@@ -637,6 +637,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("askBeforeTuning", r.askBeforeTuning);   // ★ and written in radioToJson below — the setup page reads that one
     S("bgDecode", r.bgDecode);                 // ★ V12 background decoding — written in radioToJson below too
     if (r.bgDecode.size() > 8000) r.bgDecode.clear();   // a corrupt or hostile blob is dropped, never half-applied
+    S("dxScan", r.dxScan);                     // ★★★ V12 the idle DX scanner — written in radioToJson below too
+    if (r.dxScan.size() > 1000) r.dxScan.clear();
     I("idleKickMin", r.idleKickMin);
     I("dabScanLabels", r.dabScanLabels);
     dropBlockedDabLanding(r.blockedModes, r.landingDabChannel, r.landingDabSid, r.landingDabService);
@@ -713,6 +715,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
     B("askBeforeTuning", r.askBeforeTuning);
     S("bgDecode", r.bgDecode);                 // ★ V12 — see the reader
+    S("dxScan", r.dxScan);                     // ★★★ V12 — see the reader
     N("idleKickMin", r.idleKickMin);
     N("dabScanLabels", r.dabScanLabels);
     // ★★★ AND WHAT A NEWER VERSION WROTE, back exactly as it was (see RadioConfig::unknownKeys). Last, after every

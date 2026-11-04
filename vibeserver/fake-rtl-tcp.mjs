@@ -40,6 +40,10 @@
 //               tuned centre (a 1/f skirt, a DC that wanders with gain) — the stress model, not a measurement.
 //   --carrier HZ --carrier-amp A   (with --hf, or the synthetic stations) a steady carrier at that ABSOLUTE frequency, A counts — a second listener's
 //               SSB/AM channel to measure to the hertz while the server moves the tuner.
+//   --fm-rds MHz:PI:PS[:AMP][,…]  broadcast FM stations WITH RDS at absolute frequencies (V12 DX scanner, 2026-11-04): each a
+//               mono MPX with a 19 kHz pilot and RDS group 0A (PI in hex, an 8-character PS — '_' for a space) with proper
+//               checkwords, biphase on 57 kHz locked to the pilot; AMP of full scale (default 0.3). Heard wherever the dongle's
+//               capture holds them — so a sweep across 87.5–108 MHz finds them hop by hop (scripts/test-dx-scan.mjs).
 //   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
 //               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
 //               scripts/test-rate-guard.mjs). Below HZ the stream resumes.
@@ -58,6 +62,29 @@ const PORT  = arg('port', 1234);
 let   RATE  = arg('rate', 2_400_000);
 const TONES = arg('tones', 3);
 const WFM_HZ = arg('wfm', 0) * 1e6;
+// ★ --fm-rds (see the header): the RDS bit streams are built once — differentially encoded, repeated for ever.
+const FM_RDS = (() => {
+  const i = process.argv.indexOf('--fm-rds');
+  if (i < 0 || !process.argv[i + 1]) return [];
+  const OFF = [0x0FC, 0x198, 0x168, 0x1B4];
+  const cw = (d) => { let r = d << 10; for (let b = 25; b >= 10; b--) if (r & (1 << b)) r ^= 0x5B9 << (b - 10); return r & 0x3FF; };
+  return process.argv[i + 1].split(',').map((t) => {
+    const [mhz, piHex, psRaw, amp] = t.split(':');
+    const pi = parseInt(piHex, 16) & 0xFFFF;
+    const ps = (psRaw || '').replace(/_/g, ' ').padEnd(8, ' ').slice(0, 8);
+    const bits = [];
+    for (let a = 0; a < 4; a++) {
+      const words = [pi, a & 3, 0xE0CD, (ps.charCodeAt(a * 2) << 8) | ps.charCodeAt(a * 2 + 1)];
+      for (let w = 0; w < 4; w++) {
+        const blk = (words[w] << 10) | (cw(words[w]) ^ OFF[w]);
+        for (let k = 25; k >= 0; k--) bits.push((blk >>> k) & 1);
+      }
+    }
+    const m = new Uint8Array(bits.length); let prev = 0;
+    for (let k = 0; k < bits.length; k++) { m[k] = prev ^ bits[k]; prev = m[k]; }
+    return { hz: Number(mhz) * 1e6, amp: amp ? Number(amp) : 0.3, m, ph: 0, pil: Math.random() * 6.28, aud: 0 };
+  }).filter((x) => x.hz > 0);
+})();
 const STALL_AT = arg('stall-at', 0);
 // ★ --tones-at HZ: the synthetic stations sit at ABSOLUTE frequencies (HZ + their offset) instead of moving with the
 //   dongle, so a test can tune to them exactly whatever offset the server tunes the dongle at (V12 VFO A/B, 2026-10-27).
@@ -338,6 +365,22 @@ const srv = net.createServer((sock) => {
           lPh += 2 * Math.PI * 1000 / rate;     if (lPh > 2 * Math.PI) lPh -= 2 * Math.PI;
           rPh += 2 * Math.PI * 1700 / rate;     if (rPh > 2 * Math.PI) rPh -= 2 * Math.PI;
           re += 0.5 * Math.cos(fmPhase); im += 0.5 * Math.sin(fmPhase);
+        }
+      }
+      if (FM_RDS.length) {
+        for (const st of FM_RDS) {
+          const off = st.hz - centreHz;
+          if (Math.abs(off) >= rate / 2) continue;
+          // bit clock = pilot/16: one RDS bit per 16 pilot cycles, the biphase symbol flips at the half
+          const cyc = st.pil / (2 * Math.PI) / 16;
+          const kb = Math.floor(cyc), half = (cyc - kb) < 0.5 ? 1 : -1;
+          const sym = half * (st.m[kb % st.m.length] ? 1 : -1);
+          const mpx = 0.5 * Math.sin(st.aud) + 0.09 * Math.sin(st.pil) + 0.05 * sym * Math.cos(3 * st.pil);
+          st.ph += 2 * Math.PI * (off + 75e3 * mpx) / rate;
+          if (st.ph > 1e4 || st.ph < -1e4) st.ph %= 2 * Math.PI;
+          st.pil += 2 * Math.PI * 19e3 / rate; if (st.pil > 2 * Math.PI * 16 * st.m.length) st.pil -= 2 * Math.PI * 16 * st.m.length;
+          st.aud += 2 * Math.PI * 800 / rate; if (st.aud > 2 * Math.PI) st.aud -= 2 * Math.PI;
+          re += st.amp * Math.cos(st.ph); im += st.amp * Math.sin(st.ph);
         }
       }
       buf[i * 2]     = Math.max(0, Math.min(255, Math.round(127.5 + re * 127)));

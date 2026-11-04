@@ -345,6 +345,11 @@ public:
     /** ★★ V12 BACKGROUND DECODING (vibe_bgdecode.h): this radio's profiles, as RadioConfig::bgDecode stores them. Live.
      *  @return false (and `err`) when the JSON does not parse — the old settings stay. */
     static bool setBackgroundDecoding(const std::string& json, std::string& err);
+    /** ★★★ V12 THE IDLE DX SCANNER (vibe_dxscan.h): this radio's settings, as RadioConfig::dxScan stores them. Live.
+     *  @return false (and `err`) when the JSON does not parse — the old settings stay. */
+    static bool setDxScan(const std::string& json, std::string& err);
+    /** ★★★ …and where this radio's DX log lives (one file per radio; written every ~5 min when changed, and at shutdown). */
+    static void setDxLogFile(const std::string& path);
     /** ★★ V12 what a background-decoding editor may offer here — the engine's own decoder table (ids, labels,
      *  demodulators, tones), the ISM band ids, the Band list and the decoder slots — for the Android server screen. */
     static std::string backgroundCapsJson();

@@ -2009,6 +2009,38 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           running on this radio when nobody is connected (Where new listeners start), so these profiles do not run.
           Untick it there to decode in the background instead.</p>
       </div>
+      <!-- ★★★ V12 THE IDLE DX SCANNER (Stuart's brief, 2026-11-04 — docs/v12/DX-SCANNER.md). Beside Background Decoding:
+           the same question, what this radio does when nobody is listening. Default OFF per radio. Its options sit UNDER
+           its switch (the decoder rule) and are drawn only where they mean something on this radio's driver. -->
+      <div id="hwDx" style="margin-top:14px">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="dxOn" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span><b>DX Scanner</b></span></label>
+        <p class="why" style="margin-bottom:4px"><b>DX Scanner &mdash; catch Sporadic-E, tropo and meteor scatter while the radio is idle.</b></p>
+        <p class="why">When nobody has been listening for
+          <select id="dxWait" style="width:auto;display:inline-block">
+            <option value="1">1 minute</option><option value="2">2 minutes</option>
+            <option value="5">5 minutes</option><option value="10">10 minutes</option>
+            <option value="15">15 minutes</option><option value="30">30 minutes</option>
+            <option value="60">1 hour</option></select>
+          the radio slowly sweeps <span id="dxBandsWrap"><select id="dxBands" style="width:auto;display:inline-block">
+            <option value="both">Broadcast FM and DAB</option><option value="fm">Broadcast FM only</option>
+            <option value="dab">DAB only</option></select></span><span id="dxBandsFmOnly" class="hide">Broadcast FM</span>
+          and keeps every station it identifies (the RDS PI on FM, the multiplex on DAB) in a <b>DX Log</b>, apart from
+          your bookmarks. Strong local stations are logged once and then stay out of the way; the first day builds that
+          baseline. The moment anybody connects, the scan stops and the radio goes back to exactly where it was left.
+          Background Decoding profiles come first. <span id="dxPlanLine"></span></p>
+        <div id="dxOpts" class="hide" style="margin:4px 0 0 24px">
+          <label style="display:flex;gap:8px;align-items:center;margin:4px 0"><span>FM channel raster</span>
+            <select id="dxRaster" style="width:auto;display:inline-block">
+              <option value="100">100 kHz</option><option value="50">50 kHz (regions that use it)</option></select></label>
+          <label style="display:flex;gap:8px;align-items:center;margin:4px 0">
+            <input type="checkbox" id="dxViewAdmin" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Only the owner may view the DX Log</span></label>
+        </div>
+        <!-- ★ The benchmark sets the default, it never hides: below green the scanner is still allowed, with this line. -->
+        <p class="why hide" id="dxBenchNote" style="border-left:3px solid var(--amber);padding-left:8px"></p>
+      </div>
       <div id="hwPpb" class="hide">
         <label><span class="lbl">Calibration (ppb)</span>
           <input type="number" id="ppb" step="1" placeholder="0"></label>
@@ -2113,6 +2145,7 @@ function renderBench(j) {
     rows.appendChild(tr);
   }
   tbl.classList.remove("hide");
+  if (typeof dxRender === "function" && $("dxOn")) dxRender();   // ★★★ V12 the DX scanner's "not recommended" line
   const bits = [];
   if (BENCH.recommendRate) bits.push("Recommended sample rate: <b>" + (BENCH.recommendRate / 1e6).toFixed(3) + " MS/s</b>");
   if (BENCH.network && BENCH.network.users) {
@@ -6190,6 +6223,7 @@ function fill() {
   //   keeps the behaviour it already had rather than silently changing.
   if ($("idleGrace")) $("idleGrace").value = String(r.idleGrace != null ? Math.round(r.idleGrace) : 300);
   bgLoad(r);   // ★ V12 background decoding — see bgLoad
+  dxLoad(r);   // ★★★ V12 the idle DX scanner — see dxLoad
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   if ($("askFirst")) $("askFirst").checked = !!r.askBeforeTuning;   // ★ absent = off, as on every older config
@@ -6674,6 +6708,72 @@ function bgLoad(r) {
     if ($("decoderMax")) $("decoderMax").addEventListener("input", bgRender);
   }
   bgRender();
+}
+/* ── ★★★ V12 THE IDLE DX SCANNER (RadioConfig::dxScan — one JSON blob, as bgDecode; the server's vibe_dxscan.h reads it) ── */
+let dxRadio = null, dxKeep = {};
+function dxLoad(r) {
+  dxRadio = r || null;
+  let j = null;
+  try { j = r && r.dxScan ? JSON.parse(r.dxScan) : null; } catch (e) { j = null; }
+  const c = j && typeof j === "object" ? j : {};
+  const drv = String((r && r.driver) || "");
+  // ★ An Icom has no IQ to sweep: not offered there (AGENTS.md — no dead controls).
+  if ($("hwDx")) $("hwDx").classList.toggle("hide", drv === "icom");
+  // ★ An Airspy HF+ cannot run DAB (its rates cannot hold a multiplex): FM is the only band — no band menu.
+  const fmOnly = drv === "airspyhf";
+  $("dxBandsWrap").classList.toggle("hide", fmOnly);
+  $("dxBandsFmOnly").classList.toggle("hide", !fmOnly);
+  $("dxOn").checked = c.on === true;
+  const w = String(c.waitMin > 0 ? c.waitMin : 5);
+  if (![].some.call($("dxWait").options, function (o) { return o.value === w; })) {
+    const o = document.createElement("option"); o.value = w; o.textContent = w + " minutes"; $("dxWait").appendChild(o);
+  }
+  $("dxWait").value = w;
+  $("dxBands").value = fmOnly ? "fm" : (c.bands === "fm" || c.bands === "dab" ? c.bands : "both");
+  $("dxRaster").value = Number(c.raster) === 50 ? "50" : "100";
+  $("dxViewAdmin").checked = c.viewAdmin === true;
+  dxKeep = { proof: c.proof === true, gapMin: c.gapMin > 0 ? c.gapMin : 30 };   // ★ kept as saved, not drawn
+  if (!$("dxOn").__wired) {
+    $("dxOn").__wired = 1;
+    for (const id of ["dxOn", "dxBands", "dxRaster", "dxWait"]) $(id).addEventListener("change", dxRender);
+  }
+  dxRender();
+}
+function dxRender() {
+  const on = $("dxOn").checked;
+  $("dxOpts").classList.toggle("hide", !on);
+  // ★ The raster only means something when FM is swept.
+  const fm = $("dxBands").value !== "dab";
+  $("dxRaster").closest("label").classList.toggle("hide", !fm);
+  const r = dxRadio || {};
+  const rate = Number(r.rate) || 2400000;
+  // ★ The hop count, as the server plans it (vibe_dxscan.h planFm: a channel inside ±(0.4·rate − 100 kHz) of the centre).
+  const half = 0.4 * rate - 100e3, raster = Number($("dxRaster").value) * 1e3;
+  const perHop = half >= raster ? Math.floor(2 * half / raster) + 1 : 0;
+  const hops = perHop ? Math.ceil(((108e6 - 87.5e6) / raster + 1) / perHop) : 0;
+  const bits = [];
+  if (fm && hops) bits.push("At " + (rate / 1e6).toFixed(3) + " MS/s FM takes about " + hops + " hops of ~4 s (about " + Math.max(1, Math.round(hops * 4.5 / 60)) + " min a sweep)");
+  if ($("dxBands").value !== "fm" && r.driver !== "airspyhf") bits.push("DAB steps all 41 Band III blocks, a few seconds each where nothing is there and longer where a multiplex is being pulled in");
+  $("dxPlanLine").textContent = bits.length ? bits.join("; ") + "." : "";
+  // ★ The benchmark's word (the dec_dxscan row): below green, allowed but not recommended — never hidden.
+  const note = $("dxBenchNote");
+  const row = (typeof BENCH !== "undefined" && BENCH && BENCH.rows || []).find(function (x) { return x.id === "dec_dxscan"; });
+  if (on && fm && row && row.grade && row.grade !== "green" && row.grade !== "none") {
+    note.textContent = "Not recommended on this box: the benchmark measured the FM sweep at " + Math.round(row.pct)
+      + "% of a core. It will still run (in smaller steps, so the box never falls behind), but a sweep takes longer.";
+    note.classList.remove("hide");
+  } else note.classList.add("hide");
+}
+function dxCollect() {
+  const on = $("dxOn").checked;
+  const keep = dxKeep || {};
+  // ★ Off and never set stores nothing — the radio's entry stays as it was before this existed.
+  if (!on && !(dxRadio && dxRadio.dxScan)) return "";
+  const out = { on: on, bands: $("dxBands").value, waitMin: parseFloat($("dxWait").value) || 5,
+                raster: Number($("dxRaster").value) === 50 ? 50 : 100, viewAdmin: $("dxViewAdmin").checked };
+  if (keep.proof) out.proof = true;
+  if (keep.gapMin && keep.gapMin !== 30) out.gapMin = keep.gapMin;
+  return JSON.stringify(out);
 }
 function bgCollect() {
   bgModel.on = !!($("bgOn") && $("bgOn").checked);
@@ -7184,6 +7284,8 @@ function collectRadio() {
     // ★★ V12 background decoding, as ONE JSON string (RadioConfig::bgDecode — see why there). The SERVER validates it
     //    at the save (overlaps, VFOs outside the window) and says why in the error line.
     ...($("hwBg") && !$("hwBg").classList.contains("hide") ? { bgDecode: bgCollect() } : {}),
+    // ★★★ V12 the idle DX scanner, as ONE JSON string (RadioConfig::dxScan); not offered on an Icom (nothing saved there)
+    ...($("hwDx") && !$("hwDx").classList.contains("hide") ? { dxScan: dxCollect() } : {}),
     // ★ Sent as typed; the SERVER clamps to the 15-minute floor, so the page cannot be the thing
     //   that decides what is too short.
     idleKickMin: parseInt($("idleKick").value || "0", 10),

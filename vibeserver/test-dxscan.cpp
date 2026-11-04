@@ -170,6 +170,17 @@ int main() {
         ok(l2.alertSeq() == 0, "  silent");
     }
 
+    std::printf("── an image in the SAME visit (the bootstrap too) ──\n");
+    {
+        Log log(T0);   // ★ a new server: no Locals yet
+        log.commitFm(89300, 91000, 90150, 100, { fm(89300, 0xC201, "BBC R4", 9, true, -20), fm(91000, 0xC201, "BBC R4", 4, true, -52) }, T0 + 60);
+        const Entry* im = log.findKey(fmKey(0xC201, 91000));
+        ok(log.findKey(fmKey(0xC201, 89300))->cls == Cls::Provisional && im && im->cls == Cls::Suspect,
+           "★ the same PI mirrored about the DC, 32 dB down, is Suspect even in the bootstrap (" + (im ? im->suspectWhy : std::string("-")) + ")");
+        log.commitFm(89300, 91000, 90150, 100, { fm(89500, 0xC333, "OTHER", 4, true, -50), fm(90800, 0xC444, "TWO", 4, true, -21) }, T0 + 120);
+        ok(log.findKey(fmKey(0xC333, 89500))->cls == Cls::Provisional, "a different PI on the mirror is not judged an image here (the Locals' check does that)");
+    }
+
     std::printf("── provisional during the bootstrap, then judged ──\n");
     {
         Log log(T0);

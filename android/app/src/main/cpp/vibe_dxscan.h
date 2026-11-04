@@ -295,8 +295,11 @@ public:
                 Entry e; e.id = nextId_++; e.dab = false; e.key = k; e.khz = h.khz; e.pi = h.pi; e.firstHeard = now;
                 e.cls = bootstrapping(now) ? Cls::Provisional : Cls::Dx;
                 e.dcKhz = dcKhz; e.halfKhz = std::max(dcKhz - loKhz, hiKhz - dcKhz);
-                const std::string why = suspectWhy(h.khz, h.pi, dcKhz, e.halfKhz, rasterKhz);
-                if (!why.empty() && e.cls != Cls::Provisional) { e.cls = Cls::Suspect; e.suspectWhy = why; ++vr.suspects; }
+                const std::string mirror = mirrorOf(h, hits, dcKhz, rasterKhz);
+                const std::string why = !mirror.empty() ? mirror : suspectWhy(h.khz, h.pi, dcKhz, e.halfKhz, rasterKhz);
+                // ★ A mirror heard IN THIS VERY VISIT (the same PI, far weaker, on the other side of the DC) is an image
+                //   whatever the class — the bootstrap included, so a new server's first day does not log its locals twice.
+                if (!mirror.empty() || (!why.empty() && e.cls != Cls::Provisional)) { e.cls = Cls::Suspect; e.suspectWhy = why; ++vr.suspects; }
                 else if (!why.empty()) e.suspectWhy = why;   // ★ remembered: the bootstrap's end decides with it
                 entries_[e.id] = e; byKey_[k] = e.id; id = e.id;
                 ++vr.newEntries;
@@ -768,6 +771,20 @@ private:
         return "";
     }
 
+    /** ★★ THE IMAGE IN THE SAME CAPTURE: another hit of this visit carries the SAME PI on the mirror frequency about the DC
+     *  and is at least 10 dB stronger — the dongle's own IQ image of it (RTL images sit 25–45 dB down: strong enough to
+     *  decode on a local). "" = not one. */
+    static std::string mirrorOf(const FmHit& h, const std::vector<FmHit>& all, int dcKhz, int rasterKhz) {
+        const int tol = std::max(1, rasterKhz / 2);
+        for (const auto& g : all) {
+            if (&g == &h || g.pi != h.pi || g.khz == h.khz) continue;
+            if (std::abs((2 * dcKhz - g.khz) - h.khz) < tol && g.levelDb >= h.levelDb + 10.0f) {
+                char b[96]; std::snprintf(b, sizeof b, "image of %.1f MHz (same PI %04X, %.0f dB weaker)", g.khz / 1000.0, g.pi, g.levelDb - h.levelDb);
+                return b;
+            }
+        }
+        return "";
+    }
     /** Make room for one more entry: the oldest Suspect, then Provisional, then DX, then Local — never Promoted. */
     bool makeRoom() {
         if ((int)entries_.size() < kMaxEntries) return true;

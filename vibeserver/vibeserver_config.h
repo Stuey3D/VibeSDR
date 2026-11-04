@@ -746,6 +746,9 @@ struct RadioConfig {
      *  same reason antennaSwitch is a string). Empty = off, which is every radio before this existed. Validated at the
      *  save (overlaps, VFOs outside the window); applied live. */
     std::string bgDecode;
+    /** ★★★ V12 THE IDLE DX SCANNER (vibe_dxscan.h): one JSON blob, as bgDecode — {"on","bands","waitMin","raster",
+     *  "viewAdmin","proof","gapMin"}. Empty = off (the default per radio). */
+    std::string dxScan;
 
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.
