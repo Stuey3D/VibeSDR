@@ -20,6 +20,8 @@
 //                       service on the same samples (the two-listener case)
 //     --offset2 HZ     default -1500000
 //     --sid2 HEX       the second clip's service
+//     --paired 1       wide only: add the noise at the clip's rate BEFORE the up-sampler — the very samples the native run
+//                       gets — so native against wide is an A/B of the two front ends on identical noise
 //   Prints ONE JSON line per service: lock/label/first-audio times (in CLIP seconds), the final MER, FIB rate, super
 //   frames ok of tried, AUs bad of in, RS lost, and the input's own measured in-band SNR.
 // ★ The clip is STREAMED (as dab-unitlog): nothing whole-file in memory. ★ Paced by back-pressure (never ahead of the
@@ -190,6 +192,11 @@ int main(int argc, char** argv) {
     if (argc < 2) { std::printf("usage: dab-weak <clip.vbu8> [--sid HEX] [--skip S] [--secs S] [--shift HZ] [--noise DB] [--wide RATE --offset HZ] [--second F --offset2 HZ --sid2 HEX]\n"); return 2; }
     double skip = 0, secs = 30, shift = 0, noiseDb = NAN, wide = 0, offset = 2.5e6, offset2 = -1.5e6, shift2 = 0;
     uint32_t sid = 0, sid2 = 0; unsigned seed = 1; const char* second = nullptr;
+    const char* writePath = nullptr;   // ★ --write F: write the composed stream (u8 VIBEBU81) instead of decoding it — the
+    bool to2048 = false;               //   fake radio's clips (test-server-dab-wide.mjs); --to2048 1 resamples a 2.4 clip to
+    double centreOut = 0;              //   2.048 first (the native path's own converter); --centre-out HZ = the header centre
+    bool paired = false;   // ★ --paired 1: the noise goes in at the CLIP's rate before the up-sampler, so the wide path sees
+                           //   exactly the in-band noise the native path does (an A/B of the front ends alone)
     for (int i = 2; i + 1 < argc; i += 2) {
         const std::string a = argv[i]; const char* v = argv[i + 1];
         if (a == "--sid") sid = uint32_t(std::strtoul(v, nullptr, 16));
@@ -199,6 +206,10 @@ int main(int argc, char** argv) {
         else if (a == "--shift2") shift2 = std::atof(v);
         else if (a == "--noise") noiseDb = std::atof(v);
         else if (a == "--seed") seed = unsigned(std::atoi(v));
+        else if (a == "--paired") paired = std::atoi(v) != 0;
+        else if (a == "--write") writePath = v;
+        else if (a == "--to2048") to2048 = std::atoi(v) != 0;
+        else if (a == "--centre-out") centreOut = std::atof(v);
         else if (a == "--wide") wide = std::atof(v);
         else if (a == "--offset") offset = std::atof(v);
         else if (a == "--second") second = v;
@@ -249,9 +260,18 @@ int main(int argc, char** argv) {
     std::vector<float> o1, o2, feedBuf, snrProbe;
     double fed = 0, nextPoll = 0;
     const auto tw0 = steady_clock::now();
+    FILE* wfp = nullptr; vibedab::Resample24to2048 wrs; std::vector<float> wbuf; std::vector<uint8_t> wu8;
+    if (writePath) {
+        wfp = std::fopen(writePath, "wb");
+        if (!wfp) { std::printf("cannot write %s\n", writePath); return 2; }
+        const double r = to2048 ? 2048000.0 : feedRate, cen = centreOut > 0 ? centreOut : c1.centre - (wide > 0 ? offset : 0.0);
+        std::fwrite("VIBEBU81", 1, 8, wfp); std::fwrite(&r, 8, 1, wfp); std::fwrite(&cen, 8, 1, wfp); std::fwrite(&sid, 4, 1, wfp);
+    }
     while (fed < secs) {
         if (!c1.read(u, f1, blk)) break;
         m1.run(f1.data(), blk);
+        const double sigClip = std::sqrt(density * rate / 2.0);
+        if (addNoise && paired && wide > 0) for (float& x : f1) x += float(sigClip) * g(rng);
         if (second) { std::vector<uint8_t> u2; if (!c2.read(u2, f2, blk)) break; m2.run(f2.data(), blk); }
         if (wide > 0) {
             o1.clear(); up1.run(f1.data(), blk, o1); w1.run(o1.data(), o1.size() / 2);
@@ -259,8 +279,17 @@ int main(int argc, char** argv) {
                           const size_t n = std::min(o1.size(), o2.size()); for (size_t i = 0; i < n; ++i) o1[i] += o2[i]; o1.resize(n); }
             feedBuf.swap(o1);
         } else feedBuf.assign(f1.begin(), f1.end());
-        if (addNoise) for (float& x : feedBuf) x += sigma * g(rng);
+        if (addNoise && !(paired && wide > 0)) for (float& x : feedBuf) x += sigma * g(rng);
         if (fed < 1.0 && !wide) snrProbe.insert(snrProbe.end(), feedBuf.begin(), feedBuf.end());
+        if (wfp) {
+            const std::vector<float>* src = &feedBuf;
+            if (to2048) { wbuf.clear(); wrs.process(feedBuf.data(), feedBuf.size() / 2, wbuf); src = &wbuf; }
+            wu8.resize(src->size());
+            for (size_t i = 0; i < src->size(); ++i) { const float v = (*src)[i] * 127.5f + 127.5f; wu8[i] = uint8_t(v < 0 ? 0 : v > 255 ? 255 : std::lrint(v)); }
+            std::fwrite(wu8.data(), 1, wu8.size(), wfp);
+            fed += 0.05;
+            continue;
+        }
         for (auto& s : svcs) s->feed(feedBuf.data(), feedBuf.size() / 2);
         fed += 0.05;
         for (int w = 0; w < 400000; ++w) {   // ★ back-pressure: never ahead of any worker
@@ -270,6 +299,7 @@ int main(int argc, char** argv) {
         }
         if (fed >= nextPoll) { for (size_t k = 0; k < svcs.size(); ++k) watch[k].poll(*svcs[k], fed); nextPoll = fed + 0.25; }
     }
+    if (wfp) { std::fclose(wfp); for (auto& s : svcs) s->stopWorker(); std::printf("{\"wrote\":\"%s\",\"secs\":%.2f}\n", writePath, fed); return 0; }
     std::this_thread::sleep_for(milliseconds(300));
     const double snrIn = snrProbe.empty() ? NAN : inbandSnrDb(snrProbe, rate);
     for (size_t k = 0; k < svcs.size(); ++k) {

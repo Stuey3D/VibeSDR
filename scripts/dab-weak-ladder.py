@@ -24,7 +24,7 @@ def run(args):
     p = subprocess.run([a.bin] + args, capture_output=True, text=True, timeout=3600)
     for l in p.stdout.splitlines():
         if l.startswith('{'):
-            try: return json.loads(l)
+            try: return json.loads(l.replace(":nan", ":NaN").replace(":-nan", ":NaN"))
             except Exception: pass
     return None
 

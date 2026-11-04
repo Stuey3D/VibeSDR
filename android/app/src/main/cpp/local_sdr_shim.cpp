@@ -1610,6 +1610,9 @@ static std::atomic<bool>   g_dabSavedDigAgc{false};
  *  ★ Persisted, unlike the digital-AGC toggle: this is a decision about the machine, which is
  *    exactly the kind of thing that should survive a restart. */
 static std::atomic<bool>   g_dabRateBoost{false};
+/** ★★ V12 WIDE-RATE DAB: true while DAB decodes its block out of the radio's own (wider) capture — see dabPlanFor. The
+ *  radio's rate and IF filter stay as the owner set them (applyAutoIf), nothing is re-rated, the rate guard never marks. */
+static std::atomic<bool>   g_dabWide{false};
 /* ★★★ …AND WHAT HAPPENED WHEN A MODE USED IT (vibe_rate_guard.h, Stuart 2026-10-24). A radio that stalled or crashed the
  *  process at a rate ADS-B or DAB boosted it to is recorded here; while it is, the switch above stays OFF (even if the
  *  config still says on), so nobody's next tap on the mode sends the radio back to the rate it died at. The marker it
@@ -7300,6 +7303,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 noteHwMoved();
                 LocalSdrShim::instance().setTunerBandwidth(want);
                 LOGI("[ADS-B] tuner IF filter set to %.3f MHz", want / 1e6);
+            }
+            return;
+        }
+        if (g_dabMode.load(std::memory_order_relaxed) && g_dabWide.load(std::memory_order_relaxed)) {
+            /* ★★ V12 WIDE-RATE DAB: the analogue filter is the CAPTURE's, as the owner's rate has it (2.048 MHz here
+             *  would cut the very block the DDC is reading, wherever it sits in the span). The DDC is the selectivity. */
+            const int want = int(std::lround(sampleRate));
+            if (g_tunerBwHz.load(std::memory_order_relaxed) != want) {
+                LocalSdrShim::instance().setTunerBandwidth(want);
+                LOGI("[DAB] wide capture: tuner IF filter left at the capture's %.3f MHz", want / 1e6);
             }
             return;
         }
@@ -15357,7 +15370,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         aisEnter();
     }
 
+    /** ★★★ V12 WIDE-RATE DAB — HOW A BLOCK IS CAPTURED (see vibe_dab_ddc.h and the DAB entry).
+     *  `wide`: the radio keeps the rate it runs at, DabService cuts the block out in software. For a USRP running WIDER
+     *  than 2.5 MS/s — the owner chose a wide view (several multiplexes), and re-rating that radio is exactly what failed
+     *  (each DAB block change was two re-rates, two master-clock changes — the AD9361 re-calibrating — two streamer
+     *  rebuilds). The DDC itself is as sensitive as the native paths (dab-weak, paired noise), so the choice is about the
+     *  FRONT END, and the native path stays wherever the front end is better narrow:
+     *  ✗ NOT an RSP: above 6 MS/s its ADC gives fewer bits (12 → 10 → 8), and at 2.048 it decimates in hardware for DAB.
+     *  ✗ NOT a HackRF: one 8-bit ADC, and narrow its baseband filter keeps the next multiplex out of those 8 bits.
+     *  ✗ NOT the RTL dongle (USB or rtl_tcp): above 2.4 it drops samples, and its 2.048 path is the weak-signal record.
+     *  ✗ Not the HF+ (no Band III) or an Icom (audio, not IQ). An Airspy R2/Mini has no 2.048: it keeps the nearest rate
+     *    it has at or above (2.5, 3) and the same DDC resamples it — narrow, centred, as native as that radio gets.
+     *  `keepCentre`: the block (±0.80 MHz) sits inside the flat part of the capture — 42 % of the rate either side of the
+     *  centre, inside every radio's own anti-alias roll-off — so NOTHING on the radio moves. Otherwise the centre moves to
+     *  the block, the rate still untouched. `radioCentre`: the PHYSICAL centre the radio should be at. */
+    struct DabPlan { bool wide = false, keepCentre = false; double radioCentre = 0; };
+    DabPlan dabPlanFor(double blockHz) {
+        DabPlan p; p.radioCentre = blockHz;
+        static constexpr double kWideMinHz = 2500000.0, kHalfBlockHz = 800000.0, kFlat = 0.42;
+        // ★ VIBE_DAB_WIDE_ANY=1 — TESTS ONLY: any radio takes the wide plan, so fake-rtl-tcp can prove "a block change
+        //   inside the span moves nothing" without a USRP (test-server-dab-wide.mjs).
+        static const bool anyRadio = std::getenv("VIBE_DAB_WIDE_ANY") && std::getenv("VIBE_DAB_WIDE_ANY")[0] == '1';
+        if (!(useUsrp() || anyRadio) || g_icomOn.load() || !(sampleRate > kWideMinHz + 1.0)) return p;
+        p.wide = true;
+        const double phys = rtlCenter.load() + hwOffsetHz();
+        if (std::fabs(blockHz - phys) + kHalfBlockHz <= kFlat * sampleRate) { p.keepCentre = true; p.radioCentre = phys; }
+        return p;
+    }
     void dabRestore() {
+        g_dabWide.store(false, std::memory_order_relaxed);
         if (!g_dabLockHeld.exchange(false)) return;
         dabModeEnd();   // ★ under g_dabReportMtx — see dabModeEnd
         /* ★ Give the audio chain back, and reset it: it has seen no samples for the whole DAB
@@ -19197,10 +19238,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★ hwOffsetHz() and not the constant — it is 0 on the RSP and the HF+, and this is
              *    exactly the "ELSE MEANS DONGLE" shape that has cost us a bug per new radio. */
             const double centre  = double(g_dab.centreHz());
-            const double logical = centre - hwOffsetHz();   // so PHYSICAL DC lands on the mux
+            /* ★★★ V12 WIDE-RATE DAB — DECIDE THE CAPTURE BEFORE ANYTHING MOVES (Stuart, 2026-11-03, a USRP the owner
+             *  had set wide: "the 2.4MHz sample rate killed it after a few tunes, so if a user decides to use a huge
+             *  sample rate to see multiple multiplexes we need to be able to handle it"). A radio running wider than
+             *  2.5 MS/s KEEPS ITS RATE: the block is cut out of the capture in software (vibe_dab_ddc.h, on its own
+             *  thread in DabService). A block inside the captured span moves NOTHING on the radio; one outside moves
+             *  only the centre, at the same rate. See dabPlanFor for who qualifies and why the dongle does not. */
+            const DabPlan plan = dabPlanFor(centre);
+            g_dabWide.store(plan.wide, std::memory_order_relaxed);
+            const double logical = plan.radioCentre - hwOffsetHz();   // so PHYSICAL DC lands where the plan says
             rtlCenter.store(logical);
             audioFreq.store(centre);          // the readout follows the mux
-            viewCenter.store(centre);
+            viewCenter.store(plan.wide ? plan.radioCentre : centre);
             /* ★★★ CAPTURE AT 2.4, DECODE AT 2.048. The dongle is asked for 2.4 MS/s — an exact
              *  28.8/12 division it is reliable at, and the rate every working DAB implementation
              *  uses — and vibe_dab_resample.h converts to the 2.048 the demodulator requires.
@@ -19243,19 +19292,39 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     setting. The RSP lists 2.048 and the HackRF takes any rate from 2 MS/s up, so
              *     they capture natively too; the Airspy HF+ cannot reach Band III at all. */
             const double wantRate = double(vibedab::DabService::kRateHz);
-            noteHwMoved();
-            // ★★★ A BOOST? The marker goes down first — see the ADS-B entry and vibe_rate_guard.h.
-            if (std::fabs(wantRate - sampleRate) > 1000.0) {
-                g_rateGuard.mark(wantRate, "DAB", (long long)vsNowEpoch());
-                rateBoostFellBack_.store(false);
-            }
-            LocalSdrShim::instance().setSampleRate(wantRate);
-            const double gotRate = LocalSdrShim::instance().captureSpanHz();
-            if (std::fabs(gotRate - wantRate) > 1000.0) {
-                LOGI("[DAB] ★ asked for 2.048 MS/s and the radio reports %.3f MS/s — capturing at "
-                     "2.4 and resampling instead", gotRate / 1e6);
-                if (std::fabs(2400000.0 - sampleRate) > 1000.0) g_rateGuard.mark(2400000.0, "DAB", (long long)vsNowEpoch());
-                LocalSdrShim::instance().setSampleRate(2400000.0);
+            if (!plan.keepCentre) noteHwMoved();
+            /* ★★★ THE RATE IS SETTLED ONCE, ON ENTRY — NEVER ON A BLOCK CHANGE (V12, 2026-11-04: the USRP "killed after a
+             *     few tunes"). This asked for 2.048 on EVERY "dab on", and a radio whose list has no 2.048 got its nearest
+             *     (a USRP: 2.0 MS/s), failed the readback and fell to 2.4 — so on every later block change it was at 2.4,
+             *     asked again for 2.048, and went 2.4 → 2.0 → 2.4: two full re-rates per press (stop, a new master clock —
+             *     the AD9361 re-calibrating — a new streamer, a rebuilt DSP chain), the rate guard armed at "2.4 during
+             *     DAB" throughout, and a 3 s silence anywhere in that read as the radio dying at 2.4. A rate DAB can use is
+             *     a rate DAB keeps: wide (the DDC), or any figure at or above 2.048 the radio gave (the DDC resamples it). */
+            if (plan.wide) {
+                LOGI("[DAB] wide capture: the radio stays at %.3f MS/s, centre %.3f MHz — block %s cut out in software%s",
+                     sampleRate / 1e6, plan.radioCentre / 1e6, vibedab::kBandIII[idx].name,
+                     plan.keepCentre ? " (inside the span: nothing on the radio moves)" : " (outside the span: the centre moves, the rate does not)");
+            } else if (dabWasOn && sampleRate >= wantRate - 1000.0) {
+                // ★ already at a rate DAB decodes from (set at entry): a block change is a tune, nothing more
+            } else {
+                // ★★★ A BOOST? The marker goes down first — see the ADS-B entry and vibe_rate_guard.h.
+                if (std::fabs(wantRate - sampleRate) > 1000.0) {
+                    g_rateGuard.mark(wantRate, "DAB", (long long)vsNowEpoch());
+                    rateBoostFellBack_.store(false);
+                }
+                LocalSdrShim::instance().setSampleRate(wantRate);
+                const double gotRate = LocalSdrShim::instance().captureSpanHz();
+                if (gotRate < wantRate - 1000.0) {
+                    /* ★ Only a radio that gave LESS than 2.048 goes on to 2.4. One that gave more (an Airspy R2's 2.5, a
+                     *  Mini's 3.0) keeps it: DabService's DDC resamples any rate at or above 2.048 — before V12 it fed such
+                     *  a radio's samples to the decoder as if they were 2.048, and nothing ever locked. */
+                    LOGI("[DAB] ★ asked for 2.048 MS/s and the radio reports %.3f MS/s — capturing at "
+                         "2.4 and resampling instead", gotRate / 1e6);
+                    if (std::fabs(2400000.0 - sampleRate) > 1000.0) g_rateGuard.mark(2400000.0, "DAB", (long long)vsNowEpoch());
+                    LocalSdrShim::instance().setSampleRate(2400000.0);
+                } else if (std::fabs(gotRate - wantRate) > 1000.0) {
+                    LOGI("[DAB] the radio gives %.3f MS/s for 2.048 — resampled to 2.048 in software", gotRate / 1e6);
+                }
             }
             rtlCenter.store(logical);
             /* ★★★ MODE FIRST, THEN THE FILTER, THEN THE FREQUENCY — AND THAT ORDER IS LOAD-BEARING.
@@ -19283,7 +19352,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     while the decoder went on reading BBC National on 12B (Stuart, 2026-09-09:
              *     "telling me it is changing block but its not"). rtlCenter + tuneHw is the pair
              *     that moves the radio — see flushPendingDongle. */
-            if (dabWasOn) tuneHw(logical);
+            if (dabWasOn && !plan.keepCentre) tuneHw(logical);   // ★ V12: a block inside a wide capture moves nothing
             dabTxDbInit();        // ★ names for TII codes, even on a server that set no position
             iqStopDirect();       // ★ raw IQ out cannot follow the receiver into DAB
             g_dabMode.store(true);
@@ -19303,24 +19372,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *      like data.
              *  ★ After g_dabMode, never before: the branch reads it. */
             applyAutoIf();
-            tuneHw(logical);          // ★ LAST. See the ordering note above.
+            if (!plan.keepCentre) tuneHw(logical);          // ★ LAST. See the ordering note above.
             /* ★★★ AND TELL THE DECODER THE RADIO IS STILL MOVING. tuneHw only QUEUES the
              *  frequency onto the hardware-writer thread; until it lands, the dsp loop keeps
              *  delivering samples from the PREVIOUS multiplex, and a receiver that has just been
              *  reset will acquire on those and then TRACK them for ever. That is the "spectrum
              *  shows a signal but nothing locks in, tune away and back and it works" fault, on
-             *  every platform. See DabService::armRetune. */
-            g_dab.armRetune();
+             *  every platform. See DabService::armRetune.
+             *  ★★ V12: NOT when nothing moved. A block inside a wide capture is a new mixer frequency — the samples
+             *     already captured ARE the new block once the DDC is re-aimed — so there is no hardware to wait for, only
+             *     the old block's decimated samples still queued for the worker: those are dropped outright
+             *     (flushForDigitalRetune) and 20 ms covers the one block the DDC may have had in hand. */
+            if (plan.keepCentre) { g_dab.flushForDigitalRetune(); g_dab.armRetune(0.02); }
+            else g_dab.armRetune();
             /* ★★★ THE VIEW IS THE WHOLE CAPTURE. A multiplex is 1.536 MHz of flat top; a view
              *  zoomed in past that shows NOTHING BUT the flat top, which reads as an empty band.
              *  tgcfabian's server was left slightly zoomed in from FM and "it looked like nothing was
              *  being received when in fact it was just the entire visible window looked flat like
              *  a DAB multiplex would" (Stuart, 2026-09-07). Zoom is refused while DAB owns the
              *  view, so the listener could not even fix it. Every listener's view goes back to
-             *  the full span on the block centre, and every client is told. */
-            {
+             *  the full span on the block centre, and every client is told.
+             *  ★★ V12 WIDE: the full span on the RADIO's centre — the several multiplexes the owner set it wide to see —
+             *     and a block change inside it leaves every view exactly as it is: the waterfall rolls straight on (no
+             *     re-centre, no zoom, no hold), only the readout follows the new block. */
+            if (plan.keepCentre && dabWasOn) {
+                std::vector<std::shared_ptr<net::Socket>> socks;
+                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                for (auto& sk : socks) { sendConfig(sk); sendHwInfo(sk); }
+            } else {
                 zoomFactor.store(1.0);
-                viewCenter.store(centre);
+                viewCenter.store(plan.wide ? plan.radioCentre : centre);
                 std::vector<std::shared_ptr<ClientDsp>> views;
                 std::vector<std::shared_ptr<net::Socket>> socks;
                 {

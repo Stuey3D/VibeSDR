@@ -26,6 +26,9 @@
 
 #include "vibe_dab_channels.h"
 #include "vibe_dab_resample.h"
+#include "vibe_dab_ddc.h"
+#include <condition_variable>
+#include <deque>
 #include "vibe_dab_mp2.h"
 #include "vibe_dab_aacdec.h"
 #include "vibe_dab_pad.h"
@@ -109,6 +112,7 @@ private:
     /** The whole of a block change, under m_. */
     void tuneLocked_(int idx) {
         channel_ = idx;
+        blockCentre_.store(double(kBandIII[idx].centreHz), std::memory_order_relaxed);   // ★ the DDC thread reads it
         rx_.reset();
         dlsAll_.clear(); scanCursor_ = 0; scanRotatedAt_ = 0;
         holdScanForNewService_();   // ★ a new multiplex is a new station too
@@ -153,7 +157,10 @@ public:
      *         transfer and is paid once per multiplex change, not per frame. */
     void armRetune(double seconds = 0.25) {
         std::lock_guard<std::mutex> lk(m_);
-        const double rfr = rfRate_.load(std::memory_order_relaxed); const double rate = rfr > 0 ? rfr : 2400000.0;
+        const double rfr = rfRate_.load(std::memory_order_relaxed);
+        // ★ The drop counts samples AS THE WORKER SEES THEM. The native paths keep their figure exactly as it was; the
+        //   wide path hands the worker 2.048 MS/s, so the radio's rate (30.72 …) would have dropped 15 × too long.
+        const double rate = wideActive_.load(std::memory_order_relaxed) ? double(kRateHz) : (rfr > 0 ? rfr : 2400000.0);
         settleDrop_ = size_t(seconds * rate);
     }
 
@@ -166,6 +173,7 @@ public:
      *  feeds faster than real time waits on this, so nothing is ever dropped for being early (inQ_ and iq_ both bound). */
     uint64_t backlogForTest() {
         uint64_t q; { std::lock_guard<std::mutex> ik(inM_); q = inQ_.size(); }
+        { std::lock_guard<std::mutex> wk(wM_); q += wQFloats_ / 2; }   // ★ and what waits for the DDC
         std::lock_guard<std::mutex> lk(m_);
         const size_t need = size_t(modeI().frameSamples) * 2;
         const size_t w = iq_.size() - iqHead_;
@@ -347,12 +355,93 @@ public:
          *  main), so they need no lock at all. Only the append to iq_ does. */
         const float* src = interleaved;
         size_t       n   = nSamples;
-        if (std::fabs(rfRate_.load(std::memory_order_relaxed) - 2400000.0) < 1000.0) {
+        /* ★★★ V12 WIDE-RATE DAB — WHICH FRONT END. The two NATIVE paths are exactly as they were: a radio tuned to the
+         *     block at 2.048 MS/s goes straight in, one at 2.4 through the 64/75 converter. Anything else — a wider rate,
+         *     or the block somewhere other than the capture's centre — goes to the DDC on its own thread (feedWide_),
+         *     which cuts the block out digitally. "Centred" allows 1 kHz: the radio's crystal is the AFC's business. */
+        const double rfr = rfRate_.load(std::memory_order_relaxed), rfc = rfCentre_.load(std::memory_order_relaxed);
+        const double off = rfc > 0 ? blockCentre_.load(std::memory_order_relaxed) - rfc : 0.0;
+        const bool centred = std::fabs(off) < 1000.0;
+        if (rfr > 0 && !(centred && (std::fabs(rfr - double(kRateHz)) < 1000.0 || std::fabs(rfr - 2400000.0) < 1000.0))) {
+            feedWide_(interleaved, nSamples);
+            return;
+        }
+        wideActive_.store(false, std::memory_order_relaxed);
+        if (std::fabs(rfr - 2400000.0) < 1000.0) {
             rsOut_.clear();
             rs_.process(interleaved, nSamples, rsOut_);
             src = rsOut_.data();
             n   = rsOut_.size() / 2;
         }
+        queueForWorker_(src, n, nSamples);
+    }
+    /** ★★ V12 A DIGITAL RETUNE (a block inside a wide capture): the samples already decimated for the worker are the OLD
+     *  block's — drop them now, rather than let a freshly reset receiver acquire on them. Raw capture waiting for the
+     *  DDC is kept: the DDC re-aims at the new block before it touches it. */
+    void flushForDigitalRetune() {
+        { std::lock_guard<std::mutex> lk(m_); iq_.clear(); iqHead_ = 0; }
+        { std::lock_guard<std::mutex> ik(inM_); inQ_.clear(); }
+    }
+    /** ★ The DDC thread's counters, for the report and the tests: input samples dropped for falling behind. */
+    uint64_t wideDropped() const { return wDropped_.load(std::memory_order_relaxed); }
+    bool wideActive() const { return wideActive_.load(std::memory_order_relaxed); }
+private:
+    /** ★★ THE WIDE PATH'S HAND-OVER — a copy and a notify on vibe-dsp, never the DDC itself (Network > Audio > Spectrum
+     *  > Decoders: the capture thread also feeds the spectrum and, on a shared receiver, everybody else's audio).
+     *  BOUNDED: at most 8 MB of IQ waits (32 ms at 30.72 MS/s, 130 ms at 8) — past that the OLDEST block is dropped and
+     *  counted, never the capture thread held. Blocks are recycled, so steady state allocates nothing. */
+    void feedWide_(const float* interleaved, size_t nSamples) {
+        wideActive_.store(true, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lk(wM_);
+            if (!ddcThr_.joinable()) { wStop_ = false; ddcThr_ = std::thread([this] { ddcLoop_(); }); }
+            std::vector<float> b;
+            if (!wFree_.empty()) { b.swap(wFree_.front()); wFree_.pop_front(); }
+            b.assign(interleaved, interleaved + 2 * nSamples);
+            wQFloats_ += b.size();
+            wQ_.push_back(std::move(b));
+            static constexpr size_t kCapFloats = (8u << 20) / sizeof(float);
+            while (wQFloats_ > kCapFloats && wQ_.size() > 1) {
+                wDropped_.fetch_add(wQ_.front().size() / 2, std::memory_order_relaxed);
+                wQFloats_ -= wQ_.front().size();
+                wFree_.push_back(std::move(wQ_.front())); wQ_.pop_front();
+            }
+        }
+        wCv_.notify_one();
+    }
+    /** ★ The DDC thread (vibe-dab-ddc, the audio rung like vibe-dab): take a block, re-aim the DDC if the rate or the
+     *  block moved, cut the block out, hand 2.048 MS/s to the worker exactly as the native paths do. */
+    void ddcLoop_() {
+        vibeAudioThread("vibe-dab-ddc");
+        std::vector<float> b;
+        while (true) {
+            {
+                std::unique_lock<std::mutex> lk(wM_);
+                if (b.capacity()) { if (wFree_.size() < 8) wFree_.push_back(std::move(b)); b = std::vector<float>(); }   // ★ recycled
+                wCv_.wait(lk, [this] { return wStop_ || !wQ_.empty(); });
+                if (wStop_) return;
+                b.swap(wQ_.front()); wQ_.pop_front(); wQFloats_ -= b.size();
+            }
+            const double rfr = rfRate_.load(std::memory_order_relaxed), rfc = rfCentre_.load(std::memory_order_relaxed);
+            const double shift = rfc > 0 ? blockCentre_.load(std::memory_order_relaxed) - rfc : 0.0;
+            if (rfr != ddcRate_) { ddcRate_ = rfr; ddcShift_ = 1e18; ddc_.configure(rfr, shift); ddcShift_ = shift; }
+            else if (shift != ddcShift_) { ddc_.configure(rfr, shift); ddcShift_ = shift; }
+            if (!ddc_.ok()) continue;   // ★ the block does not fit this capture: nothing to decode (the shim moves the radio)
+            ddcOut_.clear();
+            ddc_.process(b.data(), b.size() / 2, ddcOut_);
+            queueForWorker_(ddcOut_.data(), ddcOut_.size() / 2, b.size() / 2);
+        }
+    }
+    void stopWide_() {
+        { std::lock_guard<std::mutex> lk(wM_); wStop_ = true; }
+        wCv_.notify_all();
+        if (ddcThr_.joinable()) ddcThr_.join();
+        std::lock_guard<std::mutex> lk(wM_);
+        wQ_.clear(); wFree_.clear(); wQFloats_ = 0; ddcRate_ = 0; ddcShift_ = 1e18;
+    }
+    /** 2.048 MS/s samples to the worker's queue — the one append every front end ends in. `nRaw` is what the radio
+     *  delivered for them (samplesIn counts what ARRIVED, as it always has). */
+    void queueForWorker_(const float* src, size_t n, size_t nSamples) {
         {
             std::lock_guard<std::mutex> ik(inM_);
             inSamples_ += nSamples;
@@ -370,6 +459,7 @@ public:
         }
         inCv_.notify_one();
     }
+public:
     /** The false-lock watchdog and the retune settle, on the worker with m_ held — moved here from
      *  feed() unchanged apart from dropping from `in` instead of returning early. False: nothing
      *  left of this input to decode. */
@@ -396,7 +486,8 @@ public:
                     std::fprintf(stderr, "[DAB] locked but no FIBs decoded for 4 s (%d of %d) — re-acquiring (%u)\n",
                                  s.fibsOk, s.fibsTotal, fibWatchdog_);
                     noFibSince_ = {};
-                    const double rfr = rfRate_.load(std::memory_order_relaxed); const double rate = rfr > 0 ? rfr : 2048000.0;
+                    const double rfr = rfRate_.load(std::memory_order_relaxed);
+                    const double rate = wideActive_.load(std::memory_order_relaxed) ? double(kRateHz) : (rfr > 0 ? rfr : 2048000.0);   // ★ see armRetune
                     settleDrop_ = size_t(0.25 * rate);
                 }
             }
@@ -426,6 +517,7 @@ public:
         return true;
     }
     void stopWorker() {
+        stopWide_();   // ★ first: the DDC thread feeds the worker's queue
         { std::lock_guard<std::mutex> lk(m_); stop_ = true; }
         { std::lock_guard<std::mutex> ik(inM_); inStop_ = true; }
         cv_.notify_all();
@@ -2737,6 +2829,20 @@ private:
     mutable std::mutex pm_;
     int channel_ = -1;
     std::atomic<double> rfCentre_{0.0}, rfRate_{0.0};   // ★ atomics — see setRfCentre
+    // ★★ V12 WIDE-RATE DAB (vibe_dab_ddc.h): the block's centre for the DDC thread, the DDC itself (owned by that thread),
+    //    and the bounded hand-over from vibe-dsp — see feedWide_.
+    std::atomic<double> blockCentre_{0.0};
+    std::atomic<bool>   wideActive_{false};      ///< the last block in took the DDC path (the settle counts in 2.048 samples)
+    DabDdc              ddc_;
+    double              ddcRate_ = 0, ddcShift_ = 1e18;
+    std::thread         ddcThr_;
+    std::mutex          wM_;
+    std::condition_variable wCv_;
+    std::deque<std::vector<float>> wQ_, wFree_;
+    size_t              wQFloats_ = 0;
+    bool                wStop_ = false;
+    std::atomic<uint64_t> wDropped_{0};          ///< input samples the DDC thread fell too far behind to take (counted)
+    std::vector<float>  ddcOut_;
     const DabTxDb* txdb_ = nullptr;
     double rxLat_ = NAN, rxLon_ = NAN;
     uint32_t sid_ = 0, want_ = 0;

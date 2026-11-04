@@ -40,6 +40,7 @@
 //               tuned centre (a 1/f skirt, a DC that wanders with gain) — the stress model, not a measurement.
 //   --carrier HZ --carrier-amp A   (with --hf, or the synthetic stations) a steady carrier at that ABSOLUTE frequency, A counts — a second listener's
 //               SSB/AM channel to measure to the hertz while the server moves the tuner.
+//   --dab-map HZ=FILE,…  a different recording per tuned block centre, at the server's rate (see DAB_MAP below).
 //   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
 //               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
 //               scripts/test-rate-guard.mjs). Below HZ the stream resumes.
@@ -141,6 +142,22 @@ const CARRIER_HZ = arg('carrier', 0), CARRIER_A = arg('carrier-amp', 8);
 if (HF_IQ) console.log(`[fake-rtl-tcp] HF clip ${hfArg}: ${HF_IQ.length / 2} samples centred on ${HF_CENTRE} Hz`);
 if (ISM_IQ) console.log(`[fake-rtl-tcp] ISM clip ${ismArg}: ${ISM_IQ.length / 2} samples`);
 if (DAB_IQ) console.log(`[fake-rtl-tcp] DAB clip ${dabArg}: ${(DAB_IQ.length / 2 / 2.048e6).toFixed(2)} s at 2.048 MS/s`);
+/* ★★ --dab-map HZ=FILE[,HZ=FILE…] (V12 wide-rate DAB, 2026-11-04): a DIFFERENT recording per tuned centre (±50 kHz), each
+ *  replayed raw on a loop at whatever rate the server asked for — so the FILE must have been made at that rate (dab-weak
+ *  --write: a 2.048 MS/s clip per block for the native block-change bench, or ONE wide composite with several multiplexes
+ *  in it for the wide test). A bench-clip header ("VIBEBU81", 28 bytes) is skipped. Every block steps to new content, so
+ *  a lock carried across a block change cannot hide behind identical air. */
+const DAB_MAP = (() => {
+  const i = process.argv.indexOf('--dab-map');
+  if (i < 0) return [];
+  return process.argv[i + 1].split(',').map((t) => {
+    const [hz, file] = t.split('=');
+    let b = fs.readFileSync(file);
+    if (b.length > 28 && b.subarray(0, 8).toString('latin1') === 'VIBEBU81') b = b.subarray(28);
+    console.log(`[fake-rtl-tcp] DAB map ${(Number(hz) / 1e6).toFixed(3)} MHz <- ${file} (${(b.length / 2e6).toFixed(1)} M samples)`);
+    return { hz: Number(hz), buf: b, pos: 0 };
+  });
+})();
 
 // Offsets from centre (Hz) and audio modulation for each synthetic station.
 const STATIONS = Array.from({ length: TONES }, (_, k) => ({
@@ -307,6 +324,13 @@ const srv = net.createServer((sock) => {
         buf[2 * i + 1] = Math.max(0, Math.min(255, Math.round(127.5 + im)));
       }
       for (const o of adjOsc) renorm(o);
+    } else if (DAB_MAP.length && DAB_MAP.some((e) => Math.abs(e.hz - centreHz) <= 50e3)) {
+      const e = DAB_MAP.find((x) => Math.abs(x.hz - centreHz) <= 50e3);
+      for (let k = 0; k < n * 2; ) {
+        const take = Math.min(n * 2 - k, e.buf.length - e.pos);
+        e.buf.copy(buf, k, e.pos, e.pos + take);
+        k += take; e.pos = (e.pos + take) % e.buf.length;
+      }
     } else if (DAB_IQ && dabHere(centreHz)) {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, DAB_IQ.length - dabPos);
