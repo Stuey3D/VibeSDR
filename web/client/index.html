@@ -2002,14 +2002,21 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #dxList .sres { cursor: pointer; flex-wrap: wrap; }
 #dxList .sres:focus-visible { outline: 2px solid var(--freq); outline-offset: -2px; }
 #dxList .sres.dxSuspect { opacity: 0.55; }
+#dxList .sres .n { white-space: normal; }
+#dxList .tag { font-size: 10px; letter-spacing: 1px; color: var(--unit); border: 1px solid var(--btn-border);
+               border-radius: 4px; padding: 0 4px; margin-left: 4px; }
 #dxList .tag.dxLive { color: #0c0f0c; background: var(--btn-active-tx); border-color: var(--btn-active-tx); }
+#dxNote, #dxAlertRow { font-size: 11px; }
+#dxAlertRow[hidden], #dxNote[hidden] { display: none !important; }
+#dxAlertRow input { width: 14px; height: 14px; }
 #dxPager, #dxFilter, #dxSortRow { flex-wrap: wrap; align-items: center; gap: 6px; }
 #dxPager { margin-top: 8px; }
 #dxPager .gap { color: var(--unit); padding: 0 2px; }
 #dxViewBody table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
 #dxViewBody td, #dxViewBody th { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--btn-border); text-align: left; }
 #dxViewBody th { color: var(--text-dim); font-weight: normal; letter-spacing: 0.08em; }
-#dxViewBody p { margin: 6px 0; }
+#dxViewBody p { margin: 6px 0; font-size: 12px; }
+#dxViewMeta { font-size: 13px; margin: 6px 0; }
 /* ★★ V12 THE GALLERY — what this server's decoders heard, newest first; a NAVTEX message opens inline. */
 #galList .sres { cursor: pointer; flex-wrap: wrap; }
 #galList .sres:focus-visible { outline: 2px solid var(--freq); outline-offset: -2px; }

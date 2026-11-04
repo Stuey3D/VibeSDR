@@ -16749,6 +16749,7 @@ function dxAlertsArm() {
 async function renderDxLog(page = dxPage) {
   const host = $('dxList'), note = $('dxNote'), pager = $('dxPager');
   $('dxView').hidden = true; host.hidden = false; $('dxFilter').hidden = false; $('dxSortRow').hidden = false;
+  $('dxNote').hidden = false; $('dxAlertRow').hidden = false;
   host.innerHTML = '<div class="sres"><span class="n">Loading…</span></div>';
   pager.hidden = true;
   let j: DxPage | null = null;
@@ -16803,6 +16804,7 @@ let dxOpenId = -1;
 async function openDxEntry(id: number) {
   dxOpenId = id;
   $('dxList').hidden = true; $('dxFilter').hidden = true; $('dxSortRow').hidden = true; $('dxPager').hidden = true; $('dxView').hidden = false;
+  $('dxNote').hidden = true; $('dxAlertRow').hidden = true;   // ★ the list's footer and the alert switch belong to the list
   $('dxLogPanel').scrollTop = 0;
   const body = $('dxViewBody'); body.textContent = 'Loading…';
   $('dxViewMeta').textContent = '';

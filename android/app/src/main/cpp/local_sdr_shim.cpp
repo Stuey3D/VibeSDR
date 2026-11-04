@@ -23921,7 +23921,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::string j;
                 { std::lock_guard<std::mutex> lk(g_dxLogMtx); dxLogLoadLocked(); j = g_dxLog.listJson(q, utc); }
                 // ★ and what the scanner is: on, the bands, the raster — the client draws from the server (no hardcoded settings)
-                j.insert(j.size() - 1, ",\"scanner\":" + vibe::dx::toJson(cfg) + ",\"canPromote\":" + (adminOkFor(reqLine, sock) ? "true" : "false"));
+                // ★ canPromote: vsAdminHttpOk's own answer, without its 401 (no password set, the host itself, or the owner's proof)
+                bool owner;
+                { std::string sec; { std::lock_guard<std::mutex> lk(g_vsAdminMtx); sec = g_vsAdminSecret; }
+                  owner = sec.empty() || isLoopback(sock->peerAddress()) || adminOkFor(reqLine, sock); }
+                j.insert(j.size() - 1, ",\"scanner\":" + vibe::dx::toJson(cfg) + ",\"canPromote\":" + (owner ? "true" : "false"));
                 reply("200 OK", j); return;
             }
             if (!post && path == "/vibeserver/dxlog/entry") {
