@@ -51,7 +51,8 @@ using Json = vibe::antswitch::Json;
 static constexpr int    kMaxEntries   = 1000;
 static constexpr int    kMaxOpenings  = 32;      // per entry, newest kept
 static constexpr int    kMaxVariants  = 8;       // PS variants per FM entry
-static constexpr int    kMaxServices  = 32;      // DAB services per entry / opening
+static constexpr int    kMaxServices  = 32;      // DAB services per entry
+static constexpr int    kMaxOpeningServices = 16;   // …and named per opening (§12 q3) — bounded tighter: there are 32 openings
 static constexpr int    kMaxAlerts    = 100;
 static constexpr int    kBuckets      = 42;      // 7 days of 4-hour presence buckets
 static constexpr int64_t kBucketSec   = 4 * 3600;
@@ -586,7 +587,7 @@ public:
                         op.detections = (int)num(p, "detections", 0);
                         op.peakLevelDb = (float)num(p, "peakLevelDb", -200); op.peakSnrDb = (float)num(p, "peakSnrDb", 0);
                         if (const Json* sv = p.get("services"); sv && sv->kind == Json::Arr)
-                            for (const auto& s : sv->a) if (s.kind == Json::Str && (int)op.services.size() < kMaxServices) op.services.push_back(s.s);
+                            for (const auto& s : sv->a) if (s.kind == Json::Str && (int)op.services.size() < kMaxOpeningServices) op.services.push_back(s.s);
                         op.proof = p.str("proof");
                         e.openings.push_back(op);
                     }
@@ -667,7 +668,7 @@ private:
         if (level > o.peakLevelDb) o.peakLevelDb = level;
         if (snr > o.peakSnrDb) o.peakSnrDb = snr;
         for (const auto& s : svcs)
-            if ((int)o.services.size() < kMaxServices && std::find(o.services.begin(), o.services.end(), s) == o.services.end()) o.services.push_back(s);
+            if ((int)o.services.size() < kMaxOpeningServices && std::find(o.services.begin(), o.services.end(), s) == o.services.end()) o.services.push_back(s);
         // ★ a Local unheard for over the window has dropped back (judge does it on visits; this catches a band unvisited)
         if (e.cls == Cls::Local && e.lastHeard > 0 && now - e.lastHeard > kWindowSec) e.cls = Cls::Dx;
         e.lastHeard = now; ++e.timesHeard; e.lastSweep = sweepNow;

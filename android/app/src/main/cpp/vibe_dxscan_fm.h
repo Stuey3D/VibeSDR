@@ -95,9 +95,9 @@ public:
     /** Start a hop (on its own thread). The caller tunes the radio first; samples fed before start() are not wanted. */
     void start(const Params& p) {
         abort();
-        p_ = p;
         done_ = false; aborted_ = false; stop_ = false;
-        { std::lock_guard<std::mutex> lk(qm_); q_.clear(); qSamples_ = 0; dropped_ = 0; gap_ = false; }
+        // ★ under the queue's lock: a feed() already past its running_ test reads p_.rateHz there
+        { std::lock_guard<std::mutex> lk(qm_); p_ = p; q_.clear(); qSamples_ = 0; dropped_ = 0; gap_ = false; }
         results_.clear(); stats_ = Stats{};
         running_ = true;
         th_ = std::thread([this] { run(); });
@@ -106,7 +106,8 @@ public:
     void feed(const cf32* x, int n) {
         if (!running_.load(std::memory_order_relaxed) || n <= 0) return;
         std::lock_guard<std::mutex> lk(qm_);
-        const size_t cap = (size_t)(p_.rateHz * 0.5);
+        // ★ ≤ 0.5 s and ≤ 4 MB (512 k samples): an Airspy at 10 MS/s must not hold 40 MB on a 256 MB board
+        const size_t cap = std::min((size_t)(p_.rateHz * 0.5), (size_t)524288);
         while (!q_.empty() && qSamples_ + (size_t)n > cap) { qSamples_ -= q_.front().size(); q_.pop_front(); ++dropped_; gap_ = true; }
         q_.emplace_back(x, x + n);
         qSamples_ += (size_t)n;
