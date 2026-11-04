@@ -4,6 +4,7 @@ import { DIGI_MODE_STYLE } from '../utils/digiModes';   // ★ V12 the digital-s
 import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
 import BackgroundDecodingSetup from '../components/BackgroundDecodingSetup';
+import DxScanSetup, { collectDxScan, parseDxScan, type DxScanModel } from '../components/DxScanSetup';   // ★★★ V12
 import RspSetupCard from '../components/RspSetupCard';
 import { RSP_DEFAULTS, readRspCard, rspCaps, type RspCard } from '../services/rspCard';
 import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps } from '../services/bgDecode';
@@ -296,6 +297,8 @@ const K = {
   icom: 'vs_icom',
   /** ★★★ V12 background decoding — the radio's profiles, exactly RadioConfig::bgDecode's JSON ('' = none). */
   bgDecode: 'vs_bgdecode',
+  /** ★★★ V12 the idle DX scanner — exactly RadioConfig::dxScan's JSON ('' = never set: off). */
+  dxScan: 'vs_dxscan',
   /** ★★ V12 the gallery — size (MB), may everyone see it, are listeners' decodes kept. Absent = 100 / yes / yes. */
   galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
   /** ★★ V12 VibeAGC for SDRplay (0 automatic, 1 on, 2 off). */
@@ -494,6 +497,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  what the engine on this phone offers for them (null = an engine without it: the card is not drawn), the
    *  engine's own sentence when it would refuse them, and an epoch that remounts the editor when a stored value lands. */
   const [bgModel, setBgModel] = useState<BgModel>(() => emptyBgModel());
+  // ★★★ V12 THE IDLE DX SCANNER (components/DxScanSetup) — and whether it was ever saved (off-and-never-set stores nothing)
+  const [dxModel, setDxModel] = useState<DxScanModel>(() => parseDxScan(''));
+  const [dxWasSet, setDxWasSet] = useState(false);
   const [bgCaps, setBgCaps] = useState<BgCaps | null>(null);
   const [bgProblem, setBgProblem] = useState('');
   const [bgEpoch, setBgEpoch] = useState(0);
@@ -915,6 +921,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const bgSlotCap = decoderMax > 0 ? decoderMax : (bgCaps?.decoderSlotsDefault ?? 0);
   const bgJson = collectBg(bgModel);
   const onBgChange = (m: BgModel) => { setBgModel(m); void AsyncStorage.setItem(K.bgDecode, collectBg(m)); };
+  const dxJson = collectDxScan(dxModel, dxWasSet);
+  const onDxChange = (m: DxScanModel) => { setDxModel(m); setDxWasSet(true); void AsyncStorage.setItem(K.dxScan, collectDxScan(m, true)); };
   /* ★ The engine's save rule, as the owner edits — the Setup page refuses a save in these words, so this screen says them
    *  under the profiles and Start refuses the same profiles (start()). */
   useEffect(() => {
@@ -1417,6 +1425,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const vb = g(K.vfoB); if (vb != null) setVfoB(vb !== '0'); }
           // ★★ V12 background decoding + the gallery. Absent = off / the Setup page's defaults (100 MB, yes, yes).
           { const bd = g(K.bgDecode); if (bd != null) { setBgModel(parseBg(bd)); setBgEpoch((e) => e + 1); } }
+          { const dx = g(K.dxScan); if (dx != null && dx !== '') { setDxModel(parseDxScan(dx)); setDxWasSet(true); } }   // ★★★ V12
           { const gm = g(K.galleryMb); if (gm != null && gm !== '' && Number.isFinite(Number(gm))) setGalleryMb(Math.max(0, Number(gm))); }
           { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
@@ -2033,6 +2042,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
+    dxJson,
     rspCard, ppbText,
   };
 
@@ -2082,6 +2092,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★★★ V12 background decoding (RadioConfig::bgDecode) and the gallery — VibeServerBoot applies them on every start.
     //     Never sent to the private DAB scan engine's profiles (privateScanConfig drops bgDecode).
     bgDecode: live.current.bgJson,
+    // ★★★ V12 the idle DX scanner (RadioConfig::dxScan) — VibeServerBoot applies it; the private DAB scan engine drops it
+    dxScan: live.current.dxJson,
     galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
     // ★ Only an RSP's — 0 (automatic) on any other radio, so a choice saved while an RSP was plugged in cannot ride along.
     rspVibeAgc: radio?.driver === 'sdrplay' ? live.current.rspVibeAgc : 0,
@@ -2228,7 +2240,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingDabCh, String(live.current.landingDabCh)], [K.landingDabSid, String(live.current.landingDabSid)],
       [K.landingDabSvc, live.current.landingDabSvc], [K.radioLabel, live.current.radioLabel],
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
-      [K.bgDecode, live.current.bgJson], [K.galleryMb, String(live.current.galleryMb)],
+      [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
       [K.rspVibeAgc, String(live.current.rspVibeAgc)], [K.nbWide, String(live.current.nbWide)],
       [K.rsp, JSON.stringify(live.current.rspCard)], [K.ppb, live.current.ppbText],
@@ -4116,6 +4128,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   dscOk={!bgOff.has('dsc')} rate={bgRate} lockCentre={bgLockCentre}
                   users={advanced ? maxUsers : 1} decoderMax={decoderMax}
                   adsbKeeps={landingAdsb && adsbKeep} problem={bgProblem} />
+              </View>
+            )}
+
+            {/* ★★★ V12 THE IDLE DX SCANNER (2026-11-04) — beside Background Decoding, as on the Setup page's Radio tab. Not on
+                an Icom (no IQ to sweep). Lite too: the engine is the same shim; the benchmark's dec_dxscan row sets how many
+                stations a weak box decodes at once, so a TV box sweeps in smaller steps rather than falling behind. */}
+            {!isIcom && (
+              <View style={[styles.card, { borderColor: C.border }]}>
+                <DxScanSetup C={C} F={F} model={dxModel} onChange={onDxChange} driver={bgDriver} rate={bgRate} />
               </View>
             )}
 

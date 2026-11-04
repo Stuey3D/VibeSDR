@@ -364,6 +364,13 @@ object VibeLocalSDR {
      *  tick picks it up within two seconds. @return "" when applied, else the reason (the previous settings stay). */
     fun setBackgroundDecoding(json: String): String { ensureLoaded(); return nativeSetBackgroundDecoding(json) }
     private external fun nativeSetBackgroundDecoding(json: String): String
+    /** ★★★ V12 THE IDLE DX SCANNER — this radio's settings (RadioConfig::dxScan's JSON, "" = off). Live. "" = applied,
+     *  else why not. */
+    fun setDxScan(json: String): String { ensureLoaded(); return nativeSetDxScan(json) }
+    private external fun nativeSetDxScan(json: String): String
+    /** ★★★ …and where its DX log lives (written every ~5 min when changed, and at shutdown). */
+    fun setDxLogFile(path: String) { ensureLoaded(); nativeSetDxLogFile(path) }
+    private external fun nativeSetDxLogFile(path: String)
     /** ★★ V12 THE GALLERY — its directory, the owner's size in MB (0 keeps nothing), may everyone see it, are listeners'
      *  own decodes kept; the radio's label on each item and its serial kept OUT of them. */
     fun setGallery(dir: String, limitMb: Double, publicRead: Boolean, saveLive: Boolean, label: String, serial: String) {

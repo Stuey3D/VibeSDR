@@ -1495,6 +1495,18 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetBackgroundDecoding(JNIEnv* env, jobje
     vibe::LocalSdrShim::setBackgroundDecoding(jstr(env, json), err);
     return env->NewStringUTF(err.c_str());   // ★ "" = applied; else why not (the old settings stay)
 }
+/* ★★★ V12 THE IDLE DX SCANNER on the Android server (ServerModeScreen → VibeServerBoot) — main.cpp's setDxScan and the
+ *  radio's DX log file. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDxScan(JNIEnv* env, jobject, jstring json) {
+    std::string err;
+    vibe::LocalSdrShim::setDxScan(jstr(env, json), err);
+    return env->NewStringUTF(err.c_str());   // ★ "" = applied; else why not (the old settings stay)
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDxLogFile(JNIEnv* env, jobject, jstring path) {
+    vibe::LocalSdrShim::setDxLogFile(jstr(env, path));
+}
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetGallery(JNIEnv* env, jobject, jstring dir, jdouble limitMb,
                                                    jboolean publicRead, jboolean saveLive, jstring label, jstring serial) {
