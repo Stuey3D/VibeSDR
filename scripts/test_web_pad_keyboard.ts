@@ -39,7 +39,8 @@ ok(/if \(isTextField\(el\)\) \{ openPadKeyboard\(el\); suppressHeld\(\); return;
    'pad enter on a text box opens the controller keyboard, never el.focus() (a real keyboard\'s Enter types in place)');
 
 // ── ★★ Only REAL pad use counts (Stuart, 2026-10-20) ──
-ok(/if \(rising\.some\(Boolean\) \|\| sticks\.some\(\(v, i\) => v && !sWas\[i\]\)\) notePadInput\(\);/.test(gp),
+// ★ V12: the same moment also marks the pad as DRIVING (driveInput — the tune / zoom keys tuck away, index.html padTuck).
+ok(/if \(rising\.some\(Boolean\) \|\| sticks\.some\(\(v, i\) => v && !sWas\[i\]\)\) \{ notePadInput\(\); setDriven\('pad'\);/.test(gp),
    'the pad becomes the input only on a button press or a stick crossing STICK_USE');
 ok(/const STICK_USE = 0\.5;/.test(gp) && (gp.match(/notePadInput\(\)/g) ?? []).length === 1, '…in exactly one place, with a dead zone of 0.5');
 ok(!/gamepadconnected[^\n]*inputSource|gamepadconnected[^\n]*notePadInput/.test(gp), '…never on connecting');

@@ -447,9 +447,16 @@ html[data-frontdoor] #splashListeners { display: none !important; }
      readout, and a bar that shrinks to fit three chips stops being readable as a level. 15em
      keeps a usable scale while letting the island close up around it. */
   grid-template-columns: auto auto minmax(15em, 1fr) auto auto;
-  gap: 0.45em; align-items: stretch;
+  /* ★★ V12: the space BETWEEN the five is margins, not column-gap — the same 0.45em, drawn identically. A dial tucking
+     away (body.padTuck, below) takes its own margin with it; a grid gap would stay behind as an empty slot. */
+  --mGap: 0.45em;
+  gap: var(--mGap); column-gap: 0; align-items: stretch;
 }
 #mMain .mDial { min-width: 10.5em; }
+#mVfoDial { margin-right: var(--mGap); }
+#mStackL  { margin-right: var(--mGap); }
+#mStackR  { margin-left: var(--mGap); }
+#mZoomDial{ margin-left: var(--mGap); }
 /* Two half-height buttons in the space one full-height one would take. */
 /* ★★ BOTH STACKS ARE ONE WIDTH, and it belongs to the STACK rather than to a button inside it.
    The 7.2em used to live on #mStep alone, so the left stack was step-sized and the right stack
@@ -480,8 +487,12 @@ html[data-frontdoor] #splashListeners { display: none !important; }
      pill and the meter bigger. The widest state was always going to be the size of this card, so
      it may as well be the size of it all the time. */
   #mcard { width: min(96vw, 700px); }
-  #mMain { grid-template-columns: 1fr 1fr; }
+  /* ★★ V12: here the ROWS are margins (the dials' row tucks away under the island), the columns keep their gap. */
+  #mMain { grid-template-columns: 1fr 1fr; row-gap: 0; column-gap: var(--mGap); }
   #mMain .mDial { min-width: 0; }
+  #mVfoDial, #mStackL, #mStackR, #mZoomDial { margin: 0; }
+  #mPill    { margin-bottom: var(--mGap); }
+  #mVfoDial, #mZoomDial { margin-top: var(--mGap); }
   #mPill    { grid-column: 1 / -1; grid-row: 1; }
   #mStackL  { grid-column: 1;      grid-row: 2; }
   #mStackR  { grid-column: 2;      grid-row: 2; }
@@ -502,8 +513,13 @@ html[data-frontdoor] #splashListeners { display: none !important; }
      targets and a longer signal meter out of space that was otherwise wasted, which is the
      opposite trade from the desktop, where the waterfall beside it is the thing worth keeping. */
   #mcard { width: min(96vw, 1000px); }
-  #mMain { grid-template-columns: auto auto minmax(20em, 1fr) auto auto; }
+  #mMain { grid-template-columns: auto auto minmax(20em, 1fr) auto auto; row-gap: var(--mGap); column-gap: 0; }
   #mMain .mDial { min-width: 12em; }
+  #mPill, #mVfoDial, #mZoomDial { margin: 0; }
+  #mVfoDial { margin-right: var(--mGap); }
+  #mStackL  { margin-right: var(--mGap); }
+  #mStackR  { margin-left: var(--mGap); }
+  #mZoomDial{ margin-left: var(--mGap); }
   #mPill    { grid-column: 3; grid-row: 1; }
   #mStackL  { grid-column: 2; grid-row: 1; }
   #mStackR  { grid-column: 4; grid-row: 1; }
@@ -511,6 +527,31 @@ html[data-frontdoor] #splashListeners { display: none !important; }
   #mZoomDial{ grid-column: 5; grid-row: 1; }
   .mStack { grid-template-rows: 1fr 1fr; grid-template-columns: none; }
   .mStack .mBtn { min-height: 0; }
+}
+/* ★★★ V12 THE TUNE AND ZOOM KEYS TUCK AWAY WHILE A PAD, KEYBOARD OR REMOTE DRIVES (Stuart, 2026-11-04: "if gamepad,
+   keyboard, remote control detected the tune and zoom controls … disappear, if I revert back to touchscreen or
+   trackpad/mouse then they … back … Default on with option in the controls menu to disable it"; "doesnt need to be a
+   slide can be a simple fade in and out"). body.padTuck is set by main.ts padTuckSync from the LAST INPUT
+   (gamepad.ts driveInput — the same tracker the controller keyboard uses).
+   ★ A FADE, THEN THE ROOM: opacity goes over 0.18 s, and only then do the dials give up their size and margin (a
+     delayed 0 s transition), so the pill and the stacks re-flow once, into the freed width (wide) or height (narrow:
+     the dials' row goes). Coming back, the room returns at once and the keys fade in. prefers-reduced-motion: no fade.
+   ★ Kept IN the grid (not display:none), so the five-track placement never re-flows into the wrong columns; the
+     space between tracks is margins (#mMain above), so a tucked dial leaves no empty gap behind.
+   ★ The gamepad highlight and Tab skip them: visibility:hidden and 0×0 once tucked (gamepad.ts visible()).
+   ★ The card floats over the waterfall (position:absolute) — the canvases never resize for this. */
+#mVfoDial, #mZoomDial {
+  max-width: 100vw; max-height: 100vh;
+  transition: opacity 0.18s ease;
+}
+body.padTuck #mVfoDial, body.padTuck #mZoomDial {
+  opacity: 0; pointer-events: none; visibility: hidden; overflow: hidden;
+  max-width: 0; max-height: 0; min-width: 0; margin: 0; padding: 0; border-width: 0;
+  transition: opacity 0.18s ease, visibility 0s 0.18s, max-width 0s 0.18s, max-height 0s 0.18s, min-width 0s 0.18s,
+              margin 0s 0.18s;
+}
+@media (prefers-reduced-motion: reduce) {
+  #mVfoDial, #mZoomDial, body.padTuck #mVfoDial, body.padTuck #mZoomDial { transition: none; }
 }
 /* ★★ THE OLD `max-width: 440px` RULE IS GONE. It split the two dials onto a row each, which is
    the one thing Stuart did NOT want in portrait: he pointed at the landscape screenshot and said
@@ -1108,7 +1149,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
       one.
    ★ Portrait only. There is room for one row in landscape and it is not affected, so it keeps the
      denser layout rather than spending a line it does not need to. */
-@media (orientation: portrait) {
+/* ★★ V12 AND ON A SMALL LANDSCAPE SCREEN (Stuart, 2026-11-04 — the R36S handheld's 640×480): below the landscape
+   phone's one-row layout (min-width 700px, above) the card already takes the portrait arrangement — pill, buttons,
+   dials — so the status line does too: clock and chips on one line, the link on the next, under the island. Only the
+   control card; nothing else here keys on orientation. */
+@media (orientation: portrait), (max-width: 699.98px) {
   #mStatus {
     flex-direction: column; align-items: stretch;
     justify-content: flex-start; flex-wrap: nowrap;
@@ -6612,6 +6657,16 @@ select.btn { padding: 6px 8px; }
   <div class="lbl wrap">A game controller or a handheld drives this page: the D-pad moves a highlight, and the
     guide shows what every button does. SELECT on the controller opens it too. Enter on a text box opens an on-screen
     keyboard for the controller; touch, a click or a key on a real keyboard goes back to ordinary typing.</div>
+  <!-- ★★★ V12 (Stuart, 2026-11-04): the tune and zoom keys tuck into the island while a pad, keyboard or remote drives
+       — index.html body.padTuck, main.ts padTuckSync. ON by default; OFF = the keys stay exactly as they are. -->
+  <div class="mrow">
+    <label for="padTuckTg">TUCK AWAY TUNE AND ZOOM KEYS</label>
+    <div class="seg"><button class="btn on" id="padTuckTg">ON</button></div>
+  </div>
+  <div class="lbl wrap">While a game controller, a keyboard or a remote is driving, the ‹ › tune keys and the − + zoom
+    keys slide into the control panel to make room — the controller tunes and zooms itself (see the guide), a keyboard
+    with &lt; &gt; and − +. Touch the screen or use a mouse or trackpad and they slide back out. OFF leaves them where
+    they are.</div>
 
   <!-- ★★★ SERVER ADMIN — the last thing in the menu, and only for the owner.
        Hidden unless this session is unlocked as admin: a listener has no use for it, and a
