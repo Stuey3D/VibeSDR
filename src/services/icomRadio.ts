@@ -546,10 +546,10 @@ export function preflightLines(p: IcomPreflight | null): { ok: boolean; text: st
  *  names and defaults). scripts/check-icom-servermode.mjs holds this list against the Kotlin. The phone's audio is
  *  AudioRecord on the radio's USB input and its port is the device the owner allowed, so icomAudio / icomPort /
  *  icomTtyOk are not settings there. */
-export const ICOM_PHONE_KEYS = ['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomTuneLock', 'icomRfOpen', 'icomPowerOn'] as const;
+export const ICOM_PHONE_KEYS = ['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomTuneLock', 'icomPowerOn'] as const;
 export type IcomPhoneFields = Pick<IcomSettings, (typeof ICOM_PHONE_KEYS)[number]>;
 
-/** The six fields for the phone's start config, at definite values (so a crash-restore starts the radio exactly as
+/** The five fields for the phone's start config, at definite values (so a crash-restore starts the radio exactly as
  *  the screen did), from whatever was stored — a missing or damaged store gives the setup page's defaults (tune
  *  lock OFF, power-on OFF). ★ The baud is one the radio's menu offers, or 115200. */
 export function icomPhoneFields(stored: unknown): IcomPhoneFields {
@@ -559,7 +559,6 @@ export function icomPhoneFields(stored: unknown): IcomPhoneFields {
     icomCiv: s.icomCiv,
     icomScopeSpeed: s.icomScopeSpeed,
     icomTuneLock: s.icomTuneLock,
-    icomRfOpen: s.icomRfOpen,
     icomPowerOn: s.icomPowerOn,
   };
 }

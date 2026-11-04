@@ -429,7 +429,6 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     icomCiv: cfg.icomCiv ?? 0,
     icomScopeSpeed: cfg.icomScopeSpeed ?? 0,
     icomTuneLock: cfg.icomTuneLock ?? false,
-    icomRfOpen: cfg.icomRfOpen ?? false,
     icomPowerOn: cfg.icomPowerOn ?? false,
   };
 }

@@ -181,11 +181,11 @@ eq(preflightLines({ passed: false, verified: false, summary: '', items: [{ name:
    [{ ok: false, text: 'USB SEND: RTS — change it at MENU > SET > Connectors > USB SEND' }], 'a failing item names the menu path');
 
 // ── a phone serving its own Icom (ServerModeScreen) ──
-eq(icomPhoneFields(null), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomTuneLock: false, icomRfOpen: false, icomPowerOn: false },
+eq(icomPhoneFields(null), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomTuneLock: false, icomPowerOn: false },
    'phone defaults = the setup page\'s, ★ tune lock OFF, power-on OFF');
-eq(Object.keys(icomPhoneFields({})), [...ICOM_PHONE_KEYS], 'exactly the six keys Android reads, nothing else');
+eq(Object.keys(icomPhoneFields({})), [...ICOM_PHONE_KEYS], 'exactly the five keys Android reads, nothing else (no icomRfOpen: the SDR gain rules apply)');
 eq(icomPhoneFields({ icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomTuneLock: true, icomRfOpen: true, icomPowerOn: true, icomAudio: 'x', icomPort: '/dev/x', icomTtyOk: true }),
-   { icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomTuneLock: true, icomRfOpen: true, icomPowerOn: true },
+   { icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomTuneLock: true, icomPowerOn: true },
    'stored values kept; audio/port/serial-device dropped (not settings on a phone)');
 eq(icomPhoneFields({ icomBaud: 12345 }).icomBaud, 115200, 'a baud the radio\'s menu does not offer → 115200');
 eq(icomPhoneFields({ icomCiv: 999, icomScopeSpeed: 7 }), { ...icomPhoneFields(null), icomCiv: 0xff, icomScopeSpeed: 0 }, 'out-of-range values clamped / defaulted');

@@ -290,7 +290,8 @@ struct Config {
      *                  shared VFO does already"), so the server's ordinary dial rules apply. ★ A NEW KEY: the old
      *                  `icomOwnerLock` was always written (default true), so an explicit choice could not be told
      *                  from the old default — it is no longer read, and every Icom starts open.
-     *   icomRfOpen     listeners may change ATT/preamp/AGC/RF gain/NB/NR/ANF (default: admin only)
+     *   icomRfOpen     ★ IGNORED since 2026-11-04 (kept so a downgrade still reads the owner's choice): an Icom's
+     *                  ATT/preamp/AGC/RF gain/NB/NR/ANF now follow the SDRs' gain rules (sharedGate, AGC lock, gain lock)
      *   icomTtyOk      the owner allows a serial device, accepting its DTR/RTS glitch on open
      *   icomPowerOn    "Power on the radio over CI-V" (default OFF): 18 01 behind the FE wake run when the radio
      *                  is not answering; with the idle power-down on, it is also switched OFF at the idle park */

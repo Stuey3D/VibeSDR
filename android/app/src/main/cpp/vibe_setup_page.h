@@ -970,9 +970,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <b>Ask before tuning</b> if you have it on. On: listeners hear whatever you are on and cannot retune your radio
           mid-QSO; you tune from the radio or from VibeSDR signed in as admin. <b>This only protects the radio once an
           admin password is set</b> &mdash; without one, anyone can sign in as admin.</div>
-        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
-          <input type="checkbox" id="icomRfOpen" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Listeners may change ATT, preamp, AGC, RF gain, NB, NR and ANF</span></label>
+        <div class="hint" style="margin-top:12px">ATT, preamp, AGC, RF gain, NB, NR and ANF follow the same rules as any
+          radio&rsquo;s gain: listeners may change them on a personal receiver; on a locked (shared) receiver only you
+          can; and your <b>AGC lock</b> or a <b>fixed gain</b> on a band keeps ATT, preamp and RF gain yours.</div>
         <!-- ★★ POWER (2026-11-04, Saber: other software switches his IC-7300 on, so VibeServer often starts while it is
              off). VibeServer waits quietly for a switched-off radio whatever this says; this only decides whether it may
              SEND the power-on. Manual: IC-7300 Full Manual §19, command 18 01, footnote *3 (the FE preamble). -->
@@ -4679,7 +4679,6 @@ function icomRender(hw, r, drv) {
   set("icomScopeSpeed", String(r.icomScopeSpeed || 0));
   set("icomTuneLock", !!r.icomTuneLock);   // ★ default OFF (2026-11-04): the ordinary dial rules
   set("icomPowerOn", !!r.icomPowerOn);
-  set("icomRfOpen", !!r.icomRfOpen);
   set("icomAudio", r.icomAudio || "auto");
   set("icomPort", r.icomPort || "usb");
   set("icomTtyOk", !!r.icomTtyOk);
@@ -7320,7 +7319,6 @@ function collectRadio() {
       icomScopeSpeed: parseInt($("icomScopeSpeed").value, 10) || 0,
       icomTuneLock: $("icomTuneLock").checked,
       icomPowerOn: $("icomPowerOn").checked,
-      icomRfOpen: $("icomRfOpen").checked,
       icomAudio: ($("icomAudio").value || "auto").trim(),
       icomPort: ($("icomPort").value || "usb").trim(),
       icomTtyOk: $("icomTtyOk").checked,

@@ -6594,7 +6594,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool useIcom() const { return false; }
 #endif
     std::atomic<double> icomSpanHz{0.0};   ///< the scope's span — what displaySpan() is on an Icom
-    bool icomTuneLock = false, icomRfOpen = false;   // ★ tuning follows the ordinary dial rules unless the owner locks it
+    bool icomTuneLock = false;   // ★ tuning follows the ordinary dial rules unless the owner locks it
     std::string icomRadioMode;             ///< the radio's own mode name ("usbd", "rtty") — under modeMtx
     std::vector<stereo_t> icomPack;        ///< PCM → onAudio(); grows once, never per block
     std::vector<uint8_t> icomFrame;        ///< one SPEC frame; grows once per wire width
@@ -17807,10 +17807,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     VFO does already"): single-user, the listener tunes; shared, the shared-dial contract — ask before tuning
      *     (askRefuses gates tune/mode/bandwidth/icom_control before this runs), admin override. The owner may still
      *     lock it ("Only I may tune this radio", icomTuneLock, default OFF) — then only the admin tunes.
-     *     RF settings (ATT, preamp, AGC, RF gain, NB/NR/ANF) are admin-only unless the owner opens them.
+     *  ★★ RF SETTINGS (ATT, preamp, AGC, RF gain, NB/NR/ANF, scope speed) FOLLOW THE SDRs' GAIN RULES EXACTLY
+     *     (2026-11-04, Stuart: "inline with the SDR's regarding gain etc") — no Icom-only gate any more:
+     *       • sharedGate: free on a personal receiver, behind the admin password on a locked (shared) one;
+     *       • the owner's AGC lock: the manual path (ATT, preamp, RF gain) is closed to listeners, as on the HF+;
+     *       • the owner's gain lock on a capped band ("the ceiling IS the setting"): ATT/preamp/RF gain refused;
+     *       • ask before tuning: icom_control is in askRefuses' list, like every radio's front end;
+     *       • the signed-in admin is exempt from the locks, as in the `gain` and `ahf_control` handlers.
+     *     The old `icomRfOpen` is no longer read here (kept in the config file, ignored).
      *  ★★ sock == nullptr is the SERVER talking to itself (a landing, a resume): ignored — the radio is the
      *     state, and recovery is not a user action. */
-    bool icomControl(const std::shared_ptr<net::Socket>& sock, const std::string& type, const std::string& msg) {
+    bool icomControl(const std::shared_ptr<net::Socket>& sock, const std::string& type, const std::string& msg,
+                     const std::function<bool(const char*)>& sharedGate) {
         if (!useIcom()) return false;
 #if VIBE_HAVE_ICOM
         static const char* const kNotHere[] = {
@@ -17826,14 +17834,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!sock) { LOGI("icom: a server-side '%s' ignored — the radio is the dial", type.c_str()); return true; }
         const bool admin = icomAdmin(sock);
         const bool mayTune = admin || !icomTuneLock;
-        const bool mayRf = admin || icomRfOpen;
+        // ★ The SDR rules (see above), evaluated only for a message that carries an RF field — sharedGate logs a refusal.
+        int rfShared = -1;
+        auto rfOk = [&]() { if (rfShared < 0) rfShared = sharedGate("Icom RF settings") ? 1 : 0; return rfShared == 1; };
+        const double lf = LocalSdrShim::instance().listenFrequency();
+        const bool manualLocked = !admin && (LocalSdrShim::agcLocked()
+                                  || (LocalSdrShim::gainCapAt(lf) >= 0 && LocalSdrShim::gainLockedAt(lf)));
         std::string why;
         auto refuse = [&](const std::string& w) {
             LOGI("icom: refused %s — %s", type.c_str(), w.c_str());
             sendText(sock, "{\"type\":\"notice\",\"why\":\"" + jsonEscape(w) + "\"}");
         };
         static const char* kFollow = "The owner has set this radio so that only they tune it \xE2\x80\x94 you hear whatever it is on";
-        static const char* kRfAdmin = "Only the owner can change this radio's RF settings";
+        static const char* kRfAdmin = "Only the owner can change this radio's RF settings on a shared receiver";
+        static const char* kRfLocked = "The owner has fixed this radio's gain \xE2\x80\x94 ATT, preamp and RF gain are theirs";
         const icom::Model& m = icom->model();
         auto nearestSpan = [&](double want) -> uint32_t {
             uint32_t best = 0; double bestD = 1e30;
@@ -17930,14 +17944,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (jsonNum(msg, "fil", v))                   { if (!mayTune) refuse(kFollow); else if (!icom->setFilter((int)v, why)) refuse(why); }
         if (jsonNum(msg, "span", v))                  { if (!mayTune) refuse(kFollow); else if (!icom->setSpanTotal((uint32_t)v, why)) refuse(why); }
         if (!(sv = jsonStr(msg, "scopeMode")).empty()) { if (!mayTune) refuse(kFollow); else if (!icom->setScopeMode(sv == "fixed" ? 1 : sv == "centre" ? 0 : -1, why)) refuse(why); }
-        if (!(sv = jsonStr(msg, "scopeSpeed")).empty()) { if (!mayRf) refuse(kRfAdmin); else if (!icom->setScopeSpeed(sv == "fast" ? 0 : sv == "mid" ? 1 : sv == "slow" ? 2 : -1, why)) refuse(why); }
-        if (jsonNum(msg, "att", v))                   { if (!mayRf) refuse(kRfAdmin); else if (!icom->setAtt((int)v, why)) refuse(why); }
-        if (jsonNum(msg, "preamp", v))                { if (!mayRf) refuse(kRfAdmin); else if (!icom->setPreamp((int)v, why)) refuse(why); }
-        if (!(sv = jsonStr(msg, "agc")).empty())       { if (!mayRf) refuse(kRfAdmin); else if (!icom->setAgc(sv == "fast" ? 1 : sv == "mid" ? 2 : sv == "slow" ? 3 : -1, why)) refuse(why); }
-        if (jsonNum(msg, "rfGain", v))                { if (!mayRf) refuse(kRfAdmin); else if (!icom->setRfGain((int)v, why)) refuse(why); }
-        if (msg.find("\"nb\"") != std::string::npos)  { if (!mayRf) refuse(kRfAdmin); else if (!icom->setNb(jsonOn(msg, "nb"), why)) refuse(why); }
-        if (msg.find("\"nr\"") != std::string::npos)  { if (!mayRf) refuse(kRfAdmin); else if (!icom->setNr(jsonOn(msg, "nr"), why)) refuse(why); }
-        if (msg.find("\"anf\"") != std::string::npos) { if (!mayRf) refuse(kRfAdmin); else if (!icom->setAnf(jsonOn(msg, "anf"), why)) refuse(why); }
+        if (!(sv = jsonStr(msg, "scopeSpeed")).empty()) { if (!rfOk()) refuse(kRfAdmin); else if (!icom->setScopeSpeed(sv == "fast" ? 0 : sv == "mid" ? 1 : sv == "slow" ? 2 : -1, why)) refuse(why); }
+        if (jsonNum(msg, "att", v))                   { if (!rfOk()) refuse(kRfAdmin); else if (manualLocked) refuse(kRfLocked); else if (!icom->setAtt((int)v, why)) refuse(why); }
+        if (jsonNum(msg, "preamp", v))                { if (!rfOk()) refuse(kRfAdmin); else if (manualLocked) refuse(kRfLocked); else if (!icom->setPreamp((int)v, why)) refuse(why); }
+        // ★ The AGC's SPEED is the AGC's own setting, not a way past the lock (the HF+ threshold's rule) — sharedGate only.
+        if (!(sv = jsonStr(msg, "agc")).empty())       { if (!rfOk()) refuse(kRfAdmin); else if (!icom->setAgc(sv == "fast" ? 1 : sv == "mid" ? 2 : sv == "slow" ? 3 : -1, why)) refuse(why); }
+        if (jsonNum(msg, "rfGain", v))                { if (!rfOk()) refuse(kRfAdmin); else if (manualLocked) refuse(kRfLocked); else if (!icom->setRfGain((int)v, why)) refuse(why); }
+        if (msg.find("\"nb\"") != std::string::npos)  { if (!rfOk()) refuse(kRfAdmin); else if (!icom->setNb(jsonOn(msg, "nb"), why)) refuse(why); }
+        if (msg.find("\"nr\"") != std::string::npos)  { if (!rfOk()) refuse(kRfAdmin); else if (!icom->setNr(jsonOn(msg, "nr"), why)) refuse(why); }
+        if (msg.find("\"anf\"") != std::string::npos) { if (!rfOk()) refuse(kRfAdmin); else if (!icom->setAnf(jsonOn(msg, "anf"), why)) refuse(why); }
         return true;
 #else
         (void)sock; (void)type; (void)msg;
@@ -18494,7 +18509,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return g_vsLockedCentre.load() <= 0.0 || adminGate(what);
         };
         // ★★★ AN ICOM ANSWERS ITS OWN CONTROLS, after the admin sign-in above and before ANY of the IQ paths below.
-        if (useIcom() && icomControl(sock, type, msg)) return;
+        if (useIcom() && icomControl(sock, type, msg, sharedGate)) return;
         if (type == "hackrf_control") {
             /* ★★★ THE RF AMP IS BEHIND adminGate, NOT sharedGate, AND THAT IS THE WHOLE POINT OF
              *     THIS BRANCH. Every other gain control on every other radio is a listening
@@ -42072,7 +42087,7 @@ int LocalSdrShim::startIcom(const IcomStart& o, std::string& err) {
     impl->mode = "usb";
     impl->audioGain.store(1.0f);      // the radio's own AF level; buildAudio()'s per-mode trim does not apply
     impl->icomTuneLock = o.ownerLock;
-    impl->icomRfOpen = o.rfOpen;
+    (void)o.rfOpen;   // ★ ignored since 2026-11-04: an Icom's RF settings follow the SDRs' gain rules (icomControl)
     impl->icom = std::make_unique<icom::IcomSource>();
     Impl* self = impl;
     impl->icom->setSweepSink([self](const icom::Sweep& s) { self->onIcomSweep(s); });
@@ -42893,7 +42908,13 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
         for (int i = 0; i < m.nRanges; i++) j += std::string(i ? "," : "") + "[" + std::to_string(m.ranges[i].lo) + "," + std::to_string(m.ranges[i].hi) + "]";
         j += "]";
         j += std::string(",\"tx\":") + (st.tx ? "true" : "false") + ",\"linkUp\":" + (st.linkUp ? "true" : "false");
-        j += std::string(",\"ownerLock\":") + (p->icomTuneLock ? "true" : "false") + ",\"rfOpen\":" + (p->icomRfOpen ? "true" : "false");
+        /* ★★ rfOpen = MAY A LISTENER CHANGE THE RF SETTINGS NOW, by the SDRs' rules (not an Icom-only switch): not a locked
+         *  (shared) receiver, no owner AGC lock, no fixed gain on this band. The clients' icomMayRf reads it unchanged
+         *  (admin || rfOpen), so the panel shows exactly what the server will take. */
+        const double lfq = LocalSdrShim::instance().listenFrequency();
+        const bool rfOpenNow = g_vsLockedCentre.load() <= 0.0 && !LocalSdrShim::agcLocked()
+                               && !(LocalSdrShim::gainCapAt(lfq) >= 0 && LocalSdrShim::gainLockedAt(lfq));
+        j += std::string(",\"ownerLock\":") + (p->icomTuneLock ? "true" : "false") + ",\"rfOpen\":" + (rfOpenNow ? "true" : "false");
         // ★★ WHY IT IS QUIET, in the source's own words (switched off / switching on / off by the owner / refused), and
         //    the owner's next step; and the power facts the admin's RADIO ON / RADIO OFF buttons need.
         j += ",\"linkWhy\":" + q(ic.linkProblem()) + ",\"linkHint\":" + q(st.linkUp ? std::string() : ic.linkHint());

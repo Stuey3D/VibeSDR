@@ -193,7 +193,7 @@ export function IcomFacts({ icom, styles, audio = true, portNote = true }:
     <Text style={styles.fieldLbl}>Who may tune</Text>
     <Text style={styles.note}>
       {icom.ownerLock ? 'Only you tune this radio — listeners follow it.' : 'Listeners tune it under this server’s ordinary dial rules.'}{' '}
-      {icom.rfOpen ? 'Listeners may change its RF settings.' : 'Its RF settings are yours alone.'}
+      {icom.rfOpen ? 'Listeners may change its RF settings (the same rules as any radio\u2019s gain).' : 'Its RF settings are yours alone right now (a locked receiver, the AGC lock or a fixed gain).'}
     </Text>
   </>);
 }
@@ -237,11 +237,8 @@ export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink,
     </View>
     <Text style={styles.note}>Off: the radio follows this server&rsquo;s ordinary dial rules, like any other radio. On: only
       you tune it (signed in as admin). This only protects the radio once an admin password is set.</Text>
-    <View style={styles.toggleRow}>
-      <Text style={[styles.toggleLabel, { flex: 1 }]}>Listeners may change ATT, preamp, AGC, RF gain, NB, NR and ANF</Text>
-      <Switch value={form.icomRfOpen} onValueChange={(v) => onSet('icomRfOpen', v)}
-              trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomRfOpen ? ink.thumbOn : ink.thumbOff} />
-    </View>
+    <Text style={styles.note}>ATT, preamp, AGC, RF gain, NB, NR and ANF follow the same rules as any radio&rsquo;s gain:
+      free on a personal receiver, yours on a locked one, and your AGC lock or a fixed gain keeps ATT, preamp and RF gain yours.</Text>
     <View style={styles.toggleRow}>
       <Text style={[styles.toggleLabel, { flex: 1 }]}>Power on the radio over CI-V</Text>
       <Switch value={form.icomPowerOn} onValueChange={(v) => onSet('icomPowerOn', v)}

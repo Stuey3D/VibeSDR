@@ -137,6 +137,14 @@ try {
   ok(au.binBytes > 1000, `audio flows on the audio socket (${au.binBytes} bytes)`);
   ok(a.last('icom') && typeof a.last('icom').sRaw === 'number', `the icom status line arrives (S ${a.last('icom') && a.last('icom').sRaw})`);
 
+  console.log('   RF settings follow the SDRs\' gain rules');
+  ok(r.rfOpen === true, 'hwinfo rfOpen: a personal (unlocked) receiver — listeners may change the RF settings, like SDR gain');
+  a.send({ type: 'icom_control', att: 20 });
+  ok(await until(async () => (await stats()).att === 0x20, 3000), '★ a listener (not admin) switches the ATT on — like SDR gain on a personal receiver');
+  a.send({ type: 'icom_control', preamp: 2, rfGain: 200, agc: 'slow' });
+  ok(await until(async () => { const s = await stats(); return s.preamp === 2 && s.rf === 200 && s.agc === 3; }, 3000), '  … and the preamp, RF gain and AGC');
+  a.send({ type: 'icom_control', att: 0, preamp: 1, rfGain: 255, agc: 'mid' });
+  await until(async () => { const s = await stats(); return s.att === 0 && s.preamp === 1; }, 3000);
   console.log('   tuning follows the ordinary dial rules; the power keys are the owner\'s');
   a.send({ type: 'tune', frequency: 7050000, mode: 'usb' });
   ok(await until(async () => (await stats()).freq === 7050000, 3000), "★ a listener (not admin) tunes the radio — like any other radio");
@@ -210,7 +218,7 @@ try {
   fake.kill('SIGTERM');
 }
 // ── ★★ PHASE 1b: THE TUNE LOCK ON, ASK BEFORE TUNING, AND A RADIO STARTED SWITCHED OFF ──
-async function phase(fakeArgs, srvArgs, body) {
+async function phase(fakeArgs, srvArgs, body, cfgObj = null) {
   const f = spawn(FAKE, fakeArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
   let out = ''; f.stdout.on('data', (d) => { out += d.toString(); }); f.stderr.on('data', (d) => { out += d.toString(); });
   await until(() => /FAKE_ICOM_PTY (\S+)/.test(out), 3000);
@@ -224,8 +232,14 @@ async function phase(fakeArgs, srvArgs, body) {
   };
   const pt = await freePort();
   const lp = path.join(dir, `server-${pt}.log`);
+  let penv = env;
+  if (cfgObj) {   // ★ a phase's own config file (the owner's AGC lock lives there, as on a real server)
+    const cp = path.join(dir, `config-${pt}.json`);
+    fs.writeFileSync(cp, JSON.stringify(cfgObj));
+    penv = { ...env, VIBESERVER_CONFIG: cp };
+  }
   const sv = spawn(BIN, ['--icom', p, '--icom-tty-ok', '--icom-audio', 'tone', '--port', String(pt), '--idle-grace', '0', ...srvArgs],
-                   { env, stdio: ['ignore', fs.openSync(lp, 'w'), fs.openSync(lp, 'a')] });
+                   { env: penv, stdio: ['ignore', fs.openSync(lp, 'w'), fs.openSync(lp, 'a')] });
   try {
     ok(await until(() => getJson(pt, '/vibeserver.json').then((j) => !!j), 8000), `server up (${srvArgs.join(' ')}${fakeArgs.length ? ', fake ' + fakeArgs.join(' ') : ''})`);
     await body(pt, st, f, sv, () => fs.readFileSync(lp, 'utf8'));
@@ -249,6 +263,37 @@ await phase([], ['--users', '4', '--icom-tune-lock'], async (pt, st) => {
   ok(await until(async () => (await st()).freq === 7074000, 3000), 'the admin tunes it');
   x.close();
 });
+console.log('── a LOCKED (shared) Icom: RF settings are the owner\'s, as SDR gain is ──');
+await phase([], ['--users', '4', '--lock-freq', '14074000', '--admin-pass', 'icomtest'], async (pt, st) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=rfl00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.rfOpen === false, 4000), 'hwinfo rfOpen false on a locked receiver');
+  x.send({ type: 'icom_control', att: 20 });
+  await sleep(800);
+  ok((await st()).att === 0, '★ a listener\'s ATT is refused on a locked receiver (sharedGate, as for SDR gain)');
+  const nonce = (await getJson(pt, '/vibeserver/auth'))?.nonce || '';
+  x.send({ type: 'admin_unlock', nonce, token: crypto.createHmac('sha256', 'icomtest').update(nonce).digest('hex') });
+  ok(await until(() => x.txt.some((m) => m.t.includes('"type":"admin","ok":true')), 3000), 'the owner signs in');
+  x.send({ type: 'icom_control', att: 20 });
+  ok(await until(async () => (await st()).att === 0x20, 3000), 'the admin changes it');
+  x.close();
+});
+console.log('── the owner\'s AGC lock ──');
+await phase([], ['--users', '1', '--agc-lock'], async (pt, st) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=agl00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.rfOpen === false, 4000), 'hwinfo rfOpen false under the AGC lock');
+  x.send({ type: 'icom_control', att: 20, rfGain: 100 });
+  await sleep(800);
+  let s = await st();
+  ok(s.att === 0 && s.rf === 255, '★ with the AGC locked, a listener\'s ATT and RF gain are refused (the HF+ rule)');
+  ok(x.txt.some((m) => m.t.includes('fixed this radio') && m.t.includes('gain')), '  … and told why');
+  x.send({ type: 'icom_control', agc: 'slow' });
+  ok(await until(async () => (await st()).agc === 3, 3000), '  … the AGC speed is still theirs (the AGC\'s own setting, not a way past it)');
+  x.send({ type: 'admin_unlock', nonce: '', token: '' });
+  await until(() => x.txt.some((m) => m.t.includes('"type":"admin","ok":true')), 2000);
+  x.send({ type: 'icom_control', att: 20 });
+  ok(await until(async () => (await st()).att === 0x20, 3000), 'the signed-in admin is exempt, as on every radio');
+  x.close();
+});
 console.log('── a shared Icom with ask before tuning ──');
 await phase([], ['--users', '4', '--ask-before-tuning'], async (pt, st) => {
   const x = ws(pt, '/ws/user-spectrum?user_session_id=ask00001-aaaa&bins=256');
@@ -260,9 +305,11 @@ await phase([], ['--users', '4', '--ask-before-tuning'], async (pt, st) => {
   ok(await until(() => y.last('dial')?.askFirst === true, 5000), 'a second listener arrives: ask before tuning is in force');
   y.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
   y.send({ type: 'icom_control', fil: 3 });
+  y.send({ type: 'icom_control', att: 20 });
   await sleep(1000);
   const s = await st();
   ok(s.freq === 7040000, `★ the newcomer\'s tune is held back like on any shared dial (radio on ${s.freq})`);
+  ok(s.att === 0, '★ and their ATT too — RF settings are gated by ask before tuning like SDR gain');
   ok(y.txt.some((m) => m.t.includes('Ask in chat before tuning')), '  … and told to ask, in words (icom_control is gated too)');
   x.close(); y.close();
 });

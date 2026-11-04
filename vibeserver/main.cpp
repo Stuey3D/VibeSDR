@@ -511,7 +511,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--icom-open-tuning") { o.icomTuneLock = false; }   // ★ the default since 2026-11-04; kept for old scripts
         else if (a == "--icom-tune-lock")   { o.icomTuneLock = true; }
         else if (a == "--icom-power-on")    { o.icomPowerOn = true; }
-        else if (a == "--icom-rf-open")     { o.icomRfOpen = true; }
+        else if (a == "--icom-rf-open")     { o.icomRfOpen = true; }   // ★ ignored since 2026-11-04 (the SDRs' gain rules apply)
         else if (a == "--tcp") {
             o.useUsb = false;
             std::string v = need(i);
@@ -552,6 +552,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--dab-notch")  o.dabNotch = true;
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--admin-pass")     o.adminPass       = need(i);
+        else if (a == "--agc-lock")       o.agcLock         = 1;   // ★ the owner's AGC lock, from the command line (tests)
         else if (a == "--trusted-proxies") o.trustedProxies = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
         else if (a == "--admin-idle")     o.adminIdleMin    = std::atoi(need(i));

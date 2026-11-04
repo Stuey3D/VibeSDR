@@ -90,10 +90,11 @@ int main(int argc, char** argv) {
             else if (std::sscanf(line, "tx %d", &v) == 1) r.tx = v != 0;
             else if (std::sscanf(line, "power %d", &v) == 1) { if (v) r.switchOnByHand(); else r.switchOffByHand(); }
             else if (!std::strncmp(line, "quit", 4)) break;
-            std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u span=%u tx=%d powered=%d wakes=%llu offs=%llu\n",
+            std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u span=%u tx=%d powered=%d wakes=%llu offs=%llu att=%u preamp=%u agc=%u rf=%d\n",
                         (unsigned long long)r.framesIn.load(), (unsigned long long)r.violations.load(),
                         (unsigned long long)r.sweepsOut.load(), (unsigned long long)r.freq, r.mode, r.dataOn, r.spanHalf * 2, (int)r.tx.load(),
-                        (int)r.powered.load(), (unsigned long long)r.wakesSeen.load(), (unsigned long long)r.powerOffs.load());
+                        (int)r.powered.load(), (unsigned long long)r.wakesSeen.load(), (unsigned long long)r.powerOffs.load(),
+                        r.att, r.preamp, r.agc, r.rf);
             std::fflush(stdout);
         }
         run.store(false);
