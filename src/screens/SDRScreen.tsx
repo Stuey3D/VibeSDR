@@ -18,7 +18,7 @@ import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type 
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
-import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode,
+import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode, ICOM_SCOPE_FLOOR_DB,
          icomWatchState, sMeter, type IcomStatus } from '../services/icomRadio';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
 import { VS_SQL_OFF, vsSqlOn, vsSqlEffective, vsSqlRestore } from '../services/vibeSquelch';
@@ -13777,6 +13777,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfContrast={wfContrast}
         wfSharpness={wfSharpness}
         minRangeDb={dabOn ? 15 : 30}
+        clipFloorDb={icom ? ICOM_SCOPE_FLOOR_DB : null}   /* ★★ the scope's below-REF clip is not a noise floor (icomRadio.ts) */
         frameRate={frameRate}
         wfScroll={icom ? 'sharp' : wfShown}   /* ★ every speed is a row mode (wfRowTarget) — MINIMUM / LOW / ECO included */
         wfBoost={wfBoost}

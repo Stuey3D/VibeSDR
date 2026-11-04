@@ -1435,7 +1435,10 @@ export class SpectrumClient {
             const n = this.cfg.binCount || 4096;
             const viewSpan = (this.view.binBandwidth || (this.cfg.totalBandwidth / n)) * n;
             const drifted = Math.abs(this.frequency - this.view.centerHz) > viewSpan * 0.1;
-            if (this.followVfo && (moved > bw || drifted)) {
+            // ★★ NOT ON AN ICOM: its scope follows the radio's VFO by itself, and zoom() there SENDS a span rung — so the
+            //    owner turning the knob made every page send its own span back, undoing a span change still in flight
+            //    (found by test-web-icom.mjs, 2026-11-04: a 200 kHz tap reverted to 50 kHz by the next knob config).
+            if (this.followVfo && !this.icomSpans && (moved > bw || drifted)) {
               this.view.centerHz = this.frequency;
               this.zoom(this.frequency, this.view.binBandwidth || (this.cfg.totalBandwidth / n));
             }

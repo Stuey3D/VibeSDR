@@ -1,11 +1,12 @@
 // fake-icom — a pretend IC-7300 on a pseudo-terminal, for testing VibeServer end to end with no radio.
 //
-//   fake-icom [--echo] [--no-transceive] [--usb-send N] [--vox] [--baud B] [--off]
+//   fake-icom [--echo] [--no-transceive] [--usb-send N] [--vox] [--baud B] [--off] [--fps F]
+//       --fps: F sweeps a second (a real 7300 on Saber's link draws ~4), whatever the scope speed.
 //       --off: start SWITCHED OFF (USB present, CI-V silent); wakes on FE-preamble + 18 01. stdin "power 0|1" = its key.
 //       Opens a pty, prints "FAKE_ICOM_PTY <path>" and serves CI-V on it (icom_fake_radio.h): answers
 //       reads, accepts the allowed writes, streams a synthetic 475-point scope paced at the baud rate.
 //       Point VibeServer at it:  vibeserver --icom <path> --icom-tty-ok --icom-audio tone
-//       Commands on stdin (one per line): "knob <hz>"  "tx 1" / "tx 0"  "stats"  "quit".
+//       Commands on stdin (one per line): "knob <hz>"  "tx 1" / "tx 0"  "scopemode 0|1" (CENT/FIX key)  "modekey <06 byte>"  "stats"  "quit".
 //       ★ Every frame it receives is judged by the allow-list AND a crude transmit detector; each
 //         violation prints "FAKE_ICOM_VIOLATION <hex>" and is counted in "FAKE_ICOM_STATS".
 //
@@ -70,6 +71,7 @@ int main(int argc, char** argv) {
         else if (a == "--vox") r.vox = true;
         else if (a == "--baud" && i + 1 < argc) r.baud = std::atoi(argv[++i]);
         else if (a == "--off") r.powered = false;
+        else if (a == "--fps" && i + 1 < argc) r.fps = std::atof(argv[++i]);
         else { std::fprintf(stderr, "usage: see the comment at the top of tools/icom/fake-icom.cpp\n"); return 2; }
     }
     const int m = posix_openpt(O_RDWR | O_NOCTTY);
@@ -88,6 +90,8 @@ int main(int argc, char** argv) {
             unsigned long long hz = 0; int v = 0;
             if (std::sscanf(line, "knob %llu", &hz) == 1) r.turnKnob(hz);
             else if (std::sscanf(line, "tx %d", &v) == 1) r.tx = v != 0;
+            else if (std::sscanf(line, "modekey %d", &v) == 1) r.pressMode((uint8_t)v);
+            else if (std::sscanf(line, "scopemode %d", &v) == 1) r.scopeModeByHand((uint8_t)v);
             else if (std::sscanf(line, "power %d", &v) == 1) { if (v) r.switchOnByHand(); else r.switchOffByHand(); }
             else if (!std::strncmp(line, "quit", 4)) break;
             std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u span=%u tx=%d powered=%d wakes=%llu offs=%llu att=%u preamp=%u agc=%u rf=%d\n",

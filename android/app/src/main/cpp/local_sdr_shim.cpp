@@ -14830,6 +14830,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void landOnPlainLanding() {
         const double hz = g_vsLandingHz.load();
         std::string lm; { std::lock_guard<std::mutex> lk(g_vsLandingMtx); lm = g_vsLandingMode; }
+        if (useIcom()) lm.clear();   // ★ an Icom's mode is the radio's — see the connect-path landing
         if (!lm.empty() && lm != mode) { mode = lm; buildAudio(); }
         if (hz > 0) retune(hz);
     }
@@ -18289,7 +18290,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto me = dspFor(sock);
         if (!me) pbField = roomPb.configField(mode);
         // ★ An Icom: the radio's OWN mode beside the client-vocabulary one ("usbd" shows as "usb").
-        if (useIcom()) { std::lock_guard<std::recursive_mutex> lk(modeMtx); pbField = ",\"radioMode\":\"" + icomRadioMode + "\",\"icom\":true"; }
+        if (useIcom()) { std::lock_guard<std::recursive_mutex> lk(modeMtx); pbField = ",\"radioMode\":\"" + icomRadioMode + "\",\"icom\":true";
+                         // ★★★ and `mode` IS the radio's, built from what it last reported — never a mirror some other
+                         //     path wrote (a landing did, 2026-11-04). Below, `me` cannot exist on an Icom (no IQ chain).
+                         if (!icomRadioMode.empty()) { const std::string cm = icomToClientMode(icomRadioMode); if (!cm.empty()) myMode = cm; } }
         if (me) {
             myMode = me->mode; myVfo = me->vfoHz;
             // ★ Its own view, or the shared one — the client scales its axis by what we say here,
@@ -26386,6 +26390,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 const double hz = g_vsLandingHz.load();
                 std::string lm; { std::lock_guard<std::mutex> lk(g_vsLandingMtx); lm = g_vsLandingMode; }
+                /* ★★★ NOT ON AN ICOM (2026-11-04, Saber's IC-7300: config said "am" — the landing — while the radio was
+                 *     in LSB FIL2, so every client drew AM's key and passband over LSB audio, and the next step sent
+                 *     "am" back to the radio). retune() already refuses on an Icom (the radio is the dial); the MODE
+                 *     was still written here, to our mirror only. The radio's mode is the mode (onIcomState). */
+                if (useIcom()) lm.clear();
                 if (!lm.empty() && lm != mode) { mode = lm; buildAudio(); }
                 if (hz > 0) retune(hz);
                 if (hz > 0 || !lm.empty())
