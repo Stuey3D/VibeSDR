@@ -162,6 +162,15 @@ public:
     uint64_t aacDropped() const { return aac_.dropped(); }
     /** ★ TEST HOOK (dab-unitlog VIBE_UNITLOG_FAST): IQ samples fed but not yet taken by the DAB worker. */
     uint64_t inputPendingForTest() { std::lock_guard<std::mutex> ik(inM_); return inSamples_; }
+    /** ★ TEST HOOK (dab-weak): samples queued OR waiting in the worker's window beyond one decode window — a harness that
+     *  feeds faster than real time waits on this, so nothing is ever dropped for being early (inQ_ and iq_ both bound). */
+    uint64_t backlogForTest() {
+        uint64_t q; { std::lock_guard<std::mutex> ik(inM_); q = inQ_.size(); }
+        std::lock_guard<std::mutex> lk(m_);
+        const size_t need = size_t(modeI().frameSamples) * 2;
+        const size_t w = iq_.size() - iqHead_;
+        return q + (w > need ? w - need : 0);
+    }
     int  channel()   const { return channel_; }
     /** ★ The block's NAME ("11A"), for anything that has to describe the tuning to a person —
      *  the admin page's listener table, which showed "216.928 MHz WFM" for a receiver that was
