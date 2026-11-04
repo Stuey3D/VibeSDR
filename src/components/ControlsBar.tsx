@@ -626,6 +626,9 @@ export interface ControlsBarProps {
                   *  and off at first; while set the banner SAYS it ("User 2: Can I tune?") — the one line everyone
                   *  on a shared dial is already looking at. */
                  said?: string;
+                 /** ★★★ V12: AN OWNER'S SCAN HOLDS THE RADIO — the line to show now ("ADMIN TRIGGERED A SCAN" / "PLEASE
+                  *  WAIT · n / N", alternated by SDRScreen). Outranks everything; the drum dims as for the ask lock. */
+                 scanLock?: string;
                  /** ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server's word, present only while the
                   *  owner's lock is in force. Locked: the VFO drum / keys dim, and a touch calls onLockedTouch
                   *  (SDRScreen flashes the chat key and this banner) instead of tuning. */
@@ -1216,10 +1219,11 @@ function AskLockShield({ st }: { st?: SharedTuner | null }) {
       accessibilityHint="Ask in the chat before tuning — other people are listening" />
   );
 }
-const askDim = (st?: SharedTuner | null) => (st && askLocked(st.ask) ? 0.35 : 1);
+const askDim = (st?: SharedTuner | null) => (st && (st.scanLock || askLocked(st.ask)) ? 0.35 : 1);
 
 /** The SHARED TUNER banner's words — one copy for the bar's banner and the LED / analogue one (§4.1). */
 function sharedBannerText(st: SharedTuner, tight: boolean): string {
+  if (st.scanLock) return st.scanLock;
   if (st.said) return st.said;
   // ★★ Ask before tuning: while locked the banner says what to do now (ask / waiting / when it is yours).
   const ask = st.ask ? askBannerText(st.ask, tight) : null;
@@ -1235,6 +1239,7 @@ function sharedBannerText(st: SharedTuner, tight: boolean): string {
       : sharedTunerText(false, st.listeners, st.max);
 }
 function sharedBannerLabel(st: SharedTuner): string {
+  if (st.scanLock) return 'The owner triggered a scan of this receiver. Please wait — the controls come back, and the radio returns to where it was, when it ends.';
   if (st.said) return `Chat: ${st.said}`;
   if (askLocked(st.ask)) return 'Shared tuner. Tuning is locked until you ask in the chat — a yes, or no answer in 15 seconds, lets you in.';
   return st.alone ? 'Shared tuner. Nobody else is listening — free to tune.'

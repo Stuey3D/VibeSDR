@@ -672,6 +672,8 @@ export interface SpectrumCallbacks {
   onBwAuto?: (s: BwAutoState) => void;
   /** ★★ V12: the DAB band scan's state as the server publishes it (`dab_scan`) — see src/services/dabBandScan.ts. */
   onDabScan?: (m: unknown) => void;
+  /** ★★ V12: the owner's FM scan (`fm_scan`) — its `lock` locks this listener out while it runs. */
+  onFmScan?: (m: unknown) => void;
   /** ★★ V12: hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
   onDabScanOk?: (ok: boolean) => void;
   /** ★★★ V12: hwinfo `dxLog` — does this server keep a DX log THIS listener may see? Absent = no DX LOG key. */
@@ -1229,6 +1231,9 @@ export class SpectrumClient {
       }
       case 'dab_scan':
         this.cb.onDabScan?.(msg);
+        return;
+      case 'fm_scan':   // ★★ V12: the owner's FM scan — only its lock matters to a listener (the banner slot)
+        this.cb.onFmScan?.(msg);
         return;
       case 'dab_error':
         this.cb.onNotice?.(String(msg.why ?? 'DAB is not available on this receiver'));
@@ -2260,6 +2265,8 @@ export class SpectrumClient {
   dabService(sid: number) { if (this.askBlocked()) return; this._send({ type: 'dab_service', sid }); }
   /** ★★ V12: start / stop a DAB band scan. The server decides who may (dabBandScanWhyNot) and answers in words. */
   dabScan(on: boolean) { this._send({ type: 'dab_scan', on: on ? 1 : 0 }); }
+  /** ★★ V12: ask for the last scan's state (a `dab_scan` back) — read-only, anyone; an older server ignores the type. */
+  dabScanGet() { this._send({ type: 'dab_scan_get' }); }
 
   /** ★★ ADS-B HOLDS THE DIAL AND THE VIEW, as DAB does (see dabHeld): the server ignores tune, mode,
    *  bandwidth, zoom, reset, tunerbw and sampleRate while in it, so they are stopped here — the page
@@ -2360,8 +2367,12 @@ export class SpectrumClient {
    *  stopped HERE and the page says why — a control that bounces reads as a broken one. Set by main.ts from
    *  icomMayTune(); false on every other radio. */
   icomFollowLocked = false;
+  /** ★★ V12: AN OWNER'S SCAN HOLDS THE RADIO (`dab_scan` / `fm_scan` with lock:true) and this listener is not the
+   *  signed-in admin — every tune is stopped here, as the server would refuse it (scanLockRefuses). Set by main.ts. */
+  scanLocked = false;
   private askBlocked(): boolean {
     if (this.icomFollowLocked) { this.cb.onIcomFollowLocked?.(); return true; }
+    if (this.scanLocked) return true;
     if (!this.tuneLocked) return false;
     this.cb.onTuneLocked?.();
     const now = performance.now();

@@ -25,6 +25,7 @@ import { loadLeafletInto } from './leafletAsset';
 import { pushBack, padRehighlight } from './gamepad';
 import { betaConfirmText, updateButton, updateOfferText, type UpdateState } from './updateOffer';
 import { bgLines } from './adminBg';
+import { parseDabScan, dabScanLine, parseFmScan, fmScanLine } from '../../../src/services/dabBandScan';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
  *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
@@ -973,6 +974,68 @@ async function historyTail(): Promise<any> {
  *   here: the admin-ticket endpoint takes ordinary admin proof, and what it returns every process
  *   on the machine accepts. One credential, one poll.
  */
+/* ── ★★★ V12 THE OWNER'S SCANS (admin page → WHAT THIS RECEIVER HAS LEARNED) ─────────────────────────────────────────
+ *  Stuart, 2026-11-04: "in here is where there should be a button for FM scan and DAB scan so a server admin can trigger
+ *  a scan on a server". Each radio answers for itself (GET /vibeserver/admin/bandscan): both scans' state and, in words,
+ *  why each may not start. A button is drawn only where its radio can scan NOW (never greyed — AGENTS.md); the reason
+ *  takes its place otherwise. The words are the clients' own (src/services/dabBandScan.ts). */
+async function bandScanUrl(serial: string, extra: string): Promise<string> {
+  const qs = serial ? await qCached() : await q();
+  const root = serial ? `${machineBase()}/r/${encodeURIComponent(serial)}` : base();
+  return `${root}/vibeserver/admin/bandscan?${qs}${extra ? '&' + extra : ''}`;
+}
+let scansBusy = false;
+async function renderScans(): Promise<void> {
+  const box = document.getElementById('admScans');
+  if (!box || scansBusy) return;
+  scansBusy = true;
+  try {
+    const all = await fromEveryRadio('bandscan');
+    const rows = all.filter((r) => r.data && !r.data.none);
+    const note = document.getElementById('admScansNote');
+    if (note) note.hidden = rows.length === 0;
+    const many = rows.length > 1;
+    box.innerHTML = rows.map((r) => {
+      const d = r.data;
+      const dab = parseDabScan(d.dab), fm = parseFmScan(d.fm);
+      const running = !!(dab?.running || fm?.running);
+      const btn = (band: 'dab' | 'fm', act: 'start' | 'cancel', label: string) =>
+        `<button class="btn" data-serial="${esc(r.serial)}" data-band="${band}" data-act="${act}">${label}</button>`;
+      const parts: string[] = [];
+      if (dab?.running && dab.by !== 'dxscan') parts.push(btn('dab', 'cancel', 'CANCEL DAB SCAN'));
+      else if (fm?.running) parts.push(btn('fm', 'cancel', 'CANCEL FM SCAN'));
+      else if (!running) {
+        if (!d.dabWhyNot) parts.push(btn('dab', 'start', 'DAB SCAN'));
+        if (!d.fmWhyNot) parts.push(btn('fm', 'start', 'FM SCAN'));
+      }
+      const lines: string[] = [];
+      if (d.error) lines.push(String(d.error));
+      if (dab && dab.by !== 'dxscan' && (dab.running || dab.finished)) lines.push(`DAB: ${dabScanLine(dab)}`);
+      if (fm && (fm.running || fm.finished)) lines.push(fmScanLine(fm));
+      if (!running && d.dabWhyNot) lines.push(`DAB scan not available: ${d.dabWhyNot}`);
+      if (!running && d.fmWhyNot) lines.push(`FM scan not available: ${d.fmWhyNot}`);
+      const pct = dab?.running ? (dab.total ? dab.done / dab.total : 0) : fm?.running ? (fm.total ? fm.done / fm.total : 0) : -1;
+      return `<div class="admScanRow">${many ? `<b>${esc(r.radio)}</b> ` : ''}<div class="aActions">${parts.join('')}</div>`
+        + (pct >= 0 ? `<div class="admScanBar"><i style="width:${Math.round(pct * 100)}%"></i></div>` : '')
+        + lines.map((l) => `<p class="dim wrap">${esc(l)}</p>`).join('') + `</div>`;
+    }).join('');
+    box.querySelectorAll<HTMLButtonElement>('button[data-band]').forEach((b) => {
+      b.onclick = async () => {
+        const band = b.dataset.band!, act = b.dataset.act!;
+        if (act === 'start' && !window.confirm(band === 'dab'
+          ? 'Scan every DAB block on this radio now?\n\nAnybody listening is moved with the radio and locked out until it ends (about 2 minutes); the radio then goes back to where it was.'
+          : 'Scan the FM band on this radio now?\n\nAnybody listening is moved with the radio and locked out until it ends (about a minute); the radio then goes back to where it was.')) return;
+        b.disabled = true;
+        try {
+          await fetch(await bandScanUrl(b.dataset.serial || '', `band=${band}&act=${act}`), { method: 'POST', body: '{}' });
+        } catch { /* the next refresh says what is true */ }
+        scansBusy = false;
+        void renderScans();
+      };
+    });
+  } finally { scansBusy = false; }
+}
+
 async function qCached(): Promise<string> {
   const have = adminTicketQuery();
   if (have) return have;
@@ -1646,6 +1709,7 @@ async function refresh() {
       //   so it is shown wherever the admin page is — every server has an RDS list and a logo
       //   cache, whatever it can or cannot do about its own packages.
       { const ls = document.getElementById('secLearned'); if (ls) ls.hidden = false; }
+      void renderScans();   // ★★ V12: the owner's DAB / FM scans, per radio
       const offered = String(st.maintenance ?? '').split(',').filter(Boolean);
       const sec = document.getElementById('secMaintenance');
       // ★ High Detail Maps live here too, and a server can offer them with no package actions at

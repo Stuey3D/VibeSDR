@@ -286,6 +286,8 @@ export interface SDRBackend {
   dabService?(sid: number): void;
   /** ★★ V12: start / stop a DAB band scan (VibeServer only; who may is the server's call — hwinfo `dabScan`). */
   dabScan?(on: boolean): void;
+  /** ★★ V12: ask for the last band scan's state (a `dab_scan` back) — read-only, anyone (MULTIPLEXES). */
+  dabScanGet?(): void;
   /** ★ The DAB Signal pane is open — scopes (constellation, impulse response) only then (dab=2, dabAssemble.ts). */
   dabScopes?(on: boolean): void;
   /** ★ Raw IQ out for this session (VibeServer). */

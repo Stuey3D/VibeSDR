@@ -1217,9 +1217,45 @@ struct DabBandScanState {
     std::string why;                // a refusal or the reason it stopped early, in words
     double startedAt = 0.0, secs = 0.0;
     uint32_t seq = 0;               // bumps on every change — the setup page polls on it
+    bool lock = false;              // ★ V12: an owner's scan on a shared radio — listeners are locked out (g_scanLock)
 };
 static std::mutex       g_dabBandMtx;
 static DabBandScanState g_dabBand;
+/* ★★★ THE OWNER'S SCANS FROM THE ADMIN PAGE (V12, 2026-11-04 — Stuart: "in here is where there should be a button for FM
+ *  scan and DAB scan so a server admin can trigger a scan on a server", and "When a server owner has triggered a scan to
+ *  store stations on a shared VFO it should say ADMIN Triggered SCAN In Progress, Please Wait and the controls get locked
+ *  out").
+ *  ★ g_ownerScan: an ADMIN started the scan that is running (the admin page, or an admin's own socket) — the idle park,
+ *    the deferred mode leave, background decoding and the DX scanner all hold off while it runs.
+ *  ★★ g_scanLock: …and the radio has more than one listener slot. While it stands the SERVER refuses every frame from a
+ *     non-admin that would move the dial or change the receiver (scanLockRefuses), an arrival neither cancels the scan
+ *     nor is landed, and every client is told (`dab_scan` / `fm_scan` carry `"lock":true`) so it can draw the banner
+ *     "ADMIN TRIGGERED SCAN IN PROGRESS — PLEASE WAIT" and lock its controls. An OLD client just does not move. */
+static std::atomic<bool> g_ownerScan{false};
+static std::atomic<bool> g_scanLock{false};
+/* ★★★ THE OWNER'S ONE-SHOT FM BAND SCAN (V12, 2026-11-04). The DX scanner's FM hop (vibe_dxscan_fm.h, multi-peak RDS)
+ *  run once over 87.5–108 MHz; every station with a confirmed PI is stored as a SCANNED bookmark exactly as the DAB
+ *  scan's are (bmScanFm: the same store, the year-long expiry, cleared by "Clear learned stations"). One at a time, and
+ *  never beside a DAB scan (g_dabScanActive) — the radio has one dial. */
+static std::atomic<bool> g_fmScanActive{false};
+static std::atomic<bool> g_fmScanCancel{false};
+static std::atomic<bool> g_fmScanNoRestore{false};
+struct FmScanHit { int khz = 0; uint16_t pi = 0; std::string ps; bool psComplete = false; float snrDb = 0; };
+struct FmScanState {
+    bool running = false;
+    std::string by;                 // "admin" (the admin page, or an admin's own socket)
+    int done = 0, total = 0;        // hops
+    double curLoHz = 0, curHiHz = 0;
+    std::vector<FmScanHit> hits;    // in frequency order
+    int added = 0;                  // NEW bookmarks this scan made (bmScanFm)
+    bool cancelled = false, finished = false, lock = false;
+    std::string why;
+    double startedAt = 0.0, secs = 0.0;
+    uint32_t seq = 0;
+};
+static std::mutex   g_fmScanMtx;
+static FmScanState  g_fmScan;
+static std::string fmScanJsonLocked();
 /** ★ The scan's state as JSON — the `dab_scan` socket message and GET /vibeserver/dab-bandscan share it (ONE writer). */
 static std::string dabBandJsonLocked();
 /* ★★★ THE GAIN EACH BLOCK LAST DECODED AT, in AGC steps below the ceiling. DAB enters at the
@@ -1419,6 +1455,7 @@ static std::string dabBandJsonLocked() {
                   + ",\"secs\":" + std::to_string(int(st.secs + 0.5))
                   + ",\"seq\":" + std::to_string(st.seq);
     if (!st.why.empty()) j += ",\"why\":\"" + dabEscape(st.why) + "\"";
+    if (st.lock) j += ",\"lock\":true";   // ★ V12: only when set — an older client never sees it
     j += ",\"found\":[";
     bool first = true;
     for (const auto& h : st.hits) {
@@ -1438,6 +1475,33 @@ static std::string dabBandJsonLocked() {
             j += "{\"sid\":" + std::to_string(sv.first) + ",\"label\":\"" + dabEscape(sv.second) + "\"}";
         }
         j += "]}";
+    }
+    return j + "]}";
+}
+/** ★ The FM scan's state as JSON — the `fm_scan` socket message and the admin page's GET share it (ONE writer). */
+static std::string fmScanJsonLocked() {
+    const FmScanState& st = g_fmScan;
+    char cur[64] = "";
+    if (st.running && st.curHiHz > 0) std::snprintf(cur, sizeof cur, "%.1f\xe2\x80\x93%.1f MHz", st.curLoHz / 1e6, st.curHiHz / 1e6);
+    std::string j = std::string("{\"type\":\"fm_scan\",\"running\":") + (st.running ? "true" : "false")
+                  + ",\"by\":\"" + dabEscape(st.by) + "\""
+                  + ",\"done\":" + std::to_string(st.done) + ",\"total\":" + std::to_string(st.total)
+                  + ",\"current\":\"" + cur + "\""
+                  + ",\"added\":" + std::to_string(st.added)
+                  + ",\"cancelled\":" + (st.cancelled ? "true" : "false")
+                  + ",\"finished\":" + (st.finished ? "true" : "false")
+                  + ",\"secs\":" + std::to_string(int(st.secs + 0.5))
+                  + ",\"seq\":" + std::to_string(st.seq);
+    if (!st.why.empty()) j += ",\"why\":\"" + dabEscape(st.why) + "\"";
+    if (st.lock) j += ",\"lock\":true";
+    j += ",\"found\":[";
+    bool first = true;
+    for (const auto& h : st.hits) {
+        if (!first) j += ",";
+        first = false;
+        char b[80];
+        std::snprintf(b, sizeof b, "{\"khz\":%d,\"pi\":\"%04X\",\"snr\":%.1f", h.khz, (unsigned)h.pi, h.snrDb);
+        j += std::string(b) + ",\"ps\":\"" + dabEscape(h.ps) + "\",\"psComplete\":" + (h.psComplete ? "true" : "false") + "}";
     }
     return j + "]}";
 }
@@ -2382,6 +2446,53 @@ static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std
         LearnedBm b;
         b.name = n; b.pi = -1; b.hz = (long long)llround(hz); b.mode = "dab";
         b.lastHeard = now; b.manual = false; b.sid = int(r.sid); b.eid = r.eid; b.ecc = r.ecc; b.scanned = true;
+        g_bookmarks[key] = b;
+        ++added; changed = true;
+    }
+    if (changed) bmSaveLocked();
+    return added;
+}
+
+/** ★★★ AN FM SCAN'S STATIONS INTO THE SERVER'S BOOKMARKS (V12, 2026-11-04) — bmScanDab's rules for broadcast FM, keyed
+ *  exactly as RDS learning keys them (bmKey of the snapped frequency), so a station is never there twice:
+ *    - not there                  → added, origin SCANNED, named by its PS if the scan assembled one whole (shown
+ *                                   "unverified" — one dwell is not the settled vote RDS learning asks for), else the
+ *                                   provisional "PI: XXXX 93.7MHz"; counted in `added`;
+ *    - there with the SAME PI     → re-confirmed: marked scanned, lastHeard now; a provisional label takes the PS;
+ *    - there with ANOTHER PI      → a different station is on that frequency now: replaced (as bmLearn does);
+ *    - saved by hand              → left exactly as the owner made it.
+ *  One save, only if something changed. @return how many were NEW. */
+struct FmScanBmRow { int khz; int pi; std::string ps; bool psComplete; };
+static int bmScanFm(const std::vector<FmScanBmRow>& rows) {
+    const long long now = (long long)time(nullptr);
+    int added = 0;
+    bool changed = false;
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    for (const auto& r : rows) {
+        if (r.pi <= 0 || r.khz <= 0) continue;
+        const double hz = bmSnapFm(r.khz * 1000.0);
+        if (hz <= 0) continue;
+        const long long key = bmKey(hz);
+        const std::string ps = r.psComplete ? bmClean(r.ps, 64) : std::string();
+        char prov[64];
+        std::snprintf(prov, sizeof prov, "PI: %04X %.1fMHz", (unsigned)r.pi, hz / 1e6);
+        auto it = g_bookmarks.find(key);
+        if (it != g_bookmarks.end()) {
+            LearnedBm& b = it->second;
+            if (b.manual) continue;
+            if (b.pi == r.pi) {
+                if (!b.scanned || now - b.lastHeard > 24 * 3600) changed = true;
+                b.scanned = true; b.lastHeard = now;
+                if (b.nameSrc < kNameGuess && !ps.empty()) { b.name = ps; b.nameSrc = kNameGuess; changed = true; }
+                continue;
+            }
+            g_bookmarks.erase(it);   // ★ another station is here now — the old one's name would be a lie
+        } else if (g_bookmarks.size() >= kBmMax) continue;
+        LearnedBm b;
+        b.name = ps.empty() ? std::string(prov) : ps;
+        b.nameSrc = ps.empty() ? kNameProvisional : kNameGuess;
+        b.pi = r.pi; b.hz = (long long)llround(hz); b.mode = "wfm";
+        b.lastHeard = now; b.manual = false; b.scanned = true;
         g_bookmarks[key] = b;
         ++added; changed = true;
     }
@@ -11054,7 +11165,42 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** ★★ EVERY FRAME A CLIENT SENT goes in here, and nothing else does: the lock's refusal, the view-only mark for the
      *  length of this one call, then the frame. The server's own calls go straight to handleControl (askRefuses). */
+    /** ★★★ V12: THE OWNER'S SCAN LOCK, SERVER SIDE (Stuart, 2026-11-04: "it should say ADMIN Triggered SCAN In Progress,
+     *  Please Wait and the controls get locked out"). While g_scanLock stands, a frame from a NON-admin that would move
+     *  the dial, change the view's hardware centre or change the receiver is refused: the room's state goes back (so an
+     *  old client snaps to where the radio actually is — it just does not move) and, at most every 10 s, a `notice` in
+     *  words. The admin is never refused: their own tune ends the scan (dabScanUserTune), and CANCEL is theirs.
+     *  @return true if refused. Call WITHOUT clientMtx held. */
+    bool scanLockRefuses(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (!g_scanLock.load() || !sock) return false;
+        static const std::set<std::string> kLocked = {
+            "tune", "mode", "bandwidth", "zoom", "dab", "dab_service", "dab_scan", "adsb", "ism", "ndb", "ais", "mode_resume",
+            "iqtune", "watch", "set_rate", "sampleRate", "directSampling", "gain", "agc", "rsp_control", "rsp_agc_restart",
+            "ahf_control", "airspy_control", "hackrf_control", "icom_control", "antenna", "tunerbw",
+        };
+        const std::string type = jsonStr(msg, "type");
+        if (!kLocked.count(type) || adminNow(sock)) return false;
+        const double now = nowSecs();
+        bool notice = false, state = false;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            double& at = scanLockNoticeAt_[sock.get()];
+            if (now - at >= 10.0) { at = now; notice = true; }
+            double& st = scanLockStateAt_[sock.get()];
+            if (now - st >= 1.0) { st = now; state = true; }
+            if (scanLockNoticeAt_.size() > 512) { scanLockNoticeAt_.clear(); scanLockStateAt_.clear(); }
+        }
+        LOGI("%s refused \xe2\x80\x94 the owner's band scan is running on this shared radio", type.c_str());
+        if (state) sendFullState(sock);
+        if (notice)
+            sendText(sock, "{\"type\":\"notice\",\"scan\":1,\"why\":\"ADMIN TRIGGERED SCAN IN PROGRESS \xE2\x80\x94 PLEASE WAIT. "
+                           "The owner is scanning this receiver; it comes back where it was when the scan ends.\"}");
+        return true;
+    }
+    std::map<const void*, double> scanLockNoticeAt_, scanLockStateAt_;   // under clientMtx
+
     void clientFrame(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (scanLockRefuses(sock, msg)) return;
         if (askRefuses(sock, msg)) return;
         struct ViewOnly { explicit ViewOnly(bool on) { t_askViewOnly = on; } ~ViewOnly() { t_askViewOnly = false; } } vo(askViewOnly(sock, msg));
         dabScanUserTune(msg);
@@ -11347,6 +11493,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_ismMode.load(std::memory_order_relaxed)) sendText(sock, g_ism.report());   // ★ the device list, at once
         if (g_ndbMode.load(std::memory_order_relaxed)) { const std::string r = g_ndb.report(); sendText(sock, r.empty() ? ndbHello() : r); }   // ★ the beacons, at once
         if (g_aisMode.load(std::memory_order_relaxed)) sendText(sock, g_ais.report());   // ★ the ships, at once
+        // ★★ V12: an owner's scan holds this shared radio — the arrival is told at once, so its banner and lock are up
+        //    before it reaches for a control (every client would otherwise wait for the scan's next step)
+        if (g_scanLock.load()) {
+            std::string j;
+            if (g_fmScanActive.load()) { std::lock_guard<std::mutex> lk(g_fmScanMtx); j = fmScanJsonLocked(); }
+            else { std::lock_guard<std::mutex> lk(g_dabBandMtx); j = dabBandJsonLocked(); }
+            sendText(sock, j);
+        }
         if (vsSharedDial()) {
             std::lock_guard<std::mutex> lk(clientMtx);
             auto it = sockSession.find(sock.get());
@@ -15711,6 +15865,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  every 200 ms, so this normally returns within a fifth of a second. */
     void dabScanYield() {
         if (!g_dabScanActive.load()) return;
+        // ★★ V12: an OWNER'S scan on a shared radio is not given up to an arrival — they join it, locked (g_scanLock)
+        if (g_scanLock.load()) { LOGI("[DAB] a listener arrived during the owner's band scan — they wait for it"); return; }
         g_dabScanCancel.store(true);
         LOGI("[DAB] a listener arrived during a quick station scan — cancelling it");
         for (int i = 0; i < 40 && g_dabScanActive.load(); ++i)
@@ -15748,11 +15904,87 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     /** Start a band scan. @return "" when started, else why not (in words). */
+    /** ★★ V12: may the OWNER start a scan from the admin page now? "" = yes. The rules both bands share (scanAdminStart):
+     *  never two scans at once, never over ISM/AIS/NDB (a listener's whole-radio mode with nothing to come back to), and
+     *  on a SINGLE-listener radio never over somebody listening — there it is their radio, as the setup page's rule says.
+     *  On a shared radio the owner may: the listeners are locked and told (g_scanLock). */
+    std::string ownerScanWhyNot() {
+        if (frontDoorOnly || decoderOnly) return "this is not a radio process";
+        if (g_dabScanActive.load()) return "a DAB scan is already running on this radio";
+        if (g_fmScanActive.load()) return "an FM scan is already running on this radio";
+        if (g_ismMode.load() || g_aisMode.load() || g_ndbMode.load())
+            return std::string("the radio is in ") + (g_ismMode.load() ? "ISM" : g_aisMode.load() ? "AIS" : "NDB")
+                 + " for its listeners just now \xe2\x80\x94 scan when they have left it";
+        /* ★★★ NO "NOBODY LISTENING" RULE FOR THE OWNER (Stuart, 2026-11-04: "As server admin is king they do not have to
+         *  worry about other users if they want to trigger a DAB or FM scan"). Whoever is on the radio is moved with it,
+         *  locked out while it runs (g_scanLock) and put back where they were when it ends. */
+        return "";
+    }
+    /** ★ An owner's scan has started: everybody else on the radio is locked out until it ends (admin is king — on any
+     *  radio, shared or single-listener, an arrival joins it and waits rather than taking the radio back). */
+    void ownerScanBegin() {
+        g_ownerScan.store(true);
+        g_scanLock.store(true);
+        LOGI("owner's scan: listeners are locked out until it ends");
+    }
+    void ownerScanEnd() {
+        g_ownerScan.store(false);
+        if (g_scanLock.exchange(false)) {
+            // ★ everybody re-adopts the radio as it now is (the dial is back) — the banner clears with the scan message
+            std::vector<std::shared_ptr<net::Socket>> socks;
+            { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+            for (auto& sk : socks) sendFullState(sk);
+        }
+        bool empty;
+        { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+        // ★ everybody left during the scan: what the deferred leave and the park would have done, now
+        if (empty && !stopping.load()) { leaveWholeRadioModesNow(); armIdlePark(); }
+    }
+    /** ★ The admin page's DAB SCAN state for the scan thread: entered DAB itself (hand it back with dabRestore), or the
+     *  radio was in DAB already (return to its block), and whether ADS-B was on (re-entered at the end). */
+    bool dabScanAdminPage_ = false, dabScanReAdsb_ = false;
+
+    /** ★★ V12: THE ADMIN PAGE'S DAB SCAN — the band scan, whatever the radio is doing (ownerScanWhyNot): from DAB it
+     *  returns to the block and station it was on; from any other mode it enters DAB and hands the radio back exactly as
+     *  the setup page's scan does (dabRestore — the frequency, mode, rate and gain the listeners had); from ADS-B it
+     *  re-enters ADS-B afterwards. @return "" when started, else why not (in words). */
+    std::string dabBandScanAdminStart() {
+        std::string why = dabBandScanWhyNot(nullptr);
+        if (why.empty()) why = ownerScanWhyNot();
+        if (!why.empty()) return why;
+        const bool inDab = g_dabMode.load(std::memory_order_relaxed);
+        const bool wasAdsb = !inDab && g_adsbMode.load(std::memory_order_relaxed);
+        if (g_dabScanActive.exchange(true)) return "a station scan is already running on this radio";
+        ownerScanBegin();
+        g_dabScanCancel.store(false);
+        g_dabScanNoRestore.store(false);
+        dabScanAdminPage_ = true;
+        dabScanReAdsb_ = wasAdsb;
+        const int prevCh = inDab ? g_dabChannel.load() : -1;
+        const uint32_t prevSid = inDab ? (g_dab.service() ? g_dab.service() : g_dab.wantedService()) : 0u;
+        {
+            std::lock_guard<std::mutex> lk(g_dabBandMtx);
+            g_dabBand = DabBandScanState{};
+            g_dabBand.running = true;
+            g_dabBand.by = "admin";
+            g_dabBand.lock = g_scanLock.load();
+            g_dabBand.total = int(vibedab::kBandIIICount);
+            g_dabBand.startedAt = nowSecs();
+        }
+        LOGI("[DAB] band scan: started by the owner at the admin page (%zu blocks)%s%s", vibedab::kBandIIICount,
+             inDab ? (std::string(", will return to ") + vibedab::kBandIII[std::max(0, prevCh)].name).c_str() : ", the radio is handed back after",
+             wasAdsb ? ", then ADS-B again" : "");
+        dabBandBroadcast();
+        std::thread([this, inDab, prevCh, prevSid] { dabBandScanRun(!inDab, prevCh, prevSid); }).detach();
+        return "";
+    }
+
     std::string dabBandScanStart(const std::shared_ptr<net::Socket>& sock) {
         const std::string why = dabBandScanWhyNot(sock);
         if (!why.empty()) return why;
         const bool fromSetup = !sock;
         if (g_dabScanActive.load()) return "a station scan is already running on this radio";
+        if (g_fmScanActive.load()) return "an FM scan is running on this radio";
         if (!fromSetup && !g_dabMode.load(std::memory_order_relaxed)) return "the radio is not in DAB";
         if (fromSetup) {
             int listening = 0;
@@ -15769,11 +16001,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_dabScanNoRestore.store(false);
         const int prevCh = fromSetup ? -1 : g_dabChannel.load();
         const uint32_t prevSid = fromSetup ? 0u : (g_dab.service() ? g_dab.service() : g_dab.wantedService());
+        dabScanAdminPage_ = false; dabScanReAdsb_ = false;
+        // ★★ V12: an ADMIN's own socket on a shared radio is an owner's scan too — the listeners are locked out (g_scanLock)
+        const bool byAdmin = !fromSetup && g_vsMaxUsers.load() > 1;
+        if (byAdmin) ownerScanBegin();
         {
             std::lock_guard<std::mutex> lk(g_dabBandMtx);
             g_dabBand = DabBandScanState{};
             g_dabBand.running = true;
-            g_dabBand.by = fromSetup ? "setup" : (g_vsMaxUsers.load() > 1 ? "admin" : "listener");
+            g_dabBand.by = fromSetup ? "setup" : (byAdmin ? "admin" : "listener");
+            g_dabBand.lock = byAdmin && g_scanLock.load();
             g_dabBand.total = int(vibedab::kBandIIICount);
             g_dabBand.startedAt = nowSecs();
         }
@@ -15788,9 +16025,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the scan stops where it is, does NOT put the old block back over their choice, and their frame then applies.
      *  Called from the WebSocket reader only, after askRefuses; bounded like dabScanYield. */
     void dabScanUserTune(const std::string& msg) {
+        static const std::set<std::string> kMoves = { "tune", "mode", "dab", "dab_service", "adsb", "ism", "ais", "iqtune" };
+        // ★★ V12: the owner's FM scan ends the same way when the ADMIN tunes (everybody else is refused — scanLockRefuses)
+        if (g_fmScanActive.load() && kMoves.count(jsonStr(msg, "type"))) {
+            LOGI("FM scan: the dial was tuned \xe2\x80\x94 the scan stops there and leaves the dial where it was put");
+            g_fmScanNoRestore.store(true);
+            g_fmScanCancel.store(true);
+            for (int i = 0; i < 40 && g_fmScanActive.load(); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
         if (!g_dabScanActive.load()) return;
         const std::string type = jsonStr(msg, "type");
-        static const std::set<std::string> kMoves = { "tune", "mode", "dab", "dab_service", "adsb", "ism", "ais", "iqtune" };
         if (!kMoves.count(type)) return;
         LOGI("[DAB] a listener tuned (%s) during a station scan — the scan stops there and leaves the dial to them", type.c_str());
         g_dabScanNoRestore.store(true);
@@ -15896,7 +16141,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 if (g_dabScanCancel.load() || stopping.load() || !g_dabMode.load(std::memory_order_relaxed)) { cancelled = true; break; }
-                if (!fromSetup) {   // ★ the scanner went away: hand the radio back now, not after the leave grace
+                if (!fromSetup && !dabScanAdminPage_) {   // ★ the scanner went away: hand the radio back now, not after the leave grace
                     std::lock_guard<std::mutex> lk(clientMtx);
                     if (nobodyWatchingLocked()) { cancelled = true; stopWhy = "the listener left"; break; }
                 }
@@ -16000,7 +16245,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (stopping.load()) {   // ★ the server is going: touch nothing, the teardown owns the radio now
             std::lock_guard<std::mutex> lk(g_dabBandMtx);
-            g_dabBand.running = false; g_dabBand.cancelled = true; g_dabBand.finished = true;
+            g_dabBand.running = false; g_dabBand.cancelled = true; g_dabBand.finished = true; g_dabBand.lock = false;
+            g_ownerScan.store(false); g_scanLock.store(false);
             return;
         }
         // ★★ PUT THE RADIO BACK. The setup page's scan borrowed an idle radio — hand it back as a departing listener
@@ -16041,8 +16287,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("[DAB] band scan: %s after %.0f s \xe2\x80\x94 %zu ensemble(s), %d new bookmark(s)%s",
                  cancelled ? "CANCELLED" : "finished", g_dabBand.secs, g_dabBand.hits.size(), g_dabBand.added,
                  fromSetup ? ", radio handed back" : userTuned ? ", left where the listener tuned" : prevCh >= 0 ? ", back on the block it was on" : "");
+            g_dabBand.lock = false;
         }
+        // ★★ V12: the admin page's scan took the radio out of ADS-B — it goes back in, unless somebody tuned meanwhile
+        if (dabScanReAdsb_ && !userTuned && !stopping.load() && !g_dabMode.load() && !g_adsbMode.load()) {
+            LOGI("[DAB] band scan: back into ADS-B, where the radio was");
+            handleControl(nullptr, "{\"type\":\"adsb\",\"on\":1}");
+        }
+        const bool owner = g_ownerScan.load() && !dabDx_.on;
+        dabScanAdminPage_ = false; dabScanReAdsb_ = false;
         dabBandBroadcast();
+        if (owner) ownerScanEnd();
     }
 
     /** ★ Has the DAB audio buffer reached its working depth? See the pre-buffer note below. */
@@ -19675,6 +19930,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sendText(sock, j);
             return;
         }
+        // ★★ V12: the owner's FM scan, the same way (read-only, anyone) — its state and what it found
+        if (type == "fm_scan_get") {
+            std::string j;
+            { std::lock_guard<std::mutex> lk(g_fmScanMtx); j = fmScanJsonLocked(); }
+            sendText(sock, j);
+            return;
+        }
         if (type == "dab_scan") {
             double onV = 0; jsonNum(msg, "on", onV);
             if (onV == 0) {
@@ -22753,7 +23015,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  Answers at once: the scan runs on its own thread and its findings accumulate in the state. */
             if (!vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }
             std::string err;
-            if (queryParam(reqLine, "start") == "1") err = dabBandScanStart(nullptr);
+            if (queryParam(reqLine, "start") == "1") {
+                /* ★★ V12 (Stuart, 2026-11-04: "server admin is king"): this endpoint is admin-gated, so a radio somebody is
+                 *  on, or one in DAB already, is scanned the admin page's way (listeners moved, locked, put back); the idle
+                 *  radio keeps the setup page's own borrow (by "setup"). */
+                bool busy;
+                { std::lock_guard<std::mutex> lk(clientMtx); busy = !nobodyWatchingLocked(); }
+                err = (busy || g_dabMode.load(std::memory_order_relaxed)) ? dabBandScanAdminStart() : dabBandScanStart(nullptr);
+            }
             else if (queryParam(reqLine, "cancel") == "1" && g_dabScanActive.load()) g_dabScanCancel.store(true);
             std::string j;
             { std::lock_guard<std::mutex> lk(g_dabBandMtx); j = dabBandJsonLocked(); }
@@ -23214,6 +23483,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
             if (!isPost && what == "status") {
                 reply(200, "OK", LocalSdrShim::instance().adminStatusJson());
+                return;
+            }
+            /* ★★★ V12: THE OWNER'S BAND SCANS (admin page → WHAT THIS RECEIVER HAS LEARNED). GET = both scans' state and
+             *  whether each may start now (in words); POST ?band=dab|fm&act=start|cancel. Answered by the RADIO's process
+             *  (/r/<serial>/…); the front door owns no radio and says so. Additive JSON — nothing an older page reads. */
+            if (what == "bandscan") {
+                if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
+                const std::string band = queryParam(reqLine, "band"), act = queryParam(reqLine, "act");
+                std::string err;
+                if (isPost && act == "start") {
+                    err = band == "fm" ? fmScanAdminStart() : band == "dab" ? dabBandScanAdminStart() : std::string("unknown band");
+                    LOGI("admin page: %s SCAN asked by %s \xe2\x80\x94 %s", band == "fm" ? "FM" : "DAB", ip.c_str(), err.empty() ? "started" : err.c_str());
+                } else if (isPost && act == "cancel") {
+                    if (band == "fm" && g_fmScanActive.load()) g_fmScanCancel.store(true);
+                    if (band == "dab" && g_dabScanActive.load() && !g_dxDabScan.load()) g_dabScanCancel.store(true);
+                }
+                reply(200, "OK", bandScansJson(err));
                 return;
             }
             if (!isPost && what == "sessions") {
@@ -25776,7 +26062,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★★ A QUICK STATION SCAN MAY BE BORROWING THE IDLE RADIO — the listener wins. Cancel it
              *  and wait (bounded) for it to hand the receiver back exactly as it found it, so every
              *  decision below sees the radio's real state rather than the scan's multiplex. */
-            if (firstOfSession) dabScanYield();
+            if (firstOfSession) { dabScanYield(); fmScanYield(); }   // ★ V12: neither yields to an arrival under g_scanLock
 
             /* ★★★ THE DAB LANDING STATION, AND WHICH RULE WINS (2026-09-28).
              *  ★★★ RULE 0 — A START IS NOT A RESUME (Stuart, 2026-09-28, after the Sony rebooted and came
@@ -25809,7 +26095,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *       landing at all, whatever the config says — the plain landing applies instead.
              *  ★ Through handleControl, the SAME entry the remembered-block resume uses, never
              *    `mode = "dab"` (see the per-client tune path: "dab" is not a demodulator). */
-            const bool newSession = firstOfSession && landedSession != session;
+            // ★★ V12: an owner's scan holds a shared radio (g_scanLock) — an arrival joins it where it is, never landed
+            const bool newSession = firstOfSession && landedSession != session && !g_scanLock.load();
             const bool firstEver  = firstOfSession && !anySessionYet.exchange(true);
             /* ★★★ V12: ADS-B AS THE LANDING — the same rules as a DAB landing, in the same places below, because it is
              *  the same kind of thing: a whole-radio mode whose box IS the viewer. It beats a DAB landing (a radio lands
@@ -25945,7 +26232,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (adsbHolds && !landOnAdsb && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
                 && (!sharedDialNow || startLanding))
                 LOGI("new session — the receiver is in ADS-B, so the plain landing waits for EXIT ADS-B");
-            if (!landOnDab && !landOnAdsb && !adsbHolds && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
+            if (!landOnDab && !landOnAdsb && !adsbHolds && !g_scanLock.load() && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
                 && (!sharedDialNow || startLanding)) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
@@ -30429,6 +30716,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Anybody here at all? Spectrum, audio (a pocketed app), a decoder socket, a channel kept alive by its audio.
      *  ★ Caller holds clientMtx. */
     bool bgSomeoneHereLocked() {
+        if (g_ownerScan.load()) return true;   // ★ V12: an owner's band scan has the radio — background work waits
         if (specListenerCountLocked() > 0) return true;
         if (audioClient && audioClient->isOpen()) return true;
         for (const auto& d : dxSocks) if (d && d->isOpen()) return true;
@@ -30940,6 +31228,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (useIcom()) return "not on an Icom radio (it has no IQ to sweep)";
         if (bgLocked()) return "this radio's range is locked \xe2\x80\x94 the DX scanner never moves a locked radio";
         if (adsbKeepHolds()) return "ADS-B is kept running on this radio when nobody is connected";
+        if (g_ownerScan.load()) return "the owner's band scan has the radio";
         if (bgActive_.load() || bgSaved_.valid || bgWanted_.load()) return "background decoding has the idle radio (its profiles come first)";
         const int lv = g_vsBatteryLevel.load();
         if (lv >= 0 && !g_vsBatteryCharging.load() && (g_vsBatteryPaused.load() || lv < std::max(g_vsBatteryResumeAt.load(), g_vsBatteryPauseAt.load() + 10)))
@@ -31162,8 +31451,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_dabScanActive.exchange(true)) { std::this_thread::sleep_for(std::chrono::seconds(1)); return true; }
         g_dabScanCancel.store(false);
         g_dabScanNoRestore.store(false);
+        // ★★ V12: the owner's last band scan is what MULTIPLEXES shows to everybody (dab_scan_get) — the DX sweep borrows
+        //    the state for its run and puts that list back after, so an idle sweep never wipes it
+        DabBandScanState keep;
         {
             std::lock_guard<std::mutex> lk(g_dabBandMtx);
+            keep = g_dabBand;
             g_dabBand = DabBandScanState{};
             g_dabBand.running = true; g_dabBand.by = "dxscan";
             g_dabBand.total = int(vibedab::kBandIIICount); g_dabBand.startedAt = nowSecs();
@@ -31202,6 +31495,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         dabBandScanRun(true, -1, 0);   // ★ blocking; it hands DAB back itself (dabRestore), cancelled or not
         g_dxDabScan.store(false);
         dabDx_ = DabDxRun{};
+        { std::lock_guard<std::mutex> lk(g_dabBandMtx); const uint32_t seq = g_dabBand.seq; g_dabBand = keep; g_dabBand.seq = seq + 1; }
         return true;
     }
     /** ★ What the FIC rows did not carry: the EId / ECC from the receiver's own report, and the strongest TII. */
@@ -31225,6 +31519,185 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const float db = std::strtof(j.c_str() + dp + 5, nullptr);
             if (db > best && m >= 0 && sb >= 0) { best = db; h.tiiMain = m; h.tiiSub = sb; }
         }
+    }
+
+    // ── ★★★ V12 THE OWNER'S FM BAND SCAN (2026-11-04) — the DX scanner's FM hop, once, into the bookmarks ──────────────
+    /** Why the owner may not FM-scan this radio now ("" = may). In words — the admin page shows them as they are. */
+    std::string fmScanWhyNot() {
+        if (frontDoorOnly || decoderOnly) return "this is not a radio process";
+        if (vsModeBlocked("wfm")) return "Broadcast FM is switched off on this receiver";
+        if (useIcom()) return "an Icom radio gives no IQ to sweep \xe2\x80\x94 FM SCAN needs an SDR";
+        if (bgLocked()) return "this radio's centre is locked by its owner, and a scan would have to move it \xe2\x80\x94 unlock it in setup to scan";
+        vibe::dx::Config c;
+        { std::lock_guard<std::mutex> lk(g_dxMtx); c = g_dxCfg; }
+        if (vibe::dx::planFm(sampleRate, c.rasterKhz).empty()) return "this radio's sample rate is too narrow to hold an FM channel";
+        if (dxFmPlan(c).empty()) return "none of 87.5\xe2\x80\x93" "108 MHz is inside the range this radio may tune";
+        return "";
+    }
+    /** ★ The scan's state to every listener (the admin's progress; everybody else's banner when locked). */
+    void fmScanBroadcast() {
+        std::string j;
+        { std::lock_guard<std::mutex> lk(g_fmScanMtx); ++g_fmScan.seq; j = fmScanJsonLocked(); }
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) sendText(sk, j);
+    }
+    /** ★ What the scan has to put back: the dial, and DAB (block + station) or ADS-B if the radio was in one. */
+    struct FmScanSaved { double centre = 0, view = 0, audio = 0; int dabCh = -1; uint32_t dabSid = 0; bool adsb = false; };
+
+    /** Start the owner's FM scan. @return "" when started, else why not (in words). */
+    std::string fmScanAdminStart() {
+        std::string why = fmScanWhyNot();
+        if (why.empty()) why = ownerScanWhyNot();
+        if (!why.empty()) return why;
+        if (g_fmScanActive.exchange(true)) return "an FM scan is already running on this radio";
+        if (g_dabScanActive.load()) { g_fmScanActive.store(false); return "a DAB scan is already running on this radio"; }
+
+        ownerScanBegin();
+        g_fmScanCancel.store(false);
+        g_fmScanNoRestore.store(false);
+        {
+            std::lock_guard<std::mutex> lk(g_fmScanMtx);
+            g_fmScan = FmScanState{};
+            g_fmScan.running = true; g_fmScan.by = "admin"; g_fmScan.lock = g_scanLock.load();
+            g_fmScan.startedAt = nowSecs();
+        }
+        fmScanBroadcast();
+        std::thread([this] { fmScanRun(); }).detach();   // ★ like the DAB scan: it ends itself (stopping is watched)
+        return "";
+    }
+    /** ★ An arrival on a SINGLE-listener radio gives the owner's idle-radio scan up, as the DAB scan does (dabScanYield). */
+    void fmScanYield() {
+        if (!g_fmScanActive.load() || g_scanLock.load()) return;
+        LOGI("FM scan: a listener arrived \xe2\x80\x94 cancelling it");
+        g_fmScanCancel.store(true);
+        for (int i = 0; i < 40 && g_fmScanActive.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    void fmScanRun() {
+        vibeBulkThread("vibe-fmscan");   // ★ sequencing only — the hop engine decodes on its own threads
+        struct Done { ~Done() { g_fmScanActive.store(false); } } done;
+        const double t0 = nowSecs();
+        vibe::dx::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
+        std::string stopWhy;
+        bool cancelled = false;
+        // ★ The DX scanner and background decoding give the radio back first (as for an arriving listener); a parked or
+        //   released radio is taken back.
+        resumeCaptureIdle(false);
+        FmScanSaved sv;
+        if (radioReleased.load()) stopWhy = "another program on this server has the radio just now";
+        if (stopWhy.empty() && g_dabMode.load()) {
+            sv.dabCh = g_dabChannel.load();
+            sv.dabSid = g_dab.service() ? g_dab.service() : g_dab.wantedService();
+            LOGI("FM scan: leaving DAB (%s) for the scan \xe2\x80\x94 it comes back after", sv.dabCh >= 0 ? vibedab::kBandIII[sv.dabCh].name : "?");
+            handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
+        }
+        if (stopWhy.empty() && g_adsbMode.load()) {
+            sv.adsb = true;
+            LOGI("FM scan: leaving ADS-B for the scan \xe2\x80\x94 it comes back after");
+            handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
+        }
+        sv.centre = rtlCenter.load(); sv.view = viewCenter.load(); sv.audio = audioFreq.load();
+        const auto plan = dxFmPlan(cfg);
+        { std::lock_guard<std::mutex> lk(g_fmScanMtx); g_fmScan.total = int(plan.size()); }
+        std::map<int, FmScanHit> best;   // khz -> the strongest confirmed sighting
+        const double off = hwOffsetHz();
+        const vibebands::Ranges perm = vsPermittedRanges(vibebands::Ranges{{0.0, 2.0e9}});
+        for (size_t k = 0; stopWhy.empty() && k < plan.size(); ++k) {
+            if (g_fmScanCancel.load() || stopping.load()) { cancelled = true; break; }
+            const auto& hop = plan[k];
+            { std::lock_guard<std::mutex> lk(g_fmScanMtx); g_fmScan.curLoHz = hop.loHz; g_fmScan.curHiHz = hop.hiHz; g_fmScan.done = int(k); }
+            fmScanBroadcast();
+            const double centre = hop.centreHz - off;   // ★ the capture's DC where the plan put it (off the raster)
+            bgPlace(centre, centre, hop.centreHz);
+            vibe::dx::FmHopEngine::Params p;
+            p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
+            p.rasterKhz = cfg.rasterKhz; p.loHz = hop.loHz; p.hiHz = hop.hiHz;
+            p.peaksPerRound = dxPeakBudget();
+            if (const char* e = std::getenv("VIBESERVER_DX_DWELL_SEC"); e && *e) p.dwellSec = std::max(0.5, std::atof(e));   // ★ TEST-ONLY
+            dxFm_.start(p);
+            dxFmFeed_.store(true);
+            const double th = nowSecs();
+            while (!dxFm_.done() && !g_fmScanCancel.load() && !stopping.load() && nowSecs() - th < p.dwellSec * 8 + 20)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            dxFmFeed_.store(false);
+            const bool ok = dxFm_.done() && !g_fmScanCancel.load() && !stopping.load();
+            dxFm_.abort();
+            if (!ok) { if (g_fmScanCancel.load() || stopping.load()) { cancelled = true; break; } continue; }
+            /* ★★ CONFIRMED ONLY (vibe::dx::fmConfirmed — 3 clean groups or a whole PS), inside the permitted range. An
+             *  IMAGE of a stronger station about the capture's DC (the same PI mirrored, ≥ 10 dB weaker — the DX log's own
+             *  same-visit rule) is dropped: a dongle hears its locals twice. */
+            const auto res = dxFm_.results();
+            for (const auto& h : res) {
+                if (!h.pi || !vibe::dx::fmConfirmed(h.groups, h.psComplete)) continue;
+                if (!perm.empty() && !vibebands::allows(perm, h.khz * 1e3)) continue;
+                bool image = false;
+                const int mirror = (int)std::lround(2.0 * p.dcHz / 1e3) - h.khz;
+                for (const auto& o : res)
+                    if (o.pi == h.pi && std::abs(o.khz - mirror) <= cfg.rasterKhz / 2 && o.levelDb >= h.levelDb + 10.0f) image = true;
+                if (image) continue;
+                auto it = best.find(h.khz);
+                // ★ a WHOLE PS outranks a stronger sighting without one (it names the bookmark); then the stronger
+                if (it == best.end() || (h.psComplete && !it->second.psComplete)
+                    || (h.psComplete == it->second.psComplete && h.snrDb > it->second.snrDb))
+                    best[h.khz] = FmScanHit{ h.khz, h.pi, h.ps, h.psComplete, h.snrDb };
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_fmScanMtx);
+                g_fmScan.done = int(k) + 1;
+                g_fmScan.hits.clear();
+                for (const auto& kv : best) g_fmScan.hits.push_back(kv.second);
+            }
+            fmScanBroadcast();
+        }
+        if (stopping.load()) {
+            std::lock_guard<std::mutex> lk(g_fmScanMtx);
+            g_fmScan.running = false; g_fmScan.cancelled = true; g_fmScan.finished = true; g_fmScan.lock = false;
+            g_ownerScan.store(false); g_scanLock.store(false);
+            return;
+        }
+        // ★★ INTO THE BOOKMARKS — what was found, cancelled or not (a station confirmed is a station heard).
+        std::vector<FmScanBmRow> rows;
+        for (const auto& kv : best) rows.push_back({ kv.second.khz, int(kv.second.pi), kv.second.ps, kv.second.psComplete });
+        const int added = rows.empty() ? 0 : bmScanFm(rows);
+        // ★★ PUT THE RADIO BACK — the dial, then DAB or ADS-B — unless the admin tuned (their choice stands).
+        const bool userTuned = g_fmScanNoRestore.load();
+        if (!userTuned && stopWhy.empty()) {
+            bgPlace(sv.centre, sv.view, sv.audio);
+            if (sv.dabCh >= 0)
+                handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(sv.dabCh)
+                                       + (sv.dabSid ? ",\"sid\":" + std::to_string(sv.dabSid) : std::string()) + "}");
+            else if (sv.adsb) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":1}");
+        }
+        {
+            std::lock_guard<std::mutex> lk(g_fmScanMtx);
+            g_fmScan.running = false; g_fmScan.finished = true; g_fmScan.cancelled = cancelled || !stopWhy.empty();
+            g_fmScan.added = added; g_fmScan.secs = nowSecs() - t0; g_fmScan.lock = false;
+            g_fmScan.curLoHz = g_fmScan.curHiHz = 0;
+            if (!stopWhy.empty()) g_fmScan.why = stopWhy;
+            else if (cancelled && userTuned) g_fmScan.why = "stopped \xe2\x80\x94 the dial was tuned";
+            else if (cancelled) g_fmScan.why = "stopped";
+            LOGI("FM scan: %s after %.0f s \xe2\x80\x94 %zu station(s), %d new bookmark(s)%s", cancelled ? "CANCELLED" : "finished",
+                 g_fmScan.secs, g_fmScan.hits.size(), added, userTuned ? ", left where it was tuned" : ", the radio is back where it was");
+        }
+        fmScanBroadcast();
+        ownerScanEnd();
+    }
+    /** ★ The admin page's view of both scans: their state (the socket messages' own JSON) and, while neither runs, why
+     *  each may not start ("" = the button is drawn). */
+    std::string bandScansJson(const std::string& err) {
+        std::string dabWhy = dabBandScanWhyNot(nullptr), fmWhy = fmScanWhyNot();
+        const std::string own = ownerScanWhyNot();
+        if (dabWhy.empty()) dabWhy = own;
+        if (fmWhy.empty()) fmWhy = own;
+        std::string j = "{\"dab\":";
+        { std::lock_guard<std::mutex> lk(g_dabBandMtx); j += dabBandJsonLocked(); }
+        j += ",\"fm\":";
+        { std::lock_guard<std::mutex> lk(g_fmScanMtx); j += fmScanJsonLocked(); }
+        j += ",\"dabWhyNot\":\"" + dabEscape(dabWhy) + "\",\"fmWhyNot\":\"" + dabEscape(fmWhy) + "\""
+           + ",\"shared\":" + (g_vsMaxUsers.load() > 1 ? "true" : "false");
+        if (!err.empty()) j += ",\"error\":\"" + dabEscape(err) + "\"";
+        return j + "}";
     }
 
     /** ★★ THE ADMIN PAGE'S LINE (adminStatusJson, behind admin auth). */
@@ -31732,6 +32205,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void armIdlePark() {
         // ★★ V12: not while background decoding is due or running — see bgWanted_.
         if (bgWanted_.load()) return;
+        // ★★ V12: nor during an owner's band scan — it ends with its own hand-back (ownerScanEnd), which arms this then
+        if (g_ownerScan.load()) return;
         // ★★★ V12: nor while the DX scanner is due or sweeping (dxWanted_)
         if (dxWanted_.load()) return;
         // ★★ V12: nor while ADS-B is kept running with nobody here — parking would empty the warm table (adsbKeepHolds).
@@ -33101,7 +33576,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     bool empty;
                     { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
                     modeLeaveDueAt.store(0.0);
-                    if (empty) { leaveWholeRadioModesNow(); armIdlePark(); }
+                    if (empty && !g_ownerScan.load()) { leaveWholeRadioModesNow(); armIdlePark(); }   // ★ V12: not mid-scan (ownerScanEnd)
                 }
                 if (idleParkDueAt.load() == 0.0 && modeLeaveDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load() && !bgWanted_.load()
                     && !adsbKeepHolds()
@@ -33128,7 +33603,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   settling?", and two readers of one rule is how half-applied fixes ship. */
                     const bool settling = useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 6
                                           && !g_vibeAgcRspOn.load(std::memory_order_relaxed);
-                    if (!empty || bgWanted_.load() || adsbKeepHolds()) { idleParkDueAt.store(0.0); }
+                    if (!empty || bgWanted_.load() || adsbKeepHolds() || g_ownerScan.load()) { idleParkDueAt.store(0.0); }
                     else if (settling) { /* hold the deadline open and re-check next tick */ }
                     else if (g_vsReleaseWhenIdle.load()) {
                         // ★★★ RELEASE, NOT PARK — and note this bypasses the shared-receiver rule
@@ -38763,7 +39238,7 @@ void LocalSdrShim::stopLocked() {
     // ★★★ V12: the DX scanner stops (the radio is the teardown's now) and its log is written — before the DAB wait below.
     impl->dxShutdown();
     // ★ V12: a DAB band scan sees `stopping` within 100 ms and leaves the radio alone — wait for it (bounded).
-    for (int i = 0; i < 30 && g_dabScanActive.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (int i = 0; i < 30 && (g_dabScanActive.load() || g_fmScanActive.load()); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // ★ TEST KNOB: wedge this stop for good, so a test can watch the standalone server's shutdown
     //   watchdog fire (scripts/test-server-stop-during-dab.mjs). Nothing else reads it.
     if (const char* e = std::getenv("VIBE_TEST_STOP_WEDGE"); e && *e == '1') {

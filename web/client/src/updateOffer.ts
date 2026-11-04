@@ -12,6 +12,8 @@ export interface UpdateState {
   offer?: string;
   version?: string;
   stale?: boolean;
+  /** ★ V12: the installed version changed since the offer was worked out (dpkg says so) — ask for a fresh check. */
+  recheck?: boolean;
   checked?: number;
 }
 
@@ -25,7 +27,8 @@ export function updateOfferText(u: UpdateState | null | undefined): string {
     case 'back-to-stable': return `${u.version} available — back to stable.${on} Your settings are kept.`;
     case 'none':           return `Up to date${u.installed ? ` (${u.installed}${u.beta ? ', beta updates on' : ''})` : ''}.`;
     case 'unknown':        return 'The update server did not list VibeServer — is this machine online? Try CHECK FOR UPDATES.';
-    default:               return u.stale
+    default:               if (u.recheck) return `This server now runs ${u.installed} — press CHECK FOR UPDATES to see whether anything newer is out.`;
+                           return u.stale
       ? 'Beta updates were switched since the last check — press CHECK FOR UPDATES.'
       : 'Not checked yet — press CHECK FOR UPDATES.';
   }

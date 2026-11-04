@@ -10,6 +10,7 @@
 //   5. a SHARED radio (--users 3): no SCAN key at all.
 // Usage: VIBESERVER_BIN=/path/to/vibeserver node scripts/test-web-dab-bandscan.mjs   (exit 3 = not run)
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -146,7 +147,31 @@ try {
   ok(await intoDab(q), 'into DAB');
   await sleep(2500);
   ok(!(await q.js(shown('dabScanBtn'))) && (await q.js(`document.getElementById("dabScanBtn").style.display`)) === 'none', 'the SCAN key is not drawn (absent, not greyed)');
-  ok(q.errors.length === 0, 'no JavaScript errors');
+
+  // ── ★★ V12 2026-11-04: the OWNER scans this shared radio from the admin page — the listener is locked out, told in the
+  //    SHARED TUNER slot (alternating), and afterwards the key reads MULTIPLEXES for them too ──
+  console.log('the owner scans the shared radio from the admin page');
+  const nonce = (await fetch(`http://127.0.0.1:${shared.port}/vibeserver/auth`).then((r) => r.json())).nonce;
+  const aq = `vs_admin_nonce=${nonce}&vs_admin_auth=${crypto.createHmac('sha256', 'web-dabband-admin').update(nonce).digest('hex')}`;
+  const st = await fetch(`http://127.0.0.1:${shared.port}/vibeserver/admin/bandscan?${aq}&band=dab&act=start`, { method: 'POST', body: '{}' }).then((r) => r.json());
+  ok(st.dab?.running === true && !st.error, `the admin page's DAB SCAN starts with a listener on (${st.error || 'running'})`);
+  ok(await q.until(`document.body.classList.contains("scanLocked")`, 8000), '★ the listener’s controls are locked (body.scanLocked)');
+  const lines = new Set();
+  for (let i = 0; i < 12; i++) { const t = await q.js(`(() => { const m = document.getElementById("mShared"); return m && !m.hidden ? m.textContent : ""; })()`); if (t) lines.add(t.replace(/ · \d+ \/ \d+$/, '')); await sleep(500); }
+  ok(lines.has('ADMIN TRIGGERED A SCAN') && lines.has('PLEASE WAIT'), `★ the SHARED TUNER slot alternates its two lines (${[...lines].join(' | ')})`);
+  ok(/^PLEASE WAIT · \d+ \/ 41$/.test(await (async () => { for (let i = 0; i < 8; i++) { const t = await q.js(`document.getElementById("mShared").textContent`); if (/^PLEASE/.test(t)) return t; await sleep(500); } return ''; })()), '…with the progress on PLEASE WAIT');
+  ok(Number(await q.js(`getComputedStyle(document.getElementById("mMode")).opacity`)) < 0.5, 'the mode key is dimmed');
+  await q.call('Page.captureScreenshot', { format: 'png' }).then((r) => { if (process.env.SHOT_LOCK) fs.writeFileSync(process.env.SHOT_LOCK, Buffer.from(r.result.data, 'base64')); });
+  ok(await q.until(`!document.body.classList.contains("scanLocked")`, 200000), 'when the scan ends the lock clears');
+  ok(await q.until(`document.getElementById("mShared").textContent !== "PLEASE WAIT" && !/ADMIN TRIGGERED/.test(document.getElementById("mShared").textContent)`, 5000),
+     `…and the slot says what it said before (${await q.js(`document.getElementById("mShared").textContent`)})`);
+  ok(await q.until(`${shown('dabScanBtn')} && document.getElementById("dabScanBtn").textContent === "MULTIPLEXES"`, 10000),
+     '★ the key now reads MULTIPLEXES for a listener who cannot scan');
+  await q.js(`document.getElementById("dabScanBtn").click(); 1`);
+  ok(await q.until(`${shown('dabScanPane')} && !!document.querySelector('.dabScanHd[data-blk="11D"]')`, 5000), 'it opens the list the owner’s scan found (11D)');
+  ok(!(await q.js(shown('dabScanAgain'))) && !(await q.js(shown('dabScanStop'))), 'no SCAN AGAIN or CANCEL for them');
+  await q.call('Page.captureScreenshot', { format: 'png' }).then((r) => { if (process.env.SHOT_MUX) fs.writeFileSync(process.env.SHOT_MUX, Buffer.from(r.result.data, 'base64')); });
+  ok(q.errors.length === 0, 'no JavaScript errors' + (q.errors.length ? ': ' + q.errors.slice(0, 2).join(' | ') : ''));
   q.ws.close();
 } catch (e) { console.error(e); fails++; }
 for (const p of procs) { try { p.kill(); } catch {} }
