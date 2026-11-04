@@ -6,10 +6,11 @@
 //    caps and joins, a small filled detail only where a stroke would close up at 16 px. The comparison sheet is
 //    scripts/navtex-icon-sheet.mjs (16 / 24 / 32 px, dark and light, to ~/Desktop/navtex-icons/).
 // ★ `unlit` is a MODIFIER: a light, buoy, structure or platform whose light has failed carries the small UNLIT mark (a lamp
-//    struck through) in its top-right corner. The unlit-light icon is the lighthouse with that mark.
+//    struck through) in its top-right corner. The unlit-light icon is the lighthouse with that mark. ★ v10 on a FOG SIGNAL
+//    the same mark means NOT WORKING (the horn silent) — the server's flag is the one `unlit`.
 // ★ PURE strings — no React Native, no DOM: the web client and the app's map page both draw from here.
 
-export type NavHazard = 'wreck' | 'navaid' | 'light' | 'buoy' | 'structure' | 'platform' | 'firing' | 'submarine' | 'uxo'
+export type NavHazard = 'wreck' | 'navaid' | 'light' | 'buoy' | 'fogsignal' | 'structure' | 'platform' | 'firing' | 'submarine' | 'uxo'
   | 'cable' | 'cable_telecom' | 'cable_power' | 'pipeline' | 'pipeline_gas' | 'survey'
   | 'obstruction' | 'adrift' | 'works' | 'towing' | 'sar' | 'ice' | 'general';
 
@@ -25,6 +26,9 @@ export const NAV_GLYPHS: Record<NavHazard, string> = {
   buoy: '<path d="M5 11.4l1-4h4l1 4z"/><path d="M8 7.4V4"/><circle cx="8" cy="2.9" r="1.1"/><path d="' + WAVE + '"/>',
   // navaid (a beacon or a light not otherwise named) = the lighthouse
   navaid: '',
+  // ★ v10 a FOG SIGNAL (Stuart, 2026-11-04: "one icon we are missing for Navtex and that is the Fog Horn"): a horn on its
+  //   stand — a long cone, its open bell — sounding to the right, two sound arcs (the not-working mark sits over the outer one)
+  fogsignal: '<path d="M1.4 8.3L8.6 5.6v6.6L1.4 9.5z"/><ellipse cx="8.6" cy="8.9" rx="1" ry="3.3"/><path d="M4.4 10.6v3.8M2.6 14.4h3.6"/><path d="M11.4 7.4a2.2 2.2 0 0 1 0 3M13.3 5.8a4.4 4.4 0 0 1 0 6.2"/>',
   // a wind turbine on its tower — hub, three blades
   structure: '<path d="M7.5 14.4l.25-7M8.5 14.4l-.25-7M6.2 14.4h3.6"/><circle cx="8" cy="6.3" r="1"/><path d="M7.6 5.4L6.6 2.4M8.95 6.5l3 .5M7.5 7.1L5.5 9.4"/>',
   // a gun-sight: the range is in use
@@ -76,6 +80,7 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
   { id: 'wreck', words: 'Wreck' },
   { id: 'light', words: 'Light' },
   { id: 'buoy', words: 'Buoy or beacon' },
+  { id: 'fogsignal', words: 'Fog signal (foghorn)' },
   { id: 'structure', words: 'Wind farm or turbine' },
   { id: 'platform', words: 'Oil or gas platform, rig or wellhead' },
   { id: 'firing', words: 'Firing or military exercise' },
@@ -96,11 +101,18 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
   { id: 'general', words: 'Other warning' },
 ];
 
+/** ★ v10 The legend's modifier rows, after the hazards — the same in the web client's key and the app's legend. */
+export const NAV_MARK_ROWS: Array<{ id: NavHazard; words: string; pair?: boolean }> = [
+  { id: 'light', words: 'Light not working (the unlit mark)' },
+  { id: 'fogsignal', words: 'Fog signal not working (the same mark)' },
+  { id: 'light', words: 'Light and fog signal not working', pair: true },
+];
+
 /** ★ The family colours (one per icon — the icon itself stays single-colour): danger red-orange, lights amber, work at
  *  sea yellow, rescue pink, ice pale blue, the rest grey-white. Chosen to read on the dark basemap and the light one. */
 export const NAV_HAZARD_COLOURS: Record<NavHazard, string> = {
   wreck: '#ff7a59', uxo: '#ff5a5a', firing: '#ff5a5a', submarine: '#ff5a5a', obstruction: '#ff9d5c', adrift: '#ff9d5c',
-  light: '#ffc940', navaid: '#ffc940', buoy: '#ffc940',
+  light: '#ffc940', navaid: '#ffc940', buoy: '#ffc940', fogsignal: '#ffc940',   // ★ v10 the fog signal: an aid to navigation, the lights' amber
   structure: '#e8d36a', platform: '#e8d36a', cable: '#e8d36a', cable_telecom: '#e8d36a', cable_power: '#e8d36a', pipeline: '#e8d36a', pipeline_gas: '#e8d36a', survey: '#e8d36a', works: '#e8d36a', towing: '#e8d36a',
   sar: '#ff7ac8', ice: '#9fdcff', general: '#d7dee6',
 };
@@ -119,13 +131,42 @@ export function navGlyphSvg(h: NavHazard, px: number, colour: string, unlit = fa
     + ` stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}${unlit ? navUnlitMark(bg) : ''}</svg>`;
 }
 
+/** The glyph as the marker draws it (scaled 0.95, `x` across), its unlit / not-working mark knocked out of the marker's ground. */
+function markerGlyph(h: NavHazard, unlit: boolean, c: string, x: number): string {
+  const body = unlit && (h === 'light' || h === 'navaid') ? LIGHT_DARK : NAV_GLYPHS[h];
+  return `<g transform="translate(${x} 4.4) scale(0.95)" fill="none" color="${c}" stroke="${c}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}${unlit ? navUnlitMark('#0b1420') : ''}</g>`;
+}
+/** ★★ v10 THE PILL (Stuart, 2026-11-04): the light AND its fog signal both out — "TURBINE … UNLIT AND FOG SIGNAL
+ *  INOPERATIVE". The round marker stretched to two icon widths: the warning's own icon unlit (the turbine, the platform,
+ *  the lighthouse …) beside the horn not working, each in its own colour, the rim in the light's. 44 × 24, centred on the
+ *  point like every marker (the track layer anchors, hit-tests and declutters by the icon's own w / h). */
+export function navPairMarker(h: NavHazard, faded: boolean): { html: string; w: number; h: number } {
+  const c = faded ? '#9aa6b2' : NAV_HAZARD_COLOURS[h], c2 = faded ? '#9aa6b2' : NAV_HAZARD_COLOURS.fogsignal;
+  const rim = faded ? ' stroke-dasharray="2.4 1.8"' : '';
+  return {
+    html: `<svg width="44" height="24" viewBox="0 0 44 24" aria-hidden="true" style="opacity:${faded ? 0.42 : 1}"><rect x="1" y="1" width="42" height="22" rx="11" fill="#0b1420" stroke="${c}" stroke-width="1.3"${rim}/>`
+      + `${markerGlyph(h, true, c, 4.4)}${markerGlyph('fogsignal', true, c2, 24.4)}</svg>`,
+    w: 44, h: 24,
+  };
+}
+/** The pair as a standalone SVG (the legend, a card): the icon unlit and the horn not working, side by side. */
+export function navPairSvg(h: NavHazard, px: number, colour: string, bg = '#0b1420', colour2 = NAV_HAZARD_COLOURS.fogsignal): string {
+  const one = (g: NavHazard, col: string) => navGlyphSvg(g, px, col, true, bg).replace('<svg xmlns="http://www.w3.org/2000/svg" ', '<svg ');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(px * 2.25)}" height="${px}" viewBox="0 0 ${Math.round(px * 2.25)} ${px}">`
+    + one(h, colour).replace('<svg ', '<svg x="0" ') + one('fogsignal', colour2).replace('<svg ', `<svg x="${Math.round(px * 1.25)}" `) + '</svg>';
+}
+/** A legend row's picture: one glyph with its mark, or the pair. */
+export function navMarkRowSvg(r: { id: NavHazard; pair?: boolean }, px: number, bg = '#0b1420'): string {
+  return r.pair ? navPairSvg(r.id, px, NAV_HAZARD_COLOURS[r.id], bg) : navGlyphSvg(r.id, px, NAV_HAZARD_COLOURS[r.id], true, bg);
+}
+
 /** ★ THE MAP MARKER: the glyph on a dark disc rimmed in its colour (so it reads on any basemap), 24 px. Faded (expired,
  *  cancelled) = 40 % and a dashed grey rim. */
-export function navHazardMarker(h: NavHazard, unlit: boolean, faded: boolean): { html: string; w: number; h: number } {
+export function navHazardMarker(h: NavHazard, unlit: boolean, faded: boolean, fog = false): { html: string; w: number; h: number } {
+  if (fog && unlit && h !== 'fogsignal') return navPairMarker(h, faded);
   const c = faded ? '#9aa6b2' : NAV_HAZARD_COLOURS[h];
   const rim = faded ? ' stroke-dasharray="2.4 1.8"' : '';
-  const body = unlit && (h === 'light' || h === 'navaid') ? LIGHT_DARK : NAV_GLYPHS[h];
-  const glyph = `<g transform="translate(4.4 4.4) scale(0.95)" fill="none" color="${c}" stroke="${c}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}${unlit ? navUnlitMark('#0b1420') : ''}</g>`;
+  const glyph = markerGlyph(h, unlit, c, 4.4);
   return {
     html: `<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" style="opacity:${faded ? 0.42 : 1}"><circle cx="12" cy="12" r="11" fill="#0b1420" stroke="${c}" stroke-width="1.3"${rim}/>${glyph}</svg>`,
     w: 24, h: 24,

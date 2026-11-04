@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
         ok(t.id == "structure" && t.unlit, "a turbine with its light inoperative: structure + unlit");
         const auto lh = navwarn::classify('A', "LIGHTHOUSE OF S. CATALDO OF LECCE I.L. 3612 (E2192),\nIN POSITION:\nLAT 40 23.4'N\nIS NOT WORKING.");
         ok(lh.id == "navaid" && lh.unlit, "LIGHTHOUSE … IS NOT WORKING: navaid + unlit");
-        ok(c("BUOY MISSING") == "buoy" && c("RACON INOPERATIVE") == "navaid" && c("FOGHORN OUT OF ORDER") == "navaid", "BUOY → buoy (the buoy icon); RACON / FOGHORN → navaid");
+        ok(c("BUOY MISSING") == "buoy" && c("RACON INOPERATIVE") == "navaid" && c("FOGHORN OUT OF ORDER") == "fogsignal", "BUOY → buoy (the buoy icon); RACON → navaid; FOGHORN → fogsignal (v10)");
         ok(c("KUSTROUTE OOSTENDE\nLICHTBOEI BA-E 51-14.77N 002-55.42E\nLICHT GEDOOFD") == "buoy", "NL: LICHTBOEI (a compound) → buoy");
         ok(c("CONTAINERS LOST OVERBOARD") == "adrift" && c("DERELICT YACHT ADRIFT") == "adrift", "CONTAINERS LOST / DERELICT → adrift");
         ok(c("DIVED SUBMARINE EXERCISES IN PROGRESS") == "submarine" && c("SUBFACTS AND GUNFACTS") == "submarine" && c("SUBMARINE TORPEDO FIRING") == "submarine", "submarine operations → submarine, before torpedo/firing");
@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
     {
         auto cl = [](const char* t, char b2 = 'A') { return navwarn::classify(b2, t); };
         auto k = cl("OOSTENDERADIO MSI 327/26\nAPPROACH ZEEBRUGGE\nWESTERN PIER\nFOGHORN OUT OF ORDER");
-        ok(k.id == "navaid", "EN: FOGHORN OUT OF ORDER → navaid");
+        ok(k.id == "fogsignal" && k.unlit, "EN: FOGHORN OUT OF ORDER → fogsignal, not working (v10; was navaid)");
         k = cl("AVURNAV BREST 370/26\nOUESSANT\nZONE D'EXCLUSION\nPROJET CELTIC INTERCONNECTOR\nOPERATIONS CABLIERES\nPOSE DE CABLES SOUS-MARINS");
         ok(k.id == "cable_power", "FR: PROJET CELTIC INTERCONNECTOR … POSE DE CABLES SOUS-MARINS → a POWER cable (v6: the interconnector says what it carries)");
         k = cl("FEU ETEINT\nBOUEE CARDINALE NORD");
@@ -204,6 +204,54 @@ int main(int argc, char** argv) {
         ok(c("OPERACIONES DE TENDIDO DE CABLE SUBMARINO") == "cable" && c("EJERCICIOS CON SUBMARINOS") == "submarine", "ES: CABLE SUBMARINO is a cable, never a submarine; SUBMARINOS alone is");
         ok(c("IT IS REQUIRED TO CONSULT NEARBY OFFSHORE PLATFORMS TO VERIFY YOUR ANCHORAGE. DAMAGE TO SUBSEA GAS PIPELINES") == "pipeline_gas", "'CONSULT NEARBY OFFSHORE PLATFORMS' (an anchoring notice) is not a platform");
     }
+    std::printf("── v10: the fog signal ──\n");
+    {
+        auto cl = [](const char* t, char b2 = 'A') { return navwarn::classify(b2, t); };
+        auto is = [&](const char* t, bool out) { const auto k = cl(t); return k.id == "fogsignal" && k.unlit == out; };
+        // the real wording (the Lenovo's gallery, 2026-11-04)
+        ok(is("ZCZC TA13\n081359 UTC SEP\nOOSTENDERADIO MSI 327/26\nAPPROACH ZEEBRUGGE\nPORT OF ZEEBRUGGE\nWESTERN PIER\nFOGHORN OUT OF ORDER\nNNNN", true),
+           "TA13 Zeebrugge WESTERN PIER FOGHORN OUT OF ORDER → fogsignal, not working");
+        const auto nl = cl("ZCZC BA75\nNADERING ZEEBRUGGE\nHAVEN VAN ZEEBRUGGE\nWESTERSTAKETSEL\nMISTHOORN BUITEN DIENST\nNNNN");
+        ok(nl.id == "fogsignal" && nl.unlit && nl.lang == "nl" && nl.hit == "MISTHOORN", "BA75 MISTHOORN BUITEN DIENST → fogsignal, not working, from Dutch: " + nl.hit);
+        ok(is("ZCZC EA46\nWZ 655/26\nWIGHT.\nGREENWICH LIGHT VESSEL 50-24.5N 000-00.1W FOG SIGNAL INOPERATIVE.\nNNNN", true),
+           "EA46 GREENWICH LIGHT VESSEL … FOG SIGNAL INOPERATIVE → fogsignal (the light vessel's light is NOT out)");
+        ok(is("ZCZC VA28\nWZ 625/26\nTHAMES.\nEAST ANGLIA ONE OFFSHORE WIND FARM.\n1. TURBINE FOG SIGNALS INOPERATIVE:\nA. C22, 52-17.0N 002-27.3E.\nB. F17, 52-15.7N 002-33.7E.\n2. CANCEL WZ 537/26 (VA17).\nNNNN", true),
+           "VA28 EAST ANGLIA ONE … TURBINE FOG SIGNALS INOPERATIVE → fogsignal (before the wind farm)");
+        // ★ THE PRECEDENCE RULE: the light out as well → the light's own class with the unlit mark
+        const auto both = cl("HUMBER.\nINNER DOWSING WIND FARM.\nTURBINE 53-12.8N 000-26.0E UNLIT AND FOG SIGNAL INOPERATIVE.");
+        ok(both.id == "structure" && both.unlit && both.fog, "Inner Dowsing TURBINE … UNLIT AND FOG SIGNAL INOPERATIVE → structure + unlit + fog (the pill)");
+        {
+            const auto e = navwarn::fromMessage("id.txt", 1793768765, 517500, "ZCZC EA30\nWZ 642/26\nHUMBER.\nINNER DOWSING WIND FARM.\nTURBINE 53-12.8N 000-26.0E UNLIT AND FOG SIGNAL INOPERATIVE.\nNNNN");
+            navwarn::Entry back; const std::string line = navwarn::format(e);
+            ok(e.cls == "structure" && e.unlit && e.fog && navwarn::parse(line.substr(0, line.size() - 1), back) && back.unlit && back.fog, "…both flags survive the index line (unlit field 3)");
+            const auto g = navwarn::fromMessage("gw.txt", 1793768765, 517500, "ZCZC EA46\nWZ 655/26\nWIGHT.\nGREENWICH LIGHT VESSEL 50-24.5N 000-00.1W FOG SIGNAL INOPERATIVE.\nNNNN");
+            ok(g.cls == "fogsignal" && g.unlit && !g.fog, "…the horn alone is never the pill");
+            ok(!cl("TURBINE T1 UNLIT.").fog && !cl("FOG SIGNAL INOPERATIVE").fog, "…a light alone or a fog signal alone: no pill");
+        }
+        const auto lf = cl("LIGHTHOUSE X LIGHT AND FOG SIGNAL INOPERATIVE.");
+        ok(lf.id == "navaid" && lf.unlit && lf.fog, "LIGHT AND FOG SIGNAL INOPERATIVE → the lighthouse, unlit + fog (the pill)");
+        ok(is("LIGHTHOUSE OF PUNTA X FOG SIGNAL INOPERATIVE.", true), "a LIGHTHOUSE whose fog signal is out → fogsignal (the lighthouse rule never reads the fog's defect)");
+        ok(cl("LIGHTHOUSE OF PUNTA X UNLIT.").id == "navaid", "…a lighthouse whose light is out stays the lighthouse");
+        // the English forms
+        ok(is("FOG SIGNAL UNSERVICEABLE", true) && is("FOGHORN U/S", true) && is("FOG HORN NOT WORKING", true) && is("FOG-SIGNAL DEFECTIVE", true)
+           && is("DIAPHONE INOPERATIVE", true) && is("FOG SIGNAL OUT OF SERVICE", true) && is("FAILURE OF THE FOG SIGNAL AT X PIER", true), "FOG SIGNAL / FOGHORN / FOG HORN / FOG-SIGNAL / DIAPHONE + UNSERVICEABLE / U/S / NOT WORKING / DEFECTIVE / OUT OF SERVICE; FAILURE OF THE FOG SIGNAL");
+        ok(is("SOUND SIGNAL INOPERATIVE AT PIER HEAD", true) && cl("VESSELS TO GIVE SOUND SIGNALS WHEN APPROACHING").id != "fogsignal", "a SOUND SIGNAL only with its defect");
+        ok(is("FOG SIGNAL RE-ESTABLISHED", false) && is("NEW FOGHORN ESTABLISHED AT BREAKWATER", false), "a fog signal working again / new → fogsignal, not the not-working mark");
+        // the other languages (the lights lists' usual terms)
+        ok(is("SIGNAL DE BRUME HORS SERVICE", true) && is("CORNE DE BRUME EN PANNE", true) && is("NEBELSIGNAL AUSGEFALLEN", true) && is("NEBELSCHALLSIGNAL AUSSER BETRIEB", true)
+           && is("NEBELHORN GESTOERT", true) && is("MISTSIGNAAL DEFECT", true) && is("SENAL DE NIEBLA FUERA DE SERVICIO", true) && is("SEGNALE DA NEBBIA NON FUNZIONANTE", true)
+           && is("SEGNALAMENTO DA NEBBIA AVARIATO", true) && is("SINAL DE NEVOEIRO AVARIADO", true) && is("SIGNAL ZA MAGLU NE RADI", true), "FR / DE / NL / ES / IT / PT / HR fog signal + its defect → fogsignal, not working");
+        const auto fr = cl("SIGNAL DE BRUME HORS SERVICE");
+        ok(fr.lang == "fr" && fr.hit == "SIGNAL DE BRUME", "…the summary keeps the message's own word: from French: " + fr.hit);
+        ok(!cl("MISTHOORN DEFECT").unlit || cl("MISTHOORN DEFECT").id == "fogsignal", "a fog signal's DEFECT is never read as the light's");
+        // FOG alone is never a fog signal
+        ok(cl("FOG PATCHES. VISIBILITY POOR IN FOG.").id == "general" && cl("NAVIGATION RESTRICTED IN FOG").id == "general" && cl("DENSE FOG EXPECTED. VISIBILITY 200 METRES").id == "general",
+           "FOG in the text (visibility, a forecast in a nav warning) → never fogsignal");
+        ok(cl("FOG SIGNAL INOPERATIVE", 'B').id == "met" && cl("FOG BANKS. SEA STATE MODERATE", 'E').id == "met", "a forecast (B / E) stays met");
+        ok(cl("NIEBLAS COSTERAS OCASIONALES").id == "general" && cl("BANCS DE BRUME").id == "general" && cl("NEBEL UND DUNST").id == "general" && cl("NEBBIA IN BANCHI").id == "general",
+           "NIEBLAS / BRUME / NEBEL / NEBBIA alone → never fogsignal");
+        ok(cl("WRECK 50-00N 001-00W. FOG SIGNAL ON WRECK BUOY INOPERATIVE").id == "wreck", "a wreck stays a wreck (the classes before the fog signal keep their order)");
+    }
     std::printf("── v6: a list of named platforms = a marker each ──\n");
     {
         const char* pa = "ZCZC PA11\n231717 UTC OCT 26\nMSI 269/26\nNORTH SEA DUTCH EEZ\nFOLLOWING PLATFORMS HAVE DEFECTS: \nF16-A 54-07.0N 004-00.1E NAV AIDS UNRELIABLE\n"
@@ -215,7 +263,9 @@ int main(int argc, char** argv) {
            "…each its own name and defect (F16-A: NAV AIDS UNRELIABLE; K6-N: FOGHORN INOPERATIVE)");
         ok(e.items.size() == 6 && e.items[2].unlit && e.items[4].unlit && e.items[0].unlit && !e.items[1].unlit && !e.items[3].unlit,
            "…the unlit mark per item: BLACK OUT, UNLIT, NAV AIDS UNRELIABLE yes; FOGHORN INOPERATIVE no");
-        navwarn::Entry back; ok(navwarn::parse(navwarn::format(e).substr(0, navwarn::format(e).size() - 1), back) && back.items.size() == 6 && back.items[5].name == "K12-G", "…the items survive the index line");
+        ok(e.items.size() == 6 && e.items[1].fog && e.items[3].fog && !e.items[0].fog && !e.items[2].fog && !e.items[4].fog,
+           "…v10 the fog-signal flag per item: K6-N and N7-FA-1 (FOGHORN INOPERATIVE) yes; the others no");
+        navwarn::Entry back; ok(navwarn::parse(navwarn::format(e).substr(0, navwarn::format(e).size() - 1), back) && back.items.size() == 6 && back.items[5].name == "K12-G" && back.items[1].fog && !back.items[1].unlit && back.items[2].unlit && !back.items[2].fog, "…the items (and their unlit / fog flags) survive the index line");
         const auto corners = navwarn::fromMessage("cx.txt", 1793500000, 517500, "ZCZC EA50\nWZ 700/26\nA) 51-00.0N 001-00.0E\nB) 51-10.0N 001-00.0E\nC) 51-10.0N 001-10.0E\nNNNN");
         ok(corners.items.empty(), "a corner list (A) B) C) and nothing else) is not a named list");
         const auto lettered = navwarn::fromMessage("lt.txt", 1793500000, 517500, "ZCZC VA28\nWZ 702/26\nWRECKS:\nA. C22 51-30.0N 002-00.0E\nB. F17 51-35.0N 002-10.0E\nNNNN");

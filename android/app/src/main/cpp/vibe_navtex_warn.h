@@ -47,14 +47,16 @@ static constexpr size_t kMaxGroups = 20000;
 static constexpr int64_t kExpireSec = 72 * 3600;
 static constexpr int64_t kReuseSec = 30 * 86400;
 static constexpr size_t kMaxPts = 24;
-static constexpr const char* kPrefix = "v9\t";   // ★ kVersion's line prefix
-static constexpr int kVersion = 9;   // ★ 9 (2026-11-02, pass 2): rebuilds the met index — MET Norway's sea areas and Met Éireann's coastal stretches (a chain of headlands), Inner/Outer Skagerrak's ids, the Dutch/German/French names (THEEMS, DEUTSCHE BUCHT, TAMISE, PAS DE CALAIS). 8 (2026-11-02): rebuilds the met index — the SEA AREAS beyond the UK (NWS zones by name or UGC line, ECCC areas, DWD coastal areas) and winds in knots. 7 (2026-11-02): rebuilds the met index — a force range written "4-5" now reads its upper figure (the SHIPPING MAP arrows). 6 (2026-11-01): cables/pipelines in five, platforms, named lists (one marker an item), REPLACES. 5: the submarine class (was folded into firing). 4: + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
+static constexpr const char* kPrefix = "v10\t";   // ★ kVersion's line prefix
+static constexpr int kVersion = 10;   // ★ 10 (2026-11-04): the FOG SIGNAL class (a fog signal not working — its own icon, never the lighthouse) and a named item's fog-signal flag. 9 (2026-11-02, pass 2): rebuilds the met index — MET Norway's sea areas and Met Éireann's coastal stretches (a chain of headlands), Inner/Outer Skagerrak's ids, the Dutch/German/French names (THEEMS, DEUTSCHE BUCHT, TAMISE, PAS DE CALAIS). 8 (2026-11-02): rebuilds the met index — the SEA AREAS beyond the UK (NWS zones by name or UGC line, ECCC areas, DWD coastal areas) and winds in knots. 7 (2026-11-02): rebuilds the met index — a force range written "4-5" now reads its upper figure (the SHIPPING MAP arrows). 6 (2026-11-01): cables/pipelines in five, platforms, named lists (one marker an item), REPLACES. 5: the submarine class (was folded into firing). 4: + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
 
 // ── the hazard classes (the Lenovo's 3 924 messages decided them — scripts/navtex-survey numbers in the commit) ─────────
 /** Conservative keyword rules on the message body, whole words, in this order (the first that matches wins); when none
  *  does, "general" — never a guess. B2 decides SAR (D), ice (C) and met (B, E). `unlit` is a MODIFIER: a structure or a
  *  buoy whose light has failed is that icon with the unlit mark. */
-struct Class { std::string id; bool unlit = false; std::string hit, lang; };
+/** ★ v10 `fog`: the light is out AND its fog signal too ("TURBINE … UNLIT AND FOG SIGNAL INOPERATIVE") — the class stays
+ *  the light's, unlit, and the marker is the PILL: that icon unlit beside the horn not working (Stuart, 2026-11-04). */
+struct Class { std::string id; bool unlit = false, fog = false; std::string hit, lang; };
 /** ★ Every pattern compiled ONCE (2026-11-01: a regex built per message per rule was most of the backfill's time — and a
  *  Pi 2 builds them ten times slower). Keyed by the literal's address: the patterns are string literals. */
 inline const std::regex& rx(const char* re) {
@@ -97,6 +99,22 @@ inline const std::vector<Rule>& rules() {
         {"adrift", "en", R"(\bADRIFT\b|\bDRIFTING\b|\bDERELICT\b|\bCONTAINERS? (LOST|OVERBOARD)\b|\bFLOATING (OBJECT|DEBRIS|LOG|TIMBER)S?\b)"},
         {"adrift", "fr", R"(\bA LA DERIVE\b)"}, {"adrift", "es", R"(\bA LA DERIVA\b)"}, {"adrift", "it", R"(\bALLA DERIVA\b)"},
         {"adrift", "de", R"(\bTREIBEND\w*\b)"}, {"adrift", "nl", R"(\bDRIJVEND\w*\b)"}, {"adrift", "hr", R"(\bPLUTA\w*\b)"},
+        // ★★ v10 (2026-11-04, Stuart: "one icon we are missing for Navtex and that is the Fog Horn, I've seen a few messages
+        //    referring to fog horn not working"). A FOG SIGNAL — the horn, diaphone or siren on a lighthouse, a light
+        //    vessel, a pier, a turbine or a platform. BEFORE structure / platform / navaid, so "EAST ANGLIA ONE OFFSHORE WIND
+        //    FARM. TURBINE FOG SIGNALS INOPERATIVE" and "GREENWICH LIGHT VESSEL … FOG SIGNAL INOPERATIVE" draw the horn.
+        //    ★ THE PRECEDENCE RULE (classify()): the horn alone only when the LIGHT is not also out. Both out ("TURBINE …
+        //    UNLIT AND FOG SIGNAL INOPERATIVE", "LIGHT AND FOG SIGNAL INOPERATIVE") keeps the light's own class, unlit, with
+        //    `fog` set — the clients draw the PILL, that icon unlit beside the horn (Stuart's call, 2026-11-04); with no
+        //    structure named it is the lighthouse (the navaid rule keeps its FOG SIGNAL words for that). A fog signal's own defect never counts as the light's (fogMask()). Its `unlit` flag then
+        //    means NOT WORKING ("Fog signal not working"). FOG alone (a forecast, visibility IN FOG) is never one; a SOUND
+        //    SIGNAL only with its defect. Words: en / nl seen on the air (the Lenovo, 2026-11-04: FOG SIGNAL(S), FOGHORN,
+        //    MISTHOORN BUITEN DIENST); fr / de / es / it / pt / hr are the lights lists' usual terms, not yet heard here.
+        {"fogsignal", "en", R"(\bFOG ?-?SIGNALS?\b|\bFOG ?-?HORNS?\b|\bDIAPHONES?\b|\bNAUTOPHONES?\b|\bSOUND SIGNALS?\b(?=[^.\n]{0,40}\b(INOPERATIVE|UNSERVICEABLE|U/S|OUT OF (ORDER|SERVICE)|NOT (WORKING|OPERATING|OPERATIONAL|SOUNDING)|DEFECTIVE|FAILED|UNRELIABLE|DISCONTINUED|SILENT)))"},
+        {"fogsignal", "fr", R"(\bSIGNA(L|UX) DE BRUME\b|\bCORNES? DE BRUME\b|\bSIRENES? DE BRUME\b)"},
+        {"fogsignal", "nl", R"(\bMISTHOORNS?\b|\bMISTSIGNA(AL|LEN)\b)"}, {"fogsignal", "de", R"(\bNEBEL\w*SIGNAL\w*\b|\bNEBELHORN\w*\b)"},
+        {"fogsignal", "es", R"(\bSE\S{0,2}AL(ES)? DE NIEBLA\b|\bSIRENAS? DE NIEBLA\b)"}, {"fogsignal", "it", R"(\bSEGNAL\w* (DA|DI|PER) NEBBIA\b|\bSIRENA DA NEBBIA\b)"},
+        {"fogsignal", "pt", R"(\bSINA(L|IS) DE NEVOEIRO\b|\bSIRENE DE NEVOEIRO\b)"}, {"fogsignal", "hr", R"(\b(SIGNAL\w*|SIREN\w*) ZA MAGLU\b)"},
         // ★ v6 (2026-11-01, Stuart): WIND FARMS stay `structure`; oil and gas PLATFORMS, drilling RIGS (towed ones too) and
         //   WELLHEADS are `platform` — their own icon (a steel jacket and derrick), most of them "UNLIT AND ALL NAVAIDS
         //   INOPERATIVE". RIG is a whole word (never TRIG / BRIGHT / RIGHT / ORIGIN). "CONSULT NEARBY OFFSHORE PLATFORMS"
@@ -163,6 +181,28 @@ inline const std::vector<Rule>& unlitRules() {
     };
     return r;
 }
+/** ★★ v10 THE FOG SIGNAL, NOT WORKING: any language's fog-signal word (the `fogsignal` rules above, joined), then — on the
+ *  same line, before a full stop — a defect word. "FOG SIGNAL INOPERATIVE", "FOGHORN OUT OF ORDER", "MISTHOORN BUITEN
+ *  DIENST", "SIGNAL DE BRUME HORS SERVICE", "NEBELSIGNAL AUSGEFALLEN"; and English "FAILURE OF THE FOG SIGNAL". */
+inline std::string fogWords() {
+    return R"((FOG ?-?SIGNALS?|FOG ?-?HORNS?|DIAPHONES?|NAUTOPHONES?|SOUND SIGNALS?|SIGNA(L|UX) DE BRUME|CORNES? DE BRUME|SIRENES? DE BRUME|MISTHOORNS?|MISTSIGNA(AL|LEN)|NEBEL\w*SIGNAL\w*|NEBELHORN\w*|SE\S{0,2}AL(ES)? DE NIEBLA|SIRENAS? DE NIEBLA|SEGNAL\w* (DA|DI|PER) NEBBIA|SIRENA DA NEBBIA|SINA(L|IS) DE NEVOEIRO|SIRENE DE NEVOEIRO|(SIGNAL\w*|SIREN\w*) ZA MAGLU))";
+}
+inline const std::regex& fogOutRx() {
+    static const std::regex r(R"(\b)" + fogWords() + R"(\b[^.\n]{0,40}?\b(INOPERATIVE|UNSERVICEABLE|U/S|OUT OF (ORDER|SERVICE)|NOT (WORKING|OPERATING|OPERATIONAL|SOUNDING|IN OPERATION)|DEFECTIVE|FAILED|UNRELIABLE|DISCONTINUED|SILENT|INOP)"
+        R"(|HORS SERVICE|EN PANNE|INOPERANTS?|DEFAILLANTS?|BUITEN (DIENST|WERKING|GEBRUIK)|DEFECT|GESTOORD|AUSGEFALLEN|AUSSER BETRIEB|NICHT IN BETRIEB|GESTOERT)"
+        R"(|FUERA DE SERVICIO|INOPERATIV[OA]S?|AVERIAD[OA]S?|FUORI SERVIZIO|NON FUNZIONANT[EI]|AVARIAT[OA]|INEFFICIENTE|FORA DE SERVICO|AVARIAD[OA]S?|INOPERACIONA(L|IS)|INOPERANTES?|NE RADI|NEISPRAV\w*)\b)"
+        R"(|\bFAILURE OF (THE )?)" + fogWords() + R"(\b)");
+    return r;
+}
+inline const std::regex& fogAnyRx() { static const std::regex r(R"(\b)" + fogWords() + R"(\b)"); return r; }
+/** The text with every "FOG SIGNAL … INOPERATIVE" blanked: the LIGHT's defect is read from this, so a fog signal's own
+ *  defect ("GREENWICH LIGHT VESSEL … FOG SIGNAL INOPERATIVE", "MISTHOORN DEFECT") never marks the light unlit. */
+inline std::string fogMask(const std::string& U) { return std::regex_replace(U, fogOutRx(), " FOGSIGOUT "); }
+/** "LIGHT AND FOG SIGNAL INOPERATIVE" names both: the light is out too (read on the masked text). */
+inline bool lightAndFogOut(const std::string& Uf) {
+    static const std::regex r(R"(\b(LIGHTS?|FEUX?|LICHT|FEUER|LUZ|LUCE|FANALE)\s+(AND|&|ET|EN|UND|Y|E)\s+(THE\s+)?FOGSIGOUT)");
+    return std::regex_search(Uf, r);
+}
 inline Class classify(char b2, const std::string& text) {
     std::string U = navtex::upperAscii(text);
     const size_t z = U.find("ZCZC"); if (z != std::string::npos) U = U.substr(z);
@@ -179,14 +219,26 @@ inline Class classify(char b2, const std::string& text) {
     const std::string Us = std::regex_replace(U, rx(R"(\b(CABLES?|TUBERIAS?|CONDUCCION(ES)?|EMISARIOS?)\s+SUBMARIN[OA]S?\b)"), "$1");
     Class c;
     std::smatch m;
-    for (const auto& r : unlitRules()) if (std::regex_search(U, m, rx(r.re))) { c.unlit = true; if (std::string(r.lang) != "en") { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; } break; }
+    // ★ v10: the LIGHT's defect is read with every fog signal's own defect blanked (fogMask) — "LIGHT AND FOG SIGNAL
+    //   INOPERATIVE" excepted, which names both
+    const bool fogOut = std::regex_search(U, fogOutRx()), fogAny = fogOut || std::regex_search(U, fogAnyRx());
+    const std::string Uf = fogOut ? fogMask(U) : U;
+    for (const auto& r : unlitRules()) if (std::regex_search(Uf, m, rx(r.re))) { c.unlit = true; if (std::string(r.lang) != "en") { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; } break; }
+    if (fogOut && !c.unlit && lightAndFogOut(Uf)) c.unlit = true;
+    c.fog = fogOut && c.unlit;   // ★ both out: the pill (cleared below when the horn alone wins)
     if (b2 == 'C') { c.id = "ice"; return c; }
     if (b2 == 'B' || b2 == 'E') { c.id = "met"; return c; }   // ★ a forecast or a met warning: the WEATHER layer's, never a hazard icon
     for (const auto& r : rules()) {
         if (b2 == 'D' && std::string(r.cls) != "sar") { c.id = "sar"; return c; }
         const std::string cls = r.cls;
         const std::string& in = cls == "platform" ? Up : cls == "navaid" ? Un : cls == "submarine" ? Us : U;
+        if (cls == "fogsignal" && (!fogAny || c.unlit)) continue;   // ★ v10: the light is out too → the light's own class + unlit
         if (std::regex_search(in, m, rx(r.re))) {
+            if (cls == "fogsignal") {   // ★ v10: `unlit` = the fog signal NOT WORKING; the hit is its own words, never the light's
+                c.id = cls; c.unlit = fogOut; c.fog = false; c.hit.clear(); c.lang.clear();
+                if (std::string(r.lang) != "en") { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; }
+                return c;
+            }
             if (std::string(r.cls) == "adrift" && word(U, R"(\b(BUOY|BOUEE|BOYA|BOA|TONNE|BOEI)\b[^.\n]{0,30}\b(ADRIFT|A LA DERIVE|A LA DERIVA|ALLA DERIVA|TREIBEND|DRIJVEND)\b)")) continue;   // ★ a buoy adrift is a navaid
             c.id = r.cls;
             if (std::string(r.lang) != "en" && c.hit.empty()) { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; }
@@ -373,8 +425,9 @@ inline int lostChars(const std::string& b) { int n = 0; for (char c : b) n += c 
  *  "K6-N 53-41.0N 003-44.0E FOGHORN INOPERATIVE". Each is its OWN marker with its own name and defect (never one shape
  *  across the North Sea). Strict: every position of the message is on a line of its own (one position a line, two lines
  *  or more), and each line has words besides its position (a corner list "A) 51-00N 002-00E" has none). The words
- *  before the position are its name, after it its defect; `u` when the defect says its light is out. */
-struct Item { std::string name, defect; bool unlit = false; };
+ *  before the position are its name, after it its defect; `u` when the defect says its light is out; ★ v10 `fog` when
+ *  it says its FOG SIGNAL is not working ("K6-N … FOGHORN INOPERATIVE" — the horn's icon, unless its light is out too). */
+struct Item { std::string name, defect; bool unlit = false, fog = false; };
 inline std::string itemClean(std::string s, size_t cap) {
     for (auto& ch : s) if (ch == '|' || ch == '~' || ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
     s = std::regex_replace(s, rx(R"(^[\s,;:.\-]*(\d{1,2}[.)]\s*|[A-Z][.)]\s+)?)"), "");   // "1." "2)" "A." "B)" list marks
@@ -419,7 +472,9 @@ inline std::vector<Item> namedItems(const std::string& b, size_t nAll) {
         Item i; i.name = itemClean(pl.substr(0, a), 40); i.defect = itemClean(pl.substr(z), 60);
         if (!meaningful(i.name + " " + i.defect)) return {};
         if (i.name.empty()) { i.name = i.defect; i.defect.clear(); }
-        i.unlit = std::regex_search(i.defect.empty() ? i.name : i.defect, rx(R"(\bUNLIT\b|\bBLACK ?OUT\b|\bEXTINGUISHED\b|\bLIGHTS?\b[^,;]{0,20}\b(INOPERATIVE|UNRELIABLE|OUT|FAILED|DEFECTIVE)\b|\bNAV ?AIDS?\b[^,;]{0,20}\b(INOPERATIVE|UNRELIABLE)\b|\bETEINTS?\b|\bSPENT[OA]\b|\bGEDOOFD\b|\bAPAGAD[OA]\b)"));
+        const std::string& said = i.defect.empty() ? i.name : i.defect;
+        i.fog = std::regex_search(said, fogOutRx());   // ★ v10: its own defect masked before the light's is read
+        i.unlit = std::regex_search(i.fog ? fogMask(said) : said, rx(R"(\bUNLIT\b|\bBLACK ?OUT\b|\bEXTINGUISHED\b|\bLIGHTS?\b[^,;]{0,20}\b(INOPERATIVE|UNRELIABLE|OUT|FAILED|DEFECTIVE)\b|\bNAV ?AIDS?\b[^,;]{0,20}\b(INOPERATIVE|UNRELIABLE)\b|\bETEINTS?\b|\bSPENT[OA]\b|\bGEDOOFD\b|\bAPAGAD[OA]\b)"));
         out.push_back(i);
     }
     if (out.size() != nAll) return {};
@@ -462,7 +517,7 @@ inline int64_t issuedOf(const std::string& b, int64_t t) {
 struct Entry {
     std::string file, id, cls, series, cIds, cSeries;   // cIds / cSeries: what it cancels, space-separated
     int64_t t = 0, cancelAt = 0; double khz = 0;
-    uint64_t hash = 0; int lost = 0; bool unlit = false;
+    uint64_t hash = 0; int lost = 0; bool unlit = false, fog = false;   // fog: light AND fog signal out (v10)
     char b1 = 0, b2 = 0;
     std::vector<std::pair<double, double>> pts;
     std::string hit, lang;   // ★ the native word that classified it, and its language (the card's summary)
@@ -475,7 +530,7 @@ inline uint64_t nameHash(const std::string& s) { uint64_t h = 146959810393466560
 /** name~defect~u|… — the named list's index field (itemClean took '|' '~' tab and newline out) */
 inline std::string itemsField(const std::vector<Item>& v) {
     std::string o;
-    for (size_t i = 0; i < v.size(); ++i) o += (i ? "|" : "") + v[i].name + "~" + v[i].defect + "~" + (v[i].unlit ? "1" : "0");
+    for (size_t i = 0; i < v.size(); ++i) o += (i ? "|" : "") + v[i].name + "~" + v[i].defect + "~" + std::to_string((v[i].unlit ? 1 : 0) | (v[i].fog ? 2 : 0));   // ★ v10: bit 1 = the fog signal
     return o;
 }
 inline std::vector<Item> itemsOf(const std::string& f) {
@@ -484,7 +539,7 @@ inline std::vector<Item> itemsOf(const std::string& f) {
         size_t q = f.find('|', p); if (q == std::string::npos) q = f.size();
         const std::string one = f.substr(p, q - p);
         const size_t a = one.find('~'), b2 = a == std::string::npos ? a : one.find('~', a + 1);
-        if (a != std::string::npos && b2 != std::string::npos) { Item i; i.name = one.substr(0, a); i.defect = one.substr(a + 1, b2 - a - 1); i.unlit = one.substr(b2 + 1) == "1"; v.push_back(i); }
+        if (a != std::string::npos && b2 != std::string::npos) { Item i; i.name = one.substr(0, a); i.defect = one.substr(a + 1, b2 - a - 1); const int u = std::atoi(one.substr(b2 + 1).c_str()); i.unlit = u & 1; i.fog = u & 2; v.push_back(i); }
         p = q + 1;
     }
     return v;
@@ -495,7 +550,7 @@ inline std::string format(const Entry& e) {
     std::string o = "v" + std::to_string(kVersion) + "\t" + e.file;
     std::snprintf(b, sizeof b, "\t%lld\t%g\t%s\t%016llx\t%d\t", (long long)e.t, e.khz, e.id.c_str(), (unsigned long long)e.hash, e.lost);
     o += b;
-    o += e.cls + "\t" + (e.unlit ? "1" : "0") + "\t" + e.series + "\t" + e.cIds + "\t" + e.cSeries + "\t" + std::to_string((long long)e.cancelAt) + "\t";
+    o += e.cls + "\t" + (e.unlit ? (e.fog ? "3" : "1") : "0") + "\t" + e.series + "\t" + e.cIds + "\t" + e.cSeries + "\t" + std::to_string((long long)e.cancelAt) + "\t";
     for (size_t i = 0; i < e.pts.size(); ++i) { std::snprintf(b, sizeof b, "%s%.4f,%.4f", i ? ";" : "", e.pts[i].first, e.pts[i].second); o += b; }
     std::string hit = e.hit; for (auto& ch : hit) if (ch == '\t' || ch == '\n') ch = ' ';
     return o + "\t" + hit + "\t" + e.lang + "\t" + std::to_string((long long)e.validTo) + "\t" + (e.ufn ? "1" : "0")
@@ -510,7 +565,7 @@ inline bool parse(const std::string& l, Entry& e) {
     e.hit = f[14]; e.lang = f[15]; e.validTo = std::atoll(f[16].c_str()); e.ufn = f[17] == "1";
     e.shape = f[18] == "a" ? 'a' : f[18] == "r" ? 'r' : 0; e.issued = std::atoll(f[19].c_str());
     e.file = f[1]; e.t = std::atoll(f[2].c_str()); e.khz = std::atof(f[3].c_str()); e.id = f[4];
-    e.hash = std::strtoull(f[5].c_str(), nullptr, 16); e.lost = std::atoi(f[6].c_str()); e.cls = f[7]; e.unlit = f[8] == "1";
+    e.hash = std::strtoull(f[5].c_str(), nullptr, 16); e.lost = std::atoi(f[6].c_str()); e.cls = f[7]; e.unlit = f[8] == "1" || f[8] == "3"; e.fog = f[8] == "3";   // ★ v10: 3 = the light and its fog signal out
     e.series = f[9]; e.cIds = f[10]; e.cSeries = f[11]; e.cancelAt = std::atoll(f[12].c_str());
     if (e.id.size() == 4) { e.b1 = e.id[0]; e.b2 = e.id[1]; }
     std::string pts = f[13];
@@ -535,7 +590,7 @@ inline Entry fromMessage(const std::string& file, int64_t t, double hz, const st
     if (e.id.size() == 4) { e.b1 = e.id[0]; e.b2 = e.id[1]; }
     const std::string b = body(text);
     e.hash = textHash(b); e.lost = lostChars(b);
-    const Class c = classify(e.b2, b); e.cls = c.id; e.unlit = c.unlit; e.hit = c.hit; e.lang = c.lang;
+    const Class c = classify(e.b2, b); e.cls = c.id; e.unlit = c.unlit; e.fog = c.fog; e.hit = c.hit; e.lang = c.lang;
     e.series = seriesOf(b);
     const Cancels cx = cancelsOf(b, t);
     if (cx.self) e.cls = "cancel";   // ★ a cancellation: applied, never plotted
@@ -661,7 +716,7 @@ inline bool compact(const std::string& idxPath, const std::unordered_set<uint64_
 struct Group {
     std::string id, cls, series, best;       // best = the file of the best copy
     char b1 = 0, b2 = 0; double khz = 0;
-    int64_t first = 0, last = 0, cancelAt = 0; uint64_t hash = 0; int lost = 1 << 30; bool unlit = false;
+    int64_t first = 0, last = 0, cancelAt = 0; uint64_t hash = 0; int lost = 1 << 30; bool unlit = false, fog = false;
     uint32_t n = 0; std::vector<std::pair<double, double>> pts;
     std::string cancelledBy;                  // the id that cancelled it
     std::string hit, lang; int64_t validTo = 0; bool ufn = false;
@@ -728,7 +783,7 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
             //    copy's too, unless it is garbled: then the copy with the fewest lost characters.
             if (e.t >= g.newest) {
                 g.newest = e.t; g.newestLost = e.lost;
-                g.pts = e.pts; g.cls = e.cls; g.unlit = e.unlit; g.shape = e.shape; g.items = e.items; g.hit = e.hit; g.lang = e.lang; g.hash = e.hash;
+                g.pts = e.pts; g.cls = e.cls; g.unlit = e.unlit; g.fog = e.fog; g.shape = e.shape; g.items = e.items; g.hit = e.hit; g.lang = e.lang; g.hash = e.hash;
                 if (!seriesKey(e.series).empty() || g.series.empty()) g.series = e.series;
                 if (e.lost == 0 || e.lost <= g.lost) { g.lost = e.lost; g.best = e.file; }
             } else if (e.lost < g.lost && g.newestLost > 0) { g.lost = e.lost; g.best = e.file; }   // ★ a cleaner older copy's text
@@ -823,6 +878,7 @@ inline std::string toJson(const Query& q, int64_t now, const SyncResult& s, cons
         if (g.cancelAt) { std::snprintf(b, sizeof b, ",\"cancelAt\":%lld", (long long)g.cancelAt); o += b; }
         if (g.validTo) { std::snprintf(b, sizeof b, ",\"validTo\":%lld", (long long)g.validTo); o += b; }
         if (g.ufn) o += ",\"ufn\":1";
+        if (g.fog && g.unlit) o += ",\"fog\":1";   // ★ v10: the light and its fog signal both out — the pill marker
         if (!g.hit.empty()) o += ",\"hit\":\"" + navmap::jesc(g.hit) + "\",\"lang\":\"" + navmap::jesc(g.lang) + "\"";
         if (g.shape) { o += ",\"shape\":\""; o += g.shape == 'a' ? "area" : "route"; o += "\""; }
         if (g.issued) { std::snprintf(b, sizeof b, ",\"issued\":%lld", (long long)g.issued); o += b; }
@@ -830,7 +886,7 @@ inline std::string toJson(const Query& q, int64_t now, const SyncResult& s, cons
         if (!g.supersededBy.empty()) o += ",\"supersededBy\":\"" + navmap::jesc(g.supersededBy) + "\"";
         if (!g.items.empty() && g.items.size() == g.pts.size()) {   // ★ v6: a named list — one marker an item
             o += ",\"items\":[";
-            for (size_t k = 0; k < g.items.size(); ++k) o += std::string(k ? "," : "") + "{\"n\":\"" + navmap::jesc(g.items[k].name) + "\",\"d\":\"" + navmap::jesc(g.items[k].defect) + "\",\"u\":" + (g.items[k].unlit ? "1" : "0") + "}";
+            for (size_t k = 0; k < g.items.size(); ++k) o += std::string(k ? "," : "") + "{\"n\":\"" + navmap::jesc(g.items[k].name) + "\",\"d\":\"" + navmap::jesc(g.items[k].defect) + "\",\"u\":" + (g.items[k].unlit ? "1" : "0") + (g.items[k].fog ? ",\"fg\":1" : "") + "}";
             o += "]";
         }
         if (placed) {

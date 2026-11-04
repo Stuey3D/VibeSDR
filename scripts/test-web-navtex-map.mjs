@@ -50,9 +50,12 @@ const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mj
 await sleep(400);
 // ★ the real basemap, as an installed server has it: the GPU map's packs and style (test-web-spots' way) and the bundled
 //   vector map — without them the page draws an empty grid and the screenshots show no land
+// ★ VIBE_NO_GPU=1: no GPU map packs — the page takes the LEAFLET FALLBACK (the same checks, the other map)
 const MAPGL = path.join(dir, 'mapgl'); fs.mkdirSync(MAPGL);
-for (const n of fs.readdirSync(path.join(root, 'directory/public/mapgl'))) fs.symlinkSync(path.join(root, 'directory/public/mapgl', n), path.join(MAPGL, n));
-fs.copyFileSync(path.join(root, 'web/mapkit/vibemap-style.json'), path.join(MAPGL, 'vibemap-style.json'));
+if (!process.env.VIBE_NO_GPU) {
+  for (const n of fs.readdirSync(path.join(root, 'directory/public/mapgl'))) fs.symlinkSync(path.join(root, 'directory/public/mapgl', n), path.join(MAPGL, n));
+  fs.copyFileSync(path.join(root, 'web/mapkit/vibemap-style.json'), path.join(MAPGL, 'vibemap-style.json'));
+}
 const DETAIL = process.env.VIBE_DETAIL_PACK && fs.existsSync(process.env.VIBE_DETAIL_PACK) ? process.env.VIBE_DETAIL_PACK : '';
 // ★ The detail pack lives in the DATA dir (vibe_mapgl.h: <data>/mapgl/vibemap-detail.pmtiles) — linked in when given.
 if (DETAIL) { fs.mkdirSync(path.join(dir, 'data', 'mapgl'), { recursive: true }); fs.symlinkSync(DETAIL, path.join(dir, 'data', 'mapgl', 'vibemap-detail.pmtiles')); }
@@ -178,6 +181,30 @@ try {
     const n = Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => (e.getAttribute('aria-label') || '').includes('Warning ${w.id}, ')).length`));
     ok(n === w.items.length, `${w.id}'s named list: ${n} markers, one an item (${w.items.map((x) => x.n).join(', ')})`);
   }
+  // ★★ v10 THE PILL (Stuart, 2026-11-04): a light AND its fog signal out — one 44 × 24 marker, both icons; its whole width
+  //    is the hit area (a tap on the horn half finds the same marker), anchored on its centre like every marker
+  const pillsWant = drawn.filter((w) => w.fog && !lists.includes(w)).length + lists.reduce((n, w) => n + w.items.filter((x) => x.fg && x.u).length, 0);
+  const pillProbe = `(() => { const re = /light and fog signal not working|unlit and its fog signal not working/;
+    const all = [...document.querySelectorAll('.vtl-mk')].filter(e => re.test(e.getAttribute('aria-label') || ''));
+    const shown = all.filter(e => !e.classList.contains('vtl-clhid') && !e.classList.contains('vtl-yhid') && !e.classList.contains('vtl-zhid'));
+    const sized = all.every(e => { const s = e.querySelector('.vtl-ic svg'); return s && s.getAttribute('width') === '44' && s.getAttribute('height') === '24'; });
+    let hitOk = null, centred = null;
+    for (const e of shown) { const r = e.querySelector('.vtl-ic svg').getBoundingClientRect(); if (r.width < 40 || r.left < 0 || r.right > innerWidth || r.top < 60 || r.bottom > innerHeight) continue;
+      const at = document.elementFromPoint(r.right - 9, r.top + r.height / 2); hitOk = !!at && at.closest('.vtl-mk') === e;
+      const m = e.getBoundingClientRect(); centred = Math.abs((m.left + m.right) / 2 - (r.left + r.right) / 2) < 1.5 && Math.abs((m.top + m.bottom) / 2 - (r.top + r.bottom) / 2) < 1.5 && Math.abs(m.width - 44) < 1.5; break; }
+    return { n: all.length, shown: shown.length, sized, hitOk, centred }; })()`;
+  const pills = JSON.parse(await ev(`JSON.stringify(${pillProbe})`));
+  console.log(`   pills (light + fog signal out): ${pills.n} drawn of ${pillsWant} expected, ${pills.shown} not gathered`);
+  if (pillsWant) {
+    ok(pills.n === pillsWant && pills.sized, `every light-and-fog-signal-out warning or item is ONE 44 × 24 pill (${pills.n})`);
+    // ★ close up on one (its list row flies the map to it), its card closed: the whole pill is its hit area, centred on its anchor
+    await ev(`(() => { const r = [...document.querySelectorAll('.trkRow')].find(x => /light and fog signal not working|unlit and its fog signal not working/.test(x.textContent)); r && r.click(); })()`); await sleep(2200);
+    await ev(`(() => { const x = document.querySelector('.vtl-card:not([hidden]) .vtl-x'); x && x.click(); })()`); await sleep(600);
+    const near = JSON.parse(await ev(`JSON.stringify(${pillProbe})`));
+    ok(near.hitOk === true && near.centred === true, `…close up, its horn half is its own hit area and the pill is centred on its marker's anchor (${JSON.stringify(near)})`);
+    console.log('   screenshot', await shot('navtex-map-pill.png'));
+    await ev(`${view}.querySelector('.fit').click()`); await sleep(2500);   // ★ back to the fitted view the checks below expect
+  } else console.log('   (no light-and-fog-signal pill in force in this set)');
   if (drawn.length > 60) ok(clusters > 0 && await ev(`document.querySelectorAll('.vtl-mk.vtl-clhid').length > 0`), `zoomed out, warnings gathered into numbered markers (${clusters})`);
   ok(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => !e.classList.contains('vtl-clhid') && !e.classList.contains('vtl-yhid') && !e.classList.contains('vtl-zhid')).every(e => e.getAttribute('role') === 'button' && e.tabIndex === 0 && (e.getAttribute('aria-label') || '').length > 8)`),
      'every marker is a button in the tab order, with its words');

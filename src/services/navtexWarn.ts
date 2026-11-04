@@ -8,7 +8,7 @@
 //    FEU ETEINT)" — never presented as a translation (the full text below it has the gallery's own TRANSLATE).
 // ★ Everything in a report came off the air or the gallery: every string is escaped where it meets HTML.
 import { navName, navAgo } from './navtexMap';
-import { NAV_HAZARD_COLOURS, navHazardMarker, navGlyphSvg, type NavHazard } from './navtexIcons';
+import { NAV_HAZARD_COLOURS, navHazardMarker, navGlyphSvg, navPairSvg, type NavHazard } from './navtexIcons';
 import { navWindSanitise, windSvg, windLabel, windColour, windWords, type NavWind } from './navtexWind';   // ★ V12 2026-11-02 the weather arrows
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
@@ -17,12 +17,14 @@ const okLat = (v: unknown) => num(v) !== undefined && Math.abs(v as number) <= 9
 const okLon = (v: unknown) => num(v) !== undefined && Math.abs(v as number) <= 180;
 function esc(v: string): string { return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 const utc = (t: number) => { const d = new Date(t * 1000); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`; };
-const CLASSES = ['wreck', 'navaid', 'buoy', 'structure', 'platform', 'firing', 'submarine', 'uxo', 'cable', 'cable_telecom', 'cable_power', 'pipeline', 'pipeline_gas',
+const CLASSES = ['wreck', 'navaid', 'buoy', 'fogsignal', 'structure', 'platform', 'firing', 'submarine', 'uxo', 'cable', 'cable_telecom', 'cable_power', 'pipeline', 'pipeline_gas',
   'survey', 'obstruction', 'adrift', 'works', 'towing', 'sar', 'ice', 'general'];
 
 // ── the warnings ─────────────────────────────────────────────────────────────────────────────────────────────────────
 export interface NavWarn {
   key: string; id: string; khz: number; first: number; last: number; n: number; lost: number; unlit: boolean;
+  /** ★ v10 the light AND its fog signal out (the server's `fog`, only with `unlit`): the pill marker */
+  fog: boolean;
   expired: boolean; cancelled: boolean; cancelledBy: string; cancelAt: number; validTo: number; ufn: boolean;
   cls: string; f: string; series: string; hit: string; lang: string; pts: Array<[number, number]>; shape: '' | 'area' | 'route';
   issued: number; st: string; sc: string; iso: string; q: string;
@@ -33,7 +35,8 @@ export interface NavWarn {
   /** the marker's point: an area's centre, a route's middle point, else the first position */
   lat: number; lon: number;
 }
-export interface NavItem { n: string; d: string; u: boolean }
+/** u: its light out; ★ v10 fg: its FOG SIGNAL not working ("K6-N … FOGHORN INOPERATIVE") */
+export interface NavItem { n: string; d: string; u: boolean; fg: boolean }
 export interface NavWarnReport { now: number; total: number; shown: number; receptions: number; warnings: number; live: number; indexed: number; pending: number; list: NavWarn[] }
 
 /** A report from the wire, cut to its fields. */
@@ -49,11 +52,11 @@ export function navWarnSanitise(j: any): NavWarnReport | null {
     const shape = w.shape === 'area' && pts.length >= 3 ? 'area' : w.shape === 'route' && pts.length >= 2 ? 'route' : '';
     const at = navWarnPoint(pts, shape);
     const items: NavItem[] = Array.isArray(w.items) && w.items.length === pts.length && !shape
-      ? w.items.slice(0, 24).map((x: any) => ({ n: str(x?.n, 40), d: str(x?.d, 60), u: x?.u === 1 || x?.u === true })) : [];
+      ? w.items.slice(0, 24).map((x: any) => ({ n: str(x?.n, 40), d: str(x?.d, 60), u: x?.u === 1 || x?.u === true, fg: x?.fg === 1 || x?.fg === true })) : [];
     const first = num(w.first) ?? 0;
     list.push({
       key: `w:${id}:${first}`, id, khz: num(w.khz) ?? 0, first, last: num(w.last) ?? first, n: num(w.n) ?? 1, lost: Math.max(0, num(w.lost) ?? 0),
-      unlit: w.unlit === 1 || w.unlit === true, expired: w.expired === 1 || w.expired === true, cancelled: w.cancelled === 1 || !!w.cancelledBy,
+      unlit: w.unlit === 1 || w.unlit === true, fog: (w.fog === 1 || w.fog === true) && (w.unlit === 1 || w.unlit === true) && w.cls !== 'fogsignal', expired: w.expired === 1 || w.expired === true, cancelled: w.cancelled === 1 || !!w.cancelledBy,
       cancelledBy: /^[A-Z]{2}\d{2}$/.test(w.cancelledBy) ? w.cancelledBy : '', cancelAt: num(w.cancelAt) ?? 0, validTo: num(w.validTo) ?? 0, ufn: !!w.ufn,
       cls: CLASSES.includes(w.cls) ? w.cls : 'general', f: str(w.f, 80), series: str(w.series, 40), hit: str(w.hit, 40), lang: str(w.lang, 3),
       pts, shape, issued: num(w.issued) ?? 0, st: str(w.st, 40), sc: ['confident', 'likely', 'ambiguous'].includes(w.sc) ? w.sc : '', iso: /^[A-Z]{2}$/.test(w.iso) ? w.iso : '',
@@ -74,18 +77,28 @@ export function navWarnPoint(pts: Array<[number, number]>, shape: string): [numb
 export function navWarnHazard(w: Pick<NavWarn, 'cls'>): NavHazard {
   return w.cls === 'navaid' ? 'light' : (CLASSES.includes(w.cls) ? w.cls : 'general') as NavHazard;
 }
+/** ★ v10 One item of a named list: its icon and its not-working mark. A platform or turbine whose FOG SIGNAL is out (and
+ *  its light is not) draws the horn, not working; its light out draws the warning's own icon, unlit — the server's rule. */
+export function navItemHazard(w: Pick<NavWarn, 'cls'>, it: NavItem): { h: NavHazard; cls: string; out: boolean; fog: boolean } {
+  return it.fg && !it.u ? { h: 'fogsignal', cls: 'fogsignal', out: true, fog: false } : { h: navWarnHazard(w), cls: w.cls, out: it.u, fog: it.fg && it.u };
+}
 const HAZ_WORDS: Record<string, string> = {
-  wreck: 'Wreck', navaid: 'Light or navigation aid', buoy: 'Buoy or beacon', structure: 'Wind farm or turbine', platform: 'Oil or gas platform, rig or wellhead',
+  wreck: 'Wreck', navaid: 'Light or navigation aid', buoy: 'Buoy or beacon', fogsignal: 'Fog signal', structure: 'Wind farm or turbine', platform: 'Oil or gas platform, rig or wellhead',
   firing: 'Firing or military exercise', submarine: 'Submarine operations', uxo: 'Mine or unexploded ordnance', cable: 'Cable (its kind not stated)',
   cable_telecom: 'Telecom cable', cable_power: 'Power cable', pipeline: 'Pipeline', pipeline_gas: 'Gas pipeline', survey: 'Survey work', obstruction: 'Obstruction, shoal or anchoring',
   adrift: 'Adrift — a container, debris or a derelict', works: 'Works, dredging or diving', towing: 'A tow', sar: 'Search and rescue', ice: 'Ice', general: 'Navigational warning',
 };
-const UNLIT_WORDS: Record<string, string> = { navaid: 'Unlit light', buoy: 'Buoy, its light unlit', structure: 'Wind turbine, its light out', platform: 'Platform, unlit' };
+const UNLIT_WORDS: Record<string, string> = { navaid: 'Unlit light', buoy: 'Buoy, its light unlit', fogsignal: 'Fog signal not working', structure: 'Wind turbine, its light out', platform: 'Platform, unlit' };
+/** ★ v10 the light AND its fog signal out (the pill) */
+const FOG_BOTH_WORDS: Record<string, string> = { navaid: 'Light and fog signal not working', buoy: 'Buoy, its light and fog signal not working',
+  structure: 'Wind turbine, its light and fog signal not working', platform: 'Platform, unlit and its fog signal not working' };
 export const NAV_LANGS: Record<string, string> = { fr: 'French', es: 'Spanish', it: 'Italian', de: 'German', nl: 'Dutch', hr: 'Croatian', el: 'Greek', pt: 'Portuguese', et: 'Estonian', pl: 'Polish' };
 /** ★★ The one-line summary: our words for the class, and the message's own word when it was not English — "Unlit light
  *  (from French: FEU ETEINT)". Never called a translation. */
-export function navWarnSummary(w: Pick<NavWarn, 'cls' | 'unlit' | 'hit' | 'lang'>): string {
-  const words = (w.unlit && UNLIT_WORDS[w.cls]) || (w.unlit ? `${HAZ_WORDS[w.cls] ?? HAZ_WORDS.general} — a light out` : HAZ_WORDS[w.cls] ?? HAZ_WORDS.general);
+export function navWarnSummary(w: Pick<NavWarn, 'cls' | 'unlit' | 'hit' | 'lang'> & { fog?: boolean }): string {
+  const both = !!w.fog && w.unlit && w.cls !== 'fogsignal';
+  const words = both ? FOG_BOTH_WORDS[w.cls] ?? `${HAZ_WORDS[w.cls] ?? HAZ_WORDS.general} — its light and fog signal not working`
+    : (w.unlit && UNLIT_WORDS[w.cls]) || (w.unlit ? `${HAZ_WORDS[w.cls] ?? HAZ_WORDS.general} — a light out` : HAZ_WORDS[w.cls] ?? HAZ_WORDS.general);
   return w.hit && NAV_LANGS[w.lang] ? `${words} (from ${NAV_LANGS[w.lang]}: ${w.hit})` : words;
 }
 /** No longer in force: cancelled, replaced by a newer message, or expired. */
@@ -115,7 +128,7 @@ export function navWarnAria(w: NavWarn): string {
 export function navWarnWhy(w: NavWarn, now: number): string[] {
   const out: string[] = [];
   if (w.hit && NAV_LANGS[w.lang]) out.push(`Its icon: this message says ${w.hit} (${NAV_LANGS[w.lang]})`);
-  else if (w.cls !== 'general') out.push(`Its icon: this message's English wording names ${HAZ_WORDS[w.cls].toLowerCase()}${w.unlit ? ', with a light not working' : ''}`);
+  else if (w.cls !== 'general') out.push(`Its icon: this message's English wording names ${HAZ_WORDS[w.cls].toLowerCase()}${w.unlit ? (w.cls === 'fogsignal' ? ', not working' : w.fog ? ', with its light and fog signal not working' : ', with a light not working') : ''}`);
   else out.push('Its icon: no hazard word this map knows — the general warning');
   out.push(w.shape === 'area' ? `Drawn as an area: the text names an area through its ${w.pts.length} points`
     : w.shape === 'route' ? `Drawn as a line: the text names a route or line through its ${w.pts.length} points`
@@ -136,9 +149,10 @@ export function navWarnTitle(w: NavWarn): string { return `${w.id} · ${w.st || 
 /** ★ The card. The full gallery text is fetched when it opens, into `.nvTx` (data-f = the gallery file), with the
  *  gallery's own TRANSLATE in `.nvTr` (shown only where it can translate) and its note in `.nvTrNote`. */
 export function navWarnCard(w: NavWarn, now: number, wrap: 'web' | 'app' = 'web', item?: NavItem): string {
-  const h = navWarnHazard(w), faded = navWarnFaded(w);
+  const ih = item ? navItemHazard(w, item) : null;
+  const h = ih ? ih.h : navWarnHazard(w), faded = navWarnFaded(w);
   const c = faded ? '#9aa6b2' : NAV_HAZARD_COLOURS[h];
-  const unlit = item ? item.u : w.unlit;
+  const unlit = ih ? ih.out : w.unlit, cls = ih ? ih.cls : w.cls, fog = ih ? ih.fog : w.fog;
   const rows: Array<[string, string]> = [];
   if (item) rows.push(['Item', [item.n, item.d].filter(Boolean).join(' — ')]);
   rows.push(['Warning', [w.id, w.series, w.khz ? `${w.khz} kHz` : ''].filter(Boolean).join(' · ')]);
@@ -150,7 +164,7 @@ export function navWarnCard(w: NavWarn, now: number, wrap: 'web' | 'app' = 'web'
   rows.push(['Best copy', w.q || (w.lost ? `${w.lost} characters lost` : 'no errors')]);
   const tag = navWarnTag(w);
   const lines: string[] = [];
-  lines.push(`<div class="t" style="display:flex;gap:8px;align-items:center">${navGlyphSvg(h, 20, c, unlit)}<b>${esc(navWarnSummary({ ...w, unlit }))}</b></div>`);
+  lines.push(`<div class="t" style="display:flex;gap:8px;align-items:center">${fog && unlit ? navPairSvg(h, 20, c, '#0b1420', faded ? c : NAV_HAZARD_COLOURS.fogsignal) : navGlyphSvg(h, 20, c, unlit)}<b>${esc(navWarnSummary({ ...w, cls, unlit, fog }))}</b></div>`);
   if (tag) lines.push(`<div style="color:#ffb37a;font-weight:700;letter-spacing:.04em">${esc(tag.toUpperCase())}</div>`);
   for (const [k, v] of rows) lines.push(`<div class="r"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`);
   for (const y of navWarnWhy(w, now)) lines.push(`<div class="r"><span class="k">Why</span><span class="v">${esc(y)}</span></div>`);
@@ -172,16 +186,16 @@ export function navWarnItems(list: NavWarn[], now: number, wrap: 'web' | 'app' =
   return list.flatMap((w) => {
     const h = navWarnHazard(w), faded = navWarnFaded(w);
     if (w.items.length && w.items.length === w.pts.length) {
-      return w.items.map((it, i) => ({
-        key: i ? `${w.key}:${i}` : w.key, lat: w.pts[i][0], lon: w.pts[i][1], _ic: navHazardMarker(h, it.u, faded),
+      return w.items.map((it, i) => { const ih = navItemHazard(w, it); return {
+        key: i ? `${w.key}:${i}` : w.key, lat: w.pts[i][0], lon: w.pts[i][1], _ic: navHazardMarker(ih.h, ih.out, faded, ih.fog),
         _lb: `${it.n || w.id}${it.d ? ` · ${it.d}` : ''}`, _cd: navWarnCard(w, now, wrap, it), _h: w.n,
         _rk: (faded ? 0 : 1e5) + Math.min(w.last, 4e9) / 1e5, _cl: 'w',
-        _aria: `Warning ${w.id}, ${it.n}${it.d ? `: ${it.d}` : ''}. ${navWarnSummary({ ...w, unlit: it.u })}. Press Enter for its card.`,
+        _aria: `Warning ${w.id}, ${it.n}${it.d ? `: ${it.d}` : ''}. ${navWarnSummary({ ...w, cls: ih.cls, unlit: ih.out, fog: ih.fog })}. Press Enter for its card.`,
         _sh: undefined, _f: w.f,
-      }));
+      }; });
     }
     return [{
-      key: w.key, lat: w.lat, lon: w.lon, _ic: navHazardMarker(h, w.unlit, faded), _lb: navWarnLabel(w), _cd: navWarnCard(w, now, wrap),
+      key: w.key, lat: w.lat, lon: w.lon, _ic: navHazardMarker(h, w.unlit, faded, w.fog), _lb: navWarnLabel(w), _cd: navWarnCard(w, now, wrap),
       _h: w.n, _rk: (faded ? 0 : 1e5) + Math.min(w.last, 4e9) / 1e5, _cl: 'w', _aria: navWarnAria(w),
       _sh: w.shape || w.pts.length > 1 ? { kind: w.shape || 'points', pts: w.pts, colour: faded ? '#9aa6b2' : NAV_HAZARD_COLOURS[h], faded } : undefined,
       _f: w.f,

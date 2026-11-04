@@ -4,7 +4,7 @@
 import { navSanitise, navSites, navWhy, navName, navSlot, navLabel, navCard, navItems, navStatus, navRangeOf, navSince } from '../src/services/navtexMap';
 import { navWarnSanitise, navWarnSummary, navWarnLabel, navWarnVisible, navWarnItems, navWarnCard, navWarnWhy, navWarnPoint, navBuilding, navMetListed, navMetRowWords,
          navMetSanitise, navFcLabel, navMetVisible, navMetItems, navMetCard, navLayersOf } from '../src/services/navtexWarn';
-import { NAV_GLYPHS, NAV_HAZARDS, navGlyphSvg, navHazardMarker } from '../src/services/navtexIcons';
+import { NAV_GLYPHS, NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navHazardMarker, navMarkRowSvg } from '../src/services/navtexIcons';
 
 let passes = 0, fails = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -118,6 +118,56 @@ eq('only the latest is drawn; over a day old = not drawn under any filter (ALL t
   eq('the gas flame stays blue on a faded marker too', /fill="#3d9bff"/.test(navHazardMarker('pipeline_gas', false, true).html), true);
   eq('the platform carries the unlit mark', /M11 5l3.2-3.2/.test(navHazardMarker('platform', true, false).html), true);
   eq('the legend lists the five cables and pipelines and the platform', ['cable', 'cable_telecom', 'cable_power', 'pipeline', 'pipeline_gas', 'platform'].every((k) => NAV_HAZARDS.some((h) => h.id === k)), true);
+}
+// ★★ v10 the FOG SIGNAL (Stuart, 2026-11-04: "the Fog Horn")
+{
+  const now = 1793810000;
+  const r = navWarnSanitise({ now, warnings: [
+    { id: 'EA46', khz: 518, first: now - 600, last: now - 600, n: 3, cls: 'fogsignal', unlit: 1, f: 'gw.txt', pts: [[50.4083, -0.0017]] },
+    { id: 'BA75', khz: 490, first: now - 600, last: now - 600, n: 1, cls: 'fogsignal', unlit: 1, hit: 'MISTHOORN', lang: 'nl', f: 'zb.txt', pts: [[51.33, 3.18]] },
+    { id: 'EA60', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'fogsignal', unlit: 0, f: 'new.txt', pts: [[50.5, -1]] },
+    { id: 'PA26', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'platform', unlit: 1, f: 'pa.txt', pts: [[53.4567, 4.2317], [53.5, 6.2333], [53.2333, 3.9833]],
+      items: [{ n: 'L10-B', d: 'BLACK OUT', u: 1 }, { n: 'N7-FA-1', d: 'FOGHORN INOPERATIVE', u: 0, fg: 1 }, { n: 'T1', d: 'UNLIT AND FOG SIGNAL INOPERATIVE', u: 1, fg: 1 }] },
+  ] })!;
+  const [gw, zb, nw, pa] = r.list;
+  eq('fogsignal is a class the client keeps (never folded to general)', r.list.map((w) => w.cls), ['fogsignal', 'fogsignal', 'fogsignal', 'platform']);
+  eq('the summary: "Fog signal not working"; the Dutch word kept; a working one just "Fog signal"',
+     [navWarnSummary(gw), navWarnSummary(zb), navWarnSummary(nw)], ['Fog signal not working', 'Fog signal not working (from Dutch: MISTHOORN)', 'Fog signal']);
+  eq('the label', navWarnLabel(gw), 'EA46 · Fog signal not working');
+  eq('the why says "not working", never "a light not working"', [navWarnWhy(gw, now)[0], navWarnWhy(zb, now)[0]], ['Its icon: this message\'s English wording names fog signal, not working', 'Its icon: this message says MISTHOORN (Dutch)']);
+  const horn = NAV_GLYPHS.fogsignal;
+  const wi = navWarnItems([gw, nw], now, 'web');
+  eq('the marker draws the horn, the not-working mark only when it is out, in the lights\' amber',
+     [wi[0]._ic.html.includes(horn), /M11 5l3.2-3.2/.test(wi[0]._ic.html), /M11 5l3.2-3.2/.test(wi[1]._ic.html), /#ffc940/.test(wi[0]._ic.html)], [true, true, false, true]);
+  const its = navWarnItems([pa], now, 'web');
+  eq('a platform list: the foghorn item the horn, not working; a light out the platform, unlit; BOTH out the pill (platform unlit + horn)',
+     its.map((x) => [x._ic.html.includes(horn), /M11 5l3.2-3.2/.test(x._ic.html), x._ic.w]), [[false, true, 24], [true, true, 24], [true, true, 44]]);
+  eq('…the pill item says both', [/Platform, unlit and its fog signal not working/.test(its[2]._aria), /Platform, unlit and its fog signal not working/.test(its[2]._cd)], [true, true]);
+  eq('…its card and its words say so', [/Fog signal not working/.test(its[1]._cd), /Fog signal not working/.test(its[1]._aria), /Platform, unlit/.test(its[0]._cd), /Platform, unlit/.test(its[2]._aria)], [true, true, true, true]);
+  eq('the legend lists the fog signal; the marks: light, fog signal, both', [NAV_HAZARDS.some((h) => h.id === 'fogsignal'), NAV_MARK_ROWS.map((h) => h.words)],
+     [true, ['Light not working (the unlit mark)', 'Fog signal not working (the same mark)', 'Light and fog signal not working']]);
+  // ★★ THE PILL (Stuart, 2026-11-04): the light AND its fog signal out — the warning's own icon unlit beside the horn
+  const both = navWarnSanitise({ now, warnings: [
+    { id: 'EA30', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'structure', unlit: 1, fog: 1, f: 'id.txt', pts: [[53.2133, 0.4333]] },
+    { id: 'EA31', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'navaid', unlit: 1, fog: 1, f: 'lf.txt', pts: [[50, -1]] },
+    { id: 'EA32', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'structure', unlit: 0, fog: 1, f: 'x.txt', pts: [[50, -1]] },
+    { id: 'EA33', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'navaid', unlit: 1, fog: 1, cancelledBy: 'EA34', f: 'y.txt', pts: [[50, -1]] },
+  ] })!;
+  const [id, lf, nolight, gone] = both.list;
+  eq('fog is kept only with unlit', both.list.map((w) => w.fog), [true, true, false, true]);
+  eq('the summaries name both', [navWarnSummary(id), navWarnSummary(lf), navWarnLabel(lf)], ['Wind turbine, its light and fog signal not working', 'Light and fog signal not working', 'EA31 · Light and fog signal not working']);
+  const bi = navWarnItems([id, lf, nolight], now, 'web');
+  eq('the pill: 44 × 24, the structure\'s OWN icon (the turbine, not the lighthouse) unlit + the horn not working; the lighthouse pair for a light',
+     [bi[0]._ic.w, bi[0]._ic.h, bi[0]._ic.html.includes(NAV_GLYPHS.structure), bi[0]._ic.html.includes(horn), (bi[0]._ic.html.match(/M11 5l3.2-3.2/g) || []).length, /<rect[^>]*rx="11"/.test(bi[0]._ic.html),
+      bi[1]._ic.html.includes(NAV_GLYPHS.light), bi[1]._ic.w, bi[2]._ic.w], [44, 24, true, true, 2, true, false, 44, 24]);
+  eq('…the pill\'s colours: the turbine\'s rim, the horn in its amber', [/stroke="#e8d36a"/.test(bi[0]._ic.html), /color="#ffc940"/.test(bi[0]._ic.html)], [true, true]);
+  const fp = navHazardMarker('structure', true, true, true);
+  eq('…faded: 42 %, dashed, grey', [fp.w, /opacity:0.42/.test(fp.html), /stroke-dasharray/.test(fp.html), /#e8d36a|#ffc940/.test(fp.html)], [44, true, true, false]);
+  eq('…its card draws the pair and says both', [/Wind turbine, its light and fog signal not working/.test(bi[0]._cd), (bi[0]._cd.match(/M11 5l3.2-3.2/g) || []).length], [true, 2]);
+  eq('…the legend row draws the pair', (navMarkRowSvg(NAV_MARK_ROWS[2], 16).match(/M11 5l3.2-3.2/g) || []).length, 2);
+  eq('…a cancelled pill is never drawn', navWarnVisible(both, 'all').map((w) => w.id), ['EA30', 'EA31', 'EA32']);
+  void gone;
+  eq('the glyph is the same language (16 box, stroke 1.4) with the mark', /viewBox="0 0 16 16".*stroke-width="1.4".*M11 5l3.2-3.2/.test(navGlyphSvg('fogsignal', 16, '#fff', true)), true);
 }
 // ★★ the tidied station card: essentials, then "More"
 {
