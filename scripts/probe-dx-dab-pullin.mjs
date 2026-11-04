@@ -52,8 +52,9 @@ async function run(tag, noise, dx) {
   await sleep(400);
   const env = { ...process.env, VIBESERVER_DX_WAIT_SEC: '1', VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
   const logPath = path.join(dir, 'server.log');
+  const logFd = fs.openSync(logPath, 'w');   // ★ the server's lines go to stderr — both streams, one file
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2048000', '--freq', '93200000', '--mode', 'wfm', '--users', '1'],
-                    { env, stdio: ['ignore', fs.openSync(logPath, 'w'), 'ignore'] });
+                    { env, stdio: ['ignore', logFd, logFd] });
   for (let i = 0; i < 100; i++) { const up = await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); }); if (up) break; await sleep(100); }
   await sleep(1500);
   if (!dx) await fetch(`http://127.0.0.1:${port}/vibeserver/dab-bandscan?start=1`).catch(() => {});
