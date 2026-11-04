@@ -5,6 +5,11 @@
 //    a deliberately crude, separate test for the frames that transmit (1C with data, 17, 28, 18,
 //    1A 05 with a value, VOX on). Either one fires = `violations` rises, the frame is answered NG,
 //    and the end-to-end test fails. It never "transmits"; it counts.
+// ★★ POWER (2026-11-04): `powered` false = the IC-7300 switched off with its USB chip still on the bus —
+//    CI-V silent, every frame ignored, EXCEPT a power-on (18 01) behind the manual's FE run
+//    (civ::power::wakePreambleFor), which switches it on after `bootSec`. An 18 01 without the run is
+//    ignored and counted (wakesIgnored), as a real radio would ignore it. 18 00 switches it off and is
+//    COUNTED (powerOffs) — the suite asserts none is ever sent except by the owner's RADIO OFF.
 //
 // ★ The scope is synthetic but honest in shape: 475 points over the span it is set to, in 11 USB
 //   divisions (header + 9×50 + 25), centre or fixed mode, paced by the BAUD RATE like the real wire
@@ -38,9 +43,13 @@ public:
     bool vox = false;
     std::atomic<bool> tx{false};     ///< the owner presses PTT on the radio
     std::atomic<bool> unplugged{false};
+    std::atomic<bool> powered{true};   ///< false = switched off (USB present, CI-V silent)
+    double bootSec = 1.0;              ///< after a good power-on, this long until it answers
+    bool wakeable = true;              ///< false = a radio whose menu does not let CI-V switch it on
 
     // ── What it saw ────────────────────────────────────────────────────────────────────────
     std::atomic<uint64_t> framesIn{0}, violations{0}, sweepsOut{0};
+    std::atomic<uint64_t> wakesSeen{0}, wakesIgnored{0}, powerOffs{0}, framesWhileOff{0};
     std::string lastViolation;
 
     // ── Radio state ────────────────────────────────────────────────────────────────────────
@@ -58,6 +67,10 @@ public:
 
     bool gone() const override { return unplugged.load(); }
 
+    /** The owner presses the radio's own POWER key. */
+    void switchOnByHand()  { std::lock_guard<std::mutex> lk(mtx_); powered = true; bootAt_ = 0; }
+    void switchOffByHand() { std::lock_guard<std::mutex> lk(mtx_); powered = false; out_.clear(); scopeOn = scopeData = false; }
+
     /** A person turns the radio's own knob. */
     void turnKnob(uint64_t hz) {
         std::lock_guard<std::mutex> lk(mtx_);
@@ -67,6 +80,9 @@ public:
 
     void fromController(const uint8_t* b, int n) override {
         std::lock_guard<std::mutex> lk(mtx_);
+        // ★ The server writes one whole frame (or one whole wake) per write — its leading FE run is the preamble.
+        leadFe_ = 0;
+        while (leadFe_ < n && b[leadFe_] == 0xFE) leadFe_++;
         parser_.feed(b, (size_t)n, [&](const civ::Frame& f) { handle(f); });
     }
 
@@ -75,8 +91,9 @@ public:
         for (;;) {
             {
                 std::lock_guard<std::mutex> lk(mtx_);
+                if (!powered && bootAt_ > 0 && now() >= bootAt_) { powered = true; bootAt_ = 0; }
                 pace();
-                if (!answer) out_.clear();
+                if (!answer || !powered) out_.clear();
                 int n = 0;
                 while (n < max && !out_.empty() && credit_ >= 1.0) { b[n++] = out_.front(); out_.pop_front(); credit_ -= 1.0; }
                 if (n > 0) return n;
@@ -93,6 +110,8 @@ private:
     double credit_ = 0, lastT_ = 0, nextSweep_ = 0;
     uint32_t seed_ = 12345;
     const Model* policyModel_;
+    int leadFe_ = 0;
+    double bootAt_ = 0;
 
     static double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -105,7 +124,7 @@ private:
         credit_ += (t - lastT_) * baud / 10.0;
         if (credit_ > 2048) credit_ = 2048;
         lastT_ = t;
-        if (scopeOn && scopeData && answer && !unplugged.load() && out_.size() < 64 && t >= nextSweep_) {
+        if (scopeOn && scopeData && answer && powered && !unplugged.load() && out_.size() < 64 && t >= nextSweep_) {
             emitSweep();
             nextSweep_ = t + (speed == 0 ? 1.0 / 30 : speed == 1 ? 1.0 / 15 : 1.0 / 8);
         }
@@ -161,7 +180,8 @@ private:
     /** ★ The crude, separate witness for the frames that would transmit. */
     static bool looksLikeTx(const civ::Frame& f) {
         if (f.cmd == 0x1C && f.len >= 2) return true;                // 1C 00 01, 1C 01 xx
-        if (f.cmd == 0x17 || f.cmd == 0x28 || f.cmd == 0x18) return true;
+        if (f.cmd == 0x17 || f.cmd == 0x28) return true;
+        if (f.cmd == 0x18 && !(f.len == 1 && (f.data[0] == 0x00 || f.data[0] == 0x01))) return true;   // only 18 00 / 18 01 exist for us
         if (f.cmd == 0x1A && f.len >= 1 && f.data[0] == 0x05 && f.len > 3) return true;   // a menu WRITE
         if (f.cmd == 0x16 && f.len >= 2 && (f.data[0] == 0x46 || f.data[0] == 0x47)) return true;
         if (f.cmd == 0x14 && f.len >= 1 && (f.data[0] == 0x0A || f.data[0] == 0x0B)) return true;
@@ -171,6 +191,21 @@ private:
     void handle(const civ::Frame& f) {
         if (f.to != addr) return;
         framesIn.fetch_add(1);
+        if (f.cmd == 0x18 && f.len == 1 && f.data[0] == 0x01) {
+            // ★ POWER ON: only behind the full FE run (the frame's own FE FE are part of leadFe_).
+            if (leadFe_ >= civ::power::wakePreambleFor(baud) + 2) {
+                wakesSeen.fetch_add(1);
+                if (!powered && wakeable && bootAt_ == 0) bootAt_ = now() + bootSec;
+                if (powered) ok();
+            } else wakesIgnored.fetch_add(1);
+            return;
+        }
+        if (f.cmd == 0x18 && f.len == 1 && f.data[0] == 0x00) {
+            powerOffs.fetch_add(1);
+            if (powered) { ok(); powered = false; scopeOn = scopeData = false; bootAt_ = 0; }
+            return;
+        }
+        if (!powered) { framesWhileOff.fetch_add(1); return; }   // ★ switched off: CI-V is silent
         if (echo) {   // ★ the frame exactly as it arrived, from E0 — the server must ignore it
             out_.push_back(0xFE); out_.push_back(0xFE); out_.push_back(f.to); out_.push_back(f.from); out_.push_back(f.cmd);
             for (int i = 0; i < f.len; i++) out_.push_back(f.data[i]);

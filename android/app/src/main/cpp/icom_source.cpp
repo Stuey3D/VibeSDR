@@ -78,6 +78,119 @@ bool IcomSource::sendFrame(const civ::Out& o) {
     return transport_ && transport_->write(o.b, o.n);
 }
 
+/** ★★★ THE POWER-ON WAKE — the second door to the wire, and it opens for exactly one frame (civ::power::mayWake).
+ *  Auto (byOwner false): only with the owner's `powerOn` option, only while waiting, at most once per
+ *  kWakeEverySec, and never after the owner pressed RADIO OFF. byOwner: the RADIO ON press (admin-gated by the
+ *  shim), with a 3 s floor against a double press. */
+bool IcomSource::sendWake(bool byOwner) {
+    const double t = now();
+    if (!transport_) return false;
+    // ★ A listener ARRIVING at a radio the idle park switched off is worth a wake now, whatever the window says.
+    const bool arrival = arrivalWake_.load();
+    if (!byOwner && (!autoWakeWanted() || t - lastWakeAt_ < (arrival ? 3.0 : kWakeEverySec))) return false;
+    arrivalWake_.store(false);
+    if (byOwner && t - lastWakeAt_ < 3.0) return false;
+    const civ::power::Wake w = civ::power::powerOn(policy_.radio, cfg_.baud);
+    if (!civ::power::mayWake(w, policy_, cfg_.baud)) {   // ★ cannot happen; judged anyway, like every frame
+        refused_.fetch_add(1);
+        ILOG("REFUSED a CI-V power-on frame — not sent");
+        return false;
+    }
+    lastWakeAt_ = t; wakeAt_.store(t);
+    if (byOwner) ILOG("the owner pressed RADIO ON — sending CI-V power-on (18 01 after %d x FE)", civ::power::wakePreambleFor(cfg_.baud));
+    else if (offByIdle_.load())
+        ILOG("a listener arrived and the radio is off (idle power-down) — sending CI-V power-on (owner option)");
+    else ILOG("the radio is not answering — sending CI-V power-on (owner option)");
+    const bool okw = transport_->write(w.b, w.n);
+    if (okw) { wakes_.fetch_add(1); bootUntil_ = t + kBootSec; }
+    return okw;
+}
+
+/** ★★★ THE OWNER'S RADIO OFF — 18 00, the third door, for one frame (civ::power::mayPowerOff). Reached ONLY from
+ *  the CI-V thread after requestPowerOff() (admin-gated in the shim). Never on close(), never on a lost link. */
+void IcomSource::doPowerOff(bool byOwner) {
+    const civ::Out o = civ::power::powerOff(policy_.radio);
+    if (!transport_ || !civ::power::mayPowerOff(o, policy_)) { refused_.fetch_add(1); return; }
+    if (byOwner) ILOG("the owner pressed RADIO OFF — sending CI-V power-off (18 00)");
+    else ILOG("nobody is listening (idle power-down) — sending CI-V power-off (18 00); the next listener switches it back on");
+    // ★ Scope data off first, as close() does, so the radio is left as we found it when it comes back.
+    sendFrame(civ::build::scopeData(policy_.radio, false));
+    if (transport_->write(o.b, o.n)) offs_.fetch_add(1);
+    if (byOwner) offByOwner_.store(true); else offByIdle_.store(true);
+    { std::lock_guard<std::mutex> lk(stMtx_); st_.linkUp = false; }
+    inflight_.used = false;
+    enterWaiting();
+}
+
+bool IcomSource::requestPowerOff(std::string& why) {
+    if (!run_.load()) { why = "the radio is not running"; return false; }
+    if (!state().linkUp) { why = "the radio is already switched off (or not answering)"; return false; }
+    wantOff_.store(true);
+    return true;
+}
+bool IcomSource::requestPowerOn(std::string& why) {
+    if (!run_.load()) { why = "the radio is not running"; return false; }
+    if (state().linkUp) { why = "the radio is already on"; return false; }
+    wantOn_.store(true);
+    return true;
+}
+
+bool IcomSource::autoWakeWanted() const {
+    if (!cfg_.powerOn || offByOwner_.load()) return false;   // ★ no option, or the owner switched it off himself
+    if (offByIdle_.load()) return inUse_.load();             // ★ parked off: only for somebody who is here
+    return true;
+}
+
+void IcomSource::setInUse(bool inUse) {
+    if (inUse && !inUse_.exchange(true)) {   // ★ somebody arrived: try (and, if the park switched it off, wake) at once
+        if (offByIdle_.load()) arrivalWake_.store(true);
+        if (offByIdle_.load() || waiting_.load()) kick_.store(true);
+    }
+    else if (!inUse) inUse_.store(false);
+}
+
+bool IcomSource::idlePowerOff() {
+    if (!cfg_.powerOn || !run_.load() || inUse_.load() || !state().linkUp) return false;
+    wantIdleOff_.store(true);
+    return true;
+}
+
+bool IcomSource::switchingOn() const { return !state().linkUp && now() - wakeAt_.load() < 90.0; }
+
+void IcomSource::enterWaiting() {
+    if (!waiting_.exchange(true))
+        ILOG("%s — waiting for it (CI-V is tried every few seconds)",
+             offByOwner_.load() ? "the radio was switched off by the owner" : "the radio is switched off or not answering on CI-V");
+    preRefused_.store(false);
+    if (onLost_) onLost_(linkProblem());
+    notify(kLink);
+}
+
+std::string IcomSource::linkProblem() const {
+    if (state().linkUp) return "";
+    if (usbMissing_.load()) return "The radio's USB connection was lost \xE2\x80\x94 VibeServer is retrying";
+    if (preRefused_.load())
+        return "The radio is on, but VibeServer will not use it until its owner changes a setting on it (it could transmit)";
+    if (waiting_.load()) {
+        if (offByOwner_.load()) return "Switched off by the owner";
+        if (switchingOn()) return "Switching the radio on \xE2\x80\x94 about a minute";
+        if (offByIdle_.load())
+            return "Switched off while nobody was listening \xE2\x80\x94 VibeServer switches it on when somebody connects";
+        return cfg_.powerOn
+            ? "The radio is switched off (or not answering) \xE2\x80\x94 VibeServer has sent it the power-on command and will start it when it answers"
+            : "The radio is switched off (or not answering) \xE2\x80\x94 VibeServer will start it when it is turned on";
+    }
+    return "The radio is not answering \xE2\x80\x94 VibeServer is retrying";
+}
+
+std::string IcomSource::linkHint() const {
+    if (preRefused_.load()) return pre_.summary;
+    char a[8]; std::snprintf(a, sizeof a, "%02X", policy_.radio);
+    return "If it is on: check MENU > SET > Connectors > CI-V \xE2\x80\x94 CI-V USB Baud Rate must be " + std::to_string(cfg_.baud)
+         + " (or Auto), CI-V USB Port must be \"Unlink from [REMOTE]\", and CI-V Address must be " + std::string(a)
+         + " (as set in VibeServer).";
+}
+
 bool IcomSource::transact(const civ::Out& o, uint8_t wantCmd, int wantSub, int timeoutMs, civ::Frame* reply) {
     if (!sendFrame(o)) return false;
     const double until = now() + timeoutMs / 1000.0;
@@ -103,17 +216,17 @@ bool IcomSource::transact(const civ::Out& o, uint8_t wantCmd, int wantSub, int t
 
 // ── Open ───────────────────────────────────────────────────────────────────────────────────
 
-bool IcomSource::identify(std::string& err) {
+bool IcomSource::identify(std::string& err, bool* silent) {
+    if (silent) *silent = false;
     // ★ Before we know the model, the frames we may send are 19 00 and 03 — which every Icom answers,
     //   and which are reads. The policy here is the hinted (or 7300) model's: the shapes are identical.
     civ::Frame r;
     if (!transact(civ::build::readId(policy_.radio), civ::cmd::Id, 0x00, 600, &r) || r.len < 2) {
         if (!transact(civ::build::readFreq(policy_.radio), civ::cmd::ReadFreq, -1, 600, &r)) {
-            char a[8]; std::snprintf(a, sizeof a, "%02X", policy_.radio);
-            err = "The radio did not answer on CI-V (address " + std::string(a) + ", " + std::to_string(cfg_.baud)
-                + " baud). On the radio check MENU > SET > Connectors > CI-V: CI-V USB Baud Rate must be "
-                + std::to_string(cfg_.baud) + " (or Auto), CI-V USB Port must be \"Unlink from [REMOTE]\", and the "
-                  "CI-V Address must match the one set in VibeServer.";
+            // ★★ SILENCE IS USUALLY A RADIO THAT IS SWITCHED OFF (its USB chip stays on the bus) — said first; the
+            //    CI-V menu hint is for the case where it is on (linkHint).
+            if (silent) *silent = true;
+            err = "The radio is switched off (or not answering). " + linkHint();
             return false;
         }
         // Answered 03 but not 19 00: trust the address's model (older firmware) [unverified].
@@ -215,13 +328,46 @@ bool IcomSource::open(const IcomConfig& cfg, std::string& err, std::unique_ptr<C
     if (!transport_->open(err)) { transport_.reset(); return false; }
     parser_.reset(); scope_.reset();
     lastByteAt_ = now();
-    if (!identify(err) || !runPreflight(err)) { transport_->close(); transport_.reset(); return false; }
+    waiting_.store(false); preRefused_.store(false); usbMissing_.store(false); offByOwner_.store(false); offByIdle_.store(false);
+    wantIdleOff_.store(false); kick_.store(false); wakeAt_.store(-1e9);
+    wantOff_.store(false); wantOn_.store(false);
+    wakes_.store(0); offs_.store(0); lastWakeAt_ = -1e9; bootUntil_ = 0; audioStarted_ = false; lastRetryErr_.clear();
+    bool silent = false;
+    if (!identify(err, &silent)) {
+        if (!silent) { transport_->close(); transport_.reset(); return false; }
+        // ★★ SWITCHED OFF (or not answering) is a normal state, not an error: no exit, no systemd restart loop.
+        //    Up in the waiting state; ioLoop retries identify quietly and runs the full path when it answers.
+        err.clear();
+        enterWaiting();
+        sendWake(false);
+        transport_->close();
+        run_.store(true);
+        io_ = std::thread([this] { ioLoop(); });
+        ILOG("%s (from its USB serial): waiting for it to answer on CI-V %02X at %d baud%s",
+             model_->name, policy_.radio, cfg_.baud, cfg_.powerOn ? " - power-on over CI-V is ON" : "");
+        return true;
+    }
+    if (!runPreflight(err)) { transport_->close(); transport_.reset(); return false; }
     readInitialState();
     usbGone_.store(false);
     { std::lock_guard<std::mutex> lk(stMtx_); st_.linkUp = true; }
+    startAudio();
+    run_.store(true);
+    io_ = std::thread([this] { ioLoop(); });
+    ILOG("%s open: CI-V %02X at %d baud over %s%s, scope %d points, preflight %s",
+         model_->name, policy_.radio, cfg_.baud, transport_->kind(),
+         transport_->linesHeldLow() ? " (DTR/RTS held low)" : " (tty)", model_->points,
+         pre_.passed ? "passed" : "FAILED");
+    return true;
+}
+
+void IcomSource::startAudio() {
     // ★ Audio is a separate device: missing audio leaves a working dial and waterfall, and says so.
-    audioErr_.clear();
-    audio_ = makeAudio(cfg.audio, transportUsbPath(transport_.get()), audioErr_);
+    //   Started at the FIRST connection — a radio that was off at open gets its audio when it answers.
+    audioStarted_ = true;
+    std::string aerr;
+    std::unique_ptr<AudioCapture> a = makeAudio(cfg_.audio, transportUsbPath(transport_.get()), aerr);
+    { std::lock_guard<std::mutex> lk(audioMtx_); audioErr_ = aerr; audio_ = std::move(a); }
     if (audio_) {
         std::string ae;
         if (!audio_->start([this](const int16_t* p, int frames, int ch, int rate) {
@@ -236,22 +382,16 @@ bool IcomSource::open(const IcomConfig& cfg, std::string& err, std::unique_ptr<C
                     return;
                 }
                 onPcm_(p, frames, ch, rate);
-            }, ae)) { audioErr_ = ae; audio_.reset(); }
+            }, ae)) { std::lock_guard<std::mutex> lk(audioMtx_); audioErr_ = ae; audio_.reset(); }
     }
     if (!audioErr_.empty()) ILOG("audio: %s", audioErr_.c_str());
-    run_.store(true);
-    io_ = std::thread([this] { ioLoop(); });
-    ILOG("%s open: CI-V %02X at %d baud over %s%s, scope %d points, preflight %s",
-         model_->name, policy_.radio, cfg_.baud, transport_->kind(),
-         transport_->linesHeldLow() ? " (DTR/RTS held low)" : " (tty)", model_->points,
-         pre_.passed ? "passed" : "FAILED");
-    return true;
 }
 
 void IcomSource::close() {
     const bool wasRunning = run_.exchange(false);
     if (io_.joinable()) io_.join();
-    if (audio_) { audio_->stop(); audio_.reset(); }
+    { std::lock_guard<std::mutex> lk(audioMtx_); if (audio_) { audio_->stop(); audio_.reset(); } }
+    // ★★ NEVER a power-off here: stopping, restarting or idling VibeServer leaves the radio exactly as it is.
     if (transport_) {
         // ★ Leave the radio as we found it as far as we can: stop the scope streaming at it. The
         //   scope's own on/off is the owner's; we only switch off the data OUTPUT we asked for.
@@ -265,24 +405,68 @@ void IcomSource::close() {
 
 bool IcomSource::reconnect() {
     if (!transport_) return false;
+    const bool ownerOn = wantOn_.load();
+    if (!ownerOn && now() < bootUntil_) return false;   // ★ a power-on was just sent: let the radio boot first
     transport_->close();
     // ★ Android: the app's fresh descriptor for the re-plugged radio, if one has arrived (offerFd).
     if (const int f = freshFd_.exchange(-1); f >= 0 && !transport_->offerFd(f)) ::close(f);
     std::string e;
-    if (!transport_->open(e)) return false;
+    if (!transport_->open(e)) {
+        // ★ Not "switched off": the USB device itself is not there (or not ours) — said as that, once.
+        if (!usbMissing_.exchange(true)) {
+            ILOG("the radio's USB port would not open: %s", e.c_str());
+            if (onLost_) onLost_(linkProblem());
+            notify(kLink);
+        }
+        return false;
+    }
+    if (usbMissing_.exchange(false) && onLost_) onLost_(linkProblem());
     usbGone_.store(false);
     parser_.reset(); scope_.reset();
     lastByteAt_ = now();
-    // ★★ THE PREFLIGHT AGAIN — a radio that went away may come back with its menu changed.
-    if (!identify(e) || !runPreflight(e)) {
-        ILOG("reconnect refused: %s", e.c_str());
+    if (wantOn_.exchange(false)) {
+        // ★ The owner's RADIO ON — sent once, option or no option; then the radio is given time to boot.
+        offByOwner_.store(false);
+        sendWake(true);
         transport_->close();
-        if (onLost_) onLost_(e);
+        if (onLost_) onLost_(linkProblem());
+        notify(kLink);
         return false;
     }
+    bool silent = false;
+    // ★★ THE PREFLIGHT AGAIN — a radio that went away may come back with its menu changed. Never skipped,
+    //    whether it came back by itself, by the owner's hand, or by a power-on we sent.
+    if (!identify(e, &silent)) {
+        if (silent) {
+            enterWaiting();
+            sendWake(false);             // ★ only with the owner option, rate-limited, never after RADIO OFF
+            transport_->close();
+            return false;
+        }
+    } else if (runPreflight(e)) {
+        e.clear();
+    } else {
+        preRefused_.store(true);
+        waiting_.store(false);
+    }
+    if (!e.empty()) {
+        if (e != lastRetryErr_) {
+            ILOG("reconnect refused: %s", e.c_str());
+            lastRetryErr_ = e;
+            if (onLost_) onLost_(preRefused_.load() ? linkProblem() : e);
+            notify(kLink);
+        }
+        transport_->close();
+        return false;
+    }
+    lastRetryErr_.clear();
+    const bool wasWaiting = waiting_.exchange(false);
+    preRefused_.store(false); offByOwner_.store(false); offByIdle_.store(false); wakeAt_.store(-1e9);
     readInitialState();
     { std::lock_guard<std::mutex> lk(stMtx_); st_.linkUp = true; }
-    ILOG("%s back on CI-V", model_->name);
+    if (!audioStarted_) startAudio();
+    ILOG("%s %s", model_->name, wasWaiting ? "is answering on CI-V - switched on, preflight passed, starting" : "back on CI-V");
+    if (onLost_) onLost_("");
     notify(kLink | kFreq | kMode | kRf | kScope);
     return true;
 }
@@ -342,10 +526,17 @@ void IcomSource::ioLoop() {
         bool up;
         { std::lock_guard<std::mutex> lk(stMtx_); up = st_.linkUp; }
         if (!up) {
+            wantOff_.store(false);                       // ★ already off: nothing to send
+            wantIdleOff_.store(false);
+            if (wantOn_.load() || kick_.exchange(false)) tRetry = t;   // ★ RADIO ON, or a listener arriving: now
             if (t >= tRetry) { tRetry = t + 3.0; if (reconnect()) continue; }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
+        if (wantOff_.exchange(false)) { doPowerOff(true); transport_->close(); tRetry = t + 3.0; continue; }
+        // ★★ THE IDLE PARK'S POWER-OFF — re-checked here: somebody may have arrived since the park asked.
+        if (wantIdleOff_.exchange(false) && !inUse_.load()) { doPowerOff(false); transport_->close(); tRetry = t + 3.0; continue; }
+        wantOn_.store(false);                            // ★ already on: nothing to send
         // Polls — on the LOW lane, coalesced, so at 19200 baud they slow down rather than pile up.
         if (t >= tMeter) { enqueue(civ::build::readSmeter(policy_.radio), false, ignore); tMeter = t + 0.25; }
         if (t >= tTx)    { enqueue(civ::build::readTx(policy_.radio), false, ignore); tTx = t + 0.5; }
@@ -559,8 +750,9 @@ bool IcomSource::setScopeSpeed(int s, std::string& why) {
 }
 
 RadioState IcomSource::state() const { std::lock_guard<std::mutex> lk(stMtx_); return st_; }
-std::string IcomSource::audioDescription() const { return audio_ ? audio_->describe() : std::string(); }
+std::string IcomSource::audioDescription() const { std::lock_guard<std::mutex> lk(audioMtx_); return audio_ ? audio_->describe() : std::string(); }
 std::string IcomSource::audioProblem() const {
+    std::lock_guard<std::mutex> lk(audioMtx_);
     if (!audioErr_.empty()) return audioErr_;
     return audio_ ? audio_->problem() : std::string();
 }

@@ -14,8 +14,12 @@
 //     refused and counted as a fault. Nothing reaches the wire without passing it: IcomSource's only
 //     write path calls it as the very last step, and test-icom-civ.cpp enumerates every cmd/sub pair
 //     at 0-6 data bytes to prove that only the table passes.
-//   ★★ There is NO builder for any transmit command (1C 00 01, 1C 01, 17, 28, 18, …) — not even a
-//      private one. A frame that cannot be built cannot be sent by mistake; the allow-list is the
+//   ★★ There is NO builder for any transmit command (1C 00 01, 1C 01, 17, 28, 18 00, …) — not even a
+//      private one. ★ The ONE exception to "no 18" is POWER ON (18 01), which keys nothing: it has its
+//      own builder and its own exact-frame check (namespace power, below), it never passes mayTransmit,
+//      and IcomSource sends it only when the owner ticked "Power on the radio over CI-V" and the radio
+//      is not answering — or when the OWNER presses RADIO ON. 18 00 (power OFF) likewise has its own
+//      builder and check, and is sent ONLY when the owner presses RADIO OFF (admin-gated, never automatic). A frame that cannot be built cannot be sent by mistake; the allow-list is the
 //      second wall, for a bug that assembles bytes by hand.
 //   ★ Clients never send raw CI-V. They send the same semantic JSON as for any radio; the server
 //     alone builds frames, from the typed builders here (plan §3.1).
@@ -388,6 +392,60 @@ inline Out scopeSpan(uint8_t r, uint32_t halfHz) {
 }
 inline Out readScope(uint8_t r, uint8_t s)  { return scopeSel(r, s, -1, s != 0x10 && s != 0x11); }
 }  // namespace build
+
+// ── POWER ON (18 01) — the one 18 we may send, and only this exact frame ───────────────────────
+/* ★★★ IC-7300 Full Manual, §19 "Control command", command table: 18 01 = power ON, footnote *3:
+ *     "When sending the power ON command (18 01), you need to repeatedly send "FE" before the standard
+ *      format. The following is the approximated quantity of the repetition: 115200 bps: 150 "FE"s,
+ *      57600 bps: 75, 38400 bps: 50, 19200 bps: 25, 9600 bps: 13, 4800 bps: 7."
+ *     (Example in the manual, 4800 bps: FE ×7, then FE FE 94 E0 18 01 FD.) The run of FE is what wakes the
+ *     radio's CPU out of standby — it is about 13 ms of line time at every speed (150 bytes at 115200).
+ *  ★ It keys nothing and changes no TX setting, which is why it is the single exception to "no 18". It is NOT
+ *    on mayTransmit's table (that refuses every 18, and a third FE is a StrayByte there): a power-on frame
+ *    has its own builder and its own exact check, mayWake(), and IcomSource's sendWake() is its only sender.
+ *  ★★ 18 00 (power OFF) is the owner's button alone — powerOff() below, never automatic. */
+namespace power {
+/** How many FE bytes the manual asks for at `baud` (its table; other speeds scale from 150 @ 115200). */
+inline int wakePreambleFor(int baud) {
+    switch (baud) {
+        case 115200: return 150; case 57600: return 75; case 38400: return 50;
+        case 19200: return 25;   case 9600: return 13;  case 4800: return 7;
+    }
+    if (baud <= 0) return 150;
+    const int n = (int)(((long long)baud * 150 + 115199) / 115200);
+    return n < 7 ? 7 : n > 150 ? 150 : n;
+}
+/** The whole wake: FE × wakePreambleFor(baud), then FE FE <radio> E0 18 01 FD. */
+struct Wake { uint8_t b[160]; uint16_t n = 0; };
+inline Wake powerOn(uint8_t radio, int baud) {
+    Wake w;
+    const int k = wakePreambleFor(baud);
+    for (int i = 0; i < k; i++) w.b[w.n++] = kPreamble;
+    w.b[w.n++] = kPreamble; w.b[w.n++] = kPreamble;
+    w.b[w.n++] = radio; w.b[w.n++] = kController; w.b[w.n++] = 0x18; w.b[w.n++] = 0x01; w.b[w.n++] = kEnd;
+    return w;
+}
+/** ★★ May these bytes be written as a power-on? EXACTLY the frame powerOn() builds for this radio and baud:
+ *  the right number of FE, our address pair, 18 01, FD — nothing else, no other 18 sub-command, ever. */
+inline bool mayWake(const uint8_t* f, size_t n, const Policy& p, int baud) {
+    const size_t k = (size_t)wakePreambleFor(baud);
+    if (!f || n != k + 7) return false;
+    for (size_t i = 0; i < k + 2; i++) if (f[i] != kPreamble) return false;
+    return f[k + 2] == p.radio && f[k + 3] == kController && f[k + 4] == 0x18 && f[k + 5] == 0x01 && f[k + 6] == kEnd;
+}
+inline bool mayWake(const Wake& w, const Policy& p, int baud) { return mayWake(w.b, w.n, p, baud); }
+
+/** ★★ POWER OFF (18 00) — ONLY the owner's explicit RADIO OFF press (tester's request via Stuart, 2026-11-04:
+ *  "i'd love a 'Radio off' button"). Never automatic: IcomSource::requestPowerOff, behind the admin gate, is its
+ *  only caller, and nothing on stop/restart/idle reaches it. A plain frame — no wake run. Like 18 01 it keys
+ *  nothing, and like 18 01 it is NOT on mayTransmit's table: it has this builder and this exact check. */
+inline Out powerOff(uint8_t radio) { Out o; begin(o, radio, 0x18); put(o, 0x00); end(o); return o; }
+inline bool mayPowerOff(const uint8_t* f, size_t n, const Policy& p) {
+    return f && n == 7 && f[0] == kPreamble && f[1] == kPreamble && f[2] == p.radio && f[3] == kController
+        && f[4] == 0x18 && f[5] == 0x00 && f[6] == kEnd;
+}
+inline bool mayPowerOff(const Out& o, const Policy& p) { return mayPowerOff(o.b, o.n, p); }
+}  // namespace power
 
 // ── The parser — bytes in, frames out ─────────────────────────────────────────────────────────
 

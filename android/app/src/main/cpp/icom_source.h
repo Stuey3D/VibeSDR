@@ -15,6 +15,16 @@
 //       3. the transport never asserts DTR/RTS (icom_transport.h);
 //       4. open() refuses to start if the radio's own menu could key it from a modem line or from
 //          audio (USB SEND, USB Keying, VOX), naming the menu item to change. We never change it.
+//       5. ★ The ONE frame outside the table is POWER ON (18 01 behind its FE wake run, civ::power):
+//          sent by sendWake() alone, only when the owner ticked `powerOn`, only while the radio is not
+//          answering, at most once per kWakeEverySec — or on the owner's RADIO ON press. POWER OFF
+//          (18 00) is sent only by requestPowerOff(): the owner's RADIO OFF press, admin-gated in the
+//          shim, NEVER automatic (not on stop, restart or idle). Both have their own exact checks.
+//     ★★ A SWITCHED-OFF RADIO IS A NORMAL STATE (2026-11-04, Saber's Pi 4: other software switches
+//        his 7300 on, so VibeServer often starts first). USB present + CI-V silent = open() SUCCEEDS
+//        in the waiting state: link down, linkProblem() in plain words, identify retried every few
+//        seconds, and the full path (identify, PREFLIGHT, state, scope, audio) runs when it answers.
+//        An ABSENT USB device still fails open() — that is "not detected", not "switched off".
 //     While the OWNER transmits (1C 00 polled), audio is muted and the scope is frozen: listeners
 //     must not hear the owner's monitor, and a TX sweep is not the band.
 //
@@ -46,6 +56,12 @@ struct IcomConfig {
     int  scopeSpeed   = 0;         ///< 27 1A: 0 fast, 1 mid, 2 slow
     bool ttyOk        = false;     ///< the owner allows a /dev serial device (DTR/RTS glitch on open)
     std::string modelHint;         ///< "IC-7300" from the USB serial, when known
+    /** ★ Owner option "Power on the radio over CI-V" (config icomPowerOn, default OFF): when the radio is
+     *  not answering, send it 18 01 behind the manual's FE run (civ::power). Without it VibeServer NEVER sends
+     *  a power command by itself (the owner's RADIO ON / RADIO OFF buttons still work). With it, the server's
+     *  existing idle power-down ("Power down the radio" — the idle park) also means a real power-off: the shim
+     *  calls idlePowerOff() at the park, and the next listener's arrival powers it back on (setInUse). */
+    bool powerOn      = false;
 };
 
 struct PreflightItem {
@@ -134,6 +150,33 @@ public:
     /** Hand in that fresh descriptor (ownership passes); the next reconnect adopts it. Any thread. */
     bool offerFd(int fd);
     uint64_t refusedFrames() const { return refused_.load(); }
+    /** ★ USB present, CI-V silent: switched off (or not answering). The source is up and waiting for it. */
+    bool waitingForRadio() const { return waiting_.load(); }
+    /** Power-on commands sent (owner option) since open. */
+    uint64_t wakesSent() const { return wakes_.load(); }
+    /** ★ Why the link is down, in plain words for every listener's banner and the setup page; "" when up. */
+    std::string linkProblem() const;
+    /** ★ The owner's next step for that, for the setup page (the CI-V menu hint, or the preflight's words). */
+    std::string linkHint() const;
+    /** ★★ THE OWNER'S BUTTONS (admin-gated by the caller). RADIO OFF sends 18 00 once, then the source waits
+     *  quietly ("Switched off by the owner") and the auto power-on option is held off until RADIO ON or the
+     *  radio is switched on by hand. RADIO ON sends the wake once, whether or not `powerOn` is ticked.
+     *  Both only queue: the CI-V thread sends. False + `why` when it makes no sense now. */
+    bool requestPowerOff(std::string& why);
+    bool requestPowerOn(std::string& why);
+    bool offByOwner() const { return offByOwner_.load(); }
+    /** ★ Somebody (a listener, a held session, a decoder) is using the radio — the shim's housekeeping says so
+     *  every tick. A radio the idle park switched off is woken only while this is true. Any thread. */
+    void setInUse(bool inUse);
+    /** ★★ THE IDLE PARK, ON AN ICOM — called by the shim exactly where any other radio parks (nobody watching, no
+     *  background decoder, the owner's idle grace passed). Only with `powerOn` (otherwise nothing could switch it
+     *  back on for the next listener) and only while it answers. Returns true when a power-off was queued. */
+    bool idlePowerOff();
+    /** ★ A power-on was sent and the radio has not answered yet — listeners see "Switching the radio on". */
+    bool switchingOn() const;
+    uint64_t powerOffsSent() const { return offs_.load(); }
+    static constexpr double kWakeEverySec = 30.0;   ///< at most one power-on per this, while waiting
+    static constexpr double kBootSec = 4.0;         ///< after a power-on, let the radio boot before identify
     uint64_t sweepsDropped() const { return scope_.dropped; }
     /** S-meter reading as dB relative to S9 (Hamlib's published 7300 calibration points). */
     static double sRawToDbOverS9(int raw);
@@ -163,6 +206,21 @@ private:
     std::atomic<bool> usbGone_{false};   ///< read() said the device is GONE (not merely quiet)
     std::atomic<int>  freshFd_{-1};      ///< Android: a descriptor waiting for reconnect() (ownership is ours)
     std::atomic<double> txHoldUntil_{0.0};
+    std::atomic<bool> waiting_{false};      ///< USB there, CI-V silent — switched off (or not answering)
+    std::atomic<bool> preRefused_{false};   ///< the radio answered, and the preflight refused it
+    std::atomic<bool> usbMissing_{false};   ///< the transport would not open on a retry
+    std::atomic<uint64_t> wakes_{0}, offs_{0};
+    std::atomic<bool> wantOff_{false}, wantOn_{false};   ///< the owner's presses, for the CI-V thread
+    std::atomic<bool> offByOwner_{false};                ///< RADIO OFF was pressed and the radio has not answered since
+    std::atomic<bool> offByIdle_{false};                 ///< the idle park switched it off (powerOn): nobody was using it
+    std::atomic<bool> wantIdleOff_{false};
+    std::atomic<bool> inUse_{false}, kick_{false}, arrivalWake_{false};
+    std::atomic<double> wakeAt_{-1e9};                   ///< lastWakeAt_, readable from other threads
+    double lastWakeAt_ = -1e9;              ///< CI-V thread (and open) only
+    double bootUntil_ = 0;
+    bool audioStarted_ = false;
+    std::string lastRetryErr_;              ///< so a radio that stays off logs once, not every 3 s
+    mutable std::mutex audioMtx_;           ///< audio_ is created on the CI-V thread when a waiting radio answers
 
     // ── The request queue: a fixed ring per lane, coalesced by (cmd, sub). ★ No allocation.
     struct Req { civ::Out out; uint8_t cmd = 0; int sub = -1; bool used = false; };
@@ -177,7 +235,12 @@ private:
     bool takeNext(Req& r);
     bool sendFrame(const civ::Out& o);
     bool transact(const civ::Out& o, uint8_t wantCmd, int wantSub, int timeoutMs, civ::Frame* reply);
-    bool identify(std::string& err);
+    bool identify(std::string& err, bool* silent = nullptr);
+    bool sendWake(bool byOwner);
+    void doPowerOff(bool byOwner);
+    bool autoWakeWanted() const;
+    void enterWaiting();
+    void startAudio();
     bool runPreflight(std::string& err);
     void readInitialState();
     void ioLoop();
