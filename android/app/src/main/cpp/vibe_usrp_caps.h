@@ -112,7 +112,10 @@ inline const std::vector<uint32_t>& gatedRates() {
     return g;
 }
 inline std::vector<uint32_t> ratesFor(int usbSpeed, double gateHz = 0, double keepHz = 0) {
-    static const uint32_t all[] = { 1000000u, 2000000u, 2400000u, 3200000u, 4000000u, 5000000u,
+    /* ★★ 2.048 MS/s IS LISTED (V12, 2026-11-04): DAB's own rate, an exact 32.768 MHz / 16 on the AD9361. Without it DAB
+     *  asked for 2.048, got the nearest (2.0), failed its readback and fell to 2.4 — two re-rates on entry, and two more
+     *  on every block change after (see the DAB entry in local_sdr_shim.cpp). */
+    static const uint32_t all[] = { 1000000u, 2000000u, 2048000u, 2400000u, 3200000u, 4000000u, 5000000u,
                                     8000000u, 10000000u, 12500000u, 16000000u };
     // ★ Unknown speed (0) is treated as USB 2 — the conservative reading, never the optimistic one.
     const uint32_t top = usbSpeed >= 3 ? 16000000u : 8000000u;

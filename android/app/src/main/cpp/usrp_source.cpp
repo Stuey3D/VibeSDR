@@ -132,6 +132,7 @@ struct UsrpSource::Impl {
     std::recursive_mutex        mtx;          // every UHD call on the device
     std::thread                 thr;
     std::atomic<bool>           run{false};
+    std::atomic<bool>           rxEnded{false};   // ★ the recv thread left its loop on its own (a recv exception) — see start()
     std::atomic<bool>           paused{false};
     std::atomic<double>         lastRx{0.0};
     std::atomic<uint64_t>       overflows{0};
@@ -319,8 +320,17 @@ bool UsrpSource::rebuildStream(std::string& err) {
 
 bool UsrpSource::start(std::string& err) {
     if (!open_) { err = "not open"; return false; }
-    if (impl_->run.load()) return true;
+    /* ★★ A RECV THREAD THAT DIED IS NOT A RUNNING STREAM (V12, 2026-11-04). A recv() exception ends the thread but left
+     *    `run` set, so every start() after it — a rate change, a port change, the watchdog's shallow restart — answered
+     *    "already running" and did nothing; only stop() (which the watchdog happens to call first) could clear it. Now a
+     *    start() on a dead thread stops it properly (stream command, join, drain) and starts afresh. */
+    if (impl_->run.load()) {
+        if (!impl_->rxEnded.load()) return true;
+        std::fprintf(stderr, "VibeServer: USRP: the receive thread had stopped — restarting the stream\n");
+        stop();
+    }
     if (!rebuildStream(err)) return false;
+    impl_->rxEnded.store(false);
     wantStreaming_ = true;
     impl_->run.store(true);
     {
@@ -335,6 +345,7 @@ bool UsrpSource::start(std::string& err) {
         /* ★★★ THE IQ RUNG — the same one every other radio's USB thread takes (vibeIqThread): above spectrum and
          *     decoders, below audio and the network (Network > Audio > Spectrum > Decoders). */
         vibeIqThread("vibe-usrp");
+        struct Ended { std::atomic<bool>& f; ~Ended() { f.store(true); } } ended{impl_->rxEnded};   // ★ however it leaves
         uhd::rx_streamer::sptr rx;
         { std::lock_guard<std::recursive_mutex> lk(impl_->mtx); rx = impl_->rx; }
         if (!rx) return;

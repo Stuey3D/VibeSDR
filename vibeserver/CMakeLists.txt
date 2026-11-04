@@ -990,7 +990,7 @@ target_link_libraries(adsb-data-tool PRIVATE Threads::Threads)
 enable_testing()
 
 set(VIBE_DAB_TESTS modes channels prs sync ofdm interleave fec punct fic ficdec msc receiver
-                   resample superframe aac mp2 pad tii epg mot)
+                   resample ddc superframe aac mp2 pad tii epg mot)
 add_custom_target(dab-tests)
 foreach(t ${VIBE_DAB_TESTS})
   add_executable(test-dab-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-${t}.cpp")
@@ -1161,6 +1161,13 @@ add_executable(dab-unitlog "${CMAKE_CURRENT_SOURCE_DIR}/dab-unitlog.cpp")
 target_include_directories(dab-unitlog PRIVATE "${CPP_DIR}")
 target_compile_options(dab-unitlog PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(dab-unitlog PRIVATE vibeserver_core)
+# ★ dab-weak: the weak-signal regression check — a real capture + added noise through the real DabService, native or
+#   wide-rate (the DDC), one block or two; lock / label / audio times and the error counts (dev tool, real clips stay in
+#   ~/VibeSDR-test-audio/dab). scripts/dab-weak-ladder.sh steps the noise down to the edge.
+add_executable(dab-weak "${CMAKE_CURRENT_SOURCE_DIR}/dab-weak.cpp")
+target_include_directories(dab-weak PRIVATE "${CPP_DIR}")
+target_compile_options(dab-weak PRIVATE -O3 -ffp-contract=fast)
+target_link_libraries(dab-weak PRIVATE vibeserver_core)
 
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")

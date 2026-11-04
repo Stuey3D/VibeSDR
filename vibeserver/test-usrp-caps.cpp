@@ -68,6 +68,8 @@ int main() {
     ok(nearestRate(r2, 20e6, Host::X86_64) == 8000000u, "a saved 20 MS/s on USB 2 snaps to 8");
     ok(nearestRate(r3, 12e6, Host::X86_64) == 12500000u, "12 MS/s on USB 3 snaps to 12.5");
     ok(nearestRate({}, 2e6, Host::Arm64) == 0, "an empty list answers 0, never a guess");
+    ok(nearestRate(r2, 2048000.0, Host::Arm64) == 2048000u && nearestRate(r3, 2048000.0, Host::X86_64) == 2048000u,
+       "DAB's 2.048 MS/s is offered exactly (it was 2.0 -> readback fail -> 2.4: two re-rates every DAB block change)");
 
     std::printf("== gain\n");
     const auto g = gainList(0, 76, 1);   // UHD 4.9.0.1's AD9361 RX range (ad9361_ctrl.hpp)

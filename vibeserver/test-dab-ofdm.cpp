@@ -101,6 +101,44 @@ int main() {
         CHECK(out[1535] == C32(768.0f, 0.0f), "last carrier is +768");
     }
 
+    /* ★★ V12 (2026-11-04) THE SOFT BITS, VECTOR AGAINST THE FORMULA — whichever SIMD path this build takes (NEON, SSE2,
+     *  or none). The default shape is now (|p|/avg)^¾ × 140 (see DemapSoftParams): a carrier-by-carrier double-precision
+     *  reference of that formula, on products spread over 40 dB with deep fades and exact zeros, must agree to one LSB
+     *  (the vector paths use reciprocal-square-root estimates refined by Newton steps). */
+    {
+        const int K = 1536;
+        std::vector<C32> prod(K); std::vector<float> mag(K);
+        double sum = 0;
+        for (int c = 0; c < K; ++c) {
+            const double a = std::pow(10.0, 2.0 * rnd()) * (c % 97 == 0 ? 0.0 : 1.0);   // ±20 dB, and some exact zeros
+            const double ph = 3.14159265 * rnd();
+            prod[c] = C32(float(a * std::cos(ph)), float(a * std::sin(ph)));
+            mag[c] = float(std::hypot(double(prod[c].real()), double(prod[c].imag())));
+            sum += mag[c];
+        }
+        const float invAvg = float(K / sum);
+        std::vector<int8_t> re(K), im(K);
+        dqpskSoftFromProducts(prod.data(), mag.data(), K, invAvg, re.data(), im.data());
+        int worst = 0, zeros = 0;
+        const DemapSoftParams& sp = DemapSoftParams::get();
+        for (int c = 0; c < K; ++c) {
+            double k = 0;
+            if (mag[c] > 1e-12f) {
+                const double m = mag[c];
+                k = sp.mode == DemapSoftParams::Mode::Linear ? sp.kScale * invAvg
+                  : sp.mode == DemapSoftParams::Mode::Sqrt   ? sp.kScale * std::sqrt(m * invAvg) / m
+                                                             : sp.kScale * std::pow(m * invAvg, 0.75) / m;
+            }
+            auto q = [](double v) { return int(v > 127 ? 127 : v < -127 ? -127 : v); };
+            const int wr = q(prod[c].real() * k), wi = q(prod[c].imag() * k);
+            worst = std::max(worst, std::max(std::abs(wr - re[size_t(c)]), std::abs(wi - im[size_t(c)])));
+            if (mag[c] <= 1e-12f && (re[size_t(c)] || im[size_t(c)])) ++zeros;
+        }
+        printf("  soft bits (mode %d, x%.0f): worst difference from the formula %d LSB\n", int(sp.mode), sp.kScale, worst);
+        CHECK(worst <= 1, "the vector soft bits follow the formula to one LSB");
+        CHECK(zeros == 0, "a zero product gives a zero soft bit, never a NaN");
+    }
+
     if (fails == 0) printf("  all passed\n");
     else            printf("  %d FAILED\n", fails);
     return fails ? 1 : 0;
