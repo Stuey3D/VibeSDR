@@ -683,6 +683,7 @@ if node scripts/check-icom-servermode.mjs; then pass=$((pass+1)); else fail=$((f
 #     with the phone never hearing of it. A new Setup control fails here until it is classified.
 if node scripts/check-android-settings-parity.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the model behind the phone's Background Decoding editor: the bgDecode JSON both ways, the window rules.
+if node --no-warnings scripts/test_rsp_card.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_bg_decode_model.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ LAN DISCOVERY (mdnsBrowse.ts): SEARCH AGAIN and the return from the background really restart the browse; stale rows go (Stuart 2026-10-20).
 if node --no-warnings scripts/test_mdns_browse.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

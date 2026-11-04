@@ -383,6 +383,21 @@ object VibeLocalSDR {
                                                           ismOk: Boolean, ndbOk: Boolean, aisOk: Boolean): String
     /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with OpenRSP), 1 on, 2 off. */
     fun setRspVibeAgc(choice: Int) { ensureLoaded(); nativeSetRspVibeAgc(choice) }
+    /** ★★ The Setup page's SDRplay card, at start-up — see nativeSetRspFrontEnd. */
+    fun setRspFrontEnd(rfNotch: Boolean, dabNotch: Boolean, autoNotch: Boolean, userNotch: Boolean, amNotch: Boolean,
+                       hdr: Boolean, extRef: Boolean, dabDecim: Boolean, rfAgc: Boolean, dabAgcOverride: Boolean,
+                       dabAgcTarget: Int, agcSet: Int, agcSetLock: Boolean) {
+        ensureLoaded()
+        nativeSetRspFrontEnd(rfNotch, dabNotch, autoNotch, userNotch, amNotch, hdr, extRef, dabDecim, rfAgc,
+                             dabAgcOverride, dabAgcTarget, agcSet, agcSetLock)
+    }
+    private external fun nativeSetRspFrontEnd(rfNotch: Boolean, dabNotch: Boolean, autoNotch: Boolean, userNotch: Boolean,
+                                              amNotch: Boolean, hdr: Boolean, extRef: Boolean, dabDecim: Boolean,
+                                              rfAgc: Boolean, dabAgcOverride: Boolean, dabAgcTarget: Int, agcSet: Int,
+                                              agcSetLock: Boolean)
+    /** ★★ The Airspy HF+'s calibration, parts per billion (0 = none — the radio's own). */
+    fun setAhfPpb(ppb: Int) { ensureLoaded(); nativeSetAhfPpb(ppb) }
+    private external fun nativeSetAhfPpb(ppb: Int)
     private external fun nativeSetRspVibeAgc(choice: Int)
 
     /** Per-band gain ceilings, the gain to return to when everyone leaves (-1 = leave alone), and

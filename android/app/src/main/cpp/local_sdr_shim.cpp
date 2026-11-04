@@ -42464,6 +42464,9 @@ int LocalSdrShim::hackRfLna() const { return (p && p->useHackRf()) ? p->hrf->lna
 int LocalSdrShim::hackRfVga() const { return (p && p->useHackRf()) ? p->hrf->vgaGainDb() : 0; }
 void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
     g_dsp.ahfPpb.store(ppb);
+    // ★ INT32_MIN = "never set" (the Android server screen's 0): forget a previous run's figure and leave the radio's
+    //   own flash calibration alone — writing 0 would override it.
+    if (ppb == INT32_MIN) return;
     if (!p || !p->useAirspyHf()) return;
     VIBE_HW_LOCK(); p->ahf->setCalibrationPpb(ppb);
 }

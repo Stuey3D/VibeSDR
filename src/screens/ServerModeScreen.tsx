@@ -4,6 +4,8 @@ import { DIGI_MODE_STYLE } from '../utils/digiModes';   // ★ V12 the digital-s
 import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
 import BackgroundDecodingSetup from '../components/BackgroundDecodingSetup';
+import RspSetupCard from '../components/RspSetupCard';
+import { RSP_DEFAULTS, readRspCard, rspCaps, type RspCard } from '../services/rspCard';
 import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps } from '../services/bgDecode';
 import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } from '../services/antennaSwitch';
 /** ★★ THE GATE (Stuart, 2026-10-09: "pushed to [Chicopee] as a test — if it works it ships as V11, if not gated off for
@@ -300,6 +302,10 @@ const K = {
   rspVibeAgc: 'vs_rspvibeagc',
   /** ★ The wide impulse blanker (0 off, 1 auto below 30 MHz, 2 on). Absent = 1, the server's default. */
   nbWide: 'vs_nbwide',
+  /** ★★★ The SDRplay card (services/rspCard.ts), one JSON value; and the RSP's own hwinfo capabilities as last served. */
+  rsp: 'vs_rsp', rspCaps: 'vs_rspcaps',
+  /** ★★ The Airspy HF+'s calibration, ppb, as typed ('' / 0 = the radio's own). */
+  ppb: 'vs_ppb',
 };
 
 /** ★★★ HOW LONG THE SETTINGS SCREEN WAITS FOR A DAB QUICK SCAN, and the number its hint QUOTES — one
@@ -500,6 +506,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [rspVibeAgc, setRspVibeAgc] = useState(0);
   /** ★ The wide impulse blanker: 0 off, 1 auto (below 30 MHz — the Setup page's and the server's default), 2 on. */
   const [nbWide, setNbWide] = useState(1);
+  /** ★★★ The SDRplay card — RadioConfig's keys and defaults (services/rspCard). Drawn and sent only for an RSP. */
+  const [rspCard, setRspCard] = useState<RspCard>(() => ({ ...RSP_DEFAULTS }));
+  /** ★ The RSP's own capability object (hwinfo `radio`) as last read while serving — which rows its model has. */
+  const [rspLive, setRspLive] = useState<any>(null);
+  const onRspCard = (c: RspCard) => { setRspCard(c); void AsyncStorage.setItem(K.rsp, JSON.stringify(c)); };
+  /** ★★ The Airspy HF+'s calibration in ppb, as typed. */
+  const [ppbText, setPpbText] = useState('');
   /* ★★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h), read from the engine's record on mount. While
    *  one is recorded the switch is drawn off and disabled, and the saved choice is turned off too — the engine turned
    *  it off, and this screen's copy would otherwise send it back at the next Start. */
@@ -882,6 +895,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  under Modes and decoders (the setup page's modeBlockSet: the owner's list plus the region defaults). */
   useEffect(() => { void getBackgroundCaps().then((j) => setBgCaps(parseBgCaps(j))); }, [radio?.driver]);
   useEffect(() => { void galleryDisk().then(setGalDisk); }, []);
+  /* ★★ Which SDRplay rows this RSP has: its own hwinfo answer as last served (only if it is the same model plugged in
+   *  now), else its model from the USB name, else everything — the Setup page's rspCaps. */
+  const rspCapsNow = rspCaps(rspLive && (!radio?.model || !rspLive.model || String(radio.model).includes(rspLive.model)) ? rspLive : null,
+                             radio?.model ?? '');
   const bgDriver = radio?.driver ?? 'rtl';
   const bgOff = (() => {
     const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
@@ -1203,6 +1220,18 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     const read = async () => {
       let caps: any = null;
       try { const j = await (NativeModules as any).VibeLocalSDR?.radioCaps?.(); caps = j ? JSON.parse(j) : null; } catch { caps = null; }
+      // ★★ An RSP's own answer to "which rows does this model have" (the Setup page's rspCaps reads the same object),
+      //    remembered for the settings screen, which is only shown while the server is stopped.
+      if (alive && caps && caps.driver === 'sdrplay') {
+        const keep = { driver: 'sdrplay', model: caps.model || '', rfNotch: !!caps.rfNotch, dabNotch: !!caps.dabNotch,
+                       biasT: !!caps.biasT, hdr: !!caps.hdr, amNotch: !!caps.amNotch, extRef: !!caps.extRef,
+                       antennas: Array.isArray(caps.antennas) && !caps.antennaSwitch ? caps.antennas : [] };
+        setRspLive((prev: any) => {
+          if (JSON.stringify(prev) === JSON.stringify(keep)) return prev;
+          void AsyncStorage.setItem(K.rspCaps, JSON.stringify(keep));
+          return keep;
+        });
+      }
       if (!alive || !caps || caps.antennaSwitch) return;
       const ports = Array.isArray(caps.antennas) ? caps.antennas.filter((x: unknown) => typeof x === 'string') as string[] : [];
       if (ports.length < 2) return;
@@ -1393,6 +1422,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
           { const rv = g(K.rspVibeAgc); if (rv === '1' || rv === '2' || rv === '0') setRspVibeAgc(Number(rv)); }
           { const nb = g(K.nbWide); if (nb === '0' || nb === '1' || nb === '2') setNbWide(Number(nb)); }
+          { const rc = g(K.rsp); if (rc != null) setRspCard(readRspCard(rc)); }
+          { const rl = g(K.rspCaps); if (rl) { try { setRspLive(JSON.parse(rl)); } catch { /* re-read at the next serve */ } } }
+          { const pb = g(K.ppb); if (pb != null) setPpbText(pb); }
           // ★★ The engine's record of a fall-over at a boosted rate — it switches the saved choice off here too.
           rateGuardState().then((st) => {
             setRateGuard(st);
@@ -2001,6 +2033,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
+    rspCard, ppbText,
   };
 
   /* ★★★ THE CONFIG THE SERVER STARTS WITH, BUILT IN ONE PLACE (2026-09-29). Start sends it, and so does
@@ -2053,6 +2086,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★ Only an RSP's — 0 (automatic) on any other radio, so a choice saved while an RSP was plugged in cannot ride along.
     rspVibeAgc: radio?.driver === 'sdrplay' ? live.current.rspVibeAgc : 0,
     nbWide: live.current.nbWide,   // ★ VibeServerBoot: setNbWide(cfg "nbWide"), auto when absent
+    // ★★★ The SDRplay card — only an RSP's; the defaults on any other radio, so nothing saved for an RSP rides along.
+    rsp: radio?.driver === 'sdrplay' ? live.current.rspCard : RSP_DEFAULTS,
+    ppb: radio?.driver === 'airspyhf' ? (parseInt(live.current.ppbText, 10) || 0) : 0,
     /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
      *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
      *  check for the WHOLE literal, so every setting here could be misspelled or unknown to
@@ -2080,7 +2116,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     idleGraceSec: live.current.idleGrace,
     antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
     // ★ The external antenna switch: antennaSwitch / antennaMap / antennaLocked — VibeServerBoot applies them.
-    ...serverFields(live.current.antSwitch),
+    // ★★ …and on an RSP with no external switch, the card's "Switch aerial by band" + "Only I may change the aerial" —
+    //    the same two keys (RadioConfig::antennaMap / antennaPortLocked → setRspAntennaMap / setAntennaLocked).
+    ...(() => {
+      const f = serverFields(live.current.antSwitch);
+      return radio?.driver === 'sdrplay' && !f.antennaSwitch
+        ? { ...f, antennaMap: live.current.rspCard.antennaMap.trim(), antennaLocked: live.current.rspCard.antennaPortLocked }
+        : f;
+    })(),
     antennaRanges: live.current.antRanges, antennaFilters: live.current.antFilters,
     antennaNames: live.current.antNames,   // ★ V12 — VibeServerBoot applies it (setAntennaPortNames)
     landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
@@ -2188,6 +2231,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.bgDecode, live.current.bgJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
       [K.rspVibeAgc, String(live.current.rspVibeAgc)], [K.nbWide, String(live.current.nbWide)],
+      [K.rsp, JSON.stringify(live.current.rspCard)], [K.ppb, live.current.ppbText],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -3852,26 +3896,31 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               </Text>
             ) : null /* ★ an RSP1: simply no bias-T, and nothing to say about it */}
 
-            {/* ★★ V12 VibeAGC (SDRplay) — the Setup page's choice (RadioConfig::rspVibeAgc), drawn ONLY for an RSP (AGENTS.md:
-                a control for one radio is not drawn on the others). VibeServerBoot applies it on every start. */}
+            {/* ★★★ THE SDRplay CARD (Stuart, 2026-11-04: "since SDRPlay is now on android all the sdrplay settings need
+                porting over") — the Setup page's, in its order and words, VibeAGC included (components/RspSetupCard).
+                Drawn ONLY for an RSP (AGENTS.md: a control for one radio is not drawn on the others), and inside it each
+                row only on the models that have it (rspCaps — the radio's own hwinfo answer once it has served, else its
+                model from the USB name). VibeServerBoot applies all of it on every start (setRspFrontEnd). */}
             {radio?.driver === 'sdrplay' && (<>
-              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>VIBEAGC (SDRPLAY)</Text>
-              {([
-                [0, 'Automatic — on with the OpenRSP driver'],
-                [1, 'On'],
-                [2, 'Off — the RSP’s own IF AGC'],
-              ] as const).map(([v, label]) => (
-                <OptRow key={v} C={C} F={F} active={rspVibeAgc === v} label={label}
-                  onPress={() => { setRspVibeAgc(v); AsyncStorage.setItem(K.rspVibeAgc, String(v)); }} />
-              ))}
+              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>SDRPLAY</Text>
+              <View style={[styles.card, { borderColor: C.border }]}>
+                <RspSetupCard C={C} F={F} card={rspCard} onChange={onRspCard} caps={rspCapsNow}
+                  vibeAgc={rspVibeAgc} onVibeAgc={(v) => { setRspVibeAgc(v); AsyncStorage.setItem(K.rspVibeAgc, String(v)); }} />
+              </View>
+            </>)}
+            {/* ★★ THE AIRSPY HF+'s CALIBRATION in parts per BILLION (RadioConfig::ppb) — the Setup page's "Calibration (ppb)",
+                drawn only for an HF+ (the only radio calibrated that way). 0 = the radio's own. */}
+            {radio?.driver === 'airspyhf' && (<>
+              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>CALIBRATION (PPB)</Text>
+              <TextInput value={ppbText}
+                onChangeText={(t) => {
+                  const clean = t.replace(/[^0-9-]/g, '').replace(/(?!^)-/g, '').slice(0, 7);
+                  setPpbText(clean); AsyncStorage.setItem(K.ppb, clean);
+                }}
+                keyboardType="numbers-and-punctuation" placeholder="0" placeholderTextColor={C.placeholderDim}
+                style={[styles.input, { color: C.text, borderColor: C.border, fontFamily: F, width: 140 }]} />
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                Our own gain control for both stages of the RSP, in place of the API{'’'}s IF AGC: it measures the
-                converter level from the samples itself, moves the IF in small steps that are smoothed out of the audio, and
-                takes RF gain out first whenever the front end is being driven hard {'—'} a strong neighbour can overload
-                the RSP long before the wanted station is loud. Automatic runs it only with the OpenRSP driver (the one this
-                app uses). If the driver ever rejects a gain write, VibeAGC hands back to the RSP{'’'}s own AGC and says
-                why in the log. You can also switch it live from the radio menu (the AGC row in the hardware panel, once the
-                protected settings are unlocked); the choice here is what the server starts with.
+                The Airspy HF+ is calibrated in parts per BILLION. 0 unless you have measured it.
               </Text>
             </>)}
 

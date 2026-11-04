@@ -7,6 +7,7 @@
 // (IQ → FFT/SPEC → Opus audio).
 
 #include <jni.h>
+#include <climits>
 #include <android/log.h>
 #include <string>
 #include <thread>
@@ -1514,6 +1515,36 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeValidateBackgroundDecoding(JNIEnv* env, 
     const std::string e = vibe::LocalSdrShim::validateBackgroundDecoding(jstr(env, json), (double)rate, (int)slotCap,
         (double)lockCentre, ismOk == JNI_TRUE, ndbOk == JNI_TRUE, aisOk == JNI_TRUE);
     return env->NewStringUTF(e.c_str());
+}
+/* ★★★ THE SDRplay CARD (the Setup page's, Stuart 2026-11-04: "since SDRPlay is now on android all the sdrplay settings
+ *  need porting over") — the calls vibeserver/main.cpp makes at start-up, in its order: the two notch STARTING states,
+ *  then automatic notching over them, who may toggle them, the model-only filters, DAB decimation, the RF AGC, the DAB
+ *  AGC target and the IF AGC target with its lock. ★ Every value DEFINITE: the phone's process outlives a server, and
+ *  these live in g_dsp, so a choice from the last run must never carry into this one. Inert on any other radio (each
+ *  setter checks useSdrplay). */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetRspFrontEnd(JNIEnv*, jobject, jboolean rfNotch, jboolean dabNotch,
+        jboolean autoNotch, jboolean userNotch, jboolean amNotch, jboolean hdr, jboolean extRef, jboolean dabDecim,
+        jboolean rfAgc, jboolean dabAgcOverride, jint dabAgcTarget, jint agcSet, jboolean agcSetLock) {
+    vibe::LocalSdrShim::setVibeServerRfNotch(rfNotch == JNI_TRUE);
+    vibe::LocalSdrShim::setVibeServerDabNotch(dabNotch == JNI_TRUE);
+    vibe::LocalSdrShim::setVibeServerAutoNotch(autoNotch == JNI_TRUE);
+    vibe::LocalSdrShim::setVibeServerUserNotch(userNotch == JNI_TRUE);
+    auto& s = vibe::LocalSdrShim::instance();
+    s.setRspHdr(hdr == JNI_TRUE);
+    s.setRspAmNotch(amNotch == JNI_TRUE);
+    s.setRspExtRef(extRef == JNI_TRUE);
+    vibe::LocalSdrShim::setVibeServerDabAgc(dabAgcOverride == JNI_TRUE, (int)dabAgcTarget);
+    vibe::LocalSdrShim::setVibeServerRfAgc(rfAgc == JNI_TRUE);
+    vibe::LocalSdrShim::setVibeServerRspDabDecim(dabDecim == JNI_TRUE);
+    s.setIfAgcSetPoint((int)agcSet);
+    vibe::LocalSdrShim::setVibeServerAgcSetLock(agcSetLock == JNI_TRUE);
+}
+/* ★★ The Airspy HF+'s calibration in parts per BILLION (RadioConfig::ppb) — main.cpp's setAhfCalibrationPpb. Inert on any
+ *  other radio. Definite: 0 = none, sent as "never set" so the radio's own flash calibration stays (main.cpp skips 0). */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAhfPpb(JNIEnv*, jobject, jint ppb) {
+    vibe::LocalSdrShim::instance().setAhfCalibrationPpb(ppb == 0 ? INT32_MIN : (int)ppb);
 }
 /* ★★ V12 VibeAGC for SDRplay — the owner's choice (0 automatic: on with the OpenRSP driver, 1 on, 2 off), RadioConfig::rspVibeAgc. */
 extern "C" JNIEXPORT void JNICALL

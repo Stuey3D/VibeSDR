@@ -71,7 +71,7 @@ while the server is stopped, so "live" here is the next Start; the engine's tick
 | Locked range (centre, rate, users) | `lockedCentre`, `lockedRate`, `maxUsers` | ports (verified) | Background decoding follows it (never moves a locked radio). |
 | Chat / canned-chat translation | — | n/a | Not an owner setting on the Setup page. |
 | Landing message / link | `landingMessage…` | ports (verified) | |
-| DAB band scan for the owner ("Scan all DAB blocks") | — (bookmarks) | **left** | The phone has the per-block quick scan for the DAB landing; listeners have SCAN ALL in the app's DAB box. A scan-all here would need a private engine walking every block with the server stopped. |
+| **DAB band scan for the owner ("Scan all DAB blocks")** | — (bookmarks) | **ports** (this branch) | The engine's GET /vibeserver/dab-bandscan, on the running server or on the owner's radio in a private loopback engine (privateScanConfig) while the screen is up; progress, Cancel, each multiplex with its stations, "Use <block> as the landing block"; stations go to the bookmarks. Start waits for it. |
 | Pause / remove a radio | (multi-radio) | not ported | A phone serves one radio; stopping the server is the pause. |
 
 ## Deliberately not ported (no dead controls — AGENTS.md)
@@ -85,14 +85,44 @@ while the server is stopped, so "live" here is the next Start; the engine's tick
 | Radio serials, per-radio PIN | one radio per phone; the server PIN covers it |
 | Let another program use this radio | no other program can take a USB radio the app holds |
 | USRP | not built for Android |
-| External antenna switch setup | gated off on Android (`ANT_SWITCH_SETUP`, V11 decision); a configured switch keeps working |
+| External antenna switch setup | **ported, behind the same gate as the Setup page** (`ANT_SWITCH_SETUP` here, `SW_SETUP` there — both false since V11, Stuart 2026-10-10); flipping both to true is Stuart's call |
 | Icom port / tty / audio device | Linux's; Android finds them itself |
 
-## Left (gaps found, not V12, not done here)
+## Ported in the second pass (Stuart, 2026-11-04: "all the ones currently in Linux go to android")
 
-- **The SDRplay card** (pre-V12): RF notch, DAB notch, AM notch, HDR, external reference, DAB decimation, RF AGC,
-  auto notch, user notch, DAB AGC override/target, AGC set point/lock, ppb, antenna port lock / map. An RSP on the phone
-  runs on the engine's defaults for these. Classified as "GAP (pre-V12)" in the test so it is visible.
-- **Wide impulse blanker** (`nbWide`, pre-V12): `VibeServerBoot` reads it, the screen has no control (auto applies).
-- **DAB band scan for the owner** (V12): see above.
-- Untested by hand on a device: the whole branch was compiled and statically tested only.
+| Setting (Setup page words) | Config key | On Android? | Notes |
+|---|---|---|---|
+| Broadcast notch | `rfNotch` | **ports** | RADIO SETTINGS → SDRPLAY (`components/RspSetupCard`), only on models that have it; greyed under automatic notching. |
+| DAB notch | `dabNotch` | **ports** | Not on the RSP1 or RSP2. |
+| AM broadcast notch (RSPduo) | `rspAmNotch` | **ports** | RSPduo only. |
+| HDR mode below 2 MHz (RSPdx family) | `rspHdr` | **ports** | RSPdx / dx-R2 only. |
+| 24 MHz reference output (RSP2, RSPduo) | `rspExtRef` | **ports** | RSP2 / RSPduo only. |
+| DAB through the API's decimation | `rspDabDecim` | **ports** | |
+| Automatic RF gain | `rfAgc` | **ports** | |
+| VibeAGC (SDRplay) | `rspVibeAgc` | **ports** | Now inside the card, in the Setup page's place. |
+| Automatic notch filtering | `autoNotch` | **ports** | Only where the model has a notch. |
+| Let listeners toggle the notches | `userNotch` | **ports** | Default on. |
+| Use a separate IF AGC target for DAB + DAB AGC target | `dabAgcOverride`, `dabAgcTarget` | **ports** | − / + keys (D-pad), -60…-10, default on at -40. |
+| IF AGC target + Lock the AGC target | `agcSet`, `agcSetLock` | **ports** | -72…-10, default -30 (SDRplay's own). |
+| Aerial socket: Switch aerial by band + Only I may change the aerial | `antennaMap`, `antennaPortLocked` | **ports** | Only on a model with more than one socket; sent as antennaMap / antennaLocked (setRspAntennaMap / setAntennaLocked) when no external switch is set up. |
+| Calibration (ppb) | `ppb` | **ports** | Airspy HF+ only; 0 = the radio's own flash calibration (never written as 0). |
+| Impulse noise blanker | `nbWide` | **ports** | Off / Auto (below 30 MHz, default) / On; not on an Icom. |
+
+Which rows a model has: the RSP's own hwinfo `radio` object, read while the server runs and remembered (`vs_rspcaps`),
+else the model from its USB name, else everything — the Setup page's `rspCaps`, line for line (`services/rspCard.ts`).
+All applied by `VibeServerBoot` before the radio opens, as `main.cpp` does, every value definite (new JNI
+`setRspFrontEnd`, `setAhfPpb`).
+
+★ Found on the way: `VibeServerBoot` read `rawIq`, `rawIqMax`, `rawIqLanMaxHz`, `nbWide` and `vfoB` through
+`optString().toIntOrNull()`. The app's map arrives through `ReadableMap.toHashMap` (every number a Double) and
+`optString(1.0)` is `"1.0"`, so on an ordinary Start those always fell back to their defaults — VFO B could not be switched
+off and raw IQ never came on (a crash restore re-parses JSON where 1.0 is written "1", so only the ordinary path was
+wrong). Now read as numbers; the parity check refuses the pattern.
+
+## Left
+
+- **No GAP rows.** Every Setup-page control is either on the phone (applied by the engine) or listed above as unable to
+  work on Android, with why. `scripts/check-android-settings-parity.mjs` fails on any GAP row or any new unclassified
+  control.
+- Untested by hand on a device: compiled (Mac vibeserver; Android main app arm64 and Lite armeabi-v7a, Kotlin + native)
+  and statically tested only.

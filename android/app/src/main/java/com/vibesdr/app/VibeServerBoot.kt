@@ -331,6 +331,17 @@ object VibeServerBoot {
         }
         // ★★ V12 VibeAGC for SDRplay — the owner's choice; absent = 0 = automatic (on with the OpenRSP driver).
         VibeLocalSDR.setRspVibeAgc(cfg.i("rspVibeAgc", 0).coerceIn(0, 2))
+        /* ★★★ THE SDRplay CARD (Server mode → SDRPLAY), the keys and defaults of RadioConfig — vibeserver_config.h: notches
+         *  off, automatic notching off, listeners may toggle them, the model-only filters off, DAB decimation off, RF AGC off,
+         *  a separate DAB AGC target ON at -40 dBFS, the IF AGC target -30 (SDRplay's own) unlocked. Before the radio opens,
+         *  as main.cpp does; every value definite (the process outlives a server). Inert on any radio but an RSP. */
+        VibeLocalSDR.setRspFrontEnd(
+            cfg.b("rfNotch", false), cfg.b("dabNotch", false), cfg.b("autoNotch", false), cfg.b("userNotch", true),
+            cfg.b("rspAmNotch", false), cfg.b("rspHdr", false), cfg.b("rspExtRef", false), cfg.b("rspDabDecim", false),
+            cfg.b("rfAgc", false), cfg.b("dabAgcOverride", true), cfg.i("dabAgcTarget", -40).coerceIn(-60, -10),
+            cfg.i("agcSet", -30).coerceIn(-72, -10), cfg.b("agcSetLock", false))
+        // ★★ The Airspy HF+'s calibration in ppb (0 = the radio's own) — inert on any other radio.
+        VibeLocalSDR.setAhfPpb(cfg.i("ppb", 0))
 
         // ── ★★★ ADVANCED MODE ───────────────────────────────────────────────────────────────────
         // ★★ Always applied to a DEFINITE value, never "only when advanced". A limit left set from

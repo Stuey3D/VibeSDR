@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AndroidConnectedRadio } from './androidIcom';
 import type { RateGuardState } from './rateGuard';
 import { FM_DEFAULTS, fmDefaultsKeys, type FmDefaults } from './fmDefaults';
+import { RSP_DEFAULTS, rspConfigKeys, type RspCard } from './rspCard';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
 // audio + waterfall over a WebSocket, ~25x lighter than raw RTL-TCP IQ). The
@@ -162,6 +163,10 @@ export type VibeServerConfig = {
   rspVibeAgc?: number;
   /** ★ The wide impulse blanker on the whole capture: 0 off, 1 auto below 30 MHz (default), 2 on (RadioConfig::nbWide). */
   nbWide?: number;
+  /** ★★★ The SDRplay card (services/rspCard.ts) — sent as RadioConfig's flat keys; absent = the defaults. RSP only. */
+  rsp?: RspCard;
+  /** ★★ The Airspy HF+'s calibration, parts per billion (0 = the radio's own). HF+ only. */
+  ppb?: number;
   /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
    *  (-1 = leave alone), and whether the AGC is locked on. */
   gainLimits?: string;
@@ -360,6 +365,8 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     gallerySaveLive: cfg.gallerySaveLive !== false,
     rspVibeAgc: cfg.rspVibeAgc === 1 || cfg.rspVibeAgc === 2 ? cfg.rspVibeAgc : 0,
     nbWide: cfg.nbWide === 0 || cfg.nbWide === 2 ? cfg.nbWide : 1,
+    ...rspConfigKeys(cfg.rsp ?? RSP_DEFAULTS),   // ★ definite on every start — VibeServerBoot.setRspFrontEnd
+    ppb: Number.isFinite(cfg.ppb) ? Math.round(cfg.ppb as number) : 0,
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,
     agcLock: cfg.agcLock ?? false,

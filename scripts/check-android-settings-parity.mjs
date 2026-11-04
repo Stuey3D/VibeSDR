@@ -15,8 +15,9 @@ const read = (p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8')
 const PAGE = read('android/app/src/main/cpp/vibe_setup_page.h');
 const SCREEN = read('src/screens/ServerModeScreen.tsx')
   + read('src/components/BackgroundDecodingSetup.tsx') + read('src/components/BandLimitEditor.tsx')
-  + read('src/components/AntennaBandsEditor.tsx') + read('src/components/IcomSetupCard.tsx') + read('src/services/icomRadio.ts');
-const VS = read('src/services/vibeServer.ts');
+  + read('src/components/AntennaBandsEditor.tsx') + read('src/components/IcomSetupCard.tsx') + read('src/services/icomRadio.ts')
+  + read('src/components/RspSetupCard.tsx');
+const VS = read('src/services/vibeServer.ts') + read('src/services/rspCard.ts');
 const BOOT = read('android/app/src/main/java/com/vibesdr/app/VibeServerBoot.kt');
 const KT = BOOT + read('android/app/src/main/java/com/vibesdr/app/VibeIcom.kt');
 let pass = 0, fail = 0;
@@ -37,12 +38,10 @@ const TABLE = [
   N(['radioPin', 'radioPinClear'], 'a per-radio PIN on a multi-radio box — the phone has the server PIN (PIN — WHO MAY CONNECT)'),
   N(['releaseWhenIdle'], '"Let another program use this radio" — on Android no other program can take a USB radio the app holds, so it would be a dead control'),
   N(['usrpRxBw', 'usrpImgName', 'usrpImgFile'], 'USRP — UHD is not built for Android (usrp_source.cpp is not in the app\'s CMakeLists); no USRP can be served from a phone'),
-  N(['swYes', 'swNo', 'swBroker', 'swUser', 'swPass', 'swLocked'], 'the external antenna switch — ANT_SWITCH_SETUP is false on Android (V11 decision, Stuart 2026-10-10); a configured switch still works'),
+  // ★ the external antenna switch: ported (components/AntennaSwitchSetup) behind the SAME gate as the Setup page's
+  //   (SW_SETUP there, ANT_SWITCH_SETUP here — both false since V11, Stuart 2026-10-10; a configured switch still shows)
+  P(['swYes', 'swNo', 'swBroker', 'swUser', 'swPass', 'swLocked'], 'AntennaSwitchSetup', 'antennaSwitch'),
   N(['icomPort', 'icomTtyOk', 'icomAudio'], 'an Icom\'s serial port, tty permission and audio device are Linux\'s; Android finds the Icom on USB and its audio itself (ICOM_PHONE_KEYS)'),
-  // ── pre-V12 SDRplay card (an RSP on Android runs on the engine\'s defaults for these); not in this V12 parity pass ──
-  N(['rfNotch', 'dabNotch', 'rspAmNotch', 'rspHdr', 'rspExtRef', 'rspDabDecim', 'rfAgc', 'autoNotch', 'userNotch',
-     'dabAgcOverride', 'dabAgcTarget', 'agcSet', 'agcSetLock', 'ppb', 'antennaPortLocked', 'antennaMap'],
-    'GAP (pre-V12): the Setup page\'s SDRplay card never reached the phone; the engine\'s defaults apply. Listed in docs/v12/ANDROID-SETTINGS-PARITY.md as left'),
 
   // ── SERVER ──
   P(['mdns', 'name'], 'K.advertise'),
@@ -92,8 +91,22 @@ const TABLE = [
   P(['idleGrace'], 'Power down the radio', 'idleGraceSec'),
   // ── ★★★ V12 BACKGROUND DECODING (the reason this test exists) ──
   P(['bgOn', 'bgWait', 'bgKeepInRange'], 'Background Decoding', 'bgDecode'),
-  P(['rspVibeAgc'], 'VIBEAGC (SDRPLAY)', 'rspVibeAgc'),
+  P(['rspVibeAgc'], 'VibeAGC (SDRplay)', 'rspVibeAgc'),
   P(['nbWide'], 'IMPULSE NOISE BLANKER', 'nbWide'),
+  // ── the SDRplay card (Stuart 2026-11-04: "all the ones currently in Linux go to android") and the HF+ calibration ──
+  P(['rfNotch'], 'Broadcast notch', 'rfNotch'),
+  P(['dabNotch'], 'DAB notch', 'dabNotch'),
+  P(['rspAmNotch'], 'AM broadcast notch (RSPduo)', 'rspAmNotch'),
+  P(['rspHdr'], 'HDR mode below 2 MHz (RSPdx family)', 'rspHdr'),
+  P(['rspExtRef'], '24 MHz reference output (RSP2, RSPduo)', 'rspExtRef'),
+  P(['rspDabDecim'], 'decimation (flat ensemble)', 'rspDabDecim'),
+  P(['rfAgc'], 'Automatic RF gain', 'rfAgc'),
+  P(['autoNotch'], 'Automatic notch filtering', 'autoNotch'),
+  P(['userNotch'], 'Let listeners toggle the notches', 'userNotch'),
+  P(['dabAgcOverride', 'dabAgcTarget'], 'Use a separate IF AGC target for DAB', 'dabAgcTarget'),
+  P(['agcSet', 'agcSetLock'], 'Lock the AGC target', 'agcSetLock'),
+  P(['antennaMap', 'antennaPortLocked'], 'Switch aerial by band', { sent: 'antennaLocked: live.current.rspCard.antennaPortLocked', applied: 'cfg.s("antennaMap")' }),
+  P(['ppb'], 'CALIBRATION (PPB)', 'ppb'),
 ];
 
 console.log('Android server screen ↔ the Setup page\'s settings');
@@ -149,6 +162,16 @@ ok(/@ReactMethod\s+fun dabBandScanStart/.test(MOD) && /@ReactMethod\s+fun dabBan
 ok(/\/vibeserver\/dab-bandscan/.test(MOD) && /privateScanConfig\(owner\)/.test(MOD.slice(MOD.indexOf('fun dabBandScanStart'))),
    'the band scan is the ENGINE\'s (GET /vibeserver/dab-bandscan), on the owner\'s radio in a private engine when stopped');
 ok(/bandScanRef\.current\) \{\s*Alert\.alert\('A DAB scan is running'/.test(S0), 'Start waits for (or cancels) a running band scan');
+// ── 5b. the SDRplay card: only for an RSP, each row only where its model has it, applied through one JNI call ──
+ok(/radio\?\.driver === 'sdrplay' && \(<>\s*<Text[^>]*>SDRPLAY<\/Text>/.test(S0), 'the SDRplay card is drawn only for an RSP');
+const RC = read('src/components/RspSetupCard.tsx');
+ok(/caps\.hdr && /.test(RC) && /caps\.amNotch && /.test(RC) && /caps\.extRef && /.test(RC) && /caps\.rfNotch && /.test(RC) && /caps\.dabNotch && /.test(RC),
+   'each model-only row is gated on the radio\'s capabilities (rspCaps)');
+ok(/rspCaps\(/.test(S0) && /caps\.driver === 'sdrplay'/.test(S0), 'the capabilities come from hwinfo (remembered from serving), else the model');
+ok(JNI.includes('nativeSetRspFrontEnd') && JNI.includes('nativeSetAhfPpb') && /VibeLocalSDR\.setRspFrontEnd\(/.test(BOOT) && /VibeLocalSDR\.setAhfPpb\(/.test(BOOT),
+   'VibeServerBoot applies the card and the HF+ ppb through JNI on every start');
+ok(!TABLE.some((r) => r.status === 'not' && /GAP/.test(r.why)), 'no GAP rows left in the table — every row is ported or cannot work on Android');
+
 // ── 6. numbers from the app's map are read as numbers (toHashMap gives Doubles; optString(1.0) is "1.0") ──
 ok(!/cfg\.s\("[A-Za-z]+"\)\.toIntOrNull\(\)/.test(BOOT), 'VibeServerBoot never reads a number through optString().toIntOrNull()');
 
