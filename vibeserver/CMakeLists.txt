@@ -1020,6 +1020,16 @@ target_include_directories(test-spec-governor PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-spec-governor)
 target_link_libraries(test-spec-governor PRIVATE Threads::Threads)
 add_test(NAME spec-governor COMMAND test-spec-governor)
+# ★★ V12 THE IDLE DX SCANNER (vibe_dxscan.h): the log's rules (confirmation, Local/DX/Suspect, openings, bootstrap, the
+#    resume cursor, caps, the file) — and its FM hop (vibe_dxscan_fm.h): several RDS stations from one wide capture.
+add_executable(test-dxscan "${CMAKE_CURRENT_SOURCE_DIR}/test-dxscan.cpp")
+target_include_directories(test-dxscan PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-dxscan)
+add_test(NAME dxscan COMMAND test-dxscan)
+add_executable(test-dxscan-fm "${CMAKE_CURRENT_SOURCE_DIR}/test-dxscan-fm.cpp")
+target_include_directories(test-dxscan-fm PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
+target_link_libraries(test-dxscan-fm PRIVATE vibedsp Threads::Threads)
+add_test(NAME dxscan-fm COMMAND test-dxscan-fm)
 # ★ The POWER card's verdict (vibe_power.h): brief supply dips amber, sustained / continuous / USB loss red.
 add_executable(test-power-dips "${CMAKE_CURRENT_SOURCE_DIR}/test-power-dips.cpp")
 target_include_directories(test-power-dips PRIVATE "${CPP_DIR}")

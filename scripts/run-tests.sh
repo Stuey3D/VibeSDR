@@ -60,6 +60,10 @@ flags_for() {
     # ★★★ Our own gain step through the real chain (2026-10-19): the smoother + the pipeline's guard,
     #     every case run with and without the step on the same noise seed. Optimised: ~30 runs of 8 s.
     test-gain-step|test-rsp-vibeagc) echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★ V12 THE IDLE DX SCANNER: the log's rules (header-only) and its FM hop — several RDS stations from one wide
+    #    capture, decoded across worker threads (vibe_dxscan_fm.h). Optimised: ~25 s of 2.4 MS/s capture is synthesised.
+    test-dxscan)    echo "-O1" ;;
+    test-dxscan-fm) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ A cost RATIO: optimised like the shipping build, or the idle side is all loop overhead.
     test-gain-step-cost)   echo "-O2" ;;
     # ★ The Advanced RDS instrument (MpxMeasure) against a signal of known deviation, at several
@@ -223,6 +227,7 @@ flags_for() {
 deps_for() {
   case "$1" in
     test-wspr)          echo "android/app/src/main/cpp/decoders/digimodes/wspr_decoder.cpp $VDSP/third_party/pffft/pffft.c" ;;
+    test-dxscan-fm)     echo "$VDSP/fft.cpp $VDSP/channelizer.cpp $VDSP/ddc.cpp $VDSP/stereo.cpp $VDSP/rds.cpp" ;;   # ★ kiss + pffft: cobjs_for
     test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
@@ -382,7 +387,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-drm|test-drm-faad|test-drm-signal|test-tone-id|test-textmodes|test-feld-hell)
+    test-ndb|test-drm|test-drm-faad|test-drm-signal|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
