@@ -177,7 +177,7 @@ flags_for() {
     # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
     #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
     #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
-    test-ndb)              echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
+    test-ndb|test-ndb-suspect) echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
     # ★★ V12 DRM (decoders/drm/, docs/v12/DRM.md): the standard's tables, the coding layer, the test transmitter through annex
     #    B's channels in every robustness mode (every frame byte-checked), ±1.2 kHz / ±30 ppm, 10 min of noise + an AM signal =
     #    nothing, the audio framing, a CPU row. VIBE_TEST_AUDIO adds RRI off air (drm/). Optimised: ~2 min.
@@ -365,7 +365,7 @@ deps_for() {
     test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;
     test-drm-xaac) echo "$XAAC_LIB" ;;   # ★ after the source, like FAAD2   # ★ pffft + kiss from cobjs_for
     test-dab-faad|test-dab-faad-queue) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
-    test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
+    test-ndb|test-ndb-suspect) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
     *)                  echo "" ;;
   esac
@@ -385,7 +385,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-drm|test-drm-faad|test-drm-signal|test-tone-id|test-textmodes|test-feld-hell)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-tone-id|test-textmodes|test-feld-hell)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"

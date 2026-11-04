@@ -165,11 +165,13 @@ public:
         if (r.first == 0) { r.first = t; newBeacon_ = true; }
         r.last = t; r.ident = b.ident; r.hz = b.hz; r.best = r.first == t ? b.snrDb : std::max(r.best, b.snrDb);
         if (b.listed) { r.listed = true; r.name = b.name; r.cc = b.cc; r.km = b.km; r.deg = b.deg; r.lat = b.lat; r.lon = b.lon; }
+        r.unlikely = b.unlikely; r.sus = susText(b); r.susLat = b.susLat; r.susLon = b.susLon;
         dirty_ = true;
         // ★★ …and the hour's card and the last 10 minutes (the FT8 summary's two cards, V12 2026-10-27)
         closeHourIfDue(t);
         Heard h; h.key = key; h.ident = b.ident; h.hz = b.hz; h.snr = b.snrDb; h.t = t;
         if (b.listed) { h.listed = true; h.name = b.name; h.cc = b.cc; h.km = b.km; h.deg = b.deg; }
+        h.unlikely = b.unlikely; h.sus = susText(b);
         HourRow& hr = hour_[key];
         if (hr.n == 0) { hr.first = t; hr.best = h.snr; }
         hr.info = h; hr.best = std::max(hr.best, h.snr); hr.last = t; ++hr.n;
@@ -215,7 +217,22 @@ public:
     std::string mapPng() const { std::lock_guard<std::mutex> lk(m_); return renderMap(now()); }
 
 private:
-    struct Row { std::string ident, name, cc; bool listed = false; double hz = 0, km = -1, deg = 0, lat = NAN, lon = NAN; float best = -99; int64_t first = 0, last = 0; };
+    struct Row { std::string ident, name, cc; bool listed = false; double hz = 0, km = -1, deg = 0, lat = NAN, lon = NAN; float best = -99; int64_t first = 0, last = 0;
+                 std::string unlikely, sus; double susLat = NAN, susLon = NAN; };
+    /** ★★ V12 2026-11-04 — the beacon line's station field (vibe_ndb_suspect.h): the published name; a listed match
+     *  that is probably wrong says so; an unlisted one carries its "suspected …" clue, never as fact. ★ No " · " in
+     *  here: it is the card's field separator (restore() splits on it). */
+    static std::string susText(const vibendb::HeardBeacon& b) {
+        if (b.listed || b.susIcao.empty()) return std::string();
+        std::string why = b.susWhy;
+        for (size_t p; (p = why.find(kDot)) != std::string::npos;) why.replace(p, std::strlen(kDot), ", ");
+        return "suspected " + b.susName + " (" + b.susIcao + "), unconfirmed: " + why;
+    }
+    static std::string station(const std::string& name, bool listed, const std::string& unlikely, const std::string& sus) {
+        if (!name.empty()) return unlikely.empty() ? name : name + " (unlikely: " + unlikely + ")";
+        if (listed) return "(published, no name)";
+        return sus.empty() ? std::string("(not in the published list)") : "(not in the published list) " + sus;
+    }
     int64_t now() const { return o_.clock ? o_.clock() : gallery::nowUtc(); }
     std::string date(int64_t day) const { return gallery::utcStamp(day * 86400, "%Y-%m-%d"); }
     gallery::Meta meta(const std::string& slot) const {
@@ -244,7 +261,7 @@ private:
         std::sort(v.begin(), v.end(), [](const Row* a, const Row* b) { return a->last != b->last ? a->last > b->last : a->ident < b->ident; });
         return v;
     }
-    const Row* furthest() const { const Row* f = nullptr; for (const auto& kv : rows_) if (kv.second.km >= 0 && (!f || kv.second.km > f->km)) f = &kv.second; return f; }
+    const Row* furthest() const { const Row* f = nullptr; for (const auto& kv : rows_) if (kv.second.km >= 0 && kv.second.unlikely.empty() && (!f || kv.second.km > f->km)) f = &kv.second; return f; }
     std::string title() const {
         std::string t = "NDB" + std::string(kDot) + date(day_) + kDot + std::to_string(rows_.size()) + (rows_.size() == 1 ? " beacon heard" : " beacons heard");
         if (const Row* f = furthest()) { char b[96]; std::snprintf(b, sizeof b, "%sfurthest %s %.0f km", kDot, f->ident.c_str(), f->km); t += b; }
@@ -259,12 +276,12 @@ private:
         if (const Row* f = furthest()) { char b[160]; std::snprintf(b, sizeof b, "%sfurthest: %s %s %.0f km", kDot, f->ident.c_str(), f->name.c_str(), f->km); o += b; }
         o += "\n\nEach beacon, most recently heard first (last heard \xc2\xb7 first heard \xc2\xb7 ident \xc2\xb7 kHz \xc2\xb7 best SNR \xc2\xb7 distance \xc2\xb7 bearing \xc2\xb7 country \xc2\xb7 station):\n";
         for (const Row* r : byLast()) {
-            char b[400];
+            char b[900];
             std::string dist = r->km >= 0 ? std::to_string((long long)std::lround(r->km)) + " km" : std::string("-");
             std::string brg = r->km >= 0 ? std::to_string((long long)std::lround(r->deg)) + "\xc2\xb0 " + vibendb::compass(r->deg) : std::string("-");
             std::snprintf(b, sizeof b, "%s%s%s%s%s%s%.3f kHz%s%.0f dB%s%s%s%s%s%s%s%s", gallery::utcStamp(r->last, "%H:%M:%S").c_str(), kDot,
                           gallery::utcStamp(r->first, "%H:%M:%S").c_str(), kDot, r->ident.c_str(), kDot, r->hz / 1e3, kDot, r->best, kDot,
-                          dist.c_str(), kDot, brg.c_str(), kDot, r->cc.empty() ? "-" : r->cc.c_str(), kDot, !r->name.empty() ? r->name.c_str() : r->listed ? "(published, no name)" : "(not in the published list)");
+                          dist.c_str(), kDot, brg.c_str(), kDot, r->cc.empty() ? "-" : r->cc.c_str(), kDot, station(r->name, r->listed, r->unlikely, r->sus).c_str());
             o += b; o += "\n";
         }
         return o;
@@ -289,6 +306,7 @@ private:
             if (f[5] != "-") { r.km = std::atof(f[5].c_str()); r.deg = std::atof(f[6].c_str()); }
             r.cc = f[7] == "-" ? std::string() : f[7];
             r.name = f[8].rfind("(not in", 0) == 0 ? std::string() : f[8];
+            { const size_t u = r.name.find(" (unlikely: "); if (u != std::string::npos) { r.unlikely = r.name.substr(u + 12, r.name.size() - u - 13); r.name.resize(u); } }
             // ★ the position comes back from the published list (the card does not carry it)
             for (const auto& n : vibendb::onFrequency(r.hz)) if (n.ident() == r.ident) { r.lat = n.lat(); r.lon = n.lon(); break; }
             rows_[r.ident + "@" + std::to_string((long long)std::lround(r.hz / 500.0))] = r;
@@ -325,7 +343,7 @@ private:
         const int W = 960, H = 720;
         Canvas c(W, H, 12, 16, 22);
         double far = 150;
-        for (const auto& kv : rows_) if (kv.second.km > far) far = kv.second.km;
+        for (const auto& kv : rows_) if (kv.second.unlikely.empty() && kv.second.km > far) far = kv.second.km;
         const double R = std::min(W, H) * 0.44, k = R / (far * 1.08);
         const double cx = W / 2.0, cy = H / 2.0 + 10;
         auto toPx = [&](double lat, double lon, double& x, double& y) { double ex, ny; project(o_.lat, o_.lon, lat, lon, ex, ny); x = cx + ex * k; y = cy - ny * k; };
@@ -354,6 +372,13 @@ private:
         // the beacons
         for (const auto& kv : rows_) {
             const Row& r = kv.second;
+            if (!r.unlikely.empty()) continue;   // ★ probably not that beacon: no dot
+            if (!r.sus.empty() && std::isfinite(r.susLat) && std::isfinite(r.susLon) && !std::isfinite(r.lat)) {
+                double x, y; toPx(r.susLat, r.susLon, x, y);
+                for (int i = 0; i < 48; ++i) { const double a = i * M_PI / 24; c.dot((int)std::lround(x + 5 * std::cos(a)), (int)std::lround(y + 5 * std::sin(a)), 150, 190, 230); }
+                c.text((int)std::lround(x) + 8, (int)std::lround(y) - 3, r.ident + "?", 150, 190, 230);
+                continue;
+            }
             if (!std::isfinite(r.lat) || !std::isfinite(r.lon)) continue;
             double x, y; toPx(r.lat, r.lon, x, y);
             c.line(cx, cy, x, y, 90, 70, 20);
@@ -369,17 +394,17 @@ private:
     // ── ★★ the hour's card and the last 10 minutes (V12 2026-10-27) ──────────────────────────────────────────────────
     /** One heard() — what the cards need of it, copied (the day's rows are cleared at midnight; an hour or a window is
      *  not cut there). */
-    struct Heard { std::string key, ident, name, cc; bool listed = false; double hz = 0, km = -1, deg = 0; float snr = 0; int64_t t = 0; };
+    struct Heard { std::string key, ident, name, cc, unlikely, sus; bool listed = false; double hz = 0, km = -1, deg = 0; float snr = 0; int64_t t = 0; };
     struct HourRow { Heard info; float best = -99; int n = 0; int64_t first = 0, last = 0; };
     /** One beacon's line on a summary card: ident · kHz · heard N min · best SNR · distance · bearing · country · station. */
     static std::string line(const HourRow& r) {
-        char b[400];
+        char b[900];
         const Heard& h = r.info;
         const std::string dist = h.km >= 0 ? std::to_string((long long)std::lround(h.km)) + " km" : std::string("-");
         const std::string brg = h.km >= 0 ? std::to_string((long long)std::lround(h.deg)) + "\xc2\xb0 " + vibendb::compass(h.deg) : std::string("-");
         std::snprintf(b, sizeof b, "%-6s%s%.3f kHz%sheard %d min%sbest %.0f dB%s%s%s%s%s%s%s%s", h.ident.c_str(), kDot, h.hz / 1e3, kDot, r.n, kDot,
                       r.best, kDot, dist.c_str(), kDot, brg.c_str(), kDot, h.cc.empty() ? "-" : h.cc.c_str(), kDot,
-                      !h.name.empty() ? h.name.c_str() : h.listed ? "(published, no name)" : "(not in the published list)");
+                      station(h.name, h.listed, h.unlikely, h.sus).c_str());
         return b;
     }
     /** The figures and the list for a set of beacons (an hour's, or the window's). */
@@ -387,7 +412,7 @@ private:
         std::string o;
         const HourRow* far = nullptr; const HourRow* best = nullptr;
         for (const auto& kv : rows) {
-            if (kv.second.info.km >= 0 && (!far || kv.second.info.km > far->info.km)) far = &kv.second;
+            if (kv.second.info.km >= 0 && kv.second.info.unlikely.empty() && (!far || kv.second.info.km > far->info.km)) far = &kv.second;
             if (!best || kv.second.best > best->best) best = &kv.second;
         }
         char b[300];
@@ -405,7 +430,7 @@ private:
     static std::string headline(const std::map<std::string, HourRow>& rows) {
         const HourRow* far = nullptr; const HourRow* best = nullptr;
         for (const auto& kv : rows) {
-            if (kv.second.info.km >= 0 && (!far || kv.second.info.km > far->info.km)) far = &kv.second;
+            if (kv.second.info.km >= 0 && kv.second.info.unlikely.empty() && (!far || kv.second.info.km > far->info.km)) far = &kv.second;
             if (!best || kv.second.best > best->best) best = &kv.second;
         }
         std::string t = std::to_string(rows.size()) + (rows.size() == 1 ? " beacon" : " beacons");
