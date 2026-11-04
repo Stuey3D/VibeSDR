@@ -18348,7 +18348,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "tune" || type == "mode" || type == "bandwidth") {
             if (!mayTune) { refuse(kFollow); sendConfig(sock); return true; }
             const std::string cm = jsonStr(msg, "mode");
-            if (!cm.empty() && cm != "dab") {
+            /* ★★★ A TUNE'S MODE IS APPLIED TO AN ICOM ONLY WHEN IT IS A CHOICE (2026-11-04, Saber's IC-7300: "AM sounds like
+             *  LSB"). Every step's tune carries the page's mode, and a page whose mode was stale switched the RADIO back with
+             *  each step. A beta64+ client marks a chosen mode {"modeSet":1} (the mode menu, a bookmark); a {"type":"mode"}
+             *  message is always a choice. An older client's tune-borne mode is ignored on an Icom (it can still use the
+             *  radio's own mode keys, icom_control) — the cost Stuart accepted: its bookmark jumps keep the radio's mode. */
+            double modeSetV = 0; jsonNum(msg, "modeSet", modeSetV);
+            const bool modeChosen = type == "mode" || modeSetV != 0;
+            if (!cm.empty() && cm != "dab" && modeChosen) {
                 const std::string im = clientToIcomMode(cm);
                 std::string curClient; { std::lock_guard<std::recursive_mutex> lk(modeMtx); curClient = mode; }
                 // ★ A tune that merely restates the mode the client already mirrors is not a mode change —

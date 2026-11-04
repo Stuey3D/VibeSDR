@@ -764,6 +764,10 @@ export abstract class VibeServerWsClient {
       if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
     }
     this._routeTune(this.status.frequency, mode);   // ★ one route — see _routeTune
+    // ★★ An Icom applies a tune-borne mode only when it is marked a choice (local_sdr_shim icomControl, 2026-11-04) — the
+    //    native tune carries no mark, so the CHOICE goes as its own {type:"mode"} (always a choice): a step's echo of a
+    //    mode can then never switch the radio, and the mode menu / a bookmark still does.
+    if (this.icom) this.sendSpectrum({ type: 'mode', mode });
   }
 
   setBandwidth(low: number, high: number) {

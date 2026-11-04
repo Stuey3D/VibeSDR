@@ -153,6 +153,20 @@ try {
   console.log('   tuning follows the ordinary dial rules; the power keys are the owner\'s');
   a.send({ type: 'tune', frequency: 7050000, mode: 'usb' });
   ok(await until(async () => (await stats()).freq === 7050000, 3000), "★ a listener (not admin) tunes the radio — like any other radio");
+  // ★★★ 2026-11-04 (Saber's IC-7300: "AM sounds like LSB"): a tune's mode reaches the radio only when it is a CHOICE.
+  {
+    const m0 = (await stats()).mode;
+    a.send({ type: 'tune', frequency: 7051000, mode: m0 === 2 ? 'usb' : 'am' });     // a STEP's echo of a (stale) mode
+    ok(await until(async () => (await stats()).freq === 7051000, 3000), '  a step without modeSet still tunes the radio');
+    await sleep(800);
+    ok((await stats()).mode === m0, `★ …and does NOT switch its mode (stayed ${m0}) — an old page's stale mode cannot flip it`);
+    a.send({ type: 'tune', frequency: 7051000, mode: 'am', modeSet: 1 });           // the mode menu / a bookmark (beta64 client)
+    ok(await until(async () => (await stats()).mode === 2, 3000), '★ a tune marked modeSet changes the mode (AM)');
+    a.send({ type: 'mode', mode: 'usb' });                                           // an explicit mode message is always a choice
+    ok(await until(async () => (await stats()).mode === 1, 3000), '★ a {type:"mode"} message changes the mode (USB)');
+    a.send({ type: 'tune', frequency: 7050000 });
+    await until(async () => (await stats()).freq === 7050000, 3000);
+  }
   a.send({ type: 'icom_power', action: 'off' });
   await sleep(800);
   let st = await stats();

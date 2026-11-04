@@ -919,7 +919,7 @@ export class SpectrumClient {
                    bandwidthLow: o.bandwidthLow, bandwidthHigh: o.bandwidthHigh });
     } else if (newMode) {
       // ★ as setMode: the shim ignores bandwidth fields on a tune that also changes mode — mode, then bandwidth
-      this._send({ type: 'tune', frequency: o.frequency, mode: o.mode });
+      this._send({ type: 'tune', frequency: o.frequency, mode: o.mode, modeSet: 1 });
       this._send({ type: 'bandwidth', bandwidthLow: o.bandwidthLow, bandwidthHigh: o.bandwidthHigh });
     } else this._send({ type: 'tune', frequency: o.frequency, mode: o.mode });
     this.cb.onWatch?.();
@@ -2094,7 +2094,9 @@ export class SpectrumClient {
     if (bw) { this.bandwidthLow = bw[0]; this.bandwidthHigh = bw[1]; }
     // The shim IGNORES bandwidth fields on a tune that also changes mode
     // (local_sdr_shim.cpp:1529) — so send mode, then bandwidth separately.
-    this._send({ type: 'tune', frequency: this.frequency, mode });
+    // ★ modeSet: this tune's mode is a CHOICE (the mode menu, a bookmark) — an Icom server applies a tune's mode only then,
+    //   so a step's echo of a stale mode can never switch the radio (2026-11-04, Saber's IC-7300). Other servers ignore it.
+    this._send({ type: 'tune', frequency: this.frequency, mode, modeSet: 1 });
     this._send({ type: 'bandwidth', bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh });
   }
 
