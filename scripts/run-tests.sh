@@ -1069,6 +1069,9 @@ if npx tsx scripts/test_kb_handover.ts; then pass=$((pass+1)); else fail=$((fail
 if npx tsx scripts/test_kb_fonts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE BOOKMARK NAME, PRE-FILLED (decided 10-20): RDS name, then station name, then the frequency.
 if npx tsx scripts/test_bookmark_name.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ EDITING A BOOKMARK (V12, discussion #59): the shared form rules both clients use — frequency units, passband or the
+#    mode's default, "what I'm listening to now", the server edit query, an older server's left-behind row, your own list.
+if npx tsx scripts/test_bookmark_edit.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
@@ -1206,6 +1209,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     row, an old file loads as before, the file round-trips byte-identical, "Clear learned" takes scanned too. ~20 s.
 printf '\n\033[1m── scanned bookmarks: expiry, eviction, round trip (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-scanned.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12: EDIT A SERVER BOOKMARK (GitHub discussion #59): POST /bookmarks?was= — admin-only, in place and moved (one save),
+#    every refusal in words, learned → the owner's and NOT renamed by a later RDS learn (with a learning control). ~90 s.
+printf '\n\033[1m── server bookmark edit (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-edit.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12: THE DAB BAND SCAN (M7EIW, 2026-10-26) on the real server and the bench multiplex (played on 11D only): finds it,
 #     bookmarks every service, cancel/tune, shared radio refused in words, the owner's setup scan, and the re-learn-on-visit
