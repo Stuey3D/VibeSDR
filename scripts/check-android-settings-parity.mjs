@@ -162,8 +162,10 @@ ok(/!isIcom && !!bgCaps && \(/.test(S0), 'not drawn on an Icom, nor on an engine
 ok(/NativeModules as any\)\.VibeLocalSDR\b/.test(S0) && !/NativeModules as any\)\.VibeLocalSdrModule/.test(S0), 'the screen calls the native module by its real name, VibeLocalSDR');
 
 // ── 5. the owner's DAB band scan ("Scan all DAB blocks", a button — not an input, so not in the id table) ──
-ok(PAGE.includes('id="dabBandScan"') && S0.includes('Scan all DAB blocks') && S0.includes('Find the DAB multiplexes this aerial hears'),
-   'Scan all DAB blocks: on the server screen, in the Setup page\'s words');
+// ★ 2026-11-04 the Linux Setup page's scan moved to SERVER ADMIN → DAB SCAN (it ran only on an idle radio and failed
+//   "radio not running"); the page now points there. The Android server screen keeps its own — the radio is on the device.
+ok(!PAGE.includes('id="dabBandScan"') && PAGE.includes('DAB SCAN') && S0.includes('Scan all DAB blocks') && S0.includes('Find the DAB multiplexes this aerial hears'),
+   'Scan all DAB blocks: on the Android server screen; the Setup page points to SERVER ADMIN → DAB SCAN');
 ok(/@ReactMethod\s+fun dabBandScanStart/.test(MOD) && /@ReactMethod\s+fun dabBandScanState/.test(MOD) && /@ReactMethod\s+fun dabBandScanCancel/.test(MOD),
    'the bridge exports dabBandScanStart / State / Cancel (@ReactMethod)');
 ok(/\/vibeserver\/dab-bandscan/.test(MOD) && /privateScanConfig\(owner\)/.test(MOD.slice(MOD.indexOf('fun dabBandScanStart'))),

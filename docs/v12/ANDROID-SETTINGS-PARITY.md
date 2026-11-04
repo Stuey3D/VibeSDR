@@ -78,7 +78,7 @@ while the server is stopped, so "live" here is the next Start; the engine's tick
 | Locked range (centre, rate, users) | `lockedCentre`, `lockedRate`, `maxUsers` | ports (verified) | Background decoding follows it (never moves a locked radio). |
 | Chat / canned-chat translation | — | n/a | Not an owner setting on the Setup page. |
 | Landing message / link | `landingMessage…` | ports (verified) | |
-| **DAB band scan for the owner ("Scan all DAB blocks")** | — (bookmarks) | **ports** (this branch) | The engine's GET /vibeserver/dab-bandscan, on the running server or on the owner's radio in a private loopback engine (privateScanConfig) while the screen is up; progress, Cancel, each multiplex with its stations, "Use <block> as the landing block"; stations go to the bookmarks. Start waits for it. |
+| **DAB band scan for the owner ("Scan all DAB blocks")** — on Linux it moved from the Setup page to SERVER ADMIN → DAB SCAN (2026-11-04) | — (bookmarks) | **ports** (this branch) | The engine's GET /vibeserver/dab-bandscan, on the running server or on the owner's radio in a private loopback engine (privateScanConfig) while the screen is up; progress, Cancel, each multiplex with its stations, "Use <block> as the landing block"; stations go to the bookmarks. Start waits for it. |
 | Pause / remove a radio | (multi-radio) | not ported | A phone serves one radio; stopping the server is the pause. |
 
 ## Deliberately not ported (no dead controls — AGENTS.md)
