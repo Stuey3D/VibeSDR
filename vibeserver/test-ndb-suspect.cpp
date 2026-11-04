@@ -112,7 +112,7 @@ int main() {
         vibendb::ownerBeacons().resetForTest();
         // ★ the IS / Ishurdi shape: a listed beacon thousands of km away, heard all morning. (IS itself — all dots — is
         //   read as M by the synthetic bench's speed estimate, so a three-letter far one stands in; the real IS is in
-        //   the unit check above.) And NQY on 347.0 (unlisted), in a slice centred on 342.5 kHz.
+        //   the unit check above.) And NQY on 349.0 (unlisted there: our own list has Newquay's real NQY on 347.0 since 2026-11-04), in a slice centred on 342.5 kHz.
         const vibendb::NavaidRec* far = nullptr; double farKm = 0;
         for (size_t i = 0; i < vibendb::kNavaidCount && !far; ++i) {
             const auto& n = vibendb::kNavaids[i];
@@ -126,7 +126,7 @@ int main() {
         const std::string farName = vibendb::kNavaidNames + far->name;
         std::vector<Beacon> bs(2);
         bs[0].ident = far->ident; bs[0].offsetHz = far->hz - 342500.0; bs[0].snrDb = 8; bs[0].toneHz = 400;
-        bs[1].ident = "NQY"; bs[1].offsetHz = 347000 - 342500; bs[1].snrDb = 8; bs[1].toneHz = 400; bs[1].periodSec = 9;
+        bs[1].ident = "NQY"; bs[1].offsetHz = 349000 - 342500; bs[1].snrDb = 8; bs[1].toneHz = 400; bs[1].periodSec = 9;
         Rng rng(11); std::vector<cf> iq; synth(bs, 48000, 90, rng, iq);
         vibendb::Service s;
         int64_t clk = 1793786400;   // 2026-11-04 10:00 UTC — the sun up at the receiver
@@ -134,7 +134,7 @@ int main() {
         s.start(48000, 342500, 320000, 365000, true, kLat, kLon);
         s.stop();
         s.seedDayNightForTest(far->ident, far->hz, 45, 0);   // heard all morning
-        s.seedDayNightForTest("NQY", 347000, 30, 0);
+        s.seedDayNightForTest("NQY", 349000, 30, 0);
         for (size_t i = 0; i < iq.size(); i += 4800) { s.feedSliceForTest(iq.data() + i, (int)std::min<size_t>(4800, iq.size() - i), 48000, 342500); clk = 1793786400 + (int64_t)(i / 48000); }
         s.buildReportForTest();
         const std::string r = s.report();
@@ -152,10 +152,10 @@ int main() {
         const std::string dir = tmpdir("ndbsus");
         vibendb::ownerBeacons().setFile(dir + "/ndb-confirmed.json");
         std::string note;
-        ok(vibendb::ownerDecide("confirm", "NQY", 347001, "EGHQ", 1793786400, note).empty(), "the owner confirms NQY = EGHQ");
-        ok(note.find("CONFIRMED NQY 347.0 kHz = Cornwall Airport Newquay EGHQ") != std::string::npos && note.find("ndb-heard.json") != std::string::npos,
+        ok(vibendb::ownerDecide("confirm", "NQY", 349001, "EGHQ", 1793786400, note).empty(), "the owner confirms NQY = EGHQ");
+        ok(note.find("CONFIRMED NQY 349.0 kHz = Cornwall Airport Newquay EGHQ") != std::string::npos && note.find("ndb-heard.json") != std::string::npos,
            "the server-log line: " + note);
-        const auto m = vibendb::match(347002, "NQY", true, kLat, kLon);
+        const auto m = vibendb::match(349002, "NQY", true, kLat, kLon);
         ok(m.kind == vibendb::Match::Exact && m.n.owner() && m.n.source() == "confirmed by this server's owner" && m.km > 300 && m.km < 400,
            "NQY is now an Exact match, " + std::to_string((int)m.km) + " km, \"confirmed by this server's owner\"");
         clk += 60; s.buildReportForTest();
@@ -166,9 +166,9 @@ int main() {
         ok(ss.str().find("\"ident\":\"NQY\"") != std::string::npos && ss.str().find("\"airfield\":\"EGHQ\"") != std::string::npos, "written to ndb-confirmed.json");
         ok(std::ifstream(dir + "/ndb-confirmed.json.tmp").fail(), "…atomically (no .tmp left)");
         vibendb::ownerBeacons().resetForTest();
-        ok(vibendb::match(347002, "NQY", true, kLat, kLon).kind != vibendb::Match::Exact, "forgotten in memory…");
+        ok(vibendb::match(349002, "NQY", true, kLat, kLon).kind != vibendb::Match::Exact, "forgotten in memory…");
         vibendb::ownerBeacons().setFile(dir + "/ndb-confirmed.json");
-        ok(vibendb::match(347002, "NQY", true, kLat, kLon).kind == vibendb::Match::Exact, "…and read back from the file (a restart)");
+        ok(vibendb::match(349002, "NQY", true, kLat, kLon).kind == vibendb::Match::Exact, "…and read back from the file (a restart)");
         // reject: Southend is never suggested again for SND@362.5; the next airfield is
         ok(vibendb::ownerDecide("reject", "SND", 362500, "EGMC", 1793786400, note).empty() && note.find("REJECTED") != std::string::npos, "the owner rejects SND = EGMC");
         bool still = false; for (auto& x : vibendb::suspects("SND", 362500, true, kLat, kLon, byDay())) still |= x.icao() == "EGMC";
@@ -177,9 +177,9 @@ int main() {
         ok(other, "…but still is for SND on another frequency");
         ok(vibendb::ownerDecide("forget", "SND", 362500, "", 0, note).empty(), "forget undoes it");
         // bad input is refused
-        ok(!vibendb::ownerDecide("confirm", "NQY", 347000, "ZZZZ", 0, note).empty(), "an unknown airfield is refused");
+        ok(!vibendb::ownerDecide("confirm", "NQY", 349000, "ZZZZ", 0, note).empty(), "an unknown airfield is refused");
         ok(!vibendb::ownerDecide("confirm", "NQY", 5000000, "EGHQ", 0, note).empty(), "a frequency outside 150–1750 kHz is refused");
-        ok(!vibendb::ownerDecide("delete-all", "NQY", 347000, "EGHQ", 0, note).empty(), "an unknown action is refused");
+        ok(!vibendb::ownerDecide("delete-all", "NQY", 349000, "EGHQ", 0, note).empty(), "an unknown action is refused");
         vibendb::ownerBeacons().resetForTest();
         std::string cmd = "rm -rf '" + dir + "'"; if (std::system(cmd.c_str()) != 0) std::printf("  (could not remove %s)\n", dir.c_str());
     }
@@ -198,8 +198,8 @@ int main() {
             vibendb::HeardBeacon i; i.ident = "IS"; i.hz = 349970; i.snrDb = 4; i.listed = true; i.name = "Ishurdi"; i.cc = "BD";
             i.lat = 24.15; i.lon = 89.05; i.km = 7901; i.deg = 75; i.unlikely = vibendb::unlikelyWhy(7901, byDay());
             d.heard(i, clk);
-            vibendb::HeardBeacon n; n.ident = "NQY"; n.hz = 347000; n.snrDb = 9;
-            const auto sv = vibendb::suspects("NQY", 347000, true, kLat, kLon, byDay());
+            vibendb::HeardBeacon n; n.ident = "NQY"; n.hz = 349000; n.snrDb = 9;
+            const auto sv = vibendb::suspects("NQY", 349000, true, kLat, kLon, byDay());
             n.susIcao = sv.front().icao(); n.susName = sv.front().name(); n.susWhy = sv.front().why; n.susKm = sv.front().km; n.susLat = sv.front().a->lat; n.susLon = sv.front().a->lon;
             d.heard(n, clk);
             clk += 120; d.tick();
