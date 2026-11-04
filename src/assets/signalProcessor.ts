@@ -109,6 +109,11 @@ export interface SignalProcessorSettings {
    *  floor, and 30 left a weak multiplex looking like noise floor (Stuart, 2026-09-10, 7D at
    *  -58 in a -35…-65 window: "a user may skip past it"). DAB sets 15. */
   minRangeDb:      number;
+  /** ★★ A SCOPE THAT CLIPS ITS OWN FLOOR (an Icom: the radio sends levels only inside its REF window; everything
+   *  below REF arrives as 0, which the server writes as exactly this dB). Bins at or below it are kept OUT of the
+   *  auto-range statistics, like the no-data marker — otherwise the 10th percentile IS the clip, the floor sits on
+   *  it and the waterfall is black. Still drawn (as the floor). null = every other radio: no test at all. */
+  clipFloorDb:     number | null;
   /** Manual range override (wfCoarse='manual'). When set, auto-range is bypassed. */
   manualRange:     { minDb: number; maxDb: number } | null;
   /** −20…+20 dB offset applied to the spectrum trace floor (not waterfall). */
@@ -136,6 +141,7 @@ export interface SignalProcessorSettings {
 export const DEFAULT_PROCESSOR_SETTINGS: SignalProcessorSettings = {
   autoContrast:    5,       // 10 (UberSDR's value) crushes the floor — too dark
   minRangeDb:      MIN_RANGE_DB,
+  clipFloorDb:     null,
   manualRange:     null,
   specFloor:       0,
   specPeakScale:   10,
@@ -223,7 +229,7 @@ export class SignalProcessor {
   /** Patch settings. Range-affecting changes flush history (matches v1.5). */
   applySettings(patch: Partial<SignalProcessorSettings>) {
     const rangeKeys: Array<keyof SignalProcessorSettings> =
-      ['autoContrast', 'manualRange', 'wfBrightness', 'wfContrast', 'wfSharpness', 'minRangeDb'];
+      ['autoContrast', 'manualRange', 'wfBrightness', 'wfContrast', 'wfSharpness', 'minRangeDb', 'clipFloorDb'];
     const rangeChanged = rangeKeys.some(
       k => patch[k] !== undefined && patch[k] !== this.settings[k],
     );
@@ -382,6 +388,9 @@ export class SignalProcessor {
       // cannot exclude itself down to nothing.
       let edge = Math.floor(n * EDGE_EXCLUDE_FRAC);
       if (n - 2 * edge < 16) edge = 0;
+      // ★ An Icom's clipped floor (clipFloorDb) is excluded as a marker is; +0.5 dB for the wire's whole-dB bytes.
+      //   -Infinity on every other radio, so the test below is never true and nothing else changes.
+      const clipAt = s.clipFloorDb == null ? -Infinity : s.clipFloorDb + 0.5;
       for (let i = edge; i < n - edge; i++) {
         const db = src[i];
         if (!isFinite(db)) continue;
@@ -394,7 +403,7 @@ export class SignalProcessor {
         //     edge "effecting the auto contrast").
         //   ★ Tested against the RAW bin, not `src` — `src` is the EMA-smoothed copy, and a bin
         //     that has just gone out of band is somewhere mid-slide between the two.
-        if (bins[i] <= NO_DATA_DBFS) continue;
+        if (bins[i] <= NO_DATA_DBFS || bins[i] <= clipAt) continue;
         count++;
         if (db > absoluteMax) absoluteMax = db;
         let b = (db + 280) | 0; // -280..+19 dB → bucket 0..299

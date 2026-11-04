@@ -57,7 +57,7 @@ import type { DabState } from './dabTypes';
 import { gapLogOn, jsMark, jsTimed } from '../utils/frameGapLog';
 import type { ShareOut } from './chatShare';
 import { isIcom, parseIcomRadio, parseIcomStatus, icomControlMsg, nearestSpanIndex, mergeIcomStatus, icomFollowNote,
-         type IcomRadio, type IcomControlFields } from './icomRadio';
+         icomClientMode, type IcomRadio, type IcomControlFields } from './icomRadio';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzipToStringCapped } from '../utils/boundedInflate';   // ★ capped: a gzip bomb is dropped, not inflated
 import { VibePowerModule } from '../components/AudioPlayer';
@@ -751,6 +751,7 @@ export abstract class VibeServerWsClient {
     if (mode !== this.status.mode && this.askBlocked()) return;   // ★★ ask before tuning; a re-pick changes nothing
     const changed = mode !== this.status.mode;
     this.status.mode = mode;
+    this.lastLocalModeAt = Date.now();   // ★ an Icom's meter line must not undo this pick (onIcomStatus above)
     // ★ Ours, so the configs already on their way with the OLD mode are not adopted over it — see roomMode.
     this.lastLocalTuneAt = Date.now();
     // Server applies these defaults on every mode change (websocket.go —
@@ -1613,6 +1614,7 @@ export abstract class VibeServerWsClient {
   /** When this client last tuned itself — so the server's echo of our own tune is not mistaken
    *  for another listener moving a shared dial. */
   private lastLocalTuneAt = 0;
+  private lastLocalModeAt = 0;
   /** When this client last moved the passband itself — the same guard, for the room's passband. */
   private lastLocalBwAt = 0;
   /** The VFO the SERVER last told us it has us on (config.vfo). The only honest way to ask whether
@@ -2733,6 +2735,19 @@ export abstract class VibeServerWsClient {
       const st = parseIcomStatus(msg);
       if (st) {
         if (this.icom) this.icom = mergeIcomStatus(this.icom, st);   // ★ TX/link for the watchdog below
+        /* ★★★ OUR MODE FOLLOWS THE RADIO'S (2026-11-04, Saber's IC-7300 — the web client's icomRefresh has the
+         *  same rule). The config's mode is adopted only with a dial move or on a shared dial, so on a single-
+         *  listener Icom status.mode stayed stale: the passband was drawn for the wrong mode and the next step's
+         *  tune carried that stale mode, which the server applies — flipping the radio. Adopted, never sent.
+         *  ★ Not for 2 s after a pick of our own: the meter line (≤ 4/s) still carries the OLD mode until the
+         *    radio has answered, and adopting it would undo the pick. */
+        if (st.mode && Date.now() - this.lastLocalModeAt > 2000) {
+          const cm = icomClientMode(st.mode) as SDRMode;
+          if (cm !== this.status.mode && cm in MODE_BANDWIDTHS) {
+            this._adoptMode(cm);
+            this.callbacks.onStatus({ ...this.status });
+          }
+        }
         this.callbacks.onIcomStatus?.(st);
       }
       return;

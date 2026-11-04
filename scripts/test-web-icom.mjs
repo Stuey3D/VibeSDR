@@ -5,13 +5,21 @@
 //
 //   • the Icom panel is drawn from the radio's own lists; every IQ-side control is hidden (and comes back the moment
 //     the page is not on an Icom);
-//   • a LISTENER under the owner lock sees "Everyone hears what the radio is tuned to", the tuning controls disabled;
+//   • ONE LISTENER, NO TUNE LOCK (the default since a20a186f9): no banner, the controls live, a listener's tune reaches
+//     the radio; the page's mode FOLLOWS THE RADIO'S (a front-panel change, the landing's mode never imposed) and a step
+//     never sends a stale mode back (Saber's IC-7300, 2026-11-04: "AM sounds like LSB");
+//   • the tuning bar lays out whole (banner text, kHz, the mode key) at 2000×1300 and 390 px, banner or none;
+//   • the FREQUENCY AXIS: a carrier at a known frequency lands under the LISTEN line (±1 radio point), one 50 kHz away
+//     where it belongs — in CENTRE and FIXED scope mode; the waterfall keeps scrolling at the radio's ~4 sweeps/s;
+//   • auto contrast leaves the scope's below-REF clip out of its floor (clipFloorDb), only on an Icom;
+//   • a LISTENER under the tune lock (--icom-tune-lock) sees "Everyone hears what the radio is tuned to", the tuning controls disabled;
 //   • the signed-in ADMIN's mode, FIL, span (button and zoom key) and ATT changes REACH THE FAKE RADIO — checked on the
 //     fake's own counters, and the panel lights only from the radio's answer;
 //   • the S-meter is the radio's (S-units), the TX banner appears when the owner keys, no page exceptions;
 //   • phone width: no horizontal overflow; default/silver/black and transparency on/off: the panel stays legible.
 //
 // Usage: VIBESERVER_BIN=/path/to/vibeserver node scripts/test-web-icom.mjs   (fake-icom beside it; exit 3 = not run)
+//        SHOT_DIR=<dir> also writes screenshots of the tuning bar (2000×1300 and 390 px, both permission states).
 // ★ SILENT: --mute-audio --disable-audio-output, and the server's audio is a test tone to a socket.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -41,7 +49,8 @@ const ADMIN_PW = 'icom-admin-pass';
 // ★ No config file: a CONFIGURED one makes the binary the multi-radio front door on 48000 and drops --icom/--port.
 
 // ── the fake radio ──
-const fake = spawn(FAKE, ['--echo'], { stdio: ['pipe', 'pipe', 'pipe'] });
+// ★ ~4 sweeps a second, as Saber's real IC-7300 draws (beta63 status: 3.9 fps) — not the fake's flat-out rate.
+const fake = spawn(FAKE, ['--echo', '--fps', process.env.FAKE_FPS || '4'], { stdio: ['pipe', 'pipe', 'pipe'] });
 let fakeOut = '';
 fake.stdout.on('data', (d) => { fakeOut += d; }); fake.stderr.on('data', (d) => { fakeOut += d; });
 await until(() => /FAKE_ICOM_PTY (\S+)/.test(fakeOut), 3000);
@@ -57,9 +66,16 @@ const stats = async () => {
 // ── the server ──
 const port = await freePort(), proxyPort = await freePort(), cdp = await freePort();
 const log = fs.openSync(path.join(T, 'server.log'), 'w');
-const srv = spawn(BIN, ['--icom', pty, '--icom-tty-ok', '--icom-audio', 'tone', '--port', String(port), '--users', '4', '--idle-grace', '0', '--admin-pass', ADMIN_PW], {
-  env: { ...process.env, VIBESERVER_CONFIG: path.join(T, 'config.json'), VIBESERVER_DATA_DIR: path.join(T, 'data'), VIBESERVER_RUNTIME_DIR: path.join(T, 'run'), HOME: T },
-  stdio: ['ignore', log, log] });
+// ★ Started twice: first as Saber's box is set (one listener, no tune lock, a LANDING of 7.25 MHz AM — which must never
+//   reach an Icom's mode), then shared with the tune lock on, for the listener-follows-the-radio half.
+let srv = null;
+const startServer = async (extra) => {
+  if (srv) { srv.kill(); await new Promise((r) => { srv.once('exit', r); setTimeout(r, 4000); }); await sleep(500); }
+  srv = spawn(BIN, ['--icom', pty, '--icom-tty-ok', '--icom-audio', 'tone', '--port', String(port), '--idle-grace', '0', '--admin-pass', ADMIN_PW, ...extra], {
+    env: { ...process.env, VIBESERVER_CONFIG: path.join(T, 'config.json'), VIBESERVER_DATA_DIR: path.join(T, 'data'), VIBESERVER_RUNTIME_DIR: path.join(T, 'run'), HOME: T },
+    stdio: ['ignore', log, log] });
+  return until(async () => { try { return (await fetch(`http://127.0.0.1:${proxyPort}/vibeserver.json`)).ok; } catch { return false; } }, 15000);
+};
 
 // ── the proxy: THIS tree's page and scripts; everything else (APIs, WebSockets) to the server ──
 const MIME = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html; charset=utf-8' };
@@ -96,7 +112,7 @@ const br = spawn(BROWSER, ['--headless=new', '--mute-audio', '--disable-audio-ou
   '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
 
 async function cleanup() {
-  for (const p of [br, srv]) { try { p.kill(); } catch {} }
+  for (const p of [br, srv]) { try { p?.kill(); } catch {} }
   try { fake.stdin.write('quit\n'); } catch {}
   await sleep(400); try { fake.kill(); } catch {}
   proxy.close(); await sleep(300);
@@ -139,13 +155,128 @@ const HIDDEN_JS = `(sel) => { const els = Array.from(document.querySelectorAll(s
     if (['menu','audioPanel','decodersPanel','chatPanel'].includes(e.id)) return false;
     if (getComputedStyle(e).display === 'none') return true; } return false; }); }`;
 
+const SHOT_DIR = process.env.SHOT_DIR || '';
+const shot = async (p, name) => {
+  if (!SHOT_DIR) return;
+  fs.mkdirSync(SHOT_DIR, { recursive: true });
+  const r = await p.call('Page.captureScreenshot', { format: 'png' });
+  if (r.result?.data) fs.writeFileSync(path.join(SHOT_DIR, name + '.png'), Buffer.from(r.result.data, 'base64'));
+};
+const viewport = (p, width, height, mobile) => p.call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: mobile ? 2 : 1, mobile });
+/* ★★ THE TUNING BAR, WHOLE: the banner box not clipped (scrollWidth ≤ clientWidth), the frequency box not clipped and
+ *  holding its unit, the mode key drawn and inside the pill, everything inside the card. Saber's listener view had
+ *  "…NERS FOLLOW THE RADIO", "kH" and no mode key: the banner sat in the frequency row at 100 % width. */
+const BAR_JS = `(() => { const q = (id) => document.getElementById(id);
+  const R = (el) => el.getBoundingClientRect(); const pill = R(q('mPill'));
+  const inside = (el, box) => { const r = R(el); return r.width > 2 && r.left >= box.left - 1 && r.right <= box.right + 1; };
+  const sh = q('mShared'), fb = q('mFreqBox'), u = q('mUnit'), md = q('mMode');
+  const shown = (el) => el.getClientRects().length > 0 && getComputedStyle(el).display !== 'none';
+  return { banner: !sh.hidden, bannerText: sh.textContent, bannerClip: !sh.hidden && sh.scrollWidth > sh.clientWidth + 1,
+    bannerIn: sh.hidden || inside(sh, pill), freqClip: fb.scrollWidth > fb.clientWidth + 1, unit: u.textContent,
+    unitIn: inside(u, R(fb)) && inside(u, pill), freqIn: inside(fb, pill), mode: md.textContent.trim(), modeShown: shown(md) && inside(md, pill) }; })()`;
+const barOk = async (p, what) => {
+  const b = await p.js(BAR_JS);
+  ok(b && !b.bannerClip && b.bannerIn && !b.freqClip && b.freqIn && b.unitIn && b.modeShown && !!b.mode,
+     `${what}: the tuning bar is whole (${b ? `banner ${b.banner ? JSON.stringify(b.bannerText) : 'none'}${b.bannerClip ? ' CLIPPED' : ''}, freq ${b.freqClip || !b.freqIn ? 'CLIPPED' : 'ok'}, unit ${JSON.stringify(b.unit)}${b.unitIn ? '' : ' CUT'}, mode key ${b.modeShown ? JSON.stringify(b.mode) : 'MISSING'}` : 'no bar'})`);
+};
+// ★ The last SPEC row as the page received it: display bins low→high, the frame's own centre and width.
+const ROW_HOOK = `(() => { const w = window.__vibeWf(); if (!w || w.spec.__rowHook) return !!w; const cb = w.spec.cb, o = cb.onBins;
+  cb.onBins = (bins, c, bw) => { window.__row = { bins: Array.from(bins), c, bw, n: (window.__row?.n || 0) + 1 }; return o(bins, c, bw); };
+  w.spec.__rowHook = true; return true; })()`;
+/** The strongest display bin within ±win Hz of hz, as a frequency by the page's own mapping (bin i at c + (i − n/2)·bw/n). */
+const peakNear = (row, hz, win) => {
+  const n = row.bins.length, per = row.bw / n; let best = -1, bv = -Infinity;
+  for (let i = 0; i < n; i++) { const f = row.c + (i - n / 2) * per; if (Math.abs(f - hz) <= win && row.bins[i] > bv) { bv = row.bins[i]; best = i; } }
+  return best < 0 ? NaN : row.c + (best - n / 2) * per;
+};
+const freshRow = async (p, pred, ms = 8000) => {
+  const n0 = (await p.js(`window.__row?.n || 0`)) || 0;
+  const okRow = await until(async () => { const r = await p.js(`window.__row && window.__row.n > ${n0} + 2 ? window.__row : null`); return r && pred(r); }, ms);
+  return okRow ? p.js(`window.__row`) : null;
+};
+
 try {
   ok(!!pty, `the fake radio is on ${pty}`);
-  ok(await until(async () => { try { return (await fetch(`http://127.0.0.1:${proxyPort}/vibeserver.json`)).ok; } catch { return false; } }, 10000), 'server up, proxy serving this tree’s page');
+  ok(await startServer(['--users', '1', '--mode', 'am', '--freq', '7250000']), 'server up (one listener, landing 7.25 MHz AM), proxy serving this tree’s page');
   const p = await page();
 
-  // ════ 1. A LISTENER (owner lock ON by default) ════
-  console.log('── a listener ──');
+  // ════ 0. ONE LISTENER, NO TUNE LOCK — as Saber's box is set ════
+  console.log('── one listener, no tune lock (the default) ──');
+  await viewport(p, 2000, 1300, false);
+  await go(p, `http://127.0.0.1:${proxyPort}/`);
+  await p.wait(`!!document.getElementById("btnConnect")`, 15000);
+  await p.js(`document.getElementById("btnConnect").click(); 1`);
+  await startRadio(p);
+  ok(await p.wait(`document.body.classList.contains("icom") && !!window.__vibeWf()`, 15000), 'on an Icom');
+  await sleep(1500);
+  const M = () => p.js(`(() => { const w = window.__vibeWf(); return { key: document.getElementById("mMode").textContent.trim(), mode: w.spec.mode,
+     cfg: w.spec.cfg.serverMode, lo: w.spec.bandwidthLow, hi: w.spec.bandwidthHigh }; })()`);
+  let m0 = await M();
+  ok(m0.cfg === 'usb' && m0.mode === 'usb' && m0.key === 'USB-D',
+     `★★★ the config's mode is the RADIO's (USB-D → usb), never the landing's AM (config ${m0.cfg}, page ${m0.mode}, key ${m0.key})`);
+  ok(await p.js(`document.getElementById("mShared").hidden && !document.body.classList.contains("icomFollow")`), 'no tune lock: no banner, not dimmed');
+  ok(await p.js(`Array.from(document.querySelectorAll("#icomMode button, #icomFil button, #icomSpan button")).every(b => !b.disabled)`), 'mode, FIL and span are live for the listener');
+  await barOk(p, '2000×1300, no banner');
+  await shot(p, 'bar-open-2000');
+  // ── the radio's front panel changes the mode: the page follows (no dial move, no shared dial) ──
+  fake.stdin.write('modekey 0\n');
+  ok(await p.wait(`window.__vibeWf().spec.mode === "lsb" && window.__vibeWf().spec.bandwidthHigh <= 0 && document.getElementById("mMode").textContent.trim() === "LSB"`, 4000),
+     `the radio's own LSB key: the page's mode and passband follow (${JSON.stringify(await M())})`);
+  fake.stdin.write('modekey 2\n');
+  ok(await p.wait(`(() => { const s = window.__vibeWf().spec; return s.mode === "am" && s.bandwidthLow < 0 && s.bandwidthHigh > 0 && Math.abs(s.bandwidthLow + s.bandwidthHigh) < 2; })()`, 4000),
+     `AM: the passband is symmetric about the LISTEN line (${JSON.stringify(await M())})`);
+  const stA = await stats();
+  await tapId(p, 'mVfoUp'); await sleep(1200);
+  const stB = await stats();
+  ok(stB.freq !== stA.freq && stB.mode === 2, `a listener's step reaches the radio and keeps its mode — no stale mode sent back (${stA.freq}→${stB.freq}, mode byte ${stB.mode})`);
+  // ── auto contrast: the scope's clip is not a floor (Icom only) ──
+  ok(await p.js(`window.__vibeWf().wf.proc.settings.clipFloorDb === -130`), 'auto contrast leaves the scope’s below-REF clip (−130 dB) out of the floor');
+  ok(await p.js(`!document.getElementById("ptrFreq").classList.contains("show")`), 'no frequency pill without a mouse over the waterfall');
+  // ── the waterfall keeps scrolling at the radio's rate ──
+  const rs0 = await p.js(`window.__vibeWf().wf.rowSeq`); await sleep(3000);
+  const rs1 = await p.js(`window.__vibeWf().wf.rowSeq`);
+  ok(rs1 > rs0 + 20, `the waterfall keeps scrolling at ~4 sweeps/s (${rs1 - rs0} rows in 3 s)`);
+
+  // ════ THE FREQUENCY AXIS — a known carrier under the LISTEN line, one 50 kHz away where it belongs ════
+  console.log('── the frequency axis (centre and fixed) ──');
+  await p.js(ROW_HOOK);
+  fake.stdin.write('knob 14100000\n');
+  await p.js(`document.querySelector('#icomSpan button[data-v="200000"]').click(); 1`);
+  ok(await until(async () => (await stats()).span === 200000, 4000), 'span 200 kHz on the radio');
+  let row = await freshRow(p, (r) => Math.abs(r.c - 14100000) < 1 && Math.abs(r.bw - 200000) < 1);
+  ok(!!row, `centre mode: rows centred on the dial, 200 kHz wide (${row ? `${row.c}, ${row.bw}` : 'none'})`);
+  if (row) {
+    const pt = row.bw / 475, listen = await p.js(`window.__vibeWf().spec.frequency`);
+    const a = peakNear(row, 14100000, 3000), b = peakNear(row, 14150000, 3000);
+    ok(Math.abs(listen - 14100000) < 1 && Math.abs(a - 14100000) <= pt, `centre: the 14.100 carrier peaks under the LISTEN line (${a} Hz, ±${pt.toFixed(0)} Hz)`);
+    ok(Math.abs(b - 14150000) <= pt, `centre: the carrier 50 kHz up lands at 14.150 (${b} Hz)`);
+  }
+  fake.stdin.write('scopemode 1\n');
+  row = await freshRow(p, (r) => Math.abs(r.c - 14175000) < 1 && Math.abs(r.bw - 350000) < 1);
+  ok(!!row, `fixed mode: rows over the radio's own edges 14.000–14.350 (${row ? `${row.c}, ${row.bw}` : 'none'})`);
+  if (row) {
+    const pt = row.bw / 475;
+    const a = peakNear(row, 14100000, 3000), b = peakNear(row, 14150000, 3000);
+    ok(Math.abs(a - 14100000) <= pt, `fixed: the 14.100 carrier (the dial) at 14.100 (${a} Hz, ±${pt.toFixed(0)} Hz)`);
+    ok(Math.abs(b - 14150000) <= pt, `fixed: the carrier 50 kHz up at 14.150 (${b} Hz)`);
+    ok(await p.js(`Math.abs(window.__vibeWf().spec.frequency - 14100000) < 1`), 'fixed: the LISTEN line stays on the dial, not the scope centre');
+  }
+  fake.stdin.write('scopemode 0\n');
+  // ★ Put the radio back as the rest expects it: USB-D on 14.074, ±25 kHz.
+  fake.stdin.write('knob 14074000\n'); await sleep(600);
+  await p.js(`document.querySelector('#icomMode button[data-v="usbd"]').click(); 1`);
+  await until(async () => { const s = await stats(); return s.mode === 1 && s.data === 1; }, 4000);
+  await p.js(`document.querySelector('#icomSpan button[data-v="50000"]').click(); 1`);
+  const back = await until(async () => { const s = await stats(); return s.mode === 1 && s.data === 1 && s.span === 50000 && s.freq === 14074000; }, 4000);
+  ok(back, `the radio back on USB-D, 14.074, 50 kHz (${JSON.stringify(await stats())})`);
+  await viewport(p, 390, 844, true); await sleep(700);
+  await barOk(p, '390 px, no banner');
+  await shot(p, 'bar-open-390');
+  await viewport(p, 2000, 1300, false);
+
+  // ════ 1. A LISTENER UNDER THE TUNE LOCK ════
+  console.log('── a listener, tune lock on ──');
+  ok(await startServer(['--users', '4', '--icom-tune-lock']), 'server restarted: shared, “Only I may tune this radio” on');
   await go(p, `http://127.0.0.1:${proxyPort}/`);
   await p.wait(`!!document.getElementById("btnConnect")`, 15000);
   await p.js(`document.getElementById("btnConnect").click(); 1`);
@@ -185,6 +316,18 @@ try {
   await sleep(800);
   const st1 = await stats();
   ok(st1.freq === st0.freq && st1.span === st0.span, `a listener’s zoom/tune is stopped at the page — the radio did not move (${st1.freq}, ${st1.span})`);
+  await barOk(p, '2000×1300, tune lock banner');
+  await shot(p, 'bar-locked-2000');
+  await viewport(p, 390, 844, true); await sleep(700);
+  await barOk(p, '390 px, tune lock banner');
+  await shot(p, 'bar-locked-390');
+  if (SHOT_DIR) {   // ★ the layout before 2026-11-04: the banner's row tied to the shared dial alone
+    await p.js(`document.getElementById("mPillIn").classList.remove("shared"); 1`); await sleep(200); await shot(p, 'bar-locked-390-old-layout');
+    await viewport(p, 2000, 1300, false); await sleep(500);
+    await p.js(`document.getElementById("mPillIn").classList.remove("shared"); 1`); await sleep(200); await shot(p, 'bar-locked-2000-old-layout');
+    await p.js(`document.getElementById("mPillIn").classList.add("shared"); 1`);
+  }
+  await viewport(p, 2000, 1300, false);
   ok(p.errors.length === 0, `no page exceptions as a listener${p.errors.length ? ': ' + p.errors.slice(0, 3).join(' | ') : ''}`);
 
   // ════ 2. THE ADMIN ════

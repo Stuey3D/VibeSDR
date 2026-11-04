@@ -49,7 +49,7 @@ import { initMobileControls } from './mobile';
 import { addModeIcon } from './modeIconDom';   // ★ V12 mode icons
 import { layoutDecoderBands, decoderBandsDial, setWholeRadioKeys, placeOptions, sizeKeys } from './decoderBandsDom';   // ★ V12 decoder panel by band
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the contract module the app reads too, and the browser's panel.
-import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeLabel, icomClientMode, icomBanner,
+import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeLabel, icomClientMode, icomBanner, ICOM_SCOPE_FLOOR_DB,
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
 import { renderIcomPanel, icomPassband } from './icomUi';
 import { initPocketConn } from './pocketConn';
@@ -764,12 +764,23 @@ function icomRefresh() {
   document.body.classList.toggle('icom', !!ic);
   const follow = !!ic && !icomMayTune(ic, adminUnlocked);
   document.body.classList.toggle('icomFollow', follow);
+  // ★★ AUTO CONTRAST ON THE RADIO'S OWN SCOPE (Stuart, 2026-11-04, IC-7300 on 41 m: "the auto contrast isn't working"
+  //    — the floor flat on the scale's bottom, the waterfall black). Below REF the scope sends 0, which is a clip, not a
+  //    noise floor: the auto-range leaves those bins out (signalProcessor clipFloorDb). null again on any other radio,
+  //    so the SDR path runs exactly as before. applySettings flushes the range only when the value changes.
+  wf?.applySettings({ clipFloorDb: ic ? ICOM_SCOPE_FLOOR_DB : null });
   if (spec) {
     spec.icomSpans = ic && ic.scope.spans.length ? ic.scope.spans : null;
     spec.icomFollowLocked = follow;
     // ★ The passband DRAWN for the radio's FIL (factory widths, so approximate) — written, never sent.
     if (ic) {
       const cm = icomClientMode(ic.modeNow) as SDRMode;
+      /* ★★★ OUR MODE FOLLOWS THE RADIO'S, ALWAYS (2026-11-04, Saber's IC-7300: "the VFO only shows LSB", "LSB sounds
+       *  like AM and AM sounds like LSB"). SpectrumClient adopts a server's mode only with a dial move or on a shared
+       *  dial, so on a single-listener Icom spec.mode stayed whatever the page opened on: the key said AM (it reads
+       *  the radio), the passband was drawn LSB — and the next STEP carried that stale mode in its tune, which the
+       *  server applied, flipping the radio back to LSB. Adopted here, never sent (setMode's `false`). */
+      if (spec.mode !== cm && MODE_BANDWIDTHS[cm]) setMode(cm, false);
       const pb = icomPassband(ic, cm, MODE_BANDWIDTHS[cm] ?? [0, 3000]);
       if (pb && spec.mode === cm) { spec.bandwidthLow = pb[0]; spec.bandwidthHigh = pb[1]; }
     }
@@ -932,8 +943,7 @@ async function loadAudioPolicy(httpBase: string) {
     // ★ No SHARE on a shared dial — a link cannot move a radio other people are hearing (see applyShareParams).
     const sb = document.getElementById('freqShare'); if (sb) sb.hidden = srvSharedDial;
     // ★ And the standing reminder above the dial — see #mShared in index.html.
-    updateSharedBanner();
-    document.getElementById('mPillIn')?.classList.toggle('shared', srvSharedDial);
+    updateSharedBanner();   // ★ and the pill's banner row with it
   } catch { /* leave the safe defaults */ }
 }
 
@@ -999,6 +1009,16 @@ function flashSharedBanner(text: string) {
  *  company: ask — and how many are here, where the question is asked, instead of in the corner badge.
  *  listenerCount includes you. */
 function updateSharedBanner() {
+  updateSharedBannerText();
+  /* ★★★ THE BANNER'S ROW GOES WITH THE BANNER, NOT WITH THE SHARED DIAL (2026-11-04, Saber's IC-7300 as a listener:
+   *  "…NERS FOLLOW THE RADIO", the unit clipped to "kH" and no mode key). #mShared is a full-width, no-wrap box; it
+   *  gets its own row only under #mPillIn.shared, which was set from srvSharedDial alone. An Icom's own banners (the
+   *  tune lock, TX, a radio not answering) show on a dial that is NOT shared — so the box sat INSIDE the frequency
+   *  row at 100 % width and squeezed the frequency and the mode key out of the pill. */
+  const ms = document.getElementById('mShared');
+  document.getElementById('mPillIn')?.classList.toggle('shared', !!ms && !ms.hidden);
+}
+function updateSharedBannerText() {
   const ms = document.getElementById('mShared');
   if (!ms) return;
   /* ★★★ AN ICOM SAYS WHAT THE RADIO IS DOING FIRST: the owner transmitting (the server has muted the audio and

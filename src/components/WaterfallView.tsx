@@ -231,6 +231,9 @@ export interface WaterfallViewProps {
   wfSharpness?:    number;
   /** ★ Minimum dB span of the auto range; DAB passes 15 (see SignalProcessorSettings.minRangeDb). */
   minRangeDb?:     number;
+  /** ★★ An Icom's scope clip (ICOM_SCOPE_FLOOR_DB), left out of the auto range — null on every other radio.
+   *  ★ The JS processor only: Android's native engine (SpectrumEngineHost) does not read it yet. */
+  clipFloorDb?:    number | null;
   frameRate?:      '10fps' | '20fps' | '30fps';   // legacy; superseded by wfScroll below
   /** ★★★ SCROLL SPEED AS A FIXED FRAME-GENERATION MULTIPLIER — the whole point is that it is a
    *  CONSTANT. lines-per-frame maps ALL waterfall history, so every time it changes the picture
@@ -650,7 +653,7 @@ function WaterfallView({
   specShow = true, specFrac = 0.26,
   autoContrast = 5, specSmoothing = 5, avgFrames = 0, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
-  wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30,
+  wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30, clipFloorDb = null,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   needleHidden = false, secondVfo = null, activeVfo = null,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
@@ -862,7 +865,7 @@ function WaterfallView({
       spatialSmooth, peakHold,
       wfBrightness, wfContrast,
       wfSharpness: Math.min(12, sharpBase * sharpMul * 2),
-      minRangeDb,
+      minRangeDb, clipFloorDb,
     };
     proc.current.applySettings(patch);
     engine?.setSettings({
@@ -873,7 +876,7 @@ function WaterfallView({
     });
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
       specSmoothing, avgFrames, spatialSmooth, peakHold, wfBrightness, wfContrast,
-      wfSharpness, minRangeDb, frameRate, wfScroll, feedFloorFps]);
+      wfSharpness, minRangeDb, clipFloorDb, frameRate, wfScroll, feedFloorFps]);
 
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);

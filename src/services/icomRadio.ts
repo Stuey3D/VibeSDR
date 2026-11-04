@@ -253,6 +253,11 @@ export function icomHides(radio: unknown, control: IcomHiddenControl | string): 
 // ── Who may do what (the OWNER LOCK and RF-admin, plan §3.4 / decision 6) ───────────────────────────
 
 /** ★ Tune, mode, FIL, span and scope mode: anyone unless the owner lock is on, then a SIGNED-IN admin. */
+/** ★★ THE dB AN ICOM SCOPE POINT OF 0 ARRIVES AS — the server's icom::kScopeFloorDb (icom_scope.h ampToWire). The
+ *  radio sends levels only inside its REF window and everything below REF as 0, so this value is the CLIP, not the
+ *  noise floor: the waterfall's auto-range leaves it out (SignalProcessorSettings.clipFloorDb). Keep the two equal. */
+export const ICOM_SCOPE_FLOOR_DB = -130;
+
 export function icomMayTune(radio: IcomRadio | null, admin: boolean): boolean {
   return !!radio && (admin || !radio.ownerLock);
 }
