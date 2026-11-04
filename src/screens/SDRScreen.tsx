@@ -89,7 +89,7 @@ import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
-import { type DabScanState } from '../services/dabBandScan';
+import { type DabScanState, dabScanMayTune, scanLockLine, SCAN_LOCK_FLIP_MS } from '../services/dabBandScan';
 import { adsbToAircraft, adsbCaptureWarning, adsbGainView, type AdsbCap, type AdsbReport } from '../services/adsbTypes';
 import { DabBlockStepper, DabAskGuard, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
 import { hopKeysMode, hopVfoKeys, HOP_SWEEP_PER_SEC, ismHopIndex, ismHopStrip, spotsHopIndex, spotsHopNext, spotsHopStrip, dabHopStrip } from '../services/hopKeys';
@@ -2656,7 +2656,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const dabAskGuard = useRef(new DabAskGuard());
   const serverDabBlockRef = useRef(-1);
   const dabBlockKeyRef = useRef('lsv_dab_block');
-  useEffect(() => { dabOnRef.current = dabOn; }, [dabOn]);
+  useEffect(() => { dabOnRef.current = dabOn; if (dabOn) client.current?.dabScanGet?.(); }, [dabOn]);   // ★ V12: the kept list (MULTIPLEXES) on entering DAB
   useEffect(() => { dabBoxOpenRef.current = dabBoxOpen; }, [dabBoxOpen]);
   useEffect(() => { dabBlockRef.current = dabBlock; }, [dabBlock]);
   const [activeDabId, setActiveDabId] = useState<number>(0);
@@ -4689,6 +4689,13 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  The CHAT key keeps its unread mark until the drawer is opened. */
   const BANNER_SAID_MS = 8000;
   const bannerGate = useRef(new BannerGate());   // ★ no strobing — see BannerGate
+  /* ★★★ V12: THE OWNER'S SCAN LOCK (Stuart, 2026-11-04) — a `dab_scan` / `fm_scan` with lock:true. For a listener who is
+   *  not the unlocked admin, the SHARED TUNER line alternates "ADMIN TRIGGERED A SCAN" / "PLEASE WAIT · n / N" (the web's
+   *  scanLockLine), the drum dims and every reach is refused (askGate) — the server refuses them too (scanLockRefuses).
+   *  Lapses after 45 s without a scan message (a socket that dropped mid-scan). */
+  const [scanLock, setScanLock] = useState<{ on: boolean; done: number; total: number; seen: number }>({ on: false, done: 0, total: 0, seen: 0 });
+  const [scanLockPhase, setScanLockPhase] = useState(0);
+  const scanLockRef = useRef(false);
   const [bannerSaid, setBannerSaid] = useState<{ text: string; at: number } | null>(null);
   const [bannerSaidShown, setBannerSaidShown] = useState('');
   useEffect(() => {
@@ -5140,6 +5147,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [askNudge]);
   /** @return true when the lock refused this reach (and the nudge has been shown). */
   const askGate = useCallback((): boolean => {
+    if (scanLockRef.current) return true;   // ★ V12: an owner's scan holds the radio — the slot already says so
     if (!askLocked(dialStateRef.current)) return false;
     nudgeAsk();
     return true;
@@ -5252,6 +5260,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [noticeSeen, setNoticeSeen] = useState('');
   const [adminSet, setAdminSet] = useState(false);
   const [adminOk,  setAdminOk]  = useState(false);
+  const scanLockMine = scanLock.on && !adminOk;
+  useEffect(() => {
+    scanLockRef.current = scanLockMine;
+    if (!scanLockMine) return;
+    setScanLockPhase(0);
+    const t = setInterval(() => {
+      setScanLockPhase((x) => x + 1);
+      setScanLock((s) => (s.on && Date.now() - s.seen > 45000 ? { ...s, on: false } : s));
+    }, SCAN_LOCK_FLIP_MS);
+    return () => clearInterval(t);
+  }, [scanLockMine]);
+  const scanLockText = scanLockMine ? scanLockLine(scanLockPhase, scanLock.done, scanLock.total) : '';
   /** ★ Read by the watch's Icom refusal notice (onRefused), which runs outside a render. */
   const adminOkRef = useRef(adminOk); adminOkRef.current = adminOk;
   // ★ The Icom listener note (icomNoteSeen) also clears itself after 15 s: a pad or a TV remote has no way to tap its ×, and it would otherwise cover the
@@ -6946,12 +6966,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       /** ★ DAB, about once a second, with the whole measured state of the multiplex. `null` means
        *  it has ended; `why` is the server's refusal, which is an explanation and not an error —
        *  showing it as one would put a red card over a receiver that is working perfectly. */
-      onDabScanOk: (ok) => { if (!destroyed.current) setDabScanOk(ok); },
+      onDabScanOk: (ok) => { if (destroyed.current) return; setDabScanOk(ok); if (dabOnRef.current) client.current?.dabScanGet?.(); },   // ★ V12: the kept list on every (re)connect
       onDxLogOk: (ok) => { if (!destroyed.current) setDxLogOk(ok); },   // ★★★ V12 the DX LOG key
       onDabScan: (st) => {
         if (destroyed.current) return;
         // ★ A refusal arrives as a not-running state with `error` — shown in the pane's line, in the server's words.
         setDabScan(st);
+        setScanLock({ on: st.running && st.lock === true, done: st.done, total: st.total, seen: Date.now() });
+      },
+      onFmScan: (st) => {
+        if (destroyed.current) return;
+        setScanLock({ on: st.running && st.lock, done: st.done, total: st.total, seen: Date.now() });
       },
       onDab: (st, why) => {
         if (destroyed.current) return;
@@ -12777,23 +12802,25 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  hit and the drum, the Skia meter and every button re-rendered at the screen's rate. */
   // ★ Only on a shared dial: on an ordinary receiver the dial is yours and a listener
   //   count is trivia, not permission.
-  const sharedDialProp = useMemo(() => sharedDial && dialState ? {
-    listeners: dialState.listeners,
+  // ★★ V12: an owner's scan puts its two lines in this slot on ANY radio (scanLockText), shared or not
+  const sharedDialProp = useMemo(() => (sharedDial && dialState) || scanLockText ? {
+    ...(scanLockText ? { scanLock: scanLockText } : {}),
+    listeners: dialState?.listeners ?? 1,
     max: occMaxUsers,
-    alone: dialAlone(dialState),   // ★ the same test the blind-tune gate uses — one rule, two readers
+    alone: dialState ? dialAlone(dialState) : true,   // ★ the same test the blind-tune gate uses — one rule, two readers
     // ★★ NAME THE TUNER, NOT YOURSELF. "User 2 tuning" is the warning; your own last move
     //    is not news to you, and putting it here would make the badge cry wolf.
-    tuning: (dialState.tuner && !dialState.mine)
+    tuning: (dialState?.tuner && !dialState.mine)
       ? chatT(dialState.decoding ? 'userDecoding' : 'userTuning', { who: chatT('user', { n: dialState.tuner }) })
       : '',
     // ★ The banner's words are the chat's language — a change must reach the memoised bar (ControlsBar sharedBannerText).
     lang: chatLangNow,
     ...(bannerSaidShown ? { said: bannerSaidShown } : {}),
     // ★★ Ask before tuning — the server's word on whether this listener may move the dial (dialChat.AskState).
-    ...(dialState.askFirst ? { ask: { askFirst: true, tuneLocked: dialState.tuneLocked, askState: dialState.askState,
+    ...(dialState?.askFirst ? { ask: { askFirst: true, tuneLocked: dialState.tuneLocked, askState: dialState.askState,
                                       askUntil: dialState.askUntil }, onLockedTouch: nudgeAsk } : {}),
   } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
-             dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk, chatLangNow]);
+             dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk, chatLangNow, scanLockText]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
@@ -14717,6 +14744,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             client.current?.dabScan?.(on);
           }}
           onScanTune={(ch, sid) => { const b = DAB_BLOCKS[ch]; if (b) dabGoTo(b.hz, sid ?? -1); }}
+          scanMayTune={dabScanMayTune({ dialMode: dialState?.mode ?? 'exclusive', admin: adminOk, askLocked: askLocked(dialState), scanLocked: scanLockMine })}
           // ★ Above the VTS bar — the DAB box sat on top of it (Stuart, 2026-09-15 07:06).
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to

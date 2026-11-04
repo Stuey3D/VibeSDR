@@ -28,7 +28,7 @@ import { drmSanitise } from './drm';   // ★ V12 DRM
 import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
-import { parseDabScan } from './dabBandScan';
+import { parseDabScan, parseFmScan } from './dabBandScan';
 import type { WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 
 export {
@@ -133,6 +133,8 @@ export class VibeServerClient extends VibeServerWsClient {
   /** ★★ V12: start / stop a DAB band scan. The server decides who may (a single-user radio, or the admin) and answers in
    *  words; a tune while it runs ends it there (the server leaves the dial to the person tuning). */
   dabScan(on: boolean) { this.sendSpectrum({ type: 'dab_scan', on: on ? 1 : 0 }); }
+  /** ★★ V12: the last scan's list (a `dab_scan` back) — read-only, anyone; an older server ignores the type. */
+  dabScanGet() { this.sendSpectrum({ type: 'dab_scan_get' }); }
 
   // ─── ADS-B (V12, docs/v12/ADSB.md) ───────────────────────────────────────────────────────────
   //
@@ -470,6 +472,11 @@ export class VibeServerClient extends VibeServerWsClient {
       case 'dab_scan': {
         const st = parseDabScan(msg);
         if (st) this.callbacks.onDabScan?.(st);
+        return true;
+      }
+      case 'fm_scan': {   // ★★ V12: the owner's FM scan — the lock (shared-tuner slot) is all a listener needs of it
+        const fs = parseFmScan(msg);
+        if (fs) this.callbacks.onFmScan?.(fs);
         return true;
       }
       case 'dab_error':

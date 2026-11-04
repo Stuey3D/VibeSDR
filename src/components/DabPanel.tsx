@@ -37,7 +37,7 @@ import { limiter } from '../utils/limit';
 import { dabLogoKey } from '../services/logoCachePolicy';
 import { forgetShownLogo, logoDue, offerAirLogo, peekLogo, peekLogoEntry, resolveLogo, useLogoStoreVersion } from '../services/logoStore';
 import { cuPct, dabCuSegments } from '../utils/dabCapacity';
-import { dabScanRows, dabScanLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle, type DabScanState } from '../services/dabBandScan';
+import { dabScanKey, dabScanRows, dabScanLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle, type DabScanState } from '../services/dabBandScan';
 
 /** ★ Three RadioDNS lookups at a time — under the server's cap of four (src/utils/limit.ts). */
 const dabLogoQueue = limiter(3);
@@ -475,6 +475,8 @@ export interface DabPanelProps {
   scan?: DabScanState | null;
   onScan?: (on: boolean) => void;
   onScanTune?: (channel: number, sid?: number) => void;
+  /** ★★ V12 2026-11-04: may a row of the list TUNE for this listener (dabScanMayTune)? false = the list is read-only. */
+  scanMayTune?: boolean;
 }
 
 export default function DabPanel(p: DabPanelProps) {
@@ -644,16 +646,20 @@ export default function DabPanel(p: DabPanelProps) {
   // ★★ V12 2026-11-04 a finished scan keeps its list (Stuart: "dont know how to get back to this screen after a scan"):
   //    the foot key REOPENS it, and the scan pane gains SCAN AGAIN beside STATIONS. Same rule as the web client.
   const haveScan = !!p.scan && !p.scan.running && scanRows.length > 0;
+  // ★★ V12 2026-11-04 (Stuart: "change the button's name from scan to multiplexes … that way it can be shown on shared VFO
+  //    servers too"): MULTIPLEXES for ANY listener once a list exists, SCAN ALL DAB BLOCKS only where they may scan.
+  const footKey = dabScanKey(p.scan ?? null, canScan);
+  const mayTune = p.scanMayTune !== false;
   const scanItems: ScanItem[] = pane !== 'scan' ? [] : [{ k: 'ctl' }, ...(canScan && !p.scan?.running ? [{ k: 'again' as const }] : []), ...scanRows.flatMap((h) => [
     { k: 'ens' as const, block: h.block },
-    ...(scanOpen.has(h.block) ? [{ k: 'svc' as const, ch: h.channel }, ...h.services.map((sv) => ({ k: 'svc' as const, ch: h.channel, sid: sv.sid }))] : []),
+    ...(mayTune && scanOpen.has(h.block) ? [{ k: 'svc' as const, ch: h.channel }, ...h.services.map((sv) => ({ k: 'svc' as const, ch: h.channel, sid: sv.sid }))] : []),
   ])];
-  const tailKeys = pane === 'stations' && canScan ? 1 : 0;   // the SCAN key after the stations
+  const tailKeys = pane === 'stations' && footKey ? 1 : 0;   // the SCAN / MULTIPLEXES key after the stations
   const startScan = () => { setScanOpen(new Set()); setPane('scan'); p.onScan?.(true); };
-  const openOrScan = () => { if (haveScan) setPane('scan'); else startScan(); };
+  const openOrScan = () => { if (haveScan) setPane('scan'); else if (canScan) startScan(); };
   const scanTune = (ch: number, sid?: number) => { setPane('stations'); p.onScanTune?.(ch, sid); };
   const runScanItem = (it: ScanItem) => {
-    if (it.k === 'ctl') { if (p.scan?.running) p.onScan?.(false); else setPane('stations'); }
+    if (it.k === 'ctl') { if (p.scan?.running && canScan) p.onScan?.(false); else setPane('stations'); }
     else if (it.k === 'again') startScan();
     else if (it.k === 'ens') setScanOpen((o) => dabScanToggle(o, it.block));
     else scanTune(it.ch, it.sid);
@@ -712,7 +718,7 @@ export default function DabPanel(p: DabPanelProps) {
       <>
         <View style={s.scanTop}>
           <Text style={[s.scanLine, { flex: 1 }]}>{dabScanLine(st) || 'Starting the scan\u2026'}</Text>
-          <DecoderKey active onPress={() => runScanItem({ k: 'ctl' })} style={navHl(ctlAt)} label={st?.running ? 'CANCEL' : 'STATIONS'} />
+          <DecoderKey active onPress={() => runScanItem({ k: 'ctl' })} style={navHl(ctlAt)} label={st?.running && canScan ? 'CANCEL' : 'STATIONS'} />
           {canScan && !st?.running && <DecoderKey onPress={() => runScanItem({ k: 'again' })} style={navHl(againAt)} label="SCAN AGAIN" />}
         </View>
         <View style={s.scanBar}><View style={[s.scanBarFill, { width: `${st && st.total ? Math.round((100 * st.done) / st.total) : 0}%` }]} /></View>
@@ -732,7 +738,11 @@ export default function DabPanel(p: DabPanelProps) {
                 <Text style={[s.scanQ, { color: q.word === 'strong' ? C.sel : q.word === 'weak' ? C.warn : C.muted }]}>{q.word.toUpperCase()}</Text>
                 <Text style={s.svcCodec}>{open ? '\u25be' : '\u25b8'}</Text>
               </TouchableOpacity>
-              {open && [{ sid: 0, label: `\u25b6 Tune to ${h.block}` }, ...h.services].map((sv) => {
+              {/* \u2605\u2605 V12: read-only where this listener may not tune (dabScanMayTune) \u2014 the names, nothing to press */}
+              {open && !mayTune && h.services.map((sv) => (
+                <View key={sv.sid} style={s.scanSvc}><Text style={s.svcDls} numberOfLines={1}>{sv.label}</Text></View>
+              ))}
+              {open && mayTune && [{ sid: 0, label: `\u25b6 Tune to ${h.block}` }, ...h.services].map((sv) => {
                 const si = idx();
                 // nav-registered: scanItems { k: 'svc' } — walked by index (navHl), Enter runs runScanItem.
                 return (
@@ -787,9 +797,9 @@ export default function DabPanel(p: DabPanelProps) {
       )}
       {/* ★★ V12: SCAN at the foot of the station list, not in the header — the header's keys already fill an SE in
           Display Zoom, and EXIT DAB must never be pushed off it. Drawn only where the server offers it. */}
-      {pane === 'stations' && canScan && (
+      {pane === 'stations' && !!footKey && (
         <DecoderKey onPress={openOrScan} style={[{ alignSelf: 'flex-start', marginTop: 8 }, navHl(scanBase)]}
-                    label={haveScan ? `LAST SCAN \u00b7 ${scanRows.length} ${scanRows.length === 1 ? 'MULTIPLEX' : 'MULTIPLEXES'}` : 'SCAN ALL DAB BLOCKS'} />
+                    label={footKey === 'multiplexes' ? `MULTIPLEXES \u00b7 ${scanRows.length}` : 'SCAN ALL DAB BLOCKS'} />
       )}
       {scanPane}
 

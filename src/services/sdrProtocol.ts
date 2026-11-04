@@ -425,6 +425,8 @@ export interface SDRCallbacks {
   /** ★★ V12 DAB BAND SCAN, VIBESERVER-ONLY: the scan's state as the server publishes it (`dab_scan`, parsed by
    *  dabBandScan.ts), and hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
   onDabScan?:   (s: import('./dabBandScan').DabScanState) => void;
+  /** ★★ V12: the owner's FM scan (`fm_scan`) — its lock locks this listener out while it runs. */
+  onFmScan?:    (s: import('./dabBandScan').FmScanState) => void;
   onDabScanOk?: (ok: boolean) => void;
   /** ★★★ V12 THE DX LOG, VIBESERVER-ONLY: hwinfo `dxLog` — does this server keep a DX log THIS listener may see? */
   onDxLogOk?: (ok: boolean) => void;
