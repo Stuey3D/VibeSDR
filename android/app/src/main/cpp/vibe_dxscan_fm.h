@@ -316,7 +316,8 @@ private:
             }
             std::sort(chans.begin(), chans.end(), [](const std::unique_ptr<Chan>& a, const std::unique_ptr<Chan>& b) { return a->hz < b->hz; });
             for (auto& c : chans) {
-                c->iq.resize((size_t)keep); c->mpx.resize((size_t)keep); c->lmr.resize((size_t)keep);
+                c->iq.resize((size_t)chanBins);   // ★ extract() writes the whole inverse transform, then keeps the tail
+                c->mpx.resize((size_t)keep); c->lmr.resize((size_t)keep);
                 c->r57.resize((size_t)keep); c->r57q.resize((size_t)keep); c->clk.resize((size_t)keep);
             }
             stats_.peaks = (int)chans.size();
