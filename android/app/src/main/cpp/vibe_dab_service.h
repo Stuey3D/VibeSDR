@@ -93,6 +93,13 @@ public:
         if (idx == channel_) return;
         tuneLocked_(idx);
     }
+    /** ★ V12: the same, even for the block it is already on — a fresh DAB ENTRY must not inherit the last session's
+     *  lock, quality figures and ensemble (see the shim's DAB entry). */
+    void retuneChannel(int idx) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (idx < 0 || idx >= int(kBandIIICount)) return;
+        tuneLocked_(idx);
+    }
     /** ★★★ READ THIS BLOCK AFRESH — the quick station scan (Stuart, 2026-09-29: "stations change and new
      *  ones added, for instance Heart Xmas has appeared in the last few days"). setChannel() keeps the
      *  ensemble when the block has not changed, which is right for a listener stepping back to where they

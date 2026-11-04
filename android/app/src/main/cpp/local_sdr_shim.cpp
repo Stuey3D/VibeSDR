@@ -19058,7 +19058,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool dabWasOn = g_dabMode.load(std::memory_order_relaxed);   // ★ a block CHANGE, not an entry
             g_dabChannel.store(idx);
             g_dabSeedPending.store(true, std::memory_order_relaxed);   // ★ see g_dabGainMem
-            g_dab.setChannel(idx);
+            /* ★★ V12 (2026-11-04): AN ENTRY STARTS THE RECEIVER CLEAN, EVEN ON THE BLOCK IT LAST HELD. setChannel does
+             *  nothing for the block it is already on, so coming back into DAB on that block kept the old lock, MER,
+             *  FIB rate and station list until the retune settle reset them — the first reports of the new session said
+             *  "locked, 16 services" from minutes ago (seen on the Pi 500's V4L, 12D after ADS-B). A change while on
+             *  is a different block by definition, so setChannel already resets there. */
+            if (!dabWasOn) g_dab.retuneChannel(idx); else g_dab.setChannel(idx);
             /* ★★★ THE RADIO MUST BE AT 2.048 MS/s AND ON THE BLOCK CENTRE. Everything below
              *  assumes the canonical rate — it is what makes the useful symbol exactly 2048
              *  samples — so this is set here rather than hoped for. */
@@ -19352,7 +19357,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     while the decoder went on reading BBC National on 12B (Stuart, 2026-09-09:
              *     "telling me it is changing block but its not"). rtlCenter + tuneHw is the pair
              *     that moves the radio — see flushPendingDongle. */
-            if (dabWasOn && !plan.keepCentre) tuneHw(logical);   // ★ V12: a block inside a wide capture moves nothing
+            /* ★★ V12 (2026-11-04): NO EARLY TUNE HERE ANY MORE. This tuned the block a first time on every change while
+             *  in DAB, and the "LAST" tune below — after applyAutoIf, which is a no-op in steady DAB (the filter is already
+             *  the DAB one) — sent the very same frequency again: two tuner writes, two PLL relocks per press (the fake
+             *  dongle logged both). The note above still holds: on a change while on nothing is rebuilt, so the LAST tune
+             *  is what moves the radio, and it always runs. A block inside a wide capture moves nothing at all. */
             dabTxDbInit();        // ★ names for TII codes, even on a server that set no position
             iqStopDirect();       // ★ raw IQ out cannot follow the receiver into DAB
             g_dabMode.store(true);
