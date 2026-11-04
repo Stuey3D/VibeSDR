@@ -18170,10 +18170,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("icom decoder: %s — the radio to %s FIL%d%s (was %s FIL%d)", ext.c_str(), want.c_str(), fil,
              pl.offsetHz ? (" moved " + std::to_string(-pl.offsetHz) + " Hz, the readout unchanged").c_str() : "", baseMode.c_str(), baseFil);
     }
-    /** ★ May the listener behind DECODER socket `sock` change this radio's mode? The owner lock's rule (icomControl). The
-     *  admin sign-in lives on the listener's SPECTRUM socket, so their session finds it there. */
+    /** ★ May the listener behind DECODER socket `sock` change this radio's mode? The same rule as the mode keys
+     *  (icomControl): free unless the owner ticked "Only I may tune this radio" (icomTuneLock), then the signed-in admin
+     *  only. The admin sign-in lives on the listener's SPECTRUM socket, so their session finds it there. */
     bool icomDecMayTune(const std::shared_ptr<net::Socket>& sock) {
-        if (!icomOwnerLock) return true;
+        if (!icomTuneLock) return true;
         if (!sock) return false;
         if (icomAdmin(sock)) return true;
         std::string sess;
@@ -18205,7 +18206,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!pl.changes() && !icomDec.on) return {};          // the radio already delivers it: nothing to change
         if (pl.changes() && !mayTune)
             return "This decoder needs the radio in " + icomDecWords(pl, baseMode)
-                 + " \xe2\x80\x94 the owner has set this radio so that listeners follow it, so only the owner can change that";
+                 + " \xe2\x80\x94 the owner tunes this radio themselves (\"Only I may tune this radio\"), so only they can change that";
         icomDecApplyLocked(ext, pl, baseMode, baseFil);
         return {};
     }

@@ -309,7 +309,9 @@ try {
   ok(await p.wait(`!document.getElementById("icomFollow").hidden && document.getElementById("icomFollow").textContent.startsWith("Everyone hears what the radio is tuned to")`),
      'a listener under the owner lock is told: Everyone hears what the radio is tuned to');
   ok(await p.js(`Array.from(document.querySelectorAll("#icomMode button, #icomFil button, #icomSpan button")).every(b => b.disabled)`), 'mode, FIL and span are disabled for them');
-  ok(await p.js(`Array.from(document.querySelectorAll("#icomAtt button, #icomDsp button")).every(b => b.disabled) && document.getElementById("icomRfGain").disabled`), 'and the RF settings (admin-only by default)');
+  // 2026-11-04 the RF settings follow the SDR gain rules, not the tune lock: on a shared dial that is not a locked
+  //   range a listener may change them, as they may an SDR's gain.
+  ok(await p.js(`Array.from(document.querySelectorAll("#icomAtt button, #icomDsp button")).some(b => !b.disabled) && !document.getElementById("icomRfGain").disabled`), 'and the RF settings follow the SDR gain rules (a shared, unlocked dial: open to them)');
   ok(await p.js(`document.body.classList.contains("icomFollow") && /LISTENERS FOLLOW THE RADIO/.test(document.getElementById("mShared").textContent)`), 'the banner says listeners follow the radio');
   const st0 = await stats();
   await tapId(p, 'mZoomIn'); await tapId(p, 'mVfoUp');

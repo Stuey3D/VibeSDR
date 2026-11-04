@@ -415,7 +415,7 @@ await phase(['--off'], ['--users', '2', '--icom-power-on'], async (pt, st) => {
     // ★ The wav source starts at open (~0.3 s after spawn): spawn just before a 15 s boundary so the file's slot is the clock's.
     const lead = 400, wait = (15000 - (Date.now() % 15000) - lead + 15000) % 15000;
     await sleep(wait);
-    const srv3 = spawn(BIN, ['--icom', pty3, '--icom-tty-ok', '--icom-audio', `wav:${wav}`, '--port', String(port3), '--users', '4', '--idle-grace', '0'],
+    const srv3 = spawn(BIN, ['--icom', pty3, '--icom-tty-ok', '--icom-audio', `wav:${wav}`, '--port', String(port3), '--users', '4', '--idle-grace', '0', '--icom-tune-lock'],
                        { env, stdio: ['ignore', fs.openSync(log3Path, 'w'), fs.openSync(log3Path, 'a')] });
     const read3 = () => fs.readFileSync(log3Path, 'utf8');
     try {
@@ -427,7 +427,7 @@ await phase(['--off'], ['--users', '2', '--icom-power-on'], async (pt, st) => {
       const spB = ws(port3, `/ws/user-spectrum?user_session_id=${sidB}&bins=256`);
       const dxB = ws(port3, `/ws/dxcluster?user_session_id=${sidB}`);
       await until(() => spA.last('config') && spB.last('config'), 4000);
-      // ── a listener without tune rights (the owner lock, on by default) ──
+      // ── a listener without tune rights (Only I may tune this radio ticked; not the default since 2026-11-04) ──
       dxB.send({ type: 'subscribe_digital_spots' });
       ok(await until(() => dxB.last('decoder_refused')?.reason === 'icom', 3000),
          `★ a listener without tune rights cannot start spots that change the radio's filter: "${dxB.last('decoder_refused')?.message || ''}"`);
