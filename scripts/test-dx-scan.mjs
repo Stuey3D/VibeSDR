@@ -126,8 +126,9 @@ try {
   const leftAt = Date.now();
   ok(await S.until(() => S.count(/DX scanner: nobody here for [\d.]+ s/) >= 1, 15000), '★ with the radio idle past the wait, the scan starts');
   ok((Date.now() - leftAt) / 1000 >= 2.5, `…not before the wait (${((Date.now() - leftAt) / 1000).toFixed(1)} s)`);
-  // a whole sweep: 12 hops at 2.4 MS/s
-  ok(await S.until(() => S.count(/DX scanner: FM [\d.]+.[\d.]+ MHz: /) >= 12, 120000), `a whole FM sweep (${S.count(/DX scanner: FM [\d.]+.[\d.]+ MHz: /)} hops)`);
+  // two whole sweeps (12 hops each at 2.4 MS/s): with the test's short 2.5 s dwell a station can give its PI in one visit
+  // and finish its PS in the next — the entry keeps the last PS it heard, as on air
+  ok(await S.until(() => S.count(/DX scanner: FM [\d.]+.[\d.]+ MHz: /) >= 24, 180000), `two whole FM sweeps (${S.count(/DX scanner: FM [\d.]+.[\d.]+ MHz: /)} hops)`);
   const hopCpu = [...S.logText().matchAll(/DX scanner: FM ([\d.]+).([\d.]+) MHz: (\d+) peak\(s\), (\d+) identified.* in ([\d.]+) s .*?(\d+) worker\(s\), ([\d.]+) s CPU/g)];
   if (hopCpu.length) {
     const cpu = hopCpu.map((m) => Number(m[7])), wall = hopCpu.map((m) => Number(m[5]));
