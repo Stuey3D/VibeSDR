@@ -15541,6 +15541,7 @@ export default function SDRScreen({ route, navigation }: Props) {
              icom_control; the server judges the owner lock / RF-admin and answers a refusal with a notice + config. */
           icom={icom}
           onIcomControl={(f) => (client.current as any)?.icomControl?.(f)}
+          onIcomPower={(a) => (client.current as any)?.icomPower?.(a)}
           icomSetup={icom ? { doorBase: baseUrl, connectBase, authQ: adminAuthQ,
                               onOpenSetupPage: vibeSetupUrl ? () => { setHwOpen(false); onAdminLink(vibeSetupUrl, 'Setup'); } : undefined }
                           : undefined}

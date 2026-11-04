@@ -165,6 +165,7 @@ public:
     bool requestPowerOff(std::string& why);
     bool requestPowerOn(std::string& why);
     bool offByOwner() const { return offByOwner_.load(); }
+    bool autoPowerOn() const { return cfg_.powerOn; }
     /** ★ Somebody (a listener, a held session, a decoder) is using the radio — the shim's housekeeping says so
      *  every tick. A radio the idle park switched off is woken only while this is true. Any thread. */
     void setInUse(bool inUse);

@@ -6594,7 +6594,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool useIcom() const { return false; }
 #endif
     std::atomic<double> icomSpanHz{0.0};   ///< the scope's span — what displaySpan() is on an Icom
-    bool icomOwnerLock = true, icomRfOpen = false;
+    bool icomTuneLock = false, icomRfOpen = false;   // ★ tuning follows the ordinary dial rules unless the owner locks it
     std::string icomRadioMode;             ///< the radio's own mode name ("usbd", "rtty") — under modeMtx
     std::vector<stereo_t> icomPack;        ///< PCM → onAudio(); grows once, never per block
     std::vector<uint8_t> icomFrame;        ///< one SPEC frame; grows once per wire width
@@ -10996,6 +10996,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
             "tunerbw", "sampleRate", "directSampling",
             "nr", "notch", "deemph", "stereo", "nfmvoice", "wsp", "nb", "nbx", "ceq", "ims", "autobw",
+            // ★ An Icom's own controls (mode, FIL, span, scope, ATT/preamp/AGC/RF gain/NB/NR/ANF) — the same rule as
+            //   every other radio's front end (2026-11-04: an Icom "acts like the shared VFO does already").
+            "icom_control",
         };
         if (!kGated.count(type)) return false;
         const double now = Impl::nowSecs();
@@ -17800,7 +17803,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  allow-listed CI-V by IcomSource (never raw bytes from a client). Returns true when handled.
      *  ★ The IQ-shaped controls (gain, IF filter, rate, DAB, raw IQ, …) are swallowed: none of them
      *    exists on this radio, and letting them fall through would reach dongle code ("else means dongle").
-     *  ★★ OWNER LOCK (default ON, plan §3.4): "Listeners follow the radio" — only the admin tunes.
+     *  ★★ TUNING FOLLOWS THE SERVER'S ORDINARY DIAL RULES (2026-11-04, Stuart: an Icom should "act like the shared
+     *     VFO does already"): single-user, the listener tunes; shared, the shared-dial contract — ask before tuning
+     *     (askRefuses gates tune/mode/bandwidth/icom_control before this runs), admin override. The owner may still
+     *     lock it ("Only I may tune this radio", icomTuneLock, default OFF) — then only the admin tunes.
      *     RF settings (ATT, preamp, AGC, RF gain, NB/NR/ANF) are admin-only unless the owner opens them.
      *  ★★ sock == nullptr is the SERVER talking to itself (a landing, a resume): ignored — the radio is the
      *     state, and recovery is not a user action. */
@@ -17815,18 +17821,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (const char* k : kNotHere)
             if (type == k) { LOGI("icom: '%s' ignored — this radio has no such control", type.c_str()); return true; }
         const bool radioMsg = type == "tune" || type == "mode" || type == "bandwidth" || type == "zoom"
-                           || type == "reset" || type == "icom_control";
+                           || type == "reset" || type == "icom_control" || type == "icom_power";
         if (!radioMsg) return false;
         if (!sock) { LOGI("icom: a server-side '%s' ignored — the radio is the dial", type.c_str()); return true; }
         const bool admin = icomAdmin(sock);
-        const bool mayTune = admin || !icomOwnerLock;
+        const bool mayTune = admin || !icomTuneLock;
         const bool mayRf = admin || icomRfOpen;
         std::string why;
         auto refuse = [&](const std::string& w) {
             LOGI("icom: refused %s — %s", type.c_str(), w.c_str());
             sendText(sock, "{\"type\":\"notice\",\"why\":\"" + jsonEscape(w) + "\"}");
         };
-        static const char* kFollow = "The owner has set this radio so that listeners follow it \xE2\x80\x94 only the owner tunes it";
+        static const char* kFollow = "The owner has set this radio so that only they tune it \xE2\x80\x94 you hear whatever it is on";
         static const char* kRfAdmin = "Only the owner can change this radio's RF settings";
         const icom::Model& m = icom->model();
         auto nearestSpan = [&](double want) -> uint32_t {
@@ -17850,6 +17856,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return 0;
         };
         if (type == "reset") { sendConfig(sock); return true; }
+        if (type == "icom_power") {
+            /* ★★★ RADIO OFF / RADIO ON — THE OWNER'S, AND NOBODY ELSE'S (2026-11-04, the tester: "i'd love a 'Radio
+             *     off' button"). Admin only, refused in words for anyone else; the clients draw the buttons only for
+             *     the admin. 18 00 is sent ONLY from here (and the idle power-down the owner switched on) — never on a
+             *     stop, a restart or a lost link. */
+            const std::string act = jsonStr(msg, "action");
+            const std::string who = sock->peerAddress();
+            if (!admin) { LOGI("icom: RADIO %s from %s refused — not the admin", act == "off" ? "OFF" : "ON", who.c_str());
+                          refuse("Only the owner can switch the radio on or off"); return true; }
+            bool okp = false;
+            if (act == "off") okp = icom->requestPowerOff(why);
+            else if (act == "on") okp = icom->requestPowerOn(why);
+            else why = "RADIO ON or RADIO OFF";
+            LOGI("icom: the owner pressed RADIO %s (from %s)%s%s", act == "off" ? "OFF" : "ON", who.c_str(),
+                 okp ? "" : " — not sent: ", okp ? "" : why.c_str());
+            if (!okp) refuse(why);
+            for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
+            return true;
+        }
         if (type == "zoom") {
             // ★★ ZOOM IS THE SPAN LADDER (plan §2.2). The centre is the radio's, so a pan is answered
             //    with the config that says where it really is; a span picks the nearest real rung.
@@ -17860,7 +17885,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ Under the owner lock a listener's zoom is answered by the config alone — no notice. Every
                 //   existing client restores its own span on join, and a pill per join would be noise; the
                 //   config IS the answer ("a joiner adopts", shared_dial_joiner_imposes_view).
-                if (want && want != st.spanHalfHz * 2 && st.scopeMode == 0 && mayTune && !icom->setSpanTotal(want, why))
+                if (want && want != st.spanHalfHz * 2 && st.scopeMode == 0 && mayTune && !t_askViewOnly && !icom->setSpanTotal(want, why))
                     refuse(why);
             }
             sendConfig(sock);
@@ -24007,6 +24032,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // POST /vibeserver/dxlog/clear                      — OWNER: empty the log (promoted entries are kept)
         // ★ Reading is gated like the gallery (the PIN), and by the owner's "admin lock on viewing" (dxScan.viewAdmin).
         //   Writing is the bookmarks' rule: changing the receiver for everybody is the owner's (vsAdminHttpOk).
+        // POST /vibeserver/icom/power?action=on|off — OWNER: the Setup page's RADIO ON / RADIO OFF for an Icom (the client's
+        //   buttons send `icom_power` on the socket). Same gate as every owner write (vsAdminHttpOk); logged plainly.
+        } else if (reqLine.rfind("POST /vibeserver/icom/power", 0) == 0) {
+            auto reply = [&](const char* status, const std::string& body) {
+                sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
+                              "X-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            if (!vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ it already said 401
+#if VIBE_HAVE_ICOM
+            if (!useIcom()) { reply("404 Not Found", "{\"ok\":false,\"error\":\"this radio is not an Icom\"}"); return; }
+            const bool off = reqLine.find("action=off") != std::string::npos;
+            const bool on = reqLine.find("action=on") != std::string::npos;
+            std::string why;
+            const bool okp = off ? icom->requestPowerOff(why) : on ? icom->requestPowerOn(why) : (why = "action=on or action=off", false);
+            LOGI("icom: the owner pressed RADIO %s on the setup page (from %s)%s%s", off ? "OFF" : "ON", sock->peerAddress().c_str(),
+                 okp ? "" : " — not sent: ", okp ? "" : why.c_str());
+            reply(okp ? "200 OK" : "409 Conflict", okp ? std::string("{\"ok\":true}") : "{\"ok\":false,\"error\":\"" + jsonEscape(why) + "\"}");
+#else
+            reply("404 Not Found", "{\"ok\":false,\"error\":\"this build has no Icom support\"}");
+#endif
         } else if (reqLine.rfind("GET /vibeserver/dxlog", 0) == 0 || reqLine.rfind("POST /vibeserver/dxlog", 0) == 0) {
             if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
             auto reply = [&](const char* status, const std::string& body) {
@@ -29687,6 +29733,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /// When we last tried to reopen a dongle whose stream died — see the watchdog.
     double lastReopenAt_ = 0.0;
     void pauseCaptureIdle() {
+#if VIBE_HAVE_ICOM
+        /* ★★ AN ICOM HAS NO CAPTURE TO PAUSE. The owner's idle power-down ("Power down the radio") means a real
+         *  power-off for it — 18 00 — but ONLY with "Power on the radio over CI-V" ticked (otherwise the next listener
+         *  would find it off with nothing able to switch it on) and a grace set. The park's own guards (nobody watching,
+         *  no background decoder, no DX scan, no ADS-B keep) have already been passed to get here; idlePowerOff checks
+         *  "in use" once more on the CI-V thread. */
+        if (useIcom()) {
+            if (g_vsIdleGraceSec.load() > 0.0 && icom->idlePowerOff())
+                LOGI("icom: nobody listening for the idle grace — switching the radio off (idle power-down + power on over CI-V)");
+            return;
+        }
+#endif
         // ★★★ A SHARED RECEIVER NEVER IDLE-PARKS. Parking costs the AGC: the RSP's loop only
         //     starts on a TRANSITION (see the sdrpAgcKick note), so every pause/resume cycle makes
         //     it re-converge, and when it sticks the listener has NO GAIN CONTROLS to rescue it —
@@ -31764,6 +31822,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("no listeners — idle park in %.0fs (grace period)", g);
     }
     void resumeCaptureIdle(bool fromBg = false) {
+#if VIBE_HAVE_ICOM
+        if (useIcom()) icom->setInUse(true);   // ★ a listener arrived: a radio the park switched off is woken now
+#endif
         // ★★ V12: a listener arriving ends background decoding FIRST, and gets the dial back (see bgStopForListener).
         //    `fromBg` is background decoding taking the radio back for itself, which must not stop itself.
         if (!fromBg) bgStopForListener("a listener arrived");
@@ -33067,6 +33128,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     dirty flag and its own interval, so a second caller costs nothing. */
                 g_vsConnLog.saveIfDue();
 
+#if VIBE_HAVE_ICOM
+                // ── ★ An Icom is told every tick whether anybody is using it (the idle power-down's "in use") ──
+                if (useIcom()) {
+                    bool empty;
+                    { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+                    icom->setInUse(!empty || bgWanted_.load() || dxWanted_.load() || adsbKeepHolds());
+                }
+#endif
                 // ── ★★ V12: background decoding — before the park, which it holds off while a profile is due ──
                 bgTick();
                 // ── ★★★ V12: the idle DX scanner — after bgTick: a due profile comes first ──
@@ -42002,22 +42071,24 @@ int LocalSdrShim::startIcom(const IcomStart& o, std::string& err) {
     impl->fftRate = 20.0; impl->baseFftRate = 20.0;
     impl->mode = "usb";
     impl->audioGain.store(1.0f);      // the radio's own AF level; buildAudio()'s per-mode trim does not apply
-    impl->icomOwnerLock = o.ownerLock;
+    impl->icomTuneLock = o.ownerLock;
     impl->icomRfOpen = o.rfOpen;
     impl->icom = std::make_unique<icom::IcomSource>();
     Impl* self = impl;
     impl->icom->setSweepSink([self](const icom::Sweep& s) { self->onIcomSweep(s); });
     impl->icom->setPcmSink([self](const int16_t* pcm, int n, int ch, int rate) { self->onIcomPcm(pcm, n, ch, rate); });
     impl->icom->setStateSink([self](unsigned w) {
-        if (w & icom::IcomSource::kLink) setRadioProblem(self->icom->state().linkUp ? std::string() : std::string("the radio is not answering on CI-V"));
+        if (w & icom::IcomSource::kLink) setRadioProblem(self->icom->linkProblem());   // ★ "switched off", "switching on", …
         self->onIcomState(w);
     });
     impl->icom->setLostSink([](const std::string& why) { setRadioProblem(why); });
     g_icomOn.store(true);
     icom::IcomConfig c;
     c.port = o.port; c.baud = o.baud; c.civAddr = o.civAddr; c.audio = o.audio;
-    c.scopeSpeed = o.scopeSpeed; c.ttyOk = o.ttyOk; c.modelHint = o.modelHint;
+    c.scopeSpeed = o.scopeSpeed; c.ttyOk = o.ttyOk; c.modelHint = o.modelHint; c.powerOn = o.powerOn;
     if (!impl->icom->open(c, err)) { g_icomOn.store(false); delete impl; return -1; }
+    // ★★ A SWITCHED-OFF RADIO OPENS (waiting): the server runs, every listener is told why it is quiet.
+    if (impl->icom->waitingForRadio()) setRadioProblem(impl->icom->linkProblem());
     {
         const icom::Model& m = impl->icom->model();
         g_icomRanges.clear();
@@ -42052,7 +42123,7 @@ int LocalSdrShim::startIcom(const IcomStart& o, std::string& err) {
     p = impl;
     LOGI("Icom %s started (RECEIVE ONLY): %.3f kHz %s, port=%d, owner lock %s",
          impl->icom->model().name, impl->audioFreq.load() / 1e3, impl->icomRadioMode.c_str(), chosen,
-         o.ownerLock ? "ON (listeners follow the radio)" : "off");
+         o.ownerLock ? "ON (only the owner tunes)" : "off (the ordinary dial rules)");
     return chosen;
 #endif
 }
@@ -42822,7 +42893,12 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
         for (int i = 0; i < m.nRanges; i++) j += std::string(i ? "," : "") + "[" + std::to_string(m.ranges[i].lo) + "," + std::to_string(m.ranges[i].hi) + "]";
         j += "]";
         j += std::string(",\"tx\":") + (st.tx ? "true" : "false") + ",\"linkUp\":" + (st.linkUp ? "true" : "false");
-        j += std::string(",\"ownerLock\":") + (p->icomOwnerLock ? "true" : "false") + ",\"rfOpen\":" + (p->icomRfOpen ? "true" : "false");
+        j += std::string(",\"ownerLock\":") + (p->icomTuneLock ? "true" : "false") + ",\"rfOpen\":" + (p->icomRfOpen ? "true" : "false");
+        // ★★ WHY IT IS QUIET, in the source's own words (switched off / switching on / off by the owner / refused), and
+        //    the owner's next step; and the power facts the admin's RADIO ON / RADIO OFF buttons need.
+        j += ",\"linkWhy\":" + q(ic.linkProblem()) + ",\"linkHint\":" + q(st.linkUp ? std::string() : ic.linkHint());
+        j += std::string(",\"power\":{\"canSwitch\":true,\"autoOn\":") + (ic.autoPowerOn() ? "true" : "false")
+           + ",\"offByOwner\":" + (ic.offByOwner() ? "true" : "false") + ",\"switchingOn\":" + (ic.switchingOn() ? "true" : "false") + "}";
         j += ",\"audio\":" + q(ic.audioDescription()) + ",\"audioProblem\":" + q(ic.audioProblem());
         j += std::string(",\"preflight\":{\"passed\":") + (pf.passed ? "true" : "false") + ",\"verified\":" + (pf.verified ? "true" : "false")
            + ",\"summary\":" + q(pf.summary) + ",\"items\":[";

@@ -2124,6 +2124,9 @@ export class SpectrumClient {
     return true;
   }
 
+  /** ★ The admin's RADIO ON / RADIO OFF for an Icom — the server refuses it in words for anyone else. */
+  sendIcomPower(action: 'on' | 'off') { this._send({ type: 'icom_power', action }); }
+
   /** Current display span (Hz). */
   spanHz(): number {
     const n = this.cfg.binCount || 4096;

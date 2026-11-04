@@ -4,7 +4,9 @@
 // (`--icom <pty> --icom-tty-ok`, test audio `tone`). Then, over the same sockets a client uses:
 //   • hwinfo says driver "icom" with the radio's own lists, and nothing IQ-shaped;
 //   • SPEC frames arrive at the radio's rate over the radio's edges, and config's span matches them;
-//   • the OWNER LOCK refuses a listener's tune (default ON), and a signed-in admin tunes the radio;
+//   • ★ an Icom tunes like any radio (2026-11-04): a listener's tune moves it (the tune lock is OFF by default);
+//     RADIO ON / RADIO OFF are the admin's alone; with --icom-tune-lock only the admin tunes; with ask before
+//     tuning a second listener is held back like on any shared dial; a radio started SWITCHED OFF waits;
 //   • the radio's own knob reaches every listener; zoom is the span ladder; a mode change reaches the radio;
 //   • the owner keying the radio raises radio.tx;
 //   • ★★★ and at the end the fake is asked how many frames it was sent that would transmit or are off the
@@ -120,7 +122,8 @@ try {
   ok(r.scope && r.scope.points === 475 && JSON.stringify(r.scope.spans) === '[5000,10000,20000,50000,100000,200000,500000,1000000]',
      `scope: 475 points, the 8-rung span ladder (${r.scope && JSON.stringify(r.scope.spans)})`);
   ok(r.preflight && r.preflight.passed === true && r.preflight.items.length === 5, `preflight passed, ${r.preflight && r.preflight.items.length} items shown`);
-  ok(r.ownerLock === true, 'owner lock ON by default — listeners follow the radio');
+  ok(r.ownerLock === false, '★ the tune lock is OFF by default — the ordinary dial rules');
+  ok(r.power && r.power.canSwitch === true && r.power.autoOn === false, 'hwinfo carries the power facts (RADIO ON/OFF, auto power-on off)');
   ok(!('rates' in r) && !('attSteps' in r) && !('hfLna' in r), 'no IQ-radio fields (rates, attSteps, hfLna) in the radio object');
 
   const cfg0 = a.last('config') || {};
@@ -134,15 +137,30 @@ try {
   ok(au.binBytes > 1000, `audio flows on the audio socket (${au.binBytes} bytes)`);
   ok(a.last('icom') && typeof a.last('icom').sRaw === 'number', `the icom status line arrives (S ${a.last('icom') && a.last('icom').sRaw})`);
 
-  console.log('   the owner lock');
-  a.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
+  console.log('   tuning follows the ordinary dial rules; the power keys are the owner\'s');
+  a.send({ type: 'tune', frequency: 7050000, mode: 'usb' });
+  ok(await until(async () => (await stats()).freq === 7050000, 3000), "★ a listener (not admin) tunes the radio — like any other radio");
+  a.send({ type: 'icom_power', action: 'off' });
   await sleep(800);
   let st = await stats();
-  ok(st.freq === 14074000, `★ a listener's tune is REFUSED with the lock on — the radio stayed on ${st.freq}`);
-  ok(a.txt.some((m) => m.t.includes('"notice"') && m.t.includes('follow')), 'and they are told why, in words');
+  ok(st.powered === 1 && st.offs === 0, '★ a listener\'s RADIO OFF is refused — the radio is still on');
+  ok(a.txt.some((m) => m.t.includes('"notice"') && m.t.includes('Only the owner can switch the radio')), 'and they are told why, in words');
 
   a.send({ type: 'admin_unlock', nonce: '', token: '' });
   ok(await until(() => a.txt.some((m) => m.t.includes('"type":"admin","ok":true')), 2000), 'admin signs in (no password set: granted)');
+  console.log('   RADIO OFF / RADIO ON (admin)');
+  a.send({ type: 'icom_power', action: 'off' });
+  ok(await until(async () => { const s = await stats(); return s.powered === 0 && s.offs === 1; }, 3000), '★ the admin presses RADIO OFF: 18 00 sent once, the radio is off');
+  ok(await until(() => a.last('hwinfo')?.radio?.linkWhy === 'Switched off by the owner', 5000), `every listener is told: "${a.last('hwinfo')?.radio?.linkWhy}"`);
+  ok(/the owner pressed RADIO OFF/.test(readLog()), 'the press is logged plainly');
+  await sleep(4000);
+  st = await stats();
+  ok(st.wakes === 0 && st.powered === 0, 'it stays off (no automatic power-on without the option)');
+  ok(srv.exitCode === null, 'and the server is still running (no exit, no restart loop)');
+  a.send({ type: 'icom_power', action: 'on' });
+  ok(await until(async () => (await stats()).wakes === 1, 4000), 'RADIO ON: the FE preamble + 18 01 is sent once');
+  ok(await until(() => a.last('hwinfo')?.radio?.linkUp === true, 15000), '★ the radio boots, the PREFLIGHT runs again, and it is back');
+  ok(await until(() => a.last('hwinfo')?.radio?.preflight?.passed === true, 3000), '  … with the preflight passed');
   a.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
   ok(await until(async () => (await stats()).freq === 7074000, 3000), '★ the admin tunes: the RADIO moved to 7.074');
   ok(await until(() => a.last('config')?.vfo === 7074000, 3000), 'config follows');
@@ -181,6 +199,7 @@ try {
 
   st = await stats();
   ok(st.violations === 0, `★★★ the fake radio saw ZERO disallowed frames (${st.frames} frames in total)`);
+  ok(st.offs === 1, `★★ exactly one 18 00 in the whole run — the admin's press (${st.offs})`);
   ok(!/REFUSED a CI-V frame/.test(readLog()), 'and the server refused none of its own');
   a.close(); au.close(); b.close();
 } finally {
@@ -190,6 +209,87 @@ try {
   await sleep(200);
   fake.kill('SIGTERM');
 }
+// ── ★★ PHASE 1b: THE TUNE LOCK ON, ASK BEFORE TUNING, AND A RADIO STARTED SWITCHED OFF ──
+async function phase(fakeArgs, srvArgs, body) {
+  const f = spawn(FAKE, fakeArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+  let out = ''; f.stdout.on('data', (d) => { out += d.toString(); }); f.stderr.on('data', (d) => { out += d.toString(); });
+  await until(() => /FAKE_ICOM_PTY (\S+)/.test(out), 3000);
+  const p = (out.match(/FAKE_ICOM_PTY (\S+)/) || [])[1];
+  const st = async () => {
+    const n0 = out.length; f.stdin.write('stats\n');
+    await until(() => out.slice(n0).includes('FAKE_ICOM_STATS'), 2000);
+    const m = out.slice(n0).match(/FAKE_ICOM_STATS (.*)/);
+    const o = {}; if (m) for (const kv of m[1].trim().split(' ')) { const [k, v] = kv.split('='); o[k] = Number(v); }
+    return o;
+  };
+  const pt = await freePort();
+  const lp = path.join(dir, `server-${pt}.log`);
+  const sv = spawn(BIN, ['--icom', p, '--icom-tty-ok', '--icom-audio', 'tone', '--port', String(pt), '--idle-grace', '0', ...srvArgs],
+                   { env, stdio: ['ignore', fs.openSync(lp, 'w'), fs.openSync(lp, 'a')] });
+  try {
+    ok(await until(() => getJson(pt, '/vibeserver.json').then((j) => !!j), 8000), `server up (${srvArgs.join(' ')}${fakeArgs.length ? ', fake ' + fakeArgs.join(' ') : ''})`);
+    await body(pt, st, f, sv, () => fs.readFileSync(lp, 'utf8'));
+  } finally {
+    sv.kill('SIGTERM'); await sleep(400);
+    try { f.stdin.write('quit\n'); } catch {}
+    f.kill('SIGTERM');
+  }
+}
+console.log('── "Only I may tune this radio" ON ──');
+await phase([], ['--users', '4', '--icom-tune-lock'], async (pt, st) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=lock0001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.ownerLock === true, 4000), 'hwinfo says the tune lock is on');
+  x.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
+  await sleep(800);
+  ok((await st()).freq === 14074000, '★ a listener\'s tune is REFUSED with the lock on');
+  ok(x.txt.some((m) => m.t.includes('"notice"') && m.t.includes('only they tune it')), 'and they are told why, in words');
+  x.send({ type: 'admin_unlock', nonce: '', token: '' });
+  await until(() => x.txt.some((m) => m.t.includes('"type":"admin","ok":true')), 2000);
+  x.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
+  ok(await until(async () => (await st()).freq === 7074000, 3000), 'the admin tunes it');
+  x.close();
+});
+console.log('── a shared Icom with ask before tuning ──');
+await phase([], ['--users', '4', '--ask-before-tuning'], async (pt, st) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=ask00001-aaaa&bins=256');
+  await until(() => x.last('config'), 4000);
+  x.send({ type: 'tune', frequency: 7040000, mode: 'usb' });
+  ok(await until(async () => (await st()).freq === 7040000, 3000), 'alone on the shared dial: the listener tunes');
+  await sleep(300);
+  const y = ws(pt, '/ws/user-spectrum?user_session_id=ask00002-bbbb&bins=256');
+  ok(await until(() => y.last('dial')?.askFirst === true, 5000), 'a second listener arrives: ask before tuning is in force');
+  y.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
+  y.send({ type: 'icom_control', fil: 3 });
+  await sleep(1000);
+  const s = await st();
+  ok(s.freq === 7040000, `★ the newcomer\'s tune is held back like on any shared dial (radio on ${s.freq})`);
+  ok(y.txt.some((m) => m.t.includes('Ask in chat before tuning')), '  … and told to ask, in words (icom_control is gated too)');
+  x.close(); y.close();
+});
+console.log('── started with the radio SWITCHED OFF ──');
+await phase(['--off'], ['--users', '2'], async (pt, st, f, sv, rl) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=off00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.linkUp === false, 5000), '★ the server runs with the radio off (no exit)');
+  const why = x.last('hwinfo')?.radio?.linkWhy || '';
+  ok(/switched off/.test(why) && /when it is turned on/.test(why), `listeners are told: "${why}"`);
+  ok(/MENU > SET > Connectors > CI-V/.test(x.last('hwinfo')?.radio?.linkHint || ''), 'and the CI-V hint comes second');
+  await sleep(5000);
+  ok((await st()).wakes === 0 && sv.exitCode === null, 'option off: no power command, still running');
+  ok((rl().match(/waiting for it/g) || []).length <= 2, 'one quiet line for the wait, not one every retry');
+  f.stdin.write('power 1\n');
+  ok(await until(() => x.last('hwinfo')?.radio?.linkUp === true, 10000), '★ switched on by hand: VibeServer starts it (preflight, scope)');
+  ok(await until(() => (x.spec || 0) > 3, 4000), '  … and the waterfall streams');
+  x.close();
+});
+console.log('── radio off, "Power on the radio over CI-V" ticked ──');
+await phase(['--off'], ['--users', '2', '--icom-power-on'], async (pt, st) => {
+  ok(await until(async () => (await st()).wakes === 1, 5000), '★ the server sends the power-on (FE preamble + 18 01) once');
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=pwr00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.linkUp === true, 15000), '  … the radio boots and runs, preflight passed');
+  ok((await st()).offs === 0, '★ no 18 00 was ever sent');
+  x.close();
+});
+
 // ── ★★ PHASE 2: THE RADIO'S AUDIO REACHES THE DECODERS. Real off-air RTTY (Stuart's library, JARTS 2026-10-18)
 //    played as the "radio's USB audio" through the same capture path a real codec uses (paced at 48 kHz),
 //    and the server's own FSK decoder must read it. Skipped — and said so — where the library is absent.

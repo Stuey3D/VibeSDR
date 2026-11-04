@@ -73,6 +73,13 @@ export interface IcomRadio {
   ranges: [number, number][];
   tx: boolean;
   linkUp: boolean;
+  /** ★ Why the link is down, in the server's words ("The radio is switched off …", "Switching the radio on — about a
+   *  minute", "Switched off by the owner"); '' when up or an older server. */
+  linkWhy: string;
+  /** The owner's next step for that (the CI-V menu hint, or the preflight's words); '' none. */
+  linkHint: string;
+  /** ★ The power facts the ADMIN's Radio on / Radio off buttons need; null = an older server (no buttons). */
+  power: IcomPower | null;
   ownerLock: boolean;
   rfOpen: boolean;
   audio: string;
@@ -97,6 +104,15 @@ const nums = (v: unknown): number[] =>
   Array.isArray(v) ? v.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)) : [];
 const strs = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
+
+export interface IcomPower {
+  /** This server takes `icom_power` (Radio on / Radio off, admin only). */
+  canSwitch: boolean;
+  /** The owner's "Power on the radio over CI-V" is ticked. */
+  autoOn: boolean;
+  offByOwner: boolean;
+  switchingOn: boolean;
+}
 
 /** True when hwinfo.radio (or anything carrying a `driver`) is an Icom. ★ Branch on THIS before any
  *  default — "else means dongle" has produced a bug every time a new radio arrived. */
@@ -152,6 +168,12 @@ export function parseIcomRadio(raw: unknown): IcomRadio | null {
     tx: bool(r.tx),
     // ★ ABSENT is not DOWN: only an explicit false says the radio stopped answering.
     linkUp: r.linkUp !== false,
+    linkWhy: str(r.linkWhy), linkHint: str(r.linkHint),
+    power: r.power && typeof r.power === 'object' && (r.power as Record<string, unknown>).canSwitch === true
+      ? { canSwitch: true, autoOn: bool((r.power as Record<string, unknown>).autoOn),
+          offByOwner: bool((r.power as Record<string, unknown>).offByOwner),
+          switchingOn: bool((r.power as Record<string, unknown>).switchingOn) }
+      : null,
     // ★ The server's default is ON (plan §3.4); an absent field must not unlock the radio in the UI.
     ownerLock: r.ownerLock !== false,
     rfOpen: bool(r.rfOpen),
@@ -417,7 +439,9 @@ export function icomControlMsg(radio: IcomRadio | null, f: IcomControlFields): (
 export function icomBanner(radio: IcomRadio | null): string {
   if (!radio) return '';
   if (radio.tx) return 'The radio is transmitting — receive paused';
-  if (!radio.linkUp) return 'The radio is not answering — VibeServer is retrying';
+  // ★ The server's own words when it has them — a switched-off radio is a state ("switched off", "switching on"),
+  //   not a fault; the old sentence is for an older server.
+  if (!radio.linkUp) return radio.linkWhy || 'The radio is not answering — VibeServer is retrying';
   return '';
 }
 
@@ -437,8 +461,11 @@ export interface IcomSettings {
   /** 0 = the radio's own (0x94 on an IC-7300). */
   icomCiv: number;
   icomScopeSpeed: number;
-  /** ★ Default ON — "listeners follow the radio" (plan §3.4). */
-  icomOwnerLock: boolean;
+  /** "Only I may tune this radio" — ★ default OFF since 2026-11-04 (an Icom follows the ordinary dial rules). A new
+   *  key: the old `icomOwnerLock` (always written, default true) is no longer read. */
+  icomTuneLock: boolean;
+  /** "Power on the radio over CI-V" — default OFF. */
+  icomPowerOn: boolean;
   icomRfOpen: boolean;
   /** 'auto' finds the radio's USB audio; 'none' = waterfall and dial only; or a device name. */
   icomAudio: string;
@@ -456,7 +483,8 @@ export function icomSettingsFrom(r: unknown): IcomSettings {
     icomBaud: baud > 0 ? baud : 115200,
     icomCiv: Math.max(0, Math.min(0xff, Math.round(num(o.icomCiv, 0)))),
     icomScopeSpeed: [0, 1, 2].includes(num(o.icomScopeSpeed, 0)) ? num(o.icomScopeSpeed, 0) : 0,
-    icomOwnerLock: o.icomOwnerLock !== false,
+    icomTuneLock: o.icomTuneLock === true,
+    icomPowerOn: o.icomPowerOn === true,
     icomRfOpen: o.icomRfOpen === true,
     icomAudio: (str(o.icomAudio) || 'auto').trim() || 'auto',
     icomPort: (str(o.icomPort) || 'usb').trim() || 'usb',
@@ -518,20 +546,21 @@ export function preflightLines(p: IcomPreflight | null): { ok: boolean; text: st
  *  names and defaults). scripts/check-icom-servermode.mjs holds this list against the Kotlin. The phone's audio is
  *  AudioRecord on the radio's USB input and its port is the device the owner allowed, so icomAudio / icomPort /
  *  icomTtyOk are not settings there. */
-export const ICOM_PHONE_KEYS = ['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomOwnerLock', 'icomRfOpen'] as const;
+export const ICOM_PHONE_KEYS = ['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomTuneLock', 'icomRfOpen', 'icomPowerOn'] as const;
 export type IcomPhoneFields = Pick<IcomSettings, (typeof ICOM_PHONE_KEYS)[number]>;
 
-/** The five fields for the phone's start config, at definite values (so a crash-restore starts the radio exactly as
- *  the screen did), from whatever was stored — a missing or damaged store gives the setup page's defaults, owner
- *  lock ON. ★ The baud is one the radio's menu offers, or 115200. */
+/** The six fields for the phone's start config, at definite values (so a crash-restore starts the radio exactly as
+ *  the screen did), from whatever was stored — a missing or damaged store gives the setup page's defaults (tune
+ *  lock OFF, power-on OFF). ★ The baud is one the radio's menu offers, or 115200. */
 export function icomPhoneFields(stored: unknown): IcomPhoneFields {
   const s = icomSettingsFrom(stored);
   return {
     icomBaud: (ICOM_BAUDS as readonly number[]).includes(s.icomBaud) ? s.icomBaud : 115200,
     icomCiv: s.icomCiv,
     icomScopeSpeed: s.icomScopeSpeed,
-    icomOwnerLock: s.icomOwnerLock,
+    icomTuneLock: s.icomTuneLock,
     icomRfOpen: s.icomRfOpen,
+    icomPowerOn: s.icomPowerOn,
   };
 }
 

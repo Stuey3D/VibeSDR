@@ -292,7 +292,7 @@ struct Opts {
     // ★ Icom (driver "icom") — see vibeserver_config.h Config::icomPort. --icom <port> starts one directly.
     std::string icomPort = "usb", icomAudio = "auto";
     int         icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0;
-    bool        icomOwnerLock = true, icomRfOpen = false, icomTtyOk = false;
+    bool        icomTuneLock = false, icomRfOpen = false, icomTtyOk = false, icomPowerOn = false;
     bool        icomGiven = false;   ///< --icom on the command line: start the Icom, skip discovery
     bool        rspAmNotch = false;
     bool        rspExtRef = false;
@@ -508,7 +508,9 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--icom-audio")       { o.icomAudio = need(i); }
         else if (a == "--icom-scope-speed") { o.icomScopeSpeed = std::atoi(need(i)); }
         else if (a == "--icom-tty-ok")      { o.icomTtyOk = true; }
-        else if (a == "--icom-open-tuning") { o.icomOwnerLock = false; }
+        else if (a == "--icom-open-tuning") { o.icomTuneLock = false; }   // ★ the default since 2026-11-04; kept for old scripts
+        else if (a == "--icom-tune-lock")   { o.icomTuneLock = true; }
+        else if (a == "--icom-power-on")    { o.icomPowerOn = true; }
         else if (a == "--icom-rf-open")     { o.icomRfOpen = true; }
         else if (a == "--tcp") {
             o.useUsb = false;
@@ -661,7 +663,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.antennaMap = c.antennaMap;
     o.rspHdr = c.rspHdr; o.rspAmNotch = c.rspAmNotch; o.rspExtRef = c.rspExtRef;
     o.icomPort = c.icomPort; o.icomBaud = c.icomBaud; o.icomCiv = c.icomCiv; o.icomAudio = c.icomAudio;
-    o.icomScopeSpeed = c.icomScopeSpeed; o.icomOwnerLock = c.icomOwnerLock; o.icomRfOpen = c.icomRfOpen; o.icomTtyOk = c.icomTtyOk;
+    o.icomScopeSpeed = c.icomScopeSpeed; o.icomTuneLock = c.icomTuneLock; o.icomRfOpen = c.icomRfOpen; o.icomTtyOk = c.icomTtyOk; o.icomPowerOn = c.icomPowerOn;
     o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget; o.rfAgc = c.rfAgc; o.rspDabDecim = c.rspDabDecim; o.rfAgcStart = c.rfAgcStart; o.rspVibeAgc = c.rspVibeAgc;
     o.agcSet = c.agcSet; o.agcSetLock = c.agcSetLock;
     o.port = c.port; o.web = c.web;
@@ -700,7 +702,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.antennaMap = o.antennaMap;
     c.rspHdr = o.rspHdr; c.rspAmNotch = o.rspAmNotch; c.rspExtRef = o.rspExtRef;
     c.icomPort = o.icomPort; c.icomBaud = o.icomBaud; c.icomCiv = o.icomCiv; c.icomAudio = o.icomAudio;
-    c.icomScopeSpeed = o.icomScopeSpeed; c.icomOwnerLock = o.icomOwnerLock; c.icomRfOpen = o.icomRfOpen; c.icomTtyOk = o.icomTtyOk;
+    c.icomScopeSpeed = o.icomScopeSpeed; c.icomTuneLock = o.icomTuneLock; c.icomRfOpen = o.icomRfOpen; c.icomTtyOk = o.icomTtyOk; c.icomPowerOn = o.icomPowerOn;
     c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget; c.rfAgc = o.rfAgc; c.rspDabDecim = o.rspDabDecim; c.rfAgcStart = o.rfAgcStart; c.rspVibeAgc = o.rspVibeAgc;
     c.agcSet = o.agcSet; c.agcSetLock = o.agcSetLock;
     c.port = o.port; c.web = o.web;
@@ -926,8 +928,8 @@ static std::string selfExePath() {
 static int startIcomFrom(const Opts& o, const std::string& port, const std::string& serial, std::string& err) {
     vibe::LocalSdrShim::IcomStart s;
     s.port = port; s.baud = o.icomBaud; s.civAddr = o.icomCiv; s.audio = o.icomAudio;
-    s.scopeSpeed = o.icomScopeSpeed; s.ttyOk = o.icomTtyOk; s.ownerLock = o.icomOwnerLock;
-    s.rfOpen = o.icomRfOpen; s.modelHint = serial; s.freqHint = o.freq;
+    s.scopeSpeed = o.icomScopeSpeed; s.ttyOk = o.icomTtyOk; s.ownerLock = o.icomTuneLock;
+    s.rfOpen = o.icomRfOpen; s.powerOn = o.icomPowerOn; s.modelHint = serial; s.freqHint = o.freq;
     return vibe::LocalSdrShim::instance().startIcom(s, err);
 }
 

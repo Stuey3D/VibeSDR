@@ -242,14 +242,15 @@ export type VibeServerConfig = {
   biasT?: boolean;
   /** ★★★ AN ICOM, RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md Phase 4) — the five settings Android's server reads
    *  (VibeIcom.prepareStart), in the Linux config's names: the radio's CI-V USB baud, its CI-V address (0 = the
-   *  radio's own), the scope's sweep speed (0 fast, 1 mid, 2 slow), "listeners follow the radio" (default ON) and
+   *  radio's own), the scope's sweep speed (0 fast, 1 mid, 2 slow), "only I may tune this radio" (icomTuneLock, default OFF since 2026-11-04), "power on the radio over CI-V" (icomPowerOn, default OFF) and
    *  whether listeners may change its RF settings. Read only when the radio IS an Icom; sent at definite values on
    *  every start so a crash-restore brings the radio back as the owner set it. */
   icomBaud?: number;
   icomCiv?: number;
   icomScopeSpeed?: number;
-  icomOwnerLock?: boolean;
+  icomTuneLock?: boolean;
   icomRfOpen?: boolean;
+  icomPowerOn?: boolean;
   /** Manual direct sampling: 0 off, 1 I branch, 2 Q branch. */
   directSampling?: number;
   /** ★ Switch direct sampling on by itself below `directSamplingBelowHz` — the owner's choice, and
@@ -427,8 +428,9 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     icomBaud: cfg.icomBaud ?? 115200,
     icomCiv: cfg.icomCiv ?? 0,
     icomScopeSpeed: cfg.icomScopeSpeed ?? 0,
-    icomOwnerLock: cfg.icomOwnerLock ?? true,
+    icomTuneLock: cfg.icomTuneLock ?? false,
     icomRfOpen: cfg.icomRfOpen ?? false,
+    icomPowerOn: cfg.icomPowerOn ?? false,
   };
 }
 

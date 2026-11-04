@@ -23,16 +23,16 @@ console.log('Icom on the app\'s own server screen');
 
 // ── the five keys: one list, three readers ──
 const keys = JSON.parse(R.match(/ICOM_PHONE_KEYS = (\[[^\]]*\])/)[1].replace(/'/g, '"'));
-ok(keys.length === 5, `ICOM_PHONE_KEYS has five keys (${keys.join(', ')})`);
+ok(keys.length === 6, `ICOM_PHONE_KEYS has six keys (${keys.join(', ')})`);
 const prep = KT.slice(KT.indexOf('fun prepareStart'), KT.indexOf('fun onServerStarted'));
 const ktKeys = [...prep.matchAll(/cfg\.opt(?:Int|Boolean)\("(icom\w+)"/g)].map((m) => m[1]);
 ok(JSON.stringify([...ktKeys].sort()) === JSON.stringify([...keys].sort()),
    `VibeIcom.prepareStart reads exactly ICOM_PHONE_KEYS (Kotlin: ${ktKeys.join(', ')})`);
 // ★ Defaults agree: the Kotlin optX default = what icomPhoneFields(null) gives.
 const ktDefaults = Object.fromEntries([...prep.matchAll(/cfg\.opt(?:Int|Boolean)\("(icom\w+)", (\w+)\)/g)].map((m) => [m[1], m[2]]));
-const want = { icomBaud: '115200', icomCiv: '0', icomScopeSpeed: '0', icomOwnerLock: 'true', icomRfOpen: 'false' };
+const want = { icomBaud: '115200', icomCiv: '0', icomScopeSpeed: '0', icomTuneLock: 'false', icomRfOpen: 'false', icomPowerOn: 'false' };
 ok(JSON.stringify(ktDefaults) === JSON.stringify(Object.fromEntries(Object.keys(ktDefaults).map((k) => [k, want[k]]))),
-   `Kotlin defaults = the setup page's (owner lock ON): ${JSON.stringify(ktDefaults)}`);
+   `Kotlin defaults = the setup page's (tune lock OFF, power-on OFF): ${JSON.stringify(ktDefaults)}`);
 for (const k of keys) {
   has(V, `${k}?: `, `VibeServerConfig declares ${k}`);
   ok(new RegExp(`\\b${k}: cfg\\.${k} \\?\\? `).test(V), `nativeServerConfig sends ${k} at a definite value`);
