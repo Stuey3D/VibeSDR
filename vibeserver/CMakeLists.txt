@@ -336,6 +336,9 @@ add_executable(vibeserver
     # ★ The pocket image's Wi-Fi + captive portal (daemon side). Inert unless the image's marker
     #   file exists, so every other install carries it and never runs a line of it.
     "${CMAKE_CURRENT_SOURCE_DIR}/pocket.cpp"
+    # ★ V12 R36S: `vibeserver --handheld`, the handheld's supervisor (one radio, hot-swap, the card, vibe-hwd).
+    #   Inert unless asked for — a server never runs a line of it.
+    "${CMAKE_CURRENT_SOURCE_DIR}/handheld.cpp"
     $<$<BOOL:${CURSES_FOUND}>:${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp>)
 if(CURSES_FOUND)
   target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_TUI)

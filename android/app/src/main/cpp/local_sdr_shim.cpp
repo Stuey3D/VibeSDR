@@ -5686,6 +5686,7 @@ static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::SdrChangesGetFn g_vsSdrChangesGet;   // ★ guarded by g_vsConfigMtx
 static LocalSdrShim::SdrChangeSetFn  g_vsSdrChangeSet;
 static LocalSdrShim::PocketHttpFn    g_vsPocketHttp;      // ★ guarded by g_vsConfigMtx — see setPocketHttpHandler
+static std::atomic<bool>             g_vsHandheld{false}; // ★ the R36S handheld profile — see LocalSdrShim::setHandheld
 static std::atomic<bool>             g_vsCaptiveActive{false};
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
@@ -24096,6 +24097,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              //       must read a MISSING key as "ordinary receiver" — which is
                              //       what `!== true` gives for free.
                              + (frontDoorOnly ? std::string(",\"frontDoor\":true") : std::string())
+                             // ★ The R36S handheld profile (setHandheld): the page drops every server-only piece of UI.
+                             + (g_vsHandheld.load() ? std::string(",\"handheld\":true") : std::string())
                              + ",\"rangeLo\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
                                    ? g_vsLockedCentre.load() - LocalSdrShim::instance().captureSpanHz() / 2 : 0))
                              + ",\"rangeHi\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
@@ -24814,7 +24817,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             const std::string pre = "/vibeserver/gallery/file/";
             std::string fpath, ctype;
-            if (path.rfind(pre, 0) != 0 || !g.resolve(path.substr(pre.size()), fpath, ctype)) {
+            /* ★ The handheld's card names ("NAVTEX/2026-11-05 1423 - 518.000 kHz NAVTEX.txt") arrive percent-encoded;
+             *  decoded HERE, then checked by resolve() exactly like a server's flat name (vibe_gallery.h CardLayout). */
+            const std::string itemName = path.rfind(pre, 0) != 0 ? std::string()
+                : (vibe::gallery::cardLayout().on ? urlDecode(path.substr(pre.size())) : path.substr(pre.size()));
+            if (path.rfind(pre, 0) != 0 || !g.resolve(itemName, fpath, ctype)) {
                 reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}");
                 return;
             }
@@ -24830,7 +24837,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else { ::close(fd); reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}"); return; }
                 ::close(fd);
             } else { reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}"); return; }
-            const std::string name = path.substr(pre.size());
+            const std::string& name = itemName;
             // ★ V12 2026-10-25: an item may carry its own download name ("ISM 433.92 2026-10-25.txt", Meta::dlName) —
             //   only letters, digits, spaces and . - _ ( ) (downloadSafe, again here), so the header cannot be broken.
             std::string dn = vibe::gallery::downloadSafe(g.field(name, "dn"));
@@ -36039,6 +36046,26 @@ void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publi
     //    unlisted idents (data carriers read as Morse) on the cards already written are set aside (vibe_ndb_gallery_clean.h).
     //    After the first pass this is one stat().
     vibe::ndbgal::cleanUniformIdents(g);
+}
+void LocalSdrShim::setGalleryCardLayout(const std::string& filesDir) {
+    auto& c = vibe::gallery::cardLayout();
+    c.files = filesDir;
+    c.on = !filesDir.empty();
+    if (c.on) { ::mkdir(filesDir.c_str(), 0755); LOGI("gallery: handheld card layout — items under %s/<DECODER>/", filesDir.c_str()); }
+}
+void LocalSdrShim::setHandheld(bool on) { g_vsHandheld.store(on); if (on) LOGI("handheld profile: one radio, one owner, 127.0.0.1"); }
+bool LocalSdrShim::handheld() { return g_vsHandheld.load(); }
+bool LocalSdrShim::webAssetFor(const std::string& path, bool acceptsBr, bool acceptsGzip,
+                               std::string& body, std::string& contentType, std::string& encoding) {
+    int idx = -1;
+    if (path == "/" || path.rfind("/?", 0) == 0) idx = kVibeWebPageIdx;
+    else if (path.rfind("/vs/", 0) == 0) { const size_t q = path.find_first_of("?#"); idx = vibeWebAssetFind(q == std::string::npos ? path : path.substr(0, q)); }
+    if (idx < 0) return false;
+    const int enc = vibeWebPickEnc(idx, acceptsBr, acceptsGzip);
+    body = vibeWebAssetBody(idx, enc);
+    contentType = idx == kVibeWebPageIdx ? "text/html; charset=utf-8" : kVibeWebAssets[idx].type;
+    encoding = enc == kVibeEncBrotli ? "br" : enc == kVibeEncGzip ? "gzip" : "";
+    return true;
 }
 void LocalSdrShim::setGalleryRadioLabel(const std::string& label) { vibe::gallery::shared().setRadioLabel(label); }
 void LocalSdrShim::setGalleryRedact(const std::vector<std::string>& serials) { vibe::gallery::shared().setRedact(serials); }

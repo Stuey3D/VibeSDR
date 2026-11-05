@@ -55,8 +55,10 @@ take gamepad navigation** (client fix; the handheld skips the landing page anywa
 ## 0.1 The product (Stuart, 2026-11-05) — "a proper portable radio just powered by VibeSDR"
 
 **Power on.** A VibeSDR splash from the first instant (the bootloader's logo, then an early splash with a **progress
-bar**, then the page's own matching screen while the engine starts) — never a ROCKNIX logo or Linux text. **No "start
-audio" splash**: autoplay is allowed, the receiver opens straight into the waterfall.
+bar**, then the page's own matching screen while the engine starts) — never a ROCKNIX logo or Linux text. **The START RADIO screen
+stays** (Stuart 2026-11-05, superseding "no start-audio splash"): exactly as every receiver has it, with View tutorial and
+the transparency switch — and it works from the pad (D-pad moves, A presses, the tour's NEXT / BACK / SKIP too, B ends
+the tour). Only the server's LANDING page is skipped: power on → START RADIO → the waterfall.
 
 **Radios (hot-swap).** No radio → full screen **"Please connect an SDR"**. Plug one in → the waterfall starts and the menu
 offers only what that radio can do (`vibe_radio_caps.h`: no DAB / ADS-B on an Airspy HF+). Unplug during use → its settings
@@ -76,6 +78,37 @@ battery must never corrupt the card.
 set + 0.1 s nudge; set from a decoded MSF/DCF77/WWV(B)/JJY minute — two consecutive minutes must agree; align to FT8 DT),
 the card's space, power off / restart.
 
+**The handheld main menu (Stuart 2026-11-05 — supersedes a "This device" section).** Three buttons, **R36S HARDWARE**,
+**SDR HARDWARE** and **DISPLAY**. Pressing one expands its options **in place, directly under the button** (an accordion — not a new page,
+not a nested sub-menu); pressing it again, or B / back, collapses them into the button. One level only: "no multilayered
+menu but the options are still hidden", so the main menu stays uncluttered. Opening one collapses the others.
+- **R36S HARDWARE** = volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
+  **Performance** overlay toggle with its figures in full, power off, restart. (No SSH — removed 2026-11-05.)
+- **SDR HARDWARE** = the plugged-in radio's own controls (gain / AGC / bias-T / direct sampling / ppm / antenna …) from its
+  caps — what the radio menu shows today for that driver.
+- **DISPLAY** = the client's existing look options (control look, transparency, waterfall palette / contrast, display
+  font …) plus the handheld's own: **brightness** (moved here from R36S HARDWARE), the drawing frame rate (**30 fps**
+  default / 60), and an auto-dim / screen-off-after timeout (**off** by default; the screen goes off through the
+  service's `screen-off` action, audio keeps playing, any button wakes it).
+- Gamepad: the D-pad moves through the buttons and the expanded options; **A** expands / activates; **B** collapses.
+
+  The DISPLAY accordion also carries the **waterfall rate: 5 / 10 / 20 real frames a second** (below).
+
+**No server furniture on the handheld (Stuart 2026-11-05).** The engine is local, so everything about a SERVER goes from
+the handheld UI: the data-rate / link meter, KB/s, ping, buffer readouts, bandwidth or compression settings, the
+uncompressed-audio option, listener counts, reconnect banners about the server, admin, chat, the landing page. Anything
+about the RADIO or the DSP stays. (AGENTS.md: no dead controls.)
+
+**Waterfall and spectrum pacing (Stuart 2026-11-05).** The waterfall runs at **5, 10 or 20 REAL frames a second** —
+every row is a real FFT row from the engine, **no interpolated / synthesised waterfall rows** on the handheld. The
+**spectrum trace still interpolates** (a smooth trace between real frames), and frames keep the existing **fixed output
+clock / even pacing** — rows arrive evenly, never in bursts, no refresh holds.
+
+**Performance overlay (Stuart 2026-11-05).** No admin window on the handheld; instead the Performance row's toggle shows a
+SteamOS-style strip at a screen edge: CPU % (box), CPU temperature, battery % + time-remaining estimate, RAM used, client
+fps, the engine's DSP load (the figures the admin health cards already get). Plain DOM text, updated ≤ 2×/s, no canvas;
+remembered across radios.
+
 **The card.** exFAT data partition **`VIBESDR`**, grown to the KERNEL-reported size on first boot after a one-time
 capacity check: `Recordings/`, `Gallery/<DECODER>/` (SSTV, WEFAX, RTTY, NAVTEX, FT8, …), `import/` (bookmark backups,
 imported at start and from an IMPORT key, moved to `import/done/` with a result `.txt`), `export/`, **`Diagnostic logs/`** (EXPORT DIAGNOSTICS on the handheld writes the same scrubbed vibeserver-diagnostics file there, named by UTC time — Stuart 2026-11-05), `README.txt`. Names
@@ -91,6 +124,90 @@ run (IQ ones too — DAB, ISM, ADS-B). arm64 build (the Pi 500's package).
 **Build stages (all in the one image):** (1) bootable image: splash → waterfall on a plugged-in radio, with the hardware fixes above; (2) the
 handheld profile in the engine incl. hot-swap and per-radio memory; (3) the `VIBESDR` partition and card rules; (4) the
 "This device" controls, power button, battery and clock.
+
+## 0.2 The interface between the engine and the hardware service (2026-11-05)
+
+Two halves meet here: **`vibe-hwd`** (the image's root hardware service: backlight, ALSA master volume, the
+speaker/headphone mux, battery, the power button, the clock) and **`vibeserver --handheld`** (the engine, not root).
+The engine is the client; the web page never talks to the service directly — the engine proxies "This device" and relays
+the service's events to the page as a `device` message on the spectrum socket.
+
+**Transport.** Unix socket **`/run/vibe-hwd.sock`** (path overridable by env **`VIBE_HWD_SOCK`**), newline-delimited JSON,
+one request per line, **one reply line per request**, in order. After the engine sends `{"subscribe":true}` the same
+connection also carries **unsolicited event lines** (they have an `"event"` key; replies never do).
+
+**Requests → replies.**
+
+| Request | Reply |
+|---|---|
+| `{"get":"state"}` | `{"ok":true,"brightness":120,"maxBrightness":255,"volume":60,"muted":false,"output":"speaker"\|"headphones","battery":{"pct":83,"charging":false,"status":"Discharging"},"screen":"on"\|"off"}` |
+| `{"set":"brightness","value":N}` | `{"ok":true}` or `{"ok":false,"error":"…"}` |
+| `{"set":"volume","value":0..100}` | same |
+| `{"set":"time","utcMs":1793900000000}` | same (the service is root; the engine is not) |
+| `{"action":"poweroff"\|"reboot"\|"screen-off"\|"screen-on"}` | same |
+| `{"subscribe":true}` | `{"ok":true}`, then events on this connection |
+
+**SSH: removed 2026-11-05 — no SSH on the handheld** (Stuart). The `get ssh`, `set ssh` and `set ssh-password` requests
+are gone from this interface; the engine refuses them and never relays them.
+
+**Events** (after `subscribe`):
+
+- `{"event":"volume","volume":N,"muted":B}` — the volume buttons; the page shows its volume overlay.
+- `{"event":"output","output":"headphones"}` — or `"speaker"`.
+- `{"event":"battery","pct":N,"charging":B}`
+- `{"event":"battery_low","pct":10}` — the page shows the 10 % banner.
+- `{"event":"shutdown","reason":"battery"|"power-button"|"request","inSec":5}` — the engine MUST save every radio's memory
+  and flush, then send **`{"ack":"shutdown"}`** on the same connection. The service waits **≤ 5 s** for the ack, then shuts
+  down anyway.
+- `{"event":"screen","screen":"off"}` — or `"on"`.
+
+**Files the two halves share.**
+- `/run/vibe-handheld/reset-radio` — written by the boot check when Start + Select are held (absent = normal). The engine
+  reads it once at start: the radio that connects next loses its memory (back to defaults) and the page shows a one-time
+  "Radio settings reset" toast. The engine deletes the flag when it has acted on it (it needs write access to
+  `/run/vibe-handheld/`; if it cannot delete it, it remembers in memory for that run only).
+- `VIBESERVER_DATA_DIR/handheld/radio-<serial>.json` — the engine's per-radio memory (private to the engine).
+- `VIBESERVER_CARD_DIR` (the exFAT `VIBESDR` mount) — `Recordings/`, `Gallery/<DECODER>/`, `import/`, `import/done/`,
+  `export/`, `Diagnostic logs/`. The engine creates the folders it writes on first use; every write is temp + rename.
+
+## 0.3 Starting the engine, and what the page asks of Cog (2026-11-05)
+
+**The engine** (`vibeserver/handheld.cpp`, the supervisor; the radio process is the same binary):
+
+```
+User=vibeserver   (NOT root — the hardware service is the only root part)
+Environment=VIBESERVER_DATA_DIR=/var/lib/vibeserver        # per-radio memory in handheld/ (ext4, not the card)
+Environment=VIBESERVER_CARD_DIR=/media/VIBESDR             # the exFAT card; unset = no card (no recordings, no gallery files)
+Environment=VIBE_HWD_SOCK=/run/vibe-hwd.sock               # the default; only needed to move it
+ExecStart=/usr/bin/vibeserver --handheld                   # or "profile":"handheld" in VIBESERVER_CONFIG's file
+```
+
+- It listens on **127.0.0.1:48000** (`--port N` moves it); the radio process takes the next port on loopback and is reached
+  through a hand-off socket in `$VIBESERVER_DATA_DIR/handheld/run/`.
+- The user needs: write to `$VIBESERVER_DATA_DIR` and the card mount, USB access to the radios (the package's udev rules,
+  plugdev), connect to `/run/vibe-hwd.sock`, and write to `/run/vibe-handheld/` (to remove the Start+Select flag — if it
+  cannot, it says so and acts on the flag for that run only). `VIBE_HANDHELD_RESET_FLAG` moves the flag (tests).
+- **No root, no maintenance helper:** EXPORT DIAGNOSTICS runs `/usr/lib/vibeserver/vibeserver-diagnostics` as this user
+  (python3 needed; what it cannot read it says so) — `VIBESERVER_DIAG_SCRIPT` moves it.
+- SIGTERM = save every radio's memory, stop the radio, exit 0. The service's `shutdown` event is ACKed after the memory is
+  on disk and the data dir + card are `syncfs`'d (19 ms in the test); the radio process is stopped after the ack.
+- The radio process logs "handheld profile" at start; the supervisor logs every plug, unplug, save and reset.
+
+**Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette 'http://127.0.0.1:48000/?handheld=1'`. The page
+keeps its START RADIO screen (A on the pad presses it); with autoplay allowed the audio starts on that press, and without
+it the pad's press still dismisses the screen — check on the device that sound starts (a Gamepad press may not count as
+a user activation in WPE: if it does not, allow autoplay in Cog). `?handheld` alone does nothing — the page
+asks `/handheld/session`, which only the handheld engine answers. Cog needs no downloads, no file picker, no storage
+quota beyond localStorage (the look and the DISPLAY choices; everything per radio is the engine's).
+- `&wf20=interp` = the measured fallback for SPECTRUM RATE 20 (10 real frames + repeated rows) — **default is 20 real**;
+  only switch it after measuring on the device.
+
+**The page's routes on the engine** (`/handheld/*`, never handed to the radio): `session`, `memory`, `events` (long-poll),
+`device` (GET state; POST one of: brightness 1–255, volume 0–100, poweroff / reboot /
+screen-off / screen-on), `clock` (`utcMs` or `deltaMs`), `perf`, `card`, `recordings[/<name>]` (POST a WAV, GET with
+Range, DELETE), `import` + `import/result`, `export?kind=bookmarks|dxlog`, `diagnostics`. Device events reach the page
+through `events`, not the spectrum socket — the page must hear the volume buttons and the battery on the "Please connect
+an SDR" screen, where there is no spectrum socket.
 
 ---
 
