@@ -387,6 +387,7 @@ case "$action" in
   #     written HERE in root's directory (root:vibeserver 0640) for the daemon to serve — it can read it, never replace
   #     or redirect it. No python3 (a minimal install): a journal-only file, the daemon still scrubs what it knows.
   diagnostics)  log "building the diagnostics file"
+                log "diagnostics: 2% — started"
                 DIAG=$LOGDIR/diagnostics.txt
                 rm -f "$DIAG" "$DIAG.tmp" 2>/dev/null || true
                 if command -v python3 >/dev/null 2>&1 && [ -x /usr/lib/vibeserver/vibeserver-diagnostics ]; then
@@ -400,6 +401,6 @@ case "$action" in
                                  } > "$DIAG.tmp" ) || true
                 fi
                 chgrp vibeserver "$DIAG.tmp" 2>/dev/null || true
-                mv -f "$DIAG.tmp" "$DIAG" && log "diagnostics ready ($(( $(stat -c %s "$DIAG" 2>/dev/null || echo 0) / 1024 )) KB)" ;;
+                mv -f "$DIAG.tmp" "$DIAG" && log "diagnostics: 100% — ready" && log "diagnostics ready ($(( $(stat -c %s "$DIAG" 2>/dev/null || echo 0) / 1024 )) KB)" ;;
   *)            log "ignoring unknown action '$action'"; exit 0 ;;
 esac

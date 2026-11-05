@@ -565,6 +565,8 @@ if python3 vibeserver/linux/pocket/test_vibeserver_pocket.py; then pass=$((pass+
 # ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20): the file an owner sends us never carries a secret — a Wi-Fi password, the admin
 #     password, a PIN, the directory key, planted in NetworkManager, the config, a status file and the journal.
 if python3 vibeserver/linux/test_vibeserver_diagnostics.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the admin page reads its progress lines into a bar (2026-11-05)
+if node scripts/test-admin-diag-progress.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A PORTABLE UPDATES FULLY WITHOUT A NEW CARD (Stuart, 2026-10-13). vibeserver-pocket-converge on a fake root: a no-op
 #     without the marker, idempotent, config.txt lines once, an owner's own change kept, the package list drives what
 #     Update installs — and vibeserver-maintenance's `update` with apt + overlayroot-chroot stubbed.

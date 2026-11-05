@@ -710,6 +710,11 @@ body.padTuck #mVfoDial, body.padTuck #mZoomDial {
    ★★ It also has to SAY WHY, or a permanently grey button reads as broken rather than as not
       applicable — the `title` is set with the state, next to the code that sets the state. */
 .mBtn[disabled], .btn[disabled] { opacity: 0.38; cursor: default; pointer-events: none; }
+/* ★ The diagnostics file's progress — the phosphor of the rest of the admin page, a hairline track */
+#actDiagProg { margin: 10px 0 4px; }
+#actDiagProg .diagTrack { height: 6px; border: 1px solid var(--phosphor); border-radius: 3px; overflow: hidden; opacity: 0.9; }
+#actDiagProg .diagFill { height: 100%; width: 0%; background: var(--phosphor); transition: width 0.6s ease-out; }
+#actDiagProg #actDiagWhat { margin-top: 6px; }
 
 /* ★★ The step button carries the full label ("6.25kHz", not "6.25k"), and this stack is
    content-sized — so without a reserved width, changing step resized the stack and pushed the
@@ -5010,6 +5015,12 @@ select.btn { padding: 6px 8px; }
       <!-- ★★★ DOWNLOAD DIAGNOSTICS (Stuart, 2026-10-20): one text file of this server's logs and settings for the
            owner to send us. Built as root by the maintenance helper, secrets removed, saved by this browser. -->
       <button class="btn" id="actDiag" hidden>DOWNLOAD DIAGNOSTICS</button>
+    </div>
+    <!-- ★★ ITS PROGRESS (Stuart, 2026-11-05): the file takes up to a minute on a small board, and a button that just went
+         grey looked broken. The bar follows the helper's own "diagnostics: NN%" lines (admin.ts diagProgress). -->
+    <div id="actDiagProg" hidden>
+      <div class="diagTrack"><div class="diagFill" id="actDiagFill"></div></div>
+      <div class="dim wrap" id="actDiagWhat"></div>
     </div>
     <!-- ★★★ RECEIVE BETA UPDATES (Stuart, 2026-10-22). Ticked = the beta apt source exists on this machine, READ BACK
          from the server on every refresh, never just remembered by this page. Ticking only changes what UPDATE

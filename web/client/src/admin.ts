@@ -98,6 +98,17 @@ async function post(path: string, body: unknown): Promise<any> {
   return j;
 }
 
+/** ★ The newest "diagnostics: NN% — what" line in the maintenance log (vibeserver-diagnostics + the helper write them),
+ *  or null when there is none yet. Exported for scripts/test-admin-diagnostics.mjs. */
+export function diagProgress(log: string): { pct: number; what: string } | null {
+  let best: { pct: number; what: string } | null = null;
+  for (const m of log.matchAll(/^diagnostics: (\d{1,3})% [\u2014-] (.*)$/gm)) {
+    best = { pct: Math.min(100, Number(m[1])), what: m[2].trim() };
+  }
+  if (best) best.what = best.what.charAt(0).toUpperCase() + best.what.slice(1);
+  return best;
+}
+
 // ── Formatting ────────────────────────────────────────────────────────────────────────────────
 
 /** ★★ TAKES ANYTHING, NOT JUST A STRING. Every value on this page arrives as JSON from the
@@ -2381,26 +2392,46 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
   $('actDiag')?.addEventListener('click', async () => {
     const btn = $('actDiag') as HTMLButtonElement;
     btn.disabled = true;
-    msg('actMsg', 'Building the diagnostics file… (up to a minute)');
+    msg('actMsg', '');
+    // ★★ A PROGRESS BAR (Stuart, 2026-11-05: on Saber's box "it looked like the button wasnt working … then the
+    //    download link came up"). It moves from the first second — "waiting for the helper" until the root helper
+    //    picks the request up — then follows the helper's "diagnostics: NN% — what" lines, with the seconds so far.
+    const prog = $('actDiagProg'), fill = $('actDiagFill') as HTMLElement, what = $('actDiagWhat');
+    const t0 = Date.now();
+    const show = (pct: number, text: string) => {
+      prog.hidden = false;
+      fill.style.width = `${Math.max(2, Math.min(100, pct))}%`;
+      what.textContent = `${text} \u00b7 ${Math.round((Date.now() - t0) / 1000)} s`;
+    };
+    show(1, 'Asking the server to build the diagnostics file');
     try {
       let before = '';
       try { before = String((await get('maintenance-log')).text ?? ''); } catch { /* none */ }
       await post('action', { action: 'diagnostics' });
-      let done = false;
+      let done = false, pct = 1, label = 'Waiting for the server\u2019s maintenance helper to start';
       for (let i = 0; i < 120 && !done; i++) {
+        show(pct, label);
         await new Promise((r) => setTimeout(r, 1000));
         let j: any;
         try { j = await get('maintenance-log'); } catch { continue; }
         const text = String(j.text ?? '');
+        if (text && text !== before) {
+          const p = diagProgress(text);
+          if (p) { pct = Math.max(pct, p.pct); label = p.what; }
+          else if (pct < 2) { pct = 2; label = 'Building the diagnostics file'; }
+        }
         if (!j.running && text && text !== before) done = true;
       }
-      if (!done) { msg('actMsg', 'The diagnostics file was not ready in time. Is vibeserver-maintenance.path enabled?'); return; }
+      if (!done) { prog.hidden = true; msg('actMsg', 'The diagnostics file was not ready in time. Is vibeserver-maintenance.path enabled?'); return; }
+      show(100, 'Ready \u2014 your browser is saving it');
       const a = document.createElement('a');
       a.href = `${base()}/vibeserver/admin/diagnostics?${await q()}`;
       a.download = '';
       document.body.appendChild(a); a.click(); a.remove();
       msg('actMsg', 'Diagnostics saved by your browser — send the file to whoever is helping you.');
+      window.setTimeout(() => { prog.hidden = true; }, 4000);
     } catch (e) {
+      prog.hidden = true;
       msg('actMsg', (e as Error).message);
     } finally { btn.disabled = false; }
   });

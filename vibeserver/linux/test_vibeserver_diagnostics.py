@@ -8,6 +8,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -74,7 +75,18 @@ def main():
 
     kw = dict(run=run, conf_paths=(conf, dstate), pocket_marker=marker, pocket_state=pstate, join_history=hist,
               status_glob=os.path.join(tmp, "radio-status-*.json"), server_conf=conf, wifi_log=wlog)
-    text = vd.bundle(**kw)
+    import io
+    _err, sys.stderr = sys.stderr, io.StringIO()
+    try:
+        text = vd.bundle(**kw)
+        prog = sys.stderr.getvalue()
+    finally:
+        sys.stderr = _err
+    # ★★ the admin page's progress bar (2026-11-05): stages on STDERR, rising, the journal at 40 %, never in the FILE
+    pcts = [int(m) for m in re.findall(r"^diagnostics: (\d+)% \u2014 ", prog, re.M)]
+    ok(len(pcts) >= 4 and pcts == sorted(pcts) and 40 in pcts and pcts[-1] == 90,
+       "progress lines go to stderr in rising order, the journal at 40 %%, highlights at 90 %% (%s)" % pcts)
+    ok("diagnostics: " not in text, "and none of them is written into the diagnostics file itself")
     for name, v in (("the Wi-Fi password", PSK), ("the hotspot password", AP_PSK), ("the admin password", ADMIN),
                     ("the listener PIN", PIN), ("a radio's PIN", RPIN), ("the directory key", DKEY)):
         ok(v not in text, "★★★ %s is NOT in the file (planted in NM / a log line / the config / a status file)" % name)
