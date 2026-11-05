@@ -76,6 +76,21 @@ battery must never corrupt the card.
 set + 0.1 s nudge; set from a decoded MSF/DCF77/WWV(B)/JJY minute — two consecutive minutes must agree; align to FT8 DT),
 the card's space, power off / restart.
 
+**The handheld main menu (Stuart 2026-11-05 — supersedes a "This device" section).** Two buttons, **R36S HARDWARE** and
+**SDR HARDWARE**. Pressing one expands its options **in place, directly under the button** (an accordion — not a new page,
+not a nested sub-menu); pressing it again, or B / back, collapses them into the button. One level only: "no multilayered
+menu but the options are still hidden", so the main menu stays uncluttered. Opening one collapses the other.
+- **R36S HARDWARE** = brightness, volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
+  **Performance** overlay toggle with its figures in full, **Developer: SSH**, power off, restart.
+- **SDR HARDWARE** = the plugged-in radio's own controls (gain / AGC / bias-T / direct sampling / ppm / antenna …) from its
+  caps — what the radio menu shows today for that driver.
+- Gamepad: the D-pad moves through the buttons and the expanded options; **A** expands / activates; **B** collapses.
+
+**Performance overlay (Stuart 2026-11-05).** No admin window on the handheld; instead the Performance row's toggle shows a
+SteamOS-style strip at a screen edge: CPU % (box), CPU temperature, battery % + time-remaining estimate, RAM used, client
+fps, the engine's DSP load (the figures the admin health cards already get). Plain DOM text, updated ≤ 2×/s, no canvas;
+remembered across radios.
+
 **The card.** exFAT data partition **`VIBESDR`**, grown to the KERNEL-reported size on first boot after a one-time
 capacity check: `Recordings/`, `Gallery/<DECODER>/` (SSTV, WEFAX, RTTY, NAVTEX, FT8, …), `import/` (bookmark backups,
 imported at start and from an IMPORT key, moved to `import/done/` with a result `.txt`), `export/`, **`Diagnostic logs/`** (EXPORT DIAGNOSTICS on the handheld writes the same scrubbed vibeserver-diagnostics file there, named by UTC time — Stuart 2026-11-05), `README.txt`. Names
