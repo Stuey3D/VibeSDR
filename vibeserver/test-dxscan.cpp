@@ -187,7 +187,8 @@ int main() {
         log.commitFm(98000, 99800, 98950, 100, { fm(99900, 0x1234, "ES", 4) }, T0 + 3600);
         ok(log.findKey(fmKey(0x1234, 99900))->cls == Cls::Provisional, "★ a new server marks everything provisional");
         ok(log.alertSeq() == 0, "  and sends no alert");
-        for (int64_t u = T0 + 3600 + 600; u < T0 + 25 * 3600; u += 600) log.commitFm(98000, 99800, 98950, 100, {}, u);
+        // ★ the empty sweeps cover ITS frequency (99.9): a sweep that looked and missed it — see Entry::missedVisits
+        for (int64_t u = T0 + 3600 + 600; u < T0 + 25 * 3600; u += 600) log.commitFm(99000, 100800, 99900, 100, {}, u);
         log.evaluate(T0 + 25 * 3600);
         const Entry* e = log.findKey(fmKey(0x1234, 99900));
         ok(e && e->cls == Cls::Dx, "a provisional heard once in the bootstrap is DX at its end (" + std::string(e ? clsWord(e->cls) : "-") + ")");
@@ -246,6 +247,34 @@ int main() {
         ok(b && b->bHits[10 % kBuckets] == 6 && b->bVisits[10 % kBuckets] == 6, "  presence: the visits stay 6, the hits add (3 + 3)");
         ok(back.alertsJson(0).find("\"id\":" + std::to_string(b ? b->id : -1)) != std::string::npos, "  the folded row's alert now points at it");
         ok(back.dirty(), "  and the folded log is written back at the next flush");
+    }
+
+    std::printf("── openings end only on a MISSED visit, never on time the scanner wasn't looking ──\n");
+    {
+        // ★ Stuart, 2026-11-05: a local "heard 117 times in 5 openings" — the scanner pauses while somebody listens, and
+        //   a pause over 30 min used to split the run although the multiplex never went away.
+        Log log(T0 - kBootstrapSec - 10);
+        DabHit h; h.block = 30; h.blockName = "12B"; h.eid = 0xCE15; h.label = "BBC National DAB"; h.fibOk = 3;
+        log.commitDab(30, &h, T0);
+        log.commitDab(30, &h, T0 + 600);
+        // a listener holds the radio for 3 hours: NO visits at all
+        log.commitDab(30, &h, T0 + 600 + 3 * 3600);
+        const Entry* e = log.findKey(dabKey(0xCE15, "12B"));
+        ok(e && e->openings.size() == 1 && e->timesHeard == 3,
+           "★★ 3 h with the scanner paused is NOT a new opening (" + std::to_string(e ? e->openings.size() : 0) + " opening)");
+        // now it really goes: the block is swept and it is not there, for over 30 min
+        for (int k = 1; k <= 5; ++k) log.commitDab(30, nullptr, T0 + 600 + 3 * 3600 + k * 600);
+        log.commitDab(30, &h, T0 + 600 + 3 * 3600 + 6 * 600);
+        e = log.findKey(dabKey(0xCE15, "12B"));
+        ok(e && e->openings.size() == 2, "★ swept and missed for 50 min, then heard: a NEW opening (" + std::to_string(e ? e->openings.size() : 0) + ")");
+        // missed once, but back within the gap: the same opening
+        log.commitDab(30, nullptr, T0 + 600 + 3 * 3600 + 7 * 600);
+        log.commitDab(30, &h, T0 + 600 + 3 * 3600 + 8 * 600);
+        e = log.findKey(dabKey(0xCE15, "12B"));
+        ok(e && e->openings.size() == 2, "  missed once but back within 30 min: still the same opening");
+        Log back; ok(back.fromFileJson(log.toFileJson()), "the log round-trips");
+        const Entry* b = back.findKey(dabKey(0xCE15, "12B"));
+        ok(b && b->missedVisits == e->missedVisits && b->openings.size() == 2, "  …with its missed-visit count");
     }
 
     std::printf("── bounded, prune order, promoted kept ──\n");
