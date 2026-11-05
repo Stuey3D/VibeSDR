@@ -294,11 +294,17 @@ struct Config {
      *                  ATT/preamp/AGC/RF gain/NB/NR/ANF now follow the SDRs' gain rules (sharedGate, AGC lock, gain lock)
      *   icomTtyOk      the owner allows a serial device, accepting its DTR/RTS glitch on open
      *   icomPowerOn    "Power on the radio over CI-V" (default OFF): 18 01 behind the FE wake run when the radio
-     *                  is not answering; with the idle power-down on, it is also switched OFF at the idle park */
+     *                  is not answering; with icomAutoOff it is also switched OFF when nobody is using it
+     *   icomAutoOff    "Automatically power off the radio when not in use" (default ON, Stuart 2026-11-05) — only takes
+     *                  effect with icomPowerOn (otherwise nothing could switch it back on for the next listener). It,
+     *                  not the generic idle power-down, governs an Icom's automatic power-off.
+     *   icomOffDelayMin "How long after the last user leaves" (default 5): minutes between the LAST listener leaving and
+     *                  that power-off — 0 (Instant), 1, 5, 10, 15, 30 or 60 — so a radio is not switched on and off by
+     *                  listeners coming and going. A listener arriving in the wait cancels it. */
     std::string icomPort = "usb";
-    int  icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0;
+    int  icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0, icomOffDelayMin = 5;
     std::string icomAudio = "auto";
-    bool icomTuneLock = false, icomRfOpen = false, icomTtyOk = false, icomPowerOn = false;
+    bool icomTuneLock = false, icomRfOpen = false, icomTtyOk = false, icomPowerOn = false, icomAutoOff = true;
     bool rspAmNotch = false;    ///< RSPduo: AM broadcast notch on the Hi-Z port
     bool rspExtRef = false;     ///< RSP2/Duo: 24 MHz reference output
     /* ★★ V12 ETTUS USRP B2xx — the owner's radio options (vibe_usrp_caps.h Options). Read only by a USRP; offered by
@@ -617,8 +623,8 @@ struct RadioConfig {
     int    usrpRxBw = 0;
     // ★ Icom — see the note on Config::icomPort. Carried with its neighbours at every copy site.
     std::string icomPort = "usb", icomAudio = "auto";
-    int    icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0;
-    bool   icomTuneLock = false, icomRfOpen = false, icomTtyOk = false, icomPowerOn = false;
+    int    icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0, icomOffDelayMin = 5;
+    bool   icomTuneLock = false, icomRfOpen = false, icomTtyOk = false, icomPowerOn = false, icomAutoOff = true;
     bool   dabAgcOverride = true;
     int    dabAgcTarget = -40;
     bool   rfAgc = false;
@@ -1103,5 +1109,11 @@ bool dabBlocked(const std::string& blockedModes);
  *  (Config, RadioConfig, and the flatten the worker reads), so a config that says both can never
  *  land a listener on DAB — the page's sentence is the courtesy, this is the rule. */
 bool dropBlockedDabLanding(const std::string& blockedModes, int& ch, int& sid, std::string& service);
+
+/** ★ An Icom's "Switch off after" (icomOffDelayMin): exactly the dropdown's choices — 0 (Instant), 1, 5, 10, 15, 30,
+ *  60 minutes. Anything else (a hand-edited file, an old client) is read as the default, 5. */
+inline int icomOffDelayValid(int m) {
+    switch (m) { case 0: case 1: case 5: case 10: case 15: case 30: case 60: return m; default: return 5; }
+}
 
 } // namespace vsconfig

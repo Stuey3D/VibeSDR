@@ -1855,6 +1855,8 @@ std::atomic<bool> g_vsReleaseWhenIdle{false};
  *  Kotlin's (VibeServerRestore.keepRadioAlive). Off = exactly as before; the Linux server never sets it. */
 static std::atomic<bool> g_vsKeepRadioAlive{false};
 static std::atomic<double> g_vsIdleGraceSec{300.0};
+/** ★ TESTS ONLY — seconds per minute of an Icom's "How long after the last user leaves" (--icom-off-delay-scale). */
+static std::atomic<double> g_vsIcomOffDelayScale{60.0};
 static std::mutex          g_vsTuneLimitMtx;
 static std::string         g_vsAllowCsv, g_vsBlockCsv;
 static vibebands::Ranges   g_vsPermitted;      // empty = no restriction beyond the hardware
@@ -18311,22 +18313,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         };
         if (type == "reset") { sendConfig(sock); return true; }
         if (type == "icom_power") {
-            /* ★★★ RADIO OFF / RADIO ON — THE OWNER'S, AND NOBODY ELSE'S (2026-11-04, the tester: "i'd love a 'Radio
-             *     off' button"). Admin only, refused in words for anyone else; the clients draw the buttons only for
-             *     the admin. 18 00 is sent ONLY from here (and the idle power-down the owner switched on) — never on a
-             *     stop, a restart or a lost link. */
-            const std::string act = jsonStr(msg, "action");
-            const std::string who = sock->peerAddress();
-            if (!admin) { LOGI("icom: RADIO %s from %s refused — not the admin", act == "off" ? "OFF" : "ON", who.c_str());
-                          refuse("Only the owner can switch the radio on or off"); return true; }
-            bool okp = false;
-            if (act == "off") okp = icom->requestPowerOff(why);
-            else if (act == "on") okp = icom->requestPowerOn(why);
-            else why = "RADIO ON or RADIO OFF";
-            LOGI("icom: the owner pressed RADIO %s (from %s)%s%s", act == "off" ? "OFF" : "ON", who.c_str(),
-                 okp ? "" : " — not sent: ", okp ? "" : why.c_str());
-            if (!okp) refuse(why);
-            for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
+            /* ★★★ NO RADIO ON / RADIO OFF BUTTONS ANY MORE (Stuart, 2026-11-05: "If the radio is powered off then in theory
+             *     they would end up on a dead client so kinda pointless" — "the setup should handle it"). Power is the
+             *     Setup page's two settings: "Power on the radio over CI-V" (a listener arriving wakes it) and
+             *     "Automatically power off the radio when not in use" + its delay. An older page that still sends this is
+             *     told so in words and nothing reaches the radio (hwinfo power.canSwitch is false: no current page draws
+             *     the buttons). 18 00 is sent only by the automatic power-off — never on a stop, a restart or a lost link. */
+            LOGI("icom: an icom_power message from %s ignored — power is set on the Setup page now", sock->peerAddress().c_str());
+            refuse("The radio is switched on and off by its settings on the Setup page");
             return true;
         }
         if (type == "zoom") {
@@ -24529,8 +24523,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // POST /vibeserver/dxlog/clear                      — OWNER: empty the log (promoted entries are kept)
         // ★ Reading is gated like the gallery (the PIN), and by the owner's "admin lock on viewing" (dxScan.viewAdmin).
         //   Writing is the bookmarks' rule: changing the receiver for everybody is the owner's (vsAdminHttpOk).
-        // POST /vibeserver/icom/power?action=on|off — OWNER: the Setup page's RADIO ON / RADIO OFF for an Icom (the client's
-        //   buttons send `icom_power` on the socket). Same gate as every owner write (vsAdminHttpOk); logged plainly.
+        // POST /vibeserver/icom/power?action=on|off — OWNER: POWER ON / POWER OFF on the front door's radio list (2026-11-05,
+        //   behind the admin sign-in; reached as /r/<serial>/vibeserver/icom/power behind a front door). They work whether or
+        //   not the Setup page's automatic options are ticked. Same gate as every owner write (vsAdminHttpOk); logged plainly.
         } else if (reqLine.rfind("POST /vibeserver/icom/power", 0) == 0) {
             auto reply = [&](const char* status, const std::string& body) {
                 sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
@@ -24544,7 +24539,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool on = reqLine.find("action=on") != std::string::npos;
             std::string why;
             const bool okp = off ? icom->requestPowerOff(why) : on ? icom->requestPowerOn(why) : (why = "action=on or action=off", false);
-            LOGI("icom: the owner pressed RADIO %s on the setup page (from %s)%s%s", off ? "OFF" : "ON", sock->peerAddress().c_str(),
+            LOGI("icom: the owner pressed POWER %s on the radio list (from %s)%s%s", off ? "OFF" : "ON", sock->peerAddress().c_str(),
                  okp ? "" : " — not sent: ", okp ? "" : why.c_str());
             reply(okp ? "200 OK" : "409 Conflict", okp ? std::string("{\"ok\":true}") : "{\"ok\":false,\"error\":\"" + jsonEscape(why) + "\"}");
 #else
@@ -30284,14 +30279,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double lastReopenAt_ = 0.0;
     void pauseCaptureIdle() {
 #if VIBE_HAVE_ICOM
-        /* ★★ AN ICOM HAS NO CAPTURE TO PAUSE. The owner's idle power-down ("Power down the radio") means a real
-         *  power-off for it — 18 00 — but ONLY with "Power on the radio over CI-V" ticked (otherwise the next listener
-         *  would find it off with nothing able to switch it on) and a grace set. The park's own guards (nobody watching,
-         *  no background decoder, no DX scan, no ADS-B keep) have already been passed to get here; idlePowerOff checks
-         *  "in use" once more on the CI-V thread. */
+        /* ★★ AN ICOM HAS NO CAPTURE TO PAUSE. Its park is a real power-off — 18 00 — but ONLY with the owner's
+         *  "Automatically power off the radio when not in use" AND "Power on the radio over CI-V" ticked (otherwise the
+         *  next listener would find it off with nothing able to switch it on); the generic "Power down the radio" does
+         *  not decide it (Stuart, 2026-11-05: "the setup should handle it"). The wait is the Icom's own "How long after
+         *  the last user leaves" (armIdlePark). The park's own guards (nobody watching, no background decoder, no DX
+         *  scan, no ADS-B keep) have already been passed to get here; idlePowerOff checks "in use" once more on the
+         *  CI-V thread. */
         if (useIcom()) {
-            if (g_vsIdleGraceSec.load() > 0.0 && icom->idlePowerOff())
-                LOGI("icom: nobody listening for the idle grace — switching the radio off (idle power-down + power on over CI-V)");
+            /* ★ Every caller has just asked nobodyWatchingLocked() and the park's guards; the source's own "in use" is
+             *  only refreshed once a second by the housekeeping tick, so it is brought up to date here first (the
+             *  CI-V thread still refuses if somebody arrives before it sends). */
+            {
+                bool empty;
+                { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+                icom->setInUse(!empty || bgWanted_.load() || dxWanted_.load() || adsbKeepHolds());
+            }
+            if (icom->idlePowerOff())
+                LOGI("icom: nobody listening for %d min — switching the radio off (automatic power-off)", icom->offDelayMin());
+            else if (icom->autoPowerOff() && icom->state().linkUp)
+                LOGI("icom: automatic power-off not sent — the radio is still in use");
             return;
         }
 #endif
@@ -32532,6 +32539,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (dxWanted_.load()) return;
         // ★★ V12: nor while ADS-B is kept running with nobody here — parking would empty the warm table (adsbKeepHolds).
         if (adsbKeepHolds()) return;
+#if VIBE_HAVE_ICOM
+        /* ★★ AN ICOM WAITS ITS OWN TIME: "How long after the last user leaves" (icomOffDelayMin, default 5 min), so a
+         *  radio is not switched on and off by listeners coming and going. 0 = Instant. Without automatic power-off
+         *  there is nothing for the park to do on an Icom, so nothing is armed. A listener arriving cancels it
+         *  (resumeCaptureIdle), and the tick re-checks everything when it falls due. */
+        if (useIcom()) {
+            if (!icom->autoPowerOff() || !icom->state().linkUp) return;
+            const double g = icom->offDelayMin() * g_vsIcomOffDelayScale.load();
+            if (g <= 0.0) { pauseCaptureIdle(); return; }
+            idleParkDueAt.store(nowSecs() + g);
+            LOGI("icom: nobody listening — switching the radio off in %.0fs unless somebody connects", g);
+            return;
+        }
+#endif
         // ★ Applied here rather than when the park FIRES: the radio may be released or paused by
         //   then, and a gain written to a stopped device is a gain nobody applied. The grace
         //   period is about not disturbing a reload — and a reload does not care what the gain is
@@ -33937,7 +33958,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                           && !g_vibeAgcRspOn.load(std::memory_order_relaxed);
                     if (!empty || bgWanted_.load() || adsbKeepHolds() || g_ownerScan.load()) { idleParkDueAt.store(0.0); }
                     else if (settling) { /* hold the deadline open and re-check next tick */ }
-                    else if (g_vsReleaseWhenIdle.load()) {
+                    else if (g_vsReleaseWhenIdle.load() && !useIcom()) {   // ★ an Icom's park is its automatic power-off
                         // ★★★ RELEASE, NOT PARK — and note this bypasses the shared-receiver rule
                         //     that pauseCaptureIdle enforces. Parking is skipped on a locked
                         //     receiver to keep the RSP's AGC converged; here the operator has
@@ -34864,6 +34885,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return isHeldLocked(s);   // ★ V12: a held listener's decoders run on (see "THE HELD SESSION")
         }, nowSecs(), 20.0);
     }
+    /** ★★ THE IDLE PARK FOR AN ICOM. The SDRs' park runs in the hotplug watchdog's tick, which an Icom does not start
+     *  (no IQ stream to watch), so the source's "in use", the arming and the deadline are kept here, every 2 s, by the
+     *  same rules: nobody watching, no background decoding, no DX scan, no owner scan, no ADS-B keep. armIdlePark does
+     *  nothing unless the automatic power-off is in effect and the radio is answering. */
+    void icomIdleTick() {
+#if VIBE_HAVE_ICOM
+        if (!useIcom()) return;
+        bool empty;
+        { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+        const bool busy = !empty || bgWanted_.load() || dxWanted_.load() || adsbKeepHolds() || g_ownerScan.load();
+        icom->setInUse(busy);
+        if (busy) { idleParkDueAt.store(0.0); return; }     // ★ somebody is using it: no power-off pending
+        const double due = idleParkDueAt.load();
+        if (due <= 0.0) { armIdlePark(); return; }
+        if (nowSecs() >= due) { idleParkDueAt.store(0.0); pauseCaptureIdle(); }
+#endif
+    }
     void startHousekeeping() {
         if (houseRun.exchange(true)) return;
         houseThread = std::thread([this]{
@@ -34878,6 +34916,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 enforceIdleListeners();
                 reapDecoderOrphans();
                 icomDecReconcile(true);  // ★ V12: an Icom set for a decoder nobody runs any more goes back
+                icomIdleTick();          // ★ an Icom's automatic power-off (it has no hotplug watchdog to run the idle park)
                 holdTick();           // ★ V12: held sessions that have run out, given way or been ended — finished
                 askTick();             // ★ ask before tuning: the 15 s window, the 5-minute NO, people coming and going
             }
@@ -36967,6 +37006,7 @@ void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store
 void LocalSdrShim::setVibeServerSharedChannels(bool shared) { g_vsSharedChannels.store(shared); }
 void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(on); }
 void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(sec < 0 ? 0 : sec); }
+void LocalSdrShim::setVibeServerIcomOffDelayScale(double s) { g_vsIcomOffDelayScale.store(s > 0 ? s : 60.0); }
 void LocalSdrShim::setVibeServerReleaseWhenIdle(bool on) { g_vsReleaseWhenIdle.store(on); }
 void LocalSdrShim::setKeepRadioAlive(bool on) {
     if (g_vsKeepRadioAlive.exchange(on) != on) LOGI("keep radio alive: %s", on ? "on" : "off");
@@ -42831,6 +42871,9 @@ int LocalSdrShim::startIcom(const IcomStart& o, std::string& err) {
     icom::IcomConfig c;
     c.port = o.port; c.baud = o.baud; c.civAddr = o.civAddr; c.audio = o.audio;
     c.scopeSpeed = o.scopeSpeed; c.ttyOk = o.ttyOk; c.modelHint = o.modelHint; c.powerOn = o.powerOn;
+    c.autoOff = o.autoOff;
+    switch (o.offDelayMin) { case 0: case 1: case 5: case 10: case 15: case 30: case 60: c.offDelayMin = o.offDelayMin; break;
+                             default: c.offDelayMin = 5; }
     if (!impl->icom->open(c, err)) { g_icomOn.store(false); delete impl; return -1; }
     // ★★ A SWITCHED-OFF RADIO OPENS (waiting): the server runs, every listener is told why it is quiet.
     if (impl->icom->waitingForRadio()) setRadioProblem(impl->icom->linkProblem());
@@ -43648,7 +43691,15 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
         // ★★ WHY IT IS QUIET, in the source's own words (switched off / switching on / off by the owner / refused), and
         //    the owner's next step; and the power facts the admin's RADIO ON / RADIO OFF buttons need.
         j += ",\"linkWhy\":" + q(ic.linkProblem()) + ",\"linkHint\":" + q(st.linkUp ? std::string() : ic.linkHint());
-        j += std::string(",\"power\":{\"canSwitch\":true,\"autoOn\":") + (ic.autoPowerOn() ? "true" : "false")
+        /* ★ canSwitch is FALSE since 2026-11-05 — no RADIO ON / RADIO OFF buttons (an older client draws them only when it
+         *  is true). autoOff / offDelayMin = the Setup page's automatic power-off; offInS = seconds until it switches the
+         *  radio off with nobody listening, -1 when none is pending (the Setup card counts it down). */
+        double offInS = -1;
+        if (ic.autoPowerOff() && st.linkUp) { const double due = p->idleParkDueAt.load(); if (due > 0) offInS = std::max(0.0, due - p->nowSecs()); }
+        char offIn[24]; std::snprintf(offIn, sizeof offIn, "%.0f", offInS);
+        j += std::string(",\"power\":{\"canSwitch\":false,\"autoOn\":") + (ic.autoPowerOn() ? "true" : "false")
+           + ",\"autoOff\":" + (ic.autoPowerOff() ? "true" : "false") + ",\"offDelayMin\":" + std::to_string(ic.offDelayMin())
+           + ",\"offInS\":" + offIn
            + ",\"offByOwner\":" + (ic.offByOwner() ? "true" : "false") + ",\"switchingOn\":" + (ic.switchingOn() ? "true" : "false") + "}";
         j += ",\"audio\":" + q(ic.audioDescription()) + ",\"audioProblem\":" + q(ic.audioProblem());
         j += std::string(",\"preflight\":{\"passed\":") + (pf.passed ? "true" : "false") + ",\"verified\":" + (pf.verified ? "true" : "false")
@@ -44357,5 +44408,34 @@ void LocalSdrShim::setRspExtRef(bool v)     { g_dsp.rspExtRef.store(v ? 1 : 0);
 #undef VIBE_HW_LOCK
 
 bool LocalSdrShim::isRunning() const { return p != nullptr; }
+
+std::string LocalSdrShim::icomPowerState(bool& autoOn, bool& byOwner) const {
+    autoOn = false; byOwner = false;
+#if VIBE_HAVE_ICOM
+    if (!p || !p->useIcom()) return "";
+    const icom::IcomSource& ic = *p->icom;
+    autoOn = ic.autoPowerOn(); byOwner = ic.offByOwner();
+    if (ic.state().linkUp) return "on";
+    if (ic.usbMissing()) return "absent";
+    if (ic.switchingOn()) return "switchingOn";
+    return "off";
+#else
+    return "";
+#endif
+}
+void LocalSdrShim::setIcomPowerOptions(bool powerOn, bool autoOff, int offDelayMin) {
+#if VIBE_HAVE_ICOM
+    if (!p || !p->useIcom()) return;
+    const int d = (offDelayMin == 0 || offDelayMin == 1 || offDelayMin == 5 || offDelayMin == 10 || offDelayMin == 15
+                   || offDelayMin == 30 || offDelayMin == 60) ? offDelayMin : 5;
+    if (p->icom->autoPowerOn() == powerOn && p->icom->autoPowerOff() == (powerOn && autoOff) && p->icom->offDelayMin() == d) return;
+    p->icom->setPowerOptions(powerOn, autoOff, d);
+    p->idleParkDueAt.store(0.0);   // ★ re-armed by the next tick with the new delay (if nobody is here)
+    LOGI("icom: power settings now — power on over CI-V %s, automatic power-off %s, after %d min",
+         powerOn ? "ON" : "off", autoOff ? "ON" : "off", d);
+#else
+    (void)powerOn; (void)autoOff; (void)offDelayMin;
+#endif
+}
 
 } // namespace vibe

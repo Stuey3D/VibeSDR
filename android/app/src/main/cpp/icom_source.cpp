@@ -136,21 +136,23 @@ bool IcomSource::requestPowerOn(std::string& why) {
 }
 
 bool IcomSource::autoWakeWanted() const {
-    if (!cfg_.powerOn || offByOwner_.load()) return false;   // ★ no option, or the owner switched it off himself
-    if (offByIdle_.load()) return inUse_.load();             // ★ parked off: only for somebody who is here
-    return true;
+    if (!powerOn_.load() || offByOwner_.load()) return false;   // ★ no option, or the owner switched it off himself
+    /* ★★ ONLY FOR SOMEBODY WHO IS HERE (Stuart, 2026-11-05): a listener connecting — or background decoding, a DX scan,
+     *  ADS-B kept running (the shim's "in use") — wakes a radio that is not answering. With nobody here nothing is sent:
+     *  a radio started off, or switched off at its front panel, stays off until it is wanted. */
+    return inUse_.load();
 }
 
 void IcomSource::setInUse(bool inUse) {
     if (inUse && !inUse_.exchange(true)) {   // ★ somebody arrived: try (and, if the park switched it off, wake) at once
-        if (offByIdle_.load()) arrivalWake_.store(true);
+        if (offByIdle_.load() || waiting_.load()) arrivalWake_.store(true);
         if (offByIdle_.load() || waiting_.load()) kick_.store(true);
     }
     else if (!inUse) inUse_.store(false);
 }
 
 bool IcomSource::idlePowerOff() {
-    if (!cfg_.powerOn || !run_.load() || inUse_.load() || !state().linkUp) return false;
+    if (!autoPowerOff() || !run_.load() || inUse_.load() || !state().linkUp) return false;
     wantIdleOff_.store(true);
     return true;
 }
@@ -176,7 +178,7 @@ std::string IcomSource::linkProblem() const {
         if (switchingOn()) return "Switching the radio on \xE2\x80\x94 about a minute";
         if (offByIdle_.load())
             return "Switched off while nobody was listening \xE2\x80\x94 VibeServer switches it on when somebody connects";
-        return cfg_.powerOn
+        return powerOn_.load()
             ? "The radio is switched off (or not answering) \xE2\x80\x94 VibeServer has sent it the power-on command and will start it when it answers"
             : "The radio is switched off (or not answering) \xE2\x80\x94 VibeServer will start it when it is turned on";
     }
@@ -318,6 +320,7 @@ void IcomSource::readInitialState() {
 bool IcomSource::open(const IcomConfig& cfg, std::string& err, std::unique_ptr<CivTransport> injected) {
     close();
     cfg_ = cfg;
+    setPowerOptions(cfg.powerOn, cfg.autoOff, cfg.offDelayMin);
     const Model* hint = modelBySerial(cfg.modelHint.c_str());
     int n = 0; const Model* all = models(n);
     const Model& base = hint ? *hint : all[0];

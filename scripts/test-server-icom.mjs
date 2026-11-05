@@ -5,7 +5,7 @@
 //   • hwinfo says driver "icom" with the radio's own lists, and nothing IQ-shaped;
 //   • SPEC frames arrive at the radio's rate over the radio's edges, and config's span matches them;
 //   • ★ an Icom tunes like any radio (2026-11-04): a listener's tune moves it (the tune lock is OFF by default);
-//     RADIO ON / RADIO OFF are the admin's alone; with --icom-tune-lock only the admin tunes; with ask before
+//     no RADIO ON / RADIO OFF in the clients (the owner's POWER ON / OFF are HTTP, for the front door); with --icom-tune-lock only the admin tunes; with ask before
 //     tuning a second listener is held back like on any shared dial; a radio started SWITCHED OFF waits;
 //   • the radio's own knob reaches every listener; zoom is the span ladder; a mode change reaches the radio;
 //   • the owner keying the radio raises radio.tx;
@@ -128,7 +128,8 @@ try {
      `scope: 475 points, the 8-rung span ladder (${r.scope && JSON.stringify(r.scope.spans)})`);
   ok(r.preflight && r.preflight.passed === true && r.preflight.items.length === 5, `preflight passed, ${r.preflight && r.preflight.items.length} items shown`);
   ok(r.ownerLock === false, '★ the tune lock is OFF by default — the ordinary dial rules');
-  ok(r.power && r.power.canSwitch === true && r.power.autoOn === false, 'hwinfo carries the power facts (RADIO ON/OFF, auto power-on off)');
+  ok(r.power && r.power.autoOn === false && r.power.autoOff === false && r.power.offDelayMin === 5 && r.power.offInS === -1,
+     `hwinfo carries the power facts (auto power-on off, so no auto power-off; delay 5; none pending) ${JSON.stringify(r.power)}`);
   ok(!('rates' in r) && !('attSteps' in r) && !('hfLna' in r), 'no IQ-radio fields (rates, attSteps, hfLna) in the radio object');
 
   const cfg0 = a.last('config') || {};
@@ -167,25 +168,38 @@ try {
     a.send({ type: 'tune', frequency: 7050000 });
     await until(async () => (await stats()).freq === 7050000, 3000);
   }
+  // ★★ 2026-11-05: NO RADIO ON / RADIO OFF IN THE CLIENTS. An old page's icom_power is refused in words for everybody,
+  //    admin included, and nothing reaches the radio; the owner's keys are POST /vibeserver/icom/power (the front door).
+  ok(a.last('hwinfo')?.radio?.power?.canSwitch === false, '★ hwinfo power.canSwitch is false — no client draws RADIO ON / OFF');
   a.send({ type: 'icom_power', action: 'off' });
   await sleep(800);
   let st = await stats();
-  ok(st.powered === 1 && st.offs === 0, '★ a listener\'s RADIO OFF is refused — the radio is still on');
-  ok(a.txt.some((m) => m.t.includes('"notice"') && m.t.includes('Only the owner can switch the radio')), 'and they are told why, in words');
-
+  ok(st.powered === 1 && st.offs === 0, '★ an icom_power message (an older page) is ignored — the radio is still on');
+  ok(a.txt.some((m) => m.t.includes('"notice"') && m.t.includes('settings on the Setup page')), 'and the sender is told why, in words');
   a.send({ type: 'admin_unlock', nonce: '', token: '' });
   ok(await until(() => a.txt.some((m) => m.t.includes('"type":"admin","ok":true')), 2000), 'admin signs in (no password set: granted)');
-  console.log('   RADIO OFF / RADIO ON (admin)');
   a.send({ type: 'icom_power', action: 'off' });
-  ok(await until(async () => { const s = await stats(); return s.powered === 0 && s.offs === 1; }, 3000), '★ the admin presses RADIO OFF: 18 00 sent once, the radio is off');
+  await sleep(800);
+  ok((await stats()).offs === 0, '★ …the admin\'s too: the socket path is retired');
+  console.log('   POWER OFF / POWER ON (the owner, front door HTTP)');
+  const post = (q) => new Promise((res) => {
+    const rq = http.request({ host: '127.0.0.1', port, path: `/vibeserver/icom/power?action=${q}`, method: 'POST' }, (r) => {
+      let b = ''; r.on('data', (d) => { b += d; }); r.on('end', () => { try { res({ code: r.statusCode, j: JSON.parse(b) }); } catch { res({ code: r.statusCode, j: null }); } });
+    });
+    rq.on('error', () => res({ code: 0, j: null })); rq.end();
+  });
+  let pr = await post('off');
+  ok(pr.code === 200 && pr.j?.ok === true, `POST action=off → 200 ok (${pr.code})`);
+  ok(await until(async () => { const s = await stats(); return s.powered === 0 && s.offs === 1; }, 3000), '★ POWER OFF: 18 00 sent once, the radio is off');
   ok(await until(() => a.last('hwinfo')?.radio?.linkWhy === 'Switched off by the owner', 5000), `every listener is told: "${a.last('hwinfo')?.radio?.linkWhy}"`);
-  ok(/the owner pressed RADIO OFF/.test(readLog()), 'the press is logged plainly');
+  ok(/the owner pressed POWER OFF/.test(readLog()), 'the press is logged plainly');
   await sleep(4000);
   st = await stats();
   ok(st.wakes === 0 && st.powered === 0, 'it stays off (no automatic power-on without the option)');
   ok(srv.exitCode === null, 'and the server is still running (no exit, no restart loop)');
-  a.send({ type: 'icom_power', action: 'on' });
-  ok(await until(async () => (await stats()).wakes === 1, 4000), 'RADIO ON: the FE preamble + 18 01 is sent once');
+  pr = await post('on');
+  ok(pr.code === 200 && pr.j?.ok === true, 'POST action=on → 200 ok');
+  ok(await until(async () => (await stats()).wakes === 1, 4000), 'POWER ON: the FE preamble + 18 01 is sent once');
   ok(await until(() => a.last('hwinfo')?.radio?.linkUp === true, 15000), '★ the radio boots, the PREFLIGHT runs again, and it is back');
   ok(await until(() => a.last('hwinfo')?.radio?.preflight?.passed === true, 3000), '  … with the preflight passed');
   a.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
@@ -226,7 +240,7 @@ try {
 
   st = await stats();
   ok(st.violations === 0, `★★★ the fake radio saw ZERO disallowed frames (${st.frames} frames in total)`);
-  ok(st.offs === 1, `★★ exactly one 18 00 in the whole run — the admin's press (${st.offs})`);
+  ok(st.offs === 1, `★★ exactly one 18 00 in the whole run — the owner's POWER OFF (${st.offs})`);
   ok(!/REFUSED a CI-V frame/.test(readLog()), 'and the server refused none of its own');
   a.close(); au.close(); b.close();
 } finally {
@@ -349,11 +363,75 @@ await phase(['--off'], ['--users', '2'], async (pt, st, f, sv, rl) => {
 });
 console.log('── radio off, "Power on the radio over CI-V" ticked ──');
 await phase(['--off'], ['--users', '2', '--icom-power-on'], async (pt, st) => {
-  ok(await until(async () => (await st()).wakes === 1, 5000), '★ the server sends the power-on (FE preamble + 18 01) once');
+  await sleep(5000);
+  ok((await st()).wakes === 0, '★ nobody connected: nothing is sent (a radio that is off stays off until it is wanted)');
   const x = ws(pt, '/ws/user-spectrum?user_session_id=pwr00001-aaaa&bins=256');
+  ok(await until(async () => (await st()).wakes === 1, 5000), '★ a listener connects: the server sends the power-on (FE preamble + 18 01) once');
+  ok(await until(() => /Switching the radio on/.test(x.last('hwinfo')?.radio?.linkWhy || '') || x.last('hwinfo')?.radio?.linkUp === true, 5000),
+     '  … and they are told "Switching the radio on"');
   ok(await until(() => x.last('hwinfo')?.radio?.linkUp === true, 15000), '  … the radio boots and runs, preflight passed');
   ok((await st()).offs === 0, '★ no 18 00 was ever sent');
   x.close();
+});
+
+// ── ★★ AUTOMATIC POWER-OFF (Stuart, 2026-11-05): "How long after the last user leaves". --icom-off-delay-scale 4 makes
+//    one minute last 4 s, so "1 min" here is 4 s. ──
+console.log('── automatic power-off: 1 min (4 s in this test) after the last listener leaves ──');
+await phase([], ['--users', '4', '--icom-power-on', '--icom-off-delay', '1', '--icom-off-delay-scale', '4'], async (pt, st, f, sv, rl) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=aof00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.linkUp === true, 8000), 'a listener is on the radio');
+  const pw = x.last('hwinfo')?.radio?.power || {};
+  ok(pw.autoOn === true && pw.autoOff === true && pw.offDelayMin === 1, `hwinfo: power-on, automatic power-off, 1 min (${JSON.stringify(pw)})`);
+  await sleep(7000);
+  ok((await st()).offs === 0, '★ never switched off while somebody is connected (7 s > the 4 s delay)');
+  x.close();
+  const t0 = Date.now();
+  await sleep(2000);
+  ok((await st()).offs === 0, '★ not before the delay (2 s after the last listener left)');
+  const hw = await getJson(pt, '/vibeserver/hardware');
+  const left = hw?.radio?.power?.offInS;
+  ok(typeof left === 'number' && left >= 0 && left <= 4, `the Setup page sees the countdown (offInS ${left})`);
+  ok(await until(async () => (await st()).offs === 1, 6000), `★ switched off after the delay (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
+  ok(await until(async () => (await st()).powered === 0, 2000), '  … the radio is off');
+  ok(/automatic power-off/.test(rl()), '  … logged plainly');
+  const y = ws(pt, '/ws/user-spectrum?user_session_id=aof00002-bbbb&bins=256');
+  ok(await until(async () => (await st()).wakes === 1, 5000), '★ the next listener switches it back on (18 01)');
+  ok(await until(() => y.last('hwinfo')?.radio?.linkUp === true, 15000), '  … and it runs');
+  y.close();
+  await sleep(2000);
+  const z = ws(pt, '/ws/user-spectrum?user_session_id=aof00003-cccc&bins=256');   // ★ back inside the wait
+  ok(await until(() => z.last('hwinfo')?.radio?.linkUp === true, 3000), 'somebody connects again inside the wait');
+  await sleep(6000);
+  ok((await st()).offs === 1, '★ the re-join cancelled the power-off (still one 18 00 in the run)');
+  z.close();
+  ok(await until(async () => (await st()).offs === 2, 8000), 'and with them gone too, it switches off after the delay');
+});
+console.log('── automatic power-off: Instant ──');
+await phase([], ['--users', '4', '--icom-power-on', '--icom-off-delay', '0'], async (pt, st) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=ins00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.linkUp === true, 8000), 'a listener is on the radio');
+  await sleep(2500);
+  ok((await st()).offs === 0, 'never while they are connected');
+  x.close();
+  ok(await until(async () => (await st()).offs === 1, 3000), '★ Instant: switched off within a second or two of the last listener leaving');
+});
+console.log('── power-on ticked, automatic power-off unticked ──');
+await phase([], ['--users', '4', '--icom-power-on', '--icom-no-auto-off', '--icom-off-delay', '0'], async (pt, st) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=nao00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.linkUp === true, 8000), 'a listener is on the radio');
+  ok(x.last('hwinfo')?.radio?.power?.autoOff === false, 'hwinfo: automatic power-off is not in effect');
+  x.close();
+  await sleep(5000);
+  ok((await st()).offs === 0, '★ never an 18 00 without "Automatically power off the radio when not in use"');
+});
+console.log('── automatic power-off ticked, power-on NOT ticked ──');
+await phase([], ['--users', '4', '--icom-off-delay', '0'], async (pt, st) => {
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=npo00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.linkUp === true, 8000), 'a listener is on the radio');
+  x.close();
+  await sleep(5000);
+  const s2 = await st();
+  ok(s2.offs === 0 && s2.wakes === 0, '★ no power command at all without "Power on the radio over CI-V" (nothing could switch it back on)');
 });
 
 // ── ★★ PHASE 2: THE RADIO'S AUDIO REACHES THE DECODERS. Real off-air RTTY (Stuart's library, JARTS 2026-10-18)

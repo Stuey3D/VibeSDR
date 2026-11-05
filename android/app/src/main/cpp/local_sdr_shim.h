@@ -498,6 +498,8 @@ public:
      *  the libusb crash on resume, RDS dying on resume) and guarantees the AGC settle finishes.
      *  0 parks immediately, i.e. the old behaviour. */
     static void setVibeServerIdleGrace(double sec);
+    /** ★ TESTS ONLY: how many seconds one minute of an Icom's "How long after the last user leaves" lasts (default 60). */
+    static void setVibeServerIcomOffDelayScale(double secPerMin);
     static void setVibeServerRfNotch(bool on);
     /** ★ Auto notch: the RSP's front-end filters follow the dial (see vsAutoNotchFor). */
     static void setVibeServerAutoNotch(bool on);
@@ -919,11 +921,20 @@ public:
         bool ttyOk = false;
         bool ownerLock = false;  ///< "Only I may tune this radio" (config icomTuneLock, default OFF since 2026-11-04)
         bool powerOn = false;    ///< "Power on the radio over CI-V" (config icomPowerOn) — see icom::IcomConfig::powerOn
+        bool autoOff = true;     ///< "Automatically power off the radio when not in use" (config icomAutoOff) — needs powerOn
+        int  offDelayMin = 5;    ///< "How long after the last user leaves" (config icomOffDelayMin): 0 (Instant) … 60
         bool rfOpen = false;     ///< ★ IGNORED since 2026-11-04 — an Icom's RF settings follow the SDRs' gain rules
         double freqHint = 0;
     };
     int startIcom(const IcomStart& o, std::string& err);
     bool isIcom() const;
+    /** ★ An Icom's power for the front door's radio list: "on" (CI-V answering), "switchingOn", "off" (USB there, CI-V
+     *  silent — switched off or not answering), "absent" (USB gone), or "" (not an Icom). `autoOn` = "Power on the radio
+     *  over CI-V"; `byOwner` = the owner's POWER OFF. The CI-V thread already watches the link (identify every 3 s while
+     *  it is silent), so this is current without sending anything. */
+    std::string icomPowerState(bool& autoOn, bool& byOwner) const;
+    /** ★ The Setup page's power settings, applied live (re-read from config.json by the radio's own process). */
+    void setIcomPowerOptions(bool powerOn, bool autoOff, int offDelayMin);
     /** ★★ V12 PAGING: may the paging receiver run here at all? Only in the Android library (VIBE_PAGING), only while the
      *  engine is NOT serving (bound to loopback — the phone's own app is the only client), and only on a USB radio with
      *  IQ (not rtl_tcp, a SpyServer or an Icom). The attach handler also requires the decoder socket to be loopback. */

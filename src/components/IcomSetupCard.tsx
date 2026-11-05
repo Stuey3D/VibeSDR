@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Switch, ActivityIndicator, type TextInputProps } from 'react-native';
 import {
-  type IcomRadio, type IcomSettings, ICOM_BAUDS, ICOM_SCOPE_SPEED_NAMES, baudNote, transportText,
+  type IcomRadio, type IcomSettings, ICOM_BAUDS, ICOM_SCOPE_SPEED_NAMES, ICOM_OFF_DELAYS, icomOffDelayLabel, baudNote, transportText,
   preflightLines, icomSettingsFrom, parseCivHex, fmtCivHex, pickIcomSerial, withIcomSettings,
 } from '../services/icomRadio';
 
@@ -244,10 +244,30 @@ export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink,
       <Switch value={form.icomPowerOn} onValueChange={(v) => onSet('icomPowerOn', v)}
               trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomPowerOn ? ink.thumbOn : ink.thumbOff} />
     </View>
-    <Text style={styles.note}>When the radio is not answering, VibeServer sends its CI-V Power ON command (at most every 30
-      seconds), then checks USB SEND, USB Keying and VOX as always. It needs the radio&rsquo;s 13.8 V supply on, the USB
-      cable in, and a fixed CI-V USB Baud Rate. With Power down the radio on, it also switches the radio off when nobody
-      has listened for a while, and on again when somebody connects. Off: VibeServer waits for you to switch it on.</Text>
+    <Text style={styles.note}>When somebody connects and the radio is not answering, VibeServer sends its CI-V Power ON
+      command (they see &ldquo;Switching the radio on&rdquo;), then checks USB SEND, USB Keying and VOX as always; with nobody
+      connected it sends nothing. It needs the radio&rsquo;s 13.8 V supply on, the USB cable in, and a fixed CI-V USB Baud
+      Rate. Off: a switched-off radio is shown greyed out (&ldquo;Switched off&rdquo;) until you switch it on.</Text>
+    {/* ★★ AUTOMATIC POWER-OFF (Stuart, 2026-11-05) — only with power-on (otherwise nothing could switch it back on), so it
+        is drawn greyed with that reason when power-on is off (AGENTS.md: never a control that silently does nothing). */}
+    <View style={[styles.toggleRow, !form.icomPowerOn && { opacity: 0.5 }]}>
+      <Text style={[styles.toggleLabel, { flex: 1 }]}>Automatically power off the radio when not in use</Text>
+      <Switch value={form.icomAutoOff} disabled={!form.icomPowerOn} onValueChange={(v) => onSet('icomAutoOff', v)}
+              trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomAutoOff ? ink.thumbOn : ink.thumbOff} />
+    </View>
+    {form.icomPowerOn ? (<>
+      {form.icomAutoOff && (<>
+        <Text style={styles.fieldLbl}>How long after the last user leaves</Text>
+        <IcomChoice styles={styles} opts={ICOM_OFF_DELAYS} value={form.icomOffDelayMin as (typeof ICOM_OFF_DELAYS)[number]}
+                    fmt={(v) => icomOffDelayLabel(v)} onPick={(v) => onSet('icomOffDelayMin', v)} />
+      </>)}
+      <Text style={styles.note}>Switches the radio off once nobody has been connected for this long, so a radio is not
+        switched on and off by listeners coming and going; somebody connecting in the wait cancels it. Never while anybody
+        is connected or Background Decoding, the DX scanner or ADS-B keeps the radio busy.</Text>
+    </>) : (
+      <Text style={styles.note}>Needs &ldquo;Power on the radio over CI-V&rdquo;: without it nothing could switch the radio
+        back on for the next listener.</Text>
+    )}
     {!phone && (<>
       <Text style={styles.fieldLbl}>Receive audio</Text>
       <Input value={form.icomAudio} onChangeText={(t) => onSet('icomAudio', t)} autoCapitalize="none" autoCorrect={false}

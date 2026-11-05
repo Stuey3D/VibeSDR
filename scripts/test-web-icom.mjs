@@ -341,6 +341,9 @@ try {
   await startRadio(p);
   ok(await p.wait(`document.body.classList.contains("icom") && !document.body.classList.contains("icomFollow")`, 15000), 'admin: the owner lock does not apply');
   ok(await p.wait(`document.getElementById("icomFollow").hidden && !document.querySelector("#icomMode button").disabled`), 'admin: no follow note, the controls are live');
+  // ★★ 2026-11-05 (Stuart: "the setup should handle it") — no POWER row in the client, not even for the admin.
+  ok(await p.js(`!document.getElementById("icomPower") && !/RADIO (ON|OFF)/.test(document.getElementById("icomCtls").textContent)`),
+     'admin: no RADIO ON / RADIO OFF in the receiver (power is the Setup page and the front door)');
   // mode → CW
   await p.js(`document.querySelector('#icomMode button[data-v="cw"]').click(); 1`);
   ok(await until(async () => (await stats()).mode === 3, 4000), 'a MODE tap reaches the fake radio (CW)');

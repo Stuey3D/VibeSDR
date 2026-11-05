@@ -531,13 +531,16 @@ static std::string jstr(JNIEnv* env, jstring j) {
 //     (start() routes it to startIcom), and pushes AudioRecord's blocks in through nativeIcomPushPcm.
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetIcomNext(JNIEnv* env, jobject, jint baud, jint civAddr, jboolean ownerLock,
-                                                   jboolean rfOpen, jint scopeSpeed, jstring serial, jboolean powerOn) {
+                                                   jboolean rfOpen, jint scopeSpeed, jstring serial, jboolean powerOn,
+                                                   jboolean autoOff, jint offDelayMin) {
     vibe::LocalSdrShim::IcomStart o;
     o.baud = baud > 0 ? (int)baud : 115200;
     o.civAddr = civAddr > 0 && civAddr < 0xE0 ? (int)civAddr : 0;
     o.ownerLock = ownerLock == JNI_TRUE;
     o.rfOpen = rfOpen == JNI_TRUE;
     o.powerOn = powerOn == JNI_TRUE;   // ★ "Power on the radio over CI-V" — the same option as Linux's icomPowerOn
+    o.autoOff = autoOff == JNI_TRUE;   // ★ "Automatically power off the radio when not in use" (icomAutoOff)
+    o.offDelayMin = (int)offDelayMin;  // ★ "How long after the last user leaves" (icomOffDelayMin) — validated by startIcom
     o.scopeSpeed = scopeSpeed >= 0 && scopeSpeed <= 2 ? (int)scopeSpeed : 0;
     o.modelHint = jstr(env, serial);
     vibe::LocalSdrShim::setIcomNext(o);

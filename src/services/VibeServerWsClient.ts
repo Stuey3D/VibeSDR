@@ -1239,10 +1239,6 @@ export abstract class VibeServerWsClient {
     return true;
   }
 
-  /** ★★ THE OWNER'S RADIO ON / RADIO OFF for an Icom (`icom_power`). Admin only — the SERVER refuses anyone else in
-   *  words; the app draws the buttons for the admin alone. */
-  icomPower(action: 'on' | 'off') { this._sendCtl({ type: 'icom_power', action }); }
-
   /** ★★★ HackRF One controls. Same shape — only the keys present are applied.
    *  ★★ amp and biast are OWNER-ONLY and the SERVER enforces that (adminGate in the
    *  hackrf_control handler), not this method: sending them without the admin unlock is refused
