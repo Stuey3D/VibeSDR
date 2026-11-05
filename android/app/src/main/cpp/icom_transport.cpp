@@ -176,6 +176,7 @@ public:
             else       { ctrlLines0(); }
             for (int i = nIfc_ - 1; i >= 0; i--) if (claimed_[i]) { libusb_release_interface(h_, ifc_[i]); claimed_[i] = false; }
             libusb_close(h_); h_ = nullptr;
+            nIfc_ = 0;   // ★ see findEndpoints: the next open lists its interfaces afresh
         }
         if (ctx_) { libusb_exit(ctx_); ctx_ = nullptr; }
     }
@@ -212,6 +213,13 @@ private:
     unsigned char epIn_ = 0x81, epOut_ = 0x01;
 
     bool findEndpoints(std::string& err) {
+        /* ★★★ FROM ZERO ON EVERY OPEN (Saber's IC-7300, 2026-11-05). nIfc_ was never reset, so each reopen APPENDED the
+         *  interface again: the first reopen claimed interface 0 twice (harmless), the next wrote ifc_[2] — past the end
+         *  of a 2-element array, into claimed_ — and every claim after it failed LIBUSB_ERROR_INVALID_PARAM, 2 944 times
+         *  in a row, the radio stuck on "USB connection lost — retrying". An IC-7300's USB chips are INSIDE the radio, so
+         *  every automatic power-off/on is a reopen: the power option made it happen within ten minutes. */
+        nIfc_ = 0; ctrlIfc_ = 0;
+        for (bool& c : claimed_) c = false;
         libusb_config_descriptor* cfg = nullptr;
         if (libusb_get_active_config_descriptor(libusb_get_device(h_), &cfg) != 0 || !cfg) { err = "the radio's USB descriptor could not be read"; return false; }
         bool found = false;
@@ -225,11 +233,11 @@ private:
                 if ((ep.bmAttributes & 3) != LIBUSB_TRANSFER_TYPE_BULK) continue;
                 if (ep.bEndpointAddress & 0x80) in = ep.bEndpointAddress; else out = ep.bEndpointAddress;
             }
-            if (in && out) { epIn_ = in; epOut_ = out; ifc_[nIfc_++] = id.bInterfaceNumber; found = true; }
+            if (in && out && nIfc_ < 2) { epIn_ = in; epOut_ = out; ifc_[nIfc_++] = id.bInterfaceNumber; found = true; }
         }
         libusb_free_config_descriptor(cfg);
         if (!found) { err = "the radio's USB port has no serial endpoints"; return false; }
-        if (cdc_ && ctrlIfc_ != ifc_[0]) ifc_[nIfc_++] = ctrlIfc_;
+        if (cdc_ && ctrlIfc_ != ifc_[0] && nIfc_ < 2) ifc_[nIfc_++] = ctrlIfc_;
         return true;
     }
 

@@ -102,7 +102,7 @@ bool IcomSource::sendWake(bool byOwner) {
         ILOG("a listener arrived and the radio is off (idle power-down) — sending CI-V power-on (owner option)");
     else ILOG("the radio is not answering — sending CI-V power-on (owner option)");
     const bool okw = transport_->write(w.b, w.n);
-    if (okw) { wakes_.fetch_add(1); bootUntil_ = t + kBootSec; }
+    if (okw) { wakes_.fetch_add(1); bootUntil_ = t + kBootSec; offSeenDown_ = true; }   // ★ after OUR wake, an answer IS "on"
     return okw;
 }
 
@@ -116,6 +116,7 @@ void IcomSource::doPowerOff(bool byOwner) {
     // ★ Scope data off first, as close() does, so the radio is left as we found it when it comes back.
     sendFrame(civ::build::scopeData(policy_.radio, false));
     if (transport_->write(o.b, o.n)) offs_.fetch_add(1);
+    offSettleUntil_ = now() + kOffSettleSec; offSeenDown_ = false;
     if (byOwner) offByOwner_.store(true); else offByIdle_.store(true);
     { std::lock_guard<std::mutex> lk(stMtx_); st_.linkUp = false; }
     inflight_.used = false;
@@ -339,7 +340,7 @@ bool IcomSource::open(const IcomConfig& cfg, std::string& err, std::unique_ptr<C
     waiting_.store(false); preRefused_.store(false); usbMissing_.store(false); offByOwner_.store(false); offByIdle_.store(false);
     wantIdleOff_.store(false); kick_.store(false); wakeAt_.store(-1e9);
     wantOff_.store(false); wantOn_.store(false);
-    wakes_.store(0); offs_.store(0); lastWakeAt_ = -1e9; bootUntil_ = 0; audioStarted_ = false; lastRetryErr_.clear();
+    wakes_.store(0); offs_.store(0); lastWakeAt_ = -1e9; bootUntil_ = 0; offSettleUntil_ = 0; offSeenDown_ = true; audioStarted_ = false; lastRetryErr_.clear();
     bool silent = false;
     if (!identify(err, &silent)) {
         if (!silent) { transport_->close(); transport_.reset(); return false; }
@@ -446,6 +447,7 @@ bool IcomSource::reconnect() {
     //    whether it came back by itself, by the owner's hand, or by a power-on we sent.
     if (!identify(e, &silent)) {
         if (silent) {
+            offSeenDown_ = true;         // ★ it really went down: from here a wake may go at once (see offSettleUntil_)
             enterWaiting();
             sendWake(false);             // ★ only with the owner option, rate-limited, never after RADIO OFF
             transport_->close();
@@ -468,6 +470,12 @@ bool IcomSource::reconnect() {
         return false;
     }
     lastRetryErr_.clear();
+    if (!offSeenDown_) {
+        // ★★ It answered, but it has not been quiet since our 18 00: it is still SHUTTING DOWN, not switched on.
+        if (now() < offSettleUntil_) { transport_->close(); return false; }
+        offSeenDown_ = true;
+        ILOG("the radio was still answering %.0f s after the power-off (18 00) — it did not switch off", kOffSettleSec);
+    }
     const bool wasWaiting = waiting_.exchange(false);
     preRefused_.store(false); offByOwner_.store(false); offByIdle_.store(false); wakeAt_.store(-1e9);
     readInitialState();

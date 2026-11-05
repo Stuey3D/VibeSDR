@@ -191,6 +191,7 @@ public:
     uint64_t powerOffsSent() const { return offs_.load(); }
     static constexpr double kWakeEverySec = 30.0;   ///< at most one power-on per this, while waiting
     static constexpr double kBootSec = 4.0;         ///< after a power-on, let the radio boot before identify
+    static constexpr double kOffSettleSec = 15.0;   ///< after OUR power-off: an IC-7300 answers CI-V for a few s while it shuts down
     uint64_t sweepsDropped() const { return scope_.dropped; }
     /** S-meter reading as dB relative to S9 (Hamlib's published 7300 calibration points). */
     static double sRawToDbOverS9(int raw);
@@ -234,6 +235,12 @@ private:
     std::atomic<double> wakeAt_{-1e9};                   ///< lastWakeAt_, readable from other threads
     double lastWakeAt_ = -1e9;              ///< CI-V thread (and open) only
     double bootUntil_ = 0;
+    /** ★★ After OUR 18 00, an answer is NOT "switched on" until the radio has been silent once (offSeenDown_) or
+     *  kOffSettleSec has passed. An IC-7300 answers CI-V for a few seconds while it shuts down, and a probe 3 s after
+     *  the power-off took that for "switched on" and started everything again (Saber, 2026-11-05: an off / on / off
+     *  cycle every five minutes). Once it has gone quiet it is down, and a wake may go at once. */
+    double offSettleUntil_ = 0;
+    bool   offSeenDown_ = true;   ///< since our last 18 00, has the radio been SILENT once (= it really went down)?
     bool audioStarted_ = false;
     std::string lastRetryErr_;              ///< so a radio that stays off logs once, not every 3 s
     mutable std::mutex audioMtx_;           ///< audio_ is created on the CI-V thread when a waiting radio answers
