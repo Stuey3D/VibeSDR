@@ -96,7 +96,7 @@ object VibeIcom {
     // ── Starting one ────────────────────────────────────────────────────────────────────────────────────────────
 
     /** The owner's Icom settings → the engine, before the ordinary start(fd, vid, pid). Same names as the Linux
-     *  server's config (vibeserver_config.h): icomBaud, icomCiv, icomScopeSpeed, icomTuneLock, icomPowerOn.
+     *  server's config (vibeserver_config.h): icomBaud, icomCiv, icomScopeSpeed, icomTuneLock, icomPowerOn, icomAutoOff, icomOffDelayMin.
      *  ★ No icomRfOpen since 2026-11-04: an Icom's RF settings follow the SDRs' gain rules on the server. */
     fun prepareStart(cfg: JSONObject, dev: UsbDevice) {
         VibeLocalSDR.setIcomNext(
@@ -106,7 +106,9 @@ object VibeIcom {
             false,                                    // ★ rfOpen — ignored by the engine since 2026-11-04
             cfg.optInt("icomScopeSpeed", 0),
             serialOf(dev) ?: dev.productName ?: "",
-            cfg.optBoolean("icomPowerOn", false))     // ★ "Power on the radio over CI-V" — default OFF
+            cfg.optBoolean("icomPowerOn", false),     // ★ "Power on the radio over CI-V" — default OFF
+            cfg.optBoolean("icomAutoOff", true),      // ★ "Automatically power off the radio when not in use" — default ON
+            cfg.optInt("icomOffDelayMin", 5))         // ★ "How long after the last user leaves" — default 5 min
         Log.i(TAG, "starting ${identify(dev) ?: "an Icom"} at ${dev.deviceName} (receive only)")
     }
 

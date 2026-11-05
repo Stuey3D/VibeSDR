@@ -2174,6 +2174,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★★★ An Icom's five (VibeIcom.prepareStart reads them only for an Icom) — see nativeServerConfig.
     icomBaud: icomSet.icomBaud, icomCiv: icomSet.icomCiv, icomScopeSpeed: icomSet.icomScopeSpeed,
     icomTuneLock: icomSet.icomTuneLock, icomPowerOn: icomSet.icomPowerOn,
+    icomAutoOff: icomSet.icomAutoOff, icomOffDelayMin: icomSet.icomOffDelayMin,
   });
   const serverConfigRef = useRef(serverConfig);
   serverConfigRef.current = serverConfig;

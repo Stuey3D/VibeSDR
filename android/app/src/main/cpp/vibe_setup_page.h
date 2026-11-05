@@ -972,20 +972,31 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
           <input type="checkbox" id="icomPowerOn" style="width:16px;height:16px;accent-color:var(--amber)">
           <span>Power on the radio over CI-V</span></label>
-        <div class="hint">When VibeServer finds the radio not answering, it sends the IC-7300&rsquo;s CI-V
-          <b>Power ON</b> command (18 01, after the run of FE bytes the manual asks for) at most once every 30 seconds,
-          then waits for it to start and checks USB SEND, USB Keying and VOX as always. It only works while the radio
-          still has its 13.8 V supply and the USB cable connected, with <b>CI-V USB Baud Rate</b> set to the same fixed
-          speed as here (a radio that is off cannot detect &ldquo;Auto&rdquo;). If you switch the radio off at its front
-          panel while VibeServer is running, this switches it back on within about 30 seconds &mdash; use
-          <b>Radio off</b> below instead. With <b>Power down the radio</b> on (when nobody is listening), this also
-          switches the radio <b>off</b> once nobody has listened for that long, and on again when somebody connects.
-          Untick it and VibeServer never sends a power command by itself; it waits, and starts the radio when you
-          switch it on.</div>
-        <div id="icomPowerRow" style="display:flex;gap:8px;align-items:center;margin-top:10px">
-          <button type="button" class="btn" id="icomRadioOn">Radio on</button>
-          <button type="button" class="btn" id="icomRadioOff">Radio off</button>
-          <span class="hint" id="icomPowerMsg"></span></div>
+        <div class="hint">When somebody connects and the radio is not answering, VibeServer sends the IC-7300&rsquo;s CI-V
+          <b>Power ON</b> command (18 01, after the run of FE bytes the manual asks for) &mdash; they see &ldquo;Switching
+          the radio on&rdquo; for about a minute &mdash; then checks USB SEND, USB Keying and VOX as always. With nobody
+          connected it sends nothing. It only works while the radio still has its 13.8 V supply and the USB cable
+          connected, with <b>CI-V USB Baud Rate</b> set to the same fixed speed as here (a radio that is off cannot detect
+          &ldquo;Auto&rdquo;). With this ticked a switched-off radio is still offered to listeners; unticked, it is shown
+          greyed out (&ldquo;Switched off&rdquo;) until you switch it on, and VibeServer never sends a power command by
+          itself.</div>
+        <!-- ★★ AUTOMATIC POWER-OFF (Stuart, 2026-11-05: "Automatically Power off radio when not in use [x]  How long after
+             last user leaves [5 minutes]"). Only with power-on ticked — otherwise nothing could switch it back on for the
+             next listener — so it is drawn greyed with that reason when power-on is unticked. -->
+        <div id="icomAutoOffRow" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+          <label style="display:flex;gap:8px;align-items:center;margin:0">
+            <input type="checkbox" id="icomAutoOff" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Automatically power off the radio when not in use</span></label>
+          <label style="display:flex;gap:8px;align-items:center;margin:0"><span>How long after the last user leaves</span>
+            <select id="icomOffDelayMin">
+              <option value="0">Instant</option><option value="1">1 min</option><option value="5">5 min</option>
+              <option value="10">10 min</option><option value="15">15 min</option><option value="30">30 min</option>
+              <option value="60">60 min</option></select></label></div>
+        <div class="hint" id="icomAutoOffHint">Switches the radio off (CI-V 18 00) once nobody has been connected for this
+          long, so a radio is not switched on and off by listeners coming and going; somebody connecting in the wait
+          cancels it, and the next listener switches it back on. Never while anybody is connected, or while Background
+          Decoding, the DX scanner or ADS-B keeps the radio busy.</div>
+        <div class="hint" id="icomPowerMsg"></div>
         <label><span class="lbl">Receive audio</span>
           <input id="icomAudio" placeholder="auto">
           <div class="hint"><b>auto</b> finds the radio&rsquo;s own USB audio next to its CI-V port. <b>none</b> serves the
@@ -4530,23 +4541,41 @@ function govOffer() {
  *  has no sample rate, no gain table, no window to lock and no bias-T, and a card full of dead controls would
  *  read as a broken radio (AGENTS.md). The facts come from the radio itself (hw.radio = the same object as
  *  hwinfo's); the settings from this radio's config entry. */
-/* ★★ RADIO ON / RADIO OFF (the owner's; this page is the admin's). Off asks first: listeners lose the radio. */
-async function icomPower(action) {
-  const name = ($("icomModel") && $("icomModel").querySelector("b") && $("icomModel").querySelector("b").textContent) || "the radio";
-  if (action === "off" && !confirm(`Switch the ${name} off? Listeners lose it until it is switched back on.`)) return;
-  const msg = $("icomPowerMsg");
-  try {
-    const res = await fetch(`/vibeserver/icom/power?action=${action}`, {method: "POST", cache: "no-store"});
-    const j = await res.json().catch(() => ({}));
-    if (msg) msg.textContent = j.ok ? (action === "off" ? "Switching it off\u2026" : "Switching it on \u2014 about a minute\u2026") : (j.error || "Not sent");
-  } catch (e) { if (msg) msg.textContent = "Could not reach the server"; }
-  setTimeout(() => { try { renderHw(); } catch (e) {} }, 3000);
+/* ★★ THE AUTOMATIC POWER-OFF ROW only takes effect with "Power on the radio over CI-V" ticked (otherwise nothing could
+ *  switch the radio back on for the next listener): drawn greyed, with that reason, when it is not (AGENTS.md: never a
+ *  control that silently does nothing). There are no RADIO ON / RADIO OFF buttons here (2026-11-05): the owner's manual
+ *  POWER ON / POWER OFF are on the radio list, behind the admin sign-in. */
+function icomAutoOffSync() {
+  const on = !!($("icomPowerOn") && $("icomPowerOn").checked);
+  const ao = $("icomAutoOff"), dl = $("icomOffDelayMin"), row = $("icomAutoOffRow"), hint = $("icomAutoOffHint");
+  if (!ao || !dl) return;
+  ao.disabled = !on; dl.disabled = !on || !ao.checked;
+  if (row) row.style.opacity = on ? "" : "0.5";
+  if (hint && !hint.dataset.base) hint.dataset.base = hint.textContent;
+  if (hint) hint.textContent = on ? hint.dataset.base
+    : "Needs “Power on the radio over CI-V”: without it nothing could switch the radio back on for the next listener.";
 }
-document.addEventListener("click", (e) => {
+document.addEventListener("change", (e) => {
   const t = e.target;
-  if (t && t.id === "icomRadioOn") icomPower("on");
-  if (t && t.id === "icomRadioOff") icomPower("off");
+  if (t && (t.id === "icomPowerOn" || t.id === "icomAutoOff")) icomAutoOffSync();
 });
+/* ★ "Switching off in 4:12 — nobody listening", counted down from the radio's own offInS (hwinfo power). */
+let icomOffTimer = null;
+function icomOffCountdown(ic) {
+  const msg = $("icomPowerMsg");
+  if (icomOffTimer) { clearInterval(icomOffTimer); icomOffTimer = null; }
+  if (!msg) return;
+  const pw = ic && ic.power;
+  if (!pw || !(pw.offInS >= 0)) { msg.textContent = ""; return; }
+  const end = Date.now() + pw.offInS * 1000;
+  const draw = () => {
+    const s = Math.max(0, Math.round((end - Date.now()) / 1000));
+    msg.textContent = `Switching off in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} — nobody listening`;
+    if (s <= 0 && icomOffTimer) { clearInterval(icomOffTimer); icomOffTimer = null; }
+  };
+  draw();
+  icomOffTimer = setInterval(draw, 1000);
+}
 
 function icomRender(hw, r, drv) {
   const isIcom = drv === "icom";
@@ -4580,9 +4609,9 @@ function icomRender(hw, r, drv) {
     $("icomPreflight").innerHTML = (down ? `<div style="color:var(--warn)"><b>${esc(ic.linkWhy)}</b></div>`
         + (ic.linkHint ? `<div class="hint">${esc(ic.linkHint)}</div>` : "") : "")
       + (pf.ran === false && down ? "" : `<div style="color:${pf.passed ? "var(--good)" : "var(--bad)"}">${esc(pf.summary)}</div>${rows}`);
-    const on = $("icomRadioOn"), off = $("icomRadioOff");
-    if (on && off) { on.disabled = ic.linkUp !== false; off.disabled = ic.linkUp === false; }
+    icomOffCountdown(ic);
   } else {
+    icomOffCountdown(null);
     // ★ Not running: usually the preflight refused it, and the reason is in the radio's status line.
     const why = (cfg && cfg.icomStatus && r && cfg.icomStatus[r.serial]) || "";
     $("icomModel").textContent = (r && r.label) || "Icom transceiver";
@@ -4596,6 +4625,9 @@ function icomRender(hw, r, drv) {
   set("icomScopeSpeed", String(r.icomScopeSpeed || 0));
   set("icomTuneLock", !!r.icomTuneLock);   // ★ default OFF (2026-11-04): the ordinary dial rules
   set("icomPowerOn", !!r.icomPowerOn);
+  set("icomAutoOff", r.icomAutoOff !== false);   // ★ default ON (only takes effect with power-on)
+  set("icomOffDelayMin", String([0, 1, 5, 10, 15, 30, 60].includes(r.icomOffDelayMin) ? r.icomOffDelayMin : 5));
+  icomAutoOffSync();
   set("icomAudio", r.icomAudio || "auto");
   set("icomPort", r.icomPort || "usb");
   set("icomTtyOk", !!r.icomTtyOk);
@@ -7236,6 +7268,8 @@ function collectRadio() {
       icomScopeSpeed: parseInt($("icomScopeSpeed").value, 10) || 0,
       icomTuneLock: $("icomTuneLock").checked,
       icomPowerOn: $("icomPowerOn").checked,
+      icomAutoOff: $("icomAutoOff").checked,
+      icomOffDelayMin: parseInt($("icomOffDelayMin").value, 10),
       icomAudio: ($("icomAudio").value || "auto").trim(),
       icomPort: ($("icomPort").value || "usb").trim(),
       icomTtyOk: $("icomTtyOk").checked,

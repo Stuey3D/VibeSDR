@@ -8,7 +8,7 @@ import {
   icomMayTune, icomMayRf, icomFollowNote, icomModeLabel, icomClientMode, icomWidthFamily, icomFilterWidths,
   fmtWidth, fmtSpan, nearestSpanIndex, spanStep, sMeter, baudSweepsEstimate, baudNote, icomControlMsg,
   icomBanner, fmtAtt, fmtPreamp, rfGainPct, icomSettingsFrom, parseCivHex, fmtCivHex, pickIcomSerial,
-  withIcomSettings, preflightLines, ICOM_BAUDS, ICOM_PHONE_KEYS, icomPhoneFields, icomPresence, icomWatchState,
+  withIcomSettings, preflightLines, ICOM_BAUDS, ICOM_PHONE_KEYS, ICOM_OFF_DELAYS, icomOffDelayLabel, icomPhoneFields, icomPresence, icomWatchState,
 } from '../src/services/icomRadio.ts';
 
 let pass = 0, fail = 0;
@@ -158,11 +158,15 @@ eq(icomBanner({ ...r, linkUp: false, linkWhy: 'Switching the radio on — about 
    '★ the server\'s own words for a switched-off / switching-on radio');
 
 // ── setup (the same fields + defaults as the setup page's Icom card) ──
-eq(icomSettingsFrom({}), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomTuneLock: false, icomPowerOn: false, icomRfOpen: false,
+eq(icomSettingsFrom({}), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomTuneLock: false, icomPowerOn: false, icomAutoOff: true, icomOffDelayMin: 5, icomRfOpen: false,
                            icomAudio: 'auto', icomPort: 'usb', icomTtyOk: false }, 'setup defaults = the setup page\'s');
 eq(icomSettingsFrom({ icomTuneLock: true, icomRfOpen: true, icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2 }).icomTuneLock, true, 'tune lock ON read back');
 eq(icomSettingsFrom({ icomOwnerLock: true }).icomTuneLock, false, '★ the OLD key (always written, default true) is not read: every Icom starts open');
 eq(icomSettingsFrom({ icomPowerOn: true }).icomPowerOn, true, 'power-on over CI-V read back');
+eq([icomSettingsFrom({ icomAutoOff: false }).icomAutoOff, icomSettingsFrom({ icomOffDelayMin: 30 }).icomOffDelayMin,
+    icomSettingsFrom({ icomOffDelayMin: 0 }).icomOffDelayMin, icomSettingsFrom({ icomOffDelayMin: 7 }).icomOffDelayMin], [false, 30, 0, 5],
+   '★ automatic power-off read back; the delay is one of the dropdown\'s (0 = Instant kept; a junk 7 → 5)');
+eq([...ICOM_OFF_DELAYS].map(icomOffDelayLabel), ['Instant', '1 min', '5 min', '10 min', '15 min', '30 min', '60 min'], 'exactly Stuart\'s choices');
 eq(icomSettingsFrom({ icomScopeSpeed: 7 }).icomScopeSpeed, 0, 'a junk scope speed = fast');
 eq([parseCivHex('94'), parseCivHex(''), parseCivHex('a4'), parseCivHex('zz'), parseCivHex('123')], [0x94, 0, 0xa4, null, null], 'CI-V hex');
 eq([fmtCivHex(0x94), fmtCivHex(0), fmtCivHex(0x5)], ['94', '', '05'], 'CI-V hex out');
@@ -181,11 +185,11 @@ eq(preflightLines({ passed: false, verified: false, summary: '', items: [{ name:
    [{ ok: false, text: 'USB SEND: RTS — change it at MENU > SET > Connectors > USB SEND' }], 'a failing item names the menu path');
 
 // ── a phone serving its own Icom (ServerModeScreen) ──
-eq(icomPhoneFields(null), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomTuneLock: false, icomPowerOn: false },
+eq(icomPhoneFields(null), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomTuneLock: false, icomPowerOn: false, icomAutoOff: true, icomOffDelayMin: 5 },
    'phone defaults = the setup page\'s, ★ tune lock OFF, power-on OFF');
-eq(Object.keys(icomPhoneFields({})), [...ICOM_PHONE_KEYS], 'exactly the five keys Android reads, nothing else (no icomRfOpen: the SDR gain rules apply)');
+eq(Object.keys(icomPhoneFields({})), [...ICOM_PHONE_KEYS], 'exactly the seven keys Android reads, nothing else (no icomRfOpen: the SDR gain rules apply)');
 eq(icomPhoneFields({ icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomTuneLock: true, icomRfOpen: true, icomPowerOn: true, icomAudio: 'x', icomPort: '/dev/x', icomTtyOk: true }),
-   { icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomTuneLock: true, icomPowerOn: true },
+   { icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomTuneLock: true, icomPowerOn: true, icomAutoOff: true, icomOffDelayMin: 5 },
    'stored values kept; audio/port/serial-device dropped (not settings on a phone)');
 eq(icomPhoneFields({ icomBaud: 12345 }).icomBaud, 115200, 'a baud the radio\'s menu does not offer → 115200');
 eq(icomPhoneFields({ icomCiv: 999, icomScopeSpeed: 7 }), { ...icomPhoneFields(null), icomCiv: 0xff, icomScopeSpeed: 0 }, 'out-of-range values clamped / defaulted');

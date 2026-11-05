@@ -293,6 +293,9 @@ struct Opts {
     // ★ Icom (driver "icom") — see vibeserver_config.h Config::icomPort. --icom <port> starts one directly.
     std::string icomPort = "usb", icomAudio = "auto";
     int         icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0;
+    int         icomOffDelayMin = 5;          ///< "How long after the last listener leaves" — see Config::icomOffDelayMin
+    bool        icomAutoOff = true;           ///< "Automatically power off the radio when not in use" — Config::icomAutoOff
+    double      icomOffDelayScale = 60.0;     ///< seconds per minute of it: 60, or less in a test (--icom-off-delay-scale)
     bool        icomTuneLock = false, icomRfOpen = false, icomTtyOk = false, icomPowerOn = false;
     bool        icomGiven = false;   ///< --icom on the command line: start the Icom, skip discovery
     bool        rspAmNotch = false;
@@ -512,6 +515,10 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--icom-open-tuning") { o.icomTuneLock = false; }   // ★ the default since 2026-11-04; kept for old scripts
         else if (a == "--icom-tune-lock")   { o.icomTuneLock = true; }
         else if (a == "--icom-power-on")    { o.icomPowerOn = true; }
+        else if (a == "--icom-no-auto-off") { o.icomAutoOff = false; }
+        else if (a == "--icom-off-delay")   { o.icomOffDelayMin = vsconfig::icomOffDelayValid(std::atoi(need(i))); }
+        // ★ TESTS ONLY: how many seconds one minute of "Switch off after" lasts (default 60), so a test waits seconds.
+        else if (a == "--icom-off-delay-scale") { o.icomOffDelayScale = std::max(0.01, std::atof(need(i))); }
         else if (a == "--icom-rf-open")     { o.icomRfOpen = true; }   // ★ ignored since 2026-11-04 (the SDRs' gain rules apply)
         else if (a == "--tcp") {
             o.useUsb = false;
@@ -665,7 +672,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.antennaMap = c.antennaMap;
     o.rspHdr = c.rspHdr; o.rspAmNotch = c.rspAmNotch; o.rspExtRef = c.rspExtRef;
     o.icomPort = c.icomPort; o.icomBaud = c.icomBaud; o.icomCiv = c.icomCiv; o.icomAudio = c.icomAudio;
-    o.icomScopeSpeed = c.icomScopeSpeed; o.icomTuneLock = c.icomTuneLock; o.icomRfOpen = c.icomRfOpen; o.icomTtyOk = c.icomTtyOk; o.icomPowerOn = c.icomPowerOn;
+    o.icomScopeSpeed = c.icomScopeSpeed; o.icomTuneLock = c.icomTuneLock; o.icomRfOpen = c.icomRfOpen; o.icomTtyOk = c.icomTtyOk; o.icomPowerOn = c.icomPowerOn; o.icomOffDelayMin = c.icomOffDelayMin; o.icomAutoOff = c.icomAutoOff;
     o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget; o.rfAgc = c.rfAgc; o.rspDabDecim = c.rspDabDecim; o.rfAgcStart = c.rfAgcStart; o.rspVibeAgc = c.rspVibeAgc;
     o.agcSet = c.agcSet; o.agcSetLock = c.agcSetLock;
     o.port = c.port; o.web = c.web;
@@ -704,7 +711,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.antennaMap = o.antennaMap;
     c.rspHdr = o.rspHdr; c.rspAmNotch = o.rspAmNotch; c.rspExtRef = o.rspExtRef;
     c.icomPort = o.icomPort; c.icomBaud = o.icomBaud; c.icomCiv = o.icomCiv; c.icomAudio = o.icomAudio;
-    c.icomScopeSpeed = o.icomScopeSpeed; c.icomTuneLock = o.icomTuneLock; c.icomRfOpen = o.icomRfOpen; c.icomTtyOk = o.icomTtyOk; c.icomPowerOn = o.icomPowerOn;
+    c.icomScopeSpeed = o.icomScopeSpeed; c.icomTuneLock = o.icomTuneLock; c.icomRfOpen = o.icomRfOpen; c.icomTtyOk = o.icomTtyOk; c.icomPowerOn = o.icomPowerOn; c.icomOffDelayMin = o.icomOffDelayMin; c.icomAutoOff = o.icomAutoOff;
     c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget; c.rfAgc = o.rfAgc; c.rspDabDecim = o.rspDabDecim; c.rfAgcStart = o.rfAgcStart; c.rspVibeAgc = o.rspVibeAgc;
     c.agcSet = o.agcSet; c.agcSetLock = o.agcSetLock;
     c.port = o.port; c.web = o.web;
@@ -931,7 +938,7 @@ static int startIcomFrom(const Opts& o, const std::string& port, const std::stri
     vibe::LocalSdrShim::IcomStart s;
     s.port = port; s.baud = o.icomBaud; s.civAddr = o.icomCiv; s.audio = o.icomAudio;
     s.scopeSpeed = o.icomScopeSpeed; s.ttyOk = o.icomTtyOk; s.ownerLock = o.icomTuneLock;
-    s.rfOpen = o.icomRfOpen; s.powerOn = o.icomPowerOn; s.modelHint = serial; s.freqHint = o.freq;
+    s.rfOpen = o.icomRfOpen; s.powerOn = o.icomPowerOn; s.autoOff = o.icomAutoOff; s.offDelayMin = o.icomOffDelayMin; s.modelHint = serial; s.freqHint = o.freq;
     return vibe::LocalSdrShim::instance().startIcom(s, err);
 }
 
@@ -1258,6 +1265,46 @@ static void radioStatusWrite(const std::string& serial, const std::string& drive
         std::fprintf(f, "{\"serial\":\"%s\",\"driver\":\"%s\",\"state\":\"%s\",\"detail\":\"%s\","
                         "\"since\":%lld,\"last\":%lld}\n",
                      serial.c_str(), driver.c_str(), state.c_str(), clean.c_str(), since, now);
+        const bool ok = std::fclose(f) == 0;
+        if (!ok || std::rename(tmp.c_str(), path.c_str()) != 0) std::remove(tmp.c_str());
+    }
+}
+
+/* ★★ AN ICOM'S POWER, FOR THE FRONT DOOR'S RADIO LIST (Stuart, 2026-11-05). USB there + CI-V answering = "on"; USB there +
+ *  CI-V silent = "off"; USB gone = "absent". Written by the radio's own process (which already watches the link: identify
+ *  every 3 s while it is silent) on every change and every 30 s, beside the radio-status record; read by whichever
+ *  process answers /vibeserver/radios. A file older than kIcomPowerFreshSec (the process stopped) means "unknown" — the
+ *  radio is then listed exactly as before. */
+static constexpr long long kIcomPowerFreshSec = 90;
+static std::string icomPowerPath(const std::string& serial) {
+    const std::string s = radioStatusPath(serial);
+    const size_t k = s.rfind("radio-status-");
+    return k == std::string::npos ? s + ".power" : s.substr(0, k) + "icom-power-" + serial + ".json";
+}
+struct IcomPowerRec { std::string state; bool autoOn = false, byOwner = false; long long last = 0; };
+static IcomPowerRec icomPowerRead(const std::string& serial) {
+    IcomPowerRec r;
+    if (!vsconfig::validSerial(serial)) return r;
+    FILE* f = std::fopen(icomPowerPath(serial).c_str(), "r");
+    if (!f) return r;
+    char buf[256] = {0};
+    const size_t n = std::fread(buf, 1, sizeof buf - 1, f);
+    std::fclose(f);
+    const std::string j(buf, n);
+    const size_t a = j.find("\"state\":\"");
+    if (a != std::string::npos) { const size_t b = j.find('"', a + 9); if (b != std::string::npos) r.state = j.substr(a + 9, b - a - 9); }
+    r.autoOn = j.find("\"autoOn\":true") != std::string::npos;
+    r.byOwner = j.find("\"byOwner\":true") != std::string::npos;
+    if (const size_t l = j.find("\"last\":"); l != std::string::npos) r.last = std::atoll(j.c_str() + l + 7);
+    if ((long long)std::time(nullptr) - r.last > kIcomPowerFreshSec) r.state.clear();   // ★ stale = unknown
+    return r;
+}
+static void icomPowerWrite(const std::string& serial, const std::string& state, bool autoOn, bool byOwner) {
+    if (!vsconfig::validSerial(serial)) return;
+    const std::string path = icomPowerPath(serial), tmp = path + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        std::fprintf(f, "{\"state\":\"%s\",\"autoOn\":%s,\"byOwner\":%s,\"last\":%lld}\n", state.c_str(),
+                     autoOn ? "true" : "false", byOwner ? "true" : "false", (long long)std::time(nullptr));
         const bool ok = std::fclose(f) == 0;
         if (!ok || std::rename(tmp.c_str(), path.c_str()) != 0) std::remove(tmp.c_str());
     }
@@ -2034,6 +2081,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerSharedChannels(shared);
     LocalSdrShim::setVibeServerZoomSpectrum(o.zoomSpectrum);
     LocalSdrShim::setVibeServerIdleGrace(o.idleGrace);
+    LocalSdrShim::setVibeServerIcomOffDelayScale(o.icomOffDelayScale);   // ★ 60 s a minute, except in a test
     LocalSdrShim::setVibeServerRfNotch(o.rfNotch);
     // ★ The front end as the owner last left it. Applied after the start-up AGC sequence — see
     //   the kick's final step, which is the only point where it will not be immediately undone.
@@ -3058,6 +3106,18 @@ int main(int argc, char** argv) {
              *  picker then show it as unavailable instead of a radio that "is not responding" or,
              *  worse, FREE. Absent = unknown, never "free" — and nothing about WHO has it. */
             if (radioStatusInUseFresh(radioStatusRead(r.serial))) j += ",\"inUseElsewhere\":true";
+            /* ★★ AN ICOM'S POWER (2026-11-05) — `power` "on" | "switchingOn" | "off" | "absent", from the radio's own
+             *  process (icomPowerWrite), absent = unknown. `switchedOff` greys it in every chooser (front door, app,
+             *  web, directory) — ONLY when it is off AND "Power on the radio over CI-V" is unticked (Stuart: "if the
+             *  auto power on is enabled then the server and the front door treat it as available" — joining wakes it),
+             *  or the owner switched it off himself. `autoPowerOn` lets the owner's POWER ON / POWER OFF draw. */
+            if (r.driver == "icom") {
+                const IcomPowerRec pw = icomPowerRead(r.serial);
+                if (!pw.state.empty()) {
+                    j += ",\"power\":\"" + jsonEscape(pw.state) + "\",\"autoPowerOn\":" + (pw.autoOn ? "true" : "false");
+                    if (pw.state == "off" && (!pw.autoOn || pw.byOwner)) j += ",\"switchedOff\":true";
+                }
+            }
             j += ",\"serial\":\"" + jsonEscape(r.serial) + "\"";
             // ★ PUBLIC listing — the landing page renders this, so the serial comes out of the
             //   name. The setup and admin pages read the config API instead and keep the full one.
@@ -4850,6 +4910,18 @@ int main(int argc, char** argv) {
 
     while (!g_stop) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        // ★★ An Icom's power for the front door's radio list (icomPowerWrite): on every change, and every 30 s.
+        if (!frontDoorOnly && LocalSdrShim::instance().isIcom()) {
+            static std::string lastPw; static int pwTick = 0;
+            bool autoOn = false, byOwner = false;
+            const std::string pw = LocalSdrShim::instance().icomPowerState(autoOn, byOwner);
+            const std::string key = pw + (autoOn ? "a" : "-") + (byOwner ? "o" : "-");
+            const std::string ser = !g_myRadioSerial.empty() ? g_myRadioSerial : o.radioSerial;
+            if (!pw.empty() && !ser.empty() && (key != lastPw || ++pwTick >= 30)) {
+                icomPowerWrite(ser, pw, autoOn, byOwner);
+                lastPw = key; pwTick = 0;
+            }
+        }
         /* ★★★ V12 BACKGROUND DECODING REACHES THE RADIO'S OWN PROCESS (Lenovo, 2026-10-22). The setup page saves
          *  through whichever process answered it — on a multi-radio Linux box that is the FRONT DOOR, which owns no
          *  radio — so the save path's live apply reached nobody who could act on it, and the RSP's process idled and
@@ -4908,6 +4980,9 @@ int main(int argc, char** argv) {
                             /* ★ The Broadcast FM defaults, re-read like the ADS-B landing: a front-door save must reach
                              *  the process that owns the radio. The shim ignores an unchanged set (no memory is lost). */
                             if (mine) LocalSdrShim::setVibeServerFmDefaults("{" + vibefm::toJson(mine->fm) + "}");
+                            // ★ An Icom's Setup-page power settings, live (the shim ignores an unchanged set).
+                            if (mine && mine->driver == "icom" && !o.icomGiven)
+                                LocalSdrShim::instance().setIcomPowerOptions(mine->icomPowerOn, mine->icomAutoOff, mine->icomOffDelayMin);
                             LocalSdrShim::setGalleryRedact(gallerySerials(fresh));
                             const std::string gk = std::to_string(fresh.galleryMb) + (fresh.galleryPublic ? "p" : "-") + (fresh.gallerySaveLive ? "l" : "-");
                             if (gk != lastGallery) {

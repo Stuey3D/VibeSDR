@@ -791,12 +791,6 @@ function icomRefresh() {
   const root = document.getElementById('icomCtls');
   if (root) renderIcomPanel(root, ic, adminUnlocked, {
     send: (f) => { if (spec && !spec.sendIcomControl(icomR, f)) showPill('This radio does not offer that setting', 4000); },
-    power: (a) => {
-      if (!spec || !icomR) return;
-      if (a === 'off' && !confirm(`Switch the ${icomR.model || 'radio'} off? Listeners lose it until it is switched back on.`)) return;
-      spec.sendIcomPower(a);
-      showPill(a === 'off' ? 'Switching the radio off…' : 'Switching the radio on — about a minute', 4000);
-    },
   });
   // ★ The picker's FIL row, if it is open, follows the radio too.
   const fr = document.getElementById('mIcomFil');
@@ -6116,6 +6110,36 @@ function dabBadge(r: any, st: any): string {
   return `<span title="This receiver is set up for DAB+" style="display:inline-block;flex:none;width:36px;height:21px;line-height:0">${svg}</span>`;
 }
 
+/** ★ The front door's word for an Icom's power (the door's `power`): what the owner's two keys act on. */
+function icomDoorPowerWords(p: unknown): string {
+  return p === 'on' ? 'The radio is on' : p === 'switchingOn' ? 'Switching on — about a minute'
+       : p === 'off' ? 'The radio is switched off' : p === 'absent' ? 'Its USB cable is not connected' : '';
+}
+/** ★★ POWER ON / POWER OFF (owner only) — POST to the radio's own process through the door, with this tab's admin
+ *  ticket; the radio says no in words when it makes no sense. Off asks first: anyone listening loses it. */
+function wireIcomDoorPower(host: HTMLElement, radios: any[]) {
+  host.querySelectorAll('.icomDoorPower button').forEach((el) => {
+    el.addEventListener('click', async (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      const b = el as HTMLButtonElement;
+      const row = b.closest('.icomDoorPower') as HTMLElement | null;
+      const r = radios.find((x) => x.serial === row?.dataset.icomSerial);
+      if (!r || b.disabled) return;
+      const act = b.dataset.act === 'off' ? 'off' : 'on';
+      if (act === 'off' && !confirm(`Switch the ${r.label || 'radio'} off? Anyone listening loses it.`)) return;
+      const words = row?.querySelector('.sub') as HTMLElement | null;
+      try {
+        const rid = encodeURIComponent(r.id || r.serial);
+        const res = await fetch(`${location.origin}/r/${rid}/vibeserver/icom/power?action=${act}&${adminTicketQuery()}`,
+                                { method: 'POST', cache: 'no-store' });
+        const j = await res.json().catch(() => ({} as any));
+        if (words) words.textContent = j.ok ? (act === 'off' ? 'Switching it off…' : 'Switching it on — about a minute…')
+                                            : (j.error || (res.status === 401 ? 'Sign in as the owner first' : 'Not sent'));
+      } catch { if (words) words.textContent = 'Could not reach the server'; }
+    });
+  });
+}
+
 function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   const mmss = (sec: number) => {
     const m = Math.floor(sec / 60), sx = Math.max(0, Math.floor(sec % 60));
@@ -6154,6 +6178,10 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   const inUseElsewhere = r?.inUseElsewhere === true || st?.inUseElsewhere === true;
   const busyElsewhere = inUseElsewhere || (typeof st?.radioBusy === 'string' && st.radioBusy !== '');
   if (inUseElsewhere) return { state: 'IN USE BY ANOTHER APP', blocked: true };
+  /* ★★ AN ICOM THAT IS SWITCHED OFF (2026-11-05) — greyed only when nothing would switch it on: the door says so
+   *  (`switchedOff`) when its "Power on the radio over CI-V" is unticked. With it ticked the radio is AVAILABLE — joining
+   *  wakes it ("Switching the radio on — about a minute"). */
+  if (r?.switchedOff === true) return { state: 'SWITCHED OFF', blocked: true };
   /* ★★★ BEHIND ITS OWN PIN, AND NOT YET OPENED. Said BEFORE anything about listeners or queues,
    *  because it is the only fact that matters here: however free this receiver is, this visitor
    *  cannot walk into it, and "FREE" over a card that refuses them is the worst answer available.
@@ -6637,8 +6665,17 @@ async function showSplashRadios(): Promise<void> {
          + (sharedDial ? `<div class="sub" style="margin-top:3px;font-size:11px;opacity:.75;`
                        + `letter-spacing:.06em">ASK BEFORE TUNING &mdash; everyone here shares one dial`
                        + `</div>` : '')
-         + `</${tag}>`;
+         + `</${tag}>`
+         // ★★ THE OWNER'S POWER ON / POWER OFF for an Icom (2026-11-05) — beside its card, never inside the link, and
+         //    only in admin mode (a listener has no such control). They work whatever the Setup page's options say.
+         + (admin && r.driver === 'icom'
+            ? `<div class="icomDoorPower" data-icom-serial="${escapeHtml(r.serial)}" data-power="${escapeHtml(String((r as any).power || ''))}" style="display:flex;gap:8px;align-items:center;margin:-2px 0 10px 12px">`
+              + `<button class="btn" data-act="on"${(r as any).power === 'on' ? ' disabled' : ''}>POWER ON</button>`
+              + `<button class="btn" data-act="off"${(r as any).power && (r as any).power !== 'on' ? ' disabled' : ''}>POWER OFF</button>`
+              + `<span class="sub" style="font-size:11px;opacity:.7">${escapeHtml(icomDoorPowerWords((r as any).power))}</span></div>`
+            : '');
   }).join('');
+  if (inAdminMode()) wireIcomDoorPower(host, radios);
 
   // ★ The one PIN box, above the list it unlocks. Drawn after the cards so a redraw cannot leave
   //   it pointing at radios that are no longer there.
@@ -20948,6 +20985,10 @@ async function refreshSplashRadios(): Promise<void> {
     // A blocked card is a <div>, a reachable one an <a> — the tag itself has to change.
     const wasBlocked = card.tagName.toLowerCase() !== 'a';
     if (wasBlocked !== blocked) needsRedraw = true;
+    // ★ The owner's POWER ON / POWER OFF follow the radio's power (redrawn when it changes).
+    const pw = Array.from(host.querySelectorAll('.icomDoorPower') as NodeListOf<HTMLElement>)
+      .find((e) => e.dataset.icomSerial === r.serial);
+    if (pw && pw.dataset.power !== String(r.power || '')) needsRedraw = true;
   });
   if (needsRedraw) void showSplashRadios();
 }

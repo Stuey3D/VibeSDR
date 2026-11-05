@@ -77,5 +77,18 @@ console.log('\nThe page: the single-radio refresh copies the radio\'s own answer
   ok(/if \(rr\.status === 503\) rad\.radioDown = true;/.test(html), 'the multi-radio refresh does the same');
 }
 
+console.log('\nAn Icom switched off when last checked (2026-11-05)');
+{
+  const off = capRadio({ id: 'ic1', name: 'IC-7300', driver: 'icom', maxListeners: 4, listeners: 0,
+                         power: 'off', powerAt: 1793000000, switchedOff: true });
+  ok(off && off.switchedOff === true && off.power === 'off' && off.powerAt === 1793000000,
+     '★ the Worker passes switchedOff / power / powerAt through');
+  ok(radioFree(off, { radios: [off] }) === false, '★ the page never calls it free');
+  const auto = capRadio({ id: 'ic2', name: 'IC-7300', driver: 'icom', maxListeners: 4, listeners: 0, power: 'off' });
+  ok(auto && !('switchedOff' in auto) && radioFree(auto, { radios: [auto] }) === true,
+     '★ off but with power-on ticked (no switchedOff) is AVAILABLE — joining wakes it');
+  ok(/OFF WHEN LAST CHECKED/.test(html), 'the card says when it was true: "OFF WHEN LAST CHECKED"');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

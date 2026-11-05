@@ -24,8 +24,6 @@ import {
 export interface IcomPanelDeps {
   /** Send icom_control (validated against the radio's lists by the caller's SpectrumClient). */
   send: (f: IcomControlFields) => void;
-  /** ★ The ADMIN's Radio on / Radio off (`icom_power`) — the caller confirms an off first. */
-  power?: (action: 'on' | 'off') => void;
 }
 
 let builtKey = '';
@@ -49,7 +47,7 @@ export function renderIcomPanel(root: HTMLElement, r: IcomRadio | null, admin: b
   if (!r) { root.hidden = true; return; }
   root.hidden = false;
   const key = JSON.stringify([r.model, r.modes, r.filters, r.att, r.preamp, r.agc, r.rfGain, r.nb, r.nr, r.anf,
-                              r.scope.spans, r.scope.modes, r.scope.speeds, admin && !!r.power?.canSwitch]);
+                              r.scope.spans, r.scope.modes, r.scope.speeds]);
   if (key !== builtKey) {
     builtKey = key;
     let h = '';
@@ -77,17 +75,9 @@ export function renderIcomPanel(root: HTMLElement, r: IcomRadio | null, admin: b
       h += row('RADIO DSP<span class="sub">the radio’s own</span>',
                `<div class="seg" id="icomDsp">${dsp.map(([k, l]) => `<button class="btn" data-k="${k}">${l}</button>`).join('')}</div>`);
     h += `<div class="lbl wrap" id="icomScopeLine"></div>`;
-    // ★★ RADIO ON / RADIO OFF — drawn for the ADMIN only (never greyed for anyone else: a listener simply has no
-    //    such control), and only where the server takes `icom_power`.
-    if (admin && r.power?.canSwitch && deps.power)
-      h += row('POWER<span class="sub">owner only</span>',
-               `<div class="seg" id="icomPower"><button class="btn" data-v="on">RADIO ON</button><button class="btn" data-v="off">RADIO OFF</button></div>`);
+    // ★★ NO POWER ROW (Stuart, 2026-11-05: "the setup should handle it"). Power is the Setup page's two settings and the
+    //    owner's POWER ON / POWER OFF on the front door's radio list — a listener's panel has nothing to switch.
     root.innerHTML = h;
-    root.querySelector('#icomPower')?.addEventListener('click', (e) => {
-      const b = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null;
-      if (!b || b.disabled || !deps.power) return;
-      deps.power(b.dataset.v === 'off' ? 'off' : 'on');
-    });
     // ── wiring: every click SENDS and nothing else — the radio's answer paints the button ──
     const on = (id: string, f: (v: string) => IcomControlFields) => {
       const el = root.querySelector('#' + id);
@@ -140,9 +130,6 @@ function lightSeg(root: HTMLElement, id: string, cur: string, enabled: boolean) 
 
 function paint(root: HTMLElement, r: IcomRadio, admin: boolean) {
   const mayTune = icomMayTune(r, admin), mayRf = icomMayRf(r, admin);
-  const pw = root.querySelector('#icomPower');
-  if (pw) for (const b of Array.from(pw.querySelectorAll('button')) as HTMLButtonElement[])
-    b.disabled = b.dataset.v === 'on' ? r.linkUp : !r.linkUp;   // ★ ON while it is off, OFF while it is on
   const follow = root.querySelector('#icomFollow') as HTMLElement | null;
   if (follow) { const t = icomFollowNote(r, admin); follow.hidden = !t; follow.textContent = t; }
   const rfNote = root.querySelector('#icomRfNote') as HTMLElement | null;

@@ -62,7 +62,7 @@ const TABLE = [
   P(['askFirst'], 'askFirst', 'askBeforeTuning'),
   P(['lockFreq'], 'lockedCentre', 'lockedCentre'),
   P(['zoomSpectrum'], 'ZOOM DETAIL', 'zoomSpectrum'),
-  P(['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomTuneLock', 'icomPowerOn'], 'ICOM_PHONE_KEYS', 'icomBaud'),
+  P(['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomTuneLock', 'icomPowerOn', 'icomAutoOff', 'icomOffDelayMin'], 'ICOM_PHONE_KEYS', 'icomBaud'),
   P(['antenna'], 'ANTENNA', 'antennaIcon'),
   P(['antRangePreset', 'antFilterPreset'], 'AntennaBandsEditor', 'antennaRanges'),
   P(['adsbLandOn'], 'landingAdsb', 'landingAdsb'),

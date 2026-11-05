@@ -56,7 +56,7 @@ globalThis.clearInterval = () => {};
 
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ radios: [] }), text: async () => '' });
 const page = new Function(`${js}
-  return { set cfg(v){cfg=v}, icomRender };`)();
+  return { set cfg(v){cfg=v}, icomRender, icomAutoOffSync };`)();
 const hidden = (id) => $el(id).classList.contains('hide');
 
 console.log('\nThe Icom card');
@@ -77,6 +77,19 @@ ok($el('icomBaud').value === '19200', 'the saved baud is shown (19200)');
 ok($el('icomTuneLock').checked === false, '"Only I may tune this radio" defaults OFF when the config has never said');
 ok($el('icomPowerOn').checked === false, '"Power on the radio over CI-V" defaults OFF');
 ok($el('icomCiv').value === '94', 'CI-V address shown as hex');
+// ★★ 2026-11-05: the automatic power-off row, and no RADIO ON / RADIO OFF on this page
+ok($el('icomAutoOff').checked === true && $el('icomOffDelayMin').value === '5', '"Automatically power off…" defaults ON, after 5 min');
+ok([...html.match(/<select id="icomOffDelayMin">([\s\S]*?)<\/select>/)[1].matchAll(/>([^<]+)<\/option>/g)].map((m) => m[1]).join('|') === 'Instant|1 min|5 min|10 min|15 min|30 min|60 min',
+   'the delay offers exactly Instant · 1 · 5 · 10 · 15 · 30 · 60 min');
+ok($el('icomAutoOff').disabled === true && $el('icomOffDelayMin').disabled === true && /Needs/.test($el('icomAutoOffHint').textContent),
+   '★ with power-on unticked the row is greyed, with the reason (nothing could switch it back on)');
+$el('icomPowerOn').checked = true; page.icomAutoOffSync();
+ok($el('icomAutoOff').disabled === false && $el('icomOffDelayMin').disabled === false, 'power-on ticked: the row is live');
+ok(!/id="icomRadioO(n|ff)"/.test(html) && !/vibeserver\/icom\/power/.test(js), 'no RADIO ON / RADIO OFF buttons on the Setup page');
+page.icomRender({ ...hw, radio: { ...hw.radio, power: { autoOn: true, autoOff: true, offDelayMin: 5, offInS: 252 } } },
+                { ...r, icomPowerOn: true, icomOffDelayMin: 30 }, 'icom');
+ok($el('icomPowerMsg').textContent === 'Switching off in 4:12 — nobody listening', `a pending power-off counts down ("${$el('icomPowerMsg').textContent}")`);
+ok($el('icomOffDelayMin').value === '30', 'a saved delay is shown (30 min)');
 
 page.cfg = { radios: [r], icomStatus: { 'IC-7300 03001234': 'VibeServer will not start this radio, because it could transmit: VOX is ON' } };
 page.icomRender({ offline: true }, r, 'icom');

@@ -23,16 +23,16 @@ console.log('Icom on the app\'s own server screen');
 
 // ── the five keys: one list, three readers ──
 const keys = JSON.parse(R.match(/ICOM_PHONE_KEYS = (\[[^\]]*\])/)[1].replace(/'/g, '"'));
-ok(keys.length === 5, `ICOM_PHONE_KEYS has five keys (${keys.join(', ')})`);
+ok(keys.length === 7, `ICOM_PHONE_KEYS has seven keys (${keys.join(', ')})`);
 const prep = KT.slice(KT.indexOf('fun prepareStart'), KT.indexOf('fun onServerStarted'));
 const ktKeys = [...prep.matchAll(/cfg\.opt(?:Int|Boolean)\("(icom\w+)"/g)].map((m) => m[1]);
 ok(JSON.stringify([...ktKeys].sort()) === JSON.stringify([...keys].sort()),
    `VibeIcom.prepareStart reads exactly ICOM_PHONE_KEYS (Kotlin: ${ktKeys.join(', ')})`);
 // ★ Defaults agree: the Kotlin optX default = what icomPhoneFields(null) gives.
 const ktDefaults = Object.fromEntries([...prep.matchAll(/cfg\.opt(?:Int|Boolean)\("(icom\w+)", (\w+)\)/g)].map((m) => [m[1], m[2]]));
-const want = { icomBaud: '115200', icomCiv: '0', icomScopeSpeed: '0', icomTuneLock: 'false', icomPowerOn: 'false' };
+const want = { icomBaud: '115200', icomCiv: '0', icomScopeSpeed: '0', icomTuneLock: 'false', icomPowerOn: 'false', icomAutoOff: 'true', icomOffDelayMin: '5' };
 ok(JSON.stringify(ktDefaults) === JSON.stringify(Object.fromEntries(Object.keys(ktDefaults).map((k) => [k, want[k]]))),
-   `Kotlin defaults = the setup page's (tune lock OFF, power-on OFF): ${JSON.stringify(ktDefaults)}`);
+   `Kotlin defaults = the setup page's (tune lock OFF, power-on OFF, auto power-off ON after 5 min): ${JSON.stringify(ktDefaults)}`);
 for (const k of keys) {
   has(V, `${k}?: `, `VibeServerConfig declares ${k}`);
   ok(new RegExp(`\\b${k}: cfg\\.${k} \\?\\? `).test(V), `nativeServerConfig sends ${k} at a definite value`);
@@ -49,6 +49,10 @@ ok(pageBauds.length > 0 && JSON.stringify(pageBauds) === JSON.stringify(tsBauds)
 const pageSpeeds = PAGE.match(/<select id="icomScopeSpeed">(.*?)<\/select>/s)[1];
 ok(/value="0">Fast.*value="1">Mid.*value="2">Slow/s.test(pageSpeeds) && /\['Fast', 'Mid', 'Slow'\]/.test(R),
    'scope speed names and values = the setup page\'s');
+const pageDelays = [...PAGE.match(/<select id="icomOffDelayMin">(.*?)<\/select>/s)[1].matchAll(/value="(\d+)"/g)].map((m) => Number(m[1]));
+const tsDelays = JSON.parse(R.match(/ICOM_OFF_DELAYS = (\[[^\]]*\])/)[1]);
+ok(JSON.stringify(pageDelays) === JSON.stringify(tsDelays) && JSON.stringify(tsDelays) === '[0,1,5,10,15,30,60]',
+   `"How long after the last user leaves" = the setup page's list (${tsDelays.join(', ')})`);
 
 // ── the copy names every supported Icom, and only those ──
 const known = [...MODELS.matchAll(/\{0x[0-9A-Fa-f]+, "([^"]+)",\s*true,/g)].map((m) => m[1]);

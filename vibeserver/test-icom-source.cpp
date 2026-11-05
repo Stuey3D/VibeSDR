@@ -179,7 +179,10 @@ int main() {
         FakeIcomRadio fake; fake.powered = false;
         IcomSource src; std::string err; IcomConfig c = cfgTone(); c.powerOn = true;
         const bool o = src.open(c, err, makeMemoryTransport(&fake));
-        ok(o && src.wakesSent() == 1, "option ON, radio off: open() sends the power-on at once");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        ok(o && src.wakesSent() == 0, "★ option ON, radio off, NOBODY here: nothing is sent (2026-11-05: only for somebody who is here)");
+        src.setInUse(true);   // ★ a listener connects
+        ok(waitFor([&] { return src.wakesSent() == 1; }, 4000), "option ON, radio off: a listener arriving sends the power-on at once");
         ok(fake.wakesSeen.load() == 1 && fake.wakesIgnored.load() == 0, "  … and the fake accepted the FE preamble (" + std::to_string(civ::power::wakePreambleFor(115200)) + " FE at 115200)");
         ok(src.linkProblem().find("Switching the radio on") != std::string::npos, "  … listeners see: " + src.linkProblem());
         ok(waitFor([&] { return src.state().linkUp; }, 10000), "  … the radio booted and VibeServer started it");
@@ -188,8 +191,13 @@ int main() {
         // ★ the idle park, with the option on: a real power-off, then the next listener switches it back on
         src.setInUse(true);
         ok(!src.idlePowerOff(), "idle power-off refused while somebody is using it");
+        src.setPowerOptions(true, false, 5);   // ★ "Automatically power off …" unticked (live)
         src.setInUse(false);
-        ok(src.idlePowerOff(), "nobody here, idle grace passed: the idle park powers it off");
+        ok(!src.idlePowerOff() && !src.autoPowerOff(), "★ automatic power-off unticked: never an 18 00, nobody here or not");
+        src.setPowerOptions(true, true, 5);
+        src.setInUse(true);
+        src.setInUse(false);
+        ok(src.idlePowerOff(), "nobody here, the delay passed: the automatic power-off powers it off");
         ok(waitFor([&] { return !fake.powered.load(); }, 2000) && fake.powerOffs.load() == 1, "  … 18 00 sent once");
         ok(waitFor([&] { return src.linkProblem().find("nobody was listening") != std::string::npos; }, 1000), "  … status: " + src.linkProblem());
         const uint64_t w0 = src.wakesSent();
@@ -213,6 +221,7 @@ int main() {
     {
         FakeIcomRadio fake; fake.powered = false; fake.wakeable = false;   // a radio whose menu will not let CI-V wake it
         IcomSource src; std::string err; IcomConfig c = cfgTone(); c.powerOn = true;
+        src.setInUse(true);   // ★ somebody is here (a wake is only ever for somebody who is)
         ok(src.open(c, err, makeMemoryTransport(&fake)), "option ON, a radio that will not wake: opens and waits");
         std::this_thread::sleep_for(std::chrono::milliseconds(8000));
         ok(src.wakesSent() == 1 && fake.wakesSeen.load() == 1, "  … ONE power-on in 8 s (at most one per " + std::to_string((int)IcomSource::kWakeEverySec) + " s)");
@@ -224,6 +233,7 @@ int main() {
     {
         FakeIcomRadio fake; fake.powered = false; fake.usbSend = 2;   // ★ USB SEND = RTS: unsafe
         IcomSource src; std::string err; IcomConfig c = cfgTone(); c.powerOn = true;
+        src.setInUse(true);
         ok(src.open(c, err, makeMemoryTransport(&fake)), "option ON, radio off with USB SEND = RTS: opens and wakes it");
         ok(waitFor([&] { return src.preflight().ran; }, 9000) && !src.preflight().passed, "  … it switched on, and the PREFLIGHT still refuses it: " + src.preflight().summary.substr(0, 70));
         ok(fake.powered.load() && fake.wakesSeen.load() == 1, "  … (the radio is on: the wake worked)");

@@ -574,6 +574,12 @@ std::string buildStatus(int port) {
                     }
                     j += ",\"maxListeners\":" + std::to_string(rmax);
                     if (inUse) { j += ",\"inUseElsewhere\":true"; g_radioInUseElsewhere = true; }
+                    /* ★★ AN ICOM'S POWER AS LAST CHECKED (2026-11-05) — the front door's own word, with the time it was
+                     *  read (the directory cannot be live). `switchedOff` only when nothing would switch it on ("Power on
+                     *  the radio over CI-V" unticked): with it ticked the radio is AVAILABLE, joining wakes it. */
+                    { const std::string pw = jsonStr(r, "power");
+                      if (!pw.empty()) j += ",\"power\":\"" + pw + "\",\"powerAt\":" + std::to_string((long long)std::time(nullptr));
+                      if (jsonBool(r, "switchedOff")) j += ",\"switchedOff\":true"; }
                     // ★★ WORDS in coverage, NUMBERS in ranges — see the note above.
                     auto arr = [&](const std::string& key) -> std::string {
                         const std::string k2 = "\"" + key + "\":";

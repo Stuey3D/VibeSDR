@@ -251,6 +251,10 @@ export type VibeServerConfig = {
   icomTuneLock?: boolean;
   icomRfOpen?: boolean;
   icomPowerOn?: boolean;
+  /** "Automatically power off the radio when not in use" (default ON; needs icomPowerOn) and "How long after the last
+   *  user leaves" in minutes (0 Instant, 1, 5, 10, 15, 30, 60; default 5). */
+  icomAutoOff?: boolean;
+  icomOffDelayMin?: number;
   /** Manual direct sampling: 0 off, 1 I branch, 2 Q branch. */
   directSampling?: number;
   /** ★ Switch direct sampling on by itself below `directSamplingBelowHz` — the owner's choice, and
@@ -430,6 +434,8 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     icomScopeSpeed: cfg.icomScopeSpeed ?? 0,
     icomTuneLock: cfg.icomTuneLock ?? false,
     icomPowerOn: cfg.icomPowerOn ?? false,
+    icomAutoOff: cfg.icomAutoOff ?? true,
+    icomOffDelayMin: cfg.icomOffDelayMin ?? 5,
   };
 }
 

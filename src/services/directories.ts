@@ -164,6 +164,8 @@ function normaliseRadios(rows: any[]): VibeRadio[] {
        *  The normaliser dropped it, so the app's list drew a radio OpenWebRX had held for 17 hours as an
        *  ordinary one (the Lenovo, 2026-10-18). Absent = unknown, never "free". */
       inUseElsewhere: r.inUseElsewhere === true,
+      // ★★ An Icom switched off with nothing to switch it on, as last checked (2026-11-05) — greyed like the above.
+      switchedOff: r.switchedOff === true,
       restricted: !!r.restricted,
       centreHz: typeof r.centreHz === 'number' ? r.centreHz : undefined,
       spanHz: typeof r.spanHz === 'number' ? r.spanHz : undefined,

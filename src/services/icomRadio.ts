@@ -78,7 +78,7 @@ export interface IcomRadio {
   linkWhy: string;
   /** The owner's next step for that (the CI-V menu hint, or the preflight's words); '' none. */
   linkHint: string;
-  /** ★ The power facts the ADMIN's Radio on / Radio off buttons need; null = an older server (no buttons). */
+  /** ★ The radio's power facts (the Setup page's options and a pending automatic power-off); null = an older server. */
   power: IcomPower | null;
   ownerLock: boolean;
   rfOpen: boolean;
@@ -106,10 +106,17 @@ const strs = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
 
 export interface IcomPower {
-  /** This server takes `icom_power` (Radio on / Radio off, admin only). */
+  /** ★ Always false since 2026-11-05: the receiver clients have no RADIO ON / RADIO OFF (an older client draws them
+   *  only when this is true). The owner's manual keys are on the front door's radio list. */
   canSwitch: boolean;
   /** The owner's "Power on the radio over CI-V" is ticked. */
   autoOn: boolean;
+  /** "Automatically power off the radio when not in use" in effect (needs autoOn). */
+  autoOff: boolean;
+  /** "How long after the last user leaves", minutes (0 = Instant). */
+  offDelayMin: number;
+  /** Seconds until that power-off with nobody listening; -1 = none pending. */
+  offInS: number;
   offByOwner: boolean;
   switchingOn: boolean;
 }
@@ -169,8 +176,11 @@ export function parseIcomRadio(raw: unknown): IcomRadio | null {
     // ★ ABSENT is not DOWN: only an explicit false says the radio stopped answering.
     linkUp: r.linkUp !== false,
     linkWhy: str(r.linkWhy), linkHint: str(r.linkHint),
-    power: r.power && typeof r.power === 'object' && (r.power as Record<string, unknown>).canSwitch === true
-      ? { canSwitch: true, autoOn: bool((r.power as Record<string, unknown>).autoOn),
+    power: r.power && typeof r.power === 'object'
+      ? { canSwitch: bool((r.power as Record<string, unknown>).canSwitch), autoOn: bool((r.power as Record<string, unknown>).autoOn),
+          autoOff: bool((r.power as Record<string, unknown>).autoOff),
+          offDelayMin: num((r.power as Record<string, unknown>).offDelayMin, 5),
+          offInS: num((r.power as Record<string, unknown>).offInS, -1),
           offByOwner: bool((r.power as Record<string, unknown>).offByOwner),
           switchingOn: bool((r.power as Record<string, unknown>).switchingOn) }
       : null,
@@ -460,6 +470,9 @@ export function icomBanner(radio: IcomRadio | null): string {
 export const ICOM_BAUDS = [115200, 57600, 38400, 19200, 9600, 4800] as const;
 /** Scope speed as the CONFIG stores it (0 fast, 1 mid, 2 slow) — the live control uses the names. */
 export const ICOM_SCOPE_SPEED_NAMES = ['Fast', 'Mid', 'Slow'] as const;
+/** ★ "How long after the last user leaves" — exactly the Setup page's choices, in minutes (0 = Instant). */
+export const ICOM_OFF_DELAYS = [0, 1, 5, 10, 15, 30, 60] as const;
+export function icomOffDelayLabel(m: number): string { return m === 0 ? 'Instant' : `${m} min`; }
 
 export interface IcomSettings {
   icomBaud: number;
@@ -471,6 +484,10 @@ export interface IcomSettings {
   icomTuneLock: boolean;
   /** "Power on the radio over CI-V" — default OFF. */
   icomPowerOn: boolean;
+  /** "Automatically power off the radio when not in use" — default ON; takes effect only with icomPowerOn. */
+  icomAutoOff: boolean;
+  /** "How long after the last user leaves" in minutes: one of ICOM_OFF_DELAYS (0 = Instant); default 5. */
+  icomOffDelayMin: number;
   icomRfOpen: boolean;
   /** 'auto' finds the radio's USB audio; 'none' = waterfall and dial only; or a device name. */
   icomAudio: string;
@@ -490,6 +507,8 @@ export function icomSettingsFrom(r: unknown): IcomSettings {
     icomScopeSpeed: [0, 1, 2].includes(num(o.icomScopeSpeed, 0)) ? num(o.icomScopeSpeed, 0) : 0,
     icomTuneLock: o.icomTuneLock === true,
     icomPowerOn: o.icomPowerOn === true,
+    icomAutoOff: o.icomAutoOff !== false,
+    icomOffDelayMin: (ICOM_OFF_DELAYS as readonly number[]).includes(num(o.icomOffDelayMin, 5)) ? num(o.icomOffDelayMin, 5) : 5,
     icomRfOpen: o.icomRfOpen === true,
     icomAudio: (str(o.icomAudio) || 'auto').trim() || 'auto',
     icomPort: (str(o.icomPort) || 'usb').trim() || 'usb',
@@ -551,7 +570,7 @@ export function preflightLines(p: IcomPreflight | null): { ok: boolean; text: st
  *  names and defaults). scripts/check-icom-servermode.mjs holds this list against the Kotlin. The phone's audio is
  *  AudioRecord on the radio's USB input and its port is the device the owner allowed, so icomAudio / icomPort /
  *  icomTtyOk are not settings there. */
-export const ICOM_PHONE_KEYS = ['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomTuneLock', 'icomPowerOn'] as const;
+export const ICOM_PHONE_KEYS = ['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomTuneLock', 'icomPowerOn', 'icomAutoOff', 'icomOffDelayMin'] as const;
 export type IcomPhoneFields = Pick<IcomSettings, (typeof ICOM_PHONE_KEYS)[number]>;
 
 /** The five fields for the phone's start config, at definite values (so a crash-restore starts the radio exactly as
@@ -565,6 +584,8 @@ export function icomPhoneFields(stored: unknown): IcomPhoneFields {
     icomScopeSpeed: s.icomScopeSpeed,
     icomTuneLock: s.icomTuneLock,
     icomPowerOn: s.icomPowerOn,
+    icomAutoOff: s.icomAutoOff,
+    icomOffDelayMin: s.icomOffDelayMin,
   };
 }
 

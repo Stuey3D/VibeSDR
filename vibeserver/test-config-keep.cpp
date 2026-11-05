@@ -43,7 +43,7 @@ static const char* kV12 = R"({
      "icomPort":"","icomBaud":0,"binauralWidth":0.75,"v12Nested":{"gain":999,"label":"nested, not mine"}},
     {"serial":"IC7300-1234","driver":"icom","label":"IC-7300","enabled":true,"configured":true,
      "icomPort":"/dev/ttyUSB0","icomBaud":115200,"icomCiv":148,"icomAudio":"hw:CARD=CODEC","icomScopeSpeed":2,
-     "icomTuneLock":true,"icomRfOpen":false,"icomTtyOk":true,"icomPowerOn":true,"v13Dial":7}
+     "icomTuneLock":true,"icomRfOpen":false,"icomTtyOk":true,"icomPowerOn":true,"icomAutoOff":false,"icomOffDelayMin":30,"v13Dial":7}
   ]
 }
 )";
@@ -74,7 +74,7 @@ int main() {
     ok(out.find("\"v12Null\": null") != std::string::npos, "top level: null kept");
     ok(out.find("\"icomPort\":\"/dev/ttyUSB0\"") != std::string::npos && out.find("\"icomBaud\":115200") != std::string::npos
        && out.find("\"icomCiv\":148") != std::string::npos && out.find("\"icomAudio\":\"hw:CARD=CODEC\"") != std::string::npos
-       && out.find("\"icomTuneLock\":true") != std::string::npos && out.find("\"icomTtyOk\":true") != std::string::npos && out.find("\"icomPowerOn\":true") != std::string::npos,
+       && out.find("\"icomTuneLock\":true") != std::string::npos && out.find("\"icomTtyOk\":true") != std::string::npos && out.find("\"icomPowerOn\":true") != std::string::npos && out.find("\"icomAutoOff\":false") != std::string::npos && out.find("\"icomOffDelayMin\":30") != std::string::npos,
        "per radio: every Icom setting V12 wrote is kept");
     ok(out.find("\"binauralWidth\":0.75") != std::string::npos, "per radio: a number kept");
     ok(out.find("\"v12Nested\":{\"gain\":999,\"label\":\"nested, not mine\"}") != std::string::npos, "per radio: a nested object kept");

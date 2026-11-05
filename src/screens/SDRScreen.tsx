@@ -13005,7 +13005,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     const busy = radioBusy[r.id]?.busy === true;
     const unsupported = (r.minProto ?? 0) > APP_PROTO;
     const gated = r.pinLocked === true && !unlockedRadios[r.id] && !adminAuthQ;
-    const inUseApp = r.inUseElsewhere === true || radioBusy[r.id]?.inUse === true;
+    // ★★ An Icom switched off with nothing to switch it on (the door's `switchedOff`, 2026-11-05) is unusable the same way.
+    const inUseApp = r.inUseElsewhere === true || radioBusy[r.id]?.inUse === true || r.switchedOff === true;
     return { id: r.id, busy, unsupported, gated, inUseApp, blocked: (busy && !adminAuthQ) || unsupported || gated || inUseApp };
   };
   const pickShowPin = !!door && !adminAuthQ && door.radios.some((r) => r.pinLocked === true && !unlockedRadios[r.id]);
@@ -13585,7 +13586,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                       invites the tap it is there to prevent, and whether anyone is listening is
                       not the listener's problem on a radio they cannot enter at all. */}
                   {inUseApp && (
-                    <Text style={sdrMs.radioPickBusy}>IN USE BY ANOTHER APP</Text>
+                    <Text style={sdrMs.radioPickBusy}>{r.switchedOff === true ? 'SWITCHED OFF' : 'IN USE BY ANOTHER APP'}</Text>
                   )}
                   {!inUseApp && gated && (
                     <Text style={sdrMs.radioPickBusy}>PIN REQUIRED</Text>
@@ -13608,7 +13609,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                       the right code staring at a dead row with no idea the box below is the way
                       in. The PIN and the owner's password are different doors, so they are named
                       separately: one is ACCESS, the other CONTROL. */}
-                  {inUseApp ? ' · another app on this server is using it — try again later' : ''}
+                  {inUseApp ? (r.switchedOff === true ? ' · the radio is switched off — try again later'
+                                                      : ' · another app on this server is using it — try again later') : ''}
                   {!inUseApp && gated ? ' · PIN below to open it' : ''}
                   {blocked && !gated && !inUseApp ? ' · owner’s password below to take it' : ''}
                   {busy && !!adminAuthQ ? ' · you can take this one' : ''}
@@ -15613,7 +15615,6 @@ export default function SDRScreen({ route, navigation }: Props) {
              icom_control; the server judges the owner lock / RF-admin and answers a refusal with a notice + config. */
           icom={icom}
           onIcomControl={(f) => (client.current as any)?.icomControl?.(f)}
-          onIcomPower={(a) => (client.current as any)?.icomPower?.(a)}
           icomSetup={icom ? { doorBase: baseUrl, connectBase, authQ: adminAuthQ,
                               onOpenSetupPage: vibeSetupUrl ? () => { setHwOpen(false); onAdminLink(vibeSetupUrl, 'Setup'); } : undefined }
                           : undefined}

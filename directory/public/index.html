@@ -1585,6 +1585,15 @@ function radioLine(r, s) {
         <div class="rcStateRow"><span class="rcState full">IN USE BY ANOTHER APP</span></div>
       </div>`;
   }
+  /* ★★ AN ICOM SWITCHED OFF WHEN LAST CHECKED (2026-11-05) — the server says `switchedOff` only when nothing would switch
+   *  it on (its owner has not ticked "Power on the radio over CI-V"); with that ticked it is listed as available, because
+   *  joining wakes it. The listing is not live, so the words say when it was true. */
+  if (r && r.switchedOff === true) {
+    return `<div class="rcard rcLocked" title="This transceiver was switched off when the directory last checked">
+        ${card.replace(/^<div class="rcard">/, '').replace(/<\/div>$/, '')}
+        <div class="rcStateRow"><span class="rcState full">OFF WHEN LAST CHECKED</span></div>
+      </div>`;
+  }
   if (radioGated(r, s)) {
     return `<div class="rcard rcLocked" title="This receiver needs a PIN — enter it above">
         ${card.replace(/^<div class="rcard">/, '').replace(/<\/div>$/, '')}
@@ -2058,6 +2067,7 @@ function radioInUse(r, s) {
 /** One radio's slot state: true free, false busy, null nobody said. */
 function radioFree(r, s) {
   if (radioInUse(r, s)) return false;
+  if (r && r.switchedOff === true) return false;   // ★ an Icom off when last checked, with nothing to switch it on
   if (r && r.radioDown) return null;   // ★ not answering: nobody can say it is free
   // ★ A SINGLE-RADIO SERVER IS ITS RADIO — the one case where the machine's figures state a fact
   //   about the receiver rather than assume one. Anything else must have said it per radio.

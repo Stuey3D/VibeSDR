@@ -58,10 +58,17 @@ struct IcomConfig {
     std::string modelHint;         ///< "IC-7300" from the USB serial, when known
     /** ★ Owner option "Power on the radio over CI-V" (config icomPowerOn, default OFF): when the radio is
      *  not answering, send it 18 01 behind the manual's FE run (civ::power). Without it VibeServer NEVER sends
-     *  a power command by itself (the owner's RADIO ON / RADIO OFF buttons still work). With it, the server's
-     *  existing idle power-down ("Power down the radio" — the idle park) also means a real power-off: the shim
-     *  calls idlePowerOff() at the park, and the next listener's arrival powers it back on (setInUse). */
+     *  a power command by itself (the owner's RADIO ON / RADIO OFF buttons still work). With it AND `autoOff`,
+     *  the radio is also switched OFF once nobody has used it for `offDelayMin`: the shim calls idlePowerOff()
+     *  at that park, and the next listener's arrival powers it back on (setInUse). */
     bool powerOn      = false;
+    /** ★ "Automatically power off the radio when not in use" (config icomAutoOff, default ON; Stuart 2026-11-05). Only
+     *  with `powerOn` — otherwise nothing could switch it back on for the next listener. It, not the generic idle
+     *  power-down ("Power down the radio"), decides whether an Icom is switched off when nobody is using it. */
+    bool autoOff      = true;
+    /** ★ "How long after the last user leaves" (config icomOffDelayMin): 0 (Instant), 1, 5, 10, 15, 30, 60 minutes —
+     *  so a radio is not switched on and off by listeners coming and going. */
+    int  offDelayMin  = 5;
 };
 
 struct PreflightItem {
@@ -165,7 +172,13 @@ public:
     bool requestPowerOff(std::string& why);
     bool requestPowerOn(std::string& why);
     bool offByOwner() const { return offByOwner_.load(); }
-    bool autoPowerOn() const { return cfg_.powerOn; }
+    bool usbMissing() const { return usbMissing_.load(); }
+    bool autoPowerOn() const { return powerOn_.load(); }
+    /** ★ Automatic power-off in effect: "Power on the radio over CI-V" AND "Automatically power off … when not in use". */
+    bool autoPowerOff() const { return powerOn_.load() && autoOff_.load(); }
+    int  offDelayMin() const { return offDelay_.load(); }
+    /** ★ The Setup page's three power settings, applied LIVE (the radio process re-reads config.json on a change). */
+    void setPowerOptions(bool powerOn, bool autoOff, int offDelayMin) { powerOn_.store(powerOn); autoOff_.store(autoOff); offDelay_.store(offDelayMin); }
     /** ★ Somebody (a listener, a held session, a decoder) is using the radio — the shim's housekeeping says so
      *  every tick. A radio the idle park switched off is woken only while this is true. Any thread. */
     void setInUse(bool inUse);
@@ -216,6 +229,8 @@ private:
     std::atomic<bool> offByIdle_{false};                 ///< the idle park switched it off (powerOn): nobody was using it
     std::atomic<bool> wantIdleOff_{false};
     std::atomic<bool> inUse_{false}, kick_{false}, arrivalWake_{false};
+    std::atomic<bool> powerOn_{false}, autoOff_{true};   ///< cfg_.powerOn / cfg_.autoOff, live (setPowerOptions)
+    std::atomic<int>  offDelay_{5};                       ///< cfg_.offDelayMin, live
     std::atomic<double> wakeAt_{-1e9};                   ///< lastWakeAt_, readable from other threads
     double lastWakeAt_ = -1e9;              ///< CI-V thread (and open) only
     double bootUntil_ = 0;

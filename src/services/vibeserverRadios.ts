@@ -49,6 +49,9 @@ export interface VibeRadio {
    *  it from the USB bus). The picker shows it greyed, "IN USE BY ANOTHER APP", and not selectable.
    *  Absent = unknown, never "free" (Stuart, 2026-10-04). */
   inUseElsewhere?: boolean;
+  /** ★★ AN ICOM THAT IS SWITCHED OFF and nothing would switch it on ("Power on the radio over CI-V" unticked) — greyed,
+   *  "SWITCHED OFF", not selectable (2026-11-05). With power-on ticked the door never says this: joining wakes it. */
+  switchedOff?: boolean;
   /** Where it is pointed right now, so the picker can say what a radio is FOR. */
   centreHz?: number;
   spanHz?: number;
@@ -131,6 +134,7 @@ export async function fetchFrontDoor(
         // ★ An older door says nothing here; `=== true` makes that "open", never "locked".
         pinLocked: x.pinLocked === true,
         inUseElsewhere: x.inUseElsewhere === true,
+        switchedOff: x.switchedOff === true,
         centreHz: typeof x.centreHz === 'number' ? x.centreHz : undefined,
         spanHz: typeof x.spanHz === 'number' ? x.spanHz : undefined,
         mode: typeof x.mode === 'string' ? x.mode : undefined,
@@ -256,6 +260,7 @@ function shortRange(lo: number, hi: number): string {
 export function radioOccupancy(r: VibeRadio): string {
   // ★★ Said first: however many may listen, nobody can while another program holds it.
   if (r.inUseElsewhere === true) return 'In use by another app';
+  if (r.switchedOff === true) return 'Switched off';
   const cap  = Math.max(0, Number(r.users) || 0);
   const live = r.listeners == null ? null : Math.max(0, Number(r.listeners) || 0);
   if (cap <= 1) {
