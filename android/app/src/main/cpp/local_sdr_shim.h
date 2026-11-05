@@ -751,6 +751,13 @@ public:
     /** ★ The handheld's card layout for the gallery: items under `filesDir` ("<card>/Gallery"), one folder per decoder,
      *  person-readable names, temp + rename writes (vibe_gallery.h CardLayout). Call BEFORE setGallery. "" = off. */
     static void setGalleryCardLayout(const std::string& filesDir);
+    /** ★★ The map's files — /mapdata/v1/* (the bundled vector map and the detail pack) and /mapgl/* (the GPU map,
+     *  Range for its PMTiles) — answered on `fd` with the same lookup and rules a server uses (vibe_mapdata.h,
+     *  vibe_mapgl.h). For the handheld supervisor: the map is static files on the device and must work with NO radio
+     *  plugged in (the "Please connect an SDR" screen, Location's map). `path` without its query. The fd is the
+     *  caller's: it is dup()ed here and the copy closed. False for any other path (nothing sent). */
+    static bool serveMapAsset(int fd, const std::string& method, const std::string& path, bool acceptGzip,
+                              const std::string& range);
     /** ★ The box's own hotspot is up: requests for a FOREIGN host reach the pocket handler (it
      *  redirects them), and the front door stops refusing paths it does not know before it has
      *  seen the Host header. False everywhere but a pocket box in hotspot mode. */

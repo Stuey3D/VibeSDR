@@ -39,6 +39,13 @@ fs.mkdirSync(data); fs.mkdirSync(card); fs.writeFileSync(radios, '');
 const hwdSock = path.join(dir, 'hwd.sock'), resetFlag = path.join(dir, 'reset-radio');
 const diag = path.join(dir, 'diag.py');
 fs.writeFileSync(diag, 'print("== fake diagnostics ==")\n');
+// ★ the map's files, as the package lays them out (the basic pack + a detail shard; the GPU map's style + its detail PMTiles)
+const mapdata = path.join(dir, 'mapdata'), mapgl = path.join(dir, 'mapgl');
+fs.mkdirSync(mapdata); fs.mkdirSync(mapgl); fs.mkdirSync(path.join(data, 'mapgl'), { recursive: true });
+fs.writeFileSync(path.join(mapdata, 'index.json'), '{"version":1,"tiers":[0,1,2,3]}');
+fs.writeFileSync(path.join(mapdata, 'tier3-coast-12.json'), '{"type":"FeatureCollection","features":[]}');
+fs.writeFileSync(path.join(mapgl, 'vibemap-style.json'), '{"version":8}');
+fs.writeFileSync(path.join(data, 'mapgl', 'vibemap-detail.pmtiles'), Buffer.from('PMTiles-detail-pack-bytes'));
 const procs = [];
 const fakeRtl = async () => {
   const p = await freePort();
@@ -56,7 +63,8 @@ function startSupervisor() {
   const log = fs.openSync(logPath, 'a');
   sup = spawn(BIN, ['--handheld', '--port', String(port)], {
     env: { ...process.env, VIBESERVER_DATA_DIR: data, VIBESERVER_CARD_DIR: card, VIBE_HWD_SOCK: hwdSock,
-           VIBE_HANDHELD_FAKE_RADIOS: radios, VIBE_HANDHELD_RESET_FLAG: resetFlag, VIBESERVER_DIAG_SCRIPT: diag },
+           VIBE_HANDHELD_FAKE_RADIOS: radios, VIBE_HANDHELD_RESET_FLAG: resetFlag, VIBESERVER_DIAG_SCRIPT: diag,
+           VIBESERVER_MAPDATA_DIR: mapdata, VIBESERVER_MAPGL_DIR: mapgl },
     stdio: ['ignore', log, log],
   });
 }
@@ -96,12 +104,24 @@ try {
   const ws0 = await fetch(U('/ws/user-spectrum'));
   ok(ws0.status === 503, `a radio route with no radio is a plain 503 (${ws0.status})`);
   ok(await until(() => hwd.subscribed() > 0, 5000), 'the supervisor subscribed to the hardware service');
+  // ★★ the map with NO radio (the image's boot test: every /mapdata/v1/* was a 503 "no radio is plugged in")
+  let m = await fetch(U('/mapdata/v1/index.json'));
+  ok(m.status === 200 && (await m.json()).version === 1, `no radio: the map's index loads (${m.status})`);
+  m = await fetch(U('/mapdata/v1/tier3-coast-12.json'));
+  ok(m.status === 200 && (await m.text()).includes('FeatureCollection'), `…and a detail shard (${m.status})`);
+  m = await fetch(U('/mapgl/vibemap-style.json'));
+  ok(m.status === 200, `…the GPU map's style (${m.status})`);
+  m = await fetch(U('/mapgl/vibemap-detail.pmtiles'), { headers: { Range: 'bytes=0-6' } });
+  ok(m.status === 206 && (await m.text()) === 'PMTiles', `…and a detail-pack tile range (${m.status})`);
+  m = await fetch(U('/mapdata/v1/..%2F..%2Fdata%2Fhandheld%2Flocation.json'));
+  ok(m.status === 404, 'a path out of the map directory is refused');
 
   // ── 2 ──
   console.log('── a radio plugged in ──');
   const evSeq0 = (await session()).eventSeq;
   plug('RADIOA', rtlA);
   ok(await running('RADIOA'), 'radio A adopted and running — no setup step');
+  ok((await fetch(U('/mapdata/v1/index.json'))).status === 200, 'the map still loads with a radio plugged in');
   const vsA = await getJ('/vibeserver.json');
   ok(vsA.handheld === true && vsA.radio !== null && typeof vsA.proto === 'number', `its own /vibeserver.json arrives through the hand-off ("handheld":true, proto ${vsA.proto})`);
   const ev = await getJ(`/handheld/events?since=${evSeq0}`);

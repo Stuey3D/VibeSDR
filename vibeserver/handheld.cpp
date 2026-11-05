@@ -28,6 +28,7 @@
 #include "radios.h"
 #include "vibeserver_config.h"
 #include "diag_scrub.h"
+#include "vibe_mapgl.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1176,6 +1177,16 @@ void connection(int fd) {
     r.path = r.target.substr(0, q);
     r.query = q == std::string::npos ? "" : r.target.substr(q + 1);
     if (r.path.rfind("/handheld/", 0) == 0) { routeHandheld(r); ::close(fd); return; }
+    /* ★★ THE MAP IS THE DEVICE'S, NOT THE RADIO'S: static files on the card's image (the basic pack and the high-detail
+     *  one, vibeserver-mapdata-detail), so the supervisor answers /mapdata/v1/ and /mapgl/ itself, radio or none — the
+     *  image agent's boot test found every map file a 503 "no radio is plugged in". Same lookup as a server. */
+    if (r.path.rfind("/mapdata/v1/", 0) == 0 || r.path.rfind("/mapgl/", 0) == 0) {
+        if (readRequest(r, 0)) {
+            const std::string ae = header(r.head, "Accept-Encoding");
+            vibe::LocalSdrShim::serveMapAsset(fd, r.method, r.path, ae.find("gzip") != std::string::npos, header(r.head, "Range"));
+        }
+        ::close(fd); return;
+    }
     // ★ A radio that is starting is waited for (≤ 15 s) — the page's first request after a plug-in is not an error.
     std::string dest;
     {
@@ -1241,6 +1252,7 @@ int runSupervisor(int argc, char** argv) {
         return 1;
     }
     ::chmod(g_o.runDir.c_str(), 0700);
+    vibemapgl::setDataDir(g_o.dataDir + "/mapgl");   // ★ the GPU map's detail pack, where a server keeps a downloaded one
     std::signal(SIGINT, onSig); std::signal(SIGTERM, onSig); std::signal(SIGPIPE, SIG_IGN);
     // ★ Start+Select (§0.2): read once, acted on when the next radio connects, then the flag goes.
     if (hhcard::exists(g_o.resetFlag)) {

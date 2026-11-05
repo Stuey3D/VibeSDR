@@ -36067,6 +36067,24 @@ bool LocalSdrShim::webAssetFor(const std::string& path, bool acceptsBr, bool acc
     encoding = enc == kVibeEncBrotli ? "br" : enc == kVibeEncGzip ? "gzip" : "";
     return true;
 }
+bool LocalSdrShim::serveMapAsset(int fd, const std::string& method, const std::string& path, bool acceptGzip,
+                                 const std::string& range) {
+    const bool head = method == "HEAD";
+    if (method != "GET" && !head) return false;
+    if (path.rfind("/mapdata/v1/", 0) == 0) {
+        const int d = ::dup(fd); if (d < 0) return false;
+        auto sock = std::make_shared<net::Socket>(d);
+        vibemap::serve(sock, path.substr(12), acceptGzip, head, /*paced=*/false);
+        return true;
+    }
+    if (path.rfind("/mapgl/", 0) == 0) {
+        const int d = ::dup(fd); if (d < 0) return false;
+        auto sock = std::make_shared<net::Socket>(d);
+        vibemapgl::serve(sock, path.substr(7), range, head, /*paced=*/false);
+        return true;
+    }
+    return false;
+}
 void LocalSdrShim::setGalleryRadioLabel(const std::string& label) { vibe::gallery::shared().setRadioLabel(label); }
 void LocalSdrShim::setGalleryRedact(const std::vector<std::string>& serials) { vibe::gallery::shared().setRedact(serials); }
 void LocalSdrShim::setAdminIdleMinutes(int minutes) {
