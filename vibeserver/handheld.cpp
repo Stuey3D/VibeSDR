@@ -328,11 +328,14 @@ void ensureEngineConfig(const Radio& r) {
     srv.dirList = false; srv.tunnelResume = 0; srv.mdnsAdvertise = false;
     srv.cpuGovernor = "";                         // ★ schedutil is the image's choice (§0); the engine leaves it alone
     srv.name = "VibeSDR handheld";
-    srv.batteryPauseAt = 0;                       // ★ the hardware service owns the battery floor (3 %, §0.1)
+    srv.batteryPauseAt = 0;
+    srv.maxRadiosPerIp = 0;                       // ★ one owner on 127.0.0.1, radio after radio (main.cpp says why)                       // ★ the hardware service owns the battery floor (3 %, §0.1)
     if (!r.serial.empty()) {
         vsconfig::RadioConfig rc;
         rc.serial = r.serial; rc.driver = r.driver; rc.label = r.name;
         rc.enabled = true; rc.configured = true;
+        // ★ The page's SPECTRUM RATE goes to 20 real frames (DISPLAY); a server's radio defaults to a 10 fps ceiling.
+        rc.maxFps = 20; rc.fftRate = 20;
         srv.radios.push_back(rc);
     }
     if (!vsconfig::saveServer(path, srv, err)) logf("could not write %s — %s", path.c_str(), err.c_str());
@@ -365,7 +368,17 @@ void startChildLocked(const Radio& r) {
     const std::string sockName = hhcard::serialFile(r.serial.empty() ? r.driver : r.serial);
     g_childSock = g_o.runDir + "/" + sockName + ".sock";
     ::unlink(g_childSock.c_str());
-    std::vector<std::string> args = { g_o.self, "--handheld-radio", "--port", std::to_string(g_o.port + 1) };
+    // ★ The radio process must bind A port (the shim always serves one) but nobody uses it — every connection comes
+    //   through the hand-off. A free loopback port, asked of the kernel now: 48001 may well be someone else's.
+    int childPort = g_o.port + 1;
+    {
+        const int t = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in a{}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = 0;
+        socklen_t al = sizeof a;
+        if (t >= 0 && ::bind(t, (sockaddr*)&a, sizeof a) == 0 && ::getsockname(t, (sockaddr*)&a, &al) == 0) childPort = ntohs(a.sin_port);
+        if (t >= 0) ::close(t);
+    }
+    std::vector<std::string> args = { g_o.self, "--handheld-radio", "--port", std::to_string(childPort) };
     if (!r.tcp.empty()) { args.push_back("--tcp"); args.push_back(r.tcp); }
     else if (!r.serial.empty()) { args.push_back("--radio-serial"); args.push_back(r.serial); }
     else { args.push_back("--radio"); args.push_back(std::to_string(r.index)); }

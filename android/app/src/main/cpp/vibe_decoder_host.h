@@ -1416,8 +1416,10 @@ private:
         char buf[512];
         const int n = std::snprintf(buf, sizeof(buf),
             "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
-            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%llu}}",
-            m.c_str(), c.c_str(), sp.snr, rfHz, bandFor(rfHz), g.c_str(), how.c_str(), ctry.c_str(), (unsigned long long)ts);
+            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%llu,\"dt\":%.2f}}",
+            m.c_str(), c.c_str(), sp.snr, rfHz, bandFor(rfHz), g.c_str(), how.c_str(), ctry.c_str(), (unsigned long long)ts,
+            // ★ V12 (R36S handheld "Align to FT8", 2026-11-05): WSJT-X's DT, additive — a client that does not read it ignores it.
+            std::isfinite(sp.dt) ? (double)sp.dt : 0.0);
         if (n > 0) broadcastText(std::string(buf, (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1), GapSpots);
     }
     /** ★ Band's mode chips as JSON (spotsMtx_ held). */

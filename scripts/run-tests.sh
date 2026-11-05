@@ -517,6 +517,13 @@ if node scripts/test-setup-icom.mjs; then pass=$((pass+1)); else fail=$((fail+1)
 #     ~1 min. Same VIBESERVER_BIN rule (exit 3 = not run).
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-handheld.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 R36S HANDHELD — the PAGE (web/client/src/handheld.ts) in headless MUTED Edge at 640×480 with a simulated pad:
+#     "Please connect an SDR", straight into the receiver (no landing page, no start-audio screen), "Spectrum rate" and no
+#     link figures, the three accordions (one open, ○ collapses, the D-pad and ✕), the overlays, the 30 fps cap, per-radio
+#     memory across a hot swap, a recording onto the card, SPECTRUM RATE 5/10/20 (with indicative CPU figures), and an
+#     ordinary server's landing page on the D-pad. ~4 min. Same VIBESERVER_BIN rule (exit 3 = not run).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-handheld.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dx-scan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 THE OWNER'S SCANS (admin page DAB SCAN / FM SCAN) on a shared radio: the FM scan starts with a listener on,

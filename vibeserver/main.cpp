@@ -4570,7 +4570,10 @@ int main(int argc, char** argv) {
         //   machine's radios, so it cannot be a property of any one of them.
         // ★ The CAP, not the switch — the switch is derived from it in the config reader so the
         //   two can never disagree. See ServerConfig::maxRadiosPerIp.
-        LocalSdrShim::instance().setMaxRadiosPerIp(g_serverConfig.maxRadiosPerIp);
+        /* ★★ The handheld's ONE owner is 127.0.0.1 on every radio, one after another: the per-address rule would refuse
+         *  radio B while the registry still held radio A's session (found by test-web-handheld: "already listening on").
+         *  No limit, and no machine-wide occupancy registry — there is only ever one radio process. */
+        LocalSdrShim::instance().setMaxRadiosPerIp(g_handheldChild ? 0 : g_serverConfig.maxRadiosPerIp);
         // ★★★ THE DECODER LIMIT — MACHINE-level too, and for a harder reason: every radio is its
         //     own process, so the slots must live somewhere they all see. The runtime dir is where
         //     the hand-off sockets already meet; the slots are flock()ed files in it (see
@@ -4588,7 +4591,7 @@ int main(int argc, char** argv) {
                                                 g_serverConfig.landingLinkUrl,
                                                 g_serverConfig.landingLinkLabel);
     }
-    if (!g_myRadioSerial.empty()) {
+    if (!g_myRadioSerial.empty() && !g_handheldChild) {
         std::string label = g_myRadioSerial;
         for (const auto& r : g_serverConfig.radios)
             if (r.serial == g_myRadioSerial && !r.label.empty()) { label = r.label; break; }

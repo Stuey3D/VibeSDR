@@ -160,6 +160,12 @@ import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
 import { RecordBufferAnchor, parseRecordBufferSeconds } from '../../../src/services/recordBuffer';
+// ★★★ V12 R36S: the handheld profile — everything behind isHandheld(), which only a handheld engine can switch on.
+import {
+  isHandheld, handheldHinted, handheldBoot, handheldStarted, handheldUiFps, handheldSpecRate, buildHandheldMenu,
+  openDeviceMenu, saveRecordingToCard, listCardRecordings, cardRecordingUrl, deleteCardRecording, noteTimeSync,
+  noteSpot as hhNoteSpot, toast as hhToast,
+} from './handheld';
 /* ★ The shared vector-basemap renderer, carried as a string — see ensureVibeMap(). ★★ FETCHED ONLY
  *  WHEN A MAP OPENS (openSpotsMap): ~98 KB that most listeners never use, so it is its own file and
  *  the page does not carry it (build-web.mjs splits every import() into one). */
@@ -544,6 +550,9 @@ function initSplash() {
       msg.textContent = e instanceof Error ? e.message : String(e);
       $<HTMLButtonElement>('btnConnect').disabled = false;
       $<HTMLButtonElement>('btnSaveConnect').disabled = false;
+      // ★ V12 R36S: there is no landing page to show the error on — try again while the radio is still plugged in
+      //   (a radio process that has just been started can answer its first socket slowly).
+      if (isHandheld()) setTimeout(() => { if (!document.getElementById('hhConnect')) { try { $<HTMLFormElement>('connForm').requestSubmit(); } catch { /* gone */ } } }, 2000);
     }
   };
 
@@ -2834,7 +2843,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   //    gate can come BACK later if something suspends the context again, exactly as before.
   //    Without the second half a browser that suspends after the first press would be silent with
   //    nothing on screen to say so.
-  let gateDismissed = false;
+  let gateDismissed = isHandheld();   // ★ V12 R36S: no welcome screen — straight into the receiver (§0.1)
   /** ★ Set by the gesture that presses the tutorial button, acted on once the gate is off screen:
    *  the tour points at controls the gate is covering, so it cannot start while it is up. */
   let gateWantsTutorial = false;
@@ -3093,6 +3102,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   }
 
   buildControls();
+  if (isHandheld()) { try { initHandheldApp(); } catch (e) { console.error('[handheld] menu', e); } }   // ★ never takes the receiver down
   initMediaSession();
   if (NO_DEC) console.warn('[bisect] decoders disabled by #nodec');
   else initDecoders(host, auth);
@@ -3112,6 +3122,94 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
    *  back (same session id) carries straight on — the whole-radio mode, the dial, the decoders' gap replayed. */
   window.addEventListener('pagehide', (e) => { if (!(e as PageTransitionEvent).persisted) { try { spec?.send({ type: 'leave' }); } catch { /* going */ } } });
   requestAnimationFrame(loop);
+}
+
+// ── ★★★ V12 R36S HANDHELD (handheld.ts) ──────────────────────────────────────────────────────────────────────────
+/** The receiver is up on a handheld: lend handheld.ts what it needs, build the three accordions, put DEVICE where CHAT
+ *  sits on a server (the island keeps both cells — a hidden key would change its shape). */
+function initHandheldApp() {
+  handheldStarted({
+    specFps: () => framesPerSec,
+    uiFps: () => hhUiFpsNow,
+    setSpectrumRate: (fps, interpolate) => {
+      hhSpecFps = fps;
+      // ★ Every row real (NATIVE: one row per received frame) — or, only where a measurement says 20 real is too
+      //   heavy, 10 real with each row repeated to 20 (DEFAULT's rule: min(20, 3 × feed)). No boost: an even pace.
+      wfScroll = interpolate ? 'default' : 'sharp';
+      wfBoostWanted = false;
+      applyWaterfallRates();
+    },
+    setUiFpsCap: (fps) => { hhUiCap = fps; },
+    importBookmarks: async (text) => {
+      const rows = parseBookmarksAny(text, '').filter((b) => b && b.name && b.frequency);
+      if (!rows.length) return { ok: false, imported: 0, message: 'No bookmarks found in that file' };
+      // ★ The receiver's list, in batches under the server's 60 KB ceiling (POST /bookmarks/import).
+      let n = 0, batch: unknown[] = [], size = 2;
+      const send = async () => {
+        if (!batch.length) return;
+        const r = await fetch(P('/bookmarks/import'), { method: 'POST', body: JSON.stringify(batch) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `the receiver refused it (${r.status})`);
+        n += Number(j.imported) || 0;
+        batch = []; size = 2;
+      };
+      for (const b of rows) {
+        const o = { name: String(b.name).slice(0, 64), frequency: Number(b.frequency), mode: b.mode || undefined,
+                    bandwidth_low: b.bandwidth_low, bandwidth_high: b.bandwidth_high };
+        const len = JSON.stringify(o).length + 1;
+        if (size + len > 55_000) await send();
+        batch.push(o); size += len;
+      }
+      await send();
+      void loadServerBookmarks(currentHost, authState?.query ?? '').then(() => applyKnownSignals());
+      return { ok: true, imported: n, message: `Imported ${n} bookmark${n === 1 ? '' : 's'} into the receiver's list` };
+    },
+    exportBookmarks: () => exportBookmarks(),
+    openMenu: () => { if (!isPanelOpen('menu')) togglePanel('menu'); },
+  });
+  const menu = document.getElementById('menu');
+  if (menu) buildHandheldMenu(menu);
+  const chat = document.getElementById('mChat');
+  if (chat && !document.getElementById('mDevice')) {
+    const dev = document.createElement('button');
+    dev.className = 'mBtn'; dev.id = 'mDevice'; dev.title = 'This device: volume, battery, clock, card, power'; dev.textContent = 'DEVICE';
+    dev.onclick = () => openDeviceMenu();
+    chat.after(dev);
+    chat.classList.add('hhHide');
+  }
+}
+
+/** ★ The recordings panel on the handheld: the card's Recordings/ (play / delete), newest first. */
+async function renderCardRecordings() {
+  const host = $('recsList');
+  const list = await listCardRecordings();
+  host.innerHTML = '';
+  if (!list.length) {
+    host.innerHTML = '<div class="sres"><span class="n">No recordings on the card yet — press ● REC.</span></div>';
+    return;
+  }
+  for (const r of list) {
+    const row = document.createElement('div');
+    row.className = 'sres';
+    row.style.cursor = 'default';
+    const n = document.createElement('span'); n.className = 'n';
+    n.textContent = r.name.replace(/\.wav$/i, '');
+    const sz = document.createElement('span'); sz.className = 'src'; sz.textContent = ` · ${formatSize(r.bytes)}`;
+    n.appendChild(sz);
+    const del = document.createElement('button');
+    del.className = 'btn'; del.textContent = '✕';
+    let armed = 0;
+    del.onclick = async () => {
+      if (Date.now() - armed > 3000) { armed = Date.now(); del.textContent = 'DELETE?'; setTimeout(() => { del.textContent = '✕'; }, 3000); return; }
+      await deleteCardRecording(r.name); void renderRecordings();
+    };
+    const player = document.createElement('audio');
+    player.controls = true;
+    player.preload = 'none';
+    player.src = cardRecordingUrl(r.name);
+    row.append(n, del, player);
+    host.appendChild(row);
+  }
 }
 
 // ── Render loop ──────────────────────────────────────────────────────────────
@@ -3633,9 +3731,18 @@ function perfReport(secs: number) {
  *  drawn behind it (showAudioGate). Rows still arrive and are processed; only the drawing waits. */
 let startScreenUp = false;
 
+/* ★★ V12 R36S HANDHELD: DRAWN AT 30 FPS (Stuart — "as the Android app does"), 60 if the owner picks it in DISPLAY. The
+ *  panel runs at 60 Hz, so a 30 cap draws every other vsync: evenly spaced, never a burst. The spectrum's real frames
+ *  arrive on their own fixed clock and the trace still interpolates between them; only the redraw is capped.
+ *  ★ Everywhere else hhUiCap is 0 and this is one compare. */
+let hhUiCap = 0, hhLastDraw = 0, hhDrawn = 0, hhDrawnAt = 0, hhUiFpsNow = 0;
 function loop(frameTs?: number) {
   if (!wf || !spec) return;
-  try { renderFrame(frameTs ?? performance.now()); }
+  const ts = frameTs ?? performance.now();
+  if (hhUiCap > 0 && ts - hhLastDraw < 1000 / hhUiCap - 4) { requestAnimationFrame(loop); return; }
+  hhLastDraw = ts;
+  if (hhUiCap > 0) { hhDrawn++; if (ts - hhDrawnAt >= 1000) { hhUiFpsNow = hhDrawn * 1000 / (ts - hhDrawnAt); hhDrawn = 0; hhDrawnAt = ts; } }
+  try { renderFrame(ts); }
   catch (e) { noteFault('web-render', 'frame', e); }
   requestAnimationFrame(loop);
 }
@@ -5884,7 +5991,11 @@ function updateStatus() {
    *  readout that way (2026-08-26) while we were using it to tell a bursty link from a slow box,
    *  which is exactly the moment ambiguity costs something. "ping" rather than "rtt": it is the
    *  word a listener already knows, and this row is read by listeners, not only by us. */
-  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ping ${rtt.toFixed(0)} ms${buf}${idle}`;
+  /* ★★ V12 R36S HANDHELD: the engine is local, so the link's figures mean nothing (Stuart: "remove the link-rate meter,
+   *  KB/s, ping and buffer"). What stays is the RADIO's own rate — real spectrum frames per second — named so it cannot
+   *  be read as the drawing rate, which the Performance overlay shows as "UI". Servers keep the line exactly as it was. */
+  if (isHandheld()) el.textContent = `Spectrum rate ${fps} fps${idle}`;
+  else el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ping ${rtt.toFixed(0)} ms${buf}${idle}`;
   /* ★★★ AND WHAT IS BEING DONE TO THE AUDIO. This page restores noise reduction, the auto-notch
    *  and the blanker on every connect and has never said so — see the note on #dspTags. Only the
    *  ones that are ON are drawn, so the row is unchanged whenever nothing is.
@@ -10312,8 +10423,12 @@ function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
 /** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps): the DATA control's controller.
  *  ★ V12 2026-10-30: the speed keys never change it — they are display only. */
 function computeActiveFps(): number {
+  // ★ V12 R36S: no link to manage — the engine is local; the owner's SPECTRUM RATE is what is asked for (handheld.ts).
+  if (hhSpecFps > 0) return Math.min(hhSpecFps, serverFpsCap());
   return linkFps > 0 ? linkFps : serverFpsCap();
 }
+/** ★ The handheld's spectrum rate (0 = not a handheld). Set by handheld.ts through the host's setSpectrumRate. */
+let hhSpecFps = 0;
 
 /** ★ V12: the live rows/s on each Waterfall speed key, from the server's own rate (its advertised max — the rate NATIVE
  *  asks for). Unknown (no hwinfo yet) → names only. */
@@ -13065,7 +13180,9 @@ function initDecoders(host: string, auth: AuthState) {
     onSstvMode: (name) => { $('decStatus').textContent = name; },
     onStatus: (t) => { $('decStatus').textContent = t; },
     onSpotsStatus: (st) => { if (!bandSpots) return; spotModeStates = st.modes; renderSpotModeChips(); },
+    onTimeSync: (t) => { if (isHandheld()) noteTimeSync(t); },
     onSpot: (sp) => {
+      if (isHandheld()) hhNoteSpot(sp);
       // ★★★ No count cap (it held 500 reports, so an all-filters map dropped older stations — Stuart,
       //   2026-09-28). The newest report per call|band|mode replaces its older one: the list already
       //   shows only the newest per station, and memory grows with stations heard, not with time.
@@ -16671,6 +16788,13 @@ function initRecorder() {
     // Kept, not just downloaded — a recording you can't find again isn't a feature.
     // The RECORDINGS panel plays, downloads and deletes them.
     const at = new Date();
+    if (isHandheld()) {
+      // ★★ V12 R36S: the WAV goes to the engine, which writes the card's Recordings/ (temp + rename).
+      const detail = dabOn && dabState ? `DAB ${dabState.channel}` : String(spec.mode).toUpperCase();
+      try { await saveRecordingToCard(blob, spec.frequency, detail, at.getTime() - seconds * 1000); }
+      catch (e) { hhToast('Recording NOT saved', e instanceof Error ? e.message : String(e)); }
+      return;
+    }
     await saveRecording({
       name: recordingName(spec.frequency, spec.mode, at),
       frequency: Math.round(spec.frequency),
@@ -17168,6 +17292,7 @@ function initDxLog() {
 }
 
 async function renderRecordings() {
+  if (isHandheld()) { await renderCardRecordings(); return; }
   const host = $('recsList');
   const list = await listRecordings();
   host.innerHTML = '';
@@ -20851,7 +20976,13 @@ function padTuckSync() {
   document.body.classList.toggle('padTuck', padTuckOn && driveInput() !== null);
 }
 
+let keyboardInited = false;
 function initKeyboard() {
+  /* ★★ V12 (2026-11-05, found on the R36S): the pad and the keyboard were wired only by buildControls — AFTER connect —
+   *  so the landing page's START and ADMIN never took the D-pad (or a TV remote's arrows). Now bootSplash wires them
+   *  first; this guard keeps it to once. Every hook below already checks `spec`, so they are safe before connect. */
+  if (keyboardInited) return;
+  keyboardInited = true;
   /* ★★★ ONE SCHEME FOR THE KEYBOARD AND THE GAME CONTROLLER (Stuart, 2026-10-18 — gamepad.ts, src/utils/keyActions.ts):
    *  arrows / W A S D move the highlight, Enter selects, Backspace and Escape go back, < > tune, - + zoom. Both feed
    *  the same actions in gamepad.ts. The older shortcuts (arrows tuning and zooming, Shift×10, [ ] for the step, M for
@@ -20896,6 +21027,7 @@ function escapeHtml(s: unknown): string {
  *     boots exactly as before, synchronously, with nothing waited on. */
 function bootSplash(): void {
   initSplash();
+  initKeyboard();   // ★ the landing page's START / ADMIN on the D-pad — see keyboardInited
 
   // ★ Draw as soon as the page exists, then refresh while the visitor is still on the splash — a
   //   new row lands every second for the first five minutes, so a server that has just been set up
@@ -20907,7 +21039,19 @@ function bootSplash(): void {
 }
 {
   const lanOffer = lanOfferFromPage();
-  if (!lanOffer) bootSplash();
+  /* ★★★ V12 R36S HANDHELD: ?handheld (the image's Cog URL) asks the engine; only `vibeserver --handheld` answers. No
+   *  landing page — a radio plugged in goes straight into the receiver, none shows "Please connect an SDR". */
+  if (handheldHinted()) void handheldBoot().then((s) => {
+    if (!s) { bootSplash(); return; }
+    initSplash();
+    initKeyboard();
+    // ★ Only a RUNNING radio is joined; one still starting shows "Starting …" and its running event reloads the page.
+    if (s.state === 'running') {
+      const join = () => { try { $<HTMLFormElement>('connForm').requestSubmit(); } catch { /* old engine */ } };
+      if (document.readyState === 'complete') setTimeout(join, 0); else window.addEventListener('load', () => setTimeout(join, 0), { once: true });
+    }
+  });
+  else if (!lanOffer) bootSplash();
   else void lanHopAtBoot(lanOffer).catch(() => false).then((moving) => {
     if (moving) return;
     bootSplash();
