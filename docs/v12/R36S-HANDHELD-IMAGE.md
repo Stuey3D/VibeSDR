@@ -134,7 +134,10 @@ the card's space, power off / restart.
 **SDR HARDWARE** and **DISPLAY**. Pressing one expands its options **in place, directly under the button** (an accordion — not a new page,
 not a nested sub-menu); pressing it again, or B / back, collapses them into the button. One level only: "no multilayered
 menu but the options are still hidden", so the main menu stays uncluttered. Opening one collapses the others.
-- **R36S HARDWARE** = volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
+- **R36S HARDWARE** = **location** (Stuart 2026-11-05: no GPS, no internet — a Maidenhead locator or latitude /
+  longitude, the DEVICE's, unset on a fresh card; written into every radio's "Where this receiver is" and applied live:
+  the map centre, DAB / NDB / NAVTEX distances, the band region. "Set from map" is not built yet — the maps open in
+  their own window today, which a one-view Cog kiosk cannot show; it needs an in-page map first), volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
   **Performance** overlay toggle with its figures in full, power off, restart. (No SSH — removed 2026-11-05.)
 - **SDR HARDWARE** = the plugged-in radio's own controls (gain / AGC / bias-T / direct sampling / ppm / antenna …) from its
   caps — what the radio menu shows today for that driver.
@@ -256,7 +259,7 @@ quota beyond localStorage (the look and the DISPLAY choices; everything per radi
 
 **The page's routes on the engine** (`/handheld/*`, never handed to the radio): `session`, `memory`, `events` (long-poll),
 `device` (GET state; POST one of: brightness 1–255, volume 0–100, poweroff / reboot /
-screen-off / screen-on), `clock` (`utcMs` or `deltaMs`), `perf`, `card`, `recordings[/<name>]` (POST a WAV, GET with
+screen-off / screen-on), `clock` (`utcMs` or `deltaMs`), `location` (GET; POST `locator` 4/6 characters, or `lat`+`lon`, or `clear`), `perf`, `card`, `recordings[/<name>]` (POST a WAV, GET with
 Range, DELETE), `import` + `import/result`, `export?kind=bookmarks|dxlog`, `diagnostics`. Device events reach the page
 through `events`, not the spectrum socket — the page must hear the volume buttons and the battery on the "Please connect
 an SDR" screen, where there is no spectrum socket.

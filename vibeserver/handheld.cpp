@@ -317,10 +317,46 @@ void announceLocked() {
 /** ★★ The radio process's own settings file: ONE radio, enabled and configured, on a machine that lists nowhere,
  *  advertises nowhere and never touches the CPU governor. Written once per radio and then the radio process's own —
  *  it persists its gain, the DAB block and station it was left on there, as every server's radio does. */
+// ── Where the device is (no GPS, no internet — the owner says) ──────────────────────────────────────────────────────
+/* ★★ THE DEVICE'S LOCATION, NOT A RADIO'S (Stuart 2026-11-05). One file, $DATA/handheld/location.json — a Maidenhead
+ *  locator or exact lat/lon, or nothing (a fresh card). It is written into every radio's engine settings as the
+ *  machine's "Where this receiver is" (locator / lat / lon, the same fields a server's setup page writes), so the radio
+ *  process reads it exactly as a server does: the map centre, DAB transmitter distances, NDB / NAVTEX ranges, the ITU
+ *  region, the locator in logs. A change is applied LIVE: the radio process is told (SIGUSR1) and republishes it. */
+struct Location { std::string locator, lat, lon; };
+std::string locPath() { return g_o.hhDir + "/location.json"; }
+Location loadLocation() {
+    Location l; std::string t; hhjson::Value v;
+    if (hhcard::readFile(locPath(), t, 4096) && hhjson::parse(t, v) && v.kind == hhjson::Value::Obj) {
+        l.locator = v.str("locator"); l.lat = v.str("lat"); l.lon = v.str("lon");
+    }
+    return l;
+}
+/** ★ A Maidenhead square of 4 or 6 characters ("IO92" / "IO92nh"), normalised "IO92nh"; "" if it is not one. */
+std::string normLocator(const std::string& in) {
+    std::string u; for (char c : in) if (c != ' ') u += c;
+    if (u.size() != 4 && u.size() != 6) return "";
+    for (int i = 0; i < 2; i++) { const char c = (char)std::toupper((unsigned char)u[i]); if (c < 'A' || c > 'R') return ""; u[i] = c; }
+    for (int i = 2; i < 4; i++) if (!std::isdigit((unsigned char)u[i])) return "";
+    if (u.size() == 6) for (int i = 4; i < 6; i++) { const char c = (char)std::tolower((unsigned char)u[i]); if (c < 'a' || c > 'x') return ""; u[i] = c; }
+    return u;
+}
+/** The location into a radio's engine settings (the machine fields). True when the file changed. */
+bool applyLocationTo(vsconfig::ServerConfig& srv, const Location& l) {
+    if (srv.locator == l.locator && srv.lat == l.lat && srv.lon == l.lon) return false;
+    srv.locator = l.locator; srv.lat = l.lat; srv.lon = l.lon;
+    return true;
+}
+
 void ensureEngineConfig(const Radio& r) {
     const std::string path = enginePath(r.serial);
     vsconfig::ServerConfig srv; std::string err;
-    if (hhcard::exists(path) && vsconfig::loadServer(path, srv, err) && !srv.radios.empty()) return;
+    if (hhcard::exists(path) && vsconfig::loadServer(path, srv, err) && !srv.radios.empty()) {
+        // ★ an existing radio picks up a location set while it was unplugged
+        if (applyLocationTo(srv, loadLocation()) && !vsconfig::saveServer(path, srv, err))
+            logf("could not record the location for %s — %s", r.serial.c_str(), err.c_str());
+        return;
+    }
     srv = vsconfig::ServerConfig{};
     srv.configured = true;
     srv.fullMode = true;
@@ -328,8 +364,9 @@ void ensureEngineConfig(const Radio& r) {
     srv.dirList = false; srv.tunnelResume = 0; srv.mdnsAdvertise = false;
     srv.cpuGovernor = "";                         // ★ schedutil is the image's choice (§0); the engine leaves it alone
     srv.name = "VibeSDR handheld";
-    srv.batteryPauseAt = 0;
-    srv.maxRadiosPerIp = 0;                       // ★ one owner on 127.0.0.1, radio after radio (main.cpp says why)                       // ★ the hardware service owns the battery floor (3 %, §0.1)
+    applyLocationTo(srv, loadLocation());
+    srv.batteryPauseAt = 0;                       // ★ the hardware service owns the battery floor (3 %, §0.1)
+    srv.maxRadiosPerIp = 0;                       // ★ one owner on 127.0.0.1, radio after radio (main.cpp says why)
     if (!r.serial.empty()) {
         vsconfig::RadioConfig rc;
         rc.serial = r.serial; rc.driver = r.driver; rc.label = r.name;
@@ -852,6 +889,49 @@ void hPerf(Req& r) {
     json(r.fd, b);
 }
 
+void hLocationGet(Req& r) {
+    const Location l = loadLocation();
+    json(r.fd, "{\"locator\":" + quote(l.locator) + ",\"lat\":" + quote(l.lat) + ",\"lon\":" + quote(l.lon)
+         + ",\"set\":" + (l.locator.empty() && l.lat.empty() ? "false" : "true") + "}");
+}
+/** {"locator":"IO92nh"} · {"lat":52.2,"lon":-0.9} · {"clear":true}. Saved, written into the running radio's settings,
+ *  and the radio process told to republish it (SIGUSR1) — no restart. */
+void hLocationPost(Req& r) {
+    hhjson::Value v;
+    if (!hhjson::parse(r.body, v) || v.kind != hhjson::Value::Obj) { json(r.fd, errJson("not JSON"), 400); return; }
+    Location l;
+    if (v.boolean("clear")) { /* unset: an empty file */ }
+    else if (v.has("locator")) {
+        l.locator = normLocator(v.str("locator"));
+        if (l.locator.empty()) { json(r.fd, errJson("a locator is 4 or 6 characters, e.g. IO92 or IO92nh"), 400); return; }
+    } else if (v.has("lat") && v.has("lon")) {
+        const hhjson::Value* a = v.get("lat"); const hhjson::Value* b = v.get("lon");
+        const double la = a->kind == hhjson::Value::Num ? a->n : std::atof(a->s.c_str());
+        const double lo = b->kind == hhjson::Value::Num ? b->n : std::atof(b->s.c_str());
+        if (!(la >= -90 && la <= 90 && lo >= -180 && lo <= 180) || (la == 0 && lo == 0)) {
+            json(r.fd, errJson("latitude -90 to 90, longitude -180 to 180"), 400); return;
+        }
+        char x[32]; std::snprintf(x, sizeof x, "%.5f", la); l.lat = x;
+        std::snprintf(x, sizeof x, "%.5f", lo); l.lon = x;
+    } else { json(r.fd, errJson("give locator, or lat and lon, or clear"), 400); return; }
+    std::string err;
+    if (!hhcard::atomicWrite(locPath(), "{\"locator\":" + quote(l.locator) + ",\"lat\":" + quote(l.lat) + ",\"lon\":" + quote(l.lon) + "}\n", &err)) {
+        json(r.fd, errJson(err), 500); return;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_rMtx);
+        if (g_state != St::None) {
+            const std::string path = enginePath(g_cur.serial);
+            vsconfig::ServerConfig srv; std::string e2;
+            if (vsconfig::loadServer(path, srv, e2) && applyLocationTo(srv, l) && !vsconfig::saveServer(path, srv, e2))
+                logf("could not record the location — %s", e2.c_str());
+            if (g_child > 0) ::kill(g_child, SIGUSR1);
+        }
+    }
+    logf("location %s", l.locator.empty() && l.lat.empty() ? "cleared" : (l.locator.empty() ? (l.lat + ", " + l.lon).c_str() : l.locator.c_str()));
+    hLocationGet(r);
+}
+
 void hCard(Req& r) {
     const auto sp = hhcard::spaceAt(g_o.cardDir);
     json(r.fd, std::string("{\"present\":") + (sp.ok && !g_o.cardDir.empty() ? "true" : "false") + ",\"freeBytes\":" + std::to_string(sp.freeBytes)
@@ -1064,6 +1144,8 @@ void routeHandheld(Req& r) {
     else if (p == "/handheld/clock" && r.method == "POST")          hClock(r);
     else if (p == "/handheld/perf")                                hPerf(r);
     else if (p == "/handheld/card")                                hCard(r);
+    else if (p == "/handheld/location" && r.method == "POST")       hLocationPost(r);
+    else if (p == "/handheld/location")                            hLocationGet(r);
     else if (p == "/handheld/recordings" && r.method == "POST")     hRecordingsPost(r);
     else if (p == "/handheld/recordings")                          hRecordingsGet(r, "");
     else if (p.rfind("/handheld/recordings/", 0) == 0) {

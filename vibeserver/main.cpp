@@ -120,6 +120,10 @@ std::atomic<bool> g_stop{false};
  *  owner's (loopback is the operator, as on any server). Decided by the argv pre-scan in main(), before the config. */
 bool g_handheldChild = false;
 void onClockSet(int) { vibe::clockWasSet(); }
+/** ★ The handheld supervisor changed the device's location (handheld.cpp hLocationPost): re-read and republish it —
+ *  on the main loop, never in the handler. */
+std::atomic<bool> g_hhLocReload{false};
+void onLocationChanged(int) { g_hhLocReload.store(true); }
 // ★ Also on the SIGNAL path. A clean return reaps via atexit, but Ctrl-C is the common case and it
 //   must not depend on the main loop noticing g_stop and unwinding tidily. kill() and waitpid()
 //   are async-signal-safe; this deliberately does nothing else.
@@ -2040,6 +2044,7 @@ int main(int argc, char** argv) {
     if (g_handheldChild) {
         LocalSdrShim::setHandheld(true);
         std::signal(SIGUSR2, onClockSet);   // ★ the supervisor set the system clock: our NTP offset no longer applies
+        std::signal(SIGUSR1, onLocationChanged);   // ★ …or the device's location
     }
     LocalSdrShim::setVibeServerPort(o.port);    // 0 = auto-scan
     LocalSdrShim::setVibeServerAuth(o.pin);     // empty = open; loopback is always exempt
@@ -4977,6 +4982,24 @@ int main(int argc, char** argv) {
 
     while (!g_stop) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        /* ★★ V12 R36S: the device's location, changed from the handheld's R36S HARDWARE → LOCATION — the engine
+         *  settings file already holds it (the supervisor wrote it); applied here, live: the location every client
+         *  reads (/location), the receiver position (DAB / NDB / NAVTEX distances) and the band region. */
+        if (g_handheldChild && g_hhLocReload.exchange(false)) {
+            vsconfig::ServerConfig fresh; std::string lerr;
+            if (vsconfig::loadServer(g_configPath, fresh, lerr)) {
+                g_serverConfig.locator = fresh.locator; g_serverConfig.lat = fresh.lat; g_serverConfig.lon = fresh.lon;
+                g_runtimeConfig.locator = fresh.locator; g_runtimeConfig.lat = fresh.lat; g_runtimeConfig.lon = fresh.lon;
+                g_locOpts.rxGrid = fresh.locator; g_locOpts.rxLat = fresh.lat; g_locOpts.rxLon = fresh.lon;
+                publishLocation(g_locOpts, nullptr);
+                double la = 0, lo = 0; bool have = false;
+                try { if (!fresh.lat.empty() && !fresh.lon.empty()) { la = std::stod(fresh.lat); lo = std::stod(fresh.lon); have = true; } } catch (...) {}
+                if (!have && !fresh.locator.empty()) have = vssolar::gridToLatLon(fresh.locator, la, lo);
+                if (have) { LocalSdrShim::setReceiverPosition(la, lo); vibebands::defaultRegion() = vibebands::ituRegion(la, lo, true); LocalSdrShim::setBandRegion(vibebands::defaultRegion(), true); }
+                std::printf("VibeServer: location now %s\n", !fresh.locator.empty() ? fresh.locator.c_str()
+                            : !fresh.lat.empty() ? (fresh.lat + ", " + fresh.lon).c_str() : "not set");
+            }
+        }
         // ★★ An Icom's power for the front door's radio list (icomPowerWrite): on every change, and every 30 s.
         if (!frontDoorOnly && LocalSdrShim::instance().isIcom()) {
             static std::string lastPw; static int pwTick = 0;

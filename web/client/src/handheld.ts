@@ -57,6 +57,8 @@ export interface HandheldHost {
   /** The bookmarks as the page exports them. */
   exportBookmarks(): string;
   openMenu(): void;
+  /** The device's location changed: the page reads the receiver's /location again (map centre, distances). */
+  locationChanged(): void;
 }
 
 let on = false;
@@ -644,6 +646,35 @@ export function buildHandheldMenu(menu: HTMLElement) {
   r36.appendChild(clkSeg);
   r36.appendChild(el('div', { class: 'lbl wrap' }, '"Set clock from" appears after a time station (MSF, DCF77, WWV, WWVB, JJY) has given two '
     + 'consecutive parity-checked minutes that agree; "Align to FT8" after three or more FT8 decodes.'));
+  // ★★ LOCATION (Stuart 2026-11-05): no GPS, no internet — the owner says where the radio is. A locator (4 or 6
+  //    characters, the pad keyboard types it) or exact latitude / longitude; the DEVICE's, whichever radio is plugged
+  //    in. Applied live by the engine: distances, ranges and the map centre follow at once.
+  const locNow = el('span', { class: 'val hhFig', id: 'hhLocNow', style: 'flex:1' }, '—');
+  r36.appendChild(row('LOCATION<span class="sub">Where this receiver is — for distances, ranges and the map</span>', locNow));
+  const locIn = el('input', { type: 'text', id: 'hhLocIn', placeholder: 'IO92nh  or  52.25, -0.89', autocomplete: 'off', style: 'flex:1;min-width:0' }) as HTMLInputElement;
+  const locSet = el('button', { class: 'btn', id: 'hhLocSet' }, 'SET');
+  const locClr = el('button', { class: 'btn', id: 'hhLocClear' }, 'CLEAR');
+  r36.appendChild(row('SET LOCATION', locIn, locSet, locClr));
+  const paintLoc = (j: { locator: string; lat: string; lon: string; set: boolean }) => {
+    locNow.textContent = !j.set ? 'not set' : j.locator ? j.locator : `${j.lat}, ${j.lon}`;
+  };
+  const postLoc = async (body: Record<string, unknown>) => {
+    try {
+      const r = await fetch('/handheld/location', { method: 'POST', body: JSON.stringify(body) });
+      const j = await r.json();
+      if (!r.ok) { toast('Location not set', j.error || ''); return; }
+      paintLoc(j); host?.locationChanged();
+      toast(j.set ? 'Location set' : 'Location cleared', j.set ? (j.locator || `${j.lat}, ${j.lon}`) : '');
+    } catch { toast('Location not set', 'the engine did not answer'); }
+  };
+  locSet.onclick = () => {
+    const t = locIn.value.trim();
+    const ll = /^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/.exec(t);
+    if (ll) void postLoc({ lat: parseFloat(ll[1]), lon: parseFloat(ll[2]) });
+    else void postLoc({ locator: t });
+  };
+  locClr.onclick = () => void postLoc({ clear: true });
+  void fetch('/handheld/location', { cache: 'no-store' }).then((r) => r.json()).then(paintLoc).catch(() => {});
   const cardV = el('span', { class: 'val hhFig', id: 'hhCardVal', style: 'flex:1' }, '—');
   r36.appendChild(row('CARD', cardV));
   const imp = el('button', { class: 'btn' }, 'IMPORT'); imp.onclick = () => void runImport(true);

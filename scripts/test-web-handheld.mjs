@@ -51,7 +51,7 @@ kids.push(sup);
 const plug = (serial, rtl) => fs.writeFileSync(radios, rtl ? `${serial} rtlsdr 127.0.0.1:${rtl}\n` : "");
 const br = spawn(BROWSER, ["--headless=new", "--mute-audio", "--disable-audio-output", "--no-first-run", "--disable-extensions",
   "--autoplay-policy=no-user-gesture-required", `--remote-debugging-port=${cdp}`, `--user-data-dir=${path.join(T, "browser")}`,
-  "--window-size=640,480", "about:blank"], { stdio: "ignore" });
+  "--window-size=640,480", ...(process.getuid && process.getuid() === 0 ? ["--no-sandbox"] : []), "about:blank"], { stdio: "ignore" });   // ★ root in a Linux test container: Chromium needs --no-sandbox
 kids.push(br);
 const FAKE_PAD = `
   window.__pad = { id: 'R36S (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', timestamp: 0,
@@ -82,7 +82,10 @@ const shown = (sel) => `(() => { const e = document.querySelector(${JSON.stringi
 const running = () => `(() => { const f = document.getElementById("freqInput"); return !!f && parseFloat(f.value) > 0 && !document.getElementById("hhConnect"); })()`;
 const childPid = () => { try { return execFileSync("pgrep", ["-P", String(sup.pid)]).toString().trim().split("\n")[0]; } catch { return ""; } };
 /** The process's CPU time so far, in seconds ("[[dd-]hh:]mm:ss.cc" from ps). */
-const cpuOf = (pid) => { try { const t = execFileSync("ps", ["-o", "time=", "-p", pid]).toString().trim().replace(/^\d+-/, "");
+const cpuOf = (pid) => { try {
+  // ★ Linux: /proc to the clock tick (ps rounds to whole seconds there, which reads 0 % over a 5 s window)
+  if (fs.existsSync(`/proc/${pid}/stat`)) { const f = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].split(" "); return (Number(f[11]) + Number(f[12])) / 100; }
+  const t = execFileSync("ps", ["-o", "time=", "-p", pid]).toString().trim().replace(/^\d+-/, "");
   return t.split(":").reduce((a, x) => a * 60 + parseFloat(x), 0); } catch { return NaN; } };
 
 try {
@@ -138,6 +141,12 @@ try {
   ok(await p.js(`document.querySelectorAll("#menu .hhAccBody")[2].textContent.includes("SPECTRUM RATE")`), "…with SPECTRUM RATE");
   await p.js(`document.querySelectorAll("#menu .hhAcc")[0].click(); 1`);
   ok(await p.js(`(() => { const b = document.querySelectorAll("#menu .hhAccBody"); return !b[0].hidden && b[1].hidden && b[2].hidden; })()`), "R36S HARDWARE expands in place");
+  ok(await p.js(`document.getElementById("hhLocNow").textContent`) === "not set", "LOCATION: not set on a fresh card");
+  await p.js(`(() => { const i = document.getElementById("hhLocIn"); i.value = "jo01ab"; document.getElementById("hhLocSet").click(); })()`);
+  ok(await p.until(`document.getElementById("hhLocNow").textContent === "JO01ab"`, 5000), "a locator typed and SET");
+  ok(await (async () => { for (let i = 0; i < 40; i++) { try { const l = await (await fetch(`http://127.0.0.1:${port}/location`)).json(); if (l.grid === "JO01ab") return true; } catch {} await sleep(150); } return false; })(),
+     "…the receiver's /location follows, live");
+  ok(await p.until(`(document.getElementById("rxLoc") || {}).textContent.includes("JO01")`, 5000), `…and the page's own receiver line (${await p.js(`(document.getElementById("rxLoc") || {}).textContent`)})`);
   ok(await p.until(`document.getElementById("hhBattVal").textContent.includes("83")`, 5000), `the battery from the hardware service (${await p.js(`document.getElementById("hhBattVal").textContent`)})`);
   await p.js(`document.querySelectorAll("#menu .hhAcc")[2].click(); 1`);
   ok(await p.js(`(() => { const b = document.querySelectorAll("#menu .hhAccBody"); return b[0].hidden && b[1].hidden && !b[2].hidden; })()`), "opening DISPLAY collapses R36S HARDWARE");

@@ -3167,6 +3167,8 @@ function initHandheldApp() {
     },
     exportBookmarks: () => exportBookmarks(),
     openMenu: () => { if (!isPanelOpen('menu')) togglePanel('menu'); },
+    // ★ the radio process applies it on its next tick (≤ 1 s): read it then, and once more to be sure
+    locationChanged: () => { for (const ms of [1300, 3000]) setTimeout(() => { serverLoc = null; void loadServerLocation(currentHost); }, ms); },
   });
   const menu = document.getElementById('menu');
   if (menu) buildHandheldMenu(menu);

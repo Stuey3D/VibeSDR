@@ -171,6 +171,23 @@ try {
   const perf = await getJ('/handheld/perf');
   ok(typeof perf.cpu === 'number' && perf.battery && perf.battery.pct === 83, `perf figures (battery ${perf.battery?.pct} %)`);
 
+  console.log('── the device\'s location ──');
+  ok((await getJ('/handheld/location')).set === false, 'a fresh card: no location');
+  const rxLoc = async () => { try { return await getJ('/location'); } catch { return {}; } };
+  r = await postJ('/handheld/location', { locator: 'io92nh' });
+  ok(r.status === 200 && r.j?.locator === 'IO92nh', `a locator set, normalised (${r.j?.locator})`);
+  ok(await until(async () => { const l = await rxLoc(); return l.grid === 'IO92nh' && Math.abs(l.lat - 52.31) < 0.05 && Math.abs(l.lon - (-0.88)) < 0.05; }, 6000),
+     `applied LIVE in the radio process — /location ${JSON.stringify(await rxLoc())}`);
+  ok(/location now IO92nh/.test(L()), 'the radio process says so (no restart)');
+  r = await postJ('/handheld/location', { locator: 'ZZ99' });
+  ok(r.status === 400, `a bad locator is refused (${r.j?.error})`);
+  r = await postJ('/handheld/location', { lat: 51.5074, lon: -0.1278 });
+  ok(r.status === 200 && await until(async () => Math.abs((await rxLoc()).lat - 51.5074) < 0.001, 6000), 'exact latitude / longitude win, live');
+  r = await postJ('/handheld/location', { lat: 95, lon: 0 });
+  ok(r.status === 400, 'an impossible latitude is refused');
+  r = await postJ('/handheld/location', { locator: 'IO92nh' });
+  ok(JSON.parse(fs.readFileSync(path.join(data, 'handheld', 'location.json'), 'utf8')).locator === 'IO92nh', 'kept on the device (location.json)');
+
   // ── 6 ──
   console.log('── the card ──');
   const wav = Buffer.alloc(44 + 48000 * 2);
@@ -221,6 +238,8 @@ try {
   ok(s.memory === null && s.resetSeq > 0 && s.resetSerial === 'RADIOA', `A's memory gone, a reset for the toast (seq ${s.resetSeq})`);
   ok(!fs.existsSync(resetFlag), 'the flag was spent and removed');
   ok(fs.existsSync(memFile('RADIOB')), 'radio B\'s memory untouched by A\'s reset');
+  ok(await until(async () => { try { return (await getJ('/location')).grid === 'IO92nh'; } catch { return false; } }, 6000),
+     'the location is the DEVICE\'s: it survives a radio\'s reset and a restart');
 } catch (e) {
   fail++; console.log('   FAIL threw:', e && e.stack || e);
 } finally {
