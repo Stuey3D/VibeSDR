@@ -2947,7 +2947,7 @@ function modeTree() {
  *     drawn exactly as before.
  *  ★★ HIDING IS NOT CLEARING. A switch this radio cannot use is not drawn, and its saved value stays in the config
  *     untouched (blockedModes is edited token by token, so a hidden id is never written or removed). */
-let HW_CAPS = null;   // { serial, caps } — the running radio's own answer, for the tab renderHw() last asked about
+var HW_CAPS = null;   // { serial, caps } — the running radio's own answer, for the tab renderHw() last asked about
 function radioCaps(r) {
   r = r || radio();
   if (!r) return null;
@@ -2993,7 +2993,15 @@ function capsApply() {
     const fmOnly = String(r.driver || "") === "airspyhf" || !capMode("dab");
     show("dxBandsWrap", !fmOnly); show("dxBandsFmOnly", fmOnly);
   }
-  if (r.mode !== "locked") { modeBlockRender(); modeBlockSummary(); }
+  // ★ Re-drawn only when the answer CHANGED what the list shows: a re-render drops the benchmark's notes beside the boxes
+  //   (renderBench writes them in place), so the radio's own caps arriving with the same answer must leave it alone.
+  if (r.mode !== "locked" && capsSig() !== MODE_CAPS_DRAWN) { modeBlockRender(); modeBlockSummary(); }
+}
+/** What the modes list was last drawn from — the caps' modes and hints for the open tab ("" = no caps). */
+var MODE_CAPS_DRAWN = null;   // ★ var: read by modeBlockRender, which may run before this line is reached
+function capsSig() {
+  const c = radioCaps();
+  return String(radio().serial || "") + "|" + (c ? JSON.stringify([c.modes || null, c.hints || null]) : "");
 }
 
 /** The nearest switch above `id` that is OFF in `off` (null = every one above it is on). */
@@ -3136,6 +3144,7 @@ function modeBlockRender() {
   for (const id of ["dabScanRow", "bandModeWrap"]) { const n = modeNodeEl(id); if (n && n.parentNode) n.parentNode.removeChild(n); }
   const off = modeBlockSet();
   // ★★ V12 only what THIS radio can run (vibe_radio_caps.h): an HF+ is not offered DAB, an Icom not WFM (capsApply)
+  if (typeof capsSig === "function") MODE_CAPS_DRAWN = capsSig();
   const full = modeTree();
   const tree = full.filter(m => modeCapShown(full, m));
   const kids = id => tree.filter(m => m.parent === id);

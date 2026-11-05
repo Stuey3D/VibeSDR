@@ -116,6 +116,10 @@ async function openSetup() {
   await until(async () => await js(`document.querySelectorAll("#radioTabs button").length > 0`), 10000);
   await js(`(() => { const b = [...document.querySelectorAll("#radioTabs button")].find(x => /RTL/.test(x.textContent)); b && b.click(); return 1; })()`);
   ok(await until(async () => await js(`!!${box('lora+all')}`), 15000), 'signed in: the modes list is drawn');
+  // ★★ V12 (2026-11-05) and the RADIO's own caps have arrived (vibe_radio_caps.h): until then the door's answer from the
+  //    config draws the list — for an RTL named "RTL" that is a tuner-only dongle (no HF); the fake rtl_tcp has no model,
+  //    so the running radio keeps its whole table (DRM, time signals …).
+  ok(await until(async () => await js(`!!(HW_CAPS && HW_CAPS.caps)`), 15000), "…and the radio's own caps have arrived");
 }
 
 try {
@@ -142,8 +146,11 @@ try {
   const spotModes = await js(`SPOT_MODES.slice()`) || [];
   ok(spotModes.length >= 8 && await js(`SPOT_MODES.every(m => !!document.querySelector('[data-kids-of="spots"] input[data-mode="spots-' + m.toLowerCase() + '"]'))`),
      `every mode the server runs has its switch (${spotModes.join(', ')})`);
-  for (const sw of ['drm', 'adsb', 'cw', 'psk', 'same', 'selcal', 'mfsk', 'hell', 'jtty', 'ais', 'aprs', 'ndb', 'dsc', 'sitora', 'time'])
+  for (const sw of ['drm', 'adsb', 'cw', 'psk', 'same', 'selcal', 'mfsk', 'hell', 'jtty', 'ais', 'aprs', 'dsc', 'sitora', 'time'])
     ok(await js(`!!${box(sw)}`), `"${sw}" has its own switch`);
+  // ★★ V12 (2026-11-05): NOT NDB — an RTL reaches LF only on its direct-sampling Q branch (vsNdbReach), and this one has
+  //    none, so the switch is not drawn (vibe_radio_caps.h; its saved value would be kept).
+  ok(await js(`!${box('ndb')}`), '"ndb" is not drawn on an RTL without direct sampling');
   ok(/default channels/.test(await js(`document.getElementById("loraAllHint").textContent`) || ''), 'the hint says what unticked means (the default channels still decode)');
 
   console.log('── LoRa: listen on every channel ──');
