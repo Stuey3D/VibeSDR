@@ -383,6 +383,14 @@ object VibeLocalSDR {
     /** ★★ V12 what the background-decoding editor may offer — the engine's own decoder table, ISM ids, Band list, slots. */
     fun backgroundCaps(): String { ensureLoaded(); return nativeBackgroundCaps() }
     private external fun nativeBackgroundCaps(): String
+    /** ★★★ V12 what this radio can do (vibe_radio_caps.h): its modes, decoders and the settings that mean anything on it —
+     *  the Setup page's answer, so the server screen hides exactly what that page hides. Pure: nothing is opened. */
+    fun radioCapsFor(driver: String, model: String, autoDs: Boolean, directSampling: Int,
+                     convOffsetHz: Double, convLoHz: Double, convHiHz: Double): String {
+        ensureLoaded(); return nativeRadioCapsFor(driver, model, autoDs, directSampling, convOffsetHz, convLoHz, convHiHz)
+    }
+    private external fun nativeRadioCapsFor(driver: String, model: String, autoDs: Boolean, directSampling: Int,
+                                            convOffsetHz: Double, convLoHz: Double, convHiHz: Double): String
     /** ★★ V12 the Setup page's save rule for background decoding: "" = good, else the engine's sentence. */
     fun validateBackgroundDecoding(json: String, rate: Double, slotCap: Int, lockCentre: Double,
                                    ismOk: Boolean, ndbOk: Boolean, aisOk: Boolean): String {

@@ -21,6 +21,7 @@
 #include "vibe_usb_recovery.h"   // ★ the gone-radio rules Kotlin reads — see nativeGiveUpOnGoneRadio
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark — see nativeRunBenchmark
 #include "vibe_benchmark_adsb.h"  // ★ …and its ADS-B rows (CPU only)
+#include "vibe_radio_caps.h"      // ★★ V12 what a radio can do — see nativeRadioCapsFor
 /* ★★ vibemap::setDir — where this server keeps its map pack. Android has no directory next to the
  *  executable and no /usr, which is what vibe_mapdata.h searches, so the path is set explicitly
  *  from the data dir down in nativeSetAdminPaths.
@@ -1524,6 +1525,17 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetGallery(JNIEnv* env, jobject, jstring
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeBackgroundCaps(JNIEnv* env, jobject) {
     return env->NewStringUTF(vibe::LocalSdrShim::backgroundCapsJson().c_str());
+}
+/* ★★★ V12 WHAT THIS RADIO CAN DO (vibe_radio_caps.h) — the SAME function the Setup page's tabs and the server's `modes`
+ *  offer are drawn from, so the phone's server screen can never offer a mode or a setting the Setup page hides (Stuart,
+ *  2026-11-05). From the radio's facts as the screen knows them while the server is STOPPED: driver, its USB model name
+ *  (a V4), direct sampling, a converter. Pure: no radio is opened. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRadioCapsFor(JNIEnv* env, jobject, jstring driver, jstring model, jboolean autoDs,
+        jint directSampling, jdouble convOffsetHz, jdouble convLoHz, jdouble convHiHz) {
+    const vibecaps::Facts f = vibecaps::factsFromConfig(jstr(env, driver), (double)convOffsetHz, (double)convLoHz,
+                                                        (double)convHiHz, autoDs == JNI_TRUE, (int)directSampling, jstr(env, model));
+    return env->NewStringUTF(vibecaps::toJson(vibecaps::compute(f)).c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeValidateBackgroundDecoding(JNIEnv* env, jobject, jstring json, jdouble rate,

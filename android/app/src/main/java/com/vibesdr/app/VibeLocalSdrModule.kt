@@ -156,6 +156,15 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         try { promise.resolve(VibeLocalSDR.backgroundCaps()) } catch (t: Throwable) { promise.resolve("") }
     }
 
+    /** ★★★ V12 what this radio can do (vibe_radio_caps.h) — the Setup page's own answer, as JSON ("" = an engine without it). */
+    @ReactMethod
+    fun radioCapsFor(driver: String, model: String, autoDs: Boolean, directSampling: Double,
+                     convOffsetHz: Double, convLoHz: Double, convHiHz: Double, promise: Promise) {
+        try {
+            promise.resolve(VibeLocalSDR.radioCapsFor(driver, model, autoDs, directSampling.toInt(), convOffsetHz, convLoHz, convHiHz))
+        } catch (t: Throwable) { promise.resolve("") }
+    }
+
     /** ★★ V12 the Setup page's save rule for background decoding — "" = good, else the engine's own sentence. */
     @ReactMethod
     fun validateBackgroundDecoding(json: String, rate: Double, slotCap: Double, lockCentre: Double,

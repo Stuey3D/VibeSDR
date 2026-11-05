@@ -124,6 +124,7 @@ import {
   setManualServerLocation, resolveLocation, publishLocation, homeFromDevice,
   getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive, rateGuardState, rateGuardClear,
   getBackgroundCaps, validateBackgroundDecoding, galleryDisk,
+  getRadioCapsFor, capsAllowMode, capsAllowSetting, type RadioCaps,
   dabBandScanStart, dabBandScanState, dabBandScanCancel, dabBandScanSupported, type DabBandScan,
   type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
@@ -900,6 +901,25 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  screen is drawn while the server is STOPPED, so there is no running radio to ask), and what the owner switched off
    *  under Modes and decoders (the setup page's modeBlockSet: the owner's list plus the region defaults). */
   useEffect(() => { void getBackgroundCaps().then((j) => setBgCaps(parseBgCaps(j))); }, [radio?.driver]);
+  /* ★★★ V12 WHAT THIS RADIO CAN DO (vibe_radio_caps.h, through the engine — the Setup page's own answer, so the two never
+   *  disagree): the modes list, VFO A/B, Raw IQ, the impulse blanker and the FM defaults follow it. From the radio's
+   *  facts as this screen holds them (the server is usually STOPPED here): driver, USB model (a V4), direct sampling, a
+   *  converter. null (an engine without it) = everything drawn as before. */
+  const [radioCapsNow, setRadioCapsNow] = useState<RadioCaps | null>(null);
+  useEffect(() => {
+    const drv = isIcom ? 'icom' : (radio?.driver ?? '');
+    const off = (convDown ? 1 : -1) * (Number(convOffsetMhz) || 0) * 1e6;
+    void getRadioCapsFor(drv, String(radio?.model ?? ''), autoDs, directSampling === 'i' ? 1 : directSampling === 'q' ? 2 : 0,
+                         off, (Number(convLoMhz) || 0) * 1e6, (Number(convHiMhz) || 0) * 1e6).then(setRadioCapsNow);
+  }, [radio?.driver, radio?.model, isIcom, autoDs, directSampling, convOffsetMhz, convLoMhz, convHiMhz, convDown]);
+  /** A row of the modes tree is drawn when this radio can run it and every row above it is drawn (the page's modeCapShown). */
+  const modeCapShown = (tree: ModeEntry[], m: ModeEntry): boolean => {
+    for (let x: ModeEntry | undefined = m; x; x = x.parent ? tree.find((y) => y.id === x!.parent) : undefined) {
+      if (x.node || x.on || x.spotMode) continue;
+      if (!capsAllowMode(radioCapsNow, x.id)) return false;
+    }
+    return true;
+  };
   useEffect(() => { void galleryDisk().then(setGalDisk); }, []);
   /* ★★ Which SDRplay rows this RSP has: its own hwinfo answer as last served (only if it is the same model plugged in
    *  now), else its model from the USB name, else everything — the Setup page's rspCaps. */
@@ -3425,7 +3445,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {/* ★★★ BROADCAST FM DEFAULTS — what a listener starts with in the audio menu's BROADCAST FM row, and whether the
                 server remembers the last listener's or returns to these (vibe_fm_defaults.h; the browser's Setup page has
                 the same card). Not on an Icom (it demodulates in the radio) or with WFM blocked: nothing to act on. */}
-            {!isIcom && !blockedModes.split(/[,;\s]+/).includes('wfm') && (<>
+            {!isIcom && !blockedModes.split(/[,;\s]+/).includes('wfm') && capsAllowSetting(radioCapsNow, 'fmDefaults') && (<>
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>BROADCAST FM DEFAULTS</Text>
             <View style={[styles.card, { borderColor: C.border, marginBottom: 8 }]}>
               <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>FM de-emphasis</Text>
@@ -3940,7 +3960,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {/* ★★ THE WIDE IMPULSE BLANKER (RadioConfig::nbWide: 0 off, 1 auto below 30 MHz — the default, 2 on), the Setup
                 page's words. VibeServerBoot has always applied cfg "nbWide"; the screen never sent it, so every phone ran
                 the default. Not on an Icom: it blanks the IQ capture, which an Icom does not send (AGENTS.md). */}
-            {!isIcom && (<>
+            {!isIcom && capsAllowSetting(radioCapsNow, 'nbWide') && (<>
               <Text style={[styles.section, { color: C.section, fontFamily: F }]}>IMPULSE NOISE BLANKER</Text>
               {([[0, 'Off'], [1, 'Auto (below 30 MHz)'], [2, 'On']] as const).map(([v, label]) => (
                 <OptRow key={v} C={C} F={F} active={nbWide === v} label={label}
@@ -4294,7 +4314,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 {/* ★ Not in Lite: an rtl_tcp stream for external decoders — Lite is a VibeServer only (Stuart, 2026-09-18),
                     and the extra IQ stream is weight a small box should not carry. */}
                 {/* ★ …nor for an Icom, which has no IQ to send. */}
-                {!isLite && !isIcom && (<>
+                {!isLite && !isIcom && capsAllowSetting(radioCapsNow, 'rawIq') && (<>
                 {/* ★★★ RAW IQ OUT. A listener on the web client or the app can ask for the
                     channel they are tuned to as an rtl_tcp stream — 48 kHz over the tunnel, up to
                     250 kHz on the local network — for a decoder the browser cannot run (DSD, a
@@ -4438,13 +4458,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       + 'to moderate.\n\nOne VFO means the DSP cost barely moves with the number of '
                       + 'listeners. What runs out is UPLINK.'}
                 </Text>
-                {/* ★★ V12 VFO A/B — the owner's switch, beside the count because a VFO B takes a listener's place. */}
+                {/* ★★ V12 VFO A/B — the owner's switch, beside the count because a VFO B takes a listener's place.
+                    ★ Not on an Icom (one physical receiver — watchAvailable) nor wherever the caps say no (vibe_radio_caps.h). */}
+                {!isIcom && capsAllowSetting(radioCapsNow, 'vfoB') && (
                 <OptRow C={C} F={F} active={vfoB}
                   label="Let listeners use VFO A/B"
                   hint={'A second frequency on the radio, heard at the same time (lower in the left ear, higher in the right). '
                     + 'Each VFO B costs about one more listener\u2019s processing, and with a listener limit it takes a listener\u2019s '
                     + 'place — it gives way when somebody new arrives.'}
                   onPress={() => { const v = !vfoB; setVfoB(v); AsyncStorage.setItem(K.vfoB, v ? '1' : '0'); }} />
+                )}
                 {/* ★★★ ASK BEFORE TUNING (Stuart, 2026-10-21) — directly after the count, as on the browser's setup page,
                     and only on a shared dial: locked = everybody has their own VFO, one listener = nobody to ask, so
                     the switch would do nothing there (AGENTS.md). Off by default. */}
@@ -4551,10 +4574,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 14 }]}>
                   Modes and decoders — tap to switch off. A decoder's options sit under it.
                 </Text>
+                {/* ★★ V12 what the owner could change to get more (direct sampling, an upconverter) — the engine's words */}
+                {(radioCapsNow?.hints ?? []).map((h) => (
+                  <Text key={h} style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>{h}</Text>
+                ))}
                 {(() => {
                   /* ★★★ THE TREE (2026-10-31) — the setup page's, drawn the same way: a decoder's options indented under
                    *  its switch, greyed with the reason while it is off (never hidden). */
-                  const tree = modeTree().filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id)));
+                  // ★★ V12 and only what THIS radio can run (vibe_radio_caps.h — the Setup page's answer, radioCapsNow)
+                  const full = modeTree();
+                  const tree = full.filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id))).filter((m) => modeCapShown(full, m));
                   const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
                   // ★★ V12 off here only by its REGION DEFAULT — the owner has said nothing either way
                   const regionOff = (id: string) => !!regionDefaults[id] && !own.has(id) && !own.has('+' + id);
