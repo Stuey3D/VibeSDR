@@ -55,8 +55,10 @@ take gamepad navigation** (client fix; the handheld skips the landing page anywa
 ## 0.1 The product (Stuart, 2026-11-05) — "a proper portable radio just powered by VibeSDR"
 
 **Power on.** A VibeSDR splash from the first instant (the bootloader's logo, then an early splash with a **progress
-bar**, then the page's own matching screen while the engine starts) — never a ROCKNIX logo or Linux text. **No "start
-audio" splash**: autoplay is allowed, the receiver opens straight into the waterfall.
+bar**, then the page's own matching screen while the engine starts) — never a ROCKNIX logo or Linux text. **The START RADIO screen
+stays** (Stuart 2026-11-05, superseding "no start-audio splash"): exactly as every receiver has it, with View tutorial and
+the transparency switch — and it works from the pad (D-pad moves, A presses, the tour's NEXT / BACK / SKIP too, B ends
+the tour). Only the server's LANDING page is skipped: power on → START RADIO → the waterfall.
 
 **Radios (hot-swap).** No radio → full screen **"Please connect an SDR"**. Plug one in → the waterfall starts and the menu
 offers only what that radio can do (`vibe_radio_caps.h`: no DAB / ADS-B on an Airspy HF+). Unplug during use → its settings
@@ -195,8 +197,10 @@ ExecStart=/usr/bin/vibeserver --handheld                   # or "profile":"handh
   on disk and the data dir + card are `syncfs`'d (19 ms in the test); the radio process is stopped after the ack.
 - The radio process logs "handheld profile" at start; the supervisor logs every plug, unplug, save and reset.
 
-**Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette 'http://127.0.0.1:48000/?handheld=1'`, with
-autoplay allowed (WPE's default policy allows it; the page needs no gesture). `?handheld` alone does nothing — the page
+**Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette 'http://127.0.0.1:48000/?handheld=1'`. The page
+keeps its START RADIO screen (A on the pad presses it); with autoplay allowed the audio starts on that press, and without
+it the pad's press still dismisses the screen — check on the device that sound starts (a Gamepad press may not count as
+a user activation in WPE: if it does not, allow autoplay in Cog). `?handheld` alone does nothing — the page
 asks `/handheld/session`, which only the handheld engine answers. Cog needs no downloads, no file picker, no storage
 quota beyond localStorage (the look and the DISPLAY choices; everything per radio is the engine's).
 - `&wf20=interp` = the measured fallback for SPECTRUM RATE 20 (10 real frames + repeated rows) — **default is 20 real**;

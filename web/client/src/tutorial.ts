@@ -424,6 +424,8 @@ export function startTutorial() {
 
   panel = document.createElement('div');
   panel.id = 'tutBox';
+  // ★ V12 (R36S, no touchscreen): the tour's own box is where the D-pad moves — NEXT, BACK, SKIP — not the page under it.
+  panel.dataset.navscope = '';
   // ★ Inside #wfWrap so --decBoxBottom means the same thing here as it does for #decBox; body is
   //   the fallback for any page that has not built the waterfall yet.
   (document.getElementById('wfWrap') || document.body).appendChild(panel);

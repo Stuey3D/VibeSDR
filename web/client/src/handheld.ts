@@ -233,6 +233,7 @@ function injectStyle() {
   st.textContent = `
 html[data-handheld] #splash, html[data-handheld] #btnAdmin, html[data-handheld] #adminRow, html[data-handheld] #adminPwRow,
 html[data-handheld] #adminServerRow, html[data-handheld] #chatPanel, html[data-handheld] #secListeners,
+html[data-handheld] #srvHealth, html[data-handheld] #srvBattery,
 html[data-handheld] #linkBars, html[data-handheld] #rawAudioRow, html[data-handheld] #rawAudioNote, html[data-handheld] #mShared,
 html[data-handheld] .hhHide { display: none !important; }
 #hhConnect { position: fixed; inset: 0; z-index: 9000; background: #080601; color: #ffb833; display: flex; flex-direction: column;
@@ -271,7 +272,7 @@ export function showConnect(status = '') {
     el = document.createElement('div');
     el.id = 'hhConnect';
     el.innerHTML = '<div class="logo">VIBESDR</div><div>Please connect an SDR</div>'
-      + '<div class="sub">RTL-SDR · Airspy HF+ · Airspy R2 / Mini · SDRplay RSP · HackRF · USRP<br>into the USB-C port</div>'
+      + '<div class="sub">RTL-SDR · Airspy HF+ · Airspy R2 / Mini<br>SDRplay RSP · HackRF · USRP<br><br>into the USB-C port</div>'
       + '<div class="sub" id="hhConnectSt"></div>';
     document.body.appendChild(el);
   }
@@ -570,7 +571,14 @@ export function buildHandheldMenu(menu: HTMLElement) {
   const r36 = accordion(menu, firstAfterHead, 'R36S HARDWARE');
   const sdr = accordion(menu, firstAfterHead, 'SDR HARDWARE');
   const disp = accordion(menu, firstAfterHead, 'DISPLAY');
-  for (const n of radioNodes) { if (n instanceof HTMLElement && n.tagName === 'H2' && n.textContent?.trim() === 'RADIO') { n.remove(); continue; } sdr.appendChild(n); }
+  // ★ The VIEW rows that sit at the top of RADIO on a small screen (VFO CENTRE, CENTRE / FIT — .mOnly) are display,
+  //   not the radio's hardware: they go to DISPLAY.
+  const viewRows: Node[] = [];
+  for (const n of radioNodes) {
+    if (n instanceof HTMLElement && n.tagName === 'H2' && n.textContent?.trim() === 'RADIO') { n.remove(); continue; }
+    if (n instanceof HTMLElement && n.classList.contains('mOnly')) { viewRows.push(n); continue; }
+    sdr.appendChild(n);
+  }
   // DISPLAY: the handheld's own rows first, then the page's look and view rows.
   const s = hhSettings();
   const [bri, briV] = slider('hhBright', 1, 255, 120, (v) => { savedBright = v; void device({ set: 'brightness', value: v }); });
@@ -585,6 +593,7 @@ export function buildHandheldMenu(menu: HTMLElement) {
   disp.appendChild(row('SCREEN OFF AFTER<span class="sub">Dims at half the time; audio keeps playing; any button wakes it</span>',
     segOf([['0', 'NEVER'], ['1', '1 m'], ['2', '2 m'], ['5', '5 m'], ['10', '10 m']], String(s.screenOffMin),
           (v) => { saveHh({ screenOffMin: Number(v) }); noteInput(); })));
+  for (const n of viewRows) disp.appendChild(n);
   for (const n of displayNodes) {
     if (n instanceof HTMLElement && n.tagName === 'H2' && n.textContent?.trim() === 'DISPLAY') { n.remove(); continue; }
     disp.appendChild(n);

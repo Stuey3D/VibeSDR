@@ -95,8 +95,30 @@ try {
 
   plug("RADIOA", rtlA);
   ok(await p.until(running(), 30000), "radio A plugged in: the page goes straight into the receiver");
-  await sleep(1500);
-  ok(!(await p.js(shown("#audioGate"))), "no \"start audio\" screen (autoplay)");
+  // ★★ THE START SCREEN STAYS (Stuart 2026-11-05) — and on a handheld with no touchscreen it must work from the pad.
+  ok(await p.until(shown("#audioGate"), 10000), "the START RADIO screen is there, as on every receiver");
+  await p.js(`__connect(); 1`);
+  const gateFocus = () => p.js(`(() => { const h = document.querySelector("#audioGate .gpFocus"); return h ? (h.id || h.textContent.trim()) : ""; })()`);
+  const seenGate = new Set();
+  for (let i = 0; i < 8; i++) { await press(p, DOWN); seenGate.add(await gateFocus()); }
+  for (let i = 0; i < 8; i++) { await press(p, UP); seenGate.add(await gateFocus()); }
+  ok(seenGate.has("START RADIO") && seenGate.has("gateTutBtn"), `the D-pad moves on it: ${[...seenGate].filter(Boolean).join(" · ")}`);
+  // the tour, from the pad
+  for (let i = 0; i < 8 && (await gateFocus()) !== "gateTutBtn"; i++) await press(p, DOWN);
+  await press(p, CROSS);
+  ok(await p.until(shown("#tutBox"), 5000), "✕ on View tutorial opens the tour");
+  await sleep(500);
+  await press(p, DOWN);
+  ok(await p.js(`!!document.querySelector("#tutBox .gpFocus")`), `the D-pad moves inside the tour (${await p.js(`(document.querySelector(".gpFocus") || {}).textContent || ""`)})`);
+  await press(p, CIRCLE);
+  ok(await p.until(`!${shown("#tutBox")}`, 5000), "○ ends the tour");
+  // ★ The tour starts the radio itself (the gate goes when its tutorial key is pressed): START is pressed only if it is
+  //   back. Either way it must end with the radio running and the screen gone — all from the pad.
+  if (await p.js(shown("#audioGate"))) {
+    for (let i = 0; i < 8 && (await gateFocus()) !== "START RADIO"; i++) await press(p, UP);
+    await press(p, CROSS);
+  }
+  ok(await p.until(`!document.getElementById("audioGate")`, 5000), "the radio is running, the start screen gone — all from the pad");
   ok(await p.until(`document.getElementById("status").textContent.startsWith("Spectrum rate")`, 6000),
      `the status row: "${await p.js(`document.getElementById("status").textContent`)}"`);
   const st = await p.js(`document.getElementById("status").textContent`);
@@ -182,6 +204,13 @@ try {
   ok(await p.until(running() + ` && JSON.parse(localStorage.getItem("vibesdr_web_prefs_v1") || "{}").hhTestKey === 4242`, 30000), "radio A back: its pref restored");
 
   console.log("── spectrum rate 5 / 10 / 20 (indicative: a Mac, not the R36S) ──");
+  // ★ The hot swap reloaded the page, so START RADIO is up again — and drawing waits behind it: press it (from the pad).
+  await p.js(`__connect(); 1`);
+  for (let i = 0; i < 12 && await p.js(shown("#audioGate")); i++) {
+    for (let k = 0; k < 6 && (await gateFocus()) !== "START RADIO"; k++) await press(p, UP);
+    await press(p, CROSS); await sleep(400);
+  }
+  ok(!(await p.js(shown("#audioGate"))), "START RADIO pressed again after the swap (pad)");
   await p.js(`document.getElementById("mMenu").click(); document.querySelectorAll("#menu .hhAcc")[2].click(); 1`);
   const notes = [];
   for (const r of ["5", "10", "20"]) {

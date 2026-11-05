@@ -2843,7 +2843,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   //    gate can come BACK later if something suspends the context again, exactly as before.
   //    Without the second half a browser that suspends after the first press would be silent with
   //    nothing on screen to say so.
-  let gateDismissed = isHandheld();   // ★ V12 R36S: no welcome screen — straight into the receiver (§0.1)
+  let gateDismissed = false;   // ★ the handheld keeps it too (Stuart 2026-11-05): START RADIO and the tour, on the pad
   /** ★ Set by the gesture that presses the tutorial button, acted on once the gate is off screen:
    *  the tour points at controls the gate is covering, so it cannot start while it is up. */
   let gateWantsTutorial = false;
