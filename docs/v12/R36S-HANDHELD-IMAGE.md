@@ -78,7 +78,7 @@ the card's space, power off / restart.
 
 **The card.** exFAT data partition **`VIBESDR`**, grown to the KERNEL-reported size on first boot after a one-time
 capacity check: `Recordings/`, `Gallery/<DECODER>/` (SSTV, WEFAX, RTTY, NAVTEX, FT8, …), `import/` (bookmark backups,
-imported at start and from an IMPORT key, moved to `import/done/` with a result `.txt`), `export/`, `README.txt`. Names
+imported at start and from an IMPORT key, moved to `import/done/` with a result `.txt`), `export/`, **`Diagnostic logs/`** (EXPORT DIAGNOSTICS on the handheld writes the same scrubbed vibeserver-diagnostics file there, named by UTC time — Stuart 2026-11-05), `README.txt`. Names
 "YYYY-MM-DD HHMM - <kHz> kHz <MODE>.ext" in **UTC**, FAT-safe. **Every write is a temp file + rename**; fsck at boot; mount
 `flush`. Audio recordings: the page hands the WAV to the local engine (Cog has no downloads).
 
@@ -86,7 +86,9 @@ imported at start and from an IMPORT key, moved to `import/done/` with a result 
 chat / shared tuner / background decoding / DX scanner; every hardware control unlocked; the FULL decoder set the radio can
 run (IQ ones too — DAB, ISM, ADS-B). arm64 build (the Pi 500's package).
 
-**Build stages:** (1) bootable image: splash → waterfall on a plugged-in radio, with the hardware fixes above; (2) the
+**ONE IMAGE, ONE CARD WRITE (Stuart 2026-11-05):** everything below ships together. Test what runs after Linux is up on the device over SSH (the /storage/vibetest container, Panfrost) BEFORE the image exists; only the pre-Linux parts (U-Boot logo, splash/progress, Start+Select, first-boot partitioning) wait for the one write.
+
+**Build stages (all in the one image):** (1) bootable image: splash → waterfall on a plugged-in radio, with the hardware fixes above; (2) the
 handheld profile in the engine incl. hot-swap and per-radio memory; (3) the `VIBESDR` partition and card rules; (4) the
 "This device" controls, power button, battery and clock.
 
