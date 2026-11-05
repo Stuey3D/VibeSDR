@@ -5,6 +5,7 @@
 #         /work (a Docker volume: the root tree is built on the VM's own ext4, never on the Mac's shared folder —
 #         ownership, device nodes and xattrs survive there) · /deb (optional: a local vibeserver .deb)
 # Env:    VIBESERVER_DEB=/deb/<file>.deb   (else the newest arm64 vibeserver from apt.vibesdr.net suite $APT_SUITE)
+#         MAPDATA_DEB=/mapdata/vibeserver-mapdata-detail_<v>_all.deb (the high-detail map pack — REQUIRED: no internet)
 #         APT_SUITE=beta · SNAPSHOT=<YYYYMMDDTHHMMSSZ> (snapshot.debian.org, for a reproducible package set)
 #         IMAGE_VERSION=<string> (default: <vibeserver version>-<UTC date>) · JOBS=6
 #
@@ -125,6 +126,17 @@ cp "$DEB" "/cache/"
 in_root apt-get install -y -qq --no-install-recommends "/tmp/vdeb/$(basename "$DEB")" >/dev/null
 VS_VER=$(in_root dpkg-query -W -f '${Version}' vibeserver)
 [ ! -e "$R/usr/lib/vibeserver/cloudflared" ] || die "cloudflared landed on the card"
+# ── 3b. The high-detail map pack (the handheld has no internet: everything past zoom 7 must be on the card) ──
+[ -n "${MAPDATA_DEB:-}" ] && [ -f "$MAPDATA_DEB" ] || die "no map detail pack (MAPDATA_DEB) — build.sh finds or builds it"
+cp "$MAPDATA_DEB" "$R/tmp/vdeb/"
+MAP_SHA=$(sha256sum "$MAPDATA_DEB" | cut -d' ' -f1)
+in_root apt-get install -y -qq --no-install-recommends "/tmp/vdeb/$(basename "$MAPDATA_DEB")" >/dev/null
+MAP_VER=$(in_root dpkg-query -W -f '${Version}' vibeserver-mapdata-detail)
+# ★ the engine looks in <its binary>/../lib/vibeserver/mapdata first (vibe_mapdata.h dir()) — /usr/lib/vibeserver/mapdata;
+#   both packs live there, file sets disjoint, index.json the basic pack's
+MAP_N=$(in_root dpkg -L vibeserver-mapdata-detail | grep -c '^/usr/lib/vibeserver/mapdata/.')
+[ "$MAP_N" -gt 0 ] || die "the map pack installed no files into /usr/lib/vibeserver/mapdata"
+say "map detail pack $MAP_VER: $MAP_N files, $(du -sh "$R/usr/lib/vibeserver/mapdata" | cut -f1) in /usr/lib/vibeserver/mapdata (basic + detail)"
 rm -rf "$R/tmp/vdeb"
 IMAGE_VERSION=${IMAGE_VERSION:-$(echo "$VS_VER" | sed 's/-[0-9]*$//; s/~/-/g')-$(date -u +%Y%m%d)}
 say "engine vibeserver $VS_VER — image version $IMAGE_VERSION"
@@ -243,6 +255,8 @@ S=$R/usr/share/doc/vibesdr-r36s/SOURCES
   echo "  beside this file. Debian's sources: https://snapshot.debian.org (by package and version) or https://sources.debian.org."
   echo
   echo "ENGINE — vibeserver $VS_VER  (package sha256 $DEB_SHA), https://github.com/Stuey3D/VibeSDR"
+  echo "MAPS — vibeserver-mapdata-detail $MAP_VER  (package sha256 $MAP_SHA), built by scripts/build-mapdata-deb.sh from"
+  echo "  assets/mapdata/v1 (Natural Earth and the other sources listed, with their licences, in scripts/gen-map-data.mjs)"
   echo
   echo "OURS — /usr/lib/vibesdr-r36s/* (vibe-hwd, vibe-splash, vibe-card, vibe-bootkeys, vibe-clock, overlay-init, …),"
   echo "  the units in /usr/lib/systemd/system/vibe*.service and /etc: image/r36s/ in the VibeSDR repository."

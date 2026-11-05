@@ -96,6 +96,12 @@ dfs "cat /usr/lib/systemd/system/vibe-cpu.service" | grep -q schedutil || fail "
 dfs "cat /etc/systemd/logind.conf.d/vibe-r36s.conf" | grep -q '^HandlePowerKey=ignore' || fail "logind would take the power key"
 [ -z "$(dfs 'cat /etc/machine-id')" ] || fail "machine-id is baked in"
 dfs "ls /etc/apt/sources.list.d" | grep -q '\.list' && fail "apt sources left on the card"
+# ★★★ THE HIGH-DETAIL MAPS ARE ON THE CARD (no internet on the handheld): the package, and files where the engine looks
+dfs "cat /var/lib/dpkg/status" | grep -qx "Package: vibeserver-mapdata-detail" || fail "the map detail pack (vibeserver-mapdata-detail) is not installed"
+MAPN=$(dfs "ls -p /usr/lib/vibeserver/mapdata" | tr ' ' '\n' | grep -c '\.json\|\.png\|\.gz' || true)
+[ "$MAPN" -ge 100 ] || fail "only $MAPN map files in /usr/lib/vibeserver/mapdata — the detail layers are missing"
+exists /usr/lib/vibeserver/mapdata/index.json || fail "no map index.json (the basic pack's manifest)"
+ok "maps: vibeserver-mapdata-detail installed, $MAPN files in /usr/lib/vibeserver/mapdata (where vibe_mapdata.h looks first)"
 for p in cloudflared unattended-upgrades avahi-daemon; do
   dfs "cat /var/lib/dpkg/status" | grep -qx "Package: $p" && fail "$p is installed"
 done
