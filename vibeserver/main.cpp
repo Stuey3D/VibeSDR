@@ -3115,7 +3115,7 @@ int main(int argc, char** argv) {
                 const IcomPowerRec pw = icomPowerRead(r.serial);
                 if (!pw.state.empty()) {
                     j += ",\"power\":\"" + jsonEscape(pw.state) + "\",\"autoPowerOn\":" + (pw.autoOn ? "true" : "false");
-                    if (pw.state == "off" && (!pw.autoOn || pw.byOwner)) j += ",\"switchedOff\":true";
+                    if (pw.state == "off" && !pw.autoOn) j += ",\"switchedOff\":true";   // ★ auto power-on = available, even after the owner's OFF: it wakes for the next listener (Stuart 11-05)
                 }
             }
             j += ",\"serial\":\"" + jsonEscape(r.serial) + "\"";

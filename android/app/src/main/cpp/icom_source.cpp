@@ -136,7 +136,10 @@ bool IcomSource::requestPowerOn(std::string& why) {
 }
 
 bool IcomSource::autoWakeWanted() const {
-    if (!powerOn_.load() || offByOwner_.load()) return false;   // ★ no option, or the owner switched it off himself
+    /* ★★ AUTO POWER-ON WINS (Stuart, 2026-11-05: "auto power on should power on the radio"). The owner's POWER OFF holds
+     *  only while the people who were here at the press stay (no instant re-wake under the owner's finger); the next
+     *  arrival after nobody was here clears it in setInUse() and wakes the radio. Without the option nothing is sent. */
+    if (!powerOn_.load() || offByOwner_.load()) return false;
     /* ★★ ONLY FOR SOMEBODY WHO IS HERE (Stuart, 2026-11-05): a listener connecting — or background decoding, a DX scan,
      *  ADS-B kept running (the shim's "in use") — wakes a radio that is not answering. With nobody here nothing is sent:
      *  a radio started off, or switched off at its front panel, stays off until it is wanted. */
@@ -145,6 +148,8 @@ bool IcomSource::autoWakeWanted() const {
 
 void IcomSource::setInUse(bool inUse) {
     if (inUse && !inUse_.exchange(true)) {   // ★ somebody arrived: try (and, if the park switched it off, wake) at once
+        // ★ with "Power on the radio over CI-V" an arrival wakes a radio the OWNER switched off too (see autoWakeWanted)
+        if (powerOn_.load() && offByOwner_.exchange(false)) offByIdle_.store(true);
         if (offByIdle_.load() || waiting_.load()) arrivalWake_.store(true);
         if (offByIdle_.load() || waiting_.load()) kick_.store(true);
     }

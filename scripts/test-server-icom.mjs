@@ -424,6 +424,28 @@ await phase([], ['--users', '4', '--icom-power-on', '--icom-no-auto-off', '--ico
   await sleep(5000);
   ok((await st()).offs === 0, '★ never an 18 00 without "Automatically power off the radio when not in use"');
 });
+console.log('── ★★ auto power-on wins over the owner\'s POWER OFF (Stuart 2026-11-05: "auto power on should power on the radio") ──');
+await phase([], ['--users', '4', '--icom-power-on', '--icom-no-auto-off'], async (pt, st) => {
+  const post = (q) => new Promise((res) => {
+    const rq = http.request({ host: '127.0.0.1', port: pt, path: `/vibeserver/icom/power?action=${q}`, method: 'POST' }, (r) => {
+      let b = ''; r.on('data', (d) => { b += d; }); r.on('end', () => res(r.statusCode)); });
+    rq.on('error', () => res(0)); rq.end();
+  });
+  const x = ws(pt, '/ws/user-spectrum?user_session_id=own00001-aaaa&bins=256');
+  ok(await until(() => x.last('hwinfo')?.radio?.linkUp === true, 8000), 'a listener is on the radio');
+  ok(await post('off') === 200, 'the owner presses POWER OFF');
+  ok(await until(async () => (await st()).offs === 1, 3000), 'the radio is switched off (one 18 00)');
+  await sleep(3000);
+  ok((await st()).wakes === 0, '★ no instant re-wake under the owner\'s finger while that listener stays');
+  const radios = await getJson(pt, '/vibeserver/radios');
+  ok(!JSON.stringify(radios || {}).includes('"switchedOff":true'), '★ the radio list does NOT grey it — auto power-on means available');
+  x.close();
+  await sleep(1500);
+  const y = ws(pt, '/ws/user-spectrum?user_session_id=own00002-bbbb&bins=256');
+  ok(await until(async () => (await st()).wakes >= 1, 6000), '★★ the next listener to arrive WAKES it (FE preamble + 18 01)');
+  ok(await until(() => y.last('hwinfo')?.radio?.linkUp === true, 15000), 'and the radio is back for them');
+  y.close();
+});
 console.log('── automatic power-off ticked, power-on NOT ticked ──');
 await phase([], ['--users', '4', '--icom-off-delay', '0'], async (pt, st) => {
   const x = ws(pt, '/ws/user-spectrum?user_session_id=npo00001-aaaa&bins=256');
