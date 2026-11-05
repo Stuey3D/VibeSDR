@@ -496,6 +496,12 @@ if node scripts/test-setup-bg-band.mjs; then pass=$((pass+1)); else fail=$((fail
 #    running radio's ndbHw first), never with NDB blocked, once a profile; frequency and demodulator greyed out; Stuart's
 #    Lenovo profile round-trips; an older {"ndb":true} profile loads as a VFO profile with the skimmer.
 if node scripts/test-setup-bg-ndb.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 (2026-11-05) EVERY RADIO'S TAB SHOWS ONLY WHAT IT CAN DO (vibe_radio_caps.h): the server's answer per driver
+#     (test-radio-caps --json, compiled here) fed to the page's real modeBlockRender / capsApply — exactly the modes its caps
+#     allow, the settings rows (usage, Raw IQ, NB, VFO A/B, FM defaults, DX) follow them, hiding ≠ clearing, the running
+#     radio outranks the door, an older server draws everything. Then the Icom card itself (test-setup-icom).
+if node scripts/test-setup-radio-caps.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node scripts/test-setup-icom.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 THE IDLE DX SCANNER end to end (brief §13): idle past the wait → the scan starts and logs the fake dongle's RDS
 #     stations (their IQ images Suspect); a listener mid-hop gets the dial back and the hop is NOT logged; the cursor resumes;
 #     an old client works normally; promote / clear; DAB in DX mode on the 12D reference capture when VIBE_TEST_AUDIO has it.

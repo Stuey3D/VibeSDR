@@ -826,7 +826,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <input type="text" id="radioName" maxlength="60" autocomplete="off"
                placeholder="Default: the name obtained from the USB port">
       </div>
-      <div class="card">
+      <!-- ★★ V12 (2026-11-05) hidden where the radio cannot do either (an Icom: one audio channel — no window to pin,
+           no VFOs of their own): capsApply(), from vibe_radio_caps.h. -->
+      <div class="card" id="usageCard">
       <h2>How will it be used?</h2>
       <p class="why">This decides what listeners are allowed to change.</p>
       <div class="modes">
@@ -1375,7 +1377,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           them. On a clean signal it blanks nothing. <b>Auto</b> engages it only when the radio is
           below 30 MHz: on a strong VHF broadcast band a blanker trades clicks for damage. Each
           listener also has their own blanker on their own channel, in the audio menu.</div></label>
-      <!-- ★★ V12 VFO A/B — the owner's switch. On by default: one VFO B costs about one more listener. -->
+      <!-- ★★ V12 VFO A/B — the owner's switch. On by default: one VFO B costs about one more listener.
+           ★ Raw IQ, the impulse blanker and this row are hidden on a radio with no IQ capture (an Icom): capsApply(). -->
+      <div id="vfoBRow">
       <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
         <input type="checkbox" id="vfoB" checked style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Let listeners use VFO A/B (two frequencies at once)</span></label>
@@ -1383,6 +1387,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         frequency in the left ear, the higher in the right &mdash; each with its own mode and squelch, anywhere
         inside this radio&rsquo;s window (it never moves the radio). Each VFO&nbsp;B costs about as much as one more
         listener, and on a radio with a listener limit it takes a listener&rsquo;s place until a new listener arrives.</div>
+      </div>
       <!-- (the separate "streams at once" cap moved INTO the raw IQ row above; it only ever
            meant something on a locked window) -->
     </div>
@@ -2934,6 +2939,63 @@ function modeTree() {
   }
   return out;
 }
+/* ★★★ V12 WHAT THIS RADIO CAN DO (vibe_radio_caps.h — Stuart, 2026-11-05: "we shouldnt be offering modes etc that
+ *     cannot be run on that radio"; on the Icom tab, "people will think that they are setting up a standard USB port").
+ *     ONE answer from the server, never a table of this page's own: the RUNNING radio's (GET /vibeserver/hardware
+ *     `caps` — its live model, coverage and widest rate) when it has answered, else the front door's from its CONFIG
+ *     (cfg.radioCaps[serial] — a paused radio, or one not running yet). An older server sends neither: everything is
+ *     drawn exactly as before.
+ *  ★★ HIDING IS NOT CLEARING. A switch this radio cannot use is not drawn, and its saved value stays in the config
+ *     untouched (blockedModes is edited token by token, so a hidden id is never written or removed). */
+let HW_CAPS = null;   // { serial, caps } — the running radio's own answer, for the tab renderHw() last asked about
+function radioCaps(r) {
+  r = r || radio();
+  if (!r) return null;
+  if (HW_CAPS && HW_CAPS.caps && HW_CAPS.serial === String(r.serial || "")) return HW_CAPS.caps;
+  const c = cfg && cfg.radioCaps && r.serial ? cfg.radioCaps[r.serial] : null;
+  return c && typeof c === "object" ? c : null;
+}
+/** Can mode / decoder `id` run on this radio? (true when the server has not said) */
+function capMode(id, r) {
+  const c = radioCaps(r);
+  return !c || !Array.isArray(c.modes) || c.modes.includes(id);
+}
+/** Does setting `k` (usage, vfoB, rawIq, nbWide, fmDefaults, dxScan, bgDecode, ppm, ppb, biasT …) mean anything here? */
+function capSet(k, r) {
+  const c = radioCaps(r);
+  return !c || !c.settings || typeof c.settings !== "object" || c.settings[k] !== false;
+}
+/** A row of the modes tree is drawn when this radio can run it AND every row above it is drawn. The derived rows
+ *  (each digital-spots mode, LoRa's "every channel", the DAB label scan, Band's per-mode list) follow their parent. */
+function modeCapShown(tree, m) {
+  for (let x = m; x; x = x.parent ? tree.find(y => y.id === x.parent) : null) {
+    if (x.node || x.on || x.spotMode) continue;
+    if (!capMode(x.id)) return false;
+  }
+  return true;
+}
+/** ★★ The settings that exist on one kind of radio and not another, drawn from the same answer. Run when a tab is
+ *  filled (the door's answer) and again when the radio itself has answered (renderHw). Visibility only: every value
+ *  stays in the form and in the config exactly as it was. */
+function capsApply() {
+  const r = radio();
+  if (!r) return;
+  const show = (id, yes) => { const e = $(id); if (e) e.classList.toggle("hide", !yes); };
+  show("usageCard", capSet("usage"));
+  if (!capSet("usage")) show("lockedOnly", false);
+  show("rawIqRow", capSet("rawIq"));
+  show("nbWideRow", capSet("nbWide"));
+  show("vfoBRow", capSet("vfoB"));
+  if ($("fmDefCard")) show("fmDefCard", capSet("fmDefaults") && String(r.driver || "") !== "icom" && !modeBlockSet().has("wfm"));
+  if ($("hwBg")) show("hwBg", capSet("bgDecode") && String(r.driver || "") !== "icom");
+  if ($("hwDx")) {
+    show("hwDx", capSet("dxScan") && String(r.driver || "") !== "icom");
+    const fmOnly = String(r.driver || "") === "airspyhf" || !capMode("dab");
+    show("dxBandsWrap", !fmOnly); show("dxBandsFmOnly", fmOnly);
+  }
+  if (r.mode !== "locked") { modeBlockRender(); modeBlockSummary(); }
+}
+
 /** The nearest switch above `id` that is OFF in `off` (null = every one above it is on). */
 function modeOffAncestor(tree, id, off) {
   let m = tree.find(x => x.id === id);
@@ -2953,7 +3015,8 @@ function fmDefRender(r) {
   if (!$("fmDefCard")) return;
   const drv = String((r && r.driver) || "");
   const blocked = modeBlockSet().has("wfm");
-  $("fmDefCard").classList.toggle("hide", drv === "icom" || blocked);
+  // ★ V12 only where WFM can run (vibe_radio_caps.h; `typeof`: a unit test may lift this function out on its own)
+  $("fmDefCard").classList.toggle("hide", drv === "icom" || blocked || (typeof capSet === "function" && !capSet("fmDefaults", r)));
   const dv = [0, 50, 75].includes(Number(r.fmDeemph)) ? String(Number(r.fmDeemph)) : "-1";
   $("fmDeemph").value = dv;
   $("fmStereo").checked = r.fmStereo !== false;
@@ -3072,7 +3135,9 @@ function modeBlockRender() {
   // ★ moved controls out first, so emptying the list cannot take them with it
   for (const id of ["dabScanRow", "bandModeWrap"]) { const n = modeNodeEl(id); if (n && n.parentNode) n.parentNode.removeChild(n); }
   const off = modeBlockSet();
-  const tree = modeTree();
+  // ★★ V12 only what THIS radio can run (vibe_radio_caps.h): an HF+ is not offered DAB, an Icom not WFM (capsApply)
+  const full = modeTree();
+  const tree = full.filter(m => modeCapShown(full, m));
   const kids = id => tree.filter(m => m.parent === id);
   const box = (m) => {
     /* ★★★ DO NOT OFFER A MODE THE MACHINE CANNOT COMPLETE. DAB+ audio is decoded server-side — by
@@ -3108,7 +3173,12 @@ function modeBlockRender() {
   };
   host.innerHTML = tree.filter(m => !m.parent).map(draw).join("");
   for (const ph of host.querySelectorAll("[data-node]")) { const n = modeNodeEl(ph.dataset.node); if (n) ph.appendChild(n); }
-  if (!DAB_DECODER) host.insertAdjacentHTML("beforeend",
+  // ★ What the OWNER could change to get more (direct sampling, a converter) — one line each, never a list of greys
+  { const c = radioCaps();
+    const hints = c && Array.isArray(c.hints) ? c.hints.filter(h => typeof h === "string").slice(0, 4) : [];
+    for (const h of hints) host.insertAdjacentHTML("beforeend",
+      `<div class="hint capsHint" style="flex:1 1 100%;margin-top:8px">${esc(h.slice(0, 400))}</div>`); }
+  if (!DAB_DECODER && tree.some(m => m.id === "dab")) host.insertAdjacentHTML("beforeend",
     `<div class="hint" style="flex:1 1 100%;margin-top:8px">`
     + `<b>DAB is not available on this machine.</b> This server has no decoder for the AAC audio a`
     + ` DAB+ multiplex carries. The VibeServer packages for Linux and the Mac include one (FAAD2,`
@@ -3191,7 +3261,8 @@ function dabLandHwCan() {
   let can;
   if (HW && typeof HW.dabHw === "boolean" && !HW.offline) can = HW.dabHw;
   // ★ A radio that is not running cannot answer; its DRIVER can. The HF+ never reaches 2.048 MS/s.
-  else can = r.driver !== "airspyhf" && DAB_DECODER;
+  // ★ V12 and the door's answer (vibe_radio_caps.h). `typeof`: the unit tests lift this function out on its own.
+  else can = r.driver !== "airspyhf" && DAB_DECODER && (typeof capMode !== "function" || capMode("dab", r));
   // ★ A locked centre with its own VFOs cannot move the capture onto a multiplex (vsDabCapable).
   if (r.mode === "locked" && parseInt($("users").value || "1", 10) > 1) can = false;
   return can && dabLandBlocks().length > 0;
@@ -3254,7 +3325,8 @@ function adsbLandOffer(r, hw, f) {
   const drv = String((r && r.driver) || "");
   let can;
   if (hw && typeof hw.adsbHw === "boolean" && !hw.offline) can = hw.adsbHw;
-  else can = drv !== "airspyhf" && drv !== "icom";
+  // ★ V12 and the door's answer (vibe_radio_caps.h). `typeof`: test-setup-adsb-landing lifts this function out on its own.
+  else can = drv !== "airspyhf" && drv !== "icom" && (typeof capMode !== "function" || capMode("adsb", r));
   if (r && r.mode === "locked" && (f.users || 1) > 1) can = false;   // ★ a locked centre with own VFOs (vsAdsbWhyNot)
   if (!can) return { hw: false, offer: false, why: "" };
   if (f.blocked) return { hw: true, offer: false, why: "ADS-B is switched off for this radio, so it cannot be the landing page." };
@@ -3477,7 +3549,9 @@ function modeBlockSummary() {
   const tree = modeTree();
   // ★ "+" tokens are options switched ON (lora+all), and Band's per-mode words have their own sentence
   const isOn = id => tree.some(m => m.id === id && m.on);
-  const off = all.filter(id => !/^spotsband[+-]/.test(id) && !isOn(id));
+  // ★★ V12 a switch this radio cannot use is not drawn, so it is not named here either (its saved value is kept)
+  const drawn = id => { const m = tree.find(x => x.id === id); return !m || modeCapShown(tree, m); };
+  const off = all.filter(id => !/^spotsband[+-]/.test(id) && !isOn(id) && drawn(id));
   const name = (id) => (tree.find(m => m.id === id) || { label: id }).label;
   const band = all.filter(id => /^spotsband[+-]/.test(id))
     .map(id => id.slice(10).toUpperCase() + (id[9] === "-" ? " off" : " always"));
@@ -4650,8 +4724,10 @@ async function renderHw() {
     if (r.serial && (dir.radios || []).length) mine = !!me && me.serial === r.serial;
   } catch (e) { /* single-radio server: it is always ours */ }
 
+  let liveCaps = null;   // ★★ V12 the radio's own `caps` (vibe_radio_caps.h), kept through the driver fallbacks below
   if (mine) {
     try { hw = await (await fetchSoon("/vibeserver/hardware")).json(); } catch (e) {}
+    liveCaps = hw && hw.caps && typeof hw.caps === "object" && hw.driver && hw.driver !== "none" ? hw.caps : null;
     // ★ Same fallback as the other branch. A control with no options is not "unknown", it is
     //   BROKEN-looking, and the driver's own list is always better than an empty box.
     if (!hw || !hw.rates || !hw.rates.length) {
@@ -4665,6 +4741,7 @@ async function renderHw() {
     try {
       hw = await (await fetchSoon(`/r/${encodeURIComponent(r.serial)}/vibeserver/hardware`)).json();
     } catch (e) { hw = null; }
+    liveCaps = hw && hw.caps && typeof hw.caps === "object" && hw.driver && hw.driver !== "none" ? hw.caps : null;
     if (!hw || !hw.rates || !hw.rates.length) {
       const d = DRIVER_HW[r.driver] || DRIVER_HW.rtl;
       hw = { driver: r.driver, present: false, rates: d.rates, gains: [],
@@ -4705,6 +4782,8 @@ async function renderHw() {
   // ★ Only the sliders are re-wired, not the whole card: renderGain() rewrites the gain boxes from
   //   the stored config, which would wipe a figure the owner was part-way through typing.
   HW = hw;
+  // ★★ V12 the running radio's own answer outranks the door's config-only one — for THIS tab only (radioCaps)
+  HW_CAPS = { serial: String(r.serial || ""), caps: liveCaps };
   modeRateShow(r);   // ★ the rate switch's red line reads HW.rateGuard, which has only now arrived
   /* ★★ V12 2026-10-28: and the background-decoding editor reads HW.spotBands (a Band VFO's band picker) — drawn by
    *  bgLoad BEFORE this answer arrived, so a Band row showed a typed frequency until something redrew it (Stuart,
@@ -4782,7 +4861,15 @@ async function renderHw() {
     //   in another (Stuart, 2026-08-08). The request only ever refreshes what is beneath it.
     if ($("rtlSerialNow")) $("rtlSerialNow").value = (radio().serial || "").trim();
     show("hwPpb",   drv === "airspyhf");
+    // ★★ V12 …and the server's own answer where it gave one (vibe_radio_caps.h settings) — the same rule, one place
+    { const cs = radioCaps(r) && radioCaps(r).settings;
+      if (cs && typeof cs === "object") {
+        if (typeof cs.ppm === "boolean") show("hwPpm", cs.ppm);
+        if (typeof cs.ppb === "boolean") show("hwPpb", cs.ppb);
+        if (typeof cs.biasT === "boolean" && drv !== "sdrplay") show("hwBiasT", cs.biasT);
+      } }
     icomRender(hw, r, drv);
+    capsApply();   // ★★ V12 the radio has answered: its own caps now decide this tab
   }
 
   // ★ Show what the processor is ACTUALLY doing, next to the control that asks for it.
@@ -6124,6 +6211,7 @@ function fill() {
   $("users").value = r.users || 1;
   dabLandRender();
   fmDefRender(r);
+  capsApply();   // ★★ V12 what this radio can do, from the door's answer until the radio's own arrives (renderHw)
 
   if ($("biasT")) $("biasT").checked = !!r.biasT;
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
@@ -6689,7 +6777,8 @@ function bgLoad(r) {
   } catch (e) { /* ★ an unreadable setting shows as off with no profiles — the save then writes a good one */ }
   // ★ An Icom has no IQ to cut channels from (one physical receiver): the control is not offered there (AGENTS.md).
   const drv = String((r && r.driver) || "");
-  if ($("hwBg")) $("hwBg").classList.toggle("hide", drv === "icom");
+  // ★ V12 and the server's answer (vibe_radio_caps.h; `typeof`: the bg tests lift this function out on its own)
+  if ($("hwBg")) $("hwBg").classList.toggle("hide", drv === "icom" || (typeof capSet === "function" && !capSet("bgDecode", r)));
   if ($("bgOn")) $("bgOn").checked = bgModel.on;
   if ($("bgKeepInRange")) $("bgKeepInRange").checked = bgModel.keepInRange;
   if ($("bgWait")) {
@@ -6719,9 +6808,12 @@ function dxLoad(r) {
   const c = j && typeof j === "object" ? j : {};
   const drv = String((r && r.driver) || "");
   // ★ An Icom has no IQ to sweep: not offered there (AGENTS.md — no dead controls).
-  if ($("hwDx")) $("hwDx").classList.toggle("hide", drv === "icom");
+  // ★★ V12 and only where it has a band to sweep: Broadcast FM or DAB (vibe_radio_caps.h dxScan)
+  //    (`typeof`: a unit test may lift this function out on its own)
+  const capsHere = typeof capSet === "function";
+  if ($("hwDx")) $("hwDx").classList.toggle("hide", drv === "icom" || (capsHere && !capSet("dxScan", r)));
   // ★ An Airspy HF+ cannot run DAB (its rates cannot hold a multiplex): FM is the only band — no band menu.
-  const fmOnly = drv === "airspyhf";
+  const fmOnly = drv === "airspyhf" || (capsHere && !capMode("dab", r));
   $("dxBandsWrap").classList.toggle("hide", fmOnly);
   $("dxBandsFmOnly").classList.toggle("hide", !fmOnly);
   $("dxOn").checked = c.on === true;

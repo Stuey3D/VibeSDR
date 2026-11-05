@@ -27,6 +27,7 @@ const mkEl = (id) => {
                                            : (on ? e._cls.add(c) : e._cls.delete(c))),
       contains: (c) => e._cls.has(c),
     },
+    insertAdjacentHTML(_pos, h) { e.innerHTML += h; },
     addEventListener() {}, removeEventListener() {}, appendChild() {}, remove() {}, insertBefore() {},
     querySelector: () => null, closest: () => null, contains: () => false,
     querySelectorAll: () => [], getAttribute: () => null, setAttribute() {}, focus() {},
@@ -56,7 +57,7 @@ globalThis.clearInterval = () => {};
 
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ radios: [] }), text: async () => '' });
 const page = new Function(`${js}
-  return { set cfg(v){cfg=v}, icomRender, icomAutoOffSync };`)();
+  return { set cfg(v){cfg=v}, icomRender, icomAutoOffSync, capsApply };`)();
 const hidden = (id) => $el(id).classList.contains('hide');
 
 console.log('\nThe Icom card');
@@ -94,6 +95,26 @@ ok($el('icomOffDelayMin').value === '30', 'a saved delay is shown (30 min)');
 page.cfg = { radios: [r], icomStatus: { 'IC-7300 03001234': 'VibeServer will not start this radio, because it could transmit: VOX is ON' } };
 page.icomRender({ offline: true }, r, 'icom');
 ok($el('icomPreflight').innerHTML.includes('VOX is ON'), 'not running: the reason from its status file is shown');
+
+// ★★★ 2026-11-05 (Stuart: "people will think that they are setting up a standard USB port"): with the server's caps for an
+//     Icom (vibe_radio_caps.h — the shape the door sends), the usage chooser, Raw IQ out, the impulse blanker and VFO A/B go.
+//     The full per-driver check is test-setup-radio-caps.mjs; this is the Icom tab's own promise.
+{
+  const icomCaps = { iq: false, modes: ['nfm', 'am', 'usb', 'lsb', 'cwu', 'cwl', 'rtty', 'ft8', 'spots'],
+                     settings: { usage: false, vfoB: false, rawIq: false, nbWide: false, fmDefaults: false, dxScan: false, bgDecode: false },
+                     hints: ['An Icom gives VibeServer one demodulated audio channel'] };
+  for (const id of ['usageCard', 'rawIqRow', 'nbWideRow', 'vfoBRow']) $el(id).classList.remove('hide');
+  page.cfg = { radios: [{ ...r, mode: 'single', vfoB: 1, rawIq: 1, nbWide: 2 }], radioCaps: { [r.serial]: icomCaps } };
+  page.capsApply();
+  ok(['usageCard', 'rawIqRow', 'nbWideRow', 'vfoBRow'].every(hidden), 'with the Icom caps: no usage chooser, Raw IQ out, impulse blanker or VFO A/B');
+  const drawnModes = [...$el('modeBlockList').innerHTML.matchAll(/data-mode="([^"]+)"/g)].map((m) => m[1]);
+  ok(!drawnModes.includes('wfm') && !drawnModes.includes('dab') && !drawnModes.includes('adsb') && drawnModes.includes('usb'),
+     `Modes and decoders: the radio's own modes and the audio decoders only (${drawnModes.join(', ')})`);
+  ok(/one demodulated audio channel/.test($el('modeBlockList').innerHTML), 'with the one-line reason');
+  page.cfg = { radios: [{ ...r, driver: 'rtlsdr', serial: 'dongle', mode: 'single' }] };
+  page.capsApply();
+  ok(!['usageCard', 'rawIqRow', 'nbWideRow', 'vfoBRow'].some(hidden), '★ and a dongle tab (no caps from an older server) gets them all back');
+}
 
 page.icomRender({ driver: 'rtl' }, { driver: 'rtl' }, 'rtl');
 ok(hidden('icomCard'), 'a dongle tab hides the Icom card');
