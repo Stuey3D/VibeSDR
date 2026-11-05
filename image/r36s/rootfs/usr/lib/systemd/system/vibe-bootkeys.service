@@ -1,0 +1,13 @@
+[Unit]
+Description=VibeSDR: Start + Select held at power-on = reset the radio's settings
+After=systemd-udev-trigger.service systemd-tmpfiles-setup.service vibe-splash.service
+Before=vibeserver-handheld.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/vibesdr-r36s/vibe-bootkeys
+ExecStartPost=-/usr/lib/vibesdr-r36s/vibe-splash-ctl progress 22
+
+[Install]
+WantedBy=multi-user.target

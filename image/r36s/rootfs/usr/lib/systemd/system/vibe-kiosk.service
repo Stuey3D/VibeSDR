@@ -1,0 +1,34 @@
+[Unit]
+Description=VibeSDR kiosk — Cog (WPE WebKit) full screen on DRM/KMS, the GPU through Panfrost
+Documentation=file:/usr/share/doc/vibesdr-r36s/README.md
+After=vibeserver-handheld.service systemd-user-sessions.service systemd-udev-trigger.service
+Wants=vibeserver-handheld.service
+# ★ Cog has the panel; nothing else may (no getty on tty1, no compositor)
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=vibe-kiosk
+Group=vibe-kiosk
+SupplementaryGroups=video render input audio
+RuntimeDirectory=vibe-kiosk
+RuntimeDirectoryMode=0700
+Environment=HOME=/var/lib/vibe-kiosk
+Environment=XDG_RUNTIME_DIR=/run/vibe-kiosk
+Environment=XDG_CACHE_HOME=/run/vibe-kiosk/cache
+Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/
+# ★ the engine answering → progress 75 → the splash drops the DRM master (keeping its picture up) → Cog starts
+ExecStartPre=+/usr/lib/vibesdr-r36s/vibe-wait-engine
+# ★★ -P drm --platform-params=renderer=gles: no compositor, the GPU through Mesa Panfrost (day one, §0).
+#    --gamepad=manette: the pad through libmanette (the udev rule makes it a gamepad).
+#    --media-playback-requires-user-gesture=false: autoplay — the receiver opens straight into sound, no "start audio".
+#    --bg-color: the splash's own background, so the frames before the page paints never flash white.
+ExecStart=/usr/bin/cog -P drm --platform-params=renderer=gles --gamepad=manette \
+  --media-playback-requires-user-gesture=false --enable-webgl=true --enable-2d-canvas-acceleration=true \
+  --enable-write-console-messages-to-stdout=true --bg-color=#070907FF ${VIBE_ENGINE_URL}
+Restart=always
+RestartSec=1
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

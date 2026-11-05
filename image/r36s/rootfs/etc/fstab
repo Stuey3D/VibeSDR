@@ -1,0 +1,10 @@
+# /etc/fstab — the VibeSDR R36S handheld
+# ★★ / is NOT here: the kernel mounts the ext4 root read-only and overlay-init lays a RAM overlay over it.
+# ★★ The state partition (journalled ext4, 256 MB): the engine's data and the few things that must survive a power cut.
+#    nofail: a damaged state partition still boots the receiver (its settings then live in RAM until it is repaired).
+LABEL=vibestate  /var/lib/vibe-state  ext4  noatime,commit=5,errors=remount-ro,nofail,x-systemd.device-timeout=15s  0 2
+/var/lib/vibe-state/vibeserver  /var/lib/vibeserver  none  bind,nofail,x-systemd.requires-mounts-for=/var/lib/vibe-state  0 0
+/var/lib/vibe-state/kiosk       /var/lib/vibe-kiosk  none  bind,nofail,x-systemd.requires-mounts-for=/var/lib/vibe-state  0 0
+LABEL=VIBEBOOT   /boot/firmware       vfat  ro,noatime,nofail,x-systemd.device-timeout=5s  0 0
+tmpfs            /tmp                 tmpfs mode=1777,size=64M  0 0
+# ★ VIBESDR (exFAT) is not here: vibe-card.service makes it on the first boot, checks it and mounts it at /media/VIBESDR.

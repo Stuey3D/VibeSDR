@@ -1,0 +1,12 @@
+#!/bin/sh
+# vibe-wait-engine — Cog's ExecStartPre: wait (≤ 60 s) for the engine to answer, then hand the panel from the splash
+# to Cog. ★ Never fails the kiosk: on a timeout Cog starts anyway and shows the page's own retry.
+U=${VIBE_ENGINE_URL:-http://127.0.0.1:48000/}
+i=0
+while [ $i -lt 120 ]; do
+  curl -fsS -o /dev/null --max-time 1 "$U" 2>/dev/null && break
+  sleep 0.5; i=$((i + 1))
+done
+/usr/lib/vibesdr-r36s/vibe-splash-ctl progress 75
+/usr/lib/vibesdr-r36s/vibe-splash-ctl handoff
+exit 0

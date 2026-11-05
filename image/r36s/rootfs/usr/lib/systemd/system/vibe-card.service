@@ -1,0 +1,18 @@
+[Unit]
+Description=VibeSDR card: make (first boot), check and mount the VIBESDR exFAT partition
+After=vibe-state-restore.service systemd-udev-trigger.service vibe-splash.service
+Wants=vibe-state-restore.service
+Before=vibeserver-handheld.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/vibesdr-r36s/vibe-card boot
+ExecStartPost=-/usr/lib/vibesdr-r36s/vibe-splash-ctl progress 35
+# ★ the engine is ordered after us, so at power-off it has stopped (and saved) before the card is unmounted
+ExecStop=-/bin/umount /media/VIBESDR
+# ★ the first boot's capacity check + mkfs take a minute or two on a slow card
+TimeoutStartSec=15min
+
+[Install]
+WantedBy=multi-user.target

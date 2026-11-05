@@ -1,0 +1,7 @@
+#!/bin/sh
+# vibe-splash-ctl progress N | message "line|line" | handoff | quit — tell the boot splash something.
+# ★ Never blocks the boot: no splash (FIFO missing, or nobody reading it) = a quiet no-op within a second.
+F=${VIBE_SPLASH_FIFO:-/run/vibe-splash.fifo}
+[ -p "$F" ] || exit 0
+timeout 1 sh -c 'printf "%s\n" "$1" > "$2"' sh "$*" "$F" 2>/dev/null
+exit 0

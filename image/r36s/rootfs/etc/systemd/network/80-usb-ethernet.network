@@ -1,0 +1,11 @@
+# ★ DEVELOPMENT ONLY: a USB Ethernet adapter on the OTG port gets DHCP so SSH (when the owner switches it on) can be
+#   reached. No mDNS, no LLMNR, no link-local chatter — the handheld advertises nothing (§0.1: no server features).
+[Match]
+Type=ether
+
+[Network]
+DHCP=ipv4
+LinkLocalAddressing=no
+MulticastDNS=no
+LLMNR=no
+IPv6AcceptRA=no

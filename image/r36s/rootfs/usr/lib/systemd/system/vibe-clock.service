@@ -1,0 +1,17 @@
+[Unit]
+Description=VibeSDR clock: restore it at boot, save it at power-off (no trusted RTC)
+DefaultDependencies=no
+RequiresMountsFor=/var/lib/vibe-state
+After=var-lib-vibe\x2dstate.mount
+Before=sysinit.target time-set.target shutdown.target
+Wants=time-set.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/vibesdr-r36s/vibe-clock restore
+ExecStop=/usr/lib/vibesdr-r36s/vibe-clock save
+
+[Install]
+WantedBy=sysinit.target

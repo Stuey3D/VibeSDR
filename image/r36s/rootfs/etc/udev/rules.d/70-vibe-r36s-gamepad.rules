@@ -1,0 +1,4 @@
+# ★★ The R36S pad is a GAMEPAD. udev's input_id tags ROCKNIX's r36s_Gamepad (rocknix-singleadc-joypad: ADC sticks +
+#    GPIO buttons) as ID_INPUT_TABLET + ID_INPUT_TABLET_PAD, and libmanette — WebKit's gamepad provider in Cog — skips
+#    tablet pads, so the page saw no pad at all (day one, 2026-11-05). Clear both after 60-input-id.rules has run.
+SUBSYSTEM=="input", ATTRS{name}=="r36s_Gamepad", ENV{ID_INPUT_TABLET}="", ENV{ID_INPUT_TABLET_PAD}="", ENV{ID_INPUT_JOYSTICK}="1"

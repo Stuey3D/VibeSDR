@@ -1,0 +1,12 @@
+[Unit]
+Description=VibeSDR state: folders, and the owner's SSH password back into the RAM /etc
+RequiresMountsFor=/var/lib/vibe-state /var/lib/vibeserver /var/lib/vibe-kiosk
+After=var-lib-vibe\x2dstate.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/vibesdr-r36s/vibe-state-restore
+
+[Install]
+WantedBy=multi-user.target

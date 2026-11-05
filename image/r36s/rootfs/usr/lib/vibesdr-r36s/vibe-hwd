@@ -1,0 +1,529 @@
+#!/usr/bin/python3 -I
+# vibe-hwd — the R36S handheld's hardware service (root). The engine (`vibeserver --handheld`, not root) is its client.
+#
+# ★★★ THE INTERFACE IS docs/v12/R36S-HANDHELD-IMAGE.md §0.2 — newline-delimited JSON on /run/vibe-hwd.sock, ONE reply
+#     line per request, in order; after {"subscribe":true} the same connection also carries event lines (they have an
+#     "event" key, replies never do). The engine relays "This device" to the page; the page never talks to us.
+# ★★ WHAT IT OWNS: the backlight, ALSA master volume + the speaker/headphone mux, the volume and power buttons, the
+#    battery (warning at 10 %, clean shutdown at 3 %), the clock (set + kept across power-offs with no trusted RTC),
+#    and SSH (off on a fresh card; on only after the owner has set a password).
+# ★★ STDLIB ONLY (python3 -I): evdev, ALSA and the RTC are reached through ioctls and amixer, so nothing on the card
+#    can shadow a module and nothing extra has to be installed.
+# ★ Env (for tests): VIBE_HWD_SOCK, VIBE_STATE_DIR, VIBE_HWD_DRYRUN=1 (log poweroff/reboot instead of doing them),
+#   VIBE_SYSFS (prefix for /sys, a fake tree in tests), VIBE_ALSA_CARD.
+import asyncio, ctypes, fcntl, glob, grp, json, math, os, pwd, signal, struct, subprocess, sys, time
+
+SOCK = os.environ.get("VIBE_HWD_SOCK", "/run/vibe-hwd.sock")
+STATE_DIR = os.environ.get("VIBE_STATE_DIR", "/var/lib/vibe-state")
+DRYRUN = os.environ.get("VIBE_HWD_DRYRUN") == "1"
+SYS = os.environ.get("VIBE_SYSFS", "") + "/sys"
+CARD = os.environ.get("VIBE_ALSA_CARD", "rk817ext")
+BL = SYS + "/class/backlight/backlight"
+BAT = SYS + "/class/power_supply/battery"
+CHG = SYS + "/class/power_supply/rk817-charger"
+HWD_JSON = os.path.join(STATE_DIR, "hwd.json")
+SSH_DIR = os.path.join(STATE_DIR, "ssh")
+SSH_FLAG = os.path.join(SSH_DIR, "enabled")
+SSH_HASH = os.path.join(SSH_DIR, "root.hash")
+CLOCK = "/usr/lib/vibesdr-r36s/vibe-clock"
+SPLASH = "/usr/lib/vibesdr-r36s/vibe-splash"
+
+DEFAULT_BRIGHTNESS = 120      # Stuart 2026-11-05: 120/255 out of the box (stock firmware used 200)
+MIN_BRIGHTNESS = 5            # ★ a set to 0 would leave a black screen and no obvious way back; screen-off is the off
+DEFAULT_VOLUME = 60
+VOL_STEP = 5                  # per press / per auto-repeat of a volume button
+LONG_PRESS_S = 2.0            # power button held this long = clean power-off (the PMIC's own hard-off is ~6 s later)
+LOW_PCT, EMPTY_PCT = 10, 3    # Stuart 2026-11-05: warning at 10 %, clean automatic shutdown at 3 %
+ACK_WAIT_S = 5.0              # how long the engine gets to save every radio's memory before we power off
+
+# ── evdev ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+EV_KEY, EV_SW = 0x01, 0x05
+KEY_VOLUMEDOWN, KEY_VOLUMEUP, KEY_POWER = 114, 115, 116
+SW_HEADPHONE_INSERT = 0x02
+EVENT = struct.Struct("llHHi")              # struct input_event on 64-bit: timeval (2 × long), type, code, value
+
+def _IOC(d, t, nr, size): return (d << 30) | (size << 16) | (ord(t) << 8) | nr
+EVIOCGRAB = _IOC(1, "E", 0x90, 4)
+def EVIOCGSW(n): return _IOC(2, "E", 0x1B, n)
+def EVIOCGKEY(n): return _IOC(2, "E", 0x18, n)
+
+def log(*a):
+    print("vibe-hwd:", *a, file=sys.stderr, flush=True)
+
+def rd(path, default=None):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+def wr(path, value):
+    with open(path, "w") as f:
+        f.write(str(value))
+
+def atomic_write(path, data, mode=0o644):
+    # ★ temp + fsync + rename + fsync(dir): a power cut leaves the old file or the new one, never half of either.
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        os.write(fd, data.encode() if isinstance(data, str) else data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, path)
+    dfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+def input_devices():
+    """{name: /dev/input/eventN} for every input device the kernel has right now."""
+    out = {}
+    for p in glob.glob(SYS + "/class/input/event*"):
+        name = rd(p + "/device/name")
+        if name:
+            out.setdefault(name, "/dev/input/" + os.path.basename(p))
+    return out
+
+# ── ALSA (amixer: tiny, always in alsa-utils, and the controls change rarely) ─────────────────────────────────────────
+def amixer(*args):
+    try:
+        r = subprocess.run(["amixer", "-q", "-c", CARD, *args], capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            log("amixer", *args, "failed:", r.stderr.strip())
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log("amixer", *args, "failed:", e)
+        return False
+
+def pct_to_raw(pct):
+    """0..100 → 'Master Playback Volume' 0..255, which the codec spans as −95..0 dB in even steps.
+    ★ alsamixer's own mapping (volume_mapping.c): equal steps sound like equal steps — linear raw values would put
+      all the audible change in the top quarter of the slider."""
+    if pct <= 0:
+        return 0
+    min_db, max_db = -95.0, 0.0
+    min_norm = 10 ** ((min_db - max_db) / 60.0)
+    n = (pct / 100.0) * (1 - min_norm) + min_norm
+    db = 60.0 * math.log10(n) + max_db
+    return max(0, min(255, round((db - min_db) / (max_db - min_db) * 255)))
+
+
+class Hwd:
+    def __init__(self):
+        self.clients = set()          # writers of every connection
+        self.subscribers = set()
+        self.acks = set()
+        self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME}
+        try:
+            with open(HWD_JSON) as f:
+                self.cfg.update({k: v for k, v in json.load(f).items() if k in self.cfg})
+        except (OSError, ValueError):
+            pass
+        self.max_brightness = int(rd(BL + "/max_brightness", "255"))
+        self.screen = "on"
+        self.output = "speaker"
+        self.battery = {"pct": None, "charging": False, "status": "Unknown"}
+        self.low_warned = False
+        self.empty_count = 0
+        self.shutting_down = False
+        self.power_down_at = None
+        self.power_task = None
+        self.save_task = None
+        self.readers = {}             # path → task
+
+    # ── persistence ──
+    def save_soon(self):
+        # ★ debounced: holding a volume button sends ~30 auto-repeats a second; the card gets one write.
+        if self.save_task:
+            self.save_task.cancel()
+        async def later():
+            await asyncio.sleep(2)
+            try:
+                os.makedirs(STATE_DIR, exist_ok=True)
+                atomic_write(HWD_JSON, json.dumps(self.cfg))
+            except OSError as e:
+                log("could not save", HWD_JSON, e)
+        self.save_task = asyncio.get_running_loop().create_task(later())
+
+    # ── backlight ──
+    def apply_brightness(self):
+        if self.screen == "on":
+            try:
+                wr(BL + "/bl_power", 0)
+                wr(BL + "/brightness", self.cfg["brightness"])
+            except OSError as e:
+                log("backlight:", e)
+
+    def set_brightness(self, v):
+        v = int(v)
+        if not 0 <= v <= self.max_brightness:
+            raise ValueError("brightness out of range 0..%d" % self.max_brightness)
+        self.cfg["brightness"] = max(MIN_BRIGHTNESS, v)
+        self.apply_brightness()
+        self.save_soon()
+
+    def set_screen(self, on):
+        want = "on" if on else "off"
+        if want == self.screen:
+            return
+        self.screen = want
+        try:
+            if on:
+                self.apply_brightness()
+            else:
+                # ★ bl_power 4 = FB_BLANK_POWERDOWN: pwm-backlight drops its enable line and stops the PWM — the LEDs
+                #   are what cost the battery. The panel itself keeps scanning out: DPMS needs the DRM master, and that
+                #   is Cog. Audio is untouched (Stuart: short press = screen off, audio keeps playing).
+                wr(BL + "/brightness", 0)
+                wr(BL + "/bl_power", 4)
+        except OSError as e:
+            log("screen:", e)
+        self.emit({"event": "screen", "screen": self.screen})
+
+    # ── audio ──
+    def apply_volume(self):
+        raw = pct_to_raw(self.cfg["volume"])
+        amixer("cset", "name=Master Playback Volume", "%d,%d" % (raw, raw))
+
+    def set_volume(self, v, announce=False):
+        v = int(v)
+        if not 0 <= v <= 100:
+            raise ValueError("volume out of range 0..100")
+        self.cfg["volume"] = v
+        self.apply_volume()
+        self.save_soon()
+        if announce:
+            self.emit({"event": "volume", "volume": v, "muted": v == 0})
+
+    def set_output(self, headphones):
+        # ★ 'Playback Mux' (numid 6 on rk817_ext): item 0 = HP, 1 = SPK. The card is SILENT until it is set — day one.
+        self.output = "headphones" if headphones else "speaker"
+        amixer("cset", "name=Playback Mux", "HP" if headphones else "SPK")
+        self.emit({"event": "output", "output": self.output})
+
+    # ── battery ──
+    def read_battery(self):
+        pct = rd(BAT + "/capacity")
+        status = rd(BAT + "/status", "Unknown")
+        online = rd(CHG + "/online", "0") == "1"
+        return {"pct": int(pct) if pct and pct.lstrip("-").isdigit() else None,
+                "charging": status in ("Charging", "Full") or online, "status": status}
+
+    async def battery_loop(self):
+        while True:
+            b = self.read_battery()
+            if (b["pct"], b["charging"]) != (self.battery["pct"], self.battery["charging"]):
+                self.battery = b
+                if b["pct"] is not None:
+                    self.emit({"event": "battery", "pct": b["pct"], "charging": b["charging"]})
+            self.battery = b
+            pct = b["pct"]
+            if pct is not None and not b["charging"]:
+                if pct <= LOW_PCT and not self.low_warned:
+                    self.low_warned = True
+                    self.emit({"event": "battery_low", "pct": pct})
+                # ★ two readings in a row at or under 3 % — one glitchy fuel-gauge sample must not switch the radio off.
+                self.empty_count = self.empty_count + 1 if pct <= EMPTY_PCT else 0
+                if self.empty_count >= 2:
+                    await self.shutdown("battery", "poweroff")
+            else:
+                self.empty_count = 0
+                if pct is not None and pct > LOW_PCT + 2:
+                    self.low_warned = False
+            await asyncio.sleep(20 if (pct or 100) > 15 else 5)
+
+    # ── shutdown ──
+    async def shutdown(self, reason, how):
+        """Tell the engine, wait ≤ 5 s for its ack (every radio's memory saved), then a clean systemd power-off —
+        which stops the engine, unmounts the card and the state partition, and saves the clock on the way."""
+        if self.shutting_down:
+            return
+        self.shutting_down = True
+        log("shutdown:", reason, how)
+        self.acks.clear()
+        waiting = set(self.subscribers)
+        self.emit({"event": "shutdown", "reason": reason, "inSec": int(ACK_WAIT_S)})
+        t0 = time.monotonic()
+        while waiting - self.acks and time.monotonic() - t0 < ACK_WAIT_S:
+            await asyncio.sleep(0.1)
+        log("engine ack" if waiting and not (waiting - self.acks) else "no ack (%d subscriber(s))" % len(waiting),
+            "after %.1f s" % (time.monotonic() - t0))
+        os.sync()
+        if self.screen == "off":
+            self.set_screen(True)
+        msg = {"battery": "Battery empty — switching off", "power-button": "Switching off",
+               "request": "Restarting" if how == "reboot" else "Switching off"}[reason]
+        if DRYRUN:
+            log("DRYRUN: would stop the kiosk, show '%s' and systemctl %s" % (msg, how))
+            self.shutting_down = False
+            return
+        # ★ Cog holds the display; stop it so the splash can say what is happening while systemd shuts down.
+        subprocess.run(["systemctl", "stop", "vibe-kiosk.service"], timeout=10)
+        subprocess.Popen([SPLASH, "--message", msg, "--no-progress"], stdin=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "--no-block", how])
+
+    # ── clock ──
+    def set_time(self, utc_ms):
+        utc_ms = int(utc_ms)
+        if not 1577836800000 <= utc_ms <= 4102444800000:       # 2020 … 2100: anything else is a bad request
+            raise ValueError("time out of range")
+        time.clock_settime(time.CLOCK_REALTIME, utc_ms / 1000.0)
+        # ★ vibe-clock writes the RTC (when it can be written) and the saved floor/offset on the state partition.
+        subprocess.run([CLOCK, "save"], timeout=10)
+
+    async def clock_loop(self):
+        while True:
+            await asyncio.sleep(600)       # ★ every 10 min: a flat battery loses at most 10 min of the clock floor
+            await asyncio.get_running_loop().run_in_executor(None, lambda: subprocess.run([CLOCK, "save"], timeout=10))
+
+    # ── SSH ──
+    def ssh_state(self):
+        active = subprocess.run(["systemctl", "is-active", "--quiet", "ssh.service"]).returncode == 0
+        return {"ok": True, "ssh": active, "passwordSet": os.path.exists(SSH_HASH)}
+
+    def set_ssh(self, on):
+        if on:
+            if not os.path.exists(SSH_HASH):
+                raise ValueError("no password set")
+            os.makedirs(SSH_DIR, mode=0o700, exist_ok=True)
+            key = os.path.join(SSH_DIR, "ssh_host_ed25519_key")
+            if not os.path.exists(key):
+                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True, timeout=60)
+            atomic_write(SSH_FLAG, "on\n", 0o600)
+            r = subprocess.run(["systemctl", "start", "ssh.service"], capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                raise ValueError("sshd did not start")
+        else:
+            try:
+                os.unlink(SSH_FLAG)
+            except FileNotFoundError:
+                pass
+            subprocess.run(["systemctl", "stop", "ssh.service"], timeout=30)
+
+    def set_ssh_password(self, password):
+        if not isinstance(password, str) or len(password) < 8:
+            raise ValueError("password too short")
+        if len(password) > 256 or any(c in password for c in "\n\r\0:"):
+            raise ValueError("password has a character that cannot be used")
+        # ★★ NEVER LOGGED, never on a command line: chpasswd reads "root:<pw>" on stdin and hashes it (yescrypt) into
+        #    /etc/shadow — the RAM overlay of the read-only root. The HASH (only) is kept on the state partition, and
+        #    vibe-state-restore puts it back into /etc/shadow at every boot.
+        r = subprocess.run(["chpasswd"], input="root:%s\n" % password, text=True, capture_output=True, timeout=30)
+        if r.returncode != 0:
+            raise ValueError("could not set the password")
+        h = None
+        with open("/etc/shadow") as f:
+            for line in f:
+                if line.startswith("root:"):
+                    h = line.split(":")[1]
+        if not h or h[0] in "!*":
+            raise ValueError("could not set the password")
+        os.makedirs(SSH_DIR, mode=0o700, exist_ok=True)
+        atomic_write(SSH_HASH, h + "\n", 0o600)
+
+    # ── the socket ──
+    def emit(self, ev):
+        line = (json.dumps(ev) + "\n").encode()
+        for w in list(self.subscribers):
+            try:
+                w.write(line)
+            except Exception:
+                self.subscribers.discard(w)
+
+    def state(self):
+        b = self.battery if self.battery["pct"] is not None else self.read_battery()
+        return {"ok": True, "brightness": self.cfg["brightness"], "maxBrightness": self.max_brightness,
+                "volume": self.cfg["volume"], "muted": self.cfg["volume"] == 0, "output": self.output,
+                "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen}
+
+    async def handle(self, req, writer):
+        if not isinstance(req, dict):
+            raise ValueError("bad request")
+        if req.get("ack") == "shutdown":
+            self.acks.add(writer)
+            return None                                    # ★ an ack is not a request: no reply line
+        if req.get("subscribe") is True:
+            self.subscribers.add(writer)
+            return {"ok": True}
+        g, s, a = req.get("get"), req.get("set"), req.get("action")
+        if g == "state":
+            return self.state()
+        if g == "ssh":
+            return self.ssh_state()
+        if s == "brightness":
+            self.set_brightness(req.get("value"))
+        elif s == "volume":
+            self.set_volume(req.get("value"))
+        elif s == "time":
+            self.set_time(req.get("utcMs"))
+        elif s == "ssh":
+            await asyncio.get_running_loop().run_in_executor(None, self.set_ssh, bool(req.get("on")))
+        elif s == "ssh-password":
+            await asyncio.get_running_loop().run_in_executor(None, self.set_ssh_password, req.get("password"))
+        elif a in ("poweroff", "reboot"):
+            asyncio.get_running_loop().create_task(self.shutdown("request", a))
+        elif a == "screen-off":
+            self.set_screen(False)
+        elif a == "screen-on":
+            self.set_screen(True)
+        else:
+            raise ValueError("unknown request")
+        return {"ok": True}
+
+    async def client(self, reader, writer):
+        self.clients.add(writer)
+        try:
+            while True:
+                line = await reader.readline()
+                if not line:
+                    break
+                if len(line) > 8192:
+                    reply = {"ok": False, "error": "request too long"}
+                else:
+                    try:
+                        reply = await self.handle(json.loads(line), writer)
+                    except (ValueError, TypeError) as e:
+                        reply = {"ok": False, "error": str(e) or "bad request"}
+                    except Exception as e:      # ★ one bad request must never take the service down
+                        log("request failed:", type(e).__name__)
+                        reply = {"ok": False, "error": "internal error"}
+                if reply is not None:
+                    writer.write((json.dumps(reply) + "\n").encode())
+                    await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            self.clients.discard(writer)
+            self.subscribers.discard(writer)
+            writer.close()
+
+    # ── input ──
+    def on_key(self, dev, code, value):
+        if code in (KEY_VOLUMEUP, KEY_VOLUMEDOWN) and value in (1, 2):        # press + auto-repeat
+            step = VOL_STEP if code == KEY_VOLUMEUP else -VOL_STEP
+            v = max(0, min(100, self.cfg["volume"] + step))
+            if v != self.cfg["volume"] or value == 1:
+                self.set_volume(v, announce=True)
+        elif code == KEY_POWER:
+            loop = asyncio.get_running_loop()
+            if value == 1:
+                self.power_down_at = time.monotonic()
+                async def held():
+                    await asyncio.sleep(LONG_PRESS_S)
+                    self.power_down_at = None
+                    await self.shutdown("power-button", "poweroff")
+                self.power_task = loop.create_task(held())
+            elif value == 0 and self.power_down_at is not None:
+                self.power_down_at = None
+                if self.power_task:
+                    self.power_task.cancel()
+                self.set_screen(self.screen == "off")                         # short press: screen off / on
+        elif dev == "gamepad" and value == 1 and self.screen == "off":
+            self.set_screen(True)                                             # ★ any pad button wakes the screen
+
+    def on_switch(self, code, value):
+        if code == SW_HEADPHONE_INSERT:
+            self.set_output(bool(value))
+
+    async def read_dev(self, kind, path):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError as e:
+            log("cannot open", path, e)
+            return
+        try:
+            if kind in ("power", "volume"):
+                # ★ ours alone: Cog's libinput would otherwise hand KEY_POWER / volume keys to the page as keystrokes.
+                try:
+                    fcntl.ioctl(fd, EVIOCGRAB, 1)
+                except OSError:
+                    pass
+            if kind == "jack":
+                buf = bytearray(8)
+                fcntl.ioctl(fd, EVIOCGSW(len(buf)), buf)
+                self.set_output(bool(buf[0] & (1 << SW_HEADPHONE_INSERT)))
+            loop = asyncio.get_running_loop()
+            q = asyncio.Event()
+            loop.add_reader(fd, q.set)
+            try:
+                while True:
+                    await q.wait()
+                    q.clear()
+                    while True:
+                        try:
+                            data = os.read(fd, EVENT.size * 64)
+                        except BlockingIOError:
+                            break
+                        if not data:
+                            raise OSError("gone")
+                        for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                            _, _, typ, code, value = EVENT.unpack_from(data, i)
+                            if typ == EV_KEY:
+                                self.on_key(kind, code, value)
+                            elif typ == EV_SW:
+                                self.on_switch(code, value)
+            finally:
+                loop.remove_reader(fd)
+        except OSError as e:
+            log(path, "closed:", e)
+        finally:
+            os.close(fd)
+            self.readers.pop(path, None)
+
+    async def input_loop(self):
+        kinds = {"rk805 pwrkey": "power", "adc-keys": "volume", "gpio-keys": "volume",
+                 "rk817_ext Headphones": "jack", "r36s_Gamepad": "gamepad"}
+        jack_seen = False
+        while True:
+            for name, path in input_devices().items():
+                kind = kinds.get(name)
+                if kind and path not in self.readers:
+                    jack_seen |= kind == "jack"
+                    self.readers[path] = asyncio.get_running_loop().create_task(self.read_dev(kind, path))
+            if not jack_seen and self.output != "speaker":
+                self.set_output(False)
+            await asyncio.sleep(5)       # ★ the joypad is a module and can arrive late; a USB keyboard can come and go
+
+    async def main(self):
+        self.apply_brightness()
+        self.apply_volume()
+        if not any(n == "rk817_ext Headphones" for n in input_devices()):
+            self.set_output(False)       # ★ no jack detector: the speaker, never the silent default (HP)
+        if os.path.exists(SSH_FLAG) and os.path.exists(SSH_HASH):
+            subprocess.run(["systemctl", "--no-block", "start", "ssh.service"])
+        try:
+            os.unlink(SOCK)
+        except FileNotFoundError:
+            pass
+        old = os.umask(0o117)
+        server = await asyncio.start_unix_server(self.client, path=SOCK, limit=16384)
+        os.umask(old)
+        # ★ root:vibeserver 0660 — the engine connects, nobody else (§0.2).
+        try:
+            os.chown(SOCK, 0, grp.getgrnam("vibeserver").gr_gid)
+        except KeyError:
+            log("no vibeserver group — socket left root-only")
+        os.chmod(SOCK, 0o660)
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, server.close)
+        log("ready on", SOCK)
+        tasks = [loop.create_task(t) for t in (self.input_loop(), self.battery_loop(), self.clock_loop())]
+        try:
+            await server.serve_forever()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            for t in tasks:
+                t.cancel()
+            if self.save_task and not self.save_task.done():
+                atomic_write(HWD_JSON, json.dumps(self.cfg))
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(Hwd().main())
+    except KeyboardInterrupt:
+        pass
