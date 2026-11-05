@@ -30022,6 +30022,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!dabLogged_) { dabLogged_ = true;
                     LOGI("[DAB] dspLoop is feeding the receiver: %zu samples, rtlCenter %.3f MHz",
                          buf.size(), rtlCenter.load() / 1e6); }
+                /* ★★★ DAB OWNS THE SPECTRUM-ONLY FLAG FOR AS LONG AS IT RUNS — asserted here, on every block, not only at
+                 *  the entry. Stuart's Pi 2, 2026-11-05 (DX Log in DAB mode, then a listener on 9A): a listener arriving
+                 *  mid-sweep got DAB with the WFM chain still demodulating underneath it (vibe-demod 40 % in
+                 *  RxPipeline::demodTail_, vibe-dsp 22 → 70 %) — the Pi at a load of nearly 4, the audio broken, the
+                 *  admin password timing out. Whatever cleared it on the way (a sweep's hand-back racing the entry), DAB
+                 *  can never again carry a second receiver on a 900 MHz board. */
+                if (!perClientDsp() && !rx.spectrumOnly()) {
+                    rx.setSpectrumOnly(true);
+                    LOGI("[DAB] the FM chain was still running under DAB — stopped (spectrum only, as DAB needs)");
+                }
                 /* ★ The PHYSICAL centre — rtlCenter is the logical one and the radio sits
                  *  hwOffsetHz() above it. Reporting the logical figure would show 225.633 for a
                  *  mux at 225.648 and start the next hunt in the wrong place. */
@@ -30086,7 +30096,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  thread still never takes clientMtx. */
                 const bool decoding = sharedDecoderNeedsAudio();
                 const bool idle = s_listenersCached.load(std::memory_order_relaxed) <= 0 && !decoding;
-                if (idle != rxIdleSpectrumOnly_) {
+                /* ★★★ AGAINST THE PIPELINE'S REAL STATE, NOT A CACHED COPY (Pi 2, 2026-11-05). DAB, ISM, NDB, AIS and ADS-B
+                 *  set the same flag on their way in and out; leaving DAB turns it OFF behind this gate's back. With
+                 *  the cache still saying "idle, already off", the gate never put it back — the WFM chain ran for
+                 *  nobody after every DX-scanner DAB sweep, and on into the next listener's DAB (below). */
+                if (idle != rxIdleSpectrumOnly_ || idle != rx.spectrumOnly()) {
                     rxIdleSpectrumOnly_ = idle;
                     if (!idle) rx.requestReset();       // a gap invalidates every recursive state
                     rx.setSpectrumOnly(idle);
