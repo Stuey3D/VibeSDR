@@ -101,7 +101,7 @@ dd if="$IMG" of="$T/state.ext4" bs=512 skip="$S3" count="$Z3" status=none
 e2fsck -fn "$T/state.ext4" >/dev/null 2>&1 || fail "state filesystem has errors"
 [ "$(dumpe2fs -h "$T/state.ext4" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p')" = vibestate ] || fail "state label"
 for d in vibeserver kiosk ssh; do debugfs -R "stat /$d" "$T/state.ext4" 2>/dev/null | grep -q 'Type: directory' || fail "state lacks /$d"; done
-ok "state: ext4 'vibestate' with vibeserver/, kiosk/, ssh/ (the fstab bind mounts work from the first boot)"
+ok "state: ext4 'vibestate' with vibeserver/, kiosk/, ssh/ (vibe-state's bind mounts work from the first boot)"
 
 # ── units parse (systemd-analyze verify on the real tree) ──
 if [ -n "${2:-}" ] && [ -d "$2" ] && command -v systemd-analyze >/dev/null; then

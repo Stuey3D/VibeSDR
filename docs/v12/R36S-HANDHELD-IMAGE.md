@@ -52,6 +52,55 @@ Gotchas found: Sway tiled Cog beside EmulationStation (fullscreen it, or no comp
 until `gstreamer1.0-plugins-base/-good` were present (appsink/appsrc/autoaudiosink); the **landing page's buttons do not
 take gamepad navigation** (client fix; the handheld skips the landing page anyway).
 
+### Image build (2026-11-05) — `image/r36s/` (full detail: `image/r36s/README.md`)
+
+**How to build:** `image/r36s/build.sh [--deb …/vibeserver_…_arm64.deb] [--out DIR]` (Docker on the Mac, `--cpus 6`,
+~10 min) → `vibesdr-r36s-<version>.img.gz` + `.sha256`, `.packages.txt`, `.SOURCES.txt`. `DRY_RUN=1` shows the plan;
+`--verify <img.gz>` re-runs the offline checks. **How to flash:** `diskutil unmountDisk /dev/diskN; gunzip -c
+vibesdr-r36s-<version>.img.gz | sudo dd of=/dev/rdiskN bs=4m`.
+
+**Boot chain:** ROCKNIX 20261101 b's loader (`b_uboot.bin.uart5`, byte-identical to what ROCKNIX wrote on this unit) →
+ROCKNIX's `boot.scr` → our `extlinux.conf` → ROCKNIX's KERNEL (7.1.2) + eeclone DTB + `mipi-panel.dtbo` (its 60.000 Hz
+mode made the default) + `vibe-r36s.dtbo` (stock 408–1296 MHz steps, 1416 off, backlight 120) → **our Debian 13 root
+directly**: `rdinit=` names a missing file so the kernel skips ROCKNIX's built-in initramfs and mounts `root=PARTUUID`
+read-only; `overlay-init` lays a RAM overlay and execs systemd. (ROCKNIX's initramfs + SYSTEM route rejected: its init
+would grow `/storage` over VIBESDR and run ROCKNIX's update hooks.) Layout: loader · p1 FAT32 VIBEBOOT 128 MiB · p2 ext4
+root ~1.3 GB (read-only) · p3 ext4 `vibestate` 256 MiB · p4 exFAT `VIBESDR` made on first boot.
+
+**Proven on the unit before the card write** (the image's own root tree run under ROCKNIX with `pivot_root`, sandbox ON):
+
+| | Result |
+|---|---|
+| 60 Hz | the 23.04 MHz mode: **59.999 Hz** measured over 120 vblanks (80 Hz default: 80.056) |
+| Splash → Cog | `vibe-splash` on DRM, progress + messages; hand-off with the picture kept up, Cog had the panel **3.9–10.4 s** later (page load) |
+| Cog kiosk | unprivileged `vibe-kiosk`, bubblewrap ON, Panfrost (4 DRM fds), live waterfall from the Pi 2: **WPEWebProcess 58–64 %** at 80 Hz, cog 7 %, 357 MB used of 730 |
+| Gamepad | the real `r36s_Gamepad` reaches the page: **mapping "standard", 17 buttons, 4 axes**; a pad press is a gesture — AudioContext suspended → **running**, ALSA RUNNING |
+| Autoplay | `--media-playback-requires-user-gesture=false` does **not** start WebAudio in WPE 2.48 (stays suspended) — moot: the start screen + A press stays (Stuart) |
+| vibe-hwd | every §0.2 request; volume keys (uinput stand-ins) → raw 220→235→226 + `volume` events; jack in/out → mux HP/SPK + `output`; short power → `bl_power` 4 / brightness 0, a pad press wakes; 2 s hold → `shutdown` event, ack after 1.0 s honoured; SSH password → yescrypt hash only (0600), never in a log |
+| Clock | `set time` + `vibe-clock save` set the RK817 RTC (read back within 1 s); offset + floor saved |
+| Start + Select | flag written with both held (uinput pad); the real pad untouched → normal start |
+| Card | on a 4 GiB loop file, the R36S's own kernel: capacity check 61.7 s (98 samples), p4 to the kernel's full size, exFAT VIBESDR mounted as `vibeserver`, folders + README; second boot + a dirty volume fsck and mount. Simulated fakes: 64 GB claiming / 8 GiB real → 8.59 GB found; drop-writes 128/4 GB → 3.99 GB; every touched block restored |
+| `flush` | **rejected by Linux's exfat driver** ("Unknown parameter 'flush'" — it is vfat's): the same effect from the writeback timers (dirty data on the card within ~2 s) + the engine's temp + fsync + rename |
+
+**Only the card write can prove:** U-Boot reading our extlinux (FDT + two overlays), the kernel booting the ext4 root with
+`rdinit=`/`ro`/`init=overlay-init`, the 60 Hz mode as the PREFERRED one (offline: fdtoverlay applies it), the CPU steps
+in `scaling_available_frequencies`, Debian's udev naming the devices, first-boot partitioning of the real card,
+the splash from the first kernel frame, power-off/battery shutdown for real, and everything with a radio (OTG cannot
+carry a radio and the Ethernet adapter at once: hot-swap, per-radio memory, decoders, CPU with the engine).
+
+**Decisions for Stuart:**
+1. **No logo before the kernel.** ROCKNIX's mainline U-Boot has no PX30 display driver, so the panel is dark for the
+   ~1–2 s of U-Boot; the first light is our splash. A logo from the first instant means a U-Boot with a PX30
+   VOP/DSI driver (a U-Boot project, and an untested loader on the card) — worth it?
+2. **A short power press only blanks the backlight** (`bl_power` 4); the panel keeps scanning out, because DPMS needs
+   the DRM master (Cog). The page should also stop drawing on `{"event":"screen","screen":"off"}` to save the CPU.
+3. **SSH logs in as root** with the owner's password (development access needs root: `remount,rw /media/root-ro`).
+   A dedicated user is possible if you prefer.
+4. **The client must start audio from the pad:** its gate resumes on pointer/key/focus only; on the Pi 2 page an A press
+   did not start audio. The gamepad A handler needs `audio.resume()` (proven to work from the gamepad poll).
+5. **Known limit of the capacity check:** a fake that wraps at a size that is not a power of two is not caught (those
+   usually drop writes too, which is caught). A power cut during the ~1 min first-boot check on a fake card can damage it.
+
 ## 0.1 The product (Stuart, 2026-11-05) — "a proper portable radio just powered by VibeSDR"
 
 **Power on.** A VibeSDR splash from the first instant (the bootloader's logo, then an early splash with a **progress
