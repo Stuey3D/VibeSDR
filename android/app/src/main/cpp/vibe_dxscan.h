@@ -240,6 +240,11 @@ struct Entry {
     std::string promoted;                // promoted_bookmark_id ("" = not promoted)
     std::vector<Opening> openings;
     uint32_t lastSweep = 0;              // the band's sweep number when last heard ("Live now")
+    /* ★★ VISITS THAT LOOKED AND MISSED IT since it was last heard (Stuart, 2026-11-05: "heard 117 times in 5 openings" on a
+     *  local that never went away — that's the confusing line). An opening ends only when the scanner actually swept its
+     *  block or hop and did not hear it; time the scanner was NOT sweeping (a listener on the radio, a restart, an
+     *  update) is not a gap in reception and must not split a run. */
+    uint32_t missedVisits = 0;
     // presence buckets (4 h each): visits of the hop/block that covers it, and how many of those heard it
     int32_t  bStamp[kBuckets] = {};
     uint16_t bVisits[kBuckets] = {}, bHits[kBuckets] = {};
@@ -552,8 +557,8 @@ public:
             first = false;
             j += entryJson(e, true);
             j.pop_back();   // reopen the object for the private fields
-            std::snprintf(b, sizeof b, ",\"khz\":%d,\"piN\":%u,\"dc\":%d,\"hw\":%d,\"blk\":%d,\"eidN\":%u,\"tm\":%d,\"ts\":%d,\"lastSweep\":%u,\"buckets\":[",
-                          e.khz, e.pi, e.dcKhz, e.halfKhz, e.block, e.eid, e.tiiMain, e.tiiSub, e.lastSweep);
+            std::snprintf(b, sizeof b, ",\"khz\":%d,\"piN\":%u,\"dc\":%d,\"hw\":%d,\"blk\":%d,\"eidN\":%u,\"tm\":%d,\"ts\":%d,\"lastSweep\":%u,\"mv\":%u,\"buckets\":[",
+                          e.khz, e.pi, e.dcKhz, e.halfKhz, e.block, e.eid, e.tiiMain, e.tiiSub, e.lastSweep, e.missedVisits);
             j += b;
             bool fb = true;
             for (int i = 0; i < kBuckets; ++i) {
@@ -620,6 +625,7 @@ public:
                 e.presence = (float)num(o, "presence", 0);
                 e.promoted = o.str("promoted");
                 e.lastSweep = (uint32_t)num(o, "lastSweep", 0);
+                e.missedVisits = (uint32_t)num(o, "mv", 0);
                 if (const Json* ol = o.get("openingList"); ol && ol->kind == Json::Arr) {
                     for (size_t i = ol->a.size(); i-- > 0;) {   // stored newest first
                         const Json& p = ol->a[i];
@@ -706,6 +712,7 @@ private:
             if (!src.ensLabel.empty()) dst.ensLabel = src.ensLabel;
         }
         dst.lastSweep = std::max(dst.lastSweep, src.lastSweep);
+        dst.missedVisits = 0;   // ★ split rows each "missed" the visits the other one heard — meaningless once folded
         dst.peakLevelDb = std::max(dst.peakLevelDb, src.peakLevelDb);
         dst.peakSnrDb = std::max(dst.peakSnrDb, src.peakSnrDb);
         if (dst.ecc < 0) dst.ecc = src.ecc;
@@ -763,7 +770,10 @@ private:
     /** One detection of `e`: counters, peaks, the opening (new after the gap), and the alert if it is DX. */
     void heardOne(Entry& e, bool isNew, float level, float snr, int64_t now, const std::vector<std::string>& svcs,
                   VisitResult& vr, uint32_t sweepNow) {
-        const bool newOpening = e.openings.empty() || now - e.openings.back().end > gapSec_;
+        // ★ a NEW opening needs both: over the gap since it was last heard, AND at least one visit in that time that missed
+        //   it (missedVisits). Silence from not looking is not an end of reception.
+        const bool newOpening = e.openings.empty() || (now - e.openings.back().end > gapSec_ && e.missedVisits > 0);
+        e.missedVisits = 0;
         if (newOpening) {
             Opening o; o.start = now; o.end = now;
             e.openings.push_back(o);
@@ -794,6 +804,7 @@ private:
         if (e.bStamp[slot] != nb) { e.bStamp[slot] = nb; e.bVisits[slot] = 0; e.bHits[slot] = 0; }
         if (e.bVisits[slot] < 65535) ++e.bVisits[slot];
         if (hit && e.bHits[slot] < 65535) ++e.bHits[slot];
+        if (!hit && e.missedVisits < 0xFFFFFFu) ++e.missedVisits;   // ★ it looked and did not hear it — see Entry::missedVisits
         judge(e, now);
     }
 
