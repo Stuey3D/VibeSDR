@@ -30,8 +30,32 @@ def uinput(name, keys):
     time.sleep(6)          # ★ vibe-hwd rescans input devices every 5 s
     return fd
 
+def uinput_pad(name, bus, vendor, product, hold_s=0.15, wait_s=4.0):
+    """A gamepad udev calls a joystick (buttons + two axes); presses BTN_SOUTH ("A") once after wait_s."""
+    EV_ABS, UI_SET_ABSBIT = 3, IOW(103, 4)
+    fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY); fcntl.ioctl(fd, UI_SET_EVBIT, EV_ABS)
+    for k in (0x130, 0x131, 0x133, 0x134, 0x136, 0x137, 0x13A, 0x13B, 0x13C):
+        fcntl.ioctl(fd, UI_SET_KEYBIT, k)
+    for ax in (0, 1, 3, 4):
+        fcntl.ioctl(fd, UI_SET_ABSBIT, ax)
+    absmax = [0] * 64; absmin = [0] * 64
+    for ax in (0, 1, 3, 4):
+        absmax[ax], absmin[ax] = 32767, -32768
+    dev = name.encode().ljust(80, b"\0") + struct.pack("4HI", bus, vendor, product, 1, 0) \
+        + struct.pack("64i", *absmax) + struct.pack("64i", *absmin) + b"\0" * (2 * 64 * 4)
+    os.write(fd, dev)
+    fcntl.ioctl(fd, UI_DEV_CREATE)
+    time.sleep(wait_s)
+    emit(fd, EV_KEY, 0x130, 1); time.sleep(hold_s); emit(fd, EV_KEY, 0x130, 0)
+    return fd
+
 a = sys.argv[1:]
-if a[0] == "volume":
+if a[0] == "pad-a":
+    # ★ an Xbox 360 pad's identity (USB 045e:028e): libmanette surely has its mapping, so this tests the GESTURE alone
+    fd = uinput_pad("Microsoft X-Box 360 pad", 0x03, 0x045E, 0x028E, wait_s=float(a[1]) if len(a) > 1 else 4.0)
+    time.sleep(3)
+elif a[0] == "volume":
     k = 115 if a[1] == "up" else 114
     fd = uinput("gpio-keys", [114, 115])
     for _ in range(int(a[2]) if len(a) > 2 else 1):

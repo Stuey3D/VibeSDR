@@ -165,7 +165,7 @@ for u in getty@tty1.service systemd-networkd-wait-online.service apt-daily.timer
 done
 in_root systemctl disable ssh.service ssh.socket >/dev/null 2>&1 || true
 in_root systemctl mask ssh.socket >/dev/null 2>&1 || true
-for u in vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state-restore.service vibe-hwd.service \
+for u in vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service \
          vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service systemd-networkd.service; do
   in_root systemctl enable "$u" >/dev/null
 done

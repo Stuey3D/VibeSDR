@@ -3,9 +3,9 @@ Description=VibeServer — the handheld engine (127.0.0.1 only)
 Documentation=https://vibesdr.net
 # ★★ THE HANDHELD PROFILE of the same vibeserver (§0.1): local only, no tunnel / listing / mDNS / admin. Its exact
 #    command line is the engine's half of the work (§0.2); this unit is the image's half: user, paths, ordering.
-After=vibe-hwd.service vibe-card.service vibe-bootkeys.service vibe-state-restore.service vibe-clock.service
+After=vibe-hwd.service vibe-card.service vibe-bootkeys.service vibe-state.service vibe-clock.service
 Wants=vibe-hwd.service vibe-card.service vibe-bootkeys.service
-RequiresMountsFor=/var/lib/vibeserver
+# ★ After vibe-state, never Requires: a missing state partition must not stop the radio (settings then in RAM)
 
 [Service]
 Type=simple

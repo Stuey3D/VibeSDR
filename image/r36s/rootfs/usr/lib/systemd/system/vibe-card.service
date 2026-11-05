@@ -1,7 +1,7 @@
 [Unit]
 Description=VibeSDR card: make (first boot), check and mount the VIBESDR exFAT partition
-After=vibe-state-restore.service systemd-udev-trigger.service vibe-splash.service
-Wants=vibe-state-restore.service
+After=vibe-state.service systemd-udev-trigger.service vibe-splash.service
+Wants=vibe-state.service
 Before=vibeserver-handheld.service
 
 [Service]

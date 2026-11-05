@@ -20,11 +20,13 @@ Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/
 # ★ the engine answering → progress 75 → the splash drops the DRM master (keeping its picture up) → Cog starts
 ExecStartPre=+/usr/lib/vibesdr-r36s/vibe-wait-engine
 # ★★ -P drm --platform-params=renderer=gles: no compositor, the GPU through Mesa Panfrost (day one, §0).
-#    --gamepad=manette: the pad through libmanette (the udev rule makes it a gamepad).
-#    --media-playback-requires-user-gesture=false: autoplay — the receiver opens straight into sound, no "start audio".
+#    --gamepad=manette: the pad through libmanette (the udev rule makes it a gamepad). ★★★ ESSENTIAL: the page keeps
+#    its start / audio screen and the A press on the pad is the gesture that starts the audio (Stuart 2026-11-05).
+#    WebKit's media defaults are left alone. (A plain --media-playback-requires-user-gesture=false does NOT let WebAudio
+#    start without a gesture in WPE 2.48 — measured 2026-11-05: the AudioContext stays suspended.)
 #    --bg-color: the splash's own background, so the frames before the page paints never flash white.
 ExecStart=/usr/bin/cog -P drm --platform-params=renderer=gles --gamepad=manette \
-  --media-playback-requires-user-gesture=false --enable-webgl=true --enable-2d-canvas-acceleration=true \
+  --enable-webgl=true --enable-2d-canvas-acceleration=true \
   --enable-write-console-messages-to-stdout=true --bg-color=#070907FF ${VIBE_ENGINE_URL}
 Restart=always
 RestartSec=1

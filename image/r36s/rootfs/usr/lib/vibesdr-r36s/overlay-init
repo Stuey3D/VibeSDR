@@ -28,4 +28,7 @@ pivot_root . media/root-ro || fallback "pivot_root failed"
 mount --move /media/root-ro/media/root-rw /media/root-rw 2>/dev/null
 mount --move /media/root-ro/dev /dev 2>/dev/null || mount -t devtmpfs devtmpfs /dev
 umount /media/root-ro/proc 2>/dev/null
-exec chroot . /sbin/init "$@" </dev/console >/dev/console 2>&1
+# ★★ no stdio redirect: PID 1 already holds the kernel's console, and a failed redirect (no /dev/console) would end the
+#    shell — PID 1 exiting is a kernel panic. A failed exec falls back to systemd on the read-only root.
+exec chroot . /sbin/init "$@"
+fallback "exec chroot failed"

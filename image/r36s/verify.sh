@@ -71,11 +71,11 @@ for f in /usr/lib/vibesdr-r36s/vibe-hwd /usr/lib/vibesdr-r36s/vibe-splash /usr/l
 done
 exists /usr/lib/vibeserver/cloudflared && fail "cloudflared is on the card"
 WANTS=/etc/systemd/system/multi-user.target.wants
-for u in vibe-hwd vibe-bootkeys vibe-card vibe-state-restore vibeserver-handheld vibe-kiosk systemd-networkd; do
+for u in vibe-hwd vibe-bootkeys vibe-card vibeserver-handheld vibe-kiosk systemd-networkd; do
   exists "$WANTS/$u.service" || fail "$u.service is not enabled"
 done
 exists /etc/systemd/system/sysinit.target.wants/vibe-splash.service || fail "vibe-splash is not enabled"
-exists /etc/systemd/system/sysinit.target.wants/vibe-clock.service || fail "vibe-clock is not enabled"
+for u in vibe-clock vibe-state; do exists /etc/systemd/system/sysinit.target.wants/$u.service || fail "$u is not enabled"; done
 for u in vibeserver.service getty@tty1.service ssh.socket apt-daily.timer apt-daily-upgrade.timer systemd-networkd-wait-online.service; do
   [ "$(link "/etc/systemd/system/$u")" = /dev/null ] || fail "$u is not masked"
 done
@@ -86,7 +86,7 @@ dfs "cat /etc/shadow" | grep -E '^root:' | cut -d: -f2 | grep -qx '\*' || fail "
 dfs "cat /etc/shadow" | awk -F: '$2 !~ /^[*!]/ {print $1}' | grep -q . && fail "an account has a password in the image"
 dfs "cat /etc/udev/rules.d/70-vibe-r36s-gamepad.rules" | grep -q 'ENV{ID_INPUT_TABLET_PAD}=""' || fail "gamepad udev rule"
 dfs "cat /etc/modprobe.d/vibe-r36s-gpu.conf" | grep -q '^blacklist mali_kbase' || fail "mali_kbase not blacklisted"
-dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q -- '--media-playback-requires-user-gesture=false' || fail "autoplay flag"
+dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q -- '--gamepad=manette' || fail "Cog without the gamepad (the A press starts the audio)"
 dfs "cat /usr/lib/systemd/system/vibe-cpu.service" | grep -q schedutil || fail "governor"
 dfs "cat /etc/systemd/logind.conf.d/vibe-r36s.conf" | grep -q '^HandlePowerKey=ignore' || fail "logind would take the power key"
 [ -z "$(dfs 'cat /etc/machine-id')" ] || fail "machine-id is baked in"
@@ -94,7 +94,7 @@ dfs "ls /etc/apt/sources.list.d" | grep -q '\.list' && fail "apt sources left on
 for p in cloudflared unattended-upgrades avahi-daemon; do
   dfs "cat /var/lib/dpkg/status" | grep -qx "Package: $p" && fail "$p is installed"
 done
-ok "root: services enabled, server units + getty + apt timers masked, SSH disabled with no keys and no password, udev rule, Panfrost, schedutil, autoplay"
+ok "root: services enabled, server units + getty + apt timers masked, SSH disabled with no keys and no password, udev rule, Panfrost, schedutil, Cog with the gamepad"
 
 # ── state partition ──
 dd if="$IMG" of="$T/state.ext4" bs=512 skip="$S3" count="$Z3" status=none
@@ -105,7 +105,7 @@ ok "state: ext4 'vibestate' with vibeserver/, kiosk/, ssh/ (the fstab bind mount
 
 # ── units parse (systemd-analyze verify on the real tree) ──
 if [ -n "${2:-}" ] && [ -d "$2" ] && command -v systemd-analyze >/dev/null; then
-  U="vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state-restore.service vibe-hwd.service vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service"
+  U="vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service"
   OUT=$(cd "$2/usr/lib/systemd/system" && SYSTEMD_LOG_LEVEL=notice systemd-analyze verify --root="$2" $U 2>&1 | grep -v -E 'Cannot add dependency job|is not executable|Failed to (connect|put)|bpf|kmsg|No such file or directory.*(dbus|proc)' || true)
   if [ -n "$OUT" ]; then echo "$OUT" | sed 's/^/      /'; fail "systemd-analyze verify reported problems"; fi
   ok "systemd-analyze verify: the image's units parse"

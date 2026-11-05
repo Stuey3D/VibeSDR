@@ -1,8 +1,8 @@
 [Unit]
 Description=VibeSDR hardware service (backlight, volume, power button, battery, clock, SSH)
 Documentation=file:/usr/share/doc/vibesdr-r36s/README.md
-After=vibe-state-restore.service systemd-udev-trigger.service sound.target
-Wants=vibe-state-restore.service
+After=vibe-state.service systemd-udev-trigger.service sound.target
+Wants=vibe-state.service
 Before=vibeserver-handheld.service
 
 [Service]

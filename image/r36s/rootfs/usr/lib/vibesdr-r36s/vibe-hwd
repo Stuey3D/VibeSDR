@@ -309,7 +309,7 @@ class Hwd:
             raise ValueError("password has a character that cannot be used")
         # ★★ NEVER LOGGED, never on a command line: chpasswd reads "root:<pw>" on stdin and hashes it (yescrypt) into
         #    /etc/shadow — the RAM overlay of the read-only root. The HASH (only) is kept on the state partition, and
-        #    vibe-state-restore puts it back into /etc/shadow at every boot.
+        #    vibe-state puts it back into /etc/shadow at every boot.
         r = subprocess.run(["chpasswd"], input="root:%s\n" % password, text=True, capture_output=True, timeout=30)
         if r.returncode != 0:
             raise ValueError("could not set the password")

@@ -69,7 +69,7 @@ build and an unproven card, so it is used exactly as ROCKNIX wrote it on this un
 
 **Read-only root, and why.** A battery can die mid-write. The ext4 root is never written on the device (kernel `ro`
 + a RAM overlay — the Portable's overlayroot idea without an initramfs), so it cannot be corrupted. What must
-persist lives on p3 (journalled ext4, `commit=5`, fsck'd every boot, `nofail` so a damaged one still boots the radio)
+persist lives on p3 (journalled ext4, `commit=5`, fsck'd every boot by `vibe-state` — a bounded wait, never fstab: a missing or damaged one costs that boot's saved settings, never the radio)
 and on p4 (exFAT, fsck'd every boot; the engine writes temp + rename). Developer hot-fix: `mount -o remount,rw
 /media/root-ro`, edit, `sync`, reboot.
 
@@ -93,7 +93,7 @@ and on p4 (exFAT, fsck'd every boot; the engine writes temp + rename). Developer
 - **60 Hz:** the panel overlay lists twelve 640×480 modes and marks 80.046 Hz `default=1`; Cog takes the PREFERRED mode
   and cannot pick by refresh (every mode is named "640x480"). `board/panel-60hz.py` moves `default=1` to the
   23.04 MHz mode (750 × 512 → 60.000 Hz) — the same bytes otherwise, same length.
-- **Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette --media-playback-requires-user-gesture=false`
+- **Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette` — WebKit's media defaults untouched: the page keeps its start / audio screen and the **A press on the pad** starts the audio (Stuart, 2026-11-05)
   as user `vibe-kiosk`, `Restart=always`, `Nice=5` (below the engine). WebKit sandbox ON (bubblewrap).
 - **Gamepad:** `70-vibe-r36s-gamepad.rules` clears `ID_INPUT_TABLET{,_PAD}` on `r36s_Gamepad` (libmanette skips tablet pads).
 - **Audio:** GStreamer → ALSA directly (`gstreamer1.0-alsa`; the browser is the only thing making sound). `vibe-hwd` sets
@@ -109,7 +109,7 @@ and on p4 (exFAT, fsck'd every boot; the engine writes temp + rename). Developer
 | `vibe-splash` | the boot screen (above) |
 | `vibe-clock` | restores the clock at boot (RTC + saved offset, never earlier than the last save or the build), saves it at power-off |
 | `vibe-cpu` | schedutil, max 1296 MHz |
-| `vibe-state-restore` | state folders; puts the owner's SSH password hash back into the RAM `/etc/shadow` |
+| `vibe-state` | finds p3 (≤ 10 s), fsck (-p, then -y), mounts it, binds `/var/lib/vibeserver` + the browser's data, puts the SSH hash back into the RAM `/etc/shadow`, mounts VIBEBOOT read-only; every failure carries on in RAM |
 | `vibe-hwd` | the hardware service, `/run/vibe-hwd.sock` (§0.2) |
 | `vibe-bootkeys` | Start + Select held at power-on → `/run/vibe-handheld/reset-radio` + "Radio settings reset" |
 | `vibe-card` | first boot: capacity check → p4 → exFAT `VIBESDR`; every boot: `fsck.exfat -p`, mount at `/media/VIBESDR`, folders |
@@ -154,6 +154,14 @@ damage the card.
   option (needs a kernel with exFAT: the R36S, not colima).
 - `test/device-hwd-test.sh` + `test/fake-keys.py` + `test/hwd-client.py` — `vibe-hwd` on the R36S against the real
   backlight / ALSA / battery, with uinput stand-ins for the buttons and an injected jack switch.
+- **The image's own root, on the R36S under ROCKNIX** (nothing written to the card's boot area): unpack the build's
+  root tree to `/storage/vibe-r36s-root` and run inside it with `test/enter-root.sh <cmd>` (pivot_root in its own mount
+  namespace — WebKit's bubblewrap sandbox stays ON). First `systemctl stop essway sway input powerstate; rmmod
+  mali_kbase; modprobe panfrost`; a reboot restores ROCKNIX. Then:
+  `vibe-splash --measure` (the panel's refresh by vblank timing), `test/kiosk-test.sh URL` (splash → hand-off → Cog as
+  `vibe-kiosk`: CPU, memory, Panfrost), `test/gamepad-test.sh [URL]` (the pads the page sees + an A press as the audio
+  gesture), `test/bootkeys-test.sh`, `test/hwd-root-test.sh`, `test/card-loop-test.sh` (no argument: a synthetic
+  4 GiB loop file). Under ROCKNIX the device nodes carry ROCKNIX's group ids; kiosk-test.sh adds them for the test.
 - `verify.sh` — the offline checks every build runs (partition table, loader bytes, boot files, overlays applied with
   fdtoverlay, units enabled/masked, SSH off, no passwords, `systemd-analyze verify`).
 
