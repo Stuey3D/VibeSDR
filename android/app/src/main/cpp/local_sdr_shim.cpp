@@ -203,6 +203,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_airspy_limit.h"      // the owner's per-band limit on an Airspy R2 / Mini
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
 #include "vibe_decoder_reach.h"      // ★ V12 which fixed-frequency decoders this radio reaches, and the region defaults
+#include "vibe_radio_caps.h"         // ★★ V12 what this radio can do at all — the Setup page's tabs and the `modes` offer
 #include "vibe_chat_share.h"        // ★ "share a station" in the canned chat: validate, name, say
 #include "vibe_tune_etiquette.h"    // ★★ "Ask before tuning": who may move a shared dial (docs/TUNING-ETIQUETTE.md)
 #include "vibe_watch.h"            // ★★ V12 VFO A/B: a listener's watch channels (docs/v12/VFO-AB.md)
@@ -1807,6 +1808,7 @@ static bool vsAisReach();            // ★ V12 AIS: this radio reaches 162 MHz 
 static std::string vsAisWhyNot();    // "" = AIS can run here now
 static std::string vsDecoderWhyNot(const std::string& id, const vibereach::Reach* reach = nullptr);   // ★ V12 "" = this radio reaches that fixed-frequency decoder (vibe_decoder_reach.h)
 static bool vsIsmAnyBand();          // ★ false = ISM is not offered AT ALL (the HF+): no control, no reason
+static vibecaps::Caps vsRadioCaps(); // ★★ V12 what THIS running radio can do (vibe_radio_caps.h) — see its definition
 static bool vsNdbReach(double& lo, double& hi);   // the part of the NDB band this radio reaches ("" = none worth offering)
 static std::string vsNdbWhyNot();    // "" = NDB can run here now
 static std::vector<vibe::digi::Span> vsSpotSpans();   // ★ V12: the bands Band spots can sit on (empty = no Band button)
@@ -23212,6 +23214,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★★ AN ICOM's setup facts — model, CI-V address, baud, the preflight in plain words, the transport —
             //    are the same object hwinfo carries (one writer, radioCapsJsonCore), as `radio` here too.
             if (!noRadio && useIcom()) j += LocalSdrShim::instance().radioCapsJsonCore();
+            /* ★★★ V12 WHAT THIS RADIO CAN DO, from the radio itself (vsRadioCaps — vibe_radio_caps.h): the Setup page draws
+             *  this tab's modes, decoders and settings from it, ahead of the door's config-only answer (radioCaps). */
+            if (!noRadio && !lost) j += ",\"caps\":" + vibecaps::toJson(vsRadioCaps());
             // ★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h) — the red line beside the setup page's
             //    rate switch. Nothing private in it.
             if (!noRadio) j += ",\"rateGuard\":" + g_rateGuard.json();
@@ -37321,6 +37326,34 @@ static vibereach::Reach vsDecoderReach() {
                                       rtlHf, allow, block);
     return r;
 }
+/* ★★★ V12 WHAT THIS RUNNING RADIO CAN DO (vibe_radio_caps.h, 2026-11-05) — the same function the front door answers from
+ *  the config, given the facts only the running radio has: an RTL's MODEL (a V4's own HF path; unknown = its table, never
+ *  greyed on a guess, as vsDecoderReach says), an Icom's own model ranges, and the widest rate the device reports. The
+ *  hardware's question only: the owner's allow / block lists and a locked window are not in it (they are the owner's
+ *  choices, answered by vsDecoderReach and the *WhyNot functions). GET /vibeserver/hardware carries it as `caps`, and the
+ *  `modes` offer (vsTunableJson) passes through it. */
+static vibecaps::Caps vsRadioCaps() {
+    vibecaps::Facts f;
+    auto& shim = LocalSdrShim::instance();
+    if (g_icomOn.load()) {
+        f.driver = "icom";
+        f.ranges = vsTunableRanges();
+        return vibecaps::compute(f);
+    }
+    f.driver = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf" : shim.isHackRf() ? "hackrf"
+             : shim.isAirspy() ? "airspy" : shim.isUsrp() ? "usrp" : "rtl";
+    if (f.driver == "rtl") {
+        const std::string m = shim.deviceModel();
+        f.rtlHf = (g_autoDs.load() || g_dsNow.load() > 0) ? 2 : (m.empty() || m.find("V4") != std::string::npos) ? 1 : 0;
+    }
+    f.converter = shim.converterOffsetHz() != 0;
+    f.ranges = vibereach::reachRanges(f.driver, shim.converterOffsetHz(), shim.converterInputLoHz(), shim.converterInputHiHz(),
+                                      f.rtlHf);
+    if (g_vsHwMaxRate.load(std::memory_order_relaxed) == 0) shim.maxSampleRateHz();
+    f.maxRateHz = double(g_vsHwMaxRate.load(std::memory_order_relaxed));   // 0 = not known yet: no rate rule applied
+    return vibecaps::compute(f);
+}
+
 /** Why fixed-frequency decoder `id` cannot run on this radio, in words with the numbers — "" when it can, when it is not
  *  in the table, or when the owner has switched it off (the owner's block wins, with its own behaviour and words). */
 static std::string vsDecoderWhyNot(const std::string& id, const vibereach::Reach* reach) {
@@ -37833,8 +37866,12 @@ static std::string vsTunableJson() {
                                         "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "drm" };
         std::string m = "[";
         bool first = true;
+        // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
+        //    at all is never offered — so the directory, the clients and the owner's switches cannot disagree about it.
+        const vibecaps::Caps rc = vsRadioCaps();
         for (const char* id : kOffer) {
             const std::string k = id;
+            if (!rc.has(k)) continue;
             // ★ an Icom demodulates in the radio: our synchronous AM family does not exist there (AGENTS.md)
             if ((k == "sam" || k == "sau" || k == "sal" || k == "ecssu" || k == "ecssl" || k == "amst") && g_icomOn.load()) continue;
             /* ★★ V12 NOR DRM: it needs ≥ 4.5 kHz of RF with its phase intact, and the IC-7300's widest SSB filter is 3.6 kHz

@@ -78,11 +78,16 @@ has(S, "!!radio && radio.driver !== 'airspyhf' && !isIcom && dabBlocks.length > 
 has(S, '{isIcom ? icomSetupBlock : isRtl ? (<>', 'the Icom card in place of the gain / VibeAGC / IF filter / DS / ppm block');
 has(S, "{radioUseEff !== 'locked' && !isIcom && rateBlock}", 'CAPTURE WIDTH hidden');
 has(S, '{!isIcom && (<>\n                {/* ★★★ REAL BINS AT DEEP ZOOM.', 'ZOOM DETAIL hidden');
-has(S, '{!isLite && !isIcom && (<>', 'RAW IQ OUT hidden');
+has(S, "{!isLite && !isIcom && capsAllowSetting(radioCapsNow, 'rawIq') && (<>", 'RAW IQ OUT hidden');
+// ★★ V12 2026-11-05 (vibe_radio_caps.h): VFO A/B and the impulse blanker too — "people will think that they are setting up a standard USB port"
+has(S, "{!isIcom && capsAllowSetting(radioCapsNow, 'vfoB') && (", 'VFO A/B hidden');
+has(S, "{!isIcom && capsAllowSetting(radioCapsNow, 'nbWide') && (<>", 'IMPULSE NOISE BLANKER hidden');
 has(S, "{radioUseEff === 'single' && !isIcom && (<>\n                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PER-BAND CEILINGS</Text>", 'PER-BAND CEILINGS hidden');
 has(S, '{!isIcom && <Row C={C} F={F} k="SAMPLE RATE"', 'no sample-rate row while serving an Icom');
 // ★ e95282d89 (modes and decoders as a tree): the switches are modeTree() — BLOCKABLE plus the spots modes — filtered the same way.
-has(S, 'modeTree().filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id)))', 'no WFM / DAB / Adv RDS block chips');
+// ★★ V12 2026-11-05: and then by the engine's own caps (vibe_radio_caps.h — the Setup page's answer) for EVERY radio
+has(S, 'full.filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id))).filter((m) => modeCapShown(full, m))', 'no WFM / DAB / Adv RDS block chips; caps filter every radio');
+has(S, "getRadioCapsFor(drv, String(radio?.model ?? '')", 'the caps come from the engine (vibe_radio_caps.h), not a table of the screen\'s own');
 
 // ── what IS drawn ──
 has(S, 'androidIcomFacts()', 'the facts come from androidIcomFacts()');

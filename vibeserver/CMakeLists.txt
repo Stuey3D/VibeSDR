@@ -1090,6 +1090,12 @@ add_executable(test-decoder-reach "${CMAKE_CURRENT_SOURCE_DIR}/test-decoder-reac
 target_include_directories(test-decoder-reach PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-decoder-reach)
 add_test(NAME decoder-reach COMMAND test-decoder-reach)
+# ★★ V12 (2026-11-05) what each radio can do — its modes, decoders and the settings that mean anything on it
+#    (vibe_radio_caps.h), per driver, from its config: the Setup page's per-radio tabs and the shim's `modes` offer.
+add_executable(test-radio-caps "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-caps.cpp")
+target_include_directories(test-radio-caps PRIVATE "${CPP_DIR}" "${CPP_DIR}/decoders")
+vibe_sanitize(test-radio-caps)
+add_test(NAME radio-caps COMMAND test-radio-caps)
 # ★★★ VibeAGC FOR SDRplay (vibe_rsp_vibeagc.h, 2026-10-30): the combined IF + RF loop closed against a simulated RSP
 #     (Band II next to a +20 dB neighbour, weak HF, DAB, a signal arriving, the DAB rapid-step repro, fades, a rung
 #     bigger than its prior, a stalled stream) — and its writes through the real gainstep.h + RxPipeline: IF steps

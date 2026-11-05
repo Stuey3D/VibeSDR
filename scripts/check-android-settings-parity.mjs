@@ -154,6 +154,19 @@ ok(JNI.includes('nativeSetBackgroundDecoding') && JNI.includes('nativeSetGallery
 ok(/@ReactMethod\s+fun backgroundCaps/.test(MOD) && /@ReactMethod\s+fun validateBackgroundDecoding/.test(MOD) && /@ReactMethod\s+fun galleryDisk/.test(MOD), 'the bridge exports backgroundCaps / validateBackgroundDecoding / galleryDisk (@ReactMethod)');
 ok(SHIM.includes('LocalSdrShim::backgroundCapsJson') && /vibe::bg::decoders\(\)/.test(SHIM.slice(SHIM.indexOf('LocalSdrShim::backgroundCapsJson'))), 'the editor\'s decoders are the ENGINE\'s table (vibe::bg::decoders), not a list in the app');
 ok(!/id: 'navtex',\s*label:/.test(read('src/services/bgDecode.ts')), 'services/bgDecode.ts keeps no copy of the decoder table');
+/* ★★★ V12 (2026-11-05) WHAT EACH RADIO CAN DO — ONE ANSWER (vibe_radio_caps.h). The Setup page's tabs draw from it (the door's
+ *  radioCaps / the radio's caps); the phone's screen asks the ENGINE for the same function, so the two never disagree about
+ *  which modes, decoders and settings a radio is offered. */
+ok(JNI.includes('Java_com_vibesdr_app_VibeLocalSDR_nativeRadioCapsFor') && /vibecaps::compute\(f\)/.test(JNI), 'JNI: radioCapsFor is vibe_radio_caps.h itself (vibecaps::compute)');
+ok(/@ReactMethod\s+fun radioCapsFor/.test(MOD), 'the bridge exports radioCapsFor (@ReactMethod)');
+{
+  const Sc = read('src/screens/ServerModeScreen.tsx');
+  ok(/getRadioCapsFor\(/.test(Sc) && /modeCapShown\(full, m\)/.test(Sc), 'the screen\'s modes tree is filtered by the engine\'s caps');
+  for (const k of ['vfoB', 'rawIq', 'nbWide', 'fmDefaults'])
+    ok(Sc.includes(`capsAllowSetting(radioCapsNow, '${k}')`), `…and its ${k} row follows the same caps as the Setup page (${k})`);
+  const Pg = read('android/app/src/main/cpp/vibe_setup_page.h');
+  ok(/function capsApply\(\)/.test(Pg) && /cfg\.radioCaps/.test(Pg) && /HW_CAPS/.test(Pg), 'the Setup page reads the door\'s radioCaps and the radio\'s own caps');
+}
 const S0 = read('src/screens/ServerModeScreen.tsx');
 ok(/bgDecode: live\.current\.bgJson/.test(S0), 'Start sends the profiles read through the live ref (never a stale closure)');
 ok(/\[K\.bgDecode, live\.current\.bgJson\]/.test(S0), 'Start persists the profiles it sends');

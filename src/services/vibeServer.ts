@@ -538,6 +538,37 @@ export async function getBackgroundCaps(): Promise<string> {
   if (!Local?.backgroundCaps) return '';
   try { return String(await Local.backgroundCaps()); } catch { return ''; }
 }
+/** ★★★ V12 WHAT THIS RADIO CAN DO (vibe_radio_caps.h — Stuart, 2026-11-05: "we shouldnt be offering modes etc that cannot
+ *  be run on that radio"). The engine's own function, the one the Setup page's tabs are drawn from: `modes` the ids that
+ *  can run, `settings` the rows that mean anything here (absent key = shown). null = an engine without it: everything is
+ *  drawn as before. */
+export type RadioCaps = { iq: boolean; modes: string[]; settings: Record<string, boolean>; hints: string[] };
+export function parseRadioCaps(s: string): RadioCaps | null {
+  try {
+    const j = JSON.parse(s);
+    if (!j || typeof j !== 'object' || !Array.isArray(j.modes)) return null;
+    const settings: Record<string, boolean> = {};
+    if (j.settings && typeof j.settings === 'object')
+      for (const [k, v] of Object.entries(j.settings)) if (typeof v === 'boolean') settings[k] = v;
+    return { iq: j.iq !== false, modes: j.modes.filter((m: unknown) => typeof m === 'string'), settings,
+             hints: Array.isArray(j.hints) ? j.hints.filter((h: unknown) => typeof h === 'string').slice(0, 4) : [] };
+  } catch { return null; }
+}
+export async function getRadioCapsFor(driver: string, model: string, autoDs: boolean, directSampling: number,
+                                      convOffsetHz: number, convLoHz: number, convHiHz: number): Promise<RadioCaps | null> {
+  if (!driver || !Local?.radioCapsFor) return null;
+  try { return parseRadioCaps(String(await Local.radioCapsFor(driver, model, autoDs, directSampling, convOffsetHz, convLoHz, convHiHz))); }
+  catch { return null; }
+}
+/** Can mode `id` run here? A derived row (a spots mode, LoRa's "every channel", a node) follows its parent. */
+export function capsAllowMode(caps: RadioCaps | null, id: string): boolean {
+  return !caps || caps.modes.includes(id);
+}
+/** Does setting `k` mean anything here? (true when the engine has not said) */
+export function capsAllowSetting(caps: RadioCaps | null, k: string): boolean {
+  return !caps || caps.settings[k] !== false;
+}
+
 /** ★★ V12 the Setup page's save rule for background decoding: '' = good, else the engine's own sentence. */
 export async function validateBackgroundDecoding(json: string, rate: number, slotCap: number, lockCentre: number,
                                                  reach: { ismOk: boolean; ndbOk: boolean; aisOk: boolean }): Promise<string> {

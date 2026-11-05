@@ -59,6 +59,7 @@ while the server is stopped, so "live" here is the next Start; the engine's tick
 | Setting | Config key | On Android? | Notes |
 |---|---|---|---|
 | Modes and decoders tree (every decoder a switch, options under it) | `blockedModes` | ports (verified) | `BLOCKABLE` in step with the Setup page. |
+| **Only what this radio can do** (modes, decoders, and the usage / VFO A/B / Raw IQ / impulse NB / FM defaults rows) | (`radioCaps`, `caps`) | **ports** (2026-11-05) | ONE function, `vibe_radio_caps.h`: the Setup page reads the door's `radioCaps` (from config) and the running radio's `caps` (`/vibeserver/hardware`); the phone asks the engine (`radioCapsFor`, JNI → `vibecaps::compute`) with its driver, USB model, direct sampling and converter. A hidden switch keeps its saved value. `check-android-settings-parity.mjs`, `test-setup-radio-caps.mjs`, `vibeserver/test-radio-caps.cpp`. |
 | **Band, mode by mode (Auto / Always / Off)** | `blockedModes` `spotsband±<mode>` | **ports** (this branch) | Was "the setup page's alone". Now the `bandModes` node under Band; modes from the build's own registry (`DIGI_MODE_STYLE` — the server on this phone is this build). |
 | LoRa: listen on every channel | `blockedModes` `lora+all` | ports (verified) | |
 | DAB station-label scan | `dabScanLabels` | ports (verified) | Lite only, as decided (main app: always on). |

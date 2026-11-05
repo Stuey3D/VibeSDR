@@ -45,6 +45,7 @@
 #include "hackrf_source.h"
 #include "usrp_source.h"   // ★ V12 Ettus USRP B2xx (inline stub on a build without UHD)
 #include "vibe_usrp_caps.h"   // ★ V12 the USRP owner options' save check (validateSaved)
+#include "vibe_radio_caps.h"  // ★★ V12 what each radio can do — the Setup page's per-radio tabs (radioCaps below)
 #include "airspy_source.h"
 #include "sdrplay_source.h"
 
@@ -2498,6 +2499,23 @@ int main(int argc, char** argv) {
                 }
                 const size_t close = j.rfind('}');
                 if (!us.empty() && close != std::string::npos) j.insert(close, ",\"usrpStatus\":{" + us + "}");
+            }
+            /* ★★★ V12 WHAT EACH RADIO CAN DO (vibe_radio_caps.h, Stuart 2026-11-05: "we shouldnt be offering modes etc
+             *     that cannot be run on that radio"). From its CONFIG, so the door answers for a radio that is paused or
+             *     not running — the usual case while setting one up. Keyed by serial, beside icomStatus; the page prefers
+             *     the running radio's own `caps` (GET /vibeserver/hardware) when it has one. Bounded: one small object
+             *     per configured radio, behind the same admin gate as the rest of this answer. */
+            {
+                std::string rc;
+                for (const auto& r : out.radios) {
+                    if (r.serial.empty() || r.driver.empty()) continue;
+                    const vibecaps::Facts f = vibecaps::factsFromConfig(r.driver, r.converterOffsetHz, r.converterInputLoHz,
+                                                                        r.converterInputHiHz, r.autoDirectSampling,
+                                                                        r.directSampling, r.label);
+                    rc += std::string(rc.empty() ? "" : ",") + "\"" + jsonEscape(r.serial) + "\":" + vibecaps::toJson(vibecaps::compute(f));
+                }
+                const size_t close = j.rfind('}');
+                if (!rc.empty() && close != std::string::npos) j.insert(close, ",\"radioCaps\":{" + rc + "}");
             }
             return j;
         },
