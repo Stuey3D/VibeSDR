@@ -92,6 +92,48 @@ run (IQ ones too — DAB, ISM, ADS-B). arm64 build (the Pi 500's package).
 handheld profile in the engine incl. hot-swap and per-radio memory; (3) the `VIBESDR` partition and card rules; (4) the
 "This device" controls, power button, battery and clock.
 
+## 0.2 The interface between the engine and the hardware service (2026-11-05)
+
+Two halves meet here: **`vibe-hwd`** (the image's root hardware service: backlight, ALSA master volume, the
+speaker/headphone mux, battery, the power button, the clock) and **`vibeserver --handheld`** (the engine, not root).
+The engine is the client; the web page never talks to the service directly — the engine proxies "This device" and relays
+the service's events to the page as a `device` message on the spectrum socket.
+
+**Transport.** Unix socket **`/run/vibe-hwd.sock`** (path overridable by env **`VIBE_HWD_SOCK`**), newline-delimited JSON,
+one request per line, **one reply line per request**, in order. After the engine sends `{"subscribe":true}` the same
+connection also carries **unsolicited event lines** (they have an `"event"` key; replies never do).
+
+**Requests → replies.**
+
+| Request | Reply |
+|---|---|
+| `{"get":"state"}` | `{"ok":true,"brightness":120,"maxBrightness":255,"volume":60,"muted":false,"output":"speaker"\|"headphones","battery":{"pct":83,"charging":false,"status":"Discharging"},"screen":"on"\|"off"}` |
+| `{"set":"brightness","value":N}` | `{"ok":true}` or `{"ok":false,"error":"…"}` |
+| `{"set":"volume","value":0..100}` | same |
+| `{"set":"time","utcMs":1793900000000}` | same (the service is root; the engine is not) |
+| `{"action":"poweroff"\|"reboot"\|"screen-off"\|"screen-on"}` | same |
+| `{"subscribe":true}` | `{"ok":true}`, then events on this connection |
+
+**Events** (after `subscribe`):
+
+- `{"event":"volume","volume":N,"muted":B}` — the volume buttons; the page shows its volume overlay.
+- `{"event":"output","output":"headphones"}` — or `"speaker"`.
+- `{"event":"battery","pct":N,"charging":B}`
+- `{"event":"battery_low","pct":10}` — the page shows the 10 % banner.
+- `{"event":"shutdown","reason":"battery"|"power-button"|"request","inSec":5}` — the engine MUST save every radio's memory
+  and flush, then send **`{"ack":"shutdown"}`** on the same connection. The service waits **≤ 5 s** for the ack, then shuts
+  down anyway.
+- `{"event":"screen","screen":"off"}` — or `"on"`.
+
+**Files the two halves share.**
+- `/run/vibe-handheld/reset-radio` — written by the boot check when Start + Select are held (absent = normal). The engine
+  reads it once at start: the radio that connects next loses its memory (back to defaults) and the page shows a one-time
+  "Radio settings reset" toast. The engine deletes the flag when it has acted on it (it needs write access to
+  `/run/vibe-handheld/`; if it cannot delete it, it remembers in memory for that run only).
+- `VIBESERVER_DATA_DIR/handheld/radio-<serial>.json` — the engine's per-radio memory (private to the engine).
+- `VIBESERVER_CARD_DIR` (the exFAT `VIBESDR` mount) — `Recordings/`, `Gallery/<DECODER>/`, `import/`, `import/done/`,
+  `export/`, `Diagnostic logs/`. The engine creates the folders it writes on first use; every write is temp + rename.
+
 ---
 
 ## 1. The short answer
