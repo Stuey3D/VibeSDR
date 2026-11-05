@@ -1,0 +1,8 @@
+# ★ the handheld has no tunnel (§0.1: no server features) — the package's cloudflared binary never lands on the card
+path-exclude=/usr/lib/vibeserver/cloudflared
+# ★ no manuals or translations on a 640×480 receiver; copyright files stay (licences travel with the binaries)
+path-exclude=/usr/share/doc/*
+path-include=/usr/share/doc/*/copyright
+path-exclude=/usr/share/man/*
+path-exclude=/usr/share/locale/*
+path-include=/usr/share/locale/locale.alias

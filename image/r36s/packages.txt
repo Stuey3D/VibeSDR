@@ -1,0 +1,57 @@
+# The R36S handheld's Debian 13 (trixie) arm64 packages, installed with --no-install-recommends.
+# ★ One per line; '#' comments. build-image.sh reads this file — the image carries exactly these and their Depends.
+
+# the system
+systemd
+systemd-sysv
+udev
+dbus
+kmod
+util-linux
+util-linux-extra
+passwd
+procps
+iproute2          # ★ `ss`: the image's own proof that nothing but the engine listens (verify / diagnostics)
+ca-certificates
+curl
+adduser
+gzip
+systemd-zram-generator
+
+# the card: exFAT for VIBESDR, sfdisk/partx for the first boot, FAT for the boot partition
+exfatprogs
+dosfstools
+fdisk
+e2fsprogs
+
+# the hardware service, splash, card and boot-key programs are stdlib Python
+python3
+
+# audio: WebKit plays through GStreamer → ALSA (the browser is the only thing making sound — no PipeWire)
+alsa-utils
+gstreamer1.0-plugins-base
+gstreamer1.0-plugins-good
+gstreamer1.0-alsa
+
+# the browser: Cog 0.18.4 / WPE WebKit 2.48.3 on DRM, Mesa 25.0.7 Panfrost (day one, §0)
+cog
+libwpewebkit-2.0-1
+libmanette-0.2-0
+bubblewrap
+xdg-dbus-proxy
+libgl1-mesa-dri
+mesa-libgallium
+libegl-mesa0
+libegl1
+libgles2
+libgbm1
+# ★ the day-one container needed these for Mesa's EGL to load (its apt history)
+libxcb-dri2-0
+libxcb-dri3-0
+libxcb-present0
+libxcb-xfixes0
+libdrm2
+fonts-dejavu-core
+
+# ★★★ NO SSH, NO NETWORK SERVICES (Stuart 2026-11-05: "we don't need SSH"). Nothing on the card listens on any
+#     port but the engine on 127.0.0.1; debugging is the card's "Diagnostic logs/" export.

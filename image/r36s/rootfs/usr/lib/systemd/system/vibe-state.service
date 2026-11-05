@@ -1,0 +1,19 @@
+[Unit]
+Description=VibeSDR state partition: check, mount, bind the engine's and browser's data
+Documentation=file:/usr/share/doc/vibesdr-r36s/README.md
+# ★ early, and it never fails or hangs the boot (bounded waits; every failure carries on in RAM) — see vibe-state
+DefaultDependencies=no
+After=systemd-udev-trigger.service systemd-udevd.service systemd-tmpfiles-setup-dev-early.service
+Before=sysinit.target vibe-clock.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/vibesdr-r36s/vibe-state
+# ★ stopped after the engine, the browser and the clock (they are all ordered after us)
+ExecStop=-/bin/sh -c 'sync; umount /var/lib/vibeserver /var/lib/vibe-kiosk 2>/dev/null; umount /var/lib/vibe-state 2>/dev/null; true'
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=sysinit.target

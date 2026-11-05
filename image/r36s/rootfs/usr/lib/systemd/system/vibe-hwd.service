@@ -1,0 +1,17 @@
+[Unit]
+Description=VibeSDR hardware service (backlight, volume, power button, battery, clock, SSH)
+Documentation=file:/usr/share/doc/vibesdr-r36s/README.md
+After=vibe-state.service systemd-udev-trigger.service sound.target
+Wants=vibe-state.service
+Before=vibeserver-handheld.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/vibesdr-r36s/vibe-hwd
+Restart=always
+RestartSec=1
+# ★ the power button must answer even when the engine and the browser are busy
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

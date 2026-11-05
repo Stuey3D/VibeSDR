@@ -1,0 +1,64 @@
+// vibe-r36s.dts — the VibeSDR handheld's own device-tree overlay, applied by U-Boot after ROCKNIX's mipi-panel.dtbo.
+// Built at image time: dtc -@ -I dts -O dtb -o vibe-r36s.dtbo vibe-r36s.dts
+//
+// ★★★ THE STOCK CPU STEPS, 408–1296 MHz (Stuart 2026-11-05: schedutil + the stock table). ROCKNIX's EE-clone tree gives
+//     the A35s only 1008 / 1296 (and 1416 as turbo): a receiver idling at 1008 MHz wastes the battery. These are the
+//     steps and voltages of the vendor tree that shipped on this unit (rf3536k3ka.dtb, cpu0-opp-table, its base
+//     `opp-microvolt` row — the highest of its PVTM L0–L3 rows, so never under-volted). vdd_arm allows 0.85–1.35 V.
+//     ★ NEVER ABOVE 1296: 1416 is switched off here (the vendor tree had it disabled; ROCKNIX makes it turbo) and 1512
+//     needs 1.35 V flat out — an overclock (§0).
+// ★ 1008 and 1296 already exist in ROCKNIX's table with the same voltages; restating them changes nothing.
+// ★★ The backlight's boot level 128 → 120, Stuart's default, so the kernel and vibe-hwd agree from the first frame.
+/dts-v1/;
+/plugin/;
+
+&cpu0_opp_table {
+	opp-408000000 {
+		opp-hz = /bits/ 64 <408000000>;
+		opp-microvolt = <950000 950000 1350000>;
+		clock-latency-ns = <40000>;
+		opp-suspend;
+	};
+	opp-600000000 {
+		opp-hz = /bits/ 64 <600000000>;
+		opp-microvolt = <950000 950000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-816000000 {
+		opp-hz = /bits/ 64 <816000000>;
+		opp-microvolt = <1050000 1050000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1008000000 {
+		opp-hz = /bits/ 64 <1008000000>;
+		opp-microvolt = <1175000 1175000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1104000000 {
+		opp-hz = /bits/ 64 <1104000000>;
+		opp-microvolt = <1300000 1300000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1200000000 {
+		opp-hz = /bits/ 64 <1200000000>;
+		opp-microvolt = <1300000 1300000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1248000000 {
+		opp-hz = /bits/ 64 <1248000000>;
+		opp-microvolt = <1350000 1350000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1296000000 {
+		opp-hz = /bits/ 64 <1296000000>;
+		opp-microvolt = <1350000 1350000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1416000000 {
+		status = "disabled";
+	};
+};
+
+&backlight {
+	default-brightness-level = <120>;
+};

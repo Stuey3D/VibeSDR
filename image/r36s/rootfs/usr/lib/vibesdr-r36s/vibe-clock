@@ -1,0 +1,48 @@
+#!/bin/sh
+# vibe-clock restore|save — keep the R36S's clock across power-offs (fake-hwclock style, with the RTC when it works).
+#
+# ★★ THE RTC CANNOT BE TRUSTED ALONE. The RK817 has one (rtc0, read into the clock by the kernel at boot), but it runs
+#    off the main cell: a flat or pulled battery resets it, and on some clones it cannot be set at all — ROCKNIX ships
+#    an "RTC that can't be set" offset service for exactly that (rtc-offset). So we keep BOTH: the offset between the
+#    clock and the RTC, and the time of the save as a FLOOR. The clock never goes backwards past the last save.
+# ★ State: /var/lib/vibe-state/clock = "<offset seconds> <saved epoch>", written temp + rename.
+# ★ Saved: at shutdown (vibe-clock.service ExecStop), every 10 min by vibe-hwd, and after every {"set":"time"}.
+set -u
+STATE=${VIBE_STATE_DIR:-/var/lib/vibe-state}/clock
+RTC=/sys/class/rtc/rtc0/since_epoch
+# ★ the image's build time: no clock on this card can be earlier (systemd uses the same file as its own floor)
+FLOOR=$(stat -c %Y /usr/lib/clock-epoch 2>/dev/null || echo 0)
+
+rtc_now() { cat "$RTC" 2>/dev/null || echo 0; }
+
+case "${1:-}" in
+  restore)
+    NOW=$(date +%s)
+    RTC_NOW=$(rtc_now)
+    OFFSET=0; SAVED=0
+    [ -r "$STATE" ] && read -r OFFSET SAVED < "$STATE" 2>/dev/null
+    case "$OFFSET$SAVED" in *[!0-9-]*) OFFSET=0; SAVED=0 ;; esac
+    WANT=$NOW
+    # ★ the RTC behind the last save = it was reset (flat battery) or cannot be set: RTC + offset, if that is sane
+    if [ "$RTC_NOW" -gt 0 ] && [ "$RTC_NOW" -lt "$SAVED" ]; then
+      CAND=$((RTC_NOW + OFFSET))
+      [ "$CAND" -ge "$SAVED" ] && WANT=$CAND
+    fi
+    [ "$WANT" -lt "$SAVED" ] && WANT=$SAVED
+    [ "$WANT" -lt "$FLOOR" ] && WANT=$FLOOR
+    if [ "$WANT" -gt "$NOW" ]; then
+      date -u -s "@$WANT" >/dev/null && echo "vibe-clock: clock set forward to $(date -u '+%Y-%m-%d %H:%M:%S') UTC (RTC $RTC_NOW, saved $SAVED)"
+    fi
+    ;;
+  save)
+    NOW=$(date +%s)
+    [ "$NOW" -ge "$FLOOR" ] || exit 0
+    # ★ try to keep the RTC itself right; harmless when it cannot be set (the offset covers it)
+    hwclock --systohc --utc >/dev/null 2>&1 || true
+    RTC_NOW=$(rtc_now)
+    mkdir -p "$(dirname "$STATE")"
+    echo "$((NOW - RTC_NOW)) $NOW" > "$STATE.tmp" && sync "$STATE.tmp" 2>/dev/null; mv -f "$STATE.tmp" "$STATE"
+    ;;
+  *) echo "usage: vibe-clock restore|save" >&2; exit 2 ;;
+esac
+exit 0

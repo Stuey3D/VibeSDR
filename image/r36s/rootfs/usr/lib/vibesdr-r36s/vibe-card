@@ -1,0 +1,336 @@
+#!/usr/bin/python3 -I
+# vibe-card — the VIBESDR exFAT partition: made on the first boot (after a capacity check), checked and mounted on
+# every boot at /media/VIBESDR.
+#
+#   vibe-card boot                 the boot unit (vibe-card.service): first-boot work if needed, fsck, mount, folders
+#   vibe-card check DEV START END  the capacity check alone, on any block device or loop file (tests; prints JSON)
+#
+# ★★★ THE SIZE COMES FROM THE KERNEL, NEVER FROM A PARTITION TABLE (§0.1). Stuart's "64 GB" card was a 16 GB card whose
+#     controller reported 16 GB honestly; a worse fake reports 64 GB and keeps 8. So: the kernel's size is the CLAIM,
+#     the capacity check is the PROOF, and the partition ends where the proof ends.
+# ★★★ THE CAPACITY CHECK IS NON-DESTRUCTIVE, f3probe-style. A fake card ALIASES: a write past its real size lands on a
+#     low address — possibly on our own root. So every sample is READ first (its backup), then written with a pattern
+#     unique to its position, then all are read back, and finally every backup is written back in REVERSE order.
+#     Because an aliased read returns the same physical block an aliased write hits, the reverse-order restore puts
+#     every physical block back exactly as it was — whatever the aliasing (worked through in the README). A power cut
+#     DURING the ~40 s check on a fake card is the one case that can leave damage; a genuine card is never at risk.
+# ★★ BOUNDED IN TIME: 96 samples × 1 MiB (~200 MB of I/O, ~45 s at the 8.5 MB/s this card writes) in bit-reversed
+#    order, so if the 180 s budget runs out the samples already done still span the whole card evenly.
+# ★★ NEVER FORMATS A PARTITION THAT HOLDS DATA: mkfs only runs on the partition this program has just created, or on
+#    one it created on an earlier, interrupted boot (marker on the state partition) that still has no filesystem.
+import json, mmap, os, re, subprocess, sys, time, hashlib
+
+STATE = os.environ.get("VIBE_STATE_DIR", "/var/lib/vibe-state")
+MOUNT = os.environ.get("VIBE_CARD_MOUNT", "/media/VIBESDR")
+LABEL = "VIBESDR"
+README = os.environ.get("VIBE_CARD_README", "/usr/share/vibesdr-r36s/VIBESDR-README.txt")
+FOLDERS = ["Recordings", "Gallery", "import", "import/done", "export", "Diagnostic logs"]
+SAMPLES, SAMPLE_BYTES, BUDGET_S = 96, 1 << 20, 180.0
+ALIGN = 4 << 20
+MIN_BYTES = 64 << 20          # less free space than this after the root: no data partition
+SECTOR = 512
+
+def log(*a):
+    print("vibe-card:", *a, file=sys.stderr, flush=True)
+
+def splash(*a):
+    try:                                      # ★ the splash is a nicety: never let it stop the card
+        subprocess.run(["/usr/lib/vibesdr-r36s/vibe-splash-ctl", *a], timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+def run(*cmd, check=True, **kw):
+    r = subprocess.run(cmd, capture_output=True, text=True, **kw)
+    if check and r.returncode != 0:
+        raise RuntimeError("%s failed (%d): %s" % (" ".join(cmd), r.returncode, (r.stderr or r.stdout).strip()))
+    return r
+
+def atomic_write(path, data, mode=0o644):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.rename(tmp, path)
+
+# ── the capacity check ───────────────────────────────────────────────────────────────────────────────────────────────
+def bitrev_order(n):
+    bits = max(1, (n - 1).bit_length())
+    order = sorted(range(1 << bits), key=lambda i: int(format(i, "0%db" % bits)[::-1], 2))
+    return [i for i in order if i < n]
+
+def pattern(token, offset, size):
+    # ★ unique to (this run, this offset): a block that turns up at another offset is caught
+    seed = hashlib.sha256(b"%s:%d" % (token, offset)).digest()
+    return (seed * (size // len(seed) + 1))[:size]
+
+class Dev:
+    """Direct I/O on a block device or file — the card's answers, not the page cache's."""
+    def __init__(self, path):
+        self.fd = os.open(path, os.O_RDWR | getattr(os, "O_DIRECT", 0) | os.O_SYNC)
+        self.buf = mmap.mmap(-1, SAMPLE_BYTES)      # page-aligned, as O_DIRECT needs
+    def read(self, off, size):
+        n = os.preadv(self.fd, [memoryview(self.buf)[:size]], off)
+        if n != size:
+            raise OSError("short read at %d" % off)
+        return bytes(self.buf[:size])
+    def write(self, off, data):
+        self.buf[:len(data)] = data
+        n = os.pwritev(self.fd, [memoryview(self.buf)[:len(data)]], off)
+        if n != len(data):
+            raise OSError("short write at %d" % off)
+    def flush(self):
+        os.fsync(self.fd)
+        try:
+            import fcntl
+            fcntl.ioctl(self.fd, 0x1261)          # BLKFLSBUF: drop any cached copy of the device
+        except OSError:
+            pass
+
+def capacity_check(dev, start, end, progress=None, budget=BUDGET_S, samples=SAMPLES, size=SAMPLE_BYTES):
+    """Test [start, end) bytes. Returns {"verified_end": bytes, "claimed_end": end, "tested": n, "bad": [...]}"""
+    span = end - start
+    if span < size:
+        return {"verified_end": end, "claimed_end": end, "tested": 0, "bad": []}
+    # sample offsets spread over the whole span; the last one is the very end of the card
+    step = (span - size) / max(1, samples - 1)
+    offs = sorted({start + (int(i * step) // SECTOR) * SECTOR for i in range(samples)})
+    # ★★★ WRAP-AROUND FAKES. A fake that drops its top address bits maps offset S to S mod R (R a power of two). An
+    #     aliased sample reads back its OWN pattern (read and write land on the same physical block), so spread samples
+    #     alone never see it — the simulated 64-GB-holding-8-GiB card passed. So: an ANCHOR sample u at the start, and
+    #     PROBES at u + 2^k (1 GiB … 1 TiB). Under a wrap of R = 2^m every probe with k >= m lands ON u: u reads back
+    #     wrong, and the probes tell us m. Written first (anchor, then probes ascending), before the spread samples.
+    u = offs[0]
+    probes = [u + (1 << k) for k in range(30, 41) if u + (1 << k) + size <= end]
+    rest = [o for o in (offs[i] for i in bitrev_order(len(offs))) if o != u and o not in probes]
+    order = [u] + probes + rest
+    token = os.urandom(8).hex().encode()
+    t0 = time.monotonic()
+    done, backups, errors = [], {}, {}
+    try:
+        for k, off in enumerate(order):
+            if time.monotonic() - t0 > budget * 0.45:     # ★ leave time to read back and restore
+                log("time budget reached after %d of %d samples" % (k, len(order)))
+                break
+            try:
+                backups[off] = dev.read(off, size)
+                done.append(off)
+                dev.write(off, pattern(token, off, size))
+            except OSError as e:
+                errors[off] = str(e)
+            if progress:
+                progress(int(50 * (k + 1) / len(order)))
+        dev.flush()
+        bad = set(errors)
+        for k, off in enumerate(done):
+            try:
+                if dev.read(off, size) != pattern(token, off, size):
+                    bad.add(off)
+            except OSError as e:
+                bad.add(off); errors[off] = str(e)
+            if progress:
+                progress(50 + int(30 * (k + 1) / max(1, len(done))))
+    finally:
+        # ★★ REVERSE order: each restore undoes exactly the write made after its own backup was read
+        for k, off in enumerate(reversed(done)):
+            try:
+                dev.write(off, backups[off])
+            except OSError as e:
+                log("restore failed at", off, e)
+            if progress:
+                progress(80 + int(20 * (k + 1) / max(1, len(done))))
+        dev.flush()
+    tested = sorted(done)
+    limit, wrap = end, None
+    probes_done = [p for p in probes if p in backups]
+    if u in bad and probes_done:
+        # ★ the anchor was overwritten through an alias: the smallest probe that reads back wrong is u + R (with one
+        #   aliasing probe only, it reads back right — the last one written — and it is u + R itself)
+        wrong = [p for p in probes_done if p in bad]
+        wrap = (min(wrong) if wrong else max(probes_done)) - u
+        limit = min(end, wrap)
+    good_end = start
+    for off in tested:                       # verified up to the first bad sample below the limit, in address order
+        if off + size > limit:
+            break
+        if off in bad and not (off == u and wrap):
+            break
+        good_end = off + size
+    if not bad and tested:
+        good_end = end                       # ★ every sample (spread to the very last MiB) came back right
+    elif wrap and good_end >= limit - (end - start) // max(1, samples):
+        good_end = limit                     # ★ everything below the wrap held: the card's real size is the wrap
+    return {"verified_end": good_end, "claimed_end": end, "tested": len(tested), "bad": sorted(bad),
+            "wrap": wrap, "seconds": round(time.monotonic() - t0, 1)}
+
+# ── the partition ────────────────────────────────────────────────────────────────────────────────────────────────────
+def root_disk():
+    src = run("findmnt", "-n", "-o", "SOURCE", "/media/root-ro", check=False).stdout.strip() \
+        or run("findmnt", "-n", "-o", "SOURCE", "/", check=False).stdout.strip()
+    m = re.match(r"(/dev/(?:mmcblk\d+|loop\d+|nvme\d+n\d+))p(\d+)$", src) or re.match(r"(/dev/sd[a-z]+)(\d+)$", src)
+    if not m:
+        raise RuntimeError("cannot tell the root disk from %r" % src)
+    return m.group(1)
+
+def part_path(disk, n):
+    return "%s%s%d" % (disk, "p" if disk[-1].isdigit() else "", n)
+
+def table(disk):
+    return json.loads(run("sfdisk", "-J", disk).stdout)["partitiontable"]
+
+def kernel_bytes(disk):
+    with open("/sys/class/block/%s/size" % os.path.basename(disk)) as f:
+        return int(f.read()) * SECTOR
+
+def card_identity(disk):
+    d = "/sys/class/block/%s/device" % os.path.basename(disk)
+    return {k: (open(os.path.join(d, k)).read().strip() if os.path.exists(os.path.join(d, k)) else None)
+            for k in ("name", "manfid", "oemid", "date", "serial")}
+
+def gb(b):
+    return "%.1f GB" % (b / 1e9)
+
+def make_partition(disk):
+    pt = table(disk)
+    parts = pt["partitions"]
+    last_end = max(p["start"] + p["size"] for p in parts) * SECTOR
+    start = (last_end + ALIGN - 1) // ALIGN * ALIGN
+    claimed = kernel_bytes(disk)
+    marker = os.path.join(STATE, "card-capacity.json")
+    res = None
+    if os.path.exists(marker):
+        with open(marker) as f:
+            res = json.load(f)
+        if res.get("claimed_end") != claimed or res.get("start") != start:
+            res = None                       # ★ a different card in a cloned image: check this one
+    if res is None:
+        if claimed - start < MIN_BYTES:
+            log("only %d MB after the root — no data partition" % ((claimed - start) >> 20))
+            return None
+        splash("message", "Checking the card (first start only)")
+        log("capacity check: %s claimed, testing %s from %s" % (gb(claimed), gb(claimed - start), gb(start)))
+        dev = Dev(disk)
+        last = [-1]
+        def prog(p):
+            if p // 10 != last[0]:
+                last[0] = p // 10
+                splash("message", "Checking the card (first start only)|%d %%" % p)
+        res = capacity_check(dev, start, claimed, progress=prog)
+        res.update(start=start, card=card_identity(disk), at=int(time.time()))
+        os.makedirs(STATE, exist_ok=True)
+        atomic_write(marker, json.dumps(res, indent=1) + "\n")
+        log("capacity check:", json.dumps({k: res[k] for k in ("verified_end", "claimed_end", "tested", "seconds")}),
+            "bad samples:", len(res["bad"]))
+    end = res["verified_end"] // (1 << 20) * (1 << 20)
+    if res["bad"]:
+        msg = ("This card is smaller than it claims:|%s works of the %s it reports.|VibeSDR will use the %s that works."
+               % (gb(end), gb(claimed), gb(end - start)))
+        log(msg.replace("|", " "))
+        splash("message", msg)
+        time.sleep(20)                       # ★ "stop with a plain message": long enough to read, then carry on
+    if end - start < MIN_BYTES:
+        log("verified space too small for a data partition")
+        return None
+    size = (end - start) // SECTOR
+    # ★ MBR type 07 (exFAT/NTFS): what Windows and macOS expect for an exFAT card
+    run("sfdisk", "--append", "--no-reread", "--no-tell-kernel", "-q", disk,
+        input="start=%d, size=%d, type=7\n" % (start // SECTOR, size))
+    created = os.path.join(STATE, "card-created")
+    atomic_write(created, part_path(disk, 4) + "\n")
+    run("partx", "-a", "--nr", "4", disk, check=False)
+    return part_node(disk, 4)
+
+def part_node(disk, n, wait=5.0):
+    """The partition's /dev node once the KERNEL knows it (sysfs); made by hand if udev has not made it in time."""
+    p = part_path(disk, n)
+    sysd = "/sys/class/block/%s" % os.path.basename(p)
+    t0 = time.monotonic()
+    while not os.path.exists(p) and time.monotonic() - t0 < wait:
+        time.sleep(0.1)
+    if not os.path.exists(p) and os.path.exists(sysd + "/dev"):
+        major, minor = map(int, open(sysd + "/dev").read().split(":"))
+        os.mknod(p, 0o660 | 0o060000, os.makedev(major, minor))      # S_IFBLK
+    return p if os.path.exists(p) else None
+
+def fs_type(dev):
+    return run("blkid", "-p", "-o", "value", "-s", "TYPE", dev, check=False).stdout.strip()
+
+def ensure_folders():
+    for d in FOLDERS:
+        os.makedirs(os.path.join(MOUNT, d), exist_ok=True)
+    dst = os.path.join(MOUNT, "README.txt")
+    with open(README) as f:
+        want = f.read().replace("\n", "\r\n")           # ★ Notepad-friendly
+    try:
+        with open(dst, newline="") as f:
+            if f.read() == want:
+                return
+    except OSError:
+        pass
+    atomic_write(dst, want)
+
+def boot():
+    disk = os.environ.get("VIBE_CARD_DISK") or root_disk()      # ★ VIBE_CARD_DISK: tests on a loop device
+    p4 = part_path(disk, 4)
+    created = os.path.join(STATE, "card-created")
+    if any(p.get("node", "").endswith("4") for p in table(disk)["partitions"]):
+        # ★ in the table (an earlier boot made it): make sure the kernel has it too, then use it
+        run("partx", "-a", "--nr", "4", disk, check=False)
+        p4 = part_node(disk, 4) or p4
+    if not os.path.exists(p4):
+        splash("progress", "18")
+        p4 = make_partition(disk)
+        if not p4:
+            return 0
+    t = fs_type(p4)
+    if not t:
+        if os.path.exists(created):
+            splash("message", "Preparing the card")
+            log("making the exFAT filesystem on", p4)
+            run("mkfs.exfat", "-L", LABEL, p4)
+            t = "exfat"
+        else:
+            log(p4, "has no filesystem and was not made by us — leaving it alone")
+            return 0
+    if t != "exfat":
+        log(p4, "is", t, "not exfat — leaving it alone")
+        return 0
+    # ★ fsck at EVERY boot before mounting (§0.1): a pulled battery mid-write leaves a dirty volume, and exFAT has no journal
+    r = run("fsck.exfat", "-p", p4, check=False)
+    if r.returncode not in (0, 1):
+        log("fsck.exfat -p:", r.returncode, (r.stdout + r.stderr).strip()[-300:])
+    os.makedirs(MOUNT, exist_ok=True)
+    import pwd
+    try:
+        u = pwd.getpwnam("vibeserver"); uid, gid = u.pw_uid, u.pw_gid
+    except KeyError:
+        uid = gid = 0
+    opts = "uid=%d,gid=%d,fmask=0133,dmask=0022,noatime,iocharset=utf8,errors=remount-ro" % (uid, gid)
+    r = run("mount", "-t", "exfat", "-o", opts, p4, MOUNT, check=False)
+    if r.returncode != 0:
+        log("mount failed:", r.stderr.strip())
+        return 1
+    ensure_folders()
+    if os.path.exists(created):
+        os.unlink(created)
+    splash("message", "")
+    log("mounted", p4, "at", MOUNT)
+    return 0
+
+def main():
+    a = sys.argv[1:]
+    if a[:1] == ["boot"]:
+        sys.exit(boot())
+    if a[:1] == ["check"] and len(a) == 4:
+        dev = Dev(a[1])
+        res = capacity_check(dev, int(a[2]), int(a[3]), progress=None,
+                             budget=float(os.environ.get("VIBE_CARD_BUDGET", BUDGET_S)),
+                             samples=int(os.environ.get("VIBE_CARD_SAMPLES", SAMPLES)))
+        print(json.dumps(res))
+        sys.exit(0)
+    print("usage: vibe-card boot | vibe-card check DEV START END", file=sys.stderr)
+    sys.exit(2)
+
+if __name__ == "__main__":
+    main()

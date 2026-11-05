@@ -1,0 +1,15 @@
+[Unit]
+Description=VibeSDR CPU: schedutil over the stock 408–1296 MHz steps
+DefaultDependencies=no
+After=sysinit.target
+Before=basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# ★ schedutil (Stuart 2026-11-05) — also set by cpufreq.default_governor= on the kernel command line; this repeats it in
+#   case the kernel ignored the parameter, and caps every policy at 1296 MHz whatever the device tree says.
+ExecStart=-/bin/sh -c 'for p in /sys/devices/system/cpu/cpufreq/policy*; do echo schedutil > $p/scaling_governor; echo 1296000 > $p/scaling_max_freq; done'
+
+[Install]
+WantedBy=basic.target

@@ -1,0 +1,330 @@
+#!/usr/bin/python3 -I
+# vibe-splash — the R36S boot screen: VibeSDR artwork + a progress bar + a message line, drawn straight on DRM/KMS
+# from the moment the panel exists until Cog has drawn its first frame.
+#
+#   vibe-splash                         boot mode: listen on /run/vibe-splash.fifo (vibe-splash-ctl writes to it)
+#   vibe-splash --message TEXT [--no-progress]    a one-shot screen (power-off, a card problem) until killed
+#
+# ★★★ WHY OUR OWN AND NOT PLYMOUTH. (1) The bar is REAL progress: the boot units report milestones (state mounted →
+#     card ready → engine up → engine answering → browser started), where Plymouth guesses from the last boot's
+#     duration — which a read-only root cannot keep. (2) The hand-off to Cog is exact: we DROP the DRM master but keep
+#     our framebuffer on screen, Cog becomes master, and we leave only when the CRTC shows Cog's framebuffer — no black
+#     gap, no flash of the console. (3) Messages the boot needs ("Radio settings reset", the card check, a fake card)
+#     are one line in a FIFO. (4) ~300 lines of stdlib Python and a 1.2 MB picture: no daemon, no theme engine, no
+#     initramfs. Plymouth without an initramfs starts no earlier than we do.
+# ★★ THE U-BOOT ON THIS CARD (ROCKNIX's mainline v2025.10) HAS NO PX30 DISPLAY DRIVER — it never lights the panel. So
+#    the first light of the screen is the kernel's panel driver; the kernel is quiet, fbcon's cursor is off, and this
+#    program starts as one of the first units (DefaultDependencies=no). See image/r36s/README.md "Splash".
+# ★ The picture is pre-rendered at build time (art/make-splash.py, 640×480 XRGB8888 + a glyph atlas), so drawing is a
+#   memory copy. The display mode is the panel's PREFERRED one, which our overlay makes the 60.0 Hz mode.
+import ctypes, fcntl, mmap, os, select, struct, sys, time, zlib
+
+ASSETS = os.environ.get("VIBE_SPLASH_ASSETS", "/usr/share/vibesdr-r36s")
+FIFO = os.environ.get("VIBE_SPLASH_FIFO", "/run/vibe-splash.fifo")
+W, H = 640, 480
+BAR_X, BAR_Y, BAR_W, BAR_H = 160, 372, 320, 6
+MSG_Y = 400
+FG = (0xE8, 0xF5, 0xEC)         # message text
+BAR_ON = (0x5C, 0xE0, 0x7A)     # the icon's green
+BAR_OFF = (0x1C, 0x33, 0x22)
+
+def _IOWR(nr, size): return (3 << 30) | (size << 16) | (ord("d") << 8) | nr
+def _IO(nr): return (ord("d") << 8) | nr
+SET_MASTER, DROP_MASTER = _IO(0x1E), _IO(0x1F)
+GETRESOURCES, GETCRTC, SETCRTC = _IOWR(0xA0, 64), _IOWR(0xA1, 104), _IOWR(0xA2, 104)
+GETENCODER, GETCONNECTOR = _IOWR(0xA6, 20), _IOWR(0xA7, 80)
+ADDFB, CREATE_DUMB, MAP_DUMB = _IOWR(0xAE, 28), _IOWR(0xB2, 32), _IOWR(0xB3, 16)
+MODEINFO = struct.Struct("I10H3I32s")   # struct drm_mode_modeinfo, 68 bytes
+PREFERRED = 1 << 3
+
+def log(*a):
+    print("vibe-splash:", *a, file=sys.stderr, flush=True)
+
+def ioctl(fd, req, buf):
+    fcntl.ioctl(fd, req, buf, True)
+    return buf
+
+def u32array(n):
+    a = (ctypes.c_uint32 * max(n, 1))()
+    return a, ctypes.addressof(a)
+
+def refresh(m):
+    clock, hd, hss, hse, ht, hsk, vd, vss, vse, vt, vsc, vr, fl, ty, name = m
+    return clock * 1000.0 / (ht * vt) if ht and vt else 0
+
+class Display:
+    def __init__(self):
+        self.fd = self.open_card()
+        res = bytearray(64)
+        ioctl(self.fd, GETRESOURCES, res)
+        n_fb, n_crtc, n_conn, n_enc = struct.unpack_from("4I", res, 32)
+        crtcs, pcrtc = u32array(n_crtc); conns, pconn = u32array(n_conn); encs, penc = u32array(n_enc)
+        struct.pack_into("4Q4I", res, 0, 0, pcrtc, pconn, penc, 0, n_crtc, n_conn, n_enc)
+        ioctl(self.fd, GETRESOURCES, res)
+        self.conn = self.mode = None
+        for cid in conns[:n_conn]:
+            c = bytearray(80)
+            struct.pack_into("I", c, 48, cid)
+            ioctl(self.fd, GETCONNECTOR, c)
+            n_modes, _, n_e = struct.unpack_from("3I", c, 32)
+            connection = struct.unpack_from("I", c, 60)[0]
+            if connection != 1 or n_modes == 0:
+                continue
+            modes = ctypes.create_string_buffer(MODEINFO.size * n_modes)
+            ce, pce = u32array(n_e)
+            struct.pack_into("QQQQ", c, 0, pce, ctypes.addressof(modes), 0, 0)
+            struct.pack_into("3I", c, 32, n_modes, 0, n_e)
+            ioctl(self.fd, GETCONNECTOR, c)
+            ml = [MODEINFO.unpack_from(modes.raw, i * MODEINFO.size) for i in range(n_modes)]
+            ml = [m for m in ml if m[1] == W and m[6] == H] or ml
+            pref = [m for m in ml if m[13] & PREFERRED]
+            # ★ the preferred mode (60.0 Hz with our overlay); else the one nearest 60 Hz
+            self.mode = pref[0] if pref else min(ml, key=lambda m: abs(refresh(m) - 60))
+            want = os.environ.get("VIBE_SPLASH_MODE_CLOCK")      # ★ tests only: force a mode by its pixel clock (kHz)
+            if want:
+                self.mode = next(m for m in ml if m[0] == int(want))
+            self.modes = ml
+            self.conn = cid
+            enc_id = struct.unpack_from("I", c, 44)[0] or ce[0]
+            e = bytearray(20); struct.pack_into("I", e, 0, enc_id)
+            ioctl(self.fd, GETENCODER, e)
+            crtc_id, possible = struct.unpack_from("I", e, 8)[0], struct.unpack_from("I", e, 12)[0]
+            if not crtc_id:
+                crtc_id = next(crtcs[i] for i in range(n_crtc) if possible & (1 << i))
+            self.crtc = crtc_id
+            break
+        if not self.conn:
+            raise OSError("no connected display")
+        self.w, self.h = self.mode[1], self.mode[6]
+        d = bytearray(32); struct.pack_into("4I", d, 0, self.h, self.w, 32, 0)
+        ioctl(self.fd, CREATE_DUMB, d)
+        handle, self.pitch, size = struct.unpack_from("IIQ", d, 16)
+        f = bytearray(28); struct.pack_into("7I", f, 0, 0, self.w, self.h, self.pitch, 32, 24, handle)
+        ioctl(self.fd, ADDFB, f)
+        self.fb = struct.unpack_from("I", f, 0)[0]
+        m = bytearray(16); struct.pack_into("I", m, 0, handle)
+        ioctl(self.fd, MAP_DUMB, m)
+        self.map = mmap.mmap(self.fd, size, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE,
+                             offset=struct.unpack_from("Q", m, 8)[0])
+        log("display %dx%d @ %.2f Hz, connector %d, crtc %d" % (self.w, self.h, refresh(self.mode), self.conn, self.crtc))
+
+    @staticmethod
+    def open_card(timeout=15.0):
+        # ★ the card with connectors (rockchip-drm); panfrost's render-only node has none
+        t0 = time.monotonic()
+        while True:
+            for n in range(4):
+                p = "/dev/dri/card%d" % n
+                try:
+                    fd = os.open(p, os.O_RDWR | os.O_CLOEXEC)
+                except OSError:
+                    continue
+                res = bytearray(64)
+                try:
+                    ioctl(fd, GETRESOURCES, res)
+                    if struct.unpack_from("I", res, 40)[0] > 0:
+                        return fd
+                except OSError:
+                    pass
+                os.close(fd)
+            if time.monotonic() - t0 > timeout:
+                raise OSError("no DRM card with a display")
+            time.sleep(0.1)
+
+    def show(self):
+        conns = (ctypes.c_uint32 * 1)(self.conn)
+        c = bytearray(104)
+        struct.pack_into("QI6I", c, 0, ctypes.addressof(conns), 1, self.crtc, self.fb, 0, 0, 0, 1)
+        MODEINFO.pack_into(c, 36, *self.mode)
+        ioctl(self.fd, SETCRTC, c)
+
+    def measure_hz(self, frames=120):
+        """Time `frames` vblanks on our CRTC (DRM_IOCTL_WAIT_VBLANK, relative) — the panel's real refresh rate."""
+        WAIT_VBLANK = _IOWR(0x3A, 24)
+        t0 = None
+        for i in range(frames + 1):
+            v = bytearray(24); struct.pack_into("II", v, 0, 0x1, 1)      # _DRM_VBLANK_RELATIVE, +1
+            ioctl(self.fd, WAIT_VBLANK, v)
+            sec, usec = struct.unpack_from("qq", v, 8)
+            t = sec + usec / 1e6
+            if t0 is None:
+                t0 = t
+        return frames / (t - t0)
+
+    def current_fb(self):
+        c = bytearray(104); struct.pack_into("I", c, 12, self.crtc)
+        ioctl(self.fd, GETCRTC, c)
+        return struct.unpack_from("I", c, 16)[0]
+
+
+class Splash:
+    def __init__(self, show_progress=True):
+        self.d = Display()
+        with open(os.path.join(ASSETS, "splash.bgrx.z"), "rb") as f:
+            self.base = zlib.decompress(f.read())
+        self.font = self.load_font(os.path.join(ASSETS, "splash-font.bin"))
+        self.show_progress = show_progress
+        self.target = self.shown = 0.0
+        self.lines = []
+        self.blit_all()
+        self.d.show()
+
+    @staticmethod
+    def load_font(path):
+        with open(path, "rb") as f:
+            data = f.read()
+        assert data[:4] == b"VSF1"
+        h = data[4]
+        glyphs, i = {}, 5
+        for ch in range(32, 127):
+            w = data[i]; i += 1
+            glyphs[chr(ch)] = (w, data[i:i + w * h]); i += w * h
+        return h, glyphs
+
+    def put_rows(self, y0, y1):
+        """Copy base rows y0..y1 (exclusive) into the framebuffer, honouring the pitch."""
+        rb = W * 4
+        if self.d.pitch == rb and self.d.w == W:
+            self.d.map[y0 * rb:y1 * rb] = self.base[y0 * rb:y1 * rb]
+        else:
+            for y in range(y0, min(y1, self.d.h)):
+                o = y * self.d.pitch
+                self.d.map[o:o + min(rb, self.d.pitch)] = self.base[y * rb:y * rb + min(rb, self.d.pitch)]
+
+    def fill(self, x, y, w, h, rgb):
+        px = bytes((rgb[2], rgb[1], rgb[0], 0xFF)) * w
+        for yy in range(y, y + h):
+            o = yy * self.d.pitch + x * 4
+            self.d.map[o:o + w * 4] = px
+
+    def text(self, s, y):
+        fh, glyphs = self.font
+        s = "".join(c if c in glyphs else "?" for c in s)
+        width = sum(glyphs[c][0] for c in s)
+        if width > W - 20:              # ★ too long for one line: cut, never overflow the panel
+            while s and sum(glyphs[c][0] for c in s + "...") > W - 20:
+                s = s[:-1]
+            s += "..."
+            width = sum(glyphs[c][0] for c in s)
+        x = (W - width) // 2
+        for c in s:
+            gw, alpha = glyphs[c]
+            for gy in range(fh):
+                row = alpha[gy * gw:(gy + 1) * gw]
+                if not any(row):
+                    continue
+                o = (y + gy) * self.d.pitch + x * 4
+                bo = ((y + gy) * W + x) * 4
+                seg = bytearray(self.base[bo:bo + gw * 4])
+                for gx, a in enumerate(row):
+                    if a:
+                        for k, fgc in enumerate((FG[2], FG[1], FG[0])):
+                            seg[gx * 4 + k] = (fgc * a + seg[gx * 4 + k] * (255 - a)) // 255
+                self.d.map[o:o + gw * 4] = bytes(seg)
+            x += gw
+
+    def draw_bar(self):
+        if not self.show_progress:
+            return
+        on = int(BAR_W * max(0.0, min(1.0, self.shown / 100.0)))
+        self.fill(BAR_X, BAR_Y, on, BAR_H, BAR_ON)
+        self.fill(BAR_X + on, BAR_Y, BAR_W - on, BAR_H, BAR_OFF)
+
+    def draw_msg(self):
+        fh = self.font[0]
+        self.put_rows(MSG_Y, min(H, MSG_Y + 3 * (fh + 4)))
+        for i, line in enumerate(self.lines[:3]):
+            self.text(line, MSG_Y + i * (fh + 4))
+
+    def blit_all(self):
+        self.put_rows(0, H)
+        self.draw_bar()
+        self.draw_msg()
+
+    def command(self, line):
+        cmd, _, arg = line.strip().partition(" ")
+        if cmd == "progress":
+            try:
+                self.target = max(self.target, min(100.0, float(arg)))
+            except ValueError:
+                pass
+        elif cmd == "message":
+            self.lines = [l for l in arg.split("|")] if arg else []
+            self.draw_msg()
+        elif cmd == "handoff":
+            return "handoff"
+        elif cmd == "quit":
+            return "quit"
+        return None
+
+    def run(self):
+        try:
+            os.unlink(FIFO)
+        except FileNotFoundError:
+            pass
+        os.mkfifo(FIFO, 0o600)
+        fd = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)      # ★ RDWR: never sees EOF between writers
+        buf = b""
+        handoff_at = None
+        while True:
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if r:
+                buf += os.read(fd, 4096)
+                *lines, buf = buf.split(b"\n")
+                for l in lines:
+                    what = self.command(l.decode("utf-8", "replace"))
+                    if what == "quit":
+                        return
+                    if what == "handoff" and handoff_at is None:
+                        # ★★ drop the master, KEEP the framebuffer on screen: Cog becomes master on its open, and the
+                        #    panel shows us until its first page flip replaces our framebuffer.
+                        self.target = 100.0
+                        handoff_at = time.monotonic()
+                        try:
+                            fcntl.ioctl(self.d.fd, DROP_MASTER)
+                        except OSError as e:
+                            log("drop master:", e)
+            # ★ the bar eases toward the last milestone and creeps a little past it, so a slow step never looks frozen
+            goal = self.target if self.target >= 100 else min(self.target + 8.0, 97.0)
+            rate = 0.25 if self.shown < self.target else 0.01
+            new = self.shown + (goal - self.shown) * rate
+            if abs(new - self.shown) > 0.05:
+                self.shown = new
+                self.draw_bar()
+            if handoff_at is not None:
+                try:
+                    if self.d.current_fb() != self.d.fb:
+                        log("Cog has the display after %.1f s" % (time.monotonic() - handoff_at))
+                        return
+                except OSError:
+                    pass
+                if time.monotonic() - handoff_at > 90:
+                    log("no frame from Cog in 90 s — leaving the screen to it")
+                    return
+
+
+def main():
+    a = sys.argv[1:]
+    if "--measure" in a:                     # ★ tests: show the splash, time the panel's vblanks, print, exit
+        s = Splash(show_progress=False)
+        m = s.d.mode
+        print("mode clock %d kHz %dx%d total %dx%d: %.3f Hz nominal, %.3f Hz measured over 120 vblanks"
+              % (m[0], m[1], m[6], m[4], m[9], refresh(m), s.d.measure_hz()))
+        return
+    if "--message" in a:
+        s = Splash(show_progress="--no-progress" not in a)
+        s.lines = a[a.index("--message") + 1].split("|")
+        s.draw_msg()
+        if "--seconds" in a:
+            time.sleep(float(a[a.index("--seconds") + 1]))
+            return
+        while True:
+            time.sleep(3600)
+    Splash().run()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

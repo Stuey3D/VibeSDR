@@ -1,0 +1,47 @@
+[Unit]
+Description=VibeServer — the handheld engine (127.0.0.1 only)
+Documentation=https://vibesdr.net
+# ★★ THE HANDHELD PROFILE of the same vibeserver (§0.1): local only, no tunnel / listing / mDNS / admin. Its exact
+#    command line is the engine's half of the work (§0.2); this unit is the image's half: user, paths, ordering.
+After=vibe-hwd.service vibe-card.service vibe-bootkeys.service vibe-state.service vibe-clock.service
+Wants=vibe-hwd.service vibe-card.service vibe-bootkeys.service
+# ★ After vibe-state, never Requires: a missing state partition must not stop the radio (settings then in RAM)
+
+[Service]
+Type=simple
+Environment=VIBESERVER_DATA_DIR=/var/lib/vibeserver
+Environment=VIBESERVER_CARD_DIR=/media/VIBESDR
+Environment=VIBE_HWD_SOCK=/run/vibe-hwd.sock
+ExecStart=/usr/bin/vibeserver --handheld
+ExecStartPost=-/usr/lib/vibesdr-r36s/vibe-splash-ctl progress 50
+Restart=always
+RestartSec=2
+User=vibeserver
+Group=vibeserver
+SupplementaryGroups=plugdev audio
+# ★ Network > Audio > Spectrum > Decoders inside the engine; the browser runs below the engine (vibe-kiosk Nice=5)
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/vibeserver /etc/vibeserver /media/VIBESDR /run/vibe-handheld
+RuntimeDirectory=vibeserver
+RuntimeDirectoryMode=0700
+UMask=0022
+DeviceAllow=char-usb_device rw
+DeviceAllow=char-alsa rw
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyACM rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# ★ a power-off gives the engine time to save every radio's memory (it has already had the hwd "shutdown" event)
+TimeoutStopSec=10s
+
+[Install]
+WantedBy=multi-user.target
