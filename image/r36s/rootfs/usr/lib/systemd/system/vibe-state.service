@@ -1,5 +1,5 @@
 [Unit]
-Description=VibeSDR state partition: check, mount, bind the engine's and browser's data, restore the SSH hash
+Description=VibeSDR state partition: check, mount, bind the engine's and browser's data
 Documentation=file:/usr/share/doc/vibesdr-r36s/README.md
 # ★ early, and it never fails or hangs the boot (bounded waits; every failure carries on in RAM) — see vibe-state
 DefaultDependencies=no

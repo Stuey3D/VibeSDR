@@ -146,7 +146,7 @@ in_root useradd --system --user-group --home-dir /var/lib/vibe-kiosk --no-create
   --groups video,render,input,audio vibe-kiosk
 in_root id vibeserver >/dev/null || die "the vibeserver package did not create its user"
 in_root usermod -a -G audio,plugdev vibeserver 2>/dev/null || true
-# ★ root has NO password: locked ('*'), so no console and no SSH login exists until the owner sets one (vibe-hwd)
+# ★ root has NO password: locked ('*') — there is no login anywhere on the handheld (no SSH, no getty on the panel)
 in_root usermod -p '*' root
 mkdir -p "$R/media/root-ro" "$R/media/root-rw" "$R/media/VIBESDR" "$R/var/lib/vibe-state" "$R/var/lib/vibe-kiosk" \
   "$R/var/lib/vibeserver" "$R/boot/firmware" "$R/usr/share/doc/vibesdr-r36s"
@@ -157,16 +157,16 @@ for u in vibeserver.service vibeserver-radios.service vibeserver-maintenance.pat
          vibeserver-pocket-cpu.service; do
   in_root systemctl mask "$u" >/dev/null 2>&1 || true
 done
-# ★ no console on the panel (Cog has it), no network waits, no apt timers, no SSH until the owner asks
-for u in getty@tty1.service systemd-networkd-wait-online.service apt-daily.timer apt-daily-upgrade.timer \
+# ★★ no console on the panel (Cog has it), no apt timers, and NO NETWORK SERVICES: networkd / resolved / timesyncd
+#    masked — the handheld never configures a network (no SSH either: not installed, Stuart 2026-11-05)
+for u in getty@tty1.service systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service \
+         systemd-resolved.service systemd-network-generator.service apt-daily.timer apt-daily-upgrade.timer \
          apt-daily.service apt-daily-upgrade.service e2scrub_all.timer e2scrub_reap.service fstrim.timer \
          systemd-timesyncd.service systemd-backlight@backlight:backlight.service; do
   in_root systemctl mask "$u" >/dev/null 2>&1 || true
 done
-in_root systemctl disable ssh.service ssh.socket >/dev/null 2>&1 || true
-in_root systemctl mask ssh.socket >/dev/null 2>&1 || true
 for u in vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service \
-         vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service systemd-networkd.service; do
+         vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service; do
   in_root systemctl enable "$u" >/dev/null
 done
 in_root systemctl set-default multi-user.target >/dev/null
@@ -175,7 +175,6 @@ printf '127.0.0.1\tlocalhost\n127.0.1.1\tvibesdr-r36s\n::1\tlocalhost ip6-localh
 ln -sf /usr/share/zoneinfo/Etc/UTC "$R/etc/localtime" 2>/dev/null || true
 echo "Etc/UTC" > "$R/etc/timezone"
 # ★ made on the device, never shared by every card
-rm -f "$R"/etc/ssh/ssh_host_*
 : > "$R/etc/machine-id"; rm -f "$R/var/lib/dbus/machine-id"
 # ★ the clock floor (vibe-clock, and systemd's own): no clock on this card may be earlier than the build
 touch "$R/usr/lib/clock-epoch"
@@ -254,8 +253,7 @@ cp "$S" "/out/vibesdr-r36s-$IMAGE_VERSION.SOURCES.txt"
 
 # ── 8. The state partition's first contents (so the fstab bind mounts work on the very first boot) ───────────────────
 ST=$W/state
-mkdir -p "$ST/vibeserver" "$ST/kiosk" "$ST/ssh"
-chmod 0700 "$ST/ssh"
+mkdir -p "$ST/vibeserver" "$ST/kiosk"
 chown "$(in_root id -u vibeserver):$(in_root id -g vibeserver)" "$ST/vibeserver"
 chown "$(in_root id -u vibe-kiosk):$(in_root id -g vibe-kiosk)" "$ST/kiosk"
 chmod 0750 "$ST/vibeserver"

@@ -71,17 +71,22 @@ for f in /usr/lib/vibesdr-r36s/vibe-hwd /usr/lib/vibesdr-r36s/vibe-splash /usr/l
 done
 exists /usr/lib/vibeserver/cloudflared && fail "cloudflared is on the card"
 WANTS=/etc/systemd/system/multi-user.target.wants
-for u in vibe-hwd vibe-bootkeys vibe-card vibeserver-handheld vibe-kiosk systemd-networkd; do
+for u in vibe-hwd vibe-bootkeys vibe-card vibeserver-handheld vibe-kiosk; do
   exists "$WANTS/$u.service" || fail "$u.service is not enabled"
 done
 exists /etc/systemd/system/sysinit.target.wants/vibe-splash.service || fail "vibe-splash is not enabled"
 for u in vibe-clock vibe-state; do exists /etc/systemd/system/sysinit.target.wants/$u.service || fail "$u is not enabled"; done
-for u in vibeserver.service getty@tty1.service ssh.socket apt-daily.timer apt-daily-upgrade.timer systemd-networkd-wait-online.service; do
+for u in vibeserver.service getty@tty1.service apt-daily.timer apt-daily-upgrade.timer systemd-networkd.service \
+         systemd-networkd.socket systemd-networkd-wait-online.service; do
   [ "$(link "/etc/systemd/system/$u")" = /dev/null ] || fail "$u is not masked"
 done
-exists "$WANTS/ssh.service" && fail "ssh.service is enabled — SSH must be off on a fresh card"
-exists /etc/systemd/system/sshd.service && [ "$(link /etc/systemd/system/sshd.service)" != /dev/null ] && fail "sshd.service alias enabled"
-dfs "ls -l /etc/ssh" | grep -q 'ssh_host_' && fail "SSH host keys are baked into the image"
+# ★★★ NO SSH (Stuart 2026-11-05): no server package, no daemon binary, no unit, no config, no keys
+for p in openssh-server openssh-sftp-server dropbear tinysshd telnetd; do
+  dfs "cat /var/lib/dpkg/status" | grep -qx "Package: $p" && fail "$p is installed"
+done
+for f in /usr/sbin/sshd /usr/lib/systemd/system/ssh.service /usr/lib/systemd/system/ssh.socket /etc/ssh/sshd_config; do
+  exists "$f" && fail "$f is on the card"
+done
 dfs "cat /etc/shadow" | grep -E '^root:' | cut -d: -f2 | grep -qx '\*' || fail "root has a password in the image"
 dfs "cat /etc/shadow" | awk -F: '$2 !~ /^[*!]/ {print $1}' | grep -q . && fail "an account has a password in the image"
 dfs "cat /etc/udev/rules.d/70-vibe-r36s-gamepad.rules" | grep -q 'ENV{ID_INPUT_TABLET_PAD}=""' || fail "gamepad udev rule"
@@ -94,14 +99,14 @@ dfs "ls /etc/apt/sources.list.d" | grep -q '\.list' && fail "apt sources left on
 for p in cloudflared unattended-upgrades avahi-daemon; do
   dfs "cat /var/lib/dpkg/status" | grep -qx "Package: $p" && fail "$p is installed"
 done
-ok "root: services enabled, server units + getty + apt timers masked, SSH disabled with no keys and no password, udev rule, Panfrost, schedutil, Cog with the gamepad"
+ok "root: services enabled, server units + getty + apt timers masked, no SSH at all, no network services, no passwords, udev rule, Panfrost, schedutil, Cog with the gamepad"
 
 # ── state partition ──
 dd if="$IMG" of="$T/state.ext4" bs=512 skip="$S3" count="$Z3" status=none
 e2fsck -fn "$T/state.ext4" >/dev/null 2>&1 || fail "state filesystem has errors"
 [ "$(dumpe2fs -h "$T/state.ext4" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p')" = vibestate ] || fail "state label"
-for d in vibeserver kiosk ssh; do debugfs -R "stat /$d" "$T/state.ext4" 2>/dev/null | grep -q 'Type: directory' || fail "state lacks /$d"; done
-ok "state: ext4 'vibestate' with vibeserver/, kiosk/, ssh/ (vibe-state's bind mounts work from the first boot)"
+for d in vibeserver kiosk; do debugfs -R "stat /$d" "$T/state.ext4" 2>/dev/null | grep -q 'Type: directory' || fail "state lacks /$d"; done
+ok "state: ext4 'vibestate' with vibeserver/, kiosk/ (vibe-state's bind mounts work from the first boot)"
 
 # ── units parse (systemd-analyze verify on the real tree) ──
 if [ -n "${2:-}" ] && [ -d "$2" ] && command -v systemd-analyze >/dev/null; then
@@ -109,5 +114,34 @@ if [ -n "${2:-}" ] && [ -d "$2" ] && command -v systemd-analyze >/dev/null; then
   OUT=$(cd "$2/usr/lib/systemd/system" && SYSTEMD_LOG_LEVEL=notice systemd-analyze verify --root="$2" $U 2>&1 | grep -v -E 'Cannot add dependency job|is not executable|Failed to (connect|put)|bpf|kmsg|No such file or directory.*(dbus|proc)' || true)
   if [ -n "$OUT" ]; then echo "$OUT" | sed 's/^/      /'; fail "systemd-analyze verify reported problems"; fi
   ok "systemd-analyze verify: the image's units parse"
+
+  # ★★★ WHAT MAY LISTEN (Stuart 2026-11-05: nothing but the engine on 127.0.0.1). Offline, from the tree itself: every
+  #     ENABLED socket unit's Listen…= lines (only AF_UNIX paths / netlink / abstract allowed), and every enabled
+  #     service's executable — a network daemon among them fails the build. The engine's own bind address is its
+  #     handheld profile's (§0.1: 127.0.0.1 only); the live proof is `ss -tulnp` on the booted root (README "Tests").
+  echo "      listening sockets the image would open at boot (enabled .socket units):"
+  BAD=""
+  # ★ enabled = linked from a .wants/ (admin's /etc and the packages' static /usr/lib ones), and NOT masked in /etc
+  masked() { [ "$(readlink "$2/etc/systemd/system/$1" 2>/dev/null)" = /dev/null ]; }
+  for s in $(find "$2/etc/systemd/system" "$2/usr/lib/systemd/system" -path '*.wants/*.socket' 2>/dev/null | sort -u); do
+    u=$(basename "$s"); masked "$u" "$2" && continue
+    # ★ the links are absolute INSIDE the image (or relative): resolve them under the tree, never on the build host
+    f="$2/usr/lib/systemd/system/$u"; [ -f "$f" ] || f="$2/etc/systemd/system/$u"
+    grep -E '^Listen[A-Za-z]*=' "$f" 2>/dev/null | while read -r l; do
+      v=${l#*=}
+      case "$l" in ListenNetlink=*|ListenSpecial=*|ListenFIFO=*) k=ok ;; *) case "$v" in /*|@*) k=ok ;; *) k=NETWORK ;; esac ;; esac
+      printf '        %-34s %-48s %s\n' "$u" "$l" "$k"
+    done
+    grep -E '^Listen(Stream|Datagram|SequentialPacket)=' "$f" 2>/dev/null | cut -d= -f2 | grep -vqE '^(/|@)' && BAD="$BAD $u"
+  done
+  [ -z "$BAD" ] || fail "socket unit(s) listen on the network:$BAD"
+  SV=$(for x in $(find "$2/etc/systemd/system" "$2/usr/lib/systemd/system" -path '*.wants/*.service' -exec basename {} \; 2>/dev/null | sort -u); do
+         masked "$x" "$2" || printf '%s ' "$x"; done)
+  for d in sshd dropbear telnetd avahi-daemon cloudflared systemd-networkd systemd-resolved systemd-timesyncd \
+           rpcbind cupsd exim4 nginx lighttpd apache2 smbd; do
+    echo " $SV " | grep -q " $d.service " && fail "$d.service is enabled"
+  done
+  echo "      enabled services: $SV"
+  ok "listening: no enabled socket unit and no enabled service opens a network port — the engine (127.0.0.1) is the only listener"
 fi
 echo "==> verify: all checks passed"

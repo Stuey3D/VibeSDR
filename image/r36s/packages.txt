@@ -11,7 +11,7 @@ util-linux
 util-linux-extra
 passwd
 procps
-iproute2
+iproute2          # ★ `ss`: the image's own proof that nothing but the engine listens (verify / diagnostics)
 ca-certificates
 curl
 adduser
@@ -53,5 +53,5 @@ libxcb-xfixes0
 libdrm2
 fonts-dejavu-core
 
-# SSH: installed, OFF until the owner sets a password and switches it on (vibe-hwd)
-openssh-server
+# ★★★ NO SSH, NO NETWORK SERVICES (Stuart 2026-11-05: "we don't need SSH"). Nothing on the card listens on any
+#     port but the engine on 127.0.0.1; debugging is the card's "Diagnostic logs/" export.

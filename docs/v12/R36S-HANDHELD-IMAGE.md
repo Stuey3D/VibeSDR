@@ -36,7 +36,7 @@ write ~8.5 MB/s.
 | Joypad | `r36s_Gamepad` (event3), udev tags it **ID_INPUT_TABLET_PAD** → libmanette skips it | udev rule clearing `ID_INPUT_TABLET{,_PAD}`; Cog `--gamepad=manette` |
 | Wi-Fi | **none** (only EVB leftovers in the DTB) | none needed |
 | USB device mode | **none** on either port (Vol- disk mode, C–C and A–C cables) — OTG is host-only, as the radio needs | files + updates by **card swap** |
-| USB host (OTG) | a USB-C Ethernet adapter works (SSH for development) | radio on OTG |
+| USB host (OTG) | a USB-C Ethernet adapter works (SSH into ROCKNIX for development; the image itself has no SSH) | radio on OTG |
 
 **The browser test** (Debian trixie container in `/storage/vibetest`, entered with `unshare -m` + `pivot_root` so WebKit's
 bubblewrap sandbox stays ON; Cog 0.18.4 / WPE 2.48.3 on the live waterfall from a VibeServer):
@@ -76,7 +76,7 @@ root ~1.3 GB (read-only) · p3 ext4 `vibestate` 256 MiB · p4 exFAT `VIBESDR` ma
 | Cog kiosk | unprivileged `vibe-kiosk`, bubblewrap ON, Panfrost (4 DRM fds), live waterfall from the Pi 2: **WPEWebProcess 58–64 %** at 80 Hz, cog 7 %, 357 MB used of 730 |
 | Gamepad | the real `r36s_Gamepad` reaches the page: **mapping "standard", 17 buttons, 4 axes**; a pad press is a gesture — AudioContext suspended → **running**, ALSA RUNNING |
 | Autoplay | `--media-playback-requires-user-gesture=false` does **not** start WebAudio in WPE 2.48 (stays suspended) — moot: the start screen + A press stays (Stuart) |
-| vibe-hwd | every §0.2 request; volume keys (uinput stand-ins) → raw 220→235→226 + `volume` events; jack in/out → mux HP/SPK + `output`; short power → `bl_power` 4 / brightness 0, a pad press wakes; 2 s hold → `shutdown` event, ack after 1.0 s honoured; SSH password → yescrypt hash only (0600), never in a log |
+| vibe-hwd | every §0.2 request; volume keys (uinput stand-ins) → raw 220→235→226 + `volume` events; jack in/out → mux HP/SPK + `output`; short power → `bl_power` 4 / brightness 0, a pad press wakes; 2 s hold → `shutdown` event, ack after 1.0 s honoured; `get/set ssh` → `"not supported"` |
 | Clock | `set time` + `vibe-clock save` set the RK817 RTC (read back within 1 s); offset + floor saved |
 | Start + Select | flag written with both held (uinput pad); the real pad untouched → normal start |
 | Card | on a 4 GiB loop file, the R36S's own kernel: capacity check 61.7 s (98 samples), p4 to the kernel's full size, exFAT VIBESDR mounted as `vibeserver`, folders + README; second boot + a dirty volume fsck and mount. Simulated fakes: 64 GB claiming / 8 GiB real → 8.59 GB found; drop-writes 128/4 GB → 3.99 GB; every touched block restored |
@@ -88,18 +88,21 @@ in `scaling_available_frequencies`, Debian's udev naming the devices, first-boot
 the splash from the first kernel frame, power-off/battery shutdown for real, and everything with a radio (OTG cannot
 carry a radio and the Ethernet adapter at once: hot-swap, per-radio memory, decoders, CPU with the engine).
 
-**Decisions for Stuart:**
-1. **No logo before the kernel.** ROCKNIX's mainline U-Boot has no PX30 display driver, so the panel is dark for the
-   ~1–2 s of U-Boot; the first light is our splash. A logo from the first instant means a U-Boot with a PX30
-   VOP/DSI driver (a U-Boot project, and an untested loader on the card) — worth it?
-2. **A short power press only blanks the backlight** (`bl_power` 4); the panel keeps scanning out, because DPMS needs
-   the DRM master (Cog). The page should also stop drawing on `{"event":"screen","screen":"off"}` to save the CPU.
-3. **SSH logs in as root** with the owner's password (development access needs root: `remount,rw /media/root-ro`).
-   A dedicated user is possible if you prefer.
-4. **The client must start audio from the pad:** its gate resumes on pointer/key/focus only; on the Pi 2 page an A press
-   did not start audio. The gamepad A handler needs `audio.resume()` (proven to work from the gamepad poll).
-5. **Known limit of the capacity check:** a fake that wraps at a size that is not a power of two is not caught (those
-   usually drop writes too, which is caught). A power cut during the ~1 min first-boot check on a fake card can damage it.
+**Decided (Stuart, 2026-11-05):**
+1. **No logo before the kernel — leave it.** ROCKNIX's mainline U-Boot has no PX30 display driver, so the panel is dark
+   for the ~1–2 s of U-Boot; the first light is our splash.
+2. **Screen-off = backlight only** (`bl_power` 4; DPMS needs the DRM master, which is Cog) — fine. The page should still
+   stop drawing on `{"event":"screen","screen":"off"}` to save the CPU.
+3. **No SSH — "we don't need SSH".** Removed ENTIRELY: no openssh-server, no ssh units or config, no keys; `vibe-hwd`
+   answers `{"get":"ssh"}`, `{"set":"ssh"…}` and `{"set":"ssh-password"…}` with `{"ok":false,"error":"not supported"}`
+   (a password is never read or kept). No network services either (networkd / resolved / timesyncd masked). Nothing
+   listens on any port but the engine on 127.0.0.1 — `verify.sh` checks every enabled socket unit and service, and the
+   booted root's `ss -tulnp` shows it. Debugging: the card's `Diagnostic logs/` export; root is locked (no login anywhere).
+4. **Capacity check as built — fine.** (Known limit: a wrap at a size that is not a power of two is not caught; those
+   usually drop writes too, which is caught. A power cut during the ~1 min first-boot check on a fake card can damage it.)
+
+**For the client (§0.2 side):** its audio gate resumes on pointer / key / focus only — on the Pi 2 page an A press did not
+start audio. The gamepad A handler needs `audio.resume()` (proven to work from the gamepad poll, §0 table above).
 
 ## 0.1 The product (Stuart, 2026-11-05) — "a proper portable radio just powered by VibeSDR"
 

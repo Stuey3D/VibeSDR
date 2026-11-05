@@ -6,7 +6,7 @@
 #     "event" key, replies never do). The engine relays "This device" to the page; the page never talks to us.
 # ★★ WHAT IT OWNS: the backlight, ALSA master volume + the speaker/headphone mux, the volume and power buttons, the
 #    battery (warning at 10 %, clean shutdown at 3 %), the clock (set + kept across power-offs with no trusted RTC),
-#    and SSH (off on a fresh card; on only after the owner has set a password).
+#    and nothing else: there is NO SSH on the handheld — {"get":"ssh"} / {"set":"ssh"…} answer "not supported".
 # ★★ STDLIB ONLY (python3 -I): evdev, ALSA and the RTC are reached through ioctls and amixer, so nothing on the card
 #    can shadow a module and nothing extra has to be installed.
 # ★ Env (for tests): VIBE_HWD_SOCK, VIBE_STATE_DIR, VIBE_HWD_DRYRUN=1 (log poweroff/reboot instead of doing them),
@@ -22,9 +22,6 @@ BL = SYS + "/class/backlight/backlight"
 BAT = SYS + "/class/power_supply/battery"
 CHG = SYS + "/class/power_supply/rk817-charger"
 HWD_JSON = os.path.join(STATE_DIR, "hwd.json")
-SSH_DIR = os.path.join(STATE_DIR, "ssh")
-SSH_FLAG = os.path.join(SSH_DIR, "enabled")
-SSH_HASH = os.path.join(SSH_DIR, "root.hash")
 CLOCK = "/usr/lib/vibesdr-r36s/vibe-clock"
 SPLASH = "/usr/lib/vibesdr-r36s/vibe-splash"
 
@@ -278,51 +275,6 @@ class Hwd:
             await asyncio.sleep(600)       # ★ every 10 min: a flat battery loses at most 10 min of the clock floor
             await asyncio.get_running_loop().run_in_executor(None, lambda: subprocess.run([CLOCK, "save"], timeout=10))
 
-    # ── SSH ──
-    def ssh_state(self):
-        active = subprocess.run(["systemctl", "is-active", "--quiet", "ssh.service"]).returncode == 0
-        return {"ok": True, "ssh": active, "passwordSet": os.path.exists(SSH_HASH)}
-
-    def set_ssh(self, on):
-        if on:
-            if not os.path.exists(SSH_HASH):
-                raise ValueError("no password set")
-            os.makedirs(SSH_DIR, mode=0o700, exist_ok=True)
-            key = os.path.join(SSH_DIR, "ssh_host_ed25519_key")
-            if not os.path.exists(key):
-                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True, timeout=60)
-            atomic_write(SSH_FLAG, "on\n", 0o600)
-            r = subprocess.run(["systemctl", "start", "ssh.service"], capture_output=True, text=True, timeout=30)
-            if r.returncode != 0:
-                raise ValueError("sshd did not start")
-        else:
-            try:
-                os.unlink(SSH_FLAG)
-            except FileNotFoundError:
-                pass
-            subprocess.run(["systemctl", "stop", "ssh.service"], timeout=30)
-
-    def set_ssh_password(self, password):
-        if not isinstance(password, str) or len(password) < 8:
-            raise ValueError("password too short")
-        if len(password) > 256 or any(c in password for c in "\n\r\0:"):
-            raise ValueError("password has a character that cannot be used")
-        # ★★ NEVER LOGGED, never on a command line: chpasswd reads "root:<pw>" on stdin and hashes it (yescrypt) into
-        #    /etc/shadow — the RAM overlay of the read-only root. The HASH (only) is kept on the state partition, and
-        #    vibe-state puts it back into /etc/shadow at every boot.
-        r = subprocess.run(["chpasswd"], input="root:%s\n" % password, text=True, capture_output=True, timeout=30)
-        if r.returncode != 0:
-            raise ValueError("could not set the password")
-        h = None
-        with open("/etc/shadow") as f:
-            for line in f:
-                if line.startswith("root:"):
-                    h = line.split(":")[1]
-        if not h or h[0] in "!*":
-            raise ValueError("could not set the password")
-        os.makedirs(SSH_DIR, mode=0o700, exist_ok=True)
-        atomic_write(SSH_HASH, h + "\n", 0o600)
-
     # ── the socket ──
     def emit(self, ev):
         line = (json.dumps(ev) + "\n").encode()
@@ -350,18 +302,17 @@ class Hwd:
         g, s, a = req.get("get"), req.get("set"), req.get("action")
         if g == "state":
             return self.state()
-        if g == "ssh":
-            return self.ssh_state()
+        if g == "ssh" or s in ("ssh", "ssh-password"):
+            # ★★★ NO SSH ON THE HANDHELD (Stuart 2026-11-05: "we don't need SSH"). The image has no sshd at all and
+            #     nothing listens on any port but the engine on 127.0.0.1; debugging is the card's "Diagnostic logs/".
+            #     The §0.2 requests are answered — never silently ignored — and a password is never read or kept.
+            raise ValueError("not supported")
         if s == "brightness":
             self.set_brightness(req.get("value"))
         elif s == "volume":
             self.set_volume(req.get("value"))
         elif s == "time":
             self.set_time(req.get("utcMs"))
-        elif s == "ssh":
-            await asyncio.get_running_loop().run_in_executor(None, self.set_ssh, bool(req.get("on")))
-        elif s == "ssh-password":
-            await asyncio.get_running_loop().run_in_executor(None, self.set_ssh_password, req.get("password"))
         elif a in ("poweroff", "reboot"):
             asyncio.get_running_loop().create_task(self.shutdown("request", a))
         elif a == "screen-off":
@@ -495,8 +446,6 @@ class Hwd:
         self.apply_volume()
         if not any(n == "rk817_ext Headphones" for n, _ in input_devices()):
             self.set_output(False)       # ★ no jack detector: the speaker, never the silent default (HP)
-        if os.path.exists(SSH_FLAG) and os.path.exists(SSH_HASH):
-            subprocess.run(["systemctl", "--no-block", "start", "ssh.service"])
         try:
             os.unlink(SOCK)
         except FileNotFoundError:

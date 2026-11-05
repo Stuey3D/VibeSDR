@@ -43,7 +43,7 @@ The image is ~1.75 GB; the rest of the card becomes the `VIBESDR` drive on the f
 | 32 KiB … 16 MiB | ROCKNIX's loader `b_uboot.bin.uart5` (U-Boot v2025.10 + rkbin), byte-identical to what ROCKNIX's own updater wrote on Stuart's unit |
 | p1 FAT32 `VIBEBOOT`, 128 MiB | `KERNEL`, `rk3326-gameconsole-eeclone.dtb`, `boot.scr` (ROCKNIX's), `extlinux/extlinux.conf` (ours), `overlays/mipi-panel.dtbo` (60 Hz default), `overlays/vibe-r36s.dtbo`, `overlays/mipi-panel.rocknix-80hz.dtbo` (the untouched original), `stock/rf3536k3ka.dtb`, `SOURCES.txt`, `README.txt` |
 | p2 ext4 `vibe-root`, ~1.3 GB | Debian 13 trixie arm64, **mounted read-only**, a RAM overlay on top |
-| p3 ext4 `vibestate`, 256 MiB | what must survive a power cut: the engine's data (`/var/lib/vibeserver`), the browser's storage, `hwd.json` (brightness, volume), the clock, SSH's hash and host key, the card-check result |
+| p3 ext4 `vibestate`, 256 MiB | what must survive a power cut: the engine's data (`/var/lib/vibeserver`), the browser's storage, `hwd.json` (brightness, volume), the clock, the card-check result |
 | p4 exFAT `VIBESDR`, the rest | made on the first boot: `Recordings/`, `Gallery/`, `import/` (+ `done/`), `export/`, `Diagnostic logs/`, `README.txt` |
 
 ## Boot chain — and why this one
@@ -109,16 +109,18 @@ and on p4 (exFAT, fsck'd every boot; the engine writes temp + rename). Developer
 | `vibe-splash` | the boot screen (above) |
 | `vibe-clock` | restores the clock at boot (RTC + saved offset, never earlier than the last save or the build), saves it at power-off |
 | `vibe-cpu` | schedutil, max 1296 MHz |
-| `vibe-state` | finds p3 (≤ 10 s), fsck (-p, then -y), mounts it, binds `/var/lib/vibeserver` + the browser's data, puts the SSH hash back into the RAM `/etc/shadow`, mounts VIBEBOOT read-only; every failure carries on in RAM |
-| `vibe-hwd` | the hardware service, `/run/vibe-hwd.sock` (§0.2) |
+| `vibe-state` | finds p3 (≤ 10 s), fsck (-p, then -y), mounts it, binds `/var/lib/vibeserver` + the browser's data, mounts VIBEBOOT read-only; every failure carries on in RAM |
+| `vibe-hwd` | the hardware service, `/run/vibe-hwd.sock` (§0.2; SSH requests: "not supported") |
 | `vibe-bootkeys` | Start + Select held at power-on → `/run/vibe-handheld/reset-radio` + "Radio settings reset" |
 | `vibe-card` | first boot: capacity check → p4 → exFAT `VIBESDR`; every boot: `fsck.exfat -p`, mount at `/media/VIBESDR`, folders |
 | `vibeserver-handheld` | `vibeserver --handheld` as `vibeserver`, `VIBESERVER_DATA_DIR=/var/lib/vibeserver`, `VIBESERVER_CARD_DIR=/media/VIBESDR`, `VIBE_HWD_SOCK=/run/vibe-hwd.sock` |
 | `vibe-kiosk` | waits for the engine to answer on `http://127.0.0.1:48000/`, hands the panel over, runs Cog |
 
 Masked: the package's network-server units (`vibeserver`, `-radios`, `-maintenance`, `-pocket*`), `getty@tty1`,
-apt timers, `systemd-timesyncd`, `networkd-wait-online`. Not on the card: cloudflared (dpkg path-exclude), avahi, apt
-sources. A USB Ethernet adapter gets DHCP (development) with mDNS/LLMNR off.
+apt timers and every network service (`systemd-networkd`, `-resolved`, `-timesyncd`). Not on the card: cloudflared (dpkg path-exclude), avahi, apt
+sources, and **no SSH at all** (Stuart 2026-11-05: "we don't need SSH" — no server package, no unit, no keys). Nothing
+listens on any port but the engine on 127.0.0.1; `verify.sh` checks every enabled socket unit and service. Debugging
+is the card's `Diagnostic logs/` export (or the serial console on `ttyS2`, which has no login: root is locked).
 
 ### vibe-hwd
 
@@ -129,8 +131,8 @@ LEDs; DPMS needs the DRM master, which is Cog), held 2 s = `shutdown` event → 
 `{"ack":"shutdown"}` → `sync` → the splash says "Switching off" → `systemctl poweroff` (which stops the engine, unmounts
 the card, saves the clock). Any pad button wakes the screen. Battery polled every 20 s (5 s under 15 %): `battery`
 on change, `battery_low` once at 10 %, the same clean shutdown at 3 % (two readings in a row). `set time` → clock +
-RTC + saved floor. SSH: `set ssh-password` (≥ 8 chars) → `chpasswd` on stdin, only the hash kept on p3, never logged;
-`set ssh on` is refused without one; host key made on first enable. Brightness and volume persist (`hwd.json`).
+RTC + saved floor. `get ssh` / `set ssh` / `set ssh-password` answer `{"ok":false,"error":"not supported"}` — a
+password is never read or kept. Brightness and volume persist (`hwd.json`).
 
 ### The capacity check (first boot)
 
@@ -163,7 +165,7 @@ damage the card.
   gesture), `test/bootkeys-test.sh`, `test/hwd-root-test.sh`, `test/card-loop-test.sh` (no argument: a synthetic
   4 GiB loop file). Under ROCKNIX the device nodes carry ROCKNIX's group ids; kiosk-test.sh adds them for the test.
 - `verify.sh` — the offline checks every build runs (partition table, loader bytes, boot files, overlays applied with
-  fdtoverlay, units enabled/masked, SSH off, no passwords, `systemd-analyze verify`).
+  fdtoverlay, units enabled/masked, no SSH, no passwords, nothing listening but the engine, `systemd-analyze verify`).
 
 ## Decisions for Stuart
 

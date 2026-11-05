@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # hwd-client.py [SOCK] — exercise vibe-hwd's socket the way the engine does (§0.2), and print every line.
-#   hwd-client.py /run/vibe-hwd.sock                      the standard run (state, brightness, volume, errors, ssh)
+#   hwd-client.py /run/vibe-hwd.sock                      the standard run (state, brightness, volume, errors; ssh = "not supported")
 #   hwd-client.py /run/vibe-hwd.sock listen 30            subscribe and print events for 30 s
 #   hwd-client.py /run/vibe-hwd.sock raw '{"get":"state"}' one request
 import json, socket, sys, time
@@ -55,7 +55,7 @@ req({"set": "volume", "value": 101})
 req({"set": "volume", "value": v0})
 req({"get": "ssh"})
 req({"set": "ssh", "on": True})
-req({"set": "ssh-password", "password": "short"})
+req({"set": "ssh-password", "password": "correct horse battery"})
 req({"set": "time", "utcMs": 12})
 req({"action": "dance"})
 req("this is not json")

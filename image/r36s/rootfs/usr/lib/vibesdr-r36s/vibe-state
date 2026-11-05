@@ -7,8 +7,8 @@
 #     showed nothing. Here the wait is bounded (10 s) and EVERY failure carries on: a damaged or missing state
 #     partition costs the saved settings for that boot (they live in RAM), never the radio.
 # ★ fsck before mounting: -p (safe repairs), then -y if -p cannot (the state is ours; there is no one to ask).
-# ★ Then: the bind mounts the engine and the browser use, the owner's SSH password hash back into the RAM /etc/shadow,
-#   and the boot partition read-only at /boot/firmware (diagnostics, SOURCES.txt).
+# ★ Then: the bind mounts the engine and the browser use, and the boot partition read-only at /boot/firmware
+#   (diagnostics, SOURCES.txt).
 set -u
 S=/var/lib/vibe-state
 say() { echo "vibe-state: $*"; }
@@ -16,10 +16,12 @@ say() { echo "vibe-state: $*"; }
 root_part() { findmnt -n -o SOURCE /media/root-ro 2>/dev/null; }
 part_n() { r=$(root_part); case "$r" in /dev/mmcblk*p[0-9]*|/dev/loop*p[0-9]*) echo "${r%p*}p$1" ;; /dev/sd*) echo "${r%[0-9]*}$1" ;; esac; }
 
+# ★★ ONLY THE ROOT'S OWN CARD. Partition N of the disk the root came from, and only if it carries the expected label —
+#    never /dev/disk/by-label, which would take a "vibestate" from ANY disk (a second card, a USB stick; in a test
+#    container it mounted a stale loop device from an earlier build). The settings live where the system lives.
 find_dev() {   # $1 label, $2 partition number
   i=0
   while [ $i -lt 100 ]; do
-    [ -b "/dev/disk/by-label/$1" ] && { readlink -f "/dev/disk/by-label/$1"; return 0; }
     p=$(part_n "$2"); [ -n "$p" ] && [ -b "$p" ] && [ "$(blkid -o value -s LABEL "$p" 2>/dev/null)" = "$1" ] && { echo "$p"; return 0; }
     sleep 0.1; i=$((i + 1))
   done
@@ -39,8 +41,7 @@ else
   say "!! no state partition (LABEL=vibestate) — settings live in RAM this boot"
 fi
 
-mkdir -p "$S/vibeserver" "$S/kiosk" "$S/ssh"
-chmod 0700 "$S/ssh"
+mkdir -p "$S/vibeserver" "$S/kiosk"
 chown vibeserver:vibeserver "$S/vibeserver" 2>/dev/null
 chmod 0750 "$S/vibeserver"
 chown vibe-kiosk:vibe-kiosk "$S/kiosk" 2>/dev/null
@@ -48,14 +49,6 @@ for b in "vibeserver:/var/lib/vibeserver" "kiosk:/var/lib/vibe-kiosk"; do
   mkdir -p "${b#*:}"
   mountpoint -q "${b#*:}" || mount --bind "$S/${b%%:*}" "${b#*:}" || say "!! bind ${b#*:} failed"
 done
-
-if [ -s "$S/ssh/root.hash" ]; then
-  H=$(head -n1 "$S/ssh/root.hash")
-  case "$H" in
-    '$'*) usermod -p "$H" root && say "root password restored (SSH)" ;;
-    *) say "$S/ssh/root.hash is not a hash — ignored" ;;
-  esac
-fi
 
 if B=$(find_dev VIBEBOOT 1); then
   mkdir -p /boot/firmware
