@@ -76,14 +76,18 @@ battery must never corrupt the card.
 set + 0.1 s nudge; set from a decoded MSF/DCF77/WWV(B)/JJY minute — two consecutive minutes must agree; align to FT8 DT),
 the card's space, power off / restart.
 
-**The handheld main menu (Stuart 2026-11-05 — supersedes a "This device" section).** Two buttons, **R36S HARDWARE** and
-**SDR HARDWARE**. Pressing one expands its options **in place, directly under the button** (an accordion — not a new page,
+**The handheld main menu (Stuart 2026-11-05 — supersedes a "This device" section).** Three buttons, **R36S HARDWARE**,
+**SDR HARDWARE** and **DISPLAY**. Pressing one expands its options **in place, directly under the button** (an accordion — not a new page,
 not a nested sub-menu); pressing it again, or B / back, collapses them into the button. One level only: "no multilayered
-menu but the options are still hidden", so the main menu stays uncluttered. Opening one collapses the other.
-- **R36S HARDWARE** = brightness, volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
+menu but the options are still hidden", so the main menu stays uncluttered. Opening one collapses the others.
+- **R36S HARDWARE** = volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
   **Performance** overlay toggle with its figures in full, **Developer: SSH**, power off, restart.
 - **SDR HARDWARE** = the plugged-in radio's own controls (gain / AGC / bias-T / direct sampling / ppm / antenna …) from its
   caps — what the radio menu shows today for that driver.
+- **DISPLAY** = the client's existing look options (control look, transparency, waterfall palette / contrast, display
+  font …) plus the handheld's own: **brightness** (moved here from R36S HARDWARE), the drawing frame rate (**30 fps**
+  default / 60), and an auto-dim / screen-off-after timeout (**off** by default; the screen goes off through the
+  service's `screen-off` action, audio keeps playing, any button wakes it).
 - Gamepad: the D-pad moves through the buttons and the expanded options; **A** expands / activates; **B** collapses.
 
 **Performance overlay (Stuart 2026-11-05).** No admin window on the handheld; instead the Performance row's toggle shows a
