@@ -90,6 +90,18 @@ menu but the options are still hidden", so the main menu stays uncluttered. Open
   service's `screen-off` action, audio keeps playing, any button wakes it).
 - Gamepad: the D-pad moves through the buttons and the expanded options; **A** expands / activates; **B** collapses.
 
+  The DISPLAY accordion also carries the **waterfall rate: 5 / 10 / 20 real frames a second** (below).
+
+**No server furniture on the handheld (Stuart 2026-11-05).** The engine is local, so everything about a SERVER goes from
+the handheld UI: the data-rate / link meter, KB/s, ping, buffer readouts, bandwidth or compression settings, the
+uncompressed-audio option, listener counts, reconnect banners about the server, admin, chat, the landing page. Anything
+about the RADIO or the DSP stays. (AGENTS.md: no dead controls.)
+
+**Waterfall and spectrum pacing (Stuart 2026-11-05).** The waterfall runs at **5, 10 or 20 REAL frames a second** —
+every row is a real FFT row from the engine, **no interpolated / synthesised waterfall rows** on the handheld. The
+**spectrum trace still interpolates** (a smooth trace between real frames), and frames keep the existing **fixed output
+clock / even pacing** — rows arrive evenly, never in bursts, no refresh holds.
+
 **Performance overlay (Stuart 2026-11-05).** No admin window on the handheld; instead the Performance row's toggle shows a
 SteamOS-style strip at a screen edge: CPU % (box), CPU temperature, battery % + time-remaining estimate, RAM used, client
 fps, the engine's DSP load (the figures the admin health cards already get). Plain DOM text, updated ≤ 2×/s, no canvas;
