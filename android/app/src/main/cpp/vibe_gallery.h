@@ -202,6 +202,56 @@ inline std::string downloadSafe(const std::string& s) {
 //  ★★ FAIR EVICTION: oldest first, but never a kind below its newest kKindFloor items while anything else can go — a
 //     night of NAVTEX texts cannot push out the last WEFAX charts. Only when everything left is at its floor does the
 //     oldest go regardless (the size limit is the owner's, and it holds).
+/* ★★★ THE HANDHELD'S CARD LAYOUT (R36S, docs/v12/R36S-HANDHELD-IMAGE.md §0.1 "The card", 2026-11-05).
+ *  A server keeps its flat gallery directory exactly as it was. On the handheld the ITEMS go to the owner's exFAT card,
+ *  one folder per decoder, named for a person — "Gallery/NAVTEX/2026-11-05 1423 - 518.000 kHz NAVTEX.txt" — while the
+ *  INDEX (index.jsonl, the lock, side stores) stays in the engine's own data directory on the root file system: it is
+ *  written a line at a time, which a FAT file system without a journal is the worst place for.
+ *  ★★ EVERY ITEM WRITE IS A TEMP FILE + RENAME there (Stuart: "the safest option") — an append included: the run is
+ *     copied, extended and renamed over itself (a run file is ≤ kRunMaxBytes, written once a minute).
+ *  ★ Set ONCE, before any writer starts (main.cpp, handheld profile); off = every line below behaves as before.
+ *  ★ A name in this layout is "FOLDER/file name.ext" — exactly one '/', the folder [A-Z0-9-], the file FAT-safe. */
+struct CardLayout { bool on = false; std::string files; };
+inline CardLayout& cardLayout() { static CardLayout c; return c; }
+/** "NAVTEX", "ADS-B", "DAB-SLIDES" … — a decoder's folder on the card. */
+inline std::string cardFolder(const std::string& kind) {
+    static const char* const map[][2] = { {"ft8","FT8"}, {"spots","FT8"}, {"adsb","ADS-B"}, {"dabslide","DAB-SLIDES"},
+                                          {"dab","DAB-SLIDES"}, {"sitora","SITOR-A"}, {"cwskim","CW"}, {"pskskim","PSK"} };
+    for (auto& m : map) if (kind == m[0]) return m[1];
+    std::string o;
+    for (unsigned char c : kind) {
+        if (c >= 'a' && c <= 'z') o += (char)(c - 32);
+        else if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') o += (char)c;
+    }
+    if (o.size() > 24) o.resize(24);
+    return o.empty() ? "OTHER" : o;
+}
+/** ★ FAT-safe: none of : \ / * ? " < > |, no control characters, no leading/trailing dot or space. */
+inline std::string cardSafe(const std::string& in, size_t cap) {
+    std::string o;
+    for (unsigned char c : in) {
+        if (c < 0x20 || c == 0x7F) continue;
+        char r = (char)c;
+        if (c == ':') r = '.'; else if (c == '/' || c == '\\' || c == '|') r = '-';
+        else if (c == '*' || c == '?' || c == '"' || c == '<' || c == '>') continue;
+        if (r == ' ' && (o.empty() || o.back() == ' ')) continue;
+        o += r;
+    }
+    while (!o.empty() && (o.back() == ' ' || o.back() == '.')) o.pop_back();
+    while (!o.empty() && (o.front() == ' ' || o.front() == '.')) o.erase(0, 1);
+    if (o.size() > cap) { size_t k = cap; while (k > 0 && ((unsigned char)o[k] & 0xC0) == 0x80) k--; o.resize(k); }
+    while (!o.empty() && (o.back() == ' ' || o.back() == '.')) o.pop_back();
+    return o;
+}
+inline bool cardSegmentOk(const std::string& n) {
+    if (n.empty() || n.size() > 200 || n[0] == '.' || n.find("..") != std::string::npos || n.back() == ' ' || n.back() == '.') return false;
+    for (unsigned char c : n) {
+        if (c < 0x20 || c == 0x7F) return false;
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') return false;
+    }
+    return true;
+}
+
 class Store {
 public:
     static constexpr size_t   kMaxItems    = 1000000;           // ★ a BACKSTOP only (logged if hit): the SIZE governs
@@ -248,6 +298,15 @@ public:
 
     /** ★★★ THE ONLY NAMES THIS WILL EVER SERVE OR TOUCH. Our writer makes nothing else. */
     static bool safeName(const std::string& n) {
+        if (cardLayout().on) {
+            // ★ The card's "FOLDER/file" — one separator, a folder of our own making, a FAT-safe file name.
+            const size_t sl = n.find('/');
+            if (sl == std::string::npos || sl == 0 || n.find('/', sl + 1) != std::string::npos) return false;
+            const std::string folder = n.substr(0, sl), file = n.substr(sl + 1);
+            if (folder.size() > 24) return false;
+            for (unsigned char c : folder) if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-')) return false;
+            return cardSegmentOk(file);
+        }
         if (n.empty() || n.size() > 128 || n[0] == '.' || n == "index.jsonl") return false;
         for (unsigned char c : n)
             if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
@@ -262,7 +321,7 @@ public:
         if (dir.empty() || limit == 0) return "";
         Lock fl(dir);
         const std::string name = newName(m, ext);
-        if (!writeFile(dir + "/" + name, body, false)) return "";
+        if (!writeFile(itemPath(dir, name), body, false)) return "";
         appendIndex(dir, m, name, radio);
         evictLocked(dir, limit, std::set<std::string>{ name });
         return name;
@@ -274,7 +333,7 @@ public:
         if (dir.empty() || limit == 0) return "";
         Lock fl(dir);
         const std::string name = newName(m, ext);
-        if (!writeFile(dir + "/" + name, first, false)) return "";
+        if (!writeFile(itemPath(dir, name), first, false)) return "";
         appendIndex(dir, m, name, radio);
         { std::lock_guard<std::mutex> lk(m_); open_.insert(name); }
         evictLocked(dir, limit, openNames());
@@ -289,8 +348,8 @@ public:
         if (dir.empty() || limit == 0) return false;
         Lock fl(dir);
         struct stat st{};
-        if (::stat((dir + "/" + name).c_str(), &st) != 0) return false;
-        if (!writeFile(dir + "/" + name, text, true)) return false;
+        if (::stat(itemPath(dir, name).c_str(), &st) != 0) return false;
+        if (!writeFile(itemPath(dir, name), text, true)) return false;
         {   // ★ the table's bytes follow the run as it grows (no index line is written for an append)
             std::lock_guard<std::mutex> ck(cacheMtx_);
             if (refresh(dir)) {
@@ -317,9 +376,9 @@ public:
         bool listed;
         { std::lock_guard<std::mutex> ck(cacheMtx_); listed = refresh(dir) && findLive(dir, name, true) >= 0; }
         struct stat st{};
-        if (!listed || ::stat((dir + "/" + name).c_str(), &st) != 0) return false;
-        const std::string tmpf = dir + "/." + name + ".tmp";
-        if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), (dir + "/" + name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
+        if (!listed || ::stat(itemPath(dir, name).c_str(), &st) != 0) return false;
+        const std::string tmpf = tempPath(dir, name);
+        if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), itemPath(dir, name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
         appendLine(dir, indexLine(m, name, radio, toNewest ? 2 : 1));
         if (m.lastItemAt) m.lastItemAt->store(nowUtc(), std::memory_order_relaxed);
         evictLocked(dir, limit, openNames());
@@ -362,7 +421,7 @@ public:
             }
             if (fd >= 0) ::close(fd);
             struct stat st{};
-            if (!found.empty() && (!safeName(found) || ::stat((dir + "/" + found).c_str(), &st) != 0)) found.clear();
+            if (!found.empty() && (!safeName(found) || ::stat(itemPath(dir, found).c_str(), &st) != 0)) found.clear();
         }
         if (!found.empty()) { std::lock_guard<std::mutex> lk(m_); open_.insert(found); }
         return found;
@@ -439,9 +498,9 @@ public:
         l = l.substr(0, t + 9) + jsonEsc(printable(title, 120)) + l.substr(e);
         l = l.substr(0, l.size() - 1) + ",\"re\":1}\n";
         struct stat st{};
-        if (::stat((dir + "/" + name).c_str(), &st) != 0) return false;
-        const std::string tmpf = dir + "/." + name + ".tmp";
-        if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), (dir + "/" + name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
+        if (::stat(itemPath(dir, name).c_str(), &st) != 0) return false;
+        const std::string tmpf = tempPath(dir, name);
+        if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), itemPath(dir, name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
         appendLine(dir, l);
         evictLocked(dir, limit, openNames());
         return true;
@@ -469,7 +528,7 @@ public:
     uint64_t sizeOf(const std::string& name) const {
         if (!safeName(name)) return 0;
         struct stat st{};
-        return ::stat((dir() + "/" + name).c_str(), &st) == 0 ? (uint64_t)st.st_size : 0;
+        return ::stat(itemPath(dir(), name).c_str(), &st) == 0 ? (uint64_t)st.st_size : 0;
     }
 
     /** ★ The list, NEWEST FIRST, for /vibeserver/gallery.json. `kind` filters ("" = all); at most `limit` items.
@@ -509,7 +568,7 @@ public:
                     if (!lineAt(fd, r, l)) continue;
                     const std::string f = lineStr(l, "f");
                     struct stat st{};
-                    if (!safeName(f) || ::stat((dir + "/" + f).c_str(), &st) != 0) continue;   // ★ gone since the table was read
+                    if (!safeName(f) || ::stat(itemPath(dir, f).c_str(), &st) != 0) continue;   // ★ gone since the table was read
                     --limit;
                     l = redactLine(stripRe(l));
                     if (!l.empty() && l.back() == '}') l.pop_back();
@@ -572,7 +631,7 @@ public:
     bool resolve(const std::string& name, std::string& path, std::string& ctype) const {
         std::string l;
         if (!liveLine(name, l)) return false;
-        path = dir() + "/" + name;
+        path = itemPath(dir(), name);
         const size_t dot = name.rfind('.');
         const std::string ext = dot == std::string::npos ? "" : name.substr(dot + 1);
         ctype = ext == "txt" ? "text/plain; charset=utf-8" : ext == "png" ? "image/png" : ext == "json" ? "application/json"
@@ -593,7 +652,7 @@ public:
     static uint64_t sideBytes(const std::string& dir) {
         if (dir.empty()) return 0;
         uint64_t n = 0;
-        for (const char* f : { "ais-ships.dat" }) { struct stat st{}; if (::stat((dir + "/" + f).c_str(), &st) == 0 && S_ISREG(st.st_mode)) n += (uint64_t)st.st_size; }
+        for (const char* f : { "ais-ships.dat" }) { struct stat st{}; if (::stat(itemPath(dir, f).c_str(), &st) == 0 && S_ISREG(st.st_mode)) n += (uint64_t)st.st_size; }
         return n;
     }
     /** Items the gallery holds now. */
@@ -643,7 +702,38 @@ private:
         std::string o; for (char c : k) if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) o += c;
         return o.empty() ? "item" : o.substr(0, 12);
     }
+    /** ★ Where an item's FILE is: beside the index, or — on the handheld — on the card (see CardLayout). */
+    static std::string itemPath(const std::string& dir, const std::string& name) {
+        const CardLayout& c = cardLayout();
+        return (c.on ? c.files : dir) + "/" + name;
+    }
+    /** The temp name a rewrite goes through: ".<file>.tmp" in the item's own folder (".part" on the card, which a
+     *  start-up sweep removes if a write was cut off). */
+    static std::string tempPath(const std::string& dir, const std::string& name) {
+        const std::string full = itemPath(dir, name);
+        const size_t sl = full.find_last_of('/');
+        return full.substr(0, sl + 1) + "." + full.substr(sl + 1) + (cardLayout().on ? ".part" : ".tmp");
+    }
     std::string newName(const Meta& m, const std::string& ext) {
+        if (cardLayout().on) {
+            // ★ "NAVTEX/2026-11-05 1423 - 518.000 kHz NAVTEX.txt" — UTC, kHz to 3 dp, FAT-safe, never a clash.
+            const std::string folder = cardFolder(m.kind);
+            const std::string root = cardLayout().files + "/" + folder;
+            ::mkdir(cardLayout().files.c_str(), 0755); ::mkdir(root.c_str(), 0755);
+            std::string e; for (char c : ext) if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) e += c;
+            if (e.empty()) e = "txt";
+            const int64_t t = m.utc ? m.utc : nowUtc();
+            std::string detail = folder; for (auto& c : detail) if (c == '-') c = ' ';
+            if (!m.profile.empty()) detail += " " + m.profile;
+            std::string mid;
+            if (std::isfinite(m.freqHz) && m.freqHz > 0) { char k[32]; std::snprintf(k, sizeof k, "%.3f kHz ", m.freqHz / 1e3); mid = k; }
+            const std::string stem = cardSafe(utcStamp(t, "%Y-%m-%d %H%M") + " - " + mid + detail, 150);
+            std::string file = stem + "." + e;
+            struct stat st{};
+            for (int k = 2; ::lstat((root + "/" + file).c_str(), &st) == 0 && k < 1000; k++)
+                file = stem + " (" + std::to_string(k) + ")." + e;
+            return folder + "/" + file;
+        }
         // 20261022-231500-navtex-518k0-3f2a.txt — sortable, readable, and nothing a path could hide in.
         char f[24]; std::snprintf(f, sizeof f, "%.1f", m.freqHz / 1e3);
         std::string fk = f; for (auto& c : fk) if (c == '.') c = 'k';
@@ -653,6 +743,29 @@ private:
         return utcStamp(m.utc ? m.utc : nowUtc(), "%Y%m%d-%H%M%S") + "-" + kindToken(m.kind) + "-" + fk + "-" + r + "." + (e.empty() ? "txt" : e);
     }
     static bool writeFile(const std::string& path, const std::string& body, bool append) {
+        const CardLayout& cl = cardLayout();
+        if (cl.on && path.compare(0, cl.files.size() + 1, cl.files + "/") == 0) {
+            // ★★★ ON THE CARD, A TEMP FILE AND A RENAME — never a write in place (see CardLayout). An append copies first.
+            const size_t sl = path.find_last_of('/');
+            const std::string base = path.substr(sl + 1);
+            if (!base.empty() && base[0] == '.') return writePlain(path, body, append);   // ★ already a temp (replace/rewrite)
+            std::string all;
+            if (append) {
+                const int rf = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+                if (rf < 0) return false;
+                char b[16384]; ssize_t n;
+                while ((n = ::read(rf, b, sizeof b)) > 0) all.append(b, (size_t)n);
+                ::close(rf);
+            }
+            all += body;
+            const std::string tmp = path.substr(0, sl + 1) + "." + base + ".part";
+            if (!writePlain(tmp, all, false)) { ::unlink(tmp.c_str()); return false; }
+            if (::rename(tmp.c_str(), path.c_str()) != 0) { ::unlink(tmp.c_str()); return false; }
+            return true;
+        }
+        return writePlain(path, body, append);
+    }
+    static bool writePlain(const std::string& path, const std::string& body, bool append) {
         const int fd = ::open(path.c_str(), O_WRONLY | O_CLOEXEC | O_NOFOLLOW | (append ? O_APPEND : (O_CREAT | O_TRUNC)), 0644);
         if (fd < 0) return false;
         size_t off = 0;
@@ -661,6 +774,7 @@ private:
             if (n < 0) { if (errno == EINTR) continue; ::close(fd); return false; }
             off += (size_t)n;
         }
+        if (cardLayout().on) ::fsync(fd);   // ★ on the handheld the rename must never land ahead of the data
         ::close(fd);
         return true;
     }
@@ -826,7 +940,7 @@ private:
         const int re = l.size() > 8 && l.compare(l.size() - 8, 6, ",\"re\":") == 0 ? l[l.size() - 2] - '0' : 0;
         const long prev = re ? findLive(dir, f, true) : -1;
         struct stat st{};
-        if (::stat((dir + "/" + f).c_str(), &st) != 0) { if (prev >= 0) kill((size_t)prev); return; }
+        if (::stat(itemPath(dir, f).c_str(), &st) != 0) { if (prev >= 0) kill((size_t)prev); return; }
         Row n; n.h = nameHash(f); n.off = (uint32_t)off; n.len = (uint16_t)l.size();
         n.kind = kindId(k); n.flags = l.find(",\"s\":\"") == std::string::npos ? 0 : kSlot;
         n.bytes = (uint32_t)std::min<uint64_t>((uint64_t)st.st_size, 0xffffffffu);
@@ -914,7 +1028,7 @@ private:
                 if (!lineAt(fd, r, l)) continue;
                 const std::string f = lineStr(l, "f");
                 if (keepH.count(r.h) && keep.count(f)) continue;
-                if (safeName(f)) ::unlink((dir + "/" + f).c_str());
+                if (safeName(f)) ::unlink(itemPath(dir, f).c_str());
                 tomb += "{\"x\":\"" + jsonEsc(f) + "\"}\n";
                 kill(i);
                 if (tomb.size() >= 65536) { appendTombs(dir, tomb); tomb.clear(); if (!c.valid) break; }   // ★ RAM bounded

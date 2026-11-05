@@ -1303,8 +1303,39 @@ private:
                           t.year, t.month, t.day, t.hour, t.minute, name == "JJY" ? " JST" : "",
                           t.dst ? "(summer time)" : "", t.leapSecondPending ? " LEAP SECOND PENDING" : "",
                           dstChange, extra);
-            std::lock_guard<std::mutex> bl(textMtx_);
-            textBuf_ += buf;
+            {
+                std::lock_guard<std::mutex> bl(textMtx_);
+                textBuf_ += buf;
+            }
+            /* ★★ V12 (R36S handheld, 2026-11-05): "SET CLOCK FROM <station>". onTime fires ON the minute boundary, and
+             *  only once a minute has passed its parity AND agreed with the one before it (finishMinute's lastStamp_) —
+             *  the two-consecutive-minutes rule Stuart asked for is the decoder's own. So the moment is stated here as a
+             *  pair: the minute in UTC as the station says it, and this host's clock as the boundary was read. A client
+             *  that wants to set a clock applies (utcMs + rxDelayMs) − hostMs to "now", whenever it likes — the host
+             *  clock moves evenly, so the answer does not go stale.
+             *  ★ The station's own time zone comes off first: MSF sends UK civil time (BST in summer), DCF77 CET/CEST,
+             *    JJY JST; WWV and WWVB send UTC. RWM never gets here (it has no timecode).
+             *  ★ rxDelayMs: the receive path between the air and this callback — the decoder reads the marker's edge a
+             *    10 ms envelope frame late and the audio reaches it one DSP block (~21 ms) after capture. An estimate,
+             *    stated so it can be checked, not hidden in the arithmetic. Additive JSON: older clients ignore it. */
+            {
+                std::tm tmv{}; tmv.tm_year = t.year - 1900; tmv.tm_mon = t.month - 1; tmv.tm_mday = t.day;
+                tmv.tm_hour = t.hour; tmv.tm_min = t.minute; tmv.tm_sec = 0;
+                const long long civil = (long long)timegm(&tmv);
+                int offMin = 0;
+                if (name == "MSF") offMin = t.dst ? 60 : 0;
+                else if (name == "DCF77") offMin = t.dst ? 120 : 60;
+                else if (name == "JJY") offMin = 540;
+                const long long utcMs = (civil - offMin * 60LL) * 1000LL;
+                const long long hostMs = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                if (t.year >= 2020 && t.year < 2100) {
+                    char js[200];
+                    std::snprintf(js, sizeof js, "{\"type\":\"time_sync\",\"data\":{\"station\":\"%s\",\"utcMs\":%lld,"
+                                  "\"hostMs\":%lld,\"rxDelayMs\":31}}", name.c_str(), utcMs, hostMs);
+                    broadcastText(js, -1);
+                }
+            }
         };
         // ★★★ FILL THE FIELDS AS THEY ARRIVE — a replace-in-place line (see the shim's old note).
         time_->onPartial = [this, td](const TimeDecoder::Partial& p) {

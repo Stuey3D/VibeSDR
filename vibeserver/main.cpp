@@ -29,6 +29,7 @@
 #include <sstream>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <ctime>
 #include <cstring>
 #include <rtl-sdr.h>
@@ -94,6 +95,8 @@
 #include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
 #include "mapgl_curl.h"   // the High Detail Maps downloader (shared with Mac Simple mode)
 #include "diag_scrub.h"   // ★ the daemon's own scrub of the diagnostics file before it is downloaded
+#include "handheld.h"     // ★ V12 R36S: `vibeserver --handheld`, the handheld's supervisor (handheld.cpp)
+#include "vibe_clock.h"   // ★ vibe::clockWasSet — the handheld's clock set (SIGUSR2)
 
 // ★ Declared out here on purpose: the anonymous namespace below closes long before
 //   reapRadios() is defined, so a declaration inside it would be a DIFFERENT function
@@ -112,6 +115,11 @@ char** g_argv = nullptr;
 namespace {
 
 std::atomic<bool> g_stop{false};
+/** ★★★ V12 R36S HANDHELD — this process is the handheld supervisor's radio (`--handheld-radio`, see handheld.cpp):
+ *  127.0.0.1 only, no tunnel / listing / mDNS / admin / limits / background decoding / DX scan; every control the
+ *  owner's (loopback is the operator, as on any server). Decided by the argv pre-scan in main(), before the config. */
+bool g_handheldChild = false;
+void onClockSet(int) { vibe::clockWasSet(); }
 // ★ Also on the SIGNAL path. A clean return reaps via atexit, but Ctrl-C is the common case and it
 //   must not depend on the main loop noticing g_stop and unwinding tidily. kill() and waitpid()
 //   are async-signal-safe; this deliberately does nothing else.
@@ -586,6 +594,7 @@ bool parse(int argc, char** argv, Opts& o) {
         //     ★ Without this the child would fork a SECOND copy of a radio the app is already
         //       serving, and the two would fight over the device.
         else if (a == "--no-supervise")   o.noSupervise = true;
+        else if (a == "--handheld-radio") { /* ★ read by the pre-scan in main() — see g_handheldChild */ }
         else if (a == "--release-when-idle") o.releaseWhenIdle = true;
         else if (a == "--uncompressed")   { std::string v = need(i);
             o.uncompressed = (v == "choice") ? 1 : (v == "compat") ? 2 : 0; }
@@ -1661,6 +1670,11 @@ int main(int argc, char** argv) {
      *  callbacks) gets it without calling anything. The DSP threads also set it themselves (vibe_thread.h).
      *  Why: vibedsp/vibe_denormals.h. */
     vibe::vibeFlushDenormals();
+    /* ★★★ V12 R36S: THE HANDHELD SUPERVISOR is a different program in the same binary (handheld.cpp) — it owns the
+     *  port, watches the USB bus and starts this same binary as `--handheld-radio` for whatever is plugged in. Decided
+     *  before anything else reads a config or touches a radio. */
+    if (handheld::wanted(argc, argv)) return handheld::runSupervisor(argc, argv);
+    for (int i = 1; i < argc; i++) if (std::string(argv[i]) == "--handheld-radio") g_handheldChild = true;
     /* ★ The receiver's thread split (VIBE_DSP_THREADS / VIBE_DAB_SPLIT) was set here for 32-bit ARM and small
      *  aarch64. Since 2026-10-16 it is the default on every multi-core server, set in the shared code —
      *  g_vsSplitDefault in local_sdr_shim.cpp — so the Mac, the Android app and Lite run the same layout. */
@@ -2021,7 +2035,12 @@ int main(int argc, char** argv) {
     // ── Server-side policy, ALL of it before start() (the shim reads these once). ────────────
     // This is the whole point of the harness: these are the levers the operator gets, and the
     // ones Jr has been asking the server to honour with nothing on the other end.
-    LocalSdrShim::setServeOnLan(true);          // bind 0.0.0.0, not loopback
+    // ★ The handheld's radio answers 127.0.0.1 only — the supervisor hands it every connection (handheld.cpp).
+    LocalSdrShim::setServeOnLan(!g_handheldChild);   // bind 0.0.0.0, not loopback
+    if (g_handheldChild) {
+        LocalSdrShim::setHandheld(true);
+        std::signal(SIGUSR2, onClockSet);   // ★ the supervisor set the system clock: our NTP offset no longer applies
+    }
     LocalSdrShim::setVibeServerPort(o.port);    // 0 = auto-scan
     LocalSdrShim::setVibeServerAuth(o.pin);     // empty = open; loopback is always exempt
     // ★ ...and this radio's own, which opens THIS radio only. Either is accepted; see vsAuthOk.
@@ -2211,6 +2230,8 @@ int main(int argc, char** argv) {
         d.shareForSec = ownerChanged ? srv.dirShareSec : -1;
         vibedir::apply(d);
     };
+    // ★★ The handheld lists nowhere and runs no tunnel — not "listed: false", no directory code at all.
+    if (g_handheldChild) g_applyDirectory = nullptr;
     vibedir::setStateDir(vsDataDir());
     vsmoveloc::setDir(vsDataDir());
     // ★★★ NOT CALLED HERE. `o.port` is not the door's port at this point in main() — the door
@@ -3695,12 +3716,14 @@ int main(int argc, char** argv) {
     //    Same rule as AGENTS.md: remove a control that cannot work rather than leave it visible.
 #if defined(__linux__) && !defined(__ANDROID__)
     // ★ beta-on / beta-off / update-stable: the "Receive beta updates" tick-box and its way back (2026-10-22).
-    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics,beta-on,beta-off,update-stable");
+    // ★ The handheld has no admin page and no root maintenance helper: power, updates and diagnostics are its own (§0.1).
+    LocalSdrShim::setMaintenanceActions(g_handheldChild ? "" : "restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics,beta-on,beta-off,update-stable");
 #else
     LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
 #endif
     LocalSdrShim::setVibeServerReleaseWhenIdle(o.releaseWhenIdle);
-    LocalSdrShim::setBatteryPolicy(g_serverConfig.batteryPauseAt, g_serverConfig.batteryResumeAt);
+    // ★ On the handheld the battery floor is the hardware service's (a clean shutdown at 3 %, §0.1), never a suspend.
+    LocalSdrShim::setBatteryPolicy(g_handheldChild ? 0 : g_serverConfig.batteryPauseAt, g_serverConfig.batteryResumeAt);
     LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);
     // ★ Identity, published to every listener — and what makes a directory entry worth anything.
     //   See publishLocation(): the home location, or the nearest town while moving (moveloc.h).
@@ -3748,7 +3771,7 @@ int main(int argc, char** argv) {
     //     guarantee the device is released if the front door dies; arming it after the claim
     //     leaves a window in which we hold an SDR with nobody supervising us. No-op on Linux,
     //     where PR_SET_PDEATHSIG was already set before exec and survived it.
-    if (o.supervised && o.radioGiven) vibe::dieWithParent();
+    if ((o.supervised && o.radioGiven) || g_handheldChild) vibe::dieWithParent();
     // ★★★ AND DIE WITH THE MAC APP THAT LAUNCHED US (2026-10-03 security pass). In Full mode the
     //     menu-bar app spawns the front door with no arguments, so neither branch above arms a
     //     watch: a crashed or force-quit app left a PUBLIC server running — on the internet, with
@@ -4259,7 +4282,14 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "VibeServer: nowhere to put the hand-off sockets — radios will "
                                  "only be reachable on their own ports\n");
         } else {
-            if (!g_myRadioSerial.empty()) {
+            /* ★★ THE HANDHELD'S RADIO: the supervisor names the socket (it may have no serial to key on) and hands over
+             *  BARE paths — there is one radio, so no /r/<id>/ prefix (handheld.cpp startChildLocked). */
+            const char* hhSock = g_handheldChild ? std::getenv("VIBE_HANDHELD_SOCK") : nullptr;
+            if (hhSock && *hhSock) {
+                std::string herr;
+                if (!LocalSdrShim::listenForHandoff(hhSock, herr))
+                    std::fprintf(stderr, "VibeServer: the handheld supervisor cannot reach this radio — %s\n", herr.c_str());
+            } else if (!g_myRadioSerial.empty()) {
                 const std::string me = dir + "/" + g_myRadioSerial + ".sock";
                 std::string herr;
                 if (LocalSdrShim::listenForHandoff(me, herr))
@@ -4517,6 +4547,20 @@ int main(int argc, char** argv) {
                 LocalSdrShim::setDxLogFile(dxLogFileFor(mine ? mine->serial : std::string()));
             }
             g_dxLastApplied = dj;
+            if (g_handheldChild) {
+                /* ★★★ THE HANDHELD'S GALLERY IS THE CARD (§0.1): Gallery/<DECODER>/<UTC> - <kHz> kHz <MODE>.ext, temp +
+                 *  rename, the index in the engine's own data directory. Its size is half the card (the owner's
+                 *  Recordings and imports share it); without a card, the data directory as on a server. Every decode
+                 *  the owner runs is kept — they are the only listener. */
+                const char* card = std::getenv("VIBESERVER_CARD_DIR");
+                double mb = o.galleryMb >= 0 ? o.galleryMb : g_serverConfig.galleryMb;
+                if (card && *card) {
+                    LocalSdrShim::setGalleryCardLayout(std::string(card) + "/Gallery");
+                    struct statvfs v{};
+                    if (::statvfs(card, &v) == 0) mb = std::max(100.0, (double)v.f_blocks * (double)v.f_frsize / (2.0 * 1024 * 1024));
+                }
+                LocalSdrShim::setGallery(vsDataDir() + "/handheld/gallery-index", mb, true, true);
+            } else
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", o.galleryMb >= 0 ? o.galleryMb : g_serverConfig.galleryMb,
                                      g_serverConfig.galleryPublic, g_serverConfig.gallerySaveLive);
             LocalSdrShim::setGalleryRedact(gallerySerials(g_serverConfig));   // ★★★ before the label: a serial never reaches an item
@@ -4569,7 +4613,9 @@ int main(int argc, char** argv) {
     //        one file all load it, all append to it, and one rewriting while another appends
     //        loses records. A radio's bookmarks belong to that radio's process, which is the only
     //        writer it has. The front door, which owns no radio, keeps the machine-wide file.
-    LocalSdrShim::instance().setBookmarksPath(
+    // ★ The handheld's bookmarks are the OWNER's, whichever radio is plugged in — one file, one writer at a time.
+    if (g_handheldChild) LocalSdrShim::instance().setBookmarksPath(vsDataDir() + "/handheld/bookmarks.json");
+    else LocalSdrShim::instance().setBookmarksPath(
         g_myRadioSerial.empty() ? vsDataDir() + "/bookmarks.json"
                                 : vsDataDir() + "/bookmarks-" + g_myRadioSerial + ".json");
 

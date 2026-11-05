@@ -738,6 +738,19 @@ public:
     };
     using PocketHttpFn = std::function<bool(const PocketHttpRequest&, PocketHttpReply&)>;
     static void setPocketHttpHandler(PocketHttpFn fn);
+    /** ★★★ THE HANDHELD PROFILE (R36S, docs/v12/R36S-HANDHELD-IMAGE.md §0.1-§0.2, 2026-11-05). One radio, one owner,
+     *  on 127.0.0.1: /vibeserver.json says `"handheld":true` so the page drops every piece of server furniture. Set by
+     *  `vibeserver --handheld-radio` (the radio process the handheld supervisor starts); false everywhere else. */
+    static void setHandheld(bool on);
+    static bool handheld();
+    /** ★ The web client's own bytes, for the handheld supervisor to serve while no radio is plugged in (it owns the
+     *  port, and the page must load to say "Please connect an SDR"). `path` "/" (the page) or "/vs/…"; `encoding` is
+     *  "", "gzip" or "br". False for anything else. */
+    static bool webAssetFor(const std::string& path, bool acceptsBr, bool acceptsGzip,
+                            std::string& body, std::string& contentType, std::string& encoding);
+    /** ★ The handheld's card layout for the gallery: items under `filesDir` ("<card>/Gallery"), one folder per decoder,
+     *  person-readable names, temp + rename writes (vibe_gallery.h CardLayout). Call BEFORE setGallery. "" = off. */
+    static void setGalleryCardLayout(const std::string& filesDir);
     /** ★ The box's own hotspot is up: requests for a FOREIGN host reach the pocket handler (it
      *  redirects them), and the front door stops refusing paths it does not know before it has
      *  seen the Host header. False everywhere but a pocket box in hotspot mode. */
