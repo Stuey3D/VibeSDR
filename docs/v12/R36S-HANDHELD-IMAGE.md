@@ -172,6 +172,43 @@ engine** — the engine relays the one request line and forgets it; only the ser
 - `VIBESERVER_CARD_DIR` (the exFAT `VIBESDR` mount) — `Recordings/`, `Gallery/<DECODER>/`, `import/`, `import/done/`,
   `export/`, `Diagnostic logs/`. The engine creates the folders it writes on first use; every write is temp + rename.
 
+## 0.3 Starting the engine, and what the page asks of Cog (2026-11-05)
+
+**The engine** (`vibeserver/handheld.cpp`, the supervisor; the radio process is the same binary):
+
+```
+User=vibeserver   (NOT root — the hardware service is the only root part)
+Environment=VIBESERVER_DATA_DIR=/var/lib/vibeserver        # per-radio memory in handheld/ (ext4, not the card)
+Environment=VIBESERVER_CARD_DIR=/media/VIBESDR             # the exFAT card; unset = no card (no recordings, no gallery files)
+Environment=VIBE_HWD_SOCK=/run/vibe-hwd.sock               # the default; only needed to move it
+ExecStart=/usr/bin/vibeserver --handheld                   # or "profile":"handheld" in VIBESERVER_CONFIG's file
+```
+
+- It listens on **127.0.0.1:48000** (`--port N` moves it); the radio process takes the next port on loopback and is reached
+  through a hand-off socket in `$VIBESERVER_DATA_DIR/handheld/run/`.
+- The user needs: write to `$VIBESERVER_DATA_DIR` and the card mount, USB access to the radios (the package's udev rules,
+  plugdev), connect to `/run/vibe-hwd.sock`, and write to `/run/vibe-handheld/` (to remove the Start+Select flag — if it
+  cannot, it says so and acts on the flag for that run only). `VIBE_HANDHELD_RESET_FLAG` moves the flag (tests).
+- **No root, no maintenance helper:** EXPORT DIAGNOSTICS runs `/usr/lib/vibeserver/vibeserver-diagnostics` as this user
+  (python3 needed; what it cannot read it says so) — `VIBESERVER_DIAG_SCRIPT` moves it.
+- SIGTERM = save every radio's memory, stop the radio, exit 0. The service's `shutdown` event is ACKed after the memory is
+  on disk and the data dir + card are `syncfs`'d (19 ms in the test); the radio process is stopped after the ack.
+- The radio process logs "handheld profile" at start; the supervisor logs every plug, unplug, save and reset.
+
+**Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette 'http://127.0.0.1:48000/?handheld=1'`, with
+autoplay allowed (WPE's default policy allows it; the page needs no gesture). `?handheld` alone does nothing — the page
+asks `/handheld/session`, which only the handheld engine answers. Cog needs no downloads, no file picker, no storage
+quota beyond localStorage (the look and the DISPLAY choices; everything per radio is the engine's).
+- `&wf20=interp` = the measured fallback for SPECTRUM RATE 20 (10 real frames + repeated rows) — **default is 20 real**;
+  only switch it after measuring on the device.
+
+**The page's routes on the engine** (`/handheld/*`, never handed to the radio): `session`, `memory`, `events` (long-poll),
+`device` (GET state; POST one of: brightness 1–255, volume 0–100, ssh on/off, ssh-password ≥ 8, poweroff / reboot /
+screen-off / screen-on), `clock` (`utcMs` or `deltaMs`), `perf`, `card`, `recordings[/<name>]` (POST a WAV, GET with
+Range, DELETE), `import` + `import/result`, `export?kind=bookmarks|dxlog`, `diagnostics`. Device events reach the page
+through `events`, not the spectrum socket — the page must hear the volume buttons and the battery on the "Please connect
+an SDR" screen, where there is no spectrum socket.
+
 ---
 
 ## 1. The short answer
