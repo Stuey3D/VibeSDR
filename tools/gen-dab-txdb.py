@@ -33,8 +33,14 @@ def main():
     for r in rows[1:]:
         try:
             eid = int(r[ix['EID']].strip(), 16)
-            main_ = int(r[ix['TII Main Id (Hex)']].strip().strip('"'), 16)
-            sub = int(r[ix['TII Sub Id (Hex)']].strip().strip('"'), 16)
+            # ★★ A BLANK TII IS A SITE WITH NO TII ASSIGNED, NOT A BAD ROW (2026-11-05). Ofcom leaves both columns empty
+            #    for many small-scale multiplexes (Rugby and Daventry, C231, Cold Ashby, 9A) — and those are exactly the
+            #    ones whose null symbol carries no TII, so the licence record is the ONLY way to name the site. They were
+            #    being dropped here. 0/0 is DabTx's "no TII" (vibe_dab_txdb.h); a TII match never uses it.
+            mt = r[ix['TII Main Id (Hex)']].strip().strip('"'); st = r[ix['TII Sub Id (Hex)']].strip().strip('"')
+            main_ = int(mt, 16) if mt else 0
+            sub = int(st, 16) if st else 0
+            if (mt == '') != (st == ''): continue   # ★ half a code is a typo, not a site without one
             lat = float(r[ix['Lat']]); lon = float(r[ix['Long']])
         except (ValueError, IndexError):
             continue

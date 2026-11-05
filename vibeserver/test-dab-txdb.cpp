@@ -56,6 +56,14 @@ int main() {
         for (const auto& x : uk) if (x.src != kDabSrcOfcom) anySwiss = true;
         CHECK(!anySwiss, "UK 12C ensemble lists only Ofcom rows"); CHECK(!uk.empty(), "…and does list them");
         // ── a UK ensemble lists Ofcom's record, labelled as such ──
+        /* ★★ A SMALL-SCALE MULTIPLEX WITH NO TII ASSIGNED (Ofcom leaves the columns blank) is still a licence record —
+         *  Rugby and Daventry, C231, Cold Ashby on 9A, whose null symbol carries nothing (Stuart's Pi 2, 2026-11-05). The
+         *  generator used to drop such rows, so the panel had no fallback at all. */
+        {
+            auto rd = db.sitesFor(0xE1, 0xC231, 52.31, -0.88, 4, "9A");
+            CHECK(!rd.empty() && rd[0].site == "Cold Ashby" && rd[0].subId == 0, "★ 9A Rugby and Daventry: the Ofcom record names Cold Ashby (no TII code)");
+            CHECK(db.tiiCodes(0xE1, 0xC231) == std::vector<bool>(DabTxDb::kTiiCodeBits, false), "  …and gives the TII resolver no code to match (0/0 is not a TII)");
+        }
         auto d1 = db.sitesFor(0xE1, 0xC181, cLat, cLon, 4, "11D");
         CHECK(!d1.empty() && d1[0].src == kDabSrcOfcom, "Digital One lists Ofcom rows");
         CHECK(std::string(dabTxSourceLabel(kDabSrcOfcom)) == "Ofcom record", "label reads Ofcom record");
