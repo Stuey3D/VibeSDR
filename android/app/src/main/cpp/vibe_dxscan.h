@@ -225,7 +225,13 @@ struct Entry {
     int      ecc = -1;
     std::string ensLabel;
     std::vector<std::pair<uint32_t, std::string>> services;
-    int      tiiMain = -1, tiiSub = -1;
+    int      tiiMain = -1, tiiSub = -1;    // ★ the transmitter heard on the LATEST visit that read one
+    /* ★★ THE TRANSMITTERS HEARD, INSIDE THE ONE ENTRY (Stuart, 2026-11-05). The TII used to be part of the KEY, so a
+     *  visit that read 23/2 and one that read none filed the same multiplex twice — the BBC "found 29 times" beside
+     *  everything else's 61 was 35 + 37 split across two rows, Coventry four rows (three transmitters and "none").
+     *  One multiplex is one entry; which masts were heard, and how often, is a list in it. */
+    struct Tx { int main = -1, sub = -1, times = 0; int64_t last = 0; };
+    std::vector<Tx> txs;
     // both
     int64_t  firstHeard = 0, lastHeard = 0;
     int      timesHeard = 0;
@@ -240,11 +246,26 @@ struct Entry {
 };
 
 inline std::string fmKey(uint16_t pi, int khz) { char b[32]; std::snprintf(b, sizeof b, "FM:%04X:%d", pi, khz); return b; }
-inline std::string dabKey(uint32_t eid, const std::string& block, int tiiMain, int tiiSub) {
+/** ★ ONE MULTIPLEX = ONE KEY: the EId on its block. The transmitter (TII) is NOT part of it — see Entry::txs. */
+inline std::string dabKey(uint32_t eid, const std::string& block, int /*tiiMain*/ = -1, int /*tiiSub*/ = -1) {
     char b[64];
-    if (tiiMain >= 0) std::snprintf(b, sizeof b, "DAB:%04X:%s:%d/%d", (unsigned)eid, block.c_str(), tiiMain, tiiSub);
-    else std::snprintf(b, sizeof b, "DAB:%04X:%s", (unsigned)eid, block.c_str());
+    std::snprintf(b, sizeof b, "DAB:%04X:%s", (unsigned)eid, block.c_str());
     return b;
+}
+static constexpr int kMaxTx = 16;   // transmitters remembered per multiplex (the strongest few are what anyone reads)
+/** Count one visit's transmitter into the entry. */
+inline void noteTx(Entry& e, int main, int sub, int64_t now) {
+    if (main < 0) return;
+    e.tiiMain = main; e.tiiSub = sub;
+    for (auto& t : e.txs) if (t.main == main && t.sub == sub) { ++t.times; t.last = now; return; }
+    if ((int)e.txs.size() >= kMaxTx) {   // ★ full: the least-heard goes
+        auto lo = std::min_element(e.txs.begin(), e.txs.end(), [](const Entry::Tx& a, const Entry::Tx& b) { return a.times < b.times; });
+        *lo = Entry::Tx{};
+        lo->main = main; lo->sub = sub; lo->times = 1; lo->last = now;
+        return;
+    }
+    Entry::Tx t; t.main = main; t.sub = sub; t.times = 1; t.last = now;
+    e.txs.push_back(t);
 }
 
 struct Alert { uint32_t seq = 0; int64_t utc = 0; int entryId = 0; std::string kind, text; };
@@ -342,7 +363,7 @@ public:
             int id = -1;
             if (isNew && makeRoom()) {
                 Entry e; e.id = nextId_++; e.dab = true; e.key = k; e.block = block; e.blockName = hit->blockName;
-                e.eid = hit->eid; e.tiiMain = hit->tiiMain; e.tiiSub = hit->tiiSub; e.firstHeard = now;
+                e.eid = hit->eid; e.firstHeard = now;
                 e.khz = (int)std::lround(hit->hz / 1e3);   // ★ the block's centre — a client tunes it without a table of its own
                 e.cls = bootstrapping(now) ? Cls::Provisional : Cls::Dx;
                 entries_[e.id] = e; byKey_[k] = e.id; id = e.id; ++vr.newEntries;
@@ -350,6 +371,7 @@ public:
             if (id >= 0) {
                 Entry& e = entries_[id];
                 if (hit->ecc >= 0) e.ecc = hit->ecc;
+                noteTx(e, hit->tiiMain, hit->tiiSub, now);
                 if (!trimRight(hit->label).empty()) e.ensLabel = trimRight(hit->label);
                 std::vector<std::string> names;
                 for (const auto& s : hit->services) {
@@ -425,6 +447,17 @@ public:
                 j += std::string(i ? "," : "") + "{\"sid\":" + std::to_string(e.services[i].first) + ",\"label\":\"" + esc(e.services[i].second) + "\"}";
             j += "]";
             if (e.tiiMain >= 0) { std::snprintf(b, sizeof b, ",\"tii\":{\"main\":%d,\"sub\":%d}", e.tiiMain, e.tiiSub); j += b; }
+            if (!e.txs.empty()) {   // ★ every transmitter heard on this multiplex, most-heard first
+                std::vector<Entry::Tx> t = e.txs;
+                std::sort(t.begin(), t.end(), [](const Entry::Tx& a, const Entry::Tx& b) { return a.times > b.times; });
+                j += ",\"transmitters\":[";
+                for (size_t i = 0; i < t.size(); ++i) {
+                    std::snprintf(b, sizeof b, "%s{\"main\":%d,\"sub\":%d,\"timesHeard\":%d,\"lastHeard\":%lld}", i ? "," : "",
+                                  t[i].main, t[i].sub, t[i].times, (long long)t[i].last);
+                    j += b;
+                }
+                j += "]";
+            }
         }
         std::snprintf(b, sizeof b, ",\"firstHeard\":%lld,\"lastHeard\":%lld,\"timesHeard\":%d,\"presence\":%.3f,\"openings\":%zu,\"live\":%s",
                       (long long)e.firstHeard, (long long)e.lastHeard, e.timesHeard, e.presence, e.openings.size(), liveNow(e) ? "true" : "false");
@@ -544,7 +577,7 @@ public:
         if (!vibe::antswitch::parseJson(text, j) || j.kind != Json::Obj) return false;
         auto num = [](const Json& o, const char* k, double d) { const Json* v = o.get(k); return v && v->kind == Json::Num ? v->n : d; };
         auto bo  = [](const Json& o, const char* k, bool d) { const Json* v = o.get(k); return v && v->kind == Json::Bool ? v->b : d; };
-        entries_.clear(); byKey_.clear(); alerts_.clear();
+        entries_.clear(); byKey_.clear(); alerts_.clear(); remapIds_.clear(); dirty_ = false;
         created_ = (int64_t)num(j, "created", 0);
         nextId_ = (int)num(j, "nextId", 1);
         sweepsFm_ = (uint32_t)num(j, "sweepsFm", 0); sweepsDab_ = (uint32_t)num(j, "sweepsDab", 0);
@@ -570,6 +603,13 @@ public:
                 e.block = (int)num(o, "blk", -1); e.blockName = o.str("block"); e.eid = (uint32_t)num(o, "eidN", 0);
                 e.ecc = (int)num(o, "ecc", -1); e.ensLabel = o.str("ensemble");
                 e.tiiMain = (int)num(o, "tm", -1); e.tiiSub = (int)num(o, "ts", -1);
+                if (const Json* tx = o.get("transmitters"); tx && tx->kind == Json::Arr)
+                    for (const auto& t : tx->a)
+                        if (t.kind == Json::Obj && (int)e.txs.size() < kMaxTx) {
+                            Entry::Tx x; x.main = (int)num(t, "main", -1); x.sub = (int)num(t, "sub", -1);
+                            x.times = (int)num(t, "timesHeard", 0); x.last = (int64_t)num(t, "lastHeard", 0);
+                            if (x.main >= 0) e.txs.push_back(x);
+                        }
                 if (const Json* sv = o.get("services"); sv && sv->kind == Json::Arr)
                     for (const auto& s : sv->a)
                         if (s.kind == Json::Obj && (int)e.services.size() < kMaxServices)
@@ -602,7 +642,28 @@ public:
                         const int slot = ((st % kBuckets) + kBuckets) % kBuckets;
                         e.bStamp[slot] = st; e.bVisits[slot] = (uint16_t)t.a[1].n; e.bHits[slot] = (uint16_t)t.a[2].n;
                     }
-                if (byKey_.count(e.key) || entries_.count(e.id)) continue;
+                if (entries_.count(e.id)) continue;
+                /* ★★ A LOG WRITTEN BEFORE 2026-11-05 filed one multiplex under a key per transmitter ("DAB:CE15:12B:23/2"
+                 *  beside "DAB:CE15:12B"). Each is folded into the one multiplex entry here, its TII becoming one of the
+                 *  entry's transmitters — so the counts add up again the first time a server starts on this build. */
+                if (e.dab && e.eid) {
+                    const std::string base = dabKey(e.eid, e.blockName);
+                    if (e.key != base) {
+                        if (e.tiiMain >= 0 && e.txs.empty()) {
+                            Entry::Tx x; x.main = e.tiiMain; x.sub = e.tiiSub; x.times = e.timesHeard; x.last = e.lastHeard;
+                            e.txs.push_back(x);
+                        }
+                        e.key = base;
+                        dirty_ = true;
+                    }
+                    if (auto it = byKey_.find(base); it != byKey_.end()) {
+                        mergeInto(entries_[it->second], e);
+                        remapIds_[e.id] = it->second;
+                        nextId_ = std::max(nextId_, e.id + 1);
+                        continue;
+                    }
+                }
+                if (byKey_.count(e.key)) continue;
                 nextId_ = std::max(nextId_, e.id + 1);
                 byKey_[e.key] = e.id;
                 entries_[e.id] = e;
@@ -612,10 +673,13 @@ public:
             for (const auto& a : al->a) {
                 if (a.kind != Json::Obj || (int)alerts_.size() >= kMaxAlerts) continue;
                 Alert x; x.seq = (uint32_t)num(a, "seq", 0); x.utc = (int64_t)num(a, "utc", 0); x.entryId = (int)num(a, "id", 0);
+                if (auto r = remapIds_.find(x.entryId); r != remapIds_.end()) x.entryId = r->second;   // ★ a folded entry's alert
                 x.kind = a.str("kind"); x.text = a.str("text");
                 alerts_.push_back(x);
             }
-        dirty_ = false;
+        const bool folded = !remapIds_.empty() || dirty_;
+        remapIds_.clear();
+        dirty_ = folded;   // ★ a fold is written back at the next flush
         return true;
     }
 
@@ -630,6 +694,47 @@ public:
     }
 
 private:
+    std::map<int, int> remapIds_;   // ★ load only: a folded entry's id → the multiplex entry it went into
+    /** Fold `src` (the same multiplex, filed under an old per-transmitter key) into `dst`. */
+    static void mergeInto(Entry& dst, const Entry& src) {
+        const bool srcNewer = src.lastHeard > dst.lastHeard;
+        dst.timesHeard += src.timesHeard;
+        if (src.firstHeard && (!dst.firstHeard || src.firstHeard < dst.firstHeard)) dst.firstHeard = src.firstHeard;
+        if (srcNewer) {
+            dst.lastHeard = src.lastHeard;
+            if (src.tiiMain >= 0) { dst.tiiMain = src.tiiMain; dst.tiiSub = src.tiiSub; }
+            if (!src.ensLabel.empty()) dst.ensLabel = src.ensLabel;
+        }
+        dst.lastSweep = std::max(dst.lastSweep, src.lastSweep);
+        dst.peakLevelDb = std::max(dst.peakLevelDb, src.peakLevelDb);
+        dst.peakSnrDb = std::max(dst.peakSnrDb, src.peakSnrDb);
+        if (dst.ecc < 0) dst.ecc = src.ecc;
+        if (dst.promoted.empty()) dst.promoted = src.promoted;
+        for (const auto& s : src.services) {
+            bool have = false;
+            for (const auto& d : dst.services) if (d.first == s.first) { have = true; break; }
+            if (!have && (int)dst.services.size() < kMaxServices) dst.services.push_back(s);
+        }
+        for (const auto& t : src.txs) {
+            bool have = false;
+            for (auto& d : dst.txs) if (d.main == t.main && d.sub == t.sub) { d.times += t.times; d.last = std::max(d.last, t.last); have = true; break; }
+            if (!have && (int)dst.txs.size() < kMaxTx) dst.txs.push_back(t);
+        }
+        dst.openings.insert(dst.openings.end(), src.openings.begin(), src.openings.end());
+        std::sort(dst.openings.begin(), dst.openings.end(), [](const Opening& a, const Opening& b) { return a.start < b.start; });
+        if ((int)dst.openings.size() > kMaxOpenings) dst.openings.erase(dst.openings.begin(), dst.openings.end() - kMaxOpenings);
+        // ★ presence buckets: every split row was VISITED on every visit of the block, so visits are the same count —
+        //   the hits add (capped at the visits: one visit hears a multiplex once)
+        for (int i = 0; i < kBuckets; ++i) {
+            if (!src.bVisits[i]) continue;
+            if (dst.bStamp[i] == src.bStamp[i] && dst.bVisits[i]) {
+                dst.bVisits[i] = std::max(dst.bVisits[i], src.bVisits[i]);
+                dst.bHits[i] = (uint16_t)std::min<unsigned>(dst.bVisits[i], (unsigned)dst.bHits[i] + src.bHits[i]);
+            } else if (!dst.bVisits[i] || src.bStamp[i] > dst.bStamp[i]) {
+                dst.bStamp[i] = src.bStamp[i]; dst.bVisits[i] = src.bVisits[i]; dst.bHits[i] = src.bHits[i];
+            }
+        }
+    }
     std::map<int, Entry> entries_;
     std::map<std::string, int> byKey_;
     std::vector<Alert> alerts_;

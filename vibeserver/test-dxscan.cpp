@@ -204,15 +204,48 @@ int main() {
         DabHit t1 = h; t1.tiiMain = 4; t1.tiiSub = 7;
         DabHit t2 = h; t2.tiiMain = 9; t2.tiiSub = 2;
         log.commitDab(30, &t1, T0 + 60); log.commitDab(30, &t2, T0 + 120);
-        ok(log.size() == 3, "★ EId + block without TII, and EId + block + TII main/sub: two SFN sites are two entries");
+        // ★★ Stuart, 2026-11-05: the BBC "found 29 times" beside everything else's 61 was ONE multiplex split by its TII
+        ok(log.size() == 1, "★★ one multiplex = ONE entry, whatever transmitter (TII) each visit read");
         log.commitDab(30, &t1, T0 + 180);
-        ok(log.size() == 3 && log.findKey(dabKey(0xC1CE, "12B", 4, 7))->timesHeard == 2, "the same site again: the same entry");
-        const Entry* e = log.findKey(dabKey(0xC1CE, "12B", -1, -1));
+        const Entry* e = log.findKey(dabKey(0xC1CE, "12B"));
+        ok(log.size() == 1 && e && e->timesHeard == 4, "★ every visit counts on it: heard 4 times (no TII, 4/7, 9/2, 4/7)");
+        ok(e && e->txs.size() == 2 && e->tiiMain == 4 && e->tiiSub == 7, "the transmitters are listed inside it (4/7 and 9/2; latest 4/7)");
+        bool tx47 = false; for (const auto& t : e->txs) if (t.main == 4 && t.sub == 7 && t.times == 2) tx47 = true;
+        ok(tx47, "  and 4/7 was heard twice");
+        ok(log.entryJson(*e, false).find("\"transmitters\":[{\"main\":4,\"sub\":7,\"timesHeard\":2") != std::string::npos,
+           "  … the API lists them, most-heard first");
         ok(e && e->services.size() == 2 && e->openings.size() == 1 && e->openings[0].services.size() == 2,
            "★ the opening records the services that decoded (§12 q3)");
         DabHit none; none.block = 31; none.blockName = "12C"; none.eid = 0; none.fibOk = 0;
         log.commitDab(31, &none, T0 + 200);
-        ok(log.size() == 3, "a block with no EId logs nothing");
+        ok(log.size() == 1, "a block with no EId logs nothing");
+    }
+
+    std::printf("── a log from before 2026-11-05 (one row per transmitter) is folded on load ──\n");
+    {
+        // ★ the Pi 2's own file, shape for shape: BBC 12B as "DAB:CE15:12B" (35) + "DAB:CE15:12B:23/2" (37), and an alert
+        const std::string old = std::string("{\"v\":1,\"created\":") + std::to_string(T0 - 3 * 86400) + ",\"nextId\":4,\"sweepsDab\":72,\"entries\":["
+            "{\"id\":1,\"band\":\"DAB\",\"key\":\"DAB:CE15:12B\",\"class\":\"provisional\",\"block\":\"12B\",\"blk\":32,\"eidN\":52757,"
+              "\"ensemble\":\"BBC National DAB\",\"services\":[{\"sid\":1,\"label\":\"R1\"}],\"firstHeard\":100,\"lastHeard\":900,\"timesHeard\":35,"
+              "\"peakSnrDb\":23.6,\"tm\":-1,\"ts\":-1,\"lastSweep\":68,\"buckets\":[[10,6,3]]},"
+            "{\"id\":2,\"band\":\"DAB\",\"key\":\"DAB:CE15:12B:23/2\",\"class\":\"provisional\",\"block\":\"12B\",\"blk\":32,\"eidN\":52757,"
+              "\"ensemble\":\"BBC National DAB\",\"services\":[{\"sid\":2,\"label\":\"R2\"}],\"firstHeard\":200,\"lastHeard\":1000,\"timesHeard\":37,"
+              "\"peakSnrDb\":23.0,\"tm\":23,\"ts\":2,\"lastSweep\":71,\"buckets\":[[10,6,3]]},"
+            "{\"id\":3,\"band\":\"DAB\",\"key\":\"DAB:C1CE:11A\",\"class\":\"provisional\",\"block\":\"11A\",\"blk\":28,\"eidN\":49614,"
+              "\"ensemble\":\"SDL National\",\"firstHeard\":100,\"lastHeard\":1000,\"timesHeard\":72,\"tm\":-1,\"ts\":-1,\"lastSweep\":71}"
+            "],\"alerts\":[{\"seq\":1,\"utc\":500,\"id\":2,\"kind\":\"opening\",\"text\":\"x\"}]}";
+        Log back;
+        ok(back.fromFileJson(old), "the old file loads");
+        const Entry* b = back.findKey(dabKey(0xCE15, "12B"));
+        ok(back.size() == 2 && b, "★★ the two BBC rows are ONE entry (" + std::to_string(back.size()) + " entries)");
+        ok(b && b->timesHeard == 72, "★ heard 72 times — 35 + 37, the same as every other multiplex (" + std::to_string(b ? b->timesHeard : -1) + ")");
+        ok(b && b->firstHeard == 100 && b->lastHeard == 1000 && b->lastSweep == 71 && b->services.size() == 2,
+           "  first/last heard, the last sweep and the services are the union");
+        ok(b && b->txs.size() == 1 && b->txs[0].main == 23 && b->txs[0].sub == 2 && b->txs[0].times == 37 && b->tiiMain == 23,
+           "  the TII row's transmitter (23/2, 37 visits) is listed inside it");
+        ok(b && b->bHits[10 % kBuckets] == 6 && b->bVisits[10 % kBuckets] == 6, "  presence: the visits stay 6, the hits add (3 + 3)");
+        ok(back.alertsJson(0).find("\"id\":" + std::to_string(b ? b->id : -1)) != std::string::npos, "  the folded row's alert now points at it");
+        ok(back.dirty(), "  and the folded log is written back at the next flush");
     }
 
     std::printf("── bounded, prune order, promoted kept ──\n");
