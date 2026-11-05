@@ -9,6 +9,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -24,6 +26,66 @@ template <class F> static bool waitFor(F f, int ms) {
     for (int i = 0; i < ms / 10; i++) { if (f()) return true; std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     return f();
 }
+
+/** ★★ A USB SERIAL CHIP, as the IC-7300's CP2102 behaves (Saber, 2026-11-05). write() returns as soon as the bytes
+ *  are in the chip's buffer (the bulk transfer's ACK); the chip then sends them at the baud rate. close() takes the
+ *  few ms its control transfers take (lines low, UART off) and the UART-off DISCARDS whatever was still queued.
+ *  drain() waits until the queue is on the wire. Against this, a 7-byte 18 00 survives a close straight after the
+ *  write and a 157-byte power-on does not — exactly the field symptom (off worked, on never did). */
+class ChipFifoTransport final : public CivTransport {
+public:
+    ChipFifoTransport(CivPeer* p, int baud) : peer_(p), bytesPerMs_(baud / 10000.0), pump_([this] { run(); }) {}
+    ~ChipFifoTransport() override { stop_ = true; pump_.join(); }
+    bool open(std::string&) override { std::lock_guard<std::mutex> lk(m_); open_ = true; return true; }
+    void close() override {
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));   // SET_MHS + IFC_ENABLE(0) on the wire
+        std::lock_guard<std::mutex> lk(m_);
+        dropped += q_.size(); q_.clear(); open_ = false;
+    }
+    int read(uint8_t* b, int max, int timeoutMs) override {
+        { std::lock_guard<std::mutex> lk(m_); if (!open_) return -1; }
+        return peer_->toController(b, max, timeoutMs);
+    }
+    bool write(const uint8_t* b, int n) override {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!open_) return false;
+        q_.insert(q_.end(), b, b + n);
+        return true;
+    }
+    void drain(int maxMs) override {
+        drains++;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(maxMs);
+        while (std::chrono::steady_clock::now() < until) {
+            { std::lock_guard<std::mutex> lk(m_); if (q_.empty()) return; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    const char* kind() const override { return "cp210x-model"; }
+    bool linesHeldLow() const override { return true; }
+    std::atomic<uint64_t> dropped{0}, drains{0};
+private:
+    void run() {
+        double credit = 0;
+        while (!stop_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            uint8_t b[64]; int n = 0;
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                if (q_.empty()) { credit = 0; continue; }
+                credit += bytesPerMs_;
+                while (credit >= 1.0 && n < (int)sizeof b && !q_.empty()) { b[n++] = q_.front(); q_.pop_front(); credit -= 1.0; }
+            }
+            if (n) peer_->fromController(b, n);
+        }
+    }
+    CivPeer* peer_;
+    double bytesPerMs_;
+    std::mutex m_;
+    std::deque<uint8_t> q_;
+    bool open_ = false;
+    std::atomic<bool> stop_{false};
+    std::thread pump_;
+};
 
 static IcomConfig cfgTone() { IcomConfig c; c.audio = "tone"; c.modelHint = "IC-7300 03001234"; return c; }
 
@@ -258,6 +320,30 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1300));
         fake.toController(b, sizeof b, 10);
         ok(fake.powered.load(), "  … and the full wake does, after its boot delay");
+    }
+    {
+        // ★★ SABER'S IC-7300 (2026-11-05): the power-on through a USB serial chip that sends at the baud rate and
+        //    drops its queue when the port closes. ~90 wakes went unanswered in the field: the port was closed
+        //    straight after the write and the 18 01 at the end of the FE run never left the chip.
+        FakeIcomRadio fake; fake.powered = false;
+        auto chip = std::unique_ptr<ChipFifoTransport>(new ChipFifoTransport(&fake, 115200));
+        ChipFifoTransport* cp = chip.get();
+        IcomSource src; std::string err; IcomConfig c = cfgTone(); c.powerOn = true;
+        src.setInUse(true);
+        ok(src.open(c, err, std::move(chip)), "★ through a CP2102-like chip (queued at 115200, dropped on close): opens and waits");
+        ok(waitFor([&] { return src.wakesSent() == 1; }, 4000), "  … the listener's power-on is sent");
+        ok(waitFor([&] { return fake.wakesSeen.load() == 1; }, 2000) && fake.wakesIgnored.load() == 0,
+           "  … and the WHOLE run reached the radio — FE x" + std::to_string(civ::power::wakePreambleFor(115200)) + " then 18 01 (drained before the close; dropped " + std::to_string(cp->dropped.load()) + " bytes)");
+        ok(waitFor([&] { return src.state().linkUp; }, 10000), "  … it booted, the preflight passed, it is running");
+        std::string why;
+        ok(src.requestPowerOff(why) && waitFor([&] { return !fake.powered.load() && fake.powerOffs.load() == 1; }, 3000),
+           "  … RADIO OFF through the same chip: 18 00 arrives");
+        ok(src.requestPowerOn(why) && waitFor([&] { return src.state().linkUp; }, 10000), "  … RADIO ON through the same chip: back on and running");
+        ok(fake.wakesSeen.load() == 2 && cp->drains.load() >= 3, "  … two wakes seen, every power frame drained (" + std::to_string(cp->drains.load()) + ")");
+        offsByOwnerOrIdle += 1;
+        src.close();
+        ok(fake.violations.load() == 0 && src.refusedFrames() == 0, "★ zero disallowed frames");
+        offsSeen += fake.powerOffs.load();
     }
     {
         // ★ ABSENT is not OFF: no USB device at all still fails open() — "not detected".

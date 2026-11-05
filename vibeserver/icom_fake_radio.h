@@ -98,10 +98,13 @@ public:
 
     void fromController(const uint8_t* b, int n) override {
         std::lock_guard<std::mutex> lk(mtx_);
-        // ★ The server writes one whole frame (or one whole wake) per write — its leading FE run is the preamble.
-        leadFe_ = 0;
-        while (leadFe_ < n && b[leadFe_] == 0xFE) leadFe_++;
-        parser_.feed(b, (size_t)n, [&](const civ::Frame& f) { handle(f); });
+        // ★ The FE run in front of a frame is its preamble, counted ACROSS writes: a USB serial chip hands the radio
+        //   a byte stream, not our write() calls (see ChipFifoTransport in test-icom-source.cpp).
+        for (int i = 0; i < n; i++) {
+            if (b[i] == 0xFE) feRun_++;
+            else if (feRun_ > 0) { leadFe_ = feRun_; feRun_ = 0; }
+            parser_.feed(b + i, 1, [&](const civ::Frame& f) { handle(f); });
+        }
     }
 
     int toController(uint8_t* b, int max, int timeoutMs) override {
@@ -128,7 +131,7 @@ private:
     double credit_ = 0, lastT_ = 0, nextSweep_ = 0;
     uint32_t seed_ = 12345;
     const Model* policyModel_;
-    int leadFe_ = 0;
+    int leadFe_ = 0, feRun_ = 0;
     double bootAt_ = 0;
 
     static double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }

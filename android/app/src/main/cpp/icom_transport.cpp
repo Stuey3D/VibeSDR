@@ -170,6 +170,8 @@ public:
     void close() override {
         live_.store(false);
         if (h_) {
+            // ★★ What we wrote goes out FIRST (see drain): the UART-off below drops whatever the chip still holds.
+            drain(kCloseDrainMs);
             // ★ Lines low on the way out too, then the UART off: nothing is left asserted for whoever
             //   opens it next (the kernel driver re-binds on release).
             if (!cdc_) { mhsLow(); vendor(0x00, 0x0000, nullptr, 0); }
@@ -193,7 +195,38 @@ public:
         if (!h_) return false;
         int sent = 0;
         const int rc = libusb_bulk_transfer(h_, epOut_, const_cast<uint8_t*>(b), n, &sent, 500);
+        if (sent > 0) {
+            // ★ When the last of these bytes will be on the wire: the chip took them, the UART still has to send them.
+            const auto t = std::chrono::steady_clock::now();
+            if (txEnd_ < t) txEnd_ = t;
+            txEnd_ += lineTime(sent);
+        }
         return rc == 0 && sent == n;
+    }
+    /** ★★ THE CHIP'S BUFFER, EMPTIED ONTO THE WIRE (CivTransport::drain). Saber's IC-7300 (2026-11-05): ~90 power-ons
+     *  sent, NONE answered — each was written and the port closed straight after, and the CP2102's UART-disable on
+     *  close cut the 150-FE run short, so the 18 01 at its end never left the chip. 18 00 (15 bytes with the scope-off
+     *  in front, 1.3 ms) fitted in before the close; the 157-byte wake (14 ms) never did.
+     *  First the line time of what we wrote; then, on a CP210x, GET_COMM_STATUS until its out-queue is empty; then one
+     *  character more for the shift register. A CDC-ACM chip has no such query: its line time plus a margin. */
+    void drain(int maxMs) override {
+        if (!h_ || maxMs <= 0) return;
+        using clk = std::chrono::steady_clock;
+        const auto deadline = clk::now() + std::chrono::milliseconds(maxMs);
+        const auto lineEnd = txEnd_ + (cdc_ ? std::chrono::milliseconds(20) : std::chrono::milliseconds(0));
+        std::this_thread::sleep_until(lineEnd < deadline ? lineEnd : deadline);
+        if (!cdc_) {
+            for (;;) {
+                unsigned char st[19] = {0};   // AN571 SERIAL_STATUS: errors, hold reasons, in-queue, OUT-QUEUE, …
+                const int r = libusb_control_transfer(h_, 0xC1, 0x10 /*GET_COMM_STATUS*/, 0, (uint16_t)ifc_[0], st, sizeof st, 100);
+                if (r < 16) break;            // ★ not answered: the line time above is all we can do
+                const uint32_t outQ = (uint32_t)st[12] | (uint32_t)st[13] << 8 | (uint32_t)st[14] << 16 | (uint32_t)st[15] << 24;
+                if (outQ == 0 || clk::now() >= deadline) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        }
+        const auto tail = clk::now() + lineTime(1) + std::chrono::milliseconds(1);
+        std::this_thread::sleep_until(tail < deadline ? tail : deadline);
     }
     const char* kind() const override { return cdc_ ? "cdc-acm" : "cp210x"; }
     bool linesHeldLow() const override { return true; }
@@ -211,6 +244,12 @@ private:
     int ifc_[2] = {0, 0}; bool claimed_[2] = {false, false}; int nIfc_ = 0;
     int ctrlIfc_ = 0;
     unsigned char epIn_ = 0x81, epOut_ = 0x01;
+    std::chrono::steady_clock::time_point txEnd_{};   ///< when the last byte written is on the wire (drain)
+    /** ★ close() drains this long at most: a whole power-on run at 4800 baud (330 ms) fits, with room. */
+    static constexpr int kCloseDrainMs = 500;
+    std::chrono::microseconds lineTime(int bytes) const {   // 10 bits a byte: start, 8 data, stop
+        return std::chrono::microseconds((long long)bytes * 10 * 1000000LL / (baud_ > 0 ? baud_ : 115200));
+    }
 
     bool findEndpoints(std::string& err) {
         /* ★★★ FROM ZERO ON EVERY OPEN (Saber's IC-7300, 2026-11-05). nIfc_ was never reset, so each reopen APPENDED the
@@ -312,6 +351,7 @@ public:
         tcflush(fd_, TCIOFLUSH);
         return true;
     }
+    void drain(int maxMs) override { (void)maxMs; if (fd_ >= 0) tcdrain(fd_); }   // ★ no flow control set: it cannot hang
     void close() override {
         if (fd_ >= 0) { int bits = TIOCM_DTR | TIOCM_RTS; ioctl(fd_, TIOCMBIC, &bits); ::close(fd_); fd_ = -1; }
     }

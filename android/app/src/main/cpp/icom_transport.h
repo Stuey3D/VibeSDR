@@ -39,7 +39,13 @@ public:
     virtual int  read(uint8_t* b, int max, int timeoutMs) = 0;
     /** ★ PRIVATE TO IcomSource::sendFrame. Whole frames only, already allow-listed. */
     virtual bool write(const uint8_t* b, int n) = 0;
-    virtual const char* kind() const = 0;          ///< "cp210x" | "cdc-acm" | "tty" | "memory"
+    /** ★★ WAIT UNTIL WHAT WAS WRITTEN HAS LEFT THE WIRE (at most `maxMs`) — not merely the host. A USB serial
+     *  chip ACKs a bulk write as soon as the bytes are in ITS buffer; they then go out at the baud rate (a power-on
+     *  run is 157 bytes = 14 ms at 115200, 330 ms at 4800). Closing before that — the CP210x's UART-disable —
+     *  throws away the tail, and the tail of a power-on is the 18 01 itself. Call before any close() that follows
+     *  a write whose last byte matters. */
+    virtual void drain(int maxMs) { (void)maxMs; }
+    virtual const char* kind() const = 0;         ///< "cp210x" | "cdc-acm" | "tty" | "memory"
     virtual bool linesHeldLow() const = 0;
     /** ★ ANDROID ONLY (the "fd:" transport): a FRESH UsbManager descriptor for the same radio after it left the
      *  bus and came back — usbfs binds an fd to the device INSTANCE it was opened on, so the old one answers

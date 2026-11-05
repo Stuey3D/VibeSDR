@@ -102,6 +102,9 @@ bool IcomSource::sendWake(bool byOwner) {
         ILOG("a listener arrived and the radio is off (idle power-down) — sending CI-V power-on (owner option)");
     else ILOG("the radio is not answering — sending CI-V power-on (owner option)");
     const bool okw = transport_->write(w.b, w.n);
+    // ★★ Every caller closes the port next. The 18 01 is the LAST thing in this run: it must be out of the USB chip
+    //    before then, or the radio hears a burst of FE and nothing else (Saber's IC-7300, 2026-11-05 — see drain()).
+    if (okw) transport_->drain(kDrainMs);
     if (okw) { wakes_.fetch_add(1); bootUntil_ = t + kBootSec; offSeenDown_ = true; }   // ★ after OUR wake, an answer IS "on"
     return okw;
 }
@@ -115,7 +118,7 @@ void IcomSource::doPowerOff(bool byOwner) {
     else ILOG("nobody is listening (idle power-down) — sending CI-V power-off (18 00); the next listener switches it back on");
     // ★ Scope data off first, as close() does, so the radio is left as we found it when it comes back.
     sendFrame(civ::build::scopeData(policy_.radio, false));
-    if (transport_->write(o.b, o.n)) offs_.fetch_add(1);
+    if (transport_->write(o.b, o.n)) { offs_.fetch_add(1); transport_->drain(kDrainMs); }   // ★ the port closes next
     offSettleUntil_ = now() + kOffSettleSec; offSeenDown_ = false;
     if (byOwner) offByOwner_.store(true); else offByIdle_.store(true);
     { std::lock_guard<std::mutex> lk(stMtx_); st_.linkUp = false; }

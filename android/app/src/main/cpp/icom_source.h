@@ -191,6 +191,7 @@ public:
     uint64_t powerOffsSent() const { return offs_.load(); }
     static constexpr double kWakeEverySec = 30.0;   ///< at most one power-on per this, while waiting
     static constexpr double kBootSec = 4.0;         ///< after a power-on, let the radio boot before identify
+    static constexpr int kDrainMs = 600;            ///< a power frame's wait to leave the USB chip (157 B at 4800 = 330 ms)
     static constexpr double kOffSettleSec = 15.0;   ///< after OUR power-off: an IC-7300 answers CI-V for a few s while it shuts down
     uint64_t sweepsDropped() const { return scope_.dropped; }
     /** S-meter reading as dB relative to S9 (Hamlib's published 7300 calibration points). */
