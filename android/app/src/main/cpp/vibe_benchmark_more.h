@@ -903,12 +903,14 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         double fedSec = 0; size_t pos = 0;
         const size_t blk = (size_t)(fs / 100);
         while (e.running() && fedSec < 30) {   // ★ 30 s of signal is a backstop only: the hop ends after its dwell
-            while (e.running() && e.queuedSec() > 0.25) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // ★ 0.1 s, BELOW the engine's queue cap: that is min(0.5 s, 512 k samples) = 0.22 s at 2.4 MS/s, so the old 0.25 s
+            //   never waited — the feeder outran the hop, every block was dropped, and the row read "decoded 0" (11-05)
+            while (e.running() && e.queuedSec() > 0.1) std::this_thread::sleep_for(std::chrono::milliseconds(1));
             const size_t k = std::min(blk, n - pos);
             e.feed(iq.data() + pos, (int)k);
             pos = (pos + k) % n; fedSec += (double)k / fs;
         }
-        e.abort();
+        e.abort();   // joins; a finished hop keeps its results (abort marks only an unfinished one)
         r.pct = 100.0 * (processCpu() - c0) / std::max(0.5, p.settleSec + p.specSec + p.dwellSec);
         int ids = 0;
         for (const auto& h : e.results()) if (h.pi && vibe::dx::fmConfirmed(h.groups, h.psComplete)) ++ids;

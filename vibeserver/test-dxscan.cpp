@@ -115,7 +115,7 @@ int main() {
         int k = 0;
         for (; t < T0 + 26 * 3600; t += 600, ++k) {
             const auto vr = log.commitFm(98000, 99800, 98950, 100,
-                                         { fm(98500, 0xC201, "BBC R4", 8), fm(99100, 0xD3C1, scroll[k % 6], 9) }, t);
+                                         { fm(98500, 0xC201, "BBC R4", 8, true), fm(99100, 0xD3C1, scroll[k % 6], 9, true) }, t);   // ★ whole PSs (only a whole PS is kept as a name)
             if (t < T0 + kBootstrapSec) alertsDuringBoot += vr.alerts;
         }
         const Entry* r4 = log.findKey(fmKey(0xC201, 98500));

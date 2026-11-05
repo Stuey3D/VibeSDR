@@ -138,9 +138,11 @@ try {
   const byPi = (pi) => list.entries.find((e) => e.pi === pi);
   for (const [pi, mhz, ps] of [['C201', 89.3, 'BBC R4'], ['5201', 98.8, 'RAI R1'], ['F201', 104.6, 'FR INTER']]) {
     const e = byPi(pi);
-    ok(e && e.freqKhz === Math.round(mhz * 1000) && e.ps === ps && e.class === 'provisional',
-       `${mhz} MHz PI ${pi} "${ps}" in the DX log, provisional (bootstrap) — ${e ? `${e.freqKhz} "${e.ps}" ${e.class}` : 'missing'}`);
+    // ★ 2026-11-04: the name is the WHOLE PS or none yet — never a half-built one ("FR INT") from an interrupted dwell.
+    ok(e && e.freqKhz === Math.round(mhz * 1000) && (e.ps === ps || e.ps === '') && e.class === 'provisional',
+       `${mhz} MHz PI ${pi} "${ps}" (or not named yet, never part of it) in the DX log, provisional (bootstrap) — ${e ? `${e.freqKhz} "${e.ps}" ${e.class}` : 'missing'}`);
   }
+  ok(list.entries.filter((e) => e.ps).length >= 2, `the names arrive: ${list.entries.filter((e) => e.ps).map((e) => e.ps).join(', ')}`);
   ok(list.entries.filter((e) => e.band === 'FM').length === 3, `exactly the three RDS stations in the default view, no phantom PIs (${list.entries.length})`);
   const withSus = await fetch(`${S.H}/vibeserver/dxlog.json?limit=100&suspect=1`).then((r) => r.json());
   const sus = withSus.entries.filter((e) => e.class === 'suspect');

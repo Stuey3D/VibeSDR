@@ -308,7 +308,9 @@ public:
             Entry& e = entries_[id];
             e.dcKhz = dcKhz; e.halfKhz = std::max(dcKhz - loKhz, hiKhz - dcKhz); rasterKhz_ = rasterKhz;
             const std::string ps = trimRight(h.ps);
-            if (!ps.empty()) {
+            /* ★ ONLY A WHOLE PS IS A NAME (2026-11-04: an interrupted dwell logged "FR INT" for "FR INTER"). A half-built PS is
+             *  not kept — the entry stays "PI F201" until a later visit assembles all eight characters. */
+            if (!ps.empty() && h.psComplete) {
                 e.psLast = ps;
                 if (std::find(e.psVariants.begin(), e.psVariants.end(), ps) == e.psVariants.end()) {
                     e.psVariants.push_back(ps);
