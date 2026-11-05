@@ -113,6 +113,13 @@ connection also carries **unsolicited event lines** (they have an `"event"` key;
 | `{"set":"time","utcMs":1793900000000}` | same (the service is root; the engine is not) |
 | `{"action":"poweroff"\|"reboot"\|"screen-off"\|"screen-on"}` | same |
 | `{"subscribe":true}` | `{"ok":true}`, then events on this connection |
+| `{"get":"ssh"}` | `{"ok":true,"ssh":false,"passwordSet":false}` |
+| `{"set":"ssh","on":true\|false}` | `{"ok":true}`; switching ON with no password set → `{"ok":false,"error":"no password set"}` |
+| `{"set":"ssh-password","password":"…"}` | `{"ok":true}`; under 8 characters → `{"ok":false,"error":"password too short"}` |
+
+**SSH (Stuart 2026-11-05): OFF on a fresh card**, no default password. "Developer: SSH" in "This device" first asks
+the user to set a password, then switches it on. The password is **never logged, never echoed back and never stored by the
+engine** — the engine relays the one request line and forgets it; only the service (root) keeps the hash.
 
 **Events** (after `subscribe`):
 
