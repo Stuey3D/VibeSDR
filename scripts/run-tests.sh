@@ -178,6 +178,10 @@ flags_for() {
     #     index counted inside it, per-kind counts, oldest-first eviction fair between kinds, append-only + compaction,
     #     two processes on one folder, the 1,000,000 backstop. ~2 s.
     test-gallery-store)    echo "-O2 -lpthread" ;;
+    # ★★ V12 R36S handheld (handheld_card.h, the gallery's CardLayout): card names in UTC, FAT-safe, " (2)" on a clash,
+    #    every write temp + rename (no .part left; the sweep removes a cut-off one), the JSON reader, the gallery's items
+    #    on the card with the index off it, traversal refused, and the layout OFF = the server's flat gallery. ~1 s.
+    test-handheld-card)    echo "-O2 -lpthread" ;;
     # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
     #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
     #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
@@ -506,6 +510,13 @@ if node scripts/test-setup-icom.mjs; then pass=$((pass+1)); else fail=$((fail+1)
 #     stations (their IQ images Suspect); a listener mid-hop gets the dial back and the hop is NOT logged; the cursor resumes;
 #     an old client works normally; promote / clear; DAB in DX mode on the 12D reference capture when VIBE_TEST_AUDIO has it.
 #     ~3 min. Same VIBESERVER_BIN rule (exit 3 = not run).
+# ★★★ V12 R36S HANDHELD end to end (vibeserver --handheld, docs/v12/R36S-HANDHELD-IMAGE.md §0.2): no radio → the page and
+#     "none"; a fake radio adopted with no setup step and reached through the hand-off; per-radio memory written on unplug
+#     and restored when THAT radio returns; hot swap; Start+Select; the card (recordings with Range, import → done/ + .txt,
+#     export, diagnostics); the fake hardware service (clamps, SSH password never logged, clock, events, shutdown ACK).
+#     ~1 min. Same VIBESERVER_BIN rule (exit 3 = not run).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-handheld.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dx-scan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 THE OWNER'S SCANS (admin page DAB SCAN / FM SCAN) on a shared radio: the FM scan starts with a listener on,
