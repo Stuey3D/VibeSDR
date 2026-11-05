@@ -120,7 +120,10 @@ else
   rm -f "$R/etc/apt/sources.list.d/vibesdr.list"
   say "engine: $(ls "$R/tmp/vdeb") from apt.vibesdr.net $APT_SUITE (signature checked by apt)"
 fi
-DEB=$(ls "$R"/tmp/vdeb/vibeserver_*_arm64.deb | head -1)
+# ★ by CONTENT, not by name: a branch build may be called anything (vibeserver-handheld-arm64.deb, 2026-11-05)
+DEB=$(ls "$R"/tmp/vdeb/*.deb | head -1)
+[ "$(dpkg-deb -f "$DEB" Package)" = vibeserver ] && [ "$(dpkg-deb -f "$DEB" Architecture)" = arm64 ] \
+  || die "$(basename "$DEB") is not an arm64 vibeserver package"
 DEB_SHA=$(sha256sum "$DEB" | cut -d' ' -f1)
 cp "$DEB" "/cache/"
 in_root apt-get install -y -qq --no-install-recommends "/tmp/vdeb/$(basename "$DEB")" >/dev/null

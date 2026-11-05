@@ -54,10 +54,16 @@ take gamepad navigation** (client fix; the handheld skips the landing page anywa
 
 ### Image build (2026-11-05) — `image/r36s/` (full detail: `image/r36s/README.md`)
 
-**How to build:** `image/r36s/build.sh [--deb …/vibeserver_…_arm64.deb] [--out DIR]` (Docker on the Mac, `--cpus 6`,
-~10 min) → `vibesdr-r36s-<version>.img.gz` + `.sha256`, `.packages.txt`, `.SOURCES.txt`. `DRY_RUN=1` shows the plan;
-`--verify <img.gz>` re-runs the offline checks. **How to flash:** `diskutil unmountDisk /dev/diskN; gunzip -c
-vibesdr-r36s-<version>.img.gz | sudo dd of=/dev/rdiskN bs=4m`.
+**How to build:** `image/r36s/build.sh [--deb …/vibeserver_…_arm64.deb] [--mapdata …/vibeserver-mapdata-detail_…_all.deb]
+[--out DIR]` (Docker on the Mac, `--cpus 6`, ~10 min) → `vibesdr-r36s-<version>.img.gz` + `.sha256`, `.packages.txt`,
+`.SOURCES.txt`. `DRY_RUN=1` shows the plan; `--verify <img.gz>` re-runs the offline checks. **How to flash:**
+`diskutil unmountDisk /dev/diskN; gunzip -c vibesdr-r36s-<version>.img.gz | sudo dd of=/dev/rdiskN bs=4m`.
+
+**Maps (Stuart 2026-11-05: no internet on the handheld):** the high-detail pack `vibeserver-mapdata-detail` (~221 MB)
+is installed in the image, beside the basic pack in `/usr/lib/vibeserver/mapdata` (the engine's first place to look);
+`verify.sh` fails without it. p2 grows by itself (+256 MiB: 1100 MiB of files in 1588 MiB). With the handheld engine
+booted (container): `ss -tulnp` = one listener, **127.0.0.1:48000** (vibeserver); `/mapdata/v1/*` answers **503 "no radio is
+plugged in"** until a radio is plugged in — the front door does not serve maps on its own (engine side).
 
 **Boot chain:** ROCKNIX 20261101 b's loader (`b_uboot.bin.uart5`, byte-identical to what ROCKNIX wrote on this unit) →
 ROCKNIX's `boot.scr` → our `extlinux.conf` → ROCKNIX's KERNEL (7.1.2) + eeclone DTB + `mipi-panel.dtbo` (its 60.000 Hz
