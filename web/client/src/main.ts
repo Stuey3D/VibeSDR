@@ -3140,6 +3140,7 @@ function initHandheldApp() {
       applyWaterfallRates();
     },
     setUiFpsCap: (fps) => { hhUiCap = fps; },
+    setScreenOff: (off) => { hhScreenOff = off; },
     importBookmarks: async (text) => {
       const rows = parseBookmarksAny(text, '').filter((b) => b && b.name && b.frequency);
       if (!rows.length) return { ok: false, imported: 0, message: 'No bookmarks found in that file' };
@@ -3736,10 +3737,15 @@ let startScreenUp = false;
  *  arrive on their own fixed clock and the trace still interpolates between them; only the redraw is capped.
  *  ★ Everywhere else hhUiCap is 0 and this is one compare. */
 let hhUiCap = 0, hhLastDraw = 0, hhDrawn = 0, hhDrawnAt = 0, hhUiFpsNow = 0;
+/** ★ The screen is off (the power button's short press, or SCREEN OFF AFTER): nothing is drawn — the audio plays on. */
+let hhScreenOff = false;
 function loop(frameTs?: number) {
   if (!wf || !spec) return;
   const ts = frameTs ?? performance.now();
-  if (hhUiCap > 0 && ts - hhLastDraw < 1000 / hhUiCap - 4) { requestAnimationFrame(loop); return; }
+  if (hhUiCap > 0 && (hhScreenOff || ts - hhLastDraw < 1000 / hhUiCap - 4)) {
+    if (hhScreenOff) { hhUiFpsNow = 0; hhDrawn = 0; hhDrawnAt = ts; }
+    requestAnimationFrame(loop); return;
+  }
   hhLastDraw = ts;
   if (hhUiCap > 0) { hhDrawn++; if (ts - hhDrawnAt >= 1000) { hhUiFpsNow = hhDrawn * 1000 / (ts - hhDrawnAt); hhDrawn = 0; hhDrawnAt = ts; } }
   try { renderFrame(ts); }
@@ -21006,6 +21012,8 @@ function initKeyboard() {
       return anyOpen;
     },
     guide: () => togglePadGuide(),
+    // ★ A pad press resumes the audio from the pad's own poll — WPE does not unlock it from the gate's synthetic click.
+    activate: () => { void audio?.resume(); },
   });
 }
 

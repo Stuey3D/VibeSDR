@@ -6,7 +6,7 @@
 //                                    the hardware-service client (/run/vibe-hwd.sock), /handheld/* for the page
 //  radio process                     `vibeserver --handheld-radio …` — the ordinary radio process in its handheld
 //                                    profile (main.cpp g_handheldChild): loopback only, every control the owner's
-//  hardware service (the image's)    root: backlight, volume, battery, power button, the clock, SSH
+//  hardware service (the image's)    root: backlight, volume, battery, power button, the clock
 //
 // ── The routes the page uses (all answered here, never handed to the radio) ────────────────────────────────────────
 //  GET  /handheld/session            {"handheld":true,"radio":{…}|null,"state":…,"memory":{…}|null,"resetSeq":N,…}
@@ -791,16 +791,14 @@ void hEvents(Req& r) {
 }
 
 void hDeviceGet(Req& r) {
-    std::string st, ssh;
+    std::string st;
     hwdRequest("{\"get\":\"state\"}", st);
-    hwdRequest("{\"get\":\"ssh\"}", ssh);
     hhjson::Value v; if (!hhjson::parse(st, v)) st = errJson("bad reply from the hardware service");
-    hhjson::Value w; if (!hhjson::parse(ssh, w)) ssh = "null";
-    json(r.fd, "{\"state\":" + st + ",\"ssh\":" + ssh + "}");
+    json(r.fd, "{\"state\":" + st + "}");
 }
 
-/** ★★ A FIXED LIST, relayed as JSON we BUILD — never the page's line passed through. The password is put in one
- *  request line and forgotten: never logged, never stored, never echoed (§0.2). */
+/** ★★ A FIXED LIST, relayed as JSON we BUILD — never the page's line passed through.
+ *  ★ No SSH (Stuart, 2026-11-05: "no SSH on the handheld at all") — there is nothing to switch on and no password. */
 void hDevicePost(Req& r) {
     hhjson::Value v;
     if (!hhjson::parse(r.body, v) || v.kind != hhjson::Value::Obj) { json(r.fd, errJson("not JSON"), 400); return; }
@@ -813,20 +811,12 @@ void hDevicePost(Req& r) {
         if (set == "volume") n = std::max(0L, std::min(100L, n));
         else n = std::max(1L, std::min(255L, n));                     // ★ a floor above 0: never a black screen by slider
         line = "{\"set\":\"" + set + "\",\"value\":" + std::to_string(n) + "}";
-    } else if (set == "ssh") {
-        line = std::string("{\"set\":\"ssh\",\"on\":") + (v.boolean("on") ? "true" : "false") + "}";
-    } else if (set == "ssh-password") {
-        const std::string pw = v.str("password");
-        if (pw.size() < 8) { json(r.fd, errJson("the password must be at least 8 characters"), 400); return; }
-        if (pw.size() > 128) { json(r.fd, errJson("that password is too long"), 400); return; }
-        line = "{\"set\":\"ssh-password\",\"password\":" + quote(pw) + "}";
     } else if (action == "poweroff" || action == "reboot" || action == "screen-off" || action == "screen-on") {
         if (action == "poweroff" || action == "reboot") saveAllMemory(action.c_str());
         line = "{\"action\":\"" + action + "\"}";
     } else { json(r.fd, errJson("not a request the hardware service takes"), 400); return; }
     std::string rep;
     hwdRequest(line, rep);
-    line.assign(line.size(), '\0');                                    // ★ the password does not linger in our heap
     hhjson::Value rv; if (!hhjson::parse(rep, rv)) rep = errJson("bad reply from the hardware service");
     json(r.fd, rep);
 }

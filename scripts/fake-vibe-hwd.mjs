@@ -8,8 +8,6 @@
 //   node scripts/fake-vibe-hwd.mjs [--sock /tmp/vibe-hwd.sock]      (stand-alone: prints what it is asked)
 //   import { startFakeHwd } from './fake-vibe-hwd.mjs'                (tests: emit events, read what was asked)
 //
-// ★★ It never stores a password as text: `sshPasswordSet` only, and `requests` records the password as "<redacted>",
-//    so a test can prove the password reached the service without the test's own log ever holding it.
 import net from 'node:net';
 import fs from 'node:fs';
 
@@ -18,7 +16,7 @@ export function startFakeHwd(sockPath) {
   const st = {
     brightness: 120, maxBrightness: 255, volume: 60, muted: false, output: 'speaker',
     battery: { pct: 83, charging: false, status: 'Discharging' }, screen: 'on',
-    ssh: false, sshPasswordSet: false, timeSetTo: null, actions: [],
+    timeSetTo: null, actions: [],
   };
   const requests = [];
   const subscribers = new Set();
@@ -35,7 +33,7 @@ export function startFakeHwd(sockPath) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
         let m; try { m = JSON.parse(line); } catch { sock.write(JSON.stringify({ ok: false, error: 'not JSON' }) + '\n'); continue; }
         if (m.ack) { acks.push({ ack: m.ack, at: Date.now() }); continue; }   // ★ no reply to an ack (§0.2)
-        requests.push(m.set === 'ssh-password' ? { ...m, password: '<redacted>' } : m);
+        requests.push(m);
         const r = answer(m, sock);
         if (r) sock.write(JSON.stringify(r) + '\n');
       }
@@ -47,18 +45,9 @@ export function startFakeHwd(sockPath) {
       return { ok: true, brightness: st.brightness, maxBrightness: st.maxBrightness, volume: st.volume, muted: st.muted,
                output: st.output, battery: { ...st.battery }, screen: st.screen };
     }
-    if (m.get === 'ssh') return { ok: true, ssh: st.ssh, passwordSet: st.sshPasswordSet };
     if (m.set === 'brightness') { if (typeof m.value !== 'number') return { ok: false, error: 'value' }; st.brightness = m.value; return { ok: true }; }
     if (m.set === 'volume') { if (typeof m.value !== 'number' || m.value < 0 || m.value > 100) return { ok: false, error: 'value' }; st.volume = m.value; return { ok: true }; }
     if (m.set === 'time') { if (typeof m.utcMs !== 'number') return { ok: false, error: 'utcMs' }; st.timeSetTo = m.utcMs; return { ok: true }; }
-    if (m.set === 'ssh') {
-      if (m.on && !st.sshPasswordSet) return { ok: false, error: 'no password set' };
-      st.ssh = !!m.on; return { ok: true };
-    }
-    if (m.set === 'ssh-password') {
-      if (typeof m.password !== 'string' || m.password.length < 8) return { ok: false, error: 'password too short' };
-      st.sshPasswordSet = true; return { ok: true };
-    }
     if (['poweroff', 'reboot', 'screen-off', 'screen-on'].includes(m.action)) {
       st.actions.push(m.action);
       if (m.action === 'screen-off') st.screen = 'off';

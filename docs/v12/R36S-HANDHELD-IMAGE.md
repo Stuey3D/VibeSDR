@@ -83,7 +83,7 @@ the card's space, power off / restart.
 not a nested sub-menu); pressing it again, or B / back, collapses them into the button. One level only: "no multilayered
 menu but the options are still hidden", so the main menu stays uncluttered. Opening one collapses the others.
 - **R36S HARDWARE** = volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
-  **Performance** overlay toggle with its figures in full, **Developer: SSH**, power off, restart.
+  **Performance** overlay toggle with its figures in full, power off, restart. (No SSH — removed 2026-11-05.)
 - **SDR HARDWARE** = the plugged-in radio's own controls (gain / AGC / bias-T / direct sampling / ppm / antenna …) from its
   caps — what the radio menu shows today for that driver.
 - **DISPLAY** = the client's existing look options (control look, transparency, waterfall palette / contrast, display
@@ -146,13 +146,9 @@ connection also carries **unsolicited event lines** (they have an `"event"` key;
 | `{"set":"time","utcMs":1793900000000}` | same (the service is root; the engine is not) |
 | `{"action":"poweroff"\|"reboot"\|"screen-off"\|"screen-on"}` | same |
 | `{"subscribe":true}` | `{"ok":true}`, then events on this connection |
-| `{"get":"ssh"}` | `{"ok":true,"ssh":false,"passwordSet":false}` |
-| `{"set":"ssh","on":true\|false}` | `{"ok":true}`; switching ON with no password set → `{"ok":false,"error":"no password set"}` |
-| `{"set":"ssh-password","password":"…"}` | `{"ok":true}`; under 8 characters → `{"ok":false,"error":"password too short"}` |
 
-**SSH (Stuart 2026-11-05): OFF on a fresh card**, no default password. "Developer: SSH" in "This device" first asks
-the user to set a password, then switches it on. The password is **never logged, never echoed back and never stored by the
-engine** — the engine relays the one request line and forgets it; only the service (root) keeps the hash.
+**SSH: removed 2026-11-05 — no SSH on the handheld** (Stuart). The `get ssh`, `set ssh` and `set ssh-password` requests
+are gone from this interface; the engine refuses them and never relays them.
 
 **Events** (after `subscribe`):
 
@@ -207,7 +203,7 @@ quota beyond localStorage (the look and the DISPLAY choices; everything per radi
   only switch it after measuring on the device.
 
 **The page's routes on the engine** (`/handheld/*`, never handed to the radio): `session`, `memory`, `events` (long-poll),
-`device` (GET state; POST one of: brightness 1–255, volume 0–100, ssh on/off, ssh-password ≥ 8, poweroff / reboot /
+`device` (GET state; POST one of: brightness 1–255, volume 0–100, poweroff / reboot /
 screen-off / screen-on), `clock` (`utcMs` or `deltaMs`), `perf`, `card`, `recordings[/<name>]` (POST a WAV, GET with
 Range, DELETE), `import` + `import/result`, `export?kind=bookmarks|dxlog`, `diagnostics`. Device events reach the page
 through `events`, not the spectrum socket — the page must hear the volume buttons and the battery on the "Please connect

@@ -54,6 +54,10 @@ export interface GamepadHooks {
   zoom(dir: 1 | -1): void;           // one zoom step in (+1) or out (−1)
   back(): boolean;                   // close the top panel/menu; false if there was nothing to close
   guide(): void;                     // SELECT: open the controller guide on activePadLayout(), or close it
+  /** ★★ V12 (found on the R36S in Cog, 2026-11-05): any button going DOWN, called from the pad's own poll BEFORE the
+   *  press acts. A pad press is not a DOM gesture, so the start screen's pointer/key/click resume never unlocked audio in
+   *  WPE — an AudioContext.resume() made from the poll itself does (measured by the image agent). */
+  activate?(): void;
   /** ★★ V12 VFO A/B: swap which VFO the controls tune (does nothing while A/B is off). V on a keyboard; on a pad △ in
    *  the two-stick layout, and a TAP of START in either (a hold still switches the layout). */
   swapVfo?(): void;
@@ -431,6 +435,7 @@ function poll() {
     const sWas = lastSticks.get(gp.index) ?? [false, false];
     lastSticks.set(gp.index, sticks);
     if (rising.some(Boolean) || sticks.some((v, i) => v && !sWas[i])) { notePadInput(); setDriven('pad'); mouseTravel = 0; }
+    if (rising.some(Boolean)) { try { hooks?.activate?.(); } catch { /* never blocks the press */ } }
     // ★★ A PAD PRESS WHILE A TEXT BOX HAS THE CURSOR (kbHandover: system / in place + pad).
     if (rising.some(Boolean) && padWhileTyping(rising[prof === 'buttons' ? B_L1 : B_EAST])) suppressHeld();
     const btn = (i: number) => {

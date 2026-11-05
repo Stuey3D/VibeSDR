@@ -12,8 +12,7 @@
 //  6. the card: a recording uploaded, listed, fetched with a Range, deleted; names "YYYY-MM-DD HHMM - <kHz> kHz <MODE>.wav";
 //     no ".part" left; import/ listed and a result moves the file to import/done/ with a .result.txt; export/; the
 //     diagnostics file in "Diagnostic logs/"
-//  7. the hardware service: state relayed; brightness clamped 1..255; SSH refused without a password, the password
-//     relayed and never in the engine's log; a clock set (deltaMs) reaches the service; events (volume) reach a
+//  7. the hardware service: state relayed; brightness clamped 1..255; no SSH requests relayed (none on the handheld); a clock set (deltaMs) reaches the service; events (volume) reach a
 //     long-poll; the shutdown event saves memory and is ACKed inside 5 s
 //
 // usage: VIBESERVER_BIN=… node scripts/test-handheld.mjs   (~1 min; exit 3 = not run)
@@ -146,21 +145,16 @@ try {
   // ── 7 (before the reset restart) ──
   console.log('── the hardware service ──');
   const dev = await getJ('/handheld/device');
-  ok(dev.state?.ok === true && dev.state.brightness === 120 && dev.ssh?.ssh === false, 'state and SSH relayed (brightness 120, SSH off)');
+  ok(dev.state?.ok === true && dev.state.brightness === 120 && dev.ssh === undefined, 'state relayed (brightness 120), nothing about SSH');
   r = await postJ('/handheld/device', { set: 'brightness', value: 0 });
   ok(r.j?.ok && hwd.state.brightness === 1, `brightness floored at 1 (asked 0, service got ${hwd.state.brightness})`);
   r = await postJ('/handheld/device', { set: 'volume', value: 140 });
   ok(r.j?.ok && hwd.state.volume === 100, 'volume clamped to 100');
-  r = await postJ('/handheld/device', { set: 'ssh', on: true });
-  ok(r.j?.ok === false && /password/.test(r.j?.error || ''), `SSH refused with no password (${r.j?.error})`);
-  r = await postJ('/handheld/device', { set: 'ssh-password', password: 'short' });
-  ok(r.status === 400, 'a short password is refused before it is sent');
+  for (const q of [{ set: 'ssh', on: true }, { set: 'ssh-password', password: 'correct-horse-battery' }]) {
+    r = await postJ('/handheld/device', q);
+    ok(r.status === 400 && !hwd.requests.some((x) => x.set === q.set), `no SSH on the handheld: "${q.set}" refused, never relayed`);
+  }
   const PW = 'correct-horse-battery';
-  r = await postJ('/handheld/device', { set: 'ssh-password', password: PW });
-  ok(r.j?.ok && hwd.state.sshPasswordSet, 'the password reached the service');
-  r = await postJ('/handheld/device', { set: 'ssh', on: true });
-  ok(r.j?.ok && hwd.state.ssh === true, 'SSH on once a password is set');
-  ok(!L().includes(PW), 'the password is nowhere in the engine\'s log');
   r = await postJ('/handheld/device', { set: 'something-else', value: 1 });
   ok(r.status === 400, 'a request outside the list is refused, not relayed');
   const before = Date.now();

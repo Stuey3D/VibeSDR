@@ -50,6 +50,8 @@ export interface HandheldHost {
   setSpectrumRate(fps: number, interpolate: boolean): void;
   /** The drawing cap (30 / 60). */
   setUiFpsCap(fps: number): void;
+  /** The screen went off / on: stop drawing (the audio plays on) / start again. */
+  setScreenOff(off: boolean): void;
   /** Bookmark text from the card → the receiver's list. */
   importBookmarks(text: string): Promise<{ ok: boolean; imported: number; message: string }>;
   /** The bookmarks as the page exports them. */
@@ -208,6 +210,8 @@ function onEvent(e: Record<string, unknown>) {
     case 'battery': if (e.charging === true || Number(e.pct) > 10) batteryBanner(-1); paintBattery(); break;
     case 'output': toast(e.output === 'headphones' ? 'Headphones' : 'Speaker', ''); break;
     case 'shutdown': toast('Switching off', 'Settings saved.'); break;
+    // ★ The service turned the screen off (a short press of power, or our own SCREEN OFF AFTER): draw nothing.
+    case 'screen': screenOff = e.screen === 'off'; host?.setScreenOff(screenOff); break;
     case 'radio': {
       const st = String(e.state);
       const radio = e.radio as HandheldSession['radio'];
@@ -322,16 +326,16 @@ async function device(body: Record<string, unknown>): Promise<{ ok: boolean; err
 }
 interface DevState { ok?: boolean; brightness?: number; volume?: number; muted?: boolean; output?: string;
                      battery?: { pct: number; charging: boolean }; screen?: string }
-async function deviceState(): Promise<{ state: DevState; ssh: { ssh: boolean; passwordSet: boolean } | null }> {
+async function deviceState(): Promise<{ state: DevState }> {
   try { return await (await fetch('/handheld/device', { cache: 'no-store' })).json(); }
-  catch { return { state: {}, ssh: null }; }
+  catch { return { state: {} }; }
 }
 
 // ── Screen-off after (DISPLAY) ──────────────────────────────────────────────────────────────────────────────────────
 let lastInput = Date.now(), dimmed = false, screenOff = false, savedBright = 120;
 function noteInput() {
   lastInput = Date.now();
-  if (screenOff) { screenOff = false; void device({ action: 'screen-on' }); }
+  if (screenOff) { screenOff = false; host?.setScreenOff(false); void device({ action: 'screen-on' }); }
   if (dimmed) { dimmed = false; void device({ set: 'brightness', value: savedBright }); }
 }
 function initScreenTimeout() {
@@ -348,7 +352,7 @@ function initScreenTimeout() {
       void deviceState().then((d) => { if (typeof d.state.brightness === 'number') savedBright = d.state.brightness;
                                          void device({ set: 'brightness', value: Math.min(savedBright, 20) }); });
     }
-    if (!screenOff && idle >= mins) { screenOff = true; void device({ action: 'screen-off' }); }
+    if (!screenOff && idle >= mins) { screenOff = true; host?.setScreenOff(true); void device({ action: 'screen-off' }); }
   }, 250);
 }
 
@@ -654,28 +658,6 @@ export function buildHandheldMenu(menu: HTMLElement) {
   r36.appendChild(row('PERFORMANCE<span class="sub">An overlay at the top of the screen</span>', pseg));
   const perfFig = el('div', { class: 'lbl wrap hhFig', id: 'hhPerfFig', style: 'white-space:pre' }, '');
   r36.appendChild(perfFig);
-  // Developer: SSH
-  const sshB = el('button', { class: 'btn', id: 'hhSsh' }, 'OFF') as HTMLButtonElement;
-  const sshPw = el('input', { type: 'password', id: 'hhSshPw', placeholder: 'at least 8 characters', autocomplete: 'off', style: 'flex:1;min-width:0' }) as HTMLInputElement;
-  const sshSet = el('button', { class: 'btn' }, 'SET PASSWORD');
-  const sshSeg = el('div', { class: 'seg' }); sshSeg.appendChild(sshB);
-  r36.appendChild(row('DEVELOPER: SSH<span class="sub">Off on a fresh card. Needs a password first — there is no default.</span>', sshSeg));
-  const pwRow = row('SSH PASSWORD', sshPw, sshSet);
-  r36.appendChild(pwRow);
-  let sshOn = false, pwSet = false;
-  const paintSsh = () => { sshB.textContent = sshOn ? 'ON' : 'OFF'; sshB.classList.toggle('on', sshOn); sshB.disabled = !pwSet && !sshOn; };
-  sshSet.onclick = async () => {
-    const pw = sshPw.value;
-    if (pw.length < 8) { toast('Too short', 'The SSH password needs at least 8 characters.'); return; }
-    const r = await device({ set: 'ssh-password', password: pw });
-    sshPw.value = '';                              // ★ never kept in the page
-    if (r.ok) { pwSet = true; paintSsh(); toast('SSH password set', 'Now switch SSH on.'); } else toast('Not set', r.error || '');
-  };
-  sshB.onclick = async () => {
-    const r = await device({ set: 'ssh', on: !sshOn });
-    if (r.ok) { sshOn = !sshOn; paintSsh(); toast(sshOn ? 'SSH is on' : 'SSH is off', sshOn ? 'Anyone on a network cable with the password can log in.' : ''); }
-    else toast('SSH not changed', r.error || '');
-  };
   // Power
   const armed: Record<string, number> = {};
   const pw = (label: string, action: string) => {
@@ -698,7 +680,6 @@ export function buildHandheldMenu(menu: HTMLElement) {
       if (typeof st.volume === 'number') paintVolumeRow(st.volume);
       if (st.battery && typeof st.battery.pct === 'number') batt.textContent = `${st.battery.pct} %${st.battery.charging ? ' · charging' : ''}`;
       else batt.textContent = st.ok === false ? 'the hardware service is not running' : '—';
-      if (d.ssh) { sshOn = d.ssh.ssh; pwSet = d.ssh.passwordSet; } paintSsh();
     });
     void fetch('/handheld/card', { cache: 'no-store' }).then((r) => r.json()).then((c) => {
       cardV.textContent = c.present ? `${(c.freeBytes / 2 ** 30).toFixed(1)} GB free of ${(c.totalBytes / 2 ** 30).toFixed(1)} GB` : 'no card';

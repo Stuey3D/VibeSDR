@@ -108,8 +108,10 @@ try {
   await press(p, CROSS);
   ok(await p.until(shown("#tutBox"), 5000), "✕ on View tutorial opens the tour");
   await sleep(500);
-  await press(p, DOWN);
-  ok(await p.js(`!!document.querySelector("#tutBox .gpFocus")`), `the D-pad moves inside the tour (${await p.js(`(document.querySelector(".gpFocus") || {}).textContent || ""`)})`);
+  // ★ the tour draws its box a frame or two after the press — a few tries, each a real D-pad press
+  let inTour = false;
+  for (let i = 0; i < 5 && !inTour; i++) { await press(p, i % 2 ? UP : DOWN); inTour = await p.js(`!!document.querySelector("#tutBox .gpFocus")`); }
+  ok(inTour, `the D-pad moves inside the tour (${await p.js(`(document.querySelector(".gpFocus") || {}).textContent || ""`)})`);
   await press(p, CIRCLE);
   ok(await p.until(`!${shown("#tutBox")}`, 5000), "○ ends the tour");
   // ★ The tour starts the radio itself (the gate goes when its tutorial key is pressed): START is pressed only if it is
@@ -173,6 +175,17 @@ try {
   await sleep(2500);
   const ui = await p.js(`parseFloat(/UI (\\d+) fps/.exec(document.getElementById("hhPerf").textContent)[1])`);
   ok(ui > 20 && ui <= 33, `drawing capped at 30 fps (UI ${ui} fps)`);
+  // ★ the screen off (a short press of power): nothing drawn, audio on; back on: drawing again
+  hwd.emit({ event: "screen", screen: "off" });
+  await sleep(1500);
+  ok(await p.until(`/UI 0 fps/.test(document.getElementById("hhPerf").textContent)`, 4000), "screen off → the page stops drawing (UI 0 fps)");
+  ok(await p.js(`!!window.__vibeAudio && !window.__vibeAudio.suspended`), "…the audio plays on");
+  hwd.emit({ event: "screen", screen: "on" });
+  ok(await p.until(`/UI (2\\d|3\\d) fps/.test(document.getElementById("hhPerf").textContent)`, 5000), "screen on → drawing again");
+  // ★ a pad press resumes the audio from the pad's own poll (WPE: a synthetic click does not unlock it)
+  await p.js(`window.__resumes = 0; const a = window.__vibeAudio; const r = a.resume.bind(a); a.resume = () => { window.__resumes++; return r(); }; 1`);
+  await press(p, 2);
+  ok(await p.js(`window.__resumes > 0`), "a pad press calls the audio's resume()");
   await p.js(`document.getElementById("menu").classList.remove("open"); 1`);
 
   console.log("── per-radio memory ──");
