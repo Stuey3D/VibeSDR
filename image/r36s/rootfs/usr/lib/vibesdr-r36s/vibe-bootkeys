@@ -10,10 +10,12 @@ import fcntl, glob, os, select, sys, time
 
 BTN_SELECT, BTN_START = 0x13A, 0x13B
 EVIOCGKEY = lambda n: (2 << 30) | (n << 16) | (ord("E") << 8) | 0x18
-FLAG_DIR = "/run/vibe-handheld"
+FLAG_DIR = os.environ.get("VIBE_HANDHELD_RUN", "/run/vibe-handheld")
 FLAG = FLAG_DIR + "/reset-radio"
 
 def find_pad():
+    if os.environ.get("VIBE_BOOTKEYS_DEV"):          # ★ tests: a uinput stand-in for the pad
+        return os.environ["VIBE_BOOTKEYS_DEV"]
     for p in glob.glob("/sys/class/input/event*"):
         try:
             if open(p + "/device/name").read().strip() == "r36s_Gamepad":

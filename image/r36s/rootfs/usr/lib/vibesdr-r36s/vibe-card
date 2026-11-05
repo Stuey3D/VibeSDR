@@ -23,7 +23,7 @@ import json, mmap, os, re, subprocess, sys, time, hashlib
 STATE = os.environ.get("VIBE_STATE_DIR", "/var/lib/vibe-state")
 MOUNT = os.environ.get("VIBE_CARD_MOUNT", "/media/VIBESDR")
 LABEL = "VIBESDR"
-README = "/usr/share/vibesdr-r36s/VIBESDR-README.txt"
+README = os.environ.get("VIBE_CARD_README", "/usr/share/vibesdr-r36s/VIBESDR-README.txt")
 FOLDERS = ["Recordings", "Gallery", "import", "import/done", "export", "Diagnostic logs"]
 SAMPLES, SAMPLE_BYTES, BUDGET_S = 96, 1 << 20, 180.0
 ALIGN = 4 << 20
@@ -34,7 +34,10 @@ def log(*a):
     print("vibe-card:", *a, file=sys.stderr, flush=True)
 
 def splash(*a):
-    subprocess.run(["/usr/lib/vibesdr-r36s/vibe-splash-ctl", *a], timeout=5)
+    try:                                      # ★ the splash is a nicety: never let it stop the card
+        subprocess.run(["/usr/lib/vibesdr-r36s/vibe-splash-ctl", *a], timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 def run(*cmd, check=True, **kw):
     r = subprocess.run(cmd, capture_output=True, text=True, **kw)
@@ -93,7 +96,15 @@ def capacity_check(dev, start, end, progress=None, budget=BUDGET_S, samples=SAMP
     # sample offsets spread over the whole span; the last one is the very end of the card
     step = (span - size) / max(1, samples - 1)
     offs = sorted({start + (int(i * step) // SECTOR) * SECTOR for i in range(samples)})
-    order = [offs[i] for i in bitrev_order(len(offs))]
+    # ★★★ WRAP-AROUND FAKES. A fake that drops its top address bits maps offset S to S mod R (R a power of two). An
+    #     aliased sample reads back its OWN pattern (read and write land on the same physical block), so spread samples
+    #     alone never see it — the simulated 64-GB-holding-8-GiB card passed. So: an ANCHOR sample u at the start, and
+    #     PROBES at u + 2^k (1 GiB … 1 TiB). Under a wrap of R = 2^m every probe with k >= m lands ON u: u reads back
+    #     wrong, and the probes tell us m. Written first (anchor, then probes ascending), before the spread samples.
+    u = offs[0]
+    probes = [u + (1 << k) for k in range(30, 41) if u + (1 << k) + size <= end]
+    rest = [o for o in (offs[i] for i in bitrev_order(len(offs))) if o != u and o not in probes]
+    order = [u] + probes + rest
     token = os.urandom(8).hex().encode()
     t0 = time.monotonic()
     done, backups, errors = [], {}, {}
@@ -131,15 +142,27 @@ def capacity_check(dev, start, end, progress=None, budget=BUDGET_S, samples=SAMP
                 progress(80 + int(20 * (k + 1) / max(1, len(done))))
         dev.flush()
     tested = sorted(done)
+    limit, wrap = end, None
+    probes_done = [p for p in probes if p in backups]
+    if u in bad and probes_done:
+        # ★ the anchor was overwritten through an alias: the smallest probe that reads back wrong is u + R (with one
+        #   aliasing probe only, it reads back right — the last one written — and it is u + R itself)
+        wrong = [p for p in probes_done if p in bad]
+        wrap = (min(wrong) if wrong else max(probes_done)) - u
+        limit = min(end, wrap)
     good_end = start
-    for off in tested:                       # verified up to the first bad sample, in address order
-        if off in bad:
+    for off in tested:                       # verified up to the first bad sample below the limit, in address order
+        if off + size > limit:
+            break
+        if off in bad and not (off == u and wrap):
             break
         good_end = off + size
     if not bad and tested:
         good_end = end                       # ★ every sample (spread to the very last MiB) came back right
+    elif wrap and good_end >= limit - (end - start) // max(1, samples):
+        good_end = limit                     # ★ everything below the wrap held: the card's real size is the wrap
     return {"verified_end": good_end, "claimed_end": end, "tested": len(tested), "bad": sorted(bad),
-            "seconds": round(time.monotonic() - t0, 1)}
+            "wrap": wrap, "seconds": round(time.monotonic() - t0, 1)}
 
 # ── the partition ────────────────────────────────────────────────────────────────────────────────────────────────────
 def root_disk():
@@ -216,11 +239,19 @@ def make_partition(disk):
     created = os.path.join(STATE, "card-created")
     atomic_write(created, part_path(disk, 4) + "\n")
     run("partx", "-a", "--nr", "4", disk, check=False)
-    for _ in range(50):
-        if os.path.exists(part_path(disk, 4)):
-            break
+    return part_node(disk, 4)
+
+def part_node(disk, n, wait=5.0):
+    """The partition's /dev node once the KERNEL knows it (sysfs); made by hand if udev has not made it in time."""
+    p = part_path(disk, n)
+    sysd = "/sys/class/block/%s" % os.path.basename(p)
+    t0 = time.monotonic()
+    while not os.path.exists(p) and time.monotonic() - t0 < wait:
         time.sleep(0.1)
-    return part_path(disk, 4)
+    if not os.path.exists(p) and os.path.exists(sysd + "/dev"):
+        major, minor = map(int, open(sysd + "/dev").read().split(":"))
+        os.mknod(p, 0o660 | 0o060000, os.makedev(major, minor))      # S_IFBLK
+    return p if os.path.exists(p) else None
 
 def fs_type(dev):
     return run("blkid", "-p", "-o", "value", "-s", "TYPE", dev, check=False).stdout.strip()
@@ -240,13 +271,13 @@ def ensure_folders():
     atomic_write(dst, want)
 
 def boot():
-    disk = root_disk()
+    disk = os.environ.get("VIBE_CARD_DISK") or root_disk()      # ★ VIBE_CARD_DISK: tests on a loop device
     p4 = part_path(disk, 4)
     created = os.path.join(STATE, "card-created")
-    if not os.path.exists(p4):
-        if any(p.get("node", "").endswith("4") for p in table(disk)["partitions"]):
-            run("partx", "-a", "--nr", "4", disk, check=False)
-            time.sleep(0.5)
+    if any(p.get("node", "").endswith("4") for p in table(disk)["partitions"]):
+        # ★ in the table (an earlier boot made it): make sure the kernel has it too, then use it
+        run("partx", "-a", "--nr", "4", disk, check=False)
+        p4 = part_node(disk, 4) or p4
     if not os.path.exists(p4):
         splash("progress", "18")
         p4 = make_partition(disk)

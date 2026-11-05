@@ -37,10 +37,12 @@ die() { printf '!! build-image.sh: %s\n' "$*" >&2; exit 1; }
 
 mkdir -p /cache /out "$W"
 R=$W/root
-cleanup() {
+# ★ a SUBSHELL body: `set +e` in here must not switch error checking off for the rest of the build (it did, once)
+cleanup() (
   set +e
   for m in "$R/dev/pts" "$R/dev" "$R/proc" "$R/sys" "$R/run"; do mountpoint -q "$m" && umount -l "$m"; done
-}
+  exit 0
+)
 trap cleanup EXIT
 cleanup
 # ★ nothing may be mounted under $W before it is emptied (image/sbc/build.sh: the /dev deletion)
@@ -84,6 +86,7 @@ mount -t tmpfs -o mode=0755,size=1M tmpfs "$R/dev"
 mknod -m 666 "$R/dev/null" c 1 3; mknod -m 666 "$R/dev/zero" c 1 5; mknod -m 666 "$R/dev/full" c 1 7
 mknod -m 666 "$R/dev/random" c 1 8; mknod -m 666 "$R/dev/urandom" c 1 9; mknod -m 666 "$R/dev/tty" c 5 0
 mkdir -p "$R/dev/pts" "$R/dev/shm"
+mount -t devpts -o newinstance,ptmxmode=0666 devpts "$R/dev/pts"; ln -sf pts/ptmx "$R/dev/ptmx"
 mount -t proc proc "$R/proc"; mount -t sysfs -o ro sysfs "$R/sys"; mount -t tmpfs tmpfs "$R/run"
 cp /etc/resolv.conf "$R/etc/resolv.conf"
 in_root() { chroot "$R" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 "$@"; }
@@ -117,6 +120,7 @@ else
   say "engine: $(ls "$R/tmp/vdeb") from apt.vibesdr.net $APT_SUITE (signature checked by apt)"
 fi
 DEB=$(ls "$R"/tmp/vdeb/vibeserver_*_arm64.deb | head -1)
+DEB_SHA=$(sha256sum "$DEB" | cut -d' ' -f1)
 cp "$DEB" "/cache/"
 in_root apt-get install -y -qq --no-install-recommends "/tmp/vdeb/$(basename "$DEB")" >/dev/null
 VS_VER=$(in_root dpkg-query -W -f '${Version}' vibeserver)
@@ -239,7 +243,7 @@ S=$R/usr/share/doc/vibesdr-r36s/SOURCES
   echo "OPERATING SYSTEM — Debian 13 (trixie) arm64, from ${MIRROR}; the exact package versions are in packages.txt"
   echo "  beside this file. Debian's sources: https://snapshot.debian.org (by package and version) or https://sources.debian.org."
   echo
-  echo "ENGINE — vibeserver $VS_VER  (sha256 $(sha256sum "$DEB" | cut -d' ' -f1)), https://github.com/Stuey3D/VibeSDR"
+  echo "ENGINE — vibeserver $VS_VER  (package sha256 $DEB_SHA), https://github.com/Stuey3D/VibeSDR"
   echo
   echo "OURS — /usr/lib/vibesdr-r36s/* (vibe-hwd, vibe-splash, vibe-card, vibe-bootkeys, vibe-clock, overlay-init, …),"
   echo "  the units in /usr/lib/systemd/system/vibe*.service and /etc: image/r36s/ in the VibeSDR repository."

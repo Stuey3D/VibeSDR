@@ -80,6 +80,10 @@ class Display:
             pref = [m for m in ml if m[13] & PREFERRED]
             # ★ the preferred mode (60.0 Hz with our overlay); else the one nearest 60 Hz
             self.mode = pref[0] if pref else min(ml, key=lambda m: abs(refresh(m) - 60))
+            want = os.environ.get("VIBE_SPLASH_MODE_CLOCK")      # ★ tests only: force a mode by its pixel clock (kHz)
+            if want:
+                self.mode = next(m for m in ml if m[0] == int(want))
+            self.modes = ml
             self.conn = cid
             enc_id = struct.unpack_from("I", c, 44)[0] or ce[0]
             e = bytearray(20); struct.pack_into("I", e, 0, enc_id)
@@ -133,6 +137,19 @@ class Display:
         struct.pack_into("QI6I", c, 0, ctypes.addressof(conns), 1, self.crtc, self.fb, 0, 0, 0, 1)
         MODEINFO.pack_into(c, 36, *self.mode)
         ioctl(self.fd, SETCRTC, c)
+
+    def measure_hz(self, frames=120):
+        """Time `frames` vblanks on our CRTC (DRM_IOCTL_WAIT_VBLANK, relative) — the panel's real refresh rate."""
+        WAIT_VBLANK = _IOWR(0x3A, 24)
+        t0 = None
+        for i in range(frames + 1):
+            v = bytearray(24); struct.pack_into("II", v, 0, 0x1, 1)      # _DRM_VBLANK_RELATIVE, +1
+            ioctl(self.fd, WAIT_VBLANK, v)
+            sec, usec = struct.unpack_from("qq", v, 8)
+            t = sec + usec / 1e6
+            if t0 is None:
+                t0 = t
+        return frames / (t - t0)
 
     def current_fb(self):
         c = bytearray(104); struct.pack_into("I", c, 12, self.crtc)
@@ -288,6 +305,12 @@ class Splash:
 
 def main():
     a = sys.argv[1:]
+    if "--measure" in a:                     # ★ tests: show the splash, time the panel's vblanks, print, exit
+        s = Splash(show_progress=False)
+        m = s.d.mode
+        print("mode clock %d kHz %dx%d total %dx%d: %.3f Hz nominal, %.3f Hz measured over 120 vblanks"
+              % (m[0], m[1], m[6], m[4], m[9], refresh(m), s.d.measure_hz()))
+        return
     if "--message" in a:
         s = Splash(show_progress="--no-progress" not in a)
         s.lines = a[a.index("--message") + 1].split("|")

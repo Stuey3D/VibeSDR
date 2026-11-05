@@ -78,12 +78,12 @@ def atomic_write(path, data, mode=0o644):
         os.close(dfd)
 
 def input_devices():
-    """{name: /dev/input/eventN} for every input device the kernel has right now."""
-    out = {}
-    for p in glob.glob(SYS + "/class/input/event*"):
+    """[(name, /dev/input/eventN)] for every input device the kernel has right now (names can repeat)."""
+    out = []
+    for p in sorted(glob.glob(SYS + "/class/input/event*")):
         name = rd(p + "/device/name")
         if name:
-            out.setdefault(name, "/dev/input/" + os.path.basename(p))
+            out.append((name, "/dev/input/" + os.path.basename(p)))
     return out
 
 # ── ALSA (amixer: tiny, always in alsa-utils, and the controls change rarely) ─────────────────────────────────────────
@@ -383,7 +383,11 @@ class Hwd:
                     reply = {"ok": False, "error": "request too long"}
                 else:
                     try:
-                        reply = await self.handle(json.loads(line), writer)
+                        req = json.loads(line)
+                    except ValueError:
+                        req = None
+                    try:
+                        reply = await self.handle(req, writer)
                     except (ValueError, TypeError) as e:
                         reply = {"ok": False, "error": str(e) or "bad request"}
                     except Exception as e:      # ★ one bad request must never take the service down
@@ -477,7 +481,7 @@ class Hwd:
                  "rk817_ext Headphones": "jack", "r36s_Gamepad": "gamepad"}
         jack_seen = False
         while True:
-            for name, path in input_devices().items():
+            for name, path in input_devices():
                 kind = kinds.get(name)
                 if kind and path not in self.readers:
                     jack_seen |= kind == "jack"
@@ -489,7 +493,7 @@ class Hwd:
     async def main(self):
         self.apply_brightness()
         self.apply_volume()
-        if not any(n == "rk817_ext Headphones" for n in input_devices()):
+        if not any(n == "rk817_ext Headphones" for n, _ in input_devices()):
             self.set_output(False)       # ★ no jack detector: the speaker, never the silent default (HP)
         if os.path.exists(SSH_FLAG) and os.path.exists(SSH_HASH):
             subprocess.run(["systemctl", "--no-block", "start", "ssh.service"])
