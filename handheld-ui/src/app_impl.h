@@ -46,6 +46,50 @@ inline void App::tuneSteps(int n) {
     tuneTo(got);
 }
 
+inline void App::sampleCpu() {
+    const double t = nowSec();
+    if (t - cpuAt_ < 1.0) return;
+    cpuAt_ = t;
+    FILE* f = std::fopen("/proc/stat", "r");
+    if (!f) return;
+    unsigned long long v[10] = {0};
+    const int n = std::fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9]);
+    std::fclose(f);
+    if (n < 4) return;
+    unsigned long long total = 0;
+    for (int i = 0; i < 8 && i < n; i++) total += v[i];
+    const unsigned long long idle = v[3] + (n > 4 ? v[4] : 0), busy = total - idle;
+    if (cpuTotal_ && total > cpuTotal_) cpuPct_ = (int)std::lround(100.0 * (double)(busy - cpuBusy_) / (double)(total - cpuTotal_));
+    cpuBusy_ = busy; cpuTotal_ = total;
+}
+
+inline void App::stickSweep() {
+    const double t = nowSec();
+    const bool inKb = !sheets_.empty() && sheets_.back() == S_KB;
+    const double mag = std::hypot(lx_, ly_);
+    const int dir = (!screenOff_ && !inKb && mag > 0.8 && std::fabs(ly_) < 0.45 * mag) ? (lx_ > 0 ? 1 : -1) : 0;
+    const double ang = std::atan2(ly_, lx_) * 180.0 / M_PI;
+    if (dir == 0 || (sweepDir_ != 0 && dir != sweepDir_)) { sweepDir_ = 0; sweepStart_ = 0; sweepAwaiting_ = false; return; }
+    if (sweepDir_ == 0) { sweepDir_ = dir; sweepZoneAt_ = t; sweepZoneAng_ = ang; sweepStart_ = 0; return; }
+    double dA = std::fabs(ang - sweepZoneAng_); if (dA > 180) dA = 360 - dA;
+    if (sweepStart_ == 0) {
+        // ★ a spin passing through left / right is not a hold: the angle must stay put for the hold time
+        if (dA > 20) { sweepZoneAt_ = t; sweepZoneAng_ = ang; return; }
+        if (t - sweepZoneAt_ < 0.35) return;          // HOLD_MS
+        sweepStart_ = t; sweepNext_ = t + 1.0 / 3;    // the first step after 1 / SWEEP_LO
+        return;
+    }
+    if (t < sweepNext_) return;
+    const RadioState& s = eng_->state();
+    // wait for the receiver's answer to the last step (a config per tune), but never more than 700 ms
+    if (sweepAwaiting_ && s.configSeq == sweepSeq_ && t - sweepEchoAt_ < 0.7) return;
+    sweepAwaiting_ = true; sweepEchoAt_ = t; sweepSeq_ = s.configSeq;
+    lastInput_ = t;
+    tuneSteps(sweepDir_);
+    const double k = std::min(1.0, (t - sweepStart_) / 3.5);
+    sweepNext_ = t + 1.0 / (3 + (15 - 3) * k);
+}
+
 inline double App::clampTune(double hz) {
     const RadioState& s = eng_->state();
     const double want = std::round(hz);
@@ -217,6 +261,8 @@ inline void App::pollInput() {
         lx = SDL_JoystickGetAxis(joy_, 0) / 32767.0; ly = SDL_JoystickGetAxis(joy_, 1) / 32767.0;
         rx = SDL_JoystickGetAxis(joy_, 2) / 32767.0; ry = SDL_JoystickGetAxis(joy_, 3) / 32767.0;
     }
+    if (testStick_ != 0) { lx = testStick_; ly = 0; }   // ★ tests: SCRIPT STICKL / STICKR / STICK0 hold the left stick
+    lx_ = lx; ly_ = ly;
     const bool inFreq = !sheets_.empty() && sheets_.back() == S_KB;
     if (!screenOff_ && inFreq) {
         // ★ the keyboard: the left stick turned moves the caret (padKeyboard.ts)
@@ -357,13 +403,19 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     // the readouts: one centred group — frequency box · mode chip · reading chip
     const bool live = s.session == "running" && s.vfoHz > 0;
     std::string fmain = "—", ffine;
+    const char* unitTxt = set_.freqUnit == 0 ? "Hz" : set_.freqUnit == 1 ? "kHz" : "MHz";
     if (live) {
+        // web main.ts cardFreqPlain: MHz = 3 decimals + the dimmed 100 Hz / 10 Hz pair; kHz = 3 decimals (1 Hz); Hz = whole
         const long long hz = std::llround(s.vfoHz);
         char b[32];
-        std::snprintf(b, sizeof b, "%.3f", std::floor(hz / 1e3) / 1e3);
-        fmain = b;
-        std::snprintf(b, sizeof b, "%02lld", (std::llabs(hz) % 1000) / 10);
-        ffine = b;
+        if (set_.freqUnit == 0) { std::snprintf(b, sizeof b, "%lld", hz); fmain = b; }
+        else if (set_.freqUnit == 1) { std::snprintf(b, sizeof b, "%.3f", hz / 1e3); fmain = b; }
+        else {
+            std::snprintf(b, sizeof b, "%.3f", std::floor(hz / 1e3) / 1e3);
+            fmain = b;
+            std::snprintf(b, sizeof b, "%02lld", (std::llabs(hz) % 1000) / 10);
+            ffine = b;
+        }
     }
     const std::string mode = live ? modeLabel(s.mode) : "—";
     std::string reading;
@@ -378,7 +430,8 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     // widths reserved for the widest reading (the web's 8ch rule: nothing moves as the numbers change)
     const float fMainW = (float)c.tc.widthTab(c.f.freq, "8888.888"), fFineW = (float)c.tc.widthTab(c.f.freqFine, "88");
     const float unitW = (float)c.tc.width(c.f.unit, "MHz");
-    const float boxW = fMainW + 6 + fFineW + 6 + unitW + 24;
+    const float fMainW2 = set_.freqUnit == 2 ? 0.f : (float)c.tc.widthTab(c.f.freq, "88888888");
+    const float boxW = (set_.freqUnit == 2 ? fMainW + 6 + fFineW : fMainW2) + 6 + unitW + 24;
     const float modeW = std::max(84.f, (float)c.tc.width(c.f.btn, "ECSS-U") + 24);
     const float rdW = std::max(118.f, (float)c.tc.width(c.f.small, "SNR 99 dB") + 22);
     const float gap = 10, total = boxW + gap + modeW + gap + rdW;
@@ -392,9 +445,14 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     {
         const float base = fb.cy() + c.f.freq.lineHeight() * 0.5f;   // a shared baseline-ish line for the three parts
         const float mx = fb.x + 12;
-        c.tc.drawTab(c.g, c.f.freq, fmain, mx + fMainW / 2, base - c.f.freq.lineHeight(), th::white, 1);
-        c.tc.drawTab(c.g, c.f.freqFine, ffine, mx + fMainW + 6, base - c.f.freqFine.lineHeight() - 3, th::white68);
-        c.tc.draw(c.g, c.f.unit, "MHz", mx + fMainW + 6 + fFineW + 6, base - c.f.unit.lineHeight() - 4, th::white);
+        if (set_.freqUnit == 2) {
+            c.tc.drawTab(c.g, c.f.freq, fmain, mx + fMainW / 2, base - c.f.freq.lineHeight(), th::white, 1);
+            c.tc.drawTab(c.g, c.f.freqFine, ffine, mx + fMainW + 6, base - c.f.freqFine.lineHeight() - 3, th::white68);
+            c.tc.draw(c.g, c.f.unit, unitTxt, mx + fMainW + 6 + fFineW + 6, base - c.f.unit.lineHeight() - 4, th::white);
+        } else {
+            c.tc.drawTab(c.g, c.f.freq, fmain, mx + fMainW2 / 2, base - c.f.freq.lineHeight(), th::white, 1);
+            c.tc.draw(c.g, c.f.unit, unitTxt, mx + fMainW2 + 6, base - c.f.unit.lineHeight() - 4, th::white);
+        }
     }
     if (hf.focused) focusRing(c, fb, 7);
     if (hf.pressed) openFreqEntry();
@@ -464,14 +522,41 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         std::tm u{}; gmtime_r(&tt, &u);
         std::snprintf(clk, sizeof clk, "%02d:%02d UTC", u.tm_hour, u.tm_min);
         const float ty = lay::statusY + lay::statusH / 2;
-        c.tc.draw(c.g, c.f.small, clk, pill.x + 2, ty - c.f.small.lineHeight() / 2.f, th::dim);
-        if (battery_ >= 0) {
-            const std::string bt = std::to_string(battery_) + " %" + (charging_ ? " ⚡" : "");
-            const Rgba col = battery_ <= 10 && !charging_ ? th::red : th::dim;
-            c.tc.draw(c.g, c.f.small, std::to_string(battery_) + " %" + (charging_ ? " +" : ""), pill.r() - 2, ty - c.f.small.lineHeight() / 2.f, col, 2);
-            (void)bt;
+        // ★★ THE STATS ROW (Stuart, 2026-11-06: "the status row doesnt need to show the control hint all the time … have
+        //    the system stats there: Gn: 43db (A) IF: 1400K (A) CPU: 53% Bat: 65%"). Full words when they fit ("if you can
+        //    fit the full words in then do it"), his abbreviations when not; the UTC clock at the right only if there is
+        //    room left. (A) = automatic: the radio's AGC / an IF filter that follows the zoom.
+        const Json& h = s.msg("hwinfo");
+        struct Part { std::string full, abbr; Rgba col = th::dim; };
+        std::vector<Part> parts;
+        if (s.session == "running") {
+            char a1[48], a2[48];
+            const long gdb = std::lround(s.gainNow / 10.0);
+            std::snprintf(a1, sizeof a1, "Gain %ld dB%s", gdb, s.agc ? " (auto)" : "");
+            std::snprintf(a2, sizeof a2, "Gn: %lddB%s", gdb, s.agc ? " (A)" : "");
+            parts.push_back({a1, a2});
+            const Json& hr = h["radio"].has("tunerBw") || h["radio"].has("tunerBwAuto") ? h["radio"] : h;
+            if (hr.has("tunerBw") || hr.has("tunerBwAuto")) {
+                const int bwHz = (int)hr["tunerBw"].num(0);
+                const bool au = hr["tunerBwAuto"].boolean();
+                std::string v = bwHz > 0 ? std::to_string(bwHz / 1000) : "wide";
+                parts.push_back({"IF filter " + (bwHz > 0 ? v + " kHz" : v) + (au ? " (auto)" : ""),
+                                 "IF: " + (bwHz > 0 ? v + "K" : v) + (au ? " (A)" : "")});
+            }
         }
-        hints(c, pill.x + 110, ty, {{FACE_BOTTOM, "select"}, {-1, "L-stick tune · R-stick / L R zoom · L2 R2 step"}});
+        if (cpuPct_ >= 0) parts.push_back({"CPU " + std::to_string(cpuPct_) + "%", "CPU: " + std::to_string(cpuPct_) + "%"});
+        if (battery_ >= 0) {
+            Part p{"Battery " + std::to_string(battery_) + "%" + (charging_ ? " +" : ""), "Bat: " + std::to_string(battery_) + "%" + (charging_ ? "+" : "")};
+            if (battery_ <= 10 && !charging_) p.col = th::red;
+            parts.push_back(p);
+        }
+        const float room = pill.w - 4;
+        auto widthOf = [&](bool full) { float w = 0; for (auto& p : parts) w += c.tc.width(c.f.small, full ? p.full : p.abbr) + 18; return w; };
+        const bool full = widthOf(true) <= room;
+        float x = pill.x + 2;
+        for (auto& p : parts) x += c.tc.draw(c.g, c.f.small, full ? p.full : p.abbr, x, ty - c.f.small.lineHeight() / 2.f, p.col) + 18;
+        if (x + c.tc.width(c.f.small, clk) <= pill.r() - 2)
+            c.tc.draw(c.g, c.f.small, clk, pill.r() - 2, ty - c.f.small.lineHeight() / 2.f, th::dim, 2);
     }
 }
 
@@ -611,10 +696,13 @@ inline void App::openFreqEntry() {
     r.title = "FREQUENCY";
     r.opts.mode = kb::KbMode::frequency;
     char b[32];
-    std::snprintf(b, sizeof b, "%.3f", s.vfoHz / 1e6);
+    // ★ in the unit last used (Stuart: "stuck in MHz mode") — the web's freqUnit, device-wide
+    const int u = set_.freqUnit;
+    if (u == 0) std::snprintf(b, sizeof b, "%.0f", s.vfoHz);
+    else std::snprintf(b, sizeof b, "%.3f", u == 1 ? s.vfoHz / 1e3 : s.vfoHz / 1e6);
     r.opts.value = "";
     r.placeholder = b;
-    r.opts.unit = kb::KbUnit::mhz;
+    r.opts.unit = u == 0 ? kb::KbUnit::hz : u == 1 ? kb::KbUnit::khz : kb::KbUnit::mhz;
     r.opts.unitSettable = true;
     r.commit = [this](const kb::KbState& st) -> std::string {
         if (st.valueUtf8().empty()) return "";            // ↵ on the untouched pad: nothing changes
@@ -656,6 +744,12 @@ inline void App::kbInput(Btn b) {
         case B_R1: o = kbd_.edit(numeric ? kb::EditAct::unit : kb::EditAct::symbols); break;
         case B_START: o = kbd_.submit(commit); break;
         default: break;
+    }
+    // ★ the frequency pad's unit is remembered as soon as it changes (the web's unit seg saves freqUnit at once)
+    if (kbReq_.title == "FREQUENCY" && kbd_.state().unit) {
+        const kb::KbUnit u = *kbd_.state().unit;
+        const int ui = u == kb::KbUnit::hz ? 0 : u == kb::KbUnit::khz ? 1 : 2;
+        if (ui != set_.freqUnit) { set_.freqUnit = ui; dirty(); }
     }
     if (o == kb::Outcome::submit || o == kb::Outcome::cancel) {
         for (size_t i = sheets_.size(); i-- > 0;) if (sheets_[i] == S_KB) { sheets_.erase(sheets_.begin() + (long)i); break; }
@@ -873,15 +967,21 @@ inline int App::run(int argc, char** argv) {
 
     // ★ tests: VIBE_HHUI_SCRIPT="frame:BUTTON,…" presses buttons at drawn frames
     std::vector<std::pair<int, Btn>> script;
+    std::vector<std::pair<int, double>> stickScript;
     if (const char* sc = std::getenv("VIBE_HHUI_SCRIPT")) {
         const std::pair<const char*, Btn> names[] = {{"ENTER", B_ENTER}, {"BACK", B_BACK}, {"UP", B_UP}, {"DOWN", B_DOWN}, {"LEFT", B_LEFT},
             {"RIGHT", B_RIGHT}, {"L1", B_L1}, {"R1", B_R1}, {"L2", B_L2}, {"R2", B_R2}, {"SELECT", B_SELECT},
-            {"START", B_START}, {"TOPFACE", B_TOPFACE}, {"LEFTFACE", B_LEFTFACE}};
+            {"START", B_START}, {"TOPFACE", B_TOPFACE}, {"LEFTFACE", B_LEFTFACE},
+            {"STICKL", B_NONE}, {"STICKR", B_NONE}, {"STICK0", B_NONE}};
         std::string all(sc), tok;
         for (size_t i = 0; i <= all.size(); i++) {
             if (i < all.size() && all[i] != ',') { tok += all[i]; continue; }
             const size_t cpos = tok.find(':');
-            if (cpos != std::string::npos) for (auto& n : names) if (tok.substr(cpos + 1) == n.first) script.push_back({std::atoi(tok.c_str()), n.second});
+            if (cpos != std::string::npos) {
+                const std::string nm = tok.substr(cpos + 1);
+                if (nm == "STICKL" || nm == "STICKR" || nm == "STICK0") stickScript.push_back({std::atoi(tok.c_str()), nm == "STICKL" ? -1.0 : nm == "STICKR" ? 1.0 : 0.0});
+                else for (auto& n : names) if (nm == n.first) script.push_back({std::atoi(tok.c_str()), n.second});
+            }
             tok.clear();
         }
     }
@@ -894,6 +994,8 @@ inline int App::run(int argc, char** argv) {
     while (!quit_) {
         pollInput();
         hwPump(*this);
+        sampleCpu();
+        stickSweep();
 
         // the engine
         devEvents.clear();
@@ -963,6 +1065,7 @@ inline int App::run(int argc, char** argv) {
         if (screenOff_ || t - lastDraw < 1.0 / 30.0 - 0.002) { SDL_Delay(4); continue; }
         lastDraw = t;
         frame++;
+        for (auto& sp : stickScript) if (sp.first == (int)frame) testStick_ = sp.second;
         for (auto& sp : script) if (sp.first == (int)frame) { std::fprintf(stderr, "vibe-hhui: script press %d at frame %d\n", (int)sp.second, sp.first); press(sp.second); }
         tc_.tick(frame);
         glViewport(0, 0, W, H);

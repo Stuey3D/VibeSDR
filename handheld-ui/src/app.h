@@ -209,6 +209,16 @@ public:
      *  second nudge the same way jumps the gap (so a fast scroll never flings you into another band by accident). */
     double clampTune(double hz);
     int gapNudgeDir_ = 0;
+    // the whole device's CPU (/proc/stat, once a second) for the stats row
+    int cpuPct_ = -1; double cpuAt_ = 0; unsigned long long cpuBusy_ = 0, cpuTotal_ = 0;
+    void sampleCpu();
+    // ★ HOLD THE LEFT STICK LEFT / RIGHT = SWEEP TUNE (Stuart, 2026-11-06: spinning is great for small precise
+    //   adjustments, "large tunes with them hurt"). The web's hold-sweep (main.ts attachHoldSweep): 350 ms hold, then
+    //   3 → 15 steps a second over 3.5 s, each step waiting for the receiver's echo (700 ms timeout).
+    double lx_ = 0, ly_ = 0, testStick_ = 0;
+    int sweepDir_ = 0; double sweepZoneAt_ = 0, sweepZoneAng_ = 0, sweepStart_ = 0, sweepNext_ = 0, sweepEchoAt_ = 0;
+    bool sweepAwaiting_ = false; uint64_t sweepSeq_ = 0;
+    void stickSweep();
     void drawAudioSheet(Ctx& c, const RadioState& s);
     void drawMenu(Ctx& c, const RadioState& s);
     void drawNoRadio(Ctx& c, const RadioState& s);

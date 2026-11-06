@@ -3,6 +3,7 @@
 #pragma once
 #include "json.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -19,6 +20,7 @@ struct Settings {
     bool followVfo = true;         // VFO CENTRE: LOCKED (the view follows the dial)
     int meterMode = 0;             // 0 SNR · 1 S-units · 2 dBFS (the web's meter cycle)
     int volume = -1;               // last known (the hardware service owns it)
+    int freqUnit = 2;              // the readout's and the pad's unit: 0 Hz · 1 kHz · 2 MHz (the web's freqUnit, device-wide)
 
     static std::string path() {
         const char* home = std::getenv("HOME");
@@ -44,15 +46,16 @@ struct Settings {
         screenOffMin = (int)j["screenOffMin"].num(screenOffMin);
         followVfo = j["followVfo"].boolean(followVfo);
         meterMode = (int)j["meterMode"].num(meterMode);
+        freqUnit = std::max(0, std::min(2, (int)j["freqUnit"].num(freqUnit)));
     }
     void save() const {
         const std::string p = path(), tmp = p + ".tmp";
         FILE* f = std::fopen(tmp.c_str(), "w");
         if (!f) return;
         std::fprintf(f, "{\"step\":%d,\"palette\":%s,\"speed\":%d,\"contrast\":%g,\"sharpness\":%g,\"wfBrightness\":%g,"
-                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d}\n",
+                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d}\n",
                      step, jsonQuote(palette).c_str(), speed, contrast, sharpness, wfBrightness, specRate, screenOffMin,
-                     followVfo ? "true" : "false", meterMode);
+                     followVfo ? "true" : "false", meterMode, freqUnit);
         std::fflush(f);
         std::fclose(f);
         std::rename(tmp.c_str(), p.c_str());
