@@ -1,0 +1,17 @@
+# vibe-debuglog — a system snapshot to the card every 15 s, ONLY when the kernel command line has vibe.debuglog
+# (add it to the APPEND line of extlinux/extlinux.conf on VIBEBOOT from any computer). See the script's header.
+[Unit]
+Description=VibeSDR debug log to the card (only with vibe.debuglog)
+ConditionKernelCommandLine=vibe.debuglog
+After=vibe-card.service vibe-state.service
+DefaultDependencies=no
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/vibesdr-r36s/vibe-debuglog
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

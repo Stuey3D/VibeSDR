@@ -185,3 +185,12 @@ damage the card.
 ## Decisions for Stuart
 
 See `docs/v12/R36S-HANDHELD-IMAGE.md` §0 "Image build".
+
+## Debug log to the card (no SSH)
+
+Add ` vibe.debuglog` to the end of the `APPEND` line in `extlinux/extlinux.conf` on **VIBEBOOT** (any computer can
+edit it). On the next boot `vibe-debuglog` writes `Diagnostic logs/debuglog-<boot id>.txt` on VIBESDR every 15 s:
+CPU clocks and temperatures, memory and pressure, `top`, failed units, the state and restart count of every VibeSDR
+unit, the GPU / input / sound devices and mixer, USB devices, the journal and the kernel log. With no VIBESDR mounted
+it writes to VIBEBOOT instead. Remove the word to stop it — the card is not a log disk. Use it when the receiver
+itself will not come up and EXPORT DIAGNOSTICS cannot be reached.

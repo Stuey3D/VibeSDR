@@ -68,7 +68,7 @@ e2fsck -fn "$T/root.ext4" >/dev/null 2>&1 || fail "root filesystem has errors"
 [ "$(dumpe2fs -h "$T/root.ext4" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p')" = vibe-root ] || fail "root label"
 for f in /usr/lib/vibesdr-r36s/vibe-hwd /usr/lib/vibesdr-r36s/vibe-splash /usr/lib/vibesdr-r36s/vibe-card \
          /usr/lib/vibesdr-r36s/vibe-bootkeys /usr/lib/vibesdr-r36s/vibe-clock /usr/lib/vibesdr-r36s/overlay-init \
-         /usr/share/vibesdr-r36s/splash.bgrx.z /usr/share/vibesdr-r36s/splash-font.bin /usr/bin/cog /usr/bin/vibeserver \
+         /usr/lib/vibesdr-r36s/vibe-debuglog /usr/share/vibesdr-r36s/splash.bgrx.z /usr/share/vibesdr-r36s/splash-font.bin /usr/bin/cog /usr/bin/vibeserver \
          /usr/lib/modules/7.1.2/kernel/drivers/gpu/drm/panfrost/panfrost.ko /usr/lib/modules/7.1.2/modules.dep.bin \
          /etc/udev/rules.d/70-vibe-r36s-gamepad.rules /etc/modprobe.d/vibe-r36s-gpu.conf /usr/share/doc/vibesdr-r36s/SOURCES \
          /media/root-ro /media/root-rw /media/VIBESDR /var/lib/vibe-state /usr/lib/clock-epoch; do
@@ -100,6 +100,7 @@ dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q -- '--gamepad=man
 dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q '^Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1$' \
   || fail "Cog's URL lacks ?handheld=1 (the page boots as a web client: auth probe 503)"
 dfs "cat /usr/lib/systemd/system/vibe-cpu.service" | grep -q schedutil || fail "governor"
+dfs "cat /usr/lib/systemd/system/vibe-debuglog.service" | grep -q "^ConditionKernelCommandLine=vibe.debuglog$" || fail "the debug log would run without vibe.debuglog"
 dfs "cat /etc/systemd/logind.conf.d/vibe-r36s.conf" | grep -q '^HandlePowerKey=ignore' || fail "logind would take the power key"
 [ -z "$(dfs 'cat /etc/machine-id')" ] || fail "machine-id is baked in"
 dfs "ls /etc/apt/sources.list.d" | grep -q '\.list' && fail "apt sources left on the card"
@@ -123,7 +124,7 @@ ok "state: ext4 'vibestate' with vibeserver/, kiosk/ (vibe-state's bind mounts w
 
 # ── units parse (systemd-analyze verify on the real tree) ──
 if [ -n "${2:-}" ] && [ -d "$2" ] && command -v systemd-analyze >/dev/null; then
-  U="vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service"
+  U="vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service vibe-debuglog.service"
   OUT=$(cd "$2/usr/lib/systemd/system" && SYSTEMD_LOG_LEVEL=notice systemd-analyze verify --root="$2" $U 2>&1 | grep -v -E 'Cannot add dependency job|is not executable|Failed to (connect|put)|bpf|kmsg|No such file or directory.*(dbus|proc)' || true)
   if [ -n "$OUT" ]; then echo "$OUT" | sed 's/^/      /'; fail "systemd-analyze verify reported problems"; fi
   ok "systemd-analyze verify: the image's units parse"

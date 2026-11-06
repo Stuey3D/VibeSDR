@@ -181,7 +181,7 @@ for u in getty@tty1.service systemd-networkd.service systemd-networkd.socket sys
   in_root systemctl mask "$u" >/dev/null 2>&1 || true
 done
 for u in vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service \
-         vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service; do
+         vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service vibe-debuglog.service; do
   in_root systemctl enable "$u" >/dev/null
 done
 in_root systemctl set-default multi-user.target >/dev/null
