@@ -47,11 +47,11 @@ snap() {
   echo; echo "=== sound: is anything playing?"
   for st in /proc/asound/card*/pcm*p/sub*/status /proc/asound/card*/pcm*p/sub*/hw_params; do echo "-- $st"; cat "$st" 2>&1 | head -12; done
   echo; echo "=== GL libraries mapped by the browser (panfrost_dri / libgallium = Mesa; llvmpipe can't be told apart here — see fdinfo)"
-  for pid in $(pgrep -f 'WPEWebProcess|/usr/bin/cog'); do echo "-- $pid $(tr '\0' ' ' < /proc/$pid/cmdline | cut -c1-40)"; grep -o -E '/[^ ]*(gallium|dri|EGL|GLES|gbm|llvm)[^ ]*' /proc/$pid/maps 2>/dev/null | sort -u; done
+  for pid in $(pgrep -f 'WPEWebProcess|/usr/bin/cog|vibe-hhui'); do echo "-- $pid $(tr '\0' ' ' < /proc/$pid/cmdline | cut -c1-40)"; grep -o -E '/[^ ]*(gallium|dri|EGL|GLES|gbm|llvm)[^ ]*' /proc/$pid/maps 2>/dev/null | sort -u; done
   echo; echo "=== sound controls"; aplay -l 2>&1; for c in /proc/asound/card[0-9]*; do n=${c##*card}; echo "-- card $n"; amixer -c "$n" contents 2>&1 | head -80; done
   echo; echo "=== failed units"; systemctl --failed --no-pager --no-legend 2>&1
   echo; echo "=== our units"
-  for u in vibe-splash vibe-state vibe-card vibe-hwd vibe-clock vibe-cpu vibe-bootkeys vibeserver-handheld vibe-kiosk; do
+  for u in vibe-splash vibe-state vibe-card vibe-hwd vibe-clock vibe-cpu vibe-bootkeys vibeserver-handheld vibe-kiosk vibe-hhui; do
     echo "$u: $(systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus --value "$u" 2>/dev/null | tr '\n' ' ')"
   done
   echo; echo "=== GPU / display / input / sound"
