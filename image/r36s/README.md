@@ -66,10 +66,11 @@ mounts `/flash/SYSTEM` (a squashfs) and `/storage`. Two ways to boot our root we
    it grows `/storage` to 100 % on first boot (which would eat the space VIBESDR needs), runs ROCKNIX's update and
    reset hooks, and expects ROCKNIX's layout. We would be steering someone else's distribution from outside.
 2. **Boot Debian directly — chosen.** The extlinux line passes `rdinit=/vibesdr-no-initramfs`: the kernel unpacks its
-   built-in initramfs, finds no such file, skips it, and mounts `root=PARTUUID=<id>-02` itself onto `/root`. ★ ROCKNIX's initramfs has no
-   `/root`, so a 1 KB `vibe-initrd` (`/dev`, `/dev/console`, `/root`) is loaded beside it — without it: "VFS: Cannot open
-   root device … error -2", a panic, and a reboot 1 s later (`CONFIG_PANIC_TIMEOUT=1`) (`init/main.c`:
-   `prepare_namespace()` — the eMMC/SD driver, ext4 and overlayfs are all built in, so no initramfs is needed).
+   built-in initramfs, finds no such file, skips it, and mounts `root=PARTUUID=<id>-02` itself onto `/root` of that
+   initramfs (`init/main.c`: `prepare_namespace()` — the SD driver, ext4 and overlayfs are all built in).
+   ★★ ROCKNIX's initramfs has no `/root`, so a 1 KB `vibe-initrd` (`/dev`, `/dev/console`, `/root`) is loaded beside it
+   and unpacked on top. Without it: "VFS: Cannot open root device … error -2", a panic, and a reboot 1 s later
+   (`CONFIG_PANIC_TIMEOUT=1`) — the first card's boot loop (2026-11-06). `boot.scr` puts it at 0x0c000000, above the KERNEL.
    `ro` keeps the root read-only; `init=/usr/lib/vibesdr-r36s/overlay-init` lays a tmpfs overlay on top and execs
    systemd. Cost: the unused initramfs stays in RAM (a few MB). Gain: no ROCKNIX userspace at all, and one less
    moving part than an initramfs of our own.
