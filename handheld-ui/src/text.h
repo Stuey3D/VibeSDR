@@ -7,7 +7,10 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 
+#include <algorithm>
 #include <map>
+#include <tuple>
+#include <vector>
 #include <string>
 #include <utility>
 
@@ -48,6 +51,62 @@ public:
         TTF_SizeUTF8(f.get(), s.c_str(), &w, &h);
         return w;
     }
+    /** Like draw(), but digits sit in cells of one width (the font's widest digit) — a readout that changes never
+     *  moves sideways (the web's `font-variant-numeric: tabular-nums`). Returns the width drawn. */
+    int drawTab(Gfx& g, const Font& f, const std::string& s, float x, float y, Rgba c, int align = 0) {
+        if (s.empty() || !f.get()) return 0;
+        const int w = widthTab(f, s);
+        float cx = align == 1 ? x - w / 2.f : align == 2 ? x - w : x;
+        const int dw = digitW(f);
+        size_t i = 0;
+        while (i < s.size()) {
+            size_t n = 1;
+            const unsigned char ch = (unsigned char)s[i];
+            if (ch >= 0xF0) n = 4; else if (ch >= 0xE0) n = 3; else if (ch >= 0xC0) n = 2;
+            const std::string one = s.substr(i, n);
+            i += n;
+            TextTex& t = get(f, one);
+            if (ch >= '0' && ch <= '9') { if (t.tex) g.image(t.tex, cx + (dw - t.w) / 2.f, y, (float)t.w, (float)t.h, c); cx += dw; }
+            else { if (t.tex) g.image(t.tex, cx, y, (float)t.w, (float)t.h, c); cx += adv(f, one); }
+        }
+        return w;
+    }
+    int widthTab(const Font& f, const std::string& s) {
+        int w = 0;
+        const int dw = digitW(f);
+        size_t i = 0;
+        while (i < s.size()) {
+            size_t n = 1;
+            const unsigned char ch = (unsigned char)s[i];
+            if (ch >= 0xF0) n = 4; else if (ch >= 0xE0) n = 3; else if (ch >= 0xC0) n = 2;
+            w += (ch >= '0' && ch <= '9') ? dw : adv(f, s.substr(i, n));
+            i += n;
+        }
+        return w;
+    }
+    /** Word-wrap `s` to `maxW` pixels (cached). Explicit '\n' breaks a line. */
+    const std::vector<std::string>& wrap(const Font& f, const std::string& s, int maxW) {
+        auto key = std::make_tuple((const void*)f.get(), s, maxW);
+        auto it = wraps_.find(key);
+        if (it != wraps_.end()) return it->second;
+        std::vector<std::string> out;
+        std::string line, word;
+        auto flushWord = [&] {
+            if (word.empty()) return;
+            const std::string tryLine = line.empty() ? word : line + " " + word;
+            if (!line.empty() && width(f, tryLine) > maxW) { out.push_back(line); line = word; }
+            else line = tryLine;
+            word.clear();
+        };
+        for (size_t i = 0; i <= s.size(); i++) {
+            const char ch = i < s.size() ? s[i] : '\n';
+            if (ch == ' ') flushWord();
+            else if (ch == '\n') { flushWord(); out.push_back(line); line.clear(); }
+            else word += ch;
+        }
+        if (wraps_.size() > 400) wraps_.clear();
+        return wraps_[key] = out;
+    }
     /** Once a frame: forget what has not been drawn for ~5 s. */
     void tick(uint64_t frame) {
         frame_ = frame;
@@ -59,6 +118,16 @@ public:
     }
 private:
     std::map<std::pair<const void*, std::string>, TextTex> cache_;
+    std::map<std::tuple<const void*, std::string, int>, std::vector<std::string>> wraps_;
+    std::map<const void*, int> digitW_;
+    int digitW(const Font& f) {
+        auto it = digitW_.find(f.get());
+        if (it != digitW_.end()) return it->second;
+        int m = 0;
+        for (char d = '0'; d <= '9'; d++) m = std::max(m, adv(f, std::string(1, d)));
+        return digitW_[f.get()] = m;
+    }
+    int adv(const Font& f, const std::string& s) { int w = 0, h = 0; TTF_SizeUTF8(f.get(), s.c_str(), &w, &h); return w; }
     uint64_t frame_ = 0;
 
     TextTex& get(const Font& f, const std::string& s) {

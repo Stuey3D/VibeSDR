@@ -11,7 +11,9 @@ pkg_check_modules(SDL2 REQUIRED sdl2 SDL2_ttf glesv2)
 find_package(Threads REQUIRED)
 # ★ The app's waterfall + spectrum, ported (src/wf/README.md) — bit-exact against the app's own TS in test/.
 file(GLOB WF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/wf/*.cpp)
-add_executable(vibe-hhui src/main.cpp ${WF_SOURCES})
+# ★ The app's controller keyboard (layouts + editing rules), ported (src/kb/README.md) — golden-tested against the TS.
+file(GLOB KB_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/kb/*.cpp)
+add_executable(vibe-hhui src/main.cpp ${WF_SOURCES} ${KB_SOURCES})
 target_include_directories(vibe-hhui PRIVATE src ${SDL2_INCLUDE_DIRS})
 target_link_libraries(vibe-hhui PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
 # ★★ -ffp-contract=off: no fused multiply-adds — JS never fuses, and fusing moved ring and palette bytes off the app's

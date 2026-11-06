@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <random>
 #include <string>
@@ -34,6 +35,8 @@ inline bool modePassband(const std::string& m, int& lo, int& hi) {
         {"usb", 50, 2700}, {"lsb", -2700, -50}, {"am", -5000, 5000}, {"sam", -5000, 5000},
         {"cwu", -200, 200}, {"cwl", -200, 200}, {"fm", -6000, 6000}, {"nfm", -5000, 5000},
         {"wfm", -100000, 100000}, {"drm", -5000, 5000},
+        // src/services/amSync.ts AM_SYNC_PASSBAND
+        {"sau", -5000, 5000}, {"sal", -5000, 5000}, {"amst", -5000, 5000}, {"ecssu", 50, 4500}, {"ecssl", -4500, -50},
     };
     for (auto& e : t) if (m == e.m) { lo = e.lo; hi = e.hi; return true; }
     return false;
@@ -43,6 +46,7 @@ struct RadioState {
     // the supervisor
     std::string session = "unknown";     // none | starting | running | unknown (supervisor not answering)
     std::string radioName, radioDriver, radioSerial;
+    std::string hwDriver;                // hwinfo radio.driver: rtl · sdrplay · airspyhf · airspy · hackrf · usrp · icom
     // config (this listener's view)
     double viewCentreHz = 0, spanHz = 0, maxSpanHz = 0, binBwHz = 0, vfoHz = 0;
     int binCount = 0;
@@ -56,12 +60,19 @@ struct RadioState {
     std::vector<double> rates;
     double rateNow = 0;
     std::vector<std::string> blockedModes;
+    std::vector<std::pair<double, double>> ranges;   // hwinfo radio.allowed (the owner's) else radio.ranges — what the dial may reach
     // live
     double chanDb = -200, floorDb = -200;
     std::string rdsPs, rdsRt;
     bool rdsStereo = false;
     bool connected = false;              // the spectrum socket is up
     uint64_t configSeq = 0;              // bumps on every config (the UI re-reads)
+    // ★ the LAST message of every type, whole (config, hwinfo, sig, rds, rspstat, ahfstat …) — the menu sections read
+    //   their own fields from these, so a new row never needs a new field here
+    std::map<std::string, Json> last;
+    const Json& msg(const std::string& type) const { static const Json none; auto it = last.find(type); return it == last.end() ? none : it->second; }
+    /** hwinfo `radio.<k>` (most capabilities live there), else top-level hwinfo `<k>`. */
+    const Json& hw(const std::string& k) const { const Json& h = msg("hwinfo"); return h["radio"].has(k) ? h["radio"][k] : h[k]; }
 };
 
 /** Hardware-service events relayed by the supervisor (/handheld/events). */
@@ -87,16 +98,24 @@ public:
 
     /** UI thread, once a frame. `onSpec(binsLowToHigh, n, viewCentreHz, tSec)` for every SPEC frame, oldest first. */
     void pump(const std::function<void(const uint8_t*, int, double, double)>& onSpec,
-              std::vector<DeviceEvent>& deviceEvents) {
+              std::vector<DeviceEvent>& deviceEvents,
+              const std::function<void(const uint8_t*, size_t)>& onWide = {}) {
         std::vector<WsMessage> msgs;
         spec_.drain(msgs);
         st_.connected = spec_.alive();
         for (auto& m : msgs) {
-            if (!m.text) { specFrame(m.data, onSpec); continue; }
+            if (!m.text) {
+                // ★ SPWB (the full-capture layer, wide=1) first: an unknown magic must never reach the SPEC parse
+                const std::string& d = m.data;
+                if (d.size() >= 4 && d[0] == 'S' && d[1] == 'P' && d[2] == 'W' && d[3] == 'B') { if (onWide) onWide((const uint8_t*)d.data(), d.size()); continue; }
+                specFrame(m.data, onSpec);
+                continue;
+            }
             onText(m.data);
         }
         std::vector<WsMessage> amsgs;
-        audio_.drain(amsgs);                          // ★ speaker mode: only text, if anything
+        audio_.drain(amsgs);                          // ★ speaker mode: nothing, unless the recording tap is on
+        if (onAudio) for (auto& m : amsgs) onAudio(m.text, m.data);
         { std::lock_guard<std::mutex> lk(sm_); if (sessionDirty_) { st_.session = sessState_; st_.radioName = sessName_;
               st_.radioDriver = sessDriver_; st_.radioSerial = sessSerial_; sessionDirty_ = false; } }
         { std::lock_guard<std::mutex> lk(em_); for (auto& e : evq_) deviceEvents.push_back(std::move(e)); evq_.clear(); }
@@ -136,6 +155,12 @@ public:
                       spanHz / st_.binCount, free ? ",\"free\":1" : "");
         spec_.sendText(b);
     }
+    /** Every message on the AUDIO socket (UI thread, from pump): with {"type":"speaker","tap":1} sent, the engine also
+     *  streams this socket its PCM frames (the recording tap) — see docs/v12/R36S-NATIVE-MENU-INVENTORY.md §3.6. */
+    std::function<void(bool text, const std::string& data)> onAudio;
+    void sendAudio(const std::string& json) { audio_.sendText(json); }
+    /** Any control message, as the web page sends it on the spectrum socket ({"type":…}). */
+    void send(const std::string& json) { spec_.sendText(json); }
     void zoomReset() { spec_.sendText("{\"type\":\"reset\"}"); }
     void fftRate(int fps) { spec_.sendText("{\"type\":\"fftRate\",\"value\":" + std::to_string(fps) + "}"); }
     void speakerLevel(double v) { char b[80]; std::snprintf(b, sizeof b, "{\"type\":\"speaker\",\"level\":%.3f}", v); spec_.sendText(b); }
@@ -226,7 +251,7 @@ private:
             }
             if (!spec_.alive()) {
                 const std::string q = "?user_session_id=" + sid_ + "&bid=" + bid_ + "&proto=1&client=vibe-hhui";
-                if (spec_.open(port_, "/ws/user-spectrum" + q + "&mode=binary8&bins=1024")) {
+                if (spec_.open(port_, "/ws/user-spectrum" + q + "&mode=binary8&bins=1024&wide=1")) {
                     // ★ the audio socket of the same session: the engine plays it on the speaker (speaker=1)
                     audio_.close();
                     audio_.open(port_, "/ws/audio" + q + "&speaker=1");
@@ -278,8 +303,9 @@ private:
     }
 
     void onText(const std::string& s) {
-        const Json j = Json::parse(s);
-        const std::string& t = j["type"].str();
+        Json j = Json::parse(s);
+        const std::string t = j["type"].str();
+        if (t.empty()) return;
         if (t == "config") {
             st_.viewCentreHz = j["centerFreq"].num(st_.viewCentreHz);
             st_.binCount = (int)j["binCount"].num(st_.binCount);
@@ -301,11 +327,27 @@ private:
             if (j.has("rateNow")) st_.rateNow = j["rateNow"].num();
             if (j.has("blocked")) { st_.blockedModes.clear(); for (auto& b : j["blocked"].a) st_.blockedModes.push_back(b.str()); }
             if (j["radio"].has("model") && st_.radioName.empty()) st_.radioName = j["radio"]["model"].str();
+            {
+                const Json& rr = j["radio"].has("allowed") ? j["radio"]["allowed"] : j["radio"]["ranges"];
+                if (rr.kind == Json::Arr && rr.size()) {
+                    st_.ranges.clear();
+                    for (auto& r : rr.a) if (r.size() == 2) st_.ranges.push_back({r[0].num(), r[1].num()});
+                }
+            }
+            if (j["radio"].has("driver")) st_.hwDriver = j["radio"]["driver"].str();
         } else if (t == "sig") {
             st_.chanDb = j["chan"].num(st_.chanDb); st_.floorDb = j["floor"].num(st_.floorDb);
         } else if (t == "rds") {
             st_.rdsPs = j["ps"].str(); st_.rdsRt = j["radiotext"].str(); st_.rdsStereo = j["stereo"].boolean();
         }
+        if (t == "hwinfo" && st_.last.count("hwinfo")) {
+            // ★ a partial hwinfo updates the fields it carries (the shim sends deltas after a control) — merge, don't replace
+            Json& h = st_.last["hwinfo"];
+            for (auto& kv : j.o) {
+                if (kv.first == "radio" && kv.second.kind == Json::Obj && h["radio"].kind == Json::Obj) { for (auto& r : kv.second.o) h.o["radio"].o[r.first] = r.second; }
+                else h.o[kv.first] = kv.second;
+            }
+        } else st_.last[t] = std::move(j);
     }
 };
 

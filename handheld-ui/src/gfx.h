@@ -3,6 +3,7 @@
 #pragma once
 #include <GLES3/gl3.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -87,6 +88,46 @@ public:
             }
         }
     }
+    /** A filled rounded rectangle (corner radius r). */
+    void rrect(float x, float y, float w, float h, float r, Rgba c) {
+        use(0);
+        r = std::max(0.f, std::min(r, std::min(w, h) * 0.5f));
+        if (r < 0.5f) { quad(x, y, w, h, 0, 0, 0, 0, c); return; }
+        quad(x + r, y, w - 2 * r, h, 0, 0, 0, 0, c);
+        quad(x, y + r, r, h - 2 * r, 0, 0, 0, 0, c);
+        quad(x + w - r, y + r, r, h - 2 * r, 0, 0, 0, 0, c);
+        corner(x + r, y + r, r, 0, 0, c, 2); corner(x + w - r, y + r, r, 0, 0, c, 3);
+        corner(x + w - r, y + h - r, r, 0, 0, c, 0); corner(x + r, y + h - r, r, 0, 0, c, 1);
+    }
+    /** A rounded outline of thickness t. */
+    void rframe(float x, float y, float w, float h, float r, float t, Rgba c) {
+        use(0);
+        r = std::max(0.f, std::min(r, std::min(w, h) * 0.5f));
+        if (r < t) { frame(x, y, w, h, t, c); return; }
+        quad(x + r, y, w - 2 * r, t, 0, 0, 0, 0, c); quad(x + r, y + h - t, w - 2 * r, t, 0, 0, 0, 0, c);
+        quad(x, y + r, t, h - 2 * r, 0, 0, 0, 0, c); quad(x + w - t, y + r, t, h - 2 * r, 0, 0, 0, 0, c);
+        corner(x + r, y + r, r, r - t, 0, c, 2); corner(x + w - r, y + r, r, r - t, 0, c, 3);
+        corner(x + w - r, y + h - r, r, r - t, 0, c, 0); corner(x + r, y + h - r, r, r - t, 0, c, 1);
+    }
+    /** A horizontal gradient through stops cols[i] at positions pos[i] (0..1). */
+    void hgrad(float x, float y, float w, float h, const Rgba* cols, const float* pos, int n) {
+        use(0);
+        for (int i = 1; i < n; i++) {
+            const float x0 = x + w * pos[i - 1], x1 = x + w * pos[i];
+            tri({x0, y, 0, 0, cols[i - 1]}, {x1, y, 0, 0, cols[i]}, {x1, y + h, 0, 0, cols[i]});
+            tri({x0, y, 0, 0, cols[i - 1]}, {x1, y + h, 0, 0, cols[i]}, {x0, y + h, 0, 0, cols[i - 1]});
+        }
+    }
+    /** Clip everything after this to a rectangle (top-left coordinates) until unclip(). Flushes. */
+    void clip(float x, float y, float w, float h) {
+        flush();
+        glEnable(GL_SCISSOR_TEST);
+        glScissor((GLint)std::floor(x), (GLint)std::floor(h_ - (y + h)), (GLsizei)std::ceil(w), (GLsizei)std::ceil(h));
+    }
+    void unclip() { flush(); glDisable(GL_SCISSOR_TEST); }
+
+    /** A filled triangle. */
+    void triangle(float x0, float y0, float x1, float y1, float x2, float y2, Rgba c) { use(0); tri({x0, y0, 0, 0, c}, {x1, y1, 0, 0, c}, {x2, y2, 0, 0, c}); }
     /** A textured quad (text). */
     void image(GLuint tex, float x, float y, float w, float h, Rgba c = {1, 1, 1, 1}) { use(tex); quad(x, y, w, h, 0, 0, 1, 1, c); }
 
@@ -124,6 +165,20 @@ private:
     std::vector<V> verts_;
 
     void use(GLuint tex) { if (tex != tex_) { flush(); tex_ = tex; } }
+    /** A quarter disc / ring at (cx, cy): q 0 = bottom-right, 1 = bottom-left, 2 = top-left, 3 = top-right. */
+    void corner(float cx, float cy, float r, float ri, float, Rgba c, int q) {
+        const int n = 6;
+        const float a0 = q * 1.5707963f;
+        for (int i = 0; i < n; i++) {
+            const float t0 = a0 + i * 1.5707963f / n, t1 = a0 + (i + 1) * 1.5707963f / n;
+            const float c0 = std::cos(t0), s0 = std::sin(t0), c1 = std::cos(t1), s1 = std::sin(t1);
+            if (ri <= 0) tri({cx, cy, 0, 0, c}, {cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * r, cy + s1 * r, 0, 0, c});
+            else {
+                tri({cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * r, cy + s1 * r, 0, 0, c}, {cx + c1 * ri, cy + s1 * ri, 0, 0, c});
+                tri({cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * ri, cy + s1 * ri, 0, 0, c}, {cx + c0 * ri, cy + s0 * ri, 0, 0, c});
+            }
+        }
+    }
     void tri(V a, V b, V c) { verts_.push_back(a); verts_.push_back(b); verts_.push_back(c); }
     void quad(float x, float y, float w, float h, float u0, float v0, float u1, float v1, Rgba c) {
         tri({x, y, u0, v0, c}, {x + w, y, u1, v0, c}, {x + w, y + h, u1, v1, c});

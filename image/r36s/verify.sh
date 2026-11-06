@@ -71,6 +71,7 @@ for f in /usr/lib/vibesdr-r36s/vibe-hwd /usr/lib/vibesdr-r36s/vibe-splash /usr/l
          /usr/lib/vibesdr-r36s/vibe-debuglog /usr/share/vibesdr-r36s/splash.bgrx.z /usr/share/vibesdr-r36s/splash-font.bin /usr/bin/cog /usr/bin/vibeserver \
          /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /usr/lib/aarch64-linux-gnu/libSDL2_ttf-2.0.so.0 /usr/lib/vibesdr-r36s/vibe-hhui /usr/share/vibesdr-r36s/fonts/JetBrainsMono-Bold.ttf /usr/share/vibesdr-r36s/fonts/JetBrainsMono-Regular.ttf \
          /usr/share/vibesdr-r36s/fonts/DSEG14Classic-BoldItalic.ttf /usr/share/vibesdr-r36s/fonts/OFL-JetBrainsMono.txt /usr/share/vibesdr-r36s/fonts/DSEG-LICENSE.txt \
+         /usr/share/vibesdr-r36s/fonts/AtkinsonHyperlegible-Regular.ttf /usr/share/vibesdr-r36s/fonts/AtkinsonHyperlegible-Bold.ttf /usr/share/vibesdr-r36s/fonts/OFL-AtkinsonHyperlegible.txt \
          /usr/lib/modules/7.1.2/kernel/drivers/gpu/drm/panfrost/panfrost.ko /usr/lib/modules/7.1.2/modules.dep.bin \
          /etc/udev/rules.d/70-vibe-r36s-gamepad.rules /etc/modprobe.d/vibe-r36s-gpu.conf /usr/share/doc/vibesdr-r36s/SOURCES \
          /media/root-ro /media/root-rw /media/VIBESDR /var/lib/vibe-state /usr/lib/clock-epoch; do

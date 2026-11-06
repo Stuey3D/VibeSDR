@@ -168,7 +168,9 @@ chmod 0755 "$R"/usr/lib/vibesdr-r36s/*
 install -m 0755 "$HHUI_BIN" "$R/usr/lib/vibesdr-r36s/vibe-hhui"
 mkdir -p "$R/usr/share/vibesdr-r36s/fonts"
 cp /repo/assets/mapfonts/JetBrainsMono-Bold.ttf /repo/assets/mapfonts/JetBrainsMono-Regular.ttf /repo/assets/mapfonts/OFL-JetBrainsMono.txt \
-   /repo/assets/fonts/DSEG14Classic-BoldItalic.ttf /repo/assets/fonts/DSEG-LICENSE.txt "$R/usr/share/vibesdr-r36s/fonts/"
+   /repo/assets/fonts/DSEG14Classic-BoldItalic.ttf /repo/assets/fonts/DSEG-LICENSE.txt \
+   /repo/assets/fonts/AtkinsonHyperlegible-Regular.ttf /repo/assets/fonts/AtkinsonHyperlegible-Bold.ttf \
+   /repo/assets/fonts/OFL-AtkinsonHyperlegible.txt "$R/usr/share/vibesdr-r36s/fonts/"   # ★ the native UI's face (Stuart 2026-11-06)
 python3 "$H/art/make-splash.py" /repo "$R/usr/share/vibesdr-r36s" >/dev/null
 rm -f "$R/usr/share/vibesdr-r36s/splash-base.png"
 mv "$R/usr/share/vibesdr-r36s/splash-preview.png" /out/splash-preview.png
