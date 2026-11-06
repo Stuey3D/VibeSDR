@@ -43,7 +43,7 @@ OUT_FINAL="${OUT_FINAL:-$OUT}"
 case "$OUT_FINAL" in "$HOME"/*) OUT="$OUT_FINAL" ;; esac
 mkdir -p "$CACHE" "$OUT"
 TOOLS="ca-certificates curl gnupg debootstrap fdisk e2fsprogs dosfstools mtools squashfs-tools util-linux binutils file \
-kmod device-tree-compiler pigz python3 python3-pil systemd"
+kmod device-tree-compiler pigz python3 python3-pil systemd cpio u-boot-tools"
 
 if [ "${DRY_RUN:-0}" = 1 ]; then
   cat <<EOF
@@ -82,7 +82,7 @@ if [ -n "$VERIFY" ]; then
   case "$VERIFY" in "$HOME"/*) ;; *) echo "!! --verify needs a file under \$HOME (colima shares only that)"; exit 1 ;; esac
   exec docker run --rm --cpus 4 --label vibesdr-r36s-build -v "$REPO":/repo:ro -v "$(dirname "$VERIFY")":/v:ro \
     debian:trixie-slim /bin/bash -euo pipefail -c '
-      apt-get update -qq && apt-get install -y -qq --no-install-recommends fdisk e2fsprogs mtools device-tree-compiler pigz >/dev/null
+      apt-get update -qq && apt-get install -y -qq --no-install-recommends fdisk e2fsprogs mtools device-tree-compiler pigz cpio >/dev/null
       pigz -dc "/v/'"$(basename "$VERIFY")"'" > /tmp/card.img
       bash /repo/image/r36s/verify.sh /tmp/card.img'
 fi

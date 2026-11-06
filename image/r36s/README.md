@@ -66,7 +66,9 @@ mounts `/flash/SYSTEM` (a squashfs) and `/storage`. Two ways to boot our root we
    it grows `/storage` to 100 % on first boot (which would eat the space VIBESDR needs), runs ROCKNIX's update and
    reset hooks, and expects ROCKNIX's layout. We would be steering someone else's distribution from outside.
 2. **Boot Debian directly — chosen.** The extlinux line passes `rdinit=/vibesdr-no-initramfs`: the kernel unpacks its
-   built-in initramfs, finds no such file, skips it, and mounts `root=PARTUUID=<id>-02` itself (`init/main.c`:
+   built-in initramfs, finds no such file, skips it, and mounts `root=PARTUUID=<id>-02` itself onto `/root`. ★ ROCKNIX's initramfs has no
+   `/root`, so a 1 KB `vibe-initrd` (`/dev`, `/dev/console`, `/root`) is loaded beside it — without it: "VFS: Cannot open
+   root device … error -2", a panic, and a reboot 1 s later (`CONFIG_PANIC_TIMEOUT=1`) (`init/main.c`:
    `prepare_namespace()` — the eMMC/SD driver, ext4 and overlayfs are all built in, so no initramfs is needed).
    `ro` keeps the root read-only; `init=/usr/lib/vibesdr-r36s/overlay-init` lays a tmpfs overlay on top and execs
    systemd. Cost: the unused initramfs stays in RAM (a few MB). Gain: no ROCKNIX userspace at all, and one less
@@ -101,7 +103,8 @@ and on p4 (exFAT, fsck'd every boot; the engine writes temp + rename). Developer
 
 - **60 Hz:** the panel overlay lists twelve 640×480 modes and marks 80.046 Hz `default=1`; Cog takes the PREFERRED mode
   and cannot pick by refresh (every mode is named "640x480"). `board/panel-60hz.py` moves `default=1` to the
-  23.04 MHz mode (750 × 512 → 60.000 Hz) — the same bytes otherwise, same length.
+  22.92 MHz mode (732 × 521 → 60.10 Hz) — the same bytes otherwise, same length. ★ It keeps the 80 Hz mode's horizontal
+  timing (640,46,2,44); the 23.04 MHz mode (horizontal 640,46,20,44) put the picture ~80 px left on the panel.
 - **Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette` — WebKit's media defaults untouched: the page keeps its start / audio screen and the **A press on the pad** starts the audio (Stuart, 2026-11-05)
   as user `vibe-kiosk`, `Restart=always`, `Nice=5` (below the engine). WebKit sandbox ON (bubblewrap).
 - **Gamepad:** `70-vibe-r36s-gamepad.rules` clears `ID_INPUT_TABLET{,_PAD}` on `r36s_Gamepad` (libmanette skips tablet pads).

@@ -41,18 +41,22 @@ grep -q "root=PARTUUID=$DISKID-02 " "$T/ext" || fail "extlinux root= does not na
 grep -q "rdinit=/vibesdr-no-initramfs" "$T/ext" && grep -q " ro " "$T/ext" && grep -q "init=/usr/lib/vibesdr-r36s/overlay-init" "$T/ext" \
   || fail "extlinux APPEND is missing rdinit= / ro / init="
 grep -q "console=tty0" "$T/ext" && fail "console=tty0 would print over the splash"
+grep -q "^  INITRD /vibe-initrd$" "$T/ext" || fail "extlinux has no INITRD /vibe-initrd (the kernel cannot mount root without /root)"
+mcopy -n -i "$T/boot.vfat" ::/vibe-initrd ::/boot.scr "$T/"
+[ "$(cpio -it < "$T/vibe-initrd" 2>/dev/null | sort | tr '\n' ' ')" = ". dev dev/console root " ] || fail "vibe-initrd is not exactly /dev, /dev/console, /root"
+grep -aq '^setenv ramdisk_addr_r "0x0c000000"$' "$T/boot.scr" || fail "boot.scr does not put the initrd above the KERNEL"
 grep -q ' $' "$T/ext" && fail "extlinux.conf has a trailing space"
 mcopy -n -i "$T/boot.vfat" ::/overlays/mipi-panel.dtbo ::/overlays/vibe-r36s.dtbo ::/rk3326-gameconsole-eeclone.dtb "$T/"
 fdtoverlay -i "$T/rk3326-gameconsole-eeclone.dtb" -o "$T/m.dtb" "$T/mipi-panel.dtbo" "$T/vibe-r36s.dtbo" || fail "overlays do not apply"
 dtc -q -I dtb -O dts "$T/m.dtb" > "$T/m.dts"
-grep -q 'M clock=23040 horizontal=640,46,20,44 vertical=480,16,2,14 default=1' "$T/m.dts" || fail "60 Hz mode is not the default"
+grep -q 'M clock=22920 horizontal=640,46,2,44 vertical=480,16,11,14 default=1' "$T/m.dts" || fail "the 60 Hz mode (80 Hz horizontal timing) is not the default"
 [ "$(grep -o 'default=1' "$T/m.dts" | wc -l)" = 1 ] || fail "more than one default panel mode"
 for f in 408000000 600000000 816000000 1008000000 1104000000 1200000000 1248000000 1296000000; do
   grep -q "opp-$f {" "$T/m.dts" || fail "CPU step $f missing"
 done
 awk '/opp-1416000000 \{/{f=1} f&&/status = "disabled"/{print; exit}' "$T/m.dts" | grep -q disabled || fail "1416 MHz is not disabled"
 grep -q 'default-brightness-level = <0x78>' "$T/m.dts" || fail "backlight boot level is not 120"
-ok "boot: KERNEL, eeclone DTB, overlays apply (panel 60.000 Hz default, CPU 408–1296 MHz, 1416 off, backlight 120), extlinux → PARTUUID=$DISKID-02"
+ok "boot: KERNEL, eeclone DTB, overlays apply (panel 60.1 Hz default, CPU 408–1296 MHz, 1416 off, backlight 120), extlinux → PARTUUID=$DISKID-02"
 
 # ── root filesystem ──
 dd if="$IMG" of="$T/root.ext4" bs=512 skip="$S2" count="$Z2" status=none
@@ -92,6 +96,8 @@ dfs "cat /etc/shadow" | awk -F: '$2 !~ /^[*!]/ {print $1}' | grep -q . && fail "
 dfs "cat /etc/udev/rules.d/70-vibe-r36s-gamepad.rules" | grep -q 'ENV{ID_INPUT_TABLET_PAD}=""' || fail "gamepad udev rule"
 dfs "cat /etc/modprobe.d/vibe-r36s-gpu.conf" | grep -q '^blacklist mali_kbase' || fail "mali_kbase not blacklisted"
 dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q -- '--gamepad=manette' || fail "Cog without the gamepad (the A press starts the audio)"
+dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q '^Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1$' \
+  || fail "Cog's URL lacks ?handheld=1 (the page boots as a web client: auth probe 503)"
 dfs "cat /usr/lib/systemd/system/vibe-cpu.service" | grep -q schedutil || fail "governor"
 dfs "cat /etc/systemd/logind.conf.d/vibe-r36s.conf" | grep -q '^HandlePowerKey=ignore' || fail "logind would take the power key"
 [ -z "$(dfs 'cat /etc/machine-id')" ] || fail "machine-id is baked in"

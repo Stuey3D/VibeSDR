@@ -16,7 +16,9 @@ RuntimeDirectoryMode=0700
 Environment=HOME=/var/lib/vibe-kiosk
 Environment=XDG_RUNTIME_DIR=/run/vibe-kiosk
 Environment=XDG_CACHE_HOME=/run/vibe-kiosk/cache
-Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/
+# ★★★ ?handheld=1 IS WHAT MAKES THE PAGE A HANDHELD (handheldHinted()). Without it the page boots as a web client,
+#     asks /vibeserver/auth and shows "auth probe failed: HTTP 503" (the first card, 2026-11-06).
+Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1
 # ★ the engine answering → progress 75 → the splash drops the DRM master (keeping its picture up) → Cog starts
 ExecStartPre=+/usr/lib/vibesdr-r36s/vibe-wait-engine
 # ★★ -P drm --platform-params=renderer=gles: no compositor, the GPU through Mesa Panfrost (day one, §0).
