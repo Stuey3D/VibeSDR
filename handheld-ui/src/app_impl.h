@@ -40,7 +40,45 @@ inline void App::tuneSteps(int n) {
     const RadioState& s = eng_->state();
     if (s.session != "running" || n == 0) return;
     const int step = stepOnLadder(s.vfoHz, set_.step);
-    tuneTo(stepFrom(s.vfoHz, step, n));
+    const double want = stepFrom(s.vfoHz, step, n);
+    const double got = clampTune(want);
+    if (std::fabs(got - s.vfoHz) < 0.5) return;            // parked on the edge already: the message said why
+    tuneTo(got);
+}
+
+inline double App::clampTune(double hz) {
+    const RadioState& s = eng_->state();
+    const double want = std::round(hz);
+    std::vector<std::pair<double, double>> ranges = s.ranges;
+    if (ranges.empty()) { gapNudgeDir_ = 0; return std::max(10000.0, std::min(1.8e9, want)); }
+    for (auto& r : ranges) if (want >= r.first && want <= r.second) { gapNudgeDir_ = 0; return want; }
+    // in a gap: which way we were going, and the edges either side
+    const double cur = s.vfoHz > 0 ? s.vfoHz : want;
+    const int dir = want >= cur ? 1 : -1;
+    double below = -1e300, above = 1e300;
+    for (auto& r : ranges) {
+        if (r.second < want && r.second > below) below = r.second;
+        if (r.first > want && r.first < above) above = r.first;
+    }
+    char b[200];
+    if (gapNudgeDir_ == dir) {
+        gapNudgeDir_ = 0;
+        const double target = dir > 0 ? above : below;
+        if (std::fabs(target) < 1e299) { std::snprintf(b, sizeof b, "Jumped to %.3f MHz", target / 1e6); toast(b); return target; }
+    }
+    gapNudgeDir_ = dir;
+    const double edge = dir > 0 ? below : above;
+    if (std::fabs(edge) > 1e299) return ranges.front().first > want ? ranges.front().first : ranges.back().second;
+    const double other = dir > 0 ? above : below;
+    // ★ the owner's limit (radio.allowed) or the hardware's own coverage (radio.ranges)?
+    bool hwReach = false;
+    if (s.hw("allowed").kind == Json::Arr) for (auto& r : s.hw("ranges").a) if (r.size() == 2 && want >= r[0].num() && want <= r[1].num()) hwReach = true;
+    const char* why = hwReach ? "the server owner does not allow tuning here" : "this radio cannot receive here";
+    if (std::fabs(other) < 1e299)
+        std::snprintf(b, sizeof b, "%.3f MHz — %s. Tune %s again to jump to %.3f MHz", edge / 1e6, why, dir > 0 ? "up" : "down", other / 1e6);
+    else std::snprintf(b, sizeof b, "%.3f MHz — %s", edge / 1e6, why);
+    toastLong(b);
+    return edge;
 }
 
 inline void App::zoomSteps(int n) {
@@ -402,7 +440,22 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         // ★ the web's #mAudio follows the ENGINE speaker's mute (the AUDIO sheet), not the hardware's
         if (num_.count("audio.mute") && num_["audio.mute"] > 0) c.g.line(cx - 12, cy + 12, cx + 22, cy - 12, 2.5f, th::red);
     }
-    if (button(c, "device", {bx(3), lay::btnY, bw, lay::btnH}, "DEVICE", st)) { menuOpen_ = "hw"; menuScroll_ = {}; open(S_MENU); }
+    {
+        // ★★ REC, where DEVICE was (Stuart, 2026-11-06: MENU and DEVICE were the same place twice). Press to record to
+        //    the card, press again to stop; the time runs on the key itself.
+        const Rect rb4{bx(3), lay::btnY, bw, lay::btnH};
+        const bool rec = deckRecording(*this);
+        BtnStyle rs = st; rs.on = rec; rs.disabled = !rec && !s.connected;
+        std::string lbl = "REC";
+        if (rec && num_.count("audio.recSec")) { const int sec = (int)num_["audio.recSec"]; char b[24]; std::snprintf(b, sizeof b, "%02d:%02d", sec / 60, sec % 60); lbl = b; }
+        if (button(c, "rec", rb4, "", rs)) deckToggleRec(*this, s);
+        const float tw = (float)c.tc.width(c.f.btn, lbl);
+        const float gx = rb4.cx() - (tw + 22) / 2;
+        const float a = rec ? 0.55f + 0.45f * (float)std::sin(c.t * 4.0) : 1.f;
+        if (rec) c.g.circle(gx + 7, rb4.cy(), 7, 0, rgb(0xff3030, a));
+        else c.g.circle(gx + 7, rb4.cy(), 7, 2, th::btnText);
+        c.tc.draw(c.g, c.f.btn, lbl, gx + 22, rb4.cy() - c.f.btn.lineHeight() / 2.f, rec ? th::red : th::btnText);
+    }
 
     // ── the status line: UTC · hints · battery ──
     {
@@ -418,16 +471,7 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
             c.tc.draw(c.g, c.f.small, std::to_string(battery_) + " %" + (charging_ ? " +" : ""), pill.r() - 2, ty - c.f.small.lineHeight() / 2.f, col, 2);
             (void)bt;
         }
-        if (num_.count("audio.recSec")) {
-            // ★ recording: the breathing dot + MM:SS (#mRecTime)
-            const int sec = (int)num_["audio.recSec"];
-            char b[24]; std::snprintf(b, sizeof b, "REC %02d:%02d", sec / 60, sec % 60);
-            const float a = 0.55f + 0.45f * (float)std::sin(c.t * 4.0);
-            c.g.circle(pill.x + 118, ty, 6, 0, rgb(0xff3030, a));
-            c.tc.draw(c.g, c.f.small, b, pill.x + 130, ty - c.f.small.lineHeight() / 2.f, th::red);
-            hints(c, pill.x + 230, ty, {{FACE_BOTTOM, "select"}, {-1, "sticks tune / zoom"}});
-        } else
-            hints(c, pill.x + 110, ty, {{FACE_BOTTOM, "select"}, {-1, "L-stick tune · R-stick / L R zoom · L2 R2 step"}});
+        hints(c, pill.x + 110, ty, {{FACE_BOTTOM, "select"}, {-1, "L-stick tune · R-stick / L R zoom · L2 R2 step"}});
     }
 }
 
@@ -568,10 +612,12 @@ inline void App::openFreqEntry() {
     r.opts.mode = kb::KbMode::frequency;
     char b[32];
     std::snprintf(b, sizeof b, "%.3f", s.vfoHz / 1e6);
-    r.opts.value = b;
+    r.opts.value = "";
+    r.placeholder = b;
     r.opts.unit = kb::KbUnit::mhz;
     r.opts.unitSettable = true;
     r.commit = [this](const kb::KbState& st) -> std::string {
+        if (st.valueUtf8().empty()) return "";            // ↵ on the untouched pad: nothing changes
         const double v = kb::kbParseNumber(st.valueUtf8());
         if (!(v > 0)) return "Enter a frequency";
         const kb::KbUnit u = st.unit ? *st.unit : kb::KbUnit::mhz;
@@ -582,22 +628,9 @@ inline void App::openFreqEntry() {
 
 inline std::string App::tuneTyped(double hz) {
     const RadioState& s = eng_->state();
-    // ★ the radio's ranges (hwinfo radio.allowed, else radio.ranges; else 10 kHz – 1.8 GHz, as the web page).
-    //   Outside them: park on the nearest edge and say so (the web's first-attempt rule, main.ts clampTune).
-    std::vector<std::pair<double, double>> rg = s.ranges;
-    if (rg.empty()) rg.push_back({10000, 1.8e9});
-    double got = hz, bestD = 1e300;
-    bool inside = false;
-    for (auto& r : rg) {
-        if (hz >= r.first && hz <= r.second) { inside = true; break; }
-        const double e = hz < r.first ? r.first : r.second, d = std::fabs(e - hz);
-        if (d < bestD) { bestD = d; got = e; }
-    }
-    if (!inside) {
-        char b[160];
-        std::snprintf(b, sizeof b, "%.3f MHz — this radio cannot receive here", got / 1e6);
-        toast(b);
-    }
+    // ★ the web's go(): through clampTune — a typed frequency in a gap parks on the edge and says how to cross it
+    gapNudgeDir_ = 0;
+    const double got = clampTune(hz);
     // ★ A JUMP takes the landing band's step (and mode, when it changes band) — bandPlan.ts bandJumpDefaults
     const BandDefaults d = bandJumpDefaults(s.vfoHz, got, s.mode, region());
     tuneTo(got);
@@ -666,6 +699,8 @@ inline void App::drawKeyboard(Ctx& c, const RadioState& s) {
         const Font& vf = numeric ? c.f.big : c.f.title;
         const float ty = rd.y + 36 + (numeric ? 0 : 6);
         float x = rd.x + 16;
+        if (before.empty() && after.empty() && !kbReq_.placeholder.empty())
+            c.tc.draw(c.g, vf, kbReq_.placeholder, x + 6, ty, rgb(0xffffff, 0.35f));
         x += c.tc.draw(c.g, vf, before, x, ty, th::white);
         if (std::fmod(c.t, 1.0) < 0.6) c.g.rect(x + 1, ty + 3, 2, vf.lineHeight() - 6, th::white);
         x += 4;
@@ -763,10 +798,16 @@ inline void App::drawToasts(Ctx& c) {
         c.g.rrect(bx + 20, by + 48, std::max(10.f, (bw - 40) * volume_ / 100.f), 10, 5, th::amber);
     }
     if (t < toastUntil_) {
-        const float bw = (float)c.tc.width(c.f.btn, toast_) + 48, bh = 50, bx = (W - bw) / 2, by = 250;
+        // ★ wrapped: the gap message ("31.000 MHz — this radio cannot receive here. Tune up again …") is long
+        const auto& lines = c.tc.wrap(c.f.btn, toast_, 540);
+        float tw = 0;
+        for (auto& l : lines) tw = std::max(tw, (float)c.tc.width(c.f.btn, l));
+        const float lh = (float)c.f.btn.lineHeight();
+        const float bw = tw + 48, bh = lines.size() * lh + 24, bx = (W - bw) / 2, by = 270 - bh / 2;
         c.g.rrect(bx, by, bw, bh, 12, rgb(0, 0.9f));
         c.g.rframe(bx, by, bw, bh, 12, 1.5f, th::btnBorder);
-        textIn(c, c.f.btn, toast_, {bx, by, bw, bh}, th::white);
+        float y = by + 12;
+        for (auto& l : lines) { c.tc.draw(c.g, c.f.btn, l, W / 2.f, y, th::white, 1); y += lh; }
     }
 }
 

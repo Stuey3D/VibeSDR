@@ -106,6 +106,9 @@ struct KbRequest {
     kb::SessionOpts opts;
     std::string title;                                      // e.g. "FREQUENCY", "SET UTC", "BOOKMARK NAME"
     std::function<std::string(const kb::KbState&)> commit;  // ↵: act; return a refusal to keep the keyboard open
+    /** ★ Shown dimmed while the field is empty: the web SELECTS the field's value when the pad opens, so the first
+     *  key replaces it. The pad opens empty with the old value here as the hint (↵ on an empty field changes nothing). */
+    std::string placeholder;
 };
 
 class App;
@@ -170,6 +173,7 @@ public:
     void setStep(int s) { set_.step = s; dirty(); }
     void dirty() { settingsDirty_ = true; settingsAt_ = nowSec(); }
     void toast(const std::string& s) { toast_ = s; toastUntil_ = nowSec() + 2.5; }
+    void toastLong(const std::string& s) { toast_ = s; toastUntil_ = nowSec() + 5.0; }
     void open(Sheet s) { sheets_.push_back(s); }
     void closeTop() { if (!sheets_.empty()) { nav_.forget(layerName(sheets_.back())); sheets_.pop_back(); } }
     static const char* layerName(Sheet s) {
@@ -201,6 +205,10 @@ public:
     void openFreqEntry();
     /** Tune to a typed frequency: the radio's ranges, then tune. Returns a refusal ("" = done). */
     std::string tuneTyped(double hz);
+    /** web main.ts clampTune: inside a range = as asked; in a GAP the first nudge parks on the edge and says why, a
+     *  second nudge the same way jumps the gap (so a fast scroll never flings you into another band by accident). */
+    double clampTune(double hz);
+    int gapNudgeDir_ = 0;
     void drawAudioSheet(Ctx& c, const RadioState& s);
     void drawMenu(Ctx& c, const RadioState& s);
     void drawNoRadio(Ctx& c, const RadioState& s);
@@ -216,6 +224,9 @@ public:
 // the AUDIO sheet's per-frame work (sec_audio.h): auto squelch, the recording tap, re-sends on reconnect
 void audioTick(App&, const RadioState&);
 void audioSpecFrame(App&, const uint8_t*, int, double, double);
+// the deck's REC key (sec_audio.h): recording now? / start or stop it
+bool deckRecording(App&);
+void deckToggleRec(App&, const RadioState&);
 
 inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 

@@ -721,4 +721,14 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
 }
 
 
+// ── the deck's REC key (Stuart 2026-11-06: "switch the 4th button for a record button") ──
+inline bool deckRecording(App&) { return aud::st().rec.recording(); }
+inline void deckToggleRec(App& a, const RadioState& s) {
+    auto& S = aud::st();
+    const double now = nowSec();
+    if (now - S.recPressAt <= 0.4) return;
+    S.recPressAt = now;
+    if (S.rec.recording()) aud::stopRecording(a, s); else if (s.connected) aud::startRecording(a, s);
+}
+
 }  // namespace hh
