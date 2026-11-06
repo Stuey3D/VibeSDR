@@ -19,8 +19,11 @@
  *    listener stays bound), never copied.
  *  · the Performance overlay: plain DOM text, ≤ 2 updates a second, no canvas.
  *  · recordings to the card (Cog has no downloads), the import/ folder, export/, EXPORT DIAGNOSTICS, the clock.
+ *  · the device's location: typed (a locator or lat, lon) or SET FROM MAP — an in-page map (handheldMap.ts), from the
+ *    menu's LOCATION row or from "Please connect an SDR" (no radio needed).
  */
 import { pushBack } from './gamepad';
+import { openMapPick, locatorToLatLon } from './handheldMap';
 import type { Spot, TimeSync } from './decoders';
 
 const LS_PREFS = 'vibesdr_web_prefs_v1';
@@ -246,6 +249,9 @@ html[data-handheld] .hhHide { display: none !important; }
   align-items: center; justify-content: center; text-align: center; font: 600 20px/1.4 ui-monospace, Menlo, monospace; letter-spacing: 2px; }
 #hhConnect .sub { font-size: 12px; opacity: .7; letter-spacing: 1px; margin-top: 14px; max-width: 80vw; font-weight: 400; }
 #hhConnect .logo { font-size: 30px; letter-spacing: 8px; margin-bottom: 28px; }
+#hhConnect .hhKey { margin-top: 10px; font: 600 12px ui-monospace, Menlo, monospace; letter-spacing: 1px; color: #ffb833;
+  background: transparent; border: 1px solid #ffb833; border-radius: 6px; padding: 7px 14px; }
+#hhConnect .hhKey.gpFocus { background: #ffb833; color: #080601; }
 #hhVol { position: fixed; left: 50%; bottom: 14%; transform: translateX(-50%); z-index: 9500; background: rgba(8,6,1,.88);
   border: 1px solid #ffb833; border-radius: 10px; padding: 10px 16px; color: #ffb833; font: 600 14px ui-monospace, monospace;
   display: none; align-items: center; gap: 12px; pointer-events: none; }
@@ -279,8 +285,14 @@ export function showConnect(status = '') {
     el.id = 'hhConnect';
     el.innerHTML = '<div class="logo">VIBESDR</div><div>Please connect an SDR</div>'
       + '<div class="sub">RTL-SDR · Airspy HF+ · Airspy R2 / Mini<br>SDRplay RSP · HackRF · USRP<br><br>into the USB-C port</div>'
-      + '<div class="sub" id="hhConnectSt"></div>';
+      + '<div class="sub" id="hhConnectSt"></div>'
+      // ★ The location wants no radio (Stuart 2026-11-05: set it before the first one is plugged in) — the one key here
+      + '<div class="sub" id="hhConnectLoc"></div><button type="button" class="hhKey" id="hhConnectMap">SET LOCATION FROM MAP</button>';
+    // ★ The D-pad stays on this screen's one key, never the page hidden behind it (gamepad.ts scope)
+    el.dataset.navscope = '';
     document.body.appendChild(el);
+    (el.querySelector('#hhConnectMap') as HTMLButtonElement).onclick = () => void openLocationMap();
+    void refreshLocation();
   }
   const st = document.getElementById('hhConnectSt');
   if (st) st.textContent = status;
@@ -489,6 +501,40 @@ function paintClockKeys() {
   }
 }
 
+// ── The device's location ───────────────────────────────────────────────────────────────────────────────────────────
+interface Loc { locator: string; lat: string; lon: string; set: boolean }
+let loc: Loc | null = null;
+/** Every place that shows it: the menu's LOCATION row and "Please connect an SDR". */
+function paintLocation(j: Loc) {
+  loc = j;
+  const t = !j.set ? 'not set' : j.locator ? j.locator : `${j.lat}, ${j.lon}`;
+  const now = document.getElementById('hhLocNow'); if (now) now.textContent = t;
+  const c = document.getElementById('hhConnectLoc'); if (c) c.textContent = `Location: ${t}`;
+}
+async function refreshLocation() {
+  try { paintLocation(await (await fetch('/handheld/location', { cache: 'no-store' })).json()); } catch { /* the engine is restarting */ }
+}
+/** ★ The ONE way a location is set — typed, cleared or from the map: the supervisor keeps it and applies it live. */
+async function postLocation(body: Record<string, unknown>) {
+  try {
+    const r = await fetch('/handheld/location', { method: 'POST', body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) { toast('Location not set', j.error || ''); return; }
+    paintLocation(j); host?.locationChanged();
+    toast(j.set ? 'Location set' : 'Location cleared', j.set ? (j.locator || `${j.lat}, ${j.lon}`) : '');
+  } catch { toast('Location not set', 'the engine did not answer'); }
+}
+/** SET FROM MAP: the in-page map (handheldMap.ts), centred on the location if there is one, else the whole world. */
+async function openLocationMap() {
+  if (!loc) await refreshLocation();
+  let start: { lat: number; lon: number } | null = null;
+  if (loc?.set) {
+    const la = parseFloat(loc.lat), lo = parseFloat(loc.lon);
+    start = Number.isFinite(la) && Number.isFinite(lo) ? { lat: la, lon: lo } : locatorToLatLon(loc.locator);
+  }
+  openMapPick({ start, onPick: (lat, lon) => void postLocation({ lat, lon }) });
+}
+
 // ── The menu: three accordions ──────────────────────────────────────────────────────────────────────────────────────
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, text = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -650,31 +696,21 @@ export function buildHandheldMenu(menu: HTMLElement) {
   //    characters, the pad keyboard types it) or exact latitude / longitude; the DEVICE's, whichever radio is plugged
   //    in. Applied live by the engine: distances, ranges and the map centre follow at once.
   const locNow = el('span', { class: 'val hhFig', id: 'hhLocNow', style: 'flex:1' }, '—');
-  r36.appendChild(row('LOCATION<span class="sub">Where this receiver is — for distances, ranges and the map</span>', locNow));
+  const locMap = el('button', { class: 'btn', id: 'hhLocMap' }, 'SET FROM MAP');
+  locMap.onclick = () => void openLocationMap();
+  r36.appendChild(row('LOCATION<span class="sub">Where this receiver is — for distances, ranges and the map</span>', locNow, locMap));
   const locIn = el('input', { type: 'text', id: 'hhLocIn', placeholder: 'IO92nh  or  52.25, -0.89', autocomplete: 'off', style: 'flex:1;min-width:0' }) as HTMLInputElement;
   const locSet = el('button', { class: 'btn', id: 'hhLocSet' }, 'SET');
   const locClr = el('button', { class: 'btn', id: 'hhLocClear' }, 'CLEAR');
   r36.appendChild(row('SET LOCATION', locIn, locSet, locClr));
-  const paintLoc = (j: { locator: string; lat: string; lon: string; set: boolean }) => {
-    locNow.textContent = !j.set ? 'not set' : j.locator ? j.locator : `${j.lat}, ${j.lon}`;
-  };
-  const postLoc = async (body: Record<string, unknown>) => {
-    try {
-      const r = await fetch('/handheld/location', { method: 'POST', body: JSON.stringify(body) });
-      const j = await r.json();
-      if (!r.ok) { toast('Location not set', j.error || ''); return; }
-      paintLoc(j); host?.locationChanged();
-      toast(j.set ? 'Location set' : 'Location cleared', j.set ? (j.locator || `${j.lat}, ${j.lon}`) : '');
-    } catch { toast('Location not set', 'the engine did not answer'); }
-  };
   locSet.onclick = () => {
     const t = locIn.value.trim();
     const ll = /^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/.exec(t);
-    if (ll) void postLoc({ lat: parseFloat(ll[1]), lon: parseFloat(ll[2]) });
-    else void postLoc({ locator: t });
+    if (ll) void postLocation({ lat: parseFloat(ll[1]), lon: parseFloat(ll[2]) });
+    else void postLocation({ locator: t });
   };
-  locClr.onclick = () => void postLoc({ clear: true });
-  void fetch('/handheld/location', { cache: 'no-store' }).then((r) => r.json()).then(paintLoc).catch(() => {});
+  locClr.onclick = () => void postLocation({ clear: true });
+  void refreshLocation();
   const cardV = el('span', { class: 'val hhFig', id: 'hhCardVal', style: 'flex:1' }, '—');
   r36.appendChild(row('CARD', cardV));
   const imp = el('button', { class: 'btn' }, 'IMPORT'); imp.onclick = () => void runImport(true);

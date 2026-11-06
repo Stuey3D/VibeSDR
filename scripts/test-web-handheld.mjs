@@ -14,6 +14,10 @@
 //  · a recording lands on the card and is listed with a player
 //  · SPECTRUM RATE 5 / 10 / 20: the status row follows; the engine's CPU and the page's main-thread time at each
 //    (indicative only on a Mac — the R36S figures come from the integration pass)
+//  · SET FROM MAP (handheldMap.ts), with NO radio (from "Please connect an SDR") and from the menu: the in-page map over
+//    the page, the offline map files only; the D-pad / stick pan, the shoulders / right stick zoom, ✕ stores the
+//    crosshair's point (and its locator is the one shown), ○ leaves the location alone; the keyboard does the same;
+//    nothing underneath tunes or moves while it is up
 //  · and on an ORDINARY server: the landing page's START takes the D-pad (the fix is for every mode, TV remotes too)
 //
 // Usage: VIBESERVER_BIN=/path/to/vibeserver node scripts/test-web-handheld.mjs   (exit 3 = not run)
@@ -45,7 +49,8 @@ const rtlA = await fakeRtl(), rtlB = await fakeRtl();
 const port = await freePort(), cdp = await freePort();
 const sup = spawn(BIN, ["--handheld", "--port", String(port)], {
   env: { ...process.env, VIBESERVER_DATA_DIR: data, VIBESERVER_CARD_DIR: card, VIBE_HWD_SOCK: path.join(T, "hwd.sock"),
-         VIBE_HANDHELD_FAKE_RADIOS: radios, VIBE_HANDHELD_RESET_FLAG: path.join(T, "reset"), HOME: T },
+         VIBE_HANDHELD_FAKE_RADIOS: radios, VIBE_HANDHELD_RESET_FLAG: path.join(T, "reset"), HOME: T,
+         VIBESERVER_MAPDATA_DIR: path.join(ROOT, "assets/mapdata/v1") },   // ★ the basic map pack, as the image ships it
   stdio: ["ignore", fs.openSync(path.join(T, "handheld.log"), "w"), fs.openSync(path.join(T, "handheld.log"), "a")] });
 kids.push(sup);
 const plug = (serial, rtl) => fs.writeFileSync(radios, rtl ? `${serial} rtlsdr 127.0.0.1:${rtl}\n` : "");
@@ -77,7 +82,23 @@ async function page(url) {
   return { ws, js, until, call, errors };
 }
 const press = async (p, i) => { await p.js(`__btn(${i}, true); 1`); await sleep(120); await p.js(`__btn(${i}, false); 1`); await sleep(140); };
-const UP = 12, DOWN = 13, CROSS = 0, CIRCLE = 1;
+const UP = 12, DOWN = 13, LEFT = 14, RIGHT = 15, CROSS = 0, CIRCLE = 1, L1 = 4, R1 = 5;
+/** A stick held for `ms`, then let go: axes 0/1 = left, 2/3 = right. */
+const stick = async (p, axis, v, ms) => { await p.js(`__pad.axes[${axis}] = ${v}; 1`); await sleep(ms); await p.js(`__pad.axes[${axis}] = 0; 1`); await sleep(150); };
+/** A real key, through the browser's input pipeline (not a synthetic event). */
+const VK = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, Escape: 27, PageUp: 33, PageDown: 34, "+": 187, "-": 189 };
+const key = async (p, k) => {
+  const base = { key: k, code: k.length === 1 ? (k === "+" ? "Equal" : "Minus") : k, windowsVirtualKeyCode: VK[k], nativeVirtualKeyCode: VK[k] };
+  await p.call("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(k === "Enter" ? { text: "\r" } : k.length === 1 ? { text: k } : {}) });
+  await p.call("Input.dispatchKeyEvent", { type: "keyUp", ...base }); await sleep(120);
+};
+/** The 6-character locator — the test's own, so the page's is checked, not trusted. */
+const locatorOf = (lat, lon) => { const A = "ABCDEFGHIJKLMNOPQRSTUVWX"; const la = lat + 90, lo = ((lon + 180) % 360 + 360) % 360;
+  return A[Math.floor(lo / 20)] + A[Math.floor(la / 10)] + Math.floor((lo % 20) / 2) + Math.floor(la % 10)
+       + A[Math.floor((lo % 2) * 12)].toLowerCase() + A[Math.floor((la % 1) * 24)].toLowerCase(); };
+const pick = (p) => p.js(`(() => { const d = (document.getElementById("hhMapPick") || {}).dataset || {}; return { lat: +d.lat, lon: +d.lon, zoom: +d.zoom, locator: d.locator }; })()`);
+const mapReady = (p) => p.until(`!!document.querySelector("#hhMapPick .leaflet-container") && !!window.VibeMap && document.getElementById("hhMapPickNote").textContent === ""`, 15000);
+const hhLoc = async () => (await fetch(`http://127.0.0.1:${port}/handheld/location`)).json();
 const shown = (sel) => `(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 2 && r.height > 2 && getComputedStyle(e).display !== 'none'; })()`;
 const running = () => `(() => { const f = document.getElementById("freqInput"); return !!f && parseFloat(f.value) > 0 && !document.getElementById("hhConnect"); })()`;
 const childPid = () => { try { return execFileSync("pgrep", ["-P", String(sup.pid)]).toString().trim().split("\n")[0]; } catch { return ""; } };
@@ -95,6 +116,82 @@ try {
   ok(await p.until(shown("#hhConnect"), 15000), "no radio: \"Please connect an SDR\" fills the screen");
   ok(await p.js(`document.getElementById("hhConnect").textContent.includes("Please connect an SDR")`), "…in those words");
   ok(await p.js(`getComputedStyle(document.getElementById("splash")).display === "none"`), "no landing page behind it");
+
+  console.log("── SET FROM MAP with no radio ──");
+  ok(await p.until(`${shown("#hhConnectMap")} && document.getElementById("hhConnectLoc").textContent === "Location: not set"`, 5000),
+     `"Please connect an SDR" offers SET LOCATION FROM MAP (${await p.js(`(document.getElementById("hhConnectLoc") || {}).textContent`)})`);
+  await p.js(`__connect(); 1`);
+  await press(p, DOWN);
+  ok(await p.js(`!!document.querySelector(".gpFocus") && document.querySelector(".gpFocus").id === "hhConnectMap"`), "the D-pad lands on it (and on nothing hidden behind the screen)");
+  await press(p, CROSS);
+  ok(await p.until(shown("#hhMapPick"), 5000), "✕ opens the map — in the page, over the whole screen");
+  ok(await mapReady(p), "the basemap renderer draws it (Leaflet + VibeMap, from the engine)");
+  const box = await p.js(`(() => { const r = document.getElementById("hhMapPick").getBoundingClientRect(); return r.left === 0 && r.top === 0 && r.width === innerWidth && r.height === innerHeight ? "full" : r.width + "x" + r.height + " of " + innerWidth + "x" + innerHeight; })()`);
+  ok(box === "full", `the whole viewport (${await p.js(`innerWidth + "×" + innerHeight`)} in a 640×480 window)`);
+  const m0 = await pick(p);
+  ok(m0.zoom === 1 && m0.lat === 20 && m0.lon === 0, `no location yet: the whole world (zoom ${m0.zoom}, ${m0.lat}, ${m0.lon})`);
+  ok(m0.locator === locatorOf(m0.lat, m0.lon), `the crosshair's locator in the corner (${m0.locator})`);
+  for (let i = 0; i < 3; i++) await press(p, R1);
+  await press(p, L1);
+  const m1 = await pick(p);
+  ok(m1.zoom === 3, `R zooms in ×3, L out ×1 → zoom ${m1.zoom}`);
+  await stick(p, 3, -1, 250);
+  const zr = (await pick(p)).zoom;
+  ok(zr === 4, `the right stick pushed up zooms in (zoom ${zr})`);
+  const m2a = await pick(p);
+  await press(p, RIGHT); await press(p, RIGHT); await press(p, DOWN);
+  const m2 = await pick(p);
+  ok(m2.lon > m2a.lon + 1 && m2.lat < m2a.lat - 0.5, `the D-pad pans: right ×2, down ×1 (${m2a.lat}, ${m2a.lon} → ${m2.lat}, ${m2.lon})`);
+  await stick(p, 0, 0.9, 600);
+  const m3 = await pick(p);
+  ok(m3.lon > m2.lon + 1 && Math.abs(m3.lat - m2.lat) < 0.5, `the left stick pans too (${m2.lon} → ${m3.lon})`);
+  // ★ HH_SHOTS=<dir>: a picture of the map layer, for a person to look at
+  if (process.env.HH_SHOTS) { await sleep(1500); fs.writeFileSync(path.join(process.env.HH_SHOTS, "hh-map-pick.png"), Buffer.from((await p.call("Page.captureScreenshot", { format: "png" })).result.data, "base64")); }
+  ok(m3.locator === locatorOf(m3.lat, m3.lon) && await p.js(`document.getElementById("hhMapPickLoc").textContent.startsWith(${JSON.stringify(m3.locator)})`),
+     `…the corner follows live (${m3.locator})`);
+  const res = await p.js(`performance.getEntriesByType("resource").map(e => e.name)`);
+  ok(res.some((u) => u.includes("/mapdata/v1/")), `drawn from the map files on the device (${res.filter((u) => u.includes("/mapdata/v1/")).length} requests to /mapdata/v1/)`);
+  ok(res.every((u) => u.startsWith(`http://127.0.0.1:${port}/`) || u.startsWith("blob:") || u.startsWith("data:")), "…and nothing from anywhere else — no internet on the handheld");
+  await press(p, CROSS);
+  ok(await p.until(`!document.getElementById("hhMapPick")`, 3000), "✕ sets it and the map goes");
+  let st0 = {};
+  for (let i = 0; i < 30; i++) { st0 = await hhLoc(); if (st0.set) break; await sleep(150); }
+  ok(st0.set && Math.abs(parseFloat(st0.lat) - m3.lat) < 1e-5 && Math.abs(parseFloat(st0.lon) - m3.lon) < 1e-5,
+     `the stored location is the crosshair's point (${st0.lat}, ${st0.lon} vs ${m3.lat}, ${m3.lon})`);
+  ok(await p.until(`document.getElementById("hhConnectLoc").textContent.includes(${JSON.stringify(st0.lat)})`, 3000), `…and the screen says so (${await p.js(`document.getElementById("hhConnectLoc").textContent`)})`);
+  // ○ cancels: opens where it was set, moves, and leaves the stored location alone
+  await press(p, CROSS);
+  ok(await p.until(shown("#hhMapPick"), 5000) && await mapReady(p), "opened again");
+  const m4 = await pick(p);
+  ok(Math.abs(m4.lat - m3.lat) < 1e-4 && Math.abs(m4.lon - m3.lon) < 1e-4 && m4.zoom === 8, `…centred on the location set, zoomed in (zoom ${m4.zoom}, ${m4.lat}, ${m4.lon})`);
+  await press(p, LEFT); await press(p, UP);
+  ok((await pick(p)).lon < m4.lon, "moved");
+  await press(p, CIRCLE);
+  ok(await p.until(`!document.getElementById("hhMapPick")`, 3000), "○ closes it");
+  const st1 = await hhLoc();
+  ok(st1.lat === st0.lat && st1.lon === st0.lon, `…and the location is as it was (${st1.lat}, ${st1.lon})`);
+  ok(await p.js(shown("#hhConnect")), "back on \"Please connect an SDR\"");
+  // the keyboard: Enter opens it, arrows and + pan and zoom, Escape cancels, Enter sets
+  await key(p, "Enter");
+  ok(await p.until(shown("#hhMapPick"), 5000) && await mapReady(p), "the keyboard: Enter opens it");
+  const k0 = await pick(p);
+  await key(p, "ArrowRight"); await key(p, "ArrowUp"); await key(p, "+"); await key(p, "PageUp"); await key(p, "-");
+  const k1 = await pick(p);
+  ok(k1.lon > k0.lon && k1.lat > k0.lat && k1.zoom === k0.zoom + 1, `…arrows pan, + / Page Up / − zoom (zoom ${k0.zoom} → ${k1.zoom})`);
+  await key(p, "Escape");
+  ok(await p.until(`!document.getElementById("hhMapPick")`, 3000) && (await hhLoc()).lon === st0.lon, "…Escape cancels");
+  await key(p, "Enter");
+  ok(await p.until(shown("#hhMapPick"), 5000) && await mapReady(p), "…Enter again");
+  await key(p, "ArrowLeft"); await key(p, "ArrowLeft"); await key(p, "ArrowDown");
+  const k2 = await pick(p);
+  await key(p, "Enter");
+  let st2 = {};
+  for (let i = 0; i < 30; i++) { st2 = await hhLoc(); if (st2.lon !== st0.lon) break; await sleep(150); }
+  ok(!(await p.js(`!!document.getElementById("hhMapPick")`)) && Math.abs(parseFloat(st2.lat) - k2.lat) < 1e-5 && Math.abs(parseFloat(st2.lon) - k2.lon) < 1e-5,
+     `…and Enter sets the crosshair's point (${st2.lat}, ${st2.lon})`);
+  ok(p.errors.length === 0, `no page errors so far${p.errors.length ? ": " + p.errors.slice(0, 3).join(" | ") : ""}`);
+  // ★ the rest of this test begins on a fresh card: the location is cleared again
+  await fetch(`http://127.0.0.1:${port}/handheld/location`, { method: "POST", body: JSON.stringify({ clear: true }) });
 
   plug("RADIOA", rtlA);
   ok(await p.until(running(), 30000), "radio A plugged in: the page goes straight into the receiver");
@@ -147,6 +244,35 @@ try {
   ok(await (async () => { for (let i = 0; i < 40; i++) { try { const l = await (await fetch(`http://127.0.0.1:${port}/location`)).json(); if (l.grid === "JO01ab") return true; } catch {} await sleep(150); } return false; })(),
      "…the receiver's /location follows, live");
   ok(await p.until(`(document.getElementById("rxLoc") || {}).textContent.includes("JO01")`, 5000), `…and the page's own receiver line (${await p.js(`(document.getElementById("rxLoc") || {}).textContent`)})`);
+  // ★ SET FROM MAP from the menu, with the radio playing: starts on the typed locator, the pad pans it, ✕ applies it live
+  ok(await p.js(`document.getElementById("hhLocMap").closest(".mrow") === document.getElementById("hhLocNow").closest(".mrow")`), "SET FROM MAP sits in the LOCATION row");
+  const fq0 = await p.js(`document.getElementById("freqInput").value`);
+  await p.js(`document.getElementById("hhLocMap").click(); 1`);
+  ok(await p.until(shown("#hhMapPick"), 5000) && await mapReady(p), "SET FROM MAP opens the map over the receiver");
+  const g0 = await pick(p);
+  ok(Math.abs(g0.lat - 51.0625) < 0.01 && Math.abs(g0.lon - 0.0417) < 0.01 && g0.locator === "JO01ab", `…centred on the locator typed (${g0.lat}, ${g0.lon} = ${g0.locator})`);
+  await p.js(`__connect(); 1`);
+  for (let i = 0; i < 3; i++) await press(p, LEFT);
+  await stick(p, 0, -0.9, 400);
+  await press(p, R1);
+  const r1 = await pick(p);
+  ok(r1.lon < g0.lon - 0.2 && r1.zoom === 9, `the pad pans and zooms it (${r1.lat}, ${r1.lon}, zoom ${r1.zoom})`);
+  ok(await p.js(`document.getElementById("freqInput").value`) === fq0, `…and the radio underneath is not tuned by the stick (${fq0})`);
+  await press(p, CROSS);
+  ok(await p.until(`!document.getElementById("hhMapPick") && document.getElementById("hhLocNow").textContent === ${JSON.stringify(r1.lat.toFixed(5) + ", " + r1.lon.toFixed(5))}`, 5000),
+     `✕: the menu's LOCATION reads the crosshair's point (${await p.js(`document.getElementById("hhLocNow").textContent`)})`);
+  ok(await (async () => { for (let i = 0; i < 40; i++) { try { const l = await (await fetch(`http://127.0.0.1:${port}/location`)).json();
+       if (typeof l.lat === "number" ? Math.abs(l.lat - r1.lat) < 0.05 && Math.abs(l.lon - r1.lon) < 0.05 : (l.grid || "").slice(0, 4) === r1.locator.slice(0, 4)) return true; } catch {} await sleep(150); } return false; })(),
+     `…the receiver's /location follows, live (${JSON.stringify(await (await fetch(`http://127.0.0.1:${port}/location`)).json()).slice(0, 120)})`);
+  ok(await p.js(`!document.querySelectorAll("#menu .hhAccBody")[0].hidden && document.getElementById("menu").classList.contains("open")`), "…the menu still open on R36S HARDWARE");
+  await p.js(`document.getElementById("hhLocMap").click(); 1`);
+  ok(await p.until(shown("#hhMapPick"), 5000), "opened again");
+  await press(p, RIGHT);
+  await press(p, CIRCLE);
+  ok(await p.until(`!document.getElementById("hhMapPick")`, 3000) && await p.js(`!document.querySelectorAll("#menu .hhAccBody")[0].hidden`),
+     "○ closes only the map — R36S HARDWARE stays open under it");
+  const rl = await hhLoc();
+  ok(Math.abs(parseFloat(rl.lat) - r1.lat) < 1e-5 && Math.abs(parseFloat(rl.lon) - r1.lon) < 1e-5, "…the location unchanged");
   ok(await p.until(`document.getElementById("hhBattVal").textContent.includes("83")`, 5000), `the battery from the hardware service (${await p.js(`document.getElementById("hhBattVal").textContent`)})`);
   await p.js(`document.querySelectorAll("#menu .hhAcc")[2].click(); 1`);
   ok(await p.js(`(() => { const b = document.querySelectorAll("#menu .hhAccBody"); return b[0].hidden && b[1].hidden && !b[2].hidden; })()`), "opening DISPLAY collapses R36S HARDWARE");

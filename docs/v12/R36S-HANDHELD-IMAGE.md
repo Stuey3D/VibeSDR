@@ -142,8 +142,12 @@ not a nested sub-menu); pressing it again, or B / back, collapses them into the 
 menu but the options are still hidden", so the main menu stays uncluttered. Opening one collapses the others.
 - **R36S HARDWARE** = **location** (Stuart 2026-11-05: no GPS, no internet — a Maidenhead locator or latitude /
   longitude, the DEVICE's, unset on a fresh card; written into every radio's "Where this receiver is" and applied live:
-  the map centre, DAB / NDB / NAVTEX distances, the band region. "Set from map" is not built yet — the maps open in
-  their own window today, which a one-view Cog kiosk cannot show; it needs an in-page map first), volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
+  the map centre, DAB / NDB / NAVTEX distances, the band region. **SET FROM MAP** (2026-11-06, `handheldMap.ts`): the
+  other maps open in their own window, which a one-view Cog kiosk cannot show, so this one is IN the page — full screen,
+  the same basemap renderer (vibemap.js on Leaflet) from the card's map files only, a fixed centre crosshair, the D-pad /
+  left stick pan, L / R (or the right stick up / down) zoom, A sets the crosshair's point (its 6-character locator shown
+  live in the top-left corner), B cancels; arrows / + − / Enter / Escape on a keyboard. On the LOCATION row, and on
+  "Please connect an SDR" as SET LOCATION FROM MAP — no radio needed), volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
   **Performance** overlay toggle with its figures in full, power off, restart. (No SSH — removed 2026-11-05.)
 - **SDR HARDWARE** = the plugged-in radio's own controls (gain / AGC / bias-T / direct sampling / ppm / antenna …) from its
   caps — what the radio menu shows today for that driver.
