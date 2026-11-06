@@ -9,14 +9,11 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED sdl2 SDL2_ttf glesv2)
 find_package(Threads REQUIRED)
-# ★ The app's waterfall, ported (src/wf/) — switched on once it is integrated; until then the stand-in (basic_wf.h).
-option(HHUI_WF_PORT "build the ported app waterfall (src/wf)" OFF)
-set(WF_SOURCES)
-if(HHUI_WF_PORT)
-  file(GLOB WF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/wf/*.cpp)
-endif()
+# ★ The app's waterfall + spectrum, ported (src/wf/README.md) — bit-exact against the app's own TS in test/.
+file(GLOB WF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/wf/*.cpp)
 add_executable(vibe-hhui src/main.cpp ${WF_SOURCES})
 target_include_directories(vibe-hhui PRIVATE src ${SDL2_INCLUDE_DIRS})
 target_link_libraries(vibe-hhui PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
-target_compile_options(vibe-hhui PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+# ★★ -ffp-contract=off: no fused multiply-adds — JS never fuses, and fusing moved ring and palette bytes off the app's
+target_compile_options(vibe-hhui PRIVATE -O2 -ffp-contract=off -Wall -Wextra -Wno-unused-parameter)
 install(TARGETS vibe-hhui RUNTIME DESTINATION bin)

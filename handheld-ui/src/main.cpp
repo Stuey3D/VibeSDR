@@ -10,7 +10,7 @@
 #include "engine.h"
 #include "gfx.h"
 #include "text.h"
-#include "basic_wf.h"
+#include "wf/waterfall.h"   // ★ the APP's waterfall + spectrum, ported (src/wf/README.md)
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -167,7 +167,12 @@ int main(int argc, char** argv) {
     fBig.load(fontPath("JetBrainsMono-Bold.ttf"), 28);
     fVfd.load(fontPath("DSEG14Classic-BoldItalic.ttf"), 32);
     Font fVfdSmall; fVfdSmall.load(fontPath("DSEG14Classic-BoldItalic.ttf"), 14);
-    BasicWaterfall wf; wf.init();
+    // ★★★ THE APP'S WATERFALL (memory: feedback_waterfall_core_rules): per-row placement, the as-drawn zoom fan, every tune
+    //     eased, the fixed output clock (DEFAULT = 30 rows/s, never 20), the app's palettes (Jet, its production default).
+    wf::Waterfall wfp;
+    if (!wfp.init()) std::fprintf(stderr, "vibe-hhui: the waterfall did not initialise\n");
+    wfp.setPalette("Jet");
+    wfp.setSpeed(wf::Scroll::Default);
 
     Engine eng(port);
     eng.start();
@@ -196,6 +201,9 @@ int main(int argc, char** argv) {
         f = std::round(f / ui.step) * ui.step;                // ★ on the step grid, like the app's dial
         if (f < 1000) f = 1000;
         eng.tune(f);
+        // ★ the view moves with the dial before the server's frames catch up (the app's predicted view)
+        wfp.setView(s.viewCentreHz + (f - s.vfoHz), s.spanHz);
+        wfp.notifyInteraction(now());
     };
     auto zoomSteps = [&](int n) {
         const RadioState& s = eng.state();
@@ -203,9 +211,11 @@ int main(int argc, char** argv) {
         // ★ ×√2 a press on VibeServer (the app's zoom keys, Stuart 2026-10-28)
         double span = s.spanHz * std::pow(std::sqrt(0.5), n);
         const double minSpan = 3000;
-        if (span > s.maxSpanHz * 0.999 && s.maxSpanHz > 0) { eng.zoomReset(); return; }
+        if (span > s.maxSpanHz * 0.999 && s.maxSpanHz > 0) { eng.zoomReset(); wfp.notifyInteraction(now()); return; }
         if (span < minSpan) span = minSpan;
         eng.zoom(s.vfoHz, span);
+        wfp.setView(s.vfoHz, span);
+        wfp.notifyInteraction(now());
     };
     auto cycle = [&](int dir) {
         const RadioState& s = eng.state();
@@ -382,26 +392,10 @@ int main(int argc, char** argv) {
         // the engine
         devEvents.clear();
         bool newRow = false;
-        eng.pump([&](const uint8_t* bins, int n, double, double) {
-            wf.push(bins, n);
+        eng.pump([&](const uint8_t* bins, int n, double centreHz, double) {
+            // ★ bins are low → high already (engine.h rotated them); the span is this view's (config.totalBandwidth)
+            wfp.pushFrame(bins, n, false, centreHz, eng.state().spanHz, now());
             newRow = true;
-            // the trace: dB per screen column, lightly averaged (display only)
-            const int cols = W;
-            if ((int)ui.trace.size() != cols) ui.trace.assign((size_t)cols, -140.f);
-            float mn = 1e9f, mx = -1e9f;
-            for (int x = 0; x < cols; x++) {
-                const int i0 = (int)((int64_t)x * n / cols), i1 = std::max(i0 + 1, (int)((int64_t)(x + 1) * n / cols));
-                int best = 0;
-                for (int i = i0; i < i1 && i < n; i++) best = std::max(best, (int)bins[i]);
-                if (best == 0) continue;
-                const float db = (float)best - 256.f;
-                ui.trace[(size_t)x] += (db - ui.trace[(size_t)x]) * 0.5f;
-                mn = std::min(mn, db); mx = std::max(mx, db);
-            }
-            // ★ the stand-in's colour range: from the engine's own noise floor (sig.floor), a little under it to ~50 dB over
-            (void)mn; (void)mx;
-            const float fl = (float)eng.state().floorDb;
-            if (fl > -190.f) { ui.loDb += ((fl - 6.f) - ui.loDb) * 0.1f; ui.hiDb += ((fl + 48.f) - ui.hiDb) * 0.1f; }
         }, devEvents);
         for (auto& de : devEvents) {
             if (de.kind == "volume") { ui.vol = (int)de.body["volume"].num(-1); ui.muted = de.body["muted"].boolean(); ui.volUntil = now() + 1.5; }
@@ -475,24 +469,17 @@ int main(int argc, char** argv) {
             tc.draw(g, fUi, ui.step >= 1000 ? (ui.step % 1000 ? std::to_string(ui.step / 1000) + "." + std::to_string(ui.step % 1000 / 100) + "k" : std::to_string(ui.step / 1000) + "k") : std::to_string(ui.step), 513, topH + 26, kText, 1);
             tc.draw(g, fUi, "MENU", 597, topH + 18, kText, 1);
 
-            // ── spectrum ──
-            g.rect(0, specY, (float)W, specH, rgb(0x0a0d0a));
+            // ── spectrum + waterfall: the app's (waterfall FIRST — it runs the clock and the pace) ──
+            g.flush();
+            wfp.draw(0, (int)wfY, W, (int)wfH, W, H, t);
+            wfp.drawSpectrum(0, (int)specY, W, (int)specH, W, H);
+            glEnable(GL_BLEND);
             const double lo = s.viewCentreHz - s.spanHz / 2, hi = s.viewCentreHz + s.spanHz / 2;
             auto xOf = [&](double hz) { return (float)((hz - lo) / (hi - lo) * W); };
             if (s.spanHz > 0) {
                 // the passband
                 const float px0 = xOf(s.vfoHz + s.bwLow), px1 = xOf(s.vfoHz + s.bwHigh);
-                g.rect(px0, specY, std::max(1.f, px1 - px0), specH + wfH, rgb(0xffb000, 0.10f));
-                if (!ui.trace.empty()) {
-                    std::vector<float> xs(ui.trace.size()), ys(ui.trace.size());
-                    for (size_t x = 0; x < ui.trace.size(); x++) {
-                        xs[x] = (float)x;
-                        const float v = std::max(0.f, std::min(1.f, (ui.trace[x] - (ui.loDb - 10)) / ((ui.hiDb + 10) - (ui.loDb - 10))));
-                        ys[x] = specY + specH - v * (specH - 4);
-                    }
-                    g.traceFill(xs, ys, specY + specH, rgb(0x5cf2ff, 0.25f));
-                    for (size_t x = 1; x < xs.size(); x++) g.line(xs[x - 1], ys[x - 1], xs[x], ys[x], 1.4f, kHi);
-                }
+                g.rect(px0, specY, std::max(1.f, px1 - px0), specH, rgb(0xffb000, 0.12f));
                 const float vx = xOf(s.vfoHz);
                 g.rect(vx - 0.5f, specY, 1.f, specH, rgb(0xff4040, 0.9f));
                 // signal level
@@ -501,9 +488,6 @@ int main(int argc, char** argv) {
                 tc.draw(g, fUiSmall, sl, (float)W - 6, specY + 4, kDim, 2);
                 if (!s.rdsPs.empty()) tc.draw(g, fUi, s.rdsPs + (s.rdsStereo ? "  STEREO" : ""), 8, specY + 4, kAccent);
             }
-            g.flush();
-            // ── waterfall ── (★ the stand-in until the app's port lands)
-            wf.draw(W, H, 0, wfY, (float)W, wfH, ui.loDb, ui.hiDb);
             if (s.spanHz > 0) { const float vx = xOf(s.vfoHz); g.rect(vx - 0.5f, wfY, 1.f, wfH, rgb(0xff4040, 0.35f)); }
         }
 
