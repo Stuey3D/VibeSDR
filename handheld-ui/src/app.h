@@ -208,6 +208,10 @@ public:
     float secDisplay(Ctx& c, const RadioState& s, Rect area, float y);
 };
 
+// the AUDIO sheet's per-frame work (sec_audio.h): auto squelch, the recording tap, re-sends on reconnect
+void audioTick(App&, const RadioState&);
+void audioSpecFrame(App&, const uint8_t*, int, double, double);
+
 inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 
 }  // namespace hh

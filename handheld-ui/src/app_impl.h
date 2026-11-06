@@ -306,6 +306,15 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         }
     }
     c.g.rframe(pill.x, pill.y, pill.w, pill.h, 9, 1, th::btnBorder);
+    // the squelch threshold on the meter's own scale (#mSqlLine: amber, below the readouts)
+    {
+        const double sq = num_.count("audio.sqlDb") ? num_["audio.sqlDb"] : -999;
+        if (sq > -998) {
+            const float x = pill.x + 1 + (float)std::max(0.0, std::min(1.0, (sq + 121) / 108.0)) * (pill.w - 2);
+            c.g.rect(x - 2, pill.y + 1, 4, pill.h - 2, rgb(0, 0.6f));
+            c.g.rect(x - 1, pill.y + 1, 2, pill.h - 2, th::amber);
+        }
+    }
 
     // the readouts: one centred group — frequency box · mode chip · reading chip
     const bool live = s.session == "running" && s.vfoHz > 0;
@@ -324,6 +333,10 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     else if (set_.meterMode == 2) { char b[24]; std::snprintf(b, sizeof b, "%d dBFS", (int)std::lround(lastSigDb_)); reading = b; }
     else { char b[24]; std::snprintf(b, sizeof b, "SNR %d dB", (int)std::lround(snrSmooth_)); reading = b; }
     if (!live) reading = "—";
+    // ★ while the squelch gate is shut the chip says SQL (mobile.ts paintSignal)
+    const double sqlDb = num_.count("audio.sqlDb") ? num_["audio.sqlDb"] : -999;
+    const bool sqlOn = sqlDb > -998;
+    if (live && sqlOn && lastSigDb_ < sqlDb) reading = "SQL";
     // widths reserved for the widest reading (the web's 8ch rule: nothing moves as the numbers change)
     const float fMainW = (float)c.tc.widthTab(c.f.freq, "8888.888"), fFineW = (float)c.tc.widthTab(c.f.freqFine, "88");
     const float unitW = (float)c.tc.width(c.f.unit, "MHz");
@@ -386,7 +399,8 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
                 c.g.line(cx + 6 + std::cos(a0) * rr, cy + std::sin(a0) * rr, cx + 6 + std::cos(a1) * rr, cy + std::sin(a1) * rr, 2, col);
             }
         }
-        if (muted_) c.g.line(cx - 12, cy + 12, cx + 22, cy - 12, 2.5f, th::red);
+        // ★ the web's #mAudio follows the ENGINE speaker's mute (the AUDIO sheet), not the hardware's
+        if (num_.count("audio.mute") && num_["audio.mute"] > 0) c.g.line(cx - 12, cy + 12, cx + 22, cy - 12, 2.5f, th::red);
     }
     if (button(c, "device", {bx(3), lay::btnY, bw, lay::btnH}, "DEVICE", st)) { menuOpen_ = "hw"; menuScroll_ = {}; open(S_MENU); }
 
@@ -404,7 +418,16 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
             c.tc.draw(c.g, c.f.small, std::to_string(battery_) + " %" + (charging_ ? " +" : ""), pill.r() - 2, ty - c.f.small.lineHeight() / 2.f, col, 2);
             (void)bt;
         }
-        hints(c, pill.x + 110, ty, {{FACE_BOTTOM, "select"}, {-1, "L-stick tune · R-stick / L R zoom · L2 R2 step"}});
+        if (num_.count("audio.recSec")) {
+            // ★ recording: the breathing dot + MM:SS (#mRecTime)
+            const int sec = (int)num_["audio.recSec"];
+            char b[24]; std::snprintf(b, sizeof b, "REC %02d:%02d", sec / 60, sec % 60);
+            const float a = 0.55f + 0.45f * (float)std::sin(c.t * 4.0);
+            c.g.circle(pill.x + 118, ty, 6, 0, rgb(0xff3030, a));
+            c.tc.draw(c.g, c.f.small, b, pill.x + 130, ty - c.f.small.lineHeight() / 2.f, th::red);
+            hints(c, pill.x + 230, ty, {{FACE_BOTTOM, "select"}, {-1, "sticks tune / zoom"}});
+        } else
+            hints(c, pill.x + 110, ty, {{FACE_BOTTOM, "select"}, {-1, "L-stick tune · R-stick / L R zoom · L2 R2 step"}});
     }
 }
 
@@ -836,6 +859,7 @@ inline int App::run(int argc, char** argv) {
             // ★ bins are low → high already (engine.h rotated them); the span is this view's (config.totalBandwidth)
             wfp_.pushFrame(bins, n, false, centreHz, eng.state().spanHz, nowSec());
             updateSignal(bins, n, centreHz, eng.state().spanHz);
+            audioSpecFrame(*this, bins, n, centreHz, eng.state().spanHz);
         }, devEvents, [&](const uint8_t* d, size_t n) {
             // ★ the full-capture layer: the edges a glide or a zoom-in exposes are filled from real capture (wf_wide.h)
             wfp_.pushWide(d, n, nowSec());
@@ -849,6 +873,7 @@ inline int App::run(int argc, char** argv) {
             else if (de.kind == "shutdown") toast("Switching off");
         }
         const RadioState& s = eng.state();
+        audioTick(*this, s);
         if (s.session != lastSession) { if (s.session == "running") { nav_.setFocus("deck", "freq"); lastDevPoll = 0; } lastSession = s.session; }
         if (s.connected && sentRate != set_.specRate) { eng.fftRate(set_.specRate); sentRate = set_.specRate; }
         if (!s.connected) sentRate = -1;
