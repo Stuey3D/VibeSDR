@@ -18,6 +18,10 @@ Environment=XDG_RUNTIME_DIR=/run/vibe-kiosk
 Environment=XDG_CACHE_HOME=/run/vibe-kiosk/cache
 # ★★★ ?handheld=1 IS WHAT MAKES THE PAGE A HANDHELD (handheldHinted()). Without it the page boots as a web client,
 #     asks /vibeserver/auth and shows "auth probe failed: HTTP 503" (the first card, 2026-11-06).
+# ★★ which GL driver Mesa really loads (panfrost, or llvmpipe = software) goes to the journal at start-up — a handful of
+#    lines. The first card (2026-11-06) ran WPEWebProcess at 177 % CPU against day one's 54 % on Panfrost.
+Environment=EGL_LOG_LEVEL=info
+Environment=LIBGL_DEBUG=verbose
 Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1
 # ★ the engine answering → progress 75 → the splash drops the DRM master (keeping its picture up) → Cog starts
 ExecStartPre=+/usr/lib/vibesdr-r36s/vibe-wait-engine

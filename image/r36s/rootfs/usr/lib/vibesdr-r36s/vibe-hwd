@@ -195,10 +195,27 @@ class Hwd:
             self.emit({"event": "volume", "volume": v, "muted": v == 0})
 
     def set_output(self, headphones):
-        # ★ 'Playback Mux' (numid 6 on rk817_ext): item 0 = HP, 1 = SPK. The card is SILENT until it is set — day one.
+        # ★ 'Playback Mux' (numid 6 on rk817_ext): item 0 = HP, 1 = SPK. The card is SILENT until it is set — day one
+        #   (2026-11-05, measured on the device: SPK = the speaker).
+        # ★★ This unit's tree is rk817-sound-AMPLIFIED: the speaker is an external amp ("Speaker Amp", GPIO enable) behind
+        #    a DAPM pin switch, 'Internal Speakers Switch'. Under ROCKNIX something had it on; here nothing did, so it is
+        #    set explicitly — on for the speaker, off with headphones in (2026-11-06, the first card: no audio).
         self.output = "headphones" if headphones else "speaker"
         amixer("cset", "name=Playback Mux", "HP" if headphones else "SPK")
+        if self.has_control("Internal Speakers Switch"):
+            amixer("cset", "name=Internal Speakers Switch", "off" if headphones else "on")
         self.emit({"event": "output", "output": self.output})
+
+    def has_control(self, name):
+        cache = self.__dict__.setdefault("_controls", None)
+        if cache is None:
+            try:
+                r = subprocess.run(["amixer", "-c", CARD, "controls"], capture_output=True, text=True, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                return False                      # ★ not cached: asked again on the next switch
+            cache = self._controls = r.stdout
+            log("ALSA controls:", " | ".join(l.split("name=", 1)[-1] for l in r.stdout.splitlines()))
+        return ("name='%s'" % name) in cache
 
     # ── battery ──
     def read_battery(self):

@@ -21052,7 +21052,7 @@ function bootSplash(): void {
   /* ★★★ V12 R36S HANDHELD: ?handheld (the image's Cog URL) asks the engine; only `vibeserver --handheld` answers. No
    *  landing page — a radio plugged in goes straight into the receiver, none shows "Please connect an SDR". */
   if (handheldHinted()) void handheldBoot().then((s) => {
-    if (!s) { bootSplash(); return; }
+    if (!s) { document.documentElement.removeAttribute('data-hh-boot'); bootSplash(); return; }   // ★ index.html hid it
     initSplash();
     initKeyboard();
     // ★ Only a RUNNING radio is joined; one still starting shows "Starting …" and its running event reloads the page.

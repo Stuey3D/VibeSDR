@@ -1,6 +1,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VibeSDR</title>
+<!-- ★★ V12 R36S: THE HANDHELD NEVER SHOWS THE LANDING PAGE, NOT EVEN FOR A FRAME. ?handheld is known before first paint;
+     whether the engine really is a handheld is not (handheldBoot() asks it). Until it answers, the landing page (its
+     PIN box, CONNECT) is hidden; a non-handheld answer takes the mark off and the landing page draws as ever. Stuart
+     2026-11-06: "a VibeServer PIN entry screen flashes up and then disappears". -->
+<script>if (/[?&]handheld(=|&|$)/.test(location.search)) document.documentElement.setAttribute('data-hh-boot', '');</script>
+<style>html[data-hh-boot] #splash { visibility: hidden !important; }</style>
 <!-- A real URL, not a data: URI — Safari refuses data: favicons and falls back
      to its default arrow. The shim serves this from GET /favicon.png. -->
 <!-- ?v= is a CACHE KEY, not decoration. Safari keeps a separate, very sticky favicon cache and
