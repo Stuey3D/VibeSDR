@@ -1,6 +1,7 @@
 // wf_row_place.cpp — port of src/utils/wfRowPlace.ts. Comments name the TS function each block comes from; the design
 // notes live in the TS file and are not repeated here.
 #include "wf_row_place.h"
+#include "wf_wide.h"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -198,7 +199,8 @@ void fanTable(double a, double b, int n, int32_t* lo, int32_t* hi) {
   }
 }
 
-// fanRow — one eased row from the stored ring through its map; no data → the row below as it was drawn
+// fanRow — one eased row from the stored ring through its map; no data → the row below as it was drawn, or the row's
+// own full-capture layer where there is one
 void fanRow(FanState& st, const uint8_t* ring, int n, int r, int rows) {
   const double a = st.xfA[r], b = st.xfB[r];
   if (!st.hasDisp || (a == 1 && b == 0)) return;
@@ -215,6 +217,7 @@ void fanRow(FanState& st, const uint8_t* ring, int n, int r, int rows) {
     for (int k = l + 1, h = hi[x]; k <= h; k++) { const uint8_t v = ring[at + k]; if (v > m) m = v; }
     disp[at + x] = m;
   }
+  if (st.layer) layerFillRow(*st.layer, r, a, b, n, disp, at, lo);   // ★ V12 the full-capture layer (wf_wide.h)
 }
 
 // fanNoteRow (the JUMP re-map branch is behind JUMP_KEEPS_HISTORY = true in the app and is not ported)

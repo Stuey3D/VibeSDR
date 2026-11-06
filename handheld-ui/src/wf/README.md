@@ -8,7 +8,8 @@ is in `memory/feedback_waterfall_core_rules.md`:
 - a zoom never rescales the history, it only fans the new rows in;
 - every tune step eases over a few rows;
 - the output clock is fixed (sample-and-hold);
-- edges with no data continue the row below.
+- edges with no data continue the row below — or, on a VibeServer that sends the full-capture row (SPWB), show the real
+  coarse capture there instead (`wf_wide`).
 
 ## Files and where each came from
 
@@ -20,7 +21,8 @@ is in `memory/feedback_waterfall_core_rules.md`:
 | `wf_combine.h/.cpp` | `src/assets/wfCombine.ts` | the frames a thinned feed passes over are combined (a linear-power mean, with peaks kept to within 6 dB) |
 | `wf_signal.h/.cpp` | `src/assets/signalProcessor.ts` | dBFS → 0–255 intensity: auto-range, the 5-tap spatial smooth, the spectrum EMA, peak hold, and the clip and re-stretch |
 | `wf_palette.h/.cpp`, `wf_palettes_gen.h` | `src/assets/colormapUtils.ts` (+ `colormaps.ts`), `WaterfallView` `specGradColors` | all 26 built-in LUTs. They are generated from `getColorLUT` by `test/gen_palettes.ts`, so they are the app's bytes. Custom palettes use the app's own `lutStops` / `lutPos` interpolation, and the spectrum fill's 9-stop gradient is built from them too |
-| `wf_model.h/.cpp` | `WaterfallView.tsx`: `handleFrame`, `pumpClock`, `pushRow` (the resample to 1024), `traceShow`/`traceRun`, `specTweenTick`, the `jsPending` hand-over | the whole pipeline without GL |
+| `wf_wide.h/.cpp` | `src/utils/wfWide.ts` (V12) | THE FULL-CAPTURE LAYER: the SPWB v2 parse (`isWideFrame`, `parseWide`), the newest picture of the capture and its time blend (`wideArrive`, `wideBlend`, the floor match), the dB → index mapping (`makeToIdx`, `floorIdx`, `medianOf`), and the layer ring (`newLayerRing`, `layerWriteRow`, `layerFillRow` with its soft edge and thin peaks). `fanRow` (wf_row_place) calls `layerFillRow`, as the app's does |
+| `wf_model.h/.cpp` | `WaterfallView.tsx`: `handleFrame`, `pumpClock`, `pushRow` (the resample to 1024; with the layer: `layerWriteRow` + `fanRow`), the JS-path wide sink (`pushWide`), `traceShow`/`traceRun`, `specTweenTick`, the `jsPending` hand-over | the whole pipeline without GL |
 | `wf_gl.h/.cpp` | `WaterfallView.tsx` `WF_SKSL` (lines 340–498) and the trace `<Path>`s | the shader in GLSL ES 3.00 (ring addressing, per-row motion, the zoom fan / tune join, the screen ease, unsharp, S-curve, LUT), the textures, and the spectrum fill + peak |
 | `waterfall.h` | — | the one-object facade the main loop uses |
 
@@ -35,6 +37,8 @@ w.setContrast(0); w.setSharpness(5);           // Display settings, the app's ra
 w.setSpeed(wf::Scroll::Default);               // Min2 / Low / Eco / Default (30) / Smooth (60) / Sharp (= NATIVE)
 // each SPEC frame (u8 bins, DC first; dBFS = u8 − 256; 0 = no data):
 w.pushFrame(bins, n, /*fftOrder*/ true, frameViewCentreHz, config.totalBandwidth, tSec);
+// each SPWB frame (V12 full-capture row; the socket asked `&wide=1`) — the bytes as received, checked BEFORE the SPEC parse:
+if (wf::Waterfall::isWideFrame(buf, len)) w.pushWide(buf, len, tSec);
 // when the UI tunes or zooms (before the server's frames catch up):
 w.setView(newCentreHz, newSpanHz); w.notifyInteraction(tSec);
 // every display frame, waterfall FIRST (it runs the clock and the pace):
@@ -44,7 +48,8 @@ w.drawSpectrum(0, 0, 640, 120, 640, 480);      // baseline at the bottom of its 
 
 Use one monotonic clock for `tSec` and `nowSec`. `w.model()` exposes the CPU state: `dbMin()/dbMax()` for the axis,
 `uniforms()`, `frames()`. The GL side uploads **one 1024-byte ring row per new row**, plus the 4 KB motion row when it
-changed. There is no CPU pixel work per display frame.
+changed. There is no CPU pixel work per display frame. The full-capture layer adds no upload and no shader work: it is
+written into the displayed ring row that is uploaded anyway (see Costs).
 
 **Build flag: `-ffp-contract=off`.** GCC in GNU mode, and clang on arm64, fuse `a + b*c` into an FMA by default. JS never
 does. Fusing moves the odd `Math.round`/`floor` at a boundary: it made 3 ring bytes and 11 LUT bytes differ before the
@@ -58,11 +63,15 @@ flag was added. With the flag the port is bit-exact (see Tests).
    days of rows. Every difference and `mod` the shader takes is unchanged.
 3. **No A/V hold** (`wfAvSync.ts`). The handheld has no audio playout delay to wait for, so the hold is 0. If one is ever
    needed, `clockArrive` already takes `holdMs`.
-4. **No full-capture layer** (`wfWide.ts`, SPWB rows). The eased rows' edges continue the row below, as the app does on a
-   server without SPWB. **This is visible:** during a long drag, a station near the trailing edge is copied up that edge
-   as a vertical streak until the ease catches up. The app's own shader shows the same thing on the same rows
-   (`picture_*_app.png`). On a VibeServer the app fills that strip from the coarse full-capture layer instead. This is
-   the first thing to port next.
+4. **The full-capture layer follows the APP (`src/utils/wfWide.ts`), not the web (`web/client/src/wfWide.ts`).** The web
+   keeps a dense 2·C-a-row layer in three extra GPU rings and composites it in its fragment shader (`wfgl.ts` `uMT`…);
+   the app keeps a sparse ring (F floor bytes + ≤ 160 peaks a row) and writes the layer into the displayed ring on the CPU
+   (`fanRow` → `layerFillRow`), so its shader is unchanged. The port follows the app, as it does everywhere else — which is
+   also the right trade for a one-core Mali-G31. Two small things differ from WaterfallView: the layer's time base is the
+   pipeline's own `now` where the app reads `Date.now()` (the row's clock tick / the SPWB's arrival), and its soft-edge
+   width uses the trace width (`setTraceWidth`, default 640), which is the app's `frameCfg.width`. `wideCapture` (the app's
+   "the history covers the capture" view hint) is not ported. Without SPWB (an older server, or a full-span view — the
+   server sends none then) nothing is allocated and the eased rows' edges continue the row below, as before.
 5. **No scale stamps** (`wfStamps.ts`) and no tap-to-tune lookup. `displayMap()` is there for when they are added.
 6. **The ring is a fixed 1024 rows.** There is no `wfRingSize`/`wfRingGrow`, because 480 px never needs a deeper ring. The
    ring does not depend on the draw size, so resizing `draw()` keeps the history: it just shows more or fewer rows.
@@ -92,16 +101,27 @@ flag was added. With the flag the port is bit-exact (see Tests).
     motion texels and fan map, and every display frame's uniforms and spectrum trace. It also checks all palettes.
   - Scenarios: a 860→670 kHz drag with lagging tuner rows, ×√2 keys in ×3 then out ×3, a 700→1200 kHz jump, a 9–11 fps
     feed at Default/Smooth/Eco/Native, and the picture scenario.
+  - ★ V12 full-capture layer scenarios (SPWB v2 frames after every 4th frame, made by a TS twin of the server's
+    `vibe_wide_row.h` encoder, including an escape triple): **`wide_glide`** — a 150 kHz view on a 2.4 MHz capture
+    dragged 700 → 1000 kHz (two view widths) with lagging tuner rows; the capture recentres mid-glide (a new picture, no
+    time blend); then the SPWB rows stop and a second glide 1000 → 850 kHz runs past the 4 s staleness. **`wide_zoom`** —
+    ×√2 keys in ×3 and out ×3 (a zoom-in's eased rows are drawn wider than their data: the shrunk path and the soft edge).
+    Besides the ring rows, every SPWB arrival (parse, the floor-match offset, the gap EMA, the detailed median) and every
+    layer row (k, m, fade width, F floor bytes, every peak's cell/index/shape) is compared.
 - `run_render.sh [outDir]` renders the picture scenario twice:
   - with the **app's own `WF_SKSL`**, extracted from `WaterfallView.tsx` and run in CanvasKit (`render_app.ts`);
   - with the **port**, offscreen in Docker linux/arm64 on Mesa llvmpipe (`wf_render.cpp`, EGL surfaceless).
   It also builds and runs the golden test with aarch64 g++, then compares the two renders (`compare_png.ts`).
+  `wide_glide` is rendered the same two ways at 5.5 s (mid-glide), 8.5 s (after the capture recentred) and 16.5 s (the
+  stale second glide), plus `wide_glide_640x600_*_app_nowide.png`: the app's shader on the same history with the SPWB
+  rows ignored — the before picture (the vertical edge streaks).
 
 ### Results (2026-11-06)
 
-**Golden test: bit-exact.** All 8 scenarios and all palettes pass, on macOS clang and on aarch64 g++ (Docker):
+**Golden test: bit-exact.** All 10 scenarios and all palettes pass, on macOS clang and on aarch64 g++ (Docker):
 
-- 0 ring or processed bytes differ (5.2 M bytes compared);
+- 0 ring, processed or layer-floor bytes differ (8.3 M bytes compared), and every layer row matches (1 384 layer rows, 54 430 peaks,
+  57 SPWB arrivals — 2026-11-06, the layer added);
 - the doubles match to a maximum relative error of 0;
 - the spectrum trace matches to |d| = 0;
 - all 47 104 palette bytes are equal.
@@ -119,6 +139,17 @@ Every row is a whole real frame (sample-and-hold), with no stalls and no bursts.
 **CPU on the host.** A data frame takes 0.012 ms at 2048 bins and 0.023 ms at 4096 bins. A display frame takes 0.0012 ms.
 On aarch64 in Docker: 0.023 / 0.028 / 0.0015 ms. The A35 will be several times slower, which is still negligible.
 
+**The full-capture layer's cost** (`wide_glide` / `wide_zoom`, the same replay with and without its SPWB rows):
+
+| | host (M-series) | aarch64 (Docker) |
+|---|---|---|
+| per row placed (`layerWriteRow` every row + `layerFillRow` on eased rows) | +5.2 / +6.7 µs | +7.4 / +9.9 µs |
+| per SPWB row (parse + `wideArrive`), every 4th frame | 1.0–1.2 µs | 2.8–5.5 µs |
+
+At 30–60 rows/s that is under 0.6 ms of CPU a second even if an A35 is 10× slower than this — well under 0.1 % of one
+core. **GPU: nothing.** No extra texture, no extra upload (the layer lands in the 1024-byte ring row that is uploaded
+for that row anyway) and no shader change. RAM: 1024 × (128 + 4 × 160) B + 16 KB ≈ 0.8 MB, allocated at the first SPWB.
+
 **Port vs the app's own `WF_SKSL` (CanvasKit).** Same scenario, same uniforms:
 
 - **1024 px wide** (one texel per column): 0 / 13 / 41 / 85 px out of 614 400 differ by more than one LUT step.
@@ -127,12 +158,13 @@ On aarch64 in Docker: 0.023 / 0.028 / 0.0015 ms. The A35 will be several times s
   - the rest sit almost entirely on every 5th column (x ≡ 2 mod 5). There, 640 px over 1024 bins puts the sample exactly on
     a texel boundary, and two float implementations break that nearest-texel tie either way;
   - the app's own GPU back-ends do the same to each other.
+- **`wide_glide` (the layer live):** 1024 px wide, 0 / 26 / 0 px out of 614 400 differ by more than one LUT step; at
+  640 px the same every-5th-column ties as above (the layer is in the ring bytes, which are identical).
 
 ## Open items
 
-- **Port the full-capture layer** (`wfWide.ts`: `layerWriteRow`/`layerFillRow` and the SPWB parse), so that eased-row
-  edges show the real coarse capture instead of continuing the row below. This is deviation 4: it removes the vertical
-  edge streaks during long drags.
+- **On-device check of the full-capture layer** against a real VibeServer (`&wide=1`; see `pushWide` in
+  `waterfall.h`). Ported and bit-exact against the app's TS; not yet seen live on the R36S.
 - **Scale stamps and tap-to-tune** by a row's own scale (`wfStamps.ts`, `hzOnRow`).
 - **The NATIVE jitter buffer**, and `wfAvSync` if audio latency ever matters on the handheld.
 - **On-device check on the R36S.** It has not been run on the Mali-G31 / Panfrost yet; it is untested beyond llvmpipe.

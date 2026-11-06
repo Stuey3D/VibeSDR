@@ -55,8 +55,59 @@ function toWire(db: Float32Array): Uint8Array {
   return out;
 }
 
+/** ★ V12 a full-capture row as a VibeServer sends it (SPWB v2 — android/app/src/main/cpp/vibe_wide_row.h encode(), in
+ *  TS: the test only needs real-shaped frames, not the server's exact bytes). `db` = the whole capture, low → high. */
+function encodeWide(db: Float32Array, centreHz: number, spanHz: number): Uint8Array {
+  const bins = db.length, F = 128, C = 1024, MAXP = 110, PEAK_DB = 6, PEAK_SIG = 3.5, WIDTH_DB = 12;
+  const toByte = (v: number) => Math.max(1, Math.min(255, Math.round(v + 256)));
+  const fl = new Float64Array(F), sg = new Float64Array(F);
+  for (let f = 0; f < F; f++) {
+    const lo = Math.floor(f * bins / F), hi = Math.floor((f + 1) * bins / F), step = Math.max(1, Math.floor((hi - lo) / 64));
+    const t: number[] = []; for (let i = lo; i < hi; i += step) t.push(db[i]);
+    t.sort((a, b) => a - b);
+    fl[f] = t[t.length >> 1]; sg[f] = Math.max(0, fl[f] - t[Math.floor(t.length * 16 / 100)]);
+  }
+  const sigAt = (bin: number) => sg[Math.max(0, Math.min(F - 1, Math.floor(bin / bins * F)))];
+  const floorAtBin = (bin: number) => { const x = bin / bins * F - 0.5; let i = Math.floor(x), t = x - i;
+    if (i < 0) { i = 0; t = 0; } if (i >= F - 1) { i = F - 2; t = 1; } return fl[i] + (fl[i + 1] - fl[i]) * t; };
+  let pk: { cell: number; ex: number; lvl: number; shape: number }[] = [];
+  const per = bins / C;
+  for (let c = 0; c < C; c++) {
+    const lo = c * per; let bi = lo, mx = db[lo];
+    for (let i = lo + 1; i < lo + per; i++) if (db[i] > mx) { mx = db[i]; bi = i; }
+    const f0 = floorAtBin(bi + 0.5), ex = mx - f0, need = Math.max(PEAK_DB, PEAK_SIG * sigAt(bi + 0.5));
+    if (ex < need) continue;
+    const cut = Math.max(f0 + need, mx - WIDTH_DB);
+    let n = 0, first = -1, last = -1, sum = 0;
+    for (let i = lo; i < lo + per; i++) if (db[i] >= cut) { n++; sum += db[i]; if (first < 0) first = i; last = i; }
+    const centre = (first + last + 1) * 0.5 - lo;
+    const off = Math.max(0, Math.min(15, Math.floor(centre / per * 16))), w16 = Math.max(1, Math.min(16, Math.round(n / per * 16)));
+    pk.push({ cell: c, ex, lvl: toByte(n <= 2 ? mx : 0.5 * (mx + sum / n)), shape: off | ((w16 - 1) << 4) });
+  }
+  if (pk.length > MAXP) pk = pk.sort((a, b) => b.ex - a.ex).slice(0, MAXP).sort((a, b) => a.cell - b.cell);
+  const trip: number[] = []; let prev = -1;
+  for (const p of pk) { let d = p.cell - prev; while (d > 255) { trip.push(255, 0, 0); d -= 255; } trip.push(d, p.lvl, p.shape); prev = p.cell; }
+  const out = Buffer.alloc(32 + 2 * F + trip.length);
+  out.write('SPWB', 0, 'latin1'); out[4] = 2; out[5] = 0;
+  out.writeBigUInt64LE(0n, 6); out.writeBigUInt64LE(BigInt(Math.round(centreHz)), 14); out.writeUInt32LE(Math.round(spanHz), 22);
+  out.writeUInt16LE(F, 26); out.writeUInt16LE(C, 28); out.writeUInt16LE(trip.length / 3, 30);
+  for (let f = 0; f < F; f++) { out[32 + f] = toByte(fl[f]); out[32 + F + f] = Math.min(255, Math.round(sg[f] * 10)); }
+  for (let i = 0; i < trip.length; i++) out[32 + 2 * F + i] = trip[i];
+  return new Uint8Array(out);
+}
+/** The whole capture for a wide row: the band, plus carriers only the capture sees (LF and 2.25 MHz — the last one more
+ *  than 255 cells past the band's top station, so the frame carries an escape triple). */
+function wideDb(centre: number, span: number): Float32Array {
+  const n = 8192, v = bandDb(centre, span, n), hz = span / n, lo = centre - span / 2;
+  for (const [f, lvl] of [[60_000, -60], [198_000, -55], [2_250_000, -58]]) {
+    const c = Math.round((f - lo) / hz);
+    for (let k = -1; k <= 1; k++) if (c + k >= 0 && c + k < n) v[c + k] = Math.max(v[c + k], lvl - (k === 0 ? 0 : 6));
+  }
+  return v;
+}
+
 type Ev = { t: number; k: 'frame'; c: number; span: number; n: number } | { t: number; k: 'view'; c: number; span: number }
-        | { t: number; k: 'touch' } | { t: number; k: 'tick' };
+        | { t: number; k: 'touch' } | { t: number; k: 'tick' } | { t: number; k: 'wide'; c: number; span: number };
 const SCROLL_CODE: Record<WfScroll, number> = { min2: 0, low: 1, sharp: 2, eco: 3, default: 4, smooth: 5 };
 const T0 = 1000, TICK = 1000 / 60;
 
@@ -73,6 +124,13 @@ function run(name: string, cfg: Partial<RefCfg>, evs: Ev[]) {
     out.f64(p.ms.lo); out.f64(p.ms.hi);
     out.bytes(new Uint8Array([b[slot], b[n + slot], b[2 * n + slot], b[3 * n + slot], b[prev], b[n + prev], b[2 * n + prev], b[3 * n + prev]]));
     out.bytes(p.image().subarray(slot * n, slot * n + n));
+    // ★ V12 the full-capture layer row written for this slot (only once a layer exists)
+    const L = p.fan.layer;
+    if (L) {
+      const np = L.pkN[slot], po = slot * L.P;
+      out.u8(76 /*L*/); out.f64(L.k[slot]); out.f64(L.m[slot]); out.f64(L.fadeTx); out.i32(L.F); out.bytes(L.floor.subarray(slot * L.F, slot * L.F + L.F));
+      out.i32(np); for (let i = 0; i < np; i++) { out.i32(L.pkCell[po + i]); out.u8(L.pkIdx[po + i]); out.u8(L.pkShape[po + i]); }
+    }
   };
   let lastTick = 0, rows = 0, ticks = 0;
   for (const e of evs) {
@@ -82,6 +140,11 @@ function run(name: string, cfg: Partial<RefCfg>, evs: Ev[]) {
       P.pushFrameU8(wire, true, e.c, e.span, e.t);
     } else if (e.k === 'view') {
       inp.u8(2); inp.f64(e.t); inp.f64(e.c); inp.f64(e.span); P.setView(e.c, e.span);
+    } else if (e.k === 'wide') {
+      const fr = encodeWide(wideDb(e.c, e.span), e.c, e.span);
+      inp.u8(5); inp.f64(e.t); inp.i32(fr.length); inp.bytes(fr);
+      const ok = P.pushWide(fr, e.t), w = P.wideSt;
+      out.u8(87 /*W*/); out.u8(ok ? 1 : 0); out.f64(w ? w.off : NaN); out.f64(w ? w.gap : NaN); out.f64(P.detP50);
     } else if (e.k === 'touch') {
       inp.u8(3); inp.f64(e.t); P.noteInteraction(e.t);
     } else {
@@ -97,7 +160,8 @@ function run(name: string, cfg: Partial<RefCfg>, evs: Ev[]) {
   inp.u8(0); out.u8(69 /*E*/);
   writeFileSync(join(outDir, `${name}.in.bin`), inp.buf());
   writeFileSync(join(outDir, `${name}.out.bin`), out.buf());
-  console.log(`  ${name}: ${evs.filter(e => e.k === 'frame').length} frames, ${P.frameCount} rows placed, ${ticks} display frames`);
+  const nw = evs.filter(e => e.k === 'wide').length;
+  console.log(`  ${name}: ${evs.filter(e => e.k === 'frame').length} frames${nw ? `, ${nw} SPWB rows` : ''}, ${P.frameCount} rows placed, ${ticks} display frames`);
 }
 const ticksTo = (evs: Ev[], tEnd: number) => { for (let t = T0; t <= tEnd; t += TICK) evs.push({ t, k: 'tick' }); };
 
@@ -158,6 +222,48 @@ for (const scroll of ['default', 'smooth', 'eco', 'sharp'] as WfScroll[]) {
   seed = 505;
   for (let t = T0 + 5; t < end; t += 100) { const tj = t + (rnd() - 0.5) * 16; evs.push({ t: tj, k: 'frame', c: Math.round(viewAt(tj - 150)), span: spanAt(tj - 120), n }); }
   run('picture', { scroll: 'default' }, evs);
+}
+
+// 6. ★ V12 THE FULL-CAPTURE LAYER — WIDE GLIDE: a 150 kHz view on a 2.4 MHz capture; a finger drags 700 → 1000 kHz (TWO
+//    view widths) over 5 s with SPWB rows after every 4th frame; the capture recentres mid-way (a new picture, no time
+//    blend); after a rest the SPWB rows stop, and a second glide 1000 → 850 kHz runs past the 4 s staleness (its last
+//    eased rows get no layer: the edges continue the row below again).
+{
+  const evs: Ev[] = [], span = 150_000, n = 2048, end = T0 + 18000;
+  const a1 = T0 + 3000, b1 = T0 + 8000, a2 = T0 + 13000, b2 = T0 + 17000;
+  const glide = (t: number, a: number, b: number, f0: number, f1: number) => f0 + (f1 - f0) * (0.5 - 0.5 * Math.cos(Math.PI * (t - a) / (b - a)));
+  const viewAt = (t: number) => t < a1 ? 700_000 : t <= b1 ? glide(t, a1, b1, 700_000, 1_000_000) : t < a2 ? 1_000_000
+                              : t <= b2 ? glide(t, a2, b2, 1_000_000, 850_000) : 850_000;
+  const capAt = (t: number) => t < T0 + 6500 ? 1_200_000 : 1_000_000;
+  ticksTo(evs, end);
+  evs.push({ t: T0 - 1, k: 'view', c: 700_000, span });
+  for (const [a, b] of [[a1, b1], [a2, b2]]) for (let t = a; t <= b + TICK; t += TICK) { evs.push({ t, k: 'view', c: Math.round(viewAt(t)), span }); evs.push({ t, k: 'touch' }); }
+  seed = 606;
+  let k = 0;
+  for (let t = T0 + 5; t < end; t += 100) {
+    const tj = t + (rnd() - 0.5) * 16;
+    evs.push({ t: tj, k: 'frame', c: Math.round(viewAt(tj - 150)), span, n });
+    if (++k % 4 === 0 && tj < T0 + 11000) evs.push({ t: tj + 1, k: 'wide', c: capAt(tj), span: 2_400_000 });
+  }
+  run('wide_glide', { scroll: 'default' }, evs);
+}
+// 7. ★ V12 WIDE ZOOM: ×√2 keys in ×3 then out ×3 on the same capture — a zoom-in's eased rows are drawn WIDER than their
+//    data (a > 1, the shrunk path): their edges come from the layer, with the soft edge where the row's edge is on screen.
+{
+  const evs: Ev[] = [], c = 700_000, n = 2048, end = T0 + 12000;
+  ticksTo(evs, end);
+  const presses = [3000, 4000, 5000, 7500, 8500, 9500].map((x) => T0 + x);
+  const spanAt = (t: number) => { let s = 150_000; for (let i = 0; i < presses.length; i++) if (t >= presses[i]) s = i < 3 ? s / Math.SQRT2 : s * Math.SQRT2; return s; };
+  evs.push({ t: T0 - 1, k: 'view', c, span: 150_000 });
+  for (const p of presses) { evs.push({ t: p, k: 'view', c, span: spanAt(p) }); evs.push({ t: p, k: 'touch' }); }
+  seed = 707;
+  let k = 0;
+  for (let t = T0 + 5; t < end; t += 100) {
+    const tj = t + (rnd() - 0.5) * 16;
+    evs.push({ t: tj, k: 'frame', c, span: spanAt(tj - 120), n });
+    if (++k % 4 === 0) evs.push({ t: tj + 1, k: 'wide', c: 1_200_000, span: 2_400_000 });
+  }
+  run('wide_zoom', { scroll: 'default' }, evs);
 }
 
 // ── palettes ──

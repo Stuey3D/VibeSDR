@@ -30,6 +30,8 @@ const d = readFileSync(join(goldenDir, `${name}.in.bin`)); let p = 4;
 const u8 = () => d[p++], f64 = () => { const v = d.readDoubleLE(p); p += 8; return v; }, i32 = () => { const v = d.readInt32LE(p); p += 4; return v; };
 const scroll = (['min2', 'low', 'sharp', 'eco', 'default', 'smooth'] as WfScroll[])[u8()]; const displayHz = f64();
 const P = new RefPipeline({ scroll, displayHz, traceW: W });
+// NOWIDE=1: ignore the scenario's SPWB rows (the same history without the full-capture layer — the before picture)
+const NOWIDE = process.env.NOWIDE === '1';
 let next = 0;
 for (;;) {
   const t = u8();
@@ -37,6 +39,7 @@ for (;;) {
   if (t === 1) { const tt = f64(), c = f64(), s = f64(), n = i32(); const b = new Uint8Array(d.subarray(p, p + n)); p += n; P.pushFrameU8(b, true, c, s, tt); }
   else if (t === 2) { f64(); P.setView(f64(), f64()); }
   else if (t === 3) P.noteInteraction(f64());
+  else if (t === 5) { const tt = f64(), n = i32(); const b = new Uint8Array(d.subarray(p, p + n)); p += n; if (!NOWIDE) P.pushWide(b, tt); }   // ★ V12 SPWB
   else {
     const tt = f64(), gap = f64(); P.tick(tt, gap);
     if (next < snaps.length && tt >= snaps[next]) { render(snaps[next]); next++; }
@@ -59,7 +62,7 @@ function render(tag: number) {
   const surf = CK.MakeSurface(W, H); const paint = new CK.Paint(); paint.setShader(sh);
   surf.getCanvas().drawRect(CK.LTRBRect(0, 0, W, H), paint);
   const px = surf.getCanvas().readPixels(0, 0, { width: W, height: H, colorType: CK.ColorType.RGBA_8888, alphaType: CK.AlphaType.Unpremul, colorSpace: CK.ColorSpace.SRGB });
-  const base = join(outDir, `${name}_${W}x${H}_${tag}_app`);
+  const base = join(outDir, `${name}_${W}x${H}_${tag}_app${NOWIDE ? '_nowide' : ''}`);
   writeFileSync(base + '.png', surf.makeImageSnapshot().encodeToBytes());
   writeFileSync(base + '.rgba', px);
   console.log(`  app render ${base}.png  (uHead ${u.headF}, quant ${u.quant}, motion ${u.moLo}..${u.moHi})`);

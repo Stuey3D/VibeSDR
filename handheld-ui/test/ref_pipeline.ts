@@ -5,14 +5,17 @@
  * app's real TS module: signalProcessor.ts, wfClock.ts, wfRowTarget.ts, wfCombine.ts, wfRowPlace.ts, wfPace.ts.
  * The C++ port composes its ports of those modules the same way (wf_model.cpp); this file is what it is checked against.
  * Deliberately the same simplifications as the port: no A/V hold (wfAvSync — the handheld has no audio playout delay),
- * no full-capture layer (SPWB), no scale stamps, the clock timer fired at its own tick times.
+ * no scale stamps, the clock timer fired at its own tick times. The full-capture layer (SPWB, wfWide.ts) is the app's JS
+ * path: the wide sink (pushWide), the floor match's median in handleFrame, and layerWriteRow + fanRow after placeRow —
+ * with the pipeline's own `now` where WaterfallView reads Date.now().
  */
 import { SignalProcessor, DEFAULT_PROCESSOR_SETTINGS } from '../../src/assets/signalProcessor.ts';
 import { boostActive, boostNote, boostRowRate, boostTaper, BOOST_TAIL_MS, clockArrive, clockIdle, clockNextAt, clockRateUnderCap,
          clockReset, clockRowRate, clockRun, clockSetRate, newBoost, newRowClock } from '../../src/assets/wfClock.ts';
 import { newRowTargetState, rowTargetUnderCap, rowsForArrival, scrollForCap, stepRowTarget, type WfScroll } from '../../src/assets/wfRowTarget.ts';
 import { combineInto, dbPerUnit, newRowCombiner, COMBINE_MAX_FRAMES, type CombFrame } from '../../src/assets/wfCombine.ts';
-import { newFanState, newMotionState, placeRow, takeFanStep, motionImageRows, wfImageBytes } from '../../src/utils/wfRowPlace.ts';
+import { fanRow, newFanState, newMotionState, placeRow, takeFanStep, motionImageRows, wfImageBytes } from '../../src/utils/wfRowPlace.ts';
+import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../../src/utils/wfWide.ts';
 import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, rowPace, rowRate, shownRate, traceLagMs } from '../../src/utils/wfPace.ts';
 
 // The processor reads performance.now(): the harness sets the time each call sees.
@@ -54,6 +57,8 @@ export class RefPipeline {
   pend = { avail: 0, moLo: 1, moHi: 0, k: 1, c: 0 }; pendGen = 0; jsSeen = 0; jsAvail = 0; takenMoLo = 1; takenMoHi = 0;
   traceQ: { at: number; spec: number[]; peak: number[] | null }[] = [];
   specTo: number[] = []; specDisp: number[] = []; peakShown: number[] = []; specAcc = 0; tweenActive = false;
+  // the full-capture layer (WaterfallView wideSt / detP50 / p50Scratch / placedRef; the ring is fan.layer)
+  wideSt: WideState | null = null; detP50 = NaN; p50Scratch = { buf: new Float32Array(0) }; placed = { startHz: NaN, spanHz: 0 };
   onRow?: (p: RefPipeline, slot: number) => void;
   onFrame?: (f: { row: Uint8Array; dbMin: number; dbMax: number }) => void;
 
@@ -88,6 +93,7 @@ export class RefPipeline {
     fakeClock.t = now;
     const frame = this.proc.process(fbins, vC, vBw, interacting);
     this.onFrame?.(frame);
+    if (this.wideSt) this.detP50 = medianOf(fbins, this.p50Scratch);
     const boost = interacting;
     if (this.lastFrameTs > 0 && !boost) this.avgFrameMs = this.avgFrameMs * 0.8 + (now - this.lastFrameTs) * 0.2;
     this.lastFrameTs = now;
@@ -127,7 +133,7 @@ export class RefPipeline {
     const onClock = clocked && rowTarget > 0;
     const rowsNow = onClock ? 0 : rowsForArrival(this.rowCarry, dur, rowTarget);
     this.fan.rowRate = rowTarget > 0 ? rowTarget : (this.avgFrameMs > 0 ? 1000 / this.avgFrameMs : 20);
-    if (rowsNow > 0) this.pushRow(frame.row, rowCentre, rowHzBin);
+    if (rowsNow > 0) this.pushRow(frame.row, rowCentre, rowHzBin, now);
     if (onClock) {
       const id = ++this.clockSeq;
       const slot: CombFrame = { row: new Uint8Array(frame.row), c: rowCentre, h: rowHzBin, k: dbPerUnit(frame.dbMin, frame.dbMax) };
@@ -194,7 +200,7 @@ export class RefPipeline {
     for (let i = 0; i < out.length; i++) {
       if (out[i] > this.clockShown) { combineInto(this.clockComb, fr, this.clockShown, out[i]); this.clockShown = out[i]; }
       const f = fr.get(out[i]);
-      if (f) this.pushRow(f.row, f.c, f.h);
+      if (f) this.pushRow(f.row, f.c, f.h, now);
     }
     if (fr.size > 6) {
       for (const [id] of [...fr]) if (id <= this.clockShown && id !== rc.cur) fr.delete(id);
@@ -208,7 +214,18 @@ export class RefPipeline {
   }
 
   // ── pushRow ──
-  pushRow(srcRow: Uint8Array, rowCenterHz: number, rowHzPerBin: number) {
+  // ── WaterfallView's wide sink (the JS path) ──
+  pushWide(u8: Uint8Array, now: number): boolean {
+    const row = parseWide(u8);
+    if (!row) return false;
+    const st = this.wideSt ?? (this.wideSt = newWideState());
+    wideArrive(st, row, now, this.placed.startHz, this.placed.spanHz, this.detP50);
+    const fan = this.fan, L = fan.layer;
+    if (!L || L.F !== row.floor.length || L.C !== row.cells) fan.layer = newLayerRing(RING_ROWS, row.floor.length, row.cells);
+    return true;
+  }
+
+  pushRow(srcRow: Uint8Array, rowCenterHz: number, rowHzPerBin: number, now: number) {
     const srcN = srcRow.length;
     let row = srcRow, n = srcN;
     if (srcN !== RING_W) {
@@ -229,7 +246,16 @@ export class RefPipeline {
     }
     if (srcN !== RING_W && rowHzPerBin > 0) rowHzPerBin = rowHzPerBin * srcN / RING_W;
     const slot = placeRow(this.ring, RING_ROWS, n, this.frameCount, row, rowCenterHz, rowHzPerBin, this.viewC, this.viewBw,
-                          this.ms, this.fan, RING_ROWS);
+                          this.ms, this.fan, RING_ROWS, this.placed);
+    const layer = this.fan.layer;
+    if (layer) {
+      const w = this.cfg.traceW, placed = this.placed;
+      layer.fadeTx = w > 0 ? Math.max(2, Math.min(24, 6 * RING_W / w)) : 6;
+      const r = this.proc.getRange(), ws = this.wideSt;
+      layerWriteRow(layer, slot, ws, placed.startHz, placed.spanHz, now,
+                    makeToIdx(r.dbMin, r.dbMax, this.proc.getSettings().wfBrightness || 0, ws ? ws.off : 0));
+      fanRow(this.fan, this.ring, n, slot, RING_ROWS);
+    }
     this.frameCount += 1;
     const [k, c] = takeFanStep(this.fan);
     this.pend = { avail: this.frameCount, moLo: this.ms.lo, moHi: this.ms.hi, k, c };

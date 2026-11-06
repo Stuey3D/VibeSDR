@@ -3,6 +3,7 @@
 //
 //   wf::Waterfall w;  w.init();                        // with a GLES 3.0 context current
 //   on each SPEC frame:  w.pushFrame(binsU8, n, /*fftOrder*/true, frameCentreHz, totalBandwidthHz, tSec);
+//   on each SPWB frame:  w.pushWide(frameBytes, len, tSec);   // (V12 full-capture row, `&wide=1` — wf_wide.h)
 //   when the UI tunes/zooms: w.setView(centreHz, spanHz); w.notifyInteraction(tSec);
 //   every display frame:  w.draw(x, y, wW, wH, fbW, fbH, nowSec);  w.drawSpectrum(x, ys, wW, hS, fbW, fbH);
 #pragma once
@@ -27,6 +28,12 @@ class Waterfall {
   void pushFrameDb(const float* db, int n, double centreHz, double spanHz, double tSec) {
     model_.pushFrameDb(db, n, centreHz, spanHz, tSec * 1000);
   }
+  /** ★ V12 a full-capture row: an SPWB v2 binary frame from /ws/user-spectrum (asked with `&wide=1`), the bytes exactly
+   *  as received, its arrival time in seconds (the same clock as pushFrame). It is the layer under the history that the
+   *  edges of an eased row (a tune glide, a zoom-in) are filled from. False = not an SPWB v2 frame (ignored). */
+  bool pushWide(const uint8_t* frame, size_t len, double tSec) { return model_.pushWide(frame, len, tSec * 1000); }
+  /** True for an SPWB frame (by its magic) — test this BEFORE treating a binary frame as SPEC. */
+  static bool isWideFrame(const uint8_t* frame, size_t len) { return wf::isWideFrame(frame, len); }
   /** The view the UI now shows (after a tune or zoom, before the server's frames catch up) — rows are placed against it. */
   void setView(double centreHz, double spanHz) { model_.setView(centreHz, spanHz); }
   /** A tune/zoom input happened now (the gesture mode + the interaction boost run for a short tail after it). */

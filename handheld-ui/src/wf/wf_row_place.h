@@ -8,14 +8,17 @@
 //     the new zoom with a short ease (the fan); every tune step past 2 columns eases over a few rows; edges with no data
 //     continue the row below (never black wedges).
 //
-// Not ported (see README): the full-capture layer (wfWide.ts — SPWB rows; fanRow/fanAfterRow call layerFillRow only
-// when a layer exists) and the JUMP re-map branch (JUMP_KEEPS_HISTORY is true in the app, so that branch never runs).
+// The full-capture layer (wfWide.ts → wf_wide.h): fanRow fills an eased row's texels outside its data from the row's layer
+// row when FanState::layer is set (the model owns the ring; null until the first SPWB, as the app's fan.layer).
+// Not ported (see README): the JUMP re-map branch (JUMP_KEEPS_HISTORY is true in the app, so that branch never runs).
 #pragma once
 #include <cstdint>
 #include <cmath>
 #include <vector>
 
 namespace wf {
+
+struct LayerRing;   // wf_wide.h
 
 // JS Math.round: floor(x + 0.5) semantics (half toward +inf), exact for the edge cases.
 inline double jsRound(double x) { double r = std::floor(x); return (x - r >= 0.5) ? r + 1.0 : r; }
@@ -74,6 +77,7 @@ struct FanState {
   double rowRate = EASE_ROW_RATE;
   double jumpHz = 0;
   std::vector<int32_t> lo_, hi_;   // fanTable scratch
+  LayerRing* layer = nullptr;      // ★ V12 the full-capture layer (wf_wide.h) — not owned; null = none (no SPWB yet)
 };
 FanState newFanState(int rows);
 

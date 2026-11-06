@@ -70,6 +70,8 @@ void WaterfallModel::pushFrameDb(const float* db, int n, double centreHz, double
   const bool interacting = cfg_.smoothTune && now - lastInteractAt_ < SMOOTH_TUNE_TAIL_MS;
   const ProcessedFrame frame = proc_.process(db, n, vC, vBw, interacting, now);
   if (onFrame) onFrame(onRowCtx, frame);
+  // ★ V12 the full-capture layer's floor match (wfWide.ts wideArrive) — only once a server has sent one
+  if (wideSt_) detP50_ = medianOf(db, n, p50Scratch_);
   // 2. frame interval + interaction
   const bool boost = interacting;
   if (lastFrameTs_ > 0 && !boost) avgFrameMs_ = avgFrameMs_ * 0.8 + (now - lastFrameTs_) * 0.2;
@@ -112,7 +114,7 @@ void WaterfallModel::pushFrameDb(const float* db, int n, double centreHz, double
   const bool onClock = clocked && rowTarget > 0;
   const int rowsNow = onClock ? 0 : rowsForArrival(rowCarry_, dur, rowTarget);
   fan_.rowRate = rowTarget > 0 ? rowTarget : (avgFrameMs_ > 0 ? 1000 / avgFrameMs_ : 20);
-  if (rowsNow > 0) pushRow(frame.row, frame.n, rowCentre, rowHzBin);
+  if (rowsNow > 0) pushRow(frame.row, frame.n, rowCentre, rowHzBin, now);
   if (onClock) {
     const long long id = ++clockSeq_;
     CombFrame& slot = clockFrames_[id];
@@ -196,7 +198,7 @@ void WaterfallModel::pumpClock(double now) {
   for (size_t i = 0; i < clockOut_.size(); i++) {
     if (clockOut_[i] > clockShown_) { combineInto(clockComb_, get, clockShown_, clockOut_[i]); clockShown_ = clockOut_[i]; }
     CombFrame* f = get(clockOut_[i]);
-    if (f) pushRow(f->row.data(), (int)f->row.size(), f->c, f->h);
+    if (f) pushRow(f->row.data(), (int)f->row.size(), f->c, f->h, now);
   }
   if (clockFrames_.size() > 6) {
     for (auto it = clockFrames_.begin(); it != clockFrames_.end();) {
@@ -216,7 +218,7 @@ void WaterfallModel::pumpClock(double now) {
 }
 
 // ── pushRow ──
-void WaterfallModel::pushRow(const uint8_t* srcRow, int srcN, double rowCenterHz, double rowHzPerBin) {
+void WaterfallModel::pushRow(const uint8_t* srcRow, int srcN, double rowCenterHz, double rowHzPerBin, double now) {
   const uint8_t* row = srcRow;
   if (srcN != RING_W) {
     uint8_t* dst = rowBuf_.data();
@@ -233,7 +235,18 @@ void WaterfallModel::pushRow(const uint8_t* srcRow, int srcN, double rowCenterHz
     row = dst;
     if (rowHzPerBin > 0) rowHzPerBin = rowHzPerBin * srcN / RING_W;
   }
-  const int slot = placeRow(ring_, RING_ROWS, RING_W, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_, ms_, fan_, RING_ROWS);
+  const int slot = placeRow(ring_, RING_ROWS, RING_W, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_, ms_, fan_, RING_ROWS,
+                            &placedStart_, &placedSpan_);
+  // ★ V12 THE FULL-CAPTURE LAYER: this row's layer row at the same slot, in capture space (wfWide.ts layerWriteRow), then
+  //   a zoom/tune ease's row is drawn again now its layer row exists (fanRow — a no-op for an identity row). Only once a
+  //   server has sent an SPWB (layer_ is null until then). `now` = the app's Date.now() at pushRow.
+  if (layer_) {
+    const double w = traceW_;   // (the app's frameCfg.width — the same width the trace is sampled at)
+    layer_->fadeTx = w > 0 ? std::max(2.0, std::min(24.0, 6.0 * RING_W / w)) : 6;
+    layerWriteRow(*layer_, slot, wideSt_.get(), placedStart_, placedSpan_, now,
+                  makeToIdx(proc_.dbMin(), proc_.dbMax(), proc_.settings().wfBrightness, wideSt_ ? wideSt_->off : 0));
+    fanRow(fan_, ring_.data(), RING_W, slot, RING_ROWS);
+  }
   frameCount_ += 1;
   dirtyRows_.push_back(slot);
   // publishRing → jsPending: the image, its newest row, its motion range, the fans' screen move
@@ -241,6 +254,20 @@ void WaterfallModel::pushRow(const uint8_t* srcRow, int srcN, double rowCenterHz
   pend_.avail = (double)frameCount_; pend_.moLo = ms_.lo; pend_.moHi = ms_.hi; pend_.k = k; pend_.c = c;
   pendGen_++;
   if (onRow) onRow(onRowCtx, *this, slot);
+}
+
+// ── the full-capture row (WaterfallView's wide sink, JS path) ──
+bool WaterfallModel::pushWide(const uint8_t* frame, size_t len, double now) {
+  if (!parseWide(frame, len, wideRow_)) return false;
+  if (!wideSt_) wideSt_.reset(new WideState());
+  wideArrive(*wideSt_, wideRow_, now, placedStart_, placedSpan_, detP50_);
+  const int F = (int)wideRow_.floor.size(), C = wideRow_.cells;
+  // allocated at the FIRST row only (~0.8 MB), and again only if the server's grid ever changed
+  if (!layer_ || layer_->F != F || layer_->C != C) {
+    layer_.reset(new LayerRing(newLayerRing(RING_ROWS, F, C)));
+    fan_.layer = layer_.get();
+  }
+  return true;
 }
 
 // ── one display frame ──

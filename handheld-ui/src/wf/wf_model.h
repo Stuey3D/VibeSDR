@@ -11,9 +11,11 @@
 #include "wf_pace.h"
 #include "wf_row_place.h"
 #include "wf_signal.h"
+#include "wf_wide.h"
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <vector>
 
 namespace wf {
@@ -53,6 +55,15 @@ class WaterfallModel {
   void pushFrameDb(const float* db, int n, double centreHz, double spanHz, double tMs);
   /** One engine SPEC frame: u8 bins (dBFS = u8 − 256, 0 = no data). `fftOrder` = DC first (rotated by N/2 here). */
   void pushFrameU8(const uint8_t* bins, int n, bool fftOrder, double centreHz, double spanHz, double tMs);
+  /** ★ V12 one full-capture row (an SPWB v2 binary frame from /ws/user-spectrum asked with `&wide=1`, the bytes as
+   *  received) arrived at tMs. The layer under the history (wf_wide.h) is allocated at the first one (~0.8 MB). Returns
+   *  false (and changes nothing) if the bytes are not an SPWB v2 frame. */
+  bool pushWide(const uint8_t* frame, size_t len, double tMs);
+  /** Is a full-capture layer live (an SPWB has arrived)? */
+  bool hasWideLayer() const { return (bool)layer_; }
+  const LayerRing* wideLayer() const { return layer_.get(); }     // (the golden test)
+  const WideState* wideState() const { return wideSt_.get(); }
+  double wideDetP50() const { return detP50_; }
   /** One display frame at tMs (gapMs since the last): runs the clock's due ticks, the display driver, the trace tween. */
   void tick(double tMs, double gapMs);
 
@@ -81,7 +92,7 @@ class WaterfallModel {
   void* onRowCtx = nullptr;
 
  private:
-  void pushRow(const uint8_t* src, int srcN, double rowCenterHz, double rowHzPerBin);
+  void pushRow(const uint8_t* src, int srcN, double rowCenterHz, double rowHzPerBin, double now);
   void pumpClock(double now);
   void traceShow(std::vector<double>&& spec, std::vector<double>&& peak, bool hasPeak, double at, bool shrunk);
   void traceRun(double now);
@@ -122,6 +133,13 @@ class WaterfallModel {
   double specAcc_ = 0; bool tweenActive_ = false;
   int traceW_ = 640;
   std::vector<float> dbScratch_;
+  // ★ V12 the full-capture layer (WaterfallView wideSt / detP50 / placedRef; the ring is the app's fan.layer)
+  std::unique_ptr<WideState> wideSt_;
+  std::unique_ptr<LayerRing> layer_;
+  WideRow wideRow_;
+  double detP50_ = NAN;
+  std::vector<float> p50Scratch_;
+  double placedStart_ = NAN, placedSpan_ = 0;
 };
 
 }  // namespace wf

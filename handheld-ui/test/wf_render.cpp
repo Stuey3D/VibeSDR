@@ -111,6 +111,10 @@ int main(int argc, char** argv) {
       A.model().pushFrameU8(&d[p], n, true, c, s, ts); B.model().pushFrameU8(&d[p], n, true, c, s, ts); p += n;
     } else if (t == 2) { f64(); const double c = f64(), s = f64(); A.setView(c, s); B.setView(c, s); }
     else if (t == 3) { const double ts = f64(); A.notifyInteraction(ts / 1000); B.notifyInteraction(ts / 1000); }
+    else if (t == 5) {   // ★ V12 a full-capture row (SPWB), as the main loop will hand it over
+      const double ts = f64(); const int n = i32();
+      A.pushWide(&d[p], (size_t)n, ts / 1000); B.pushWide(&d[p], (size_t)n, ts / 1000); p += n;
+    }
     else {
       const double ts = f64(); f64();
       // every display frame: the waterfall draws (it advances the clock + the pace), as the main loop will

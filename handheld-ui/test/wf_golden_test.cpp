@@ -31,6 +31,7 @@ struct Stats {
   long bytes = 0, byteOff1 = 0, byteOffMore = 0;
   double maxRel = 0, maxTrace = 0;
   long traceVals = 0;
+  long layerRows = 0, layerLive = 0, layerPeaks = 0, wideFrames = 0;
   std::string firstFail;
 };
 
@@ -94,6 +95,22 @@ static void onRow(void*, const WaterfallModel& m, int slot) {
   const uint8_t* em = R.exp.bytes(8);
   if (std::memcmp(mot, em, 8) != 0) R.fail("motion texels (h, g codes)");
   R.bytes("ring row", m.imageBytes() + (size_t)slot * RING_W, R.exp.bytes(RING_W), RING_W);
+  // ★ V12 the full-capture layer row for this slot (the TS writes one record per row once a layer exists)
+  if (const LayerRing* L = m.wideLayer()) {
+    R.expectTag('L');
+    R.num("layer k", L->k[slot], R.exp.f64()); R.num("layer m", L->m[slot], R.exp.f64()); R.num("layer fadeTx", L->fadeTx, R.exp.f64());
+    const int F = R.exp.i32();
+    if (F != L->F) { R.fail("layer F"); return; }
+    R.bytes("layer floor", &L->floor[(size_t)slot * F], R.exp.bytes(F), F);
+    const int np = R.exp.i32();
+    if (np != L->pkN[slot]) R.fail("layer peak count");
+    for (int i = 0; i < np; i++) {
+      const int c = R.exp.i32(); const uint8_t ix = R.exp.u8(), sh = R.exp.u8();
+      R.st.layerPeaks++;
+      if (i < L->pkN[slot]) { const size_t o = (size_t)slot * L->P + i; if (L->pkCell[o] != c || L->pkIdx[o] != ix || L->pkShape[o] != sh) R.fail("layer peak"); }
+    }
+    R.st.layerRows++; if (L->k[slot] > 0) R.st.layerLive++;
+  }
 }
 
 static Scroll scrollOf(int c) {
@@ -119,6 +136,15 @@ static bool runScenario(const std::string& dir, const std::string& name) {
       m.pushFrameU8(in.bytes(n), n, true, c, span, ts);
     } else if (t == 2) { in.f64(); const double c = in.f64(), s = in.f64(); m.setView(c, s); }
     else if (t == 3) { m.noteInteraction(in.f64()); }
+    else if (t == 5) {   // ★ V12 a full-capture row (SPWB)
+      const double ts = in.f64(); const int len = in.i32();
+      const bool ok = m.pushWide(in.bytes(len), (size_t)len, ts);
+      R.expectTag('W'); R.st.wideFrames++;
+      if ((int)ok != R.exp.u8()) R.fail("SPWB parse");
+      const WideState* w = m.wideState();
+      R.num("wide off", w ? w->off : NAN, R.exp.f64()); R.num("wide gap", w ? w->gap : NAN, R.exp.f64());
+      R.num("detP50", m.wideDetP50(), R.exp.f64());
+    }
     else if (t == 4) {
       const double ts = in.f64(), gap = in.f64();
       m.tick(ts, gap);
@@ -148,6 +174,9 @@ static bool runScenario(const std::string& dir, const std::string& name) {
   std::printf("  %-18s %s  records %ld, ring/processed bytes %ld (±1: %ld, >1: %ld), max rel err %.2g, trace max |d| %.2g (%ld values)\n",
               name.c_str(), R.st.fails ? "FAIL" : "ok  ", R.st.records, R.st.bytes, R.st.byteOff1, R.st.byteOffMore, R.st.maxRel,
               R.st.maxTrace, R.st.traceVals);
+  if (R.st.wideFrames)
+    std::printf("      full-capture layer: %ld SPWB rows, %ld layer rows checked (%ld live, %ld peaks)\n", R.st.wideFrames,
+                R.st.layerRows, R.st.layerLive, R.st.layerPeaks);
   if (R.st.fails) std::printf("      %ld mismatches; first: %s\n", R.st.fails, R.st.firstFail.c_str());
   if (name.rfind("irregular", 0) == 0) {
     // the steady part (after 2 s of warm-up): rows per display frame and the row interval
@@ -198,7 +227,7 @@ static void bench(const std::string& dir, const std::string& name) {
   Reader in; if (!in.open(dir + "/" + name + ".in.bin")) return;
   in.bytes(4); WaterfallConfig cfg; cfg.scroll = scrollOf(in.u8()); cfg.displayHz = in.f64();
   WaterfallModel m(cfg); m.setTraceWidth(640);
-  using C = std::chrono::steady_clock; double tf = 0, tt = 0; long nf = 0, nt = 0, binsN = 0;
+  using C = std::chrono::steady_clock; double tf = 0, tt = 0, tw = 0; long nf = 0, nt = 0, nw = 0, binsN = 0;
   std::vector<int> r, mo;
   for (;;) {
     const uint8_t t = in.u8(); if (t == 0) break;
@@ -206,20 +235,55 @@ static void bench(const std::string& dir, const std::string& name) {
                   auto a = C::now(); m.pushFrameU8(b, n, true, c, s, ts); tf += std::chrono::duration<double, std::milli>(C::now() - a).count(); nf++; binsN = n; }
     else if (t == 2) { in.f64(); const double c = in.f64(), s = in.f64(); m.setView(c, s); }
     else if (t == 3) m.noteInteraction(in.f64());
+    else if (t == 5) { const double ts = in.f64(); const int len = in.i32(); const uint8_t* b = in.bytes(len);
+                       auto a = C::now(); m.pushWide(b, (size_t)len, ts); tw += std::chrono::duration<double, std::milli>(C::now() - a).count(); nw++; }
     else { const double ts = in.f64(), gap = in.f64(); auto a = C::now(); m.tick(ts, gap); m.takeDirty(r, mo);
            tt += std::chrono::duration<double, std::milli>(C::now() - a).count(); nt++; }
   }
   std::printf("  cpu %-16s %ld bins: %.3f ms a data frame (processor + clock + rows), %.4f ms a display frame (clock ticks, pace, trace tween)\n",
               name.c_str(), binsN, tf / nf, tt / nt);
+  if (nw) std::printf("  cpu %-16s %.4f ms an SPWB row (parse + arrive)\n", "", tw / nw);
+}
+
+// ★ V12 what the full-capture layer costs: the same scenario replayed with its SPWB rows and without them (20 passes
+// each); the difference over the rows placed is the layer's CPU per row (layerWriteRow on every row + layerFillRow on the
+// eased ones + the SPWB arrivals).
+static double replayMs(const std::string& dir, const std::string& name, bool wide, long& rows, long& eased) {
+  Reader in; if (!in.open(dir + "/" + name + ".in.bin")) return 0;
+  in.bytes(4); WaterfallConfig cfg; cfg.scroll = scrollOf(in.u8()); cfg.displayHz = in.f64();
+  WaterfallModel m(cfg); m.setTraceWidth(640);
+  struct Cnt { long eased = 0; } cnt;
+  m.onRowCtx = &cnt;
+  m.onRow = [](void* c, const WaterfallModel& mm, int slot) { if (!(mm.fan().xfA[slot] == 1 && mm.fan().xfB[slot] == 0)) ((Cnt*)c)->eased++; };
+  std::vector<int> r, mo;
+  using C = std::chrono::steady_clock; const auto a = C::now();
+  for (;;) {
+    const uint8_t t = in.u8(); if (t == 0) break;
+    if (t == 1) { const double ts = in.f64(), c = in.f64(), s = in.f64(); const int n = in.i32(); m.pushFrameU8(in.bytes(n), n, true, c, s, ts); }
+    else if (t == 2) { in.f64(); const double c = in.f64(), s = in.f64(); m.setView(c, s); }
+    else if (t == 3) m.noteInteraction(in.f64());
+    else if (t == 5) { const double ts = in.f64(); const int len = in.i32(); const uint8_t* b = in.bytes(len); if (wide) m.pushWide(b, (size_t)len, ts); }
+    else { const double ts = in.f64(), gap = in.f64(); m.tick(ts, gap); m.takeDirty(r, mo); }
+  }
+  rows = (long)m.frames(); eased = cnt.eased;
+  return std::chrono::duration<double, std::milli>(C::now() - a).count();
+}
+static void benchLayer(const std::string& dir, const std::string& name) {
+  long rows = 0, eased = 0; double on = 0, off = 0;
+  for (int i = 0; i < 20; i++) { off += replayMs(dir, name, false, rows, eased); on += replayMs(dir, name, true, rows, eased); }
+  std::printf("  cpu %-16s full-capture layer: +%.4f ms a row placed (%ld rows, %ld eased), whole scenario %.2f → %.2f ms\n",
+              name.c_str(), (on - off) / 20 / rows, rows, eased, off / 20, on / 20);
 }
 
 int main(int argc, char** argv) {
   const std::string dir = argc > 1 ? argv[1] : "golden";
   bool ok = true;
-  for (const char* s : { "sweep", "zoom", "jump", "irregular_default", "irregular_smooth", "irregular_eco", "irregular_sharp", "picture" })
+  for (const char* s : { "sweep", "zoom", "jump", "irregular_default", "irregular_smooth", "irregular_eco", "irregular_sharp", "picture",
+                         "wide_glide", "wide_zoom" })
     ok = runScenario(dir, s) && ok;
   ok = runPalettes(dir) && ok;
-  for (const char* s : { "sweep", "irregular_smooth" }) bench(dir, s);
+  for (const char* s : { "sweep", "irregular_smooth", "wide_glide", "wide_zoom" }) bench(dir, s);
+  for (const char* s : { "wide_glide", "wide_zoom" }) benchLayer(dir, s);
   std::printf(ok ? "  ALL GOLDEN TESTS PASS\n" : "  GOLDEN TESTS FAILED\n");
   return ok ? 0 : 1;
 }
