@@ -274,8 +274,8 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
     c.g.rect(px0, spec.y, std::max(1.f, px1 - px0), spec.h, rgb(0xffb000, 0.13f));
     c.g.rect(px0, wfr.y, std::max(1.f, px1 - px0), wfr.h, rgb(0xffb000, 0.06f));
     const float vx = xOf(s.vfoHz);
-    c.g.rect(vx - 1, spec.y, 2, spec.h, rgb(0xe02020, 0.9f));
-    c.g.rect(vx - 0.5f, wfr.y, 1, wfr.h, rgb(0xe02020, 0.45f));
+    c.g.rect(vx - 1, spec.y, 2, spec.h, dispNeedle(0.9f));
+    c.g.rect(vx - 0.5f, wfr.y, 1, wfr.h, dispNeedle(0.45f));
     // the radio's name (top right, as the web page) and the station's RDS name (top left)
     const std::string name = s.radioName.empty() ? "VibeSDR" : s.radioName;
     c.tc.draw(c.g, c.f.title, name, spec.r() - 10, spec.y + 6, rgb(0, 0.8f), 2);
@@ -717,7 +717,7 @@ inline void App::drawMenu(Ctx& c, const RadioState& s) {
     c.g.clip(view.x, view.y, view.w, view.h);
     float y = area.y - menuScroll_.y;
     struct Sec { const char* id; const char* title; };
-    const Sec secs[] = {{"hw", "R36S HARDWARE"}, {"sdr", "SDR HARDWARE"}, {"disp", "DISPLAY"}};
+    const Sec secs[] = {{"hw", "R36S HARDWARE"}, {"sdr", "SDR HARDWARE"}, {"disp", "DISPLAY"}, {"pad", "GAME CONTROLLER"}};
     for (auto& sec : secs) {
         const bool openNow = menuOpen_ == sec.id;
         const Rect hr{area.x, y, area.w, 52};
@@ -736,7 +736,7 @@ inline void App::drawMenu(Ctx& c, const RadioState& s) {
         if (openNow) {
             const Rect inner{area.x + 12, y, area.w - 12, 0};
             c.g.rect(area.x + 4, y, 2, 1, th::btnBorder);
-            const float y1 = sec.id[0] == 'h' ? secHardware(c, s, inner, y) : sec.id[0] == 's' ? secSdr(c, s, inner, y) : secDisplay(c, s, inner, y);
+            const float y1 = sec.id[0] == 'h' ? secHardware(c, s, inner, y) : sec.id[0] == 's' ? secSdr(c, s, inner, y) : sec.id[0] == 'p' ? secController(c, s, inner, y) : secDisplay(c, s, inner, y);
             c.g.rect(area.x + 4, y, 2, y1 - y, th::btnBorder);
             y = y1 + 8;
         }
@@ -852,6 +852,7 @@ inline int App::run(int argc, char** argv) {
     std::vector<DeviceEvent> devEvents;
     while (!quit_) {
         pollInput();
+        hwPump(*this);
 
         // the engine
         devEvents.clear();
@@ -970,6 +971,7 @@ inline int App::run(int argc, char** argv) {
         if (nav_.backPressed() && !sheets_.empty()) closeTop();
         nav_.end();
         drawToasts(c);
+        hwDrawPerf(c);
         g_.flush();
 
         if (shot && (int)frame == shotFrame) {

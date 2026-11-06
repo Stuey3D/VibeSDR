@@ -1,0 +1,181 @@
+// hw_state.h — what MENU → R36S HARDWARE (and DISPLAY's backlight) learns from the supervisor's /handheld/* endpoints,
+// fetched on WORKER threads (http.h: never from the draw loop) and handed to the UI thread under one lock.
+// ★ Workers never touch App: they fill HwShared; the UI thread (hwPump / the sections) copies what it needs into App
+//   and turns queued messages into toasts.
+#pragma once
+#include "http.h"
+#include "json.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <ctime>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace hh {
+
+struct HwShared {
+    std::mutex m;
+    // GET /handheld/device
+    bool devKnown = false, hwdOk = true;
+    int brightness = -1, volume = -1, batt = -1; bool charging = false;
+    // GET /handheld/perf
+    bool perfKnown = false;
+    double cpu = -1, tempC = -1, engineCpu = -1; int ramUsed = -1, ramTotal = -1, minutesLeft = -1;
+    // GET /handheld/card
+    std::string card = "—";
+    // GET /handheld/location
+    bool locKnown = false, locSet = false; std::string locator, lat, lon;
+    // in flight (a button shows WORKING…)
+    bool diagBusy = false, importBusy = false, exportBusy = false;
+    // toasts for the UI thread
+    std::deque<std::string> toasts;
+};
+inline HwShared& hwShared() { static HwShared s; return s; }
+inline void hwToast(const std::string& t) { HwShared& h = hwShared(); std::lock_guard<std::mutex> lk(h.m); h.toasts.push_back(t); }
+inline double hwNow() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
+/** Run `fn` on a worker thread (the engine's port captured). */
+template <class F> inline void hwAsync(F fn) { std::thread(std::move(fn)).detach(); }
+
+inline void hwParseLocation(const Json& j) {
+    HwShared& h = hwShared();
+    std::lock_guard<std::mutex> lk(h.m);
+    h.locKnown = true; h.locSet = j["set"].boolean();
+    h.locator = j["locator"].str();
+    // lat / lon arrive as strings (the supervisor's own formatting) — accept numbers too
+    auto s = [](const Json& v) { if (v.kind == Json::Str) return v.s; if (v.kind == Json::Num) { char b[32]; std::snprintf(b, sizeof b, "%g", v.n); return std::string(b); } return std::string(); };
+    h.lat = s(j["lat"]); h.lon = s(j["lon"]);
+}
+
+/** refreshDeviceRows (handheld.ts): /handheld/device, /card, /perf, /location — every time a section opens. */
+inline void hwRefresh(int port) {
+    hwAsync([port] {
+        const HttpResult d = httpRequest(port, "GET", "/handheld/device", "", 4);
+        {
+            HwShared& h = hwShared();
+            std::lock_guard<std::mutex> lk(h.m);
+            if (d.status == 200) {
+                const Json st = Json::parse(d.body)["state"];
+                h.devKnown = true;
+                h.hwdOk = !(st.has("ok") && !st["ok"].boolean(true));
+                if (st["brightness"].kind == Json::Num) h.brightness = (int)st["brightness"].n;
+                if (st["volume"].kind == Json::Num) h.volume = (int)st["volume"].n;
+                if (st["battery"]["pct"].kind == Json::Num) { h.batt = (int)st["battery"]["pct"].n; h.charging = st["battery"]["charging"].boolean(); }
+                else h.batt = -1;
+            }
+        }
+        const HttpResult c = httpRequest(port, "GET", "/handheld/card", "", 4);
+        {
+            HwShared& h = hwShared();
+            std::lock_guard<std::mutex> lk(h.m);
+            if (c.status == 200) {
+                const Json j = Json::parse(c.body);
+                if (j["present"].boolean()) {
+                    char b[80];
+                    std::snprintf(b, sizeof b, "%.1f GB free of %.1f GB", j["freeBytes"].num() / 1073741824.0, j["totalBytes"].num() / 1073741824.0);
+                    h.card = b;
+                } else h.card = "no card";
+            } else h.card = "—";
+        }
+        const HttpResult p = httpRequest(port, "GET", "/handheld/perf", "", 4);
+        if (p.status == 200) {
+            const Json j = Json::parse(p.body);
+            HwShared& h = hwShared();
+            std::lock_guard<std::mutex> lk(h.m);
+            h.perfKnown = true;
+            h.cpu = j["cpu"].num(-1); h.tempC = j["tempC"].num(-1); h.engineCpu = j["engineCpu"].num(-1);
+            h.ramUsed = (int)j["ramUsedMb"].num(-1); h.ramTotal = (int)j["ramTotalMb"].num(-1);
+            h.minutesLeft = (int)j["battery"]["minutesLeft"].num(-1);
+        }
+        const HttpResult l = httpRequest(port, "GET", "/handheld/location", "", 4);
+        if (l.status == 200) hwParseLocation(Json::parse(l.body));
+    });
+}
+
+/** /handheld/perf alone (the PERFORMANCE overlay, once a second). */
+inline void hwRefreshPerf(int port) {
+    hwAsync([port] {
+        const HttpResult p = httpRequest(port, "GET", "/handheld/perf", "", 3);
+        if (p.status != 200) return;
+        const Json j = Json::parse(p.body);
+        HwShared& h = hwShared();
+        std::lock_guard<std::mutex> lk(h.m);
+        h.perfKnown = true;
+        h.cpu = j["cpu"].num(-1); h.tempC = j["tempC"].num(-1); h.engineCpu = j["engineCpu"].num(-1);
+        h.ramUsed = (int)j["ramUsedMb"].num(-1); h.ramTotal = (int)j["ramTotalMb"].num(-1);
+        h.minutesLeft = (int)j["battery"]["minutesLeft"].num(-1);
+        if (j["battery"]["pct"].kind == Json::Num) { h.batt = (int)j["battery"]["pct"].n; h.charging = j["battery"]["charging"].boolean(); }
+    });
+}
+
+/** "2026-11-06 21:11:18.0" from UTC milliseconds. */
+inline std::string hwUtcText(long long ms, bool tenths = true) {
+    const std::time_t tt = (std::time_t)(ms / 1000);
+    std::tm u{}; gmtime_r(&tt, &u);
+    char b[48];
+    if (tenths) std::snprintf(b, sizeof b, "%04d-%02d-%02d %02d:%02d:%02d.%d", u.tm_year + 1900, u.tm_mon + 1, u.tm_mday, u.tm_hour, u.tm_min, u.tm_sec, (int)((ms % 1000) / 100));
+    else std::snprintf(b, sizeof b, "%04d-%02d-%02d %02d:%02d:%02d", u.tm_year + 1900, u.tm_mon + 1, u.tm_mday, u.tm_hour, u.tm_min, u.tm_sec);
+    return b;
+}
+inline long long hwUtcMsNow() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+/** setClock (handheld.ts): POST /handheld/clock, the answer toasted. */
+inline void hwSetClock(int port, const std::string& body, const std::string& what) {
+    hwAsync([port, body, what] {
+        const HttpResult r = httpRequest(port, "POST", "/handheld/clock", body, 5);
+        const Json j = Json::parse(r.body);
+        if (r.status == 0) hwToast("The clock was not set — the engine did not answer");
+        else if (j["ok"].boolean()) hwToast("Clock set " + what + " · " + hwUtcText((long long)j["utcMs"].num()) + " UTC");
+        else hwToast("The clock was not set" + (j["error"].str().empty() ? std::string() : " — " + j["error"].str()));
+    });
+}
+
+/** postLocation (handheld.ts): the ONE way a location is set — typed or cleared. */
+inline void hwPostLocation(int port, const std::string& body) {
+    hwAsync([port, body] {
+        const HttpResult r = httpRequest(port, "POST", "/handheld/location", body, 5);
+        const Json j = Json::parse(r.body);
+        if (r.status == 0) { hwToast("Location not set — the engine did not answer"); return; }
+        if (r.status != 200) { hwToast("Location not set" + (j["error"].str().empty() ? std::string() : " — " + j["error"].str())); return; }
+        hwParseLocation(j);
+        if (j["set"].boolean()) hwToast("Location set · " + (j["locator"].str().empty() ? j["lat"].str() + ", " + j["lon"].str() : j["locator"].str()));
+        else hwToast("Location cleared");
+    });
+}
+
+// ── the clock keys' evidence (fed by whoever reads the decoder socket — none yet in the native UI) ─────────────────────
+struct HwTimeSync { std::string station; double utcMs = 0, rxDelayMs = 0, hostMs = 0; double at = 0; };
+inline HwTimeSync& hwLastSync() { static HwTimeSync s; return s; }
+inline std::deque<std::pair<double, double>>& hwFt8Dts() { static std::deque<std::pair<double, double>> d; return d; }   // (dt, at)
+/** A corroborated time-station minute (main.ts onTimeSync → handheld.ts noteTimeSync). UI thread. */
+inline void hwNoteTimeSync(const std::string& station, double utcMs, double rxDelayMs, double hostMs) {
+    hwLastSync() = {station, utcMs, rxDelayMs, hostMs, hwNow()};
+}
+/** An FT8 spot's DT (handheld.ts noteSpot). UI thread. */
+inline void hwNoteFt8Dt(double dt) {
+    auto& d = hwFt8Dts();
+    d.push_back({dt, hwNow()});
+    while (d.size() > 200) d.pop_front();
+}
+/** ft8Median: ≥ 3 decodes in 2 min with |dt| < 5 s. */
+inline bool hwFt8Median(double& dt, int& n) {
+    std::vector<double> v;
+    const double now = hwNow();
+    for (auto& x : hwFt8Dts()) if (now - x.second < 120 && std::fabs(x.first) < 5) v.push_back(x.first);
+    if (v.size() < 3) return false;
+    std::sort(v.begin(), v.end());
+    const size_t k = v.size();
+    dt = k % 2 ? v[(k - 1) / 2] : (v[k / 2 - 1] + v[k / 2]) / 2;
+    n = (int)k;
+    return true;
+}
+
+}  // namespace hh

@@ -108,6 +108,9 @@ struct KbRequest {
     std::function<std::string(const kb::KbState&)> commit;  // ↵: act; return a refusal to keep the keyboard open
 };
 
+class App;
+inline void dispApply(App& a);
+
 // ★ Everything is public: the menu's parts (sec_*.h) are App members in their own files, and read its state directly.
 class App {
 public:
@@ -179,6 +182,7 @@ public:
         wfp_.setContrast(set_.contrast);
         wfp_.setSharpness(set_.sharpness);
         wfp_.setBrightness(set_.wfBrightness);
+        dispApply(*this);   // DISPLAY's own look settings + the custom colour map (disp_settings.h)
     }
     void press(Btn b);
     void pollInput();
@@ -206,6 +210,7 @@ public:
     float secHardware(Ctx& c, const RadioState& s, Rect area, float y);
     float secSdr(Ctx& c, const RadioState& s, Rect area, float y);
     float secDisplay(Ctx& c, const RadioState& s, Rect area, float y);
+    float secController(Ctx& c, const RadioState& s, Rect area, float y);
 };
 
 // the AUDIO sheet's per-frame work (sec_audio.h): auto squelch, the recording tap, re-sends on reconnect
@@ -216,8 +221,10 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 
 }  // namespace hh
 
+#include "hw_pump.h"
 #include "app_impl.h"
 #include "sec_audio.h"
 #include "sec_display.h"
 #include "sec_hardware.h"
 #include "sec_sdr.h"
+#include "sec_controller.h"
