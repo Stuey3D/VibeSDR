@@ -432,7 +432,9 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     const float unitW = (float)c.tc.width(c.f.unit, "MHz");
     const float fMainW2 = set_.freqUnit == 2 ? 0.f : (float)c.tc.widthTab(c.f.freq, "88888888");
     const float boxW = (set_.freqUnit == 2 ? fMainW + 6 + fFineW : fMainW2) + 6 + unitW + 24;
-    const float modeW = std::max(84.f, (float)c.tc.width(c.f.btn, "ECSS-U") + 24);
+    // ★ + room for the STEREO badge (#mStereo), reserved always so nothing moves when the pilot comes and goes
+    const float stW = 30;
+    const float modeW = std::max(84.f, (float)c.tc.width(c.f.btn, "ECSS-U") + 24) + stW;
     const float rdW = std::max(118.f, (float)c.tc.width(c.f.small, "SNR 99 dB") + 22);
     const float gap = 10, total = boxW + gap + modeW + gap + rdW;
     float x = pill.cx() - total / 2;
@@ -461,7 +463,14 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     const Nav::Hit hm = c.nav.item("mode", mb);
     c.g.rrect(mb.x, mb.y, mb.w, mb.h, 7, rgb(0, 0.62f));
     c.g.rframe(mb.x, mb.y, mb.w, mb.h, 7, 1, rgb(0xffffff, 0.38f));
-    textIn(c, c.f.btn, mode, mb, th::white);
+    textIn(c, c.f.btn, mode, {mb.x, mb.y, mb.w - stW, mb.h}, th::white);
+    // ★★ THE STEREO BADGE (web syncStereoLight: the RDS/pilot `stereo` flag) — two overlapping rings, white like the
+    //    mode, drawn only while the pilot is locked; its absence on a weak station is information
+    if (live && s.mode == "wfm" && s.rdsStereo) {   // (the web clears it on a mode change)
+        const float cx = mb.r() - stW / 2 - 6, cy = mb.cy();
+        c.g.circle(cx - 5, cy, 7, 1.6f, th::white);
+        c.g.circle(cx + 5, cy, 7, 1.6f, th::white);
+    }
     if (hm.focused) focusRing(c, mb, 7);
     if (hm.pressed) open(S_MODE);
     x += modeW + gap;
