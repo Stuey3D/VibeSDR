@@ -22,10 +22,10 @@ Environment=XDG_CACHE_HOME=/run/vibe-kiosk/cache
 #    lines. The first card (2026-11-06) ran WPEWebProcess at 177 % CPU against day one's 54 % on Panfrost.
 Environment=EGL_LOG_LEVEL=info
 Environment=LIBGL_DEBUG=verbose
-# ★★★ PAINT ON THE GPU. WPE 2.46–2.48 paints pages with Skia ON THE CPU BY DEFAULT ("GPU usage for rendering is not yet
-#     the default in the WPE port … set WEBKIT_SKIA_ENABLE_CPU_RENDERING=0" — the 2.48 release notes). The first cards
-#     (2026-11-06): WPEWebProcess 177–186 %, its busy threads SkiaCPUWorker, the receiver at 4 fps.
-Environment=WEBKIT_SKIA_ENABLE_CPU_RENDERING=0
+# ★★ SKIA PAINTS ON THE CPU (WPE 2.48's default) — MEASURED BOTH WAYS. handheld6 set WEBKIT_SKIA_ENABLE_CPU_RENDERING=0
+#    (GPU painting, SkiaGPUWorker): WPEWebProcess the same 186 %, the whole device the same 92 %, and the screen slower
+#    by eye (Stuart). The G31 here has ONE shader core. The CPU goes on the page's AUDIO path (AudioWorklet, the decode
+#    Worker, GStreamer's queues) and its main thread — not on painting.
 # ★ GStreamer's warnings and errors in the journal: the browser's audio ran, but the ALSA device stayed "closed".
 Environment=GST_DEBUG=2
 Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1

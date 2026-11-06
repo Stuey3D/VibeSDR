@@ -96,6 +96,7 @@ dfs "cat /etc/shadow" | grep -E '^root:' | cut -d: -f2 | grep -qx '\*' || fail "
 dfs "cat /etc/shadow" | awk -F: '$2 !~ /^[*!]/ {print $1}' | grep -q . && fail "an account has a password in the image"
 dfs "cat /etc/udev/rules.d/70-vibe-r36s-gamepad.rules" | grep -q 'ENV{ID_INPUT_TABLET_PAD}=""' || fail "gamepad udev rule"
 dfs "cat /etc/modprobe.d/vibe-r36s-gpu.conf" | grep -q '^blacklist mali_kbase' || fail "mali_kbase not blacklisted"
+dfs "cat /etc/asound.conf" | grep -q "type dmix" || fail "/etc/asound.conf: the default ALSA device does not mix (two sinks → busy)"
 dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q -- '--gamepad=manette' || fail "Cog without the gamepad (the A press starts the audio)"
 dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q '^Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1$' \
   || fail "Cog's URL lacks ?handheld=1 (the page boots as a web client: auth probe 503)"
