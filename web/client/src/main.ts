@@ -16781,6 +16781,10 @@ function recBufCheck() {
 }
 
 function initRecorder() {
+  // ★★ V12 R36S: OFF by default on the handheld — STORED as Off, so the recorder's own buttons show what is true. The
+  //    buffer taps the audio ALL the time, and in speaker mode that tap is the only audio the page handles: ~45 % of an
+  //    A35 core (the Worker + the network process, handheld8's log) for 30 s of pre-roll. Switch it on and it is kept.
+  if (isHandheld() && prefs().recbuf === undefined) savePref('recbuf', '0');
   recBufSec = parseRecordBufferSeconds(String(prefs().recbuf ?? ''));
   segment('recBufSeg', 'rb', (v) => { recBufSec = parseRecordBufferSeconds(String(v)); applyRecBuf(); }, 'recbuf');
   applyRecBuf();

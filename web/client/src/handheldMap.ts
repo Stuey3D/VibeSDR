@@ -19,6 +19,7 @@
 import { loadLeafletInto } from './leafletAsset';
 import { loadVibemapSource } from './chunkCache';
 import { setPadCapture, type PadCaptureAction } from './gamepad';
+import { padFace } from './padFace';
 
 // ── Maidenhead ──────────────────────────────────────────────────────────────────────────────────────────────────────
 /** The 6-character locator of a point ("IO92nh": field, square, subsquare — the subsquare in lower case, as written). */
@@ -106,7 +107,8 @@ export function openMapPick(o: MapPickOptions): void {
   root.innerHTML = '<div id="hhMapPickMap"></div>'
     + '<div class="xh"><i class="h"></i><i class="h2"></i><i class="v"></i><i class="v2"></i><b></b></div>'
     + '<div id="hhMapPickLoc"></div><div id="hhMapPickNote">Loading the map…</div>'
-    + '<div id="hhMapPickBar"><span>D-pad / stick move · L / R zoom · B set · A cancel</span>'
+    // ★ Switch-style face glyphs (padFace.ts): bottom = set, right = cancel, whatever the letters on this pad
+    + `<div id="hhMapPickBar"><span>D-pad / stick move · L / R zoom · ${padFace('bottom', 'bottom button')} set · ${padFace('right', 'right button')} cancel</span>`
     + '<button type="button" id="hhMapPickSet">SET HERE</button><button type="button" id="hhMapPickCancel">CANCEL</button></div>';
   document.body.appendChild(root);
   const host = root.querySelector('#hhMapPickMap') as HTMLDivElement;
@@ -195,7 +197,7 @@ export function openMapPick(o: MapPickOptions): void {
 
   void (async () => {
     const w = window as any;
-    if (!await loadLeafletInto(document)) { if (!closed) note.textContent = 'The map could not be loaded — A to go back.'; return; }
+    if (!await loadLeafletInto(document)) { if (!closed) note.innerHTML = `The map could not be loaded — ${padFace('right', 'right button')} to go back.`; return; }
     if (closed) return;
     try {
       if (!w.VibeMap) { const { VIBEMAP_JS } = await loadVibemapSource(); if (closed) return; if (!w.VibeMap) runSource(VIBEMAP_JS); }
@@ -212,5 +214,5 @@ export function openMapPick(o: MapPickOptions): void {
     // ★ A finger or a mouse may move it too (desktop testing): the readout follows any move, not only ours
     map.on('move zoomend', fromMap);
     fromMap();
-  })().catch((e) => { console.error('[map pick] the map did not load', e); if (!closed) note.textContent = 'The map did not load — A to go back.'; });
+  })().catch((e) => { console.error('[map pick] the map did not load', e); if (!closed) note.innerHTML = `The map did not load — ${padFace('right', 'right button')} to go back.`; });
 }

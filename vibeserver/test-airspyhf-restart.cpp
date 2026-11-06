@@ -65,6 +65,7 @@ int airspyhf_get_samplerates(airspyhf_device_t*, uint32_t* buf, const uint32_t l
     buf[0] = 912000; return AIRSPYHF_SUCCESS;
 }
 int airspyhf_set_lib_dsp(airspyhf_device_t*, const uint8_t) { return AIRSPYHF_SUCCESS; }
+int airspyhf_iq_balancer_configure(airspyhf_device_t*, int, int, int, int) { return AIRSPYHF_SUCCESS; }
 int airspyhf_set_samplerate(airspyhf_device_t* d, uint32_t r) {
     note("set_samplerate " + std::to_string(d->id) + " " + std::to_string(r) + (d->streaming ? " LIVE" : ""));
     return AIRSPYHF_SUCCESS;
