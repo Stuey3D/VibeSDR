@@ -185,6 +185,7 @@ public:
     void updateSignal(const uint8_t* bins, int n, double centreHz, double spanHz);
 
     // ── drawing ──
+    void drawBands(Ctx& c, const RadioState& s, Rect r);
     void drawScale(Ctx& c, const RadioState& s, Rect r);
     void drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wf);
     void drawDeck(Ctx& c, const RadioState& s, Rect r);

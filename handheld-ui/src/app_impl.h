@@ -5,8 +5,9 @@ namespace hh {
 
 // ── layout (the web handheld page at 640×480, a little larger: no tune / zoom row) ─────────────────────────────────────
 namespace lay {
-constexpr float scaleH = 24;                        // the frequency scale
-constexpr float specY = 24, specH = 120;            // the spectrum
+constexpr float bandsH = 18;                        // the band plan bar (the web's #bands, 16 px)
+constexpr float scaleY = 18, scaleH = 22;           // the frequency scale
+constexpr float specY = 40, specH = 112;            // the spectrum
 constexpr float wfY = specY + specH;                // the waterfall runs to the foot, behind the island
 constexpr float islandX = 8, islandW = 624, islandY = 314, islandH = 160;
 constexpr float pillX = 18, pillY = 324, pillW = 604, pillH = 58;
@@ -215,6 +216,41 @@ inline void App::drawScale(Ctx& c, const RadioState& s, Rect r) {
         const int tw = c.tc.width(c.f.small, b);
         const float tx = std::max(r.x + 2 + tw / 2.f, std::min(r.r() - 2 - tw / 2.f, x));
         c.tc.draw(c.g, c.f.small, b, tx, r.y + 2, rgb(0xffb43c, 0.9f), 1);
+    }
+}
+
+/** The band plan bar (web main.ts drawBands, the app's BAND_COLS): widest first so a narrower band sits on top; the
+ *  full name when it fits, else the short label, clipped to its own segment. Region-scoped. */
+inline void App::drawBands(Ctx& c, const RadioState& s, Rect r) {
+    c.g.rect(r.x, r.y, r.w, r.h, rgb(0));
+    if (s.spanHz <= 0) return;
+    static std::vector<int> order;
+    if (order.empty()) {
+        for (int i = 0; i < kBandPlanN; i++) order.push_back(i);
+        std::stable_sort(order.begin(), order.end(), [](int a, int b) { return (kBandPlan[a].hi - kBandPlan[a].lo) > (kBandPlan[b].hi - kBandPlan[b].lo); });
+    }
+    const double lo = s.viewCentreHz - s.spanHz / 2, hi = lo + s.spanHz;
+    const int reg = region();
+    for (int i : order) {
+        const BandDef& b = kBandPlan[i];
+        if (b.hi < lo || b.lo > hi) continue;
+        if (b.regions && !(b.regions & (1 << reg))) continue;
+        const float x0 = std::max(r.x, r.x + (float)((b.lo - lo) / s.spanHz) * r.w), x1 = std::min(r.r(), r.x + (float)((b.hi - lo) / s.spanHz) * r.w);
+        if (x1 - x0 < 1) continue;
+        const bool cb = std::strstr(b.name, "CB") != nullptr;
+        const Rgba col = cb ? rgb(0xff7700, 0.92f) : b.type == 0 ? rgb(0xcf0000, 0.92f) : b.type == 1 ? rgb(0x0900ff, 0.92f) : rgb(0x07bd00, 0.92f);
+        c.g.rect(x0, r.y, x1 - x0, r.h, col);
+        const std::string full = b.name, shortL = *b.label ? b.label : b.name;
+        const int wf = c.tc.width(c.f.tiny, full), ws = c.tc.width(c.f.tiny, shortL);
+        std::string label; int tw = 0;
+        if (x1 - x0 > wf + 8) { label = full; tw = wf; } else if (x1 - x0 > ws + 8) { label = shortL; tw = ws; }
+        if (!label.empty()) {
+            c.g.clip(x0, r.y, x1 - x0, r.h);
+            const float ty = r.cy() - c.f.tiny.lineHeight() / 2.f;
+            c.tc.draw(c.g, c.f.tiny, label, (x0 + x1) / 2 - tw / 2.f + 1, ty + 1, rgb(0, 0.55f));
+            c.tc.draw(c.g, c.f.tiny, label, (x0 + x1) / 2 - tw / 2.f, ty, rgb(0xffffff, 0.95f));
+            c.g.unclip();
+        }
     }
 }
 
@@ -757,7 +793,7 @@ inline int App::run(int argc, char** argv) {
     g_.init(W, H);
     // ★★ ATKINSON HYPERLEGIBLE EVERYWHERE (Stuart, 2026-11-06) — the Braille Institute's face, made for low-vision reading
     const std::string R = fontPath("AtkinsonHyperlegible-Regular.ttf"), B = fontPath("AtkinsonHyperlegible-Bold.ttf");
-    f_.small.load(R, 16); f_.body.load(R, 19); f_.bodyB.load(B, 19); f_.btn.load(B, 21); f_.title.load(B, 22);
+    f_.tiny.load(B, 13); f_.small.load(R, 16); f_.body.load(R, 19); f_.bodyB.load(B, 19); f_.btn.load(B, 21); f_.title.load(B, 22);
     f_.big.load(B, 34); f_.freq.load(B, 38); f_.freqFine.load(B, 22); f_.unit.load(R, 18);
 
     set_.load();
@@ -887,7 +923,8 @@ inline int App::run(int argc, char** argv) {
             wfp_.draw(0, (int)wfr.y, W, (int)wfr.h, W, H, t);
             wfp_.drawSpectrum(0, (int)spec.y, W, (int)spec.h, W, H);
             glEnable(GL_BLEND);
-            drawScale(c, s, {0, 0, (float)W, lay::scaleH});
+            drawBands(c, s, {0, 0, (float)W, lay::bandsH});
+            drawScale(c, s, {0, lay::scaleY, (float)W, lay::scaleH});
             drawOverlays(c, s, spec, wfr);
             drawDeck(c, s, {lay::islandX, lay::islandY, lay::islandW, lay::islandH});
         }

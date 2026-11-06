@@ -48,7 +48,7 @@ inline const Rgba shade     = rgb(0x000000, 0.55f);
 }  // namespace th
 
 struct Fonts {
-    Font small, body, bodyB, btn, title, big, freq, freqFine, unit;   // Atkinson Hyperlegible
+    Font tiny, small, body, bodyB, btn, title, big, freq, freqFine, unit;   // Atkinson Hyperlegible
 };
 
 struct Rect {
