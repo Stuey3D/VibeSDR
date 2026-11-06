@@ -53,5 +53,10 @@ libxcb-xfixes0
 libdrm2
 fonts-dejavu-core
 
+# the native receiver UI (vibe-hhui, built from handheld-ui/): SDL2 on KMSDRM + OpenGL ES 3 (Mesa, above), SDL_ttf for text
+libsdl2-2.0-0
+libsdl2-ttf-2.0-0
+libgles2
+
 # ★★★ NO SSH, NO NETWORK SERVICES (Stuart 2026-11-05: "we don't need SSH"). Nothing on the card listens on any
 #     port but the engine on 127.0.0.1; debugging is the card's "Diagnostic logs/" export.

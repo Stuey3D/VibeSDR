@@ -69,6 +69,8 @@ e2fsck -fn "$T/root.ext4" >/dev/null 2>&1 || fail "root filesystem has errors"
 for f in /usr/lib/vibesdr-r36s/vibe-hwd /usr/lib/vibesdr-r36s/vibe-splash /usr/lib/vibesdr-r36s/vibe-card \
          /usr/lib/vibesdr-r36s/vibe-bootkeys /usr/lib/vibesdr-r36s/vibe-clock /usr/lib/vibesdr-r36s/overlay-init \
          /usr/lib/vibesdr-r36s/vibe-debuglog /usr/share/vibesdr-r36s/splash.bgrx.z /usr/share/vibesdr-r36s/splash-font.bin /usr/bin/cog /usr/bin/vibeserver \
+         /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /usr/lib/aarch64-linux-gnu/libSDL2_ttf-2.0.so.0 /usr/lib/vibesdr-r36s/vibe-hhui /usr/share/vibesdr-r36s/fonts/JetBrainsMono-Bold.ttf /usr/share/vibesdr-r36s/fonts/JetBrainsMono-Regular.ttf \
+         /usr/share/vibesdr-r36s/fonts/DSEG14Classic-BoldItalic.ttf /usr/share/vibesdr-r36s/fonts/OFL-JetBrainsMono.txt /usr/share/vibesdr-r36s/fonts/DSEG-LICENSE.txt \
          /usr/lib/modules/7.1.2/kernel/drivers/gpu/drm/panfrost/panfrost.ko /usr/lib/modules/7.1.2/modules.dep.bin \
          /etc/udev/rules.d/70-vibe-r36s-gamepad.rules /etc/modprobe.d/vibe-r36s-gpu.conf /usr/share/doc/vibesdr-r36s/SOURCES \
          /media/root-ro /media/root-rw /media/VIBESDR /var/lib/vibe-state /usr/lib/clock-epoch; do
@@ -76,7 +78,7 @@ for f in /usr/lib/vibesdr-r36s/vibe-hwd /usr/lib/vibesdr-r36s/vibe-splash /usr/l
 done
 exists /usr/lib/vibeserver/cloudflared && fail "cloudflared is on the card"
 WANTS=/etc/systemd/system/multi-user.target.wants
-for u in vibe-hwd vibe-bootkeys vibe-card vibeserver-handheld vibe-kiosk; do
+for u in vibe-hwd vibe-bootkeys vibe-card vibeserver-handheld vibe-kiosk vibe-hhui; do
   exists "$WANTS/$u.service" || fail "$u.service is not enabled"
 done
 exists /etc/systemd/system/sysinit.target.wants/vibe-splash.service || fail "vibe-splash is not enabled"
@@ -97,6 +99,9 @@ dfs "cat /etc/shadow" | awk -F: '$2 !~ /^[*!]/ {print $1}' | grep -q . && fail "
 dfs "cat /etc/udev/rules.d/70-vibe-r36s-gamepad.rules" | grep -q 'ENV{ID_INPUT_TABLET_PAD}=""' || fail "gamepad udev rule"
 dfs "cat /etc/modprobe.d/vibe-r36s-gpu.conf" | grep -q '^blacklist mali_kbase' || fail "mali_kbase not blacklisted"
 dfs "cat /etc/asound.conf" | grep -q "type dmix" || fail "/etc/asound.conf: the default ALSA device does not mix (two sinks → busy)"
+# ★★ the native UI is the default; the browser kiosk runs only with vibe.browser on the command line — never both
+dfs "cat /usr/lib/systemd/system/vibe-hhui.service" | grep -q '^ConditionKernelCommandLine=!vibe.browser$' || fail "vibe-hhui is not the default interface"
+dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q '^ConditionKernelCommandLine=vibe.browser$' || fail "the browser kiosk is not the vibe.browser fallback"
 dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q -- '--gamepad=manette' || fail "Cog without the gamepad (the A press starts the audio)"
 dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q '^Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1$' \
   || fail "Cog's URL lacks ?handheld=1 (the page boots as a web client: auth probe 503)"
@@ -125,7 +130,7 @@ ok "state: ext4 'vibestate' with vibeserver/, kiosk/ (vibe-state's bind mounts w
 
 # ── units parse (systemd-analyze verify on the real tree) ──
 if [ -n "${2:-}" ] && [ -d "$2" ] && command -v systemd-analyze >/dev/null; then
-  U="vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service vibe-debuglog.service"
+  U="vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service vibe-hhui.service vibe-debuglog.service"
   OUT=$(cd "$2/usr/lib/systemd/system" && SYSTEMD_LOG_LEVEL=notice systemd-analyze verify --root="$2" $U 2>&1 | grep -v -E 'Cannot add dependency job|is not executable|Failed to (connect|put)|bpf|kmsg|No such file or directory.*(dbus|proc)' || true)
   if [ -n "$OUT" ]; then echo "$OUT" | sed 's/^/      /'; fail "systemd-analyze verify reported problems"; fi
   ok "systemd-analyze verify: the image's units parse"

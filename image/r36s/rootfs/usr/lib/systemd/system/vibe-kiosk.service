@@ -5,6 +5,9 @@ After=vibeserver-handheld.service systemd-user-sessions.service systemd-udev-tri
 Wants=vibeserver-handheld.service
 # ★ Cog has the panel; nothing else may (no getty on tty1, no compositor)
 Conflicts=getty@tty1.service
+# ★★ The FALLBACK interface since 2026-11-06: only with `vibe.browser` on the kernel command line — vibe-hhui.service
+#    (native) is the default.
+ConditionKernelCommandLine=vibe.browser
 
 [Service]
 Type=simple

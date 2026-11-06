@@ -150,10 +150,25 @@ cp -a "$KO/modules/$KVER" "$R/usr/lib/modules/"
 cp -a "$KO/firmware/." "$R/usr/lib/firmware/"
 in_root depmod -a "$KVER"
 
+# ── 4b. vibe-hhui, the native receiver UI (handheld-ui/) ─────────────────────────────────────────────────────────────
+# ★ Compiled HERE, in the build container (Debian trixie arm64 — the card's own release, so the same libraries), never
+#   in the image: no compiler and no -dev package lands on the card. Fonts: JetBrains Mono (OFL) for the UI, DSEG14
+#   (OFL) for the frequency, as the app's VFD.
+echo "==> vibe-hhui (the native receiver UI)"
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends g++ cmake make pkg-config \
+  libsdl2-dev libsdl2-ttf-dev libgles-dev libegl-dev >/dev/null
+rm -rf /work/hhui && cmake -S /repo/handheld-ui -B /work/hhui -DCMAKE_BUILD_TYPE=Release >/dev/null
+make -C /work/hhui -j"${JOBS:-6}" >/dev/null || die "vibe-hhui did not build"
+HHUI_BIN=/work/hhui/vibe-hhui
+
 # ── 5. Our files, users and units ────────────────────────────────────────────────────────────────────────────────────
 # ★ modes and times from the repository, ownership root's (the checkout belongs to the Mac's user)
 cp -R --preserve=mode,timestamps "$H/rootfs/." "$R/"
 chmod 0755 "$R"/usr/lib/vibesdr-r36s/*
+install -m 0755 "$HHUI_BIN" "$R/usr/lib/vibesdr-r36s/vibe-hhui"
+mkdir -p "$R/usr/share/vibesdr-r36s/fonts"
+cp /repo/assets/mapfonts/JetBrainsMono-Bold.ttf /repo/assets/mapfonts/JetBrainsMono-Regular.ttf /repo/assets/mapfonts/OFL-JetBrainsMono.txt \
+   /repo/assets/fonts/DSEG14Classic-BoldItalic.ttf /repo/assets/fonts/DSEG-LICENSE.txt "$R/usr/share/vibesdr-r36s/fonts/"
 python3 "$H/art/make-splash.py" /repo "$R/usr/share/vibesdr-r36s" >/dev/null
 rm -f "$R/usr/share/vibesdr-r36s/splash-base.png"
 mv "$R/usr/share/vibesdr-r36s/splash-preview.png" /out/splash-preview.png
@@ -181,7 +196,8 @@ for u in getty@tty1.service systemd-networkd.service systemd-networkd.socket sys
   in_root systemctl mask "$u" >/dev/null 2>&1 || true
 done
 for u in vibe-splash.service vibe-clock.service vibe-cpu.service vibe-state.service vibe-hwd.service \
-         vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service vibe-debuglog.service; do
+         vibe-bootkeys.service vibe-card.service vibeserver-handheld.service vibe-kiosk.service vibe-hhui.service \
+         vibe-debuglog.service; do
   in_root systemctl enable "$u" >/dev/null
 done
 in_root systemctl set-default multi-user.target >/dev/null
