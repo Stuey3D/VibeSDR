@@ -860,13 +860,26 @@ export class AudioPlayer {
    *  context exists — the common case, and the server mixes centred either way the moment we say otherwise. */
   get outputChannels(): number { try { return this.ctx ? this.ctx.destination.maxChannelCount || 2 : 2; } catch { return 2; } }
 
+  /** ★★★ V12 R36S SPEAKER MODE (`speaker=1` in the URL, the handheld only): the ENGINE plays the audio on the device's
+   *  own speaker (vibe_local_speaker.h), so this player builds no AudioContext, no worklet and no decoder chain — the
+   *  socket stays open for the session, and PCM arrives only while a recording (or the record buffer) taps it. Volume
+   *  and mute go to the engine through `onSpeaker`. ~1.1 cores of the R36S's four were the browser's audio path. */
+  readonly speakerMode: boolean;
+  onSpeaker: ((m: { tap?: boolean; level?: number }) => void) | null = null;
+
   constructor(url: string, cb: AudioCallbacks = {}) {
     this.url = url;
+    this.speakerMode = /[?&]speaker=1(&|$)/.test(url);
     this.cb = guardCallbacks('web-ui', cb);   // ★ a meter or recorder UI that throws stays its own problem
   }
 
   /** Must be called from a user gesture — browsers block audio otherwise. */
   async start() {
+    if (this.speakerMode) {
+      if (!this.worker) this._startWorker();   // ★ no node: the Worker only keeps the socket and forwards a tap
+      this.onSpeaker?.({ level: this._muted ? 0 : this._volume });
+      return;
+    }
     if (AudioPlayer._useMediaPlayout()) {
       if (!this.omEl) await this._startMediaPlayout();
       if (this.omEl) {
@@ -2464,6 +2477,7 @@ export class AudioPlayer {
   /** The Worker forwards PCM (and, on the media path, decodes for it) only while someone is listening for it. */
   private _syncWorkerTap() {
     this.worker?.postMessage({ type: 'rec', on: !!(this.rec || this.rb) });
+    if (this.speakerMode) this.onSpeaker?.({ tap: !!(this.rec || this.rb) });   // ★ the engine sends PCM only when tapped
   }
 
   /** Start a recording. Returns the seconds it already holds from the record buffer (0 when Off). */
@@ -2490,6 +2504,8 @@ export class AudioPlayer {
   }
 
   get recording(): boolean { return this.rec !== null; }
+  /** ★ The record buffer is on (it taps the stream all the time). */
+  get recordBufferOn(): boolean { return !!this.rb; }
 
   /** Seconds recorded so far. */
   get recordedSeconds(): number {
@@ -2858,6 +2874,7 @@ export class AudioPlayer {
 
   set volume(v: number) {
     this._volume = Math.max(0, Math.min(1, v));
+    if (this.speakerMode && !this._muted) this.onSpeaker?.({ level: this._volume });
     if (this.gain && !this._muted) this.gain.gain.value = this._volume;
     // ★ Media playout: the element owns the level (read-only on iOS, where the buttons do).
     if (this.omEl) { try { this.omEl.volume = this._volume; } catch { /* iOS */ } }
@@ -2866,6 +2883,7 @@ export class AudioPlayer {
 
   set muted(m: boolean) {
     this._muted = m;
+    if (this.speakerMode) this.onSpeaker?.({ level: m ? 0 : this._volume });
     if (this.gain) this.gain.gain.value = m ? 0 : this._volume;
     if (this.omEl) this.omEl.muted = m;
   }

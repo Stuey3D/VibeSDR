@@ -19,6 +19,8 @@ RestartSec=2
 User=vibeserver
 Group=vibeserver
 SupplementaryGroups=plugdev audio
+# ★★★ the engine plays the receiver on the R36S's own speaker (vibe_local_speaker.h) — the rk817 codec, by its ALSA id
+Environment=VIBE_SPEAKER_CARD=rk817ext
 # ★ Network > Audio > Spectrum > Decoders inside the engine; the browser runs below the engine (vibe-kiosk Nice=5)
 AmbientCapabilities=CAP_SYS_NICE
 CapabilityBoundingSet=CAP_SYS_NICE

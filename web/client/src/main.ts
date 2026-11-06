@@ -1414,8 +1414,11 @@ async function connect(host: string, pin: string) {
   await loadAudioPolicy(httpBaseUrl);
   const forceOpus = new URLSearchParams(location.search).has('opus');
   const wantRaw = !forceOpus && (srvLocal || (srvUncompressed === 'choice' && prefersRawAudio()));
-  const wantOpus = !wantRaw && await AudioPlayer.supportsOpus();
-  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + '&bid=' + browserId() + '&proto=1' + (wantOpus ? '&codec=opus' : ''), auth)}`;
+  // ★★★ V12 R36S: the handheld's ENGINE plays the audio on the device's speaker (`speaker=1`, AudioPlayer.speakerMode) —
+  //     raw PCM, and the browser builds no audio chain at all (~1.1 of the four cores, handheld6's log).
+  const hhSpeaker = isHandheld();
+  const wantOpus = !hhSpeaker && !wantRaw && await AudioPlayer.supportsOpus();
+  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + '&bid=' + browserId() + '&proto=1' + (wantOpus ? '&codec=opus' : '') + (hhSpeaker ? '&speaker=1' : ''), auth)}`;
   // ★★★ WE CAN ALWAYS TAKE OPUS NOW, so this only ever says no when RAW was ASKED for. The old
   // gate answered "no Opus" on every plain-http LAN origin (WebCodecs is [SecureContext]) and the
   // server then refused the uncompressed socket it had just been asked for — silence, on the only
@@ -2783,6 +2786,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onBytes: (n) => { audioBytes += n; },
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
+  if (audio.speakerMode) audio.onSpeaker = sendSpeaker;   // ★ V12 R36S — the engine plays it (see audioUrl)
   applyRecBuf();
   if (adsbOn || ismOn || aisOn || ndbOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM / AIS / NDB stays quiet (syncAudioQuiet)
   // ★★★ TELL IT WHETHER THERE IS ANYWHERE TO FALL BACK TO. With the owner's policy OFF the
@@ -2843,7 +2847,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   //    gate can come BACK later if something suspends the context again, exactly as before.
   //    Without the second half a browser that suspends after the first press would be silent with
   //    nothing on screen to say so.
-  let gateDismissed = false;   // ★ the handheld keeps it too (Stuart 2026-11-05): START RADIO and the tour, on the pad
+  // ★★★ V12 R36S: NOT on the handheld any more (Stuart 2026-11-06: "no having to click to start audio"). The engine plays
+  //     the audio itself (speaker mode), so there is no browser audio to unlock and the receiver opens straight away.
+  //     The tour stays in the menu. Every other browser keeps START RADIO exactly as before.
+  let gateDismissed = !!audio?.speakerMode;
   /** ★ Set by the gesture that presses the tutorial button, acted on once the gate is off screen:
    *  the tour points at controls the gate is covering, so it cannot start while it is up. */
   let gateWantsTutorial = false;
@@ -18047,8 +18054,18 @@ function buildMenu() {
  * Client-side settings (palette, brightness, spectrum split…) don't appear here:
  * they're applied locally when the menu is built.
  */
+/** ★★ V12 R36S speaker mode: the page's volume / mute and the recording tap, to the engine that plays the audio. */
+function sendSpeaker(m: { tap?: boolean; level?: number }) {
+  const o: Record<string, unknown> = { type: 'speaker' };
+  if (m.tap !== undefined) o.tap = m.tap ? 1 : 0;
+  if (m.level !== undefined) o.level = Math.round(m.level * 1000) / 1000;
+  spec?.send(o);
+}
+
 function pushSettingsToServer() {
   if (!spec) return;
+  // ★ V12 R36S: a reconnect (or the first connect) tells the engine's speaker the level and the tap again
+  if (audio?.speakerMode) sendSpeaker({ level: audio.muted ? 0 : audio.volume, tap: audio.recording || audio.recordBufferOn });
   const p = prefs();
   const num = (k: string) => (typeof p[k] === 'number' ? p[k] as number : undefined);
   const bool = (k: string) => (typeof p[k] === 'boolean' ? p[k] as boolean : undefined);

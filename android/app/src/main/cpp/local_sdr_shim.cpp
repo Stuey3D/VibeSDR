@@ -209,6 +209,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_watch.h"            // ★★ V12 VFO A/B: a listener's watch channels (docs/v12/VFO-AB.md)
 #include "vibe_vfo_dc.h"           // ★★ V12: a FREE VFO's DC spike moved out of its way (vfoDcPlace)
 #include "vibe_icom_decode.h"      // ★★ V12: the mode / filter an Icom needs for a decoder to hear its signal
+#include "vibe_local_speaker.h"    // ★★★ V12 R36S: the handheld engine plays its own audio (no browser audio)
 #if VIBE_HAVE_ICOM
 #include "icom_source.h"            // ★★★ an Icom transceiver as a RECEIVER (docs/ICOM-SUPPORT-PLAN.md)
 #endif
@@ -6609,6 +6610,33 @@ static int vsKickMinutes(double m, bool given) {
 }
 
 struct LocalSdrShim::Impl {
+#if defined(__linux__) && !defined(__ANDROID__)
+    /* ★★★ V12 R36S — THE SPEAKER SOCKETS (vibe_local_speaker.h). On the handheld the page opens its audio socket with
+     *  `speaker=1`: the session, the codec choice and every control stay exactly as they are, but the PCM meant for that
+     *  socket goes to the codec here instead of over the wire (sendWs). `speakerTap` = ALSO send it — while the page is
+     *  recording to the card, which taps the stream it is sent. Only on the handheld (g_vsHandheld, loopback only). */
+    std::mutex speakerMtx;
+    std::vector<std::weak_ptr<net::Socket>> speakerSocks;   // under speakerMtx
+    std::atomic<bool> speakerTap{false};
+    std::atomic<float> speakerLevel{1.0f};                   // the page's volume × mute, 0..1
+    std::unique_ptr<vibe::LocalSpeaker> speaker;             // made on first use, under speakerMtx
+    static void speakerLog(const char* s) { LOGI("%s", s); }
+    void speakerMark(const std::shared_ptr<net::Socket>& sock) {
+        std::lock_guard<std::mutex> lk(speakerMtx);
+        speakerSocks.erase(std::remove_if(speakerSocks.begin(), speakerSocks.end(),
+            [](const std::weak_ptr<net::Socket>& w) { auto p = w.lock(); return !p || !p->isOpen(); }), speakerSocks.end());
+        speakerSocks.push_back(sock);
+        if (!speaker) speaker.reset(new vibe::LocalSpeaker(&Impl::speakerLog));
+        LOGI("audio WS is the handheld's speaker socket — its PCM plays here, not in the browser");
+    }
+    /** ★ The speaker, if `sock` is a speaker socket; nullptr otherwise (every ordinary socket — the fast no). */
+    vibe::LocalSpeaker* speakerFor(const net::Socket* sock) {
+        if (!g_vsHandheld.load(std::memory_order_relaxed)) return nullptr;
+        std::lock_guard<std::mutex> lk(speakerMtx);
+        for (auto& w : speakerSocks) { auto p = w.lock(); if (p && p.get() == sock && p->isOpen()) return speaker.get(); }
+        return nullptr;
+    }
+#endif
     bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
     vibe::DecFeedResampler decFeed;       // feedDecoderPcm — ONE continuous resampler (vibe_decfeed_resampler.h)
     std::vector<float> pcmResid;          // upsample carry (fractional sample pos)
@@ -17974,6 +18002,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void sendWs(const std::shared_ptr<net::Socket>& sock, uint8_t opcode,
                 const uint8_t* payload, size_t len, Out cls = Out::Control) {
         if (!sock || !sock->isOpen()) return;
+#if defined(__linux__) && !defined(__ANDROID__)
+        /* ★★★ V12 R36S: a speaker socket's raw PCM plays HERE (header [0]=ch, [1]=0 raw, [2..5]=rate, int16 PCM —
+         *  sendAudioPcm). Every audio path (shared, per-listener, squelched zeros, VFO B mixes) ends in this call, so
+         *  diverting here catches them all. Sent on as well only while the page records (speakerTap). */
+        if (cls == Out::Audio && opcode == 0x2 && len > 6 && payload[1] == 0
+            && (payload[0] == 1 || payload[0] == 2)) {
+            if (vibe::LocalSpeaker* spk = speakerFor(sock.get())) {
+                const int ch = payload[0];
+                std::vector<int16_t> pcm((len - 6) / 2);
+                std::memcpy(pcm.data(), payload + 6, pcm.size() * 2);
+                const float lv = speakerLevel.load(std::memory_order_relaxed);
+                if (lv < 0.999f) {
+                    // ★ linear, exactly as the browser's GainNode applied the same slider — the level does not change
+                    const float g = lv;
+                    for (auto& x : pcm) x = (int16_t)std::lround((float)x * g);
+                }
+                spk->push(pcm.data(), (int)(pcm.size() / (size_t)ch), ch);
+                if (!speakerTap.load(std::memory_order_relaxed)) return;
+            }
+        }
+#endif
         std::vector<uint8_t> f;
         f.reserve(len + 10);
         f.push_back(0x80 | opcode);
@@ -21061,6 +21110,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // to touch them. Exposing them here gives both remote clients the same
         // audio controls the local app has — and keeps the DSP server-side, so
         // the client stays a thin renderer (no duplicate DSP to drift).
+#if defined(__linux__) && !defined(__ANDROID__)
+        /* ★★ V12 R36S: {"type":"speaker", "tap":0|1, "level":0..1} from the handheld page (AudioPlayer speaker mode).
+         *  tap = the page is recording to the card (or keeps the record buffer): send the speaker socket its PCM too.
+         *  level = the page's volume / mute, applied to what the speaker plays (the hardware keys set the codec's own). */
+        if (type == "speaker") {
+            if (!g_vsHandheld.load()) return;
+            double v = 0;
+            if (jsonNum(msg, "tap", v)) speakerTap.store(v != 0);
+            if (jsonNum(msg, "level", v)) speakerLevel.store((float)std::max(0.0, std::min(1.0, v)));
+            return;
+        }
+#endif
         if (type == "squelch") {
             // ★ This listener's own gate, never the radio's — see sessionSquelch. On/off from
             //   vibe::squelchMsgOn (explicit `on`, else the legacy db <= -100 = off) — the SAME rule
@@ -22845,6 +22906,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sock->close(); return;
             }
             compatRecord(wsAudio ? "ws-audio" : "ws-spectrum", reqLine, userAgent);
+#if defined(__linux__) && !defined(__ANDROID__)
+            // ★★★ V12 R36S: the handheld page's audio socket — its PCM plays on the device's own speaker (speakerMark).
+            if (wsAudio && g_vsHandheld.load() && queryParam(reqLine, "speaker") == "1") speakerMark(sock);
+#endif
             acceptWs(sock, wsKey, wsAudio, vsSessionIdOf(reqLine),
                      // ★★★ ON A SHARED DIAL, OPUS IS NOT A REQUEST — IT IS THE STREAM. One encode
                      //     is fanned out to everybody, so an older client asking for raw would

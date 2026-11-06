@@ -24,6 +24,7 @@
  */
 import { pushBack } from './gamepad';
 import { openPadTest } from './handheldPadTest';
+import { startTutorial } from './tutorial';
 import { openMapPick, locatorToLatLon } from './handheldMap';
 import type { Spot, TimeSync } from './decoders';
 
@@ -723,6 +724,11 @@ export function buildHandheldMenu(menu: HTMLElement) {
   const padT = el('button', { class: 'btn' }, 'TEST BUTTONS'); padT.onclick = () => openPadTest();
   const padSeg = el('div', { class: 'seg' }); padSeg.appendChild(padT);
   r36.appendChild(row('CONTROLLER<span class="sub">Shows each button and stick as the receiver sees it</span>', padSeg));
+  // ★ The tour lived on the START RADIO screen, which the handheld no longer shows (its engine plays the audio) — so here
+  const tourB = el('button', { class: 'btn', id: 'hhTourBtn' }, 'VIEW TUTORIAL');
+  tourB.onclick = () => { document.getElementById('menu')?.classList.remove('open'); setTimeout(() => startTutorial(), 0); };
+  const tourSeg = el('div', { class: 'seg' }); tourSeg.appendChild(tourB);
+  r36.appendChild(row('TOUR<span class="sub">The controls, one at a time</span>', tourSeg));
   // Performance
   const perfB = el('button', { class: 'btn' + (hhSettings().perf ? ' on' : ''), id: 'hhPerfBtn' }, hhSettings().perf ? 'ON' : 'OFF');
   perfB.onclick = () => { const n = !hhSettings().perf; setPerf(n); perfB.classList.toggle('on', n); perfB.textContent = n ? 'ON' : 'OFF'; };

@@ -1353,9 +1353,15 @@
     let baseRetries = 0;
     let baseRetryT = null;
     let redrawT = null;
+    /* ★★ DETACHED MEANS NO MORE DRAWS. detach() cleared the pending timer, but a draw already IN FLIGHT finishes later
+     *  and its "pan landed mid-draw" rerun (redrawAgain) scheduled a fresh one — on a map the host had removed, so
+     *  drawGrid's getBounds() threw "_leaflet_pos" (the handheld's SET FROM MAP, closed while it was still drawing). */
+    let detached = false;
     function redrawMap() {
+      if (detached) return;
       clearTimeout(redrawT);
       redrawT = setTimeout(() => {
+        if (detached) return;
         /* ★★★ A PAN THAT LANDS MID-DRAW IS REMEMBERED, NOT DROPPED. This used to `return`, so the
          *  last moveend of a drag was thrown away whenever a draw was still awaiting data, and the
          *  map sat on geometry culled to the PREVIOUS view box -- land missing at the edges you had
@@ -1418,6 +1424,7 @@
        *   (the app's WebView does, on a profile change from native) would otherwise stack renderers
        *   and every redraw would do the work twice. */
       detach() {
+        detached = true;
         clearTimeout(redrawT); clearTimeout(baseRetryT);
         map.off('zoomend moveend', redrawMap);
         for (const lg of allLayers) map.removeLayer(lg);
