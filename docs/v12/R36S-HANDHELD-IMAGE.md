@@ -26,7 +26,7 @@ write ~8.5 MB/s.
 | | Measured | For the image |
 |---|---|---|
 | ROCKNIX 20261101 **B** image (EE clones) | boots, mainline kernel **7.1.2** | use ROCKNIX's U-Boot + KERNEL + DTBs |
-| Panel | **Sitronix ST7703** MIPI-DSI 4-lane, 640×480, 30 MHz → **80.046 Hz** default; modes to 120 Hz work | display **60 Hz**; our drawing capped at **30 fps** (Stuart) |
+| Panel | **Sitronix ST7703** MIPI-DSI 4-lane, 640×480, 30 MHz → **80.046 Hz** default; modes to 120 Hz work | display **80 Hz, ROCKNIX's overlay unchanged** (✗ both 60 Hz modes off-centre / garbled on the device, 2026-11-06); our drawing capped at **30 fps** (Stuart) |
 | Display overlay | works ONLY with ROCKNIX's own generated `mipi-panel.dtbo` — stock DTB in `/flash/stock`, **no** overlay pre-placed (`002-generate_dtbo` is a no-op if one exists; a panel-only `importpanel.py` overlay broke the EE-clone audio tuning) | ship the overlay ROCKNIX generated for this board, or let first boot generate it from `stock/` |
 | Audio | card `rk817_ext`; amp `simple-audio-amplifier` (enable high); **silent until `Playback Mux` (numid=6) → SPK** | mux follows the `Headphones Jack` control: **SPK default, HP when a plug is in** |
 | Backlight | `/sys/class/backlight/backlight`, PWM 25 µs, 0–255, stock default 200 | slider 0–255 (floor above 0); **default 120** |
@@ -66,7 +66,7 @@ booted (container): `ss -tulnp` = one listener, **127.0.0.1:48000** (vibeserver)
 plugged in"** until a radio is plugged in — the front door does not serve maps on its own (engine side).
 
 **Boot chain:** ROCKNIX 20261101 b's loader (`b_uboot.bin.uart5`, byte-identical to what ROCKNIX wrote on this unit) →
-ROCKNIX's `boot.scr` → our `extlinux.conf` → ROCKNIX's KERNEL (7.1.2) + eeclone DTB + `mipi-panel.dtbo` (its 60.000 Hz
+ROCKNIX's `boot.scr` → our `extlinux.conf` → ROCKNIX's KERNEL (7.1.2) + eeclone DTB + `mipi-panel.dtbo` (✗ 2026-11-06: now ROCKNIX's unchanged 80 Hz overlay — the 60.000 Hz
 mode made the default) + `vibe-r36s.dtbo` (stock 408–1296 MHz steps, 1416 off, backlight 120) → **our Debian 13 root
 directly**: `rdinit=` names a missing file so the kernel skips ROCKNIX's built-in initramfs and mounts `root=PARTUUID`
 read-only; `overlay-init` lays a RAM overlay and execs systemd. (ROCKNIX's initramfs + SYSTEM route rejected: its init
@@ -145,8 +145,8 @@ menu but the options are still hidden", so the main menu stays uncluttered. Open
   the map centre, DAB / NDB / NAVTEX distances, the band region. **SET FROM MAP** (2026-11-06, `handheldMap.ts`): the
   other maps open in their own window, which a one-view Cog kiosk cannot show, so this one is IN the page — full screen,
   the same basemap renderer (vibemap.js on Leaflet) from the card's map files only, a fixed centre crosshair, the D-pad /
-  left stick pan, L / R (or the right stick up / down) zoom, A sets the crosshair's point (its 6-character locator shown
-  live in the top-left corner), B cancels; arrows / + − / Enter / Escape on a keyboard. On the LOCATION row, and on
+  left stick pan, L / R (or the right stick up / down) zoom, B (the bottom button — by position) sets the crosshair's point (its 6-character locator shown
+  live in the top-left corner), A (the right button) cancels; arrows / + − / Enter / Escape on a keyboard. On the LOCATION row, and on
   "Please connect an SDR" as SET LOCATION FROM MAP — no radio needed), volume, battery, the clock tools, card space, IMPORT, EXPORT DIAGNOSTICS, the
   **Performance** overlay toggle with its figures in full, power off, restart. (No SSH — removed 2026-11-05.)
 - **SDR HARDWARE** = the plugged-in radio's own controls (gain / AGC / bias-T / direct sampling / ppm / antenna …) from its
@@ -259,7 +259,7 @@ ExecStart=/usr/bin/vibeserver --handheld                   # or "profile":"handh
 - The radio process logs "handheld profile" at start; the supervisor logs every plug, unplug, save and reset.
 
 **Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette 'http://127.0.0.1:48000/?handheld=1'`. The page
-keeps its START RADIO screen (A on the pad presses it); with autoplay allowed the audio starts on that press, and without
+keeps its START RADIO screen (the bottom button, B, presses it — any button press counts as the gesture); with autoplay allowed the audio starts on that press, and without
 it the pad's press still dismisses the screen — check on the device that sound starts (a Gamepad press may not count as
 a user activation in WPE: if it does not, allow autoplay in Cog). `?handheld` alone does nothing — the page
 asks `/handheld/session`, which only the handheld engine answers. Cog needs no downloads, no file picker, no storage

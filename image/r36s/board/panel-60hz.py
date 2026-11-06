@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-# panel-60hz.py IN.dtbo OUT.dtbo — make the panel's 60.0 Hz mode the default one, changing nothing else.
+# panel-60hz.py IN.dtbo OUT.dtbo — make a 60 Hz mode the panel's default.
+# ✗✗✗ NOT USED (2026-11-06): on Stuart's R36S neither 60 Hz mode displays correctly (23.04 MHz: picture ~80 px left;
+#     22.92 MHz: left half only, columns of noise). ROCKNIX's 80 Hz default is centred and clean, and the image ships
+#     that overlay unchanged (build-image.sh). Kept as the record of what was tried.
 #
 # ★★★ WHY THE OVERLAY AND NOT COG. The ST7703 panel's overlay (ROCKNIX's generic-dsi description, generated for this
 #     board — see board/PROVENANCE) lists twelve 640×480 modes and marks the 80.046 Hz one `default=1`, which the

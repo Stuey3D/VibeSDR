@@ -7,7 +7,7 @@
  *     on Leaflet, both served by the engine itself) from the map files on the card: /mapdata/v1/, the basic pack and the
  *     high-detail one. No tile server, no internet — there is none on the handheld.
  * ★★ The crosshair is FIXED at the centre and the map moves under it: a pad has no pointer, so "where you are" is
- *    simply the middle of the screen. D-pad / left stick pan, the shoulders (or the right stick up / down) zoom, A sets
+ *    simply the middle of the screen. D-pad / left stick pan, the shoulders (or the right stick up / down) zoom, the BOTTOM face button sets
  *    the location there, B leaves it as it was. A keyboard does the same (arrows, + / − or Page Up / Down, Enter,
  *    Escape) — a TV remote and desktop testing. The pad and keys reach it through gamepad.ts's capture (setPadCapture),
  *    so nothing underneath tunes, zooms or moves its highlight while it is up.
@@ -47,7 +47,7 @@ export function locatorToLatLon(loc: string): { lat: number; lon: number } | nul
 export interface MapPickOptions {
   /** Where to start: the device's location if it has one, else null = the whole world. */
   start: { lat: number; lon: number } | null;
-  /** A pressed: the crosshair's point. The layer closes whatever this returns. */
+  /** ★ Bottom face button (B on the R36S — by POSITION, Stuart 2026-11-06; the right one, A, cancels): the crosshair's point. The layer closes whatever this returns. */
   onPick(lat: number, lon: number): void;
 }
 
@@ -106,7 +106,7 @@ export function openMapPick(o: MapPickOptions): void {
   root.innerHTML = '<div id="hhMapPickMap"></div>'
     + '<div class="xh"><i class="h"></i><i class="h2"></i><i class="v"></i><i class="v2"></i><b></b></div>'
     + '<div id="hhMapPickLoc"></div><div id="hhMapPickNote">Loading the map…</div>'
-    + '<div id="hhMapPickBar"><span>D-pad / stick move · L / R zoom · A set · B cancel</span>'
+    + '<div id="hhMapPickBar"><span>D-pad / stick move · L / R zoom · B set · A cancel</span>'
     + '<button type="button" id="hhMapPickSet">SET HERE</button><button type="button" id="hhMapPickCancel">CANCEL</button></div>';
   document.body.appendChild(root);
   const host = root.querySelector('#hhMapPickMap') as HTMLDivElement;
@@ -195,7 +195,7 @@ export function openMapPick(o: MapPickOptions): void {
 
   void (async () => {
     const w = window as any;
-    if (!await loadLeafletInto(document)) { if (!closed) note.textContent = 'The map could not be loaded — B to go back.'; return; }
+    if (!await loadLeafletInto(document)) { if (!closed) note.textContent = 'The map could not be loaded — A to go back.'; return; }
     if (closed) return;
     try {
       if (!w.VibeMap) { const { VIBEMAP_JS } = await loadVibemapSource(); if (closed) return; if (!w.VibeMap) runSource(VIBEMAP_JS); }
@@ -212,5 +212,5 @@ export function openMapPick(o: MapPickOptions): void {
     // ★ A finger or a mouse may move it too (desktop testing): the readout follows any move, not only ours
     map.on('move zoomend', fromMap);
     fromMap();
-  })().catch((e) => { console.error('[map pick] the map did not load', e); if (!closed) note.textContent = 'The map did not load — B to go back.'; });
+  })().catch((e) => { console.error('[map pick] the map did not load', e); if (!closed) note.textContent = 'The map did not load — A to go back.'; });
 }

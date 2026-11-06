@@ -78,7 +78,7 @@ class Display:
             ml = [MODEINFO.unpack_from(modes.raw, i * MODEINFO.size) for i in range(n_modes)]
             ml = [m for m in ml if m[1] == W and m[6] == H] or ml
             pref = [m for m in ml if m[13] & PREFERRED]
-            # ★ the preferred mode (60.0 Hz with our overlay); else the one nearest 60 Hz
+            # ★ the preferred mode (ROCKNIX's 80 Hz default); else the one nearest 60 Hz
             self.mode = pref[0] if pref else min(ml, key=lambda m: abs(refresh(m) - 60))
             want = os.environ.get("VIBE_SPLASH_MODE_CLOCK")      # ★ tests only: force a mode by its pixel clock (kHz)
             if want:

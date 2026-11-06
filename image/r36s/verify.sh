@@ -49,14 +49,15 @@ grep -q ' $' "$T/ext" && fail "extlinux.conf has a trailing space"
 mcopy -n -i "$T/boot.vfat" ::/overlays/mipi-panel.dtbo ::/overlays/vibe-r36s.dtbo ::/rk3326-gameconsole-eeclone.dtb "$T/"
 fdtoverlay -i "$T/rk3326-gameconsole-eeclone.dtb" -o "$T/m.dtb" "$T/mipi-panel.dtbo" "$T/vibe-r36s.dtbo" || fail "overlays do not apply"
 dtc -q -I dtb -O dts "$T/m.dtb" > "$T/m.dts"
-grep -q 'M clock=22920 horizontal=640,46,2,44 vertical=480,16,11,14 default=1' "$T/m.dts" || fail "the 60 Hz mode (80 Hz horizontal timing) is not the default"
+cmp -s "$T/mipi-panel.dtbo" /repo/image/r36s/board/mipi-panel.rocknix.dtbo || fail "the panel overlay is not ROCKNIX's, unchanged"
+grep -q 'M clock=30000 horizontal=640,46,2,44 vertical=480,16,2,14 default=1' "$T/m.dts" || fail "the panel's default is not ROCKNIX's 80 Hz mode"
 [ "$(grep -o 'default=1' "$T/m.dts" | wc -l)" = 1 ] || fail "more than one default panel mode"
 for f in 408000000 600000000 816000000 1008000000 1104000000 1200000000 1248000000 1296000000; do
   grep -q "opp-$f {" "$T/m.dts" || fail "CPU step $f missing"
 done
 awk '/opp-1416000000 \{/{f=1} f&&/status = "disabled"/{print; exit}' "$T/m.dts" | grep -q disabled || fail "1416 MHz is not disabled"
 grep -q 'default-brightness-level = <0x78>' "$T/m.dts" || fail "backlight boot level is not 120"
-ok "boot: KERNEL, eeclone DTB, overlays apply (panel 60.1 Hz default, CPU 408–1296 MHz, 1416 off, backlight 120), extlinux → PARTUUID=$DISKID-02"
+ok "boot: KERNEL, eeclone DTB, overlays apply (panel = ROCKNIX's 80 Hz overlay, unchanged, CPU 408–1296 MHz, 1416 off, backlight 120), extlinux → PARTUUID=$DISKID-02"
 
 # ── root filesystem ──
 dd if="$IMG" of="$T/root.ext4" bs=512 skip="$S2" count="$Z2" status=none

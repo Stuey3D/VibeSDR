@@ -23,6 +23,7 @@
  *    menu's LOCATION row or from "Please connect an SDR" (no radio needed).
  */
 import { pushBack } from './gamepad';
+import { openPadTest } from './handheldPadTest';
 import { openMapPick, locatorToLatLon } from './handheldMap';
 import type { Spot, TimeSync } from './decoders';
 
@@ -718,6 +719,10 @@ export function buildHandheldMenu(menu: HTMLElement) {
   const diag = el('button', { class: 'btn' }, 'EXPORT DIAGNOSTICS') as HTMLButtonElement; diag.onclick = () => void exportDiagnostics(diag);
   const files = el('div', { class: 'seg', style: 'flex-wrap:wrap' }); files.append(imp, exp, diag);
   r36.appendChild(row('FILES', files));
+  // ★ What the pad really reports (handheldPadTest.ts) — clones are wired differently, and the image has no SSH
+  const padT = el('button', { class: 'btn' }, 'TEST BUTTONS'); padT.onclick = () => openPadTest();
+  const padSeg = el('div', { class: 'seg' }); padSeg.appendChild(padT);
+  r36.appendChild(row('CONTROLLER<span class="sub">Shows each button and stick as the receiver sees it</span>', padSeg));
   // Performance
   const perfB = el('button', { class: 'btn' + (hhSettings().perf ? ' on' : ''), id: 'hhPerfBtn' }, hhSettings().perf ? 'ON' : 'OFF');
   perfB.onclick = () => { const n = !hhSettings().perf; setPerf(n); perfB.classList.toggle('on', n); perfB.textContent = n ? 'ON' : 'OFF'; };

@@ -102,8 +102,10 @@ and on p4 (exFAT, fsck'd every boot; the engine writes temp + rename). Developer
 
 ## Display, GPU, input, audio
 
-- **60 Hz:** the panel overlay lists twelve 640×480 modes and marks 80.046 Hz `default=1`; Cog takes the PREFERRED mode
-  and cannot pick by refresh (every mode is named "640x480"). `board/panel-60hz.py` moves `default=1` to the
+- **Panel: ROCKNIX's 80 Hz, unchanged.** ✗ Both 60 Hz modes failed on the device (2026-11-06): the 23.04 MHz one put the
+  picture ~80 px left, the 22.92 MHz one drew the left half and columns of noise. The 80 Hz default is centred and clean,
+  and the page draws at 30 fps regardless. The history: the overlay lists twelve 640×480 modes and marks 80.046 Hz
+  `default=1`; Cog takes the PREFERRED mode and cannot pick by refresh. `board/panel-60hz.py` (unused now) moved it to the
   22.92 MHz mode (732 × 521 → 60.10 Hz) — the same bytes otherwise, same length. ★ It keeps the 80 Hz mode's horizontal
   timing (640,46,2,44); the 23.04 MHz mode (horizontal 640,46,20,44) put the picture ~80 px left on the panel.
 - **Cog:** `cog -P drm --platform-params=renderer=gles --gamepad=manette` — WebKit's media defaults untouched: the page keeps its start / audio screen and the **A press on the pad** starts the audio (Stuart, 2026-11-05)
