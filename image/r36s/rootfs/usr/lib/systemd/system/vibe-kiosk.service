@@ -22,9 +22,19 @@ Environment=XDG_CACHE_HOME=/run/vibe-kiosk/cache
 #    lines. The first card (2026-11-06) ran WPEWebProcess at 177 % CPU against day one's 54 % on Panfrost.
 Environment=EGL_LOG_LEVEL=info
 Environment=LIBGL_DEBUG=verbose
+# ★★★ PAINT ON THE GPU. WPE 2.46–2.48 paints pages with Skia ON THE CPU BY DEFAULT ("GPU usage for rendering is not yet
+#     the default in the WPE port … set WEBKIT_SKIA_ENABLE_CPU_RENDERING=0" — the 2.48 release notes). The first cards
+#     (2026-11-06): WPEWebProcess 177–186 %, its busy threads SkiaCPUWorker, the receiver at 4 fps.
+Environment=WEBKIT_SKIA_ENABLE_CPU_RENDERING=0
+# ★ GStreamer's warnings and errors in the journal: the browser's audio ran, but the ALSA device stayed "closed".
+Environment=GST_DEBUG=2
 Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1
 # ★ the engine answering → progress 75 → the splash drops the DRM master (keeping its picture up) → Cog starts
 ExecStartPre=+/usr/lib/vibesdr-r36s/vibe-wait-engine
+# ★ DEBUG: `vibe.gpuinfo` on the kernel command line shows WebKit's own GPU report (webkit://gpu) instead of the
+#   receiver — what WebKit really draws with, readable on the screen. The file is read at each start (after this runs).
+ExecStartPre=+/bin/sh -c 'if grep -qw vibe.gpuinfo /proc/cmdline; then echo VIBE_ENGINE_URL=webkit://gpu > /run/vibe-kiosk.env; else rm -f /run/vibe-kiosk.env; fi'
+EnvironmentFile=-/run/vibe-kiosk.env
 # ★★ -P drm --platform-params=renderer=gles: no compositor, the GPU through Mesa Panfrost (day one, §0).
 #    --gamepad=manette: the pad through libmanette (the udev rule makes it a gamepad). ★★★ ESSENTIAL: the page keeps
 #    its start / audio screen and a press on the pad is the gesture that starts the audio (Stuart 2026-11-05).
