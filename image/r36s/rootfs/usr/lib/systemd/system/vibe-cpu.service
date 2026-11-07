@@ -1,5 +1,5 @@
 [Unit]
-Description=VibeSDR CPU: schedutil over the stock 408–1296 MHz steps
+Description=VibeSDR CPU: schedutil over the stock 408–1296 MHz steps; the memory clock at most 450 MHz
 DefaultDependencies=no
 After=sysinit.target
 Before=basic.target
@@ -10,6 +10,11 @@ RemainAfterExit=yes
 # ★ schedutil (Stuart 2026-11-05) — also set by cpufreq.default_governor= on the kernel command line; this repeats it in
 #   case the kernel ignored the parameter, and caps every policy at 1296 MHz whatever the device tree says.
 ExecStart=-/bin/sh -c 'for p in /sys/devices/system/cpu/cpufreq/policy*; do echo schedutil > $p/scaling_governor; echo 1296000 > $p/scaling_max_freq; done'
+# ★★ THE MEMORY CLOCK AT MOST 450 MHz (Stuart, 2026-11-07, the battery; handheld21's power log): the DDR's own governor sat
+#    at its top step, 666 MHz at 1.05 V, for 47 of 48 minutes — the receiver's DSP keeps it "busy" by its rule. 450 MHz runs
+#    at 0.95 V (the device tree's opp-table-dmc) and is still many times what a 640×480 screen and a 2 MS/s receiver move.
+#    The governor still steps down to 194 MHz when there is nothing to do.
+ExecStart=-/bin/sh -c 'for d in /sys/class/devfreq/dmc; do [ -w $d/max_freq ] && echo 450000000 > $d/max_freq; done'
 
 [Install]
 WantedBy=basic.target

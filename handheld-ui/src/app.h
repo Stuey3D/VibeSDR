@@ -151,6 +151,16 @@ public:
     std::atomic<double> cpuMaxSeen_{0};   // the CPU SPEED cap the hardware service reported (kHz), handed to num_ on the UI thread
     bool screenOff_ = false;
     double lastInput_ = 0;
+    /** ★★★ IDLE POWER SAVE (Stuart, 2026-11-07: "the big one would be slowing the waterfall data rate to the minimum
+     *  when idle … for us in direct control of the hardware … then sharpen it up and speed it up when in use"; the
+     *  23–46 % of a core the UI drew at 31 fps, the engine's 4× FFTs for the waterfall — handheld21's power log). A
+     *  minute with no button or stick: the engine sends 2 spectrum frames a second (its FFTs follow: 8 a second, not
+     *  40–80) and the screen is redrawn 4 times a second, not 30. Any input: the next frame is drawn at once, at the
+     *  listener's own rate. The audio, the decoders and the meters' sources are untouched. */
+    bool idleNow_ = false;
+    bool specCovered_ = false;   // ★ nothing on screen shows the spectrum now (the tall decoder box, a full page)
+    // ★ Stuart, 2026-11-07: "10 seconds to slow down everything, make it a minute or so". Tests: VIBE_HHUI_IDLE_SEC.
+    static double idleSec() { static const double v = [] { const char* e = std::getenv("VIBE_HHUI_IDLE_SEC"); const double d = e ? std::atof(e) : 0; return d > 0 ? d : 60.0; }(); return v; }
     std::string toast_; double toastUntil_ = 0;
     double armedPower_ = 0, armedReboot_ = 0;
     // the menu
@@ -261,6 +271,8 @@ inline void dispRateDraw(App&, Ctx&);
 inline void dispRateStartup(App&);
 inline float dispRateRow(App&, Ctx&, Rect, float);
 inline bool dispRateWaiting();
+inline bool& decBoxTallShown();
+inline bool decPicFullOpen();
 // SET CLOCK FROM RDS / DAB (clock_rds.h): watches their clocks, offers a corroborated one
 inline void clockTick(App&, const RadioState&);
 // per-radio memory (memory.h): restore on plug-in, save what changed

@@ -1141,7 +1141,20 @@ inline int App::run(int argc, char** argv) {
         clockTick(*this, s);
         dispRateTick(*this);
         if (s.session != lastSession) { if (s.session == "running") { nav_.setFocus("deck", "freq"); lastDevPoll = 0; } lastSession = s.session; }
-        if (s.connected && sentRate != set_.specRate) { eng.fftRate(set_.specRate); sentRate = set_.specRate; }
+        idleNow_ = set_.idleSave && !screenOff_ && nowSec() - lastInput_ > idleSec();
+        {
+            /* ★★ AND WHILE NOTHING SHOWS THE SPECTRUM (Stuart, 2026-11-07: "any decoder box that takes up nearly the full
+             *    screen can have similar done to the spectrum etc behind it"): the tall decoder box, a full-screen page
+             *    (menu, audio, bookmarks, search, DAB, a picture full screen) or the map — the minimum rate behind it, the
+             *    listener's own the moment it is uncovered. The screen keeps its own pace: somebody is using that page. */
+            bool covered = decBoxTallShown() || mapCoversScreen(*this);
+            for (const Sheet sh : sheets_)
+                covered = covered || sh == S_MENU || sh == S_AUDIO || sh == S_BOOKMARKS || sh == S_SEARCH || sh == S_DAB
+                       || sh == S_MAP || (sh == S_DEC && decPicFullOpen());
+            specCovered_ = covered && set_.idleSave;
+            const int want = idleNow_ || specCovered_ ? 2 : set_.specRate;   // ★ IDLE POWER SAVE: 2 rows a second
+            if (s.connected && sentRate != want) { eng.fftRate(want); sentRate = want; }
+        }
         if (!s.connected) sentRate = -1;
         // the view follows the dial: ≤ 1 zoom per 33 ms, the last one always sent (spectrum.ts _sendView)
         if (viewPending_ && nowSec() - viewSentAt_ > 0.033) {
@@ -1210,8 +1223,10 @@ inline int App::run(int argc, char** argv) {
         // ★ between frames, SLEEP until the next one is due (≤ 16 ms, so the sticks are still read ~60 times a second —
         //   the web samples its pad once an animation frame); it used to wake every 4 ms and redo every tick
         if (screenOff_) { SDL_Delay(30); continue; }
-        if (t - lastDraw < 1.0 / 30.0 - 0.002) {
-            const double wait = (1.0 / 30.0 - 0.002) - (t - lastDraw);
+        // ★ IDLE POWER SAVE: 4 frames a second while untouched (idleNow_); an input clears it, so the next loop draws
+        const double frameDt = idleNow_ && nowSec() - lastInput_ > idleSec() ? 0.25 : 1.0 / 30.0;
+        if (t - lastDraw < frameDt - 0.002) {
+            const double wait = (frameDt - 0.002) - (t - lastDraw);
             SDL_Delay((Uint32)std::max(1.0, std::min(16.0, wait * 1000)));
             continue;
         }

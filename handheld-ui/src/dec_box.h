@@ -696,8 +696,11 @@ inline std::vector<std::string> decSubs(const std::string& view) {
 
 /** ★★ THE BOX — call once a frame in the deck pass, right after dabDrawBox and before drawDeck / drawVts. Draws nothing
  *  while no decoder runs and the picker is not open; never in DAB (its own page). */
+/** ★ The TALL box was drawn this frame — it covers the spectrum and nearly all the waterfall (App::specCovered_). */
+inline bool& decBoxTallShown() { static bool v = false; return v; }
 inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
     DecUi& u = decUi();
+    decBoxTallShown() = false;
     static bool wasGrabbed = false;
     bool grabbed = decGrabbed(a);
     if (wasGrabbed && !grabbed) {   // released (BACK, the menu): the picker folds; an empty box goes
@@ -730,6 +733,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
     const bool tall = u.pane == DecUi::P_PICK || (xv && xv->tall);
     const float top = 156, bot = decVtsShowing() ? 270.f : 308.f;
     Rect box = tall ? Rect{6, 44, 628, bot - 44} : Rect{6, top, 628, bot - top};
+    decBoxTallShown() = tall;
     c.nav.layer("dec");
     if (u.pane == DecUi::P_PICK) decDrawPicker(a, c, s, box);
     else {

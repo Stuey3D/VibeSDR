@@ -423,6 +423,10 @@ void startChildLocked(const Radio& r) {
     if (!r.tcp.empty()) { args.push_back("--tcp"); args.push_back(r.tcp); }
     else if (!r.serial.empty()) { args.push_back("--radio-serial"); args.push_back(r.serial); }
     else { args.push_back("--radio"); args.push_back(std::to_string(r.index)); }
+    // ★★ 2.048 MS/s, not the server's 2.4 (Stuart, 2026-11-07, the battery): the lowest rate that still carries a DAB
+    //    multiplex (1.536 MHz wide — 1.2 MS/s cannot), and ~15 % less of every per-sample job than 2.4. The radio's
+    //    memory (POST /handheld/memory, vibe-hhui memory.h) still puts back the rate a person chose for it.
+    args.push_back("--rate"); args.push_back("2048000");
     std::vector<std::string> env;
     for (char** e = environ; e && *e; e++) {
         const std::string kv = *e;
