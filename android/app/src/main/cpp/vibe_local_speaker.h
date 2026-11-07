@@ -199,7 +199,7 @@ private:
      *     writer waits while the device has more than two periods in hand, and pads only a real starvation.
      * ★★ DRIFT: the RTL's crystal and the codec's never agree — and on this board the codec ran ~1.7 % slow (handheld33) —
      *     so the total buffered (queue + device) is held near kHoldFrames by the rate converter below (PI, ±5 %). */
-    static constexpr long kHoldFrames = 4800;             // ~100 ms held in all
+    static constexpr long kHoldFrames = 7200;             // 150 ms held in all — the web clients' best-case jitter buffer (Stuart)
     void loop() {
         std::vector<int16_t> buf((size_t)kPeriod * 2);
         bool primed = false;
@@ -233,7 +233,7 @@ private:
                  *     right on the device's real clock, and nothing is dropped or padded. Slow on purpose: ~10 s to settle. */
                 // ★ the loop steers on the SMOOTHED level (~2 s): the DSP's blocks make the instant level jump every period,
                 //   and steering on that wobbled the pitch. Gains from a simulation against a ±1.7 % codec and real block
-                //   sizes: the correction settles within ±0.07 % of the truth, ≤ 21 ppm a period, 88–122 ms held.
+                //   sizes: the correction settles within ±0.07 % of the truth, ≤ 21 ppm a period, the hold ±20 ms.
                 avgTotal_ = avgTotal_ <= 0 ? (double)total : avgTotal_ + 0.005 * ((double)total - avgTotal_);
                 const double err = (avgTotal_ - (double)kHoldFrames) / (double)kHoldFrames;
                 const double corr = std::max(-0.05, std::min(0.05, rateI_ + 0.02 * err));
