@@ -118,7 +118,9 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         }
     }
     for (auto& l : c.tc.wrap(c.f.small, "\"Set clock from\" appears after a time station (MSF, DCF77, WWV, WWVB, JJY) has given two consecutive "
-                                        "parity-checked minutes that agree; \"Align to FT8\" after three or more FT8 decodes.", (int)a.w - 12)) {
+                                        "parity-checked minutes that agree — or, without one, after an FM station's RDS clock or a DAB "
+                                        "multiplex's time has agreed with itself twice (to about a second); \"Align to FT8\" after three "
+                                        "or more FT8 decodes.", (int)a.w - 12)) {
         c.tc.draw(c.g, c.f.small, l, a.x + 6, y, th::dim); y += c.f.small.lineHeight();
     }
     y += 10;

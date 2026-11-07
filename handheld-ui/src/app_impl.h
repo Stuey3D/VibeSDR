@@ -597,7 +597,12 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
             parts.push_back(p);
         }
         if (battery_ >= 0) {
-            Part p{"", std::to_string(battery_) + "%"};
+            // ★ the estimated time left beside it (Stuart, 2026-11-07), from the engine's /handheld/perf estimate
+            std::string bt = std::to_string(battery_) + "%";
+            int mins = -1;
+            { std::lock_guard<std::mutex> lk(hwShared().m); mins = hwShared().minutesLeft; }
+            if (!charging_ && mins >= 0) { char b[24]; std::snprintf(b, sizeof b, " %dh%02dm", mins / 60, mins % 60); bt += b; }
+            Part p{"", bt};
             p.icon = 2;
             p.col = charging_ ? hc[0] : battery_ > 40 ? hc[0] : battery_ > 15 ? hc[1] : hc[3];   // green / yellow / red
             parts.push_back(p);
@@ -607,15 +612,8 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         const float lyT = ty - c.f.small.lineHeight() / 2.f;
         const float leftW = (float)c.tc.width(c.f.small, clk);
         c.tc.draw(c.g, c.f.small, clk, pill.x + 2, lyT, th::dim);
-        float rightW = 0;
-        if (num_.count("audio.recSec")) {
-            const int sec = (int)num_["audio.recSec"];
-            char rb[24]; std::snprintf(rb, sizeof rb, "REC %02d:%02d", sec / 60, sec % 60);
-            rightW = (float)c.tc.width(c.f.small, rb) + 16;
-            const float a = 0.55f + 0.45f * (float)std::sin(c.t * 4.0);
-            c.g.circle(pill.r() - rightW + 5, ty, 5, 0, rgb(0xff3030, a));
-            c.tc.draw(c.g, c.f.small, rb, pill.r() - 2, lyT, th::red, 2);
-        }
+        // ★ no recording time here — the REC key shows it (Stuart, 2026-11-07)
+        const float rightW = 0;
         // the stats centred in the room between the clock and the recording time
         const float gapW = 18;
         const float room = pill.w - leftW - rightW - 2 * gapW;
@@ -1126,6 +1124,7 @@ inline int App::run(int argc, char** argv) {
         audioTick(*this, s);
         dabTick(*this, s);
         memTick(*this, s);
+        clockTick(*this, s);
         dispRateTick(*this);
         if (s.session != lastSession) { if (s.session == "running") { nav_.setFocus("deck", "freq"); lastDevPoll = 0; } lastSession = s.session; }
         if (s.connected && sentRate != set_.specRate) { eng.fftRate(set_.specRate); sentRate = set_.specRate; }
@@ -1139,6 +1138,7 @@ inline int App::run(int argc, char** argv) {
         // the device's state, once a minute (and at the start)
         if (nowSec() - lastDevPoll > 60 || lastDevPoll == 0) {
             lastDevPoll = nowSec();
+            hwRefreshPerf(eng.port());   // ★ the battery's time-left estimate for the status row (once a minute)
             std::thread([this, p = eng.port()] {
                 const HttpResult r = httpRequest(p, "GET", "/handheld/device", "", 4);
                 if (r.status == 200) {

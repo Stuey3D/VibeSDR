@@ -256,6 +256,8 @@ inline void dispRateTick(App&);
 inline void dispRateDraw(App&, Ctx&);
 inline void dispRateStartup(App&);
 inline float dispRateRow(App&, Ctx&, Rect, float);
+// SET CLOCK FROM RDS / DAB (clock_rds.h): watches their clocks, offers a corroborated one
+inline void clockTick(App&, const RadioState&);
 // per-radio memory (memory.h): restore on plug-in, save what changed
 inline void memTick(App&, const RadioState&);
 // the deck's REC key (sec_audio.h): recording now? / start or stop it
@@ -279,3 +281,4 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 #include "vts.h"
 #include "memory.h"
 #include "display_rate.h"
+#include "clock_rds.h"
