@@ -369,10 +369,7 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
     const float vx = xOf(s.vfoHz);
     c.g.rect(vx - 1, spec.y, 2, spec.h, dispNeedle(0.9f));
     c.g.rect(vx - 0.5f, wfr.y, 1, wfr.h, dispNeedle(0.45f));
-    // the radio's name (top right, as the web page) and the station's RDS name (top left)
-    const std::string name = s.radioName.empty() ? "VibeSDR" : s.radioName;
-    c.tc.draw(c.g, c.f.title, name, spec.r() - 10, spec.y + 6, rgb(0, 0.8f), 2);
-    c.tc.draw(c.g, c.f.title, name, spec.r() - 11, spec.y + 5, th::amber, 2);
+    // ★ no radio name over the spectrum (Stuart, 2026-11-07: "takes up valuable space") — it is in SDR HARDWARE → RECEIVER
     // (the station's RDS name is the VTS bar's now — vts.h)
 }
 
