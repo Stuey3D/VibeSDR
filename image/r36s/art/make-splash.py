@@ -122,6 +122,21 @@ callout("r", 58,  DX + DW - 30, DY - 10, "R1 · R2", "zoom in · tune up\nhold R
 callout("r", 112, FX + FG2 + FR, FY, "RIGHT BUTTON", "back · close")
 callout("r", 160, FX + 4, FY + FG2 + FR - 2, "BOTTOM BUTTON", "press · select")
 callout("r", 214, RX + SR + 9, RY, "RIGHT STICK", "turn it to zoom\nclockwise = in")
+# ★★ THE POWER SAVE LEAF (Stuart, 2026-11-07: "An explanation of the leaf needs to go on the boot screen, to save battery
+#    when the radio hasnt been touched for 1min the waterfall slows") — the status row's green leaf (vibe-hhui app_impl.h),
+#    drawn the same way: two halves either side of a midrib, tip up-right, a short stem; no arrow (it is on the screen).
+lx0, ly0 = DX + DW + 20, 270
+def leaf(x, y, k=1.0):
+    bx, by, tx, ty = x + 3 * k, y + 13 * k, x + 14 * k, y + 2 * k
+    d.polygon([c * S for c in (bx, by, tx, ty, x + 4 * k, y + 4 * k)], fill=GREEN)
+    d.polygon([c * S for c in (bx, by, tx, ty, x + 13 * k, y + 12 * k)], fill=GREEN)
+    d.line(R([bx + 1, by - 1, tx - 2, ty + 2]), fill=BG, width=max(1, int(1.2 * S)))
+    d.line(R([x + 1, y + 15 * k, bx + 0.5, by - 0.5]), fill=GREEN, width=int(1.6 * S))
+leaf(lx0, ly0 + 1)
+d.text(((lx0 + 22) * S, ly0 * S), "POWER SAVE", font=f_key, fill=GREEN)
+for i, l in enumerate(["untouched for a minute, the", "waterfall slows to save the", "battery — any button: full speed"]):
+    d.text((lx0 * S, (ly0 + 18 + i * 16) * S), l, font=f_txt, fill=TXT)
+
 # the power button (on the case's edge, so a note rather than an arrow)
 pw = "POWER: tap = screen off / on · hold = switch off"
 d.text(((W * S - d.textlength(pw, font=f_small)) / 2, 356 * S), pw, font=f_small, fill=TXT_DIM)
