@@ -364,10 +364,7 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
     const std::string name = s.radioName.empty() ? "VibeSDR" : s.radioName;
     c.tc.draw(c.g, c.f.title, name, spec.r() - 10, spec.y + 6, rgb(0, 0.8f), 2);
     c.tc.draw(c.g, c.f.title, name, spec.r() - 11, spec.y + 5, th::amber, 2);
-    if (!s.rdsPs.empty()) {
-        c.tc.draw(c.g, c.f.title, s.rdsPs, spec.x + 50, spec.y + 6, rgb(0, 0.8f));
-        c.tc.draw(c.g, c.f.title, s.rdsPs, spec.x + 49, spec.y + 5, th::white);
-    }
+    // (the station's RDS name is the VTS bar's now — vts.h)
 }
 
 /** The portrait control island: the pill (signal gradient · frequency · mode · reading), the four buttons, the status line. */
@@ -753,6 +750,7 @@ inline std::string App::tuneTyped(double hz) {
 }
 
 inline void App::kbInput(Btn b) {
+    if (padLinksInput(b)) return;   // the pad's BOOKMARKS / SEARCH keys
     const bool numeric = kbd_.layout() == kb::KbLayoutName::numeric;
     kb::Outcome o = kb::Outcome::none;
     const auto commit = kbReq_.commit ? kbReq_.commit : kb::Commit{};
@@ -818,14 +816,15 @@ inline void App::drawKeyboard(Ctx& c, const RadioState& s) {
         const Font& vf = numeric ? c.f.big : c.f.title;
         const float ty = rd.y + 36 + (numeric ? 0 : 6);
         float x = rd.x + 16;
-        if (before.empty() && after.empty() && !kbReq_.placeholder.empty())
-            c.tc.draw(c.g, vf, kbReq_.placeholder, x + 6, ty, rgb(0xffffff, 0.35f));
+        const bool ph = before.empty() && after.empty() && !kbReq_.placeholder.empty();
+        float phW = 0;
+        if (ph) phW = (float)c.tc.draw(c.g, vf, kbReq_.placeholder, x + 6, ty, rgb(0xffffff, 0.35f)) + 6;
         x += c.tc.draw(c.g, vf, before, x, ty, th::white);
         if (std::fmod(c.t, 1.0) < 0.6) c.g.rect(x + 1, ty + 3, 2, vf.lineHeight() - 6, th::white);
         x += 4;
         x += c.tc.draw(c.g, vf, after, x, ty, th::white);
         const std::string u = kbd_.unitText();
-        if (!u.empty()) c.tc.draw(c.g, c.f.body, u, x + 8, ty + (vf.lineHeight() - c.f.body.lineHeight()) - 4, th::unit);
+        if (!u.empty()) c.tc.draw(c.g, c.f.body, u, std::max(x, rd.x + 16 + phW) + 8, ty + (vf.lineHeight() - c.f.body.lineHeight()) - 4, th::unit);
     }
     if (!kbd_.err().empty()) {
         float y = rd.b() + 10;
@@ -846,8 +845,10 @@ inline void App::drawKeyboard(Ctx& c, const RadioState& s) {
         if (k.act.t == kb::KeyActT::enter || k.act.t == kb::KeyActT::bs || k.act.t == kb::KeyActT::shift)
             kbGlyph(c, k.act.t, b, col, kbd_.state().layer == kb::KbLayer::caps);
         else textIn(c, digit ? (numeric ? c.f.big : c.f.title) : c.f.btn, k.label, b, col);
-        if ((int)i == kbd_.focus()) c.g.rframe(b.x - 4, b.y - 4, b.w + 8, b.h + 8, 11, 3, kbd_.secure() ? rgb(0xaaaaaa) : th::focus);
+        if ((int)i == kbd_.focus() && !padLinkFocused()) c.g.rframe(b.x - 4, b.y - 4, b.w + 8, b.h + 8, 11, 3, kbd_.secure() ? rgb(0xaaaaaa) : th::focus);
     }
+    if (numeric && kbReq_.title == "FREQUENCY") drawPadLinks(c, {16, 392, 608, 52});
+    if (!numeric) drawSearchLive(c, {16, 112, 608, 84});
     hints(c, 16, 464, numeric ? std::vector<std::pair<int, std::string>>{{FACE_BOTTOM, "press"}, {FACE_RIGHT, "back"}, {FACE_LEFT, "delete"}, {-1, "L R unit · START enter"}}
                               : std::vector<std::pair<int, std::string>>{{FACE_BOTTOM, "press"}, {FACE_RIGHT, "back"}, {FACE_LEFT, "delete"}, {FACE_TOP, "space"}, {-1, "L shift · R symbols"}});
 }
@@ -1016,7 +1017,10 @@ inline int App::run(int argc, char** argv) {
     int sentRate = -1;
     std::string lastSession;
     std::vector<DeviceEvent> devEvents;
+    prof_.since = nowSec();
     while (!quit_) {
+        double pc = threadCpu();
+        prof_.loops++;
         pollInput();
         hwPump(*this);
         sampleCpu();
@@ -1087,7 +1091,26 @@ inline int App::run(int argc, char** argv) {
 
         // ── draw (≤ 30 fps; nothing while the screen is off) ──
         const double t = nowSec();
-        if (screenOff_ || t - lastDraw < 1.0 / 30.0 - 0.002) { SDL_Delay(4); continue; }
+        {
+            const double c1 = threadCpu(); prof_.pre += c1 - pc; pc = c1;
+            if (t - prof_.since >= 30) {
+                const double fr = std::max(1L, prof_.frames), el = t - prof_.since;
+                std::fprintf(stderr, "vibe-hhui: perf %.0f s — %ld frames (%.1f fps), %ld loops/s · UI-thread CPU per frame: "
+                             "ticks %.2f ms · waterfall %.2f ms · drawing %.2f ms · swap %.2f ms · total %.0f %% of a core\n",
+                             el, prof_.frames, prof_.frames / el, (long)(prof_.loops / el), prof_.pre * 1e3 / fr, prof_.wf * 1e3 / fr,
+                             prof_.ui * 1e3 / fr, prof_.swap * 1e3 / fr, 100 * (prof_.pre + prof_.wf + prof_.ui + prof_.swap) / el);
+                prof_ = Prof{}; prof_.since = t;
+            }
+        }
+        // ★ between frames, SLEEP until the next one is due (≤ 16 ms, so the sticks are still read ~60 times a second —
+        //   the web samples its pad once an animation frame); it used to wake every 4 ms and redo every tick
+        if (screenOff_) { SDL_Delay(30); continue; }
+        if (t - lastDraw < 1.0 / 30.0 - 0.002) {
+            const double wait = (1.0 / 30.0 - 0.002) - (t - lastDraw);
+            SDL_Delay((Uint32)std::max(1.0, std::min(16.0, wait * 1000)));
+            continue;
+        }
+        prof_.frames++;
         lastDraw = t;
         frame++;
         for (auto& sp : stickScript) if (sp.first == (int)frame) testStick_ = sp.second;
@@ -1115,13 +1138,16 @@ inline int App::run(int argc, char** argv) {
             // spectrum + waterfall: the app's (waterfall FIRST — it runs the clock and the pace)
             g_.flush();
             const Rect spec{0, lay::specY, (float)W, lay::specH}, wfr{0, lay::wfY, (float)W, (float)H - lay::wfY};
+            { const double c0 = threadCpu(); prof_.ui += c0 - pc; pc = c0; }
             wfp_.draw(0, (int)wfr.y, W, (int)wfr.h, W, H, t);
             wfp_.drawSpectrum(0, (int)spec.y, W, (int)spec.h, W, H);
+            { const double c0 = threadCpu(); prof_.wf += c0 - pc; pc = c0; }
             glEnable(GL_BLEND);
             drawBands(c, s, {0, 0, (float)W, lay::bandsH});
             drawScale(c, s, {0, lay::scaleY, (float)W, lay::scaleH});
             drawOverlays(c, s, spec, wfr);
             drawDeck(c, s, {lay::islandX, lay::islandY, lay::islandW, lay::islandH});
+            drawVts(c, s, {lay::islandX, lay::islandY - 40, lay::islandW, 34});
         }
         for (size_t i = 0; i < sheets_.size(); i++) {
             const Sheet sh = sheets_[i];
@@ -1131,6 +1157,8 @@ inline int App::run(int argc, char** argv) {
                 case S_MODE: drawModeSheet(c, s); break;
                 case S_STEP: drawStepSheet(c, s); break;
                 case S_KB: drawKeyboard(c, s); break;
+                case S_BOOKMARKS: drawBookmarks(c, s); break;
+                case S_SEARCH: drawSearch(c, s); break;
                 case S_AUDIO: drawAudioSheet(c, s); break;
                 case S_MENU: drawMenu(c, s); break;
                 default: break;
@@ -1153,7 +1181,9 @@ inline int App::run(int argc, char** argv) {
             }
             quit_ = true;
         }
+        { const double c0 = threadCpu(); prof_.ui += c0 - pc; pc = c0; }
         SDL_GL_SwapWindow(win_);
+        { const double c0 = threadCpu(); prof_.swap += c0 - pc; pc = c0; }
     }
     if (settingsDirty_) set_.save();
     eng.stop();

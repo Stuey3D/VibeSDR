@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <time.h>
 #include <deque>
 #include <functional>
 #include <map>
@@ -134,7 +135,7 @@ public:
     bool quit_ = false;
 
     // ── state ──
-    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB };
+    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH };
     std::vector<Sheet> sheets_;
     std::deque<Btn> presses_;
     Jog tuneJog_{30}, zoomJog_{45};
@@ -178,7 +179,7 @@ public:
     void closeTop() { if (!sheets_.empty()) { nav_.forget(layerName(sheets_.back())); sheets_.pop_back(); } }
     static const char* layerName(Sheet s) {
         switch (s) { case S_MODE: return "mode"; case S_STEP: return "step"; case S_MENU: return "menu"; case S_AUDIO: return "audio";
-                     case S_KB: return "kb"; default: return "deck"; }
+                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; default: return "deck"; }
     }
     void applyLook() {
         wfp_.setPalette(set_.palette);
@@ -194,6 +195,7 @@ public:
 
     // ── drawing ──
     void drawBands(Ctx& c, const RadioState& s, Rect r);
+    void drawVts(Ctx& c, const RadioState& s, Rect r);   // vts.h — the app's VTS bar
     void drawScale(Ctx& c, const RadioState& s, Rect r);
     void drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wf);
     void drawDeck(Ctx& c, const RadioState& s, Rect r);
@@ -201,6 +203,13 @@ public:
     void drawStepSheet(Ctx& c, const RadioState& s);
     void drawKeyboard(Ctx& c, const RadioState& s);
     void kbInput(Btn b);
+    // BOOKMARKS + SEARCH (bm_page.h, search_page.h) — reached from the frequency pad's two keys
+    void drawBookmarks(Ctx& c, const RadioState& s);
+    void drawSearch(Ctx& c, const RadioState& s);
+    void drawSearchLive(Ctx& c, Rect r);
+    void drawPadLinks(Ctx& c, Rect r);
+    bool padLinksInput(Btn b);
+    bool padLinkFocused() const;
     void openKeyboard(const KbRequest& r) { kbReq_ = r; kbd_.open(r.opts); open(S_KB); }
     void openFreqEntry();
     /** Tune to a typed frequency: the radio's ranges, then tune. Returns a refusal ("" = done). */
@@ -219,6 +228,10 @@ public:
     int sweepDir_ = 0; double sweepZoneAt_ = 0, sweepZoneAng_ = 0, sweepStart_ = 0, sweepNext_ = 0, sweepEchoAt_ = 0;
     bool sweepAwaiting_ = false; uint64_t sweepSeq_ = 0;
     void stickSweep();
+    // ★ PROFILE: the UI thread's own CPU per stage (CLOCK_THREAD_CPUTIME_ID), summed and logged every 30 s — the
+    //   handheld13 log had vibe-hhui at 77–85 % of a core on FM, far more than 30 fps of drawing should cost
+    struct Prof { double pre = 0, wf = 0, ui = 0, swap = 0, idle = 0; long loops = 0, frames = 0; double since = 0; } prof_;
+    static double threadCpu() { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec + ts.tv_nsec * 1e-9; }
     void drawAudioSheet(Ctx& c, const RadioState& s);
     void drawMenu(Ctx& c, const RadioState& s);
     void drawNoRadio(Ctx& c, const RadioState& s);
@@ -249,3 +262,6 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 #include "sec_hardware.h"
 #include "sec_sdr.h"
 #include "sec_controller.h"
+#include "bm_page.h"
+#include "search_page.h"
+#include "vts.h"
