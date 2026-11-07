@@ -72,6 +72,8 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
             brightness_ = (int)v; eng_->device("{\"set\":\"brightness\",\"value\":" + std::to_string(brightness_) + "}");
         }
     }
+    // DISPLAY RATE (display_rate.h — Stuart, 2026-11-07: screen noise on FM)
+    y = dispRateRow(*this, c, a, y);
     // SPECTRUM RATE
     float y0 = y;
     y = menuRow(c, a, y, "SPECTRUM RATE", "Real frames from the radio each second — every waterfall row is real");

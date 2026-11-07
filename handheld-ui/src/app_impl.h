@@ -167,6 +167,7 @@ inline void App::updateSignal(const uint8_t* bins, int n, double centreHz, doubl
 inline void App::press(Btn b) {
     lastInput_ = nowSec();
     if (screenOff_) { screenOff_ = false; eng_->device("{\"action\":\"screen-on\"}"); return; }
+    if (dispRatePress(*this, b)) return;   // a display-rate change waiting to be kept (display_rate.h)
     if (!sheets_.empty() && sheets_.back() == S_KB) { kbInput(b); return; }   // ★ the keyboard takes every button while it is up
     const bool inFreq = !sheets_.empty() && sheets_.back() == S_KB;
     switch (b) {
@@ -997,6 +998,7 @@ inline int App::run(int argc, char** argv) {
     eng_ = &eng;
     eng.start();
     lastInput_ = nowSec();
+    dispRateStartup(*this);   // the display rate the person KEPT, if any
 
     // ★ tests: VIBE_HHUI_SCRIPT="frame:BUTTON,…" presses buttons at drawn frames
     std::vector<std::pair<int, Btn>> script;
@@ -1056,6 +1058,7 @@ inline int App::run(int argc, char** argv) {
         audioTick(*this, s);
         dabTick(*this, s);
         memTick(*this, s);
+        dispRateTick(*this);
         if (s.session != lastSession) { if (s.session == "running") { nav_.setFocus("deck", "freq"); lastDevPoll = 0; } lastSession = s.session; }
         if (s.connected && sentRate != set_.specRate) { eng.fftRate(set_.specRate); sentRate = set_.specRate; }
         if (!s.connected) sentRate = -1;
@@ -1187,6 +1190,7 @@ inline int App::run(int argc, char** argv) {
         nav_.end();
         drawToasts(c);
         hwDrawPerf(c);
+        dispRateDraw(*this, c);
         g_.flush();
 
         if (shot && (int)frame == shotFrame) {

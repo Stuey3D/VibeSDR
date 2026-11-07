@@ -156,7 +156,7 @@ in_root depmod -a "$KVER"
 #   (OFL) for the frequency, as the app's VFD.
 echo "==> vibe-hhui (the native receiver UI)"
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends g++ cmake make pkg-config \
-  libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libgles-dev libegl-dev >/dev/null
+  libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libdrm-dev libgles-dev libegl-dev >/dev/null
 rm -rf /work/hhui && cmake -S /repo/handheld-ui -B /work/hhui -DCMAKE_BUILD_TYPE=Release >/dev/null
 make -C /work/hhui -j"${JOBS:-6}" >/dev/null || die "vibe-hhui did not build"
 HHUI_BIN=/work/hhui/vibe-hhui
@@ -241,11 +241,26 @@ mkimage -A arm64 -O linux -T script -C none -n "VibeSDR R36S boot" -d "$W/boot.t
 #     reboot in 1 s: the first card, 2026-11-06). The kernel unpacks this on top of the built-in one.
 rm -rf "$W/ird" && mkdir -p "$W/ird/dev" "$W/ird/root" && mknod -m 600 "$W/ird/dev/console" c 5 1
 (cd "$W/ird" && find . | sort | cpio -o -H newc --owner 0:0 --quiet) > "$B/vibe-initrd"
-# ★★★ ROCKNIX's panel overlay UNCHANGED — its 80 Hz default (clock=30000, 640,46,2,44 / 480,16,2,14). Proven on
+# ★★★ ROCKNIX's panel overlay, its DEFAULT UNCHANGED — the 80 Hz mode (clock=30000, 640,46,2,44 / 480,16,2,14). Proven on
 #     Stuart's R36S 2026-11-06: both 60 Hz modes ROCKNIX lists put the picture off-centre or garbled on this panel
 #     (23.04 MHz: ~80 px left; 22.92 MHz: left half only, columns of noise). The page draws at 30 fps whatever the
 #     panel refreshes at, so 80 Hz costs no drawing. board/panel-60hz.py is kept only as the record of what failed.
-cp "$H/board/mipi-panel.rocknix.dtbo" "$B/overlays/mipi-panel.dtbo"
+# ★★ + FOUR MODES OF OUR OWN for the DISPLAY RATE switcher (Stuart, 2026-11-07: FM interference from the screen). The 80 Hz
+#    default runs a 30 MHz pixel clock whose 3rd harmonic is 90 MHz — in the FM band. These keep the 80 Hz mode's PROVEN
+#    geometry exactly (640,46,2,44 / 480,16,2,14 — ROCKNIX's other modes change the porches, which shifted or garbled
+#    this panel) and change only the clock, so the picture is identical and the harmonics move: 27.5 MHz (73 Hz: 82.5 /
+#    110), 28.4 (76 Hz: 85.2 / 113.6), 29.0 (77 Hz: 87.0 / 116), 37.0 (99 Hz: 74 / 111). The DEFAULT is unchanged.
+dtc -q -I dtb -O dts -o "$W/mipi-panel.dts" "$H/board/mipi-panel.rocknix.dtbo"
+python3 - "$W/mipi-panel.dts" <<'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+key = '"M clock=30000 horizontal=640,46,2,44 vertical=480,16,2,14 default=1"'
+assert s.count(key) == 1, "the panel overlay's 80 Hz default mode is not where it was"
+extra = "".join(', "M clock=%d horizontal=640,46,2,44 vertical=480,16,2,14"' % c for c in (27500, 28400, 29000, 37000))
+s = s.replace(key, key + extra)
+open(p, "w").write(s)
+PYEOF
+dtc -q -@ -I dts -O dtb -o "$B/overlays/mipi-panel.dtbo" "$W/mipi-panel.dts"
 dtc -q -@ -I dts -O dtb -o "$B/overlays/vibe-r36s.dtbo" "$H/board/vibe-r36s.dts"
 cp "$H/board/rf3536k3ka.dtb" "$B/stock/rf3536k3ka.dtb"
 # ★ prove the overlays apply to the DTB, as U-Boot will (same libfdt)

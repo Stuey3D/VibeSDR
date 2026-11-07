@@ -248,6 +248,12 @@ public:
 // the AUDIO sheet's per-frame work (sec_audio.h): auto squelch, the recording tap, re-sends on reconnect
 void audioTick(App&, const RadioState&);
 void audioSpecFrame(App&, const uint8_t*, int, double, double);
+// DISPLAY RATE (display_rate.h): the panel's modes, live, with keep-or-revert
+inline bool dispRatePress(App&, Btn);
+inline void dispRateTick(App&);
+inline void dispRateDraw(App&, Ctx&);
+inline void dispRateStartup(App&);
+inline float dispRateRow(App&, Ctx&, Rect, float);
 // per-radio memory (memory.h): restore on plug-in, save what changed
 inline void memTick(App&, const RadioState&);
 // the deck's REC key (sec_audio.h): recording now? / start or stop it
@@ -270,3 +276,4 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 #include "search_page.h"
 #include "vts.h"
 #include "memory.h"
+#include "display_rate.h"

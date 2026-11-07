@@ -20,6 +20,7 @@ struct Settings {
     bool followVfo = true;         // VFO CENTRE: LOCKED (the view follows the dial)
     int meterMode = 0;             // 0 SNR · 1 S-units · 2 dBFS (the web's meter cycle)
     int volume = -1;               // last known (the hardware service owns it)
+    int dispClock = 0, dispProven = 1;   // the KEPT display mode (pixel clock kHz; 0 = the panel's default) — display_rate.h
     int freqUnit = 2;              // the readout's and the pad's unit: 0 Hz · 1 kHz · 2 MHz (the web's freqUnit, device-wide)
 
     static std::string path() {
@@ -47,15 +48,17 @@ struct Settings {
         followVfo = j["followVfo"].boolean(followVfo);
         meterMode = (int)j["meterMode"].num(meterMode);
         freqUnit = std::max(0, std::min(2, (int)j["freqUnit"].num(freqUnit)));
+        dispClock = (int)j["dispClock"].num(dispClock);
+        dispProven = (int)j["dispProven"].num(dispProven);
     }
     void save() const {
         const std::string p = path(), tmp = p + ".tmp";
         FILE* f = std::fopen(tmp.c_str(), "w");
         if (!f) return;
         std::fprintf(f, "{\"step\":%d,\"palette\":%s,\"speed\":%d,\"contrast\":%g,\"sharpness\":%g,\"wfBrightness\":%g,"
-                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d}\n",
+                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d,\"dispClock\":%d,\"dispProven\":%d}\n",
                      step, jsonQuote(palette).c_str(), speed, contrast, sharpness, wfBrightness, specRate, screenOffMin,
-                     followVfo ? "true" : "false", meterMode, freqUnit);
+                     followVfo ? "true" : "false", meterMode, freqUnit, dispClock, dispProven);
         std::fflush(f);
         std::fclose(f);
         std::rename(tmp.c_str(), p.c_str());

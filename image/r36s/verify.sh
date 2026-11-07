@@ -49,8 +49,12 @@ grep -q ' $' "$T/ext" && fail "extlinux.conf has a trailing space"
 mcopy -n -i "$T/boot.vfat" ::/overlays/mipi-panel.dtbo ::/overlays/vibe-r36s.dtbo ::/rk3326-gameconsole-eeclone.dtb "$T/"
 fdtoverlay -i "$T/rk3326-gameconsole-eeclone.dtb" -o "$T/m.dtb" "$T/mipi-panel.dtbo" "$T/vibe-r36s.dtbo" || fail "overlays do not apply"
 dtc -q -I dtb -O dts "$T/m.dtb" > "$T/m.dts"
-cmp -s "$T/mipi-panel.dtbo" /repo/image/r36s/board/mipi-panel.rocknix.dtbo || fail "the panel overlay is not ROCKNIX's, unchanged"
+# ★ ROCKNIX's overlay + our four clock-only modes (build-image.sh): everything else must be ROCKNIX's, byte for byte
+dtc -q -I dtb -O dts /repo/image/r36s/board/mipi-panel.rocknix.dtbo | sed 's/"M clock=30000 horizontal=640,46,2,44 vertical=480,16,2,14 default=1"/&, "M clock=27500 horizontal=640,46,2,44 vertical=480,16,2,14", "M clock=28400 horizontal=640,46,2,44 vertical=480,16,2,14", "M clock=29000 horizontal=640,46,2,44 vertical=480,16,2,14", "M clock=37000 horizontal=640,46,2,44 vertical=480,16,2,14"/' > "$T/want.dts"
+dtc -q -I dtb -O dts "$T/mipi-panel.dtbo" > "$T/have.dts"
+cmp -s "$T/want.dts" "$T/have.dts" || fail "the panel overlay is not ROCKNIX's plus our four display-rate modes"
 grep -q 'M clock=30000 horizontal=640,46,2,44 vertical=480,16,2,14 default=1' "$T/m.dts" || fail "the panel's default is not ROCKNIX's 80 Hz mode"
+grep -q 'M clock=28400 horizontal=640,46,2,44 vertical=480,16,2,14' "$T/m.dts" || fail "the panel's extra display-rate modes are missing"
 [ "$(grep -o 'default=1' "$T/m.dts" | wc -l)" = 1 ] || fail "more than one default panel mode"
 for f in 408000000 600000000 816000000 1008000000 1104000000 1200000000 1248000000 1296000000; do
   grep -q "opp-$f {" "$T/m.dts" || fail "CPU step $f missing"
