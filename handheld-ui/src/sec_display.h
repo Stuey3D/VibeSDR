@@ -87,7 +87,7 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     // IDLE POWER SAVE (App::idleNow_)
     // ★ Stuart, 2026-11-07: "give an option to disable the powersave with the warning that it will reduce battery life"
     y = menuRow(c, a, y, "IDLE POWER SAVE", set_.idleSave
-        ? "Untouched for a minute: the waterfall slows to 5 rows a second, a little coarser, and the screen redraws 4 times a second — any button brings it straight back. Longer on battery; the audio is not touched"
+        ? "Untouched for a minute: the waterfall slows to 5 rows a second and the screen redraws 4 times a second — any button brings it straight back. Longer on battery; the audio is not touched"
         : "OFF — the waterfall and the screen run at full speed all the time. This WILL shorten the battery life: switch it back on for the longest listening");
     {
         const int hit = segmented(c, "d.idle", {a.x + 6, y - 4, a.w - 12, 38}, {"OFF", "ON"}, set_.idleSave ? 1 : 0);

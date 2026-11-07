@@ -2104,7 +2104,11 @@ int main(int argc, char** argv) {
                     o.lockFreq / 1e6, (o.lockFreq - o.rate / 2) / 1e6, (o.lockFreq + o.rate / 2) / 1e6);
     }
     LocalSdrShim::setVibeServerSharedChannels(shared);
-    LocalSdrShim::setVibeServerZoomSpectrum(o.zoomSpectrum);
+    // ★★ THE HANDHELD: NO KEEP-SHARP ZOOM (Stuart, 2026-11-07: "the keep sharp when zoomed wasnt in use for the longest
+    //    time on the servers and they worked well enough, on a 640x480 tiny screen I think we can get away with it off and
+    //    save processing power"). It filters every sample of the capture down to the zoomed span for its own FFT; off, a
+    //    close zoom is magnified from the wide FFT's bins — the battery matters more here than detail on a small screen.
+    LocalSdrShim::setVibeServerZoomSpectrum(o.zoomSpectrum && !g_handheldChild);
     LocalSdrShim::setVibeServerIdleGrace(o.idleGrace);
     LocalSdrShim::setVibeServerIcomOffDelayScale(o.icomOffDelayScale);   // ★ 60 s a minute, except in a test
     LocalSdrShim::setVibeServerRfNotch(o.rfNotch);
@@ -3626,7 +3630,7 @@ int main(int argc, char** argv) {
         //    with a screenshot of the staircase to prove it).
         // ★ Only what this patch actually carries, and only for OUR radio — the loop above has
         //   already resolved that, so `next` is the truth for this process.
-        LocalSdrShim::setVibeServerZoomSpectrum(next.zoomSpectrum);
+        LocalSdrShim::setVibeServerZoomSpectrum(next.zoomSpectrum && !g_handheldChild);   // ★ never on the handheld (above)
         g_runtimeConfig = next;
         g_serverConfig  = srv;
     });
