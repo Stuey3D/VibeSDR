@@ -87,7 +87,8 @@ private:
     uint64_t dropped_ = 0;
     // ★ the minute's figures (said once a minute while playing): device underruns, real starvations padded with silence,
     //   the drift trims each way, the total buffered (queue + device) min / max
-    uint64_t xruns_ = 0, starved_ = 0, trimFast_ = 0, trimSlow_ = 0, droppedSaid_ = 0;
+    uint64_t xruns_ = 0, starved_ = 0, droppedSaid_ = 0;
+    double rateI_ = 0, phase_ = 0, corrSum_ = 0, avgTotal_ = 0; uint64_t corrN_ = 0;   // the rate converter (writer thread only)
     long depthMin_ = LONG_MAX, depthMax_ = 0;
     std::chrono::steady_clock::time_point statAt_{};
     std::atomic<bool> run_{false};
@@ -196,14 +197,11 @@ private:
      *     still had up to 80 ms to play. At 2.048 MS/s the DSP hands over audio in blocks under a period, so the queue sat
      *     short and tiny gaps were injected all the time: the crackle, and the gaps' added time made DAB run slow. Now the
      *     writer waits while the device has more than two periods in hand, and pads only a real starvation.
-     * ★★ DRIFT: the RTL's crystal and the codec's never agree exactly, so the total buffered (queue + device) is held near
-     *     kHoldFrames by playing a period's 480 frames from 481 (a hair faster) or 479 (a hair slower) of input — ±0.2 %,
-     *     inaudible — instead of letting it drain to a gap or fill to a drop. */
+     * ★★ DRIFT: the RTL's crystal and the codec's never agree — and on this board the codec ran ~1.7 % slow (handheld33) —
+     *     so the total buffered (queue + device) is held near kHoldFrames by the rate converter below (PI, ±5 %). */
     static constexpr long kHoldFrames = 4800;             // ~100 ms held in all
-    static constexpr long kHoldBand = 1440;               // ±30 ms before a trim
     void loop() {
         std::vector<int16_t> buf((size_t)kPeriod * 2);
-        std::vector<int16_t> in((size_t)(kPeriod + 2) * 2);
         bool primed = false;
         auto lastFail = std::chrono::steady_clock::time_point{};
         while (run_.load()) {
@@ -227,32 +225,45 @@ private:
                 primed = true;
                 const long qf = (long)(q_.size() / 2);
                 const long dev = deviceDelay();
-                // ★ short of a period, but the device still has plenty: wait for the DSP's next block, insert nothing
-                if (qf < (long)kPeriod + 1 && dev > (long)kPeriod * 2) continue;
                 const long total = qf + std::max(0L, dev);
+                /* ★★★ THE RATE CONVERTER (handheld33's log: the buffer sat full, ~50 000 frames a minute dropped — the
+                 *     codec plays ~1.7 % under 48 kHz; its I2S clock is not a clean 48 k on this board). A PI loop holds the
+                 *     total buffered near kHoldFrames by reading the queue at `ratio` input frames per output frame (up to
+                 *     ±5 %), with linear interpolation and the phase carried across periods — so speed AND pitch come out
+                 *     right on the device's real clock, and nothing is dropped or padded. Slow on purpose: ~10 s to settle. */
+                // ★ the loop steers on the SMOOTHED level (~2 s): the DSP's blocks make the instant level jump every period,
+                //   and steering on that wobbled the pitch. Gains from a simulation against a ±1.7 % codec and real block
+                //   sizes: the correction settles within ±0.07 % of the truth, ≤ 21 ppm a period, 88–122 ms held.
+                avgTotal_ = avgTotal_ <= 0 ? (double)total : avgTotal_ + 0.005 * ((double)total - avgTotal_);
+                const double err = (avgTotal_ - (double)kHoldFrames) / (double)kHoldFrames;
+                const double corr = std::max(-0.05, std::min(0.05, rateI_ + 0.02 * err));
+                const double ratio = 1.0 + corr;   // input frames per output frame
+                const double needF = phase_ + ratio * kPeriod + 2;
+                // ★ short of this period's input, but the device still has plenty: wait for the DSP's next block, insert nothing
+                if ((double)qf < needF && dev > (long)kPeriod * 2) continue;
                 depthMin_ = std::min(depthMin_, total); depthMax_ = std::max(depthMax_, total);
-                // ★ the drift trim: how much input this period of output is made from
-                long take = kPeriod;
-                if (total > kHoldFrames + kHoldBand && qf >= (long)kPeriod + 1) { take = kPeriod + 1; trimFast_++; }
-                else if (total < kHoldFrames - kHoldBand && dev >= 0) { take = kPeriod - 1; trimSlow_++; }
-                if (qf >= take) {
-                    for (long i = 0; i < take * 2; i++) { in[(size_t)i] = q_.front(); q_.pop_front(); }
-                    if (take == (long)kPeriod) std::copy(in.begin(), in.begin() + kPeriod * 2, buf.begin());
-                    else {
-                        // linear, `take` input frames across kPeriod output frames (the ends land exactly)
-                        for (unsigned o = 0; o < kPeriod; o++) {
-                            const double pos = (double)o * (double)(take - 1) / (double)(kPeriod - 1);
-                            const long i0 = (long)pos; const long i1 = std::min(take - 1, i0 + 1); const double f = pos - (double)i0;
-                            for (int c = 0; c < 2; c++)
-                                buf[o * 2 + c] = (int16_t)std::lround(in[(size_t)i0 * 2 + c] * (1 - f) + in[(size_t)i1 * 2 + c] * f);
+                rateI_ = std::max(-0.05, std::min(0.05, rateI_ + 0.00005 * err));   // the integral, once per period written
+                corrSum_ += corr; corrN_++;
+                if ((double)qf >= needF) {
+                    double ph = phase_;
+                    for (unsigned o = 0; o < kPeriod; o++) {
+                        const size_t i0 = (size_t)ph; const double f = ph - (double)i0;
+                        for (int c = 0; c < 2; c++) {
+                            const double v = q_[i0 * 2 + c] * (1 - f) + q_[(i0 + 1) * 2 + c] * f;
+                            buf[o * 2 + c] = (int16_t)std::lround(std::max(-32768.0, std::min(32767.0, v)));
                         }
+                        ph += ratio;
                     }
+                    const size_t used = (size_t)ph;
+                    for (size_t i = 0; i < used * 2; i++) q_.pop_front();
+                    phase_ = ph - (double)used;
                 } else {
                     // ★ a REAL starvation (the device is nearly dry too): what there is, then silence, and refill first
-                    const size_t have = q_.size();
+                    const size_t have = std::min(q_.size(), buf.size());
                     for (size_t i = 0; i < have; i++) { buf[i] = q_.front(); q_.pop_front(); }
                     for (size_t i = have; i < buf.size(); i++) buf[i] = 0;
                     primed = false;
+                    phase_ = 0;
                     starved_++;
                 }
                 const auto nowT = std::chrono::steady_clock::now();
@@ -260,12 +271,12 @@ private:
                 if (nowT - statAt_ >= std::chrono::seconds(60)) {
                     char b[240];
                     std::snprintf(b, sizeof b, "speaker: the last minute — %llu starved, %llu device underruns, %llu dropped (queue full), "
-                                  "drift trims %llu faster / %llu slower, buffered %ld–%ld ms",
+                                  "rate %+.2f %% (the device's clock against 48 kHz), buffered %ld–%ld ms",
                                   (unsigned long long)starved_, (unsigned long long)xruns_, (unsigned long long)(dropped_ - droppedSaid_),
-                                  (unsigned long long)trimFast_, (unsigned long long)trimSlow_,
+                                  corrN_ ? 100.0 * corrSum_ / (double)corrN_ : 0.0,
                                   depthMin_ == LONG_MAX ? 0 : depthMin_ / 48, depthMax_ / 48);
                     lk.unlock(); say(b); lk.lock();
-                    starved_ = xruns_ = trimFast_ = trimSlow_ = 0; droppedSaid_ = dropped_;
+                    starved_ = xruns_ = 0; corrSum_ = 0; corrN_ = 0; droppedSaid_ = dropped_;
                     depthMin_ = LONG_MAX; depthMax_ = 0; statAt_ = nowT;
                 }
             }
