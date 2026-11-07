@@ -62,6 +62,12 @@ inline void App::sampleCpu() {
     const unsigned long long idle = v[3] + (n > 4 ? v[4] : 0), busy = total - idle;
     if (cpuTotal_ && total > cpuTotal_) cpuPct_ = (int)std::lround(100.0 * (double)(busy - cpuBusy_) / (double)(total - cpuTotal_));
     cpuBusy_ = busy; cpuTotal_ = total;
+    // ★ the clock it is running at now (Stuart, 2026-11-07: "put the CPU clock next to the %")
+    if (FILE* q = std::fopen("/sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq", "r")) {
+        long khz = 0;
+        if (std::fscanf(q, "%ld", &khz) == 1) cpuKHz_ = khz;
+        std::fclose(q);
+    }
 }
 
 inline void App::stickSweep() {
@@ -578,7 +584,14 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         // the web's HEALTH_COLOURS: OK · elevated · high · critical
         const Rgba hc[4] = {rgb(0x5BE36B), rgb(0xE8C547), rgb(0xFF8A3D), rgb(0xFF4B4B)};
         if (cpuPct_ >= 0) {
-            Part p{"", std::to_string(cpuPct_) + "%"};
+            std::string t = std::to_string(cpuPct_) + "%";
+            if (cpuKHz_ > 0) {
+                char b[24];
+                if (cpuKHz_ >= 1000000) std::snprintf(b, sizeof b, " %.1fGHz", cpuKHz_ / 1e6);
+                else std::snprintf(b, sizeof b, " %ldMHz", cpuKHz_ / 1000);
+                t += b;
+            }
+            Part p{"", t};
             p.icon = 1;
             p.col = hc[cpuPct_ >= 90 ? 3 : cpuPct_ >= 75 ? 2 : cpuPct_ >= 60 ? 1 : 0];
             parts.push_back(p);

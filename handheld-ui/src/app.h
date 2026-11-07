@@ -222,7 +222,7 @@ public:
     double clampTune(double hz);
     int gapNudgeDir_ = 0;
     // the whole device's CPU (/proc/stat, once a second) for the stats row
-    int cpuPct_ = -1; double cpuAt_ = 0; unsigned long long cpuBusy_ = 0, cpuTotal_ = 0;
+    int cpuPct_ = -1; long cpuKHz_ = 0; double cpuAt_ = 0; unsigned long long cpuBusy_ = 0, cpuTotal_ = 0;
     void sampleCpu();
     // ★ HOLD THE LEFT STICK LEFT / RIGHT = SWEEP TUNE (Stuart, 2026-11-06: spinning is great for small precise
     //   adjustments, "large tunes with them hurt"). The web's hold-sweep (main.ts attachHoldSweep): 350 ms hold, then
