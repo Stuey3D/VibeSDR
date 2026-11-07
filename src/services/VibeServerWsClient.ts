@@ -1001,6 +1001,8 @@ export abstract class VibeServerWsClient {
   abSetMonoOut(on: boolean) { this.ab.setMonoOut(on); }
   /** ★★★ The A ⟷ B balance (−1 all A … +1 all B) — sent while B is on, to a server that takes it (hwinfo watchBal). */
   abSetBalance(b: number) { this.ab.setBalance(b); }
+  /** ★★★ V12 per-VFO recording — which VFOs' own audio this listener wants (vfoAB VfoABCore.setRec). */
+  abSetRec(a: boolean, b: boolean) { this.ab.setRec(a, b); }
   /** ★★ The offer — from hwinfo `watch` AND from the watch state's `max` (see watchMaxOf), as the web reads both.
    *  A withdrawn offer resets to one VFO (A restored if B was tuned) and says so; a changed one redraws the toggle. */
   private _abOffer(n: number) {

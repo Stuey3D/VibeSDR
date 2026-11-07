@@ -445,6 +445,18 @@ function SectionLabel({ label, icon }: { label: string; icon?: SectionIconName }
     </View>
   );
 }
+/** ★★★ One VFO's recording clock — ticks itself once a second (never the whole sheet). */
+function VfoRecClock({ label, startedAt, st }: { label: string; startedAt: number; st: any }) {
+  const [now, setNow] = React.useState(Date.now());
+  React.useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  return (
+    <PopupWindow style={st.recTimer} metalStyle={st.recTimerWin}>
+      <View style={st.recDot} />
+      <Text style={st.recTime}>{label} {fmtRecTime(Math.max(0, Math.floor((now - startedAt) / 1000)))}</Text>
+    </PopupWindow>
+  );
+}
+
 function BtnRow({ children, end }: { children: React.ReactNode; end?: boolean }) {
   const st = usePopupStyles(makeSt);
   return <NavRow><View style={[st.btnRow, end && st.btnRowEnd]}>{children}</View></NavRow>;
@@ -587,6 +599,9 @@ export interface AudioSheetProps {
    *  it holds what a recording captures, so wherever REC works, so does this. Hidden when the screen passes no handler. */
   recBuffer?:   RecordBufferSeconds;
   onRecBuffer?: (s: RecordBufferSeconds) => void;
+  /** ★★★ V12 PER-VFO RECORDING: set while VFO B is on, on a server that records each VFO on its own — REC becomes VFO
+   *  A's and a REC B row appears, each with its own clock (`aAt`/`bAt`: when it started, ms, or null). */
+  vfoRec?: { aAt: number | null; bAt: number | null; onRecA: () => void; onRecB: () => void } | null;
 
   // Squelch variants (gated by backend)
   snrSquelch?:   number;  onSnrSquelch?:   (v: number) => void;
@@ -727,7 +742,7 @@ export interface AudioSheetProps {
 export default function AudioSheet({
   visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', meterBus, isLocal = false, recordingOnly = false,
   nr = false, onNr, nb = false, onNb, nbx = false, onNbx, nfmVoice = true, onNfmVoice,
-  recording = false, onRec, recSeconds = 0, onRecordings, recBuffer = 0, onRecBuffer,
+  recording = false, onRec, recSeconds = 0, onRecordings, recBuffer = 0, onRecBuffer, vfoRec = null,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR,
@@ -904,9 +919,23 @@ export default function AudioSheet({
               <Btn label={dualMuted ? 'MUTED' : 'MUTE'} active={dualMuted} onPress={() => onDualMute(!dualMuted)} />
             )}
             {/* No pip (the mockup): REC is an action whose state the timer below reports. */}
-            <Btn label="⏺ REC" active={recording} pip={false} onPress={onRec} />
+            {vfoRec
+              ? <Btn label="⏺ REC A" active={vfoRec.aAt != null} pip={false} onPress={vfoRec.onRecA} />
+              : <Btn label="⏺ REC" active={recording} pip={false} onPress={onRec} />}
           </BtnRow>
-          {recording && (
+          {/* ★★★ V12 PER-VFO RECORDING — VFO B's own REC, under A's; each records its VFO before the pan to one ear */}
+          {vfoRec && (
+            <BtnRow end>
+              <Btn label="⏺ REC B" active={vfoRec.bAt != null} pip={false} onPress={vfoRec.onRecB} />
+            </BtnRow>
+          )}
+          {vfoRec && (vfoRec.aAt != null || vfoRec.bAt != null) && (
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8 }}>
+              {vfoRec.aAt != null && <VfoRecClock label="A" startedAt={vfoRec.aAt} st={st} />}
+              {vfoRec.bAt != null && <VfoRecClock label="B" startedAt={vfoRec.bAt} st={st} />}
+            </View>
+          )}
+          {!vfoRec && recording && (
             // ★ Silver / black: the timer is a readout, so it sits in a window (text colour).
             <PopupWindow style={st.recTimer} metalStyle={st.recTimerWin}>
               <View style={st.recDot} />

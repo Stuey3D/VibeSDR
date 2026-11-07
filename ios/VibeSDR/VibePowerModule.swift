@@ -2163,6 +2163,31 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
   }
 
+  // MARK: - Per-VFO recording (V12)
+
+  /// ★★★ VFO `vfo` (0 = A, 1 = B): its own file from its own stream (VibeVfoTrack). Resolves {path, bufferedSeconds}.
+  @objc func startVfoRecording(_ vfo: NSNumber, frequency: NSNumber, mode: NSString,
+                               resolver resolve: @escaping RCTPromiseResolveBlock,
+                               rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let v = vfo.intValue
+    guard v == 0 || v == 1 else { reject("vfo", "No such VFO", nil); return }
+    VibeVfoTrack.tracks[v].start(freqHz: frequency.intValue, mode: mode as String, resolve: resolve, reject: reject)
+  }
+  @objc func stopVfoRecording(_ vfo: NSNumber, resolver resolve: @escaping RCTPromiseResolveBlock,
+                              rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let v = vfo.intValue
+    guard v == 0 || v == 1 else { resolve(nil); return }
+    VibeVfoTrack.tracks[v].stop(resolve)
+  }
+  /// The REC BUFFER for both VFOs' own streams (0 = Off). JS sends it while VFO A/B records per VFO.
+  @objc func setVfoRecordBuffer(_ seconds: NSNumber) {
+    for t in VibeVfoTrack.tracks { t.setBuffer(seconds.doubleValue) }
+  }
+  @objc func clearVfoRecordBuffer(_ vfo: NSNumber) {
+    let v = vfo.intValue
+    if v == 0 || v == 1 { VibeVfoTrack.tracks[v].clearBuffer() }
+  }
+
   // MARK: - Record buffer (V12)
 
   /// 0 = Off (frees it), else the seconds to hold (30 / 60). App-wide setting; JS sends it on every screen.
@@ -2896,6 +2921,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     guard b.count > 6 else { return }
     let channels = Int(b[0]) == 2 ? 2 : 1
     let format   = Int(b[1])
+    // ★★★ V12 PER-VFO RECORDING (format 5): one VFO's own audio, sent only while this listener records it (or holds a
+    //     record buffer for it) — never played; its track decodes and writes it on its own queue (VibeVfoTrack).
+    if format == 5 {
+      guard b.count > 8 else { return }
+      let v = Int(b[6])
+      if v == 0 || v == 1 { VibeVfoTrack.tracks[v].feed(b) }
+      return
+    }
     let rate = Int(b[2]) | (Int(b[3]) << 8) | (Int(b[4]) << 16) | (Int(b[5]) << 24)
     // ★★★ Refused HERE, before the engine start, Opus, PCM and ADPCM paths all see it — a rate at
     //     or above 2^31 used to reach Int32(...) in feedExternalOpus and trap.
@@ -4640,4 +4673,133 @@ enum VibeCrashLog {
   @objc static func session(_ why: String) {
     log("──────── LAUNCH (\(why)) build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?") ────────")
   }
+}
+
+
+/// ★★★ V12 PER-VFO RECORDING (Stuart, 2026-11-07: "when the A/B VFO's are active there needs to be a 2nd record line in the
+/// audio menu for the B VFO, both can be triggered independently and both have their own clocks and the signal is recorded
+/// as it should be before we push it to one ear so Stereo for an FM signal and mono for others").
+/// ONE VFO's own audio, as the server sends it to a listener recording it — FORMAT 5: [0] channels · [1] 5 · [2..5] 48000 ·
+/// [6] the VFO (0 A, 1 B) · [7] 3 Opus / 0 int16 PCM · payload (local_sdr_shim.cpp watchSendRec). Never played — the
+/// listener hears the server's mix exactly as before. Its own Opus decoder (the main stream's carries that stream's state),
+/// its own record buffer (RecordBufferRing) and its own AAC file, all on its own serial queue: the socket's queue only
+/// hands the bytes over, and the audio thread never sees this at all (Network > Audio > Spectrum > Decoders).
+/// ★ The file keeps the VFO's channels as they are when it starts — mono stays mono, stereo stays stereo; a change midway
+///   is folded or doubled to fit (an m4a cannot change its channel count).
+final class VibeVfoTrack {
+  static let tracks = [VibeVfoTrack(0), VibeVfoTrack(1)]
+  let vfo: Int
+  private let q: DispatchQueue
+  private var dec: OpaquePointer?
+  private var decCh: Int32 = 0
+  private let ring = RecordBufferRing(rate: 48_000)
+  private var file: AVAudioFile?
+  private var path = ""
+  private var lastCh = 1
+  private var pcm = [Int16](repeating: 0, count: 5760 * 2)
+  private init(_ v: Int) { vfo = v; q = DispatchQueue(label: "com.vibesdr.vforec\(v)", qos: .userInitiated) }
+
+  func feed(_ b: [UInt8]) {
+    q.async { [self] in
+      guard file != nil || ring.isOn else { return }
+      let ch = b[0] == 2 ? 2 : 1, inner = b[7]
+      var frames = 0
+      if inner == 0 {
+        frames = (b.count - 8) / (2 * ch)
+        if frames <= 0 { return }
+        if pcm.count < frames * ch { pcm = [Int16](repeating: 0, count: frames * ch) }
+        for i in 0..<(frames * ch) { pcm[i] = Int16(bitPattern: UInt16(b[8 + i * 2]) | (UInt16(b[9 + i * 2]) << 8)) }
+      } else if inner == 3 {
+        if dec == nil || decCh != Int32(ch) {
+          if let d = dec { opus_decoder_destroy(d) }
+          var err: Int32 = 0
+          dec = opus_decoder_create(48_000, Int32(ch), &err)
+          decCh = Int32(ch)
+          if err != 0 { dec = nil; return }
+        }
+        guard let d = dec else { return }
+        let got: Int32 = b.withUnsafeBufferPointer { p in
+          pcm.withUnsafeMutableBufferPointer { o in
+            opus_decode(d, p.baseAddress! + 8, Int32(b.count - 8), o.baseAddress!, 5760, 0)
+          }
+        }
+        if got <= 0 { opus_decoder_destroy(d); dec = nil; return }   // ★ rebuilt on the next packet (the main path's rule)
+        frames = Int(got)
+      } else { return }
+      lastCh = ch
+      var l = [Float](repeating: 0, count: frames), r = [Float](repeating: 0, count: frames)
+      for i in 0..<frames {
+        if ch == 2 { l[i] = Float(pcm[i * 2]) / 32768; r[i] = Float(pcm[i * 2 + 1]) / 32768 }
+        else { l[i] = Float(pcm[i]) / 32768; r[i] = l[i] }
+      }
+      if ring.isOn { l.withUnsafeBufferPointer { lp in r.withUnsafeBufferPointer { rp in
+        ring.append(left: lp.baseAddress!, right: ch == 2 ? rp.baseAddress! : nil, frames: frames) } } }
+      if file != nil { write(l, r, frames) }
+    }
+  }
+
+  /// q only: into the file, at ITS channel count.
+  private func write(_ l: [Float], _ r: [Float], _ n: Int) {
+    guard let f = file, n > 0,
+          let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: AVAudioFrameCount(n)),
+          let out = buf.floatChannelData else { return }
+    buf.frameLength = AVAudioFrameCount(n)
+    if f.processingFormat.channelCount >= 2 {
+      for i in 0..<n { out[0][i] = l[i]; out[1][i] = r[i] }
+    } else {
+      for i in 0..<n { out[0][i] = 0.5 * (l[i] + r[i]) }
+    }
+    do { try f.write(from: buf) } catch {
+      NSLog("[VibeVfoTrack] VFO %@ write error: %@", vfo == 0 ? "A" : "B", error.localizedDescription)
+      file = nil
+    }
+  }
+
+  func start(freqHz: Int, mode: String, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    q.async { [self] in
+      if file != nil { resolve(["path": path, "bufferedSeconds": 0]); return }
+      let prefix = ring.isOn ? ring.snapshot() : []
+      let prefixSec = ring.isOn ? ring.seconds : 0
+      let ch = prefix.contains(where: { $0.channels == 2 }) || lastCh == 2 ? 2 : 1
+      let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
+      let mhz = String(format: "%.4fMHz", Double(freqHz) / 1e6)
+      let name = "VibeSDR_\(df.string(from: Date()))_\(mhz)_\(mode.uppercased())_VFO-\(vfo == 0 ? "A" : "B").m4a"
+      let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
+      do {
+        let f = try AVAudioFile(forWriting: url, settings: [
+          AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: ch,
+          AVEncoderBitRateKey: ch == 2 ? 128_000 : 64_000,
+        ], commonFormat: .pcmFormatFloat32, interleaved: false)
+        file = f; path = url.path
+        NSLog("[VibeVfoTrack] VFO %@ recording → %@ (%d ch, %.1f s from the record buffer)", vfo == 0 ? "A" : "B", name, ch, prefixSec)
+        resolve(["path": url.path, "bufferedSeconds": prefixSec])
+        for c in prefix {
+          var l = [Float](repeating: 0, count: c.frames), r = [Float](repeating: 0, count: c.frames)
+          c.samples.withUnsafeBufferPointer { sp in
+            for i in 0..<c.frames {
+              if c.channels == 2 { l[i] = Float(sp[i * 2]) / 32768; r[i] = Float(sp[i * 2 + 1]) / 32768 }
+              else { l[i] = Float(sp[i]) / 32768; r[i] = l[i] }
+            }
+          }
+          write(l, r, c.frames)
+        }
+      } catch { reject("rec_open", error.localizedDescription, error) }
+    }
+  }
+
+  func stop(_ resolve: @escaping RCTPromiseResolveBlock) {
+    q.async { [self] in
+      let p = path
+      file = nil      // closing the AVAudioFile finalises the .m4a
+      path = ""
+      ring.clear()    // ★ the next recording never repeats this one (the main recorder's rule)
+      NSLog("[VibeVfoTrack] VFO %@ recording stopped: %@", vfo == 0 ? "A" : "B", p)
+      resolve(p.isEmpty ? nil : p)
+    }
+  }
+  func setBuffer(_ seconds: Double) {
+    let s = max(0, min(120, seconds))
+    q.async { [self] in if ring.capacitySeconds != s { ring.setCapacity(seconds: s) } }
+  }
+  func clearBuffer() { q.async { [self] in ring.clear() } }
 }

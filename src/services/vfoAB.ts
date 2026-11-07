@@ -65,6 +65,11 @@ export interface WatchState {
   /** ★★★ The listener's A ⟷ B balance as the server holds it (−1 all A … +1 all B). Absent (an older server: no
    *  balance there) = null. */
   bal: number | null;
+  /** ★★★ V12 PER-VFO RECORDING: this server sends each VFO's own audio to a listener recording it (format 5). Absent (an
+   *  older server) = false — REC records the mix there, as before. And what it holds for this listener now. */
+  recVfo: boolean;
+  recA: boolean;
+  recB: boolean;
   chans: WatchChan[];
   /** Set when the server refused the last request — outside | full | off | mode | band | apart | id | session. */
   refused?: string;
@@ -103,7 +108,8 @@ export function parseWatch(msg: Record<string, unknown> | null | undefined): Wat
   const st: WatchState = {
     max: Math.max(0, Math.floor(num(msg.max))), lo: num(msg.lo), hi: num(msg.hi),
     stereo: msg.stereo !== false, monoOut: msg.monoOut === true, muteA: msg.muteA === true, decB: msg.decB === true,
-    bal: typeof msg.bal === 'number' && Number.isFinite(msg.bal) ? clampBalance(msg.bal) : null, chans,
+    bal: typeof msg.bal === 'number' && Number.isFinite(msg.bal) ? clampBalance(msg.bal) : null,
+    recVfo: msg.recVfo === true, recA: msg.recA === true, recB: msg.recB === true, chans,
   };
   const r = text(msg.refused, 16); if (r) st.refused = r;
   const n = text(msg.note, 200); if (n) st.note = n;
@@ -203,6 +209,8 @@ export function roundBalance(b: number): number { return Math.round(clampBalance
  *  +1 = all B — dualMix.ts balanceGains, applied by the SERVER (vibe_watch.h PanMixer::setBalance) as a LEVEL before
  *  any stereo or mono placement: it only turns the VFO leaned away from DOWN. */
 export function msgBalance(b: number): Record<string, unknown> { return { type: 'watch', balance: roundBalance(b) }; }
+/** ★★★ V12 PER-VFO RECORDING — which VFOs' own audio this listener wants sent (recording, or a record buffer held). */
+export function msgRec(a: boolean, b: boolean): Record<string, unknown> { return { type: 'watch', recA: a, recB: b }; }
 
 // ── The ears ───────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
@@ -271,6 +279,8 @@ export interface VfoABInfo {
   balOffered: boolean;
   /** The listener's balance (−1 all A … +1 all B) — this device's, sent to the server. */
   balance: number;
+  /** ★★★ This server records each VFO on its own (its state's recVfo) — the Audio menu then has REC A and REC B. */
+  recOffered: boolean;
 }
 
 /** The four fields of the client's status that ARE a VFO's tuning. */
@@ -341,6 +351,8 @@ export interface WatchOutcome {
   meterDb?: number;
   /** The server holds a VFO B this client did not know about, and it has been taken on (A still selected). */
   adopted?: boolean;
+  /** ★★★ This server turned out to offer per-VFO recording (the first state saying recVfo) — the screen redraws. */
+  recOffered?: boolean;
 }
 
 /**
@@ -403,7 +415,7 @@ export class VfoABCore {
              activeSquelchDb: this.active === 'A' ? this.sqlA : this.sqlB, state: this.state,
              squelchA: this.sqlA, squelchB: this.sqlB,
              muteA: !!b && this.state?.muteA === true, muteB: !!b && b.mute,
-             balOffered: this.balOffered, balance: this.balance };
+             balOffered: this.balOffered, balance: this.balance, recOffered: this.on && this.recOffered };
   }
   /** hwinfo's `watch`. Returns true when the offer CHANGED. A withdrawn offer resets (no dead VFO B). */
   setOffered(n: number): boolean {
@@ -421,6 +433,7 @@ export class VfoABCore {
       this.stash = this.slotOfStatus(-999);   // ★ B starts where A is (the server does the same), squelch off
       this.sqlB = -999;
       this.send(msgOn(this.stereo, this.monoOut, this.balOffered ? this.balance : undefined));
+      if (this.recOffered && (this.recA || this.recB)) this.send(msgRec(this.recA, this.recB));
       return true;
     }
     this.send(msgOff());
@@ -506,6 +519,17 @@ export class VfoABCore {
   /** ★★ Round 3 — mute VFO `v` in the mix. Only while B is on (the server ignores it otherwise). */
   setMute(v: VfoId, on: boolean) { if (this.on) this.send(msgMute(v, on)); }
   setStereo(on: boolean) { this.stereo = on; if (this.on) this.send(msgStereo(on)); }
+  /** ★★★ V12 PER-VFO RECORDING: which VFOs' own audio to send (held always; sent only while B is on, to a server that
+   *  offers it — the set lives with B on the server, so a new B is told again). */
+  private recOffered = false;
+  private recA = false;
+  private recB = false;
+  private recAt = 0;
+  setRec(a: boolean, b: boolean) {
+    if (a === this.recA && b === this.recB) return;
+    this.recA = a; this.recB = b; this.recAt = this.now();
+    if (this.on && this.recOffered) this.send(msgRec(a, b));
+  }
   setMonoOut(on: boolean) { if (on === this.monoOut) return; this.monoOut = on; if (this.on) this.send(msgMonoOut(on)); }
   /** ★★★ hwinfo's `watchBal`. Returns true when it CHANGED. */
   setBalOffered(on: boolean): boolean { if (on === this.balOffered) return false; this.balOffered = on; return true; }
@@ -536,6 +560,7 @@ export class VfoABCore {
     this.openAt = 0;   // ★ the server has spoken on this socket — its state, not a timer, decides from here
     this.state = st;
     if (st.bal !== null) this.balOffered = true;   // ★★★ a state carrying `bal` IS a server that takes the balance
+    if (st.recVfo && !this.recOffered) { this.recOffered = true; out.recOffered = true; }
     if (st.refused && st.note) out.notes.push(st.note);   // ★ the server's own sentence
     if (!this.on) {
       // ★★★ THE SERVER HOLDS A VFO B FOR THIS SESSION AND WE DO NOT KNOW IT — a client made afresh under the same
@@ -572,6 +597,12 @@ export class VfoABCore {
       }
     }
     if (this.active === 'B') out.meterDb = b.lvl;
+    // ★★★ The server's set lost what this listener asked (B made again, a reconnect): ask again — not on the echo of a
+    //     change of ours still on its way
+    if (this.recOffered && this.now() - this.recAt > 1500 && (st.recA !== this.recA || st.recB !== this.recB)) {
+      this.recAt = this.now();
+      this.send(msgRec(this.recA, this.recB));
+    }
     return out;
   }
 }

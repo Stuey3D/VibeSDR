@@ -46,7 +46,7 @@ import { fileURLToPath } from 'node:url';
  *
  * Run: node --no-warnings scripts/test_vfoAB.ts   (silent: no audio anywhere)
  */
-import {
+import { msgRec,
   parseWatch, watchOffered, watchMaxOf, vfoB, msgOn, msgOff, msgAim, msgSquelch, msgStereo, msgMonoOut, EarOrder, VfoABCore,
   decStartVfo, decTagFor, abOfferNow, watchBalOffered, msgBalance,
   SWAP_HZ, SAME_HZ, otherVfo, vfoATune, DoorSeq, RESYNC_MS, edgesForWidth, autoVfoBColour, vfoBNeedle, VFO_B_AUTO,
@@ -520,6 +520,36 @@ console.log('── the A ⟷ B balance (Stuart, 2026-10-30) ──');
   const sq = sheet.indexOf('<VfoSqlLabel vfo="B"'), row = sheet.indexOf('<VfoBalanceRow'), stereoRow = sheet.indexOf('VFO STEREO</Text>');
   ok(sq > 0 && row > sq && row < stereoRow && /\{vfoRows\.onBalance && \(/.test(sheet), 'the BALANCE row sits right under VFO B\'s squelch row, drawn only with onBalance');
   ok(/VFO_BALANCE_KEY/.test(scr) && /c\?\.abSetBalance\?\.\(vfoBalanceRef\.current\)/.test(scr), 'remembered per device; re-sent with B on and on every hwinfo');
+}
+console.log('── per-VFO recording (V12) ──');
+{
+  const status: TuneStatus = { frequency: 7074000, mode: 'usb', bandwidthLow: 100, bandwidthHigh: 2800 };
+  const sent: Record<string, unknown>[] = [];
+  let t = 1000;
+  const ab = new VfoABCore(() => status, (m) => sent.push(m), () => {}, () => t);
+  ab.setOffered(1);
+  ab.setRec(true, false);
+  ok(sent.length === 0, 'asked before B is on: held, nothing sent');
+  ab.setOn(true);
+  ok(!sent.some((m) => 'recA' in m), 'a server that has not said recVfo is never asked');
+  ok(ab.info().recOffered === false, '…and the Audio menu has no REC B there');
+  t += 100;
+  const st = { type: 'watch', max: 1, recVfo: true, recA: false, recB: false, chans: [{ id: 1, freq: 7074000, mode: 'usb', bw: 2700, open: true, lvl: -95 }] };
+  const o1 = ab.onWatch(st);
+  ok(o1.recOffered === true && ab.info().recOffered === true, 'recVfo in the state: offered (REC A / REC B)');
+  t += 2000;
+  sent.length = 0;
+  ab.onWatch(st);
+  ok(sent.some((m) => m.recA === true && m.recB === false), 'the server\'s set lacks what was asked: asked again');
+  sent.length = 0;
+  t += 10;
+  ab.setRec(true, true);
+  ok(sent.length === 1 && sent[0].recA === true && sent[0].recB === true, 'REC B: one message, both flags');
+  sent.length = 0;
+  ab.onWatch({ ...st, recA: false, recB: false });
+  ok(sent.length === 0, 'the echo of our own change still on its way: not re-sent');
+  ok(msgRec(false, true).type === 'watch' && msgRec(false, true).recB === true, 'msgRec');
+  ok(parseWatch({ type: 'watch', max: 1, chans: [] })!.recVfo === false, 'an older server: recVfo false');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

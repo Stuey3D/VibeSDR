@@ -154,6 +154,12 @@ object VibeLocalSDR {
     }
     private external fun nativeOpusDecodeAux(packet: ByteArray, rate: Int, channels: Int): ShortArray?
 
+    /** ★★★ V12 per-VFO recording: VFO `vfo`'s (0 A, 1 B) own stream, on a decoder of its own (VfoTrack). */
+    fun opusDecodeVfo(vfo: Int, packet: ByteArray, rate: Int, channels: Int): ShortArray? {
+        ensureLoaded(); return nativeOpusDecodeVfo(vfo, packet, rate, channels)
+    }
+    private external fun nativeOpusDecodeVfo(vfo: Int, packet: ByteArray, rate: Int, channels: Int): ShortArray?
+
     // ─── FULL MODE ────────────────────────────────────────────────────────────────────────
     //
     // ★★★ THE APP IS THE RADIO; THE CHILD PROCESS IS THE FRONT DOOR. Inverted relative to Linux,

@@ -1138,7 +1138,40 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecodeAux(JNIEnv* env, jobject,
     if (out) env->SetShortArrayRegion(out, 0, outLen, (const jshort*)pcm.data());
     return out;
 }
+/* ★★★ V12 PER-VFO RECORDING — each VFO's own stream (format 5) on a decoder of its own (VfoTrack.kt): two slots, each with
+ *  its own state and lock, the rebuild-on-failure rule above. */
+namespace {
+struct VfoDec { std::mutex m; OpusDecoder* d = nullptr; int rate = 0, ch = 0; };
+VfoDec g_opusVfo[2];
+}
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecodeVfo(JNIEnv* env, jobject, jint vfo, jbyteArray packet, jint rate, jint channels) {
+    if (vfo < 0 || vfo > 1 || !packet || rate <= 0 || (channels != 1 && channels != 2)) return nullptr;
+    const jsize n = env->GetArrayLength(packet);
+    if (n <= 0) return nullptr;
+    std::vector<jbyte> buf((size_t)n);
+    env->GetByteArrayRegion(packet, 0, n, buf.data());
+    VfoDec& v = g_opusVfo[vfo];
+    std::lock_guard<std::mutex> lk(v.m);
+    if (!v.d || v.rate != rate || v.ch != channels) {
+        if (v.d) opus_decoder_destroy(v.d);
+        int err = OPUS_OK;
+        v.d = opus_decoder_create(rate, channels, &err);
+        if (!v.d || err != OPUS_OK) { v.d = nullptr; LOGE("vfo opus_decoder_create failed: %d", err); return nullptr; }
+        v.rate = rate; v.ch = channels;
+    }
+    const int maxSamples = rate / 1000 * 120;
+    std::vector<opus_int16> pcm((size_t)maxSamples * channels);
+    const int got = opus_decode(v.d, (const unsigned char*)buf.data(), (opus_int32)n, pcm.data(), maxSamples, 0);
+    if (got <= 0) { opus_decoder_destroy(v.d); v.d = nullptr; v.rate = 0; v.ch = 0; return nullptr; }
+    const jsize outLen = (jsize)got * channels;
+    jshortArray out = env->NewShortArray(outLen);
+    if (out) env->SetShortArrayRegion(out, 0, outLen, (const jshort*)pcm.data());
+    return out;
+}
 #else
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecodeVfo(JNIEnv*, jobject, jint, jbyteArray, jint, jint) { return nullptr; }
 extern "C" JNIEXPORT jshortArray JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecode(JNIEnv*, jobject, jbyteArray, jint, jint) {
     return nullptr;   // no encoder in this build either — the client will not ask for Opus

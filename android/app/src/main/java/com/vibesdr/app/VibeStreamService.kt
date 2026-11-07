@@ -1072,6 +1072,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     val rate = ByteBuffer.wrap(b, 2, 4).order(ByteOrder.LITTLE_ENDIAN).int
                     if (rate <= 0) return
                     val format = b[1].toInt() and 0xFF
+                    // ★★★ V12 PER-VFO RECORDING (format 5): one VFO's own audio — never played; its track decodes and
+                    //     writes it on its own thread (VfoTrack.kt)
+                    if (format == 5) {
+                        if (b.size > 8) { val v = b[6].toInt() and 0xFF; if (v == 0 || v == 1) VfoTrack.tracks[v].feed(b) }
+                        return
+                    }
                     val out: Triple<Int, Int, ShortArray>? = when (format) {
                         1, 2 -> {
                             val count = if (b.size >= 8) (b[6].toInt() and 0xFF) or ((b[7].toInt() and 0xFF) shl 8) else 0

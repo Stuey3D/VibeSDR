@@ -169,6 +169,7 @@ import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq, fetchOccupancy,
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
 import { useRecordBuffer, bufferedSecondsOf }          from '../hooks/useRecordBuffer';
+import { RecordBufferAnchor } from '../services/recordBuffer';
 import { setDefaultInstance, getDefaultInstance,
          clearDefaultInstance }                        from '../services/defaultInstance';
 import { getFavourites, toggleFavourite }              from '../services/favourites';
@@ -3408,7 +3409,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     abSetMonoOut?: (on: boolean) => void; abInfo?: () => VfoABInfo; abSetBalance?: (b: number) => void;
     // ★★ Round 3: a named VFO's squelch, its mute, and its own level (VibeServerWsClient)
     setSquelchVfo?: (v: VfoId, db: number) => void; abSetMute?: (v: VfoId, on: boolean) => void;
-    channelLevelVfoDb?: (v: VfoId, maxAgeMs?: number) => number } | null, []);
+    channelLevelVfoDb?: (v: VfoId, maxAgeMs?: number) => number;
+    abSetRec?: (a: boolean, b: boolean) => void } | null, []);
   const onVfoStereo = useCallback((on: boolean) => {
     vfoStereoRef.current = on; setVfoStereoState(on);
     AsyncStorage.setItem(VFO_STEREO_KEY, on ? '1' : '0').catch(() => {});
@@ -4652,6 +4654,82 @@ export default function SDRScreen({ route, navigation }: Props) {
         .catch(() => setAudioSheetOpen(false));
     }
   }, [isRecording, status.frequency, status.mode]);
+
+  /* ★★★ V12 PER-VFO RECORDING (Stuart, 2026-11-07: "when the A/B VFO's are active there needs to be a 2nd record line in
+   *     the audio menu for the B VFO, both can be triggered independently and both have their own clocks and the signal
+   *     is recorded as it should be before we push it to one ear so Stereo for an FM signal and mono for others"). While
+   *     VFO B is on, on a server that sends each VFO's own audio (abInfo.recOffered), the Audio menu's REC is VFO A's and a
+   *     REC B row is VFO B's — each its own native track (VibeVfoTrack / VfoTrack.kt), its own file, its own clock. The
+   *     server sends a VFO's stream only while it is recorded — or while the REC BUFFER is on, so its recording can still
+   *     start with the seconds before the press (the bandwidth the server setup page warns of). */
+  const vfoRecMode = abOn && !!abInfo?.recOffered;
+  const [vfoRecAt, setVfoRecAt] = useState<[number | null, number | null]>([null, null]);
+  const vfoRecAtRef = useRef(vfoRecAt); vfoRecAtRef.current = vfoRecAt;
+  const vfoRecBusy = useRef([false, false]);
+  const vfoTune = useCallback((v: 0 | 1) => {
+    if (v === 0) return vfoATune(status as never, abInfo);
+    return abInfo?.active === 'B' || !abInfo?.other ? status : abInfo.other;
+  }, [status, abInfo]);
+  const stopVfoRec = useCallback((v: 0 | 1) => {
+    if (vfoRecBusy.current[v] || vfoRecAtRef.current[v] == null) return Promise.resolve();
+    vfoRecBusy.current[v] = true;
+    setVfoRecAt((p) => (v === 0 ? [null, p[1]] : [p[0], null]));
+    noteAudioEvent(`REC ${v === 0 ? 'A' : 'B'} → stop requested`);
+    return ((VibePowerModule as any)?.stopVfoRecording?.(v) ?? Promise.resolve(null))
+      .then((path: string | null) => { if (path) void noteRecordingServer(path, recServerName); })
+      .catch(() => {})
+      .finally(() => { vfoRecBusy.current[v] = false; });
+  }, [recServerName]);
+  const toggleVfoRec = useCallback((v: 0 | 1) => {
+    if (vfoRecBusy.current[v]) return;
+    if (vfoRecAtRef.current[v] != null) { void stopVfoRec(v); return; }
+    vfoRecBusy.current[v] = true;
+    const tapAt = Date.now();
+    setVfoRecAt((p) => (v === 0 ? [tapAt, p[1]] : [p[0], tapAt]));
+    const t = vfoTune(v);
+    noteAudioEvent(`REC ${v === 0 ? 'A' : 'B'} → start requested`);
+    ((VibePowerModule as any)?.startVfoRecording?.(v, Math.round(Number(t.frequency) || 0), String(t.mode || '')) ?? Promise.reject(new Error('this build cannot record a VFO on its own')))
+      .then((r: unknown) => {
+        const pre = bufferedSecondsOf(r);
+        if (pre > 0) setVfoRecAt((p) => { const n = [...p] as [number | null, number | null]; if (n[v] === tapAt) n[v] = tapAt - Math.round(pre * 1000); return n; });
+      })
+      .catch((e: Error) => {
+        setVfoRecAt((p) => (v === 0 ? [null, p[1]] : [p[0], null]));
+        appAlert('Recording', `Could not start recording VFO ${v === 0 ? 'A' : 'B'}: ${e.message}`);
+      })
+      .finally(() => { vfoRecBusy.current[v] = false; });
+  }, [vfoTune, stopVfoRec]);
+  // ★ What the server sends, and what each track holds — whenever A/B, a recording or the buffer changes
+  useEffect(() => {
+    const sec = vfoRecMode ? recBufSeconds : 0;
+    (VibePowerModule as any)?.setVfoRecordBuffer?.(sec);
+    abClient()?.abSetRec?.(vfoRecMode && (vfoRecAt[0] != null || sec > 0), vfoRecMode && (vfoRecAt[1] != null || sec > 0));
+  }, [vfoRecMode, recBufSeconds, vfoRecAt, abClient]);
+  // ★ VFO B gone (switched off, or the server closed it): each VFO's recording ends and is kept — said once
+  useEffect(() => {
+    if (vfoRecMode) return;
+    const at = vfoRecAtRef.current;
+    if (at[0] == null && at[1] == null) return;
+    void stopVfoRec(0); void stopVfoRec(1);
+    setDialHint('VFO A/B is off — the VFO recordings are saved in Recordings.');
+  }, [vfoRecMode, stopVfoRec]);
+  // ★ The record buffer's retune rule, per VFO (services/recordBuffer.ts — the main recorder's own)
+  const vfoRecAnchors = useRef([new RecordBufferAnchor(0), new RecordBufferAnchor(0)]);
+  {
+    const aT = vfoTune(0), bT = vfoTune(1);
+    const keyA = `${aT.frequency}|${aT.mode}`, keyB = `${bT.frequency}|${bT.mode}`;
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useEffect(() => {
+      if (!vfoRecMode || !recBufSeconds) return;
+      for (const [v, t] of [[0, aT], [1, bT]] as const) {
+        const an = vfoRecAnchors.current[v];
+        an.setWindow(recBufSeconds);
+        if (an.update({ freqHz: Number(t.frequency) || 0, mode: String(t.mode || ''), source: recBufSource }, Date.now()))
+          (VibePowerModule as any)?.clearVfoRecordBuffer?.(v);
+      }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [keyA, keyB, vfoRecMode, recBufSeconds, recBufSource]);
+  }
 
   // ── Chat ──────────────────────────────────────────────────────────────────
 
@@ -15541,6 +15619,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         recording={isRecording}
         recSeconds={recSeconds}
         onRec={toggleRecording}
+        vfoRec={vfoRecMode && !isRecording ? { aAt: vfoRecAt[0], bAt: vfoRecAt[1], onRecA: () => toggleVfoRec(0), onRecB: () => toggleVfoRec(1) } : null}
         recBuffer={recBufSeconds}
         onRecBuffer={setRecBufSeconds}
         onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}

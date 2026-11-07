@@ -473,6 +473,9 @@ export default function LocalAudioPlayer(
        *  Opus caused there in July. Same shape, different reader — AGENTS.md, "ONE RULE, TWO
        *  READERS". Silence is a bug you go and look for; a buzz is one you blame on the radio. */
       if (format === 4) return;
+      // ★★★ V12 PER-VFO RECORDING (format 5): one VFO's own audio for the native recorder — never played. This JS reader
+      //     is only the fallback (USE_NATIVE_PUMP), which has no per-VFO recorder: dropped, never pushed as samples (a buzz).
+      if (format === 5) return;
       if (format === 1 || format === 2) {
         // VibeServer compressed audio (IMA-ADPCM). Decode to int16 PCM bytes.
         const d = decodeVibeAdpcmFrame(buf);

@@ -568,6 +568,25 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun clearRecordBuffer() { VibeStreamService.recRing.clear() }
 
+    // ★★★ V12 PER-VFO RECORDING (VfoTrack.kt) — VFO 0 = A, 1 = B; each its own file, from its own stream. Process-wide,
+    //     like the record buffer: the tracks are fed by the service's audio socket reader.
+    @ReactMethod
+    fun startVfoRecording(vfo: Double, frequency: Double, mode: String, promise: Promise) {
+        val v = vfo.toInt()
+        if (v !in 0..1) { promise.reject("vfo", "No such VFO"); return }
+        VfoTrack.tracks[v].start(reactApplicationContext.filesDir, frequency, mode, promise)
+    }
+    @ReactMethod
+    fun stopVfoRecording(vfo: Double, promise: Promise) {
+        val v = vfo.toInt()
+        if (v !in 0..1) { promise.resolve(null); return }
+        VfoTrack.tracks[v].stop(promise)
+    }
+    @ReactMethod
+    fun setVfoRecordBuffer(seconds: Double) { for (t in VfoTrack.tracks) t.setBuffer(seconds.toInt()) }
+    @ReactMethod
+    fun clearVfoRecordBuffer(vfo: Double) { val v = vfo.toInt(); if (v in 0..1) VfoTrack.tracks[v].clearBuffer() }
+
     @ReactMethod
     fun shareRecording(path: String) {
         VibeStreamService.instance?.shareRecordingNative(path)
