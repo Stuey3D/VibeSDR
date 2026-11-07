@@ -155,8 +155,8 @@ public:
      *  when idle … for us in direct control of the hardware … then sharpen it up and speed it up when in use"; the
      *  23–46 % of a core the UI drew at 31 fps, the engine's 4× FFTs for the waterfall — handheld21's power log). A
      *  minute with no button or stick: the engine sends 5 spectrum frames a second (its FFTs follow: 20 a second, not
-     *  40–80 — 5, not 2, keeps the history looking alive) and the screen is redrawn 4 times a second, not 30. Any input: the next frame is drawn at once, at the
-     *  listener's own rate. The audio, the decoders and the meters' sources are untouched. */
+     *  40–80 — 5, not 2, keeps the history looking alive) and the waterfall glides at that pace (the screen stays at 30 fps — 4 was too jerky, Stuart). Any input: the
+     *  listener's own rate at once. The audio, the decoders and the meters' sources are untouched. */
     bool idleNow_ = false;
     bool specCovered_ = false;   // ★ nothing on screen shows the spectrum now (the tall decoder box, a full page)
     // ★ Stuart, 2026-11-07: "10 seconds to slow down everything, make it a minute or so". Tests: VIBE_HHUI_IDLE_SEC.

@@ -62,6 +62,8 @@ class Waterfall {
     gl_.sync(model_);
     gl_.draw(model_, x, y, w, h, fbW, fbH, rowPx);
   }
+  /** The same frame drawn again (a second scissored strip of it) — GL only: the model and its pace are NOT ticked again. */
+  void drawAgain(int x, int y, int w, int h, int fbW, int fbH, int rowPx = 1) { gl_.draw(model_, x, y, w, h, fbW, fbH, rowPx); }
   void drawSpectrum(int x, int y, int w, int h, int fbW, int fbH) { spec_.draw(model_, x, y, w, h, fbW, fbH); }
 
   WaterfallModel& model() { return model_; }

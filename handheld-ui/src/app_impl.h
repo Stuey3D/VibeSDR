@@ -385,7 +385,7 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
 
 /** The portrait control island: the pill (signal gradient · frequency · mode · reading), the four buttons, the status line. */
 inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
-    c.g.rrect(r.x, r.y, r.w, r.h, 14, rgb(0x0e0700, 0.90f));
+    c.g.rrect(r.x, r.y, r.w, r.h, 14, rgb(0x0e0700));   // ★ solid: nothing is drawn behind it any more (see the waterfall's scissor)
     c.g.rframe(r.x, r.y, r.w, r.h, 14, 1, th::barBorder);
 
     // ── the pill ──
@@ -1226,8 +1226,11 @@ inline int App::run(int argc, char** argv) {
         // ★ between frames, SLEEP until the next one is due (≤ 16 ms, so the sticks are still read ~60 times a second —
         //   the web samples its pad once an animation frame); it used to wake every 4 ms and redo every tick
         if (screenOff_) { SDL_Delay(30); continue; }
-        // ★ IDLE POWER SAVE: 4 frames a second while untouched (idleNow_); an input clears it, so the next loop draws
-        const double frameDt = idleNow_ && nowSec() - lastInput_ > idleSec() ? 0.25 : 1.0 / 30.0;
+        // ★★ THE SCREEN STAYS AT 30 FPS WHILE IDLE (Stuart, 2026-11-07, on handheld24: "the 4fps when idle looks too jerky
+        //    and not very nice to someone just passively watching … do what we do in the app and web client slow the rows
+        //    being drawn too. We need to keep the UI smooth"). Only the waterfall slows: 5 rows a second from the engine,
+        //    and the pacing (wf_pace — the app's own) scrolls at the rate the rows arrive, so it glides, it does not jump.
+        const double frameDt = 1.0 / 30.0;
         if (t - lastDraw < frameDt - 0.002) {
             const double wait = (frameDt - 0.002) - (t - lastDraw);
             SDL_Delay((Uint32)std::max(1.0, std::min(16.0, wait * 1000)));
@@ -1268,6 +1271,25 @@ inline int App::run(int argc, char** argv) {
             const bool dabScr = dabScreenRects(*this, dr);   // ★ the DAB page (layout C): the spectrum as a strip
             if (dabScr) { spec = dr.spec; wfr = dr.wf; scaleR = dr.scale; }
             { const double c0 = threadCpu(); prof_.ui += c0 - pc; pc = c0; }
+            /* ★★ NOT UNDER THE DECK (Stuart, 2026-11-07: "the transparency of the control deck I suspect is adding load we can
+             *    get rid of"). The deck was 90 % opaque over the waterfall — and the waterfall's fragment shader (up to six
+             *    taps and a sharpen a pixel) ran over the half of its height the deck covers, for a 10 % glimpse. The deck
+             *    is solid now and the waterfall stops just under its rounded top (corner radius 14), with the 8 px strips
+             *    either side of it still drawn — the same frame, only the hidden part skipped. The DAB page lays out
+             *    differently (dabScreenRects) and keeps the whole draw. */
+            if (!dabScr && wfr.y < lay::islandY) {
+                const int cut = (int)lay::islandY + 16, sideW = (int)lay::islandX;
+                glEnable(GL_SCISSOR_TEST);
+                glScissor(0, H - cut, W, cut - (int)wfr.y);                      // GL's origin is the bottom-left
+                wfp_.draw(0, (int)wfr.y, W, (int)wfr.h, W, H, t);
+                glScissor(0, 0, sideW, H - cut);
+                wfp_.drawAgain(0, (int)wfr.y, W, (int)wfr.h, W, H);
+                glScissor(W - sideW, 0, sideW, H - cut);
+                wfp_.drawAgain(0, (int)wfr.y, W, (int)wfr.h, W, H);
+                const int foot = (int)(lay::islandY + lay::islandH) - 16;        // under the deck's rounded foot
+                if (foot < H) { glScissor(0, 0, W, H - foot); wfp_.drawAgain(0, (int)wfr.y, W, (int)wfr.h, W, H); }
+                glDisable(GL_SCISSOR_TEST);
+            } else
             wfp_.draw(0, (int)wfr.y, W, (int)wfr.h, W, H, t);
             wfp_.drawSpectrum(0, (int)spec.y, W, (int)spec.h, W, H);
             { const double c0 = threadCpu(); prof_.wf += c0 - pc; pc = c0; }
