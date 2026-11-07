@@ -1,5 +1,5 @@
 [Unit]
-Description=VibeSDR CPU: schedutil over the stock 408–1296 MHz steps; the memory clock at most 450 MHz
+Description=VibeSDR CPU: schedutil over the stock 408–1296 MHz steps; the memory clock at most 450 MHz, the GPU 300 MHz
 DefaultDependencies=no
 After=sysinit.target
 Before=basic.target
@@ -15,6 +15,13 @@ ExecStart=-/bin/sh -c 'for p in /sys/devices/system/cpu/cpufreq/policy*; do echo
 #    at 0.95 V (the device tree's opp-table-dmc) and is still many times what a 640×480 screen and a 2 MS/s receiver move.
 #    The governor still steps down to 194 MHz when there is nothing to do.
 ExecStart=-/bin/sh -c 'for d in /sys/class/devfreq/dmc; do [ -w $d/max_freq ] && echo 450000000 > $d/max_freq; done'
+# ★★ THE GPU AT MOST 300 MHz, 0.975 V (Stuart, 2026-11-07, handheld28's log): with the stock steps back (vibe-r36s.dts)
+#    Panfrost's governor still sat at 400–560 MHz (1.05–1.15 V) — it steps up as soon as the GPU is 45 % busy, and the
+#    waterfall at 30 fps keeps it there — so the rail it shares with the memory controller stayed high. 560 MHz ran it
+#    under half busy: 300 MHz is ~¾ busy, still inside a 640×480 frame at 30 fps (vibe-hhui logs its fps: if it ever
+#    falls short — the map — 400 MHz / 1.05 V is the next step).
+#    ★ Panfrost is a module (systemd-modules-load): its devfreq node may not exist yet — wait up to 5 s for it.
+ExecStart=-/bin/sh -c 'd=/sys/class/devfreq/ff400000.gpu; i=0; while [ ! -w $d/max_freq ] && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done; [ -w $d/max_freq ] && echo 300000000 > $d/max_freq'
 
 [Install]
 WantedBy=basic.target

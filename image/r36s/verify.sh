@@ -123,6 +123,7 @@ dfs "cat /usr/lib/systemd/system/vibe-kiosk.service" | grep -q '^Environment=VIB
   || fail "Cog's URL lacks ?handheld=1 (the page boots as a web client: auth probe 503)"
 dfs "cat /usr/lib/systemd/system/vibe-cpu.service" | grep -q schedutil || fail "governor"
 dfs "cat /usr/lib/systemd/system/vibe-cpu.service" | grep -q "450000000 > \$d/max_freq" || fail "the memory clock cap (450 MHz)"
+dfs "cat /usr/lib/systemd/system/vibe-cpu.service" | grep -q "echo 300000000 > \$d/max_freq" || fail "the GPU cap (300 MHz)"
 dfs "cat /usr/lib/systemd/system/vibe-debuglog.service" | grep -q "^ConditionKernelCommandLine=vibe.debuglog$" || fail "the debug log would run without vibe.debuglog"
 dfs "cat /etc/systemd/logind.conf.d/vibe-r36s.conf" | grep -q '^HandlePowerKey=ignore' || fail "logind would take the power key"
 [ -z "$(dfs 'cat /etc/machine-id')" ] || fail "machine-id is baked in"

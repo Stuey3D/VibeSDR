@@ -39,7 +39,7 @@ snap() {
   done
   echo "backlight $(cat /sys/class/backlight/*/brightness 2>/dev/null)/$(cat /sys/class/backlight/*/max_brightness 2>/dev/null)"
   for g in /sys/class/devfreq/*; do
-    echo "devfreq $(basename "$g"): $(cat "$g/governor" 2>/dev/null) cur=$(cat "$g/cur_freq" 2>/dev/null) avail=[$(cat "$g/available_frequencies" 2>/dev/null)]"
+    echo "devfreq $(basename "$g"): $(cat "$g/governor" 2>/dev/null) cur=$(cat "$g/cur_freq" 2>/dev/null) max=$(cat "$g/max_freq" 2>/dev/null) avail=[$(cat "$g/available_frequencies" 2>/dev/null)]"
     grep -E '^ *\*? *[0-9]+:' "$g/trans_stat" 2>/dev/null | awk '{t=$NF; f=$1; if (f=="*") f=$2; print "    " f " " t " ms"}'
   done
   for z in /sys/class/thermal/thermal_zone*; do echo "$z $(cat "$z/type" 2>/dev/null) $(cat "$z/temp" 2>/dev/null)"; done
