@@ -26,10 +26,25 @@ inline std::string memNum(double v) { char b[40]; std::snprintf(b, sizeof b, "%.
 inline std::string memBody(App& a, const RadioState& s) {
     const Json& h = s.msg("hwinfo");
     std::string j = "{\"v\":1,\"driver\":" + jsonQuote(s.hwDriver);
-    if (!dabActive() && s.vfoHz > 0) {      // ★ in DAB the dial is the block, not a frequency to come back to
+    if (!dabActive() && s.vfoHz > 0) {
         j += ",\"f\":" + memNum(s.vfoHz) + ",\"mode\":" + jsonQuote(s.mode) + ",\"lo\":" + std::to_string(s.bwLow)
            + ",\"hi\":" + std::to_string(s.bwHigh);
         if (s.spanHz > 0) j += ",\"span\":" + memNum(s.spanHz);
+    } else if (dabActive()) {
+        // ★★★ IN DAB: the multiplex + service, AND the station before DAB (Stuart, 2026-11-07: "when powering down the
+        //     unit it needs to remember the last station and settings rather than coming back to 9410"). This wrote
+        //     no dial at all in DAB — a few seconds in, the memory lost its station, and a power-off in DAB came back at
+        //     the engine's 9.410 MHz. The DAB block is not a frequency to tune; the pre-DAB pair is where leaving DAB
+        //     goes (dabLeave), so it is kept as the dial.
+        const DabUi& u = dabUi();
+        if (u.prevHz > 0 && !u.prevMode.empty()) j += ",\"f\":" + memNum(u.prevHz) + ",\"mode\":" + jsonQuote(u.prevMode);
+        const int blk = dabShownBlock();
+        if (blk >= 0 && blk < kDabBlockN) {
+            j += ",\"dab\":{\"block\":" + jsonQuote(kDabBlocks[blk].name);
+            const double sid = s.msg("dab")["sid"].num(0);
+            if (sid > 0 && dabReport(s)) j += ",\"sid\":" + memNum(sid);
+            j += "}";
+        }
     }
     j += ",\"step\":" + std::to_string(a.set_.step);
     if (s.hwDriver == "rtl") {
@@ -65,7 +80,14 @@ inline void memRestore(App& a, const RadioState& s, const Json& m) {
         if (m.has("ifbw")) e.send("{\"type\":\"tunerbw\",\"value\":" + memNum(m["ifbw"].num(0)) + "}");
     }
     if (m.has("step") && m["step"].num(0) > 0) a.set_.step = (int)m["step"].num(0);
-    if (m.has("f") && m["f"].num(0) > 0) {
+    const int dabBlk = m["dab"].kind == Json::Obj ? dabBlockIndex(m["dab"]["block"].str()) : -1;
+    if (dabBlk >= 0) {
+        // ★ back into DAB on that multiplex + service; the saved dial is where leaving DAB will go (not tuned now — it
+        //   would only be a visit on the way)
+        dabEnter(a, s, dabBlk, m["dab"]["sid"].num(0));
+        DabUi& u = dabUi();
+        if (m.has("f") && m["f"].num(0) > 0 && !m["mode"].str().empty()) { u.prevHz = m["f"].num(0); u.prevMode = m["mode"].str(); }
+    } else if (m.has("f") && m["f"].num(0) > 0) {
         // ★ the frequency FIRST: setMode sends a tune at the dial it knows, which would visit the default 9.410 on the way
         const std::string mode = m["mode"].str();
         const double f = m["f"].num(0);

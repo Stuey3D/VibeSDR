@@ -42,6 +42,7 @@ inline std::string upper(std::string s) { for (auto& c : s) c = (char)std::toupp
 class Jog {
 public:
     explicit Jog(double degPerStep) : per_(degPerStep) {}
+    void setDegPerStep(double d) { if (d > 0 && d != per_) { per_ = d; acc_ = 0; } }   // ★ CONTROLLER → TUNING STICK FEEL
     int feed(double x, double y, double tMs) {
         const double mag = std::hypot(x, y);
         if (mag < (has_ ? kRelease : kEngage)) { has_ = false; acc_ = 0; speed_ = 0; return 0; }
@@ -146,6 +147,7 @@ public:
     int battery_ = -1; bool charging_ = false;
     int volume_ = -1; bool muted_ = false; double volUntil_ = 0;
     int brightness_ = 120;
+    std::vector<long> cpuSteps_;          // the clock steps the hardware service reports (kHz, ascending) — under srvMtx_
     std::atomic<double> cpuMaxSeen_{0};   // the CPU SPEED cap the hardware service reported (kHz), handed to num_ on the UI thread
     bool screenOff_ = false;
     double lastInput_ = 0;
@@ -224,13 +226,15 @@ public:
     // the whole device's CPU (/proc/stat, once a second) for the stats row
     int cpuPct_ = -1; long cpuKHz_ = 0; double cpuAt_ = 0; unsigned long long cpuBusy_ = 0, cpuTotal_ = 0;
     void sampleCpu();
-    // ★ HOLD THE LEFT STICK LEFT / RIGHT = SWEEP TUNE (Stuart, 2026-11-06: spinning is great for small precise
-    //   adjustments, "large tunes with them hurt"). The web's hold-sweep (main.ts attachHoldSweep): 350 ms hold, then
-    //   3 → 15 steps a second over 3.5 s, each step waiting for the receiver's echo (700 ms timeout).
-    double lx_ = 0, ly_ = 0, testStick_ = 0;
-    int sweepDir_ = 0; double sweepZoneAt_ = 0, sweepZoneAng_ = 0, sweepStart_ = 0, sweepNext_ = 0, sweepEchoAt_ = 0;
+    // ★ HOLD L2 / R2 = SWEEP TUNE (Stuart, 2026-11-07: "the tune buttons on the L/R can they be held to sweep and we can
+    //   remove the holding the analogue stick left and right and keep it just as rotation"). The web's hold-sweep
+    //   (main.ts attachHoldSweep): a press is one step; held 350 ms, then 3 → 15 steps a second over 3.5 s, each step
+    //   waiting for the receiver's echo (700 ms timeout). (It was the left stick held left / right, 2026-11-06.)
+    bool kbL2_ = false, kbR2_ = false, joyL2_ = false, joyR2_ = false;
+    double testHold_ = 0;   // ★ tests: SCRIPT HOLDL2 / HOLDR2 / RELEASE
+    int sweepDir_ = 0; double sweepZoneAt_ = 0, sweepStart_ = 0, sweepNext_ = 0, sweepEchoAt_ = 0;
     bool sweepAwaiting_ = false; uint64_t sweepSeq_ = 0;
-    void stickSweep();
+    void holdSweep();
     // ★ PROFILE: the UI thread's own CPU per stage (CLOCK_THREAD_CPUTIME_ID), summed and logged every 30 s — the
     //   handheld13 log had vibe-hhui at 77–85 % of a core on FM, far more than 30 fps of drawing should cost
     struct Prof { double pre = 0, wf = 0, ui = 0, swap = 0, idle = 0; long loops = 0, frames = 0, batches = 0; double since = 0; } prof_;
@@ -256,6 +260,7 @@ inline void dispRateTick(App&);
 inline void dispRateDraw(App&, Ctx&);
 inline void dispRateStartup(App&);
 inline float dispRateRow(App&, Ctx&, Rect, float);
+inline bool dispRateWaiting();
 // SET CLOCK FROM RDS / DAB (clock_rds.h): watches their clocks, offers a corroborated one
 inline void clockTick(App&, const RadioState&);
 // per-radio memory (memory.h): restore on plug-in, save what changed

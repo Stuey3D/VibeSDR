@@ -469,11 +469,10 @@ inline bool mapPress(App& a, Btn b) {
         default: return false;                                               // L2 / R2 tune (App), BACK (Nav)
     }
 }
-/** Call in App::pollInput before the jog wheels: true = the map took the sticks (the jogs and the hold-sweep rest). */
+/** Call in App::pollInput before the jog wheels: true = the map took the sticks (the jogs rest). */
 inline bool mapSticks(App& a, double lx, double ly, double rx, double ry) {
     if (!mapTop(a)) return false;
     mapUi().view.sticks(lx, ly, rx, ry, nowSec());
-    a.lx_ = 0; a.ly_ = 0;   // ★ no hold-sweep tune from the pointer stick
     return true;
 }
 

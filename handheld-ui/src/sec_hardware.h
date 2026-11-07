@@ -197,22 +197,37 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         if (hwRowButton(c, "hw.padtest", {a.x, y0, a.w, 44}, {a.r() - 166, y0 + 3, 160, 38}, on != 0 ? "HIDE TEST" : "TEST BUTTONS", st)) on = on != 0 ? 0 : 1;
         if (on != 0) y = hwDrawPadTest(c, a, y, pad_, joy_);
     }
-    // CPU SPEED — the cap the hardware service puts on the clock (Stuart, 2026-11-07: 1.1 GHz is enough — a Pi 2 serves
-    // at 900 MHz); shown only when the service reports it (an older one has no such setting: no dead control)
+    // CPU SPEED — the cap the hardware service puts on the clock. Every step the processor has (Stuart, 2026-11-07: "I
+    // dropped it to 816MHz with no real issues, so if we can put the full range of caps in that would be good") — the
+    // service's own list (vibe-r36s.dts: 408–1296), left / right to step, applied at once (a clock change is harmless:
+    // schedutil keeps working under the new ceiling). Shown only when the service reports it (no dead control).
     if (num_.count("hw.cpuMax")) {
-        y0 = y;
-        y = menuRow(c, a, y, "CPU SPEED", "The fastest the processor may run. Lower = longer battery and less heat; FULL = 1.3 GHz. "
-                                          "Watch CPU in the status row: if it sits near 100 % or the audio breaks up, go faster.");
-        const long caps[4] = {1296000, 1104000, 1008000, 816000};
+        std::vector<long> steps;
+        { std::lock_guard<std::mutex> lk(srvMtx_); steps = cpuSteps_; }
+        if (steps.empty()) steps = {408000, 600000, 816000, 1008000, 1104000, 1200000, 1248000, 1296000};
         const long cur = (long)num_["hw.cpuMax"];
-        int sel = 1;
-        for (int i = 0; i < 4; i++) if (caps[i] == cur) sel = i;
-        const int hit = segmented(c, "hw.cpu", {a.x + 6, y, a.w - 12, 40}, {"FULL", "1.1 GHz", "1.0 GHz", "816 MHz"}, sel);
-        if (hit >= 0 && hit != sel) {
-            num_["hw.cpuMax"] = (double)caps[hit];
-            eng_->device("{\"set\":\"cpuMax\",\"value\":" + std::to_string(caps[hit]) + "}");
+        int sel = 0;
+        for (int i = 0; i < (int)steps.size(); i++) if (steps[(size_t)i] <= cur) sel = i;   // the step the cap lands on
+        y0 = y;
+        y = menuRow(c, a, y, "CPU SPEED", "The fastest the processor may run: left / right. Lower = longer battery and less "
+                                          "heat. Watch CPU in the status row: if it sits near 100 % or the audio breaks up, "
+                                          "go faster. Advanced RDS and DAB want more than plain FM or AM.");
+        const Nav::Hit h = c.nav.item("hw.cpu", {a.x, y0, a.w, 44}, true);
+        if (h.adjust) {
+            const int n = std::clamp(sel + h.adjust, 0, (int)steps.size() - 1);
+            if (n != sel) {
+                sel = n;
+                num_["hw.cpuMax"] = (double)steps[(size_t)n];
+                eng_->device("{\"set\":\"cpuMax\",\"value\":" + std::to_string(steps[(size_t)n]) + "}");
+            }
         }
-        y += 52;
+        const long f = steps[(size_t)sel];
+        char lb[48];
+        std::snprintf(lb, sizeof lb, "%ld MHz", f / 1000);   // ★ MHz throughout: 1008 read as "1.01 GHz"
+        std::string label = std::string(sel > 0 ? "‹ " : "  ") + lb + (sel == (int)steps.size() - 1 ? " · FULL" : "") + (sel + 1 < (int)steps.size() ? " ›" : "  ");
+        const Rect pr{a.x + 170, y0 + 6, a.w - 176, 34};
+        c.tc.draw(c.g, c.f.body, label, pr.r() - 4, pr.cy() - c.f.body.lineHeight() / 2.f, th::activeTx, 2);
+        if (h.focused) focusRing(c, pr, 6, true);
     }
     // PERFORMANCE (the overlay) + its figure
     y0 = y;

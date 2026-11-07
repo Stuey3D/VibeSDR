@@ -22,6 +22,8 @@ struct Settings {
     int meterMode = 0;             // 0 SNR · 1 S-units · 2 dBFS (the web's meter cycle)
     int volume = -1;               // last known (the hardware service owns it)
     int dispClock = 0, dispProven = 1;   // the KEPT display mode (pixel clock kHz; 0 = the panel's default) — display_rate.h
+    int stickDeg = 30;             // ★ the TUNING STICK FEEL: degrees of turn a step (Stuart, 2026-11-07: "more of a turn before
+                                   //   it steps so a user can dial in the feel they want") — 30 = the web's Jog
     int freqUnit = 2;              // the readout's and the pad's unit: 0 Hz · 1 kHz · 2 MHz (the web's freqUnit, device-wide)
 
     static std::string path() {
@@ -51,15 +53,16 @@ struct Settings {
         freqUnit = std::max(0, std::min(2, (int)j["freqUnit"].num(freqUnit)));
         dispClock = (int)j["dispClock"].num(dispClock);
         dispProven = (int)j["dispProven"].num(dispProven);
+        stickDeg = std::max(10, std::min(180, (int)j["stickDeg"].num(stickDeg)));
     }
     void save() const {
         const std::string p = path(), tmp = p + ".tmp";
         FILE* f = std::fopen(tmp.c_str(), "w");
         if (!f) return;
         std::fprintf(f, "{\"step\":%d,\"palette\":%s,\"speed\":%d,\"contrast\":%g,\"sharpness\":%g,\"wfBrightness\":%g,"
-                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d,\"dispClock\":%d,\"dispProven\":%d}\n",
+                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d,\"dispClock\":%d,\"dispProven\":%d,\"stickDeg\":%d}\n",
                      step, jsonQuote(palette).c_str(), speed, contrast, sharpness, wfBrightness, specRate, screenOffMin,
-                     followVfo ? "true" : "false", meterMode, freqUnit, dispClock, dispProven);
+                     followVfo ? "true" : "false", meterMode, freqUnit, dispClock, dispProven, stickDeg);
         std::fflush(f);
         std::fclose(f);
         std::rename(tmp.c_str(), p.c_str());

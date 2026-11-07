@@ -21,6 +21,27 @@ inline float App::secController(Ctx& c, const RadioState& s, Rect a, float y) {
         BtnStyle st; st.font = &c.f.body; st.radius = 7; st.on = on != 0;
         if (hwRowButton(c, "pad.guide", {a.x, y0, a.w, 44}, {a.r() - 226, y0 + 3, 220, 38}, on != 0 ? "HIDE GUIDE" : "CONTROLLER GUIDE", st)) on = on != 0 ? 0 : 1;
     }
+    // TUNING STICK FEEL — how far the left stick turns for one step
+    {
+        static const int degs[] = {15, 20, 30, 45, 60, 90, 120};
+        static const char* names[] = {"LIGHTEST", "LIGHT", "DEFAULT", "FIRMER", "FIRM", "HEAVY", "HEAVIEST"};
+        const int n = (int)(sizeof degs / sizeof degs[0]);
+        int sel = 2;
+        for (int i = 0; i < n; i++) if (degs[i] <= set_.stickDeg) sel = i;
+        const float r0 = y;
+        y = menuRow(c, a, y, "TUNING STICK FEEL", "How far the left stick turns for one tuning step: left / right. Heavier = more "
+                                                  "of a turn a step, for fine tuning; a fast spin still speeds up.");
+        const Nav::Hit h = c.nav.item("pad.feel", {a.x, r0, a.w, 44}, true);
+        if (h.adjust) {
+            const int k = std::clamp(sel + h.adjust, 0, n - 1);
+            if (k != sel) { sel = k; set_.stickDeg = degs[k]; dirty(); }
+        }
+        char lb[64];
+        std::snprintf(lb, sizeof lb, "%s%s · %d° a step%s", sel > 0 ? "‹ " : "  ", names[sel], degs[sel], sel + 1 < n ? " ›" : "  ");
+        const Rect pr{a.x + 230, r0 + 6, a.w - 236, 34};
+        c.tc.draw(c.g, c.f.body, lb, pr.r() - 4, pr.cy() - c.f.body.lineHeight() / 2.f, th::activeTx, 2);
+        if (h.focused) focusRing(c, pr, 6, true);
+    }
     if (on == 0) return y;
     struct G { int face; const char* key; const char* what; };
     // face: −1 = a named key; 0..3 = a face button by position (top, left, right, bottom)
@@ -29,8 +50,8 @@ inline float App::secController(Ctx& c, const RadioState& s, Rect a, float y) {
         {FACE_BOTTOM, "", "press the highlighted control"},
         {FACE_RIGHT, "", "back · fold a menu section · close"},
         {-1, "L1 · R1", "zoom out · zoom in"},
-        {-1, "L2 · R2", "tune down · tune up, one step"},
-        {-1, "Left stick", "turn it like a dial to tune — faster turns, faster tuning"},
+        {-1, "L2 · R2", "tune down · tune up, one step — hold to sweep, faster the longer it is held"},
+        {-1, "Left stick", "turn it like a dial to tune — faster turns, faster tuning (TUNING STICK FEEL sets how far a step is)"},
         {-1, "Right stick", "turn it like a dial to zoom"},
         {-1, "SELECT", "the menu (again to close it)"},
     };

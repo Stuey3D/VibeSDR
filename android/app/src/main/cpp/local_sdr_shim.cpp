@@ -20912,6 +20912,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LocalSdrShim::instance().setGain(want);
                 vsPersist("{\"gain\":" + std::to_string(want) + "}");
             }
+            /* ★★ AND SAY SO. Neither branch reported the change: a client drew its slider from the last hwinfo, which still
+             *  said agc:1 — the R36S's GAIN stayed locked after VibeAGC was switched off until a sample-rate change made the
+             *  engine report again (Stuart, 2026-11-07). Every listener's readout follows the radio. */
+            LocalSdrShim::instance().broadcastHwInfo();
             return;
         }
         if (type == "biasT") {

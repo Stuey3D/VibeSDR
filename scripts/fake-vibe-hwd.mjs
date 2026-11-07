@@ -17,6 +17,8 @@ export function startFakeHwd(sockPath) {
     brightness: 120, maxBrightness: 255, volume: 60, muted: false, output: 'speaker',
     battery: { pct: 83, charging: false, status: 'Discharging' }, screen: 'on',
     timeSetTo: null, actions: [],
+    // the real service's CPU SPEED cap + the clock steps (vibe-r36s.dts: 408–1296 MHz)
+    cpuMax: 1008000, cpuSteps: [408000, 600000, 816000, 1008000, 1104000, 1200000, 1248000, 1296000],
   };
   const requests = [];
   const subscribers = new Set();
@@ -43,10 +45,12 @@ export function startFakeHwd(sockPath) {
     if (m.subscribe) { subscribers.add(sock); return { ok: true }; }
     if (m.get === 'state') {
       return { ok: true, brightness: st.brightness, maxBrightness: st.maxBrightness, volume: st.volume, muted: st.muted,
-               output: st.output, battery: { ...st.battery }, screen: st.screen };
+               output: st.output, battery: { ...st.battery }, screen: st.screen,
+               cpuMax: st.cpuMax, cpuSteps: [...st.cpuSteps] };
     }
     if (m.set === 'brightness') { if (typeof m.value !== 'number') return { ok: false, error: 'value' }; st.brightness = m.value; return { ok: true }; }
     if (m.set === 'volume') { if (typeof m.value !== 'number' || m.value < 0 || m.value > 100) return { ok: false, error: 'value' }; st.volume = m.value; return { ok: true }; }
+    if (m.set === 'cpuMax') { if (typeof m.value !== 'number' || m.value < 408000 || m.value > 1296000) return { ok: false, error: 'value' }; st.cpuMax = m.value; return { ok: true }; }
     if (m.set === 'time') { if (typeof m.utcMs !== 'number') return { ok: false, error: 'utcMs' }; st.timeSetTo = m.utcMs; return { ok: true }; }
     if (['poweroff', 'reboot', 'screen-off', 'screen-on'].includes(m.action)) {
       st.actions.push(m.action);

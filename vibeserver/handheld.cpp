@@ -647,8 +647,15 @@ void perfLoop() {
         unsigned long long childT = 0; pid_t pid;
         { std::lock_guard<std::mutex> lk(g_rMtx); pid = g_child; }
         if (pid > 0) {
+            // ★★ NOT hhcard::readFile: it sizes the read by fstat, and every /proc file reports st_size 0 — the line came
+            //    back empty, utime+stime read 0, and DSP showed 0 % on the R36S for ever (Stuart, 2026-11-07).
             std::string st;
-            if (hhcard::readFile("/proc/" + std::to_string((int)pid) + "/stat", st, 8192)) {
+            if (FILE* sf = std::fopen(("/proc/" + std::to_string((int)pid) + "/stat").c_str(), "r")) {
+                char line[1024];
+                if (std::fgets(line, sizeof line, sf)) st = line;
+                std::fclose(sf);
+            }
+            if (!st.empty()) {
                 const size_t rp = st.rfind(')');
                 if (rp != std::string::npos) {
                     unsigned long long ut = 0, stt = 0;

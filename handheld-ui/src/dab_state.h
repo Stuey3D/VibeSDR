@@ -189,7 +189,7 @@ inline void dabLeave(App& a, const RadioState& s, const std::string& wantMode = 
     dabReleaseBox(a);
 }
 
-/** Step the multiplex — L2 / R2, the left stick's jog and its hold-sweep all end here in DAB (main.ts dabTune). The label
+/** Step the multiplex — L2 / R2 (and their hold-sweep) and the left stick's jog all end here in DAB (main.ts dabTune). The label
  *  moves on every press; the server is told the block the person STOPPED on, once, 450 ms after the last press
  *  (DAB_STEP_SETTLE_MS). CLAMPED at the ends, never wrapped. Returns true when DAB took the press. */
 inline bool dabTune(App& a, int n) {

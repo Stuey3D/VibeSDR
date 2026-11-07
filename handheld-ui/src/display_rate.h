@@ -30,6 +30,8 @@ struct DispRate {
     int prev = -1; double deadline = 0;  // a change waiting to be kept
 };
 inline DispRate& dispRate() { static DispRate d; return d; }
+/** A change is waiting to be kept or put back (the buttons answer that card, nothing else). */
+inline bool dispRateWaiting() { return dispRate().prev >= 0; }
 
 /** Fill the list once: SDL's modes, each matched to the kernel's (its index is SDL KMSDRM's driverdata). */
 inline void dispRateList(App& a) {

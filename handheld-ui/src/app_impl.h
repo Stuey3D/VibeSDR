@@ -71,21 +71,15 @@ inline void App::sampleCpu() {
     }
 }
 
-inline void App::stickSweep() {
+inline void App::holdSweep() {
     const double t = nowSec();
     const bool inKb = !sheets_.empty() && sheets_.back() == S_KB;
-    const double mag = std::hypot(lx_, ly_);
-    const int dir = (!screenOff_ && !inKb && mag > 0.8 && std::fabs(ly_) < 0.45 * mag) ? (lx_ > 0 ? 1 : -1) : 0;
-    const double ang = std::atan2(ly_, lx_) * 180.0 / M_PI;
-    if (dir == 0 || (sweepDir_ != 0 && dir != sweepDir_)) { sweepDir_ = 0; sweepStart_ = 0; sweepAwaiting_ = false; return; }
-    if (sweepDir_ == 0) { sweepDir_ = dir; sweepZoneAt_ = t; sweepZoneAng_ = ang; sweepStart_ = 0; return; }
-    double dA = std::fabs(ang - sweepZoneAng_); if (dA > 180) dA = 360 - dA;
+    const bool l = l2Down_ || joyL2_ || kbL2_ || testHold_ < 0, r = r2Down_ || joyR2_ || kbR2_ || testHold_ > 0;
+    const int dir = (!screenOff_ && !inKb && !dispRateWaiting() && l != r) ? (r ? 1 : -1) : 0;
+    if (dir == 0 || dir != sweepDir_) { sweepDir_ = dir; sweepZoneAt_ = t; sweepStart_ = 0; sweepAwaiting_ = false; return; }
     if (sweepStart_ == 0) {
-        // ★ a spin passing through left / right is not a hold: the angle must stay put for the hold time
-        if (dA > 20) { sweepZoneAt_ = t; sweepZoneAng_ = ang; return; }
-        if (t - sweepZoneAt_ < 0.35) return;          // HOLD_MS
-        sweepStart_ = t; sweepNext_ = t + 1.0 / 3;    // the first step after 1 / SWEEP_LO
-        return;
+        if (t - sweepZoneAt_ < 0.35) return;          // HOLD_MS (the press itself has made the first step)
+        sweepStart_ = t; sweepNext_ = t;
     }
     if (t < sweepNext_) return;
     const RadioState& s = eng_->state();
@@ -233,7 +227,14 @@ inline void App::pollInput() {
         if (e.type == SDL_QUIT) { presses_.clear(); quit_ = true; }
         else if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_JOYDEVICEADDED) openPads();
         else if (e.type == SDL_CONTROLLERBUTTONDOWN) { const Btn b = fromController(e.cbutton.button); if (b != B_NONE) press(b); }
-        else if (e.type == SDL_JOYBUTTONDOWN && joy_ && !pad_) { const Btn b = fromJoystick(e.jbutton.button); if (b != B_NONE) press(b); }
+        else if (e.type == SDL_JOYBUTTONDOWN && joy_ && !pad_) {
+            const Btn b = fromJoystick(e.jbutton.button);
+            if (b == B_L2) joyL2_ = true; else if (b == B_R2) joyR2_ = true;
+            if (b != B_NONE) press(b);
+        } else if (e.type == SDL_JOYBUTTONUP && joy_ && !pad_) {
+            const Btn b = fromJoystick(e.jbutton.button);
+            if (b == B_L2) joyL2_ = false; else if (b == B_R2) joyR2_ = false;
+        }
         else if (e.type == SDL_JOYHATMOTION && joy_ && !pad_) {
             if (e.jhat.value & SDL_HAT_UP) press(B_UP);
             if (e.jhat.value & SDL_HAT_DOWN) press(B_DOWN);
@@ -243,7 +244,12 @@ inline void App::pollInput() {
             // the analogue triggers as buttons (L2 / R2)
             if (e.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) { const bool d = e.caxis.value > 16000; if (d && !l2Down_) press(B_L2); l2Down_ = d; }
             if (e.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) { const bool d = e.caxis.value > 16000; if (d && !r2Down_) press(B_R2); r2Down_ = d; }
+        } else if (e.type == SDL_KEYUP) {
+            if (e.key.keysym.sym == SDLK_COMMA) kbL2_ = false;
+            if (e.key.keysym.sym == SDLK_PERIOD) kbR2_ = false;
         } else if (e.type == SDL_KEYDOWN) {
+            // ★ < > held = the hold-sweep (holdSweep), not the keyboard's own repeat
+            if (e.key.repeat && (e.key.keysym.sym == SDLK_COMMA || e.key.keysym.sym == SDLK_PERIOD)) continue;
             // ★ a USB keyboard: the ONE keyboard scheme (memory gamepad_mapping 10-18): arrows + WASD move, Enter select,
             //   Backspace AND Escape back, < > (, .) tune, - + (=) zoom; Tab = the menu
             switch (e.key.keysym.sym) {
@@ -253,7 +259,7 @@ inline void App::pollInput() {
                 case SDLK_RIGHT: case SDLK_d: press(B_RIGHT); break;
                 case SDLK_RETURN: press(B_ENTER); break;
                 case SDLK_BACKSPACE: case SDLK_ESCAPE: press(B_BACK); break;
-                case SDLK_COMMA: press(B_L2); break; case SDLK_PERIOD: press(B_R2); break;
+                case SDLK_COMMA: kbL2_ = true; press(B_L2); break; case SDLK_PERIOD: kbR2_ = true; press(B_R2); break;
                 case SDLK_MINUS: press(B_L1); break; case SDLK_EQUALS: case SDLK_PLUS: press(B_R1); break;
                 case SDLK_TAB: press(B_SELECT); break;
                 default: break;
@@ -273,8 +279,7 @@ inline void App::pollInput() {
         lx = SDL_JoystickGetAxis(joy_, 0) / 32767.0; ly = SDL_JoystickGetAxis(joy_, 1) / 32767.0;
         rx = SDL_JoystickGetAxis(joy_, 2) / 32767.0; ry = SDL_JoystickGetAxis(joy_, 3) / 32767.0;
     }
-    if (testStick_ != 0) { lx = testStick_; ly = 0; }   // ★ tests: SCRIPT STICKL / STICKR / STICK0 hold the left stick
-    lx_ = lx; ly_ = ly;
+    tuneJog_.setDegPerStep(set_.stickDeg);   // ★ CONTROLLER → TUNING STICK FEEL
     // ★ the map: left stick = its pointer, right stick = pan (the jogs rest while it is up)
     if (!screenOff_ && mapSticks(*this, lx, ly, rx, ry)) { tuneJog_.feed(0, 0, tMs); zoomJog_.feed(0, 0, tMs); return; }
     const bool inFreq = !sheets_.empty() && sheets_.back() == S_KB;
@@ -1079,14 +1084,14 @@ inline int App::run(int argc, char** argv) {
         const std::pair<const char*, Btn> names[] = {{"ENTER", B_ENTER}, {"BACK", B_BACK}, {"UP", B_UP}, {"DOWN", B_DOWN}, {"LEFT", B_LEFT},
             {"RIGHT", B_RIGHT}, {"L1", B_L1}, {"R1", B_R1}, {"L2", B_L2}, {"R2", B_R2}, {"SELECT", B_SELECT},
             {"START", B_START}, {"TOPFACE", B_TOPFACE}, {"LEFTFACE", B_LEFTFACE},
-            {"STICKL", B_NONE}, {"STICKR", B_NONE}, {"STICK0", B_NONE}};
+            {"HOLDL2", B_NONE}, {"HOLDR2", B_NONE}, {"RELEASE", B_NONE}};
         std::string all(sc), tok;
         for (size_t i = 0; i <= all.size(); i++) {
             if (i < all.size() && all[i] != ',') { tok += all[i]; continue; }
             const size_t cpos = tok.find(':');
             if (cpos != std::string::npos) {
                 const std::string nm = tok.substr(cpos + 1);
-                if (nm == "STICKL" || nm == "STICKR" || nm == "STICK0") stickScript.push_back({std::atoi(tok.c_str()), nm == "STICKL" ? -1.0 : nm == "STICKR" ? 1.0 : 0.0});
+                if (nm == "HOLDL2" || nm == "HOLDR2" || nm == "RELEASE") stickScript.push_back({std::atoi(tok.c_str()), nm == "HOLDL2" ? -1.0 : nm == "HOLDR2" ? 1.0 : 0.0});
                 else for (auto& n : names) if (nm == n.first) script.push_back({std::atoi(tok.c_str()), n.second});
             }
             tok.clear();
@@ -1106,7 +1111,7 @@ inline int App::run(int argc, char** argv) {
         pollInput();
         hwPump(*this);
         sampleCpu();
-        stickSweep();
+        holdSweep();
 
         // the engine
         devEvents.clear();
@@ -1156,6 +1161,12 @@ inline int App::run(int argc, char** argv) {
                     if (j.has("brightness")) brightness_ = (int)j["brightness"].num(brightness_);
                     if (j.has("volume")) volume_ = (int)j["volume"].num(volume_);
                     if (j.has("cpuMax")) cpuMaxSeen_ = j["cpuMax"].num(0);
+                    if (j["cpuSteps"].kind == Json::Arr) {
+                        std::vector<long> st;
+                        for (auto& f : j["cpuSteps"].a) if (f.num(0) >= 400000) st.push_back((long)f.num(0));
+                        std::sort(st.begin(), st.end());
+                        std::lock_guard<std::mutex> lk(srvMtx_); cpuSteps_ = st;
+                    }
                 }
                 const HttpResult v = httpRequest(p, "GET", "/vibeserver.json", "", 4);
                 if (v.status == 200) {
@@ -1207,7 +1218,7 @@ inline int App::run(int argc, char** argv) {
         prof_.frames++;
         lastDraw = t;
         frame++;
-        for (auto& sp : stickScript) if (sp.first == (int)frame) testStick_ = sp.second;
+        for (auto& sp : stickScript) if (sp.first == (int)frame) testHold_ = sp.second;
         for (auto& sp : script) if (sp.first == (int)frame) { std::fprintf(stderr, "vibe-hhui: script press %d at frame %d\n", (int)sp.second, sp.first); press(sp.second); }
         tc_.tick(frame);
         glViewport(0, 0, W, H);

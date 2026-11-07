@@ -326,6 +326,12 @@ private:
             if (j.has("gainNow")) st_.gainNow = (int)j["gainNow"].num();
             if (j.has("agc")) st_.agc = j["agc"].boolean();
             st_.configSeq++;
+        } else if (t == "ovl") {
+            // ★★ EVERY VibeAGC STEP (Stuart, 2026-11-07: "the AGC seems a little slow to respond"). The engine says each
+            //    gain it applies here; the readout followed only config / hwinfo, which come seldom — the loop was quick,
+            //    the number behind it was not.
+            if (j.has("gain") && j["gain"].num(-1) >= 0) st_.gainNow = (int)j["gain"].num();
+            if (j.has("agc")) st_.agc = j["agc"].boolean();
         } else if (t == "hwinfo") {
             if (j.has("gains")) { st_.gains.clear(); for (auto& g : j["gains"].a) st_.gains.push_back((int)g.num()); }
             if (j.has("gainNow")) st_.gainNow = (int)j["gainNow"].num();

@@ -46,7 +46,9 @@ inline void gainRows(S& x, float& y) {
         textRow(x, y, "GAIN", "", (airspy ? fmtI("%d of 21", s.gainNow / 10) : fmt("%.1f dB", s.gainNow / 10.0)) + " · set by the owner");
         return;
     }
-    const bool vibeAgc = d == "rtl" && s.agc;                // VibeAGC owns the gain: the slider follows it
+    // ★ the switch's own (held) state, not only the engine's: switching VibeAGC off unlocks the slider AT ONCE (it stayed
+    //   locked until a sample-rate change made the engine report again — Stuart, 2026-11-07)
+    const bool vibeAgc = d == "rtl" && held(x, "vagc", s.agc ? 1 : 0) > 0.5;   // VibeAGC owns the gain: the slider follows it
     const int top = gainTopIndex(x);
     double v = held(x, "gain", nowIdx);
     v = std::min<double>(v, top);
