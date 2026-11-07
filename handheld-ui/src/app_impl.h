@@ -1117,6 +1117,18 @@ inline int App::run(int argc, char** argv) {
         devEvents.clear();
         eng.pump([&](const uint8_t* bins, int n, double centreHz, double) {
             // ★ bins are low → high already (engine.h rotated them); the span is this view's (config.totalBandwidth)
+            /* ★★ CHUNKIER WHILE IDLE OR COVERED (Stuart, 2026-11-07: "in idle mode reduce the bins and the fps so that
+             *    the waterfall looks a little chunkier and a little slower but still flows at a reasonable rate … same
+             *    applies in menus and decoders too"). The row goes in at a quarter of its bins, each the PEAK of its four
+             *    (a signal never vanishes into its neighbours); the frequency span is the same, so it lands where it
+             *    always does. The meters and the squelch below read the full row. */
+            if ((idleNow_ || specCovered_) && n >= 512) {
+                thread_local std::vector<uint8_t> coarse;
+                const int m = n / 4;
+                coarse.resize((size_t)m);
+                for (int i = 0; i < m; i++) coarse[(size_t)i] = std::max(std::max(bins[i * 4], bins[i * 4 + 1]), std::max(bins[i * 4 + 2], bins[i * 4 + 3]));
+                wfp_.pushFrame(coarse.data(), m, false, centreHz, eng.state().spanHz, nowSec());
+            } else
             wfp_.pushFrame(bins, n, false, centreHz, eng.state().spanHz, nowSec());
             updateSignal(bins, n, centreHz, eng.state().spanHz);
             audioSpecFrame(*this, bins, n, centreHz, eng.state().spanHz);
@@ -1152,7 +1164,10 @@ inline int App::run(int argc, char** argv) {
                 covered = covered || sh == S_MENU || sh == S_AUDIO || sh == S_BOOKMARKS || sh == S_SEARCH || sh == S_DAB
                        || sh == S_MAP || (sh == S_DEC && decPicFullOpen());
             specCovered_ = covered && set_.idleSave;
-            const int want = idleNow_ || specCovered_ ? 2 : set_.specRate;   // ★ IDLE POWER SAVE: 2 rows a second
+            // ★★ 5 rows a second, not 2 (Stuart, 2026-11-07: "preserving waterfall history so that when the screen is
+            //    working up from idle it doesnt look like it is completely stopped, its the reason we used 5fps as the
+            //    idle rate previously") — behind a cover too: the history builds there and is seen the moment it opens
+            const int want = idleNow_ || specCovered_ ? std::min(5, set_.specRate) : set_.specRate;
             if (s.connected && sentRate != want) { eng.fftRate(want); sentRate = want; }
         }
         if (!s.connected) sentRate = -1;
