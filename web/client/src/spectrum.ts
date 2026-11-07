@@ -811,6 +811,17 @@ export class SpectrumClient {
   /** ★★★ The listener's A ⟷ B balance, −1 all A … +1 all B (remembered per device by main.ts). Sent while B is on, with
    *  B's `on`, and again on every hwinfo (a reconnect) — only ever to a server that takes it. */
   abBalance = 0;
+  /** ★★★ V12 PER-VFO RECORDING: this server sends each VFO's own audio to a listener recording it (`recVfo` in its watch
+   *  state). False (an older server) = REC records the mix, as before. */
+  watchRecVfo = false;
+  /** Which VFOs this listener wants the own-audio stream of (recording, or holding a record buffer for it). */
+  abRecA = false;
+  abRecB = false;
+  setAbRec(a: boolean, b: boolean) {
+    if (a === this.abRecA && b === this.abRecB) return;
+    this.abRecA = a; this.abRecB = b;
+    if (this.abOn && this.watchRecVfo) this._send({ type: 'watch', recA: a, recB: b });
+  }
   private lastLocalWatchAt = -Infinity;
   private watchTimer: number | null = null;
   private swapLive() {
@@ -840,6 +851,8 @@ export class SpectrumClient {
       this.lastLocalWatchAt = performance.now();
       this._send({ type: 'watch', id: 1, on: true, stereo: this.abStereo, monoOut: this.abMonoOut,
                    ...(this.watchBal ? { balance: this.abBalance } : {}) });
+      // ★ the per-VFO streams follow (the set exists once B is on) — only to a server that offers them
+      if (this.watchRecVfo && (this.abRecA || this.abRecB)) this._send({ type: 'watch', recA: this.abRecA, recB: this.abRecB });
     } else {
       if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; }
       this.abOn = false;
@@ -951,6 +964,7 @@ export class SpectrumClient {
     this.watchState = w;
     if (w.max >= 0) this.watchMax = w.max;
     if (w.bal !== null) this.watchBal = true;   // ★★★ a state carrying `bal` IS a server that takes the balance
+    if (msg.recVfo === true) this.watchRecVfo = true;   // ★★★ per-VFO recording offered
     if (typeof msg.stereo === 'boolean') this.abStereo = msg.stereo;
     const ch = w.chans.find((c) => c.id === 1);
     // ★ Round 3: the mutes are the server's (it unmutes A itself when B goes)
@@ -977,6 +991,9 @@ export class SpectrumClient {
         if (d) { b.bandwidthLow = d[0]; b.bandwidthHigh = d[1]; }
       }
     }
+    // ★★★ The server's set lost (a reconnect, B made again) what this listener asked: ask again
+    if (ch && this.abOn && this.watchRecVfo && !recent && ((msg.recA === true) !== this.abRecA || (msg.recB === true) !== this.abRecB))
+      this._send({ type: 'watch', recA: this.abRecA, recB: this.abRecB });
     this.cb.onWatch?.(w.note);
   }
 

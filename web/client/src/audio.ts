@@ -431,6 +431,9 @@ function onFrame(buf) {
    *      every other format off the main thread, and hands over only what genuinely cannot run
    *      here. The buffer is transferred, not copied. */
   if (format === 4) { self.postMessage({ type: 'passthru', buf }, [buf]); return; }
+  // ★★ V12 PER-VFO RECORDING (format 5): one VFO's own audio, sent only while this listener records it (or holds a record
+  //    buffer for it). Never played — the page's VfoTrack decodes and keeps it. Transferred, not copied.
+  if (format === 5) { self.postMessage({ type: 'vrec', buf }, [buf]); return; }
   // ★ Legacy IMA-ADPCM is retired server-side. Hand anything else back rather than guess.
   self.postMessage({ type: 'unhandled', format });
 }
@@ -647,6 +650,121 @@ function silentLoopUrl(): string {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+}
+
+/** ★★★ V12 PER-VFO RECORDING (Stuart, 2026-11-07: "a 2nd record line in the audio menu for the B VFO, both can be
+ *  triggered independently and both have their own clocks and the signal is recorded as it should be before we push it to
+ *  one ear"). ONE VFO's own audio, as the server sends it to a listener recording it — FORMAT 5: [0] channels · [1] 5 ·
+ *  [2..5] 48000 · [6] the VFO (0 A, 1 B) · [7] 3 Opus / 0 int16 PCM · the payload (local_sdr_shim.cpp watchSendRec).
+ *  Its own decoder (WebCodecs, else the WASM one), its own record buffer and its own recording — never played: the
+ *  listener hears the server's mix as before. The file keeps the VFO's channels: mono stays mono, stereo stays stereo
+ *  (a channel change midway is widened to stereo from there, as the main recorder does — a WAV cannot change). */
+export class VfoTrack {
+  private rec: { chunks: { pcm: Int16Array; ch: number; frames: number }[]; frames: number; ch: number; startedAt: number } | null = null;
+  private rb: { chunks: { pcm: Int16Array; ch: number; frames: number }[]; frames: number; cap: number } | null = null;
+  private dec: AudioDecoder | null = null;
+  private decCh = 0;
+  private ts = 0;
+  private wasm: OpusDecoder | null = null;
+  private wasmCh = 0;
+  private wasmLoading = false;
+  /** Frames received (tests and the diagnostics). */
+  packets = 0;
+  feed(buf: ArrayBuffer) {
+    if (buf.byteLength < 8) return;
+    const u = new Uint8Array(buf);
+    const ch = Math.max(1, Math.min(2, u[0])), inner = u[7];
+    this.packets++;
+    if (!this.rec && !this.rb) return;
+    if (inner === 0) { this.pcm(new Int16Array(buf.slice(8)), ch); return; }
+    if (inner !== 3) return;
+    const pkt = new Uint8Array(buf, 8);
+    if (typeof AudioDecoder !== 'undefined') {
+      if (!this.dec || this.decCh !== ch) {
+        try { this.dec?.close(); } catch { /* closed */ }
+        this.decCh = ch;
+        this.dec = new AudioDecoder({
+          output: (ad) => {
+            const n = ad.numberOfFrames, nc = ad.numberOfChannels;
+            const out = new Int16Array(n * nc), plane = new Float32Array(n);
+            for (let c = 0; c < nc; c++) {
+              ad.copyTo(plane, { planeIndex: c, format: 'f32-planar' });
+              for (let i = 0; i < n; i++) { const v = Math.round(plane[i] * 32767); out[i * nc + c] = v < -32768 ? -32768 : v > 32767 ? 32767 : v; }
+            }
+            ad.close();
+            this.pcm(out, nc);
+          },
+          error: (e) => { console.warn('[vfo-rec] decoder', e); this.dec = null; },
+        });
+        this.dec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: ch });
+      }
+      try { this.dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: this.ts, duration: 20000, data: pkt.slice() })); this.ts += 20000; }
+      catch (e) { console.warn('[vfo-rec] decode', e); this.dec = null; }
+      return;
+    }
+    // ★ No WebCodecs (a plain-http LAN page): the WASM decoder, fetched once; packets meanwhile are dropped
+    if (!this.wasm || this.wasmCh !== ch) {
+      if (this.wasmLoading) return;
+      this.wasmLoading = true;
+      loadOpusModule().then(async (m) => {
+        const d = new m.OpusDecoder({ channels: ch, sampleRate: 48000 } as never);
+        await d.ready;
+        try { this.wasm?.free(); } catch { /* freed */ }
+        this.wasm = d; this.wasmCh = ch;
+      }).catch((e) => console.warn('[vfo-rec] wasm', e)).finally(() => { this.wasmLoading = false; });
+      return;
+    }
+    try {
+      const o = this.wasm.decodeFrame(pkt);
+      const nc = o.channelData.length, n = o.samplesDecoded;
+      if (!nc || n <= 0) return;
+      const out = new Int16Array(n * nc);
+      for (let c = 0; c < nc; c++) { const src = o.channelData[c]; for (let i = 0; i < n; i++) { const v = Math.round(src[i] * 32767); out[i * nc + c] = v < -32768 ? -32768 : v > 32767 ? 32767 : v; } }
+      this.pcm(out, nc);
+    } catch (e) { console.warn('[vfo-rec] wasm decode', e); }
+  }
+  private pcm(pcm: Int16Array, ch: number) {
+    const frames = Math.floor(pcm.length / ch);
+    if (frames <= 0) return;
+    const c = { pcm: pcm.length === frames * ch ? pcm : pcm.slice(0, frames * ch), ch, frames };
+    if (this.rb) {
+      this.rb.chunks.push(c); this.rb.frames += frames;
+      let drop = 0;
+      while (drop < this.rb.chunks.length && this.rb.frames - this.rb.chunks[drop].frames >= this.rb.cap) { this.rb.frames -= this.rb.chunks[drop].frames; drop++; }
+      if (drop) this.rb.chunks.splice(0, drop);
+    }
+    if (this.rec) { this.rec.chunks.push(c); this.rec.frames += frames; this.rec.ch = Math.max(this.rec.ch, ch); }
+  }
+  /** 0 = Off, else the seconds held before REC (the page's REC BUFFER). */
+  setBuffer(sec: number) {
+    if (sec > 0) { if (!this.rb) this.rb = { chunks: [], frames: 0, cap: sec * 48000 }; else this.rb.cap = sec * 48000; }
+    else this.rb = null;
+  }
+  clearBuffer() { if (this.rb) { this.rb.chunks = []; this.rb.frames = 0; } }
+  get wantsStream(): boolean { return !!(this.rec || this.rb); }
+  get recording(): boolean { return this.rec !== null; }
+  get recordedSeconds(): number { return this.rec ? (Date.now() - this.rec.startedAt) / 1000 : 0; }
+  /** Start; the seconds it already holds from the buffer. */
+  start(): number {
+    const pre = this.rb ? this.rb.frames : 0;
+    this.rec = { chunks: this.rb ? this.rb.chunks.slice() : [], frames: pre, ch: 1, startedAt: Date.now() - Math.round(pre / 48) };
+    for (const c of this.rec.chunks) this.rec.ch = Math.max(this.rec.ch, c.ch);
+    return pre / 48000;
+  }
+  /** Stop and return the WAV (null if nothing came). Mono stays mono; any stereo in it makes the whole file stereo. */
+  stop(): Blob | null {
+    const r = this.rec;
+    this.rec = null;
+    this.clearBuffer();   // ★ the next recording never repeats this one (the main recorder's rule)
+    if (!r || !r.frames) return null;
+    const out = new Int16Array(r.frames * r.ch);
+    let o = 0;
+    for (const c of r.chunks) {
+      if (c.ch === r.ch) { out.set(c.pcm, o); o += c.pcm.length; continue; }
+      for (let i = 0; i < c.frames; i++) { out[o++] = c.pcm[i]; out[o++] = c.pcm[i]; }   // mono → stereo
+    }
+    return wavBlob(out, r.ch, 48000);
+  }
 }
 
 export class AudioPlayer {
@@ -1142,6 +1260,7 @@ export class AudioPlayer {
           /* ★ A frame the worker cannot decode but the page can — DAB+ AAC. See the worker's own
            *   note: forwarding it keeps the socket and every other format off the main thread. */
           case 'passthru': if (d.buf) { const b = d.buf as ArrayBuffer; guard('web-audio', 'frame', () => this._handleFrame(b)); } break;
+          case 'vrec':     if (d.buf) { const b = d.buf as ArrayBuffer; guard('web-audio', 'vrec', () => this._vfoFeed(b)); } break;
           // ★ A frame the Worker dropped — counted and logged here, where faultLog lives.
           case 'fault':    noteFault('web-audio-worker', String((d as { kind?: string }).kind ?? 'frame'), new Error(d.why || 'bad frame')); break;
           case 'opus':     if (d.buf) this._mediaFeed(d.buf as ArrayBuffer); break;
@@ -1221,6 +1340,7 @@ export class AudioPlayer {
     const dv = new DataView(buf);
     const channels = dv.getUint8(0);
     const format = dv.getUint8(1);
+    if (format === 5) { this._vfoFeed(buf); return; }   // ★★ V12 per-VFO recording — never played (VfoTrack)
 
     // format 3 = Opus (VibeServer compressed audio). Decoded ASYNCHRONOUSLY via WebCodecs — the
     // decoded PCM lands in _onOpusData → _playPcm, same tail as the sync paths below.
@@ -2364,6 +2484,12 @@ export class AudioPlayer {
    *  ★ Always stereo. A WFM stream silently drops from 2ch to 1ch when the pilot unlocks, and a WAV
    *    header cannot change channel count midway — so duplicate mono rather than write a file that
    *    desyncs halfway through. */
+  /** ★★ V12 PER-VFO RECORDING — VFO A's and VFO B's own tracks (VfoTrack), fed by format-5 frames. */
+  readonly vfo: [VfoTrack, VfoTrack] = [new VfoTrack(), new VfoTrack()];
+  private _vfoFeed(buf: ArrayBuffer) {
+    const v = buf.byteLength >= 8 ? new Uint8Array(buf, 6, 1)[0] : -1;
+    if (v === 0 || v === 1) this.vfo[v].feed(buf);
+  }
   private _recordPcm(pcm: Int16Array, ch: number) {
     if (!this.rec && !this.rb) return;
     const frames = Math.floor(pcm.length / Math.max(1, ch));

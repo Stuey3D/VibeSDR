@@ -4466,7 +4466,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   hint={'A second frequency on the radio, heard at the same time (lower in the left ear, higher in the right). '
                     + 'Each VFO B costs about one more listener\u2019s processing, and with a listener limit it takes a listener\u2019s '
                     + 'place — it gives way when somebody new arrives.\n\nBandwidth: a listener who records both VFOs at once is sent '
-                    + 'two extra stereo audio streams of up to 96 kbit/s each, on top of the one they are listening to. If this '
+                    + 'two extra stereo audio streams of up to 96 kbit/s each, on top of the one they are listening to \u2014 for as long '
+                    + 'as VFO A/B is on if they keep the record buffer on. If this '
                     + 'server\u2019s upload is limited, switch VFO A/B off.'}
                   onPress={() => { const v = !vfoB; setVfoB(v); AsyncStorage.setItem(K.vfoB, v ? '1' : '0'); }} />
                 )}

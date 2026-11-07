@@ -5287,6 +5287,12 @@ select.btn { padding: 6px 8px; }
   <button class="mPanelBtn" id="mPanelRecs" title="Recordings">RECORDINGS</button>
   <span></span>
 </div>
+<!-- ★★★ V12 PER-VFO RECORDING (Stuart, 2026-11-07): while VFO A/B is on, REC above is VFO A's and this is VFO B's — each
+     starts and stops on its own, with its own clock, and records its VFO as it is before the pan (mono or stereo). -->
+<div class="mrow mOnly mOnlyGrid" id="mRecBRow" hidden>
+  <button class="mPanelBtn" id="mPanelRecB" title="Start / stop recording VFO B"><span class="mRecIc"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="4" fill="currentColor"/></svg></span><span id="mRecLblB">REC B</span></button>
+  <span class="lbl wrap" id="mRecBNote" style="grid-column:span 2;white-space:normal;align-self:center">Each VFO is recorded on its own, before the pan to one ear.</span>
+</div>
 <!-- ★★ V12 RECORD BUFFER — beside REC because it changes what REC does (Stuart, 2026-10-18: "a setting so a user
      knows why recordings are longer than they expected. Next to the record button"). The app has the same. -->
 <div class="mrow">

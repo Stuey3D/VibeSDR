@@ -1389,7 +1389,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         listener, and on a radio with a listener limit it takes a listener&rsquo;s place until a new listener arrives.</div>
       <!-- ★★ Stuart, 2026-11-07: per-VFO recording sends each VFO's own audio as well as the mix — say what it costs -->
       <div class="hint" style="color:var(--amber)"><b>Bandwidth:</b> a listener who records both VFOs at once is sent
-        two extra stereo audio streams of up to 96&nbsp;kbit/s each, on top of the one they are listening to. If this
+        two extra stereo audio streams of up to 96&nbsp;kbit/s each, on top of the one they are listening to &mdash;
+        for as long as VFO A/B is on if they keep the record buffer on. If this
         server&rsquo;s upload is limited, switch VFO A/B off.</div>
       </div>
       <!-- (the separate "streams at once" cap moved INTO the raw IQ row above; it only ever

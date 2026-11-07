@@ -3647,6 +3647,7 @@ function renderFrame(frameTs: number) {
 
   wf.vfoHz = spec.frequency;
   recBufCheck();   // ★ V12 record buffer's retune rule — a string compare when nothing moved, nothing at all when Off
+  vfoRecBufCheck();   // ★★★ …and each VFO's own, while A/B records per VFO
   guard('web-render', 'overlays', updateViewOverlays);
   // Passband drives the acrylic sidebands — so bandwidth is something you SEE
   // sitting on the signal, not a number you read.
@@ -16633,6 +16634,95 @@ function showRecording(on: boolean) {
   setClass($('mRecTime'), 'on', on);
 }
 
+/* ★★★ V12 PER-VFO RECORDING (Stuart, 2026-11-07: "when the A/B VFO's are active there needs to be a 2nd record line in
+ *     the audio menu for the B VFO, both can be triggered independently and both have their own clocks and the signal is
+ *     recorded as it should be before we push it to one ear so Stereo for an FM signal and mono for others"). While VFO B
+ *     is on, on a server that sends each VFO's own audio (recVfo), REC is VFO A's and the row under it VFO B's; each is
+ *     its own VfoTrack (audio.ts), fed by the server only while it records — or while the REC BUFFER is on, so a VFO's
+ *     recording can still start with the seconds before the press (that is the bandwidth the setup page warns of). */
+function abRecMode(): boolean { return !!spec?.abOn && !!spec?.watchRecVfo && !!audio; }
+const vfoRecAnchor: [RecordBufferAnchor, RecordBufferAnchor] = [new RecordBufferAnchor(0), new RecordBufferAnchor(0)];
+const vfoRecLast = ['', ''];
+const vfoRecSec = [-1, -1];
+const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s) % 60).padStart(2, '0')}`;
+/** What the server should send and what each track holds — called whenever A/B, a recording or the buffer changes. */
+function vfoRecSync() {
+  if (!audio || !spec) return;
+  const on = abRecMode();
+  for (const v of [0, 1] as const) {
+    const t = audio.vfo[v];
+    const sec = on ? recBufSec : 0;
+    if (sec !== vfoRecSec[v]) { vfoRecSec[v] = sec; vfoRecAnchor[v] = new RecordBufferAnchor(sec); vfoRecLast[v] = ''; }
+    t.setBuffer(sec);
+  }
+  spec.setAbRec(on && audio.vfo[0].wantsStream, on && audio.vfo[1].wantsStream);
+  vfoRecPaint();
+}
+function vfoRecPaint() {
+  if (!audio) return;
+  const on = abRecMode();
+  $('mRecBRow').hidden = !on;
+  if (!on) return;
+  const a = audio.vfo[0], b = audio.vfo[1];
+  // ★ a recording of the MIX started before VFO B came on keeps its STOP (the button still ends it)
+  if (!audio.recording) setText($('mRecLbl'), a.recording ? `STOP A ${mmss(a.recordedSeconds)}` : 'REC A');
+  setText($('mRecLblB'), b.recording ? `STOP B ${mmss(b.recordedSeconds)}` : 'REC B');
+  $('mPanelRec').classList.toggle('rec', a.recording || !!audio.recording);
+  $('mPanelRecB').classList.toggle('rec', b.recording);
+  const any = a.recording || b.recording;
+  $('mAudio').classList.toggle('rec', any || !!audio.recording);
+  setClass($('mRecTime'), 'on', any || !!audio.recording);
+  if (any) setText($('mRecVal'), mmss((a.recording ? a : b).recordedSeconds));
+}
+/** The retune rule for each VFO's own buffer — the main recorder's (RecordBufferAnchor), per VFO. */
+function vfoRecBufCheck() {
+  if (!audio || !spec || !recBufSec || !abRecMode()) return;
+  const vs = [spec.vfoA(), spec.vfoB()];
+  for (const v of [0, 1] as const) {
+    const key = `${vs[v].frequency}|${vs[v].mode}`;
+    if (key === vfoRecLast[v]) continue;
+    vfoRecLast[v] = key;
+    if (vfoRecAnchor[v].update({ freqHz: vs[v].frequency, mode: String(vs[v].mode), source: location.host + location.pathname }, Date.now())) audio.vfo[v].clearBuffer();
+  }
+}
+async function vfoRecSave(v: 0 | 1) {
+  if (!audio || !spec) return;
+  const t = audio.vfo[v];
+  const seconds = t.recordedSeconds;
+  const blob = t.stop();
+  vfoRecSync();
+  if (!blob) return;
+  const at = new Date();
+  const s = v === 0 ? spec.vfoA() : spec.vfoB();
+  await saveRecording({
+    name: recordingName(s.frequency, String(s.mode), at).replace(/\.wav$/, `_VFO-${v === 0 ? 'A' : 'B'}.wav`),
+    frequency: Math.round(s.frequency), mode: s.mode, createdAt: at.getTime(), seconds, bytes: blob.size, blob,
+  });
+  $('mPanelRecs').classList.add('on');
+  setTimeout(() => $('mPanelRecs').classList.remove('on'), 1500);
+}
+function vfoRecToggle(v: 0 | 1) {
+  if (!audio || !spec || !abRecMode()) return;
+  if (audio.vfo[v].recording) { void vfoRecSave(v); return; }
+  audio.vfo[v].start();
+  vfoRecSync();
+}
+/** VFO B gone (switched off, or the server closed it): each VFO's recording ends and is kept — say so. */
+function vfoRecOnWatch() {
+  if (!audio) return;
+  if (!abRecMode()) {
+    const had = audio.vfo[0].recording || audio.vfo[1].recording;
+    for (const v of [0, 1] as const) if (audio.vfo[v].recording) void vfoRecSave(v);
+    for (const v of [0, 1] as const) audio.vfo[v].setBuffer(0);
+    if (had) showPill('VFO A/B is off — the VFO recordings are saved in RECORDINGS', 5000);
+    if (spec?.abRecA || spec?.abRecB) spec.setAbRec(false, false);
+    $('mRecBRow').hidden = true;
+    if (!audio.recording) showRecording(false);
+    return;
+  }
+  vfoRecSync();
+}
+
 /* ★★ V12 RECORD BUFFER — the setting (this browser, per server like every page setting) and the retune rule, which is
  *    the app's own (src/services/recordBuffer.ts, unit-tested): a move past the mode's allowance from the ANCHOR — the
  *    dial when the held audio began — a mode change, or another receiver / DAB service clears what is held. */
@@ -16655,11 +16745,13 @@ function recBufCheck() {
 
 function initRecorder() {
   recBufSec = parseRecordBufferSeconds(String(prefs().recbuf ?? ''));
-  segment('recBufSeg', 'rb', (v) => { recBufSec = parseRecordBufferSeconds(String(v)); applyRecBuf(); }, 'recbuf');
+  segment('recBufSeg', 'rb', (v) => { recBufSec = parseRecordBufferSeconds(String(v)); applyRecBuf(); vfoRecSync(); }, 'recbuf');
   applyRecBuf();
   const btn = $<HTMLButtonElement>('mPanelRec');
+  $<HTMLButtonElement>('mPanelRecB').onclick = () => vfoRecToggle(1);
   btn.onclick = async () => {
     if (!audio || !spec) return;
+    if (abRecMode() && !audio.recording) { vfoRecToggle(0); return; }   // ★★★ VFO A/B: REC is VFO A's own
     if (!audio.recording) {
       audio.startRecording();
       showRecording(true);
@@ -17216,6 +17308,7 @@ async function renderRecordings() {
 }
 
 function updateRecTime() {
+  if (abRecMode()) { vfoRecPaint(); if (!audio?.recording) return; }
   if (!audio?.recording) return;
   const s = Math.floor(audio.recordedSeconds);
   setText($('mRecVal'), `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`);
@@ -20821,6 +20914,7 @@ function abOnWatch(note?: string) {
   abPaint();
   sqlRowsPaint();
   bandMuteFollowAB();
+  vfoRecOnWatch();   // ★★★ per-VFO recording: the REC B row, the streams, B going away
   if (note && Date.now() - abNoteAt > 1500) { abNoteAt = Date.now(); showPill(note, 6000); }
 }
 
