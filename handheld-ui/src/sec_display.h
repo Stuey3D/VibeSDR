@@ -192,14 +192,24 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     // ── WATERFALL ──
     y = dispHead(c, a, y, "WATERFALL");
     // WATERFALL SPEED (the native loop's own: rows a second the waterfall scrolls at)
-    y = menuRow(c, a, y, "WATERFALL SPEED", "Rows a second. NATIVE: the 5 the radio sends; 10, 15 and 30 scroll smoothly between them — every row a real one, repeated, never blended.");
+    // ★★ NATIVE APART, THE INTERPOLATED THREE BOXED (Stuart, 2026-11-07: "native sounds like it should be higher than ECO so
+    //    What i would like is Native as its own separate button … then the eco default smooth are boxed and called
+    //    interpolated for smoothness"). wf::Scroll: Sharp 2 (NATIVE) · Eco 3 (10) · Default 4 (15) · Smooth 5 (30) — the
+    //    app's and the web's rules for the engine's fixed 5 frames a second.
+    y = menuRow(c, a, y, "WATERFALL SPEED", "NATIVE draws the 5 lines a second the radio sends. INTERPOLATED scrolls smoothly between them — every row a real one, repeated, never blended.");
     {
-        // wf::Scroll: Sharp(NATIVE) 2 · Eco 3 (10) · Default 4 (15) · Smooth 5 (30) — from the 5 fps feed, as the app and web
-        const int order[4] = {2, 3, 4, 5};
-        int sel = 2; for (int i = 0; i < 4; i++) if (order[i] == set_.speed) sel = i;
-        const int hit = segmented(c, "d.spd", {a.x + 6, y - 4, a.w - 12, 38}, {"NATIVE", "10", "15", "30"}, sel);
+        const float bh = 38, cap = 18, pad = 6;
+        const Rect nat{a.x + 6, y - 4 + cap + pad, 132, bh};
+        BtnStyle ns; ns.lit = set_.speed == 2; ns.font = &c.f.body; ns.radius = 7;
+        if (button(c, "d.spd#n", nat, "NATIVE", ns)) { set_.speed = 2; look(); dirty(); }
+        const Rect box{nat.r() + 14, y - 4, a.r() - 6 - (nat.r() + 14), cap + pad + bh + pad};
+        c.g.rframe(box.x, box.y, box.w, box.h, 9, 1, th::btnBorder);
+        c.tc.draw(c.g, c.f.small, "INTERPOLATED", box.x + 10, box.y + 3, th::dim);
+        const int order[3] = {3, 4, 5};
+        int sel = -1; for (int i = 0; i < 3; i++) if (order[i] == set_.speed) sel = i;
+        const int hit = segmented(c, "d.spd", {box.x + pad, box.y + cap + pad, box.w - 2 * pad, bh}, {"ECO 10", "DEFAULT 15", "SMOOTH 30"}, sel);
         if (hit >= 0) { set_.speed = order[hit]; look(); dirty(); }
-        y += 46;
+        y += box.h + 8;
     }
     // RANGE: AUTO / MANUAL
     y0 = y;
