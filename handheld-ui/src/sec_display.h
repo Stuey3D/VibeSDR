@@ -57,7 +57,10 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
                          double step, const std::string& shown) -> bool {
         const float y0 = y;
         y = menuRow(c, a, y, label, help);
-        const float lw = std::max(150.f, (float)c.tc.width(c.f.bodyB, label) + 30);
+        // ★ ONE COLUMN for every slider on the page (Stuart, 2026-11-07: "can you align them please") — the widest label's,
+        //   not each its own, which left them starting at four different places
+        (void)label;
+        const float lw = std::max(150.f, (float)c.tc.width(c.f.bodyB, "WATERFALL BRIGHTNESS") + 24);
         const bool ch = hwRowSlider(c, id, {a.x, y0, a.w, 44}, {a.x + lw, y0 + 2, a.w - lw - 76, 40}, v, lo, hi, step);
         c.tc.draw(c.g, c.f.body, shown, a.r() - 6, y0 + valY, th::dim, 2);
         return ch;
@@ -189,12 +192,12 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     // ── WATERFALL ──
     y = dispHead(c, a, y, "WATERFALL");
     // WATERFALL SPEED (the native loop's own: rows a second the waterfall scrolls at)
-    y = menuRow(c, a, y, "WATERFALL SPEED", "Rows a second. NATIVE: the 5 the radio sends; 10 and 30 scroll smoothly between them — every row a real one, repeated, never blended.");
+    y = menuRow(c, a, y, "WATERFALL SPEED", "Rows a second. NATIVE: the 5 the radio sends; 10, 15 and 30 scroll smoothly between them — every row a real one, repeated, never blended.");
     {
-        // wf::Scroll: Sharp(NATIVE) 2 · Eco 3 (10) · Smooth 5 (30 from the 5 fps feed) — Stuart's three
-        const int order[3] = {2, 3, 5};
-        int sel = 2; for (int i = 0; i < 3; i++) if (order[i] == set_.speed) sel = i;
-        const int hit = segmented(c, "d.spd", {a.x + 6, y - 4, a.w - 12, 38}, {"NATIVE", "10", "30"}, sel);
+        // wf::Scroll: Sharp(NATIVE) 2 · Eco 3 (10) · Default 4 (15) · Smooth 5 (30) — from the 5 fps feed, as the app and web
+        const int order[4] = {2, 3, 4, 5};
+        int sel = 2; for (int i = 0; i < 4; i++) if (order[i] == set_.speed) sel = i;
+        const int hit = segmented(c, "d.spd", {a.x + 6, y - 4, a.w - 12, 38}, {"NATIVE", "10", "15", "30"}, sel);
         if (hit >= 0) { set_.speed = order[hit]; look(); dirty(); }
         y += 46;
     }
