@@ -37327,7 +37327,7 @@ static std::string vsAdsbWhyNot() {
         //    about owner setting as if it were the server"): there the switch is in the radio's own menu, named as it is.
         if (g_vsHandheld.load(std::memory_order_relaxed))
             std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 the radio runs at %.3f MS/s. "
-                          "Turn on ALLOW DECODERS TO CHANGE THE SAMPLE RATE (MENU \xe2\x86\x92 SDR HARDWARE, under SAMPLE RATE), "
+                          "Turn on DECODER RATE BOOST (MENU \xe2\x86\x92 SDR HARDWARE, under SAMPLE RATE), "
                           "or choose 2.4 MS/s there", running / 1e6);
         else
         std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s "

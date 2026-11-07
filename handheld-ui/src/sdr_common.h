@@ -78,7 +78,7 @@ inline void gainRows(S& x, float& y) {
     }
 }
 
-// ── ALLOW DECODERS TO CHANGE THE SAMPLE RATE — under SAMPLE RATE (Stuart, 2026-11-07: "a button under the sample rate
+// ── DECODER RATE BOOST — under SAMPLE RATE ("it doesnt need a super long label") (Stuart, 2026-11-07: "a button under the sample rate
 //    options in the sdr menu to Allow decoder to change sample rate"). The server's own switch (Setup's "change the sample
 //    rate when a mode needs it", {"type":"dabBoost"}, hwinfo `dabBoost`): ADS-B raises the radio to 2.4 MS/s while it
 //    runs (and DAB to 2.048), then puts the chosen rate back. Only where the server reports it (no dead control).
@@ -86,9 +86,8 @@ inline void rateBoostRow(S& x, float& y) {
     const Json& h = x.hwi();
     if (!h.has("dabBoost")) return;
     const bool on = held(x, "rboost", h["dabBoost"].boolean() ? 1 : 0) > 0.5;
-    if (rowToggle(x, y, "sdr.rboost", "ALLOW DECODERS TO CHANGE THE SAMPLE RATE",
-                  "Some decoders need a minimum sample rate from the radio (ADS-B 2.4 MS/s). Running lower, the decoder can raise it "
-                  "for as long as it is in use, and your rate comes back when it stops.", on)) {
+    if (rowToggle(x, y, "sdr.rboost", "DECODER RATE BOOST",
+                  "Lets a decoder raise the sample rate it needs (ADS-B 2.4 MS/s) while it runs; your rate comes back when it stops.", on)) {
         hold(x, "rboost", on ? 0 : 1);
         send(x, std::string("{\"type\":\"dabBoost\",\"on\":") + (on ? "0" : "1") + "}");
     }
