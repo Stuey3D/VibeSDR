@@ -22,8 +22,20 @@
 // ★ Cheap: only the visible rows are drawn; text is wrapped once when it arrives (dec_state.h DecLog), never per frame.
 #pragma once
 #include "dec_state.h"
+#include "dec_pic.h"   // ★ the picture decoders' state (WEFAX, SSTV, HELL); their drawing is dec_pic_box.h, included at the end
 
 namespace hh {
+
+// ★ dec_pic_box.h / dec_pic_gallery.h (included at the end of this file)
+inline void decPicPane(App&, Ctx&, const RadioState&, Rect, bool);
+inline void decPicKeys(App&, const std::string&, std::vector<PicKey>&);
+inline void decPicKeyPress(App&, int, const std::string&);
+inline bool decPicFullOpen();
+inline void galOpen(App&, int);
+inline bool galEnabled(int);
+inline void galClose(App&);
+struct GalUi; inline GalUi& galUi();
+inline bool galIsOpen();
 
 // ── small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -86,6 +98,7 @@ inline std::string decTitle(const std::string& view) {
     if (view == "aprs") return u.aprsBaud == 300 ? "APRS · HF 300" : "APRS";
     if (view == "time") { for (auto& t : kTimeStations) if (u.timeStation == t.id) return std::string("TIME · ") + upper(t.id); }
     if (view == "refused") return "DECODER";
+    if (view == "hell") return "FELD HELL";
     if (const DecExternal* e = decExt(view)) return e->label;
     const DecDef* d = decDef(view);
     return d ? d->label : "DECODERS";
@@ -447,6 +460,11 @@ inline void decOptionRows(App& a, const RadioState& s, const std::string& id, st
         std::vector<std::string> o; std::vector<bool> lit; std::vector<double> hzs;
         for (auto& d : kJttyDials) { if (!decReach(s, d.hz)) continue; o.push_back(d.label); lit.push_back(std::fabs(s.vfoHz - d.hz) < 500 && s.mode == "usb"); hzs.push_back(d.hz); }
         action("jtty.band", "BAND", o, lit, [&a, &s, hzs](int i) { decTune(a, s, hzs[(size_t)i], "usb"); });
+    } else if (id == "wefax") {
+        // main.ts #wefaxLpm (60 · 120 · 240) — a re-attach; the chart's own ADJ (margin / slant / RAW) is in the box
+        static const int lpms[] = {60, 120, 240};
+        int sel = 1; for (int i = 0; i < 3; i++) if (picUi().lpm == lpms[i]) sel = i;
+        choice("wefax.lpm", "LPM", {"60", "120", "240"}, sel, [](int i) { picUi().lpm = lpms[i]; decReattachSoon("wefax"); });
     } else if (id == "mfsk") {
         // ★★★ AUTO's fallback rows (autoModes.ts, RTTY's pattern): FAMILY (AUTO + the server's groups), then the family's MODE
         std::vector<DecGMode> list; { std::lock_guard<std::mutex> lk(u.capMtx); list = u.mfskModes; }
@@ -608,6 +626,13 @@ inline void decPickRows(App& a, const RadioState& s, std::vector<DecPRow>& out) 
             if (decIsOn(id)) decOptionRows(a, s, id, out);
         }
     }
+    // ★ THE GALLERY — the pictures the engine kept on the card; only where it keeps any (galEnabled asks once)
+    if (galEnabled(a.eng_->port())) {
+        DecPRow h{DecPRow::HEAD}; h.id = "g.gallery"; h.label = "SAVED ON THE CARD"; out.push_back(std::move(h));
+        DecPRow r{DecPRow::ACTION}; r.id = "gallery"; r.label = "GALLERY"; r.opts = {"WEFAX CHARTS", "SSTV PICTURES"}; r.lit = {false, false};
+        r.pick = [&a](int i) { galOpen(a, i); };
+        out.push_back(std::move(r));
+    }
 }
 inline float decPRowH(Ctx& c, const DecPRow& r, float w) {
     switch (r.kind) {
@@ -677,6 +702,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
     bool grabbed = decGrabbed(a);
     if (wasGrabbed && !grabbed) {   // released (BACK, the menu): the picker folds; an empty box goes
         u.pane = DecUi::P_OUT;
+        picUi().full = 0; if (galIsOpen()) galClose(a);
         if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); }
     }
     wasGrabbed = grabbed;
@@ -687,6 +713,19 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
     if (grabbed && !a.sheets_.empty() && a.sheets_.back() == App::S_DEC && u.pane == DecUi::P_PICK && decRunning() && c.nav.input().back) {
         if (c.nav.backPressed()) { u.pane = DecUi::P_OUT; a.nav_.forget("dec"); }
     }
+    // ★ a picture full screen, or the gallery: drawn from the sheet loop (decDrawFull) — the box draws nothing under it.
+    //   Without that hook wired (app_impl.h `case S_DEC: decDrawFull(*this, c, s);`) it would be an invisible state:
+    //   then it closes again and says so, rather than leave the pad on nothing.
+    if (grabbed && decPicFullOpen()) {
+        PicUi& pu = picUi();
+        if (!pu.fullOpenedAt) pu.fullOpenedAt = nowSec();
+        if (nowSec() - pu.fullOpenedAt > 0.5 && nowSec() - pu.fullDrawnAt > 0.5) {
+            pu.full = 0; if (galIsOpen()) galClose(a);
+            a.toast("Full screen is not wired in this build");
+            std::fprintf(stderr, "vibe-hhui: decDrawFull is not called from the sheet loop (case S_DEC) — full screen closed\n");
+        } else return;
+    }
+    picUi().fullOpenedAt = 0;
     const DecExternal* xv = decExt(u.view);
     const bool tall = u.pane == DecUi::P_PICK || (xv && xv->tall);
     const float top = 156, bot = decVtsShowing() ? 270.f : 308.f;
@@ -712,8 +751,10 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (!u.active.empty() && u.spotsOn) ks.push_back({"dec.k.sw", view == "spots" ? decTitle(u.active) : std::string("SPOTS"), 10, false});
             const auto subs = decSubs(view);
             for (size_t i = 0; i < subs.size(); i++) ks.push_back({"dec.k.s" + std::to_string(i), subs[i], 20 + (int)i, u.sub == (int)i});
+            if (d && d->kind == DK_PICTURE) { std::vector<PicKey> pk; decPicKeys(a, view, pk); for (auto& k : pk) ks.push_back({k.id, k.label, k.act, k.on}); }
             ks.push_back({"dec.k.pick", "DECODERS", 1, false});
-            if (view != "refused") ks.push_back({"dec.k.clr", "CLR", 2, false});
+            // ★ CLR only where there is something it clears (an external decoder: only with its own clear action)
+            if (view != "refused" && (!xv || xv->clear)) ks.push_back({"dec.k.clr", "CLR", 2, false});
             ks.push_back({"dec.k.stop", decRunning() ? "STOP" : "CLOSE", 3, false});
         }
         float kx = head.r() - 6;
@@ -735,6 +776,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
         if (view == "refused" || (!u.refusal.empty() && view != "spots" && u.active.empty())) decNone(c, body, u.refusal);
         else if (view == "spots") decPaneSpots(a, c, s, body);
         else if (xv) { if (xv->draw) xv->draw(a, c, s, body); else decNone(c, body, u.status); }
+        else if (d && d->kind == DK_PICTURE) decPicPane(a, c, s, body, grabbed);
         else if (d && d->kind == DK_DSC) decPaneDsc(a, c, s, body);
         else if (d && d->kind == DK_APRS) decPaneAprs(a, c, s, body);
         else if (d && (d->kind == DK_KB || d->kind == DK_JTTY)) {
@@ -755,13 +797,16 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
         for (auto& p : placed) if (decKey(c, ks[p.second].id, p.first, ks[p.second].label, ks[p.second].on)) act = ks[p.second].act;
         if (act == 1) { u.pane = DecUi::P_PICK; u.pickFocus = "dec.p." + (view == "refused" ? std::string("rtty") : view); decPickScroll() = {}; a.nav_.forget("dec"); }
         else if (act == 2) {
-            if (view == "spots") u.spots.clear();
+            if (xv) { if (xv->clear) xv->clear(); }
+            else if (d && d->kind == DK_PICTURE) picClear();
+            else if (view == "spots") u.spots.clear();
             else { u.log.clear(); u.calls.clear(); u.dsc.clear(); u.aprsLog.clear(); }
         } else if (act == 3) {
             if (decRunning()) decStop(a, view == "spots" ? "spots" : view);
             if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); decRelease(a); }
             else a.nav_.forget("dec");
         } else if (act == 10) { u.view = view == "spots" ? u.active : "spots"; u.sub = 0; decListScroll() = {}; a.nav_.forget("dec"); }
+        else if (act >= 60) decPicKeyPress(a, act, view);
         else if (act >= 40) { if ((size_t)(act - 40) < extPress.size()) extPress[(size_t)(act - 40)](); }
         else if (act >= 20) { u.sub = act - 20; decListScroll() = {}; a.nav_.forget("dec"); }
     }
@@ -821,3 +866,5 @@ inline bool decModePick(App& a, const RadioState& s, const std::string& id) {
 }
 
 }  // namespace hh
+
+#include "dec_pic_box.h"   // ★ the picture decoders drawn + the gallery (they use this file's helpers)

@@ -263,6 +263,7 @@ inline void memTick(App&, const RadioState&);
 // DECODERS (dec_state.h / dec_box.h): the framework, the text decoders, spots, the box over the waterfall
 inline void decTick(App&, const RadioState&);
 inline void decDrawBox(App&, Ctx&, const RadioState&);
+inline void decDrawFull(App&, Ctx&, const RadioState&);   // the picture / gallery full screen (dec_pic_box.h)
 inline void decModeEntries(const RadioState&, std::vector<ModeDef>&);
 inline bool decModeLit(const std::string&);
 inline bool decModePick(App&, const RadioState&, const std::string&);

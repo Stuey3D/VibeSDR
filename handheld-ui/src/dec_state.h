@@ -17,8 +17,9 @@
 //    minute (`time_sync`) goes to hwNoteTimeSync, every FT8 spot's DT to hwNoteFt8Dt — whichever decoder is open.
 // ★ AUTO decoders open in AUTO unless a manual choice was made THIS SESSION (src/services/decoderSession.ts): the
 //   choices live in memory only — a restart is AUTO again.
-// ★ PICTURE (WEFAX, SSTV, HELL) and MAP (ADS-B, AIS, NDB, ISM) decoders are in the table (DK_PICTURE / DK_MAP) so their
-//   passes plug in here, but are not offered yet: a key whose every use is a no-op is not drawn (AGENTS.md).
+// ★ PICTURE decoders (WEFAX, SSTV, HELL) are dec_pic.h's: their frames go there (decPicBinary), their pictures are GL
+//   textures drawn by dec_pic_box.h, the gallery is dec_pic_gallery.h. MAP decoders (ADS-B, AIS, NDB, ISM) are in the
+//   table (DK_MAP) so their pass plugs in here, but are not offered yet: a key whose every use is a no-op is not drawn.
 //
 // DEBUG (tests only): VIBE_HHUI_DEC_START=rtty,spots starts decoders once the session runs; VIBE_HHUI_DEC_CANNED=1 — a started decoder is fed CANNED frames through the very parse path the
 //   socket uses (decCannedTick), instead of opening the socket. For the screenshots of decoders the bench cannot make
@@ -69,8 +70,9 @@ inline const DecDef kDecs[] = {
     {"time",   "TIME",    DK_TEXT, "",       false, true,  ""},
     {"spots",  "DIGITAL SPOTS", DK_SPOTS, "", false, true, "The digital modes at your dial (FT8 and FT4 on your passband), decoded on the server. Press a spot to tune to it."},
     // ★ the later passes (in the table so they plug in; never offered until they are built)
-    {"wefax", "WEFAX", DK_PICTURE, "", false, false, ""}, {"sstv", "SSTV", DK_PICTURE, "", false, false, ""},
-    {"hell", "HELL", DK_PICTURE, "hell", false, false, ""},
+    {"wefax", "WEFAX", DK_PICTURE, "", false, true, "Weather charts by radio fax, drawn line by line. Tune USB 1.9 kHz below the station's published frequency — Northwood 4608.1, DWD 7878.1 kHz; 120 LPM for nearly every station. The margin and slant are found on each chart by itself; ADJ in the box sets them by hand. Each finished chart is kept in the GALLERY."},
+    {"sstv", "SSTV", DK_PICTURE, "", false, true, "Slow-scan TV pictures — 14.230 MHz USB on 20 m (7.171 MHz LSB on 40 m; 145.800 MHz FM from the ISS). The mode is found by itself; each finished picture is kept in the GALLERY."},
+    {"hell", "HELL", DK_PICTURE, "hell", false, true, "FELD HELL (Hellschreiber): drawn, not read — the text is painted as it is heard, a strip at a time, and you read it. Every column is printed twice, one copy above the other, so a slant or a fade that cuts one copy leaves the other whole. Tune USB so the signal is in your passband (the tone is found by itself); each new page puts the last one under PREV."},
     {"adsb", "ADS-B", DK_MAP, "adsb", false, false, ""}, {"ais", "AIS", DK_MAP, "ais", false, false, ""},
     {"ndb", "NDB", DK_MAP, "ndb", false, false, ""}, {"ism", "ISM", DK_MAP, "ism", false, false, ""},
 };
@@ -362,11 +364,21 @@ struct DecExternal {
     bool tall = false;                                       // ★ the box as the tall panel (y 44 →) instead of over the waterfall
     std::function<void(App&, const RadioState&, std::vector<std::string>&, std::vector<std::function<void()>>&)> keys;   // extra header keys (labels + presses)
     std::string hint;                                        // under its key in the picker, while on
+    std::function<void()> clear;                             // ★ CLR's action — no CLR key without one (AGENTS.md: no no-op controls)
 };
 inline std::vector<DecExternal>& decExternals() { static std::vector<DecExternal> v; return v; }
 inline void decRegister(DecExternal e) { for (auto& x : decExternals()) if (x.id == e.id) { x = std::move(e); return; } decExternals().push_back(std::move(e)); }
 inline DecExternal* decExt(const std::string& id) { for (auto& x : decExternals()) if (x.id == id) return &x; return nullptr; }
 inline void decExternalEnded(const std::string& id);   // (below) — the provider says its decoder stopped by itself
+// ★ the picture decoders (dec_pic.h — included by dec_box.h after this file)
+inline bool decIsPicture(const std::string& id);
+inline void decPicBinary(App&, const RadioState&, const std::string&);
+inline bool decPicJson(const std::string& type, const Json& d);
+inline void decPicOpen(const RadioState&, const std::string&);
+inline std::string decPicParams(const std::string&);
+inline void decPicTick(App&, const RadioState&);
+inline void decPicCanned(App&, const RadioState&, int);
+inline void galTick(App&);
 
 inline bool decBlocked(const RadioState& s, const std::string& id) {
     for (auto& b : s.blockedModes) if (b == id) return true;
@@ -475,6 +487,7 @@ inline std::string decAttachJson(const RadioState& s, const std::string& id) {
         else j += ",\"band\":\"hf\",\"center_frequency\":" + std::to_string(decDscCentre(s.vfoHz, m));
     } else if (id == "sitora") j += ",\"center_frequency\":1000";
     else if (id == "mfsk") j += ",\"mode\":" + jsonQuote(u.mfskMode);
+    else if (decIsPicture(id)) j += decPicParams(id);
     return j + "}";
 }
 
@@ -524,6 +537,7 @@ inline void decStart(App& a, const RadioState& s, const std::string& id) {
     u.log.clear(); u.sitor = Json(); u.sigs.clear(); u.calls.clear(); u.dsc.clear(); u.aprs.clear(); u.aprsLog.clear();
     u.status = decIdleStatus(id); u.tuneHint.clear(); u.live = false;
     u.navtexHz = s.vfoHz;
+    if (decIsPicture(id)) decPicOpen(s, id);   // ★ a clean picture box (resetDecImages), this kHz's WEFAX slant
     u.cannedN = 0;
     decSend(decAttachJson(s, id));
     std::fprintf(stderr, "vibe-hhui: decoder %s attach %s\n", id.c_str(), decAttachJson(s, id).c_str());
@@ -631,7 +645,8 @@ inline void decOnBinary(App& a, const RadioState& s, const std::string& b) {
     DecUi& u = decUi();
     if (b.empty() || u.active.empty()) return;   // ★ frames mean something only against the decoder attached (0x01 is ambiguous)
     const DecDef* d = decDef(u.active);
-    if (!d || d->kind == DK_PICTURE || d->kind == DK_MAP) return;
+    if (!d || d->kind == DK_MAP) return;
+    if (d->kind == DK_PICTURE) { decPicBinary(a, s, b); return; }
     const uint8_t op = (uint8_t)b[0];
     if (op == 0x01 && b.size() >= 13) {
         const uint32_t len = decU32(b, 9);
@@ -661,6 +676,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
     const std::string& type = m["type"].str();
     const Json& d = m["data"];
     const double now = nowSec();
+    if (decPicJson(type, d)) return;   // hell_status
     if (type == "decoder_refused") {
         // ★★ FORGET WHAT WAS REFUSED, and say so in the server's words where the output would have been
         const std::string msg = m["message"].str().empty() ? "The server could not start that decoder." : decClip(m["message"].str(), 300);
@@ -892,6 +908,8 @@ inline void decTick(App& a, const RadioState& s) {
             for (auto& m : msgs) { if (m.text) decOnJson(a, s, m.data); else decOnBinary(a, s, m.data); }
         }
     }
+    decPicTick(a, s);   // the pictures: the WEFAX worker's answers, the textures' mipmaps, the LED
+    galTick(a);         // the gallery's list, thumbnails and picture
     // a burst of option presses: the one re-attach
     if (u.reattachAt > 0 && now >= u.reattachAt) {
         u.reattachAt = 0;
@@ -987,6 +1005,8 @@ inline void decCannedTick(App& a, const RadioState& s) {
         if (k == 2) decOnJson(a, s, "{\"type\":\"sitora_status\",\"data\":{\"link\":4,\"iss\":0,\"master\":0,\"ids\":[\"PEARDBY\",\"\"],\"numbers\":[\"364775427\",\"\"],\"blocks\":120,\"repeats\":12,\"lost\":2,\"idChecked\":true}}");
         static const std::string txt = "[1 · PEARDBY] GA+? QRU? MSG FOR MASTER: ETA ROTTERDAM 0600 UTC 08 NOV. CARGO DOCS FOLLOW. ";
         decOnBinary(a, s, decTextFrame(txt.substr((size_t)(k * 5) % txt.size(), 5)));
+    } else if (decIsPicture(m)) {
+        decPicCanned(a, s, k);
     } else if (m == "same" || m == "selcal" || m == "mfsk") {
         if (k == 6) decOnBinary(a, s, decTextFrame(m == "same" ? "ZCZC-WXR-TOR-029095-029101+0045-3121453-KEAX/NWS- Tornado Warning · Jackson MO, Cass MO · until 15:30\n"
                                                     : m == "selcal" ? "14:32:07 SELCAL AB-CD (4 tones, 1.0 s)\n" : "[OLIVIA 8/250 · 1500 Hz]\nCQ CQ DE PA3ABC PA3ABC OLIVIA 8/250 K\n"));

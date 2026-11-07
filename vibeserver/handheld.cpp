@@ -19,6 +19,7 @@
 //  GET  /handheld/perf               CPU %, temperature, RAM, battery + time left, the engine's own CPU
 //  GET  /handheld/card · GET/POST/DELETE /handheld/recordings[/<name>] · GET /handheld/import ·
 //  POST /handheld/import/result · POST /handheld/export · POST /handheld/diagnostics
+//  DELETE /handheld/gallery/<FOLDER/file>  a decoded picture on the card
 //  POST /handheld/eibi/import        the newest sked-*.csv in the card's EiBi/ (or import/) becomes the schedule
 #include "handheld.h"
 #include "handheld_card.h"
@@ -1035,6 +1036,19 @@ void hRecordingsPost(Req& r) {
     json(r.fd, "{\"ok\":true,\"name\":" + quote(name) + "}");
 }
 
+/** DELETE /handheld/gallery/<FOLDER/file> — a decoded picture on the card (Gallery/WEFAX/…, Gallery/SSTV/…). The
+ *  listing already skips an item whose file is gone, so unlinking the file removes it. FOLDER = [A-Z0-9-]{1,24}. */
+void hGalleryDelete(Req& r, const std::string& name) {
+    const std::string dir = cardSub("Gallery");
+    const size_t sl = name.find('/');
+    bool ok = !dir.empty() && sl != std::string::npos && sl > 0 && sl <= 24 && name.find('/', sl + 1) == std::string::npos;
+    for (size_t i = 0; ok && i < sl; i++) { const char c = name[i]; ok = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'; }
+    if (ok) ok = hhcard::safeSegment(name.substr(sl + 1));
+    if (!ok || ::unlink((dir + "/" + name).c_str()) != 0) { json(r.fd, errJson("no such picture"), 404); return; }
+    logf("gallery item deleted: Gallery/%s", name.c_str());
+    json(r.fd, "{\"ok\":true}");
+}
+
 void hRecordingsDelete(Req& r, const std::string& name) {
     const std::string dir = cardSub("Recordings");
     if (dir.empty() || !hhcard::safeSegment(name)) { json(r.fd, errJson("no such recording"), 404); return; }
@@ -1240,6 +1254,7 @@ void routeHandheld(Req& r) {
         const std::string name = pctDecode(p.substr(21));
         if (r.method == "DELETE") hRecordingsDelete(r, name); else hRecordingsGet(r, name);
     }
+    else if (p.rfind("/handheld/gallery/", 0) == 0 && r.method == "DELETE") hGalleryDelete(r, pctDecode(p.substr(18)));
     else if (p == "/handheld/import" && r.method == "GET")          hImportGet(r);
     else if (p == "/handheld/import/result" && r.method == "POST")  hImportResult(r);
     else if (p == "/handheld/eibi/import" && r.method == "POST")    hEibiImport(r);
