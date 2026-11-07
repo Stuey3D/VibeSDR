@@ -266,6 +266,8 @@ inline void decDrawBox(App&, Ctx&, const RadioState&);
 inline void decModeEntries(const RadioState&, std::vector<ModeDef>&);
 inline bool decModeLit(const std::string&);
 inline bool decModePick(App&, const RadioState&, const std::string&);
+// ADVANCED RDS (adv_rds*.h) — a decoder in the decoder box (DECODERS… → BROADCAST → ADV RDS), off by default
+inline void ardsRegisterDecoder(App&);
 // the deck's REC key (sec_audio.h): recording now? / start or stop it
 bool deckRecording(App&);
 void deckToggleRec(App&, const RadioState&);
@@ -289,3 +291,5 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 #include "memory.h"
 #include "display_rate.h"
 #include "clock_rds.h"
+#include "adv_rds.h"
+#include "adv_rds_dec.h"

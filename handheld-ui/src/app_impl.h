@@ -1091,6 +1091,7 @@ inline int App::run(int argc, char** argv) {
     int sentRate = -1;
     std::string lastSession;
     std::vector<DeviceEvent> devEvents;
+    ardsRegisterDecoder(*this);   // Advanced RDS into the decoder box's registry
     prof_.since = nowSec();
     while (!quit_) {
         double pc = threadCpu();
