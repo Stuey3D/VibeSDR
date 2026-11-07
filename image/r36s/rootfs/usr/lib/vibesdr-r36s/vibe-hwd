@@ -158,6 +158,8 @@ class Hwd:
     def apply_cpu(self):
         steps = self.cpu_steps()
         want = int(self.cfg.get("cpuMax", 1008000))
+        if getattr(self, "boost", False):
+            want = max(steps) if steps else want   # ★ the map's boost: the top step while it is up (set_boost)
         ok = [f for f in steps if f <= want] or steps[:1]
         if not ok:
             return
@@ -176,6 +178,28 @@ class Hwd:
         self.cfg["cpuMax"] = v
         self.apply_cpu()
         self.save_soon()
+
+    # ★★ THE MAP'S BOOST (Stuart, 2026-11-07: "the map is super slow and keeps looking like it is refreshing all the time"
+    #    — on handheld29's caps: the CPU 1008 MHz, the GPU 300 MHz, the memory 450 MHz). While the UI asks (the map is on
+    #    screen) every cap is lifted to the top step; off, the caps come straight back. NEVER saved — a restart, or a UI
+    #    that went away, always comes back capped (vibe-cpu.service sets the GPU and memory caps at boot).
+    DEVFREQ_CAPS = (("/sys/class/devfreq/ff400000.gpu", 300000000), ("/sys/class/devfreq/dmc", 450000000))
+
+    def set_boost(self, v):
+        on = bool(int(v))
+        if on == getattr(self, "boost", False):
+            return
+        self.boost = on
+        self.apply_cpu()
+        for d, cap in self.DEVFREQ_CAPS:
+            avail = sorted(int(x) for x in rd(d + "/available_frequencies", "").split() if x.isdigit())
+            if not avail:
+                continue
+            try:
+                wr(d + "/max_freq", avail[-1] if on else min(cap, avail[-1]))
+            except OSError as e:
+                log("boost:", d, e)
+        log("performance boost:", "ON (the map)" if on else "off — the caps are back")
 
     # ── backlight ──
     def apply_brightness(self):
@@ -364,6 +388,8 @@ class Hwd:
             self.set_volume(req.get("value"))
         elif s == "cpuMax":
             self.set_cpu(req.get("value"))
+        elif s == "boost":
+            self.set_boost(req.get("value"))
         elif s == "time":
             self.set_time(req.get("utcMs"))
         elif a in ("poweroff", "reboot"):

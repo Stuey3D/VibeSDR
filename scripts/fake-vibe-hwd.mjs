@@ -50,6 +50,7 @@ export function startFakeHwd(sockPath) {
     }
     if (m.set === 'brightness') { if (typeof m.value !== 'number') return { ok: false, error: 'value' }; st.brightness = m.value; return { ok: true }; }
     if (m.set === 'volume') { if (typeof m.value !== 'number' || m.value < 0 || m.value > 100) return { ok: false, error: 'value' }; st.volume = m.value; return { ok: true }; }
+    if (m.set === 'boost') { st.boost = !!m.value; process.stderr.write(`[fake-hwd] boost ${st.boost ? 'ON' : 'off'}\n`); return { ok: true }; }
     if (m.set === 'cpuMax') { if (typeof m.value !== 'number' || m.value < 408000 || m.value > 1296000) return { ok: false, error: 'value' }; st.cpuMax = m.value; return { ok: true }; }
     if (m.set === 'time') { if (typeof m.utcMs !== 'number') return { ok: false, error: 'utcMs' }; st.timeSetTo = m.utcMs; return { ok: true }; }
     if (['poweroff', 'reboot', 'screen-off', 'screen-on'].includes(m.action)) {

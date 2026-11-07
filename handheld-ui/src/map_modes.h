@@ -601,7 +601,7 @@ inline void mapRegisterModes() {
         if (id == "adsb") { d.build = mapAdsbBuild; d.card = mapAdsbCard; d.empty = "listening on 1090 MHz — aircraft appear as they are heard"; }
         if (id == "ais") { d.build = mapAisBuild; d.card = mapAisCard; d.empty = "listening on 161.975 and 162.025 MHz — ships appear as they report"; }
         if (id == "ndb") { d.build = mapNdbBuild; d.card = mapNdbCard; d.empty = "skimming the beacon band — each carrier is listed as it is found, its ident as it is read"; }
-        if (id == "ism") { d.build = mapIsmBuild; d.card = mapIsmCard; d.empty = "listening — sensors, meters and mesh nodes appear as they are decoded"; }
+        if (id == "ism") { d.build = mapIsmBuild; d.card = mapIsmCard; d.empty = "listening — sensors, meters and mesh nodes appear as they are decoded"; d.listFirst = true; }
         mapRegisterPage(d);
     }
     MapPageDef ap; ap.id = "dec:aprs"; ap.title = "APRS MAP"; ap.profile = "spots"; ap.startZ = 8; ap.build = mapAprsBuild; ap.card = mapAprsCard;

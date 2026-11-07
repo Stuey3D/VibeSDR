@@ -870,6 +870,11 @@ void hDevicePost(Req& r) {
         if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
         const long n = std::max(408000L, std::min(1296000L, (long)x->n));
         line = "{\"set\":\"cpuMax\",\"value\":" + std::to_string(n) + "}";
+    } else if (set == "boost") {
+        // ★★ the map's performance boost (vibe-hwd set_boost): every cap lifted while the map is up — 1 / 0, never saved
+        const hhjson::Value* x = v.get("value");
+        if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
+        line = std::string("{\"set\":\"boost\",\"value\":") + (x->n != 0 ? "1" : "0") + "}";
     } else if (action == "poweroff" || action == "reboot" || action == "screen-off" || action == "screen-on") {
         if (action == "poweroff" || action == "reboot") saveAllMemory(action.c_str());
         line = "{\"action\":\"" + action + "\"}";

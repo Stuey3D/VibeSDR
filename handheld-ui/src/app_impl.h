@@ -1171,6 +1171,13 @@ inline int App::run(int argc, char** argv) {
             // ★ idle or covered: the waterfall drops to NATIVE rows (its 5) — the leaf shows (status row)
             const bool slow = idleNow_ || specCovered_;
             if (slow != slowApplied_) { slowApplied_ = slow; applyLook(); }
+            /* ★★ THE MAP'S PERFORMANCE BOOST (Stuart, 2026-11-07: "the map is super slow and keeps looking like it is
+             *    refreshing all the time"). The map draws thousands of shapes and labels a frame; on the battery caps (CPU
+             *    1008, GPU 300, memory 450 MHz) it starved. While the map covers the screen every cap is lifted (vibe-hwd
+             *    set_boost — never saved); the moment it closes they are back. Sent once at start too (boostSent_ = -1),
+             *    so a UI that restarted with the map up never leaves a boost behind. */
+            const int boost = mapShowsMap(*this) ? 1 : 0;   // ★ the map drawn — not ISM's list alone
+            if (boost != boostSent_) { boostSent_ = boost; eng.device(std::string("{\"set\":\"boost\",\"value\":") + (boost ? "1" : "0") + "}"); }
             if (s.connected && sentRate != want) { eng.fftRate(want); sentRate = want; }
         }
         if (!s.connected) sentRate = -1;

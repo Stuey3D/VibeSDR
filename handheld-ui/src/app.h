@@ -159,7 +159,8 @@ public:
      *  listener's own rate at once. The audio, the decoders and the meters' sources are untouched. */
     bool idleNow_ = false;
     bool specCovered_ = false;
-    bool slowApplied_ = false;   // ★ the waterfall's speed is NATIVE now because of idle / cover (applyLook)   // ★ nothing on screen shows the spectrum now (the tall decoder box, a full page)
+    bool slowApplied_ = false;
+    int boostSent_ = -1;         // ★ the map's performance boost as last asked of the hardware service (-1 = not yet)   // ★ the waterfall's speed is NATIVE now because of idle / cover (applyLook)   // ★ nothing on screen shows the spectrum now (the tall decoder box, a full page)
     // ★ Stuart, 2026-11-07: "10 seconds to slow down everything, make it a minute or so". Tests: VIBE_HHUI_IDLE_SEC.
     static double idleSec() { static const double v = [] { const char* e = std::getenv("VIBE_HHUI_IDLE_SEC"); const double d = e ? std::atof(e) : 0; return d > 0 ? d : 60.0; }(); return v; }
     std::string toast_; double toastUntil_ = 0;
@@ -291,6 +292,7 @@ inline void ardsRegisterDecoder(App&);
 inline bool mapPress(App&, Btn);
 inline bool mapSticks(App&, double, double, double, double);
 inline bool mapCoversScreen(const App&);
+inline bool mapShowsMap(const App&);
 inline void mapDrawSheet(App&, Ctx&, const RadioState&);
 inline void mapOpenPicker(App&);
 inline void mapTick(App&, const RadioState&);

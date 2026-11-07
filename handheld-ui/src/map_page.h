@@ -29,6 +29,10 @@ struct MapPageDef {
     int startZ = 7, maxZ = 12;
     std::vector<double> ringsNm;                       // range rings round the receiver
     std::string empty = "nothing yet";
+    /** ★★ THE LIST FIRST (Stuart, 2026-11-07: "ISM the map is an optional view for the Meshcore repeaters so ISM needs to
+     *  be the list view primarily"): the page opens as its list across the whole screen, no map drawn behind it; MAP
+     *  brings the map (and the list beside it), LIST goes back. */
+    bool listFirst = false;
     /** Fill the list, the markers and the header's status line (once a frame — keep it bounded). */
     std::function<void(App&, const RadioState&, std::vector<MapListRow>&, std::vector<MapMarker>&, std::string&)> build;
     /** The selected row's card: a few lines. */
@@ -45,6 +49,7 @@ struct MapUi {
     std::string page;                 // "" = no map sheet
     MapView view;
     bool listOpen = true;
+    bool listFull = false;            // ★ a listFirst page showing only its list (no map drawn — mapShowsMap)
     std::string sel;                  // the selected row / marker
     Scroller listScroll;
     uint64_t frame = 0;
@@ -77,6 +82,8 @@ inline void mapAskLocation(int port) {
 }
 inline bool mapTop(const App& a) { return !a.sheets_.empty() && a.sheets_.back() == App::S_MAP; }
 inline bool mapCoversScreen(const App& a) { for (auto s : a.sheets_) if (s == App::S_MAP) return true; return false; }
+/** The map itself is being drawn (not a listFirst page's list) — what the performance boost is for (app_impl.h). */
+inline bool mapShowsMap(const App& a) { return mapCoversScreen(a) && !mapUi().listFull; }
 
 /** Start the engine's half (the worker, the GL buffer) the first time a map opens. UI thread. */
 inline void mapEnsureStarted(App& a) {
@@ -106,6 +113,7 @@ inline void mapOpenPage(App& a, const std::string& id, double lat = NAN, double 
         else if (me) u.view.centreOn(mlat, mlon, z > 0 ? z : it->second.startZ);
         else u.view.centreOn(30, 0, 2);
         u.sel.clear(); u.listScroll = {}; u.centredOnce = me || std::isfinite(lat);
+        u.listFull = it->second.listFirst;
         a.nav_.forget("map");
     }
     mapAskLocation(a.eng_->port());
@@ -247,10 +255,12 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     const bool me = mapMe(mlat, mlon);
     if (me && !u.centredOnce) { u.centredOnce = true; u.view.centreOn(mlat, mlon, P.startZ); }
     const bool pick = u.page == "pick";
-    const bool list = !pick && u.listOpen;
+    const bool full = !pick && P.listFirst && u.listFull;   // ★ the list alone, across the screen
+    const bool list = !pick && (u.listOpen || full);
     u.view.area = {0, mapl::headH, list ? mapl::listX : 640.f, 480 - mapl::headH - mapl::footH};
-    u.view.showPointer = true;
-    u.view.draw(c, now, u.frame);
+    u.view.showPointer = !full;
+    if (full) c.g.rect(0, mapl::headH, 640, 480 - mapl::headH - mapl::footH, rgb(0x0c0802));
+    else u.view.draw(c, now, u.frame);
 
     // the page's content
     std::string status;
@@ -261,6 +271,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
         const std::string f = a.nav_.focus("map");
         if (f.empty() || f.compare(0, 6, "map.k.") == 0) a.nav_.setFocus("map", "map.r." + u.rows[0].key);
     }
+    if (!full) {
     c.g.clip(u.view.area.x, u.view.area.y, u.view.area.w, u.view.area.h);
     if (me) {
         for (double nm : P.ringsNm) { char b[24]; std::snprintf(b, sizeof b, "%.0f NM", nm); mapRing(c, u.view, mlat, mlon, nm * 1.852, rgb(0x46e0ff, 0.45f), b, mapFonts().reg11); }
@@ -297,6 +308,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     }
     u.view.drawPointer(c, now);
     c.g.unclip();
+    }
 
     // ── the header: title · status · keys ──
     c.g.rect(0, 0, 640, mapl::headH, rgb(0x080601, 0.92f));
@@ -305,8 +317,10 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     hx += c.tc.draw(c.g, c.f.bodyB, P.title, hx, 7, th::btnText) + 12;
     std::vector<std::pair<std::string, std::function<void()>>> keys;
     if (P.keys) P.keys(a, s, keys);
-    if (!pick) keys.push_back({list ? "HIDE LIST" : "LIST", [&u] { u.listOpen = !u.listOpen; }});
-    if (me && !pick) keys.push_back({"HOME", [&u, mlat, mlon] { u.view.cx = mercX(mlon); u.view.cy = mercY(mlat); u.view.pan(0, 0); }});
+    if (full) keys.push_back({"MAP", [&u] { u.listFull = false; u.listOpen = true; u.view.dirty = true; }});
+    else if (!pick && P.listFirst) keys.push_back({"LIST", [&u] { u.listFull = true; }});
+    else if (!pick) keys.push_back({list ? "HIDE LIST" : "LIST", [&u] { u.listOpen = !u.listOpen; }});
+    if (me && !pick && !full) keys.push_back({"HOME", [&u, mlat, mlon] { u.view.cx = mercX(mlon); u.view.cy = mercY(mlat); u.view.pan(0, 0); }});
     // ★ the picker has no keys to highlight: its D-pad pans, the bottom face sets, the right face cancels (the hint line)
     if (!pick) keys.push_back({P.exitLabel, [&a, &s, &P] { if (P.exit) P.exit(a, s); else mapClosePage(a); }});
     float kx = 636;
@@ -327,7 +341,8 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
 
     // ── the list ──
     if (list) {
-        const Rect lr{mapl::listX, mapl::headH, mapl::listW, 480 - mapl::headH - mapl::footH};
+        const Rect lr = full ? Rect{0, mapl::headH, 640, 480 - mapl::headH - mapl::footH}
+                             : Rect{mapl::listX, mapl::headH, mapl::listW, 480 - mapl::headH - mapl::footH};
         c.g.rect(lr.x, lr.y, lr.w, lr.h, rgb(0x0c0802, 0.94f));
         c.g.rect(lr.x, lr.y, 1, lr.h, th::barBorder);
         if (u.rows.empty()) {
@@ -363,7 +378,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
         }
     }
 
-    const float attrTop = u.view.drawAttribution(c, u.view.area.b());
+    const float attrTop = full ? 480 - mapl::footH : u.view.drawAttribution(c, u.view.area.b());
     // ── the selected thing's card ──
     if (!u.sel.empty() && P.card) {
         const auto lines = P.card(a, s, u.sel);
@@ -394,7 +409,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
         for (char ch : upper(loc.substr(0, 4)) + loc.substr(4)) { const std::string one(1, ch); lx += c.tc.draw(c.g, c.f.title, one, lx, by + 4, th::amber) + 3; }
         c.tc.drawTab(c.g, c.f.small, ll, bx + 10, by + 34, th::amber);
     }
-    {
+    if (!full) {   // ★ no map is drawn behind a listFirst page's list: no word about loading one
         MapStore& st = mapStore();
         std::string note;
         if (!st.indexReady()) note = st.lastError().empty() ? "Loading the map…" : "The map files did not load — " + st.lastError();
@@ -414,7 +429,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
         const float cy = 480 - mapl::footH / 2.f;
         float x = 8;
         x = hints(c, x, cy, {{FACE_BOTTOM, pick ? "set here" : "select"}, {FACE_RIGHT, pick ? "cancel" : "back"}}, th::dim);
-        c.tc.draw(c.g, c.f.small, pick ? "L stick point · R stick move · L1/R1 zoom" : "L stick point · R stick move · L1/R1 zoom · L2/R2 tune",
+        c.tc.draw(c.g, c.f.small, pick ? "L stick point · R stick move · L1/R1 zoom" : full ? "D-pad the list · MAP for the map · L2/R2 band" : "L stick point · R stick move · L1/R1 zoom · L2/R2 tune",
                   x, cy - c.f.small.lineHeight() / 2.f, th::dimmer);
     }
     if (pressed) pressed();
@@ -457,6 +472,7 @@ inline bool mapPress(App& a, Btn b) {
         case MA_ZOOM_OUT: u.view.zoomBy(-1); return true;
         case MA_ZOOM_IN: u.view.zoomBy(1); return true;
         case MA_SELECT:
+            if (u.listFull) return false;                                    // ★ the list alone: no pointer, the highlight is pressed
             if (u.view.ptrAt >= u.view.dpadAt || u.page == "pick") { mapClick(a); return true; }
             return false;                                                    // the highlighted key / row (Nav)
         case MA_DPAD:
