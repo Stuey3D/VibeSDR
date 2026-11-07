@@ -16,7 +16,9 @@
 #pragma once
 
 #if defined(__linux__) && !defined(__ANDROID__)
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <climits>
 #include <condition_variable>
@@ -41,7 +43,7 @@ public:
     static constexpr unsigned kPeriod = 480;            // 10 ms
     static constexpr unsigned kPeriods = 8;             // 80 ms in the device
     static constexpr size_t   kTargetFrames = 2880;     // ~60 ms queued before playing (absorbs DSP block jitter)
-    static constexpr size_t   kMaxFrames = 12000;       // ~250 ms: past this the oldest goes
+    static constexpr size_t   kMaxFrames = 19200;       // ~400 ms: past this the oldest goes (the drift trim keeps it far below)
     static constexpr int      kIdleCloseMs = 3000;
 
     using LogFn = void (*)(const char*);
@@ -83,6 +85,11 @@ private:
     std::chrono::steady_clock::time_point lastPush_{};
     std::string problem_;
     uint64_t dropped_ = 0;
+    // ★ the minute's figures (said once a minute while playing): device underruns, real starvations padded with silence,
+    //   the drift trims each way, the total buffered (queue + device) min / max
+    uint64_t xruns_ = 0, starved_ = 0, trimFast_ = 0, trimSlow_ = 0, droppedSaid_ = 0;
+    long depthMin_ = LONG_MAX, depthMax_ = 0;
+    std::chrono::steady_clock::time_point statAt_{};
     std::atomic<bool> run_{false};
     std::atomic<int> fd_{-1};
     std::thread th_;
@@ -176,8 +183,27 @@ private:
         return fd;
     }
 
+    /** Frames still queued in the DEVICE (written, not yet played); -1 if it cannot say. */
+    long deviceDelay() const {
+        const int fd = fd_.load();
+        if (fd < 0) return -1;
+        snd_pcm_sframes_t d = 0;
+        return ioctl(fd, SNDRV_PCM_IOCTL_DELAY, &d) == 0 ? (long)d : -1;
+    }
+    /* ★★★ NEVER SILENCE WHILE THE DEVICE STILL HAS AUDIO (Stuart, 2026-11-07, handheld32: "the audio has a crackle in all
+     *     modes with AM being the worst and DAB seemed ever so slightly off speed like very slightly slow"). This padded
+     *     a period with silence whenever ITS queue held less than one period at a 5 ms wake — though the device behind it
+     *     still had up to 80 ms to play. At 2.048 MS/s the DSP hands over audio in blocks under a period, so the queue sat
+     *     short and tiny gaps were injected all the time: the crackle, and the gaps' added time made DAB run slow. Now the
+     *     writer waits while the device has more than two periods in hand, and pads only a real starvation.
+     * ★★ DRIFT: the RTL's crystal and the codec's never agree exactly, so the total buffered (queue + device) is held near
+     *     kHoldFrames by playing a period's 480 frames from 481 (a hair faster) or 479 (a hair slower) of input — ±0.2 %,
+     *     inaudible — instead of letting it drain to a gap or fill to a drop. */
+    static constexpr long kHoldFrames = 4800;             // ~100 ms held in all
+    static constexpr long kHoldBand = 1440;               // ±30 ms before a trim
     void loop() {
         std::vector<int16_t> buf((size_t)kPeriod * 2);
+        std::vector<int16_t> in((size_t)(kPeriod + 2) * 2);
         bool primed = false;
         auto lastFail = std::chrono::steady_clock::time_point{};
         while (run_.load()) {
@@ -199,11 +225,49 @@ private:
                 }
                 if (!primed && q_.size() < kTargetFrames * 2) continue;
                 primed = true;
-                // one period: what is there, then silence (an underrun of the queue is a glitch, never a stall)
-                const size_t have = std::min(q_.size(), buf.size());
-                for (size_t i = 0; i < have; i++) { buf[i] = q_.front(); q_.pop_front(); }
-                for (size_t i = have; i < buf.size(); i++) buf[i] = 0;
-                if (have < buf.size()) primed = false;           // refill to the target before the next
+                const long qf = (long)(q_.size() / 2);
+                const long dev = deviceDelay();
+                // ★ short of a period, but the device still has plenty: wait for the DSP's next block, insert nothing
+                if (qf < (long)kPeriod + 1 && dev > (long)kPeriod * 2) continue;
+                const long total = qf + std::max(0L, dev);
+                depthMin_ = std::min(depthMin_, total); depthMax_ = std::max(depthMax_, total);
+                // ★ the drift trim: how much input this period of output is made from
+                long take = kPeriod;
+                if (total > kHoldFrames + kHoldBand && qf >= (long)kPeriod + 1) { take = kPeriod + 1; trimFast_++; }
+                else if (total < kHoldFrames - kHoldBand && dev >= 0) { take = kPeriod - 1; trimSlow_++; }
+                if (qf >= take) {
+                    for (long i = 0; i < take * 2; i++) { in[(size_t)i] = q_.front(); q_.pop_front(); }
+                    if (take == (long)kPeriod) std::copy(in.begin(), in.begin() + kPeriod * 2, buf.begin());
+                    else {
+                        // linear, `take` input frames across kPeriod output frames (the ends land exactly)
+                        for (unsigned o = 0; o < kPeriod; o++) {
+                            const double pos = (double)o * (double)(take - 1) / (double)(kPeriod - 1);
+                            const long i0 = (long)pos; const long i1 = std::min(take - 1, i0 + 1); const double f = pos - (double)i0;
+                            for (int c = 0; c < 2; c++)
+                                buf[o * 2 + c] = (int16_t)std::lround(in[(size_t)i0 * 2 + c] * (1 - f) + in[(size_t)i1 * 2 + c] * f);
+                        }
+                    }
+                } else {
+                    // ★ a REAL starvation (the device is nearly dry too): what there is, then silence, and refill first
+                    const size_t have = q_.size();
+                    for (size_t i = 0; i < have; i++) { buf[i] = q_.front(); q_.pop_front(); }
+                    for (size_t i = have; i < buf.size(); i++) buf[i] = 0;
+                    primed = false;
+                    starved_++;
+                }
+                const auto nowT = std::chrono::steady_clock::now();
+                if (statAt_.time_since_epoch().count() == 0) statAt_ = nowT;
+                if (nowT - statAt_ >= std::chrono::seconds(60)) {
+                    char b[240];
+                    std::snprintf(b, sizeof b, "speaker: the last minute — %llu starved, %llu device underruns, %llu dropped (queue full), "
+                                  "drift trims %llu faster / %llu slower, buffered %ld–%ld ms",
+                                  (unsigned long long)starved_, (unsigned long long)xruns_, (unsigned long long)(dropped_ - droppedSaid_),
+                                  (unsigned long long)trimFast_, (unsigned long long)trimSlow_,
+                                  depthMin_ == LONG_MAX ? 0 : depthMin_ / 48, depthMax_ / 48);
+                    lk.unlock(); say(b); lk.lock();
+                    starved_ = xruns_ = trimFast_ = trimSlow_ = 0; droppedSaid_ = dropped_;
+                    depthMin_ = LONG_MAX; depthMax_ = 0; statAt_ = nowT;
+                }
             }
             // ── the device ──
             if (fd_.load() < 0) {
@@ -224,7 +288,7 @@ private:
             snd_xferi x{}; x.buf = buf.data(); x.frames = kPeriod;
             if (ioctl(fd_.load(), SNDRV_PCM_IOCTL_WRITEI_FRAMES, &x) == 0) continue;
             if (!run_.load()) break;
-            if (errno == EPIPE) { ioctl(fd_.load(), SNDRV_PCM_IOCTL_PREPARE); continue; }   // underrun: carry on
+            if (errno == EPIPE) { xruns_++; ioctl(fd_.load(), SNDRV_PCM_IOCTL_PREPARE); continue; }   // underrun: carry on
             if (errno == EINTR || errno == EAGAIN) continue;
             closeDevice(std::string("write failed: ") + std::strerror(errno));
             lastFail = std::chrono::steady_clock::now();
