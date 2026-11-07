@@ -570,7 +570,7 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         //    fit the full words in then do it"), his abbreviations when not; the UTC clock at the right only if there is
         //    room left. (A) = automatic: the radio's AGC / an IF filter that follows the zoom.
         const Json& h = s.msg("hwinfo");
-        struct Part { std::string full, abbr; Rgba col = th::dim; int icon = 0; };   // icon: 1 CPU chip · 2 battery
+        struct Part { std::string full, abbr; Rgba col = th::dim; int icon = 0; };   // icon: 1 CPU chip · 2 battery · 3 power save
         std::vector<Part> parts;
         if (s.session == "running") {
             char a1[48], a2[48];
@@ -614,6 +614,9 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
             p.col = charging_ ? hc[0] : battery_ > 40 ? hc[0] : battery_ > 15 ? hc[1] : hc[3];   // green / yellow / red
             parts.push_back(p);
         }
+        // ★★ THE POWER SAVE LEAF (Stuart, 2026-11-07: "when slowed down a little Powersave icon needs to show in the status")
+        //    — while the waterfall is slowed (idle a minute, or covered): an icon alone, beside the battery it is saving
+        if (idleNow_ || specCovered_) { Part p{"", ""}; p.icon = 3; p.col = hc[0]; parts.push_back(p); }
         const float iconW = 22;   // an icon + its gap before the figure
         // ★ Stuart, 2026-11-06: "Time left, record time right stats middle"
         const float lyT = ty - c.f.small.lineHeight() / 2.f;
@@ -656,6 +659,15 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
                     c.g.triangle(mx, ty - 1, mx + 3, ty - 1, mx - 1, by2 + bh2 + 1, th::white);
                 }
                 x += iconW;
+            } else if (p.icon == 3) {
+                // a leaf, tip up-right: two triangles either side of its midrib, the rib and a short stem in the row's ink
+                const float ox = x, oy = ty - 8;
+                const float bx = ox + 3, by = oy + 13, tx = ox + 14, tyy = oy + 2;
+                c.g.triangle(bx, by, tx, tyy, ox + 4, oy + 4, p.col);
+                c.g.triangle(bx, by, tx, tyy, ox + 13, oy + 12, p.col);
+                c.g.line(bx + 1, by - 1, tx - 2, tyy + 2, 1.0f, th::bg);
+                c.g.line(ox + 1, oy + 15, bx + 0.5f, by - 0.5f, 1.4f, p.col);
+                x += iconW - 4;
             }
             x += c.tc.drawTab(c.g, c.f.small, full ? p.full : p.abbr, x, lyT, p.col) + gapW;
         }
