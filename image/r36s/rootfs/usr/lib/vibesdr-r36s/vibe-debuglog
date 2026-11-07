@@ -42,6 +42,10 @@ snap() {
     echo "devfreq $(basename "$g"): $(cat "$g/governor" 2>/dev/null) cur=$(cat "$g/cur_freq" 2>/dev/null) max=$(cat "$g/max_freq" 2>/dev/null) avail=[$(cat "$g/available_frequencies" 2>/dev/null)]"
     grep -E '^ *\*? *[0-9]+:' "$g/trans_stat" 2>/dev/null | awk '{t=$NF; f=$1; if (f=="*") f=$2; print "    " f " " t " ms"}'
   done
+  # ★★ the clocks the speaker's speed hangs on (handheld33: audio speed changed with the screen) — the PLLs, the I2S and the
+  #    GPU, with their parents (debugfs, if mounted)
+  [ -r /sys/kernel/debug/clk/clk_summary ] || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+  grep -E "^ *(npll|gpll|cpll|apll|dpll|clk_i2s1|i2s1|clk_gpu|aclk_gpu|dclk_vop|mclk)" /sys/kernel/debug/clk/clk_summary 2>/dev/null | awk '{print "clk " $0}' | head -24
   for z in /sys/class/thermal/thermal_zone*; do echo "$z $(cat "$z/type" 2>/dev/null) $(cat "$z/temp" 2>/dev/null)"; done
   echo; echo "=== memory"; free -m; cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io 2>/dev/null
   echo; echo "=== top"; top -b -n 1 -w 200 2>/dev/null | head -30

@@ -195,8 +195,17 @@ class Hwd:
             avail = sorted(int(x) for x in rd(d + "/available_frequencies", "").split() if x.isdigit())
             if not avail:
                 continue
+            target = avail[-1] if on else min(cap, avail[-1])
+            # ★★★ the GPU is PINNED (min = max — vibe-cpu.service): its clock may share a PLL with the speaker's I2S, so it
+            #     never roams; the boost moves the pin (560 while the map is up, 300 after). Order keeps min ≤ max.
+            pin = d.endswith("ff400000.gpu")
             try:
-                wr(d + "/max_freq", avail[-1] if on else min(cap, avail[-1]))
+                if on:
+                    wr(d + "/max_freq", target)
+                    if pin: wr(d + "/min_freq", target)
+                else:
+                    if pin: wr(d + "/min_freq", target)
+                    wr(d + "/max_freq", target)
             except OSError as e:
                 log("boost:", d, e)
         log("performance boost:", "ON (the map)" if on else "off — the caps are back")

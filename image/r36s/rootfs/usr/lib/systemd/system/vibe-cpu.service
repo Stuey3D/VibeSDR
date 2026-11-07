@@ -21,7 +21,10 @@ ExecStart=-/bin/sh -c 'for d in /sys/class/devfreq/dmc; do [ -w $d/max_freq ] &&
 #    under half busy: 300 MHz is ~¾ busy, still inside a 640×480 frame at 30 fps (vibe-hhui logs its fps: if it ever
 #    falls short — the map — 400 MHz / 1.05 V is the next step).
 #    ★ Panfrost is a module (systemd-modules-load): its devfreq node may not exist yet — wait up to 5 s for it.
-ExecStart=-/bin/sh -c 'd=/sys/class/devfreq/ff400000.gpu; i=0; while [ ! -w $d/max_freq ] && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done; [ -w $d/max_freq ] && echo 300000000 > $d/max_freq'
+#    ★★★ PINNED, min = max (Stuart, 2026-11-07, handheld33: "if I turn the screen off the audio speeds up", a crackle with
+#        it on): the GPU's clock and the I2S (the speaker's) can share a PLL on the PX30, and each GPU step (200 ↔ 300 MHz as
+#        the load moved; 200 with the screen dark) retuned the audio clock with it. One fixed GPU clock never moves it.
+ExecStart=-/bin/sh -c 'd=/sys/class/devfreq/ff400000.gpu; i=0; while [ ! -w $d/max_freq ] && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done; [ -w $d/max_freq ] && echo 300000000 > $d/max_freq && echo 300000000 > $d/min_freq'
 
 [Install]
 WantedBy=basic.target
