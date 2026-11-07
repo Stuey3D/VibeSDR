@@ -1,0 +1,493 @@
+// map_page.h — THE MAP SHEET (App::S_MAP): one full-screen page over everything (the receiver, or "Please connect an
+// SDR" — the map needs no radio), drawn natively from the map files on the card. No webview, no tile server, no
+// internet: there is none on the handheld.
+//
+// Pages: SET LOCATION FROM MAP (R36S HARDWARE → LOCATION — web/client/src/handheldMap.ts openMapPick), and the map
+// decoders (map_modes.h registers ADS-B, AIS, NDB, ISM, and the APRS / DSC maps of the decoder box). A page gives the
+// sheet its list rows, its markers and its card; this file draws them, moves the map and routes the pad.
+// ★ The pad on the map: map_view.h's header (mapControl — one table).
+// ★ Include AFTER dec_box.h and dab_box.h (a whole-radio mode leaves DAB and stops a decoder, as the web does).
+#pragma once
+#include "hw_state.h"
+#include "map_view.h"
+
+#include <functional>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace hh {
+
+/** A thing on the map (an aircraft, a ship, a beacon, a station, a pin). glyph: see mapGlyph. angle: degrees, NaN = none. */
+struct MapMarker { std::string key; double lat = 0, lon = 0; int glyph = 0; float angle = NAN; Rgba col{1, 1, 1, 1}; std::string label; };
+enum { MG_DOT, MG_PLANE, MG_SHIP, MG_MOORED, MG_ATON, MG_NDB, MG_PIN, MG_STATION, MG_NODE };
+/** One row of the page's list. */
+struct MapListRow { std::string key, title, right, sub; Rgba col = th::amber; bool pos = false; double lat = 0, lon = 0; };
+
+struct MapPageDef {
+    std::string id, title, profile = "directory", exitLabel = "CLOSE";
+    int startZ = 7, maxZ = 12;
+    std::vector<double> ringsNm;                       // range rings round the receiver
+    std::string empty = "nothing yet";
+    /** Fill the list, the markers and the header's status line (once a frame — keep it bounded). */
+    std::function<void(App&, const RadioState&, std::vector<MapListRow>&, std::vector<MapMarker>&, std::string&)> build;
+    /** The selected row's card: a few lines. */
+    std::function<std::vector<std::string>(App&, const RadioState&, const std::string&)> card;
+    /** BACK / EXIT: leave the page (a whole-radio mode leaves the mode). */
+    std::function<void(App&, const RadioState&)> exit;
+    /** Extra header keys (label, press). */
+    std::function<void(App&, const RadioState&, std::vector<std::pair<std::string, std::function<void()>>>&)> keys;
+};
+inline std::map<std::string, MapPageDef>& mapPages() { static std::map<std::string, MapPageDef> m; return m; }
+inline void mapRegisterPage(MapPageDef d) { mapPages()[d.id] = std::move(d); }
+
+struct MapUi {
+    std::string page;                 // "" = no map sheet
+    MapView view;
+    bool listOpen = true;
+    std::string sel;                  // the selected row / marker
+    Scroller listScroll;
+    uint64_t frame = 0;
+    bool started = false;
+    double perfAt = 0;
+    long perfFrames = 0; double perfDraw = 0;
+    // the receiver's location (GET /handheld/location → hwShared)
+    double meAskedAt = -1e9;
+    bool centredOnce = false;
+    std::string note;                 // a message over the map (loading / no data)
+    std::vector<MapMarker> markers;   // this frame's (the pointer's hit test)
+    std::vector<MapListRow> rows;
+    double closedAt = 0;              // when the last page closed (the buffers are let go 90 s later)
+};
+inline MapUi& mapUi() { static MapUi u; return u; }
+
+/** The receiver's position, if set (R36S HARDWARE → LOCATION). */
+inline bool mapMe(double& lat, double& lon) {
+    HwShared& h = hwShared();
+    std::lock_guard<std::mutex> lk(h.m);
+    if (!h.locKnown || !h.locSet || h.lat.empty() || h.lon.empty()) return false;
+    lat = std::atof(h.lat.c_str()); lon = std::atof(h.lon.c_str());
+    return std::isfinite(lat) && std::isfinite(lon) && !(lat == 0 && lon == 0);
+}
+inline void mapAskLocation(int port) {
+    MapUi& u = mapUi();
+    if (nowSec() - u.meAskedAt < 20) return;
+    u.meAskedAt = nowSec();
+    hwAsync([port] { const HttpResult l = httpRequest(port, "GET", "/handheld/location", "", 4); if (l.status == 200) hwParseLocation(Json::parse(l.body)); });
+}
+inline bool mapTop(const App& a) { return !a.sheets_.empty() && a.sheets_.back() == App::S_MAP; }
+inline bool mapCoversScreen(const App& a) { for (auto s : a.sheets_) if (s == App::S_MAP) return true; return false; }
+
+/** Start the engine's half (the worker, the GL buffer) the first time a map opens. UI thread. */
+inline void mapEnsureStarted(App& a) {
+    MapUi& u = mapUi();
+    if (u.started) return;
+    u.started = true;
+    mapStore().start(a.eng_->port());
+    mapFonts().load(fontPath("AtkinsonHyperlegible-Regular.ttf"), fontPath("AtkinsonHyperlegible-Bold.ttf"));
+    mapRender().init(a.W, a.H, 128);
+}
+inline void mapEnsureGpu(App& a) { if (!mapRender().ready()) mapRender().init(a.W, a.H, 128); }
+
+/** Open a page (centred on the receiver if it has a location, else where `lat`, `lon` say). */
+inline void mapOpenPage(App& a, const std::string& id, double lat = NAN, double lon = NAN, int z = -1) {
+    auto it = mapPages().find(id);
+    if (it == mapPages().end()) return;
+    mapEnsureStarted(a);
+    mapEnsureGpu(a);
+    MapUi& u = mapUi();
+    const bool same = u.page == id;
+    u.page = id;
+    u.view.profile = it->second.profile; u.view.maxZ = it->second.maxZ; u.view.dirty = true;
+    if (!same) {
+        double mlat, mlon;
+        const bool me = mapMe(mlat, mlon);
+        if (std::isfinite(lat)) u.view.centreOn(lat, lon, z > 0 ? z : it->second.startZ);
+        else if (me) u.view.centreOn(mlat, mlon, z > 0 ? z : it->second.startZ);
+        else u.view.centreOn(30, 0, 2);
+        u.sel.clear(); u.listScroll = {}; u.centredOnce = me || std::isfinite(lat);
+        a.nav_.forget("map");
+    }
+    mapAskLocation(a.eng_->port());
+    u.view.ptrAt = nowSec(); u.view.dpadAt = 0;   // ★ the bottom face starts as "select under the pointer", never a key
+    u.closedAt = 0;
+    if (!mapCoversScreen(a)) a.open(App::S_MAP);
+}
+/** Close the sheet (the page's own exit decides what else happens). */
+inline void mapClosePage(App& a) {
+    MapUi& u = mapUi();
+    u.page.clear(); u.sel.clear(); u.closedAt = nowSec();
+    for (size_t i = 0; i < a.sheets_.size(); i++) if (a.sheets_[i] == App::S_MAP) { a.nav_.forget("map"); a.sheets_.erase(a.sheets_.begin() + (long)i); break; }
+}
+
+// ── drawing helpers ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+inline Rgba mapHsl(float h, float s, float l, float a = 1) {
+    const float c = (1 - std::fabs(2 * l - 1)) * s, hp = std::fmod(h, 360.f) / 60.f, x = c * (1 - std::fabs(std::fmod(hp, 2.f) - 1));
+    float r = 0, g = 0, b = 0;
+    if (hp < 1) { r = c; g = x; } else if (hp < 2) { r = x; g = c; } else if (hp < 3) { g = c; b = x; }
+    else if (hp < 4) { g = x; b = c; } else if (hp < 5) { r = x; b = c; } else { r = c; b = x; }
+    const float m = l - c / 2;
+    return {r + m, g + m, b + m, a};
+}
+/** A polygon (points relative to its centre, nose up), rotated by `deg`, as a fan of triangles. */
+inline void mapShape(Ctx& c, float x, float y, const float* pts, int n, float deg, float scale, Rgba col) {
+    const float r = deg * (float)M_PI / 180.f, cs = std::cos(r), sn = std::sin(r);
+    auto P = [&](int i, float& ox, float& oy) { const float px = pts[2 * i] * scale, py = pts[2 * i + 1] * scale; ox = x + px * cs - py * sn; oy = y + px * sn + py * cs; };
+    float x0, y0; P(0, x0, y0);
+    for (int i = 1; i + 1 < n; i++) { float x1, y1, x2, y2; P(i, x1, y1); P(i + 1, x2, y2); c.g.triangle(x0, y0, x1, y1, x2, y2, col); }
+}
+inline void mapGlyph(Ctx& c, const MapMarker& m, float x, float y, bool sel) {
+    const Rgba k = rgb(0, 0.8f);
+    const float ang = std::isfinite(m.angle) ? m.angle : 0;
+    if (sel) c.g.circle(x, y, 15, 2.5f, th::focus);
+    switch (m.glyph) {
+        case MG_PLANE: {
+            // fuselage + wings + tail (convex pieces, so the fan is exact)
+            static const float body[] = {0, -1, 0.16f, -0.6f, 0.16f, 0.75f, -0.16f, 0.75f, -0.16f, -0.6f};
+            static const float wing[] = {0, -0.3f, 1, 0.25f, 1, 0.42f, 0, 0.2f, -1, 0.42f, -1, 0.25f};
+            static const float tail[] = {0, 0.55f, 0.45f, 0.95f, -0.45f, 0.95f};
+            for (int pass = 0; pass < 2; pass++) {
+                const float s = pass ? 9.5f : 11.5f; const Rgba q = pass ? m.col : k;
+                mapShape(c, x, y, body, 5, ang, s, q); mapShape(c, x, y, wing, 6, ang, s, q); mapShape(c, x, y, tail, 3, ang, s, q);
+            }
+            break;
+        }
+        case MG_SHIP: {
+            static const float hull[] = {0, -1, 0.5f, -0.2f, 0.5f, 0.9f, -0.5f, 0.9f, -0.5f, -0.2f};
+            mapShape(c, x, y, hull, 5, ang, 10.5f, k); mapShape(c, x, y, hull, 5, ang, 8.5f, m.col);
+            break;
+        }
+        case MG_MOORED: c.g.circle(x, y, 6, 0, k); c.g.circle(x, y, 4.5f, 0, m.col); break;
+        case MG_ATON: {
+            static const float d[] = {0, -1, 1, 0, 0, 1, -1, 0};
+            mapShape(c, x, y, d, 4, 0, 8, k); mapShape(c, x, y, d, 4, 0, 6, m.col);
+            break;
+        }
+        case MG_NDB: c.g.circle(x, y, 8, 0, k); c.g.circle(x, y, 7, 1.8f, m.col); c.g.circle(x, y, 2.5f, 0, m.col); break;
+        case MG_PIN: c.g.circle(x, y, 9, 0, k); c.g.circle(x, y, 7, 0, m.col); c.g.circle(x, y, 2.5f, 0, rgb(0)); break;
+        case MG_STATION: c.g.rect(x - 6, y - 6, 12, 12, k); c.g.rect(x - 4.5f, y - 4.5f, 9, 9, m.col); break;
+        case MG_NODE: { static const float t[] = {0, -1, 0.9f, 0.7f, -0.9f, 0.7f}; mapShape(c, x, y, t, 3, 0, 9, k); mapShape(c, x, y, t, 3, 0, 7, m.col); break; }
+        default: c.g.circle(x, y, 6, 0, k); c.g.circle(x, y, 4.5f, 0, m.col); break;
+    }
+}
+/** The receiver: a small house, cyan (the web's RX_HOUSE). */
+inline void mapHouse(Ctx& c, float x, float y) {
+    const Rgba k = rgb(0, 0.85f), col = rgb(0x46e0ff);
+    c.g.triangle(x - 9, y - 1, x + 9, y - 1, x, y - 10, k); c.g.rect(x - 7, y - 2, 14, 10, k);
+    c.g.triangle(x - 7, y - 2, x + 7, y - 2, x, y - 8, col); c.g.rect(x - 5, y - 2, 10, 8, col);
+}
+/** A range ring (km) round a point — 72 chords, so a large ring is a circle, not a polygon. */
+inline void mapRing(Ctx& c, const MapView& v, double lat, double lon, double km, Rgba col, const std::string& label, const Font& f) {
+    const double dLat = km / 111.32, dLon = km / (111.32 * std::max(0.05, std::cos(lat * M_PI / 180)));
+    float px0 = 0, py0 = 0;
+    for (int i = 0; i <= 72; i++) {
+        const double t = i * 2 * M_PI / 72;
+        float x, y;
+        v.toScreen(lat + dLat * std::cos(t), lon + dLon * std::sin(t), x, y, 4000);
+        if (i) c.g.line(px0, py0, x, y, 1.2f, col);
+        px0 = x; py0 = y;
+    }
+    float lx, ly;
+    if (v.toScreen(lat + dLat, lon, lx, ly, 0)) c.tc.draw(c.g, f, label, lx + 3, ly + 1, col);
+}
+
+// ── the sheet ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+namespace mapl {
+constexpr float headH = 36, footH = 28, listX = 404, listW = 236;
+}
+
+inline void mapSelect(App& a, const std::string& key, bool centre) {
+    MapUi& u = mapUi();
+    u.sel = key;
+    a.nav_.setFocus("map", "map.r." + key);
+    if (!centre) return;
+    for (auto& r : u.rows) if (r.key == key && r.pos) {
+        float x, y;
+        if (!u.view.toScreen(r.lat, r.lon, x, y, -40)) { u.view.cx = mercX(r.lon); u.view.cy = mercY(r.lat); u.view.pan(0, 0); }
+    }
+}
+
+/** The pointer pressed: the marker under it (within 18 px), else the basemap POI there (a toast). */
+inline void mapClick(App& a) {
+    MapUi& u = mapUi();
+    if (u.page == "pick") {
+        const double lat = u.view.pointerLat(), lon = u.view.pointerLon();
+        char b[96]; std::snprintf(b, sizeof b, "{\"lat\":%.5f,\"lon\":%.5f}", lat, lon);
+        hwPostLocation(a.eng_->port(), b);
+        mapClosePage(a);
+        return;
+    }
+    const MapMarker* best = nullptr; float bd = 18 * 18;
+    for (auto& m : u.markers) {
+        float x, y;
+        if (!u.view.toScreen(m.lat, m.lon, x, y, 0)) continue;
+        const float d = (x - u.view.px) * (x - u.view.px) + (y - u.view.py) * (y - u.view.py);
+        if (d < bd) { bd = d; best = &m; }
+    }
+    if (best) { mapSelect(a, best->key, false); return; }
+    for (auto& p : mapRender().poi) {
+        const float x = p.x - u.view.blitX, y = p.y - u.view.blitY;
+        if (u.view.px >= x && u.view.px <= x + p.w && u.view.py >= y && u.view.py <= y + p.h) { a.toast(p.text); return; }
+    }
+    u.sel.clear();
+}
+
+inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
+    MapUi& u = mapUi();
+    auto it = mapPages().find(u.page);
+    if (it == mapPages().end()) { mapClosePage(a); return; }
+    const MapPageDef& P = it->second;
+    const double now = c.t;
+    const double t0 = App::threadCpu();
+    u.frame++;
+    // ★ a page that opened before the receiver's location arrived goes there once it does
+    double mlat = 0, mlon = 0;
+    const bool me = mapMe(mlat, mlon);
+    if (me && !u.centredOnce) { u.centredOnce = true; u.view.centreOn(mlat, mlon, P.startZ); }
+    const bool pick = u.page == "pick";
+    const bool list = !pick && u.listOpen;
+    u.view.area = {0, mapl::headH, list ? mapl::listX : 640.f, 480 - mapl::headH - mapl::footH};
+    u.view.showPointer = true;
+    u.view.draw(c, now, u.frame);
+
+    // the page's content
+    std::string status;
+    u.rows.clear(); u.markers.clear();
+    if (P.build) P.build(a, s, u.rows, u.markers, status);
+    // ★ the D-pad's first stop is the list, not EXIT
+    if (!u.rows.empty() && u.view.dpadAt == 0) {
+        const std::string f = a.nav_.focus("map");
+        if (f.empty() || f.compare(0, 6, "map.k.") == 0) a.nav_.setFocus("map", "map.r." + u.rows[0].key);
+    }
+    c.g.clip(u.view.area.x, u.view.area.y, u.view.area.w, u.view.area.h);
+    if (me) {
+        for (double nm : P.ringsNm) { char b[24]; std::snprintf(b, sizeof b, "%.0f NM", nm); mapRing(c, u.view, mlat, mlon, nm * 1.852, rgb(0x46e0ff, 0.45f), b, mapFonts().reg11); }
+    }
+    // markers: labels where there is room (a simple placer — the selected one always)
+    {
+        std::vector<Rect> taken;
+        const Font& f = mapFonts().bold13;
+        int labels = 0;
+        const MapMarker* selM = nullptr;
+        for (auto& m : u.markers) {
+            float x, y;
+            if (!u.view.toScreen(m.lat, m.lon, x, y)) continue;
+            const bool sel = m.key == u.sel;
+            if (sel) { selM = &m; continue; }
+            mapGlyph(c, m, x, y, false);
+            if (m.label.empty() || labels > 60 || u.view.z < 5) continue;
+            const Rect r{x + 11, y - 9, (float)c.tc.width(f, m.label) + 4, 18};
+            bool free = true;
+            for (auto& t : taken) if (r.x < t.r() && r.r() > t.x && r.y < t.b() && r.b() > t.y) { free = false; break; }
+            if (!free) continue;
+            taken.push_back(r); labels++;
+            c.tc.draw(c.g, f, m.label, r.x + 1, r.y + 1, rgb(0, 0.8f));
+            c.tc.draw(c.g, f, m.label, r.x, r.y, m.col);
+        }
+        if (me) { float x, y; if (u.view.toScreen(mlat, mlon, x, y)) mapHouse(c, x, y); }
+        if (selM) {
+            float x, y;
+            if (u.view.toScreen(selM->lat, selM->lon, x, y)) {
+                mapGlyph(c, *selM, x, y, true);
+                if (!selM->label.empty()) { c.tc.draw(c.g, f, selM->label, x + 15, y - 8, rgb(0, 0.85f)); c.tc.draw(c.g, f, selM->label, x + 14, y - 9, th::white); }
+            }
+        }
+    }
+    u.view.drawPointer(c, now);
+    c.g.unclip();
+
+    // ── the header: title · status · keys ──
+    c.g.rect(0, 0, 640, mapl::headH, rgb(0x080601, 0.92f));
+    c.g.rect(0, mapl::headH - 1, 640, 1, th::barBorder);
+    float hx = 10;
+    hx += c.tc.draw(c.g, c.f.bodyB, P.title, hx, 7, th::btnText) + 12;
+    std::vector<std::pair<std::string, std::function<void()>>> keys;
+    if (P.keys) P.keys(a, s, keys);
+    if (!pick) keys.push_back({list ? "HIDE LIST" : "LIST", [&u] { u.listOpen = !u.listOpen; }});
+    if (me && !pick) keys.push_back({"HOME", [&u, mlat, mlon] { u.view.cx = mercX(mlon); u.view.cy = mercY(mlat); u.view.pan(0, 0); }});
+    // ★ the picker has no keys to highlight: its D-pad pans, the bottom face sets, the right face cancels (the hint line)
+    if (!pick) keys.push_back({P.exitLabel, [&a, &s, &P] { if (P.exit) P.exit(a, s); else mapClosePage(a); }});
+    float kx = 636;
+    std::function<void()> pressed;
+    for (size_t i = keys.size(); i-- > 0;) {
+        const float w = (float)c.tc.width(c.f.tiny, keys[i].first) + 20;
+        kx -= w;
+        BtnStyle st; st.font = &c.f.tiny; st.radius = 6;
+        if (button(c, "map.k." + keys[i].first, {kx, 5, w, 26}, keys[i].first, st)) pressed = keys[i].second;
+        kx -= 6;
+    }
+    if (!status.empty()) {
+        const int room = (int)(kx - hx - 8);
+        std::string st = status;
+        while (!st.empty() && c.tc.width(c.f.small, st) > room) st.pop_back();
+        c.tc.draw(c.g, c.f.small, st, hx, 9, th::dim);
+    }
+
+    // ── the list ──
+    if (list) {
+        const Rect lr{mapl::listX, mapl::headH, mapl::listW, 480 - mapl::headH - mapl::footH};
+        c.g.rect(lr.x, lr.y, lr.w, lr.h, rgb(0x0c0802, 0.94f));
+        c.g.rect(lr.x, lr.y, 1, lr.h, th::barBorder);
+        if (u.rows.empty()) {
+            float y = lr.y + 14;
+            for (auto& l : c.tc.wrap(c.f.small, P.empty, (int)lr.w - 24)) { c.tc.draw(c.g, c.f.small, l, lr.x + 12, y, th::dim); y += c.f.small.lineHeight(); }
+        } else {
+            const float rh = 46;
+            u.listScroll.contentH = rh * (float)std::min<size_t>(u.rows.size(), 150);
+            c.g.clip(lr.x, lr.y, lr.w, lr.h);
+            for (size_t i = 0; i < u.rows.size() && i < 150; i++) {
+                const MapListRow& r = u.rows[i];
+                const Rect rr{lr.x + 6, lr.y + 4 + i * rh - u.listScroll.y, lr.w - 12, rh - 4};
+                const Nav::Hit h = c.nav.item("map.r." + r.key, rr);
+                if (h.focused && u.view.dpadAt > u.view.ptrAt) u.sel = r.key;   // ★ the D-pad's row is the selection (its marker lit, its card up)
+                if (rr.b() < lr.y - rh || rr.y > lr.b() + rh) { if (h.pressed) mapSelect(a, r.key, true); continue; }
+                const bool on = r.key == u.sel;
+                c.g.rrect(rr.x, rr.y, rr.w, rr.h, 6, on ? th::activeBg : rgb(0x140a00, 0.6f));
+                if (on) c.g.rframe(rr.x, rr.y, rr.w, rr.h, 6, 1, th::activeBdr);
+                const int rw = c.tc.width(c.f.small, r.right);
+                std::string t = r.title;
+                while (!t.empty() && c.tc.width(c.f.bodyB, t) > rr.w - rw - 22) t.pop_back();
+                c.tc.draw(c.g, c.f.bodyB, t, rr.x + 8, rr.y + 2, r.col);
+                c.tc.draw(c.g, c.f.small, r.right, rr.r() - 8, rr.y + 4, th::dim, 2);
+                std::string sub = r.sub;
+                while (!sub.empty() && c.tc.width(c.f.small, sub) > rr.w - 16) sub.pop_back();
+                c.tc.draw(c.g, c.f.small, sub, rr.x + 8, rr.y + 23, rgb(0xffffff, r.pos ? 0.7f : 0.45f));
+                if (h.focused) { focusRing(c, rr, 6); }
+                if (h.pressed) mapSelect(a, r.key, true);
+            }
+            c.g.unclip();
+            const Rect* fr = c.nav.focusedRect();
+            u.listScroll.follow(fr && fr->x >= lr.x ? fr : nullptr, lr, 8);
+        }
+    }
+
+    const float attrTop = u.view.drawAttribution(c, u.view.area.b());
+    // ── the selected thing's card ──
+    if (!u.sel.empty() && P.card) {
+        const auto lines = P.card(a, s, u.sel);
+        if (!lines.empty()) {
+            const float w = std::min(380.f, u.view.area.w - 20), lh = (float)c.f.small.lineHeight();
+            const float h = 10 + c.f.bodyB.lineHeight() + lh * (lines.size() - 1);
+            const float x = 10, y = attrTop - h - 6;
+            c.g.rrect(x, y, w, h, 8, rgb(0x080601, 0.9f));
+            c.g.rframe(x, y, w, h, 8, 1, th::btnBorder);
+            for (size_t i = 0; i < lines.size(); i++) {
+                std::string l = lines[i];
+                const Font& f = i == 0 ? c.f.bodyB : c.f.small;
+                while (!l.empty() && c.tc.width(f, l) > w - 16) l.pop_back();
+                c.tc.draw(c.g, f, l, x + 8, y + 5 + (i == 0 ? 0 : c.f.bodyB.lineHeight() + lh * (i - 1)), i == 0 ? th::activeTx : rgb(0xffffff, 0.85f));
+            }
+        }
+    }
+
+    // ── the readout (pick) / the loading note ──
+    if (pick) {
+        const double lat = u.view.pointerLat(), lon = u.view.pointerLon();
+        char ll[64]; std::snprintf(ll, sizeof ll, "%.5f, %.5f", lat, lon);
+        const std::string loc = maidenhead(lat, lon);
+        const float bx = 10, by = mapl::headH + 8;
+        c.g.rrect(bx, by, 220, 58, 7, rgb(0x080601, 0.88f));
+        c.g.rframe(bx, by, 220, 58, 7, 1, th::amber);
+        float lx = bx + 10;
+        for (char ch : upper(loc.substr(0, 4)) + loc.substr(4)) { const std::string one(1, ch); lx += c.tc.draw(c.g, c.f.title, one, lx, by + 4, th::amber) + 3; }
+        c.tc.drawTab(c.g, c.f.small, ll, bx + 10, by + 34, th::amber);
+    }
+    {
+        MapStore& st = mapStore();
+        std::string note;
+        if (!st.indexReady()) note = st.lastError().empty() ? "Loading the map…" : "The map files did not load — " + st.lastError();
+        if (!note.empty()) {
+            const int w = c.tc.width(c.f.body, note) + 28;
+            const float x = u.view.area.cx() - w / 2.f, y = u.view.area.y + 70;
+            c.g.rrect(x, y, (float)w, 36, 8, rgb(0x080601, 0.9f));
+            c.g.rframe(x, y, (float)w, 36, 8, 1, th::amber);
+            c.tc.draw(c.g, c.f.body, note, x + 14, y + 7, th::amber);
+        } else if (st.pending() > 0) c.tc.draw(c.g, mapFonts().reg11, "loading map data…", u.view.area.r() - 8, u.view.area.y + 6, rgb(0xffffff, 0.7f), 2);
+    }
+
+    // ── the hint line ──
+    c.g.rect(0, 480 - mapl::footH, 640, mapl::footH, rgb(0x080601, 0.94f));
+    c.g.rect(0, 480 - mapl::footH, 640, 1, th::barBorder);
+    {
+        const float cy = 480 - mapl::footH / 2.f;
+        float x = 8;
+        x = hints(c, x, cy, {{FACE_BOTTOM, pick ? "set here" : "select"}, {FACE_RIGHT, pick ? "cancel" : "back"}}, th::dim);
+        c.tc.draw(c.g, c.f.small, pick ? "L stick point · R stick move · L1/R1 zoom" : "L stick point · R stick move · L1/R1 zoom · L2/R2 tune",
+                  x, cy - c.f.small.lineHeight() / 2.f, th::dimmer);
+    }
+    if (pressed) pressed();
+    if (c.nav.backPressed()) { if (P.exit) P.exit(a, s); else mapClosePage(a); }
+
+    // ★ the map's own cost, beside the UI's perf line
+    u.perfFrames++; u.perfDraw += App::threadCpu() - t0;
+    if (now - u.perfAt >= 30) {
+        if (u.perfAt > 0) {
+            MapRender& R = mapRender();
+            std::fprintf(stderr, "vibe-hhui: map perf — %ld frames, map page %.2f ms a frame (incl. re-renders) · %ld re-renders, %.1f ms each (last %.1f ms, %ld indices in %ld draws) · "
+                         "%ld labels · resident %.1f MB in %d files + buffer %.1f MB · z%d\n",
+                         u.perfFrames, u.perfDraw * 1e3 / std::max(1L, u.perfFrames), R.renders, R.renders ? R.renderMs / R.renders : 0.0, R.lastMs,
+                         R.vertsLast, R.drawsLast, R.labelsLast, mapStore().residentBytes() / 1048576.0, mapStore().residentFiles(), R.gpuBytes / 1048576.0, u.view.z);
+            R.renders = 0; R.renderMs = 0;
+        }
+        u.perfAt = now; u.perfFrames = 0; u.perfDraw = 0;
+    }
+}
+
+/** ★ Memory back when the map has been shut for 90 s: the GPU geometry, the relief and the off-screen buffer (≈ 70 MB at
+ *  most) are let go; the next map reads its files again (from the card, a few hundred ms). Call once a loop. */
+inline void mapIdle(App&) {
+    MapUi& u = mapUi();
+    if (!u.started || !u.page.empty() || u.closedAt <= 0 || nowSec() - u.closedAt < 90) return;
+    u.closedAt = 0;
+    mapStore().dropAll();
+    mapRender().release();
+    std::fprintf(stderr, "vibe-hhui: map closed 90 s — its buffers released\n");
+}
+
+// ── the pad (App::press / pollInput hooks) ───────────────────────────────────────────────────────────────────────────
+
+/** Call at the top of App::press (after the keyboard): true = the map took the button. */
+inline bool mapPress(App& a, Btn b) {
+    if (!mapTop(a)) return false;
+    MapUi& u = mapUi();
+    const double now = nowSec();
+    switch (mapControl(b)) {
+        case MA_ZOOM_OUT: u.view.zoomBy(-1); return true;
+        case MA_ZOOM_IN: u.view.zoomBy(1); return true;
+        case MA_SELECT:
+            if (u.view.ptrAt >= u.view.dpadAt || u.page == "pick") { mapClick(a); return true; }
+            return false;                                                    // the highlighted key / row (Nav)
+        case MA_DPAD:
+            u.view.dpadAt = now;
+            if (u.page == "pick") {                                          // no list: the D-pad pans (the web's 64 px)
+                u.view.pan(b == B_LEFT ? -64 : b == B_RIGHT ? 64 : 0, b == B_UP ? -64 : b == B_DOWN ? 64 : 0);
+                return true;
+            }
+            return false;
+        default: return false;                                               // L2 / R2 tune (App), BACK (Nav)
+    }
+}
+/** Call in App::pollInput before the jog wheels: true = the map took the sticks (the jogs and the hold-sweep rest). */
+inline bool mapSticks(App& a, double lx, double ly, double rx, double ry) {
+    if (!mapTop(a)) return false;
+    mapUi().view.sticks(lx, ly, rx, ry, nowSec());
+    a.lx_ = 0; a.ly_ = 0;   // ★ no hold-sweep tune from the pointer stick
+    return true;
+}
+
+// ── SET LOCATION FROM MAP ────────────────────────────────────────────────────────────────────────────────────────────
+
+/** R36S HARDWARE → LOCATION → SET FROM MAP: the map at the receiver's location (else the world); the bottom face sets
+ *  the point under the pointer — POST /handheld/location {lat, lon}, the same route as the typed locator. */
+inline void mapOpenPicker(App& a) {
+    if (!mapPages().count("pick")) {
+        MapPageDef d;
+        d.id = "pick"; d.title = "SET LOCATION"; d.profile = "directory"; d.startZ = 8; d.maxZ = 13; d.exitLabel = "CANCEL";
+        mapRegisterPage(d);
+    }
+    mapOpenPage(a, "pick");
+}
+
+}  // namespace hh

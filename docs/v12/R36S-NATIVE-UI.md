@@ -46,7 +46,7 @@ full state, client has no vote, client sends only what the person did).
   vibe-hwd's.
 
 ## Later, one at a time
-SET FROM MAP (the offline map) · RDS / station names · decoders (FT8, NAVTEX, …) · DAB · recordings (the engine
+~~SET FROM MAP~~ (done 11-07: native map, map_*.h) · RDS / station names · decoders (FT8, NAVTEX, …) · DAB · recordings (the engine
 records to the card, since the native UI has no page to tap) · the clock from MSF / DAB / RDS.
 
 ## Measure, both images, same radio

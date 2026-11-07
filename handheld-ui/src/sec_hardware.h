@@ -4,7 +4,7 @@
 // Rows, in the web's order: VOLUME · BATTERY · CLOCK · NUDGE · SET UTC · SET CLOCK FROM <station> / ALIGN TO FT8 (only
 // with fresh evidence) · the note · LOCATION · SET LOCATION · CARD · FILES · CONTROLLER (TEST BUTTONS) · PERFORMANCE ·
 // POWER. ★ BRIGHTNESS is DISPLAY's first row, as on the web page (sec_display.h).
-// Left out: LOCATION's SET FROM MAP (the map picker, handheldMap.ts — not ported); TOUR / VIEW TUTORIAL (no native
+// Left out: TOUR / VIEW TUTORIAL (no native
 // tutorial yet — a key that opened nothing would be a dead control).
 #pragma once
 // (included by app.h after App is declared)
@@ -163,6 +163,11 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         BtnStyle st; st.font = &c.f.body; st.radius = 7;
         if (button(c, "hw.locclr", {a.r() - 6 - cw, y0 + 3, cw, 38}, "CLEAR", st)) hwPostLocation(port, "{\"clear\":true}");
     }
+    // SET FROM MAP (handheldMap.ts openMapPick): the native map, the pointer's point set with the bottom face
+    y0 = y;
+    y = menuRow(c, a, y, "", "");
+    { BtnStyle st; st.font = &c.f.body; st.radius = 7;
+      if (button(c, "hw.locmap", {a.x + 150, y0 + 3, a.w - 156, 38}, "SET FROM MAP", st)) mapOpenPicker(*this); }
     // CARD
     y0 = y;
     y = menuRow(c, a, y, "CARD", "");

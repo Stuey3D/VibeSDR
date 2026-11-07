@@ -137,7 +137,7 @@ public:
     bool quit_ = false;
 
     // ── state ──
-    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB, S_DEC };
+    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB, S_DEC, S_MAP };
     std::vector<Sheet> sheets_;
     std::deque<Btn> presses_;
     Jog tuneJog_{30}, zoomJog_{45};
@@ -182,7 +182,7 @@ public:
     void closeTop() { if (!sheets_.empty()) { nav_.forget(layerName(sheets_.back())); sheets_.pop_back(); } }
     static const char* layerName(Sheet s) {
         switch (s) { case S_MODE: return "mode"; case S_STEP: return "step"; case S_MENU: return "menu"; case S_AUDIO: return "audio";
-                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; case S_DEC: return "dec"; default: return "deck"; }
+                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; case S_DEC: return "dec"; case S_MAP: return "map"; default: return "deck"; }
     }
     void applyLook() {
         wfp_.setPalette(set_.palette);
@@ -269,6 +269,20 @@ inline bool decModeLit(const std::string&);
 inline bool decModePick(App&, const RadioState&, const std::string&);
 // ADVANCED RDS (adv_rds*.h) — a decoder in the decoder box (DECODERS… → BROADCAST → ADV RDS), off by default
 inline void ardsRegisterDecoder(App&);
+// THE MAP (map_*.h): the sheet, the pad on it, the map decoders (whole-radio modes) and SET LOCATION FROM MAP
+inline bool mapPress(App&, Btn);
+inline bool mapSticks(App&, double, double, double, double);
+inline bool mapCoversScreen(const App&);
+inline void mapDrawSheet(App&, Ctx&, const RadioState&);
+inline void mapOpenPicker(App&);
+inline void mapTick(App&, const RadioState&);
+inline bool mapTune(App&, int);
+inline bool mapZoom(App&, int);
+inline void mapModeEntries(const RadioState&, std::vector<ModeDef>&);
+inline bool mapModeLit(const std::string&);
+inline bool mapModePick(App&, const RadioState&, const std::string&);
+inline void mapDecFeed(App&, const std::string&, const Json&);
+inline void mapOpenDecoder(App&, const std::string&);
 // the deck's REC key (sec_audio.h): recording now? / start or stop it
 bool deckRecording(App&);
 void deckToggleRec(App&, const RadioState&);
@@ -289,6 +303,8 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 #include "search_page.h"
 #include "vts.h"
 #include "dec_box.h"
+#include "map_page.h"
+#include "map_modes.h"
 #include "memory.h"
 #include "display_rate.h"
 #include "clock_rds.h"

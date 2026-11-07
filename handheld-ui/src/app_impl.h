@@ -37,6 +37,7 @@ inline void App::tuneTo(double f) {
 }
 
 inline void App::tuneSteps(int n) {
+    if (mapTune(*this, n)) return;   // a map mode holds the dial (ADS-B, AIS) or steps bands (ISM)
     if (dabTune(*this, n)) return;   // in DAB the arrows step the block (L2/R2, the jog, the hold-sweep)
     const RadioState& s = eng_->state();
     if (s.session != "running" || n == 0) return;
@@ -133,6 +134,7 @@ inline double App::clampTune(double hz) {
 }
 
 inline void App::zoomSteps(int n) {
+    if (mapZoom(*this, n)) return;   // the view is the mode's in a map mode
     if (dabZoom(*this, n)) return;   // zoom is fixed in DAB
     const RadioState& s = eng_->state();
     if (s.session != "running" || n == 0 || s.spanHz <= 0) return;
@@ -175,6 +177,7 @@ inline void App::press(Btn b) {
     if (screenOff_) { screenOff_ = false; eng_->device("{\"action\":\"screen-on\"}"); return; }
     if (dispRatePress(*this, b)) return;   // a display-rate change waiting to be kept (display_rate.h)
     if (!sheets_.empty() && sheets_.back() == S_KB) { kbInput(b); return; }   // ★ the keyboard takes every button while it is up
+    if (mapPress(*this, b)) return;   // ★ the map: L1/R1 zoom IT, the bottom face selects under the pointer (map_view.h mapControl)
     const bool inFreq = !sheets_.empty() && sheets_.back() == S_KB;
     switch (b) {
         // ★ the dial and the zoom work under every sheet but the keypad (the web page keeps them live too)
@@ -272,6 +275,8 @@ inline void App::pollInput() {
     }
     if (testStick_ != 0) { lx = testStick_; ly = 0; }   // ★ tests: SCRIPT STICKL / STICKR / STICK0 hold the left stick
     lx_ = lx; ly_ = ly;
+    // ★ the map: left stick = its pointer, right stick = pan (the jogs rest while it is up)
+    if (!screenOff_ && mapSticks(*this, lx, ly, rx, ry)) { tuneJog_.feed(0, 0, tMs); zoomJog_.feed(0, 0, tMs); return; }
     const bool inFreq = !sheets_.empty() && sheets_.back() == S_KB;
     if (!screenOff_ && inFreq) {
         // ★ the keyboard: the left stick turned moves the caret (padKeyboard.ts)
@@ -686,16 +691,18 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
     c.g.rrect(r.x, r.y, r.w, r.h, 10, rgb(0x101010, 0.97f));
     std::vector<ModeDef> ms;
     { std::lock_guard<std::mutex> lk(srvMtx_); ms = offeredModes(srvModes_, s.blockedModes); }
+    mapModeEntries(s, ms);   // ADS-B · AIS · ISM · NDB — whole-radio modes, after DAB (map_modes.h)
     decModeEntries(s, ms);   // DECODERS… (or the sole decoder) after the whole-radio modes
     const float cw = (r.w - 24) / 2, rh = std::min(50.f, (r.h - 16) / (float)((ms.size() + 1) / 2) - 4);
     for (size_t i = 0; i < ms.size(); i++) {
         const Rect b{r.x + 8 + (i % 2) * (cw + 8), r.y + 8 + (i / 2) * (rh + 4), cw, rh};
-        const bool cur = decModeLit(ms[i].id) || (dabActive() ? ms[i].id == "dab" : s.mode == ms[i].id);
+        const bool cur = mapModeLit(ms[i].id) || decModeLit(ms[i].id) || (dabActive() ? ms[i].id == "dab" : s.mode == ms[i].id);
         const Nav::Hit h = c.nav.item("m." + ms[i].id, b);
         if (cur) c.g.rframe(b.x, b.y, b.w, b.h, 6, 1.5f, th::amber);
         textIn(c, c.f.btn, ms[i].label, b, cur ? th::amber : rgb(0xdddddd));
         if (h.focused) focusRing(c, b, 6);
         if (h.pressed) {
+            if (mapModePick(*this, s, ms[i].id)) { closeTop(); return; }   // ADS-B / AIS / ISM / NDB (map_modes.h)
             if (decModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DECODERS… (dec_box.h)
             if (dabModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DAB in / out (dab_state.h)
             eng_->setMode(ms[i].id);
@@ -1124,6 +1131,7 @@ inline int App::run(int argc, char** argv) {
         audioTick(*this, s);
         dabTick(*this, s);
         decTick(*this, s);
+        mapTick(*this, s);
         memTick(*this, s);
         clockTick(*this, s);
         dispRateTick(*this);
@@ -1218,7 +1226,9 @@ inline int App::run(int argc, char** argv) {
         Ctx c{g_, tc_, f_, nav_, t};
 
         nav_.layer("deck");
-        if (s.session != "running") {
+        if (mapCoversScreen(*this)) {
+            // ★ the map covers the screen: no waterfall, spectrum or deck underneath (the web's adsbViewUp)
+        } else if (s.session != "running") {
             drawNoRadio(c, s);
         } else {
             // spectrum + waterfall: the app's (waterfall FIRST — it runs the clock and the pace)
@@ -1255,6 +1265,7 @@ inline int App::run(int argc, char** argv) {
                 case S_DEC: decDrawFull(*this, c, s); break;
                 case S_AUDIO: drawAudioSheet(c, s); break;
                 case S_MENU: drawMenu(c, s); break;
+                case S_MAP: mapDrawSheet(*this, c, s); break;
                 default: break;
             }
             if (sheets_.size() < before) break;     // it closed itself

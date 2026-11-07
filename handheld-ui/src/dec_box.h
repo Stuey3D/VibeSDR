@@ -751,6 +751,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (!u.active.empty() && u.spotsOn) ks.push_back({"dec.k.sw", view == "spots" ? decTitle(u.active) : std::string("SPOTS"), 10, false});
             const auto subs = decSubs(view);
             for (size_t i = 0; i < subs.size(); i++) ks.push_back({"dec.k.s" + std::to_string(i), subs[i], 20 + (int)i, u.sub == (int)i});
+            if (view == "aprs" || view == "dsc") ks.push_back({"dec.k.map", "MAP", 50, false});   // the APRS / DSC map (map_modes.h)
             if (d && d->kind == DK_PICTURE) { std::vector<PicKey> pk; decPicKeys(a, view, pk); for (auto& k : pk) ks.push_back({k.id, k.label, k.act, k.on}); }
             ks.push_back({"dec.k.pick", "DECODERS", 1, false});
             // ★ CLR only where there is something it clears (an external decoder: only with its own clear action)
@@ -805,6 +806,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (decRunning()) decStop(a, view == "spots" ? "spots" : view);
             if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); decRelease(a); }
             else a.nav_.forget("dec");
+        } else if (act == 50) { mapOpenDecoder(a, view);
         } else if (act == 10) { u.view = view == "spots" ? u.active : "spots"; u.sub = 0; decListScroll() = {}; a.nav_.forget("dec"); }
         else if (act >= 60) decPicKeyPress(a, act, view);
         else if (act >= 40) { if ((size_t)(act - 40) < extPress.size()) extPress[(size_t)(act - 40)](); }

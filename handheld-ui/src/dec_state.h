@@ -767,6 +767,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
     }
     if (type == "dsc_call" && d["line"].kind == Json::Str) {
         if (u.active != "dsc") return;
+        mapDecFeed(a, type, d);   // ★ the DSC map's distress positions (map_modes.h)
         DecDsc c;
         c.id = d["id"].num(0); c.rf = d["rf"].num(0); c.utc = d["utc"].num(0); c.repeat = std::max(1, (int)d["repeat"].num(1));
         c.level = std::max(0, std::min(3, (int)d["level"].num(0))); c.line = decClip(d["line"].str(), 600);
@@ -778,6 +779,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
     }
     if (type == "aprs_list" && d.kind == Json::Obj) {
         if (u.active != "aprs") return;
+        mapDecFeed(a, type, d);   // ★ the APRS map's positions (map_modes.h)
         u.aprs.clear();
         bool recent = false;
         for (auto& x : d["stations"].a) {
