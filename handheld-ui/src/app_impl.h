@@ -559,13 +559,29 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
             if (battery_ <= 10 && !charging_) p.col = th::red;
             parts.push_back(p);
         }
-        const float room = pill.w - 4;
-        auto widthOf = [&](bool full) { float w = 0; for (auto& p : parts) w += c.tc.width(c.f.small, full ? p.full : p.abbr) + 18; return w; };
+        // ★ Stuart, 2026-11-06: "Time left, record time right stats middle"
+        const float lyT = ty - c.f.small.lineHeight() / 2.f;
+        const float leftW = (float)c.tc.width(c.f.small, clk);
+        c.tc.draw(c.g, c.f.small, clk, pill.x + 2, lyT, th::dim);
+        float rightW = 0;
+        if (num_.count("audio.recSec")) {
+            const int sec = (int)num_["audio.recSec"];
+            char rb[24]; std::snprintf(rb, sizeof rb, "REC %02d:%02d", sec / 60, sec % 60);
+            rightW = (float)c.tc.width(c.f.small, rb) + 16;
+            const float a = 0.55f + 0.45f * (float)std::sin(c.t * 4.0);
+            c.g.circle(pill.r() - rightW + 5, ty, 5, 0, rgb(0xff3030, a));
+            c.tc.draw(c.g, c.f.small, rb, pill.r() - 2, lyT, th::red, 2);
+        }
+        // the stats centred in the room between the clock and the recording time
+        const float gapW = 18;
+        const float room = pill.w - leftW - rightW - 2 * gapW;
+        auto widthOf = [&](bool full) { float w = 0; for (auto& p : parts) w += c.tc.width(c.f.small, full ? p.full : p.abbr) + gapW; return w - gapW; };
         const bool full = widthOf(true) <= room;
-        float x = pill.x + 2;
-        for (auto& p : parts) x += c.tc.draw(c.g, c.f.small, full ? p.full : p.abbr, x, ty - c.f.small.lineHeight() / 2.f, p.col) + 18;
-        if (x + c.tc.width(c.f.small, clk) <= pill.r() - 2)
-            c.tc.draw(c.g, c.f.small, clk, pill.r() - 2, ty - c.f.small.lineHeight() / 2.f, th::dim, 2);
+        const float tw = widthOf(full);
+        // centred on the row; nudged right of the clock if it would overlap
+        float x = std::max(pill.x + 2 + leftW + gapW, pill.cx() - tw / 2);
+        if (x + tw > pill.r() - rightW - gapW) x = pill.r() - rightW - gapW - tw;
+        for (auto& p : parts) x += c.tc.draw(c.g, c.f.small, full ? p.full : p.abbr, x, lyT, p.col) + gapW;
     }
 }
 
