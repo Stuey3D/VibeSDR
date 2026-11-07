@@ -1167,7 +1167,10 @@ inline int App::run(int argc, char** argv) {
             // ★★ 5 rows a second, not 2 (Stuart, 2026-11-07: "preserving waterfall history so that when the screen is
             //    working up from idle it doesnt look like it is completely stopped, its the reason we used 5fps as the
             //    idle rate previously") — behind a cover too: the history builds there and is seen the moment it opens
-            const int want = idleNow_ || specCovered_ ? std::min(5, set_.specRate) : set_.specRate;
+            const int want = 5;   // ★★ ALWAYS 5 (Stuart, 2026-11-07) — the row rate is WATERFALL SPEED's (applyLook)
+            // ★ idle or covered: the waterfall drops to NATIVE rows (its 5) — the leaf shows (status row)
+            const bool slow = idleNow_ || specCovered_;
+            if (slow != slowApplied_) { slowApplied_ = slow; applyLook(); }
             if (s.connected && sentRate != want) { eng.fftRate(want); sentRate = want; }
         }
         if (!s.connected) sentRate = -1;

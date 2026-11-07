@@ -74,20 +74,13 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     }
     // DISPLAY RATE (display_rate.h — Stuart, 2026-11-07: screen noise on FM)
     y = dispRateRow(*this, c, a, y);
-    // SPECTRUM RATE
+    // ★★ (SPECTRUM RATE is gone — Stuart, 2026-11-07: "loose the 5/10/20 raw data and simply stick with 5FPS and use the
+    //    interpolator for scrolling": the engine always sends 5, WATERFALL SPEED below says how it scrolls)
     float y0 = y;
-    y = menuRow(c, a, y, "SPECTRUM RATE", "Real frames from the radio each second — every waterfall row is real");
-    {
-        const int rates[3] = {5, 10, 20};
-        int sel = 0; for (int i = 0; i < 3; i++) if (rates[i] == set_.specRate) sel = i;
-        const int hit = segmented(c, "d.rate", {a.x + 6, y - 4, a.w - 12, 38}, {"5", "10", "20"}, sel);
-        if (hit >= 0) { set_.specRate = rates[hit]; eng_->fftRate(set_.specRate); dirty(); }
-        y += 46;
-    }
     // IDLE POWER SAVE (App::idleNow_)
     // ★ Stuart, 2026-11-07: "give an option to disable the powersave with the warning that it will reduce battery life"
     y = menuRow(c, a, y, "IDLE POWER SAVE", set_.idleSave
-        ? "Untouched for a minute: the waterfall slows to 5 rows a second and glides at that pace — any button brings it straight back. Longer on battery; the screen stays smooth and the audio is not touched"
+        ? "Untouched for a minute, or behind a menu or a decoder: the waterfall drops to its NATIVE 5 rows a second — any button brings your speed straight back. Longer on battery; the audio is not touched"
         : "OFF — the waterfall and the screen run at full speed all the time. This WILL shorten the battery life: switch it back on for the longest listening");
     {
         const int hit = segmented(c, "d.idle", {a.x + 6, y - 4, a.w - 12, 38}, {"OFF", "ON"}, set_.idleSave ? 1 : 0);
@@ -196,12 +189,12 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     // ── WATERFALL ──
     y = dispHead(c, a, y, "WATERFALL");
     // WATERFALL SPEED (the native loop's own: rows a second the waterfall scrolls at)
-    y = menuRow(c, a, y, "WATERFALL SPEED", "Rows a second the waterfall scrolls at. NATIVE draws every frame as it arrives.");
+    y = menuRow(c, a, y, "WATERFALL SPEED", "Rows a second. NATIVE: the 5 the radio sends; 10 and 30 scroll smoothly between them — every row a real one, repeated, never blended.");
     {
-        // wf::Scroll: Min2 0, Low 1, Sharp(NATIVE) 2, Eco 3, Default 4, Smooth 5 — shown slowest → fastest
-        const int order[5] = {1, 3, 4, 5, 2};
-        int sel = 2; for (int i = 0; i < 5; i++) if (order[i] == set_.speed) sel = i;
-        const int hit = segmented(c, "d.spd", {a.x + 6, y - 4, a.w - 12, 38}, {"LOW", "ECO", "DEFAULT", "SMOOTH", "NATIVE"}, sel);
+        // wf::Scroll: Sharp(NATIVE) 2 · Eco 3 (10) · Smooth 5 (30 from the 5 fps feed) — Stuart's three
+        const int order[3] = {2, 3, 5};
+        int sel = 2; for (int i = 0; i < 3; i++) if (order[i] == set_.speed) sel = i;
+        const int hit = segmented(c, "d.spd", {a.x + 6, y - 4, a.w - 12, 38}, {"NATIVE", "10", "30"}, sel);
         if (hit >= 0) { set_.speed = order[hit]; look(); dirty(); }
         y += 46;
     }

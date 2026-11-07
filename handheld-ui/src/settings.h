@@ -13,7 +13,10 @@ namespace hh {
 struct Settings {
     int step = 1000;               // Hz (the web's default `step`)
     std::string palette = "Jet";   // ★ the app's production default
-    int speed = 4;                 // wf::Scroll: 4 = Default (30 rows/s, never 20 — feedback_waterfall_core_rules)
+    // wf::Scroll — ★★ Stuart, 2026-11-07: three choices over the engine's fixed 5 frames a second: NATIVE (2, the real 5
+    //   rows), 10 (Eco, 3) and 30 (Smooth, 5 — Smooth's rule gives 30 from a 5 fps feed; Default would give 15). No 20 (it
+    //   judders on other devices — feedback_waterfall_core_rules). 30 by default.
+    int speed = 5;
     double contrast = 0, sharpness = 5, wfBrightness = 0;
     int specRate = 10;             // real spectrum frames a second asked of the engine: 5 / 10 / 20 — ★ 10, as every server's
                                    //   default (Stuart, 2026-11-07); the waterfall's output clock stays 30 rows/s regardless
@@ -46,6 +49,7 @@ struct Settings {
         step = (int)j["step"].num(step);
         if (!j["palette"].str().empty()) palette = j["palette"].str();
         speed = (int)j["speed"].num(speed);
+        if (speed != 2 && speed != 3) speed = 5;   // ★ LOW / DEFAULT / older choices → 30 (the three left are NATIVE, 10, 30)
         contrast = j["contrast"].num(contrast);
         sharpness = j["sharpness"].num(sharpness);
         wfBrightness = j["wfBrightness"].num(wfBrightness);
