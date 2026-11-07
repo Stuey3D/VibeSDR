@@ -37,6 +37,7 @@ inline void App::tuneTo(double f) {
 }
 
 inline void App::tuneSteps(int n) {
+    if (dabTune(*this, n)) return;   // in DAB the arrows step the block (L2/R2, the jog, the hold-sweep)
     const RadioState& s = eng_->state();
     if (s.session != "running" || n == 0) return;
     const int step = stepOnLadder(s.vfoHz, set_.step);
@@ -126,6 +127,7 @@ inline double App::clampTune(double hz) {
 }
 
 inline void App::zoomSteps(int n) {
+    if (dabZoom(*this, n)) return;   // zoom is fixed in DAB
     const RadioState& s = eng_->state();
     if (s.session != "running" || n == 0 || s.spanHz <= 0) return;
     // ★ ×√2 a press on VibeServer (the app's zoom keys, Stuart 2026-10-28)
@@ -344,7 +346,7 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
     auto xOf = [&](double hz) { return spec.x + (float)((hz - lo) / (hi - lo)) * spec.w; };
     // the dB grid + labels (web drawDbScale: 5 stops, faint lines, amber labels with a shadow)
     const double dbMax = wfp_.dbMax(), dbMin = wfp_.dbMin();
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 5 && spec.h >= 60; i++) {   // (no dB grid on the DAB page's strip)
         const float t = i / 4.f, y = spec.y + t * spec.h;
         c.g.rect(spec.x, y, spec.w, 1, rgb(0xffb43c, 0.10f));
         char b[16];
@@ -374,6 +376,7 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
 
     // ── the pill ──
     const Rect pill{lay::pillX, lay::pillY, lay::pillW, lay::pillH};
+    if (!dabDrawPill(*this, c, s, pill)) {   // ★ in DAB the pill is the DAB reception meter (dab_box.h)
     c.g.rrect(pill.x, pill.y, pill.w, pill.h, 9, th::pillBg);
     {
         // ★ the meter IS the pill's background (#mSig): red → amber → green, its width the smoothed level
@@ -479,11 +482,14 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     if (hr.focused) focusRing(c, rb, 15);
     if (hr.pressed) { set_.meterMode = (set_.meterMode + 1) % 3; dirty(); }   // ★ the web's meter cycle: SNR → S → dBFS
 
+    }
+
     // ── the four buttons ──
     const float bw = (pill.w - 3 * 8) / 4;
     auto bx = [&](int i) { return pill.x + i * (bw + 8); };
     BtnStyle st; st.font = &c.f.btn;
-    if (button(c, "step", {bx(0), lay::btnY, bw, lay::btnH}, formatStep(stepOnLadder(s.vfoHz, set_.step)), st)) open(S_STEP);
+    if (!dabDrawStepKey(*this, c, {bx(0), lay::btnY, bw, lay::btnH}, st))
+        if (button(c, "step", {bx(0), lay::btnY, bw, lay::btnH}, formatStep(stepOnLadder(s.vfoHz, set_.step)), st)) open(S_STEP);
     if (button(c, "menu", {bx(1), lay::btnY, bw, lay::btnH}, "MENU", st)) { menuOpen_.clear(); menuScroll_ = {}; open(S_MENU); }
     {
         const Rect ab{bx(2), lay::btnY, bw, lay::btnH};
@@ -619,22 +625,23 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
     const float cw = (r.w - 24) / 2, rh = std::min(50.f, (r.h - 16) / (float)((ms.size() + 1) / 2) - 4);
     for (size_t i = 0; i < ms.size(); i++) {
         const Rect b{r.x + 8 + (i % 2) * (cw + 8), r.y + 8 + (i / 2) * (rh + 4), cw, rh};
-        const bool cur = s.mode == ms[i].id;
+        const bool cur = dabActive() ? ms[i].id == "dab" : s.mode == ms[i].id;
         const Nav::Hit h = c.nav.item("m." + ms[i].id, b);
         if (cur) c.g.rframe(b.x, b.y, b.w, b.h, 6, 1.5f, th::amber);
         textIn(c, c.f.btn, ms[i].label, b, cur ? th::amber : rgb(0xdddddd));
         if (h.focused) focusRing(c, b, 6);
         if (h.pressed) {
+            if (dabModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DAB in / out (dab_state.h)
             eng_->setMode(ms[i].id);
             num_["bw.sync"] = -1;   // the new mode's own SYNC default
             closeTop();
             return;
         }
     }
-    if (nav_.focus("mode").empty()) nav_.setFocus("mode", "m." + s.mode);
+    if (nav_.focus("mode").empty()) nav_.setFocus("mode", dabActive() ? std::string("m.dab") : "m." + s.mode);
 
     // ── BANDWIDTH (hidden in DRM, as the web's syncBw) ──
-    if (s.mode == "drm" || s.mode.empty()) return;
+    if (s.mode == "drm" || s.mode.empty() || dabActive()) return;
     const Rect p{444, 8, 184, 464};
     c.g.rrect(p.x, p.y, p.w, p.h, 10, rgb(0x101010, 0.97f));
     c.tc.draw(c.g, c.f.bodyB, "BANDWIDTH", p.x + 14, p.y + 14, th::btnText);
@@ -1047,6 +1054,7 @@ inline int App::run(int argc, char** argv) {
         }
         const RadioState& s = eng.state();
         audioTick(*this, s);
+        dabTick(*this, s);
         if (s.session != lastSession) { if (s.session == "running") { nav_.setFocus("deck", "freq"); lastDevPoll = 0; } lastSession = s.session; }
         if (s.connected && sentRate != set_.specRate) { eng.fftRate(set_.specRate); sentRate = set_.specRate; }
         if (!s.connected) sentRate = -1;
@@ -1070,7 +1078,9 @@ inline int App::run(int argc, char** argv) {
                 const HttpResult v = httpRequest(p, "GET", "/vibeserver.json", "", 4);
                 if (v.status == 200) {
                     std::vector<std::string> ms;
-                    for (auto& m : Json::parse(v.body)["modes"].a) ms.push_back(m.str());
+                    const Json vj = Json::parse(v.body);
+                    for (auto& m : vj["modes"].a) ms.push_back(m.str());
+                    if (vj["dab"].boolean()) ms.push_back("dab");
                     std::lock_guard<std::mutex> lk(srvMtx_); srvModes_ = ms;
                 }
                 const HttpResult l = httpRequest(p, "GET", "/handheld/location", "", 4);
@@ -1137,15 +1147,20 @@ inline int App::run(int argc, char** argv) {
         } else {
             // spectrum + waterfall: the app's (waterfall FIRST — it runs the clock and the pace)
             g_.flush();
-            const Rect spec{0, lay::specY, (float)W, lay::specH}, wfr{0, lay::wfY, (float)W, (float)H - lay::wfY};
+            Rect spec{0, lay::specY, (float)W, lay::specH}, wfr{0, lay::wfY, (float)W, (float)H - lay::wfY};
+            Rect scaleR{0, lay::scaleY, (float)W, lay::scaleH};
+            DabScreenRects dr;
+            const bool dabScr = dabScreenRects(*this, dr);   // ★ the DAB page (layout C): the spectrum as a strip
+            if (dabScr) { spec = dr.spec; wfr = dr.wf; scaleR = dr.scale; }
             { const double c0 = threadCpu(); prof_.ui += c0 - pc; pc = c0; }
             wfp_.draw(0, (int)wfr.y, W, (int)wfr.h, W, H, t);
             wfp_.drawSpectrum(0, (int)spec.y, W, (int)spec.h, W, H);
             { const double c0 = threadCpu(); prof_.wf += c0 - pc; pc = c0; }
             glEnable(GL_BLEND);
-            drawBands(c, s, {0, 0, (float)W, lay::bandsH});
-            drawScale(c, s, {0, lay::scaleY, (float)W, lay::scaleH});
+            if (!dabScr || dr.bands) drawBands(c, s, {0, 0, (float)W, lay::bandsH});
+            drawScale(c, s, scaleR);
             drawOverlays(c, s, spec, wfr);
+            dabDrawBox(*this, c, s);
             drawDeck(c, s, {lay::islandX, lay::islandY, lay::islandW, lay::islandH});
             drawVts(c, s, {lay::islandX, lay::islandY - 40, lay::islandW, 34});
         }
@@ -1159,6 +1174,7 @@ inline int App::run(int argc, char** argv) {
                 case S_KB: drawKeyboard(c, s); break;
                 case S_BOOKMARKS: drawBookmarks(c, s); break;
                 case S_SEARCH: drawSearch(c, s); break;
+                case S_DAB: break;
                 case S_AUDIO: drawAudioSheet(c, s); break;
                 case S_MENU: drawMenu(c, s); break;
                 default: break;

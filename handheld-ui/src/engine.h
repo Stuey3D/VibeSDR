@@ -70,6 +70,7 @@ struct RadioState {
     // ★ the LAST message of every type, whole (config, hwinfo, sig, rds, rspstat, ahfstat …) — the menu sections read
     //   their own fields from these, so a new row never needs a new field here
     std::map<std::string, Json> last;
+    std::map<std::string, uint64_t> seq;   // ★ an arrival counter per message type (a repeated identical message still counts)
     const Json& msg(const std::string& type) const { static const Json none; auto it = last.find(type); return it == last.end() ? none : it->second; }
     /** hwinfo `radio.<k>` (most capabilities live there), else top-level hwinfo `<k>`. */
     const Json& hw(const std::string& k) const { const Json& h = msg("hwinfo"); return h["radio"].has(k) ? h["radio"][k] : h[k]; }
@@ -306,6 +307,7 @@ private:
         Json j = Json::parse(s);
         const std::string t = j["type"].str();
         if (t.empty()) return;
+        st_.seq[t]++;
         if (t == "config") {
             st_.viewCentreHz = j["centerFreq"].num(st_.viewCentreHz);
             st_.binCount = (int)j["binCount"].num(st_.binCount);

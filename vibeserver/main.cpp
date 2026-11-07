@@ -4590,7 +4590,10 @@ int main(int argc, char** argv) {
         // ★ Nothing to set for the shared dial: it IS "unlocked centre + more than one listener",
         //   which the two settings below already carry. See vsSharedDial() in the shim.
         LocalSdrShim::instance().setIdleKickMinutes(mine ? mine->idleKickMin : 0);
-        LocalSdrShim::instance().setDabScanLabels(mine ? mine->dabScanLabels : -1);   // ★ read from the radio record directly, like idleKickMin — no flatten hop to forget
+        // ★ read from the radio record directly, like idleKickMin — no flatten hop to forget.
+        // ★★ THE HANDHELD NEVER SCANS EVERY STATION'S LABELS (Stuart, 2026-11-07: "DAB should lose the all station radio
+        //    text on this device as that will be too much") — the R36S's A35s spend their DAB time on the station played.
+        LocalSdrShim::instance().setDabScanLabels(g_handheldChild ? 0 : (mine ? mine->dabScanLabels : -1));
         LocalSdrShim::instance().setLandingInfo(mine ? mine->antenna : std::string(),
                                                 g_serverConfig.landingMessage,
                                                 g_serverConfig.landingLinkUrl,

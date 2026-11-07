@@ -93,6 +93,7 @@ inline std::vector<ModeDef> offeredModes(const std::vector<std::string>& srvMode
     for (const char* sy : {"sam", "sau", "sal", "ecssu", "ecssl", "amst"}) if (has(srvModes, sy)) ids.push_back(sy);
     for (const char* m : {"usb", "lsb", "cwu", "cwl"}) ids.push_back(m);
     if (has(srvModes, "drm")) ids.push_back("drm");
+    if (has(srvModes, "dab")) ids.push_back("dab");   // (vibeserver.json dab === true, added to srvModes at the fetch)
     std::vector<ModeDef> out;
     for (auto& id : ids) {
         if (has(blocked, id)) continue;
@@ -135,7 +136,7 @@ public:
     bool quit_ = false;
 
     // ── state ──
-    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH };
+    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB };
     std::vector<Sheet> sheets_;
     std::deque<Btn> presses_;
     Jog tuneJog_{30}, zoomJog_{45};
@@ -179,7 +180,7 @@ public:
     void closeTop() { if (!sheets_.empty()) { nav_.forget(layerName(sheets_.back())); sheets_.pop_back(); } }
     static const char* layerName(Sheet s) {
         switch (s) { case S_MODE: return "mode"; case S_STEP: return "step"; case S_MENU: return "menu"; case S_AUDIO: return "audio";
-                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; default: return "deck"; }
+                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; default: return "deck"; }
     }
     void applyLook() {
         wfp_.setPalette(set_.palette);
@@ -256,6 +257,7 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 }  // namespace hh
 
 #include "hw_pump.h"
+#include "dab_box.h"
 #include "app_impl.h"
 #include "sec_audio.h"
 #include "sec_display.h"
