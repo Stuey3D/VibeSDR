@@ -137,7 +137,7 @@ public:
     bool quit_ = false;
 
     // ── state ──
-    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB };
+    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB, S_DEC };
     std::vector<Sheet> sheets_;
     std::deque<Btn> presses_;
     Jog tuneJog_{30}, zoomJog_{45};
@@ -182,7 +182,7 @@ public:
     void closeTop() { if (!sheets_.empty()) { nav_.forget(layerName(sheets_.back())); sheets_.pop_back(); } }
     static const char* layerName(Sheet s) {
         switch (s) { case S_MODE: return "mode"; case S_STEP: return "step"; case S_MENU: return "menu"; case S_AUDIO: return "audio";
-                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; default: return "deck"; }
+                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; case S_DEC: return "dec"; default: return "deck"; }
     }
     void applyLook() {
         wfp_.setPalette(set_.palette);
@@ -260,6 +260,12 @@ inline float dispRateRow(App&, Ctx&, Rect, float);
 inline void clockTick(App&, const RadioState&);
 // per-radio memory (memory.h): restore on plug-in, save what changed
 inline void memTick(App&, const RadioState&);
+// DECODERS (dec_state.h / dec_box.h): the framework, the text decoders, spots, the box over the waterfall
+inline void decTick(App&, const RadioState&);
+inline void decDrawBox(App&, Ctx&, const RadioState&);
+inline void decModeEntries(const RadioState&, std::vector<ModeDef>&);
+inline bool decModeLit(const std::string&);
+inline bool decModePick(App&, const RadioState&, const std::string&);
 // the deck's REC key (sec_audio.h): recording now? / start or stop it
 bool deckRecording(App&);
 void deckToggleRec(App&, const RadioState&);
@@ -279,6 +285,7 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 #include "bm_page.h"
 #include "search_page.h"
 #include "vts.h"
+#include "dec_box.h"
 #include "memory.h"
 #include "display_rate.h"
 #include "clock_rds.h"

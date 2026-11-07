@@ -175,6 +175,7 @@ public:
     }
 
     int port() const { return port_; }
+    const std::string& sessionId() const { return sid_; }
 
 private:
     int port_;

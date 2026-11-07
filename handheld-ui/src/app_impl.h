@@ -686,15 +686,17 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
     c.g.rrect(r.x, r.y, r.w, r.h, 10, rgb(0x101010, 0.97f));
     std::vector<ModeDef> ms;
     { std::lock_guard<std::mutex> lk(srvMtx_); ms = offeredModes(srvModes_, s.blockedModes); }
+    decModeEntries(s, ms);   // DECODERS… (or the sole decoder) after the whole-radio modes
     const float cw = (r.w - 24) / 2, rh = std::min(50.f, (r.h - 16) / (float)((ms.size() + 1) / 2) - 4);
     for (size_t i = 0; i < ms.size(); i++) {
         const Rect b{r.x + 8 + (i % 2) * (cw + 8), r.y + 8 + (i / 2) * (rh + 4), cw, rh};
-        const bool cur = dabActive() ? ms[i].id == "dab" : s.mode == ms[i].id;
+        const bool cur = decModeLit(ms[i].id) || (dabActive() ? ms[i].id == "dab" : s.mode == ms[i].id);
         const Nav::Hit h = c.nav.item("m." + ms[i].id, b);
         if (cur) c.g.rframe(b.x, b.y, b.w, b.h, 6, 1.5f, th::amber);
         textIn(c, c.f.btn, ms[i].label, b, cur ? th::amber : rgb(0xdddddd));
         if (h.focused) focusRing(c, b, 6);
         if (h.pressed) {
+            if (decModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DECODERS… (dec_box.h)
             if (dabModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DAB in / out (dab_state.h)
             eng_->setMode(ms[i].id);
             num_["bw.sync"] = -1;   // the new mode's own SYNC default
@@ -1120,6 +1122,7 @@ inline int App::run(int argc, char** argv) {
         const RadioState& s = eng.state();
         audioTick(*this, s);
         dabTick(*this, s);
+        decTick(*this, s);
         memTick(*this, s);
         clockTick(*this, s);
         dispRateTick(*this);
@@ -1233,6 +1236,7 @@ inline int App::run(int argc, char** argv) {
             drawScale(c, s, scaleR);
             drawOverlays(c, s, spec, wfr);
             dabDrawBox(*this, c, s);
+            decDrawBox(*this, c, s);
             drawDeck(c, s, {lay::islandX, lay::islandY, lay::islandW, lay::islandH});
             drawVts(c, s, {lay::islandX, lay::islandY - 40, lay::islandW, 34});
         }
