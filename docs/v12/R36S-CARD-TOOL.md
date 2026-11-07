@@ -97,6 +97,24 @@ For a lost card, a DTB the tool could not read, or an image flashed directly:
 - The panel extraction as a library both the tool and the device use (one implementation).
 - Where the images come from: the tool downloads the current VibeSDR R36S image (signed), or takes a local file.
 
+## 8b. From the panel research (docs/v12/R36S-PANELS-RESEARCH.md, 2026-11-07)
+
+- **Identify panels by their init-sequence hash**, never by `compatible` (Stuart's says ST7703; it is an NV3051D).
+- ROCKNIX's first boot runs `rocknix_dtbo.py` (MIT, from stolen/overlay_server) — it writes the panel AND the board
+  bits (panel pins, adc-keys, joypad, headphone detect, speaker amp): why a panel-only overlay broke the audio. So:
+  split our output into **`board.dtbo`** (pins, audio, joypad — from the stock DTB) and **`panel.dtbo`** (the
+  description only); the panel finder swaps only `panel.dtbo` and, with no stock DTB, cycles the **three known pin
+  sets** (A: B7/B5, B: D3/A3, C: C0).
+- ~14 distinct init sequences cover every R36S-family DTB in arkos4clone; ROCKNIX + stolen's overlays match 7.
+- The board-ID ADC picks only the FAMILY (490–540 → eeclone): it orders the candidates, it does not choose.
+- generic-dsi has an `I seq=da read=1` hook (a DSI read at power-up, printed to dmesg) and a `descfile=` parameter
+  (the description from /lib/firmware) — the read narrows to a controller family; `descfile=` is an alternative to
+  swapping overlays.
+- Regenerate when the stock DTB's HASH changes (not when a file is missing); don't copy ROCKNIX's U-Boot reinstall;
+  ★ only enable a speaker-amplifier GPIO the stock DTB names (an overvolting amp can destroy a clone's speaker).
+- Licences: ROCKNIX DTS = GPL-2.0+ OR MIT (ship with sources); importpanel.py GPL-2.0 (read only); arkos4clone MIT;
+  stolen's release unlicensed → ship OUR overlays generated from the data, with credit; our own extractor (native FDT).
+
 ## 9. Order of work
 
 1. **The panel set and ROCKNIX's mechanism** — collect ROCKNIX's RK3326 trees + the community numbered panels; read

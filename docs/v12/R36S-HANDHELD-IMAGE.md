@@ -26,7 +26,7 @@ write ~8.5 MB/s.
 | | Measured | For the image |
 |---|---|---|
 | ROCKNIX 20261101 **B** image (EE clones) | boots, mainline kernel **7.1.2** | use ROCKNIX's U-Boot + KERNEL + DTBs |
-| Panel | **Sitronix ST7703** MIPI-DSI 4-lane, 640×480, 30 MHz → **80.046 Hz** default; modes to 120 Hz work | display **80 Hz, ROCKNIX's overlay unchanged** (✗ both 60 Hz modes off-centre / garbled on the device, 2026-11-06); our drawing capped at **30 fps** (Stuart) |
+| Panel | **NewVision NV3051D** (✗ NOT the ST7703 the stock DTB's `compatible` claims — its init sequence starts FF 30 / FF 52 / FF 01 / E3 00, the NV3051D preamble; arkos4clone "Clone Type 1 Panel 2" — docs/v12/R36S-PANELS-RESEARCH.md) MIPI-DSI 4-lane, 640×480, 30 MHz → **80.046 Hz** default; modes to 120 Hz work | display **80 Hz, ROCKNIX's overlay unchanged** (✗ both 60 Hz modes off-centre / garbled on the device, 2026-11-06); our drawing capped at **30 fps** (Stuart) |
 | Display overlay | works ONLY with ROCKNIX's own generated `mipi-panel.dtbo` — stock DTB in `/flash/stock`, **no** overlay pre-placed (`002-generate_dtbo` is a no-op if one exists; a panel-only `importpanel.py` overlay broke the EE-clone audio tuning) | ship the overlay ROCKNIX generated for this board, or let first boot generate it from `stock/` |
 | Audio | card `rk817_ext`; amp `simple-audio-amplifier` (enable high); **silent until `Playback Mux` (numid=6) → SPK** | mux follows the `Headphones Jack` control: **SPK default, HP when a plug is in** |
 | Backlight | `/sys/class/backlight/backlight`, PWM 25 µs, 0–255, stock default 200 | slider 0–255 (floor above 0); **default 120** |
@@ -420,6 +420,8 @@ Repository: `github.com/ROCKNIX/distribution`, branch `next`, pushed 2026-11-03 
 ### ArkOS (and ArkOS-for-clones forks: AeolusUX/ArkOS-R3XS, lcdyk0517/arkos4clone)
 - Same BSP 4.4 + libmali family. These are where most of the **clone panel knowledge** lives.
 - arkos4clone renamed panels to "Type" numbers: Panel 1 = Type 1, Panel 8 = Type 2, Panel 4 = Type 3, Panel 7 = Type 5
+  (✗ OUT OF DATE: renamed again 2025-09-05 / 09-15 — "Type N" is now the board wiring, "Panel M" the panel on it; see
+  docs/v12/R36S-PANELS-RESEARCH.md — identify panels by their INIT SEQUENCE, never by name or `compatible`)
   (source: arkos4clone 20251022 notes). Panel numbers in forum posts are therefore ambiguous; always go by the DTB.
 
 ### Arch R (archr-linux/Arch-R)
