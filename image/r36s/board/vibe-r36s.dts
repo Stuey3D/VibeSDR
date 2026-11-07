@@ -66,26 +66,31 @@
 //     tree's steps (rf3536k3ka.dtb gpu-opp-table) at its base `opp-microvolt` — the highest of its PVTM L0–L3 rows, so
 //     never under-volted. A 640×480 UI asks little of it: the devfreq governor (simple_ondemand) settles low by itself.
 // ★ ROCKNIX's own 560 MHz / 1.15 V stays, the top step for a heavy moment (the map).
+// ★★★ <target min max> — "this voltage OR HIGHER", as the CPU steps are written (handheld27: a bare <950000> asked the
+//     rail for EXACTLY 0.95 V while the memory controller on the same rail was holding at least 1.05 V; the regulator
+//     could meet both only with an empty range, refused (-22: "failed to set voltage (950000 950000 950000)"), and
+//     Panfrost gave up — the UI fell back to llvmpipe at 95 % CPU). With a range the rail settles at the higher of the
+//     two needs, and drops to 0.95 V when both are low.
 &gpu_opp_table {
 	opp-200000000 {
 		opp-hz = /bits/ 64 <200000000>;
-		opp-microvolt = <950000>;
+		opp-microvolt = <950000 950000 1350000>;
 	};
 	opp-300000000 {
 		opp-hz = /bits/ 64 <300000000>;
-		opp-microvolt = <975000>;
+		opp-microvolt = <975000 975000 1350000>;
 	};
 	opp-400000000 {
 		opp-hz = /bits/ 64 <400000000>;
-		opp-microvolt = <1050000>;
+		opp-microvolt = <1050000 1050000 1350000>;
 	};
 	opp-480000000 {
 		opp-hz = /bits/ 64 <480000000>;
-		opp-microvolt = <1125000>;
+		opp-microvolt = <1125000 1125000 1350000>;
 	};
 	opp-520000000 {
 		opp-hz = /bits/ 64 <520000000>;
-		opp-microvolt = <1175000>;
+		opp-microvolt = <1175000 1175000 1350000>;
 	};
 };
 

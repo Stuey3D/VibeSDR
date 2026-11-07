@@ -64,6 +64,13 @@ awk '/opp-1416000000 \{/{f=1} f&&/status = "disabled"/{print; exit}' "$T/m.dts" 
 for f in 200000000 300000000 400000000 480000000 520000000 560000000; do
   grep -q "opp-$f {" "$T/m.dts" || fail "GPU step $f missing"
 done
+# ★ handheld27: an EXACT voltage on a rail the memory controller shares failed Panfrost's probe (llvmpipe) — each added
+#   GPU step must be a range, "<v v 1350000>": opp-microvolt with three cells (dtc prints them as <0x.. 0x.. 0x149970>)
+awk '/^\topp-table-1 \{/{f=1} f{print} f&&/^\t\};/{exit}' "$T/m.dts" > "$T/gpu-opp.dts"
+grep -q "opp-560000000" "$T/gpu-opp.dts" || fail "the GPU's OPP table (opp-table-1) not found"
+for v in 0xe7ef0 0xee098 0x100590 0x112a88 0x11edd8; do
+  grep -q "opp-microvolt = <$v $v 0x149970>" "$T/gpu-opp.dts" || fail "GPU step at $v is not a <v v 1.35 V> range"
+done
 grep -q 'default-brightness-level = <0x78>' "$T/m.dts" || fail "backlight boot level is not 120"
 ok "boot: KERNEL, eeclone DTB, overlays apply (panel = ROCKNIX's 80 Hz overlay, unchanged, CPU 408–1296 MHz, 1416 off, backlight 120), extlinux → PARTUUID=$DISKID-02"
 
