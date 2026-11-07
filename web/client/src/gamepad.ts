@@ -43,7 +43,7 @@
  *    kept the cursor). Only a real press or a stick past STICK_USE counts as using the pad; a connected pad does not.
  */
 import { pickNext, Jog, padProfile, type Box, type Dir } from '../../../src/utils/gamepadNav';
-import { keyAction, keyDir, keyRepeats, type KeyAction } from '../../../src/utils/keyActions';
+import { keyAction, keyDigit, keyDir, keyRepeats, type KeyAction } from '../../../src/utils/keyActions';
 import { guideTabStep, type PadLayout } from '../../../src/utils/padGuide';
 import { padGuideOpen, padGuideLayout, setPadGuideLayout, scrollPadGuide } from './padGuide';
 import { isTextField, fieldEdited, openPadKeyboard, padKbOpen, padKbLayout, padKbMove, padKbPress, padKbBack, padKbEdit,
@@ -57,6 +57,8 @@ export interface GamepadHooks {
   /** ★★ V12 VFO A/B: swap which VFO the controls tune (does nothing while A/B is off). V on a keyboard; on a pad △ in
    *  the two-stick layout, and a TAP of START in either (a hold still switches the layout). */
   swapVfo?(): void;
+  /** ★★ DIRECT NUMBER ENTRY: a digit typed on the page (nobody typing in a field) opens the frequency box with it. */
+  typeFreq?(digit: string): void;
 }
 
 // Standard-layout button indices.
@@ -341,6 +343,14 @@ function onKey(e: KeyboardEvent) {
   if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !typingIn(e.target) && !padKbOpen()) {
     hooks?.swapVfo?.();
     setDriven('keyboard'); mouseTravel = 0;
+    return;
+  }
+  // ★★ DIRECT NUMBER ENTRY (Stuart, 2026-11-07): a DIGIT — top row or number pad — opens the frequency box with that
+  //    digit in it. Never a full stop (it is tune up: MW in MHz is 0 then .648), never while typing, never repeated.
+  if (keyDigit(e.key, { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey }) && !e.repeat && !typingIn(e.target) && !padKbOpen() && hooks?.typeFreq) {
+    e.preventDefault();
+    setDriven('keyboard'); mouseTravel = 0;
+    hooks.typeFreq(e.key);
     return;
   }
   const a = keyAction(e.key, { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey });

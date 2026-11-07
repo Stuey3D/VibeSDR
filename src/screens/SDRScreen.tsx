@@ -188,7 +188,7 @@ import { NavCard, CardKey } from '../components/NavCard';
 import { bookmarkDefaultName } from '../utils/bookmarkName';
 import { serverEditQuery, serverEditError, serverLeftOldRow, applyPersonalEdit, type BookmarkEditValue } from '../utils/bookmarkEdit';
 import { usePadField } from '../components/ControllerKeyboard';
-import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide, addSwapVfoListener } from '../utils/hardwareKeys';
+import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide, addSwapVfoListener, addDigitListener } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import DualServerCard from '../components/DualServerCard';
@@ -12864,6 +12864,25 @@ export default function SDRScreen({ route, navigation }: Props) {
   } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
              dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk, chatLangNow, scanLockText]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
+  /* ★★ DIRECT NUMBER ENTRY (Stuart, 2026-11-07: "If a user starts typing a number say I press the 9 key then the
+   *  frequency entry box needs to pop up with the number 9 already entered and then i can continue to type 6.6 then
+   *  press enter"). A digit on a hardware keyboard, nobody in a field: the frequency card opens with it typed and the
+   *  cursor after it (FreqModal `typed`). Digits arriving before the field has the cursor (a fast typist, the card
+   *  still opening) join the text; one after a pause starts again. Only a digit starts it — the full stop is tune up,
+   *  so MW in MHz is 0 .648. */
+  const [freqTyped, setFreqTyped] = useState<{ text: string; seq: number } | null>(null);
+  const freqTypedAt = useRef(0);
+  useEffect(() => {
+    const sub = addDigitListener((d) => {
+      const now = Date.now();
+      const join = now - freqTypedAt.current < 600;
+      freqTypedAt.current = now;
+      setFreqTyped((p) => ({ text: join && p ? p.text + d : d, seq: (p?.seq ?? 0) + 1 }));
+      setFreqModalDab(false);
+      setFreqModalOpen(true);
+    });
+    return () => sub.remove();
+  }, []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
 
@@ -13407,7 +13426,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them. In ISM every step of the tuning moves one band.',
       target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard or controller drives it all',
-      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. A game controller does the same, on Android too: the D-pad moves the highlight, SELECT shows a guide to every button, holding START switches between face buttons and the two sticks (a tap of START — or the top button on a two-stick pad — swaps VFO A and B while both are on), and Enter on a text box opens an on-screen keyboard it can type with. More in the settings cog, under KEYBOARD and CONTROLLER GUIDE.',
+      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom, and typing a number opens the frequency box with it. A game controller does the same, on Android too: the D-pad moves the highlight, SELECT shows a guide to every button, holding START switches between face buttons and the two sticks (a tap of START — or the top button on a two-stick pad — swaps VFO A and B while both are on), and Enter on a text box opens an on-screen keyboard it can type with. More in the settings cog, under KEYBOARD and CONTROLLER GUIDE.',
       target: tourRef('menuBtn'), illustration: keysMock },
     // ★★ v5, not v4: the two steps above are new in V10 and describe things that
     //    already shipped invisibly. Bumping the key re-runs the tour ONCE for
@@ -15893,6 +15912,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       <PanelBoundary name="Frequency card" onClose={closeFreqModal} resetKey={freqModalOpen}>
       <FreqModal
         visible={freqModalOpen}
+        typed={freqTyped}
         defaultBookmarkName={bookmarkDefaultName({ rds: liveStation.name, station: vtsMenuName, hz: status.frequency })}
         /* ★ The card is inside a Modal, where useSafeAreaInsets reads 0 — measure out here and
          *   pass it in, the same way BrowserOverlay has done since build 70. */

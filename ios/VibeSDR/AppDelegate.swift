@@ -89,6 +89,9 @@ class VibeKeyWindow: UIWindow {
     "w", "a", "s", "d", "W", "A", "S", "D",
     ",", "<", ".", ">",          // tune down / up
     "-", "_", "=", "+",          // zoom out / in (the numeric keypad's - and + arrive as these too)
+    // ★★ DIRECT NUMBER ENTRY (Stuart, 2026-11-07): a digit — top row or keypad — opens the frequency card with it typed
+    //    (hardwareKeys addDigitListener). Never while a field has the cursor: typingPassthrough leaves digits to it.
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
   ]
 
   /// Cmd, Ctrl and Alt: never ours — system and app shortcuts (Cmd-Q, Cmd-W) stay theirs.

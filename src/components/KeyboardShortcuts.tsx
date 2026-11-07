@@ -41,9 +41,10 @@ const SECTIONS: Section[] = [
   {
     title: 'ONE SET OF KEYS, EVERYWHERE',
     body: [
-      'The keyboard works the way a game controller or the Apple TV remote does, and the same way on the web page. There are only five things to know.',
+      'The keyboard works the way a game controller or the Apple TV remote does, and the same way on the web page. There are only six things to know.',
       'The arrow keys — or W, A, S and D — move a highlight box from control to control, following the screen as it is laid out. Enter presses whatever is highlighted. Backspace or Escape goes back: it closes the menu or panel that is open, one layer at a time.',
       '< and > tune down and up one step, and - and + zoom out and in. The unshifted keys work too — comma and full stop, and = for zoom in — and so does the number pad. Hold any of them to keep going; on the receiver screen a held tune key sweeps the band, speeding up as you hold it, exactly as the tuner keys do under a thumb.',
+      'Type a number and the frequency card opens with it already in the box — carry on typing and press Enter to tune. Start with a digit (the top row or the number pad): the full stop tunes up, so medium wave in MHz is 0 then .648.',
     ],
   },
   {

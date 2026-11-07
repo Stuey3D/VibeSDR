@@ -4,7 +4,7 @@
 // radio. Keys are REAL key events (CDP Input.dispatchKeyEvent), so they arrive exactly as a keyboard's would.
 //
 //  Arrows and W A S D move the highlight (and reach the frequency box and the mode); Enter presses; Backspace and
-//  Escape close; < > , . tune; - + = zoom. Typing in the frequency field is never hijacked. The old shortcuts (arrows
+//  Escape close; < > , . tune; - + = zoom; a digit opens the frequency box with it typed. Typing in the frequency field is never hijacked. The old shortcuts (arrows
 //  tuning and zooming, M mute, [ ] step, T, mode letters) do nothing.
 //
 // Usage: VIBESERVER_BIN=/path/to/vibeserver node scripts/test-web-keyboard.mjs   (exit 3 = not run: no binary)
@@ -198,6 +198,26 @@ try {
   await p.key("Escape");
   ok(await p.until(`!document.querySelector(".open")`, 3000), "a second Escape closes the panel");
   ok(near(await freq(p), before), "nothing tuned by the typing");
+
+  // ── DIRECT NUMBER ENTRY (Stuart, 2026-11-07): a digit opens the frequency box with it; 6 . 6 Enter tunes 96.6 ──
+  await p.key("Escape"); await sleep(200);
+  ok(!(await p.js(`!!document.querySelector(".open")`)), "nothing open before typing a number");
+  const ne0 = await freq(p);
+  await p.key(".");
+  await sleep(300);
+  ok(!(await p.js(`!!document.querySelector("#freqPanel.open")`)) && !near(await freq(p), ne0), "the full stop alone still tunes up (it does not open the box)");
+  await p.key("9");
+  ok(await p.until(`document.querySelector("#freqPanel.open") && document.activeElement?.id === "freqInput"`, 2000), "9 opens the frequency box with the cursor in it");
+  ok((await p.js(`document.getElementById("freqInput").value`)) === "9", `…and 9 already typed (${await p.js(`document.getElementById("freqInput").value`)})`);
+  for (const k of ["6", ".", "6"]) await p.key(k);
+  ok((await p.js(`document.getElementById("freqInput").value`)) === "96.6", `6 . 6 carry on in the box (${await p.js(`document.getElementById("freqInput").value`)})`);
+  await p.key("Enter");
+  ok(await p.until(`!document.querySelector("#freqPanel.open")`, 3000), "Enter tunes and closes the box");
+  ok(await p.until(`Math.abs(parseFloat(document.getElementById("freqInput").value) - 96.6) < 1e-6`, 4000), `tuned 96.6 MHz (${await freq(p)})`);
+  // a fast typist: no pause between the keys
+  for (const k of ["0", ".", "6", "4", "8"]) await p.key(k);
+  ok((await p.js(`document.getElementById("freqInput").value`)) === "0.648", `0 .648 typed straight through (${await p.js(`document.getElementById("freqInput").value`)})`);
+  await p.key("Escape"); await p.key("Escape");
 
   ok(p.errors.length === 0, "no JavaScript errors" + (p.errors.length ? ": " + p.errors.slice(0, 2).join(" | ") : ""));
   p.ws.close();

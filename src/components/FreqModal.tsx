@@ -45,6 +45,10 @@ interface FreqModalProps {
   visible:   boolean;
   currentHz: number;
   onConfirm: (hz: number) => void;
+  /** ★★ DIRECT NUMBER ENTRY (Stuart, 2026-11-07): the digits typed on a hardware keyboard with nobody in a field
+   *  (hardwareKeys addDigitListener). A new `seq` puts `text` in the frequency field with the cursor in it, after the
+   *  text — the next key lands there, and the field's Enter tunes. */
+  typed?: { text: string; seq: number } | null;
   onClose:   () => void;
   /** Controlled unit — selection here also drives the main frequency display. */
   unit?:     Unit;
@@ -245,7 +249,7 @@ export default function FreqModal({
   eibiEnabled = true, onEibiToggle, userBookmarks = [],
   onAddBookmark, onDeleteBookmark, onToggleBookmarkSync, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onPickShare, vfoAB = false, onVfoAB,
-  onEditBookmark, onEditServerBookmark, currentPassband = null,
+  onEditBookmark, onEditServerBookmark, currentPassband = null, typed = null,
 }: FreqModalProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const picking = !!onPickShare;
@@ -377,10 +381,12 @@ export default function FreqModal({
   }, [unitProp]);
 
   useEffect(() => {
+    if (!visible) typedActive.current = false;
     if (visible) {
       // ★ Pre-fill the bookmark name so SAVE works at once — a pad cannot type one (decided 10-20); still editable.
       setBmName(defaultBookmarkName || bookmarkFreqLabel(currentHz));
-      setValue(toDisplay(currentHz, unit));
+      // ★ never over what is being typed (the dial reporting in while a typed entry is under way)
+      if (!typedActive.current) setValue(toDisplay(currentHz, unit));
       setDraftVts(null);   // start from the tuned station; typing takes over
       // ★ Come back to the list you were working through — see stickySearch.
       const sticky = stickySearch && (Date.now() - stickySearch.at) < SEARCH_STICKY_MS
@@ -414,6 +420,34 @@ export default function FreqModal({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, currentHz]);
+
+  /* ★★★ DIRECT NUMBER ENTRY — THE ONE ROUTE THAT PUTS THE CURSOR IN THE FIELD (Stuart, 2026-11-07: "If a user starts
+   *     typing a number say I press the 9 key then the frequency entry box needs to pop up with the number 9 already
+   *     entered and then i can continue to type 6.6 then press enter"). The card still opens inert for a tap or a
+   *     click ("we want to click the field", above); a DIGIT typed on a hardware keyboard is somebody already typing a
+   *     frequency, so here the field takes the text and the cursor, after the text — never the select-all, which would
+   *     let the next digit replace the first. A hardware keyboard raises no on-screen one. */
+  const typedActive = useRef(false);
+  const typedFocus = useRef(false);
+  useEffect(() => {
+    if (!visible || !typed) return;
+    typedActive.current = true;
+    typedFocus.current = true;
+    setCardMode('tune');
+    setValue(typed.text);
+    setEntryMsg('');
+    setDraftVts(vtsLookup ? (() => { const hz = fromDisplay(typed.text, unit); return hz > 0 ? vtsLookup(hz) : null; })() : null);
+    const end = typed.text.length;
+    const focusNow = () => {
+      if (!inputRef.current) return;
+      if (inputRef.current.isFocused()) { inputRef.current.setSelection(end, end); return; }
+      inputRef.current.focus();
+    };
+    // ★ the Modal mounts its children a frame after `visible` — try at once, then again once it has
+    const t1 = setTimeout(focusNow, 0), t2 = setTimeout(focusNow, 120);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, typed?.seq]);
 
   // Read through a ref so the key listener never captures a stale `value`/`unit`.
   const switchUnitRef = useRef<(u: Unit) => void>(() => {});
@@ -964,7 +998,14 @@ export default function FreqModal({
                 // ★ The highlight sits on the field while it has the cursor, however the cursor got there (a tap, or
                 //   Enter on the highlighted box) — so when Escape lets go of it, the arrows carry on from HERE.
                 if (tuneLayout.start >= 0) tuneNavHandle.current?.setFocus(tuneLayout.start);
-                if (onMac) replaceOnType.current = true;
+                if (typedFocus.current) {
+                  // ★ a typed entry: the cursor after the digits, nothing selected (selectTextOnFocus lands first)
+                  typedFocus.current = false;
+                  replaceOnType.current = false;
+                  const end = valueRef.current.length;
+                  requestAnimationFrame(() => inputRef.current?.setSelection(end, end));
+                  setTimeout(() => inputRef.current?.setSelection(end, end), 40);
+                } else if (onMac) replaceOnType.current = true;
                 else if (Platform.OS === 'android') {
                   const len = valueRef.current.length;
                   requestAnimationFrame(() => inputRef.current?.setSelection(0, len));

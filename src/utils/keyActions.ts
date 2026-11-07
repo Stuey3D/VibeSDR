@@ -11,6 +11,7 @@
  *   Backspace, Escape .......... back (close the top panel or menu; leave adjust mode)
  *   < >  (, . unshifted) ....... tune down / up one step
  *   - +  (= unshifted, numpad) . zoom out / in
+ *   0 – 9 ...................... open the frequency entry with that digit typed (keyDigit; never the full stop)
  *
  * Nothing else. Every older shortcut (letters that opened panels, mode letters, mute, step cycling, Shift×10, the
  * arrows tuning and zooming) is gone — a keyboard now does exactly what a pad or a remote does, so there is one
@@ -51,6 +52,15 @@ export function keyAction(key: string | null | undefined, mods?: KeyMods): KeyAc
   if (!key) return null;
   if (mods && (mods.ctrl || mods.meta || mods.alt)) return null;
   return MAP[key] ?? null;
+}
+
+/** ★★ DIRECT NUMBER ENTRY (Stuart, 2026-11-07): a digit key (top row or number pad — both report '0'…'9') typed with
+ *  nobody in a text field opens the frequency entry with that digit already in it; the rest is typed into the box and
+ *  its Enter tunes. Only a DIGIT starts it — the full stop is tune up ('.'), so MW in MHz is typed 0 .648. Not one of
+ *  the KeyActions (a digit is text for the box, not an action), so the callers ask this before keyAction. */
+export function keyDigit(key: string | null | undefined, mods?: KeyMods): boolean {
+  if (!key || key.length !== 1 || key < '0' || key > '9') return false;
+  return !(mods && (mods.ctrl || mods.meta || mods.alt));
 }
 
 /** Movement keys, in the shape the highlight code wants. */

@@ -12,6 +12,7 @@
  *   'Enter'                                          select
  *   'Back'                                           back (Backspace, Escape, forward Delete)
  *   'TuneDown' 'TuneUp' 'ZoomOut' 'ZoomIn'           tune and zoom (< > , .  - + = _)
+ *   0 – 9 (addDigitListener, not the bus)            open the frequency card with that digit typed
  *
  * ★ `plain` is false for anything that is not the physical arrow key it stands for (W A S D) — the Full Keyboard
  *   Access detector needs that, see PanelNav noteKeyForFka.
@@ -33,7 +34,7 @@
  */
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { KeyBus, type HwKey, type HwKeyEvent } from './keyActions';
+import { KeyBus, keyDigit, type HwKey, type HwKeyEvent } from './keyActions';
 import { PadMapper, type PadButton, type PadOut, type PadProfile, type PadReport } from './padActions';
 import { inputSource } from './inputSource';
 
@@ -51,8 +52,14 @@ function ensureNative() {
     // ★ The last input source (src/utils/inputSource.ts) is set HERE, before any listener hears the key: a physical
     //   key is 'keyboard', a pad report 'pad' (runPad). Only keys that are ours count — but a key typed into a field
     //   still says a keyboard is in use.
-    em.addListener('VibeKeyDown', (r: any) => { if (r?.key) inputSource.set('keyboard'); bus.dispatch('down', r); }),
-    em.addListener('VibeKeyUp', (r: any) => bus.dispatch('up', r)),
+    em.addListener('VibeKeyDown', (r: any) => {
+      if (r?.key) inputSource.set('keyboard');
+      // ★★ DIRECT NUMBER ENTRY: a digit is text for the frequency card, not an action — it goes to its own listeners
+      //    (never while a field has the cursor: the native side sends a digit only when nobody is typing)
+      if (keyDigit(r?.key)) { if (!r?.typing) digitListeners.forEach((f) => { try { f(r.key); } catch { /* a listener's fault */ } }); return; }
+      bus.dispatch('down', r);
+    }),
+    em.addListener('VibeKeyUp', (r: any) => { if (!keyDigit(r?.key)) bus.dispatch('up', r); }),
     em.addListener('VibePad', (r: any) => onPad(r)),
   ];
 }
@@ -99,6 +106,16 @@ export function addPadKbListener(f: (o: { kbButton: PadButton; profile: PadProfi
   ensureNative();
   padKbListeners.add(f);
   return { remove: () => { padKbListeners.delete(f); } };
+}
+
+const digitListeners = new Set<(digit: string) => void>();
+/** ★★ DIRECT NUMBER ENTRY (Stuart, 2026-11-07: "If a user starts typing a number say I press the 9 key then the
+ *  frequency entry box needs to pop up with the number 9 already entered"): a digit key ('0'…'9', top row or number
+ *  pad) with nobody typing in a field. The receiver screen opens the frequency card with it (keyActions keyDigit). */
+export function addDigitListener(f: (digit: string) => void): { remove(): void } {
+  ensureNative();
+  digitListeners.add(f);
+  return { remove: () => { digitListeners.delete(f); } };
 }
 
 const swapVfoListeners = new Set<() => void>();

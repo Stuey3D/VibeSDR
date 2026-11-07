@@ -11763,6 +11763,11 @@ function closePanels(reopenChat = true) {
   //   here — Escape, a click away, opening something else. Telling it from the button handlers
   //   alone would leave the count frozen at zero after any of the other three.
   if (isPanelOpen('chatPanel')) chatOpened(false);
+  // ★★ A FIELD IN A PANEL THAT CLOSES LETS GO OF THE CURSOR (2026-11-07, direct number entry): the frequency box
+  //    closed on Enter kept the focus until its fade ended, so the next number typed went INTO the hidden box (96.6
+  //    then 0 read 96.60) instead of opening it afresh — and every key meanwhile was "typing", so none was ours.
+  const ae = document.activeElement;
+  if (ae instanceof HTMLElement && PANELS.some((id) => document.getElementById(id)?.contains(ae))) ae.blur();
   for (const id of PANELS) $(id).classList.remove('open');
   if (!keepSharePick) endSharePick(reopenChat);
 }
@@ -19082,15 +19087,28 @@ function setFreqUnit(u: FreqUnit) {
  *  dead press: the padlock says the box is shut, this says why and what to do about it (Stuart,
  *  2026-09-25: "advise it is locked due to DAB mode, or EXIT DAB MODE TO USE").
  *  ★ It used to be the onclick of the retired desktop bar's hidden #pill, which the card CLICKED. */
-function openFreqEntry() {
+function openFreqEntry(typed?: string) {
   if (dabOn) { showTuneGapMsg('Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
   if (adsbOn) { showTuneGapMsg('Frequency is locked in ADS-B — the receiver is held on 1090 MHz. Press EXIT ADS-B to tune.'); return; }
   // ★ ISM: the box stays open — a typed frequency puts the capture there for an odd device (see go() below)
-  togglePanel('freqPanel');
+  if (typed === undefined || !isPanelOpen('freqPanel')) togglePanel('freqPanel');
   abRowPaint();
   const el = $<HTMLInputElement>('freqInput');
-  el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
   $('freqMsg').textContent = '';
+  if (typed !== undefined) {
+    /* ★★★ DIRECT NUMBER ENTRY (Stuart, 2026-11-07: "If a user starts typing a number say I press the 9 key then the
+     *     frequency entry box needs to pop up with the number 9 already entered and then i can continue to type 6.6
+     *     then press enter"). The digit that opened it is the box's first character, the caret after it, and the field
+     *     has the focus AT ONCE — the next key a fast typist presses must land in it, not on the page. Only a DIGIT opens
+     *     it: the full stop is tune up (keyActions.ts), so MW in MHz is 0 .648. The box's own Enter tunes. */
+    el.value = typed;
+    el.focus();
+    el.setSelectionRange(typed.length, typed.length);
+    el.dispatchEvent(new Event('input'));          // the airband channel hint, as if typed
+    setTimeout(() => { if (document.activeElement !== el && isPanelOpen('freqPanel')) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 60);
+    return;
+  }
+  el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
   setTimeout(() => { el.focus(); el.select(); }, 60);
 }
 
@@ -20861,6 +20879,7 @@ function initKeyboard() {
   initGamepad({
     tune: (d) => { if (spec) nudge(d * step); },
     swapVfo: () => spec?.swapVfo(),   // ★★ V12 VFO A/B — V on a keyboard, △ / START tap on a pad (gamepad.ts)
+    typeFreq: (digit) => { if (spec) openFreqEntry(digit); },   // ★★ a digit typed on the page opens the box with it
     zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
     back: () => {
       // ★ The admin panel is not a .open panel (it is shown by `hidden`), so it is asked for by name; it sits above all.
