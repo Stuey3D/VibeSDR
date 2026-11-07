@@ -112,9 +112,9 @@ class Hwd:
         self.clients = set()          # writers of every connection
         self.subscribers = set()
         self.acks = set()
-        # ★ cpuMax: the CPU SPEED cap (kHz). 1104 MHz by default (Stuart, 2026-11-07: a Pi 2 runs a whole server at
+        # ★ cpuMax: the CPU SPEED cap (kHz). 1008 MHz by default (Stuart, 2026-11-07: "try 1.0GHz" — 1.175 V against 1.30 V at 1104, a quarter less energy per unit of work; a Pi 2 runs a whole server at
         #   900 MHz; the A35s' top steps cost the most power per unit of work) — FULL = 1296000
-        self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME, "cpuMax": 1104000}
+        self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME, "cpuMax": 1008000}
         try:
             with open(HWD_JSON) as f:
                 self.cfg.update({k: v for k, v in json.load(f).items() if k in self.cfg})
@@ -157,7 +157,7 @@ class Hwd:
 
     def apply_cpu(self):
         steps = self.cpu_steps()
-        want = int(self.cfg.get("cpuMax", 1104000))
+        want = int(self.cfg.get("cpuMax", 1008000))
         ok = [f for f in steps if f <= want] or steps[:1]
         if not ok:
             return
