@@ -43,11 +43,11 @@ public:
             "#version 300 es\nlayout(location=0) in vec2 p; layout(location=1) in vec2 uv; layout(location=2) in vec4 c;\n"
             "uniform vec2 uView; out vec2 vUv; out vec4 vC;\n"
             "void main(){ vUv=uv; vC=c; gl_Position=vec4(p.x/uView.x*2.0-1.0, 1.0-p.y/uView.y*2.0, 0.0, 1.0); }\n",
-            "#version 300 es\nprecision mediump float; in vec2 vUv; in vec4 vC; uniform sampler2D uTex; uniform float uUseTex;\n"
-            "out vec4 o; void main(){ vec4 t = uUseTex > 0.5 ? texture(uTex, vUv) : vec4(1.0); o = vC * t; }\n");
+            // ★ uv.x < 0 = a solid (no texture read) — so shapes never force a batch break (one draw a frame, text.h)
+            "#version 300 es\nprecision mediump float; in vec2 vUv; in vec4 vC; uniform sampler2D uTex;\n"
+            "out vec4 o; void main(){ vec4 t = vUv.x < -0.5 ? vec4(1.0) : texture(uTex, vUv); o = vC * t; }\n");
         uView_ = glGetUniformLocation(prog_, "uView");
         uTex_ = glGetUniformLocation(prog_, "uTex");
-        uUseTex_ = glGetUniformLocation(prog_, "uUseTex");
         glGenVertexArrays(1, &vao_);
         glGenBuffers(1, &vbo_);
         glBindVertexArray(vao_);
@@ -60,7 +60,7 @@ public:
     int width() const { return w_; }
     int height() const { return h_; }
 
-    void rect(float x, float y, float w, float h, Rgba c) { use(0); quad(x, y, w, h, 0, 0, 0, 0, c); }
+    void rect(float x, float y, float w, float h, Rgba c) { use(0); quad(x, y, w, h, -1, -1, -1, -1, c); }
     void frame(float x, float y, float w, float h, float t, Rgba c) {
         rect(x, y, w, t, c); rect(x, y + h - t, w, t, c); rect(x, y + t, t, h - 2 * t, c); rect(x + w - t, y + t, t, h - 2 * t, c);
     }
@@ -70,8 +70,8 @@ public:
         const float dx = x1 - x0, dy = y1 - y0, l = std::sqrt(dx * dx + dy * dy);
         if (l <= 0) return;
         const float nx = -dy / l * t * 0.5f, ny = dx / l * t * 0.5f;
-        tri({x0 + nx, y0 + ny, 0, 0, c}, {x1 + nx, y1 + ny, 0, 0, c}, {x1 - nx, y1 - ny, 0, 0, c});
-        tri({x0 + nx, y0 + ny, 0, 0, c}, {x1 - nx, y1 - ny, 0, 0, c}, {x0 - nx, y0 - ny, 0, 0, c});
+        tri({x0 + nx, y0 + ny, -1, -1, c}, {x1 + nx, y1 + ny, -1, -1, c}, {x1 - nx, y1 - ny, -1, -1, c});
+        tri({x0 + nx, y0 + ny, -1, -1, c}, {x1 - nx, y1 - ny, -1, -1, c}, {x0 - nx, y0 - ny, -1, -1, c});
     }
     /** A filled disc, or a ring of thickness `t` (t <= 0 = filled). */
     void circle(float cx, float cy, float r, float t, Rgba c) {
@@ -80,11 +80,11 @@ public:
         for (int i = 0; i < n; i++) {
             const float a0 = (float)i / n * 6.2831853f, a1 = (float)(i + 1) / n * 6.2831853f;
             const float c0 = std::cos(a0), s0 = std::sin(a0), c1 = std::cos(a1), s1 = std::sin(a1);
-            if (t <= 0) tri({cx, cy, 0, 0, c}, {cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * r, cy + s1 * r, 0, 0, c});
+            if (t <= 0) tri({cx, cy, -1, -1, c}, {cx + c0 * r, cy + s0 * r, -1, -1, c}, {cx + c1 * r, cy + s1 * r, -1, -1, c});
             else {
                 const float ri = r - t;
-                tri({cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * r, cy + s1 * r, 0, 0, c}, {cx + c1 * ri, cy + s1 * ri, 0, 0, c});
-                tri({cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * ri, cy + s1 * ri, 0, 0, c}, {cx + c0 * ri, cy + s0 * ri, 0, 0, c});
+                tri({cx + c0 * r, cy + s0 * r, -1, -1, c}, {cx + c1 * r, cy + s1 * r, -1, -1, c}, {cx + c1 * ri, cy + s1 * ri, -1, -1, c});
+                tri({cx + c0 * r, cy + s0 * r, -1, -1, c}, {cx + c1 * ri, cy + s1 * ri, -1, -1, c}, {cx + c0 * ri, cy + s0 * ri, -1, -1, c});
             }
         }
     }
@@ -92,10 +92,10 @@ public:
     void rrect(float x, float y, float w, float h, float r, Rgba c) {
         use(0);
         r = std::max(0.f, std::min(r, std::min(w, h) * 0.5f));
-        if (r < 0.5f) { quad(x, y, w, h, 0, 0, 0, 0, c); return; }
-        quad(x + r, y, w - 2 * r, h, 0, 0, 0, 0, c);
-        quad(x, y + r, r, h - 2 * r, 0, 0, 0, 0, c);
-        quad(x + w - r, y + r, r, h - 2 * r, 0, 0, 0, 0, c);
+        if (r < 0.5f) { quad(x, y, w, h, -1, -1, -1, -1, c); return; }
+        quad(x + r, y, w - 2 * r, h, -1, -1, -1, -1, c);
+        quad(x, y + r, r, h - 2 * r, -1, -1, -1, -1, c);
+        quad(x + w - r, y + r, r, h - 2 * r, -1, -1, -1, -1, c);
         corner(x + r, y + r, r, 0, 0, c, 2); corner(x + w - r, y + r, r, 0, 0, c, 3);
         corner(x + w - r, y + h - r, r, 0, 0, c, 0); corner(x + r, y + h - r, r, 0, 0, c, 1);
     }
@@ -104,8 +104,8 @@ public:
         use(0);
         r = std::max(0.f, std::min(r, std::min(w, h) * 0.5f));
         if (r < t) { frame(x, y, w, h, t, c); return; }
-        quad(x + r, y, w - 2 * r, t, 0, 0, 0, 0, c); quad(x + r, y + h - t, w - 2 * r, t, 0, 0, 0, 0, c);
-        quad(x, y + r, t, h - 2 * r, 0, 0, 0, 0, c); quad(x + w - t, y + r, t, h - 2 * r, 0, 0, 0, 0, c);
+        quad(x + r, y, w - 2 * r, t, -1, -1, -1, -1, c); quad(x + r, y + h - t, w - 2 * r, t, -1, -1, -1, -1, c);
+        quad(x, y + r, t, h - 2 * r, -1, -1, -1, -1, c); quad(x + w - t, y + r, t, h - 2 * r, -1, -1, -1, -1, c);
         corner(x + r, y + r, r, r - t, 0, c, 2); corner(x + w - r, y + r, r, r - t, 0, c, 3);
         corner(x + w - r, y + h - r, r, r - t, 0, c, 0); corner(x + r, y + h - r, r, r - t, 0, c, 1);
     }
@@ -114,8 +114,8 @@ public:
         use(0);
         for (int i = 1; i < n; i++) {
             const float x0 = x + w * pos[i - 1], x1 = x + w * pos[i];
-            tri({x0, y, 0, 0, cols[i - 1]}, {x1, y, 0, 0, cols[i]}, {x1, y + h, 0, 0, cols[i]});
-            tri({x0, y, 0, 0, cols[i - 1]}, {x1, y + h, 0, 0, cols[i]}, {x0, y + h, 0, 0, cols[i - 1]});
+            tri({x0, y, -1, -1, cols[i - 1]}, {x1, y, -1, -1, cols[i]}, {x1, y + h, -1, -1, cols[i]});
+            tri({x0, y, -1, -1, cols[i - 1]}, {x1, y + h, -1, -1, cols[i]}, {x0, y + h, -1, -1, cols[i - 1]});
         }
     }
     /** Clip everything after this to a rectangle (top-left coordinates) until unclip(). Flushes. */
@@ -127,7 +127,11 @@ public:
     void unclip() { flush(); glDisable(GL_SCISSOR_TEST); }
 
     /** A filled triangle. */
-    void triangle(float x0, float y0, float x1, float y1, float x2, float y2, Rgba c) { use(0); tri({x0, y0, 0, 0, c}, {x1, y1, 0, 0, c}, {x2, y2, 0, 0, c}); }
+    void triangle(float x0, float y0, float x1, float y1, float x2, float y2, Rgba c) { use(0); tri({x0, y0, -1, -1, c}, {x1, y1, -1, -1, c}, {x2, y2, -1, -1, c}); }
+    /** A textured quad from part of a texture (the glyph atlas). */
+    void imageUV(GLuint tex, float x, float y, float w, float h, float u0, float v0, float u1, float v1, Rgba c) { use(tex); quad(x, y, w, h, u0, v0, u1, v1, c); }
+    /** Batches drawn since the last call (the perf line). */
+    int takeFlushes() { const int n = flushes_; flushes_ = 0; return n; }
     /** A textured quad (text). */
     void image(GLuint tex, float x, float y, float w, float h, Rgba c = {1, 1, 1, 1}) { use(tex); quad(x, y, w, h, 0, 0, 1, 1, c); }
 
@@ -135,8 +139,8 @@ public:
     void traceFill(const std::vector<float>& xs, const std::vector<float>& ys, float baseY, Rgba fill) {
         use(0);
         for (size_t i = 1; i < xs.size(); i++) {
-            tri({xs[i - 1], ys[i - 1], 0, 0, fill}, {xs[i], ys[i], 0, 0, fill}, {xs[i], baseY, 0, 0, fill});
-            tri({xs[i - 1], ys[i - 1], 0, 0, fill}, {xs[i], baseY, 0, 0, fill}, {xs[i - 1], baseY, 0, 0, fill});
+            tri({xs[i - 1], ys[i - 1], -1, -1, fill}, {xs[i], ys[i], -1, -1, fill}, {xs[i], baseY, -1, -1, fill});
+            tri({xs[i - 1], ys[i - 1], -1, -1, fill}, {xs[i], baseY, -1, -1, fill}, {xs[i - 1], baseY, -1, -1, fill});
         }
     }
 
@@ -145,7 +149,6 @@ public:
         glUseProgram(prog_);
         glUniform2f(uView_, (float)w_, (float)h_);
         glUniform1i(uTex_, 0);
-        glUniform1f(uUseTex_, tex_ ? 1.f : 0.f);
         if (tex_) { glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex_); }
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -153,6 +156,7 @@ public:
         glBindBuffer(GL_ARRAY_BUFFER, vbo_);
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(verts_.size() * sizeof(V)), verts_.data(), GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLES, 0, (GLsizei)verts_.size());
+        flushes_++;
         glBindVertexArray(0);
         verts_.clear();
     }
@@ -161,10 +165,11 @@ private:
     struct V { float x, y, u, v; Rgba c; };
     int w_ = 640, h_ = 480;
     GLuint prog_ = 0, vao_ = 0, vbo_ = 0, tex_ = 0;
-    GLint uView_ = -1, uTex_ = -1, uUseTex_ = -1;
+    GLint uView_ = -1, uTex_ = -1;
     std::vector<V> verts_;
+    int flushes_ = 0;
 
-    void use(GLuint tex) { if (tex != tex_) { flush(); tex_ = tex; } }
+    void use(GLuint tex) { if (tex == 0) return; if (tex != tex_) { flush(); tex_ = tex; } }
     /** A quarter disc / ring at (cx, cy): q 0 = bottom-right, 1 = bottom-left, 2 = top-left, 3 = top-right. */
     void corner(float cx, float cy, float r, float ri, float, Rgba c, int q) {
         const int n = 6;
@@ -172,10 +177,10 @@ private:
         for (int i = 0; i < n; i++) {
             const float t0 = a0 + i * 1.5707963f / n, t1 = a0 + (i + 1) * 1.5707963f / n;
             const float c0 = std::cos(t0), s0 = std::sin(t0), c1 = std::cos(t1), s1 = std::sin(t1);
-            if (ri <= 0) tri({cx, cy, 0, 0, c}, {cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * r, cy + s1 * r, 0, 0, c});
+            if (ri <= 0) tri({cx, cy, -1, -1, c}, {cx + c0 * r, cy + s0 * r, -1, -1, c}, {cx + c1 * r, cy + s1 * r, -1, -1, c});
             else {
-                tri({cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * r, cy + s1 * r, 0, 0, c}, {cx + c1 * ri, cy + s1 * ri, 0, 0, c});
-                tri({cx + c0 * r, cy + s0 * r, 0, 0, c}, {cx + c1 * ri, cy + s1 * ri, 0, 0, c}, {cx + c0 * ri, cy + s0 * ri, 0, 0, c});
+                tri({cx + c0 * r, cy + s0 * r, -1, -1, c}, {cx + c1 * r, cy + s1 * r, -1, -1, c}, {cx + c1 * ri, cy + s1 * ri, -1, -1, c});
+                tri({cx + c0 * r, cy + s0 * r, -1, -1, c}, {cx + c1 * ri, cy + s1 * ri, -1, -1, c}, {cx + c0 * ri, cy + s0 * ri, -1, -1, c});
             }
         }
     }

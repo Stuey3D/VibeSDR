@@ -231,7 +231,7 @@ public:
     void stickSweep();
     // ★ PROFILE: the UI thread's own CPU per stage (CLOCK_THREAD_CPUTIME_ID), summed and logged every 30 s — the
     //   handheld13 log had vibe-hhui at 77–85 % of a core on FM, far more than 30 fps of drawing should cost
-    struct Prof { double pre = 0, wf = 0, ui = 0, swap = 0, idle = 0; long loops = 0, frames = 0; double since = 0; } prof_;
+    struct Prof { double pre = 0, wf = 0, ui = 0, swap = 0, idle = 0; long loops = 0, frames = 0, batches = 0; double since = 0; } prof_;
     static double threadCpu() { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec + ts.tv_nsec * 1e-9; }
     void drawAudioSheet(Ctx& c, const RadioState& s);
     void drawMenu(Ctx& c, const RadioState& s);

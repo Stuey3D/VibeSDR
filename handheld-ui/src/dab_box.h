@@ -379,6 +379,8 @@ inline int dabRows(Ctx& c, Scroller& sc, Rect view, int n, float rowH, const std
 
 /** STATIONS: one row per service the receiver can play (the server already drops data / CA / incomplete ones). */
 inline void dabPaneStations(App& a, Ctx& c, const RadioState& s, Rect view, float rowH, bool tiles) {
+    tiles = false;   // ★★ NO LOGO TILES (Stuart, 2026-11-07): logos come from RadioDNS (internet) elsewhere and "very few
+                     //    stations seem to have logos in the UK" — a monogram box on most rows is space for nothing
     DabUi& u = dabUi();
     const Json* rep = dabReport(s);
     if (!rep || !(*rep)["services"].size()) {
@@ -648,14 +650,14 @@ inline void dabDrawBox(App& a, Ctx& c, const RadioState& s) {
         const Rect body{box.x + 8, head.b() + 4, box.w - 22, box.b() - head.b() - 8};
         const Rect now{body.x, body.y + 2, 232, body.h - 2};
         const Rect list{body.x + 244, body.y, body.r() - (body.x + 244), body.h};
-        if (u.pane == DabUi::P_STATIONS) dabNowPlayingBlock(c, s, now, 44, 1);
+        if (u.pane == DabUi::P_STATIONS) dabNowPlayingBlock(c, s, now, 0, 1);
         dabPane(a, c, s, body, list, 26, false);
     } else if (u.layout == DAB_B_STRIP) {
         if (!grabbed) {
             box = {6, 222, 628, 48};
             dabPanel(c, box, 10);
             c.tc.draw(c.g, c.f.tiny, "DAB", box.x + 10, box.y + 4, th::btnText);
-            dabNowPlayingBlock(c, s, {box.x + 46, box.y + 5, box.w - 200, box.h - 8}, 38, 0);
+            dabNowPlayingBlock(c, s, {box.x + 46, box.y + 5, box.w - 200, box.h - 8}, 0, 0);
             hints(c, box.r() - 150, box.cy(), {{FACE_BOTTOM, "STATIONS"}});
         } else {
             box = {6, 44, 628, 226};
@@ -665,7 +667,7 @@ inline void dabDrawBox(App& a, Ctx& c, const RadioState& s) {
             c.g.rect(box.x + 8, head.b(), box.w - 16, 1, th::barBorder);
             const Rect npr{box.x + 10, head.b() + 6, box.w - 20, 46};
             float by = head.b() + 4;
-            if (u.pane == DabUi::P_STATIONS) { dabNowPlayingBlock(c, s, npr, 40, 1); by = npr.b() + 4; c.g.rect(box.x + 8, by, box.w - 16, 1, th::barBorder); by += 4; }
+            if (u.pane == DabUi::P_STATIONS) { dabNowPlayingBlock(c, s, npr, 0, 1); by = npr.b() + 4; c.g.rect(box.x + 8, by, box.w - 16, 1, th::barBorder); by += 4; }
             const Rect body{box.x + 8, by, box.w - 22, box.b() - by - 6};
             dabPane(a, c, s, body, body, 30, true);
         }
@@ -677,11 +679,24 @@ inline void dabDrawBox(App& a, Ctx& c, const RadioState& s) {
         const Rect head{box.x + 2, box.y + 1, box.w - 6, 30};
         dabHeader(a, c, s, head, true);
         c.g.rect(box.x + 8, head.b(), box.w - 16, 1, th::barBorder);
+        // ★★ THE SLIDE COLUMN ONLY WHILE A SLIDESHOW IS ACTUALLY ARRIVING (Stuart, 2026-11-07: "drop the picture and
+        //    reclaim the space"). Without one the station list takes the whole width — the playing row is marked ▶ with
+        //    its codec, and its radio text is in the VTS bar under the box.
+        const bool slideOn = dabImages().slide() && play;
         const Rect slide{10, head.b() + 6, 168, 126};
         const Rect now{10, slide.b() + 4, 172, box.b() - slide.b() - 6};
-        const Rect list{192, head.b() + 6, box.w - 192 - 14, box.b() - head.b() - 10};
+        Rect list{192, head.b() + 6, box.w - 192 - 14, box.b() - head.b() - 10};
+        if (!slideOn) {
+            list = {10, head.b() + 6, box.w - 24, box.b() - head.b() - 10};
+            if (!u.waiting.empty() && u.pane == DabUi::P_STATIONS) {
+                // the "Tuning in…" line, which lived under the slide, sits over the list's top edge while it shows
+                const Rect wl{list.x, list.y, list.w, 22};
+                c.tc.draw(c.g, c.f.small, dabFit(c, c.f.small, u.waiting, (int)wl.w), wl.x + 4, wl.y + 2, th::amber);
+                list.y += 24; list.h -= 24;
+            }
+        }
         const Rect body{10, head.b() + 6, box.w - 24, box.b() - head.b() - 10};
-        if (u.pane == DabUi::P_STATIONS) {
+        if (u.pane == DabUi::P_STATIONS && slideOn) {
             // ★ the slide is a stop of its own when there is one: ENTER shows it full screen
             bool fsl = false;
             if (dabImages().slide() && play) {

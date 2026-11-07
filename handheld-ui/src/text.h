@@ -1,6 +1,12 @@
-// text.h — text for vibe-hhui: SDL_ttf renders a string once into a GL texture, cached by (font, text); the cache
-// keeps what was drawn in the last few seconds and frees the rest, so a ticking clock or a moving frequency never
-// grows memory. ★ White glyphs, tinted by the quad colour — one texture serves every colour.
+// text.h — text for vibe-hhui through ONE GLYPH ATLAS: SDL_ttf renders each glyph (font, code point) once into a
+// 1024×1024 texture, and a string is laid out from those glyphs (advance + kerning) as textured quads.
+//
+// ★★★ WHY AN ATLAS (handheld14 log, 2026-11-07): with a texture per string every string was its own batch — a hundred
+//     glBufferData + draws a frame — and on Panfrost that cost 20–40 ms of the UI thread's CPU per frame (80–95 % of a
+//     core; 0.5 ms on the Mac's driver). Now text and shapes share one texture (solids use uv −1: no sample, see
+//     gfx.h), so the whole UI is a single batch a frame.
+// ★ White glyphs, tinted by the quad colour — one glyph serves every colour. The atlas is never evicted mid-frame:
+//   if it ever fills (it holds every face and size the UI uses many times over), it is cleared at the next frame start.
 #pragma once
 #include "gfx.h"
 
@@ -8,15 +14,15 @@
 #include <SDL2/SDL_ttf.h>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
-#include <tuple>
-#include <vector>
 #include <string>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace hh {
-
-struct TextTex { GLuint tex = 0; int w = 0, h = 0; uint64_t lastUse = 0; };
 
 class Font {
 public:
@@ -39,16 +45,24 @@ public:
     /** Draw `s` with its top-left at (x, y). align: 0 left, 1 centre, 2 right of x. Returns the width drawn. */
     int draw(Gfx& g, const Font& f, const std::string& s, float x, float y, Rgba c, int align = 0) {
         if (s.empty() || !f.get()) return 0;
-        TextTex& t = get(f, s);
-        if (!t.tex) return 0;
-        const float ox = align == 1 ? x - t.w / 2.f : align == 2 ? x - t.w : x;
-        g.image(t.tex, ox, y, (float)t.w, (float)t.h, c);
-        return t.w;
+        const int w = width(f, s);
+        float pen = std::round(align == 1 ? x - w / 2.f : align == 2 ? x - w : x);
+        const float top = std::round(y);
+        Uint32 prev = 0;
+        for (Uint32 cp : decode(s)) {
+            if (prev) pen += kern(f, prev, cp);
+            const Glyph& gl = glyph(f, cp);
+            if (gl.w > 0) g.imageUV(atlas_, pen, top, (float)gl.w, (float)gl.h, gl.u0, gl.v0, gl.u1, gl.v1, c);
+            pen += gl.adv;
+            prev = cp;
+        }
+        return w;
     }
     int width(const Font& f, const std::string& s) {
         if (s.empty() || !f.get()) return 0;
-        int w = 0, h = 0;
-        TTF_SizeUTF8(f.get(), s.c_str(), &w, &h);
+        int w = 0;
+        Uint32 prev = 0;
+        for (Uint32 cp : decode(s)) { if (prev) w += kern(f, prev, cp); w += glyph(f, cp).adv; prev = cp; }
         return w;
     }
     /** Like draw(), but digits sit in cells of one width (the font's widest digit) — a readout that changes never
@@ -56,32 +70,25 @@ public:
     int drawTab(Gfx& g, const Font& f, const std::string& s, float x, float y, Rgba c, int align = 0) {
         if (s.empty() || !f.get()) return 0;
         const int w = widthTab(f, s);
-        float cx = align == 1 ? x - w / 2.f : align == 2 ? x - w : x;
+        float cx = std::round(align == 1 ? x - w / 2.f : align == 2 ? x - w : x);
+        const float top = std::round(y);
         const int dw = digitW(f);
-        size_t i = 0;
-        while (i < s.size()) {
-            size_t n = 1;
-            const unsigned char ch = (unsigned char)s[i];
-            if (ch >= 0xF0) n = 4; else if (ch >= 0xE0) n = 3; else if (ch >= 0xC0) n = 2;
-            const std::string one = s.substr(i, n);
-            i += n;
-            TextTex& t = get(f, one);
-            if (ch >= '0' && ch <= '9') { if (t.tex) g.image(t.tex, cx + (dw - t.w) / 2.f, y, (float)t.w, (float)t.h, c); cx += dw; }
-            else { if (t.tex) g.image(t.tex, cx, y, (float)t.w, (float)t.h, c); cx += adv(f, one); }
+        for (Uint32 cp : decode(s)) {
+            const Glyph& gl = glyph(f, cp);
+            if (cp >= '0' && cp <= '9') {
+                if (gl.w > 0) g.imageUV(atlas_, std::round(cx + (dw - gl.adv) / 2.f), top, (float)gl.w, (float)gl.h, gl.u0, gl.v0, gl.u1, gl.v1, c);
+                cx += dw;
+            } else {
+                if (gl.w > 0) g.imageUV(atlas_, cx, top, (float)gl.w, (float)gl.h, gl.u0, gl.v0, gl.u1, gl.v1, c);
+                cx += gl.adv;
+            }
         }
         return w;
     }
     int widthTab(const Font& f, const std::string& s) {
         int w = 0;
         const int dw = digitW(f);
-        size_t i = 0;
-        while (i < s.size()) {
-            size_t n = 1;
-            const unsigned char ch = (unsigned char)s[i];
-            if (ch >= 0xF0) n = 4; else if (ch >= 0xE0) n = 3; else if (ch >= 0xC0) n = 2;
-            w += (ch >= '0' && ch <= '9') ? dw : adv(f, s.substr(i, n));
-            i += n;
-        }
+        for (Uint32 cp : decode(s)) w += (cp >= '0' && cp <= '9') ? dw : glyph(f, cp).adv;
         return w;
     }
     /** Word-wrap `s` to `maxW` pixels (cached). Explicit '\n' breaks a line. */
@@ -107,55 +114,102 @@ public:
         if (wraps_.size() > 400) wraps_.clear();
         return wraps_[key] = out;
     }
-    /** Once a frame: forget what has not been drawn for ~5 s. */
+    /** Once a frame, before anything is drawn: a full atlas is cleared here (never mid-frame). */
     void tick(uint64_t frame) {
         frame_ = frame;
-        if (frame % 60) return;
-        for (auto it = cache_.begin(); it != cache_.end();) {
-            if (frame - it->second.lastUse > 150) { glDeleteTextures(1, &it->second.tex); it = cache_.erase(it); }
-            else ++it;
-        }
+        if (full_) { glyphs_.clear(); penX_ = 1; penY_ = 1; rowH_ = 0; full_ = false; ++clears_; }
     }
+    int glyphsMade() const { return made_; }
+    int atlasClears() const { return clears_; }
+
 private:
-    std::map<std::pair<const void*, std::string>, TextTex> cache_;
+    struct Glyph { float u0 = 0, v0 = 0, u1 = 0, v1 = 0; int w = 0, h = 0, adv = 0; };
+    static constexpr int AW = 1024, AH = 1024;
+    GLuint atlas_ = 0;
+    int penX_ = 1, penY_ = 1, rowH_ = 0, made_ = 0, clears_ = 0;
+    bool full_ = false;
+    std::map<std::pair<const void*, Uint32>, Glyph> glyphs_;
+    std::map<std::tuple<const void*, Uint32, Uint32>, int> kerns_;
     std::map<std::tuple<const void*, std::string, int>, std::vector<std::string>> wraps_;
     std::map<const void*, int> digitW_;
+    uint64_t frame_ = 0;
+
+    static std::vector<Uint32> decode(const std::string& s) {
+        std::vector<Uint32> out;
+        out.reserve(s.size());
+        for (size_t i = 0; i < s.size();) {
+            const unsigned char c = (unsigned char)s[i];
+            Uint32 cp = c; size_t n = 1;
+            if (c >= 0xF0 && i + 3 < s.size()) { cp = ((c & 7u) << 18) | ((s[i + 1] & 63u) << 12) | ((s[i + 2] & 63u) << 6) | (s[i + 3] & 63u); n = 4; }
+            else if (c >= 0xE0 && i + 2 < s.size()) { cp = ((c & 15u) << 12) | ((s[i + 1] & 63u) << 6) | (s[i + 2] & 63u); n = 3; }
+            else if (c >= 0xC0 && i + 1 < s.size()) { cp = ((c & 31u) << 6) | (s[i + 1] & 63u); n = 2; }
+            out.push_back(cp);
+            i += n;
+        }
+        return out;
+    }
+    int kern(const Font& f, Uint32 a, Uint32 b) {
+        auto key = std::make_tuple((const void*)f.get(), a, b);
+        auto it = kerns_.find(key);
+        if (it != kerns_.end()) return it->second;
+        int k = TTF_GetFontKerningSizeGlyphs32(f.get(), a, b);
+        if (kerns_.size() > 20000) kerns_.clear();
+        return kerns_[key] = k;
+    }
     int digitW(const Font& f) {
         auto it = digitW_.find(f.get());
         if (it != digitW_.end()) return it->second;
         int m = 0;
-        for (char d = '0'; d <= '9'; d++) m = std::max(m, adv(f, std::string(1, d)));
+        for (Uint32 d = '0'; d <= '9'; d++) m = std::max(m, glyph(f, d).adv);
         return digitW_[f.get()] = m;
     }
-    int adv(const Font& f, const std::string& s) { int w = 0, h = 0; TTF_SizeUTF8(f.get(), s.c_str(), &w, &h); return w; }
-    uint64_t frame_ = 0;
-
-    TextTex& get(const Font& f, const std::string& s) {
-        auto key = std::make_pair((const void*)f.get(), s);
-        auto it = cache_.find(key);
-        if (it != cache_.end()) { it->second.lastUse = frame_; return it->second; }
-        TextTex t;
-        t.lastUse = frame_;
-        SDL_Surface* src = TTF_RenderUTF8_Blended(f.get(), s.c_str(), SDL_Color{255, 255, 255, 255});
+    void ensureAtlas() {
+        if (atlas_) return;
+        glGenTextures(1, &atlas_);
+        glBindTexture(GL_TEXTURE_2D, atlas_);
+        std::vector<uint8_t> zero((size_t)AW * AH * 4, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, AW, AH, 0, GL_RGBA, GL_UNSIGNED_BYTE, zero.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    const Glyph& glyph(const Font& f, Uint32 cp) {
+        auto key = std::make_pair((const void*)f.get(), cp);
+        auto it = glyphs_.find(key);
+        if (it != glyphs_.end()) return it->second;
+        ensureAtlas();
+        Glyph gl;
+        int minx = 0, maxx = 0, miny = 0, maxy = 0, adv = 0;
+        if (TTF_GlyphMetrics32(f.get(), cp, &minx, &maxx, &miny, &maxy, &adv) == 0) gl.adv = adv;
+        SDL_Surface* src = (cp > ' ') ? TTF_RenderGlyph32_Blended(f.get(), cp, SDL_Color{255, 255, 255, 255}) : nullptr;
         if (src) {
             SDL_Surface* rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ABGR8888, 0);   // ★ bytes R,G,B,A in memory
             SDL_FreeSurface(src);
             if (rgba) {
-                glGenTextures(1, &t.tex);
-                glBindTexture(GL_TEXTURE_2D, t.tex);
+                const int w = rgba->w, h = rgba->h;
+                if (penX_ + w + 1 > AW) { penX_ = 1; penY_ += rowH_ + 1; rowH_ = 0; }
+                if (penY_ + h + 1 > AH) {
+                    // ★ full: draw nothing for this glyph now, clear at the next frame start (tick) and re-make then
+                    full_ = true;
+                    SDL_FreeSurface(rgba);
+                    static Glyph none; none = gl; return none;
+                }
+                glBindTexture(GL_TEXTURE_2D, atlas_);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, rgba->pitch / 4);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rgba->w, rgba->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba->pixels);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, penX_, penY_, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba->pixels);
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                t.w = rgba->w; t.h = rgba->h;
+                gl.w = w; gl.h = h;
+                gl.u0 = (float)penX_ / AW; gl.v0 = (float)penY_ / AH;
+                gl.u1 = (float)(penX_ + w) / AW; gl.v1 = (float)(penY_ + h) / AH;
+                penX_ += w + 1;
+                rowH_ = std::max(rowH_, h);
+                made_++;
                 SDL_FreeSurface(rgba);
             }
         }
-        return cache_[key] = t;
+        return glyphs_[key] = gl;
     }
 };
 

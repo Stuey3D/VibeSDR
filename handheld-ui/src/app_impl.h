@@ -1106,9 +1106,10 @@ inline int App::run(int argc, char** argv) {
             if (t - prof_.since >= 30) {
                 const double fr = std::max(1L, prof_.frames), el = t - prof_.since;
                 std::fprintf(stderr, "vibe-hhui: perf %.0f s — %ld frames (%.1f fps), %ld loops/s · UI-thread CPU per frame: "
-                             "ticks %.2f ms · waterfall %.2f ms · drawing %.2f ms · swap %.2f ms · total %.0f %% of a core\n",
+                             "ticks %.2f ms · waterfall %.2f ms · drawing %.2f ms · swap %.2f ms · total %.0f %% of a core · %.1f UI batches a frame · %d glyphs made, %d atlas clears\n",
                              el, prof_.frames, prof_.frames / el, (long)(prof_.loops / el), prof_.pre * 1e3 / fr, prof_.wf * 1e3 / fr,
-                             prof_.ui * 1e3 / fr, prof_.swap * 1e3 / fr, 100 * (prof_.pre + prof_.wf + prof_.ui + prof_.swap) / el);
+                             prof_.ui * 1e3 / fr, prof_.swap * 1e3 / fr, 100 * (prof_.pre + prof_.wf + prof_.ui + prof_.swap) / el,
+                             prof_.batches / fr, tc_.glyphsMade(), tc_.atlasClears());
                 prof_ = Prof{}; prof_.since = t;
             }
         }
@@ -1198,6 +1199,7 @@ inline int App::run(int argc, char** argv) {
             quit_ = true;
         }
         { const double c0 = threadCpu(); prof_.ui += c0 - pc; pc = c0; }
+        prof_.batches += g_.takeFlushes();
         SDL_GL_SwapWindow(win_);
         { const double c0 = threadCpu(); prof_.swap += c0 - pc; pc = c0; }
     }
