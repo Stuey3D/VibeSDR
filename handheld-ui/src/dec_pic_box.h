@@ -1,8 +1,8 @@
 // dec_pic_box.h — the PICTURE decoders drawn (dec_pic.h is their state): the picture in the decoder box, WEFAX's ADJ
 // row, the picture FULL SCREEN, and the GALLERY sheet (dec_pic_gallery.h). Included at the end of dec_box.h.
 //
-// ★★ IN THE BOX (over the waterfall, dec_box.h): the picture takes the box's whole body. WEFAX at the box's width with
-//    the NEWEST lines at the foot (a fax machine's view; grabbed, UP / DOWN scroll back up the chart), SSTV whole at the
+// ★★ IN THE BOX (over the waterfall, dec_box.h): the picture takes the box's whole body. WEFAX top down and WHOLE (the
+//    app's fitsWhole: at the box's width until it is taller, then scaled down to stay whole), SSTV whole at the
 //    box's height with its mode and the last picture beside it, HELL's newest strips at the box's width (the text big
 //    enough to read). Grabbed, the picture is a stop: ENTER opens it FULL SCREEN (dab_box.h dabDrawFull's way).
 // ★★ FULL SCREEN (decDrawFull — drawn from the sheet loop, `case S_DEC`): the picture fitted; ENTER zooms 1 → 1.5 → 2 →
@@ -122,8 +122,25 @@ inline void decPicPane(App& a, Ctx& c, const RadioState& s, Rect body, bool grab
                 c.tc.draw(c.g, c.f.tiny, "PREV", qr.r() + 6, qr.y, th::dim);
             }
         }
+    } else if (p->kind == PK_WEFAX) {
+        // ★★★ WEFAX: TOP DOWN, WHOLE (Stuart, 2026-11-07: "the wefax draws from bottom up then gets to about halfway
+        //     then just scrolls. It needs to be top down like the app and web client does"). The app's
+        //     DecoderImageCanvas fitsWhole: the chart starts at the top at the box's width and, once it is taller than
+        //     the box, scales down to stay whole (centred) — the full screen's zoom + pan are for the detail.
+        const float k = std::min(body.w / p->w, body.h / rows);
+        const float dw = p->w * k, dh = rows * k;
+        const Rect pr{body.x + (body.w - dw) / 2, body.y, dw, dh};
+        c.g.clip(body.x, body.y, body.w, body.h);
+        picDraw(c.g, *p, pr, 0, rows, picUOff(*p));
+        c.g.unclip();
+        u.scrollBack = 0;
+        if (u.viewingPrev) {
+            const float w = (float)c.tc.width(c.f.tiny, "PREV") + 18;
+            c.g.rrect(body.x + 6, body.y + 4, w, 18, 9, rgb(0, 0.8f));
+            c.tc.draw(c.g, c.f.tiny, "PREV", body.x + 15, body.y + 5, th::amber);
+        }
     } else {
-        // WEFAX / HELL: at the box's width, the newest at the foot
+        // HELL: at the box's width, the newest at the foot
         const float k = body.w / p->w;
         const float vis = body.h / k;
         if (p->kind == PK_HELL) c.g.rect(body.x, body.y, body.w, std::min(body.h, rows * k), rgb(0xffffff));

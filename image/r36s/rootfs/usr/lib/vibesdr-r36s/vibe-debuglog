@@ -31,6 +31,17 @@ snap() {
   for p in /sys/devices/system/cpu/cpufreq/policy*; do
     echo "$p: gov=$(cat "$p/scaling_governor" 2>/dev/null) cur=$(cat "$p/scaling_cur_freq" 2>/dev/null) min=$(cat "$p/scaling_min_freq" 2>/dev/null) max=$(cat "$p/scaling_max_freq" 2>/dev/null) avail=[$(cat "$p/scaling_available_frequencies" 2>/dev/null)]"
   done
+  # ★★ POWER (Stuart, 2026-11-07: "anything else we can do to improve the battery life" — ~1 h 45 left at 60–70 %):
+  #    the battery's own current + voltage each snapshot (the draw, measured — not guessed from the % slope), and the
+  #    memory + GPU clocks' residency (trans_stat), so a saving is a number before and after
+  for b in /sys/class/power_supply/*; do
+    echo "power $(basename "$b"): status=$(cat "$b/status" 2>/dev/null) cap=$(cat "$b/capacity" 2>/dev/null) uA=$(cat "$b/current_now" 2>/dev/null) uV=$(cat "$b/voltage_now" 2>/dev/null) uAavg=$(cat "$b/current_avg" 2>/dev/null) uW=$(cat "$b/power_now" 2>/dev/null) charge=$(cat "$b/charge_now" 2>/dev/null)"
+  done
+  echo "backlight $(cat /sys/class/backlight/*/brightness 2>/dev/null)/$(cat /sys/class/backlight/*/max_brightness 2>/dev/null)"
+  for g in /sys/class/devfreq/*; do
+    echo "devfreq $(basename "$g"): $(cat "$g/governor" 2>/dev/null) cur=$(cat "$g/cur_freq" 2>/dev/null) avail=[$(cat "$g/available_frequencies" 2>/dev/null)]"
+    grep -E '^ *\*? *[0-9]+:' "$g/trans_stat" 2>/dev/null | awk '{t=$NF; f=$1; if (f=="*") f=$2; print "    " f " " t " ms"}'
+  done
   for z in /sys/class/thermal/thermal_zone*; do echo "$z $(cat "$z/type" 2>/dev/null) $(cat "$z/temp" 2>/dev/null)"; done
   echo; echo "=== memory"; free -m; cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io 2>/dev/null
   echo; echo "=== top"; top -b -n 1 -w 200 2>/dev/null | head -30

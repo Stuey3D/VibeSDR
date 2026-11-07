@@ -181,7 +181,7 @@ struct PicUi {
     bool adjOpen = false, adjWantFocus = false;
     int adjDir = 0, adjRun = 0; double adjAt = 0;   // a held key steps ×5 after 8 (useHoldRepeat)
     double lineAt = 0;               // the LED: a line in the last 2.5 s (until the server reports WEFAX phases)
-    float scrollBack = 0;            // WEFAX in the box: rows scrolled up from the newest
+    float scrollBack = 0;            // HELL in the box: rows scrolled up from the newest (WEFAX fits whole)
     // full screen: 0 closed, 1 the live picture (or PREV), 2 a gallery picture
     int full = 0; int zoomI = 0; float panX = 0.5f, panY = 1.f;
     double fullOpenedAt = 0, fullDrawnAt = 0;   // ★ the full-screen view is drawn from the sheet loop (decDrawFull) — see dec_box.h
