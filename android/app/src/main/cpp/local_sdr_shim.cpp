@@ -8862,6 +8862,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 #ifdef VIBE_HAVE_OPUS
         vibe::OpusAudioEncoder opus;       // ★ its own stream: the shared one is ONE encode for everybody
 #endif
+        /** ★★★ PER-VFO RECORDING (Stuart, 2026-11-07: "a 2nd record line in the audio menu for the B VFO, both can be
+         *  triggered independently … the signal is recorded as it should be before we push it to one ear"). While the
+         *  listener records a VFO, that VFO's OWN audio — before the pan, the balance and the mute; after its squelch,
+         *  as heard — is sent to them as well, tagged (format 5, watchSendRec). Only to a listener who asked: an older
+         *  client would play an unknown format as noise. recBPcm: VFO B's block, kept by watchMix for the send. */
+        std::atomic<bool> recA{false}, recB{false};   // ★ read on the audio thread without `m`
+        std::vector<float> recBPcm;
+        bool recBHave = false;
+#ifdef VIBE_HAVE_OPUS
+        vibe::OpusAudioEncoder recOpus[2]; // ★ one per recorded VFO — never the mix's (its state, its channel count)
+#endif
         ~WatchSet() { bTap.stop(); feeder.stop(); }
         /** Anything to mix? (`m` held) */
         bool activeLocked() const { return !chans.empty() || !fading.empty(); }
@@ -10156,6 +10167,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::vector<int16_t> pcm16;
                 floatToPcm16(lr.data(), lr.size(), pcm16);
                 sendClientAudio(c, sock, pcm16.data(), outFrames, 2);   // ★ a mono socket folds L+R: both VFOs heard
+                // ★★ PER-VFO RECORDING (WatchSet::recA): VFO A before the fold, stereo when it is, through its squelch
+                if (c->watch->recA && !g_dabMode.load(std::memory_order_relaxed)) {
+                    std::vector<float> a((size_t)outFrames * ch);
+                    for (size_t i = 0; i < a.size(); i++) a[i] = squelched ? 0.0f : out[i];
+                    watchSendRec(c->watch.get(), 0, {sock}, a.data(), outFrames, ch, c->wantsOpus);
+                }
+                if (!g_dabMode.load(std::memory_order_relaxed)) watchSendRecB(c->watch.get(), {sock}, outFrames, c->wantsOpus);
                 return;
             }
         }
@@ -28855,8 +28873,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ Decoders run on either VFO here ("vfo":"B" on the decoder socket — watchDecBKey). A round-3 server never says
         //    so and would decode A whatever it was asked: the clients then keep the old rule (switch to A first).
         j += ",\"decB\":true";
+        // ★★★ This server sends each VFO's own audio to a listener recording it (format 5 — watchSendRec). An older server
+        //     never says so: its clients record the mix, as before.
+        j += ",\"recVfo\":true";
         if (w) {
             std::lock_guard<std::mutex> lk(w->m);
+            j += std::string(",\"recA\":") + (w->recA ? "true" : "false") + ",\"recB\":" + (w->recB ? "true" : "false");
             j += std::string(",\"stereo\":") + (w->stereo ? "true" : "false") + ",\"monoOut\":" + (w->monoOut ? "true" : "false")
                + ",\"muteA\":" + (w->muteA ? "true" : "false");
             snprintf(b, sizeof b, ",\"bal\":%.2f", (double)w->balance); j += b;   // ★★★ the A ⟷ B balance (watchBal)
@@ -29004,6 +29026,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double balV = 0;
         const bool hasBal = jsonNum(msg, "balance", balV);
         if (hasBal && w) { std::lock_guard<std::mutex> lk(w->m); w->balance = vibewatch::clampBalance((float)balV); }
+        // ★★★ PER-VFO RECORDING: {"recA":true|false} / {"recB":…} — any message may carry them; settings only (they never
+        //     create or re-aim a channel). Kept on the listener's set: a new set (B on again) starts with neither.
+        if (w && msg.find("\"recA\":") != std::string::npos) w->recA = jsonOn(msg, "recA");
+        if (w && msg.find("\"recB\":") != std::string::npos) w->recB = jsonOn(msg, "recB");
         if (jsonOn(msg, "off")) {
             if (w) {
                 watchRemove(w, id, "VFO B was switched off");
@@ -29288,6 +29314,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::lock_guard<std::mutex> lk(w->m);
         if (!w->activeLocked() && !w->mixing) return false;
         w->mixing = true;
+        w->recBHave = false;
         w->mixer.setStereo(w->stereo);
         w->mixer.setMonoOut(monoOut || w->monoOut);
         w->mixer.setBalance(w->balance);   // ★★★ the A ⟷ B balance — a level, before stereo or mono placement
@@ -29308,6 +29335,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             s.key = ch->id(); s.hz = ch->wanted().hz; s.present = present;
             s.gateOpen = ch->open() && !ch->parked(); s.muted = present && ch->muted(); s.pcm = buf.data();
             srcs.push_back(s);
+            // ★ PER-VFO RECORDING: VFO B as heard before the pan — through its squelch (the gate), never the listener's mute
+            if (w->recB && present && ch->id() == 1) {
+                w->recBPcm.assign(buf.begin(), buf.end());
+                if (!s.gateOpen) std::fill(w->recBPcm.begin(), w->recBPcm.end(), 0.0f);
+                w->recBHave = true;
+            }
         };
         for (auto& ch : w->chans) add(ch, true);
         for (auto& ch : w->fading) add(ch, false);
@@ -29360,8 +29393,64 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (mono) { std::vector<float> m((size_t)count); for (int i = 0; i < count; i++) m[i] = 0.5f * (lr[2 * i] + lr[2 * i + 1]); floatToPcm16(m.data(), m.size(), out); outCh = 1; }
             else floatToPcm16(lr.data(), lr.size(), out);
             watchSendPrivate(w.get(), list, out.data(), count, outCh);
+            // ★★ PER-VFO RECORDING: VFO A as it is BEFORE the fold — stereo when it is stereo — through the listener's squelch
+            if (w->recA) {
+                std::vector<float> a((size_t)count * ch);
+                for (size_t i = 0; i < a.size(); i++) a[i] = shut ? 0.0f : (float)pcm[i] / 32767.0f;
+                watchSendRec(w.get(), 0, list, a.data(), count, ch, audioWantsOpus.load());
+            }
+            watchSendRecB(w.get(), list, count, audioWantsOpus.load());
         }
         return rest;
+    }
+    /** ★★★ PER-VFO RECORDING — one VFO's own audio (WatchSet::recA / recB), for the listener's recorder only.
+     *  FORMAT 5: [0] channels · [1] 5 · [2..5] 48000 LE · [6] the VFO (0 = A, 1 = B) · [7] what follows (3 = one Opus packet,
+     *  0 = int16 PCM, as the ordinary stream's own format byte) · the payload. Its OWN encoder per VFO, at the content's
+     *  channel count (mono is not widened: nobody hears this stream, it is only written to a file). `x`: frames × ch floats. */
+    void watchSendRec(WatchSet* w, int vfo, const std::vector<std::shared_ptr<net::Socket>>& socks, const float* x, int frames,
+                      int ch, bool opus) {
+        if (frames <= 0 || vfo < 0 || vfo > 1) return;
+        std::vector<int16_t> pcm;
+        floatToPcm16(x, (size_t)frames * ch, pcm);
+        const uint32_t sr = (uint32_t)AUDIO_SR;
+        auto head = [&](std::vector<uint8_t>& f, uint8_t inner) {
+            f.push_back((uint8_t)ch); f.push_back(5);
+            f.push_back((uint8_t)(sr & 0xff)); f.push_back((uint8_t)((sr >> 8) & 0xff));
+            f.push_back((uint8_t)((sr >> 16) & 0xff)); f.push_back((uint8_t)((sr >> 24) & 0xff));
+            f.push_back((uint8_t)vfo); f.push_back(inner);
+        };
+        auto fanOut = [&](const std::vector<uint8_t>& frame) {
+            for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x2, frame.data(), frame.size(), Out::Audio);
+            vsAudioBytes.fetch_add(frame.size() * socks.size(), std::memory_order_relaxed);
+        };
+#ifdef VIBE_HAVE_OPUS
+        if (opus) {
+            std::vector<std::vector<uint8_t>> packets;
+            { std::lock_guard<std::mutex> lk(w->m); w->recOpus[vfo].setBitrate(opusBitrateFor(ch)); w->recOpus[vfo].encode(pcm.data(), frames, ch, packets); }
+            for (auto& pkt : packets) {
+                std::vector<uint8_t> frame; frame.reserve(8 + pkt.size());
+                head(frame, 3);
+                frame.insert(frame.end(), pkt.begin(), pkt.end());
+                fanOut(frame);
+            }
+            return;
+        }
+#endif
+        std::vector<uint8_t> frame; frame.reserve(8 + (size_t)frames * ch * 2);
+        head(frame, 0);
+        const uint8_t* p = (const uint8_t*)pcm.data();
+        frame.insert(frame.end(), p, p + (size_t)frames * ch * 2);
+        fanOut(frame);
+    }
+    /** VFO B's block kept by the last watchMix, if the listener records it. */
+    void watchSendRecB(WatchSet* w, const std::vector<std::shared_ptr<net::Socket>>& socks, int frames, bool opus) {
+        std::vector<float> b;
+        {
+            std::lock_guard<std::mutex> lk(w->m);
+            if (!w->recB || !w->recBHave || (int)w->recBPcm.size() != frames) return;
+            b.swap(w->recBPcm); w->recBHave = false;
+        }
+        watchSendRec(w, 1, socks, b.data(), frames, 1, opus);
     }
     /** One session's own stream, framed exactly as the shared one (Opus if the shared stream is Opus, else PCM). */
     void watchSendPrivate(WatchSet* w, const std::vector<std::shared_ptr<net::Socket>>& socks, const int16_t* pcm, int count, int ch) {
