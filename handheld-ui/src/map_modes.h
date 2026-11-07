@@ -582,9 +582,81 @@ inline std::vector<std::string> mapDscCard(App&, const RadioState&, const std::s
     return {};
 }
 /** The decoder box's MAP key (APRS, DSC): the map of what the decoder has heard; the decoder runs on under it. */
+// ── DIGITAL SPOTS ───────────────────────────────────────────────────────────────────────────────────────────────────
+// ★★ THE SPOTS MAP (Stuart, 2026-11-07: "is there a map view for FT8 etc?" — the app's and the web's DIGITAL SPOTS MAP):
+//    every station the digital spots heard, at the centre of its grid square, coloured by mode; the list beside it newest
+//    first (call · mode · band · SNR · distance), the selected one's card. From decUi().spots — what the box already holds.
+/** A Maidenhead locator (2, 4 or 6 characters) → the centre of its square. False for anything that is not one. */
+inline bool mapGridCentre(const std::string& g0, double& lat, double& lon) {
+    std::string g; for (char ch : g0) g += (char)std::toupper((unsigned char)ch);
+    if (g.size() < 2 || g[0] < 'A' || g[0] > 'R' || g[1] < 'A' || g[1] > 'R') return false;
+    lon = (g[0] - 'A') * 20.0 - 180.0; lat = (g[1] - 'A') * 10.0 - 90.0;
+    double w = 20, h = 10;
+    if (g.size() >= 4 && std::isdigit((unsigned char)g[2]) && std::isdigit((unsigned char)g[3])) {
+        lon += (g[2] - '0') * 2.0; lat += (g[3] - '0') * 1.0; w = 2; h = 1;
+        if (g.size() >= 6 && g[4] >= 'A' && g[4] <= 'X' && g[5] >= 'A' && g[5] <= 'X') {
+            lon += (g[4] - 'A') * (5.0 / 60); lat += (g[5] - 'A') * (2.5 / 60); w = 5.0 / 60; h = 2.5 / 60;
+        }
+    }
+    lon += w / 2; lat += h / 2;
+    return true;
+}
+inline Rgba mapSpotColour(const std::string& m0) {
+    std::string m; for (char ch : m0) m += (char)std::toupper((unsigned char)ch);
+    if (m == "FT8") return rgb(0x5be36b);
+    if (m == "FT4") return rgb(0x46e0ff);
+    if (m == "WSPR") return rgb(0xff7ad9);
+    if (m == "JS8") return rgb(0xffb833);
+    return th::amber;
+}
+inline std::string mapSpotKey(const DecSpot& sp) { return sp.call + "|" + sp.band + "|" + sp.mode; }
+inline void mapSpotsBuild(App&, const RadioState&, std::vector<MapListRow>& rows, std::vector<MapMarker>& mk, std::string& status) {
+    const DecUi& d = decUi();
+    const double now = (double)std::time(nullptr);
+    int withPos = 0;
+    for (const DecSpot& sp : d.spots) {
+        if (rows.size() >= 300) break;   // ★ bounded — the newest 300 (the box keeps one per call · band · mode)
+        MapListRow row;
+        row.key = mapSpotKey(sp); row.title = sp.call.empty() ? "?" : sp.call;
+        row.right = agoText(std::max(0.0, now - sp.at));
+        row.col = mapSpotColour(sp.mode);
+        std::string sub = sp.mode + (sp.band.empty() ? "" : " · " + sp.band) + mapFmt(" · %+.0f dB", sp.snr);
+        double lat, lon;
+        if (!sp.grid.empty() && mapGridCentre(sp.grid, lat, lon)) {
+            row.pos = true; row.lat = lat; row.lon = lon; withPos++;
+            const std::string dist = mapDist(lat, lon);
+            sub += " · " + sp.grid + (dist.empty() ? "" : " · " + dist);
+            mk.push_back({row.key, lat, lon, MG_DOT, NAN, row.col, row.title});
+        } else if (!sp.country.empty()) sub += " · " + sp.country;
+        row.sub = sub;
+        rows.push_back(row);
+    }
+    char b[120]; std::snprintf(b, sizeof b, "%zu spots · %d on the map", d.spots.size(), withPos);
+    status = b;
+}
+inline std::vector<std::string> mapSpotsCard(App&, const RadioState&, const std::string& key) {
+    for (const DecSpot& sp : decUi().spots) {
+        if (mapSpotKey(sp) != key) continue;
+        std::vector<std::string> l{sp.call};
+        l.push_back(sp.mode + (sp.band.empty() ? "" : " · " + sp.band) + mapFmt(" · %+.0f dB", sp.snr) + mapFmt(" · %.3f MHz", sp.hz / 1e6));
+        double lat, lon;
+        std::string where = sp.country;
+        if (!sp.grid.empty() && mapGridCentre(sp.grid, lat, lon)) {
+            const std::string dist = mapDist(lat, lon);
+            where = sp.grid + (sp.country.empty() ? "" : " · " + sp.country) + (dist.empty() ? "" : " · " + dist);
+        }
+        if (!where.empty()) l.push_back(where);
+        const std::string ago = agoText(std::max(0.0, (double)std::time(nullptr) - sp.at));
+        l.push_back(ago == "now" ? "heard just now" : "heard " + ago + " ago");
+        return l;
+    }
+    return {};
+}
+
 inline void mapOpenDecoder(App& a, const std::string& view) {
     if (view == "aprs") mapOpenPage(a, "dec:aprs");
     else if (view == "dsc") mapOpenPage(a, "dec:dsc");
+    else if (view == "spots") mapOpenPage(a, "dec:spots");
 }
 
 // ── registration, the tick ───────────────────────────────────────────────────────────────────────────────────────────
@@ -610,6 +682,10 @@ inline void mapRegisterModes() {
     MapPageDef dp; dp.id = "dec:dsc"; dp.title = "DSC MAP"; dp.profile = "marine"; dp.startZ = 6; dp.build = mapDscBuild; dp.card = mapDscCard;
     dp.empty = "no DSC call with a position yet — distress calls carry one"; dp.exitLabel = "CLOSE";
     mapRegisterPage(dp);
+    MapPageDef sp; sp.id = "dec:spots"; sp.title = "DIGITAL SPOTS MAP"; sp.profile = "spots"; sp.startZ = 3; sp.build = mapSpotsBuild;
+    sp.card = mapSpotsCard; sp.empty = "no spots yet — the digital spots run on under the map; each station is placed on its grid square";
+    sp.exitLabel = "CLOSE";
+    mapRegisterPage(sp);
 }
 
 inline void mapCannedTick(App& a, const RadioState& s);
