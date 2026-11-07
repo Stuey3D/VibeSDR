@@ -61,7 +61,6 @@ for f in 408000000 600000000 816000000 1008000000 1104000000 1200000000 12480000
 done
 awk '/opp-1416000000 \{/{f=1} f&&/status = "disabled"/{print; exit}' "$T/m.dts" | grep -q disabled || fail "1416 MHz is not disabled"
 # ★ the stock GPU steps (vibe-r36s.dts &gpu_opp_table) in the GPU's own table, beside ROCKNIX's 560 MHz
-awk '/opp-560000000 \{/{f=1} f' "$T/m.dts" >/dev/null
 for f in 200000000 300000000 400000000 480000000 520000000 560000000; do
   grep -q "opp-$f {" "$T/m.dts" || fail "GPU step $f missing"
 done
