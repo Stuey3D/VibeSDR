@@ -50,6 +50,8 @@ class Waterfall {
   void setBrightness(double v) { WaterfallConfig c = model_.config(); c.sig.wfBrightness = v; model_.setConfig(c); }
   void setAutoContrast(double v) { WaterfallConfig c = model_.config(); c.sig.autoContrast = v; model_.setConfig(c); }
   void setSpeed(Scroll s) { WaterfallConfig c = model_.config(); c.scroll = s; model_.setConfig(c); }
+  /** The speaker's playout delay, ms (< 0 = no speaker) — the rows wait for it (WaterfallModel::setAudioDelayMs). */
+  void setAudioDelayMs(double ms, double nowSec) { model_.setAudioDelayMs(ms, nowSec * 1000); }
   void setConfig(const WaterfallConfig& c) { model_.setConfig(c); }
   const WaterfallConfig& config() const { return model_.config(); }
 

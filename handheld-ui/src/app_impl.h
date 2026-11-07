@@ -1127,6 +1127,9 @@ inline int App::run(int argc, char** argv) {
 
         // the engine
         devEvents.clear();
+        // ★★ the speaker's playout delay for the waterfall's A/V hold — the rate converter holds its buffer at 150 ms
+        //    (vibe_local_speaker.h kHoldFrames), so that is the delay while the radio plays; none without a session
+        wfp_.setAudioDelayMs(eng.state().session == "running" ? 150.0 : -1.0, nowSec());
         eng.pump([&](const uint8_t* bins, int n, double centreHz, double) {
             // ★ bins are low → high already (engine.h rotated them); the span is this view's (config.totalBandwidth)
             wfp_.pushFrame(bins, n, false, centreHz, eng.state().spanHz, nowSec());

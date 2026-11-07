@@ -120,8 +120,27 @@ void WaterfallModel::pushFrameDb(const float* db, int n, double centreHz, double
     CombFrame& slot = clockFrames_[id];
     slot.row.assign(frame.row, frame.row + frame.n); slot.c = rowCentre; slot.h = rowHzBin; slot.k = dbPerUnit(frame.dbMin, frame.dbMax);
     clockSetRate(clock_, rowTarget, now);
-    // (no A/V hold here: the handheld has no audio playout delay to wait for — wfAvSync's hold is 0)
-    const double pAt = clockArrive(clock_, id, now, boost, 0);
+    /* ★★ THE A/V HOLD (Stuart, 2026-11-07: "dont forget to align the waterfall and spectrum … I noticed earlier they
+     *    appeared slightly out of sync"). The speaker now holds ~150 ms (vibe_local_speaker.h, the web clients' jitter
+     *    buffer), so a row reached the screen that much before it was heard. wfAvSync.ts avHold, line for line: hold = the
+     *    audio's delay − the clock's own route (clockOwnMs), ≤ 500 ms, a growth ramped at 0.25 × real time (never a pause),
+     *    a shrink stepped, 8 ms deadband; ZERO while a tune or zoom is in hand (passthrough — the dial stays immediate).
+     *    The spectrum trace rides its row (traceLagMs), so it is held with it. NATIVE has no clock and is never held. */
+    double hold = 0;
+    {
+      const double dt = avHoldT_ > 0 ? std::max(0.0, std::min(1000.0, now - avHoldT_)) : -1;
+      avHoldT_ = now;
+      if (boost) { avHold_ = 0; avRamp_ = false; }
+      else {
+        const double own = clockDelayMs(clock_.ivl) + traceLagMs(rowTarget) + 20;   // wfAvSync.ts clockOwnMs
+        const double want = avAud_ >= 0 ? std::max(0.0, std::min(500.0, avAud_ - own)) : 0;
+        if (std::fabs(want - avHold_) > 8 || (want == 0 && avHold_ > 0) || (avRamp_ && want > avHold_))
+          avHold_ = want > avHold_ && dt >= 0 ? std::min(want, avHold_ + 0.25 * dt) : want;
+        avRamp_ = avHold_ < want;
+      }
+      hold = avHold_;
+    }
+    const double pAt = clockArrive(clock_, id, now, boost, hold);
     pumpClock(now);
     if (!boost) traceAt = pAt + traceLagMs(rowTarget);
   } else if (clock_.rate > 0) {
@@ -305,6 +324,14 @@ void WaterfallModel::tick(double now, double gap) {
       if (maxDelta < 0.002) { specAcc_ = 0; tweenActive_ = false; }
     }
   }
+}
+
+// ★ wfAvSync.ts avNoteAudio: the audio's delay, smoothed (500 ms) — it saw-tooths by a period as buffers come and go
+void WaterfallModel::setAudioDelayMs(double ms, double now) {
+  if (!(ms >= 0) || !std::isfinite(ms)) { avAud_ = -1; avAudT_ = now; return; }
+  if (avAud_ < 0 || !(now > avAudT_)) { avAud_ = ms; avAudT_ = now; return; }
+  avAud_ += (ms - avAud_) * (1 - std::exp(-std::min(5000.0, now - avAudT_) / 500.0));
+  avAudT_ = now;
 }
 
 }  // namespace wf

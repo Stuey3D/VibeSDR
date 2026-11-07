@@ -51,6 +51,9 @@ class WaterfallModel {
   void setView(double centreHz, double spanHz) { viewC_ = centreHz; viewBw_ = spanHz; viewSet_ = true; }
   /** A tune/zoom input at tMs (the app's lastInteractAt) — drives the gesture mode and the interaction boost. */
   void noteInteraction(double tMs) { lastInteractAt_ = tMs; }
+  /** ★★ THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts, ported). The audio's playout delay in ms (< 0 = none —
+   *  no speaker, the hold is 0: the waterfall exactly as before). */
+  void setAudioDelayMs(double ms, double nowMs);
   /** One spectrum frame in dBFS, bins LOW → HIGH, its own centre and span (the bins' true geometry). */
   void pushFrameDb(const float* db, int n, double centreHz, double spanHz, double tMs);
   /** One engine SPEC frame: u8 bins (dBFS = u8 − 256, 0 = no data). `fftOrder` = DC first (rotated by N/2 here). */
@@ -108,6 +111,8 @@ class WaterfallModel {
   // view / interaction
   double viewC_ = 0, viewBw_ = 0; bool viewSet_ = false;
   double lastInteractAt_ = 0;
+  // the A/V hold (wfAvSync.ts AvSyncState)
+  double avAud_ = -1, avAudT_ = 0, avHold_ = 0, avHoldT_ = 0; bool avRamp_ = false;
   // handleFrame state
   double lastFrameTs_ = 0, avgFrameMs_ = 150, lastWfPushAt_ = 0, avgWfGapMs_ = 0, rowCarry_ = 0;
   RowTargetState rowTargetSt_; int rowTargetCap_ = -1;
