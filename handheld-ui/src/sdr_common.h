@@ -78,6 +78,22 @@ inline void gainRows(S& x, float& y) {
     }
 }
 
+// ── ALLOW DECODERS TO CHANGE THE SAMPLE RATE — under SAMPLE RATE (Stuart, 2026-11-07: "a button under the sample rate
+//    options in the sdr menu to Allow decoder to change sample rate"). The server's own switch (Setup's "change the sample
+//    rate when a mode needs it", {"type":"dabBoost"}, hwinfo `dabBoost`): ADS-B raises the radio to 2.4 MS/s while it
+//    runs (and DAB to 2.048), then puts the chosen rate back. Only where the server reports it (no dead control).
+inline void rateBoostRow(S& x, float& y) {
+    const Json& h = x.hwi();
+    if (!h.has("dabBoost")) return;
+    const bool on = held(x, "rboost", h["dabBoost"].boolean() ? 1 : 0) > 0.5;
+    if (rowToggle(x, y, "sdr.rboost", "ALLOW DECODERS TO CHANGE THE SAMPLE RATE",
+                  "Some decoders need a minimum sample rate from the radio (ADS-B 2.4 MS/s). Running lower, the decoder can raise it "
+                  "for as long as it is in use, and your rate comes back when it stops.", on)) {
+        hold(x, "rboost", on ? 0 : 1);
+        send(x, std::string("{\"type\":\"dabBoost\",\"on\":") + (on ? "0" : "1") + "}");
+    }
+}
+
 // ── SAMPLE RATE (§4a.2) — every driver but the HF+ and the Icom ─────────────────────────────────────────────────────
 inline void rateRow(S& x, float& y) {
     const RadioState& s = x.s;
@@ -117,6 +133,7 @@ inline void rateRow(S& x, float& y) {
     for (size_t i = 0; i < rs.size(); i++) if (std::fabs(rs[i] - now) < 0.5) sel = (int)i;
     const int hit = rowSelect(x, y, "sdr.rate", "SAMPLE RATE", "", labels, sel);
     if (hit >= 0) { hold(x, "rate", rs[(size_t)hit]); sendKV(x, "sampleRate", "value", std::lround(rs[(size_t)hit])); }
+    rateBoostRow(x, y);
 }
 
 // ── IF FILTER (§4a.2, rtl only) ─────────────────────────────────────────────────────────────────────────────────────

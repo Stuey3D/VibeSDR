@@ -21477,6 +21477,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       /* ★★★ …and it takes {"type":"watch","balance":x} — the A ⟷ B balance. An older server never
                        *  says so, and the clients then draw no balance row (no dead control). */
                       + ",\"watchBal\":true"
+                      /* ★★ V12 the rate switch ("change the sample rate when a mode needs it" — g_dabRateBoost) in the radio's
+                       *  own report too, so a client can draw it beside the sample rate and see it flip at once (the handheld,
+                       *  Stuart 2026-11-07); /vibeserver.json has carried it for the web's setup page all along. */
+                      + std::string(",\"dabBoost\":") + (g_dabRateBoost.load(std::memory_order_relaxed) ? "true" : "false")
                       + std::string(",\"gainCap\":")
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))
@@ -37319,6 +37323,13 @@ static std::string vsAdsbWhyNot() {
     if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
     if (running < vibeadsb::Service::kMinRateHz) {
         char b[240];
+        // ★★ THE HANDHELD HAS NO OWNER BUT ITS HOLDER (Stuart, 2026-11-07: "it stated that it needed 2.4MHz but then talked
+        //    about owner setting as if it were the server"): there the switch is in the radio's own menu, named as it is.
+        if (g_vsHandheld.load(std::memory_order_relaxed))
+            std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 the radio runs at %.3f MS/s. "
+                          "Turn on ALLOW DECODERS TO CHANGE THE SAMPLE RATE (MENU \xe2\x86\x92 SDR HARDWARE, under SAMPLE RATE), "
+                          "or choose 2.4 MS/s there", running / 1e6);
+        else
         std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s "
                       "(its owner can let it change rate for ADS-B in Setup)", running / 1e6);
         return b;
