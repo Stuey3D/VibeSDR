@@ -193,6 +193,88 @@ int main() {
     eqs("March note", vseibi::note(),
         "EiBi hasn't published the A27 (summer) schedule yet — using B26 until it appears.");
 
+    std::printf("── V12 R36S IMPORT EIBI: a file the owner put on the card (no internet) ──\n");
+    eqs("season of sked-b26.csv",        vseibi::seasonOfName("sked-b26.csv"), "b26");
+    eqs("season of a browser's rename",  vseibi::seasonOfName("/card/EiBi/SKED-A26 (1).csv"), "a26");
+    eqs("no season in bookmarks.csv",    vseibi::seasonOfName("bookmarks.csv"), "");
+    eqs("sked-a261.csv is not a season", vseibi::seasonOfName("sked-a261.csv"), "");
+    {
+        fresh();
+        g_now = utc(2026, 11, 6, 12);
+        const std::string card = g_dir + "/sked-b26.csv";
+        auto put = [&](const std::string& path, const std::string& body) {
+            FILE* f = std::fopen(path.c_str(), "wb"); std::fwrite(body.data(), 1, body.size(), f); std::fclose(f);
+        };
+        put(card, csvWith("Card Radio", 7));
+        std::string season;
+        n = vseibi::importFile(card, err, &season);
+        CHECK("imported 7 entries", n == 7);
+        eqs("no error", err, "");
+        eqs("its season, in words", season, "B26 (winter)");
+        CHECK("published to /stations", g_published.find("Card Radio") != std::string::npos);
+        CHECK("the comment's separator is UTF-8 once (not \"Â·\")", g_published.find("0000-2400 \xC2\xB7 E") != std::string::npos
+                                                                && g_published.find("\xC3\x82") == std::string::npos);
+        CHECK("installed as THE cache (what the radio loads at start)", vseibi::loadFromCache() == 7);
+        CHECK("loadedCount agrees, no re-parse needed", vseibi::loadedCount() == 7);
+        FILE* sf = std::fopen((g_dir + "/eibi.season").c_str(), "rb");
+        char sb[32] = {0}; if (sf) { std::fread(sb, 1, sizeof sb - 1, sf); std::fclose(sf); }
+        eqs("season marker set from the name", sb, "sked-b26.csv");
+        CHECK("no staging files left", access((g_dir + "/eibi.csv.import").c_str(), F_OK) != 0
+                                     && access((g_dir + "/eibi.season.tmp").c_str(), F_OK) != 0);
+        CHECK("the card's copy is left alone", access(card.c_str(), F_OK) == 0);
+        CHECK("current season, fresh: no download attempt", !vseibi::needsRefresh());
+
+        // ★ a wrong file must never replace a working schedule
+        const std::string bad = g_dir + "/sked-a27.csv";
+        put(bad, "<html><body>EiBi</body></html>");
+        g_published.clear();
+        n = vseibi::importFile(bad, err, &season);
+        CHECK("an HTML page is refused", n == 0 && err.find("no stations") == 0);
+        CHECK("nothing published", g_published.empty());
+        CHECK("the B26 cache is untouched", vseibi::loadFromCache() == 7);
+        n = vseibi::importFile(g_dir + "/missing.csv", err, &season);
+        CHECK("a missing file is refused", n == 0 && !err.empty());
+        {
+            FILE* f = std::fopen(bad.c_str(), "wb");
+            const std::string row(1024, 'x');
+            for (int i = 0; i < 9 * 1024; i++) std::fwrite(row.data(), 1, row.size(), f);   // 9 MB
+            std::fclose(f);
+        }
+        n = vseibi::importFile(bad, err, &season);
+        CHECK("over 8 MB is refused", n == 0 && err.find("8 MB") != std::string::npos);
+        CHECK("…and the cache still holds B26", vseibi::loadFromCache() == 7);
+        unlink(bad.c_str());
+
+        // ★ a schedule whose name carries no season: installed, marker cleared (a networked server would still ask daily)
+        const std::string plain = g_dir + "/schedule.csv";
+        put(plain, csvWith("Plain Radio", 2));
+        n = vseibi::importFile(plain, err, &season);
+        CHECK("a season-less name still imports", n == 2 && season.empty());
+        CHECK("season marker cleared", access((g_dir + "/eibi.season").c_str(), F_OK) != 0);
+        unlink(plain.c_str());
+
+        // ★ the previous season while EiBi has not published the current one: the "not yet" marker stays meaningful
+        g_now = utc(2026, 10, 27, 21);
+        {
+            FILE* f = std::fopen((g_dir + "/eibi.tried").c_str(), "wb");
+            std::fprintf(f, "sked-b26.csv %lld", (long long)g_now); std::fclose(f);
+        }
+        const std::string a26 = g_dir + "/sked-a26.csv";
+        put(a26, csvWith("Summer Radio", 3));
+        n = vseibi::importFile(a26, err, &season);
+        CHECK("A26 imported", n == 3 && season == "A26 (summer)");
+        eqs("note: using A26 until B26 appears", vseibi::note(),
+            "EiBi hasn't published the B26 (winter) schedule yet — using A26 until it appears.");
+        // and then the owner brings B26 itself: the marker for B26 goes
+        put(card, csvWith("Card Radio", 7));
+        n = vseibi::importFile(card, err, &season);
+        CHECK("B26 imported over A26", n == 7);
+        CHECK("tried marker for B26 cleared", access((g_dir + "/eibi.tried").c_str(), F_OK) != 0);
+        eqs("no note", vseibi::note(), "");
+        unlink(a26.c_str());
+        unlink(card.c_str());
+    }
+
     fresh();
     rmdir(g_dir.c_str());
     std::printf(fails ? "\n%d FAILURES (%d passed)\n" : "\nall %d passed\n", fails ? fails : passes, passes);

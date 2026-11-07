@@ -19,6 +19,7 @@
 //  GET  /handheld/perf               CPU %, temperature, RAM, battery + time left, the engine's own CPU
 //  GET  /handheld/card · GET/POST/DELETE /handheld/recordings[/<name>] · GET /handheld/import ·
 //  POST /handheld/import/result · POST /handheld/export · POST /handheld/diagnostics
+//  POST /handheld/eibi/import        the newest sked-*.csv in the card's EiBi/ (or import/) becomes the schedule
 #include "handheld.h"
 #include "handheld_card.h"
 #include "handheld_json.h"
@@ -28,6 +29,7 @@
 #include "radios.h"
 #include "vibeserver_config.h"
 #include "diag_scrub.h"
+#include "eibi.h"
 #include "vibe_mapgl.h"
 
 #include <algorithm>
@@ -1043,6 +1045,7 @@ void hImportGet(Req& r) {
     std::string out; int n = 0;
     for (const auto& e : hhcard::listFiles(dir)) {
         if (n >= 20) break;
+        if (!vseibi::seasonOfName(e.name).empty()) continue;   // ★ an EiBi schedule is not a bookmark backup (IMPORT EIBI)
         std::string text;
         if (e.bytes > (1u << 20) || !hhcard::readFile(dir + "/" + e.name, text, 1u << 20)) {
             out += (out.empty() ? "" : ",") + std::string("{\"name\":") + quote(e.name) + ",\"tooBig\":true}";
@@ -1069,6 +1072,83 @@ void hImportResult(Req& r) {
     hhcard::atomicWrite(done + "/" + dest + ".result.txt", text);
     logf("import: %s → import/done/%s (%s, %d)", name.c_str(), dest.c_str(), ok ? "ok" : "failed", count);
     json(r.fd, "{\"ok\":true,\"movedTo\":" + quote("done/" + dest) + "}");
+}
+
+/** Ask the radio process to re-read the schedule: GET /vibeserver/eibi through our own door (it is handed over like any
+ *  page request) re-parses the cache when the file changed (vseibi::loadedCount). Its entry count, or -1 when no radio
+ *  answered — the next radio to start loads the file anyway (main.cpp, loadFromCache at start-up). */
+int askRadioToReloadEibi() {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    timeval tv{ 25, 0 };
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+#if defined(__APPLE__)
+    { int one = 1; ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one); }
+#endif
+    sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons((uint16_t)g_o.port); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::connect(fd, (sockaddr*)&a, sizeof a) != 0) { ::close(fd); return -1; }
+    std::string got;
+    if (sendAll(fd, "GET /vibeserver/eibi HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")) {
+        char b[4096];
+        for (;;) { const ssize_t n = ::recv(fd, b, sizeof b, 0); if (n <= 0) break; got.append(b, (size_t)n); if (got.size() > 65536) break; }
+    }
+    ::close(fd);
+    if (got.compare(0, 12, "HTTP/1.1 200") != 0) return -1;
+    const size_t at = got.find("\"entries\":");
+    return at == std::string::npos ? -1 : std::atoi(got.c_str() + at + 10);
+}
+
+/** ★★ V12 IMPORT EIBI (Stuart, 2026-11-06: "EiBi is not going to be able to be auto downloaded"). The handheld has no
+ *  internet, so the owner downloads EiBi's schedule (sked-b26.csv … from eibispace.de) on a computer and puts it on the
+ *  card in EiBi\ (import\ is looked in too). The NEWEST sked-*.csv there is checked and installed as the machine's
+ *  schedule — $DATA/eibi.csv, the very file the radio process loads at start and a networked server downloads to
+ *  (vseibi::importFile: capped, parsed, refused when empty, temp + rename) — then the radio process re-reads it, so
+ *  SEARCH finds the stations at once and after every reboot. The file stays on the card: it is the owner's copy. */
+void hEibiImport(Req& r) {
+    if (g_o.cardDir.empty()) { json(r.fd, errJson("no card"), 503); return; }
+    std::string pick, from;
+    int64_t newest = -1;
+    for (const char* sub : { "EiBi", "import" }) {
+        const std::string dir = cardSub(sub);
+        if (std::string(sub) == "EiBi") hhcard::ensureDir(dir);
+        for (const auto& e : hhcard::listFiles(dir)) {
+            if (vseibi::seasonOfName(e.name).empty() || e.name.size() < 4) continue;
+            std::string ext = e.name.substr(e.name.size() - 4);
+            for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+            if (ext != ".csv") continue;
+            if (e.mtime > newest) { newest = e.mtime; pick = dir + "/" + e.name; from = std::string(sub) + "/" + e.name; }
+        }
+    }
+    if (pick.empty()) {
+        // ★ eibispace.de also offers the SAME data as printable lists (freq-b26.txt, time-b26.txt: fixed-width, a banner
+        //   header). Only the CSV is read — so when that is what the owner brought, say exactly which file to fetch.
+        for (const char* sub : { "EiBi", "import" }) {
+            for (const auto& e : hhcard::listFiles(cardSub(sub))) {
+                std::string lo = e.name;
+                for (auto& c : lo) c = (char)std::tolower((unsigned char)c);
+                if (lo.size() < 9 || (lo.compare(0, 5, "freq-") != 0 && lo.compare(0, 5, "time-") != 0)) continue;
+                const std::string code = vseibi::seasonOfName("sked-" + lo.substr(5));
+                const std::string want = "sked-" + (code.empty() ? std::string("b26") : code) + ".csv";
+                json(r.fd, errJson("found " + e.name + " — that is the printable list; download " + want
+                                   + " from eibispace.de instead (the CSV, not the freq-/time- .txt versions)"), 404);
+                return;
+            }
+        }
+        json(r.fd, errJson("No EiBi file on the card — download sked-b26.csv from eibispace.de (the CSV, not the "
+                           "freq-/time- .txt versions) and put it in the card's EiBi folder"), 404);
+        return;
+    }
+    vseibi::setDir(g_o.dataDir);
+    std::string err, season;
+    const int n = vseibi::importFile(pick, err, &season);
+    if (n <= 0) { logf("EiBi import: %s refused — %s", from.c_str(), err.c_str()); json(r.fd, errJson(from + ": " + err), 400); return; }
+    const int loaded = askRadioToReloadEibi();
+    logf("EiBi import: %s — %d entries%s%s", from.c_str(), n, season.empty() ? "" : (", " + season).c_str(),
+         loaded < 0 ? " (no radio running: loaded when one starts)" : "");
+    json(r.fd, "{\"ok\":true,\"file\":" + quote(from) + ",\"entries\":" + std::to_string(n) + ",\"season\":" + quote(season)
+             + ",\"loaded\":" + std::to_string(loaded) + "}");
 }
 
 void hExport(Req& r) {
@@ -1155,6 +1235,7 @@ void routeHandheld(Req& r) {
     }
     else if (p == "/handheld/import" && r.method == "GET")          hImportGet(r);
     else if (p == "/handheld/import/result" && r.method == "POST")  hImportResult(r);
+    else if (p == "/handheld/eibi/import" && r.method == "POST")    hEibiImport(r);
     else if (p == "/handheld/export" && r.method == "POST")         hExport(r);
     else if (p == "/handheld/diagnostics" && r.method == "POST")    hDiagnostics(r);
     else json(r.fd, errJson("no such handheld route"), 404);

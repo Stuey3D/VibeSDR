@@ -11,7 +11,8 @@
 //  5. Start+Select: the flag is spent on the next radio (its memory gone, a reset sequence for the toast), then removed
 //  6. the card: a recording uploaded, listed, fetched with a Range, deleted; names "YYYY-MM-DD HHMM - <kHz> kHz <MODE>.wav";
 //     no ".part" left; import/ listed and a result moves the file to import/done/ with a .result.txt; export/; the
-//     diagnostics file in "Diagnostic logs/"
+//     diagnostics file in "Diagnostic logs/"; IMPORT EIBI: the card's EiBi/sked-b26.csv becomes $DATA/eibi.csv, a web page
+//     saved as the CSV is refused, the running radio's /stations has the entries at once, import/ never offers a schedule
 //  7. the hardware service: state relayed; brightness clamped 1..255; no SSH requests relayed (none on the handheld); a clock set (deltaMs) reaches the service; events (volume) reach a
 //     long-poll; the shutdown event saves memory and is ACKed inside 5 s
 //
@@ -233,6 +234,30 @@ try {
   const done = path.join(card, 'import', 'done');
   ok(r.j?.ok && fs.existsSync(path.join(done, 'my bookmarks.json')) && !fs.existsSync(path.join(card, 'import', 'my bookmarks.json')), 'moved to import/done/');
   ok(/Bookmarks imported: 1/.test(fs.readFileSync(path.join(done, 'my bookmarks.json.result.txt'), 'utf8')), 'with a result .txt beside it');
+  // ★★ V12 IMPORT EIBI: no internet on the handheld — the owner's sked-xNN.csv on the card becomes the schedule
+  r = await postJ('/handheld/eibi/import', '');
+  ok(r.status === 404 && /EiBi folder/.test(r.j?.error || ''), `no EiBi file: says where to put one (${r.status})`);
+  const skedRows = (name, n) => 'kHz:75;Time(UTC):93;Days:59;ITU:49;Station:201;Lng:49;Target:62;Remarks:135;P:35;Start:60;Stop:60;\n'
+    + Array.from({ length: n }, (_, i) => `${6000 + i * 5};0000-2400;;G;${name};E;Eu;;1;;\n`).join('');
+  fs.mkdirSync(path.join(card, 'EiBi'), { recursive: true });
+  fs.writeFileSync(path.join(card, 'EiBi', 'freq-b26.txt'), 'EiBi printable list\n');
+  r = await postJ('/handheld/eibi/import', '');
+  ok(r.status === 404 && /found freq-b26\.txt — that is the printable list; download sked-b26\.csv/.test(r.j?.error || ''), `the printable .txt is named and the CSV asked for (${r.j?.error})`);
+  fs.unlinkSync(path.join(card, 'EiBi', 'freq-b26.txt'));
+  fs.writeFileSync(path.join(card, 'EiBi', 'sked-b26.csv'), '<html>not the schedule</html>');
+  r = await postJ('/handheld/eibi/import', '');
+  ok(r.status === 400 && /no stations/.test(r.j?.error || '') && !fs.existsSync(path.join(data, 'eibi.csv')), `a web page saved as the CSV is refused (${r.j?.error})`);
+  fs.writeFileSync(path.join(card, 'EiBi', 'sked-b26.csv'), skedRows('Card Test Radio', 12));
+  r = await postJ('/handheld/eibi/import', '');
+  ok(r.j?.ok && r.j.entries === 12 && r.j.file === 'EiBi/sked-b26.csv' && r.j.season === 'B26 (winter)', `imported ${r.j?.entries} from ${r.j?.file} (${r.j?.season})`);
+  ok(fs.existsSync(path.join(data, 'eibi.csv')) && fs.readFileSync(path.join(data, 'eibi.season'), 'utf8').trim() === 'sked-b26.csv', 'installed as the machine\'s schedule ($DATA/eibi.csv + season)');
+  ok(r.j?.loaded === 12, `the running radio re-read it (loaded ${r.j?.loaded})`);
+  const st = await getJ('/stations');
+  ok(Array.isArray(st) && st.filter((x) => x.name === 'Card Test Radio').length === 12, 'SEARCH\'s /stations has them at once');
+  ok(fs.existsSync(path.join(card, 'EiBi', 'sked-b26.csv')), 'the card keeps the owner\'s copy');
+  fs.writeFileSync(path.join(card, 'import', 'sked-a26.csv'), skedRows('x', 1));
+  ok(!(await getJ('/handheld/import')).files.some((f) => f.name === 'sked-a26.csv'), 'a schedule in import/ is not offered to the BOOKMARK import');
+  fs.unlinkSync(path.join(card, 'import', 'sked-a26.csv'));
   r = await postJ('/handheld/export?kind=bookmarks', '[{"name":"x"}]');
   ok(r.j?.ok && /^export\/\d{4}-\d\d-\d\d \d{6} - bookmarks\.json$/.test(r.j.name) && fs.existsSync(path.join(card, r.j.name)), `export → ${r.j?.name}`);
   r = await postJ('/handheld/diagnostics', '');

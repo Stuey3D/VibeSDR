@@ -188,9 +188,11 @@ std::string toStationsJson(const std::string& csv, int& count) {
         if (!itu.empty())  j += ",\"itu\":\"" + esc(toUtf8(itu)) + "\"";
         // ★ The comment carries the time and language, which is what makes two entries on the same
         //   frequency tellable apart — without it a busy channel is a list of identical rows.
-        std::string comment = time;
-        if (!lang.empty()) comment += (comment.empty() ? "" : " · ") + lang;
-        if (!comment.empty()) j += ",\"comment\":\"" + esc(toUtf8(comment)) + "\"";
+        // ★★ Each FIELD is converted from Windows-1252, never the joined string: the " · " is already UTF-8, and
+        //    converting it again made every comment read "0000-2400 Â· E" (found on the R36S's SEARCH, 2026-11-07).
+        std::string comment = toUtf8(time);
+        if (!lang.empty()) comment += (comment.empty() ? "" : " · ") + toUtf8(lang);
+        if (!comment.empty()) j += ",\"comment\":\"" + esc(comment) + "\"";
         j += ",\"mode\":\"am\"}";
         count++;
         if (nl == csv.size()) break;
@@ -427,6 +429,64 @@ int refresh(std::string& err) {
         : "EiBi hasn't published the " + seasonLabel(cur) + " schedule yet, and the "
           + seasonLabel(prev) + " file has no entries either";
     return 0;
+}
+
+std::string seasonOfName(const std::string& fileName) {
+    std::string n = fileName;
+    const size_t slash = n.find_last_of('/');
+    if (slash != std::string::npos) n = n.substr(slash + 1);
+    for (auto& c : n) c = (char)std::tolower((unsigned char)c);
+    if (n.size() < 8 || n.compare(0, 5, "sked-") != 0) return "";
+    if ((n[5] != 'a' && n[5] != 'b') || !std::isdigit((unsigned char)n[6]) || !std::isdigit((unsigned char)n[7])) return "";
+    if (n.size() > 8 && std::isalnum((unsigned char)n[8])) return "";     // "sked-a261.csv" is not a season
+    return n.substr(5, 3);
+}
+
+int importFile(const std::string& path, std::string& err, std::string* season) {
+    err.clear();
+    if (season) season->clear();
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) { err = "the file could not be read"; return 0; }
+    std::string csv;
+    const bool fits = readCapped(f, csv);
+    fclose(f);
+    if (!fits) { err = "the file is larger than any EiBi schedule (over 8 MB) — not loaded"; return 0; }
+    int count = 0;
+    std::string json = toStationsJson(csv, count);
+    // ★ The same test as a download: a file that parses to nothing (a saved web page, a different CSV) must never
+    //   replace a working schedule.
+    if (count <= 0) { err = "no stations in it — use EiBi's CSV file (sked-…csv), not the web page"; return 0; }
+    // ★ Staged NEXT TO the cache (rename cannot cross a filesystem), under its own name: the radio process's refresh()
+    //   uses eibi.csv.tmp and may be running in the other process at this very moment.
+    mkdir(g_dir.c_str(), 0755);
+    const std::string tmp = g_dir + "/eibi.csv.import";
+    bool wrote = false;
+    if (FILE* o = fopen(tmp.c_str(), "wb")) {
+        wrote = fwrite(csv.data(), 1, csv.size(), o) == csv.size();
+        wrote = (fflush(o) == 0) && wrote;
+        if (wrote) fsync(fileno(o));
+        wrote = (fclose(o) == 0) && wrote;
+    }
+    csv.clear(); csv.shrink_to_fit();
+    if (!wrote) { unlink(tmp.c_str()); err = "the schedule could not be saved (" + g_dir + ")"; return 0; }
+    const std::string code = seasonOfName(path);
+    std::lock_guard<std::mutex> lk(g_loadMtx);
+    if (rename(tmp.c_str(), cachePath().c_str()) != 0) { unlink(tmp.c_str()); err = "the schedule could not be saved (" + g_dir + ")"; return 0; }
+    // ★ The season marker says which file the cache holds — temp + rename like the cache itself. A name with no
+    //   season clears it: then needsRefresh() asks daily when there is a network, as for an unknown cache.
+    if (!code.empty()) {
+        const std::string st = seasonPath() + ".tmp";
+        writeSmall(st, fileFor(code));
+        if (rename(st.c_str(), seasonPath().c_str()) != 0) unlink(st.c_str());
+        std::time_t at = 0;
+        if (triedSeason(at) == code) unlink(triedPath().c_str());   // the season EiBi had not published: now we hold it
+        if (season) *season = seasonLabel(code);
+    } else unlink(seasonPath().c_str());
+    publish(json);
+    long long mt = 0, sz = 0;
+    const bool have = cacheId(mt, sz);
+    g_loaded = Loaded{have, mt, sz, count};
+    return count;
 }
 
 std::string status() {

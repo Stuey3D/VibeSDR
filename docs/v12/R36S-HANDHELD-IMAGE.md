@@ -176,7 +176,7 @@ remembered across radios.
 
 **The card.** exFAT data partition **`VIBESDR`**, grown to the KERNEL-reported size on first boot after a one-time
 capacity check: `Recordings/`, `Gallery/<DECODER>/` (SSTV, WEFAX, RTTY, NAVTEX, FT8, …), `import/` (bookmark backups,
-imported at start and from an IMPORT key, moved to `import/done/` with a result `.txt`), `export/`, **`Diagnostic logs/`** (EXPORT DIAGNOSTICS on the handheld writes the same scrubbed vibeserver-diagnostics file there, named by UTC time — Stuart 2026-11-05), `README.txt`. Names
+imported at start and from an IMPORT key, moved to `import/done/` with a result `.txt`), **`EiBi/`** (the owner's own EiBi `sked-xNN.csv` — no internet on the handheld; IMPORT EIBI → `POST /handheld/eibi/import` installs the newest as `$DATA/eibi.csv`, Stuart 2026-11-06), `export/`, **`Diagnostic logs/`** (EXPORT DIAGNOSTICS on the handheld writes the same scrubbed vibeserver-diagnostics file there, named by UTC time — Stuart 2026-11-05), `README.txt`. Names
 "YYYY-MM-DD HHMM - <kHz> kHz <MODE>.ext" in **UTC**, FAT-safe. **Every write is a temp file + rename**; fsck at boot; mount
 `flush`. Audio recordings: the page hands the WAV to the local engine (Cog has no downloads).
 

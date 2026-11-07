@@ -11,6 +11,14 @@ of the handheld (power it off first), put it in a computer, and this drive appea
   import\            Put a bookmark backup here to load it into the handheld. It is read
                      when the handheld starts (or from IMPORT in the menu), then moved to
                      import\done\ with a .txt saying what happened.
+  EiBi\              The shortwave station schedule that SEARCH looks in. The handheld has no
+                     internet, so fetch it yourself: on a computer go to eibispace.de and
+                     download sked-b26.csv - the CSV, not the freq-b26.txt / time-b26.txt
+                     versions (those are printable lists the handheld cannot read). B = winter,
+                     A = summer: take the newest. Put it here, then press IMPORT EIBI on the
+                     handheld (frequency pad -> BOOKMARKS). It is kept through restarts; the
+                     file here stays as your copy. A new one comes out twice a year - repeat
+                     with the new file.
   export\            Files the handheld writes for you to take away.
   Diagnostic logs\   EXPORT DIAGNOSTICS in the menu writes a report here, named by UTC
                      time. Send it with a bug report; personal details are removed.
