@@ -7,7 +7,7 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED sdl2 SDL2_ttf glesv2)
+pkg_check_modules(SDL2 REQUIRED sdl2 SDL2_ttf SDL2_image glesv2)   # SDL2_image: the DAB slideshow + logos (JPEG / PNG only, dab_image.h)
 find_package(Threads REQUIRED)
 # ★ The app's waterfall + spectrum, ported (src/wf/README.md) — bit-exact against the app's own TS in test/.
 file(GLOB WF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/wf/*.cpp)

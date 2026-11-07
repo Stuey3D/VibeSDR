@@ -16,9 +16,11 @@
 //     All three leave the strip directly above the island (y ~274–310) to the VTS bar, which carries the radio text.
 // ★★ ONLY THE PLAYING STATION'S RADIO TEXT (Stuart, 2026-11-07) — the rows never show another service's `dls`.
 // ★ Text: Atkinson Hyperlegible (the Fonts), as everywhere on the R36S.
-// ★ Logos and the MOT slideshow are JPEG / PNG, and the image has no decoder (image/r36s/packages.txt: SDL2 + SDL_ttf
-//   only). Until libsdl2-image-2.0-0 (+ -dev in the build) is added, a logo is the station's initials on a tile and the
-//   slideshow is a framed placeholder naming what the multiplex sent (GET /vibeserver/dabslide is where it comes from).
+// ★ Logos and the MOT slideshow: dab_image.h (SDL2_image, JPEG + PNG only, fetched and decoded off the UI thread, bounded).
+//   The slide sits in layout C's slide area; pressing the station that is already playing (or the slide itself) shows it
+//   full screen (dabDrawFull). A station without a picture gets its initials on a tile.
+// ★ The SCOPES (constellation + impulse response) sit at the left of the SIGNAL pane; `dab_scopes` on/off follows the
+//   pane being on screen.
 #pragma once
 #include "dab_state.h"
 
@@ -50,12 +52,18 @@ inline std::string dabTrim(std::string s) {
     size_t i = 0; while (i < s.size() && (unsigned char)s[i] <= ' ') i++;
     return s.substr(i);
 }
-/** A station's tile: its initials on a colour of its own (a logo where an image decoder exists — see the header). */
+/** A station's picture: the logo the multiplex sent (dab_image.h), else its initials on a colour of its own. */
 inline void dabLogoTile(Ctx& c, Rect r, const std::string& label, double sid) {
+    const float rad = std::min(8.f, r.w / 5);
+    if (const DabTex* t = dabImages().logo((uint32_t)sid, c.t)) {
+        c.g.rrect(r.x, r.y, r.w, r.h, rad, rgb(0xffffff, 0.92f));   // ★ logos are drawn for light backgrounds
+        dabDrawTex(c.g, *t, r.x + 2, r.y + 2, r.w - 4, r.h - 4);
+        return;
+    }
     static const unsigned pal[] = {0x7a3b00, 0x00507a, 0x5a007a, 0x2f6a00, 0x7a0030, 0x006a5a, 0x6a5a00, 0x30307a};
     const unsigned h = (unsigned)sid * 2654435761u;
-    c.g.rrect(r.x, r.y, r.w, r.h, std::min(8.f, r.w / 5), rgb(pal[(h >> 16) % 8]));
-    c.g.rframe(r.x, r.y, r.w, r.h, std::min(8.f, r.w / 5), 1, rgb(0xffffff, 0.22f));
+    c.g.rrect(r.x, r.y, r.w, r.h, rad, rgb(pal[(h >> 16) % 8]));
+    c.g.rframe(r.x, r.y, r.w, r.h, rad, 1, rgb(0xffffff, 0.22f));
     std::string ini;
     const std::string t = dabTrim(label);
     bool start = true;
@@ -69,23 +77,55 @@ inline void dabLogoTile(Ctx& c, Rect r, const std::string& label, double sid) {
     const Font& f = r.h >= 56 ? c.f.big : r.h >= 34 ? c.f.bodyB : c.f.tiny;
     textIn(c, f, ini, r, th::white);
 }
-/** The MOT slideshow's place (TS 101 499) — a placeholder until the image has a JPEG / PNG decoder. */
-inline void dabSlide(Ctx& c, Rect r, const Json* rep, const Json* play) {
-    c.g.rrect(r.x, r.y, r.w, r.h, 8, rgb(0x000000, 0.75f));
-    c.g.rframe(r.x, r.y, r.w, r.h, 8, 1, th::btnBorder);
-    const Json& sl = rep ? (*rep)["slide"] : Json();
-    if (rep && sl.kind == Json::Obj) {
-        textIn(c, c.f.tiny, "SLIDESHOW", {r.x, r.y + 8, r.w, 18}, th::dim);
-        const std::string mime = sl["mime"].str();
-        char b[64]; std::snprintf(b, sizeof b, "%s · %.0f kB", mime.size() > 6 ? mime.substr(6).c_str() : mime.c_str(), sl["bytes"].num(0) / 1024.0);
-        if (play) dabLogoTile(c, {r.cx() - 28, r.cy() - 34, 56, 56}, (*play)["label"].str(), (*play)["sid"].num(0));
-        textIn(c, c.f.tiny, b, {r.x, r.b() - 40, r.w, 16}, th::dim);
-        textIn(c, c.f.tiny, dabFit(c, c.f.tiny, sl["name"].str(), (int)r.w - 12), {r.x, r.b() - 22, r.w, 16}, th::dimmer);
+/** The MOT slideshow (TS 101 499): the picture the playing service is sending, fitted to `r`; while none has arrived,
+ *  the station's logo and "no slideshow". */
+inline void dabSlide(Ctx& c, Rect r, const Json* rep, const Json* play, bool focused) {
+    c.g.rrect(r.x, r.y, r.w, r.h, 8, rgb(0x000000, 0.85f));
+    const DabTex* t = dabImages().slide();
+    if (t && play) {
+        c.g.flush();
+        c.g.clip(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+        dabDrawTex(c.g, *t, r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+        c.g.unclip();
     } else if (play) {
+        const bool coming = rep && (*rep)["slide"].kind == Json::Obj;
         dabLogoTile(c, {r.cx() - 36, r.cy() - 44, 72, 72}, (*play)["label"].str(), (*play)["sid"].num(0));
-        textIn(c, c.f.tiny, "no slideshow", {r.x, r.b() - 24, r.w, 16}, th::dimmer);
+        textIn(c, c.f.tiny, coming ? "slideshow…" : "no slideshow", {r.x, r.b() - 24, r.w, 16}, th::dimmer);
     } else {
         textIn(c, c.f.small, "DAB", r, th::dimmer);
+    }
+    c.g.rframe(r.x, r.y, r.w, r.h, 8, 1, th::btnBorder);
+    if (focused) focusRing(c, r, 8);
+}
+/** ★ THE SCOPES (the web's dabDrawScopes): the constellation — the carriers' differential phases, four clouds when the
+ *  multiplex is clean — and the impulse response of the channel (the PRS correlation, 128 bins, the main path at bin 8;
+ *  everything right of it is an echo). Points and bars, a few hundred quads. Both come in every report this client reads. */
+inline void dabScopes(Ctx& c, const Json* rep, Rect cr, Rect ir) {
+    c.g.rrect(cr.x, cr.y, cr.w, cr.h, 6, rgb(0, 0.8f));
+    c.g.rframe(cr.x, cr.y, cr.w, cr.h, 6, 1, th::btnBorder);
+    c.g.rect(cr.cx(), cr.y + 3, 1, cr.h - 6, rgb(0xffffff, 0.15f));
+    c.g.rect(cr.x + 3, cr.cy(), cr.w - 6, 1, rgb(0xffffff, 0.15f));
+    c.g.rrect(ir.x, ir.y, ir.w, ir.h, 6, rgb(0, 0.8f));
+    c.g.rframe(ir.x, ir.y, ir.w, ir.h, 6, 1, th::btnBorder);
+    c.tc.draw(c.g, c.f.tiny, "CONSTELLATION", cr.x + 5, cr.y + 2, th::dimmer);
+    c.tc.draw(c.g, c.f.tiny, "IMPULSE", ir.x + 5, ir.y + 2, th::dimmer);
+    if (!rep) return;
+    const auto& iq = (*rep)["iq"].a;
+    const float k = std::min(cr.w, cr.h) / 2 / 70.f;   // the web: ±70 counts fill a 120 px box (×0.85)
+    const Rgba dot = rgb(0xffe566, 0.9f);
+    for (size_t i = 0; i + 1 < iq.size(); i += 2) {
+        const float x = cr.cx() + (float)iq[i].num(0) * k, y = cr.cy() - (float)iq[i + 1].num(0) * k;
+        if (x > cr.x && x < cr.r() && y > cr.y && y < cr.b()) c.g.rect(x - 1, y - 1, 2, 2, dot);
+    }
+    const auto& v = (*rep)["ir"].a;
+    if (!v.empty()) {
+        const float bw = (ir.w - 8) / (float)v.size(), base = ir.b() - 4, hh = ir.h - 20;
+        for (float gx = 0; gx <= v.size(); gx += 16) c.g.rect(ir.x + 4 + gx * bw, ir.y + 16, 1, hh, rgb(0xffffff, 0.10f));
+        for (size_t i = 0; i < v.size(); i++) {
+            const float h = std::max(0.f, std::min(1.f, (float)v[i].num(0) / 255.f)) * hh;
+            if (h >= 0.5f) c.g.rect(ir.x + 4 + i * bw, base - h, std::max(1.f, bw), h, rgb(0xffa000));
+        }
+        c.g.rect(ir.x + 4 + 8 * bw, ir.y + 16, 1, hh, rgb(0xffffff, 0.5f));   // the main path: right of it, echoes
     }
 }
 /** The three bars (signal-strength style), `level` of them lit, coloured by the verdict. */
@@ -367,7 +407,13 @@ inline void dabPaneStations(App& a, Ctx& c, const RadioState& s, Rect view, floa
             c.tc.draw(c.g, c.f.body, dabFit(c, c.f.body, nm.empty() ? "(unnamed)" : nm, (int)(rr.r() - 22 - cw - x)), x,
                       rr.cy() - c.f.body.lineHeight() / 2.f, on ? th::activeTx : th::btnText);
         });
-    if (hit >= 0) dabPickService(a, svcs[(size_t)hit]["sid"].num(0));
+    if (hit >= 0) {
+        const double sid = svcs[(size_t)hit]["sid"].num(0);
+        // ★ the station already playing, pressed again: its slideshow full screen (when it has one) — re-asking for the
+        //   service it is already on would do nothing a listener could hear
+        if (sid == playing && playing > 0 && dabImages().slide()) u.slideFull = true;
+        else dabPickService(a, sid);
+    }
 }
 
 /** SIGNAL: the advanced figures, one row each (the web's signal pane, without the scopes — see the report). */
@@ -423,7 +469,19 @@ inline void dabPaneSignal(App& a, Ctx& c, const RadioState& s, Rect view) {
             if (!an.empty()) rows.push_back({"Announcement", an + " on air (the radio does not switch)"});
         }
     }
-    const float kw = 210;
+    // ★ the scopes at the left of the figures (stacked when the pane is tall, side by side when it is short)
+    Rect rowsV = view;
+    if (view.h >= 150) {
+        const float sq = std::min(view.h - 52, 140.f);
+        dabScopes(c, rep, {view.x, view.y, sq, sq}, {view.x, view.y + sq + 4, std::max(sq, 168.f), view.h - sq - 4});
+        rowsV = {view.x + std::max(sq, 168.f) + 10, view.y, view.w - std::max(sq, 168.f) - 10, view.h};
+    } else {
+        const float sq = view.h;
+        dabScopes(c, rep, {view.x, view.y, sq, sq}, {view.x + sq + 4, view.y, 140, sq});
+        rowsV = {view.x + sq + 154, view.y, view.w - sq - 154, view.h};
+    }
+    const float kw = std::min(210.f, rowsV.w * 0.42f);
+    view = rowsV;
     dabRows(c, u.sigScroll, view, (int)rows.size(), 26, "dab.sig.", [](int k) { return std::to_string(k); },
         [&](int k, Rect rr, bool focused) {
             if (k % 2 == 0) c.g.rect(rr.x, rr.y, rr.w, rr.h + 3, rgb(0xffa000, 0.05f));
@@ -579,7 +637,8 @@ inline void dabDrawBox(App& a, Ctx& c, const RadioState& s) {
     Rect box;
     const Json* rep = dabReport(s);
     const Json* play = rep ? dabPlaying(*rep) : nullptr;
-    c.nav.layer("dab");
+    if (u.slideFull && !(dabImages().slide() && play && grabbed)) u.slideFull = false;
+    c.nav.layer(u.slideFull ? "dab.under" : "dab");   // ★ under the full-screen slide nothing in the box takes the pad
     if (u.layout == DAB_A_SHEET) {
         box = {6, 156, 628, 114};
         dabPanel(c, box);
@@ -623,7 +682,14 @@ inline void dabDrawBox(App& a, Ctx& c, const RadioState& s) {
         const Rect list{192, head.b() + 6, box.w - 192 - 14, box.b() - head.b() - 10};
         const Rect body{10, head.b() + 6, box.w - 24, box.b() - head.b() - 10};
         if (u.pane == DabUi::P_STATIONS) {
-            dabSlide(c, slide, rep, play);
+            // ★ the slide is a stop of its own when there is one: ENTER shows it full screen
+            bool fsl = false;
+            if (dabImages().slide() && play) {
+                const Nav::Hit hs = c.nav.item("dab.slide", slide);
+                fsl = hs.focused;
+                if (hs.pressed) u.slideFull = true;
+            }
+            dabSlide(c, slide, rep, play, fsl);
             if (play) {
                 c.tc.draw(c.g, c.f.bodyB, dabFit(c, c.f.bodyB, dabTrim((*play)["label"].str()), (int)now.w), now.x, now.y, th::white);
                 // ★ the radio text is the VTS bar's; here the codec line, or the "tuning in" line while it starts
@@ -639,7 +705,7 @@ inline void dabDrawBox(App& a, Ctx& c, const RadioState& s) {
                               u.waiting.empty() ? th::dim : th::amber);
             }
         }
-        dabPane(a, c, s, body, list, 29, false);
+        dabPane(a, c, s, body, list, 29, true);
     }
     c.nav.layer("deck");
     // the box as ONE stop on the island's layer (the web's [data-navbox]): ENTER grabs
@@ -666,8 +732,37 @@ inline void dabDrawBox(App& a, Ctx& c, const RadioState& s) {
         const double sid = play ? (*play)["sid"].num(0) : (*rep)["services"][0]["sid"].num(0);
         a.nav_.setFocus("dab", "dab.row." + std::to_string((long long)sid));
     }
+    // ★ the scopes travel only while they are on screen (the web's dabSetPane → spec.dabScopes). This client reads the
+    //   legacy report, which carries them anyway; the message also makes the engine send a report AT ONCE, so the pane
+    //   never opens empty — and it is right the day this client moves to dab=2.
+    const bool wantScopes = u.pane == DabUi::P_SIGNAL && (u.layout != DAB_B_STRIP || grabbed) && !u.slideFull;
+    if (wantScopes != u.scopesOn) { u.scopesOn = wantScopes; a.eng_->send(std::string("{\"type\":\"dab_scopes\",\"on\":") + (wantScopes ? "1" : "0") + "}"); }
     // ★ an open request from the island (BLOCK, the frequency box, the meter) grabs too
     if (u.grabNext && !grabbed) { u.grabNext = false; a.open(App::S_DAB); u.wantRowFocus = true; }
 }
 
+}  // namespace hh
+
+namespace hh {
+/** ★ THE SLIDE, FULL SCREEN — draw it from the sheet loop (`case S_DAB: dabDrawFull(*this, c, s); break;`). A 320 × 240
+ *  MOT slide is exactly half the panel, so it doubles cleanly. ENTER or BACK closes it; the station, its radio text and
+ *  the slide's name ride along the foot. Nothing while it is not open. */
+inline void dabDrawFull(App& a, Ctx& c, const RadioState& s) {
+    DabUi& u = dabUi();
+    if (!u.slideFull) return;
+    const DabTex* t = dabImages().slide();
+    const Json* rep = dabReport(s);
+    const Json* play = rep ? dabPlaying(*rep) : nullptr;
+    if (!t || !play) { u.slideFull = false; return; }
+    c.g.rect(0, 0, (float)a.W, (float)a.H, rgb(0));
+    dabDrawTex(c.g, *t, 0, 0, (float)a.W, (float)a.H);
+    const float fh = 54;
+    c.g.rect(0, a.H - fh, (float)a.W, fh, rgb(0, 0.72f));
+    c.tc.draw(c.g, c.f.bodyB, dabFit(c, c.f.bodyB, dabTrim((*play)["label"].str()), a.W - 220), 14, a.H - fh + 4, th::white);
+    const std::string dls = dabTrim((*rep)["dls"].str());
+    c.tc.draw(c.g, c.f.small, dabFit(c, c.f.small, dls, a.W - 28), 14, a.H - fh + 4 + c.f.bodyB.lineHeight(), th::white68);
+    hints(c, a.W - 200.f, a.H - fh + 15, {{FACE_RIGHT, "close"}}, th::white68);
+    const Nav::Hit h = c.nav.item("dab.full", {0, 0, (float)a.W, (float)a.H});
+    if (h.pressed || c.nav.backPressed()) { u.slideFull = false; a.nav_.setFocus("dab", "dab.slide"); }
+}
 }  // namespace hh

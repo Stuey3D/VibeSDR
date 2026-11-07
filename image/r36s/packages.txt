@@ -56,6 +56,8 @@ fonts-dejavu-core
 # the native receiver UI (vibe-hhui, built from handheld-ui/): SDL2 on KMSDRM + OpenGL ES 3 (Mesa, above), SDL_ttf for text
 libsdl2-2.0-0
 libsdl2-ttf-2.0-0
+# SDL2_image: the DAB slideshow and station logos (JPEG + PNG; handheld-ui/src/dab_image.h decodes only those two)
+libsdl2-image-2.0-0
 libgles2
 
 # ★★★ NO SSH, NO NETWORK SERVICES (Stuart 2026-11-05: "we don't need SSH"). Nothing on the card listens on any

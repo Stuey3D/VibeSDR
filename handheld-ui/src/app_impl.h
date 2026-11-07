@@ -1174,7 +1174,7 @@ inline int App::run(int argc, char** argv) {
                 case S_KB: drawKeyboard(c, s); break;
                 case S_BOOKMARKS: drawBookmarks(c, s); break;
                 case S_SEARCH: drawSearch(c, s); break;
-                case S_DAB: break;
+                case S_DAB: dabDrawFull(*this, c, s); break;
                 case S_AUDIO: drawAudioSheet(c, s); break;
                 case S_MENU: drawMenu(c, s); break;
                 default: break;

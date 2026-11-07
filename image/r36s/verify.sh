@@ -69,7 +69,7 @@ e2fsck -fn "$T/root.ext4" >/dev/null 2>&1 || fail "root filesystem has errors"
 for f in /usr/lib/vibesdr-r36s/vibe-hwd /usr/lib/vibesdr-r36s/vibe-splash /usr/lib/vibesdr-r36s/vibe-card \
          /usr/lib/vibesdr-r36s/vibe-bootkeys /usr/lib/vibesdr-r36s/vibe-clock /usr/lib/vibesdr-r36s/overlay-init \
          /usr/lib/vibesdr-r36s/vibe-debuglog /usr/share/vibesdr-r36s/splash.bgrx.z /usr/share/vibesdr-r36s/splash-font.bin /usr/bin/cog /usr/bin/vibeserver \
-         /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /usr/lib/aarch64-linux-gnu/libSDL2_ttf-2.0.so.0 /usr/lib/vibesdr-r36s/vibe-hhui /usr/share/vibesdr-r36s/fonts/JetBrainsMono-Bold.ttf /usr/share/vibesdr-r36s/fonts/JetBrainsMono-Regular.ttf \
+         /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /usr/lib/aarch64-linux-gnu/libSDL2_ttf-2.0.so.0 /usr/lib/aarch64-linux-gnu/libSDL2_image-2.0.so.0 /usr/lib/vibesdr-r36s/vibe-hhui /usr/share/vibesdr-r36s/fonts/JetBrainsMono-Bold.ttf /usr/share/vibesdr-r36s/fonts/JetBrainsMono-Regular.ttf \
          /usr/share/vibesdr-r36s/fonts/DSEG14Classic-BoldItalic.ttf /usr/share/vibesdr-r36s/fonts/OFL-JetBrainsMono.txt /usr/share/vibesdr-r36s/fonts/DSEG-LICENSE.txt \
          /usr/share/vibesdr-r36s/fonts/AtkinsonHyperlegible-Regular.ttf /usr/share/vibesdr-r36s/fonts/AtkinsonHyperlegible-Bold.ttf /usr/share/vibesdr-r36s/fonts/OFL-AtkinsonHyperlegible.txt \
          /usr/lib/modules/7.1.2/kernel/drivers/gpu/drm/panfrost/panfrost.ko /usr/lib/modules/7.1.2/modules.dep.bin \

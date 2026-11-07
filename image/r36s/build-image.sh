@@ -156,7 +156,7 @@ in_root depmod -a "$KVER"
 #   (OFL) for the frequency, as the app's VFD.
 echo "==> vibe-hhui (the native receiver UI)"
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends g++ cmake make pkg-config \
-  libsdl2-dev libsdl2-ttf-dev libgles-dev libegl-dev >/dev/null
+  libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libgles-dev libegl-dev >/dev/null
 rm -rf /work/hhui && cmake -S /repo/handheld-ui -B /work/hhui -DCMAKE_BUILD_TYPE=Release >/dev/null
 make -C /work/hhui -j"${JOBS:-6}" >/dev/null || die "vibe-hhui did not build"
 HHUI_BIN=/work/hhui/vibe-hhui

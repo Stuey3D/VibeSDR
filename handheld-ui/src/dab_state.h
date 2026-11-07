@@ -16,6 +16,7 @@
 // ★★ ARRIVALS: engine.h keeps the LAST message of each type, so an identical second `dab_off` is invisible by content.
 //    RadioState::seq[type] (one counter per type, bumped in Engine::onText) says a message ARRIVED — see the wiring.
 #pragma once
+#include "dab_image.h"
 #include "dab_quality.h"
 
 #include <cstdint>
@@ -58,6 +59,9 @@ struct DabUi {
     bool grabNext = false;           // give the box the D-pad on the next frame (the web's autoGrab on entry)
     bool wantRowFocus = false;       // a fresh grab lands on the playing (else first) station row once there are rows
     int layout = DAB_C_PAGE;
+    bool slideFull = false;          // the slide full-screen (a press on it; BACK / ENTER closes)
+    bool scopesOn = false;           // what we last told the engine (dab_scopes)
+    double slideSid = 0;             // the service the shown slide belongs to
     // the block: what the label says, what the server last reported, the burst being settled (DabBlockStepper)
     int channel = -1, serverBlock = -1;
     int stepPending = -1; double stepSendAt = 0;
@@ -181,6 +185,7 @@ inline void dabLeave(App& a, const RadioState& s, const std::string& wantMode = 
     if (u.scanMine && s.msg("dab_scan")["running"].boolean()) a.eng_->send("{\"type\":\"dab_scan\",\"on\":0}");
     a.eng_->send("{\"type\":\"dab\",\"on\":0}");
     u.on = false; u.haveReport = false; u.meter.reset(); u.stepPending = -1; u.askBlock = -1; u.scanMine = false; u.pickedAt = 0;
+    u.scopesOn = false; u.slideFull = false;   // ★ the engine forgets a socket's scopes when DAB ends (dabPeersForget)
     dabReleaseBox(a);
 }
 
@@ -241,6 +246,7 @@ inline bool dabModePick(App& a, const RadioState& s, const std::string& id) {
 
 // ── once a frame ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
+inline void dabImagesTick(App& a, const RadioState& s);
 /** Call once a loop, after eng.pump (with the session running or not). */
 inline void dabTick(App& a, const RadioState& s) {
     DabUi& u = dabUi();
@@ -257,7 +263,8 @@ inline void dabTick(App& a, const RadioState& s) {
     const uint64_t off = dabArrived(s, "dab_off");
     if (off != u.seenOff) {
         u.seenOff = off;
-        if (u.on) { u.on = false; u.haveReport = false; u.meter.reset(); u.stepPending = -1; u.askBlock = -1; dabReleaseBox(a); }
+        if (u.on) { u.on = false; u.haveReport = false; u.meter.reset(); u.stepPending = -1; u.askBlock = -1; u.slideFull = false; dabReleaseBox(a); }
+        u.scopesOn = false;
     }
     // the restore, spent on the first config out of DAB (dabApplyRestore) — on top of the server's truth
     if (u.restoreArmed && off > u.offAtLeave && s.configSeq > u.cfgAtLeave) {
@@ -335,6 +342,39 @@ inline void dabTick(App& a, const RadioState& s) {
             u.waiting = b;
         }
     }
+    dabImagesTick(a, s);
+}
+
+/** The pictures, once a frame from dabTick: the playing service's slide on a new `seq`, every listed station's logo
+ *  (the one the multiplex sent, else its kept slide), and the uploads. */
+inline void dabImagesTick(App& a, const RadioState& s) {
+    DabUi& u = dabUi();
+    DabImages& im = dabImages();
+    const double now = nowSec();
+    const Json* r = dabReport(s);
+    if (!u.on) { if (im.slide()) im.clearSlide(); u.slideFull = false; im.tick(now); return; }
+    if (r) {
+        const double sid = (*r)["sid"].num(0);
+        if (sid != u.slideSid) { u.slideSid = sid; im.clearSlide(); u.slideFull = false; }
+        const Json& sl = (*r)["slide"];
+        const Json* pl = dabPlaying(*r);
+        uint64_t key = sl.kind == Json::Obj ? (uint64_t)sl["seq"].num(0) : 0;
+        std::string path = "/vibeserver/dabslide";
+        if (!key && pl && (*pl)["logoSlide"].boolean()) { key = (1ull << 40) | (uint64_t)sid; path += "?sid=" + std::to_string((uint64_t)sid); }
+        if (key && sid > 0 && key != im.slideSeqShown()) {
+            static uint64_t asked = 0; static double askedSid = 0, askedAt = 0;
+            // ★ once per new slide; a miss (the engine had not stored it yet) is asked again after 10 s
+            if (key != asked || sid != askedSid || now - askedAt > 10) { asked = key; askedSid = sid; askedAt = now; im.setSlideWanted(key); im.wantSlide(a.eng_->port(), key, path); }
+        }
+        for (auto& sv : (*r)["services"].a) {
+            const uint32_t id = (uint32_t)sv["sid"].num(0);
+            if (!id) continue;
+            const std::string path = sv["logoAir"].boolean() ? "/vibeserver/dablogoair?sid=" + std::to_string(id)
+                                   : sv["logoSlide"].boolean() ? "/vibeserver/dabslide?sid=" + std::to_string(id) : "";
+            im.wantLogo(a.eng_->port(), id, path, now);
+        }
+    }
+    im.tick(now);
 }
 
 // ── for the VTS bar (vts.h) ───────────────────────────────────────────────────────────────────────────────────────────
