@@ -428,16 +428,34 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     const double sqlDb = num_.count("audio.sqlDb") ? num_["audio.sqlDb"] : -999;
     const bool sqlOn = sqlDb > -998;
     if (live && sqlOn && lastSigDb_ < sqlDb) reading = "SQL";
-    // widths reserved for the widest reading (the web's 8ch rule: nothing moves as the numbers change)
-    const float fMainW = (float)c.tc.widthTab(c.f.freq, "8888.888"), fFineW = (float)c.tc.widthTab(c.f.freqFine, "88");
+    // widths reserved for the widest reading THIS RADIO CAN SHOW (the web's 8ch rule: nothing moves as the numbers change)
+    // ★ from its own top frequency — "96100.000" kHz ran into the unit when 8 characters were reserved (Stuart, 2026-11-07)
+    double topHz = 1.8e9;
+    for (auto& r : s.ranges) topHz = std::max(topHz, r.second);
+    auto as8 = [](std::string t) { for (auto& ch : t) if (ch >= '0' && ch <= '9') ch = '8'; return t; };
+    char tb[48];
+    if (set_.freqUnit == 0) std::snprintf(tb, sizeof tb, "%lld", (long long)topHz);
+    else if (set_.freqUnit == 1) std::snprintf(tb, sizeof tb, "%.3f", topHz / 1e3);
+    else std::snprintf(tb, sizeof tb, "%.3f", std::floor(topHz / 1e6));
+    const std::string tmpl = as8(tb);
     const float unitW = (float)c.tc.width(c.f.unit, "MHz");
-    const float fMainW2 = set_.freqUnit == 2 ? 0.f : (float)c.tc.widthTab(c.f.freq, "88888888");
-    const float boxW = (set_.freqUnit == 2 ? fMainW + 6 + fFineW : fMainW2) + 6 + unitW + 24;
     // ★ + room for the STEREO badge (#mStereo), reserved always so nothing moves when the pilot comes and goes
     const float stW = 30;
     const float modeW = std::max(84.f, (float)c.tc.width(c.f.btn, "ECSS-U") + 24) + stW;
     const float rdW = std::max(118.f, (float)c.tc.width(c.f.small, "SNR 99 dB") + 22);
-    const float gap = 10, total = boxW + gap + modeW + gap + rdW;
+    const float gap = 10;
+    const float avail = pill.w - 12 - modeW - rdW - 2 * gap;
+    // the readout's face: the big one, smaller only if this unit's widest reading would not fit beside the chips
+    const Font* ff = &c.f.freq;
+    float fMainW = 0, fFineW = 0, boxW = 0;
+    for (const Font* cand : {&c.f.freq, &c.f.big, &c.f.title}) {
+        ff = cand;
+        fMainW = (float)c.tc.widthTab(*ff, tmpl);
+        fFineW = set_.freqUnit == 2 ? (float)c.tc.widthTab(c.f.freqFine, "88") : 0.f;
+        boxW = fMainW + (set_.freqUnit == 2 ? 6 + fFineW : 0.f) + 6 + unitW + 24;
+        if (boxW <= avail) break;
+    }
+    const float total = boxW + gap + modeW + gap + rdW;
     float x = pill.cx() - total / 2;
     const float bh = pill.h - 12, by = pill.y + 6;
     // the frequency box (#mFreqBox: 62 % black, a white hairline)
@@ -446,16 +464,15 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     c.g.rrect(fb.x, fb.y, fb.w, fb.h, 7, rgb(0, 0.62f));
     c.g.rframe(fb.x, fb.y, fb.w, fb.h, 7, 1, rgb(0xffffff, 0.38f));
     {
-        const float base = fb.cy() + c.f.freq.lineHeight() * 0.5f;   // a shared baseline-ish line for the three parts
+        const float base = fb.cy() + ff->lineHeight() * 0.5f;   // a shared baseline-ish line for the parts
         const float mx = fb.x + 12;
+        c.tc.drawTab(c.g, *ff, fmain, mx + fMainW / 2, base - ff->lineHeight(), th::white, 1);
+        float ux = mx + fMainW + 6;
         if (set_.freqUnit == 2) {
-            c.tc.drawTab(c.g, c.f.freq, fmain, mx + fMainW / 2, base - c.f.freq.lineHeight(), th::white, 1);
-            c.tc.drawTab(c.g, c.f.freqFine, ffine, mx + fMainW + 6, base - c.f.freqFine.lineHeight() - 3, th::white68);
-            c.tc.draw(c.g, c.f.unit, unitTxt, mx + fMainW + 6 + fFineW + 6, base - c.f.unit.lineHeight() - 4, th::white);
-        } else {
-            c.tc.drawTab(c.g, c.f.freq, fmain, mx + fMainW2 / 2, base - c.f.freq.lineHeight(), th::white, 1);
-            c.tc.draw(c.g, c.f.unit, unitTxt, mx + fMainW2 + 6, base - c.f.unit.lineHeight() - 4, th::white);
+            c.tc.drawTab(c.g, c.f.freqFine, ffine, ux, base - c.f.freqFine.lineHeight() - 3, th::white68);
+            ux += fFineW + 6;
         }
+        c.tc.draw(c.g, c.f.unit, unitTxt, ux, base - c.f.unit.lineHeight() - 4, th::white);
     }
     if (hf.focused) focusRing(c, fb, 7);
     if (hf.pressed) openFreqEntry();
@@ -540,7 +557,7 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         //    fit the full words in then do it"), his abbreviations when not; the UTC clock at the right only if there is
         //    room left. (A) = automatic: the radio's AGC / an IF filter that follows the zoom.
         const Json& h = s.msg("hwinfo");
-        struct Part { std::string full, abbr; Rgba col = th::dim; };
+        struct Part { std::string full, abbr; Rgba col = th::dim; int icon = 0; };   // icon: 1 CPU chip · 2 battery
         std::vector<Part> parts;
         if (s.session == "running") {
             char a1[48], a2[48];
@@ -557,12 +574,22 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
                                  "IF: " + (bwHz > 0 ? v + "K" : v) + (au ? " (A)" : "")});
             }
         }
-        if (cpuPct_ >= 0) parts.push_back({"CPU " + std::to_string(cpuPct_) + "%", "CPU: " + std::to_string(cpuPct_) + "%"});
-        if (battery_ >= 0) {
-            Part p{"Battery " + std::to_string(battery_) + "%" + (charging_ ? " +" : ""), "Bat: " + std::to_string(battery_) + "%" + (charging_ ? "+" : "")};
-            if (battery_ <= 10 && !charging_) p.col = th::red;
+        // ★ CPU and battery as ICONS + figure (Stuart, 2026-11-07)
+        // the web's HEALTH_COLOURS: OK · elevated · high · critical
+        const Rgba hc[4] = {rgb(0x5BE36B), rgb(0xE8C547), rgb(0xFF8A3D), rgb(0xFF4B4B)};
+        if (cpuPct_ >= 0) {
+            Part p{"", std::to_string(cpuPct_) + "%"};
+            p.icon = 1;
+            p.col = hc[cpuPct_ >= 90 ? 3 : cpuPct_ >= 75 ? 2 : cpuPct_ >= 60 ? 1 : 0];
             parts.push_back(p);
         }
+        if (battery_ >= 0) {
+            Part p{"", std::to_string(battery_) + "%"};
+            p.icon = 2;
+            p.col = charging_ ? hc[0] : battery_ > 40 ? hc[0] : battery_ > 15 ? hc[1] : hc[3];   // green / yellow / red
+            parts.push_back(p);
+        }
+        const float iconW = 22;   // an icon + its gap before the figure
         // ★ Stuart, 2026-11-06: "Time left, record time right stats middle"
         const float lyT = ty - c.f.small.lineHeight() / 2.f;
         const float leftW = (float)c.tc.width(c.f.small, clk);
@@ -579,13 +606,41 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         // the stats centred in the room between the clock and the recording time
         const float gapW = 18;
         const float room = pill.w - leftW - rightW - 2 * gapW;
-        auto widthOf = [&](bool full) { float w = 0; for (auto& p : parts) w += c.tc.width(c.f.small, full ? p.full : p.abbr) + gapW; return w - gapW; };
-        const bool full = widthOf(true) <= room;
+        auto widthOf = [&](bool full) { float w = 0; for (auto& p : parts) w += c.tc.widthTab(c.f.small, full ? p.full : p.abbr) + gapW + (p.icon ? iconW : 0); return w - gapW; };
+        // ★ ALWAYS the abbreviations (Stuart, 2026-11-07: "keep the abbreviated status line as it flaps between full
+        //   and shortened") — the full words came and went as the figures changed width
+        const bool full = false;
+        (void)room;
         const float tw = widthOf(full);
         // centred on the row; nudged right of the clock if it would overlap
         float x = std::max(pill.x + 2 + leftW + gapW, pill.cx() - tw / 2);
         if (x + tw > pill.r() - rightW - gapW) x = pill.r() - rightW - gapW - tw;
-        for (auto& p : parts) x += c.tc.draw(c.g, c.f.small, full ? p.full : p.abbr, x, lyT, p.col) + gapW;
+        for (auto& p : parts) {
+            if (p.icon == 1) {
+                // ★ THE SERVER'S CPU GLYPH (HealthPill.tsx 'cpu', 16×16, stroke 1.4): a 7×7 chip, two pins a side,
+                //   tinted by its level with the health colours (the web's HEALTH_COLOURS)
+                const float ox = x, oy = ty - 8;
+                c.g.rframe(ox + 4.5f - 0.7f, oy + 4.5f - 0.7f, 7 + 1.4f, 7 + 1.4f, 1.5f, 1.4f, p.col);
+                const float pins[8][4] = {{6.5f, 1.8f, 6.5f, 4.5f}, {9.5f, 1.8f, 9.5f, 4.5f}, {6.5f, 11.5f, 6.5f, 14.2f}, {9.5f, 11.5f, 9.5f, 14.2f},
+                                          {1.8f, 6.5f, 4.5f, 6.5f}, {1.8f, 9.5f, 4.5f, 9.5f}, {11.5f, 6.5f, 14.2f, 6.5f}, {11.5f, 9.5f, 14.2f, 9.5f}};
+                for (auto& pn : pins) c.g.line(ox + pn[0], oy + pn[1], ox + pn[2], oy + pn[3], 1.4f, p.col);
+                x += iconW;
+            } else if (p.icon == 2) {
+                // a battery, green / yellow / red by level (Stuart): the body filled to the level, its nub, a bolt charging
+                const float bx = x, by2 = ty - 5, bw2 = 16, bh2 = 10;
+                c.g.rframe(bx, by2, bw2, bh2, 2, 1.3f, p.col);
+                c.g.rect(bx + bw2, by2 + 3, 2, 4, p.col);
+                const float lvl = std::max(0.f, std::min(1.f, battery_ / 100.f));
+                if (lvl > 0) c.g.rect(bx + 2, by2 + 2, (bw2 - 4) * lvl, bh2 - 4, p.col);
+                if (charging_) {
+                    const float mx = bx + bw2 / 2;
+                    c.g.triangle(mx + 1, by2 - 1, mx - 3, ty + 1, mx, ty + 1, th::white);
+                    c.g.triangle(mx, ty - 1, mx + 3, ty - 1, mx - 1, by2 + bh2 + 1, th::white);
+                }
+                x += iconW;
+            }
+            x += c.tc.drawTab(c.g, c.f.small, full ? p.full : p.abbr, x, lyT, p.col) + gapW;
+        }
     }
 }
 
@@ -1078,6 +1133,7 @@ inline int App::run(int argc, char** argv) {
                     if (j.has("battery")) { battery_ = (int)j["battery"]["pct"].num(-1); charging_ = j["battery"]["charging"].boolean(); }
                     if (j.has("brightness")) brightness_ = (int)j["brightness"].num(brightness_);
                     if (j.has("volume")) volume_ = (int)j["volume"].num(volume_);
+                    if (j.has("cpuMax")) cpuMaxSeen_ = j["cpuMax"].num(0);
                 }
                 const HttpResult v = httpRequest(p, "GET", "/vibeserver.json", "", 4);
                 if (v.status == 200) {
@@ -1101,6 +1157,7 @@ inline int App::run(int argc, char** argv) {
             eng.device("{\"action\":\"screen-off\"}");
             screenOff_ = true;
         }
+        if (cpuMaxSeen_ > 0) { num_["hw.cpuMax"] = cpuMaxSeen_; cpuMaxSeen_ = 0; }   // (from the device poll's worker)
         if (settingsDirty_ && nowSec() - settingsAt_ > 1.0) { set_.save(); settingsDirty_ = false; }
 
         // ── draw (≤ 30 fps; nothing while the screen is off) ──

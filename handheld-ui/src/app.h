@@ -21,6 +21,7 @@
 #include <cstring>
 #include <ctime>
 #include <time.h>
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <map>
@@ -145,6 +146,7 @@ public:
     int battery_ = -1; bool charging_ = false;
     int volume_ = -1; bool muted_ = false; double volUntil_ = 0;
     int brightness_ = 120;
+    std::atomic<double> cpuMaxSeen_{0};   // the CPU SPEED cap the hardware service reported (kHz), handed to num_ on the UI thread
     bool screenOff_ = false;
     double lastInput_ = 0;
     std::string toast_; double toastUntil_ = 0;

@@ -112,7 +112,9 @@ class Hwd:
         self.clients = set()          # writers of every connection
         self.subscribers = set()
         self.acks = set()
-        self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME}
+        # ★ cpuMax: the CPU SPEED cap (kHz). 1104 MHz by default (Stuart, 2026-11-07: a Pi 2 runs a whole server at
+        #   900 MHz; the A35s' top steps cost the most power per unit of work) — FULL = 1296000
+        self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME, "cpuMax": 1104000}
         try:
             with open(HWD_JSON) as f:
                 self.cfg.update({k: v for k, v in json.load(f).items() if k in self.cfg})
@@ -143,6 +145,37 @@ class Hwd:
             except OSError as e:
                 log("could not save", HWD_JSON, e)
         self.save_task = asyncio.get_running_loop().create_task(later())
+
+    # ── CPU speed ──
+    def cpu_steps(self):
+        steps = set()
+        for p in glob.glob("/sys/devices/system/cpu/cpufreq/policy*"):
+            for f in rd(p + "/scaling_available_frequencies", "").split():
+                if f.isdigit():
+                    steps.add(int(f))
+        return sorted(steps)
+
+    def apply_cpu(self):
+        steps = self.cpu_steps()
+        want = int(self.cfg.get("cpuMax", 1104000))
+        ok = [f for f in steps if f <= want] or steps[:1]
+        if not ok:
+            return
+        cap = ok[-1]
+        for p in glob.glob("/sys/devices/system/cpu/cpufreq/policy*"):
+            try:
+                wr(p + "/scaling_max_freq", cap)
+            except OSError as e:
+                log("cpu speed:", e)
+        log("cpu speed: capped at", cap // 1000, "MHz")
+
+    def set_cpu(self, v):
+        v = int(v)
+        if not 408000 <= v <= 1296000:
+            raise ValueError("cpu speed out of range 408000..1296000 kHz")
+        self.cfg["cpuMax"] = v
+        self.apply_cpu()
+        self.save_soon()
 
     # ── backlight ──
     def apply_brightness(self):
@@ -305,7 +338,8 @@ class Hwd:
         b = self.battery if self.battery["pct"] is not None else self.read_battery()
         return {"ok": True, "brightness": self.cfg["brightness"], "maxBrightness": self.max_brightness,
                 "volume": self.cfg["volume"], "muted": self.cfg["volume"] == 0, "output": self.output,
-                "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen}
+                "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen,
+                "cpuMax": self.cfg["cpuMax"], "cpuSteps": self.cpu_steps()}
 
     async def handle(self, req, writer):
         if not isinstance(req, dict):
@@ -328,6 +362,8 @@ class Hwd:
             self.set_brightness(req.get("value"))
         elif s == "volume":
             self.set_volume(req.get("value"))
+        elif s == "cpuMax":
+            self.set_cpu(req.get("value"))
         elif s == "time":
             self.set_time(req.get("utcMs"))
         elif a in ("poweroff", "reboot"):
@@ -460,6 +496,7 @@ class Hwd:
 
     async def main(self):
         self.apply_brightness()
+        self.apply_cpu()          # ★ the CPU SPEED cap, after vibe-cpu.service set schedutil + the 1296 MHz ceiling
         self.apply_volume()
         if not any(n == "rk817_ext Headphones" for n, _ in input_devices()):
             self.set_output(False)       # ★ no jack detector: the speaker, never the silent default (HP)

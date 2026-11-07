@@ -15,7 +15,8 @@ struct Settings {
     std::string palette = "Jet";   // ★ the app's production default
     int speed = 4;                 // wf::Scroll: 4 = Default (30 rows/s, never 20 — feedback_waterfall_core_rules)
     double contrast = 0, sharpness = 5, wfBrightness = 0;
-    int specRate = 20;             // real spectrum frames a second asked of the engine: 5 / 10 / 20
+    int specRate = 10;             // real spectrum frames a second asked of the engine: 5 / 10 / 20 — ★ 10, as every server's
+                                   //   default (Stuart, 2026-11-07); the waterfall's output clock stays 30 rows/s regardless
     int screenOffMin = 0;          // 0 = never
     bool followVfo = true;         // VFO CENTRE: LOCKED (the view follows the dial)
     int meterMode = 0;             // 0 SNR · 1 S-units · 2 dBFS (the web's meter cycle)

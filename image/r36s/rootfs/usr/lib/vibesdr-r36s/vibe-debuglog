@@ -1,6 +1,10 @@
 #!/bin/sh
 # vibe-debuglog — ONLY with `vibe.debuglog` on the kernel command line (extlinux.conf on VIBEBOOT, editable from any
-# computer): every 15 s, a snapshot of the running system to the card — Diagnostic logs/debuglog-<boot>.txt.
+# computer): every 60 s, a snapshot of the running system to the card — Diagnostic logs/debuglog-<boot>.txt.
+# ★★ LIGHT (Stuart, 2026-11-07: the 15 s snapshots were the "random" CPU bursts to 70 %+): the heavy probes (every fd of
+#    every process, the sound controls, GL maps, devices) run in the FIRST snapshot only; later ones are cpufreq + its
+#    residency, top / top -H, memory, the units and the journal lines SINCE the last snapshot (a cursor), appended —
+#    never the last 4000 lines re-copied. One snapshot ≈ a few tenths of a second of one core.
 #
 # ★★★ WHY. The handheld has no SSH and no network (Stuart), and the journal lives in RAM. When the receiver itself
 #     will not come up (the first card, 2026-11-06: no audio, a waterfall row every ~10 s, START RADIO dead), the
@@ -31,6 +35,11 @@ snap() {
   echo; echo "=== memory"; free -m; cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io 2>/dev/null
   echo; echo "=== top"; top -b -n 1 -w 200 2>/dev/null | head -30
   echo; echo "=== threads (top -H)"; top -H -b -n 1 -w 200 2>/dev/null | sed -n '7,30p'
+  # ★ who is running hwclock (seen at 99.9 % in two snapshots, 2026-11-06/07) — its parent says why
+  for h in $(pgrep -x hwclock); do echo "hwclock pid $h parent: $(ps -o pid=,args= -p "$(ps -o ppid= -p "$h" | tr -d ' ')" 2>/dev/null)"; done
+  echo; echo "=== cpufreq residency (time_in_state, 10 ms units since boot)"
+  for p in /sys/devices/system/cpu/cpufreq/policy*; do tr '\n' ' ' < "$p/stats/time_in_state" 2>/dev/null; echo; done
+  [ "$FIRST" = 1 ] || { light_tail; return; }
   echo; echo "=== GPU clients (fdinfo: which processes hold a DRM device, and the GPU time they have used)"
   # ★★ the question for the slowness: does WPEWebProcess draw on Panfrost (drm-driver panfrost, engine time rising
   #    snapshot to snapshot) or in software (no panfrost fd at all, or engine time stuck at 0)?
@@ -60,16 +69,30 @@ snap() {
   cat /proc/asound/cards 2>/dev/null; amixer -c rk817ext contents 2>&1 | grep -A2 -E "Master Playback Volume|Playback Mux" | head -12
   ls -l /run/vibe-hwd.sock 2>&1
   for u in /sys/bus/usb/devices/*; do [ -f "$u/idVendor" ] && echo "usb $(basename "$u") $(cat "$u/idVendor"):$(cat "$u/idProduct") $(cat "$u/product" 2>/dev/null)"; done
-  echo; echo "=== journal (this boot, last 4000 lines)"; journalctl -b --no-pager -o short-monotonic -n 4000 2>&1
-  echo; echo "=== kernel (last 400 lines)"; dmesg 2>/dev/null | tail -400
+  light_tail
+}
+light_tail() {
+  echo; echo "=== our units"
+  for u in vibe-hwd vibeserver-handheld vibe-hhui vibe-kiosk; do
+    echo "$u: $(systemctl show -p ActiveState,SubState,NRestarts --value "$u" 2>/dev/null | tr '\n' ' ')"
+  done
+  # ★ only the journal lines since the last snapshot (the cursor file lives in /run — RAM)
+  echo; echo "=== journal (new since the last snapshot)"
+  journalctl -b --no-pager -o short-monotonic --cursor-file=/run/vibe-debuglog.cursor 2>&1 | tail -3000
 }
 
+FIRST=1
+rm -f /run/vibe-debuglog.cursor
 while :; do
   D=$(target)
   if [ -n "$D" ]; then
     F="$D/debuglog-$ID.txt"
-    snap > "$F.tmp" 2>&1 && sync "$F.tmp" 2>/dev/null; mv -f "$F.tmp" "$F"; sync
+    # ★ APPENDED: one snapshot a minute (each with only the new journal lines) — never the whole file rewritten. A pulled
+    #   battery can cut the LAST snapshot short, never an earlier one. Capped: past 20 MB the file rolls to .1.
+    [ -f "$F" ] && [ "$(stat -c %s "$F" 2>/dev/null || echo 0)" -gt 20000000 ] && mv -f "$F" "$F.1"
+    snap >> "$F" 2>&1; sync "$F" 2>/dev/null
     [ "$D" = "$BOOT" ] && mount -o remount,ro "$BOOT" 2>/dev/null
   fi
-  sleep 15
+  FIRST=0
+  sleep 60
 done
