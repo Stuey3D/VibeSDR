@@ -248,6 +248,8 @@ public:
 // the AUDIO sheet's per-frame work (sec_audio.h): auto squelch, the recording tap, re-sends on reconnect
 void audioTick(App&, const RadioState&);
 void audioSpecFrame(App&, const uint8_t*, int, double, double);
+// per-radio memory (memory.h): restore on plug-in, save what changed
+inline void memTick(App&, const RadioState&);
 // the deck's REC key (sec_audio.h): recording now? / start or stop it
 bool deckRecording(App&);
 void deckToggleRec(App&, const RadioState&);
@@ -267,3 +269,4 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 #include "bm_page.h"
 #include "search_page.h"
 #include "vts.h"
+#include "memory.h"

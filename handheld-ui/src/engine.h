@@ -71,6 +71,7 @@ struct RadioState {
     //   their own fields from these, so a new row never needs a new field here
     std::map<std::string, Json> last;
     std::map<std::string, uint64_t> seq;   // ★ an arrival counter per message type (a repeated identical message still counts)
+    Json memory;                           // ★ the plugged radio's saved settings at plug-in (/handheld/session.memory)
     const Json& msg(const std::string& type) const { static const Json none; auto it = last.find(type); return it == last.end() ? none : it->second; }
     /** hwinfo `radio.<k>` (most capabilities live there), else top-level hwinfo `<k>`. */
     const Json& hw(const std::string& k) const { const Json& h = msg("hwinfo"); return h["radio"].has(k) ? h["radio"][k] : h[k]; }
@@ -118,7 +119,7 @@ public:
         audio_.drain(amsgs);                          // ★ speaker mode: nothing, unless the recording tap is on
         if (onAudio) for (auto& m : amsgs) onAudio(m.text, m.data);
         { std::lock_guard<std::mutex> lk(sm_); if (sessionDirty_) { st_.session = sessState_; st_.radioName = sessName_;
-              st_.radioDriver = sessDriver_; st_.radioSerial = sessSerial_; sessionDirty_ = false; } }
+              st_.radioDriver = sessDriver_; st_.radioSerial = sessSerial_; st_.memory = sessMemory_; sessionDirty_ = false; } }
         { std::lock_guard<std::mutex> lk(em_); for (auto& e : evq_) deviceEvents.push_back(std::move(e)); evq_.clear(); }
     }
 
@@ -188,6 +189,7 @@ private:
     std::mutex sm_;
     bool sessionDirty_ = false;
     std::string sessState_ = "unknown", sessName_, sessDriver_, sessSerial_;
+    Json sessMemory_;
     // device events
     std::mutex em_;
     std::vector<DeviceEvent> evq_;
@@ -225,16 +227,18 @@ private:
     void pollSession() {
         const HttpResult r = httpRequest(port_, "GET", "/handheld/session", "", 4);
         std::string st = "unknown", name, drv, ser;
+        Json mem;
         if (r.status == 200) {
             const Json j = Json::parse(r.body);
             if (j["handheld"].boolean()) {
                 st = j["state"].str();
                 name = j["radio"]["name"].str(); drv = j["radio"]["driver"].str(); ser = j["radio"]["serial"].str();
+                mem = j["memory"];   // ★ this radio's saved settings (POST /handheld/memory), or null
             }
         }
         std::lock_guard<std::mutex> lk(sm_);
         if (st != sessState_ || name != sessName_ || ser != sessSerial_) {
-            sessState_ = st; sessName_ = name; sessDriver_ = drv; sessSerial_ = ser; sessionDirty_ = true;
+            sessState_ = st; sessName_ = name; sessDriver_ = drv; sessSerial_ = ser; sessMemory_ = mem; sessionDirty_ = true;
         }
     }
 

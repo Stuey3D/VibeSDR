@@ -1055,6 +1055,7 @@ inline int App::run(int argc, char** argv) {
         const RadioState& s = eng.state();
         audioTick(*this, s);
         dabTick(*this, s);
+        memTick(*this, s);
         if (s.session != lastSession) { if (s.session == "running") { nav_.setFocus("deck", "freq"); lastDevPoll = 0; } lastSession = s.session; }
         if (s.connected && sentRate != set_.specRate) { eng.fftRate(set_.specRate); sentRate = set_.specRate; }
         if (!s.connected) sentRate = -1;
