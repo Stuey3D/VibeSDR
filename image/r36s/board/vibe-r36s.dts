@@ -59,6 +59,36 @@
 	};
 };
 
+// ★★★ THE STOCK GPU STEPS, 200–520 MHz (Stuart, 2026-11-07: "what is the GPU doing can that be downclocked?"). ROCKNIX's
+//     tree gives the Mali-G31 ONE step, 560 MHz at 1.15 V — and the GPU shares vdd_logic with the memory controller
+//     (mali-supply and the dmc's center-supply are the same regulator), so a GPU pinned at 1.15 V held the whole rail
+//     there: the 450 MHz memory cap (vibe-cpu.service) could not take the rail down to its 0.95 V. These are the vendor
+//     tree's steps (rf3536k3ka.dtb gpu-opp-table) at its base `opp-microvolt` — the highest of its PVTM L0–L3 rows, so
+//     never under-volted. A 640×480 UI asks little of it: the devfreq governor (simple_ondemand) settles low by itself.
+// ★ ROCKNIX's own 560 MHz / 1.15 V stays, the top step for a heavy moment (the map).
+&gpu_opp_table {
+	opp-200000000 {
+		opp-hz = /bits/ 64 <200000000>;
+		opp-microvolt = <950000>;
+	};
+	opp-300000000 {
+		opp-hz = /bits/ 64 <300000000>;
+		opp-microvolt = <975000>;
+	};
+	opp-400000000 {
+		opp-hz = /bits/ 64 <400000000>;
+		opp-microvolt = <1050000>;
+	};
+	opp-480000000 {
+		opp-hz = /bits/ 64 <480000000>;
+		opp-microvolt = <1125000>;
+	};
+	opp-520000000 {
+		opp-hz = /bits/ 64 <520000000>;
+		opp-microvolt = <1175000>;
+	};
+};
+
 &backlight {
 	default-brightness-level = <120>;
 };
