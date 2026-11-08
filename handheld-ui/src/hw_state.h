@@ -159,11 +159,35 @@ inline std::deque<std::pair<double, double>>& hwFt8Dts() { static std::deque<std
 inline void hwNoteTimeSync(const std::string& station, double utcMs, double rxDelayMs, double hostMs) {
     hwLastSync() = {station, utcMs, rxDelayMs, hostMs, hwNow()};
 }
+/** ★★ FT8 CLOCK AUTO-SET's evidence (Stuart, 2026-11-08) — the DTs grouped by the 15 s cycle they were decoded in
+ *  (their arrival's cycle: every decode of one slot lands in the same one). See clockAutoFt8 (clock_rds.h). */
+struct HwFt8Clock {
+    struct Cycle { long long slot = 0; std::vector<double> dts; };
+    std::deque<Cycle> cycles;
+    long long evalSlot = -1;          // the newest cycle already judged
+    double holdUntil = 0;             // hwNow(): DTs before this were measured against the clock before a set — ignored
+    double syncedAt = -1e18;          // hwNow(): the last cycle that found the clock right (or set it)
+    double setAt = -1e18, setMs = 0;  // the last auto-set and how far it moved the clock
+    int agreeing = 0;                 // how many of the last 3 complete cycles agree (the box's "cycle N of 3")
+};
+inline HwFt8Clock& hwFt8Clock() { static HwFt8Clock k; return k; }
 /** An FT8 spot's DT (handheld.ts noteSpot). UI thread. */
 inline void hwNoteFt8Dt(double dt) {
     auto& d = hwFt8Dts();
     d.push_back({dt, hwNow()});
     while (d.size() > 200) d.pop_front();
+    HwFt8Clock& k = hwFt8Clock();
+    if (hwNow() < k.holdUntil || std::fabs(dt) >= 5) return;
+    const long long slot = hwUtcMsNow() / 15000;
+    if (k.cycles.empty() || k.cycles.back().slot != slot) k.cycles.push_back({slot, {}});
+    k.cycles.back().dts.push_back(dt);
+    while (k.cycles.size() > 8) k.cycles.pop_front();
+}
+/** After any clock set: the DTs so far were measured against the old clock. */
+inline void hwFt8ClockForget(double holdSec) {
+    HwFt8Clock& k = hwFt8Clock();
+    k.cycles.clear(); k.agreeing = 0; k.holdUntil = hwNow() + holdSec;
+    hwFt8Dts().clear();
 }
 /** ft8Median: ≥ 3 decodes in 2 min with |dt| < 5 s. */
 inline bool hwFt8Median(double& dt, int& n) {

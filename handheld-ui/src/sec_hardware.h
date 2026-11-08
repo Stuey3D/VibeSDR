@@ -92,7 +92,8 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
     // CLOCK AUTO-SET (clock_rds.h clockAutoTick) — Stuart, 2026-11-08
     y = menuRow(c, a, y, "CLOCK AUTO-SET", set_.clockAuto
         ? "ON: the clock sets itself from a time station, an FM station's RDS clock or a DAB multiplex once it has agreed "
-          "with itself twice — and only when it is further out than that source can be trusted to (DAB: 4 s, RDS: 1.5 s)"
+          "with itself twice, or from FT8 after three cycles of decodes that agree — and only when it is further out than "
+          "that source can be trusted to (DAB: 4 s, RDS: 1.5 s, FT8 and time stations: 0.2 s)"
         : "OFF: the clock changes only when you press SET CLOCK FROM below");
     {
         const int hit = segmented(c, "hw.clkauto", {a.x + 6, y - 4, a.w - 12, 38}, {"OFF", "ON"}, set_.clockAuto ? 1 : 0);
@@ -113,16 +114,20 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
                 const std::string t = "SET CLOCK FROM " + ls.station;
                 const float w = (float)c.tc.width(c.f.body, t) + 32;
                 // ★ (utcMs + rxDelayMs) − hostMs is the engine clock's error at the boundary — still the error now
-                if (button(c, "hw.clkst", {x, y, w, 40}, t, st))
+                if (button(c, "hw.clkst", {x, y, w, 40}, t, st)) {
                     hwSetClock(port, "{\"deltaMs\":" + std::to_string(std::llround(ls.utcMs + ls.rxDelayMs - ls.hostMs)) + ",\"source\":" + jsonQuote(ls.station) + "}", "from " + ls.station);
+                    hwFt8ClockForget(25);   // ★ the FT8 DTs so far were against the old clock
+                }
                 x += w + 8;
             }
             if (ft8) {
                 char t[64]; std::snprintf(t, sizeof t, "ALIGN TO FT8 (DT %s%.2f s, %d)", dt >= 0 ? "+" : "", dt, n);
                 const float w = (float)c.tc.width(c.f.body, t) + 32;
                 // ★ a positive DT = signals arrive late against our clock = our clock is FAST: set it back
-                if (button(c, "hw.clkft8", {x, y, w, 40}, t, st))
+                if (button(c, "hw.clkft8", {x, y, w, 40}, t, st)) {
                     hwSetClock(port, "{\"deltaMs\":" + std::to_string(std::llround(-dt * 1000)) + ",\"source\":\"FT8\"}", "to FT8 (" + std::to_string(n) + " decodes)");
+                    hwFt8ClockForget(25);
+                }
             }
             y += 50;
         }

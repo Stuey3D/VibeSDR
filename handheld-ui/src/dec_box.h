@@ -262,8 +262,38 @@ inline void decPaneCalls(App& a, Ctx& c, const RadioState& s, Rect view) {
     }
 }
 /** DIGITAL SPOTS (renderSpots): newest per call + band, time · mode · band · SNR · call · country · grid — press = tune. */
+/** ★★ THE FT8 CLOCK LINE (Stuart, 2026-11-08): with CLOCK AUTO-SET on, the top of DIGITAL SPOTS says what the clock is
+ *  doing — measuring (amber: "decodes may be poor until then") or "System clock synchronised to FT8 signals" (green).
+ *  Off, it says nothing unless FT8 shows the clock half a second or more out — then where the key is. */
+inline float decFt8ClockLine(App& a, Ctx& c, Rect view) {
+    const HwFt8Clock& k = hwFt8Clock();
+    const double now = hwNow();
+    std::string t; Rgba col = th::amber;
+    if (a.set_.clockAuto) {
+        if (now - k.setAt < 120) {
+            char b[96]; std::snprintf(b, sizeof b, "System clock synchronised to FT8 signals (moved %+.2f s)", k.setMs / 1000.0);
+            t = b; col = rgb(0x7dffb0);
+        } else if (now - k.syncedAt < 600) { t = "System clock synchronised to FT8 signals"; col = rgb(0x7dffb0); }
+        else if (now < k.holdUntil) t = "Clock set — measuring FT8 timing again from the next cycle";
+        else t = "Clock auto-set: measuring FT8 timing (" + std::to_string(std::min(k.agreeing, 3)) + " of 3 cycles). "
+                 "The clock adjusts after 3 cycles; until then decodes may be poor.";
+    } else {
+        double dt = 0; int n = 0;
+        if (hwFt8Median(dt, n) && std::fabs(dt) >= 0.5) {
+            char b[128]; std::snprintf(b, sizeof b, "FT8 shows the clock %.1f s %s — MENU › HARDWARE › ALIGN TO FT8 (or CLOCK AUTO-SET ON)",
+                                       std::fabs(dt), dt > 0 ? "fast" : "slow");
+            t = b;
+        }
+    }
+    if (t.empty()) return 0;
+    const auto lines = c.tc.wrap(c.f.small, t, (int)view.w - 16);
+    float y = view.y + 2;
+    for (auto& l : lines) { c.tc.draw(c.g, c.f.small, l, view.x + 8, y, col); y += c.f.small.lineHeight(); }
+    return (float)lines.size() * c.f.small.lineHeight() + 6;
+}
 inline void decPaneSpots(App& a, Ctx& c, const RadioState& s, Rect view) {
     DecUi& u = decUi();
+    { const float h = decFt8ClockLine(a, c, view); view.y += h; view.h -= h; }
     if (u.spots.empty()) { decNone(c, view, "listening — the spots arrive at the end of each 15 s slot (FT8) as the server decodes them. Tune a digital frequency in USB (14.074 MHz FT8)."); return; }
     std::vector<const DecSpot*> rows;
     for (auto& sp : u.spots) {
