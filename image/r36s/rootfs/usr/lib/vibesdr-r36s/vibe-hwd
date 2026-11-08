@@ -190,7 +190,13 @@ class Hwd:
     #     boosted map was fine; the STEP was not. And at 300 the map page costs 1.4–5.6 ms a frame at 26–30 fps — the
     #     boost bought little. So: the memory clock is never moved (a DDR frequency change stalls the bus under the GPU),
     #     and the GPU steps one notch, to 400. If the timeouts persist, take the GPU out of the boost too.
-    BOOST_TARGETS = {"/sys/class/devfreq/ff400000.gpu": 400000000}
+    # ★★★ THEY PERSISTED — WORSE (handheld42 log, 2026-11-08): at 400 the timeouts ran the WHOLE boost, one every
+    #     ~0.7 s (37 in two boosts: 209–226 s and 256–274 s), none before the first boost and none with it off. Each
+    #     reset cut a map render short and left the old picture in the buffer (Stuart: "a zoomed in UK over a zoomed
+    #     out USA"), and the renders it did finish took 84–193 ms. Unboosted at 300 the same map rendered in ~20 ms with
+    #     no timeouts at all (handheld40, 1277–1327 s). So the GPU is no longer boosted: ANY step off the 300 pin breaks
+    #     this board's GPU. The boost is the CPU's top step alone (apply_cpu); the GPU and memory stay on their caps.
+    BOOST_TARGETS = {}
 
     def set_boost(self, v):
         on = bool(int(v))
