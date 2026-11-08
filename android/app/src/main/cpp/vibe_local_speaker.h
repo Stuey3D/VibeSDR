@@ -47,7 +47,20 @@ public:
     static constexpr int      kIdleCloseMs = 3000;
 
     using LogFn = void (*)(const char*);
-    explicit LocalSpeaker(LogFn log = nullptr) : log_(log) {}
+    explicit LocalSpeaker(LogFn log = nullptr) : log_(log) {
+        /* ★★ START FROM WHAT THIS DEVICE NEEDS (Stuart, 2026-11-08: "DAB started slow sounding"; handheld38's log: the
+         *    converter learnt the codec's +2 % over ~6 minutes, from 0, every boot). The settled correction is kept in
+         *    $VIBESERVER_DATA_DIR/speaker-rate (written once a minute) and the next start begins there. */
+        const char* d = std::getenv("VIBESERVER_DATA_DIR");
+        if (d && *d) {
+            ratePath_ = std::string(d) + "/speaker-rate";
+            if (FILE* f = std::fopen(ratePath_.c_str(), "r")) {
+                double v = 0;
+                if (std::fscanf(f, "%lf", &v) == 1 && std::isfinite(v) && std::fabs(v) < 0.05) rateI_ = v;
+                std::fclose(f);
+            }
+        }
+    }
     ~LocalSpeaker() { stop(); }
 
     /** From the DSP thread. ch 1 or 2, interleaved. */
@@ -205,6 +218,7 @@ private:
      *    the hold (to 400 ms in all), each calm minute gives 25 ms back (to 150) — it settles where this device needs it. */
     long holdExtra_ = 0;
     bool fadeIn_ = false;   // ★ the next period follows a gap: it fades in (writer thread only)
+    std::string ratePath_;  // ★ where the learnt correction is kept (constructor / the minute's line)
     long hold() const { return kHoldFrames + holdExtra_; }
     void loop() {
         std::vector<int16_t> buf((size_t)kPeriod * 2);
@@ -299,6 +313,11 @@ private:
                                   depthMin_ == LONG_MAX ? 0 : depthMin_ / 48, depthMax_ / 48, hold() / 48);
                     lk.unlock(); say(b); lk.lock();
                     if (starved_ == 0 && xruns_ == 0) holdExtra_ = std::max(0L, holdExtra_ - 1200);   // ★ a calm minute: 25 ms back
+                    // ★ a calm minute: the correction it settled on is what the next start begins with
+                    if (starved_ == 0 && xruns_ == 0 && !ratePath_.empty()) {
+                        const std::string tmp = ratePath_ + ".tmp";
+                        if (FILE* f = std::fopen(tmp.c_str(), "w")) { std::fprintf(f, "%.6f\n", rateI_); std::fclose(f); std::rename(tmp.c_str(), ratePath_.c_str()); }
+                    }
                     starved_ = xruns_ = 0; corrSum_ = 0; corrN_ = 0; droppedSaid_ = dropped_;
                     depthMin_ = LONG_MAX; depthMax_ = 0; statAt_ = nowT;
                 }
