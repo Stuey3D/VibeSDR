@@ -69,7 +69,9 @@ import {
 } from './PopupShell';
 import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
-import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
+import { TABLET_MIN_SIDE, useUiScale } from '../hooks/useUiScale';
+import { IS_TV } from '../utils/tv';
+import { usePortraitScheme, setPortraitScheme, type PortraitScheme } from '../services/portraitScheme';
 import type { Textures } from '../constants/assetDensity';
 import { appAlert } from './AppAlert';
 import { autoVfoBColour, VFO_B_AUTO } from '../services/vfoAB';
@@ -985,6 +987,8 @@ function ControlCustomisationPane({
   //   an old phone sees solid panels, the ON key unlit, and no reason why.
   const autoNote = !fp.transparencyExplicit && auto.reason ? AUTO_REASON_NOTE[auto.reason] : null;
   const texts = textChoices(fp.display);
+  const ui = useUiScale();
+  const portraitScheme = usePortraitScheme(ui.W);
   // ★ Asked once per opening: can this device change its icon? (null until the answer comes back.)
   const [iconOk, setIconOk] = useState<boolean | null>(null);
   useEffect(() => { let live = true; appIconSupported().then(v => { if (live) setIconOk(v); }); return () => { live = false; }; }, []);
@@ -1087,6 +1091,16 @@ function ControlCustomisationPane({
       <SelectorRow label="ZOOM" value={zoomKeys ? 'keys' : 'drum'}
         choices={[{ value: 'drum', label: 'DRUM' }, { value: 'keys', label: 'KEYS' }]}
         onPick={(v: string) => onZoomKeys?.(v === 'keys')} />
+      {/* ★★ PORTRAIT CONTROLS (Stuart, 2026-11-08) — a tablet held upright only: anywhere else there is one deck and
+          the row would do nothing (AGENTS.md — never a dead control). The choice is kept for THIS window width
+          (services/portraitScheme), so split screen or a freeform window gets its own best fit. */}
+      {!IS_TV && ui.isTablet && ui.isPortrait && (
+        <SelectorRow label="PORTRAIT CONTROLS" value={portraitScheme}
+          choices={[{ value: 'wide', label: 'WIDE' }, { value: 'tall', label: 'TALL' }]}
+          onPick={(v: PortraitScheme) => setPortraitScheme(ui.W, v)}
+          note={'WIDE puts tune and zoom at the screen\u2019s edges, under your thumbs, and leaves more of the waterfall clear. '
+              + 'TALL has bigger keys. Kept for this window size \u2014 split screen or a smaller window picks its own best fit.'} />
+      )}
       {/* DRUM FEEL is the old DRUMS NORMAL/PRECISE, renamed: the pane now has several drum rows. */}
       <SelectorRow label="DRUM FEEL" value={drumMode}
         choices={[{ value: 'normal', label: 'NORMAL' }, { value: 'precise', label: 'PRECISE' }]}

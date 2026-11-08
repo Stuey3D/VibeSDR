@@ -192,7 +192,8 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useFaceplate, useFaceplateOnTrial, useFaceplateSettings } from '../contexts/FaceplateContext';
 import { explainMeterFault } from '../services/faceplateGuard';
 import type { PlateTokens } from '../constants/faceplate';
-import { useUiScale, UiScaleOverride, uprightBandScale, UPRIGHT_BAND_MIN_W } from '../hooks/useUiScale';
+import { useUiScale, UiScaleOverride, uprightBandScale } from '../hooks/useUiScale';
+import { usePortraitScheme } from '../services/portraitScheme';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { STEP_833, type AirChannel } from '../utils/airband';
 import { tourRef, mergeRefs } from './Coachmark';
@@ -3373,8 +3374,12 @@ function ControlsBar({
    *     the portrait controls instead and the same for the iPad mini potentially"). UPRIGHT_BAND_MIN_W = 800 pt across:
    *     10" Android tablets (800 dp) and every full-size iPad (810–1024) take the band; the Tab A9 (601) and the iPad
    *     mini (744) keep the portrait deck.
-   *  ★ By the window, not the device: a big tablet in split screen narrower than that gets the portrait deck. */
-  const band = !IS_TV && (s.isLandscape || (s.isTablet && s.W >= UPRIGHT_BAND_MIN_W));
+   *  ★ By the window, not the device: a big tablet in split screen narrower than that gets the portrait deck.
+   *  ★★ AND THE OWNER CHOOSES (CONTROL CUSTOMISATION · PORTRAIT CONTROLS WIDE / TALL, services/portraitScheme): the
+   *     width only sets the default, and a choice is kept for the window width it was made at — split screen or a
+   *     freeform window of another width gets its own best fit. */
+  const scheme = usePortraitScheme(s.W);
+  const band = !IS_TV && (s.isLandscape || (s.isTablet && scheme === 'wide'));
   const upright = band && s.isPortrait;
   const bandScale = useMemo(() => (upright ? uprightBandScale(s) : null), [upright, s]);
   const PAD_H   = !plate ? s.r(12) : band ? s.r(plate.screws ? 24 : 12) : s.r(14);
