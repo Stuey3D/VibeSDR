@@ -2251,7 +2251,12 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
    *    the keys step down to the compact deck's sizes first (default 44 → 34, the window 30 → 40; metal + shared
    *    58 → 44 with the banner inside). The deck's height is unchanged; a shared default deck still adds the
    *    banner strip above it, as before. */
-  const pStack     = !dl0.compact && !s.isTablet;
+  /* ★★★ AND TABLETS UPRIGHT TOO (Stuart, 2026-11-08, NickB's large Android tablet: "a huge waste of space for that giant
+   *  signal meter around tiny numbers"). Tablets kept the full-height gradient frame with the pill floating in it — on
+   *  Android at the tight 19 pt font, inside a frame sized for a tablet: a big meter round small digits. The stack sizes
+   *  the digits to the window (the pill's height) and caps the window at the bar's own (phoneBarStack), so a tablet
+   *  held upright reads its frequency as large as the room allows. This is the PORTRAIT deck; landscape has its own. */
+  const pStack     = !dl0.compact;
   const P_THIN     = Math.max(6, s.r(7));
   const P_GAP      = Math.max(2, s.r(3));
   const P_BANNER_H = Math.round(sharedBannerFont(FREQ_FONT) * 1.25) + 9;   // SharedBanner's box + its 3 pt margin
