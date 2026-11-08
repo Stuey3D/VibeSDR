@@ -28,7 +28,7 @@
  */
 
 import { useWindowDimensions } from 'react-native';
-import { useMemo } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 
 export interface UiScale {
   scale:       number;
@@ -46,10 +46,26 @@ export interface UiScale {
   pxStep:      number;    // scaled BASE_LSV_PX_STEP (22)
 }
 
+/** ★★ THE UPRIGHT TABLET'S BAR (2026-11-08): ControlsBar draws the LANDSCAPE bar on a tablet held upright and hands
+ *  everything inside it this scale through UiScaleOverride — the drums, keys and frequency window each call useUiScale
+ *  themselves, so a prop would reach only the bar. The bar is sized as a landscape window of this WIDTH (the same
+ *  W / 926 rule an SE or a Pro Max held sideways gets), and reads as landscape (44 pt drums, the landscape tube
+ *  designs). W, H and isTablet stay the window's. null = no override (everything else on the screen). */
+export const UiScaleOverride = createContext<UiScale | null>(null);
+
+export function uprightBandScale(base: UiScale): UiScale {
+  const scale = Math.max(0.58, Math.min(1.45, base.W / 926));
+  const r = (n: number) => Math.round(n * scale);
+  const f = (n: number) => n * scale;
+  return { ...base, scale, r, f, isPortrait: false, isLandscape: true, isSmall: false,
+           drumW: r(140), drumH: r(44), pxStep: r(22) };
+}
+
 export function useUiScale(): UiScale {
   const { width: W, height: H } = useWindowDimensions();
+  const override = useContext(UiScaleOverride);
 
-  return useMemo(() => {
+  const own = useMemo(() => {
     const isPortrait  = H >= W;
     const isLandscape = !isPortrait;
 
@@ -76,6 +92,7 @@ export function useUiScale(): UiScale {
 
     return { scale, r, f, isPortrait, isLandscape, isSmall, isTiny, isTablet, W, H, drumW, drumH, pxStep };
   }, [W, H]);
+  return override ?? own;
 }
 
 /** ★★ THE TABLET LINE: a window whose SHORTEST side is at least this (pt) is a tablet (Android's sw600dp). It was 768
