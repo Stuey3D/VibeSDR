@@ -158,8 +158,10 @@ class Hwd:
     def apply_cpu(self):
         steps = self.cpu_steps()
         want = int(self.cfg.get("cpuMax", 1008000))
-        if getattr(self, "boost", False):
-            want = max(steps) if steps else want   # ★ the map's boost: the top step while it is up (set_boost)
+        # ★★★ NO CPU BOOST EITHER (handheld43 log, 2026-11-08): with the GPU left at 300, 14 GPU timeouts still came
+        #     within ~1 s of the boost lifting the CPU to 1296 MHz (157–184 s), and none with the map up unboosted
+        #     (handheld40, 1277–1327 s). The map never needed it: the UI thread used 19–25 % of a core with the map up.
+        #     So the boost moves nothing; the request is still accepted and logged (an older UI sends it).
         ok = [f for f in steps if f <= want] or steps[:1]
         if not ok:
             return
@@ -224,7 +226,7 @@ class Hwd:
                     wr(d + "/max_freq", target)
             except OSError as e:
                 log("boost:", d, e)
-        log("performance boost:", "ON (the map)" if on else "off — the caps are back")
+        log("performance boost:", "ON (the map) — no clock moved" if on else "off")
 
     # ── backlight ──
     def apply_brightness(self):
