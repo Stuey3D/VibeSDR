@@ -438,6 +438,13 @@ public:
         for (auto& kv : files_) release(*kv.second);
         files_.clear(); total_ = 0; gen_++;
     }
+    /** ★ Everything gone, the loader's queue too (the map closed — mapClosePage). A file in flight lands in done_ and is
+     *  uploaded fresh the next time the map is up. UI thread. */
+    void flush() {
+        { std::lock_guard<std::mutex> lk(m_); q_.clear(); done_.clear(); asked_.clear(); }
+        dropAll();
+        lastRender_ = 0;
+    }
     /** Files the loader is still working through (the "loading" hint). */
     int pending() { std::lock_guard<std::mutex> lk(m_); return (int)q_.size() + (busy_ ? 1 : 0) + (int)done_.size(); }
 

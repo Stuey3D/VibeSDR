@@ -5,6 +5,7 @@
 //   on the GPU. At z14 the world is 4.2 M px wide and float32 still resolves 0.25 px — the map stops at z14.
 #pragma once
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -39,6 +40,22 @@ inline std::string maidenhead(double lat, double lon) {
     s += A[f1 % 18]; s += A[f2 % 18]; s += (char)('0' + s1); s += (char)('0' + s2);
     s += (char)(A[u1 % 24] + 32); s += (char)(A[u2 % 24] + 32);
     return s;
+}
+
+/** A Maidenhead locator (2, 4 or 6 characters) → the centre of its square. False for anything that is not one. */
+inline bool mapGridCentre(const std::string& g0, double& lat, double& lon) {
+    std::string g; for (char ch : g0) g += (char)std::toupper((unsigned char)ch);
+    if (g.size() < 2 || g[0] < 'A' || g[0] > 'R' || g[1] < 'A' || g[1] > 'R') return false;
+    lon = (g[0] - 'A') * 20.0 - 180.0; lat = (g[1] - 'A') * 10.0 - 90.0;
+    double w = 20, h = 10;
+    if (g.size() >= 4 && std::isdigit((unsigned char)g[2]) && std::isdigit((unsigned char)g[3])) {
+        lon += (g[2] - '0') * 2.0; lat += (g[3] - '0') * 1.0; w = 2; h = 1;
+        if (g.size() >= 6 && g[4] >= 'A' && g[4] <= 'X' && g[5] >= 'A' && g[5] <= 'X') {
+            lon += (g[4] - 'A') * (5.0 / 60); lat += (g[5] - 'A') * (2.5 / 60); w = 5.0 / 60; h = 2.5 / 60;
+        }
+    }
+    lon += w / 2; lat += h / 2;
+    return true;
 }
 
 /** Great-circle range (km) and initial bearing (°) — tracks.ts rangeBearing. */

@@ -71,7 +71,11 @@ inline MapUi& mapUi() { static MapUi u; return u; }
 inline bool mapMe(double& lat, double& lon) {
     HwShared& h = hwShared();
     std::lock_guard<std::mutex> lk(h.m);
-    if (!h.locKnown || !h.locSet || h.lat.empty() || h.lon.empty()) return false;
+    if (!h.locKnown || !h.locSet) return false;
+    /* ★★ A LOCATOR IS A LOCATION (Stuart, 2026-11-08: set IO92nh, and no rings). The engine stores what was typed —
+     *  a locator alone, lat / lon empty — so the map read "no location". A locator is placed at its square's centre
+     *  (IO92nh: about 2.5 × 4.6 km — well inside the smallest ring). */
+    if (h.lat.empty() || h.lon.empty()) return !h.locator.empty() && mapGridCentre(h.locator, lat, lon);
     lat = std::atof(h.lat.c_str()); lon = std::atof(h.lon.c_str());
     return std::isfinite(lat) && std::isfinite(lon) && !(lat == 0 && lon == 0);
 }
@@ -126,6 +130,16 @@ inline void mapOpenPage(App& a, const std::string& id, double lat = NAN, double 
 inline void mapClosePage(App& a) {
     MapUi& u = mapUi();
     u.page.clear(); u.sel.clear(); u.closedAt = nowSec();
+    /* ★★★ CLOSED = FLUSHED (Stuart, 2026-11-08: "When exiting a map we need to flush it completely" — reopening within
+     *  the old 90 s grace drew the tiles all wrong and ran slowly). Every file off the GPU, the loader's queue emptied,
+     *  the off-screen buffer released: the next map starts from nothing, as the first one did. Costs a fresh read of
+     *  the visible files from the card on each open. */
+    if (u.started) {
+        mapStore().flush();
+        mapRender().release();
+        u.view.dirty = true;
+        std::fprintf(stderr, "vibe-hhui: map closed — flushed (files, queue, buffer)\n");
+    }
     for (size_t i = 0; i < a.sheets_.size(); i++) if (a.sheets_[i] == App::S_MAP) { a.nav_.forget("map"); a.sheets_.erase(a.sheets_.begin() + (long)i); break; }
 }
 
@@ -180,11 +194,18 @@ inline void mapGlyph(Ctx& c, const MapMarker& m, float x, float y, bool sel) {
         default: c.g.circle(x, y, 6, 0, k); c.g.circle(x, y, 4.5f, 0, m.col); break;
     }
 }
-/** The receiver: a small house, cyan (the web's RX_HOUSE). */
+/** The receiver: a little radio, cyan (Stuart, 2026-11-08: "a little radio icon on the map to show the receiver
+ *  location") — a cabinet with a whip, a dial and a speaker grille, outlined dark so it reads on land and sea; the
+ *  cabinet's centre is the spot. */
 inline void mapHouse(Ctx& c, float x, float y) {
-    const Rgba k = rgb(0, 0.85f), col = rgb(0x46e0ff);
-    c.g.triangle(x - 9, y - 1, x + 9, y - 1, x, y - 10, k); c.g.rect(x - 7, y - 2, 14, 10, k);
-    c.g.triangle(x - 7, y - 2, x + 7, y - 2, x, y - 8, col); c.g.rect(x - 5, y - 2, 10, 8, col);
+    const Rgba k = rgb(0, 0.85f), col = rgb(0x46e0ff), ink = rgb(0x06222a);
+    c.g.line(x + 5, y - 6, x + 11, y - 17, 3.5f, k);            // the whip: outline, then cyan
+    c.g.line(x + 5, y - 6, x + 11, y - 17, 1.6f, col);
+    c.g.circle(x + 11, y - 17, 2.2f, 0, col);
+    c.g.rrect(x - 11, y - 7, 22, 15, 3, k);                      // the cabinet
+    c.g.rrect(x - 9.5f, y - 5.5f, 19, 12, 2, col);
+    c.g.circle(x + 4.5f, y + 0.5f, 3.2f, 0, ink);                // the dial
+    for (int i = 0; i < 3; i++) c.g.rect(x - 7.5f, y - 3 + i * 3, 7, 1.4f, ink);   // the grille
 }
 /** A range ring (km) round a point — 72 chords, so a large ring is a circle, not a polygon. */
 inline void mapRing(Ctx& c, const MapView& v, double lat, double lon, double km, Rgba col, const std::string& label, const Font& f) {
@@ -470,16 +491,8 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     }
 }
 
-/** ★ Memory back when the map has been shut for 90 s: the GPU geometry, the relief and the off-screen buffer (≈ 70 MB at
- *  most) are let go; the next map reads its files again (from the card, a few hundred ms). Call once a loop. */
-inline void mapIdle(App&) {
-    MapUi& u = mapUi();
-    if (!u.started || !u.page.empty() || u.closedAt <= 0 || nowSec() - u.closedAt < 90) return;
-    u.closedAt = 0;
-    mapStore().dropAll();
-    mapRender().release();
-    std::fprintf(stderr, "vibe-hhui: map closed 90 s — its buffers released\n");
-}
+/** (The 90 s release is gone: a closed map is flushed at once — mapClosePage.) */
+inline void mapIdle(App&) {}
 
 // ── the pad (App::press / pollInput hooks) ───────────────────────────────────────────────────────────────────────────
 

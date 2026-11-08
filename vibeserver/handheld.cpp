@@ -377,6 +377,18 @@ void ensureEngineConfig(const Radio& r) {
         rc.enabled = true; rc.configured = true;
         // ★ The page's SPECTRUM RATE goes to 20 real frames (DISPLAY); a server's radio defaults to a 10 fps ceiling.
         rc.maxFps = 20; rc.fftRate = 20;
+        /* ★★ IT SIMPLY WORKS FROM A FRESH CARD (Stuart, 2026-11-08: "I would like the decoder rate boost to be default and
+         *  VibeAGC also being default so that when a user fires a radio up from fresh install it simply works. Obviously
+         *  Airspy handles its own gain"). A server keeps both opt-in — a weak shared box may not sustain the borrowed rate,
+         *  and an AGC that can raise the gain above the owner's setting must be asked for there. The handheld is one
+         *  owner's own radio on a known CPU, so both start ON (the HARDWARE/SDR pages still turn them off):
+         *    DECODER RATE BOOST (dabRateBoost) — DAB 2.048 / ADS-B 2.4 MS/s borrowed while they run; without it ADS-B
+         *      refused with "enable the boost" on a fresh card.
+         *    VibeAGC on an RTL (rtlAgc). An SDRplay keeps rspVibeAgc 0 = automatic, which IS VibeAGC with the OpenRSP
+         *      driver and keeps SDRplay's own API (which wedged under VibeAGC's write load) on its IF AGC. Airspy and
+         *      HackRF: unchanged. */
+        rc.dabRateBoost = true;
+        if (r.driver == "rtlsdr") rc.rtlAgc = true;
         srv.radios.push_back(rc);
     }
     if (!vsconfig::saveServer(path, srv, err)) logf("could not write %s — %s", path.c_str(), err.c_str());

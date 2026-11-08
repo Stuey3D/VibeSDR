@@ -53,7 +53,8 @@ struct MapModes {
     std::string lastSession;
     // vibeserver.json (worker)
     std::mutex capMtx;
-    bool capFetching = false; double capAt = -1e9;
+    bool capFetching = false; double capAt = -1e9, capDoneAt = -1e9;
+    std::string enterAfterCaps; double enterAskedAt = 0;   // ★ a refused mode, entered again once fresh caps say yes
     std::vector<std::pair<std::string, std::string>> ismBands;   // id, name
     std::string ismLanding;
     // ISM band stepper (main.ts ismStepperFor: the band the person STOPPED on, once, 450 ms after the last press)
@@ -96,7 +97,7 @@ inline void mapFetchCaps(int port) {
         MapModes& x = mapModes();
         const HttpResult r = httpRequest(port, "GET", "/vibeserver.json", "", 4);
         std::lock_guard<std::mutex> lk(x.capMtx);
-        x.capFetching = false;
+        x.capFetching = false; x.capDoneAt = nowSec();
         if (r.status != 200) return;
         const Json j = Json::parse(r.body);
         bool inModes = false;
@@ -145,7 +146,22 @@ inline void mapModeUiOff(App& a, MapMode& m) {
 inline void mapModeEnter(App& a, const RadioState& s, MapMode& m) {
     int cap; std::string why;
     { std::lock_guard<std::mutex> lk(mapModes().capMtx); cap = m.cap; why = m.why; }
-    if (cap == 0) { a.toastLong(why.empty() ? m.label + " is not available on this receiver" : why); return; }
+    /* ★★ A "NO" IS CHECKED AGAIN BEFORE IT IS SAID (Stuart, 2026-11-08: turned the boosted sample rate on, and ADS-B
+     *  still said to enable it — the second try worked). The offer is fetched once a minute, so a setting just changed
+     *  was not in it yet. Refused here, it asks the server afresh and enters the moment the fresh answer says yes. */
+    if (cap == 0) {
+        MapModes& x = mapModes();
+        if (x.enterAfterCaps != m.id) {
+            x.enterAfterCaps = m.id; x.enterAskedAt = nowSec();
+            mapFetchCaps(a.eng_->port());
+            a.toast("Checking " + m.label + "…");
+            return;
+        }
+        x.enterAfterCaps.clear();
+        a.toastLong(why.empty() ? m.label + " is not available on this receiver" : why);
+        return;
+    }
+    mapModes().enterAfterCaps.clear();
     if (s.session != "running" && mapModes().canned != m.id) { a.toast("No radio — plug one in first"); return; }
     m.quietUntil = 0;
     if (mapModes().canned != m.id) a.eng_->send("{\"type\":\"" + m.id + "\",\"on\":1}");   // ISM: no band = where it last was / the landing band
@@ -605,21 +621,6 @@ inline std::vector<std::string> mapDscCard(App&, const RadioState&, const std::s
 // ★★ THE SPOTS MAP (Stuart, 2026-11-07: "is there a map view for FT8 etc?" — the app's and the web's DIGITAL SPOTS MAP):
 //    every station the digital spots heard, at the centre of its grid square, coloured by mode; the list beside it newest
 //    first (call · mode · band · SNR · distance), the selected one's card. From decUi().spots — what the box already holds.
-/** A Maidenhead locator (2, 4 or 6 characters) → the centre of its square. False for anything that is not one. */
-inline bool mapGridCentre(const std::string& g0, double& lat, double& lon) {
-    std::string g; for (char ch : g0) g += (char)std::toupper((unsigned char)ch);
-    if (g.size() < 2 || g[0] < 'A' || g[0] > 'R' || g[1] < 'A' || g[1] > 'R') return false;
-    lon = (g[0] - 'A') * 20.0 - 180.0; lat = (g[1] - 'A') * 10.0 - 90.0;
-    double w = 20, h = 10;
-    if (g.size() >= 4 && std::isdigit((unsigned char)g[2]) && std::isdigit((unsigned char)g[3])) {
-        lon += (g[2] - '0') * 2.0; lat += (g[3] - '0') * 1.0; w = 2; h = 1;
-        if (g.size() >= 6 && g[4] >= 'A' && g[4] <= 'X' && g[5] >= 'A' && g[5] <= 'X') {
-            lon += (g[4] - 'A') * (5.0 / 60); lat += (g[5] - 'A') * (2.5 / 60); w = 5.0 / 60; h = 2.5 / 60;
-        }
-    }
-    lon += w / 2; lat += h / 2;
-    return true;
-}
 inline Rgba mapSpotColour(const std::string& m0) {
     std::string m; for (char ch : m0) m += (char)std::toupper((unsigned char)ch);
     if (m == "FT8") return rgb(0x5be36b);
@@ -731,6 +732,15 @@ inline void mapTick(App& a, const RadioState& s) {
     // the offer: at the session's start, then once a minute
     if (s.session != x.lastSession) { x.lastSession = s.session; if (s.session == "running") x.capAt = -1e9; else for (auto& m : x.m) if (m.on && x.canned != m.id) mapModeUiOff(a, m); }
     if (s.session == "running" && now - x.capAt > 60) mapFetchCaps(a.eng_->port());
+    // ★ the refused mode's second look (mapModeEnter): once a fetch made after the ask has answered
+    if (!x.enterAfterCaps.empty()) {
+        bool answered, stale;
+        { std::lock_guard<std::mutex> lk(x.capMtx); answered = !x.capFetching && x.capAt >= x.enterAskedAt && x.capDoneAt > x.enterAskedAt;
+          stale = !x.capFetching && x.capAt < x.enterAskedAt; }   // ★ a fetch begun before the ask does not count
+        if (stale) mapFetchCaps(a.eng_->port());
+        else if (answered) { if (MapMode* m = mapMode(x.enterAfterCaps)) mapModeEnter(a, s, *m); else x.enterAfterCaps.clear(); }
+        else if (now - x.enterAskedAt > 6) { x.enterAfterCaps.clear(); a.toast("The receiver did not answer — try again"); }
+    }
     // arrivals (seeded once, so a report from before this UI started does not count as new)
     for (auto& m : x.m) {
         const uint64_t rep = mapArrived(s, m.id), off = mapArrived(s, m.id + "_off"), err = mapArrived(s, m.id + "_error");
