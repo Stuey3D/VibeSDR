@@ -306,7 +306,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
      *  from the receiver, so without a location there is nothing to draw them round: say where to set it. */
     if (!me && !P.ringsNm.empty() && !pick) {
         const std::string t = "No location set — range rings and distances need one: MENU › HARDWARE › LOCATION";
-        const float x = u.view.area.x + 8, y = u.view.area.y + 8, w = std::min(420.f, u.view.area.w - 16);
+        const float x = u.view.area.x + 8, y = u.view.area.y + (status.empty() ? 8.f : 36.f), w = std::min(420.f, u.view.area.w - 16);
         const auto ls = c.tc.wrap(c.f.small, t, (int)w - 20);
         const float lh = (float)c.f.small.lineHeight();
         c.g.rrect(x, y, w, lh * ls.size() + 10, 6, rgb(0x080601, 0.88f));
@@ -345,6 +345,19 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
             }
         }
     }
+    /* ★★ THE COUNTS SIT ON THE MAP, NOT IN THE HEADER (Stuart, 2026-11-08: "the buttons in the header cause them to be
+     *  clipped off screen" — GAIN 40.2 AUTO · HIDE LIST · HOME · EXIT ADS-B left "11 aircra"). A chip at the map's
+     *  top-left, over the markers; the header keeps the title and the keys. (The list alone, with no map, keeps it in
+     *  the header — it has the room there.) */
+    if (!status.empty()) {
+        const float x = u.view.area.x + 8, y = u.view.area.y + 6;
+        std::string st = status;
+        const int room = (int)u.view.area.w - 36;
+        while (!st.empty() && c.tc.width(c.f.small, st) > room) st.pop_back();
+        const float w = (float)c.tc.width(c.f.small, st) + 20;
+        c.g.rrect(x, y, w, (float)c.f.small.lineHeight() + 8, 6, rgb(0x080601, 0.85f));
+        c.tc.draw(c.g, c.f.small, st, x + 10, y + 4, th::amber);
+    }
     u.view.drawPointer(c, now);
     c.g.unclip();
     }
@@ -373,7 +386,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
         if (button(c, "map.k." + kid, {kx, 5, w, 26}, keys[i].first, st)) pressed = keys[i].second;
         kx -= 6;
     }
-    if (!status.empty()) {
+    if (!status.empty() && full) {   // (on the map otherwise — the chip above)
         const int room = (int)(kx - hx - 8);
         std::string st = status;
         while (!st.empty() && c.tc.width(c.f.small, st) > room) st.pop_back();
@@ -460,7 +473,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
             c.g.rrect(x, y, (float)w, 36, 8, rgb(0x080601, 0.9f));
             c.g.rframe(x, y, (float)w, 36, 8, 1, th::amber);
             c.tc.draw(c.g, c.f.body, note, x + 14, y + 7, th::amber);
-        } else if (st.pending() > 0) c.tc.draw(c.g, mapFonts().reg11, "loading map data…", u.view.area.r() - 8, u.view.area.y + 6, rgb(0xffffff, 0.7f), 2);
+        } else if (st.pending() > 0) c.tc.draw(c.g, mapFonts().reg11, "loading map data…", u.view.area.r() - 8, u.view.area.y + 34, rgb(0xffffff, 0.7f), 2);
     }
 
     // ── the hint line ──
