@@ -192,7 +192,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useFaceplate, useFaceplateOnTrial, useFaceplateSettings } from '../contexts/FaceplateContext';
 import { explainMeterFault } from '../services/faceplateGuard';
 import type { PlateTokens } from '../constants/faceplate';
-import { useUiScale, UiScaleOverride, uprightBandScale } from '../hooks/useUiScale';
+import { useUiScale, UiScaleOverride, uprightBandScale, UPRIGHT_BAND_MIN_W } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { STEP_833, type AirChannel } from '../utils/airband';
 import { tourRef, mergeRefs } from './Coachmark';
@@ -2251,8 +2251,8 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
    *    the keys step down to the compact deck's sizes first (default 44 → 34, the window 30 → 40; metal + shared
    *    58 → 44 with the banner inside). The deck's height is unchanged; a shared default deck still adds the
    *    banner strip above it, as before. */
-  /* ★ Phones only: a tablet held upright takes the LANDSCAPE bar (see `band` in ControlsBar), and the Apple TV — a
-   *  "tablet" by its 1080 pt short side — keeps its bar exactly as it was. */
+  /* ★ Phones only: a large tablet held upright takes the LANDSCAPE bar (see `band` in ControlsBar), a small one keeps
+   *  today's tablet deck, and the Apple TV — a "tablet" by its 1080 pt short side — keeps its bar exactly as it was. */
   const pStack     = !dl0.compact && !s.isTablet;
   const P_THIN     = Math.max(6, s.r(7));
   const P_GAP      = Math.max(2, s.r(3));
@@ -3369,8 +3369,12 @@ function ControlsBar({
    *  the thumbs at the edges of the screen"). 600 pt across is wider than an SE held sideways (568), which the
    *  landscape bar already serves. Sized by the window's WIDTH (uprightBandScale), not the tablet's long side — at
    *  that size the frequency window and keys left the drums 47 pt on Nick's tablet, 2 pt on silver.
-   *  ★ By the window, not the device: a tablet in split screen below 600 pt across is a phone column again. */
-  const band = !IS_TV && (s.isLandscape || s.isTablet);
+   *  ★★ LARGE TABLETS ONLY (Stuart, same day: "the samsung tab a9 that I have is too small for that to work and needs
+   *     the portrait controls instead and the same for the iPad mini potentially"). UPRIGHT_BAND_MIN_W = 800 pt across:
+   *     10" Android tablets (800 dp) and every full-size iPad (810–1024) take the band; the Tab A9 (601) and the iPad
+   *     mini (744) keep the portrait deck.
+   *  ★ By the window, not the device: a big tablet in split screen narrower than that gets the portrait deck. */
+  const band = !IS_TV && (s.isLandscape || (s.isTablet && s.W >= UPRIGHT_BAND_MIN_W));
   const upright = band && s.isPortrait;
   const bandScale = useMemo(() => (upright ? uprightBandScale(s) : null), [upright, s]);
   const PAD_H   = !plate ? s.r(12) : band ? s.r(plate.screws ? 24 : 12) : s.r(14);

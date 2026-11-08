@@ -100,3 +100,7 @@ export function useUiScale(): UiScale {
  *  phone column scaled up 1.45× — "as if someone had taken a phone and made it 8 inches" (Stuart, 2026-10-11).
  *  ONE number for every reader (useUiScale, SDRScreen, MenuSheet). */
 export const TABLET_MIN_SIDE = 600;
+
+/** ★★ An upright tablet at least this wide (pt) takes the LANDSCAPE bar (ControlsBar `band`): 10" Android tablets and
+ *  every full-size iPad. The Tab A9 (601) and iPad mini (744) are too narrow for it and keep the portrait deck. */
+export const UPRIGHT_BAND_MIN_W = 800;
