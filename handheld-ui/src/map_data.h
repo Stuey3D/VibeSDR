@@ -46,7 +46,10 @@
 
 namespace hh {
 
-constexpr size_t kMapCacheBytes = 56u << 20;   // GPU buffers + rows + relief textures (the brief's ≤ 64 MB)
+/* ★★ 96 MB, not 56 (Stuart, 2026-11-08: "we definitely need the bigger ram cache"). At town-label zooms the picture alone
+ *  held 51–59 MB (handheld40/43 logs), so the 56 MB cap kept evicting and re-fetching the surrounding area ("loading map
+ *  data…"). With the map and the radio up the card had 168–250 MB available of 730 MB; 96 MB leaves > 100 MB. */
+constexpr size_t kMapCacheBytes = 96u << 20;   // GPU buffers + rows + relief textures
 constexpr size_t kMapBodyMax = 12u << 20;       // the largest shard is tier2-countries, 9.05 MB
 
 /** GET a whole file from the engine (worker threads only). 0 = no answer; the body is refused past `maxBytes`. */

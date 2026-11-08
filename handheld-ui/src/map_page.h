@@ -51,6 +51,7 @@ struct MapUi {
     bool listOpen = true;
     bool listFull = false;            // ★ a listFirst page showing only its list (no map drawn — mapShowsMap)
     std::string sel;                  // the selected row / marker
+    std::string dismissed;            // ★ the row whose card BACK closed — the D-pad resting on it does not reopen it
     Scroller listScroll;
     uint64_t frame = 0;
     bool started = false;
@@ -273,6 +274,16 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     }
     if (!full) {
     c.g.clip(u.view.area.x, u.view.area.y, u.view.area.w, u.view.area.h);
+    /* ★ NO LOCATION, NO RINGS (Stuart, 2026-11-08: "and the distance rings") — the rings and every distance are measured
+     *  from the receiver, so without a location there is nothing to draw them round: say where to set it. */
+    if (!me && !P.ringsNm.empty() && !pick) {
+        const std::string t = "No location set — range rings and distances need one: MENU › HARDWARE › LOCATION";
+        const float x = u.view.area.x + 8, y = u.view.area.y + 8, w = std::min(420.f, u.view.area.w - 16);
+        const auto ls = c.tc.wrap(c.f.small, t, (int)w - 20);
+        const float lh = (float)c.f.small.lineHeight();
+        c.g.rrect(x, y, w, lh * ls.size() + 10, 6, rgb(0x080601, 0.88f));
+        for (size_t i = 0; i < ls.size(); i++) c.tc.draw(c.g, c.f.small, ls[i], x + 10, y + 5 + lh * i, th::amber);
+    }
     if (me) {
         for (double nm : P.ringsNm) { char b[24]; std::snprintf(b, sizeof b, "%.0f NM", nm); mapRing(c, u.view, mlat, mlon, nm * 1.852, rgb(0x46e0ff, 0.45f), b, mapFonts().reg11); }
     }
@@ -329,7 +340,9 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
         const float w = (float)c.tc.width(c.f.tiny, keys[i].first) + 20;
         kx -= w;
         BtnStyle st; st.font = &c.f.tiny; st.radius = 6;
-        if (button(c, "map.k." + keys[i].first, {kx, 5, w, 26}, keys[i].first, st)) pressed = keys[i].second;
+        // ★ a key whose label carries a reading (GAIN 37.2 AUTO) keeps one id, so the highlight stays on it as it changes
+        const std::string kid = keys[i].first.rfind("GAIN ", 0) == 0 ? std::string("gain") : keys[i].first;
+        if (button(c, "map.k." + kid, {kx, 5, w, 26}, keys[i].first, st)) pressed = keys[i].second;
         kx -= 6;
     }
     if (!status.empty()) {
@@ -356,7 +369,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
                 const MapListRow& r = u.rows[i];
                 const Rect rr{lr.x + 6, lr.y + 4 + i * rh - u.listScroll.y, lr.w - 12, rh - 4};
                 const Nav::Hit h = c.nav.item("map.r." + r.key, rr);
-                if (h.focused && u.view.dpadAt > u.view.ptrAt) u.sel = r.key;   // ★ the D-pad's row is the selection (its marker lit, its card up)
+                if (h.focused && u.view.dpadAt > u.view.ptrAt && r.key != u.dismissed) { u.sel = r.key; u.dismissed.clear(); }   // ★ the D-pad's row is the selection (its marker lit, its card up)
                 if (rr.b() < lr.y - rh || rr.y > lr.b() + rh) { if (h.pressed) mapSelect(a, r.key, true); continue; }
                 const bool on = r.key == u.sel;
                 c.g.rrect(rr.x, rr.y, rr.w, rr.h, 6, on ? th::activeBg : rgb(0x140a00, 0.6f));
@@ -428,12 +441,19 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     {
         const float cy = 480 - mapl::footH / 2.f;
         float x = 8;
-        x = hints(c, x, cy, {{FACE_BOTTOM, pick ? "set here" : "select"}, {FACE_RIGHT, pick ? "cancel" : "back"}}, th::dim);
-        c.tc.draw(c.g, c.f.small, pick ? "L stick point · R stick move · L1/R1 zoom" : full ? "D-pad the list · MAP for the map · L2/R2 band" : "L stick point · R stick move · L1/R1 zoom · L2/R2 tune",
+        const bool cardUp = !pick && !u.sel.empty() && P.card;
+        x = hints(c, x, cy, {{FACE_BOTTOM, pick ? "set here" : "select"}, {FACE_RIGHT, pick ? "cancel" : cardUp ? "close card" : "back"}}, th::dim);
+        c.tc.draw(c.g, c.f.small, pick ? "L stick point · R stick move · L1/R1 zoom" : full ? "D-pad the list · MAP for the map · L2/R2 band"
+                                  : u.page == "mode:adsb" ? "L stick point · R stick move · L1/R1 zoom · L2/R2 gain" : "L stick point · R stick move · L1/R1 zoom · L2/R2 tune",
                   x, cy - c.f.small.lineHeight() / 2.f, th::dimmer);
     }
     if (pressed) pressed();
-    if (c.nav.backPressed()) { if (P.exit) P.exit(a, s); else mapClosePage(a); }
+    /* ★★ BACK CLOSES THE CARD FIRST (Stuart, 2026-11-08: pressed the right face to close an aircraft's card and it closed
+     *  the whole map). With a card up BACK takes the card down; the next BACK leaves the page. */
+    if (c.nav.backPressed()) {
+        if (!pick && !u.sel.empty() && P.card) { u.dismissed = u.sel; u.sel.clear(); }
+        else if (P.exit) P.exit(a, s); else mapClosePage(a);
+    }
 
     // ★ the map's own cost, beside the UI's perf line
     u.perfFrames++; u.perfDraw += App::threadCpu() - t0;

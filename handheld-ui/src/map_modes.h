@@ -179,6 +179,23 @@ inline bool mapModePick(App& a, const RadioState& s, const std::string& id) {
 }
 
 /** tuneSteps' hook: ADS-B / AIS hold the dial; ISM steps bands; NDB tunes as usual (inside the capture). */
+/* ★★ ADS-B GAIN ON THE HANDHELD (Stuart, 2026-11-08: "need the gain control/indication as I dont know what the gain was
+ *  doing"). The engine already reports it with every aircraft report — gain (dB), gainAuto, gainWhy (why the automatic
+ *  rule chose it), feedWarn (the feed looks dead) — and takes a listener's gain like any mode's: a value pauses the rule
+ *  ("set by a listener"), -1 hands it back ("ramping from the middle"). L2/R2 step through the radio's own gain list;
+ *  the header's GAIN key goes back to AUTO. */
+inline void mapAdsbGainStep(App& a, int n) {
+    if (!a.eng_) return;
+    const RadioState& s = a.eng_->state();
+    if (s.gains.empty()) { a.toast("This radio has no gain steps to set"); return; }
+    const double cur = mapReport(s, *mapMode("adsb"))["gain"].num(s.gainNow / 10.0);
+    size_t i = 0;
+    for (size_t k = 0; k < s.gains.size(); k++) if (std::fabs(s.gains[k] / 10.0 - cur) < std::fabs(s.gains[i] / 10.0 - cur)) i = k;
+    const int ni = std::max(0, std::min((int)s.gains.size() - 1, (int)i + (n < 0 ? -1 : 1)));
+    a.eng_->gain(s.gains[(size_t)ni]);
+    char t[80]; std::snprintf(t, sizeof t, "ADS-B gain %.1f dB — manual (GAIN for auto)", s.gains[(size_t)ni] / 10.0);
+    a.toast(t);
+}
 inline bool mapTune(App& a, int n) {
     MapMode* m = mapModeOn();
     if (!m || n == 0) return false;
@@ -194,6 +211,7 @@ inline bool mapTune(App& a, int n) {
         x.ismHop = nx; x.ismSendAt = nowSec() + 0.45;
         return true;
     }
+    if (m->id == "adsb") { mapAdsbGainStep(a, n); return true; }   // ★ the dial is held at 1090: L2/R2 are the gain
     static double toldAt = 0;
     if (nowSec() - toldAt > 3) { toldAt = nowSec(); a.toast("The dial is held in " + m->label + " — EXIT " + m->label + " to tune"); }
     return true;
@@ -278,8 +296,9 @@ inline void mapAdsbBuild(App& a, const RadioState& s, std::vector<MapListRow>& r
     char b[160];
     std::snprintf(b, sizeof b, "%zu aircraft · %d on the map%s", ac.size(), withPos, r["msgRate"].kind == Json::Num ? mapFmt(" · %.0f msg/s", r["msgRate"].n).c_str() : "");
     status = b;
+    // ★ the feed looks dead (the engine's warning): said once each time it appears
+    { static std::string told; const std::string w = r["feedWarn"].str(); if (!w.empty() && w != told) a.toast(w); told = w; }
     if (r.isNull()) status = "starting — tuning to 1090 MHz…";
-    (void)a;
 }
 inline std::vector<std::string> mapAdsbCard(App&, const RadioState& s, const std::string& key) {
     const Json& r = mapReport(s, *mapMode("adsb"));
@@ -670,7 +689,20 @@ inline void mapRegisterModes() {
         d.id = "mode:" + m.id; d.title = m.title; d.profile = m.profile; d.startZ = m.z; d.ringsNm = m.rings; d.exitLabel = "EXIT " + m.label;
         const std::string id = m.id;
         d.exit = [id](App& a, const RadioState&) { if (MapMode* x = mapMode(id)) mapModeLeave(a, *x); };
-        if (id == "adsb") { d.build = mapAdsbBuild; d.card = mapAdsbCard; d.empty = "listening on 1090 MHz — aircraft appear as they are heard"; }
+        if (id == "adsb") {
+            d.build = mapAdsbBuild; d.card = mapAdsbCard; d.empty = "listening on 1090 MHz — aircraft appear as they are heard";
+            // ★ GAIN 37.2 AUTO / GAIN 40.2 — the key hands the gain back to the automatic rule
+            d.keys = [](App& a, const RadioState& s, std::vector<std::pair<std::string, std::function<void()>>>& k) {
+                const Json& r = mapReport(s, *mapMode("adsb"));
+                if (r["gain"].kind != Json::Num) return;
+                const bool au = r["gainAuto"].num(0) != 0;
+                k.push_back({mapFmt("GAIN %.1f", r["gain"].n) + (au ? " AUTO" : ""), [&a, au] {
+                    if (au) { a.toast("ADS-B gain is automatic — L2/R2 to set it yourself"); return; }
+                    if (a.eng_) a.eng_->gain(-1);
+                    a.toast("ADS-B gain back to automatic — it ramps from the middle");
+                }});
+            };
+        }
         if (id == "ais") { d.build = mapAisBuild; d.card = mapAisCard; d.empty = "listening on 161.975 and 162.025 MHz — ships appear as they report"; }
         if (id == "ndb") { d.build = mapNdbBuild; d.card = mapNdbCard; d.empty = "skimming the beacon band — each carrier is listed as it is found, its ident as it is read"; }
         if (id == "ism") { d.build = mapIsmBuild; d.card = mapIsmCard; d.empty = "listening — sensors, meters and mesh nodes appear as they are decoded"; d.listFirst = true; }
