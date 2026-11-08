@@ -6629,6 +6629,116 @@ struct LocalSdrShim::Impl {
         if (!speaker) speaker.reset(new vibe::LocalSpeaker(&Impl::speakerLog));
         LOGI("audio WS is the handheld's speaker socket — its PCM plays here, not in the browser");
     }
+    /* ★★★ PLAYING A RECORDING ON THE HANDHELD (Stuart, 2026-11-08: "we need a way of playing the recordings on the device").
+     *  The speaker is the engine's (it holds the sound device), so the engine plays the file: {"type":"playRec","name":…}
+     *  starts it, "seek":±s moves it, "stop":1 ends it; the radio's own audio waits meanwhile (sendWs) and comes back when
+     *  it stops. Only from the card's Recordings/ (VIBE_HANDHELD_RECDIR, set by the supervisor), only a bare file name —
+     *  never a path. 16-bit PCM WAV (what REC writes), any rate (linear to 48 kHz), mono or stereo, through the page's
+     *  volume like the radio. Progress to the socket that asked: {"type":"playRec","name","pos","dur","playing"}. */
+    std::atomic<bool> recPlayOn_{false};
+    std::atomic<double> recPlaySeek_{0};
+    std::atomic<uint64_t> recPlayGen_{0};
+    std::atomic<int> recPlayRunning_{0};   // ★ detached players still alive (a joinable thread at exit would abort)
+    void recPlayStop() {
+        recPlayGen_.fetch_add(1);
+        for (int i = 0; i < 100 && recPlayRunning_.load() > 0; i++) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        recPlayOn_.store(false);
+    }
+    void recPlayStart(const std::shared_ptr<net::Socket>& sock, const std::string& name) {
+        recPlayStop();
+        const char* dirE = std::getenv("VIBE_HANDHELD_RECDIR");
+        auto refuse = [&](const char* why) { sendText(sock, std::string("{\"type\":\"playRec\",\"playing\":false,\"error\":\"") + why + "\"}"); };
+        if (!dirE || !*dirE || !g_vsHandheld.load()) { refuse("no card"); return; }
+        if (name.empty() || name.find('/') != std::string::npos || name.find("..") != std::string::npos || name[0] == '.') { refuse("no such recording"); return; }
+        const std::string path = std::string(dirE) + "/" + name;
+        FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) { refuse("no such recording"); return; }
+        // the RIFF chunks: fmt (16-bit PCM) and data
+        unsigned ch = 0, rate = 0, bits = 0; long dataAt = -1; uint32_t dataLen = 0;
+        char hd[12];
+        if (std::fread(hd, 1, 12, f) == 12 && std::memcmp(hd, "RIFF", 4) == 0 && std::memcmp(hd + 8, "WAVE", 4) == 0) {
+            char id[4]; uint32_t sz = 0;
+            while (std::fread(id, 1, 4, f) == 4 && std::fread(&sz, 4, 1, f) == 1) {
+                if (std::memcmp(id, "fmt ", 4) == 0) {
+                    uint8_t b[16] = {0};
+                    if (sz < 16 || std::fread(b, 1, 16, f) != 16) break;
+                    const unsigned fmt = b[0] | (b[1] << 8);
+                    ch = b[2] | (b[3] << 8); rate = b[4] | (b[5] << 8) | (b[6] << 16) | ((unsigned)b[7] << 24); bits = b[14] | (b[15] << 8);
+                    if (fmt != 1) ch = 0;
+                    std::fseek(f, (long)sz - 16 + (sz & 1), SEEK_CUR);
+                } else if (std::memcmp(id, "data", 4) == 0) { dataAt = std::ftell(f); dataLen = sz; break; }
+                else std::fseek(f, (long)sz + (sz & 1), SEEK_CUR);
+            }
+        }
+        if (dataAt < 0 || (ch != 1 && ch != 2) || bits != 16 || rate < 8000 || rate > 192000) { std::fclose(f); refuse("not a recording this can play"); return; }
+        const double dur = (double)(dataLen / (ch * 2)) / rate;
+        recPlaySeek_.store(0);
+        recPlayOn_.store(true);
+        const uint64_t gen = recPlayGen_.load();
+        std::weak_ptr<net::Socket> ws = sock;
+        recPlayRunning_.fetch_add(1);
+        std::thread([this, f, ch, rate, dataAt, dataLen, dur, gen, ws, name] {
+            const uint64_t frames = dataLen / (ch * 2);
+            double pos = 0;                                   // in source frames
+            const double step = (double)rate / 48000.0;       // source frames per output frame
+            const unsigned outBlk = 960;                      // 20 ms at 48 kHz
+            std::vector<int16_t> src, out((size_t)outBlk * 2);
+            auto tick = std::chrono::steady_clock::now();
+            double lastSaid = -1;
+            LOGI("playing a recording: %s (%.1f s, %u Hz, %u ch)", name.c_str(), dur, rate, ch);
+            while (recPlayGen_.load() == gen) {
+                const double sk = recPlaySeek_.exchange(0);
+                if (sk != 0) pos = std::max(0.0, std::min((double)frames - 1, pos + sk * rate));
+                if (pos >= (double)frames - 1) break;
+                const uint64_t need = (uint64_t)std::ceil(outBlk * step) + 2;
+                const uint64_t i0 = (uint64_t)pos;
+                src.assign((size_t)need * ch, 0);
+                std::fseek(f, dataAt + (long)(i0 * ch * 2), SEEK_SET);
+                const size_t got = std::fread(src.data(), 2, src.size(), f) / ch;
+                if (got < 2) break;
+                const float lv = speakerLevel.load(std::memory_order_relaxed);
+                unsigned made = 0;
+                for (; made < outBlk; made++) {
+                    const double p = pos - (double)i0 + made * step;
+                    const size_t k = (size_t)p; const double fr = p - (double)k;
+                    if (k + 1 >= got) break;
+                    for (unsigned c = 0; c < 2; c++) {
+                        const unsigned sc = ch == 2 ? c : 0;
+                        const double v = (src[k * ch + sc] * (1 - fr) + src[(k + 1) * ch + sc] * fr) * lv;
+                        out[made * 2 + c] = (int16_t)std::lround(std::max(-32768.0, std::min(32767.0, v)));
+                    }
+                }
+                if (made == 0) break;
+                pos += made * step;
+                {
+                    std::lock_guard<std::mutex> sl(speakerMtx);
+                    if (speaker) speaker->push(out.data(), (int)made, 2);
+                }
+                // ★ real time: 20 ms a block (the speaker's own converter matches the device's clock)
+                tick += std::chrono::microseconds((long long)made * 1000000 / 48000);
+                std::this_thread::sleep_until(tick);
+                const double at = pos / rate;
+                if (at - lastSaid >= 0.25 || lastSaid < 0) {
+                    lastSaid = at;
+                    if (auto s = ws.lock()) {
+                        char b[400];
+                        std::snprintf(b, sizeof b, "{\"type\":\"playRec\",\"name\":\"%s\",\"pos\":%.2f,\"dur\":%.2f,\"playing\":true}", jsonEscape(name).c_str(), at, dur);
+                        sendText(s, b);
+                    }
+                }
+            }
+            std::fclose(f);
+            const bool mine = recPlayGen_.load() == gen;
+            if (mine) recPlayOn_.store(false);
+            if (auto s = ws.lock()) {
+                char b[400];
+                std::snprintf(b, sizeof b, "{\"type\":\"playRec\",\"name\":\"%s\",\"pos\":%.2f,\"dur\":%.2f,\"playing\":false}", jsonEscape(name).c_str(), pos / rate, dur);
+                sendText(s, b);
+            }
+            LOGI("recording playback ended: %s", name.c_str());
+            recPlayRunning_.fetch_sub(1);
+        }).detach();
+    }
     /** ★ The speaker, if `sock` is a speaker socket; nullptr otherwise (every ordinary socket — the fast no). */
     vibe::LocalSpeaker* speakerFor(const net::Socket* sock) {
         if (!g_vsHandheld.load(std::memory_order_relaxed)) return nullptr;
@@ -18009,6 +18119,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (cls == Out::Audio && opcode == 0x2 && len > 6 && payload[1] == 0
             && (payload[0] == 1 || payload[0] == 2)) {
             if (vibe::LocalSpeaker* spk = speakerFor(sock.get())) {
+                // ★★ a recording is playing (recPlay*): the radio's audio waits — the file has the speaker
+                if (recPlayOn_.load(std::memory_order_relaxed)) { if (!speakerTap.load(std::memory_order_relaxed)) return; goto speakerDone; }
                 const int ch = payload[0];
                 std::vector<int16_t> pcm((len - 6) / 2);
                 std::memcpy(pcm.data(), payload + 6, pcm.size() * 2);
@@ -18022,6 +18134,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!speakerTap.load(std::memory_order_relaxed)) return;
             }
         }
+        speakerDone:
 #endif
         std::vector<uint8_t> f;
         f.reserve(len + 10);
@@ -18675,6 +18788,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (auto c = dspFor(sock)) { c->lastAsk = Impl::nowSecs(); c->idleAskAt = 0; }
         // ★★ V12 VFO A/B — the listener's watch channels, on every kind of radio (handleWatch).
         if (type == "watch") { handleWatch(sock, msg); return; }
+#if defined(__linux__) && !defined(__ANDROID__)
+        if (type == "playRec") {   // ★★ the handheld plays a recording (recPlayStart) — loopback only (the handheld's own UI)
+            if (!g_vsHandheld.load()) return;
+            if (jsonOn(msg, "stop")) { recPlayStop(); sendText(sock, "{\"type\":\"playRec\",\"playing\":false}"); return; }
+            double sk = 0;
+            if (jsonNum(msg, "seek", sk) && recPlayOn_.load()) { recPlaySeek_.store(sk); return; }
+            const std::string nm = jsonStr(msg, "name");
+            if (!nm.empty()) recPlayStart(sock, nm);
+            return;
+        }
+#endif
         // ★★★ PER-CLIENT CONTROL COMES FIRST, AND THE ORDER IS LOAD-BEARING. The shared handlers
         //     below (zoom, reset, tune…) return as soon as they match, so a per-client block
         //     placed after them is dead code for every message they claim. It was, for zoom: one

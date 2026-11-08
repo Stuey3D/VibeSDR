@@ -432,7 +432,8 @@ void startChildLocked(const Radio& r) {
         const std::string kv = *e;
         if (kv.rfind("VIBESERVER_CONFIG=", 0) == 0 || kv.rfind("VIBESERVER_RUNTIME_DIR=", 0) == 0
             || kv.rfind("VIBESERVER_PARENT_PID=", 0) == 0 || kv.rfind("VIBE_HANDHELD_SERIAL=", 0) == 0
-            || kv.rfind("VIBE_HANDHELD_SOCK=", 0) == 0 || kv.rfind("VIBESERVER_DATA_DIR=", 0) == 0) continue;
+            || kv.rfind("VIBE_HANDHELD_SOCK=", 0) == 0 || kv.rfind("VIBESERVER_DATA_DIR=", 0) == 0
+            || kv.rfind("VIBE_HANDHELD_RECDIR=", 0) == 0) continue;
         env.push_back(kv);
     }
     env.push_back("VIBESERVER_CONFIG=" + enginePath(r.serial));
@@ -441,6 +442,8 @@ void startChildLocked(const Radio& r) {
     env.push_back("VIBESERVER_PARENT_PID=" + std::to_string((long)::getpid()));   // ★ macOS: dies with us (kqueue)
     env.push_back("VIBE_HANDHELD_SERIAL=" + r.serial);
     env.push_back("VIBE_HANDHELD_SOCK=" + g_childSock);                             // ★ where it takes our hand-offs
+    // ★★ the card's Recordings/ — the radio plays a recording from there on the speaker it owns ({"type":"playRec"})
+    if (!g_o.cardDir.empty()) env.push_back("VIBE_HANDHELD_RECDIR=" + g_o.cardDir + "/Recordings");
     std::vector<char*> av, ev;
     for (auto& a : args) av.push_back(const_cast<char*>(a.c_str()));
     av.push_back(nullptr);

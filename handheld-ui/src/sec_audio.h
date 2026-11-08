@@ -103,6 +103,7 @@ struct State {
     bool recsView = false;
     bool recsLoaded = false;
     std::vector<Json> recs;
+    double playAskedAt = 0;   // ★ when ▶ was last pressed (a refusal is shown for a few seconds after)
     std::string armedDel; double armedAt = 0;
     int uploadingSeen = 0;
     // ★ the sheet's own UP / DOWN order: rows of (id, centre x), top to bottom. ui.h's nearest-box rule is made for
@@ -195,7 +196,14 @@ inline void stopRecording(App& a, const RadioState& s) {
     S.rec.clearBuffer();
     S.rbAnchor = Anchor{}; S.rbAnchor.windowS = S.rbSec;
     syncTap(a, s);
-    if (got) arec::upload(a.eng_->port(), d, s.vfoHz, upper(s.mode));
+    // ★ on DAB: "DAB <service> <block>" (Stuart, 2026-11-08: a DAB recording was named "222064.000 kHz WFM")
+    std::string md = upper(s.mode);
+    if (dabActive()) {
+        const DabNowPlaying np = dabNowPlaying(s);
+        const int b = dabShownBlock();
+        md = "DAB" + (np.service.empty() ? std::string() : " " + np.service) + (b >= 0 && b < kDabBlockN ? " " + std::string(kDabBlocks[b].name) : std::string());
+    }
+    if (got) arec::upload(a.eng_->port(), d, s.vfoHz, md);
 }
 inline void startRecording(App& a, const RadioState& s) {
     State& S = st();
@@ -357,7 +365,10 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
     bool closed = false;
     const Rect area = sheetPanel(c, {12, 10, 616, 460}, recs ? "RECORDINGS" : "AUDIO", recs ? "r.close" : "a.close", closed);
     if (closed) {
-        if (recs) { S.recsView = false; audioScroll_ = {}; nav_.setFocus("audio", "a.recs"); }
+        if (recs) {
+            if (s.msg("playRec")["playing"].boolean()) eng_->send("{\"type\":\"playRec\",\"stop\":1}");
+            S.recsView = false; audioScroll_ = {}; nav_.setFocus("audio", "a.recs");
+        }
         else { S.navFix.clear(); closeTop(); }
         return;
     }
@@ -370,8 +381,38 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
 
     if (recs) {
         // ════ RECORDINGS (§5.2) — the card's Recordings/, newest first; ✕ twice within 3 s deletes ════
-        // ★ No playback: the web's is an HTML <audio> element (browser audio, not the engine's speaker), and the
-        //   engine has no "play a file" path yet. Listed and deleted only.
+        // ★★ PLAYBACK (Stuart, 2026-11-08: "we need a way of playing the recordings on the device"): the engine owns the
+        //    speaker, so it plays the file ({"type":"playRec"} — local_sdr_shim.cpp recPlayStart); the radio's audio waits
+        //    meanwhile and comes back when it stops. ▶ on a row plays it (■ stops it); the bar at the top: −10 s · STOP ·
+        //    +10 s. Leaving this page stops it — the radio is what the rest of the UI is about.
+        const Json& pr = s.msg("playRec");
+        const bool playing = pr["playing"].boolean();
+        const std::string playName = playing ? pr["name"].str() : std::string();
+        auto sendPlay = [&](const std::string& j) { eng_->send(j); };
+        if (playing) {
+            const double pos = pr["pos"].num(0), dur = std::max(0.1, pr["dur"].num(0));
+            const float bh = 92;
+            c.g.rrect(x0 - 4, y, w + 8, bh, 8, rgb(0x0c1a10));
+            c.g.rframe(x0 - 4, y, w + 8, bh, 8, 1, th::activeBdr);
+            std::string nm = playName;
+            if (nm.size() > 4 && nm.compare(nm.size() - 4, 4, ".wav") == 0) nm.resize(nm.size() - 4);
+            while (nm.size() > 4 && c.tc.width(c.f.small, nm) > w - 140) nm.pop_back();
+            c.tc.draw(c.g, c.f.small, "PLAYING  " + nm, x0 + 6, y + 6, th::activeTx);
+            auto mmss = [](double t) { char b[16]; const int v = (int)t; std::snprintf(b, sizeof b, "%d:%02d", v / 60, v % 60); return std::string(b); };
+            c.tc.drawTab(c.g, c.f.small, mmss(pos) + " / " + mmss(dur), xr - 4, y + 6, th::dim, 2);
+            const float py = y + 30;
+            c.g.rrect(x0 + 4, py, w - 8, 6, 3, th::meterTrack);
+            c.g.rrect(x0 + 4, py, std::max(6.f, (w - 8) * (float)std::min(1.0, pos / dur)), 6, 3, th::amber);
+            const float kw = 120, ky = y + 46;
+            BtnStyle ks; ks.font = &c.f.bodyB; ks.radius = 7;
+            if (button(c, "r.p.back", {x0 + 4, ky, kw, 38}, "−10 s", ks)) sendPlay("{\"type\":\"playRec\",\"seek\":-10}");
+            if (button(c, "r.p.stop", {x0 + w / 2 - kw / 2, ky, kw, 38}, "STOP", ks)) sendPlay("{\"type\":\"playRec\",\"stop\":1}");
+            if (button(c, "r.p.fwd", {xr - 4 - kw, ky, kw, 38}, "+10 s", ks)) sendPlay("{\"type\":\"playRec\",\"seek\":10}");
+            y += bh + 10;
+        } else if (!pr["error"].str().empty() && now - S.playAskedAt < 4) {
+            c.tc.draw(c.g, c.f.small, "Could not play it — " + pr["error"].str(), x0, y + 4, th::amber);
+            y += 28;
+        }
         if (S.recsLoaded && S.recs.empty()) {
             const std::string t1 = "No recordings on the card yet — press ", t2 = " REC.";
             const float ty = y + 10;
@@ -388,10 +429,12 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
             const bool armed = S.armedDel == r["name"].str() && now - S.armedAt < 3;
             const float bw = armed ? 120 : 56, rh = 48;
             const Rect del{xr - bw, y + 2, bw, rh - 4};
+            const Rect play{del.x - 62, y + 2, 56, rh - 4};
+            const bool thisPlays = playing && playName == r["name"].str();
             c.g.rrect(x0 - 4, y, w + 8, rh, 8, th::btnBg);
             float tx = x0 + 8;
             const std::string size = " · " + arec::formatSize(r["bytes"].num());
-            const float maxName = del.x - 12 - tx - (float)c.tc.width(c.f.small, size);
+            const float maxName = play.x - 12 - tx - (float)c.tc.width(c.f.small, size);
             std::string shown = name;
             while (shown.size() > 4 && c.tc.width(c.f.body, shown) > maxName) {
                 shown.pop_back();
@@ -406,13 +449,26 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
                 else { S.armedDel = r["name"].str(); S.armedAt = now; }
             }
             if (!armed) crossGlyph(c, del.cx(), del.cy(), 8, th::btnText);   // ✕ (not in the font)
+            {
+                BtnStyle ps; ps.radius = 7; ps.on = thisPlays;
+                if (button(c, "r.play#" + r["name"].str(), play, "", ps)) {
+                    if (thisPlays) sendPlay("{\"type\":\"playRec\",\"stop\":1}");
+                    else { sendPlay("{\"type\":\"playRec\",\"name\":" + jsonQuote(r["name"].str()) + "}"); S.playAskedAt = now; }
+                }
+                const Rgba pc = thisPlays ? th::activeTx : th::btnText;
+                if (thisPlays) c.g.rect(play.cx() - 6, play.cy() - 6, 12, 12, pc);                                       // ■
+                else c.g.triangle(play.cx() - 5, play.cy() - 8, play.cx() - 5, play.cy() + 8, play.cx() + 8, play.cy(), pc);   // ▶
+            }
             y += rh + 8;
         }
         c.g.unclip();
         audioScroll_.contentH = y + audioScroll_.y - area.y;
         audioScroll_.follow(c.nav.focusedRect(), view);
         // the back button returns to the AUDIO sheet (the web's recordings panel has its own CLOSE)
-        if (c.nav.input().back && c.nav.backPressed()) { S.recsView = false; audioScroll_ = {}; nav_.setFocus("audio", "a.recs"); }
+        if (c.nav.input().back && c.nav.backPressed()) {
+            if (playing) sendPlay("{\"type\":\"playRec\",\"stop\":1}");   // ★ leaving the page: the radio comes back
+            S.recsView = false; audioScroll_ = {}; nav_.setFocus("audio", "a.recs");
+        }
         if (nav_.focus("audio").empty() || nav_.focus("audio") == "a.close") nav_.setFocus("audio", "r.close");
         return;
     }
