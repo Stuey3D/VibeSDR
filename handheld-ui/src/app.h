@@ -168,6 +168,7 @@ public:
     // the menu
     std::string menuOpen_;           // the open accordion ("" = all folded)
     Scroller menuScroll_;
+    Scroller stepScroll_;   // the STEP pop-up (drawStepSheet)
     // the view follows the dial (VFO CENTRE: LOCKED) — paced like spectrum.ts _sendView (≤ 1 per 33 ms, trailing edge)
     bool viewPending_ = false; double viewF_ = 0, viewSpan_ = 0, viewSentAt_ = 0;
     // the on-screen keyboard (one at a time, over everything)

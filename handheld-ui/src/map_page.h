@@ -53,6 +53,11 @@ struct MapUi {
     std::string sel;                  // the selected row / marker
     std::string dismissed;            // ★ the row whose card BACK closed — the D-pad resting on it does not reopen it
     Scroller listScroll;
+    /* ★ A POP-UP OVER THE PAGE (the ADS-B gain list): while one is up it alone takes the pad — the page below draws on a
+     *  layer that never takes the highlight — and BACK closes it. It returns false to close itself. */
+    std::function<bool(App&, Ctx&, const RadioState&)> pop;
+    Scroller popScroll;
+    bool popRefocus = false;          // ★ the frame after a pop-up closes: the highlight back on GAIN (not EXIT beside it)
     uint64_t frame = 0;
     bool started = false;
     double perfAt = 0;
@@ -129,7 +134,7 @@ inline void mapOpenPage(App& a, const std::string& id, double lat = NAN, double 
 /** Close the sheet (the page's own exit decides what else happens). */
 inline void mapClosePage(App& a) {
     MapUi& u = mapUi();
-    u.page.clear(); u.sel.clear(); u.closedAt = nowSec();
+    u.page.clear(); u.sel.clear(); u.pop = nullptr; u.closedAt = nowSec();
     /* ★★★ CLOSED = FLUSHED (Stuart, 2026-11-08: "When exiting a map we need to flush it completely" — reopening within
      *  the old 90 s grace drew the tiles all wrong and ran slowly). Every file off the GPU, the loader's queue emptied,
      *  the off-screen buffer released: the next map starts from nothing, as the first one did. Costs a fresh read of
@@ -272,6 +277,8 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     const double now = c.t;
     const double t0 = App::threadCpu();
     u.frame++;
+    if (u.pop) c.nav.layer("map.under");   // ★ the pop-up has the pad (drawn last, on "map")
+    if (u.popRefocus) { u.popRefocus = false; a.nav_.setFocus("map", "map.k.gain"); }
     // ★ a page that opened before the receiver's location arrived goes there once it does
     double mlat = 0, mlon = 0;
     const bool me = mapMe(mlat, mlon);
@@ -291,7 +298,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     // ★ the D-pad's first stop is the list, not EXIT
     if (!u.rows.empty() && u.view.dpadAt == 0) {
         const std::string f = a.nav_.focus("map");
-        if (f.empty() || f.compare(0, 6, "map.k.") == 0) a.nav_.setFocus("map", "map.r." + u.rows[0].key);
+        if (f.empty() || (f.compare(0, 6, "map.k.") == 0 && f != "map.k.gain")) a.nav_.setFocus("map", "map.r." + u.rows[0].key);
     }
     if (!full) {
     c.g.clip(u.view.area.x, u.view.area.y, u.view.area.w, u.view.area.h);
@@ -463,10 +470,17 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
         const float cy = 480 - mapl::footH / 2.f;
         float x = 8;
         const bool cardUp = !pick && !u.sel.empty() && P.card;
-        x = hints(c, x, cy, {{FACE_BOTTOM, pick ? "set here" : "select"}, {FACE_RIGHT, pick ? "cancel" : cardUp ? "close card" : "back"}}, th::dim);
+        x = hints(c, x, cy, {{FACE_BOTTOM, pick ? "set here" : u.pop ? "set" : "select"}, {FACE_RIGHT, pick ? "cancel" : u.pop ? "close" : cardUp ? "close card" : "back"}}, th::dim);
         c.tc.draw(c.g, c.f.small, pick ? "L stick point · R stick move · L1/R1 zoom" : full ? "D-pad the list · MAP for the map · L2/R2 band"
-                                  : u.page == "mode:adsb" ? "L stick point · R stick move · L1/R1 zoom · L2/R2 gain" : "L stick point · R stick move · L1/R1 zoom · L2/R2 tune",
+                                  : u.page == "mode:adsb" ? "L stick point · R stick move · L1/R1 zoom" : "L stick point · R stick move · L1/R1 zoom · L2/R2 tune",
                   x, cy - c.f.small.lineHeight() / 2.f, th::dimmer);
+    }
+    if (u.pop) {
+        c.nav.layer("map");
+        const bool back = c.nav.backPressed();
+        // ★ the header was not on the pad this frame, so the highlight goes back to GAIN on the next one
+        if (back || !u.pop(a, c, s)) { u.pop = nullptr; u.popRefocus = true; }
+        pressed = nullptr;
     }
     if (pressed) pressed();
     /* ★★ BACK CLOSES THE CARD FIRST (Stuart, 2026-11-08: pressed the right face to close an aircraft's card and it closed
@@ -505,10 +519,11 @@ inline bool mapPress(App& a, Btn b) {
         case MA_ZOOM_OUT: u.view.zoomBy(-1); return true;
         case MA_ZOOM_IN: u.view.zoomBy(1); return true;
         case MA_SELECT:
-            if (u.listFull) return false;                                    // ★ the list alone: no pointer, the highlight is pressed
+            if (u.listFull || u.pop) return false;                         // ★ a pop-up: ENTER is its highlighted row                                    // ★ the list alone: no pointer, the highlight is pressed
             if (u.view.ptrAt >= u.view.dpadAt || u.page == "pick") { mapClick(a); return true; }
             return false;                                                    // the highlighted key / row (Nav)
         case MA_DPAD:
+            if (u.pop) return false;                                         // ★ the pop-up's rows (Nav)
             u.view.dpadAt = now;
             if (u.page == "pick") {                                          // no list: the D-pad pans (the web's 64 px)
                 u.view.pan(b == B_LEFT ? -64 : b == B_RIGHT ? 64 : 0, b == B_UP ? -64 : b == B_DOWN ? 64 : 0);

@@ -790,21 +790,42 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
 }
 
 inline void App::drawStepSheet(Ctx& c, const RadioState& s) {
+    /* ★★ SHORT AND SCROLLING (Stuart, 2026-11-08: "when longer step rate options are available the step rate menu clips
+     *  off the top of the screen"). The airband ladder has ten steps — 416 px of rows over a 392 px gap. At most seven
+     *  show; the highlight scrolls the rest into view, with a bar at the side to say there is more. */
     const auto& steps = stepsForFreq(s.vfoHz);
-    const float rh = 40, w = 220, h = steps.size() * rh + 16;
+    constexpr size_t kShow = 7;
+    const float rh = 40, w = 220;
+    const size_t shown = std::min(steps.size(), kShow);
+    const float h = shown * rh + 16;
     const Rect r{lay::pillX, lay::btnY - 8 - h, w, h};
     c.g.rect(0, 0, 640, 480, rgb(0, 0.35f));
     c.g.rrect(r.x, r.y, r.w, r.h, 8, rgb(0x0d0d0d, 0.98f));
     c.g.rframe(r.x, r.y, r.w, r.h, 8, 1, rgb(0xffa000));
     const int cur = stepOnLadder(s.vfoHz, set_.step);
+    if (nav_.focus("step").empty()) {
+        nav_.setFocus("step", "st." + std::to_string(cur));
+        stepScroll_ = Scroller{};
+        for (size_t i = 0; i < steps.size(); i++)   // ★ open with the current step in view, not the top of the list
+            if (steps[i] == cur) stepScroll_.y = stepScroll_.target = std::max(0.f, std::min((float)i * rh - (shown - 1) * rh / 2.f, (steps.size() - shown) * rh));
+    }
+    const Rect view{r.x + 6, r.y + 8, r.w - 12, shown * rh};
+    stepScroll_.contentH = steps.size() * rh;
+    c.g.clip(view.x - 4, view.y - 4, view.w + 8, view.h + 8);   // (room for the highlight ring)
     for (size_t i = 0; i < steps.size(); i++) {
-        const Rect b{r.x + 6, r.y + 8 + i * rh, r.w - 12, rh - 2};
-        const Nav::Hit h = c.nav.item("st." + std::to_string(steps[i]), b);
+        const Rect b{view.x, view.y + i * rh - stepScroll_.y, view.w - (steps.size() > shown ? 8.f : 0.f), rh - 2};
+        const Nav::Hit h = c.nav.item("st." + std::to_string(steps[i]), b);   // ★ every row registers: the highlight scrolls onto it
+        if (b.b() < view.y - rh || b.y > view.b() + rh) { if (h.pressed) { setStep(steps[i]); closeTop(); c.g.unclip(); return; } continue; }
         c.tc.draw(c.g, c.f.btn, formatStep(steps[i]), b.r() - 12, b.cy() - c.f.btn.lineHeight() / 2.f, steps[i] == cur ? th::activeTx : rgb(0xdddddd), 2);
         if (h.focused) focusRing(c, b, 5);
-        if (h.pressed) { setStep(steps[i]); closeTop(); return; }
+        if (h.pressed) { setStep(steps[i]); closeTop(); c.g.unclip(); return; }
     }
-    if (nav_.focus("step").empty()) nav_.setFocus("step", "st." + std::to_string(cur));
+    c.g.unclip();
+    stepScroll_.follow(c.nav.focusedRect(), view, 4);
+    if (steps.size() > shown) {
+        const float frac = view.h / stepScroll_.contentH, top = stepScroll_.y / stepScroll_.contentH;
+        c.g.rrect(view.r() - 4, view.y + top * view.h, 3, std::max(10.f, frac * view.h), 1.5f, th::dim);
+    }
 }
 
 // ── the on-screen keyboard (padKeyboard.ts, drawn as the web page draws it) ─────────────────────────────────────────

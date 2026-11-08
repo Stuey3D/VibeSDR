@@ -198,19 +198,61 @@ inline bool mapModePick(App& a, const RadioState& s, const std::string& id) {
 /* ★★ ADS-B GAIN ON THE HANDHELD (Stuart, 2026-11-08: "need the gain control/indication as I dont know what the gain was
  *  doing"). The engine already reports it with every aircraft report — gain (dB), gainAuto, gainWhy (why the automatic
  *  rule chose it), feedWarn (the feed looks dead) — and takes a listener's gain like any mode's: a value pauses the rule
- *  ("set by a listener"), -1 hands it back ("ramping from the middle"). L2/R2 step through the radio's own gain list;
- *  the header's GAIN key goes back to AUTO. */
-inline void mapAdsbGainStep(App& a, int n) {
-    if (!a.eng_) return;
-    const RadioState& s = a.eng_->state();
-    if (s.gains.empty()) { a.toast("This radio has no gain steps to set"); return; }
-    const double cur = mapReport(s, *mapMode("adsb"))["gain"].num(s.gainNow / 10.0);
-    size_t i = 0;
-    for (size_t k = 0; k < s.gains.size(); k++) if (std::fabs(s.gains[k] / 10.0 - cur) < std::fabs(s.gains[i] / 10.0 - cur)) i = k;
-    const int ni = std::max(0, std::min((int)s.gains.size() - 1, (int)i + (n < 0 ? -1 : 1)));
-    a.eng_->gain(s.gains[(size_t)ni]);
-    char t[80]; std::snprintf(t, sizeof t, "ADS-B gain %.1f dB — manual (GAIN for auto)", s.gains[(size_t)ni] / 10.0);
-    a.toast(t);
+ *  ("set by a listener"), -1 hands it back ("ramping from the middle").
+ * ★★ A POP-UP, NOT THE SHOULDERS (Stuart, same day: "remove the gain control off the shoulder buttons as its easy to
+ *  accidentally mess with the gain, leave it in a pop up menu on the button"). The header's GAIN key opens a short,
+ *  scrolling list — AUTO, then the radio's own gain steps — the current one lit; ENTER sets, BACK leaves it alone. */
+inline bool mapAdsbGainPop(App& a, Ctx& c, const RadioState& s) {
+    MapUi& u = mapUi();
+    const Json& r = mapReport(s, *mapMode("adsb"));
+    const bool au = r["gainAuto"].num(0) != 0;
+    const double cur = r["gain"].num(s.gainNow / 10.0);
+    // rows: AUTO, then the steps high → low (the useful end first)
+    std::vector<int> rows{-1};
+    for (size_t k = s.gains.size(); k-- > 0;) rows.push_back(s.gains[k]);
+    int lit = 0;
+    if (!au) { double best = 1e9; for (size_t i = 1; i < rows.size(); i++) if (std::fabs(rows[i] / 10.0 - cur) < best) { best = std::fabs(rows[i] / 10.0 - cur); lit = (int)i; } }
+    auto rid = [&](size_t i) { return "map.g." + std::to_string(rows[i]); };
+    constexpr size_t kShow = 7;
+    const float rh = 36, w = 230, headH = 30;
+    const size_t shown = std::min(rows.size(), kShow);
+    const Rect p{640 - w - 6, mapl::headH + 4, w, headH + shown * rh + 12};
+    if (a.nav_.focus("map").compare(0, 6, "map.g.") != 0) {   // ★ first frame: on the current setting, in view
+        a.nav_.setFocus("map", rid((size_t)lit));
+        u.popScroll = Scroller{};
+        u.popScroll.y = u.popScroll.target = std::max(0.f, std::min(lit * rh - (shown - 1) * rh / 2.f, (rows.size() - shown) * rh));
+    }
+    c.g.rect(0, 0, 640, 480, rgb(0, 0.35f));
+    c.g.rrect(p.x, p.y, p.w, p.h, 8, rgb(0x0d0d0d, 0.98f));
+    c.g.rframe(p.x, p.y, p.w, p.h, 8, 1, th::amber);
+    c.tc.draw(c.g, c.f.bodyB, "ADS-B GAIN", p.x + 12, p.y + 6, th::btnText);
+    const Rect view{p.x + 6, p.y + headH + 4, p.w - 12, shown * rh};
+    u.popScroll.contentH = rows.size() * rh;
+    int set = -2;
+    c.g.clip(view.x - 4, view.y - 4, view.w + 8, view.h + 8);   // (room for the highlight ring)
+    for (size_t i = 0; i < rows.size(); i++) {
+        const Rect b{view.x, view.y + i * rh - u.popScroll.y, view.w - (rows.size() > shown ? 8.f : 0.f), rh - 2};
+        const Nav::Hit h = c.nav.item(rid(i), b);
+        if (h.pressed) set = rows[i];
+        if (b.b() < view.y - rh || b.y > view.b() + rh) continue;
+        char t[48];
+        if (rows[i] >= 0) std::snprintf(t, sizeof t, "%.1f dB", rows[i] / 10.0);
+        else if (au) std::snprintf(t, sizeof t, "AUTO  (%.1f)", cur);
+        else std::snprintf(t, sizeof t, "AUTO");
+        c.tc.draw(c.g, c.f.btn, t, b.x + 12, b.cy() - c.f.btn.lineHeight() / 2.f, (int)i == lit ? th::activeTx : rgb(0xdddddd));
+        if (h.focused) focusRing(c, b, 5);
+    }
+    c.g.unclip();
+    u.popScroll.follow(c.nav.focusedRect(), view, 4);
+    if (rows.size() > shown) {
+        const float frac = view.h / u.popScroll.contentH, top = u.popScroll.y / u.popScroll.contentH;
+        c.g.rrect(view.r() - 4, view.y + top * view.h, 3, std::max(10.f, frac * view.h), 1.5f, th::dim);
+    }
+    if (set == -2) return true;
+    if (a.eng_) a.eng_->gain(set);
+    if (set < 0) a.toast("ADS-B gain automatic — it ramps from the middle");
+    else { char t[64]; std::snprintf(t, sizeof t, "ADS-B gain %.1f dB — set by you (AUTO to hand back)", set / 10.0); a.toast(t); }
+    return false;
 }
 inline bool mapTune(App& a, int n) {
     MapMode* m = mapModeOn();
@@ -227,7 +269,11 @@ inline bool mapTune(App& a, int n) {
         x.ismHop = nx; x.ismSendAt = nowSec() + 0.45;
         return true;
     }
-    if (m->id == "adsb") { mapAdsbGainStep(a, n); return true; }   // ★ the dial is held at 1090: L2/R2 are the gain
+    if (m->id == "adsb") {   // ★ the dial is held at 1090, and the gain is the GAIN key's pop-up — never the shoulders
+        static double saidAt = 0;
+        if (nowSec() - saidAt > 3) { saidAt = nowSec(); a.toast("The dial is held at 1090 MHz — the GAIN key sets the gain"); }
+        return true;
+    }
     static double toldAt = 0;
     if (nowSec() - toldAt > 3) { toldAt = nowSec(); a.toast("The dial is held in " + m->label + " — EXIT " + m->label + " to tune"); }
     return true;
@@ -697,10 +743,9 @@ inline void mapRegisterModes() {
                 const Json& r = mapReport(s, *mapMode("adsb"));
                 if (r["gain"].kind != Json::Num) return;
                 const bool au = r["gainAuto"].num(0) != 0;
-                k.push_back({mapFmt("GAIN %.1f", r["gain"].n) + (au ? " AUTO" : ""), [&a, au] {
-                    if (au) { a.toast("ADS-B gain is automatic — L2/R2 to set it yourself"); return; }
-                    if (a.eng_) a.eng_->gain(-1);
-                    a.toast("ADS-B gain back to automatic — it ramps from the middle");
+                k.push_back({mapFmt("GAIN %.1f", r["gain"].n) + (au ? " AUTO" : ""), [&a, &s] {
+                    if (s.gains.empty()) { a.toast("This radio has no gain steps to set"); return; }
+                    mapUi().pop = mapAdsbGainPop;
                 }});
             };
         }
@@ -800,7 +845,7 @@ inline void mapCannedTick(App& a, const RadioState& s) {
     std::string j;
     char b[512];
     if (x.canned == "adsb") {
-        j = "{\"type\":\"adsb\",\"msgRate\":143,\"aircraft\":[";
+        j = "{\"type\":\"adsb\",\"msgRate\":143,\"gain\":40.2,\"gainAuto\":1,\"aircraft\":[";
         const char* calls[] = {"BAW123", "EZY45KP", "RYR8KJ", "KLM1007", "DLH4TC", "VIR25", "SHT7", "TOM62", "", "EXS33"};
         for (int i = 0; i < 10; i++) {
             const double ang = i * 0.63 + k * 0.01, rkm = 15 + i * 18;
