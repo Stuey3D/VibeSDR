@@ -11,6 +11,7 @@
 // ★ Precision ~ a second (the report rate and the decode path): far better than a drifting clock, worse than a time
 //   station — which is why time stations and FT8 keep their own keys.
 // Feeds hwNoteTimeSync (hw_state.h) — the R36S HARDWARE clock rows draw SET CLOCK FROM <source> from it.
+// ★★ AND CLOCK AUTO-SET (Stuart, 2026-11-08) sets it without the key: see clockAutoTick at the foot.
 #pragma once
 #include <chrono>
 
@@ -65,22 +66,60 @@ inline void clockTick(App& a, const RadioState& s) {
             hwNoteTimeSync("RDS · " + name, utc, 0, host);
         }
     }
-    // ── DAB FIG 0/10: mjd + utc "HH:MM:SS" of the multiplex ──
+    // ── DAB FIG 0/10: mjd + utc "HH:MM:SS" (+ the long form's milliseconds) of the multiplex ──
+    // ★★ THE ENGINE'S OWN STAMP (2026-11-08, ~3 s slow from DAB): timeChangedAtMs is this machine's clock at the moment
+    //    the DECODER saw the value change. The report reaches us only every 0.5 s, so our own frame time was up to half a
+    //    second late — and every late millisecond sets the clock that much slow. Without the stamp (an older engine), the
+    //    frame time as before.
     if (dabActive()) {
         const Json* rep = dabReport(s);
         if (rep && (*rep).has("mjd") && !(*rep)["utc"].str().empty()) {
             int hh = 0, mm = 0, ss = 0;
             if (std::sscanf((*rep)["utc"].str().c_str(), "%d:%d:%d", &hh, &mm, &ss) >= 2) {
                 const double mjd = (*rep)["mjd"].num(0);
-                const double utc = (mjd - 40587.0) * 86400000.0 + ((hh * 60.0 + mm) * 60.0 + ss) * 1000.0;
-                const std::string key = (*rep)["mjd"].str().empty() ? std::to_string((long long)mjd) + " " + (*rep)["utc"].str()
-                                                                     : (*rep)["mjd"].str() + " " + (*rep)["utc"].str();
+                const double milli = (*rep)["utcMilli"].num(0);
+                const double utc = (mjd - 40587.0) * 86400000.0 + ((hh * 60.0 + mm) * 60.0 + ss) * 1000.0 + milli;
+                const double stamp = (*rep)["timeChangedAtMs"].num(0);
+                const bool stamped = stamp > 0;
+                const std::string key = stamped ? std::to_string((long long)stamp)
+                                      : ((*rep)["mjd"].str().empty() ? std::to_string((long long)mjd) + " " + (*rep)["utc"].str()
+                                                                     : (*rep)["mjd"].str() + " " + (*rep)["utc"].str());
                 const std::string ens = (*rep)["ensemble"].str().empty() ? (*rep)["label"].str() : (*rep)["ensemble"].str();
-                if (mjd > 50000 && clockStep(clockDab(), key, utc, host, 2000, ens))
-                    hwNoteTimeSync("DAB · " + (ens.empty() ? std::string("multiplex") : ens), utc, 0, host);
+                if (mjd > 50000 && clockStep(clockDab(), key, utc, stamped ? stamp : host, 2000, ens))
+                    hwNoteTimeSync("DAB · " + (ens.empty() ? std::string("multiplex") : ens), utc, 0, stamped ? stamp : host);
             }
         }
     } else clockDab() = ClockSrc{};
+}
+
+/* ★★★ CLOCK AUTO-SET (Stuart, 2026-11-08: "there should be an option for the clock to autoset from any compatible source
+ *  RDS/DAB then a user doesnt have to press an option button"). Every corroborated minute hwNoteTimeSync records is a
+ *  candidate; it sets the clock only when the clock is further out than that kind of source can be trusted to:
+ *    a time station (MSF, DCF77, WWV, WWVB, JJY)  0.2 s
+ *    RDS clock time                               1.5 s  (sent once a minute, ~a second of decode path)
+ *    DAB multiplex time                           4 s    (★ Stuart measured a multiplex's own clock 2 s BEHIND his Mac —
+ *                                                         a broadcast's chain delay, not ours: DAB can put a clock that
+ *                                                         is minutes out right, but must never drag a good one 2 s slow)
+ *  and a weaker kind never overrules a stronger one set in the last 6 hours (DAB does not undo MSF). FT8 stays a key:
+ *  its DT is a spread of other people's clocks. Corroboration (two agreeing boundaries) is unchanged, so one wrong
+ *  transmitter minute cannot set it. OFF (MENU › HARDWARE › CLOCK AUTO-SET) puts it back to the keys alone. */
+inline void clockAutoTick(App& a) {
+    static double seenAt = 0, lastAt = -1e18;
+    static int lastRank = 0;
+    const HwTimeSync& ls = hwLastSync();
+    if (ls.station.empty() || ls.at == seenAt) return;
+    seenAt = ls.at;
+    if (!a.set_.clockAuto || !a.eng_) return;
+    const bool rds = ls.station.rfind("RDS", 0) == 0, dab = ls.station.rfind("DAB", 0) == 0;
+    const int rank = dab ? 1 : rds ? 2 : 3;
+    const double limit = dab ? 4000 : rds ? 1500 : 200;
+    const double err = ls.utcMs + ls.rxDelayMs - ls.hostMs;   // the engine clock's error at the boundary — still it now
+    if (std::fabs(err) < limit) return;
+    if (rank < lastRank && hwNow() - lastAt < 6 * 3600) return;
+    lastRank = rank; lastAt = hwNow();
+    std::fprintf(stderr, "vibe-hhui: clock auto-set from %s, %+.0f ms\n", ls.station.c_str(), err);
+    hwSetClock(a.eng_->port(), "{\"deltaMs\":" + std::to_string(std::llround(err)) + ",\"source\":" + jsonQuote("auto · " + ls.station) + "}",
+               "from " + ls.station);
 }
 
 }  // namespace hh

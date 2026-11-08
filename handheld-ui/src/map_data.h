@@ -424,6 +424,9 @@ public:
         }
         if (total_ > kMapCacheBytes) evict();
     }
+    /** The frame of the last basemap render (MapRender::render): the files it touched carry this `used`, and they are
+     *  the picture on screen — evict() never takes one (see there). */
+    void noteRender(uint64_t frame) { lastRender_ = frame; }
     size_t residentBytes() const { return total_; }
     int residentFiles() const { return (int)files_.size(); }
     std::string lastError() { std::lock_guard<std::mutex> lk(m_); return err_; }
@@ -437,6 +440,7 @@ public:
 
 private:
     int port_ = 48000;
+    uint64_t lastRender_ = 0;
     std::atomic<bool> run_{false};
     std::thread th_;
     std::mutex m_;
@@ -624,9 +628,20 @@ private:
         if (f.tex) glDeleteTextures(1, &f.tex);
         f.tex = 0;
     }
+    /* ★★★ NEVER EVICT THE PICTURE ON SCREEN (Stuart, 2026-11-08: "when you zoom into the map at the point the town names
+     *  appear it constantly says loading and seems to flicker lots"). The basemap is rendered into a buffer only when
+     *  something changes, so a file's `used` is the frame of the LAST RENDER, not of every frame. The old test
+     *  (used + 2 < frame) therefore offered the whole visible set for eviction two frames after each render; past the cap
+     *  — and at town-label zooms the visible files alone are near it — eviction took them, bumped gen_, the map
+     *  re-rendered, found them missing ("loading map data…"), fetched them, went over the cap, evicted them: a loop.
+     *  Now the files of the last render (used ≥ lastRender_) are never candidates, and evicting a file that was NOT in
+     *  the picture does not bump gen_ (nothing on screen changed, so no re-render). When the picture alone is over the
+     *  cap the cache simply holds it — it falls back under the cap as soon as the view moves on. */
     void evict() {
         std::vector<std::pair<uint64_t, std::string>> c;
-        for (auto& kv : files_) if (kv.first.compare(0, 6, "tier0-") != 0 && kv.second->used + 2 < frame_) c.push_back({kv.second->used, kv.first});
+        for (auto& kv : files_)
+            if (kv.first.compare(0, 6, "tier0-") != 0 && kv.second->used + 2 < frame_ && kv.second->used < lastRender_)
+                c.push_back({kv.second->used, kv.first});
         std::sort(c.begin(), c.end());
         for (auto& e : c) {
             if (total_ <= kMapCacheBytes * 9 / 10) break;
@@ -634,7 +649,6 @@ private:
             total_ -= std::min(total_, it->second->bytes);
             release(*it->second);
             files_.erase(it);
-            gen_++;
         }
     }
 };

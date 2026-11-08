@@ -277,6 +277,7 @@ inline bool& decBoxTallShown();
 inline bool decPicFullOpen();
 // SET CLOCK FROM RDS / DAB (clock_rds.h): watches their clocks, offers a corroborated one
 inline void clockTick(App&, const RadioState&);
+inline void clockAutoTick(App&);
 // per-radio memory (memory.h): restore on plug-in, save what changed
 inline void memTick(App&, const RadioState&);
 // DECODERS (dec_state.h / dec_box.h): the framework, the text decoders, spots, the box over the waterfall

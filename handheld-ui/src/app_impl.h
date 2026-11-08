@@ -1154,6 +1154,7 @@ inline int App::run(int argc, char** argv) {
         mapTick(*this, s);
         memTick(*this, s);
         clockTick(*this, s);
+        clockAutoTick(*this);
         dispRateTick(*this);
         if (s.session != lastSession) { if (s.session == "running") { nav_.setFocus("deck", "freq"); lastDevPoll = 0; } lastSession = s.session; }
         idleNow_ = set_.idleSave && !screenOff_ && nowSec() - lastInput_ > idleSec();

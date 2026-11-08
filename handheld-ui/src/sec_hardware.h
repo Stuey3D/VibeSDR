@@ -89,6 +89,16 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         };
         openKeyboard(r);
     }
+    // CLOCK AUTO-SET (clock_rds.h clockAutoTick) — Stuart, 2026-11-08
+    y = menuRow(c, a, y, "CLOCK AUTO-SET", set_.clockAuto
+        ? "ON: the clock sets itself from a time station, an FM station's RDS clock or a DAB multiplex once it has agreed "
+          "with itself twice — and only when it is further out than that source can be trusted to (DAB: 4 s, RDS: 1.5 s)"
+        : "OFF: the clock changes only when you press SET CLOCK FROM below");
+    {
+        const int hit = segmented(c, "hw.clkauto", {a.x + 6, y - 4, a.w - 12, 38}, {"OFF", "ON"}, set_.clockAuto ? 1 : 0);
+        if (hit >= 0) { set_.clockAuto = hit; dirty(); }
+        y += 46;
+    }
     // SET CLOCK FROM <station> · ALIGN TO FT8 — only while there is fresh evidence (a station minute under 90 s old;
     // ≥ 3 FT8 decodes in 2 min). Fed by hwNoteTimeSync / hwNoteFt8Dt.
     {

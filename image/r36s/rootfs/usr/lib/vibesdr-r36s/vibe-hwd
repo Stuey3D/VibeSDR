@@ -11,7 +11,7 @@
 #    can shadow a module and nothing extra has to be installed.
 # ★ Env (for tests): VIBE_HWD_SOCK, VIBE_STATE_DIR, VIBE_HWD_DRYRUN=1 (log poweroff/reboot instead of doing them),
 #   VIBE_SYSFS (prefix for /sys, a fake tree in tests), VIBE_ALSA_CARD.
-import asyncio, ctypes, fcntl, glob, grp, json, math, os, pwd, signal, struct, subprocess, sys, time
+import asyncio, ctypes, fcntl, glob, grp, json, math, os, pwd, signal, struct, subprocess, sys, threading, time
 
 SOCK = os.environ.get("VIBE_HWD_SOCK", "/run/vibe-hwd.sock")
 STATE_DIR = os.environ.get("VIBE_STATE_DIR", "/var/lib/vibe-state")
@@ -184,6 +184,13 @@ class Hwd:
     #    screen) every cap is lifted to the top step; off, the caps come straight back. NEVER saved — a restart, or a UI
     #    that went away, always comes back capped (vibe-cpu.service sets the GPU and memory caps at boot).
     DEVFREQ_CAPS = (("/sys/class/devfreq/ff400000.gpu", 300000000), ("/sys/class/devfreq/dmc", 450000000))
+    # ★★★ WHAT THE MAP BOOST MAY RAISE (handheld40 log, 2026-11-08). Boosting BOTH to their tops (GPU 560, memory 666) was
+    #     followed within ~1 s, every time, by Panfrost "gpu sched timeout"s (13 in one session: a GPU job over half a
+    #     second, the GPU reset) — and their burst starved the speaker (12 starved / 9 underruns that minute). The steady
+    #     boosted map was fine; the STEP was not. And at 300 the map page costs 1.4–5.6 ms a frame at 26–30 fps — the
+    #     boost bought little. So: the memory clock is never moved (a DDR frequency change stalls the bus under the GPU),
+    #     and the GPU steps one notch, to 400. If the timeouts persist, take the GPU out of the boost too.
+    BOOST_TARGETS = {"/sys/class/devfreq/ff400000.gpu": 400000000}
 
     def set_boost(self, v):
         on = bool(int(v))
@@ -195,9 +202,12 @@ class Hwd:
             avail = sorted(int(x) for x in rd(d + "/available_frequencies", "").split() if x.isdigit())
             if not avail:
                 continue
-            target = avail[-1] if on else min(cap, avail[-1])
+            if d not in self.BOOST_TARGETS:
+                continue                                    # ★ never moved by the boost (BOOST_TARGETS)
+            up = max([f for f in avail if f <= self.BOOST_TARGETS[d]] or [avail[0]])
+            target = up if on else min(cap, avail[-1])
             # ★★★ the GPU is PINNED (min = max — vibe-cpu.service): its clock may share a PLL with the speaker's I2S, so it
-            #     never roams; the boost moves the pin (560 while the map is up, 300 after). Order keeps min ≤ max.
+            #     never roams; the boost moves the pin (400 while the map is up, 300 after). Order keeps min ≤ max.
             pin = d.endswith("ff400000.gpu")
             try:
                 if on:
@@ -351,7 +361,9 @@ class Hwd:
             raise ValueError("time out of range")
         time.clock_settime(time.CLOCK_REALTIME, utc_ms / 1000.0)
         # ★ vibe-clock writes the RTC (when it can be written) and the saved floor/offset on the state partition.
-        subprocess.run([CLOCK, "save"], timeout=10)
+        # ★★ OFF THE LOOP (2026-11-08): a save now waits up to a second for the RTC's tick (vibe-clock's header), and the
+        #    loop is what answers the buttons — so it runs in a thread, after the clock itself is already set.
+        threading.Thread(target=lambda: subprocess.run([CLOCK, "save"], timeout=10), daemon=True).start()
 
     async def clock_loop(self):
         while True:

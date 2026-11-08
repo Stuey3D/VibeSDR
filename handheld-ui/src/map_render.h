@@ -164,6 +164,7 @@ public:
         ox_ = cx - fboW / 2.0 / wpx_; oy_ = cy - fboH / 2.0 / wpx_;
         box_[0] = (float)ox_; box_[1] = (float)oy_; box_[2] = (float)(ox_ + fboW / wpx_); box_[3] = (float)(oy_ + fboH / wpx_);
         st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0;
+        st.noteRender(frame);   // ★ the files this render touches are the picture — evict() keeps them (map_data.h)
         glBindFramebuffer(GL_FRAMEBUFFER, drawFbo_ ? drawFbo_ : resolveFbo_);
         glViewport(0, 0, fboW, fboH);
         glDisable(GL_SCISSOR_TEST);

@@ -25,6 +25,9 @@ struct Settings {
     /** ★★ IDLE POWER SAVE (Stuart, 2026-11-07: "slowing the waterfall data rate to the minimum when idle … and then
      *  sharpen it up and speed it up when in use") — 1 = on (the default). See App::idleNow_. */
     int idleSave = 1;
+    /** ★★ CLOCK AUTO-SET (Stuart, 2026-11-08: "there should be an option for the clock to autoset from any compatible
+     *  source RDS/DAB then a user doesnt have to press an option button") — 1 = on (the default). See clockAutoTick. */
+    int clockAuto = 1;
     bool followVfo = true;         // VFO CENTRE: LOCKED (the view follows the dial)
     int meterMode = 0;             // 0 SNR · 1 S-units · 2 dBFS (the web's meter cycle)
     int volume = -1;               // last known (the hardware service owns it)
@@ -57,6 +60,7 @@ struct Settings {
         specRate = (int)j["specRate"].num(specRate);
         screenOffMin = (int)j["screenOffMin"].num(screenOffMin);
         idleSave = (int)j["idleSave"].num(idleSave) ? 1 : 0;
+        clockAuto = (int)j["clockAuto"].num(clockAuto) ? 1 : 0;
         followVfo = j["followVfo"].boolean(followVfo);
         meterMode = (int)j["meterMode"].num(meterMode);
         freqUnit = std::max(0, std::min(2, (int)j["freqUnit"].num(freqUnit)));
@@ -69,9 +73,9 @@ struct Settings {
         FILE* f = std::fopen(tmp.c_str(), "w");
         if (!f) return;
         std::fprintf(f, "{\"step\":%d,\"palette\":%s,\"speed\":%d,\"contrast\":%g,\"sharpness\":%g,\"wfBrightness\":%g,"
-                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d,\"dispClock\":%d,\"dispProven\":%d,\"stickDeg\":%d,\"idleSave\":%d}\n",
+                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d,\"dispClock\":%d,\"dispProven\":%d,\"stickDeg\":%d,\"idleSave\":%d,\"clockAuto\":%d}\n",
                      step, jsonQuote(palette).c_str(), speed, contrast, sharpness, wfBrightness, specRate, screenOffMin,
-                     followVfo ? "true" : "false", meterMode, freqUnit, dispClock, dispProven, stickDeg, idleSave);
+                     followVfo ? "true" : "false", meterMode, freqUnit, dispClock, dispProven, stickDeg, idleSave, clockAuto);
         std::fflush(f);
         std::fclose(f);
         std::rename(tmp.c_str(), p.c_str());

@@ -1245,8 +1245,9 @@ public:
                 one("epgNext", nextP);
             }
             if (e.mjd >= 0) {
-                char tb[64];
-                snprintf(tb, sizeof tb, ",\"mjd\":%d,\"utc\":\"%02d:%02d:%02d\",\"lto\":%d", e.mjd, e.utcHour, e.utcMin, e.utcSec, e.ltoHalfHours);
+                char tb[128];
+                snprintf(tb, sizeof tb, ",\"mjd\":%d,\"utc\":\"%02d:%02d:%02d\",\"utcMilli\":%d,\"timeChangedAtMs\":%.0f,\"lto\":%d",
+                         e.mjd, e.utcHour, e.utcMin, e.utcSec, e.utcMilli, e.timeChangedAtMs, e.ltoHalfHours);
                 j += tb;
             }
             /* ★★★ ANNOUNCEMENTS ON AIR NOW (FIG 0/19, EN 300 401 8.1.6). Reported, never acted on:
