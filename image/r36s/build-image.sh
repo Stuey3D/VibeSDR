@@ -183,6 +183,13 @@ in_root usermod -p '*' root
 mkdir -p "$R/media/root-ro" "$R/media/root-rw" "$R/media/VIBESDR" "$R/var/lib/vibe-state" "$R/var/lib/vibe-kiosk" \
   "$R/var/lib/vibeserver" "$R/boot/firmware" "$R/usr/share/doc/vibesdr-r36s"
 cp "$H/README.md" "$R/usr/share/doc/vibesdr-r36s/README.md"
+# ★★ the aircraft database (build.sh built it into /cache/adsb/out): the engine reads <data dir>/adsb/{vrs,mic}.vad —
+#    on the handheld no update can ever fetch them. Credits and both licences beside the image's README (ODC-By 1.0).
+[ -s /cache/adsb/out/vrs.vad ] && [ -s /cache/adsb/out/mic.vad ] || die "no aircraft database in /cache/adsb/out (build.sh builds it)"
+mkdir -p "$R/var/lib/vibeserver/adsb"
+cp /cache/adsb/out/vrs.vad /cache/adsb/out/mic.vad "$R/var/lib/vibeserver/adsb/"
+in_root chown -R vibeserver:vibeserver /var/lib/vibeserver/adsb
+cp /repo/vibeserver/adsb-data/CREDITS.md /repo/vibeserver/adsb-data/LICENSE-*.txt "$R/usr/share/doc/vibesdr-r36s/"
 # the engine's own units: the network server, its radios starter and maintenance are not the handheld's
 for u in vibeserver.service vibeserver-radios.service vibeserver-maintenance.path vibeserver-maintenance.service \
          vibeserver-pocket.service vibeserver-pocket-data.service vibeserver-pocket-seal.service \

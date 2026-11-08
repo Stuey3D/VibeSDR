@@ -108,6 +108,27 @@ if [ -n "$DEB" ]; then
   case "$DEB" in "$HOME"/*) ;; *) cp "$DEB" "$CACHE/"; DEB="$CACHE/$(basename "$DEB")" ;; esac
   DEBMNT+=(-v "$(dirname "$DEB")":/deb:ro); DEBENV+=(-e "VIBESERVER_DEB=/deb/$(basename "$DEB")")
 fi
+# ── the aircraft database (Stuart, 2026-11-08: "without an internet connection does an aircraft identify its type") ──
+# ★★ An aircraft broadcasts its address, callsign and position — never its type. Servers learn the type from the
+#    Mictronics + VRS tables their weekly update downloads (vibe_adsb_data_update.h); the handheld has no network, so
+#    the card carries them: built here by the SAME builder (vibeserver/adsb-data-tool.cpp, which refuses a source whose
+#    licence changed), at most a week old, into /var/lib/vibeserver/adsb (the engine's own place for them).
+#    Mictronics is ODC-By 1.0: the ADS-B page shows the notice, and CREDITS + both licences go in the image's docs.
+ADSB="$CACHE/adsb"; mkdir -p "$ADSB/raw" "$ADSB/out"
+if [ -z "$(find "$ADSB/out/mic.vad" -mtime -7 2>/dev/null)" ] || [ ! -s "$ADSB/out/vrs.vad" ]; then
+  echo "==> aircraft database: fetching VRS standing data + Mictronics, building the tables"
+  UA="VibeSDR-build (+https://vibesdr.net)"
+  curl -fsSL --retry 2 --connect-timeout 30 -A "$UA" -o "$ADSB/raw/standing-data-main.tar.gz.new" \
+    https://codeload.github.com/vradarserver/standing-data/tar.gz/refs/heads/main && mv "$ADSB/raw/standing-data-main.tar.gz.new" "$ADSB/raw/standing-data-main.tar.gz"
+  curl -fsSL --retry 2 --connect-timeout 30 -A "$UA" -o "$ADSB/raw/indexedDB.zip.new" \
+    https://raw.githubusercontent.com/Mictronics/aircraft-database/main/indexedDB.zip && mv "$ADSB/raw/indexedDB.zip.new" "$ADSB/raw/indexedDB.zip"
+  nice -n 10 c++ -std=c++17 -O2 -I "$REPO/android/app/src/main/cpp" "$REPO/vibeserver/adsb-data-tool.cpp" -o "$ADSB/adsb-data-tool"
+  rm -rf "$ADSB/out.new" && mkdir -p "$ADSB/out.new"
+  nice -n 10 "$ADSB/adsb-data-tool" build "$ADSB/raw/standing-data-main.tar.gz" "$ADSB/raw/indexedDB.zip" "$ADSB/out.new"
+  [ -s "$ADSB/out.new/vrs.vad" ] && [ -s "$ADSB/out.new/mic.vad" ] || { echo "!! the aircraft tables did not build"; exit 1; }
+  rm -rf "$ADSB/out" && mv "$ADSB/out.new" "$ADSB/out"
+fi
+echo "==> aircraft database: $(ls -la "$ADSB/out" | awk '/\.vad/ {printf "%s %.1f MB  ", $NF, $5/1048576}')"
 docker volume create vibesdr-r36s-work >/dev/null
 docker run --rm --privileged --cpus "${JOBS:-6}" --label vibesdr-r36s-build \
   -v "$REPO":/repo:ro -v "$CACHE":/cache -v "$OUT":/out -v vibesdr-r36s-work:/work \

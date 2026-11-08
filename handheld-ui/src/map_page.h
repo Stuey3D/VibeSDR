@@ -26,6 +26,8 @@ struct MapListRow { std::string key, title, right, sub; Rgba col = th::amber; bo
 
 struct MapPageDef {
     std::string id, title, profile = "directory", exitLabel = "CLOSE";
+    /** The page's own data credit under the map (ADS-B: the aircraft database's ODC-By notice). */
+    std::string credit;
     int startZ = 7, maxZ = 12;
     std::vector<double> ringsNm;                       // range rings round the receiver
     std::string empty = "nothing yet";
@@ -432,7 +434,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
         }
     }
 
-    const float attrTop = full ? 480 - mapl::footH : u.view.drawAttribution(c, u.view.area.b());
+    const float attrTop = full ? 480 - mapl::footH : u.view.drawAttribution(c, u.view.area.b(), P.credit);
     // ── the selected thing's card ──
     if (!u.sel.empty() && P.card) {
         const auto lines = P.card(a, s, u.sel);

@@ -164,17 +164,26 @@ public:
 
     /** The data credit (a CONDITION of the CC BY / ODbL layers, not a courtesy): bottom-right of the map area. */
     /** Returns the top of what it drew (a card above it starts there). */
-    float drawAttribution(Ctx& c, float bottom) const {
+    /** `extra`: the page's own data credit, a line of its own above the map's (the ADS-B page: Mictronics, ODC-By). */
+    float drawAttribution(Ctx& c, float bottom, const std::string& extra = "") const {
         const MapIndex& ix = mapStore().index();
-        static std::string text;
-        if (text.empty() && ix.loaded) {
-            text = "Natural Earth · NOAA ETOPO";
-            for (auto& a : ix.attribution) text += " · " + a;
-            text += " · OurAirports · NGA WPI";
+        static std::string base;
+        if (base.empty() && ix.loaded) {
+            base = "Natural Earth · NOAA ETOPO";
+            for (auto& a : ix.attribution) base += " · " + a;
+            base += " · OurAirports · NGA WPI";
         }
-        if (text.empty()) return bottom;
+        if (base.empty() && extra.empty()) return bottom;
+        const std::string text = extra.empty() ? base : base.empty() ? extra : extra + "\n" + base;
         const Font& f = mapFonts().reg11;
-        const auto& ls = c.tc.wrap(f, text, (int)area.w - 16);
+        std::vector<std::string> ls;
+        size_t from = 0;
+        while (from <= text.size()) {   // ★ each credit starts its own line
+            const size_t nl = text.find('\n', from);
+            for (auto& l : c.tc.wrap(f, text.substr(from, nl == std::string::npos ? std::string::npos : nl - from), (int)area.w - 16)) ls.push_back(l);
+            if (nl == std::string::npos) break;
+            from = nl + 1;
+        }
         const float lh = (float)f.lineHeight();
         float y = bottom - lh * ls.size() - 4;
         c.g.rect(area.x, y - 2, area.w, lh * ls.size() + 6, rgb(0x000000, 0.45f));

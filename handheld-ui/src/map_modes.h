@@ -737,6 +737,8 @@ inline void mapRegisterModes() {
         const std::string id = m.id;
         d.exit = [id](App& a, const RadioState&) { if (MapMode* x = mapMode(id)) mapModeLeave(a, *x); };
         if (id == "adsb") {
+            // ★★ ODC-By 1.0 §4.3: the notice wherever the aircraft data is shown (the card carries the Mictronics tables)
+            d.credit = "Contains information from Mictronics aircraft database, which is made available under the ODC Attribution License · VRS standing data (CC0)";
             d.build = mapAdsbBuild; d.card = mapAdsbCard; d.empty = "listening on 1090 MHz — aircraft appear as they are heard";
             // ★ GAIN 37.2 AUTO / GAIN 40.2 — the key hands the gain back to the automatic rule
             d.keys = [](App& a, const RadioState& s, std::vector<std::pair<std::string, std::function<void()>>>& k) {
@@ -855,7 +857,7 @@ inline void mapCannedTick(App& a, const RadioState& s) {
             j += b;
         }
         j += ",{\"hex\":\"4ca9f1\",\"alt_baro\":36000,\"gs\":450,\"seen\":2}]}";
-        if (k == 0) mapAdsbInfoTake(Json::parse("{\"type\":\"adsb_info\",\"full\":1,\"aircraft\":{\"406a00\":{\"r\":\"G-EUPT\",\"t\":\"A319\",\"desc\":\"AIRBUS A-319\",\"opName\":\"British Airways\",\"route\":{\"from\":\"EGLL\",\"to\":\"LEMD\"}}}}"));
+        if (k % 5 == 0) mapAdsbInfoTake(Json::parse("{\"type\":\"adsb_info\",\"full\":1,\"aircraft\":{\"406a00\":{\"r\":\"G-EUPT\",\"t\":\"A319\",\"desc\":\"AIRBUS A-319\",\"opName\":\"British Airways\",\"route\":{\"from\":\"EGLL\",\"to\":\"LEMD\"}}}}"));
     } else if (x.canned == "ais") {
         j = "{\"type\":\"ais\",\"chA\":512,\"chB\":498,\"vessels\":[";
         const char* names[] = {"EVER GIVEN", "STENA BRITANNICA", "PRIDE OF KENT", "SVITZER MARS", "MAERSK ESSEN", "", "NORTH FORELAND LT", "JENNY"};
