@@ -43510,6 +43510,8 @@ unsigned LocalSdrShim::maxSampleRateHz() {
 /** The USB transfer test's restart (g_rtlXferBytes): the rate path's full stop / rebuild / relaunch at the SAME rate —
  *  the one proven way to relaunch an RTL capture safely — forced past its "already at that rate" guard. RTL USB only. */
 void LocalSdrShim::restartRtlCapture() {
+    Impl* const impl = p;                          // ★ read once, as setSampleRate does (a stop may clear it)
+    if (!impl) return;
     if (!impl->dev || impl->useTcp() || impl->useAirspyHf() || impl->useAirspy() || impl->useHackRf() || impl->useSdrplay()
         || impl->useUsrp() || impl->sampleRate <= 0) return;
     g_forceRateRestart.store(true);
