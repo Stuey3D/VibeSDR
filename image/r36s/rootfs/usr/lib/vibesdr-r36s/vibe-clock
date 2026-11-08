@@ -19,6 +19,12 @@ RTC=/sys/class/rtc/rtc0/since_epoch
 # ★ the image's build time: no clock on this card can be earlier (systemd uses the same file as its own floor)
 FLOOR=$(stat -c %Y /usr/lib/clock-epoch 2>/dev/null || echo 0)
 
+# ★★ WAS THE CLOCK KNOWN AT BOOT? (Stuart, 2026-11-08: "if the battery fully dies then when it comes back up it will
+#    have a date/time in the past … the line says System Clock not set"). restore writes "rtc" when the RTC carried the
+#    time across the power-off, "guess" when it could not (a flat or pulled battery reset the RTC, or there is none) and
+#    the clock was only pushed forward to the last save or the image's build time. The UI reads it (MENU › R36S
+#    HARDWARE › CLOCK) and asks for a time source until a set this boot replaces the guess.
+BOOTSTATE=/run/vibe-clock.boot
 rtc_now() { cat "$RTC" 2>/dev/null || echo 0; }
 now_ms() { date +%s%3N; }
 # Wait (≤ 1.2 s) for the RTC's second to turn over; prints the NEW second, or nothing if it never ticked (no RTC, stopped).
@@ -47,13 +53,15 @@ case "${1:-}" in
     TICK=$(rtc_tick)
     if [ -n "$TICK" ]; then
       T_MS=$((TICK * 1000 + OFFSET_MS))
-      if [ $((T_MS / 1000)) -ge "$SAVED" ]; then
+      if [ $((T_MS / 1000)) -ge "$SAVED" ] && [ $((T_MS / 1000)) -ge "$FLOOR" ]; then   # (a reset RTC on a fresh card reads 2000)
         S=$((T_MS / 1000)); F=$((T_MS % 1000)); [ $F -lt 0 ] && F=0
+        echo rtc > "$BOOTSTATE" 2>/dev/null
         date -u -s "@$S.$(printf %03d $F)" >/dev/null && echo "vibe-clock: clock set from the RTC tick to $(date -u '+%Y-%m-%d %H:%M:%S.%3N') UTC (offset ${OFFSET_MS} ms)"
         exit 0
       fi
     fi
-    # ★ no tick (no RTC, or one that cannot be read): whole seconds, as before
+    # ★ no tick (no RTC, or one that cannot be read), or an RTC that lost the time: whole seconds, as before — a GUESS
+    echo guess > "$BOOTSTATE" 2>/dev/null
     if [ "$RTC_NOW" -gt 0 ] && [ "$RTC_NOW" -lt "$SAVED" ]; then
       CAND=$((RTC_NOW + OFFSET_MS / 1000))
       [ "$CAND" -ge "$SAVED" ] && WANT=$CAND

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <deque>
 #include <mutex>
@@ -127,13 +128,87 @@ inline long long hwUtcMsNow() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-/** setClock (handheld.ts): POST /handheld/clock, the answer toasted. */
+/* ★★ THE LAST GOOD SYNC (Stuart, 2026-11-08: "all it needs to be is one line showing the latest successful sync" —
+ *  "System Clock set by FT8 @ 18:17:20 08/Nov/26"). Every set the engine confirms is kept: who set it (FT8 · RDS · DAB ·
+ *  a time station · by hand) and the clock as it read just after. Kept in ~/.vibe-hhui-clock.json so it survives a
+ *  power-off (a reflash starts it blank). */
+struct HwClockLast { std::mutex m; std::string by; long long utcMs = 0; bool loaded = false; };
+inline HwClockLast& hwClockLast() { static HwClockLast c; return c; }
+inline std::string hwClockLastPath() { const char* home = std::getenv("HOME"); return std::string(home && *home ? home : "/tmp") + "/.vibe-hhui-clock.json"; }
+/** "FT8" / "RDS" / "DAB" / "MSF" / "hand" from the source the set carried. */
+inline std::string hwClockBy(std::string src) {
+    if (src.rfind("auto · ", 0) == 0) src = src.substr(8);   // ("auto · " is 8 bytes: "·" is two)
+    if (src.find("FT8") != std::string::npos) return "FT8";
+    if (src.rfind("RDS", 0) == 0) return "RDS";
+    if (src.rfind("DAB", 0) == 0) return "DAB";
+    if (src.empty() || src == "by hand" || src.rfind("nudge", 0) == 0) return "hand";
+    return src;   // a time station: MSF, DCF77, WWVB …
+}
+/** The clock at boot was only a GUESS (vibe-clock wrote "guess": the RTC lost the time — a flat or pulled battery). */
+inline bool hwClockBootGuess() {
+    static int g = -1;
+    if (g < 0) {
+        g = 0;
+        if (FILE* f = std::fopen("/run/vibe-clock.boot", "r")) { char b[16] = {0}; if (std::fgets(b, sizeof b, f)) g = std::string(b).rfind("guess", 0) == 0; std::fclose(f); }
+    }
+    return g == 1;
+}
+/** When this boot began, on the clock as it reads now (a set since then moved both together). */
+inline long long hwBootUtcMs() {
+    double up = 0;
+    if (FILE* f = std::fopen("/proc/uptime", "r")) { if (std::fscanf(f, "%lf", &up) != 1) up = 0; std::fclose(f); }
+    return hwUtcMsNow() - (long long)(up * 1000);
+}
+/** "System Clock set by FT8 @ 18:17:20 08/Nov/26" (UTC), or "" before the first. warn: the clock is NOT known — the
+ *  RTC lost the time at boot and nothing has set it since — and the line asks for a source instead. */
+inline std::string hwClockLastLine(bool& warn) {
+    warn = false;
+    HwClockLast& c = hwClockLast();
+    std::lock_guard<std::mutex> lk(c.m);
+    if (!c.loaded) {
+        c.loaded = true;
+        if (FILE* f = std::fopen(hwClockLastPath().c_str(), "r")) {
+            char buf[512]; const size_t n = std::fread(buf, 1, sizeof buf - 1, f); std::fclose(f); buf[n] = 0;
+            const Json j = Json::parse(buf);
+            c.by = j["by"].str(); c.utcMs = (long long)j["utcMs"].num(0);
+        }
+    }
+    // ★ a guessed boot clock stays unset until a set made THIS boot (on the corrected clock, after the boot began)
+    if (hwClockBootGuess() && !(c.utcMs > 0 && c.utcMs >= hwBootUtcMs())) {
+        warn = true;
+        return "System clock not set — it lost the time while the battery was flat or out. Tune to a time signal (MSF, DCF77, WWVB), FT8, "
+               "an FM station with RDS or a DAB multiplex to set it";
+    }
+    if (c.by.empty() || c.utcMs <= 0) return "";
+    static const char* mon[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    const std::time_t tt = (std::time_t)(c.utcMs / 1000);
+    std::tm u{}; gmtime_r(&tt, &u);
+    char b[96];
+    std::snprintf(b, sizeof b, "System Clock set by %s @ %02d:%02d:%02d %02d/%s/%02d", c.by.c_str(), u.tm_hour, u.tm_min, u.tm_sec, u.tm_mday, mon[u.tm_mon], u.tm_year % 100);
+    return b;
+}
+inline void hwClockNoteSet(const std::string& by, long long utcMs) {
+    HwClockLast& c = hwClockLast();
+    std::lock_guard<std::mutex> lk(c.m);
+    c.loaded = true; c.by = by; c.utcMs = utcMs;
+    const std::string p = hwClockLastPath(), tmp = p + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        std::fprintf(f, "{\"by\":%s,\"utcMs\":%lld}\n", jsonQuote(by).c_str(), utcMs);
+        std::fclose(f);
+        std::rename(tmp.c_str(), p.c_str());
+    }
+}
+
+/** setClock (handheld.ts): POST /handheld/clock, the answer toasted — and a confirmed set kept (hwClockLastLine). */
 inline void hwSetClock(int port, const std::string& body, const std::string& what) {
     hwAsync([port, body, what] {
         const HttpResult r = httpRequest(port, "POST", "/handheld/clock", body, 5);
         const Json j = Json::parse(r.body);
         if (r.status == 0) hwToast("The clock was not set — the engine did not answer");
-        else if (j["ok"].boolean()) hwToast("Clock set " + what + " · " + hwUtcText((long long)j["utcMs"].num()) + " UTC");
+        else if (j["ok"].boolean()) {
+            hwToast("Clock set " + what + " · " + hwUtcText((long long)j["utcMs"].num()) + " UTC");
+            hwClockNoteSet(hwClockBy(Json::parse(body)["source"].str()), j["utcMs"].kind == Json::Num ? (long long)j["utcMs"].n : hwUtcMsNow());
+        }
         else hwToast("The clock was not set" + (j["error"].str().empty() ? std::string() : " — " + j["error"].str()));
     });
 }

@@ -53,6 +53,15 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
     c.tc.draw(c.g, c.f.small, "UTC", a.x + 6, y0 + 36, th::dim);
     c.tc.drawTab(c.g, c.f.body, hwUtcText(hwUtcMsNow()), a.r() - 6, y0 + valY, th::dim, 2);
     y += 8;
+    // ★ the latest successful sync, one line (hw_state.h hwClockLastLine) — Stuart, 2026-11-08
+    {
+        bool warn = false;
+        const std::string last = hwClockLastLine(warn);
+        if (warn) {   // ★ the clock is not known (flat battery): ask for a source, wrapped, in amber
+            for (auto& l : c.tc.wrap(c.f.small, last, (int)a.w - 12)) { c.tc.draw(c.g, c.f.small, l, a.x + 6, y - 6, th::amber); y += c.f.small.lineHeight(); }
+            y += 4;
+        } else if (!last.empty()) { c.tc.draw(c.g, c.f.small, last, a.r() - 6, y - 6, th::green, 2); y += c.f.small.lineHeight() + 2; }
+    }
     // NUDGE
     y0 = y;
     y = menuRow(c, a, y, "NUDGE", "");
