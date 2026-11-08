@@ -97,3 +97,15 @@
 &backlight {
 	default-brightness-level = <120>;
 };
+
+// ★★ THE OTG PORT AT 5.2 V (Stuart, 2026-11-08: "can you do the force voltage to 5.2?"). The radio's 5 V is the RK817's
+//    BOOST (label usb_midu) through a GPIO load switch (vcc_host, a fixed regulator that only switches). ROCKNIX's tree
+//    lets BOOST sit anywhere in 4.9–5.4 V and fixes nothing. Stuart's inline meter, RTL-SDR V4 at 0.26 A: 4.83 V and
+//    unsteady on the R36S against 5.2 V and steady on his Mac; the V4 has spikes on every band on the R36S only.
+//    5.2 V gives the dongle's own regulators headroom back and stays inside USB's 5.25 V. BOOST feeds nothing but
+//    vcc_host (the only vin-supply = <&usb_midu> in the tree), so nothing else on the console sees it.
+//    ★ min = max makes the regulator core APPLY it at probe; the boot log prints the rail's set voltage (vibe-debuglog).
+&usb_midu {
+	regulator-min-microvolt = <5200000>;
+	regulator-max-microvolt = <5200000>;
+};

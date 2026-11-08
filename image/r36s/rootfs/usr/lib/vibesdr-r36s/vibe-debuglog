@@ -46,6 +46,12 @@ snap() {
   #    GPU, with their parents (debugfs, if mounted)
   [ -r /sys/kernel/debug/clk/clk_summary ] || mount -t debugfs none /sys/kernel/debug 2>/dev/null
   grep -E "^ *(npll|gpll|cpll|apll|dpll|clk_i2s1|i2s1|clk_gpu|aclk_gpu|dclk_vop|mclk)" /sys/kernel/debug/clk/clk_summary 2>/dev/null | awk '{print "clk " $0}' | head -24
+  # ★★ every regulator's SET voltage (2026-11-08: the OTG port's BOOST, usb_midu, fixed at 5.2 V by vibe-r36s.dts) — the
+  #    figure the PMIC was told, not a measurement; Stuart's inline meter is the measurement
+  for r in /sys/class/regulator/regulator.*; do
+    n=$(cat "$r/name" 2>/dev/null); [ -n "$n" ] || continue
+    echo "regulator $n: $(cat "$r/microvolts" 2>/dev/null || echo -) uV $(cat "$r/state" 2>/dev/null)"
+  done
   for z in /sys/class/thermal/thermal_zone*; do echo "$z $(cat "$z/type" 2>/dev/null) $(cat "$z/temp" 2>/dev/null)"; done
   echo; echo "=== memory"; free -m; cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io 2>/dev/null
   echo; echo "=== top"; top -b -n 1 -w 200 2>/dev/null | head -30

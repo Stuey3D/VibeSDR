@@ -72,7 +72,11 @@ for v in 0xe7ef0 0xee098 0x100590 0x112a88 0x11edd8; do
   grep -q "opp-microvolt = <$v $v 0x149970>" "$T/gpu-opp.dts" || fail "GPU step at $v is not a <v v 1.35 V> range"
 done
 grep -q 'default-brightness-level = <0x78>' "$T/m.dts" || fail "backlight boot level is not 120"
-ok "boot: KERNEL, eeclone DTB, overlays apply (panel = ROCKNIX's 80 Hz overlay, unchanged, CPU 408–1296 MHz, 1416 off, backlight 120), extlinux → PARTUUID=$DISKID-02"
+# ★ the OTG port's 5 V (vibe-r36s.dts &usb_midu): BOOST fixed at 5.2 V (0x4f5880), min = max
+awk '/^\t+BOOST \{/{f=1} f{print} f&&/\};/{exit}' "$T/m.dts" > "$T/boost.dts"
+grep -q 'regulator-min-microvolt = <0x4f5880>' "$T/boost.dts" && grep -q 'regulator-max-microvolt = <0x4f5880>' "$T/boost.dts" \
+  || fail "the OTG boost (usb_midu) is not fixed at 5.2 V"
+ok "boot: KERNEL, eeclone DTB, overlays apply (panel = ROCKNIX's 80 Hz overlay, unchanged, CPU 408–1296 MHz, 1416 off, backlight 120, OTG 5.2 V), extlinux → PARTUUID=$DISKID-02"
 
 # ── root filesystem ──
 dd if="$IMG" of="$T/root.ext4" bs=512 skip="$S2" count="$Z2" status=none

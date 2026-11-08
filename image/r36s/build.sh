@@ -51,7 +51,7 @@ repository ... $REPO
 engine ....... ${DEB:-vibeserver (newest arm64) from https://apt.vibesdr.net ${APT_SUITE:-beta}}
 map pack ..... ${MAPDATA:-vibeserver-mapdata-detail: the newest in $CACHE/mapdata, else built by scripts/build-mapdata-deb.sh}
 boot chain ... ROCKNIX 20261101 b (EE clones): loader b_uboot.bin.uart5, boot.scr, KERNEL 7.1.2, eeclone DTB, modules, firmware
-board ........ $HERE/board: mipi-panel.rocknix.dtbo (→ 60 Hz default), vibe-r36s.dts (CPU 408–1296, backlight 120), extlinux.conf
+board ........ $HERE/board: mipi-panel.rocknix.dtbo (→ 60 Hz default), vibe-r36s.dts (CPU 408–1296, backlight 120, OTG 5.2 V), extlinux.conf
 OS ........... Debian 13 trixie arm64 minbase + $(sed 's/#.*//' "$HERE/packages.txt" | xargs | wc -w) packages (packages.txt)${SNAPSHOT:+, snapshot $SNAPSHOT}
 layout ....... loader @32 KiB · p1 FAT32 VIBEBOOT 128 MiB @16 MiB · p2 ext4 root (read-only + RAM overlay) · p3 ext4 vibestate 256 MiB
                · p4 exFAT VIBESDR made on the first boot after the capacity check
