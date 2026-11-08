@@ -43,7 +43,7 @@ public:
     static constexpr unsigned kPeriod = 480;            // 10 ms
     static constexpr unsigned kPeriods = 8;             // 80 ms in the device
     static constexpr size_t   kTargetFrames = 2880;     // ~60 ms queued before playing (absorbs DSP block jitter)
-    static constexpr size_t   kMaxFrames = 19200;       // ~400 ms: past this the oldest goes (the drift trim keeps it far below)
+    static constexpr size_t   kMaxFrames = 28800;       // 600 ms: past this the oldest goes — far over the 150 ms hold, so never in use
     static constexpr int      kIdleCloseMs = 3000;
 
     using LogFn = void (*)(const char*);
@@ -300,7 +300,8 @@ private:
                     primed = false;
                     phase_ = 0;
                     starved_++;
-                    holdExtra_ = std::min(12000L, holdExtra_ + 2400);   // ★ 50 ms deeper after a starvation
+                    // ★ (no adaptive growth: handheld39's starvations were RETUNES — a gap by nature, not jitter — and a hold
+                    //   grown to 400 ms for them overfilled the queue: ~1 s a minute dropped, the FM crackle. 150 held.)
                 }
                 const auto nowT = std::chrono::steady_clock::now();
                 if (statAt_.time_since_epoch().count() == 0) statAt_ = nowT;
