@@ -6718,7 +6718,7 @@ struct LocalSdrShim::Impl {
                 tick += std::chrono::microseconds((long long)made * 1000000 / 48000);
                 std::this_thread::sleep_until(tick);
                 const double at = pos / rate;
-                if (at - lastSaid >= 0.25 || lastSaid < 0) {
+                if (std::fabs(at - lastSaid) >= 0.25 || lastSaid < 0) {   // ★ either way: a seek BACK must be said too
                     lastSaid = at;
                     if (auto s = ws.lock()) {
                         char b[400];
@@ -18791,7 +18791,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 #if defined(__linux__) && !defined(__ANDROID__)
         if (type == "playRec") {   // ★★ the handheld plays a recording (recPlayStart) — loopback only (the handheld's own UI)
             if (!g_vsHandheld.load()) return;
-            if (jsonOn(msg, "stop")) { recPlayStop(); sendText(sock, "{\"type\":\"playRec\",\"playing\":false}"); return; }
+            double stopV = 0;   // ★ "stop":true or "stop":1 (jsonOn reads only the word)
+            if (jsonOn(msg, "stop") || (jsonNum(msg, "stop", stopV) && stopV != 0)) { recPlayStop(); sendText(sock, "{\"type\":\"playRec\",\"playing\":false}"); return; }
             double sk = 0;
             if (jsonNum(msg, "seek", sk) && recPlayOn_.load()) { recPlaySeek_.store(sk); return; }
             const std::string nm = jsonStr(msg, "name");
