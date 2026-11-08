@@ -7318,7 +7318,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ Every rate change stops and relaunches capture, which resets the window: no minute spans two rates. */
     double rtlChkStart = 0.0, rtlChkLast = 0.0, rtlChkMaxGap = 0.0, rtlChkRate = 0.0;
     uint64_t rtlChkN = 0;
-    struct RtlChkReport { double secs = 0, rate = 0, maxGap = 0; uint64_t got = 0; };
+    int rtlChkWindows = 0;                        // complete minutes since this capture started
+    struct RtlChkReport { double secs = 0, rate = 0, maxGap = 0; uint64_t got = 0; bool first = false; };
     RtlChkReport rtlChkOut;                       // written by the callback while ready is false, then released
     std::atomic<bool> rtlChkReady{false};
     // ★ When the RSP's tuner was last written. A retune burst (block-stepping through Band III at
@@ -30457,7 +30458,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ Set on EVERY exit path, including the early returns below — a flag that is only
             //   correct on the happy path is worse than none, because it is trusted.
             struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{self};
-            self->rtlChkStart = 0.0; self->rtlChkRate = self->sampleRate;   // a fresh delivery window at this rate
+            self->rtlChkStart = 0.0; self->rtlChkRate = self->sampleRate; self->rtlChkWindows = 0;   // a fresh delivery window at this rate
             rtlsdr_read_async(self->dev, &Impl::asyncHandler, self, 0, bufLen);
             // We only reach here when the IQ stops. Three reasons, and they must not be confused:
             if (self->stopping.load() || self->restarting.load()) return;   // we asked for it
@@ -34254,7 +34255,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
 
                 /* ★★ THE USB DELIVERY CHECK'S MINUTE (see rtlChkStart). A shortfall is printed every minute it happens;
-                 *    a clean run says so once every 10 minutes, so a server is not filled with good news. ±0.02 % is
+                 *    a clean run says so for the first minute after each start (handheld53: Stuart's rate changes
+                 *    restarted the count before a 10th minute ever came, so a clean session printed nothing), then once
+                 *    every 10 minutes, so a server is not filled with good news. ±0.02 % is
                  *    far above clock error (the V4's TCXO is 1 ppm) and the timing jitter of a 60 s window, and below
                  *    one lost USB buffer (~0.09 % of a minute at 2.4 MS/s). */
                 if (rtlChkReady.load(std::memory_order_acquire)) {
@@ -34264,11 +34267,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     const double want = r.rate * r.secs;
                     const double diffPct = want > 0 ? ((double)r.got - want) / want * 100.0 : 0.0;
                     const bool shortfall = diffPct < -0.02;
-                    if (shortfall || ++cleanRuns >= 10) {
-                        cleanRuns = 0;
+                    if (r.first) cleanRuns = 0;
+                    if (shortfall || r.first || ++cleanRuns >= 10) {
+                        if (!r.first) cleanRuns = 0;
                         LOGI("USB IQ: %s — %llu of %.0f samples in %.1f s at %.3f MS/s (%+.3f %%), longest wait between "
                              "buffers %.0f ms%s",
-                             shortfall ? "SAMPLES LOST in the last minute" : "every sample arrived (10 min)",
+                             shortfall ? "SAMPLES LOST in the last minute"
+                                       : r.first ? "every sample arrived (the first minute of this stream)"
+                                                 : "every sample arrived (10 min)",
                              (unsigned long long)r.got, want, r.secs, r.rate / 1e6, diffPct, r.maxGap * 1000.0,
                              shortfall ? " — the USB host did not collect in time; the dongle's FIFO overflowed" : "");
                     }
@@ -35221,10 +35227,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             self->rtlChkLast = t;
             if (t - self->rtlChkStart >= 60.0) {
                 if (!self->rtlChkReady.load(std::memory_order_acquire)) {
-                    self->rtlChkOut = { t - self->rtlChkStart, self->rtlChkRate, self->rtlChkMaxGap, self->rtlChkN };
+                    self->rtlChkOut = { t - self->rtlChkStart, self->rtlChkRate, self->rtlChkMaxGap, self->rtlChkN,
+                                        self->rtlChkWindows == 0 };
                     self->rtlChkReady.store(true, std::memory_order_release);
                 }
-                self->rtlChkStart = t; self->rtlChkN = 0; self->rtlChkMaxGap = 0.0;
+                self->rtlChkStart = t; self->rtlChkN = 0; self->rtlChkMaxGap = 0.0; self->rtlChkWindows++;
             }
         }
         if (self->idleDiscard.load(std::memory_order_relaxed)) return;   // nobody listening

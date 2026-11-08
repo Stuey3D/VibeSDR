@@ -890,6 +890,12 @@ void hDevicePost(Req& r) {
         const hhjson::Value* x = v.get("value");
         if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
         line = std::string("{\"set\":\"boost\",\"value\":") + (x->n != 0 ? "1" : "0") + "}";
+    } else if (set == "otgZcd") {
+        // ★ the OTG converter's light-load TEST (vibe-hwd set_otg_zcd): RK817 BOOST_ZCD 0-3 = 50/100/150/200 mA, never saved
+        const hhjson::Value* x = v.get("value");
+        if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
+        const long n = std::max(0L, std::min(3L, (long)x->n));
+        line = "{\"set\":\"otgZcd\",\"value\":" + std::to_string(n) + "}";
     } else if (action == "poweroff" || action == "reboot" || action == "screen-off" || action == "screen-on") {
         if (action == "poweroff" || action == "reboot") saveAllMemory(action.c_str());
         line = "{\"action\":\"" + action + "\"}";

@@ -253,6 +253,34 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         c.tc.draw(c.g, c.f.body, label, pr.r() - 4, pr.cy() - c.f.body.lineHeight() / 2.f, th::activeTx, 2);
         if (h.focused) focusRing(c, pr, 6, true);
     }
+    // ★★ OTG POWER TEST — the radio port's converter at a light load (vibe-hwd set_otg_zcd; 2026-11-08). The V4's comb of
+    //    spikes every ~250 kHz follows the dial: noise riding in on the port's 5 V. The RK817's zero-current detection
+    //    (50 / 100 / 150 / 200 mA, 150 at power-on) changes how the converter switches at the V4's 0.25 A. Listen while
+    //    stepping it: a comb that moves or goes proves the converter. Never saved — power-off puts it back to 150.
+    //    Shown only when the service could read the PMIC (no dead control).
+    if (num_.count("hw.otgZcd")) {
+        static const int ma[4] = {50, 100, 150, 200};
+        int sel = std::clamp((int)num_["hw.otgZcd"], 0, 3);
+        y0 = y;
+        y = menuRow(c, a, y, "OTG POWER TEST", "How the radio port's power converter switches at a light load: left / right, "
+                                               "while you listen. If the evenly spaced spikes move or go, the converter is "
+                                               "their source. 150 mA is the console's own setting; not saved.");
+        const Nav::Hit h = c.nav.item("hw.otgzcd", {a.x, y0, a.w, 44}, true);
+        if (h.adjust) {
+            const int n = std::clamp(sel + h.adjust, 0, 3);
+            if (n != sel) {
+                sel = n;
+                num_["hw.otgZcd"] = n;
+                eng_->device("{\"set\":\"otgZcd\",\"value\":" + std::to_string(n) + "}");
+                toast("OTG converter: " + std::to_string(ma[n]) + " mA");
+            }
+        }
+        char lb[48];
+        std::snprintf(lb, sizeof lb, "%s%d mA%s%s", sel > 0 ? "‹ " : "  ", ma[sel], sel == 2 ? " · STOCK" : "", sel < 3 ? " ›" : "  ");
+        const Rect pr{a.x + 170, y0 + 6, a.w - 176, 34};
+        c.tc.draw(c.g, c.f.body, lb, pr.r() - 4, pr.cy() - c.f.body.lineHeight() / 2.f, th::activeTx, 2);
+        if (h.focused) focusRing(c, pr, 6, true);
+    }
     // PERFORMANCE (the overlay) + its figure
     y0 = y;
     y = menuRow(c, a, y, "PERFORMANCE", "An overlay at the top of the screen");

@@ -343,6 +343,10 @@ mkfs.ext4 -q -L vibestate -U "$UUID_STATE" -E hash_seed="$UUID_STATE",root_owner
 truncate -s "${BOOT_MIB}M" "$P/boot.vfat"
 mkfs.vfat -F 32 -n VIBEBOOT -i "${DISKID}" "$P/boot.vfat" >/dev/null
 mcopy -s -i "$P/boot.vfat" "$B"/* ::/
+# ★ the uncompressed card from earlier builds: only the .img.gz in /out is kept. Every build left its 1.1 GB .img here
+#   and the work volume filled Docker's whole 100 GB disk by handheld53 (2026-11-08) — the next compile could not even
+#   install its packages.
+find "$W" -maxdepth 1 -name 'vibesdr-r36s-*.img' -delete
 IMG=$W/vibesdr-r36s-$IMAGE_VERSION.img
 S1=32768; S2=$((S1 + BOOT_MIB * 2048)); S3=$((S2 + ROOT_MIB * 2048)); END=$((S3 + STATE_MIB * 2048))
 rm -f "$IMG"; truncate -s $((END * 512)) "$IMG"
