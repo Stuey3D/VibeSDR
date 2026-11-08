@@ -200,6 +200,12 @@ private:
      * ★★ DRIFT: the RTL's crystal and the codec's never agree — and on this board the codec ran ~1.7 % slow (handheld33) —
      *     so the total buffered (queue + device) is held near kHoldFrames by the rate converter below (PI, ±5 %). */
     static constexpr long kHoldFrames = 7200;             // 150 ms held in all — the web clients' best-case jitter buffer (Stuart)
+    /* ★★ ADAPTIVE (Stuart, 2026-11-08, handheld38: "still getting the odd speaker crackle"; handheld36's log: the odd minute
+     *    with 2–3 starvations — a DSP block later than 150 ms). As the web clients' buffer: each starvation adds 50 ms to
+     *    the hold (to 400 ms in all), each calm minute gives 25 ms back (to 150) — it settles where this device needs it. */
+    long holdExtra_ = 0;
+    bool fadeIn_ = false;   // ★ the next period follows a gap: it fades in (writer thread only)
+    long hold() const { return kHoldFrames + holdExtra_; }
     void loop() {
         std::vector<int16_t> buf((size_t)kPeriod * 2);
         bool primed = false;
@@ -235,7 +241,7 @@ private:
                 //   and steering on that wobbled the pitch. Gains from a simulation against a ±1.7 % codec and real block
                 //   sizes: the correction settles within ±0.07 % of the truth, ≤ 21 ppm a period, the hold ±20 ms.
                 avgTotal_ = avgTotal_ <= 0 ? (double)total : avgTotal_ + 0.005 * ((double)total - avgTotal_);
-                const double err = (avgTotal_ - (double)kHoldFrames) / (double)kHoldFrames;
+                const double err = (avgTotal_ - (double)hold()) / (double)hold();
                 const double corr = std::max(-0.05, std::min(0.05, rateI_ + 0.02 * err));
                 const double ratio = 1.0 + corr;   // input frames per output frame
                 const double needF = phase_ + ratio * kPeriod + 2;
@@ -257,25 +263,42 @@ private:
                     const size_t used = (size_t)ph;
                     for (size_t i = 0; i < used * 2; i++) q_.pop_front();
                     phase_ = ph - (double)used;
+                    if (fadeIn_) {   // ★ back from a gap: 2 ms up from silence
+                        for (unsigned k = 0; k < 96 && k < kPeriod; k++) { const float g = (float)k / 96.f; buf[k * 2] = (int16_t)(buf[k * 2] * g); buf[k * 2 + 1] = (int16_t)(buf[k * 2 + 1] * g); }
+                        fadeIn_ = false;
+                    }
                 } else {
                     // ★ a REAL starvation (the device is nearly dry too): what there is, then silence, and refill first
                     const size_t have = std::min(q_.size(), buf.size());
                     for (size_t i = 0; i < have; i++) { buf[i] = q_.front(); q_.pop_front(); }
                     for (size_t i = have; i < buf.size(); i++) buf[i] = 0;
+                    // ★★ A SOFT GAP, NOT A CLICK (handheld38: the starvations were a DAB multiplex change — a gap nobody can
+                    //    avoid): the last 2 ms before the silence fade out, and the first 2 ms after it fade in (fadeIn_)
+                    {
+                        const size_t hf = have / 2, n = std::min<size_t>(96, hf);
+                        for (size_t k = 0; k < n; k++) {
+                            const float g = (float)k / (float)n;   // 0 at the last frame … 1, n frames back
+                            const size_t fi = hf - 1 - k;
+                            buf[fi * 2] = (int16_t)(buf[fi * 2] * g); buf[fi * 2 + 1] = (int16_t)(buf[fi * 2 + 1] * g);
+                        }
+                    }
+                    fadeIn_ = true;
                     primed = false;
                     phase_ = 0;
                     starved_++;
+                    holdExtra_ = std::min(12000L, holdExtra_ + 2400);   // ★ 50 ms deeper after a starvation
                 }
                 const auto nowT = std::chrono::steady_clock::now();
                 if (statAt_.time_since_epoch().count() == 0) statAt_ = nowT;
                 if (nowT - statAt_ >= std::chrono::seconds(60)) {
                     char b[240];
                     std::snprintf(b, sizeof b, "speaker: the last minute — %llu starved, %llu device underruns, %llu dropped (queue full), "
-                                  "rate %+.2f %% (the device's clock against 48 kHz), buffered %ld–%ld ms",
+                                  "rate %+.2f %% (the device's clock against 48 kHz), buffered %ld–%ld ms, holding %ld ms",
                                   (unsigned long long)starved_, (unsigned long long)xruns_, (unsigned long long)(dropped_ - droppedSaid_),
                                   corrN_ ? 100.0 * corrSum_ / (double)corrN_ : 0.0,
-                                  depthMin_ == LONG_MAX ? 0 : depthMin_ / 48, depthMax_ / 48);
+                                  depthMin_ == LONG_MAX ? 0 : depthMin_ / 48, depthMax_ / 48, hold() / 48);
                     lk.unlock(); say(b); lk.lock();
+                    if (starved_ == 0 && xruns_ == 0) holdExtra_ = std::max(0L, holdExtra_ - 1200);   // ★ a calm minute: 25 ms back
                     starved_ = xruns_ = 0; corrSum_ = 0; corrN_ = 0; droppedSaid_ = dropped_;
                     depthMin_ = LONG_MAX; depthMax_ = 0; statAt_ = nowT;
                 }

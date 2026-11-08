@@ -201,6 +201,26 @@ inline bool button(Ctx& c, const std::string& id, Rect r, const std::string& lab
     return h.pressed;
 }
 
+/** ★★ A TICKER for text too long for its room (Stuart, 2026-11-08: "the lines need to scroll when you highlight them if
+ *  the data goes off the screen"): while `live` (the row is highlighted) and the text is wider than `r`, it waits 1 s,
+ *  slides to its end at 40 px/s, waits 1 s and slides back; otherwise the fitted text (… at the end). `t` the clock (s). */
+inline void tickerText(Ctx& c, const Font& f, const std::string& s, Rect r, Rgba col, bool live, double t) {
+    const float tw = (float)c.tc.width(f, s);
+    const float ty = r.cy() - f.lineHeight() / 2.f;
+    if (!live || tw <= r.w) {
+        std::string fit = s;
+        if (tw > r.w) { while (!fit.empty() && c.tc.width(f, fit + "…") > r.w) { fit.pop_back(); while (!fit.empty() && ((unsigned char)fit.back() & 0xC0) == 0x80) fit.pop_back(); } fit += "…"; }
+        c.tc.draw(c.g, f, fit, r.x, ty, col);
+        return;
+    }
+    const double over = tw - r.w, slide = over / 40.0, cyc = 2 * slide + 2.0;
+    const double ph = std::fmod(t, cyc);
+    const double off = ph < 1.0 ? 0 : ph < 1.0 + slide ? (ph - 1.0) * 40.0 : ph < 2.0 + slide ? over : over - (ph - 2.0 - slide) * 40.0;
+    c.g.clipPush(r.x, r.y - 2, r.w, r.h + 4);
+    c.tc.draw(c.g, f, s, r.x - (float)off, ty, col);
+    c.g.clipPop();
+}
+
 /** A row of choices (the web's .seg); returns the index pressed, or -1. `sel` is drawn lit. */
 inline int segmented(Ctx& c, const std::string& id, Rect r, const std::vector<std::string>& opts, int sel, float gap = 6,
                      const Font* font = nullptr) {

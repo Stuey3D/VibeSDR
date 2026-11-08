@@ -1,6 +1,7 @@
 // gfx.h — the 2D drawing vibe-hhui needs besides the waterfall: filled / outlined rectangles, lines, circles and
 // textured quads (text), batched into one GLES 3 draw per texture change. Pixel coordinates, (0,0) top-left.
 #pragma once
+#include <array>
 #include <GLES3/gl3.h>
 
 #include <algorithm>
@@ -123,8 +124,25 @@ public:
         flush();
         glEnable(GL_SCISSOR_TEST);
         glScissor((GLint)std::floor(x), (GLint)std::floor(h_ - (y + h)), (GLsizei)std::ceil(w), (GLsizei)std::ceil(h));
+        clipOn_ = true; clipR_[0] = x; clipR_[1] = y; clipR_[2] = w; clipR_[3] = h;
     }
-    void unclip() { flush(); glDisable(GL_SCISSOR_TEST); }
+    void unclip() { flush(); glDisable(GL_SCISSOR_TEST); clipOn_ = false; }
+    /** ★ A clip INSIDE whatever clip is on (intersected), undone by clipPop() — clip()/unclip() are not nested: a clip
+     *  inside a list's clip would otherwise replace it, and its unclip() would open the whole screen to the next rows. */
+    void clipPush(float x, float y, float w, float h) {
+        stack_.push_back({clipOn_ ? 1.f : 0.f, clipR_[0], clipR_[1], clipR_[2], clipR_[3]});
+        if (clipOn_) {
+            const float x0 = std::max(x, clipR_[0]), y0 = std::max(y, clipR_[1]);
+            const float x1 = std::min(x + w, clipR_[0] + clipR_[2]), y1 = std::min(y + h, clipR_[1] + clipR_[3]);
+            x = x0; y = y0; w = std::max(0.f, x1 - x0); h = std::max(0.f, y1 - y0);
+        }
+        clip(x, y, w, h);
+    }
+    void clipPop() {
+        if (stack_.empty()) { unclip(); return; }
+        const auto p = stack_.back(); stack_.pop_back();
+        if (p[0] > 0.5f) clip(p[1], p[2], p[3], p[4]); else unclip();
+    }
 
     /** A filled triangle. */
     void triangle(float x0, float y0, float x1, float y1, float x2, float y2, Rgba c) { use(0); tri({x0, y0, -1, -1, c}, {x1, y1, -1, -1, c}, {x2, y2, -1, -1, c}); }
@@ -164,6 +182,8 @@ public:
 private:
     struct V { float x, y, u, v; Rgba c; };
     int w_ = 640, h_ = 480;
+    bool clipOn_ = false; float clipR_[4] = {0, 0, 0, 0};
+    std::vector<std::array<float, 5>> stack_;   // ★ clipPush / clipPop
     GLuint prog_ = 0, vao_ = 0, vbo_ = 0, tex_ = 0;
     GLint uView_ = -1, uTex_ = -1;
     std::vector<V> verts_;

@@ -488,7 +488,8 @@ inline void dabPaneSignal(App& a, Ctx& c, const RadioState& s, Rect view) {
         [&](int k, Rect rr, bool focused) {
             if (k % 2 == 0) c.g.rect(rr.x, rr.y, rr.w, rr.h + 3, rgb(0xffa000, 0.05f));
             c.tc.draw(c.g, c.f.small, rows[(size_t)k].first, rr.x + 8, rr.cy() - c.f.small.lineHeight() / 2.f, th::dim);
-            c.tc.draw(c.g, c.f.small, dabFit(c, c.f.small, rows[(size_t)k].second, (int)(rr.w - kw - 16)), rr.x + kw, rr.cy() - c.f.small.lineHeight() / 2.f, th::white);
+            // ★ the highlighted row's value scrolls when it is too long for the row (tickerText)
+            tickerText(c, c.f.small, rows[(size_t)k].second, {rr.x + kw, rr.y, rr.w - kw - 16, rr.h}, th::white, focused, c.t);
         });
 }
 
