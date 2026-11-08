@@ -170,6 +170,7 @@ import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
 import { useRecordBuffer, bufferedSecondsOf }          from '../hooks/useRecordBuffer';
 import { RecordBufferAnchor } from '../services/recordBuffer';
+import { recordingLabel } from '../services/recordingLabel';
 import { setDefaultInstance, getDefaultInstance,
          clearDefaultInstance }                        from '../services/defaultInstance';
 import { getFavourites, toggleFavourite }              from '../services/favourites';
@@ -4608,8 +4609,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       // tracked on UberSDR's audio WS, so OWRX would otherwise show a stale freq.
       // ★★ V12: a scanner record-on-stop file in progress ends first — one recorder, never two at once.
       scannerCtlRef.current?.releaseRecorder();
+      // ★★ DAB is named by its service, at the multiplex (services/recordingLabel.ts — the web's and the handheld's rule)
+      const recLab = recordingLabel(Number(status.frequency) || 0, String(status.mode || ''), dabOn ? dabState : null);
       (scannerRecIdleRef.current?.() ?? Promise.resolve()).then(() =>
-        (VibePowerModule as any)?.startRecording(Math.round(status.frequency || 0), String(status.mode || '')))
+        (VibePowerModule as any)?.startRecording(Math.round(recLab.hz), recLab.mode))
         .then((r: unknown) => {
           recBusy.current = false;
           // ★ V12 record buffer: the file already holds this many seconds from before the tap — the timer says so.
@@ -4653,7 +4656,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         })
         .catch(() => setAudioSheetOpen(false));
     }
-  }, [isRecording, status.frequency, status.mode]);
+  }, [isRecording, status.frequency, status.mode, dabOn, dabState]);
 
   /* ★★★ V12 PER-VFO RECORDING (Stuart, 2026-11-07: "when the A/B VFO's are active there needs to be a 2nd record line in
    *     the audio menu for the B VFO, both can be triggered independently and both have their own clocks and the signal

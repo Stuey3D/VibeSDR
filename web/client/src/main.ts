@@ -20,6 +20,7 @@ import { webLogos, webLogoOffer, webLogoOutranked, webLogoForget, webLogoDead, d
 import { drmRender, drmSignalRender, type DrmState } from './drm';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
+import { recordingLabel } from '../../../src/services/recordingLabel';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
@@ -16768,10 +16769,12 @@ function initRecorder() {
     // Kept, not just downloaded — a recording you can't find again isn't a feature.
     // The RECORDINGS panel plays, downloads and deletes them.
     const at = new Date();
+    // ★★ DAB is named by its service (src/services/recordingLabel.ts — the app's and the handheld's rule too)
+    const lab = recordingLabel(spec.frequency, String(spec.mode), dabOn ? dabState : null);
     await saveRecording({
-      name: recordingName(spec.frequency, spec.mode, at),
-      frequency: Math.round(spec.frequency),
-      mode: spec.mode,
+      name: recordingName(lab.hz, lab.mode, at),
+      frequency: Math.round(lab.hz),
+      mode: dabOn ? 'dab' : spec.mode,
       createdAt: at.getTime(),
       seconds,
       bytes: blob.size,
