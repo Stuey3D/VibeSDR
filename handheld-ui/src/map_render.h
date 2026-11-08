@@ -260,15 +260,16 @@ private:
      *  the fan indices (fills) or the edges (lines); `first` is where that part starts in the ibo. */
     void runs(const MapGroup& g, bool fan, GLenum prim) {
         const std::vector<uint32_t>& at = fan ? g.fanAt : g.edgeAt;
+        const std::vector<float>& boxes = fan ? g.fanBoxes : g.boxes;   // ★ a fill's pieces have their own boxes (mapSplitFill)
         const uint32_t first = fan ? 0 : (uint32_t)g.fanN;
-        const size_t nr = g.boxes.size() / 4;
+        const size_t nr = boxes.size() / 4;
         if (at.size() != nr + 1) return;
         for (int k : wraps(g.box)) {
             glUniform1f(uWrap_, (float)k);
             uint32_t r0 = 0, r1 = 0; bool open = false;
             auto flushRun = [&] { if (open && r1 > r0) { glDrawElements(prim, (GLsizei)(r1 - r0), GL_UNSIGNED_INT, (void*)(sizeof(uint32_t) * (size_t)(first + r0))); verts_ += r1 - r0; draws_++; } open = false; };
             for (size_t i = 0; i < nr; i++) {
-                const float* b = &g.boxes[i * 4];
+                const float* b = &boxes[i * 4];
                 if (b[2] + k < box_[0] || b[0] + k > box_[2] || b[3] < box_[1] || b[1] > box_[3]) continue;
                 const uint32_t s0 = at[i], s1 = at[i + 1];
                 if (s1 == s0) continue;

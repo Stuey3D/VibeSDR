@@ -108,7 +108,8 @@ struct MapGroup {
     std::vector<float> v;                 // staged until upload, then freed
     std::vector<uint32_t> fan, edge;      // fills: fan triangles (stencil); edges: GL_LINES pairs (outlines / lines)
     std::vector<float> boxes;             // one (x0, y0, x1, y1) per ring / line — the CPU's own culling + hit tests
-    std::vector<uint32_t> fanAt, edgeAt;  // ★ each ring's first index (+ an end sentinel): only the rings in view are drawn
+    std::vector<uint32_t> fanAt, edgeAt;  // ★ each fill PIECE's / ring's first index (+ an end sentinel): only those in view are drawn
+    std::vector<float> fanBoxes;          // ★ one (x0, y0, x1, y1) per fill piece (mapSplitFill) — fanAt's culling boxes
     std::vector<uint32_t> rv;             // parse-time: (first vertex, count) per ring, until mapFinish
     // GPU
     GLuint vbo = 0, ibo = 0;
@@ -259,6 +260,59 @@ private:
     bool ok_ = true;
 };
 
+/* ★★★ FILLS CUT INTO CELLS AT LOAD (2026-11-08 — the R36S map's GPU resets, at last). A fill is drawn by stencil-then-
+ *  cover as a fan from its ring's FIRST point. Zoomed in, that point is usually far off the screen, so a coast ring of
+ *  tens of thousands of points became tens of thousands of slivers that EACH cross the whole buffer — on the Mali-G31
+ *  the tiler bins every one into every tile it crosses, and one fragment job ran past Panfrost's 500 ms limit: the
+ *  "gpu sched timeout"s (handheld46: 14 of them in a re-open with nothing loading, 486 k indices), the reset that left
+ *  "a zoomed in UK over a zoomed out USA", and why ZOOMED IN was slow while the world view was fine.
+ *  So a big ring is cut into cells (Sutherland–Hodgman against each quadrant, recursively) until a piece has ≤ 64 points
+ *  or its cell is ~2 km; each piece is fanned from its own first point, so no sliver is bigger than its cell, and each
+ *  piece carries its own box, so only the cells in view are drawn at all. Inside a convex cell the clipped polygon has
+ *  the same winding as the ring, so the even-odd stencil gives the same picture; the bridges SH adds along a cell edge
+ *  are drawn twice and cancel. Interior cells stop early as four-point squares. Cost: once, on the loader thread. */
+struct MapP2 { float x, y; };
+inline void mapClipSide(const std::vector<MapP2>& in, std::vector<MapP2>& out, int side, float c) {
+    out.clear();
+    const size_t n = in.size();
+    if (n < 3) return;
+    auto inside = [&](const MapP2& p) { return side == 0 ? p.x >= c : side == 1 ? p.x <= c : side == 2 ? p.y >= c : p.y <= c; };
+    auto cross = [&](const MapP2& a, const MapP2& b) {
+        if (side < 2) { const float t = (c - a.x) / (b.x - a.x); return MapP2{c, a.y + t * (b.y - a.y)}; }
+        const float t = (c - a.y) / (b.y - a.y); return MapP2{a.x + t * (b.x - a.x), c};
+    };
+    MapP2 prev = in[n - 1]; bool pin = inside(prev);
+    for (size_t i = 0; i < n; i++) {
+        const MapP2& cur = in[i]; const bool cin = inside(cur);
+        if (cin) { if (!pin) out.push_back(cross(prev, cur)); out.push_back(cur); }
+        else if (pin) out.push_back(cross(prev, cur));
+        prev = cur; pin = cin;
+    }
+}
+inline void mapSplitFill(const std::vector<MapP2>& poly, float x0, float y0, float x1, float y1, std::vector<float>& v, MapGroup& g, std::vector<MapP2>& t1, std::vector<MapP2>& t2) {
+    if (poly.size() < 3) return;
+    if (poly.size() <= 64 || (x1 - x0 < 1.f / 16384 && y1 - y0 < 1.f / 16384)) {
+        const uint32_t base = (uint32_t)(v.size() / 2);
+        float b0 = 1e9f, b1 = 1e9f, b2 = -1e9f, b3 = -1e9f;
+        for (auto& p : poly) { v.push_back(p.x); v.push_back(p.y); b0 = std::min(b0, p.x); b1 = std::min(b1, p.y); b2 = std::max(b2, p.x); b3 = std::max(b3, p.y); }
+        g.fanAt.push_back((uint32_t)g.fan.size());
+        for (uint32_t k = 1; k + 1 < poly.size(); k++) { g.fan.push_back(base); g.fan.push_back(base + k); g.fan.push_back(base + k + 1); }
+        g.fanBoxes.insert(g.fanBoxes.end(), {b0, b1, b2, b3});
+        return;
+    }
+    // ★ split the longer side only once it is far the longer (a tall ring is not cut into flat strips)
+    const float mx = (x0 + x1) * 0.5f, my = (y0 + y1) * 0.5f;
+    const bool sx = x1 - x0 >= (y1 - y0) * 0.5f, sy = y1 - y0 >= (x1 - x0) * 0.5f;
+    for (int qx = 0; qx < (sx ? 2 : 1); qx++)
+        for (int qy = 0; qy < (sy ? 2 : 1); qy++) {
+            const float cx0 = sx ? (qx ? mx : x0) : x0, cx1 = sx ? (qx ? x1 : mx) : x1;
+            const float cy0 = sy ? (qy ? my : y0) : y0, cy1 = sy ? (qy ? y1 : my) : y1;
+            std::vector<MapP2> a, b;
+            mapClipSide(poly, a, 0, cx0); mapClipSide(a, b, 1, cx1); mapClipSide(b, a, 2, cy0); mapClipSide(a, b, 3, cy1);
+            mapSplitFill(b, cx0, cy0, cx1, cy1, v, g, t1, t2);
+        }
+}
+
 /** ★★ RINGS IN SPACE ORDER. After the parse, a group's rings are re-laid in Morton (Z-curve) order of their centres and
  *  their indices made: the rings in any one view then sit in a few contiguous runs of the index buffer, so a view draws
  *  ONLY what it can see in a handful of calls (tier2 lakes are 13 000 rings a shard; drawing a whole shard for the
@@ -277,14 +331,26 @@ inline void mapFinish(MapGroup& g, bool fill, bool edges) {
     std::sort(order.begin(), order.end());
     std::vector<float> v, boxes;
     v.reserve(g.v.size()); boxes.reserve(g.boxes.size());
-    g.fan.clear(); g.edge.clear(); g.fanAt.clear(); g.edgeAt.clear();
+    g.fan.clear(); g.edge.clear(); g.fanAt.clear(); g.edgeAt.clear(); g.fanBoxes.clear();
+    std::vector<MapP2> poly, t1, t2;
     for (auto& o : order) {
         const uint32_t i = o.second, first = g.rv[2 * i], n = g.rv[2 * i + 1];
         const uint32_t base = (uint32_t)(v.size() / stride);
         v.insert(v.end(), g.v.begin() + (long)(first * stride), g.v.begin() + (long)((first + n) * stride));
         boxes.insert(boxes.end(), g.boxes.begin() + (long)(i * 4), g.boxes.begin() + (long)(i * 4 + 4));
-        g.fanAt.push_back((uint32_t)g.fan.size()); g.edgeAt.push_back((uint32_t)g.edge.size());
-        if (fill) for (uint32_t k = 1; k + 1 < n; k++) { g.fan.push_back(base); g.fan.push_back(base + k); g.fan.push_back(base + k + 1); }
+        g.edgeAt.push_back((uint32_t)g.edge.size());
+        if (fill) {
+            if (n <= 64) {   // ★ a small ring: its own fan, its own box
+                g.fanAt.push_back((uint32_t)g.fan.size());
+                for (uint32_t k = 1; k + 1 < n; k++) { g.fan.push_back(base); g.fan.push_back(base + k); g.fan.push_back(base + k + 1); }
+                g.fanBoxes.insert(g.fanBoxes.end(), g.boxes.begin() + (long)(i * 4), g.boxes.begin() + (long)(i * 4 + 4));
+            } else {          // ★ a big one: cut into cells (mapSplitFill) — its pieces' vertices follow the plain ones
+                poly.clear();
+                for (uint32_t k = 0; k < n; k++) poly.push_back({g.v[(first + k) * 2], g.v[(first + k) * 2 + 1]});
+                const float* bb = &g.boxes[i * 4];
+                mapSplitFill(poly, bb[0], bb[1], bb[2], bb[3], v, g, t1, t2);
+            }
+        }
         if (!fill || edges) for (uint32_t k = 0; k + 1 < n; k++) { g.edge.push_back(base + k); g.edge.push_back(base + k + 1); }
     }
     g.fanAt.push_back((uint32_t)g.fan.size()); g.edgeAt.push_back((uint32_t)g.edge.size());
@@ -630,7 +696,8 @@ private:
             // ★ the CPU copies go: only the per-ring boxes stay (culling, hit tests)
             std::vector<float>().swap(g.v); std::vector<uint32_t>().swap(g.fan); std::vector<uint32_t>().swap(g.edge);
             g.boxes.shrink_to_fit();
-            gpu += (g.boxes.size() + g.fanAt.size() + g.edgeAt.size()) * sizeof(float);
+            g.fanBoxes.shrink_to_fit();
+            gpu += (g.boxes.size() + g.fanBoxes.size() + g.fanAt.size() + g.edgeAt.size()) * sizeof(float);
         }
         f.bytes += gpu;
         if (gpu > (2u << 20)) std::fprintf(stderr, "vibe-hhui: map upload geometry %s %.1f MB\n", f.name.c_str(), gpu / 1048576.0);
