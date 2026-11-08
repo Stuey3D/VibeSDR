@@ -597,6 +597,8 @@ private:
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             f.texW = f.img->w; f.texH = f.img->h;
+            // ★ the log's side of the GPU-timeout hunt (handheld44): each image put on the GPU, against the kernel's times
+            std::fprintf(stderr, "vibe-hhui: map upload image %s %dx%d (%.1f MB)\n", f.name.c_str(), f.img->w, f.img->h, f.img->w * f.img->h * 4 / 1048576.0);
             SDL_FreeSurface(f.img); f.img = nullptr;
             f.uploaded = true;
             return;
@@ -624,6 +626,7 @@ private:
             gpu += (g.boxes.size() + g.fanAt.size() + g.edgeAt.size()) * sizeof(float);
         }
         f.bytes += gpu;
+        if (gpu > (2u << 20)) std::fprintf(stderr, "vibe-hhui: map upload geometry %s %.1f MB\n", f.name.c_str(), gpu / 1048576.0);
         f.uploaded = true;
     }
     static void release(MapFile& f) {

@@ -125,11 +125,18 @@ public:
         const bool settle = (std::fabs(ox) > 0.5 || std::fabs(oy) > 0.5) && now - movedAt_ > 0.35 && now - renderedAt_ > 0.35;
         if (std::fabs(ox - lastOx_) > 0.01 || std::fabs(oy - lastOy_) > 0.01 || R.fz != z) movedAt_ = now;
         lastOx_ = ox; lastOy_ = oy;
-        if (dirty || R.fz != z || outside || gen || settle || frame == 0) {
+        /* ★★ ONE MORE RENDER WHEN THE LOADING ENDS (Stuart, 2026-11-08: the map reopened as "a zoomed in UK over a zoomed
+         *  out USA"). handheld44's log: with no clock changed at all, Panfrost still reset the GPU in the first ~12 s of
+         *  a map, while its files were going up — and a reset throws away the render in flight, leaving the buffer's old
+         *  picture under the new one. A render made while files were still loading is redone 1.5 s after the last one
+         *  arrived, so whatever a reset cut short is drawn again whole. */
+        const bool loadingNow = st.pending() > 0;
+        const bool repair = loadRender_ && !loadingNow && now - renderedAt_ > 1.5;
+        if (dirty || R.fz != z || outside || gen || settle || repair || frame == 0) {
             c.g.flush();
             const uint64_t g0 = st.generation();
             R.render(st, c.tc, mapFonts(), cx, cy, z, mapProfile(profile), frame);
-            gen_ = g0; renderedAt_ = now; dirty = false;
+            gen_ = g0; renderedAt_ = now; dirty = false; loadRender_ = loadingNow;
             glViewport(0, 0, W, H);
             dx = 0; lastOx_ = lastOy_ = 0;
         }
@@ -179,6 +186,7 @@ public:
 private:
     static constexpr int W = 640, H = 480;
     double last_ = 0, rimSince_ = 0, renderedAt_ = 0, movedAt_ = 0, lastOx_ = 0, lastOy_ = 0;
+    bool loadRender_ = false;   // the last render was made while files were still loading (the repair render)
     uint64_t gen_ = ~0ull;
     void clampY() {
         const double half = H / 2.0 / worldPx(z);
