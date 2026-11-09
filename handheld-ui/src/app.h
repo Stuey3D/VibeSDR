@@ -148,6 +148,11 @@ public:
     int volume_ = -1; bool muted_ = false; double volUntil_ = 0;
     int brightness_ = 120;
     bool screenOff_ = false;
+    // ★★ the screen-off SAFETY NET (2026-11-09, handheld57: a power tap put the screen to sleep and the UI never heard it
+    //    come back — 0 frames for 110 s, a frozen picture on a lit screen). While off, the hardware service is asked every
+    //    2 s; if it says the screen is on, drawing resumes whatever happened to the event.
+    double screenOffSince_ = 0, screenPollAt_ = 0;
+    std::atomic<int> screenSeen_{-1};     // 1 = the service reported the screen ON (from the poll's worker), -1 = nothing new
     double lastInput_ = 0;
     /** ★★★ IDLE POWER SAVE (Stuart, 2026-11-07: "the big one would be slowing the waterfall data rate to the minimum
      *  when idle … for us in direct control of the hardware … then sharpen it up and speed it up when in use"; the

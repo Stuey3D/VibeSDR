@@ -240,11 +240,12 @@ class Hwd:
         self.apply_brightness()
         self.save_soon()
 
-    def set_screen(self, on):
+    def set_screen(self, on, why="request"):
         want = "on" if on else "off"
         if want == self.screen:
             return
         self.screen = want
+        log("screen", want, "(%s, %d listening)" % (why, len(self.subscribers)))
         try:
             if on:
                 self.apply_brightness()
@@ -474,9 +475,9 @@ class Hwd:
                 self.power_down_at = None
                 if self.power_task:
                     self.power_task.cancel()
-                self.set_screen(self.screen == "off")                         # short press: screen off / on
+                self.set_screen(self.screen == "off", "power button")         # short press: screen off / on
         elif dev == "gamepad" and value == 1 and self.screen == "off":
-            self.set_screen(True)                                             # ★ any pad button wakes the screen
+            self.set_screen(True, "pad button")                               # ★ any pad button wakes the screen
 
     def on_switch(self, code, value):
         if code == SW_HEADPHONE_INSERT:

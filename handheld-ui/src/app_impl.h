@@ -1165,7 +1165,11 @@ inline int App::run(int argc, char** argv) {
             else if (de.kind == "battery") { battery_ = (int)de.body["pct"].num(battery_); charging_ = de.body["charging"].boolean(); }
             else if (de.kind == "battery_low") toast("Battery low — " + std::to_string((int)de.body["pct"].num()) + " %");
             else if (de.kind == "output") toast(de.body["output"].str() == "headphones" ? "Headphones" : "Speaker");
-            else if (de.kind == "screen") { screenOff_ = de.body["screen"].str() == "off"; if (!screenOff_) lastInput_ = nowSec(); }
+            else if (de.kind == "screen") {
+                screenOff_ = de.body["screen"].str() == "off";
+                if (!screenOff_) lastInput_ = nowSec();
+                std::fprintf(stderr, "vibe-hhui: screen %s (the hardware service's event)\n", screenOff_ ? "off" : "on");
+            }
             else if (de.kind == "shutdown") toast("Switching off");
         }
         const RadioState& s = eng.state();
@@ -1259,7 +1263,26 @@ inline int App::run(int argc, char** argv) {
         }
         // ★ between frames, SLEEP until the next one is due (≤ 16 ms, so the sticks are still read ~60 times a second —
         //   the web samples its pad once an animation frame); it used to wake every 4 ms and redo every tick
-        if (screenOff_) { SDL_Delay(30); continue; }
+        if (screenOff_) {
+            const double tn = nowSec();
+            if (screenOffSince_ == 0) { screenOffSince_ = tn; screenSeen_ = -1; }
+            if (screenSeen_.exchange(-1) == 1 && tn - screenOffSince_ > 3.0) {
+                screenOff_ = false; lastInput_ = tn;
+                std::fprintf(stderr, "vibe-hhui: screen: the hardware service says ON but no event said so — drawing again (off %.0f s)\n",
+                             tn - screenOffSince_);
+            } else if (tn - screenOffSince_ > 3.0 && tn - screenPollAt_ > 2.0) {
+                // ★ 3 s grace: our own screen-off request may not have reached the service yet
+                screenPollAt_ = tn;
+                std::thread([this, p = eng.port()] {
+                    const HttpResult r = httpRequest(p, "GET", "/handheld/device", "", 4);
+                    if (r.status != 200) return;
+                    const Json j = Json::parse(r.body);
+                    if (j["state"]["screen"].str() == "on") screenSeen_ = 1;
+                }).detach();
+            }
+            if (screenOff_) { SDL_Delay(30); continue; }
+        }
+        if (screenOffSince_ != 0) { screenOffSince_ = 0; std::fprintf(stderr, "vibe-hhui: drawing again after screen off\n"); }
         // ★★ THE SCREEN STAYS AT 30 FPS WHILE IDLE (Stuart, 2026-11-07, on handheld24: "the 4fps when idle looks too jerky
         //    and not very nice to someone just passively watching … do what we do in the app and web client slow the rows
         //    being drawn too. We need to keep the UI smooth"). Only the waterfall slows: 5 rows a second from the engine,
