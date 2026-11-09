@@ -896,6 +896,12 @@ void hDevicePost(Req& r) {
         if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
         const long n = std::max(0L, std::min(3L, (long)x->n));
         line = "{\"set\":\"otgZcd\",\"value\":" + std::to_string(n) + "}";
+    } else if (set == "cpuQuiet") {
+        // ★ the CPU QUIET TEST (vibe-hwd set_cpu_quiet): 0 normal, 1 fixed clock, 2 always busy — never saved
+        const hhjson::Value* x = v.get("value");
+        if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
+        const long n = std::max(0L, std::min(2L, (long)x->n));
+        line = "{\"set\":\"cpuQuiet\",\"value\":" + std::to_string(n) + "}";
     } else if (action == "poweroff" || action == "reboot" || action == "screen-off" || action == "screen-on") {
         if (action == "poweroff" || action == "reboot") saveAllMemory(action.c_str());
         line = "{\"action\":\"" + action + "\"}";

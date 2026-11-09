@@ -1220,6 +1220,7 @@ inline int App::run(int argc, char** argv) {
                     if (j.has("volume")) volume_ = (int)j["volume"].num(volume_);
                     if (j.has("cpuMax")) cpuMaxSeen_ = j["cpuMax"].num(0);
                     if (j["otgZcd"].kind == Json::Num) otgZcdSeen_ = (int)j["otgZcd"].num(-1);
+                    if (j["cpuQuiet"].kind == Json::Num) cpuQuietSeen_ = (int)j["cpuQuiet"].num(-1);
                     if (j["cpuSteps"].kind == Json::Arr) {
                         std::vector<long> st;
                         for (auto& f : j["cpuSteps"].a) if (f.num(0) >= 400000) st.push_back((long)f.num(0));
@@ -1250,7 +1251,8 @@ inline int App::run(int argc, char** argv) {
             screenOff_ = true;
         }
         if (cpuMaxSeen_ > 0) { num_["hw.cpuMax"] = cpuMaxSeen_; cpuMaxSeen_ = 0; }
-        { const int z = otgZcdSeen_.exchange(-1); if (z >= 0 && z <= 3) num_["hw.otgZcd"] = z; }   // (from the device poll's worker)
+        { const int z = otgZcdSeen_.exchange(-1); if (z >= 0 && z <= 3) num_["hw.otgZcd"] = z; }
+        { const int q = cpuQuietSeen_.exchange(-1); if (q >= 0 && q <= 2) num_["hw.cpuQuiet"] = q; }   // (from the device poll's worker)
         if (settingsDirty_ && nowSec() - settingsAt_ > 1.0) { set_.save(); settingsDirty_ = false; }
 
         // ── draw (≤ 30 fps; nothing while the screen is off) ──

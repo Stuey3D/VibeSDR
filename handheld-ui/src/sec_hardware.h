@@ -281,6 +281,33 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         c.tc.draw(c.g, c.f.body, lb, pr.r() - 4, pr.cy() - c.f.body.lineHeight() / 2.f, th::activeTx, 2);
         if (h.focused) focusRing(c, pr, 6, true);
     }
+    // ★★ CPU QUIET TEST (vibe-hwd set_cpu_quiet; 2026-11-09). The V4's spikes, recorded, pulse at exactly 250 Hz (a 4 ms
+    //    rhythm — the kernel's tick waking sleeping cores) and 8000 Hz (USB's own 125 µs heartbeat). FIXED CLOCK stops the
+    //    CPU's speed and voltage moving; ALWAYS BUSY keeps every core awake on lowest-priority filler work, so the tick no
+    //    longer changes what the console draws. Shown only when the service reports it (no dead control). Never saved.
+    if (num_.count("hw.cpuQuiet")) {
+        static const char* const qn[3] = {"NORMAL", "FIXED CLOCK", "ALWAYS BUSY"};
+        int sel = std::clamp((int)num_["hw.cpuQuiet"], 0, 2);
+        y0 = y;
+        y = menuRow(c, a, y, "CPU QUIET TEST", "Steadies what the console draws while you listen: left / right. If the evenly "
+                                               "spaced spikes weaken or go on ALWAYS BUSY, the CPU waking up is feeding them. "
+                                               "Uses more battery; not saved.");
+        const Nav::Hit h = c.nav.item("hw.cpuquiet", {a.x, y0, a.w, 44}, true);
+        if (h.adjust) {
+            const int n = std::clamp(sel + h.adjust, 0, 2);
+            if (n != sel) {
+                sel = n;
+                num_["hw.cpuQuiet"] = n;
+                eng_->device("{\"set\":\"cpuQuiet\",\"value\":" + std::to_string(n) + "}");
+                toast(std::string("CPU quiet test: ") + qn[n]);
+            }
+        }
+        char lb[48];
+        std::snprintf(lb, sizeof lb, "%s%s%s", sel > 0 ? "‹ " : "  ", qn[sel], sel < 2 ? " ›" : "  ");
+        const Rect pr{a.x + 170, y0 + 6, a.w - 176, 34};
+        c.tc.draw(c.g, c.f.body, lb, pr.r() - 4, pr.cy() - c.f.body.lineHeight() / 2.f, th::activeTx, 2);
+        if (h.focused) focusRing(c, pr, 6, true);
+    }
     // PERFORMANCE (the overlay) + its figure
     y0 = y;
     y = menuRow(c, a, y, "PERFORMANCE", "An overlay at the top of the screen");
