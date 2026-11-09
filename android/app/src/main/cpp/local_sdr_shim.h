@@ -1094,7 +1094,6 @@ public:
      *    the device actually opened, and cannot be stale. */
     static void setUsbModelName(const std::string& name);
     void setSampleRate(double rate);
-    void restartRtlCapture();   // the handheld's USB transfer test (g_rtlXferBytes)
     /** ★ True when the serving radio is an Airspy HF+, whose sample rate is PINNED at open —
      *  changing it on a live stream is a path no other SDR client takes and ours could leave the
      *  device needing a power cycle. See the lockedRate note in hwinfo. */

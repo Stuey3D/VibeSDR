@@ -875,16 +875,7 @@ struct ModeParams {
  * Size it by TIME instead — ~32 ms per buffer at any rate. libusb requires a
  * multiple of 512; clamp to librtlsdr's sane range.
  */
-/** ★★ THE USB TRANSFER TEST (R36S, 2026-11-08). Stuart's V4 has a comb of spikes at every eighth of the sample rate on
- *  the R36S only — same engine, driver, settings, dongle and cable are clean on his Mac; the 5 V is steady, every
- *  sample arrives, and the PMIC's converter settings change nothing. What differs is the USB host (a dwc2 here) and so
- *  the RHYTHM in which the dongle's data is collected — activity in step with the sample clock that can couple back into
- *  the dongle's own receiver. This sets the transfer size by hand (bytes; 0 = by time, below) so the rhythm can be
- *  changed while listening: a comb that moves with it proves the mechanism. Handheld only, never saved. */
-static std::atomic<uint32_t> g_rtlXferBytes{0};
-static std::atomic<bool> g_forceRateRestart{false};
 static uint32_t rtlBufLenForRate(double rate) {
-    if (const uint32_t o = g_rtlXferBytes.load(std::memory_order_relaxed)) return o;
     double bytes = rate * 2.0 * 0.032;             // 2 bytes/sample (I+Q u8), 32 ms
     uint32_t len = (uint32_t)(bytes / 512.0 + 0.5) * 512;
     if (len < 16384)  len = 16384;
@@ -7326,10 +7317,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    watchdog to print — the callback is the thread whose lateness loses data, so it never writes a log.
      *  ★ Every rate change stops and relaunches capture, which resets the window: no minute spans two rates. */
     double rtlChkStart = 0.0, rtlChkLast = 0.0, rtlChkMaxGap = 0.0, rtlChkRate = 0.0;
-    uint32_t rtlChkBufLen = 0;                    // the USB transfer size this capture runs with (the transfer test)
     uint64_t rtlChkN = 0;
     int rtlChkWindows = 0;                        // complete minutes since this capture started
-    struct RtlChkReport { double secs = 0, rate = 0, maxGap = 0; uint64_t got = 0; bool first = false; uint32_t bufLen = 0; };
+    struct RtlChkReport { double secs = 0, rate = 0, maxGap = 0; uint64_t got = 0; bool first = false; };
     RtlChkReport rtlChkOut;                       // written by the callback while ready is false, then released
     std::atomic<bool> rtlChkReady{false};
     // ★ When the RSP's tuner was last written. A retune burst (block-stepping through Band III at
@@ -20903,19 +20893,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             broadcastConfig();
             return;
         }
-        if (type == "rtlxfer") {
-            // ★★ THE USB TRANSFER TEST (g_rtlXferBytes). On the handheld only — the supervisor sets VIBE_HANDHELD_RECDIR for
-            //    the radio it runs; a shared server never offers a listener a way to restart its capture.
-            if (!std::getenv("VIBE_HANDHELD_RECDIR")) { LOGI("rtlxfer ignored — the USB transfer test is the handheld's"); return; }
-            double kb = 0;
-            jsonNum(msg, "kb", kb);
-            const int k = (int)std::lround(kb);
-            if (k != 0 && k != 16 && k != 64 && k != 128 && k != 256) { LOGI("rtlxfer ignored — %d KB is not offered", k); return; }
-            if (g_rtlXferBytes.exchange((uint32_t)k * 1024u) == (uint32_t)k * 1024u) return;
-            LOGI("USB transfer test: %s — restarting capture", k ? (std::to_string(k) + " KB transfers").c_str() : "back to sizing by time");
-            LocalSdrShim::instance().restartRtlCapture();
-            return;
-        }
         if (type == "adcstats") {
             /* ★ A SELF-EXPIRING LATCH, not a reference count. Counting holders means a tool that
              *   is killed mid-sweep leaves a receiver measuring for ever, and every socket needs
@@ -30481,7 +30458,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ Set on EVERY exit path, including the early returns below — a flag that is only
             //   correct on the happy path is worse than none, because it is trusted.
             struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{self};
-            self->rtlChkStart = 0.0; self->rtlChkRate = self->sampleRate; self->rtlChkWindows = 0; self->rtlChkBufLen = bufLen;   // a fresh delivery window at this rate
+            self->rtlChkStart = 0.0; self->rtlChkRate = self->sampleRate; self->rtlChkWindows = 0;   // a fresh delivery window at this rate
             rtlsdr_read_async(self->dev, &Impl::asyncHandler, self, 0, bufLen);
             // We only reach here when the IQ stops. Three reasons, and they must not be confused:
             if (self->stopping.load() || self->restarting.load()) return;   // we asked for it
@@ -34294,11 +34271,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (shortfall || r.first || ++cleanRuns >= 10) {
                         if (!r.first) cleanRuns = 0;
                         LOGI("USB IQ: %s — %llu of %.0f samples in %.1f s at %.3f MS/s (%+.3f %%), longest wait between "
-                             "buffers %.0f ms, USB transfers of %u KB%s",
+                             "buffers %.0f ms%s",
                              shortfall ? "SAMPLES LOST in the last minute"
                                        : r.first ? "every sample arrived (the first minute of this stream)"
                                                  : "every sample arrived (10 min)",
-                             (unsigned long long)r.got, want, r.secs, r.rate / 1e6, diffPct, r.maxGap * 1000.0, r.bufLen / 1024u,
+                             (unsigned long long)r.got, want, r.secs, r.rate / 1e6, diffPct, r.maxGap * 1000.0,
                              shortfall ? " — the USB host did not collect in time; the dongle's FIFO overflowed" : "");
                     }
                 }
@@ -35251,7 +35228,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (t - self->rtlChkStart >= 60.0) {
                 if (!self->rtlChkReady.load(std::memory_order_acquire)) {
                     self->rtlChkOut = { t - self->rtlChkStart, self->rtlChkRate, self->rtlChkMaxGap, self->rtlChkN,
-                                        self->rtlChkWindows == 0, self->rtlChkBufLen };
+                                        self->rtlChkWindows == 0 };
                     self->rtlChkReady.store(true, std::memory_order_release);
                 }
                 self->rtlChkStart = t; self->rtlChkN = 0; self->rtlChkMaxGap = 0.0; self->rtlChkWindows++;
@@ -43507,16 +43484,6 @@ unsigned LocalSdrShim::maxSampleRateHz() {
     return mx;
 }
 
-/** The USB transfer test's restart (g_rtlXferBytes): the rate path's full stop / rebuild / relaunch at the SAME rate —
- *  the one proven way to relaunch an RTL capture safely — forced past its "already at that rate" guard. RTL USB only. */
-void LocalSdrShim::restartRtlCapture() {
-    if (!impl->dev || impl->useTcp() || impl->useAirspyHf() || impl->useAirspy() || impl->useHackRf() || impl->useSdrplay()
-        || impl->useUsrp() || impl->sampleRate <= 0) return;
-    g_forceRateRestart.store(true);
-    setSampleRate(impl->sampleRate);
-    g_forceRateRestart.store(false);
-}
-
 void LocalSdrShim::setSampleRate(double rate) {
     // ★★★ "changing the sample rate should retrigger the AGC rather than the wait to increase the
     //     gain again" (Stuart, 2026-08-23). He is right, and the reason is the IF filter: it follows
@@ -43622,7 +43589,7 @@ void LocalSdrShim::setSampleRate(double rate) {
     // ★ Compared against the rate the engine is ACTUALLY running, not the last value requested:
     //   a device that rounded the request is already running something slightly different, and it
     //   is that figure a repeat request has to match.
-    if (impl->sampleRate > 0 && std::fabs(impl->sampleRate - rate) < 1.0 && !g_forceRateRestart.exchange(false)) {
+    if (impl->sampleRate > 0 && std::fabs(impl->sampleRate - rate) < 1.0) {
         LOGI("sample rate already %.0f — nothing to do", impl->sampleRate);
         return;
     }

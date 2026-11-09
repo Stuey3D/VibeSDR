@@ -93,22 +93,6 @@ inline void rateBoostRow(S& x, float& y) {
     }
 }
 
-// ── USB TRANSFER TEST (rtl only, the R36S's comb at every eighth of the sample rate; 2026-11-08) ─────────────────────
-// ★ How much the dongle sends per USB transfer: AUTO (32 ms of samples) or a fixed size. It changes the rhythm in which the
-//   console collects the data; if the comb moves or weakens with it, the USB activity is what reaches the receiver. Each
-//   change restarts the capture (a second of silence). Not saved — the engine starts on AUTO.
-inline void usbXferRow(S& x, float& y) {
-    static const int kbs[5] = {0, 16, 64, 128, 256};
-    const std::vector<std::string> labels = {"AUTO — 32 ms of samples", "16 KB", "64 KB", "128 KB", "256 KB"};
-    // ★ the UI's own record, not held(): the engine reports nothing back for this test, and held() falls back to the
-    //   report after 3 s — the row would snap back to AUTO while the engine kept the size. Starts AUTO, as the engine does.
-    static int sel = 0;
-    const int hit = rowSelect(x, y, "sdr.usbxfer", "USB TRANSFER TEST", "How the console collects the dongle's data. If the evenly "
-                              "spaced spikes move or weaken, USB activity is reaching the receiver. Restarts the radio briefly; "
-                              "not saved.", labels, sel);
-    if (hit >= 0 && hit != sel) { sel = hit; sendKV(x, "rtlxfer", "kb", kbs[hit]); }
-}
-
 // ── SAMPLE RATE (§4a.2) — every driver but the HF+ and the Icom ─────────────────────────────────────────────────────
 inline void rateRow(S& x, float& y) {
     const RadioState& s = x.s;
@@ -149,7 +133,6 @@ inline void rateRow(S& x, float& y) {
     const int hit = rowSelect(x, y, "sdr.rate", "SAMPLE RATE", "", labels, sel);
     if (hit >= 0) { hold(x, "rate", rs[(size_t)hit]); sendKV(x, "sampleRate", "value", std::lround(rs[(size_t)hit])); }
     rateBoostRow(x, y);
-    if (d == "rtl") usbXferRow(x, y);
 }
 
 // ── IF FILTER (§4a.2, rtl only) ─────────────────────────────────────────────────────────────────────────────────────
