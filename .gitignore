@@ -151,3 +151,9 @@ android/app/src/main/cpp/vibedsp/test/build-*/
 
 # ★ Expo export output (was committed once, 2026-06; nothing reads it)
 dist-ios-tmp/
+
+# Claude Code: per-machine approvals can hold the full text of a command, secrets included (Ars Technica,
+# 2026-11-09). Ignored here, not only in a global ignore file that a new Mac or a fresh clone may not have.
+.claude/settings.local.json
+.claude/*.local.json
+CLAUDE.local.md
