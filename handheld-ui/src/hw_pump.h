@@ -1,9 +1,10 @@
 // hw_pump.h — the UI-thread side of R36S HARDWARE / DISPLAY: worker results into App, the SCREEN OFF AFTER dim, the
-// PERFORMANCE overlay, the first silent import, and DISPLAY's save. Wire-up (app_impl.h's loop):
+// first silent import, and DISPLAY's save. Wire-up (app_impl.h's loop):
 //     hwPump(*this);        once a loop iteration (before drawing)
-//     hwDrawPerf(c);        after drawToasts(c) (the overlay sits on top of everything)
 // ★ Without hwPump the sections still drain their own results while the menu is open (hwPumpUi) — but the dim at half
-//   the SCREEN OFF time, the overlay's polling and the start-up import need it.
+//   the SCREEN OFF time and the start-up import need it.
+// ★ The PERFORMANCE overlay was removed (Stuart, 2026-11-09: "the performance overlay isnt needed either"); vibe-hhui's
+//   "perf 30 s" line in the debug log still measures the same things.
 #pragma once
 #include "disp_settings.h"
 #include "hw_files.h"
@@ -11,26 +12,9 @@
 
 namespace hh {
 
-/** The PERFORMANCE switch (handheld.ts `perf`, default OFF) — the device's, kept with DISPLAY's file. */
-inline bool& hwPerfOn() {
-    static bool on = false, loaded = false;
-    if (!loaded) {
-        loaded = true;
-        if (FILE* f = std::fopen((DispSettings::path() + ".perf").c_str(), "r")) { on = std::fgetc(f) == '1'; std::fclose(f); }
-    }
-    return on;
-}
-inline void hwPerfSave() {
-    const std::string p = DispSettings::path() + ".perf", tmp = p + ".tmp";
-    if (FILE* f = std::fopen(tmp.c_str(), "w")) { std::fputc(hwPerfOn() ? '1' : '0', f); std::fclose(f); std::rename(tmp.c_str(), p.c_str()); }
-}
-
 struct HwPumpState {
     bool dimmed = false; int savedBright = -1; double dimAt = 0;
-    double lastPerfPoll = 0;
     bool importedAtStart = false;
-    // the overlay's rates: drawn frames, and REAL spectrum frames (counted at the waterfall's processor, not its rows)
-    double rateT0 = 0; long long specFrames = 0, rateFrames0 = 0; int uiFrames = 0; double uiFps = 0, specFps = 0;
 };
 inline HwPumpState& hwPumpState() { static HwPumpState s; return s; }
 
@@ -67,50 +51,6 @@ inline void hwPump(App& a) {
             if (p.savedBright > 0) a.eng_->device("{\"set\":\"brightness\",\"value\":" + std::to_string(p.savedBright) + "}");
         }
     }
-    // the overlay's figures, once a second while it is on
-    if (hwPerfOn() && a.eng_ && now - p.lastPerfPoll > 1.0) { p.lastPerfPoll = now; hwRefreshPerf(a.eng_->port()); }
-    // ★ the model's per-frame hook (only the golden test sets it otherwise) counts each SPEC frame the radio sent
-    if (!a.wfp_.model().onFrame) a.wfp_.model().onFrame = [](void*, const wf::ProcessedFrame&) { hwPumpState().specFrames++; };
-    if (now - p.rateT0 >= 1.0) {
-        const long long fr = p.specFrames;
-        if (p.rateT0 > 0) { p.uiFps = p.uiFrames / (now - p.rateT0); p.specFps = (fr - p.rateFrames0) / (now - p.rateT0); }
-        p.rateT0 = now; p.rateFrames0 = fr; p.uiFrames = 0;
-    }
-}
-
-/** perfLines (handheld.ts): the four lines of the overlay and of the PERFORMANCE figure. */
-inline std::vector<std::string> hwPerfLines() {
-    HwShared& h = hwShared();
-    std::lock_guard<std::mutex> lk(h.m);
-    const HwPumpState& p = hwPumpState();
-    auto fig = [](double v, const char* u) { if (v < 0) return std::string("—"); char b[32]; std::snprintf(b, sizeof b, "%.0f%s", v, u); return std::string(b); };
-    char b[4][96];
-    std::snprintf(b[0], sizeof b[0], "CPU %s  %s", h.perfKnown ? fig(h.cpu, " %").c_str() : "—", h.perfKnown ? fig(h.tempC, " °C").c_str() : "");
-    std::string ram = h.perfKnown && h.ramUsed >= 0 ? std::to_string(h.ramUsed) + "/" + std::to_string(h.ramTotal) + " MB" : "—";
-    std::snprintf(b[1], sizeof b[1], "DSP %s  RAM %s", h.perfKnown ? fig(h.engineCpu, " %").c_str() : "—", ram.c_str());
-    std::snprintf(b[2], sizeof b[2], "UI %.0f fps  Spectrum %.1f fps", p.uiFps, p.specFps);
-    std::string bat = "—";
-    if (h.batt >= 0) {
-        bat = std::to_string(h.batt) + " %";
-        if (h.charging) bat += " charging";
-        else if (h.minutesLeft >= 0) { char m[24]; std::snprintf(m, sizeof m, " ~%dh%02d", h.minutesLeft / 60, h.minutesLeft % 60); bat += m; }
-    }
-    std::snprintf(b[3], sizeof b[3], "Battery %s", bat.c_str());
-    return {b[0], b[1], b[2], b[3]};
-}
-
-/** The PERFORMANCE overlay (#hhPerf): top left, over everything. Counts drawn frames for "UI … fps". */
-inline void hwDrawPerf(Ctx& c) {
-    hwPumpState().uiFrames++;
-    if (!hwPerfOn()) return;
-    const auto lines = hwPerfLines();
-    const float lh = c.f.small.lineHeight();
-    float w = 0;
-    for (auto& l : lines) w = std::max(w, (float)c.tc.width(c.f.small, l));
-    const float x = 6, y = 28, bw = w + 16, bh = lh * 4 + 10;
-    c.g.rrect(x, y, bw, bh, 6, rgb(0, 0.72f));
-    c.g.rframe(x + 3, y + 3, (float)c.tc.width(c.f.small, lines[0]) + 10, lh + 2, 4, 1, th::btnBorder);   // the CPU line, boxed
-    for (int i = 0; i < 4; i++) c.tc.draw(c.g, c.f.small, lines[(size_t)i], x + 8, y + 5 + i * lh, i == 0 ? th::btnText : th::white68);
 }
 
 /** refreshDeviceRows on opening (the web runs it whenever an accordion opens): a gap in the section's drawing = opened. */

@@ -2,14 +2,13 @@
 // app.h for the App's state and helpers, ui.h for the widgets).
 //
 // Rows, in the web's order: VOLUME · BATTERY · CLOCK · NUDGE · SET UTC · SET CLOCK FROM <station> / ALIGN TO FT8 (only
-// with fresh evidence) · the note · LOCATION · SET LOCATION · CARD · FILES · CONTROLLER (TEST BUTTONS) · PERFORMANCE ·
+// with fresh evidence) · the note · LOCATION · SET LOCATION · CARD · FILES ·
 // POWER. ★ BRIGHTNESS is DISPLAY's first row, as on the web page (sec_display.h).
 // Left out: TOUR / VIEW TUTORIAL (no native
 // tutorial yet — a key that opened nothing would be a dead control).
 #pragma once
 // (included by app.h after App is declared)
 #include "hw_files.h"
-#include "hw_padtest.h"
 #include "hw_pump.h"
 #include "hw_state.h"
 
@@ -212,20 +211,6 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         if (button(c, "hw.diag", {a.x + 6 + w0 + w1 + 2 * gap, y - 6, w2, 40}, db ? "WORKING…" : "EXPORT DIAGNOSTICS", st)) hwExportDiagnostics(port);
         y += 46;
     }
-    // CONTROLLER — TEST BUTTONS (live, inline)
-    y0 = y;
-    y = menuRow(c, a, y, "CONTROLLER", "Shows each button and stick as the receiver sees it");
-    {
-        double& on = num_["hw.padtest"];
-        BtnStyle st; st.font = &c.f.body; st.radius = 7; st.on = on != 0;
-        if (hwRowButton(c, "hw.padtest", {a.x, y0, a.w, 44}, {a.r() - 166, y0 + 3, 160, 38}, on != 0 ? "HIDE TEST" : "TEST BUTTONS", st)) on = on != 0 ? 0 : 1;
-        if (on != 0) y = hwDrawPadTest(c, a, y, pad_, joy_);
-    }
-    // PERFORMANCE (the overlay) + its figure
-    y0 = y;
-    y = menuRow(c, a, y, "PERFORMANCE", "An overlay at the top of the screen");
-    if (hwRowToggle(c, "hw.perf", {a.x, y0, a.w, 44}, {a.r() - 96, y0 + 3, 90, 38}, hwPerfOn())) { hwPerfOn() = !hwPerfOn(); hwPerfSave(); }
-    for (auto& l : hwPerfLines()) { c.tc.draw(c.g, c.f.small, l, a.x + 6, y, th::dim); y += c.f.small.lineHeight(); }
     y += 10;
     // POWER — POWER OFF · RESTART (press twice — a stray press never switches the radio off)
     y = menuRow(c, a, y, "POWER", "");
@@ -234,7 +219,7 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         const float bw = (a.w - 12 - 12) / 2;
         BtnStyle st; st.font = &c.f.btn;
         st.on = t - armedPower_ < 3;
-        // ★ POWER OFF's highlight box is the row (DOWN from PERFORMANCE skipped two half-width keys); RIGHT reaches RESTART
+        // ★ POWER OFF's highlight box is the row (DOWN from the row above skipped two half-width keys); RIGHT reaches RESTART
         if (hwRowButton(c, "hw.off", {a.x, y - 6, a.w, 52}, {a.x + 6, y - 6, bw, 52}, st.on ? "PRESS AGAIN" : "POWER OFF", st)) {
             if (t - armedPower_ < 3) { eng_->device("{\"action\":\"poweroff\"}"); toast("Switching off"); }
             else { armedPower_ = t; toast("Press again to switch off"); }

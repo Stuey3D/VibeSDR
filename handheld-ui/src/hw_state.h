@@ -99,7 +99,7 @@ inline void hwRefresh(int port) {
     });
 }
 
-/** /handheld/perf alone (the PERFORMANCE overlay, once a second). */
+/** /handheld/perf alone (the status row's battery time-left, once a minute). */
 inline void hwRefreshPerf(int port) {
     hwAsync([port] {
         const HttpResult p = httpRequest(port, "GET", "/handheld/perf", "", 3);

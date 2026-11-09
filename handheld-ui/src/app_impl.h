@@ -1358,7 +1358,6 @@ inline int App::run(int argc, char** argv) {
         if (nav_.backPressed() && !sheets_.empty()) closeTop();
         nav_.end();
         drawToasts(c);
-        hwDrawPerf(c);
         dispRateDraw(*this, c);
         g_.flush();
 
