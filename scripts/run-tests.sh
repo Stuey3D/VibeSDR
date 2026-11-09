@@ -418,6 +418,10 @@ for t in "$SRC"/test-*.cpp; do
   #   ones this way — it has no node for the page checks below).
   if [ -n "${VIBE_TESTS:-}" ]; then case " $VIBE_TESTS " in *" $name "*) ;; *) continue ;; esac; fi
   case "$name" in
+    # ★ RETIRED FROM THE RUN 2026-11-09 (Stuart: "we have already ran all those tests and built on the results"): these run
+    #   ONLY on off-air recordings, which were deleted from ~/VibeSDR-test-audio once their results were built in. The sources
+    #   stay; run one by hand with VIBE_TESTS="<name>" after a fresh capture (the README/logs beside each folder say how).
+    test-dab-faad|test-dab-faad-queue|test-dab-tii-air|test-drm-faad|test-drm-xaac|test-ssb-offset-real) [ -n "${VIBE_TESTS:-}" ] || continue ;;
     test-radio-api|test-icom-source) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
   esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
@@ -640,11 +644,6 @@ if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fa
 if node --no-warnings scripts/test_binauralOffset.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 VFO A/B, the app's half (src/services/vfoAB.ts): the wire, the A/B slots, the L/R tags (the server's rule).
 if node --no-warnings scripts/test_vfoAB.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-# ★★★ V12 BINAURAL — THE WATERFALL CUE ON A SWEEP (2026-10-18, Stuart on 482: "it's not panning as I tune through the
-#     band"): the real tracker over spectra from real voices, the dial clicking 100/500 Hz. NOT RUN (exit 3) without
-#     VIBE_TEST_AUDIO (the I/Q is not in the repo). ~2 minutes (it builds a composite band from the recordings).
-node --no-warnings --max-old-space-size=4000 scripts/test_binauralSweep.ts; rc=$?
-if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 TRANSCRIBE AUTO ORDER (transcribeOrder.ts): EiBi, the SDR's local language's reserved lane, the ★ list, the ⚠.
 if node --no-warnings scripts/test_transcribeOrder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 RECORD BUFFER (recordBuffer.ts): the retune rule — per-mode allowance, measured from the ANCHOR, mode/source clear.
@@ -1407,41 +1406,6 @@ printf '\n\033[1m── DAB landing (end to end) ──\033[0m\n'
 node scripts/test-server-dab-landing.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
-# ★★★ V12 ADS-B AS THE LANDING + KEEP IT RUNNING (Stuart, 2026-10-24: "a new connection instantly sees a list of planes
-#     and a full map"): in ADS-B with aircraft before anybody connects, a client's list within ~1 s, EXIT to the plain
-#     landing, back into ADS-B when they leave; keep-running off lands the first client; background decoding gives way;
-#     a radio that cannot run ADS-B falls back. Needs VIBESERVER_BIN and VIBE_ADSB_CLIP (exit 3 = not run).
-printf '\n\033[1m── ADS-B landing + keep running (end to end) ──\033[0m\n'
-node scripts/test-server-adsb-landing.mjs; rc=$?
-if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-
-# ★★★ V12 BACK TO THE WHOLE-RADIO MODE (2026-10-27): the leave grace follows the owner's idle grace (≤ 60 s), and a
-#     returning listener's mode_resume is granted alone on an untouched radio — refused (and NOT entered) with somebody
-#     else on it, after a retune, or with nothing to resume. Needs VIBESERVER_BIN and VIBE_ADSB_CLIP (exit 3 = not run).
-printf '\n\033[1m── Whole-radio mode resume (end to end) ──\033[0m\n'
-node scripts/test-server-mode-resume.mjs; rc=$?
-if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-
-# ★★★ V12 THE HELD SESSION (2026-10-27): a suspended listener's mode, dial, decoders (their gap replayed) and VFO B held
-#     for 180 s; a held place giving way; `leave` never held; a hard 1-minute limit cutting the hold and ending it as a
-#     live session. ~8 minutes, so only with VIBESERVER_SLOW=1. Needs VIBESERVER_BIN, VIBE_ADSB_CLIP (VIBE_CW_CLIP for the
-#     decoder part).
-printf '\n\033[1m── The held session (end to end) ──\033[0m\n'
-if [ "${VIBESERVER_SLOW:-0}" = "1" ]; then
-  node scripts/test-server-session-hold.mjs; rc=$?
-else
-  echo '   not run — ~8 minutes; set VIBESERVER_SLOW=1'; rc=3
-fi
-if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-
-# ★★★ V12 THE ADS-B GAIN RULE end to end (2026-10-26): Stuart's FlightAware clip (filtered LNA feed) replayed so that it
-#     follows the gain the server writes (fake-rtl-tcp --adsb-gain); the ramp must end at 38.6–40.2 dB (where dump1090-fa
-#     holds it), not 49.6, the reason naming the noise floor, no feed warning, and a reconnect inside the 5 s grace finds the sky as it was. ~2.5 min. Needs VIBESERVER_BIN and
-#     VIBE_ADSB_CLIP (exit 3 = not run).
-printf '\n\033[1m── ADS-B gain rule (end to end) ──\033[0m\n'
-VIBESERVER_BIN="${VIBESERVER_BIN:-vibeserver/build/vibeserver}" bash scripts/test-adsb-gain-e2e.sh; rc=$?
-if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-
 # ★★★ V12 ISM MODE (docs/v12/ISM-DECODER.md): the real server on a fake rtl_tcp replaying a synthetic 433 MHz clip made by
 #     test-ism --write-clip — the capability, the device list and its readable lines, the privacy rule ON THE WIRE, band
 #     steps (clamped), an exact frequency, EXIT giving the dial back; then the web client in headless Edge (--mute-audio).
@@ -1551,22 +1515,6 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-cw.sh clip "$OUT/cw-clip.cu8" >/
   rm -f "$OUT/cw-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
-fi
-
-# ★★★ V12 DRM (2026-10-26): the real server on a fake rtl_tcp replaying REAL DRM — RRI 9570 kHz off Stuart's UberSDR — on a
-#     one-pipeline radio and a range-locked one: the reports, the label, the codec and the honest "why" for its AAC, the
-#     audio stream never stalling (test-server-drm); then the web client in headless Edge (--mute-audio): the DRM mode, the
-#     DRM box at desktop and 390 px (test-web-drm). Needs VIBESERVER_BIN, VIBE_TEST_AUDIO (drm/) and numpy for the clip.
-printf '\n\033[1m── DRM (end to end: server, then the web client) ──\033[0m\n'
-DRM_WAV="${VIBE_TEST_AUDIO:-}/drm/uber_rri_9570000_iq48.wav"
-if [ -n "${VIBESERVER_BIN:-}" ] && [ -f "$DRM_WAV" ] && python3 scripts/drm-clip.py "$DRM_WAV" "$OUT/drm-clip.cu8" 140 >/dev/null 2>&1; then
-  VIBE_DRM_CLIP="$OUT/drm-clip.cu8" node scripts/test-server-drm.mjs; rc=$?
-  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  VIBE_DRM_CLIP="$OUT/drm-clip.cu8" node scripts/test-web-drm.mjs; rc=$?
-  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  rm -f "$OUT/drm-clip.cu8"
-else
-  echo '   not run — needs VIBESERVER_BIN, VIBE_TEST_AUDIO with drm/uber_rri_9570000_iq48.wav, and numpy'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 PSK31/63 (2026-10-26): the same shape — the real server on a fake rtl_tcp replaying the bench's synthetic clip
@@ -1697,17 +1645,6 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── DAB exit (end to end) ──\033[0m\n'
 node scripts/test-server-dab-exit.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-
-# ★★★ V12 DAB BLOCK CHANGES, TIMED (2026-11-04 — a wide USRP "killed after a few tunes"; multiplex changes "slow and a bit
-#     unreliable" on the Sony + V4). WIDE: a 6.4 MS/s capture holding two real multiplexes — every change inside the span
-#     sends the radio nothing, locks, labels and plays, the waterfall never stops. NATIVE: 2.048 MS/s, a different
-#     recording per block — every change locks and plays, one tune each, no re-rate. Real clips from
-#     ~/VibeSDR-test-audio/dab/bench (dab-weak --write): NOT RUN without them. Same VIBESERVER_BIN rule.
-for m in wide native; do
-  printf '\n\033[1m── DAB block changes, %s (end to end) ──\033[0m\n' "$m"
-  DAB_WIDE_MODE=$m node --max-old-space-size=512 scripts/test-server-dab-wide.mjs; rc=$?
-  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-done
 
 # ★★★ A STOP THAT LANDS ON A DAB START STILL STOPS (Pi 500, 2026-10-16: a settings save, a listener asking for
 #     DAB in the same second, "Stopping…" and then 90 s until systemd's SIGKILL): a rate change held open across
