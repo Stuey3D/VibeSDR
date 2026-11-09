@@ -147,9 +147,6 @@ public:
     int battery_ = -1; bool charging_ = false;
     int volume_ = -1; bool muted_ = false; double volUntil_ = 0;
     int brightness_ = 120;
-    std::vector<long> cpuSteps_;          // the clock steps the hardware service reports (kHz, ascending) — under srvMtx_
-    std::atomic<int> otgZcdSeen_{-1};     // the OTG converter test's setting the hardware service reported (0-3), -1 = none
-    std::atomic<double> cpuMaxSeen_{0};   // the CPU SPEED cap the hardware service reported (kHz), handed to num_ on the UI thread
     bool screenOff_ = false;
     double lastInput_ = 0;
     /** ★★★ IDLE POWER SAVE (Stuart, 2026-11-07: "the big one would be slowing the waterfall data rate to the minimum

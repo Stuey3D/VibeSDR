@@ -112,12 +112,14 @@ class Hwd:
         self.clients = set()          # writers of every connection
         self.subscribers = set()
         self.acks = set()
-        # ★ cpuMax: the CPU SPEED cap (kHz). 1008 MHz by default (Stuart, 2026-11-07: "try 1.0GHz" — 1.175 V against 1.30 V at 1104, a quarter less energy per unit of work; a Pi 2 runs a whole server at
-        #   900 MHz; the A35s' top steps cost the most power per unit of work) — FULL = 1296000
+        # ★★ cpuMax: the CPU's cap, FIXED at 1008 MHz (Stuart, 2026-11-07: "try 1.0GHz" — 1.175 V against 1.30 V at 1104,
+        #    a quarter less energy per unit of work). The CPU SPEED row is gone (2026-11-09: "that isnt needed anymore since we
+        #    have determined 1GHz gives us good performance"), so a cap an older build saved is NOT read back — it could
+        #    otherwise strand a console at 408 MHz with no way to change it.
         self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME, "cpuMax": 1008000}
         try:
             with open(HWD_JSON) as f:
-                self.cfg.update({k: v for k, v in json.load(f).items() if k in self.cfg})
+                self.cfg.update({k: v for k, v in json.load(f).items() if k in self.cfg and k != "cpuMax"})
         except (OSError, ValueError):
             pass
         self.max_brightness = int(rd(BL + "/max_brightness", "255"))
@@ -173,13 +175,6 @@ class Hwd:
                 log("cpu speed:", e)
         log("cpu speed: capped at", cap // 1000, "MHz")
 
-    def set_cpu(self, v):
-        v = int(v)
-        if not 408000 <= v <= 1296000:
-            raise ValueError("cpu speed out of range 408000..1296000 kHz")
-        self.cfg["cpuMax"] = v
-        self.apply_cpu()
-        self.save_soon()
 
     # ★★ THE MAP'S BOOST (Stuart, 2026-11-07: "the map is super slow and keeps looking like it is refreshing all the time"
     #    — on handheld29's caps: the CPU 1008 MHz, the GPU 300 MHz, the memory 450 MHz). While the UI asks (the map is on
@@ -387,74 +382,11 @@ class Hwd:
             except Exception:
                 self.subscribers.discard(w)
 
-    # ── the OTG port's converter: a TEST of its light-load behaviour (2026-11-08) ──
-    # ★★ WHY. Stuart's RTL-SDR V4 shows a comb of spikes every ~250 kHz on the R36S only (the same dongle, cable and antenna
-    #    are clean on his Mac). The comb follows the dial and its spacing does not follow the sample rate: noise riding
-    #    into the dongle on its supply, not anything digital. Fixing the converter at 5.2 V (vibe-r36s.dts) did not move it.
-    #    The RK817 datasheet (Rev 1.7, PMIC_BOOST_CONFIG1 0xDF bits 4:3, BOOST_ZCD) sets the converter's zero-current
-    #    detection — 50 / 100 / 150 (reset) / 200 mA — which decides how it behaves at a light load like the V4's 0.25 A,
-    #    where a boost converter typically bursts instead of switching steadily. If the comb moves or goes when this
-    #    changes, the converter is proven the source. ★ A TEST: never saved; the PMIC resets it at power-off.
-    # ★ I2C_RDWR on /dev/i2c-N (i2c-dev is built into ROCKNIX's kernel): ONE combined transaction for the read (register
-    #   pointer + read, repeated start), so the kernel's own rk808 driver can never slip between the two halves. Nothing
-    #   else in the kernel writes 0xDF outside suspend (it holds BOOST_SLP_VSEL), and the other bits are written back as read.
-    PMIC_ADDR, ZCD_REG, ZCD_SHIFT = 0x20, 0xDF, 3
-    ZCD_MA = (50, 100, 150, 200)
-
-    def pmic_bus(self):
-        for d in glob.glob("/sys/bus/i2c/devices/*-0020"):
-            if "pmic" in os.path.basename(os.path.realpath(d + "/of_node")) or os.path.exists(d + "/driver"):
-                return int(os.path.basename(d).split("-")[0])
-        return None
-
-    def pmic_xfer(self, msgs):
-        class Msg(ctypes.Structure):
-            _fields_ = [("addr", ctypes.c_uint16), ("flags", ctypes.c_uint16), ("len", ctypes.c_uint16),
-                        ("buf", ctypes.POINTER(ctypes.c_uint8))]
-        class RdWr(ctypes.Structure):
-            _fields_ = [("msgs", ctypes.POINTER(Msg)), ("nmsgs", ctypes.c_uint32)]
-        bus = self.pmic_bus()
-        if bus is None:
-            raise OSError("the PMIC is not on any I2C bus")
-        bufs = [(ctypes.c_uint8 * len(data))(*data) for _, data in msgs]
-        arr = (Msg * len(msgs))(*[Msg(self.PMIC_ADDR, flags, len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8)))
-                                   for (flags, data), buf in zip(msgs, bufs)])
-        fd = os.open("/dev/i2c-%d" % bus, os.O_RDWR)
-        try:
-            fcntl.ioctl(fd, 0x0707, RdWr(arr, len(msgs)))        # I2C_RDWR
-        finally:
-            os.close(fd)
-        return [list(b) for b in bufs]
-
-    def pmic_read(self, reg):
-        return self.pmic_xfer([(0, [reg]), (1, [0])])[1][0]          # write the pointer, then I2C_M_RD one byte
-
-    def otg_zcd(self):
-        try:
-            return (self.pmic_read(self.ZCD_REG) >> self.ZCD_SHIFT) & 3
-        except OSError as e:
-            if not getattr(self, "zcd_err_logged", False):
-                self.zcd_err_logged = True
-                log("OTG converter test: cannot read the PMIC:", e)
-            return None
-
-    def set_otg_zcd(self, v):
-        n = int(v)
-        if n not in (0, 1, 2, 3):
-            raise ValueError("otgZcd is 0-3")
-        old = self.pmic_read(self.ZCD_REG)
-        new = (old & ~(3 << self.ZCD_SHIFT)) | (n << self.ZCD_SHIFT)
-        self.pmic_xfer([(0, [self.ZCD_REG, new])])
-        back = self.pmic_read(self.ZCD_REG)
-        log("OTG converter test: zero-current detection %d mA -> %d mA (0xDF 0x%02x -> 0x%02x, read back 0x%02x)"
-            % (self.ZCD_MA[(old >> self.ZCD_SHIFT) & 3], self.ZCD_MA[n], old, new, back))
-
     def state(self):
         b = self.battery if self.battery["pct"] is not None else self.read_battery()
         return {"ok": True, "brightness": self.cfg["brightness"], "maxBrightness": self.max_brightness,
                 "volume": self.cfg["volume"], "muted": self.cfg["volume"] == 0, "output": self.output,
-                "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen,
-                "cpuMax": self.cfg["cpuMax"], "cpuSteps": self.cpu_steps(), "otgZcd": self.otg_zcd()}
+                "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen}
 
     async def handle(self, req, writer):
         if not isinstance(req, dict):
@@ -477,12 +409,8 @@ class Hwd:
             self.set_brightness(req.get("value"))
         elif s == "volume":
             self.set_volume(req.get("value"))
-        elif s == "cpuMax":
-            self.set_cpu(req.get("value"))
         elif s == "boost":
             self.set_boost(req.get("value"))
-        elif s == "otgZcd":
-            self.set_otg_zcd(req.get("value"))
         elif s == "time":
             self.set_time(req.get("utcMs"))
         elif a in ("poweroff", "reboot"):

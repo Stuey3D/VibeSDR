@@ -878,24 +878,11 @@ void hDevicePost(Req& r) {
         if (set == "volume") n = std::max(0L, std::min(100L, n));
         else n = std::max(1L, std::min(255L, n));                     // ★ a floor above 0: never a black screen by slider
         line = "{\"set\":\"" + set + "\",\"value\":" + std::to_string(n) + "}";
-    } else if (set == "cpuMax") {
-        // ★ CPU SPEED (Stuart, 2026-11-07: "we do have a little wiggle room for a downclock to say 1.1GHz") — the cap in
-        //   kHz; the hardware service rounds it to a step the CPU has and keeps it across reboots
-        const hhjson::Value* x = v.get("value");
-        if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
-        const long n = std::max(408000L, std::min(1296000L, (long)x->n));
-        line = "{\"set\":\"cpuMax\",\"value\":" + std::to_string(n) + "}";
     } else if (set == "boost") {
         // ★★ the map's performance boost (vibe-hwd set_boost): every cap lifted while the map is up — 1 / 0, never saved
         const hhjson::Value* x = v.get("value");
         if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
         line = std::string("{\"set\":\"boost\",\"value\":") + (x->n != 0 ? "1" : "0") + "}";
-    } else if (set == "otgZcd") {
-        // ★ the OTG converter's light-load TEST (vibe-hwd set_otg_zcd): RK817 BOOST_ZCD 0-3 = 50/100/150/200 mA, never saved
-        const hhjson::Value* x = v.get("value");
-        if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
-        const long n = std::max(0L, std::min(3L, (long)x->n));
-        line = "{\"set\":\"otgZcd\",\"value\":" + std::to_string(n) + "}";
     } else if (action == "poweroff" || action == "reboot" || action == "screen-off" || action == "screen-on") {
         if (action == "poweroff" || action == "reboot") saveAllMemory(action.c_str());
         line = "{\"action\":\"" + action + "\"}";

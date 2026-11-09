@@ -221,66 +221,6 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         if (hwRowButton(c, "hw.padtest", {a.x, y0, a.w, 44}, {a.r() - 166, y0 + 3, 160, 38}, on != 0 ? "HIDE TEST" : "TEST BUTTONS", st)) on = on != 0 ? 0 : 1;
         if (on != 0) y = hwDrawPadTest(c, a, y, pad_, joy_);
     }
-    // CPU SPEED — the cap the hardware service puts on the clock. Every step the processor has (Stuart, 2026-11-07: "I
-    // dropped it to 816MHz with no real issues, so if we can put the full range of caps in that would be good") — the
-    // service's own list (vibe-r36s.dts: 408–1296), left / right to step, applied at once (a clock change is harmless:
-    // schedutil keeps working under the new ceiling). Shown only when the service reports it (no dead control).
-    if (num_.count("hw.cpuMax")) {
-        std::vector<long> steps;
-        { std::lock_guard<std::mutex> lk(srvMtx_); steps = cpuSteps_; }
-        if (steps.empty()) steps = {408000, 600000, 816000, 1008000, 1104000, 1200000, 1248000, 1296000};
-        const long cur = (long)num_["hw.cpuMax"];
-        int sel = 0;
-        for (int i = 0; i < (int)steps.size(); i++) if (steps[(size_t)i] <= cur) sel = i;   // the step the cap lands on
-        y0 = y;
-        y = menuRow(c, a, y, "CPU SPEED", "The fastest the processor may run: left / right. Lower = longer battery and less "
-                                          "heat. Watch CPU in the status row: if it sits near 100 % or the audio breaks up, "
-                                          "go faster. Advanced RDS and DAB want more than plain FM or AM.");
-        const Nav::Hit h = c.nav.item("hw.cpu", {a.x, y0, a.w, 44}, true);
-        if (h.adjust) {
-            const int n = std::clamp(sel + h.adjust, 0, (int)steps.size() - 1);
-            if (n != sel) {
-                sel = n;
-                num_["hw.cpuMax"] = (double)steps[(size_t)n];
-                eng_->device("{\"set\":\"cpuMax\",\"value\":" + std::to_string(steps[(size_t)n]) + "}");
-            }
-        }
-        const long f = steps[(size_t)sel];
-        char lb[48];
-        std::snprintf(lb, sizeof lb, "%ld MHz", f / 1000);   // ★ MHz throughout: 1008 read as "1.01 GHz"
-        std::string label = std::string(sel > 0 ? "‹ " : "  ") + lb + (sel == (int)steps.size() - 1 ? " · FULL" : "") + (sel + 1 < (int)steps.size() ? " ›" : "  ");
-        const Rect pr{a.x + 170, y0 + 6, a.w - 176, 34};
-        c.tc.draw(c.g, c.f.body, label, pr.r() - 4, pr.cy() - c.f.body.lineHeight() / 2.f, th::activeTx, 2);
-        if (h.focused) focusRing(c, pr, 6, true);
-    }
-    // ★★ OTG POWER TEST — the radio port's converter at a light load (vibe-hwd set_otg_zcd; 2026-11-08). The V4's comb of
-    //    spikes every ~250 kHz follows the dial: noise riding in on the port's 5 V. The RK817's zero-current detection
-    //    (50 / 100 / 150 / 200 mA, 150 at power-on) changes how the converter switches at the V4's 0.25 A. Listen while
-    //    stepping it: a comb that moves or goes proves the converter. Never saved — power-off puts it back to 150.
-    //    Shown only when the service could read the PMIC (no dead control).
-    if (num_.count("hw.otgZcd")) {
-        static const int ma[4] = {50, 100, 150, 200};
-        int sel = std::clamp((int)num_["hw.otgZcd"], 0, 3);
-        y0 = y;
-        y = menuRow(c, a, y, "OTG POWER TEST", "How the radio port's power converter switches at a light load: left / right, "
-                                               "while you listen. If the evenly spaced spikes move or go, the converter is "
-                                               "their source. 150 mA is the console's own setting; not saved.");
-        const Nav::Hit h = c.nav.item("hw.otgzcd", {a.x, y0, a.w, 44}, true);
-        if (h.adjust) {
-            const int n = std::clamp(sel + h.adjust, 0, 3);
-            if (n != sel) {
-                sel = n;
-                num_["hw.otgZcd"] = n;
-                eng_->device("{\"set\":\"otgZcd\",\"value\":" + std::to_string(n) + "}");
-                toast("OTG converter: " + std::to_string(ma[n]) + " mA");
-            }
-        }
-        char lb[48];
-        std::snprintf(lb, sizeof lb, "%s%d mA%s%s", sel > 0 ? "‹ " : "  ", ma[sel], sel == 2 ? " · STOCK" : "", sel < 3 ? " ›" : "  ");
-        const Rect pr{a.x + 170, y0 + 6, a.w - 176, 34};
-        c.tc.draw(c.g, c.f.body, lb, pr.r() - 4, pr.cy() - c.f.body.lineHeight() / 2.f, th::activeTx, 2);
-        if (h.focused) focusRing(c, pr, 6, true);
-    }
     // PERFORMANCE (the overlay) + its figure
     y0 = y;
     y = menuRow(c, a, y, "PERFORMANCE", "An overlay at the top of the screen");
