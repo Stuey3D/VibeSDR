@@ -131,8 +131,6 @@ class Hwd:
         self.power_task = None
         self.save_task = None
         self.readers = {}             # path → task
-        self.cpu_quiet = 0            # ★ the CPU QUIET TEST (0 normal, 1 fixed clock, 2 always busy) — never saved
-        self.spinners = []            # pids of the ALWAYS BUSY filler processes
 
     # ── persistence ──
     def save_soon(self):
@@ -171,11 +169,9 @@ class Hwd:
         for p in glob.glob("/sys/devices/system/cpu/cpufreq/policy*"):
             try:
                 wr(p + "/scaling_max_freq", cap)
-                # ★ the CPU QUIET TEST's FIXED CLOCK holds the floor at the cap (max is written first: min may not pass it)
-                wr(p + "/scaling_min_freq", cap if self.cpu_quiet >= 1 else steps[0])
             except OSError as e:
                 log("cpu speed:", e)
-        log("cpu speed: capped at", cap // 1000, "MHz", "(held there: CPU quiet test)" if self.cpu_quiet >= 1 else "")
+        log("cpu speed: capped at", cap // 1000, "MHz")
 
     def set_cpu(self, v):
         v = int(v)
@@ -453,59 +449,12 @@ class Hwd:
         log("OTG converter test: zero-current detection %d mA -> %d mA (0xDF 0x%02x -> 0x%02x, read back 0x%02x)"
             % (self.ZCD_MA[(old >> self.ZCD_SHIFT) & 3], self.ZCD_MA[n], old, new, back))
 
-    # ★★ CPU QUIET TEST (2026-11-09). The V4's comb, recorded in WFM on two teeth, is PULSED: an exact 250 Hz harmonic
-    #    comb (+43 dB) and an 8000 Hz line (USB's 125 µs microframes). 250 Hz is a 4 ms rhythm — the kernel's tick waking
-    #    idle cores, each wake a step in the current the console draws from the same 5 V and ground as the radio port.
-    #    1 = FIXED CLOCK: the CPU's speed (and its voltage) stops moving. 2 = ALWAYS BUSY: fixed clock and one SCHED_IDLE
-    #    filler per core, so a core never sleeps and the tick no longer changes the draw; real work pre-empts the filler
-    #    at once (SCHED_IDLE runs only when nothing else wants the core). Costs battery and heat — a test, never saved.
-    def spin_start(self):
-        if self.spinners:
-            return
-        for cpu in sorted(os.sched_getaffinity(0)):
-            pid = os.fork()
-            if pid == 0:
-                try:
-                    ctypes.CDLL(None).prctl(1, signal.SIGKILL)       # PR_SET_PDEATHSIG: never outlive vibe-hwd
-                    os.sched_setaffinity(0, {cpu})
-                    os.sched_setscheduler(0, os.SCHED_IDLE, os.sched_param(0))
-                    while True:
-                        pass
-                finally:
-                    os._exit(0)
-            self.spinners.append(pid)
-        log("CPU quiet test: %d cores kept busy (SCHED_IDLE fillers %s)" % (len(self.spinners), self.spinners))
-
-    def spin_stop(self):
-        for pid in self.spinners:
-            try:
-                os.kill(pid, signal.SIGKILL)
-                os.waitpid(pid, 0)
-            except OSError:
-                pass
-        if self.spinners:
-            log("CPU quiet test: fillers stopped")
-        self.spinners = []
-
-    def set_cpu_quiet(self, v):
-        n = int(v)
-        if n not in (0, 1, 2):
-            raise ValueError("cpuQuiet is 0-2")
-        old, self.cpu_quiet = self.cpu_quiet, n
-        if n == 2:
-            self.spin_start()
-        else:
-            self.spin_stop()
-        self.apply_cpu()
-        names = ("NORMAL", "FIXED CLOCK", "ALWAYS BUSY")
-        log("CPU quiet test: %s -> %s" % (names[old], names[n]))
-
     def state(self):
         b = self.battery if self.battery["pct"] is not None else self.read_battery()
         return {"ok": True, "brightness": self.cfg["brightness"], "maxBrightness": self.max_brightness,
                 "volume": self.cfg["volume"], "muted": self.cfg["volume"] == 0, "output": self.output,
                 "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen,
-                "cpuMax": self.cfg["cpuMax"], "cpuSteps": self.cpu_steps(), "otgZcd": self.otg_zcd(), "cpuQuiet": self.cpu_quiet}
+                "cpuMax": self.cfg["cpuMax"], "cpuSteps": self.cpu_steps(), "otgZcd": self.otg_zcd()}
 
     async def handle(self, req, writer):
         if not isinstance(req, dict):
@@ -534,8 +483,6 @@ class Hwd:
             self.set_boost(req.get("value"))
         elif s == "otgZcd":
             self.set_otg_zcd(req.get("value"))
-        elif s == "cpuQuiet":
-            self.set_cpu_quiet(req.get("value"))
         elif s == "time":
             self.set_time(req.get("utcMs"))
         elif a in ("poweroff", "reboot"):
