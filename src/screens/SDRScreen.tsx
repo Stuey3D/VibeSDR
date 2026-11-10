@@ -1430,6 +1430,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  connection yet. A ref, because the server's report arrives in a socket callback made once. */
   const nfmVoiceWantRef = useRef(true);
   const nfmVoiceSentRef = useRef(false);
+  /** ★★ ALL while APRS is open (the effect beside paging's mute): the saved choice is never touched. */
+  const aprsNfmRawRef = useRef(false);
+  const aprsWasOpenRef = useRef(false);
   useEffect(() => {
     AsyncStorage.getItem(NFM_VOICE_KEY).then((v) => {
       if (v === '0') { nfmVoiceWantRef.current = false; setFmNfmVoice(false); }
@@ -2027,6 +2030,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setFmNbx(on); fmClient()?.setNoiseBlankerHf?.(on);
   }, [fmClient]);
   const onFmNfmVoice = useCallback((on: boolean) => {
+    aprsNfmRawRef.current = false;   // ★ the listener's press stands, APRS or not
     nfmVoiceWantRef.current = on;
     setFmNfmVoice(on); fmClient()?.setNfmVoice?.(on);
     AsyncStorage.setItem(NFM_VOICE_KEY, on ? '1' : '0').catch(() => {});
@@ -5303,6 +5307,19 @@ export default function SDRScreen({ route, navigation }: Props) {
       const back = prePagingMuteRef.current; prePagingMuteRef.current = null; VM?.setMuted?.(back); setIsMuted(back);
     }
   }, [pagingOn, isMuted]);
+  /* ★★ NFM AUDIO GOES TO ALL WHILE APRS IS OPEN (Stuart, 2026-11-10: "when APRS is open the NFM needs to switch to all
+   *  and then switch back to voice afterwards"). Voice's steep 300 Hz–3 kHz edges delay 2200 Hz more than 1200 Hz and
+   *  smear the bits (100 synthetic packets, 11 dB, space tone 6 dB down: ALL 70, VOICE 18). APRS is silent, so the
+   *  harsher hiss costs nothing. Edge-triggered: on APRS opening and closing only, so a press of the row in between is
+   *  the listener's and stands; closing puts back their saved choice. The web page and the R36S do the same. */
+  useEffect(() => {
+    const open = activeDecoder === 'aprs';
+    if (open === aprsWasOpenRef.current) return;
+    aprsWasOpenRef.current = open;
+    const was = aprsNfmRawRef.current;
+    aprsNfmRawRef.current = open;
+    if (open || was) { const v = open ? false : nfmVoiceWantRef.current; fmClient()?.setNfmVoice?.(v); setFmNfmVoice(v); }
+  }, [activeDecoder, fmClient]);
   useEffect(() => () => {
     if (prePagingMuteRef.current !== null) {
       (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(prePagingMuteRef.current);
@@ -7802,7 +7819,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setNfmVoiceKnown(true);
           if (!nfmVoiceSentRef.current) {
             nfmVoiceSentRef.current = true;
-            const want = nfmVoiceWantRef.current;
+            const want = aprsNfmRawRef.current ? false : nfmVoiceWantRef.current;   // ★★ ALL while APRS has it
             if (want !== st.nfmVoice) fmClient()?.setNfmVoice?.(want);
             setFmNfmVoice(want);
           } else setFmNfmVoice(st.nfmVoice);

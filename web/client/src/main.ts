@@ -2035,7 +2035,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
          *  server's default (Voice), possibly before the restored Raw has landed — saving that
          *  report as the pref (setToggleTo's prefKey) would quietly forget the choice. So the
          *  remembered value wins: re-stated if the server disagrees, and shown. Only a CLICK saves. */
-        const want = prefs().nfmVoice;
+        const want = nfmVoiceWant();   // ★★ the listener's choice — or ALL while APRS has it (aprsSilentSync)
         if (typeof want === 'boolean' && want !== s.nfmVoice) spec?.setNfmVoice(want);
         setToggleTo('nfmVoiceBtn', typeof want === 'boolean' ? want : s.nfmVoice, undefined,
                     (on) => on ? 'VOICE' : 'RAW');
@@ -11978,12 +11978,28 @@ function bandMuteFollowAB() {
  *  listener who unmutes meanwhile may); with VFO B on, only the VFO APRS decodes is taken out of the mix. Called from
  *  syncDecButtons (every decoder change) and when B comes or goes. The app and the R36S do the same. */
 let aprsMutedFrom: boolean | null = null;
+/* ★★ …AND NFM AUDIO GOES TO ALL WHILE APRS IS OPEN (Stuart, 2026-11-10: "when APRS is open the NFM needs to switch to all
+ *  and then switch back to voice afterwards"). Voice's steep 300 Hz–3 kHz edges delay 2200 Hz more than 1200 Hz and smear
+ *  the bits: on 100 synthetic packets at 11 dB with the space tone 6 dB down, ALL decoded 70 and VOICE 18. Silent, so the
+ *  harsher hiss costs nothing. The saved choice is never touched — ALL is said to the server, and the listener's own
+ *  choice comes back when APRS closes. A press of the row while APRS is open is the listener's, and it stands. */
+let aprsNfmRaw = false;
+let aprsWasOpen = false;
+/** What NFM audio should be: ALL while APRS holds it, else the listener's saved choice (undefined = the server's). */
+function nfmVoiceWant(): boolean | undefined { const p = prefs().nfmVoice; return aprsNfmRaw ? false : typeof p === 'boolean' ? p : undefined; }
+function nfmVoiceShow(on: boolean) { const b = document.getElementById('nfmVoiceBtn'); if (b) { b.classList.toggle('on', on); b.textContent = on ? 'VOICE' : 'RAW'; } }
 let aprsMutedV: 'A' | 'B' | null = null;
 function aprsSilentSync() {
   const want = activeDec === 'aprs' && !!spec;
   const wantV = want && !!spec?.abOn ? decVfo : null;
   if (aprsMutedV && aprsMutedV !== wantV) { const v = aprsMutedV; aprsMutedV = null; if (spec?.abOn) spec.setAbMute(v, false); }
   if (wantV && aprsMutedV !== wantV) { aprsMutedV = wantV; spec!.setAbMute(wantV, true); }
+  if (want !== aprsWasOpen) {   // ★ on APRS opening or closing only — a press in between stands
+    aprsWasOpen = want;
+    const was = aprsNfmRaw;
+    aprsNfmRaw = want;
+    if (nfmVoiceKnown && (want || was)) { const v = nfmVoiceWant() ?? true; spec?.setNfmVoice(v); nfmVoiceShow(v); }
+  }
   const wantSpk = want && !wantV;
   if (wantSpk && aprsMutedFrom === null && audio) { aprsMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
   else if (!wantSpk && aprsMutedFrom !== null) { setMuted(aprsMutedFrom); aprsMutedFrom = null; updateMediaSession(); }
@@ -17778,6 +17794,7 @@ function buildMenu() {
   toggle('nbxBtn', (on) => { spec!.setNoiseBlankerHf(on); }, 'nbx', false, false);
   // ★ The listener's own choice, remembered and restored like stereo. Voice is the default.
   toggle('nfmVoiceBtn', (on) => {
+    aprsNfmRaw = false;   // ★ the listener's press stands, APRS or not
     $('nfmVoiceBtn').textContent = on ? 'VOICE' : 'RAW';
     spec!.setNfmVoice(on);
   }, 'nfmVoice', true);
