@@ -103,6 +103,11 @@ int main(int argc, char** argv) {
   A.model().setTraceWidth(W); B.model().setTraceWidth(640);
   Fbo fa, fb; fa.make(W, H); fb.make(640, 480);
   size_t next = 0;
+  /* ★ WF_DARK=<fromMs>-<toMs>: the screen is off in that window — the bare waterfall (A) is NOT drawn, so neither ticked
+   *  nor uploaded, exactly as the main loop while dark; its rows are made all the same. A long window makes more rows
+   *  than DIRTY_ALL's threshold, so the first frame after it uploads the whole ring in one go (wf_model.cpp pushRow). */
+  double darkFrom = -1, darkTo = -1;
+  if (const char* e = std::getenv("WF_DARK")) std::sscanf(e, "%lf-%lf", &darkFrom, &darkTo);
   for (;;) {
     const uint8_t t = u8();
     if (t == 0) break;
@@ -119,7 +124,7 @@ int main(int argc, char** argv) {
       const double ts = f64(); f64();
       // every display frame: the waterfall draws (it advances the clock + the pace), as the main loop will
       glBindFramebuffer(GL_FRAMEBUFFER, fa.fb);
-      A.draw(0, 0, W, H, W, H, ts / 1000);
+      if (!(ts >= darkFrom && ts < darkTo)) A.draw(0, 0, W, H, W, H, ts / 1000);
       glBindFramebuffer(GL_FRAMEBUFFER, fb.fb);
       glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
       B.draw(0, 120, 640, 360, 640, 480, ts / 1000);

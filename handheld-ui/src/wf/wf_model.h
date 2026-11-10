@@ -76,7 +76,9 @@ class WaterfallModel {
   long long frames() const { return frameCount_; }
   double availTaken() const { return jsAvail_; }      // the newest row the display driver has taken (jsAvail)          // rows written (the image's newest = frames()-1)
   WfUniforms uniforms() const;
-  /** Ring slots written since the last call (each needs one texture-row upload) — and motion texels changed. */
+  /** Ring slots written since the last call (each needs one texture-row upload) — and motion texels changed. A single
+   *  DIRTY_ALL = the whole ring (more rows were written than are worth uploading one by one — a dark screen's backlog). */
+  static constexpr int DIRTY_ALL = -1;
   void takeDirty(std::vector<int>& rows, std::vector<int>& motionSlots);
   /** The spectrum trace as displayed (0..1, one value per SPEC_PX_STEP px at the last width given) and its peak. */
   const std::vector<double>& traceDisp() const { return specDisp_; }
@@ -108,6 +110,7 @@ class WaterfallModel {
   FanState fan_;
   long long frameCount_ = 0;
   std::vector<int> dirtyRows_;
+  bool dirtyAll_ = false;   // (takeDirty: DIRTY_ALL)
   // view / interaction
   double viewC_ = 0, viewBw_ = 0; bool viewSet_ = false;
   double lastInteractAt_ = 0;

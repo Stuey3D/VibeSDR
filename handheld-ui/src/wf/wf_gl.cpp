@@ -209,7 +209,10 @@ void WaterfallGL::sync(WaterfallModel& m) {
   if (!rows_.empty()) {
     glBindTexture(GL_TEXTURE_2D, texRing_);
     const uint8_t* img = m.imageBytes();
-    for (int s : rows_) glTexSubImage2D(GL_TEXTURE_2D, 0, 0, s, RING_W, 1, GL_RED, GL_UNSIGNED_BYTE, img + (size_t)s * RING_W);
+    if (rows_.size() == 1 && rows_[0] == WaterfallModel::DIRTY_ALL)   // the whole ring, once (a dark screen's backlog)
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, RING_W, RING_ROWS, GL_RED, GL_UNSIGNED_BYTE, img);
+    else
+      for (int s : rows_) glTexSubImage2D(GL_TEXTURE_2D, 0, 0, s, RING_W, 1, GL_RED, GL_UNSIGNED_BYTE, img + (size_t)s * RING_W);
   }
   if (!mot_.empty()) {   // 4 KB: one upload of the whole motion row
     glBindTexture(GL_TEXTURE_2D, texMotion_);

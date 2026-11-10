@@ -63,7 +63,7 @@ void setMotion(MotionState& ms, int slot, double g, double h, int /*n*/) {
   const int v = encodeMotion(h), z = encodeZoom(g);
   uint8_t* t = &ms.tex[4 * (size_t)slot];
   const uint8_t nv[4] = { (uint8_t)(v >> 8), (uint8_t)(v & 255), (uint8_t)(z >> 8), (uint8_t)(z & 255) };
-  if (std::memcmp(t, nv, 4) != 0) { std::memcpy(t, nv, 4); ms.dirty.push_back(slot); }
+  if (std::memcmp(t, nv, 4) != 0) { std::memcpy(t, nv, 4); if (ms.dirty.size() < 4096) ms.dirty.push_back(slot); }   // ★ capped: the GL side uploads the whole motion row whenever any changed
 }
 static inline bool moves(double g, double h) { return g != 1 || h != 0; }
 

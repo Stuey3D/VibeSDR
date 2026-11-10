@@ -280,6 +280,7 @@ struct DecUi {
     std::string active;              // the text decoder attached ("" none) — the web's activeDec
     std::string ext;                 // …and the extension it went out as (CW / PSK: by view)
     bool spotsOn = false;
+    int spotsMin = 0; double spotsMinAt = 0;   // ★ the log's once-a-minute spot count (decTick)
     std::string view;                // what the box shows: `active` or "spots"
     bool boxOpen = false;            // the box is drawn (a decoder runs, or the person is choosing one)
     // the box
@@ -722,6 +723,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             if (it->call == sp.call && it->band == sp.band && it->mode == sp.mode) { u.spots.erase(it); break; }
         u.spots.push_front(sp);
         decCap(u.spots, 300);
+        u.spotsMin++;
         if (u.view == "spots") { u.live = true; u.liveAt = now; }
         return;
     }
@@ -941,6 +943,16 @@ inline void decTick(App& a, const RadioState& s) {
             for (auto& m : msgs) { if (m.text) decOnJson(a, s, m.data); else decOnBinary(a, s, m.data); }
         }
     }
+    /* ★ ONE LINE A MINUTE while the spots run (Stuart, 2026-11-10: with the screen off "it appears as if a lot of decodes
+     *  were missing"): the list keeps ONE row per call, so a repeat never shows as new — this count, in the debug log,
+     *  says whether spots kept arriving through a dark screen. */
+    if (u.spotsOn) {
+        if (u.spotsMinAt == 0) u.spotsMinAt = now;
+        else if (now - u.spotsMinAt >= 60) {
+            std::fprintf(stderr, "vibe-hhui: spots: %d in the last minute (screen %s)\n", u.spotsMin, a.screenOff_ ? "off" : "on");
+            u.spotsMin = 0; u.spotsMinAt = now;
+        }
+    } else { u.spotsMin = 0; u.spotsMinAt = 0; }
     decPicTick(a, s);   // the pictures: the WEFAX worker's answers, the textures' mipmaps, the LED
     galTick(a);         // the gallery's list, thumbnails and picture
     // a burst of option presses: the one re-attach

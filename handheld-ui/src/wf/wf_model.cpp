@@ -51,6 +51,7 @@ WfUniforms WaterfallModel::uniforms() const {
 
 void WaterfallModel::takeDirty(std::vector<int>& rows, std::vector<int>& motionSlots) {
   rows.swap(dirtyRows_); dirtyRows_.clear();
+  if (dirtyAll_) { rows.assign(1, DIRTY_ALL); dirtyAll_ = false; }
   motionSlots.swap(ms_.dirty); ms_.dirty.clear();
 }
 
@@ -267,7 +268,15 @@ void WaterfallModel::pushRow(const uint8_t* srcRow, int srcN, double rowCenterHz
     fanRow(fan_, ring_.data(), RING_W, slot, RING_ROWS);
   }
   frameCount_ += 1;
-  dirtyRows_.push_back(slot);
+  /* ★★ BOUNDED (Stuart, 2026-11-10: "still a delay in screen waking up"; the 11-09 lockup was the same, longer). Rows
+   *  are made while the screen is off but uploaded only by a drawn frame, and this list had no cap: 3 min dark = 6000
+   *  queued uploads, 10 min = 18000, all in the first frame after the wake (one glTexSubImage each, a 1 MB texture on
+   *  Panfrost) — the handheld58 log's 10 fps / 17 ms of waterfall a frame after the screen came on. Past a quarter of
+   *  the ring, ONE upload of the whole ring is cheaper than the rows one by one, so the list becomes that. */
+  if (!dirtyAll_) {
+    dirtyRows_.push_back(slot);
+    if (dirtyRows_.size() > (size_t)RING_ROWS / 4) { dirtyAll_ = true; dirtyRows_.clear(); }
+  }
   // publishRing → jsPending: the image, its newest row, its motion range, the fans' screen move
   double k, c; takeFanStep(fan_, k, c);
   pend_.avail = (double)frameCount_; pend_.moLo = ms_.lo; pend_.moHi = ms_.hi; pend_.k = k; pend_.c = c;
