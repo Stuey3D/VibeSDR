@@ -20880,6 +20880,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LocalSdrShim::instance().setGain(want);
                 vsPersist("{\"gain\":" + std::to_string(want) + "}");
             }
+            /* ★★★ AND TELL EVERYONE (Stuart, 2026-11-10, the Pi 500 V4L: "I've gone manual to boost the gain but the AGC
+             *  status in the bottom still shows AGC 38.6"). A manual gain switches VibeAGC off (setGain → setVibeAgcRtl(false))
+             *  and AUTO switches it on, but nothing here said so: the log had "RTL AGC: off" and the radio at 49.6 dB while
+             *  every client's status line still read "AGC 38.6 dB" from the last report. The server sends the full state
+             *  (the shared-dial contract) — every listener's readout, not only the sender's, follows the radio. */
+            LocalSdrShim::instance().broadcastHwInfo();
             return;
         }
         if (type == "biasT") {
