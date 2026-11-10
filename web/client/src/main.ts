@@ -11973,6 +11973,21 @@ function bandMuteFollowAB() {
     if (audio) { bandMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
   }
 }
+/* ★★ APRS IS A SILENT DECODER (Stuart, 2026-11-10: "we need to make APRS a silent decoder"). Packets are a screech nobody
+ *  listens to — Band's rule exactly: the speaker muted while APRS is open and put back as it was when it closes (a
+ *  listener who unmutes meanwhile may); with VFO B on, only the VFO APRS decodes is taken out of the mix. Called from
+ *  syncDecButtons (every decoder change) and when B comes or goes. The app and the R36S do the same. */
+let aprsMutedFrom: boolean | null = null;
+let aprsMutedV: 'A' | 'B' | null = null;
+function aprsSilentSync() {
+  const want = activeDec === 'aprs' && !!spec;
+  const wantV = want && !!spec?.abOn ? decVfo : null;
+  if (aprsMutedV && aprsMutedV !== wantV) { const v = aprsMutedV; aprsMutedV = null; if (spec?.abOn) spec.setAbMute(v, false); }
+  if (wantV && aprsMutedV !== wantV) { aprsMutedV = wantV; spec!.setAbMute(wantV, true); }
+  const wantSpk = want && !wantV;
+  if (wantSpk && aprsMutedFrom === null && audio) { aprsMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
+  else if (!wantSpk && aprsMutedFrom !== null) { setMuted(aprsMutedFrom); aprsMutedFrom = null; updateMediaSession(); }
+}
 function bandSpotsUi(on: boolean) {
   const was = bandSpots;
   bandSpots = on && !!spotBandCap;
@@ -13571,8 +13586,8 @@ function aprsHintSync() {
   if (b) b.textContent = aprsBaud === 300 ? 'TUNE 10.1476 USB' : `TUNE ${(aprsHz / 1e6).toFixed(3)} NFM`;
   const h = document.getElementById('aprsHint');
   if (h) h.innerHTML = aprsBaud === 300
-    ? 'HF packet: <b>300 Bd</b> on <b>10.1476 MHz USB</b> (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough.'
-    : `VHF APRS: <b>${(aprsHz / 1e6).toFixed(3)} MHz NFM</b> here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. <b>MAP</b> in the box shows them on the map.`;
+    ? 'HF packet: <b>300 Bd</b> on <b>10.1476 MHz USB</b> (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough. The speaker is muted while APRS listens.'
+    : `VHF APRS: <b>${(aprsHz / 1e6).toFixed(3)} MHz NFM</b> here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. <b>MAP</b> in the box shows them on the map. The speaker is muted while APRS listens.`;
 }
 function renderAprs() {
   const rows = document.getElementById('aprsRows');
@@ -13891,6 +13906,7 @@ function decWhyPaint() {
 }
 
 function syncDecButtons() {
+  aprsSilentSync();   // ★★ APRS is a silent decoder
   syncCwPlain();   // ★ V12 the CW box's PLAIN key follows the decoder (CW only)
   decWhyPaint();
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
@@ -20917,6 +20933,7 @@ function abOnWatch(note?: string) {
   abPaint();
   sqlRowsPaint();
   bandMuteFollowAB();
+  aprsSilentSync();   // ★★ B came or went: APRS's mute moves between the speaker and its VFO
   vfoRecOnWatch();   // ★★★ per-VFO recording: the REC B row, the streams, B going away
   if (note && Date.now() - abNoteAt > 1500) { abNoteAt = Date.now(); showPill(note, 6000); }
 }

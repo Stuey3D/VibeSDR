@@ -5291,7 +5291,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  restarts the audio unmuted (every native start clears its mute) — the second branch mutes it again. A crash needs
    *  nothing: the mute is not stored, and the next start is unmuted. Same shape as Band's mute (preBandMuteRef). */
   const prePagingMuteRef = useRef<boolean | null>(null);
-  const pagingOn = activeDecoder === 'paging';
+  /* ★★ APRS IS SILENT TOO (Stuart, 2026-11-10: "we need to make APRS a silent decoder") — packets are a screech nobody
+   *  listens to. The same derived mute as paging's; the web page and the R36S mute APRS the same way. */
+  const pagingOn = activeDecoder === 'paging' || activeDecoder === 'aprs';
   useEffect(() => {
     const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
     if (pagingOn) {
@@ -14471,7 +14473,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           once — a control whose every use is a no-op is not offered). Closing PAGE puts the audio back as it was. */}
       {isLocal && isMuted && pagingOn && !dataSaverOff && !reconnectFailedUi && (
         <View style={[styles.mutedBanner, { top: insets.top + 46 }]} pointerEvents="none">
-          <Text style={styles.mutedBannerText}>🔇 AUDIO MUTED WHILE PAGE RUNS</Text>
+          <Text style={styles.mutedBannerText}>{activeDecoder === 'aprs' ? '🔇 AUDIO MUTED WHILE APRS RUNS' : '🔇 AUDIO MUTED WHILE PAGE RUNS'}</Text>
         </View>
       )}
       {isLocal && isMuted && !pagingOn && !dataSaverOff && !reconnectFailedUi && (

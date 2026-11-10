@@ -155,8 +155,8 @@ export function aprsTuneFor(baud: AprsBaud, aprsHz: number): { hz: number; mode:
 /** The hint under the settings — the web's aprsHint, as plain text. */
 export function aprsHintText(baud: AprsBaud, aprsHz: number): string {
   return baud === 300
-    ? 'HF packet: 300 Bd on 10.1476 MHz USB (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough.'
-    : `VHF APRS: ${(aprsHz / 1e6).toFixed(3)} MHz NFM here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. MAP in the box shows them on the map.`;
+    ? 'HF packet: 300 Bd on 10.1476 MHz USB (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough. The speaker is muted while APRS listens.'
+    : `VHF APRS: ${(aprsHz / 1e6).toFixed(3)} MHz NFM here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. MAP in the box shows them on the map. The speaker is muted while APRS listens.`;
 }
 
 // ── shared formatting ──────────────────────────────────────────────────────────────────────────────────────────────
