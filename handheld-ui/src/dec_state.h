@@ -870,6 +870,15 @@ inline void decTick(App& a, const RadioState& s) {
             aud::State& A = aud::st();
             if (aprs) { muteWas = A.mute; A.mute = true; } else A.mute = muteWas;
             aud::sendLevel(a);
+            // ★★ …AND NFM AUDIO GOES TO ALL (Stuart, 2026-11-10: "when APRS is open the NFM needs to switch to all and then
+            //    switch back to voice afterwards"). Voice's steep edges smear 1200/2200 (100 synthetic packets, 11 dB, space
+            //    tone 6 dB down: ALL 70, VOICE 18). Silent, so the harsher hiss costs nothing. A press in between stands.
+            const bool was = A.aprsNfmRaw;
+            A.aprsNfmRaw = aprs;
+            if (aprs || was) {
+                const int w = aud::nfmWant(A);
+                a.eng_->send(std::string("{\"type\":\"nfmvoice\",\"on\":") + (w == 0 ? "false" : "true") + "}");
+            }
             std::fprintf(stderr, "vibe-hhui: speaker %s (APRS %s)\n", A.mute ? "muted" : "on", aprs ? "open" : "closed");
         }
     }

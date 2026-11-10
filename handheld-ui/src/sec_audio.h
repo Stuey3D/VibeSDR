@@ -98,6 +98,7 @@ struct State {
     // DSP presses (the 4 s guard): key → (time, value)
     std::map<std::string, std::pair<double, double>> press;
     int nfmPref = -1;              // NFM AUDIO: the listener's choice wins over the report (main.ts:2043-2052)
+    bool aprsNfmRaw = false;       // ★★ ALL while APRS holds it (dec_state.h decTick) — nfmPref is never written by APRS
     double nfmResentAt = 0;
     // the RECORDINGS view
     bool recsView = false;
@@ -114,6 +115,8 @@ struct State {
     std::string navFix;
 };
 inline State& st() { static State s; return s; }
+/** NFM AUDIO as it should be: 0 ALL while APRS holds it, else the listener's choice (1 Voice, 0 All, -1 = the server's). */
+inline int nfmWant(const State& S) { return S.aprsNfmRaw ? 0 : S.nfmPref; }
 
 inline std::string fmtDb(double v) { char b[32]; std::snprintf(b, sizeof b, "%.0f", v); return b; }
 inline const char* jb(bool b) { return b ? "true" : "false"; }
@@ -305,10 +308,11 @@ inline void audioTick(App& a, const RadioState& s) {
     }
     // the record buffer forgets on a retune beyond the mode's allowance (main.ts recBufCheck)
     if (S.rbSec > 0 && s.vfoHz > 0 && S.rbAnchor.update(s.vfoHz, s.mode, nowSec())) S.rec.clearBuffer();
-    // NFM AUDIO: the listener's choice wins over a report that disagrees (re-stated, at most every 2 s)
-    if (S.nfmPref >= 0 && s.msg("hwinfo").has("nfmvoice") && s.msg("hwinfo")["nfmvoice"].boolean() != (S.nfmPref == 1)
+    // NFM AUDIO: the listener's choice (or ALL while APRS holds it) wins over a report that disagrees (re-stated, ≤ every 2 s)
+    const int nfmW = nfmWant(S);
+    if (nfmW >= 0 && s.msg("hwinfo").has("nfmvoice") && s.msg("hwinfo")["nfmvoice"].boolean() != (nfmW == 1)
         && nowSec() - S.nfmResentAt > 2 && nowSec() - (S.press.count("nfmvoice") ? S.press["nfmvoice"].first : 0) > PRESS_GUARD_S) {
-        a.eng_->send(std::string("{\"type\":\"nfmvoice\",\"on\":") + jb(S.nfmPref == 1) + "}");
+        a.eng_->send(std::string("{\"type\":\"nfmvoice\",\"on\":") + jb(nfmW == 1) + "}");
         S.nfmResentAt = nowSec();
     }
     if (S.rec.recording()) a.num_["audio.recSec"] = S.rec.seconds();   // ★ for the deck's status line (#mRecTime)
@@ -651,12 +655,12 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
     auto switchRow = [&](const std::string& id, const std::string& label, const std::string& key, bool def,
                          const std::string& onT, const std::string& offT, const std::string& help) {
         rowLabel(c, label, x0, y + 21);
-        const bool on = key == "nfmvoice" && st().nfmPref >= 0 ? st().nfmPref == 1 : dspBool(s, key, def);
+        const bool on = key == "nfmvoice" && nfmWant(st()) >= 0 ? nfmWant(st()) == 1 : dspBool(s, key, def);
         const float tw = std::max(96.f, (float)std::max(c.tc.width(c.f.bodyB, onT), c.tc.width(c.f.bodyB, offT)) + 28);
         navRow({{id, xr - tw / 2}});
         if (toggle(c, id, {xr - tw, y, tw, 42}, on, onT, offT)) {
             pressed(key, on ? 0 : 1);
-            if (key == "nfmvoice") st().nfmPref = on ? 0 : 1;
+            if (key == "nfmvoice") { st().nfmPref = on ? 0 : 1; st().aprsNfmRaw = false; }   // ★ a press stands, APRS or not
             eng_->send("{\"type\":\"" + key + "\",\"on\":" + jb(!on) + "}");
         }
         y += 42 + 8;
