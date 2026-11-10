@@ -473,7 +473,7 @@ inline void decOptionRows(App& a, const RadioState& s, const std::string& id, st
         if (decReach(s, th)) action("aprs.tune", "TUNE", {decMHz(th) + (u.aprsBaud == 300 ? " USB" : " NFM")}, {std::fabs(s.vfoHz - th) < 500 && s.mode == tm},
                                     [&a, &s, th, tm](int) { decTune(a, s, th, tm); });
         hint(u.aprsBaud == 300 ? "HF packet: 300 Bd on 10.1476 MHz USB (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough."
-                               : "VHF APRS: " + decMHz(hz) + " MHz NFM here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it.");
+                               : "VHF APRS: " + decMHz(hz) + " MHz NFM here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. The speaker is muted while it listens (AUDIO unmutes it).");
     } else if (id == "dsc") {
         std::vector<std::string> o; std::vector<bool> lit; std::vector<DecDscCh> chs;
         for (auto& ch : kDscDistress) {

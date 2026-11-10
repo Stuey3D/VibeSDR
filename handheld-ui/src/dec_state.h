@@ -413,6 +413,13 @@ inline const DecDef* decSole(const RadioState& s) {
     for (auto& e : decExternals()) if (decExtOffered(s, e)) n++;   // (an external key counts; then DECODERS… stays the door)
     return n == 1 ? one : nullptr;
 }
+inline bool decSkimSegment(int& lo, int& hi) {
+    const DecUi& u = decUi();
+    const int w = u.active == "cw" && u.cwSkim ? u.cwWidth : u.active == "psk" && u.pskSkim ? u.pskWidth : 0;
+    if (w <= 0) return false;
+    lo = -w / 2; hi = w / 2;
+    return true;
+}
 inline bool decRunning() { const DecUi& u = decUi(); return !u.active.empty() || u.spotsOn; }
 inline bool decIsOn(const std::string& id) { const DecUi& u = decUi(); return id == "spots" ? u.spotsOn : u.active == id; }
 
@@ -851,6 +858,21 @@ inline void decTick(App& a, const RadioState& s) {
         if (due && (u.boxOpen || !u.capFetched)) decFetchCaps(a.eng_->port());
     }
     if (s.session != "running" && decRunning()) { u.active.clear(); u.spotsOn = false; u.view.clear(); u.boxOpen = false; }
+    // ★★ APRS MUTES THE SPEAKER (Stuart, 2026-11-10): packets are a screech nobody listens to. Muted when it opens, put
+    //    back as it was when it closes, however it closes; the speaker key still unmutes in between (the mute is the
+    //    AUDIO sheet's own, so the deck's glyph shows it). This listener's speaker only — the server and anyone else on
+    //    the dial hear what they heard.
+    {
+        static bool aprsWas = false, muteWas = false;
+        const bool aprs = u.active == "aprs";
+        if (aprs != aprsWas) {
+            aprsWas = aprs;
+            aud::State& A = aud::st();
+            if (aprs) { muteWas = A.mute; A.mute = true; } else A.mute = muteWas;
+            aud::sendLevel(a);
+            std::fprintf(stderr, "vibe-hhui: speaker %s (APRS %s)\n", A.mute ? "muted" : "on", aprs ? "open" : "closed");
+        }
+    }
     // ★ tests: VIBE_HHUI_DEC_START=time,spots starts those once the session runs and the offer is in (the screenshots)
     {
         static bool started = false;

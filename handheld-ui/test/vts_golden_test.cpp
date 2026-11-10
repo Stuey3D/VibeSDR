@@ -115,7 +115,7 @@ struct Rig {
             sc.update(in);
             const uint64_t e = bar.update(sc.notif(), t);
             if (e) { sc.timedEnd(e); bar.update(sc.notif(), t); }
-            in.connectedEdge = false; in.rdsNew = false; in.noticeNew = false; in.dabNew = false; in.dabOffNew = false; in.toneNew = false;
+            in.connectedEdge = false; in.rdsNew = false; in.noticeNew = false; in.dabNew = false; in.dabOffNew = false; in.drmNew = false; in.toneNew = false;
         }
     }
     void rds(const std::string& ps, const std::string& rt, int pi, bool flags = true) {
@@ -216,6 +216,19 @@ static void scenarios() {
         expect(r.bar.shown()->dab && r.bar.shown()->dabPlus, "DAB+ mark");
         r.in.dabOffNew = true; r.in.mode = "wfm"; r.step(600);
         expect(!r.bar.shown(), "leaving DAB clears it");
+    }
+    {   // DRM: SId / SDC label: text · audio, the country, no mark; an unlocked report and leaving DRM take it away
+        Rig r; r.in.mode = "drm"; r.in.vfoHz = 5990000; r.step(100);
+        r.in.drmNew = true; r.in.drmLive = true; r.in.drmLabel = "TDF DRM"; r.in.drmSid = 0x1000; r.in.drmCountry = "FR";
+        r.in.drmText = "Diffusion DRM"; r.in.drmAudio = "AAC \xc2\xb7 12 kHz | 8 kbit/s"; r.step(100);
+        expect(r.line() == "SId: 1000 / TDF DRM: Diffusion DRM  \xc2\xb7  AAC \xc2\xb7 12 kHz | 8 kbit/s", "DRM line: " + r.line());
+        expect(r.bar.shown()->iso == "FR" && r.bar.shown()->badge.empty() && !r.bar.shown()->dab, "DRM country, no mark");
+        r.in.drmNew = true; r.in.drmLive = false; r.step(600);
+        expect(!r.bar.shown(), "an unlocked DRM report clears it");
+        r.in.drmNew = true; r.in.drmLive = true; r.step(100);
+        expect(r.bar.shown().has_value(), "DRM back on relock");
+        r.in.mode = "usb"; r.step(600);
+        expect(!r.bar.shown(), "leaving DRM clears it");
     }
     {   // the tone, NFM only
         Rig r; r.in.mode = "nfm"; r.in.vfoHz = 145500000; r.step(100);

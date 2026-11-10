@@ -316,6 +316,10 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 
 }  // namespace hh
 
+/** ★ The CW / PSK SKIMMER's VFO is its segment (dec_state.h; the web's kbSkimOn — Stuart 2026-10-25: "the VFO doesnt
+ *  actually show me where i am tuning"): true + the box's edges (Hz from the dial) while one is open. Drawn only, never
+ *  sent — the listener's own passband comes back when the skimmer closes. */
+namespace hh { inline bool decSkimSegment(int& lo, int& hi); }
 #include "hw_pump.h"
 #include "dab_box.h"
 #include "app_impl.h"

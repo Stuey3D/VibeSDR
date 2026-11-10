@@ -373,7 +373,9 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
         c.tc.draw(c.g, c.f.small, b, spec.x + 4, ly, rgb(0xffb43c, 0.9f));
     }
     // the passband and the dial
-    const float px0 = xOf(s.vfoHz + s.bwLow), px1 = xOf(s.vfoHz + s.bwHigh);
+    int pbLo = s.bwLow, pbHi = s.bwHigh;
+    decSkimSegment(pbLo, pbHi);   // ★ a skimmer's VFO is the segment it decodes, as on the web
+    const float px0 = xOf(s.vfoHz + pbLo), px1 = xOf(s.vfoHz + pbHi);
     c.g.rect(px0, spec.y, std::max(1.f, px1 - px0), spec.h, rgb(0xffb000, 0.13f));
     c.g.rect(px0, wfr.y, std::max(1.f, px1 - px0), wfr.h, rgb(0xffb000, 0.06f));
     const float vx = xOf(s.vfoHz);

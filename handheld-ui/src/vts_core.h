@@ -438,6 +438,11 @@ struct Inputs {
     bool dabNew = false, dabOffNew = false;
     std::string dabSvcLabel, dabSvcDls, dabDls, dabSvcCodec;
     double dabSvcSid = 0;
+    // drm (a `drm` report while in DRM): the station names itself in its SDC (label) and sends a text message — the bar
+    // shows them like a DAB service's label and DLS (the web page's updateVts), plus the audio it is sending
+    bool drmNew = false, drmLive = false;
+    std::string drmLabel, drmText, drmCountry, drmAudio;
+    double drmSid = 0;
     // tone ({"type":"tone","label":…})
     bool toneNew = false; std::string toneLabel;
     // notice ({"type":"notice"} — `why` (a refusal) or `vts` (a server line for the bar); `ask` refusals are dropped)
@@ -473,6 +478,8 @@ public:
         if (in.rdsNew) onRds(in);
         if (in.dabOffNew) setDabOn(false);
         else if (in.dabNew) onDab(in);
+        if (in.drmNew) onDrm(in);
+        else if (in.mode != "drm" && live_.badge == "DRM") dropDrm();   // ★ leaving DRM takes its station with it
         if (in.toneNew) setTone(in.mode == "nfm" || in.mode == "fm" ? in.toneLabel : "");
         if (in.noticeNew && !in.noticeText.empty()) show(in.noticeText, 7000);
         ownNotices(in);
@@ -675,6 +682,25 @@ private:
         l.dabPlus = in.dabSvcCodec == "DAB+" ? 1 : in.dabSvcCodec == "MP2" ? 0 : -1;
         live_ = l;
     }
+    void onDrm(const Inputs& in) {
+        const std::string svc = in.drmLive ? dabSafeText(in.drmLabel, 32) : "";
+        if (svc.empty()) { dropDrm(); return; }
+        liveRef_ = svc;
+        liveBadge_ = "DRM"; hasLiveBadge_ = true;
+        ps_.reset(); liveCall_.clear(); psTickAt_ = 0;
+        Live l;
+        l.name = svc;
+        const std::string txt = dabSafeText(in.drmText);
+        l.text = txt.empty() ? in.drmAudio : in.drmAudio.empty() ? txt : txt + "  \xc2\xb7  " + in.drmAudio;
+        l.badge = "DRM";
+        l.sid = vtsHex(in.drmSid);
+        l.iso = in.drmCountry;
+        live_ = l;
+    }
+    void dropDrm() {
+        if (liveBadge_ == "DRM") { liveBadge_.clear(); hasLiveBadge_ = false; liveRef_.clear(); }
+        if (live_.badge == "DRM") live_ = Live{};
+    }
     void setDabOn(bool on) {
         const bool was = dabOn_;
         dabOn_ = on;
@@ -686,7 +712,8 @@ private:
     void liveStationEffect(const Inputs& in) {
         const std::string& name = live_.name;
         const bool textOnly = name.empty() && !live_.text.empty();
-        const bool isDab = liveBadge_ == "DAB" || dabOn_;
+        const bool isDrm = liveBadge_ == "DRM";
+        const bool isDab = liveBadge_ == "DAB" || dabOn_ || isDrm;   // ★ DRM's service id reads like DAB's: "SId: 1000"
         const std::string vtsId = isDab ? live_.sid : liveBadge_ == "RDS" ? live_.pi : "";
         if (name.empty() && !textOnly && vtsId.empty()) {
             if (!lastStation_.empty()) {
@@ -697,7 +724,7 @@ private:
             return;
         }
         const bool wfm = in.mode == "wfm" && !dabOn_;
-        const std::string iso = wfm && validIso(live_.iso) ? live_.iso : "";
+        const std::string iso = (wfm || isDrm) && validIso(live_.iso) ? live_.iso : "";
         const bool ann = wfm && live_.hasFlags;
         const bool dab = liveBadge_ == "DAB";
         const bool plus = live_.dabPlus == 1;
@@ -709,7 +736,7 @@ private:
             Notif x;
             x.key = ++key_; x.name = name; x.rt = live_.text; x.id = vtsId; x.idLabel = isDab ? "SId" : "PI";
             x.kind = Notif::StationOn; x.hold = true;
-            x.badge = hasLiveBadge_ ? liveBadge_ : (!vtsId.empty() ? "RDS" : "");
+            x.badge = isDrm ? "" : hasLiveBadge_ ? liveBadge_ : (!vtsId.empty() ? "RDS" : "");   // ★ no DRM mark (the web has none)
             x.iso = iso;
             x.annunciators = ann; x.tp = live_.tp; x.ta = live_.ta; x.af = live_.af;
             x.dab = dab; x.dabPlus = plus;

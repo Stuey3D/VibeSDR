@@ -22,6 +22,8 @@
 #include "vts_marks.h"
 
 #include <SDL2/SDL_ttf.h>
+#include <cctype>
+#include <cstdlib>
 
 namespace hh {
 namespace vts {
@@ -57,7 +59,7 @@ struct Arrival {
 struct State {
     Screen screen;
     Bar bar;
-    Arrival rds, dab, dabOff, dabErr, tone, notice, device;
+    Arrival rds, dab, dabOff, dabErr, drm, tone, notice, device;
     bool wasConnected = false;
     std::map<std::pair<const void*, char32_t>, bool> glyphs;   // TTF_GlyphIsProvided32, cached
 };
@@ -105,6 +107,34 @@ inline Inputs readInputs(State& st, const RadioState& s, double nowMs, int regio
             in.dabNew = true;
             in.dabDls = j["dls"].str();
             if (play) { in.dabSvcLabel = (*play)["label"].str(); in.dabSvcDls = (*play)["dls"].str(); in.dabSvcCodec = (*play)["codec"].str(); in.dabSvcSid = (*play)["sid"].num(0); }
+        }
+    }
+    // drm — the station's SDC label + text message, and the audio it sends ("AAC · 12 kHz | 8 kbit/s"); a report after
+    // leaving DRM is a ghost (the web's onDrm), an unlocked one ends the line
+    {
+        const Json& j = s.msg("drm");
+        const bool live = s.mode == "drm" && j["locked"].boolean() && !trim(j["label"].str()).empty();
+        std::string audio;
+        if (live && !j["codec"].str().empty()) {
+            audio = j["codec"].str();
+            char b[64];
+            if (j["audioRate"].num(0) > 0) { std::snprintf(b, sizeof b, " \xc2\xb7 %g kHz", j["audioRate"].num() / 1000.0); audio += b; }
+            if (j["bitrate"].num(0) > 0) {
+                std::snprintf(b, sizeof b, "%.1f", j["bitrate"].num() / 1000.0);
+                std::string br = b;
+                if (br.size() > 2 && br.compare(br.size() - 2, 2, ".0") == 0) br.resize(br.size() - 2);
+                audio += " | " + br + " kbit/s";
+            }
+        }
+        const std::string sig = live ? j["label"].str() + "\x1f" + j["text"].str() + "\x1f" + j["serviceId"].str() + j["country"].str() + audio : "off";
+        if (st.drm(j, sig)) {
+            in.drmNew = true; in.drmLive = live;
+            if (live) {
+                in.drmLabel = j["label"].str(); in.drmText = j["text"].str(); in.drmAudio = audio;
+                const std::string c = j["country"].str();
+                in.drmCountry = c.size() == 2 ? std::string{(char)std::toupper((unsigned char)c[0]), (char)std::toupper((unsigned char)c[1])} : "";
+                in.drmSid = (double)std::strtoul(j["serviceId"].str().c_str(), nullptr, 16);
+            }
         }
     }
     // tone
