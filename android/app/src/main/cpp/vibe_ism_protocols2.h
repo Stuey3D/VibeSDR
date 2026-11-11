@@ -36,34 +36,64 @@ inline int evenParityOk(uint8_t v) { int n = 0; for (int i = 0; i < 8; ++i) n +=
 namespace fineoffset {
 
 inline bool wh1080Fields(const std::vector<uint8_t>& by, bool fsk, Reading& r) {
-    if ((by[0] >> 4) != 0xA) return false;
+    const int type = by[0] >> 4;
+    char id[4]; std::snprintf(id, sizeof id, "%02X", ((by[0] & 0xF) << 4) | (by[1] >> 4));
+    r.kind = "weather"; r.make = "Fine Offset"; r.pubId = id;
+    /* ★ 2026-11-11 (weather pass; field facts cross-checked with rtl_433 fineoffset_wh1080.c): the WH3080's UV / light
+     *  frame (type 7: 7 bytes, the CRC over 6) and the DCF77 / WWVB time frame (type B) are the station's too — read, not
+     *  dropped. And the OOK temperature is 10 bits: the top two of the 12 are flags, not sign or value. */
+    if (type == 0x7) {
+        if (crc8(by.data(), 6, 0x31, 0) != by[6]) return false;
+        r.model = "WH3080 UV / light";
+        r.uv = by[1] & 0xF;
+        const int light = by[3] << 16 | by[4] << 8 | by[5];
+        char e[40]; std::snprintf(e, sizeof e, "%.0f lux", light * 0.1); r.extra = e;
+        if (by[2] != 85) r.note = "UV sensor fault";
+        return true;
+    }
+    if (type != 0xA && type != 0xB) return false;
     if (crc8(by.data(), 9, 0x31, 0) != by[9]) return false;
-    r.kind = "weather"; r.make = "Fine Offset"; r.model = fsk ? "WH1080 (FSK)" : "WH1080";
-    char id[4]; std::snprintf(id, sizeof id, "%02X", ((by[0] & 0xF) << 4) | (by[1] >> 4)); r.pubId = id;
-    const int raw = ((by[1] & 0xF) << 8) | by[2];
-    r.tempC = fsk ? ((raw & 0x800) ? -1 : 1) * (raw & 0x7FF) / 10.0 : (raw - 400) / 10.0;
+    if (type == 0xB) {
+        auto bcd = [](int v) { return (v >> 4) * 10 + (v & 0xF); };
+        r.model = fsk ? "WH1080 (FSK) clock" : "WH1080 clock";
+        char e[48]; std::snprintf(e, sizeof e, "%s time %02d:%02d:%02d %04d-%02d-%02d", (by[1] & 0xF) == 10 ? "DCF77" : "WWVB/MSF",
+                                  bcd(by[2] & 0x3F), bcd(by[3]), bcd(by[4]), 2000 + bcd(by[5]), bcd(by[6] & 0x1F), bcd(by[7]));
+        r.extra = e;
+        return true;
+    }
+    r.model = fsk ? "WH1080 (FSK)" : "WH1080";
+    if (fsk) { const int raw = ((by[1] & 0xF) << 8) | by[2]; r.tempC = ((raw & 0x800) ? -1 : 1) * (raw & 0x7FF) / 10.0; }
+    else r.tempC = ((((by[1] & 0x3) << 8) | by[2]) - 400) / 10.0;
     r.hum = fsk ? (by[3] & 0x7F) : by[3];
     r.windKmh = by[4] * 0.34 * 3.6;
     r.gustKmh = by[5] * 0.34 * 3.6;
     r.rainMm = (((by[6] & 0xF) << 8) | by[7]) * 0.3;
     const int st = by[8] >> 4;
-    r.battOk = fsk ? ((st & 0x8) ? 0 : 1) : (st ? 0 : 1);
+    r.battOk = fsk ? ((st & 0x8) ? 0 : 1) : (st == 1 ? 0 : 1);
     r.windDir = (by[8] & 0xF) * 22.5;
     if (r.tempC < -40 || r.tempC > 70 || r.hum > 100) return false;
     return true;
 }
 
 inline bool decodeWh1080(const Burst& b, std::vector<Reading>& out) {
+    // ★ 2026-11-11: the preamble is 8 ones on most units, 7 on newer ones — a frame after ≥ 7 ones
+    // ★★ the frame is the whole row (88 / 87 bits, the UV frame 64 / 63): a CRC-8 tried at every offset of a noise row
+    //    passes now and then (the corpus: "WH3080 UV" on a doorbell) — so the preamble starts the row, and the row ends
+    //    where the frame does
     for (const Bits& row : slicePwm(b.ook, 500, 1500, 4000, true)) {
-        for (size_t s = 0; s + 88 <= row.size(); ++s) {
-            if (bitsAt(row, s, 8) != 0xFF) continue;
-            const auto by = bytesAt(row, s + 8, 10);
+        for (size_t s = 7; s <= 9 && s + 56 <= row.size(); ++s) {
+            if (bitsAt(row, s - 7, 7) != 0x7F) continue;
+            const size_t len = row.size() - s, want = (row[s] == 0) ? 56 : 80;
+            if (len < want || len > want + 2) continue;
+            const auto by = bytesAt(row, s, 10);
             Reading r;
             if (wh1080Fields(by, false, r)) { out.push_back(r); return true; }
         }
     }
-    const double bit = tpms::halfEstimate(b.fsk);
-    for (const Bits& row : fskNrzRows(b, bit)) {
+    // ★ the FSK version: the bit from the preamble (shortest runs); both demodulations (wx::fskRows)
+    const double bit = tpms::halfEstimate(b.fsk.empty() ? b.ook : b.fsk);
+    if (bit < 20 || bit > 200) return false;
+    for (const Bits& row : wx::fskRows(b, bit, 40, 80)) {
         for (size_t s = findBits(row, 0x2DD4, 16); s != size_t(-1); s = findBits(row, 0x2DD4, 16, s + 1)) {
             if (s + 16 + 80 > row.size()) break;
             const auto by = bytesAt(row, s + 16, 10);
