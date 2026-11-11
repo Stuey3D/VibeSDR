@@ -5,6 +5,7 @@
 #pragma once
 #include "vibe_ism_protocols.h"
 #include "vibe_ism_weather2.h"   // ★ weather pass 2026-11-11: SL109H, Fine Offset / Ecowitt FSK
+#include "vibe_ism_weather3.h"   // ★ weather pass 2026-11-11: La Crosse (TX141 family, WS-2310/3600, TX-3/6U/7U, TX22U)
 
 namespace vibeism {
 
@@ -242,25 +243,43 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 namespace lacrosse {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& row : fskNrzRows(b, 1e6 / 17241.0)) {
+    /* ★ 2026-11-11 (weather pass; facts cross-checked with rtl_433 lacrosse_tx35.c / lacrosse_tx34.c): the TX35DTH-IT and
+     *  TX25U send the same frame at ~9.58 kbps (105 µs), not 17.24; a short preamble (as little as 1010) is common, so the
+     *  sync is matched as 2D D4 + the model nibble; model 5 is the TX34-IT rain gauge (16-bit tip count × 0.222 mm);
+     *  humidity 0x6A = no hygrometer, 0x7D = the TX25U's second (probe) temperature. Both demodulations (wx::fskRows). */
+    for (double bit : {1e6 / 17241.0, 105.0}) {
+    for (const Bits& row : wx::fskRows(b, bit, 40, 56)) {
         for (size_t s = findBits(row, 0x2DD4, 16); s != size_t(-1); s = findBits(row, 0x2DD4, 16, s + 1)) {
             if (s + 16 + 40 > row.size()) break;
             const auto by = bytesAt(row, s + 16, 5);
-            if ((by[0] >> 4) != 9 || crc8(by.data(), 4, 0x31, 0) != by[4]) continue;
+            const int model = by[0] >> 4;
+            if ((model != 9 && model != 5) || crc8(by.data(), 4, 0x31, 0) != by[4]) continue;
+            Reading r;
+            r.kind = "weather"; r.make = "La Crosse";
+            const int id = ((by[0] & 0xF) << 2) | (by[1] >> 6);
+            if (model == 5) {
+                r.model = "TX34-IT rain";
+                char ib[4]; std::snprintf(ib, sizeof ib, "%02X", id); r.pubId = ib;
+                r.rainMm = (by[2] << 8 | by[3]) * 0.222;
+                r.battOk = (by[1] & 0x10) ? 0 : 1;
+                if (by[1] & 0x20) r.extra = "new battery";
+                out.push_back(r);
+                return true;
+            }
             const int d1 = by[1] & 0xF, d2 = by[2] >> 4, d3 = by[2] & 0xF;
             if (d1 > 9 || d2 > 9 || d3 > 9) continue;
-            Reading r;
-            r.kind = "weather"; r.make = "La Crosse"; r.model = "IT+ (TX29/TX35)";
-            const int id = ((by[0] & 0xF) << 2) | (by[1] >> 6);
-            char ib[4]; std::snprintf(ib, sizeof ib, "%02X", id); r.pubId = ib;
-            r.tempC = (d1 * 100 + d2 * 10 + d3) / 10.0 - 40.0;
+            r.model = bit > 80 ? "IT+ (TX35 / TX25U)" : "IT+ (TX29 / TX35)";
             const int h = by[3] & 0x7F;
+            char ib[4]; std::snprintf(ib, sizeof ib, "%02X", h == 0x7D ? id + 0x40 : id); r.pubId = ib;
+            r.tempC = (d1 * 100 + d2 * 10 + d3) / 10.0 - 40.0;
             if (h <= 100) r.hum = h;
+            if (h == 0x7D) r.note = "probe";
             r.battOk = (by[3] & 0x80) ? 0 : 1;
             if ((by[1] >> 5) & 1) r.extra = "new battery";
             out.push_back(r);
             return true;
         }
+    }
     }
     return false;
 }
@@ -431,6 +450,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (lacrosse::decode(b, out)) return;
     if (currentcost::decode(b, out)) return;
     if (sl109h::decode(b, out)) return;
+    if (lacrosse::decodeWx3(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
     if (tpms::decodeA(b, out)) return;
