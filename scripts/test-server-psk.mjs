@@ -136,6 +136,34 @@ function checkSpots(spots, label, which = STATIONS) {
     ok(g && /g4abc g4abc/.test(g.text) && g.baud === 31, `a row carries its text and mode: "${g ? g.text.slice(-40) : 'no G4ABC row'}" (${g && g.baud})`);
     const o = jsons(L.dx, 'psk_signals').reverse().map((l) => l.data.signals.find((x) => x.call === 'OK1RR')).find(Boolean);
     ok(o && o.baud === 63, `the PSK63 station's row says 63 (${o && o.baud})`);
+    // ★★ THE SEGMENT MOVES (the CW skimmer's 80 m → 40 m bug, 2026-11-11 — vibe_psk_run.h has the same code): a small move
+    //    keeps each known signal at the RF it was heard at; a jump of half the segment or more starts afresh.
+    {
+      const MODE = 'usb';
+      const before = jsons(L.dx, 'psk_signals').at(-1).data.signals;
+      const c0 = jsons(L.dx, 'psk_signals').at(-1).data.centre;
+      const n0 = jsons(L.dx, 'psk_signals').length;
+      L.spec.send({ type: 'tune', frequency: CENTRE + 1000, mode: MODE });
+      const atSmall = () => jsons(L.dx, 'psk_signals').slice(n0).find((l) => Math.abs(l.data.centre - c0) > 0.5 && Math.abs(l.data.centre - (CENTRE + 1000)) < 500);
+      ok(await until(() => !!atSmall(), 6000), `small move (+1 kHz): a list at the new centre (${atSmall() ? atSmall().data.centre : 'none'})`);
+      const after = atSmall() ? atSmall().data.signals : [];
+      const moved = before.filter((b) => { const a = after.find((x) => x.id === b.id); return a && Math.abs(a.hz - b.hz) > 1; });
+      const kept = before.filter((b) => after.some((x) => x.id === b.id)).length;
+      ok(kept > 0 && moved.length === 0, `small move: the ${kept} signals already known keep the RF they were heard at`
+        + (moved.length ? ` — MOVED: ${moved.map((b) => `${b.id} ${b.hz}→${after.find((x) => x.id === b.id).hz}`).join(', ')}` : ''));
+      const n1 = jsons(L.dx, 'psk_signals').length;
+      const FAR = CENTRE + 200000;
+      L.spec.send({ type: 'tune', frequency: FAR, mode: MODE });
+      const atFar = () => jsons(L.dx, 'psk_signals').slice(n1).filter((l) => Math.abs(l.data.centre - FAR) < 500);
+      ok(await until(() => atFar().length > 0, 6000), 'big move (+200 kHz): a list at the new centre');
+      const first = atFar()[0];
+      ok(first && first.data.signals.length === 0, `big move: the first list there is EMPTY (${first ? first.data.signals.map((x) => `${(x.hz / 1e3).toFixed(1)} "${x.text.slice(-20)}"`).join(' | ') : '—'})`);
+      await sleep(3000);
+      const stale = atFar().flatMap((l) => l.data.signals).filter((x) => /g4abc|cq cq cq de/.test(x.text));
+      ok(stale.length === 0, `big move: no old text re-labelled at the new place in 3 s (${stale.length})`);
+      L.spec.send({ type: 'tune', frequency: CENTRE, mode: MODE });
+      await sleep(800);
+    }
 
     // ★ ONE SIGNAL: USB with EA7XX in the middle of the passband (audio 1500 Hz)
     L.dx.bin.length = 0; L.dx.txt.length = 0;
