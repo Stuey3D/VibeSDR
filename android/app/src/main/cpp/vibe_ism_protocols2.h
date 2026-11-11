@@ -4,6 +4,7 @@
 //     detail open, the choice made is marked ASSUMED and the doc lists it for a real-signal check.
 #pragma once
 #include "vibe_ism_protocols.h"
+#include "vibe_ism_weather2.h"   // ★ weather pass 2026-11-11: SL109H, Fine Offset / Ecowitt FSK
 
 namespace vibeism {
 
@@ -328,6 +329,7 @@ inline bool bandPlausible(const Reading& r, double freqHz) {
 }
 inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (oregon::decode(b, out)) return;
+    if (fofsk::decode(b, out)) return;
     if (fineoffset::decodeWh1080(b, out)) return;
     if (fineoffset::decodeWh2(b, out)) return;
     if (nexus::decode(b, out)) return;
@@ -335,6 +337,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (acurite::decode782(b, out)) return;
     if (lacrosse::decode(b, out)) return;
     if (currentcost::decode(b, out)) return;
+    if (sl109h::decode(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
     if (tpms::decodeA(b, out)) return;
