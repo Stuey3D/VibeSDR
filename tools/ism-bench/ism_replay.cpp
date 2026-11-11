@@ -3,14 +3,22 @@
 // Scored against the recordings' own expected output by scripts/ism-corpus.mjs (the rtl_433_tests corpus — used here as
 // test INPUT only, never shipped or committed; our decoders are our own code).
 //
-//   ism_replay [--dc HZ] FILE.cu8 …        8-bit unsigned I/Q; the rate and centre from the name: …_433.92M_250k.cu8
+//   ism_replay [--dc HZ] [--lead S] FILE.cu8 …   8-bit unsigned I/Q; the rate and centre from the name: …_433.92M_250k.cu8
 //
 // ★ --dc: the detector's DC guard. Live, the service tunes OFF the band so a sensor never sits on the dongle's DC spike
 //   and guards ±15 kHz; these recordings were made tuned ON the sensor (it sits within a few kHz of DC), so the replay
 //   guards only ±1 kHz by default — the score is the decoders', not an artefact of how the corpus was recorded.
+// ★ --lead S (off by default, so the corpus score stays comparable; 2026-11-11): live, the detector has watched the band's noise for minutes before a sensor
+//   sends; these recordings are cut by a trigger, so most start with the sensor already on the air — and the detector's
+//   first frames SEED its noise floor (vibe_ism.h), so a burst present from the first sample was learnt as "floor" and
+//   never detected (the XC-0324 folder: 0 bursts found in 18 of 18 recordings). The replay therefore starts with this
+//   much of the recording's own quietest 10 ms (its real noise), as the live band would have. With --lead 0.3 the whole
+//   corpus read +37 matches, but bursts elsewhere moved (a stretch with a steady spur, repeated, is held as a hog) — so
+//   it is a diagnostic for decoders whose recordings start mid-burst, not the score.
 #include "vibe_ism_service.h"
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <cstdlib>
 #include <regex>
 #include <string>
@@ -29,11 +37,12 @@ static void num(std::string& o, const char* k, double v) {
 }
 
 int main(int argc, char** argv) {
-    double dc = 1000;
+    double dc = 1000, lead = 0;
     std::vector<std::string> files;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--dc" && i + 1 < argc) dc = std::atof(argv[++i]);
+        else if (a == "--lead" && i + 1 < argc) lead = std::atof(argv[++i]);
         else files.push_back(a);
     }
     const std::regex nameRx(R"(_([0-9.]+)M_([0-9]+)k)");
@@ -50,6 +59,20 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < x.size(); ++i) x[i] = cf((raw[2 * i] - 127.5f) / 128.f, (raw[2 * i + 1] - 127.5f) / 128.f);
         // ★ the rtl_433 recordings are short; pad with a quarter second of silence so the last burst closes
         x.resize(x.size() + (size_t)(rate * 0.25), cf(0, 0));
+        // ★ --lead: the recording's own quietest stretch first (see the header) — its real noise, spectrum and all,
+        //   played forwards and backwards in turn so the joins are continuous
+        if (lead > 0 && raw.size() / 2 > size_t(rate * 0.02)) {
+            const size_t n0 = raw.size() / 2, w = size_t(rate * 0.01);
+            size_t best = 0; double bestP = 1e300;
+            for (size_t s0 = 0; s0 + w <= n0; s0 += w / 2) {
+                double p = 0; for (size_t i = s0; i < s0 + w; ++i) p += std::norm(x[i]);
+                if (p < bestP) { bestP = p; best = s0; }
+            }
+            std::vector<cf> pre; pre.reserve(size_t(rate * lead) + w);
+            for (int k = 0; pre.size() < size_t(rate * lead); ++k)
+                for (size_t i = 0; i < w; ++i) pre.push_back(x[best + ((k & 1) ? w - 1 - i : i)]);
+            x.insert(x.begin(), pre.begin(), pre.end());
+        }
         FrontEnd fe(rate);
         fe.setDcGuardHz(dc);
         const bool m868 = centre >= 863e6 && centre <= 870e6;
@@ -69,7 +92,7 @@ int main(int argc, char** argv) {
                 num(o, "wind_avg_km_h", r.windKmh); num(o, "wind_max_km_h", r.gustKmh); num(o, "wind_dir_deg", r.windDir);
                 num(o, "rain_mm", r.rainMm); num(o, "uv", r.uv); num(o, "power_W", r.watts); num(o, "pressure_hPa", r.baroHpa);
                 if (r.battOk >= 0) o += ",\"battery_ok\":" + std::to_string(r.battOk);
-                num(o, "t", b.tSec);
+                num(o, "t", b.tSec - lead);
                 o += "}";
                 std::puts(o.c_str());
             }

@@ -4,7 +4,8 @@
 // expected output (the .json beside each recording). The corpus is test INPUT only — kept outside the repository
 // (~/VibeSDR-test-audio/rtl_433_tests), never committed or shipped; every decoder is our own code.
 //
-//   node scripts/ism-corpus.mjs [--corpus DIR] [--bin PATH] [--jobs N] [--only SUBSTR] [--out results.json]
+//   node scripts/ism-corpus.mjs [--corpus DIR] [--bin PATH] [--jobs N] [--only SUBSTR] [--out results.json] [--lead S]
+//   (--lead: passed to ism_replay — noise before each recording; a diagnostic, not the score: see ism_replay.cpp)
 //
 // Per recording:
 //   match   we decoded it AND a reading agrees on a value both report (temperature ±0.25 °C, humidity ±1 %, tyre
@@ -26,6 +27,7 @@ const BIN = arg('--bin', path.join(homedir(), 'R36S-debug/ism/ism_replay'));
 const JOBS = Number(arg('--jobs', Math.min(8, cpus().length)));
 const ONLY = arg('--only', '');
 const OUT = arg('--out', '');
+const LEAD = arg('--lead', '');
 if (!existsSync(CORPUS) || !existsSync(BIN)) { console.error(`need the corpus (${CORPUS}) and ism_replay (${BIN})`); process.exit(3); }
 
 const files = [];
@@ -43,7 +45,7 @@ for (const f of files) { const k = folderOf(f); if (!groups.has(k)) groups.set(k
 
 function run(list) {
   return new Promise((res) => {
-    const p = spawn(BIN, list, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const p = spawn(BIN, LEAD ? ['--lead', LEAD, ...list] : list, { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
     p.stdout.on('data', (d) => { out += d; });
     p.on('close', () => res(out.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)));
