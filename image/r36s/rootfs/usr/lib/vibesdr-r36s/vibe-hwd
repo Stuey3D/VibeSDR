@@ -45,8 +45,41 @@ ACK_WAIT_S = 5.0              # how long the engine gets to save every radio's m
 #       table: 0 = 450 mA, 1 = 80, 2 = 850, 3 = 1500, 4 = 1750, 5 = 2000, 6 = 2500, 7 = 3000. Bits 7:4 (the 4.5 V input
 #       voltage floor the driver set) are kept. The register is uncached in the kernel (REGCACHE_NONE, volatile), and the
 #       driver touches it only on unplug, so this write stands until then.
-PMIC_ADDR, CHRG_IN, ILIM_MASK, ILIM_EN, ILIM_2A = 0x20, 0xE5, 0x07, 0x08, 0x05
-I2C_SLAVE_FORCE = 0x0706
+PMIC_ADDR, CHRG_IN = 0x20, 0xE5
+# ★★ WRITTEN AS ONE FIXED VALUE, never read-modify-write: 0xDD = USB_VLIM_EN | 4.5 V floor (sel 5, the driver's own) |
+#    USB_ILIM_EN | 2 A (sel 5). The driver's value is 0xDB (the same with 1.5 A) — read at start-up on handheld62.
+CHRG_IN_2A = 0xDD
+class _SmbusData(ctypes.Union):
+    _fields_ = [("byte", ctypes.c_uint8), ("word", ctypes.c_uint16), ("block", ctypes.c_uint8 * 34)]
+
+class _SmbusIoctl(ctypes.Structure):
+    _fields_ = [("read_write", ctypes.c_uint8), ("command", ctypes.c_uint8), ("size", ctypes.c_uint32),
+                ("data", ctypes.POINTER(_SmbusData))]
+
+I2C_SLAVE_FORCE, I2C_SMBUS, SMBUS_BYTE_DATA, SMBUS_READ, SMBUS_WRITE = 0x0706, 0x0720, 2, 1, 0
+
+def _smbus(dev, rw, reg, val=0):
+    """ONE SMBus byte-data transfer (I2C_SMBUS ioctl): the register-pointer write and the read go as one i2c_transfer
+    with a repeated start, under the adapter's lock, so the kernel's own PMIC traffic (the fuel gauge polls it many
+    times a second) cannot land in between. ★★ handheld62 read with two plain read()/write() calls and the driver DID
+    land in between: about one second in three read ANOTHER register (0x24, 0x0f, 0x05 instead of 0xdb) — and the
+    read-modify-write then wrote those bits back (CHRG_IN 0x2d: the 4.5 V input floor switched off).
+    FORCE: the rk808 driver owns address 0x20."""
+    data = _SmbusData()
+    data.byte = val
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, I2C_SLAVE_FORCE, PMIC_ADDR)
+        fcntl.ioctl(fd, I2C_SMBUS, _SmbusIoctl(rw, reg, SMBUS_BYTE_DATA, ctypes.pointer(data)))
+    finally:
+        os.close(fd)
+    return data.byte
+
+def pmic_read(dev, reg):
+    return _smbus(dev, SMBUS_READ, reg)
+
+def pmic_write(dev, reg, val):
+    _smbus(dev, SMBUS_WRITE, reg, val)
 
 def pmic_bus():
     """/dev/i2c-N of the RK817 (address 0x20 on i2c@ff180000) — found by its device node, never assumed."""
@@ -54,21 +87,6 @@ def pmic_bus():
         if "ff180000" in os.path.realpath(d):
             return "/dev/i2c-" + os.path.basename(d).split("-")[0]
     return None
-
-def pmic_rmw(dev, reg, mask, bits):
-    """Read-modify-write one PMIC register; returns (old, read back). FORCE: the rk808 driver owns the address."""
-    fd = os.open(dev, os.O_RDWR)
-    try:
-        fcntl.ioctl(fd, I2C_SLAVE_FORCE, PMIC_ADDR)
-        os.write(fd, bytes([reg]))
-        old = os.read(fd, 1)[0]
-        new = (old & ~mask) | bits
-        if new != old:
-            os.write(fd, bytes([reg, new]))
-        os.write(fd, bytes([reg]))
-        return old, os.read(fd, 1)[0]
-    finally:
-        os.close(fd)
 
 # ── evdev ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 EV_KEY, EV_SW = 0x01, 0x05
@@ -344,19 +362,25 @@ class Hwd:
 
     async def charger_loop(self):
         """Hold the charge port's input limit at 2 A whenever the charger is in (see PMIC_ADDR above). A 1 s look at
-        sysfs; the PMIC is read only while charging, written only when the limit is not already 2 A."""
+        sysfs; the PMIC is read only while charging (one atomic transfer), written only when it is not 0xDD."""
         dev = pmic_bus()
         if not dev:
             log("charger: PMIC i2c bus not found — the input limit stays at the driver's 1.5 A")
             return
-        mask, want = ILIM_EN | ILIM_MASK, ILIM_EN | ILIM_2A
+        try:   # ★ once, read only: the evidence for vibe-charge-fast's 0xA0 and for the driver's own CHRG_IN
+            log("charger: PMIC at start-up — CHRG_OUT 0x%02x (vibe-charge-fast expects 0xa0), CHRG_IN 0x%02x" %
+                (pmic_read(dev, 0xE4), pmic_read(dev, CHRG_IN)))
+        except OSError as e:
+            log("charger: PMIC not readable:", e)
         while True:
             if rd(CHG + "/online", "0") == "1":
                 try:
-                    old, got = pmic_rmw(dev, CHRG_IN, mask, want)
-                    if (old & mask) != want:
+                    old = pmic_read(dev, CHRG_IN)
+                    if old != CHRG_IN_2A:
+                        pmic_write(dev, CHRG_IN, CHRG_IN_2A)
+                        got = pmic_read(dev, CHRG_IN)
                         log("charger: input limit 2 A (CHRG_IN 0x%02x -> 0x%02x)%s" %
-                            (old, got, "" if (got & mask) == want else " ✗ DID NOT STICK"))
+                            (old, got, "" if got == CHRG_IN_2A else " ✗ DID NOT STICK"))
                 except OSError as e:
                     log("charger: input limit not set:", e)
                     await asyncio.sleep(30)
