@@ -215,6 +215,77 @@ static Runs porscheTx(uint32_t id, int pRaw, int tC) {
     return chipsToRuns(c + "0101", 52);
 }
 
+/** The "VDO" frames (Renault, Hyundai/Kia, Citroën/Jeep, Ford, Abarth, EGQ Q85, truck): FSK 52 µs chips, Manchester with
+ *  (0,1) = 1, after a run-in of `pairs` zero bits and a 1 — "…1010 1001" one way up. */
+static Runs vdoTx(const Bits& data, int pairs = 16) {
+    std::string c; for (int i = 0; i < pairs; ++i) c += "10";
+    c += "01";
+    mcChips(c, data, false);
+    return chipsToRuns(c + "10", 52);
+}
+// Toyota PMV-C210: run-in 0101 0101 0011 11, a 0 chip, then 72 differential-Manchester bits (1 = no change at the start).
+static Runs toyotaC210Tx(uint32_t id, int pRaw, int tRaw, int status = 0x80) {
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t((status & 0x80) | (pRaw >> 1)),
+                                uint8_t(((pRaw & 1) << 7) | (tRaw >> 1)), uint8_t(((tRaw & 1) << 7) | (status & 0x7F)), uint8_t(pRaw ^ 0xFF) };
+    by.push_back(crc8(by.data(), 8, 0x07, 0x80));
+    std::string c = "0101 0101 0011 11 0";
+    dmcChips(c, bytesToBits(by), false);
+    return chipsToRuns(c + "01", 52);
+}
+// Toyota PMV-107J: 100 µs chips, run-in …1111 1100, 66 differential-Manchester bits, CRC-8 0x13 on a 6-zero byte grid.
+static Runs pmv107jTx(uint32_t id28, int flags6, int pRaw, int tRaw) {
+    Bits d = bitsOf(id28, 28), f = bitsOf(uint64_t(flags6), 6), p = bitsOf(uint64_t(pRaw), 8), np = bitsOf(uint64_t(pRaw ^ 0xFF), 8), t = bitsOf(uint64_t(tRaw), 8);
+    for (const Bits* x : {&f, &p, &np, &t}) d.insert(d.end(), x->begin(), x->end());
+    Bits al(6, 0); al.insert(al.end(), d.begin(), d.end());
+    std::vector<uint8_t> by; for (size_t i = 0; i < 8; ++i) by.push_back(uint8_t(bitsAt(al, 8 * i, 8)));
+    const Bits c8 = bitsOf(crc8(by.data(), 8, 0x13, 0), 8); d.insert(d.end(), c8.begin(), c8.end());
+    std::string c = "0000 1111 1100";
+    dmcChips(c, d, false);
+    return chipsToRuns(c + "01", 100);
+}
+static Runs renaultTx(uint32_t id24, int pRaw10, int tC) {
+    std::vector<uint8_t> by = { uint8_t(0xD0 | (pRaw10 >> 8)), uint8_t(pRaw10), uint8_t(tC + 30), uint8_t(id24), uint8_t(id24 >> 8), uint8_t(id24 >> 16), 0xFF, 0xFF };
+    by.push_back(crc8(by.data(), 8, 0x07, 0)); return vdoTx(bytesToBits(by));
+}
+static Runs renault0435RTx(uint32_t id24, int pRaw, int tC) {
+    std::vector<uint8_t> by = { uint8_t(id24 >> 16), uint8_t(id24 >> 8), uint8_t(id24), 0xC0, uint8_t(pRaw), uint8_t(tC + 50), 0x10, 0, 0x85 };
+    unsigned x = 0; for (int i = 0; i < 9; ++i) if (i != 7) x ^= by[size_t(i)]; by[7] = uint8_t(x); return vdoTx(bytesToBits(by));
+}
+static Runs hyundaiVdoTx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { 0x21, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x03, uint8_t(pRaw), uint8_t(tC + 50), 0x2C };
+    by.push_back(crc8(by.data(), 9, 0x07, 0xAA)); return vdoTx(bytesToBits(by));
+}
+static Runs egqQ85Tx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x05, uint8_t(pRaw), uint8_t(tC + 55), 0x13 };
+    unsigned x = 0; for (uint8_t v : by) x ^= v; by.push_back(uint8_t(x)); by.push_back(0x40);
+    const uint16_t c = crc16(by.data(), 10, 0x1021, 0xFFFF); by.push_back(uint8_t(c)); by.push_back(uint8_t(c >> 8));
+    return vdoTx(bytesToBits(by));
+}
+static Runs abarthTx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x05, uint8_t(pRaw), uint8_t(tC + 50), 0x13 };
+    unsigned x = 0; for (uint8_t v : by) x ^= v; by.push_back(uint8_t(x)); return vdoTx(bytesToBits(by));
+}
+static Runs citroenTx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { 0x20, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x01, uint8_t(pRaw), uint8_t(tC + 50), 0x77 };
+    unsigned x = 0; for (size_t i = 1; i < by.size(); ++i) x ^= by[i]; by.push_back(uint8_t(x)); return vdoTx(bytesToBits(by));
+}
+static Runs fordTx(uint32_t id, int psiX4, int tC) {
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(psiX4), uint8_t(tC + 56), 0x06 };
+    unsigned sm = 0; for (uint8_t v : by) sm += v; by.push_back(uint8_t(sm)); return vdoTx(bytesToBits(by));
+}
+static Runs truckTx(uint32_t id, int kpa, int tC) {
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x02, uint8_t(0x30 | (kpa >> 8)), uint8_t(kpa), uint8_t(int8_t(tC)) };
+    unsigned x = 0; for (uint8_t v : by) x ^= v; by.push_back(uint8_t(x));
+    Bits b = bitsOf(0xA, 4); Bits d = bytesToBits(by); b.insert(b.end(), d.begin(), d.end()); return vdoTx(b, 40);
+}
+// Elantra 2012 / Civic (TRW): sync 0111 0001 0101 0101, then Manchester (0,1) = 1, CRC-8 0x07 init 0 over all eight = 0.
+static Runs elantraTx(uint32_t id, int kpa, int tC) {
+    std::vector<uint8_t> by = { uint8_t(kpa - 60), uint8_t(tC + 50), uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0xC0 };
+    by.push_back(crc8(by.data(), 7, 0x07, 0));
+    std::string c = "0000 0111 0001 0101 0101"; mcChips(c, bytesToBits(by), false);
+    return chipsToRuns(c + "10", 52);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -361,6 +432,50 @@ int main(int argc, char** argv) {
         const Reading* r = findModel(got, c.model);
         CHECK(r != nullptr, "%s: not decoded through the 480 kS/s channel (%zu readings)", c.name, got.size());
         if (r && c.temp == c.temp) CHECK(approx(r->tempC, c.temp, 0.051), "%s (480 k): %.2f °C, want %.2f", c.name, r->tempC, c.temp);
+    }
+    /* ★ V12 2026-11-11: EVERY TPMS MAKE end to end — an encoder per family from its frame facts, modulated into IQ at
+     *  2.4 MS/s +120 kHz, through the real front end and every decoder: the right make, the values, the strength of its
+     *  check (confirm only for the weak ones), secret, and NO other make claiming it. */
+    printf(" TPMS makes end to end\n");
+    {
+        struct T { const char* name; Runs runs; bool fsk; double chipUs; const char* model; double kpa, tC; bool weak; };
+        const std::vector<T> ts = {
+            {"Schrader GG4", schraderGG4Tx(0x0ABCDEF, 92, 21), false, 120, "Schrader", 230, 21, false},
+            {"Porsche 987", porscheTx(0x1234ABCD, 0x84, 19), true, 52, "Porsche 987", 0x84 * 2.5 - 100, 19, false},
+            {"Toyota PMV-C210", toyotaC210Tx(0x0D5AEE3, 165, 69), true, 52, "PMV-C210", (165 * 0.25 - 7) * 6.894757, 29, false},
+            {"Toyota PMV-107J", pmv107jTx(0x79E15A0, 0x18, 130, 64), true, 100, "PMV-107J", (130 - 40) * 2.48, 24, false},
+            {"Renault", renaultTx(0x87F293, 270, 25), true, 52, "Renault", 270 * 0.75, 25, false},
+            {"Hyundai VDO", hyundaiVdoTx(0x9A1B2C3D, 170, 22), true, 52, "Hyundai / Kia", 170 / 5.0 * 6.894757, 22, false},
+            {"EGQ Q85", egqQ85Tx(0x0C0FFEE1, 80, 27), true, 52, "Q85", 240, 27, false},
+            {"Elantra 2012", elantraTx(0x5A5A1234, 230, 26), true, 52, "Elantra", 230, 26, false},
+            {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
+            {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
+            {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},
+            {"Ford", fordTx(0x45BB320F, 134, 15), true, 52, "Ford", 134 * 0.25 * 6.894757, 15, true},
+            {"Truck", truckTx(0x0581B281, 790, 30), true, 52, "Truck", 790, 30, true},
+        };
+        for (const T& t : ts) {
+            Sig s{repeatRuns(t.runs, 2, 4000)}; s.fsk = t.fsk; s.devHz = 38e3; s.offHz = 120e3;
+            std::vector<Burst> bs;
+            const auto got = runFront(synth({s}, 2.4e6, 0.6, 0.02, 21), 2.4e6, &bs);
+            const Reading* r = findModel(got, t.model);
+            CHECK(r != nullptr, "TPMS %s: not decoded (%zu bursts, %zu readings%s%s)", t.name, bs.size(), got.size(),
+                  got.empty() ? "" : ": ", got.empty() ? "" : got[0].model.c_str());
+            if (!r) continue;
+            CHECK(r->kind == "tpms" && r->secret && r->secretId != 0 && r->pubId.empty(), "TPMS %s: secret", t.name);
+            CHECK(r->confirm == t.weak, "TPMS %s: confirm %d, want %d (the check's strength)", t.name, int(r->confirm), int(t.weak));
+            if (t.kpa == t.kpa) CHECK(approx(r->kpa, t.kpa, 0.01), "TPMS %s: %.2f kPa, want %.2f", t.name, r->kpa, t.kpa);
+            else CHECK(r->kpa != r->kpa, "TPMS %s: a pressure where the scale is not known", t.name);
+            CHECK(approx(r->tempC, t.tC, 1e-9), "TPMS %s: %.1f °C, want %.1f", t.name, r->tempC, t.tC);
+            for (const auto& o : got) CHECK(o.kind == "tpms" && o.model == r->model, "TPMS %s: also read as %s %s", t.name, o.kind.c_str(), o.model.c_str());
+            printf("   %-18s → %s%s\n", t.name, readable(*r, 1).c_str(), r->confirm ? "  (confirm twice)" : "");
+        }
+        // and no TPMS from any other family's bursts
+        for (auto& c : cases) {
+            if (std::string(c.name).rfind("TPMS", 0) == 0) continue;
+            const auto got = runFront(synth({c.s}, 2.4e6, 0.95, 0.02, 1), 2.4e6);
+            for (const auto& o : got) CHECK(o.kind != "tpms", "%s read as a tyre: %s", c.name, o.model.c_str());
+        }
     }
     // the TPMS values exactly — and a CRC-checked make is trusted from ONE frame (no confirm flag)
     {

@@ -127,11 +127,14 @@ public:
         auto it = cache_.find(key);
         if (it != cache_.end()) return it->second;
         std::vector<Bits>& out = cache_[key];
-        const double w = fsk ? wFsk_ : wOok_;
-        if (w < 0.75 * nominal || w > 1.33 * nominal) return out;
-        const Runs& r = fsk ? b_.fsk : b_.ook;
-        out = chipRows(r, w, 24, fsk ? 0 : 6);
-        if (fsk) { const size_t n = out.size(); for (size_t i = 0; i < n; ++i) out.push_back(invert(out[i])); }
+        auto fits = [&](double w) { return w >= 0.75 * nominal && w <= 1.33 * nominal; };
+        auto both = [&](std::vector<Bits> rs) { for (auto& r : rs) { out.push_back(invert(r)); out.push_back(std::move(r)); } };
+        if (!fsk) { if (fits(wOok_)) out = chipRows(b_.ook, wOok_, 24, 6); return out; }
+        if (fits(wFsk_)) both(chipRows(b_.fsk, wFsk_, 24, 0));
+        /* ★★ AN FSK SENSOR WITH A WIDE DEVIATION ARRIVES AS TWO "OOK" BURSTS (the corpus' older Renault, Ford and Toyota
+         *  recordings: tones ±60-75 kHz apart). The detector opens a channel on each tone, and each channel's ENVELOPE is
+         *  the frame's chips — the tone on or off. So an FSK family is offered the envelope's chips too, both ways up. */
+        if (fits(wOok_)) both(chipRows(b_.ook, wOok_, 24, 6));
         return out;
     }
 private:
@@ -221,11 +224,272 @@ inline bool porsche987(Chips& ch, std::vector<Reading>& out) {
     return false;
 }
 
+constexpr double kPaPerPsi = 6.894757;
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  TOYOTA — Pacific Industrial PMV-C210 (Auris / Corolla and others; 433.92 MHz)
+//  Facts: rtl_433 tpms_toyota.c notes and its issue #706. FSK, ~52 µs chips, a run-in "0101 0101 0011 11", then 72
+//  differential-Manchester bits: ID (32), a status bit, pressure (8: raw / 4 − 7 PSI), temperature (8: °C + 40), 7 more
+//  status bits, the pressure again INVERTED (8), CRC-8 poly 0x07 init 0x80 over the eight bytes before it.
+//  STRONG: a CRC-8 and a redundant pressure byte (16 bits of check) behind a 12-chip sync.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool toyotaC210(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "1010 1001 1110";
+    for (const Bits& c : ch.rows(true, 52)) {
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            Bits d;
+            if (!dmcRead(c, p + patLen(kSync), 72, false, d)) continue;
+            const auto by = pack(d);
+            if (crc8(by.data(), 8, 0x07, 0x80) != by[8]) continue;
+            const int pr = ((by[4] & 0x7F) << 1) | (by[5] >> 7), tr = ((by[5] & 0x7F) << 1) | (by[6] >> 7);
+            if (pr != (by[7] ^ 0xFF)) continue;
+            const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+            Reading r = tyre("Toyota", "Toyota PMV-C210", 3, id, false);
+            r.kpa = std::max(0.0, (pr * 0.25 - 7) * kPaPerPsi);
+            r.tempC = tr - 40;
+            if (!plausible(r.kpa, r.tempC)) continue;
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  TOYOTA — Pacific Industrial PMV-107J (US Toyota / Lexus, 315 MHz)
+//  Facts: the FCC filing (fccid.io/PAXPMV107J: 314.98 MHz, F2D FSK, ±40 kHz) and rtl_433 tpms_pmv107j.c notes (after
+//  Werner Johansson's work; github.com/xnk/pacific-tpms). ~100 µs chips, a run-in ending "1111 10", then 66
+//  differential-Manchester bits: ID (28), flags (6: battery low, a 2-bit repeat counter, unknown, rapid change, failed),
+//  pressure (8: (raw − 40) × 2.48 kPa), the pressure INVERTED, temperature (8: °C + 40), CRC-8 poly 0x13 init 0 over the
+//  first 64 bits taken as 8 bytes after six leading zero bits.
+//  STRONG: a CRC-8 and the inverted pressure.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool toyota107J(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "111110";
+    for (const Bits& c : ch.rows(true, 100)) {
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            // ★ the run-in's last space measured 1½ chips on the corpus' recordings (a desync mark): the first data pair
+            //   starts one or two chips after "111110" — both are tried, the CRC and the inverted pressure decide
+            std::vector<uint8_t> by;
+            for (int slack = 1; slack <= 2 && by.empty(); ++slack) {
+                Bits d;
+                if (!dmcRead(c, p + patLen(kSync) + size_t(slack), 66, false, d)) continue;
+                Bits al(6, 0); al.insert(al.end(), d.begin(), d.end());   // 72 bits: the CRC's byte grid
+                auto t = pack(al);
+                if (crc8(t.data(), 8, 0x13, 0x00) == t[8] && t[5] == (t[6] ^ 0xFF)) by = t;
+            }
+            if (by.empty()) continue;
+            const uint32_t id = uint32_t(by[0]) << 26 | uint32_t(by[1]) << 18 | uint32_t(by[2]) << 10 | uint32_t(by[3]) << 2 | (by[4] >> 6);
+            Reading r = tyre("Toyota", "Toyota PMV-107J", 4, id, false);
+            r.kpa = std::max(0.0, (int(by[5]) - 40) * 2.48);
+            r.tempC = int(by[7]) - 40;
+            r.battOk = (by[4] & 0x20) ? 0 : 1;
+            if (!plausible(r.kpa, r.tempC)) continue;
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Every frame in a burst's chip rows (FSK or OOK at `nominal` µs) that follows `sync` and reads `nBits` clean
+ *  Manchester bits ((1,0) = 1 when hiLoIsOne): `f(bytes)` decides; true stops the search. */
+template <class F> bool eachMc(Chips& ch, bool fsk, double nominal, const char* sync, int nBits, bool hiLoIsOne, F&& f) {
+    const size_t n = patLen(sync);
+    for (const Bits& c : ch.rows(fsk, nominal))
+        for (size_t p = findChips(c, sync); p != size_t(-1); p = findChips(c, sync, p + 1)) {
+            Bits d;
+            if (!mcRead(c, p + n, nBits, hiLoIsOne, d)) continue;
+            if (f(pack(d), d)) return true;
+        }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  THE "VDO" FAMILY OF FRAMES — Continental/VDO and the sensors that copied its air interface: FSK, ~52 µs chips (9.6
+//  kbit/s Manchester), a run-in of alternating chips ending in a broken pair — "…1010 1001" seen one way up — and then
+//  Manchester with (0,1) = 1. The makes differ in the payload and the check. Facts for each: rtl_433's tpms_*.c notes
+//  as named; the VDO application list (vdo.com, 2017-05) for which cars carry which part.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+constexpr const char* kVdoSync = "1010 1010 1010 1001";
+
+/** RENAULT (Clio, Captur, Zoe; maybe Dacia) — tpms_renault.c notes: 9 bytes; flags (6 bits), pressure (10 bits ×
+ *  0.75 kPa), temperature (°C + 30), ID (24 bits, LITTLE-endian), 2 unknown bytes, CRC-8 poly 0x07 init 0.
+ *  STRONG: CRC-8 behind the 16-chip sync. */
+inline bool renault(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, kVdoSync, 72, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc8(by.data(), 8, 0x07, 0x00) != by[8] || allSame(by.data(), 9)) return false;
+        const uint32_t id = uint32_t(by[5]) << 16 | uint32_t(by[4]) << 8 | by[3];
+        Reading r = tyre("Renault", "Renault", 5, id, false);
+        r.kpa = (((by[0] & 0x03) << 8) | by[1]) * 0.75;
+        r.tempC = int(by[2]) - 30;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+/** RENAULT 0435R (VDO S180052064Z: Mégane III, Scénic III, Laguna III, Fluence, Zoe) — tpms_renault_0435r.c notes:
+ *  9 bytes; ID (3), flags (seen only 0xC0), pressure (raw ÷ 0.75 kPa), temperature (°C + 50), centripetal acceleration,
+ *  an XOR checksum of all nine = 0, and a tick byte (0x80 + count ≤ 30, or 0). WEAK: an 8-bit XOR — confirm, and the
+ *  flags' high nibble and the tick rule as plausibility. */
+inline bool renault0435R(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, kVdoSync, 72, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (xor8(by.data(), 9) != 0 || allSame(by.data(), 9)) return false;
+        if ((by[3] & 0xF0) != 0xC0) return false;
+        if (by[8] && (!(by[8] & 0x80) || (by[8] & 0x7F) > 30)) return false;
+        const uint32_t id = uint32_t(by[0]) << 16 | uint32_t(by[1]) << 8 | by[2];
+        if (id == 0 || id == 0xFFFFFF) return false;
+        Reading r = tyre("Renault", "Renault 0435R", 6, id, true);
+        r.kpa = by[4] / 0.75;
+        r.tempC = int(by[5]) - 50;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+/** HYUNDAI / KIA — VDO TG1C (i30 and others; FCC ID KR5TIS-01) — tpms_hyundai_vdo.c notes: 10 bytes after a 32-chip
+ *  run-in; state, ID (4), flags + repeat counter, pressure (raw ÷ 5 PSI), temperature (°C + 50), battery?, CRC-8 poly
+ *  0x07 init 0xAA over the nine before it. STRONG. */
+inline bool hyundaiVdo(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, "1010 1010 1010 1010 1010 1010 1010 1001", 80, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc8(by.data(), 9, 0x07, 0xAA) != by[9] || allSame(by.data(), 10)) return false;
+        const uint32_t id = uint32_t(by[1]) << 24 | uint32_t(by[2]) << 16 | uint32_t(by[3]) << 8 | by[4];
+        Reading r = tyre("Hyundai / Kia", "Hyundai / Kia (VDO)", 7, id, false);
+        r.kpa = by[6] / 5.0 * kPaPerPsi;
+        r.tempC = int(by[7]) - 50;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+/** SHENZHEN EGQ "Q85" (aftermarket kit) — tpms_abarth124.c notes (issue #2556): 12 bytes; ID (4), flags, pressure
+ *  (raw × 3 kPa), temperature (°C + 55), status, XOR of the first nine = 0, a fixed 0x40, then CRC-16 poly 0x1021 init
+ *  0xFFFF over the first ten, LITTLE-endian. STRONG (CRC-16). */
+inline bool egqQ85(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, "1010 1010 1010 1010 1010 1001", 96, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc16(by.data(), 10, 0x1021, 0xFFFF) != uint16_t(by[11] << 8 | by[10])) return false;
+        if (xor8(by.data(), 9) != 0 || allSame(by.data(), 10)) return false;
+        const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+        Reading r = tyre("Shenzhen EGQ", "EGQ Q85", 8, id, false);
+        r.kpa = by[5] * 3.0;
+        r.tempC = int(by[6]) - 55;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+/** ABARTH 124 SPIDER / FIAT 124 / MAZDA MX-5 ND — VDO TG1C — tpms_abarth124.c notes: 9 bytes; ID (4), flags, pressure
+ *  (raw × 1.38 kPa), temperature (°C + 50), status, XOR of all nine = 0. WEAK: confirm. */
+inline bool abarth124(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, "1010 1010 1010 1010 1010 1001", 72, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (xor8(by.data(), 9) != 0 || allSame(by.data(), 9)) return false;
+        const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("Abarth / Fiat / Mazda", "Abarth 124 / MX-5 (VDO TG1C)", 9, id, true);
+        r.kpa = by[5] * 1.38;
+        r.tempC = int(by[6]) - 50;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+/** CITROËN / PEUGEOT (PSA; VDO) — tpms_citroen.c notes: 10 bytes; state (not checked), ID (4), flags + repeat counter,
+ *  pressure (raw × 1.364 kPa), temperature (°C + 50), battery?, XOR of bytes 1-9 = 0. JEEP (2021 Grand Cherokee,
+ *  Continental) sends the same frame — tpms_jeep.c notes say NOTHING in the bits tells them apart, and the Jeep's
+ *  pressure byte counts double (× 2.728 kPa). So this reads "PSA / Jeep (VDO)" and shows no pressure (it would be
+ *  wrong for one of them half the time) — the temperature is common to both. WEAK: confirm. */
+inline bool citroenJeep(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, kVdoSync, 80, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (xor8(by.data() + 1, 9) != 0 || allSame(by.data() + 1, 9)) return false;
+        if (by[6] == 0 || by[7] == 0) return false;
+        const uint32_t id = uint32_t(by[1]) << 24 | uint32_t(by[2]) << 16 | uint32_t(by[3]) << 8 | by[4];
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("Citroën / Peugeot / Jeep", "PSA / Jeep (VDO)", 10, id, true);
+        r.tempC = int(by[7]) - 50;
+        r.note = "pressure scale differs by make";
+        if (!plausible(NAN, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+/** FORD (Fiesta, Focus, Kuga, Transit …; VDO S180084730Z) — tpms_ford.c notes: 8 bytes; ID (4), pressure (raw / 4 PSI,
+ *  a ninth bit in byte 6 bit 5), temperature (°C + 56 when bit 7 is clear), flags (moving / at rest / learn), the sum of
+ *  the first seven = byte 8. WEAK: confirm, and the flags must be one of the three known states. */
+inline bool ford(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, kVdoSync, 64, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (sum8(by.data(), 7) != by[7] || allSame(by.data(), 8)) return false;
+        const int st = by[6] & 0x4C;
+        if ((st != 0x08 && st != 0x04 && st != 0x44) || (by[6] & 0x90)) return false;
+        const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("Ford", "Ford (VDO)", 11, id, true);
+        /* ★ A LEARN-TOOL FRAME'S PRESSURE IS NOT TRUSTED: the notes' fit is from moving / at-rest frames, and the one learn
+         *  frame in the corpus — a multi-make aftermarket sensor (Redi-Sensor, printed serial 0CD6136D) answering a
+         *  learn tool in Ford format as well as its own — said 41 PSI where its own frame said 26-33. Shown as heard. */
+        if (st == 0x08) r.extra = "learn";
+        else r.kpa = ((((by[6] & 0x20) << 3) | by[4]) * 0.25) * kPaPerPsi;
+        if (!(by[5] & 0x80)) r.tempC = (by[5] & 0x7F) - 56;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+/** TRUCK SOLAR TPMS (unbranded, 6 wheels) — tpms_truck.c notes (issue #1893): a 232-chip run-in, 4 bits, then 9 bytes:
+ *  ID (4), wheel, flags (4 bits: pressure alert, battery) + pressure (12 bits, kPa), temperature (signed °C), XOR of all
+ *  nine = 0. WEAK: confirm. */
+inline bool truck(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, "1010 1010 1010 1010 1010 1001", 76, false, [&](const std::vector<uint8_t>&, const Bits& d) {
+        const auto by = pack(d, 4);
+        if (by[0] == 0 && by[1] == 0 && by[2] == 0 && by[3] == 0) return false;
+        if (xor8(by.data(), 9) != 0) return false;
+        const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+        Reading r = tyre("Truck TPMS", "Truck solar TPMS", 12, id, true);
+        r.kpa = ((by[5] & 0x0F) << 8) | by[6];
+        r.tempC = int8_t(by[7]);
+        const int fl = by[5] >> 4;
+        r.battOk = (fl & 3) == 3 ? 1 : (fl & 3) == 0 ? 0 : -1;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+/** HYUNDAI ELANTRA 2012 / HONDA CIVIC — TRW GQ4-44T — tpms_elantra2012.c notes: FSK ~52 µs chips, sync "1110 0010 1010
+ *  101" + one, 64 Manchester bits ((0,1) = 1): pressure (raw + 60 kPa), temperature (°C + 50), ID (4), flags (battery
+ *  low = bit 1), CRC-8 poly 0x07 init 0 over all eight = 0. STRONG. */
+inline bool elantra2012(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, "0111 0001 0101 0101", 64, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc8(by.data(), 8, 0x07, 0x00) != 0 || allSame(by.data(), 8)) return false;
+        const uint32_t id = uint32_t(by[2]) << 24 | uint32_t(by[3]) << 16 | uint32_t(by[4]) << 8 | by[5];
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("Hyundai / Honda (TRW)", "Elantra 2012 / Civic (TRW)", 13, id, false);
+        r.kpa = by[0] + 60;
+        r.tempC = int(by[1]) - 50;
+        r.battOk = (by[6] & 0x02) ? 0 : 1;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+
 /** Every TPMS family, in turn. */
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
     Chips ch(b);
     if (schraderGG4(ch, out)) return true;
     if (porsche987(ch, out)) return true;
+    if (toyotaC210(ch, out)) return true;
+    if (toyota107J(ch, out)) return true;
+    if (renault(ch, out)) return true;
+    if (hyundaiVdo(ch, out)) return true;
+    if (egqQ85(ch, out)) return true;
+    if (elantra2012(ch, out)) return true;
+    // the weak checks last: a strong family's frame must never be taken by a weak one's 8-bit sum
+    // ★ the 0435R before the Abarth: both are nine bytes with an XOR of zero after a long run-in, and nothing else in the
+    //   Abarth frame is fixed — the 0435R's flag nibble and tick rule make it the stricter test (test-ism caught it)
+    if (renault0435R(ch, out)) return true;
+    if (abarth124(ch, out)) return true;
+    if (citroenJeep(ch, out)) return true;
+    if (ford(ch, out)) return true;
+    if (truck(ch, out)) return true;
     return false;
 }
 
