@@ -27,6 +27,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vibe {
@@ -74,7 +75,23 @@ public:
             c.loHz = -half; c.hiHz = half;
             c.maxSignals = std::max(32, std::min(160, (int)(2.0 * half / 60.0)));   // ★ a PSK31 signal every 60 Hz at most
             rate_ = rate;
+            cfg_ = c;
             build(c);
+        } else if (centre_ != 0 && std::fabs(centreRfHz - centre_) > 0.5) {
+        // ★★ THE SEGMENT MOVED (Stuart, 2026-11-11, R36S: "when I moved from 80-40m band some of the text from the 80m
+        //    band CW contacts were then assigned to 40m frequencies"). The engine keeps signals by their OFFSET from the
+        //    centre, and the RF was always centre_ + offset with TODAY's centre — so after a retune every signal heard
+        //    before it was re-labelled at the new place. Now: a jump of half the segment or more (a band change, a
+        //    different stretch of band) starts the engine afresh — empty list, sent at once; a smaller move (tap a row to
+        //    tune to it) keeps the list, and each signal already known keeps the RF it was heard at (pinned_); only
+        //    signals found after the move are placed against the new centre.
+            if (std::fabs(centreRfHz - centre_) >= std::min(width_, rate * 0.94) / 2.0) { build(cfg_); lastListAt_ = 0; }
+            else {
+                const auto now = sk_->signals(true);
+                std::unordered_map<int, double> keep;   // ★ only signals still listed: the map cannot grow without end
+                for (auto& sv : now) { const auto it = pinned_.find(sv.id); keep.emplace(sv.id, it != pinned_.end() ? it->second : centre_ + sv.offsetHz); }
+                pinned_.swap(keep);
+            }
         }
         centre_ = centreRfHz;
         sk_->feedIq(x, n);
@@ -104,10 +121,16 @@ private:
         sk_->onText = [this](int id, double off, const std::string& t) { onText(id, off, t); };
         sk_->onSpot = [this](const psk::Spot& s) { onSpot(s); };
         primary_ = 0; lastList_.clear();
+        pinned_.clear();
     }
     double rf(double off) const {
         if (skim_) return centre_ + off;
         return rfOf_ ? rfOf_(off) : 0.0;
+    }
+    /** A listed signal's RF: the place it was heard if the segment has moved since (pinned_), else rf(). */
+    double rfOf(int id, double off) const {
+        const auto it = pinned_.find(id);
+        return it != pinned_.end() ? it->second : rf(off);
     }
     static std::string clean(const std::string& in, size_t cap) {
         std::string o;
@@ -194,7 +217,7 @@ private:
             ++n;
             std::snprintf(b, sizeof b, "{\"id\":%d,\"hz\":%.0f,\"audio\":%.0f,\"baud\":%d,\"snr\":%.0f,\"imd\":%.0f,\"q\":\"%s\",\"active\":%s,"
                           "\"last\":%lld,\"first\":%lld,",
-                          s.id, rf(s.offsetHz), skim_ ? 0.0 : s.offsetHz, s.baud, s.snrDb, s.imdDb, psk::qualityWord(s.quality),
+                          s.id, rfOf(s.id, s.offsetHz), skim_ ? 0.0 : s.offsetHz, s.baud, s.snrDb, s.imdDb, psk::qualityWord(s.quality),
                           s.active ? "true" : "false", (long long)s.lastMs, (long long)s.firstMs);
             j += b;
             j += "\"call\":\"" + jsonText(s.call, 16) + "\",\"country\":\""
@@ -215,6 +238,8 @@ private:
     std::vector<float> buf_;
     float acc_ = 0; int dec_ = 0;
     double rate_ = 0, centre_ = 0;
+    psk::Skimmer::Config cfg_;
+    std::unordered_map<int, double> pinned_;   // id → RF heard at, for signals found before a small move
     int primary_ = 0, challenger_ = 0; int64_t challengeAt_ = 0;
     std::string pend_, lastList_;
     int64_t lastTick_ = 0, lastListAt_ = 0;

@@ -133,6 +133,35 @@ function checkSpots(spots, label) {
     const g = gRow();
     ok(g && /G4ABC G4ABC/.test(g.text), `a row carries its text: "${g ? g.text.slice(-40) : `no G4ABC row in ${JSON.stringify(last && last.data.signals.map((x) => [x.hz, x.call, x.text.slice(-30)]))}`}"`);
     ok(lists.every((l) => l.data.signals.length <= 60), 'never more than 60 rows');
+    // ★★ THE SEGMENT MOVES (Stuart, 2026-11-11: after 80 m → 40 m "some of the text from the 80m band CW contacts were
+    //    then assigned to 40m frequencies"). A small move (a row tapped) keeps each known signal at the RF it was heard
+    //    at; a jump of half the segment or more starts the skimmer afresh — the first list at the new centre is empty.
+    {
+      const before = jsons(L.dx, 'cw_signals').at(-1).data.signals;
+      const n0 = jsons(L.dx, 'cw_signals').length;
+      L.spec.send({ type: 'tune', frequency: CENTRE + 3000, mode: 'cwu' });
+      // ★ the segment's centre snaps to the tap's FFT bins (vibe_wide_tap.h centreBin), so "near", not equal
+      const c0 = jsons(L.dx, 'cw_signals').at(-1).data.centre;
+      const atSmall = () => jsons(L.dx, 'cw_signals').slice(n0).find((l) => Math.abs(l.data.centre - c0) > 0.5 && Math.abs(l.data.centre - (CENTRE + 3000)) < 500);
+      ok(await until(() => !!atSmall(), 6000), `small move (+3 kHz): a list at the new centre (${atSmall() ? atSmall().data.centre : 'none'})`);
+      const after = atSmall() ? atSmall().data.signals : [];
+      const moved = before.filter((b) => { const a = after.find((x) => x.id === b.id); return a && Math.abs(a.hz - b.hz) > 1; });
+      const kept = before.filter((b) => after.some((x) => x.id === b.id)).length;
+      ok(kept > 0 && moved.length === 0, `small move: the ${kept} signals already known keep the RF they were heard at`
+        + (moved.length ? ` — MOVED: ${moved.map((b) => `${b.id} ${b.hz}→${after.find((x) => x.id === b.id).hz}`).join(', ')}` : ''));
+      const n1 = jsons(L.dx, 'cw_signals').length;
+      const FAR = CENTRE + 200000;   // ★ inside the capture, far outside the 48 kHz segment: "a different band"
+      L.spec.send({ type: 'tune', frequency: FAR, mode: 'cwu' });
+      const atFar = () => jsons(L.dx, 'cw_signals').slice(n1).filter((l) => Math.abs(l.data.centre - FAR) < 500);
+      ok(await until(() => atFar().length > 0, 6000), 'big move (+200 kHz): a list at the new centre');
+      const first = atFar()[0];
+      ok(first && first.data.signals.length === 0, `big move: the first list there is EMPTY (${first ? first.data.signals.map((x) => `${(x.hz / 1e3).toFixed(1)} "${x.text.slice(-20)}"`).join(' | ') : '—'})`);
+      await sleep(3000);
+      const stale = atFar().flatMap((l) => l.data.signals).filter((x) => /G4ABC|CQ CQ DE/.test(x.text));
+      ok(stale.length === 0, `big move: no old text re-labelled at the new place in 3 s (${stale.length})`);
+      L.spec.send({ type: 'tune', frequency: CENTRE, mode: 'cwu' });
+      await sleep(800);
+    }
 
     // ★ ONE SIGNAL: tuned to G4ABC in CW (a carrier on the dial is the 600 Hz tone)
     L.dx.bin.length = 0; L.dx.txt.length = 0;

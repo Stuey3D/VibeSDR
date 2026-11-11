@@ -279,7 +279,7 @@ private:
 
 /** One CW / PSK signal (cw_signals / psk_signals — decoders.ts), and one JTTY signal. */
 struct DecSig { double id = 0, hz = 0, audio = 0, wpm = 0, wpmLo = 0, wpmHi = 0, snr = 0, baud = 0, imd = 0, last = 0, frames = 0;
-                std::string q, call, country, text; bool active = false; };
+                std::string q, call, country, text, raw; bool active = false; };   // raw = text as the server sent it
 /** A call heard identifying itself (cw_spot / psk_spot / jtty_spot). */
 struct DecCall { std::string call, country, how, mode; double hz = 0, snr = 0, wpm = 0, at = 0; };
 /** A digital spot (digital_spot). */
@@ -295,6 +295,13 @@ struct DecAprsPkt { double at = 0; std::string line; };
 struct DecUi {
     // what runs
     std::string active;              // the text decoder attached ("" none) — the web's activeDec
+    // ★★ CLR on a LIST the server keeps re-sending (Stuart, 2026-11-11: "the CLR button doesnt work"): the CW / PSK /
+    //    JTTY signals and the APRS stations come back whole every second, so emptying them here did nothing. CLR now
+    //    remembers each signal's text as it was (clrText, by id) and the moment (aprsClrAt); afterwards a signal shows
+    //    only what it decodes AFTER the press, and is hidden until it does; a station shows once heard again.
+    std::string clrFor;                          // the decoder these belong to ("" = no CLR in force)
+    std::unordered_map<long long, std::string> clrText;
+    double aprsClrAt = 0;
     std::string ext;                 // …and the extension it went out as (CW / PSK: by view)
     bool spotsOn = false;
     int spotsMin = 0; double spotsMinAt = 0;   // ★ the log's once-a-minute spot count (decTick)
@@ -366,6 +373,42 @@ inline DecUi& decUi() {
     static const bool init = [] { const char* c = std::getenv("VIBE_HHUI_DEC_CANNED"); u.canned = c && *c && *c != '0'; return true; }();
     (void)init;
     return u;
+}
+/** The part of `now` that came after `then` (a signal's text when CLR was pressed). The server's text is a rolling
+ *  window, so `then` is found by its last 16 characters, not its length; gone from the window = all of it is new. */
+inline std::string decTextSince(const std::string& then, const std::string& now) {
+    if (then.empty()) return now;
+    if (now.compare(0, then.size(), then) == 0) return now.substr(then.size());
+    const std::string tail = then.size() > 16 ? then.substr(then.size() - 16) : then;
+    const size_t at = now.find(tail);
+    return at == std::string::npos ? now : now.substr(at + tail.size());
+}
+/** CLR in force on this decoder's list: each signal shows only its text since the press; one with none is left out. */
+inline void decApplyClr(std::vector<DecSig>& v) {
+    DecUi& u = decUi();
+    for (auto& g : v) g.raw = g.text;
+    if (u.clrFor.empty() || u.clrFor != u.active) return;
+    std::vector<DecSig> keep;
+    for (auto& g : v) {
+        auto it = u.clrText.find((long long)g.id);
+        if (it != u.clrText.end()) {
+            std::string t = decTextSince(it->second, g.raw);
+            while (!t.empty() && t[0] == ' ') t.erase(0, 1);
+            if (t.empty()) continue;
+            g.text = t;
+        }
+        keep.push_back(std::move(g));
+    }
+    v.swap(keep);
+}
+/** CLR pressed on a list decoder (dec_box.h). */
+inline void decClearLists() {
+    DecUi& u = decUi();
+    u.clrFor = u.active;
+    u.clrText.clear();
+    for (auto& g : u.sigs) u.clrText[(long long)g.id] = g.raw;
+    u.sigs.clear();
+    u.aprsClrAt = nowSec();
 }
 
 /** The engine's listener session id, so the decoders hear THIS listener's audio on a per-VFO radio. Engine has no
@@ -548,6 +591,7 @@ inline void decStart(App& a, const RadioState& s, const std::string& id) {
         if (!u.active.empty()) decStop(a, u.active);   // ★ exclusive with the text decoders
         u.refusal.clear(); u.boxOpen = true;
         u.active = id; u.ext.clear(); u.view = id; u.sub = 0; u.status.clear(); u.live = false;
+        u.clrFor.clear(); u.clrText.clear(); u.aprsClrAt = 0;
         if (e->setOn) e->setOn(a, s, true);
         std::fprintf(stderr, "vibe-hhui: decoder %s on (external)\n", id.c_str());
         return;
@@ -569,6 +613,7 @@ inline void decStart(App& a, const RadioState& s, const std::string& id) {
     if (u.active == id) return;
     if (DecExternal* e = decExt(u.active)) { if (e->setOn) e->setOn(a, s, false); u.active.clear(); }   // ★ an external one gives way
     u.active = id; u.ext = decExtFor(id);
+    u.clrFor.clear(); u.clrText.clear(); u.aprsClrAt = 0;   // ★ a decoder started afresh: no CLR in force
     u.view = id; u.sub = (id == "cw" && u.cwSkim) || (id == "psk" && u.pskSkim) ? 1 : 0;
     u.log.clear(); u.sitor = Json(); u.sigs.clear(); u.calls.clear(); u.dsc.clear(); u.aprs.clear(); u.aprsLog.clear();
     u.status = decIdleStatus(id); u.tuneHint.clear(); u.live = false;
@@ -770,6 +815,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             any = any || g.active;
             u.sigs.push_back(std::move(g));
         }
+        decApplyClr(u.sigs);
         decSortSigs(u.sigs);   // ★★ the app's order (cwList sortCwSignals) — the server's order moves every update
         u.live = any; if (any) u.liveAt = now;
         return;
@@ -799,6 +845,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             any = any || g.active;
             u.sigs.push_back(std::move(g));
         }
+        decApplyClr(u.sigs);
         decSortSigs(u.sigs);   // ★ lowest first
         u.live = any; if (any) u.liveAt = now;
         return;
@@ -830,6 +877,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             st.line = decClip(line.empty() ? x["kind"].str() : line, 200); st.kind = decClip(x["kind"].str(), 14);
             st.seen = x["seen"].num(0); st.pos = x["lat"].kind == Json::Num;
             recent = recent || st.seen < 60;
+            if (u.clrFor == "aprs" && u.aprsClrAt > 0 && st.seen >= nowSec() - u.aprsClrAt) continue;   // ★ CLR: not heard since
             u.aprs.push_back(std::move(st));
         }
         u.live = recent;
