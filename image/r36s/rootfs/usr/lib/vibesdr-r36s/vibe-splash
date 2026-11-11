@@ -210,6 +210,8 @@ class Splash:
         for c in s:
             gw, alpha = glyphs[c]
             for gy in range(fh):
+                if y + gy >= H or y + gy < 0:   # ★ never past the panel (the frame buffer ends there) — see msg_y()
+                    continue
                 row = alpha[gy * gw:(gy + 1) * gw]
                 if not any(row):
                     continue
@@ -230,11 +232,20 @@ class Splash:
         self.fill(BAR_X, BAR_Y, on, BAR_H, BAR_ON)
         self.fill(BAR_X + on, BAR_Y, BAR_W - on, BAR_H, BAR_OFF)
 
+    def msg_y(self):
+        """★★ Where the message starts: MSG_Y, raised so its LAST line ends on the panel (2026-11-11 — three 25 px lines 4 px
+        apart from 400 reach 483 on a 480-row panel; a "g" in the third line's bottom rows wrote past the frame buffer,
+        the splash died with an IndexError and the screen went black on a card-check message). Never above the bar."""
+        fh = self.font[0]
+        n = max(1, min(3, len(self.lines)))
+        return max(BAR_Y + BAR_H + 6, min(MSG_Y, H - 2 - (n * fh + (n - 1) * 4)))
+
     def draw_msg(self):
         fh = self.font[0]
-        self.put_rows(MSG_Y, min(H, MSG_Y + 3 * (fh + 4)))
+        y0 = self.msg_y()
+        self.put_rows(min(MSG_Y, y0), min(H, y0 + 3 * (fh + 4)))
         for i, line in enumerate(self.lines[:3]):
-            self.text(line, MSG_Y + i * (fh + 4))
+            self.text(line, y0 + i * (fh + 4))
 
     def blit_all(self):
         self.put_rows(0, H)
