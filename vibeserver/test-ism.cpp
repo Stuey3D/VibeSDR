@@ -34,7 +34,9 @@ static std::vector<uint8_t> hexBytes(const char* h) {
 static Bits bytesToBits(const std::vector<uint8_t>& b) { Bits o; for (uint8_t x : b) for (int i = 7; i >= 0; --i) o.push_back((x >> i) & 1); return o; }
 
 // ── IQ synthesis ─────────────────────────────────────────────────────────────────────────────────────────────────────
-struct Sig { Runs runs; bool fsk = false; double offHz = 0, amp = 0.3, devHz = 35e3, startS = 0.05; };
+struct Sig { Runs runs; bool fsk = false; double offHz = 0, amp = 0.3, devHz = 35e3, startS = 0.05;
+             double fskOffOverUs = 0;   ///< FSK: a space longer than this is the carrier OFF (frames repeated inside one burst)
+};
 static std::vector<cf> synth(const std::vector<Sig>& sigs, double rate, double lenS, double noise, uint32_t seed) {
     std::vector<cf> x(size_t(rate * lenS));
     std::mt19937 rng(seed);
@@ -49,7 +51,8 @@ static std::vector<cf> synth(const std::vector<Sig>& sigs, double rate, double l
             const double f = s.fsk ? s.offHz + (d > 0 ? s.devHz : -s.devHz) : s.offHz;
             for (size_t i = a; i < e; ++i) {
                 ph += 2 * M_PI * f / rate;
-                if (s.fsk || d > 0) x[i] += cf(float(s.amp * std::cos(ph)), float(s.amp * std::sin(ph)));
+                const bool off = s.fsk && s.fskOffOverUs > 0 && d < 0 && -d > s.fskOffOverUs;
+                if ((s.fsk && !off) || d > 0) x[i] += cf(float(s.amp * std::cos(ph)), float(s.amp * std::sin(ph)));
             }
         }
     }
@@ -469,6 +472,15 @@ int main(int argc, char** argv) {
             CHECK(approx(r->tempC, t.tC, 1e-9), "TPMS %s: %.1f °C, want %.1f", t.name, r->tempC, t.tC);
             for (const auto& o : got) CHECK(o.kind == "tpms" && o.model == r->model, "TPMS %s: also read as %s %s", t.name, o.kind.c_str(), o.model.c_str());
             printf("   %-18s → %s%s\n", t.name, readable(*r, 1).c_str(), r->confirm ? "  (confirm twice)" : "");
+        }
+        // ★ three frames 11 ms apart in ONE burst, the carrier off between them (the EGQ Q85 on the corpus): the front end's
+        //   gated discriminator must still hand the decoders FSK
+        {
+            Sig s{repeatRuns(egqQ85Tx(0x0C0FFEE1, 80, 27), 3, 11000)}; s.fsk = true; s.devHz = 38e3; s.offHz = -90e3; s.fskOffOverUs = 5000;
+            std::vector<Burst> bs;
+            const auto got = runFront(synth({s}, 2.4e6, 0.5, 0.02, 22), 2.4e6, &bs);
+            CHECK(bs.size() == 1 && !bs[0].fsk.empty(), "Q85 x3 in one burst: %zu bursts, fsk %s", bs.size(), bs.empty() || bs[0].fsk.empty() ? "none" : "yes");
+            CHECK(findModel(got, "Q85") != nullptr, "Q85 x3 in one burst: not decoded");
         }
         // and no TPMS from any other family's bursts
         for (auto& c : cases) {
