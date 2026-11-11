@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RECORD_BUFFER_CHOICES, type RecordBufferSeconds } from '../services/recordBuffer';
 import {
-  Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions,
+  Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions, Animated,
 } from 'react-native';
 import { RotateSheet, SheetRise, useRisingPressRetention } from './RotateFade';
 import Slider from '@react-native-community/slider';
@@ -15,7 +15,7 @@ import { isKiwiProtocol } from '../services/sdrTypes';
 import { balanceGains } from '../services/dualMix';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
-  PopupKey, PopupFader, PopupPlate, PopupHandle, sheetCap, PopupScrim, PopupWindow, type PopupTokens,
+  PopupKey, PopupFader, PopupPlate, PopupHandle, useSheetDrag, sheetCap, PopupScrim, PopupWindow, type PopupTokens,
   scrollLane, scrollLaneOutset,
 } from './PopupShell';
 import { sMeterText, sqlClosedOf } from '../constants/meters';
@@ -761,6 +761,7 @@ export default function AudioSheet({
   const askDim = askLocked ? { opacity: 0.35 } : null;   // ★ ask before tuning — see the prop
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
+  const sheetDrag = useSheetDrag(onClose);   // ★ the grab handle drags the sheet closed (PopupShell)
   const C = audioC(pt);
   const [iqRate, setIqRate] = useState(48000);   // ★ raw IQ out: the rate to ask for
   const { theme: t } = useTheme();
@@ -839,7 +840,7 @@ export default function AudioSheet({
           wide window — sheets are capped at 640 pt — the top half went dark and the strips beside the sheet stayed
           clean. "I don't mind not having the transparency layer when the menu is up". The tap-to-close view stays. */}
       <PopupScrim style={st.backdrop} color="transparent" onPress={onClose} onTouchStart={noteTouchInteraction} />
-      <View style={[st.sheet, {
+      <Animated.View style={[{ transform: [{ translateY: sheetDrag.y }] }, st.sheet, {
         borderTopColor: pt.metal ? t.barBorder : pt.ink.border,
         // Landscape: keep clear of the Dynamic Island and don't sprawl the full
         // (very wide) width — cap it and centre it.
@@ -849,7 +850,7 @@ export default function AudioSheet({
       }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) }, metalFrame,
          metalFrame && { paddingTop: 0 }]}>
         <PopupPlate />
-        <PopupHandle />
+        <PopupHandle drag={sheetDrag} />
         <View style={st.titleRow}>
           <SectionIcon name="audio" size={15} color={pt.metal ? pt.label : pt.ink.section} />
           <Text style={[st.sheetLabel, { color: pt.ink.section, fontFamily: t.font, marginBottom: 0 }, st.sheetLabelMetal]}>
@@ -1380,7 +1381,7 @@ export default function AudioSheet({
           <Text style={[st.closeBtnText, { fontFamily: t.font, color: pt.gold.close }]}>CLOSE</Text>
         </TouchableOpacity>
         )}
-      </View>
+      </Animated.View>
       </SheetRise></RotateSheet>
     </Modal>
   );

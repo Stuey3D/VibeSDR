@@ -1,10 +1,10 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useListNav, useNavFocus, NavRing } from './PanelNav';
-import { Modal, View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
+import { Modal, View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
-  PopupKey, PopupPlate, PopupHandle, PopupWindow, type PopupTokens, scrollLane, sheetCap,
+  PopupKey, PopupPlate, PopupHandle, useSheetDrag, PopupWindow, type PopupTokens, scrollLane, sheetCap,
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
 
@@ -75,6 +75,7 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
   const insets = useSafeAreaInsets();
   const s = usePopupStyles(makeS);
   const pt = usePopupTheme();
+  const sheetDrag = useSheetDrag(onClose);   // ★ the grab handle drags the sheet closed (PopupShell)
   // ★★★ Transparency OFF: no full-screen dim over the live waterfall (§10.2).
   const dim = useSurface().scrimOpacity > 0;
   const metalFrame = usePopupFrame(14, true);
@@ -105,9 +106,9 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={[s.backdrop, dim && s.backdropDim]}>
-        <View style={[s.sheet, sheetCap, { paddingBottom: insets.bottom + 10 }, metalFrame, metalFrame && { paddingTop: 0 }]}>
+        <Animated.View style={[{ transform: [{ translateY: sheetDrag.y }] }, s.sheet, sheetCap, { paddingBottom: insets.bottom + 10 }, metalFrame, metalFrame && { paddingTop: 0 }]}>
           <PopupPlate radius={14} />
-          <PopupHandle />
+          <PopupHandle drag={sheetDrag} />
           <Text style={s.title}>SET LOCATION</Text>
           <Text style={s.sub}>Pick a nearby city for rough spot distances (no GPS).</Text>
           <TextInput
@@ -148,7 +149,7 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
             <NavRing on={focus === list.length + 1} color={navRing} radius={6} />
           </TouchableOpacity>
           )}
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );

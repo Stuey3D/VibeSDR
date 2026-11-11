@@ -10,7 +10,7 @@ import { decoderTokensFor } from '../constants/decoderTokens';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { solidOver } from '../constants/faceplate';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { usePopupTheme, useGlassTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, PopupWindow, scrollLane, sheetCap,
+import { usePopupTheme, useGlassTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, useSheetDrag, PopupWindow, scrollLane, sheetCap,
          type PopupTokens } from './PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode, useNavFocus } from './PanelNav';
@@ -359,6 +359,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   //   today's dark controls, unchanged — sits in ONE recessed window, so nothing light lands on the
   //   plate. (The body's own keys and switches keep their look inside the window for now.)
   const pt = usePopupTheme();
+  const sheetDrag = useSheetDrag(p.onClose);   // ★ the grab handle drags the sheet closed (PopupShell)
   /* ★★ THE BODY IN THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including directory if
    *   possible"). The body always sits on dark (the glass sheet, or the recessed window on silver / black), so it
    *   takes the GLASS skin's tokens on every chassis: labels and read-outs in the TEXT colour, the segment keys,
@@ -608,12 +609,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.kbWrap} pointerEvents="box-none">
       <DecoderSurface transparency="on">
-      <View style={[styles.sheet, sheetCap, { borderColor: frameBorder, backgroundColor: sheetBg,
+      <Animated.View style={[{ transform: [{ translateY: sheetDrag.y }] }, styles.sheet, sheetCap, { borderColor: frameBorder, backgroundColor: sheetBg,
         paddingBottom: insets.bottom + 12,
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
       }, metalFrame, metalFrame && { paddingTop: 0 }]}>
         <PopupPlate />
-        <PopupHandle />
+        <PopupHandle drag={sheetDrag} />
         <View style={styles.handleBar}>
           {/* ★ NAME THE ACTUAL RADIO. This said "RTL-SDR Controls" over a panel driving an
               Airspy HF+ (Stuart, 2026-07-27) — which is not just wrong, it tells the user the
@@ -1839,7 +1840,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </Text>}
         </ScrollView>
         </PopupWindow>
-      </View>
+      </Animated.View>
       </DecoderSurface>
       </KeyboardAvoidingView>
     </Modal>

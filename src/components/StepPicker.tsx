@@ -6,7 +6,7 @@
 import React from 'react';
 import {
   Modal, StyleSheet, Text, TouchableOpacity,
-  TouchableWithoutFeedback, View,
+  TouchableWithoutFeedback, View, Animated,
 } from 'react-native';
 import { RotateSheet, SheetRise } from './RotateFade';
 import { STEPS_HZ } from '../services/sdrTypes';
@@ -14,7 +14,7 @@ import { STEP_833 } from '../utils/airband';
 import { useTheme } from '../contexts/ThemeContext';
 import { useListNav, noteTouchInteraction, useNavFocus } from './PanelNav';
 import {
-  usePopupTheme, usePopupSurface, usePopupFrame, engraveText, PopupKey, PopupPlate, PopupHandle, sheetCap,
+  usePopupTheme, usePopupSurface, usePopupFrame, engraveText, PopupKey, PopupPlate, PopupHandle, useSheetDrag, sheetCap,
 } from './PopupShell';
 
 /** Today's dim and sheet glass — Transparency OFF drops the first and makes the second opaque. */
@@ -47,6 +47,7 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const pt = usePopupTheme();
+  const sheetDrag = useSheetDrag(onClose);   // ★ the grab handle drags the sheet closed (PopupShell)
   const surf = usePopupSurface();
   const metalFrame = usePopupFrame(14, true);
 
@@ -82,11 +83,11 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
         </TouchableWithoutFeedback>
         {/* ★★ Default chassis in the user's colours (Stuart, 2026-10-12: "yes colours apply everywhere"): the sheet's
             edge and the step keys in the CONTROLS colour, the heading in the TEXT colour (popupTokens ink). */}
-        <View style={[st.sheet, { borderTopColor: pt.ink.border },
+        <Animated.View style={[{ transform: [{ translateY: sheetDrag.y }] }, st.sheet, { borderTopColor: pt.ink.border },
                       surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },
                       metalFrame, metalFrame && { paddingTop: 0 }]}>
           <PopupPlate radius={14} />
-          <PopupHandle />
+          <PopupHandle drag={sheetDrag} />
           <Text style={[st.sheetLabel, { color: pt.ink.section, fontFamily: t.font },
                         pt.metal && { ...engraveText(pt), fontWeight: '700' }]}>
             TUNING STEP
@@ -163,7 +164,7 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
             </Text>
           </TouchableOpacity>
           )}
-        </View>
+        </Animated.View>
       </View>
       </SheetRise></RotateSheet>
     </Modal>

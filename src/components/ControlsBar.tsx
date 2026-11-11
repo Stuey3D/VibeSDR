@@ -2306,6 +2306,20 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   // ★ Tablets / Mac: the banner leaves the bar frame only when the two cannot share it (barFitsBanner).
   const bannerOut  = !!stack?.bannerOut
                      || (!pStack && !dl.compact && !!sharedDial && !barFitsBanner(dl.displayH, FREQ_FONT, PILL_PAD_V));
+  /* ★★ THE PILL GROWS WITH THE FRAME ON A TABLET (Stuart, 2026-11-11, NickB's 13" Android tablet on TALL: "the portrait
+   *  mode controls still look misproportioned and the signal meter is huge around tiny little frequency box and
+   *  demodulator box"). The frame runs the window's width — ~1000 pt upright on that tablet — while the frequency and
+   *  mode pill kept the phone's 19 pt digits and 112 pt window. Tablets / Mac only (the bar frame, not the phone
+   *  stack): the pill scales by one factor until it fills ~58 % of the frame's width or ~72 % of its height, whichever
+   *  comes first, so the meter still shows round it; never below today's size. The deck's height does not change. */
+  const pk = React.useMemo(() => {
+    if (pStack || dl.compact || !s.isTablet || sigW <= 0) return 1;
+    const pillH = FREQ_FONT * 1.12 + 2 * PILL_PAD_V + (bannerOut || !sharedDial ? 0 : sharedBannerFont(FREQ_FONT) * 1.25 + 9);
+    const pillW = FREQ_W + 2 * PILL_PAD_H + PILL_GAP + MODE_FONT * 4.2 + 2 * MODE_PAD_H + SNR_W;
+    const k = Math.min((sigW * 0.58) / pillW, ((dl.displayH - (dab ? FRAME_DAB_H : 0)) * 0.72) / pillH);
+    return Math.max(1, Math.min(2.4, k));
+  }, [pStack, dl.compact, dl.displayH, s.isTablet, sigW, FREQ_FONT, PILL_PAD_V, PILL_PAD_H, PILL_GAP, MODE_FONT, MODE_PAD_H,
+      SNR_W, FREQ_W, bannerOut, sharedDial, dab, FRAME_DAB_H]);
 
   /* ★★ THE READOUT TAKES THE BEZEL (Stuart, 2026-11-02, iPhone, analogue + Nixie on a shared server: "the bezel
    *  around the frequency and signal meter is a bit much and feels like wasted space … expanding the frequency and
@@ -2387,10 +2401,10 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
           connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
           onFreqTap={onFreqTap} onModeTap={onModeTap}
-          freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
-          modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
-          pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
-          modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
+          freqFontSize={Math.round(FREQ_FONT * pk)} freqWidth={Math.round(FREQ_W * pk)} unitFontSize={Math.round(UNIT_FONT * pk)}
+          modeFontSize={Math.round(MODE_FONT * pk)} modeLs={MODE_LS} snrWidth={Math.round(SNR_W * pk)}
+          pillPadH={Math.round(PILL_PAD_H * pk)} pillPadV={Math.round(PILL_PAD_V * pk)}
+          modePadH={Math.round(MODE_PAD_H * pk)} modePadV={Math.round(MODE_PAD_V * pk)} gap={Math.round(PILL_GAP * pk)}
           tight={tight} sharedTuner={bannerOut ? null : sharedDial ?? null}
         />
       </View>

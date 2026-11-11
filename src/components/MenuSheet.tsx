@@ -65,7 +65,7 @@ import {
 import { AUTO_REASON_NOTE } from '../constants/transparency';
 import {
   usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
-  PopupKey, PopupFader, PopupPlate, PopupHandle, type PopupTokens, SHEET_MAX_W, POPUP_FONT,
+  PopupKey, PopupFader, PopupPlate, PopupHandle, useSheetDrag, type PopupTokens, SHEET_MAX_W, POPUP_FONT,
 } from './PopupShell';
 import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
@@ -1363,6 +1363,7 @@ function MenuSheetBody({
   const C = menuC(pt);
 
   const translateY = useRef(new Animated.Value(SHEET_H)).current;
+  const sheetDrag = useSheetDrag(onClose);   // ★ the grab handle drags it closed (PopupShell useSheetDrag)
   const [cmapOpen, setCmapOpen] = useState(false);
   /** ★ Cleared the moment it is submitted — this gets typed at a club night with people behind
    *  you, the same reason the server screen's box is dots by default. */
@@ -1597,7 +1598,7 @@ function MenuSheetBody({
             metal and glass → metal were fine. Remounting the sheet's body on that change draws it clean; the
             pane state (custOpen) lives above it, so the user stays where they were. iOS untouched. */}
         <Animated.View key={Platform.OS === 'android' ? (pt.metal ? 'metal' : 'glass') : undefined}
-          style={[styles.sheet, sheetGeom, { transform: [{ translateY }] },
+          style={[styles.sheet, sheetGeom, { transform: [{ translateY: Animated.add(translateY, sheetDrag.y) }] },
                                opaque && !pt.metal && { backgroundColor: SHEET_SOLID }, metalFrame]}>
           {/* ★★★ Transparency OFF: the sheet's own background, alpha 1.0 (its tint over black) — no
               BlurView. ★★ Silver / black (§10.3): the brushed plate, opaque in BOTH settings — both
@@ -1606,7 +1607,7 @@ function MenuSheetBody({
           {/* a11y panel is near-opaque (reference bg rgba(6,4,2,0.99)) */}
           {!opaque && !pt.metal && <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'android' ? androidGlass(SHEET_TINT, 0.88) : SHEET_TINT }]} />}
           <PopupPlate />
-          <PopupHandle><View style={styles.handle} /></PopupHandle>
+          <PopupHandle drag={sheetDrag}><View style={styles.handle} /></PopupHandle>
 
           <NavCtx.Provider value={navCtx}>
             {/* ★★ Shown when iOS Full Keyboard Access appears to be on — it takes the arrows and

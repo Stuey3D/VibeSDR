@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { scrollLane } from '../constants/popupTokens';
 import {
   Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,
-  type TextStyle,
+  type TextStyle, Animated,
 } from 'react-native';
 import { RotateSheet, SheetRise } from './RotateFade';
 import { openWebPage } from '../utils/openWebPage';
@@ -16,7 +16,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus, NAV_ADJUST } from './PanelNav';
 import {
   usePopupSurface, usePopupTheme, usePopupFrame, engraveText, windowStyle,
-  PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader, sheetCap, POPUP_FONT, SHEET_MAX_W,
+  PopupScrim, PopupPlate, PopupHandle, useSheetDrag, PopupKey, PopupFader, sheetCap, POPUP_FONT, SHEET_MAX_W,
 } from './PopupShell';
 import { decoderKeyGrid, gridRows, tabCorners, type KeyGrid as KeyGridSize, type KeyLegend } from '../utils/decoderKeyGrid';
 
@@ -654,6 +654,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const { theme: theme0 } = useTheme();
   const surf = usePopupSurface();
   const pt = usePopupTheme();
+  const sheetDrag = useSheetDrag(onClose);   // ★ the grab handle drags the sheet closed (PopupShell)
   /* ★★ THE DEFAULT SKIN FOLLOWS THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including
    *  directory if possible"): the legacy theme's button / section colours are swapped for the popup tokens —
    *  keys and selectors in the CONTROLS colour, section heads in the TEXT colour. Silver / black keep `theme0`
@@ -1684,10 +1685,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           wide window — sheets are capped at 640 pt — the top half went dark and the strips beside the sheet stayed
           clean. "I don't mind not having the transparency layer when the menu is up". The tap-to-close view stays. */}
       <PopupScrim style={st.backdrop} color="transparent" onPress={onClose} onTouchStart={noteTouchInteraction} />
-      <View style={[st.sheet, sheetCap, { borderTopColor: t.barBorder }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },
+      <Animated.View style={[{ transform: [{ translateY: sheetDrag.y }] }, st.sheet, sheetCap, { borderTopColor: t.barBorder }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },
                     metalFrame, metalFrame && { paddingTop: 0 }]} onTouchStart={noteTouchInteraction}>
         <PopupPlate />
-        <PopupHandle />
+        <PopupHandle drag={sheetDrag} />
         {/* Scrolls when the content (decoders + callout + extensions + maps) overflows on a
             small screen (§7). Capped so big screens render static as before. */}
         <ScrollView {...scrollProps} style={{ maxHeight: winH * 0.82 }} showsVerticalScrollIndicator={false}
@@ -2099,7 +2100,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         </TouchableOpacity>)}</NavItem></NavRow>
                 </NavCtx.Provider>
         </ScrollView>
-      </View>
+      </Animated.View>
       </SheetRise></RotateSheet>
       {/* ★ Inside this Modal, so it presents over the sheet (a second top-level Modal cannot on iOS). */}
       <CwTermsGuide visible={visible && cwGuideOpen} onClose={() => setCwGuideOpen(false)} />

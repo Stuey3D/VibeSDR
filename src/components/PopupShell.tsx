@@ -210,15 +210,50 @@ export function usePopupFrame(radius = 16, sheet = true): ViewStyle | null {
   };
 }
 
+/** ★★★ THE GRAB HANDLE DRAGS THE SHEET CLOSED (Stuart, 2026-11-11, NickB's Android tablet: "when the menus are open
+ *  the grab at the top doesnt allow you to drag them closed, only scrolling to the bottom and tapping the close button
+ *  actually does it"). It was drawn and inert — a control that looks like it works and does not. `useSheetDrag(onClose)`
+ *  gives the sheet a translateY to add to its own transform and the handle's pan handlers: drag down, the sheet follows
+ *  the finger (never up); let go past 80 pt or with a downward flick and it slides away and closes, else it springs
+ *  back. On the handle strip only, so a sheet's own scroller and sliders keep every gesture they had. */
+export type SheetDrag = { y: Animated.Value; handlers: ReturnType<typeof PanResponder.create>['panHandlers'] };
+export function useSheetDrag(onClose: (() => void) | undefined): SheetDrag {
+  const y = useRef(new Animated.Value(0)).current;
+  const closeRef = useRef(onClose); closeRef.current = onClose;
+  const pan = React.useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dy) > 3,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderMove: (_e, g) => y.setValue(Math.max(0, g.dy)),
+    onPanResponderRelease: (_e, g) => {
+      if (g.dy > 80 || (g.vy > 0.9 && g.dy > 12)) {
+        Animated.timing(y, { toValue: 900, duration: 170, useNativeDriver: true }).start(() => {
+          closeRef.current?.();
+          setTimeout(() => y.setValue(0), 400);   // ★ after the sheet has gone, ready for the next opening
+        });
+      } else Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+    },
+    onPanResponderTerminate: () => Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start(),
+  }), [y]);
+  return { y, handlers: pan.panHandlers };
+}
+
 /** The grab handle: on metal an engraved groove (silver rgba(0,0,0,.38) over a white 1 pt lip);
- *  on default whatever `children` (today's pill) the popup draws. */
-export function PopupHandle({ children, style }: { children?: React.ReactNode; style?: StyleProp<ViewStyle> }) {
+ *  on default whatever `children` (today's pill) the popup draws. With `drag` (useSheetDrag) the strip it sits in —
+ *  the sheet's full width, ≥ 28 pt tall — takes the drag. */
+export function PopupHandle({ children, style, drag }: { children?: React.ReactNode; style?: StyleProp<ViewStyle>; drag?: SheetDrag }) {
   const pt = usePopupTheme();
-  if (!pt.metal) return <>{children}</>;
-  return (
+  const body = !pt.metal ? <>{children}</> : (
     <View style={[{ alignItems: 'center', paddingTop: 8, paddingBottom: 4 }, style]} pointerEvents="none">
       <View style={{ width: 38, height: 4, borderRadius: 2, backgroundColor: pt.shell.handle }} />
       <View style={{ width: 34, height: 1, marginTop: 0, backgroundColor: pt.shell.handleLip }} />
+    </View>
+  );
+  if (!drag) return body;
+  return (
+    <View {...drag.handlers} style={{ alignSelf: 'stretch', alignItems: 'center', minHeight: 28, justifyContent: 'center' }}
+          hitSlop={{ top: 8, bottom: 8 }}>
+      <View pointerEvents="none">{body}</View>
     </View>
   );
 }
