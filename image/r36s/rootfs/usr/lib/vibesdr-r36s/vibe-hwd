@@ -33,6 +33,43 @@ LONG_PRESS_S = 2.0            # power button held this long = clean power-off (t
 LOW_PCT, EMPTY_PCT = 10, 3    # Stuart 2026-11-05: warning at 10 %, clean automatic shutdown at 3 %
 ACK_WAIT_S = 5.0              # how long the engine gets to save every radio's memory before we power off
 
+# ── the PMIC's charge-port input limit ──────────────────────────────────────────────────────────────────────────────
+# ★★★ 2 A FROM THE CHARGER WHILE THE CONSOLE IS ON (Stuart 2026-11-11: "if we can tell the charger to give 2a when the
+#     unit is powered on then that will be good" — the R36S manual's charger is 5 V 2 A). The mainline rk817 driver
+#     hard-wires the USB input limit at 1.5 A and writes it again on every UNPLUG (its plug-out handler: the PMIC resets
+#     those bits when the cord comes out). At 1.5 A, ~1.0 A into the battery + the console + the radio pinned the port:
+#     the BOOST's supply sagged as the RTL-SDR started streaming and it dropped off USB every ~4 s (handheld61 logs
+#     2f39c04a / cac5d085). So: 2 A at start-up and again whenever the charger is in and the limit is not 2 A (i.e.
+#     after every plug-in), with the battery held at 1.0 A (vibe-r36s.dts &battery) — ~1.5 A drawn, ~0.5 A spare.
+#     ★ Register 0xE5 RK817_PMIC_CHRG_IN: bit 3 USB_ILIM_EN, bits 2:0 USB_ILIM_SEL — Rockchip's own rk817 driver's
+#       table: 0 = 450 mA, 1 = 80, 2 = 850, 3 = 1500, 4 = 1750, 5 = 2000, 6 = 2500, 7 = 3000. Bits 7:4 (the 4.5 V input
+#       voltage floor the driver set) are kept. The register is uncached in the kernel (REGCACHE_NONE, volatile), and the
+#       driver touches it only on unplug, so this write stands until then.
+PMIC_ADDR, CHRG_IN, ILIM_MASK, ILIM_EN, ILIM_2A = 0x20, 0xE5, 0x07, 0x08, 0x05
+I2C_SLAVE_FORCE = 0x0706
+
+def pmic_bus():
+    """/dev/i2c-N of the RK817 (address 0x20 on i2c@ff180000) — found by its device node, never assumed."""
+    for d in glob.glob(SYS + "/bus/i2c/devices/*-0020"):
+        if "ff180000" in os.path.realpath(d):
+            return "/dev/i2c-" + os.path.basename(d).split("-")[0]
+    return None
+
+def pmic_rmw(dev, reg, mask, bits):
+    """Read-modify-write one PMIC register; returns (old, read back). FORCE: the rk808 driver owns the address."""
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, I2C_SLAVE_FORCE, PMIC_ADDR)
+        os.write(fd, bytes([reg]))
+        old = os.read(fd, 1)[0]
+        new = (old & ~mask) | bits
+        if new != old:
+            os.write(fd, bytes([reg, new]))
+        os.write(fd, bytes([reg]))
+        return old, os.read(fd, 1)[0]
+    finally:
+        os.close(fd)
+
 # ── evdev ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 EV_KEY, EV_SW = 0x01, 0x05
 KEY_VOLUMEDOWN, KEY_VOLUMEUP, KEY_POWER = 114, 115, 116
@@ -305,6 +342,26 @@ class Hwd:
         return {"pct": int(pct) if pct and pct.lstrip("-").isdigit() else None,
                 "charging": status in ("Charging", "Full") or online, "status": status}
 
+    async def charger_loop(self):
+        """Hold the charge port's input limit at 2 A whenever the charger is in (see PMIC_ADDR above). A 1 s look at
+        sysfs; the PMIC is read only while charging, written only when the limit is not already 2 A."""
+        dev = pmic_bus()
+        if not dev:
+            log("charger: PMIC i2c bus not found — the input limit stays at the driver's 1.5 A")
+            return
+        mask, want = ILIM_EN | ILIM_MASK, ILIM_EN | ILIM_2A
+        while True:
+            if rd(CHG + "/online", "0") == "1":
+                try:
+                    old, got = pmic_rmw(dev, CHRG_IN, mask, want)
+                    if (old & mask) != want:
+                        log("charger: input limit 2 A (CHRG_IN 0x%02x -> 0x%02x)%s" %
+                            (old, got, "" if (got & mask) == want else " ✗ DID NOT STICK"))
+                except OSError as e:
+                    log("charger: input limit not set:", e)
+                    await asyncio.sleep(30)
+            await asyncio.sleep(1)
+
     async def battery_loop(self):
         while True:
             b = self.read_battery()
@@ -565,7 +622,7 @@ class Hwd:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, server.close)
         log("ready on", SOCK)
-        tasks = [loop.create_task(t) for t in (self.input_loop(), self.battery_loop(), self.clock_loop())]
+        tasks = [loop.create_task(t) for t in (self.input_loop(), self.battery_loop(), self.charger_loop(), self.clock_loop())]
         try:
             await server.serve_forever()
         except asyncio.CancelledError:

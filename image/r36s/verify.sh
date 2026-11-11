@@ -76,7 +76,11 @@ grep -q 'default-brightness-level = <0x78>' "$T/m.dts" || fail "backlight boot l
 awk '/^\t+BOOST \{/{f=1} f{print} f&&/\};/{exit}' "$T/m.dts" > "$T/boost.dts"
 grep -q 'regulator-min-microvolt = <0x4f5880>' "$T/boost.dts" && grep -q 'regulator-max-microvolt = <0x4f5880>' "$T/boost.dts" \
   || fail "the OTG boost (usb_midu) is not fixed at 5.2 V"
-ok "boot: KERNEL, eeclone DTB, overlays apply (panel = ROCKNIX's 80 Hz overlay, unchanged, CPU 408–1296 MHz, 1416 off, backlight 120, OTG 5.2 V), extlinux → PARTUUID=$DISKID-02"
+# ★ the battery charges at 1.0 A while Linux runs (vibe-r36s.dts &battery; vibe-hwd lifts the input limit to 2 A)
+awk '/^\tbattery \{/{f=1} f{print} f&&/\};/{exit}' "$T/m.dts" > "$T/battery.dts"
+grep -q 'constant-charge-current-max-microamp = <0xf4240>' "$T/battery.dts" \
+  || fail "the battery's charge current is not 1.0 A (the radio drops off USB on charge at 1.5 A)"
+ok "boot: KERNEL, eeclone DTB, overlays apply (panel = ROCKNIX's 80 Hz overlay, unchanged, CPU 408–1296 MHz, 1416 off, backlight 120, OTG 5.2 V, charge 1.0 A), extlinux → PARTUUID=$DISKID-02"
 
 # ── root filesystem ──
 dd if="$IMG" of="$T/root.ext4" bs=512 skip="$S2" count="$Z2" status=none
@@ -97,6 +101,9 @@ for f in /usr/lib/vibesdr-r36s/vibe-hwd /usr/lib/vibesdr-r36s/vibe-splash /usr/l
   exists "$f" || fail "root lacks $f"
 done
 exists /usr/lib/vibeserver/cloudflared && fail "cloudflared is on the card"
+# ★ powered off the battery charges at 1.5 A (the systemd-shutdown hook; mode 0755 or systemd skips it)
+dfs "stat /usr/lib/systemd/system-shutdown/vibe-charge-fast" | grep -qE 'Mode: +0?755' \
+  || fail "the power-off fast-charge hook (vibe-charge-fast) is missing or not executable"
 WANTS=/etc/systemd/system/multi-user.target.wants
 for u in vibe-hwd vibe-bootkeys vibe-card vibeserver-handheld vibe-kiosk vibe-hhui; do
   exists "$WANTS/$u.service" || fail "$u.service is not enabled"

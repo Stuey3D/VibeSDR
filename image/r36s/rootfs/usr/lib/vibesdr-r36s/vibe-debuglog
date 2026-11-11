@@ -34,8 +34,9 @@ snap() {
   # ★★ POWER (Stuart, 2026-11-07: "anything else we can do to improve the battery life" — ~1 h 45 left at 60–70 %):
   #    the battery's own current + voltage each snapshot (the draw, measured — not guessed from the % slope), and the
   #    memory + GPU clocks' residency (trans_stat), so a saving is a number before and after
+  # ★ rk817-charger voltage_avg = the CHARGE PORT's input voltage (2026-11-11: the radio dropped off USB on charge)
   for b in /sys/class/power_supply/*; do
-    echo "power $(basename "$b"): status=$(cat "$b/status" 2>/dev/null) cap=$(cat "$b/capacity" 2>/dev/null) uA=$(cat "$b/current_now" 2>/dev/null) uV=$(cat "$b/voltage_now" 2>/dev/null) uAavg=$(cat "$b/current_avg" 2>/dev/null) uW=$(cat "$b/power_now" 2>/dev/null) charge=$(cat "$b/charge_now" 2>/dev/null)"
+    echo "power $(basename "$b"): status=$(cat "$b/status" 2>/dev/null) cap=$(cat "$b/capacity" 2>/dev/null) uA=$(cat "$b/current_now" 2>/dev/null) uV=$(cat "$b/voltage_now" 2>/dev/null) uVavg=$(cat "$b/voltage_avg" 2>/dev/null) online=$(cat "$b/online" 2>/dev/null) uAavg=$(cat "$b/current_avg" 2>/dev/null) uW=$(cat "$b/power_now" 2>/dev/null) charge=$(cat "$b/charge_now" 2>/dev/null)"
   done
   echo "backlight $(cat /sys/class/backlight/*/brightness 2>/dev/null)/$(cat /sys/class/backlight/*/max_brightness 2>/dev/null)"
   for g in /sys/class/devfreq/*; do

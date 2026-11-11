@@ -1,0 +1,46 @@
+#!/usr/bin/python3 -I
+# vibe-charge-fast — systemd-shutdown hook ($1 = poweroff | reboot | halt | kexec), run after every service has stopped
+# and the filesystems are read-only, just before the kernel switches off.
+#
+# ★★ Powered off, nothing else draws from the charger, so the battery may take the RK817's full 1.5 A. While Linux runs
+#    it is held at 1.0 A (vibe-r36s.dts &battery: with 1.5 A into the battery the charge port hit its input limit and
+#    the RTL-SDR dropped off USB; vibe-hwd also lifts that limit to 2 A). The rk817 driver writes the charge current only at probe and keeps no cached copy of the register
+#    (REGCACHE_NONE, RK817_PMIC_CHRG_OUT volatile), so this write stands until the next boot sets 1.0 A again.
+#    Register 0xE4 (RK817_PMIC_CHRG_OUT), bits 2:0 = CHRG_CUR_SEL: 0 = 1 A, 1 = 1.5 A, 6 = 0.5 A. Bits 7:3 (voltage, enable) kept.
+#    Never fatal: any failure leaves the 1.0 A and the power-off goes on.
+import fcntl, glob, os, sys
+
+if (sys.argv[1:2] or [""])[0] != "poweroff":
+    sys.exit(0)                     # a reboot comes straight back to the driver's 1.0 A
+
+I2C_SLAVE_FORCE, ADDR, REG, CUR_MASK, CUR_1_5A = 0x0706, 0x20, 0xE4, 0x07, 0x01
+
+
+def bus():
+    """/dev/i2c-N of the PMIC's bus (i2c@ff180000) — found by its device node, never assumed to be 0."""
+    for d in glob.glob("/sys/bus/i2c/devices/*-0020"):
+        if "ff180000" in os.path.realpath(d):
+            return "/dev/i2c-" + os.path.basename(d).split("-")[0]
+    return None
+
+
+try:
+    dev = bus()
+    if not dev:
+        raise OSError("PMIC bus not found")
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, I2C_SLAVE_FORCE, ADDR)   # FORCE: the rk808 driver owns the address; it is idle by now
+        os.write(fd, bytes([REG]))
+        old = os.read(fd, 1)[0]
+        new = (old & ~CUR_MASK) | CUR_1_5A
+        if new != old:
+            os.write(fd, bytes([REG, new]))
+        os.write(fd, bytes([REG]))
+        got = os.read(fd, 1)[0]
+    finally:
+        os.close(fd)
+    print("vibe-charge-fast: charge current 1.5 A for power-off (0x%02x -> 0x%02x, read back 0x%02x)" % (old, new, got),
+          file=sys.stderr)
+except Exception as e:  # noqa: BLE001 — a power-off must never stop here
+    print("vibe-charge-fast: left at 1.0 A (%s)" % e, file=sys.stderr)

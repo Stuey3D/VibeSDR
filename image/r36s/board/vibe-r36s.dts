@@ -109,3 +109,16 @@
 	regulator-min-microvolt = <5200000>;
 	regulator-max-microvolt = <5200000>;
 };
+
+// ★★ THE BATTERY CHARGES AT 1.0 A WHILE LINUX RUNS (2026-11-11, Stuart's option B). ROCKNIX's tree charges at 1.5 A and
+//    the mainline driver hard-wires the charge port's input limit at 1.5 A too, so ~1.0 A into the battery + ~0.7 A of
+//    console and radio pinned the port at its limit: as the RTL-SDR started streaming the BOOST's supply sagged and the
+//    dongle dropped off USB, re-enumerated 0.3 s later and dropped again (every ~4 s, handheld61 logs 2f39c04a /
+//    cac5d085). The one boot that charged at ~0.6 A never dropped it. Now: vibe-hwd lifts the input limit to 2 A (the
+//    R36S manual's 5 V 2 A charger; Rockchip's own driver defaults to 2 A) and the battery takes 1.0 A — ~1.5 A drawn,
+//    ~0.5 A spare. The RK817's charge steps are 0.5 / 1 / 1.5 A.
+//    ★ POWERED OFF it charges at 1.5 A: the systemd-shutdown hook vibe-charge-fast writes the PMIC's register as the
+//    last step, and the driver puts 1.0 A back at the next boot.
+&battery {
+	constant-charge-current-max-microamp = <1000000>;
+};
