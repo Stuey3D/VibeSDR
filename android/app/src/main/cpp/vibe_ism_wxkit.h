@@ -151,6 +151,32 @@ inline std::vector<Bits> mcZero(const Runs& r, double halfUs, double gapLimitUs)
     return rows;
 }
 
+/** Biphase "DMC" (a 0 is one full-bit run, a 1 two half-bit runs — every bit boundary a transition): runs of ~`halfUs`
+ *  come in pairs = 1, a run of ~2 × `halfUs` = 0; anything else (beyond `tolUs`) ends the row. */
+inline std::vector<Bits> dmc(const Runs& r, double halfUs, double tolUs) {
+    std::vector<Bits> rows(1);
+    for (size_t i = 0; i < r.size(); ++i) {
+        const double a = std::abs(r[i]);
+        if (std::fabs(a - halfUs) < tolUs) {
+            if (i + 1 < r.size() && std::fabs(std::abs(r[i + 1]) - halfUs) < tolUs) { rows.back().push_back(1); ++i; }
+            else if (i + 1 >= r.size()) rows.back().push_back(1);
+            else newRow(rows);
+        } else if (std::fabs(a - 2 * halfUs) < tolUs) rows.back().push_back(0);
+        else newRow(rows);
+    }
+    trimRows(rows);
+    return rows;
+}
+
+/** CRC-4 MSB-first over whole bytes (the 4-bit remainder, poly as a nibble). */
+inline uint8_t crc4(const uint8_t* d, size_t n, uint8_t poly, uint8_t init) {
+    unsigned rem = unsigned(init) << 4;
+    const unsigned p = unsigned(poly) << 4;
+    for (size_t i = 0; i < n; ++i) { rem ^= d[i]; for (int k = 0; k < 8; ++k) rem = (rem & 0x80) ? ((rem << 1) ^ p) & 0xFF : (rem << 1) & 0xFF; }
+    return uint8_t(rem >> 4);
+}
+inline uint8_t rev8(uint8_t v) { v = uint8_t((v & 0xF0) >> 4 | (v & 0x0F) << 4); v = uint8_t((v & 0xCC) >> 2 | (v & 0x33) << 2); return uint8_t((v & 0xAA) >> 1 | (v & 0x55) << 1); }
+
 /** A row that appears at least `minCount` times (with `minBits` ≤ length ≤ `maxBits`); -1 if none. */
 inline int repeatedRow(const std::vector<Bits>& rows, int minCount, size_t minBits, size_t maxBits = 100000) {
     for (size_t i = 0; i < rows.size(); ++i) {
