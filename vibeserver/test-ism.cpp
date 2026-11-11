@@ -172,31 +172,47 @@ static Runs fixedCodeTx(uint32_t code24, double T = 350, int reps = 6) {
     tx.mark(T);
     return tx.r;
 }
-static Runs tpmsBTx(uint32_t id, int pRaw, int tC) {
-    std::vector<uint8_t> by = { 0x5A, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(pRaw), uint8_t(tC + 50) };
-    by.push_back(crc8(by.data() + 1, 6, 0x07, 0));
-    Bits b; for (int i = 0; i < 16; ++i) b.push_back(1);      // a run-in we chose (the paper gives none)
-    b.push_back(1); b.push_back(0); b.push_back(1);           // 3 LEARN bits
-    Bits d = bytesToBits(by); b.insert(b.end(), d.begin(), d.end());
-    Tx tx; manchesterTx(tx, b, 120, 0); tx.space(500);
-    Runs one = tx.r;
-    Tx all; for (int k = 0; k < 2; ++k) { for (int x : one) all.add(x); all.space(3000); }
-    return all.r;
+// ── TPMS encoders — each written from the frame facts in vibe_ism_tpms.h's family notes: the frame as CHIPS (one per
+//    half-bit), then runs. OOK: 1 = carrier on; FSK: 1 = the high tone.
+static Bits bitsOf(uint64_t v, int n) { Bits o; for (int i = n - 1; i >= 0; --i) o.push_back(uint8_t((v >> i) & 1)); return o; }
+static Bits bitsOfBytes(const std::vector<uint8_t>& by, size_t from = 0, size_t n = 0) {
+    Bits all = bytesToBits(by); if (!n) n = all.size() - from;
+    return Bits(all.begin() + long(from), all.begin() + long(from + n));
 }
-static Runs tpmsATx(uint32_t id, int p, int tC, double half = 52) {
-    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(p), uint8_t(tC + 40), 0x12, 0x34 };
-    const uint16_t c = crc16(by.data(), 8, 0x1021, 0xFFFF); by.push_back(uint8_t(c >> 8)); by.push_back(uint8_t(c));
-    Bits bits = {1, 0}; Bits d = bytesToBits(by); bits.insert(bits.end(), d.begin(), d.end());
-    // differential Manchester (a change at a bit's start = 0, a change in every middle), after 8 alternating halves
-    std::vector<uint8_t> lv;
-    for (int i = 0; i < 8; ++i) lv.push_back(uint8_t(i & 1));
-    uint8_t cur = lv.back();
-    for (uint8_t b : bits) {
-        uint8_t first = b ? cur : uint8_t(cur ^ 1);
-        lv.push_back(first); lv.push_back(uint8_t(first ^ 1)); cur = uint8_t(first ^ 1);
+/** Manchester: each bit a chip pair, (1,0) = 1 when hiLoIsOne. */
+static void mcChips(std::string& c, const Bits& b, bool hiLoIsOne) { for (uint8_t x : b) c += ((x == 1) == hiLoIsOne) ? "10" : "01"; }
+/** Differential Manchester: a change in every middle; a change at the start too when the bit is (changeIsOne ? 1 : 0). */
+static void dmcChips(std::string& c, const Bits& b, bool changeIsOne) {
+    for (uint8_t x : b) {
+        const char last = c.empty() ? '0' : c.back();
+        const bool change = (x == 1) == changeIsOne;
+        const char first = change ? (last == '1' ? '0' : '1') : last;
+        c += first; c += first == '1' ? '0' : '1';
     }
-    Tx tx; for (uint8_t l : lv) { if (l) tx.mark(half); else tx.space(half); }
-    return tx.r;
+}
+static Runs chipsToRuns(const std::string& c, double w) { Tx tx; for (char ch : c) { if (ch == '1') tx.mark(w); else if (ch == '0') tx.space(w); } return tx.r; }
+/** Repeat a frame's runs `n` times with `gapUs` of silence (OOK) or of the low tone (FSK) between. */
+static Runs repeatRuns(const Runs& one, int n, double gapUs) { Tx t; for (int k = 0; k < n; ++k) { for (int x : one) t.add(x); t.space(gapUs); } return t.r; }
+
+// Schrader GG4: OOK, 120 µs chips; a ~480 µs wake mark, an alternating run-in, the 0xF nibble, then flags, ID 28,
+// pressure ×2.5 kPa, °C + 50, CRC-8 0x07 init 0xF0 over the seven bytes from the 0xF nibble.
+static Runs schraderGG4Tx(uint32_t id28, int pRaw, int tC, int flags = 0x67) {
+    std::vector<uint8_t> by = { uint8_t(0xF0 | (flags >> 4)), uint8_t(((flags & 0xF) << 4) | ((id28 >> 24) & 0xF)), uint8_t(id28 >> 16),
+                                uint8_t(id28 >> 8), uint8_t(id28), uint8_t(pRaw), uint8_t(tC + 50) };
+    by.push_back(crc8(by.data(), 7, 0x07, 0xF0));
+    std::string c = "1111" "0101010101";
+    mcChips(c, {1, 1}, true);
+    mcChips(c, bitsOfBytes(by, 4), true);
+    return chipsToRuns(c + "0", 120);
+}
+// Porsche 987 (the former "type A"): FSK, 52 µs chips, run-in 0011… ending 0010 + one chip, differential Manchester
+// (1 = no change at the bit's start), ID 4, pressure (raw × 2.5 − 100 kPa), °C + 40, 2 status, CRC-16 0x1021 init 0xFFFF.
+static Runs porscheTx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(pRaw), uint8_t(tC + 40), 0x12, 0x34 };
+    const uint16_t c16 = crc16(by.data(), 8, 0x1021, 0xFFFF); by.push_back(uint8_t(c16 >> 8)); by.push_back(uint8_t(c16));
+    std::string c = "0011 0011 0011 0011 0011 0011 0011 0010 1";
+    dmcChips(c, bytesToBits(by), false);
+    return chipsToRuns(c + "0101", 52);
 }
 
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
@@ -212,7 +228,7 @@ static int writeClip(const char* out, double centre, double rate) {
     std::vector<Sig> s;
     Sig a{oregonV3(withChecksum(oregonNibbles("F824" "2" "6B" "0" "481" "0" "26" "0"), 17))}; a.offHz = 433.92e6 - centre; a.startS = 0.3; s.push_back(a);
     Sig b{wh1080("a1820d5a0306004e08d3")}; b.offHz = 433.85e6 - centre; b.startS = 0.9; s.push_back(b);
-    Sig c{tpmsBTx(0x11223344, 88, 18)}; c.offHz = 433.95e6 - centre; c.startS = 1.5; s.push_back(c);
+    Sig c{schraderGG4Tx(0x1223344, 88, 18)}; c.offHz = 433.95e6 - centre; c.startS = 1.5; s.push_back(c);
     Sig c2 = c; c2.startS = 2.1; s.push_back(c2);
     Sig d{fixedCodeTx(0xA5C3E8)}; d.offHz = 434.00e6 - centre; d.startS = 2.6; s.push_back(d);
     const auto x = synth(s, rate, 3.4, 0.02, 77);
@@ -283,6 +299,20 @@ int main(int argc, char** argv) {
             Burst c; c.ook = acurite782("8B8FFB17"); o.clear(); acurite::decode782(c, o);
             CHECK(o.size() == 1 && approx(o[0].tempC, -0.5, 1e-9), "Acurite 782 -0.5");
         }
+        // Porsche 987 TPMS: the two worked frames in rtl_433's tpms_porsche.c notes (facts: raw chips → 23d7ad23 623b bb02
+        // f05f and 23d7ad23 603b bb02 1d37) — sent here in the other FSK polarity, which the decoder must also read
+        {
+            const char* ex[2] = {"333333354ab32d334b2d4ab2cab54cb34cb2aab4cd552ccd8", "333333354ab32d334b2d4ab2caaab34cb34d554aacd2b2cd8"};
+            const int praw[2] = {0x62, 0x60};
+            for (int i = 0; i < 2; ++i) {
+                std::string c; for (const char* h = ex[i]; *h; ++h) { const int v = *h <= '9' ? *h - '0' : *h - 'a' + 10; for (int k = 3; k >= 0; --k) c += char('0' + ((v >> k) & 1)); }
+                c.resize(193);
+                Burst b; b.fsk = chipsToRuns(c, 52); b.ook = {int(193 * 52)};
+                std::vector<Reading> o; tyre::decode(b, o);
+                CHECK(o.size() == 1 && o[0].model == "Porsche 987" && approx(o[0].kpa, praw[i] * 2.5 - 100, 1e-9) && approx(o[0].tempC, 0x3b - 40, 0),
+                      "Porsche 987 worked frame %d: %s", i + 1, o.empty() ? "nothing" : readable(o[0], 1).c_str());
+            }
+        }
         // Current Cost (Kelly wiki): address 63B, 390 W
         {
             Burst b; b.fsk = currentCostTx("063B818600000000"); std::vector<Reading> o; currentcost::decode(b, o);
@@ -305,8 +335,8 @@ int main(int argc, char** argv) {
     { Sig s{currentCostTx("063B818600000000")}; s.fsk = true; s.devHz = 30e3; cases.push_back({"Current Cost", s, "transmitter", NAN}); }
     cases.push_back({"KeeLoq", {keeloqTx(0xDEADBEEF, 0x0ABCDEF, 0x2, false)}, "Key fob", NAN});
     cases.push_back({"EV1527", {fixedCodeTx(0xA5C3E8)}, "Doorbell", NAN});
-    cases.push_back({"TPMS B", {tpmsBTx(0x11223344, 88, 18)}, "type B", 18});
-    { Sig s{tpmsATx(0x55667788, 0x80, 21)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"TPMS A", s, "type A", 21}); }
+    cases.push_back({"TPMS Schrader GG4", {schraderGG4Tx(0x1223344, 88, 18)}, "Schrader", 18});
+    { Sig s{porscheTx(0x55667788, 0x80, 21)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"TPMS Porsche 987", s, "Porsche 987", 21}); }
     printf(" end to end at 2.4 MS/s, +120 kHz, 20 dB-ish SNR\n");
     for (auto& c : cases) {
         c.s.offHz = 120e3;
@@ -332,12 +362,16 @@ int main(int argc, char** argv) {
         CHECK(r != nullptr, "%s: not decoded through the 480 kS/s channel (%zu readings)", c.name, got.size());
         if (r && c.temp == c.temp) CHECK(approx(r->tempC, c.temp, 0.051), "%s (480 k): %.2f °C, want %.2f", c.name, r->tempC, c.temp);
     }
-    // the TPMS B values exactly
+    // the TPMS values exactly — and a CRC-checked make is trusted from ONE frame (no confirm flag)
     {
-        Sig s{tpmsBTx(0x11223344, 88, 18)}; s.offHz = -60e3;
+        Sig s{schraderGG4Tx(0x1223344, 88, 18)}; s.offHz = -60e3;
         const auto got = runFront(synth({s}, 2.4e6, 1.0, 0.02, 2), 2.4e6);
-        const Reading* r = findModel(got, "type B");
-        CHECK(r && approx(r->kpa, 220, 1e-9) && r->confirm, "TPMS B: 220 kPa, confirm flag");
+        const Reading* r = findModel(got, "Schrader");
+        CHECK(r && approx(r->kpa, 220, 1e-9) && !r->confirm && r->secret && r->pubId.empty(), "TPMS Schrader: 220 kPa, one frame, secret");
+        Sig q{porscheTx(0x55667788, 0x80, 21)}; q.fsk = true; q.devHz = 40e3; q.offHz = 75e3;
+        const auto g2 = runFront(synth({q}, 2.4e6, 1.0, 0.02, 3), 2.4e6);
+        const Reading* p = findModel(g2, "Porsche 987");
+        CHECK(p && approx(p->kpa, 0x80 * 2.5 - 100, 1e-9) && approx(p->tempC, 21, 0), "TPMS Porsche 987: %.1f kPa", p ? p->kpa : -1.0);
     }
 
     // 3. Drift: ±150 kHz around the band centre, and the capture rates the radios run (Oregon v3, the slowest-edged)
@@ -510,13 +544,13 @@ int main(int argc, char** argv) {
         std::vector<Reading> v;
         Burst kb; kb.ook = keeloqTx(0xDEADBEEF, 0x0ABCDEF, 0x3, true); keeloq::decode(kb, v);
         Burst fb; fb.ook = fixedCodeTx(0xA5C3E8); fixedcode::decode(fb, v);
-        Burst tb; tb.ook = tpmsBTx(0x11223344, 88, 18); tpms::decodeB(tb, v);
-        Burst tb2; tb2.ook = tpmsBTx(0x99AABBCC, 92, 20); tpms::decodeB(tb2, v);
+        Burst tb; tb.ook = schraderGG4Tx(0x1223344, 88, 18); tyre::decode(tb, v);
+        Burst tb2; tb2.ook = schraderGG4Tx(0x9AABBCC, 92, 20); tyre::decode(tb2, v);
         CHECK(v.size() == 4, "privacy setup: %zu readings", v.size());
-        for (int pass = 0; pass < 2; ++pass) for (const auto& r : v) tr.accept(r, 10.0 + pass);   // twice: TPMS B confirms
+        for (int pass = 0; pass < 2; ++pass) for (const auto& r : v) tr.accept(r, 10.0 + pass);
         const std::string j = tr.json(12.0);
-        const char* banned[] = {"DEADBEEF", "deadbeef", "ABCDEF", "abcdef", "A5C3E", "a5c3e", "11223344", "99AABBCC", "99aabbcc",
-                                "3735928559", "11259375", "10863592", "287454020"};
+        const char* banned[] = {"DEADBEEF", "deadbeef", "ABCDEF", "abcdef", "A5C3E", "a5c3e", "1223344", "9AABBCC", "9aabbcc",
+                                "3735928559", "11259375", "10863592", "19018564", "162184140"};
         for (const char* s : banned) CHECK(j.find(s) == std::string::npos, "privacy: the JSON carries %s", s);
         CHECK(j.find("TPMS #1") != std::string::npos && j.find("TPMS #2") != std::string::npos, "privacy: two cars, two nicknames");
         CHECK(j.find("Key fob #1") != std::string::npos && j.find("button 1+2") != std::string::npos && j.find("battery low") != std::string::npos,
@@ -543,7 +577,7 @@ int main(int argc, char** argv) {
         CHECK(tr.size() == 1 && tr.json(2).find("\"count\":1") != std::string::npos, "repeats fold into one heard");
         tr.accept(w, 60.0);
         CHECK(tr.json(60).find("\"count\":2") != std::string::npos, "a minute later counts again");
-        Reading t; t.kind = "tpms"; t.secret = true; t.make = "TPMS"; t.model = "type B"; t.kpa = 220; t.tempC = 18;
+        Reading t; t.kind = "tpms"; t.secret = true; t.make = "Schrader"; t.model = "Schrader"; t.kpa = 220; t.tempC = 18;
         CHECK(readable(t, 2).find("32 PSI") != std::string::npos, "PSI by default: %s", readable(t, 2).c_str());
         Units kp; kp.pressure = 1; CHECK(readable(t, 2, kp).find("220 kPa") != std::string::npos, "kPa");
         Units br; br.pressure = 2; CHECK(readable(t, 2, br).find("2.20 bar") != std::string::npos, "bar");

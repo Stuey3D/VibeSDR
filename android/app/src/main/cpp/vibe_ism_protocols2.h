@@ -4,6 +4,7 @@
 //     detail open, the choice made is marked ASSUMED and the doc lists it for a real-signal check.
 #pragma once
 #include "vibe_ism_protocols.h"
+#include "vibe_ism_tpms.h"     // ★ V12 2026-11-11: tyre-pressure sensors, make by make
 
 namespace vibeism {
 
@@ -337,8 +338,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (currentcost::decode(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
-    if (tpms::decodeA(b, out)) return;
-    if (tpms::decodeB(b, out)) return;
+    if (tyre::decode(b, out)) return;
 }
 
 } // namespace vibeism
