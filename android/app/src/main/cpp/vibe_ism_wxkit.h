@@ -20,7 +20,9 @@ namespace wx {
 
 /** A mark and the space after it, µs (the space is "forever" after the burst's last mark). */
 struct MarkSpace { int mark, space; };
-inline std::vector<MarkSpace> markSpaces(const Runs& r) {
+/** `sliverUs` > 0: a mark narrower than that is noise inside a space — it and the space after it join the space before
+ *  (a weak PPM burst's long spaces are often split by a one-sample blip). */
+inline std::vector<MarkSpace> markSpaces(const Runs& r, int sliverUs = 0) {
     std::vector<MarkSpace> o;
     o.reserve(r.size() / 2 + 1);
     for (size_t i = 0; i < r.size(); ++i) {
@@ -28,7 +30,8 @@ inline std::vector<MarkSpace> markSpaces(const Runs& r) {
         int mk = r[i];
         while (i + 1 < r.size() && r[i + 1] > 0) mk += r[++i];          // two marks in a row: one
         const int sp = (i + 1 < r.size()) ? -r[i + 1] : 1 << 28;
-        o.push_back({mk, sp});
+        if (mk < sliverUs && !o.empty() && o.back().space < (1 << 27)) o.back().space += mk + sp;
+        else o.push_back({mk, sp});
         if (i + 1 < r.size()) ++i;
     }
     return o;
@@ -38,13 +41,14 @@ inline void newRow(std::vector<Bits>& rows) { if (!rows.back().empty()) rows.emp
 inline void trimRows(std::vector<Bits>& rows) { if (!rows.empty() && rows.back().empty()) rows.pop_back(); }
 
 /** PPM — the SPACE after each mark carries the bit: under the short/long midpoint = `shortBit`, up to `gapLimitUs` =
- *  the other; a longer space ends the row. Marks wider than `maxMarkUs` (when > 0) end the row too. */
+ *  the other; a longer space ends the row. Marks wider than `maxMarkUs` (when > 0) or narrower than `minMarkUs` end
+ *  the row too (a family whose marks are all one width says so — noise slivers then never read as bits). */
 inline std::vector<Bits> ppm(const Runs& r, double shortUs, double longUs, double gapLimitUs, int shortBit = 0,
-                             double maxMarkUs = 0) {
+                             double maxMarkUs = 0, double minMarkUs = 0, int sliverUs = 0) {
     std::vector<Bits> rows(1);
     const double mid = 0.5 * (shortUs + longUs);
-    for (const auto& ms : markSpaces(r)) {
-        if (maxMarkUs > 0 && ms.mark > maxMarkUs) { newRow(rows); continue; }
+    for (const auto& ms : markSpaces(r, sliverUs)) {
+        if ((maxMarkUs > 0 && ms.mark > maxMarkUs) || ms.mark < minMarkUs) { newRow(rows); continue; }
         if (ms.space > gapLimitUs) { newRow(rows); continue; }
         rows.back().push_back(uint8_t(ms.space < mid ? shortBit : !shortBit));
     }

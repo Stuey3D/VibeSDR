@@ -22,7 +22,7 @@ namespace vibeism {
 namespace sl109h {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
-    const auto rows = wx::ppm(b.ook, 2000, 4000, 5500, 0, 1500);
+    const auto rows = wx::ppm(b.ook, 2000, 4000, 5500, 0, 1500, 0, 120);   // ★ blips inside a 2–4 ms space are noise
     const int i = wx::repeatedRow(rows, 2, 38, 38);
     if (i < 0) return false;
     const Bits& w = rows[size_t(i)];
