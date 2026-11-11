@@ -21303,6 +21303,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   the bug the per-client path just lost.
             if (jsonNum(msg, "strength", v))
                 LocalSdrShim::instance().setNrStrength((float)std::max(0.0, std::min(1.4, v)));
+            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
             return;
         }
         // ★★★ THE FOUR BROADCAST-FM TREATMENTS ARE PER LISTENER, and the premise that made them
@@ -21425,7 +21426,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (type == "notch") {
             if (!sharedGate("the notch filter")) return;
-            LocalSdrShim::instance().setNotch(jsonOn(msg)); return;
+            LocalSdrShim::instance().setNotch(jsonOn(msg));
+            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
+            return;
         }
         // ★★ THE ANALYSER SWITCH, ON THE CONTROL SOCKET. The web client turns the extended
         // RDS stream on by ATTACHING A DECODER, which is right for it — it already holds the
@@ -21451,17 +21454,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "nfmvoice") {
             if (!sharedGate("NFM voice filter")) return;
             LocalSdrShim::instance().setNfmVoice(jsonOn(msg));
+            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
             return;
         }
         if (type == "deemph") {
             if (!sharedGate("de-emphasis")) return;
             // tau in SECONDS (0 = off, 50e-6 or 75e-6).
             if (jsonNum(msg, "tau", v)) { LocalSdrShim::instance().setDeemphasis(v); fmNote(sock); }
+            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
             return;
         }
         if (type == "stereo") {
             if (!sharedGate("stereo")) return;
-            LocalSdrShim::instance().setStereoEnabled(jsonOn(msg)); fmNote(sock); return;
+            LocalSdrShim::instance().setStereoEnabled(jsonOn(msg)); fmNote(sock);
+            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
+            return;
         }
         // Live spectrum frame rate — the client throttles this when the user goes
         // idle, so an unattended (solar/battery) server stops burning CPU and
