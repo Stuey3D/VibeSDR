@@ -166,10 +166,21 @@ public:
     }
     /** A line of its own (a separator, a refusal): finishes the line arriving first. */
     void line(const std::string& t) { push("\n" + t + "\n", false); }
-    void clear() { rows_.clear(); open_.clear(); openRows_.clear(); pending_.clear(); progress_ = false; back = 0; lastBlank_ = true; added_ = 0; }
+    void clear() { rows_.clear(); raw_.clear(); open_.clear(); openRows_.clear(); pending_.clear(); progress_ = false; back = 0; lastBlank_ = true; added_ = 0; }
+    /** ★ How each LINE is shown (CW's EXPLAIN: cwPlainEnglish; nullptr = as decoded). A change re-reads the whole log
+     *  from the lines as decoded (kept, up to kMaxRaw) at the next layout — the reader's place goes back to the newest. */
+    using Xform = std::string (*)(const std::string&);
+    void setXform(Xform x) { if (x != xform_) { xform_ = x; reread_ = true; } }
     /** Lay out what arrived (UI thread; cheap — only the new text). */
     void layout(TextCache& tc, const Font& f, int w) {
         if (w != w_) { w_ = w; rewrap(tc, f); }
+        if (reread_) {
+            reread_ = false; rows_.clear(); back = 0;
+            std::vector<std::string> out;
+            for (auto& r : raw_) { wrap(tc, f, shown(r), out); for (auto& x : out) rows_.push_back(std::move(x)); }
+            while (rows_.size() > kMaxRows) rows_.pop_front();
+            rewrap(tc, f);
+        }
         if (pending_.empty()) return;
         std::string p; p.swap(pending_);
         bool openDirty = false;
@@ -188,7 +199,7 @@ public:
             i = e;
             if (i < p.size() && p[i] == '\n') { finish(tc, f); openDirty = true; i++; }
         }
-        if (openDirty) { if (open_.empty()) openRows_.clear(); else wrap(tc, f, open_, openRows_); }   // ★ no empty row at the foot
+        if (openDirty) { if (open_.empty()) openRows_.clear(); else wrap(tc, f, shown(open_), openRows_); }   // ★ no empty row at the foot
     }
     size_t rows() const { return rows_.size() + openRows_.size(); }
     const std::string& row(size_t k) const { return k < rows_.size() ? rows_[k] : openRows_[k - rows_.size()]; }
@@ -198,8 +209,12 @@ public:
     int back = 0;   // ★ rows scrolled up from the newest (0 = following the newest text)
 
 private:
-    std::deque<std::string> rows_;
+    static constexpr size_t kMaxRaw = 300;   // finished lines kept as decoded (a CW line is long: ~kMaxRows rows' worth)
+    std::deque<std::string> rows_, raw_;
     std::string open_, pending_;
+    Xform xform_ = nullptr;
+    bool reread_ = false;
+    std::string shown(const std::string& s) const { return xform_ ? xform_(s) : s; }
     std::vector<std::string> openRows_;
     bool progress_ = false, lastBlank_ = true;
     int w_ = 0;
@@ -210,13 +225,15 @@ private:
         const bool blank = open_.find_first_not_of(' ') == std::string::npos;
         if (blank && lastBlank_) { open_.clear(); openRows_.clear(); return; }   // ★ one blank row, never a column of them
         lastBlank_ = blank;
+        raw_.push_back(open_);
+        while (raw_.size() > kMaxRaw) raw_.pop_front();
         std::vector<std::string> out;
-        wrap(tc, f, open_, out);
+        wrap(tc, f, shown(open_), out);
         for (auto& r : out) { rows_.push_back(std::move(r)); added_++; }
         while (rows_.size() > kMaxRows) rows_.pop_front();
         open_.clear(); openRows_.clear();
     }
-    void rewrap(TextCache& tc, const Font& f) { if (!open_.empty()) wrap(tc, f, open_, openRows_); }
+    void rewrap(TextCache& tc, const Font& f) { if (!open_.empty()) wrap(tc, f, shown(open_), openRows_); }
     int advance(TextCache& tc, const Font& f, uint32_t cp, const std::string& one) {
         const uint64_t k = ((uint64_t)(uintptr_t)f.get() << 21) ^ cp;
         auto it = adv_.find(k);
@@ -333,6 +350,17 @@ struct DecUi {
     // cut-to-width cache (dec_box.h)
     std::map<std::string, std::string> fit;
 };
+/** ★★ LOWEST FREQUENCY FIRST, ALWAYS, AND A TIE THE SAME WAY EVERY TIME — the app's cwList sortCwSignals exactly
+ *  (hz, the audio offset when either has no RF, then the id). Stuart, 2026-11-11: the R36S's skimmer "seems to flap about
+ *  moving signals up and down into different orders" — CW / PSK rows were drawn in the SERVER's order, which changes
+ *  from one update to the next; JTTY's sort had no tie-break. */
+inline void decSortSigs(std::vector<DecSig>& v) {
+    std::stable_sort(v.begin(), v.end(), [](const DecSig& a, const DecSig& b) {
+        const double d = a.hz > 0 && b.hz > 0 ? a.hz - b.hz : a.audio - b.audio;
+        if (d != 0) return d < 0;
+        return a.id < b.id;
+    });
+}
 inline DecUi& decUi() {
     static DecUi u;
     static const bool init = [] { const char* c = std::getenv("VIBE_HHUI_DEC_CANNED"); u.canned = c && *c && *c != '0'; return true; }();
@@ -742,6 +770,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             any = any || g.active;
             u.sigs.push_back(std::move(g));
         }
+        decSortSigs(u.sigs);   // ★★ the app's order (cwList sortCwSignals) — the server's order moves every update
         u.live = any; if (any) u.liveAt = now;
         return;
     }
@@ -770,7 +799,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             any = any || g.active;
             u.sigs.push_back(std::move(g));
         }
-        std::sort(u.sigs.begin(), u.sigs.end(), [](const DecSig& x, const DecSig& y) { return x.hz < y.hz; });   // ★ lowest first
+        decSortSigs(u.sigs);   // ★ lowest first
         u.live = any; if (any) u.liveAt = now;
         return;
     }

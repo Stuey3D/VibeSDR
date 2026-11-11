@@ -224,8 +224,15 @@ def make_partition(disk):
             "bad samples:", len(res["bad"]))
     end = res["verified_end"] // (1 << 20) * (1 << 20)
     if res["bad"]:
-        msg = ("This card is smaller than it claims:|%s works of the %s it reports.|VibeSDR will use the %s that works."
-               % (gb(end), gb(claimed), gb(end - start)))
+        # ★★ WORDED FOR SOMEONE WHO DOES NOT KNOW WHAT A PARTITION IS (Stuart, 2026-11-11: "you've just told me 10.6GB
+        #    is available so why only 8.4? … your average Joe won't have thought of that" — the 2.1 GB VibeSDR itself
+        #    takes was never said). Three lines (vibe-splash's limit), each measured under its 620 px in the splash font.
+        #    ★ The figures ADD UP as shown: VibeSDR's share is the difference of the two ROUNDED figures (10.6 − 8.4 =
+        #    2.2), never its own rounding (2.1), or the sum on screen would be out by 0.1.
+        ok_gb, free_gb = round(end / 1e9, 1), round((end - start) / 1e9, 1)
+        msg = ("Part of this card failed a check.|It says %s, but only the first %.1f GB can be trusted.|"
+               "VibeSDR itself needs %.1f GB, leaving %.1f GB for your files."
+               % (gb(claimed), ok_gb, ok_gb - free_gb, free_gb))
         log(msg.replace("|", " "))
         splash("message", msg)
         time.sleep(20)                       # ★ "stop with a plain message": long enough to read, then carry on

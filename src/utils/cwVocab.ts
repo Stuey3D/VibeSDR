@@ -191,7 +191,7 @@ export function matchCwLookalikes(q: string): { title: string; text: string }[] 
   return CW_LOOKALIKES.filter((l) => l.title.toUpperCase().includes(s) || l.text.toUpperCase().includes(s));
 }
 
-const BY_CODE: Map<string, CwTerm> = (() => {
+export const BY_CODE: Map<string, CwTerm> = (() => {
   const m = new Map<string, CwTerm>();
   for (const t of CW_TERMS) {
     if (!m.has(t.code)) m.set(t.code, t);
@@ -229,7 +229,7 @@ export function looksLikeCallsign(w: string): boolean {
 
 /** ★ Function words that mark a line as ANOTHER language (Italian, Spanish, French, German, Portuguese, Dutch). Only
  *  ones that are not also English or ham words. Two on a line = not English. */
-const FOREIGN_WORDS = new Set([
+export const FOREIGN_WORDS = new Set([
   // Italian
   'IL', 'LA', 'LE', 'DI', 'DEL', 'DELLA', 'CHE', 'NON', 'PER', 'UNA', 'UNO', 'SONO', 'MOLTO', 'GRAZIE', 'CIAO', 'QUI', 'TUTTO', 'TUTTA',
   'ANCHE', 'COME', 'STATO', 'BUONA', 'SERA', 'BUONGIORNO', 'CON', 'NELLA', 'FILARE', 'SI', 'GLI', 'HO',
@@ -243,7 +243,7 @@ const FOREIGN_WORDS = new Set([
   'OBRIGADO', 'MUITO', 'BOA', 'NOITE', 'EEN', 'HET', 'EN', 'IK', 'BEDANKT', 'GOEDE', 'AVOND',
 ]);
 /** Words of English that also appear above — never count as foreign. */
-const ENGLISH_TOO = new Set(['I', 'A', 'IN', 'IS', 'ON', 'TO', 'AS', 'HE', 'ME', 'NO']);
+export const ENGLISH_TOO = new Set(['I', 'A', 'IN', 'IS', 'ON', 'TO', 'AS', 'HE', 'ME', 'NO']);
 
 export function readsAsOtherLanguage(words: string[]): boolean {
   let n = 0;
@@ -252,7 +252,7 @@ export function readsAsOtherLanguage(words: string[]): boolean {
 }
 
 /** ★ Multi-word phrases first (they read better than word-by-word). Matched on whole words; `?` may follow the last. */
-const PHRASES: { words: string[]; plain: string }[] = [
+export const PHRASES: { words: string[]; plain: string }[] = [
   { words: ['TNX', 'FER', 'CALL'], plain: 'thanks for the call' },
   { words: ['TNX', 'FER', 'QSO'], plain: 'thanks for the contact' },
   { words: ['TNX', 'FER', 'RPRT'], plain: 'thanks for the report' },

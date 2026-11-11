@@ -158,7 +158,7 @@ past the wrap lands on the anchor, and the first probe that reads back wrong giv
 f3probe-style: each sample is read (backup) before its write, all are read back, then every backup is written back in
 **reverse** order — since an aliased read hits the same physical block as an aliased write, the reverse restore leaves
 every block, ours included, as it was. ~200 MB of I/O, capped at 180 s. A bad card → a plain message on the splash
-for 20 s ("This card is smaller than it claims: X works of the Y it reports"), then p4 sized to what works.
+for 20 s ("Part of this card failed a check. It says Y, but only the first X can be trusted. VibeSDR itself needs S, leaving F for your files." — the figures add up as shown), then p4 sized to what works.
 **Known limit:** a wrap at a size that is not a power of two (aliases between the samples) is not seen; such cards
 usually also drop writes, which is seen. A power cut *during* the ~1 min check on a fake card is the one case that can
 damage the card.

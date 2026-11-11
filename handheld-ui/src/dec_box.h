@@ -22,6 +22,7 @@
 // ★ Cheap: only the visible rows are drawn; text is wrapped once when it arrives (dec_state.h DecLog), never per frame.
 #pragma once
 #include "dec_state.h"
+#include "cw_plain.h"  // ★ CW's EXPLAIN reading (the app's plainEnglish, ported + held to it by test/cw_plain_test.cpp)
 #include "dec_pic.h"   // ★ the picture decoders' state (WEFAX, SSTV, HELL); their drawing is dec_pic_box.h, included at the end
 
 namespace hh {
@@ -111,11 +112,37 @@ inline bool decKey(Ctx& c, const std::string& id, Rect r, const std::string& lab
     return button(c, id, r, label, st);
 }
 
-/** A scrolling column of full-width rows (registered under prefix + key(k)); returns the row pressed, or -1. */
+/** ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (the app's useSpotsPin, Stuart 2026-10-31; the R36S 2026-11-11):
+ *  the rows at the top of the view (up to three, by key, with where each sat) are kept; next frame, the first of them
+ *  still listed is put back at the same place on screen — so a signal arriving ABOVE it (rows are lowest frequency
+ *  first) or leaving, or a row changing above it, does not move what is being read. Even at the very top: scroll up
+ *  to see a new one. The highlight still brings its own row into view (Scroller::follow). */
+struct DecAnchor { std::vector<std::pair<std::string, float>> rows; };
+
+/** ★ CW (not PSK — typed, not abbreviated — nor JTTY) read in plain English: the EXPLAIN key (settings cwPlain). */
+inline bool decCwPlain(const App& a) { return a.set_.cwPlain && decUi().active == "cw"; }
+
+/** A scrolling column of full-width rows (registered under prefix + key(k)); returns the row pressed, or -1.
+ *  `hold` (optional): keep the rows being read in place as the list changes (DecAnchor). */
 template <class KeyF, class DrawF>
-inline int decRows(Ctx& c, Scroller& sc, Rect view, int n, float rowH, const std::string& prefix, KeyF key, DrawF draw) {
+inline int decRows(Ctx& c, Scroller& sc, Rect view, int n, float rowH, const std::string& prefix, KeyF key, DrawF draw,
+                   DecAnchor* hold = nullptr) {
     int hit = -1;
     sc.contentH = n * rowH;
+    if (hold && !hold->rows.empty()) {
+        bool done = false;
+        for (auto& ar : hold->rows) {
+            for (int k = 0; k < n && !done; k++) {
+                if (key(k) != ar.first) continue;
+                const float d = (k * rowH - ar.second) - sc.y;   // where it must be scrolled to sit where it sat
+                sc.y += d; sc.target += d;
+                done = true;
+            }
+            if (done) break;
+        }
+        const float mx = std::max(0.f, sc.contentH - view.h);
+        sc.y = std::max(0.f, std::min(sc.y, mx)); sc.target = std::max(0.f, std::min(sc.target, mx));
+    }
     c.g.clip(view.x - 1, view.y, view.w + 2, view.h);
     Rect fr{}; bool haveF = false;
     for (int k = 0; k < n; k++) {
@@ -129,6 +156,11 @@ inline int decRows(Ctx& c, Scroller& sc, Rect view, int n, float rowH, const std
     if (haveF && fr.b() > view.y && fr.y < view.b())
         c.g.rframe(fr.x - 1, std::max(view.y, fr.y) - 1, fr.w + 2, std::min(view.b(), fr.b()) - std::max(view.y, fr.y) + 2, 7, 3, th::focus);
     sc.follow(c.nav.focusedRect(), view, 3);
+    if (hold) {
+        hold->rows.clear();
+        for (int k = std::max(0, (int)std::floor(sc.y / rowH)); k < n && hold->rows.size() < 3; k++)
+            hold->rows.push_back({key(k), k * rowH - sc.y});
+    }
     if (sc.contentH > view.h + 1) {
         const float frac = view.h / sc.contentH, top = sc.y / sc.contentH;
         c.g.rrect(view.r() + 2, view.y + top * view.h, 3, std::max(10.f, frac * view.h), 1.5f, th::dim);
@@ -143,6 +175,7 @@ inline int decRows(Ctx& c, Scroller& sc, Rect view, int n, float rowH, const std
 inline void decDrawLog(App& a, Ctx& c, Rect body, const std::string& idle) {
     DecUi& u = decUi();
     DecLog& L = u.log;
+    L.setXform(decCwPlain(a) ? &cwPlainEnglish : nullptr);
     const Font& f = c.f.body;
     const float lh = (float)f.lineHeight();
     L.layout(c.tc, f, (int)body.w - 22);
@@ -210,6 +243,7 @@ inline void decNone(Ctx& c, Rect view, const std::string& t) {
 }
 
 inline Scroller& decListScroll() { static Scroller s; return s; }
+inline DecAnchor& decSigAnchor() { static DecAnchor h; return h; }
 
 /** CW / PSK / JTTY signals: frequency · speed or mode · SNR · call · text — press = tune to it. */
 inline void decPaneSignals(App& a, Ctx& c, const RadioState& s, Rect view) {
@@ -229,8 +263,9 @@ inline void decPaneSignals(App& a, Ctx& c, const RadioState& s, Rect view) {
             }
             const std::string fq = g.hz > 0 ? decKHz(g.hz) : std::to_string((int)g.audio) + " Hz";
             const std::string who = g.call.empty() ? "" : g.call + "  ";
-            decRowText(c, rr, fq, 92, who + g.text, decQCol(g.q), g.active ? th::white : th::white68, spd);
-        });
+            decRowText(c, rr, fq, 92, who + (!psk && !jtty && decCwPlain(a) ? cwPlainEnglish(g.text) : g.text), decQCol(g.q),
+                       g.active ? th::white : th::white68, spd);
+        }, &decSigAnchor());
     if (hit >= 0) {
         const DecSig& g = u.sigs[(size_t)hit];
         if (!(g.hz > 0)) return;
@@ -788,6 +823,8 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (view == "aprs" || view == "dsc" || view == "spots") ks.push_back({"dec.k.map", "MAP", 50, false});   // the APRS / DSC / SPOTS map (map_modes.h)
             if (d && d->kind == DK_PICTURE) { std::vector<PicKey> pk; decPicKeys(a, view, pk); for (auto& k : pk) ks.push_back({k.id, k.label, k.act, k.on}); }
             ks.push_back({"dec.k.pick", "DECODERS", 1, false});
+            // ★★ EXPLAIN ↔ RAW (the app's key, Stuart 2026-10-30): the legend names what a press DOES; CW only
+            if (view == "cw") ks.push_back({"dec.k.plain", a.set_.cwPlain ? "RAW" : "EXPLAIN", 4, false});
             // ★ CLR only where there is something it clears (an external decoder: only with its own clear action)
             if (view != "refused" && (!xv || xv->clear)) ks.push_back({"dec.k.clr", "CLR", 2, false});
             ks.push_back({"dec.k.stop", decRunning() ? "STOP" : "CLOSE", 3, false});
@@ -840,11 +877,13 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (decRunning()) decStop(a, view == "spots" ? "spots" : view);
             if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); decRelease(a); }
             else a.nav_.forget("dec");
+        } else if (act == 4) { a.set_.cwPlain = a.set_.cwPlain ? 0 : 1; a.dirty();
+            a.toast(a.set_.cwPlain ? "CW in plain English — RAW shows it as sent" : "CW as sent");
         } else if (act == 50) { mapOpenDecoder(a, view);
-        } else if (act == 10) { u.view = view == "spots" ? u.active : "spots"; u.sub = 0; decListScroll() = {}; a.nav_.forget("dec"); }
+        } else if (act == 10) { u.view = view == "spots" ? u.active : "spots"; u.sub = 0; decListScroll() = {}; decSigAnchor() = {}; a.nav_.forget("dec"); }
         else if (act >= 60) decPicKeyPress(a, act, view);
         else if (act >= 40) { if ((size_t)(act - 40) < extPress.size()) extPress[(size_t)(act - 40)](); }
-        else if (act >= 20) { u.sub = act - 20; decListScroll() = {}; a.nav_.forget("dec"); }
+        else if (act >= 20) { u.sub = act - 20; decListScroll() = {}; decSigAnchor() = {}; a.nav_.forget("dec"); }
     }
     c.nav.layer("deck");
     // the box as ONE stop on the island's layer (the web's [data-navbox]): ENTER grabs

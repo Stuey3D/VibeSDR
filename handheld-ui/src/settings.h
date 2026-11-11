@@ -38,6 +38,9 @@ struct Settings {
      *  second record buffer the default … I enable the 60 second buffer and then when i turn the device off and on again
      *  it has reset back to 0" — it lived only in the audio sheet's memory). */
     int recBuffer = 30;
+    /** ★ CW's EXPLAIN ↔ RAW (the decoder box's key): 1 = CW read in plain English (cw_plain.h), kept like the app's
+     *  vibe_cw_plain. */
+    int cwPlain = 0;
     int freqUnit = 2;              // the readout's and the pad's unit: 0 Hz · 1 kHz · 2 MHz (the web's freqUnit, device-wide)
 
     static std::string path() {
@@ -73,15 +76,16 @@ struct Settings {
         stickDeg = std::max(10, std::min(180, (int)j["stickDeg"].num(stickDeg)));
         recBuffer = (int)j["recBuffer"].num(recBuffer);
         if (recBuffer != 0 && recBuffer != 30 && recBuffer != 60) recBuffer = 30;
+        cwPlain = (int)j["cwPlain"].num(cwPlain) ? 1 : 0;
     }
     void save() const {
         const std::string p = path(), tmp = p + ".tmp";
         FILE* f = std::fopen(tmp.c_str(), "w");
         if (!f) return;
         std::fprintf(f, "{\"step\":%d,\"palette\":%s,\"speed\":%d,\"contrast\":%g,\"sharpness\":%g,\"wfBrightness\":%g,"
-                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d,\"dispClock\":%d,\"dispProven\":%d,\"stickDeg\":%d,\"idleSave\":%d,\"clockAuto\":%d,\"recBuffer\":%d}\n",
+                        "\"specRate\":%d,\"screenOffMin\":%d,\"followVfo\":%s,\"meterMode\":%d,\"freqUnit\":%d,\"dispClock\":%d,\"dispProven\":%d,\"stickDeg\":%d,\"idleSave\":%d,\"clockAuto\":%d,\"recBuffer\":%d,\"cwPlain\":%d}\n",
                      step, jsonQuote(palette).c_str(), speed, contrast, sharpness, wfBrightness, specRate, screenOffMin,
-                     followVfo ? "true" : "false", meterMode, freqUnit, dispClock, dispProven, stickDeg, idleSave, clockAuto, recBuffer);
+                     followVfo ? "true" : "false", meterMode, freqUnit, dispClock, dispProven, stickDeg, idleSave, clockAuto, recBuffer, cwPlain);
         std::fflush(f);
         std::fclose(f);
         std::rename(tmp.c_str(), p.c_str());
