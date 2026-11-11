@@ -300,6 +300,11 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace currentcost
 
+} // namespace vibeism
+// ★ V12 2026-11-11: the HOME families — meters and monitors, alarm sensors, remotes (vibe_ism_kit.h has their tools)
+#include "vibe_ism_meters.h"
+namespace vibeism {
+
 /** Every decoder, in turn, on every smoothing of the burst (finest first). The first that accepts it wins (a burst is one
  *  transmitter). */
 inline void decodeOne(const Burst& b, std::vector<Reading>& out);
@@ -335,6 +340,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (acurite::decode782(b, out)) return;
     if (lacrosse::decode(b, out)) return;
     if (currentcost::decode(b, out)) return;
+    if (decodeMeters(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
     if (tpms::decodeA(b, out)) return;

@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vibeism {
@@ -40,6 +41,14 @@ struct Reading {
     std::string extra;       ///< a reading in words, shown in the line ("13 bucket tips", "pairing", "new battery")
     double freqHz = 0;       ///< filled by the service: the burst's frequency
     float levelDb = -99, snrDb = 0;
+    /** ★ THE BENCH'S VALUES (2026-11-11): what the frame said, as name → value pairs named as the published write-ups
+     *  name them ("depth_cm", "button", "state"), so tools/ism-bench/ism_replay can score a reading against a recording's
+     *  answer key. Printed ONLY by the bench — the service's JSON never carries them. ★ PRIVACY: never an identity or a
+     *  code of a secret kind (the bench drops "id" on a secret reading as a second guard). */
+    std::vector<std::pair<std::string, std::string>> facts;
+    void fact(const char* k, long long v) { facts.emplace_back(k, std::to_string(v)); }
+    void fact(const char* k, double v) { char b[32]; std::snprintf(b, sizeof b, "%.3f", v); facts.emplace_back(k, b); }
+    void fact(const char* k, const char* v) { facts.emplace_back(k, std::string("\"") + v + "\""); }
     /** ★ V12 kind "meter" only (vibe_wmbus.h): what the meter's frame said — never its encrypted bytes. */
     std::shared_ptr<const wmbus::Meter> meter;
 };

@@ -69,6 +69,15 @@ int main(int argc, char** argv) {
                 num(o, "wind_avg_km_h", r.windKmh); num(o, "wind_max_km_h", r.gustKmh); num(o, "wind_dir_deg", r.windDir);
                 num(o, "rain_mm", r.rainMm); num(o, "uv", r.uv); num(o, "power_W", r.watts); num(o, "pressure_hPa", r.baroHpa);
                 if (r.battOk >= 0) o += ",\"battery_ok\":" + std::to_string(r.battOk);
+                // ★ the frame's own values for the scorer (Reading::facts) — never an identity of a secret kind
+                if (!r.facts.empty()) {
+                    std::string f;
+                    for (const auto& kv : r.facts) {
+                        if (r.secret && kv.first == "id") continue;
+                        f += (f.empty() ? "" : ",") + jstr(kv.first) + ":" + kv.second;
+                    }
+                    if (!f.empty()) o += ",\"facts\":{" + f + "}";
+                }
                 num(o, "t", b.tSec);
                 o += "}";
                 std::puts(o.c_str());
