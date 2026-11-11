@@ -18793,12 +18793,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 if (!me->nrOn.load()) { std::lock_guard<std::mutex> lk(me->fxMtx);
                                         if (me->nrEng) me->nrEng->reset(); }
+                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
                 return;
             }
             if (type == "notch") {
                 me->notchOn.store(jsonOn(msg));
                 if (!me->notchOn.load()) { std::lock_guard<std::mutex> lk(me->fxMtx);
                                            if (me->notchEng) me->notchEng->reset(); }
+                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
                 return;
             }
             if (type == "deemph") {
@@ -18806,6 +18808,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ SECONDS on the wire — see vibeserver_wire_units_seconds. A value in
                 //   microseconds here is 1000x wrong and sounds like no de-emphasis at all.
                 if (jsonNum(msg, "tau", tau) && me->rx) { me->deempTau = tau; me->rx->setDeemphasis(tau); fmNote(sock); }
+                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
                 return;
             }
             if (type == "nfmvoice") {
@@ -18814,6 +18817,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const bool on = jsonOn(msg);
                 me->nfmVoice.store(on);
                 if (me->rx) me->rx->setNfmVoice(on);
+                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
                 return;
             }
             if (type == "stereo") {
@@ -18821,6 +18825,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 me->stereoOn.store(on);
                 if (me->rx) me->rx->setStereoEnabled(on);
                 fmNote(sock);
+                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
                 return;
             }
         }
@@ -20898,6 +20903,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     and was using it until you restarted it which should've saved the Bias-t
             //     setting"). Gain and the notches already did this; these four were missed.
             vsPersist(std::string("{\"biasT\":") + (on ? "true" : "false") + "}");
+            /* ★★ AND SAY SO (Stuart, 2026-11-11, the R36S: "if I stay in the menu the button will switch back" — Bias-T, AUTO NOTCH,
+             *  NOISE BLANKER …). A client shows its press for a few seconds and then the radio's report; these handlers acted and
+             *  sent no report, so the last one — the OLD state — won and the row flipped back while the change stood. Every switch
+             *  answers now: this listener's own → their hwinfo; a shared one → every listener's (the shared-dial contract). */
+            LocalSdrShim::instance().broadcastHwInfo();
             return;
         }
         if (type == "agc") {
@@ -20924,7 +20934,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "ppm") {
             if (!adminGate("ppm")) return;
             if (jsonNum(msg,"value",v)) { LocalSdrShim::instance().setPpm((int)v);
-                                          vsPersist("{\"ppm\":" + std::to_string((int)v) + "}"); }
+                                          vsPersist("{\"ppm\":" + std::to_string((int)v) + "}");
+                                          LocalSdrShim::instance().broadcastHwInfo(); }   // ★ AND SAY SO — see the biasT handler
             return;
         }
         // Capture sample rate = the spectrum span the server sends. A remote client
@@ -21140,6 +21151,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 ((*dsp).*slot).store(on);
                 if (dsp->rx) ((*dsp->rx).*setter)(on);
                 fmNote(sock);   // ★ theirs, and "the last listener's" (vibe_fm_defaults.h)
+                sendHwInfo(sock);   // ★ AND SAY SO — see the biasT handler
                 return;
             }
             (rx.*setter)(on);
@@ -21148,6 +21160,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  applyDesiredDsp replays g_dsp, and this path never wrote it. */
             vsFmRecordDesired(fmSharedState());
             fmNote(sock);
+            LocalSdrShim::instance().broadcastHwInfo();   // ★ AND SAY SO — shared, so everybody's (see the biasT handler)
         };
         /* ★ NAMED IN THE LOG, because these six were dead on a local dongle for two releases and
          *  nothing said so — the switch moved, the audio did not, and there was no way to tell
@@ -21844,7 +21857,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // tell something is wrong.
         // ★ ADVERTISE STATE THE SERVER ENFORCES. Every silent disagreement we have hit
         // — locked rate, fps ceiling, admin lock, and now these — is the same bug.
-        j += std::string(",\"nr\":")    + (nrOn.load()    ? "true" : "false");
         // ★★ REPORTED, NOT JUST ACCEPTED. A sticky control that does not say its state cannot be
         //    restored by a client that reconnects, and the button then lies about the radio — the
         //    lesson from the July fix that did `nr` and `notch` and left four siblings behind.
@@ -21883,7 +21895,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ REPORTED, so a client shows the NFM Voice/Raw control only on a server that has it —
         //   an older one never states it, and a button that does nothing is worse than none.
         j += std::string(",\"nfmvoice\":") + (mine(&ClientDsp::nfmVoice, g_nfmVoiceShared) ? "true" : "false");
-        j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
+        /* ★★ NR AND NOTCH ARE THIS LISTENER'S TOO (2026-11-11). Their handlers store me->nrOn / me->notchOn, but this
+         *  reported the SHARED pair — so with a per-listener pipeline the report never changed and AUTO NOTCH flipped
+         *  back on the R36S the moment its press guard ran out. Through mine(), as nb / nbx / ceq already were. */
+        j += std::string(",\"nr\":")    + (mine(&ClientDsp::nrOn,    nrOn)    ? "true" : "false");
+        j += std::string(",\"notch\":") + (mine(&ClientDsp::notchOn, notchOn) ? "true" : "false");
         /* ★★★ DE-EMPHASIS AND STEREO WERE ACCEPTED AND NEVER REPORTED — the same shape again (Stuart,
          *  2026-10-17): set 75 µs on a US server, come home, and the app showed 75 while this server
          *  ran 50, because the app had nothing to read and drew the last value it had saved. Stated
@@ -21910,7 +21926,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    the client fell back to its own saved number and drew a figure the radio was not
         //    using. A boolean cannot describe a continuous control.
         //    ★ <0 means the listener never set one — send nothing rather than invent a value.
-        if (vsDesiredNrStrength() >= 0.0f)
+        // ★ …and THIS listener's strength where they have their own pipeline (2026-11-11, with nr / notch above)
+        if (myDsp) j += ",\"nrStrength\":" + std::to_string(myDsp->nrStrength);
+        else if (vsDesiredNrStrength() >= 0.0f)
             j += ",\"nrStrength\":" + std::to_string(vsDesiredNrStrength());
         // ★★ Tri-state on the wire as well as in the store: these are only meaningful once
         //    somebody has chosen, and the RSP ones only exist on an RSP at all. Omitting the
