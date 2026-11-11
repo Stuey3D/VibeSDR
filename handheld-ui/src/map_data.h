@@ -469,7 +469,7 @@ public:
     MapFile* want(const std::string& name, uint64_t frame, int prio = 0) {
         auto it = files_.find(name);
         if (it != files_.end()) { it->second->used = frame; return it->second.get(); }
-        ask(name, prio);
+        ask(name, prio, frame);
         return nullptr;
     }
     /** Is it resident (no request)? */
@@ -482,7 +482,15 @@ public:
         {
             std::lock_guard<std::mutex> lk(m_);
             if (ixFresh_) { ix_ = ixNext_; ixFresh_ = false; gen_++; }
-            for (int i = 0; i < 2 && !done_.empty(); i++) { got.push_back(done_.front()); asked_.erase(done_.front()->name); done_.pop_front(); }
+            for (int i = 0; i < 2 && !done_.empty(); i++) {
+                auto f = done_.front(); done_.pop_front(); asked_.erase(f->name);
+                // ★ PURGED ON ZOOM: a file the newest view no longer asked for is dropped here, never uploaded (see endRender)
+                auto a = askedAt_.find(f->name);
+                const bool stale = a != askedAt_.end() && a->second < lastRender_;
+                if (a != askedAt_.end()) askedAt_.erase(a);
+                if (stale) { i--; continue; }
+                got.push_back(f);
+            }
         }
         for (auto& f : got) {
             upload(*f);
@@ -496,6 +504,24 @@ public:
     /** The frame of the last basemap render (MapRender::render): the files it touched carry this `used`, and they are
      *  the picture on screen — evict() never takes one (see there). */
     void noteRender(uint64_t frame) { lastRender_ = frame; }
+    /** ★★★ PURGED ON ZOOM (Stuart, 2026-11-11: "the tiles all seem to overlap different zoom levels etc, so we maybe need
+     *  to purge the ram when zooming"). Every render asks for exactly the files ITS view needs; a zoom from z10 to z2
+     *  rendered every level on the way, and each one queued its own files — the R36S then fetched, parsed and uploaded
+     *  13–20 MB of coastline, countries and lakes for views that were gone a second later (11-11 log: 75 ms renders,
+     *  the last 303 ms, uploads all through the zoom). After a render, whatever it did NOT ask for leaves the queue, and
+     *  a file that lands afterwards for an older view is thrown away in pump() instead of uploaded. The file in flight
+     *  finishes (one read); nothing already on screen is touched. UI thread, at the end of MapRender::render. */
+    void endRender(uint64_t frame) {
+        std::lock_guard<std::mutex> lk(m_);
+        size_t dropped = 0;
+        for (auto it = q_.begin(); it != q_.end();) {
+            auto a = askedAt_.find(it->first);
+            if (a == askedAt_.end() || a->second < frame) { asked_.erase(it->first); if (a != askedAt_.end()) askedAt_.erase(a); it = q_.erase(it); dropped++; }
+            else ++it;
+        }
+        static const bool logIt = std::getenv("VIBE_HHUI_MAP_LOG") != nullptr;
+        if (logIt && dropped) std::fprintf(stderr, "vibe-hhui: map dropped %zu queued files the view no longer needs\n", dropped);
+    }
     size_t residentBytes() const { return total_; }
     int residentFiles() const { return (int)files_.size(); }
     std::string lastError() { std::lock_guard<std::mutex> lk(m_); return err_; }
@@ -507,7 +533,7 @@ public:
     /** ★ Everything gone, the loader's queue too (the map closed — mapClosePage). A file in flight lands in done_ and is
      *  uploaded fresh the next time the map is up. UI thread. */
     void flush() {
-        { std::lock_guard<std::mutex> lk(m_); q_.clear(); done_.clear(); asked_.clear(); }
+        { std::lock_guard<std::mutex> lk(m_); q_.clear(); done_.clear(); asked_.clear(); askedAt_.clear(); }
         dropAll();
         lastRender_ = 0;
     }
@@ -523,6 +549,7 @@ private:
     std::condition_variable cv_;
     std::deque<std::pair<std::string, int>> q_;            // (file, priority) — newest asks first within a priority
     std::set<std::string> asked_;                          // queued or in flight
+    std::map<std::string, uint64_t> askedAt_;              // the render frame that last asked (endRender's purge)
     std::map<std::string, double> failedAt_;               // a miss: retried after 3 s
     std::deque<std::shared_ptr<MapFile>> done_;
     bool busy_ = false, ixFresh_ = false, ixAsked_ = false;
@@ -534,8 +561,9 @@ private:
 
     static double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
-    void ask(const std::string& name, int prio) {
+    void ask(const std::string& name, int prio, uint64_t frame) {
         std::lock_guard<std::mutex> lk(m_);
+        askedAt_[name] = frame;
         if (asked_.count(name)) {
             // ★ asked again: to the front of its priority (the file the view needs NOW goes first)
             for (auto it = q_.begin(); it != q_.end(); ++it) if (it->first == name) { auto e = *it; q_.erase(it); q_.push_front({e.first, std::max(e.second, prio)}); break; }
@@ -546,7 +574,7 @@ private:
         asked_.insert(name);
         q_.push_front({name, prio});
         // ★ bounded: a long pan can ask for more than will ever be drawn — the oldest asks fall off
-        while (q_.size() > 48) { asked_.erase(q_.back().first); q_.pop_back(); }
+        while (q_.size() > 48) { asked_.erase(q_.back().first); askedAt_.erase(q_.back().first); q_.pop_back(); }
         cv_.notify_one();
     }
 

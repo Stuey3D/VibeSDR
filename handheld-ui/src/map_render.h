@@ -175,6 +175,7 @@ public:
         layers();
         labels(tc, mf);
         g_.flush();
+        st.endRender(frame);   // ★ purged on zoom: what this view did not ask for leaves the load queue (map_data.h)
         glDisable(GL_STENCIL_TEST);
         if (drawFbo_) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, drawFbo_);
@@ -246,13 +247,15 @@ private:
         bool all = true;
         for (auto& n : names) { MapFile* f = st_->want(n, frame_, prio); if (f) got.push_back(f); else all = false; }
         if (all) return got;
-        // ★★★ THE OLD LAND STAYS UP UNTIL THE NEW LAND HAS ARRIVED: the best lower tier already resident underneath,
-        //     what has arrived of the wanted one on top
+        // ★★★ THE OLD LAND STAYS UP UNTIL THE NEW LAND HAS ARRIVED: the best lower tier already resident, ON ITS OWN.
+        // ★★ Not with what has arrived of the wanted one on top (Stuart, 2026-11-11: "the tiles all seem to overlap
+        //    different zoom levels"): two tiers of one layer drawn together is two coastlines and two sets of borders a
+        //    few pixels apart. One complete tier at a time; the new one replaces it whole once all of it is here.
         for (int u = want - 1; u >= 0; u--) {
             if (!exists(u)) continue;
             bool ok = true; std::vector<MapFile*> lower;
             for (auto& n : filesFor(layer, u)) { MapFile* f = st_->peekFile(n); if (f) { f->used = frame_; lower.push_back(f); } else ok = false; }
-            if (ok) { lower.insert(lower.end(), got.begin(), got.end()); return lower; }
+            if (ok) return lower;
         }
         return got;
     }

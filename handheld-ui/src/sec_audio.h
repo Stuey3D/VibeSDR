@@ -92,7 +92,8 @@ struct State {
     int sentTap = -1;
     // the recorder
     arec::Recorder rec;
-    int rbSec = 0;                 // ★ the handheld's default is OFF (main.ts:16787), and it is DRAWN off
+    int rbSec = 0;                 // ★ set from Settings::recBuffer (30 s by default, kept) at the first audioTick
+    bool rbLoaded = false;
     Anchor rbAnchor;
     double recPressAt = 0;
     // DSP presses (the 4 s guard): key → (time, value)
@@ -297,6 +298,13 @@ inline void audioTick(App& a, const RadioState& s) {
         S.lastTickAt = 0;
     }
     S.wasConnected = s.connected;
+    // ★ the REC BUFFER as it was left (Settings::recBuffer — 30 s on a fresh handheld)
+    if (!S.rbLoaded) {
+        S.rbLoaded = true;
+        S.rbSec = a.set_.recBuffer;
+        S.rec.setBuffer(S.rbSec);
+        S.rbAnchor = Anchor{}; S.rbAnchor.windowS = S.rbSec;
+    }
     syncTap(a, s);
     // the auto squelch, once per `sig` sample (≈ 20 a second): a new figure, or 50 ms since the last (a repeat)
     if (S.autoOn && s.last.count("sig")) {
@@ -614,7 +622,7 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
         y += 50 + 18;
     }
 
-    // ════ REC BUFFER — §3.7 (★ drawn as it IS: off on a fresh handheld, never the markup's lit 30 s) ════
+    // ════ REC BUFFER — §3.7 (★ drawn as it IS; 30 s on a fresh handheld, the choice kept — Settings::recBuffer) ════
     {
         rowLabel(c, "REC BUFFER", x0, y + 21);
         const int opts[3] = {0, 30, 60};
@@ -624,6 +632,7 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
         navRow({{"a.rb#0", xr - 198 + 31}, {"a.rb#1", xr - 99}, {"a.rb#2", xr - 31}});
         if (hit >= 0 && opts[hit] != S.rbSec) {
             S.rbSec = opts[hit];
+            set_.recBuffer = S.rbSec; dirty();   // ★ kept through a restart
             S.rec.setBuffer(S.rbSec);
             S.rbAnchor = Anchor{}; S.rbAnchor.windowS = S.rbSec;
             syncTap(*this, s);

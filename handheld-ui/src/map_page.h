@@ -8,6 +8,7 @@
 // ★ The pad on the map: map_view.h's header (mapControl — one table).
 // ★ Include AFTER dec_box.h and dab_box.h (a whole-radio mode leaves DAB and stops a decoder, as the web does).
 #pragma once
+#include "aprs_marks.h"
 #include "hw_state.h"
 #include "map_view.h"
 
@@ -19,8 +20,10 @@
 namespace hh {
 
 /** A thing on the map (an aircraft, a ship, a beacon, a station, a pin). glyph: see mapGlyph. angle: degrees, NaN = none. */
-struct MapMarker { std::string key; double lat = 0, lon = 0; int glyph = 0; float angle = NAN; Rgba col{1, 1, 1, 1}; std::string label; };
-enum { MG_DOT, MG_PLANE, MG_SHIP, MG_MOORED, MG_ATON, MG_NDB, MG_PIN, MG_STATION, MG_NODE };
+struct MapMarker { std::string key; double lat = 0, lon = 0; int glyph = 0; float angle = NAN; Rgba col{1, 1, 1, 1}; std::string label;
+                   std::string sym;   // MG_APRS: the station's APRS symbol, table + code ("/>" a car)
+};
+enum { MG_DOT, MG_PLANE, MG_SHIP, MG_MOORED, MG_ATON, MG_NDB, MG_PIN, MG_STATION, MG_NODE, MG_APRS };
 /** One row of the page's list. */
 struct MapListRow { std::string key, title, right, sub; Rgba col = th::amber; bool pos = false; double lat = 0, lon = 0; };
 
@@ -167,6 +170,62 @@ inline void mapShape(Ctx& c, float x, float y, const float* pts, int n, float de
     float x0, y0; P(0, x0, y0);
     for (int i = 1; i + 1 < n; i++) { float x1, y1, x2, y2; P(i, x1, y1); P(i + 1, x2, y2); c.g.triangle(x0, y0, x1, y1, x2, y2, col); }
 }
+/** ★★ APRS ICONS (Stuart, 2026-11-11: "APRS on OWRX … uses little icons for certain things like a little red car or a
+ *  house etc, can we do something similar please"). The APP'S OWN, as the web client draws them — src/services/tracks.ts
+ *  aprsIcon(): a disc in the station's colour (aprsColour, below), its picture dark on it (aprs_marks.h, generated from
+ *  tracks.ts APRS_GLYPH by test/gen_aprs_marks.mjs), the symbol code itself when there is no picture, a dashed ring for
+ *  the alternate table, an overlay character bottom right. ×1.2 for the panel (26 px). */
+inline Rgba mapAprsColour(const std::string& kind, const std::string& sym, double speed) {   // tracks.ts aprsColour, a copy
+    const char code = sym.size() > 1 ? sym[1] : '/';
+    if (kind == "weather" || code == '_') return rgb(0x39d0d8);
+    if (kind == "object" || kind == "item") return rgb(0xffad42);
+    if (code == '#' || code == '&' || code == 'r') return rgb(0xc58cff);
+    if (std::isfinite(speed) && speed >= 2) return rgb(0x4fa3ff);
+    return rgb(0x59c26b);
+}
+inline void mapAprsIcon(Ctx& c, const MapMarker& m, float x, float y) {
+    using namespace aprsmark;
+    const float k = kSize / 22.f;
+    const Rgba ink = rgb(0x0b1014);
+    const char table = m.sym.size() > 0 ? m.sym[0] : '/', code = m.sym.size() > 1 ? m.sym[1] : '/';
+    c.g.circle(x, y, 10 * k + 0.7f * k, 0, ink);           // the disc's outline (stroke 1.4, half outside)
+    c.g.circle(x, y, 10 * k - 0.7f * k, 0, m.col);
+    if (table == '\\') {                                    // the alternate table: the ring dashed (3 / 1.6)
+        const int n = 14;
+        for (int i = 0; i < n; i++) if (i % 2) {
+            const float a0 = i * 6.2831853f / n, a1 = (i + 1) * 6.2831853f / n;
+            c.g.line(x + std::cos(a0) * 10 * k, y + std::sin(a0) * 10 * k, x + std::cos(a1) * 10 * k, y + std::sin(a1) * 10 * k, 1.6f * k, m.col);
+        }
+    }
+    const int gi = glyphFor(code);
+    if (gi >= 0) {
+        static GLuint tex[kCount] = {};
+        if (!tex[gi]) {
+            std::vector<uint8_t> px((size_t)kSize * kSize * 4);
+            for (int i = 0; i < kSize * kSize; i++) { px[(size_t)i * 4] = px[(size_t)i * 4 + 1] = px[(size_t)i * 4 + 2] = 255; px[(size_t)i * 4 + 3] = kMask[gi][i]; }
+            glGenTextures(1, &tex[gi]);
+            glBindTexture(GL_TEXTURE_2D, tex[gi]);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
+        c.g.image(tex[gi], std::round(x - kSize / 2.f), std::round(y - kSize / 2.f), (float)kSize, (float)kSize, ink);
+    } else if (code > ' ' && code < 0x7f) {
+        const std::string t(1, code);
+        c.tc.draw(c.g, c.f.small, t, x - c.tc.width(c.f.small, t) / 2.f, y - 8, ink);
+    }
+    const bool overlay = table != '/' && table != '\\' && ((table >= '0' && table <= '9') || (table >= 'A' && table <= 'Z'));
+    if (overlay) {
+        const std::string t(1, table);
+        const float ox = x + 6.5f * k, oy = y + 4 * k;
+        c.g.circle(ox, oy, 5 * k, 0, ink);
+        c.tc.draw(c.g, c.f.tiny, t, ox - c.tc.width(c.f.tiny, t) / 2.f, oy - 6, rgb(0xffffff));
+    }
+}
 inline void mapGlyph(Ctx& c, const MapMarker& m, float x, float y, bool sel) {
     const Rgba k = rgb(0, 0.8f);
     const float ang = std::isfinite(m.angle) ? m.angle : 0;
@@ -197,22 +256,35 @@ inline void mapGlyph(Ctx& c, const MapMarker& m, float x, float y, bool sel) {
         case MG_NDB: c.g.circle(x, y, 8, 0, k); c.g.circle(x, y, 7, 1.8f, m.col); c.g.circle(x, y, 2.5f, 0, m.col); break;
         case MG_PIN: c.g.circle(x, y, 9, 0, k); c.g.circle(x, y, 7, 0, m.col); c.g.circle(x, y, 2.5f, 0, rgb(0)); break;
         case MG_STATION: c.g.rect(x - 6, y - 6, 12, 12, k); c.g.rect(x - 4.5f, y - 4.5f, 9, 9, m.col); break;
+        case MG_APRS: mapAprsIcon(c, m, x, y); break;
         case MG_NODE: { static const float t[] = {0, -1, 0.9f, 0.7f, -0.9f, 0.7f}; mapShape(c, x, y, t, 3, 0, 9, k); mapShape(c, x, y, t, 3, 0, 7, m.col); break; }
         default: c.g.circle(x, y, 6, 0, k); c.g.circle(x, y, 4.5f, 0, m.col); break;
     }
 }
-/** The receiver: a little radio, cyan (Stuart, 2026-11-08: "a little radio icon on the map to show the receiver
- *  location") — a cabinet with a whip, a dial and a speaker grille, outlined dark so it reads on land and sea; the
- *  cabinet's centre is the spot. */
+/** The receiver: THE DIRECTORY'S RADIO (Stuart, 2026-11-11: "the Radio Icon on the map is incorrect it needs to be the
+ *  same one we use in the directory map for the servers") — directory/public/index.html radioGlyph(), stroke for stroke
+ *  on its 24-unit box: the cabinet, the dial with its dot, three grille bars, the aerial off the top right; in the
+ *  directory's "free" green, with a dark pass under it for the page's drop shadow, so it reads on land and sea. The
+ *  glyph's centre (12, 12) is the spot. ~29 px (the directory's 22 px marker, scaled for the 640×480 panel). */
 inline void mapHouse(Ctx& c, float x, float y) {
-    const Rgba k = rgb(0, 0.85f), col = rgb(0x46e0ff), ink = rgb(0x06222a);
-    c.g.line(x + 5, y - 6, x + 11, y - 17, 3.5f, k);            // the whip: outline, then cyan
-    c.g.line(x + 5, y - 6, x + 11, y - 17, 1.6f, col);
-    c.g.circle(x + 11, y - 17, 2.2f, 0, col);
-    c.g.rrect(x - 11, y - 7, 22, 15, 3, k);                      // the cabinet
-    c.g.rrect(x - 9.5f, y - 5.5f, 19, 12, 2, col);
-    c.g.circle(x + 4.5f, y + 0.5f, 3.2f, 0, ink);                // the dial
-    for (int i = 0; i < 3; i++) c.g.rect(x - 7.5f, y - 3 + i * 3, 7, 1.4f, ink);   // the grille
+    const float k = 1.2f;
+    const Rgba col = rgb(0x28A745), dark = rgb(0, 0.85f);
+    auto P = [&](float gx, float gy, float& ox, float& oy) { ox = x + (gx - 12) * k; oy = y + (gy - 12) * k; };
+    for (int pass = 0; pass < 2; pass++) {
+        const Rgba cc = pass ? col : dark;
+        const float t = (pass ? 1.8f : 3.8f) * k;
+        auto L = [&](float ax, float ay, float bx, float by) { float x0, y0, x1, y1; P(ax, ay, x0, y0); P(bx, by, x1, y1); c.g.line(x0, y0, x1, y1, t, cc); };
+        // the cabinet <rect x=3 y=8.5 w=18 h=12.5>: four sides, the corners squared off by half a stroke
+        L(3 - 0.9f, 8.5f, 21 + 0.9f, 8.5f); L(3 - 0.9f, 21, 21 + 0.9f, 21); L(3, 8.5f, 3, 21); L(21, 8.5f, 21, 21);
+        // the dial <circle cx=8.6 cy=14.8 r=2.9> and its dot (r 1)
+        float dx, dy; P(8.6f, 14.8f, dx, dy);
+        c.g.circle(dx, dy, 2.9f * k + t * 0.5f, t, cc);
+        c.g.circle(dx, dy, pass ? 1.0f * k : 1.0f * k + 1.0f, 0, cc);
+        // the grille: three bars, y 11.6 → 18
+        L(14.2f, 11.6f, 14.2f, 18); L(16.8f, 11.6f, 16.8f, 18); L(19.2f, 11.6f, 19.2f, 18);
+        // the aerial
+        L(14.6f, 8.5f, 19.3f, 3.2f);
+    }
 }
 /** A range ring (km) round a point — 72 chords, so a large ring is a circle, not a polygon. */
 inline void mapRing(Ctx& c, const MapView& v, double lat, double lon, double km, Rgba col, const std::string& label, const Font& f) {

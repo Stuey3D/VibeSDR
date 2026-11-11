@@ -44,7 +44,7 @@ struct MapMode {
 };
 
 struct MapAdsbInfo { std::string reg, type, desc, op, route; };
-struct MapAprsSt { std::string key, name, kind, line, sym; double lat = NAN, lon = NAN, course = NAN, speed = NAN, seen = 0, at = 0; std::vector<std::pair<double, double>> trail; };
+struct MapAprsSt { std::string key, name, kind, line, sym, symCode; double lat = NAN, lon = NAN, course = NAN, speed = NAN, seen = 0, at = 0; std::vector<std::pair<double, double>> trail; };
 struct MapDscPin { std::string key, line; double lat = 0, lon = 0, at = 0; int level = 0; };
 
 struct MapModes {
@@ -345,7 +345,7 @@ inline void mapAdsbBuild(App& a, const RadioState& s, std::vector<MapListRow>& r
             row.pos = true; row.lat = lat; row.lon = lon; withPos++;
             const std::string d = mapDist(lat, lon);
             if (!d.empty()) sub += (sub.empty() ? "" : " · ") + d;
-            if (mk.size() < 600) mk.push_back({hex, lat, lon, MG_PLANE, (float)p["track"].num(NAN), row.col, row.title});
+            if (mk.size() < 600) mk.push_back({hex, lat, lon, MG_PLANE, (float)p["track"].num(NAN), row.col, row.title, ""});
         } else sub += (sub.empty() ? "" : " · ") + std::string("no position");
         auto in = mapModes().info.find(hex);
         if (in != mapModes().info.end() && !in->second.type.empty()) sub += " · " + in->second.type;
@@ -431,7 +431,7 @@ inline void mapAisBuild(App&, const RadioState& s, std::vector<MapListRow>& rows
             if (!d.empty()) sub += (sub.empty() ? "" : " · ") + d;
             const double hd = v["hdg"].kind == Json::Num && v["hdg"].n < 360 ? v["hdg"].n : v["cog"].num(NAN);
             const int g = aton ? MG_ATON : (std::isfinite(sog) && sog >= 0.5 && std::isfinite(hd)) ? MG_SHIP : MG_MOORED;
-            if (mk.size() < 600) mk.push_back({row.key, lat, lon, g, (float)hd, row.col, row.title});
+            if (mk.size() < 600) mk.push_back({row.key, lat, lon, g, (float)hd, row.col, row.title, ""});
         } else sub += (sub.empty() ? "" : " · ") + std::string("no position yet");
         row.sub = sub;
         rows.push_back(row);
@@ -489,7 +489,7 @@ inline void mapNdbBuild(App&, const RadioState& s, std::vector<MapListRow>& rows
             row.pos = true; row.lat = lat; row.lon = lon;
             const std::string d = db["km"].num(-1) >= 0 ? nmText(db["km"].n, db["brg"].num(0)) : mapDist(lat, lon);
             if (!d.empty()) sub += " · " + d;
-            if (mk.size() < 600) mk.push_back({row.key, lat, lon, MG_NDB, NAN, bars ? rgb(0xd68cff) : rgb(0x9a7aa8), id});
+            if (mk.size() < 600) mk.push_back({row.key, lat, lon, MG_NDB, NAN, bars ? rgb(0xd68cff) : rgb(0x9a7aa8), id, ""});
             drawn[id + mapFmt("%.0f", b["hz"].num(0))] = true;
         }
         row.sub = sub;
@@ -500,7 +500,7 @@ inline void mapNdbBuild(App&, const RadioState& s, std::vector<MapListRow>& rows
         double lat, lon;
         const std::string id = e["ident"].str().substr(0, 6);
         if (!mapPos(e, lat, lon) || drawn.count(id + mapFmt("%.0f", e["hz"].num(0))) || mk.size() >= 600) continue;
-        mk.push_back({"l" + id + mapFmt("%.0f", e["hz"].num(0)), lat, lon, MG_NDB, NAN, rgb(0x8a6a98), id});
+        mk.push_back({"l" + id + mapFmt("%.0f", e["hz"].num(0)), lat, lon, MG_NDB, NAN, rgb(0x8a6a98), id, ""});
     }
     char b[160];
     std::snprintf(b, sizeof b, "%.0f carriers · %.0f identified · %.0f–%.0f kHz", r["carriers"].num(0), r["identified"].num(0), r["lo"].num(0) / 1e3, r["hi"].num(0) / 1e3);
@@ -546,7 +546,7 @@ inline void mapIsmBuild(App&, const RadioState& s, std::vector<MapListRow>& rows
         if (mapPos(d, lat, lon)) {
             row.pos = true; row.lat = lat; row.lon = lon; withPos++;
             const std::string short_ = d["short"].str().substr(0, 8);
-            if (mk.size() < 600) mk.push_back({row.key, lat, lon, MG_NODE, NAN, row.col, short_.empty() ? row.title.substr(0, 16) : short_});
+            if (mk.size() < 600) mk.push_back({row.key, lat, lon, MG_NODE, NAN, row.col, short_.empty() ? row.title.substr(0, 16) : short_, ""});
         }
         rows.push_back(row);
     }
@@ -587,7 +587,7 @@ inline void mapDecFeed(App&, const std::string& type, const Json& d) {
             st.key = s["key"].str().substr(0, 40);
             if (st.key.empty()) continue;
             st.name = (s["name"].str().empty() ? s["from"].str() : s["name"].str()).substr(0, 24);
-            st.kind = s["kind"].str().substr(0, 14); st.line = decAscii(s["line"].str().substr(0, 200)); st.sym = s["symName"].str().substr(0, 40);
+            st.kind = s["kind"].str().substr(0, 14); st.line = decAscii(s["line"].str().substr(0, 200)); st.sym = s["symName"].str().substr(0, 40); st.symCode = s["sym"].str().substr(0, 2);
             mapPos(s, st.lat, st.lon) || (st.lat = NAN, true);
             st.course = s["course"].num(NAN); st.speed = s["speed"].num(NAN); st.seen = s["seen"].num(0); st.at = now;
             for (auto& p : s["trail"].a) if (p.size() >= 2 && st.trail.size() < 200) st.trail.push_back({p[0].num(), p[1].num()});
@@ -618,7 +618,8 @@ inline void mapAprsBuild(App&, const RadioState&, std::vector<MapListRow>& rows,
         row.col = st.kind == "weather" ? rgb(0x5bb6ff) : st.kind == "object" || st.kind == "item" ? rgb(0xd88cff) : th::amber;
         if (std::isfinite(st.lat)) {
             row.pos = true; row.lat = st.lat; row.lon = st.lon; withPos++;
-            mk.push_back({st.key, st.lat, st.lon, MG_STATION, NAN, row.col, row.title});
+            // ★ the app's APRS icon (map_page.h mapAprsIcon) — a car, a house, a balloon … in tracks.ts's colours
+            mk.push_back({st.key, st.lat, st.lon, MG_APRS, NAN, mapAprsColour(st.kind, st.symCode, st.speed), row.title, st.symCode});
         }
         rows.push_back(row);
     }
@@ -651,7 +652,7 @@ inline void mapDscBuild(App&, const RadioState&, std::vector<MapListRow>& rows, 
         row.sub = cut == std::string::npos ? "" : p.line.substr(cut + 4 > p.line.size() ? p.line.size() : cut + 4);
         row.right = agoText(nowSec() - p.at); row.col = lv[p.level]; row.pos = true; row.lat = p.lat; row.lon = p.lon;
         rows.push_back(row);
-        mk.push_back({p.key, p.lat, p.lon, MG_PIN, NAN, lv[p.level], ""});
+        mk.push_back({p.key, p.lat, p.lon, MG_PIN, NAN, lv[p.level], "", ""});
     }
     // ★ distress first, then urgency, safety, routine — newest first within each
     std::stable_sort(rows.begin(), rows.end(), [](const MapListRow& a, const MapListRow& b) { return a.title.compare(0, 8, "DISTRESS") == 0 && b.title.compare(0, 8, "DISTRESS") != 0; });
@@ -692,7 +693,7 @@ inline void mapSpotsBuild(App&, const RadioState&, std::vector<MapListRow>& rows
             row.pos = true; row.lat = lat; row.lon = lon; withPos++;
             const std::string dist = mapDist(lat, lon);
             sub += " · " + sp.grid + (dist.empty() ? "" : " · " + dist);
-            mk.push_back({row.key, lat, lon, MG_DOT, NAN, row.col, row.title});
+            mk.push_back({row.key, lat, lon, MG_DOT, NAN, row.col, row.title, ""});
         } else if (!sp.country.empty()) sub += " · " + sp.country;
         row.sub = sub;
         rows.push_back(row);
@@ -887,9 +888,11 @@ inline void mapCannedTick(App& a, const RadioState& s) {
              "{\"key\":\"w1\",\"kind\":\"meter\",\"make\":\"Kamstrup\",\"model\":\"Multical 21\",\"line\":\"Water 123.456 m³\",\"freq\":868950000,\"snr\":11,\"age\":2}]}";
         if (x.ismBands.empty()) { std::lock_guard<std::mutex> lk(x.capMtx); x.ismBands = {{"433", "433 MHz"}, {"868", "868 MHz (EU)"}, {"915", "915 MHz (US)"}}; }
     } else if (x.canned == "aprs") {
-        if (k % 3 == 0) mapDecFeed(a, "aprs_list", Json::parse("{\"stations\":[{\"key\":\"M0ABC-9\",\"from\":\"M0ABC-9\",\"kind\":\"position\",\"symName\":\"Car\",\"line\":\"car, 48 km/h · via MB7UH\",\"lat\":52.25,\"lon\":-0.88,\"speed\":48,\"course\":120,\"seen\":3},"
-                                                            "{\"key\":\"MB7UH\",\"from\":\"MB7UH\",\"kind\":\"position\",\"symName\":\"Digipeater\",\"line\":\"digipeater\",\"lat\":52.33,\"lon\":-0.71,\"seen\":40},"
-                                                            "{\"key\":\"G4XYZ-13\",\"from\":\"G4XYZ-13\",\"kind\":\"weather\",\"symName\":\"Weather station\",\"line\":\"9.8 °C · 1012 hPa\",\"lat\":52.16,\"lon\":-1.02,\"seen\":120}]}"));
+        if (k % 3 == 0) mapDecFeed(a, "aprs_list", Json::parse("{\"stations\":[{\"key\":\"M0ABC-9\",\"from\":\"M0ABC-9\",\"kind\":\"position\",\"sym\":\"/>\",\"symName\":\"Car\",\"line\":\"car, 48 km/h · via MB7UH\",\"lat\":52.25,\"lon\":-0.88,\"speed\":48,\"course\":120,\"seen\":3},"
+                                                            "{\"key\":\"MB7UH\",\"from\":\"MB7UH\",\"kind\":\"position\",\"sym\":\"/#\",\"symName\":\"Digipeater\",\"line\":\"digipeater\",\"lat\":52.33,\"lon\":-0.71,\"seen\":40},"
+                                                            "{\"key\":\"G4XYZ-13\",\"from\":\"G4XYZ-13\",\"kind\":\"weather\",\"sym\":\"/_\",\"symName\":\"Weather station\",\"line\":\"9.8 °C · 1012 hPa\",\"lat\":52.16,\"lon\":-1.02,\"seen\":120},"
+                                                            "{\"key\":\"G0HOM\",\"from\":\"G0HOM\",\"kind\":\"position\",\"sym\":\"/-\",\"symName\":\"house\",\"line\":\"house\",\"lat\":52.20,\"lon\":-0.78,\"seen\":60},"
+                                                            "{\"key\":\"G1BAL-11\",\"from\":\"G1BAL-11\",\"kind\":\"position\",\"sym\":\"/O\",\"symName\":\"balloon\",\"line\":\"balloon\",\"lat\":52.29,\"lon\":-1.00,\"seen\":8}]}"));
         return;
     } else if (x.canned == "dsc") {
         if (k == 1) mapDecFeed(a, "dsc_call", Json::parse("{\"id\":1,\"rf\":2187500,\"level\":3,\"line\":\"DISTRESS · MMSI 235012345 · fire, explosion · 50°12'N 001°18'W\",\"lat\":50.2,\"lon\":-1.3}"));
