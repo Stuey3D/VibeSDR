@@ -1053,7 +1053,22 @@ public:
         on = on0;
         // ── FSK: the discriminator, over the stretch where the carrier is up
         size_t first = n, last = 0, cnt = 0;
-        for (size_t i = 0; i < n; ++i) if (on[i]) { if (first == n) first = i; last = i; ++cnt; }
+        /* ★★ WHERE THE CARRIER IS UP, WITHOUT THE GLITCHES THE RUNS FOLDED AWAY (2026-11-11). A noise blip of a sample or
+         *  two in the pre-roll — folded into its space by runsOf, so the runs never show it — set `first` 24 ms early, and
+         *  the "constant envelope" test then saw a burst up only 75 % of its span and gave no FSK slice at all (every
+         *  Current Cost EnviR recording: ±32 kHz FSK, 76 ms, read as one long mark). The span now starts and ends at an
+         *  on-run of at least 20 µs. */
+        {
+            const size_t g = std::max<size_t>(3, size_t(std::lround(20.0 / us)));
+            size_t i = 0;
+            while (i < n) {
+                if (!on[i]) { ++i; continue; }
+                size_t j = i; while (j < n && on[j]) ++j;
+                if (j - i >= g) { if (first == n) first = i; last = j - 1; }
+                i = j;
+            }
+            if (first < last) for (size_t k = first; k <= last; ++k) cnt += on[k];
+        }
         b.fsk.clear(); b.fskDevHz = 0;
         if (first < last) {
             // the carrier: the mean instantaneous frequency where it is up (refines the detector's bin centroid)

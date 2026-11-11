@@ -154,9 +154,55 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace oiltank
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  OPENENERGYMONITOR emonTx (and any JeeLib RF12 node) — FSK NRZ at ~49.2 kbit/s (RFM12B 49.23 k, RFM69 49.26 k)
+//  Source: Jean-Claude Wippler, "RF12 packet format and design", jeelabs.org, 2011-06-09 (the packet: preamble AA AA AA,
+//  SYN 2D, group byte, header (C, D, A flags + 5-bit node), length, data, CRC-16 over group..data — the standard
+//  CRC-16/IBM reflected, poly 0xA001, init 0xFFFF, sent low byte first); the emonTx v3 payload from openenergymonitor.org
+//  (13 little-endian words: CT1–CT4 watts · Vrms × 100 · 6 temperatures × 10 (300.0 = none) · a 32-bit pulse count).
+//  The facts were also checked against rtl_433's emontx.c notes. Group 0xD2 (210) is the emonTx default.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace emontx {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& row : kit::nrzRows(b.fsk, 2e6 / (49230 + 49261), 40, true, 200)) {
+        for (size_t s : kit::findAll(row, 0x2DD2, 16)) {
+            if (s + 8 * 33 > row.size()) break;
+            const auto by = bytesAt(row, s + 8, 32);   // group, header, length, 26 data, CRC lo, CRC hi
+            if ((by[1] & 0xE0) != 0 || by[2] != 26) continue;
+            const uint16_t crc = kit::crc16r(by.data(), 29, 0xA001, 0xFFFF);
+            if (crc != uint16_t(by[29] | by[30] << 8)) continue;
+            auto w = [&](int i) { return int(int16_t(uint16_t(by[size_t(3 + 2 * i)] | by[size_t(4 + 2 * i)] << 8))); };
+            const int node = by[1] & 0x1F;
+            Reading r;
+            r.kind = "energy"; r.make = "OpenEnergyMonitor"; r.model = "emonTx";
+            r.pubId = std::to_string(node);
+            const int ct[4] = {w(0), w(1), w(2), w(3)};
+            r.watts = ct[0];
+            const double vrms = (w(4) & 0xFFFF) / 100.0;
+            std::string ex;
+            for (int i = 1; i < 4; ++i) if (ct[i]) ex += (ex.empty() ? "" : " \xc2\xb7 ") + std::string("CT") + char('1' + i) + " " + std::to_string(ct[i]) + " W";
+            if (vrms > 0) ex += (ex.empty() ? "" : " \xc2\xb7 ") + kit::fmt1v(vrms) + " V";
+            r.extra = ex;
+            for (int i = 0; i < 6; ++i) if (w(5 + i) != 3000) { r.tempC = w(5 + i) / 10.0; break; }
+            const uint32_t pulse = uint32_t(w(11) & 0xFFFF) | uint32_t(w(12) & 0xFFFF) << 16;
+            r.fact("node", (long long)node);
+            r.fact("ct1", (long long)ct[0]); r.fact("ct2", (long long)ct[1]); r.fact("ct3", (long long)ct[2]); r.fact("ct4", (long long)ct[3]);
+            r.fact("batt_Vrms", vrms); r.fact("pulse", (long long)pulse);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace emontx
+
 /** The meter and monitor families, strongest checks first. */
 inline bool decodeMeters(const Burst& b, std::vector<Reading>& out) {
     if (oiltank::decode(b, out)) return true;
+    if (emontx::decode(b, out)) return true;
     return false;
 }
 

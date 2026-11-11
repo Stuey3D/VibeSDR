@@ -23,6 +23,7 @@ inline uint16_t crc16r(const uint8_t* d, size_t n, uint16_t polyRev, uint16_t in
     for (size_t i = 0; i < n; ++i) { c ^= d[i]; for (int k = 0; k < 8; ++k) c = uint16_t(c & 1 ? (c >> 1) ^ polyRev : c >> 1); }
     return c;
 }
+inline std::string fmt1v(double v, int dp = 1) { char b[32]; std::snprintf(b, sizeof b, "%.*f", dp, v); return b; }
 inline unsigned sumBytes(const uint8_t* d, size_t n) { unsigned s = 0; for (size_t i = 0; i < n; ++i) s += d[i]; return s; }
 inline uint8_t xorBytes(const uint8_t* d, size_t n) { uint8_t s = 0; for (size_t i = 0; i < n; ++i) s ^= d[i]; return s; }
 inline int parity(uint32_t v) { int p = 0; while (v) { p ^= int(v & 1); v >>= 1; } return p; }
