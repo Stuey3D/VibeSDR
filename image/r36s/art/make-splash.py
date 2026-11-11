@@ -92,6 +92,8 @@ def g_stick(x, y):
     d.polygon([c * S for p_ in pts for c in p_], fill=GREEN)
 def g_select(x, y):
     pill(x + 2, y + 5, 48, "SELECT")
+def g_start(x, y):
+    pill(x + 2, y + 5, 48, "START")
 def g_power(x, y):
     cx, cy, r_ = x + 26, y + 14, 8
     d.arc(R([cx - r_, cy - r_, cx + r_, cy + r_]), -60, 240, fill=GREEN, width=int(1.8 * S))
@@ -116,11 +118,12 @@ ROWS = [
     (g_stick, "LEFT STICK", "turn it like a dial to tune · clockwise = up"),
     (g_stick, "RIGHT STICK", "turn it like a dial to zoom · clockwise = in"),
     (g_select, "SELECT", "the menu (again to close it)"),
+    (g_start, "START", "type a frequency · START again to tune"),
     (g_power, "POWER", "tap: screen off / on · hold: switch off"),
     (g_leaf, "POWER SAVE", "untouched a minute: the waterfall slows"),
     (g_reset, "START + SELECT", "held while switching on: reset the radio"),
 ]
-GX, TX, Y0, RH = LW + 12, LW + 72, 8, 32
+GX, TX, Y0, RH = LW + 12, LW + 72, 4, 30   # ★ twelve rows above the bar (BAR_Y 372)
 TMAX = W - 8 - TX
 for i, (glyph, key, what) in enumerate(ROWS):
     y = Y0 + i * RH

@@ -290,6 +290,7 @@ inline void decDrawBox(App&, Ctx&, const RadioState&);
 inline void decDrawFull(App&, Ctx&, const RadioState&);   // the picture / gallery full screen (dec_pic_box.h)
 inline void decModeEntries(const RadioState&, std::vector<ModeDef>&);
 inline bool decModeLit(const std::string&);
+inline bool decRunning();   // a decoder (or Spots) is on (dec_state.h) — App::tuneTyped keeps its mode
 inline bool decModePick(App&, const RadioState&, const std::string&);
 // ADVANCED RDS (adv_rds*.h) — a decoder in the decoder box (DECODERS… → BROADCAST → ADV RDS), off by default
 inline void ardsRegisterDecoder(App&);

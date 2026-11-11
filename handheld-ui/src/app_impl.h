@@ -179,6 +179,10 @@ inline void App::press(Btn b) {
         case B_R1: if (!inFreq) zoomSteps(1); return;
         case B_L2: if (!inFreq) tuneSteps(-1); return;
         case B_R2: if (!inFreq) tuneSteps(1); return;
+        // ★★ START = TYPE A FREQUENCY (Stuart, 2026-11-11: "make the start button pop up the frequency entry box"). It did
+        //    nothing outside the keyboard; on the pad it is still ENTER (kbInput takes every button while the pad is up),
+        //    so START · digits · START tunes. From under any sheet; the map keeps its own buttons (mapPress, above).
+        case B_START: openFreqEntry(); return;
         case B_SELECT:
             if (!sheets_.empty() && sheets_.back() == S_MENU) closeTop();
             else { sheets_.clear(); menuOpen_.clear(); menuScroll_ = {}; open(S_MENU); }
@@ -862,7 +866,11 @@ inline std::string App::tuneTyped(double hz) {
     gapNudgeDir_ = 0;
     const double got = clampTune(hz);
     // ★ A JUMP takes the landing band's step (and mode, when it changes band) — bandPlan.ts bandJumpDefaults
-    const BandDefaults d = bandJumpDefaults(s.vfoHz, got, s.mode, region());
+    BandDefaults d = bandJumpDefaults(s.vfoHz, got, s.mode, region());
+    // ★★ A DECODER RUNNING KEEPS ITS MODE (2026-11-11, with START = type a frequency): a jump with the CW skimmer on
+    //    from 7.030 to 3.560 must not land in the band's LSB default and leave the decoder listening to the wrong thing.
+    //    With a decoder (or Spots) on, the typed frequency moves the dial only — mode and step stay the listener's.
+    if (decRunning()) d = BandDefaults{};
     tuneTo(got);
     if (!d.mode.empty()) eng_->setMode(d.mode);
     if (d.step > 0) setStep(stepOnLadder(got, d.step));

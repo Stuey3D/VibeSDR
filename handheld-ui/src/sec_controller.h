@@ -54,6 +54,7 @@ inline float App::secController(Ctx& c, const RadioState& s, Rect a, float y) {
         {-1, "Left stick", "turn it like a dial to tune — faster turns, faster tuning (TUNING STICK FEEL sets how far a step is)"},
         {-1, "Right stick", "turn it like a dial to zoom"},
         {-1, "SELECT", "the menu (again to close it)"},
+        {-1, "START", "type a frequency (START again to tune) — a running decoder keeps its mode"},
     };
     const G keyboard[] = {
         {FACE_BOTTOM, "", "type the highlighted key"},
