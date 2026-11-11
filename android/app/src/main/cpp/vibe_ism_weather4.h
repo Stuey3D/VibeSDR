@@ -207,7 +207,7 @@ inline bool tx606(const Burst& b, std::vector<Reading>& out) {
     const auto by = bytesAt(rows[size_t(i)], 0, 4);
     if ((by[0] | by[1] | by[2] | by[3]) == 0 || wx::lfsrDigest8(by.data(), 3, 0x98, 0xF1) != by[3]) return false;
     int t = (by[1] & 0xF) << 8 | by[2]; if (t & 0x800) t -= 0x1000;
-    Reading r = wx::wxReading("AcuRite", "606TX / TX960", wx::hex(by[0], 2));
+    Reading r = wx::wxReading("AcuRite", "606TX / 00782 / TX960", wx::hex(by[0], 2));   // ★ the 00782 is this format: its 4th byte is this digest (Ray Wang's examples check)
     r.tempC = t / 10.0;
     if (!wx::tempOk(r.tempC)) return false;
     r.battOk = (by[1] & 0x80) ? 1 : 0;
