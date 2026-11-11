@@ -726,9 +726,25 @@ private:
  *  DayLog per decoder run (a VFO or a listener's session), finished when the decoder stops. */
 class StationTap : public DecoderTap {
 public:
-    StationTap(gallery::Store& st, const gallery::Meta& m) {
+    StationTap(gallery::Store& st, const gallery::Meta& m, std::function<double()> dial = nullptr)
+        : st_(st), meta_(m), dial_(std::move(dial)) { last_ = m.lastItemAt; }
+    void station(const vibestation::Heard& h) override {
+        if (!log_) open();
+        log_->heard(h);
+        if (last_) last_->store(int64_t(::time(nullptr)));
+    }
+    void tick() override { if (log_) log_->tick(); }
+    void finish(bool) override { if (log_) log_->finish(); }
+private:
+    /* ★★ OPENED AT THE FIRST STATION, ON THE DIAL IT WAS HEARD ON (Stuart's R36S card, 2026-11-11: the day's APRS logs were
+     *  "0000 - 97200.000 kHz APRS" and "128816.667 kHz" — the FM and airband frequencies he was on when he opened APRS,
+     *  which then tuned 144.800). The meta's frequency is the dial at ATTACH, before the decoder's own retune; by the
+     *  first packet the dial is where APRS listens. Background decoding's meta is already its channel (no dial given). */
+    void open() {
         vibestation::DayLog::Options o;
-        o.kind = m.kind; o.label = "APRS"; o.what = "stations"; o.freqHz = m.freqHz; o.mode = m.mode; o.origin = m.origin; o.profile = m.profile;
+        const double hz = dial_ ? dial_() : 0;
+        o.kind = meta_.kind; o.label = "APRS"; o.what = "stations"; o.freqHz = hz > 0 ? hz : meta_.freqHz; o.mode = meta_.mode;
+        o.origin = meta_.origin; o.profile = meta_.profile;
         o.kindWord = [](const std::string& k, int n) -> std::string {
             if (k == "position" || k == "mice" || k == "nmea") return n == 1 ? "station on the move or fixed" : "stations with positions";
             if (k == "weather") return n == 1 ? "weather station" : "weather stations";
@@ -737,16 +753,11 @@ public:
             if (k == "status") return n == 1 ? "status" : "statuses";
             return "other";
         };
-        log_ = std::make_shared<vibestation::DayLog>(st, o);
-        last_ = m.lastItemAt;
+        log_ = std::make_shared<vibestation::DayLog>(st_, o);
     }
-    void station(const vibestation::Heard& h) override {
-        log_->heard(h);
-        if (last_) last_->store(int64_t(::time(nullptr)));
-    }
-    void tick() override { log_->tick(); }
-    void finish(bool) override { log_->finish(); }
-private:
+    gallery::Store& st_;
+    gallery::Meta meta_;
+    std::function<double()> dial_;
     std::shared_ptr<vibestation::DayLog> log_;
     std::shared_ptr<std::atomic<int64_t>> last_;
 };
@@ -755,7 +766,7 @@ private:
 inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr,
                                     std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
-    if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta);
+    if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta, std::move(dial));
     if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
     if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk" || meta.kind == "sitora") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
