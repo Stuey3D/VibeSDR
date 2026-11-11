@@ -199,10 +199,90 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace emontx
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  EFERGY e2 classic / e2CT clamp and EFERGY optical (meter-LED) transmitters — ~433.55 MHz FSK, PWM on the mark:
+//  a ~500 µs sync mark, then marks of ~64 µs = 1 and ~136 µs = 0, ~200 µs a bit (the line can arrive inverted: the
+//  frame always opens with 0000, so 1111 means invert it).
+//  Facts: the protocol notes in rtl_433's efergy_e2_classic.c (R. Högberg; the power arithmetic credited there to
+//  N. Elijah's EfergyRPI) and efergy_optical.c — read for the frame facts only.
+//   • e2 classic: 8 bytes — start 00 · ID 16 (low byte first) · flags (bit 7 learn, bit 6 battery OK, bits 5–4 =
+//     interval (n + 1) × 6 s) · current mantissa 16 · exponent byte e (amps = mantissa / 2^(15 − (int8)e)) · sum of
+//     bytes 0–6 (mod 256).
+//   • optical: 12 bytes — ID 24 · byte 3 bits 5–4 = interval (n + 1) × 30 s · byte 8 = LED pulses counted · CRC-16
+//     (CCITT poly 0x1021, init 0) over bytes 0–9. kWh per pulse depends on the meter (the transmitter does not say).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace efergy {
+
+/** The PWM bits after each sync mark (≥ 350 µs), from both FSK polarities and the envelope. */
+inline std::vector<Bits> rows(const Burst& b) {
+    std::vector<Bits> out;
+    auto scan = [&](const Runs& r, bool flip) {
+        for (size_t i = 0; i < r.size(); ++i) {
+            const int m = flip ? -r[i] : r[i];
+            if (m < 350 || m > 900) continue;
+            Bits row;
+            for (size_t k = i + 1; k + 1 < r.size(); k += 2) {
+                const int sp = flip ? r[k] : -r[k], mk = flip ? -r[k + 1] : r[k + 1];
+                if (sp <= 0 || sp > 300 || mk <= 0) break;
+                if (mk >= 30 && mk < 100) row.push_back(1); else if (mk >= 100 && mk < 220) row.push_back(0); else break;
+            }
+            if (row.size() >= 60) out.push_back(row);
+        }
+    };
+    for (int f = 0; f < 2; ++f) scan(b.fsk, f);
+    scan(b.ook, false);
+    return out;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (Bits row : rows(b)) {
+        if (bitsAt(row, 0, 4) == 0xF) row = invert(row);
+        if (bitsAt(row, 0, 4) != 0) continue;
+        if (row.size() >= 96 && row.size() <= 100) {          // optical
+            const auto by = bytesAt(row, 0, 12);
+            if ((by[8] | by[9] | by[10] | by[11]) == 0) continue;
+            if (crc16(by.data(), 10, 0x1021, 0) != uint16_t(by[10] << 8 | by[11])) continue;
+            const uint32_t id = uint32_t(by[0]) << 16 | uint32_t(by[1]) << 8 | by[2];
+            const int secs = (((by[3] & 0x30) >> 4) + 1) * 30;
+            Reading r;
+            r.kind = "energy"; r.make = "Efergy"; r.model = "optical sensor";
+            r.pubId = std::to_string(id);
+            r.extra = std::to_string(by[8]) + " meter pulses in " + std::to_string(secs) + " s";
+            r.fact("id", (long long)id); r.fact("pulsecount", (long long)by[8]);
+            out.push_back(r);
+            return true;
+        }
+        if (row.size() >= 64 && row.size() <= 65) {           // e2 classic
+            const auto by = bytesAt(row, 0, 8);
+            int zeros = 0; for (uint8_t v : by) zeros += v == 0;
+            if (zeros > 5) continue;
+            const unsigned sum = kit::sumBytes(by.data(), 7);
+            if (sum == 0 || (sum & 0xFF) != by[7]) continue;
+            const int fact = 15 - int(int8_t(by[6]));
+            if (fact < 7 || fact > 23) continue;
+            const double amps = double(by[4] << 8 | by[5]) / double(1 << fact);
+            const int id = by[2] << 8 | by[1];
+            Reading r;
+            r.kind = "energy"; r.make = "Efergy"; r.model = "e2 classic";
+            r.pubId = std::to_string(id);
+            r.extra = kit::fmt1v(amps, 2) + " A";
+            if (by[3] & 0x80) r.extra += " \xc2\xb7 pairing";
+            r.battOk = (by[3] & 0x40) ? 1 : 0;
+            r.fact("id", (long long)id); r.fact("current", amps); r.fact("interval", (long long)((((by[3] & 0x30) >> 4) + 1) * 6));
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace efergy
+
 /** The meter and monitor families, strongest checks first. */
 inline bool decodeMeters(const Burst& b, std::vector<Reading>& out) {
     if (oiltank::decode(b, out)) return true;
     if (emontx::decode(b, out)) return true;
+    if (efergy::decode(b, out)) return true;
     return false;
 }
 
