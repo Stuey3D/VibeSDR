@@ -92,7 +92,7 @@ and on p4 (exFAT, fsck'd every boot; the engine writes temp + rename). Developer
   lights it. Showing a logo from power-on needs a U-Boot with a PX30 display driver — Stuart's decision (below).
 - **Kernel quiet:** no `console=tty0` (serial only), `quiet loglevel=3`, `vt.global_cursor_default=0`, no getty on tty1.
 - **`vibe-splash`** (ours, ~300 lines of stdlib Python, not Plymouth): starts as one of the first units, draws the
-  pre-rendered artwork (`art/make-splash.py`: the app icon + wordmark, 640×480) straight into a DRM dumb buffer, a
+  pre-rendered artwork (`art/make-splash.py`: the app icon + wordmark on the left, a row per control on the right with a small drawing of each control, 640×480) straight into a DRM dumb buffer, a
   **real** progress bar fed by the boot units (state 12 % → boot keys 22 % → card 35 % → engine started 50 % → engine
   answering 75 % → browser 100 %), and messages ("Radio settings reset", the card check, a fake card). At the hand-off
   it drops the DRM master but keeps its picture on screen; Cog becomes master and the splash exits only when the CRTC

@@ -24,122 +24,114 @@ GREEN_DIM = (0x2E, 0x70, 0x3D)
 TXT = (0xE8, 0xF5, 0xEC)
 TXT_DIM = (0xA8, 0xB8, 0xAC)
 
-# ★★★ THE CONTROLS ON THE BOOT SCREEN, EVERY BOOT (Stuart, 2026-11-07: "a little glyph of the R36S next to the VibeSDR
-#     logo with the controls explained … make it the permanent boot screen then anybody goes back to it gets a
-#     reminder. Keep the status bar"; "a green outline of the R36S and its controls with arrows pointing to the
-#     controls explaining how they work, including the arrows to indicate how to use the analogue sticks").
+# ★★★ THE CONTROLS ON THE BOOT SCREEN, EVERY BOOT (Stuart, 2026-11-07: "make it the permanent boot screen then anybody
+#     goes back to it gets a reminder. Keep the status bar"). 2026-11-11: no longer a portrait outline of the R36S with
+#     callouts (an odd shape on a landscape panel, and the shoulder labels never had room) — the logo on the left, a
+#     row per control on the right with a small drawing of that control (see the LANDSCAPE note below).
 # ★★ What each control does is the native UI's (handheld-ui/src/app_impl.h press / pollInput / holdSweep, and
 #    sec_controller.h's CONTROLLER GUIDE). If a button moves there, fix this picture too (AGENTS.md).
-# ★ Drawn at 2× and scaled down: the outline and the arrows are antialiased like the font.
+# ★ Drawn at 2× and scaled down: the outlines are antialiased like the font.
 S = 2
 big = Image.new("RGB", (W * S, H * S), BG)
 d = ImageDraw.Draw(big)
 def F(path, px): return ImageFont.truetype(path, px * S)
 f_key, f_txt, f_word, f_small = F(BOLD, 15), F(FONT, 14), F(BOLD, 30), F(FONT, 13)
 
-# ── the header: the icon + the wordmark, side by side ──
-ic = icon.resize((44 * S, 44 * S), Image.LANCZOS)
-word = "VibeSDR"
-ww = d.textlength(word, font=f_word)
-hx = (W * S - (44 * S + 12 * S + ww)) / 2
-big.paste(ic, (int(hx), 10 * S))
-d.text((hx + 56 * S, 14 * S), word, font=f_word, fill=TXT)
-
-# ── the R36S (portrait: screen, D-pad + face buttons, the two sticks, SELECT / START; shoulders on top) ──
-DX, DY, DW, DH = 238, 82, 164, 270
+# ★★★ LANDSCAPE (Stuart, 2026-11-11: "the glyph of the R36S is a bit of an odd shape for a Landscape screen. Maybe Have
+#     the VibeSDR logo on the left and a list of the controls on the right with little glyphs for the actual controls
+#     instead"). The logo + wordmark fill the left; each control is a row on the right: a small drawing of THAT control,
+#     its name in green, what it does. Order and words = sec_controller.h's CONTROLLER GUIDE (L1 · R1 zoom, L2 · R2 tune
+#     a step / hold to sweep, the sticks turn like dials) + the power button, the power-save leaf and the boot reset
+#     (vibe-bootkeys). Everything sits above the bar (BAR_Y) and the message under it (vibe-splash msg_y).
+import math
 def R(v): return [c * S for c in v]
 def rr(x, y, w, h, r, width=2, fill=None, outline=GREEN):
-    d.rounded_rectangle(R([x, y, x + w, y + h]), radius=r * S, outline=outline, width=width * S, fill=fill)
+    d.rounded_rectangle(R([x, y, x + w, y + h]), radius=r * S, outline=outline, width=max(1, int(width * S)), fill=fill)
 def circ(cx, cy, r, width=2, outline=GREEN, fill=None):
-    d.ellipse(R([cx - r, cy - r, cx + r, cy + r]), outline=outline, width=width * S, fill=fill)
-# shoulders: L2 behind L1 (taller), R2 behind R1
-rr(DX + 10, DY - 14, 46, 20, 6); rr(DX + 14, DY - 7, 40, 14, 5, fill=BG)
-rr(DX + DW - 56, DY - 14, 46, 20, 6); rr(DX + DW - 54, DY - 7, 40, 14, 5, fill=BG)
-rr(DX, DY, DW, DH, 18, width=3, fill=BG)                       # the body
-SX, SY, SW, SH = DX + 14, DY + 14, DW - 28, 104                 # the screen (4:3)
-rr(SX, SY, SW, SH, 4, width=2, outline=GREEN_DIM)
-mi = icon.resize((60 * S, 60 * S), Image.LANCZOS)               # the mark on the little screen
-big.paste(mi, ((SX + SW // 2 - 30) * S, (SY + SH // 2 - 30) * S))
-# D-pad (a plus)
-PX, PY = DX + 40, DY + 152
-d.polygon([(c * S) for xy in [(PX - 6, PY - 18), (PX + 6, PY - 18), (PX + 6, PY - 6), (PX + 18, PY - 6), (PX + 18, PY + 6),
-                                (PX + 6, PY + 6), (PX + 6, PY + 18), (PX - 6, PY + 18), (PX - 6, PY + 6), (PX - 18, PY + 6),
-                                (PX - 18, PY - 6), (PX - 6, PY - 6)] for c in xy], outline=GREEN, width=2 * S)
-# face buttons (a diamond); BOTTOM and RIGHT are the two the receiver uses — filled
-FX, FY, FR, FG2 = DX + DW - 40, DY + 152, 7, 14
-face = {"top": (FX, FY - FG2), "left": (FX - FG2, FY), "right": (FX + FG2, FY), "bottom": (FX, FY + FG2)}
-for k, (cx, cy) in face.items():
-    circ(cx, cy, FR, fill=GREEN if k in ("bottom", "right") else None)
-# the sticks
-LX, LY, RX, RY, SR = DX + 52, DY + 214, DX + DW - 52, DY + 214, 15
-for cx, cy in ((LX, LY), (RX, RY)):
-    circ(cx, cy, SR); circ(cx, cy, 7, width=2, outline=GREEN_DIM)
-# SELECT / START
-BX1, BX2, BY = DX + DW // 2 - 22, DX + DW // 2 + 6, DY + DH - 22
-rr(BX1, BY, 16, 7, 3); rr(BX2, BY, 16, 7, 3)
+    d.ellipse(R([cx - r, cy - r, cx + r, cy + r]), outline=outline, width=max(1, int(width * S)), fill=fill)
 
-# ── the turn arrows round each stick: clockwise = up (tune up / zoom in) ──
-import math
-def turn_arrow(cx, cy, r):
-    a0, a1 = 215, 505                                          # degrees, clockwise on screen (PIL: 0 = 3 o'clock, +cw)
-    d.arc(R([cx - r, cy - r, cx + r, cy + r]), a0, a1 - 360 if a1 > 360 else a1, fill=GREEN, width=2 * S)
-    for end, sgn in ((a1, 1), (a0, -1)):                       # a head at each end: turn either way
-        t = math.radians(end)
-        ex, ey = cx + r * math.cos(t), cy + r * math.sin(t)
-        tx, ty = -math.sin(t) * sgn, math.cos(t) * sgn          # the direction of travel there
-        nx, ny = math.cos(t), math.sin(t)
-        L = 10
-        pts = [(ex + tx * L, ey + ty * L), (ex - tx * 2 + nx * 7, ey - ty * 2 + ny * 7), (ex - tx * 2 - nx * 7, ey - ty * 2 - ny * 7)]
-        d.polygon([c * S for p_ in pts for c in p_], fill=GREEN)
-turn_arrow(LX, LY, SR + 9)
-turn_arrow(RX, RY, SR + 9)
+# ── the left: the icon and the wordmark ──
+LW = 200                                             # the left column's width
+ic = icon.resize((132 * S, 132 * S), Image.LANCZOS)
+big.paste(ic, ((LW // 2 - 66) * S, 96 * S))
+f_big = F(BOLD, 38)
+word = "VibeSDR"
+d.text(((LW * S - d.textlength(word, font=f_big)) / 2, 240 * S), word, font=f_big, fill=TXT)
+sub = "the radio in your pocket"
+d.text(((LW * S - d.textlength(sub, font=f_small)) / 2, 288 * S), sub, font=f_small, fill=TXT_DIM)
+d.line(R([LW + 2, 22, LW + 2, 350]), fill=GREEN_DIM, width=S)
 
-# ── the callouts: a label at the side, a line to the control with a dot on it ──
-def callout(side, ly, tx, ty, key, what):
-    """side 'l' / 'r'; (tx, ty) = the control; the label's first line sits at ly."""
-    edge = DX - 14 if side == "l" else DX + DW + 14
-    lx_text_end = edge - 6 if side == "l" else edge + 6
-    kw = d.textlength(key, font=f_key) / S
-    wl = [w_ for w_ in what.split("\n")]
-    if side == "l":
-        d.text(((lx_text_end - kw) * S, ly * S), key, font=f_key, fill=GREEN)
-        for i, l in enumerate(wl):
-            d.text(((lx_text_end - d.textlength(l, font=f_txt) / S) * S, (ly + 18 + i * 16) * S), l, font=f_txt, fill=TXT)
-    else:
-        d.text((lx_text_end * S, ly * S), key, font=f_key, fill=GREEN)
-        for i, l in enumerate(wl):
-            d.text((lx_text_end * S, (ly + 18 + i * 16) * S), l, font=f_txt, fill=TXT)
-    ay = ly + 9
-    d.line(R([edge, ay, edge + (8 if side == "l" else -8), ay]), fill=GREEN_DIM, width=2 * S)
-    d.line(R([edge + (8 if side == "l" else -8), ay, tx, ty]), fill=GREEN_DIM, width=2 * S)
-    circ(tx, ty, 3, width=1, fill=GREEN)
-
-callout("l", 58,  DX + 30, DY - 10, "L1 · L2", "zoom out · tune down\nhold L2 to sweep down")
-callout("l", 126, PX - 18, PY, "D-PAD", "move the highlight\nleft / right adjust")
-callout("l", 196, LX - SR - 9, LY, "LEFT STICK", "turn it like a dial to tune\nclockwise = up")
-callout("l", 272, BX1 + 2, BY + 4, "SELECT", "the menu")
-callout("r", 58,  DX + DW - 30, DY - 10, "R1 · R2", "zoom in · tune up\nhold R2 to sweep up")
-callout("r", 112, FX + FG2 + FR, FY, "RIGHT BUTTON", "back · close")
-callout("r", 160, FX + 4, FY + FG2 + FR - 2, "BOTTOM BUTTON", "press · select")
-callout("r", 214, RX + SR + 9, RY, "RIGHT STICK", "turn it to zoom\nclockwise = in")
-# ★★ THE POWER SAVE LEAF (Stuart, 2026-11-07: "An explanation of the leaf needs to go on the boot screen, to save battery
-#    when the radio hasnt been touched for 1min the waterfall slows") — the status row's green leaf (vibe-hhui app_impl.h),
-#    drawn the same way: two halves either side of a midrib, tip up-right, a short stem; no arrow (it is on the screen).
-lx0, ly0 = DX + DW + 20, 270
-def leaf(x, y, k=1.0):
+# ── the glyphs (each fits a 34 × 26 box at (x, y)) ──
+f_btn = F(BOLD, 11)          # ★ the button names INSIDE the glyphs (Stuart: the shoulders' words never read at 9 px)
+def pill(x, y, w, label, h=15):
+    rr(x, y, w, h, h / 2, width=1.5)
+    d.text(((x + w / 2) * S - d.textlength(label, font=f_btn) / 2, (y + (h - 13) / 2) * S), label, font=f_btn, fill=GREEN)
+def tab(x, y, w, label):
+    # a shoulder button: rounded on top, square underneath (the R36S's L / R tabs)
+    d.rounded_rectangle(R([x, y, x + w, y + 17]), radius=6 * S, outline=GREEN, width=int(1.5 * S), corners=(True, True, False, False))
+    d.text(((x + w / 2) * S - d.textlength(label, font=f_btn) / 2, (y + 2) * S), label, font=f_btn, fill=GREEN)
+def g_shoulders(x, y, a_, b_):
+    tab(x, y + 5, 24, a_); tab(x + 28, y + 5, 24, b_)
+def g_dpad(x, y):
+    cx, cy, a_, b_ = x + 26, y + 13, 4, 11
+    pts = [(cx - a_, cy - b_), (cx + a_, cy - b_), (cx + a_, cy - a_), (cx + b_, cy - a_), (cx + b_, cy + a_), (cx + a_, cy + a_),
+           (cx + a_, cy + b_), (cx - a_, cy + b_), (cx - a_, cy + a_), (cx - b_, cy + a_), (cx - b_, cy - a_), (cx - a_, cy - a_)]
+    d.polygon([c * S for p_ in pts for c in p_], outline=GREEN, width=int(1.6 * S))
+def g_face(x, y, solid):
+    cx, cy, g_, r_ = x + 26, y + 13, 8, 4.2
+    for k, (dx, dy) in {"top": (0, -g_), "left": (-g_, 0), "right": (g_, 0), "bottom": (0, g_)}.items():
+        circ(cx + dx, cy + dy, r_, width=1.4, fill=GREEN if k == solid else None)
+def g_stick(x, y):
+    cx, cy = x + 26, y + 13
+    circ(cx, cy, 7, width=1.6); circ(cx, cy, 3, width=1.2, outline=GREEN_DIM)
+    r_ = 11.5; a0, a1 = 200, 340                     # a clockwise arc over the top, its head on the right
+    d.arc(R([cx - r_, cy - r_, cx + r_, cy + r_]), a0, a1, fill=GREEN, width=int(1.6 * S))
+    t = math.radians(a1); ex, ey = cx + r_ * math.cos(t), cy + r_ * math.sin(t)
+    tx, ty = -math.sin(t), math.cos(t); nx, ny = math.cos(t), math.sin(t)
+    pts = [(ex + tx * 5, ey + ty * 5), (ex - tx * 1 + nx * 3.5, ey - ty * 1 + ny * 3.5), (ex - tx * 1 - nx * 3.5, ey - ty * 1 - ny * 3.5)]
+    d.polygon([c * S for p_ in pts for c in p_], fill=GREEN)
+def g_select(x, y):
+    pill(x + 2, y + 5, 48, "SELECT")
+def g_power(x, y):
+    cx, cy, r_ = x + 26, y + 14, 8
+    d.arc(R([cx - r_, cy - r_, cx + r_, cy + r_]), -60, 240, fill=GREEN, width=int(1.8 * S))
+    d.line(R([cx, cy - r_ - 2, cx, cy - 1]), fill=GREEN, width=int(1.8 * S))
+def g_leaf(x, y):
+    # the status row's leaf (vibe-hhui): two halves either side of a midrib, tip up-right, a short stem
+    k = 1.25; x += 17; y += 3
     bx, by, tx, ty = x + 3 * k, y + 13 * k, x + 14 * k, y + 2 * k
     d.polygon([c * S for c in (bx, by, tx, ty, x + 4 * k, y + 4 * k)], fill=GREEN)
     d.polygon([c * S for c in (bx, by, tx, ty, x + 13 * k, y + 12 * k)], fill=GREEN)
     d.line(R([bx + 1, by - 1, tx - 2, ty + 2]), fill=BG, width=max(1, int(1.2 * S)))
     d.line(R([x + 1, y + 15 * k, bx + 0.5, by - 0.5]), fill=GREEN, width=int(1.6 * S))
-leaf(lx0, ly0 + 1)
-d.text(((lx0 + 22) * S, ly0 * S), "POWER SAVE", font=f_key, fill=GREEN)
-for i, l in enumerate(["untouched for a minute, the", "waterfall slows to save the", "battery — any button: full speed"]):
-    d.text((lx0 * S, (ly0 + 18 + i * 16) * S), l, font=f_txt, fill=TXT)
+def g_reset(x, y):
+    pill(x + 2, y - 2, 48, "START", h=14); pill(x + 2, y + 14, 48, "SELECT", h=14)
 
-# the power button (on the case's edge, so a note rather than an arrow)
-pw = "POWER: tap = screen off / on · hold = switch off"
-d.text(((W * S - d.textlength(pw, font=f_small)) / 2, 356 * S), pw, font=f_small, fill=TXT_DIM)
+ROWS = [
+    (lambda x, y: g_shoulders(x, y, "L1", "R1"), "L1 · R1", "zoom out · zoom in"),
+    (lambda x, y: g_shoulders(x, y, "L2", "R2"), "L2 · R2", "tune down · up a step — hold to sweep"),
+    (g_dpad, "D-PAD", "move the highlight · left / right adjust"),
+    (lambda x, y: g_face(x, y, "bottom"), "BOTTOM BUTTON", "press the highlighted control"),
+    (lambda x, y: g_face(x, y, "right"), "RIGHT BUTTON", "back · close"),
+    (g_stick, "LEFT STICK", "turn it like a dial to tune · clockwise = up"),
+    (g_stick, "RIGHT STICK", "turn it like a dial to zoom · clockwise = in"),
+    (g_select, "SELECT", "the menu (again to close it)"),
+    (g_power, "POWER", "tap: screen off / on · hold: switch off"),
+    (g_leaf, "POWER SAVE", "untouched a minute: the waterfall slows"),
+    (g_reset, "START + SELECT", "held while switching on: reset the radio"),
+]
+GX, TX, Y0, RH = LW + 12, LW + 72, 8, 32
+TMAX = W - 8 - TX
+for i, (glyph, key, what) in enumerate(ROWS):
+    y = Y0 + i * RH
+    glyph(GX, y + 2)
+    d.text((TX * S, y * S), key, font=f_key, fill=GREEN)
+    fw = f_small
+    if d.textlength(what, font=fw) / S > TMAX:
+        raise SystemExit("splash: row %r too wide (%d > %d px)" % (what, d.textlength(what, font=fw) / S, TMAX))
+    d.text((TX * S, (y + 16) * S), what, font=fw, fill=TXT)
+if Y0 + len(ROWS) * RH > BAR_Y - 4:
+    raise SystemExit("splash: the rows run into the bar")
 
 img = big.resize((W, H), Image.LANCZOS)
 img.save(os.path.join(out, "splash-base.png"))
