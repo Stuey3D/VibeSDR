@@ -75,14 +75,75 @@ inline bool wh1080Fields(const std::vector<uint8_t>& by, bool fsk, Reading& r) {
     return true;
 }
 
+/** ★ 2026-11-11 (weather pass): the rest of the family that shares the WH1080's OOK PWM and CRC — field facts from
+ *  rtl_433 fineoffset_wh1050.c and fineoffset.c (WH0530 / Alecto WS-1200 tables). After the ones: WH1050 / TFA Stratos
+ *  (type 5 weather, 6 time; 9 bytes, CRC-8 0x31 over 8; temperature 10 bits − 400, rain 16 bits × 0.3 mm, battery bit 2
+ *  of byte 1); WH0530 / Rosenborg 35926 rain + temperature (type 3; 8 bytes: temperature 11 bits − 400, rain 16 bits
+ *  little-endian × 0.3 mm, CRC over 6, byte sum over 7); Alecto WS-1200 v1 (type 3, 7 bytes, CRC over 6) and v2 (type 3,
+ *  11 bytes, CRC over 6, sum over 7; or 0x52 = its DCF77 clock frame, CRC over 9, sum over 10). */
+inline bool shortFamily(const Bits& row, size_t s, bool fsk, std::vector<Reading>& out) {
+    const size_t len = row.size() - s;
+    const auto by = bytesAt(row, s, 11);
+    const int type = by[0] >> 4;
+    char id[4]; std::snprintf(id, sizeof id, "%02X", ((by[0] & 0xF) << 4) | (by[1] >> 4));
+    Reading r; r.kind = "weather"; r.make = "Fine Offset"; r.pubId = id;
+    if ((type == 5 || type == 6) && (fsk ? len >= 72 : (len >= 72 && len <= 74))) {
+        if (crc8(by.data(), 8, 0x31, 0) != by[8]) return false;
+        r.battOk = (by[1] & 0x04) ? 0 : 1;
+        if (type == 6) {
+            auto bcd = [](int v) { return (v >> 4) * 10 + (v & 0xF); };
+            r.model = "WH1050 clock";
+            char e[48]; std::snprintf(e, sizeof e, "time %02d:%02d:%02d %04d-%02d-%02d", bcd(by[2] & 0x3F), bcd(by[3]), bcd(by[4]),
+                                      2000 + bcd(by[5]), bcd(by[6] & 0x1F), bcd(by[7]));
+            r.extra = e;
+        } else {
+            r.model = fsk ? "WH1050 (FSK) / TFA 30.3151" : "WH1050";
+            const int raw = ((by[1] & 0x03) << 8) | by[2];
+            r.tempC = fsk ? ((by[1] & 0x08) ? -1 : 1) * raw / 10.0 : (raw - 400) / 10.0;
+            r.hum = by[3];
+            r.windKmh = by[4] * 0.34 * 3.6; r.gustKmh = by[5] * 0.34 * 3.6;
+            r.rainMm = (by[6] << 8 | by[7]) * (fsk ? 0.5 : 0.3);
+            if (r.tempC < -40 || r.tempC > 70 || r.hum > 100) return false;
+        }
+        out.push_back(r);
+        return true;
+    }
+    if (fsk) return false;
+    const bool t3 = type == 3;
+    auto rainTemp = [&](const char* make, const char* model) {
+        r.make = make; r.model = model;
+        r.battOk = (by[1] & 0x08) ? 0 : 1;
+        r.tempC = (((by[1] & 0x07) << 8 | by[2]) - 400) / 10.0;
+        r.rainMm = (by[4] << 8 | by[3]) * 0.3;
+        if (r.tempC < -40 || r.tempC > 70) return false;
+        out.push_back(r);
+        return true;
+    };
+    if (t3 && len >= 64 && len <= 65 && crc8(by.data(), 6, 0x31, 0) == by[6] && (wx::addBytes(by.data(), 7) & 0xFF) == by[7])
+        return rainTemp("Fine Offset", "WH0530 rain / temperature");
+    if (t3 && len >= 56 && len <= 57 && crc8(by.data(), 6, 0x31, 0) == by[6])
+        return rainTemp("Alecto", "WS-1200 v1 rain / temperature");
+    if (t3 && len >= 88 && len <= 89 && crc8(by.data(), 6, 0x31, 0) == by[6] && (wx::addBytes(by.data(), 7) & 0xFF) == by[7])
+        return rainTemp("Alecto", "WS-1200 v2 rain / temperature");
+    if (by[0] == 0x52 && len >= 88 && len <= 89 && crc8(by.data(), 9, 0x31, 0) == by[9] && (wx::addBytes(by.data(), 10) & 0xFF) == by[10]) {
+        r.make = "Alecto"; r.model = "WS-1200 v2 clock"; r.pubId = wx::hex(by[1], 2);
+        r.battOk = (by[2] & 0x80) ? 0 : 1;
+        char e[40]; std::snprintf(e, sizeof e, "DCF77 time %02X:%02X:%02X 20%02X-%02X-%02X", by[6], by[7], by[8], by[3], by[4], by[5]);
+        r.extra = e;
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
 inline bool decodeWh1080(const Burst& b, std::vector<Reading>& out) {
-    // ★ 2026-11-11: the preamble is 8 ones on most units, 7 on newer ones — a frame after ≥ 7 ones
     // ★★ the frame is the whole row (88 / 87 bits, the UV frame 64 / 63): a CRC-8 tried at every offset of a noise row
     //    passes now and then (the corpus: "WH3080 UV" on a doorbell) — so the preamble starts the row, and the row ends
-    //    where the frame does
+    //    where the frame does. ★ 2026-11-11: 8 ones on most units, 7 on newer ones.
     for (const Bits& row : slicePwm(b.ook, 500, 1500, 4000, true)) {
         for (size_t s = 7; s <= 9 && s + 56 <= row.size(); ++s) {
             if (bitsAt(row, s - 7, 7) != 0x7F) continue;
+            if (shortFamily(row, s, false, out)) return true;
             const size_t len = row.size() - s, want = (row[s] == 0) ? 56 : 80;
             if (len < want || len > want + 2) continue;
             const auto by = bytesAt(row, s, 10);
@@ -95,7 +156,9 @@ inline bool decodeWh1080(const Burst& b, std::vector<Reading>& out) {
     if (bit < 20 || bit > 200) return false;
     for (const Bits& row : wx::fskRows(b, bit, 40, 80)) {
         for (size_t s = findBits(row, 0x2DD4, 16); s != size_t(-1); s = findBits(row, 0x2DD4, 16, s + 1)) {
-            if (s + 16 + 80 > row.size()) break;
+            if (s + 16 + 72 > row.size()) break;
+            if (shortFamily(row, s + 16, true, out)) return true;
+            if (s + 16 + 80 > row.size()) continue;
             const auto by = bytesAt(row, s + 16, 10);
             Reading r;
             if (wh1080Fields(by, true, r)) { out.push_back(r); return true; }
