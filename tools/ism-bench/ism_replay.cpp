@@ -4,6 +4,7 @@
 // test INPUT only, never shipped or committed; our decoders are our own code).
 //
 //   ism_replay [--dc HZ] FILE.cu8 …        8-bit unsigned I/Q; the rate and centre from the name: …_433.92M_250k.cu8
+//                                          (or …_2500k.cu8, or a `samplerate` file beside it; else 250 k at 433.92)
 //
 // ★ --dc: the detector's DC guard. Live, the service tunes OFF the band so a sensor never sits on the dongle's DC spike
 //   and guards ±15 kHz; these recordings were made tuned ON the sensor (it sits within a few kHz of DC), so the replay
@@ -36,11 +37,19 @@ int main(int argc, char** argv) {
         if (a == "--dc" && i + 1 < argc) dc = std::atof(argv[++i]);
         else files.push_back(a);
     }
-    const std::regex nameRx(R"(_([0-9.]+)M_([0-9]+)k)");
+    const std::regex nameRx(R"(_([0-9.]+)M_([0-9.]+)k)"), rateRx(R"(_([0-9.]+)k\.cu8$)");
     for (const auto& path : files) {
         double rate = 250e3, centre = 433.92e6;
         std::smatch m;
+        /* ★ THE RATE AS THE RECORDING STATES IT (2026-11-11): "_912.6M_2359.3k" (a decimal rate), "_2500k" (no frequency),
+         *  or a `samplerate` file beside it — read as 250 k before, every emonTx, IDM and SCM+ recording was sliced at
+         *  a tenth of its real speed. */
         if (std::regex_search(path, m, nameRx)) { centre = std::stod(m[1]) * 1e6; rate = std::stod(m[2]) * 1e3; }
+        else if (std::regex_search(path, m, rateRx)) rate = std::stod(m[1]) * 1e3;
+        else if (FILE* sr = std::fopen((path.substr(0, path.find_last_of('/') + 1) + "samplerate").c_str(), "r")) {
+            double v = 0; if (std::fscanf(sr, "%lf", &v) == 1 && v > 1e4) rate = v;
+            std::fclose(sr);
+        }
         FILE* f = std::fopen(path.c_str(), "rb");
         if (!f) { std::printf("{\"file\":%s,\"error\":\"open\"}\n", jstr(path).c_str()); continue; }
         std::vector<uint8_t> raw;
