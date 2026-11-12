@@ -901,6 +901,20 @@ public:
         std::lock_guard<std::mutex> qk(qM_);
         return qSnap_;
     }
+    /** ★★ V12 AUTO-PPM (vibe_afc.h): THE OFFSET THE RECEIVER MEASURED, AVERAGED OVER THE FRAMES SINCE THE LAST CALL, and
+     *  whether anything disturbed the lock in that span. READ ONLY — the smallest hook there is: the receiver's tracking
+     *  is not touched (the DAB drift work on its own branch owns that), this only copies DabStats::freqOffsetHz out
+     *  beside the quality snapshot it already publishes after every frame, under the same small lock. */
+    struct ClockRead { bool locked = false; int frames = 0; double offsetHz = 0; double blockHz = 0; int channel = -1;
+                       float merDb = 0, fibRate = 0; bool disturbed = false; };
+    ClockRead clockRead() {
+        std::lock_guard<std::mutex> qk(qM_);
+        ClockRead r = clkAcc_;
+        if (r.frames > 0) r.offsetHz /= r.frames;
+        r.locked = r.frames > 0 && !clkUnlocked_;
+        clkAcc_ = ClockRead{}; clkAcc_.channel = r.channel; clkAcc_.blockHz = r.blockHz; clkUnlocked_ = false;
+        return r;
+    }
     /** Called by the worker with m_ held, after anything that changes the receiver's state. */
     void publishQuality_() {
         const DabStats& s = rx_.stats();
@@ -908,7 +922,22 @@ public:
         std::string label = rx_.ensemble().label;
         std::lock_guard<std::mutex> qk(qM_);
         qSnap_ = q; labelSnap_.swap(label);
+        // ★ auto-PPM's average (clockRead): one entry per decoded frame; a re-acquisition, a block change or an
+        //   unlocked frame marks the span disturbed
+        if (s.framesSeen != clkFrames_ || s.reacquires != clkReacq_ || channel_ != clkAcc_.channel) {
+            if (s.reacquires != clkReacq_ || channel_ != clkAcc_.channel) clkAcc_.disturbed = true;
+            if (s.framesSeen != clkFrames_) {
+                if (s.locked) { clkAcc_.offsetHz += s.freqOffsetHz; ++clkAcc_.frames; }
+                else clkUnlocked_ = true;
+            }
+            clkFrames_ = s.framesSeen; clkReacq_ = s.reacquires; clkAcc_.channel = channel_;
+            clkAcc_.blockHz = channel_ >= 0 ? double(kBandIII[channel_].centreHz) : 0.0;
+            clkAcc_.merDb = s.merDb; clkAcc_.fibRate = float(s.fibRate);
+        }
     }
+    ClockRead clkAcc_;               // ★ under qM_ — see clockRead
+    int  clkFrames_ = -1, clkReacq_ = -1;
+    bool clkUnlocked_ = false;
 
     /** The station list and the signal block, as the web client wants them. */
     std::string json() {

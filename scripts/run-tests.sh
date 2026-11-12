@@ -227,6 +227,10 @@ flags_for() {
     #    and their negations / sea state from words or wave height / visibility; native gale words set only the flag; the
     #    latest per area; then every forecast of the fixture set. Fast.
     test-navtex-met)       echo "-O2 -lpthread" ;;
+    # ★★ V12 AUTO-PPM (vibe_afc.h, 2026-11-12): the reading → clock error, minSamples / spread / outliers / regroup, the
+    #    step cap and interval, DRM only corroborating, the loop on a simulated warming radio with latency (no reversals),
+    #    the DAB/DRM gates, the hardware/digital split, the glide, the per-radio store. Fast.
+    test-afc)              echo "-O2" ;;
     *)               echo "" ;;
   esac
 }
