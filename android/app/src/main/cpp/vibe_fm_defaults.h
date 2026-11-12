@@ -132,6 +132,33 @@ inline std::string toJson(const Defaults& d) {
     return buf;
 }
 
+// ── THE HANDHELD: the owner's own change IS the owner's default ────────────────────────────────────
+/* ★★★ Stuart, 2026-11-12, on the R36S: "the Broadcast FM noise reduction doesnt stay enabled on power off and on
+ *     on the R36S. I prefer it on so I would want this to be remembered setting". The handheld's engine starts at
+ *     every power-on, and a start begins from the owner's defaults (above) — which nobody on a handheld ever sets,
+ *     because its one listener IS the owner and changes the row from the audio menu, never the setup page.
+ *  ★★ So on the handheld ONLY (LocalSdrShim::handheld(), the R36S's radio process) a change to the row is written
+ *     into this radio's owner defaults — its engine config (handheld/radio-<serial>.engine.json, the fm* keys), saved
+ *     temp + rename through the config persist handler like a gain nudge. The next start begins there, the setup page
+ *     shows it, and Start+Select (which deletes that file) puts the code's defaults back.
+ *  ★★ NEVER on a server: there a listener's change is theirs, and the owner's defaults are the owner's
+ *     (scripts/test-handheld-fm-persist.mjs proves a server still restarts from them).
+ *  ★ REMEMBER / RETURN is kept as the owner left it; a de-emphasis that is still the region's own stays BY REGION,
+ *    so taking the handheld abroad still follows the region unless the owner actually picked a value. */
+inline int tauToUs(double tau) {
+    if (std::fabs(tau) < 1e-9) return 0;
+    if (std::fabs(tau - 50e-6) < 1e-9) return 50;
+    if (std::fabs(tau - 75e-6) < 1e-9) return 75;
+    return -1;
+}
+inline Defaults adoptAsDefaults(const Defaults& cur, const State& s, int ituRegion) {
+    Defaults d = cur;
+    const bool stillRegion = cleanDeemphUs(cur.deemphUs) < 0 && std::fabs(s.deemphTau - regionTau(ituRegion)) < 1e-9;
+    d.deemphUs = stillRegion ? -1 : tauToUs(s.deemphTau);
+    d.stereo = s.stereo; d.nr = s.nr; d.ims = s.ims; d.ceq = s.ceq; d.autobw = s.autobw; d.nb = s.nb;
+    return d;
+}
+
 // ── The rules ─────────────────────────────────────────────────────────────────────────────────────
 /** ★ Not thread-safe on its own: the shim holds it under a mutex. */
 class Memory {
@@ -143,6 +170,9 @@ public:
         haveLast_ = false;      // ★ a (re)configure is a start: begin from the owner's word
         ses_.clear();
     }
+    /** ★ THE HANDHELD (adoptAsDefaults): the owner's defaults become what the owner just chose — WITHOUT the
+     *  forgetting configure() does, because nothing restarted. */
+    void adoptDefaults(const Defaults& d) { d_ = d; }
     /** ★ The region only decides a BY-REGION de-emphasis; changing it forgets nobody. */
     void setRegion(int ituRegion) { region_ = ituRegion; }
     const Defaults& defaults() const { return d_; }
