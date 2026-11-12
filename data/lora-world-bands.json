@@ -1,0 +1,8813 @@
+{
+ "generated": "2026-11-12",
+ "capture": {
+  "rateHz": 2048000,
+  "usableHalfWidthHz": 900000.0,
+  "fitRule": "|channel - centre| + bw/2 <= 0.9 MHz"
+ },
+ "syncWords": {
+  "lorawan_public": "0x34",
+  "private_and_meshcore": "0x12",
+  "meshtastic": "0x2B (SX126x 0x24B4)"
+ },
+ "sources": {
+  "RP002": "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+  "MT_FW": "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+  "MT_FW27": "meshtastic/firmware v2.7.26 (last stable, 2026-06-24) RadioInterface.cpp",
+  "MT_DOC": "meshtastic.org/docs/configuration/radio/lora (region table)",
+  "MC_API": "MeshCore app suggested_radio_settings (api.meshcore.nz/api/v1/config, fetched 2026-11-12) = meshcore-dev/MeshCore docs/radio_presets.md",
+  "MC_FW": "meshcore-dev/MeshCore platformio.ini (LORA_FREQ 869.618 / BW 62.5 / SF8) and variants/*/target.cpp (RADIOLIB_SX126X_SYNC_WORD_PRIVATE = 0x12, preamble 16)",
+  "TTN_FP": "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)",
+  "TTN_CTRY": "thethingsnetwork.org/docs/lorawan/frequencies-by-country"
+ },
+ "regions": [
+  {
+   "id": "mt_us",
+   "family": "meshtastic",
+   "name": "Meshtastic US",
+   "loHz": 902000000,
+   "hiHz": 928000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "US",
+    "CA",
+    "MX",
+    "PR"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic US LongFast",
+     "kind": "meshtastic",
+     "hz": 906875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 20/104 (djb2('LongFast') % 104)"
+    },
+    {
+     "name": "Meshtastic US LongSlow",
+     "kind": "meshtastic",
+     "hz": 905312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 27/208 (djb2('LongSlow') % 208)"
+    },
+    {
+     "name": "Meshtastic US MediumSlow",
+     "kind": "meshtastic",
+     "hz": 914875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 52/104 (djb2('MediumSlow') % 104)"
+    },
+    {
+     "name": "Meshtastic US MediumFast",
+     "kind": "meshtastic",
+     "hz": 913125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 45/104 (djb2('MediumFast') % 104)"
+    },
+    {
+     "name": "Meshtastic US ShortSlow",
+     "kind": "meshtastic",
+     "hz": 920625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 75/104 (djb2('ShortSlow') % 104)"
+    },
+    {
+     "name": "Meshtastic US ShortFast",
+     "kind": "meshtastic",
+     "hz": 918875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 68/104 (djb2('ShortFast') % 104)"
+    },
+    {
+     "name": "Meshtastic US LongMod",
+     "kind": "meshtastic",
+     "hz": 902687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/208 (djb2('LongMod') % 208)"
+    },
+    {
+     "name": "Meshtastic US ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 926750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 50/52 (djb2('ShortTurbo') % 52)"
+    },
+    {
+     "name": "Meshtastic US LongTurbo",
+     "kind": "meshtastic",
+     "hz": 908750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/52 (djb2('LongTurbo') % 52)"
+    },
+    {
+     "name": "Meshtastic US MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 925250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 47/52 (djb2('MediumTurbo') % 52)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_eu_433",
+   "family": "meshtastic",
+   "name": "Meshtastic EU_433",
+   "loHz": 433000000,
+   "hiHz": 434000000,
+   "dutyPct": 10,
+   "firmware": "stable+2.8",
+   "countries": [
+    "EU/CEPT 433 users"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic EU_433 LongFast",
+     "kind": "meshtastic",
+     "hz": 433875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 4/4 (djb2('LongFast') % 4)"
+    },
+    {
+     "name": "Meshtastic EU_433 LongSlow",
+     "kind": "meshtastic",
+     "hz": 433312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/8 (djb2('LongSlow') % 8)"
+    },
+    {
+     "name": "Meshtastic EU_433 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 433875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/4 (djb2('MediumSlow') % 4)"
+    },
+    {
+     "name": "Meshtastic EU_433 MediumFast",
+     "kind": "meshtastic",
+     "hz": 433125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/4 (djb2('MediumFast') % 4)"
+    },
+    {
+     "name": "Meshtastic EU_433 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 433625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/4 (djb2('ShortSlow') % 4)"
+    },
+    {
+     "name": "Meshtastic EU_433 ShortFast",
+     "kind": "meshtastic",
+     "hz": 433875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/4 (djb2('ShortFast') % 4)"
+    },
+    {
+     "name": "Meshtastic EU_433 LongMod",
+     "kind": "meshtastic",
+     "hz": 433687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/8 (djb2('LongMod') % 8)"
+    },
+    {
+     "name": "Meshtastic EU_433 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 433750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/2 (djb2('ShortTurbo') % 2)"
+    },
+    {
+     "name": "Meshtastic EU_433 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 433750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/2 (djb2('LongTurbo') % 2)"
+    },
+    {
+     "name": "Meshtastic EU_433 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 433250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/2 (djb2('MediumTurbo') % 2)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_eu_868",
+   "family": "meshtastic",
+   "name": "Meshtastic EU_868",
+   "loHz": 869400000,
+   "hiHz": 869650000,
+   "dutyPct": 10,
+   "firmware": "stable+2.8",
+   "countries": [
+    "EU",
+    "GB",
+    "CH",
+    "NO",
+    "IS",
+    "ZA (ETSI)"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic EU_868 LongFast",
+     "kind": "meshtastic",
+     "hz": 869525000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 1/1 (djb2('LongFast') % 1)"
+    },
+    {
+     "name": "Meshtastic EU_868 LongSlow",
+     "kind": "meshtastic",
+     "hz": 869462500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/2 (djb2('LongSlow') % 2)"
+    },
+    {
+     "name": "Meshtastic EU_868 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 869525000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('MediumSlow') % 1)"
+    },
+    {
+     "name": "Meshtastic EU_868 MediumFast",
+     "kind": "meshtastic",
+     "hz": 869525000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('MediumFast') % 1)"
+    },
+    {
+     "name": "Meshtastic EU_868 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 869525000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('ShortSlow') % 1)"
+    },
+    {
+     "name": "Meshtastic EU_868 ShortFast",
+     "kind": "meshtastic",
+     "hz": 869525000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('ShortFast') % 1)"
+    },
+    {
+     "name": "Meshtastic EU_868 LongMod",
+     "kind": "meshtastic",
+     "hz": 869587500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/2 (djb2('LongMod') % 2)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_eu_866",
+   "family": "meshtastic",
+   "name": "Meshtastic EU_866",
+   "loHz": 865600000,
+   "hiHz": 867600000,
+   "dutyPct": 2.5,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "EU (2006/771/EC band 46b)"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic EU_866 LiteFast",
+     "kind": "meshtastic",
+     "hz": 866300000,
+     "bw": 125000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 2/4 (djb2('LiteFast') % 4)"
+    },
+    {
+     "name": "Meshtastic EU_866 LiteSlow",
+     "kind": "meshtastic",
+     "hz": 865700000,
+     "bw": 125000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/4 (djb2('LiteSlow') % 4)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_eu_n_868",
+   "family": "meshtastic",
+   "name": "Meshtastic EU_N_868",
+   "loHz": 869400000,
+   "hiHz": 869650000,
+   "dutyPct": 10,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "EU"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic EU_N_868 NarrowFast",
+     "kind": "meshtastic",
+     "hz": 869524900,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 6,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/3 (djb2('NarrowFast') % 3)"
+    },
+    {
+     "name": "Meshtastic EU_N_868 NarrowSlow",
+     "kind": "meshtastic",
+     "hz": 869524900,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 6,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 2/3 (djb2('NarrowSlow') % 3)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_cn",
+   "family": "meshtastic",
+   "name": "Meshtastic CN",
+   "loHz": 470000000,
+   "hiHz": 510000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "CN"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic CN LongFast",
+     "kind": "meshtastic",
+     "hz": 478875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 36/160 (djb2('LongFast') % 160)"
+    },
+    {
+     "name": "Meshtastic CN LongSlow",
+     "kind": "meshtastic",
+     "hz": 493312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 187/320 (djb2('LongSlow') % 320)"
+    },
+    {
+     "name": "Meshtastic CN MediumSlow",
+     "kind": "meshtastic",
+     "hz": 504875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 140/160 (djb2('MediumSlow') % 160)"
+    },
+    {
+     "name": "Meshtastic CN MediumFast",
+     "kind": "meshtastic",
+     "hz": 507125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 149/160 (djb2('MediumFast') % 160)"
+    },
+    {
+     "name": "Meshtastic CN ShortSlow",
+     "kind": "meshtastic",
+     "hz": 492625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 91/160 (djb2('ShortSlow') % 160)"
+    },
+    {
+     "name": "Meshtastic CN ShortFast",
+     "kind": "meshtastic",
+     "hz": 494875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 100/160 (djb2('ShortFast') % 160)"
+    },
+    {
+     "name": "Meshtastic CN LongMod",
+     "kind": "meshtastic",
+     "hz": 476687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 54/320 (djb2('LongMod') % 320)"
+    },
+    {
+     "name": "Meshtastic CN ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 502750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 66/80 (djb2('ShortTurbo') % 80)"
+    },
+    {
+     "name": "Meshtastic CN LongTurbo",
+     "kind": "meshtastic",
+     "hz": 470750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/80 (djb2('LongTurbo') % 80)"
+    },
+    {
+     "name": "Meshtastic CN MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 495250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 51/80 (djb2('MediumTurbo') % 80)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_jp",
+   "family": "meshtastic",
+   "name": "Meshtastic JP",
+   "loHz": 920500000,
+   "hiHz": 923500000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "JP"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic JP LongFast",
+     "kind": "meshtastic",
+     "hz": 923375000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 12/12 (djb2('LongFast') % 12)"
+    },
+    {
+     "name": "Meshtastic JP LongSlow",
+     "kind": "meshtastic",
+     "hz": 920812500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/24 (djb2('LongSlow') % 24)"
+    },
+    {
+     "name": "Meshtastic JP MediumSlow",
+     "kind": "meshtastic",
+     "hz": 921375000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/12 (djb2('MediumSlow') % 12)"
+    },
+    {
+     "name": "Meshtastic JP MediumFast",
+     "kind": "meshtastic",
+     "hz": 920625000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/12 (djb2('MediumFast') % 12)"
+    },
+    {
+     "name": "Meshtastic JP ShortSlow",
+     "kind": "meshtastic",
+     "hz": 923125000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/12 (djb2('ShortSlow') % 12)"
+    },
+    {
+     "name": "Meshtastic JP ShortFast",
+     "kind": "meshtastic",
+     "hz": 922375000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 8/12 (djb2('ShortFast') % 12)"
+    },
+    {
+     "name": "Meshtastic JP LongMod",
+     "kind": "meshtastic",
+     "hz": 922187500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/24 (djb2('LongMod') % 24)"
+    },
+    {
+     "name": "Meshtastic JP ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 923250000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/6 (djb2('ShortTurbo') % 6)"
+    },
+    {
+     "name": "Meshtastic JP LongTurbo",
+     "kind": "meshtastic",
+     "hz": 923250000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/6 (djb2('LongTurbo') % 6)"
+    },
+    {
+     "name": "Meshtastic JP MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 922750000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/6 (djb2('MediumTurbo') % 6)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_anz",
+   "family": "meshtastic",
+   "name": "Meshtastic ANZ",
+   "loHz": 915000000,
+   "hiHz": 928000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "AU",
+    "NZ"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ANZ LongFast",
+     "kind": "meshtastic",
+     "hz": 919875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 20/52 (djb2('LongFast') % 52)"
+    },
+    {
+     "name": "Meshtastic ANZ LongSlow",
+     "kind": "meshtastic",
+     "hz": 918312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 27/104 (djb2('LongSlow') % 104)"
+    },
+    {
+     "name": "Meshtastic ANZ MediumSlow",
+     "kind": "meshtastic",
+     "hz": 927875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 52/52 (djb2('MediumSlow') % 52)"
+    },
+    {
+     "name": "Meshtastic ANZ MediumFast",
+     "kind": "meshtastic",
+     "hz": 926125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 45/52 (djb2('MediumFast') % 52)"
+    },
+    {
+     "name": "Meshtastic ANZ ShortSlow",
+     "kind": "meshtastic",
+     "hz": 920625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 23/52 (djb2('ShortSlow') % 52)"
+    },
+    {
+     "name": "Meshtastic ANZ ShortFast",
+     "kind": "meshtastic",
+     "hz": 918875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 16/52 (djb2('ShortFast') % 52)"
+    },
+    {
+     "name": "Meshtastic ANZ LongMod",
+     "kind": "meshtastic",
+     "hz": 915687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/104 (djb2('LongMod') % 104)"
+    },
+    {
+     "name": "Meshtastic ANZ ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 926750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 24/26 (djb2('ShortTurbo') % 26)"
+    },
+    {
+     "name": "Meshtastic ANZ LongTurbo",
+     "kind": "meshtastic",
+     "hz": 921750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/26 (djb2('LongTurbo') % 26)"
+    },
+    {
+     "name": "Meshtastic ANZ MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 925250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 21/26 (djb2('MediumTurbo') % 26)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_anz_433",
+   "family": "meshtastic",
+   "name": "Meshtastic ANZ_433",
+   "loHz": 433050000,
+   "hiHz": 434790000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "AU",
+    "NZ"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ANZ_433 LongFast",
+     "kind": "meshtastic",
+     "hz": 434425000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 6/7 (djb2('LongFast') % 7)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 LongSlow",
+     "kind": "meshtastic",
+     "hz": 434612500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 13/14 (djb2('LongSlow') % 14)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 434425000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/7 (djb2('MediumSlow') % 7)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 MediumFast",
+     "kind": "meshtastic",
+     "hz": 434425000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/7 (djb2('MediumFast') % 7)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 433425000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/7 (djb2('ShortSlow') % 7)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 ShortFast",
+     "kind": "meshtastic",
+     "hz": 433425000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/7 (djb2('ShortFast') % 7)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 LongMod",
+     "kind": "meshtastic",
+     "hz": 433737500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/14 (djb2('LongMod') % 14)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 434300000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('ShortTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 434300000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('LongTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic ANZ_433 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 433800000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/3 (djb2('MediumTurbo') % 3)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_ru",
+   "family": "meshtastic",
+   "name": "Meshtastic RU",
+   "loHz": 868700000,
+   "hiHz": 869200000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "RU"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic RU LongFast",
+     "kind": "meshtastic",
+     "hz": 869075000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 2/2 (djb2('LongFast') % 2)"
+    },
+    {
+     "name": "Meshtastic RU LongSlow",
+     "kind": "meshtastic",
+     "hz": 869012500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/4 (djb2('LongSlow') % 4)"
+    },
+    {
+     "name": "Meshtastic RU MediumSlow",
+     "kind": "meshtastic",
+     "hz": 869075000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/2 (djb2('MediumSlow') % 2)"
+    },
+    {
+     "name": "Meshtastic RU MediumFast",
+     "kind": "meshtastic",
+     "hz": 868825000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/2 (djb2('MediumFast') % 2)"
+    },
+    {
+     "name": "Meshtastic RU ShortSlow",
+     "kind": "meshtastic",
+     "hz": 868825000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/2 (djb2('ShortSlow') % 2)"
+    },
+    {
+     "name": "Meshtastic RU ShortFast",
+     "kind": "meshtastic",
+     "hz": 869075000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/2 (djb2('ShortFast') % 2)"
+    },
+    {
+     "name": "Meshtastic RU LongMod",
+     "kind": "meshtastic",
+     "hz": 868887500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/4 (djb2('LongMod') % 4)"
+    },
+    {
+     "name": "Meshtastic RU ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 868950000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('ShortTurbo') % 1)"
+    },
+    {
+     "name": "Meshtastic RU LongTurbo",
+     "kind": "meshtastic",
+     "hz": 868950000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('LongTurbo') % 1)"
+    },
+    {
+     "name": "Meshtastic RU MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 868950000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('MediumTurbo') % 1)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_kr",
+   "family": "meshtastic",
+   "name": "Meshtastic KR",
+   "loHz": 920000000,
+   "hiHz": 923000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "KR"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic KR LongFast",
+     "kind": "meshtastic",
+     "hz": 922875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 12/12 (djb2('LongFast') % 12)"
+    },
+    {
+     "name": "Meshtastic KR LongSlow",
+     "kind": "meshtastic",
+     "hz": 920312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/24 (djb2('LongSlow') % 24)"
+    },
+    {
+     "name": "Meshtastic KR MediumSlow",
+     "kind": "meshtastic",
+     "hz": 920875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/12 (djb2('MediumSlow') % 12)"
+    },
+    {
+     "name": "Meshtastic KR MediumFast",
+     "kind": "meshtastic",
+     "hz": 920125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/12 (djb2('MediumFast') % 12)"
+    },
+    {
+     "name": "Meshtastic KR ShortSlow",
+     "kind": "meshtastic",
+     "hz": 922625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/12 (djb2('ShortSlow') % 12)"
+    },
+    {
+     "name": "Meshtastic KR ShortFast",
+     "kind": "meshtastic",
+     "hz": 921875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 8/12 (djb2('ShortFast') % 12)"
+    },
+    {
+     "name": "Meshtastic KR LongMod",
+     "kind": "meshtastic",
+     "hz": 921687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/24 (djb2('LongMod') % 24)"
+    },
+    {
+     "name": "Meshtastic KR ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 922750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/6 (djb2('ShortTurbo') % 6)"
+    },
+    {
+     "name": "Meshtastic KR LongTurbo",
+     "kind": "meshtastic",
+     "hz": 922750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/6 (djb2('LongTurbo') % 6)"
+    },
+    {
+     "name": "Meshtastic KR MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 922250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/6 (djb2('MediumTurbo') % 6)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_tw",
+   "family": "meshtastic",
+   "name": "Meshtastic TW",
+   "loHz": 920000000,
+   "hiHz": 925000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "TW"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic TW LongFast",
+     "kind": "meshtastic",
+     "hz": 923875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 16/20 (djb2('LongFast') % 20)"
+    },
+    {
+     "name": "Meshtastic TW LongSlow",
+     "kind": "meshtastic",
+     "hz": 923312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 27/40 (djb2('LongSlow') % 40)"
+    },
+    {
+     "name": "Meshtastic TW MediumSlow",
+     "kind": "meshtastic",
+     "hz": 924875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 20/20 (djb2('MediumSlow') % 20)"
+    },
+    {
+     "name": "Meshtastic TW MediumFast",
+     "kind": "meshtastic",
+     "hz": 922125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 9/20 (djb2('MediumFast') % 20)"
+    },
+    {
+     "name": "Meshtastic TW ShortSlow",
+     "kind": "meshtastic",
+     "hz": 922625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/20 (djb2('ShortSlow') % 20)"
+    },
+    {
+     "name": "Meshtastic TW ShortFast",
+     "kind": "meshtastic",
+     "hz": 924875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 20/20 (djb2('ShortFast') % 20)"
+    },
+    {
+     "name": "Meshtastic TW LongMod",
+     "kind": "meshtastic",
+     "hz": 921687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/40 (djb2('LongMod') % 40)"
+    },
+    {
+     "name": "Meshtastic TW ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 922750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/10 (djb2('ShortTurbo') % 10)"
+    },
+    {
+     "name": "Meshtastic TW LongTurbo",
+     "kind": "meshtastic",
+     "hz": 920750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/10 (djb2('LongTurbo') % 10)"
+    },
+    {
+     "name": "Meshtastic TW MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 920250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/10 (djb2('MediumTurbo') % 10)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_in",
+   "family": "meshtastic",
+   "name": "Meshtastic IN",
+   "loHz": 865000000,
+   "hiHz": 867000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "IN"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic IN LongFast",
+     "kind": "meshtastic",
+     "hz": 865875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 4/8 (djb2('LongFast') % 8)"
+    },
+    {
+     "name": "Meshtastic IN LongSlow",
+     "kind": "meshtastic",
+     "hz": 866312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/16 (djb2('LongSlow') % 16)"
+    },
+    {
+     "name": "Meshtastic IN MediumSlow",
+     "kind": "meshtastic",
+     "hz": 865875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/8 (djb2('MediumSlow') % 8)"
+    },
+    {
+     "name": "Meshtastic IN MediumFast",
+     "kind": "meshtastic",
+     "hz": 866125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/8 (djb2('MediumFast') % 8)"
+    },
+    {
+     "name": "Meshtastic IN ShortSlow",
+     "kind": "meshtastic",
+     "hz": 865625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/8 (djb2('ShortSlow') % 8)"
+    },
+    {
+     "name": "Meshtastic IN ShortFast",
+     "kind": "meshtastic",
+     "hz": 865875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/8 (djb2('ShortFast') % 8)"
+    },
+    {
+     "name": "Meshtastic IN LongMod",
+     "kind": "meshtastic",
+     "hz": 865687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/16 (djb2('LongMod') % 16)"
+    },
+    {
+     "name": "Meshtastic IN ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 865750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/4 (djb2('ShortTurbo') % 4)"
+    },
+    {
+     "name": "Meshtastic IN LongTurbo",
+     "kind": "meshtastic",
+     "hz": 865750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/4 (djb2('LongTurbo') % 4)"
+    },
+    {
+     "name": "Meshtastic IN MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 866250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/4 (djb2('MediumTurbo') % 4)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_nz_865",
+   "family": "meshtastic",
+   "name": "Meshtastic NZ_865",
+   "loHz": 864000000,
+   "hiHz": 868000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "NZ"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic NZ_865 LongFast",
+     "kind": "meshtastic",
+     "hz": 864875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 4/16 (djb2('LongFast') % 16)"
+    },
+    {
+     "name": "Meshtastic NZ_865 LongSlow",
+     "kind": "meshtastic",
+     "hz": 867312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 27/32 (djb2('LongSlow') % 32)"
+    },
+    {
+     "name": "Meshtastic NZ_865 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 866875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 12/16 (djb2('MediumSlow') % 16)"
+    },
+    {
+     "name": "Meshtastic NZ_865 MediumFast",
+     "kind": "meshtastic",
+     "hz": 865125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/16 (djb2('MediumFast') % 16)"
+    },
+    {
+     "name": "Meshtastic NZ_865 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 866625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/16 (djb2('ShortSlow') % 16)"
+    },
+    {
+     "name": "Meshtastic NZ_865 ShortFast",
+     "kind": "meshtastic",
+     "hz": 864875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/16 (djb2('ShortFast') % 16)"
+    },
+    {
+     "name": "Meshtastic NZ_865 LongMod",
+     "kind": "meshtastic",
+     "hz": 866687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 22/32 (djb2('LongMod') % 32)"
+    },
+    {
+     "name": "Meshtastic NZ_865 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 864750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/8 (djb2('ShortTurbo') % 8)"
+    },
+    {
+     "name": "Meshtastic NZ_865 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 864750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/8 (djb2('LongTurbo') % 8)"
+    },
+    {
+     "name": "Meshtastic NZ_865 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 865250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/8 (djb2('MediumTurbo') % 8)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_th",
+   "family": "meshtastic",
+   "name": "Meshtastic TH",
+   "loHz": 920000000,
+   "hiHz": 925000000,
+   "dutyPct": 10,
+   "firmware": "stable+2.8",
+   "countries": [
+    "TH"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic TH LongFast",
+     "kind": "meshtastic",
+     "hz": 923875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 16/20 (djb2('LongFast') % 20)"
+    },
+    {
+     "name": "Meshtastic TH LongSlow",
+     "kind": "meshtastic",
+     "hz": 923312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 27/40 (djb2('LongSlow') % 40)"
+    },
+    {
+     "name": "Meshtastic TH MediumSlow",
+     "kind": "meshtastic",
+     "hz": 924875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 20/20 (djb2('MediumSlow') % 20)"
+    },
+    {
+     "name": "Meshtastic TH MediumFast",
+     "kind": "meshtastic",
+     "hz": 922125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 9/20 (djb2('MediumFast') % 20)"
+    },
+    {
+     "name": "Meshtastic TH ShortSlow",
+     "kind": "meshtastic",
+     "hz": 922625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/20 (djb2('ShortSlow') % 20)"
+    },
+    {
+     "name": "Meshtastic TH ShortFast",
+     "kind": "meshtastic",
+     "hz": 924875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 20/20 (djb2('ShortFast') % 20)"
+    },
+    {
+     "name": "Meshtastic TH LongMod",
+     "kind": "meshtastic",
+     "hz": 921687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/40 (djb2('LongMod') % 40)"
+    },
+    {
+     "name": "Meshtastic TH ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 922750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/10 (djb2('ShortTurbo') % 10)"
+    },
+    {
+     "name": "Meshtastic TH LongTurbo",
+     "kind": "meshtastic",
+     "hz": 920750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/10 (djb2('LongTurbo') % 10)"
+    },
+    {
+     "name": "Meshtastic TH MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 920250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/10 (djb2('MediumTurbo') % 10)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_ua_433",
+   "family": "meshtastic",
+   "name": "Meshtastic UA_433",
+   "loHz": 433000000,
+   "hiHz": 434700000,
+   "dutyPct": 10,
+   "firmware": "stable+2.8",
+   "countries": [
+    "UA"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic UA_433 LongFast",
+     "kind": "meshtastic",
+     "hz": 434375000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 6/7 (djb2('LongFast') % 7)"
+    },
+    {
+     "name": "Meshtastic UA_433 LongSlow",
+     "kind": "meshtastic",
+     "hz": 434562500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 13/14 (djb2('LongSlow') % 14)"
+    },
+    {
+     "name": "Meshtastic UA_433 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 434375000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/7 (djb2('MediumSlow') % 7)"
+    },
+    {
+     "name": "Meshtastic UA_433 MediumFast",
+     "kind": "meshtastic",
+     "hz": 434375000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/7 (djb2('MediumFast') % 7)"
+    },
+    {
+     "name": "Meshtastic UA_433 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 433375000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/7 (djb2('ShortSlow') % 7)"
+    },
+    {
+     "name": "Meshtastic UA_433 ShortFast",
+     "kind": "meshtastic",
+     "hz": 433375000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/7 (djb2('ShortFast') % 7)"
+    },
+    {
+     "name": "Meshtastic UA_433 LongMod",
+     "kind": "meshtastic",
+     "hz": 433687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/14 (djb2('LongMod') % 14)"
+    },
+    {
+     "name": "Meshtastic UA_433 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 434250000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('ShortTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic UA_433 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 434250000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('LongTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic UA_433 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 433750000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/3 (djb2('MediumTurbo') % 3)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_ua_868",
+   "family": "meshtastic",
+   "name": "Meshtastic UA_868",
+   "loHz": 868000000,
+   "hiHz": 868600000,
+   "dutyPct": 1,
+   "firmware": "2.7 stable only \u2014 removed in 2.8",
+   "countries": [
+    "UA"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic UA_868 LongFast",
+     "kind": "meshtastic",
+     "hz": 868375000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 2/2 (djb2('LongFast') % 2)"
+    },
+    {
+     "name": "Meshtastic UA_868 LongSlow",
+     "kind": "meshtastic",
+     "hz": 868187500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/5 (djb2('LongSlow') % 5)"
+    },
+    {
+     "name": "Meshtastic UA_868 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 868375000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/2 (djb2('MediumSlow') % 2)"
+    },
+    {
+     "name": "Meshtastic UA_868 MediumFast",
+     "kind": "meshtastic",
+     "hz": 868125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/2 (djb2('MediumFast') % 2)"
+    },
+    {
+     "name": "Meshtastic UA_868 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 868125000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/2 (djb2('ShortSlow') % 2)"
+    },
+    {
+     "name": "Meshtastic UA_868 ShortFast",
+     "kind": "meshtastic",
+     "hz": 868375000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/2 (djb2('ShortFast') % 2)"
+    },
+    {
+     "name": "Meshtastic UA_868 LongMod",
+     "kind": "meshtastic",
+     "hz": 868437500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/5 (djb2('LongMod') % 5)"
+    },
+    {
+     "name": "Meshtastic UA_868 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 868250000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('ShortTurbo') % 1)"
+    },
+    {
+     "name": "Meshtastic UA_868 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 868250000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('LongTurbo') % 1)"
+    },
+    {
+     "name": "Meshtastic UA_868 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 868250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/1 (djb2('MediumTurbo') % 1)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic/firmware v2.7.26 (last stable, 2026-06-24) RadioInterface.cpp"
+   ]
+  },
+  {
+   "id": "mt_my_433",
+   "family": "meshtastic",
+   "name": "Meshtastic MY_433",
+   "loHz": 433000000,
+   "hiHz": 435000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "MY"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic MY_433 LongFast",
+     "kind": "meshtastic",
+     "hz": 433875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 4/8 (djb2('LongFast') % 8)"
+    },
+    {
+     "name": "Meshtastic MY_433 LongSlow",
+     "kind": "meshtastic",
+     "hz": 434312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/16 (djb2('LongSlow') % 16)"
+    },
+    {
+     "name": "Meshtastic MY_433 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 433875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/8 (djb2('MediumSlow') % 8)"
+    },
+    {
+     "name": "Meshtastic MY_433 MediumFast",
+     "kind": "meshtastic",
+     "hz": 434125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/8 (djb2('MediumFast') % 8)"
+    },
+    {
+     "name": "Meshtastic MY_433 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 433625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/8 (djb2('ShortSlow') % 8)"
+    },
+    {
+     "name": "Meshtastic MY_433 ShortFast",
+     "kind": "meshtastic",
+     "hz": 433875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/8 (djb2('ShortFast') % 8)"
+    },
+    {
+     "name": "Meshtastic MY_433 LongMod",
+     "kind": "meshtastic",
+     "hz": 433687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/16 (djb2('LongMod') % 16)"
+    },
+    {
+     "name": "Meshtastic MY_433 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 433750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/4 (djb2('ShortTurbo') % 4)"
+    },
+    {
+     "name": "Meshtastic MY_433 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 433750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/4 (djb2('LongTurbo') % 4)"
+    },
+    {
+     "name": "Meshtastic MY_433 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 434250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/4 (djb2('MediumTurbo') % 4)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_my_919",
+   "family": "meshtastic",
+   "name": "Meshtastic MY_919",
+   "loHz": 919000000,
+   "hiHz": 924000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "MY"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic MY_919 LongFast",
+     "kind": "meshtastic",
+     "hz": 922875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 16/20 (djb2('LongFast') % 20)"
+    },
+    {
+     "name": "Meshtastic MY_919 LongSlow",
+     "kind": "meshtastic",
+     "hz": 922312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 27/40 (djb2('LongSlow') % 40)"
+    },
+    {
+     "name": "Meshtastic MY_919 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 923875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 20/20 (djb2('MediumSlow') % 20)"
+    },
+    {
+     "name": "Meshtastic MY_919 MediumFast",
+     "kind": "meshtastic",
+     "hz": 921125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 9/20 (djb2('MediumFast') % 20)"
+    },
+    {
+     "name": "Meshtastic MY_919 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 921625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/20 (djb2('ShortSlow') % 20)"
+    },
+    {
+     "name": "Meshtastic MY_919 ShortFast",
+     "kind": "meshtastic",
+     "hz": 923875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 20/20 (djb2('ShortFast') % 20)"
+    },
+    {
+     "name": "Meshtastic MY_919 LongMod",
+     "kind": "meshtastic",
+     "hz": 920687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/40 (djb2('LongMod') % 40)"
+    },
+    {
+     "name": "Meshtastic MY_919 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 921750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/10 (djb2('ShortTurbo') % 10)"
+    },
+    {
+     "name": "Meshtastic MY_919 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 919750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/10 (djb2('LongTurbo') % 10)"
+    },
+    {
+     "name": "Meshtastic MY_919 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 919250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/10 (djb2('MediumTurbo') % 10)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_sg_923",
+   "family": "meshtastic",
+   "name": "Meshtastic SG_923",
+   "loHz": 917000000,
+   "hiHz": 925000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "SG"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic SG_923 LongFast",
+     "kind": "meshtastic",
+     "hz": 917875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 4/32 (djb2('LongFast') % 32)"
+    },
+    {
+     "name": "Meshtastic SG_923 LongSlow",
+     "kind": "meshtastic",
+     "hz": 924312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 59/64 (djb2('LongSlow') % 64)"
+    },
+    {
+     "name": "Meshtastic SG_923 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 919875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 12/32 (djb2('MediumSlow') % 32)"
+    },
+    {
+     "name": "Meshtastic SG_923 MediumFast",
+     "kind": "meshtastic",
+     "hz": 922125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 21/32 (djb2('MediumFast') % 32)"
+    },
+    {
+     "name": "Meshtastic SG_923 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 923625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 27/32 (djb2('ShortSlow') % 32)"
+    },
+    {
+     "name": "Meshtastic SG_923 ShortFast",
+     "kind": "meshtastic",
+     "hz": 917875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/32 (djb2('ShortFast') % 32)"
+    },
+    {
+     "name": "Meshtastic SG_923 LongMod",
+     "kind": "meshtastic",
+     "hz": 923687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 54/64 (djb2('LongMod') % 64)"
+    },
+    {
+     "name": "Meshtastic SG_923 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 917750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/16 (djb2('ShortTurbo') % 16)"
+    },
+    {
+     "name": "Meshtastic SG_923 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 917750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/16 (djb2('LongTurbo') % 16)"
+    },
+    {
+     "name": "Meshtastic SG_923 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 918250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/16 (djb2('MediumTurbo') % 16)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_ph_433",
+   "family": "meshtastic",
+   "name": "Meshtastic PH_433",
+   "loHz": 433000000,
+   "hiHz": 434700000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "PH"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic PH_433 LongFast",
+     "kind": "meshtastic",
+     "hz": 434375000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 6/7 (djb2('LongFast') % 7)"
+    },
+    {
+     "name": "Meshtastic PH_433 LongSlow",
+     "kind": "meshtastic",
+     "hz": 434562500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 13/14 (djb2('LongSlow') % 14)"
+    },
+    {
+     "name": "Meshtastic PH_433 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 434375000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/7 (djb2('MediumSlow') % 7)"
+    },
+    {
+     "name": "Meshtastic PH_433 MediumFast",
+     "kind": "meshtastic",
+     "hz": 434375000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/7 (djb2('MediumFast') % 7)"
+    },
+    {
+     "name": "Meshtastic PH_433 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 433375000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/7 (djb2('ShortSlow') % 7)"
+    },
+    {
+     "name": "Meshtastic PH_433 ShortFast",
+     "kind": "meshtastic",
+     "hz": 433375000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/7 (djb2('ShortFast') % 7)"
+    },
+    {
+     "name": "Meshtastic PH_433 LongMod",
+     "kind": "meshtastic",
+     "hz": 433687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/14 (djb2('LongMod') % 14)"
+    },
+    {
+     "name": "Meshtastic PH_433 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 434250000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('ShortTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic PH_433 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 434250000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('LongTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic PH_433 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 433750000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/3 (djb2('MediumTurbo') % 3)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_ph_868",
+   "family": "meshtastic",
+   "name": "Meshtastic PH_868",
+   "loHz": 868000000,
+   "hiHz": 869400000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "PH"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic PH_868 LongFast",
+     "kind": "meshtastic",
+     "hz": 869375000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 6/6 (djb2('LongFast') % 6)"
+    },
+    {
+     "name": "Meshtastic PH_868 LongSlow",
+     "kind": "meshtastic",
+     "hz": 869312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/11 (djb2('LongSlow') % 11)"
+    },
+    {
+     "name": "Meshtastic PH_868 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 868875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/6 (djb2('MediumSlow') % 6)"
+    },
+    {
+     "name": "Meshtastic PH_868 MediumFast",
+     "kind": "meshtastic",
+     "hz": 868125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/6 (djb2('MediumFast') % 6)"
+    },
+    {
+     "name": "Meshtastic PH_868 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 869125000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/6 (djb2('ShortSlow') % 6)"
+    },
+    {
+     "name": "Meshtastic PH_868 ShortFast",
+     "kind": "meshtastic",
+     "hz": 868375000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/6 (djb2('ShortFast') % 6)"
+    },
+    {
+     "name": "Meshtastic PH_868 LongMod",
+     "kind": "meshtastic",
+     "hz": 868562500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/11 (djb2('LongMod') % 11)"
+    },
+    {
+     "name": "Meshtastic PH_868 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 869250000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('ShortTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic PH_868 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 869250000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('LongTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic PH_868 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 868750000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/3 (djb2('MediumTurbo') % 3)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_ph_915",
+   "family": "meshtastic",
+   "name": "Meshtastic PH_915",
+   "loHz": 915000000,
+   "hiHz": 918000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "PH"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic PH_915 LongFast",
+     "kind": "meshtastic",
+     "hz": 917875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 12/12 (djb2('LongFast') % 12)"
+    },
+    {
+     "name": "Meshtastic PH_915 LongSlow",
+     "kind": "meshtastic",
+     "hz": 915312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/24 (djb2('LongSlow') % 24)"
+    },
+    {
+     "name": "Meshtastic PH_915 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 915875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/12 (djb2('MediumSlow') % 12)"
+    },
+    {
+     "name": "Meshtastic PH_915 MediumFast",
+     "kind": "meshtastic",
+     "hz": 915125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/12 (djb2('MediumFast') % 12)"
+    },
+    {
+     "name": "Meshtastic PH_915 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 917625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/12 (djb2('ShortSlow') % 12)"
+    },
+    {
+     "name": "Meshtastic PH_915 ShortFast",
+     "kind": "meshtastic",
+     "hz": 916875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 8/12 (djb2('ShortFast') % 12)"
+    },
+    {
+     "name": "Meshtastic PH_915 LongMod",
+     "kind": "meshtastic",
+     "hz": 916687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/24 (djb2('LongMod') % 24)"
+    },
+    {
+     "name": "Meshtastic PH_915 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 917750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/6 (djb2('ShortTurbo') % 6)"
+    },
+    {
+     "name": "Meshtastic PH_915 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 917750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/6 (djb2('LongTurbo') % 6)"
+    },
+    {
+     "name": "Meshtastic PH_915 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 917250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/6 (djb2('MediumTurbo') % 6)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_kz_433",
+   "family": "meshtastic",
+   "name": "Meshtastic KZ_433",
+   "loHz": 433075000,
+   "hiHz": 434775000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "KZ"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic KZ_433 LongFast",
+     "kind": "meshtastic",
+     "hz": 434450000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 6/7 (djb2('LongFast') % 7)"
+    },
+    {
+     "name": "Meshtastic KZ_433 LongSlow",
+     "kind": "meshtastic",
+     "hz": 434637500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 13/14 (djb2('LongSlow') % 14)"
+    },
+    {
+     "name": "Meshtastic KZ_433 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 434450000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/7 (djb2('MediumSlow') % 7)"
+    },
+    {
+     "name": "Meshtastic KZ_433 MediumFast",
+     "kind": "meshtastic",
+     "hz": 434450000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/7 (djb2('MediumFast') % 7)"
+    },
+    {
+     "name": "Meshtastic KZ_433 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 433450000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/7 (djb2('ShortSlow') % 7)"
+    },
+    {
+     "name": "Meshtastic KZ_433 ShortFast",
+     "kind": "meshtastic",
+     "hz": 433450000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/7 (djb2('ShortFast') % 7)"
+    },
+    {
+     "name": "Meshtastic KZ_433 LongMod",
+     "kind": "meshtastic",
+     "hz": 433762500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/14 (djb2('LongMod') % 14)"
+    },
+    {
+     "name": "Meshtastic KZ_433 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 434325000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('ShortTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic KZ_433 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 434325000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/3 (djb2('LongTurbo') % 3)"
+    },
+    {
+     "name": "Meshtastic KZ_433 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 433825000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/3 (djb2('MediumTurbo') % 3)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_kz_863",
+   "family": "meshtastic",
+   "name": "Meshtastic KZ_863",
+   "loHz": 863000000,
+   "hiHz": 868000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "KZ"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic KZ_863 LongFast",
+     "kind": "meshtastic",
+     "hz": 866875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 16/20 (djb2('LongFast') % 20)"
+    },
+    {
+     "name": "Meshtastic KZ_863 LongSlow",
+     "kind": "meshtastic",
+     "hz": 866312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 27/40 (djb2('LongSlow') % 40)"
+    },
+    {
+     "name": "Meshtastic KZ_863 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 867875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 20/20 (djb2('MediumSlow') % 20)"
+    },
+    {
+     "name": "Meshtastic KZ_863 MediumFast",
+     "kind": "meshtastic",
+     "hz": 865125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 9/20 (djb2('MediumFast') % 20)"
+    },
+    {
+     "name": "Meshtastic KZ_863 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 865625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/20 (djb2('ShortSlow') % 20)"
+    },
+    {
+     "name": "Meshtastic KZ_863 ShortFast",
+     "kind": "meshtastic",
+     "hz": 867875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 20/20 (djb2('ShortFast') % 20)"
+    },
+    {
+     "name": "Meshtastic KZ_863 LongMod",
+     "kind": "meshtastic",
+     "hz": 864687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/40 (djb2('LongMod') % 40)"
+    },
+    {
+     "name": "Meshtastic KZ_863 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 865750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/10 (djb2('ShortTurbo') % 10)"
+    },
+    {
+     "name": "Meshtastic KZ_863 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 863750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/10 (djb2('LongTurbo') % 10)"
+    },
+    {
+     "name": "Meshtastic KZ_863 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 863250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/10 (djb2('MediumTurbo') % 10)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_np_865",
+   "family": "meshtastic",
+   "name": "Meshtastic NP_865",
+   "loHz": 865000000,
+   "hiHz": 868000000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "NP"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic NP_865 LongFast",
+     "kind": "meshtastic",
+     "hz": 867875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 12/12 (djb2('LongFast') % 12)"
+    },
+    {
+     "name": "Meshtastic NP_865 LongSlow",
+     "kind": "meshtastic",
+     "hz": 865312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 3/24 (djb2('LongSlow') % 24)"
+    },
+    {
+     "name": "Meshtastic NP_865 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 865875000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 4/12 (djb2('MediumSlow') % 12)"
+    },
+    {
+     "name": "Meshtastic NP_865 MediumFast",
+     "kind": "meshtastic",
+     "hz": 865125000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 1/12 (djb2('MediumFast') % 12)"
+    },
+    {
+     "name": "Meshtastic NP_865 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 867625000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/12 (djb2('ShortSlow') % 12)"
+    },
+    {
+     "name": "Meshtastic NP_865 ShortFast",
+     "kind": "meshtastic",
+     "hz": 866875000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 8/12 (djb2('ShortFast') % 12)"
+    },
+    {
+     "name": "Meshtastic NP_865 LongMod",
+     "kind": "meshtastic",
+     "hz": 866687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 14/24 (djb2('LongMod') % 24)"
+    },
+    {
+     "name": "Meshtastic NP_865 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 867750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/6 (djb2('ShortTurbo') % 6)"
+    },
+    {
+     "name": "Meshtastic NP_865 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 867750000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 6/6 (djb2('LongTurbo') % 6)"
+    },
+    {
+     "name": "Meshtastic NP_865 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 867250000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 5/6 (djb2('MediumTurbo') % 6)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_br_902",
+   "family": "meshtastic",
+   "name": "Meshtastic BR_902",
+   "loHz": 902000000,
+   "hiHz": 907500000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "BR"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic BR_902 LongFast",
+     "kind": "meshtastic",
+     "hz": 903875000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 0,
+     "note": "slot 8/22 (djb2('LongFast') % 22)"
+    },
+    {
+     "name": "Meshtastic BR_902 LongSlow",
+     "kind": "meshtastic",
+     "hz": 903312500,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 11/44 (djb2('LongSlow') % 44)"
+    },
+    {
+     "name": "Meshtastic BR_902 MediumSlow",
+     "kind": "meshtastic",
+     "hz": 907375000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 22/22 (djb2('MediumSlow') % 22)"
+    },
+    {
+     "name": "Meshtastic BR_902 MediumFast",
+     "kind": "meshtastic",
+     "hz": 906625000,
+     "bw": 250000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 19/22 (djb2('MediumFast') % 22)"
+    },
+    {
+     "name": "Meshtastic BR_902 ShortSlow",
+     "kind": "meshtastic",
+     "hz": 905125000,
+     "bw": 250000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 13/22 (djb2('ShortSlow') % 22)"
+    },
+    {
+     "name": "Meshtastic BR_902 ShortFast",
+     "kind": "meshtastic",
+     "hz": 904375000,
+     "bw": 250000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 10/22 (djb2('ShortFast') % 22)"
+    },
+    {
+     "name": "Meshtastic BR_902 LongMod",
+     "kind": "meshtastic",
+     "hz": 906687500,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 38/44 (djb2('LongMod') % 44)"
+    },
+    {
+     "name": "Meshtastic BR_902 ShortTurbo",
+     "kind": "meshtastic",
+     "hz": 905750000,
+     "bw": 500000,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 8/11 (djb2('ShortTurbo') % 11)"
+    },
+    {
+     "name": "Meshtastic BR_902 LongTurbo",
+     "kind": "meshtastic",
+     "hz": 906250000,
+     "bw": 500000,
+     "sfs": [
+      11
+     ],
+     "cr": 8,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 9/11 (djb2('LongTurbo') % 11)"
+    },
+    {
+     "name": "Meshtastic BR_902 MediumTurbo",
+     "kind": "meshtastic",
+     "hz": 902750000,
+     "bw": 500000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": false,
+     "tier": 1,
+     "note": "slot 2/11 (djb2('MediumTurbo') % 11)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)",
+    "meshtastic.org/docs/configuration/radio/lora (region table)"
+   ]
+  },
+  {
+   "id": "mt_itu1_2m",
+   "family": "meshtastic",
+   "name": "Meshtastic ITU1_2M (amateur, licensed mode)",
+   "loHz": 144000000,
+   "hiHz": 146000000,
+   "dutyPct": 100,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "licensed amateurs, ITU region 1"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ITU1_2M TinyFast",
+     "kind": "meshtastic",
+     "hz": 144510000,
+     "bw": 15625,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 2,
+     "note": "fixed override slot 26; 20/100 kHz ham raster (padding)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)"
+   ]
+  },
+  {
+   "id": "mt_itu2_2m",
+   "family": "meshtastic",
+   "name": "Meshtastic ITU2_2M (amateur, licensed mode)",
+   "loHz": 144000000,
+   "hiHz": 148000000,
+   "dutyPct": 100,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "licensed amateurs, ITU region 2"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ITU2_2M TinyFast",
+     "kind": "meshtastic",
+     "hz": 145010000,
+     "bw": 15625,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 2,
+     "note": "fixed override slot 51; 20/100 kHz ham raster (padding)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)"
+   ]
+  },
+  {
+   "id": "mt_itu3_2m",
+   "family": "meshtastic",
+   "name": "Meshtastic ITU3_2M (amateur, licensed mode)",
+   "loHz": 144000000,
+   "hiHz": 148000000,
+   "dutyPct": 100,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "licensed amateurs, ITU region 3"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ITU3_2M TinyFast",
+     "kind": "meshtastic",
+     "hz": 144650000,
+     "bw": 15625,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 2,
+     "note": "fixed override slot 33; 20/100 kHz ham raster (padding)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)"
+   ]
+  },
+  {
+   "id": "mt_itu2_125cm",
+   "family": "meshtastic",
+   "name": "Meshtastic ITU2_125CM (amateur, licensed mode)",
+   "loHz": 220000000,
+   "hiHz": 225000000,
+   "dutyPct": 100,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "licensed amateurs, ITU region 2"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ITU2_125CM NarrowSlow",
+     "kind": "meshtastic",
+     "hz": 223650000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 6,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 2,
+     "note": "fixed override slot 37; 20/100 kHz ham raster (padding)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)"
+   ]
+  },
+  {
+   "id": "mt_itu1_70cm",
+   "family": "meshtastic",
+   "name": "Meshtastic ITU1_70CM (amateur, licensed mode)",
+   "loHz": 430000000,
+   "hiHz": 440000000,
+   "dutyPct": 100,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "licensed amateurs, ITU region 1"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ITU1_70CM NarrowSlow",
+     "kind": "meshtastic",
+     "hz": 433650000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 6,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 2,
+     "note": "fixed override slot 37; 20/100 kHz ham raster (padding)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)"
+   ]
+  },
+  {
+   "id": "mt_itu2_70cm",
+   "family": "meshtastic",
+   "name": "Meshtastic ITU2_70CM (amateur, licensed mode)",
+   "loHz": 420000000,
+   "hiHz": 450000000,
+   "dutyPct": 100,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "licensed amateurs, ITU region 2"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ITU2_70CM NarrowSlow",
+     "kind": "meshtastic",
+     "hz": 433650000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 6,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 2,
+     "note": "fixed override slot 137; 20/100 kHz ham raster (padding)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)"
+   ]
+  },
+  {
+   "id": "mt_itu3_70cm",
+   "family": "meshtastic",
+   "name": "Meshtastic ITU3_70CM (amateur, licensed mode)",
+   "loHz": 430000000,
+   "hiHz": 450000000,
+   "dutyPct": 100,
+   "firmware": "2.8 prerelease only",
+   "countries": [
+    "licensed amateurs, ITU region 3"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic ITU3_70CM NarrowSlow",
+     "kind": "meshtastic",
+     "hz": 433650000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 6,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 2,
+     "note": "fixed override slot 37; 20/100 kHz ham raster (padding)"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)"
+   ]
+  },
+  {
+   "id": "mt_lora_24",
+   "family": "meshtastic",
+   "name": "Meshtastic LORA_24 (2.4 GHz, SX128x)",
+   "loHz": 2400000000,
+   "hiHz": 2483500000,
+   "dutyPct": 100,
+   "firmware": "stable+2.8",
+   "countries": [
+    "worldwide"
+   ],
+   "channels": [
+    {
+     "name": "Meshtastic LORA_24 LongFast",
+     "kind": "meshtastic",
+     "hz": 2420718750,
+     "bw": 812500,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x2B",
+     "default": true,
+     "tier": 2,
+     "note": "wide-LoRa: LongFast = BW 812.5 kHz; slot 26/103"
+    }
+   ],
+   "source": [
+    "meshtastic/firmware src/mesh/RadioInterface.cpp regions[] + MeshRadio.h modemPresetToParams (develop, = v2.8.2 prerelease 2026-11-04)"
+   ]
+  },
+  {
+   "id": "meshcore_presets",
+   "family": "meshcore",
+   "name": "MeshCore community presets (app list)",
+   "loHz": null,
+   "hiHz": null,
+   "dutyPct": null,
+   "firmware": "app config 2026-11-12",
+   "countries": [
+    "AU",
+    "BR",
+    "CA",
+    "CH",
+    "CR",
+    "CZ",
+    "EU",
+    "GB",
+    "HU",
+    "NL",
+    "NZ",
+    "PT",
+    "SK",
+    "TH",
+    "US",
+    "VN"
+   ],
+   "channels": [
+    {
+     "name": "MeshCore Australia",
+     "kind": "meshcore",
+     "hz": 915800000,
+     "bw": 250000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "AU"
+     ]
+    },
+    {
+     "name": "MeshCore Australia (Narrow)",
+     "kind": "meshcore",
+     "hz": 916575000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 7,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "AU"
+     ]
+    },
+    {
+     "name": "MeshCore Australia (Mid)",
+     "kind": "meshcore",
+     "hz": 915075000,
+     "bw": 125000,
+     "sfs": [
+      9
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "AU"
+     ]
+    },
+    {
+     "name": "MeshCore Australia: SA, WA",
+     "kind": "meshcore",
+     "hz": 923125000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 8,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "AU"
+     ]
+    },
+    {
+     "name": "MeshCore Australia: QLD",
+     "kind": "meshcore",
+     "hz": 923125000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "AU"
+     ]
+    },
+    {
+     "name": "MeshCore Brazil",
+     "kind": "meshcore",
+     "hz": 923125000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 8,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "BR"
+     ]
+    },
+    {
+     "name": "MeshCore Canada",
+     "kind": "meshcore",
+     "hz": 910525000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "CA"
+     ]
+    },
+    {
+     "name": "MeshCore Costa Rica",
+     "kind": "meshcore",
+     "hz": 910525000,
+     "bw": 125000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "CR"
+     ]
+    },
+    {
+     "name": "MeshCore EU/UK (Narrow)",
+     "kind": "meshcore",
+     "hz": 869618000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 8,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "EU",
+      "GB"
+     ]
+    },
+    {
+     "name": "MeshCore EU/UK (Deprecated)",
+     "kind": "meshcore",
+     "hz": 869525000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": false,
+     "tier": 2,
+     "countries": [
+      "EU",
+      "GB"
+     ]
+    },
+    {
+     "name": "MeshCore Czech Republic (Narrow)",
+     "kind": "meshcore",
+     "hz": 869432000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "CZ"
+     ]
+    },
+    {
+     "name": "MeshCore EU 433MHz (Long Range)",
+     "kind": "meshcore",
+     "hz": 433650000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "EU"
+     ]
+    },
+    {
+     "name": "MeshCore EU 433MHz (Narrow)",
+     "kind": "meshcore",
+     "hz": 433650000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 8,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "EU"
+     ]
+    },
+    {
+     "name": "MeshCore Hungary",
+     "kind": "meshcore",
+     "hz": 869618000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "HU"
+     ]
+    },
+    {
+     "name": "MeshCore Netherlands",
+     "kind": "meshcore",
+     "hz": 869618000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "NL"
+     ]
+    },
+    {
+     "name": "MeshCore Netherlands (Limburg)",
+     "kind": "meshcore",
+     "hz": 869618000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 8,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "NL"
+     ]
+    },
+    {
+     "name": "MeshCore New Zealand (Narrow)",
+     "kind": "meshcore",
+     "hz": 917375000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "NZ"
+     ]
+    },
+    {
+     "name": "MeshCore New Zealand (Gisborne)",
+     "kind": "meshcore",
+     "hz": 917375000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "NZ"
+     ]
+    },
+    {
+     "name": "MeshCore Portugal 433",
+     "kind": "meshcore",
+     "hz": 433375000,
+     "bw": 62500,
+     "sfs": [
+      9
+     ],
+     "cr": 6,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "PT"
+     ]
+    },
+    {
+     "name": "MeshCore Portugal 868",
+     "kind": "meshcore",
+     "hz": 869618000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 6,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "PT"
+     ]
+    },
+    {
+     "name": "MeshCore Slovakia",
+     "kind": "meshcore",
+     "hz": 869618000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "SK"
+     ]
+    },
+    {
+     "name": "MeshCore Switzerland",
+     "kind": "meshcore",
+     "hz": 869618000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 8,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "CH"
+     ]
+    },
+    {
+     "name": "MeshCore Thailand",
+     "kind": "meshcore",
+     "hz": 921000000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "TH"
+     ]
+    },
+    {
+     "name": "MeshCore USA",
+     "kind": "meshcore",
+     "hz": 910525000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "US"
+     ]
+    },
+    {
+     "name": "MeshCore USA - Southern California",
+     "kind": "meshcore",
+     "hz": 927875000,
+     "bw": 62500,
+     "sfs": [
+      7
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "US"
+     ]
+    },
+    {
+     "name": "MeshCore Vietnam (Narrow)",
+     "kind": "meshcore",
+     "hz": 920250000,
+     "bw": 62500,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": true,
+     "tier": 0,
+     "countries": [
+      "VN"
+     ]
+    },
+    {
+     "name": "MeshCore Vietnam (Deprecated)",
+     "kind": "meshcore",
+     "hz": 920250000,
+     "bw": 250000,
+     "sfs": [
+      11
+     ],
+     "cr": 5,
+     "sync": "0x12",
+     "default": false,
+     "tier": 2,
+     "countries": [
+      "VN"
+     ]
+    }
+   ],
+   "note": "Every preset is a community default for its area, so every non-deprecated one is tier 0. Firmware build default (no app) = 869.618 / 62.5 / SF8 / CR5 (platformio.ini); the app's EU/UK preset is CR8 \u2014 the header carries CR, so both decode.",
+   "source": [
+    "MeshCore app suggested_radio_settings (api.meshcore.nz/api/v1/config, fetched 2026-11-12) = meshcore-dev/MeshCore docs/radio_presets.md",
+    "meshcore-dev/MeshCore platformio.ini (LORA_FREQ 869.618 / BW 62.5 / SF8) and variants/*/target.cpp (RADIOLIB_SX126X_SYNC_WORD_PRIVATE = 0x12, preamble 16)"
+   ]
+  },
+  {
+   "id": "lw_eu868",
+   "family": "lorawan",
+   "name": "LoRaWAN EU868",
+   "loHz": 863000000,
+   "hiHz": 870000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "AL",
+    "AD",
+    "AO",
+    "AT",
+    "BH",
+    "BE",
+    "BA",
+    "BW",
+    "BG",
+    "CG",
+    "HR",
+    "CY",
+    "CZ",
+    "DK",
+    "EE",
+    "SZ",
+    "FI",
+    "FR",
+    "GR",
+    "HU",
+    "IS",
+    "IE",
+    "IT",
+    "LV",
+    "LS",
+    "LI",
+    "LT",
+    "LU",
+    "MG",
+    "MW",
+    "MT",
+    "MU",
+    "MD",
+    "ME",
+    "MZ",
+    "NA",
+    "NL",
+    "MK",
+    "PH",
+    "PL",
+    "PT",
+    "RO",
+    "RU",
+    "SA",
+    "RS",
+    "SC",
+    "SK",
+    "SI",
+    "ZA",
+    "ES",
+    "SE",
+    "CH",
+    "TZ",
+    "TR",
+    "AE",
+    "GB",
+    "VA",
+    "ZM",
+    "ZW"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN EU868 868.1",
+     "kind": "lorawan",
+     "hz": 868100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN EU868 868.3",
+     "kind": "lorawan",
+     "hz": 868300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN EU868 868.5",
+     "kind": "lorawan",
+     "hz": 868500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN EU868 RX2 869.525 (downlink)",
+     "kind": "lorawan",
+     "hz": 869525000,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN EU868 867.1 (common NS addition)",
+     "kind": "lorawan",
+     "hz": 867100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN EU868 867.3 (common NS addition)",
+     "kind": "lorawan",
+     "hz": 867300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN EU868 867.5 (common NS addition)",
+     "kind": "lorawan",
+     "hz": 867500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN EU868 867.7 (common NS addition)",
+     "kind": "lorawan",
+     "hz": 867700000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN EU868 867.9 (common NS addition)",
+     "kind": "lorawan",
+     "hz": 867900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "RX2 SF12 per RP002; TTN uses SF9 on RX2 (EU_863_870_TTN). 867.1-867.9 are TTN/most-NS CFList additions, not RP002 defaults."
+  },
+  {
+   "id": "lw_eu433",
+   "family": "lorawan",
+   "name": "LoRaWAN EU433",
+   "loHz": 433000000,
+   "hiHz": 434000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "(ITU R1 433 users)"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN EU433 433.175",
+     "kind": "lorawan",
+     "hz": 433175000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN EU433 433.375",
+     "kind": "lorawan",
+     "hz": 433375000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN EU433 433.575",
+     "kind": "lorawan",
+     "hz": 433575000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN EU433 RX2 434.665 (downlink)",
+     "kind": "lorawan",
+     "hz": 434665000,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ]
+  },
+  {
+   "id": "lw_us915",
+   "family": "lorawan",
+   "name": "LoRaWAN US915",
+   "loHz": 902000000,
+   "hiHz": 928000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "CA",
+    "CR",
+    "EC",
+    "GY",
+    "MX",
+    "PA",
+    "PR",
+    "US"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN US915 903.9",
+     "kind": "lorawan",
+     "hz": 903900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN US915 904.1",
+     "kind": "lorawan",
+     "hz": 904100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN US915 904.3",
+     "kind": "lorawan",
+     "hz": 904300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN US915 904.5",
+     "kind": "lorawan",
+     "hz": 904500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN US915 904.7",
+     "kind": "lorawan",
+     "hz": 904700000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN US915 904.9",
+     "kind": "lorawan",
+     "hz": 904900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN US915 905.1",
+     "kind": "lorawan",
+     "hz": 905100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN US915 905.3",
+     "kind": "lorawan",
+     "hz": 905300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN US915 RX2 923.3 (downlink)",
+     "kind": "lorawan",
+     "hz": 923300000,
+     "bw": 500000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN US915 FSB2 904.6 (500 kHz, DR4)",
+     "kind": "lorawan",
+     "hz": 904600000,
+     "bw": 500000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN US915 downlink 923.3",
+     "kind": "lorawan",
+     "hz": 923300000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN US915 downlink 923.9",
+     "kind": "lorawan",
+     "hz": 923900000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN US915 downlink 924.5",
+     "kind": "lorawan",
+     "hz": 924500000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN US915 downlink 925.1",
+     "kind": "lorawan",
+     "hz": 925100000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN US915 downlink 925.7",
+     "kind": "lorawan",
+     "hz": 925700000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN US915 downlink 926.3",
+     "kind": "lorawan",
+     "hz": 926300000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN US915 downlink 926.9",
+     "kind": "lorawan",
+     "hz": 926900000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN US915 downlink 927.5",
+     "kind": "lorawan",
+     "hz": 927500000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "Fixed plan: 64x125 kHz 902.3-914.9 + 8x500 kHz 903.0-914.2 up; 8x500 kHz 923.3-927.5 down. FSB2 (903.9-905.3) is the one TTN and most public networks use; the other 7 sub-bands are listed by formula only."
+  },
+  {
+   "id": "lw_au915",
+   "family": "lorawan",
+   "name": "LoRaWAN AU915",
+   "loHz": 915000000,
+   "hiHz": 928000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "AR",
+    "AU",
+    "BO",
+    "BR",
+    "CA",
+    "CL",
+    "CO",
+    "DO",
+    "NZ",
+    "PY",
+    "PE",
+    "SR",
+    "UY"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN AU915 916.8",
+     "kind": "lorawan",
+     "hz": 916800000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AU915 917.0",
+     "kind": "lorawan",
+     "hz": 917000000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AU915 917.2",
+     "kind": "lorawan",
+     "hz": 917200000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AU915 917.4",
+     "kind": "lorawan",
+     "hz": 917400000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AU915 917.6",
+     "kind": "lorawan",
+     "hz": 917600000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AU915 917.8",
+     "kind": "lorawan",
+     "hz": 917800000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AU915 918.0",
+     "kind": "lorawan",
+     "hz": 918000000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AU915 918.2",
+     "kind": "lorawan",
+     "hz": 918200000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AU915 RX2 923.3 (downlink)",
+     "kind": "lorawan",
+     "hz": 923300000,
+     "bw": 500000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN AU915 FSB2 917.5 (500 kHz, DR6)",
+     "kind": "lorawan",
+     "hz": 917500000,
+     "bw": 500000,
+     "sfs": [
+      8
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN AU915 downlink 923.3",
+     "kind": "lorawan",
+     "hz": 923300000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN AU915 downlink 923.9",
+     "kind": "lorawan",
+     "hz": 923900000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN AU915 downlink 924.5",
+     "kind": "lorawan",
+     "hz": 924500000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN AU915 downlink 925.1",
+     "kind": "lorawan",
+     "hz": 925100000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN AU915 downlink 925.7",
+     "kind": "lorawan",
+     "hz": 925700000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN AU915 downlink 926.3",
+     "kind": "lorawan",
+     "hz": 926300000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN AU915 downlink 926.9",
+     "kind": "lorawan",
+     "hz": 926900000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN AU915 downlink 927.5",
+     "kind": "lorawan",
+     "hz": 927500000,
+     "bw": 500000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "Fixed plan: 64x125 kHz 915.2-927.8 + 8x500 kHz 915.9-927.1 up; down as US915. FSB2 (916.8-918.2) = TTN."
+  },
+  {
+   "id": "lw_as923_1",
+   "family": "lorawan",
+   "name": "LoRaWAN AS923-1",
+   "loHz": 915000000,
+   "hiHz": 928000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "JP",
+    "SG",
+    "TW",
+    "TH",
+    "MY",
+    "HK",
+    "AU(recommended by AU operators)",
+    "NZ"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN AS923-1 923.2",
+     "kind": "lorawan",
+     "hz": 923200000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AS923-1 923.4",
+     "kind": "lorawan",
+     "hz": 923400000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AS923-1 RX2 923.2 (downlink)",
+     "kind": "lorawan",
+     "hz": 923200000,
+     "bw": 125000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "RX2 DR2 = SF10/125."
+  },
+  {
+   "id": "lw_as923_2",
+   "family": "lorawan",
+   "name": "LoRaWAN AS923-2",
+   "loHz": 915000000,
+   "hiHz": 928000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "ID",
+    "VN"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN AS923-2 921.4",
+     "kind": "lorawan",
+     "hz": 921400000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AS923-2 921.6",
+     "kind": "lorawan",
+     "hz": 921600000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AS923-2 RX2 921.4 (downlink)",
+     "kind": "lorawan",
+     "hz": 921400000,
+     "bw": 125000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "RX2 DR2 = SF10/125."
+  },
+  {
+   "id": "lw_as923_3",
+   "family": "lorawan",
+   "name": "LoRaWAN AS923-3",
+   "loHz": 915000000,
+   "hiHz": 928000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "PH",
+    "CU",
+    "GB/EU 915-918 (RP002 table)"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN AS923-3 916.6",
+     "kind": "lorawan",
+     "hz": 916600000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AS923-3 916.8",
+     "kind": "lorawan",
+     "hz": 916800000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AS923-3 RX2 916.6 (downlink)",
+     "kind": "lorawan",
+     "hz": 916600000,
+     "bw": 125000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "RX2 DR2 = SF10/125."
+  },
+  {
+   "id": "lw_as923_4",
+   "family": "lorawan",
+   "name": "LoRaWAN AS923-4",
+   "loHz": 917000000,
+   "hiHz": 920000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "IL"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN AS923-4 917.3",
+     "kind": "lorawan",
+     "hz": 917300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AS923-4 917.5",
+     "kind": "lorawan",
+     "hz": 917500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN AS923-4 RX2 917.3 (downlink)",
+     "kind": "lorawan",
+     "hz": 917300000,
+     "bw": 125000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "RX2 DR2 = SF10/125."
+  },
+  {
+   "id": "lw_kr920",
+   "family": "lorawan",
+   "name": "LoRaWAN KR920",
+   "loHz": 920900000,
+   "hiHz": 923300000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "KR"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN KR920 922.1",
+     "kind": "lorawan",
+     "hz": 922100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN KR920 922.3",
+     "kind": "lorawan",
+     "hz": 922300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN KR920 922.5",
+     "kind": "lorawan",
+     "hz": 922500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN KR920 RX2 921.9 (downlink)",
+     "kind": "lorawan",
+     "hz": 921900000,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ]
+  },
+  {
+   "id": "lw_in865",
+   "family": "lorawan",
+   "name": "LoRaWAN IN865",
+   "loHz": 865000000,
+   "hiHz": 867000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "IN"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN IN865 865.0625",
+     "kind": "lorawan",
+     "hz": 865062500,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IN865 865.4025",
+     "kind": "lorawan",
+     "hz": 865402500,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IN865 865.985",
+     "kind": "lorawan",
+     "hz": 865985000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IN865 RX2 866.55 (downlink)",
+     "kind": "lorawan",
+     "hz": 866550000,
+     "bw": 125000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "RX2 DR2 = SF10/125."
+  },
+  {
+   "id": "lw_ru864",
+   "family": "lorawan",
+   "name": "LoRaWAN RU864",
+   "loHz": 864000000,
+   "hiHz": 870000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "RU"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN RU864 868.9",
+     "kind": "lorawan",
+     "hz": 868900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN RU864 869.1",
+     "kind": "lorawan",
+     "hz": 869100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN RU864 RX2 869.1 (downlink)",
+     "kind": "lorawan",
+     "hz": 869100000,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN RU864 864.1 (TTN addition)",
+     "kind": "lorawan",
+     "hz": 864100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN RU864 864.3 (TTN addition)",
+     "kind": "lorawan",
+     "hz": 864300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN RU864 864.5 (TTN addition)",
+     "kind": "lorawan",
+     "hz": 864500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN RU864 864.7 (TTN addition)",
+     "kind": "lorawan",
+     "hz": 864700000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN RU864 864.9 (TTN addition)",
+     "kind": "lorawan",
+     "hz": 864900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ]
+  },
+  {
+   "id": "lw_cn470",
+   "family": "lorawan",
+   "name": "LoRaWAN CN470",
+   "loHz": 470000000,
+   "hiHz": 510000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "CN"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN CN470 470.9",
+     "kind": "lorawan",
+     "hz": 470900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 472.5",
+     "kind": "lorawan",
+     "hz": 472500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 474.1",
+     "kind": "lorawan",
+     "hz": 474100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 475.7",
+     "kind": "lorawan",
+     "hz": 475700000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 504.1",
+     "kind": "lorawan",
+     "hz": 504100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 505.7",
+     "kind": "lorawan",
+     "hz": 505700000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 507.3",
+     "kind": "lorawan",
+     "hz": 507300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 508.9",
+     "kind": "lorawan",
+     "hz": 508900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 479.9",
+     "kind": "lorawan",
+     "hz": 479900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN CN470 499.9",
+     "kind": "lorawan",
+     "hz": 499900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 470.3",
+     "kind": "lorawan",
+     "hz": 470300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 472.3",
+     "kind": "lorawan",
+     "hz": 472300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 474.3",
+     "kind": "lorawan",
+     "hz": 474300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 476.3",
+     "kind": "lorawan",
+     "hz": 476300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 478.3",
+     "kind": "lorawan",
+     "hz": 478300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 480.3",
+     "kind": "lorawan",
+     "hz": 480300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 482.3",
+     "kind": "lorawan",
+     "hz": 482300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 484.3",
+     "kind": "lorawan",
+     "hz": 484300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 486.3",
+     "kind": "lorawan",
+     "hz": 486300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 488.3",
+     "kind": "lorawan",
+     "hz": 488300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0,
+     "coverage": "scan-list (40 MHz spread)"
+    },
+    {
+     "name": "LoRaWAN CN470 RX2 492.5 (downlink)",
+     "kind": "lorawan",
+     "hz": 492500000,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x",
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML)"
+   ],
+   "note": "RP002 Table 39: the 20 common join channels (uplink). 1.0.4 dropped SF12 from CN470; the SF list is the decoder's, not the plan's."
+  },
+  {
+   "id": "lw_cn779",
+   "family": "lorawan",
+   "name": "LoRaWAN CN779 (deprecated)",
+   "loHz": 779000000,
+   "hiHz": 787000000,
+   "dutyPct": null,
+   "firmware": "deprecated in RP002-1.0.4; no new devices after 2021-01-01",
+   "countries": [
+    "CN"
+   ],
+   "channels": [],
+   "note": "UNCONFIRMED: default channels not given in RP002-1.0.4 (defined in LoRaWAN 1.0.1). Not tabled.",
+   "source": [
+    "LoRa Alliance RP002-1.0.4 Regional Parameters (2022), Tables 2/3 and \u00a72.x"
+   ]
+  },
+  {
+   "id": "lw_ma869_draft",
+   "family": "lorawan",
+   "name": "LoRaWAN MA869 (draft)",
+   "loHz": 869000000,
+   "hiHz": 870000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "MA"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN MA869 (draft) 869.1",
+     "kind": "lorawan",
+     "hz": 869100000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN MA869 (draft) 869.3",
+     "kind": "lorawan",
+     "hz": 869300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN MA869 (draft) RX2 869.5 (downlink)",
+     "kind": "lorawan",
+     "hz": 869500000,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    },
+    {
+     "name": "LoRaWAN MA869 869.7",
+     "kind": "lorawan",
+     "hz": 869700000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    },
+    {
+     "name": "LoRaWAN MA869 869.9",
+     "kind": "lorawan",
+     "hz": 869900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 1
+    }
+   ],
+   "source": [
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML) MA_869_870_DRAFT.yml"
+   ],
+   "note": "TTN DRAFT plan, not in RP002-1.0.4. Treat as unconfirmed."
+  },
+  {
+   "id": "lw_uz923_draft",
+   "family": "lorawan",
+   "name": "LoRaWAN UZ923 (draft)",
+   "loHz": 915000000,
+   "hiHz": 928000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "UZ"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN UZ923 (draft) 926.2",
+     "kind": "lorawan",
+     "hz": 926200000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN UZ923 (draft) 926.4",
+     "kind": "lorawan",
+     "hz": 926400000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN UZ923 (draft) 926.6",
+     "kind": "lorawan",
+     "hz": 926600000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN UZ923 (draft) 926.8",
+     "kind": "lorawan",
+     "hz": 926800000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN UZ923 (draft) RX2 926.6 (downlink)",
+     "kind": "lorawan",
+     "hz": 926600000,
+     "bw": 125000,
+     "sfs": [
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML) UZ_923_1.yml"
+   ],
+   "note": "TTN DRAFT plan, not in RP002-1.0.4. Treat as unconfirmed; RX2 from the YAML."
+  },
+  {
+   "id": "lw_il917_ttn",
+   "family": "lorawan",
+   "name": "LoRaWAN IL917 (TTN, AS923-4 base)",
+   "loHz": 917000000,
+   "hiHz": 920000000,
+   "dutyPct": null,
+   "firmware": "RP002-1.0.4",
+   "countries": [
+    "IL"
+   ],
+   "channels": [
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) 917.3",
+     "kind": "lorawan",
+     "hz": 917300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) 917.5",
+     "kind": "lorawan",
+     "hz": 917500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) 917.7",
+     "kind": "lorawan",
+     "hz": 917700000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) 917.9",
+     "kind": "lorawan",
+     "hz": 917900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) 919.3",
+     "kind": "lorawan",
+     "hz": 919300000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) 919.5",
+     "kind": "lorawan",
+     "hz": 919500000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) 919.7",
+     "kind": "lorawan",
+     "hz": 919700000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) 919.9",
+     "kind": "lorawan",
+     "hz": 919900000,
+     "bw": 125000,
+     "sfs": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": true,
+     "tier": 0
+    },
+    {
+     "name": "LoRaWAN IL917 (TTN, AS923-4 base) RX2 917.3 (downlink)",
+     "kind": "lorawan",
+     "hz": 917300000,
+     "bw": 125000,
+     "sfs": [
+      10
+     ],
+     "cr": 5,
+     "sync": "0x34",
+     "default": false,
+     "tier": 2,
+     "invertIq": true
+    }
+   ],
+   "source": [
+    "TheThingsNetwork/lorawan-frequency-plans (frequency-plans.yml + per-plan YAML) IL_917_920_TTN.yml"
+   ],
+   "note": "TTN's Israeli channels on the AS923-4 base."
+  }
+ ],
+ "sensorBands": [
+  {
+   "id": "ism_315",
+   "name": "315 MHz (US/JP fobs, TPMS)",
+   "loHz": 310000000.0,
+   "hiHz": 320000000.0,
+   "centreHz": 315000000.0,
+   "countries": [
+    "US",
+    "CA",
+    "JP",
+    "KR",
+    "R2"
+   ],
+   "source": "FCC 47 CFR 15.231 (260-470 MHz periodic); ARIB STD-T93 (JP 312-315.25 MHz) \u2014 the JP range is UNCONFIRMED from the primary"
+  },
+  {
+   "id": "ism_426_jp",
+   "name": "426 MHz JP 'specified low power' telemeter/telecontrol",
+   "loHz": 426000000.0,
+   "hiHz": 426150000.0,
+   "centreHz": 426100000.0,
+   "countries": [
+    "JP"
+   ],
+   "source": "UNCONFIRMED: ARIB STD-T67 channel range not checked against the primary"
+  },
+  {
+   "id": "ism_433",
+   "name": "433.05-434.79 MHz ISM (ITU RR 5.138) / LPD433",
+   "loHz": 433050000.0,
+   "hiHz": 434790000.0,
+   "centreHz": 433920000.0,
+   "countries": [
+    "ITU R1",
+    "AU",
+    "NZ",
+    "BR",
+    "MY",
+    "many R2/R3"
+   ],
+   "source": "ITU Radio Regulations 5.138; CEPT ERC/REC 70-03 Annex 1"
+  },
+  {
+   "id": "srd_868",
+   "name": "863-870 MHz SRD (868.3 / 868.95 wM-Bus, 869.4-869.65 10 % 500 mW)",
+   "loHz": 863000000.0,
+   "hiHz": 870000000.0,
+   "centreHz": 868600000.0,
+   "countries": [
+    "AL",
+    "AD",
+    "AO",
+    "AT",
+    "BH",
+    "BE",
+    "BA",
+    "BW",
+    "BG",
+    "CG",
+    "HR",
+    "CY",
+    "CZ",
+    "DK",
+    "EE",
+    "SZ",
+    "FI",
+    "FR",
+    "GR",
+    "HU",
+    "IS",
+    "IE",
+    "IT",
+    "LV",
+    "LS",
+    "LI",
+    "LT",
+    "LU",
+    "MG",
+    "MW",
+    "MT",
+    "MU",
+    "MD",
+    "ME",
+    "MZ",
+    "NA",
+    "NL",
+    "MK",
+    "PH",
+    "PL",
+    "PT",
+    "RO",
+    "RU",
+    "SA",
+    "RS",
+    "SC",
+    "SK",
+    "SI",
+    "ZA",
+    "ES",
+    "SE",
+    "CH",
+    "TZ",
+    "TR",
+    "AE",
+    "GB",
+    "VA",
+    "ZM",
+    "ZW"
+   ],
+   "source": "CEPT ERC/REC 70-03 Annex 1 (bands h1.3-h1.7); EU 2006/771/EC; EN 300 220"
+  },
+  {
+   "id": "srd_865_in",
+   "name": "865-867 MHz India",
+   "loHz": 865000000.0,
+   "hiHz": 867000000.0,
+   "centreHz": 866000000.0,
+   "countries": [
+    "IN"
+   ],
+   "source": "RP002 Table 1 (IN 865-867); Indian GSR 564(E) not checked"
+  },
+  {
+   "id": "ism_902",
+   "name": "902-928 MHz ISM (ITU R2, RR 5.150)",
+   "loHz": 902000000.0,
+   "hiHz": 928000000.0,
+   "centreHz": 915000000.0,
+   "countries": [
+    "CA",
+    "CR",
+    "EC",
+    "GY",
+    "MX",
+    "PA",
+    "PR",
+    "US"
+   ],
+   "source": "ITU RR 5.150; FCC 47 CFR 15.247/15.249"
+  },
+  {
+   "id": "lipd_915",
+   "name": "915-928 MHz AU/NZ LIPD, BR 902-907.5 + 915-928",
+   "loHz": 915000000.0,
+   "hiHz": 928000000.0,
+   "centreHz": 920000000.0,
+   "countries": [
+    "AU",
+    "NZ",
+    "BR"
+   ],
+   "source": "ACMA LIPD class licence; Anatel (BR ranges per Meshtastic BR_902 and RP002 Table 1: 902-907.5, 915-928)"
+  },
+  {
+   "id": "srd_920",
+   "name": "920-923/925 MHz JP/KR/AS",
+   "loHz": 920000000.0,
+   "hiHz": 925000000.0,
+   "centreHz": 922500000.0,
+   "countries": [
+    "JP",
+    "KR",
+    "TW",
+    "TH",
+    "SG",
+    "MY",
+    "VN",
+    "ID"
+   ],
+   "source": "ARIB STD-T108 (JP 920.5-928 per RP002 Table 1); RP002 Table 1"
+  },
+  {
+   "id": "srd_470_cn",
+   "name": "470-510 MHz China",
+   "loHz": 470000000.0,
+   "hiHz": 510000000.0,
+   "centreHz": 490000000.0,
+   "countries": [
+    "CN"
+   ],
+   "source": "RP002 \u00a72.9 (MIIT)"
+  }
+ ],
+ "blocks": [
+  {
+   "id": "315",
+   "centreHz": 315250000,
+   "spanHz": 1800000,
+   "label": "315 US/JP sensors",
+   "landingFor": [
+    "US",
+    "CA",
+    "JP"
+   ],
+   "sensorNote": "315.00 keeps today's 250 kHz DC offset (radio at 315.25)",
+   "regions": [],
+   "channels": [],
+   "defaultChannels": [],
+   "optional": false
+  },
+  {
+   "id": "433",
+   "centreHz": 434000000,
+   "spanHz": 1800000,
+   "label": "433.9 ISM + 433 mesh",
+   "landingFor": [
+    "ITU R1 433",
+    "MY_433",
+    "UA",
+    "PH",
+    "KZ",
+    "ANZ_433"
+   ],
+   "sensorNote": "433.92 sits 80 kHz below DC: keep it out of the DC notch; 433.05-434.79 fully inside except the bottom 50 kHz (433.05-433.10)",
+   "regions": [
+    "lw_eu433",
+    "meshcore_presets",
+    "mt_anz_433",
+    "mt_eu_433",
+    "mt_itu1_70cm",
+    "mt_itu2_70cm",
+    "mt_itu3_70cm",
+    "mt_kz_433",
+    "mt_my_433",
+    "mt_ph_433",
+    "mt_ua_433"
+   ],
+   "channels": [
+    "Meshtastic EU_433 LongFast",
+    "Meshtastic EU_433 LongSlow",
+    "Meshtastic EU_433 MediumSlow",
+    "Meshtastic EU_433 ShortSlow",
+    "Meshtastic EU_433 ShortFast",
+    "Meshtastic EU_433 LongMod",
+    "Meshtastic EU_433 ShortTurbo",
+    "Meshtastic EU_433 LongTurbo",
+    "Meshtastic ANZ_433 LongFast",
+    "Meshtastic ANZ_433 LongSlow",
+    "Meshtastic ANZ_433 MediumSlow",
+    "Meshtastic ANZ_433 MediumFast",
+    "Meshtastic ANZ_433 ShortSlow",
+    "Meshtastic ANZ_433 ShortFast",
+    "Meshtastic ANZ_433 LongMod",
+    "Meshtastic ANZ_433 ShortTurbo",
+    "Meshtastic ANZ_433 LongTurbo",
+    "Meshtastic ANZ_433 MediumTurbo",
+    "Meshtastic UA_433 LongFast",
+    "Meshtastic UA_433 LongSlow",
+    "Meshtastic UA_433 MediumSlow",
+    "Meshtastic UA_433 MediumFast",
+    "Meshtastic UA_433 ShortSlow",
+    "Meshtastic UA_433 ShortFast",
+    "Meshtastic UA_433 LongMod",
+    "Meshtastic UA_433 ShortTurbo",
+    "Meshtastic UA_433 LongTurbo",
+    "Meshtastic UA_433 MediumTurbo",
+    "Meshtastic MY_433 LongFast",
+    "Meshtastic MY_433 LongSlow",
+    "Meshtastic MY_433 MediumSlow",
+    "Meshtastic MY_433 MediumFast",
+    "Meshtastic MY_433 ShortSlow",
+    "Meshtastic MY_433 ShortFast",
+    "Meshtastic MY_433 LongMod",
+    "Meshtastic MY_433 ShortTurbo",
+    "Meshtastic MY_433 LongTurbo",
+    "Meshtastic MY_433 MediumTurbo",
+    "Meshtastic PH_433 LongFast",
+    "Meshtastic PH_433 LongSlow",
+    "Meshtastic PH_433 MediumSlow",
+    "Meshtastic PH_433 MediumFast",
+    "Meshtastic PH_433 ShortSlow",
+    "Meshtastic PH_433 ShortFast",
+    "Meshtastic PH_433 LongMod",
+    "Meshtastic PH_433 ShortTurbo",
+    "Meshtastic PH_433 LongTurbo",
+    "Meshtastic PH_433 MediumTurbo",
+    "Meshtastic KZ_433 LongFast",
+    "Meshtastic KZ_433 LongSlow",
+    "Meshtastic KZ_433 MediumSlow",
+    "Meshtastic KZ_433 MediumFast",
+    "Meshtastic KZ_433 ShortSlow",
+    "Meshtastic KZ_433 ShortFast",
+    "Meshtastic KZ_433 LongMod",
+    "Meshtastic KZ_433 ShortTurbo",
+    "Meshtastic KZ_433 LongTurbo",
+    "Meshtastic KZ_433 MediumTurbo",
+    "Meshtastic ITU1_70CM NarrowSlow",
+    "Meshtastic ITU2_70CM NarrowSlow",
+    "Meshtastic ITU3_70CM NarrowSlow",
+    "MeshCore EU 433MHz (Long Range)",
+    "MeshCore EU 433MHz (Narrow)",
+    "MeshCore Portugal 433",
+    "LoRaWAN EU433 433.175",
+    "LoRaWAN EU433 433.375",
+    "LoRaWAN EU433 433.575",
+    "LoRaWAN EU433 RX2 434.665 (downlink)"
+   ],
+   "defaultChannels": [
+    "Meshtastic EU_433 LongFast",
+    "Meshtastic ANZ_433 LongFast",
+    "Meshtastic UA_433 LongFast",
+    "Meshtastic MY_433 LongFast",
+    "Meshtastic PH_433 LongFast",
+    "Meshtastic KZ_433 LongFast",
+    "Meshtastic ITU1_70CM NarrowSlow",
+    "Meshtastic ITU2_70CM NarrowSlow",
+    "Meshtastic ITU3_70CM NarrowSlow",
+    "MeshCore EU 433MHz (Long Range)",
+    "MeshCore EU 433MHz (Narrow)",
+    "MeshCore Portugal 433",
+    "LoRaWAN EU433 433.175",
+    "LoRaWAN EU433 433.375",
+    "LoRaWAN EU433 433.575"
+   ],
+   "optional": false
+  },
+  {
+   "id": "479",
+   "centreHz": 479300000,
+   "spanHz": 1800000,
+   "label": "479 CN",
+   "landingFor": [
+    "CN"
+   ],
+   "sensorNote": "no sensor band here (CN SRD only)",
+   "regions": [
+    "lw_cn470",
+    "mt_cn"
+   ],
+   "channels": [
+    "Meshtastic CN LongFast",
+    "LoRaWAN CN470 479.9"
+   ],
+   "defaultChannels": [
+    "Meshtastic CN LongFast",
+    "LoRaWAN CN470 479.9"
+   ],
+   "optional": false
+  },
+  {
+   "id": "865",
+   "centreHz": 865600000,
+   "spanHz": 1800000,
+   "label": "865 IN/NZ",
+   "landingFor": [
+    "IN",
+    "NZ_865"
+   ],
+   "sensorNote": "IN 865-867 SRD",
+   "regions": [
+    "lw_in865",
+    "lw_ru864",
+    "mt_eu_866",
+    "mt_in",
+    "mt_kz_863",
+    "mt_np_865",
+    "mt_nz_865"
+   ],
+   "channels": [
+    "Meshtastic EU_866 LiteFast",
+    "Meshtastic EU_866 LiteSlow",
+    "Meshtastic IN LongFast",
+    "Meshtastic IN LongSlow",
+    "Meshtastic IN MediumSlow",
+    "Meshtastic IN MediumFast",
+    "Meshtastic IN ShortSlow",
+    "Meshtastic IN ShortFast",
+    "Meshtastic IN LongMod",
+    "Meshtastic IN ShortTurbo",
+    "Meshtastic IN LongTurbo",
+    "Meshtastic IN MediumTurbo",
+    "Meshtastic NZ_865 LongFast",
+    "Meshtastic NZ_865 MediumFast",
+    "Meshtastic NZ_865 ShortFast",
+    "Meshtastic NZ_865 MediumTurbo",
+    "Meshtastic KZ_863 LongSlow",
+    "Meshtastic KZ_863 MediumFast",
+    "Meshtastic KZ_863 ShortSlow",
+    "Meshtastic KZ_863 ShortTurbo",
+    "Meshtastic NP_865 LongSlow",
+    "Meshtastic NP_865 MediumSlow",
+    "Meshtastic NP_865 MediumFast",
+    "LoRaWAN IN865 865.0625",
+    "LoRaWAN IN865 865.4025",
+    "LoRaWAN IN865 865.985",
+    "LoRaWAN RU864 864.9 (TTN addition)"
+   ],
+   "defaultChannels": [
+    "Meshtastic EU_866 LiteFast",
+    "Meshtastic IN LongFast",
+    "Meshtastic NZ_865 LongFast",
+    "LoRaWAN IN865 865.0625",
+    "LoRaWAN IN865 865.4025",
+    "LoRaWAN IN865 865.985"
+   ],
+   "optional": false
+  },
+  {
+   "id": "867",
+   "centreHz": 867200000,
+   "spanHz": 1800000,
+   "label": "867 EU866/KZ/NP",
+   "landingFor": [
+    "NP",
+    "KZ"
+   ],
+   "sensorNote": "lower 863-870 SRD",
+   "regions": [
+    "lw_eu868",
+    "lw_in865",
+    "mt_kz_863",
+    "mt_np_865",
+    "mt_nz_865"
+   ],
+   "channels": [
+    "Meshtastic NZ_865 LongSlow",
+    "Meshtastic NZ_865 MediumSlow",
+    "Meshtastic NZ_865 ShortSlow",
+    "Meshtastic NZ_865 LongMod",
+    "Meshtastic KZ_863 LongFast",
+    "Meshtastic KZ_863 MediumSlow",
+    "Meshtastic KZ_863 ShortFast",
+    "Meshtastic NP_865 LongFast",
+    "Meshtastic NP_865 ShortSlow",
+    "Meshtastic NP_865 ShortFast",
+    "Meshtastic NP_865 LongMod",
+    "Meshtastic NP_865 ShortTurbo",
+    "Meshtastic NP_865 LongTurbo",
+    "Meshtastic NP_865 MediumTurbo",
+    "LoRaWAN EU868 867.1 (common NS addition)",
+    "LoRaWAN EU868 867.3 (common NS addition)",
+    "LoRaWAN EU868 867.5 (common NS addition)",
+    "LoRaWAN EU868 867.7 (common NS addition)",
+    "LoRaWAN EU868 867.9 (common NS addition)",
+    "LoRaWAN IN865 RX2 866.55 (downlink)"
+   ],
+   "defaultChannels": [
+    "Meshtastic KZ_863 LongFast",
+    "Meshtastic NP_865 LongFast"
+   ],
+   "optional": false
+  },
+  {
+   "id": "869",
+   "centreHz": 868850000,
+   "spanHz": 1800000,
+   "label": "869 EU/UK/RU mesh",
+   "landingFor": [
+    "EU",
+    "GB",
+    "RU",
+    "PH_868",
+    "UA_868"
+   ],
+   "sensorNote": "868.3 and 868.95 wM-Bus inside; DC at 868.85 is 100 kHz below 868.95",
+   "regions": [
+    "lw_eu868",
+    "lw_ma869_draft",
+    "lw_ru864",
+    "meshcore_presets",
+    "mt_eu_868",
+    "mt_eu_n_868",
+    "mt_ph_868",
+    "mt_ru",
+    "mt_ua_868"
+   ],
+   "channels": [
+    "Meshtastic EU_868 LongFast",
+    "Meshtastic EU_868 LongSlow",
+    "Meshtastic EU_868 MediumSlow",
+    "Meshtastic EU_868 MediumFast",
+    "Meshtastic EU_868 ShortSlow",
+    "Meshtastic EU_868 ShortFast",
+    "Meshtastic EU_868 LongMod",
+    "Meshtastic EU_N_868 NarrowFast",
+    "Meshtastic EU_N_868 NarrowSlow",
+    "Meshtastic RU LongFast",
+    "Meshtastic RU LongSlow",
+    "Meshtastic RU MediumSlow",
+    "Meshtastic RU MediumFast",
+    "Meshtastic RU ShortSlow",
+    "Meshtastic RU ShortFast",
+    "Meshtastic RU LongMod",
+    "Meshtastic RU ShortTurbo",
+    "Meshtastic RU LongTurbo",
+    "Meshtastic RU MediumTurbo",
+    "Meshtastic UA_868 LongFast",
+    "Meshtastic UA_868 LongSlow",
+    "Meshtastic UA_868 MediumSlow",
+    "Meshtastic UA_868 MediumFast",
+    "Meshtastic UA_868 ShortSlow",
+    "Meshtastic UA_868 ShortFast",
+    "Meshtastic UA_868 LongMod",
+    "Meshtastic UA_868 ShortTurbo",
+    "Meshtastic UA_868 LongTurbo",
+    "Meshtastic UA_868 MediumTurbo",
+    "Meshtastic PH_868 LongFast",
+    "Meshtastic PH_868 LongSlow",
+    "Meshtastic PH_868 MediumSlow",
+    "Meshtastic PH_868 MediumFast",
+    "Meshtastic PH_868 ShortSlow",
+    "Meshtastic PH_868 ShortFast",
+    "Meshtastic PH_868 LongMod",
+    "Meshtastic PH_868 ShortTurbo",
+    "Meshtastic PH_868 LongTurbo",
+    "Meshtastic PH_868 MediumTurbo",
+    "MeshCore EU/UK (Narrow)",
+    "MeshCore EU/UK (Deprecated)",
+    "MeshCore Czech Republic (Narrow)",
+    "MeshCore Hungary",
+    "MeshCore Netherlands",
+    "MeshCore Netherlands (Limburg)",
+    "MeshCore Portugal 868",
+    "MeshCore Slovakia",
+    "MeshCore Switzerland",
+    "LoRaWAN EU868 868.1",
+    "LoRaWAN EU868 868.3",
+    "LoRaWAN EU868 868.5",
+    "LoRaWAN EU868 RX2 869.525 (downlink)",
+    "LoRaWAN RU864 868.9",
+    "LoRaWAN RU864 869.1",
+    "LoRaWAN RU864 RX2 869.1 (downlink)",
+    "LoRaWAN MA869 (draft) 869.1",
+    "LoRaWAN MA869 (draft) 869.3",
+    "LoRaWAN MA869 (draft) RX2 869.5 (downlink)"
+   ],
+   "defaultChannels": [
+    "Meshtastic EU_868 LongFast",
+    "Meshtastic EU_N_868 NarrowSlow",
+    "Meshtastic RU LongFast",
+    "Meshtastic UA_868 LongFast",
+    "Meshtastic PH_868 LongFast",
+    "MeshCore EU/UK (Narrow)",
+    "MeshCore Czech Republic (Narrow)",
+    "MeshCore Hungary",
+    "MeshCore Netherlands",
+    "MeshCore Netherlands (Limburg)",
+    "MeshCore Portugal 868",
+    "MeshCore Slovakia",
+    "MeshCore Switzerland",
+    "LoRaWAN EU868 868.1",
+    "LoRaWAN EU868 868.3",
+    "LoRaWAN EU868 868.5",
+    "LoRaWAN RU864 868.9",
+    "LoRaWAN RU864 869.1",
+    "LoRaWAN MA869 (draft) 869.1",
+    "LoRaWAN MA869 (draft) 869.3"
+   ],
+   "optional": false
+  },
+  {
+   "id": "904",
+   "centreHz": 904600000,
+   "spanHz": 1800000,
+   "label": "904.6 US-LoRaWAN/BR",
+   "landingFor": [
+    "BR (Meshtastic BR_902)"
+   ],
+   "sensorNote": "902-928 sensors partially (915 is NOT in this block)",
+   "regions": [
+    "lw_us915",
+    "mt_br_902",
+    "mt_us"
+   ],
+   "channels": [
+    "Meshtastic US LongSlow",
+    "Meshtastic BR_902 LongFast",
+    "Meshtastic BR_902 ShortSlow",
+    "Meshtastic BR_902 ShortFast",
+    "LoRaWAN US915 903.9",
+    "LoRaWAN US915 904.1",
+    "LoRaWAN US915 904.3",
+    "LoRaWAN US915 904.5",
+    "LoRaWAN US915 904.7",
+    "LoRaWAN US915 904.9",
+    "LoRaWAN US915 905.1",
+    "LoRaWAN US915 905.3",
+    "LoRaWAN US915 FSB2 904.6 (500 kHz, DR4)"
+   ],
+   "defaultChannels": [
+    "Meshtastic BR_902 LongFast",
+    "LoRaWAN US915 903.9",
+    "LoRaWAN US915 904.1",
+    "LoRaWAN US915 904.3",
+    "LoRaWAN US915 904.5",
+    "LoRaWAN US915 904.7",
+    "LoRaWAN US915 904.9",
+    "LoRaWAN US915 905.1",
+    "LoRaWAN US915 905.3"
+   ],
+   "optional": false
+  },
+  {
+   "id": "907",
+   "centreHz": 906600000,
+   "spanHz": 1800000,
+   "label": "906.9 US Meshtastic",
+   "landingFor": [
+    "US",
+    "CA",
+    "MX"
+   ],
+   "sensorNote": "\u2014",
+   "regions": [
+    "mt_br_902",
+    "mt_us"
+   ],
+   "channels": [
+    "Meshtastic US LongFast",
+    "Meshtastic BR_902 MediumSlow",
+    "Meshtastic BR_902 MediumFast",
+    "Meshtastic BR_902 LongMod",
+    "Meshtastic BR_902 LongTurbo"
+   ],
+   "defaultChannels": [
+    "Meshtastic US LongFast"
+   ],
+   "optional": false
+  },
+  {
+   "id": "910",
+   "centreHz": 910400000,
+   "spanHz": 1800000,
+   "label": "910.5 US/CA MeshCore",
+   "landingFor": [
+    "US (MeshCore)",
+    "CA",
+    "CR"
+   ],
+   "sensorNote": "\u2014",
+   "regions": [
+    "meshcore_presets"
+   ],
+   "channels": [
+    "MeshCore Canada",
+    "MeshCore Costa Rica",
+    "MeshCore USA"
+   ],
+   "defaultChannels": [
+    "MeshCore Canada",
+    "MeshCore Costa Rica",
+    "MeshCore USA"
+   ],
+   "optional": false
+  },
+  {
+   "id": "913",
+   "centreHz": 913400000,
+   "spanHz": 1800000,
+   "label": "913 US MediumFast",
+   "landingFor": [],
+   "sensorNote": "915 US sensors fit (915.0 is 600 kHz above centre)",
+   "regions": [
+    "mt_us"
+   ],
+   "channels": [
+    "Meshtastic US MediumFast"
+   ],
+   "defaultChannels": [],
+   "optional": true
+  },
+  {
+   "id": "915",
+   "centreHz": 915800000,
+   "spanHz": 1800000,
+   "label": "915.8 AU MeshCore/915 ISM",
+   "landingFor": [
+    "AU (MeshCore)"
+   ],
+   "sensorNote": "915.00 US/AU sensors inside (800 kHz below centre)",
+   "regions": [
+    "lw_as923_3",
+    "meshcore_presets",
+    "mt_anz",
+    "mt_ph_915"
+   ],
+   "channels": [
+    "Meshtastic ANZ LongMod",
+    "Meshtastic PH_915 LongSlow",
+    "Meshtastic PH_915 MediumSlow",
+    "Meshtastic PH_915 MediumFast",
+    "MeshCore Australia",
+    "MeshCore Australia (Narrow)",
+    "MeshCore Australia (Mid)",
+    "LoRaWAN AS923-3 916.6",
+    "LoRaWAN AS923-3 RX2 916.6 (downlink)"
+   ],
+   "defaultChannels": [
+    "MeshCore Australia",
+    "MeshCore Australia (Narrow)",
+    "MeshCore Australia (Mid)",
+    "LoRaWAN AS923-3 916.6"
+   ],
+   "optional": false
+  },
+  {
+   "id": "917",
+   "centreHz": 917400000,
+   "spanHz": 1800000,
+   "label": "917.4 AU/NZ/AS923-3/4/PH/SG",
+   "landingFor": [
+    "NZ (MeshCore)",
+    "PH",
+    "SG",
+    "IL",
+    "AU (LoRaWAN)"
+   ],
+   "sensorNote": "\u2014",
+   "regions": [
+    "lw_as923_3",
+    "lw_as923_4",
+    "lw_au915",
+    "lw_il917_ttn",
+    "meshcore_presets",
+    "mt_ph_915",
+    "mt_sg_923"
+   ],
+   "channels": [
+    "Meshtastic SG_923 LongFast",
+    "Meshtastic SG_923 ShortFast",
+    "Meshtastic SG_923 ShortTurbo",
+    "Meshtastic SG_923 LongTurbo",
+    "Meshtastic PH_915 LongFast",
+    "Meshtastic PH_915 ShortSlow",
+    "Meshtastic PH_915 ShortFast",
+    "Meshtastic PH_915 LongMod",
+    "Meshtastic PH_915 ShortTurbo",
+    "Meshtastic PH_915 LongTurbo",
+    "Meshtastic PH_915 MediumTurbo",
+    "MeshCore Australia (Narrow)",
+    "MeshCore New Zealand (Narrow)",
+    "MeshCore New Zealand (Gisborne)",
+    "LoRaWAN AU915 916.8",
+    "LoRaWAN AU915 917.0",
+    "LoRaWAN AU915 917.2",
+    "LoRaWAN AU915 917.4",
+    "LoRaWAN AU915 917.6",
+    "LoRaWAN AU915 917.8",
+    "LoRaWAN AU915 918.0",
+    "LoRaWAN AU915 918.2",
+    "LoRaWAN AU915 FSB2 917.5 (500 kHz, DR6)",
+    "LoRaWAN AS923-3 916.6",
+    "LoRaWAN AS923-3 916.8",
+    "LoRaWAN AS923-3 RX2 916.6 (downlink)",
+    "LoRaWAN AS923-4 917.3",
+    "LoRaWAN AS923-4 917.5",
+    "LoRaWAN AS923-4 RX2 917.3 (downlink)",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 917.3",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 917.5",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 917.7",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 917.9",
+    "LoRaWAN IL917 (TTN, AS923-4 base) RX2 917.3 (downlink)"
+   ],
+   "defaultChannels": [
+    "Meshtastic SG_923 LongFast",
+    "Meshtastic PH_915 LongFast",
+    "MeshCore Australia (Narrow)",
+    "MeshCore New Zealand (Narrow)",
+    "MeshCore New Zealand (Gisborne)",
+    "LoRaWAN AU915 916.8",
+    "LoRaWAN AU915 917.0",
+    "LoRaWAN AU915 917.2",
+    "LoRaWAN AU915 917.4",
+    "LoRaWAN AU915 917.6",
+    "LoRaWAN AU915 917.8",
+    "LoRaWAN AU915 918.0",
+    "LoRaWAN AU915 918.2",
+    "LoRaWAN AS923-3 916.6",
+    "LoRaWAN AS923-3 916.8",
+    "LoRaWAN AS923-4 917.3",
+    "LoRaWAN AS923-4 917.5",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 917.3",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 917.5",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 917.7",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 917.9"
+   ],
+   "optional": false
+  },
+  {
+   "id": "920",
+   "centreHz": 920100000,
+   "spanHz": 1800000,
+   "label": "920 ANZ Meshtastic/VN/TH",
+   "landingFor": [
+    "AU/NZ (Meshtastic)",
+    "VN",
+    "TH (MeshCore)"
+   ],
+   "sensorNote": "\u2014",
+   "regions": [
+    "lw_il917_ttn",
+    "meshcore_presets",
+    "mt_anz",
+    "mt_jp",
+    "mt_kr",
+    "mt_my_919",
+    "mt_sg_923",
+    "mt_th",
+    "mt_tw",
+    "mt_us"
+   ],
+   "channels": [
+    "Meshtastic US ShortSlow",
+    "Meshtastic JP LongSlow",
+    "Meshtastic JP MediumFast",
+    "Meshtastic ANZ LongFast",
+    "Meshtastic ANZ ShortSlow",
+    "Meshtastic KR LongSlow",
+    "Meshtastic KR MediumSlow",
+    "Meshtastic KR MediumFast",
+    "Meshtastic TW LongTurbo",
+    "Meshtastic TW MediumTurbo",
+    "Meshtastic TH LongTurbo",
+    "Meshtastic TH MediumTurbo",
+    "Meshtastic MY_919 LongMod",
+    "Meshtastic MY_919 LongTurbo",
+    "Meshtastic SG_923 MediumSlow",
+    "MeshCore Vietnam (Narrow)",
+    "MeshCore Vietnam (Deprecated)",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 919.3",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 919.5",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 919.7",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 919.9"
+   ],
+   "defaultChannels": [
+    "Meshtastic ANZ LongFast",
+    "MeshCore Vietnam (Narrow)",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 919.3",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 919.5",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 919.7",
+    "LoRaWAN IL917 (TTN, AS923-4 base) 919.9"
+   ],
+   "optional": false
+  },
+  {
+   "id": "922",
+   "centreHz": 921700000,
+   "spanHz": 1800000,
+   "label": "921.7 AS923-2/KR LoRaWAN",
+   "landingFor": [
+    "ID",
+    "KR (LoRaWAN)"
+   ],
+   "sensorNote": "\u2014",
+   "regions": [
+    "lw_as923_2",
+    "lw_kr920",
+    "meshcore_presets",
+    "mt_anz",
+    "mt_jp",
+    "mt_kr",
+    "mt_my_919",
+    "mt_sg_923",
+    "mt_th",
+    "mt_tw"
+   ],
+   "channels": [
+    "Meshtastic JP MediumSlow",
+    "Meshtastic JP ShortFast",
+    "Meshtastic JP LongMod",
+    "Meshtastic ANZ LongTurbo",
+    "Meshtastic KR ShortFast",
+    "Meshtastic KR LongMod",
+    "Meshtastic KR MediumTurbo",
+    "Meshtastic TW MediumFast",
+    "Meshtastic TW LongMod",
+    "Meshtastic TH MediumFast",
+    "Meshtastic TH LongMod",
+    "Meshtastic MY_919 LongSlow",
+    "Meshtastic MY_919 MediumFast",
+    "Meshtastic MY_919 ShortSlow",
+    "Meshtastic MY_919 ShortTurbo",
+    "Meshtastic SG_923 MediumFast",
+    "MeshCore Thailand",
+    "LoRaWAN AS923-2 921.4",
+    "LoRaWAN AS923-2 921.6",
+    "LoRaWAN AS923-2 RX2 921.4 (downlink)",
+    "LoRaWAN KR920 922.1",
+    "LoRaWAN KR920 922.3",
+    "LoRaWAN KR920 922.5",
+    "LoRaWAN KR920 RX2 921.9 (downlink)"
+   ],
+   "defaultChannels": [
+    "MeshCore Thailand",
+    "LoRaWAN AS923-2 921.4",
+    "LoRaWAN AS923-2 921.6",
+    "LoRaWAN KR920 922.1",
+    "LoRaWAN KR920 922.3",
+    "LoRaWAN KR920 922.5"
+   ],
+   "optional": false
+  },
+  {
+   "id": "923",
+   "centreHz": 923150000,
+   "spanHz": 1800000,
+   "label": "923 BR/AU/AS/JP/KR mesh",
+   "landingFor": [
+    "BR (MeshCore)",
+    "JP",
+    "KR",
+    "TW",
+    "TH",
+    "MY",
+    "AU SA/WA/QLD"
+   ],
+   "sensorNote": "\u2014",
+   "regions": [
+    "lw_as923_1",
+    "lw_au915",
+    "lw_kr920",
+    "lw_us915",
+    "meshcore_presets",
+    "mt_jp",
+    "mt_kr",
+    "mt_my_919",
+    "mt_sg_923",
+    "mt_th",
+    "mt_tw"
+   ],
+   "channels": [
+    "Meshtastic JP LongFast",
+    "Meshtastic JP ShortSlow",
+    "Meshtastic JP ShortFast",
+    "Meshtastic JP ShortTurbo",
+    "Meshtastic JP LongTurbo",
+    "Meshtastic JP MediumTurbo",
+    "Meshtastic KR LongFast",
+    "Meshtastic KR ShortSlow",
+    "Meshtastic KR ShortTurbo",
+    "Meshtastic KR LongTurbo",
+    "Meshtastic TW LongFast",
+    "Meshtastic TW LongSlow",
+    "Meshtastic TW ShortSlow",
+    "Meshtastic TW ShortTurbo",
+    "Meshtastic TH LongFast",
+    "Meshtastic TH LongSlow",
+    "Meshtastic TH ShortSlow",
+    "Meshtastic TH ShortTurbo",
+    "Meshtastic MY_919 LongFast",
+    "Meshtastic MY_919 LongSlow",
+    "Meshtastic MY_919 MediumSlow",
+    "Meshtastic MY_919 ShortFast",
+    "Meshtastic SG_923 ShortSlow",
+    "Meshtastic SG_923 LongMod",
+    "MeshCore Australia: SA, WA",
+    "MeshCore Australia: QLD",
+    "MeshCore Brazil",
+    "LoRaWAN US915 RX2 923.3 (downlink)",
+    "LoRaWAN US915 downlink 923.3",
+    "LoRaWAN AU915 RX2 923.3 (downlink)",
+    "LoRaWAN AU915 downlink 923.3",
+    "LoRaWAN AS923-1 923.2",
+    "LoRaWAN AS923-1 923.4",
+    "LoRaWAN AS923-1 RX2 923.2 (downlink)",
+    "LoRaWAN KR920 922.5"
+   ],
+   "defaultChannels": [
+    "Meshtastic JP LongFast",
+    "Meshtastic KR LongFast",
+    "Meshtastic TW LongFast",
+    "Meshtastic TH LongFast",
+    "Meshtastic MY_919 LongFast",
+    "MeshCore Australia: SA, WA",
+    "MeshCore Australia: QLD",
+    "MeshCore Brazil",
+    "LoRaWAN AS923-1 923.2",
+    "LoRaWAN AS923-1 923.4",
+    "LoRaWAN KR920 922.5"
+   ],
+   "optional": false
+  },
+  {
+   "id": "925",
+   "centreHz": 925400000,
+   "spanHz": 1800000,
+   "label": "925 US/AU LoRaWAN downlinks",
+   "landingFor": [],
+   "sensorNote": "\u2014",
+   "regions": [
+    "lw_au915",
+    "lw_us915",
+    "lw_uz923_draft",
+    "mt_anz",
+    "mt_th",
+    "mt_tw",
+    "mt_us"
+   ],
+   "channels": [
+    "Meshtastic US MediumTurbo",
+    "Meshtastic ANZ MediumFast",
+    "Meshtastic ANZ MediumTurbo",
+    "Meshtastic TW MediumSlow",
+    "Meshtastic TW ShortFast",
+    "Meshtastic TH MediumSlow",
+    "Meshtastic TH ShortFast",
+    "LoRaWAN US915 downlink 925.1",
+    "LoRaWAN US915 downlink 925.7",
+    "LoRaWAN AU915 downlink 925.1",
+    "LoRaWAN AU915 downlink 925.7",
+    "LoRaWAN UZ923 (draft) 926.2"
+   ],
+   "defaultChannels": [
+    "LoRaWAN UZ923 (draft) 926.2"
+   ],
+   "optional": true
+  },
+  {
+   "id": "927",
+   "centreHz": 927050000,
+   "spanHz": 1800000,
+   "label": "927.9 SoCal/UZ",
+   "landingFor": [
+    "US-SoCal (MeshCore)",
+    "UZ"
+   ],
+   "sensorNote": "\u2014",
+   "regions": [
+    "lw_au915",
+    "lw_us915",
+    "lw_uz923_draft",
+    "meshcore_presets",
+    "mt_anz",
+    "mt_us"
+   ],
+   "channels": [
+    "Meshtastic US ShortTurbo",
+    "Meshtastic ANZ ShortTurbo",
+    "MeshCore USA - Southern California",
+    "LoRaWAN US915 downlink 926.9",
+    "LoRaWAN US915 downlink 927.5",
+    "LoRaWAN AU915 downlink 926.9",
+    "LoRaWAN AU915 downlink 927.5",
+    "LoRaWAN UZ923 (draft) 926.4",
+    "LoRaWAN UZ923 (draft) 926.6",
+    "LoRaWAN UZ923 (draft) 926.8",
+    "LoRaWAN UZ923 (draft) RX2 926.6 (downlink)"
+   ],
+   "defaultChannels": [
+    "MeshCore USA - Southern California",
+    "LoRaWAN UZ923 (draft) 926.4",
+    "LoRaWAN UZ923 (draft) 926.6",
+    "LoRaWAN UZ923 (draft) 926.8"
+   ],
+   "optional": true
+  },
+  {
+   "id": "144",
+   "centreHz": 144800000,
+   "spanHz": 1800000,
+   "label": "2 m ham Meshtastic (licensed)",
+   "landingFor": [],
+   "sensorNote": "\u2014",
+   "regions": [
+    "mt_itu1_2m",
+    "mt_itu2_2m",
+    "mt_itu3_2m"
+   ],
+   "channels": [
+    "Meshtastic ITU1_2M TinyFast",
+    "Meshtastic ITU2_2M TinyFast",
+    "Meshtastic ITU3_2M TinyFast"
+   ],
+   "defaultChannels": [
+    "Meshtastic ITU1_2M TinyFast",
+    "Meshtastic ITU2_2M TinyFast",
+    "Meshtastic ITU3_2M TinyFast"
+   ],
+   "optional": true
+  },
+  {
+   "id": "223",
+   "centreHz": 223650000,
+   "spanHz": 1800000,
+   "label": "1.25 m ham Meshtastic (R2)",
+   "landingFor": [],
+   "sensorNote": "\u2014",
+   "regions": [
+    "mt_itu2_125cm"
+   ],
+   "channels": [
+    "Meshtastic ITU2_125CM NarrowSlow"
+   ],
+   "defaultChannels": [
+    "Meshtastic ITU2_125CM NarrowSlow"
+   ],
+   "optional": true
+  },
+  {
+   "id": "2420",
+   "centreHz": 2420720000,
+   "spanHz": 1800000,
+   "label": "2.4 GHz LORA_24",
+   "landingFor": [],
+   "sensorNote": "\u2014",
+   "regions": [
+    "mt_lora_24"
+   ],
+   "channels": [
+    "Meshtastic LORA_24 LongFast"
+   ],
+   "defaultChannels": [
+    "Meshtastic LORA_24 LongFast"
+   ],
+   "optional": true
+  }
+ ],
+ "uncoveredDefaults": [],
+ "uncoveredNonDefaults": [
+  "Meshtastic US MediumSlow",
+  "Meshtastic US ShortFast",
+  "Meshtastic US LongMod",
+  "Meshtastic US LongTurbo",
+  "Meshtastic EU_433 MediumFast",
+  "Meshtastic EU_433 MediumTurbo",
+  "Meshtastic CN LongSlow",
+  "Meshtastic CN MediumSlow",
+  "Meshtastic CN MediumFast",
+  "Meshtastic CN ShortSlow",
+  "Meshtastic CN ShortFast",
+  "Meshtastic CN LongMod",
+  "Meshtastic CN ShortTurbo",
+  "Meshtastic CN LongTurbo",
+  "Meshtastic CN MediumTurbo",
+  "Meshtastic ANZ LongSlow",
+  "Meshtastic ANZ MediumSlow",
+  "Meshtastic ANZ ShortFast",
+  "Meshtastic NZ_865 ShortTurbo",
+  "Meshtastic NZ_865 LongTurbo",
+  "Meshtastic MY_919 MediumTurbo",
+  "Meshtastic SG_923 LongSlow",
+  "Meshtastic SG_923 MediumTurbo",
+  "Meshtastic KZ_863 LongMod",
+  "Meshtastic KZ_863 LongTurbo",
+  "Meshtastic KZ_863 MediumTurbo",
+  "Meshtastic BR_902 LongSlow",
+  "Meshtastic BR_902 ShortTurbo",
+  "Meshtastic BR_902 MediumTurbo",
+  "LoRaWAN US915 downlink 923.9",
+  "LoRaWAN US915 downlink 924.5",
+  "LoRaWAN US915 downlink 926.3",
+  "LoRaWAN AU915 downlink 923.9",
+  "LoRaWAN AU915 downlink 924.5",
+  "LoRaWAN AU915 downlink 926.3",
+  "LoRaWAN RU864 864.1 (TTN addition)",
+  "LoRaWAN RU864 864.3 (TTN addition)",
+  "LoRaWAN RU864 864.5 (TTN addition)",
+  "LoRaWAN RU864 864.7 (TTN addition)",
+  "LoRaWAN CN470 RX2 492.5 (downlink)",
+  "LoRaWAN MA869 869.7",
+  "LoRaWAN MA869 869.9"
+ ],
+ "countryLanding": {
+  "note": "Ordered block ids: the first is the landing block. Built from the region tables here (Meshtastic region labels, MeshCore preset titles, TTN frequency-plans.yml country-codes, RP002 Table 1 spot checks). Countries not listed fall back by ITU region of the server's position (lon < -25 and > -170 = R2; else R3 if lon > 60 and lat < 55 or south-east Asia/Oceania; else R1).",
+  "byIso": {
+   "AL": [
+    "869",
+    "433",
+    "867"
+   ],
+   "AD": [
+    "869",
+    "433",
+    "867"
+   ],
+   "AT": [
+    "869",
+    "433",
+    "867"
+   ],
+   "BE": [
+    "869",
+    "433",
+    "867"
+   ],
+   "BA": [
+    "869",
+    "433",
+    "867"
+   ],
+   "BG": [
+    "869",
+    "433",
+    "867"
+   ],
+   "HR": [
+    "869",
+    "433",
+    "867"
+   ],
+   "CY": [
+    "869",
+    "433",
+    "867"
+   ],
+   "CZ": [
+    "869",
+    "433",
+    "867"
+   ],
+   "DK": [
+    "869",
+    "433",
+    "867"
+   ],
+   "EE": [
+    "869",
+    "433",
+    "867"
+   ],
+   "FI": [
+    "869",
+    "433",
+    "867"
+   ],
+   "FR": [
+    "869",
+    "433",
+    "867"
+   ],
+   "DE": [
+    "869",
+    "433",
+    "867"
+   ],
+   "GR": [
+    "869",
+    "433",
+    "867"
+   ],
+   "HU": [
+    "869",
+    "433",
+    "867"
+   ],
+   "IS": [
+    "869",
+    "433",
+    "867"
+   ],
+   "IE": [
+    "869",
+    "433",
+    "867"
+   ],
+   "IT": [
+    "869",
+    "433",
+    "867"
+   ],
+   "LV": [
+    "869",
+    "433",
+    "867"
+   ],
+   "LI": [
+    "869",
+    "433",
+    "867"
+   ],
+   "LT": [
+    "869",
+    "433",
+    "867"
+   ],
+   "LU": [
+    "869",
+    "433",
+    "867"
+   ],
+   "MT": [
+    "869",
+    "433",
+    "867"
+   ],
+   "MD": [
+    "869",
+    "433",
+    "867"
+   ],
+   "ME": [
+    "869",
+    "433",
+    "867"
+   ],
+   "NL": [
+    "869",
+    "433",
+    "867"
+   ],
+   "MK": [
+    "869",
+    "433",
+    "867"
+   ],
+   "NO": [
+    "869",
+    "433",
+    "867"
+   ],
+   "PL": [
+    "869",
+    "433",
+    "867"
+   ],
+   "PT": [
+    "869",
+    "433",
+    "867"
+   ],
+   "RO": [
+    "869",
+    "433",
+    "867"
+   ],
+   "RS": [
+    "869",
+    "433",
+    "867"
+   ],
+   "SK": [
+    "869",
+    "433",
+    "867"
+   ],
+   "SI": [
+    "869",
+    "433",
+    "867"
+   ],
+   "ES": [
+    "869",
+    "433",
+    "867"
+   ],
+   "SE": [
+    "869",
+    "433",
+    "867"
+   ],
+   "CH": [
+    "869",
+    "433",
+    "867"
+   ],
+   "GB": [
+    "869",
+    "433",
+    "867"
+   ],
+   "VA": [
+    "869",
+    "433",
+    "867"
+   ],
+   "SM": [
+    "869",
+    "433",
+    "867"
+   ],
+   "MC": [
+    "869",
+    "433",
+    "867"
+   ],
+   "TR": [
+    "869",
+    "433",
+    "867"
+   ],
+   "AO": [
+    "869",
+    "433",
+    "867"
+   ],
+   "BW": [
+    "869",
+    "433",
+    "867"
+   ],
+   "CG": [
+    "869",
+    "433",
+    "867"
+   ],
+   "LS": [
+    "869",
+    "433",
+    "867"
+   ],
+   "MG": [
+    "869",
+    "433",
+    "867"
+   ],
+   "MW": [
+    "869",
+    "433",
+    "867"
+   ],
+   "MU": [
+    "869",
+    "433",
+    "867"
+   ],
+   "MZ": [
+    "869",
+    "433",
+    "867"
+   ],
+   "NA": [
+    "869",
+    "433",
+    "867"
+   ],
+   "SC": [
+    "869",
+    "433",
+    "867"
+   ],
+   "SZ": [
+    "869",
+    "433",
+    "867"
+   ],
+   "TZ": [
+    "869",
+    "433",
+    "867"
+   ],
+   "ZA": [
+    "869",
+    "433",
+    "867"
+   ],
+   "ZM": [
+    "869",
+    "433",
+    "867"
+   ],
+   "ZW": [
+    "869",
+    "433",
+    "867"
+   ],
+   "BH": [
+    "869",
+    "433",
+    "867"
+   ],
+   "SA": [
+    "869",
+    "433",
+    "867"
+   ],
+   "AE": [
+    "869",
+    "433",
+    "867"
+   ],
+   "RU": [
+    "869",
+    "433"
+   ],
+   "UA": [
+    "433",
+    "869"
+   ],
+   "KZ": [
+    "867",
+    "433"
+   ],
+   "BY": [
+    "869",
+    "433"
+   ],
+   "US": [
+    "907",
+    "910",
+    "904",
+    "315",
+    "913"
+   ],
+   "CA": [
+    "910",
+    "907",
+    "904",
+    "315"
+   ],
+   "MX": [
+    "907",
+    "904",
+    "315"
+   ],
+   "PR": [
+    "907",
+    "904",
+    "315"
+   ],
+   "CR": [
+    "910",
+    "904"
+   ],
+   "PA": [
+    "904",
+    "907"
+   ],
+   "GY": [
+    "904",
+    "907"
+   ],
+   "EC": [
+    "904",
+    "917"
+   ],
+   "BR": [
+    "923",
+    "904",
+    "433"
+   ],
+   "AR": [
+    "917",
+    "433"
+   ],
+   "CL": [
+    "917",
+    "433"
+   ],
+   "CO": [
+    "917",
+    "433"
+   ],
+   "PE": [
+    "917"
+   ],
+   "UY": [
+    "917"
+   ],
+   "PY": [
+    "917"
+   ],
+   "BO": [
+    "917"
+   ],
+   "SR": [
+    "917"
+   ],
+   "DO": [
+    "917"
+   ],
+   "AU": [
+    "915",
+    "920",
+    "917",
+    "923",
+    "433"
+   ],
+   "NZ": [
+    "917",
+    "920",
+    "865",
+    "433"
+   ],
+   "IN": [
+    "865"
+   ],
+   "NP": [
+    "867",
+    "865"
+   ],
+   "CN": [
+    "479"
+   ],
+   "JP": [
+    "923",
+    "315"
+   ],
+   "KR": [
+    "923",
+    "922"
+   ],
+   "TW": [
+    "923"
+   ],
+   "TH": [
+    "923",
+    "922",
+    "920"
+   ],
+   "MY": [
+    "923",
+    "433"
+   ],
+   "SG": [
+    "917",
+    "923"
+   ],
+   "PH": [
+    "917",
+    "869",
+    "433"
+   ],
+   "ID": [
+    "922"
+   ],
+   "VN": [
+    "920",
+    "922"
+   ],
+   "HK": [
+    "923"
+   ],
+   "IL": [
+    "917",
+    "920"
+   ],
+   "MA": [
+    "869"
+   ],
+   "UZ": [
+    "927",
+    "433"
+   ],
+   "CU": [
+    "917"
+   ]
+  },
+  "fallbackByItuRegion": {
+   "ITU_R1": [
+    "869",
+    "433"
+   ],
+   "ITU_R2": [
+    "907",
+    "910",
+    "315"
+   ],
+   "ITU_R3": [
+    "923",
+    "433"
+   ]
+  }
+ }
+}
