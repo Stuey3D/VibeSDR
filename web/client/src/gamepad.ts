@@ -224,6 +224,21 @@ function autoGrab(): boolean {
 }
 
 function box(el: HTMLElement): Box { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }
+/** ★★ A WIDE STOP IS STRAIGHT AHEAD OF WHATEVER IS ABOVE OR BELOW IT ([data-navwide] — the menu's category headers,
+ *  2026-11-12). pickNext scores by centre-to-centre distance, so a full-width header's centre sat far to the side of the
+ *  CENTRE key above it, and down skipped every header to land on a narrow key further down that happened to line up
+ *  (found by test-web-menu-cats). For a move up or down, a wide stop is measured where it meets the column the highlight
+ *  is in — and FROM a wide stop, anything under its span is straight ahead (or SAVE FOR ALL, a narrow key between two
+ *  headers, was skipped both ways). Opt-in: nothing else on the page navigates differently. */
+function navBox(el: HTMLElement, from: Box | null, dir: Dir, fromWide: boolean): Box {
+  const b = box(el);
+  if (!from || (dir !== 'up' && dir !== 'down')) return b;
+  const c = from.x + from.w / 2;
+  if (el.hasAttribute('data-navwide') && c >= b.x && c <= b.x + b.w) return { x: c - 1, y: b.y, w: 2, h: b.h };
+  const bc = b.x + b.w / 2;
+  if (fromWide && bc >= from.x && bc <= from.x + from.w) return { x: c - b.w / 2, y: b.y, w: b.w, h: b.h };
+  return b;
+}
 
 function highlight(el: HTMLElement | null) {
   current?.classList.remove('gpFocus', 'gpAdjust');
@@ -258,7 +273,8 @@ function move(dir: Dir) {
   // ★ Redrawn under the highlight (detached), or HIDDEN under it (the tune / zoom keys tucked away while a pad or keyboard drives —
   //   padTuck): carry on from where it stood, never back to the top of the page.
   const from = cur ? box(cur) : current && (!current.isConnected || root.contains(current)) ? lastBox : null;
-  const i = pickNext(from, list.map(box), dir);
+  const fromWide = !!cur?.hasAttribute('data-navwide');
+  const i = pickNext(from, list.map((e) => navBox(e, from, dir, fromWide)), dir);
   if (i >= 0) highlight(list[i]);
   else if (!from && list.length) highlight(list[0]);
   else if (root === grabbed && (dir === 'up' || dir === 'down')) {

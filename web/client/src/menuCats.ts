@@ -105,6 +105,7 @@ export function addMenuCat(id: string, title: string, before: Node | null): HTML
   btn.type = 'button';
   btn.className = 'btn mCat';
   btn.dataset.cat = id;
+  btn.setAttribute('data-navwide', '');   // ★ straight ahead of whatever is above or below it (gamepad.ts navBox)
   btn.id = 'mCat-' + id;
   btn.setAttribute('aria-expanded', 'false');
   btn.textContent = title;
