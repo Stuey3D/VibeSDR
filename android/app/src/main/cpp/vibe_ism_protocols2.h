@@ -15,7 +15,8 @@
 #include "vibe_ism_weather9.h"   // ★ weather pass 2026-11-11: EFTH-800, ThermoPro, Rubicson, Bresser 3CH, WT450
 #include "vibe_ism_weather10.h"  // ★ weather pass 2026-11-11: Bresser 5/6/7-in-1 FSK family, Maverick ET-73x, Companion WTR001
 #include "vibe_ism_weather11.h"  // ★ weather pass 2026-11-11: TFA Drop, Inkbird ITH-20R
-#include "vibe_ism_weather12.h"  // ★ weather pass 2 2026-11-12: La Crosse View (LTV)
+#include "vibe_ism_weather12.h"  // ★ weather pass 2 2026-11-12: La Crosse View (LTV), Bresser garden
+#include "vibe_ism_weather13.h"  // ★ weather pass 2 2026-11-12: ThermoPro FSK, WG-PB12V1, Thermor, Maverick ET-73
 #include "vibe_ism_tpms.h"     // ★ V12 2026-11-11: tyre-pressure sensors, make by make
 #include "vibe_ism_kit.h"        // ★ V12 2026-11-11: the home families' tools (Current Cost uses its NRZ rows)
 
@@ -487,6 +488,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (oregon::decode(b, out)) return;
     if (fofsk::decode(b, out)) return;
     if (wx12::decode(b, out)) return;
+    if (wx13::decode(b, out)) return;
     if (fineoffset::decodeWh1080(b, out)) return;
     if (fineoffset::decodeWh2(b, out)) return;
     if (sl109h::decode(b, out)) return;      // ★ before the 609: a background 609 inside an SL109H's channel must not win
@@ -508,6 +510,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (decodeMeters(b, out)) return;
     if (decodeSecurity(b, out)) return;
     if (decodeRemotes(b, out)) return;
+    if (wx13::decodeWeak(b, out)) return;   // ★ no published check: after every family with one
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
     if (tyre::decode(b, out)) return;

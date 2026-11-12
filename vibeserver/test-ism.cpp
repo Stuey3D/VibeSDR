@@ -648,6 +648,86 @@ static Runs gardenSoilTx(uint32_t src, double tF, int moist) {
     std::vector<uint8_t> f(12, 0xAA); f.insert(f.end(), {0xF3, 0xE9, 0x10, 0x5E, 0x51}); f.insert(f.end(), m.begin(), m.end()); f.push_back(0x55);
     return nrzFsk(bytesToBits(f), 50);
 }
+/** ThermoPro TX-7B: FSK NRZ 108 µs, D2 55 2D D4, 9 bytes, the last-byte-first digest (0x98, 0x25). */
+static Runs tx7bTx(int id, int ch, double t, int h) {
+    const int raw = int(std::lround(t * 10)) + 400;
+    std::vector<uint8_t> m = {uint8_t(id), uint8_t((ch - 1) << 4), uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4), uint8_t(h), 0xAA, 0x55, 0xAA};
+    m.push_back(wx13::digestLastFirst(m.data(), 8, 0x98, 0x25));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xD2, 0x55, 0x2D, 0xD4}; f.insert(f.end(), m.begin(), m.end()); f.insert(f.end(), {0xD2, 0xD2, 0xD2});
+    return nrzFsk(bytesToBits(f), 108);
+}
+/** ThermoPro TP211B: FSK NRZ 105 µs, 55 2D D4, ID 24 · temperature 12 (+500) · AA · the 16-bit check. */
+static Runs tp211bTx(uint32_t id, double t) {
+    const int raw = int(std::lround(t * 10)) + 500;
+    std::vector<uint8_t> m = {uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(raw >> 8), uint8_t(raw), 0xAA};
+    const uint16_t c = wx13::tp211bCheck(m.data(), 6); m.push_back(uint8_t(c >> 8)); m.push_back(uint8_t(c));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0x55, 0x2D, 0xD4}; f.insert(f.end(), m.begin(), m.end()); f.insert(f.end(), {0xD2, 0xD2, 0xD2});
+    return nrzFsk(bytesToBits(f), 105);
+}
+static uint8_t bcd8(int v) { return uint8_t((v / 10) << 4 | v % 10); }
+/** ThermoPro TP28b: FSK NRZ 105 µs, D2 AA 2D D4, six LE BCD temperatures, flags, ID, byte sum. */
+static Runs tp28bTx(double t1, double t2, int id) {
+    std::vector<uint8_t> m;
+    for (double t : {t1, 65.6, 0.0, t2, 65.6, 0.0}) { const int d = int(std::lround(t * 10)); m.push_back(bcd8(d % 100)); m.push_back(bcd8(d / 100)); }
+    m.insert(m.end(), {0xA2, 0x90, uint8_t(id >> 8), uint8_t(id)});
+    m.push_back(uint8_t(wx::addBytes(m.data(), 16)));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xD2, 0xAA, 0x2D, 0xD4}; f.insert(f.end(), m.begin(), m.end()); f.insert(f.end(), {0, 0, 0, 0, 0, 0, 0xAA, 0xAA});
+    return nrzFsk(bytesToBits(f), 105);
+}
+/** ThermoPro TempSpike XR probe: FSK NRZ 104 µs, D2 55 2D D4, 9 bytes, CRC-8 (0x07) ^ 0xDB and its complement. */
+static Runs tempSpikeTx(int id, double tin, double tamb) {
+    const int a = int(std::lround(tin * 10)) + 500, c = int(std::lround(tamb * 10)) + 500;
+    std::vector<uint8_t> m = {uint8_t(id), 0x40, uint8_t(a >> 4), uint8_t((a & 0xF) << 4 | c >> 8), uint8_t(c), 0x00, 0x3C};
+    m.push_back(uint8_t(crc8(m.data(), 7, 0x07, 0) ^ 0xDB)); m.push_back(uint8_t(~m[7]));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xD2, 0x55, 0x2D, 0xD4}; f.insert(f.end(), m.begin(), m.end()); f.insert(f.end(), {0xAA, 0xAA});
+    return nrzFsk(bytesToBits(f), 104);
+}
+/** WG-PB12V1: OOK PWM 564 / 1476 µs marks, 960 µs gaps: FF · 3 + temperature 12 (+400) · ID · FF · CRC-8 0x31. */
+static Runs wgpb12Tx(int id, double t) {
+    const int raw = int(std::lround(t * 10)) + 400;
+    std::vector<uint8_t> m = {0xFF, uint8_t(0x30 | raw >> 8), uint8_t(raw), uint8_t(id & 0x1F), 0xFF};
+    m.push_back(crc8(m.data() + 1, 4, 0x31, 0));
+    Tx tx; pwmBits(tx, bytesToBits(m), 564, 1476, 960); return tx.r;
+}
+/** Thermor A6N-132TX: OOK PPM, 520 µs marks, 1000 / 2000 µs spaces, 32 bits × 11, the ID-specific check. */
+static Runs thermorA6nTx(int id, int ch, double t) {
+    const int raw = int(std::lround(t * 10));
+    uint8_t m[4] = {uint8_t(id << 4 | ch << 2), uint8_t(raw >> 8), uint8_t(raw), 0};
+    const int lo = (m[0] & 0xF) + (m[1] & 0xF) + (m[2] & 0xF), carry = lo >> 4, hi = (m[0] >> 4) + (m[1] >> 4) + (m[2] >> 4);
+    const int top = id == 4 ? (hi + carry) & 1
+                            : (wx::parity8(m[0] & 0xF) ^ wx::parity8(m[1] & 0xF) ^ wx::parity8(m[2])) << 3 | (((2 + (hi & 1)) ^ carry) & 7);
+    m[3] = uint8_t(top << 4 | (lo & 0xF));
+    return ppmRows(bytesToBits({m[0], m[1], m[2], m[3]}), 520, 1000, 2000, 4000, 11);
+}
+/** Thermor DG950: 96 sync pulses, then 13 words (a 0 start bit, a byte LSB first), PWM 750 = 1 / 2128 = 0. */
+static Runs dg950Tx(int id, double t, int dirNib) {
+    const int whole = int(std::floor(t)), tenth = int(std::lround((t - whole) * 10));
+    uint8_t m[13];
+    m[0] = uint8_t(~id); m[1] = uint8_t(whole + 195); m[10] = uint8_t(tenth + 245); m[3] = uint8_t(m[1] + m[10] + 1);
+    m[2] = uint8_t(~0); m[12] = uint8_t(~7);          // no rain
+    m[4] = m[5] = uint8_t(0x10 | dirNib);
+    m[6] = uint8_t(~20); m[7] = uint8_t(~0); m[8] = uint8_t(~10); m[9] = uint8_t(~(20 + 0 + 10)); m[11] = 0x0F;
+    Tx tx;
+    for (int k = 0; k < 96; ++k) { tx.mark(1440); tx.space(1440); }
+    for (uint8_t v : m) {
+        tx.space(4000);
+        tx.mark(2128); tx.space(900);
+        for (int j = 0; j < 8; ++j) { const double mk = ((v >> j) & 1) ? 750 : 2128; tx.mark(mk); tx.space(900); }
+    }
+    return tx.r;
+}
+/** Maverick ET-73: OOK PPM, 240 µs marks, ~1 / ~2 ms spaces, 48 bits × 8, ~4 ms between. */
+static Runs et73Tx(int id, double t1, double t2) {
+    const int a = int(std::lround(t1 * 10)) & 0xFFF, c = int(std::lround(t2 * 10)) & 0xFFF;
+    return ppmRows(bytesToBits({uint8_t(id), uint8_t(a >> 4), uint8_t((a & 0xF) << 4 | c >> 8), uint8_t(c), 0x90, 0xFC}), 240, 970, 1970, 4000, 8);
+}
+/** ThermoPro TX-2C: the Prologue's 36 bits and 9 zero bits, OOK PPM 452 µs marks, 1958 / 3825 µs spaces. */
+static Runs tx2cTx(int id, int ch, double t, int h) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    Bits w = bitsOf(uint64_t(0x9) << 32 | uint64_t(id) << 24 | uint64_t(ch - 1) << 20 | uint64_t(raw) << 8 | uint64_t(h), 36);
+    w.resize(45, 0);
+    return ppmRows(w, 452, 1958, 3825, 8550, 8);
+}
 
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
@@ -1077,6 +1157,21 @@ int main(int argc, char** argv) {
     // ★ weather pass 2 (2026-11-12)
     { Sig s{ltvTh3Tx(0x13EFB7, 18.2, 49)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"La Crosse LTV-TH3", s, "LTV-TH3", 18.2}); }
     { Sig s{gardenSoilTx(0x470005B5, 66.0, 47)}; s.fsk = true; s.devHz = 36e3; cases.push_back({"Bresser garden soil", s, "soil sensor", (66.0 - 32) / 1.8}); }
+    { Sig s{tx7bTx(0x25, 3, 27.5, 18)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"ThermoPro TX-7B", s, "TX-7B", 27.5}); }
+    { Sig s{tp211bTx(0x011ED6, 22.9)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"ThermoPro TP211B", s, "TP211B", 22.9}); }
+    { Sig s{tp28bTx(22.5, 77.5, 0x6D70)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"ThermoPro TP28b", s, "TP28b", 22.5}); }
+    { Sig s{tempSpikeTx(0x8A, 32.5, 32.7)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"ThermoPro TempSpike XR", s, "TempSpike", 32.5}); }
+    cases.push_back({"WG-PB12V1", {wgpb12Tx(8, 25.6)}, "PB12V1", 25.6});
+    cases.push_back({"Thermor A6N-132TX", {thermorA6nTx(3, 3, 38.3)}, "A6N-132TX", 38.3});
+    cases.push_back({"Thermor DG950", {dg950Tx(145, 20.7, 3)}, "DG950", 20.7});
+    cases.push_back({"Maverick ET-73", {et73Tx(0x68, 0.0, 26.7)}, "ET-73", 0.0});
+    cases.push_back({"ThermoPro TX-2C", {tx2cTx(0x45, 2, 21.3, 72)}, "TX-2C", 21.3});
+    {   // ★ weather pass 2: the checks restated from the notes, held to the notes' own worked frames
+        const uint8_t a[] = {0x01, 0x1E, 0xD6, 0x03, 0x6C, 0xAA}, c[] = {0x01, 0x1E, 0xD6, 0x02, 0xFA, 0xAA};
+        CHECK(wx13::tp211bCheck(a, 6) == 0x14FF && wx13::tp211bCheck(c, 6) == 0xC41E, "TP211B check on the notes' frames");
+        const uint8_t d[] = {0xE8, 0x00, 0x29, 0x30, 0x17, 0xAA, 0x55, 0xAA}, e[] = {0x25, 0x20, 0x2C, 0xA0, 0x0D, 0xAA, 0x55, 0xAA};
+        CHECK(wx13::digestLastFirst(d, 8, 0x98, 0x25) == 0x83 && wx13::digestLastFirst(e, 8, 0x98, 0x25) == 0xBB, "TX-7B digest on the notes' frames");
+    }
     printf(" end to end at 2.4 MS/s, +120 kHz, 20 dB-ish SNR\n");
     for (auto& c : cases) {
         c.s.offHz = 120e3;

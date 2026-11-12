@@ -128,12 +128,20 @@ inline bool alectoCk(const std::vector<uint8_t>& b) {
 inline bool alectoProlog(const Burst& b, std::vector<Reading>& out) {
     const auto rows = wx::ppm(b.ook, 2000, 4000, 7000, 0, 1200, 0, 120);
     std::vector<std::vector<uint8_t>> msgs;
-    for (const Bits& w : rows) if (w.size() == 36 || w.size() == 37) msgs.push_back(bytesAt(w, 0, 5));
+    /* ★ weather pass 2 (2026-11-12): the ThermoPro TX-2C / TX-2B (868 / 915 MHz) sends the Prologue's 36 bits and 9–12
+     *  zero bits after them (rtl_433 thermopro_tx2c.c notes) — kept as the 36, flagged in byte 5 (never a Prologue
+     *  value: its fifth byte holds only 4 bits) */
+    for (const Bits& w : rows) {
+        if (w.size() == 36 || w.size() == 37) msgs.push_back(bytesAt(w, 0, 5));
+        else if (w.size() >= 44 && w.size() <= 48 && std::find(w.begin() + 36, w.end(), uint8_t(1)) == w.end()) {
+            auto m = bytesAt(w, 0, 6); m[5] = 0xC2; msgs.push_back(m);
+        }
+    }
     if (msgs.size() < 2) return false;
     // AlectoV1: two checked messages that agree
     for (size_t i = 0; i < msgs.size(); ++i) {
         const auto& m = msgs[i];
-        if ((m[4] & 0xF) || !alectoCk(m) || m[0] == 0) continue;
+        if (m.size() > 5 || (m[4] & 0xF) || !alectoCk(m) || m[0] == 0) continue;
         int same = 0; for (const auto& o : msgs) if (o == m) ++same;
         if (same < 2) continue;
         Reading r = wx::wxReading("Alecto", "V1", wx::hex(wx::rev8(m[0]), 2));
@@ -184,8 +192,10 @@ inline bool alectoProlog(const Burst& b, std::vector<Reading>& out) {
         const double t = t12(unsigned(m[2]) << 4 | m[3] >> 4);
         const int h = (m[3] & 0xF) << 4 | m[4] >> 4;
         if (!wx::tempOk(t)) continue;
-        Reading r = wx::wxReading("Prologue", "T/H (NC-7104 / NC-7159)", wx::hex(unsigned((m[0] & 0xF) << 4 | m[1] >> 4), 2));
+        Reading r = m.size() > 5 ? wx::wxReading("ThermoPro", "TX-2C / TX-2B", wx::hex(unsigned((m[0] & 0xF) << 4 | m[1] >> 4), 2))
+                                 : wx::wxReading("Prologue", "T/H (NC-7104 / NC-7159)", wx::hex(unsigned((m[0] & 0xF) << 4 | m[1] >> 4), 2));
         r.battOk = (m[1] & 8) ? 1 : 0; r.channel = (m[1] & 3) + 1; r.tempC = t;
+        if (m.size() > 5) r.battOk = (m[1] & 8) ? 0 : 1;   // ★ the TX-2C's bit 3 is battery LOW (its notes)
         if (h != 0xCC && h <= 100) r.hum = h;
         r.confirm = true;
         out.push_back(r);
