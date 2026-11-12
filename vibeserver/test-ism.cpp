@@ -939,6 +939,57 @@ static void testHome() {
     homeRun(cs);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★ V12 2026-11-12: THE SECOND SECURITY / REMOTES PASS (vibe_ism_security2.h, vibe_ism_fobs.h) — each family ENCODED
+//  FROM ITS FRAME FACTS, through the real front end at the band it sends on, then through the Tracker twice: the JSON
+//  must name the make and NEVER carry the sender's code / ID / serial (hex upper and lower, decimal).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+struct SecCase { HomeCase h; double centre; std::vector<std::string> banned; const char* line; };
+static std::vector<std::string> spellings(uint64_t v) {
+    char a[32], b[32], c[32];
+    std::snprintf(a, sizeof a, "%llX", (unsigned long long)v); std::snprintf(b, sizeof b, "%llx", (unsigned long long)v);
+    std::snprintf(c, sizeof c, "%llu", (unsigned long long)v);
+    return {a, b, c};
+}
+static void secRun(std::vector<SecCase>& cs, double rate = 2.4e6) {
+    for (auto& sc : cs) {
+        HomeCase& c = sc.h;
+        if (c.s.offHz == 0) c.s.offHz = 120e3;
+        FrontEnd fe(rate); fe.setDcGuardHz(15e3);
+        std::vector<Reading> got;
+        auto on = [&](const Burst& b) { Service::decodeBurst(b, sc.centre, got); };
+        const auto x = synth({c.s}, rate, 1.2, 0.02, 7);
+        for (size_t i = 0; i < x.size(); i += 16384) fe.feed(x.data() + i, std::min<size_t>(16384, x.size() - i), on);
+        fe.flush(on);
+        const Reading* r = findModel(got, c.model);
+        CHECK(r != nullptr, "%s: not decoded (%zu readings%s%s)", c.name, got.size(), got.empty() ? "" : ", first: ", got.empty() ? "" : got[0].model.c_str());
+        if (!r) continue;
+        if (c.fact) CHECK(factOf(*r, c.fact) == c.want, "%s: %s = %s, want %s", c.name, c.fact, factOf(*r, c.fact).c_str(), c.want);
+        CHECK(r->secret == c.secret && (!c.secret || r->pubId.empty()), "%s: secret %d, pubId '%s'", c.name, r->secret, r->pubId.c_str());
+        Tracker tr; tr.accept(*r, 10.0); tr.accept(*r, 11.0);
+        const std::string j = tr.json(12.0);
+        for (const auto& bnd : sc.banned) CHECK(j.find(bnd) == std::string::npos, "%s: the JSON carries the code (%s)", c.name, bnd.c_str());
+        CHECK(j.find("\"id\"") == std::string::npos, "%s: an id field on a secret kind", c.name);
+        if (sc.line) CHECK(j.find(sc.line) != std::string::npos, "%s: the line lacks '%s': %s", c.name, sc.line, j.substr(0, 300).c_str());
+        printf("   %-26s → %s\n", c.name, readable(*r, 1).c_str());
+    }
+}
+static void testSec2() {
+    printf(" second security / remotes pass (alarm sensors, smoke, doorbells, car fobs, gates)\n");
+    std::vector<SecCase> cs;
+    // Vivint door/window: OOK Manchester 135 µs halves, FFFE, type 7A · counter · status · TXID · packed 12-bit CRC 0x8050
+    {
+        const uint32_t id = 0x0137BEDA;
+        std::vector<uint8_t> by = {0x7A, 0x00, 0x42, 0x10, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x40, 0};
+        const uint16_t c = crc16(by.data(), 9, 0x8050, 0) >> 4; by[8] = uint8_t(0x40 | (c >> 8)); by[9] = uint8_t(c);
+        Bits d = hb(0xFFFE, 16); append(d, bytesToBits(by));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { manchesterTx(tx, d, 135, 0); tx.space(20000); }
+        Sig s{tx.r};
+        cs.push_back({{"Vivint door / window", s, "door / window", "event_type", "122", true}, 345e6, spellings(id), "Vivint"});
+    }
+    secRun(cs);
+}
+
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     printf("test-ism — the V12 ISM decoder\n");
@@ -1562,6 +1613,7 @@ int main(int argc, char** argv) {
     }
 
     testHome();
+    testSec2();
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "ok", checks, fails);
     return fails ? 1 : 0;
 }
