@@ -273,11 +273,12 @@ see Tests). Alarm sensors are kind `security` ("Alarm sensor #n"), remotes `door
 | Paradox Magellan sensors and remotes | 433 OOK PWM | **5/5** | Flipper Zero protocol via rtl_433's notes | CRC-8 |
 | Honeywell ActivLink chimes / PIR / contacts | 916.8 OOK, 868 FSK, PWM | **5/6** | K. Lohner, honeywell-wireless-doorbell | parity + 15 zero bits, twice |
 | RadioHead ASK packets, Sensible Living moisture | 433 OOK NRZ | **9/10** | RadioHead RH_ASK docs | CRC-16 (data never shown) |
+| Vaillant VRT 340f thermostat | 868 OOK differential Manchester | **6/7** | R. Kainhofer's wiki | 16-bit checksum, HDLC stuffing |
 
 Not done (home area), and why: Owl CM130/160/180 (inside the Oregon v3 path the weather work owns), IKEA Sparsnäs
 (encrypted with its ID — not decrypted), Security+ 1/2, Chamberlain, car remotes (Ford, Honda, Nidec, Code Alarm,
 Compustar, Astroflex), Insteon, EC3k, ESIC EMT7110, Elster, Vivint (its status byte is enciphered), Visonic, Cavius,
-Honeywell CM921, Danfoss, Vaillant, Funkbus, Siemens, HCS362, Kerui/Chuango/Waveman naming (they ARE
+Honeywell CM921, Danfoss, Funkbus, Siemens, HCS362, Kerui/Chuango/Waveman naming (they ARE
 EV1527/PT2262 — told apart only by data patterns), 24-bit Nice FLO (a PT2262 word on the air) and ADLM (a La Crosse
 length) — the last two were tried and dropped for naming other devices.
 
@@ -352,8 +353,8 @@ armhf hop, more on a noisy band; ISM mode switches the audio chain off, which pa
 - ★ 2026-11-11, the home families: `test-ism` encodes each from its frame facts (oil ×4, emonTx, Efergy, Current Cost
   counter, Interlogix, Honeywell, DSC, generic motion, LightwaveRF, Nexa, X10 + X10 security, GE Color Effects, ERT SCM,
   Somfy, Clemsa, Continental, Chrysler, RadioHead) through the real front end, the secret rule on each (225 checks).
-  **The real-recording score** is `scripts/ism-corpus.mjs` over rtl_433_tests (test input only): home area 56 → 672
-  of 877 recordings read; every family's cross-reads audited (none but real background devices: a LightwaveRF TRV in two
+  **The real-recording score** is `scripts/ism-corpus.mjs` over rtl_433_tests (test input only): home area 56 → 678
+  of 884 recordings read; every family's cross-reads audited (none but real background devices: a LightwaveRF TRV in two
   La Crosse captures and an Oregon one, a neighbour's ERT meter in a 915 MHz Ambient capture). ★ The bench cannot see a
   burst that starts inside the detector's first 64 frames (~65 ms at 250 kS/s, ~20 ms at 2.4 MS/s — the floor seed):
   every emonTx, SimpliSafe, ERT/IDM/SCM+ capture and many short ones — a bench limit, not a live one (live, the seed is

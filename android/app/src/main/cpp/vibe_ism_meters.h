@@ -484,6 +484,54 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace radiohead
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  VAILLANT VRT 340f (calorMatic 340f) heating thermostat — 868 MHz OOK, differential Manchester, 836 µs half-bits (a bit
+//  of two half-length runs = 1, one full-length run = 0). Source: Reinhold Kainhofer, "Vaillant VRT 340f",
+//  wiki.kainhofer.com/hardware/vaillantvrt340f — HDLC-style: a 1-bit-stuffed stream (a 0 after five 1s is dropped),
+//  bytes LSB first: 00 00 7E · device ID 16 · 3 constant · repeat flag · hot water (bit 3 clear = on) · heating (bit 7
+//  two-point, bits 6–0 the target flow temperature °C) · battery (non-zero = low) · a 16-bit checksum = −Σ bytes 3–11.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace vaillant {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (const Runs* rr : {&b.ook}) {
+        Bits raw; bool half = false;
+        auto close = [&](std::vector<Reading>& o) -> bool {
+            Bits u; int ones = 0;
+            for (uint8_t x : raw) { if (x) { u.push_back(1); ++ones; } else { if (ones != 5) u.push_back(0); ones = 0; } }
+            raw.clear();
+            if (u.size() < 128 || u.size() > 131) return false;
+            std::vector<uint8_t> by(14);
+            for (size_t k = 0; k < 14; ++k) by[k] = uint8_t(bitsAtLsb(u, k * 8, 8));
+            if (by[0] || by[1] || by[2] != 0x7E) return false;
+            const unsigned sum = kit::sumBytes(by.data() + 3, 9);
+            if (((sum + (unsigned(by[12]) << 8 | by[13])) & 0xFFFF) != 0) return false;
+            const int id = by[3] << 8 | by[4], target = by[10] & 0x7F;
+            const bool twoPoint = by[10] >> 7, water = (by[9] & 8) == 0;
+            Reading r;
+            r.kind = "sensor"; r.make = "Vaillant"; r.model = "VRT 340f thermostat";
+            char ib[8]; std::snprintf(ib, sizeof ib, "%04X", id); r.pubId = ib;
+            r.extra = (!twoPoint && !target) ? "heating off" : twoPoint ? "heating on (2-point)" : "heating to " + std::to_string(target) + " \xc2\xb0" "C";
+            r.extra += water ? " \xc2\xb7 hot water on" : " \xc2\xb7 hot water off";
+            r.battOk = by[11] ? 0 : 1;
+            r.fact("heating_temp", (long long)target); r.fact("water", water ? "ON" : "off");
+            r.fact("heating", (!twoPoint && !target) ? "OFF" : twoPoint ? "ON (2-point)" : "ON (analogue)");
+            o.push_back(r);
+            return true;
+        };
+        for (int d : *rr) {
+            const int a = std::abs(d);
+            if (std::fabs(a - 836.0) <= 300) { if (half) { raw.push_back(1); half = false; } else half = true; }
+            else if (std::fabs(a - 1648.0) <= 400) { if (half) { half = false; if (close(out)) return true; continue; } raw.push_back(0); }
+            else { half = false; if (close(out)) return true; }
+        }
+        if (close(out)) return true;
+    }
+    return false;
+}
+
+} // namespace vaillant
+
 /** The meter and monitor families, strongest checks first. */
 inline bool decodeMeters(const Burst& b, std::vector<Reading>& out) {
     if (oiltank::decode(b, out)) return true;
@@ -492,6 +540,7 @@ inline bool decodeMeters(const Burst& b, std::vector<Reading>& out) {
     if (ert::decode(b, out)) return true;
     if (r900::decode(b, out)) return true;
     if (radiohead::decode(b, out)) return true;
+    if (vaillant::decode(b, out)) return true;
     return false;
 }
 
