@@ -229,6 +229,133 @@ static int writeClip(const char* out, double centre, double rate) {
     return 0;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★ V12 2026-11-11: THE HOME FAMILIES (vibe_ism_meters.h, vibe_ism_security.h, vibe_ism_remotes.h) — each ENCODED FROM
+//  ITS FRAME FACTS (as cited above each decoder), modulated into noisy IQ, through the real front end and the decoders.
+//  The encoders build bits from the facts; they share no code path with the decoders but the CRC routines.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+static std::string factOf(const Reading& r, const char* k) { for (const auto& kv : r.facts) if (kv.first == k) return kv.second; return ""; }
+static Bits hb(uint64_t v, int n) { Bits o; for (int i = n - 1; i >= 0; --i) o.push_back((v >> i) & 1); return o; }
+static void cat(Bits& a, const Bits& b) { a.insert(a.end(), b.begin(), b.end()); }
+static Bits manch01(const Bits& d) { Bits o; for (uint8_t x : d) { o.push_back(x ? 0 : 1); o.push_back(x ? 1 : 0); } return o; }   // 01 = 1
+struct HomeCase { const char* name; Sig s; const char* model; const char* fact; const char* want; bool secret; };
+static void homeRun(std::vector<HomeCase>& cs, double rate = 2.4e6) {
+    for (auto& c : cs) {
+        if (c.s.offHz == 0) c.s.offHz = 120e3;
+        std::vector<Burst> bs;
+        const auto got = runFront(synth({c.s}, rate, 1.2, 0.02, 7), rate, &bs);
+        const Reading* r = findModel(got, c.model);
+        if (!r && std::getenv("ISM_HOME_DIAG"))
+            for (const auto& b : bs) { printf("     burst %.3f s %+.0f Hz dev %.0f ook %zu fsk %zu:", b.tSec, b.offHz + b.carrierHz, b.fskDevHz, b.ook.size(), b.fsk.size());
+                                       for (size_t i = 0; i < b.fsk.size() && i < 80; ++i) printf(" %d", b.fsk[i]); printf("\n");
+                                       if (const char* us = std::getenv("ISM_HOME_DIAG_US")) for (const Bits& row : kit::nrzRows(b.fsk, std::atof(us), 160, true, 16)) { printf("      "); for (auto x : row) printf("%d", x); printf("\n"); } }
+        CHECK(r != nullptr, "%s: not decoded (%zu readings%s%s)", c.name, got.size(), got.empty() ? "" : ", first: ", got.empty() ? "" : got[0].model.c_str());
+        if (!r) continue;
+        if (c.fact) CHECK(factOf(*r, c.fact) == c.want, "%s: %s = %s, want %s", c.name, c.fact, factOf(*r, c.fact).c_str(), c.want);
+        CHECK(r->secret == c.secret && (!c.secret || r->pubId.empty()), "%s: secret %d, pubId '%s'", c.name, r->secret, r->pubId.c_str());
+        printf("   %-26s → %s\n", c.name, readable(*r, 1).c_str());
+    }
+}
+/** NRZ chips → runs with the edges at their true times (Tx rounds each chip to a whole µs: 57 chips of 20.3 µs would
+ *  come out a chip short). */
+static Runs fskNrz(const Bits& chips, double us) {
+    Runs r; long prev = 0;
+    for (size_t i = 0; i < chips.size(); ++i) {
+        if (i + 1 < chips.size() && chips[i + 1] == chips[i]) continue;
+        const long edge = std::lround(double(i + 1) * us);
+        const int d = int(edge - prev); prev = edge;
+        r.push_back(chips[i] ? d : -d);
+    }
+    return r;
+}
+static void testHome() {
+    printf(" home families (meters, alarm sensors, remotes)\n");
+    std::vector<HomeCase> cs;
+    // Watchman Sonic: 1 ms chips, 111000, 64 Manchester bits (01 = 1), the last chip twice more
+    {
+        std::vector<uint8_t> by = {0x28, 0xC7, 0x4E, 0x0F, 0x80, uint8_t(17 << 2 | 0), 92};
+        by.push_back(kit::crc8r(by.data(), 7, 0x31, 0));
+        Bits c = hb(0x55, 8); cat(c, hb(0x38, 6)); cat(c, manch01(bytesToBits(by)));
+        const uint8_t last = by[7] & 1; c.push_back(last); c.push_back(last); cat(c, hb(last ? 0 : 0xFF, 8));
+        Sig s{fskNrz(c, 1000)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"oil: Watchman Sonic", s, "Watchman Sonic", "depth_cm", "92", false});
+    }
+    // Apollo Smart: 500 µs chips, …5558, 64 Manchester bits, CRC-8 reflected over all 8 = 0
+    {
+        std::vector<uint8_t> by = {0x12, 0x5D, 0x82, 0xAB, 0x46, 0xB0, 48};
+        by.push_back(kit::crc8r(by.data(), 7, 0x31, 0));
+        Bits c = hb(0x5555, 16); cat(c, hb(0x5558, 16)); cat(c, manch01(bytesToBits(by))); cat(c, hb(0xF0, 8));
+        Sig s{fskNrz(c, 500)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"oil: Apollo Smart", s, "Apollo Ultrasonic Smart", "depth_cm", "48", false});
+    }
+    // Apollo Standard: 500 µs chips, 0x555D (last two chips = the first pair), 32 Manchester bits, ends in a violation
+    {
+        std::vector<uint8_t> by = {0x60, 0xFB, 0x00, 135};
+        Bits m = manch01(bytesToBits(by));
+        Bits c = hb(0x5555, 16); cat(c, hb((by[0] & 0x80 ? 0x555D : 0x5562) >> 2, 14)); cat(c, m);   // its last 2 chips = the 1st pair
+        const uint8_t l = m.back(); for (int i = 0; i < 4; ++i) c.push_back(l); cat(c, hb(l ? 0 : 0xFF, 8));
+        Tx tx; for (int rep = 0; rep < 2; ++rep) { for (uint8_t x : c) { if (x) tx.mark(500); else tx.space(500); } tx.space(20000); }
+        Sig s{tx.r}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"oil: Apollo Standard", s, "Apollo Ultrasonic / Tekelek", "depth_cm", "135", false});
+    }
+    // Watchman Sonic Advanced: 500 µs NRZ, AA… 2D D4, length 0E, model 0401, serial, … CRC-16 0x8005 init 0
+    {
+        std::vector<uint8_t> by = {0x0E, 0x04, 0x01, 0x00, 0x25, 0x9E, 0x98, 0x4F + 0x10, 0xAA, 0x60, 0x28, 0x01, 0x05, 0x03, 0x00};
+        const uint16_t c16 = crc16(by.data(), 15, 0x8005, 0); by.push_back(uint8_t(c16 >> 8)); by.push_back(uint8_t(c16));
+        Bits c = hb(0xAAAAAAAAAAull, 40); cat(c, hb(0x2DD4, 16)); cat(c, bytesToBits(by)); cat(c, hb(0, 8));
+        Sig s{fskNrz(c, 500)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"oil: Watchman Advanced", s, "Watchman Sonic Advanced", "depth_cm", "40", false});
+    }
+    // emonTx: JeeLib RF12 — AA AA AA 2D, group D2, header (node 8), length 26, 13 LE words, CRC-16/IBM LE, AA
+    {
+        std::vector<uint8_t> by = {0xD2, 0x08, 26};
+        const int w[13] = {7, 0, 0, 0, 23665, 3000, 3000, 3000, 3000, 3000, 3000, 1, 0};
+        for (int v : w) { by.push_back(uint8_t(v)); by.push_back(uint8_t(v >> 8)); }
+        const uint16_t c16 = kit::crc16r(by.data(), by.size(), 0xA001, 0xFFFF); by.push_back(uint8_t(c16)); by.push_back(uint8_t(c16 >> 8));
+        Bits c = hb(0xAAAAAA, 24); cat(c, hb(0x2D, 8)); cat(c, bytesToBits(by)); cat(c, hb(0xAA, 8));
+        Sig s{fskNrz(c, 2e6 / (49230 + 49261))}; s.fsk = true; s.devHz = 45e3;
+        cs.push_back({"emonTx", s, "emonTx", "ct1", "7", false});
+    }
+    // Efergy e2 classic: FSK PWM, 500 µs sync, 64 µs mark = 1, 136 µs = 0, 200 µs a bit; bytes sum check
+    {
+        std::vector<uint8_t> by = {0x00, 0x34, 0xEA, 0x40, 0x09, 0xEB, 0x03};
+        by.push_back(uint8_t(kit::sumBytes(by.data(), 7)));
+        Tx tx; for (int i = 0; i < 16; ++i) { tx.mark(64); tx.space(60); }
+        tx.space(1000); tx.mark(500); tx.space(150);
+        for (uint8_t x : bytesToBits(by)) { tx.mark(x ? 64 : 136); tx.space(x ? 136 : 64); }
+        tx.space(2000);
+        Sig s{tx.r}; s.fsk = true; s.devHz = 40e3;
+        cs.push_back({"Efergy e2 classic", s, "e2 classic", "id", "59956", false});
+    }
+    // Current Cost EnviR: 55 55 55 55 2D D4, Manchester 10 = 1; a counter packet (gas, 4321 pulses)
+    {
+        Bits c = hb(0x55555555ull, 32); cat(c, hb(0x2DD4, 16));
+        for (uint8_t x : bytesToBits(hexBytes("404D0003000010E1"))) { c.push_back(x); c.push_back(!x); }
+        cat(c, hb(0x55, 8));
+        Sig s{fskNrz(c, 1e6 / 3918.0)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Current Cost counter", s, "EnviR impulse counter", "power0", "4321", false});
+    }
+    // Interlogix contact: PPM, ~120 µs marks, 122 µs gap = 0, 244 µs = 1; 12 zeros + a 1, then LSB-first fields
+    {
+        Bits d;
+        auto lsb = [&](uint32_t v, int n) { for (int i = 0; i < n; ++i) d.push_back((v >> i) & 1); };
+        lsb(0x7106D, 20); lsb(0xA, 4);                    // sensor ID, then device type A (contact), each LSB first
+        lsb(0, 3); d.push_back(0); d.push_back(1); d.push_back(1); lsb(0, 9);   // trigger 0, battery OK, F1 latch + level set, the rest clear
+        // patent bit 55 = even parity over the odd bits 15–55 (the start bit 15 is a 1), bit 56 = odd parity over 16–56
+        int odd = 1, even = 0; for (size_t i = 0; i < 39; ++i) (i & 1 ? odd : even) ^= d[i];
+        d.push_back(uint8_t(odd ^ 0)); d.push_back(uint8_t(even ^ 1));   // index 39 makes the odd set even with the start bit; 40 makes the even set odd
+        d.push_back(0);                                   // bit 57, programmable
+        int ones = 1; for (size_t i = 0; i < 39; ++i) ones += d[i];
+        d.push_back(0); d.push_back(1); for (int i = 0; i < 3; ++i) d.push_back((ones >> i) & 1); d.push_back(0);   // 58 … 63
+        Bits all = hb(0x0001, 12 + 1); cat(all, d);
+        Tx tx; tx.mark(976);
+        for (uint8_t x : all) { tx.space(x ? 244 : 122); tx.mark(122); }
+        tx.space(20000);
+        cs.push_back({"Interlogix contact", Sig{tx.r}, "contact", "subtype", "\"contact\"", true});
+    }
+    homeRun(cs);
+}
+
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     printf("test-ism — the V12 ISM decoder\n");
@@ -314,7 +441,7 @@ int main(int argc, char** argv) {
         std::vector<Burst> bs;
         const auto got = runFront(x, 2.4e6, &bs);
         const Reading* r = findModel(got, c.model);
-        CHECK(r != nullptr, "%s: not decoded (%zu bursts, %zu readings)", c.name, bs.size(), got.size());
+        CHECK(r != nullptr, "%s: not decoded (%zu bursts, %zu readings%s%s)", c.name, bs.size(), got.size(), got.empty() ? "" : " — ", got.empty() ? "" : (got[0].make + " " + got[0].model).c_str());
         if (r && c.temp == c.temp) CHECK(approx(r->tempC, c.temp, 0.051), "%s: %.2f °C, want %.2f", c.name, r->tempC, c.temp);
         if (r) {
             CHECK(approx(r->freqHz, 433.92e6 + 120e3, 12e3), "%s: frequency %.0f", c.name, r->freqHz);
@@ -718,6 +845,7 @@ int main(int argc, char** argv) {
         CHECK(on.lines.size() >= 6, "the six sensors away from the emitters decode (%zu readings)", on.lines.size());
     }
 
+    testHome();
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "ok", checks, fails);
     return fails ? 1 : 0;
 }

@@ -85,6 +85,24 @@ inline std::vector<Runs> keyedRuns(const Burst& b) {
     return v;
 }
 
+/** PPM rows whose MARKS are checked too: a mark outside [markMin, markMax] ends the row (slicePpm reads only the gaps,
+ *  so a Manchester sender's 1T/2T marks pass through it — and a PPM decoder with a weak check then reads them). */
+inline std::vector<Bits> ppmRows(const Runs& r, double shortGap, double longGap, double rowGap, double markMin, double markMax,
+                                 double tol = 0.35) {
+    std::vector<Bits> rows(1);
+    for (size_t i = 0; i < r.size(); ++i) {
+        const int d = r[i];
+        if (d > 0) { if ((d < markMin || d > markMax) && !rows.back().empty()) rows.emplace_back(); continue; }
+        const double g = -d;
+        if (g > rowGap) { if (!rows.back().empty()) rows.emplace_back(); continue; }
+        if (std::fabs(g - shortGap) <= shortGap * tol) rows.back().push_back(0);
+        else if (std::fabs(g - longGap) <= longGap * tol) rows.back().push_back(1);
+        else if (!rows.back().empty()) rows.emplace_back();
+    }
+    if (rows.back().empty()) rows.pop_back();
+    return rows;
+}
+
 /** Every position of `pattern` (`n` ≤ 32 bits, MSB first) in `b`. */
 inline std::vector<size_t> findAll(const Bits& b, uint32_t pattern, int n) {
     std::vector<size_t> at;

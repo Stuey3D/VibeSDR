@@ -166,10 +166,10 @@ namespace emontx {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (b.fsk.empty()) return false;
-    for (const Bits& row : kit::nrzRows(b.fsk, 2e6 / (49230 + 49261), 40, true, 200)) {
+    for (const Bits& row : kit::nrzRows(b.fsk, 2e6 / (49230 + 49261), 160, true, 200)) {   // ★ 160: the zero words run long
         for (size_t s : kit::findAll(row, 0x2DD2, 16)) {
-            if (s + 8 * 33 > row.size()) break;
-            const auto by = bytesAt(row, s + 8, 32);   // group, header, length, 26 data, CRC lo, CRC hi
+            if (s + 8 + 8 * 31 > row.size()) break;
+            const auto by = bytesAt(row, s + 8, 31);   // group, header, length, 26 data, CRC lo, CRC hi
             if ((by[1] & 0xE0) != 0 || by[2] != 26) continue;
             const uint16_t crc = kit::crc16r(by.data(), 29, 0xA001, 0xFFFF);
             if (crc != uint16_t(by[29] | by[30] << 8)) continue;

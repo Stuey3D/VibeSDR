@@ -32,11 +32,13 @@ inline void addWord(std::string& s, const std::string& w) { if (!w.empty()) s +=
 namespace interlogix {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& row : slicePpm(b.ook, 122, 244, 500, false, 0.35)) {
-        if (row.size() < 57 || row.size() > 64) continue;
-        const size_t s = findBits(row, 0x01, 8);
-        if (s == size_t(-1) || s + 8 + 46 > row.size()) continue;
-        const auto m = bytesAt(row, s + 8, 6);   // 46 bits; the last byte's low 2 bits are padding
+    // ★ marks of ~122 µs only (the 976 µs front porch and the 366 µs old stop bit end/start a row harmlessly): a
+    //   Manchester sender's 1T/2T marks — TPMS at 120 µs halves — must not be read as gaps of a PPM frame
+    for (const Bits& row : kit::ppmRows(b.ook, 122, 244, 500, 60, 200, 0.35)) {
+        if (row.size() < 55 || row.size() > 64) continue;
+        const size_t s = findBits(row, 0x0001, 12);   // ★ the patent's 12 sync zeros then the start 1 — at least 11 + 1 seen
+        if (s == size_t(-1) || s + 12 + 42 > row.size()) continue;
+        const auto m = bytesAt(row, s + 12, 6);   // 46 bits; the last byte's low 2 bits are padding
         if ((m[0] == 0 && m[1] == 0 && m[2] == 0) || (m[0] == 0xFF && m[1] == 0xFF && m[2] == 0xFF)) continue;
         if ((m[3] == 0 && m[4] == 0 && m[5] == 0) || (m[3] == 0xFF && m[4] == 0xFF && m[5] == 0xFF)) continue;
         int p = m[0] ^ m[1] ^ m[2] ^ m[3] ^ m[4];
