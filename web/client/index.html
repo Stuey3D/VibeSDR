@@ -3637,6 +3637,10 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 #menu .mFlat[hidden] { display: none; }
 #saveAllBlock .lbl.wrap { margin-top: 6px; }
 #srvBlock .lbl.wrap { margin-top: 6px; }
+/* ★ The password box is a wide stop (data-navwide): up from SAVE FOR ALL / RESET lands on it, not on the CONTROLS header
+   above it (gamepad.ts navBox). RESET's two answers split the row, CANCEL under RESET — straight down is the safe one. */
+#resetAllAsk .seg { flex: 1 1 auto; width: 100%; justify-content: stretch; }
+#resetAllAsk .seg button { flex: 1 1 0; }
 /* ★ SDR HARDWARE's "locked — unlock under SERVER below" line: a full-width button (a pad / keyboard stop) that reads
    as a note, and wraps on a phone. */
 #menu button.mJump { display: block; width: 100%; margin: 4px 0 6px; padding: 0.55em 0.8em; text-align: left;
@@ -6785,7 +6789,7 @@ select.btn { padding: 6px 8px; }
     <h2>SERVER</h2>
     <div class="mrow" id="adminPwRow">
       <label for="adminPwInput">PASSWORD</label>
-      <input type="password" id="adminPwInput" autocomplete="off" spellcheck="false"
+      <input type="password" id="adminPwInput" data-navwide autocomplete="off" spellcheck="false"
              placeholder="admin password">
       <div class="seg"><button class="btn" id="adminPwGo">UNLOCK</button></div>
     </div>
@@ -6796,15 +6800,10 @@ select.btn { padding: 6px 8px; }
       <label>ADMINISTRATION</label>
       <div class="seg"><button class="btn" id="btnServerAdmin">SERVER ADMIN</button><button class="btn" id="adminLock">LOCK</button></div>
     </div>
-    <div class="lbl wrap" id="adminNote">
-      Radio controls on this receiver are locked by its operator. Gain, AGC, filters and calibration change the radio
-      for everyone listening, not just for you, and Bias-T puts DC on the feedline. You can still see what they are set
-      to. The operator&rsquo;s password unlocks them.
-    </div>
-    <div class="lbl wrap" id="adminSrvNote" hidden>
-      Unlocked. SERVER ADMIN: monitoring, listeners, connection history, blocking and maintenance for this receiver.
-      LOCK locks the protected controls again.
-    </div>
+    <div class="lbl wrap" id="adminNote">Gain, AGC, filters, calibration and Bias-T change the radio for everyone
+      listening, so the operator has locked them. You can still see how they are set.</div>
+    <div class="lbl wrap" id="adminSrvNote" hidden>SERVER ADMIN: listeners, connection history, blocking and
+      maintenance. LOCK locks the radio controls again.</div>
   </div>
 
   <!-- ★★★ SAVE FOR ALL — UNDER EVERY CATEGORY, JUST ABOVE ABOUT (Stuart, 2026-11-12: "the save for all .vibesdr.net
@@ -6827,7 +6826,7 @@ select.btn { padding: 6px 8px; }
         they came. Other servers keep anything you set on them individually. The radio&rsquo;s hardware and the
         owner&rsquo;s settings are not touched.</div>
       <div class="mrow">
-        <div class="seg"><button class="btn" id="resetAllYes">YES, RESET</button><button class="btn" id="resetAllNo">CANCEL</button></div>
+        <div class="seg"><button class="btn" data-navwide id="resetAllYes">YES, RESET</button><button class="btn" data-navwide id="resetAllNo">CANCEL</button></div>
       </div>
     </div>
     <!-- ★ Stuart's caption, verbatim (2026-09-28). The store keeps a cookie, which is what Safari shares
@@ -6836,7 +6835,7 @@ select.btn { padding: 6px 8px; }
     <div class="lbl wrap" id="dispAllHint">Menu settings are saved for this server automatically. Save for all and
       your display, colour, mouse and controller settings become your default on every server in the VibeSDR.net
       directory &mdash; never the radio&rsquo;s hardware. Anything you then change on one server stays on that server.
-      RESET clears those defaults and puts this server&rsquo;s menu back to how it came.</div>
+      RESET clears them, and this server&rsquo;s menu.</div>
   </div>
 
   <!-- ★★ ABOUT & CREDITS. The web client had none, and the bundle strips every licence comment

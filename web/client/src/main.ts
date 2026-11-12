@@ -18263,7 +18263,10 @@ function buildMenu() {
     const ask = $('resetAllAsk');
     const showAsk = (on: boolean) => {
       ask.hidden = !on;
-      // ★ The highlight / cursor goes where the next press belongs: CANCEL (the safe answer) or back to RESET.
+      // ★ A pad or keyboard walks into the question itself (down from RESET) — scrolling under its highlight would
+      //   leave it measuring from where RESET WAS and skip the answers. A mouse or finger gets the question brought
+      //   into view, the cursor on CANCEL (the safe answer).
+      if (driveInput()) return;
       (on ? $('resetAllNo') : $('dispResetAll')).focus({ preventScroll: true });
       if (on) ask.scrollIntoView({ block: 'nearest' });
     };
