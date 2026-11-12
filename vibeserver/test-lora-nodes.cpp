@@ -99,7 +99,10 @@ static void feed(MeshTable& t, const Msg& m, double at, vibeism::Sink* s) {
 /** The web test's fixture: a day of nodes heard, some in the background, some live. */
 static int seedGallery(const std::string& dir) {
     vibe::gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20);
-    int64_t clk = vibe::gallery::nowUtc() - 3600;
+    // ★ an hour ago — but never before today's UTC midnight: in the first hour of a day "an hour ago" was YESTERDAY, the
+    //   gallery rightly showed "2 days" and test-web-ism-map failed (found 2026-11-12 00:40)
+    const int64_t now = vibe::gallery::nowUtc();
+    int64_t clk = std::max<int64_t>(now - 3600, now - now % 86400 + 60);
     auto opts = [&](const char* origin) {
         vibe::ismgal::DayLog::Options o; o.bandId = "868"; o.bandName = "868 MHz SRD"; o.bandHz = 868.6e6; o.origin = origin;
         o.profile = std::string(origin) == "background" ? "Profile 1" : ""; o.clock = [&clk] { return clk; }; o.rxLat = 52.2405; o.rxLon = -0.9027;

@@ -130,7 +130,7 @@ try {
   const cardText = card ? await (await fileOf(card.f)).text() : '';
   ok(/4 devices: 2 weather, 1 TPMS, 1 doorbell \/ remote/.test(cardText), `the card: ${(cardText.match(/^\d+ devices?:.*$/m) || ['-'])[0]}`);
   ok(cardText.includes('Heard by a listener in ISM mode.') && /Most heard: {3}\S/.test(cardText), 'the card says who heard it, and the most heard');
-  ok(/ · TPMS · TPMS #1 · type B · 32 PSI · 18 °C$/m.test(cardText), 'the card\'s last reading of the TPMS, by its nickname');
+  ok(/ · TPMS · TPMS #1 · Schrader · 32 PSI · 18 °C$/m.test(cardText), 'the card\'s last reading of the TPMS, by its nickname');
   const wire = JSON.stringify(g1) + JSON.stringify(all) + body + cardText + everythingOnDisk();
   const leaked = SECRETS.filter((x) => wire.includes(x));
   ok(leaked.length === 0, `no TPMS ID or remote code in the files, the index or the gallery JSON${leaked.length ? ' — found ' + leaked.join(',') : ''}`);
