@@ -1,5 +1,5 @@
 // test-server-lora.mjs — V12 LoRa in ISM mode through the REAL server (docs/v12/LORA-MESH.md): a fake rtl_tcp replaying
-// a synthetic 868 MHz clip (`test-lora --write-clip clip.u8 868600000 2400000`: Meshtastic node info, a position, a
+// a synthetic 868 MHz clip (`test-lora --write-clip clip.u8 868800000 2400000`: Meshtastic node info, a position, a
 // public text, a private-channel packet and a direct message; a MeshCore repeater's advert, a Public-channel message and
 // a message on another channel; three LoRaWAN uplinks), a spectrum socket, and the contract: the rows by kind, their
 // lines and fields, the positions, the public messages, the `lora` status block — and the PRIVACY rule on the wire (no
@@ -16,7 +16,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = process.env.VIBESERVER_BIN || '';
 const CLIP = process.env.VIBE_LORA_CLIP || '';
 if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP)) {
-  console.log('   not run — set VIBESERVER_BIN and VIBE_LORA_CLIP (make one: test-lora --write-clip clip.u8 868600000 2400000)');
+  console.log('   not run — set VIBESERVER_BIN and VIBE_LORA_CLIP (make one: test-lora --write-clip clip.u8 868800000 2400000)');
   process.exit(3);
 }
 let pass = 0, fail = 0;

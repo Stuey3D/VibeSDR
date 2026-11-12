@@ -47,7 +47,7 @@ ok(!!sel('bgKind') && sel('bgKind').children.map((o) => o.value).join() === 'vfo
 ok(sel('bgKind').value === 'vfo' && vfoRows().length === 2, "Nick's profile shows as VFOs, two rows");
 ok(api.bgCollect() === JSON.stringify(NICK), 'an ordinary profile saves back byte for byte (no "ism" key)');
 sel('bgKind').value = 'ism'; sel('bgKind').onchange();
-ok(!!sel('bgIsmBand') && sel('bgIsmBand').children.map((o) => o.value).join() === '315,433,868,906,910,915,920,923', 'choosing ISM shows a band list: 315, 433, 868, 906, 910, 915, 920, 923');
+ok(!!sel('bgIsmBand') && sel('bgIsmBand').children.map((o) => o.value).join() === '315,433,868,907,910,915,920,923', 'choosing ISM shows a band list: 315, 433, 868, 907, 910, 915, 920, 923');
 ok(sel('bgIsmBand').value === '433', '...433.92 MHz first choice');
 ok(vfoRows().length === 0 && !box.text().includes('RF Centre') && !box.text().includes('+ Add another VFO'), 'no RF centre, no VFO rows, no "add VFO"');
 ok(box.text().includes('runs only while nobody is listening') && box.text().includes('nickname'), 'the note: whole radio, only while nobody listens, nicknames');

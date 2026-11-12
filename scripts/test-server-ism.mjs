@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = process.env.VIBESERVER_BIN || '';
 const CLIP = process.env.VIBE_ISM_CLIP || '';
-// ★ V12 wM-Bus: a meter clip for the 868 band (`test-wmbus --write-clip clip868.u8 868600000 2400000`) — optional
+// ★ V12 wM-Bus: a meter clip for the 868 band (`test-wmbus --write-clip clip868.u8 868800000 2400000`) — optional
 const CLIP868 = process.env.VIBE_WMBUS_CLIP || '';
 if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP)) {
   console.log('   not run — set VIBESERVER_BIN and VIBE_ISM_CLIP (make one: test-ism --write-clip clip.u8 434130000 2400000)');
@@ -47,8 +47,8 @@ try {
   const st = await status();
   ok(st.ism === true, `vibeserver.json: ism ${JSON.stringify(st.ism)} ${st.ismWhy || ''}`);
   const ids = (st.ismBands || []).map((b) => b.id);
-  // ★ V12 2026-11-12: the 902–928 MHz mesh bands (906 Meshtastic US, 910 MeshCore US, 920 Meshtastic ANZ, 923 MeshCore BR/AU, AS923)
-  ok(JSON.stringify(ids) === JSON.stringify(['315', '433', '868', '906', '910', '915', '920', '923']), `ismBands (an R820T reaches all eight, in frequency order): ${ids.join(' ')}`);
+  // ★ V12 2026-11-12: the 902–928 MHz mesh bands (907 Meshtastic US, 910 MeshCore US, 920 Meshtastic ANZ, 923 MeshCore BR/AU, AS923)
+  ok(JSON.stringify(ids) === JSON.stringify(['315', '433', '868', '907', '910', '915', '920', '923']), `ismBands (an R820T reaches all eight, in frequency order): ${ids.join(' ')}`);
   ok((st.ismBands || []).every((b) => b.name.length <= 40), 'every band name fits the clients (≤ 40 characters)');
   ok(st.ismLanding === '433', `ismLanding for a UK locator: ${st.ismLanding}`);
   ok(Array.isArray(st.modes) && st.modes.includes('ism'), 'modes lists ism');
@@ -107,9 +107,9 @@ try {
       for (const f of [b.map((x) => x.toString(16).toUpperCase().padStart(2, '0')).join(''), b.map((x) => x.toString(16)).join(''), b.join(',')]) if (w868.includes(f)) leak++;
     }
     ok(leak === 0, `the encrypted payload never on the wire (${leak})`);
-  } else console.log('   (meters not run — set VIBE_WMBUS_CLIP: test-wmbus --write-clip clip868.u8 868600000 2400000)');
+  } else console.log('   (meters not run — set VIBE_WMBUS_CLIP: test-wmbus --write-clip clip868.u8 868800000 2400000)');
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));
-  ok(await until(() => last.band === '906', 5000), `step +1 → ${last.band} (${last.bandName})`);
+  ok(await until(() => last.band === '907', 5000), `step +1 → ${last.band} (${last.bandName})`);
   ws.send(JSON.stringify({ type: 'ism', on: 1, band: '923' }));
   ok(await until(() => last.band === '923', 5000), `923 by name: ${last.bandName}`);
   ok(last.lora && last.lora.chans >= 1, `923 runs LoRa channels: ${JSON.stringify(last.lora)}`);

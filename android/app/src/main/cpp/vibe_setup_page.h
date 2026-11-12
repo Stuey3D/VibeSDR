@@ -6919,7 +6919,7 @@ const BG_ISM_BANDS = [
   { id: "315", label: "315 MHz (US / Japan: tyre sensors, key fobs, remotes)" },
   { id: "433", label: "433.92 MHz (weather stations, sensors, doorbells, tyre sensors)" },
   { id: "868", label: "868 MHz SRD \u2014 sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)" },
-  { id: "906", label: "906 MHz \u2014 Meshtastic US (LongFast 906.875), LoRaWAN US915" },
+  { id: "907", label: "907 MHz \u2014 Meshtastic US (LongFast 906.875)" },
   { id: "910", label: "910 MHz \u2014 MeshCore US / Canada (910.525)" },
   { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset; MeshCore AU, LoRaWAN AU915)" },
   { id: "920", label: "920 MHz \u2014 Meshtastic ANZ (LongFast 919.875), MeshCore Vietnam / Thailand" },

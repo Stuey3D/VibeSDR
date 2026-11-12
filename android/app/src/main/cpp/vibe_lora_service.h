@@ -98,11 +98,11 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
     static const unsigned NA = homeBit(Region::NorthAmerica), SA = homeBit(Region::SouthAmerica),
                           OC = homeBit(Region::Oceania), AS = homeBit(Region::Asia);
     static const std::vector<int> SF7_10 = {7, 8, 9, 10};
-    static const std::vector<PlanCh> b906 = {
+    /* ★ US915 FSB2 (903.9–905.3, TTN's and most public US networks') is NOT in any capture here: a 904 block
+     *  (LORA-WORLD-BANDS.md) is beta72's. The 915 band's FSB8 914.3–914.9 stays for whoever uses it. */
+    static const std::vector<PlanCh> b907 = {
         {"Meshtastic US LongFast 906.875", "meshtastic", 906.875e6, 250e3, {11}, MT, false, 0},
         {"Meshtastic BR_902 MediumFast 906.625", "meshtastic", 906.625e6, 250e3, {9}, MT, false, 1, SA},
-        {"LoRaWAN US915 905.1", "lorawan", 905.1e6, 125e3, SF7_10, LW, false, 1, NA},
-        {"LoRaWAN US915 905.3", "lorawan", 905.3e6, 125e3, SF7_10, LW, false, 1, NA},
     };
     static const std::vector<PlanCh> b910 = {
         {"MeshCore USA/Canada 910.525", "meshcore", 910.525e6, 62.5e3, {7}, MC, false, 0},
@@ -151,7 +151,7 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
     static const std::vector<PlanCh> none;
     if (band == "868") return eu868;
     if (band == "433") return eu433;
-    if (band == "906") return b906;
+    if (band == "907") return b907;
     if (band == "910") return b910;
     if (band == "915") return b915;
     if (band == "920") return b920;

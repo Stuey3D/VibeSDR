@@ -126,7 +126,7 @@ between the preamble windows and the SFD is carried too (SF12 at 500 kHz lost ev
 |---|---|---|
 | 868 | Meshtastic LongFast 869.525 (BW250 SF11, syncs 0x2B / 0x12), MeshCore EU/UK 869.618 (BW62.5 SF8), LoRaWAN 868.1 / .3 / .5 (BW125 SF7–12) | MeshCore SF7; Meshtastic other presets SF7–10; LoRaWAN 867.1–867.9; RX2 869.525 inverted (SF9, SF12); LongModerate 869.4625 / 869.5875; MeshCore CZ |
 | 433 | Meshtastic 433.875, MeshCore 433.650 | LoRaWAN EU433 433.175/.375/.575; MeshCore 433 variants |
-| 906 | Meshtastic US LongFast 906.875 (BW250 SF11) | BR_902 MediumFast 906.625 SF9 (S. America); LoRaWAN US915 905.1 / 905.3 (N. America) |
+| 907 | Meshtastic US LongFast 906.875 (BW250 SF11) | BR_902 MediumFast 906.625 SF9 (S. America) |
 | 910 | MeshCore USA/Canada 910.525 (BW62.5 SF7) | Costa Rica 910.525 BW125 SF11; US915 sub-band 5 909.9–911.1 (tier 2) |
 | 915 | N. America: LoRaWAN US915 914.3 / 914.5 (SF7–10). S. America and AU/NZ: MeshCore Australia 915.800 (BW250 SF10), Australia (Mid) 915.075 (BW125 SF9), LoRaWAN AU915 915.2 (SF7–10) | US915 914.7 / 914.9; AU915 915.4–916.2 and 915.9 (BW500 SF8) |
 | 920 | Meshtastic ANZ LongFast 919.875; Asia: MeshCore Vietnam 920.250 (SF8), Thailand 921.000 (SF7), both BW62.5 | AS923-2 921.4 / 921.6 |
@@ -135,7 +135,7 @@ between the preamble windows and the SFD is carried too (SF12 at 500 kHz lost ev
 At 2.4 MS/s on 868.6 MHz, 13 of the 16 EU868 channels fit (867.1–867.5 do not).
 
 ★★ **902–928 MHz (V12 2026-11-12).** Five bands, each one capture (an RTL holds ~2 MHz), placed where a region's mesh
-is: `906` `910` `915` `920` `923` (ISM-DECODER.md §bands). A channel may carry a **home** — the regions whose network it
+is: `907` `910` `915` `920` `923` (ids and the 907/910 centres as LORA-WORLD-BANDS.md's blocks) (ISM-DECODER.md §bands). A channel may carry a **home** — the regions whose network it
 is (`vibeism::regionAt`: North America, South America, Australia/NZ, east/south-east Asia; rough boxes). At home it keeps
 its tier, with no position set too; elsewhere it drops to tier 2 (still there with the benchmark's budget or
 "lora+all"). Each mesh band's own main channel has no home. So a Pi 2 in Brazil on 923 runs MeshCore Brasil only, and
@@ -155,7 +155,7 @@ one in Tokyo runs MeshCore 923.125 and the three Meshtastic LongFast slots.
 
 **Not covered (one capture cannot hold everything):** MeshCore Australia (Narrow) 916.575 and NZ 917.375, TTN AU915
 FSB2 916.8–918.2, Meshtastic SG/PH LongFast 917.875, Meshtastic US MediumFast 913.125 / ShortFast 918.875, BR_902
-LongFast 903.875, US915 FSB2's lower six channels 903.9–904.9, MeshCore S. California 927.875. A ninth band would need
+LongFast 903.875, **US915 FSB2 903.9–905.3 (TTN's and most public US networks' — beta72's 904 block)**, MeshCore S. California 927.875. A ninth band would need
 the clients' eight-band cap raised first.
 
 ★ **Frequency error.** The detector folds CFO into timing and separates them at the SFD: ±BW/4 is safe (test-lora: a

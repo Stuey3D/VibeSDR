@@ -388,7 +388,7 @@ int main(int argc, char** argv) {
         // every plan channel's slot / preset is inside its band's capture at 2.4 MS/s (the radio where ismHwCentre puts it)
         auto hwOf = [](const vibeism::Band& b, double rate) {
             return b.dcOffsetHz <= 0 ? b.centreHz : b.centreHz + std::max(40e3, std::min(b.dcOffsetHz, rate * 0.45 - b.needHz)); };
-        for (const char* id : {"906", "910", "915", "920", "923"}) {
+        for (const char* id : {"907", "910", "915", "920", "923"}) {
             const auto* b = vibeism::bandById(id);
             const double lo = std::string(id) >= "920" ? 915.0e6 : 902.0e6;
             ok(b && vibeism::exactAllowed(*b, lo) && vibeism::exactAllowed(*b, 928.0e6) && !vibeism::exactAllowed(*b, lo - 0.1e6)
@@ -401,19 +401,28 @@ int main(int argc, char** argv) {
             ok(fit24 == plan.size() || std::string(id) == "920", std::string(id) + ": every plan channel fits at 2.4 MS/s");
             ok(std::string(id) == "915" || main2048 >= 1, std::string(id) + ": its main (no-home) channel runs at 2.048 MS/s too");
         }
+        {   // ★ the 868 band at 2.048 MS/s (LORA-WORLD-BANDS.md found it): Meshtastic LongFast 869.525 was out of reach at 868.6
+            const auto* b8 = vibeism::bandById("868");
+            const double h8 = hwOf(*b8, 2.048e6);
+            bool mt = false; for (auto* c : choose(planFor("868"), h8, 2.048e6, 0)) mt = mt || std::string(c->name) == "Meshtastic LongFast 869.525";
+            ok(std::fabs(h8 - 868.8e6) < 1 && mt, "868 at 2.048 MS/s: the radio at " + std::to_string(h8 / 1e6) + " MHz, Meshtastic LongFast in the default set");
+            const double lo = b8->centreHz - b8->needHz - 40e3, hi = b8->centreHz + b8->needHz + 40e3;
+            ok(lo > h8 - 0.45 * 2.048e6 && hi < h8 + 0.45 * 2.048e6 && std::fabs(h8 - 868.95e6) >= 100e3 && std::fabs(h8 - 868.5e6) - 62.5e3 > 200e3,
+               "…the sensors' and meters' window (868.11–869.09) still inside, the DC 100 kHz clear of 868.90 / 868.5625");
+        }
         auto names = [](const std::vector<const PlanCh*>& v) { std::string s; for (auto* c : v) s += std::string(c->name) + "; "; return s; };
         auto tier0 = [&](const char* id, Region r) { const auto* b = vibeism::bandById(id); return choose(planFor(id), hwOf(*b, 2.4e6), 2.4e6, 0, 0.45, r); };
         double units = 0; for (auto* c : tier0("923", Region::SouthAmerica)) units += chanCost(*c);
         ok(names(tier0("923", Region::SouthAmerica)) == "MeshCore Brazil / AU 923.125; ", "Brazil, 923: the default set is MeshCore Brasil (" + std::to_string(units) + " units)");
         ok(tier0("923", Region::Asia).size() == 4, "Asia, 923: MeshCore 923.125 + three Meshtastic LongFast slots");
-        ok(names(tier0("906", Region::NorthAmerica)) == "Meshtastic US LongFast 906.875; ", "US, 906: Meshtastic US LongFast");
+        ok(names(tier0("907", Region::NorthAmerica)) == "Meshtastic US LongFast 906.875; ", "US, 907: Meshtastic US LongFast");
         ok(names(tier0("910", Region::NorthAmerica)) == "MeshCore USA/Canada 910.525; ", "US, 910: MeshCore US");
         const std::string br915 = names(tier0("915", Region::SouthAmerica));
         ok(br915.find("AU915 915.2") != std::string::npos && br915.find("MeshCore Australia 915.800") != std::string::npos
            && br915.find("US915") == std::string::npos, "Brazil, 915: " + br915);
         const std::string us915 = names(tier0("915", Region::NorthAmerica));
         ok(us915.find("US915 914.3") != std::string::npos && us915.find("AU915") == std::string::npos, "US, 915: " + us915);
-        for (const char* id : {"906", "910", "915", "920", "923"})
+        for (const char* id : {"907", "910", "915", "920", "923"})
             for (Region r : {Region::NorthAmerica, Region::SouthAmerica, Region::Oceania, Region::Asia, Region::Unknown}) {
                 double u = 0; for (auto* c : tier0(id, r)) u += chanCost(*c);
                 double eu = 0; for (const auto& c : planFor("868")) if (c.tier == 0) eu += chanCost(c);
@@ -450,10 +459,10 @@ int main(int argc, char** argv) {
         ok(off == 1, "…and one 12 kHz off its channel");
     }
 
-    std::printf("── 906 MHz at 2.4 MS/s: Meshtastic US LongFast (906.875, BW 250, SF11) through the engine ──\n");
+    std::printf("── 907 MHz at 2.4 MS/s: Meshtastic US LongFast (906.875, BW 250, SF11) through the engine ──\n");
     {
-        const auto* b = vibeism::bandById("906");
-        const double fs = 2.4e6, hc = b->centreHz;
+        const auto* b = vibeism::bandById("907");
+        const double fs = 2.4e6, hc = b->centreHz + 450e3;   // ★ where ismHwCentre puts the radio
         std::mt19937 r2(37);
         const uint32_t BC = 0xFFFFFFFF;
         PbW user; user.str(1, "!0badc0de"); user.str(2, "Boulder Hill"); user.str(3, "BLDR"); user.u(5, 43); user.u(7, 2);
@@ -464,8 +473,8 @@ int main(int argc, char** argv) {
         };
         const auto x = render(txs, fs, hc, 4.0, 3.0, r2);
         Engine e;
-        e.startInline("906", hc, fs, 0, 0.45, vibeism::Region::NorthAmerica);
-        ok(e.channelsRun() == 1, "the US default set on 906: one channel");
+        e.startInline("907", hc, fs, 0, 0.45, vibeism::Region::NorthAmerica);
+        ok(e.channelsRun() == 1, "the US default set on 907: one channel");
         for (size_t i = 0; i < x.size(); i += 65536) e.process(x.data() + i, std::min<size_t>(65536, x.size() - i));
         int ni = 0, tx = 0;
         for (auto& h : e.take()) {

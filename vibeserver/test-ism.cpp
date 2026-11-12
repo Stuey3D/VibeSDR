@@ -2424,7 +2424,7 @@ int main(int argc, char** argv) {
         auto all = [](const Band&) { return true; };
         CHECK(std::string(landingBand(52.2, -0.9, all)->id) == "433", "UK lands on 433.92");
         // ★ V12 2026-11-12: the Americas, Australia and Asia land on their MESH band
-        CHECK(std::string(landingBand(40.7, -74.0, all)->id) == "906", "US (New York) lands on 906 (Meshtastic US LongFast)");
+        CHECK(std::string(landingBand(40.7, -74.0, all)->id) == "907", "US (New York) lands on 907 (Meshtastic US LongFast)");
         CHECK(std::string(landingBand(-22.62, -48.63, all)->id) == "923", "Brazil (Kiko, GG33if) lands on 923 (MeshCore Brasil)");
         CHECK(std::string(landingBand(-33.87, 151.21, all)->id) == "920", "Australia (Sydney) lands on 920 (Meshtastic ANZ)");
         CHECK(std::string(landingBand(-36.85, 174.76, all)->id) == "920", "New Zealand (Auckland) lands on 920");
@@ -2442,8 +2442,8 @@ int main(int argc, char** argv) {
         double lastHz = 0; bool ordered = true, shortNames = true;
         for (const auto& b : bands()) { ordered = ordered && b.centreHz > lastHz; lastHz = b.centreHz; shortNames = shortNames && std::strlen(b.name) <= 40; }
         CHECK(ordered && bands().size() <= 8 && shortNames, "%zu bands in frequency order, names short enough for every client", bands().size());
-        CHECK(exactAllowed(*bandById("923"), 923.125e6) && exactAllowed(*bandById("906"), 902.0e6) && !exactAllowed(*bandById("923"), 929e6)
-              && !exactAllowed(*bandById("906"), 900e6) && exactAllowed(*bandById("910"), 912.0e6) && exactAllowed(*bandById("920"), 915.0e6)
+        CHECK(exactAllowed(*bandById("923"), 923.125e6) && exactAllowed(*bandById("907"), 902.0e6) && !exactAllowed(*bandById("923"), 929e6)
+              && !exactAllowed(*bandById("907"), 900e6) && exactAllowed(*bandById("910"), 912.0e6) && exactAllowed(*bandById("920"), 915.0e6)
               && !exactAllowed(*bandById("920"), 914.9e6) && !exactAllowed(*bandById("923"), 914.0e6) && exactAllowed(*bandById("923"), 928.0e6),
               "exactAllowed: 906/910/915 take 902–928 MHz, 920/923 take 915–928 (Brazil, AU/NZ, AS923), nothing outside");
         CHECK(std::string(bandById("923")->name) == "923 MHz ISM (MeshCore BR/AU, AS923)", "923's readout: %s", bandById("923")->name);
