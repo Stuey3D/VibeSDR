@@ -451,6 +451,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (sl109h::decode(b, out)) return;      // ★ before the 609: a background 609 inside an SL109H's channel must not win
     if (acurite2::decode(b, out)) return;
     if (wx7::decode(b, out)) return;
+    if (wx8::decode(b, out)) return;
     if (wx6::decode(b, out)) return;
     if (wx5::decode(b, out)) return;
     if (nexus::decode(b, out)) return;

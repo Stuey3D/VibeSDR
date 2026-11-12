@@ -5,6 +5,7 @@
 // (auriol_*.c, vauno_en8822c.c, alecto.c, prologue.c) for FACTS only. Our own code throughout.
 #pragma once
 #include "vibe_ism_wxkit.h"
+#include "vibe_ism_weather8.h"   // the TFA Twin Plus shares the AlectoV1 / Prologue timing: tried between them
 
 namespace vibeism {
 namespace wx6 {
@@ -168,6 +169,7 @@ inline bool alectoProlog(const Burst& b, std::vector<Reading>& out) {
         out.push_back(r);
         return true;
     }
+    if (wx8::twinPlus(b, out)) return true;   // a 4-bit sum and a fixed bit: before the unchecked Prologue
     // Prologue: three copies alike (the AlectoV1's check was tried first), type 9 or 5. ★ Two sensors in one burst are
     //  common (the corpus: a second Prologue's copies interleaved with the first's) — each is read.
     bool any = false;
