@@ -279,6 +279,148 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace emt7110
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  RFXCOM RFXMeter / RFXPower pulse counters (gas / water / electricity meter-pulse transmitters) — 433.92 MHz OOK, an
+//  X10-like PPM frame: a ~9 ms mark, a ~4.5 ms gap, then 48 bits, each a 0.5 ms mark and a 0.5 ms (0) or 1.5 ms (1) gap;
+//  four copies 38 ms apart. Facts: the RFXCOM RFXMeter / RFXPower user notes (the packet-type list) and rtl_433 issue
+//  #2141 / rfxmeter.c notes (read for facts only). Bytes: address · the address with its high nibble complemented ·
+//  counter middle · counter low · counter high · packet type (high nibble; 0 = a reading) and a check nibble making the
+//  sum of all twelve nibbles ≡ 0xF. RFXPower counts 0.001 kWh; the meter's own pulses otherwise (shown as a count).
+//  A ~12-bit check: believed when two copies in the burst agree, else shown once heard twice (confirm).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace rfxmeter {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    std::vector<std::vector<uint8_t>> got;
+    for (size_t i = 0; i + 2 < r.size(); ++i) {
+        if (r[i] < 7500 || r[i] > 10500 || -r[i + 1] < 3500 || -r[i + 1] > 5500) continue;
+        Bits w;
+        size_t k = i + 2;
+        for (; k < r.size() && w.size() < 48; k += 2) {
+            if (r[k] < 350 || r[k] > 750) break;
+            const int g = k + 1 < r.size() ? -r[k + 1] : 100000;
+            if (g >= 350 && g <= 750) w.push_back(0);
+            else if (g >= 1250 && g <= 1900) w.push_back(1);
+            else if (w.size() == 47) w.push_back(2);   // the last gap runs into the next copy or the end: try both
+            else break;
+        }
+        i = k - 1;
+        if (w.size() != 48) continue;
+        for (int last = 0; last < 2; ++last) {
+            if (w[47] != 2 && w[47] != last) continue;
+            Bits v = w; v[47] = uint8_t(last);
+            const auto by = kit::packBits(v);
+            if ((by[0] ^ 0xF0) != by[1]) continue;
+            unsigned ns = 0; for (uint8_t x : by) ns += (x >> 4) + (x & 0xF);
+            if ((ns & 0xF) != 0xF) continue;
+            got.push_back(by);
+            break;
+        }
+    }
+    for (const auto& by : got) {
+        const int type = by[5] >> 4;
+        const uint32_t value = uint32_t(by[4]) << 16 | uint32_t(by[2]) << 8 | by[3];
+        Reading rd;
+        rd.kind = "energy"; rd.make = "RFXCOM"; rd.model = "RFXMeter / RFXPower";
+        rd.pubId = std::to_string(by[0]);
+        rd.extra = type == 0 ? "count " + std::to_string(value) : type == 0xF ? "identification" : "set-up message " + std::to_string(type);
+        rd.confirm = std::count(got.begin(), got.end(), by) < 2;
+        rd.fact("id", (long long)by[0]); rd.fact("msg_type", (long long)type); rd.fact("msg_value", (long long)value);
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+} // namespace rfxmeter
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  REVOLT NC-5462 plug-in energy meter (Pearl) — 433.92 MHz OOK PWM: a ~10 ms sync mark, then 104 bits, a ~320 µs
+//  mark = 1, ~180 µs = 0, ~160 µs gaps. Facts: rtl_433's revolt_nc5462.c notes (Nicolai Hess; read for facts only).
+//  Bytes: button (bit 7) + ID 15 · volts · current 16 × 0.01 A · Hz · power 16 × 0.1 W · power factor × 0.01 · energy
+//  16 × 0.01 kWh · the sum of bytes 0–10 · one more byte. An 8-bit sum: plausibility (50/60 Hz, 90–260 V) and two
+//  copies, or confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace revolt {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    std::vector<std::vector<uint8_t>> got;
+    for (size_t i = 0; i + 2 < r.size(); ++i) {
+        if (r[i] < 8000 || r[i] > 12000) continue;
+        Bits w;
+        size_t k = i + 2;
+        for (; k < r.size() && w.size() < 104; k += 2) {
+            const int m = r[k], g = k > 0 ? -r[k - 1] : 0;
+            if (m <= 0 || g < 80 || g > 400) break;
+            if (m >= 120 && m < 250) w.push_back(0); else if (m >= 250 && m <= 420) w.push_back(1); else break;
+        }
+        i = k - 1;
+        if (w.size() != 104) continue;
+        const auto by = kit::packBits(w);
+        const unsigned sum = kit::sumBytes(by.data(), 11);
+        if (!sum || (sum & 0xFF) != by[11]) continue;
+        if ((by[5] != 50 && by[5] != 60) || by[2] < 90) continue;
+        got.push_back(by);
+    }
+    for (const auto& by : got) {
+        Reading rd;
+        rd.kind = "energy"; rd.make = "Revolt"; rd.model = "NC-5462 energy meter";
+        const int id = (by[0] & 0x7F) << 8 | by[1];
+        rd.pubId = std::to_string(id);
+        rd.watts = (by[6] << 8 | by[7]) * 0.1;
+        const double amps = (by[3] << 8 | by[4]) * 0.01, kwh = (by[9] << 8 | by[10]) * 0.01;
+        rd.extra = std::to_string(by[2]) + " V \xc2\xb7 " + kit::fmt1v(amps, 2) + " A \xc2\xb7 " + kit::fmt1v(kwh, 2) + " kWh";
+        rd.confirm = std::count(got.begin(), got.end(), by) < 2;
+        rd.fact("id", (long long)id); rd.fact("voltage_V", (long long)by[2]); rd.fact("current_A", amps); rd.fact("energy_kWh", kwh);
+        rd.fact("frequency_Hz", (long long)by[5]); rd.fact("button", (long long)(by[0] >> 7));
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+} // namespace revolt
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  FLOWIS water meters — 868 MHz FSK (CC110x), 100 kbit/s (10 µs). Facts: rtl_433's flowis.c notes (Benjamin Larsson;
+//  read for facts only) and the rtl_433_tests flowis README / capture log. AA AA, sync D3 91 D3 91, then LEN · type ·
+//  … · CRC-16 (poly 0x8005, init 0xFFFF) over LEN … the last data byte. Type 1 (the reading): meter ID 32 LE (as
+//  printed on the meter) · ? · time stamp 32 bits packed (seconds 6, minutes 6, hours 5, day 5, month 4, year 6 from
+//  2000) · volume 24 LE in litres · backflow · alarm. Other types are counted by the CRC and not read.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace flowis {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& row : kit::nrzRows(b.fsk, 10.0, 64, true, 200)) {
+        for (size_t s : kit::findAll(row, 0xD391D391u, 32)) {
+            if (s + 40 > row.size()) break;
+            const int len = int(bitsAt(row, s + 32, 8));
+            if (len < 16 || s + 32 + size_t(len + 3) * 8 > row.size()) continue;
+            const auto f = bytesAt(row, s + 32, len + 3);
+            if (crc16(f.data(), size_t(len + 1), 0x8005, 0xFFFF) != uint16_t(f[size_t(len + 1)] << 8 | f[size_t(len + 2)])) continue;
+            if (f[1] != 1) continue;
+            const uint32_t id = uint32_t(f[5]) << 24 | uint32_t(f[4]) << 16 | uint32_t(f[3]) << 8 | f[2];
+            const uint32_t litres = uint32_t(f[13]) << 16 | uint32_t(f[12]) << 8 | f[11];
+            Reading r;
+            r.kind = "energy"; r.make = "Flowis"; r.model = "water meter";
+            r.pubId = std::to_string(id);
+            char ts[24]; std::snprintf(ts, sizeof ts, "%04d-%02d-%02d %02d:%02d", 2000 + (f[10] >> 2), (f[9] >> 6) | (f[10] & 3) << 2,
+                                       (f[9] & 0x3E) >> 1, (f[8] >> 4) | (f[9] & 1) << 4, (f[8] & 0xF) << 2 | (f[7] & 0xC0) >> 6);
+            r.extra = kit::fmt1v(litres / 1000.0, 3) + " m\xc2\xb3 \xc2\xb7 meter clock " + ts;
+            if (f[14]) r.extra += " \xc2\xb7 backflow";
+            r.fact("id", (long long)id); r.fact("volume_m3", litres / 1000.0); r.fact("alarm", (long long)f[15]); r.fact("backflow", (long long)f[14]);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace flowis
+
 /** The second-pass meter families, strongest checks first. (★ OWL is NOT here: decodeOne tries it after the fixed-code
  *  remotes — a remote and a neighbour's OWL CM160 in one burst (corpus status-rc202) must give the remote, the
  *  recording's own device; OWL's nibble sum is the weaker check.) */
@@ -286,6 +428,9 @@ inline bool decodeMeters2(const Burst& b, std::vector<Reading>& out) {
     if (sparsnas::decode(b, out)) return true;
     if (ec3k::decode(b, out)) return true;
     if (emt7110::decode(b, out)) return true;
+    if (flowis::decode(b, out)) return true;
+    if (rfxmeter::decode(b, out)) return true;
+    if (revolt::decode(b, out)) return true;
     return false;
 }
 
@@ -295,6 +440,7 @@ inline bool meters2BandOk(const Reading& r, double f) {
     const bool b868 = f >= 863e6 && f <= 870e6;
     if (r.make == "IKEA") return b868;
     if (r.make == "ESIC") return b868;
+    if (r.make == "RFXCOM" || r.make == "Revolt") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "OWL") return f >= 433.0e6 && f <= 435.0e6;
     return true;
 }

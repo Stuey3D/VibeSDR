@@ -1167,6 +1167,23 @@ static void testHome2() {
         Sig s{tx.r};
         cs.push_back({"Martec fan remote", s, 433.92e6, "fan remote", "speed", "\"medium\"", true});
     }
+    // RFXMeter: OOK, 9 ms mark, 4.5 ms gap, 48 PPM bits (0.5 ms mark; 0.5 ms gap = 0, 1.5 ms = 1); address, ~address-hi, counter, type+check
+    {
+        std::vector<uint8_t> by = {0x01, 0xF1, 0xCE, 0xD8, 0x19, 0x00};
+        unsigned ns = 0; for (uint8_t x : by) ns += (x >> 4) + (x & 0xF);
+        by[5] |= uint8_t((0xF - (ns & 0xF)) & 0xF);
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { tx.mark(9000); tx.space(4200); for (uint8_t x : bytesToBits(by)) { tx.mark(540); tx.space(x ? 1590 : 530); } tx.mark(540); tx.space(38000); }
+        Sig s{tx.r};
+        cs.push_back({"RFXMeter", s, 433.92e6, "RFXMeter", "msg_value", "1691352", false});
+    }
+    // Revolt NC-5462: OOK, 10 ms sync, 104 PWM bits (320 µs mark = 1, 180 = 0, 160 µs gaps), byte-sum; twice
+    {
+        std::vector<uint8_t> by = {0x02, 0x21, 233, 0x00, 0x1F, 50, 0x02, 0x8E, 90, 0x77, 0xF9};
+        by.push_back(uint8_t(kit::sumBytes(by.data(), 11))); by.push_back(0x00);
+        Tx tx; for (int rep = 0; rep < 2; ++rep) { tx.mark(10000); tx.space(280); for (uint8_t x : bytesToBits(by)) { tx.mark(x ? 320 : 180); tx.space(165); } tx.mark(180); tx.space(30000); }
+        Sig s{tx.r};
+        cs.push_back({"Revolt NC-5462", s, 433.92e6, "NC-5462", "voltage_V", "233", false});
+    }
     home2Run(cs);
 }
 
