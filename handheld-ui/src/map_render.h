@@ -172,7 +172,8 @@ public:
         wpx_ = worldPx(z);
         ox_ = cx - fboW / 2.0 / wpx_; oy_ = cy - fboH / 2.0 / wpx_;
         box_[0] = (float)ox_; box_[1] = (float)oy_; box_[2] = (float)(ox_ + fboW / wpx_); box_[3] = (float)(oy_ + fboH / wpx_);
-        st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0; drawn.clear();
+        st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0; drawn.clear(); waits_.clear();
+        indexAtRender_ = st.indexReady();
         st.noteRender(frame);   // ★ the files this render touches are the picture — evict() keeps them (map_data.h)
         glBindFramebuffer(GL_FRAMEBUFFER, drawFbo_ ? drawFbo_ : resolveFbo_);
         glViewport(0, 0, fboW, fboH);
@@ -198,6 +199,23 @@ public:
         if (!draws_) emptyRenders++;
     }
 
+    /** ★★ WOULD AN UPLOAD CHANGE THE PICTURE? Every render notes what it asked for and did not get — a group of
+     *  files a layer waits on. A group that must arrive WHOLE (a tier drawn only once all of it is here — the lower
+     *  tier is up meanwhile) changes nothing until its last file lands; a group drawn as it arrives (no lower tier
+     *  to stand in, a relief tile, a label file) changes with any one. MapView re-renders for new data only when
+     *  one of them is satisfied — a shard of an incomplete tier landing re-drew the very same picture before. */
+    bool newlyDrawable(MapStore& st) const {
+        if (!indexAtRender_ && st.indexReady()) return true;
+        for (auto& w : waits_) {
+            size_t here = 0;
+            for (auto& n : w.names) if (st.peekFile(n)) here++;
+            if (w.whole ? here == w.names.size() : here > 0) return true;
+        }
+        return false;
+    }
+    /** A base layer (the land) waits: the first picture of a fresh view is worth drawing as soon as it can be. */
+    bool waitingOnLand() const { for (auto& w : waits_) if (w.land) return true; return false; }
+
     /** What the last render drew, a row per file and use (the tests' check that no layer is drawn from two tiers). */
     struct Drawn { std::string layer; int tier; const char* what; const std::string* file; };
     std::vector<Drawn> drawn;
@@ -222,6 +240,12 @@ private:
     bool dbg_ = std::getenv("VIBE_HHUI_MAP_LOG") != nullptr;
     struct Box { float x, y, w, h; };
     std::vector<Box> placed_;
+    struct Wait { std::vector<std::string> names; bool whole, land; };
+    std::vector<Wait> waits_;
+    bool indexAtRender_ = false;
+    void waitFor(std::vector<std::string> names, bool whole, bool land = false) { if (!names.empty()) waits_.push_back({std::move(names), whole, land}); }
+    /** want() for a single file; a miss is a wait (drawn the moment it lands). */
+    MapFile* want1(const std::string& name, int prio) { MapFile* f = st_->want(name, frame_, prio); if (!f) waitFor({name}, false); return f; }
 
     static double clk() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -259,8 +283,10 @@ private:
         const auto names = filesFor(layer, want);
         if (names.empty()) return {};                    // the layer exists, nothing of it in this view
         bool all = true;
-        for (auto& n : names) { MapFile* f = st_->want(n, frame_, prio); if (f) got.push_back(f); else all = false; }
+        std::vector<std::string> missing;
+        for (auto& n : names) { MapFile* f = st_->want(n, frame_, prio); if (f) got.push_back(f); else { all = false; missing.push_back(n); } }
         if (all) return got;
+        const bool land = layer == "countries" || layer == "coast";
         // ★★★ THE OLD LAND STAYS UP UNTIL THE NEW LAND HAS ARRIVED: the best lower tier already resident, ON ITS OWN.
         // ★★ Not with what has arrived of the wanted one on top (Stuart, 2026-11-11: "the tiles all seem to overlap
         //    different zoom levels"): two tiers of one layer drawn together is two coastlines and two sets of borders a
@@ -269,8 +295,9 @@ private:
             if (!exists(u)) continue;
             bool ok = true; std::vector<MapFile*> lower;
             for (auto& n : filesFor(layer, u)) { MapFile* f = st_->peekFile(n); if (f) { f->used = frame_; lower.push_back(f); } else ok = false; }
-            if (ok) return lower;
+            if (ok) { waitFor(std::move(missing), true, land); return lower; }   // ★ nothing changes till ALL of it is here
         }
+        waitFor(std::move(missing), false, land);                                 // ★ drawn as it arrives
         return got;
     }
     /** Draw the rings of `g` that meet the view, as few runs of its index buffer as the space order allows. `fan` picks
@@ -435,12 +462,12 @@ private:
             bool tiles = false;
             if (z >= 6 && !ix.reliefTiles.empty()) {
                 std::vector<std::pair<MapFile*, const float*>> got; bool all = true;
-                for (auto& t : ix.reliefTiles) if (hits(t.box)) { MapFile* f = st_->want(t.file, frame_, 0); if (f) got.push_back({f, t.box}); else all = false; }
-                if (!all) { static const float wb[4] = {0, 0, 1, 1}; if (MapFile* g = st_->peekFile(ix.reliefBasic)) image(g->tex, wb, 0.92f); }
-                for (auto& p : got) image(p.first->tex, p.second, 0.92f);
+                for (auto& t : ix.reliefTiles) if (hits(t.box)) { MapFile* f = want1(t.file, 0); if (f) got.push_back({f, t.box}); else all = false; }
+                if (!all) { static const float wb[4] = {0, 0, 1, 1}; if (MapFile* g = st_->peekFile(ix.reliefBasic)) { image(g->tex, wb, 0.92f); note(g, "image"); } }
+                for (auto& p : got) { image(p.first->tex, p.second, 0.92f); note(p.first, "image"); }
                 tiles = true;
             }
-            if (!tiles) { static const float wb[4] = {0, 0, 1, 1}; if (MapFile* g = st_->want(ix.reliefBasic, frame_, 0)) image(g->tex, wb, 0.92f); }
+            if (!tiles) { static const float wb[4] = {0, 0, 1, 1}; if (MapFile* g = want1(ix.reliefBasic, 0)) { image(g->tex, wb, 0.92f); note(g, "image"); } }
         }
         // ground cover, then what was built on it, then what joins it
         {
@@ -466,7 +493,7 @@ private:
         //     fill is drawn before any line.) It also leaves 150 k border indices out of every world-view render.
         if (!countries.empty()) lines(countries, mp::border, 1);
         else if (coastDrawn) lines(resolve("borders", 2, 2), mp::border, z >= 6 ? 1.6f : 1.3f);
-        if (z >= 2 && z <= 8) geolines(st_->want("tier0-geolines.json", frame_, 1));
+        if (z >= 2 && z <= 8) geolines(want1("tier0-geolines.json", 1));
         grid();
         if (z >= 5 && P_.roads) lines(resolve("roads", mapTierFor("roads", z)), mp::road, z >= 9 ? 1.4f : 1);
         if (z >= 7 && P_.rail) lines(resolve("rail", mapTierFor("rail", z)), mp::road, 1, 6);
@@ -544,7 +571,7 @@ private:
         }
         // physical regions and seas — stacked when long (a paper atlas's NORTH / ATLANTIC / OCEAN)
         if (z >= 2 && z <= 6) {
-            if (MapFile* f = st_->want("tier0-regions.json", frame_, 1)) {
+            if (MapFile* f = want1("tier0-regions.json", 1)) {
                 const int cut = z <= 3 ? 2 : z <= 4 ? 3 : z <= 5 ? 4 : 6;
                 std::vector<const MapRow*> c;
                 for (auto& r : f->rows) {
@@ -572,7 +599,7 @@ private:
         }
         // countries — Natural Earth's own label points, thinned by rank against zoom
         if (z >= 4 && z <= 7) {
-            if (MapFile* f = st_->want("tier0-countrylabels.json", frame_, 1)) {
+            if (MapFile* f = want1("tier0-countrylabels.json", 1)) {
                 const int cut = z <= 4 ? 3 : z <= 5 ? 5 : 7;
                 std::vector<const MapRow*> c;
                 for (auto& r : f->rows) if (r.n[2] <= cut) c.push_back(&r);
@@ -699,7 +726,7 @@ private:
     }
 
     void ports(TextCache& tc, MapFonts& mf, long& n) {
-        MapFile* f = st_->want("tier1-ports.json", frame_, 1);
+        MapFile* f = want1("tier1-ports.json", 1);
         if (!f) return;
         static const int minZ[5] = {5, 6, 7, 8, 10};
         auto clsOf = [](const MapRow& r) { return std::isfinite(r.n[2]) ? std::max(0, std::min(4, (int)r.n[2])) : 4; };

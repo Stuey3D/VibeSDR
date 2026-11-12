@@ -105,7 +105,10 @@ static void noteRender(H& h) {
     MapRender& R = mapRender();
     std::string sig = std::to_string(R.fz) + "|" + std::to_string(R.fcx) + "|" + std::to_string(R.fcy) + "|" + std::to_string(R.vertsLast) + "|" + std::to_string(R.labelsLast);
     for (auto& d : R.drawn) sig += "|" + *d.file + d.what;
-    if (sig == gLastSig) { gWasted++; if (R.lastCause == MapRender::RC_DATA) gWastedData++; }
+    if (sig == gLastSig) {
+        gWasted++; if (R.lastCause == MapRender::RC_DATA) gWastedData++;
+        if (std::getenv("MAP_TEST_DEBUG")) std::fprintf(stderr, "wasted render (cause %s) at z%d: %s\n", MapRender::causeName(R.lastCause), R.fz, sig.c_str());
+    } else if (std::getenv("MAP_TEST_DEBUG")) std::fprintf(stderr, "render (cause %s) z%d %ld idx\n", MapRender::causeName(R.lastCause), R.fz, R.vertsLast);
     gLastSig = sig;
 }
 /** One frame: the basemap (MapView::draw — the code under test), then the overlay, as mapDrawSheet does. */
@@ -208,6 +211,31 @@ int main(int argc, char** argv) {
         settle(h, none);
         savePng(out);
         std::printf("  shot %s (%.2f, %.2f, z%d): %ld indices in %ld draws, %ld labels\n", out.c_str(), lat, lon, z, mapRender().vertsLast, mapRender().drawsLast, mapRender().labelsLast);
+        return 0;
+    }
+
+    if (what == "bench") {
+        // ★ ONE RE-RENDER'S COST, view by view: settled (everything loaded), then re-rendered 15 times, each finished
+        //   (glFinish — llvmpipe draws on the CPU, so this is the whole render, CPU + "GPU").
+        h.v.profile = "spots";
+        struct V { double lat, lon; int z; } views[] = {{30, 0, 2}, {52.24, -0.9, 3}, {50, 12, 4}, {49.5, 16, 6}, {51.5, -0.5, 8}, {50.85, 4.3, 10}};
+        double total = 0; int n = 0;
+        for (auto& w : views) {
+            h.v.centreOn(w.lat, w.lon, w.z);
+            settle(h, none);
+            Ctx c{h.g, h.tc, h.f, h.nav, wall()};
+            double ms = 0, best = 1e9;
+            for (int i = 0; i < 15; i++) {
+                glFinish();
+                const double a = wall();
+                mapRender().render(mapStore(), h.tc, mapFonts(), h.v.cx, h.v.cy, h.v.z, mapProfile(h.v.profile), h.frame++, MapRender::RC_OPEN);
+                glFinish();
+                const double d = (wall() - a) * 1e3; ms += d; best = std::min(best, d);
+            }
+            std::printf("  bench z%-2d (%.2f, %.2f): %.1f ms a render (best %.1f) · %ld indices in %ld draws · %ld labels\n", w.z, w.lat, w.lon, ms / 15, best, mapRender().vertsLast, mapRender().drawsLast, mapRender().labelsLast);
+            total += ms / 15; n++;
+        }
+        std::printf("  bench mean %.1f ms a render · buffer %.1f MB%s\n", total / n, mapRender().gpuBytes / 1048576.0, mapRender().msaa ? " (MSAA)" : "");
         return 0;
     }
 

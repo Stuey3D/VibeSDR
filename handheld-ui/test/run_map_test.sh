@@ -10,7 +10,7 @@ OUT=${1:-$HOME/R36S-debug/map-test}
 shift 2>/dev/null || true
 mkdir -p "$OUT"
 SCEN=${*:-zoom spots}
-docker run --rm --platform linux/arm64 -e MAP_TEST_BPS -e MAP_TEST_RENDER_CAP -e VIBE_HHUI_MAP_NOMSAA -v "$REPO/handheld-ui:/w:ro" -v "$REPO/assets:/a:ro" -v "$OUT:/o" vibe-hh-map:trixie sh -c "
+docker run --rm --platform linux/arm64 -e MAP_TEST_BPS -e MAP_TEST_DEBUG -e MAP_TEST_RENDER_CAP -e VIBE_HHUI_MAP_NOMSAA -v "${MAP_TEST_SRC:-$REPO/handheld-ui/src}:/w/src:ro" -v "$REPO/handheld-ui/test:/w/test:ro" -v "$REPO/assets:/a:ro" -v "$OUT:/o" vibe-hh-map:trixie sh -c "
   set -e
   g++ -std=c++17 -O2 -ffp-contract=off -Wall -Wno-unused-parameter -I/w/src \$(pkg-config --cflags sdl2) -o /tmp/map_test /w/test/map_test.cpp \
       \$(pkg-config --libs sdl2 SDL2_ttf SDL2_image) -lEGL -lGLESv2 -lpthread
