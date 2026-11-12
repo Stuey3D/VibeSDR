@@ -143,6 +143,23 @@ inline std::vector<Bits> piwmRows(const Runs& r, double shortUs, double longUs, 
     return rows;
 }
 
+/** Manchester BIT rows of a burst at `chipUs` half-bits: both slices, both polarities, both pair phases, each row's
+ *  stretches restarted after every violation, each also inverted (so either convention is covered). */
+inline std::vector<Bits> manchesterRows(const Burst& b, double chipUs, size_t minBits) {
+    std::vector<Bits> out;
+    for (const Bits& chips : nrzRowsAny(b, chipUs, 8, 2 * minBits))
+        for (int ph = 0; ph < 2; ++ph) {
+            size_t i = size_t(ph);
+            while (i + 1 < chips.size()) {
+                size_t end = 0;
+                Bits d = manchesterAt(chips, i, 100000, true, &end);
+                if (d.size() >= minBits) { out.push_back(d); out.push_back(invert(d)); }
+                i = end + 1;
+            }
+        }
+    return out;
+}
+
 /** Every position of `pattern` (`n` ≤ 32 bits, MSB first) in `b`. */
 inline std::vector<size_t> findAll(const Bits& b, uint32_t pattern, int n) {
     std::vector<size_t> at;

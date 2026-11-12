@@ -378,6 +378,111 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace pwmfam
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  CAR KEY FOBS with a known frame — facts from the notes in rtl_433's *_car_remote.c files (E. Halsall et al.), with the
+//  FCC IDs they name: Continental KR5V2X (Honda OEM, 313.8 MHz FSK Manchester 100 µs; …f0f06 then ID 32 · 8 · button 4 ·
+//  4 · sequence 24 · rolling code 32 · XOR of all 14 bytes = 0), MIC 6SC2 (315 OOK Manchester 250 µs; 55 54 then LSB-first
+//  rolling code 32 · button 4 · 4 · sequence 16 · XOR over bytes 2–10 = 0), GM ABO1502T (315 OOK PPM 300 / 500 µs; the
+//  last 113 bits: FF · byte · a button byte whose nibbles sum to 0 mod 16 · ID 32 · sequence 24 · rolling code 24 · the
+//  bytes 1–13 sum to 0 mod 256), Chrysler 56008761-class (315 OOK PWM TE 350 µs, fixed code; inverted, bytes reflected:
+//  ID 32 · button 4 · flags · byte sum). ★ PRIVACY: "Key fob #n · Continental · button lock" — never the ID, never the
+//  sequence, never the rolling code.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace carfob {
+
+inline Reading fob(const char* make, uint64_t fam, uint64_t id, int code, const char* word) {
+    Reading r = remoteReading("keyfob", make, "Key fob", fam, id);
+    r.button = word;
+    r.fact("button_code", (long long)code);
+    return r;
+}
+
+inline bool continental(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& d : kit::manchesterRows(b, 100, 120)) {
+        for (size_t s : kit::findAll(d, 0xF0F06, 20)) {
+            if (s + 20 + 112 > d.size()) break;
+            const auto by = bytesAt(d, s + 20, 14);
+            if (kit::xorBytes(by.data(), 14) != 0) continue;
+            const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+            const int bt = by[5] >> 4;
+            const uint32_t seq = uint32_t(by[6]) << 16 | uint32_t(by[7]) << 8 | by[8];
+            if (id == 0 || bt == 0 || seq == 0 || seq == 0xFFFFFF || id == 0xFFFFFFFF) continue;
+            const char* w = bt == 1 ? "lock" : bt == 3 ? "unlock" : bt == 9 ? "trunk (long)" : bt == 0xA ? "trunk / panic" : bt == 0xB ? "panic (long)" : nullptr;
+            if (!w) continue;
+            out.push_back(fob("Continental", 40, id, bt, w));
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool sixsc2(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& d : kit::manchesterRows(b, 250, 80)) {
+        for (size_t s : kit::findAll(d, 0x5554, 16)) {
+            if (s + 88 > d.size()) break;
+            const auto by = bytesAt(d, s, 11);
+            if (kit::xorBytes(by.data() + 2, 9) != 0) continue;
+            const int bt = kit::rev8(by[6]) & 0xF;
+            const char* w = bt == 1 ? "unlock" : bt == 2 ? "lock" : bt == 3 ? "trunk" : bt == 4 ? "panic" : nullptr;
+            if (!w) continue;
+            const uint32_t enc = uint32_t(by[2]) << 24 | uint32_t(by[3]) << 16 | uint32_t(by[4]) << 8 | by[5];
+            if (enc == 0 || enc == 0xFFFFFFFF) continue;
+            Reading r = fob("MIC 6SC2", 41, enc, bt, w);   // ★ no fixed ID on the air: the rolling word, hashed, keys the row
+            r.confirm = true;                               //   (a new hash each press) — so only a repeat confirms it
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool gm(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& w : kit::ppmRows(b.ook, 300, 500, 2000, 100, 700, 0.3)) {
+        if (w.size() < 113) continue;
+        const auto by = bytesAt(w, w.size() - 113, 14);
+        if (by[0] != 0xFF) continue;
+        const int bs = (by[2] >> 4) + (by[2] & 0xF);
+        if (bs == 0 || (bs & 0xF) != 0) continue;
+        const unsigned sum = kit::sumBytes(by.data() + 1, 13);
+        if (sum == 0 || (sum & 0xFF) != 0) continue;
+        const int bt = by[2] & 7;
+        const char* wd = bt == 1 ? "unlock" : bt == 2 ? "lock" : bt == 3 ? "trunk" : bt == 4 ? "panic" : "?";
+        const uint64_t id = uint64_t(by[1]) << 32 | uint64_t(by[3]) << 24 | uint64_t(by[4]) << 16 | uint64_t(by[5]) << 8 | by[6];
+        out.push_back(fob("GM", 42, id, bt, wd));
+        return true;
+    }
+    return false;
+}
+
+inline bool chrysler(const Burst& b, std::vector<Reading>& out) {
+    // ★ a press sends two packets, 49 and 48 bits: a row must be EXACTLY one of them (an 8-bit sum over any long row let
+    //   KeeLoq and La Crosse frames through), and a lone packet is shown only once heard twice alike
+    std::vector<std::vector<uint8_t>> good;
+    for (const Bits& w0 : slicePwm(b.ook, 350, 700, 4200, true, 0.35)) {
+        if (w0.size() != 48 && w0.size() != 49) continue;
+        const Bits w = invert(w0);
+        auto by = bytesAt(w, 0, 6);   // the packet's first 48 bits (the 49-bit packet's last bit is a stop)
+        for (auto& x : by) x = kit::rev8(x);
+        const unsigned sum = kit::sumBytes(by.data(), 5);
+        if ((sum & 0xFF) != by[5] || sum == 0 || sum == 0xFF * 5) continue;
+        good.push_back(by);
+    }
+    if (good.empty()) return false;
+    const auto& by = good[0];
+    const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+    const int bt = by[4] >> 4;
+    Reading r = fob("Chrysler", 43, id, bt, (std::to_string(bt) + ((by[4] & 4) ? " (several)" : "")).c_str());
+    r.confirm = std::count(good.begin(), good.end(), by) < 2;
+    out.push_back(r);
+    return true;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    return continental(b, out) || sixsc2(b, out) || gm(b, out) || chrysler(b, out);
+}
+
+} // namespace carfob
+
 /** The remote families, strongest checks first. */
 inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (lightwave::decode(b, out)) return true;
@@ -386,6 +491,7 @@ inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (nexa::decode(b, out)) return true;
     if (x10::decode(b, out)) return true;
     if (somfy::decode(b, out)) return true;
+    if (carfob::decode(b, out)) return true;
     if (pwmfam::decode(b, out)) return true;
     return false;
 }
