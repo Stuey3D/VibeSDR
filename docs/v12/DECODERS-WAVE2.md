@@ -42,7 +42,9 @@ servers.
 
 "if you need UberSDR or any server to test on real signals use mine": UberSDR (RX888, 192.168.86.11:8080,
 `tools/ubersdr-rec`); VibeServers Pi 500 192.168.86.88, Lenovo i5 192.168.86.13, Pi 2 192.168.86.129 (ports
-48000/48001). Rules: check the listener count first and take a dial only at 0 listeners; restore frequency, mode, gain
+48000/48001). ★ From the release after 2026-11-12 a radio's own port (48001+) behind a front door answers 127.0.0.1
+only — from another machine use the door, `ws://<host>:48000/r/<id>` (every `scripts/agc-*.mjs` / `probe-*.mjs` that
+takes a base URL accepts it). Rules: check the listener count first and take a dial only at 0 listeners; restore frequency, mode, gain
 and settings afterwards (Pi 2: `agcLock` back to 1 if borrowed); recording and tuning ONLY — no install, update,
 restart or reconfiguration; no builds on the Lenovo; never adb keys into the Sony/XCover UIs; recordings stay local and
 out of git (paging captures: decode-test only, never commit message content). Every session is logged below.

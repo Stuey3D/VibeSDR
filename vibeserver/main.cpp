@@ -3875,7 +3875,9 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < g_serverConfig.radios.size(); i++) {
             const auto& r = g_serverConfig.radios[i];
             if (!r.enabled || !r.configured) continue;
-            std::printf("  %-22s port %d\n", (r.label.empty() ? r.driver : r.label).c_str(),
+            // ★ "this machine only": each radio binds 127.0.0.1 behind the door (setBindLocalOnly) — and says so
+            //   in its own log if it cannot, which is the one case this line would be wrong.
+            std::printf("  %-22s port %d (this machine only)\n", (r.label.empty() ? r.driver : r.label).c_str(),
                         vsconfig::portForRadio(g_serverConfig, i));
         }
         frontDoorOnly = true;
@@ -4330,7 +4332,7 @@ int main(int argc, char** argv) {
         const std::string dir = handoffDir();
         if (dir.empty()) {
             std::fprintf(stderr, "VibeServer: nowhere to put the hand-off sockets — radios will "
-                                 "only be reachable on their own ports\n");
+                                 "only be reachable on their own ports, which stay open on the network\n");
         } else {
             /* ★★ THE HANDHELD'S RADIO: the supervisor names the socket (it may have no serial to key on) and hands over
              *  BARE paths — there is one radio, so no /r/<id>/ prefix (handheld.cpp startChildLocked). */

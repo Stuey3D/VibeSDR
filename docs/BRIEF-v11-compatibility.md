@@ -161,6 +161,9 @@ Jr's own `proto`.
   with its reason.
 - **Three paths:** direct radio port, the front door `/r/<id>`, and a real quick tunnel (the slash
   normalisation only happens in transit).
+  ★ Since 2026-11-12 a radio's own port behind the front door answers **127.0.0.1 only**, so the
+  "direct radio port" path can only be run on the server machine itself; from anywhere else, test
+  `/r/<id>` through the door.
 - **Enforced:** `publish-apt.sh` refuses to publish unless the gate passes.
 - **Manual check:** one physical device stays on the current App Store build of the app and Jr,
   updated only through the App Store, and is tested against each server release.
