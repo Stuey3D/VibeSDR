@@ -892,6 +892,12 @@ static Runs wh52Tx(uint32_t id, double t, int moist) {
     std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x2D, 0xD4}; f.insert(f.end(), by.begin(), by.end()); f.push_back(0x55);
     return nrzFsk(bytesToBits(f), 58.5);
 }
+/** Bresser 3CH V0: OOK PPM 475 µs marks, 990 / 1980 µs, 52 bits × 8 ~4 ms apart. */
+static Runs bresser3chV0Tx(int id, int ch, double t, int h) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF, fl = (ch & 1) << 3 | (ch >> 1) << 2;
+    Bits w = bytesToBits({uint8_t(id), uint8_t(fl << 4 | raw >> 8), uint8_t(raw), uint8_t(0xF0 | h >> 4), uint8_t((h & 0xF) << 4), 0, 0}); w.resize(52);
+    return ppmRows(w, 475, 990, 1980, 3975, 8);
+}
 
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
@@ -1345,6 +1351,7 @@ int main(int argc, char** argv) {
     cases.push_back({"Missil ML0757", {missilTx(0x2C, 23.1)}, "ML0757", 23.1});
     cases.push_back({"EFTH-800 (stretched)", {efth800StretchedTx(0x6F4, -18.2, 35)}, "EFTH-800", -18.2});
     cases.push_back({"Rubicson 48942 pool", {rubicsonPoolTx(1, 0x1AE, 26.6)}, "48942", 26.6});
+    cases.push_back({"Bresser 3CH (V0)", {bresser3chV0Tx(0x5A, 2, -7.3, 88)}, "3CH (V0)", -7.3});
     { Sig s{wn38Tx(0x002885, 24.5)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"Ecowitt WN38", s, "WN38", 24.5}); }
     { Sig s{wh52Tx(0x0058AC, 20.4, 44)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"Ecowitt WH52", s, "WH52", 20.4}); }
     {   // ★ weather pass 2: the checks restated from the notes, held to the notes' own worked frames

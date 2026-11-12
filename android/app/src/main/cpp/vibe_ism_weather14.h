@@ -20,7 +20,8 @@ namespace wx14 {
 inline uint8_t aokDigest(uint8_t x) { uint8_t s = 0; for (int i = 0; i < 8; ++i) if ((x >> i) & 1) s ^= uint8_t(0x31 << i); return s; }
 inline bool aokPcm(const Burst& b, std::vector<Reading>& out) {
     if (b.fsk.empty() && b.ook.size() < 40) return false;
-    for (const Bits& row : wx::fskRows(b, 100, 40, 150)) {
+    // ★ up to 80 bits of one tone: the zero bytes 8–11 of the model without light run longer than the usual row limit
+    for (const Bits& row : wx::fskRows(b, 100, 80, 150)) {
         for (size_t s : wx::findAll(row, 0xAA98F3A5u, 32)) {
             const size_t at = s + 32;
             if (at + 13 * 8 > row.size() + 8) break;
@@ -70,7 +71,7 @@ inline bool holmanPwm(const Burst& b, std::vector<Reading>& out) {
         if (rs->size() < 150) continue;
         for (int sense = 0; sense < 2; ++sense) {
             const auto rows = wx::pwm(*rs, 488, 976, 2000, sense);
-            const int i = wx::repeatedRow(rows, 2, 96, 96);
+            const int i = wx::repeatedRow(rows, 2, 95, 96);   // (the trailing 00 / 80 byte may lose its last bit)
             if (i < 0) continue;
             const auto m = bytesAt(rows[size_t(i)], 0, 12);
             if (m[0] != 0xAA || m[1] != 0xA5 || m[2] != 0x98 || holmanCheck(m.data(), 10) != m[10]) continue;

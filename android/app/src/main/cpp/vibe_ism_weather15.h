@@ -3,7 +3,7 @@
 // Missil ML0757.
 // Sources: the makers' pages / FCC IDs named per family and the protocol notes at the head of rtl_433's infactory.c,
 // esun_en2053.c (issue #1478), en2058.c, rubicson_pool_48942.c, tfa_marbella.c (TFA's 30.3238.06 manual), emax.c (issues #2000 … #3463),
-// eurochron.c, baldr_therm.c, missil_ml0757.c — FACTS only (layout, timing, check, scaling); our own code on our own
+// eurochron.c, baldr_therm.c, bresser_3ch.c (V0), missil_ml0757.c — FACTS only (layout, timing, check, scaling); our own code on our own
 // slicers (vibe_ism_wxkit.h). Scored on the rtl_433_tests recordings (scripts/ism-corpus.mjs).
 #pragma once
 #include "vibe_ism_wxkit.h"
@@ -262,6 +262,25 @@ inline bool rubicsonPool(const Burst& b, std::vector<Reading>& out) {
     return false;
 }
 
+//  BRESSER 3CH, the older V0 format (Flipper Zero's protocol notes via rtl_433 bresser_3ch.c) — OOK PPM, ~475 µs marks,
+//  990 µs = 0, 1980 µs = 1, 8 × 52 bits ~4 ms apart: ID 8 · flags (channel bit 0, channel bit 1, button, battery low) ·
+//  temperature 12 (signed, / 10 °C) · F · humidity 8 · 16 zero bits. No check: 3 alike + the F and zeros + confirm.
+inline bool bresser3chV0(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = wx::ppm(b.ook, 990, 1980, 3000, 0, 900, 150, 120);
+    const int i = wx::repeatedRow(rows, 3, 52, 52);
+    if (i < 0) return false;
+    const auto m = bytesAt(rows[size_t(i)], 0, 7);
+    if ((m[3] >> 4) != 0xF || (m[4] & 0xF) || m[5] || (m[6] & 0xF0)) return false;
+    const int fl = m[1] >> 4, ch = ((fl >> 3) & 1) | ((fl >> 2) & 1) << 1, h = (m[3] & 0xF) << 4 | m[4] >> 4;
+    if (m[0] == 0 || m[0] == 0xFF || ch == 0 || h > 100) return false;
+    const double t = s12((m[1] & 0xF) << 8 | m[2]) / 10.0;
+    if (!wx::tempOk(t)) return false;
+    Reading r = wx::wxReading("Bresser", "Thermo-/Hygro 3CH (V0)", wx::hex(m[0], 2));
+    r.channel = ch; r.battOk = (fl & 1) ? 0 : 1; r.tempC = t; r.hum = h; r.confirm = true;
+    out.push_back(r);
+    return true;
+}
+
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (en2058(b, out)) return true;
     if (rubicsonPool(b, out)) return true;
@@ -276,6 +295,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 }
 inline bool decodeWeak(const Burst& b, std::vector<Reading>& out) {
     if (baldr(b, out)) return true;
+    if (bresser3chV0(b, out)) return true;
     if (missil(b, out)) return true;
     if (eurochron(b, out)) return true;
     return false;
