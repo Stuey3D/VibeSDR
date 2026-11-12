@@ -289,6 +289,23 @@ static Runs elantraTx(uint32_t id, int kpa, int tC) {
     return chipsToRuns(c + "10", 52);
 }
 
+// Schrader EG53MA4: OOK 123 µs, Manchester (1,0) = 1: 40 zero bits, then flags (4), ID (3), pressure ×2.5 kPa, °F, sum.
+static Runs eg53Tx(uint32_t id24, int pRaw, int tF) {
+    std::vector<uint8_t> by = { 0x4C, 0x90, 0x00, 0x70, uint8_t(id24 >> 16), uint8_t(id24 >> 8), uint8_t(id24), uint8_t(pRaw), uint8_t(tF) };
+    unsigned sm = 0; for (uint8_t v : by) sm += v; by.push_back(uint8_t(sm));
+    std::string c; mcChips(c, Bits(40, 0), true); mcChips(c, bytesToBits(by), true);
+    return chipsToRuns(c + "0", 123);
+}
+// Schrader SMD3MA4 / 3039: OOK PCM 120 µs: 1111 0101… 11, then 38 Manchester bits (1,0) = 1, the 19 pairs summing to 1 mod 4.
+static Runs smd3Tx(uint32_t id24, int flags3, int pRaw) {
+    Bits d = {1}; for (const Bits& x : {bitsOf(uint64_t(flags3), 3), bitsOf(id24, 24), bitsOf(uint64_t(pRaw), 8)}) d.insert(d.end(), x.begin(), x.end());
+    unsigned sum = 0; for (size_t i = 0; i < 36; i += 2) sum += unsigned(d[i] << 1 | d[i + 1]);
+    const unsigned ck = (1 + 4 - (sum & 3)) & 3; d.push_back(uint8_t(ck >> 1)); d.push_back(uint8_t(ck & 1));
+    std::string c = "1111"; for (int i = 0; i < 7; ++i) c += "0101"; c += "11";
+    mcChips(c, d, true);
+    return chipsToRuns(c + "0", 120);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -451,6 +468,8 @@ int main(int argc, char** argv) {
             {"Hyundai VDO", hyundaiVdoTx(0x9A1B2C3D, 170, 22), true, 52, "Hyundai / Kia", 170 / 5.0 * 6.894757, 22, false},
             {"EGQ Q85", egqQ85Tx(0x0C0FFEE1, 80, 27), true, 52, "Q85", 240, 27, false},
             {"Elantra 2012", elantraTx(0x5A5A1234, 230, 26), true, 52, "Elantra", 230, 26, false},
+            {"Schrader EG53MA4", eg53Tx(0x2EAAF9, 88, 77), false, 123, "EG53MA4", 220, 25, true},
+            {"Schrader SMD3MA4", smd3Tx(0x3F0650, 7, 164), false, 120, "SMD3MA4", NAN, NAN, true},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},
@@ -469,7 +488,8 @@ int main(int argc, char** argv) {
             CHECK(r->confirm == t.weak, "TPMS %s: confirm %d, want %d (the check's strength)", t.name, int(r->confirm), int(t.weak));
             if (t.kpa == t.kpa) CHECK(approx(r->kpa, t.kpa, 0.01), "TPMS %s: %.2f kPa, want %.2f", t.name, r->kpa, t.kpa);
             else CHECK(r->kpa != r->kpa, "TPMS %s: a pressure where the scale is not known", t.name);
-            CHECK(approx(r->tempC, t.tC, 1e-9), "TPMS %s: %.1f °C, want %.1f", t.name, r->tempC, t.tC);
+            if (t.tC == t.tC) CHECK(approx(r->tempC, t.tC, 1e-9), "TPMS %s: %.1f °C, want %.1f", t.name, r->tempC, t.tC);
+            else CHECK(r->tempC != r->tempC, "TPMS %s: a temperature the frame does not carry", t.name);
             for (const auto& o : got) CHECK(o.kind == "tpms" && o.model == r->model, "TPMS %s: also read as %s %s", t.name, o.kind.c_str(), o.model.c_str());
             printf("   %-18s → %s%s\n", t.name, readable(*r, 1).c_str(), r->confirm ? "  (confirm twice)" : "");
         }

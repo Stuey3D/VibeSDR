@@ -292,6 +292,74 @@ inline bool toyota107J(Chips& ch, std::vector<Reading>& out) {
     return false;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SCHRADER EG53MA4 — Opel / Vauxhall / Saab / Chevrolet OE (Opel 13348393, GM 13540600); the corpus' "PA66GF35"
+//  sensor sends it too. Facts: rtl_433 schraeder.c notes (Leonardo Hamada). OOK Manchester, ~123 µs half-bit, 120 bits:
+//  a 40-bit run-in, then 10 bytes — flags/status (4), ID (24), pressure (× 2.5 kPa), temperature (°F), and the sum of
+//  the nine before it.
+//  ★ OUR FRAMING: the run-in is Manchester zeros in the data's own phase, and the frame's first bits may be zeros too,
+//  so the frame is anchored at its END — the last 80 bits of an unbroken Manchester run that starts with ≥ 32 zeros.
+//  WEAK: an 8-bit sum — confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool schraderEG53MA4(Chips& ch, std::vector<Reading>& out) {
+    static const char* kRunIn = "0101 0101 0101 0101 0101 0101 0101 0101";   // 16 Manchester zeros, (1,0) = 1
+    for (const Bits& c : ch.rows(false, 123)) {
+        const size_t p0 = findChips(c, kRunIn);
+        if (p0 == size_t(-1)) continue;
+        // the longest clean run of pairs from the run-in on
+        Bits d;
+        for (size_t i = p0; i + 1 < c.size() && c[i] != c[i + 1]; i += 2) d.push_back(c[i]);   // (1,0) = 1
+        if (d.size() < 80 + 32) continue;
+        const size_t s = d.size() - 80;
+        bool zeros = true; for (size_t i = s - 32; i < s; ++i) zeros = zeros && d[i] == 0;
+        if (!zeros) continue;
+        const auto by = pack(d, s);
+        if (sum8(by.data(), 9) != by[9]) continue;
+        if (!by[1] && !by[2] && !by[4] && !by[5] && !by[7] && !by[8]) continue;
+        const uint32_t id = uint32_t(by[4]) << 16 | uint32_t(by[5]) << 8 | by[6];
+        if (id == 0 || id == 0xFFFFFF) continue;
+        Reading r = tyre("Schrader", "Schrader EG53MA4", 14, id, true);
+        r.kpa = by[7] * 2.5;
+        r.tempC = (by[8] - 32) / 1.8;
+        if (!plausible(r.kpa, r.tempC)) continue;
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SCHRADER SMD3MA4 (Subaru) and SCHRADER 3039 / MRXNIS315G3 (Nissan, Infiniti, Renault Koleos; Redi-Sensor
+//  SE10001HP) — 315 MHz. Facts: rtl_433 schraeder.c notes (RonNiles; MotorvateDIY; github.com/JoeSc/Subaru-TPMS-
+//  Spoofing; issue #1734). OOK, 120 µs chips: a 36-chip run-in 0xF5555555E, then 38 Manchester bits with (1,0) = 1 —
+//  a fixed 1, flags (3: 0 learn, 3 pressure alarm, 5 wake, 7 driving), ID (24), pressure (8), a 2-bit check: all 19 bit
+//  pairs summed mod 4 = 1. No temperature is sent.
+//  ★ The two sensors send the SAME frame with different pressure scales (Subaru PSI × 5, Nissan PSI × 4) and nothing
+//  in the bits tells them apart, so no pressure is shown — a number that is wrong for one of them half the time is
+//  worse than none. WEAK: a 2-bit check — confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool schraderSMD3MA4(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "0101 0101 0101 1110";
+    for (const Bits& c : ch.rows(false, 120)) {
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            Bits d;
+            if (!mcRead(c, p + 14, 38, true, d) || d[0] != 1) continue;
+            unsigned sum = 0; for (size_t i = 0; i < 38; i += 2) sum += unsigned(d[i] << 1 | d[i + 1]);
+            if ((sum & 3) != 1) continue;
+            const uint32_t id = bitsAt(d, 4, 24);
+            if (id == 0 || id == 0xFFFFFF) continue;
+            const unsigned flags = bitsAt(d, 1, 3);
+            Reading r = tyre("Schrader", "Schrader SMD3MA4 / 3039", 15, id, true);
+            r.note = "pressure scale depends on the car (Subaru or Nissan)";
+            if (flags == 0) r.extra = "learn";
+            else if (flags == 3) r.extra = "pressure alarm";
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Every frame in a burst's chip rows (FSK or OOK at `nominal` µs) that follows `sync` and reads `nBits` clean
  *  Manchester bits ((1,0) = 1 when hiLoIsOne): `f(bytes)` decides; true stops the search. */
 template <class F> bool eachMc(Chips& ch, bool fsk, double nominal, const char* sync, int nBits, bool hiLoIsOne, F&& f) {
@@ -483,6 +551,8 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (egqQ85(ch, out)) return true;
     if (elantra2012(ch, out)) return true;
     // the weak checks last: a strong family's frame must never be taken by a weak one's 8-bit sum
+    if (schraderEG53MA4(ch, out)) return true;
+    if (schraderSMD3MA4(ch, out)) return true;
     // ★ the 0435R before the Abarth: both are nine bytes with an XOR of zero after a long run-in, and nothing else in the
     //   Abarth frame is fixed — the 0435R's flag nibble and tick rule make it the stricter test (test-ism caught it)
     if (renault0435R(ch, out)) return true;

@@ -64,7 +64,14 @@ int main(int argc, char** argv) {
                 std::string o = "{\"file\":" + jstr(path) + ",\"kind\":" + jstr(r.kind) + ",\"make\":" + jstr(r.make) +
                                 ",\"model\":" + jstr(r.model) + ",\"id\":" + jstr(r.pubId);
                 if (r.channel >= 0) o += ",\"channel\":" + std::to_string(r.channel);
-                if (r.secret) o += ",\"secret\":true";
+                if (r.secret) {
+                    o += ",\"secret\":true";
+                    /* ★ BENCH ONLY: the secret ID's low 40 bits, so the scorer can tell "the same sensor in a second
+                     *  format" from a misread (ism-corpus.mjs, sameSensor). Public test recordings only — the service
+                     *  never puts a secret ID in any output (vibe_ism_service.h, Tracker::accept). */
+                    char sid[24]; std::snprintf(sid, sizeof sid, "%llx", (unsigned long long)(r.secretId & 0xFFFFFFFFFFull));
+                    o += ",\"sid\":\"" + std::string(sid) + "\"";
+                }
                 num(o, "temperature_C", r.tempC); num(o, "humidity", r.hum); num(o, "pressure_kPa", r.kpa);
                 num(o, "wind_avg_km_h", r.windKmh); num(o, "wind_max_km_h", r.gustKmh); num(o, "wind_dir_deg", r.windDir);
                 num(o, "rain_mm", r.rainMm); num(o, "uv", r.uv); num(o, "power_W", r.watts); num(o, "pressure_hPa", r.baroHpa);

@@ -55,8 +55,33 @@ function expected(f) {
   return readFileSync(j, 'utf8').split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((x) => x && x.model);
 }
 const near = (a, b, tol) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= tol;
+/* ★ THE SAME SENSOR IN A SECOND FORMAT (2026-11-11, the TPMS makes). Multi-make aftermarket tyre sensors (Redi-Sensor
+ *  and the like) answer a learn tool in several OEM formats at once, so a recording keyed with ONE format holds real
+ *  frames of others. Such a reading is not compared — it is "decoded" — only when ALL of these hold: it is a TPMS
+ *  reading of a family whose rtl_433 model names are listed here, none of those names is in the answer key, and its
+ *  ID (bench builds of ism_replay print it as "sid") ends with an ID the key gives for that recording (≥ 6 hex
+ *  digits) — proof it is the same physical sensor, not a misread. A reading of a family the key DOES list is always
+ *  compared, so a wrong scale in our own decoder still counts as WRONG. */
+const RTL_NAMES = {
+  'Schrader': ['Schrader'], 'Schrader EG53MA4': ['Schrader-EG53MA4'], 'Schrader SMD3MA4 / 3039': ['Schrader-SMD3MA4', 'Schrader-NIS315G3'], 'Porsche 987': ['Porsche'],
+  'Toyota PMV-C210': ['Toyota'], 'Toyota PMV-107J': ['PMV-107J'], 'Renault': ['Renault'], 'Renault 0435R': ['Renault-0435R'],
+  'Hyundai / Kia (VDO)': ['Hyundai-VDO'], 'EGQ Q85': ['Shenzhen-EGQQ85'], 'Abarth 124 / MX-5 (VDO TG1C)': ['Abarth-124Spider'],
+  'PSA / Jeep (VDO)': ['Citroen', 'Jeep'], 'Ford (VDO)': ['Ford'], 'Truck solar TPMS': ['Truck'],
+  'Elantra 2012 / Civic (TRW)': ['Elantra2012'],
+};
+function sameSensorOtherFormat(o, exp) {
+  const names = RTL_NAMES[o.model];
+  if (o.kind !== 'tpms' || !names || !o.sid) return false;
+  if (exp.some((e) => names.includes(e.model))) return false;
+  const sid = String(o.sid).toLowerCase().replace(/^0+/, '');
+  return exp.some((e) => {
+    const id = String(e.id ?? '').toLowerCase().replace(/^0+/, '');
+    return id.length >= 6 && sid.length >= 6 && (sid.endsWith(id) || id.endsWith(sid));
+  });
+}
 function compare(ours, exp) {
   let comparable = false, agree = false;
+  ours = ours.filter((o) => !sameSensorOtherFormat(o, exp));
   for (const o of ours) for (const e of exp) {
     const eT = e.temperature_C ?? (typeof e.temperature_F === 'number' ? (e.temperature_F - 32) / 1.8 : undefined);
     const eK = e.pressure_kPa ?? (typeof e.pressure_PSI === 'number' ? e.pressure_PSI * 6.894757 : undefined)
