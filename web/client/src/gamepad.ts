@@ -186,7 +186,9 @@ function scope(): HTMLElement {
 }
 
 function candidates(root: HTMLElement): HTMLElement[] {
-  const all = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(visible);
+  // ★ [data-gpskip]: pointer-only chrome (the health pill's tuck › and its edge tab, 2026-11-12) is never a stop — the
+  //   corner dock caught every route and the highlight could not get back to MENU (test-web-keyboard)
+  const all = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((e) => visible(e) && !e.closest('[data-gpskip]'));
   if (root === grabbed) return all;
   // Outside a box, the box is ONE stop and what is inside it is not on the route.
   const boxes = [...root.querySelectorAll<HTMLElement>(NAVBOX)].filter(visible);

@@ -117,6 +117,7 @@ export function healthTuckBody(el: HTMLElement): HTMLElement {
   let body = el.querySelector<HTMLElement>('.hBody');
   if (body) return body;
   dock = el;
+  el.dataset.gpskip = '';   // ★ pointer-only: off the pad / keyboard route (gamepad.ts candidates)
   el.innerHTML =
       `<div class="hCard"><button type="button" class="hTuck" aria-label="Hide server health" title="Tuck away">›</button>`
     + `<div class="hBody" role="group"></div></div>`
