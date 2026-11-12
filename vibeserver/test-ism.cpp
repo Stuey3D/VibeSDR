@@ -199,6 +199,166 @@ static Runs tpmsATx(uint32_t id, int p, int tC, double half = 52) {
     return tx.r;
 }
 
+// ── WEATHER PASS (2026-11-11) — encoders written from the frame facts in vibe_ism_weather*.h, through the real front end ──
+static Bits bitsOf(uint64_t v, int n) { Bits o; for (int i = n - 1; i >= 0; --i) o.push_back((v >> i) & 1); return o; }
+static Bits cat(Bits a, const Bits& b) { a.insert(a.end(), b.begin(), b.end()); return a; }
+/** PPM: every bit a `mark` then its space; each row ends with a mark and `rowGap`. */
+static Runs ppmRows(const Bits& w, double mark, double s0, double s1, double rowGap, int reps) {
+    Tx tx;
+    for (int r = 0; r < reps; ++r) { for (uint8_t x : w) { tx.mark(mark); tx.space(x ? s1 : s0); } tx.mark(mark); tx.space(rowGap); }
+    return tx.r;
+}
+/** PWM at a fixed period: mark `one` / `zero`, the rest of `period` space; `syncs` sync pulses (mark = space = `syncUs`)
+ *  before every row, or `rowGap` between rows when there are none. */
+static Runs pwmRows(const Bits& w, double one, double zero, double period, int reps, double syncUs, int syncs, double rowGap = 0) {
+    Tx tx;
+    for (int r = 0; r < reps; ++r) {
+        for (int k = 0; k < syncs; ++k) { tx.mark(syncUs); tx.space(syncUs); }
+        for (uint8_t x : w) { const double m = x ? one : zero; tx.mark(m); tx.space(period - m); }
+        if (rowGap > 0) tx.space(rowGap);
+    }
+    return tx.r;
+}
+/** Biphase ("DMC"): a level change at every bit start, and mid-bit for a 1. */
+static Runs dmcTx(const Bits& w, double half, int reps, double gap) {
+    Tx tx;
+    for (int r = 0; r < reps; ++r) {
+        bool lv = true;
+        for (uint8_t x : w) {
+            if (x) { if (lv) { tx.mark(half); tx.space(half); } else { tx.space(half); tx.mark(half); } }
+            else { if (lv) tx.mark(2 * half); else tx.space(2 * half); lv = !lv; }
+        }
+        tx.space(gap);
+    }
+    return tx.r;
+}
+static Runs repeatRuns(const Runs& one, int reps, double gap) { Tx tx; for (int r = 0; r < reps; ++r) { for (int d : one) tx.add(d); tx.space(gap); } return tx.r; }
+
+static Runs sl109hTx(int ch, double t, int h, int id) {
+    const int traw = int(std::lround(t * 10)) & 0xFFF, cc = ch == 3 ? 0 : ch;
+    Bits body = cat(cat(cat(cat(bitsOf(uint32_t(cc), 2), bitsOf(uint32_t((h / 10) << 4 | (h % 10)), 8)), bitsOf(uint32_t(traw), 12)), bitsOf(0, 4)), bitsOf(uint32_t(id), 8));
+    unsigned sum = cc; for (int k = 0; k < 8; ++k) sum += bitsAt(body, size_t(2 + 4 * k), 4);
+    return ppmRows(cat(bitsOf(sum & 0xF, 4), body), 500, 2000, 4000, 8900, 6);
+}
+static Runs fofskWh24(double t, int h) {
+    std::vector<uint8_t> by = {0x24, 0xBF, 0x0A, uint8_t(0x00 | ((int(std::lround(t * 10)) + 400) >> 8)), uint8_t((int(std::lround(t * 10)) + 400) & 0xFF),
+                               uint8_t(h), 0x08, 0x02, 0x00, 0x4A, 0x00, 0x01, 0x00, 0x00, 0x00};
+    by.push_back(crc8(by.data(), 15, 0x31, 0)); by.push_back(uint8_t(wx::addBytes(by.data(), 16)));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x2D, 0xD4}; f.insert(f.end(), by.begin(), by.end()); f.push_back(0);
+    return nrzFsk(bytesToBits(f), 58.5);
+}
+static Runs wh1050Tx(double t, int h) {
+    const int raw = int(std::lround(t * 10)) + 400;
+    std::vector<uint8_t> by = {0x5F, uint8_t(0x50 | (raw >> 8)), uint8_t(raw), uint8_t(h), 0x02, 0x04, 0x01, 0x23};
+    by.push_back(crc8(by.data(), 8, 0x31, 0));
+    Tx tx; pwmBits(tx, cat(Bits(8, 1), bytesToBits(by)), 500, 1500, 1000); return tx.r;
+}
+static Runs tx141thTx(int id, double t, int h) {
+    const int raw = int(std::lround(t * 10)) + 500;
+    std::vector<uint8_t> by = {uint8_t(id), uint8_t(0x00 | (raw >> 8)), uint8_t(raw), uint8_t(h)};
+    by.push_back(wx::lfsrDigest8Refl(by.data(), 4, 0x31, 0xF4));
+    return pwmRows(bytesToBits(by), 417, 208, 625, 12, 833, 4);
+}
+static Runs th609Tx(int id, double t, int h) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    std::vector<uint8_t> by = {uint8_t(id), uint8_t(0x20 | (raw >> 8)), uint8_t(raw), uint8_t(h)};
+    by.push_back(uint8_t(wx::addBytes(by.data(), 4)));
+    return ppmRows(bytesToBits(by), 500, 1000, 2000, 8900, 6);
+}
+static Runs s3318Tx(int id, int ch, double tF, int h) {
+    const int raw = int(std::lround(tF * 10)) + 900;
+    std::vector<uint8_t> by = {uint8_t(id), uint8_t(((ch - 1) << 4) | (raw & 0xF)), uint8_t((raw & 0xF0) | (raw >> 8)), uint8_t((h & 0xF) << 4 | h >> 4)};
+    const uint8_t flags = 0x0;
+    by.push_back(uint8_t(flags << 4 | (wx::crc4(by.data(), 4, 3, 0) ^ flags)));
+    return ppmRows(cat(bitsOf(0, 2), bytesToBits(by)), 500, 2000, 4000, 8900, 6);
+}
+static Runs xc0324Tx(int id, double t, int h) {
+    const int raw = int(std::lround(t * 10)) + 400;
+    std::vector<uint8_t> by = {0x5F, uint8_t(id), wx::rev8(uint8_t(raw & 0xFF)), uint8_t(wx::rev8(uint8_t(raw >> 8))), wx::rev8(uint8_t(h))};
+    by.push_back(uint8_t(wx::xorBytes(by.data(), 5)));
+    Bits w; for (int k = 0; k < 3; ++k) w = cat(cat(w, bytesToBits(by)), bitsOf(0, 2));
+    return ppmRows(w, 400, 520, 1000, 4000, 1);
+}
+static Runs hidekiTx(int ch, double t, int h) {
+    const int tt = int(std::lround(std::fabs(t) * 10));
+    uint8_t p[9] = {uint8_t(ch << 5 | 0x5), 0x0E, 0x1E, uint8_t(((tt / 10) % 10) << 4 | (tt % 10)), uint8_t((t >= 0 ? 0x80 : 0) | 0x40 | (tt / 100)),
+                    uint8_t((h / 10) << 4 | (h % 10)), 0x00, 0, 0};
+    uint8_t q[9]; for (int k = 0; k < 7; ++k) q[k] = wx::rev8(p[k]);
+    q[7] = uint8_t(wx::xorBytes(q, 7)); q[8] = crc8(q, 8, 0x07, 0);
+    Bits w = bitsOf(0x0D, 9);
+    for (uint8_t v : q) { w = cat(w, bitsOf(uint8_t(~v), 8)); w.push_back(uint8_t(!wx::parity8(v))); }
+    return dmcTx(w, 520, 3, 6000);
+}
+static Runs gtwt03Tx(int id, double t, int h) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    std::vector<uint8_t> by = {uint8_t(id), uint8_t(h), uint8_t(0x00 | (raw >> 8)), uint8_t(raw)};
+    uint8_t sum = 0; for (int k = 0; k < 4; ++k) { uint16_t key = 0x3100; for (int bit = 7; bit >= 0; --bit) { if ((by[size_t(k)] >> bit) & 1) sum ^= uint8_t(key); key >>= 1; } }
+    by.push_back(uint8_t(sum ^ 0x2D));
+    return pwmRows(cat(bytesToBits(by), bitsOf(0, 1)), 625, 256, 881, 10, 855, 4);
+}
+static Runs cotechTx(int id, double tF, int h) {
+    const int raw = int(std::lround(tF * 10)) + 400;
+    std::vector<uint8_t> by = {uint8_t(0x10 | (id >> 4)), uint8_t((id & 0xF) << 4), 12, 20, 90, 0x00, 0x2A, uint8_t(0x80 | (raw >> 8)), uint8_t(raw), uint8_t(h), 0x01, 0x00, 0x03};
+    uint8_t c = 0xC0; for (uint8_t v : by) { c ^= v; for (int k = 0; k < 8; ++k) c = uint8_t(c & 0x80 ? (c << 1) ^ 0x31 : c << 1); }
+    by.push_back(c);
+    Tx tx; manchesterTx(tx, cat(bitsOf(0x014, 12), bytesToBits(by)), 500, 0); tx.space(5400);
+    return repeatRuns(tx.r, 2, 5400);
+}
+static Runs ws7000Tx(double t, int h) {
+    const int tt = int(std::lround(std::fabs(t) * 10)), hh = h * 10;
+    std::vector<uint8_t> n = {1, uint8_t(3 | (t < 0 ? 8 : 0)), uint8_t(tt % 10), uint8_t((tt / 10) % 10), uint8_t(tt / 100), uint8_t(hh % 10), uint8_t((hh / 10) % 10), uint8_t(hh / 100)};
+    unsigned x = 0, sum = 0; for (uint8_t v : n) { x ^= v; sum += v; }
+    n.push_back(uint8_t(x)); sum += x; n.push_back(uint8_t((sum + 5) & 0xF));
+    Bits w = cat(Bits(10, 0), Bits(1, 1));
+    for (uint8_t v : n) { for (int k = 0; k < 4; ++k) w.push_back((v >> k) & 1); w.push_back(1); }
+    Tx tx; for (uint8_t b : w) { const double m = b ? 400 : 800; tx.mark(m); tx.space(1200 - m); } return tx.r;
+}
+static Runs f007Tx(int id, int ch, double tF, int h) {
+    const int raw = int(std::lround(tF * 10)) + 400;
+    std::vector<uint8_t> by = {0x45, uint8_t(id), uint8_t(((ch - 1) << 4) | (raw >> 8)), uint8_t(raw), uint8_t(h)};
+    by.push_back(uint8_t(wx::lfsrDigest8(by.data(), 5, 0x98, 0x3E) ^ 0x64));
+    Tx tx; manchesterTx(tx, cat(bitsOf(0x01, 8), bytesToBits(by)), 500, 0); tx.space(3000);
+    return repeatRuns(tx.r, 3, 3000);
+}
+static Runs tp11Tx(int id, double t) {
+    const int raw = int(std::lround(t * 10)) + 200;
+    std::vector<uint8_t> by = {uint8_t(id >> 4), uint8_t((id & 0xF) << 4 | (raw >> 8)), uint8_t(raw)};
+    by.push_back(wx::lfsrDigest8Refl(by.data(), 3, 0x51, 0x04));
+    return ppmRows(bytesToBits(by), 500, 500, 1500, 3000, 4);
+}
+static Runs rubicsonTx(int id, double t) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    uint8_t t5[5] = {uint8_t(id), uint8_t(0x80 | (raw >> 8)), uint8_t(raw), 0xF0, 0};
+    uint8_t c = 0x6C; for (int i = 0; i < 4; ++i) { c ^= t5[i]; for (int k = 0; k < 8; ++k) c = uint8_t(c & 0x80 ? (c << 1) ^ 0x31 : c << 1); }
+    // the CRC byte sits in nibbles 7–8; with it the 5-byte CRC is zero
+    Bits w = cat(cat(cat(cat(bitsOf(t5[0], 8), bitsOf(t5[1], 8)), bitsOf(t5[2], 8)), bitsOf(0xF, 4)), bitsOf(c, 8));
+    return ppmRows(w, 500, 1000, 2000, 4500, 8);
+}
+static Runs bresser6Tx(double t, int h) {
+    const int tt = int(std::lround(t * 10));
+    std::vector<uint8_t> m = {0, 0, 0x18, 0x80, 0x02, 0xC3, 0x18, 0xFF, 0xFF, 0xFF, 0x00, 0x00,
+                              uint8_t((tt / 100) << 4 | ((tt / 10) % 10)), uint8_t((tt % 10) << 4 | 0x02), uint8_t((h / 10) << 4 | (h % 10)), 0xFF, 0xF0, 0};
+    m[17] = uint8_t(0xFF - (wx::addBytes(m.data() + 2, 15) & 0xFF));
+    const uint16_t d = wx::lfsrDigest16(m.data() + 2, 15, 0x8810, 0x5412); m[0] = uint8_t(d >> 8); m[1] = uint8_t(d);
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0x2D, 0xD4}; f.insert(f.end(), m.begin(), m.end()); f.push_back(0);
+    return nrzFsk(bytesToBits(f), 124);
+}
+static Runs efth800Tx(int id, double t, int h) {
+    const int raw = int(std::lround(t * 10)) & 0x3FF;
+    std::vector<uint8_t> by = {uint8_t(0x10 | (id >> 8)), uint8_t(id), uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4), uint8_t((h / 10) << 4 | (h % 10))};
+    by.push_back(crc8(by.data(), 5, 0x31, 0));
+    return pwmRows(bytesToBits(by), 500, 250, 730, 2, 750, 4, 4900);
+}
+static Runs wt450Tx(int house, int ch, double t, int h) {
+    const int whole = int(std::floor(t)) + 50, frac = int(std::lround((t - std::floor(t)) * 16)) & 0xF;
+    std::vector<uint8_t> by = {uint8_t(0xC0 | house), uint8_t(((ch - 1) << 6) | (h >> 4)), uint8_t((h & 0xF) << 4 | (whole >> 4)), uint8_t((whole & 0xF) << 4 | frac), 0};
+    unsigned p = wx::xorBytes(by.data(), 4); p ^= p >> 4; p ^= p >> 2;
+    by[4] = uint8_t(p & 3) << 4;   // the parity pair in the last nibble's low bits: bits 34, 35
+    Bits w = bitsOf(0, 36); for (int k = 0; k < 32; ++k) w[size_t(k)] = (by[size_t(k / 8)] >> (7 - k % 8)) & 1;
+    w[34] = (p >> 1) & 1; w[35] = p & 1;
+    return dmcTx(w, 976, 3, 20000);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -307,6 +467,24 @@ int main(int argc, char** argv) {
     cases.push_back({"EV1527", {fixedCodeTx(0xA5C3E8)}, "Doorbell", NAN});
     cases.push_back({"TPMS B", {tpmsBTx(0x11223344, 88, 18)}, "type B", 18});
     { Sig s{tpmsATx(0x55667788, 0x80, 21)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"TPMS A", s, "type A", 21}); }
+    // ★ the weather pass (2026-11-11): one frame per new family, built from its frame facts
+    cases.push_back({"Oregon SL109H", {sl109hTx(2, 21.8, 65, 0xC5)}, "SL109H", 21.8});
+    { Sig s{fofskWh24(11.8, 78)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"Fine Offset WH24", s, "WH24", 11.8}); }
+    cases.push_back({"Fine Offset WH1050", {wh1050Tx(0.3, 72)}, "WH1050", 0.3});
+    cases.push_back({"La Crosse TX141TH-Bv2", {tx141thTx(0x5A, 22.4, 48)}, "TX141TH", 22.4});
+    cases.push_back({"AcuRite 609TXC", {th609Tx(0x5E, -9.5, 41)}, "609TXC", -9.5});
+    cases.push_back({"S3318P family", {s3318Tx(0x53, 1, 55.5, 74)}, "S3318P", (55.5 - 32) / 1.8});
+    cases.push_back({"Digitech XC-0324", {xc0324Tx(0xA2, 10.3, 41)}, "XC-0324", 10.3});
+    cases.push_back({"Hideki TS04", {hidekiTx(1, 18.6, 52)}, "TS04", 18.6});
+    cases.push_back({"Globaltronics GT-WT-03", {gtwt03Tx(0x17, 26.1, 48)}, "GT-WT-03", 26.1});
+    cases.push_back({"Cotech 36-7959", {cotechTx(0x68, 54.2, 63)}, "36-7959", (54.2 - 32) / 1.8});
+    cases.push_back({"WS 7000-22/25", {ws7000Tx(-3.4, 57)}, "WS 7000", -3.4});
+    cases.push_back({"Ambient F007TH", {f007Tx(0x2B, 2, 71.6, 39)}, "F007TH", (71.6 - 32) / 1.8});
+    cases.push_back({"ThermoPro TP11", {tp11Tx(0xDB4, 21.4)}, "TP11", 21.4});
+    cases.push_back({"Rubicson", {rubicsonTx(0x8C, -2.7)}, "temperature", -2.7});
+    { Sig s{bresser6Tx(3.8, 96)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"Bresser 6-in-1", s, "6-in-1", 3.8}); }
+    cases.push_back({"Eurochron EFTH-800", {efth800Tx(0xE5A, 19.7, 44)}, "EFTH-800", 19.7});
+    cases.push_back({"WT450", {wt450Tx(3, 2, 20.25, 51)}, "WT450", 20.25});
     printf(" end to end at 2.4 MS/s, +120 kHz, 20 dB-ish SNR\n");
     for (auto& c : cases) {
         c.s.offHz = 120e3;

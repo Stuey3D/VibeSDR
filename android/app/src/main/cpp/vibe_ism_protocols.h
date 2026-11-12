@@ -4,6 +4,9 @@
 //     datasheet, a paper, a protocol write-up), cited above the decoder and in docs/v12/ISM-DECODER.md §Protocols.
 //     rtl_433 (GPL-2) and other GPL decoders were NOT read. A protocol whose only description is GPL source code is
 //     not here; the doc lists it as "not done: no non-GPL description".
+//     ★ From the weather pass (2026-11-11, Stuart's agreement) rtl_433's device files may be READ for protocol FACTS
+//     (layout, timing, check, scaling) — never copied. Additions made that way say so where they are (docs/v12/
+//     ISM-DECODER.md §Clean room).
 // ★★★ PRIVACY (Stuart, 2026-10-25). TPMS, key fobs and fixed-code remotes NEVER carry their identity out of here: the
 //     decoder puts it in Reading::secretId, the Tracker (vibe_ism_service.h) turns it into a per-server nickname with a
 //     salted hash kept only in memory, and clears it. No code, rolling or fixed, no raw bits, no sensor ID — on public
@@ -58,17 +61,27 @@ struct Reading {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 namespace oregon {
 
-struct Sensor { const char* id; const char* model; int len; char kind; };   // kind: T th, t temp, U uv, W wind, R pcr800, r rgr968
+struct Sensor { const char* id; const char* model; int len; char kind; };   // kind: T th, t temp, U uv, W wind, R pcr800, r rgr968, w wgr968, B th+baro
+/* ★ 2026-11-11 (weather pass): more sensor IDs and lengths, cross-checked with rtl_433 oregon_scientific.c's ID table
+ *  (facts only): THGR968, THGR328N, BTHR918, BTHGN129 (baro), WGR968 (3-digit direction), AWR129 BBQ (a hundreds digit),
+ *  THN129 / RTHN129, RTGN318 / RTGN129 / RTGR328N (their first ID nibble varies — matched on the last three, '?'), the
+ *  THGR810's rolling IDs, the PCR800's AU ID. */
 inline const Sensor* find(const std::string& id) {
     static const Sensor k[] = {
         {"1D20", "THGR122NX / THGN123N", 17, 'T'}, {"F824", "THGR810 / THGN801", 17, 'T'}, {"F8B4", "THGR810", 17, 'T'},
-        {"EC40", "THN132N / THR238NF", 14, 't'}, {"C844", "THWR800", 14, 't'},
+        {"F024", "THGR810 / THGN801", 17, 'T'}, {"F224", "THGR810 / THGN801", 17, 'T'}, {"FA24", "THGR810 / THGN801", 17, 'T'},
+        {"1D30", "THGR968", 17, 'T'}, {"CC23", "THGR328N", 17, 'T'}, {"?CC3", "RTGN318 / RTGR328N", 17, 'T'},
+        {"EC40", "THN132N / THR238NF", 14, 't'}, {"C844", "THWR800", 14, 't'}, {"EC41", "AWR129 BBQ", 14, 't'},
+        {"CC43", "THN129", 14, 't'}, {"?CD3", "RTHN129", 14, 't'},
         {"EC70", "UVR128", 14, 'U'}, {"D874", "UVN800", 14, 'U'},
-        {"1984", "WGR800", 19, 'W'}, {"1994", "WGR800", 19, 'W'},
-        {"2914", "PCR800", 20, 'R'}, {"2D10", "RGR968", 18, 'r'},
-        {"5D60", "BTHR968", 21, 'T'},
+        {"1984", "WGR800", 19, 'W'}, {"1994", "WGR800", 19, 'W'}, {"3D00", "WGR968", 19, 'w'},
+        {"2914", "PCR800", 20, 'R'}, {"2D14", "PCR800", 20, 'R'}, {"2D10", "RGR968", 18, 'r'},
+        {"5D60", "BTHR968", 21, 'B'}, {"5D50", "BTHR918", 21, 'B'}, {"5D53", "BTHGN129", 21, 'B'},
     };
-    for (const auto& s : k) if (id == s.id) return &s;
+    for (const auto& s : k) {
+        if (id == s.id) return &s;
+        if (s.id[0] == '?' && id.compare(1, 3, s.id + 1) == 0) return &s;
+    }
     return nullptr;
 }
 
@@ -111,11 +124,24 @@ inline bool parse(const std::vector<int>& nb, bool v21, Reading& r) {
         return v;
     };
     switch (s->kind) {
-        case 'T': case 't': {
+        case 'T': case 't': case 'B': {
             const int t = digits(8, 3);
             if (t < 0) return false;
-            r.tempC = (nb[11] ? -1 : 1) * t / 10.0;
-            if (s->kind == 'T') { const int h = digits(12, 2); if (h < 0 || h > 100) return false; r.hum = h; }
+            // ★ nibble 11: bit 3 the sign; bits 0–2 the AWR129's hundreds digit (0 on every weather sensor)
+            r.tempC = ((nb[11] & 8) ? -1 : 1) * (t / 10.0 + (nb[11] & 7) * 100.0);
+            if (s->kind != 't') { const int h = digits(12, 2); if (h < 0 || h > 100) return false; r.hum = h; }
+            if (s->kind == 'B') {   // barometer: 8 bits, nibbles 15 (low) and 16 (high); the offset is per model
+                const int raw = nb[15] | nb[16] << 4;
+                if (id == "5D53") r.baroHpa = raw * 2 + (nb[17] & 1) + 600;
+                else r.baroHpa = raw + (id == "5D50" ? 795 : 856);
+            }
+            if (id == "EC41") r.kind = "sensor";   // a BBQ probe
+            break;
+        }
+        case 'w': {   // WGR968: direction 3 BCD digits; gust and average 0.1 m/s
+            const int d = digits(8, 3), g = digits(11, 3), a = digits(14, 3);
+            if (d < 0 || g < 0 || a < 0 || d > 359) return false;
+            r.windDir = d; r.gustKmh = g / 10.0 * 3.6; r.windKmh = a / 10.0 * 3.6;
             break;
         }
         case 'U': { const int u = digits(8, 2); if (u < 0) return false; r.uv = u; break; }
@@ -139,7 +165,7 @@ inline bool parse(const std::vector<int>& nb, bool v21, Reading& r) {
             break;
         }
     }
-    if (!(r.tempC != r.tempC) && (r.tempC < -50 || r.tempC > 70)) return false;
+    if (!(r.tempC != r.tempC) && (r.tempC < -50 || r.tempC > (id == "EC41" ? 300 : 70))) return false;
     return true;
 }
 

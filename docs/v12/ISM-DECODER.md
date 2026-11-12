@@ -26,6 +26,14 @@ censored-mean noise floor, an NCO, a triangular decimator, a polar discriminator
 textbook. Where a write-up left a detail open, the choice is marked **ASSUMED** in the code and in the table — each is a
 thing a real capture will confirm or correct.
 
+**★ From the weather pass (2026-11-11), with Stuart's agreement:** rtl_433's device files (`src/devices/*.c`) MAY be
+read for protocol **facts** — frame layout, timing, sync, check polynomial / init / coverage, scaling — and were, for the
+families in `vibe_ism_weather2.h` … `vibe_ism_weather10.h` and the fixes to the phase-1 weather decoders. No code, table
+or identifier was copied: every decoder is ours, on our own slicers (`vibe_ism_wxkit.h`). Independent public write-ups
+are cited first wherever one exists (the Oregon "RF Protocols II" PDF, the tfd.hu Auriol/Alecto PDF, ala-paavola.fi's
+WT450H page, andreafabrizi's Bresser 5-in-1 notes, the f6fbb.org TX3 page, Ray Wang's AcuRite posts…). Each family was
+scored on the rtl_433_tests recordings (`scripts/ism-corpus.mjs` — test input only, never in the repository).
+
 ## Architecture — a whole-radio mode, not a passband decoder
 
 **Decision: a whole-radio mode, ADS-B's shape** (save the listener's state, take the radio onto the band, give it back
@@ -60,7 +68,12 @@ exactly as found). Why not a decoder on the listener's DDC channel:
    lengths in µs (+mark / −space). The burst's carrier (or the tones' midpoint) refines the reported frequency.
    A burst under 6.5 dB, or with > 6000 transitions, is not decoded (noise reads ~4.5 dB — measured).
 5. **Bit slicers** (shared by every protocol): PWM, PPM, NRZ, Manchester (both conventions, re-phasing on a violation),
-   differential Manchester; CRC-8 / CRC-16 (MSB-first) and the helpers.
+   differential Manchester; CRC-8 / CRC-16 (MSB-first) and the helpers. **The weather kit** (`vibe_ism_wxkit.h`,
+   2026-11-11) adds the lenient forms real sensors need — a run is short or long by which side of the midpoint it
+   falls, only a run past the gap limit ends a row (a stretched pulse no longer costs the frame); PPM can absorb noise
+   slivers inside a space; PCM (NRZ / RZ), "first edge = 0" Manchester, biphase (DMC), repeated-row search, CRC-4,
+   reflected CRC-8/16, the LFSR digests (8 / 8-reflected / 16), and `fskRows` — NRZ from the discriminator AND from a
+   tone's own envelope (wide-deviation FSK opens a channel per tone: each is OOK of one tone).
 
 ### The protocols (`vibe_ism_protocols*.h`) — see the coverage table below
 
@@ -223,14 +236,42 @@ slicer's smoothing is in µs, so every family above slices as before. Everything
 | TPMS "type B" | OOK, 240 µs symbols | **done, privacy** (kPa = raw × 2.5, °C) | same paper | **line code and preamble not published**: Manchester/NRZ both tried, frame after an 8-bit run-in, latest start wins; confirm-twice |
 | TPMS "type C" | FSK Manchester | not done | same paper | XOR checksum too weak without a published preamble; pressure scale not given |
 | TPMS by manufacturer (Schrader, Continental/VDO, Huf/Beru, Pacific/Toyota, TRW…) | 315/433 | **not done: no non-GPL description** | — | **so "Toyota TPMS" cannot be named yet** |
-| LaCrosse TX141TH-Bv2 / TX141-Bv3 | 433 OOK | not done: no non-GPL description | — | |
-| AcuRite 5-in-1 (VN1TXC), 606TX | 433 OOK | not done: no non-GPL description | — | |
-| Bresser 5/6/7-in-1 | 868 FSK | not done: no field description outside GPL-derived code | — | |
-| Ambient Weather F007TH | 433 Manchester | not done: half-bit period and the digest's byte range unpublished | forum + README (partial) | |
 | Efergy e2 / Elite | 433 FSK | not done: framing (preamble/sync) and bit rate unpublished | Elijah / Gough Lui blogs (layout only) | |
-| Fine Offset WH24/WH65/WS68/WH51, Ecowitt | 433/868 FSK | not done: not found in the research pass | — | worth a second look |
 
 Twelve families with their variants (≈ 25 models) in phase 1.
+
+### Weather and environment — the weather pass (2026-11-11)
+
+Scored on the rtl_433_tests corpus (3 724 recordings): **match 162 → 1 040** across the whole corpus (decoded-with-
+nothing-to-compare 259 → 350), **WRONG 12 → 5** (the five left are all TPMS "type B" on non-weather recordings),
+**false alarms 0 → 0**. test-ism: 245 checks (17 new end-to-end weather families). "Check" is what tells a frame from
+noise; weak checks are shown once heard twice (`confirm`). Header per family = the frame facts and their sources.
+
+| Family (models) | Band / mod | Check | File |
+|---|---|---|---|
+| Oregon v2.1 / v3 — **added** THGR968, THGR328N, RTGN318 / RTGN129 / RTGR328N (first ID nibble varies), THN129 / RTHN129, BTHR918 / BTHGN129 (+ barometer), WGR968, AWR129 BBQ (hundreds digit), THGR810 rolling IDs, PCR800 AU; sign = bit 3 of nibble 11 | 433 OOK Manchester | nibble sum | `vibe_ism_protocols.h` |
+| Oregon SL109H | 433 OOK PPM 2/4 ms | 4-bit sum + repeat (confirm) | `weather2` |
+| Fine Offset / Ecowitt FSK: WH24, WH65, WS69 (+ pressure), WH25, WH32 / WH32B, WH0290 PM2.5, WH51 soil, WH31E / WH31B, WH40 / WN20 rain, WS68 wind/light, the WWVB clock frame | 433/868/915 FSK 58 µs | CRC-8 + byte sum | `weather2` |
+| Fine Offset WH1080 / WH3080 — **fixed**: 7-one preamble, 10-bit OOK temperature, UV/light (type 7) and DCF77 time (type B) frames, frame = whole row; **added** WH1050 / TFA Stratos (OOK + FSK), WH0530, Alecto WS-1200 v1/v2 | 433/868 OOK PWM, FSK | CRC-8 (+ sum) | `protocols2` |
+| La Crosse IT+ — **fixed**: 9.58 kbps (TX35 / TX25U), short preamble; **added** TX34-IT rain | 868 FSK | CRC-8 | `protocols2` |
+| La Crosse TX141-Bv2/Bv3, TX141TH-Bv2/Bv3, TX141W / TX145wsdth; WS-2310 / WS-3600; TX-3 / TX-6U / TX-7U / TX5U; TX22U-IT | 433 OOK PWM, 915 FSK | LFSR digest / CRC-8 / nibble sums + parity | `weather3` |
+| AcuRite TXR family: 592TXR tower, 5-in-1, 3-in-1, Atlas (± lightning), Optimus, 515, 6045M, 899, 1190 leak; 00275 / 00276RM; 609TXC; 606TX / **00782** (the same format — its 4th byte is the 606 digest); 590TX; 985 / 986 fridge | 433 OOK PWM / PPM | byte sum + parity / CRC-16 / LFSR / CRC-8 | `weather4` |
+| S3318P family (Conrad, Esperanza EWS, Kedsum, Pearl), Digitech XC-0324, Hideki (TS04, Cresta, Bresser 5CH, Mebus, Sigma), GT-WT-02 / -03, WT0122 / WT0124 pool, Cotech 36-7959 (SwitchDoc, Sainlogic), TFA 30.3160 pool | 433 OOK PPM / PWM / DMC / Manchester | CRC-4 / XOR / CRC-8 / sums | `weather5` |
+| Auriol AFW 2 A1, AFT 77 B2, AHFL, HG02832 / Rubicson 48957; Vauno EN8822C; AlectoV1 (T/H, rain, wind); Prologue / ThermoPro TX2 (two sensors in one burst are both read) | 433 OOK PPM / PWM | sums / LFSR / CRC-8 / repeats | `weather6` |
+| WS 7000 / WS 2500 (ELV, La Crosse); Ambient F007TH family; Ambient TX-8300 / TFA 30.3211 | 433 OOK PWM / Manchester / PPM | XOR + sum / LFSR / inverted copy + Fletcher | `weather7` |
+| GT-TMBBQ-05; TFA Twin Plus 30.3049 / KW9010; Philips AJ7010 / AJ3650; TFA 30.3196 (868) | 433 OOK, 868 FSK | sums / XOR / CRC-4 / repeats | `weather8` |
+| Eurochron EFTH-800; ThermoPro TP11 / TP08 / TP12 / TP20; Rubicson / TFA 30.3197 / inFactory (before Nexus); Bresser 3CH; WT450 / WT260H / WT405H | 433 OOK | CRC-8 / LFSR / sums / parity | `weather9` |
+| TFA Drop 30.3233 rain; Inkbird ITH-20R / IBS-P01R | 433 OOK PWM, 433 FSK 100 µs | LFSR digest + repeat / CRC-16 | `weather11` |
+| Bresser 6-in-1 family (7-in-1 indoor, new 5-in-1, soil, pool, 3-in-1 wind, Froggit WH6000, Ventus, Sencor), 7-in-1 / 3-in-1 / 8-in-1 + PM / CO2 / HCHO, 5-in-1; Maverick ET-732/733; Companion WTR001 | 868 FSK 124 µs, 433 OOK | LFSR-16 + sum / inverted copy / repeats | `weather10` |
+
+**ASSUMED / open:** the Philips AJ7010 °C formula (raw / 353 − 9.2 — the only published fit); the TFA 30.3196's 16-bit
+check key is unknown (twice alike + confirm instead); the WH24 / WH65 split by preamble length; the Maverick digest
+hides a per-reset ID (raw pattern + confirm). **Left (and why):** XC-0324 recordings that start mid-transmission — the
+detector's first frames seed its floor, so a sensor on the air from sample 0 is never detected (`ism_replay --lead 0.3`
+reads all 58: a corpus artefact, not a live one); Cotech 36-9231 is LoRa (not this path); WH51 at 915 MHz (a ~430 kHz
+tone spacing — two channels, neither the whole signal); Oregon v1 / WMR500; La Crosse LTV (WR1, R1, TH2/3, W1,
+BreezePro) and WS-6868; Emax W6 family, Govee, ThermoPro TX7B / 211B / TP28B, TS-FT002, Oria, Esun, inFactory,
+Thermor, Holman — not yet written. Oil-tank level sensors (Watchman, ~380 recordings) were left to the home/energy pass.
 
 ## The gallery (2026-10-25)
 
