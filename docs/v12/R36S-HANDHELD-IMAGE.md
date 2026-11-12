@@ -232,6 +232,26 @@ are gone from this interface; the engine refuses them and never relays them.
   "Radio settings reset" toast. The engine deletes the flag when it has acted on it (it needs write access to
   `/run/vibe-handheld/`; if it cannot delete it, it remembers in memory for that run only).
 - `VIBESERVER_DATA_DIR/handheld/radio-<serial>.json` — the engine's per-radio memory (private to the engine).
+- `VIBESERVER_DATA_DIR/handheld/radio-<serial>.engine.json` — that radio's engine config (a server config with one
+  radio). Also cleared by Start + Select, with `radio-<serial>.dab-scan.txt` (the last DAB scan).
+
+**Which audio settings survive a power-off, and where they are kept (2026-11-12).** Stuart: *"the Broadcast FM noise
+reduction doesnt stay enabled on power off and on on the R36S. I prefer it on so I would want this to be remembered
+setting"*. The engine starts at every power-on, so anything held only in the radio process was lost.
+- **The Broadcast FM row** (de-emphasis, ST, NR = `wsp`, IMS, CEQ, AUTO BW, NB) is server state with OWNER DEFAULTS (the
+  `fm*` keys, `vibe_fm_defaults.h`), and a start always begins from them. **On the handheld only**, a change made in
+  the audio menu is adopted AS this radio's owner defaults (`adoptAsDefaults`) and written into
+  `radio-<serial>.engine.json` (temp + rename, the config persist handler). The handheld's one user is its owner, so
+  this is the honest reading of "owner's defaults": the setup page shows the same values, and the RETURN/REMEMBER policy
+  still works as written. A de-emphasis that is still the region's own stays *by region*. **A server never does this**:
+  a listener's change stays theirs and the owner's config is untouched (`scripts/test-handheld-fm-persist.mjs` part S).
+  The clients still READ the row and never re-assert it on connect (main.ts).
+- **NOISE REDUCTION (+ strength), AUTO NOTCH, NOISE BLANKER** (every mode but WFM) have no owner default on the server.
+  Like the squelch and the volume, the native UI keeps them in the radio's memory (`handheld-ui/src/memory.h`,
+  `radio-<serial>.json`) and puts back what differs once per plug-in.
+- Already kept before this: frequency/mode/passband/span, the DAB multiplex + service, step, RTL gain/AGC/rate/bias-T/
+  PPM/direct sampling/IF filter (same driver only), squelch, volume (memory.h); the last DAB scan (`.dab-scan.txt`).
+- Start + Select clears all of it for that radio (`handheld.cpp applyResetLocked`).
 - `VIBESERVER_CARD_DIR` (the exFAT `VIBESDR` mount) — `Recordings/`, `Gallery/<DECODER>/`, `import/`, `import/done/`,
   `export/`, `Diagnostic logs/`. The engine creates the folders it writes on first use; every write is temp + rename.
 
