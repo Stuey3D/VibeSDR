@@ -30,6 +30,8 @@ struct BmRow {
     bool manual = false;          // saved by the owner (else heard by this receiver)
     bool hasBw = false; int bwLo = 0, bwHi = 0;
     int sid = -1;                 // a DAB service (mode "dab") — the native UI has no DAB, so these are not offered
+    int nameSrc = -1;             // how settled a learnt name is (≥ 2 heard; -1 not sent) — the SIGNAL LABELS' learnt-FM rule
+    bool repeater = false;        // a repeater-database row (never a signal label)
 };
 
 /** One EiBi entry (GET /stations), kept compact: ~9000 of them. */
@@ -111,6 +113,8 @@ inline bool bmParseList(const std::string& body, std::vector<BmRow>& out) {
             if (r.bwHi <= r.bwLo) r.hasBw = false;
         }
         r.sid = b["sid"].kind == Json::Num ? (int)b["sid"].n : -1;
+        r.nameSrc = b["nameSrc"].kind == Json::Num ? (int)b["nameSrc"].n : -1;
+        r.repeater = b["repeater"].boolean();
         out.push_back(std::move(r));
     }
     return true;
