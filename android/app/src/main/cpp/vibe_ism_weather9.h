@@ -43,7 +43,10 @@ inline bool thermopro(const Burst& b, std::vector<Reading>& out) {
     for (const Bits& w : rows) {
         if (w.size() == 41) {
             const auto by = bytesAt(w, 0, 5);
-            if (!(by[0] | by[1] | by[2] | by[3]) || wx::lfsrDigest8Refl(by.data(), 4, 0x51, 0x04) != by[4]) continue;
+            if (!(by[1] | by[2] | by[3]) || wx::lfsrDigest8Refl(by.data(), 4, 0x51, 0x04) != by[4]) continue;   // both probes raw 0: a frame of nothing
+            // ★ an 8-bit digest: the copies must agree (the corpus: a 345 MHz Honeywell read once as a TP12)
+            int same = 0; for (const Bits& o : rows) if (o.size() >= 40 && bitsAt(o, 0, 32) == bitsAt(w, 0, 32) && bitsAt(o, 32, 8) == bitsAt(w, 32, 8)) ++same;
+            if (same < 2) continue;
             Reading r = wx::wxReading("ThermoPro", "TP08 / TP12 / TP20", wx::hex(by[0], 2));
             r.kind = "sensor";
             r.tempC = ((((by[2] & 0xF0) << 4) | by[1]) - 200) / 10.0;

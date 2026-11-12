@@ -242,8 +242,8 @@ Twelve families with their variants (≈ 25 models) in phase 1.
 
 ### Weather and environment — the weather pass (2026-11-11)
 
-Scored on the rtl_433_tests corpus (3 724 recordings): **match 162 → 1 035** across the whole corpus (decoded-with-
-nothing-to-compare 259 → 340), **WRONG 12 → 5** (the five left are all TPMS "type B" on non-weather recordings),
+Scored on the rtl_433_tests corpus (3 724 recordings): **match 162 → 1 040** across the whole corpus (decoded-with-
+nothing-to-compare 259 → 350), **WRONG 12 → 5** (the five left are all TPMS "type B" on non-weather recordings),
 **false alarms 0 → 0**. test-ism: 245 checks (17 new end-to-end weather families). "Check" is what tells a frame from
 noise; weak checks are shown once heard twice (`confirm`). Header per family = the frame facts and their sources.
 
@@ -261,6 +261,7 @@ noise; weak checks are shown once heard twice (`confirm`). Header per family = t
 | WS 7000 / WS 2500 (ELV, La Crosse); Ambient F007TH family; Ambient TX-8300 / TFA 30.3211 | 433 OOK PWM / Manchester / PPM | XOR + sum / LFSR / inverted copy + Fletcher | `weather7` |
 | GT-TMBBQ-05; TFA Twin Plus 30.3049 / KW9010; Philips AJ7010 / AJ3650; TFA 30.3196 (868) | 433 OOK, 868 FSK | sums / XOR / CRC-4 / repeats | `weather8` |
 | Eurochron EFTH-800; ThermoPro TP11 / TP08 / TP12 / TP20; Rubicson / TFA 30.3197 / inFactory (before Nexus); Bresser 3CH; WT450 / WT260H / WT405H | 433 OOK | CRC-8 / LFSR / sums / parity | `weather9` |
+| TFA Drop 30.3233 rain; Inkbird ITH-20R / IBS-P01R | 433 OOK PWM, 433 FSK 100 µs | LFSR digest + repeat / CRC-16 | `weather11` |
 | Bresser 6-in-1 family (7-in-1 indoor, new 5-in-1, soil, pool, 3-in-1 wind, Froggit WH6000, Ventus, Sencor), 7-in-1 / 3-in-1 / 8-in-1 + PM / CO2 / HCHO, 5-in-1; Maverick ET-732/733; Companion WTR001 | 868 FSK 124 µs, 433 OOK | LFSR-16 + sum / inverted copy / repeats | `weather10` |
 
 **ASSUMED / open:** the Philips AJ7010 °C formula (raw / 353 − 9.2 — the only published fit); the TFA 30.3196's 16-bit
@@ -269,7 +270,7 @@ hides a per-reset ID (raw pattern + confirm). **Left (and why):** XC-0324 record
 detector's first frames seed its floor, so a sensor on the air from sample 0 is never detected (`ism_replay --lead 0.3`
 reads all 58: a corpus artefact, not a live one); Cotech 36-9231 is LoRa (not this path); WH51 at 915 MHz (a ~430 kHz
 tone spacing — two channels, neither the whole signal); Oregon v1 / WMR500; La Crosse LTV (WR1, R1, TH2/3, W1,
-BreezePro) and WS-6868; TFA Drop; Inkbird, Govee, ThermoPro TX7B / 211B / TP28B, TS-FT002, Oria, Esun, inFactory,
+BreezePro) and WS-6868; Emax W6 family, Govee, ThermoPro TX7B / 211B / TP28B, TS-FT002, Oria, Esun, inFactory,
 Thermor, Holman — not yet written. Oil-tank level sensors (Watchman, ~380 recordings) were left to the home/energy pass.
 
 ## The gallery (2026-10-25)
