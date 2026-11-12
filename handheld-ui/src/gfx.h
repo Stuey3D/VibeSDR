@@ -77,10 +77,16 @@ public:
     /** A filled disc, or a ring of thickness `t` (t <= 0 = filled). */
     void circle(float cx, float cy, float r, float t, Rgba c) {
         use(0);
-        const int n = 20;
+        /* ★ The unit circle once (it was 80 cos / sin a circle — 300 spots on the map are 600 circles a frame), and
+         *  12 sides for a small one (r ≤ 8 px: 0.2 px from round at most, below what the panel shows). */
+        struct U { float c[21], s[21]; };
+        static const U u20 = [] { U u{}; for (int i = 0; i <= 20; i++) { const float a = (float)i / 20 * 6.2831853f; u.c[i] = std::cos(a); u.s[i] = std::sin(a); } return u; }();
+        static const U u12 = [] { U u{}; for (int i = 0; i <= 12; i++) { const float a = (float)i / 12 * 6.2831853f; u.c[i] = std::cos(a); u.s[i] = std::sin(a); } return u; }();
+        const bool small = r <= 8;
+        const int n = small ? 12 : 20;
+        const U& uc = small ? u12 : u20;
         for (int i = 0; i < n; i++) {
-            const float a0 = (float)i / n * 6.2831853f, a1 = (float)(i + 1) / n * 6.2831853f;
-            const float c0 = std::cos(a0), s0 = std::sin(a0), c1 = std::cos(a1), s1 = std::sin(a1);
+            const float c0 = uc.c[i], s0 = uc.s[i], c1 = uc.c[i + 1], s1 = uc.s[i + 1];
             if (t <= 0) tri({cx, cy, -1, -1, c}, {cx + c0 * r, cy + s0 * r, -1, -1, c}, {cx + c1 * r, cy + s1 * r, -1, -1, c});
             else {
                 const float ri = r - t;

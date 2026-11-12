@@ -764,7 +764,9 @@ inline void mapRegisterModes() {
     dp.empty = "no DSC call with a position yet — distress calls carry one"; dp.exitLabel = "CLOSE";
     mapRegisterPage(dp);
     MapPageDef sp; sp.id = "dec:spots"; sp.title = "DIGITAL SPOTS MAP"; sp.profile = "spots"; sp.startZ = 3; sp.build = mapSpotsBuild;
-    sp.card = mapSpotsCard; sp.empty = "no spots yet — the digital spots run on under the map; each station is placed on its grid square";
+    sp.card = mapSpotsCard;
+    sp.stamp = [](App&, const RadioState&) { return decUi().spotsSeq * 1000003ull + (uint64_t)std::time(nullptr); };   // ★ new spots, or the "ago" ticking
+    sp.empty = "no spots yet — the digital spots run on under the map; each station is placed on its grid square";
     sp.exitLabel = "CLOSE";
     mapRegisterPage(sp);
 }

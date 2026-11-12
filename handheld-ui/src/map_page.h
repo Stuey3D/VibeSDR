@@ -40,6 +40,10 @@ struct MapPageDef {
     bool listFirst = false;
     /** Fill the list, the markers and the header's status line (once a frame — keep it bounded). */
     std::function<void(App&, const RadioState&, std::vector<MapListRow>&, std::vector<MapMarker>&, std::string&)> build;
+    /** ★ Optional: a number that changes whenever build() would build something different. With one, the list, the
+     *  markers and the status are built only when it changes (the spots map: 300 rows of strings a frame, rebuilt
+     *  once a second or when a spot comes, not 30 times a second). Without one, build() runs every frame. */
+    std::function<uint64_t(App&, const RadioState&)> stamp;
     /** The selected row's card: a few lines. */
     std::function<std::vector<std::string>(App&, const RadioState&, const std::string&)> card;
     /** BACK / EXIT: leave the page (a whole-radio mode leaves the mode). */
@@ -73,6 +77,8 @@ struct MapUi {
     std::string note;                 // a message over the map (loading / no data)
     std::vector<MapMarker> markers;   // this frame's (the pointer's hit test)
     std::vector<MapListRow> rows;
+    std::string status;               // the page's status line (built with the rows)
+    std::string builtPage; uint64_t builtStamp = 0;   // what rows / markers / status were last built for (MapPageDef::stamp)
     double closedAt = 0;              // when the last page closed (the buffers are let go 90 s later)
 };
 inline MapUi& mapUi() { static MapUi u; return u; }
@@ -158,7 +164,7 @@ inline void mapPerfLine(const char* tag, double now) {
 /** Close the sheet (the page's own exit decides what else happens). */
 inline void mapClosePage(App& a) {
     MapUi& u = mapUi();
-    u.page.clear(); u.sel.clear(); u.pop = nullptr; u.closedAt = nowSec();
+    u.page.clear(); u.sel.clear(); u.pop = nullptr; u.closedAt = nowSec(); u.builtPage.clear();
     /* ★★★ CLOSED = FLUSHED (Stuart, 2026-11-08: "When exiting a map we need to flush it completely" — reopening within
      *  the old 90 s grace drew the tiles all wrong and ran slowly). Every file off the GPU, the loader's queue emptied,
      *  the off-screen buffer released: the next map starts from nothing, as the first one did. Costs a fresh read of
@@ -387,9 +393,13 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     else u.view.draw(c, now, u.frame);
 
     // the page's content
-    std::string status;
-    u.rows.clear(); u.markers.clear();
-    if (P.build) P.build(a, s, u.rows, u.markers, status);
+    const uint64_t stamp = P.stamp ? P.stamp(a, s) : 0;
+    if (!P.stamp || stamp != u.builtStamp || u.builtPage != u.page) {
+        u.rows.clear(); u.markers.clear(); u.status.clear();
+        if (P.build) P.build(a, s, u.rows, u.markers, u.status);
+        u.builtStamp = stamp; u.builtPage = u.page;
+    }
+    const std::string& status = u.status;
     // ★ the D-pad's first stop is the list, not EXIT
     if (!u.rows.empty() && u.view.dpadAt == 0) {
         const std::string f = a.nav_.focus("map");
