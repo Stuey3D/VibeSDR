@@ -28,6 +28,7 @@ struct Msg {
     // ── routing ──
     int hopLimit = -1, hopStart = -1;
     uint32_t to = 0; bool broadcast = false; bool privateCh = false; int chHash = -1;
+    bool found = false;       ///< ★ V12 2026-11-12: heard on a channel FOUND ON AIR (vibe_lora_discover.h), not a standard one
     std::string route;        ///< MeshCore: "flood" / "direct"; Meshtastic: "via MQTT"
     int pathLen = -1;
     // ── LoRaWAN ──
