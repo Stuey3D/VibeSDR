@@ -171,10 +171,120 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace owl
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  VOLTCRAFT ENERGYCOUNT 3000 ("EC3k", Conrad) — and its rebadges Technoline Cost Control RT-110, Velleman NETBESEM4,
+//  La Crosse RS3620 — plug-in energy meters, 868.3 MHz FSK, 50 µs bits. Facts: the AX5042 transceiver's HDLC mode
+//  (onsemi AX5042 datasheet), the write-ups at sevenwatt.com ("RFM69 Energy Count 3000") and github.com/avian2/ec3k's
+//  README, cross-checked with rtl_433's ec3k.c notes (read for facts only). On the air: NRZI (no change = 1), scrambled
+//  by the self-synchronising x¹⁷ + x¹² + 1 (each bit XOR the ones 12 and 17 before it), then HDLC — 0x7E flags, a 0
+//  stuffed after five 1s, bytes LSB first: 41 bytes, the last two a CRC-16 (poly 0x1021 reflected, init 0xFFFF,
+//  complemented, low byte first) over the 39 before. Nibbles, high first: ID 1–4 · seconds total 5–8 (low 16) · 0 ×4 ·
+//  seconds on 13–16 (low) · 0 ×7 · energy Ws 24–30 (low 28 bits) · power 31–34 (0.1 W) · peak power 35–38 (0.1 W) ·
+//  39–44 a second energy count · 59–61 seconds total (high 12) · 0 ×5 · 67–70 energy (high 16) · 71–73 seconds on
+//  (high) · 74–75 resets · 76 flags · 0.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace ec3k {
+
+inline bool frame(const uint8_t* p, std::vector<Reading>& out) {
+    auto nib = [&](int from, int n) { uint64_t v = 0; for (int i = 0; i < n; ++i) v = v << 4 | uint64_t((p[(from + i) / 2] >> ((from + i) & 1 ? 0 : 4)) & 0xF); return v; };
+    const uint16_t crc = uint16_t(~kit::crc16r(p, 39, 0x8408, 0xFFFF));
+    if (crc != uint16_t(p[39] | p[40] << 8)) return false;
+    if (nib(9, 4) || nib(17, 7) || nib(62, 5) || nib(77, 1)) return false;
+    const int id = int(nib(1, 4));
+    const uint64_t ws = nib(67, 4) << 28 | nib(24, 7);
+    const double power = double(nib(31, 4)) / 10.0, peak = double(nib(35, 4)) / 10.0;
+    const uint32_t total = uint32_t(nib(59, 3) << 16 | nib(5, 4)), on = uint32_t(nib(71, 3) << 16 | nib(13, 4));
+    Reading r;
+    r.kind = "energy"; r.make = "Voltcraft"; r.model = "EnergyCount 3000";
+    char ib[8]; std::snprintf(ib, sizeof ib, "%04X", id); r.pubId = ib;
+    r.watts = power;
+    r.extra = kit::fmt1v(ws / 3.6e6, 2) + " kWh \xc2\xb7 peak " + kit::fmt1v(peak, 1) + " W";
+    r.fact("id", (long long)id); r.fact("power", power); r.fact("energy", ws / 3.6e6); r.fact("power_max", peak);
+    r.fact("time_total", (long long)total); r.fact("time_on", (long long)on);
+    r.fact("reset_counter", (long long)nib(74, 2)); r.fact("flags", (long long)nib(76, 1));
+    out.push_back(r);
+    return true;
+}
+
+/** ★ Every frame in the burst is read: two plugs a few ms apart arrive as ONE burst (corpus ec3k gfile007), and each
+ *  is its own reading. A frame already read (the same 41 bytes, its repeat) is not read twice. */
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    std::vector<std::vector<uint8_t>> seen;
+    for (const Bits& raw : kit::nrzRows(b.fsk, 50.0, 40, false, 400)) {
+        const size_t n = raw.size();
+        std::vector<uint8_t> sy(n), d(n);
+        for (size_t i = 1; i < n; ++i) sy[i] = raw[i] == raw[i - 1];
+        for (size_t i = 0; i < n; ++i) d[i] = uint8_t(sy[i] ^ (i >= 17 ? sy[i - 17] : 0) ^ (i >= 12 ? sy[i - 12] : 0));
+        // HDLC: a flag (0 111111 0) opens; five 1s then a 0 = a stuffed 0; bytes LSB first
+        int ones = 0; bool in = false; uint8_t pk[41]; size_t nb = 0; int bit = 0; uint8_t cur = 0;
+        for (size_t i = 18; i < n; ++i) {
+            if (d[i]) {
+                if (++ones > 6) { in = false; ones = 0; }
+                else if (in) { cur = uint8_t(cur >> 1 | 0x80); if (++bit == 8) { pk[nb++] = cur; bit = 0; } }
+            } else {
+                if (ones == 6) { in = true; nb = 0; bit = 0; cur = 0; }
+                else if (ones != 5 && in) { cur = uint8_t(cur >> 1); if (++bit == 8) { pk[nb++] = cur; bit = 0; } }
+                ones = 0;
+            }
+            if (nb == 41) {
+                std::vector<uint8_t> v(pk, pk + 41);
+                if (std::find(seen.begin(), seen.end(), v) == seen.end() && frame(pk, out)) seen.push_back(v);
+                in = false; nb = 0;
+            }
+        }
+    }
+    return !seen.empty();
+}
+
+} // namespace ec3k
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ESIC EMT7110 plug-in energy meter (for the EMR7370 display; sold by Pearl / Velleman) — 868.28 MHz FSK (±90 kHz),
+//  NRZ at 9.579 kbit/s (~104.4 µs). Facts: Petter Reinholdtsen's samples and analysis as summarised in rtl_433's
+//  esic_emt7110.c notes (read for facts only). AA AA, sync 2D D4, 12 bytes: ID 32 · pairing (bit 7), load on (bit 6),
+//  power 14 bits × 0.5 W · current 16 bits mA · voltage = (byte + 256) / 2 V · 2 unknown bits + energy 14 bits ×
+//  0.01 kWh · a check byte making the sum of all 12 zero. A weak check: believed at once when the burst's two packets
+//  (14 ms apart) agree, else shown once heard twice (confirm).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace emt7110 {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    std::vector<std::vector<uint8_t>> got;
+    for (const Bits& row : kit::nrzRowsAny(b, 104.4, 48, 110))
+        for (size_t s : kit::findAll(row, 0xAA2DD4, 24)) {
+            if (s + 24 + 96 > row.size()) break;
+            const auto by = bytesAt(row, s + 24, 12);
+            if (kit::sumBytes(by.data(), 12) & 0xFF) continue;
+            if ((by[0] | by[1] | by[2] | by[3]) == 0 || by[8] < 160 || by[8] > 250) continue;   // 208–253 V: mains
+            got.push_back(by);
+        }
+    for (const auto& by : got) {
+        const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+        const double w = (((by[4] & 0x3F) << 8) | by[5]) * 0.5, amps = (by[6] << 8 | by[7]) * 0.001, volts = (by[8] + 256) * 0.5;
+        const double kwh = (((by[9] & 0x3F) << 8) | by[10]) * 0.01;
+        Reading r;
+        r.kind = "energy"; r.make = "ESIC"; r.model = "EMT7110 energy meter";
+        char ib[12]; std::snprintf(ib, sizeof ib, "%08X", id); r.pubId = ib;
+        r.watts = w;
+        r.extra = kit::fmt1v(volts, 1) + " V \xc2\xb7 " + kit::fmt1v(amps, 3) + " A \xc2\xb7 " + kit::fmt1v(kwh, 2) + " kWh";
+        if (by[4] & 0x80) r.extra += " \xc2\xb7 pairing";
+        r.confirm = std::count(got.begin(), got.end(), by) < 2;
+        r.fact("current_A", amps); r.fact("voltage_V", volts); r.fact("energy_kWh", kwh);
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace emt7110
+
 /** The second-pass meter families, strongest checks first. */
 inline bool decodeMeters2(const Burst& b, std::vector<Reading>& out) {
     if (sparsnas::decode(b, out)) return true;
     if (owl::decode(b, out)) return true;
+    if (ec3k::decode(b, out)) return true;
+    if (emt7110::decode(b, out)) return true;
     return false;
 }
 
@@ -183,6 +293,7 @@ inline bool decodeMeters2(const Burst& b, std::vector<Reading>& out) {
 inline bool meters2BandOk(const Reading& r, double f) {
     const bool b868 = f >= 863e6 && f <= 870e6;
     if (r.make == "IKEA") return b868;
+    if (r.make == "ESIC") return b868;
     if (r.make == "OWL") return f >= 433.0e6 && f <= 435.0e6;
     return true;
 }

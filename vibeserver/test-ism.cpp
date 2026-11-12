@@ -1004,6 +1004,65 @@ static void testHome2() {
         Sig s{owlTx(nb)};
         cs.push_back({"OWL CM130", s, 433.92e6, "CM130", "id", "133", false});
     }
+    // Voltcraft EC3k: 41 bytes (CRC-16 0x8408 reflected, init FFFF, complemented, LE) → HDLC (7E, stuffing, LSB first)
+    //   → scrambled x^17 + x^12 + 1 → NRZI (no change = 1), FSK 50 µs
+    {
+        uint8_t pk[41] = {0};
+        auto putNib = [&](int at, int n, uint64_t v) { for (int i = n - 1; i >= 0; --i, v >>= 4) { const int k = at + i; pk[k / 2] |= uint8_t((v & 0xF) << ((k & 1) ? 0 : 4)); } };
+        putNib(1, 4, 0x5623); putNib(5, 4, 0x1234); putNib(13, 4, 0x0F00); putNib(24, 7, 66751200); putNib(31, 4, 655); putNib(35, 4, 4921);
+        putNib(59, 3, 0x11); putNib(71, 3, 0x07); putNib(74, 2, 1); putNib(76, 1, 8);
+        const uint16_t c = uint16_t(~kit::crc16r(pk, 39, 0x8408, 0xFFFF)); pk[39] = uint8_t(c); pk[40] = uint8_t(c >> 8);
+        Bits h = hb(0x7E7E, 16); int ones = 0;
+        for (int i = 0; i < 41; ++i) for (int k = 0; k < 8; ++k) {
+            const uint8_t x = (pk[i] >> k) & 1; h.push_back(x);
+            if (x) { if (++ones == 5) { h.push_back(0); ones = 0; } } else ones = 0;
+        }
+        append(h, hb(0x7E7E, 16));
+        Bits t(h.size()); for (size_t i = 0; i < h.size(); ++i) t[i] = uint8_t(h[i] ^ (i >= 12 ? t[i - 12] : 0) ^ (i >= 17 ? t[i - 17] : 0));
+        Bits raw = hb(0xAAAAAAAA, 32); uint8_t lv = 0;
+        for (uint8_t x : t) { if (!x) lv ^= 1; raw.push_back(lv); }
+        append(raw, hb(0xAAAA, 16));
+        Sig s{fskNrz(raw, 50)}; s.fsk = true; s.devHz = 20e3;
+        cs.push_back({"Voltcraft EC3k", s, 868.3e6, "EnergyCount", "power_max", "492.100", false});
+    }
+    // ESIC EMT7110: 868 FSK NRZ 104.4 µs, AA AA 2D D4, 12 bytes summing to 0; the two packets 14 ms apart
+    {
+        std::vector<uint8_t> by = {0x25, 0x6A, 0x5C, 0x87, 0x40 | 0x03, 0x20, 0x03, 0x41, 203, 0x01, 0x2C};
+        by.push_back(uint8_t(-int(kit::sumBytes(by.data(), 11))));
+        Bits c = hb(0xAAAAAA, 24); append(c, hb(0x2DD4, 16)); append(c, bytesToBits(by)); append(c, hb(0x00, 4));
+        Runs one = fskNrz(c, 104.4), two = one; two.push_back(-14000); two.insert(two.end(), one.begin(), one.end());
+        Sig s{two}; s.fsk = true; s.devHz = 40e3;
+        cs.push_back({"ESIC EMT7110", s, 868.28e6, "EMT7110", "voltage_V", "229.500", false});
+    }
+    // ADLM FPRF: a 50 ms wake-up, then 3 frames: 3 ms start mark + 40 PWM bits of 2 ms (500 µs mark = 1, 1500 = 0)
+    {
+        const uint64_t w = 0x40ull << 33 | 0x62DCull << 17 | uint64_t(7) << 9 | uint64_t(10) << 5;   // ID 62DC, zone 7, comfort
+        Tx tx; tx.mark(50000); tx.space(9900);
+        for (int rep = 0; rep < 3; ++rep) {
+            tx.mark(3000);
+            for (int i = 39; i >= 0; --i) { const bool one = (w >> i) & 1; tx.space(one ? 1500 : 500); tx.mark(one ? 500 : 1500); }
+            tx.space(5000);
+        }
+        Sig s{tx.r};
+        cs.push_back({"ADLM FPRF heater", s, 433.92e6, "heater programmer", "mode", "\"COMFORT\"", true});
+    }
+    // Insteon (915): 109.6 µs chips; per byte "11" + Manchester (01 = 1) of a 5-bit index (31, 30 …) and the byte, LSB first
+    {
+        std::vector<uint8_t> by = {0x45, 0x80, 0x25, 0x13, 0x9B, 0xFF, 0x2A, 0x11, 0x01};
+        uint8_t r = 0; for (int i = 0; i < 9; ++i) { r ^= by[size_t(i)]; r ^= uint8_t(((r ^ (r << 1)) & 0x0F) << 4); }
+        by.push_back(r);
+        Bits c = hb(0xAAAAAAAA, 32);
+        for (size_t i = 0; i < by.size(); ++i) {
+            c.push_back(1); c.push_back(1);
+            Bits d; const int idx = i == 0 ? 31 : int(by.size() - 1 - i);
+            for (int k = 0; k < 5; ++k) d.push_back((idx >> k) & 1);
+            for (int k = 0; k < 8; ++k) d.push_back((by[i] >> k) & 1);
+            append(c, manch01(d));
+        }
+        append(c, hb(0xAA, 8));
+        Sig s{fskNrz(c, 109.6)}; s.fsk = true; s.devHz = 40e3;
+        cs.push_back({"Insteon switch", s, 915.0e6, "", "msg_type", "2", true});
+    }
     home2Run(cs);
 }
 
