@@ -321,6 +321,10 @@ deps_for() {
     # ★★ V12 wide-rate DAB (vibe_dab_ddc.h): 17 capture rates × block offsets, aliases swept to the capture's edge, and
     #    its cost table — optimised, or the sweep takes minutes and the cost line means nothing.
     test-dab-ddc) echo "-O2" ;;
+    # ★★★ A SLOW SAMPLE CLOCK (2026-11-12, a B210 4 ppm out on MTVNL 7D): the null walks to the window's front and the tracker
+    #     pinned there — the lock broke up hours into a listen. The window re-centres (advanceAfterPush); the old loop must
+    #     still show the fault. ~2,000 synthetic frames through the real receiver, so optimised.
+    test-dab-clockwalk) echo "-O2" ;;
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;
