@@ -306,6 +306,78 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace somfy
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SIMPLE FIXED-CODE GATE / GARAGE REMOTES — each a short PWM word with no check, told apart by its pulse widths, its
+//  length and (where it has one) a fixed first bit. Facts: the format descriptions in rtl_433's conf/ files (Clemsa,
+//  Allstar-Firefly, BETT, Elplast, Nice-FLO, Ansonic, Linear-MultiCode, Roger) and the rtl_433_tests notes;
+//  a short pulse is a 1 unless the description says "invert". Bit counts are exact, so a generic EV1527 / PT2262 word
+//  (24 bits, fixedcode::) is never taken. No check: a WHOLE word (gap to gap, every mark one of the two widths) twice
+//  alike in the burst. ★ The code is the key: secret; only the button, where the format has one, is shown.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace pwmfam {
+
+struct Fam {
+    const char* make; const char* model; int shortUs, longUs, tolUs, gapUs; bool invert; int bits, bits2; int lead;   // lead: -1 any
+    int btnAt, btnLen; uint64_t family;
+};
+inline const Fam* table(size_t& n) {
+    static const Fam f[] = {
+        {"Clemsa", "gate remote", 385, 2695, 450, 4000, true, 18, 18, -1, 16, 2, 30},
+        {"Clemsa", "MasterCode remote", 1072, 2145, 200, 4000, true, 36, 36, -1, 32, 2, 31},
+        {"Allstar", "Firefly garage remote", 600, 4000, 800, 10000, true, 18, 18, -1, -1, 0, 32},
+        {"BETT", "gate remote", 340, 2000, 300, 3000, true, 18, 18, -1, -1, 0, 33},
+        {"Elplast", "gate remote", 230, 1550, 300, 2500, true, 18, 18, -1, -1, 0, 34},
+        {"Nice", "FLO gate remote", 700, 1400, 150, 3000, false, 13, 13, 1, -1, 0, 35},   // ★ not the 24-bit one: a PT2262 word looks the same
+        {"Ansonic", "gate remote", 555, 1111, 150, 1400, true, 13, 13, 0, 10, 2, 36},
+        {"Linear", "MultiCode remote", 450, 1500, 300, 2000, true, 10, 10, -1, -1, 0, 37},
+        {"Linear", "Delta-3 remote", 500, 2000, 200, 4500, false, 8, 8, -1, -1, 0, 38},
+        {"Roger", "gate remote", 450, 1000, 300, 6000, true, 28, 28, 1, 16, 4, 39},
+    };
+    n = sizeof f / sizeof f[0];
+    return f;
+}
+
+/** WHOLE PWM words with ABSOLUTE tolerances (the format descriptions give them so): a word is everything between two
+ *  gaps over `gapUs` (or the burst's ends), and ONE mark that is neither width spoils it — a fragment of some longer
+ *  PWM frame is never a word (it was: weather sensors and TPMS read as Linear and Elplast remotes). */
+inline std::vector<Bits> rows(const Runs& r, const Fam& f) {
+    std::vector<Bits> out;
+    Bits cur; bool bad = false;
+    auto close = [&] { if (!bad && !cur.empty()) out.push_back(cur); cur.clear(); bad = false; };
+    for (int d : r) {
+        if (d > 0) {
+            const bool sh = std::abs(d - f.shortUs) <= f.tolUs, lg = std::abs(d - f.longUs) <= f.tolUs;
+            if (sh == lg) bad = true; else cur.push_back(uint8_t(sh != f.invert));
+        } else if (-d > f.gapUs) close();
+        else if (-d > f.longUs + f.shortUs + 2 * f.tolUs) bad = true;   // a gap no bit has
+    }
+    close();
+    return out;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    size_t n = 0;
+    const Fam* t = table(n);
+    for (size_t k = 0; k < n; ++k) {
+        const Fam& f = t[k];
+        const auto rs = rows(b.ook, f);
+        for (const Bits& w : rs) {
+            if (int(w.size()) != f.bits && int(w.size()) != f.bits2) continue;
+            if (f.lead >= 0 && w[0] != f.lead) continue;
+            uint64_t v = 0; for (uint8_t x : w) v = v << 1 | x;
+            if (v == 0 || v == (uint64_t(1) << w.size()) - 1) continue;      // all one level: a carrier, not a code
+            if (!kit::twice(rs, w)) continue;   // ★ no check in the word: twice alike in the burst, always
+            Reading r = remoteReading("doorbell", f.make, f.model, f.family, v);
+            if (f.btnAt >= 0) { const uint32_t bt = bitsAt(w, size_t(f.btnAt), f.btnLen); r.button = std::to_string(bt); r.fact("button", (long long)bt); }
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace pwmfam
+
 /** The remote families, strongest checks first. */
 inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (lightwave::decode(b, out)) return true;
@@ -314,6 +386,7 @@ inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (nexa::decode(b, out)) return true;
     if (x10::decode(b, out)) return true;
     if (somfy::decode(b, out)) return true;
+    if (pwmfam::decode(b, out)) return true;
     return false;
 }
 
