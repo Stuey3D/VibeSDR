@@ -8,6 +8,7 @@
 #include "vibe_ism_weather3.h"   // ★ weather pass 2026-11-11: La Crosse (TX141 family, WS-2310/3600, TX-3/6U/7U, TX22U)
 #include "vibe_ism_weather4.h"   // ★ weather pass 2026-11-11: AcuRite (TXR family, 00275RM, 609, 606, 590, 985/986)
 #include "vibe_ism_weather5.h"   // ★ weather pass 2026-11-11: S3318P family, XC-0324, Hideki, GT-WT-02/03, WT0124, Cotech, TFA pool
+#include "vibe_ism_weather6.h"   // ★ weather pass 2026-11-11: Auriol, Vauno, AlectoV1, Prologue
 
 namespace vibeism {
 
@@ -448,6 +449,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (fineoffset::decodeWh2(b, out)) return;
     if (sl109h::decode(b, out)) return;      // ★ before the 609: a background 609 inside an SL109H's channel must not win
     if (acurite2::decode(b, out)) return;
+    if (wx6::decode(b, out)) return;
     if (wx5::decode(b, out)) return;
     if (nexus::decode(b, out)) return;
     if (acurite::decodePwm(b, out)) return;
