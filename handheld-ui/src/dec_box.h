@@ -932,7 +932,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (xv) { if (xv->clear) xv->clear(); }
             else if (d && d->kind == DK_PICTURE) picClear();
             else if (view == "spots") u.spots.clear();
-            else { const long long rd = u.readSig; u.log.clear(); u.calls.clear(); u.dsc.clear(); u.aprsLog.clear(); u.aprs.clear(); decClearLists(); decListScroll() = {}; decSigAnchor() = {}; u.readSig = rd; }
+            else { u.log.clear(); u.calls.clear(); u.dsc.clear(); u.aprsLog.clear(); u.aprs.clear(); decClearLists(); decListScroll() = {}; decSigAnchor() = {}; }
         } else if (act == 3) {
             if (decRunning()) decStop(a, view == "spots" ? "spots" : view);
             if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); decRelease(a); }
