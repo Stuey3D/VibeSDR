@@ -42,7 +42,7 @@ using namespace hh;
 
 // ── the engine's /mapdata/v1/, served from a directory (throttled like the R36S's card + A35 parse) ─────────────────
 static std::string gDir;
-static double gBytesPerSec = 4e6;   // ★ the device's pace: a 4 MB shard took ~1–1.5 s to land (h66 log, upload times)
+static double gBytesPerSec = 1.5e6;   // ★ the device's pace: 22 files landed in ~25 s of a fresh map (h66 log, 1918–1948 s)
 static void serveOne(int c) {
     char buf[2048];
     const ssize_t n = ::recv(c, buf, sizeof buf - 1, 0);
@@ -98,6 +98,16 @@ static void savePng(const std::string& path) {
 /** A spot as the sheet draws it (map_page.h's marker loop, MG_DOT): a dark disc, the mode's colour, its call at z ≥ 5. */
 struct Spot { double lat, lon; Rgba col; std::string call; };
 
+/** ★ A WASTED RENDER: one that drew exactly what the render before it drew, for the same view — nothing new was
+ *  drawable (a shard of a tier that is not complete yet lands; the old tier is drawn again, alone). */
+static std::string gLastSig; static long gWasted = 0, gWastedData = 0;
+static void noteRender(H& h) {
+    MapRender& R = mapRender();
+    std::string sig = std::to_string(R.fz) + "|" + std::to_string(R.fcx) + "|" + std::to_string(R.fcy) + "|" + std::to_string(R.vertsLast) + "|" + std::to_string(R.labelsLast);
+    for (auto& d : R.drawn) sig += "|" + *d.file + d.what;
+    if (sig == gLastSig) { gWasted++; if (R.lastCause == MapRender::RC_DATA) gWastedData++; }
+    gLastSig = sig;
+}
 /** One frame: the basemap (MapView::draw — the code under test), then the overlay, as mapDrawSheet does. */
 static void frameOnce(H& h, const std::vector<Spot>& spots, bool finish = true) {
     const double now = wall();
@@ -107,7 +117,9 @@ static void frameOnce(H& h, const std::vector<Spot>& spots, bool finish = true) 
     glViewport(0, 0, 640, 480);
     glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
     Ctx c{h.g, h.tc, h.f, h.nav, now};
+    const long before = mapRender().renders;
     h.v.draw(c, now, h.frame);
+    if (mapRender().renders != before) noteRender(h);
     c.g.clip(h.v.area.x, h.v.area.y, h.v.area.w, h.v.area.h);
     const Font& lf = mapFonts().bold13;
     for (auto& s : spots) {
@@ -155,11 +167,11 @@ static void perfLine(const char* tag, H& h, double sec) {
     MapRender& R = mapRender();
     std::string causes;
     for (int k = 0; k < MapRender::RC_N; k++) if (R.byCause[k]) causes += std::string(causes.empty() ? "" : " ") + MapRender::causeName(k) + " " + std::to_string(R.byCause[k]);
-    std::printf("  %s: %ld re-renders in %.0f s (%.1f a minute) [%s], %.1f ms each (max %.1f), %ld drew nothing · frame %.2f ms (%ld frames) · %ld uploads · last %ld indices in %ld draws, %ld labels\n",
-                tag, R.renders, sec, R.renders * 60.0 / sec, causes.c_str(), R.renders ? R.renderMs / R.renders : 0.0, R.maxMs, R.emptyRenders,
+    std::printf("  %s: %ld re-renders in %.0f s (%.1f a minute) [%s], %ld drew what the one before drew (%ld of them data), %.1f ms each (max %.1f), %ld drew nothing · frame %.2f ms (%ld frames) · %ld uploads · last %ld indices in %ld draws, %ld labels\n",
+                tag, R.renders, sec, R.renders * 60.0 / sec, causes.c_str(), gWasted, gWastedData, R.renders ? R.renderMs / R.renders : 0.0, R.maxMs, R.emptyRenders,
                 h.frameCpu / std::max(1L, h.frames), h.frames, mapStore().uploads, R.vertsLast, R.drawsLast, R.labelsLast);
 }
-static void resetPerf(H& h) { mapRender().resetPerf(); mapStore().uploads = 0; mapStore().uploadMs = 0; h.frameCpu = 0; h.frames = 0; }
+static void resetPerf(H& h) { gWasted = gWastedData = 0; mapRender().resetPerf(); mapStore().uploads = 0; mapStore().uploadMs = 0; h.frameCpu = 0; h.frames = 0; }
 
 int main(int argc, char** argv) {
     if (argc < 4) { std::fprintf(stderr, "usage: map_test <zoom|spots|shot> <mapdataDir> <outDir> [lat lon z]\n"); return 2; }
@@ -275,6 +287,7 @@ int main(int argc, char** argv) {
         // ★ bounded: an open (everything loads), 3 zooms, 1 pan, their data — not one render per file
         const long cap = std::getenv("MAP_TEST_RENDER_CAP") ? std::atol(std::getenv("MAP_TEST_RENDER_CAP")) : 24;
         check(renders <= cap, "re-renders bounded (" + std::to_string(renders) + " ≤ " + std::to_string(cap) + " in 60 s)");
+        check(gWastedData == 0, "no data re-render that draws nothing new (" + std::to_string(gWastedData) + ")");
         std::printf("  spots: %s\n", fails ? "FAILED" : "passed");
         return fails ? 1 : 0;
     }

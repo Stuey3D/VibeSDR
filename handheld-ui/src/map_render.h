@@ -85,7 +85,7 @@ public:
      *  counts the renders that drew nothing at all. */
     enum Cause { RC_OPEN, RC_ZOOM, RC_PAN, RC_SETTLE, RC_DATA, RC_REPAIR, RC_N };
     static const char* causeName(int c) { static const char* n[RC_N] = {"open", "zoom", "pan", "settle", "data", "repair"}; return n[c]; }
-    long byCause[RC_N] = {}; long emptyRenders = 0;
+    long byCause[RC_N] = {}; long emptyRenders = 0; int lastCause = RC_OPEN;
     void resetPerf() { renders = 0; renderMs = 0; maxMs = 0; emptyRenders = 0; for (auto& c : byCause) c = 0; }
     bool msaa = false;
 
@@ -166,6 +166,7 @@ public:
     void render(MapStore& st, TextCache& tc, MapFonts& mf, double cx, double cy, int z, const MapProfile& P, uint64_t frame, int cause = RC_OPEN) {
         if (!ok_) return;
         if (cause >= 0 && cause < RC_N) byCause[cause]++;
+        lastCause = cause;
         const double t0 = clk();
         fcx = cx; fcy = cy; fz = z;
         wpx_ = worldPx(z);
@@ -198,7 +199,7 @@ public:
     }
 
     /** What the last render drew, a row per file and use (the tests' check that no layer is drawn from two tiers). */
-    struct Drawn { std::string layer; int tier; const char* what; };
+    struct Drawn { std::string layer; int tier; const char* what; const std::string* file; };
     std::vector<Drawn> drawn;
 
     /** The place labels / POIs that were drawn, for the pointer's hit test (FBO pixel boxes). */
@@ -297,7 +298,7 @@ private:
     }
     void note(const MapFile* f, const char* what) {
         const int tier = f->name.size() > 5 && f->name.compare(0, 4, "tier") == 0 ? f->name[4] - '0' : -1;
-        drawn.push_back({mapLayerOf(f->name), tier, what});
+        drawn.push_back({mapLayerOf(f->name), tier, what, &f->name});
     }
     void use() {
         g_.flush();
@@ -395,10 +396,27 @@ private:
         if (z >= 10 && ix.detail()) {
             const auto coast = resolve("coast", 2, 3);
             if (!coast.empty()) {
-                // ★ not every shard here yet: the country fill underneath, so a half-arrived view is never sea
-                bool all = true;
-                for (auto& n : filesFor("coast", 2)) if (!st_->peekFile(n)) all = false;
-                if (!all) fill(resolve("countries", 2, 2), mp::land);
+                /* ★ not every shard here yet: the country fill underneath, so a half-arrived view is never sea —
+                 *  ★★ but ONLY over the shards still missing (a scissor a shard box). Under the whole view it was the
+                 *  coarse land poking out past the fine coast wherever the coast HAD arrived: low detail under fine
+                 *  detail, for as long as one shard of the view was still loading (or never came). */
+                std::vector<const float*> missing;
+                auto sh = ix.sharded.find("tier2-coast");
+                if (sh != ix.sharded.end()) for (auto& s : sh->second) if (ix.has(s.file) && hits(s.box) && !st_->peekFile(s.file)) missing.push_back(s.box);
+                if (!missing.empty()) {
+                    const auto under = resolve("countries", 2, 2);
+                    for (const float* b : missing) {
+                        for (int k : wraps(b)) {
+                            const float x0 = std::max(0.f, sx(b[0] + k)), x1 = std::min((float)fboW, sx(b[2] + k));
+                            const float y0 = std::max(0.f, sy(b[1])), y1 = std::min((float)fboH, sy(b[3]));
+                            if (x1 <= x0 || y1 <= y0) continue;
+                            glEnable(GL_SCISSOR_TEST);
+                            glScissor((GLint)std::floor(x0), (GLint)std::floor(fboH - y1), (GLsizei)std::ceil(x1 - x0) + 1, (GLsizei)std::ceil(y1 - y0) + 1);
+                            fill(under, mp::land);
+                            glDisable(GL_SCISSOR_TEST);
+                        }
+                    }
+                }
                 fill(coast, mp::land);
                 lines(coast, mp::coast, 1);
                 coastDrawn = true;
@@ -436,10 +454,18 @@ private:
         if (z >= 4) lines(resolve("reefs", std::max(1, mapTierFor("reefs", z))), mp::reef, 1);
         // ★ admin-1 DASHED and dim: a solid line reads as a border between countries — a factual error, not a style one
         if (z >= 5) lines(resolve("admin1", mapTierFor("admin1", z)), mp::admin, 1, 7);
-        // ★★★ THREE LINE KINDS, THREE LOOKS: coast · border (brighter, solid) · admin (dashed). At the country tier the
-        //     outline IS the border, then tier2-borders on top (vibemap.js drawBorders, "in all places").
+        // ★★★ THREE LINE KINDS, THREE LOOKS: coast · border (brighter, solid) · admin (dashed).
+        // ★★★ A LAND BORDER HAS ONE SOURCE (Stuart, 2026-11-12, handheld66: "still overlapping … the maps draw different
+        //     zoom levels or different countries merged into one"). At the country tiers (z ≤ 9) the outline of the
+        //     country polygons IS the border — Natural Earth's countries share their border vertices exactly, so it
+        //     sits where the two fills meet. tier2-borders on top of it (vibemap.js drawBorders does both) was the
+        //     same border a second time from 10 m data over 110 m / 50 m: two lines a few pixels apart, the coarse
+        //     one under the fine one, all across every land border (test/map_test.cpp zoom). tier2-borders is drawn
+        //     at the COAST tier (z10+) only, where the fill is not political and the borders must come on their own.
+        //     (The web's reason for both — a neighbour's fill painting over the stroke — cannot happen here: every
+        //     fill is drawn before any line.) It also leaves 150 k border indices out of every world-view render.
         if (!countries.empty()) lines(countries, mp::border, 1);
-        lines(resolve("borders", 2, 2), mp::border, z >= 6 ? 1.6f : 1.3f);
+        else if (coastDrawn) lines(resolve("borders", 2, 2), mp::border, z >= 6 ? 1.6f : 1.3f);
         if (z >= 2 && z <= 8) geolines(st_->want("tier0-geolines.json", frame_, 1));
         grid();
         if (z >= 5 && P_.roads) lines(resolve("roads", mapTierFor("roads", z)), mp::road, z >= 9 ? 1.4f : 1);
