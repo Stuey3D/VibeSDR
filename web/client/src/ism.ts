@@ -30,7 +30,9 @@ export interface IsmDevice {
 }
 /** A public mesh message (Meshtastic's default channel, MeshCore's Public channel — nothing else is ever sent). */
 export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number }
-export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number }
+export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number;
+  /** ★ V12 2026-11-12: channels FOUND ON AIR running / known on this band (absent on an older server = 0) */
+  found: number; foundKnown: number }
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 export interface IsmBand { id: string; name: string; hz: number }
 export interface IsmReport {
@@ -87,7 +89,8 @@ export function ismSanitise(msg: any): IsmReport | null {
     noise: num(msg.noise), dropped: num(msg.dropped), capture: num(msg.capture), gain: num(msg.gain), gainAuto: num(msg.gainAuto),
     meters: num(msg.meters), damaged: num(msg.damaged), collector: num(msg.collector), wmGap: num(msg.wmGap),
     lora: lo ? { chans: num(lo.chans) ?? 0, plan: num(lo.plan) ?? 0, dets: num(lo.dets) ?? 0, frames: num(lo.frames) ?? 0, badCrc: num(lo.badCrc) ?? 0,
-                 texts: num(lo.texts) ?? 0, mapped: num(lo.mapped) ?? 0, dropped: num(lo.dropped) ?? 0 } : undefined,
+                 texts: num(lo.texts) ?? 0, mapped: num(lo.mapped) ?? 0, dropped: num(lo.dropped) ?? 0,
+                 found: num(lo.found) ?? 0, foundKnown: num(lo.foundKnown) ?? 0 } : undefined,
     msgs: lo ? msgsOf(msg.msgs) : undefined,
     devices,
   };
@@ -260,7 +263,10 @@ export function ismStatus(r: IsmReport): string {
   if (r.wmGap === 1 && r.rate) parts.push(`868.95 not covered at ${(r.rate / 1e6).toFixed(r.rate % 1e6 ? 1 : 0)} MS/s`);
   if (r.bursts !== undefined) parts.push(`${r.bursts} bursts${r.unknown ? ` (${r.unknown} unidentified)` : ''}`);
   // ★ V12 LoRa: frames decoded, and how many of the band's LoRa channels this capture holds
-  if (r.lora) parts.push(`LoRa ${r.lora.frames} ${r.lora.frames === 1 ? 'frame' : 'frames'} · ${r.lora.chans} of ${r.lora.plan} channels`);
+  //   ★ V12 2026-11-12 + the channels FOUND ON AIR (vibe_lora_discover.h), and any the CPU budget holds back — said honestly
+  if (r.lora) parts.push(`LoRa ${r.lora.frames} ${r.lora.frames === 1 ? 'frame' : 'frames'} · ${r.lora.chans} of ${r.lora.plan} channels`
+    + (r.lora.found ? ` + ${r.lora.found} found on air` : '')
+    + (r.lora.foundKnown > r.lora.found ? ` (${r.lora.foundKnown - r.lora.found} more found, waiting for CPU)` : ''));
   /* ★ THE GAIN ISM IS ACTUALLY USING (Stuart, 2026-10-25: "the gain is indicating 0dB but I know that not to be the case").
    *  ISM sets the radio's gain itself (vibe_ism_service.h GainRule: 60 % up the radio's own list, down only on clipping)
    *  and the dongle AGC off, so the ordinary gain readout has nothing true to say — the report's `gain` is the figure. */
