@@ -329,6 +329,23 @@ static Runs jansiteSolarTx(uint32_t id24, int pRaw, int tC) {
     return chipsToRuns(ch + "0", 51);
 }
 
+// GM aftermarket: OOK 120 µs, Manchester (1,0) = 1: 48 zeros, flags (2), ID (5), ×2.75 kPa, °C + 60, sum of nine, 2 bits.
+static Runs gmTx(uint64_t id40, int pRaw, int tC, int flags = 0x4C93) {
+    std::vector<uint8_t> by = { uint8_t(flags >> 8), uint8_t(flags), uint8_t(id40 >> 32), uint8_t(id40 >> 24), uint8_t(id40 >> 16), uint8_t(id40 >> 8),
+                                uint8_t(id40), uint8_t(pRaw), uint8_t(tC + 60) };
+    unsigned sm = 0; for (uint8_t v : by) sm += v; by.push_back(uint8_t(sm));
+    Bits d(48, 0); Bits b = bytesToBits(by); d.insert(d.end(), b.begin(), b.end()); d.push_back(0); d.push_back(0);
+    std::string c; mcChips(c, d, true);
+    return chipsToRuns(c + "0", 120);
+}
+// Honda TRW: FSK 50 µs, the 23-chip marker, then Manchester (0,1) = 1: ×0.2 PSI, °C + 50, ID (4), flags, CRC-8 0x07.
+static Runs hondaTx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { uint8_t(pRaw), uint8_t(tC + 50), uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0xE1 };
+    by.push_back(crc8(by.data(), 7, 0x07, 0));
+    std::string c = "1111 1101 1010 1110 0011 0101 010"; mcChips(c, bytesToBits(by), false);
+    return chipsToRuns(c + "10", 50);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -496,6 +513,9 @@ int main(int argc, char** argv) {
             {"Steelmate", steelmateTx(0x1A4E, 83, 25), true, 50, "Steelmate", 83 * 3.125, 25, true},
             {"Jansite Solar", jansiteSolarTx(0x4C2A11, 140, 21), true, 51, "Jansite Solar", 140 * 1.6, 21, false},
             {"Jansite TY02S", jansiteTx(0x55ADE73, 52, 22), true, 52, "TY02S", 52 * 1.7, 22, true},
+            {"Nissan (FSK)", smd3Tx(0x6C253C, 5, 4 * (26 + 3)), true, 120, "Nissan", 26 * 6.894757, NAN, true},
+            {"GM aftermarket", gmTx(0x787847C1A7ull, 80, 27), false, 120, "GM aftermarket", 220, 27, true},
+            {"Honda TRW", hondaTx(0x8D3F6D67, 160, 20), true, 50, "Honda (TRW)", 160 * 0.2 * 6.894757, 20, false},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},

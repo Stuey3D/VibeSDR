@@ -66,7 +66,7 @@ const RTL_NAMES = {
   'Schrader': ['Schrader'], 'Schrader EG53MA4': ['Schrader-EG53MA4'], 'Schrader SMD3MA4 / 3039': ['Schrader-SMD3MA4', 'Schrader-NIS315G3'], 'Porsche 987': ['Porsche'],
   'Toyota PMV-C210': ['Toyota'], 'Toyota PMV-107J': ['PMV-107J'], 'Renault': ['Renault'], 'Renault 0435R': ['Renault-0435R'],
   'Hyundai / Kia (VDO)': ['Hyundai-VDO'], 'EGQ Q85': ['Shenzhen-EGQQ85'], 'Abarth 124 / MX-5 (VDO TG1C)': ['Abarth-124Spider'],
-  'PSA / Jeep (VDO)': ['Citroen', 'Jeep'], 'Ford (VDO)': ['Ford'], 'Truck solar TPMS': ['Truck'], 'Steelmate': ['Steelmate'], 'Jansite TY02S': ['Jansite'], 'Jansite Solar': ['Jansite-Solar'],
+  'PSA / Jeep (VDO)': ['Citroen', 'Jeep'], 'Ford (VDO)': ['Ford'], 'Truck solar TPMS': ['Truck'], 'Steelmate': ['Steelmate'], 'Jansite TY02S': ['Jansite'], 'Jansite Solar': ['Jansite-Solar'], 'Nissan (Schrader FSK)': ['Nissan'], 'GM aftermarket': ['GM-Aftermarket'], 'Honda (TRW)': ['Honda-TRW'],
   'Elantra 2012 / Civic (TRW)': ['Elantra2012'],
 };
 function sameSensorOtherFormat(o, exp) {

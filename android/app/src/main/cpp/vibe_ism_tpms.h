@@ -314,14 +314,19 @@ inline bool toyota107J(Chips& ch, std::vector<Reading>& out) {
 //  so the frame is anchored at its END — the last 80 bits of an unbroken Manchester run that starts with ≥ 32 zeros.
 //  WEAK: an 8-bit sum — confirm.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** The Schrader OOK frames whose run-in is Manchester ZEROS in the data's own phase ((1,0) = 1): from the first 16 of
+ *  them, every clean pair up to the first violation — the frame then ends where this run ends. */
+inline Bits zeroRunInFrame(const Bits& c) {
+    static const char* kRunIn = "0101 0101 0101 0101 0101 0101 0101 0101";
+    Bits d;
+    const size_t p0 = findChips(c, kRunIn);
+    if (p0 == size_t(-1)) return d;
+    for (size_t i = p0; i + 1 < c.size() && c[i] != c[i + 1]; i += 2) d.push_back(c[i]);
+    return d;
+}
 inline bool schraderEG53MA4(Chips& ch, std::vector<Reading>& out) {
-    static const char* kRunIn = "0101 0101 0101 0101 0101 0101 0101 0101";   // 16 Manchester zeros, (1,0) = 1
     for (const Bits& c : ch.rows(false, 123)) {
-        const size_t p0 = findChips(c, kRunIn);
-        if (p0 == size_t(-1)) continue;
-        // the longest clean run of pairs from the run-in on
-        Bits d;
-        for (size_t i = p0; i + 1 < c.size() && c[i] != c[i + 1]; i += 2) d.push_back(c[i]);   // (1,0) = 1
+        const Bits d = zeroRunInFrame(c);
         if (d.size() < 80 + 32) continue;
         const size_t s = d.size() - 80;
         bool zeros = true; for (size_t i = s - 32; i < s; ++i) zeros = zeros && d[i] == 0;
@@ -334,6 +339,36 @@ inline bool schraderEG53MA4(Chips& ch, std::vector<Reading>& out) {
         Reading r = tyre("Schrader", "Schrader EG53MA4", 14, id, true);
         r.kpa = by[7] * 2.5;
         r.tempC = (by[8] - 32) / 1.8;
+        if (!plausible(r.kpa, r.tempC)) continue;
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  GM AFTERMARKET (EL-50448-learnable sensors) — facts: rtl_433 tpms_gm.c notes. OOK Manchester, 120 µs half-bit, 130
+//  bits: 48 zeros, then flags (16: learn mode, battery low = bit 5), ID (40), pressure (raw × 2.75 kPa), temperature
+//  (°C + 60), the sum of the nine bytes from the flags on, 2 trailing bits. Framed like the EG53MA4 (anchored at the
+//  end). WEAK: an 8-bit sum — confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool gmAftermarket(Chips& ch, std::vector<Reading>& out) {
+    for (const Bits& c : ch.rows(false, 120)) {
+        const Bits d = zeroRunInFrame(c);
+        if (d.size() < 82 + 32) continue;
+        const size_t s = d.size() - 82;
+        bool zeros = true; for (size_t i = s - 32; i < s; ++i) zeros = zeros && d[i] == 0;
+        if (!zeros) continue;
+        const auto by = pack(d, s);   // flags (2), ID (5), P, T, sum — and the 2 trailing bits ignored
+        if (sum8(by.data(), 9) != by[9] || allSame(by.data(), 9)) continue;
+        const uint64_t id = uint64_t(by[2]) << 32 | uint64_t(by[3]) << 24 | uint64_t(by[4]) << 16 | uint64_t(by[5]) << 8 | by[6];
+        if (id == 0) continue;
+        Reading r = tyre("GM", "GM aftermarket", 20, id, true);
+        r.kpa = by[7] * 2.75;
+        r.tempC = int(by[8]) - 60;
+        const unsigned fl = unsigned(by[0]) << 8 | by[1];
+        r.battOk = (fl & 0x20) ? 0 : 1;
+        if (!(fl & 0x100) && !(fl & 0x2) && !(fl & 0x1)) r.extra = "learn";
         if (!plausible(r.kpa, r.tempC)) continue;
         out.push_back(r);
         return true;
@@ -381,6 +416,31 @@ inline std::vector<uint8_t> packLsb(const Bits& b, size_t pos, int n) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  NISSAN (FSK; Schrader-made, 315 MHz) — facts: rtl_433 tpms_nissan.c notes. ~120 µs FSK chips, the same run-in and
+//  check as the Schrader 3039 above (0xF5555555E, the run-in's last pair a fixed 1), then 37 Manchester bits with
+//  (1,0) = 1: mode (3), ID (24), pressure (8: raw / 4 − 3 PSI), 2 unknown bits; with the fixed 1, the 19 bit pairs sum
+//  to 1 mod 4. WEAK: a 2-bit check — confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool nissan(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "1111 0101 0101 0101 0101 0101 0101 0101 1110";
+    for (const Bits& c : ch.rows(true, 120))
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            Bits d;
+            if (!mcRead(c, p + 34, 38, true, d) || d[0] != 1) continue;   // from the fixed 1
+            unsigned sum = 0; for (size_t i = 0; i < 38; i += 2) sum += unsigned(d[i] << 1 | d[i + 1]);
+            if ((sum & 3) != 1) continue;
+            const uint32_t id = bitsAt(d, 4, 24);
+            if (id == 0 || id == 0xFFFFFF) continue;
+            Reading r = tyre("Nissan", "Nissan (Schrader FSK)", 19, id, true);
+            r.kpa = std::max(0.0, (bitsAt(d, 28, 8) / 4.0 - 3) * kPaPerPsi);
+            if (!plausible(r.kpa, NAN)) continue;
+            out.push_back(r);
+            return true;
+        }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  STEELMATE TP-S15 (and R-Lake) — aftermarket. Facts: rtl_433 steelmate.c notes (issue #3200). FSK, 50 µs Manchester
 //  half-bits. Read with (0,1) = 1 and every byte LSB first (checked on the corpus): 16 zeros, a 0x01 byte, ID (16),
 //  pressure (raw × 3.125 kPa — bar × 32), temperature (°C + 50), battery (3.9 V − raw × 10 mV; 0xFF / 0xFE = fast /
@@ -407,6 +467,27 @@ inline bool steelmate(Chips& ch, std::vector<Reading>& out) {
             return true;
         }
     return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  HONDA — TRW PPA-GF33 (FCC ID GQ4-36T; 2009-2016 Honda Insight and others, 315 MHz). Facts: rtl_433 tpms_honda.c notes
+//  (issue #3447). FSK ~50 µs chips: a 23-chip desync marker "1101 1010 1110 0011 0101 010", then 64 Manchester bits
+//  ((0,1) = 1): pressure (raw × 0.2 PSI), temperature (°C + 50), ID (32), flags, CRC-8 poly 0x07 init 0 over the seven
+//  before it. A raw pressure of 1-49 is what an Elantra / TRW GQ4-44T frame looks like here — refused. STRONG.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool hondaTrw(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 50, "1101 1010 1110 0011 0101 010", 64, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc8(by.data(), 7, 0x07, 0x00) != by[7] || allSame(by.data(), 8)) return false;
+        if (by[0] > 0 && by[0] < 50) return false;
+        const uint32_t id = uint32_t(by[2]) << 24 | uint32_t(by[3]) << 16 | uint32_t(by[4]) << 8 | by[5];
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("Honda", "Honda (TRW)", 21, id, false);
+        r.kpa = by[0] * 0.2 * kPaPerPsi;
+        r.tempC = int(by[1]) - 50;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -637,10 +718,13 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (egqQ85(ch, out)) return true;
     if (elantra2012(ch, out)) return true;
     if (jansiteSolar(ch, out)) return true;
+    if (hondaTrw(ch, out)) return true;
     // the weak checks last: a strong family's frame must never be taken by a weak one's 8-bit sum
     if (schraderEG53MA4(ch, out)) return true;
     if (schraderSMD3MA4(ch, out)) return true;
+    if (gmAftermarket(ch, out)) return true;
     if (steelmate(ch, out)) return true;
+    if (nissan(ch, out)) return true;
     // ★ the 0435R before the Abarth: both are nine bytes with an XOR of zero after a long run-in, and nothing else in the
     //   Abarth frame is fixed — the 0435R's flag nibble and tick rule make it the stricter test (test-ism caught it)
     if (renault0435R(ch, out)) return true;
