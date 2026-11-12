@@ -5,7 +5,7 @@ VibeServer's answer to OpenWebRX's "ISM" (rtl_433) mode, but **human-readable**:
 ```
 Oregon Scientific THGR810 / THGN801 · 18.4 °C · 62 % RH · battery OK · ch 2
 Fine Offset WH1080 · 12.5 °C · 90 % RH · wind 4 km/h S · gust 7 km/h · rain 23.4 mm · battery OK
-TPMS #1 · type B · 32 PSI · 18 °C
+TPMS #1 · Schrader · 32 PSI · 18 °C
 Key fob #1 · KeeLoq · button 2 · battery OK
 Doorbell / remote #1 · button A
 ```
@@ -138,7 +138,11 @@ first · `count` times heard. Absent = not carried.
 - To tell cars apart: **a per-server nickname** ("TPMS #2"), a number handed out in first-heard order, keyed by a
   **SipHash-2-4 of the ID under a 128-bit salt drawn at every start and held only in the process's memory** — never sent,
   logged or stored. The raw ID is wiped from the reading the moment it is hashed (`Tracker::accept`). A restart
-  renumbers. (Our TPMS formats do not name a make — see the table; the nickname then reads "TPMS #2".)
+  renumbers. The make goes in the line, never the ID: "TPMS #2 · Toyota PMV-C210 · 34 PSI · 29 °C".
+- **One frame or two** (2026-11-11): a tyre whose frame carries a strong check (a CRC-8 or CRC-16 behind an exact sync,
+  or a CRC plus an inverted copy of the pressure) is listed from its first frame — a car passing at 50 km/h may be heard
+  once. A weak check (8-bit sum or XOR, 2- or 5-bit check, none) is listed only once heard twice alike within 90 s, and
+  an unconfirmed frame takes no nickname. Each family below says which it is.
 - **Key fobs** show only "Key fob #n · KeeLoq · button 2" — the button bits travel in clear on KeeLoq; **never the code,
   rolling or fixed, never raw bits**.
 - **Suspected key fobs** (2026-10-25, Stuart: "add them to a list that maybe says suspected keyfob"): an UNDECODED press
@@ -219,10 +223,45 @@ slicer's smoothing is in µs, so every family above slices as before. Everything
 | Current Cost transmitters (electricity) | 433 FSK 3918 bps | **done** | Jack Kelly, rfm_edf_ecomanager wiki | counter (gas/water) packets not shown yet |
 | KeeLoq code-hopping fobs/remotes (Microchip HCS301 class) | 315/433 OOK PWM | **done, privacy** | Microchip HCS301 datasheet DS21143B | make unknown from the air: "KeeLoq" |
 | EV1527 / PT2262 fixed-code doorbells, PIRs, contacts, gate remotes | 315/433 OOK PWM | **done, privacy** | EV1527/SC1527 and PT2262 datasheets | 2 identical words required |
-| TPMS "type A" | FSK diff. Manchester | **done, privacy** (temperature) | Krstic et al., "Applying TPMS Devices for Traffic Management Purposes" (IHP/DLR) | **pressure scale not published** — shown without pressure; make not named |
-| TPMS "type B" | OOK, 240 µs symbols | **done, privacy** (kPa = raw × 2.5, °C) | same paper | **line code and preamble not published**: Manchester/NRZ both tried, frame after an 8-bit run-in, latest start wins; confirm-twice |
-| TPMS "type C" | FSK Manchester | not done | same paper | XOR checksum too weak without a published preamble; pressure scale not given |
-| TPMS by manufacturer (Schrader, Continental/VDO, Huf/Beru, Pacific/Toyota, TRW…) | 315/433 | **not done: no non-GPL description** | — | **so "Toyota TPMS" cannot be named yet** |
+| **TPMS — 34 decoders (≈ 40 sensor models) in `vibe_ism_tpms.h`** (2026-11-11) | | | rtl_433 device notes (`src/devices/tpms_*.c`, `schraeder.c`) **read for facts only** — layout, timing, check — plus FCC filings and the IHP/DLR paper where they exist; our own framing engine and code (see below) | corpus = the rtl_433_tests recordings (`scripts/ism-corpus.mjs`): match / of the folder's keyed recordings |
+| Schrader GG4 (EU/US OE) | 433 OOK Manch. 120 µs | **done, strong** (CRC-8) | schraeder.c notes | corpus 53/54 |
+| Schrader EG53MA4 (Opel/Vauxhall/Saab/GM) | 433 OOK Manch. 123 µs | **done, weak** (sum) | schraeder.c notes | corpus 10/10 (incl. the PA66GF35 type B misread); framed from the END |
+| Schrader SMD3MA4 (Subaru) / 3039 (Nissan, Infiniti, Renault Koleos) | 315 OOK PCM 120 µs | **done, weak** (2-bit) — no pressure | schraeder.c notes, JoeSc/Subaru-TPMS-Spoofing | same frame, two pressure scales: none shown; corpus 7/7 decoded |
+| Nissan (Schrader FSK) | 315 FSK 120 µs | **done, weak** (2-bit) | tpms_nissan.c notes | corpus 10/10 |
+| Schrader RDC3 motorcycle | 433 OOK Manch. 122 µs | **done, strong** (CRC-8) | tpms_schrader_motorcycle.c notes, FCC MRXRDC3 | not in corpus (test-ism only) |
+| Porsche 987 (was "type A") | 433 FSK diff. Manch. 52 µs | **done, strong** (CRC-16) — now with pressure | IHP/DLR paper + tpms_porsche.c notes | the notes' 2 worked frames in test-ism |
+| Toyota PMV-C210 (Pacific) | 433 FSK diff. Manch. 52 µs | **done, strong** (CRC-8 + inverted pressure) | tpms_toyota.c notes, issue #706 | corpus 8/15 — 6 old captures with ±75 kHz deviation the detector splits into two silent tones |
+| Toyota PMV-107J (Pacific, US) | 315 FSK diff. Manch. 100 µs | **done, strong** (CRC-8 + inverted pressure) | FCC PAXPMV107J + tpms_pmv107j.c notes | corpus 27/29 |
+| Renault (Clio, Captur, Zoe) | 433 FSK Manch. 52 µs | **done, strong** (CRC-8) | tpms_renault.c notes | corpus 2/4 (wide-deviation captures) |
+| Renault 0435R (VDO: Mégane III, Scénic III, Laguna III, Zoe) | 433 FSK Manch. | **done, weak** (XOR) | tpms_renault_0435r.c notes, VDO 2017 list | not in corpus; tried before Abarth (same XOR frame shape) |
+| Hyundai / Kia VDO TG1C (i30 …) | 433 FSK Manch. | **done, strong** (CRC-8) | tpms_hyundai_vdo.c notes, FCC KR5TIS-01 | not in corpus |
+| Kia Rio III / some Hyundai | 433 FSK Manch. 50 µs | **done, weak** (5-bit CRC) | tpms_kia.c notes | not in corpus |
+| Hyundai Elantra 2012 / Honda Civic (TRW GQ4-44T) | 315 FSK Manch. | **done, strong** (CRC-8) | tpms_elantra2012.c notes | corpus 4/4 |
+| Honda TRW PPA-GF33 (GQ4-36T) | 315 FSK Manch. 50 µs | **done, strong** (CRC-8) | tpms_honda.c notes | corpus 1/1 |
+| TRW GQ4-70T (Chrysler / Jeep / Dodge / Ram) | 315/433 OOK + FSK Manch. 52 µs | **done, strong** (CRC-8) | tpms_trw.c notes, FCC GQ4-70T | not in corpus |
+| Citroën / Peugeot / Jeep (VDO) | 433 FSK Manch. | **done, weak** (XOR) — temperature only | tpms_citroen.c, tpms_jeep.c notes | identical frames, pressure scale ×1 vs ×2: none shown; corpus 3/3 |
+| Ford (VDO S180084730Z) | 315/433 FSK Manch. | **done, weak** (sum + state) | tpms_ford.c notes | corpus 2/3; learn-tool frames shown without pressure |
+| Abarth 124 / Fiat 124 / Mazda MX-5 ND (VDO TG1C) | 433 FSK Manch. | **done, weak** (XOR) | tpms_abarth124.c notes | corpus 4/4 |
+| Shenzhen EGQ Q85 | 433 FSK Manch. | **done, strong** (CRC-16) | tpms_abarth124.c notes (#2556) | corpus 6/6 (needed the gated discriminator, below) |
+| BMW Gen4/Gen5 (Huf/Beru, Schrader-Sensata, Continental), Audi alert | 433 FSK Manch. 25 µs | **done, strong** (CRC-8 0x2F) | tpms_bmw.c notes | corpus: `continental_tpms` 3/4 (no answer key — IDs and values agree with its README); the BMW .cs16 captures start too close to the frame |
+| BMW Gen2 / Gen3 | 433 FSK diff. Manch. 52 µs | **done, strong** (CRC-16) | tpms_bmw_g3.c notes | not in corpus |
+| Mercedes-Benz Sprinter (2025) | 433 FSK Manch. 25 µs | **done, strong** (CRC-8 0x2F) | tpms_mercedes_benz.c notes | corpus 1/2 |
+| Truck solar TPMS | 433 FSK Manch. | **done, weak** (XOR) | tpms_truck.c notes | corpus 5/6 |
+| Jansite Solar | 433 FSK Manch. | **done, strong** (CRC-16) | tpms_jansite_solar.c notes | corpus 1/1 |
+| Jansite TY02S | 433 FSK Manch. | **done, weak** (no check — a fixed 16-bit trailer) | tpms_jansite.c notes (off in rtl_433: last byte unknown) | corpus 29/29 |
+| Airpuxem TYH11 (Senasic SNP739D) | 433 FSK Manch. | **done, strong** (CRC-8) | tpms_airpuxem.c notes | not in corpus |
+| Steelmate TP-S15 / R-Lake | 433 FSK Manch. 50 µs, LSB first | **done, weak** (sum) | steelmate.c notes (#3200) | corpus 24/31 (the rest start too close to the capture's start) |
+| SmarTire Vantage (Aston Martin DB9) | 433 OOK PCM 167 µs, diff. Manch. | **done, weak** (CRC-7) | tpms_smartire.c notes | corpus 1/1 |
+| EezTire E618 / Carchet / TST 507 | 433 OOK Manch. 50 µs | **done, weak** (sum) | tpms_eezrv.c notes | corpus 4/4 (EEZ + tst507) |
+| Gear Hive | 433 OOK Manch. 104 µs | **done, weak** (no check — 10 fixed bits) | tpms_gear_hive.c notes | corpus 2/2 |
+| GM aftermarket (EL-50448) | 433 OOK Manch. 120 µs | **done, weak** (sum) | tpms_gm.c notes | corpus 2/2 |
+| Sefis M3 / Careud / Sykik | 433 FSK Manch. | **done, strong** (CRC-16) — no ID in the frame | tpms_sefis_m3.c notes | corpus 2/2; all Sefis tyres share one line |
+| AVE | 433 FSK diff. Manch. 100 µs | **done, strong** (CRC-8) | tpms_ave.c notes | not in corpus |
+| TyreGuard 400 (Davies Craig, 434.1 MHz) | 433 OOK Manch. 100 µs | **done, strong** (CRC-8) | tpms_tyreguard400.c notes | not in corpus |
+| "Type B" (OOK, CRC-8 searched over every offset) | — | **retired** | — | on the corpus it read only weather sensors, remotes and doorbells — all 12 WRONG of the baseline — and misread real Schrader frames |
+| Schrader MRXBC5A4 (BMW) | 433 | not done | schraeder.c notes | its 4 captures are FSK where the notes say OOK; the framing could not be confirmed on them |
+| iMars T240 | 433 OOK | not done | tpms_imars_t240.c notes | no pressure/temperature mapping known, and its "checksum" is a constant per unit |
+| Jansite TY468 / TY588 | 433 | not done | — | no recordings, only code lists |
 | LaCrosse TX141TH-Bv2 / TX141-Bv3 | 433 OOK | not done: no non-GPL description | — | |
 | AcuRite 5-in-1 (VN1TXC), 606TX | 433 OOK | not done: no non-GPL description | — | |
 | Bresser 5/6/7-in-1 | 868 FSK | not done: no field description outside GPL-derived code | — | |
@@ -230,7 +269,22 @@ slicer's smoothing is in µs, so every family above slices as before. Everything
 | Efergy e2 / Elite | 433 FSK | not done: framing (preamble/sync) and bit rate unpublished | Elijah / Gough Lui blogs (layout only) | |
 | Fine Offset WH24/WH65/WS68/WH51, Ecowitt | 433/868 FSK | not done: not found in the research pass | — | worth a second look |
 
-Twelve families with their variants (≈ 25 models) in phase 1.
+Twelve families with their variants (≈ 25 models) in phase 1; 34 tyre-sensor decoders added 2026-11-11.
+
+**TPMS framing (`vibe_ism_tpms.h`, 2026-11-11).** Every tyre family is a chip sync + a line code + a check at one of a
+handful of chip widths (25, 50-52, 100-104, 120-123, 167 µs). A burst's runs become fixed-width CHIPS — the width
+measured from the burst (the shortest marks and the shortest spaces measured apart, so an OOK transmitter's mark
+stretch comes out) and used when within ±25 % of a family's nominal — and each family searches its sync, reads
+Manchester or differential Manchester, and checks. FSK families try both polarities and also the burst's ENVELOPE:
+a wide-deviation sensor (±60-75 kHz) arrives as two OOK channels, one per tone, and each tone's on/off IS the frame.
+The front end's discriminator now also runs over a burst whose carrier drops BETWEEN repeated frames (EGQ Q85, Jansite
+Solar, Sefis: three frames 11 ms apart) — gated to the carrier's long stretches, the gaps read as the low tone.
+Sources: Stuart (2026-11-11) — *"we dont want to copy but if we can take inspiration"*: rtl_433's device notes were read
+for the FACTS of each frame; no code, table, comment or identifier was copied.
+
+**Score on the rtl_433_tests corpus** (`node scripts/ism-corpus.mjs`, .cu8 recordings): before the TPMS work 162 match ·
+259 decoded · 12 WRONG (all "type B") · 0 false alarms; after: 363 match · 254 decoded · 0 WRONG · 0 false alarms. The
+13 fewer "decoded" were type B's false TPMS on remotes and doorbells.
 
 ## The gallery (2026-10-25)
 
