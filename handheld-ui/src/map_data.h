@@ -107,13 +107,16 @@ struct MapGroup {
     std::string key;
     std::vector<float> v;                 // staged until upload, then freed
     std::vector<uint32_t> fan, edge;      // fills: fan triangles (stencil); edges: GL_LINES pairs (outlines / lines)
-    std::vector<float> boxes;             // one (x0, y0, x1, y1) per ring / line — the CPU's own culling + hit tests
+    std::vector<float> boxes;             // one (x0, y0, x1, y1) per ring / line while parsing; per EDGE CHUNK after mapFinish
     std::vector<uint32_t> fanAt, edgeAt;  // ★ each fill PIECE's / ring's first index (+ an end sentinel): only those in view are drawn
     std::vector<float> fanBoxes;          // ★ one (x0, y0, x1, y1) per fill piece (mapSplitFill) — fanAt's culling boxes
+    std::vector<uint32_t> fanV, edgeV;    // ★ each piece's / edge chunk's (first, last) vertex — glDrawRangeElements' bounds
+    std::vector<uint32_t> lo, loAt;       // ★ the WORLD-VIEW fan (mapLoFan): the same pieces with sub-pixel points dropped
+    bool wantLo = false;                  // ★ only files drawn at z ≤ 4 carry one (mapParse) — it is GPU memory
     std::vector<uint32_t> rv;             // parse-time: (first vertex, count) per ring, until mapFinish
     // GPU
     GLuint vbo = 0, ibo = 0;
-    GLsizei fanN = 0, edgeN = 0;          // index counts (fan first in the ibo, then edges)
+    GLsizei fanN = 0, edgeN = 0, loN = 0; // index counts (fan first in the ibo, then edges, then the world-view fan)
     float box[4] = {1, 1, 0, 0};          // the group's whole extent
 };
 /** One point row (places, airports, ports, labels, regions, runways): numbers and strings in the order they came. */
@@ -289,6 +292,26 @@ inline void mapClipSide(const std::vector<MapP2>& in, std::vector<MapP2>& out, i
         prev = cur; pin = cin;
     }
 }
+/* ★★ THE WORLD-VIEW FAN (2026-11-12). From z2 to z4 the shelf is tier1 (there is no tier0 one) — 436 k of a z2
+ *  render's 724 k indices for a contour drawn a pixel thick. Each fill piece gets a second fan beside its own, from
+ *  the points at least kMapLoEps apart (1 px at z4, ½ px at z3): the same polygon to the eye — offscreen, under
+ *  0.5 % of a view's pixels change at all, none by more than an edge's antialiasing (test/map_test.cpp lod). The cell's own edges are never thinned — a point on the cell boundary is always kept, so two neighbouring
+ *  pieces still meet exactly along their cut. A piece that would thin to nothing (an island smaller than the step —
+ *  Ascension is one) keeps every point. */
+constexpr float kMapLoEps = 1.f / 4096;
+inline void mapLoFan(const std::vector<float>& v, uint32_t base, uint32_t n, const float* cell, MapGroup& g, std::vector<uint32_t>& keep) {
+    if (!g.wantLo) return;
+    g.loAt.push_back((uint32_t)g.lo.size());
+    keep.clear();
+    float lx = 0, ly = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const float x = v[(size_t)(base + i) * 2], y = v[(size_t)(base + i) * 2 + 1];
+        const bool onCut = cell && (x == cell[0] || x == cell[2] || y == cell[1] || y == cell[3]);
+        if (i == 0 || onCut || std::fabs(x - lx) >= kMapLoEps || std::fabs(y - ly) >= kMapLoEps) { keep.push_back(base + i); lx = x; ly = y; }
+    }
+    if (keep.size() < 3) { keep.clear(); for (uint32_t i = 0; i < n; i++) keep.push_back(base + i); }
+    for (size_t k = 1; k + 1 < keep.size(); k++) { g.lo.push_back(keep[0]); g.lo.push_back(keep[k]); g.lo.push_back(keep[k + 1]); }
+}
 inline void mapSplitFill(const std::vector<MapP2>& poly, float x0, float y0, float x1, float y1, std::vector<float>& v, MapGroup& g, std::vector<MapP2>& t1, std::vector<MapP2>& t2) {
     if (poly.size() < 3) return;
     if (poly.size() <= 64 || (x1 - x0 < 1.f / 16384 && y1 - y0 < 1.f / 16384)) {
@@ -298,6 +321,10 @@ inline void mapSplitFill(const std::vector<MapP2>& poly, float x0, float y0, flo
         g.fanAt.push_back((uint32_t)g.fan.size());
         for (uint32_t k = 1; k + 1 < poly.size(); k++) { g.fan.push_back(base); g.fan.push_back(base + k); g.fan.push_back(base + k + 1); }
         g.fanBoxes.insert(g.fanBoxes.end(), {b0, b1, b2, b3});
+        g.fanV.push_back(base); g.fanV.push_back(base + (uint32_t)poly.size() - 1);
+        const float cell[4] = {x0, y0, x1, y1};
+        std::vector<uint32_t> keep;
+        mapLoFan(v, base, (uint32_t)poly.size(), cell, g, keep);
         return;
     }
     // ★ split the longer side only once it is far the longer (a tall ring is not cut into flat strips)
@@ -331,19 +358,21 @@ inline void mapFinish(MapGroup& g, bool fill, bool edges) {
     std::sort(order.begin(), order.end());
     std::vector<float> v, boxes;
     v.reserve(g.v.size()); boxes.reserve(g.boxes.size());
-    g.fan.clear(); g.edge.clear(); g.fanAt.clear(); g.edgeAt.clear(); g.fanBoxes.clear();
+    g.fan.clear(); g.edge.clear(); g.fanAt.clear(); g.edgeAt.clear(); g.fanBoxes.clear(); g.fanV.clear(); g.edgeV.clear();
     std::vector<MapP2> poly, t1, t2;
+    std::vector<uint32_t> keep;
+    g.lo.clear(); g.loAt.clear();
     for (auto& o : order) {
         const uint32_t i = o.second, first = g.rv[2 * i], n = g.rv[2 * i + 1];
         const uint32_t base = (uint32_t)(v.size() / stride);
         v.insert(v.end(), g.v.begin() + (long)(first * stride), g.v.begin() + (long)((first + n) * stride));
-        boxes.insert(boxes.end(), g.boxes.begin() + (long)(i * 4), g.boxes.begin() + (long)(i * 4 + 4));
-        g.edgeAt.push_back((uint32_t)g.edge.size());
         if (fill) {
             if (n <= 64) {   // ★ a small ring: its own fan, its own box
                 g.fanAt.push_back((uint32_t)g.fan.size());
                 for (uint32_t k = 1; k + 1 < n; k++) { g.fan.push_back(base); g.fan.push_back(base + k); g.fan.push_back(base + k + 1); }
                 g.fanBoxes.insert(g.fanBoxes.end(), g.boxes.begin() + (long)(i * 4), g.boxes.begin() + (long)(i * 4 + 4));
+                g.fanV.push_back(base); g.fanV.push_back(base + n - 1);
+                mapLoFan(v, base, n, nullptr, g, keep);
             } else {          // ★ a big one: cut into cells (mapSplitFill) — its pieces' vertices follow the plain ones
                 poly.clear();
                 for (uint32_t k = 0; k < n; k++) poly.push_back({g.v[(first + k) * 2], g.v[(first + k) * 2 + 1]});
@@ -351,9 +380,27 @@ inline void mapFinish(MapGroup& g, bool fill, bool edges) {
                 mapSplitFill(poly, bb[0], bb[1], bb[2], bb[3], v, g, t1, t2);
             }
         }
-        if (!fill || edges) for (uint32_t k = 0; k + 1 < n; k++) { g.edge.push_back(base + k); g.edge.push_back(base + k + 1); }
+        /* ★★ OUTLINES AND LINES IN CHUNKS, each with its own box (2026-11-12). Culled a RING at a time, a z10 view of the
+         *  coast drew the whole of Europe's coastline ring — 360 k of its 374 k indices off the buffer. A chunk is
+         *  ≤ 128 segments, so only the coast near the view is drawn. */
+        if (!fill || edges) {
+            constexpr uint32_t kChunk = 128;
+            for (uint32_t k0 = 0; k0 + 1 < n; k0 += kChunk) {
+                const uint32_t k1 = std::min(n - 1, k0 + kChunk);   // segments k0 … k1 − 1, vertices k0 … k1
+                float b0 = 1e9f, b1 = 1e9f, b2 = -1e9f, b3 = -1e9f;
+                for (uint32_t k = k0; k <= k1; k++) {
+                    const float x = v[(size_t)(base + k) * stride], y = v[(size_t)(base + k) * stride + 1];
+                    b0 = std::min(b0, x); b1 = std::min(b1, y); b2 = std::max(b2, x); b3 = std::max(b3, y);
+                }
+                g.edgeAt.push_back((uint32_t)g.edge.size());
+                for (uint32_t k = k0; k < k1; k++) { g.edge.push_back(base + k); g.edge.push_back(base + k + 1); }
+                boxes.insert(boxes.end(), {b0, b1, b2, b3});
+                g.edgeV.push_back(base + k0); g.edgeV.push_back(base + k1);
+            }
+        }
     }
     g.fanAt.push_back((uint32_t)g.fan.size()); g.edgeAt.push_back((uint32_t)g.edge.size());
+    if (g.wantLo) g.loAt.push_back((uint32_t)g.lo.size());
     g.v.swap(v); g.boxes.swap(boxes);
     std::vector<uint32_t>().swap(g.rv);
 }
@@ -420,7 +467,9 @@ inline bool mapParse(MapFile& f, const std::string& body) {
         s.paths(g, !lines, f.outline);
         f.groups.push_back(std::move(g));
     }
-    for (auto& g : f.groups) mapFinish(g, !lines, f.outline);
+    // ★ the world-view fan: tier0 (z ≤ 4's own) and the tier1 fills z ≤ 4 borrows (no tier0 shelf; playas from z4)
+    const bool lod = f.name.compare(0, 6, "tier0-") == 0 || (f.name.compare(0, 6, "tier1-") == 0 && (layer == "shelf" || layer == "playas"));
+    for (auto& g : f.groups) { g.wantLo = lod && !lines; mapFinish(g, !lines, f.outline); }
     return s.ok();
 }
 
@@ -492,15 +541,20 @@ public:
                 got.push_back(f);
             }
         }
+        const double u0 = now();
         for (auto& f : got) {
             upload(*f);
+            uploads++;
             f->used = frame;
             files_[f->name] = f;
             total_ += f->bytes;
             gen_++;
         }
+        if (!got.empty()) uploadMs += (now() - u0) * 1e3;
         if (total_ > kMapCacheBytes) evict();
     }
+    /** The perf line's: files put on the GPU (and the UI-thread time it took) since the last reset. */
+    long uploads = 0; double uploadMs = 0;
     /** The frame of the last basemap render (MapRender::render): the files it touched carry this `used`, and they are
      *  the picture on screen — evict() never takes one (see there). */
     void noteRender(uint64_t frame) { lastRender_ = frame; }
@@ -711,21 +765,24 @@ private:
             glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
             glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g.v.size() * sizeof(float)), g.v.data(), GL_STATIC_DRAW);
             std::vector<uint32_t> all;
-            all.reserve(g.fan.size() + g.edge.size());
+            all.reserve(g.fan.size() + g.edge.size() + g.lo.size());
             all.insert(all.end(), g.fan.begin(), g.fan.end());
             all.insert(all.end(), g.edge.begin(), g.edge.end());
+            all.insert(all.end(), g.lo.begin(), g.lo.end());
             glGenBuffers(1, &g.ibo);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.ibo);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(all.size() * sizeof(uint32_t)), all.data(), GL_STATIC_DRAW);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
-            g.fanN = (GLsizei)g.fan.size(); g.edgeN = (GLsizei)g.edge.size();
+            g.fanN = (GLsizei)g.fan.size(); g.edgeN = (GLsizei)g.edge.size(); g.loN = (GLsizei)g.lo.size();
             gpu += g.v.size() * sizeof(float) + all.size() * sizeof(uint32_t);
             // ★ the CPU copies go: only the per-ring boxes stay (culling, hit tests)
-            std::vector<float>().swap(g.v); std::vector<uint32_t>().swap(g.fan); std::vector<uint32_t>().swap(g.edge);
+            std::vector<float>().swap(g.v); std::vector<uint32_t>().swap(g.fan); std::vector<uint32_t>().swap(g.edge); std::vector<uint32_t>().swap(g.lo);
+            g.loAt.shrink_to_fit();
             g.boxes.shrink_to_fit();
             g.fanBoxes.shrink_to_fit();
-            gpu += (g.boxes.size() + g.fanBoxes.size() + g.fanAt.size() + g.edgeAt.size()) * sizeof(float);
+            g.fanV.shrink_to_fit(); g.edgeV.shrink_to_fit();
+            gpu += (g.boxes.size() + g.fanBoxes.size() + g.fanAt.size() + g.edgeAt.size() + g.fanV.size() + g.edgeV.size() + g.loAt.size()) * sizeof(float);
         }
         f.bytes += gpu;
         if (gpu > (2u << 20)) std::fprintf(stderr, "vibe-hhui: map upload geometry %s %.1f MB\n", f.name.c_str(), gpu / 1048576.0);

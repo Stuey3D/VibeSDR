@@ -322,6 +322,7 @@ struct DecUi {
     std::vector<DecSig> sigs;        // CW / PSK / JTTY
     std::deque<DecCall> calls;       // cw / psk / jtty spots, newest first, one per call
     std::deque<DecSpot> spots;       // newest first, one per call|band|mode
+    uint64_t spotsSeq = 0;           // ★ bumped on every change to `spots` (the spots map rebuilds its list only then)
     std::deque<DecDsc> dsc;
     std::vector<DecAprsSt> aprs;
     std::deque<DecAprsPkt> aprsLog;
@@ -796,6 +797,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             if (it->call == sp.call && it->band == sp.band && it->mode == sp.mode) { u.spots.erase(it); break; }
         u.spots.push_front(sp);
         decCap(u.spots, 300);
+        u.spotsSeq++;
         u.spotsMin++;
         if (u.view == "spots") { u.live = true; u.liveAt = now; }
         return;

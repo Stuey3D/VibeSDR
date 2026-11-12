@@ -121,8 +121,21 @@ public:
         double dx = cx - R.fcx; dx -= std::round(dx);
         const double ox = dx * wpx, oy = (cy - R.fcy) * wpx;
         const bool outside = std::fabs(ox) > R.margin - 2 || std::fabs(oy) > R.margin - 2;
-        const bool gen = st.generation() != gen_ && now - renderedAt_ > 0.25;
-        const bool settle = (std::fabs(ox) > 0.5 || std::fabs(oy) > 0.5) && now - movedAt_ > 0.35 && now - renderedAt_ > 0.35;
+        /* ★★★ NEW DATA RE-RENDERS RARELY, COALESCED, AND ONLY WHEN IT CHANGES THE PICTURE (handheld66, 2026-11-12: the
+         *  DIGITAL SPOTS map ran at ~20 fps with 28 re-renders in 30 s at 47 ms each, while the files of a fresh view
+         *  landed one by one). A re-render a file was ~one per upload, ≤ 4 a second. Now: only when an upload satisfies
+         *  something the last render waited for (MapRender::newlyDrawable — a shard of a half-here tier draws nothing
+         *  new), and while files are still landing at most one a 1.2 s — except the land of a fresh view, drawn the
+         *  moment it can be. When the loading ends, whatever landed meanwhile is drawn at once. */
+        const bool loadingNow = st.pending() > 0;
+        bool gen = false;
+        if (st.generation() != gen_ && now - renderedAt_ > 0.25) {
+            if (R.newlyDrawable(st)) gen = !loadingNow || now - renderedAt_ > 1.2 || R.waitingOnLand();
+            else if (!loadingNow) gen_ = st.generation();   // ★ nothing it waited on: this generation is drawn already
+        }
+        /* ★★ A PAN THAT STOPS INSIDE THE MARGIN NEEDS NO RE-RENDER: the buffer still covers the screen with room to spare.
+         *  It re-centres only once half the margin is used (the next pan then has the full margin again). */
+        const bool settle = (std::fabs(ox) > R.margin * 0.5 || std::fabs(oy) > R.margin * 0.5) && now - movedAt_ > 0.35 && now - renderedAt_ > 0.35;
         if (std::fabs(ox - lastOx_) > 0.01 || std::fabs(oy - lastOy_) > 0.01 || R.fz != z) movedAt_ = now;
         lastOx_ = ox; lastOy_ = oy;
         /* ★★ ONE MORE RENDER WHEN THE LOADING ENDS (Stuart, 2026-11-08: the map reopened as "a zoomed in UK over a zoomed
@@ -130,12 +143,13 @@ public:
          *  a map, while its files were going up — and a reset throws away the render in flight, leaving the buffer's old
          *  picture under the new one. A render made while files were still loading is redone 1.5 s after the last one
          *  arrived, so whatever a reset cut short is drawn again whole. */
-        const bool loadingNow = st.pending() > 0;
         const bool repair = loadRender_ && !loadingNow && now - renderedAt_ > 1.5;
         if (dirty || R.fz != z || outside || gen || settle || repair || frame == 0) {
             c.g.flush();
             const uint64_t g0 = st.generation();
-            R.render(st, c.tc, mapFonts(), cx, cy, z, mapProfile(profile), frame);
+            const int cause = dirty || frame == 0 || R.fz < 0 ? MapRender::RC_OPEN : R.fz != z ? MapRender::RC_ZOOM : outside ? MapRender::RC_PAN
+                            : gen ? MapRender::RC_DATA : repair ? MapRender::RC_REPAIR : MapRender::RC_SETTLE;
+            R.render(st, c.tc, mapFonts(), cx, cy, z, mapProfile(profile), frame, cause);
             gen_ = g0; renderedAt_ = now; dirty = false; loadRender_ = loadingNow;
             glViewport(0, 0, W, H);
             dx = 0; lastOx_ = lastOy_ = 0;

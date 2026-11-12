@@ -20,12 +20,15 @@
 #include "text.h"
 
 #include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
+#include <SDL2/SDL.h>
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -79,7 +82,14 @@ public:
     int fboW = 0, fboH = 0, margin = 0;
     GLuint tex = 0;
     // measurements (the perf line)
-    long renders = 0; double renderMs = 0, lastMs = 0; long vertsLast = 0, labelsLast = 0, drawsLast = 0;
+    long renders = 0; double renderMs = 0, lastMs = 0, maxMs = 0; long vertsLast = 0, labelsLast = 0, drawsLast = 0;
+    /* ★★ WHY EACH RE-RENDER HAPPENED (2026-11-12 — handheld66's log said "28 re-renders, 47 ms each" and could not say
+     *  what asked for them). MapView::draw names a cause for every render; the perf line counts them by cause, and
+     *  counts the renders that drew nothing at all. */
+    enum Cause { RC_OPEN, RC_ZOOM, RC_PAN, RC_SETTLE, RC_DATA, RC_REPAIR, RC_N };
+    static const char* causeName(int c) { static const char* n[RC_N] = {"open", "zoom", "pan", "settle", "data", "repair"}; return n[c]; }
+    long byCause[RC_N] = {}; long emptyRenders = 0; int lastCause = RC_OPEN;
+    void resetPerf() { renders = 0; renderMs = 0; maxMs = 0; emptyRenders = 0; for (auto& c : byCause) c = 0; }
     bool msaa = false;
 
     bool init(int screenW, int screenH, int marginPx) {
@@ -111,7 +121,29 @@ public:
         GLint maxS = 0; glGetIntegerv(GL_MAX_SAMPLES, &maxS);
         const int samples = std::min(4, (int)maxS);
         bool ok = false;
-        if (samples >= 2 && !std::getenv("VIBE_HHUI_MAP_NOMSAA")) {
+        /* ★★ 4× MSAA RESOLVED IN THE TILE, when the driver offers EXT_multisampled_render_to_texture (Mesa's Panfrost
+         *  does): the 4× samples live only in the GPU's tile memory and are resolved straight into the texture as each
+         *  tile is written out — no 4× colour and depth-stencil buffers in RAM (22.6 MB → 5.3 MB for the 896 × 736
+         *  buffer, on a 730 MB device whose map already holds up to 96 MB), and no resolve pass (the blit read all
+         *  10.5 MB of 4× colour back). Else the renderbuffers below, as before. VIBE_HHUI_MAP_NOMSRTT=1 forces those. */
+        const bool noMsaa = std::getenv("VIBE_HHUI_MAP_NOMSAA") != nullptr;
+        if (samples >= 2 && !noMsaa && !std::getenv("VIBE_HHUI_MAP_NOMSRTT") && hasExt("GL_EXT_multisampled_render_to_texture")) {
+            auto texMs = (PFNGLFRAMEBUFFERTEXTURE2DMULTISAMPLEEXTPROC)SDL_GL_GetProcAddress("glFramebufferTexture2DMultisampleEXT");
+            auto rbMs = (PFNGLRENDERBUFFERSTORAGEMULTISAMPLEEXTPROC)SDL_GL_GetProcAddress("glRenderbufferStorageMultisampleEXT");
+            if (texMs && rbMs) {
+                while (glGetError() != GL_NO_ERROR) {}   // (an older error is not this one's)
+                glGenFramebuffers(1, &msFbo_);
+                glBindFramebuffer(GL_FRAMEBUFFER, msFbo_);
+                texMs(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0, samples);
+                glGenRenderbuffers(1, &dsRb_); glBindRenderbuffer(GL_RENDERBUFFER, dsRb_);
+                rbMs(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, fboW, fboH);
+                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, dsRb_);
+                ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE && glGetError() == GL_NO_ERROR;
+                if (ok) { msaa = true; inTile = true; gpuBytes = (size_t)fboW * fboH * 8; }
+                else { glDeleteFramebuffers(1, &msFbo_); glDeleteRenderbuffers(1, &dsRb_); msFbo_ = dsRb_ = 0; }
+            }
+        }
+        if (!ok && samples >= 2 && !noMsaa) {
             glGenFramebuffers(1, &drawFbo_);
             glBindFramebuffer(GL_FRAMEBUFFER, drawFbo_);
             glGenRenderbuffers(1, &colorRb_); glBindRenderbuffer(GL_RENDERBUFFER, colorRb_);
@@ -136,64 +168,110 @@ public:
         glBindRenderbuffer(GL_RENDERBUFFER, 0);
         GLfloat lw[2] = {1, 1}; glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, lw); maxLine_ = lw[1];
         if (!gInit_) { g_.init(fboW, fboH); gInit_ = true; }   // (Gfx has no teardown: made once)
-        std::fprintf(stderr, "vibe-hhui: map buffer %dx%d%s (%.1f MB), line widths ≤ %.1f, %s\n", fboW, fboH, msaa ? " 4×MSAA" : "",
+        std::fprintf(stderr, "vibe-hhui: map buffer %dx%d%s (%.1f MB), line widths ≤ %.1f, %s\n", fboW, fboH,
+                     inTile ? " 4×MSAA in the tile (EXT_multisampled_render_to_texture)" : msaa ? " 4×MSAA renderbuffers + resolve" : "",
                      gpuBytes / 1048576.0, maxLine_, ok ? "ready" : "INCOMPLETE");
         ok_ = ok;
         return ok;
     }
     bool ready() const { return ok_; }
+    bool inTile = false;   // ★ MSAA resolved in the tile (no 4× buffers, no blit)
+    void setLod(bool on) { noLod_ = !on; }   // (tests: the world-view fans against the full ones)
     /** Every GL object gone (the map shut for a while); init() makes them again. */
     void release() {
         if (!prog_) return;
         glDeleteProgram(prog_); glDeleteVertexArrays(1, &vao_); glDeleteTextures(1, &tex);
         if (drawFbo_) glDeleteFramebuffers(1, &drawFbo_);
         if (resolveFbo_) glDeleteFramebuffers(1, &resolveFbo_);
+        if (msFbo_) glDeleteFramebuffers(1, &msFbo_);
         if (colorRb_) glDeleteRenderbuffers(1, &colorRb_);
         if (dsRb_) glDeleteRenderbuffers(1, &dsRb_);
-        prog_ = vao_ = tex = drawFbo_ = resolveFbo_ = colorRb_ = dsRb_ = 0;
-        ok_ = false; msaa = false; fz = -1; gpuBytes = 0;
+        prog_ = vao_ = tex = drawFbo_ = resolveFbo_ = colorRb_ = dsRb_ = msFbo_ = 0;
+        ok_ = false; msaa = false; inTile = false; fz = -1; gpuBytes = 0;
     }
     size_t gpuBytes = 0;
 
     /** Draw the basemap for centre (cx, cy) in world units at zoom z. `tc` / `mf` for the labels. */
-    void render(MapStore& st, TextCache& tc, MapFonts& mf, double cx, double cy, int z, const MapProfile& P, uint64_t frame) {
+    void render(MapStore& st, TextCache& tc, MapFonts& mf, double cx, double cy, int z, const MapProfile& P, uint64_t frame, int cause = RC_OPEN) {
         if (!ok_) return;
+        if (cause >= 0 && cause < RC_N) byCause[cause]++;
+        lastCause = cause;
         const double t0 = clk();
         fcx = cx; fcy = cy; fz = z;
         wpx_ = worldPx(z);
         ox_ = cx - fboW / 2.0 / wpx_; oy_ = cy - fboH / 2.0 / wpx_;
         box_[0] = (float)ox_; box_[1] = (float)oy_; box_[2] = (float)(ox_ + fboW / wpx_); box_[3] = (float)(oy_ + fboH / wpx_);
-        st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0;
+        st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0; noted_ = 0; drawn.clear(); waits_.clear();
+        indexAtRender_ = st.indexReady();
         st.noteRender(frame);   // ★ the files this render touches are the picture — evict() keeps them (map_data.h)
-        glBindFramebuffer(GL_FRAMEBUFFER, drawFbo_ ? drawFbo_ : resolveFbo_);
+        glBindFramebuffer(GL_FRAMEBUFFER, msFbo_ ? msFbo_ : drawFbo_ ? drawFbo_ : resolveFbo_);
         glViewport(0, 0, fboW, fboH);
         glDisable(GL_SCISSOR_TEST);
         glClearColor(mp::sea.r, mp::sea.g, mp::sea.b, 1);
         glClearStencil(0);
+        glClearDepthf(1);
         glStencilMask(0xff);
-        glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        layers();
-        labels(tc, mf);
+        glDepthMask(GL_TRUE);
+        /* ★★ DEPTH CLEARED TOO, though nothing tests it: depth and stencil are one buffer (D24S8), and clearing only the
+         *  stencil keeps the depth — so a tiled GPU (the Mali-G31) must READ the whole 4× buffer back in, tile by tile,
+         *  at the start of every render (3.4 MB here). Cleared, it starts each tile from nothing. */
+        glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (st.indexReady()) {   // ★ no index yet: the sea alone, and nothing else to work out
+            layers();
+            labels(tc, mf);
+        } else { poi.clear(); labelsLast = 0; }
         g_.flush();
         st.endRender(frame);   // ★ purged on zoom: what this view did not ask for leaves the load queue (map_data.h)
         glDisable(GL_STENCIL_TEST);
+        // ★★ …and never WRITTEN out: the depth-stencil is not needed after the render (nor the 4× colour after its resolve)
+        const GLenum ds[] = {GL_DEPTH_STENCIL_ATTACHMENT};
+        glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, ds);
         if (drawFbo_) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, drawFbo_);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolveFbo_);
             glBlitFramebuffer(0, 0, fboW, fboH, 0, 0, fboW, fboH, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            const GLenum col[] = {GL_COLOR_ATTACHMENT0};
+            glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 1, col);
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         renders++;
-        lastMs = (clk() - t0) * 1e3; renderMs += lastMs;
+        lastMs = (clk() - t0) * 1e3; renderMs += lastMs; maxMs = std::max(maxMs, lastMs);
         vertsLast = verts_; drawsLast = draws_;
+        if (!draws_) emptyRenders++;
     }
+
+    /** ★★ WOULD AN UPLOAD CHANGE THE PICTURE? Every render notes what it asked for and did not get — a group of
+     *  files a layer waits on. A group that must arrive WHOLE (a tier drawn only once all of it is here — the lower
+     *  tier is up meanwhile) changes nothing until its last file lands; a group drawn as it arrives (no lower tier
+     *  to stand in, a relief tile, a label file) changes with any one. MapView re-renders for new data only when
+     *  one of them is satisfied — a shard of an incomplete tier landing re-drew the very same picture before. */
+    bool newlyDrawable(MapStore& st) const {
+        if (!indexAtRender_ && st.indexReady()) return true;
+        for (auto& w : waits_) {
+            size_t here = 0;
+            for (auto& n : w.names) if (st.peekFile(n)) here++;
+            if (w.whole ? here == w.names.size() : here > 0) return true;
+        }
+        return false;
+    }
+    /** A base layer (the land) waits: the first picture of a fresh view is worth drawing as soon as it can be. */
+    bool waitingOnLand() const { for (auto& w : waits_) if (w.land) return true; return false; }
+
+    /** What the last render drew, a row per file and use (the tests' check that no layer is drawn from two tiers). */
+    struct Drawn { std::string layer; int tier; const char* what; const std::string* file; long indices; };
+    std::vector<Drawn> drawn;
 
     /** The place labels / POIs that were drawn, for the pointer's hit test (FBO pixel boxes). */
     struct Placed { float x, y, w, h; std::string text, kind; double lat, lon; };
     std::vector<Placed> poi;
 
 private:
-    GLuint prog_ = 0, vao_ = 0, drawFbo_ = 0, resolveFbo_ = 0, colorRb_ = 0, dsRb_ = 0;
+    GLuint prog_ = 0, vao_ = 0, drawFbo_ = 0, resolveFbo_ = 0, colorRb_ = 0, dsRb_ = 0, msFbo_ = 0;
+    static bool hasExt(const char* name) {
+        GLint n = 0; glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+        for (GLint i = 0; i < n; i++) { const char* e = (const char*)glGetStringi(GL_EXTENSIONS, (GLuint)i); if (e && !std::strcmp(e, name)) return true; }
+        return false;
+    }
     GLint uOrigin_ = -1, uWorld_ = -1, uWrap_ = -1, uSize_ = -1, uColor_ = -1, uDash_ = -1;
     float maxLine_ = 1;
     bool ok_ = false, gInit_ = false;
@@ -204,10 +282,17 @@ private:
     int z_ = 0;
     double wpx_ = 256, ox_ = 0, oy_ = 0;
     float box_[4] = {0, 0, 1, 1};
-    long verts_ = 0, draws_ = 0;
+    long verts_ = 0, draws_ = 0, noted_ = 0;
     bool dbg_ = std::getenv("VIBE_HHUI_MAP_LOG") != nullptr;
+    bool noLod_ = std::getenv("VIBE_HHUI_MAP_NOLOD") != nullptr;   // (tests: the full fans at every zoom)
     struct Box { float x, y, w, h; };
     std::vector<Box> placed_;
+    struct Wait { std::vector<std::string> names; bool whole, land; };
+    std::vector<Wait> waits_;
+    bool indexAtRender_ = false;
+    void waitFor(std::vector<std::string> names, bool whole, bool land = false) { if (!names.empty()) waits_.push_back({std::move(names), whole, land}); }
+    /** want() for a single file; a miss is a wait (drawn the moment it lands). */
+    MapFile* want1(const std::string& name, int prio) { MapFile* f = st_->want(name, frame_, prio); if (!f) waitFor({name}, false); return f; }
 
     static double clk() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -245,8 +330,10 @@ private:
         const auto names = filesFor(layer, want);
         if (names.empty()) return {};                    // the layer exists, nothing of it in this view
         bool all = true;
-        for (auto& n : names) { MapFile* f = st_->want(n, frame_, prio); if (f) got.push_back(f); else all = false; }
+        std::vector<std::string> missing;
+        for (auto& n : names) { MapFile* f = st_->want(n, frame_, prio); if (f) got.push_back(f); else { all = false; missing.push_back(n); } }
         if (all) return got;
+        const bool land = layer == "countries" || layer == "coast";
         // ★★★ THE OLD LAND STAYS UP UNTIL THE NEW LAND HAS ARRIVED: the best lower tier already resident, ON ITS OWN.
         // ★★ Not with what has arrived of the wanted one on top (Stuart, 2026-11-11: "the tiles all seem to overlap
         //    different zoom levels"): two tiers of one layer drawn together is two coastlines and two sets of borders a
@@ -255,32 +342,55 @@ private:
             if (!exists(u)) continue;
             bool ok = true; std::vector<MapFile*> lower;
             for (auto& n : filesFor(layer, u)) { MapFile* f = st_->peekFile(n); if (f) { f->used = frame_; lower.push_back(f); } else ok = false; }
-            if (ok) return lower;
+            if (ok) { waitFor(std::move(missing), true, land); return lower; }   // ★ nothing changes till ALL of it is here
         }
+        waitFor(std::move(missing), false, land);                                 // ★ drawn as it arrives
         return got;
     }
     /** Draw the rings of `g` that meet the view, as few runs of its index buffer as the space order allows. `fan` picks
      *  the fan indices (fills) or the edges (lines); `first` is where that part starts in the ibo. */
-    void runs(const MapGroup& g, bool fan, GLenum prim) {
-        const std::vector<uint32_t>& at = fan ? g.fanAt : g.edgeAt;
+    /* ★★ glDrawRangeElements, WITH THE RUN'S VERTEX BOUNDS (2026-11-12). Without them the driver must find the lowest
+     *  and highest index of every draw itself — Panfrost (the R36S's Mesa driver) reads the index range back from
+     *  the GPU buffer on the CPU to do it, for every run of every layer of every render (its min/max cache rarely
+     *  hits: the runs change with the view). The bounds are known at load (MapGroup fanV / edgeV): the pieces and
+     *  chunks of a group are in vertex order, so a run's range is its first one's first vertex to its last one's last.
+     *  Also returns the drawn pieces' box (world units, wrap applied) for the cover quad. */
+    bool runs(const MapGroup& g, bool fan, GLenum prim, float* ub = nullptr) {
+        const bool lo = fan && z_ <= 4 && g.loN > 0 && !noLod_;   // ★ the world-view fan (map_data.h mapLoFan)
+        const std::vector<uint32_t>& at = lo ? g.loAt : fan ? g.fanAt : g.edgeAt;
         const std::vector<float>& boxes = fan ? g.fanBoxes : g.boxes;   // ★ a fill's pieces have their own boxes (mapSplitFill)
-        const uint32_t first = fan ? 0 : (uint32_t)g.fanN;
+        const std::vector<uint32_t>& vb = fan ? g.fanV : g.edgeV;
+        const uint32_t first = lo ? (uint32_t)(g.fanN + g.edgeN) : fan ? 0 : (uint32_t)g.fanN;
         const size_t nr = boxes.size() / 4;
-        if (at.size() != nr + 1) return;
+        if (at.size() != nr + 1 || vb.size() != nr * 2) return false;
+        bool any = false;
         for (int k : wraps(g.box)) {
             glUniform1f(uWrap_, (float)k);
-            uint32_t r0 = 0, r1 = 0; bool open = false;
-            auto flushRun = [&] { if (open && r1 > r0) { glDrawElements(prim, (GLsizei)(r1 - r0), GL_UNSIGNED_INT, (void*)(sizeof(uint32_t) * (size_t)(first + r0))); verts_ += r1 - r0; draws_++; } open = false; };
+            uint32_t r0 = 0, r1 = 0, v0 = 0, v1 = 0; bool open = false;
+            auto flushRun = [&] {
+                if (open && r1 > r0) {
+                    glDrawRangeElements(prim, v0, v1, (GLsizei)(r1 - r0), GL_UNSIGNED_INT, (void*)(sizeof(uint32_t) * (size_t)(first + r0)));
+                    verts_ += r1 - r0; draws_++; any = true;
+                }
+                open = false;
+            };
             for (size_t i = 0; i < nr; i++) {
                 const float* b = &boxes[i * 4];
                 if (b[2] + k < box_[0] || b[0] + k > box_[2] || b[3] < box_[1] || b[1] > box_[3]) continue;
                 const uint32_t s0 = at[i], s1 = at[i + 1];
                 if (s1 == s0) continue;
-                if (open && s0 - r1 < 4096) r1 = s1;   // ★ a short gap is cheaper drawn than another call
-                else { flushRun(); r0 = s0; r1 = s1; open = true; }
+                if (ub) { ub[0] = std::min(ub[0], b[0] + k); ub[1] = std::min(ub[1], b[1]); ub[2] = std::max(ub[2], b[2] + k); ub[3] = std::max(ub[3], b[3]); }
+                if (open && s0 - r1 < 4096) { r1 = s1; v1 = std::max(v1, vb[2 * i + 1]); }   // ★ a short gap is cheaper drawn than another call
+                else { flushRun(); r0 = s0; r1 = s1; v0 = vb[2 * i]; v1 = vb[2 * i + 1]; open = true; }
             }
             flushRun();
         }
+        return any;
+    }
+    void note(const MapFile* f, const char* what) {
+        const int tier = f->name.size() > 5 && f->name.compare(0, 4, "tier") == 0 ? f->name[4] - '0' : -1;
+        drawn.push_back({mapLayerOf(f->name), tier, what, &f->name, verts_ - noted_});
+        noted_ = verts_;
     }
     void use() {
         g_.flush();
@@ -300,6 +410,7 @@ private:
     /** Stencil-then-cover: every ring's fan inverts the stencil (even-odd), then one quad paints where it is odd. */
     void fill(const std::vector<MapFile*>& fs, Rgba col, const std::string& key = "") {
         bool any = false;
+        float ub[4] = {1e9f, 1e9f, -1e9f, -1e9f};   // what the fans touched (world units) — the cover goes over that only
         use();
         glEnable(GL_STENCIL_TEST);
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -310,15 +421,21 @@ private:
             if (!key.empty() && g.key != key) continue;
             if (!g.vbo || !g.fanN || !hits(g.box)) continue;
             bindGroup(g, f->kind == MF_LINE);
-            runs(g, true, GL_TRIANGLES);
-            any = true;
+            if (runs(g, true, GL_TRIANGLES, ub)) { any = true; note(f, "fill"); }
         }
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         if (any) {
-            glStencilFunc(GL_EQUAL, 0x01, 0x01);
-            glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO);   // ★ the cover clears as it paints: the next layer starts from zero
-            g_.rect(0, 0, (float)fboW, (float)fboH, col);
-            g_.flush();
+            /* ★★ THE COVER OVER WHAT WAS FILLED, NOT THE WHOLE BUFFER: every fill layer painted a full 896 × 736 quad
+             *  (4× MSAA) — a dozen a render — for lakes or salt flats that touch a corner. The stencil outside the
+             *  drawn pieces' box is zero anyway, so the picture is the same. (Nothing drawn: no cover at all.) */
+            const float x0 = std::max(0.f, std::floor(sx(ub[0])) - 1), y0 = std::max(0.f, std::floor(sy(ub[1])) - 1);
+            const float x1 = std::min((float)fboW, std::ceil(sx(ub[2])) + 1), y1 = std::min((float)fboH, std::ceil(sy(ub[3])) + 1);
+            if (x1 > x0 && y1 > y0) {
+                glStencilFunc(GL_EQUAL, 0x01, 0x01);
+                glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO);   // ★ the cover clears as it paints: the next layer starts from zero
+                g_.rect(x0, y0, x1 - x0, y1 - y0, col);
+                g_.flush();
+            }
         }
         glDisable(GL_STENCIL_TEST);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -336,7 +453,7 @@ private:
             if (!g.vbo || !g.edgeN || !hits(g.box)) continue;
             bindGroup(g, f->kind == MF_LINE);
             glUniform1f(uDash_, f->kind == MF_LINE ? dash : 0);
-            runs(g, false, GL_LINES);
+            if (runs(g, false, GL_LINES)) note(f, f->kind == MF_LINE ? "line" : "outline");
         }
         glLineWidth(1);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -376,10 +493,27 @@ private:
         if (z >= 10 && ix.detail()) {
             const auto coast = resolve("coast", 2, 3);
             if (!coast.empty()) {
-                // ★ not every shard here yet: the country fill underneath, so a half-arrived view is never sea
-                bool all = true;
-                for (auto& n : filesFor("coast", 2)) if (!st_->peekFile(n)) all = false;
-                if (!all) fill(resolve("countries", 2, 2), mp::land);
+                /* ★ not every shard here yet: the country fill underneath, so a half-arrived view is never sea —
+                 *  ★★ but ONLY over the shards still missing (a scissor a shard box). Under the whole view it was the
+                 *  coarse land poking out past the fine coast wherever the coast HAD arrived: low detail under fine
+                 *  detail, for as long as one shard of the view was still loading (or never came). */
+                std::vector<const float*> missing;
+                auto sh = ix.sharded.find("tier2-coast");
+                if (sh != ix.sharded.end()) for (auto& s : sh->second) if (ix.has(s.file) && hits(s.box) && !st_->peekFile(s.file)) missing.push_back(s.box);
+                if (!missing.empty()) {
+                    const auto under = resolve("countries", 2, 2);
+                    for (const float* b : missing) {
+                        for (int k : wraps(b)) {
+                            const float x0 = std::max(0.f, sx(b[0] + k)), x1 = std::min((float)fboW, sx(b[2] + k));
+                            const float y0 = std::max(0.f, sy(b[1])), y1 = std::min((float)fboH, sy(b[3]));
+                            if (x1 <= x0 || y1 <= y0) continue;
+                            glEnable(GL_SCISSOR_TEST);
+                            glScissor((GLint)std::floor(x0), (GLint)std::floor(fboH - y1), (GLsizei)std::ceil(x1 - x0) + 1, (GLsizei)std::ceil(y1 - y0) + 1);
+                            fill(under, mp::land);
+                            glDisable(GL_SCISSOR_TEST);
+                        }
+                    }
+                }
                 fill(coast, mp::land);
                 lines(coast, mp::coast, 1);
                 coastDrawn = true;
@@ -398,12 +532,12 @@ private:
             bool tiles = false;
             if (z >= 6 && !ix.reliefTiles.empty()) {
                 std::vector<std::pair<MapFile*, const float*>> got; bool all = true;
-                for (auto& t : ix.reliefTiles) if (hits(t.box)) { MapFile* f = st_->want(t.file, frame_, 0); if (f) got.push_back({f, t.box}); else all = false; }
-                if (!all) { static const float wb[4] = {0, 0, 1, 1}; if (MapFile* g = st_->peekFile(ix.reliefBasic)) image(g->tex, wb, 0.92f); }
-                for (auto& p : got) image(p.first->tex, p.second, 0.92f);
+                for (auto& t : ix.reliefTiles) if (hits(t.box)) { MapFile* f = want1(t.file, 0); if (f) got.push_back({f, t.box}); else all = false; }
+                if (!all) { static const float wb[4] = {0, 0, 1, 1}; if (MapFile* g = st_->peekFile(ix.reliefBasic)) { image(g->tex, wb, 0.92f); note(g, "image"); } }
+                for (auto& p : got) { image(p.first->tex, p.second, 0.92f); note(p.first, "image"); }
                 tiles = true;
             }
-            if (!tiles) { static const float wb[4] = {0, 0, 1, 1}; if (MapFile* g = st_->want(ix.reliefBasic, frame_, 0)) image(g->tex, wb, 0.92f); }
+            if (!tiles) { static const float wb[4] = {0, 0, 1, 1}; if (MapFile* g = want1(ix.reliefBasic, 0)) { image(g->tex, wb, 0.92f); note(g, "image"); } }
         }
         // ground cover, then what was built on it, then what joins it
         {
@@ -417,11 +551,19 @@ private:
         if (z >= 4) lines(resolve("reefs", std::max(1, mapTierFor("reefs", z))), mp::reef, 1);
         // ★ admin-1 DASHED and dim: a solid line reads as a border between countries — a factual error, not a style one
         if (z >= 5) lines(resolve("admin1", mapTierFor("admin1", z)), mp::admin, 1, 7);
-        // ★★★ THREE LINE KINDS, THREE LOOKS: coast · border (brighter, solid) · admin (dashed). At the country tier the
-        //     outline IS the border, then tier2-borders on top (vibemap.js drawBorders, "in all places").
+        // ★★★ THREE LINE KINDS, THREE LOOKS: coast · border (brighter, solid) · admin (dashed).
+        // ★★★ A LAND BORDER HAS ONE SOURCE (Stuart, 2026-11-12, handheld66: "still overlapping … the maps draw different
+        //     zoom levels or different countries merged into one"). At the country tiers (z ≤ 9) the outline of the
+        //     country polygons IS the border — Natural Earth's countries share their border vertices exactly, so it
+        //     sits where the two fills meet. tier2-borders on top of it (vibemap.js drawBorders does both) was the
+        //     same border a second time from 10 m data over 110 m / 50 m: two lines a few pixels apart, the coarse
+        //     one under the fine one, all across every land border (test/map_test.cpp zoom). tier2-borders is drawn
+        //     at the COAST tier (z10+) only, where the fill is not political and the borders must come on their own.
+        //     (The web's reason for both — a neighbour's fill painting over the stroke — cannot happen here: every
+        //     fill is drawn before any line.) It also leaves 150 k border indices out of every world-view render.
         if (!countries.empty()) lines(countries, mp::border, 1);
-        lines(resolve("borders", 2, 2), mp::border, z >= 6 ? 1.6f : 1.3f);
-        if (z >= 2 && z <= 8) geolines(st_->want("tier0-geolines.json", frame_, 1));
+        else if (coastDrawn) lines(resolve("borders", 2, 2), mp::border, z >= 6 ? 1.6f : 1.3f);
+        if (z >= 2 && z <= 8) geolines(want1("tier0-geolines.json", 1));
         grid();
         if (z >= 5 && P_.roads) lines(resolve("roads", mapTierFor("roads", z)), mp::road, z >= 9 ? 1.4f : 1);
         if (z >= 7 && P_.rail) lines(resolve("rail", mapTierFor("rail", z)), mp::road, 1, 6);
@@ -499,7 +641,7 @@ private:
         }
         // physical regions and seas — stacked when long (a paper atlas's NORTH / ATLANTIC / OCEAN)
         if (z >= 2 && z <= 6) {
-            if (MapFile* f = st_->want("tier0-regions.json", frame_, 1)) {
+            if (MapFile* f = want1("tier0-regions.json", 1)) {
                 const int cut = z <= 3 ? 2 : z <= 4 ? 3 : z <= 5 ? 4 : 6;
                 std::vector<const MapRow*> c;
                 for (auto& r : f->rows) {
@@ -527,7 +669,7 @@ private:
         }
         // countries — Natural Earth's own label points, thinned by rank against zoom
         if (z >= 4 && z <= 7) {
-            if (MapFile* f = st_->want("tier0-countrylabels.json", frame_, 1)) {
+            if (MapFile* f = want1("tier0-countrylabels.json", 1)) {
                 const int cut = z <= 4 ? 3 : z <= 5 ? 5 : 7;
                 std::vector<const MapRow*> c;
                 for (auto& r : f->rows) if (r.n[2] <= cut) c.push_back(&r);
@@ -654,7 +796,7 @@ private:
     }
 
     void ports(TextCache& tc, MapFonts& mf, long& n) {
-        MapFile* f = st_->want("tier1-ports.json", frame_, 1);
+        MapFile* f = want1("tier1-ports.json", 1);
         if (!f) return;
         static const int minZ[5] = {5, 6, 7, 8, 10};
         auto clsOf = [](const MapRow& r) { return std::isfinite(r.n[2]) ? std::max(0, std::min(4, (int)r.n[2])) : 4; };
