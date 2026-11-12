@@ -172,7 +172,7 @@ public:
         wpx_ = worldPx(z);
         ox_ = cx - fboW / 2.0 / wpx_; oy_ = cy - fboH / 2.0 / wpx_;
         box_[0] = (float)ox_; box_[1] = (float)oy_; box_[2] = (float)(ox_ + fboW / wpx_); box_[3] = (float)(oy_ + fboH / wpx_);
-        st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0; drawn.clear(); waits_.clear();
+        st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0; noted_ = 0; drawn.clear(); waits_.clear();
         indexAtRender_ = st.indexReady();
         st.noteRender(frame);   // ★ the files this render touches are the picture — evict() keeps them (map_data.h)
         glBindFramebuffer(GL_FRAMEBUFFER, drawFbo_ ? drawFbo_ : resolveFbo_);
@@ -180,17 +180,29 @@ public:
         glDisable(GL_SCISSOR_TEST);
         glClearColor(mp::sea.r, mp::sea.g, mp::sea.b, 1);
         glClearStencil(0);
+        glClearDepthf(1);
         glStencilMask(0xff);
-        glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        layers();
-        labels(tc, mf);
+        glDepthMask(GL_TRUE);
+        /* ★★ DEPTH CLEARED TOO, though nothing tests it: depth and stencil are one buffer (D24S8), and clearing only the
+         *  stencil keeps the depth — so a tiled GPU (the Mali-G31) must READ the whole 4× buffer back in, tile by tile,
+         *  at the start of every render (3.4 MB here). Cleared, it starts each tile from nothing. */
+        glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (st.indexReady()) {   // ★ no index yet: the sea alone, and nothing else to work out
+            layers();
+            labels(tc, mf);
+        } else { poi.clear(); labelsLast = 0; }
         g_.flush();
         st.endRender(frame);   // ★ purged on zoom: what this view did not ask for leaves the load queue (map_data.h)
         glDisable(GL_STENCIL_TEST);
+        // ★★ …and never WRITTEN out: the depth-stencil is not needed after the render (nor the 4× colour after its resolve)
+        const GLenum ds[] = {GL_DEPTH_STENCIL_ATTACHMENT};
+        glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, ds);
         if (drawFbo_) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, drawFbo_);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolveFbo_);
             glBlitFramebuffer(0, 0, fboW, fboH, 0, 0, fboW, fboH, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            const GLenum col[] = {GL_COLOR_ATTACHMENT0};
+            glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 1, col);
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         renders++;
@@ -217,7 +229,7 @@ public:
     bool waitingOnLand() const { for (auto& w : waits_) if (w.land) return true; return false; }
 
     /** What the last render drew, a row per file and use (the tests' check that no layer is drawn from two tiers). */
-    struct Drawn { std::string layer; int tier; const char* what; const std::string* file; };
+    struct Drawn { std::string layer; int tier; const char* what; const std::string* file; long indices; };
     std::vector<Drawn> drawn;
 
     /** The place labels / POIs that were drawn, for the pointer's hit test (FBO pixel boxes). */
@@ -236,7 +248,7 @@ private:
     int z_ = 0;
     double wpx_ = 256, ox_ = 0, oy_ = 0;
     float box_[4] = {0, 0, 1, 1};
-    long verts_ = 0, draws_ = 0;
+    long verts_ = 0, draws_ = 0, noted_ = 0;
     bool dbg_ = std::getenv("VIBE_HHUI_MAP_LOG") != nullptr;
     struct Box { float x, y, w, h; };
     std::vector<Box> placed_;
@@ -302,30 +314,47 @@ private:
     }
     /** Draw the rings of `g` that meet the view, as few runs of its index buffer as the space order allows. `fan` picks
      *  the fan indices (fills) or the edges (lines); `first` is where that part starts in the ibo. */
-    void runs(const MapGroup& g, bool fan, GLenum prim) {
+    /* ★★ glDrawRangeElements, WITH THE RUN'S VERTEX BOUNDS (2026-11-12). Without them the driver must find the lowest
+     *  and highest index of every draw itself — Panfrost (the R36S's Mesa driver) reads the index range back from
+     *  the GPU buffer on the CPU to do it, for every run of every layer of every render (its min/max cache rarely
+     *  hits: the runs change with the view). The bounds are known at load (MapGroup fanV / edgeV): the pieces and
+     *  chunks of a group are in vertex order, so a run's range is its first one's first vertex to its last one's last.
+     *  Also returns the drawn pieces' box (world units, wrap applied) for the cover quad. */
+    bool runs(const MapGroup& g, bool fan, GLenum prim, float* ub = nullptr) {
         const std::vector<uint32_t>& at = fan ? g.fanAt : g.edgeAt;
         const std::vector<float>& boxes = fan ? g.fanBoxes : g.boxes;   // ★ a fill's pieces have their own boxes (mapSplitFill)
+        const std::vector<uint32_t>& vb = fan ? g.fanV : g.edgeV;
         const uint32_t first = fan ? 0 : (uint32_t)g.fanN;
         const size_t nr = boxes.size() / 4;
-        if (at.size() != nr + 1) return;
+        if (at.size() != nr + 1 || vb.size() != nr * 2) return false;
+        bool any = false;
         for (int k : wraps(g.box)) {
             glUniform1f(uWrap_, (float)k);
-            uint32_t r0 = 0, r1 = 0; bool open = false;
-            auto flushRun = [&] { if (open && r1 > r0) { glDrawElements(prim, (GLsizei)(r1 - r0), GL_UNSIGNED_INT, (void*)(sizeof(uint32_t) * (size_t)(first + r0))); verts_ += r1 - r0; draws_++; } open = false; };
+            uint32_t r0 = 0, r1 = 0, v0 = 0, v1 = 0; bool open = false;
+            auto flushRun = [&] {
+                if (open && r1 > r0) {
+                    glDrawRangeElements(prim, v0, v1, (GLsizei)(r1 - r0), GL_UNSIGNED_INT, (void*)(sizeof(uint32_t) * (size_t)(first + r0)));
+                    verts_ += r1 - r0; draws_++; any = true;
+                }
+                open = false;
+            };
             for (size_t i = 0; i < nr; i++) {
                 const float* b = &boxes[i * 4];
                 if (b[2] + k < box_[0] || b[0] + k > box_[2] || b[3] < box_[1] || b[1] > box_[3]) continue;
                 const uint32_t s0 = at[i], s1 = at[i + 1];
                 if (s1 == s0) continue;
-                if (open && s0 - r1 < 4096) r1 = s1;   // ★ a short gap is cheaper drawn than another call
-                else { flushRun(); r0 = s0; r1 = s1; open = true; }
+                if (ub) { ub[0] = std::min(ub[0], b[0] + k); ub[1] = std::min(ub[1], b[1]); ub[2] = std::max(ub[2], b[2] + k); ub[3] = std::max(ub[3], b[3]); }
+                if (open && s0 - r1 < 4096) { r1 = s1; v1 = std::max(v1, vb[2 * i + 1]); }   // ★ a short gap is cheaper drawn than another call
+                else { flushRun(); r0 = s0; r1 = s1; v0 = vb[2 * i]; v1 = vb[2 * i + 1]; open = true; }
             }
             flushRun();
         }
+        return any;
     }
     void note(const MapFile* f, const char* what) {
         const int tier = f->name.size() > 5 && f->name.compare(0, 4, "tier") == 0 ? f->name[4] - '0' : -1;
-        drawn.push_back({mapLayerOf(f->name), tier, what, &f->name});
+        drawn.push_back({mapLayerOf(f->name), tier, what, &f->name, verts_ - noted_});
+        noted_ = verts_;
     }
     void use() {
         g_.flush();
@@ -345,6 +374,7 @@ private:
     /** Stencil-then-cover: every ring's fan inverts the stencil (even-odd), then one quad paints where it is odd. */
     void fill(const std::vector<MapFile*>& fs, Rgba col, const std::string& key = "") {
         bool any = false;
+        float ub[4] = {1e9f, 1e9f, -1e9f, -1e9f};   // what the fans touched (world units) — the cover goes over that only
         use();
         glEnable(GL_STENCIL_TEST);
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -355,16 +385,21 @@ private:
             if (!key.empty() && g.key != key) continue;
             if (!g.vbo || !g.fanN || !hits(g.box)) continue;
             bindGroup(g, f->kind == MF_LINE);
-            runs(g, true, GL_TRIANGLES);
-            any = true;
-            note(f, "fill");
+            if (runs(g, true, GL_TRIANGLES, ub)) { any = true; note(f, "fill"); }
         }
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         if (any) {
-            glStencilFunc(GL_EQUAL, 0x01, 0x01);
-            glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO);   // ★ the cover clears as it paints: the next layer starts from zero
-            g_.rect(0, 0, (float)fboW, (float)fboH, col);
-            g_.flush();
+            /* ★★ THE COVER OVER WHAT WAS FILLED, NOT THE WHOLE BUFFER: every fill layer painted a full 896 × 736 quad
+             *  (4× MSAA) — a dozen a render — for lakes or salt flats that touch a corner. The stencil outside the
+             *  drawn pieces' box is zero anyway, so the picture is the same. (Nothing drawn: no cover at all.) */
+            const float x0 = std::max(0.f, std::floor(sx(ub[0])) - 1), y0 = std::max(0.f, std::floor(sy(ub[1])) - 1);
+            const float x1 = std::min((float)fboW, std::ceil(sx(ub[2])) + 1), y1 = std::min((float)fboH, std::ceil(sy(ub[3])) + 1);
+            if (x1 > x0 && y1 > y0) {
+                glStencilFunc(GL_EQUAL, 0x01, 0x01);
+                glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO);   // ★ the cover clears as it paints: the next layer starts from zero
+                g_.rect(x0, y0, x1 - x0, y1 - y0, col);
+                g_.flush();
+            }
         }
         glDisable(GL_STENCIL_TEST);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -382,8 +417,7 @@ private:
             if (!g.vbo || !g.edgeN || !hits(g.box)) continue;
             bindGroup(g, f->kind == MF_LINE);
             glUniform1f(uDash_, f->kind == MF_LINE ? dash : 0);
-            runs(g, false, GL_LINES);
-            note(f, f->kind == MF_LINE ? "line" : "outline");
+            if (runs(g, false, GL_LINES)) note(f, f->kind == MF_LINE ? "line" : "outline");
         }
         glLineWidth(1);
         glBindBuffer(GL_ARRAY_BUFFER, 0);

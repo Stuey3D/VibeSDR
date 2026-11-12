@@ -223,7 +223,6 @@ int main(int argc, char** argv) {
         for (auto& w : views) {
             h.v.centreOn(w.lat, w.lon, w.z);
             settle(h, none);
-            Ctx c{h.g, h.tc, h.f, h.nav, wall()};
             double ms = 0, best = 1e9;
             for (int i = 0; i < 15; i++) {
                 glFinish();
@@ -233,6 +232,7 @@ int main(int argc, char** argv) {
                 const double d = (wall() - a) * 1e3; ms += d; best = std::min(best, d);
             }
             std::printf("  bench z%-2d (%.2f, %.2f): %.1f ms a render (best %.1f) · %ld indices in %ld draws · %ld labels\n", w.z, w.lat, w.lon, ms / 15, best, mapRender().vertsLast, mapRender().drawsLast, mapRender().labelsLast);
+            if (std::getenv("MAP_TEST_DEBUG")) { std::map<std::string, long> by; for (auto& d : mapRender().drawn) by[*d.file + " " + d.what] += d.indices; for (auto& b : by) if (b.second > 2000) std::printf("      %7ld %s\n", b.second, b.first.c_str()); }
             total += ms / 15; n++;
         }
         std::printf("  bench mean %.1f ms a render · buffer %.1f MB%s\n", total / n, mapRender().gpuBytes / 1048576.0, mapRender().msaa ? " (MSAA)" : "");
