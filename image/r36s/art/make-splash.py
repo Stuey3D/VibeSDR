@@ -51,16 +51,6 @@ def circ(cx, cy, r, width=2, outline=GREEN, fill=None):
     d.ellipse(R([cx - r, cy - r, cx + r, cy + r]), outline=outline, width=max(1, int(width * S)), fill=fill)
 
 # ── the left: the icon and the wordmark ──
-LW = 200                                             # the left column's width
-ic = icon.resize((132 * S, 132 * S), Image.LANCZOS)
-big.paste(ic, ((LW // 2 - 66) * S, 96 * S))
-f_big = F(BOLD, 38)
-word = "VibeSDR"
-d.text(((LW * S - d.textlength(word, font=f_big)) / 2, 240 * S), word, font=f_big, fill=TXT)
-sub = "the radio in your pocket"
-d.text(((LW * S - d.textlength(sub, font=f_small)) / 2, 288 * S), sub, font=f_small, fill=TXT_DIM)
-d.line(R([LW + 2, 22, LW + 2, 350]), fill=GREEN_DIM, width=S)
-
 # ── the glyphs (each fits a 34 × 26 box at (x, y)) ──
 f_btn = F(BOLD, 11)          # ★ the button names INSIDE the glyphs (Stuart: the shoulders' words never read at 9 px)
 def pill(x, y, w, label, h=15):
@@ -123,7 +113,25 @@ ROWS = [
     (g_leaf, "POWER SAVE", "untouched a minute: the waterfall slows"),
     (g_reset, "START + SELECT", "held while switching on: reset the radio"),
 ]
-GX, TX, Y0, RH = LW + 12, LW + 72, 4, 30   # ★ twelve rows above the bar (BAR_Y 372)
+Y0, RH = 4, 30                                       # ★ twelve rows above the bar (BAR_Y 372)
+# ★★ BALANCED (Stuart, 2026-11-11: "the black boarders are wider on the right than the left and everything looks hunched
+#    over to the left"): the logo column and the control column are ONE group — measured ink widths, a fixed gap with
+#    the divider in its middle — centred on the panel, so the two outer margins are equal.
+f_big = F(BOLD, 38)
+word = "VibeSDR"
+sub = "the radio in your pocket"
+LOGO_W = max(132, d.textlength(word, font=f_big) / S, d.textlength(sub, font=f_small) / S)
+WIDEST = max(max(d.textlength(k, font=f_key), d.textlength(w_, font=f_small)) for _, k, w_ in ROWS) / S
+GLYPH_W, GAP = 60, 44
+M = (W - (LOGO_W + GAP + GLYPH_W + WIDEST)) / 2
+LCX = M + LOGO_W / 2                                  # the logo column's centre
+GX = int(round(M + LOGO_W + GAP)); TX = GX + GLYPH_W
+DIV = int(round(M + LOGO_W + GAP / 2))
+d.line(R([DIV, 22, DIV, 350]), fill=GREEN_DIM, width=S)
+ic = icon.resize((132 * S, 132 * S), Image.LANCZOS)
+big.paste(ic, (int(round((LCX - 66) * S)), 96 * S))
+d.text((LCX * S - d.textlength(word, font=f_big) / 2, 240 * S), word, font=f_big, fill=TXT)
+d.text((LCX * S - d.textlength(sub, font=f_small) / 2, 288 * S), sub, font=f_small, fill=TXT_DIM)
 TMAX = W - 8 - TX
 for i, (glyph, key, what) in enumerate(ROWS):
     y = Y0 + i * RH
@@ -133,6 +141,7 @@ for i, (glyph, key, what) in enumerate(ROWS):
     if d.textlength(what, font=fw) / S > TMAX:
         raise SystemExit("splash: row %r too wide (%d > %d px)" % (what, d.textlength(what, font=fw) / S, TMAX))
     d.text((TX * S, (y + 16) * S), what, font=fw, fill=TXT)
+print("splash: margins left %.0f / right %.0f px" % (M, W - TX - WIDEST))
 if Y0 + len(ROWS) * RH > BAR_Y - 4:
     raise SystemExit("splash: the rows run into the bar")
 
