@@ -965,6 +965,7 @@ vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k) {
 // LAN bind flag + PIN secret + compatibility limits + audio-codec toggle. The
 // public setter methods that write these live after the Impl struct.
 static std::atomic<bool>   g_serveOnLan{false};
+static std::atomic<bool>   g_bindLocalOnly{false};   // ★ the bind ADDRESS only — see setBindLocalOnly
 static std::mutex          g_vsMtx;
 static std::string         g_vsSecret;                 // empty = no PIN (open)
 /** ★ THIS radio's own PIN — see setVibeServerRadioAuth. Empty = the server's setting alone
@@ -36057,7 +36058,14 @@ void LocalSdrShim::startMdnsService(const std::string& host, const std::string& 
 void LocalSdrShim::stopMdns() { mdnsStop(); }
 std::string LocalSdrShim::mdnsHostname() { return mdnsHost(); }
 bool LocalSdrShim::serveOnLan() { return g_serveOnLan.load(); }
-static const char* bindHost() { return g_serveOnLan.load() ? "0.0.0.0" : "127.0.0.1"; }
+void LocalSdrShim::setBindLocalOnly(bool on) { g_bindLocalOnly.store(on); }
+bool LocalSdrShim::bindLocalOnly() { return g_bindLocalOnly.load(); }
+/** ★★★ THE ADDRESS, NOT THE BEHAVIOUR. g_serveOnLan still decides trust, caps and locks everywhere
+ *  else in this file; only the bind reads g_bindLocalOnly. A radio behind the front door is serving
+ *  (g_serveOnLan true) but answers 127.0.0.1 only — see setBindLocalOnly. */
+static const char* bindHost() {
+    return (g_serveOnLan.load() && !g_bindLocalOnly.load()) ? "0.0.0.0" : "127.0.0.1";
+}
 
 // VibeServer server-side config setter definitions (state declared above Impl).
 void LocalSdrShim::setVibeServerPort(int port) {

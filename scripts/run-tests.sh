@@ -1177,6 +1177,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE RADIO PORTS ARE THIS MACHINE ONLY (security pass, 2026-11-12): behind the front door each radio's own port
+#     (base+1+n) accepts on 127.0.0.1 and refuses on the LAN address; the door still serves /r/<id> in full (json,
+#     waterfall, audio) from loopback and the LAN, and the radio sees the CLIENT's address; a radio with no usable
+#     hand-off socket keeps its port on the network and says so. Door + three radio processes on fake rtl_tcp. ~25 s.
+printf '\n\033[1m── radio ports behind the front door answer this machine only (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-radio-ports-local.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 USRP (2026-11-02): a clone's FPGA image uploaded through /r/<serial>/… while that radio is NOT running — the
 #    front door takes it (the tester's "Refused (503)"); every other path of the down radio still 503s.
 printf '\n\033[1m── a USRP image upload through the front door, the radio down (end to end) ──\033[0m\n'

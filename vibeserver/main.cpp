@@ -19,6 +19,7 @@
 // around this same core later; nothing here should grow Mac-specific behaviour.
 
 #include "local_sdr_shim.h"
+#include "fd_passing.h"   // ★ vibe::fdListen — the hand-off socket is proved before a radio port goes local-only
 #include "directory.h"
 #include <functional>
 #include <algorithm>
@@ -3831,6 +3832,45 @@ int main(int argc, char** argv) {
      *    put a red line in a journal for a non-event." It was putting a CRASH there instead. */
     if (!willBeFrontDoor && !claimRadioLock(g_myRadioSerial)) { LocalSdrShim::stopMdns(); return 0; }
 
+    /* ★★★ A RADIO BEHIND THE FRONT DOOR ANSWERS THIS MACHINE ONLY ON ITS OWN PORT (security pass, 2026-11-12).
+     *
+     *  Every listener reaches a radio through the door: the app's /r/<id>, the directory, the tunnel and mDNS all
+     *  connect to the ONE public port, and the door hands the live socket over (SCM_RIGHTS, fd_passing.h). The
+     *  radio's own port (base+1+n, portForRadio) was nonetheless bound to 0.0.0.0 — setServeOnLan(true) above is
+     *  what makes this process behave as a SERVING radio, and the bind address simply followed it. So 48001-48004
+     *  answered the whole network, while the setup page told owners those ports were "this machine only" and
+     *  Stuart believed the same. A direct connection skipped nothing the radio itself enforces (PIN, bans and
+     *  caps all run here), but it was a second way in that nobody had chosen.
+     *  ★★ ONLY THE ADDRESS CHANGES. g_serveOnLan stays true, so loopback-is-owner trust stays OFF, and the
+     *     owner's rate, FFT and bandwidth caps and gain locks stay ON — exactly as now. A handed-over socket is
+     *     the ORIGINAL CLIENT's socket, so its peer address is still the client's, never 127.0.0.1
+     *     (scripts/test-radio-ports-local.mjs proves both).
+     *  ★★ ONLY WHEN THE DOOR CAN ACTUALLY REACH US. The hand-off socket is the only other way in, so it is
+     *     PROVED before the port is narrowed: the real path is bound once here (and removed again —
+     *     listenForHandoff binds it for good once the server is up). No usable hand-off directory, or a path the
+     *     socket cannot take, and the radio keeps its port on the network and says so: a radio reachable the old
+     *     way is better than one reachable no way at all. After claimRadioLock, deliberately — the probe unlinks
+     *     the path, and before the lock it could pull the socket out from under another copy of this radio.
+     *  ★ Not the handheld's radio (already 127.0.0.1 — serveOnLan is false there), not the door itself, not Simple
+     *    mode (one process, one radio, the base port IS the radio), not a server with no config. */
+    if (!willBeFrontDoor && !g_handheldChild && o.radioGiven && vsconfig::needsFrontDoor(g_serverConfig)
+        && !g_myRadioSerial.empty()) {
+        const std::string dir = handoffDir();
+        std::string perr = "no usable directory for the hand-off sockets";
+        const std::string sockPath = dir.empty() ? std::string() : dir + "/" + g_myRadioSerial + ".sock";
+        const int probe = sockPath.empty() ? -1 : vibe::fdListen(sockPath, perr);
+        if (probe >= 0) {
+            ::close(probe);
+            ::unlink(sockPath.c_str());
+            LocalSdrShim::setBindLocalOnly(true);
+            std::printf("VibeServer: this radio's own port answers this machine only (127.0.0.1) — listeners "
+                        "come in through the front door\n");
+        } else {
+            std::fprintf(stderr, "VibeServer: the front door cannot hand connections to this radio (%s) — its own "
+                                 "port stays open on the network so it can still be reached\n", perr.c_str());
+        }
+    }
+
     if (willBeFrontDoor) {
         port = LocalSdrShim::startFrontDoor(g_serverConfig.port, err);
         if (port <= 0) {
@@ -3848,7 +3888,9 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < g_serverConfig.radios.size(); i++) {
             const auto& r = g_serverConfig.radios[i];
             if (!r.enabled || !r.configured) continue;
-            std::printf("  %-22s port %d\n", (r.label.empty() ? r.driver : r.label).c_str(),
+            // ★ "this machine only": each radio binds 127.0.0.1 behind the door (setBindLocalOnly) — and says so
+            //   in its own log if it cannot, which is the one case this line would be wrong.
+            std::printf("  %-22s port %d (this machine only)\n", (r.label.empty() ? r.driver : r.label).c_str(),
                         vsconfig::portForRadio(g_serverConfig, i));
         }
         frontDoorOnly = true;
@@ -4303,7 +4345,7 @@ int main(int argc, char** argv) {
         const std::string dir = handoffDir();
         if (dir.empty()) {
             std::fprintf(stderr, "VibeServer: nowhere to put the hand-off sockets — radios will "
-                                 "only be reachable on their own ports\n");
+                                 "only be reachable on their own ports, which stay open on the network\n");
         } else {
             /* ★★ THE HANDHELD'S RADIO: the supervisor names the socket (it may have no serial to key on) and hands over
              *  BARE paths — there is one radio, so no /r/<id>/ prefix (handheld.cpp startChildLocked). */
@@ -4318,6 +4360,12 @@ int main(int argc, char** argv) {
                 if (LocalSdrShim::listenForHandoff(me, herr))
                     LocalSdrShim::setPathPrefix("/r/" + vsconfig::radioId(g_myRadioSerial),
                                             "/r/" + g_myRadioSerial);
+                else if (LocalSdrShim::bindLocalOnly())
+                    // ★★ The probe above proved this path moments ago, so this should never happen — but if it does, a
+                    //    radio with a local-only port and no hand-off is reachable by nobody, and the owner must be told.
+                    std::fprintf(stderr, "VibeServer: not accepting handed-over connections — %s. ★ This radio's own "
+                                         "port answers this machine only, so NOBODY can reach it until it restarts\n",
+                                 herr.c_str());
                 else
                     std::fprintf(stderr, "VibeServer: not accepting handed-over connections — %s\n",
                                  herr.c_str());

@@ -47,6 +47,16 @@ public:
     // and has no authentication, so it must never leave loopback by accident.
     static void setServeOnLan(bool on);
     static bool serveOnLan();
+    /** ★★★ WHERE THE PORT IS BOUND, SEPARATELY FROM WHETHER WE ARE SERVING (2026-11-12 security pass).
+     *  serveOnLan() is BEHAVIOUR as well as an address: it switches off loopback-is-owner trust and
+     *  switches on the owner's rate, FFT and bandwidth caps and the gain locks. A radio process behind
+     *  the front door must keep all of that exactly as a serving radio — its listeners are remote people
+     *  whose sockets the door handed over — while its OWN TCP port answers this machine only. true =
+     *  bind 127.0.0.1 whatever serveOnLan says. Call BEFORE start(). Off by default, so every server
+     *  that is reached on its own port (Simple mode, the Android server app, the Mac's in-process
+     *  Simple server) binds exactly as before. */
+    static void setBindLocalOnly(bool on);
+    static bool bindLocalOnly();
 
     // VibeServer PIN auth. When a non-empty secret is set, incoming LAN clients
     // must pass an HMAC-SHA256(secret, nonce) challenge-response before the

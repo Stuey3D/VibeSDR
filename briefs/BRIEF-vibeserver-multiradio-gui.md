@@ -153,7 +153,10 @@ description of the world — there is nothing to multiplex.
 - **Isolation is untouched.** The point of one-process-per-radio was that a listener's FPS, FFT and
   gain cannot affect another's. Those still live in separate processes; the hub only moves bytes.
 - **LAN access is unaffected.** Bonjour still advertises each radio directly (§4), so clients on the
-  network connect straight to 48001/48002 and never touch the proxy. **Port forwarding is a REMOTE
+  network connect straight to 48001/48002 and never touch the proxy.
+  ★ **Superseded (2026-11-12):** what shipped is the front door with fd hand-off, not this proxy. Only the
+  door advertises, and every client — LAN included — connects to it and is handed over; the radios'
+  own ports 48001+ are bound to 127.0.0.1 and refuse on the LAN (`scripts/test-radio-ports-local.mjs`). **Port forwarding is a REMOTE
   concern only** — which is exactly the case worth optimising, since it is the one with a router in
   it.
 - **The hub becomes a single point of failure for REMOTE users.** Honest cost. A crash there takes

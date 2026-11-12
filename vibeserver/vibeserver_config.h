@@ -476,7 +476,13 @@ struct RadioConfig {
      *      That is exactly why it is a separate number and not a reorder of the array. */
     int  order = -1;
 
-    int  port = 0;           // 0 = assigned automatically; bound to loopback behind the front door
+    /** 0 = assigned automatically (portForRadio: base+1+n behind the front door). ★★★ Behind the door it is bound to
+     *  127.0.0.1 — this machine only; every listener comes in on the door's port and is handed over (main.cpp,
+     *  setBindLocalOnly). That was written here long before it was true: until 2026-11-12 the radios bound 0.0.0.0.
+     *  ★ The one exception, logged by the radio itself: a radio whose hand-off socket cannot be made keeps this port
+     *    on the network, because it is then the only way in. A pinned port is bound the same way — pinning it no
+     *    longer makes a router rule to it work; the door's port is the one to forward. */
+    int  port = 0;
 
     // Everything below mirrors the same field in Config, for this radio alone.
     Mode   mode = Mode::SingleUser;
