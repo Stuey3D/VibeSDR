@@ -328,7 +328,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  SIMPLE FIXED-CODE GATE / GARAGE REMOTES — each a short PWM word with no check, told apart by its pulse widths, its
 //  length and (where it has one) a fixed first bit. Facts: the format descriptions in rtl_433's conf/ files (Clemsa,
-//  Allstar-Firefly, BETT, Elplast, Nice-FLO, Ansonic, Linear-MultiCode, Roger) and the rtl_433_tests notes;
+//  Allstar-Firefly, BETT, Elplast, Nice-FLO, Ansonic, Linear-MultiCode, Roger, KeyFinder) and the rtl_433_tests notes;
 //  a short pulse is a 1 unless the description says "invert". Bit counts are exact, so a generic EV1527 / PT2262 word
 //  (24 bits, fixedcode::) is never taken. No check: a WHOLE word (gap to gap, every mark one of the two widths) twice
 //  alike in the burst. ★ The code is the key: secret; only the button, where the format has one, is shown.
@@ -351,6 +351,7 @@ inline const Fam* table(size_t& n) {
         {"Linear", "MultiCode remote", 450, 1500, 300, 2000, true, 10, 10, -1, -1, 0, 37},
         {"Linear", "Delta-3 remote", 500, 2000, 200, 4500, false, 8, 8, -1, -1, 0, 38},
         {"Roger", "gate remote", 450, 1000, 300, 6000, true, 28, 28, 1, 16, 4, 39},
+        {"KeyFinder", "key finder tag", 400, 1300, 250, 2500, false, 28, 28, -1, 20, 4, 0xE2},   // ★ 2026-11-12 (conf/KeyFinder.conf)
     };
     n = sizeof f / sizeof f[0];
     return f;
@@ -385,8 +386,14 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
             if (f.lead >= 0 && w[0] != f.lead) continue;
             uint64_t v = 0; for (uint8_t x : w) v = v << 1 | x;
             if (v == 0 || v == (uint64_t(1) << w.size()) - 1) continue;      // all one level: a carrier, not a code
-            if (!kit::twice(rs, w)) continue;   // ★ no check in the word: twice alike in the burst, always
+            // ★ no check in the word: twice alike in the burst — except (2026-11-12) Nice FLO and Roger, which send each
+            //   copy as its own burst (50–110 ms apart): one whole word, then the Tracker's confirm. Only those two: done for
+            //   every family, single words of Clemsa / Linear / BETT / Elplast / Ansonic shapes turned up in weather and
+            //   TPMS recordings across the corpus.
+            const bool rep = kit::twice(rs, w), once = f.family == 35 || f.family == 39;
+            if (!rep && !once) continue;
             Reading r = remoteReading("doorbell", f.make, f.model, f.family, v);
+            r.confirm = !rep;
             if (f.btnAt >= 0) { const uint32_t bt = bitsAt(w, size_t(f.btnAt), f.btnLen); r.button = std::to_string(bt); r.fact("button", (long long)bt); }
             out.push_back(r);
             return true;

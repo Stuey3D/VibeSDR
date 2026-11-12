@@ -1280,6 +1280,19 @@ static void testSec2() {
         Sig s{fskNrz(d, 206)}; s.fsk = true; s.devHz = 30e3;
         cs.push_back({{"Cavius smoke alarm", s, "smoke / heat / water", "message", "32", true}, 869.67e6, spellings(0x00041FDF), "ALARM"});
     }
+    // KeyFinder tag: OOK PWM, 400 µs mark = 1, 1300 µs = 0; 28 bits: ID 20 · button 4 · 4; repeated in the burst
+    {
+        const uint32_t w = 0xC0FFE4F;
+        Tx tx; for (int rep = 0; rep < 6; ++rep) { for (int i = 27; i >= 0; --i) { const bool one = (w >> i) & 1; tx.mark(one ? 400 : 1300); tx.space(one ? 1300 : 400); } tx.space(5000); }
+        cs.push_back({{"KeyFinder tag", Sig{tx.r}, "key finder", "button", "4", true}, 433.92e6, {"C0FFE", "c0ffe", "790526"}, "KeyFinder"});
+    }
+    // Roger gate remote: OOK PWM 450 / 1000 µs, inverted (a long mark = 1), 28 bits led by a 1; ONE word a burst, 100 ms
+    //   apart — shown via the Tracker's confirm
+    {
+        const uint32_t w = 0x8F2A1C3;
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (int i = 27; i >= 0; --i) { const bool one = (w >> i) & 1; tx.mark(one ? 1000 : 500); tx.space(one ? 500 : 1000); } tx.space(100000); }
+        cs.push_back({{"Roger gate remote", Sig{tx.r}, "gate remote", "button", "1", true}, 433.92e6, {"8F2A", "8f2a"}, "Roger"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
