@@ -127,9 +127,46 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace cwpirc
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  VISONIC PowerCode sensors (433.92 OOK PWM: ~400 µs mark = 1, ~800 µs = 0) — facts from the notes in rtl_433's
+//  visonic_powercode.c (citing Visonic's MCR-300 UART manual): 37 bits, sent 6 times — a start 1 · ID 24 · status 8
+//  (tamper · alarm · battery low · else · restore · supervised · spidernet · repeater) · a nibble = the XOR of the eight
+//  nibbles before it. Twice alike in the burst required (a 4-bit check).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace visonic {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    std::vector<Bits> rows;
+    for (const Bits& w : slicePwm(b.ook, 400, 800, 900, true, 0.35)) rows.push_back(w);
+    for (const Bits& w : rows) {
+        if (w.size() != 37 || !w[0] || !kit::twice(rows, w)) continue;
+        const auto m = bytesAt(w, 1, 5);
+        if (!(m[0] | m[1] | m[2] | m[3] | m[4])) continue;
+        const uint8_t x = kit::xorBytes(m.data(), 5);
+        if (((x >> 4) ^ (x & 0xF)) != 0) continue;
+        const uint32_t id = uint32_t(m[0]) << 16 | uint32_t(m[1]) << 8 | m[2];
+        const int st = m[3];
+        Reading r = alarmReading("Visonic", "PowerCode sensor", 0xC2, id);
+        std::string wd = (st & 0x40) ? "alarm" : "quiet";
+        if (st & 0x80) addWord(wd, "tamper");
+        if (st & 0x08) addWord(wd, "restore");
+        if (st & 0x04) addWord(wd, "check-in");
+        r.extra = wd;
+        r.battOk = (st & 0x20) ? 0 : 1;
+        r.fact("tamper", (long long)((st >> 7) & 1)); r.fact("alarm", (long long)((st >> 6) & 1));
+        r.fact("restore", (long long)((st >> 3) & 1)); r.fact("supervised", (long long)((st >> 2) & 1));
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace visonic
+
 /** The second-pass alarm / smoke / doorbell families, strongest checks first. */
 inline bool decodeSecurity2(const Burst& b, std::vector<Reading>& out) {
     if (vivint::decode(b, out)) return true;
+    if (visonic::decode(b, out)) return true;
     /* ★ HELD (2026-11-12): cwpirc::decode is written and right (CRC-16 frames, the same sensor's fixed ID in three
      *  recordings) but NOT called — the corpus's chamberlain_cwpirc/02 holds four CRC-valid frames of that sensor and an
      *  EMPTY answer key, so it would score as a false alarm, and false alarms must never rise. For Stuart to decide. */

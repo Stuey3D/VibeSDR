@@ -640,6 +640,69 @@ inline bool kinggates(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace alarmremote
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  iDo 111 / 117 gate remotes (433.92 OOK PPM) — facts from the notes in rtl_433's ido.c (from the Flipper Zero
+//  protocol): a 4.5 ms mark and 4.5 ms gap, then 48 bits on ~450 µs marks, a 450 µs gap = 1, 1450 µs = 0; LSB first:
+//  serial 20 · button 4 · a 24-bit hop code (new in every message; ~20 messages a press). NO check: two messages with
+//  the same fixed part. ★ The hop code is never read; the serial only hashed.
+//  HT680-based remotes (433.92 OOK PWM: ~260 µs mark = 1, ~660 µs = 0) — facts from rtl_433's ht680.c notes: 41 bits,
+//  a 10101 sync, then 18 tri-state address/data pins in pairs (00 = 0, 11 = 1, 10 = open) with the HT680's fixed open
+//  pins (A4, A5, AD10, AD13, AD16, AD17); buttons = the pairs at D1–D4. Twice alike (burst or Tracker).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace gateremote {
+
+inline bool ido(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    std::vector<uint32_t> fix;
+    for (size_t i = 0; i + 2 + 96 <= r.size(); ++i) {
+        if (r[i] <= 0 || !near(r[i], 4500, 0.15) || !near(r[i + 1], 4500, 0.15)) continue;
+        uint32_t f = 0; int n = 0; size_t k = i + 2;
+        for (; n < 48 && k + 1 < r.size(); k += 2, ++n) {
+            if (!near(r[k], 450, 0.35) || r[k + 1] >= 0) break;
+            const int g = -r[k + 1];
+            const int bit = near(g, 450, 0.35) ? 1 : near(g, 1450, 0.2) ? 0 : (n == 47 && g > 3000) ? 2 : -1;
+            if (bit < 0) break;
+            if (n < 24 && bit == 1) f |= uint32_t(1) << n;
+        }
+        if (n == 48) fix.push_back(f);
+        i = k - 1;
+    }
+    for (size_t a = 0; a < fix.size(); ++a) {
+        if (std::count(fix.begin(), fix.end(), fix[a]) < 2) continue;
+        const uint32_t serial = fix[a] & 0xFFFFF;
+        const int bt = int(fix[a] >> 20);
+        if (serial == 0 || serial == 0xFFFFF) continue;
+        Reading rd = remoteReading("keyfob", "iDo", "gate remote", 0xE0, serial);
+        rd.button = std::to_string(bt);
+        rd.fact("button", (long long)bt);
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+inline bool ht680(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = caralarm::pwmWords(b.ook, 260, 660, 0.35, 1200);
+    for (const Bits& w : rows) {
+        if (w.size() != 41 || bitsAt(w, 0, 5) != 0x15) continue;
+        const auto by = bytesAt(w, 5, 5);
+        if ((by[1] & 0xF0) != 0xA0 || (by[2] & 0x0C) != 0x08 || (by[3] & 0x30) != 0x20 || (by[4] & 0xF0) != 0xA0) continue;
+        const uint32_t addr = uint32_t(by[0]) << 12 | uint32_t(by[1]) << 4 | uint32_t(by[2] >> 4);
+        const int pins[4] = {by[3] & 3, (by[3] >> 2) & 3, (by[3] >> 6) & 3, by[2] & 3};
+        std::string bt;
+        for (int q = 0; q < 4; ++q) if (pins[q] == 3) { if (!bt.empty()) bt += "+"; bt += char('1' + q); }
+        Reading rd = remoteReading("doorbell", "Generic", "HT680 remote", 0xE1, addr);
+        rd.button = bt.empty() ? "none" : bt;
+        for (int q = 0; q < 4; ++q) { const std::string k = "button" + std::to_string(q + 1); rd.facts.emplace_back(k, pins[q] == 3 ? "\"PRESSED\"" : "\"\""); }
+        rd.confirm = !kit::twice(rows, w);   // 17 fixed bits: twice alike (in the burst, or by the Tracker)
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+} // namespace gateremote
+
 /** The second-pass remote / fob families, strongest checks first. */
 inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (twogigkey::decode(b, out)) return true;
@@ -654,6 +717,8 @@ inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (alarmremote::gangqi(b, out)) return true;
     if (alarmremote::hollarm(b, out)) return true;
     if (alarmremote::kinggates(b, out)) return true;
+    if (gateremote::ido(b, out)) return true;
+    if (gateremote::ht680(b, out)) return true;
     if (tvremote::dish(b, out)) return true;
     return false;
 }

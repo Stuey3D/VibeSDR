@@ -1219,6 +1219,36 @@ static void testSec2() {
         cs.push_back({{"King Gates gate remote", Sig{tx.r}, "Stylo 4k", "button", "14", true}, 433.92e6,
                       {"1A2B3C4D", "1a2b3c4d", "439041101", "CC92D33D", "cc92d33d"}, "King Gates"});
     }
+    // iDo gate remote: 4.5 ms mark + 4.5 ms gap, 48 bits on 450 µs marks (450 µs gap = 1, 1450 = 0), LSB first: serial 20
+    //   · button 4 · hop 24 (new each message); three messages back to back
+    {
+        const uint32_t serial = 0xFEDCB; const int bt = 8;
+        Tx tx;
+        for (int rep = 0; rep < 3; ++rep) {
+            const uint32_t hop = 0x4B6EA0 + uint32_t(rep) * 0x1357;
+            Bits d; for (int j = 0; j < 20; ++j) d.push_back((serial >> j) & 1); for (int j = 0; j < 4; ++j) d.push_back((bt >> j) & 1);
+            for (int j = 0; j < 24; ++j) d.push_back((hop >> j) & 1);
+            tx.mark(4500); tx.space(4500); for (uint8_t x : d) { tx.mark(450); tx.space(x ? 450 : 1450); }
+        }
+        tx.mark(4500); tx.space(20000);
+        cs.push_back({{"iDo gate remote", Sig{tx.r}, "gate remote", "button", "8", true}, 433.92e6, {"FEDCB", "fedcb", "1043915", "4B6EA0", "4b6ea0"}, "iDo"});
+    }
+    // Visonic PowerCode: OOK PWM 400 µs mark = 1, 800 µs = 0 (1200 µs a bit); start 1 · ID 24 · status · XOR nibble; ×6
+    {
+        std::vector<uint8_t> m = {0x6F, 0x47, 0x70, 0x4C, 0};
+        const uint8_t x = kit::xorBytes(m.data(), 4); m[4] = uint8_t(((x >> 4) ^ (x & 0xF)) << 4);
+        Bits d(1, 1); Bits mb = bytesToBits(m); mb.resize(36); append(d, mb);
+        Tx tx; for (int rep = 0; rep < 6; ++rep) { for (uint8_t v : d) { tx.mark(v ? 400 : 800); tx.space(v ? 800 : 400); } tx.space(4000); }
+        cs.push_back({{"Visonic PowerCode contact", Sig{tx.r}, "PowerCode sensor", "alarm", "1", true}, 433.92e6, spellings(0x6F4770), "alarm"});
+    }
+    // HT680 remote: OOK PWM ~260 µs mark = 1, ~660 µs = 0; 10101, then 18 tri-state pins (11 = 1, 00 = 0, 10 = open)
+    {
+        const char* tri = "1ZZZZZ01ZZZ01Z1ZZZ";
+        Bits d = hb(0x15, 5);
+        for (const char* p = tri; *p; ++p) { const int v = *p == '1' ? 3 : *p == '0' ? 0 : 2; d.push_back(uint8_t(v >> 1)); d.push_back(uint8_t(v & 1)); }
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t v : d) { tx.mark(v ? 260 : 660); tx.space(v ? 840 : 440); } tx.space(12000); }
+        cs.push_back({{"HT680 remote", Sig{tx.r}, "HT680", "button2", "\"PRESSED\"", true}, 433.92e6, {"961082", "EAA3A", "eaa3a"}, "HT680 remote"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
