@@ -2587,9 +2587,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   Anyone can listen at {publicAddr} — share that address, it stays the same.
                 </Text>
               ) : (
+                /* ★★ HOW LISTENERS REACH IT, SAID THE SAME WAY AS THE SETUP PAGE (2026-11-12). The phone has one way:
+                      Automatic. The setup page's other two (own address, own domain with HTTPS) and its "also give it a
+                      vibesdr.net address" switch are not drawn here — this server only ever registers a tunnel
+                      (VibeTunnel.kt), so they would be controls that do nothing (AGENTS.md). Said in one line instead. */
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                  Publishes this receiver on vibesdr.net so anyone can find it and listen. Your home
-                  address is never published — listeners reach it through a Cloudflare tunnel.
+                  Publishes this receiver on vibesdr.net so anyone can find it and listen. Listeners reach it
+                  automatically through a free Cloudflare tunnel, at name.vibeserver.vibesdr.net with HTTPS. There's
+                  nothing to set up, it works on mobile data, and your home address is never published. Using your own
+                  address or domain needs VibeServer on a computer or a Pi.
                 </Text>
               )}
               {publicErr ? (
