@@ -29,7 +29,7 @@ import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseDabScan, parseFmScan } from './dabBandScan';
-import type { WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
+import { othersEnded, type WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 
 export {
   MODE_BANDWIDTHS,
@@ -178,6 +178,7 @@ export class VibeServerClient extends VibeServerWsClient {
     else this.adsbExit.left(Date.now());
     this.adsbHeld = on;
     if (on) this.adsbLastAt = Date.now();   // ★ the silence clock starts at the ask, not at 1970
+    if (on) this.wholeAskAt.adsb = Date.now();
     this.sendSpectrum({ type: 'adsb', on: on ? 1 : 0 });
   }
 
@@ -200,6 +201,20 @@ export class VibeServerClient extends VibeServerWsClient {
   modeResume(kind: WholeKind): boolean {
     if (this.askBlocked()) return false;   // ★★ ask before tuning — it would move everybody's radio
     return this.sendSpectrum({ type: 'mode_resume', mode: kind });
+  }
+  /** ★ Date.now() of OUR OWN last entry of each whole-radio mode — othersEnded's grace for the mode we came from. */
+  private wholeAskAt: Record<WholeKind, number> = { adsb: 0, ndb: 0, ism: 0, ais: 0 };
+  /** ★★★ A report of `kind` means the server is in `kind` — and, one whole-radio mode at a time, in none of the others
+   *  (wholeModeResume.othersEnded: back past the hold to the server's idle ADS-B, the ISM screen stayed over 1090 MHz).
+   *  Each is let go exactly as its own `_off` does, so the screen's own handlers close it. */
+  private wholeOthersOff(kind: WholeKind) {
+    const held: Record<WholeKind, boolean> = { adsb: this.adsbHeld, ndb: this.ndbHeld, ism: this.ismHeld, ais: this.aisHeld };
+    for (const k of othersEnded(kind, held, this.wholeAskAt, Date.now())) {
+      if (k === 'adsb') { this.adsbHeld = false; this.adsbInfo.clear(); this.callbacks.onAdsb?.(null); }
+      else if (k === 'ndb') { this.ndbHeld = false; this.callbacks.onNdb?.(null); }
+      else if (k === 'ism') { this.ismHeld = false; this.callbacks.onIsm?.(null); }
+      else { this.aisHeld = false; this.callbacks.onAis?.(null); }
+    }
   }
   /** Drop a whole-radio hold WITHOUT telling the server (adsbForget's rule) — it has left the mode; nobody told us. */
   wholeForget(kind: WholeKind) {
@@ -225,6 +240,7 @@ export class VibeServerClient extends VibeServerWsClient {
     else this.ismExit.left(Date.now());
     this.ismHeld = on;
     if (on) this.wholeLastAt.ism = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
+    if (on) this.wholeAskAt.ism = Date.now();
     const m: Record<string, unknown> = { type: 'ism', on: on ? 1 : 0 };
     if (on && o.band) m.band = o.band;
     if (on && o.step) m.step = o.step > 0 ? 1 : -1;
@@ -246,6 +262,7 @@ export class VibeServerClient extends VibeServerWsClient {
     else this.ndbExit.left(Date.now());
     this.ndbHeld = on;
     if (on) this.wholeLastAt.ndb = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
+    if (on) this.wholeAskAt.ndb = Date.now();
     this.sendSpectrum({ type: 'ndb', on: on ? 1 : 0 });
   }
   /** Find NDB — published beacons nearest the receiver first (in or out of the mode); answered by `ndb_found`. */
@@ -271,6 +288,7 @@ export class VibeServerClient extends VibeServerWsClient {
     else this.aisExit.left(Date.now());
     this.aisHeld = on;
     if (on) this.wholeLastAt.ais = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
+    if (on) this.wholeAskAt.ais = Date.now();
     this.sendSpectrum({ type: 'ais', on: on ? 1 : 0 });
   }
   /** One ship's track (the map's card) — a read, answered to the asker only (`ais_trail`). */
@@ -347,6 +365,7 @@ export class VibeServerClient extends VibeServerWsClient {
           holdNativeHealing(VibeServerClient.ADSB_QUIET_HOLD_MS, this.adsbHeld ? 'ADS-B running' : 'server reports ADS-B',
                             this.adsbHeld);
         }
+        this.wholeOthersOff('adsb');   // ★ one whole-radio mode at a time — see wholeOthersOff
         this.adsbHeld = true;
         this.adsbLastAt = now;
         this.callbacks.onAdsb?.(r);
@@ -377,6 +396,7 @@ export class VibeServerClient extends VibeServerWsClient {
           this.ismHealHeldAt = now;
           holdNativeHealing(VibeServerClient.ISM_HOLD_MS, this.ismHeld ? 'ISM running' : 'server reports ISM', this.ismHeld);
         }
+        this.wholeOthersOff('ism');   // ★ one whole-radio mode at a time — see wholeOthersOff
         this.ismHeld = true;            // ★ arrival = the receiver is in ISM, whoever put it there
         this.wholeLastAt.ism = now;
         this.callbacks.onIsm?.(r);
@@ -402,6 +422,7 @@ export class VibeServerClient extends VibeServerWsClient {
           this.ndbHealHeldAt = now;
           holdNativeHealing(VibeServerClient.NDB_HOLD_MS, this.ndbHeld ? 'NDB running' : 'server reports NDB', this.ndbHeld);
         }
+        this.wholeOthersOff('ndb');   // ★ one whole-radio mode at a time — see wholeOthersOff
         this.ndbHeld = true;            // ★ arrival = the receiver is in NDB, whoever put it there
         this.wholeLastAt.ndb = now;
         this.callbacks.onNdb?.(r);
@@ -452,6 +473,7 @@ export class VibeServerClient extends VibeServerWsClient {
           this.aisHealHeldAt = now;
           holdNativeHealing(VibeServerClient.AIS_HOLD_MS, this.aisHeld ? 'AIS running' : 'server reports AIS', this.aisHeld);
         }
+        this.wholeOthersOff('ais');   // ★ one whole-radio mode at a time — see wholeOthersOff
         this.aisHeld = true;
         this.wholeLastAt.ais = now;
         this.callbacks.onAis?.(r);

@@ -90,9 +90,18 @@ export class WholeModeResume {
     return NONE;
   }
 
-  /** The server's answer. Yes: the reports follow — wait for them (afresh, the entry may take a moment). No: let it go. */
-  answered(kind: WholeKind, ok: boolean, why: string | undefined, now: number): ResumeStep {
-    if (!this.asked || this.asked.kind !== kind) return NONE;   // ★ not ours (a stale answer after the mode changed)
+  /** The server's answer. Yes: the reports follow — wait for them (afresh, the entry may take a moment). No: let it go.
+   *  ★★ V12 2026-11-12: `believed` = the mode the screen shows now. A refusal we did not ask for is the server's own
+   *     answer at our ARRIVAL (the shim's arrivalResume: we came back past the hold and it could not put us back) — for
+   *     the mode we still show, it is the reason the mode has gone, and it is said. */
+  answered(kind: WholeKind, ok: boolean, why: string | undefined, now: number, believed: WholeKind | null = null): ResumeStep {
+    if (!this.asked || this.asked.kind !== kind) {
+      if (!ok && believed === kind && this.gaveUp !== kind) {
+        this.asked = null; this.gaveUp = kind;
+        return { do: 'giveUp', kind, why: why || defaultGoneWhy(kind) };
+      }
+      return NONE;   // ★ not ours (a stale answer after the mode changed)
+    }
     if (ok) { this.asked = { ...this.asked, at: now }; return NONE; }
     this.asked = null; this.gaveUp = kind;
     return { do: 'giveUp', kind, why: why || defaultGoneWhy(kind) };
@@ -108,4 +117,23 @@ export class WholeModeResume {
   reset() { this.asked = null; this.gaveUp = null; }
 
   get pending(): WholeKind | null { return this.asked?.kind ?? null; }
+}
+
+/** ★ How long after OUR OWN entry of a mode a report of the mode we came from is still believed to be in flight. */
+export const WHOLE_SWITCH_MS = 5_000;
+const KINDS: WholeKind[] = ['adsb', 'ndb', 'ism', 'ais'];
+
+/**
+ * ★★★ ONE WHOLE-RADIO MODE AT A TIME — A REPORT OF ONE MEANS THE OTHERS HAVE ENDED (V12, 2026-11-12).
+ * Stuart, iPhone, the Pi 500's V4L (idle default ADS-B): back from the background past the hold, the app was handed ADS-B's
+ * reports but nothing ever said ISM had gone (the server left ISM while nobody was here, telling nobody), so it kept the
+ * ISM screen — and ISM's frequency box — over a radio at 1090 MHz: "I stay in ISM mode but … it tunes to 1089.590MHz".
+ * The server runs ONE whole-radio mode (each entry leaves the others through their own doors), so `kind` reporting is
+ * the truth about all four: the others are over.
+ * ★ Not for a mode WE entered in the last WHOLE_SWITCH_MS — the mode we came from may still have a report on the wire.
+ * @returns the modes to let go, without telling the server (it has left them).
+ */
+export function othersEnded(kind: WholeKind, held: Record<WholeKind, boolean>, askedAt: Record<WholeKind, number>,
+                            now: number): WholeKind[] {
+  return KINDS.filter((k) => k !== kind && held[k] && !(now - (askedAt[k] ?? 0) < WHOLE_SWITCH_MS));
 }

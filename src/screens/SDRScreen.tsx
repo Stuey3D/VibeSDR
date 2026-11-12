@@ -7199,7 +7199,11 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  never closed; no = the mode goes, and the reason is said. */
       onModeResume: (kind, ok, why) => {
         if (destroyed.current) return;
-        wholeResumeStepRef.current(wholeResume.current.answered(kind, ok, why, Date.now()));
+        // ★ V12 2026-11-12: with the mode we SHOW — an answer we did not ask for is the server's own, at our arrival
+        //   back past the hold (arrivalResume): a refusal says why the mode has gone (its `_off` follows and closes it).
+        const shown: WholeKind | null = adsbOnRef.current ? 'adsb' : ndbOnRef.current ? 'ndb' : ismOnRef.current ? 'ism'
+          : aisOnRef.current ? 'ais' : null;
+        wholeResumeStepRef.current(wholeResume.current.answered(kind, ok, why, Date.now(), shown === kind ? kind : null));
       },
       onAisTrail: (mmsi, pts) => {
         const done = aisTrailWait.current.get(mmsi);

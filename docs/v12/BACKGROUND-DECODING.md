@@ -384,6 +384,19 @@ landing skipped"), and the map never closed. After the hold, the old path applie
 and `mode_resume` may still give it back to a listener who returns to an untouched radio. The app then says the session
 ended.
 
+**Coming back after the hold (2026-11-12).** Stuart, iPhone, the Pi 500's V4L, whose idle default is ADS-B kept running:
+ISM, backgrounded past the hold, came back as an ISM screen over a radio at 1090 MHz, and the ISM frequency box then put
+"ISM" on 1089.590 MHz. Now (`scripts/test-server-ism-bg-return.mjs`):
+- kept-running ADS-B waits for a listener's whole-radio mode to leave through its own door (`adsbKeepTick`), so the leave
+  is recorded, with the session that left and ISM's band;
+- that same session arriving back is put back in the mode by the server **before its first config** (`arrivalResume`),
+  when nobody else is here and only the idle default has run since (`adsbByKeep_` — kept ADS-B is not somebody's use;
+  `resumeWhyNot` is the one rule for this and for `mode_resume`). It is then not landed;
+- refused, the arrival is sent `mode_resume` `ok:0` with the reason and then `<mode>_off`, and the app says why;
+- in the app, a report of one whole-radio mode lets go of any other it still shows (`othersEnded`, not within 5 s of our
+  own entry of it) — the server runs one at a time;
+- an exact ISM frequency must be inside the band's allocation (`vibeism::exactAllowed`).
+
 **Nothing missed, mode by mode.** The modes keep running through the hold. What the returning app or page gets:
 
 | Mode | Kept on the server | On return |
