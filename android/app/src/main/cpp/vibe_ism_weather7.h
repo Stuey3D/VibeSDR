@@ -89,7 +89,7 @@ inline bool f007th(const Burst& b, std::vector<Reading>& out) {
 //  Fletcher-like check (complemented nibble sums of all bits and of bits 0 and 2 of each nibble).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool tx8300(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& w : wx::ppm(b.ook, 1950, 3900, 6500, 0, 2800, 1200)) {
+    for (const Bits& w : wx::ppm(b.ook, 1950, 3900, 6500, 0, 0, 1200)) {   // ★ the third mark is ~3.9 ms: no mark limit
         if (w.size() != 74) continue;
         auto by = bytesAt(w, 2, 9);
         for (int k = 4; k < 8; ++k) by[size_t(k)] ^= 0xFF;
