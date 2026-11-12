@@ -439,12 +439,19 @@ inline bool sixsc2(const Burst& b, std::vector<Reading>& out) {
 inline bool gm(const Burst& b, std::vector<Reading>& out) {
     for (const Bits& w : kit::ppmRows(b.ook, 300, 500, 2000, 100, 700, 0.3)) {
         if (w.size() < 113) continue;
-        const auto by = bytesAt(w, w.size() - 113, 14);
-        if (by[0] != 0xFF) continue;
-        const int bs = (by[2] >> 4) + (by[2] & 0xF);
-        if (bs == 0 || (bs & 0xF) != 0) continue;
-        const unsigned sum = kit::sumBytes(by.data() + 1, 13);
-        if (sum == 0 || (sum & 0xFF) != 0) continue;
+        // ★ 2026-11-12: our PPM row ends at the last GAP — the frame's final bit, after the last mark, is not in it — so
+        //   the 112 bits end at the row's end (the corpus: 0/5 → 5/5); the one-bit-longer reading is still tried
+        std::vector<uint8_t> by;
+        for (size_t tail : {size_t(112), size_t(113)}) {
+            auto t = bytesAt(w, w.size() - tail, 14);
+            if (t[0] != 0xFF) continue;
+            const int bs = (t[2] >> 4) + (t[2] & 0xF);
+            if (bs == 0 || (bs & 0xF) != 0) continue;
+            const unsigned sum = kit::sumBytes(t.data() + 1, 13);
+            if (sum == 0 || (sum & 0xFF) != 0) continue;
+            by = t; break;
+        }
+        if (by.empty()) continue;
         const int bt = by[2] & 7;
         const char* wd = bt == 1 ? "unlock" : bt == 2 ? "lock" : bt == 3 ? "trunk" : bt == 4 ? "panic" : "?";
         const uint64_t id = uint64_t(by[1]) << 32 | uint64_t(by[3]) << 24 | uint64_t(by[4]) << 16 | uint64_t(by[5]) << 8 | by[6];

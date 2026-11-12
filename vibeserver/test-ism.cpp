@@ -974,6 +974,15 @@ static void secRun(std::vector<SecCase>& cs, double rate = 2.4e6) {
         printf("   %-26s → %s\n", c.name, readable(*r, 1).c_str());
     }
 }
+static void dmcTx2(Tx& tx, const Bits& d, double half, bool startLevel) {   // differential Manchester, 1 = no mid change
+    bool lv = startLevel;
+    for (uint8_t x : d) {
+        if (lv) tx.mark(half); else tx.space(half);
+        if (!x) lv = !lv;
+        if (lv) tx.mark(half); else tx.space(half);
+        lv = !lv;
+    }
+}
 static void testSec2() {
     printf(" second security / remotes pass (alarm sensors, smoke, doorbells, car fobs, gates)\n");
     std::vector<SecCase> cs;
@@ -986,6 +995,26 @@ static void testSec2() {
         Tx tx; for (int rep = 0; rep < 3; ++rep) { manchesterTx(tx, d, 135, 0); tx.space(20000); }
         Sig s{tx.r};
         cs.push_back({{"Vivint door / window", s, "door / window", "event_type", "122", true}, 345e6, spellings(id), "Vivint"});
+    }
+    // Ford (EU) car key: 250 µs mark, 500/500 pairs, 250 µs mark, 3.5 ms sync, 80 DMC bits at 250 µs halves; resent 100 ms on
+    {
+        const uint64_t hi = 0x03E001E4E0ull, lo = 0x9052973960ull;
+        Bits d = hb(hi, 40); append(d, hb(lo, 40));
+        Tx tx;
+        for (int rep = 0; rep < 3; ++rep) {
+            tx.mark(250); for (int k = 0; k < 4; ++k) { tx.space(500); tx.mark(500); } tx.space(500); tx.mark(250); tx.space(3500);
+            dmcTx2(tx, d, 250, true); tx.space(60000);
+        }
+        cs.push_back({{"Ford car key", Sig{tx.r}, "Key fob", nullptr, nullptr, true}, 433.92e6, {"03E001E4E0", "03e001e4e0", "9052973960"}, "Ford"});
+    }
+    // GM ABO1502T: OOK PPM, ~230 µs marks, a 270 µs gap = 0, 470 µs = 1; a run of 1s (wake-up), then FF · byte · button
+    //   byte (nibbles sum to 0 mod 16) · ID 32 · sequence 24 · rolling 24 · byte sum of bytes 1–13 = 0
+    {
+        std::vector<uint8_t> by = {0xFF, 0x4B, 0xF1, 0xDB, 0x3B, 0x73, 0xEA, 0x00, 0x00, 0x0C, 0x82, 0x10, 0x31, 0};
+        by[13] = uint8_t(0x100 - (kit::sumBytes(by.data() + 1, 12) & 0xFF));
+        Bits d(60, 1); append(d, bytesToBits(by));
+        Tx tx; for (uint8_t x : d) { tx.mark(230); tx.space(x ? 470 : 270); } tx.mark(230); tx.space(30000);
+        cs.push_back({{"GM car key", Sig{tx.r}, "Key fob", "button_code", "1", true}, 315e6, {"DB3B73EA", "db3b73ea", "3678106602"}, "unlock"});
     }
     secRun(cs);
 }
