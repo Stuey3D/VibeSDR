@@ -424,6 +424,66 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace r900
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  RADIOHEAD ASK packets (Arduino / hobby links, and the Sensible Living plant-moisture sensor built on them) — 433 OOK
+//  NRZ at 2000 bit/s (500 µs; Sensible Living 1000 µs). Source: the RadioHead library documentation (airspayce.com,
+//  RH_ASK): a 36-bit 0101… training preamble, the 12-bit start symbol 0xB38 (sent LSB first), then every byte as two
+//  4-to-6 symbols (each 6-bit symbol three 1s and three 0s; sent LSB first, high nibble first): length · to · from · id ·
+//  flags · data · CRC-16 (CCITT reflected, init 0xFFFF, complemented, low byte first) over everything before it. The
+//  Sensible Living fields (house, module, sensor type / count, alarms, value, battery × 10 mV) from rtl_433's notes.
+//  A hobby link's data are its owner's: shown as a length only, never the bytes.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace radiohead {
+
+inline int nib6(uint32_t sym) {
+    static const uint8_t k[16] = {0x0D, 0x0E, 0x13, 0x15, 0x16, 0x19, 0x1A, 0x1C, 0x23, 0x25, 0x26, 0x29, 0x2A, 0x2C, 0x32, 0x34};
+    for (int i = 0; i < 16; ++i) if (k[i] == sym) return i;
+    return -1;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (double bit : {500.0, 1000.0}) {
+        for (const Bits& row : kit::nrzRows(b.ook, bit, 6, false, 60)) {
+            for (size_t s : kit::findAll(row, 0x5551CD, 24)) {
+                if (s < 16 || bitsAt(row, s - 16, 16) != 0x5555) continue;
+                std::vector<uint8_t> p;
+                size_t pos = s + 24;
+                int len = 0;
+                while (pos + 12 <= row.size()) {
+                    const int hi = nib6(bitsAtLsb(row, pos, 6)), lo = nib6(bitsAtLsb(row, pos + 6, 6));
+                    if (hi < 0 || lo < 0) break;
+                    p.push_back(uint8_t(hi << 4 | lo));
+                    pos += 12;
+                    if (p.size() == 1) { len = p[0]; if (len < 7 || len > 60) break; }
+                    if (len && int(p.size()) == len) break;
+                }
+                if (len < 7 || int(p.size()) != len) continue;
+                const uint16_t c = uint16_t(~kit::crc16r(p.data(), size_t(len - 2), 0x8408, 0xFFFF));
+                if (c != uint16_t(p[size_t(len - 1)] << 8 | p[size_t(len - 2)])) continue;
+                Reading r;
+                if (bit == 1000.0 && len >= 13) {
+                    r.kind = "sensor"; r.make = "Sensible Living"; r.model = "plant moisture sensor";
+                    r.pubId = std::to_string(p[2] << 8 | p[3]);
+                    r.extra = "moisture " + std::to_string(p[7] << 8 | p[8]);
+                    r.fact("house_id", (long long)p[1]); r.fact("module_id", (long long)(p[2] << 8 | p[3]));
+                    r.fact("sensor_value", (long long)(p[7] << 8 | p[8])); r.fact("battery_mV", (long long)((p[9] << 8 | p[10]) * 10));
+                } else {
+                    r.kind = "sensor"; r.make = "RadioHead"; r.model = "ASK packet";
+                    r.pubId = std::to_string(p[2]);
+                    r.extra = std::to_string(len - 7) + " data bytes, from " + std::to_string(p[2]) + " to " + std::to_string(p[1]);
+                    r.fact("len", (long long)(len - 7)); r.fact("to", (long long)p[1]); r.fact("from", (long long)p[2]);
+                    r.fact("flags", (long long)p[4]);
+                }
+                out.push_back(r);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace radiohead
+
 /** The meter and monitor families, strongest checks first. */
 inline bool decodeMeters(const Burst& b, std::vector<Reading>& out) {
     if (oiltank::decode(b, out)) return true;
@@ -431,6 +491,7 @@ inline bool decodeMeters(const Burst& b, std::vector<Reading>& out) {
     if (efergy::decode(b, out)) return true;
     if (ert::decode(b, out)) return true;
     if (r900::decode(b, out)) return true;
+    if (radiohead::decode(b, out)) return true;
     return false;
 }
 
