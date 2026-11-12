@@ -26,6 +26,12 @@ censored-mean noise floor, an NCO, a triangular decimator, a polar discriminator
 textbook. Where a write-up left a detail open, the choice is marked **ASSUMED** in the code and in the table — each is a
 thing a real capture will confirm or correct.
 
+**TPMS, 2026-11-11 (Stuart: *"we dont want to copy but if we can take inspiration"*).** For the tyre sensors
+(`vibe_ism_tpms.h`) rtl_433's device notes WERE read — for the FACTS of each frame only (bit timing, modulation, sync,
+field layout, check polynomial / start, scaling), most of which exist nowhere else. No code, table, comment or
+identifier was copied: the framing engine and every decoder are our own, checked against real recordings. Each family
+names its source above itself and in the table. The paragraph above still describes every decoder written before then.
+
 ## Architecture — a whole-radio mode, not a passband decoder
 
 **Decision: a whole-radio mode, ADS-B's shape** (save the listener's state, take the radio onto the band, give it back
