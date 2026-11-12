@@ -36,7 +36,11 @@ export const BG_ISM_WORDS: Record<string, string> = {
   '315': '315 MHz (US / Japan: tyre sensors, key fobs, remotes)',
   '433': '433.92 MHz (weather stations, sensors, doorbells, tyre sensors)',
   '868': '868 MHz SRD — sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)',
-  '915': '915 MHz (US: LaCrosse, Ambient, Fine Offset)',
+  '906': '906 MHz — Meshtastic US (LongFast 906.875), LoRaWAN US915',
+  '910': '910 MHz — MeshCore US / Canada (910.525)',
+  '915': '915 MHz (US: LaCrosse, Ambient, Fine Offset; MeshCore AU, LoRaWAN AU915)',
+  '920': '920 MHz — Meshtastic ANZ (LongFast 919.875), MeshCore Vietnam / Thailand',
+  '923': '923 MHz — MeshCore Brazil / Australia (923.125), AS923, Meshtastic JP / KR / TW',
 };
 export const BG_WAIT_CHOICES = [1, 2, 5, 10, 15, 30, 60];
 export const BG_NDB_LO = 190000, BG_NDB_HI = 535000, BG_NDB_MIN = 100000, BG_NDB_LEGACY_CENTRE = 362750;
