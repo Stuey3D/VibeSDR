@@ -577,6 +577,19 @@ int main(int argc, char** argv) {
         { Tx t; t.chips = chipsS(frameA(kamBody()), 15); t.chipHz = 32768; t.offHz = -300e3;     // S2's short preamble
           CHECK(findMeter(runFront(synth({t}, 2.4e6, 0.3, 0.02, 9), 2.4e6), "87654321") != nullptr, "S with a short (15 × 01) preamble"); }
 
+        /* ★ V12 2026-11-12: the radio now sits at 868.80 for the 868 band (so Meshtastic 869.525 fits at 2.048 MS/s) — a
+         *  T1 on 868.95 and an S1 on 868.30 at ±60 ppm, at 2.048 and 2.4 MS/s, with the radio there */
+        {
+            int ok8 = 0, tot8 = 0;
+            for (double rate : {2.048e6, 2.4e6}) for (double ppm : {-60.0, 60.0}) for (int mi : {0, 1}) {
+                Tx t = txFor(modes[mi], mi == 0 ? sensusBody(0x68) : kamBody());
+                t.offHz += 868.6e6 - 868.8e6 + ppm * 868.6;
+                ++tot8;
+                if (findMeter(runFront(synth({t}, rate, 0.4, 0.02, uint32_t(300 + tot8)), rate, nullptr, 868.8e6), mi == 0 ? "12345678" : "87654321")) ++ok8;
+                else printf("   radio at 868.80: %s missed at %.3f MS/s, %+.0f ppm\n", mi == 0 ? "T1" : "C1", rate / 1e6, ppm);
+            }
+            CHECK(ok8 == tot8, "the radio at 868.80 MHz: T1 + C1 meters at 2.048 and 2.4 MS/s, ±60 ppm: %d/%d", ok8, tot8);
+        }
         // two meters 300 ms apart; a T1 and an S1 at once
         {
             Tx a = txFor(modes[0], sensusBody(0x68)); a.startS = 0.05;

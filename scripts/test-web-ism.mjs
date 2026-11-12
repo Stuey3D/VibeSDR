@@ -119,24 +119,25 @@ try {
   } else console.log('   (meters not run — set VIBE_WMBUS_CLIP)');
   // the arrows on the card step bands too (nudge)
   await ev(`(() => { const b = document.getElementById('mVfoUp'); if (!b) return 0; b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); return 1; })()`);
-  ok(await until(`document.getElementById('ismBandName')?.textContent === '915 MHz ISM'`, 6000), `the card's ▶ steps a band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
-  ok(await until(`document.getElementById('ismUp')?.disabled === true`, 3000), 'the box ▶ greys at the top band');
+  // ★ V12 2026-11-12: above 868 come the 902–928 mesh bands (907 910 915 920 923), so 907 is next and ▶ stays live
+  ok(await until(`document.getElementById('ismBandName')?.textContent === '907 MHz ISM (Meshtastic US)'`, 6000), `the card's ▶ steps a band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
+  ok(await until(`document.getElementById('ismUp')?.disabled === false`, 3000), 'the box ▶ stays live below the top band (923)');
   {   // ★★ V12 hop keys (2026-11-03): the current band bold over the glyph, the neighbours on the arrows, the spoken line
     const lab = JSON.parse(await ev(`JSON.stringify({ cur: document.getElementById('mTuneCur')?.textContent, hid: document.getElementById('mTuneCur')?.hidden,
       d: document.getElementById('mStepCapD')?.textContent, u: document.getElementById('mStepCapU')?.textContent,
       say: document.getElementById('mTuneGlyph')?.getAttribute('aria-label'),
       bold: getComputedStyle(document.getElementById('mTuneCur')).fontWeight,
       cardH: document.getElementById('mVfoDial')?.getBoundingClientRect().height })`));
-    ok(lab.cur === '915' && lab.hid === false, `the current band over the glyph: ${lab.cur}`);
-    ok(lab.d === '868' && lab.u === '', `the arrows name the neighbours (clamped at the top): ${lab.d} ‹ › ${lab.u || '(none)'}`);
-    ok(lab.say === 'Band 915. Previous 868, next none', `spoken: ${lab.say}`);
+    ok(lab.cur === '907' && lab.hid === false, `the current band over the glyph: ${lab.cur}`);
+    ok(lab.d === '868' && lab.u === '910', `the arrows name the neighbours: ${lab.d} ‹ › ${lab.u || '(none)'}`);
+    ok(lab.say === 'Band 907. Previous 868, next 910', `spoken: ${lab.say}`);
     ok(Number(lab.bold) >= 700, `the current band is bold (${lab.bold})`);
     // a press moves the label AT ONCE — before the server's report
     await ev(`(() => { const b = document.getElementById('mVfoDown'); b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); })()`);
     ok(await ev(`document.getElementById('mTuneCur')?.textContent`) === '868', 'the press moves the current band at once');
     ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz SRD'`, 6000), `and the server follows to 868 (one send, by band id): ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
     await ev(`(() => { const b = document.getElementById('mVfoUp'); b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); })()`);
-    ok(await until(`document.getElementById('ismBandName')?.textContent === '915 MHz ISM'`, 6000), 'back to 915 for the rest');
+    ok(await until(`document.getElementById('ismBandName')?.textContent === '907 MHz ISM (Meshtastic US)'`, 6000), 'back to 907 for the rest');
   }
   // filter chips
   await ev(`document.querySelector('#ismChips [data-k="tpms"]').click()`);

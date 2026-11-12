@@ -6919,7 +6919,11 @@ const BG_ISM_BANDS = [
   { id: "315", label: "315 MHz (US / Japan: tyre sensors, key fobs, remotes)" },
   { id: "433", label: "433.92 MHz (weather stations, sensors, doorbells, tyre sensors)" },
   { id: "868", label: "868 MHz SRD \u2014 sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)" },
-  { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset)" },
+  { id: "907", label: "907 MHz \u2014 Meshtastic US (LongFast 906.875)" },
+  { id: "910", label: "910 MHz \u2014 MeshCore US / Canada (910.525)" },
+  { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset; MeshCore AU, LoRaWAN AU915)" },
+  { id: "920", label: "920 MHz \u2014 Meshtastic ANZ (LongFast 919.875), MeshCore Vietnam / Thailand" },
+  { id: "923", label: "923 MHz \u2014 MeshCore Brazil / Australia (923.125), AS923, Meshtastic JP / KR / TW" },
 ];
 /* ★★ V12 2026-11-02 — MAY A PROFILE HERE DECODE AIS (ships on 162 MHz, the whole radio)? Only where the radio reaches
  *  162 MHz (not an Airspy HF+, not an Icom — the server's vsAisReach), it is not locked (background never moves a locked
@@ -6939,7 +6943,10 @@ function bgIsmBands() {
   if (r0.mode === "locked" && r0.lockFreq > 0) return [];
   try { if (typeof modeBlockSet === "function" && modeBlockSet().has("ism")) return []; } catch (e) { /* no mode list on this page */ }
   const hw = typeof HW !== "undefined" ? HW : null;
-  if (hw && Array.isArray(hw.ismHwBands) && !hw.offline) return BG_ISM_BANDS.filter(function (b) { return hw.ismHwBands.indexOf(b.id) >= 0; });
+  // ★ V12 2026-11-12: the SERVER's band list decides; a band this page has no words for still appears, by its id
+  if (hw && Array.isArray(hw.ismHwBands) && !hw.offline) return hw.ismHwBands.map(function (id) {
+    return BG_ISM_BANDS.filter(function (b) { return b.id === String(id); })[0] || { id: String(id), label: String(id) + " MHz" };
+  });
   return BG_ISM_BANDS.slice();
 }
 /* ★★ V12 2026-10-27 — MAY A VFO HERE BE THE NDB SKIMMER? Only where THIS radio reaches LF (HW.ndbHw; else its driver —

@@ -2423,10 +2423,30 @@ int main(int argc, char** argv) {
     {
         auto all = [](const Band&) { return true; };
         CHECK(std::string(landingBand(52.2, -0.9, all)->id) == "433", "UK lands on 433.92");
-        CHECK(std::string(landingBand(40.7, -74.0, all)->id) == "315", "US lands on 315");
+        // ★ V12 2026-11-12: the Americas, Australia and Asia land on their MESH band
+        CHECK(std::string(landingBand(40.7, -74.0, all)->id) == "907", "US (New York) lands on 907 (Meshtastic US LongFast)");
+        CHECK(std::string(landingBand(-22.62, -48.63, all)->id) == "923", "Brazil (Kiko, GG33if) lands on 923 (MeshCore Brasil)");
+        CHECK(std::string(landingBand(-33.87, 151.21, all)->id) == "920", "Australia (Sydney) lands on 920 (Meshtastic ANZ)");
+        CHECK(std::string(landingBand(-36.85, 174.76, all)->id) == "920", "New Zealand (Auckland) lands on 920");
+        CHECK(std::string(landingBand(35.68, 139.69, all)->id) == "923", "Japan (Tokyo) lands on 923 (AS923, Meshtastic JP)");
+        CHECK(std::string(landingBand(25.03, 121.56, all)->id) == "923", "Taiwan lands on 923");
+        CHECK(std::string(landingBand(39.9, 116.4, all)->id) == "433", "mainland China (Beijing) is not AS923: 433.92");
         CHECK(std::string(landingBand(NAN, NAN, all)->id) == "433", "no position lands on 433.92");
-        auto no315 = [](const Band& b) { return std::string(b.id) != "315"; };
-        CHECK(std::string(landingBand(40.7, -74.0, no315)->id) == "915", "US without 315 → 915");
+        CHECK(regionAt(9.93, -84.08) == Region::NorthAmerica && regionAt(-34.6, -58.4) == Region::SouthAmerica
+              && regionAt(52.2, -0.9) == Region::Other && regionAt(NAN, 1) == Region::Unknown, "regions: Costa Rica, Buenos Aires, UK, none");
+        auto noMesh = [](const Band& b) { return std::string(b.id) == "315" || std::string(b.id) == "915"; };
+        CHECK(std::string(landingBand(40.7, -74.0, noMesh)->id) == "315", "US without the mesh bands → 315");
+        auto only433 = [](const Band& b) { return std::string(b.id) == "433"; };
+        CHECK(std::string(landingBand(-22.62, -48.63, only433)->id) == "433", "a radio reaching only 433 still lands, anywhere");
+        // ★ the step order is frequency order, ≤ 8 bands (what every client draws), names ≤ 40 characters
+        double lastHz = 0; bool ordered = true, shortNames = true;
+        for (const auto& b : bands()) { ordered = ordered && b.centreHz > lastHz; lastHz = b.centreHz; shortNames = shortNames && std::strlen(b.name) <= 40; }
+        CHECK(ordered && bands().size() <= 8 && shortNames, "%zu bands in frequency order, names short enough for every client", bands().size());
+        CHECK(exactAllowed(*bandById("923"), 923.125e6) && exactAllowed(*bandById("907"), 902.0e6) && !exactAllowed(*bandById("923"), 929e6)
+              && !exactAllowed(*bandById("907"), 900e6) && exactAllowed(*bandById("910"), 912.0e6) && exactAllowed(*bandById("920"), 915.0e6)
+              && !exactAllowed(*bandById("920"), 914.9e6) && !exactAllowed(*bandById("923"), 914.0e6) && exactAllowed(*bandById("923"), 928.0e6),
+              "exactAllowed: 906/910/915 take 902–928 MHz, 920/923 take 915–928 (Brazil, AU/NZ, AS923), nothing outside");
+        CHECK(std::string(bandById("923")->name) == "923 MHz ISM (MeshCore BR/AU, AS923)", "923's readout: %s", bandById("923")->name);
         auto none = [](const Band&) { return false; };
         CHECK(landingBand(52.2, -0.9, none) == nullptr, "an HF+ (no band) has no landing");
     }

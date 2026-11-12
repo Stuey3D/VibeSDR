@@ -47,7 +47,7 @@ ok(!!sel('bgKind') && sel('bgKind').children.map((o) => o.value).join() === 'vfo
 ok(sel('bgKind').value === 'vfo' && vfoRows().length === 2, "Nick's profile shows as VFOs, two rows");
 ok(api.bgCollect() === JSON.stringify(NICK), 'an ordinary profile saves back byte for byte (no "ism" key)');
 sel('bgKind').value = 'ism'; sel('bgKind').onchange();
-ok(!!sel('bgIsmBand') && sel('bgIsmBand').children.map((o) => o.value).join() === '315,433,868,915', 'choosing ISM shows a band list: 315, 433, 868, 915');
+ok(!!sel('bgIsmBand') && sel('bgIsmBand').children.map((o) => o.value).join() === '315,433,868,907,910,915,920,923', 'choosing ISM shows a band list: 315, 433, 868, 907, 910, 915, 920, 923');
 ok(sel('bgIsmBand').value === '433', '...433.92 MHz first choice');
 ok(vfoRows().length === 0 && !box.text().includes('RF Centre') && !box.text().includes('+ Add another VFO'), 'no RF centre, no VFO rows, no "add VFO"');
 ok(box.text().includes('runs only while nobody is listening') && box.text().includes('nickname'), 'the note: whole radio, only while nobody listens, nicknames');
@@ -64,6 +64,11 @@ ok(vfoRows().length === 1 && !('ism' in api.model().profiles[0]) && !api.bgColle
 api = mk({ ismHwBands: ['433', '868'] });
 api.bgLoad({ driver: 'sdrplay', bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 0, from: '00:00', to: '00:00', vfos: [], ism: '433' }] }) });
 ok(sel('bgIsmBand').children.map((o) => o.value).join() === '433,868', 'a running radio offers only the bands it reaches (HW.ismHwBands: 433, 868)');
+// ★ V12 2026-11-12: the SERVER's list decides — a band this page has no words for still appears, by its id
+api = mk({ ismHwBands: ['433', '923', '931'] });
+api.bgLoad({ driver: 'rtlsdr', bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 0, from: '00:00', to: '00:00', vfos: [], ism: '923' }] }) });
+ok(sel('bgIsmBand').children.map((o) => o.value).join() === '433,923,931' && sel('bgIsmBand').value === '923',
+   'the server\'s bands, a new one (931) by its id: ' + sel('bgIsmBand').children.map((o) => o.value).join());
 
 // where ISM cannot run: not offered
 api = mk(null);

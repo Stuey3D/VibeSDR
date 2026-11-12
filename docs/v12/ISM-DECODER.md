@@ -126,8 +126,17 @@ after last heard, tyres/fobs/remotes 15 min, at most 300. The live `capture N %`
 |---|---|---|---|---|
 | `315` | 315 MHz ISM | 315.00 | +40…250 kHz (rate-dependent) | US/Japan TPMS, fobs, remotes |
 | `433` | 433.92 MHz ISM | 433.92 | 434.13 at 2.4 MS/s (51 kHz above at 2.048) | 433.05–434.79: EU/UK weather, sensors, doorbells, TPMS |
-| `868` | 868 MHz SRD | 868.60 | 868.60 (DC between the two channels) | 868.3 + 868.95: LaCrosse IT+, Fine Offset FSK, Bresser |
-| `915` | 915 MHz ISM | 915.00 | +40…250 kHz | US LaCrosse, Ambient, Fine Offset 915 |
+| `868` | 868 MHz SRD | 868.60 | 868.80 (+40…200 kHz; V12 2026-11-12, so Meshtastic 869.525 fits at 2.048 MS/s) | 868.3 + 868.95: LaCrosse IT+, Fine Offset FSK, Bresser |
+| `907` | 907 MHz ISM (Meshtastic US) | 906.60 | +40…450 kHz (907.05: DC clear of both channels) | LoRa only: Meshtastic US LongFast 906.875, BR_902 MediumFast 906.625 |
+| `910` | 910 MHz ISM (MeshCore US) | 910.40 | 910.40 (DC between 910.3 and 910.525) | LoRa only: MeshCore USA/Canada 910.525, US915 sub-band 5 |
+| `915` | 915 MHz ISM | 915.00 | +40…250 kHz | US LaCrosse, Ambient, Fine Offset 915; MeshCore Australia 915.8 / 915.075, LoRaWAN AU915 FSB1, US915 sub-band 8 |
+| `920` | 920 MHz Meshtastic ANZ | 920.65 | 920.65 | LoRa only: Meshtastic ANZ LongFast 919.875, MeshCore Vietnam 920.25 / Thailand 921.0, AS923-2 |
+| `923` | 923 MHz MeshCore BR/AU/Asia | 923.30 | +40…300 kHz (923.6 at 2.048–2.4 MS/s) | LoRa only: MeshCore Brazil / Australia SA-WA-QLD 923.125, AS923-1 923.2/923.4, Meshtastic JP/KR/TW/TH/MY LongFast |
+
+★ V12 2026-11-12 — **the 902–928 MHz mesh bands** (Stuart: "we are missing an ISM/meshcore band"; Kiko's server in
+Brazil had nothing to decode). An RTL holds ~2 MHz, so 902–928 is five captures placed where each region's mesh is;
+the step order is frequency order and stays at eight bands (every client draws at most eight). Channels, sources and
+tiers: LORA-MESH.md §Plans.
 
 - The radio sits a little **above** the band's middle so its DC remnant misses the busy channel, never so far that the
   band's far edge leaves the capture (`ismHwCentre`). The readout shows the band's centre and name, never the offset.
@@ -137,9 +146,11 @@ after last heard, tyres/fobs/remotes 15 min, at most 300. The live `capture N %`
   for an odd device — `{"type":"ism","on":1,"hz":N}`, or a plain `tune` (old clients); the list is kept.
 - **The server owns the band** (the shared-dial contract): a client sends a change only on a user action; every
   listener's view follows the report.
-- **Landing band** = the one nearest the server's location (`ismLanding`): the Americas (longitude −170…−25) → 315 MHz
-  (TPMS and fobs), else 433.92; then whichever this radio reaches. ⚖ Stuart to confirm for the US: AcuRite and Ambient
-  weather stations also sit at 433.92 there.
+- **Landing band** = where the server's region's MESH is (`ismLanding`, `vibeism::regionAt` on the receiver's own
+  position): North America → 907 (Meshtastic US), then 910, 315, 915; South America → 923 (MeshCore Brasil), then 915,
+  920; Australia / NZ → 920 (Meshtastic ANZ), then 915, 923; east / south-east Asia → 923 (AS923-1, Meshtastic JP/KR/TW),
+  then 920; elsewhere and no position → 433.92, 868; then whichever this radio reaches. (Until 2026-11-12 the Americas
+  landed on 315 MHz for TPMS and fobs — it is one step away.)
 - **Radio gating**: a band is offered only if the radio can tune all of it (`vsIsmReach`, from the EFFECTIVE tunable
   ranges). **The Airspy HF+ reaches none (it tops out near 260 MHz): ISM is not offered on it at all** — no menu entry,
   no reason, nothing (AGENTS.md: a control that cannot work on this radio is not drawn). An Icom: not offered. Locked
