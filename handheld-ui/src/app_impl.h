@@ -402,10 +402,10 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         // ★ the meter IS the pill's background (#mSig): red → amber → green, its width the smoothed level
         const float w = (float)std::max(0.0, std::min(1.0, sigSmooth_)) * (pill.w - 2);
         if (w > 1) {
-            const Rgba cols[3] = {rgb(0xe8462a), rgb(0xe8a02a), rgb(0x35e08a)};
-            const float pos[3] = {0, 0.38f, 1};
+            const Rgba cols[4] = {th::meterRed, th::meterAmber, th::meterLime, th::meterGreen};   // ★ deeper for the panel (ui.h)
+            const float pos[4] = {0, 0.38f, 0.68f, 1};
             c.g.clip(pill.x + 1, pill.y + 1, w, pill.h - 2);
-            c.g.hgrad(pill.x + 1, pill.y + 1, pill.w - 2, pill.h - 2, cols, pos, 3);
+            c.g.hgrad(pill.x + 1, pill.y + 1, pill.w - 2, pill.h - 2, cols, pos, 4);
             c.g.unclip();
         }
     }

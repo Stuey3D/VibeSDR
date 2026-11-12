@@ -36,6 +36,15 @@ inline const Rgba unit      = rgb(0x886600);
 inline const Rgba dim       = rgb(0xffa000, 0.45f);
 inline const Rgba dimmer    = rgb(0xffa000, 0.30f);
 inline const Rgba meterTrack= rgb(0x696252, 0.30f);
+// ★★ THE SIGNAL METER'S RED → AMBER → GREEN, deeper and fully saturated (Stuart, 2026-11-11: "compensate for the lower
+//    bitrate screen (i think the r36s is only 6bit) … make the red amber green of the signal meter a bit deeper and more
+//    vibrant as the signal meter looks washed out on the actual display"). The web's #e8462a / #e8a02a / #35e08a are
+//    light and the green leans mint — on this panel they read pale. R36S only; the app and the page keep theirs.
+inline const Rgba meterRed  = rgb(0xff1e0a);
+inline const Rgba meterAmber= rgb(0xff8c00);
+inline const Rgba meterGreen= rgb(0x00d040);
+// ★ amber → green straight through RGB goes olive at these depths; a yellow-green stop at 68 % keeps the bar bright
+inline const Rgba meterLime = rgb(0xb4e600);
 inline const Rgba red       = rgb(0xe05050);
 inline const Rgba green     = rgb(0x28a745);
 inline const Rgba white     = rgb(0xffffff);

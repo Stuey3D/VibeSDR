@@ -130,7 +130,7 @@ inline void dabScopes(Ctx& c, const Json* rep, Rect cr, Rect ir) {
 }
 /** The three bars (signal-strength style), `level` of them lit, coloured by the verdict. */
 inline void dabBars(Ctx& c, float x, float yBot, float h, int level) {
-    const Rgba on = level >= 3 ? rgb(0x35e08a) : level == 2 ? rgb(0xe8a02a) : rgb(0xe8462a);
+    const Rgba on = level >= 3 ? th::meterGreen : level == 2 ? th::meterAmber : th::meterRed;   // ★ the meter's deeper colours (ui.h)
     for (int i = 0; i < 3; i++) {
         const float bh = h * (0.45f + 0.275f * i);
         c.g.rrect(x + i * 9, yBot - bh, 6, bh, 2, i < level ? on : th::meterTrack);
