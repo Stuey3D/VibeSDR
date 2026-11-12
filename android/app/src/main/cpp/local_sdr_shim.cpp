@@ -1179,9 +1179,28 @@ static vibefm::State vsFmChannelStart(const std::string& session) {
     g_fm.setRegion(vibebands::defaultRegion());
     return g_fm.channelStart(session);
 }
+static void vsPersist(const std::string& patch);   // ★ defined below — the config persist handler
 static void vsFmNote(const std::string& session, const vibefm::State& st) {
-    std::lock_guard<std::mutex> lk(g_fmMtx);
-    g_fm.note(session, st);
+    bool adopted = false;
+    { std::lock_guard<std::mutex> lk(g_fmMtx);
+      g_fm.note(session, st);
+      /* ★★★ THE HANDHELD: the owner's change IS the owner's default (vibe_fm_defaults.h adoptAsDefaults — Stuart,
+       *  2026-11-12: Broadcast FM NR "doesnt stay enabled on power off and on on the R36S"). Never on a server. */
+      if (LocalSdrShim::handheld()) {
+          g_fm.setRegion(vibebands::defaultRegion());
+          const vibefm::Defaults d = vibefm::adoptAsDefaults(g_fm.defaults(), st, vibebands::defaultRegion());
+          if (!(d == g_fm.defaults())) { g_fm.adoptDefaults(d); g_fmConfigured = true; adopted = true; }
+      } }
+    if (!adopted) return;
+    /* ★ Written as the LATEST defaults, read under the same lock that writes it — two quick presses on two threads can
+     *  never leave the older one on disk. The persist handler folds the fm* keys into this radio's entry (temp +
+     *  rename); the config watcher's re-read then finds them equal to g_fm's and forgets nobody. */
+    static std::mutex persistMtx;
+    std::lock_guard<std::mutex> pl(persistMtx);
+    std::string patch;
+    { std::lock_guard<std::mutex> lk(g_fmMtx); patch = "{" + vibefm::toJson(g_fm.defaults()) + "}"; }
+    vsPersist(patch);
+    LOGI("handheld: Broadcast FM row kept as this radio's starting values (%s)", patch.c_str());
 }
 static bool vsFmRemember() { std::lock_guard<std::mutex> lk(g_fmMtx); return g_fm.remember(); }
 /** Writes the shared pipeline's DESIRED record (g_dsp — defined further down) so a freshly built Impl starts there. */

@@ -132,6 +132,33 @@ int main() {
            "a patch about something else does not reset them");
     }
 
+    std::printf("THE HANDHELD: the owner's change becomes the owner's default (adoptAsDefaults)\n");
+    {
+        Defaults cur;                                   // a fresh card: by region, NR off, RETURN
+        State s = vibefm::resolve(cur, 1); s.nr = true; // the user turns NR on in the audio menu
+        const Defaults d = vibefm::adoptAsDefaults(cur, s, 1);
+        ok(d.nr, "NR ON is kept as the radio's default");
+        ok(d.deemphUs == -1, "a de-emphasis that is still the region's own stays BY REGION");
+        ok(!d.remember, "the policy (RETURN) is left as the owner set it");
+        ok(d.stereo && d.ims && d.ceq && d.autobw && d.nb, "the rest of the row is unchanged");
+        State t = s; t.deemphTau = 75e-6; t.ceq = false; t.autobw = false; t.stereo = false; t.ims = false; t.nb = false;
+        const Defaults e = vibefm::adoptAsDefaults(d, t, 1);
+        ok(e.deemphUs == 75 && !e.ceq && !e.autobw && !e.stereo && !e.ims && !e.nb && e.nr, "all seven are carried");
+        State z = t; z.deemphTau = 0;
+        ok(vibefm::adoptAsDefaults(e, z, 1).deemphUs == 0, "de-emphasis OFF is kept as 0");
+        State back = t; back.deemphTau = 50e-6;
+        ok(vibefm::adoptAsDefaults(e, back, 1).deemphUs == 50, "an explicit 50 us after 75 is 50, not by region");
+        // ★ and through the rules: RETURN now returns to what the owner chose last
+        Memory m; m.configure(cur, 1);
+        m.note("ses-1", s);
+        m.adoptDefaults(vibefm::adoptAsDefaults(m.defaults(), s, 1));
+        State out;
+        ok(m.sharedArrival("ses-2", 0, out) && out.nr, "a new arrival (RETURN) starts with NR ON");
+        ok(m.known("ses-1", out), "adopting forgets nobody (no configure)");
+        Defaults round; vibefm::fromJson("{" + vibefm::toJson(m.defaults()) + "}", round);
+        ok(round == m.defaults(), "what is written to the engine config reads back the same");
+    }
+
     std::printf(failures ? "\nFAILED (%d)\n" : "\nall passed\n", failures);
     return failures ? 1 : 0;
 }
