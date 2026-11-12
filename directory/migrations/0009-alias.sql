@@ -1,0 +1,13 @@
+-- ★★ THE vibesdr.net ADDRESS IS OPTIONAL FOR A SERVER THE OWNER REACHES DIRECTLY (2026-11-12, a tester with his own
+--    domain behind a reverse proxy: "let the admin choose to use .vibeserver.vibesdr.net domain or own domain").
+--
+--   alias   1 = <slug>.vibeserver.vibesdr.net serves this server (every row until now, and still the default).
+--           0 = the owner opted out: the listing links straight to `url`, list() publishes no address, and the slug
+--               host answers 404. The slug itself is KEPT on the row, so switching the alias back on gives the same
+--               name rather than a fresh one. A TUNNEL server is always 1 — the alias is how it is reached.
+--
+-- ★ An older server never sends `alias`, so its row keeps the default and nothing changes for it.
+-- ★ Apply BEFORE deploying the Worker that reads it (the Worker copes either way — without the column it serves every
+--   alias exactly as before and logs that this migration is missing — but nobody can opt out until it exists):
+--     npx wrangler d1 execute vibesdr-directory --remote --file migrations/0009-alias.sql
+ALTER TABLE servers ADD COLUMN alias INTEGER NOT NULL DEFAULT 1;
