@@ -20,7 +20,7 @@
  */
 import {
   WholeModeResume, holdLapsed, firstReportMs, defaultGoneWhy, RESUME_ANSWER_MS, WHOLE_STEADY_SILENCE_MS,
-  type WholeKind, type ResumeStep,
+  othersEnded, WHOLE_SWITCH_MS, type WholeKind, type ResumeStep,
 } from '../src/services/wholeModeResume.ts';
 
 let fails = 0, passes = 0;
@@ -153,6 +153,27 @@ for (const kind of ['adsb', 'ndb', 'ais', 'ism'] as WholeKind[]) {
   eq('reset clears it', r.pending, null);
   eq('an answer after reset does nothing', r.answered('adsb', false, 'x', T0 + 2), { do: 'none' });
   eq('no mode → nothing', r.step(null, true, T0 + 3), { do: 'none' });
+}
+
+
+// ── ★★ V12 2026-11-12: back past the hold to the server's idle ADS-B (Stuart, the Pi 500's V4L) ─────────────────────
+{
+  const r = new WholeModeResume();
+  const why = 'The receiver left ISM while you were away, and somebody else is listening now — it was not moved under them.';
+  eq('an UNASKED refusal for the mode we show → give up with its words (arrivalResume)', r.answered('ism', false, why, T0, 'ism'),
+     { do: 'giveUp', kind: 'ism', why });
+  eq('…once', r.answered('ism', false, why, T0 + 10, 'ism'), { do: 'none' });
+  eq('an unasked refusal for a mode we do NOT show does nothing', new WholeModeResume().answered('ism', false, why, T0, 'adsb'), { do: 'none' });
+  eq('an unasked yes does nothing', new WholeModeResume().answered('ism', true, undefined, T0, 'ism'), { do: 'none' });
+  const held = (o: Partial<Record<WholeKind, boolean>>) => ({ adsb: false, ndb: false, ism: false, ais: false, ...o });
+  const at = (o: Partial<Record<WholeKind, number>>) => ({ adsb: 0, ndb: 0, ism: 0, ais: 0, ...o });
+  eq('★ an ADS-B report while we still show ISM (entered long ago) → ISM has ended',
+     othersEnded('adsb', held({ ism: true, adsb: true }), at({ ism: T0 - 600_000 }), T0), ['ism']);
+  eq('…but not ISM we entered just now (the ADS-B report was already on the wire)',
+     othersEnded('adsb', held({ ism: true, adsb: true }), at({ ism: T0 - 1000 }), T0), []);
+  eq('…after the switch grace it has ended', othersEnded('adsb', held({ ism: true }), at({ ism: T0 - WHOLE_SWITCH_MS - 1 }), T0), ['ism']);
+  eq('an ISM report after OUR ISM press from ADS-B → ADS-B has ended', othersEnded('ism', held({ ism: true, adsb: true }), at({ ism: T0 - 2000, adsb: T0 - 90_000 }), T0), ['adsb']);
+  eq('nothing else held → nothing', othersEnded('ndb', held({ ndb: true }), at({}), T0), []);
 }
 
 console.log(`${fails ? 'FAIL' : 'ok'} — wholeModeResume: ${passes} passed, ${fails} failed`);
