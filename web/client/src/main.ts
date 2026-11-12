@@ -7928,7 +7928,7 @@ function dabRender() {
         + (Math.abs(d.rfCentreHz - d.centreHz) > 500 ? ` (asked ${(d.centreHz / 1e6).toFixed(4)})` : '') : '—')
     + row('Capture rate', d.rfRateHz ? (d.rfRateHz / 1e6).toFixed(3) + ' MS/s' : '—')
     + row('Null depth', tl(d.nullDepthDb.toFixed(1) + ' dB', d.nullDepthDb >= 14 ? 'ok' : d.nullDepthDb >= 8 ? 'warn' : 'bad'))
-    + row('Frequency offset', tl(`${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`, Math.abs(d.offsetPpm) < 1 ? 'ok' : Math.abs(d.offsetPpm) < 3 ? 'warn' : 'bad'))
+    + row('Frequency offset', tl(`${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`, Math.abs(d.offsetPpm) < 10 ? 'ok' : Math.abs(d.offsetPpm) < 30 ? 'warn' : 'bad'))   // ★ see DabPanel: <10 ppm costs < 3 dB of MER
     + row('Carrier shift', String(d.carrierShift))
     + row('Phase reference', d.prs.toFixed(3) + (d.prsRatio !== undefined ? ` (${d.prsRatio.toFixed(2)} of ref)` : ''))
     + row('MER', d.mer ? tl(d.mer.toFixed(1) + ' dB', d.mer >= 16 ? 'ok' : d.mer >= 10 ? 'warn' : 'bad') : '—')
