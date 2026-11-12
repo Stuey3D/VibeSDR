@@ -33,7 +33,21 @@ struct National {
 //   most likely to receive.
 inline const std::vector<National>& nationals() {
     static const std::vector<National> t = {
-        // (filled from the verified research — see the commit that adds each row)
+        // ★ One SFN on 12B across the UK since 1995.
+        { "GB", "12B", "BBC National DAB", "worlddab.org/countries/united-kingdom/multiplexes" },
+        // ★ 1. Bundesmux, nationwide SFN on 5C (178.352 MHz). The second Bundesmux (Antenne Deutschland) is 5D.
+        { "DE", "5C",  "1. Bundesmux (DR Deutschland)", "worlddab.org/countries/germany/multiplexes; "
+                                                        "media-broadcast.com 2023-07-03 press release (Ausbau 1. Bundesmux)" },
+        // ★ NPO's national multiplex is 12C (the commercial national one is 11C).
+        { "NL", "12C", "NPO (national public)", "worlddab.org/countries/netherlands/multiplexes" },
+        /* ✗ LEFT OUT on purpose (2026-11-12) — the main public multiplex is not one block nationwide, or not on air:
+         *   NO (NRK: 7 regional muxes, 12C/13A/13F/12B/13E), BE (VRT 12A in Flanders only; RTBF varies), DK (DR on
+         *   11C/13B/8B by region), CH (SRG SSR by language: 12C/12A/12D), AT (Bundesweit 1 on four blocks), IT (RAI
+         *   12A–12D by region), FR (métropolitain layers are per-area allotments), PL (Polskie Radio regional), CZ (12C
+         *   Bohemia / 12D Moravia since 2020-01-15), SE (12B/12C), ES (MF1 9D, coverage unstated), IE (RTÉ's 12C mux
+         *   closed 2021-03-31). AU: the ABC/SBS capital-city mux looks like 9C everywhere (WorldDAB: Brisbane, Adelaide,
+         *   Canberra) but Sydney, Perth, Hobart and Darwin were not confirmed from a primary source — add it once they are.
+         *   A country left out still opens on a scan's strongest block once anybody scans. */
     };
     return t;
 }
@@ -53,7 +67,22 @@ inline const National* nationalFor(const std::string& iso) {
 struct Box { const char* iso; double lat0, lat1, lon0, lon1; };
 inline const std::vector<Box>& boxes() {
     static const std::vector<Box> b = {
-        // (filled with the table)
+        // GB — Great Britain north of Dover, the south coast west of Folkestone (clear of Boulogne/Calais), the Kent
+        //      tip, Northern Ireland's east (clear of Donegal and Monaghan), and the Northern Isles.
+        { "GB", 51.10, 58.70, -5.70,  1.80 },
+        { "GB", 49.90, 51.10, -5.80,  0.90 },
+        { "GB", 50.70, 51.10,  0.90,  1.45 },
+        { "GB", 54.40, 55.00, -7.00, -5.40 },
+        { "GB", 58.70, 60.90, -3.50, -0.70 },
+        // DE — clear of NL (7.03 at Gronau), DK (54.8), PL (Oder), CZ, AT, CH, FR (the Rhine and the Saar), BE and LU.
+        { "DE", 50.90, 54.50,  7.30, 13.80 },
+        { "DE", 49.50, 50.90,  6.60, 12.00 },
+        { "DE", 49.25, 49.50,  7.40, 12.00 },
+        { "DE", 47.90, 49.25,  8.30, 12.00 },
+        { "DE", 48.60, 49.25, 12.00, 12.80 },
+        // NL — clear of BE (north of 51.5) and DE (west of 6.0, then of 6.65 above Twente).
+        { "NL", 51.50, 53.40,  4.20,  6.00 },
+        { "NL", 52.20, 53.30,  6.00,  6.65 },
     };
     return b;
 }
