@@ -384,7 +384,8 @@ try {
 
   // ════ 3. LAYOUT AND LOOK ════
   console.log('── phone width and themes ──');
-  await p.js(`document.getElementById("mMenu").click(); 1`);
+  // ★ The Icom panel lives in MENU → SDR HARDWARE, which folds (menuCats.ts, 2026-11-12): open it.
+  await p.js(`document.getElementById("mMenu").click(); if (document.getElementById("mCatHw").getAttribute("aria-expanded") !== "true") document.getElementById("mCatHw").click(); 1`);
   await p.call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(700);
   const ov = await p.js(`(() => { const c = document.getElementById("icomCtls"); return { doc: document.documentElement.scrollWidth, win: innerWidth,

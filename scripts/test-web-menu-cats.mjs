@@ -182,14 +182,15 @@ const key = async (k) => {
 const press = async (i) => { await js(`__btn(${i}, true); 1`); await sleep(120); await js(`__btn(${i}, false); 1`); await sleep(120); };
 const shot = async (file, clipMenu = false) => {
   let clip;
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2 });   // ★ no hover glow left on a header
   if (clipMenu) {
     // ★ The whole menu card, even where it scrolls: grow the card for the picture, then put it back.
-    const r = await js(`(() => { const m = document.getElementById('menu'); m.dataset.oldMh = m.style.maxHeight; m.style.maxHeight = 'none';
+    const r = await js(`(() => { const m = document.getElementById('menu'); m.dataset.oldMh = m.style.maxHeight; m.style.maxHeight = 'none'; m.style.transition = 'none'; m.style.top = '12px'; m.style.transform = 'translate(-50%, 0)';
       const b = m.getBoundingClientRect(); return { x: Math.max(0, b.left - 12), y: Math.max(0, b.top - 12), w: b.width + 24, h: b.height + 24 }; })()`);
     clip = { x: r.x, y: r.y, width: r.w, height: r.h, scale: 1 };
   }
   const r = await send('Page.captureScreenshot', { format: 'png', ...(clip ? { clip, captureBeyondViewport: true } : {}) });
-  if (clipMenu) await js(`(() => { const m = document.getElementById('menu'); m.style.maxHeight = m.dataset.oldMh || ''; })()`);
+  if (clipMenu) await js(`(() => { const m = document.getElementById('menu'); m.style.maxHeight = m.dataset.oldMh || ''; m.style.top = ''; m.style.transform = ''; m.style.transition = ''; })()`);
   fs.writeFileSync(file, Buffer.from(r.result.data, 'base64'));
   console.log(`        saved ${file}`);
 };

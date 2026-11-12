@@ -263,7 +263,9 @@ try {
   await p.js(`document.querySelectorAll(".open").forEach(e => e.classList.remove("open")); 1`);
 
   // ── PASSWORD mode ──
-  await p.js(`document.getElementById("menu").classList.add("open"); document.getElementById("adminPwRow").hidden = false; 1`);
+  // ★ The password box lives in MENU → SDR HARDWARE, which folds (menuCats.ts, 2026-11-12): open it first.
+  await p.js(`document.getElementById("menu").classList.add("open"); document.getElementById("adminPwRow").hidden = false;
+    if (document.getElementById("mCatHw").getAttribute("aria-expanded") !== "true") document.getElementById("mCatHw").click(); 1`);
   await sleep(200);
   await highlightField(p, "adminPwInput");
   await press(p, B.S);
