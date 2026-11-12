@@ -8,6 +8,7 @@
 
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
+import { healthTuckBody, healthTuckLevel } from './healthTuck';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
@@ -6458,7 +6459,8 @@ function showLandingMessage(text?: unknown, linkUrl?: unknown, linkLabel?: unkno
   host.style.textAlign = long ? 'left' : 'center';
   host.style.maxWidth = long ? '560px' : '340px';
   host.innerHTML =
-      (msg ? `<div style="white-space:pre-wrap">${escapeHtml(msg)}</div>` : '')
+      // ★★ **bold** and *italic* only — landingMarkupHtml escapes every character and can emit nothing but <b>/<i>.
+      (msg ? `<div style="white-space:pre-wrap">${landingMarkupHtml(msg)}</div>` : '')
     + (url ? `<div style="margin-top:6px"><a href="${escapeHtml(url)}" target="_blank" `
            // ★ noopener is not decoration: without it the opened page gets window.opener and can
            //   navigate this tab somewhere else.
@@ -13889,6 +13891,10 @@ function renderHealthPill(h: {
     el.id = 'srvHealth';
     document.body.appendChild(el);
   }
+  /* ★★ V12 (2026-11-12): the pill is a card in a dock that tucks into the edge like the app's (healthTuck.ts). The
+   *  contents go in its body; the frame is the card; the dock carries `crit` and `tucked`. */
+  const body = healthTuckBody(el);
+  const card = el.querySelector<HTMLElement>('.hCard') ?? el;
   const slots: string[] = [
     healthGlyph('cpu', h.cpu, `Processor: ${HEALTH_WORDS[h.cpu]}`, h.cpuPos),
     healthGlyph('ram', h.ram, `Memory: ${HEALTH_WORDS[h.ram]}`, h.ramPos),
@@ -13933,7 +13939,7 @@ function renderHealthPill(h: {
       + `</svg></span>`;
   }
   const worst = Math.max(h.cpu, h.ram, h.temp.kind === 'none' ? 0 : h.temp.level, h.bat.level ?? 0);
-  el.className = worst >= 3 ? 'crit' : '';
+  el.classList.toggle('crit', worst >= 3);   // ★ a toggle, not className: the dock also carries `tucked`
   /* ★★★ THE FRAME BLENDS TOO, OR THE PILL SNAPS ROUND SMOOTH ICONS. The slots inside were given a
    *  continuous tint (see healthColour); this border kept a DISCRETE `HEALTH_COLOURS[worst]` and a
    *  two-step alpha, so the icons drifted while the ring around them jumped green->amber in one
@@ -13950,7 +13956,9 @@ function renderHealthPill(h: {
     h.temp.kind === 'none' ? 0 : (h.temp.pos ?? h.temp.level),
     h.bat.level ?? 0);
   const ringAlpha = Math.round(0x73 + (0xbf - 0x73) * Math.min(1, Math.max(0, worstPos)));
-  el.style.borderColor = `${healthColour(worst, worstPos)}${ringAlpha.toString(16).padStart(2, '0')}`;
+  card.style.borderColor = `${healthColour(worst, worstPos)}${ringAlpha.toString(16).padStart(2, '0')}`;
+  // ★ The tab and the › wear the same colour, solid — and level 3 brings a tucked pill back out.
+  healthTuckLevel(worst, healthColour(worst, worstPos));
   /* ★★ A DECODER TOO HEAVY FOR THIS MACHINE (Stuart, 2026-10-25: "a little addition to the health card that says
    *  something like Decoder too heavy"). The server names a decoder only when it threw input away in the last minute
    *  (vibe_health.h BehindWatch) — busy is not named, falling behind is. One short amber line each, under the icons;
@@ -13958,9 +13966,9 @@ function renderHealthPill(h: {
   const behind = Array.isArray(h.behind) ? h.behind.filter((b) => typeof b === 'string' && b).slice(0, 3) : [];
   const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
   const warn = behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('');
-  el.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
+  body.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
   /* ★ One sentence for a screen reader, since the icons carry no text. */
-  el.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
+  body.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
     + (h.temp.kind === 'sensor' ? `, temperature ${HEALTH_WORDS[h.temp.level]}`
        : h.temp.kind === 'none' ? '' : ', throttling')
     + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : '')
