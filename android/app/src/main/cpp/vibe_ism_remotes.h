@@ -236,7 +236,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     for (const Bits& w0 : rows) {
         Bits w = w0;
         if (w.size() == 33) w.pop_back();
-        if (w.size() != 32 || !kit::twice(rows, w0)) continue;
+        if (w.size() != 32) continue;   // ★ not "twice in the burst": the copies come 40 ms apart, often a burst each
         const auto x = bytesAt(w, 0, 4);   // ★ bytes as the long-gap = 1 reading gives them (the doc calls that 0; the checks are symmetric)
         if ((x[0] ^ x[1]) != 0xFF || (x[2] ^ x[3]) != 0xFF) continue;
         if ((x[0] & 0x0B) != 0x00 || (x[1] & 0x0B) != 0x0B || (x[2] & 0x07) != 0 || (x[3] & 0x07) != 0x07) continue;
@@ -248,6 +248,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
             ev = x[2] == 0x98 ? "DIM" : x[2] == 0x88 ? "BRI" : x[2] == 0x90 ? "ALL LTS ON" : x[2] == 0x80 ? "ALL OFF" : "UNKNOWN";
         }
         Reading r = remoteReading("doorbell", "X10", "remote", 24, uint64_t(hc) << 8 | uint64_t(unit));
+        r.confirm = !kit::twice(rows, w0);   // one copy in this burst: shown once heard twice alike
         std::string low = ev; for (auto& c : low) c = char(std::tolower(c));
         r.extra = low;
         r.fact("state", ev.c_str()); r.fact("channel", std::string(1, hc).c_str());

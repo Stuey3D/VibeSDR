@@ -353,6 +353,102 @@ static void testHome() {
         tx.space(20000);
         cs.push_back({"Interlogix contact", Sig{tx.r}, "contact", "subtype", "\"contact\"", true});
     }
+    // Honeywell 5800: OOK Manchester 136 µs chips, raw preamble 55 55 56, then 01 = 1 pairs: ch 8 · id · event · CRC-16 0x8005
+    {
+        std::vector<uint8_t> by = {0x8A, 0xA9, 0x9B, 0x80};
+        const uint16_t c16 = crc16(by.data(), 4, 0x8005, 0); by.push_back(uint8_t(c16 >> 8)); by.push_back(uint8_t(c16));
+        Bits c = hb(0x5555, 16); cat(c, hb(0x555556, 24)); cat(c, manch01(bytesToBits(by))); cat(c, hb(0, 4));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t x : c) { if (x) tx.mark(136); else tx.space(136); } tx.space(8000); }
+        cs.push_back({"Honeywell 5800 contact", Sig{tx.r}, "5800 series", "contact_open", "1", true});
+    }
+    // DSC: RZ, 500 µs bits, a 250 µs pulse in a 1's second half; 4 sync 1s, a 1 before every 8 further bits; CRC
+    {
+        uint8_t by[5] = {0x81, 0x24, 0xBD, 0xC8, 0};
+        for (int c = 0; c < 256; ++c) { by[4] = uint8_t(c); if (kit::crc8r(by, 5, 0xF5, 0x3D) == 0) break; }
+        Bits d = hb(0xF, 4);
+        for (int k = 0; k < 4; ++k) { cat(d, hb(by[k], 8)); d.push_back(1); }
+        cat(d, hb(by[4], 8));                 // the 1 before the CRC, then the CRC: 48 bits
+        const Bits& frame = d;
+        Tx tx; tx.mark(2500);
+        for (uint8_t x : frame) { if (x) { tx.space(250); tx.mark(250); } else tx.space(500); }
+        tx.space(20000);
+        cs.push_back({"DSC contact", Sig{tx.r}, "sensor", "status", "129", true});
+    }
+    // Generic 433.3 MHz motion: 8 copies of a 20-bit code, alternating 888/1332 and 1332/1784 µs marks, 920/472 µs gaps
+    {
+        const uint32_t code = 0x800A2;
+        Tx tx; tx.mark(9000);
+        for (int p = 0; p < 8; ++p) {
+            const double m1 = p & 1 ? 1332 : 888, m0 = p & 1 ? 1784 : 1332;
+            tx.space(p ? 1672 : 1672);
+            for (int i = 19; i >= 0; --i) { const bool one = (code >> i) & 1; if (i != 19) tx.space(one ? 920 : 472); tx.mark(one ? m1 : m0); }
+        }
+        tx.space(5000);
+        cs.push_back({"Generic motion sensor", Sig{tx.r}, "motion sensor", nullptr, nullptr, true});
+    }
+    // LightwaveRF: 250 µs pulses; the line 1 + 10 × (1 + symbol) as short (1) / long (1 then 0) gaps; 6 repeats
+    {
+        static const uint8_t symb[16] = {0xF6, 0xEE, 0xED, 0xEB, 0xDE, 0xDD, 0xDB, 0xBE, 0xBD, 0xBB, 0xB7, 0x7E, 0x7D, 0x7B, 0x77, 0x6F};
+        const int nib[10] = {0, 0, 2, 1, 0xF, 0x2, 0xF, 0x3, 0xD, 0x5};   // param 00, sub-unit 2, on, ID F2F3D5
+        Bits line; line.push_back(1);
+        for (int k = 0; k < 10; ++k) { line.push_back(1); cat(line, hb(symb[nib[k]], 8)); }
+        line.push_back(1);
+        Tx tx;
+        for (int rep = 0; rep < 6; ++rep) {
+            for (size_t i = 0; i < line.size(); ) {          // each 1 is a pulse; a 0 after it lengthens its gap
+                if (!line[i]) { ++i; continue; }
+                tx.mark(250);
+                const bool z = i + 1 < line.size() && !line[i + 1];
+                if (i + 1 < line.size()) tx.space(z ? 1250 : 250);
+                i += z ? 2 : 1;
+            }
+            tx.space(10000);
+        }
+        cs.push_back({"LightwaveRF switch", Sig{tx.r}, "switch", "subunit", "2", true});
+    }
+    // Nexa / KlikAanKlikUit self-learning: T 270 µs; sync gap 10T; each data bit as two PPM bits (1 → 1 0, 0 → 0 1)
+    {
+        Bits d = hb(0x129ACDE, 26); d.push_back(0); d.push_back(1); cat(d, hb(0x3, 4));   // group 0, on, unit bits
+        Tx tx;
+        for (int rep = 0; rep < 6; ++rep) {
+            tx.mark(270); tx.space(2650);
+            for (uint8_t x : d) { tx.mark(270); tx.space(x ? 1300 : 270); tx.mark(270); tx.space(x ? 270 : 1300); }
+            tx.mark(270); tx.space(10000);
+        }
+        cs.push_back({"Nexa self-learning", Sig{tx.r}, "self-learning", "state", "\"ON\"", true});
+    }
+    // X10 RF: 9 ms + 4.5 ms sync, 562 µs marks, a long gap reads 1 here; house B (0111), unit 1, on; 5 copies
+    {
+        const uint8_t b0 = 0x70, b2 = 0x00;
+        std::vector<uint8_t> by = {b0, uint8_t(~b0), b2, uint8_t(~b2)};
+        Tx tx;
+        for (int rep = 0; rep < 5; ++rep) { tx.mark(9000); tx.space(4500); for (uint8_t x : bytesToBits(by)) { tx.mark(562); tx.space(x ? 1687 : 562); } tx.mark(562); tx.space(40000); }
+        cs.push_back({"X10 remote", Sig{tx.r}, "remote", "channel", "\"B\"", true});
+    }
+    // GE Color Effects: 52 µs FSK chips; 1100 ×5, FF 00, then 10 = 0 / 1100 = 1: 00 · ID 6 · command 8 · 0; 3 repeats
+    {
+        Bits d = hb(0, 2); cat(d, hb(63, 6)); cat(d, hb(0x5A, 8)); d.push_back(0);
+        Bits c;
+        for (int rep = 0; rep < 3; ++rep) {
+            for (int i = 0; i < 5; ++i) cat(c, hb(0xC, 4));
+            cat(c, hb(0xFF00, 16));
+            for (uint8_t x : d) cat(c, x ? hb(0xC, 4) : hb(0x2, 2));
+            cat(c, hb(0, 20));
+        }
+        Sig s{fskNrz(c, 52)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"GE Color Effects remote", s, "Color Effects", "command", "\"change\"", true});
+    }
+    // ERT SCM: OOK Manchester, 30.5 µs chips; preamble 0x1F2A60 (21 bits), the rest, BCH 0x6F63 over bytes 2–11
+    {
+        std::vector<uint8_t> by = {0xF9, 0x53, 0x02 | 0x01, uint8_t(12 << 2), 0x08, 0x95, 0x18, 0x41, 0x0C, 0x0C, 0, 0};
+        by[2] = (by[2] & ~0x07) | 0x02;   // ID's high bits, 0b01 → 1 << 24 here
+        for (uint32_t c = 0; c < 65536; ++c) { by[10] = uint8_t(c >> 8); by[11] = uint8_t(c); if (crc16(by.data() + 2, 10, 0x6F63, 0) == 0) break; }
+        Bits d = bytesToBits(by);
+        Bits c; for (uint8_t x : d) { c.push_back(x ? 1 : 0); c.push_back(x ? 0 : 1); }   // 10 = 1
+        Tx tx; for (uint8_t x : c) { if (x) tx.mark(30.52); else tx.space(30.52); }
+        Sig s{fskNrz(c, 30.52)}; s.runs.erase(s.runs.begin(), s.runs.begin() + (s.runs[0] < 0 ? 1 : 0));
+        cs.push_back({"ERT SCM meter", s, "SCM", "ert_type", "12", false});
+    }
     homeRun(cs);
 }
 
