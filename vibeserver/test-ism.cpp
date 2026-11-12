@@ -792,6 +792,8 @@ int main(int argc, char** argv) {
         CHECK(!bandPlausible(r, 868.3e6) && bandPlausible(r, 433.92e6), "band: AcuRite refused at 868, kept at 433.92");
         Reading t; t.kind = "tpms"; Reading lc; lc.make = "La Crosse"; lc.kind = "weather";
         CHECK(!bandPlausible(t, 868.95e6) && bandPlausible(lc, 868.3e6), "band: TPMS refused at 868, La Crosse kept there");
+        CHECK(!bandPlausible(t, 915.0e6) && bandPlausible(t, 314.98e6) && bandPlausible(t, 433.92e6) && bandPlausible(t, 434.1e6),
+              "band: TPMS at 315 and 433-434 only (refused at 915)");
         // the rain gauge: ONE good frame is no longer enough (three repeats are sent; two must agree)
         std::vector<uint8_t> by = hexBytes("A2 30 01 00 00 01 0B 00");     // 139 tips
         for (int i = 3; i < 7; ++i) if (!evenParityOk(by[size_t(i)])) by[size_t(i)] ^= 0x80;

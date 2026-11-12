@@ -317,12 +317,15 @@ inline void decodeAll(const Burst& b, std::vector<Reading>& out) {
     }
 }
 /** ★★ A FAMILY HEARD WHERE IT NEVER TRANSMITS IS NOISE (2026-10-25: an AcuRite 00899 and a TPMS "decoded" on 868 MHz on
- *  the Pi 500). AcuRite, Oregon Scientific and both TPMS formats send on 315 / 433.92 / 915 only — never in the 863-870 MHz
+ *  the Pi 500). AcuRite and Oregon Scientific send on 315 / 433.92 / 915 only (TPMS: 315 / 433 only, below) — never in the 863-870 MHz
  *  SRD band — so a reading of theirs at 868 is refused. Families that do use 868 (La Crosse IT+, Fine Offset FSK,
  *  Current Cost, fixed-code remotes, KeeLoq) are untouched. Applied by Service::decodeBurst, which knows the frequency. */
 inline bool bandPlausible(const Reading& r, double freqHz) {
     // ★ V12 wM-Bus: a meter only at 868.2-868.4 (S) or 868.85-869.05 (T/C) — anywhere else its CRC passed by chance
     if (r.kind == "meter") return (freqHz >= 868.2e6 && freqHz <= 868.4e6) || (freqHz >= 868.85e6 && freqHz <= 869.05e6);
+    /* ★ V12 2026-11-11: a tyre sensor transmits at 315 MHz (the Americas, Japan; 314.9-315.0) or in the 433 band
+     *  (433.92, TyreGuard 434.1) — nowhere else: not at 868, not at 915 (no TPMS uses either). */
+    if (r.kind == "tpms") return (freqHz >= 312e6 && freqHz <= 318e6) || (freqHz >= 433.0e6 && freqHz <= 435.0e6);
     const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6;
     if (!srd868) return true;
     return !(r.make == "AcuRite" || r.make == "Oregon Scientific" || r.kind == "tpms");
