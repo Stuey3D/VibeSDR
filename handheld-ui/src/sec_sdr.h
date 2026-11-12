@@ -3,7 +3,7 @@
 // radio that is plugged in: branch on hwinfo radio.driver (rtl · sdrplay · airspyhf · airspy · hackrf · usrp · icom) and
 // draw only the controls THAT radio has (AGENTS.md: a control that only works on one radio should not be there).
 // Spec: docs/v12/R36S-NATIVE-MENU-INVENTORY.md §4a. Rows in the web markup's order:
-//   RECEIVER · GAIN · VIBE AGC · [RSP | HF+ | R2 | USRP | HackRF panel] · SAMPLE RATE · IF FILTER · PPM · BIAS-T ·
+//   RECEIVER · GAIN · VIBE AGC · [RSP | HF+ | R2 | USRP | HackRF panel] · SAMPLE RATE · IF FILTER · PPM · AUTO PPM · BIAS-T ·
 //   DIGITAL AGC · DIRECT SAMPLING · ANTENNA
 // ★★ NOTHING IS SENT WHEN THE MENU IS BUILT, except the HF+'s four operating settings once per radio (it reports none
 //    of them — sdr_more.h). Every other row reads what the radio reports; the web's page-build re-sends (bias-T, RSP
@@ -38,6 +38,7 @@ inline float App::secSdr(Ctx& c, const RadioState& s, Rect a, float y) {
     if (d != "airspyhf") sdr::rateRow(x, y);
     if (d == "rtl") sdr::ifFilterRow(x, y);
     if (d == "rtl" || d == "sdrplay") sdr::ppmRow(x, y);
+    sdr::afcRows(x, y);   // ★★ V12 AUTO PPM — any radio the engine says can use it (after the manual PPM it sits on top of)
     if (d == "rtl") sdr::rtlRows(x, y);
     sdr::antennaRows(x, y);
     return y;

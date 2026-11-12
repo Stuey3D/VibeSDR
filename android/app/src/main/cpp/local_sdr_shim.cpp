@@ -4037,6 +4037,7 @@ static std::string            g_afcFile;
 static bool                   g_afcHandheld = false, g_afcCapSet = false;
 static double                 g_afcStableSince = 0.0, g_afcLastRejectLog = 0.0;
 static int64_t                g_afcSavedConfirm = 0;
+static std::string            g_afcSig;   // ★ what clients last saw (afcTick re-sends hwinfo when it changes)
 static std::atomic<double>    g_afcTarget{0.0}, g_afcNow{0.0};
 static std::atomic<bool>      g_afcJump{false};
 /** Write the store (under g_afcMtx). */
@@ -24260,6 +24261,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★★ V12: THE OWNER'S BAND SCANS (admin page → WHAT THIS RECEIVER HAS LEARNED). GET = both scans' state and
              *  whether each may start now (in words); POST ?band=dab|fm&act=start|cancel. Answered by the RADIO's process
              *  (/r/<serial>/…); the front door owns no radio and says so. Additive JSON — nothing an older page reads. */
+            /* ★★ V12 AUTO-PPM on the admin page (vibe_afc.h): GET = what it is doing on this radio; POST ?reset=1 (forget
+             *  what was learned, lift a suspension) or ?on=0|1 (Turn off / on, persisted). Answered by the RADIO. */
+            if (what == "autoppm") {
+                if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
+                if (isPost) {
+                    if (queryParam(reqLine, "reset") == "1") LocalSdrShim::instance().afcReset();
+                    const std::string onq = queryParam(reqLine, "on");
+                    if (onq == "0" || onq == "1") {
+                        LocalSdrShim::instance().afcSetOn(onq == "1");
+                        vsPersist(std::string("{\"autoPpm\":") + (onq == "1" ? "true" : "false") + "}");
+                    }
+                    LOGI("admin page: auto-PPM %s by %s", queryParam(reqLine, "reset") == "1" ? "reset" : onq == "0" ? "turned off" : "turned on", ip.c_str());
+                    LocalSdrShim::instance().broadcastHwInfo();
+                }
+                reply(200, "OK", LocalSdrShim::instance().afcJson());
+                return;
+            }
             if (what == "bandscan") {
                 if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
                 const std::string band = queryParam(reqLine, "band"), act = queryParam(reqLine, "act");
@@ -43502,12 +43520,14 @@ void LocalSdrShim::afcReset() {
     afcSaveLocked();
 }
 std::string LocalSdrShim::afcJson() const {
+    const bool avail = vsRadioCaps().s.autoPpm;   // ★ before g_afcMtx — it reads the radio's own state
     std::lock_guard<std::mutex> lk(g_afcMtx);
     const int64_t unixNow = (int64_t)time(nullptr);
     const char* state = !g_afc.on() ? "off" : g_afc.suspended() ? "suspended" : g_afc.acquired() ? (g_afc.verifying() ? "checking" : "applied") : "learning";
     char b[256];
-    std::snprintf(b, sizeof b, "{\"on\":%s,\"state\":\"%s\",\"ppm\":%.3f,\"inForce\":%.3f,\"manual\":%d,\"cap\":%.0f,\"at\":%lld,\"now\":%lld,\"reverts\":%d",
-                  g_afc.on() ? "true" : "false", state, g_afc.target(), g_afcNow.load(std::memory_order_relaxed),
+    // ★ available: the radio can reach DAB (vibe_radio_caps.h autoPpm) — a client draws the row only then (AGENTS.md)
+    std::snprintf(b, sizeof b, "{\"available\":%s,\"on\":%s,\"state\":\"%s\",\"ppm\":%.3f,\"inForce\":%.3f,\"manual\":%d,\"cap\":%.0f,\"at\":%lld,\"now\":%lld,\"reverts\":%d",
+                  avail ? "true" : "false", g_afc.on() ? "true" : "false", state, g_afc.target(), g_afcNow.load(std::memory_order_relaxed),
                   g_ppmNow.load(std::memory_order_relaxed), g_afc.cap(), (long long)g_afc.confirmedAt(), (long long)unixNow, g_afc.reverts());
     std::string j = b;
     j += ",\"source\":\"" + vibeafc::jsonEsc(g_afc.source()) + "\",\"line\":\"" + vibeafc::jsonEsc(g_afc.describe(unixNow))
@@ -43525,7 +43545,18 @@ void LocalSdrShim::afcTick() {
                               : isAirspy() ? "airspy" : isUsrp() ? "usrp" : "rtl";
         g_afc.setCap(vibeafc::capFor(drv));
     }
-    auto publish = [&]() { g_afcTarget.store(g_afc.target(), std::memory_order_relaxed); };
+    /* ★ publish the target for the DSP's glide; and when what a client would DRAW has changed (the state, the glide
+     *  starting or finishing — not every step of it), re-send hwinfo, after the lock (it reads afcJson). */
+    bool bcast = false;
+    auto publish = [&]() {
+        g_afcTarget.store(g_afc.target(), std::memory_order_relaxed);
+        const bool gliding = std::fabs(g_afcNow.load(std::memory_order_relaxed) - g_afc.target()) > 1e-9;
+        char sig[96];
+        std::snprintf(sig, sizeof sig, "%d%d%d%d%d%.3f", g_afc.on(), g_afc.suspended(), g_afc.acquired(), g_afc.verifying(), gliding, g_afc.target());
+        if (g_afcSig != sig) { g_afcSig = sig; bcast = true; }
+    };
+    struct Bcast { bool& b; std::unique_lock<std::mutex>& l; LocalSdrShim* s;
+                   ~Bcast() { if (b) { if (l.owns_lock()) l.unlock(); s->broadcastHwInfo(); } } } bc{bcast, lk, this};
     if (!g_afc.on() || g_afc.suspended() || !g_dabMode.load(std::memory_order_relaxed)) { g_afcStableSince = 0; publish(); return; }
     const auto c = g_dab.clockRead();
     vibeafc::DabRead d;
@@ -43546,8 +43577,7 @@ void LocalSdrShim::afcTick() {
         // ★ rule 4: one line per change — from → to, the reference, MER and offset
         LOGI("auto-PPM: %s", a.why.c_str());
         afcSaveLocked();
-        lk.unlock();
-        broadcastHwInfo();   // ★ after the lock: hwinfo reads afcJson
+        bcast = true;   // ★ re-sent after the lock (Bcast): hwinfo reads afcJson
         return;
     } else if (!a.why.empty() && now - g_afcLastRejectLog > 60.0) {
         g_afcLastRejectLog = now;   // ★ a rejected reading (beyond the cap) is LOGGED — once a minute, not every 2 s

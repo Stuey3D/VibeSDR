@@ -5035,6 +5035,9 @@ select.btn { padding: 6px 8px; }
          radio's own answer (GET /vibeserver/admin/bandscan): DAB SCAN / FM SCAN only where that radio can scan now (else
          the reason in words), CANCEL and the progress while one runs, the result line after. -->
     <div id="admScans"></div>
+    <!-- ★★ V12 AUTO-PPM (vibe_afc.h): what each radio's automatic frequency correction has learned, with RESET and TURN
+         OFF / ON (Stuart's rule 4 — always visible, always undoable). One row per radio that can use it (admin.ts renderAfc). -->
+    <div id="admAfc"></div>
     <p class="dim wrap aNote" id="admScansNote" hidden>
       <b>DAB scan</b> walks every Band III block; <b>FM scan</b> sweeps 87.5&ndash;108 MHz and reads each station's RDS.
       Every station found is kept as a scanned bookmark (a year unheard). Anybody listening is moved with the radio while
@@ -6393,6 +6396,17 @@ select.btn { padding: 6px 8px; }
     <label for="ppm">PPM</label>
     <input type="range" id="ppm" min="-50" max="50" value="0">
     <span class="val" id="ppmVal">0</span>
+  </div>
+  <!-- ★★ V12 AUTO-PPM (the server's automatic frequency correction, vibe_afc.h). Drawn only when the server says the
+       radio can use it (afc.available — it learns from DAB). Rule 4: always visible, always undoable — the owner's
+       line, Reset and Turn off (admin-gated, as the ppm is), and the sentence that tells a puzzled owner what to do. -->
+  <div class="mrow" id="afcRow" style="display:none;flex-wrap:wrap;align-items:flex-start">
+    <label>AUTO PPM</label>
+    <div style="flex:1;min-width:0">
+      <div id="afcLine" style="font-size:12px;line-height:1.35"></div>
+      <div class="seg" id="afcBtns" style="margin-top:4px"><button class="btn" id="afcReset">RESET</button><button class="btn" id="afcOff">TURN OFF</button></div>
+      <div style="font-size:11px;opacity:.7;margin-top:3px">If tuning looks off on this radio, turn this off to return to your manual setting.</div>
+    </div>
   </div>
   <div class="mrow rtlOnly">
     <label>BIAS-T</label>

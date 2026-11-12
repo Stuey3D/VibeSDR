@@ -102,6 +102,16 @@ const VIEW_SETTLE_MS = 300;
 const GAIN_SEND_MS   = 120;
 const MIN_SPAN_HZ    = 6_000;     // max-zoom floor; deeper looks frozen/artefacted
 
+/** ★★ V12 hwinfo `afc` — the server's automatic frequency correction (vibe_afc.h LocalSdrShim::afcJson). */
+export interface AfcState {
+  available: boolean;
+  on: boolean;
+  state: 'off' | 'learning' | 'checking' | 'applied' | 'suspended';
+  ppm: number; inForce: number; manual: number; cap: number;
+  at: number; now: number; reverts: number;
+  source: string; line: string; why: string;
+}
+
 export interface Config {
   centerFreq: number;
   binCount: number;
@@ -679,6 +689,9 @@ export interface SpectrumCallbacks {
   onFmScan?: (m: unknown) => void;
   /** ★★ V12: hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
   onDabScanOk?: (ok: boolean) => void;
+  /** ★★ V12 auto-PPM (vibe_afc.h): what the server's automatic frequency correction is doing on this radio. null = an
+   *  older server (nothing to draw). */
+  onAfc?: (a: AfcState | null) => void;
   /** ★★★ V12: hwinfo `dxLog` — does this server keep a DX log THIS listener may see? Absent = no DX LOG key. */
   onDxLogOk?: (ok: boolean) => void;
   /** ★ ADS-B (V12, docs/v12/ADSB.md): the aircraft report, once a second while the receiver is in ADS-B
@@ -1697,6 +1710,7 @@ export class SpectrumClient {
       case 'hwinfo':
         this.cb.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);   // ★ V12 beta25 — absent dcHz = no spike to show
         this.cb.onDabScanOk?.(msg.dabScan === true);   // ★ absent (an older server, a shared radio) = no SCAN key
+        this.cb.onAfc?.(msg.afc && typeof msg.afc === 'object' ? (msg.afc as AfcState) : null);   // ★★ V12 auto-PPM
         this.cb.onDxLogOk?.(msg.dxLog === true);       // ★★★ V12 the DX LOG key beside GALLERY — absent = not drawn
         // ★★ V12 VFO A/B: how many watch channels a listener may add here. Absent (an older server) = 0 = no toggle.
         // ★★★ …and whether it takes the A ⟷ B balance; re-sent here so a reconnect keeps the listener's balance.
@@ -2501,6 +2515,9 @@ export class SpectrumClient {
   setHwBiasT(on: boolean)  { this._send({ type: 'biasT', on }); }
   setHwAgc(on: boolean)    { this._send({ type: 'agc', on }); }
   setHwPpm(ppm: number)    { this._send({ type: 'ppm', value: Math.round(ppm) }); }
+  /** ★★ V12 auto-PPM, the owner's two buttons (admin-gated on the server, as the ppm is). */
+  setAutoPpm(on: boolean)  { this._send({ type: 'autoppm', on }); }
+  resetAutoPpm()           { this._send({ type: 'autoppm_reset' }); }
   setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
   /** ★ The tuner's IF filter in Hz; 0 = librtlsdr's automatic choice. RTL only. */
   /** ★ TEF6686-style automatic demodulator bandwidth. FM broadcast only; server-wide. */

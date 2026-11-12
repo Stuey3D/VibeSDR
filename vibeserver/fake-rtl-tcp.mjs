@@ -45,6 +45,10 @@
 //               mono MPX with a 19 kHz pilot and RDS group 0A (PI in hex, an 8-character PS — '_' for a space) with proper
 //               checkwords, biphase on 57 kHz locked to the pilot; AMP of full scale (default 0.3). Heard wherever the dongle's
 //               capture holds them — so a sweep across 87.5–108 MHz finds them hop by hop (scripts/test-dx-scan.mjs).
+//   --clock-ppm P  (V12 auto-PPM, 2026-11-12) a dongle whose crystal runs P ppm FAST: the --dab clip lands −(P − ppm)·f low,
+//               where ppm is what the server last wrote (0x05) — a radio the owner has trimmed by hand is trimmed here too.
+//               (The sample clock's own P ppm is not modelled: it moves nothing the DAB receiver measures.)
+//   --clock-drift PPM_PER_MIN  …and it warms: the error grows by this much a minute from the first connection.
 //   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
 //               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
 //               scripts/test-rate-guard.mjs). Below HZ the stream resumes.
@@ -87,6 +91,8 @@ const FM_RDS = (() => {
   }).filter((x) => x.hz > 0);
 })();
 const STALL_AT = arg('stall-at', 0);
+const CLOCK_PPM = arg('clock-ppm', 0), CLOCK_DRIFT = arg('clock-drift', 0);   // ★ --clock-ppm / --clock-drift (see the header)
+const T0 = Date.now();
 // ★ --tones-at HZ: the synthetic stations sit at ABSOLUTE frequencies (HZ + their offset) instead of moving with the
 //   dongle, so a test can tune to them exactly whatever offset the server tunes the dongle at (V12 VFO A/B, 2026-10-27).
 const TONES_AT = arg('tones-at', 0);
@@ -216,7 +222,8 @@ const srv = net.createServer((sock) => {
   let carRe = 1, carIm = 0, skRe = 0, skIm = 0;   // ★ --carrier's phasor, --dc-skirt's filter state
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
-  let gainTenths = 350, muxPos = 0;   // ★ --dab-mux: the gain the server last wrote, the replay position
+  let gainTenths = 350, muxPos = 0;
+  let ppmCmd = 0, clkRe = 1, clkIm = 0;   // ★ --clock-ppm: the ppm the server wrote, the error mixer's phasor   // ★ --dab-mux: the gain the server last wrote, the replay position
   // ★ The neighbour: 8 carriers 12.5 kHz apart from +0.93 MHz, each a rotating unit phasor (no trig per sample).
   const adjOsc = Array.from({ length: 8 }, (_, t) => { const w = 2 * Math.PI * (0.93e6 + t * 12.5e3) / 2.048e6;
     return { re: Math.cos(t * 1.7), im: Math.sin(t * 1.7), cw: Math.cos(w), sw: Math.sin(w) }; });
@@ -364,6 +371,18 @@ const srv = net.createServer((sock) => {
         DAB_IQ.copy(buf, k, dabPos, dabPos + take);
         k += take; dabPos = (dabPos + take) % DAB_IQ.length;
       }
+      // ★ --clock-ppm: the radio's own clock error, less what the server's manual ppm trims out
+      const errPpm = CLOCK_PPM + CLOCK_DRIFT * (Date.now() - T0) / 60000 - ppmCmd;
+      if (CLOCK_PPM || CLOCK_DRIFT || ppmCmd) {
+        const w = 2 * Math.PI * (-errPpm * 1e-6 * centreHz) / rate, cw = Math.cos(w), sw = Math.sin(w);
+        for (let i = 0; i < n; i++) {
+          const x = buf[2 * i] - 127.5, y = buf[2 * i + 1] - 127.5;
+          buf[2 * i] = Math.max(0, Math.min(255, Math.round(127.5 + x * clkRe - y * clkIm)));
+          buf[2 * i + 1] = Math.max(0, Math.min(255, Math.round(127.5 + x * clkIm + y * clkRe)));
+          const r = clkRe * cw - clkIm * sw; clkIm = clkRe * sw + clkIm * cw; clkRe = r;
+        }
+        const m = 1.5 - 0.5 * (clkRe * clkRe + clkIm * clkIm); clkRe *= m; clkIm *= m;
+      }
     } else for (let i = 0; i < n; i++) {
       let re = (Math.random() + Math.random() - 1) * 0.06;
       let im = (Math.random() + Math.random() - 1) * 0.06;
@@ -441,7 +460,7 @@ const srv = net.createServer((sock) => {
       //   sampling, gain mode and gain (the DAB quick scan's "full hardware set", 2026-09-29).
       else if (cmd === 0x03) { if (!val) gainTenths = 350; console.log(`[fake-rtl-tcp] gain mode ${val ? 'manual' : 'auto'}`); }
       else if (cmd === 0x04) { gainTenths = val; console.log(`[fake-rtl-tcp] gain ${(val / 10).toFixed(1)} dB`); }
-      else if (cmd === 0x05) console.log(`[fake-rtl-tcp] ppm ${val | 0}`);
+      else if (cmd === 0x05) { ppmCmd = val | 0; console.log(`[fake-rtl-tcp] ppm ${val | 0}`); }
       else if (cmd === 0x08) console.log(`[fake-rtl-tcp] RTL digital AGC ${val ? 'on' : 'off'}`);
       else if (cmd === 0x09) console.log(`[fake-rtl-tcp] direct sampling ${val}`);
       else if (cmd === 0x0e) console.log(`[fake-rtl-tcp] bias-T ${val ? 'ON' : 'off'}`);

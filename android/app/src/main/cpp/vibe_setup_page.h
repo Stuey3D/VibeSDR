@@ -1882,6 +1882,22 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <input type="number" id="ppm" step="1" placeholder="0"></label>
         <p class="why">Corrects a radio whose crystal is slightly off. 0 unless you have measured it.</p>
       </div>
+      <!-- ★★ V12 AUTOMATIC FREQUENCY CORRECTION (vibe_afc.h, docs/v12/AUTO-PPM.md). ON by default. Drawn only where the radio
+           can reach DAB (caps.settings.autoPpm) — it learns from nothing else. Rule 4 of Stuart's safety rules: always
+           visible (the line says what it is doing), always undoable (Reset, Turn off), and one plain sentence saying so. -->
+      <div id="hwAutoPpm" class="hide" style="margin-top:10px">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="autoPpm" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Automatic frequency correction — learn this radio's clock error from DAB</span></label>
+        <div class="hint" id="autoPpmNow"></div>
+        <div id="autoPpmBtns" class="hide" style="display:none;gap:8px;margin-top:6px">
+          <button type="button" class="btn" id="autoPpmReset">Reset</button>
+          <button type="button" class="btn" id="autoPpmOff">Turn off</button>
+        </div>
+        <p class="why">While this radio plays a clean DAB multiplex it measures how far its own clock is out and corrects
+          every mode for it, on top of the ppm above (which it never changes). It changes nothing until it is sure.
+          <b>If tuning looks off on this radio, turn this off to return to your manual setting.</b></p>
+      </div>
       <!-- ★★★ AN UP/DOWN-CONVERTER IN FRONT OF THE AERIAL, and it is a SERVER setting for the
            reason the hint spells out: every listener on this radio is behind the same box, so the
            server corrects for it once and publishes true frequencies. No client — the app, the
@@ -2984,6 +3000,30 @@ function modeCapShown(tree, m) {
 /** ★★ The settings that exist on one kind of radio and not another, drawn from the same answer. Run when a tab is
  *  filled (the door's answer) and again when the radio itself has answered (renderHw). Visibility only: every value
  *  stays in the form and in the config exactly as it was. */
+/* ★★ V12 AUTO-PPM's line and its two buttons (rule 4: always visible, always undoable). `a` = the radio's `afc` object
+ *  (GET /vibeserver/hardware, or /vibeserver/autoppm after a button); absent = an older server or a radio not running. */
+function afcPaint(a) {
+  const now = $("autoPpmNow"), btns = $("autoPpmBtns");
+  if (!now || !btns) return;
+  if (!a || typeof a !== "object") { now.textContent = ""; btns.classList.add("hide"); return; }
+  now.textContent = a.line || "";
+  now.style.color = a.state === "suspended" ? "var(--bad)" : a.state === "applied" ? "var(--good)" : "var(--dim)";
+  // ★ Reset when there is something to forget (learned, or suspended); Turn off whenever it is on
+  btns.classList.toggle("hide", !a.on);
+  btns.style.display = a.on ? "flex" : "none";
+  $("autoPpmReset").disabled = !(a.state === "applied" || a.state === "checking" || a.state === "suspended");
+}
+async function afcButton(qs) {
+  try {
+    const r = await fetch(`${HW_PREFIX}/vibeserver/autoppm?${qs}&${await authQuery()}`, {method: "POST", cache: "no-store"});
+    const a = await r.json();
+    afcPaint(a);
+    if (qs === "on=0" && $("autoPpm")) { $("autoPpm").checked = false; radio().autoPpm = false; }
+  } catch (e) { $("autoPpmNow").textContent = "The radio did not answer \u2014 is it running?"; }
+}
+if ($("autoPpmReset")) $("autoPpmReset").addEventListener("click", () => afcButton("reset=1"));
+if ($("autoPpmOff")) $("autoPpmOff").addEventListener("click", () => afcButton("on=0"));
+
 function capsApply() {
   const r = radio();
   if (!r) return;
@@ -4883,7 +4923,9 @@ async function renderHw() {
         if (typeof cs.ppm === "boolean") show("hwPpm", cs.ppm);
         if (typeof cs.ppb === "boolean") show("hwPpb", cs.ppb);
         if (typeof cs.biasT === "boolean" && drv !== "sdrplay") show("hwBiasT", cs.biasT);
-      } }
+        show("hwAutoPpm", cs.autoPpm === true);   // ★★ V12 auto-PPM: only where DAB can run (an older server: absent = hidden)
+      } else show("hwAutoPpm", false); }
+    afcPaint(hw && hw.afc);
     icomRender(hw, r, drv);
     capsApply();   // ★★ V12 the radio has answered: its own caps now decide this tab
   }
@@ -6231,6 +6273,7 @@ function fill() {
 
   if ($("biasT")) $("biasT").checked = !!r.biasT;
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
+  if ($("autoPpm")) $("autoPpm").checked = r.autoPpm !== false;   // ★ V12 auto-PPM: absent = ON (the default)
   // ★ Stored SIGNED in Hz (an up-converter is negative — see RadioConfig::converterOffsetHz), but
   //   shown as a positive LO in MHz plus a direction: the box in the owner's hands is labelled
   //   "125 MHz", and asking them to type a minus sign is a mistake waiting to be made.
@@ -7367,6 +7410,9 @@ function collectRadio() {
        : DRIVER_HW[drv] && DRIVER_HW[drv].biasT ? {biasT: $("biasT").checked} : {}),
     ...(drv === "rtl" || drv === "rtlsdr" || drv === "sdrplay" ? {ppm: parseInt($("ppm").value || "0", 10)} : {}),
     ...(drv === "airspyhf" ? {ppb: parseInt($("ppb").value || "0", 10)} : {}),
+    // ★★ V12 auto-PPM — every radio but an Icom carries the switch (the caps decide whether it is DRAWN; an unticked box
+    //    on a radio that never drew it was never unticked by anybody, so it is only sent where it was shown or is on).
+    ...(drv !== "icom" && !$("hwAutoPpm").classList.contains("hide") ? {autoPpm: $("autoPpm").checked} : {}),
     // ★ V12 the USRP's owner options — only the ones its running radio reported (usrpCollect reads what is drawn).
     ...(drv === "usrp" ? usrpCollect() : {}),
     // ★ An Icom's own settings — only for an Icom, so no other radio's config ever carries them.

@@ -1047,6 +1047,45 @@ async function renderScans(): Promise<void> {
   } finally { scansBusy = false; }
 }
 
+/* ── ★★ V12 AUTO-PPM, per radio (admin page → WHAT THIS RECEIVER HAS LEARNED) ────────────────────────────────────────
+ *  Each radio answers GET /vibeserver/admin/autoppm with its afc state (LocalSdrShim::afcJson); a row only where the radio
+ *  can use it (available). The owner's line, RESET while something is learned or it is suspended, TURN OFF / ON, and the
+ *  sentence that says what to do when tuning looks off. */
+let afcBusy = false;
+async function renderAfc(): Promise<void> {
+  const box = document.getElementById('admAfc');
+  if (!box || afcBusy) return;
+  afcBusy = true;
+  try {
+    const all = await fromEveryRadio('autoppm');
+    const rows = all.filter((r) => r.data && !r.data.none && r.data.available);
+    const many = rows.length > 1;
+    box.innerHTML = rows.map((r) => {
+      const a = r.data;
+      const btn = (act: string, label: string) => `<button class="btn" data-serial="${esc(r.serial)}" data-afc="${act}">${label}</button>`;
+      const parts: string[] = [];
+      if (a.on && (a.state === 'applied' || a.state === 'checking' || a.state === 'suspended')) parts.push(btn('reset=1', 'RESET AUTO PPM'));
+      parts.push(btn(a.on ? 'on=0' : 'on=1', a.on ? 'TURN OFF AUTO PPM' : 'TURN ON AUTO PPM'));
+      return `<div class="admScanRow">${many ? `<b>${esc(r.radio)}</b> ` : ''}<p class="wrap"${a.state === 'suspended' ? ' style="color:#ff6b6b"' : ''}>${esc(String(a.line || ''))}</p>`
+        + `<div class="aActions">${parts.join('')}</div>`
+        + `<p class="dim wrap">If tuning looks off on this radio, turn this off to return to your manual setting.</p></div>`;
+    }).join('');
+    box.querySelectorAll<HTMLButtonElement>('button[data-afc]').forEach((b) => {
+      b.onclick = async () => {
+        b.disabled = true;
+        const serial = b.dataset.serial || '';
+        try {
+          const qs = serial ? await qCached() : await q();
+          const root = serial ? `${machineBase()}/r/${encodeURIComponent(serial)}` : base();
+          await fetch(`${root}/vibeserver/admin/autoppm?${qs}&${b.dataset.afc}`, { method: 'POST', body: '{}' });
+        } catch { /* the next refresh says what is true */ }
+        afcBusy = false;
+        void renderAfc();
+      };
+    });
+  } finally { afcBusy = false; }
+}
+
 async function qCached(): Promise<string> {
   const have = adminTicketQuery();
   if (have) return have;
@@ -1721,6 +1760,7 @@ async function refresh() {
       //   cache, whatever it can or cannot do about its own packages.
       { const ls = document.getElementById('secLearned'); if (ls) ls.hidden = false; }
       void renderScans();   // ★★ V12: the owner's DAB / FM scans, per radio
+      void renderAfc();     // ★★ V12: auto-PPM, per radio
       const offered = String(st.maintenance ?? '').split(',').filter(Boolean);
       const sec = document.getElementById('secMaintenance');
       // ★ High Detail Maps live here too, and a server can offer them with no package actions at

@@ -94,7 +94,8 @@ const CLIENT_Q = `&client=${encodeURIComponent(USER_AGENT)}&proto=${APP_PROTO}&d
 /** Powersave target, in frames/sec — an absolute floor, not a divisor. */
 const POWERSAVE_FPS = 5;
 
-import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState } from './sdrProtocol';
+import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState, AfcState } from './sdrProtocol';
+export type { AfcState } from './sdrProtocol';
 import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, clampVibePassband } from './sdrProtocol';
 import { roomMode, roomPassband } from './roomPassband';
 import { cleanKeepSpacing } from '../utils/cleanLines';
@@ -884,6 +885,9 @@ export abstract class VibeServerWsClient {
   share(out: ShareOut) { this._sendCtl({ ...out }); }
   setHwAgc(on: boolean)   { this._sendCtl({ type: 'agc', on }); }
   setHwPpm(ppm: number)   { this._sendCtl({ type: 'ppm', value: Math.round(ppm) }); }
+  /** ★★ V12 auto-PPM, the owner's two buttons (admin-gated on the server, as the ppm is). */
+  setAutoPpm(on: boolean) { this._sendCtl({ type: 'autoppm', on }); }
+  resetAutoPpm()          { this._sendCtl({ type: 'autoppm_reset' }); }
   /** ★★★ FM DE-EMPHASIS — tau in SECONDS (0 = off, 50e-6 EU/UK, 75e-6 Americas).
    *
    *  These two were MISSING, and their absence is why both controls did nothing on a networked
@@ -3162,6 +3166,8 @@ export abstract class VibeServerWsClient {
         if (st.digitalAgc !== undefined || st.biasT !== undefined || st.ppm !== undefined)
           this.callbacks.onHwDongleState?.(st);
       }
+      // ★★ V12 auto-PPM (vibe_afc.h): what the server's automatic frequency correction is doing. Absent = an older server.
+      this.callbacks.onAfc?.(msg.afc && typeof msg.afc === 'object' ? { ...(msg.afc as AfcState), receivedAt: Date.now() } : null);
       if (msg.rfCentre !== undefined || msg.lockedCentre !== undefined)
         this.callbacks.onRfCentre?.(Number(msg.rfCentre) || 0, Number(msg.lockedCentre) || 0);
       // ★ V12 beta25: the DC spike's place (absent = none to show). See the `dc` message.

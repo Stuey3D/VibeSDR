@@ -174,6 +174,40 @@ inline void ppmRow(S& x, float& y) {
     }
 }
 
+// ── AUTO PPM (V12, 2026-11-12 — the engine's automatic frequency correction, vibe_afc.h) ─────────────────────────────
+// ★★ Every radio the engine says can use it (afc.available — it learns from DAB), so it is drawn OUTSIDE the per-driver
+//    rows. Stuart's rule 4: always visible (what it is doing, in one line), always undoable (the switch, and RESET while
+//    something is learned or it is suspended), and the one sentence that tells a puzzled owner what to do. On the
+//    handheld the switch is kept with the radio's memory (handheld/radio-<serial>.afc.txt), which Start+Select clears.
+/** "Auto-corrected +4.0 ppm from DAB 7D, 2 min ago" — the engine's words, the age from this device's own clock (the
+ *  engine runs here, so its `at` is on the same clock). */
+inline std::string afcLine(const Json& a) {
+    const std::string st = a["state"].str();
+    if (st != "applied" && st != "checking") return a["line"].str();
+    const double ago = std::max(0.0, (double)std::time(nullptr) - a["at"].num(0));
+    std::string when = ago < 90 ? "just now" : ago < 5400 ? fmtI("%d min ago", (int)(ago / 60))
+                     : ago < 172800 ? fmtI("%d h ago", (int)(ago / 3600)) : fmtI("%d days ago", (int)(ago / 86400));
+    const std::string src = a["source"].str();
+    return fmt("Auto-corrected %+.1f ppm", a["ppm"].num(0)) + (src.empty() ? "" : " from " + src) + ", " + when;
+}
+inline void afcRows(S& x, float& y) {
+    const Json& a = x.hwi()["afc"];
+    if (a.kind != Json::Obj || !a["available"].boolean()) return;
+    const bool on = held(x, "afc", a["on"].boolean() ? 1 : 0) > 0.5;
+    if (rowToggle(x, y, "sdr.afc", "AUTO PPM", "Learns this radio's clock error from DAB", on)) {
+        hold(x, "afc", on ? 0 : 1);
+        send(x, std::string("{\"type\":\"autoppm\",\"on\":") + (on ? "false" : "true") + "}");
+    }
+    const std::string st = a["state"].str();
+    y = note(x, y, afcLine(a), st == "suspended" ? th::red : st == "applied" ? th::amber : th::dim);
+    if (on && (st == "applied" || st == "checking" || st == "suspended")) {
+        int focused = -1;
+        if (buttonGrid(x, y, "sdr.afcReset", {"RESET"}, {false}, {true}, focused, 1) == 0)
+            send(x, "{\"type\":\"autoppm_reset\"}");
+    }
+    y = note(x, y, "If tuning looks off on this radio, turn this off to return to your manual setting.");
+}
+
 // ── BIAS-T · DIGITAL AGC · DIRECT SAMPLING (§4a.2, rtl only) ────────────────────────────────────────────────────────
 inline bool isBlogV4(const std::string& model) {
     std::string m;

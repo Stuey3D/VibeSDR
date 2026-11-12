@@ -15,6 +15,17 @@ import type { AisReport } from './tracks';   // ★ V12 AIS
 import type { AskState } from './dialChat';
 import { AM_SYNC_PASSBAND } from './amSync.ts';   // ★ .ts: node tests import this file directly
 
+/** ★★ V12 hwinfo `afc` — the server's automatic frequency correction (vibe_afc.h, LocalSdrShim::afcJson). */
+export interface AfcState {
+  available: boolean;
+  on: boolean;
+  state: 'off' | 'learning' | 'checking' | 'applied' | 'suspended';
+  ppm: number; inForce: number; manual: number; cap: number;
+  at: number; now: number; reverts: number;
+  source: string; line: string; why: string;
+  receivedAt?: number;   // ★ this client's clock when it arrived — "N min ago" counts on from the server's `now`
+}
+
 /** The one sentence a refused-as-too-old client shows; SDRScreen matches on it to add the button. */
 export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the app, or open the receiver in your browser for now.';
 
@@ -536,6 +547,8 @@ export interface SDRCallbacks {
    *  is `agc`), the dongle's bias-T (`biasT`) and the frequency correction (`ppm`). Each is
    *  undefined when the server did not state it, which must never be read as "off". */
   onHwDongleState?: (s: { digitalAgc?: boolean; biasT?: boolean; ppm?: number }) => void;
+  /** ★★ V12 the server's automatic frequency correction (hwinfo `afc`); null = an older server. */
+  onAfc?: (a: AfcState | null) => void;
   /** Advanced RDS analyser frame (~5 Hz), only while setAdvRds(true). */
   onRdsExt?:    (x: RdsExt) => void;
   /** What the serving radio is and what it can do (hwinfo.radio). */

@@ -26,7 +26,7 @@ import { wideVfoPassband, wideVfoLabel, type WideVfoMode } from '../../../src/ut
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { recordingLabel } from '../../../src/services/recordingLabel';
-import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
+import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport, type AfcState } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
@@ -1164,6 +1164,7 @@ function refreshAdminRow() {
     const rowEl = el.closest('.mrow') as HTMLElement | null;
     if (rowEl) rowEl.style.opacity = locked ? '0.45' : '1';
   }
+  paintAfc();   // ★★ V12 auto-PPM's buttons are the owner's — shown on unlock, gone on the re-lock
   // ★ The RSP's gain controls follow a DIFFERENT rule to the list above — they are gated on the
   //   receiver being LOCKED (shared front end), not merely on a password existing. Unlocking is
   //   the moment they should appear, so re-apply it here.
@@ -1879,7 +1880,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★★ The answer to our mode_resume (wholeResumeTick): yes = the reports follow; no = the mode goes, and why is said
     onModeResume: (kind, ok, why) => wholeResumeDo(wholeResume.answered(kind, ok, why, Date.now())),
     onDabScan: (m: unknown) => dabScanOnMessage(m),
-    onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); if (dabOn) spec?.dabScanGet(); },   // ★ V12: hwinfo comes on every (re)connect — the kept list with it
+    onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); if (dabOn) spec?.dabScanGet(); },
+    onAfc: (a) => { afcNow = a; afcAt = Date.now(); paintAfc(); },   // ★★ V12 auto-PPM — the owner's line (paintAfc)   // ★ V12: hwinfo comes on every (re)connect — the kept list with it
     onFmScan: (m: unknown) => { const s = parseFmScan(m); if (s) scanLockSet(s.running && s.lock, s.done, s.total); },
     onDxLogOk: (ok: boolean) => { dxLogOk = ok; dxLogSyncBtn(); },   // ★★★ V12 the DX LOG key beside GALLERY
     onDab: (d: DabState) => {
@@ -7929,6 +7931,9 @@ function dabRender() {
     + row('Capture rate', d.rfRateHz ? (d.rfRateHz / 1e6).toFixed(3) + ' MS/s' : '—')
     + row('Null depth', tl(d.nullDepthDb.toFixed(1) + ' dB', d.nullDepthDb >= 14 ? 'ok' : d.nullDepthDb >= 8 ? 'warn' : 'bad'))
     + row('Frequency offset', tl(`${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`, Math.abs(d.offsetPpm) < 1 ? 'ok' : Math.abs(d.offsetPpm) < 3 ? 'warn' : 'bad'))
+    // ★★ V12 auto-PPM: the radio's clock is being corrected — the offset above is what is LEFT after it
+    + (afcNow && afcNow.available && afcNow.inForce !== 0
+        ? row('Clock corrected', `${afcNow.inForce >= 0 ? '+' : ''}${afcNow.inForce.toFixed(2)} ppm (auto${afcNow.state === 'checking' ? ', checking' : ''})`) : '')
     + row('Carrier shift', String(d.carrierShift))
     + row('Phase reference', d.prs.toFixed(3) + (d.prsRatio !== undefined ? ` (${d.prsRatio.toFixed(2)} of ref)` : ''))
     + row('MER', d.mer ? tl(d.mer.toFixed(1) + ' dB', d.mer >= 16 ? 'ok' : d.mer >= 10 ? 'warn' : 'bad') : '—')
@@ -10563,6 +10568,33 @@ let serverMaxFps = 0;
 let lastSentFps = -1;
 /** Structure of the last hwinfo, so a gain move does not rebuild the controls. See onHwInfo. */
 let lastHwSig = '';
+/* ★★ V12 AUTO-PPM (vibe_afc.h): the server's automatic frequency correction, as hwinfo last described it. The line is
+ *  the server's own words; only "N min ago" is brought up to date here, from the server's clock (`now` beside `at`),
+ *  so a client whose clock is wrong still says the right age. */
+let afcNow: AfcState | null = null;
+let afcAt = 0;
+function afcLineText(a: AfcState): string {
+  if (a.state !== 'applied' && a.state !== 'checking') return a.line;
+  const ago = Math.max(0, a.now - a.at + (Date.now() - afcAt) / 1000);
+  const when = ago < 90 ? 'just now' : ago < 5400 ? `${Math.floor(ago / 60)} min ago` : ago < 172800 ? `${Math.floor(ago / 3600)} h ago` : `${Math.floor(ago / 86400)} days ago`;
+  return `Auto-corrected ${a.ppm >= 0 ? '+' : ''}${a.ppm.toFixed(1)} ppm${a.source ? ` from ${a.source}` : ''}, ${when}`;
+}
+function paintAfc(): void {
+  const row = document.getElementById('afcRow');
+  if (!row) return;
+  const a = afcNow;
+  row.style.display = a && a.available ? 'flex' : 'none';
+  if (!a || !a.available) return;
+  $('afcLine').textContent = afcLineText(a);
+  ($('afcLine') as HTMLElement).style.color = a.state === 'suspended' ? '#ff6b6b' : '';
+  // ★ The buttons are the owner's: an ordinary listener sees what the radio is doing, never a control that only refuses
+  const btns = $('afcBtns') as HTMLElement;
+  btns.style.display = adminUnlocked ? '' : 'none';
+  const off = $<HTMLButtonElement>('afcOff');
+  off.textContent = a.on ? 'TURN OFF' : 'TURN ON';
+  $<HTMLButtonElement>('afcReset').disabled = !(a.state === 'applied' || a.state === 'checking' || a.state === 'suspended');
+}
+
 /** What we should be asking for right now: our own choice, clamped to the server's ceiling. */
 function wantedFps(): number {
   const want = throttled ? Math.min(IDLE_FPS, activeFps) : activeFps;
@@ -17870,6 +17902,9 @@ function buildMenu() {
   $('audioClose').onclick = () => $('audioPanel').classList.remove('open');
 
   // ── Radio (server-side hardware; ranges filled in from hwinfo) ────────────
+  $<HTMLButtonElement>('afcReset').onclick = () => spec?.resetAutoPpm();
+  $<HTMLButtonElement>('afcOff').onclick = () => spec?.setAutoPpm(!(afcNow?.on ?? true));
+  setInterval(() => { if (afcNow?.state === 'applied') paintAfc(); }, 30000);   // ★ "N min ago" keeps up
   $<HTMLInputElement>('ppm').oninput = () => {
     const v = Number($<HTMLInputElement>('ppm').value);
     $('ppmVal').textContent = String(v);

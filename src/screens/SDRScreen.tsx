@@ -17,7 +17,7 @@
 import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { kickedSentence } from '../services/kickedText';
-import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
+import { UPDATE_APP_MESSAGE, type SDRCallbacks, type AfcState } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode, ICOM_SCOPE_FLOOR_DB,
          icomWatchState, sMeter, type IcomStatus } from '../services/icomRadio';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
@@ -1398,6 +1398,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ A REMOTE server has stated these (undefined = not yet, or an older server that never
    *  does). Until then the panel shows no figure rather than this phone's guess. */
   const [hwStated, setHwStated] = useState<{ ppm?: boolean; biasT?: boolean; digitalAgc?: boolean }>({});
+  /** ★★ V12 the server's automatic frequency correction (hwinfo `afc`, vibe_afc.h) — the hardware panel's AUTO line. */
+  const [afc, setAfc] = useState<AfcState | null>(null);
   /** ★ The IF filter's manual widths as the SERVER publishes them (null = an older server that
    *  does not), the owner's ceiling for this band (Hz, -1 = none) and whether it is fixed. */
   const [hwIfWidths,    setHwIfWidths]    = useState<number[] | null>(null);
@@ -1892,6 +1894,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     const rc = hwClient();
     if (rc) rc.setHwPpm?.(v); else LocalHw?.setPpm?.(v);
   }, [LocalHw, hwClient]);
+  // ★★ V12 auto-PPM, the owner's Reset and Turn off/on — a remote VibeServer only (the server owns the correction)
+  const onAfcReset = useCallback(() => { (hwClient() as { resetAutoPpm?: () => void } | null)?.resetAutoPpm?.(); }, [hwClient]);
+  const onAfcOn = useCallback((on: boolean) => { (hwClient() as { setAutoPpm?: (v: boolean) => void } | null)?.setAutoPpm?.(on); }, [hwClient]);
   const onHwSampleRate = useCallback((rate: number) => {
     setHwSampleRate(rate);
     const rc = hwClient();
@@ -7457,6 +7462,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       /* ★ The dongle's digital AGC, bias-T and ppm — adopted from a REMOTE server only (on local
        *  hardware they are this app's saved settings; see adoptHw). */
+      onAfc: (a) => { if (!destroyed.current) setAfc(a); },   // ★★ V12 auto-PPM
       onHwDongleState: (st) => {
         if (destroyed.current || !adoptHw) return;
         if (st.digitalAgc !== undefined) setHwAgc(st.digitalAgc);
@@ -15909,6 +15915,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           onGain={onHwGain}
           ppm={adoptHw && !hwStated.ppm ? undefined : hwPpm}
           onPpm={onHwPpm}
+          afc={adoptHw ? afc : null}
+          onAfcReset={onAfcReset}
+          onAfcOn={onAfcOn}
           sampleRate={hwSampleRate}
           onSampleRate={onHwSampleRate}
           isTcp={!!route.params.isTcp}

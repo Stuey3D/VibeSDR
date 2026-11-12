@@ -18,6 +18,7 @@ import IcomSetupCard from './IcomSetupCard';
 import GainSlider, { gainSliderInk } from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
+import type { AfcState } from '../services/VibeServerWsClient';
 import { VAGC_KEYS, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText } from '../services/rspAgcReadout';
 import {
   type IcomRadio, type IcomControlFields, icomMayTune, icomMayRf, icomFollowNote, icomModeLabel,
@@ -107,6 +108,11 @@ export interface LocalHardwarePanelProps {
   /** ★ undefined = a remote server that has not stated it: shown as unknown, never as our guess. */
   ppm?: number;
   onPpm: (ppm: number) => void;
+  /** ★★ V12 the server's AUTOMATIC FREQUENCY CORRECTION (hwinfo `afc`, vibe_afc.h) — its line for everyone, Reset and
+   *  Turn off for the owner. undefined/null = an older server or the phone's own radio: nothing drawn. */
+  afc?: AfcState | null;
+  onAfcReset?: () => void;
+  onAfcOn?: (on: boolean) => void;
   /** ★★ The panel is showing a REMOTE server's radio: every option list and value comes from the
    *  server, and where an older one does not publish something the panel shows a readout of what
    *  is in force instead of offering a list of its own (Stuart, 2026-09-28). False for the phone's
@@ -346,6 +352,14 @@ function Seg<T>({ options, value, onChange, fmt, sub, slot, disabled }: {
       })}
     </View>
   );
+}
+
+/** ★★ V12 auto-PPM's line: the server's words, with "N min ago" kept current from the server's own clock. */
+function afcLine(a: AfcState): string {
+  if (a.state !== 'applied' && a.state !== 'checking') return a.line;
+  const ago = Math.max(0, a.now - a.at + (Date.now() - (a.receivedAt ?? Date.now())) / 1000);
+  const when = ago < 90 ? 'just now' : ago < 5400 ? `${Math.floor(ago / 60)} min ago` : ago < 172800 ? `${Math.floor(ago / 3600)} h ago` : `${Math.floor(ago / 86400)} days ago`;
+  return `Auto-corrected ${a.ppm >= 0 ? '+' : ''}${a.ppm.toFixed(1)} ppm${a.source ? ` from ${a.source}` : ''}, ${when}`;
 }
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
@@ -1760,6 +1774,24 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             </>);
           })()}
 
+          {/* ★★ V12 AUTO PPM — the server's automatic frequency correction (vibe_afc.h). Every radio the server says can
+              use it (afc.available: it learns from DAB), so it sits OUTSIDE the per-driver blocks. Stuart's rule 4: always
+              visible (the line, for every listener — it is the radio's state), always undoable (Reset and Turn off, the
+              owner's, gated as the ppm is), and the one sentence that tells a puzzled owner what to do. */}
+          {p.afc?.available && <>
+            <Text style={styles.section}>AUTOMATIC FREQUENCY CORRECTION</Text>
+            <Text style={[styles.note, p.afc.state === 'suspended' && { color: '#ff6b6b' }]}>{afcLine(p.afc)}</Text>
+            {canProtected && p.onAfcReset && p.onAfcOn && (
+              <View style={styles.stepperRow}>
+                {(p.afc.state === 'applied' || p.afc.state === 'checking' || p.afc.state === 'suspended') && (
+                  <TouchableOpacity style={[styles.afcBtn, slot(() => p.onAfcReset?.()) && kbNav && { borderColor: focusC.ring, borderWidth: 2 }]} onPress={() => p.onAfcReset?.()}><Text style={styles.stepBtnTxt}>Reset</Text></TouchableOpacity>
+                )}
+                <TouchableOpacity style={[styles.afcBtn, slot(() => p.onAfcOn?.(!p.afc?.on)) && kbNav && { borderColor: focusC.ring, borderWidth: 2 }]} onPress={() => p.onAfcOn?.(!p.afc?.on)}><Text style={styles.stepBtnTxt}>{p.afc.on ? 'Turn off' : 'Turn on'}</Text></TouchableOpacity>
+              </View>
+            )}
+            <Text style={styles.note}>If tuning looks off on this radio, turn this off to return to your manual setting.</Text>
+          </>}
+
           {/* ★ DONGLE-ONLY from here: PPM (the HF+ calibrates in parts per BILLION, and that
               control is admin-gated), bias-T, the RTL2832's digital AGC and direct sampling
               are all properties of an RTL dongle. Showing them for another radio is how the
@@ -2031,6 +2063,7 @@ const makeLhpStyles = (pt: PopupTokens) => StyleSheet.create({
   segSubActive: { color: pt.gold.sel, opacity: 0.85 },
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: pt.ink.keyBorder, backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
+  afcBtn: { minWidth: 88, height: 36, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: pt.ink.keyBorder, backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
   stepBtnTxt: { fontFamily: FONT, fontSize: 20, color: pt.gold.glyph },
   adminCard: { borderWidth: 1, borderColor: 'rgba(255,140,60,0.55)', borderRadius: 8,
                padding: 12, marginBottom: 14, backgroundColor: 'rgba(255,140,60,0.08)' },
