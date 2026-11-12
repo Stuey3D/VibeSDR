@@ -793,6 +793,73 @@ static Runs springfieldTx(int id, int ch, double t, int moist10) {
     Bits w = bytesToBits({m[0], m[1], m[2], m[3], m[4]}); w.resize(37);
     return ppmRows(w, 500, 2000, 4000, 9000, 6);
 }
+/** inFactory T/H: OOK PPM 500 µs marks, 2 / 4 ms spaces, 40 bits × 6 between 8 ms / 16 ms syncs; CRC-4 with the
+ *  channel in its place, the humidity units nibble XORed in. */
+static Runs infactoryTx(int id, int ch, double tF, int hum) {
+    const int raw = int(std::lround(tF * 10)) + 900;
+    uint8_t m[5] = {uint8_t(id), 0, uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4 | hum / 10), uint8_t((hum % 10) << 4 | ch)};
+    uint8_t c[4] = {m[0], uint8_t(m[4] << 4), m[2], m[3]};
+    m[1] = uint8_t((wx::crc4(c, 4, 0x3, 0) ^ (m[4] >> 4)) << 4);
+    Tx tx;
+    for (int k = 0; k < 6; ++k) {
+        for (int j = 0; j < 4; ++j) { tx.mark(1000); tx.space(1000); }
+        tx.mark(500); tx.space(8000);
+        for (uint8_t x : bytesToBits({m[0], m[1], m[2], m[3], m[4]})) { tx.mark(500); tx.space(x ? 4000 : 2000); }
+        tx.mark(500); tx.space(16000);
+    }
+    return tx.r;
+}
+/** Esun EN2053: OOK PPM 436 µs marks, 1024 / 2000 µs, 40 bits × 9, the sum-and-parity check. */
+static Runs esunTx(int p1F, int p2F) {
+    uint8_t m[5] = {0xC0, uint8_t(p1F >> 4), uint8_t((p1F & 0xF) << 4 | p2F >> 8), uint8_t(p2F), 0};
+    unsigned c = (m[0] + m[1] + m[2] + m[3]) & 7;
+    for (int k = 0; k < 4; ++k) c |= unsigned(1 ^ wx::parity8(m[k])) << (4 + k);
+    m[4] = uint8_t(c);
+    return ppmRows(bytesToBits({m[0], m[1], m[2], m[3], m[4]}), 436, 1024, 2000, 3952, 9);
+}
+/** EN2058: FSK NRZ 100 µs, 15 ones + 15 zeros, AA×5 CA CA, ID, four temperatures (+900, °F × 10), AA, check. */
+static Runs en2058Tx(uint32_t id, double t1F, double t2F) {
+    std::vector<uint8_t> m = {uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id)};
+    for (double t : {t1F, t2F, 112.0, 173.0}) { const int r = int(std::lround(t * 10)) + 900; m.push_back(uint8_t(r >> 8)); m.push_back(uint8_t(r)); }
+    m.push_back(0xAA); m.push_back(uint8_t(0x56 + wx::addBytes(m.data(), 11)));
+    Bits w(15, 1); w.resize(30, 0);
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xCA, 0xCA}; f.insert(f.end(), m.begin(), m.end());
+    for (int k = 0; k < 18; ++k) f.push_back(uint8_t(k));
+    const Bits fb = bytesToBits(f); w.insert(w.end(), fb.begin(), fb.end());
+    return nrzFsk(w, 100);
+}
+/** TFA Marbella: FSK NRZ 105 µs, AA 2D D4, serial · flags · temperature 12 (+400) · A · AA · reflected digest. */
+static Runs marbellaTx(uint32_t serial, double t) {
+    const int raw = int(std::lround(t * 10)) + 400;
+    std::vector<uint8_t> m = {uint8_t(serial >> 16), uint8_t(serial >> 8), uint8_t(serial), 0x0A, uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4 | 0xA), 0xAA};
+    m.push_back(wx::lfsrDigest8Refl(m.data(), 7, 0x31, 0x31));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x2D, 0xD4}; f.insert(f.end(), m.begin(), m.end()); f.push_back(0xAA);
+    return nrzFsk(bytesToBits(f), 105);
+}
+/** Emax W6 T/H sensor (subtype 1, °F): FSK NRZ 90 µs, AA AA CA CA 54, 32 bytes, byte sum. */
+static Runs emaxTx(int ch, int id, double tF, int hum) {
+    const int raw = int(std::lround(tF * 10)) + 900;
+    std::vector<uint8_t> m(32, 0xAA);
+    m[1] = uint8_t(0xA0 | ch); m[2] = uint8_t(id >> 4); m[3] = uint8_t((id & 0xF) << 4 | 0x1);
+    m[4] = uint8_t(0xA0 | raw >> 8); m[5] = uint8_t((raw & 0xF0) | 0xA); m[6] = uint8_t(0xA0 | (raw & 0xF)); m[7] = uint8_t(hum);
+    m[31] = uint8_t(wx::addBytes(m.data(), 31));
+    std::vector<uint8_t> f = {0xFF, 0xFF, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xCA, 0xCA, 0x54}; f.insert(f.end(), m.begin(), m.end()); f.insert(f.end(), {0xAA, 0x00});
+    return nrzFsk(bytesToBits(f), 90);
+}
+static Runs eurochronTx(int id, double t, int h) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    Bits w = bytesToBits({uint8_t(id), 0x00, uint8_t(h), uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4)}); w.resize(36);
+    return ppmRows(w, 500, 1016, 2024, 8000, 6);
+}
+static Runs baldrTx(int id, int ch, double t, int h) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    return ppmRows(bytesToBits({uint8_t(id), uint8_t(0x80 | (ch - 1) << 4 | raw >> 8), uint8_t(raw), uint8_t(0xF0 | h >> 4), uint8_t((h & 0xF) << 4), 0, 0, uint8_t(id ^ 0x5A)}),
+                   500, 1000, 2000, 4000, 8);
+}
+static Runs missilTx(int id, double t) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    return ppmRows(bytesToBits({uint8_t(id), 0x00, uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4 | 0x3), uint8_t(0x6F)}), 500, 975, 1950, 4000, 9);
+}
 
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
@@ -1237,11 +1304,27 @@ int main(int argc, char** argv) {
     cases.push_back({"Emos TTX201", {ttx201Tx(0xC2, 1, 26.4)}, "TTX201", 26.4});
     cases.push_back({"Hyundai WS SENZOR", {wsSenzorTx(0x8A, 1, -0.1)}, "WS SENZOR", -0.1});
     cases.push_back({"Springfield", {springfieldTx(0xD4, 1, 20.6, 8)}, "PreciseTemp", 20.6});
+    cases.push_back({"Esun EN2053", {esunTx(73, 259)}, "EN2053", (73 - 32) / 1.8});
+    { Sig s{en2058Tx(0x5441EC, 259.0, 87.0)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"EN2058", s, "four-probe", (259.0 - 32) / 1.8}); }
+    { Sig s{marbellaTx(0x683F16, 22.8)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"TFA Marbella", s, "Marbella", 22.8}); }
+    { Sig s{emaxTx(1, 0xE41, 72.3, 57)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"Emax W6 T/H", s, "W6-family", (72.3 - 32) / 1.8}); }
+    cases.push_back({"Eurochron T/H", {eurochronTx(0x23, -13.3, 43)}, "T/H", -13.3});
+    cases.push_back({"Baldr E0666TH", {baldrTx(0x9C, 3, 28.2, 45)}, "E0666TH", 28.2});
+    cases.push_back({"Missil ML0757", {missilTx(0x2C, 23.1)}, "ML0757", 23.1});
     {   // ★ weather pass 2: the checks restated from the notes, held to the notes' own worked frames
         const uint8_t a[] = {0x01, 0x1E, 0xD6, 0x03, 0x6C, 0xAA}, c[] = {0x01, 0x1E, 0xD6, 0x02, 0xFA, 0xAA};
         CHECK(wx13::tp211bCheck(a, 6) == 0x14FF && wx13::tp211bCheck(c, 6) == 0xC41E, "TP211B check on the notes' frames");
         const uint8_t d[] = {0xE8, 0x00, 0x29, 0x30, 0x17, 0xAA, 0x55, 0xAA}, e[] = {0x25, 0x20, 0x2C, 0xA0, 0x0D, 0xAA, 0x55, 0xAA};
         CHECK(wx13::digestLastFirst(d, 8, 0x98, 0x25) == 0x83 && wx13::digestLastFirst(e, 8, 0x98, 0x25) == 0xBB, "TX-7B digest on the notes' frames");
+    }
+    {   // ★ inFactory (held out of decodeOne — see vibe_ism_weather15.h): its decoder on a burst built from its facts
+        Burst bb; bb.ook = infactoryTx(0x0F, 1, 69.0, 73);
+        std::vector<Reading> got;
+        CHECK(wx15::infactory(bb, got) && !got.empty() && approx(got[0].tempC, (69.0 - 32) / 1.8, 0.06) && got[0].hum == 73 && got[0].channel == 1,
+              "inFactory T/H from its frame facts (%zu readings)", got.size());
+        const uint8_t notes[5] = {0x0F, 0x30, 0x5C, 0xE7, 0x61};   // the notes' worked frame: its CRC-4 holds
+        uint8_t c[4] = {notes[0], uint8_t((notes[1] & 0x0F) | (notes[4] & 0x0F) << 4), notes[2], notes[3]};
+        CHECK(uint8_t(wx::crc4(c, 4, 0x3, 0) ^ (notes[4] >> 4)) == (notes[1] >> 4), "inFactory CRC-4 on the notes' frame");
     }
     printf(" end to end at 2.4 MS/s, +120 kHz, 20 dB-ish SNR\n");
     for (auto& c : cases) {
