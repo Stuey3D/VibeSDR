@@ -5973,7 +5973,7 @@ select.btn { padding: 6px 8px; }
          · VFO CENTRE / CENTRE / FIT stay at the very top, outside every category ("stay at the top above all like now").
          · SDR HARDWARE · DISPLAY · CONTROLS — split BY CATEGORY: a setting lives where its kind lives.
          · SERVER — the one password box (locked) or SERVER ADMIN + LOCK (unlocked); not folded, it is two rows.
-         · SAVE FOR ALL VIBESDR.NET SERVERS — below every category, just above ABOUT: it carries the whole menu's
+         · SAVE FOR ALL VIBESDR.NET SERVERS (+ RESET) — below every category, just above ABOUT: it carries the whole menu's
            listener settings, not one category's (portable.ts VIEW_KEYS).
          · ABOUT — folded too ("the about needs to collapse too as that is huge now"). -->
   <!-- ★ WATERFALL / SPECTRUM CONTROLS BELONG IN THE MENU (Stuart) — they are view
@@ -6815,8 +6815,20 @@ select.btn { padding: 6px 8px; }
   <div id="saveAllBlock" class="mFlat" hidden>
     <h2>ALL SERVERS</h2>
     <div class="mrow" id="dispAllRow">
-      <div class="seg"><button class="btn" id="dispSaveAll">SAVE FOR ALL VIBESDR.NET SERVERS</button></div>
+      <div class="seg"><button class="btn" id="dispSaveAll">SAVE FOR ALL VIBESDR.NET SERVERS</button><button class="btn" id="dispResetAll">RESET</button></div>
     </div>
+    <!-- ★★ RESET (Stuart, 2026-11-12: "clear defaults + this server"). Asked in the page, not with confirm(): a native
+         dialog is out of reach of a game controller and a remote, and RESET must be reachable by both. YES clears the
+         all-servers defaults in the store (store.html op 'clearView') and puts THIS server's menu settings back to
+         factory; hardware and the owner's settings are never touched (portable.ts resetMenuForAll). -->
+    <div id="resetAllAsk" hidden>
+      <div class="lbl wrap" id="resetAllText">Are you sure? This clears your saved defaults for all VibeSDR.net servers
+        and puts this server&rsquo;s menu settings &mdash; display, colours, mouse and controller &mdash; back to how
+        they came. Other servers keep anything you set on them individually. The radio&rsquo;s hardware and the
+        owner&rsquo;s settings are not touched.</div>
+      <div class="mrow">
+        <div class="seg"><button class="btn" id="resetAllYes">YES, RESET</button><button class="btn" id="resetAllNo">CANCEL</button></div>
+      </div>
     </div>
     <!-- ★ Stuart's caption, verbatim (2026-09-28). The store keeps a cookie, which is what Safari shares
          between servers (directory/public/store.html). -->
@@ -6824,7 +6836,7 @@ select.btn { padding: 6px 8px; }
     <div class="lbl wrap" id="dispAllHint">Menu settings are saved for this server automatically. Save for all and
       your display, colour, mouse and controller settings become your default on every server in the VibeSDR.net
       directory &mdash; never the radio&rsquo;s hardware. Anything you then change on one server stays on that server.
-      Reset everything from the directory page.</div>
+      RESET clears those defaults and puts this server&rsquo;s menu back to how it came.</div>
   </div>
 
   <!-- ★★ ABOUT & CREDITS. The web client had none, and the bundle strips every licence comment

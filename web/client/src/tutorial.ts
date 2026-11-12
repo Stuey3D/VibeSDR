@@ -131,7 +131,7 @@ const STEPS: Step[] = [
     // ★★ 2026-11-12: the menu FOLDS (menuCats.ts) — VFO CENTRE / CENTRE / FIT on top, then SDR HARDWARE · DISPLAY ·
     //    CONTROLS · ABOUT, SAVE FOR ALL just above ABOUT. Every place below names its category (AGENTS.md copy rule).
     // ★★ 2026-11-12 (later): the owner's password box moved from the top of SDR HARDWARE to SERVER, its own block above
-    //    ALL SERVERS; SDR HARDWARE keeps one "unlock under SERVER below" line.
+    //    ALL SERVERS; SDR HARDWARE keeps one "unlock under SERVER below" line. RESET sits beside SAVE FOR ALL.
     body: () => '[[MENU]] keeps ' + (onIcom() ? 'CENTRE and FIT' : 'VFO CENTRE, CENTRE and FIT') + ' at the top; under '
         + 'them, folded until you open one, are SDR HARDWARE (the receiver\u2019s own controls), DISPLAY, CONTROLS and ABOUT. '
         + 'In DISPLAY, under SPECTRUM, SIGNAL LABELS names the decoder to use on well-known signals in view \u2014 RTTY on DWD\u2019s '
@@ -155,7 +155,8 @@ const STEPS: Step[] = [
           : '')
         + (saveAllShown()
           ? ' SAVE FOR ALL VIBESDR.NET SERVERS, just above ABOUT, makes these settings your default on every VibeSDR.net '
-            + 'server \u2014 never the radio\u2019s hardware, which belongs to each server.'
+            + 'server \u2014 never the radio\u2019s hardware, which belongs to each server \u2014 and RESET beside it clears '
+            + 'those defaults and puts this server\u2019s menu back to how it came.'
           : ''),
   },
   {

@@ -9,7 +9,7 @@
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
-import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
+import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, clearViewForAll, VIEW_KEYS } from './portable';
 import { initMenuCats, revealServerUnlock } from './menuCats';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
@@ -18254,6 +18254,37 @@ function buildMenu() {
       localStorage.setItem(LS_PREFS, JSON.stringify(lp));
       showPill('Saved — these menu settings are now your default on every VibeSDR.net server', 5000);
     };
+    /* ★★ RESET (Stuart, 2026-11-12: "clear defaults + this server"). Asked in the page (index.html #resetAllAsk) —
+     *  a native confirm() is out of reach of a pad or a remote. YES: the store drops the all-servers defaults
+     *  (portable.ts clearViewForAll — other servers keep anything set on them individually), then THIS server's menu
+     *  settings go back to factory and the page reloads to apply them, as DISPLAY's own RESET does.
+     *  ★ Only the menu's settings (VIEW_KEYS less volume and the frequency unit, which are not in the menu and keep
+     *    what is in force here). Never hardware, the antenna, the owner's settings or where you were tuned. */
+    const ask = $('resetAllAsk');
+    const showAsk = (on: boolean) => {
+      ask.hidden = !on;
+      // ★ The highlight / cursor goes where the next press belongs: CANCEL (the safe answer) or back to RESET.
+      (on ? $('resetAllNo') : $('dispResetAll')).focus({ preventScroll: true });
+      if (on) ask.scrollIntoView({ block: 'nearest' });
+    };
+    $('dispResetAll').onclick = () => showAsk(ask.hidden);
+    $('resetAllNo').onclick = () => showAsk(false);
+    $('resetAllYes').onclick = async () => {
+      if (!(await clearViewForAll())) { showPill('Could not reach the VibeSDR.net settings store — nothing was reset', 5000); return; }
+      const inForce = prefs();
+      const lp = localPrefs();
+      for (const k of VIEW_KEYS) delete lp[k];
+      for (const k of ['volume', 'freqUnit']) if (inForce[k] !== undefined) lp[k] = inForce[k];
+      localStorage.setItem(LS_PREFS, JSON.stringify(lp));
+      try { sessionStorage.setItem('vsMenuResetDone', '1'); } catch { /* private mode: no pill after the reload */ }
+      location.reload();
+    };
+    try {
+      if (sessionStorage.getItem('vsMenuResetDone')) {
+        sessionStorage.removeItem('vsMenuResetDone');
+        showPill('Reset — your all-servers defaults are cleared and this server\u2019s menu is back to how it came', 6000);
+      }
+    } catch { /* private mode */ }
   }
 
   // Back to the app's defaults, without hunting every slider.

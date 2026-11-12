@@ -46,7 +46,7 @@
   var KEY = 'vsPortable', CK = 'vsP', CHUNK = 3800, MAXCHUNKS = 8, AGE = 34560000;  // 400 days (Chrome's cap)
   var OK = /^https:\/\/[a-z0-9-]+\.vibeserver\.vibesdr\.net$/;
   // ★ How new a record is. The directory's reset writes only { resetAt } (and older pages no `at`).
-  function stamp(v) { return v ? Math.max(Number(v.at) || 0, Number(v.resetAt) || 0, Number(v.viewAt) || 0) : 0; }
+  function stamp(v) { return v ? Math.max(Number(v.at) || 0, Number(v.resetAt) || 0, Number(v.viewAt) || 0, Number(v.clearedAt) || 0) : 0; }
   function obj(v) { return v && typeof v === 'object' ? v : null; }
   function lsLoad() {
     try { return obj(JSON.parse(localStorage.getItem(KEY) || 'null')); }
@@ -253,7 +253,7 @@
       if (d.op === 'get') {
         r.ok = true;
         r.data = { view: s.view || {}, bookmarks: Array.isArray(s.bookmarks) ? s.bookmarks : null,
-                   resetAt: s.resetAt || 0, viewAt: s.viewAt || 0 };
+                   resetAt: s.resetAt || 0, viewAt: s.viewAt || 0, clearedAt: s.clearedAt || 0 };
         return;
       }
       if (d.op === 'setView' && d.view && typeof d.view === 'object') {
@@ -266,6 +266,13 @@
               side (search.ts clears the list when it advances), so stamping it here would have made
               changing a colour delete the listener's bookmarks on every other server. */
         s.view = cleanView(d.view); s.viewAt = Date.now();
+      } else if (d.op === 'clearView') {
+        /* ★★ RESET beside SAVE FOR ALL in a server's menu (Stuart, 2026-11-12: "clear defaults + this server"). Drops
+           the all-servers defaults ONLY: bookmarks stay, and neither resetAt (search.ts would clear bookmarks
+           everywhere) nor viewAt (every server would drop its OWN settings) moves — other servers keep whatever was
+           set on them individually. clearedAt tells a server page that this empty view is the listener's wish, not
+           lost storage, so it lets go of its copy of the old defaults (portable.ts). */
+        s.view = {}; s.clearedAt = Date.now();
       } else if (d.op === 'setBookmarks' && Array.isArray(d.bookmarks)) {
         var bm = cleanBookmarks(d.bookmarks);
         if (!bm) { console.warn('portable store: refused a bookmark list that is too large'); return; }
