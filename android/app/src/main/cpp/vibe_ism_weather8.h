@@ -10,7 +10,7 @@ namespace wx8 {
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  GT-TMBBQ-05 — OOK PPM, ~2 ms space = 0, ~4 ms = 1; 33 bits × 8: 0 · static 8 · temperature low 8 · static 8 ·
-//  temperature high 2 · ? · odd parity over the 7 nibbles before · 4-bit sum of those nibbles. °F + 90, whole degrees.
+//  temperature high 2 · ? · even parity over the 7 nibbles before · 4-bit sum of those nibbles. °F + 90, whole degrees.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool tmbbq05(const Burst& b, std::vector<Reading>& out) {
     const auto rows = wx::ppm(b.ook, 2000, 4000, 4200, 0, 1200, 0, 120);
@@ -19,7 +19,7 @@ inline bool tmbbq05(const Burst& b, std::vector<Reading>& out) {
     auto by = bytesAt(rows[size_t(i)], 1, 4);
     if (!(by[0] | by[1] | by[2] | by[3])) return false;
     int par = 0; for (int k = 0; k < 3; ++k) par ^= wx::parity8(by[size_t(k)]); par ^= wx::parity8(by[3] & 0xF0);
-    if (par != 1) return false;
+    if (par != 0) return false;   // ★ even over the 7 nibbles (the field table says odd; its examples are even)
     if (((wx::addNibbles(by.data(), 3) + (by[3] >> 4)) & 0xF) != (by[3] & 0xF)) return false;
     const int f = (((by[3] & 0xC0) << 2) | by[1]) - 90;
     Reading r = wx::wxReading("Globaltronics", "GT-TMBBQ-05 BBQ", wx::hex(unsigned(by[0] << 8 | by[2]), 4));
@@ -99,7 +99,7 @@ inline bool philips(const Burst& b, std::vector<Reading>& out) {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  TFA 30.3196 (868.33 MHz, "Modus Plus") — FSK, Manchester twice: 245 µs half-bits ("first edge = 0" layer), then
 //  0x5556 and a second Manchester layer (01 = 1, 10 = 0) giving 48 bits: 0xA8 · ? 2 + channel 2 + temperature 12
-//  ((raw − 400) / 10 °C) · battery low + humidity 7 · LFSR-16 digest (generator 0x8810, key 0x22D0) of the four bytes.
+//  ((raw − 400) / 10 °C) · battery low + humidity 7 · a 16-bit check (an LFSR digest whose key is not yet known).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool tfa303196(const Burst& b, std::vector<Reading>& out) {
     const Runs* src[2] = {&b.fsk, &b.ook};
@@ -116,12 +116,18 @@ inline bool tfa303196(const Burst& b, std::vector<Reading>& out) {
                     for (size_t k = 0; k < 48; ++k) { const uint8_t a = row[st + 2 * k], c = row[st + 2 * k + 1]; if (a == c) break; d.push_back(c); }
                     if (d.size() < 48) continue;
                     const auto by = bytesAt(d, 0, 6);
-                    if (by[0] != 0xA8 || wx::lfsrDigest16(by.data(), 4, 0x8810, 0x22D0) != uint16_t(by[4] << 8 | by[5])) continue;
+                    if (by[0] != 0xA8) continue;
+                    // ★ the 16-bit check's key is not known yet (the field table reads it, never verifies it): the
+                    //   frame must come twice alike in the burst instead, and is shown once heard twice
+                    int same = 0;
+                    for (const Bits& o : wx::mcZero(rr, 245, 2000)) if (o.size() >= st + 96 && std::equal(row.begin() + long(st), row.begin() + long(st + 96), o.begin() + long(st))) ++same;
+                    if (same < 2) continue;
                     Reading r = wx::wxReading("TFA Dostmann", "30.3196 T/H", "");
                     r.channel = (by[1] >> 4) + 1;   // as the field table counts it (the top two bits are unknown)
                     r.tempC = (((by[1] & 0xF) << 8 | by[2]) - 400) / 10.0;
                     r.battOk = (by[3] & 0x80) ? 0 : 1;
                     r.hum = by[3] & 0x7F;
+                    r.confirm = true;
                     if (!wx::tempOk(r.tempC) || r.hum > 100) continue;
                     out.push_back(r);
                     return true;
