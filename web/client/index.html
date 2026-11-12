@@ -3636,6 +3636,16 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 #menu .mFlat { margin-top: 6px; }
 #menu .mFlat[hidden] { display: none; }
 #saveAllBlock .lbl.wrap { margin-top: 6px; }
+#srvBlock .lbl.wrap { margin-top: 6px; }
+/* ★ The password box is a wide stop (data-navwide): up from SAVE FOR ALL / RESET lands on it, not on the CONTROLS header
+   above it (gamepad.ts navBox). RESET's two answers split the row, CANCEL under RESET — straight down is the safe one. */
+#resetAllAsk .seg { flex: 1 1 auto; width: 100%; justify-content: stretch; }
+#resetAllAsk .seg button { flex: 1 1 0; }
+/* ★ SDR HARDWARE's "locked — unlock under SERVER below" line: a full-width button (a pad / keyboard stop) that reads
+   as a note, and wraps on a phone. */
+#menu button.mJump { display: block; width: 100%; margin: 4px 0 6px; padding: 0.55em 0.8em; text-align: left;
+  white-space: normal; font-size: 11px; line-height: 1.35; }
+#menu button.mJump[hidden] { display: none; }
 
 /* ── ★★★ THE ADMIN PAGE ────────────────────────────────────────────────────────────────────
    NOT the menu's centred card. This one is WIDE and near-full-screen, because it is the only
@@ -5966,8 +5976,8 @@ select.btn { padding: 6px 8px; }
        folded body is `hidden`, so nothing inside it is a stop.
          · VFO CENTRE / CENTRE / FIT stay at the very top, outside every category ("stay at the top above all like now").
          · SDR HARDWARE · DISPLAY · CONTROLS — split BY CATEGORY: a setting lives where its kind lives.
-         · SERVER (the unlocked owner's one door) — not folded: a category holding one button is a click for nothing.
-         · SAVE FOR ALL VIBESDR.NET SERVERS — below every category, just above ABOUT: it carries the whole menu's
+         · SERVER — the one password box (locked) or SERVER ADMIN + LOCK (unlocked); not folded, it is two rows.
+         · SAVE FOR ALL VIBESDR.NET SERVERS (+ RESET) — below every category, just above ABOUT: it carries the whole menu's
            listener settings, not one category's (portable.ts VIEW_KEYS).
          · ABOUT — folded too ("the about needs to collapse too as that is huge now"). -->
   <!-- ★ WATERFALL / SPECTRUM CONTROLS BELONG IN THE MENU (Stuart) — they are view
@@ -5996,40 +6006,17 @@ select.btn { padding: 6px 8px; }
     <label>RECEIVER</label>
     <span class="val" id="radioName" style="flex:1">—</span>
   </div>
-  <!-- ★★ PROTECTED SETTINGS AT THE TOP OF SDR HARDWARE (2026-11-12): everything it unlocks is in this category (gain,
-       AGC, filters, bias-T, calibration, the antenna), so it sits above them — open the category and the lock and its
-       reason are the first thing you read. menuCats.ts opens SDR HARDWARE by itself when the password is wanted again
-       (an idle re-lock, a refused password). -->
-  <!-- ★★ ADMIN UNLOCK. Shown only when the server actually HAS an admin password — an unlock
-       prompt on a server with nothing to unlock is a puzzle, not a feature. The controls below
-       it are the ones a visitor has no business touching on someone else's radio; they are
-       disabled rather than hidden, because a listener should be able to see that the operator
-       has protected them rather than wonder where the feature went. -->
-  <div class="mrow" id="adminRow" hidden>
-    <label>PROTECTED SETTINGS</label>
-    <div class="seg"><button class="btn" id="adminUnlock">UNLOCK</button></div>
-  </div>
-  <!-- ★ MASKED, INLINE. This was a window.prompt(), which renders the password in CLEAR TEXT
-       in a dialog — the exact thing the operator-side field was made secure about. An inline
-       type=password also lets Enter submit and keeps the whole exchange in the panel. -->
-  <div class="mrow" id="adminPwRow" hidden>
-    <label>PASSWORD</label>
-    <input type="password" id="adminPwInput" autocomplete="off" spellcheck="false"
-           placeholder="admin password">
-    <div class="seg"><button class="btn" id="adminPwGo">GO</button></div>
-  </div>
-  <!-- ★★ NAMES THE CATEGORY, NOT A LIST THAT GOES STALE. This read "Bias-T, direct sampling and
-       calibration are locked" — written when those three were the whole of it, and wrong ever
-       since gain, AGC, filters, squelch and the notches joined them on a locked receiver. A list
-       that omits half of what it describes is worse than a category: the reader concludes the
-       gain slider is BROKEN rather than protected (Stuart, 2026-08-05).
-       ★ The readouts stay VISIBLE while locked, deliberately — Stuart: "it is good to see the AGC,
-         if it is working or not and what exactly it is doing". Locked is not the same as hidden. -->
-  <div class="lbl wrap" id="adminNote" hidden>
-    Radio controls are locked by this receiver's operator. Gain, AGC, filters and calibration
-    change the radio for everyone listening, not just for you, and Bias-T puts DC on the feedline.
-    You can still see what they are set to. Enter the admin password to unlock them.
-  </div>
+  <!-- ★★★ ONE PASSWORD BOX, IN SERVER (Stuart, 2026-11-12). The protected settings' unlock used to sit here, at the top
+       of SDR HARDWARE, while SERVER (the admin door) sat at the bottom — so an owner who wanted SERVER ADMIN had to open
+       SDR HARDWARE first to type the password. The box now lives in SERVER, above ALL SERVERS (#srvBlock below), and
+       this category keeps ONE line where its controls are locked: pressing it folds SDR HARDWARE and lands on that box
+       (menuCats.ts revealServerUnlock). The input is MOVED, never copied — one password box in the page.
+       ★★ NAMES THE CATEGORY, NOT A LIST THAT GOES STALE (Stuart, 2026-08-05): the controls below are "locked by the
+          operator", not "bias-T, direct sampling and calibration are locked" — a list that omits half of what it
+          describes makes the reader conclude the gain slider is BROKEN rather than protected.
+       ★ The readouts stay VISIBLE while locked, deliberately — Stuart: "it is good to see the AGC, if it is working or
+         not and what exactly it is doing". Locked is not the same as hidden. -->
+  <button type="button" class="btn mJump" data-navwide id="adminJump" hidden>Locked by the operator &mdash; unlock under SERVER below</button>
   <!-- ★★★ PORTABLE WI-FI (Stuart, 2026-10-10) — only on a pocket VibeServer, only on its own network (never through
        the tunnel). Each saved network by name | Own Wi-Fi (NETWORK on an older server), with the link's signal / rate /
        retries beside it. pocketConn.ts. -->
@@ -6790,21 +6777,33 @@ select.btn { padding: 6px 8px; }
     they are.</div>
   </div>
 
-  <!-- ★★★ SERVER ADMIN — the last thing in the menu, and only for the owner.
-       Hidden unless this session is unlocked as admin: a listener has no use for it, and a
-       button that exists only to refuse you is worse than no button at all. Everything above
-       this point is about LISTENING; this is about running the receiver, which is why it is a
-       door to another screen rather than another block of rows. -->
-  <!-- ★ NOT FOLDED (2026-11-12): one button and a line; a header to open first would be a click for nothing. -->
-  <div id="adminServerRow" class="mFlat" hidden>
+  <!-- ★★★ SERVER — THE OWNER'S ONE DOOR, AND THE ONE PASSWORD BOX (Stuart, 2026-11-12: one owner password box, in
+       SERVER at the bottom). Its own section above ALL SERVERS and ABOUT, shown on any receiver with an admin password
+       (and to an unlocked owner): locked, the box and UNLOCK; unlocked, SERVER ADMIN and LOCK in its place.
+       ★ NOT FOLDED: two rows and a line; a header to open first would be a click for nothing — and the SDR HARDWARE
+         line, the idle re-lock and a refused password all send the owner straight here.
+       ★ MASKED, INLINE. This was once a window.prompt(), which shows the password in CLEAR TEXT; a type=password row
+         lets Enter submit and keeps the whole exchange in the panel.
+       ★ Hidden on the handheld page (handheld.ts): the R36S has no owner sign-in. -->
+  <div id="srvBlock" class="mFlat" hidden>
     <h2>SERVER</h2>
-    <div class="mrow">
+    <div class="mrow" id="adminPwRow">
+      <label for="adminPwInput">PASSWORD</label>
+      <input type="password" id="adminPwInput" data-navwide autocomplete="off" spellcheck="false"
+             placeholder="admin password">
+      <div class="seg"><button class="btn" id="adminPwGo">UNLOCK</button></div>
+    </div>
+    <!-- ★★ SERVER ADMIN only for an unlocked owner — a listener has no use for it, and a button whose only job is to
+         refuse you is worse than no button. LOCK beside it: an owner who has finished should not have to wait for the
+         idle re-lock or close the tab. -->
+    <div class="mrow" id="adminServerRow" hidden>
       <label>ADMINISTRATION</label>
-      <div class="seg"><button class="btn" id="btnServerAdmin">SERVER ADMIN</button></div>
+      <div class="seg"><button class="btn" id="btnServerAdmin">SERVER ADMIN</button><button class="btn" id="adminLock">LOCK</button></div>
     </div>
-    <div class="lbl wrap">
-      Monitoring, listeners, connection history, blocking and maintenance for this receiver.
-    </div>
+    <div class="lbl wrap" id="adminNote">Gain, AGC, filters, calibration and Bias-T change the radio for everyone
+      listening, so the operator has locked them. You can still see how they are set.</div>
+    <div class="lbl wrap" id="adminSrvNote" hidden>SERVER ADMIN: listeners, connection history, blocking and
+      maintenance. LOCK locks the radio controls again.</div>
   </div>
 
   <!-- ★★★ SAVE FOR ALL — UNDER EVERY CATEGORY, JUST ABOVE ABOUT (Stuart, 2026-11-12: "the save for all .vibesdr.net
@@ -6815,7 +6814,20 @@ select.btn { padding: 6px 8px; }
   <div id="saveAllBlock" class="mFlat" hidden>
     <h2>ALL SERVERS</h2>
     <div class="mrow" id="dispAllRow">
-      <div class="seg"><button class="btn" id="dispSaveAll">SAVE FOR ALL VIBESDR.NET SERVERS</button></div>
+      <div class="seg"><button class="btn" id="dispSaveAll">SAVE FOR ALL VIBESDR.NET SERVERS</button><button class="btn" id="dispResetAll">RESET</button></div>
+    </div>
+    <!-- ★★ RESET (Stuart, 2026-11-12: "clear defaults + this server"). Asked in the page, not with confirm(): a native
+         dialog is out of reach of a game controller and a remote, and RESET must be reachable by both. YES clears the
+         all-servers defaults in the store (store.html op 'clearView') and puts THIS server's menu settings back to
+         factory; hardware and the owner's settings are never touched (portable.ts resetMenuForAll). -->
+    <div id="resetAllAsk" hidden>
+      <div class="lbl wrap" id="resetAllText">Are you sure? This clears your saved defaults for all VibeSDR.net servers
+        and puts this server&rsquo;s menu settings &mdash; display, colours, mouse and controller &mdash; back to how
+        they came. Other servers keep anything you set on them individually. The radio&rsquo;s hardware and the
+        owner&rsquo;s settings are not touched.</div>
+      <div class="mrow">
+        <div class="seg"><button class="btn" data-navwide id="resetAllYes">YES, RESET</button><button class="btn" data-navwide id="resetAllNo">CANCEL</button></div>
+      </div>
     </div>
     <!-- ★ Stuart's caption, verbatim (2026-09-28). The store keeps a cookie, which is what Safari shares
          between servers (directory/public/store.html). -->
@@ -6823,7 +6835,7 @@ select.btn { padding: 6px 8px; }
     <div class="lbl wrap" id="dispAllHint">Menu settings are saved for this server automatically. Save for all and
       your display, colour, mouse and controller settings become your default on every server in the VibeSDR.net
       directory &mdash; never the radio&rsquo;s hardware. Anything you then change on one server stays on that server.
-      Reset everything from the directory page.</div>
+      RESET clears them, and this server&rsquo;s menu.</div>
   </div>
 
   <!-- ★★ ABOUT & CREDITS. The web client had none, and the bundle strips every licence comment

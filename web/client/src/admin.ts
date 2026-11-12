@@ -2122,7 +2122,7 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     const pw = getPassword();
     // ★ A ticket is enough on its own — see q(). Only refuse when there is NEITHER.
     if (!pw && !inAdminMode()) {
-      alert('Enter the admin password first: MENU, SDR HARDWARE, PROTECTED SETTINGS.');
+      alert('Enter the admin password first: MENU, SERVER, PASSWORD.');
       return;
     }
     document.getElementById('menu')?.classList.remove('show');

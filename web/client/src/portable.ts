@@ -16,7 +16,11 @@
  *
  * ★ Nothing here leaves the browser: no cookie, nothing sent with a request, nothing stored by us. Only VIEW
  *   settings travel — never gain, hardware, where you were tuned, or any credential.
- * ★ RESET lives on the directory page. It clears MASTER and stamps a reset time; a server page that loads
+ * ★★ RESET IN THE MENU (Stuart, 2026-11-12: "clear defaults + this server") — clearViewForAll(): the store drops its
+ *    VIEW (op 'clearView') and stamps clearedAt; bookmarks and both epochs are left alone, so every other server keeps
+ *    what was set on it individually. clearedAt is what tells a server's own copy of the old master (MASTER_COPY_KEY)
+ *    that the empty store is the listener's wish, not lost storage. The caller resets THIS server's menu.
+ * ★ RESET lives on the directory page too. It clears MASTER and stamps a reset time; a server page that loads
  *   with overrides older than that stamp drops them, so a reset reaches every server, not just the master.
  * ★★ "SAVE FOR ALL" STAMPS ITS OWN TIME (viewAt) FOR THE SAME REASON. Writing MASTER is not enough on its
  *    own: layer 1 beats layer 2, and any server the listener has already tweaked is holding a layer-1
@@ -80,8 +84,9 @@ function writeCopy(c: MasterCopy | null) {
   } catch { /* private mode */ }
 }
 
-export interface Portable { view: Record<string, unknown>; bookmarks: unknown[] | null; resetAt: number; viewAt: number }
-let master: Portable = { view: {}, bookmarks: null, resetAt: 0, viewAt: 0 };
+export interface Portable { view: Record<string, unknown>; bookmarks: unknown[] | null; resetAt: number; viewAt: number;
+                           clearedAt: number }
+let master: Portable = { view: {}, bookmarks: null, resetAt: 0, viewAt: 0, clearedAt: 0 };
 /** ★ Decided ONCE, when the store loads, before anything can write the epoch: was the directory reset since
  *  this origin last looked? Settings (honourReset) and bookmarks (search.ts) both act on this one answer —
  *  deciding it twice raced, and the second reader saw the epoch the first had already written. */
@@ -134,7 +139,7 @@ export function portableReady(): Promise<boolean> {
      *  never answers leaves the page on the listener's view, not on the defaults. No epochs move: a
      *  copy is only what we already knew, so it must never drop anything. */
     const copy = readCopy();
-    if (copy) master = { view: copy.view, bookmarks: null, resetAt: copy.resetAt, viewAt: copy.viewAt };
+    if (copy) master = { view: copy.view, bookmarks: null, resetAt: copy.resetAt, viewAt: copy.viewAt, clearedAt: 0 };
     window.addEventListener('message', (e) => {
       if (e.origin !== DIRECTORY || !e.data || typeof e.data.id !== 'number') return;
       const cb = waiting.get(e.data.id); if (cb) { waiting.delete(e.data.id); cb(e.data); }
@@ -153,9 +158,12 @@ export function portableReady(): Promise<boolean> {
       return false;
     }
     const fresh: Portable = { view: got.data.view || {}, bookmarks: got.data.bookmarks ?? null,
-                              resetAt: Number(got.data.resetAt) || 0, viewAt: Number(got.data.viewAt) || 0 };
+                              resetAt: Number(got.data.resetAt) || 0, viewAt: Number(got.data.viewAt) || 0,
+                              clearedAt: Number(got.data.clearedAt) || 0 };
     const storeEmpty = !Object.keys(fresh.view).length;
-    if (storeEmpty && copy && fresh.resetAt <= copy.resetAt) {
+    // ★ Emptied ON PURPOSE since this copy was taken: the menu's RESET (clearedAt) or the directory's (resetAt).
+    const clearedSince = fresh.resetAt > (copy?.resetAt ?? 0) || fresh.clearedAt > (copy?.viewAt ?? 0);
+    if (storeEmpty && copy && !clearedSince) {
       /* ★★ THE STORE LOST ITS VIEW WITHOUT A RESET — browser storage cleared, a new profile. That is
        *  not the listener asking for defaults; keep their view. (Not written back: this page does not
        *  get to stamp viewAt on every other server's behalf.) */
@@ -164,7 +172,7 @@ export function portableReady(): Promise<boolean> {
       fresh.viewAt = copy.viewAt;
     }
     master = fresh;
-    writeCopy(storeEmpty && fresh.resetAt > (copy?.resetAt ?? 0) ? null
+    writeCopy(storeEmpty && clearedSince ? null
               : { view: master.view, resetAt: master.resetAt, viewAt: master.viewAt });
     let seen = 0, seenView = 0;
     try { seen = Number(localStorage.getItem(EPOCH_KEY)) || 0; } catch { /* private mode */ }
@@ -205,6 +213,19 @@ export async function saveViewForAll(values: Record<string, unknown>): Promise<b
     /* ★ This page has just deleted its own overrides, so it is already in step with the master it
      *  wrote; record the stamp it caused so its NEXT load does not treat its own save as news. */
     try { localStorage.setItem(VIEW_EPOCH_KEY, String(Date.now())); } catch { /* private mode */ }
+  }
+  return !!r?.ok;
+}
+
+/** ★★ RESET (the menu's ALL SERVERS block): clear the all-servers defaults in the store. Bookmarks, resetAt and viewAt
+ *  are left alone — other servers keep their own settings, and nobody's bookmarks move. This origin's copy of the old
+ *  master goes too, or it would stand in for the store the next time the store is slow. True when the store said so. */
+export async function clearViewForAll(): Promise<boolean> {
+  const r = await ask({ op: 'clearView' });
+  if (r?.ok) {
+    master.view = {};
+    master.clearedAt = Date.now();
+    writeCopy(null);
   }
   return !!r?.ok;
 }

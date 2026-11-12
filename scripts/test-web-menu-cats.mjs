@@ -15,9 +15,16 @@
 //     server's page (another origin, no settings of its own) opens with every one of them;
 //   • the keyboard and a simulated pad: headers are stops, a folded body's rows are not; Enter / ✕ opens; Escape / ○
 //     folds it with the highlight left on its header and the menu still open; again closes the menu;
+//   • SERVER (2026-11-12, one owner password box): shown to a listener on a protected receiver, with the box; ONE
+//     password input in the page; SDR HARDWARE's "unlock under SERVER below" line folds it and lands on the box;
+//     unlocking swaps the box for SERVER ADMIN + LOCK, LOCK brings the box back (and the server agrees);
 //   • an idle re-lock (the server's own {"type":"admin","relocked":true} message, delivered on the page's socket — the
-//     server sends it only after minutes with no command at all, and the page's own traffic counts) opens SDR HARDWARE
-//     by itself, where the password box is;
+//     server sends it only after minutes with no command at all, and the page's own traffic counts) folds the
+//     categories and the next MENU lands on SERVER's password box;
+//   • RESET beside SAVE FOR ALL: asks first; YES clears the store's defaults (bookmarks kept), puts this server's menu
+//     settings back to factory (the same as a server that never had any), leaves the hardware prefs alone, and another
+//     server that followed the defaults lets go of its copy;
+//   • the keyboard and the pad reach the password box and RESET;
 //   • 390 px phone width: no sideways scroll with any category open.
 // ★ How (as test-web-chunk-cache.mjs): a local https front (self-signed, trusted by SPKI for this browser only) answers
 //   for a/b.vibeserver.vibesdr.net (both → the one test server; two ORIGINS, so two sets of settings) and for
@@ -26,7 +33,7 @@
 //
 // Usage: VIBESERVER_BIN=/path/to/vibeserver node scripts/test-web-menu-cats.mjs   (exit 3 = not run)
 //   SHOTS=<dir>   also save the menu at desktop and 390 px in three looks (default, SOLID, light controls)
-//   DESKTOP=1     save Web-menu-collapsed.png and Web-menu-hardware-open.png to ~/Desktop
+//   DESKTOP=1     save Web-menu-collapsed.png, Web-menu-hardware-open.png and Web-menu-server-unlock.png to ~/Desktop
 import { spawn, execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -251,17 +258,29 @@ try {
      'VFO CENTRE, CENTRE and FIT are visible, above every category');
   ok(await js(`[...document.querySelectorAll('#menu .mCatBody')].every((b) => [...b.querySelectorAll('button,input,select')].every((e) => e.getBoundingClientRect().height < 2))`),
      'nothing inside a folded category is drawn');
-  ok(await js(`document.getElementById('adminServerRow').hidden`), 'SERVER is not offered to a listener');
+  ok(await js(`(() => { const b = document.getElementById('srvBlock'), i = document.getElementById('adminPwInput');
+      return !b.hidden && b.getBoundingClientRect().height > 2 && b.contains(i) && i.getBoundingClientRect().height > 2 && !b.closest('.mCatBody'); })()`),
+     'SERVER is shown to a listener on a protected receiver, unfolded, with the password box');
+  ok(await js(`document.getElementById('adminServerRow').hidden && document.getElementById('btnServerAdmin').getBoundingClientRect().height < 2`),
+     '…and no SERVER ADMIN until unlocked');
+  ok(await js(`document.querySelectorAll('#menu input[type=password]').length === 1 && document.querySelectorAll('[id=adminPwInput]').length === 1`),
+     'ONE password input in the menu (moved, not copied)');
+  ok(await js(`(() => { const sv = document.getElementById('srvBlock'), sa = document.getElementById('saveAllBlock'), c = document.getElementById('mCatControlsBody');
+      return !!(c.compareDocumentPosition(sv) & Node.DOCUMENT_POSITION_FOLLOWING) && !!(sv.compareDocumentPosition(sa) & Node.DOCUMENT_POSITION_FOLLOWING); })()`),
+     'SERVER sits after CONTROLS, above ALL SERVERS and ABOUT');
   const order = await js(`(() => { const sv = document.getElementById('saveAllBlock'), ab = document.querySelector('#menu > button.mCat[data-cat="about"]');
-    const cats = [...document.querySelectorAll('#menu > button.mCat, #menu > .mCatBody')].filter((n) => n.dataset.cat !== 'about');
+    const cats = [...document.querySelectorAll('#menu > button.mCat, #menu > .mCatBody, #srvBlock')].filter((n) => n.dataset.cat !== 'about');
     const afterAll = cats.every((c) => c.compareDocumentPosition(sv) & Node.DOCUMENT_POSITION_FOLLOWING);
     const beforeAbout = !!(sv.compareDocumentPosition(ab) & Node.DOCUMENT_POSITION_FOLLOWING);
     const between = [...document.querySelectorAll('#menu > *')].filter((n) => (sv.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) && (n.compareDocumentPosition(ab) & Node.DOCUMENT_POSITION_FOLLOWING));
-    const r = sv.getBoundingClientRect(), a = ab.getBoundingClientRect(), c = document.querySelector('#menu > button.mCat[data-cat="controls"]').getBoundingClientRect();
+    const r = sv.getBoundingClientRect(), a = ab.getBoundingClientRect(), c = document.getElementById('srvBlock').getBoundingClientRect();
     return { afterAll, beforeAbout, between: between.length, drawn: r.top >= c.bottom && r.bottom <= a.top }; })()`);
   ok(order.afterAll && order.beforeAbout && order.between === 0 && order.drawn, `SAVE FOR ALL sits below every category and just above ABOUT (${JSON.stringify(order)})`);
-  const mh = await js(`(() => { const m = document.getElementById('menu'); return [m.scrollHeight, m.clientHeight]; })()`);
-  ok(mh[0] <= mh[1] + 1, `the folded menu fits without scrolling at 1280×900 (${mh[0]} px of content in ${mh[1]})`);
+  // ★ SERVER (the password box, always shown on a protected receiver — Stuart, 2026-11-12) is the one thing allowed to
+  //   push the folded menu past the card at 1280×900: every category header and SAVE FOR ALL still fit without it.
+  const mh = await js(`(() => { const m = document.getElementById('menu'), c = document.getElementById('mCatControls'), sa = document.getElementById('saveAllBlock');
+    return [m.scrollHeight, m.clientHeight, Math.round(sa.getBoundingClientRect().top - c.getBoundingClientRect().bottom - parseFloat(getComputedStyle(sa).marginTop))]; })()`);
+  ok(mh[0] - mh[2] <= mh[1] + 1, `the folded menu, less SERVER, fits without scrolling at 1280×900 (${mh[0]} px of content, ${mh[2]} of it SERVER, in ${mh[1]})`);
   if (DESKTOP) await shot(path.join(DESKTOP, 'Web-menu-collapsed.png'), true);
   if (SHOTS) await shot(path.join(SHOTS, 'desktop-collapsed.png'), true);
 
@@ -277,11 +296,19 @@ try {
   await hdr('controls');
   ok(Object.values(await state()).every((v) => !v.exp && !v.shown) && (await saved()) === null, 'pressed again: folded, and nothing remembered');
   await hdr('hw');
-  ok(await js(`(() => { const b = document.getElementById('mCatHwBody'); return ['radioName', 'adminRow', 'rowGain', 'rowRate'].every((id) => b.contains(document.getElementById(id)))
-      && b.contains(document.getElementById('rowAntenna')) && document.getElementById('adminRow').getBoundingClientRect().height > 2; })()`),
-     'SDR HARDWARE holds the receiver, PROTECTED SETTINGS (shown), gain, sample rate and the antenna');
+  ok(await js(`(() => { const b = document.getElementById('mCatHwBody'); return ['radioName', 'adminJump', 'rowGain', 'rowRate'].every((id) => b.contains(document.getElementById(id)))
+      && b.contains(document.getElementById('rowAntenna')) && document.getElementById('adminJump').getBoundingClientRect().height > 2 && !b.querySelector('input[type=password]'); })()`),
+     'SDR HARDWARE holds the receiver, the "unlock under SERVER below" line (shown), gain, sample rate and the antenna — and no password box');
+  ok(await js(`/Locked by the operator — unlock under SERVER below/.test(document.getElementById('adminJump').textContent)`), '…the line reads "Locked by the operator — unlock under SERVER below"');
   if (DESKTOP) await shot(path.join(DESKTOP, 'Web-menu-hardware-open.png'), true);
   if (SHOTS) await shot(path.join(SHOTS, 'desktop-hardware-open.png'), true);
+  await js(`document.getElementById('adminJump').click(); 1`);
+  await sleep(300);
+  ok(!(await state()).hw.exp && await js(`document.activeElement?.id === 'adminPwInput'`) && await js(`(() => { const r = document.getElementById('adminPwInput').getBoundingClientRect(), m = document.getElementById('menu').getBoundingClientRect();
+      return r.height > 2 && r.top >= m.top && r.bottom <= m.bottom; })()`),
+     'pressing it folds SDR HARDWARE and lands the cursor in SERVER\'s password box, in view');
+  await js(`document.activeElement?.blur(); 1`);
+  await hdr('hw');
   await hdr('display');
   await closeMenu();
   await send('Page.reload'); await visit('a'); await openMenu();
@@ -347,7 +374,7 @@ try {
   await send('Page.reload'); await visit('b');
   await openMenu();
   const seen = [];
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 40; i++) {
     await key('ArrowDown');
     const f = await js(`(() => { const h = document.querySelector('.gpFocus'); if (!h) return null;
       const body = h.closest('.mCatBody'); return { t: (h.id || '') + ':' + h.textContent.trim().slice(0, 30), inFolded: !!body && body.hidden, inMenu: document.getElementById('menu').contains(h) }; })()`);
@@ -355,8 +382,18 @@ try {
   }
   const stops = seen.map((f) => f.t);
   ok(seen.every((f) => f.inMenu && !f.inFolded), `the highlight walks the menu and never into a folded category (${stops.length} stops)`);
-  ok(['SDR HARDWARE', 'DISPLAY', 'CONTROLS', 'ABOUT'].every((t) => stops.some((s) => s.endsWith(':' + t))) && stops.some((s) => s.startsWith('dispSaveAll')),
-     `…every header and SAVE FOR ALL are stops: ${stops.join(' · ')}`);
+  ok(['SDR HARDWARE', 'DISPLAY', 'CONTROLS', 'ABOUT'].every((t) => stops.some((s) => s.endsWith(':' + t))),
+     `…every header is a stop: ${stops.join(' · ')}`);
+  // ★ SAVE FOR ALL and RESET share a row, as the box and UNLOCK do: down lands on one, left / right reach the other.
+  for (let i = 0; i < 30 && !(await js(`/^(dispSaveAll|dispResetAll)$/.test(document.querySelector('.gpFocus')?.id || '')`)); i++) await key('ArrowUp');
+  const rowPair = [await js(`document.querySelector('.gpFocus')?.id`)];
+  await key(rowPair[0] === 'dispResetAll' ? 'ArrowLeft' : 'ArrowRight'); rowPair.push(await js(`document.querySelector('.gpFocus')?.id`));
+  ok(rowPair.includes('dispSaveAll') && rowPair.includes('dispResetAll'), `SAVE FOR ALL and RESET are both reached (${rowPair.join(' → ')})`);
+  for (let i = 0; i < 10 && !/^(adminPwInput|adminPwGo)$/.test(await js(`document.querySelector('.gpFocus')?.id || ''`)); i++) await key('ArrowUp');
+  const pwPair = [await js(`document.querySelector('.gpFocus')?.id`)];
+  await key(pwPair[0] === 'adminPwGo' ? 'ArrowLeft' : 'ArrowRight'); pwPair.push(await js(`document.querySelector('.gpFocus')?.id`));
+  ok(pwPair.includes('adminPwInput') && pwPair.includes('adminPwGo'), `…and the password box and UNLOCK beside it (${pwPair.join(' → ')})`);
+  ok(stops.some((s) => s.startsWith('adminPwInput')) && stops.some((s) => s.startsWith('dispSaveAll')), '…and so are SERVER\'s password box and SAVE FOR ALL (keyboard, straight down)');
   for (let i = 0; i < 30 && !(await js(`document.querySelector('.gpFocus')?.dataset.cat === 'display'`)); i++) await key('ArrowUp');
   ok(await js(`document.querySelector('.gpFocus')?.dataset.cat === 'display'`), 'the highlight reaches the DISPLAY header');
   await key('Enter');
@@ -381,6 +418,22 @@ try {
   await press(1);
   ok(!(await state()).controls.shown && await js(`document.getElementById('menu').classList.contains('open') && document.querySelector('.gpFocus')?.dataset.cat === 'controls'`),
      '○ folds it, the highlight on its header, the menu still open');
+  // ★ The pad reaches SERVER's password box and RESET (the D-pad, down from CONTROLS).
+  const padSeen = new Set();
+  for (let i = 0; i < 20; i++) { await press(13); const f = await js(`document.querySelector('.gpFocus')?.id || ''`); padSeen.add(f); if (f === 'dispSaveAll') break; }
+  await press(15); padSeen.add(await js(`document.querySelector('.gpFocus')?.id || ''`));
+  ok(padSeen.has('adminPwInput') && padSeen.has('dispResetAll'), `the D-pad reaches the password box and RESET (${[...padSeen].join(' · ')})`);
+  await press(0);
+  ok(await until(`!document.getElementById('resetAllAsk').hidden`, 2000), '✕ on RESET asks first');
+  const askSeen = [];
+  for (let i = 0; i < 6 && !(await js(`document.querySelector('.gpFocus')?.id === 'resetAllNo'`)); i++) {
+    await press(13);
+    askSeen.push(await js(`document.querySelector('.gpFocus')?.id || ''`));
+  }
+  ok(await js(`document.querySelector('.gpFocus')?.id === 'resetAllNo'`), `…and the D-pad reaches CANCEL (${askSeen.join(' · ')})`);
+  await press(0);
+  ok(await until(`document.getElementById('resetAllAsk').hidden`, 2000), '✕ on CANCEL puts the question away, nothing reset');
+  for (let i = 0; i < 30 && !(await js(`document.querySelector('.gpFocus')?.dataset.cat === 'controls'`)); i++) await press(12);
   await press(1);
   ok(await until(`!document.getElementById('menu').classList.contains('open')`, 3000), '○ again closes the menu');
   ok(await js(`!document.getElementById('menu').classList.contains('open') && localStorage.getItem('vibesdr_menu_cat_v1') === null`), 'and nothing is left open for next time');
@@ -414,30 +467,85 @@ try {
   }
   await send('Emulation.clearDeviceMetricsOverride'); await sleep(400);
 
-  // ── 8. The owner: SERVER unfolded above the save; an idle re-lock opens SDR HARDWARE ──
+  // ── 8. The owner: the box in SERVER; SERVER ADMIN + LOCK; LOCK; an idle re-lock lands on the box ──
   console.log('── the owner ──');
-  await hdr('hw');
-  await js(`document.getElementById('adminUnlock').click(); 1`);
-  await until(`!document.getElementById('adminPwRow').hidden`, 3000);
   await js(`(() => { const i = document.getElementById('adminPwInput'); i.value = ${JSON.stringify(ADMIN)}; document.getElementById('adminPwGo').click(); return 1; })()`);
-  ok(await until(`document.getElementById('adminUnlock').textContent === 'UNLOCKED'`, 6000), 'unlocked through PROTECTED SETTINGS');
-  await hdr('hw');
-  ok(await until(`!document.getElementById('adminServerRow').hidden`, 3000) && await js(`(() => { const s = document.getElementById('adminServerRow'), v = document.getElementById('saveAllBlock'),
-      c = document.getElementById('mCatControlsBody'); return !s.closest('.mCatBody') && !!(c.compareDocumentPosition(s) & Node.DOCUMENT_POSITION_FOLLOWING)
-      && !!(s.compareDocumentPosition(v) & Node.DOCUMENT_POSITION_FOLLOWING) && document.getElementById('btnServerAdmin').getBoundingClientRect().height > 2; })()`),
-     'SERVER ADMIN appears unfolded, after CONTROLS and above SAVE FOR ALL');
+  ok(await until(`!document.getElementById('adminServerRow').hidden`, 6000), 'unlocked through SERVER\'s box');
+  ok(await js(`(() => { const s = document.getElementById('adminServerRow'), v = document.getElementById('saveAllBlock'), b = document.getElementById('srvBlock');
+      return b.contains(s) && !!(s.compareDocumentPosition(v) & Node.DOCUMENT_POSITION_FOLLOWING) && document.getElementById('adminPwRow').hidden
+      && ['btnServerAdmin', 'adminLock'].every((id) => document.getElementById(id).getBoundingClientRect().height > 2); })()`),
+     'unlocked: the box gives way to SERVER ADMIN and LOCK, above SAVE FOR ALL');
+  ok(await js(`document.getElementById('adminJump').hidden`), '…and SDR HARDWARE\'s locked line is gone');
   if (SHOTS) await shot(path.join(SHOTS, 'desktop-owner-folded.png'), true);
+  await js(`document.getElementById('adminLock').click(); 1`);
+  ok(await until(`!document.getElementById('adminPwRow').hidden && document.getElementById('adminServerRow').hidden && !document.getElementById('adminJump').hidden`, 3000),
+     'LOCK: SERVER ADMIN and LOCK go, the box comes back');
+  await sleep(1200);
+  ok(await js(`!/not accepted/.test(document.body.innerText) && document.getElementById('gain')?.closest('.mrow') !== null`), '…without a "password not accepted" (LOCK\'s own answer)');
+  ok(await js(`document.getElementById('biasT') ? document.getElementById('biasT').disabled : true`), '…and the protected controls are locked again');
+  // Unlock again, for the re-lock.
+  await js(`(() => { const i = document.getElementById('adminPwInput'); i.value = ${JSON.stringify(ADMIN)}; document.getElementById('adminPwGo').click(); return 1; })()`);
+  ok(await until(`!document.getElementById('adminServerRow').hidden`, 6000), 'unlocked again after LOCK (the server took the password)');
+  if (DESKTOP || SHOTS) {
+    await openMenu();
+    await js(`document.getElementById('srvBlock').scrollIntoView({ block: 'nearest' }); 1`);
+  }
+  await hdr('display');
   await closeMenu();
-  ok(Object.values(await state()).every((v) => !v.exp), 'all folded, menu shut');
   const handed = await js(`(() => { let n = 0; for (const s of window.__sockets) if (s.readyState === 1) {
       s.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'admin', ok: false, relocked: true, idleMin: 30 }) })); n++; } return n; })()`);
-  const relocked = await until(`document.getElementById('adminUnlock').textContent === 'UNLOCK'`, 5000);
+  const relocked = await until(`!document.getElementById('adminPwRow').hidden && document.getElementById('adminServerRow').hidden`, 5000);
   ok(relocked, `the idle re-lock message (handed to ${handed} open sockets) re-locks the page`);
-  ok(await js(`/unlock again in MENU → SDR HARDWARE/.test(document.body.innerText)`), '…and its pill says where to unlock again');
+  ok(await js(`/unlock again in MENU → SERVER/.test(document.body.innerText)`), '…and its pill says where to unlock again: MENU → SERVER');
   await sleep(500);
-  ok((await state()).hw.exp && await js(`localStorage.getItem('vibesdr_menu_cat_v1') === 'hw'`), 'the re-lock opened SDR HARDWARE — the next MENU lands on the password');
+  ok(Object.values(await state()).every((v) => !v.exp) && await js(`localStorage.getItem('vibesdr_menu_cat_v1') === null`), 'the re-lock folded the categories, so SERVER sits right under them');
   await openMenu();
-  ok(await js(`(() => { const r = document.getElementById('adminRow').getBoundingClientRect(); return r.height > 2; })()`), '…and PROTECTED SETTINGS is right there');
+  ok(await until(`document.activeElement?.id === 'adminPwInput' || document.querySelector('.gpFocus')?.id === 'adminPwInput'`, 2000) && await js(`(() => { const r = document.getElementById('adminPwInput').getBoundingClientRect(), m = document.getElementById('menu').getBoundingClientRect();
+      return r.height > 2 && r.top >= m.top && r.bottom <= m.bottom; })()`), '…and the next MENU lands on SERVER\'s password box');
+  if (DESKTOP) await shot(path.join(DESKTOP, 'Web-menu-server-unlock.png'), true);
+  if (SHOTS) await shot(path.join(SHOTS, 'desktop-server-unlock.png'), true);
+  await js(`document.activeElement?.blur(); 1`);
+  await closeMenu();
+
+  // ── 9. RESET: the store's defaults and this server's menu — never the hardware ──
+  console.log('── RESET ──');
+  const bmBefore = await inStore(`JSON.stringify((JSON.parse(localStorage.getItem('vsPortable') || 'null') || {}).bookmarks ?? null)`);
+  await js(`(() => { const p = JSON.parse(localStorage.getItem('vibesdr_web_prefs_v1') || '{}'); Object.assign(p, ${JSON.stringify(PLANTED)}, { wfSpeed: 30, palette: 'gray' });
+    localStorage.setItem('vibesdr_web_prefs_v1', JSON.stringify(p)); return 1; })()`);
+  ok(Object.keys(await inStore(`(JSON.parse(localStorage.getItem('vsPortable') || 'null') || {}).view || {}`)).length > 20, 'before: the store holds the all-servers defaults');
+  await openMenu();
+  await js(`document.getElementById('dispResetAll').click(); 1`);
+  ok(await until(`!document.getElementById('resetAllAsk').hidden`, 2000) && await js(`(() => { const t = document.getElementById('resetAllText').textContent;
+      return /Are you sure\?/.test(t) && /all VibeSDR\.net servers/.test(t) && /Other servers keep anything you set on them individually/.test(t) && /hardware/.test(t); })()`),
+     'RESET asks "Are you sure?" — what is cleared, and that other servers keep their own');
+  await js(`document.getElementById('resetAllYes').click(); 1`);
+  await sleep(1500);
+  await visit('b');
+  const viewAfter = await inStore(`(JSON.parse(localStorage.getItem('vsPortable') || 'null') || {}).view || {}`);
+  ok(Object.keys(viewAfter).length === 0, `the store's all-servers defaults are cleared (${Object.keys(viewAfter).length} keys left)`);
+  ok(await inStore(`JSON.stringify((JSON.parse(localStorage.getItem('vsPortable') || 'null') || {}).bookmarks ?? null)`) === bmBefore, '…and its bookmarks are untouched');
+  const lpAfter = await js(`JSON.parse(localStorage.getItem('vibesdr_web_prefs_v1') || '{}')`);
+  // ★ A page writes a few of its own defaults as it loads (wfCoarse 'auto'); factory is what a server that never had a
+  //   setting writes — checked against server C below.
+  const stillSet = VIEW_KEYS.filter((k) => k in lpAfter && k !== 'volume' && k !== 'freqUnit');
+  // ★ (bias-T is not checked: the page takes it from the SERVER's word on every connect, reset or not.)
+  ok(['ppm', 'rsp_ifagc', 'tunerBw'].every((k) => JSON.stringify(lpAfter[k]) === JSON.stringify(PLANTED[k])) && JSON.stringify(lpAfter.tuned?.x) === JSON.stringify(PLANTED.tuned.x),
+     `…and the hardware prefs (ppm, rsp_ifagc, tuned, IF filter) are untouched (${JSON.stringify({ ppm: lpAfter.ppm, rsp_ifagc: lpAfter.rsp_ifagc, tunerBw: lpAfter.tunerBw })})`);
+  ok(await js(`/menu is back to how it came/.test(document.body.innerText)`), '…and it says so after the reload');
+  const onBReset = await js(READ_CONTROLS);
+  // ★ Factory, as a server that never had a setting shows it: a third origin, nothing stored, an empty store.
+  await visit('c');
+  const onC = await js(READ_CONTROLS);
+  const cSets = await js(`JSON.parse(localStorage.getItem('vibesdr_web_prefs_v1') || '{}')`);
+  const notOwn = stillSet.filter((k) => JSON.stringify(lpAfter[k]) !== JSON.stringify(cSets[k]));
+  ok(notOwn.length === 0, `this server's menu settings are back to factory (${notOwn.map((k) => k + '=' + JSON.stringify(lpAfter[k])).join(', ') || 'only what a fresh page writes itself: ' + (stillSet.join(', ') || 'none')})`);
+  const notFactory = Object.keys(onC).filter((k) => onC[k] !== onBReset[k]);
+  ok(notFactory.length === 0, `…every menu control on this server shows its factory value (${notFactory.map((k) => `${k}: ${onBReset[k]} ≠ ${onC[k]}`).join('; ') || Object.keys(onC).length + ' controls'})`);
+  // ★ Server A followed the defaults (SAVE FOR ALL dropped its own) and keeps a copy of them: the clear reaches it.
+  await visit('a');
+  const onAReset = await js(READ_CONTROLS);
+  const aStuck = Object.keys(onC).filter((k) => onC[k] !== onAReset[k]);
+  ok(aStuck.length === 0 && await js(`localStorage.getItem('vsPortableMasterCopy') === null`), `another server that followed the defaults lets go of them (${aStuck.join(', ') || 'factory'})`);
 
   ok(errors.length === 0, `no page errors${errors.length ? ': ' + errors.slice(0, 3).join(' | ') : ''}`);
 } catch (e) {

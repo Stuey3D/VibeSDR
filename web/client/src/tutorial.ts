@@ -50,6 +50,9 @@ type Step = {
 const onVagcRow = (): boolean => { const r = document.getElementById('rowRspVagc'); return !!r && !r.hidden; };
 /** ★ SAVE FOR ALL is offered (main.ts shows #saveAllBlock only on a *.vibeserver.vibesdr.net address). */
 const saveAllShown = () => document.getElementById('saveAllBlock')?.hidden === false;
+/** ★ SERVER (the owner's password box / SERVER ADMIN) is offered — main.ts refreshAdminRow shows #srvBlock on a receiver
+ *  with an admin password. */
+const serverShown = () => document.getElementById('srvBlock')?.hidden === false;
 /** ★ The server is serving an Icom transceiver (main.ts sets body.icom from hwinfo.radio.driver). */
 const onIcom = () => document.body.classList.contains('icom');
 /** ★★ V12 VFO A/B is offered here (main.ts abPaint shows the audio panel's STEREO row only where hwinfo says watch). */
@@ -127,6 +130,8 @@ const STEPS: Step[] = [
     // ★ 2026-10-30: SIGNAL LABELS (src/utils/knownSignals.ts) is in the display settings' SPECTRUM section.
     // ★★ 2026-11-12: the menu FOLDS (menuCats.ts) — VFO CENTRE / CENTRE / FIT on top, then SDR HARDWARE · DISPLAY ·
     //    CONTROLS · ABOUT, SAVE FOR ALL just above ABOUT. Every place below names its category (AGENTS.md copy rule).
+    // ★★ 2026-11-12 (later): the owner's password box moved from the top of SDR HARDWARE to SERVER, its own block above
+    //    ALL SERVERS; SDR HARDWARE keeps one "unlock under SERVER below" line. RESET sits beside SAVE FOR ALL.
     body: () => '[[MENU]] keeps ' + (onIcom() ? 'CENTRE and FIT' : 'VFO CENTRE, CENTRE and FIT') + ' at the top; under '
         + 'them, folded until you open one, are SDR HARDWARE (the receiver\u2019s own controls), DISPLAY, CONTROLS and ABOUT. '
         + 'In DISPLAY, under SPECTRUM, SIGNAL LABELS names the decoder to use on well-known signals in view \u2014 RTTY on DWD\u2019s '
@@ -140,13 +145,18 @@ const STEPS: Step[] = [
          *  that reports the choice. Read from the page, so the card can never describe a row this receiver lacks. */
         + (onVagcRow()
           ? 'On this SDRplay RSP, the AGC row in SDR HARDWARE says which gain control runs it \u2014 VibeAGC, VibeSDR\u2019s own, or '
-            + 'the SDRplay\u2019s own \u2014 and once the protected settings are unlocked the owner can switch it there, live. '
+            + 'the SDRplay\u2019s own \u2014 and once the owner has unlocked the protected settings under SERVER, they can switch it there, live. '
           : '')
         + 'CONTROLS sets the colours of these controls and how see-through the panels are, what the mouse wheel does, and '
         + 'the game controller\u2019s guide and options.'
+        + (serverShown()
+          ? ' SERVER, below the categories, is where this receiver\u2019s owner types the password to unlock the protected '
+            + 'radio controls, and then finds SERVER ADMIN and LOCK.'
+          : '')
         + (saveAllShown()
           ? ' SAVE FOR ALL VIBESDR.NET SERVERS, just above ABOUT, makes these settings your default on every VibeSDR.net '
-            + 'server \u2014 never the radio\u2019s hardware, which belongs to each server.'
+            + 'server \u2014 never the radio\u2019s hardware, which belongs to each server \u2014 and RESET beside it clears '
+            + 'those defaults and puts this server\u2019s menu back to how it came.'
           : ''),
   },
   {

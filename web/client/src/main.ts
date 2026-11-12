@@ -9,8 +9,8 @@
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
-import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
-import { initMenuCats, revealMenuCat } from './menuCats';
+import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, clearViewForAll, VIEW_KEYS } from './portable';
+import { initMenuCats, revealServerUnlock } from './menuCats';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { kickedSentence } from '../../../src/services/kickedText';
@@ -1136,17 +1136,25 @@ function refreshAdminRow() {
   //     perfectly valid — was told by the admin button to enter a password and given nowhere to
   //     type it. Two credentials with two lifetimes, and the UI assumed one implied the other
   //     (Stuart, 2026-08-14: "asking for a password I cannot enter until I refresh the page").
+  //  ★ 2026-11-12: so, unlocked, the box stays only while there is NEITHER credential (no password typed this page,
+  //    no ticket) — SERVER ADMIN would ask for one; otherwise it gives way to SERVER ADMIN + LOCK.
   const pwRowNow = document.getElementById('adminPwRow');
-  if (pwRowNow) pwRowNow.hidden = adminUnlocked && inAdminMode();
-  const row = document.getElementById('adminRow');
+  if (pwRowNow) pwRowNow.hidden = adminUnlocked && (!!adminPassword || inAdminMode());
+  // ★★★ SERVER — the one password box, and the owner's door (index.html #srvBlock, Stuart 2026-11-12). On any receiver
+  //     with an admin password, and to an unlocked owner; a receiver with nothing to unlock offers nothing to unlock.
+  const srvBlk = document.getElementById('srvBlock');
+  if (srvBlk) srvBlk.hidden = !(show || adminUnlocked);
   const note = document.getElementById('adminNote');
-  if (row) row.hidden = !show;
   if (note) note.hidden = !show || adminUnlocked;
-  const btn = document.getElementById('adminUnlock');
-  if (btn) {
-    btn.textContent = adminUnlocked ? 'UNLOCKED' : 'UNLOCK';
-    btn.classList.toggle('on', adminUnlocked);
-  }
+  const srvNote = document.getElementById('adminSrvNote');
+  if (srvNote) srvNote.hidden = !adminUnlocked;
+  // ★ SDR HARDWARE's one line where its controls are locked — pressing it lands on the box in SERVER.
+  const jump = document.getElementById('adminJump');
+  if (jump) jump.hidden = !show || adminUnlocked;
+  // ★ LOCK only where there is a password to lock behind: on a receiver with none the server grants admin to anyone
+  //   who asks, so LOCK would be undone the moment it was pressed.
+  const lockBtn = document.getElementById('adminLock');
+  if (lockBtn) lockBtn.hidden = !show;
   // The protected controls themselves. Disabled while locked, and left alone entirely on a
   // server with no admin password so nothing changes for the vast majority of hosts.
   const locked = show && !adminUnlocked;
@@ -1172,8 +1180,8 @@ function refreshAdminRow() {
   //   the moment they should appear, so re-apply it here.
   if (radioCaps?.driver === 'sdrplay') applyRspLock();
   if (radioCaps?.driver === 'hackrf')  applyHrfLock();
-  // ★★ The SERVER ADMIN door. Present only for an unlocked owner — a listener has no use for
-  //    it, and a button whose only job is to refuse you is worse than no button.
+  // ★★ The SERVER ADMIN door (+ LOCK), in place of the box. Present only for an unlocked owner — a listener has no
+  //    use for it, and a button whose only job is to refuse you is worse than no button.
   //    ★ It also has to DISAPPEAR on the idle re-lock, which is why this lives here rather than
   //      being set once when the password is accepted.
   const srv = document.getElementById('adminServerRow');
@@ -1209,18 +1217,39 @@ function refreshAdminRow() {
  *  ★ A control that is drawn, enabled and inert is worse than a missing one: the user concludes
  *  the feature is broken rather than absent, and there is nothing on screen to contradict them. */
 function initAdminUnlock() {
-  const btn = document.getElementById('adminUnlock');
-  const row = document.getElementById('adminPwRow');
   const inp = document.getElementById('adminPwInput') as HTMLInputElement | null;
-  btn?.addEventListener('click', () => {
-    if (adminUnlocked) return;
-    if (!row) return;
-    row.hidden = !row.hidden;          // second press hides it again
-    if (!row.hidden) inp?.focus();
-  });
-  const go = () => { const v = inp?.value ?? ''; if (v) void doAdminUnlock(v); };
+  // ★ Unlocked but holding neither credential (a ticket that lapsed): the box is back, and what it does then is
+  //   RE-PROVE — doAdminUnlock's own guard would make it a box that does nothing.
+  const go = () => { const v = inp?.value ?? ''; if (v) void (adminUnlocked ? sendAdminUnlock(v) : doAdminUnlock(v)); };
   document.getElementById('adminPwGo')?.addEventListener('click', go);
   inp?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') go(); });
+  // ★★ SDR HARDWARE's "locked — unlock under SERVER below": fold it, land on the box (menuCats.ts).
+  document.getElementById('adminJump')?.addEventListener('click', () => revealServerUnlock());
+  document.getElementById('adminLock')?.addEventListener('click', adminLockNow);
+}
+
+/** ★ Set while LOCK's own request is in flight, so the server's "admin: false" answer to it is the lock it asked for
+ *  and not "That admin password was not accepted". */
+let adminLocking = false;
+
+/** ★★ LOCK (Stuart, 2026-11-12: unlocked, SERVER shows SERVER ADMIN and LOCK). Drops admin for this session here and
+ *  on the server, and forgets every credential the page holds, so nothing re-proves it behind the owner's back.
+ *  ★ The server needs nothing new: an admin_unlock that offers NO credentials is answered "not admin" and demotes this
+ *    session (setAdminNow false) — and, offering none, it is never counted as a wrong guess (audit 2026-10-03). */
+function adminLockNow() {
+  if (!adminUnlocked) return;
+  adminLocking = true;
+  setTimeout(() => { adminLocking = false; }, 5000);
+  adminPassword = '';
+  clearAdminTicket();
+  adminUnlocked = false;
+  spec?.send({ type: 'admin_unlock' });
+  syncMediaSkip();
+  refreshAdminRow();
+  showPill('Locked — the protected controls are locked again', 3000);
+  // ★ The box takes LOCK's place under the pad / keyboard highlight, so the next press is not lost on a hidden button.
+  const inp = document.getElementById('adminPwInput') as HTMLInputElement | null;
+  if (inp && document.getElementById('menu')?.classList.contains('open')) inp.focus({ preventScroll: true });
 }
 
 async function doAdminUnlock(pw: string) {
@@ -1988,12 +2017,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //     success must un-hide it on the way back, or the way back does not exist.
         const pwRowBack = document.getElementById('adminPwRow');
         if (pwRowBack) pwRowBack.hidden = false;
-        // ★ …and where it can be FOUND: the box lives in SDR HARDWARE, which may be folded (menuCats.ts).
-        revealMenuCat('hw');
+        // ★ …and where it can be FOUND: the box lives in SERVER, under the categories — fold the open one and land
+        //   on it (now, or the next time the menu opens). menuCats.ts.
+        revealServerUnlock();
         refreshAdminRow();
         syncMediaSkip();
         return;
       }
+      // ★ The answer to LOCK's own credential-less request: the lock it asked for, not a refused password.
+      if (adminLocking && !ok) { adminLocking = false; adminUnlocked = false; refreshAdminRow(); syncMediaSkip(); return; }
       adminUnlocked = ok;
       syncMediaSkip();   // ★ the owner may skip on their own spectator dial
       // ★ An admin session has no time limit on the server, so it must have no countdown here.
@@ -2005,7 +2037,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (pwRow) pwRow.hidden = ok;    // wrong password: leave it open to try again
       if (!ok) setStatus('error', 'admin');
       refreshAdminRow();
-      if (!ok) alert('That admin password was not accepted.');
+      if (!ok) { alert('That admin password was not accepted.'); revealServerUnlock(); }
     },
     // ★★ THE SERVER'S WORD ON ITS OWN DSP. These controls are GLOBAL and sticky —
     // whatever the last listener left is what the radio is doing — so rendering our
@@ -11065,8 +11097,8 @@ function showKicked(secs: number) { showRefusal('DISCONNECTED', kickedSentence(s
  *  "simply lock the admin controls with a little pill pop up warning"). */
 function showAdminRelocked(idleMin: number) {
   const mins = idleMin > 0 ? `${idleMin} minutes` : 'a while';
-  showPill(`Admin controls locked after ${mins} idle — unlock again in MENU → SDR HARDWARE`);
-  revealMenuCat('hw');   // ★ the password box is in there: open it, so the next MENU press lands on it
+  showPill(`Admin controls locked after ${mins} idle — unlock again in MENU → SERVER`);
+  revealServerUnlock();   // ★ the password box is in SERVER: the next MENU press lands on it
 }
 
 /** ★ A small transient notice at the top of the screen. Replaces any pill already showing
@@ -18222,6 +18254,40 @@ function buildMenu() {
       localStorage.setItem(LS_PREFS, JSON.stringify(lp));
       showPill('Saved — these menu settings are now your default on every VibeSDR.net server', 5000);
     };
+    /* ★★ RESET (Stuart, 2026-11-12: "clear defaults + this server"). Asked in the page (index.html #resetAllAsk) —
+     *  a native confirm() is out of reach of a pad or a remote. YES: the store drops the all-servers defaults
+     *  (portable.ts clearViewForAll — other servers keep anything set on them individually), then THIS server's menu
+     *  settings go back to factory and the page reloads to apply them, as DISPLAY's own RESET does.
+     *  ★ Only the menu's settings (VIEW_KEYS less volume and the frequency unit, which are not in the menu and keep
+     *    what is in force here). Never hardware, the antenna, the owner's settings or where you were tuned. */
+    const ask = $('resetAllAsk');
+    const showAsk = (on: boolean) => {
+      ask.hidden = !on;
+      // ★ A pad or keyboard walks into the question itself (down from RESET) — scrolling under its highlight would
+      //   leave it measuring from where RESET WAS and skip the answers. A mouse or finger gets the question brought
+      //   into view, the cursor on CANCEL (the safe answer).
+      if (driveInput()) return;
+      (on ? $('resetAllNo') : $('dispResetAll')).focus({ preventScroll: true });
+      if (on) ask.scrollIntoView({ block: 'nearest' });
+    };
+    $('dispResetAll').onclick = () => showAsk(ask.hidden);
+    $('resetAllNo').onclick = () => showAsk(false);
+    $('resetAllYes').onclick = async () => {
+      if (!(await clearViewForAll())) { showPill('Could not reach the VibeSDR.net settings store — nothing was reset', 5000); return; }
+      const inForce = prefs();
+      const lp = localPrefs();
+      for (const k of VIEW_KEYS) delete lp[k];
+      for (const k of ['volume', 'freqUnit']) if (inForce[k] !== undefined) lp[k] = inForce[k];
+      localStorage.setItem(LS_PREFS, JSON.stringify(lp));
+      try { sessionStorage.setItem('vsMenuResetDone', '1'); } catch { /* private mode: no pill after the reload */ }
+      location.reload();
+    };
+    try {
+      if (sessionStorage.getItem('vsMenuResetDone')) {
+        sessionStorage.removeItem('vsMenuResetDone');
+        showPill('Reset — your all-servers defaults are cleared and this server\u2019s menu is back to how it came', 6000);
+      }
+    } catch { /* private mode */ }
   }
 
   // Back to the app's defaults, without hunting every slider.
