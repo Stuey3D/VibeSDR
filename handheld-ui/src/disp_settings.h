@@ -56,6 +56,7 @@ struct DispSettings {
     double specFloor = 0;          // −20..20
     double peakScale = 10;         // 1..30, shown ÷10 as "1.0×"
     bool peakHold = true;
+    bool knownLabels = true;       // SIGNAL LABELS (known_labels.h) — ON, the app's and the web's default
     // VFO
     uint32_t needle = 0xff2020;    // NEEDLE COLOUR (also the spectrum's peak line, as the app)
     // the custom colour map (COLOUR MAP → CUSTOM)
@@ -85,6 +86,7 @@ struct DispSettings {
         specFloor = j["specFloor"].num(specFloor);
         peakScale = j["peakScale"].num(peakScale);
         peakHold = j["peakHold"].boolean(peakHold);
+        knownLabels = j["knownLabels"].boolean(knownLabels);
         needle = (uint32_t)j["needle"].num(needle);
         custom = j["custom"].boolean(custom);
         if (j["stops"].size() == 5) for (int i = 0; i < 5; i++) stops[i] = (uint32_t)j["stops"][(size_t)i].num(stops[i]);
@@ -94,10 +96,10 @@ struct DispSettings {
         FILE* f = std::fopen(tmp.c_str(), "w");
         if (!f) return;
         std::fprintf(f, "{\"rangeManual\":%s,\"autoContrast\":%g,\"minDb\":%g,\"maxDb\":%g,\"spatialSmooth\":%s,"
-                        "\"smoothing\":%g,\"specFloor\":%g,\"peakScale\":%g,\"peakHold\":%s,\"needle\":%u,\"custom\":%s,"
+                        "\"smoothing\":%g,\"specFloor\":%g,\"peakScale\":%g,\"peakHold\":%s,\"knownLabels\":%s,\"needle\":%u,\"custom\":%s,"
                         "\"stops\":[%u,%u,%u,%u,%u]}\n",
                      rangeManual ? "true" : "false", autoContrast, minDb, maxDb, spatialSmooth ? "true" : "false",
-                     smoothing, specFloor, peakScale, peakHold ? "true" : "false", (unsigned)needle, custom ? "true" : "false",
+                     smoothing, specFloor, peakScale, peakHold ? "true" : "false", knownLabels ? "true" : "false", (unsigned)needle, custom ? "true" : "false",
                      (unsigned)stops[0], (unsigned)stops[1], (unsigned)stops[2], (unsigned)stops[3], (unsigned)stops[4]);
         std::fflush(f);
         std::fclose(f);

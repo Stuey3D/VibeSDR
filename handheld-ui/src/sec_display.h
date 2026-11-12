@@ -257,6 +257,11 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     y0 = y;
     y = menuRow(c, a, y, "PEAK HOLD", "");
     if (hwRowToggle(c, "d.ph", {a.x, y0, a.w, 44}, {a.r() - 96, y0 + 3, 90, 38}, d.peakHold)) { d.peakHold = !d.peakHold; dispDirty(); look(); }
+    // ★★ SIGNAL LABELS (known_labels.h — the app's Display settings toggle, ON by default; Stuart, 2026-11-12: "port the
+    //    little station labels that are on the spectrum … to bring it in line with the main app")
+    y0 = y;
+    y = menuRow(c, a, y, "SIGNAL LABELS", "Names the decoder for well-known signals in view (RTTY on DWD's 4583 kHz, WEFAX on Northwood's 4610, NAVTEX, DSC, FT8, time signals) and EiBi's utility stations on air now, plus this receiver's saved stations and the FM names it learnt from RDS. Drawn at the foot of the spectrum, never over the needle.");
+    if (hwRowToggle(c, "d.kl", {a.x, y0, a.w, 44}, {a.r() - 96, y0 + 3, 90, 38}, d.knownLabels)) { d.knownLabels = !d.knownLabels; dispDirty(); }
 
     // ── VFO ──
     y = dispHead(c, a, y, "VFO");
