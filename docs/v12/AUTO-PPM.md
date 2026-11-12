@@ -99,6 +99,13 @@ DDC's) is phase 2.
      They must agree within 2 ppm, from at least 10 readings, before any change is applied. `test-afc` J shows a 1 kHz
      slip on the only block (carrier 8.2, timing 3.0) applying nothing.
    - **The first acquisition needs agreement**: 120 s of clean readings, or two blocks that agree.
+   - **A reference that keeps landing away from the rest disagrees.** Two or more of its readings more than 1 ppm from
+     the median, set aside or still in the window, within the window's span, stop every decision.
+   - Real data (Stuart's RSP1A on the Lenovo, 2026-11-12 22:03): six blocks from 7D to 12B read +153 to +178 Hz, which
+     is 0.79 ppm slow on every one, agreeing to ±0.01 even at 10.6 dB MER.
+     - `test-afc` J accepts them and applies −0.79 ppm, which leaves at most 0.7 Hz on any block.
+     - With a 1 kHz slip on 10D (+1169 Hz) it applies nothing.
+     - A good RSP is under 1 ppm, so its 10 ppm cap is generous.
    - **References that disagree stop every decision.** A 1 kHz slip is 5.7 ppm at 174 MHz and 4.2 at 240 MHz, so it
      cannot agree with another block. `test-afc` J shows a slip on 12B against a clean 7D applying nothing in 160 s.
 3. **Self-check and auto-revert.** After each change, and once the glide has finished plus 5 s, the next 5 readings
