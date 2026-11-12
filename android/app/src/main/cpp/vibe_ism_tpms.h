@@ -605,6 +605,52 @@ inline bool eezTire(Chips& ch, std::vector<Reading>& out) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SEFIS M3 / CAREUD / SYKIK SRTP300 (Infineon SP400) — facts: rtl_433 tpms_sefis_m3.c notes (issue #3342). FSK ~52 µs
+//  chips, a long alternating run-in, the 32-chip sync "0110 0110 1001 1001 1001 0110 1010 0110", then 9 Manchester
+//  bytes ((1,0) = 1): B0-B6 and CRC-16 poly 0x1021 init 0 over them. Pressure: a 15-bit code from B4/B5 with an odd
+//  2-bit "page" in B4's top three bits (7, 4, 5, 2 → 0-3), kPa = (code − 0x0E00) / 102.4; temperature 14 + the low
+//  nibble of B2 + B5. ★ NO sensor ID has been found in the frame, so every Sefis tyre in range shares one line (its
+//  ID here is 0). STRONG (CRC-16).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool sefisM3(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, "0110 0110 1001 1001 1001 0110 1010 0110", 72, true, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc16(by.data(), 7, 0x1021, 0x0000) != uint16_t(by[7] << 8 | by[8]) || allSame(by.data(), 9)) return false;
+        Reading r = tyre("Sefis", "Sefis M3", 25, 0, false);
+        int page = -1;
+        switch (by[4] >> 5) { case 7: page = 0; break; case 4: page = 1; break; case 5: page = 2; break; case 2: page = 3; break; default: break; }
+        if (page >= 0) r.kpa = std::max(0.0, ((page << 13 | (by[4] & 0x1F) << 8 | by[5]) - 0x0E00) / 102.4);
+        r.tempC = 14 + (((by[2] + by[5]) & 0xFF) & 0x0F);
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  MERCEDES-BENZ SPRINTER (2025; Huf-style frame) — facts: rtl_433 tpms_mercedes_benz.c notes (issue #3539). FSK,
+//  25 µs Manchester half-bits; read with (1,0) = 1: eight zeros or eight ones, then "0010" (the notes' 0x002 / 0xFF2 —
+//  the corpus' Sprinter sends 0xFF2), then 10 bytes:
+//  state (0x83 parked, 0xA3 moving — the only values seen), ID (32), pressure (raw ÷ 2.75 PSI), temperature
+//  (°C + 51), counter, status, CRC-8 poly 0x2F init 0xAA over all ten = 0. STRONG.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool mercedesSprinter(Chips& ch, std::vector<Reading>& out) {
+    auto take = [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc8(by.data(), 10, 0x2F, 0xAA) != 0) return false;
+        if (by[0] != 0x83 && by[0] != 0xA3) return false;
+        const uint32_t id = uint32_t(by[1]) << 24 | uint32_t(by[2]) << 16 | uint32_t(by[3]) << 8 | by[4];
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("Mercedes-Benz", "Mercedes-Benz Sprinter", 26, id, false);
+        r.kpa = by[5] / 2.75 * kPaPerPsi;
+        r.tempC = int(by[6]) - 51;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    };
+    return eachMc(ch, true, 25, "0101 0101 0101 0101 0101 1001", 80, true, take)
+        || eachMc(ch, true, 25, "1010 1010 1010 1010 0101 1001", 80, true, take);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  JANSITE TY02S (solar, internal / external) — aftermarket. Facts: rtl_433 tpms_jansite.c notes: the VDO-style run-in
 //  (…aaa9), then 7 bytes — ID (28), status (4), pressure (raw × 1.7 kPa), temperature (°C + 50), and a last byte whose
 //  rule nobody has found (rtl_433 leaves this decoder OFF for that reason; we could not find it either — no CRC-8 of any
@@ -833,6 +879,8 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (elantra2012(ch, out)) return true;
     if (jansiteSolar(ch, out)) return true;
     if (hondaTrw(ch, out)) return true;
+    if (sefisM3(ch, out)) return true;
+    if (mercedesSprinter(ch, out)) return true;
     // the weak checks last: a strong family's frame must never be taken by a weak one's 8-bit sum
     if (schraderEG53MA4(ch, out)) return true;
     if (schraderSMD3MA4(ch, out)) return true;

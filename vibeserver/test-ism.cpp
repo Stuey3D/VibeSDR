@@ -377,6 +377,24 @@ static Runs eezTx(uint32_t id24, int pRaw, int tC) {
     return chipsToRuns(c + "0", 50);
 }
 
+// Sefis M3: FSK 52 µs, the 32-chip sync, 9 Manchester bytes ((1,0) = 1), CRC-16 0x1021 init 0 over seven.
+static Runs sefisTx(int pageRaw3, int code13, int b2) {
+    std::vector<uint8_t> by = { 0x93, 0xC1, uint8_t(b2), 0xF1, uint8_t((pageRaw3 << 5) | (code13 >> 8)), uint8_t(code13), 0x2C };
+    const uint16_t c = crc16(by.data(), 7, 0x1021, 0); by.push_back(uint8_t(c >> 8)); by.push_back(uint8_t(c));
+    std::string ch = "1010 1010 1010 1010 0110 0110 1001 1001 1001 0110 1010 0110"; mcChips(ch, bytesToBits(by), true);
+    return chipsToRuns(ch + "0", 52);
+}
+// Mercedes-Benz Sprinter: FSK 25 µs, Manchester (1,0) = 1: 1111 1111 0010, state, ID (4), ÷2.75 PSI, °C + 51, counter,
+// status, CRC-8 0x2F init 0xAA over all ten = 0.
+static Runs sprinterTx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { 0x83, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(pRaw), uint8_t(tC + 51), 0x09, 0x6B };
+    by.push_back(crc8(by.data(), 9, 0x2F, 0xAA));
+    Bits d(8, 0); for (int i = 0; i < 8; ++i) d.push_back(1);
+    for (const Bits& x : {bitsOf(0x2, 4), bytesToBits(by)}) d.insert(d.end(), x.begin(), x.end());
+    std::string c; mcChips(c, d, true);
+    return chipsToRuns(c + "0", 25);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -551,6 +569,8 @@ int main(int argc, char** argv) {
             {"SmarTire (pressure)", smartireTx(17489, 0, 92), false, 167, "SmarTire", 92 * 2.5, NAN, true},
             {"SmarTire (temperature)", smartireTx(17489, 1, 24), false, 167, "SmarTire", NAN, 24, true},
             {"EezTire E618", eezTx(0x54E328, 136, 23), false, 50, "EezTire", 340, 23, true},
+            {"Sefis M3", sefisTx(4, 0x0C00, 0x48), true, 52, "Sefis", ((1 << 13 | 0x0C00) - 0x0E00) / 102.4, 14 + ((0x48 + 0x00) & 0x0F), false},
+            {"Mercedes Sprinter", sprinterTx(0x247E80B6, 179, 22), true, 25, "Sprinter", 179 / 2.75 * 6.894757, 22, false},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},
