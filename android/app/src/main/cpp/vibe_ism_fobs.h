@@ -543,6 +543,103 @@ inline bool dish(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace tvremote
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ALARM-SYSTEM REMOTES (arm / disarm / panic / ring) and a KeeLoq gate remote — facts from the notes in rtl_433's
+//  gangqi.c, hollarm.c and kinggates.c (each from the Flipper Zero protocol of the same name):
+//  · GangQi (433.92 OOK PWM: a 1200 µs mark = 1, 500 µs = 0; 34 bits, resent after 2.2 ms): serial 16 · 0xD · button 4
+//    · a checksum = 0xC8 − the three bytes before (or 0x02 + them) · 00.
+//  · Hollarm (433.92 OOK PPM: 200 µs marks, a 1000 µs gap = 0, 1600 µs = 1; 42 bits, the last one lost in the row's
+//    ending gap, so 41): serial 24 · 4 · button 4 · the sum of the 4 bytes before · 00.
+//  · King Gates Stylo 4k (433.92: 12 × 400/400 µs, a 2.2 ms gap, an 800 µs start mark, then 89 bits, each a gap and a
+//    mark: 1 = 400 µs gap + 1100 µs mark, 0 = 1100 + 400), LSB first: serial low 16 · 1 · button 4 · serial high 16 ·
+//    16 zeros · a 32-bit KeeLoq hop code · 4 zeros. NO check: the constant bits and two identical messages.
+//  ★★ PRIVACY: the serials are the keys of the alarm / the gate — only hashed; the hop code is never read.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace alarmremote {
+
+inline bool gangqi(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = caralarm::pwmWords(b.ook, 1200, 500, 0.3, 2000);
+    for (const Bits& w : rows) {
+        if (w.size() != 34) continue;
+        const auto by = bytesAt(w, 0, 5);
+        if ((by[2] >> 4) != 0xD || w[32] || w[33]) continue;
+        const unsigned s3 = unsigned(by[0]) + by[1] + by[2];
+        if (by[3] != uint8_t(0xC8 - s3) && by[3] != uint8_t(0x02 + s3)) continue;
+        const uint32_t id = uint32_t(by[0]) << 8 | by[1];
+        if (id == 0 || id == 0xFFFF) continue;
+        const int bt = by[2] & 0xF;
+        const char* wd = bt == 0xD ? "arm" : bt == 0xE ? "disarm" : bt == 0xB ? "alarm" : bt == 0x7 ? "ring" : nullptr;
+        Reading r = remoteReading("keyfob", "GangQi", "alarm remote", 0xDD, id);
+        r.button = wd ? wd : std::to_string(bt);
+        r.fact("button", (long long)bt);
+        r.confirm = !kit::twice(rows, w);   // an 8-bit sum: twice alike (in the burst, or by the Tracker)
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+inline bool hollarm(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = kit::ppmRows(b.ook, 1000, 1600, 2000, 120, 320, 0.2);
+    for (const Bits& w : rows) {
+        if (w.size() != 41) continue;
+        const auto by = bytesAt(w, 0, 6);
+        if (w[40]) continue;
+        if (uint8_t(by[0] + by[1] + by[2] + by[3]) != by[4]) continue;
+        const uint32_t id = uint32_t(by[0]) << 16 | uint32_t(by[1]) << 8 | by[2];
+        if (id == 0 || id == 0xFFFFFF) continue;
+        const int bt = by[3] & 0xF;
+        const char* wd = bt == 0x2 ? "arm" : bt == 0x1 ? "disarm" : bt == 0x4 ? "alarm" : bt == 0x8 ? "ring" : nullptr;
+        Reading r = remoteReading("keyfob", "Hollarm", "alarm remote", 0xDE, id);
+        r.button = wd ? wd : std::to_string(bt);
+        r.fact("button", (long long)bt);
+        r.confirm = !kit::twice(rows, w);
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+inline bool kinggates(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    std::vector<Bits> msgs;
+    for (size_t i = 1; i + 2 * 89 < r.size(); ++i) {
+        if (r[i] <= 0 || !near(r[i], 800, 0.2) || !near(r[i - 1], 2200, 0.2)) continue;
+        Bits d; size_t k = i + 1;
+        for (; d.size() < 89 && k + 1 < r.size(); k += 2) {
+            const int g = -r[k], m = r[k + 1];
+            if (r[k] >= 0 || m <= 0) break;
+            if (near(g, 400, 0.35) && near(m, 1100, 0.2)) d.push_back(1);
+            else if (near(g, 1100, 0.2) && near(m, 400, 0.35)) d.push_back(0);
+            else break;
+        }
+        if (d.size() == 89) msgs.push_back(d);
+        i = k;
+    }
+    for (size_t a = 0; a < msgs.size(); ++a) {
+        const Bits& d = msgs[a];
+        if (!d[16]) continue;
+        bool zero = true;
+        for (int j = 37; j < 53; ++j) if (d[size_t(j)]) zero = false;
+        for (int j = 85; j < 89; ++j) if (d[size_t(j)]) zero = false;
+        if (!zero || std::count(msgs.begin(), msgs.end(), d) < 2) continue;   // ★ no check: two identical messages
+        uint32_t lo = 0, hi = 0; int bt = 0;
+        for (int j = 0; j < 16; ++j) lo |= uint32_t(d[size_t(j)]) << j;
+        for (int j = 0; j < 4; ++j) bt |= d[size_t(17 + j)] << j;
+        for (int j = 0; j < 16; ++j) hi |= uint32_t(d[size_t(21 + j)]) << j;
+        const uint32_t serial = hi << 16 | lo;
+        if (serial == 0 || serial == 0xFFFFFFFF) continue;
+        Reading rd = remoteReading("keyfob", "King Gates", "Stylo 4k gate remote", 0xDF, serial);
+        rd.button = std::to_string(bt);
+        rd.fact("button", (long long)bt);
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+} // namespace alarmremote
+
 /** The second-pass remote / fob families, strongest checks first. */
 inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (twogigkey::decode(b, out)) return true;
@@ -554,6 +651,9 @@ inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (honda::decode(b, out)) return true;
     if (alps::decode(b, out)) return true;
     if (tvremote::directv(b, out)) return true;
+    if (alarmremote::gangqi(b, out)) return true;
+    if (alarmremote::hollarm(b, out)) return true;
+    if (alarmremote::kinggates(b, out)) return true;
     if (tvremote::dish(b, out)) return true;
     return false;
 }

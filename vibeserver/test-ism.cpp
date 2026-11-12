@@ -1180,6 +1180,45 @@ static void testSec2() {
         }
         cs.push_back({{"HCS361 key (VPWM)", Sig{tx.r}, "Key fob / remote", "button", "10", true}, 315e6, {"24DDB57", "24ddb57", "6225C0F8", "6225c0f8", "38657879"}, "Microchip HCS361"});
     }
+    // GangQi: OOK PWM, 1200 µs mark = 1, 500 µs = 0 (period 1700); serial 16 · D · button · 0xC8 − the bytes · 00; ×4
+    {
+        std::vector<uint8_t> by = {0x1A, 0x2B, 0xDD, 0};
+        by[3] = uint8_t(0xC8 - by[0] - by[1] - by[2]);
+        Bits d = bytesToBits(by); d.push_back(0); d.push_back(0);
+        Tx tx; for (int rep = 0; rep < 4; ++rep) { for (uint8_t x : d) { tx.mark(x ? 1200 : 500); tx.space(x ? 500 : 1200); } tx.space(2200); }
+        tx.space(20000);
+        cs.push_back({{"GangQi alarm remote", Sig{tx.r}, "alarm remote", "button", "13", true}, 433.92e6, spellings(0x1A2B), "arm"});
+    }
+    // Hollarm: OOK PPM, 200 µs marks, 1000 µs gap = 0, 1600 µs = 1; serial 24 · 4 · button · sum · 00 (the last bit lost)
+    {
+        std::vector<uint8_t> by = {0xC0, 0xFF, 0xEE, 0x08, 0};
+        by[4] = uint8_t(by[0] + by[1] + by[2] + by[3]);
+        Bits d = bytesToBits(by); d.push_back(0); d.push_back(0);
+        Tx tx; for (int rep = 0; rep < 4; ++rep) { for (size_t j = 0; j < d.size(); ++j) { tx.mark(200); tx.space(j + 1 == d.size() ? 2400 : d[j] ? 1600 : 1000); } }
+        tx.space(20000);
+        cs.push_back({{"Hollarm alarm remote", Sig{tx.r}, "alarm remote", "button", "8", true}, 433.92e6, spellings(0xC0FFEE), "ring"});
+    }
+    // King Gates Stylo 4k: 12 × 400/400 µs, 2.2 ms, an 800 µs start, 89 bits (1 = 400 gap + 1100 mark, 0 = 1100 + 400),
+    //   LSB first: serial low 16 · 1 · button 4 · serial high 16 · 16 zeros · hop 32 · 4 zeros; sent twice
+    {
+        const uint32_t serial = 0x1A2B3C4D, hop = 0xCC92D33D; const int bt = 0xE;
+        Bits d;
+        for (int j = 0; j < 16; ++j) d.push_back((serial >> j) & 1);
+        d.push_back(1);
+        for (int j = 0; j < 4; ++j) d.push_back((bt >> j) & 1);
+        for (int j = 0; j < 16; ++j) d.push_back((serial >> (16 + j)) & 1);
+        for (int j = 0; j < 16; ++j) d.push_back(0);
+        for (int j = 0; j < 32; ++j) d.push_back((hop >> j) & 1);
+        for (int j = 0; j < 4; ++j) d.push_back(0);
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            tx.space(9500); for (int k = 0; k < 12; ++k) { tx.mark(400); tx.space(k < 11 ? 400 : 2200); }
+            tx.mark(800); for (uint8_t x : d) { tx.space(x ? 400 : 1100); tx.mark(x ? 1100 : 400); }
+        }
+        tx.space(20000);
+        cs.push_back({{"King Gates gate remote", Sig{tx.r}, "Stylo 4k", "button", "14", true}, 433.92e6,
+                      {"1A2B3C4D", "1a2b3c4d", "439041101", "CC92D33D", "cc92d33d"}, "King Gates"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
