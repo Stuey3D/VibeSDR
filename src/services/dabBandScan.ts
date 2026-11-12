@@ -121,6 +121,18 @@ export function dabScanKey(s: DabScanState | null, mayScan: boolean): 'multiplex
   return mayScan ? 'scan' : null;
 }
 
+/** ★★ V12 2026-11-12: THE "NO SCAN YET" LINE. The server opens DAB on 12B when it has nothing better — no block remembered,
+ *  no scan list, no national multiplex for its country (vibe_dab_landing.h) — and says so in the report (`unscanned`).
+ *  Outside the UK 12B is often silence, so the box says why, plainly. ★ SCAN is suggested ONLY to someone who can press it
+ *  (Stuart: "Scan only unlocks on single user radios and admin mode") — the same `mayScan` (hwinfo `dabScan`) that draws
+ *  the key; everybody else is told where the owner's scan lives, with no control offered. Nothing while a scan runs or
+ *  once a list exists. */
+export function dabUnscannedLine(unscanned: boolean, s: DabScanState | null, mayScan: boolean): string {
+  if (!unscanned || s?.running || (s && s.found.length > 0)) return '';
+  return mayScan ? 'No DAB scan on this radio yet, so it opened on 12B — press SCAN to find the multiplexes here.'
+                 : 'No DAB scan on this radio yet, so it opened on 12B — the owner can run one from SERVER ADMIN → DAB SCAN.';
+}
+
 /** May a tap on a row of the list TUNE for this listener? The server's own answers only: not on a listen-only
  *  (spectator) dial unless they are its unlocked admin, not while ask-before-tuning holds them, not while an owner's
  *  scan has the radio. Where it may not, the list is shown READ-ONLY (no tune affordance at all). */

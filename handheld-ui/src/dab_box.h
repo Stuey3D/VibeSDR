@@ -386,6 +386,21 @@ inline void dabPaneStations(App& a, Ctx& c, const RadioState& s, Rect view, floa
     if (!rep || !(*rep)["services"].size()) {
         const char* t = !rep ? "Tuning…" : !(*rep)["locked"].boolean() ? "Searching for a multiplex…" : "Reading the multiplex…";
         textIn(c, c.f.body, t, view, th::dim);
+        /* ★★ V12 (2026-11-12): opened on 12B with nothing to go on — the server's `unscanned` (vibe_dab_landing.h). The
+         *  words are dabUnscannedLine's (src/services/dabBandScan.ts): SCAN suggested ONLY where this listener may press
+         *  it (hwinfo dabScan, the key's own rule); otherwise where the owner's scan lives. Not while a scan runs, not
+         *  once a list exists. */
+        const Json& scan = s.msg("dab_scan");
+        if (rep && (*rep)["unscanned"].boolean() && !scan["running"].boolean() && !scan["found"].size()) {
+            const char* why = s.hw("dabScan").boolean()
+                ? "No DAB scan on this radio yet, so it opened on 12B \xe2\x80\x94 press SCAN to find the multiplexes here."
+                : "No DAB scan on this radio yet, so it opened on 12B \xe2\x80\x94 the owner can run one from SERVER ADMIN \xe2\x86\x92 DAB SCAN.";
+            float y = view.cy() + c.f.body.lineHeight();
+            for (const auto& l : c.tc.wrap(c.f.small, why, (int)view.w - 24)) {
+                c.tc.draw(c.g, c.f.small, l, view.cx(), y, th::dim, 1);
+                y += c.f.small.lineHeight();
+            }
+        }
         c.nav.item("dab.none", view);   // ★ something to hold the highlight, so BACK still releases a box with no rows
         return;
     }

@@ -4,7 +4,7 @@
  * Run: node --no-warnings scripts/test_dab_band_scan.ts   (run-tests.sh does)
  */
 import { parseDabScan, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz,
-         dabScanToggle, dabScanKey, dabScanMayTune, scanLocked, scanLockLine, parseFmScan, fmScanLine } from '../src/services/dabBandScan.ts';
+         dabScanToggle, dabScanKey, dabScanMayTune, dabUnscannedLine, scanLocked, scanLockLine, parseFmScan, fmScanLine } from '../src/services/dabBandScan.ts';
 
 let fails = 0;
 const ok = (c: boolean, w: string) => { console.log(`  ${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -56,6 +56,14 @@ ok(!open.has('11D') && open.has('7D'), 'closing one keeps the other');
 console.log('the key: MULTIPLEXES for everyone once a list exists (V12 2026-11-04)');
 ok(dabScanKey(null, true) === 'scan', 'no list, may scan → SCAN');
 ok(dabScanKey(null, false) === null, 'no list, may not scan (a shared radio) → no key at all');
+// ★★ V12 2026-11-12 — the "no scan yet" line (the server's `unscanned`): SCAN suggested ONLY to someone who can press it.
+{ const mine = dabUnscannedLine(true, null, true), theirs = dabUnscannedLine(true, null, false);
+  ok(/press SCAN/.test(mine) && /12B/.test(mine), 'unscanned, may scan → "press SCAN"');
+  ok(!/SCAN to|press SCAN/.test(theirs) && /owner/.test(theirs) && /SERVER ADMIN → DAB SCAN/.test(theirs),
+     'unscanned on a shared radio → no SCAN suggestion, the owner\'s door named instead');
+  ok(dabUnscannedLine(false, null, true) === '', 'the server knows its country (or has a scan) → nothing');
+  ok(dabUnscannedLine(true, { ...p, running: true }, true) === '', 'a scan running → nothing (its own pane speaks)');
+  ok(dabUnscannedLine(true, { ...p, running: false }, false) === '', 'a list exists → nothing (MULTIPLEXES is there)'); }
 ok(dabScanKey(done, false) === 'multiplexes', 'a list on a shared radio → MULTIPLEXES for a listener who cannot scan');
 ok(dabScanKey(done, true) === 'multiplexes', 'a list where they may scan → MULTIPLEXES (SCAN AGAIN is in the list)');
 ok(dabScanKey(p, true) === null, 'a scan running → no key (its pane has CANCEL)');
