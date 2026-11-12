@@ -2,6 +2,8 @@
 // ★★★ CLEAN ROOM — the same rule as vibe_ism_protocols.h: every decoder cites the published description it was written
 //     from (docs/v12/ISM-DECODER.md §Protocols has the table); no GPL decoder source was read. Where a write-up left a
 //     detail open, the choice made is marked ASSUMED and the doc lists it for a real-signal check.
+//     ★ The weather pass (2026-11-11) fixed the families here against real recordings, cross-checking frame FACTS with
+//     rtl_433's device files (read, never copied — see ISM-DECODER.md §Clean room); each change says so where it is.
 #pragma once
 #include "vibe_ism_protocols.h"
 #include "vibe_ism_weather2.h"   // ★ weather pass 2026-11-11: SL109H, Fine Offset / Ecowitt FSK

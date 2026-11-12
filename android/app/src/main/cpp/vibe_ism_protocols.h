@@ -4,6 +4,9 @@
 //     datasheet, a paper, a protocol write-up), cited above the decoder and in docs/v12/ISM-DECODER.md §Protocols.
 //     rtl_433 (GPL-2) and other GPL decoders were NOT read. A protocol whose only description is GPL source code is
 //     not here; the doc lists it as "not done: no non-GPL description".
+//     ★ From the weather pass (2026-11-11, Stuart's agreement) rtl_433's device files may be READ for protocol FACTS
+//     (layout, timing, check, scaling) — never copied. Additions made that way say so where they are (docs/v12/
+//     ISM-DECODER.md §Clean room).
 // ★★★ PRIVACY (Stuart, 2026-10-25). TPMS, key fobs and fixed-code remotes NEVER carry their identity out of here: the
 //     decoder puts it in Reading::secretId, the Tracker (vibe_ism_service.h) turns it into a per-server nickname with a
 //     salted hash kept only in memory, and clears it. No code, rolling or fixed, no raw bits, no sensor ID — on public
