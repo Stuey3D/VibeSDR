@@ -703,6 +703,34 @@ inline bool ht680(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace gateremote
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  REVERS RB2 remotes (433.92 OOK "zero-bit" Manchester, 250 µs halves) — facts from rtl_433's conf/Revers-RB2.conf and
+//  its test notes: after a long preamble, the 32-bit word (ID 22 · 10 more) and 32 one-bits, again and again (seven times
+//  in the corpus's frames). No check: the word must repeat at least three times, each followed by its 32 ones.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace revers {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& d0 : zerobitFrames(b.ook, 250, 160, 4)) {
+        for (int inv = 0; inv < 2; ++inv) {
+            const Bits d = inv ? invert(d0) : d0;
+            for (size_t s = 0; s + 64 * 3 <= d.size(); ++s) {
+                const uint32_t w = bitsAt(d, s, 32);
+                if (w == 0xFFFFFFFF || w == 0 || (s && d[s - 1] == 0)) continue;
+                int n = 0;
+                for (size_t k = s; k + 64 <= d.size() && bitsAt(d, k, 32) == w && bitsAt(d, k + 32, 32) == 0xFFFFFFFF; k += 64) ++n;
+                if (n < 3) continue;
+                Reading r = remoteReading("doorbell", "Revers", "RB2 remote", 0xE3, w >> 10);
+                out.push_back(r);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace revers
+
 /** The second-pass remote / fob families, strongest checks first. */
 inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (twogigkey::decode(b, out)) return true;
@@ -719,6 +747,7 @@ inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (alarmremote::kinggates(b, out)) return true;
     if (gateremote::ido(b, out)) return true;
     if (gateremote::ht680(b, out)) return true;
+    if (revers::decode(b, out)) return true;
     if (tvremote::dish(b, out)) return true;
     return false;
 }

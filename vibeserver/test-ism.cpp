@@ -1293,6 +1293,16 @@ static void testSec2() {
         Tx tx; for (int rep = 0; rep < 3; ++rep) { for (int i = 27; i >= 0; --i) { const bool one = (w >> i) & 1; tx.mark(one ? 1000 : 500); tx.space(one ? 500 : 1000); } tx.space(100000); }
         cs.push_back({{"Roger gate remote", Sig{tx.r}, "gate remote", "button", "1", true}, 433.92e6, {"8F2A", "8f2a"}, "Roger"});
     }
+    // Revers RB2: OOK zero-bit Manchester 250 µs (a bit = its first half, the first half-bit idle); a preamble, then the
+    //   32-bit word (ID 22 · 10) and 32 ones, seven times
+    {
+        const uint32_t w = 0xEAF37A00;
+        Bits d = hb(0x803FFFFFFFC0ull, 42); d.erase(d.begin(), d.begin() + 0);
+        for (int k = 0; k < 7; ++k) { append(d, hb(w, 32)); if (k < 6) append(d, hb(0xFFFFFFFF, 32)); }
+        Bits c; for (uint8_t x : d) { c.push_back(x); c.push_back(!x); }
+        Tx tx; tx.space(2000); for (size_t j = 1; j < c.size(); ++j) { if (c[j]) tx.mark(250); else tx.space(250); } tx.space(20000);
+        cs.push_back({{"Revers RB2 remote", Sig{tx.r}, "RB2 remote", nullptr, nullptr, true}, 433.92e6, spellings(0x3ABCDE), "Revers"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
