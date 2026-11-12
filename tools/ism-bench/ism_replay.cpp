@@ -46,6 +46,16 @@ int main(int argc, char** argv) {
          *  a tenth of its real speed. */
         if (std::regex_search(path, m, nameRx)) { centre = std::stod(m[1]) * 1e6; rate = std::stod(m[2]) * 1e3; }
         else if (std::regex_search(path, m, rateRx)) rate = std::stod(m[1]) * 1e3;
+        // ★ a name that says "_0M_" (m-bus/02) knows no frequency: the folder's README may ("rtl_sdr -f 868900000")
+        if (centre < 1e6) {
+            centre = 433.92e6;
+            if (FILE* rd = std::fopen((path.substr(0, path.find_last_of('/') + 1) + "README.md").c_str(), "r")) {
+                std::string t; char buf[4096]; size_t k; while ((k = std::fread(buf, 1, sizeof buf, rd)) > 0) t.append(buf, k);
+                std::fclose(rd);
+                std::smatch fm;
+                if (std::regex_search(t, fm, std::regex(R"(-f\s+([0-9]{8,10})\b)"))) centre = std::stod(fm[1]);
+            }
+        }
         else if (FILE* sr = std::fopen((path.substr(0, path.find_last_of('/') + 1) + "samplerate").c_str(), "r")) {
             double v = 0; if (std::fscanf(sr, "%lf", &v) == 1 && v > 1e4) rate = v;
             std::fclose(sr);

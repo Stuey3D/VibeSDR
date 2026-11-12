@@ -737,6 +737,14 @@ public:
             wmbus::Meter m;
             const int k = wmbus::decodeBurst(b, hwCentreHz, m, wm);
             if (k == 2) return;
+            if (k == 1 && m.knx) {
+                // ★ KNX-RF (home automation: push buttons, sensors, actuators) — named, its address never shown
+                Reading r;
+                r.kind = "sensor"; r.make = "KNX-RF"; r.model = "device";
+                r.freqHz = hwCentreHz + b.offHz + m.carrierHz; r.levelDb = b.levelDb; r.snrDb = b.levelDb - b.noiseDb;
+                out.push_back(std::move(r));
+                return;
+            }
             if (k == 1) {
                 Reading r;
                 r.kind = "meter";
@@ -744,6 +752,15 @@ public:
                 r.make = mk ? mk : m.mfr;
                 r.model = wmbus::typeText(m.type);
                 r.pubId = m.id;                          // ★ the serial is shown (Stuart, 2026-10-25)
+                // the bench's values (Reading::facts, never in the JSON): the serial, maker, version, type as the
+                // write-ups name them — the serial's digits are its BCD bytes, so it reads as the decimal number
+                //   ★ via a repeater / converter (CI 0x72) the write-ups name the LINK layer's sender: its maker and serial
+                { const bool via = m.via.size() > 4;
+                  const std::string sid = via ? m.via.substr(m.via.find(' ') + 1) : m.id;
+                  char* e = nullptr; const long long v = std::strtoll(sid.c_str(), &e, 10);
+                  if (e && *e == 0 && !sid.empty()) r.fact("id", v);
+                  r.fact("M", via ? m.via.substr(0, m.via.find(' ')).c_str() : m.mfr.c_str());
+                  if (!via) { r.fact("version", (long long)m.ver); r.fact("type", (long long)m.type); } }
                 if (m.sts >= 0 && (m.sts & 0x04)) r.battOk = 0;
                 r.freqHz = hwCentreHz + b.offHz + m.carrierHz; r.levelDb = b.levelDb; r.snrDb = b.levelDb - b.noiseDb;
                 r.meter = std::make_shared<const wmbus::Meter>(std::move(m));
