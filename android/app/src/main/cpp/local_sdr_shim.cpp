@@ -42,6 +42,7 @@
 #include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
 #include "vibe_thread_layout.h"   // ★ the receiver split on every multi-core server — g_vsSplitDefault below
 #include "vibe_usb_recovery.h"   // ★ park-not-release, fresh-fd back-off, the re-plug advice (2026-10-05)
+#include "vibe_tz_id.h"     // ★ the IANA zone name sent as "tz" — see the header
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_room_passband.h"   // ★ the shared chain's passband edges, reported in config (2026-10-17)
 #include "vibe_hwinfo.h"
@@ -1118,6 +1119,13 @@ static std::string vsZoneAbbrev() {
     char buf[16] = {0};
     if (strftime(buf, sizeof buf, "%Z", &lt) == 0) return {};
     return std::string(buf);
+}
+
+/** ★ `,"tz":"America/Sao_Paulo"` — or nothing, when the machine does not name its zone. */
+static std::string vsZoneIdField() {
+    const std::string id = vsZoneId();
+    // ★ No escaping needed: vsTzIdPlausible admits only [A-Za-z0-9_+-/].
+    return id.empty() ? std::string() : (",\"tz\":\"" + id + "\"");
 }
 
 static std::string vsDabBlockNow() {
@@ -21987,6 +21995,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *    formatting the offset itself, so an empty string is harmless. */
                       + ",\"tzOffsetMin\":" + std::to_string(vsUtcOffsetMinutes())
                       + ",\"tzAbbr\":\"" + jsonEscape(vsZoneAbbrev()) + "\""
+                      /* ★★★ THE ZONE NAME, so a client with CURRENT rules works the offset out
+                       *  itself (vibe_tz_id.h). Kiko's pre-2019 Android box still applies Brazilian
+                       *  DST: tzOffsetMin said -120 "BRST" in November when Sao_Paulo is -180 all
+                       *  year. The name is never stale; the device's rule table is. Absent when the
+                       *  machine does not say — clients then use tzOffsetMin/tzAbbr exactly as before. */
+                      + vsZoneIdField()
                       // ★ > 0: the I branch (1) bypasses the tuner exactly as the Q branch (2) does —
                       //   both clients then show "Direct Sample" in place of a gain (B10).
                       + ",\"dsActive\":" + (g_dsNow.load(std::memory_order_relaxed) > 0 ? "true" : "false")
