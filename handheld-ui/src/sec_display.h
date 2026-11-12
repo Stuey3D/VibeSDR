@@ -241,7 +241,7 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
         if (sliderRow("d.max", "MAX dB", "", d.maxDb, -100, 0, 5, d.maxDb < 0 ? fmt("−%g", -d.maxDb) : std::string("0"))) { dispDirty(); look(); }
     }
     // BRIGHTNESS · CONTRAST · SHARPNESS (the waterfall's — "WATERFALL BRIGHTNESS", as the backlight's row is BRIGHTNESS)
-    if (sliderRow("d.wbr", "WATERFALL BRIGHTNESS", "", set_.wfBrightness, -20, 20, 2, fmt("%g", set_.wfBrightness))) { look(); dirty(); }
+    if (sliderRow("d.wbr", "WATERFALL BRIGHTNESS", "", set_.wfBrightness, -20, 20, 1, fmt("%g", set_.wfBrightness))) { look(); dirty(); }
     if (sliderRow("d.con", "CONTRAST", "", set_.contrast, -10, 10, 1, fmt("%g", set_.contrast))) { look(); dirty(); }
     if (sliderRow("d.shp", "SHARPNESS", "", set_.sharpness, 0, 10, 1, fmt("%g", set_.sharpness))) { look(); dirty(); }
     // SPATIAL SMOOTH
