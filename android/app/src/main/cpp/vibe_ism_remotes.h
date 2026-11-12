@@ -76,9 +76,46 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace lightwave
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  GE COLOR EFFECTS (G-35) Christmas-light remote — 433 MHz FSK, ~52 µs chips. Sources: Robert Quattlebaum, "Hacking
+//  Christmas Lights", deepdarc.com, 2010-11-27 and Luke Cyca, "G35 RF Remote", lukecyca.com, 2013 — chips 10 = 0, 1100 = 1;
+//  a preamble of 1100 repeats, then 8 high and 8 low chips; then 17 bits: 00 · a 6-bit unit ID · an 8-bit command (0xAA
+//  on, 0x55 off, 0x5A change, else a function) · 0. No check beyond those fixed bits: heard twice alike in the burst.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace gecolor {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    std::vector<uint32_t> seen;
+    for (const Bits& row : kit::nrzRows(b.fsk, 52, 12, true, 40)) {
+        for (size_t s : kit::findAll(row, 0xCCFF00, 24)) {
+            size_t i = s + 24; Bits d;
+            while (i + 1 < row.size() && d.size() < 18) {
+                if (row[i] == 1 && row[i + 1] == 0) { d.push_back(0); i += 2; }
+                else if (i + 3 < row.size() && row[i] == 1 && row[i + 1] == 1 && row[i + 2] == 0 && row[i + 3] == 0) { d.push_back(1); i += 4; }
+                else break;
+            }
+            if (d.size() != 17 || d[0] || d[1] || d[16]) continue;
+            const uint32_t v = bitsAt(d, 0, 17);
+            if (std::find(seen.begin(), seen.end(), v) == seen.end()) { seen.push_back(v); continue; }
+            const int id = int(bitsAt(d, 2, 6)), cmd = int(bitsAt(d, 8, 8));
+            Reading r = remoteReading("doorbell", "GE", "Color Effects remote", 21, uint64_t(id));
+            r.extra = cmd == 0xAA ? "on" : cmd == 0x55 ? "off" : cmd == 0x5A ? "change" : "function " + std::to_string(cmd);
+            char c[8]; std::snprintf(c, sizeof c, cmd == 0xAA ? "on" : cmd == 0x55 ? "off" : cmd == 0x5A ? "change" : "0x%x", cmd);
+            r.fact("command", c);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace gecolor
+
 /** The remote families, strongest checks first. */
 inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (lightwave::decode(b, out)) return true;
+    if (gecolor::decode(b, out)) return true;
     return false;
 }
 
