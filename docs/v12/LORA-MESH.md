@@ -126,10 +126,42 @@ between the preamble windows and the SFD is carried too (SF12 at 500 kHz lost ev
 |---|---|---|
 | 868 | Meshtastic LongFast 869.525 (BW250 SF11, syncs 0x2B / 0x12), MeshCore EU/UK 869.618 (BW62.5 SF8), LoRaWAN 868.1 / .3 / .5 (BW125 SF7–12) | MeshCore SF7; Meshtastic other presets SF7–10; LoRaWAN 867.1–867.9; RX2 869.525 inverted (SF9, SF12); LongModerate 869.4625 / 869.5875; MeshCore CZ |
 | 433 | Meshtastic 433.875, MeshCore 433.650 | LoRaWAN EU433 433.175/.375/.575; MeshCore 433 variants |
-| 915 | LoRaWAN US915 914.3 / 914.5 (SF7–10) | 914.7 / 914.9 |
+| 906 | Meshtastic US LongFast 906.875 (BW250 SF11) | BR_902 MediumFast 906.625 SF9 (S. America); LoRaWAN US915 905.1 / 905.3 (N. America) |
+| 910 | MeshCore USA/Canada 910.525 (BW62.5 SF7) | Costa Rica 910.525 BW125 SF11; US915 sub-band 5 909.9–911.1 (tier 2) |
+| 915 | N. America: LoRaWAN US915 914.3 / 914.5 (SF7–10). S. America and AU/NZ: MeshCore Australia 915.800 (BW250 SF10), Australia (Mid) 915.075 (BW125 SF9), LoRaWAN AU915 915.2 (SF7–10) | US915 914.7 / 914.9; AU915 915.4–916.2 and 915.9 (BW500 SF8) |
+| 920 | Meshtastic ANZ LongFast 919.875; Asia: MeshCore Vietnam 920.250 (SF8), Thailand 921.000 (SF7), both BW62.5 | AS923-2 921.4 / 921.6 |
+| 923 | MeshCore Brazil / Australia SA-WA-QLD 923.125 (BW62.5 SF8, CR 4/8); Asia: Meshtastic LongFast JP 923.375, KR/MY 922.875, TW/TH 923.875 | AS923-1 923.2 / 923.4; MeshCore 923.125 SF7 |
 
-At 2.4 MS/s on 868.6 MHz, 13 of the 16 EU868 channels fit (867.1–867.5 do not). US Meshtastic (906.875) and US
-MeshCore (910.525) are outside the 915 band's capture.
+At 2.4 MS/s on 868.6 MHz, 13 of the 16 EU868 channels fit (867.1–867.5 do not).
+
+★★ **902–928 MHz (V12 2026-11-12).** Five bands, each one capture (an RTL holds ~2 MHz), placed where a region's mesh
+is: `906` `910` `915` `920` `923` (ISM-DECODER.md §bands). A channel may carry a **home** — the regions whose network it
+is (`vibeism::regionAt`: North America, South America, Australia/NZ, east/south-east Asia; rough boxes). At home it keeps
+its tier, with no position set too; elsewhere it drops to tier 2 (still there with the benchmark's budget or
+"lora+all"). Each mesh band's own main channel has no home. So a Pi 2 in Brazil on 923 runs MeshCore Brasil only, and
+one in Tokyo runs MeshCore 923.125 and the three Meshtastic LongFast slots.
+
+| fact | source |
+|---|---|
+| MeshCore presets: USA / Canada 910.525 BW62.5 SF7 CR5; Costa Rica 910.525 BW125 SF11; Australia 915.800 BW250 SF10; Australia (Narrow) 916.575 SF7; Australia (Mid) 915.075 BW125 SF9; Australia SA/WA and Brazil 923.125 BW62.5 SF8 CR8 (QLD CR5); NZ (Narrow) 917.375 SF7; Thailand 921.000 SF7; Vietnam (Narrow) 920.250 SF8; USA S. California 927.875 SF7 | api.meshcore.nz/api/v1/config (the config tool's own list, fetched 2026-11-12) |
+| MeshCore Brasil: pick "Australia: SA, WA, Brazil" — 923.125 MHz, BW 62.5, SF 8, CR 8; 915–928 MHz, Anatel | meshcore.com.br/configuracao |
+| MeshCore sync word 0x12 (RadioLib private) and the Public key `izOH6cXN6mrJ5e26oRXNcg==` added unconditionally — the same worldwide | meshcore-dev/MeshCore `src/helpers/radiolib/CustomSX1262.h`, `examples/companion_radio/MyMesh.cpp` |
+| Meshtastic regions: US 902–928, ANZ 915–928, BR_902 902–907.5, JP 920.5–923.5, KR 920–923, TW / TH 920–925, MY_919 919–924, SG_923 917–925, PH_915 915–918; slot = djb2(name) % round(span / bw); f = start + bw/2 + slot × bw | meshtastic/firmware `src/mesh/RadioInterface.cpp` |
+| LongFast slots: US 906.875, ANZ 919.875, BR_902 903.875, JP 923.375, KR / MY 922.875, TW / TH 923.875, SG / PH 917.875; BR_902 MediumFast 906.625 | the formula above (djb2("LongFast") = 130429955); checked in test-lora |
+| Meshtastic sync 0x2B; the default key `d4f1bb3a…69 01` from "AQ==", no region dependence | firmware `RadioLibInterface.h`, `Channels.h` |
+| AU915: uplinks 915.2 + 0.2n (125 kHz), 915.9 + 1.6n (500 kHz); TTN uses FSB2 916.8–918.2; **Brazil = AU915** (BR listed under AU_915_928 FSB2) | TTN lorawan-stack `pkg/band/au_915_928.go`; lorawan-frequency-plans `frequency-plans.yml` |
+| US915 TTN FSB2 903.9–905.3; AS923-1 default 923.2 / 923.4, -2 at −1.8 MHz, -3 −6.6, -4 −5.9 | lorawan-frequency-plans `US_902_928_FSB_2.yml`; lorawan-stack `pkg/band/as_923.go` |
+| Brazil (Anatel Ato 14.448/2017 item 10.1): digital modulation 902–907.5 and 915–928 MHz | the Act's text (a copy on the TTN forum; Anatel's portal was down). A 2025 amendment (Ato 14158) is reported to tighten bandwidth rules — **not read** |
+
+**Not covered (one capture cannot hold everything):** MeshCore Australia (Narrow) 916.575 and NZ 917.375, TTN AU915
+FSB2 916.8–918.2, Meshtastic SG/PH LongFast 917.875, Meshtastic US MediumFast 913.125 / ShortFast 918.875, BR_902
+LongFast 903.875, US915 FSB2's lower six channels 903.9–904.9, MeshCore S. California 927.875. A ninth band would need
+the clients' eight-band cap raised first.
+
+★ **Frequency error.** The detector folds CFO into timing and separates them at the SFD: ±BW/4 is safe (test-lora: a
+MeshCore 923.125 frame 12 kHz off its 62.5 kHz channel decodes). An RTL without a TCXO can be 20–50 ppm out — 18–46 kHz
+at 923 MHz, past a 62.5 kHz channel's reach — so **Auto-PPM** (AUTO-PPM.md, on by default) matters most on these bands:
+once it has learned the crystal, what is left is the transmitter's own (±10 ppm on a TCXO radio).
 
 **Governor.** A detector's cost unit = its rate/125 kHz × (SF+3)/10. The benchmark row `dec_lora` times the 868 default
 set through the threaded engine in real time; it is GRADED by its hottest thread (LoRa runs on `vibe-lora` / `lora2` /
