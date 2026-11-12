@@ -4,6 +4,7 @@
 // test INPUT only, never shipped or committed; our decoders are our own code).
 //
 //   ism_replay [--dc HZ] [--lead S] FILE.cu8 …   8-bit unsigned I/Q; the rate and centre from the name: …_433.92M_250k.cu8
+//                                          (.cs8 = 8-bit signed, .cs16 = 16-bit signed little-endian I/Q, by extension)
 //
 // ★ --dc: the detector's DC guard. Live, the service tunes OFF the band so a sensor never sits on the dongle's DC spike
 //   and guards ±15 kHz; these recordings were made tuned ON the sensor (it sits within a few kHz of DC), so the replay
@@ -45,18 +46,35 @@ int main(int argc, char** argv) {
         else if (a == "--lead" && i + 1 < argc) lead = std::atof(argv[++i]);
         else files.push_back(a);
     }
-    const std::regex nameRx(R"(_([0-9.]+)M_([0-9]+)k)");
+    /* ★ the rate and the centre are read SEPARATELY (2026-11-11): 143 corpus recordings carry only a rate
+     *  ("g003_1000k.cu8", "…_2000k.cu8", "….250k.cu8") or a fractional one ("_2359.3k"), and were replayed at 250 k */
+    const std::regex centreRx(R"(_([0-9.]+)M[_.])"), rateRx(R"([_.]([0-9.]+)k[_.])");
     for (const auto& path : files) {
         double rate = 250e3, centre = 433.92e6;
         std::smatch m;
-        if (std::regex_search(path, m, nameRx)) { centre = std::stod(m[1]) * 1e6; rate = std::stod(m[2]) * 1e3; }
+        const std::string base = path.substr(path.find_last_of('/') + 1);
+        if (std::regex_search(base, m, centreRx)) centre = std::stod(m[1]) * 1e6;
+        if (std::regex_search(base, m, rateRx)) rate = std::stod(m[1]) * 1e3;
         FILE* f = std::fopen(path.c_str(), "rb");
         if (!f) { std::printf("{\"file\":%s,\"error\":\"open\"}\n", jstr(path).c_str()); continue; }
         std::vector<uint8_t> raw;
         { uint8_t b[1 << 16]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) raw.insert(raw.end(), b, b + n); }
         std::fclose(f);
-        std::vector<cf> x(raw.size() / 2);
-        for (size_t i = 0; i < x.size(); ++i) x[i] = cf((raw[2 * i] - 127.5f) / 128.f, (raw[2 * i + 1] - 127.5f) / 128.f);
+        std::vector<cf> x;
+        const bool cs16 = path.size() > 5 && path.compare(path.size() - 5, 5, ".cs16") == 0;
+        const bool cs8 = !cs16 && path.size() > 4 && path.compare(path.size() - 4, 4, ".cs8") == 0;
+        if (cs16) {
+            x.resize(raw.size() / 4);
+            for (size_t i = 0; i < x.size(); ++i) {
+                const int16_t re = int16_t(raw[4 * i] | raw[4 * i + 1] << 8), im = int16_t(raw[4 * i + 2] | raw[4 * i + 3] << 8);
+                x[i] = cf(re / 32768.f, im / 32768.f);
+            }
+        } else {
+            x.resize(raw.size() / 2);
+            for (size_t i = 0; i < x.size(); ++i)
+                x[i] = cs8 ? cf(int8_t(raw[2 * i]) / 128.f, int8_t(raw[2 * i + 1]) / 128.f)
+                           : cf((raw[2 * i] - 127.5f) / 128.f, (raw[2 * i + 1] - 127.5f) / 128.f);
+        }
         // ★ the rtl_433 recordings are short; pad with a quarter second of silence so the last burst closes
         x.resize(x.size() + (size_t)(rate * 0.25), cf(0, 0));
         // ★ --lead: the recording's own quietest stretch first (see the header) — its real noise, spectrum and all,
@@ -87,7 +105,14 @@ int main(int argc, char** argv) {
                 std::string o = "{\"file\":" + jstr(path) + ",\"kind\":" + jstr(r.kind) + ",\"make\":" + jstr(r.make) +
                                 ",\"model\":" + jstr(r.model) + ",\"id\":" + jstr(r.pubId);
                 if (r.channel >= 0) o += ",\"channel\":" + std::to_string(r.channel);
-                if (r.secret) o += ",\"secret\":true";
+                if (r.secret) {
+                    o += ",\"secret\":true";
+                    /* ★ BENCH ONLY: the secret ID's low 40 bits, so the scorer can tell "the same sensor in a second
+                     *  format" from a misread (ism-corpus.mjs, sameSensor). Public test recordings only — the service
+                     *  never puts a secret ID in any output (vibe_ism_service.h, Tracker::accept). */
+                    char sid[24]; std::snprintf(sid, sizeof sid, "%llx", (unsigned long long)(r.secretId & 0xFFFFFFFFFFull));
+                    o += ",\"sid\":\"" + std::string(sid) + "\"";
+                }
                 num(o, "temperature_C", r.tempC); num(o, "humidity", r.hum); num(o, "pressure_kPa", r.kpa);
                 num(o, "wind_avg_km_h", r.windKmh); num(o, "wind_max_km_h", r.gustKmh); num(o, "wind_dir_deg", r.windDir);
                 num(o, "rain_mm", r.rainMm); num(o, "uv", r.uv); num(o, "power_W", r.watts); num(o, "pressure_hPa", r.baroHpa);

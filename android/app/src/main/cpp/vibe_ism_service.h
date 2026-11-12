@@ -303,16 +303,10 @@ public:
     bool accept(Reading r, double t, Heard* out = nullptr) {
         std::string key;
         int nick = 0;
+        uint64_t h = 0;
         if (r.secret) {
-            const uint64_t h = sipHash24(k0_, k1_, r.secretId);
+            h = sipHash24(k0_, k1_, r.secretId);
             r.secretId = 0;                                         // ★ gone — only the hash remains, in memory only
-            const std::string fam = r.kind;
-            auto it = nickOf_.find(h);
-            if (it == nickOf_.end()) {
-                if (nickOf_.size() > 4096) nickOf_.clear();           // bounded; numbering restarts, which is harmless
-                it = nickOf_.emplace(h, ++nextNick_[fam]).first;
-            }
-            nick = it->second;
             char kb[40]; std::snprintf(kb, sizeof kb, "s%016llx", (unsigned long long)h);
             key = kb;                                                 // ★ internal map key; never sent (devices get "d<n>")
         } else if (r.kind == "meter" && r.meter) {
@@ -321,15 +315,31 @@ public:
             key = r.make + "|" + r.model + "|" + std::to_string(r.channel) + "|" + r.pubId;
         }
         if (r.kind == "meter" && r.meter) return acceptMeter(key, std::move(r), t, out);
+        /* ★★ ONE FRAME OR TWO? (V12 2026-11-11, the TPMS makes). A reading whose decoder checked it STRONGLY — a CRC-8 or
+         *  CRC-16 behind an exact sync, or a CRC plus a redundant field — is shown from one frame: noise passes such a
+         *  check far less often than a real sensor is heard, and a car driving past may be heard ONCE (a tyre sensor
+         *  sends a few frames a minute; at 50 km/h it is in range for seconds). A WEAK check (an 8-bit sum or XOR, a 2-bit
+         *  check, none at all) passes noise one time in 256 or worse, and a busy band offers thousands of bursts a day —
+         *  so those readings (Reading::confirm) are shown only once the same device says the same thing twice within
+         *  90 s. Each decoder sets confirm by its own check (vibe_ism_tpms.h says which TPMS families are which). */
         if (r.confirm) {
-            // ★ a weak check: the same values from the same device twice within 90 s, or nothing
-            const std::string sig = key + "|" + readable(r, nick);
+            const std::string sig = key + "|" + readable(r, 0);
             auto pit = pending_.find(sig);
             if (pit == pending_.end() || t - pit->second > 90) {
                 pending_[sig] = t;
                 if (pending_.size() > 512) pending_.clear();
                 return false;
             }
+        }
+        /* ★ the nickname only once a reading is shown: an unconfirmed frame (noise that passed a weak check once) must
+         *  not take "TPMS #7" and leave the day's numbering with holes */
+        if (r.secret) {
+            auto it = nickOf_.find(h);
+            if (it == nickOf_.end()) {
+                if (nickOf_.size() > 4096) nickOf_.clear();           // bounded; numbering restarts, which is harmless
+                it = nickOf_.emplace(h, ++nextNick_[r.kind]).first;
+            }
+            nick = it->second;
         }
         Dev& d = devs_[key];
         const std::string line = readable(r, nick);
