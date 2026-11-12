@@ -248,7 +248,7 @@ static void homeRun(std::vector<HomeCase>& cs, double rate = 2.4e6) {
         if (!r && std::getenv("ISM_HOME_DIAG"))
             for (const auto& b : bs) { printf("     burst %.3f s %+.0f Hz dev %.0f ook %zu fsk %zu:", b.tSec, b.offHz + b.carrierHz, b.fskDevHz, b.ook.size(), b.fsk.size());
                                        for (size_t i = 0; i < b.fsk.size() && i < 80; ++i) printf(" %d", b.fsk[i]); printf("\n");
-                                       if (const char* us = std::getenv("ISM_HOME_DIAG_US")) for (const Bits& row : kit::nrzRows(b.fsk, std::atof(us), 160, true, 16)) { printf("      "); for (auto x : row) printf("%d", x); printf("\n"); } }
+                                       if (const char* us = std::getenv("ISM_HOME_DIAG_US")) for (const Bits& row : kit::nrzRowsAny(b, std::atof(us), 160, 16)) { printf("      "); for (auto x : row) printf("%d", x); printf("\n"); } }
         CHECK(r != nullptr, "%s: not decoded (%zu readings%s%s)", c.name, got.size(), got.empty() ? "" : ", first: ", got.empty() ? "" : got[0].model.c_str());
         if (!r) continue;
         if (c.fact) CHECK(factOf(*r, c.fact) == c.want, "%s: %s = %s, want %s", c.name, c.fact, factOf(*r, c.fact).c_str(), c.want);
@@ -448,6 +448,68 @@ static void testHome() {
         Tx tx; for (uint8_t x : c) { if (x) tx.mark(30.52); else tx.space(30.52); }
         Sig s{fskNrz(c, 30.52)}; s.runs.erase(s.runs.begin(), s.runs.begin() + (s.runs[0] < 0 ? 1 : 0));
         cs.push_back({"ERT SCM meter", s, "SCM", "ert_type", "12", false});
+    }
+    // Somfy RTS: 604 µs symbols; sync 4×(2416 on, 2416 off)…, a 4.8 ms soft sync, 604 off, 56 Manchester bits (01 = 1)
+    {
+        uint8_t pl[7] = {0xA7, 0x40, 0x00, 0x09, 0xAB, 0xC4, 0x37};   // seed, Down (4) + checksum nibble, counter 9, address
+        uint8_t x = 0; for (int i = 0; i < 7; ++i) x ^= pl[i];
+        pl[1] |= uint8_t((x & 0xF) ^ (x >> 4));
+        uint8_t sc[7]; sc[0] = pl[0]; for (int i = 1; i < 7; ++i) sc[i] = uint8_t(pl[i] ^ sc[i - 1]);
+        Tx tx;
+        for (int rep = 0; rep < 3; ++rep) {
+            for (int k = 0; k < (rep ? 7 : 2); ++k) { tx.mark(2416); tx.space(2416); }
+            tx.mark(4832); tx.space(604);
+            for (int i = 0; i < 56; ++i) { const bool one = (sc[i / 8] >> (7 - i % 8)) & 1; if (one) { tx.space(604); tx.mark(604); } else { tx.mark(604); tx.space(604); } }
+            tx.space(30400);
+        }
+        cs.push_back({"Somfy RTS remote", Sig{tx.r}, "RTS remote", "control", "\"Down (4)\"", true});
+    }
+    // Clemsa: PWM 385 / 2695 µs marks, inverted (a long mark is a 1), 18 bits, 4 copies 10 ms apart
+    {
+        const uint32_t w = 0x0CE2C | 0x1;
+        Tx tx;
+        for (int rep = 0; rep < 4; ++rep) { for (int i = 17; i >= 0; --i) { const bool one = (w >> i) & 1; tx.mark(one ? 2695 : 385); tx.space(one ? 385 : 2695); } tx.space(10000); }
+        cs.push_back({"Clemsa gate remote", Sig{tx.r}, "gate remote", "button", "1", true});
+    }
+    // Continental KR5V2X: FSK Manchester 100 µs halves (01 = 1), …f0f06, ID · · button · · sequence · code · XOR = 0
+    {
+        std::vector<uint8_t> by = {0x2A, 0x79, 0x17, 0x80, 0x00, 0x30, 0x00, 0xD4, 0x85, 0xB9, 0x00, 0x57, 0xD2, 0};
+        by[13] = kit::xorBytes(by.data(), 13);
+        Bits d = hb(0xFFFFF0F06ull, 36); cat(d, bytesToBits(by)); cat(d, hb(0, 4));
+        Sig s{fskNrz(manch01(d), 100)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Continental car key", s, "Key fob", "button_code", "3", true});
+    }
+    // Chrysler: PWM TE 350 µs (a short mark = 1, then the whole word inverted), two packets 49 + 48 bits, bytes reflected
+    {
+        uint8_t by[6] = {0x40, 0xE8, 0xCA, 0x2E, 0x40, 0};
+        by[5] = uint8_t(kit::sumBytes(by, 5));
+        Bits w; for (uint8_t v : by) { const uint8_t r = kit::rev8(v); for (int i = 7; i >= 0; --i) w.push_back(!((r >> i) & 1)); }
+        Tx tx;
+        for (int p = 0; p < 2; ++p) {
+            Bits pk = w; if (p == 0) pk.push_back(1);
+            for (uint8_t x : pk) { tx.mark(x ? 350 : 700); tx.space(x ? 700 : 350); }
+            tx.space(12000);
+        }
+        cs.push_back({"Chrysler car key", Sig{tx.r}, "Key fob", "button_code", "4", true});
+    }
+    // RadioHead ASK: 500 µs NRZ; 0101… then 0xB38 LSB first, bytes as two 4-to-6 symbols LSB first, CRC-16 (~CCITT LSB)
+    {
+        static const uint8_t k6[16] = {0x0D, 0x0E, 0x13, 0x15, 0x16, 0x19, 0x1A, 0x1C, 0x23, 0x25, 0x26, 0x29, 0x2A, 0x2C, 0x32, 0x34};
+        std::vector<uint8_t> p = {12, 0xFF, 0x07, 0x00, 0x00, 'h', 'e', 'l', 'l', 'o'};
+        const uint16_t c = uint16_t(~kit::crc16r(p.data(), p.size(), 0x8408, 0xFFFF)); p.push_back(uint8_t(c)); p.push_back(uint8_t(c >> 8));
+        Bits d = hb(0x555555, 24); cat(d, hb(0x5551CD, 24));
+        for (uint8_t v : p) for (int half = 0; half < 2; ++half) { const uint8_t sym = k6[half ? (v & 0xF) : (v >> 4)]; for (int i = 0; i < 6; ++i) d.push_back((sym >> i) & 1); }
+        cat(d, hb(0, 8));
+        Tx tx; for (uint8_t x : d) { if (x) tx.mark(500); else tx.space(500); }
+        cs.push_back({"RadioHead ASK packet", Sig{tx.r}, "ASK packet", "from", "7", false});
+    }
+    // X10 security: X10 RF line, 41 bits: ID · its top nibble · low nibble XOR · code · ¬code · ID 2 · even parity
+    {
+        const uint8_t id = 0x5A, code = 0x0C;   // motion
+        std::vector<uint8_t> by = {id, uint8_t(id ^ 0x0F), code, uint8_t(~code), 0x3C};
+        Bits w = bytesToBits(by); int par = 0; for (uint8_t x : w) par ^= x; w.push_back(uint8_t(par));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { tx.mark(9000); tx.space(4500); for (uint8_t x : w) { tx.mark(562); tx.space(x ? 1687 : 562); } tx.mark(562); tx.space(20000); }
+        cs.push_back({"X10 motion sensor", Sig{tx.r}, "security sensor", "event", "\"MOTION TRIPPED\"", true});
     }
     homeRun(cs);
 }

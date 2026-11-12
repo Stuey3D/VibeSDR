@@ -449,7 +449,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
                 std::vector<uint8_t> p;
                 size_t pos = s + 24;
                 int len = 0;
-                while (pos + 12 <= row.size()) {
+                while (pos + 12 <= row.size() + 3) {   // ★ the last symbol's trailing 0s run into the idle: up to 3 implied
                     const int hi = nib6(bitsAtLsb(row, pos, 6)), lo = nib6(bitsAtLsb(row, pos + 6, 6));
                     if (hi < 0 || lo < 0) break;
                     p.push_back(uint8_t(hi << 4 | lo));
