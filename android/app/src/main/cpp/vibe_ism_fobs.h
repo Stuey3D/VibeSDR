@@ -203,10 +203,42 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace caralarm
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  HONDA car keys (433.92 MHz FSK, the older European fobs) — facts from the notes in rtl_433's hondaremote.c: FSK, the
+//  tone held 250 µs = 1, 500 µs = 0 (PWM on the "mark" tone); 385–394 bits; byte 0 = FF, byte 38 = FF, byte 46 = AA
+//  (boot) / AB (unlock) / AC (lock); bytes 44–45 a device number; a rolling code otherwise, not decoded. NO check: 26
+//  fixed bits, the exact length and a repeat (confirm). ★ Only "Key fob · Honda · lock" — the device number only
+//  ever hashed.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace honda {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    Runs inv0 = b.fsk; for (auto& d : inv0) d = -d;
+    const Runs& inv = inv0;
+    for (const Runs* r : {&b.fsk, &inv})
+        for (const Bits& w : caralarm::pwmWords(*r, 250, 500, 0.25, 2000)) {
+            if (w.size() < 385 || w.size() > 394) continue;
+            const auto by = bytesAt(w, 0, 48);
+            if (by[0] != 0xFF || by[38] != 0xFF || by[46] < 0xAA || by[46] > 0xAC) continue;
+            const int cmd = by[46] - 0xAA;
+            Reading rd = remoteReading("keyfob", "Honda", "Key fob", 0xD5, uint64_t(by[44]) << 8 | by[45]);
+            rd.button = cmd == 0 ? "boot" : cmd == 1 ? "unlock" : "lock";
+            rd.fact("code", rd.button.c_str());
+            rd.confirm = true;   // ★ no check: shown once heard twice alike
+            out.push_back(rd);
+            return true;
+        }
+    return false;
+}
+
+} // namespace honda
+
 /** The second-pass remote / fob families, strongest checks first. */
 inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (caralarm::decode(b, out)) return true;
     if (ford::decode(b, out)) return true;
+    if (honda::decode(b, out)) return true;
     return false;
 }
 

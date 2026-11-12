@@ -1049,6 +1049,24 @@ static void testSec2() {
         Tx tx; for (int rep = 0; rep < 4; ++rep) { for (uint8_t x : d) { tx.mark(x ? 450 : 900); tx.space(x ? 880 : 430); } tx.space(15000); }
         cs.push_back({{"Audiovox car key", Sig{tx.r}, "Key fob", "button_str", "\"Lock\"", true}, 303e6, spellings(0x2EA9), "lock"});
     }
+    // MIC 6SC2: OOK Manchester 250 µs halves, a bit = its first half, the first half-bit a GAP; 55 54 · rolling 32 ·
+    //   button byte (reflected; low nibble) · sequence 16 · a byte · XOR of bytes 2–10 = 0; each frame its own burst
+    {
+        std::vector<uint8_t> by = {0x55, 0x54, 0x03, 0x37, 0x69, 0x2D, kit::rev8(0x01), 0x46, 0x84, 0x00, 0};
+        by[10] = kit::xorBytes(by.data() + 2, 8);
+        Bits c; for (uint8_t x : bytesToBits(by)) { c.push_back(x); c.push_back(!x); }
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { tx.space(2000); for (uint8_t x : c) { if (x) tx.mark(250); else tx.space(250); } tx.space(120000); }
+        cs.push_back({{"MIC 6SC2 car key", Sig{tx.r}, "Key fob", "button_code", "1", true}, 315e6, {"0337692D", "0337692d", "B496ECC0", "b496ecc0"}, "unlock"});
+    }
+    // Honda (EU) car key: FSK, the tone held 250 µs = 1, 500 µs = 0 (and as long apart); byte 0 FF, byte 38 FF, device
+    //   44–45, byte 46 = AC (lock); 390 bits; no check
+    {
+        std::vector<uint8_t> by(49, 0x5A); by[0] = 0xFF; by[38] = 0xFF; by[44] = 0xDB; by[45] = 0x5A; by[46] = 0xAC;
+        Bits d = bytesToBits(by); d.resize(390);
+        Tx tx; for (size_t i = 0; i < d.size(); ++i) { const double w = d[i] ? 250 : 500; tx.mark(w); tx.space(w); }
+        Sig s{tx.r}; s.fsk = true; s.devHz = 40e3;
+        cs.push_back({{"Honda car key", s, "Key fob", "code", "\"lock\"", true}, 433.92e6, {"DB5A", "db5a", "56154"}, "lock"});
+    }
     secRun(cs);
 }
 

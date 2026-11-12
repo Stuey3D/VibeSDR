@@ -417,7 +417,17 @@ inline bool continental(const Burst& b, std::vector<Reading>& out) {
 }
 
 inline bool sixsc2(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& d : kit::manchesterRows(b, 250, 80)) {
+    // ★ 2026-11-12: the frame's FIRST half-bit is a gap (the "zero-bit" Manchester of the notes) — the slice starts at the
+    //   first mark, so a row decoded from there lost the preamble's first bit (corpus 1/6). Each row is tried again with
+    //   that half-bit put back.
+    std::vector<Bits> rows = kit::manchesterRows(b, 250, 80);
+    for (const Bits& c0 : kit::nrzRows(b.ook, 250, 8, false, 160)) {
+        if (c0.empty() || !c0[0]) continue;
+        Bits c(1, 0); c.insert(c.end(), c0.begin(), c0.end());
+        const Bits d = kit::manchesterAt(c, 0, 200, false);
+        if (d.size() >= 80) rows.push_back(d);
+    }
+    for (const Bits& d : rows) {
         for (size_t s : kit::findAll(d, 0x5554, 16)) {
             if (s + 88 > d.size()) break;
             const auto by = bytesAt(d, s, 11);
