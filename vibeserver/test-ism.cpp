@@ -1118,6 +1118,55 @@ static void testHome2() {
         Sig s{fskNrz(w, 26.04)}; s.fsk = true; s.devHz = 30e3;
         cs.push_back({"Honeywell evohome", s, 868.3e6, "evohome", "demand", "0.500", false});
     }
+    // Funkbus: OOK, 4 ms mark, biphase-mark 48 bits (0 = one 1 ms run, 1 = two 500 µs), fields LSB first, XOR-nibble check
+    {
+        auto lsb = [](Bits& w, uint32_t v, int n) { for (int i = 0; i < n; ++i) w.push_back((v >> i) & 1); };
+        Bits w; lsb(w, 4, 4); lsb(w, 3, 4); lsb(w, 403414, 20); lsb(w, 0, 2); lsb(w, 0, 1); lsb(w, 0, 2); lsb(w, 4, 3); lsb(w, 3, 2); lsb(w, 0, 1);
+        lsb(w, 3, 2); lsb(w, 0, 1); lsb(w, 0, 1);
+        const auto by = kit::packBits(w, 0, 43);
+        const uint8_t x = kit::xorBytes(by.data(), by.size());
+        const int nib = (x >> 4) ^ (x & 0xF); uint8_t c = 0;
+        if (nib & 8) c ^= 0x8C; if (nib & 4) c ^= 0x32; if (nib & 2) c ^= 0xC8; if (nib & 1) c ^= 0x23;
+        c &= 0xF;
+        w.push_back(uint8_t(kit::parity(x)));
+        for (int k = 3; k >= 0; --k) w.push_back((c >> k) & 1);   // the check nibble, sent bit-reversed: its LSB-first read = rev(c)
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            tx.mark(4000); bool lv = false;
+            for (uint8_t bit : w) { if (bit) { if (lv) tx.mark(500); else tx.space(500); lv = !lv; if (lv) tx.mark(500); else tx.space(500); lv = !lv; }
+                                    else { if (lv) tx.mark(1000); else tx.space(1000); lv = !lv; } }
+            tx.space(20000);
+        }
+        Sig s{tx.r};
+        cs.push_back({"Funkbus remote", s, 433.42e6, "", "action", "3", true});
+    }
+    // Feron: OOK PWM (750 µs mark = 1, 350 = 0), ID 16 · command · ~command, a 500/500 end, repeated
+    {
+        Bits w = hb(0xC0DE, 16); append(w, hb(0x86, 8)); append(w, hb(0x79, 8));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t x : w) { tx.mark(x ? 750 : 350); tx.space(x ? 350 : 750); } tx.space(150); tx.mark(500); tx.space(4500); }
+        Sig s{tx.r};
+        cs.push_back({"Feron light remote", s, 433.92e6, "LED light", "command", "134", true});
+    }
+    // Power Smart: OOK Manchester 225 µs (1 = mark then gap), FD · K C D · D K · Y · AA · inverted · W (Y = ~W − 1), ×8
+    {
+        const int btn = 2, ch = 5, d = 0x5A; const uint8_t y = 0x3C;
+        const uint16_t kcdk = uint16_t(((btn >> 1) & 1) << 15 | ch << 9 | d << 1 | (btn & 1));
+        std::vector<uint8_t> by = {0xFD, uint8_t(kcdk >> 8), uint8_t(kcdk), y, 0xAA, uint8_t(~(kcdk >> 8)), uint8_t(~kcdk), uint8_t(~(y + 1))};
+        Bits w; for (int rep = 0; rep < 8; ++rep) append(w, bytesToBits(by));
+        Tx tx; manchesterTx(tx, w, 225, 0); tx.space(3000);
+        Sig s{tx.r};
+        cs.push_back({"Power Smart blind remote", s, 433.92e6, "blind remote", "channel", "5", true});
+    }
+    // Martec MPLCD: OOK PWM (320 µs mark = 1, 676 = 0), 22 bits 1000 · ch · dimmer 7 · fan 2 · 0 · nibble-sum check; repeated
+    {
+        Bits w = hb(0x8, 4); append(w, hb(0xE, 4)); append(w, hb(25, 7)); append(w, hb(2, 2)); w.push_back(0);
+        const auto by = kit::packBits(w, 1, 17);
+        const int sum = ((by[0] >> 4) + (by[0] & 0xF) + (by[1] >> 4) + (by[1] & 0xF)) & 0xF;
+        append(w, hb(uint32_t(sum), 4));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t x : w) { tx.mark(x ? 320 : 676); tx.space(x ? 750 : 400); } tx.space(9500); }
+        Sig s{tx.r};
+        cs.push_back({"Martec fan remote", s, 433.92e6, "fan remote", "speed", "\"medium\"", true});
+    }
     home2Run(cs);
 }
 

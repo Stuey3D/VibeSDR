@@ -8,6 +8,7 @@
 //     recordings (test INPUT only — scripts/ism-corpus.mjs). Each family says where its facts came from.
 #pragma once
 #include "vibe_ism_kit.h"
+#include "vibe_ism_wxkit.h"
 
 namespace vibeism {
 
@@ -462,6 +463,168 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace wattsvision
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  FUNKBUS / INSTAFUNK wall and hand remotes (Insta GmbH; sold by Berker, Gira, Jung …) — 433.42 MHz OOK, biphase-mark
+//  (every bit boundary a transition; a 0 is one 1 ms run, a 1 two 500 µs runs) after a ~4 ms mark. Facts: the Insta
+//  "instafunk RX/TX-Modul" notes as summarised in rtl_433's funkbus.c (Markus Sattler; read for facts only). 48 bits,
+//  every field LSB first: type 4 (4 = remote) · subtype 4 (3) · serial 20 · 2 unknown · battery low · 2 unknown ·
+//  button 3 · group 2 (A–C; 3 = scenes) · 1 unknown · action 2 (stop, off, on, scene) · repeat · long press · parity
+//  · check 4. The check: XOR the first 43 bits as bytes (MSB first, the last byte's unused bits 0), fold to a nibble;
+//  each of its bits 3…0 XORs in 0x8C, 0x32, 0xC8, 0x23; the low nibble, sent bit-reversed, is the check, and the
+//  XOR byte's parity is the parity bit — with the fixed type a ~13-bit check, so a single frame is shown once heard
+//  twice (confirm). ★ The serial commands that switch: SECRET, as every remote.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace funkbus {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    for (size_t i = 0; i + 40 < r.size(); ++i) {
+        if (r[i] < 3000 || r[i] > 5500) continue;
+        const Runs tail(r.begin() + long(i + 1), r.end());
+        const auto rows = wx::dmc(tail, 500, 250);
+        for (const Bits& row : rows) {
+            if (row.size() < 48) continue;
+            auto lsb = [&](int at, int n) { return int(bitsAtLsb(row, size_t(at), n)); };
+            if (lsb(0, 4) != 4 || lsb(4, 4) != 3) continue;
+            const auto by = kit::packBits(row, 0, 43);
+            const uint8_t x = kit::xorBytes(by.data(), by.size());
+            const int nib = (x >> 4) ^ (x & 0xF);
+            uint8_t c = 0;
+            if (nib & 8) c ^= 0x8C;
+            if (nib & 4) c ^= 0x32;
+            if (nib & 2) c ^= 0xC8;
+            if (nib & 1) c ^= 0x23;
+            c &= 0xF;
+            const int rev = ((c & 1) << 3) | ((c & 2) << 1) | ((c & 4) >> 1) | ((c & 8) >> 3);
+            if (lsb(44, 4) != rev || lsb(43, 1) != kit::parity(x)) continue;
+            const int sn = lsb(8, 20), btn = lsb(33, 3), grp = lsb(36, 2), act = lsb(39, 2);
+            Reading rd = homeRemote("Funkbus", "", 0xF0B, uint64_t(sn));
+            static const char* const acts[4] = {"stop", "off", "on", "scene"};
+            rd.button = (grp == 3 ? std::string("scene ") : std::string(1, char('A' + grp))) + std::to_string(btn);
+            rd.extra = acts[act];
+            if (lsb(42, 1)) rd.extra += " (long press)";
+            rd.battOk = lsb(30, 1) ? 0 : 1;
+            rd.confirm = !kit::twice(rows, row);   // a 4-bit check + parity: believed at once only when sent twice alike
+            rd.fact("command", (long long)btn); rd.fact("group", (long long)grp); rd.fact("action", (long long)act);
+            rd.fact("repeat", (long long)lsb(41, 1)); rd.fact("longpress", (long long)lsb(42, 1));
+            out.push_back(rd);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace funkbus
+
+/** PWM words of an OOK burst: a mark of ~`oneUs` = 1, ~`zeroUs` = 0 (each ±`tol`), every gap under `gapMax`; a longer gap
+ *  (or a mark out of range) ends the word. */
+inline std::vector<Bits> pwmWords(const Runs& r, double oneUs, double zeroUs, double tol, double gapMax) {
+    std::vector<Bits> rows(1);
+    for (size_t i = 0; i < r.size(); ++i) {
+        const int d = r[i];
+        if (d > 0) {
+            if (std::fabs(d - oneUs) <= tol) rows.back().push_back(1);
+            else if (std::fabs(d - zeroUs) <= tol) rows.back().push_back(0);
+            else if (!rows.back().empty()) rows.emplace_back();
+        } else if (-d > gapMax && !rows.back().empty()) rows.emplace_back();
+    }
+    if (rows.back().empty()) rows.pop_back();
+    return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  FERON LED-light remotes — 433.92 MHz OOK PWM: a 750 µs mark + 350 µs gap = 1, 350 + 750 = 0; 32 bits, then a 500 µs
+//  gap, a 500 µs mark and ~4.5 ms, repeated. ID 16 · command 8 (0x85 on, 0x84 off, 0x86 brighter, 0x87 dimmer, 0x82
+//  mode) · the command inverted. Facts: the Flipper Zero firmware's protocol notes (lib/subghz/protocols/feron.c) as
+//  given in rtl_433's feron.c notes (read for facts only). A weak check (the inverted byte): two identical words in the
+//  burst before it is believed — as rtl_433 itself asks. SECRET (a remote).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace feron {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    std::vector<Bits> rows = pwmWords(b.ook, 750, 350, 150, 1000);
+    for (auto& w : rows) if (w.size() == 33) w.pop_back();   // the 500 µs end mark can read as a 33rd bit
+    for (const Bits& w : rows) {
+        if (w.size() != 32 || !kit::twice(rows, w)) continue;
+        const uint32_t v = bitsAt(w, 0, 32);
+        const int cmd = int(v >> 8 & 0xFF);
+        if (((v ^ (v >> 8)) & 0xFF) != 0xFF) continue;
+        Reading r = homeRemote("Feron", "LED light remote", 0xFE0, v >> 16);
+        const char* c = cmd == 0x85 ? "on" : cmd == 0x84 ? "off" : cmd == 0x86 ? "brighter" : cmd == 0x87 ? "dimmer" : cmd == 0x82 ? "mode" : nullptr;
+        char hx[16]; std::snprintf(hx, sizeof hx, "command %02X", cmd);
+        r.extra = c ? c : hx;
+        r.fact("command", (long long)cmd);
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace feron
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  POWER SMART blind remotes — 433.92 MHz OOK Manchester, 225 µs half-bits (1 = mark then gap), 64 bits sent 8 times.
+//  Facts: the Flipper Zero firmware's notes (lib/subghz/protocols/power_smart.c) as given in rtl_433's power_smart.c
+//  (read for facts only). FD · K CCCCCC D / DDDDDDD K (K = the button's two bits, first and last: 1 down, 2 up, 3 stop;
+//  C = 6-bit channel) · Y · AA · the two K…K bytes inverted · W, where Y = ~W − 1. 16 fixed bits, a 16-bit inverted copy
+//  and the Y/W pair: shown at once. SECRET (the C D Y bits are the remote's address).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace powersmart {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& d : kit::manchesterRows(b, 225, 64)) {
+        for (size_t s : kit::findAll(d, 0xFD, 8)) {
+            if (s + 64 > d.size()) break;
+            const auto by = bytesAt(d, s, 8);
+            if (by[4] != 0xAA || (by[1] ^ by[5]) != 0xFF || (by[2] ^ by[6]) != 0xFF || by[3] != uint8_t(~by[7] - 1)) continue;
+            const int button = ((by[1] >> 6) & 2) | (by[2] & 1), channel = (by[1] >> 1) & 0x3F;
+            const uint32_t id = ((uint32_t(by[1] & 0x7F) << 7 | (by[2] >> 1)) << 8) | by[3];
+            Reading r = homeRemote("Power Smart", "blind remote", 0x957, id);
+            static const char* const ctl[4] = {"?", "down", "up", "stop"};
+            r.button = std::to_string(channel);
+            r.extra = ctl[button];
+            r.fact("channel", (long long)channel); r.fact("button", (long long)button);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace powersmart
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  MARTEC MPLCD ceiling-fan / light remotes — 433.92 MHz OOK PWM (a ~300 µs mark = 1, ~650 µs = 0), 22 bits, repeated.
+//  Facts: rtl_433 PR #3133 and its martec_mplcd.c notes (read for facts only). 1000 · channel 4 (bit-reversed,
+//  inverted) · dimmer 7 (0 off, 1–41 on, 1 the brightest) · fan 2 (off, high, medium, low) · 1 unknown · check 4 = the
+//  sum of the four nibbles from bit 1. A 4-bit check: two identical rows in the burst, and not all zero.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace martec {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const std::vector<Bits> rows = pwmWords(b.ook, 320, 676, 150, 900);
+    for (const Bits& w : rows) {
+        if (w.size() != 22 || !kit::twice(rows, w) || bitsAt(w, 0, 4) != 0x8) continue;
+        const auto by = kit::packBits(w, 1, 21);
+        const int sum = ((by[0] >> 4) + (by[0] & 0xF) + (by[1] >> 4) + (by[1] & 0xF)) & 0xF;
+        if (sum != ((by[2] >> 3) & 0xF) || (by[0] == 0 && by[1] == 0)) continue;
+        int ch = (~by[0] >> 1) & 0xF; ch = ((ch & 1) << 3) | ((ch & 2) << 1) | ((ch & 4) >> 1) | ((ch & 8) >> 3);
+        int dim = ((by[0] & 1) << 6) + ((by[1] >> 2) & 0x3F);
+        if (dim > 41) continue;
+        if (dim > 0) dim = 42 - dim;
+        static const char* const fan[4] = {"off", "high", "medium", "low"};
+        Reading r = homeRemote("Martec", "fan remote", 0x3A7, uint64_t(ch));
+        r.button = std::to_string(ch);
+        r.extra = (dim ? "light " + std::to_string(dim * 100 / 41) + " %" : std::string("light off")) + " \xc2\xb7 fan " + fan[by[1] & 3];
+        r.fact("dimmer", (long long)dim); r.fact("speed", fan[by[1] & 3]);
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace martec
+
 /** The home-automation families, strongest checks first. */
 inline bool decodeHomeauto(const Burst& b, std::vector<Reading>& out) {
     if (insteon::decode(b, out)) return true;
@@ -469,8 +632,12 @@ inline bool decodeHomeauto(const Burst& b, std::vector<Reading>& out) {
     if (evohome::decode(b, out)) return true;
     if (wattslcd::decode(b, out)) return true;
     if (wattsvision::decode(b, out)) return true;
+    if (powersmart::decode(b, out)) return true;
+    if (funkbus::decode(b, out)) return true;
     if (adlm::decode(b, out)) return true;
     if (wattsrf::decode(b, out)) return true;
+    if (feron::decode(b, out)) return true;
+    if (martec::decode(b, out)) return true;
     return false;
 }
 
@@ -478,6 +645,8 @@ inline bool decodeHomeauto(const Burst& b, std::vector<Reading>& out) {
 inline bool homeautoBandOk(const Reading& r, double f) {
     if (r.make == "Honeywell" && r.model == "evohome") return f >= 863e6 && f <= 870e6;
     if (r.make == "Watts" && r.model == "WFHT-RF thermostat") return f >= 433.0e6 && f <= 435.0e6;
+    if (r.make == "Funkbus") return f >= 433.0e6 && f <= 435.0e6;
+    if (r.make == "Feron" || r.make == "Power Smart" || r.make == "Martec") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "ADLM FPRF") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "Insteon") return (f >= 902e6 && f <= 928e6) || (f >= 863e6 && f <= 870e6);
     return true;

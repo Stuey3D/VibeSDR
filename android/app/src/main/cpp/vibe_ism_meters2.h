@@ -279,10 +279,11 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace emt7110
 
-/** The second-pass meter families, strongest checks first. */
+/** The second-pass meter families, strongest checks first. (★ OWL is NOT here: decodeOne tries it after the fixed-code
+ *  remotes — a remote and a neighbour's OWL CM160 in one burst (corpus status-rc202) must give the remote, the
+ *  recording's own device; OWL's nibble sum is the weaker check.) */
 inline bool decodeMeters2(const Burst& b, std::vector<Reading>& out) {
     if (sparsnas::decode(b, out)) return true;
-    if (owl::decode(b, out)) return true;
     if (ec3k::decode(b, out)) return true;
     if (emt7110::decode(b, out)) return true;
     return false;

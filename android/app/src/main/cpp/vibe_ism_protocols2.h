@@ -513,6 +513,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (decodeRemotes(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
+    if (owl::decode(b, out)) return;          // ★ 2026-11-12: after the remotes (vibe_ism_meters2.h)
     if (tyre::decode(b, out)) return;
 }
 
