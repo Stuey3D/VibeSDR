@@ -292,6 +292,104 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace x10sec
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  PARADOX MAGELLAN (door contacts, PIR, smoke, remotes) — 433.92 OOK PWM: 200 µs = 1, 400 µs = 0, 600 µs a bit; an 800 µs
+//  header, 12 × 1, then a 1200 µs start pulse and 32 bits (LSB first): serial 16 · event (type door 1 / motion 2 / smoke
+//  3 / remote 4–7, state alarm · tamper bits, 8 reset, 9 battery low, A battery OK, B learn) · CRC-8 0x31 over the 3
+//  bytes as sent. Facts: rtl_433's paradox_magellan.c notes (from the Flipper Zero firmware's protocol description, with
+//  its worked example 37 AE 48 28 = serial 0x75EC, door, tamper — checked in test-ism).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace paradox {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    for (size_t i = 0; i + 64 < r.size(); ++i) {
+        if (r[i] < 950 || r[i] > 1500) continue;                 // the start pulse
+        // ≥ 10 short (1) pulses before it — the preamble
+        int ones = 0; for (size_t k = i; k >= 2 && ones < 12; k -= 2) { if (r[k - 2] > 120 && r[k - 2] < 290) ++ones; else break; }
+        if (ones < 10) continue;
+        Bits w;
+        for (size_t k = i + 2; k < r.size() && w.size() < 32; k += 2) {
+            const int m = r[k];
+            if (m > 120 && m < 290) w.push_back(1); else if (m >= 290 && m < 520) w.push_back(0); else break;
+        }
+        if (w.size() != 32) continue;
+        const auto by = bytesAt(w, 0, 4);
+        if (!by[0] && !by[1] && !by[2]) continue;
+        if (crc8(by.data(), 3, 0x31, 0) != by[3]) continue;
+        const int ev = kit::rev8(by[2]), type = ev >> 4, st = ev & 0xF;
+        const uint32_t id = uint32_t(kit::rev8(by[1])) << 8 | kit::rev8(by[0]);
+        const bool sensor = type >= 1 && type <= 3;
+        const char* sub = type == 1 ? "door" : type == 2 ? "motion" : type == 3 ? "smoke" : (type >= 4 && type <= 7) ? "remote" : "sensor";
+        Reading rd = alarmReading("Paradox", std::string("Magellan ") + sub, 16, id);
+        if (!sensor) rd.kind = "keyfob";
+        std::string w2;
+        if (sensor && st <= 3) { w2 = (st & 1) ? (type == 1 ? "open" : "alarm") : (type == 1 ? "closed" : "clear"); if (st & 2) addWord(w2, "tamper"); }
+        else if (st == 8) w2 = "reset"; else if (st == 0xB) w2 = "learn";
+        if (st == 9) rd.battOk = 0; else if (st == 0xA) rd.battOk = 1;
+        rd.extra = w2;
+        char evs[4]; std::snprintf(evs, sizeof evs, "%02x", ev);
+        rd.fact("event", (long long)ev);
+        if (sensor && st <= 3) { rd.fact("alarm", (long long)(st & 1)); rd.fact("tamper", (long long)((st >> 1) & 1)); }
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+} // namespace paradox
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  HONEYWELL ACTIVLINK door chimes, PIR and door/window contacts (RCWL300A/330A, Series 3/5/9, Decor) — 916.8 MHz (US)
+//  OOK / 868 MHz (EU) FSK, PWM ~160–175 µs = 1, ~320–340 µs = 0, 48 bits. Source: K. Lohner, "honeywell-wireless-doorbell"
+//  (github.com/klohner/honeywell-wireless-doorbell): ID 20 bits · device type (1 PIR, 2 doorbell, 5 contact) · alert
+//  2 bits · door open / closed · secret knock (tamper on a contact) · relay · battery low · an even parity over all 48.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace activlink {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    // ★ which FSK tone is the pulse matters: the other way round reads the complement — still even parity (48 bits),
+    //   and a doorbell (type 010) becomes a contact (101). Lohner's map has 15 bits that are always 0 (byte 2's low
+    //   nibble, byte 3's bit 7 and low nibble, byte 4's top six, byte 5's bit 7): the complement fails them. And twice
+    //   alike: one parity bit is all the check there is.
+    for (const Runs& rr : kit::keyedRuns(b)) {
+        const auto rows = slicePwm(rr, 170, 330, 450, true, 0.3);
+        for (const Bits& w : rows) {
+            if (w.size() != 48 || !kit::twice(rows, w)) continue;
+            const auto by = bytesAt(w, 0, 6);
+            int ones = 0; for (uint8_t x : w) ones += x;
+            if (ones & 1) continue;
+            if ((by[0] | by[1] | by[2] | by[3] | by[4] | by[5]) == 0) continue;
+            if (by[0] == 0xFF && by[2] == 0xFF && by[4] == 0xFF && by[5] == 0xFF) continue;
+            if ((by[2] & 0x0F) || (by[3] & 0x8F) || (by[4] & 0xFC) || (by[5] & 0x80)) continue;
+            const int type = (by[3] & 0x70) >> 4;
+            const char* sub = type == 1 ? "PIR-Motion" : type == 2 ? "Doorbell" : type == 5 ? "Contact" : nullptr;
+            if (!sub) continue;
+            const uint32_t id = uint32_t(by[0]) << 12 | uint32_t(by[1]) << 4 | (by[2] >> 4);
+            const int alertBits = by[4] & 3;
+            const bool knockOrTamper = by[5] & 0x10, relay = by[5] & 0x08, low = by[5] & 0x02;
+            const bool opened = by[5] & 0x20, closed = by[5] & 0x40;
+            Reading r = type == 2 ? Reading() : alarmReading("Honeywell", "ActivLink", 17, id);
+            if (type == 2) { r.kind = "doorbell"; r.make = "Honeywell"; r.model = "ActivLink doorbell"; r.secret = true; r.secretId = (uint64_t(17) << 40) | id; }
+            else r.model = type == 1 ? "ActivLink PIR" : "ActivLink contact";
+            std::string w2 = type == 5 ? (opened && !closed ? "open" : !opened && closed ? "closed" : "") : type == 1 ? "motion" : "";
+            if (alertBits == 3) addWord(w2, "full alarm");
+            if (type == 5 && knockOrTamper) addWord(w2, "tamper");
+            if (type == 2 && knockOrTamper) addWord(w2, "secret knock");
+            r.extra = w2;
+            r.battOk = low ? 0 : 1;
+            r.fact("subtype", sub); r.fact("alert", alertBits == 0 ? "Normal" : alertBits == 3 ? "Full" : "High");
+            r.fact("secret_knock", (long long)(type != 5 && knockOrTamper)); r.fact("tampered", (long long)(type == 5 && knockOrTamper));
+            r.fact("relay", (long long)relay); r.fact("open", (long long)(opened && !closed ? 1 : !opened && closed ? 0 : -1));
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace activlink
+
 /** The alarm-sensor families, strongest checks first. */
 inline bool decodeSecurity(const Burst& b, std::vector<Reading>& out) {
     if (honeywell::decode(b, out)) return true;
@@ -300,6 +398,8 @@ inline bool decodeSecurity(const Burst& b, std::vector<Reading>& out) {
     if (x10sec::decode(b, out)) return true;
     if (simplisafe::decode(b, out)) return true;
     if (genericmotion::decode(b, out)) return true;
+    if (paradox::decode(b, out)) return true;
+    if (activlink::decode(b, out)) return true;
     return false;
 }
 
