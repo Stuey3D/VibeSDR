@@ -37,6 +37,9 @@ const TABLE = [
   //    hardware panel and the web page — hwinfo `afc`), and the switch is kept in the radio's store beside the bookmarks, as the
   //    R36S keeps it; the server screen has no row of its own.
   N(['autoPpm'], 'auto-PPM is on by default; its switch, line, Reset and Turn off live in the radio menu (hwinfo afc), kept beside the bookmarks'),
+  // ★★ V12 2026-11-12 how listeners reach it: the phone's server can only register a Cloudflare tunnel (VibeTunnel.kt
+  //    sends kind:"tunnel"; there is no address box), so the three-way choice and the alias opt-out cannot work there.
+  N(['reachAuto', 'reachOwn', 'reachHttps', 'dirAlias'], 'the phone server is always the Automatic tunnel (VibeTunnel.kt) — an own address and the vibesdr.net alias opt-out need a direct listing it cannot make'),
   N(['srvPort'], 'the phone takes the first free port of 48000-48049 itself (one VibeServer per device)'),
   N(['rtlSerialNow', 'serialA', 'serialB'], 'radio serials that tell several radios apart on one box — a phone serves one radio'),
   N(['radioPin', 'radioPinClear'], 'a per-radio PIN on a multi-radio box — the phone has the server PIN (PIN — WHO MAY CONNECT)'),
