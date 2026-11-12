@@ -278,11 +278,159 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace efergy
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ITRON ERT (encoder receiver transmitter) utility meters, 902–928 MHz — SCM and SCM+. OOK Manchester, ~30.5 µs chips
+//  (16.384 kbit/s). Sources: bemasher, rtlamr wiki "Protocol" (github.com/bemasher/rtlamr/wiki/Protocol): SCM = a 21-bit
+//  preamble 0x1F2A60, then ID high bits · tamper · ERT type · encoder tamper · 24-bit consumption · ID low 24 bits ·
+//  BCH CRC, generator 0x6F63, over the 10 bytes from the third (0 when right); SCM+ = sync 0x16A31E, protocol ID ·
+//  endpoint type · 32-bit endpoint ID · 32-bit consumption · 16-bit tamper · CRC-16 (CCITT poly; rtl_433's scmplus.c
+//  gives the 0x0971 start that matches it) over bytes 2–13. Meter type from the endpoint type's low nibble (rtlamr's
+//  "Compatible meters" page). IDM / NetIDM (interval data): sync 0x16A31C, 92 bytes — endpoint type byte 6, ID bytes 7–10,
+//  last consumption bytes 27–30, CRC-16 (CCITT poly, start 0xD895 per rtl_433's ert_idm.c) over bytes 2–87 = bytes 88–89.
+//  ★ The meter's serial is shown (Stuart, 2026-10-25).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace ert {
+
+inline const char* meterType(int t) {
+    switch (t & 0xF) {
+        case 4: case 5: case 7: case 8: return "Electric";
+        case 0: case 1: case 2: case 9: case 12: return "Gas";
+        case 3: case 11: case 13: return "Water";
+        default: return nullptr;
+    }
+}
+
+/** Manchester bit rows of a burst at ~30.5 µs chips: both slices, both polarities, both pair phases, both conventions. */
+inline std::vector<Bits> rows(const Burst& b) {
+    std::vector<Bits> out;
+    for (const Bits& chips : kit::nrzRowsAny(b, 30.52, 8, 120))
+        for (int ph = 0; ph < 2; ++ph) {
+            // a row may hold several Manchester stretches: restart after each violation
+            size_t i = size_t(ph);
+            while (i + 1 < chips.size()) {
+                size_t end = 0;
+                Bits d = kit::manchesterAt(chips, i, 4000, true, &end);
+                if (d.size() >= 60) { out.push_back(d); out.push_back(invert(d)); }
+                i = end + 1;
+            }
+        }
+    return out;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const auto rs = rows(b);
+    for (const Bits& d : rs) {
+        for (size_t s : kit::findAll(d, 0x1F2A60, 21)) {      // SCM
+            if (s + 96 > d.size()) break;
+            const auto by = bytesAt(d, s, 12);
+            if (!by[0] && !by[1] && !by[2] && !by[3]) continue;
+            if (crc16(by.data() + 2, 10, 0x6F63, 0) != 0) continue;
+            const uint32_t id = uint32_t(by[2] & 0x06) << 23 | uint32_t(by[7]) << 16 | uint32_t(by[8]) << 8 | by[9];
+            const int type = (by[3] >> 2) & 0xF;
+            const uint32_t cons = uint32_t(by[4]) << 16 | uint32_t(by[5]) << 8 | by[6];
+            Reading r;
+            r.kind = "energy"; r.make = "Itron ERT"; r.model = std::string("SCM ") + (meterType(type) ? meterType(type) : "meter");
+            r.pubId = std::to_string(id);
+            r.extra = "reading " + std::to_string(cons);
+            if (by[3] & 0xC0) r.extra += " \xc2\xb7 tamper";
+            r.fact("id", (long long)id); r.fact("ert_type", (long long)type); r.fact("consumption_data", (long long)cons);
+            r.fact("physical_tamper", (long long)((by[3] & 0xC0) >> 6)); r.fact("encoder_tamper", (long long)(by[3] & 3));
+            out.push_back(r);
+            return true;
+        }
+        for (size_t s : kit::findAll(d, 0x16A31E, 24)) {      // SCM+
+            if (s + 128 > d.size()) break;
+            const auto by = bytesAt(d, s, 16);
+            if (crc16(by.data() + 2, 12, 0x1021, 0x0971) != uint16_t(by[14] << 8 | by[15])) continue;
+            const uint32_t id = uint32_t(by[4]) << 24 | uint32_t(by[5]) << 16 | uint32_t(by[6]) << 8 | by[7];
+            const uint32_t cons = uint32_t(by[8]) << 24 | uint32_t(by[9]) << 16 | uint32_t(by[10]) << 8 | by[11];
+            const char* mt = meterType(by[3]);
+            Reading r;
+            r.kind = "energy"; r.make = "Itron ERT"; r.model = std::string("SCM+ ") + (mt ? mt : "meter");
+            r.pubId = std::to_string(id);
+            r.extra = "reading " + std::to_string(cons);
+            r.fact("id", (long long)id); r.fact("Consumption", (long long)cons);
+            char et[8]; std::snprintf(et, sizeof et, "0x%02X", by[3]); r.fact("EndpointType", et);
+            out.push_back(r);
+            return true;
+        }
+        for (size_t s : kit::findAll(d, 0x16A31C, 24)) {      // IDM / NetIDM: 92 bytes
+            if (s + 90 * 8 > d.size()) break;              // to the end of the CRC (the trailer is not needed)
+            const auto by = bytesAt(d, s, 90);
+            if (crc16(by.data() + 2, 86, 0x1021, 0xD895) != uint16_t(by[88] << 8 | by[89])) continue;
+            const uint32_t id = uint32_t(by[7]) << 24 | uint32_t(by[8]) << 16 | uint32_t(by[9]) << 8 | by[10];
+            const uint32_t last = uint32_t(by[27]) << 24 | uint32_t(by[28]) << 16 | uint32_t(by[29]) << 8 | by[30];
+            const char* mt = meterType(by[6]);
+            Reading r;
+            r.kind = "energy"; r.make = "Itron ERT"; r.model = std::string("IDM ") + (mt ? mt : "meter");
+            r.pubId = std::to_string(id);
+            r.extra = "reading " + std::to_string(last);
+            r.fact("id", (long long)id); r.fact("ERTType", (long long)by[6]); r.fact("LastConsumptionCount", (long long)last);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace ert
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  NEPTUNE R900 water-meter radios (E-CODER / MACH 10), 902–928 MHz — OOK, 30 µs chips. Sources: bemasher, rtlamr wiki
+//  "Protocol" § R900 consumption message (ID 32 · unknown 8 · no-use 6 · backflow · consumption 24 · leak · leak now) and
+//  issue #29; the 4-chip → base-6 symbols (0011 0, 0101 1, 0110 2, 1100 3, 1010 4, 1001 5), the 5-bit packing of each
+//  digit pair and the preamble …55 55 55 A9 66 69 65 from rtl_433's neptune_r900.c notes. The 42 symbols, every one of
+//  six valid 4-chip codes, are the check. Consumption: plain binary with 3 wrap bits above it, or six BCD digits on some
+//  meters (T-10) — the frame does not say which, so a value that is valid BCD is shown both ways.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace r900 {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    static const int sym[16] = {-1, -1, -1, 0, -1, 1, 2, -1, -1, 5, 4, -1, 3, -1, -1, -1};
+    for (const Bits& row : kit::nrzRowsAny(b, 30.0, 12, 200)) {
+        for (size_t s : kit::findAll(row, 0xA9666965, 32)) {
+            if (s < 24 || bitsAt(row, s - 24, 24) != 0x555555 || s + 32 + 168 > row.size()) continue;
+            Bits pk; bool ok = true;
+            for (size_t k = 0; k < 21 && ok; ++k) {
+                const uint32_t by = bitsAt(row, s + 32 + 8 * k, 8);
+                const int hi = sym[by >> 4], lo = sym[by & 0xF];
+                if (hi < 0 || lo < 0) { ok = false; break; }
+                const int v = 6 * hi + lo;
+                for (int q = 4; q >= 0; --q) pk.push_back((v >> q) & 1);
+            }
+            if (!ok) continue;
+            const auto x = bytesAt(pk, 0, 13);
+            const uint32_t id = uint32_t(x[0]) << 24 | uint32_t(x[1]) << 16 | uint32_t(x[2]) << 8 | x[3];
+            const uint32_t raw = uint32_t(x[6]) << 16 | uint32_t(x[7]) << 8 | x[8];
+            const uint32_t bin = uint32_t(x[9] >> 5) << 24 | raw;
+            bool isBcd = true; uint32_t bcd = 0;
+            for (int i = 5; i >= 0; --i) { const uint32_t dgt = (raw >> (4 * i)) & 0xF; if (dgt > 9) isBcd = false; bcd = bcd * 10 + dgt; }
+            const int leak = ((x[9] >> 1) & 0x0F) >> 1, leakNow = x[9] & 3, back = x[5] & 3;
+            Reading r;
+            r.kind = "energy"; r.make = "Neptune"; r.model = "R900 water meter";
+            r.pubId = std::to_string(id);
+            r.extra = "reading " + std::to_string(bin) + (isBcd ? " (or " + std::to_string(bcd) + ")" : "");
+            if (leakNow) r.extra += leakNow == 2 ? " \xc2\xb7 continuous leak" : " \xc2\xb7 intermittent leak";
+            if (back) r.extra += " \xc2\xb7 backflow";
+            r.fact("id", (long long)id); r.fact("metertype", (long long)(x[4] & 0xF));
+            r.fact("leak", (long long)leak); r.fact("leaknow", (long long)leakNow); r.fact("backflow", (long long)back);
+            if (!isBcd) r.fact("consumption", (long long)bin);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace r900
+
 /** The meter and monitor families, strongest checks first. */
 inline bool decodeMeters(const Burst& b, std::vector<Reading>& out) {
     if (oiltank::decode(b, out)) return true;
     if (emontx::decode(b, out)) return true;
     if (efergy::decode(b, out)) return true;
+    if (ert::decode(b, out)) return true;
+    if (r900::decode(b, out)) return true;
     return false;
 }
 

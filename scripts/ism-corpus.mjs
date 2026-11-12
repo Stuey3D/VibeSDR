@@ -77,7 +77,11 @@ function compare(ours, exp) {
         if (typeof v === 'number' && typeof w === 'number') { if (Math.abs(v - w) <= Math.max(0.0051, Math.abs(w) * 0.001)) ++same; }
         else if (String(v).toLowerCase() === String(w).toLowerCase()) ++same;
       }
-      if (shared) { comparable = true; if (same === shared) agree = true; }
+      // ★ an ID alone says nothing about WHICH device it is (another sensor in the same recording — a US capture
+      //   holds the neighbours' ERT meters — shares the key "id" and nothing else): it must come with a fact of the
+      //   device's own kind to be compared
+      const onlyId = shared === 1 && 'id' in o.facts && 'id' in e;
+      if (shared && !onlyId) { comparable = true; if (same === shared) agree = true; }
     }
   }
   return { comparable, agree };
