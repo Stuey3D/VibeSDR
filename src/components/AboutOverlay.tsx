@@ -58,6 +58,9 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 2026-11-12 — LoRa FOUND ON AIR (vibe_lora_discover.h, docs/v12/LORA-MESH.md §Found on air). Stuart: in ISM mode
+  //    "we decoded the entire band that is visible on screen" — Kiko's 915 band had 81 bursts and LoRa 0.
+  { v: 'V12 (experimental)', detail: 'ISM MODE FINDS LoRa WHERE NO CHANNEL LIST LOOKS \u2014 LoRa used to be listened for only on the channels each band\u2019s networks are known to use. The server now also watches the whole band on screen for bursts shaped like LoRa (the right width, flat, sweeping across it), and when they repeat on a frequency nothing is listening to, it starts listening there, works out the spreading factor by trying the likely ones, and keeps what decodes. What it hears there is marked \u201cfound on air\u201d in the list and on the map, the status line counts those channels separately (\u201c13 of 16 channels + 1 found on air\u201d), and the receiver remembers them, so after a restart it listens there straight away. Weather stations, tyre sensors and meters are never mistaken for LoRa, and a small server only adds found channels while it has the CPU to spare.' },
   // ★★ V12 2026-11-12 — the 902–928 MHz mesh bands (vibe_ism_bands.h, vibe_lora_service.h planFor, docs/v12/LORA-MESH.md
   //    §Plans). Stuart: "we are missing an ISM/meshcore band" — Kiko's server in Brazil had nothing to decode (MeshCore
   //    Brasil is on 923.125 MHz). Five captures in 902–928, each where a region's mesh is; landing by the receiver's region.

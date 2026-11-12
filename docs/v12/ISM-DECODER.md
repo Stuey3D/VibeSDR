@@ -138,6 +138,10 @@ Brazil had nothing to decode). An RTL holds ~2 MHz, so 902–928 is five capture
 the step order is frequency order and stays at eight bands (every client draws at most eight). Channels, sources and
 tiers: LORA-MESH.md §Plans.
 
+★ V12 2026-11-12 — **LoRa found on air**: besides the plan channels, LoRa searches the whole capture for LoRa-shaped
+bursts and starts a detector where they repeat (LORA-MESH.md §Found on air). Sensor decoding is untouched: LoRa has
+its own threads and queue, found channels run only within the CPU budget, and the search is skipped where none could.
+
 - The radio sits a little **above** the band's middle so its DC remnant misses the busy channel, never so far that the
   band's far edge leaves the capture (`ismHwCentre`). The readout shows the band's centre and name, never the offset.
 - **Each tune step** — the arrows, the drum, the keyboard's tune keys, a pad's tune — **moves ONE band** among those
