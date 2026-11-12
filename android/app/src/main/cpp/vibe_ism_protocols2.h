@@ -17,6 +17,7 @@
 #include "vibe_ism_weather11.h"  // ★ weather pass 2026-11-11: TFA Drop, Inkbird ITH-20R
 #include "vibe_ism_weather12.h"  // ★ weather pass 2 2026-11-12: La Crosse View (LTV), Bresser garden
 #include "vibe_ism_weather13.h"  // ★ weather pass 2 2026-11-12: ThermoPro FSK, WG-PB12V1, Thermor, Maverick ET-73
+#include "vibe_ism_weather14.h"  // ★ weather pass 2 2026-11-12: AOK / Holman WS5029, TS-FT002, TTX201, WS SENZOR
 #include "vibe_ism_tpms.h"     // ★ V12 2026-11-11: tyre-pressure sensors, make by make
 #include "vibe_ism_kit.h"        // ★ V12 2026-11-11: the home families' tools (Current Cost uses its NRZ rows)
 
@@ -489,6 +490,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (fofsk::decode(b, out)) return;
     if (wx12::decode(b, out)) return;
     if (wx13::decode(b, out)) return;
+    if (wx14::decode(b, out)) return;
     if (fineoffset::decodeWh1080(b, out)) return;
     if (fineoffset::decodeWh2(b, out)) return;
     if (sl109h::decode(b, out)) return;      // ★ before the 609: a background 609 inside an SL109H's channel must not win
@@ -511,6 +513,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (decodeSecurity(b, out)) return;
     if (decodeRemotes(b, out)) return;
     if (wx13::decodeWeak(b, out)) return;   // ★ no published check: after every family with one
+    if (wx14::decodeWeak(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
     if (tyre::decode(b, out)) return;

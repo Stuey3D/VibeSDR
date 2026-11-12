@@ -178,6 +178,28 @@ inline bool alectoProlog(const Burst& b, std::vector<Reading>& out) {
         return true;
     }
     if (wx8::twinPlus(b, out)) return true;   // a 4-bit sum and a fixed bit: before the unchecked Prologue
+    /* ★ weather pass 2 (2026-11-12): Springfield PreciseTemp soil moisture + temperature (rtl_433 springfield.c notes)
+     *  — the same line code and 36 / 37 bits: ID 8 · battery low · button · channel 2 · temperature 12 (signed, / 10 °C)
+     *  · moisture 0–10 · a nibble whose XOR with nibbles 0–6 is 0 · 4 unknown. Three copies alike; an ID whose top nibble
+     *  is 9 or 5 is left to the Prologue (whose type nibble it would be), and confirm. */
+    for (size_t i = 0; i < msgs.size(); ++i) {
+        const auto& m = msgs[i];
+        if (m.size() > 5 || (m[0] >> 4) == 9 || (m[0] >> 4) == 5) continue;
+        const unsigned x = wx::xorBytes(m.data(), 4);
+        if (((x >> 4) ^ (x & 0xF)) != 0 || (m[0] | m[1] | m[2] | m[3]) == 0 || (m[0] & m[1] & m[2] & m[3]) == 0xFF) continue;
+        int same = 0; for (const auto& o : msgs) if (o == m) ++same;
+        if (same < 3) continue;
+        const double t = (int16_t((m[1] & 0xF) << 12 | m[2] << 4) >> 4) / 10.0;
+        const int moist = (m[3] >> 4) * 10;
+        if (t < -30 || t > 70 || moist > 100) continue;
+        Reading r = wx::wxReading("Springfield", "PreciseTemp soil", wx::hex(m[0], 2));
+        r.battOk = (m[1] & 0x80) ? 0 : 1; r.channel = ((m[1] >> 4) & 3) + 1; r.tempC = t;
+        char e[32]; std::snprintf(e, sizeof e, "soil moisture %d %%", moist); r.extra = e;
+        r.fact("moisture", (long long)moist);
+        r.confirm = true;
+        out.push_back(r);
+        return true;
+    }
     // Prologue: three copies alike (the AlectoV1's check was tried first), type 9 or 5. ★ Two sensors in one burst are
     //  common (the corpus: a second Prologue's copies interleaved with the first's) — each is read.
     bool any = false;

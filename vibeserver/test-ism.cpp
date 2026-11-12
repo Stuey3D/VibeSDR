@@ -728,6 +728,71 @@ static Runs tx2cTx(int id, int ch, double t, int h) {
     w.resize(45, 0);
     return ppmRows(w, 452, 1958, 3825, 8550, 8);
 }
+/** AOK / Holman WS5029 PCM: FSK NRZ 100 µs, AA × 6, 98 F3 A5, 13 bytes with the XOR digest, three copies. */
+static Runs aokPcmTx(uint16_t id, double t, int h, int rain, int wind, int dir) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    std::vector<uint8_t> m = {uint8_t(id >> 8), uint8_t(id), uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4 | h >> 4), uint8_t((h & 0xF) << 4 | rain >> 8),
+                              uint8_t(rain), uint8_t(wind), uint8_t(dir << 4), 0, 0, 0, 0};
+    m.push_back(wx14::aokDigest(uint8_t(wx::xorBytes(m.data(), 12))));
+    Tx tx;
+    for (int k = 0; k < 3; ++k) {   // the copies 1.5 ms apart, the carrier off between (Sig::fskOffOverUs)
+        std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x98, 0xF3, 0xA5}; f.insert(f.end(), m.begin(), m.end()); f.insert(f.end(), {0x0D, 0x55});
+        for (int d : nrzFsk(bytesToBits(f), 100)) tx.add(d);
+        tx.space(1500);
+    }
+    return tx.r;
+}
+/** Holman WS5029 PWM: FSK, a bit = 488 µs (1) or 976 µs (0) of one tone, the other tone to a 1464 µs period; 96 bits
+ *  inverted, three times. */
+static Runs holmanPwmTx(int id, double t, int h, int rain, int wind, int dir) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    std::vector<uint8_t> m = {0xAA, 0xA5, 0x98, uint8_t(id), uint8_t(raw >> 8), uint8_t(raw), uint8_t(h), uint8_t(rain >> 4),
+                              uint8_t((rain & 0xF) << 4 | wind >> 4), uint8_t((wind & 0xF) << 4 | dir), 0, 0};
+    m[10] = wx14::holmanCheck(m.data(), 10);
+    Tx tx;
+    for (int k = 0; k < 3; ++k) {
+        for (uint8_t x : bytesToBits(m)) { const double hi = x ? 976 : 488; tx.mark(hi); tx.space(1464 - hi); }   // inverted on air
+        tx.space(3000);
+    }
+    return tx.r;
+}
+/** TS-FT002: OOK PPM 500 µs marks, 464 / 948 µs spaces, 9 bytes LSB first, two packets 1.9 ms apart. */
+static Runs tsft002Tx(int id, int depth, double t) {
+    const int traw = int(std::lround(t * 10)) + 400;
+    std::vector<uint8_t> m = {0xFA, uint8_t(id), 0x11, uint8_t(depth >> 4), uint8_t(depth & 0xF), uint8_t(traw & 0xF), uint8_t(traw >> 4), 0};
+    for (auto& v : m) v = wx::rev8(v);
+    m.push_back(uint8_t(wx::xorBytes(m.data(), 8)));
+    Tx tx;
+    for (int k = 0; k < 2; ++k) { for (uint8_t x : bytesToBits(m)) { tx.mark(500); tx.space(x ? 948 : 464); } tx.mark(500); tx.space(1876); }
+    return tx.r;
+}
+/** Emos TTX201: OOK Manchester 500 µs halves, 17-bit zero preamble, 8 packets of 54 bits 1.5 ms apart. */
+static Runs ttx201Tx(int id, int ch, double t) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    Tx tx;
+    manchesterTx(tx, Bits(17, 0), 500, 0);
+    for (int x = 0; x < 8; ++x) {
+        std::vector<uint8_t> m = {0, uint8_t(id), uint8_t(ch - 1), uint8_t(x << 4 | raw >> 8), uint8_t(raw), 0x14};
+        m[0] = uint8_t(wx::addNibbles(m.data() + 1, 5) & 0x3F);
+        Bits w = bitsOf(0, 2); const Bits d = bytesToBits(m); w.insert(w.end(), d.begin(), d.end()); for (int k = 0; k < 4; ++k) w.push_back(1);
+        manchesterTx(tx, w, 500, 0);
+        tx.space(1500);
+    }
+    return tx.r;
+}
+/** Hyundai WS SENZOR: OOK PPM 224 µs marks, 1032 / 1992 µs spaces, 24 bits × 23, 4 ms apart. */
+static Runs wsSenzorTx(int id, int ch, double t) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    return ppmRows(bytesToBits({uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4 | 0x08 | (ch - 1)), uint8_t(id)}), 224, 1032, 1992, 4016, 23);
+}
+/** Springfield PreciseTemp: the Prologue's line code (500 µs marks, 2 / 4 ms spaces), 37 bits with the nibble XOR. */
+static Runs springfieldTx(int id, int ch, double t, int moist10) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    uint8_t m[5] = {uint8_t(id), uint8_t((ch - 1) << 4 | raw >> 8), uint8_t(raw), uint8_t(moist10 << 4), 0};
+    unsigned x = wx::xorBytes(m, 4); x = (x >> 4) ^ (x & 0xF); m[3] = uint8_t(m[3] | x);
+    Bits w = bytesToBits({m[0], m[1], m[2], m[3], m[4]}); w.resize(37);
+    return ppmRows(w, 500, 2000, 4000, 9000, 6);
+}
 
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
@@ -1166,6 +1231,12 @@ int main(int argc, char** argv) {
     cases.push_back({"Thermor DG950", {dg950Tx(145, 20.7, 3)}, "DG950", 20.7});
     cases.push_back({"Maverick ET-73", {et73Tx(0x68, 0.0, 26.7)}, "ET-73", 0.0});
     cases.push_back({"ThermoPro TX-2C", {tx2cTx(0x45, 2, 21.3, 72)}, "TX-2C", 21.3});
+    { Sig s{aokPcmTx(0xD201, 16.0, 48, 1, 1, 8)}; s.fsk = true; s.devHz = 40e3; s.fskOffOverUs = 1200; cases.push_back({"Holman WS5029 (PCM)", s, "WS5029 / AOK", 16.0}); }
+    { Sig s{holmanPwmTx(0x4C, 22.3, 35, 23, 3, 13)}; s.fsk = true; s.devHz = 25e3; cases.push_back({"Holman WS5029 (PWM)", s, "WS5029 station", 22.3}); }
+    cases.push_back({"TS-FT002", {tsft002Tx(0xB6, 100, 21.4)}, "tank level", 21.4});
+    cases.push_back({"Emos TTX201", {ttx201Tx(0xC2, 1, 26.4)}, "TTX201", 26.4});
+    cases.push_back({"Hyundai WS SENZOR", {wsSenzorTx(0x8A, 1, -0.1)}, "WS SENZOR", -0.1});
+    cases.push_back({"Springfield", {springfieldTx(0xD4, 1, 20.6, 8)}, "PreciseTemp", 20.6});
     {   // ★ weather pass 2: the checks restated from the notes, held to the notes' own worked frames
         const uint8_t a[] = {0x01, 0x1E, 0xD6, 0x03, 0x6C, 0xAA}, c[] = {0x01, 0x1E, 0xD6, 0x02, 0xFA, 0xAA};
         CHECK(wx13::tp211bCheck(a, 6) == 0x14FF && wx13::tp211bCheck(c, 6) == 0xC41E, "TP211B check on the notes' frames");
