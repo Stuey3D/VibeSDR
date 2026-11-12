@@ -840,6 +840,28 @@ inline bool trwChrysler(Chips& ch, std::vector<Reading>& out) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  KIA RIO III (UB, 2011-2017) and some Hyundai — facts: rtl_433 tpms_kia.c notes. FSK ~50 µs chips, a 16-chip sync
+//  "1110 1101 0111 0001", then 69 Manchester bits ((0,1) = 1): 4 unknown, pressure (raw ÷ 5 PSI), temperature
+//  (°C + 50), ID (32), 12 unknown, and the top 5 bits of a CRC-8 poly 0x07 init 0x76 over the eight bytes before it.
+//  Sent only while the wheel turns (≥ ~40 km/h). WEAK: 5 bits of CRC — confirm. Not in the corpus as a recording.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool kia(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 50, "1110 1101 0111 0001", 69, false, [&](const std::vector<uint8_t>&, const Bits& d) {
+        Bits b = d; b.resize(72, 0);
+        const auto by = pack(b);
+        if ((crc8(by.data(), 8, 0x07, 0x76) & 0xF8) != (by[8] & 0xF8) || allSame(by.data(), 8)) return false;
+        const uint32_t id = bitsAt(d, 20, 32);
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("Kia / Hyundai", "Kia Rio III", 35, id, true);
+        r.kpa = bitsAt(d, 4, 8) / 5.0 * kPaPerPsi;
+        r.tempC = int(bitsAt(d, 12, 8)) - 50;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  JANSITE TY02S (solar, internal / external) — aftermarket. Facts: rtl_433 tpms_jansite.c notes: the VDO-style run-in
 //  (…aaa9), then 7 bytes — ID (28), status (4), pressure (raw × 1.7 kPa), temperature (°C + 50), and a last byte whose
 //  rule nobody has found (rtl_433 leaves this decoder OFF for that reason; we could not find it either — no CRC-8 of any
@@ -1092,6 +1114,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (truck(ch, out)) return true;
     if (smartire(ch, out)) return true;
     if (eezTire(ch, out)) return true;
+    if (kia(ch, out)) return true;
     if (gearHive(ch, out)) return true;  // no check at all, only fixed bits
     if (jansite(ch, out)) return true;   // no check at all, only a fixed trailer: after everything else
     return false;

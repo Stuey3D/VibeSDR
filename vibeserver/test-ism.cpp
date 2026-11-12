@@ -455,6 +455,17 @@ static Runs trwTx(uint32_t id, int pRaw, int tC) {
     return chipsToRuns(c + "0", 52);
 }
 
+// Kia Rio III: FSK 50 µs, sync 1110 1101 0111 0001, Manchester (0,1) = 1: 4 bits, ÷5 PSI, °C + 50, ID (32), 12 bits, CRC-8
+// 0x07 init 0x76 cut to its top 5 bits.
+static Runs kiaTx(uint32_t id, int pRaw, int tC) {
+    Bits d = bitsOf(0xF, 4);
+    for (const Bits& x : {bitsOf(uint64_t(pRaw), 8), bitsOf(uint64_t(tC + 50), 8), bitsOf(id, 32), bitsOf(0x3A5, 12)}) d.insert(d.end(), x.begin(), x.end());
+    std::vector<uint8_t> by; for (size_t i = 0; i < 8; ++i) by.push_back(uint8_t(bitsAt(d, 8 * i, 8)));
+    const Bits c5 = bitsOf(crc8(by.data(), 8, 0x07, 0x76) >> 3, 5); d.insert(d.end(), c5.begin(), c5.end());
+    std::string c = "1010 1010 1110 1101 0111 0001"; mcChips(c, d, false);
+    return chipsToRuns(c + "10", 50);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -638,6 +649,7 @@ int main(int argc, char** argv) {
             {"TyreGuard 400", tyreGuardTx(0x6B20D21, 232, 7), false, 100, "TyreGuard", 232, 7, false},
             {"Schrader RDC3 moto", motoTx(0x420B3D, 0x2DC, 33), false, 122, "RDC3", 0x2DC * 0.5, 33, false},
             {"TRW Chrysler", trwTx(0x3E52852E, 83, 25), false, 52, "TRW (Chrysler", 83 * 0.4 * 6.894757, 25, false},
+            {"Kia Rio III", kiaTx(0x1A2B3C4D, 165, 30), true, 50, "Kia Rio", 165 / 5.0 * 6.894757, 30, true},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},
@@ -660,6 +672,25 @@ int main(int argc, char** argv) {
             else CHECK(r->tempC != r->tempC, "TPMS %s: a temperature the frame does not carry", t.name);
             for (const auto& o : got) CHECK(o.kind == "tpms" && o.model == r->model, "TPMS %s: also read as %s %s", t.name, o.kind.c_str(), o.model.c_str());
             printf("   %-18s → %s%s\n", t.name, readable(*r, 1).c_str(), r->confirm ? "  (confirm twice)" : "");
+        }
+        // ★ ONE FRAME OR TWO (Tracker::accept): a strongly checked make is listed from its first frame; a weakly checked
+        //   one only once heard twice alike — and a weak frame heard once takes no nickname (no holes in "TPMS #n")
+        {
+            std::vector<Reading> v;
+            Burst s; s.ook = schraderGG4Tx(0x1111111, 90, 20); tyre::decode(s, v);
+            Burst w; w.fsk = fordTx(0x22222222, 130, 15); w.ook = {int(200 * 52)}; tyre::decode(w, v);
+            Burst w2; w2.fsk = fordTx(0x33333333, 128, 16); w2.ook = {int(200 * 52)}; tyre::decode(w2, v);
+            CHECK(v.size() == 3 && !v[0].confirm && v[1].confirm && v[2].confirm, "confirm setup: %zu readings", v.size());
+            if (v.size() == 3) {
+                Tracker tr;
+                CHECK(tr.accept(v[0], 1.0) && tr.size() == 1, "a strong TPMS frame is listed at once");
+                CHECK(!tr.accept(v[2], 2.0) && tr.size() == 1, "a weak TPMS frame heard once is not listed");
+                CHECK(!tr.accept(v[1], 3.0) && tr.size() == 1, "nor another");
+                CHECK(tr.accept(v[1], 4.0) && tr.size() == 2, "the weak one heard twice alike is listed");
+                const std::string j = tr.json(4.0);
+                CHECK(j.find("TPMS #2 \xc2\xb7 Ford") != std::string::npos && j.find("TPMS #3") == std::string::npos,
+                      "the confirmed weak one is TPMS #2 (the unconfirmed one took no number): %s", j.substr(0, 300).c_str());
+            }
         }
         // ★ three frames 11 ms apart in ONE burst, the carrier off between them (the EGQ Q85 on the corpus): the front end's
         //   gated discriminator must still hand the decoders FSK
