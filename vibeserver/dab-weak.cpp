@@ -20,6 +20,12 @@
 //                       service on the same samples (the two-listener case)
 //     --offset2 HZ     default -1500000
 //     --sid2 HEX       the second clip's service
+//     --drift-rate HZ/S ★ A SLOWLY DRIFTING RECEIVER (2026-11-12, the B210 TCXO report): the frequency offset walks at
+//                       this rate as a triangle 0 → +max → -max → +max …, on top of --shift      default 0 (off)
+//     --drift-max HZ   the triangle's peak                                                     default 1500
+//     --ppm P          ★ a SAMPLE-CLOCK error of P ppm: the clip is resampled as a receiver whose clock runs P ppm fast
+//                       would see it (more samples per second of air). Pair with --shift P*centre for a whole-crystal error
+//     --trace 1        one line a second: offset, carrier shift, MER, lock, erased, re-acquisitions, super frames
 //     --paired 1       wide only: add the noise at the clip's rate BEFORE the up-sampler — the very samples the native run
 //                       gets — so native against wide is an A/B of the two front ends on identical noise
 //     --tii LAT,LON    ★ TII replay (2026-11-04): give the service the compiled-in directory (UK + CH) and this
@@ -79,6 +85,62 @@ struct Mix {
             const double re = x[2 * i] * c - x[2 * i + 1] * s, im = x[2 * i] * s + x[2 * i + 1] * c;
             x[2 * i] = float(re); x[2 * i + 1] = float(im);
             ph += step; if (ph > M_PI) ph -= 2 * M_PI; else if (ph < -M_PI) ph += 2 * M_PI;
+        }
+    }
+};
+
+/** ★ A FRACTIONAL RESAMPLER for --ppm (the TEST GENERATOR): a 48-tap Kaiser-windowed sinc, tabulated at 4096 phases
+ *  (a quarter-millisample of timing quantisation — far below anything the receiver can see), evaluated at every
+ *  output's own fractional position. Output k sits at input position k*(1-ppm), so a receiver clock P ppm fast sees
+ *  P ppm more samples per second of air. Streams: keeps its tail across calls. */
+struct PpmResampler {
+    double step = 1.0, pos = 0.0; std::vector<float> buf, tab; static constexpr int T = 48, P = 4096;
+    static double bessel0(double x) { double s = 1, t = 1; for (int k = 1; k < 40; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); s += t; } return s; }
+    void set(double ppm) {
+        step = 1.0 / (1.0 + ppm * 1e-6); buf.assign(size_t(2 * T), 0.0f); pos = double(T / 2);
+        tab.assign(size_t(P + 1) * T, 0.0f);
+        const double ib = 1.0 / bessel0(8.0);
+        for (int ph = 0; ph <= P; ++ph) {
+            const double fr = double(ph) / P;
+            for (int j = 0; j < T; ++j) {
+                const double x = double(j - T / 2 + 1) - fr;
+                const double sinc = std::fabs(x) < 1e-12 ? 1.0 : std::sin(M_PI * x) / (M_PI * x);
+                const double r = x / (T / 2.0);
+                tab[size_t(ph) * T + size_t(j)] = float(std::fabs(r) >= 1.0 ? 0.0 : sinc * bessel0(8.0 * std::sqrt(1 - r * r)) * ib);
+            }
+        }
+    }
+    void run(const float* in, size_t n, std::vector<float>& out) {
+        buf.insert(buf.end(), in, in + 2 * n);
+        const size_t have = buf.size() / 2;
+        out.clear();
+        while (pos + T / 2 + 1 < double(have)) {
+            const long i0 = long(std::floor(pos));
+            const float* h = &tab[size_t(std::lrint((pos - double(i0)) * P)) * T];
+            const float* x = &buf[size_t(2 * (i0 - T / 2 + 1))];
+            float re = 0, im = 0;
+            for (int j = 0; j < T; ++j) { re += h[j] * x[2 * j]; im += h[j] * x[2 * j + 1]; }
+            out.push_back(re); out.push_back(im);
+            pos += step;
+        }
+        const long keep = long(std::floor(pos)) - T;   // drop what no later output can reach
+        if (keep > 0) { buf.erase(buf.begin(), buf.begin() + 2 * keep); pos -= double(keep); }
+    }
+};
+
+/** ★ A drifting oscillator for --drift-rate: the frequency follows a triangle 0 → +max → -max → +max at `rate` Hz/s,
+ *  advanced per SAMPLE (phase continuous), so the receiver sees a TCXO warming, not steps. */
+struct Drift {
+    double ph = 0, f = 0, dir = 1, rate = 0, max = 1500, fs = 1;
+    void run(float* x, size_t n) {
+        if (rate == 0) return;
+        const double df = rate / fs;
+        for (size_t i = 0; i < n; ++i) {
+            const double c = std::cos(ph), s = std::sin(ph);
+            const double re = x[2 * i] * c - x[2 * i + 1] * s, im = x[2 * i] * s + x[2 * i + 1] * c;
+            x[2 * i] = float(re); x[2 * i + 1] = float(im);
+            ph += 2.0 * M_PI * f / fs; if (ph > M_PI) ph -= 2 * M_PI; else if (ph < -M_PI) ph += 2 * M_PI;
+            f += dir * df; if (f > max) { f = max; dir = -1; } else if (f < -max) { f = -max; dir = 1; }
         }
     }
 };
@@ -202,6 +264,7 @@ int main(int argc, char** argv) {
     bool to2048 = false;               //   fake radio's clips (test-server-dab-wide.mjs); --to2048 1 resamples a 2.4 clip to
     double centreOut = 0;              //   2.048 first (the native path's own converter); --centre-out HZ = the header centre
     bool loop = false;
+    double driftRate = 0, driftMax = 1500, ppm = 0; bool trace = false;
     const char* tiiPos = nullptr; bool tiiNoDir = false;
     bool paired = false;   // ★ --paired 1: the noise goes in at the CLIP's rate before the up-sampler, so the wide path sees
                            //   exactly the in-band noise the native path does (an A/B of the front ends alone)
@@ -217,6 +280,10 @@ int main(int argc, char** argv) {
         else if (a == "--paired") paired = std::atoi(v) != 0;
         else if (a == "--loop") loop = std::atoi(v) != 0;   // ★ replay a short clip (the 5.76 s bench clips are seamless loops)
         else if (a == "--write") writePath = v;
+        else if (a == "--drift-rate") driftRate = std::atof(v);
+        else if (a == "--drift-max") driftMax = std::atof(v);
+        else if (a == "--ppm") ppm = std::atof(v);
+        else if (a == "--trace") trace = std::atoi(v) != 0;
         else if (a == "--tii") tiiPos = v;
         else if (a == "--tii-nodir") tiiNoDir = std::atoi(v) != 0;
         else if (a == "--to2048") to2048 = std::atoi(v) != 0;
@@ -273,6 +340,11 @@ int main(int argc, char** argv) {
 
     Mix m1, m2, w1, w2; m1.set(shift, rate); m2.set(shift2, rate);
     Upsampler up1, up2;
+    Drift drift; drift.rate = driftRate; drift.max = driftMax; drift.fs = rate;
+    PpmResampler ppmRs; if (ppm != 0) ppmRs.set(ppm);
+    std::vector<float> ppmOut;
+    // ★ the trace's running counts (re-acquisitions and erasures are cumulative in the report)
+    double trNext = 1.0; double minMer = 1e9; int worstSec = -1; double lastSf = 0, lastTried = 0, sfDropSecs = 0;
     if (wide > 0) { up1.design(rate, wide); w1.set(offset, wide); if (second) { up2.design(rate, wide); w2.set(offset2, wide); } }
 
     // ★ 50 ms of the clip — or, at 2.048 MS/s, half a DAB frame (98304), so a 60-frame bench clip loops on a frame edge
@@ -289,12 +361,15 @@ int main(int argc, char** argv) {
     }
     while (fed < secs) {
         if (!c1.read(u, f1, blk)) { if (!loop) break; c1.skip(0); if (!c1.read(u, f1, blk)) break; }
-        m1.run(f1.data(), blk);
+        size_t n1 = blk;
+        if (ppm != 0) { ppmRs.run(f1.data(), blk, ppmOut); f1.swap(ppmOut); n1 = f1.size() / 2; }
+        drift.run(f1.data(), n1);
+        m1.run(f1.data(), n1);
         const double sigClip = std::sqrt(density * rate / 2.0);
         if (addNoise && paired && wide > 0) for (float& x : f1) x += float(sigClip) * g(rng);
         if (second) { std::vector<uint8_t> u2; if (!c2.read(u2, f2, blk)) break; m2.run(f2.data(), blk); }
         if (wide > 0) {
-            o1.clear(); up1.run(f1.data(), blk, o1); w1.run(o1.data(), o1.size() / 2);
+            o1.clear(); up1.run(f1.data(), n1, o1); w1.run(o1.data(), o1.size() / 2);
             if (second) { o2.clear(); up2.run(f2.data(), blk, o2); w2.run(o2.data(), o2.size() / 2);
                           const size_t n = std::min(o1.size(), o2.size()); for (size_t i = 0; i < n; ++i) o1[i] += o2[i]; o1.resize(n); }
             feedBuf.swap(o1);
@@ -312,6 +387,22 @@ int main(int argc, char** argv) {
         }
         for (auto& s : svcs) s->feed(feedBuf.data(), feedBuf.size() / 2);
         fed += double(blk) / rate;
+        if (trace && fed >= trNext) {
+            std::string j; for (int i = 0; i < 100 && !svcs[0]->jsonTry(j); ++i) std::this_thread::sleep_for(milliseconds(1));
+            if (!j.empty()) {
+                const double sf = num(j, "sfOk", 0), tried = num(j, "sfTried", 0), mer = num(j, "mer");
+                const bool sfStall = tried > lastTried && sf == lastSf;   // super frames tried this second, none good
+                if (sfStall && fed > 5) ++sfDropSecs;
+                if (fed > 5 && mer == mer && mer < minMer) { minMer = mer; worstSec = int(fed); }
+                std::printf("{\"t\":%.0f,\"applied\":%.0f,\"offsetHz\":%.0f,\"shift\":%.0f,\"mer\":%.1f,\"locked\":%.0f,\"erased\":%.0f,"
+                            "\"reacq\":%.0f,\"fibRate\":%.2f,\"sfOk\":%.0f,\"sfTried\":%.0f,\"auBad\":%.0f,\"frameAt\":%.0f,\"irPeak\":%.0f,\"prsRatio\":%.2f,\"mscBer\":%.4f,\"recentres\":%.0f}\n",
+                            fed, drift.f + shift, num(j, "offsetHz"), num(j, "carrierShift"), mer, num(j, "locked"), num(j, "erased"),
+                            num(j, "reacquires"), num(j, "fibRate"), sf, tried, num(j, "auBad"), num(j, "frameAt"), num(j, "irPeak"),
+                            num(j, "prsRatio"), num(j, "mscBer"), num(j, "recentres", 0));
+                lastSf = sf; lastTried = tried;
+            }
+            trNext += 1.0;
+        }
         for (int w = 0; w < 400000; ++w) {   // ★ back-pressure: never ahead of any worker
             bool busy = false; for (auto& s : svcs) if (s->backlogForTest() > 0) busy = true;
             if (!busy) break;
@@ -357,6 +448,7 @@ int main(int argc, char** argv) {
                     num(j, "frames"), num(j, "reacquires"), num(j, "offsetHz"),
                     duration<double>(steady_clock::now() - tw0).count());
     }
+    if (trace) std::printf("{\"traceSummary\":true,\"minMer\":%.1f,\"minMerAt\":%d,\"secsWithNoGoodSuperFrame\":%.0f}\n", minMer, worstSec, sfDropSecs);
     for (auto& s : svcs) s->stopWorker();
     return 0;
 }
