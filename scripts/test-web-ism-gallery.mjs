@@ -117,7 +117,7 @@ try {
   for (let i = 0; i < 40 && !(await ev(`!document.getElementById('galView').hidden && /The last reading/.test(document.getElementById('galText').textContent)`)); i++) await sleep(150);
   const view = await ev(`JSON.stringify({ text: document.getElementById('galText').textContent, meta: document.getElementById('galViewMeta').textContent,
     dl: document.getElementById('galDl').download, tr: !document.getElementById('galTr').hidden })`).then(JSON.parse);
-  ok(view.text.includes('ISM summary · 433.92 MHz ISM') && view.text.includes(' · TPMS · TPMS #1 · type B · 32 PSI · 18 °C'), 'the card opens as text, its device table by nickname');
+  ok(view.text.includes('ISM summary · 433.92 MHz ISM') && view.text.includes(' · TPMS · TPMS #1 · Schrader · 32 PSI · 18 °C'), 'the card opens as text, its device table by nickname');
   ok(view.meta.includes("a listener's decoder") && !view.meta.includes('MHz  ·'), `the meta line: ${view.meta}`);
   ok(view.dl === `ISM 433.92 ${today} summary.txt`, `DOWNLOAD saves as "${view.dl}"`);
   ok(!view.tr, 'no TRANSLATE key on our own English');
