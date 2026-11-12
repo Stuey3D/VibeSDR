@@ -162,6 +162,7 @@ import { amSyncOffered, amSyncReadout, AM_SYNC_LABEL, AM_SYNC_NAME, isAmFamily, 
 import { autoBwOffered, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
 import { landingSpotBand, bandPassband } from '../utils/digiModes';
+import { wideVfoPassband, wideVfoLabel, type WideVfoMode } from '../utils/wideVfo';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { registerIqCode } from '../services/iqPairing';
 import AntennaBandNotice from '../components/AntennaBandNotice';
@@ -6647,6 +6648,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (the web's renderFrame) — drawn where it is, never sent. */
   // ★★ VFO A/B: drawn on the needle of the VFO Band runs on only (with the other VFO tuned, `status` is that one's)
   const bandDrawn = spotsBandOn && spotsBandCap && (!abOn || abActive === spotsVfo) ? bandPassband(spotsBandCap.bands, status.frequency) : null;
+  /* ★★ V12 A WHOLE-CHANNEL MODE'S VFO IS ITS CHANNEL (utils/wideVfo.ts; Stuart, 2026-11-12: "we need an extra wide VFO for
+   *  things like DAB") — DAB's 1.536 MHz block about its centre, ADS-B's ~2 MHz, AIS's two channels. Drawn only, never
+   *  sent: the server's DAB / ADS-B / AIS pipelines and the listener's own filter are untouched. */
+  const wideMode: WideVfoMode | null = dabOn ? 'dab' : adsbOn ? 'adsb' : aisOn ? 'ais' : null;
+  const wideCentre = wideMode === 'dab' && dabState?.centreHz ? dabState.centreHz : status.frequency;
+  const wideDrawn = wideMode ? wideVfoPassband(wideMode, status.frequency, wideCentre) : null;
+  const wideLabel = wideMode ? wideVfoLabel(wideMode, wideCentre, wideMode === 'dab' ? dabState?.channel ?? '' : '') : undefined;
   /* ★ V12 PSK: the same two settings, remembered apart from CW's (6/12/24 kHz, not 24/48/96). */
   const pskSkimRef = useRef(false);
   const pskWidthRef = useRef<number>(PSK_DEFAULT_WIDTH);
@@ -13894,8 +13902,10 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
         /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */
         needleHidden={ismOn}
-        filterLow={bandDrawn ? bandDrawn[0] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).low}
-        filterHigh={bandDrawn ? bandDrawn[1] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).high}
+        wideVfo={!!wideDrawn}
+        needleLabel={wideLabel}
+        filterLow={wideDrawn ? wideDrawn[0] : bandDrawn ? bandDrawn[0] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).low}
+        filterHigh={wideDrawn ? wideDrawn[1] : bandDrawn ? bandDrawn[1] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).high}
         /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing
          *  the bins. The adapters hand us a reused buffer (see the note on visualGain), so an
          *  in-place offset would accumulate every frame. Mapping through a range shifted by -vg is

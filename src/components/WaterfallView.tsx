@@ -263,6 +263,11 @@ export interface WaterfallViewProps {
   activeVfo?: { letter: string; ear: string | null; dec?: boolean } | null;
   /** ★ V12 ISM: no LISTEN needle, passband or label (the web's wf.vfoHidden) — a band capture has nothing to listen to. */
   needleHidden?:   boolean;
+  /** ★★ V12 THE PASSBAND IS A WHOLE CHANNEL (utils/wideVfo.ts — DAB's 1.536 MHz block): filterLow / filterHigh are the
+   *  channel, not an audio filter. No frosted backing; past most of the view the acrylic panels give way to the edges. */
+  wideVfo?:        boolean;
+  /** The needle's label in place of "LISTEN: <frequency>" (V12: "DAB 7D · 194.064M" — wideVfoLabel). */
+  needleLabel?:    string;
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
   needleIntensity?: number;
@@ -655,7 +660,7 @@ function WaterfallView({
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30, clipFloorDb = null,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
-  needleHidden = false, secondVfo = null, activeVfo = null,
+  needleHidden = false, wideVfo = false, needleLabel, secondVfo = null, activeVfo = null,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
   smoothTune = true, wfBoost: wfBoostOn = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
@@ -2759,8 +2764,8 @@ function WaterfallView({
 
   // ── Needle + sideband geometry (v1.5) ───────────────────────────────────────
   // ★ utils/needleGeometry — every renderer path below reads this one result, so `needleHidden` (V12 ISM) removes them all.
-  const needle = useMemo(() => needleGeometry({ hidden: needleHidden, bwHz, tuneHz, filterLow, filterHigh, width, pxPerHz, hzToX }),
-    [needleHidden, bwHz, tuneHz, filterLow, filterHigh, hzToX, pxPerHz, width]);
+  const needle = useMemo(() => needleGeometry({ hidden: needleHidden, bwHz, tuneHz, filterLow, filterHigh, width, pxPerHz, hzToX, wide: wideVfo }),
+    [needleHidden, bwHz, tuneHz, filterLow, filterHigh, hzToX, pxPerHz, width, wideVfo]);
 
   // ── VFO-lock boundary walls + RF-centre marker (BRIEF §5.6) ─────────────────
   // Geometry only; rendered on the spectrum/needle canvas via hzToX so it tracks
@@ -3085,14 +3090,15 @@ function WaterfallView({
       {/* ── Frosted backing (under the acrylics): smoked-glass band dims the
              waterfall across the passband so the needle keeps contrast on
              bright palettes whatever colour it is ── */}
-      {needle && needleFrost > 0 && needle.hiXc > needle.loXc && (
+      {needle && needle.frost && needleFrost > 0 && needle.hiXc > needle.loXc && (
         <Rect x={needle.loXc} y={BAND_H}
               width={needle.hiXc - needle.loXc} height={height - BAND_H}
               color={`rgba(0,0,0,${(needleFrost / 10) * 0.72})`} />
       )}
 
-      {/* ── Acrylic sideband panels (band-strip bottom → screen bottom) ── */}
-      {needle && needle.nX > needle.loXc && (
+      {/* ── Acrylic sideband panels (band-strip bottom → screen bottom) — ★ V12 not on a wide passband that fills the
+             view (needle.fill — DAB's block on an RTL): its edges alone ── */}
+      {needle && needle.fill && needle.nX > needle.loXc && (
         <Rect x={needle.loXc} y={BAND_H}
               width={needle.nX - needle.loXc} height={height - BAND_H}>
           <LinearGradient
@@ -3102,7 +3108,7 @@ function WaterfallView({
             positions={[0, 0.15, 0.55, 1]} />
         </Rect>
       )}
-      {needle && needle.hiXc > needle.nX && (
+      {needle && needle.fill && needle.hiXc > needle.nX && (
         <Rect x={needle.nX} y={BAND_H}
               width={needle.hiXc - needle.nX} height={height - BAND_H}>
           <LinearGradient
@@ -3404,10 +3410,10 @@ function WaterfallView({
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: needleColor,
-                  left: Math.min(width - 96, needle.nX + 3), top: markerLabelBase,
-                  width: 96, textAlign: 'left', fontSize: 9,
+                  left: Math.min(width - (needleLabel ? 124 : 96), needle.nX + 3), top: markerLabelBase,
+                  width: needleLabel ? 124 : 96, textAlign: 'left', fontSize: 9,
                 }]}>
-            {'LISTEN: ' + fmtHz(tuneHz)}
+            {needleLabel || 'LISTEN: ' + fmtHz(tuneHz)}
           </Text>
         )}
 

@@ -830,6 +830,9 @@ if node --no-warnings scripts/test_dab_quality.ts; then pass=$((pass+1)); else f
 # ★★★ THE DRM RECEPTION METER (V12, 2026-11-12): DAB's meter for DRM — the decoder's own SNR in the box (Stuart: 17–20 dB
 #     decoded on a signal the meter read as 42 dB), the verdict on the programme's MER against its QAM and the audio frames.
 if node --no-warnings scripts/test_drm_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE WIDE VFO (V12, 2026-11-12): a whole-channel mode's drawn passband — DAB's 1.536 MHz block, ADS-B, AIS — drawn
+#     only, never sent; edges only once it covers most of the view (app + web share it; the R36S's port is held to it too).
+if node --no-warnings scripts/test_wide_vfo.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE STATION-LOGO CACHE (V12, 2026-10-30): air > RadioDNS > name, a failed fetch retried 1 min / 5 min / 30 min /
 #     daily (never a permanent blank), replaced only when the published logo changed, LRU-bounded (app + web share it).
 if node --no-warnings scripts/test_logo_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

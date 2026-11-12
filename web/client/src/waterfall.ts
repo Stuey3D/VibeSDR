@@ -52,6 +52,7 @@ import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
 import { spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
 import { TUNE_EASE_MIN_FRAC } from '../../../src/utils/wfRowPlace.ts';
+import { wideVfoFill } from '../../../src/utils/wideVfo.ts';
 import { WIDE_TEX, wideExtent, wideRowInto, rowInCapture, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
 import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type RowView } from './wfGlide';
 import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRow, stampPrune, stampReset, stampSettleRows, stampSweepRows, stampsShown, stampTicks, stampColour, stampTimeLabel }
@@ -255,6 +256,13 @@ export class Waterfall {
   vfoHz = 0;
   /** ★ ISM: there is no listening passband on a band capture — the needle and its LISTEN label are not drawn. */
   vfoHidden = false;
+  /** ★★ V12 THE PASSBAND IS A WHOLE CHANNEL (src/utils/wideVfo.ts — DAB's 1.536 MHz block), set by main.ts renderFrame with
+   *  filterLow / filterHigh: no frosted backing, and past most of the view the acrylic panels give way to the edges alone.
+   *  `vfoWideLabel` replaces "LISTEN …" ("DAB 7D · 194.064M"). Drawn only — nothing here is ever sent. */
+  vfoWide = false;
+  vfoWideLabel = '';
+  /** What the last frame drew for the selected needle's passband (device px) — for the drivers (scripts/test-web-dab-vfo.mjs). */
+  vfoDrawn: { loX: number; hiX: number; nX: number; W: number; fill: boolean; frost: boolean; label: string } | null = null;
   /** ★ Appended to the RF CENTRE label — e.g. " — controlled by VibeClarity" when the suite is
    *  choosing where the tuner sits, so a centre that moves on its own explains itself. */
   rfCenterNote = '';
@@ -1356,7 +1364,12 @@ export class Waterfall {
     const v2 = this.vfo2;
     if (v2 && v2.hz) this._drawNeedle(ctx, W, H, v2.hz, v2.lo, v2.hi, v2.col, v2.label, v2.alpha, false, v2.parked, 2);
     this._drawNeedle(ctx, W, H, this.vfoHz, this.filterLow, this.filterHigh, this.vfoLiveColor || this.vfoColor,
-                     this.vfoLiveLabel || `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`, this.vfoLiveAlpha, true, false, 0);
+                     this.liveLabel(), this.vfoLiveAlpha, true, false, 0);
+  }
+
+  /** The selected needle's label: VFO A/B's, else a whole-channel mode's ("DAB 7D · 194.064M"), else LISTEN. */
+  private liveLabel(): string {
+    return this.vfoLiveLabel || (this.vfoWide && this.vfoWideLabel) || `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`;
   }
 
   /** One needle with its acrylic passband. `primary` also draws the capture bracket, the walls and the RF centre (once
@@ -1375,6 +1388,11 @@ export class Waterfall {
     if (hiX - nX < minSb) hiX = nX + minSb;
     const loXc = Math.max(0, loX);
     const hiXc = Math.min(W, hiX);
+    // ★★ V12 a whole channel (vfoWide, the selected needle only): no frost; edges alone once it covers most of the view
+    const wide = primary && this.vfoWide;
+    const fill = !wide || wideVfoFill(loX, hiX, W);
+    const frost = !wide;
+    if (primary) this.vfoDrawn = { loX, hiX, nX, W, fill, frost, label };
 
     const col = parked ? '#8a8a8a' : colIn;
     const k = this.vfoIntensity / 5;          // 5 = the app's original look
@@ -1385,7 +1403,7 @@ export class Waterfall {
 
     // Frosted backing: dims the waterfall across the passband so the needle keeps
     // contrast on bright palettes, whatever colour it is.
-    if (this.vfoFrost > 0 && hiXc > loXc) {
+    if (frost && this.vfoFrost > 0 && hiXc > loXc) {
       ctx.fillStyle = `rgba(0,0,0,${(this.vfoFrost / 10) * 0.72})`;
       ctx.fillRect(loXc, 0, hiXc - loXc, H);
     }
@@ -1394,11 +1412,11 @@ export class Waterfall {
     // ★ CACHED: the same gradient object is reused while its endpoints and colour are unchanged
     //   (i.e. whenever the dial is still — nearly every frame). A CanvasGradient is immutable once
     //   its stops are added, so reusing one with identical endpoints/stops paints identically.
-    if (nX > loXc) {
+    if (fill && nX > loXc) {
       ctx.fillStyle = this.sbGradient(ctx, gslot as 0 | 2, loXc, nX, col);
       ctx.fillRect(loXc, 0, nX - loXc, H);
     }
-    if (hiXc > nX) {
+    if (fill && hiXc > nX) {
       ctx.fillStyle = this.sbGradient(ctx, (gslot + 1) as 1 | 3, nX, hiXc, col);
       ctx.fillRect(nX, 0, hiXc - nX, H);
     }
@@ -1661,7 +1679,7 @@ export class Waterfall {
     const span = this.spanHz, lo = this.displayCenterHz() - span / 2;
     const font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
     const showSpec = this._showSpec && H - this.wf.height > 40 * dpr;
-    const key = `${lo}|${span}|${W}|${H}|${dpr}|${this.vfoHz}|${this.rfCenterHz}|${this.knownGen}|${showSpec}|${this.vfoHidden}`;
+    const key = `${lo}|${span}|${W}|${H}|${dpr}|${this.vfoHz}|${this.rfCenterHz}|${this.knownGen}|${showSpec}|${this.vfoHidden}|${this.liveLabel()}`;   // ★ the label's width blocks a row
     if (key !== this.knownKey) {
       this.knownKey = key;
       ctx.save(); ctx.font = font;
@@ -1677,7 +1695,7 @@ export class Waterfall {
         const lx = x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
         blocked.push({ row, x0: lx - 3 * dpr, x1: lx + tw + 3 * dpr });
       };
-      if (this.vfoHz && !this.vfoHidden) box(0, this.hzToX(this.vfoHz, W), this.vfoLiveLabel || `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`);
+      if (this.vfoHz && !this.vfoHidden) box(0, this.hzToX(this.vfoHz, W), this.liveLabel());
       if (this.rfCenterHz != null) box(1, this.hzToX(this.rfCenterHz, W), `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M${this.rfCenterNote}`);
       this.knownPlaced = labelLayout(this.knownSignals!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
       ctx.restore();

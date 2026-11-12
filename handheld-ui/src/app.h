@@ -337,6 +337,7 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 namespace hh { inline bool decSkimSegment(int& lo, int& hi); }
 #include "hw_pump.h"
 #include "dab_box.h"
+#include "wide_vfo.h"   // ★ V12 a whole-channel mode's drawn passband (DAB's 1.536 MHz block — app_impl.h drawOverlays)
 #include "drm_quality.h"   // ★ V12 the DRM reception meter (the pill's reading in DRM — app_impl.h drawDeck)
 #include "known_labels_app.h"   // ★ SIGNAL LABELS on the spectrum (the app's knownSignals.ts, ported)
 #include "app_impl.h"

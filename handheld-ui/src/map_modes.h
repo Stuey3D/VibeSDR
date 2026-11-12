@@ -86,6 +86,8 @@ inline MapModes& mapModes() {
 }
 inline MapMode* mapMode(const std::string& id) { for (auto& m : mapModes().m) if (m.id == id) return &m; return nullptr; }
 inline MapMode* mapModeOn() { for (auto& m : mapModes().m) if (m.on) return &m; return nullptr; }
+/** ★ V12 for drawOverlays' whole-channel passband (wide_vfo.h): the running map mode's id, or "". */
+inline std::string wideMapModeId() { const MapMode* m = mapModeOn(); return m ? m->id : std::string(); }
 inline const Json& mapReport(const RadioState& s, const MapMode& m) { return mapModes().canned == m.id ? m.canned : s.msg(m.id); }
 inline uint64_t mapArrived(const RadioState& s, const std::string& t) { auto it = s.seq.find(t); return it == s.seq.end() ? 0 : it->second; }
 

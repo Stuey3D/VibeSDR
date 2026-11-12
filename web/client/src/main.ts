@@ -22,6 +22,7 @@ import { webLogos, webLogoOffer, webLogoOutranked, webLogoForget, webLogoDead, d
 import { drmRender, drmSignalRender, drmDrawConstellation, DRM_SCOPE_HTML, DRM_IQ_TIP, type DrmState } from './drm';
 import { DRM_IQ_STALE_MS, type DrmIq } from '../../../src/services/drm';
 import { DrmQualityMeter, type DrmQuality } from '../../../src/utils/drmQuality';
+import { wideVfoPassband, wideVfoLabel, type WideVfoMode } from '../../../src/utils/wideVfo';   // ★★ V12 DAB's wide VFO
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { recordingLabel } from '../../../src/services/recordingLabel';
@@ -3803,8 +3804,16 @@ function renderFrame(frameTs: number) {
    *  mode's decoder reads its own dial from, drawn where it is (it need not be centred: an exact frequency typed inside
    *  the band moves the dial, the span stays on the modes). Drawn only, never sent, as the skimmer's. */
   const bp = bandHere() && spotBandCap ? bandPassband(spotBandCap.bands, spec.frequency) : null;   // ★ the Band VFO's needle only
-  wf.filterLow = bp ? bp[0] : skim ? -segW / 2 : spec.bandwidthLow;
-  wf.filterHigh = bp ? bp[1] : skim ? segW / 2 : spec.bandwidthHigh;
+  /* ★★ V12 …AND A WHOLE-CHANNEL MODE'S VFO IS ITS CHANNEL (src/utils/wideVfo.ts; Stuart, 2026-11-12, a B210 on a 7 MHz span
+   *  with 7D's multiplex filling 1.5 MHz under a 200 kHz passband: "we need an extra wide VFO for things like DAB"). DAB's
+   *  1.536 MHz block about the block's centre, labelled "DAB 7D · 194.064M"; ADS-B's and AIS's are in the same table (their
+   *  maps cover this page, so only the app and the R36S ever show them). Drawn only, never sent: the server's DAB pipeline
+   *  and the listener's own filter are untouched. */
+  const wide = dabWideNow();
+  wf.vfoWide = !!wide;
+  wf.vfoWideLabel = wide ? wide.label : '';
+  wf.filterLow = wide ? wide.lo : bp ? bp[0] : skim ? -segW / 2 : spec.bandwidthLow;
+  wf.filterHigh = wide ? wide.hi : bp ? bp[1] : skim ? segW / 2 : spec.bandwidthHigh;
   abDraw();   // ★★ V12 VFO A/B — the other needle, the labels, the brightness
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
@@ -8377,6 +8386,20 @@ function dabGoTo(hz: number, sid: number) {
   }
   dabRender();
   syncDialTips();
+}
+
+/** ★★ V12 the drawn passband of a whole-channel mode (src/utils/wideVfo.ts), or null — renderFrame. DAB's is centred on
+ *  the block the SERVER reports (dabState; the stepper's label may be ahead of it while a burst settles — the passband is
+ *  what is being received), else the dial. */
+function dabWideNow(): { lo: number; hi: number; label: string } | null {
+  if (!spec) return null;
+  const mode: WideVfoMode | null = dabOn ? 'dab' : adsbOn ? 'adsb' : aisOn ? 'ais' : null;
+  if (!mode) return null;
+  const dial = spec.frequency;
+  const blk = mode === 'dab' ? (dabState?.centreHz ? { hz: dabState.centreHz, name: dabState.channel } : dabChannel >= 0 ? DAB_BLOCKS[dabChannel] : null) : null;
+  const centre = blk?.hz || dial;
+  const [lo, hi] = wideVfoPassband(mode, dial, centre);
+  return { lo, hi, label: wideVfoLabel(mode, centre, blk?.name ?? '') };
 }
 
 /** Step the multiplex — every arrow, key, wheel and pad press in DAB ends here (via nudge). Coalesced:

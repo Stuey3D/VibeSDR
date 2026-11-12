@@ -381,6 +381,9 @@ inline void App::drawBands(Ctx& c, const RadioState& s, Rect r) {
     }
 }
 
+/** The map mode running ("adsb" / "ais" / "ndb" / "ism"), or "" — defined in map_modes.h (included after this file). */
+inline std::string wideMapModeId();
+
 inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) {
     if (s.spanHz <= 0) return;
     const double lo = s.viewCentreHz - s.spanHz / 2, hi = s.viewCentreHz + s.spanHz / 2;
@@ -399,9 +402,26 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
     // the passband and the dial
     int pbLo = s.bwLow, pbHi = s.bwHigh;
     decSkimSegment(pbLo, pbHi);   // ★ a skimmer's VFO is the segment it decodes, as on the web
-    const float px0 = xOf(s.vfoHz + pbLo), px1 = xOf(s.vfoHz + pbHi);
-    c.g.rect(px0, spec.y, std::max(1.f, px1 - px0), spec.h, rgb(0xffb000, 0.13f));
-    c.g.rect(px0, wfr.y, std::max(1.f, px1 - px0), wfr.h, rgb(0xffb000, 0.06f));
+    /* ★★ V12 A WHOLE-CHANNEL MODE'S VFO IS ITS CHANNEL (wide_vfo.h, the app's and the web's wideVfo.ts; Stuart, 2026-11-12:
+     *  "we need an extra wide VFO for things like DAB") — DAB's 1.536 MHz block about the block the server reports, ADS-B's
+     *  ~2 MHz, AIS's two channels. Drawn only, never sent. Clipped to the view, and edges only once it covers most of it
+     *  (an RTL's DAB view is the 2.048 MS/s capture — the block is ¾ of it). */
+    const WideVfoMode wm = dabActive() ? WIDE_DAB : wideVfoMode(wideMapModeId());
+    double centre = s.vfoHz;
+    if (wm == WIDE_DAB) { const int b = dabUi().serverBlock; if (b >= 0 && b < kDabBlockN) centre = kDabBlocks[b].hz; }
+    if (wm != WIDE_NONE) { double lo, hi; wideVfoPassband(wm, s.vfoHz, centre, lo, hi); pbLo = (int)std::lround(lo); pbHi = (int)std::lround(hi); }
+    float px0 = xOf(s.vfoHz + pbLo), px1 = xOf(s.vfoHz + pbHi);
+    if (wm == WIDE_NONE || wideVfoFill(px0 - spec.x, px1 - spec.x, spec.w)) {
+        if (wm != WIDE_NONE) { px0 = std::max(px0, spec.x); px1 = std::min(px1, spec.r()); }
+        c.g.rect(px0, spec.y, std::max(1.f, px1 - px0), spec.h, rgb(0xffb000, 0.13f));
+        c.g.rect(px0, wfr.y, std::max(1.f, px1 - px0), wfr.h, rgb(0xffb000, 0.06f));
+    }
+    if (wm != WIDE_NONE)
+        for (const float ex : {px0, px1}) {   // the block's edges, where they are on screen
+            if (ex <= spec.x || ex >= spec.r()) continue;
+            c.g.rect(ex - 0.5f, spec.y, 1, spec.h, rgb(0xffb000, 0.55f));
+            c.g.rect(ex - 0.5f, wfr.y, 1, wfr.h, rgb(0xffb000, 0.30f));
+        }
     const float vx = xOf(s.vfoHz);
     c.g.rect(vx - 1, spec.y, 2, spec.h, dispNeedle(0.9f));
     c.g.rect(vx - 0.5f, wfr.y, 1, wfr.h, dispNeedle(0.45f));
