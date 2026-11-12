@@ -1206,6 +1206,8 @@ static void vsFmNote(const std::string& session, const vibefm::State& st) {
 static bool vsFmRemember() { std::lock_guard<std::mutex> lk(g_fmMtx); return g_fm.remember(); }
 /** Writes the shared pipeline's DESIRED record (g_dsp — defined further down) so a freshly built Impl starts there. */
 static void vsFmRecordDesired(const vibefm::State& st);
+/** ★ The shared pipeline's HF NOISE BLANKER into g_dsp, so a fresh Impl replays it (defined beside vsFmRecordDesired). */
+static void vsRecordNbx(bool on);
 /** ★ The owner's display name for this radio (Android's "SDR display name") — see setRadioLabel. */
 static std::mutex            g_vsRadioLabelMtx;
 static std::string           g_vsRadioLabel;
@@ -21565,6 +21567,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             logDsp("HF noise blanker", jsonOn(msg));
             /* ★ The audio-menu NOISE BLANKER — the listener's own, every mode but WFM. */
             perListener(&vibedsp::RxPipeline::setNoiseBlankerHf, &ClientDsp::nbxOn, &nbxOn, jsonOn(msg));
+            // ★ the shared pipeline's value into the desired record too (vsFmRecordDesired covers only the FM row),
+            //   so a fresh Impl replays it; a per-listener channel keeps its own in ClientDsp as before
+            if (!dspFor(sock)) vsRecordNbx(jsonOn(msg));
             return;
         }
         if (type == "ceq") {
@@ -35686,6 +35691,8 @@ struct DesiredDsp {
     std::atomic<bool>   imsOn{true};        // Impl::imsOn
     std::atomic<bool>   ceqOn{true};        // Impl::ceqOn
     std::atomic<bool>   nbOn{true};         // Impl::nbOn
+    std::atomic<bool>   nbxOn{false};       // Impl::nbxOn — the audio-menu (HF) NOISE BLANKER, every mode but WFM. ★ 2026-11-12:
+                                            //   never replayed, so a fresh Impl (rate change, reopen) switched it off mid-session
     std::atomic<bool>   stereoOn{true};     // RxPipeline defaults to stereo enabled
     // ★★ THE RSP CONTROLS TOO — same bug, separately reported: "RF gain on RSP1B not
     // remembered between sessions" (Stuart, 2026-07-27). The web client was innocent; it
@@ -35920,6 +35927,7 @@ static bool  vsAntennaLocked()     { return g_antennaLocked.load() != 0; }
 static float vsDesiredNrStrength() { return g_dsp.nrStrength.load(); }
 static double vsDesiredDeemph()    { return g_dsp.deempTau.load(); }
 static bool  vsDesiredStereo()     { return g_dsp.stereoOn.load(); }
+static void vsRecordNbx(bool on) { g_dsp.nbxOn.store(on); }
 static void vsFmRecordDesired(const vibefm::State& st) {
     g_dsp.deempTau.store(st.deemphTau); g_dsp.stereoOn.store(st.stereo);
     g_dsp.weakProcOn.store(st.nr); g_dsp.imsOn.store(st.ims); g_dsp.ceqOn.store(st.ceq); g_dsp.nbOn.store(st.nb);
@@ -35945,6 +35953,7 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
     impl->imsOn.store(g_dsp.imsOn.load());           impl->rx.setIms(g_dsp.imsOn.load());
     impl->ceqOn.store(g_dsp.ceqOn.load());           impl->rx.setCeq(g_dsp.ceqOn.load());
     impl->nbOn.store(g_dsp.nbOn.load());             impl->rx.setNoiseBlanker(g_dsp.nbOn.load());
+    impl->nbxOn.store(g_dsp.nbxOn.load());           impl->rx.setNoiseBlankerHf(g_dsp.nbxOn.load());
     impl->deempTau = g_dsp.deempTau.load();
     impl->rx.setDeemphasis(impl->deempTau);
     impl->rx.setNfmVoice(g_nfmVoiceShared.load());
