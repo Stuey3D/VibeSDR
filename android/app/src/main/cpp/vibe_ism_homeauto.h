@@ -163,15 +163,321 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace adlm
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  DANFOSS CFR room thermostat (for the Danfoss RX1/RX2 boiler receivers) — 433.92 MHz FSK, NRZ 100 µs. Facts: Tommy
+//  Vestermark's reverse engineering as noted in rtl_433's danfoss.c (read for facts only; no other description
+//  exists). ~128 bits of AA, then 21 nibbles, each sent as a 6-bit code (three 1s, three 0s — the code for each nibble
+//  below): E 0 2 (the prefix) · ID 4 nibbles · message counter · switch (2 day, 4 timer, 8 night) · temperature as two
+//  bytes, fraction then whole °C · set point the same · CRC-16 poly 0x1021 init 0 over the nibbles from the 0 (as
+//  bytes 02 … set point) = the last 4 nibbles.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace danfoss {
+
+inline int nibbleOf(uint32_t code) {
+    static const uint8_t c[16] = {0x25, 0x29, 0x32, 0x0E, 0x13, 0x2A, 0x1A, 0x26, 0x34, 0x19, 0x15, 0x31, 0x2C, 0x0B, 0x0D, 0x16};
+    for (int i = 0; i < 16; ++i) if (c[i] == code) return i;
+    return -1;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& row : kit::nrzRows(b.fsk, 100.0, 6, true, 140)) {
+        for (size_t s : kit::findAll(row, 0xD972, 18)) {     // the codes of E, 0, 2
+            if (s + 18 + 6 * 18 > row.size()) break;
+            uint8_t by[10]; by[0] = 0x02; bool ok = true;
+            for (int k = 0; k < 18 && ok; ++k) {
+                const int n = nibbleOf(bitsAt(row, s + 18 + 6 * size_t(k), 6));
+                if (n < 0) { ok = false; break; }
+                if (k % 2 == 0) by[1 + k / 2] = uint8_t(n << 4); else by[1 + k / 2] |= uint8_t(n);
+            }
+            if (!ok || crc16(by, 8, 0x1021, 0) != uint16_t(by[8] << 8 | by[9])) continue;
+            const int id = by[1] << 8 | by[2], sw = by[3] & 0xF;
+            const char* swName = sw == 2 ? "DAY" : sw == 4 ? "TIMER" : sw == 8 ? "NIGHT" : nullptr;
+            if (!swName) continue;
+            const double t = by[5] + by[4] / 256.0, set = by[7] + by[6] / 256.0;
+            Reading r;
+            r.kind = "sensor"; r.make = "Danfoss"; r.model = "CFR thermostat";
+            r.pubId = std::to_string(id);
+            r.tempC = t;
+            r.extra = "set " + kit::fmt1v(set, 1) + " \xc2\xb0" "C \xc2\xb7 " + (sw == 2 ? "day" : sw == 4 ? "timer" : "night");
+            r.fact("id", (long long)id); r.fact("setpoint_C", set); r.fact("switch", swName);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace danfoss
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  HONEYWELL evohome / RAMSES II (CM921 room thermostat, HR92 radiator valves, BDR91 relays, DTS92 …) — 868.3 MHz FSK,
+//  38.4 kbit/s (26 µs). Facts: the RAMSES II write-ups (github.com/Evsdd/The-Evohome-Protocol wiki; domoticaforum.eu
+//  "Evohome" thread) and rtl_433's honeywell_cm921.c notes (read for facts only). Every byte is sent UART-style — a 0
+//  start bit, 8 bits LSB first, a 1 stop bit. Preamble 55 FF 00, then bytes 33 55 53 (a deliberate Manchester break),
+//  the message Manchester-coded two bytes per byte, 35, then 55s. The message: header (it says how many 3-byte device
+//  addresses follow: 14 → 1; 10 / 18 / 1C / 3C → 2; else bits 3–2) · addresses · command 16 · length · payload ·
+//  a check byte making the sum of every byte 0. Read here: 0008 relay demand, 3EF0 relay status / boiler
+//  modulation, 2309 set point, 30C9 zone temperatures, 3150 heat demand, 3B00 TPI state, 1100 boiler cycle settings;
+//  any other command is named by number. The Manchester break, the 35 footer and the byte sum together are the check.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace evohome {
+
+inline bool message(const std::vector<uint8_t>& m, std::vector<Reading>& out) {
+    if (m.size() < 7 || (kit::sumBytes(m.data(), m.size()) & 0xFF)) return false;
+    const uint8_t h = m[0];
+    const size_t nId = (h == 0x14) ? 1 : (h == 0x10 || h == 0x18 || h == 0x1C || h == 0x3C) ? 2 : size_t((h >> 2) & 3);
+    size_t i = 1 + 3 * nId;
+    if (nId == 0 || i + 3 > m.size()) return false;
+    const int cmd = m[i] << 8 | m[i + 1];
+    const size_t len = m[i + 2];
+    i += 3;
+    if (i + len + 1 != m.size()) return false;
+    const uint8_t* p = m.data() + i;
+    const uint32_t dev = uint32_t(m[1]) << 16 | uint32_t(m[2]) << 8 | m[3];
+    Reading r;
+    r.kind = "sensor"; r.make = "Honeywell"; r.model = "evohome";
+    char ib[8]; std::snprintf(ib, sizeof ib, "%06X", dev); r.pubId = ib;
+    auto pct = [](int v) { return kit::fmt1v(v / 2.0, 0) + " %"; };
+    char hx[24];
+    switch (cmd) {
+        case 0x0008:
+            if (len != 2) goto other;
+            r.extra = "heat demand " + pct(p[1]);
+            r.fact("domain_id", (long long)p[0]); r.fact("demand", p[1] / 200.0);
+            break;
+        case 0x3EF0:
+            if (len == 3) { r.extra = "relay " + pct(p[1]); r.fact("status", p[1] / 200.0); }
+            else if (len == 6) { r.extra = "boiler " + pct(p[1]) + (p[3] ? " \xc2\xb7 flame on" : " \xc2\xb7 flame off"); r.fact("boiler_modulation_level", p[1] / 200.0); r.fact("flame_status", (long long)p[3]); }
+            else goto other;
+            break;
+        case 0x2309:
+            if (len != 3) goto other;
+            r.extra = "zone " + std::to_string(p[0]) + " set " + kit::fmt1v((p[1] << 8 | p[2]) / 100.0, 1) + " \xc2\xb0" "C";
+            r.fact("zone", (long long)p[0]); r.fact("setpoint", (p[1] << 8 | p[2]) / 100.0);
+            break;
+        case 0x30C9:
+            if (len < 3 || len % 3) goto other;
+            r.tempC = int16_t(p[1] << 8 | p[2]) / 100.0;
+            if (len > 3) r.extra = std::to_string(len / 3) + " zones";
+            break;
+        case 0x3150:
+            if (len < 2) goto other;
+            r.extra = "zone " + std::to_string(p[0]) + " heat demand " + pct(p[1]);
+            r.fact("zone", (long long)p[0]); r.fact("heat_demand", (long long)p[1]);
+            break;
+        case 0x3B00:
+            if (len != 2) goto other;
+            r.extra = "TPI " + pct(p[1]);
+            r.fact("domain_id", (long long)p[0]); r.fact("state", p[1] / 200.0);
+            break;
+        case 0x1100:
+            if (len != 5 && len != 8) goto other;
+            r.extra = "boiler cycle " + kit::fmt1v(p[1] / 4.0, 0) + " /h";
+            r.fact("domain_id", (long long)p[0]); r.fact("cycle_rate", p[1] / 4.0);
+            break;
+        default:
+        other:
+            std::snprintf(hx, sizeof hx, "command %04X", cmd); r.extra = hx;
+            break;
+    }
+    out.push_back(r);
+    return true;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& row : kit::nrzRows(b.fsk, 26.04, 12, true, 200)) {
+        for (size_t s : kit::findAll(row, 0x555FF004 >> 2, 30)) {
+            // UART bytes (start 0, LSB first, stop 1) → their values
+            std::vector<uint8_t> u;
+            for (size_t q = s + 30; q + 10 <= row.size() && u.size() < 300; q += 10) {
+                if (row[q] != 0 || row[q + 9] != 1) break;
+                u.push_back(uint8_t(bitsAtLsb(row, q + 1, 8)));
+            }
+            if (u.size() < 8 || u[0] != 0x33 || u[1] != 0x55 || u[2] != 0x53) continue;
+            size_t f = u.size();
+            while (f > 3 && u[f - 1] == 0x55) --f;
+            if (f == u.size() || f < 5 || u[f - 1] != 0x35) continue;
+            Bits mb;
+            for (size_t k = 3; k + 1 < f; ++k) for (int q = 7; q >= 0; --q) mb.push_back((u[k] >> q) & 1);
+            for (int conv = 0; conv < 2; ++conv) {
+                size_t end = 0;
+                const Bits d = kit::manchesterAt(mb, 0, mb.size() / 2, conv == 0, &end);
+                if (d.size() != mb.size() / 2 || d.size() % 8) continue;
+                std::vector<uint8_t> m;
+                for (size_t k = 0; k < d.size(); k += 8) m.push_back(uint8_t(bitsAt(d, k, 8)));
+                if (message(m, out)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace evohome
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  WATTS WFHT-RF room thermostat (an ADEV design, France; underfloor-heating controllers) — 433.92 MHz OOK PWM: a ~6 ms
+//  sync mark, then 54 bits, a ~600 µs mark (then ~260 µs gap) = 1, a ~260 µs mark (then ~600 µs) = 0. Facts: the
+//  rtl_433_tests watts_thermostat README (manual + pulse captures) and rtl_433's watts_thermostat.c notes (read for
+//  facts only; protocol work by Ådne Hovda and Christian Zuckschwerdt). Fields, each LSB first: preamble 0x5A (as sent
+//  MSB first: 1010 0101) · ID 16 · flags 4 (bit 0 pairing) · temperature 9 bits × 0.1 °C · set point 9 × 0.1 °C ·
+//  check 8 = the sum of the ID's, flags', temperature's and set point's bytes (low and high). A weak check: believed
+//  when the burst holds two identical frames, else shown once heard twice (confirm).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace wattsrf {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    std::vector<Bits> frames;
+    for (size_t i = 0; i < r.size(); ++i) {
+        if (r[i] < 4000 || r[i] > 8000) continue;
+        Bits f;
+        size_t k = i + 1;
+        for (; k + 1 < r.size() && f.size() < 54; k += 2) {
+            const int g = -r[k], m = r[k + 1];
+            if (g < 120 || g > 900 || m <= 0) break;
+            if (m >= 150 && m < 450) f.push_back(0); else if (m >= 450 && m <= 900) f.push_back(1); else break;
+        }
+        if (f.size() == 54 && bitsAt(f, 0, 8) == 0xA5) frames.push_back(f);
+        i = k - 1;
+    }
+    for (const Bits& f : frames) {
+        const int id = int(bitsAtLsb(f, 8, 16)), flags = int(bitsAtLsb(f, 24, 4));
+        const int t = int(bitsAtLsb(f, 28, 9)), sp = int(bitsAtLsb(f, 37, 9)), chk = int(bitsAtLsb(f, 46, 8));
+        const int sum = (id & 0xFF) + (id >> 8) + flags + (t & 0xFF) + (t >> 8) + (sp & 0xFF) + (sp >> 8);
+        if ((sum & 0xFF) != chk || (id == 0 && t == 0 && sp == 0)) continue;
+        if (t > 500 || sp > 400) continue;
+        Reading rd;
+        rd.kind = "sensor"; rd.make = "Watts"; rd.model = "WFHT-RF thermostat";
+        rd.pubId = std::to_string(id);
+        rd.tempC = t / 10.0;
+        rd.extra = "set " + kit::fmt1v(sp / 10.0, 1) + " \xc2\xb0" "C";
+        if (flags & 1) rd.extra += " \xc2\xb7 pairing";
+        rd.confirm = std::count(frames.begin(), frames.end(), f) < 2;
+        rd.fact("id", (long long)id); rd.fact("setpoint_C", sp / 10.0); rd.fact("pairing", (long long)(flags & 1)); rd.fact("flags", (long long)flags);
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+} // namespace wattsrf
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  WATTS WFHT-LCD-RF underfloor-heating thermostat (the newer, CC1101-based generation) — 433.92 MHz (+~73 kHz) OOK
+//  Manchester, ~2 170 chips/s (~461 µs). Facts: Steven Bontius, "WATTS_WFHT_RF_PROTOCOL.md"
+//  (github.com/StevenBontius/watts-wfht-ha, docs/), cross-checked with rtl_433's watts_wfht_rf.c notes. Preamble
+//  2A AA AA AA, sync D3 91 D3 91, then 16 bytes: length 0D · FF FF FE · mode (bit 0 pairing, bit 1 heat, the rest 0)
+//  · device ID 3 · temperature 16 BE × 0.1 °C · set point 16 BE × 0.1 °C · call for heat (0 / 100) · CRC-8 (poly
+//  0xE6, init 0, over length … set point, then XOR 0xBE and the call-for-heat byte) · CRC-16 (poly 0x8005, init 0xFFFF)
+//  over length … CRC-8.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace wattslcd {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& d : kit::manchesterRows(b, 460.8, 150)) {
+        for (size_t s : kit::findAll(d, 0xD391D391u, 32)) {
+            if (s + 32 + 128 > d.size()) break;
+            const auto by = bytesAt(d, s + 32, 16);
+            if (by[0] != 0x0D || by[1] != 0xFF || by[2] != 0xFF || by[3] != 0xFE || (by[4] & 0xFC)) continue;
+            if ((by[5] | by[6] | by[7]) == 0) continue;
+            if (uint8_t(crc8(by.data(), 12, 0xE6, 0) ^ 0xBE ^ by[12]) != by[13]) continue;
+            if (crc16(by.data(), 14, 0x8005, 0xFFFF) != uint16_t(by[14] << 8 | by[15])) continue;
+            const double t = int16_t(by[8] << 8 | by[9]) / 10.0, sp = int16_t(by[10] << 8 | by[11]) / 10.0;
+            Reading r;
+            r.kind = "sensor"; r.make = "Watts"; r.model = "WFHT-LCD-RF thermostat";
+            char ib[12]; std::snprintf(ib, sizeof ib, "%02X:%02X:%02X", by[5], by[6], by[7]); r.pubId = ib;
+            r.tempC = t;
+            r.extra = std::string(by[4] & 2 ? "heat" : "cool") + " to " + kit::fmt1v(sp, 1) + " \xc2\xb0" "C" +
+                      (by[12] ? (by[4] & 2 ? " \xc2\xb7 calling for heat" : " \xc2\xb7 calling for cooling") : "") +
+                      (by[4] & 1 ? " \xc2\xb7 pairing" : "");
+            r.fact("setpoint_C", sp); r.fact("mode", by[4] & 2 ? "heat" : "cool"); r.fact("pairing", by[4] & 1 ? "true" : "false");
+            r.fact("call_for_heat", (long long)by[12]);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace wattslcd
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  WATTS VISION thermostats and their central unit (CC110L) — 868.3 MHz FSK, 38.4 kbit/s (26 µs). Facts: rtl_433 issue
+//  #2885 (analysis by floe, klohner, zuckschwerdt), the rtl_433_tests watts_vision cc110l analysis note, and rtl_433's
+//  watts_vision.c notes (read for facts only). AA, sync D3 91 D3 91, then LEN (0x14 a command from the central unit,
+//  0x22 a thermostat's status) · source ID 32 · C6 · destination ID 32 · records · CRC-16/MODBUS (0xA001 reflected,
+//  init 0xFFFF, low byte first) over source … records · CRC-16 (0x8005, init 0xFFFF, high byte first) over LEN …
+//  the MODBUS CRC. A record is a tag and (tag >> 6) + 1 value bytes; 0 ends them. Read: 0x4B measured temperature and
+//  0x8A set point (16 BE, 0.1 °F; 0x084C = no sensor) + its mode byte, 0x03 the endpoint's slot.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace wattsvision {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& row : kit::nrzRows(b.fsk, 26.04, 24, true, 200)) {
+        for (size_t s : kit::findAll(row, 0xD391D391u, 32)) {
+            if (s + 32 + 8 > row.size()) break;
+            const int len = int(bitsAt(row, s + 32, 8));
+            if (len != 0x14 && len != 0x22) continue;
+            if (s + 32 + size_t(len + 3) * 8 > row.size()) continue;
+            const auto by = bytesAt(row, s + 32, len + 3);
+            if (by[5] != 0xC6) continue;
+            if (kit::crc16r(by.data() + 1, size_t(len - 2), 0xA001, 0xFFFF) != uint16_t(by[size_t(len)] << 8 | by[size_t(len - 1)])) continue;
+            if (crc16(by.data(), size_t(len + 1), 0x8005, 0xFFFF) != uint16_t(by[size_t(len + 1)] << 8 | by[size_t(len + 2)])) continue;
+            const uint32_t src = uint32_t(by[1]) << 24 | uint32_t(by[2]) << 16 | uint32_t(by[3]) << 8 | by[4];
+            Reading r;
+            r.kind = "sensor"; r.make = "Watts"; r.model = len == 0x14 ? "Vision central unit" : "Vision thermostat";
+            char ib[12]; std::snprintf(ib, sizeof ib, "%08X", src); r.pubId = ib;
+            r.fact("msg_type", len == 0x14 ? "command" : "status");
+            static const char* const modes[17] = {"comfort", "off", "anti-freeze", "eco", "boost", nullptr, nullptr, nullptr, "auto (comfort)",
+                                                  nullptr, nullptr, "auto (eco)", nullptr, nullptr, nullptr, nullptr, "manual"};
+            std::string ex = len == 0x14 ? "command" : "";
+            const int recEnd = 10 + (len - 11);
+            for (int i = 10; i < recEnd;) {
+                const int tag = by[size_t(i)];
+                if (!tag) break;
+                const int vl = (tag >> 6) + 1;
+                if (i + 1 + vl > recEnd) break;
+                const uint8_t* v = by.data() + i + 1;
+                if (tag == 0x4B) { const int raw = v[0] << 8 | v[1]; if (raw != 0x084C) r.tempC = (raw / 10.0 - 32.0) / 1.8; }
+                else if (tag == 0x8A) {
+                    const double f = (v[0] << 8 | v[1]) / 10.0;
+                    const char* m = v[2] <= 16 ? modes[v[2]] : nullptr;
+                    ex += (ex.empty() ? "" : " \xc2\xb7 ") + std::string(m ? m : "mode") + " set " + kit::fmt1v((f - 32.0) / 1.8, 1) + " \xc2\xb0" "C";
+                    r.fact("mode_setpoint_F", f);
+                }
+                else if (tag == 0x03) r.fact("association_id", (long long)v[0]);
+                else if (tag == 0x3B) r.fact("flags_raw", (long long)v[0]);
+                i += 1 + vl;
+            }
+            r.extra = ex;
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace wattsvision
+
 /** The home-automation families, strongest checks first. */
 inline bool decodeHomeauto(const Burst& b, std::vector<Reading>& out) {
     if (insteon::decode(b, out)) return true;
+    if (danfoss::decode(b, out)) return true;
+    if (evohome::decode(b, out)) return true;
+    if (wattslcd::decode(b, out)) return true;
+    if (wattsvision::decode(b, out)) return true;
     if (adlm::decode(b, out)) return true;
+    if (wattsrf::decode(b, out)) return true;
     return false;
 }
 
 /** ★ Where each home-automation family transmits (bandPlausible). `false` = refuse. */
 inline bool homeautoBandOk(const Reading& r, double f) {
+    if (r.make == "Honeywell" && r.model == "evohome") return f >= 863e6 && f <= 870e6;
+    if (r.make == "Watts" && r.model == "WFHT-RF thermostat") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "ADLM FPRF") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "Insteon") return (f >= 902e6 && f <= 928e6) || (f >= 863e6 && f <= 870e6);
     return true;

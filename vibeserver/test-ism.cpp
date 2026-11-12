@@ -1063,6 +1063,61 @@ static void testHome2() {
         Sig s{fskNrz(c, 109.6)}; s.fsk = true; s.devHz = 40e3;
         cs.push_back({"Insteon switch", s, 915.0e6, "", "msg_type", "2", true});
     }
+    // Danfoss CFR: FSK NRZ 100 µs, AA…, 21 nibbles as 6-bit codes (E 0 2 · ID · count · switch · temp · set · CRC-16 0x1021)
+    {
+        static const uint8_t code[16] = {0x25, 0x29, 0x32, 0x0E, 0x13, 0x2A, 0x1A, 0x26, 0x34, 0x19, 0x15, 0x31, 0x2C, 0x0B, 0x0D, 0x16};
+        uint8_t by[10] = {0x02, 0x11, 0x1E, 0x38, 0xDA, 0x1A, 0xF1, 0x05, 0, 0};   // ID 0x111E, night, 26.852 °C, 5.941 °C
+        const uint16_t c = crc16(by, 8, 0x1021, 0); by[8] = uint8_t(c >> 8); by[9] = uint8_t(c);
+        Bits w = hb(0xAAAAAAAAAAAAAAAAull, 64); append(w, hb(0xAAAAAAAAAAAAAAAAull, 64));
+        append(w, hb(code[0xE], 6));
+        for (int k = 0; k < 10; ++k) { append(w, hb(code[by[k] >> 4], 6)); append(w, hb(code[by[k] & 0xF], 6)); }
+        append(w, hb(0xAA, 8));
+        Sig s{fskNrz(w, 100)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Danfoss CFR", s, 433.92e6, "CFR thermostat", "switch", "\"NIGHT\"", false});
+    }
+    // Watts WFHT-RF: OOK, 6 ms sync mark, 54 PWM bits (600 µs mark = 1, 260 µs = 0), fields LSB first, byte-sum check; twice
+    {
+        auto lsb = [](uint32_t v, int n) { Bits o; for (int i = 0; i < n; ++i) o.push_back((v >> i) & 1); return o; };
+        const int id = 28082, fl = 0, t = 262, sp = 221;
+        const int sum = (id & 0xFF) + (id >> 8) + fl + (t & 0xFF) + (t >> 8) + (sp & 0xFF) + (sp >> 8);
+        Bits w = hb(0xA5, 8); append(w, lsb(id, 16)); append(w, lsb(fl, 4)); append(w, lsb(t, 9)); append(w, lsb(sp, 9)); append(w, lsb(sum & 0xFF, 8));
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) { tx.mark(6000); for (uint8_t x : w) { tx.space(x ? 230 : 570); tx.mark(x ? 640 : 300); } tx.space(23000); }
+        Sig s{tx.r};
+        cs.push_back({"Watts WFHT-RF", s, 433.92e6, "WFHT-RF thermostat", "setpoint_C", "22.100", false});
+    }
+    // Watts WFHT-LCD-RF: OOK Manchester 461 µs chips, 2A AA AA AA D3 91 D3 91, 16 bytes, CRC-8 0xE6 (^BE ^ byte 12), CRC-16 0x8005
+    {
+        std::vector<uint8_t> by = {0x0D, 0xFF, 0xFF, 0xFE, 0x03, 0x34, 0x9E, 0x48, 0x01, 0x04, 0x00, 0xB0, 0x00};
+        by.push_back(uint8_t(crc8(by.data(), 12, 0xE6, 0) ^ 0xBE ^ by[12]));
+        const uint16_t c = crc16(by.data(), 14, 0x8005, 0xFFFF); by.push_back(uint8_t(c >> 8)); by.push_back(uint8_t(c));
+        Bits w = hb(0x2AAAAAAAull, 32); append(w, hb(0xD391D391ull, 32)); append(w, bytesToBits(by));
+        Tx tx; manchesterTx(tx, w, 460.8, 0); tx.space(5000);
+        Sig s{tx.r};
+        cs.push_back({"Watts WFHT-LCD-RF", s, 433.92e6, "WFHT-LCD-RF", "pairing", "\"true\"", false});
+    }
+    // Watts Vision: 868 FSK 26 µs, AA D3 91 D3 91, LEN 14, src, C6, dest, records, CRC-16/MODBUS LE, CRC-16 0x8005 BE
+    {
+        std::vector<uint8_t> by = {0x14, 0xD0, 0x90, 0x4D, 0x89, 0xC6, 0xD0, 0x37, 0x46, 0x55, 0x03, 0x07, 0xDF, 0x00, 0x11, 0x08, 0x00, 0x3B, 0x00};
+        const uint16_t m = kit::crc16r(by.data() + 1, by.size() - 1, 0xA001, 0xFFFF); by.push_back(uint8_t(m)); by.push_back(uint8_t(m >> 8));
+        const uint16_t c = crc16(by.data(), by.size(), 0x8005, 0xFFFF); by.push_back(uint8_t(c >> 8)); by.push_back(uint8_t(c));
+        Bits w = hb(0xAAAAAAAA, 32); append(w, hb(0xD391D391ull, 32)); append(w, bytesToBits(by)); append(w, hb(0xAA, 8));
+        Sig s{fskNrz(w, 26.04)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Watts Vision", s, 868.3e6, "Vision central", "association_id", "7", false});
+    }
+    // Honeywell evohome: 868 FSK 26 µs; UART bytes (0, 8 LSB first, 1): 55 FF 00, 33 55 53, Manchester message, 35, 55 55
+    {
+        std::vector<uint8_t> m = {0x14, 0x32, 0x55, 0xC1, 0x00, 0x08, 0x02, 0x00, 0x64};   // relay demand 50 %
+        m.push_back(uint8_t(-int(kit::sumBytes(m.data(), m.size()))));
+        std::vector<uint8_t> u = {0x55, 0xFF, 0x00, 0x33, 0x55, 0x53};
+        Bits mb; for (uint8_t v : m) for (int q = 7; q >= 0; --q) { const uint8_t x = (v >> q) & 1; mb.push_back(x ? 0 : 1); mb.push_back(x); }
+        for (size_t k = 0; k < mb.size(); k += 8) u.push_back(uint8_t(bitsAt(mb, k, 8)));
+        u.push_back(0x35); u.push_back(0x55); u.push_back(0x55);
+        Bits w = hb(0x5555, 16);
+        for (uint8_t v : u) { w.push_back(0); for (int q = 0; q < 8; ++q) w.push_back((v >> q) & 1); w.push_back(1); }
+        Sig s{fskNrz(w, 26.04)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Honeywell evohome", s, 868.3e6, "evohome", "demand", "0.500", false});
+    }
     home2Run(cs);
 }
 
