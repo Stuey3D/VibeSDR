@@ -605,7 +605,15 @@ public:
         //   holds, as many detectors as the owner's choice and the benchmark allow. Not on a typed frequency.
         if (!keepList) mesh_.clear();
         loraChans_ = 0;
-        if (loraOn_ && customHz <= 0) loraChans_ = lora_.start(band.id, hwCentreHz, rateHz, loraBudget_, 0.45, region_);
+        if (loraOn_ && customHz <= 0) {
+            /* ★ V12 2026-11-12 FOUND ON AIR (vibe_lora_discover.h): the capture is searched for LoRa-shaped bursts too, and
+             *  this radio's channels found on this band before start with it (after the default set, within the budget) */
+            // ★ the search costs ~14 % of the default set's CPU (test-lora): not where no found channel could ever run
+            //   (a zero budget — the Pi 2 with no benchmark, the default set only)
+            lora_.setDiscover(discoverOn_ && loraBudget_ > 0);
+            loraChans_ = lora_.start(band.id, hwCentreHz, rateHz, loraBudget_, 0.45, region_, &found_.book(band.id).list, unixNow());
+            loraStartT_ = now(); foundDirty_ = false; foundTick_ = 0;
+        }
         run_ = true;
         detTh_ = std::thread([this] { detLoop(); });
         mixTh_ = std::thread([this] { mixLoop(); });
@@ -616,6 +624,13 @@ public:
     void setLora(bool on, double budgetUnits) { std::lock_guard<std::mutex> lk(mtx_); loraOn_ = on; loraBudget_ = budgetUnits; }
     /** ★ V12 2026-11-12: the receiver's region (vibeism::regionAt) — which 902–928 MHz channels are LoRa's default set. */
     void setRegion(Region r) { std::lock_guard<std::mutex> lk(mtx_); region_ = r; }
+    /** ★ V12 found on air: where this radio's found channels are kept (beside its bookmarks; "" = memory only), and the
+     *  search itself (on by default — the budget decides whether a found channel RUNS). Take effect at the next start(). */
+    void setFoundFile(const std::string& path) { std::lock_guard<std::mutex> lk(mtx_); found_.setPath(path); }
+    void setDiscover(bool on) { std::lock_guard<std::mutex> lk(mtx_); discoverOn_ = on; }
+    /** Tests: how soon after a start a change of found channels may restart LoRa (default 20 s). */
+    void setFoundRestartSec(double s) { foundRestartSec_ = s; }
+    std::vector<vibelora::FoundCh> foundChannels(const std::string& band) { std::lock_guard<std::mutex> lk(mtx_); return found_.book(band).list; }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
         { std::lock_guard<std::mutex> q(qMtx_); } qCv_.notify_all(); qSpace_.notify_all();
@@ -624,7 +639,9 @@ public:
         if (detTh_.joinable()) detTh_.join();
         if (mixTh_.joinable()) mixTh_.join();
         if (decTh_.joinable()) decTh_.join();
+        const bool searched = lora_.discovering();
         lora_.stop();
+        if (searched) found_.save();   // ★ V12 found on air: what this run learnt (frames, last heard) kept for the next
         // ★ The worker is gone, so nothing else touches the sink: its buffer is written here, once.
         std::shared_ptr<Sink> s;
         { std::lock_guard<std::mutex> lk(mtx_); s.swap(sink_); }
@@ -706,9 +723,33 @@ public:
             uint64_t ok = 0, bh = 0, bc = 0;
             lora_.counts(ok, bh, bc);
             std::snprintf(b, sizeof b, ",\"lora\":{\"chans\":%zu,\"plan\":%zu,\"dets\":%zu,\"frames\":%llu,\"badCrc\":%llu,\"texts\":%llu,"
-                          "\"mapped\":%zu,\"dropped\":%llu}", loraChans_, lora_.planSize(), lora_.detectors(), (unsigned long long)ok,
+                          "\"mapped\":%zu,\"dropped\":%llu", loraChans_ - std::min(loraChans_, lora_.foundRun()), lora_.planSize(), lora_.detectors(), (unsigned long long)ok,
                           (unsigned long long)bc, (unsigned long long)mesh_.texts(), mesh_.nodesWithPosition(), (unsigned long long)lora_.dropped());
             o += b;
+            /* ★ V12 FOUND ON AIR, said honestly: `found` the found channels running, `foundKnown` those known on this band
+             *  (more than `found` = the CPU budget holds the rest back), `foundList` each one — the clients say
+             *  "LoRa: 3 plan channels + 2 found on air". `chans` above counts the plan channels only. */
+            if (band_) {
+                const auto& fl = found_.book(band_->id).list;
+                const double un = unixNow();
+                std::snprintf(b, sizeof b, ",\"found\":%zu,\"foundKnown\":%zu,\"foundList\":[", lora_.foundRun(), found_.book(band_->id).activeCount(un));
+                o += b;
+                bool first = true;
+                const auto running = lora_.channelNames();
+                for (const auto& f : fl) {
+                    std::string sfs; for (int x : f.sfs) sfs += (sfs.empty() ? "" : ",") + std::to_string(x);
+                    std::string gd; for (int x : f.good) gd += (gd.empty() ? "" : ",") + std::to_string(x);
+                    const bool run = std::find(running.begin(), running.end(), f.name()) != running.end();
+                    std::snprintf(b, sizeof b, "%s{\"hz\":%.0f,\"bw\":%.0f,\"sfs\":[%s],\"good\":[%s],\"frames\":%llu,\"run\":%d,\"resting\":%d",
+                                  first ? "" : ",", f.hz, f.bw, sfs.c_str(), gd.c_str(), (unsigned long long)f.frames, run ? 1 : 0, f.retiredUntil > un ? 1 : 0);
+                    o += b;
+                    if (!f.std.empty()) o += ",\"std\":\"" + f.std + "\"";
+                    o += "}";
+                    first = false;
+                }
+                o += "]";
+            }
+            o += "}";
             o += ",\"msgs\":" + mesh_.msgsJson(t);
         }
         // ★ V12 wM-Bus: frames whose later block failed its CRC (the meter is still listed), and the capture too narrow
@@ -940,12 +981,39 @@ private:
         // ★ The gallery's copy OUTSIDE the lock: a report() asked for meanwhile never waits on a file.
         if (!heard.empty()) { auto s = sink_; lk.unlock(); for (const auto& h : heard) s->heard(h); }
     }
+    /** ★ V12 FOUND ON AIR — the LoRa-shaped bursts and the decodes since the last look, into this band's book; a change
+     *  restarts LoRa on the new set (at most once per foundRestartSec_), and the book is saved (atomically) when it does.
+     *  Runs on the housekeeping thread only, the sole writer of the book while ISM runs. */
+    void discoverStep(const std::vector<vibelora::Heard>& lh) {
+        if (!band_ || customHz_ > 0) return;
+        auto& bk = found_.book(band_->id);
+        const double un = unixNow();
+        const auto running = lora_.channelNames();
+        std::vector<vibelora::StdCh> plan;
+        for (const auto& c : vibelora::planFor(band_->id))
+            plan.push_back({c.name, c.hz, c.bw, c.sfs, std::find(running.begin(), running.end(), std::string(c.name)) != running.end()});
+        bool changed = false;
+        for (const auto& sh : lora_.takeShapes()) changed |= bk.offer(sh, un, plan, running);
+        for (const auto& h : lh) if (h.m.found) changed |= bk.decoded(h.f.chan, h.f.sf, un);
+        if (un - foundTick_ >= 10) { foundTick_ = un; changed |= bk.tick(un); }
+        if (changed) foundDirty_ = true;
+        if (foundDirty_ && now() - loraStartT_ >= foundRestartSec_) {
+            foundDirty_ = false;
+            const size_t n = lora_.start(band_->id, hwCentre_, rate_, loraBudget_, 0.45, region_, &bk.list, un);
+            { std::lock_guard<std::mutex> lk(mtx_); loraChans_ = n; }
+            loraStartT_ = now();
+            found_.save();
+        }
+    }
+    static double unixNow() { return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count(); }
+
     void housekeeping(double& winStart) {
         std::unique_lock<std::mutex> lk(mtx_);
         // ★ V12 LoRa: what the LoRa thread decoded since the last look — into the list, and news to the gallery
         if (lora_.running()) {
             lk.unlock();
             auto lh = lora_.take();
+            if (lora_.discovering()) discoverStep(lh);
             lk.lock();
             if (!lh.empty()) {
                 const double tl = now();
@@ -1025,6 +1093,9 @@ private:
     bool loraOn_ = true;
     double loraBudget_ = INFINITY;
     Region region_ = Region::Unknown;
+    vibelora::FoundStore found_;
+    bool discoverOn_ = true, foundDirty_ = false;
+    double loraStartT_ = 0, foundTick_ = 0, foundRestartSec_ = 20;
     size_t loraChans_ = 0;
 };
 

@@ -28,6 +28,8 @@
 //   --ism FILE  while the dongle is tuned within 2 MHz of 434 MHz, replay FILE (unsigned 8-bit IQ at the rate the server
 //               asked for, centred where ISM mode puts the radio) on a loop: sensors for ISM mode on the bench (V12,
 //               2026-10-25 — `test-ism --write-clip` makes one, scripts/test-server-ism.mjs uses it).
+//   --ism915 FILE  the same while the dongle is tuned within 2 MHz of 915.25 MHz — LoRa found on air (V12, 2026-11-12 —
+//               `test-lora --write-clip-found` makes one, scripts/test-server-lora-found.mjs uses it).
 //   --ism868 FILE  the same while the dongle is tuned within 2 MHz of 868.6 MHz — wM-Bus meters for ISM's 868 band (V12,
 //               2026-10-26 — `test-wmbus --write-clip` makes one).
 //   --hf FILE --hf-centre HZ   while the dongle is tuned within a quarter of the rate of HZ, replay FILE (unsigned 8-bit IQ
@@ -164,6 +166,9 @@ const ismArg = (() => { const i = process.argv.indexOf('--ism'); return i >= 0 ?
 const ISM_IQ = ismArg ? fs.readFileSync(ismArg) : null;
 const ism868Arg = (() => { const i = process.argv.indexOf('--ism868'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const ISM868_IQ = ism868Arg ? fs.readFileSync(ism868Arg) : null;
+const ism915Arg = (() => { const i = process.argv.indexOf('--ism915'); return i >= 0 ? process.argv[i + 1] : ''; })();
+const ISM915_IQ = ism915Arg ? fs.readFileSync(ism915Arg) : null;
+let ism915Pos = 0;
 const hfArg = (() => { const i = process.argv.indexOf('--hf'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const HF_IQ = hfArg ? fs.readFileSync(hfArg) : null;
 // ★ --hf-utc: the HF clip is UTC-ANCHORED — clip time t plays at UTC ≡ t (mod the clip's length), so a slotted digital
@@ -325,6 +330,12 @@ const srv = net.createServer((sock) => {
         const take = Math.min(n * 2 - k, ISM868_IQ.length - ism868Pos);
         ISM868_IQ.copy(buf, k, ism868Pos, ism868Pos + take);
         k += take; ism868Pos = (ism868Pos + take) % ISM868_IQ.length;
+      }
+    } else if (ISM915_IQ && Math.abs(centreHz - 915.25e6) <= 2e6) {
+      for (let k = 0; k < n * 2; ) {
+        const take = Math.min(n * 2 - k, ISM915_IQ.length - ism915Pos);
+        ISM915_IQ.copy(buf, k, ism915Pos, ism915Pos + take);
+        k += take; ism915Pos = (ism915Pos + take) % ISM915_IQ.length;
       }
     } else if (ADSB_IQ && Math.abs(centreHz - 1090e6) <= 2e6) {
       for (let k = 0; k < n * 2; ) {
