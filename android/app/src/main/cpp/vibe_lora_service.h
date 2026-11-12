@@ -14,6 +14,7 @@
 //    (the report says how many the capture holds).
 #pragma once
 #include "vibe_lora.h"
+#include "vibe_ism_bands.h"   // ★ vibeism::Region — the 902–928 MHz plans follow the receiver's region
 #include "vibe_lorawan.h"
 #include "vibe_meshtastic.h"
 #include "vibe_meshcore.h"
@@ -39,11 +40,26 @@ struct PlanCh {
     std::vector<uint8_t> syncs;
     bool inv;                  ///< inverted IQ (LoRaWAN downlinks)
     int tier;                  ///< 0 = the default set (runs on the minimum-spec Pi 2); 1, 2 = added as the budget allows
+    unsigned home = 0;         ///< ★ 902–928 MHz: the regions (homeBit) whose network this is; 0 = everywhere. Away from
+                               ///<   home a channel drops to tier 2 (still there with the budget or "lora+all")
 };
+inline unsigned homeBit(vibeism::Region r) { return 1u << unsigned(r); }
+/** A channel's tier where the receiver is: its own at home and where the region is unknown (no position set: every
+ *  region's default set — at most 17.6 units, on the 915 band, against 868's 25.85), tier 2 anywhere else. Each mesh
+ *  band's own main channel has no home — it is what the band is named for. */
+inline int tierAt(const PlanCh& c, vibeism::Region r) {
+    if (!c.home || r == vibeism::Region::Unknown || (c.home & homeBit(r))) return c.tier;
+    return 2;
+}
 /** ★ Sources per channel in LORA-MESH.md §Plans: LoRaWAN Regional Parameters (EU868 default channels 868.1/.3/.5 and the
- *  common 867.1-867.9 additions, RX2 869.525; EU433 433.175/.375/.575; US915 sub-band 8); meshtastic.org radio-settings
+ *  common 867.1-867.9 additions, RX2 869.525; EU433 433.175/.375/.575; US915 sub-band 8; US915 902.3 + 0.2n, AU915
+ *  915.2 + 0.2n and 915.9 + 1.6n, AS923 923.2/923.4 − offsets — TTN lorawan-stack pkg/band, lorawan-frequency-plans,
+ *  where BR is listed under AU_915_928); meshtastic.org radio-settings
  *  (EU_868 869.4-869.65 MHz, one 250 kHz slot at 869.525; EU_433 433-434 MHz, LongFast on 433.875); MeshCore's preset
- *  list (EU/UK Narrow 869.618 SF8 BW62.5; NL/PT/SK/HU 869.618 SF7; CZ 869.432 SF7; EU 433 Narrow 433.650 SF8). */
+ *  list (EU/UK Narrow 869.618 SF8 BW62.5; NL/PT/SK/HU 869.618 SF7; CZ 869.432 SF7; EU 433 Narrow 433.650 SF8;
+ *  api.meshcore.nz/api/v1/config 2026-11-12: USA/Canada 910.525 SF7 BW62.5; Costa Rica 910.525 SF11 BW125; Australia
+ *  915.800 SF10 BW250, (Mid) 915.075 SF9 BW125; "Australia: SA, WA" and Brazil 923.125 SF8 BW62.5 CR4/8 — meshcore.com.br
+ *  /configuracao tells Brazil to pick it; Vietnam 920.250 SF8 BW62.5; Thailand 921.000 SF7 BW62.5). */
 inline const std::vector<PlanCh>& planFor(const std::string& band) {
     static const std::vector<uint8_t> LW = {0x34, 0x12}, MT = {0x2B, 0x12}, MC = {0x12};
     static const std::vector<int> ALL = {7, 8, 9, 10, 11, 12};
@@ -74,16 +90,72 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
         {"MeshCore EU 433 Long Range 433.650", "meshcore", 433.650e6, 250e3, {11}, MC, false, 2},
         {"MeshCore PT 433.375", "meshcore", 433.375e6, 62.5e3, {9}, MC, false, 2},
     };
-    static const std::vector<PlanCh> us915 = {
-        {"LoRaWAN US915 914.3", "lorawan", 914.3e6, 125e3, {7, 8, 9, 10}, LW, false, 0},
-        {"LoRaWAN US915 914.5", "lorawan", 914.5e6, 125e3, {7, 8, 9, 10}, LW, false, 0},
-        {"LoRaWAN US915 914.7", "lorawan", 914.7e6, 125e3, {7, 8, 9, 10}, LW, false, 1},
-        {"LoRaWAN US915 914.9", "lorawan", 914.9e6, 125e3, {7, 8, 9, 10}, LW, false, 1},
+    /* ★★ V12 2026-11-12 — THE 902–928 MHz PLANS (LORA-MESH.md §Plans, a source for every line). `home` = the regions
+     *  whose network a channel is (tierAt): at home its tier, unknown position one lower, elsewhere tier 2 — so a Pi 2
+     *  (the default tier only) in Brazil runs Brazil's channels, not Asia's. Meshtastic slots are djb2(preset name) %
+     *  slots (firmware RadioInterface.cpp; checked in test-lora); MeshCore's from its preset list (api.meshcore.nz). */
+    using vibeism::Region;
+    static const unsigned NA = homeBit(Region::NorthAmerica), SA = homeBit(Region::SouthAmerica),
+                          OC = homeBit(Region::Oceania), AS = homeBit(Region::Asia);
+    static const std::vector<int> SF7_10 = {7, 8, 9, 10};
+    static const std::vector<PlanCh> b906 = {
+        {"Meshtastic US LongFast 906.875", "meshtastic", 906.875e6, 250e3, {11}, MT, false, 0},
+        {"Meshtastic BR_902 MediumFast 906.625", "meshtastic", 906.625e6, 250e3, {9}, MT, false, 1, SA},
+        {"LoRaWAN US915 905.1", "lorawan", 905.1e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 905.3", "lorawan", 905.3e6, 125e3, SF7_10, LW, false, 1, NA},
+    };
+    static const std::vector<PlanCh> b910 = {
+        {"MeshCore USA/Canada 910.525", "meshcore", 910.525e6, 62.5e3, {7}, MC, false, 0},
+        {"MeshCore Costa Rica 910.525", "meshcore", 910.525e6, 125e3, {11}, MC, false, 1, NA},
+        {"LoRaWAN US915 909.9", "lorawan", 909.9e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 910.1", "lorawan", 910.1e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 910.3", "lorawan", 910.3e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 910.7", "lorawan", 910.7e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 910.9", "lorawan", 910.9e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 911.1", "lorawan", 911.1e6, 125e3, SF7_10, LW, false, 2, NA},
+    };
+    /* The 915 band (the radio at 915.25 at 2.4 MS/s: 914.17–916.33). ★ Brazil's MeshCore users pick from the AUSTRALIAN
+     *  presets (meshcore.com.br: "Australia: SA, WA, Brazil"), so AU's 915.8 and 915.075 are at home in South America
+     *  too; Brazil's LoRaWAN is AU915 (TTN frequency-plans.yml lists BR under AU_915_928). */
+    static const std::vector<PlanCh> b915 = {
+        {"MeshCore Australia 915.800", "meshcore", 915.8e6, 250e3, {10}, MC, false, 0, OC | SA},
+        {"MeshCore Australia (Mid) 915.075", "meshcore", 915.075e6, 125e3, {9}, MC, false, 0, OC | SA},
+        {"LoRaWAN AU915 915.2", "lorawan", 915.2e6, 125e3, SF7_10, LW, false, 0, SA | OC},
+        {"LoRaWAN US915 914.3", "lorawan", 914.3e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"LoRaWAN US915 914.5", "lorawan", 914.5e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"LoRaWAN US915 914.7", "lorawan", 914.7e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 914.9", "lorawan", 914.9e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN AU915 915.4", "lorawan", 915.4e6, 125e3, SF7_10, LW, false, 1, SA | OC},
+        {"LoRaWAN AU915 915.6", "lorawan", 915.6e6, 125e3, SF7_10, LW, false, 1, SA | OC},
+        {"LoRaWAN AU915 915.8", "lorawan", 915.8e6, 125e3, SF7_10, LW, false, 2, SA | OC},
+        {"LoRaWAN AU915 916.0", "lorawan", 916.0e6, 125e3, SF7_10, LW, false, 2, SA | OC},
+        {"LoRaWAN AU915 916.2", "lorawan", 916.2e6, 125e3, SF7_10, LW, false, 2, SA | OC},
+        {"LoRaWAN AU915 915.9 (500 kHz)", "lorawan", 915.9e6, 500e3, {8}, LW, false, 2, SA | OC},
+    };
+    static const std::vector<PlanCh> b920 = {
+        {"Meshtastic ANZ LongFast 919.875", "meshtastic", 919.875e6, 250e3, {11}, MT, false, 0},
+        {"MeshCore Vietnam 920.250", "meshcore", 920.25e6, 62.5e3, {8}, MC, false, 0, AS},
+        {"MeshCore Thailand 921.000", "meshcore", 921.0e6, 62.5e3, {7}, MC, false, 0, AS},
+        {"LoRaWAN AS923-2 921.4", "lorawan", 921.4e6, 125e3, SF7_10, LW, false, 1, AS},
+        {"LoRaWAN AS923-2 921.6", "lorawan", 921.6e6, 125e3, SF7_10, LW, false, 1, AS},
+    };
+    static const std::vector<PlanCh> b923 = {
+        {"MeshCore Brazil / AU 923.125", "meshcore", 923.125e6, 62.5e3, {8}, MC, false, 0},
+        {"Meshtastic JP LongFast 923.375", "meshtastic", 923.375e6, 250e3, {11}, MT, false, 0, AS},
+        {"Meshtastic KR/MY LongFast 922.875", "meshtastic", 922.875e6, 250e3, {11}, MT, false, 0, AS},
+        {"Meshtastic TW/TH LongFast 923.875", "meshtastic", 923.875e6, 250e3, {11}, MT, false, 0, AS},
+        {"LoRaWAN AS923 923.2", "lorawan", 923.2e6, 125e3, SF7_10, LW, false, 1, AS},
+        {"LoRaWAN AS923 923.4", "lorawan", 923.4e6, 125e3, SF7_10, LW, false, 1, AS},
+        {"MeshCore 923.125 SF7", "meshcore", 923.125e6, 62.5e3, {7}, MC, false, 2},
     };
     static const std::vector<PlanCh> none;
     if (band == "868") return eu868;
     if (band == "433") return eu433;
-    if (band == "915") return us915;
+    if (band == "906") return b906;
+    if (band == "910") return b910;
+    if (band == "915") return b915;
+    if (band == "920") return b920;
+    if (band == "923") return b923;
     return none;
 }
 
@@ -95,12 +167,12 @@ inline double chanCost(const PlanCh& c) { double u = 0; for (int sf : c.sfs) u +
 /** Which plan channels run: everything inside the capture, the default tier always (never hidden by the benchmark —
  *  only the owner switches LoRa off), then the next tiers while `budgetUnits` lasts (∞ = all; "all" forced by the owner). */
 inline std::vector<const PlanCh*> choose(const std::vector<PlanCh>& plan, double hwCentreHz, double rateHz, double budgetUnits,
-                                         double edge = 0.45) {
+                                         double edge = 0.45, vibeism::Region region = vibeism::Region::Unknown) {
     std::vector<const PlanCh*> out;
     double used = 0;
     for (int tier = 0; tier <= 2; ++tier)
         for (const auto& c : plan) {
-            if (c.tier != tier) continue;
+            if (tierAt(c, region) != tier) continue;
             if (std::fabs(c.hz - hwCentreHz) + c.bw / 2 > edge * rateHz + 1) continue;
             const double u = chanCost(c);
             if (tier > 0 && used + u > budgetUnits) continue;
@@ -155,14 +227,15 @@ class Engine {
 public:
     ~Engine() { stop(); }
     /** Start on `band` ("868"…) with the radio at `hwCentreHz`, `rateHz`. Returns the channels that run. */
-    size_t start(const std::string& band, double hwCentreHz, double rateHz, double budgetUnits, double edge = 0.45) {
+    size_t start(const std::string& band, double hwCentreHz, double rateHz, double budgetUnits, double edge = 0.45,
+                 vibeism::Region region = vibeism::Region::Unknown) {
         stop();
         std::lock_guard<std::mutex> lk(mtx_);
         hc_ = hwCentreHz; rate_ = rateHz;
         chans_.clear(); demods_.clear(); streams_.clear(); names_.clear();
         const auto& plan = planFor(band);
         planSize_ = plan.size();
-        chosen_ = choose(plan, hwCentreHz, rateHz, budgetUnits, edge);
+        chosen_ = choose(plan, hwCentreHz, rateHz, budgetUnits, edge, region);
         if (chosen_.empty()) return 0;
         ch_.reset(new Channeliser(rateHz));
         // ★ one stream per distinct (frequency, bandwidth) — Meshtastic's two 869.525 entries share theirs
@@ -309,8 +382,9 @@ public:
     /** ★ For the tests and the offline runner: the same work as the thread, inline. */
     void process(const cf* x, size_t n) { work(x, n); }
     /** `edge`: how far out a channel may reach, as a share of the rate (0.5 = a narrow recording made for ONE channel). */
-    void startInline(const std::string& band, double hwCentreHz, double rateHz, double budgetUnits, double edge = 0.45) {
-        start(band, hwCentreHz, rateHz, budgetUnits, edge);
+    void startInline(const std::string& band, double hwCentreHz, double rateHz, double budgetUnits, double edge = 0.45,
+                     vibeism::Region region = vibeism::Region::Unknown) {
+        start(band, hwCentreHz, rateHz, budgetUnits, edge, region);
         stop();      // the worker is not wanted; the channels and detectors stay built
     }
 

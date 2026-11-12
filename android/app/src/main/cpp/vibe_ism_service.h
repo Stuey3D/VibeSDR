@@ -605,7 +605,7 @@ public:
         //   holds, as many detectors as the owner's choice and the benchmark allow. Not on a typed frequency.
         if (!keepList) mesh_.clear();
         loraChans_ = 0;
-        if (loraOn_ && customHz <= 0) loraChans_ = lora_.start(band.id, hwCentreHz, rateHz, loraBudget_);
+        if (loraOn_ && customHz <= 0) loraChans_ = lora_.start(band.id, hwCentreHz, rateHz, loraBudget_, 0.45, region_);
         run_ = true;
         detTh_ = std::thread([this] { detLoop(); });
         mixTh_ = std::thread([this] { mixLoop(); });
@@ -614,6 +614,8 @@ public:
     /** ★ V12 LoRa: on/off (the owner's switch) and the detector budget in vibelora::detCost units (∞ = every plan
      *  channel the capture holds; the default tier always runs while LoRa is on). Takes effect at the next start(). */
     void setLora(bool on, double budgetUnits) { std::lock_guard<std::mutex> lk(mtx_); loraOn_ = on; loraBudget_ = budgetUnits; }
+    /** ★ V12 2026-11-12: the receiver's region (vibeism::regionAt) — which 902–928 MHz channels are LoRa's default set. */
+    void setRegion(Region r) { std::lock_guard<std::mutex> lk(mtx_); region_ = r; }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
         { std::lock_guard<std::mutex> q(qMtx_); } qCv_.notify_all(); qSpace_.notify_all();
@@ -1022,6 +1024,7 @@ private:
     vibelora::MeshTable mesh_;
     bool loraOn_ = true;
     double loraBudget_ = INFINITY;
+    Region region_ = Region::Unknown;
     size_t loraChans_ = 0;
 };
 

@@ -371,6 +371,110 @@ int main(int argc, char** argv) {
         ok(!want.empty() && have == want, "threads = inline: " + std::to_string(have.size()) + " frames against " + std::to_string(want.size()) + ", identical");
     }
 
+    std::printf("── 902–928 MHz (V12 2026-11-12): the mesh bands, their slots, their plans by region ──\n");
+    {
+        using vibeism::Region;
+        // ★ Meshtastic's slot formula (firmware RadioInterface.cpp): freqStart + bw/2 + (djb2(name) % slots) × bw
+        auto slotHz = [](double lo, double hi, double bw, const char* name) {
+            const int n = int(std::lround((hi - lo) / bw));
+            return lo + bw / 2 + double(meshtastic::slotHash(name) % uint32_t(n)) * bw;
+        };
+        ok(std::fabs(slotHz(902e6, 928e6, 250e3, "LongFast") - 906.875e6) < 1, "Meshtastic US LongFast slot = 906.875 MHz");
+        ok(std::fabs(slotHz(915e6, 928e6, 250e3, "LongFast") - 919.875e6) < 1, "Meshtastic ANZ LongFast slot = 919.875 MHz");
+        ok(std::fabs(slotHz(902e6, 907.5e6, 250e3, "MediumFast") - 906.625e6) < 1, "Meshtastic BR_902 MediumFast slot = 906.625 MHz");
+        ok(std::fabs(slotHz(920.5e6, 923.5e6, 250e3, "LongFast") - 923.375e6) < 1, "Meshtastic JP LongFast slot = 923.375 MHz");
+        ok(std::fabs(slotHz(920e6, 923e6, 250e3, "LongFast") - 922.875e6) < 1, "Meshtastic KR LongFast slot = 922.875 MHz");
+        ok(std::fabs(slotHz(920e6, 925e6, 250e3, "LongFast") - 923.875e6) < 1, "Meshtastic TW/TH LongFast slot = 923.875 MHz");
+        // every plan channel's slot / preset is inside its band's capture at 2.4 MS/s (the radio where ismHwCentre puts it)
+        auto hwOf = [](const vibeism::Band& b, double rate) {
+            return b.dcOffsetHz <= 0 ? b.centreHz : b.centreHz + std::max(40e3, std::min(b.dcOffsetHz, rate * 0.45 - b.needHz)); };
+        for (const char* id : {"906", "910", "915", "920", "923"}) {
+            const auto* b = vibeism::bandById(id);
+            const double lo = std::string(id) >= "920" ? 915.0e6 : 902.0e6;
+            ok(b && vibeism::exactAllowed(*b, lo) && vibeism::exactAllowed(*b, 928.0e6) && !vibeism::exactAllowed(*b, lo - 0.1e6)
+               && !vibeism::exactAllowed(*b, 928.1e6), std::string(id) + ": a typed frequency is allowed inside its allocation only");
+            const auto& plan = planFor(id);
+            const size_t fit24 = choose(plan, hwOf(*b, 2.4e6), 2.4e6, INFINITY).size();
+            const size_t main2048 = choose(plan, hwOf(*b, 2.048e6), 2.048e6, 0, 0.45, Region::Other).size();
+            std::printf("    %s %-28s radio %.3f MHz: %zu of %zu channels fit at 2.4 MS/s; the band's main channel at 2.048: %zu\n",
+                        id, b->name, hwOf(*b, 2.4e6) / 1e6, fit24, plan.size(), main2048);
+            ok(fit24 == plan.size() || std::string(id) == "920", std::string(id) + ": every plan channel fits at 2.4 MS/s");
+            ok(std::string(id) == "915" || main2048 >= 1, std::string(id) + ": its main (no-home) channel runs at 2.048 MS/s too");
+        }
+        auto names = [](const std::vector<const PlanCh*>& v) { std::string s; for (auto* c : v) s += std::string(c->name) + "; "; return s; };
+        auto tier0 = [&](const char* id, Region r) { const auto* b = vibeism::bandById(id); return choose(planFor(id), hwOf(*b, 2.4e6), 2.4e6, 0, 0.45, r); };
+        double units = 0; for (auto* c : tier0("923", Region::SouthAmerica)) units += chanCost(*c);
+        ok(names(tier0("923", Region::SouthAmerica)) == "MeshCore Brazil / AU 923.125; ", "Brazil, 923: the default set is MeshCore Brasil (" + std::to_string(units) + " units)");
+        ok(tier0("923", Region::Asia).size() == 4, "Asia, 923: MeshCore 923.125 + three Meshtastic LongFast slots");
+        ok(names(tier0("906", Region::NorthAmerica)) == "Meshtastic US LongFast 906.875; ", "US, 906: Meshtastic US LongFast");
+        ok(names(tier0("910", Region::NorthAmerica)) == "MeshCore USA/Canada 910.525; ", "US, 910: MeshCore US");
+        const std::string br915 = names(tier0("915", Region::SouthAmerica));
+        ok(br915.find("AU915 915.2") != std::string::npos && br915.find("MeshCore Australia 915.800") != std::string::npos
+           && br915.find("US915") == std::string::npos, "Brazil, 915: " + br915);
+        const std::string us915 = names(tier0("915", Region::NorthAmerica));
+        ok(us915.find("US915 914.3") != std::string::npos && us915.find("AU915") == std::string::npos, "US, 915: " + us915);
+        for (const char* id : {"906", "910", "915", "920", "923"})
+            for (Region r : {Region::NorthAmerica, Region::SouthAmerica, Region::Oceania, Region::Asia, Region::Unknown}) {
+                double u = 0; for (auto* c : tier0(id, r)) u += chanCost(*c);
+                double eu = 0; for (const auto& c : planFor("868")) if (c.tier == 0) eu += chanCost(c);
+                if (r == Region::Unknown) std::printf("    %s default set, no position: %.2f units (868's: %.2f)\n", id, u, eu);
+                ok(u <= eu, std::string(id) + " " + vibeism::regionName(r) + ": the default set costs no more than 868's (" + std::to_string(u) + ")");
+            }
+    }
+
+    std::printf("── 923 MHz at 2.4 MS/s: MeshCore Brasil (923.125, BW 62.5, SF8, CR 4/8) through the engine ──\n");
+    {
+        const auto* b = vibeism::bandById("923");
+        const double fs = 2.4e6, hc = b->centreHz + 300e3;   // ★ where ismHwCentre puts the radio at 2.4 MS/s
+        std::mt19937 r2(31);
+        std::vector<Tx> txs = {
+            {923.125e6, 62.5e3, 8, 4, 0x12, 16, mcAdvert("Repetidor Curitiba", -25.43, -49.27, 2), 0.3, 1500, false},
+            {923.125e6, 62.5e3, 8, 4, 0x12, 16, mcGroupText(meshcore::publicKey(), "Kiko: alguem na malha?"), 2.0, -2500, false},
+            // ★ a transmitter 12 kHz off (13 ppm at 923 MHz — a cheap crystal, or an RTL with no PPM set): still decoded
+            {923.125e6, 62.5e3, 8, 4, 0x12, 16, mcGroupText(meshcore::publicKey(), "Ana: longe do canal"), 3.6, 12000, false},
+        };
+        const auto x = render(txs, fs, hc, 6.0, 3.0, r2);
+        Engine e;
+        e.startInline("923", hc, fs, 0, 0.45, vibeism::Region::SouthAmerica);
+        int adv = 0, txt = 0, off = 0;
+        for (size_t i = 0; i < x.size(); i += 65536) e.process(x.data() + i, std::min<size_t>(65536, x.size() - i));
+        for (auto& h : e.take()) {
+            std::printf("    %-34s SF%-2d CR4/%d %+6.0f Hz  %s\n", h.f.chan.c_str(), h.f.sf, 4 + h.f.cr, h.f.cfoHz, meshcore::line(h.m).c_str());
+            adv += h.m.what == "advert" && h.m.longName == "Repetidor Curitiba";
+            txt += h.m.what == "text" && h.m.text == "alguem na malha?" && h.m.channel == "Public";
+            off += h.m.what == "text" && h.m.text == "longe do canal";
+        }
+        if (!adv || !txt || !off) std::printf("%s", e.stats().c_str());
+        ok(adv == 1, "the MeshCore advert on 923.125 (Brazil's default set only)");
+        ok(txt == 1, "a Public-channel message, CR 4/8, opened with the worldwide Public key");
+        ok(off == 1, "…and one 12 kHz off its channel");
+    }
+
+    std::printf("── 906 MHz at 2.4 MS/s: Meshtastic US LongFast (906.875, BW 250, SF11) through the engine ──\n");
+    {
+        const auto* b = vibeism::bandById("906");
+        const double fs = 2.4e6, hc = b->centreHz;
+        std::mt19937 r2(37);
+        const uint32_t BC = 0xFFFFFFFF;
+        PbW user; user.str(1, "!0badc0de"); user.str(2, "Boulder Hill"); user.str(3, "BLDR"); user.u(5, 43); user.u(7, 2);
+        const std::string hi = "Hello from Colorado";
+        std::vector<Tx> txs = {
+            {906.875e6, 250e3, 11, 1, 0x2B, 16, mtPacket(BC, 0x0badc0de, 0x2001, 3, 3, 4, user.b), 0.2, 3000, false},
+            {906.875e6, 250e3, 11, 1, 0x2B, 16, mtPacket(BC, 0x0badc0de, 0x2002, 3, 3, 1, std::vector<uint8_t>(hi.begin(), hi.end())), 1.8, -6000, false},
+        };
+        const auto x = render(txs, fs, hc, 4.0, 3.0, r2);
+        Engine e;
+        e.startInline("906", hc, fs, 0, 0.45, vibeism::Region::NorthAmerica);
+        ok(e.channelsRun() == 1, "the US default set on 906: one channel");
+        for (size_t i = 0; i < x.size(); i += 65536) e.process(x.data() + i, std::min<size_t>(65536, x.size() - i));
+        int ni = 0, tx = 0;
+        for (auto& h : e.take()) {
+            std::printf("    %-34s SF%-2d %+6.0f Hz  %s\n", h.f.chan.c_str(), h.f.sf, h.f.cfoHz, meshtastic::line(h.m).c_str());
+            ni += h.m.what == "nodeinfo" && h.m.longName == "Boulder Hill"; tx += h.m.what == "text" && h.m.text == hi;
+        }
+        ok(ni == 1 && tx == 1, "Meshtastic US node info and a LongFast text, opened with the worldwide default key");
+    }
+
     std::printf("── pure noise: nothing, and the CPU rows ──\n");
     {
         const double fs = 2.4e6, hc = 868.6e6, secs = 20;

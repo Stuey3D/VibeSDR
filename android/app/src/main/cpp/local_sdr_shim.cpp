@@ -15443,6 +15443,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★ V12 LoRa (vibe_lora_service.h, docs/v12/LORA-MESH.md): on unless the owner blocks "lora"; every plan channel
          *  when the owner allows "lora+all", otherwise the default set plus what the benchmark's dec_lora row affords. */
         g_ism.setLora(!vsModeBlocked("lora"), vsModeBlocked("lora+all") ? INFINITY : vibelora::budgetFromBench(vsLoraBenchPct()));
+        // ★ V12 2026-11-12: which 902–928 MHz channels are the default set follows the receiver's own position
+        g_ism.setRegion(vibeism::regionAt(g_bgLat.load(), g_bgLon.load()));
         auto log = ismMakeLog(b);
         if (log) for (const auto& kv : log->nickFloor()) g_ism.reserveNicks(kv.first, kv.second);
         { std::lock_guard<std::mutex> lk(ismLogMtx_); ismLog_ = log; }
@@ -38596,6 +38598,7 @@ static std::string vsTunableJson() {
         {
             const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : 2.4e6;
             const double budget = vsModeBlocked("lora+all") ? INFINITY : vibelora::budgetFromBench(vsLoraBenchPct());
+            const vibeism::Region region = vibeism::regionAt(g_bgLat.load(), g_bgLon.load());
             j += ",\"loraChannels\":[";
             bool firstL = true;
             for (const auto& b : vibeism::bands()) {
@@ -38606,8 +38609,8 @@ static std::string vsTunableJson() {
                                 : b.centreHz + std::max(40e3, std::min(b.dcOffsetHz, rate * 0.45 - b.needHz));
                 char e[160];
                 std::snprintf(e, sizeof e, "%s{\"band\":\"%s\",\"plan\":%zu,\"fit\":%zu,\"defaults\":%zu,\"run\":%zu}",
-                              firstL ? "" : ",", b.id, plan.size(), vibelora::choose(plan, hw, rate, INFINITY).size(),
-                              vibelora::choose(plan, hw, rate, 0).size(), vibelora::choose(plan, hw, rate, budget).size());
+                              firstL ? "" : ",", b.id, plan.size(), vibelora::choose(plan, hw, rate, INFINITY, 0.45, region).size(),
+                              vibelora::choose(plan, hw, rate, 0, 0.45, region).size(), vibelora::choose(plan, hw, rate, budget, 0.45, region).size());
                 j += e; firstL = false;
             }
             j += "]";
