@@ -1280,6 +1280,14 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── the DAB scan survives a restart (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-scan-persist.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12: AUTOMATIC FREQUENCY CORRECTION (auto-PPM, vibe_afc.h, 2026-11-12) on the real server and the bench multiplex from
+#     a dongle whose crystal runs 4 ppm fast (fake-rtl-tcp --clock-ppm 4): off = nothing changes; an upgrade (no key) = on,
+#     nothing for 100 s, then ~4 ppm learned, glided in, checked, handed to the RTL's crystal correction (the dial unmoved),
+#     DAB's offset ~0; a restart restores it; a manual ppm is the base it adds to; Reset / Turn off = the manual exactly.
+#     Needs the bench clip. Silent. ~12 min.
+printf '\n\033[1m── auto-PPM (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-afc.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12: THE DAB SCAN AND THE GAIN (2026-10-27, Stuart: "the AGC can work quick enough to allow the multiplex to be found
 #     but without taking forever"). An RTL front end that OBEYS the gain (fake-rtl-tcp --dab-mux): strong→weak locks in ~3 s
 #     (was 20 s, the recovering jump refused by its own gate), a typical aerial's five ensembles all found in < 2.5 min, a +3 dB

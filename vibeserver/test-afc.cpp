@@ -282,6 +282,36 @@ int main() {
         a = feedW(hw, 4.2, 0.2, 0, 80);   // ★ 4 ppm already in the radio's crystal correction: the timing sees the 0.2 left
         ok(a.kind == Action::Apply && std::fabs(a.to - 4.2) < 1e-9, "4 ppm handed to the RTL: the timing reads the 0.2 left, + 4 = the carrier's 4.2 — applied");
 
+        // ── REAL DATA: Stuart's RSP1A on the Lenovo, six blocks within ~60 s (2026-11-12 22:03 UTC, 2.048 MS/s, shift 0) ──
+        {
+            struct B { const char* name; double hz, off; int idx; float mer; };
+            const B blocks[] = { {"DAB 7D", 194.064e6, 153, 11, 25.8f}, {"DAB 10C", 213.360e6, 169, 22, 20.f}, {"DAB 10D", 215.072e6, 169, 23, 10.6f},
+                                 {"DAB 11A", 216.928e6, 171, 25, 22.f}, {"DAB 11D", 222.064e6, 175, 29, 24.f}, {"DAB 12B", 225.648e6, 178, 32, 23.f} };
+            for (const B& b : blocks) ok(std::fabs(-b.off / b.hz * 1e6 + 0.79) < 0.02, std::string(b.name) + f(": %+.0f Hz is %.3f ppm", b.off, b.off / b.hz * 1e6));
+            auto run = [&](Controller& c, double slipHz, double& learned) {
+                Action x;
+                for (int i = 0; i < 6 && x.kind == Action::None; ++i)
+                    for (int k = 0; k < 4 && x.kind == Action::None; ++k) {
+                        const B& b = blocks[i];
+                        Reference r; r.source = b.name; r.rfHz = b.hz; r.at = 12 * i + 3 * k; r.kind = Kind::Primary;
+                        r.offsetHz = b.off + (i == 2 ? slipHz : 0) + ((k % 2) ? 1.0 : -1.0);   // ±1 Hz of reading noise
+                        x = c.offer(r, b.mer, b.idx, 0, r.at, U);
+                    }
+                learned = x.to;
+                return x;
+            };
+            Controller rsp(capFor("sdrplay")); double learned = 0;
+            Action x = run(rsp, 0, learned);
+            ok(x.kind == Action::Apply && std::fabs(learned + 0.79) < 0.02, f("the six blocks agree: applied %+.3f ppm (the RSP is 0.79 ppm SLOW)", learned));
+            double worst = 0;
+            for (const B& b : blocks) worst = std::max(worst, std::fabs(b.off + learned * 1e-6 * b.hz));
+            ok(worst < 5, f("…which drives every block's offset to ~0 Hz (worst %.1f Hz of 153–178)", worst));
+            Controller rs2(capFor("sdrplay")); double l2 = 0;
+            x = run(rs2, 1000, l2);
+            ok(x.kind == Action::None && rs2.target() == 0 && rs2.estimator().sourcesDisagree(),
+               "the same six with a 1 kHz carrier slip on 10D (+1169 Hz = 5.44 ppm): the references disagree, NOTHING applied");
+        }
+
         // ── rule 1: beyond the cap ──
         Controller tc(capFor("usrp"));
         a = feed(tc, 14.0, 0, 0, 80, 2, 194.064e6, "DAB 7D", 14, 11);

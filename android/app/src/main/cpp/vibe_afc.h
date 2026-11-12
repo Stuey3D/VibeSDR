@@ -148,12 +148,15 @@ public:
             if (primaries_ < c_.minSamples || std::fabs(x - median()) > c_.agreePpm) { ++disagree_; return Verdict::Disagrees; }
         } else if (int(win_.size()) >= c_.minSamples && std::fabs(x - median()) > c_.outlierPpm) {
             ++outliers_;
+            // ★ remembered by source: a reference that keeps landing outside IS a disagreeing reference (sourcesDisagree)
+            outl_.push_back({x, true, r.at, r.source});
+            while (outl_.size() > c_.window) outl_.pop_front();
             run_.push_back(x);
             if (int(run_.size()) >= c_.regroupAfter) {
                 const double m = medianOf(run_);
                 if (madOf(run_, m) <= c_.maxSpreadPpm) {
                     // ★ the truth moved: a whole run agrees with itself and not with the window
-                    win_.clear(); primaries_ = 0;
+                    win_.clear(); primaries_ = 0; outl_.clear();
                     for (double v : run_) push_(v, true, r.at, r.source);
                     run_.clear(); ++regroups_;
                     lastSource_ = r.source; lastAt_ = r.at;
@@ -195,6 +198,24 @@ public:
     /** Two references (blocks, stations) with minPerSource readings each whose medians differ by more than agreePpm. A
      *  wrong DAB carrier shift is 1 kHz — 5.7 ppm at 174 MHz, 4.2 at 240 — so it cannot agree with another block. */
     bool sourcesDisagree() const {
+        // ★ a source whose readings land away from the rest — set aside as outliers, or still in the window but more than
+        //   agreePpm from its median — twice or more disagrees with them just as surely: a 1 kHz slip on one block of six
+        //   is exactly this, whether its first readings arrived before the window could call them outliers or after
+        {
+            const double med = median();
+            const double since = win_.empty() ? -1e300 : win_.front().at;
+            std::vector<std::string> seen;
+            auto check = [&](const std::string& src) {
+                if (std::find(seen.begin(), seen.end(), src) != seen.end()) return false;
+                seen.push_back(src);
+                int n = 0;
+                for (const auto& f : outl_) if (f.src == src && f.at >= since) ++n;   // ★ only within the window's span
+                for (const auto& f : win_) if (f.primary && f.src == src && std::fabs(f.v - med) > c_.agreePpm) ++n;
+                return n >= 2;
+            };
+            for (const auto& e : outl_) if (e.at >= since && check(e.src)) return true;
+            for (const auto& e : win_) if (e.primary && check(e.src)) return true;
+        }
         const auto m = perSource_();
         for (size_t i = 0; i < m.size(); ++i)
             for (size_t j = i + 1; j < m.size(); ++j)
@@ -233,7 +254,7 @@ private:
         while (win_.size() > c_.window) { if (win_.front().primary) --primaries_; win_.pop_front(); }
     }
     Config c_;
-    std::deque<E> win_;
+    std::deque<E> win_, outl_;
     std::vector<double> run_;
     int primaries_ = 0, outliers_ = 0, settling_ = 0, disagree_ = 0, regroups_ = 0, accepted_ = 0;
     double blank_ = -1e300, lastChange_ = -1e300, lastAt_ = 0;
