@@ -69,6 +69,22 @@ inline cf nearestQam(cf y, int levels) {
     };
     return cf(ax(y.real()), ax(y.imag()));
 }
+
+/** ★★ V12 the constellation: `maxN` of the cells `y`, picked evenly across them (every frame, every carrier of the super
+ *  frame — so the picture is the whole channel, not one symbol), as int8 x/y pairs with a unit-power point at radius
+ *  Constellation::kScale. Bounded: at most maxN points whatever the mode or occupancy. */
+void sampleCells(const std::vector<cf>& y, int maxN, std::vector<int8_t>& out) {
+    out.clear();
+    const size_t n = y.size();
+    if (!n || maxN <= 0) return;
+    const size_t m = std::min(n, size_t(maxN));
+    out.resize(m * 2);
+    auto q = [](float v) { v *= Constellation::kScale; return int8_t(v < -127.f ? -127 : v > 127.f ? 127 : int(std::lround(v))); };
+    for (size_t i = 0; i < m; ++i) {
+        const cf v = y[i * n / m];
+        out[i * 2] = q(v.real()); out[i * 2 + 1] = q(v.imag());
+    }
+}
 }  // namespace
 
 Receiver::Receiver() { reset(); }
@@ -848,6 +864,7 @@ void Receiver::frameDone() {
                 if (emap_.type[size_t(emap_.idx(1, s2, k))] == kFac) { const cf y = fy[size_t(q++)]; const cf d = nearestQam(y, 1);
                     if (std::norm(y - d) > 0.01) fprintf(stderr, "[drm] FAC cell s%d k%d y=(%.3f,%.3f)\n", s2, k, y.real(), y.imag()); }
         }
+        if (wantConstellation) sampleCells(fy, Constellation::kFac, constelFac_);   // ★ the constellation's FAC (one frame's 65)
         const float mer = pe > 0 ? float(10.0 * std::log10(ps / pe)) : 40.0f;
         // ★ only frames whose FAC decoded: the frame after a (re)plan is half empty and would read as a terrible MER
         if (ok) { facMerAcc_ = merInit_ ? 0.8f * facMerAcc_ + 0.2f * mer : mer; merInit_ = true; }
@@ -893,6 +910,17 @@ void Receiver::superFrameDone() {
     const Fac& fac = sf_[0].facOk ? sf_[0].fac : lastFac_;
     if (!occupancySupported(mode_, fac.so) || fac.so != estSo_) return;
     ++st_.superFrames;
+    /* ★★ V12 THE CONSTELLATION: a new snapshot for every super frame while it is wanted. Each channel is filled where it is
+     *  decoded below, so a channel this super frame does not reach (the MSC before the SDC names the multiplex) is empty,
+     *  never last time's. Not wanted: emptied once, and nothing more is copied. */
+    if (wantConstellation) {
+        constel_.msc.clear(); constel_.sdc.clear(); constel_.mscQam = constel_.sdcQam = 0;
+        constel_.fac = constelFac_;
+        ++constel_.seq;
+    } else if (!constel_.fac.empty() || !constel_.msc.empty() || !constel_.sdc.empty()) {
+        const uint64_t sq = constel_.seq; constel_ = Constellation(); constel_.seq = sq;
+        constelFac_.clear();
+    }
     const CellMap& m = emap_;
     auto cellsOf = [&](uint8_t type, int frameLo, int frameHi, std::vector<cf>& y, std::vector<float>& w) {
         y.clear(); w.clear();
@@ -909,6 +937,7 @@ void Receiver::superFrameDone() {
     cellsOf(kSdc, 0, 0, y, w);
     MlcLayout sdcL;
     if (sdcL.buildSdc(fac.sdcLevels(), m.nSdc) && int(y.size()) == m.nSdc) {
+        if (wantConstellation) { sampleCells(y, Constellation::kSdc, constel_.sdc); constel_.sdcQam = 1 << (2 * fac.sdcLevels()); }
         st_.sdcRate = double(sdcL.l1 + sdcL.l2) / (2.0 * (sdcL.n1 + sdcL.n2) * sdcL.levels);
         {   // ★ the SDC's MER, as the MSC's: ~1000 cells once per super frame, cheap
             double ps = 0, pe = 0;
@@ -947,6 +976,7 @@ void Receiver::superFrameDone() {
     if (cdi_.nMux() != m.nMux || cdi_.depth() != fac.interleaveDepth()) cdi_.reset(m.nMux, fac.interleaveDepth());
     cellsOf(kMsc, 0, 2, y, w);
     if (int(y.size()) != 3 * m.nMux) { if (onSuperFrame) onSuperFrame(); return; }
+    if (wantConstellation) { sampleCells(y, Constellation::kMsc, constel_.msc); constel_.mscQam = 1 << (2 * fac.mscLevels()); }
     {
         double ps = 0, pe = 0;
         for (const cf& v : y) { const cf d = nearestQam(v, fac.mscLevels()); ps += std::norm(d); pe += std::norm(v - d); }

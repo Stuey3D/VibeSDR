@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -105,6 +106,21 @@ public:
         if (version) *version = statusVer_;
         return status_;
     }
+    /** ★★ V12 THE CONSTELLATION (2026-11-12): who receives it. The server sets a sink while some listener of THIS receiver
+     *  has the Signal pane open ({"type":"drm_scopes","on":1} — local_sdr_shim.cpp drmClientSinkSync / drmSharedSinkSync),
+     *  and clears it (nullptr) when nobody has. With no sink the receiver copies no cells and nothing is built or sent:
+     *  it costs nothing while nobody is looking.
+     *  ★ The sink is called on THIS listener's vibe-drm thread (decoder priority) — never the audio callback, never the
+     *    pipeline — once per super frame, with a ready {"type":"drm_iq"} message (drmCellsJson). It must not block for long;
+     *    the server's sinks only copy the target sockets under a leaf mutex and queue the frame. */
+    void setCellsSink(std::function<void(const std::string&)> sink) {
+        std::lock_guard<std::mutex> lk(cm_);
+        sink_ = std::move(sink);
+        cellsOn_.store(static_cast<bool>(sink_), std::memory_order_relaxed);
+    }
+    bool cellsWanted() const { return cellsOn_.load(std::memory_order_relaxed); }
+    /** Snapshots handed to a sink since this receiver began (the tests: nothing while nobody looks). */
+    uint64_t cellsSent() const { return cellsSent_.load(std::memory_order_relaxed); }
     uint64_t droppedBlocks() const { std::lock_guard<std::mutex> lk(m_); return dropped_; }
     uint64_t gaps() const { std::lock_guard<std::mutex> lk(m_); return gaps_; }
 
@@ -125,6 +141,7 @@ private:
                 if (stop_) return;
                 b = std::move(q_.front()); q_.pop_front(); queued_ -= b.iq.size();
             }
+            rx_.wantConstellation = cellsOn_.load(std::memory_order_relaxed);   // ★ the constellation: only while a sink is set
             const bool wasLocked = rx_.status().locked;
             rx_.feed(b.iq.data(), int(b.iq.size()), b.rate);
             if (wasLocked && !rx_.status().locked) { dec_.close(); framer_ = vibedrm::AudioFramer(); publish(); }
@@ -175,8 +192,24 @@ private:
         x.gaps = gaps();
         x.blanked = rx_.recentBlankedFraction();
         std::string j = drmReportJson(s, x);
-        std::lock_guard<std::mutex> lk(sm_);
-        if (j != status_) { status_ = j; ++statusVer_; }
+        {
+            std::lock_guard<std::mutex> lk(sm_);
+            if (j != status_) { status_ = j; ++statusVer_; }
+        }
+        sendCells();
+    }
+
+    /** ★★ The constellation to the sink, once per new snapshot — built here, on the vibe-drm thread. */
+    void sendCells() {
+        const vibedrm::Constellation& c = rx_.constellation();
+        if (!rx_.wantConstellation || c.seq == cellsSeq_) return;
+        cellsSeq_ = c.seq;
+        if (c.fac.empty() && c.sdc.empty() && c.msc.empty()) return;
+        std::function<void(const std::string&)> sink;
+        { std::lock_guard<std::mutex> lk(cm_); sink = sink_; }
+        if (!sink) return;
+        sink(drmCellsJson(c));
+        cellsSent_.fetch_add(1, std::memory_order_relaxed);
     }
 
     vibedrm::Receiver rx_;
@@ -193,6 +226,12 @@ private:
 
     std::mutex pm_;
     std::vector<float> pcm_; bool primed_ = false; int64_t underruns_ = 0; uint64_t pcmFrames_ = 0;
+
+    std::mutex cm_;                                           // ★ the constellation's sink (setCellsSink)
+    std::function<void(const std::string&)> sink_;
+    std::atomic<bool> cellsOn_{false};
+    std::atomic<uint64_t> cellsSent_{0};
+    uint64_t cellsSeq_ = 0;                                   // the vibe-drm thread's own: the last snapshot sent
 
     mutable std::mutex sm_;
     std::string status_ = "{\"type\":\"drm\",\"sync\":false}"; uint64_t statusVer_ = 1;

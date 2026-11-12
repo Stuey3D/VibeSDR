@@ -103,4 +103,28 @@ inline std::string drmReportJson(const vibedrm::RxStatus& s, const DrmReportExtr
     return j;
 }
 
+/** ★★ V12 THE CONSTELLATION (2026-11-12): {"type":"drm_iq"} — a NEW message type, sent only to a socket that asked for it
+ *  ({"type":"drm_scopes","on":1}), so an older client never sees one and an older server never sends one (the clients then
+ *  simply draw no constellation). x/y int8 pairs, an ideal unit-power point at radius `scale`:
+ *    {"type":"drm_iq","scale":60,"mscQam":16,"sdcQam":4,"msc":[x,y,…],"sdc":[…],"fac":[…]}
+ *  A channel this super frame did not decode is absent, never an empty or stale array. */
+inline std::string drmCellsJson(const vibedrm::Constellation& c) {
+    std::string j;
+    j.reserve(32 + (c.msc.size() + c.sdc.size() + c.fac.size()) * 5);
+    char buf[96];
+    std::snprintf(buf, sizeof buf, "{\"type\":\"drm_iq\",\"scale\":%d", int(vibedrm::Constellation::kScale));
+    j += buf;
+    auto arr = [&](const char* k, const std::vector<int8_t>& v) {
+        if (v.empty()) return;
+        j += ",\""; j += k; j += "\":[";
+        for (size_t i = 0; i < v.size(); ++i) { if (i) j += ','; j += std::to_string(int(v[i])); }
+        j += ']';
+    };
+    if (!c.msc.empty() && c.mscQam) { std::snprintf(buf, sizeof buf, ",\"mscQam\":%d", c.mscQam); j += buf; }
+    if (!c.sdc.empty() && c.sdcQam) { std::snprintf(buf, sizeof buf, ",\"sdcQam\":%d", c.sdcQam); j += buf; }
+    arr("msc", c.msc); arr("sdc", c.sdc); arr("fac", c.fac);
+    j += '}';
+    return j;
+}
+
 }  // namespace vibe
