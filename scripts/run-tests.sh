@@ -1101,6 +1101,7 @@ if npx tsx scripts/test_kb_handover.ts; then pass=$((pass+1)); else fail=$((fail
 if npx tsx scripts/test_kb_fonts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE BOOKMARK NAME, PRE-FILLED (decided 10-20): RDS name, then station name, then the frequency.
 if npx tsx scripts/test_bookmark_name.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_landing_markup.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ EDITING A BOOKMARK (V12, discussion #59): the shared form rules both clients use — frequency units, passband or the
 #    mode's default, "what I'm listening to now", the server edit query, an older server's left-behind row, your own list.
 if npx tsx scripts/test_bookmark_edit.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

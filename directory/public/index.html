@@ -1814,9 +1814,65 @@ function lanNote(s) {
     directly (${esc(h)})</a>.</div>`;
 }
 
+/* ── ownerMarkup:start ── ★★★ **bold** AND *italic* IN THE OWNER'S MESSAGE, and nothing else (Stuart, 2026-11-12: "HTML I
+ *  really dont want on the SDR itself. Italics etc are fine"). A hand port of src/utils/landingMarkup.ts — this page has no
+ *  build step — and scripts/test_landing_markup.ts runs the same nasty inputs through BOTH, so they cannot drift.
+ *  ★★ Every character of the text goes through esc(); the only tags this can produce are <b> and <i>. No links (the link
+ *     has its own box), no `_underscore_` italic (call signs carry them), an unpaired marker shows as typed, and a pair
+ *     never crosses a line break. */
+function ownerMarkupSpans(text) {
+  if (typeof text !== 'string' || !text) return [];
+  const sp = (c) => c === undefined || /\s/.test(c);
+  const out = [];
+  const push = (s, b, i) => { if (!s) return; const l = out[out.length - 1];
+    if (l && l.b === b && l.i === i) l.text += s; else out.push({ text: s, b, i }); };
+  text.split(/\r\n|\r|\n/).forEach((line, li) => {
+    if (li > 0) push('\n', false, false);
+    const toks = [];
+    for (let i = 0; i < line.length;) {
+      let j = i;
+      if (line[i] !== '*') { while (j < line.length && line[j] !== '*') j++; toks.push({ t: 'txt', s: line.slice(i, j) }); i = j; continue; }
+      while (j < line.length && line[j] === '*') j++;
+      const n = j - i, open = !sp(line[j]), close = !sp(line[i - 1]);
+      if (n > 3 || (!open && !close)) toks.push({ t: 'txt', s: line.slice(i, j) });
+      else if (n === 3) { toks.push({ t: 'del', kind: 'b', raw: '**', open, close, tri: true }); toks.push({ t: 'del', kind: 'i', raw: '*', open, close }); }
+      else toks.push({ t: 'del', kind: n === 2 ? 'b' : 'i', raw: '*'.repeat(n), open, close });
+      i = j;
+    }
+    const stack = [];
+    for (let k = 0; k < toks.length; k++) {
+      const d = toks[k];
+      if (d.t !== 'del') continue;
+      if (d.tri && d.close && stack.length && toks[stack[stack.length - 1]].kind === 'i') { d.tri = false; toks[k] = toks[k + 1]; toks[k + 1] = d; }
+      const cur = toks[k];
+      if (cur.close) {
+        let at = -1;
+        for (let s = stack.length - 1; s >= 0; s--) if (toks[stack[s]].kind === cur.kind) { at = s; break; }
+        if (at >= 0 && stack[at] !== k - 1) {
+          toks[stack[at]].matched = true; toks[stack[at]].on = true; cur.matched = true; cur.on = false;
+          stack.length = at; continue;
+        }
+      }
+      if (cur.open) stack.push(k);
+    }
+    let b = 0, it = 0;
+    for (const tk of toks) {
+      if (tk.t === 'txt') { push(tk.s, b > 0, it > 0); continue; }
+      if (!tk.matched) { push(tk.raw, b > 0, it > 0); continue; }
+      if (tk.kind === 'b') b += tk.on ? 1 : -1; else it += tk.on ? 1 : -1;
+    }
+  });
+  return out;
+}
+function ownerMarkup(text) {
+  return ownerMarkupSpans(text).map((p) => { let h = esc(p.text); if (p.i) h = `<i>${h}</i>`; if (p.b) h = `<b>${h}</b>`; return h; }).join('');
+}
+/* ── ownerMarkup:end ── */
+
 /** ★★ THE OWNER'S MESSAGE, IN THE DIRECTORY TOO (Stuart, 2026-09-28): "since you can click a SDR direct
  *  from the directory you'd bypass that page and miss it". The same message and link the server's landing
- *  page shows (web client showLandingMessage) — the text as TEXT (escaped, line breaks kept), the link hidden
+ *  page shows (web client showLandingMessage) — the text as TEXT (escaped, line breaks kept, **bold** and *italic* via
+ *  ownerMarkup above and nothing else), the link hidden
  *  behind its label ("Join the Discord", "Donate"), falling back to the site's host, never the raw URL.
  *  The Worker has already capped the text and refused anything but an http(s) link. */
 function ownerMessage(s) {
@@ -1826,7 +1882,7 @@ function ownerMessage(s) {
   let label = typeof s.landingLinkLabel === 'string' ? s.landingLinkLabel.trim() : '';
   if (!label && url) { try { label = new URL(url).host; } catch { label = url; } }
   return `<div class="ownerMsg"><div class="ownerMsgHead">Message from the server owner</div>`
-    + (msg ? `<div class="ownerMsgText">${esc(msg)}</div>` : '')
+    + (msg ? `<div class="ownerMsgText">${ownerMarkup(msg)}</div>` : '')
     + (url ? `<a class="ownerMsgLink" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : '')
     + `</div>`;
 }
