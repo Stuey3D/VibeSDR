@@ -828,6 +828,9 @@ if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fa
 # ★★★ THE DAB RECEPTION METER (2026-10-06): three bars + a sentence in place of the signal bar, judged on ~5 s
 #     of the server's counters with hysteresis; thresholds held to the on-air cases (app + web share it).
 if node --no-warnings scripts/test_dab_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE DRM RECEPTION METER (V12, 2026-11-12): DAB's meter for DRM — the decoder's own SNR in the box (Stuart: 17–20 dB
+#     decoded on a signal the meter read as 42 dB), the verdict on the programme's MER against its QAM and the audio frames.
+if node --no-warnings scripts/test_drm_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE STATION-LOGO CACHE (V12, 2026-10-30): air > RadioDNS > name, a failed fetch retried 1 min / 5 min / 30 min /
 #     daily (never a permanent blank), replaced only when the published logo changed, LRU-bounded (app + web share it).
 if node --no-warnings scripts/test_logo_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
