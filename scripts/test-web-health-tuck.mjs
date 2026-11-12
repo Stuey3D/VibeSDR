@@ -158,6 +158,7 @@ try {
   ok(m.pwned === null, "nothing ran");
   ok(m.text.includes("Unclosed **marker and 5 * 3 = 15"), "an unclosed marker and a lone * are shown as typed");
   ok(m.ws === "pre-wrap", "drawn pre-wrap, so a line break the server sends is kept");
+  ok(m.text.includes("before you leave.\n"), "the line break reaches the page (the server sends it as \\n, not a space)");
   // ★ FINDING (2026-11-12): the server's /vibeserver.json drops control characters from the message (the shim's
   //   jsonEscape keeps only >= 0x20), so a typed line break never reaches a client today. The tokenizer's line rules are
   //   covered by scripts/test_landing_markup.ts; this only records what arrives.

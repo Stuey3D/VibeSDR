@@ -1035,6 +1035,19 @@ static std::string jsonEscape(const std::string& in) {
     }
     return o;
 }
+/** ★ 2026-11-12: the owner's standing message KEEPS ITS LINE BREAKS (as \n) — every client draws it pre-wrap, and the
+ *  setup page's textarea takes them, but jsonEscape turned each into a space. Other control characters still go. */
+static std::string jsonEscapeLines(const std::string& in) {
+    std::string o;
+    for (char c : in) {
+        if (c == '\n') o += "\\n";
+        else if (c == '\r') continue;
+        else if (c == '"' || c == '\\') { o += '\\'; o += c; }
+        else if ((unsigned char)c < 0x20)  o += ' ';
+        else o += c;
+    }
+    return o;
+}
 
 namespace {
 /** ★★★ Every radio's serial on this machine — kept out of the gallery (LocalSdrShim::setGalleryRedact). */
@@ -3101,7 +3114,7 @@ int main(int argc, char** argv) {
                       + ",\"minProto\":" + std::to_string(LocalSdrShim::minProtoNumber())
                       + ",\"name\":\"" + jsonEscape(srv.name) + "\"";
         if (!srv.landingMessage.empty())
-            j += ",\"landingMessage\":\"" + jsonEscape(srv.landingMessage) + "\"";
+            j += ",\"landingMessage\":\"" + jsonEscapeLines(srv.landingMessage) + "\"";
         // ★★★ RE-CHECKED HERE, not trusted from the config. safeLinkUrl() already ran when the
         //     file was read, but this is the point where the value becomes an href in somebody
         //     else's browser — and "validate at both ends" means the render side checks too,

@@ -17700,6 +17700,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         return o;
     }
+    /** ★ 2026-11-12: as jsonEscape, but a line break survives as \n — the owner's standing message is drawn pre-wrap by
+     *  every client and typed in a textarea, yet jsonEscape dropped every break ("a\nb" arrived as "ab"). */
+    static std::string jsonEscapeLines(const std::string& s_raw) {
+        const std::string s = vibeadmin::utf8Clean(s_raw);
+        std::string o;
+        for (char c : s) {
+            if (c == '\n') { o += "\\n"; }
+            else if (c == '"' || c == '\\') { o.push_back('\\'); o.push_back(c); }
+            else if ((unsigned char)c >= 0x20) o.push_back(c);
+        }
+        return o;
+    }
     /** The landing fields for /vibeserver.json — the aerial and the owner's standing message.
      *  Each is omitted entirely when unset, so a client reads absence as "nothing to show".
      *  ★ A member because it needs jsonEscape, which is one. */
@@ -17712,7 +17724,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   so an older client and an unconfigured radio both see exactly what they saw before.
         if (!g_vsAntennaRanges.empty())  j += ",\"antennaRanges\":\""  + jsonEscape(g_vsAntennaRanges)  + "\"";
         if (!g_vsAntennaFilters.empty()) j += ",\"antennaFilters\":\"" + jsonEscape(g_vsAntennaFilters) + "\"";
-        if (!g_vsLandingMsg.empty()) j += ",\"landingMessage\":\"" + jsonEscape(g_vsLandingMsg) + "\"";
+        if (!g_vsLandingMsg.empty()) j += ",\"landingMessage\":\"" + jsonEscapeLines(g_vsLandingMsg) + "\"";
         // ★ The URL was checked before it was stored (setLandingInfo) — stored empty if it did
         //   not pass — so an unsafe value never became this string in the first place.
         if (!g_vsLandingUrl.empty()) {
