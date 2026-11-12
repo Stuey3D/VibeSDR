@@ -171,7 +171,8 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     const auto rows = kit::piwmRows(b.ook, 500, 1000, 0.3);
     for (const Bits& row : rows) {
         if (row.size() != 92 || !kit::twice(rows, row)) continue;
-        const Bits inv = invert(row);
+        // ★ 2026-11-12: our PIWM slice (short = 0) IS the notes' "inverted" row — inverting it again read nothing (0/10)
+        const Bits& inv = row;
         if (bitsAt(inv, 0, 16) != 0x33A0 || bitsAt(inv, 16, 8) != 0x88) continue;
         const auto by = bytesAt(inv, 0, 11);
         const int seq = kit::rev8(by[8]), state = kit::rev8(by[9]), cs = kit::rev8(by[10]);

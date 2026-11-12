@@ -1249,6 +1249,20 @@ static void testSec2() {
         Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t v : d) { tx.mark(v ? 260 : 660); tx.space(v ? 840 : 440); } tx.space(12000); }
         cs.push_back({{"HT680 remote", Sig{tx.r}, "HT680", "button2", "\"PRESSED\"", true}, 433.92e6, {"961082", "EAA3A", "eaa3a"}, "HT680 remote"});
     }
+    // SimpliSafe contact (the first-pass decoder, polarity fixed 2026-11-12): PIWM — every run a bit, ~500 µs = 0, ~1000 µs
+    //   = 1; 1000/1000 preamble, a 2 ms gap + 2 ms mark before each copy; 33 A0 · 88 · ID 5 bytes · seq · state · seq+state,
+    //   bytes LSB first
+    {
+        const uint8_t idc[5] = {'1', 'J', 'V', '7', 'T'};
+        std::vector<uint8_t> by = {0x33, 0xA0, 0x88};
+        for (uint8_t c : idc) by.push_back(kit::rev8(c));
+        by.push_back(kit::rev8(197)); by.push_back(kit::rev8(1)); by.push_back(kit::rev8(198));
+        Bits d = bytesToBits(by); d.resize(92, 1);
+        Tx tx; for (int k = 0; k < 20; ++k) { tx.mark(1000); tx.space(1000); }
+        for (int rep = 0; rep < 2; ++rep) { tx.space(2000); tx.mark(2000); for (size_t j = 0; j < d.size(); ++j) { const double w = d[j] ? 1000 : 500; if (j % 2 == 0) tx.space(w); else tx.mark(w); } }
+        tx.space(25000);
+        cs.push_back({{"SimpliSafe contact", Sig{tx.r}, "sensor", "state", "1", true}, 433.92e6, {"1JV7T"}, "open"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
