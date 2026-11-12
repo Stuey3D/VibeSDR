@@ -1263,6 +1263,23 @@ static void testSec2() {
         tx.space(25000);
         cs.push_back({{"SimpliSafe contact", Sig{tx.r}, "sensor", "state", "1", true}, 433.92e6, {"1JV7T"}, "open"});
     }
+    // Cavius door sensor: FSK NRZ 415 µs; AA AA AA D3 15 27 · counter · ID 6 · 25 (open) · CRC-8 0x07 over the 8 bytes
+    {
+        std::vector<uint8_t> by = {0xFE, 0xDC, 0x3C, 0xE3, 0x12, 0x65, 0x33, 0x25, 0};
+        by[8] = crc8(by.data(), 8, 0x07, 0);
+        Bits d = hb(0xAAAAAAD31527ull, 48); append(d, bytesToBits(by)); append(d, hb(0xAA, 8));
+        Sig s{fskNrz(d, 415)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({{"Cavius door sensor", s, "door sensor", "state", "\"open\"", true}, 868.68e6, {"DC3CE3126533", "dc3ce3126533"}, "open"});
+    }
+    // Cavius smoke alarm: FSK 206 µs; AA… "Cavi", then Manchester (01 = 1): net ID 4 · message · ¬message · CRC-8 (Maxim,
+    //   reflected 0x31) over the 6 · sender ID 4; message 0x20 = ALARM
+    {
+        std::vector<uint8_t> by = {0x00, 0x04, 0x1F, 0xDF, 0x20, 0xDF, 0, 0x00, 0x04, 0x1F, 0xDF};
+        by[6] = kit::crc8r(by.data(), 6, 0x31, 0);
+        Bits d = hb(0xAAAAAAAA, 32); append(d, hb(0x43617669, 32)); append(d, manch01(bytesToBits(by))); append(d, hb(0xAA, 8));
+        Sig s{fskNrz(d, 206)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({{"Cavius smoke alarm", s, "smoke / heat / water", "message", "32", true}, 869.67e6, spellings(0x00041FDF), "ALARM"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low

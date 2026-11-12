@@ -163,10 +163,63 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace visonic
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  CAVIUS smoke / heat / water alarms and door sensors (868–870 MHz FSK) — facts from the notes in rtl_433's cavius.c:
+//  · the alarms (HopeRF RF69, 869.67 MHz, 4800 bps = 206 µs bits): the sync word "Cavi" (43 61 76 69), then Manchester —
+//    11 bytes: network ID 4 · message · its complement · CRC-8 (Dallas/Maxim) over those 6 · sender ID 4; message bits
+//    80 pairing · 40 test · 20 ALARM · 10 warning · 08 battery low · 04 mute.
+//  · the door sensors (868.65–868.70 MHz, NRZ 415 µs bits): AA AA AA D3 15 27, then counter · ID 6 · state (25 open,
+//    24 closed) · CRC-8 poly 0x07 init 0 over the 8 bytes before it.
+//  ★ The IDs are secret (alarm sensors); what the alarm SAYS — alarm, test, battery — is shown.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace cavius {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& w : kit::nrzRows(b.fsk, 415, 40, true, 100))
+        for (size_t s : kit::findAll(w, 0xD31527, 24)) {
+            if (s + 24 + 72 > w.size()) break;
+            const auto by = bytesAt(w, s + 24, 9);
+            if (crc8(by.data(), 8, 0x07, 0) != by[8] || (by[7] != 0x25 && by[7] != 0x24)) continue;
+            uint64_t id = 0; for (int k = 1; k <= 6; ++k) id = id << 8 | by[size_t(k)];
+            Reading r = alarmReading("Cavius", "door sensor", 0xC3, id);
+            r.extra = by[7] == 0x25 ? "open" : "closed";
+            r.fact("state", by[7] == 0x25 ? "open" : "closed");
+            out.push_back(r);
+            return true;
+        }
+    for (const Bits& w : kit::nrzRows(b.fsk, 206, 40, true, 100))
+        for (size_t s : kit::findAll(w, 0x43617669, 32))
+            for (int conv = 0; conv < 2; ++conv) {
+                const Bits d = kit::manchesterAt(w, s + 32, 88, conv == 0);
+                if (d.size() < 88) continue;
+                const auto by = bytesAt(d, 0, 11);
+                if (uint8_t(by[4] ^ 0xFF) != by[5] || kit::crc8r(by.data(), 6, 0x31, 0) != by[6]) continue;
+                const int m = by[4];
+                uint64_t id = 0; for (int k = 7; k <= 10; ++k) id = id << 8 | by[size_t(k)];
+                Reading r = alarmReading("Cavius", "smoke / heat / water alarm", 0xC4, id);
+                std::string wd;
+                if (m & 0x20) addWord(wd, "ALARM");
+                if (m & 0x10) addWord(wd, "warning");
+                if (m & 0x40) addWord(wd, "test");
+                if (m & 0x80) addWord(wd, "pairing");
+                if (m & 0x04) addWord(wd, "muted");
+                r.extra = wd.empty() ? "quiet" : wd;
+                r.battOk = (m & 0x08) ? 0 : 1;
+                r.fact("message", (long long)m);
+                out.push_back(r);
+                return true;
+            }
+    return false;
+}
+
+} // namespace cavius
+
 /** The second-pass alarm / smoke / doorbell families, strongest checks first. */
 inline bool decodeSecurity2(const Burst& b, std::vector<Reading>& out) {
     if (vivint::decode(b, out)) return true;
     if (visonic::decode(b, out)) return true;
+    if (cavius::decode(b, out)) return true;
     /* ★ HELD (2026-11-12): cwpirc::decode is written and right (CRC-16 frames, the same sensor's fixed ID in three
      *  recordings) but NOT called — the corpus's chamberlain_cwpirc/02 holds four CRC-valid frames of that sensor and an
      *  EMPTY answer key, so it would score as a false alarm, and false alarms must never rise. For Stuart to decide. */
