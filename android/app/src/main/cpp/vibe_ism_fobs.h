@@ -10,6 +10,8 @@
 // ★ Secret-id family tags here: 0xD0… (the remotes use 20–43, TPMS 0x40…, vibe_ism_security2.h 0xC0…).
 #pragma once
 #include "vibe_ism_remotes.h"
+#include "vibe_ism_security2.h"
+#include <cctype>
 
 namespace vibeism {
 
@@ -69,8 +71,141 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace ford
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  CAR ALARM / REMOTE-START fobs (North America) — facts from the notes in rtl_433's code_alarm_car_remote.c,
+//  astrostart_2000.c, compustar_1wg3r.c and audiovox_pro_oe3b.c (E. Halsall et al., with the FCC IDs they name):
+//  · Code Alarm FRDPC2002 (433.92 OOK Manchester, 550 µs halves, an implied leading 0 half-bit): 60 bits — 16+ zero
+//    preamble bits … button 4 at bit 19 · a 36-bit rolling code from bit 23. NO check: the frame resent ~90 ms on
+//    confirms it. ★ The rolling code is NEVER shown; the row is keyed (hashed) by the XOR of its byte pairs, as the
+//    notes derive an ID from it.
+//  · Astroflex Astrostart 2000/3000 (372.4 OOK PPM: ~125 µs marks, ~280 µs gap = 0, ~480 µs = 1): 52 bits — button 8 ·
+//    its complement · ID 32 · a 4-bit sum of the ID's nibbles. Fixed code.
+//  · Compustar 1WG3R / 1WAMR (433.92 OOK PWM: 740 µs mark = 1, 1110 µs = 0, a 1480 µs mark between words): ID 16 · 111
+//    · ¬button 8 · button 8 (· a 0). Fixed code; the word is sent several times — twice alike in the burst required.
+//  · Audiovox PRO-OE3B / OE4B (303 OOK PWM: 450 µs mark = 1, 900 µs = 0): 25 bits — ID 16 · then 110b1b1b 1 (a raw 0), all
+//    inverted; b = lock, unlock, option, trunk. Fixed code, almost no check: twice alike (in the burst, or by the
+//    Tracker's confirm).
+//  ★ PRIVACY: the fixed codes ARE the keys of these cars — make + button only; the ID only ever as the hashed secret.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace caralarm {
+
+inline Reading carFob(const char* make, uint64_t fam, uint64_t id, int code, const std::string& word) {
+    Reading r = remoteReading("keyfob", make, "Key fob", fam, id);
+    r.button = word;
+    r.fact("button_code", (long long)code);
+    return r;
+}
+
+inline bool codeAlarm(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& c0 : kit::nrzRows(b.ook, 550, 4, false, 100)) {
+        if (c0.empty() || !c0[0]) continue;
+        Bits c(1, 0); c.insert(c.end(), c0.begin(), c0.end());   // the implied first half-bit
+        size_t end = 0;
+        const Bits d = kit::manchesterAt(c, 0, 61, false, &end);   // the bit = its first half: 01 = 0
+        if (d.size() != 60 || end + 1 < c.size() - 1) continue;    // exactly one frame, gap to gap
+        if (bitsAt(d, 0, 16) != 0) continue;
+        const auto by = bytesAt(d, 19, 5);
+        const unsigned sum = kit::sumBytes(by.data(), 5);
+        if (sum == 0 || sum >= 0xFFu * 5) continue;
+        const auto cd = bytesAt(d, 23, 4);
+        const uint32_t id = uint32_t(cd[0] ^ cd[1]) << 16 | uint32_t(cd[1] ^ cd[2]) << 8 | uint32_t(cd[2] ^ cd[3]);
+        const int bt = by[0] >> 4;
+        std::string w;
+        if (bt == 7) w = "several";
+        else { if (bt == 6 || bt == 4) addWord(w, "lock"); if (bt == 1 || bt == 3) addWord(w, "panic"); if (bt == 0 || bt == 3) addWord(w, "start");
+               if (bt == 5 || bt == 4) addWord(w, "unlock"); }
+        if (w.empty()) continue;
+        Reading r = carFob("Code Alarm", 0xD1, id, bt, w);
+        r.confirm = true;   // ★ no check: shown once the identical frame is heard again
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+inline bool astrostart(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& w : kit::ppmRows(b.ook, 280, 480, 1000, 60, 220, 0.25)) {
+        if (w.size() != 52) continue;
+        const auto by = bytesAt(w, 0, 7);
+        if (by[0] != uint8_t(~by[1])) continue;
+        int ck = 0; for (int i = 2; i < 6; ++i) ck = (ck + (by[size_t(i)] >> 4) + by[size_t(i)]) & 0xF;
+        if (ck != by[6] >> 4) continue;
+        const uint32_t id = uint32_t(by[2]) << 24 | uint32_t(by[3]) << 16 | uint32_t(by[4]) << 8 | by[5];
+        if (id == 0 || id == 0xFFFFFFFF) continue;
+        const int bt = by[0];
+        Reading r = carFob("Astroflex", 0xD2, id, bt, "code " + std::to_string(bt));
+        r.model = "Astrostart remote starter";
+        r.confirm = true;   // a 12-bit check on a fixed code: the press sends three — shown from the second
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+/** Whole PWM words (a run of marks, each `oneUs` or `zeroUs` ± `tol`), ended by a gap over `gapUs` or a mark of neither
+ *  width; every word kept. */
+inline std::vector<Bits> pwmWords(const Runs& r, double oneUs, double zeroUs, double tol, double gapUs) {
+    std::vector<Bits> rows(1);
+    for (int d : r) {
+        if (d > 0) {
+            if (near(d, oneUs, tol)) rows.back().push_back(1);
+            else if (near(d, zeroUs, tol)) rows.back().push_back(0);
+            else if (!rows.back().empty()) rows.emplace_back();
+        } else if (-d > gapUs && !rows.back().empty()) rows.emplace_back();
+    }
+    if (rows.back().empty()) rows.pop_back();
+    return rows;
+}
+
+inline bool compustar(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = pwmWords(b.ook, 740, 1110, 0.18, 1700);
+    for (const Bits& w0 : rows) {
+        if ((w0.size() != 35 && w0.size() != 36) || !kit::twice(rows, w0)) continue;
+        Bits w = w0; w.resize(40, 0);
+        if (bitsAt(w, 16, 3) != 7 || w[35]) continue;
+        const uint32_t id = bitsAt(w, 0, 16);
+        if (id == 0 || id == 0xFFFF) continue;
+        const uint32_t inv = bitsAt(w, 19, 8), bt = bitsAt(w, 27, 8);
+        if ((~inv & 0xFF) != bt) continue;
+        out.push_back(carFob("Compustar", 0xD3, id, int(bt), "code " + std::to_string(bt)));
+        return true;
+    }
+    return false;
+}
+
+inline bool audiovox(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = pwmWords(b.ook, 450, 900, 0.25, 1790);
+    for (const Bits& w : rows) {
+        if (w.size() != 25) continue;
+        const auto raw = bytesAt(w, 0, 4);
+        if ((raw[2] & 0xAA) || raw[2] == 0x55 || w[24]) continue;
+        const uint16_t id = uint16_t(~(raw[0] << 8 | raw[1]));
+        if (id == 0 || id == 0xFFFF) continue;
+        const uint8_t bt = uint8_t(~raw[2]);
+        std::string s;
+        static const char* const names[4] = {"lock", "unlock", "option", "trunk"};
+        for (int i = 0; i < 4; ++i) if (bt & (1 << (2 * i))) addWord(s, names[i]);
+        if (s.empty()) continue;
+        Reading r = carFob("Audiovox", 0xD4, id, bt, s);
+        r.facts.clear();
+        std::string key; for (int i = 0; i < 4; ++i) if (bt & (1 << (2 * i))) { if (!key.empty()) key += "; "; key += char(std::toupper(names[i][0])); key += names[i] + 1; }
+        r.fact("button_str", key.c_str());
+        r.confirm = !kit::twice(rows, w);   // ★ one whole word in this burst (a weak signal breaks the rest): shown once heard again
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    return astrostart(b, out) || compustar(b, out) || audiovox(b, out) || codeAlarm(b, out);
+}
+
+} // namespace caralarm
+
 /** The second-pass remote / fob families, strongest checks first. */
 inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
+    if (caralarm::decode(b, out)) return true;
     if (ford::decode(b, out)) return true;
     return false;
 }

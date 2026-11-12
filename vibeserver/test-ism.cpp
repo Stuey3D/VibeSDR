@@ -1016,6 +1016,39 @@ static void testSec2() {
         Tx tx; for (uint8_t x : d) { tx.mark(230); tx.space(x ? 470 : 270); } tx.mark(230); tx.space(30000);
         cs.push_back({{"GM car key", Sig{tx.r}, "Key fob", "button_code", "1", true}, 315e6, {"DB3B73EA", "db3b73ea", "3678106602"}, "unlock"});
     }
+    // Code Alarm FRDPC2002: OOK Manchester 550 µs halves, a bit = its first half, the first half-bit implied (not sent);
+    //   60 bits: 19 zero bits · button 4 · rolling 36 · a final bit; resent 90 ms on
+    {
+        Bits d(19, 0); append(d, hb(0x6, 4)); append(d, hb(0x57E65FD7Cull, 36)); d.push_back(0);
+        Bits c; for (uint8_t x : d) { c.push_back(x); c.push_back(!x); }
+        c.erase(c.begin());
+        Tx tx; for (int rep = 0; rep < 2; ++rep) { tx.space(1000); for (uint8_t x : c) { if (x) tx.mark(550); else tx.space(550); } tx.space(90000); }
+        cs.push_back({{"Code Alarm car key", Sig{tx.r}, "Key fob", "button_code", "6", true}, 433.92e6, {"57E65FD7C", "57e65fd7c"}, "lock"});
+    }
+    // Astrostart 2000: OOK PPM, 125 µs marks, 280 µs gap = 0, 480 µs = 1; button · ¬button · ID 32 · nibble sum 4; ×3
+    {
+        const uint32_t id = 0x3410DE88;
+        std::vector<uint8_t> by = {0x2B, uint8_t(~0x2B), 0x34, 0x10, 0xDE, 0x88, 0};
+        int ck = 0; for (int i = 2; i < 6; ++i) ck = (ck + (by[size_t(i)] >> 4) + by[size_t(i)]) & 0xF;
+        by[6] = uint8_t(ck << 4);
+        Bits d = bytesToBits(by); d.resize(52);
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t x : d) { tx.mark(125); tx.space(x ? 480 : 280); } tx.mark(125); tx.space(300000); }
+        cs.push_back({{"Astrostart remote starter", Sig{tx.r}, "Astrostart", "button_code", "43", true}, 372.4e6, spellings(id), "Astroflex"});
+    }
+    // Compustar 1WG3R: OOK PWM, a 740 µs mark = 1, 1110 µs = 0 (gaps as long as the marks), a 1480 µs mark between words;
+    //   ID 16 · 111 · ¬button · button
+    {
+        Bits d = hb(0x9EB4, 16); append(d, hb(7, 3)); append(d, hb(0xF8, 8)); append(d, hb(0x07, 8));
+        Tx tx; for (int rep = 0; rep < 6; ++rep) { for (int k = 0; k < 3; ++k) { tx.mark(1480); tx.space(1480); } for (uint8_t x : d) { tx.mark(x ? 740 : 1110); tx.space(x ? 740 : 1110); } }
+        tx.space(20000);
+        cs.push_back({{"Compustar car key", Sig{tx.r}, "Key fob", "button_code", "7", true}, 433.92e6, spellings(0x9EB4), "Compustar"});
+    }
+    // Audiovox PRO-OE3B: OOK PWM, 450 µs mark = 1, 900 µs = 0 (1330 µs a bit); ID 16 · 110b1b1b · 1, all inverted
+    {
+        Bits d = hb(uint16_t(~0x2EA9), 16); append(d, hb(0x54, 8)); d.push_back(0);
+        Tx tx; for (int rep = 0; rep < 4; ++rep) { for (uint8_t x : d) { tx.mark(x ? 450 : 900); tx.space(x ? 880 : 430); } tx.space(15000); }
+        cs.push_back({{"Audiovox car key", Sig{tx.r}, "Key fob", "button_str", "\"Lock\"", true}, 303e6, spellings(0x2EA9), "lock"});
+    }
     secRun(cs);
 }
 
