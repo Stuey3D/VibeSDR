@@ -627,6 +627,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <label><span class="lbl">Message</span>
           <textarea id="landingMessage" rows="3" maxlength="500"
             placeholder="e.g. The waterfall slows to 5 fps when nobody is listening. That is normal — turn it off in the menu."></textarea></label>
+        <div class="hint"><code>**bold**</code> and <code>*italic*</code> are allowed &mdash; nothing else.
+          No HTML; a link goes in the box below.</div>
         <div class="row">
           <label><span class="lbl">Link (optional)</span>
             <input type="url" id="landingLinkUrl" placeholder="https://…"></label>

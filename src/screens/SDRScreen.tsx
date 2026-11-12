@@ -107,6 +107,7 @@ import {
 import { wrapWithConverter, wrapConverterCallbacks } from '../services/ConverterBackend';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { withKiwiProxyPort } from '../utils/kiwiProxy';
+import LandingMarkupText from '../components/LandingMarkupText';
 import { lockedWindow as lockedTuneWindow, tuneBounds, rangeMessage } from '../utils/tuneWindow';
 import { toHttpUrl } from '../utils/serverUrl';
 import { localSessionGen, newLocalSession } from '../services/localSession';
@@ -13533,7 +13534,8 @@ export default function SDRScreen({ route, navigation }: Props) {
               showed nothing, so an operator writing it reached only half their visitors.
               ★ NOT the transient notice: this one never expires and is not dismissed. */}
           {!!door.landingMessage && (
-            <Text style={sdrMs.radioPickMsg}>{door.landingMessage}</Text>
+            // ★★ V12 (2026-11-12): **bold** and *italic*, nothing else — the same spans the web and the directory draw.
+            <LandingMarkupText style={sdrMs.radioPickMsg} text={door.landingMessage} />
           )}
           {/* ★★ http(s) ONLY (security, 2026-10-03): this is opened by the OS, and a server must not be able
               to hand us tel:, sms: or another app's scheme. Checked where it arrives AND here. */}

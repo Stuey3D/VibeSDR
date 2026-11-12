@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { clampPortName, portLabel, portNamesFrom } from '../utils/antennaPortNames';
+import { LANDING_MARKUP_HINT } from '../utils/landingMarkup';
 import { DIGI_MODE_STYLE } from '../utils/digiModes';   // ★ V12 the digital-spots modes (per-mode switches)
 import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
@@ -3311,6 +3312,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 placeholderTextColor={C.placeholderDim} maxLength={500}
                 style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border,
                                         minHeight: 74, textAlignVertical: 'top' }]} />
+              {/* ★ V12 (2026-11-12): the markup the landing screens draw — the same words as the setup page's hint. */}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                {LANDING_MARKUP_HINT}
+              </Text>
               <View style={[styles.rowBetween, { marginTop: 8, gap: 8 }]}>
                 <TextInput value={landingUrl} onChangeText={setLandingUrl}
                   placeholder="https://… (optional link)" placeholderTextColor={C.placeholderDim}
