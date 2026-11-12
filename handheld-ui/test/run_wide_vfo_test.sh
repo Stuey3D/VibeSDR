@@ -5,7 +5,7 @@
 set -euo pipefail
 H="$(cd "$(dirname "$0")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-node --no-warnings "$H/test/gen_wide_vfo_golden.ts" "$T/golden.jsonl"
+node --no-warnings "$H/test/gen_wide_vfo_golden.ts" > "$T/golden.jsonl"
 c++ -std=c++17 -O1 -Wall -Wextra -o "$T/t" "$H/test/wide_vfo_test.cpp"
 "$T/t" "$T/golden.jsonl"
 if [ "${DOCKER:-0}" = 1 ]; then

@@ -2,9 +2,9 @@
  * The R36S's wide VFO (src/wide_vfo.h) against the app's and the web's (src/utils/wideVfo.ts): the TS table, passband,
  * label and fill rule over a grid of cases, one JSON line each, for wide_vfo_test.cpp to replay through the port.
  * Run by run_wide_vfo_test.sh.
- *   node --no-warnings handheld-ui/test/gen_wide_vfo_golden.ts <out.jsonl>
+ *   node --no-warnings handheld-ui/test/gen_wide_vfo_golden.ts > out.jsonl
+ * (stdout, not node:fs — so the app's type check, which has no node types, gains no error from this file)
  */
-import { writeFileSync } from 'node:fs';
 import { WIDE_VFO, WIDE_VFO_FILL_MAX, wideVfoFill, wideVfoLabel, wideVfoPassband, type WideVfoMode } from '../../src/utils/wideVfo.ts';
 
 const out: string[] = [];
@@ -24,4 +24,4 @@ for (const w of W) for (const lo of [-900, -1, 0, 30, 125, 320]) for (const hi o
   if (hi <= lo) continue;
   out.push(JSON.stringify({ k: 'fill', lo, hi, w, fill: wideVfoFill(lo, hi, w) }));
 }
-writeFileSync(process.argv[2], out.join('\n') + '\n');
+console.log(out.join('\n'));
