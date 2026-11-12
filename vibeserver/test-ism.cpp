@@ -2407,6 +2407,16 @@ int main(int argc, char** argv) {
         Reading a; a.kind = "weather"; a.make = "Fine Offset"; a.model = "WH1080"; a.windKmh = 14; a.windDir = 225; a.rainMm = 2.3; a.tempC = 11.2;
         CHECK(readable(a, 0) == "Fine Offset WH1080 \xc2\xb7 11.2 \xc2\xb0" "C \xc2\xb7 wind 14 km/h SW \xc2\xb7 rain 2.3 mm", "the wind line: %s", readable(a, 0).c_str());
         Units mph; mph.mph = true; CHECK(readable(a, 0, mph).find("wind 9 mph SW") != std::string::npos, "mph");
+        // ★ 2026-11-12: rain SINCE LISTENING — the gauge's own figure is its total since new batteries (2754.3 mm)
+        Tracker tg; Reading g = a; g.rainMm = 2754.3;
+        tg.accept(g, 1.0);
+        CHECK(tg.json(1).find("rain 0.0 mm since listening") != std::string::npos && tg.json(1).find("\"rain\":2754.3") != std::string::npos,
+              "rain since listening starts at 0, the total still sent: %s", tg.json(1).c_str());
+        g.rainMm = 2755.2; tg.accept(g, 70.0);
+        CHECK(tg.json(70).find("rain 0.9 mm since listening") != std::string::npos && tg.json(70).find("\"rainNew\":0.9") != std::string::npos,
+              "0.9 mm more has fallen: %s", tg.json(70).c_str());
+        g.rainMm = 0.3; tg.accept(g, 140.0);
+        CHECK(tg.json(140).find("rain 0.0 mm since listening") != std::string::npos, "a total that went DOWN (new batteries) starts again, never negative");
     }
 
     // 9. Bands: landing by location, reachability

@@ -128,6 +128,16 @@ function compare(ours, exp) {
   return { comparable, agree };
 }
 
+/* ★ ANSWER KEYS KNOWN TO BE EMPTY WHERE THE DEVICE IS ON THE AIR (2026-11-12, Stuart: switch CWPIRC on). Each entry is
+ *  one recording, the make it holds, and why: a reading of THAT make there is "decoded, no key", not a false alarm;
+ *  anything else read there still is one. Never a folder, never a pattern — one checked recording at a time. */
+const KEY_GAPS = {
+  'chamberlain_cwpirc/02/g036_915M_1000k.cu8': { make: 'Chamberlain', why: 'four CRC-16-valid frames of the CWPIRC sensor in 01 and 03 (the same fixed ID); its .json is empty' },
+};
+const keyGap = (f, ours) => {
+  const g = KEY_GAPS[path.relative(CORPUS, f)];
+  return !!g && ours.length > 0 && ours.every((o) => o.make === g.make);
+};
 const results = [];
 const queue = [...groups.entries()].flatMap(([k, fs]) => { const c = []; for (let i = 0; i < fs.length; i += 12) c.push([k, fs.slice(i, i + 12)]); return c; });
 let done = 0;
@@ -140,7 +150,7 @@ async function worker() {
       const exp = expected(f);
       let status;
       if (exp === null) status = ours.length ? 'decoded-nokey' : 'nokey';
-      else if (!exp.length) status = ours.length ? 'fp' : 'quiet';
+      else if (!exp.length) status = !ours.length ? 'quiet' : keyGap(f, ours) ? 'decoded-nokey' : 'fp';
       else if (!ours.length) status = 'miss';
       else { const c = compare(ours, exp); status = !c.comparable ? 'decoded' : c.agree ? 'match' : 'wrong'; }
       results.push({ folder: k, file: path.relative(CORPUS, f), status, ours: ours.map((o) => `${o.make} ${o.model}`.trim()),

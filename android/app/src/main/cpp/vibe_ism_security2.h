@@ -220,9 +220,10 @@ inline bool decodeSecurity2(const Burst& b, std::vector<Reading>& out) {
     if (vivint::decode(b, out)) return true;
     if (visonic::decode(b, out)) return true;
     if (cavius::decode(b, out)) return true;
-    /* ★ HELD (2026-11-12): cwpirc::decode is written and right (CRC-16 frames, the same sensor's fixed ID in three
-     *  recordings) but NOT called — the corpus's chamberlain_cwpirc/02 holds four CRC-valid frames of that sensor and an
-     *  EMPTY answer key, so it would score as a false alarm, and false alarms must never rise. For Stuart to decide. */
+    /* ★ ON (Stuart, 2026-11-12): CRC-16 frames, the same sensor's fixed ID in three recordings. The corpus's
+     *  chamberlain_cwpirc/02 holds four CRC-valid frames of that sensor under an EMPTY answer key — ism-corpus.mjs
+     *  KEY_GAPS names that one recording, so it scores "decoded, no key" rather than a false alarm. */
+    if (cwpirc::decode(b, out)) return true;
     return false;
 }
 

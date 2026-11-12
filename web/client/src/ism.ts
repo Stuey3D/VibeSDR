@@ -10,7 +10,7 @@
 export interface IsmDevice {
   key: string; kind: string; make: string; model: string; name: string; line: string;
   nick?: number; id?: string; ch?: number;
-  temp?: number; hum?: number; wind?: number; gust?: number; dir?: number; rain?: number; rainRate?: number;
+  temp?: number; hum?: number; wind?: number; gust?: number; dir?: number; rain?: number; rainNew?: number; rainRate?: number;
   kpa?: number; uv?: number; watts?: number; baro?: number; batt?: number; button?: string; note?: string; extra?: string;
   freq: number; level: number; snr: number; seen: number; age: number; count: number;
   /** ★ V12 Wireless M-Bus meters (kind 'meter', docs/v12/WMBUS-DECODER.md §4.5). The serial is `id`. Never a byte of an
@@ -69,7 +69,7 @@ export function ismSanitise(msg: any): IsmReport | null {
     devices.push({
       key: str(d.key, 24) ?? '', kind: str(d.kind, 16) ?? 'sensor', make: str(d.make, 40) ?? '', model: str(d.model, 60) ?? '',
       name: str(d.name, 80) ?? '', line: str(d.line, 400) ?? '', nick: num(d.nick), id: str(d.id, 16), ch: num(d.ch),
-      temp: num(d.temp), hum: num(d.hum), wind: num(d.wind), gust: num(d.gust), dir: num(d.dir), rain: num(d.rain),
+      temp: num(d.temp), hum: num(d.hum), wind: num(d.wind), gust: num(d.gust), dir: num(d.dir), rain: num(d.rain), rainNew: num(d.rainNew),
       rainRate: num(d.rainRate), kpa: num(d.kpa), uv: num(d.uv), watts: num(d.watts), baro: num(d.baro), batt: num(d.batt),
       button: str(d.button, 16), note: str(d.note, 40), extra: str(d.extra, d.kind === 'meter' ? 200 : 60),
       freq: num(d.freq) ?? 0, level: num(d.level) ?? -99, snr: num(d.snr) ?? 0, seen: num(d.seen) ?? 0, age: num(d.age) ?? 0,
@@ -220,7 +220,10 @@ export function ismLine(d: IsmDevice, u: IsmUnits): string {
   const sp = (kmh: number) => (u.mph ? `${Math.round(kmh / 1.609344)} mph` : `${Math.round(kmh)} km/h`);
   if (d.wind !== undefined) p.push(`wind ${sp(d.wind)}${d.dir !== undefined ? ' ' + compass(d.dir) : ''}`);
   if (d.gust !== undefined) p.push(`gust ${sp(d.gust)}`);
-  if (d.rain !== undefined) p.push(`rain ${d.rain.toFixed(1)} mm`);
+  // ★ rain since the server first heard the gauge (its own figure is a running total since new batteries); an older
+  //   server sends only the total
+  if (d.rainNew !== undefined) p.push(`rain ${d.rainNew.toFixed(1)} mm since listening`);
+  else if (d.rain !== undefined) p.push(`rain ${d.rain.toFixed(1)} mm`);
   if (d.rainRate !== undefined && d.rainRate > 0) p.push(`${d.rainRate.toFixed(1)} mm/h`);
   if (d.uv !== undefined) p.push(`UV ${Math.round(d.uv)}`);
   if (d.baro !== undefined) p.push(`${Math.round(d.baro)} hPa`);
