@@ -610,7 +610,18 @@ private:
              *  every frame, so FrameSync's tracking branch never ran and each frame was a cold
              *  acquisition against a 6 dB null — the whole reason 9A could not lock (see the note
              *  on FrameSync). Consumption below is unchanged; only the detector keeps its memory. */
-            rx_.syncConsumed(modeI().frameSamples);
+            /* ★★★ …AND THE WINDOW RE-CENTRES ON A SLOW CLOCK (2026-11-12): normally one frame, half a frame when the
+             *  null has walked to the window's front — see DabReceiver::advanceAfterPush. A fixed advance here pinned
+             *  the tracker at sample 0 on a radio a few ppm slow, and the lock broke up hours into a listen. */
+            const size_t adv = rx_.advanceAfterPush(size_t(modeI().frameSamples));
+            if (adv != size_t(modeI().frameSamples)) {
+                ++recentres_;
+                // ★ Rare by design (hours apart on a few-ppm radio) — so a line in the owner's log is what confirms it
+                std::fprintf(stderr, "[DAB] null %ld samples from the front of the decode window — re-centred (offset %.2f ppm; a slow radio clock walks it there) (%u)\n",
+                             rx_.lastFrameStart(), double(rx_.stats().freqOffsetPpm), recentres_);
+                if (lastAt_ >= 0) lastAt_ += long(modeI().frameSamples) - long(adv);   // not a sync jump
+            }
+            rx_.syncConsumed(adv);
             /* ★★★ REVERTED (4.1.89): consuming `at + frameSamples` MEASURED WORSE on air.
              *  It raised the decoded frame rate from 20% to 50% of real time and then wrecked the
              *  thing that matters — Stuart's signal panel on 11A read frequency offset -24152 Hz,
@@ -620,7 +631,7 @@ private:
              *  ★ The 20% shortfall is REAL and still unexplained — see the frame-rate measurement
              *    in the 4.1.88 message. It is not this. Measure where the samples go before
              *    changing this line again. */
-            iqHead_ += size_t(modeI().frameSamples);      // ★ skipped, not erased — see above
+            iqHead_ += adv;      // ★ skipped, not erased — see above
 
             if (want_ && sid_ != want_ && rx_.ensemble().services.count(want_))
                 if (rx_.selectService(want_)) sid_ = want_;
@@ -1053,9 +1064,13 @@ public:
          *  the symptom was indistinguishable from a dead decoder. A separate, short append cannot
          *  drift out of step with its own arguments. */
         {
-            char rb[96];
-            snprintf(rb, sizeof rb, ",\"reacquires\":%d,\"preTuneDropped\":%u,\"aacRestarts\":%d,\"aacRebuilds\":%u",
-                     s.reacquires, preTuneDropped_, aac_.restarts(), aacRebuilds_);
+            char rb[160];
+            /* ★ wideDropped (2026-11-12): capture samples the WIDE path's DDC queue threw away for falling behind (a USRP at
+             *  8 MS/s and the like). They were counted and never reported — "IQ dropped" in the pane (`dropped`) is only
+             *  the worker's own backlog guard, so a wide radio's losses read as 0 there. */
+            snprintf(rb, sizeof rb, ",\"reacquires\":%d,\"preTuneDropped\":%u,\"aacRestarts\":%d,\"aacRebuilds\":%u,\"wideDropped\":%llu",
+                     s.reacquires, preTuneDropped_, aac_.restarts(), aacRebuilds_,
+                     (unsigned long long)wDropped_.load(std::memory_order_relaxed));
             j += rb;
         }
         {
@@ -1327,9 +1342,12 @@ public:
             /* ★ Signal analysis for the DX pane: MER, raw MSC bit error rate, the PRS impulse
              *  response and a constellation snapshot. Built by append, never through the big
              *  printf (see the argument-misalignment note above). */
-            char ab[96];
-            snprintf(ab, sizeof ab, ",\"mer\":%.1f,\"mscBer\":%.5f,\"irPeak\":%d,\"aacDec\":\"%s\"",
-                     s.merDb, s.mscBer, s.irPeakSamples, aac_.backend());   // ★ which decoder DAB+ goes through — never guessed from the sound
+            char ab[160];
+            /* ★ frameAt: where in the decode window the last null was found (samples). It walks by the radio's
+             *  sample-clock error every frame (4 ppm = 0.8 samples a frame) — the figure to read when a lock that was
+             *  fine for an hour goes bad (see FrameSync::consumeHint, 2026-11-12). */
+            snprintf(ab, sizeof ab, ",\"mer\":%.1f,\"mscBer\":%.5f,\"irPeak\":%d,\"frameAt\":%ld,\"recentres\":%u,\"aacDec\":\"%s\"",
+                     s.merDb, s.mscBer, s.irPeakSamples, lastAt_, recentres_, aac_.backend());   // ★ which decoder DAB+ goes through — never guessed from the sound
             j += ab;
             /* ★★ AND WHAT IT COSTS (V12): the decoder's CPU over the time since the last report, as % of one core —
              *  FAAD2's time on its own thread — and the units concealed (FAAD2 only). aacCpu is absent when the platform
@@ -2804,6 +2822,7 @@ private:
     uint32_t mp2In_ = 0, mp2Bad_ = 0, mp2Out_ = 0, mp2WithCrc_ = 0;
     uint32_t scfChecked_ = 0, scfOk_[4] = {0,0,0,0};
     long     lastAt_ = -1;
+    uint32_t recentres_ = 0;   ///< window re-centres for a slow sample clock — see DabReceiver::advanceAfterPush
     uint32_t syncJumps_ = 0;
     uint64_t samplesIn_ = 0;
     /** ★ Samples seen since the last check, for the capture-rate watchdog in the shim. */

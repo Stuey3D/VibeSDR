@@ -177,6 +177,7 @@ public:
     /** Feed a buffer of at least one frame. Returns true when a frame was decoded. */
     bool push(const Cplx* iq, size_t n) {
         VDAB_T_START();
+        confirmedAt_ = -1;
         const long at = sync_.offer(iq, n);
         lastAt_ = at;
         { static const bool dbg = std::getenv("VIBE_DAB_DEBUG_IR") != nullptr;
@@ -394,6 +395,8 @@ public:
          *  reference's job here is to say whether it IS a frame. */
         sync_.confirm(at);
         stats_.locked = true;
+        confirmedAt_ = at;
+        recentreBelow_ = long(symLen);
 
         // ── every symbol to carriers, then DQPSK against the previous ───────
         VDAB_T_LAP(4);
@@ -617,6 +620,8 @@ public:
 
     static constexpr float kIrConfirm = 4.5f;   ///< see the lock decision in push()
     float prsRef_ = 0.0f;      ///< running reference for the phase-reference correlation
+    long     confirmedAt_   = -1;   ///< where THIS push's confirmed frame started, or -1 — see advanceAfterPush
+    long     recentreBelow_ = 0;    ///< one symbol at the running rate
     unsigned shiftFrames_ = 0; ///< frames through the integer-offset search — every 64th runs it in full
     int   untrustedRun_ = 0;   ///< consecutive frames under the erasure fraction — see the re-anchor
     long lastAt_ = -1;
@@ -798,6 +803,25 @@ public:
     long lastFrameStart() const { return lastAt_; }
     /** Tell the sync that `n` samples were dropped from the front of the buffer. See consumed(). */
     void syncConsumed(size_t n) { sync_.consumed(n); }
+    /** ★★★ HOW FAR TO ADVANCE THE WINDOW AFTER THIS push() — normally one frame; HALF a frame when the frame just
+     *  decoded started within one symbol of the window's front (2026-11-12).
+     *
+     *  The caller advances a fixed frame per push and the tracker follows the null within the window. A radio whose
+     *  sample clock runs SLOW (fewer samples per frame of air — a B210 4.02 ppm out reads +781 Hz) makes the null
+     *  walk towards the window's front by 0.8 samples a frame, and the window cannot look behind its own start: the
+     *  search clamps at sample 0, the tracker PINNED there while the real null kept walking (the impulse-response
+     *  peak climbing -8 samples a second), the FFT windows slid out of the guard interval after ~30 s, the audio broke
+     *  up while the FIC still read, and ~30 s later the FIC died too — "clear as day until suddenly it broke up and
+     *  stopped; tuned away and back, working again" (MTVNL 7D, Stuart, 2026-11-12). Once every 6.7 h at 4 ppm, at a
+     *  moment set by where the first lock happened to land; minutes on a dongle tens of ppm slow.
+     *  ★ A FAST clock walks the other way and was always fine: past the window's end push() declines the frame and the
+     *    next window, one frame on, finds it at the front.
+     *  ★ The fix moves the WINDOW, not the null: half a frame's advance puts the next null mid-window, the prediction
+     *    moves with it (syncConsumed), no frame is skipped or read twice, and the next re-centre is hours away. Costs
+     *    nothing per frame. */
+    size_t advanceAfterPush(size_t frameSamples) const {
+        return (confirmedAt_ >= 0 && confirmedAt_ < recentreBelow_) ? frameSamples / 2 : frameSamples;
+    }
 
 private:
     int symbolSamplesAt(uint32_t r) const {
