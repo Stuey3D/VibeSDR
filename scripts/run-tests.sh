@@ -1440,6 +1440,14 @@ printf '\n\033[1m── Whole-radio mode resume (end to end) ──\033[0m\n'
 node scripts/test-server-mode-resume.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ V12 ISM BACKGROUNDED ON AN ADS-B-IDLE RADIO (2026-11-12, Stuart's iPhone on the Pi 500's V4L: back to "ISM" at
+#     1089.590 MHz): kept ADS-B waits for ISM's own leave; the same session back past the hold is put back in ISM on its
+#     band before its first config; with somebody else on, it is told ism_off (and why); an exact ISM frequency outside
+#     every allocation is refused. Fake rtl_tcp noise only — needs VIBESERVER_BIN (exit 3 = not run). ~3 minutes.
+printf '\n\033[1m── ISM backgrounded, ADS-B the idle default (end to end) ──\033[0m\n'
+node scripts/test-server-ism-bg-return.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ V12 THE HELD SESSION (2026-10-27): a suspended listener's mode, dial, decoders (their gap replayed) and VFO B held
 #     for 180 s; a held place giving way; `leave` never held; a hard 1-minute limit cutting the hold and ending it as a
 #     live session. ~8 minutes, so only with VIBESERVER_SLOW=1. Needs VIBESERVER_BIN, VIBE_ADSB_CLIP (VIBE_CW_CLIP for the
