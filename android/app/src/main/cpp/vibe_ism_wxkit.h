@@ -159,7 +159,7 @@ inline std::vector<Bits> dmc(const Runs& r, double halfUs, double tolUs) {
         const double a = std::abs(r[i]);
         if (std::fabs(a - halfUs) < tolUs) {
             if (i + 1 < r.size() && std::fabs(std::abs(r[i + 1]) - halfUs) < tolUs) { rows.back().push_back(1); ++i; }
-            else if (i + 1 >= r.size()) rows.back().push_back(1);
+            else if (i + 1 >= r.size() || std::abs(r[i + 1]) > 2 * halfUs + tolUs) { rows.back().push_back(1); newRow(rows); ++i; }   // the last 1's second half ran into the gap
             else newRow(rows);
         } else if (std::fabs(a - 2 * halfUs) < tolUs) rows.back().push_back(0);
         else newRow(rows);

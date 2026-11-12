@@ -61,7 +61,7 @@ inline bool tx141(const Burst& b, std::vector<Reading>& out) {
         if (by[0] == 0 || by[3] == 0 || by[3] > 100 || !wx::tempOk(t)) continue;
         Reading r = wx::wxReading("La Crosse", w.size() == 41 ? "TX141TH-Bv3" : "TX141TH-Bv2", wx::hex(by[0], 2));
         r.battOk = (by[1] & 0x80) ? 0 : 1;
-        r.channel = (by[1] >> 4) & 3;
+        r.channel = ((by[1] >> 4) & 3) + 1;
         r.tempC = t; r.hum = by[3];
         out.push_back(r);
         return true;
@@ -77,7 +77,7 @@ inline bool tx141(const Burst& b, std::vector<Reading>& out) {
         Reading r = wx::wxReading("La Crosse", len == 37 ? "TX141-Bv2" : len == 33 ? "TX141-Bv3" : "TX141B",
                                   wx::hex(by[0], 2));
         r.battOk = (by[1] & 0x80) ? 1 : 0;
-        r.channel = (by[1] >> 4) & 3;
+        r.channel = ((by[1] >> 4) & 3) + 1;
         r.tempC = t;
         r.confirm = true;
         out.push_back(r);

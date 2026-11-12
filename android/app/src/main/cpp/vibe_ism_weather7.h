@@ -64,7 +64,7 @@ inline bool f007th(const Burst& b, std::vector<Reading>& out) {
     for (const Bits& row0 : wx::mcZero(b.ook, 500, 2400)) {
         for (int inv = 0; inv < 2; ++inv) {
             const Bits row = inv ? invert(row0) : row0;
-            for (size_t s : wx::findAll(row, 0x145, 12)) {
+            for (size_t s : wx::findAll(row, 0x014, 12)) {   // 0x01 0x45: the pattern is the first 12 bits, the frame at +8
                 if (s + 8 + 48 > row.size()) break;
                 const auto by = bytesAt(row, s + 8, 6);
                 if ((wx::lfsrDigest8(by.data(), 5, 0x98, 0x3E) ^ 0x64) != by[5]) continue;

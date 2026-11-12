@@ -119,7 +119,8 @@ inline bool bresser3ch(const Burst& b, std::vector<Reading>& out) {
 //  parity · odd-bit parity.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool wt450(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& w : wx::dmc(b.ook, 976, 250)) {
+    for (Bits w : wx::dmc(b.ook, 976, 250)) {
+        if (w.size() == 35) w.push_back(0);   // ★ a last 0 sent at the low level is a space that runs into the gap: invisible
         if (w.size() != 36 || bitsAt(w, 0, 4) != 0xC) continue;
         const auto by = bytesAt(w, 0, 5);
         unsigned p = wx::xorBytes(by.data(), 5); p ^= p >> 4; p ^= p >> 2;
@@ -127,7 +128,7 @@ inline bool wt450(const Burst& b, std::vector<Reading>& out) {
         const int h = ((by[1] & 7) << 4) | by[2] >> 4;
         const double t = (((by[2] << 4) | (by[3] >> 4)) & 0xFF) - 50.0 + (by[3] & 0xF) / 16.0;
         if (h > 100 || t < -35 || t > 75) continue;
-        Reading r = wx::wxReading("WT450", "T/H (WT260H / WT405H)", wx::hex(by[0] & 0xF, 1));
+        Reading r = wx::wxReading("WT450-type", "WT450 / WT260H / WT405H T/H", wx::hex(by[0] & 0xF, 1));
         r.channel = (by[1] >> 6) + 1; r.battOk = (by[1] & 8) ? 0 : 1; r.tempC = t; r.hum = h;
         r.confirm = true;   // ★ two parity bits
         out.push_back(r);
