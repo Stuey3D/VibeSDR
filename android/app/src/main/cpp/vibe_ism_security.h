@@ -78,8 +78,51 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace interlogix
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  HONEYWELL / ADEMCO 5800 series (5811, 5816, 5820L, 5890PI …) and 2GIG / Resolution Products sensors — 345 MHz OOK,
+//  Manchester, ~136 µs half-bits. Source: Logan Lamb, "Home Insecurity: No Alarms, False Alarms, and SIGINT", DEF CON 22
+//  (2014) — preamble FF FE, then channel 4 · serial 20 · event 8 · CRC-16 over the first 4 bytes, poly 0x8005 (Honeywell,
+//  channel 8) or 0x8050 (2GIG: channels 2, 4, 9, A, C), init 0; event bits contact · tamper · reed · alarm · battery low
+//  · heartbeat. The raw preamble 55 55 56 and the per-channel polynomial as rtl_433's honeywell.c notes give them; the
+//  DW11's longer frames carry the same first 6 bytes.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace honeywell {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& row : kit::nrzRowsAny(b, 136, 12, 72)) {
+        for (size_t s : kit::findAll(row, 0x555556, 24)) {
+            const Bits d = kit::manchesterAt(row, s + 24, 96);
+            if (d.size() < 48) continue;
+            const auto by = bytesAt(d, 0, 6);
+            const int ch = by[0] >> 4;
+            const uint32_t id = uint32_t(by[0] & 0xF) << 16 | uint32_t(by[1]) << 8 | by[2];
+            const uint16_t crc = uint16_t(by[4] << 8 | by[5]);
+            if (id == 0 && crc == 0) continue;
+            const bool gig = ch == 0x2 || ch == 0x4 || ch == 0x9 || ch == 0xA || ch == 0xC;
+            if (crc16(by.data(), 4, gig ? 0x8050 : 0x8005, 0) != crc) continue;
+            const int ev = by[3];
+            Reading r = alarmReading(gig ? "2GIG" : "Honeywell", gig ? "sensor" : "5800 series", 11, id);
+            std::string w = (ev & 0x80) ? "open" : "closed";
+            if (ev & 0x10) addWord(w, "alarm");
+            if (ev & 0x40) addWord(w, "tamper");
+            if (ev & 0x04) addWord(w, "check-in");
+            r.extra = w;
+            r.battOk = (ev & 0x08) ? 0 : 1;
+            r.fact("channel", (long long)ch); r.fact("event", (long long)ev);
+            r.fact("contact_open", (long long)((ev >> 7) & 1)); r.fact("tamper", (long long)((ev >> 6) & 1));
+            r.fact("alarm", (long long)((ev >> 4) & 1)); r.fact("heartbeat", (long long)((ev >> 2) & 1));
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace honeywell
+
 /** The alarm-sensor families, strongest checks first. */
 inline bool decodeSecurity(const Burst& b, std::vector<Reading>& out) {
+    if (honeywell::decode(b, out)) return true;
     if (interlogix::decode(b, out)) return true;
     return false;
 }
