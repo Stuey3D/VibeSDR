@@ -376,12 +376,51 @@ see Tests). Alarm sensors are kind `security` ("Alarm sensor #n"), remotes `door
 | RadioHead ASK packets, Sensible Living moisture | 433 OOK NRZ | **9/10** | RadioHead RH_ASK docs | CRC-16 (data never shown) |
 | Vaillant VRT 340f thermostat | 868 OOK differential Manchester | **6/7** | R. Kainhofer's wiki | 16-bit checksum, HDLC stuffing |
 
-Not done (home area), and why: Owl CM130/160/180 (inside the Oregon v3 path the weather work owns), IKEA Sparsnäs
-(encrypted with its ID — not decrypted), Security+ 1/2, Chamberlain, car remotes (Ford, Honda, Nidec, Code Alarm,
-Compustar, Astroflex), Insteon, EC3k, ESIC EMT7110, Elster, Vivint (its status byte is enciphered), Visonic, Cavius,
-Honeywell CM921, Danfoss, Funkbus, Siemens, HCS362, Kerui/Chuango/Waveman naming (they ARE
-EV1527/PT2262 — told apart only by data patterns), 24-bit Nice FLO (a PT2262 word on the air) and ADLM (a La Crosse
-length) — the last two were tried and dropped for naming other devices.
+Not done (home area) after the first pass: see the second pass below.
+
+### Home families, second pass (2026-11-12): meters, heating, smart home — `vibe_ism_meters2.h`, `vibe_ism_homeauto.h`
+
+Hooked into `decodeOne` after `decodeMeters` (OWL after `fixedcode::` — see its row); each family's band in
+`meters2BandOk` / `homeautoBandOk` (bandPlausible). Corpus = the bench as it stands; "padded" = with ism2-front-pad's
+front end and bench (real-noise padding, the floor-seed fix) — what these read once that lands. Thermostats are kind
+`sensor` with their ID shown (as the Vaillant); every remote — anything whose address commands a light, blind, fan,
+socket or heater — is kind `doorbell`, **secret**. Encoders for every family in test-ism (`testHome2`).
+
+| Family | Band / mod | Corpus (padded) | Facts from | Check |
+|---|---|---|---|---|
+| IKEA Sparsnäs energy monitor | 868 FSK 26 µs | **10/10** | kodarn/Sparsnas, strigeus/sparsnas_decoder; rtl_433 notes | CRC-16 + the ID's own XOR key (solved over the 4 096 six-digit IDs) |
+| OWL CM130 / CM180 / CM160 | 433 OOK Oregon v3 rate | **3/3, 1/1, 1/8** | rtl_433 oregon_scientific.c notes | CRC-8 / nibble sum; CM160 frame types 2–3 refused (the EBP50 thermostat sends them) |
+| Voltcraft EnergyCount 3000 (RT-110, NETBESEM4, RS3620) | 868 FSK 50 µs NRZI, scrambled, HDLC | **8/8** | AX5042 datasheet, sevenwatt.com, avian2/ec3k; rtl_433 notes | CRC-16 + zero pads; every frame in a burst |
+| ESIC EMT7110 | 868 FSK 104 µs | **5/5** | rtl_433 notes (P. Reinholdtsen) | byte sum + mains-volt sanity; confirm unless both packets agree |
+| RFXCOM RFXMeter / RFXPower | 433 OOK PPM (X10-like) | **2/2** | RFXCOM notes; rtl_433 #2141 | address complement + nibble sum; confirm unless two copies |
+| Revolt NC-5462 | 433 OOK PWM | 0/2 (front end: channel closes early at the capture's edge) | rtl_433 notes | byte sum + 50/60 Hz + volts; confirm |
+| Flowis water meter | 868 FSK 10 µs | 0/3 (front end; offline demod = the key) | rtl_433 notes | CRC-16 |
+| Insteon | 915 / 869.85 FSK 109.6 µs Manchester blocks | **5/12** (9/12) | evilpete/insteonrf; rtl_433 notes | our CRC rule / ext. sum |
+| ADLM FPRF heater programmer | 433 OOK PWM | **7/7** | rtl_433 conf + README | none: wake-up + 2 copies, or 3 |
+| Danfoss CFR thermostat | 433 FSK 100 µs, 6-bit nibble codes | **4/4** | rtl_433 notes (T. Vestermark) | CRC-16 |
+| Honeywell evohome / RAMSES II (CM921 …) | 868 FSK 38.4 k UART + Manchester | 1/4 (**4/4**) | Evsdd evohome wiki; rtl_433 notes | Manchester break + footer + byte sum |
+| Watts WFHT-RF | 433 OOK PWM | **2+2/2+2** | rtl_433 README + notes | byte sum; confirm unless two copies |
+| Watts WFHT-LCD-RF | 433 OOK Manchester 461 µs | **3+2/3+2** | S. Bontius, WATTS_WFHT_RF_PROTOCOL.md | CRC-8 + CRC-16 |
+| Watts Vision | 868 FSK 26 µs | 0/3 (**3/3**) | rtl_433 #2885 + notes | CRC-16/MODBUS + CRC-16 |
+| Funkbus / Instafunk (Berker, Gira, Jung) | 433.42 OOK biphase-mark | **5/5** | rtl_433 notes (Insta module doc) | XOR-nibble + parity; confirm unless twice |
+| Feron LED-light remotes | 433 OOK PWM | **3/3** | Flipper Zero notes via rtl_433 | inverted byte, two identical words |
+| Power Smart blinds | 433 OOK Manchester 225 µs | **3/3** | Flipper Zero notes via rtl_433 | 16 fixed bits + inverted copy + Y/W |
+| Martec MPLCD fan / light | 433 OOK PWM | **3/3** | rtl_433 PR #3133 | nibble sum, two identical rows |
+| FSL cricket scoreboard | 433.95 FSK 528 µs Manchester | **2/2** | rtl_433 notes (D. Woodhouse) | position markers, two identical blocks |
+| emonTx (first pass) | 433 FSK 49 k, ±93 kHz | 0/76 (**76/76**) | — | the decoder was right; front end (seed + wide tones) |
+
+Fixed in place: Apollo Standard / Smart get back the idle 0 before a row's first mark (their sync starts with it);
+Standard also folds envelope slivers (clipped TEK377A). **Scorer** (`ism-corpus.mjs`): an IDM reading on a recording
+keyed only NETIDM, same meter ID, is "decoded" — rtl_433's own notes say the two cannot be told apart and both answer
+the same packet; the NetIDM recordings' bytes 27–30 equal the IDM recording's consumption count.
+
+**Not cracked, and why:** Elster R2S/REXU type 2 (7 µs bits, FHSS — finer than any 250/500 kS/s channel); Itron ERT
+SCM / IDM / SCM+ remaining (frames start in the first ms: front end); Neptune R900 (envelope does not slice);
+Silver Spring mesh, Arad MS, Landis+Gyr GS, Elero (75 kbit/s GFSK, whitened + obfuscated), DeltaDore X3D, CTT tags,
+IBIS beacon, LoRa (not this path), Fanimation — not written this pass; Siemens 5WY72xx and Nidec are car keys, Blyss,
+Quhwa and Elro DB286A doorbells, RF-tech a temperature sensor (the security and weather passes). Owl CM160's other 7:
+~7 dB over a full-band 250 kS/s channel (front end). Efergy e2 classic 6/14 (7/14 padded): FSK slivers inside the PWM
+— a fold was tried and gained nothing, dropped.
 
 ## The gallery (2026-10-25)
 

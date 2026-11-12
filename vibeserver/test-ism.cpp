@@ -1184,6 +1184,14 @@ static void testHome2() {
         Sig s{tx.r};
         cs.push_back({"Revolt NC-5462", s, 433.92e6, "NC-5462", "voltage_V", "233", false});
     }
+    // FSL scoreboard: FSK 528 µs chips, 38 alternating, then 10 × (111 · 32 Manchester bits 01 = 1 · 0 · 000)
+    {
+        const uint32_t v = 0x3E2F1200u;   // field 14, blank hundreds, 20
+        Bits c; for (int i = 0; i < 38; ++i) c.push_back(uint8_t((i & 1) ? 0 : 1));
+        for (int k = 0; k < 10; ++k) { c.push_back(1); c.push_back(1); c.push_back(1); Bits d = hb(v, 32); d.push_back(0); append(c, manch01(d)); append(c, hb(0, 3)); }
+        Sig s{fskNrz(c, 528)}; s.fsk = true; s.devHz = 25e3;
+        cs.push_back({"FSL scoreboard", s, 433.95e6, "scoreboard", "value", "20", false});
+    }
     home2Run(cs);
 }
 

@@ -625,6 +625,44 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace martec
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  FSL CRICKET SCOREBOARD controller (a club's wireless scoreboard; the radio link to each field of digits) — 433.95
+//  MHz FSK, 528 µs chips. Facts: David Woodhouse's analysis in rtl_433's fsl_scoreboard.c notes (read for facts only).
+//  A 38-chip alternating preamble, then ten 72-chip blocks: 111 · 32 Manchester bits (01 = 1) · 1 more bit · 000 —
+//  the bits as nibbles 3 F 2 H 1 T 0 U: field ID F, then hundreds, tens, units (F = blank), each after its position
+//  marker. The markers are the check; two identical blocks are asked for.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace fsl {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& row : kit::nrzRowsAny(b, 528, 8, 140)) {
+        std::vector<uint32_t> got;
+        for (size_t s : kit::findAll(row, 0x7, 3)) {
+            const Bits d = kit::manchesterAt(row, s + 3, 32);
+            if (d.size() != 32) continue;
+            const uint32_t v = bitsAt(d, 0, 32);
+            if ((v & 0xF0F0F0F0u) != 0x30201000u) continue;
+            got.push_back(v);
+        }
+        for (uint32_t v : got) {
+            if (std::count(got.begin(), got.end(), v) < 2) continue;
+            const int field = (v >> 24) & 0xF, h = (v >> 16) & 0xF, t = (v >> 8) & 0xF, u = v & 0xF;
+            if ((h != 0xF && h > 9) || (t != 0xF && t > 9) || (u != 0xF && u > 9)) continue;
+            const int value = (h == 0xF ? 0 : h * 100) + (t == 0xF ? 0 : t * 10) + (u == 0xF ? 0 : u);
+            Reading r;
+            r.kind = "sensor"; r.make = "FSL"; r.model = "cricket scoreboard";
+            r.pubId = std::to_string(field);
+            r.extra = "field " + std::to_string(field) + " shows " + std::to_string(value);
+            r.fact("id", (long long)field); r.fact("value", (long long)value);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace fsl
+
 /** The home-automation families, strongest checks first. */
 inline bool decodeHomeauto(const Burst& b, std::vector<Reading>& out) {
     if (insteon::decode(b, out)) return true;
@@ -637,6 +675,7 @@ inline bool decodeHomeauto(const Burst& b, std::vector<Reading>& out) {
     if (adlm::decode(b, out)) return true;
     if (wattsrf::decode(b, out)) return true;
     if (feron::decode(b, out)) return true;
+    if (fsl::decode(b, out)) return true;
     if (martec::decode(b, out)) return true;
     return false;
 }
@@ -646,6 +685,7 @@ inline bool homeautoBandOk(const Reading& r, double f) {
     if (r.make == "Honeywell" && r.model == "evohome") return f >= 863e6 && f <= 870e6;
     if (r.make == "Watts" && r.model == "WFHT-RF thermostat") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "Funkbus") return f >= 433.0e6 && f <= 435.0e6;
+    if (r.make == "FSL") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "Feron" || r.make == "Power Smart" || r.make == "Martec") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "ADLM FPRF") return f >= 433.0e6 && f <= 435.0e6;
     if (r.make == "Insteon") return (f >= 902e6 && f <= 928e6) || (f >= 863e6 && f <= 870e6);
