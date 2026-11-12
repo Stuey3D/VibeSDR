@@ -240,11 +240,64 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace genericmotion
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  X10 SECURITY (DS10/DS18 door-window, MS10/MS18 motion, KR10/15/18 fobs; 310 MHz "A", 433 MHz "E") — the X10 RF line
+//  (9 ms + 4.5 ms sync, 562 µs marks, 562 / 1687 µs gaps — read long = 1), 41 bits: ID 8 · its top nibble again · its low
+//  nibble XORed · code 8 · ¬code · ID 8 more · an even parity over all 41. Facts: the notes in rtl_433's x10_sec.c
+//  (A. Kava; W. Herzig's observations) — the codes: 0x00/0x80 open/closed (0x40 tamper, 0x04 delay, bit 0 battery low),
+//  0x0C/0x8C motion / ready, 0x06 arm, 0x86 disarm, 0x26/0x88/0x98 panic, 0x42/0xC2 & 0x46/0xC6 lights A / B on / off.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace x10sec {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& w : kit::ppmRows(b.ook, 562, 1687, 3000, 300, 900, 0.35)) {
+        if (w.size() < 41 || w.size() > 42) continue;
+        const auto x = bytesAt(w, 0, 6);
+        if ((x[0] ^ x[1]) != 0x0F || (x[2] ^ x[3]) != 0xFF) continue;
+        int p = 0; for (size_t i = 0; i < 41; ++i) p ^= w[i];
+        if (p) continue;
+        const int code = x[2], c = code & 0xFE;
+        const char* ev = "UNKNOWN"; const char* word = "event";
+        bool fob = false;
+        switch (c) {
+            case 0x00: case 0x04: case 0x40: case 0x44: ev = "DOOR/WINDOW OPEN"; word = "open"; break;
+            case 0x80: case 0x84: case 0xC0: case 0xC4: ev = "DOOR/WINDOW CLOSED"; word = "closed"; break;
+            case 0x0C: case 0x4C: ev = "MOTION TRIPPED"; word = "motion"; break;
+            case 0x8C: case 0xCC: ev = "MOTION READY"; word = "quiet"; break;
+            case 0x06: ev = "KEY-FOB ARM"; word = "arm"; fob = true; break;
+            case 0x86: ev = "KEY-FOB DISARM"; word = "disarm"; fob = true; break;
+            case 0x82: ev = "SH624 SEC-REMOTE DISARM"; word = "disarm"; fob = true; break;
+            case 0x26: ev = "KR18 PANIC"; word = "panic"; fob = true; break;
+            case 0x88: ev = "KR15 PANIC"; word = "panic"; fob = true; break;
+            case 0x98: ev = "KR15 PANIC-3SECOND"; word = "panic"; fob = true; break;
+            case 0x42: ev = "KEY-FOB LIGHTS A ON"; word = "lights A on"; fob = true; break;
+            case 0xC2: ev = "KEY-FOB LIGHTS A OFF"; word = "lights A off"; fob = true; break;
+            case 0x46: ev = "KEY-FOB LIGHTS B ON"; word = "lights B on"; fob = true; break;
+            case 0xC6: ev = "KEY-FOB LIGHTS B OFF"; word = "lights B off"; fob = true; break;
+            default: break;
+        }
+        Reading r = alarmReading("X10", fob ? "security remote" : "security sensor", 15, uint64_t(x[0]) << 8 | x[4]);
+        std::string w2 = word;
+        const bool sensor = c == 0x00 || c == 0x04 || c == 0x40 || c == 0x44 || c == 0x80 || c == 0x84 || c == 0xC0 || c == 0xC4 || c == 0x0C || c == 0x4C || c == 0x8C || c == 0xCC;
+        if (sensor && (code & 0x40)) addWord(w2, "tamper");
+        if (!fob) r.battOk = (code & 1) ? 0 : 1;
+        r.extra = w2;
+        char cs[4]; std::snprintf(cs, sizeof cs, "%02x", code);
+        r.fact("event", ev); r.fact("code", cs);
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace x10sec
+
 /** The alarm-sensor families, strongest checks first. */
 inline bool decodeSecurity(const Burst& b, std::vector<Reading>& out) {
     if (honeywell::decode(b, out)) return true;
     if (interlogix::decode(b, out)) return true;
     if (dsc::decode(b, out)) return true;
+    if (x10sec::decode(b, out)) return true;
     if (simplisafe::decode(b, out)) return true;
     if (genericmotion::decode(b, out)) return true;
     return false;

@@ -215,12 +215,57 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace nexa
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  X10 RF (lamp / appliance remotes and their motion sensors, 310 / 433 MHz) — OOK, NEC-like: a 9 ms mark and 4.5 ms gap,
+//  then 32 bits of 562 µs marks with a 562 µs or a 1687 µs gap; five copies. Source: WGL Designs, "W800RF32 protocol"
+//  (wgldesigns.com/protocols/w800rf32_protocol.txt): byte 2 = ¬byte 1, byte 4 = ¬byte 3; the house code (the standard X10
+//  RF table — not the power-line one: A = 0110, B = 0111, C = 0100 … P = 0011) in byte 1's top nibble; the unit in byte 1 bit 2 and byte 3 bits 6, 4, 3; byte 3 bit 5 =
+//  off; byte 3 bit 7 = a special (0x80 all off, 0x90 all lights on, 0x88 bright, 0x98 dim). The fixed bits as rtl_433's
+//  x10_rf.c checks them. ★ The house + unit is the address: secret.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace x10 {
+
+inline char house(int nib) {
+    static const int code[16] = {0x6, 0x7, 0x4, 0x5, 0x8, 0x9, 0xA, 0xB, 0xE, 0xF, 0xC, 0xD, 0x0, 0x1, 0x2, 0x3};   // A … P on the air
+    for (int i = 0; i < 16; ++i) if (code[i] == nib) return char('A' + i);
+    return '?';
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = kit::ppmRows(b.ook, 562, 1687, 3000, 300, 900, 0.35);
+    for (const Bits& w0 : rows) {
+        Bits w = w0;
+        if (w.size() == 33) w.pop_back();
+        if (w.size() != 32 || !kit::twice(rows, w0)) continue;
+        const auto x = bytesAt(w, 0, 4);   // ★ bytes as the long-gap = 1 reading gives them (the doc calls that 0; the checks are symmetric)
+        if ((x[0] ^ x[1]) != 0xFF || (x[2] ^ x[3]) != 0xFF) continue;
+        if ((x[0] & 0x0B) != 0x00 || (x[1] & 0x0B) != 0x0B || (x[2] & 0x07) != 0 || (x[3] & 0x07) != 0x07) continue;
+        const char hc = house(x[0] >> 4);
+        int unit = ((x[0] & 0x04) << 1 | (x[2] & 0x40) >> 4 | (x[2] & 0x08) >> 2 | (x[2] & 0x10) >> 4) + 1;
+        std::string ev = (x[2] & 0x20) ? "OFF" : "ON";
+        if (x[2] & 0x80) {
+            unit = 0;
+            ev = x[2] == 0x98 ? "DIM" : x[2] == 0x88 ? "BRI" : x[2] == 0x90 ? "ALL LTS ON" : x[2] == 0x80 ? "ALL OFF" : "UNKNOWN";
+        }
+        Reading r = remoteReading("doorbell", "X10", "remote", 24, uint64_t(hc) << 8 | uint64_t(unit));
+        std::string low = ev; for (auto& c : low) c = char(std::tolower(c));
+        r.extra = low;
+        r.fact("state", ev.c_str()); r.fact("channel", std::string(1, hc).c_str());
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace x10
+
 /** The remote families, strongest checks first. */
 inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (lightwave::decode(b, out)) return true;
     if (gecolor::decode(b, out)) return true;
     if (hcs361::decode(b, out)) return true;
     if (nexa::decode(b, out)) return true;
+    if (x10::decode(b, out)) return true;
     return false;
 }
 
