@@ -1299,6 +1299,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── the DAB report in pieces (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-report-pieces.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ WHAT PLAYS AFTER A LISTENER CHANGES MULTIPLEX (2026-11-12): silent until the list, then the first; the same
+#     station by SId on another block; a named one wins; the last one here across a restart. VIBESERVER_BIN + the bench
+#     clip (VIBE_DAB_CLIP=), NOT RUN without either. ~40 s.
+printf '\n\033[1m── the DAB station choice (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-station-choice.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ A LONG SESSION COSTS NO MORE THAN A SHORT ONE (2026-10-19): Stuart's app read 93-103 KB/s in DAB after 23 minutes
 #     of tuning, 45 after a restart — an Advanced RDS subscription made on FM kept every rdsx coming in DAB. rdsx only
