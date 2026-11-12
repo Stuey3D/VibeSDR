@@ -65,6 +65,30 @@ inline std::string decFit(Ctx& c, const Font& f, const std::string& s, int maxW)
     }
     return u.fit[key] = out;
 }
+/** ★ `s` cut to `maxW` pixels from the FRONT ("…" first): the newest of a signal's text, the web's #cwList .tx
+ *  (direction: rtl + an ellipsis). The row's text runs on as it is decoded, as RTTY's foot does (cached). */
+inline std::string decFitTail(Ctx& c, const Font& f, const std::string& s, int maxW) {
+    DecUi& u = decUi();
+    if (maxW <= 0) return "";
+    const std::string key = "T|" + std::to_string((uintptr_t)f.get()) + "|" + std::to_string(maxW) + "|" + s;
+    auto it = u.fit.find(key);
+    if (it != u.fit.end()) return it->second;
+    if (u.fit.size() > 2000) u.fit.clear();
+    std::string out = s;
+    if (c.tc.width(f, s) > maxW) {
+        // a first cut by an average advance, then a character at a time (a row is redrawn once a second, not per frame)
+        size_t i = 0;
+        const int avg = std::max(1, c.tc.width(f, "abcdefghij ABCDE 0123") / 21);
+        if ((int)s.size() * avg > maxW * 2) i = s.size() - (size_t)(maxW * 2 / avg);
+        for (;;) {
+            while (i < s.size() && ((unsigned char)s[i] & 0xC0) == 0x80) i++;
+            out = "…" + s.substr(i);
+            if (i >= s.size() || c.tc.width(f, out) <= maxW) break;
+            i++;
+        }
+    }
+    return u.fit[key] = out;
+}
 inline bool decGrabbed(const App& a) { for (auto sh : a.sheets_) if (sh == App::S_DEC) return true; return false; }
 inline void decRelease(App& a) {
     for (size_t i = 0; i < a.sheets_.size();) { if (a.sheets_[i] == App::S_DEC) a.sheets_.erase(a.sheets_.begin() + (long)i); else i++; }
@@ -172,17 +196,19 @@ inline int decRows(Ctx& c, Scroller& sc, Rect view, int n, float rowH, const std
 
 /** The decoded text: the newest at the foot, following it unless the reader has scrolled up (then the place holds
  *  still as new text arrives — the web's keepReadingPlace). Grabbed, UP / DOWN scroll two rows a press. */
-inline void decDrawLog(App& a, Ctx& c, Rect body, const std::string& idle) {
+inline void decDrawLog(App& a, Ctx& c, Rect body, const std::string& idle, DecLog* log = nullptr) {
     DecUi& u = decUi();
-    DecLog& L = u.log;
+    DecLog& L = log ? *log : u.log;
     L.setXform(decCwPlain(a) ? &cwPlainEnglish : nullptr);
+    L.setCwBreaks(u.active == "cw");   // ★ CW's stream of characters is cut into lines (DecLog::setCwBreaks)
     const Font& f = c.f.body;
     const float lh = (float)f.lineHeight();
-    L.layout(c.tc, f, (int)body.w - 22);
     const int n = std::max(1, (int)std::floor(body.h / lh));
+    L.setView(n);
+    L.layout(c.tc, f, (int)body.w - 22);
     const int rows = (int)L.rows();
-    const size_t added = L.takeAdded();
-    if (L.back > 0) L.back += (int)added;
+    const long added = L.takeAdded();
+    if (L.back > 0) L.back = (int)std::max(1L, L.back + added);   // ★ the place holds while text arrives below it
     // the scroll stops (see the header): a press that landed on one scrolls, and the highlight goes back to the text
     // ★ only a press FROM the text scrolls: DOWN from a header key lands on the upper stop too, and must just enter the text
     static std::string prevFocus;
@@ -262,12 +288,22 @@ inline void decPaneSignals(App& a, Ctx& c, const RadioState& s, Rect view) {
                 spd = g.wpmLo > 0 && g.wpmHi > 0 && lo != hi ? std::to_string(lo) + "–" + std::to_string(hi) + " wpm" : std::to_string((int)std::lround(g.wpm)) + " wpm";
             }
             const std::string fq = g.hz > 0 ? decKHz(g.hz) : std::to_string((int)g.audio) + " Hz";
-            const std::string who = g.call.empty() ? "" : g.call + "  ";
-            decRowText(c, rr, fq, 92, who + (!psk && !jtty && decCwPlain(a) ? cwPlainEnglish(g.text) : g.text), decQCol(g.q),
-                       g.active ? th::white : th::white68, spd);
+            // ★★ the NEWEST of the text (decFitTail), after the call — it was cut at its END, so the row showed the
+            //    oldest of the server's 120 characters and stood still while the signal was decoded (Stuart, 2026-11-12)
+            const float cy = rr.cy();
+            c.tc.draw(c.g, c.f.small, decFit(c, c.f.small, fq, 86), rr.x + 8, cy - c.f.small.lineHeight() / 2.f, decQCol(g.q));
+            const float tw = (float)c.tc.width(c.f.small, spd) + 10;
+            c.tc.draw(c.g, c.f.small, spd, rr.r() - 8, cy - c.f.small.lineHeight() / 2.f, th::dim, 2);
+            float x = rr.x + 8 + 92;
+            if (!g.call.empty()) x += (float)c.tc.draw(c.g, c.f.body, g.call, x, cy - c.f.body.lineHeight() / 2.f, g.active ? th::white : th::white68) + 12;
+            const std::string tx = !psk && !jtty && decCwPlain(a) ? cwPlainEnglish(g.text) : g.text;
+            c.tc.draw(c.g, c.f.body, decFitTail(c, c.f.body, tx, (int)(rr.r() - 8 - tw - x)), x, cy - c.f.body.lineHeight() / 2.f,
+                      g.active ? th::white : th::white68);
         }, &decSigAnchor());
     if (hit >= 0) {
         const DecSig& g = u.sigs[(size_t)hit];
+        // ★★ CW: a press READS the signal (its own history, RTTY's reading — decPaneRead); TUNE there tunes to it
+        if (!psk && !jtty) { decReadSig((long long)g.id); a.nav_.forget("dec"); return; }
         if (!(g.hz > 0)) return;
         if (jtty) decTune(a, s, g.hz - 1500, "usb");          // jtty.ts jttyTuneFor: tone 0 mid-passband
         else if (psk) {
@@ -276,6 +312,23 @@ inline void decPaneSignals(App& a, Ctx& c, const RadioState& s, Rect view) {
             decTune(a, s, lsb ? g.hz + cc : g.hz - cc, lsb ? "lsb" : "usb");
         } else decTune(a, s, g.hz, "cwu");
     }
+}
+/** ★★ ONE CW SIGNAL READ (a SIGNALS row pressed): its decoded history, newest at the foot, following it — and, the
+ *  box grabbed, UP / DOWN scroll back through it and the place holds as text arrives (decDrawLog, RTTY's). The header
+ *  has TUNE (tune to it — what the row's press did before) and SIGNALS / BACK return to the list. */
+inline void decPaneRead(App& a, Ctx& c, const RadioState& s, Rect view) {
+    DecUi& u = decUi();
+    const DecSig* g = nullptr;
+    for (auto& x : u.sigs) if ((long long)x.id == u.readSig) g = &x;
+    // the signal's line: frequency · call · speed (or "no longer heard")
+    std::string head = g ? (g->hz > 0 ? decKHz(g->hz) + " kHz" : std::to_string((int)g->audio) + " Hz") : std::string("no longer heard");
+    if (g && !g->call.empty()) head += "  " + g->call;
+    if (g && g->wpm > 0) head += "  · " + std::to_string((int)std::lround(g->wpm)) + " wpm";
+    const float hh = (float)c.f.small.lineHeight() + 2;
+    c.tc.draw(c.g, c.f.small, decFit(c, c.f.small, head, (int)view.w - 16), view.x + 8, view.y, g ? decQCol(g->q) : th::dim);
+    const Rect body{view.x, view.y + hh, view.w, view.h - hh};
+    decDrawLog(a, c, body, "nothing decoded from this signal yet — its text appears here as it is heard", &u.sigLog);
+    (void)s;
 }
 /** The callsigns heard (cw_spot / psk_spot / jtty_spot), newest first — press = tune. */
 inline void decPaneCalls(App& a, Ctx& c, const RadioState& s, Rect view) {
@@ -492,7 +545,7 @@ inline void decOptionRows(App& a, const RadioState& s, const std::string& id, st
         bool& skim = cw ? u.cwSkim : u.pskSkim;
         if (!skimOk && skim) { skim = false; decReattachSoon(id); }
         if (skimOk) choice(id + ".view", "VIEW", {"ONE SIGNAL", "SKIMMER"}, skim ? 1 : 0, [id](int i) {
-            DecUi& x = decUi(); (id == "cw" ? x.cwSkim : x.pskSkim) = i == 1; x.sub = i == 1 ? 1 : 0; decReattachSoon(id); });
+            DecUi& x = decUi(); (id == "cw" ? x.cwSkim : x.pskSkim) = i == 1; x.sub = 0; decReadSig(0); decReattachSoon(id); });
         if (skimOk && skim) {
             int& w = cw ? u.cwWidth : u.pskWidth;
             const std::vector<int> ws = cw ? std::vector<int>{24000, 48000, 96000} : std::vector<int>{6000, 12000, 24000};
@@ -781,6 +834,10 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
     if (grabbed && !a.sheets_.empty() && a.sheets_.back() == App::S_DEC && u.pane == DecUi::P_PICK && decRunning() && c.nav.input().back) {
         if (c.nav.backPressed()) { u.pane = DecUi::P_OUT; a.nav_.forget("dec"); }
     }
+    // ★ …and a CW signal being read goes back to the list first (its row keeps the highlight)
+    if (grabbed && !a.sheets_.empty() && a.sheets_.back() == App::S_DEC && u.pane == DecUi::P_OUT && u.readSig && u.view == "cw" && c.nav.input().back) {
+        if (c.nav.backPressed()) { const long long id = u.readSig; decReadSig(0); a.nav_.setFocus("dec", "dec.sig." + std::to_string(id)); }
+    }
     // ★ a picture full screen, or the gallery: drawn from the sheet loop (decDrawFull) — the box draws nothing under it.
     //   Without that hook wired (app_impl.h `case S_DEC: decDrawFull(*this, c, s);`) it would be an invisible state:
     //   then it closes again and says so, rather than leave the pad on nothing.
@@ -825,6 +882,8 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             ks.push_back({"dec.k.pick", "DECODERS", 1, false});
             // ★★ EXPLAIN ↔ RAW (the app's key, Stuart 2026-10-30): the legend names what a press DOES; CW only
             if (view == "cw") ks.push_back({"dec.k.plain", a.set_.cwPlain ? "RAW" : "EXPLAIN", 4, false});
+            if (view == "cw" && u.readSig && decSubs(view)[(size_t)std::max(0, std::min(u.sub, (int)decSubs(view).size() - 1))] == "SIGNALS")
+                ks.push_back({"dec.k.tune", "TUNE", 5, false});
             // ★ CLR only where there is something it clears (an external decoder: only with its own clear action)
             if (view != "refused" && (!xv || xv->clear)) ks.push_back({"dec.k.clr", "CLR", 2, false});
             ks.push_back({"dec.k.stop", decRunning() ? "STOP" : "CLOSE", 3, false});
@@ -856,6 +915,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             const std::string sp = u.sub >= 0 && u.sub < (int)subs.size() ? subs[(size_t)u.sub] : "SIGNALS";
             if (sp == "TEXT") decDrawLog(a, c, body, "listening — the signal in the middle of your passband is decoded here");
             else if (sp == "CALLS") decPaneCalls(a, c, s, body);
+            else if (view == "cw" && u.readSig) decPaneRead(a, c, s, body);
             else decPaneSignals(a, c, s, body);
         } else {
             std::string idle = u.status;
@@ -879,11 +939,13 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             else a.nav_.forget("dec");
         } else if (act == 4) { a.set_.cwPlain = a.set_.cwPlain ? 0 : 1; a.dirty();
             a.toast(a.set_.cwPlain ? "CW in plain English — RAW shows it as sent" : "CW as sent");
+        } else if (act == 5) {
+            for (auto& g : u.sigs) if ((long long)g.id == u.readSig && g.hz > 0) decTune(a, s, g.hz, "cwu");
         } else if (act == 50) { mapOpenDecoder(a, view);
         } else if (act == 10) { u.view = view == "spots" ? u.active : "spots"; u.sub = 0; decListScroll() = {}; decSigAnchor() = {}; a.nav_.forget("dec"); }
         else if (act >= 60) decPicKeyPress(a, act, view);
         else if (act >= 40) { if ((size_t)(act - 40) < extPress.size()) extPress[(size_t)(act - 40)](); }
-        else if (act >= 20) { u.sub = act - 20; decListScroll() = {}; decSigAnchor() = {}; a.nav_.forget("dec"); }
+        else if (act >= 20) { u.sub = act - 20; decReadSig(0); decListScroll() = {}; decSigAnchor() = {}; a.nav_.forget("dec"); }
     }
     c.nav.layer("deck");
     // the box as ONE stop on the island's layer (the web's [data-navbox]): ENTER grabs

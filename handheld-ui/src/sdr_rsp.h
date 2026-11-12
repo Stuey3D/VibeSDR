@@ -128,7 +128,7 @@ inline void rspRows(S& x, float& y) {
         if (rowSlider(x, y, "sdr.rsp.lna", "RF GAIN (LNA)", help, pos, 0, lnaMax, 1, val, !agcDrives, 190)) {
             const int want = lnaMax - (int)pos;
             hold(x, "rsp.lna", want);
-            rspSend(x, "lna", want);
+            sendKVSlider(x, "rsp_control", "lna", want);
         }
     }
 
@@ -147,7 +147,7 @@ inline void rspRows(S& x, float& y) {
         if (floorDb >= 20) help += fmtI("\nThe owner requires at least %d dB of IF gain reduction on this band", floorDb);
         if (rowSlider(x, y, "sdr.rsp.ifgr", "IF GAIN RED.", help, gr, lo, hi, 1, val, !ifOn, 190)) {
             hold(x, "rsp.ifgr", gr);
-            rspSend(x, "ifgr", (long)gr);
+            sendKVSlider(x, "rsp_control", "ifgr", (long)gr);
         }
     }
 
@@ -204,7 +204,7 @@ inline void rspRows(S& x, float& y) {
                 : "";
             if (rowSlider(x, y, "sdr.rsp.agcset", std::string("AGC TARGET") + (vOwns ? " · VIBEAGC" : ""), help, sp, -72, -10, 1, val, !vOwns, 170)) {
                 hold(x, "rsp.agcset", sp);
-                rspSend(x, "agcset", (long)sp);
+                sendKVSlider(x, "rsp_control", "agcset", (long)sp);
             }
         }
         // FILTERS

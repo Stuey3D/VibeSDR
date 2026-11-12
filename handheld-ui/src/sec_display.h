@@ -71,8 +71,9 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     // BRIGHTNESS (the backlight, 1–255 — the supervisor clamps, so it is never black)
     {
         double v = brightness_;
-        if (sliderRow("d.bri", "BRIGHTNESS", "", v, 5, 255, 10, std::to_string(brightness_))) {
-            brightness_ = (int)v; eng_->device("{\"set\":\"brightness\",\"value\":" + std::to_string(brightness_) + "}");
+        if (sliderRow("d.bri", "BRIGHTNESS", "", v, 5, 255, 5, std::to_string(brightness_))) {   // ★ 5 (was 10: 5 → 15 tripled the dimmest)
+            brightness_ = (int)v; const std::string m = "{\"set\":\"brightness\",\"value\":" + std::to_string(brightness_) + "}";
+            sendLatest("d.bri", [this, m] { eng_->device(m); });   // ★ a held slider: ≤ 10 POSTs a second, the last always
         }
     }
     // DISPLAY RATE (display_rate.h — Stuart, 2026-11-07: screen noise on FM)
@@ -237,8 +238,8 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     if (!d.rangeManual) {
         if (sliderRow("d.ac", "AUTO CONTRAST", "", d.autoContrast, 0, 20, 1, fmt("%g", d.autoContrast))) { dispDirty(); look(); }
     } else {
-        if (sliderRow("d.min", "MIN dB", "", d.minDb, -160, -60, 5, fmt("−%g", -d.minDb))) { dispDirty(); look(); }
-        if (sliderRow("d.max", "MAX dB", "", d.maxDb, -100, 0, 5, d.maxDb < 0 ? fmt("−%g", -d.maxDb) : std::string("0"))) { dispDirty(); look(); }
+        if (sliderRow("d.min", "MIN dB", "", d.minDb, -160, -60, 1, fmt("−%g", -d.minDb))) { dispDirty(); look(); }
+        if (sliderRow("d.max", "MAX dB", "", d.maxDb, -100, 0, 1, d.maxDb < 0 ? fmt("−%g", -d.maxDb) : std::string("0"))) { dispDirty(); look(); }
     }
     // BRIGHTNESS · CONTRAST · SHARPNESS (the waterfall's — "WATERFALL BRIGHTNESS", as the backlight's row is BRIGHTNESS)
     if (sliderRow("d.wbr", "WATERFALL BRIGHTNESS", "", set_.wfBrightness, -20, 20, 1, fmt("%g", set_.wfBrightness))) { look(); dirty(); }

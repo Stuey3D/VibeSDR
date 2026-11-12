@@ -60,7 +60,7 @@ inline void gainRows(S& x, float& y) {
     if (airspy && top < (int)s.gains.size() - 1) help = fmtI("The owner has limited gain to %d of 21 on this band", s.gains[(size_t)top] / 10);
     if (rowSlider(x, y, "sdr.gain", "GAIN", help, v, 0, top, 1, val, !vibeAgc, 110)) {
         hold(x, "gain", v);
-        sendGain(x, s.gains[(size_t)v]);
+        sendSlider(x, "{\"type\":\"gain\",\"value\":" + std::to_string(s.gains[(size_t)v]) + "}");   // (engine.h gain(), coalesced)
     }
 
     // VIBE AGC — rtl only (§4a.2 row 2)
@@ -170,7 +170,7 @@ inline void ppmRow(S& x, float& y) {
     double v = held(x, "ppm", x.hwi()["ppm"].num(0), kSilent);
     if (rowSlider(x, y, "sdr.ppm", "PPM", "", v, -50, 50, 1, fmtI("%d", (int)v), true, 60)) {
         hold(x, "ppm", v);
-        sendKV(x, "ppm", "value", (long)v);
+        sendKVSlider(x, "ppm", "value", (long)v);
     }
 }
 

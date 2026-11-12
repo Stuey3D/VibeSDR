@@ -57,7 +57,7 @@ struct DecDef {
 };
 inline const DecDef kDecs[] = {
     {"rtty",   "RTTY",    DK_TEXT, "",       false, true,  "AUTO finds the shift, centre, speed and polarity itself. If it cannot lock, pick a preset or set the signal by hand below."},
-    {"cw",     "CW",      DK_KB,   "cw",     true,  true,  "Tune the signal in CW — the decoder finds the speed itself (5–60 WPM). A wider USB filter lists every CW signal inside it. Press a row to tune to it."},
+    {"cw",     "CW",      DK_KB,   "cw",     true,  true,  "Tune the signal in CW — the decoder finds the speed itself (5–60 WPM). A wider USB filter lists every CW signal inside it. Press a row to read its text back as far as it has been heard; TUNE there tunes to it."},
     {"psk",    "PSK",     DK_KB,   "psk",    true,  true,  "Tune USB with the PSK segment in your passband (e.g. 14.070). The signal in the middle of the passband is decoded; press a row to tune to it."},
     {"aprs",   "APRS",    DK_APRS, "aprs",   true,  true,  "Every station heard is listed, with its position, weather, messages and the digipeater that carried it."},
     {"navtex", "NAVTEX",  DK_TEXT, "",       true,  true,  "Tune 518 kHz (international) or 490 kHz (national) in USB, or 4209.5 kHz. Each message starts ZCZC and ends NNNN; a retune starts the next one."},
@@ -141,7 +141,12 @@ struct DecGMode { std::string id, label, group; };
 inline std::string decAscii(std::string s);
 inline std::string decAsciiLog(const std::string& s) { return s.find('\xe2') == std::string::npos ? s : decAscii(s); }
 /** A scrolling text log, bounded: finished DISPLAY rows (wrapped once, when their line ends) + the line still arriving.
- *  The wrapping is done on the UI thread when new text arrives — never per frame (dec_box.h draws only visible rows). */
+ *  The wrapping is done on the UI thread when new text arrives — never per frame (dec_box.h draws only visible rows).
+ *  ★★ THE READER'S PLACE (`back`, rows up from the newest) is kept by the log itself (2026-11-12, Stuart: CW "should
+ *     auto scroll like RTTY does, and then selected the user should be able to scroll back"): every row that appears
+ *     BELOW the reader — a finished line's, or the line still arriving growing a row — moves `back` up by one, so what
+ *     is being read stays still; a log that was only counting FINISHED lines let CW (which never ends a line) drag the
+ *     reader forward a row at a time, then jump 75 rows when its 3000-character line was cut. */
 class DecLog {
 public:
     static constexpr size_t kMaxRows = 600, kMaxPending = 64 * 1024, kMaxLine = 3000;
@@ -166,22 +171,27 @@ public:
     }
     /** A line of its own (a separator, a refusal): finishes the line arriving first. */
     void line(const std::string& t) { push("\n" + t + "\n", false); }
-    void clear() { rows_.clear(); raw_.clear(); open_.clear(); openRows_.clear(); pending_.clear(); progress_ = false; back = 0; lastBlank_ = true; added_ = 0; }
+    void clear() { rows_.clear(); rowSer_.clear(); raw_.clear(); rawSer_.clear(); open_.clear(); openRows_.clear(); pending_.clear();
+                   progress_ = false; back = 0; lastBlank_ = true; added_ = 0; }
     /** ★ How each LINE is shown (CW's EXPLAIN: cwPlainEnglish; nullptr = as decoded). A change re-reads the whole log
-     *  from the lines as decoded (kept, up to kMaxRaw) at the next layout — the reader's place goes back to the newest. */
+     *  from the lines as decoded (kept, up to kMaxRaw) at the next layout — a reader scrolled back stays on the same
+     *  decoded line (its rows re-read), one following the newest still follows. */
     using Xform = std::string (*)(const std::string&);
     void setXform(Xform x) { if (x != xform_) { xform_ = x; reread_ = true; } }
+    /** ★ CW's text never ends a line (the server sends a stream of characters, no line ends — vibe_cw_run.h clean()):
+     *  `on`, a line ends at the first space after a CW break (= + <AR> <KN> <BK> <SK> <BT>) once it is 40 characters
+     *  long, else at the first space after 240 — so lines finish as RTTY's do, EXPLAIN reads a paragraph at a time and
+     *  only the short line still arriving is re-wrapped as it grows. */
+    void setCwBreaks(bool on) { cwBreaks_ = on; }
+    /** How many rows the box shows (for keeping the reader's place across a re-read). */
+    void setView(int n) { view_ = std::max(1, n); }
     /** Lay out what arrived (UI thread; cheap — only the new text). */
     void layout(TextCache& tc, const Font& f, int w) {
+        const long before = (long)rows();
+        popped_ = 0;
         if (w != w_) { w_ = w; rewrap(tc, f); }
-        if (reread_) {
-            reread_ = false; rows_.clear(); back = 0;
-            std::vector<std::string> out;
-            for (auto& r : raw_) { wrap(tc, f, shown(r), out); for (auto& x : out) rows_.push_back(std::move(x)); }
-            while (rows_.size() > kMaxRows) rows_.pop_front();
-            rewrap(tc, f);
-        }
-        if (pending_.empty()) return;
+        if (reread_) { reread(tc, f); return layout(tc, f, w); }
+        if (pending_.empty()) { added_ += (long)rows() - before + popped_; return; }
         std::string p; p.swap(pending_);
         bool openDirty = false;
         size_t i = 0;
@@ -195,42 +205,105 @@ public:
             const size_t e = j == std::string::npos ? p.size() : j;
             open_.append(p, i, e - i);
             openDirty = true;
+            if (cwBreaks_) cwBreak(tc, f);
             if (open_.size() > kMaxLine) finish(tc, f);
             i = e;
             if (i < p.size() && p[i] == '\n') { finish(tc, f); openDirty = true; i++; }
         }
         if (openDirty) { if (open_.empty()) openRows_.clear(); else wrap(tc, f, shown(open_), openRows_); }   // ★ no empty row at the foot
+        added_ += (long)rows() - before + popped_;
     }
     size_t rows() const { return rows_.size() + openRows_.size(); }
     const std::string& row(size_t k) const { return k < rows_.size() ? rows_[k] : openRows_[k - rows_.size()]; }
     bool empty() const { return rows_.empty() && open_.empty() && openRows_.empty(); }
-    /** Rows added since the last call (the box keeps a reader's place while they arrive). */
-    size_t takeAdded() { const size_t n = added_; added_ = 0; return n; }
+    /** Rows that appeared at the foot since the last call (negative: the line arriving re-read shorter). The box adds
+     *  them to `back` while the reader is scrolled up, so the place holds still. */
+    long takeAdded() { const long n = added_; added_ = 0; return n; }
     int back = 0;   // ★ rows scrolled up from the newest (0 = following the newest text)
 
 private:
     static constexpr size_t kMaxRaw = 300;   // finished lines kept as decoded (a CW line is long: ~kMaxRows rows' worth)
     std::deque<std::string> rows_, raw_;
+    std::deque<uint64_t> rowSer_, rawSer_;   // ★ the decoded line each row / kept line belongs to (serial numbers)
+    uint64_t ser_ = 1;                       // the serial of the line arriving
     std::string open_, pending_;
     Xform xform_ = nullptr;
-    bool reread_ = false;
+    bool reread_ = false, cwBreaks_ = false;
+    int view_ = 0;
     std::string shown(const std::string& s) const { return xform_ ? xform_(s) : s; }
     std::vector<std::string> openRows_;
     bool progress_ = false, lastBlank_ = true;
     int w_ = 0;
-    size_t added_ = 0;
+    long added_ = 0, popped_ = 0;
     std::unordered_map<uint64_t, int> adv_;
 
+    uint64_t serAt(size_t k) const { return k < rowSer_.size() ? rowSer_[k] : ser_; }
+    void capRows() { while (rows_.size() > kMaxRows) { rows_.pop_front(); rowSer_.pop_front(); popped_++; } }
+    /** The view re-read through a new Xform: the reader stays on the decoded line at the top of the view. */
+    void reread(TextCache& tc, const Font& f) {
+        reread_ = false;
+        uint64_t keepSer = 0; double frac = 0;
+        if (back > 0 && rows() > 0) {
+            const long n = (long)rows();
+            const long top = std::max(0L, n - view_ - back);
+            keepSer = serAt((size_t)top);
+            long first = top, cnt = 0;
+            while (first > 0 && serAt((size_t)first - 1) == keepSer) first--;
+            for (long k = first; k < n && serAt((size_t)k) == keepSer; k++) cnt++;
+            frac = cnt > 0 ? (double)(top - first) / cnt : 0;
+        }
+        rows_.clear(); rowSer_.clear();
+        std::vector<std::string> out;
+        for (size_t k = 0; k < raw_.size(); k++) {
+            wrap(tc, f, shown(raw_[k]), out);
+            for (auto& x : out) { rows_.push_back(std::move(x)); rowSer_.push_back(rawSer_[k]); }
+        }
+        while (rows_.size() > kMaxRows) { rows_.pop_front(); rowSer_.pop_front(); }
+        if (!open_.empty()) wrap(tc, f, shown(open_), openRows_); else openRows_.clear();
+        added_ = 0;
+        if (!keepSer) { back = 0; return; }
+        const long n = (long)rows();
+        long first = -1, cnt = 0;
+        for (long k = 0; k < n; k++) if (serAt((size_t)k) == keepSer) { if (first < 0) first = k; cnt++; }
+        if (first < 0) { back = 0; return; }
+        const long top = first + std::min(cnt - 1, (long)std::lround(frac * cnt));
+        back = (int)std::max(0L, n - view_ - top);
+    }
+    /** ★ CW's line breaks (setCwBreaks). */
+    void cwBreak(TextCache& tc, const Font& f) {
+        for (;;) {
+            size_t cut = std::string::npos;
+            if (open_.size() >= 40) {
+                size_t s = 0;
+                while (s < open_.size()) {
+                    const size_t e = open_.find(' ', s);
+                    if (e == std::string::npos) break;   // the last word may still be arriving
+                    if (e > s && e >= 40) {
+                        const std::string w = open_.substr(s, e - s);
+                        if (w.back() == '=' || w.back() == '+' || w == "<AR>" || w == "<KN>" || w == "<BK>" || w == "<SK>" || w == "<BT>") { cut = e; break; }
+                    }
+                    s = e + 1;
+                }
+            }
+            if (cut == std::string::npos && open_.size() > 240) cut = open_.find(' ', 240);
+            if (cut == std::string::npos) return;
+            std::string rest = open_.substr(cut + 1);
+            open_.resize(cut);
+            finish(tc, f);
+            open_ = std::move(rest);
+        }
+    }
     void finish(TextCache& tc, const Font& f) {
         const bool blank = open_.find_first_not_of(' ') == std::string::npos;
         if (blank && lastBlank_) { open_.clear(); openRows_.clear(); return; }   // ★ one blank row, never a column of them
         lastBlank_ = blank;
-        raw_.push_back(open_);
-        while (raw_.size() > kMaxRaw) raw_.pop_front();
+        raw_.push_back(open_); rawSer_.push_back(ser_);
+        while (raw_.size() > kMaxRaw) { raw_.pop_front(); rawSer_.pop_front(); }
         std::vector<std::string> out;
         wrap(tc, f, shown(open_), out);
-        for (auto& r : out) { rows_.push_back(std::move(r)); added_++; }
-        while (rows_.size() > kMaxRows) rows_.pop_front();
+        for (auto& r : out) { rows_.push_back(std::move(r)); rowSer_.push_back(ser_); }
+        capRows();
+        ser_++;
         open_.clear(); openRows_.clear();
     }
     void rewrap(TextCache& tc, const Font& f) { if (!open_.empty()) wrap(tc, f, shown(open_), openRows_); }
@@ -335,6 +408,13 @@ struct DecUi {
                   double stop = 1.5; int bits = 7; char parity = 'N'; } rtty;
     std::string timeStation = "msf";
     bool cwSkim = false; int cwWidth = 48000;
+    // ★★ A CW SIGNAL'S OWN HISTORY (Stuart, 2026-11-12: "selected the user should be able to scroll back to see the
+    //    decoded history"): the server sends each signal's LAST 120 characters (vibe_cw_run.h sendList), so the history
+    //    is joined here from those windows (decHistMerge), by id, while the signal is listed. A row pressed opens it
+    //    (readSig) in a log of its own (sigLog) — RTTY's reading: following the newest, UP / DOWN scroll back.
+    std::unordered_map<long long, std::string> sigHist;
+    long long readSig = 0;           // the CW signal being read (0 = the list)
+    DecLog sigLog;
     bool pskSkim = false; int pskWidth = 12000;
     int aprsBaud = 1200;
     std::string mfskMode = "auto";
@@ -402,6 +482,52 @@ inline void decApplyClr(std::vector<DecSig>& v) {
     }
     v.swap(keep);
 }
+/** ★ A signal's history (`hist`) joined with the server's latest window of its text (`win`, its last 120 characters):
+ *  the longest end of `hist` that `win` starts with is the overlap, the rest of `win` is new and is appended (and
+ *  returned). No overlap of at least 12 characters (or all of a shorter history / window) = the window moved on further
+ *  than it holds, or the text was replaced: the history goes on after a gap (" … "). Bounded (kMax, the oldest go). */
+inline std::string decHistMerge(std::string& hist, const std::string& win) {
+    static constexpr size_t kMax = 6000;
+    if (win.empty()) return "";
+    std::string add;
+    if (hist.empty()) add = win;
+    else {
+        const size_t need = std::min<size_t>({12, win.size(), hist.size()});   // (a young signal: all of it)
+        size_t k = std::min(hist.size(), win.size());
+        for (; k >= need && k > 0; k--) if (hist.compare(hist.size() - k, k, win, 0, k) == 0) break;
+        if (k >= need && k > 0) add = win.substr(k);
+        else if (hist.size() >= win.size() && hist.compare(hist.size() - win.size(), win.size(), win) == 0) add.clear();
+        else add = " … " + win;
+    }
+    hist += add;
+    if (hist.size() > kMax) { size_t cut = hist.find(' ', hist.size() - kMax); hist.erase(0, cut == std::string::npos ? hist.size() - kMax : cut + 1); }
+    return add;
+}
+/** The CW histories after a cw_signals list: each listed signal's window joined on; a signal no longer listed is
+ *  forgotten (the one being read is kept — its log stays readable after it fades). */
+inline void decCwHistories() {
+    DecUi& u = decUi();
+    std::unordered_map<long long, std::string> keep;
+    for (auto& g : u.sigs) {
+        const long long id = (long long)g.id;
+        auto it = u.sigHist.find(id);
+        std::string h = it != u.sigHist.end() ? std::move(it->second) : std::string();
+        const std::string add = decHistMerge(h, g.text);
+        if (id == u.readSig && !add.empty()) u.sigLog.push(add, false);
+        keep[id] = std::move(h);
+    }
+    if (u.readSig && !keep.count(u.readSig)) { auto it = u.sigHist.find(u.readSig); if (it != u.sigHist.end()) keep[u.readSig] = std::move(it->second); }
+    u.sigHist.swap(keep);
+}
+/** Open (id ≠ 0) or close the reader of one CW signal. */
+inline void decReadSig(long long id) {
+    DecUi& u = decUi();
+    u.readSig = id;
+    u.sigLog.clear();
+    if (!id) return;
+    auto it = u.sigHist.find(id);
+    if (it != u.sigHist.end()) u.sigLog.push(it->second, false);
+}
 /** CLR pressed on a list decoder (dec_box.h). */
 inline void decClearLists() {
     DecUi& u = decUi();
@@ -409,6 +535,7 @@ inline void decClearLists() {
     u.clrText.clear();
     for (auto& g : u.sigs) u.clrText[(long long)g.id] = g.raw;
     u.sigs.clear();
+    u.sigHist.clear(); u.sigLog.clear();   // ★ the reader stays open on its signal, empty, and fills with what comes next
     u.aprsClrAt = nowSec();
 }
 
@@ -615,7 +742,9 @@ inline void decStart(App& a, const RadioState& s, const std::string& id) {
     if (DecExternal* e = decExt(u.active)) { if (e->setOn) e->setOn(a, s, false); u.active.clear(); }   // ★ an external one gives way
     u.active = id; u.ext = decExtFor(id);
     u.clrFor.clear(); u.clrText.clear(); u.aprsClrAt = 0;   // ★ a decoder started afresh: no CLR in force
-    u.view = id; u.sub = (id == "cw" && u.cwSkim) || (id == "psk" && u.pskSkim) ? 1 : 0;
+    // ★ the first sub-pane: TEXT in ONE SIGNAL, SIGNALS in the skimmer (it was 1 — CALLS — once the skimmer has no TEXT)
+    u.view = id; u.sub = 0;
+    u.sigHist.clear(); decReadSig(0);
     u.log.clear(); u.sitor = Json(); u.sigs.clear(); u.calls.clear(); u.dsc.clear(); u.aprs.clear(); u.aprsLog.clear();
     u.status = decIdleStatus(id); u.tuneHint.clear(); u.live = false;
     u.navtexHz = s.vfoHz;
@@ -819,6 +948,7 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
         }
         decApplyClr(u.sigs);
         decSortSigs(u.sigs);   // ★★ the app's order (cwList sortCwSignals) — the server's order moves every update
+        if (!psk) decCwHistories();
         u.live = any; if (any) u.liveAt = now;
         return;
     }

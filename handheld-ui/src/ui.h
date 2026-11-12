@@ -75,11 +75,12 @@ enum Dir { D_NONE, D_UP, D_DOWN, D_LEFT, D_RIGHT };
 struct Input {
     Dir nav = D_NONE;
     bool enter = false, back = false;
+    int repeat = 0;   // ★ a held LEFT / RIGHT's repeat steps this frame (key_repeat.h; signed) — only a slider takes them
 };
 
 class Nav {
 public:
-    struct Hit { bool focused = false, pressed = false; int adjust = 0; };
+    struct Hit { bool focused = false, pressed = false; int adjust = 0; bool repeat = false; };   // repeat: adjust is a hold's
 
     /** Start a frame: `top` is the layer that takes the pad this frame. */
     void begin(const std::string& top, const Input& in) {
@@ -91,20 +92,22 @@ public:
 
     /** Register a control. `takesLR`: while it has the highlight, D-pad left / right adjust it (a slider, a stepper)
      *  instead of moving — the web's range inputs do the same. Returns whether it has the highlight, was pressed, and
-     *  any adjustment this frame. */
-    Hit item(const std::string& id, Rect r, bool takesLR = false) {
+     *  any adjustment this frame. `repeats` (a slider): LEFT / RIGHT HELD keep stepping it (Input::repeat, key_repeat.h;
+     *  `adjust` is then the number of steps due, signed). */
+    Hit item(const std::string& id, Rect r, bool takesLR = false, bool repeats = false) {
         Hit h;
         if (layerNow_ != top_) {
             // not the top layer: drawn, never highlighted
             return h;
         }
-        items_.push_back({id, r, takesLR});
+        items_.push_back({id, r, takesLR, takesLR && repeats});
         std::string& f = focus_[top_];
         if (f.empty() && !pendingDefault_.count(top_)) pendingDefault_[top_] = id;
         if (f == id) {
             h.focused = true;
             if (in_.enter && !consumed_) { h.pressed = true; consumed_ = true; }
             if (takesLR && !consumed_ && (in_.nav == D_LEFT || in_.nav == D_RIGHT)) { h.adjust = in_.nav == D_LEFT ? -1 : 1; consumed_ = true; }
+            if (takesLR && repeats && !consumed_ && in_.repeat) { h.adjust = in_.repeat; h.repeat = true; consumed_ = true; }
         }
         return h;
     }
@@ -114,6 +117,14 @@ public:
     void forget(const std::string& layer) { focus_.erase(layer); pendingDefault_.erase(layer); }
     bool backPressed() { if (in_.back && !consumed_) { consumed_ = true; return true; } return false; }
     const Input& input() const { return in_; }
+    /** Before begin(): whether `layer`'s highlighted control slides when held (from the frame just drawn). */
+    bool focusRepeats(const std::string& layer) const {
+        if (layer != top_) return false;
+        auto it = focus_.find(layer);
+        if (it == focus_.end()) return false;
+        for (auto& i : items_) if (i.id == it->second) return i.repeats;
+        return false;
+    }
     /** The highlighted control's box this frame (for scrolling it into view), or nullptr. */
     const Rect* focusedRect() const {
         auto it = focus_.find(top_);
@@ -141,7 +152,7 @@ public:
     }
 
 private:
-    struct Item { std::string id; Rect r; bool takesLR; };
+    struct Item { std::string id; Rect r; bool takesLR; bool repeats; };
     std::string top_, layerNow_;
     Input in_;
     bool consumed_ = false;
@@ -244,9 +255,9 @@ inline int segmented(Ctx& c, const std::string& id, Rect r, const std::vector<st
 }
 
 /** The web's range input: amber track + ball. While highlighted, D-pad left / right step it (and the ring turns
- *  amber, the web's .gpAdjust). Returns true when the value changed. */
+ *  amber, the web's .gpAdjust) — held, it keeps sliding (key_repeat.h). Returns true when the value changed. */
 inline bool slider(Ctx& c, const std::string& id, Rect r, double& v, double lo, double hi, double step) {
-    const Nav::Hit h = c.nav.item(id, r, true);
+    const Nav::Hit h = c.nav.item(id, r, true, true);   // ★ held LEFT / RIGHT slide it (key_repeat.h)
     bool changed = false;
     if (h.adjust) {
         const double nv = std::max(lo, std::min(hi, std::round((v + h.adjust * step - lo) / step) * step + lo));

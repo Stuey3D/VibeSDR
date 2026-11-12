@@ -59,7 +59,7 @@ inline void ahfRows(S& x, float& y) {
                       "than that does not necessarily improve SNR, but it definitely costs dynamic range. If in doubt, turn the AGC on and let it decide.",
                       v, 0, steps - 1, 1, val, !agc, 110)) {
             n["sdr.ahf.att"] = v;
-            sendKV(x, "ahf_control", "att", (long)v);
+            sendKVSlider(x, "ahf_control", "att", (long)v);
         }
     }
     // PREAMP
@@ -85,7 +85,7 @@ inline void ahfRows(S& x, float& y) {
         if (rowSlider(x, y, "sdr.ahf.ppb", "CALIBRATION", fine ? "Fine steps (5 ppb) \u2014 press to go back to 100." : "Steps of 100 ppb \u2014 press for fine steps (5 ppb).",
                       v, -5000, 5000, fine ? 5 : 100, val, true, 110, &pressed)) {
             n["sdr.ahf.ppb"] = v;
-            sendKV(x, "ahf_control", "ppb", (long)v);
+            sendKVSlider(x, "ahf_control", "ppb", (long)v);
         }
         if (pressed) n["sdr.ahf.ppbFine"] = fine ? 0 : 1;
     }
@@ -128,7 +128,7 @@ inline void airspyRows(S& x, float& y) {
             for (auto& s : st) {
                 double v = std::max(0.0, std::min<double>(stageMax, held(x, std::string("asp.") + s.key, r[s.key].num(0))));
                 if (rowSlider(x, y, std::string("sdr.asp.") + s.key, s.label, s.help, v, 0, stageMax, 1, s.agc ? "set by AGC" : std::to_string((int)v), !s.agc, 110)) {
-                    hold(x, std::string("asp.") + s.key, v); aspSend(x, s.key, (long)v);
+                    hold(x, std::string("asp.") + s.key, v); sendKVSlider(x, "airspy_control", s.key, (long)v);
                 }
             }
             y = note(x, y, "The VGA has no automatic setting on this radio — it is always yours.");
@@ -185,7 +185,7 @@ inline void hackrfRows(S& x, float& y) {
                       "The front-end (IF) gain stage, 0-40 dB in 8 dB steps. Raise this BEFORE the VGA: gain taken here costs the least noise figure. "
                       "Back it off if the waterfall shows images or the audio breaks up on peaks — an 8-bit radio clips where others cope.",
                       v, 0, std::max(lnaTop, 0), lnaStep, fmtI("%d dB", (int)v) + (v == 0 ? " · none" : ""), lnaTop > 0, 110)) {
-            hold(x, "hrf.lna", v); hrfSend(x, "lna", (long)v);
+            hold(x, "hrf.lna", v); sendKVSlider(x, "hackrf_control", "lna", (long)v);
         }
     }
     {
@@ -194,7 +194,7 @@ inline void hackrfRows(S& x, float& y) {
                       "The baseband (VGA) gain stage, 0-62 dB in 2 dB steps. It comes AFTER the mixer, so it amplifies noise along with signal — use "
                       "it to top up once the LNA is set, not as the main control.",
                       v, 0, std::max(vgaTop, 0), vgaStep, fmtI("%d dB", (int)v) + (v == 0 ? " · none" : ""), vgaTop > 0, 110)) {
-            hold(x, "hrf.vga", v); hrfSend(x, "vga", (long)v);
+            hold(x, "hrf.vga", v); sendKVSlider(x, "hackrf_control", "vga", (long)v);
         }
     }
     {
