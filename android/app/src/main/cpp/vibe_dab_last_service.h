@@ -35,7 +35,18 @@ struct Entry { uint64_t seq = 0; uint32_t eid = 0; std::string block; uint32_t s
 class Store {
 public:
     const std::vector<Entry>& entries() const { return e_; }
-    void clear() { e_.clear(); seq_ = 0; }
+    void clear() { e_.clear(); seq_ = 0; block_.clear(); }
+
+    /** ★★ THE BLOCK THIS RADIO WAS LAST LISTENED TO ON (V12, 2026-11-12 — vibe_dab_landing.h rule 1). Kept in the same
+     *  file as the per-multiplex stations, so Start+Select's reset forgets both. "" = none. A listener's choice only: the
+     *  DX sweep, the band scans and background decoding never reach this (the shim records it). */
+    const std::string& lastBlock() const { return block_; }
+    /** True if it changed (the caller saves). */
+    bool setLastBlock(const std::string& b) {
+        if (b.empty() || b.size() > 4 || b == block_) return false;
+        block_ = b;
+        return true;
+    }
 
     /** The service last played on this multiplex: by EId when known, else by block name. 0 = none remembered. */
     uint32_t lookup(uint32_t eid, const std::string& block) const {
@@ -66,6 +77,8 @@ public:
     std::string serialise() const {
         std::string out = "VIBE-DAB-LAST 1\n";
         char b[96];
+        // ★ "B <block>" — an older build skips the line it cannot read (parse() below does the same for any unknown line)
+        if (!block_.empty()) out += "B " + block_ + "\n";
         for (const auto& x : e_) {
             std::snprintf(b, sizeof b, "L %llu %X %s %X\n", (unsigned long long)x.seq, unsigned(x.eid),
                           x.block.empty() ? "-" : x.block.c_str(), unsigned(x.sid));
@@ -84,6 +97,10 @@ public:
             const std::string line = text.substr(p, q - p);
             p = q + 1;
             unsigned long long seq = 0; unsigned eid = 0, sid = 0; char blk[16] = {0};
+            if (line.size() > 2 && line[0] == 'B' && line[1] == ' ') {
+                if (std::sscanf(line.c_str(), "B %4s", blk) == 1) block_ = blk;
+                continue;
+            }
             if (std::sscanf(line.c_str(), "L %llu %X %15s %X", &seq, &eid, blk, &sid) != 4 || !sid) continue;
             Entry x; x.seq = seq; x.eid = eid; x.block = std::strcmp(blk, "-") ? blk : ""; x.sid = sid;
             e_.push_back(x);
@@ -113,6 +130,7 @@ public:
 private:
     std::vector<Entry> e_;
     uint64_t seq_ = 0;
+    std::string block_;
 };
 
 /** Labels compared as a listener reads them: case and runs of spaces aside, ends trimmed. */

@@ -295,6 +295,13 @@ public:
         if (!path.empty()) lastStore_.load(path); else lastStore_.clear();
         remSid_ = 0; remEid_ = 0;
     }
+    /** ★★ The block a LISTENER last chose (vibe_dab_landing.h rule 1), per radio, in the same file. The shim calls this
+     *  only for a person's entry or block change — never the DX sweep, a band scan or background decoding. */
+    void rememberBlock(const std::string& block) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (lastStore_.setLastBlock(block) && !lastFile_.empty()) lastStore_.save(lastFile_);
+    }
+    std::string lastBlock() { std::lock_guard<std::mutex> lk(m_); return lastStore_.lastBlock(); }
     /** ★ TEST HOOK: what the store would answer for this multiplex. */
     uint32_t lastServiceForTest(uint32_t eid, const std::string& block) { std::lock_guard<std::mutex> lk(m_); return lastStore_.lookup(eid, block); }
     /** The receiver tells us where the radio actually is, so the two can be compared. */

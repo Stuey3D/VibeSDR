@@ -47,6 +47,7 @@
 #include "vibe_room_passband.h"   // ★ the shared chain's passband edges, reported in config (2026-10-17)
 #include "vibe_hwinfo.h"
 #include "vibe_dab_scan_store.h"   // ★ the last DAB band scan, on disk — see g_dabScanFile
+#include "vibe_dab_landing.h"      // ★ which block DAB opens on when nobody named one
 #include "vibe_afc.h"               // ★★ V12 automatic frequency correction — see g_afc
 #include "vibe_mqtt.h"        // ★ the external antenna switch (2026-10-09) — see g_ext below
 #include "vibe_antswitch.h"
@@ -1297,6 +1298,39 @@ static void dabBandLoadSaved(const std::string& path) {
     g_dabBandPrev = g_dabBand.hits;
     LOGI("[DAB] band scan: the last scan's %zu ensemble(s) remembered from %s", g_dabBand.hits.size(), path.c_str());
 }
+/* ★★ THE OWNER'S COUNTRY (config "country", two letters) for vibe_dab_landing.h rule 3 — LocalSdrShim::setReceiverCountry.
+ *  "" = not set: the server's position answers instead (g_bgLat/g_bgLon, defined further down — read through the
+ *  accessor below). */
+static std::mutex  g_vsCountryMtx;
+static std::string g_vsCountry;
+static double vsBgLat();
+static double vsBgLon();
+static bool   vsDabBlockReach(const char* block);
+/** The saved scan, as far as choosing a block goes. Under g_dabBandMtx inside. */
+static std::vector<vibedabland::ScanBlock> dabScanBlocks() {
+    std::vector<vibedabland::ScanBlock> v;
+    std::lock_guard<std::mutex> lk(g_dabBandMtx);
+    const auto& hits = g_dabBand.running ? g_dabBandPrev : g_dabBand.hits;
+    for (const auto& h : hits) {
+        if (h.idx < 0 || size_t(h.idx) >= vibedab::kBandIIICount) continue;
+        v.push_back({ vibedab::kBandIII[h.idx].name, h.merDb, h.fibRate, int(h.services.size()), h.complete });
+    }
+    return v;
+}
+/** ★ vibe_dab_landing.h's rule, with this radio's memory, scan, country and reach. */
+static vibedabland::Choice vsDabLandingChoice() {
+    std::string iso;
+    { std::lock_guard<std::mutex> lk(g_vsCountryMtx); iso = g_vsCountry; }
+    return vibedabland::choose(g_dab.lastBlock(), dabScanBlocks(), iso, vsBgLat(), vsBgLon(),
+                               [](const std::string& b) { return vsDabBlockReach(b.c_str()); });
+}
+/** ★ No scan list and no national multiplex for this country: the DAB box says "no scan yet" (the report's `unscanned`). */
+static bool vsDabUnscanned() {
+    std::string iso;
+    { std::lock_guard<std::mutex> lk(g_vsCountryMtx); iso = g_vsCountry; }
+    if (!vibedabland::strongest(dabScanBlocks()).empty()) return false;
+    return !vibedabland::countryKnown(iso, vsBgLat(), vsBgLon());
+}
 /** A scan has just ENDED (never a running one, never the DX sweep's): settle its list and write it.
  *  ★★ A SCAN THAT STOPS PART-WAY DOES NOT FORGET THE REST OF THE BAND. Cancelled at 7A, tuned away at 9C, or never
  *     started ("another program has the radio"): the blocks it walked are this scan's answer, and the blocks it never
@@ -1641,9 +1675,13 @@ static std::string dabBlocksJson() {
 /** The DAB status message, with the per-block memory appended. ★ ONE helper, because there are
  *  five callers of g_dab.json() and a field added at four of them is the "one rule, several
  *  readers" fault this codebase keeps paying for. */
+/** ★★ V12 (2026-11-12): `unscanned` — this radio has no scan list and its country has no national multiplex in
+ *  vibe_dab_landing.h, so the block DAB opened on is a guess (12B). Every client says so in the box. Always sent
+ *  (true or false), so a client merging live reports never keeps a stale true after a scan. */
+static std::string dabUnscannedField() { return vsDabUnscanned() ? ",\"unscanned\":true" : ",\"unscanned\":false"; }
 static void dabStatusJsonFinish_(std::string& j) {
-    const std::string blocks = dabBlocksJson();
-    if (!blocks.empty() && !j.empty() && j.back() == '}') j.insert(j.size() - 1, blocks);
+    const std::string blocks = dabBlocksJson() + dabUnscannedField();
+    if (!j.empty() && j.back() == '}') j.insert(j.size() - 1, blocks);
 }
 /** ★ Non-blocking, for vibe-dsp — see DabService::jsonTry. False = the decoder is busy, try again. */
 static bool dabStatusJsonTry(std::string& j) {
@@ -1669,7 +1707,7 @@ static void dabPartsFinish_(DabParts& p) {
     char lv[96];
     snprintf(lv, sizeof lv, ",\"v\":2,\"listRev\":\"%016llx\",\"dlsRev\":\"%016llx\"",
              (unsigned long long)p.listRev, (unsigned long long)p.dlsRev);
-    if (p.live.back() == '}') p.live.insert(p.live.size() - 1, lv);
+    if (p.live.back() == '}') p.live.insert(p.live.size() - 1, std::string(lv) + dabUnscannedField());
 }
 static bool dabPartsTry(DabParts& p) {
     if (!g_dab.partsTry(p)) return false;
@@ -1683,10 +1721,10 @@ static DabParts dabParts() {
 }
 static std::string dabStatusJson() {
     std::string j = g_dab.json();
-    const std::string blocks = dabBlocksJson();
+    const std::string blocks = dabBlocksJson() + dabUnscannedField();
     // ★ Only ever inserted before the FINAL brace, and only if json() actually returned an object —
     //   the truncation guard in json() can return a short object and must still be valid.
-    if (!blocks.empty() && !j.empty() && j.back() == '}') j.insert(j.size() - 1, blocks);
+    if (!j.empty() && j.back() == '}') j.insert(j.size() - 1, blocks);
     return j;
 }
 
@@ -6696,6 +6734,8 @@ std::string queryParam(const std::string& reqLine, const char* key) {
     return "";
 }
 } // namespace
+static double vsBgLat() { return g_bgLat.load(); }
+static double vsBgLon() { return g_bgLon.load(); }
 
 // ── Impl ────────────────────────────────────────────────────────────────────
 /** Put the AGC straight at `wantSteps` below the ceiling and write that gain — the tick's own
@@ -20097,8 +20137,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (jsonNum(msg, "channel", chV)) idx = int(chV);
                 }
             }
-            if (idx < 0) idx = g_dabChannel.load() >= 0 ? g_dabChannel.load()
-                                                        : vibedab::nearestChannel(225648000);  // 12B
+            /* ★★★ NO BLOCK NAMED (V12, 2026-11-12 — vibe_dab_landing.h). Already in DAB: stay on the block it is on.
+             *  Entering: the LAST block a listener chose here (per radio, on disk), else the strongest of the saved scan,
+             *  else the country's national multiplex, else 12B. It used to be the in-memory g_dabChannel or 12B — which the
+             *  DX sweep moved, a restart forgot, and which outside the UK is very often silence (Stuart: "for other
+             *  countries 12B may be dead"). */
+            if (idx < 0) {
+                if (g_dabMode.load(std::memory_order_relaxed) && g_dabChannel.load() >= 0) idx = g_dabChannel.load();
+                else {
+                    const vibedabland::Choice c = vsDabLandingChoice();
+                    if (const vibedab::Channel* ch = vibedab::channelByName(c.block.c_str())) idx = int(ch - &vibedab::kBandIII[0]);
+                    LOGI("[DAB] no block named — opening on %s (%s)", c.block.c_str(), vibedabland::whyWord(c.why));
+                }
+            }
             if (idx < 0 || size_t(idx) >= vibedab::kBandIIICount) {
                 sendText(sock, "{\"type\":\"dab\",\"error\":\"unknown channel\"}");
                 return;
@@ -20488,6 +20539,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  first — and every client shows it, because it is the report's `sid` (the shared-dial contract). The
              *  server's own moves (sock == nullptr: the DX sweep, the band scans, their restores) never choose and
              *  carry nothing: a sweep must not start audio on every block that happens to carry the last station. */
+            /* ★★ AND REMEMBER THE BLOCK — a LISTENER's entry or block change only (vibe_dab_landing.h rule 1). Never the
+             *  server's own moves (sock == nullptr: the DX sweep, the band scans, their restores, background decoding),
+             *  never while a scan or the sweep holds the radio, never the owner's landing (it is the owner's, not theirs). */
+            if (sock && !g_dabScanActive.load() && !g_dxDabScan.load() && msg.find("\"landing\":1") == std::string::npos)
+                g_dab.rememberBlock(vibedab::kBandIII[idx].name);
             if (sid > 0) g_dab.setService(uint32_t(sid));
             else if (!sock) g_dab.disarmAutoChoice(/*clearWant=*/true);
             else if (dabNewBlock && !g_dabScanActive.load() && !g_dxDabScan.load()) g_dab.armAutoChoice();
@@ -27066,7 +27122,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const uint32_t sid = g_vsLandingDabSid.load(std::memory_order_relaxed);
                 LOGI("[DAB] new session — landing on DAB block %s, service 0x%X",
                      vibedab::kBandIII[landDabCh].name, unsigned(sid));
-                handleControl(sock, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(landDabCh)
+                handleControl(sock, "{\"type\":\"dab\",\"on\":1,\"landing\":1,\"channel\":" + std::to_string(landDabCh)
                               + (sid ? ",\"sid\":" + std::to_string(sid) : std::string()) + "}");
                 // ★ If the entry refused (a race with a rate change), say so rather than leave a
                 //   listener on nothing — the plain landing below is the fallback.
@@ -38037,6 +38093,23 @@ static vibebands::Ranges vsTunableRanges() {
     const vibebands::Ranges perm = vsPermittedRanges(hw);
     return perm.empty() ? hw : perm;
 }
+/** ★ Can this radio tune DAB block `block` (vibe_dab_landing.h's reach)? Its hardware coverage and the owner's permitted
+ *  lists — NOT a locked centre, which DAB suspends for the life of the mode (see vsDabCapableHw). */
+static bool vsDabBlockReach(const char* block) {
+    const vibedab::Channel* ch = vibedab::channelByName(block);
+    if (!ch) return false;
+    vibebands::Ranges r;
+    if (g_icomOn.load()) return false;
+    auto& shim = LocalSdrShim::instance();
+    const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf"
+                          : shim.isHackRf() ? "hackrf" : shim.isAirspy() ? "airspy"
+                          : shim.isUsrp() ? "usrp" : "rtl";
+    const vibebands::Ranges hw = vibebands::driverCoverage(drv);
+    const vibebands::Ranges perm = vsPermittedRanges(hw);
+    const double lo = double(ch->centreHz) - 768e3, hi = double(ch->centreHz) + 768e3;
+    for (const auto& x : perm.empty() ? hw : perm) if (x.lo <= lo && x.hi >= hi) return true;
+    return false;
+}
 
 /** The two directory fields, from ONE evaluation of the set — `tunable` in Hz and `bands` in the
  *  band plan's own words. Computed together because they are two readings of the same fact, and
@@ -39157,6 +39230,10 @@ void LocalSdrShim::clearLogoCache() {
     LogoCacheClearFn fn;
     { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsLogoClearFn; }
     if (fn) fn();
+}
+void LocalSdrShim::setReceiverCountry(const std::string& iso) {
+    std::lock_guard<std::mutex> lk(g_vsCountryMtx);
+    g_vsCountry = iso.size() == 2 ? iso : std::string();
 }
 void LocalSdrShim::setReceiverPosition(double lat, double lon) {
     g_bgLat.store(lat); g_bgLon.store(lon);   // ★ V12: the FT8 summary measures its distances from here too
