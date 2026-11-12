@@ -26,6 +26,13 @@ censored-mean noise floor, an NCO, a triangular decimator, a polar discriminator
 textbook. Where a write-up left a detail open, the choice is marked **ASSUMED** in the code and in the table — each is a
 thing a real capture will confirm or correct.
 
+**★ 2026-11-11 — the rule widened (Stuart: "we dont want to copy but if we can take inspiration … only decoding 3% is
+pityful").** For the families that have NO other public description, the protocol notes at the head of rtl_433's device
+files (and its `conf/` format descriptions) may be read for FACTS — layout, timing, line code, sync, check polynomial,
+scaling — never code, tables, comments or identifiers; every decoder is still our own code on our own slicers, and each
+cites where its facts came from (a datasheet, patent, FCC report or write-up first where one exists). rtl_433's test
+recordings (`rtl_433_tests`) are used as test INPUT only, outside the repository — `scripts/ism-corpus.mjs`.
+
 ## Architecture — a whole-radio mode, not a passband decoder
 
 **Decision: a whole-radio mode, ADS-B's shape** (save the listener's state, take the radio onto the band, give it back
@@ -216,8 +223,8 @@ slicer's smoothing is in µs, so every family above slices as before. Everything
 | AcuRite 592TX-family T/H | 433 OOK PWM | **done** | Ray Wang, rayshobby.net parts 1–3 (CC BY-SA text) | temperature offset 1000 (author's empirical 1005); checksum identified by us on his examples |
 | AcuRite 00899 rain gauge | 433 OOK PWM | **done** (tips) | same | mm per tip unpublished — shown as "N bucket tips" |
 | AcuRite 00782 temperature | 433 OOK PPM | **done** | same | no checksum: 3 identical frames required |
-| Current Cost transmitters (electricity) | 433 FSK 3918 bps | **done** | Jack Kelly, rfm_edf_ecomanager wiki | counter (gas/water) packets not shown yet |
-| KeeLoq code-hopping fobs/remotes (Microchip HCS301 class) | 315/433 OOK PWM | **done, privacy** | Microchip HCS301 datasheet DS21143B | make unknown from the air: "KeeLoq" |
+| Current Cost transmitters (electricity), EnviR, impulse counters (gas / water / electricity) | 433 FSK 3918 bps | **done** (corpus 23/31) | Jack Kelly, rfm_edf_ecomanager wiki; EnviR preamble + counter layout from rtl_433's notes | — |
+| KeeLoq code-hopping fobs/remotes (Microchip HCS200/301 class) | 315/433 OOK PWM | **done, privacy** (corpus: HCS200 12/12 with the button) | Microchip HCS301 datasheet DS21143B | make unknown from the air: "KeeLoq" |
 | EV1527 / PT2262 fixed-code doorbells, PIRs, contacts, gate remotes | 315/433 OOK PWM | **done, privacy** | EV1527/SC1527 and PT2262 datasheets | 2 identical words required |
 | TPMS "type A" | FSK diff. Manchester | **done, privacy** (temperature) | Krstic et al., "Applying TPMS Devices for Traffic Management Purposes" (IHP/DLR) | **pressure scale not published** — shown without pressure; make not named |
 | TPMS "type B" | OOK, 240 µs symbols | **done, privacy** (kPa = raw × 2.5, °C) | same paper | **line code and preamble not published**: Manchester/NRZ both tried, frame after an 8-bit run-in, latest start wins; confirm-twice |
@@ -227,10 +234,47 @@ slicer's smoothing is in µs, so every family above slices as before. Everything
 | AcuRite 5-in-1 (VN1TXC), 606TX | 433 OOK | not done: no non-GPL description | — | |
 | Bresser 5/6/7-in-1 | 868 FSK | not done: no field description outside GPL-derived code | — | |
 | Ambient Weather F007TH | 433 Manchester | not done: half-bit period and the digest's byte range unpublished | forum + README (partial) | |
-| Efergy e2 / Elite | 433 FSK | not done: framing (preamble/sync) and bit rate unpublished | Elijah / Gough Lui blogs (layout only) | |
+| Efergy e2 / Elite | 433 FSK | **done 2026-11-11** — see the home families below | | |
 | Fine Offset WH24/WH65/WS68/WH51, Ecowitt | 433/868 FSK | not done: not found in the research pass | — | worth a second look |
 
 Twelve families with their variants (≈ 25 models) in phase 1.
+
+### Home families (2026-11-11): meters, alarm sensors, remotes — `vibe_ism_meters.h`, `vibe_ism_security.h`, `vibe_ism_remotes.h`
+
+Corpus = the rtl_433_tests recordings that decode (`scripts/ism-corpus.mjs`); "oracle" = the recording decodes when its
+channel is cut by hand, but the bench's detector misses the burst (it starts inside the detector's 64-frame floor seed —
+see Tests). Alarm sensors are kind `security` ("Alarm sensor #n"), remotes `doorbell`, car / gate fobs `keyfob`: all
+**secret** (identity hashed, never shown; rolling codes never decoded or shown).
+
+| Family | Band / mod | Corpus | Facts from | Check |
+|---|---|---|---|---|
+| Oil-tank gauges: Watchman Sonic, Apollo Ultrasonic Smart / Standard, Tekelek TEK377, Watchman Sonic Advanced | 433 FSK (or OOK) 500 µs / 1 ms chips, Manchester | **328/381** | rtl_433 oil_*.c notes | CRC-8 / CRC-16; Standard has none → confirm |
+| OpenEnergyMonitor emonTx (JeeLib RF12) | 433 FSK 49.2 kbit/s | test only (recordings in the seed) | jeelabs.org RF12 packet format | CRC-16 |
+| Efergy e2 classic clamp, Efergy optical | 433 FSK PWM | **11/19** | rtl_433 efergy_*.c notes | sum / CRC-16 |
+| Itron ERT SCM, SCM+, IDM / NetIDM | 912 OOK Manchester 30.5 µs | oracle 5/7 | rtlamr wiki "Protocol" | BCH / CRC-16 |
+| Neptune R900 | 912 OOK 30 µs | test only (envelope does not slice) | rtlamr wiki; rtl_433 notes | 42 symbols of 6 valid codes |
+| Wireless M-Bus (existing) | 868 | **38/43 + 2/2** (was 16/43: the bench read a `_0M_` name as 0 Hz) | EN 13757 | — |
+| KNX-RF (named, no address) | 868 | 11/11 | KNX RF 1.1 (Esc 0xFF) | wM-Bus block CRCs |
+| Interlogix / GE / UTC (ITI) | 319.5 OOK PPM | **30/38** | US patent 5 761 206; rtl_433 notes | 2 parity bits → confirm; marks checked |
+| Honeywell / Ademco 5800, 2GIG | 345 OOK Manchester 136 µs | **27/31** | L. Lamb, DEF CON 22 "Home Insecurity" | CRC-16 |
+| DSC contacts / motion | 433 OOK RZ 500 µs | **8/8** | FCC F5300NB912 report; rtl_433 notes | CRC-8 |
+| X10 security | 310/433 OOK NEC-like | **5/5** | rtl_433 notes | complements + parity |
+| SimpliSafe sensors (never keypad PINs) | 433 OOK PIWM | test only (seed) | rtl_433 notes | sum + twice alike |
+| Generic 433.3 MHz motion kit | 433 OOK PWM | **14/14** | rtl_433 notes | none: 3 copies, every gap agreeing with its mark |
+| LightwaveRF | 433 OOK | **43/43** | So Make It wiki | 16-of-256 symbols, whole frame, twice |
+| Nexa / KlikAanKlikUit / Proove / Intertechno self-learning | 433 OOK PPM | **17/17** | elektronikforumet wiki | pairs, twice |
+| X10 RF | 310/433 | **4/4** | WGL Designs W800RF32 doc | complements + fixed bits |
+| GE Color Effects | 433 FSK 52 µs | **14/16** | deepdarc.com; lukecyca.com | twice |
+| Somfy RTS | 433.42 OOK | 1/2 | pushstack.wordpress.com; US 8 189 620 | nibble XOR |
+| Microchip HCS361 (car / gate) | 315 OOK PWM | 3/10 | DS40146F | 2-bit CRC → confirm |
+| Clemsa, Ansonic, BETT, Elplast, Linear MultiCode / Delta-3, Roger, Allstar Firefly, Nice FLO (12-bit) | 433 OOK PWM | **13/27** | rtl_433 conf/ descriptions | none: whole words, twice |
+
+Not done (my area), and why: Owl CM130/160/180 (inside the Oregon v3 path the weather work owns), IKEA Sparsnäs
+(encrypted with its ID — not decrypted), Security+ 1/2, Chamberlain, car remotes (Ford, GM, Honda, Chrysler, 6SC2,
+Continental, Code Alarm, Compustar, Astroflex), Insteon, RadioHead ASK, EC3k, ESIC EMT7110, Elster, Vivint, Paradox,
+Visonic, Cavius, Honeywell ActivLink/CM921, Danfoss, Vaillant, Funkbus, Siemens, Kerui/Chuango/Waveman naming (they ARE
+EV1527/PT2262 — told apart only by data patterns), 24-bit Nice FLO (a PT2262 word on the air) and ADLM (a La Crosse
+length) — the last two were tried and dropped for naming other devices.
 
 ## The gallery (2026-10-25)
 
