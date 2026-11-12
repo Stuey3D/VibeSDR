@@ -1590,6 +1590,23 @@ else
   echo '   not run — needs VIBESERVER_BIN, VIBE_TEST_AUDIO with drm/uber_rri_9570000_iq48.wav, and numpy'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 THE DRM CONSTELLATION + RECEPTION METER (2026-11-12): the same shape on a SYNTHETIC DRM signal (the test
+#     transmitter, vibeserver/drm-synth-clip.cpp) — so it needs no recording: drm_iq only to a socket that asked, ~one per
+#     super frame, within budget, clustered on the QAM grid, off again, never to another listener (test-server-drm-
+#     constellation); then the web page: the constellation in the Signal pane, the meter in the signal bar's place with
+#     the decoder's SNR (test-web-drm-constellation, headless Edge --mute-audio).
+printf '\n\033[1m── DRM constellation + meter (synthetic signal: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && g++ -std=c++17 -O2 -I android/app/src/main/cpp -I android/app/src/main/cpp/vibedsp vibeserver/drm-synth-clip.cpp \
+     -o "$OUT/drm-synth-clip" 2>"$OUT/drm-synth-clip.buildlog" && "$OUT/drm-synth-clip" "$OUT/drm-synth.cu8" 30 24 16 B >/dev/null; then
+  VIBE_DRM_SYNTH="$OUT/drm-synth.cu8" node scripts/test-server-drm-constellation.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_DRM_SYNTH="$OUT/drm-synth.cu8" node scripts/test-web-drm-constellation.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/drm-synth.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the synthetic clip to build: vibeserver/drm-synth-clip.cpp)'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 PSK31/63 (2026-10-26): the same shape — the real server on a fake rtl_tcp replaying the bench's synthetic clip
 #     (five PSK stations around 14.071 MHz, one PSK63): the skimmer on a one-pipeline radio and a range-locked one, a
 #     second listener's own segment, ONE SIGNAL's text and its spot's RF (test-server-psk); then the web client in
