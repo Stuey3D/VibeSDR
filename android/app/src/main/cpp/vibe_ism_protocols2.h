@@ -449,6 +449,8 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 #include "vibe_ism_meters.h"
 #include "vibe_ism_security.h"
 #include "vibe_ism_remotes.h"
+#include "vibe_ism_meters2.h"    // ★ V12 2026-11-12: meters and monitors, second pass
+#include "vibe_ism_homeauto.h"   // ★ V12 2026-11-12: heating, blinds, lighting, smart home
 namespace vibeism {
 
 /** Every decoder, in turn, on every smoothing of the burst (finest first). The first that accepts it wins (a burst is one
@@ -479,6 +481,7 @@ inline bool bandPlausible(const Reading& r, double freqHz) {
     const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6, ism915 = freqHz >= 902e6 && freqHz <= 928e6;
     // ★ V12 2026-11-11: the home families that only ever send at 300–440 MHz (bandOk in vibe_ism_kit.h's families)
     if ((srd868 || ism915) && homeLowBandOnly(r)) return false;
+    if (!meters2BandOk(r, freqHz) || !homeautoBandOk(r, freqHz)) return false;   // ★ 2026-11-12: the second home pass
     if (!srd868) return true;
     return !(r.make == "AcuRite" || r.make == "Oregon Scientific" || r.kind == "tpms");
 }
@@ -504,10 +507,13 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (lacrosse::decodeWx3(b, out)) return;
     if (wx9::bresser3ch(b, out)) return;
     if (decodeMeters(b, out)) return;
+    if (decodeMeters2(b, out)) return;
+    if (decodeHomeauto(b, out)) return;
     if (decodeSecurity(b, out)) return;
     if (decodeRemotes(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
+    if (owl::decode(b, out)) return;          // ★ 2026-11-12: after the remotes (vibe_ism_meters2.h)
     if (tyre::decode(b, out)) return;
 }
 

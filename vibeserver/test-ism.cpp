@@ -58,12 +58,13 @@ static std::vector<cf> synth(const std::vector<Sig>& sigs, double rate, double l
     }
     return x;
 }
-static std::vector<Reading> runFront(const std::vector<cf>& x, double rate, std::vector<Burst>* bursts = nullptr, double chanRate = 0) {
+static std::vector<Reading> runFront(const std::vector<cf>& x, double rate, std::vector<Burst>* bursts = nullptr, double chanRate = 0,
+                                    double centreHz = 433.92e6) {
     FrontEnd fe(rate);
     fe.setDcGuardHz(15e3);
     if (chanRate > 0) { fe.setChanRate(chanRate); fe.setKeepBaseband(true); }   // ★ the 868 band's wider channel (V12 wM-Bus)
     std::vector<Reading> out;
-    auto on = [&](const Burst& b) { if (bursts) bursts->push_back(b); Service::decodeBurst(b, 433.92e6, out); };
+    auto on = [&](const Burst& b) { if (bursts) bursts->push_back(b); Service::decodeBurst(b, centreHz, out); };
     for (size_t i = 0; i < x.size(); i += 16384) fe.feed(x.data() + i, std::min<size_t>(16384, x.size() - i), on);
     fe.flush(on);
     return out;
@@ -939,6 +940,261 @@ static void testHome() {
     homeRun(cs);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★ V12 2026-11-12: THE SECOND HOME PASS (vibe_ism_meters2.h, vibe_ism_homeauto.h) — each family ENCODED FROM ITS FRAME
+//  FACTS (as cited above each decoder), through the real front end at the band it transmits in (bandPlausible holds).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+struct Home2Case { const char* name; Sig s; double centreHz; const char* model; const char* fact; const char* want; bool secret; };
+static void home2Run(std::vector<Home2Case>& cs, double rate = 2.4e6) {
+    for (auto& c : cs) {
+        if (c.s.offHz == 0) c.s.offHz = 120e3;
+        std::vector<Burst> bs;
+        const auto got = runFront(synth({c.s}, rate, 1.2, 0.02, 7), rate, &bs, 0, c.centreHz);
+        const Reading* r = findModel(got, c.model);
+        CHECK(r != nullptr, "%s: not decoded (%zu readings%s%s, %zu bursts)", c.name, got.size(), got.empty() ? "" : ", first: ",
+              got.empty() ? "" : got[0].model.c_str(), bs.size());
+        if (!r) continue;
+        if (c.fact) CHECK(factOf(*r, c.fact) == c.want, "%s: %s = %s, want %s", c.name, c.fact, factOf(*r, c.fact).c_str(), c.want);
+        CHECK(r->secret == c.secret && (!c.secret || r->pubId.empty()), "%s: secret %d, pubId '%s'", c.name, r->secret, r->pubId.c_str());
+        printf("   %-26s → %s\n", c.name, readable(*r, 1).c_str());
+    }
+}
+/** Oregon v3-rate OOK Manchester (bit 1 = on then off) of a preamble of ones and the nibbles LSB first — NO sync nibble
+ *  (the OWL CM180 / CM130 send none). */
+static Runs owlTx(const std::vector<int>& nb) {
+    Bits b(24, 1);
+    for (int n : nb) for (int i = 0; i < 4; ++i) b.push_back((n >> i) & 1);
+    for (int i = 0; i < 8; ++i) b.push_back(0);
+    Tx tx; manchesterTx(tx, b, 488.28, 138); return tx.r;
+}
+static void testHome2() {
+    printf(" home families, second pass (meters, home automation)\n");
+    std::vector<Home2Case> cs;
+    // IKEA Sparsnäs: 868 FSK NRZ 26 µs, AA AA AA AA D2 01, 20 bytes, bytes 5–17 XOR a key from (ID − 0x5D38E8CB), CRC-16 0x8005
+    {
+        const uint32_t id = 617633, k = id - 0x5D38E8CBu;
+        const uint8_t key[5] = {uint8_t(k >> 24), uint8_t(k), uint8_t(k >> 8), 0x47, uint8_t(k >> 16)};
+        const uint8_t plain[13] = {uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x05, 0x5F, 0x04, 0x86,
+                                   0x00, 0x36, 0x97, 0xDC, 100};
+        std::vector<uint8_t> by = {0x11, uint8_t(id), 0x07, 0x07, 0x0E};
+        for (int i = 0; i < 13; ++i) by.push_back(plain[i] ^ key[i % 5]);
+        const uint16_t c16 = crc16(by.data(), 18, 0x8005, 0xFFFF); by.push_back(uint8_t(c16 >> 8)); by.push_back(uint8_t(c16));
+        Bits c = hb(0xAAAAAAAAull, 32); append(c, hb(0xD201, 16)); append(c, bytesToBits(by)); append(c, hb(0xAA, 8));
+        Sig s{fskNrz(c, 26.04)}; s.fsk = true; s.devHz = 20e3;
+        cs.push_back({"IKEA Sparsnäs", s, 868.0e6, "Sparsn", "effect", "1158", false});
+    }
+    // OWL CM180: no sync; nibbles 2 6 · sequence 0 · ID 3 nibbles · battery · power 3 nibbles · lifetime 12 · Oregon sum
+    {
+        std::vector<int> nb = {2, 6, 0, 8, 3, 3, 0, 0x7, 0x7, 0x1};   // ID 0x3380, power (0x0177 << 4) = 6000 × 1.00625
+        const uint64_t ws = 560822400ull;                           // 155.784 kWh in watt-seconds
+        for (int i = 0; i < 12; ++i) nb.push_back(int((ws >> (4 * i)) & 0xF));
+        nb.push_back(0);
+        int sum = 0; for (size_t i = 1; i < nb.size(); ++i) sum += nb[i];
+        nb.push_back(sum & 0xF); nb.push_back((sum >> 4) & 0xF);
+        Sig s{owlTx(nb)};
+        cs.push_back({"OWL CM180", s, 433.92e6, "CM180", "id", "13184", false});
+    }
+    // OWL CM130: no sync; 6 0 first; nibble-swapped bytes: ID byte 2, LE16 power ÷ 16, LE32 lifetime; CRC-8 0x07 over 1–10
+    {
+        uint8_t m[12] = {0x06, 0x00, 133, 45, 0, 0, 0x00, 0x06, 0, 0, 0, 0};   // 45 × 16 = 720 W; 0x600 / 8192 kWh
+        uint8_t by[12];
+        for (int k = 0; k < 12; ++k) by[k] = uint8_t(m[k] << 4 | m[k] >> 4);
+        const uint8_t c8 = crc8(by + 1, 10, 0x07, 0); by[11] = uint8_t(c8 << 4 | c8 >> 4);
+        std::vector<int> nb; for (int k = 0; k < 12; ++k) { nb.push_back(by[k] >> 4); nb.push_back(by[k] & 0xF); }
+        Sig s{owlTx(nb)};
+        cs.push_back({"OWL CM130", s, 433.92e6, "CM130", "id", "133", false});
+    }
+    // Voltcraft EC3k: 41 bytes (CRC-16 0x8408 reflected, init FFFF, complemented, LE) → HDLC (7E, stuffing, LSB first)
+    //   → scrambled x^17 + x^12 + 1 → NRZI (no change = 1), FSK 50 µs
+    {
+        uint8_t pk[41] = {0};
+        auto putNib = [&](int at, int n, uint64_t v) { for (int i = n - 1; i >= 0; --i, v >>= 4) { const int k = at + i; pk[k / 2] |= uint8_t((v & 0xF) << ((k & 1) ? 0 : 4)); } };
+        putNib(1, 4, 0x5623); putNib(5, 4, 0x1234); putNib(13, 4, 0x0F00); putNib(24, 7, 66751200); putNib(31, 4, 655); putNib(35, 4, 4921);
+        putNib(59, 3, 0x11); putNib(71, 3, 0x07); putNib(74, 2, 1); putNib(76, 1, 8);
+        const uint16_t c = uint16_t(~kit::crc16r(pk, 39, 0x8408, 0xFFFF)); pk[39] = uint8_t(c); pk[40] = uint8_t(c >> 8);
+        Bits h = hb(0x7E7E, 16); int ones = 0;
+        for (int i = 0; i < 41; ++i) for (int k = 0; k < 8; ++k) {
+            const uint8_t x = (pk[i] >> k) & 1; h.push_back(x);
+            if (x) { if (++ones == 5) { h.push_back(0); ones = 0; } } else ones = 0;
+        }
+        append(h, hb(0x7E7E, 16));
+        Bits t(h.size()); for (size_t i = 0; i < h.size(); ++i) t[i] = uint8_t(h[i] ^ (i >= 12 ? t[i - 12] : 0) ^ (i >= 17 ? t[i - 17] : 0));
+        Bits raw = hb(0xAAAAAAAA, 32); uint8_t lv = 0;
+        for (uint8_t x : t) { if (!x) lv ^= 1; raw.push_back(lv); }
+        append(raw, hb(0xAAAA, 16));
+        Sig s{fskNrz(raw, 50)}; s.fsk = true; s.devHz = 20e3;
+        cs.push_back({"Voltcraft EC3k", s, 868.3e6, "EnergyCount", "power_max", "492.100", false});
+    }
+    // ESIC EMT7110: 868 FSK NRZ 104.4 µs, AA AA 2D D4, 12 bytes summing to 0; the two packets 14 ms apart
+    {
+        std::vector<uint8_t> by = {0x25, 0x6A, 0x5C, 0x87, 0x40 | 0x03, 0x20, 0x03, 0x41, 203, 0x01, 0x2C};
+        by.push_back(uint8_t(-int(kit::sumBytes(by.data(), 11))));
+        Bits c = hb(0xAAAAAA, 24); append(c, hb(0x2DD4, 16)); append(c, bytesToBits(by)); append(c, hb(0x00, 4));
+        Runs one = fskNrz(c, 104.4), two = one; two.push_back(-14000); two.insert(two.end(), one.begin(), one.end());
+        Sig s{two}; s.fsk = true; s.devHz = 40e3;
+        cs.push_back({"ESIC EMT7110", s, 868.28e6, "EMT7110", "voltage_V", "229.500", false});
+    }
+    // ADLM FPRF: a 50 ms wake-up, then 3 frames: 3 ms start mark + 40 PWM bits of 2 ms (500 µs mark = 1, 1500 = 0)
+    {
+        const uint64_t w = 0x40ull << 33 | 0x62DCull << 17 | uint64_t(7) << 9 | uint64_t(10) << 5;   // ID 62DC, zone 7, comfort
+        Tx tx; tx.mark(50000); tx.space(9900);
+        for (int rep = 0; rep < 3; ++rep) {
+            tx.mark(3000);
+            for (int i = 39; i >= 0; --i) { const bool one = (w >> i) & 1; tx.space(one ? 1500 : 500); tx.mark(one ? 500 : 1500); }
+            tx.space(5000);
+        }
+        Sig s{tx.r};
+        cs.push_back({"ADLM FPRF heater", s, 433.92e6, "heater programmer", "mode", "\"COMFORT\"", true});
+    }
+    // Insteon (915): 109.6 µs chips; per byte "11" + Manchester (01 = 1) of a 5-bit index (31, 30 …) and the byte, LSB first
+    {
+        std::vector<uint8_t> by = {0x45, 0x80, 0x25, 0x13, 0x9B, 0xFF, 0x2A, 0x11, 0x01};
+        uint8_t r = 0; for (int i = 0; i < 9; ++i) { r ^= by[size_t(i)]; r ^= uint8_t(((r ^ (r << 1)) & 0x0F) << 4); }
+        by.push_back(r);
+        Bits c = hb(0xAAAAAAAA, 32);
+        for (size_t i = 0; i < by.size(); ++i) {
+            c.push_back(1); c.push_back(1);
+            Bits d; const int idx = i == 0 ? 31 : int(by.size() - 1 - i);
+            for (int k = 0; k < 5; ++k) d.push_back((idx >> k) & 1);
+            for (int k = 0; k < 8; ++k) d.push_back((by[i] >> k) & 1);
+            append(c, manch01(d));
+        }
+        append(c, hb(0xAA, 8));
+        Sig s{fskNrz(c, 109.6)}; s.fsk = true; s.devHz = 40e3;
+        cs.push_back({"Insteon switch", s, 915.0e6, "", "msg_type", "2", true});
+    }
+    // Danfoss CFR: FSK NRZ 100 µs, AA…, 21 nibbles as 6-bit codes (E 0 2 · ID · count · switch · temp · set · CRC-16 0x1021)
+    {
+        static const uint8_t code[16] = {0x25, 0x29, 0x32, 0x0E, 0x13, 0x2A, 0x1A, 0x26, 0x34, 0x19, 0x15, 0x31, 0x2C, 0x0B, 0x0D, 0x16};
+        uint8_t by[10] = {0x02, 0x11, 0x1E, 0x38, 0xDA, 0x1A, 0xF1, 0x05, 0, 0};   // ID 0x111E, night, 26.852 °C, 5.941 °C
+        const uint16_t c = crc16(by, 8, 0x1021, 0); by[8] = uint8_t(c >> 8); by[9] = uint8_t(c);
+        Bits w = hb(0xAAAAAAAAAAAAAAAAull, 64); append(w, hb(0xAAAAAAAAAAAAAAAAull, 64));
+        append(w, hb(code[0xE], 6));
+        for (int k = 0; k < 10; ++k) { append(w, hb(code[by[k] >> 4], 6)); append(w, hb(code[by[k] & 0xF], 6)); }
+        append(w, hb(0xAA, 8));
+        Sig s{fskNrz(w, 100)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Danfoss CFR", s, 433.92e6, "CFR thermostat", "switch", "\"NIGHT\"", false});
+    }
+    // Watts WFHT-RF: OOK, 6 ms sync mark, 54 PWM bits (600 µs mark = 1, 260 µs = 0), fields LSB first, byte-sum check; twice
+    {
+        auto lsb = [](uint32_t v, int n) { Bits o; for (int i = 0; i < n; ++i) o.push_back((v >> i) & 1); return o; };
+        const int id = 28082, fl = 0, t = 262, sp = 221;
+        const int sum = (id & 0xFF) + (id >> 8) + fl + (t & 0xFF) + (t >> 8) + (sp & 0xFF) + (sp >> 8);
+        Bits w = hb(0xA5, 8); append(w, lsb(id, 16)); append(w, lsb(fl, 4)); append(w, lsb(t, 9)); append(w, lsb(sp, 9)); append(w, lsb(sum & 0xFF, 8));
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) { tx.mark(6000); for (uint8_t x : w) { tx.space(x ? 230 : 570); tx.mark(x ? 640 : 300); } tx.space(23000); }
+        Sig s{tx.r};
+        cs.push_back({"Watts WFHT-RF", s, 433.92e6, "WFHT-RF thermostat", "setpoint_C", "22.100", false});
+    }
+    // Watts WFHT-LCD-RF: OOK Manchester 461 µs chips, 2A AA AA AA D3 91 D3 91, 16 bytes, CRC-8 0xE6 (^BE ^ byte 12), CRC-16 0x8005
+    {
+        std::vector<uint8_t> by = {0x0D, 0xFF, 0xFF, 0xFE, 0x03, 0x34, 0x9E, 0x48, 0x01, 0x04, 0x00, 0xB0, 0x00};
+        by.push_back(uint8_t(crc8(by.data(), 12, 0xE6, 0) ^ 0xBE ^ by[12]));
+        const uint16_t c = crc16(by.data(), 14, 0x8005, 0xFFFF); by.push_back(uint8_t(c >> 8)); by.push_back(uint8_t(c));
+        Bits w = hb(0x2AAAAAAAull, 32); append(w, hb(0xD391D391ull, 32)); append(w, bytesToBits(by));
+        Tx tx; manchesterTx(tx, w, 460.8, 0); tx.space(5000);
+        Sig s{tx.r};
+        cs.push_back({"Watts WFHT-LCD-RF", s, 433.92e6, "WFHT-LCD-RF", "pairing", "\"true\"", false});
+    }
+    // Watts Vision: 868 FSK 26 µs, AA D3 91 D3 91, LEN 14, src, C6, dest, records, CRC-16/MODBUS LE, CRC-16 0x8005 BE
+    {
+        std::vector<uint8_t> by = {0x14, 0xD0, 0x90, 0x4D, 0x89, 0xC6, 0xD0, 0x37, 0x46, 0x55, 0x03, 0x07, 0xDF, 0x00, 0x11, 0x08, 0x00, 0x3B, 0x00};
+        const uint16_t m = kit::crc16r(by.data() + 1, by.size() - 1, 0xA001, 0xFFFF); by.push_back(uint8_t(m)); by.push_back(uint8_t(m >> 8));
+        const uint16_t c = crc16(by.data(), by.size(), 0x8005, 0xFFFF); by.push_back(uint8_t(c >> 8)); by.push_back(uint8_t(c));
+        Bits w = hb(0xAAAAAAAA, 32); append(w, hb(0xD391D391ull, 32)); append(w, bytesToBits(by)); append(w, hb(0xAA, 8));
+        Sig s{fskNrz(w, 26.04)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Watts Vision", s, 868.3e6, "Vision central", "association_id", "7", false});
+    }
+    // Honeywell evohome: 868 FSK 26 µs; UART bytes (0, 8 LSB first, 1): 55 FF 00, 33 55 53, Manchester message, 35, 55 55
+    {
+        std::vector<uint8_t> m = {0x14, 0x32, 0x55, 0xC1, 0x00, 0x08, 0x02, 0x00, 0x64};   // relay demand 50 %
+        m.push_back(uint8_t(-int(kit::sumBytes(m.data(), m.size()))));
+        std::vector<uint8_t> u = {0x55, 0xFF, 0x00, 0x33, 0x55, 0x53};
+        Bits mb; for (uint8_t v : m) for (int q = 7; q >= 0; --q) { const uint8_t x = (v >> q) & 1; mb.push_back(x ? 0 : 1); mb.push_back(x); }
+        for (size_t k = 0; k < mb.size(); k += 8) u.push_back(uint8_t(bitsAt(mb, k, 8)));
+        u.push_back(0x35); u.push_back(0x55); u.push_back(0x55);
+        Bits w = hb(0x5555, 16);
+        for (uint8_t v : u) { w.push_back(0); for (int q = 0; q < 8; ++q) w.push_back((v >> q) & 1); w.push_back(1); }
+        Sig s{fskNrz(w, 26.04)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Honeywell evohome", s, 868.3e6, "evohome", "demand", "0.500", false});
+    }
+    // Funkbus: OOK, 4 ms mark, biphase-mark 48 bits (0 = one 1 ms run, 1 = two 500 µs), fields LSB first, XOR-nibble check
+    {
+        auto lsb = [](Bits& w, uint32_t v, int n) { for (int i = 0; i < n; ++i) w.push_back((v >> i) & 1); };
+        Bits w; lsb(w, 4, 4); lsb(w, 3, 4); lsb(w, 403414, 20); lsb(w, 0, 2); lsb(w, 0, 1); lsb(w, 0, 2); lsb(w, 4, 3); lsb(w, 3, 2); lsb(w, 0, 1);
+        lsb(w, 3, 2); lsb(w, 0, 1); lsb(w, 0, 1);
+        const auto by = kit::packBits(w, 0, 43);
+        const uint8_t x = kit::xorBytes(by.data(), by.size());
+        const int nib = (x >> 4) ^ (x & 0xF); uint8_t c = 0;
+        if (nib & 8) c ^= 0x8C; if (nib & 4) c ^= 0x32; if (nib & 2) c ^= 0xC8; if (nib & 1) c ^= 0x23;
+        c &= 0xF;
+        w.push_back(uint8_t(kit::parity(x)));
+        for (int k = 3; k >= 0; --k) w.push_back((c >> k) & 1);   // the check nibble, sent bit-reversed: its LSB-first read = rev(c)
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            tx.mark(4000); bool lv = false;
+            for (uint8_t bit : w) { if (bit) { if (lv) tx.mark(500); else tx.space(500); lv = !lv; if (lv) tx.mark(500); else tx.space(500); lv = !lv; }
+                                    else { if (lv) tx.mark(1000); else tx.space(1000); lv = !lv; } }
+            tx.space(20000);
+        }
+        Sig s{tx.r};
+        cs.push_back({"Funkbus remote", s, 433.42e6, "", "action", "3", true});
+    }
+    // Feron: OOK PWM (750 µs mark = 1, 350 = 0), ID 16 · command · ~command, a 500/500 end, repeated
+    {
+        Bits w = hb(0xC0DE, 16); append(w, hb(0x86, 8)); append(w, hb(0x79, 8));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t x : w) { tx.mark(x ? 750 : 350); tx.space(x ? 350 : 750); } tx.space(150); tx.mark(500); tx.space(4500); }
+        Sig s{tx.r};
+        cs.push_back({"Feron light remote", s, 433.92e6, "LED light", "command", "134", true});
+    }
+    // Power Smart: OOK Manchester 225 µs (1 = mark then gap), FD · K C D · D K · Y · AA · inverted · W (Y = ~W − 1), ×8
+    {
+        const int btn = 2, ch = 5, d = 0x5A; const uint8_t y = 0x3C;
+        const uint16_t kcdk = uint16_t(((btn >> 1) & 1) << 15 | ch << 9 | d << 1 | (btn & 1));
+        std::vector<uint8_t> by = {0xFD, uint8_t(kcdk >> 8), uint8_t(kcdk), y, 0xAA, uint8_t(~(kcdk >> 8)), uint8_t(~kcdk), uint8_t(~(y + 1))};
+        Bits w; for (int rep = 0; rep < 8; ++rep) append(w, bytesToBits(by));
+        Tx tx; manchesterTx(tx, w, 225, 0); tx.space(3000);
+        Sig s{tx.r};
+        cs.push_back({"Power Smart blind remote", s, 433.92e6, "blind remote", "channel", "5", true});
+    }
+    // Martec MPLCD: OOK PWM (320 µs mark = 1, 676 = 0), 22 bits 1000 · ch · dimmer 7 · fan 2 · 0 · nibble-sum check; repeated
+    {
+        Bits w = hb(0x8, 4); append(w, hb(0xE, 4)); append(w, hb(25, 7)); append(w, hb(2, 2)); w.push_back(0);
+        const auto by = kit::packBits(w, 1, 17);
+        const int sum = ((by[0] >> 4) + (by[0] & 0xF) + (by[1] >> 4) + (by[1] & 0xF)) & 0xF;
+        append(w, hb(uint32_t(sum), 4));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t x : w) { tx.mark(x ? 320 : 676); tx.space(x ? 750 : 400); } tx.space(9500); }
+        Sig s{tx.r};
+        cs.push_back({"Martec fan remote", s, 433.92e6, "fan remote", "speed", "\"medium\"", true});
+    }
+    // RFXMeter: OOK, 9 ms mark, 4.5 ms gap, 48 PPM bits (0.5 ms mark; 0.5 ms gap = 0, 1.5 ms = 1); address, ~address-hi, counter, type+check
+    {
+        std::vector<uint8_t> by = {0x01, 0xF1, 0xCE, 0xD8, 0x19, 0x00};
+        unsigned ns = 0; for (uint8_t x : by) ns += (x >> 4) + (x & 0xF);
+        by[5] |= uint8_t((0xF - (ns & 0xF)) & 0xF);
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { tx.mark(9000); tx.space(4200); for (uint8_t x : bytesToBits(by)) { tx.mark(540); tx.space(x ? 1590 : 530); } tx.mark(540); tx.space(38000); }
+        Sig s{tx.r};
+        cs.push_back({"RFXMeter", s, 433.92e6, "RFXMeter", "msg_value", "1691352", false});
+    }
+    // Revolt NC-5462: OOK, 10 ms sync, 104 PWM bits (320 µs mark = 1, 180 = 0, 160 µs gaps), byte-sum; twice
+    {
+        std::vector<uint8_t> by = {0x02, 0x21, 233, 0x00, 0x1F, 50, 0x02, 0x8E, 90, 0x77, 0xF9};
+        by.push_back(uint8_t(kit::sumBytes(by.data(), 11))); by.push_back(0x00);
+        Tx tx; for (int rep = 0; rep < 2; ++rep) { tx.mark(10000); tx.space(280); for (uint8_t x : bytesToBits(by)) { tx.mark(x ? 320 : 180); tx.space(165); } tx.mark(180); tx.space(30000); }
+        Sig s{tx.r};
+        cs.push_back({"Revolt NC-5462", s, 433.92e6, "NC-5462", "voltage_V", "233", false});
+    }
+    // FSL scoreboard: FSK 528 µs chips, 38 alternating, then 10 × (111 · 32 Manchester bits 01 = 1 · 0 · 000)
+    {
+        const uint32_t v = 0x3E2F1200u;   // field 14, blank hundreds, 20
+        Bits c; for (int i = 0; i < 38; ++i) c.push_back(uint8_t((i & 1) ? 0 : 1));
+        for (int k = 0; k < 10; ++k) { c.push_back(1); c.push_back(1); c.push_back(1); Bits d = hb(v, 32); d.push_back(0); append(c, manch01(d)); append(c, hb(0, 3)); }
+        Sig s{fskNrz(c, 528)}; s.fsk = true; s.devHz = 25e3;
+        cs.push_back({"FSL scoreboard", s, 433.95e6, "scoreboard", "value", "20", false});
+    }
+    home2Run(cs);
+}
+
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     printf("test-ism — the V12 ISM decoder\n");
@@ -1613,6 +1869,7 @@ int main(int argc, char** argv) {
     }
 
     testHome();
+    testHome2();
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "ok", checks, fails);
     return fails ? 1 : 0;
 }
