@@ -841,6 +841,9 @@ public:
     /** File the shim persists bookmarks to. It owns them, so it saves them — the app's
      *  JS timer could not, being suspended whenever the server was actually serving. */
     static void setBookmarksPath(const std::string& path);
+    /** ★ The file the last DAB band scan is kept in — PER RADIO (the standalone server names it by serial). Call BEFORE
+     *  setBookmarksPath; without it the shim keeps "dab-scan.txt" beside the bookmarks. Read at once. */
+    static void setDabScanFile(const std::string& path);
     /** mDNS hostname responder: answer "<host>.local" with this IPv4. Renames itself
      *  (vibesdr-2, …) if the name is already taken on the network — RFC 6762 probing. */
     static void startMdns(const std::string& host, const std::string& ipv4);

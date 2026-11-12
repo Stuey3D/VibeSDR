@@ -95,6 +95,7 @@
 #include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
 #include "mapgl_curl.h"   // the High Detail Maps downloader (shared with Mac Simple mode)
 #include "diag_scrub.h"   // ★ the daemon's own scrub of the diagnostics file before it is downloaded
+#include "handheld_card.h"   // ★ hhcard::serialFile — the handheld radio's own file names (the DAB scan)
 #include "handheld.h"     // ★ V12 R36S: `vibeserver --handheld`, the handheld's supervisor (handheld.cpp)
 #include "vibe_clock.h"   // ★ vibe::clockWasSet — the handheld's clock set (SIGUSR2)
 
@@ -4628,6 +4629,20 @@ int main(int argc, char** argv) {
     //        one file all load it, all append to it, and one rewriting while another appends
     //        loses records. A radio's bookmarks belong to that radio's process, which is the only
     //        writer it has. The front door, which owns no radio, keeps the machine-wide file.
+    /* ★★★ THE LAST DAB BAND SCAN, PER RADIO (2026-11-12). It lived in memory only, so every restart forgot it — a
+     *  settings save, an update, a reboot, and on the R36S every power-off. Named BEFORE the bookmarks (which would
+     *  otherwise give it a machine-wide default). One file per radio serial, like the bookmarks and the connection log,
+     *  so one radio's scan never shows on another's MULTIPLEXES. On the handheld it sits with that radio's memory
+     *  (handheld/radio-<serial>.*, handheld.cpp memPath), which Start+Select's reset also clears. */
+    if (g_handheldChild) {
+        const char* hs = std::getenv("VIBE_HANDHELD_SERIAL");
+        const std::string ser = hs && *hs ? std::string(hs) : g_myRadioSerial;
+        LocalSdrShim::setDabScanFile(vsDataDir() + "/handheld/radio-" + hhcard::serialFile(ser) + ".dab-scan.txt");
+    } else {
+        std::string tag;
+        for (char c : g_myRadioSerial) if (std::isalnum((unsigned char)c) || c == '-' || c == '_') tag += c;
+        LocalSdrShim::setDabScanFile(tag.empty() ? vsDataDir() + "/dab-scan.txt" : vsDataDir() + "/dab-scan-" + tag + ".txt");
+    }
     // ★ The handheld's bookmarks are the OWNER's, whichever radio is plugged in — one file, one writer at a time.
     if (g_handheldChild) LocalSdrShim::instance().setBookmarksPath(vsDataDir() + "/handheld/bookmarks.json");
     else LocalSdrShim::instance().setBookmarksPath(

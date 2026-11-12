@@ -45,6 +45,7 @@
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_room_passband.h"   // ★ the shared chain's passband edges, reported in config (2026-10-17)
 #include "vibe_hwinfo.h"
+#include "vibe_dab_scan_store.h"   // ★ the last DAB band scan, on disk — see g_dabScanFile
 #include "vibe_mqtt.h"        // ★ the external antenna switch (2026-10-09) — see g_ext below
 #include "vibe_antswitch.h"
 #include "vibe_port_names.h"  // ★ V12 the owner's names for the radio's own antenna ports — see g_portNamesJson
@@ -1204,13 +1205,8 @@ static std::atomic<bool>     g_dabScanCancel{false};
  *  ★ g_dabScanNoRestore: the scan was ended by somebody TUNING (a tap on a result, a block step, a mode change). The
  *    shared dial obeys the person tuning it, so the scan does not put the old block back over their choice. */
 static std::atomic<bool>     g_dabScanNoRestore{false};
-struct DabBandScanHit {
-    int idx = -1;
-    std::string ensemble;
-    std::vector<std::pair<uint32_t, std::string>> services;   // playable audio, labelled — what the station list offers
-    float fibRate = 0.0f, merDb = 0.0f;
-    bool complete = false;
-};
+/* ★ One ensemble the scan found — the on-disk store's own type (vibe_dab_scan_store.h), so what is saved is what is shown. */
+using DabBandScanHit = vibedabscan::Hit;
 struct DabBandScanState {
     bool running = false;
     std::string by;                 // "setup" (the owner, idle radio), "listener" (a single-user radio), "admin"
@@ -1222,9 +1218,82 @@ struct DabBandScanState {
     double startedAt = 0.0, secs = 0.0;
     uint32_t seq = 0;               // bumps on every change — the setup page polls on it
     bool lock = false;              // ★ V12: an owner's scan on a shared radio — listeners are locked out (g_scanLock)
+    int64_t at = 0;                 // ★ when the scan ENDED (unix seconds) — 0 while one runs; sent as "at" when known
 };
 static std::mutex       g_dabBandMtx;
 static DabBandScanState g_dabBand;
+/* ★★★ THE LAST SCAN SURVIVES A RESTART (2026-11-12, Stuart on the R36S: "after a DAB scan … if I power off and on again
+ *  the DAB multiplexes are forgotten and the scan button is present again"). g_dabBand was memory only, so EVERY server
+ *  forgot it too — on a settings save (which restarts the radio process), an update, a reboot. Now a finished scan is
+ *  written to g_dabScanFile (per radio — main.cpp names it by serial; Android derives it beside the bookmarks) and read
+ *  back at start, so dab_scan_get answers with it and MULTIPLEXES is offered again. The DX sweep's borrowed runs are
+ *  never written (they put the owner's list back themselves). A missing or read-only place: the list lives in memory,
+ *  as before, and one line says so. Under g_dabBandMtx for the name; the write itself under g_dabScanFileMtx. */
+static std::string      g_dabScanFile;
+static bool             g_dabScanFileExplicit = false;   // ★ main.cpp named it — setBookmarksPath's default stands aside
+static std::mutex       g_dabScanFileMtx;
+/** ★ The last COMPLETE picture of the band (loaded, or what the last scan left) — what a scan that stops part-way keeps
+ *  for the blocks it never reached. Under g_dabBandMtx. */
+static std::vector<DabBandScanHit> g_dabBandPrev;
+/** Read the saved scan into g_dabBand — at start only, never over a scan that is running. */
+static void dabBandLoadSaved(const std::string& path) {
+    vibedabscan::Saved sv;
+    const bool ok = vibedabscan::load(path, sv);
+    std::lock_guard<std::mutex> lk(g_dabBandMtx);
+    if (g_dabBand.running) return;
+    g_dabBand = DabBandScanState{};
+    g_dabBandPrev.clear();
+    if (!ok) return;   // ★ nothing saved (or not ours): no list, so the SCAN key shows
+    g_dabBand.finished = true;
+    g_dabBand.cancelled = sv.cancelled;
+    g_dabBand.by = sv.by;
+    g_dabBand.why = sv.why;
+    g_dabBand.secs = sv.secs;
+    g_dabBand.at = sv.at;
+    g_dabBand.total = int(vibedab::kBandIIICount);
+    g_dabBand.done = sv.cancelled ? 0 : int(vibedab::kBandIIICount);
+    g_dabBand.hits = std::move(sv.hits);
+    g_dabBandPrev = g_dabBand.hits;
+    LOGI("[DAB] band scan: the last scan's %zu ensemble(s) remembered from %s", g_dabBand.hits.size(), path.c_str());
+}
+/** A scan has just ENDED (never a running one, never the DX sweep's): settle its list and write it.
+ *  ★★ A SCAN THAT STOPS PART-WAY DOES NOT FORGET THE REST OF THE BAND. Cancelled at 7A, tuned away at 9C, or never
+ *     started ("another program has the radio"): the blocks it walked are this scan's answer, and the blocks it never
+ *     reached keep what the last scan found there. Without this a SCAN AGAIN pressed and cancelled at once would wipe
+ *     a good list — now for good, on disk.
+ *  ★ No ensembles at all after a FULL walk: nothing to remember — the file goes, so the next start offers SCAN. */
+static void dabBandSaveFinished() {
+    std::string path, text;
+    bool empty;
+    {
+        std::lock_guard<std::mutex> lk(g_dabBandMtx);
+        DabBandScanState& st = g_dabBand;
+        if (st.running || !st.finished || st.by == "dxscan") return;
+        const int walked = std::max(0, std::min(st.done, int(vibedab::kBandIIICount)));
+        if (walked < int(vibedab::kBandIIICount)) {
+            for (const auto& h : g_dabBandPrev) {
+                if (h.idx < walked) continue;
+                bool have = false;
+                for (const auto& n : st.hits) if (n.idx == h.idx) { have = true; break; }
+                if (!have) st.hits.push_back(h);
+            }
+            std::stable_sort(st.hits.begin(), st.hits.end(), [](const DabBandScanHit& x, const DabBandScanHit& y) { return x.idx < y.idx; });
+        }
+        g_dabBandPrev = st.hits;
+        if (g_dabScanFile.empty()) return;
+        path = g_dabScanFile;
+        empty = st.hits.empty();
+        vibedabscan::Saved sv;
+        sv.at = st.at; sv.secs = int(st.secs + 0.5); sv.cancelled = st.cancelled;
+        sv.by = st.by; sv.why = st.why; sv.hits = st.hits;
+        text = vibedabscan::serialise(sv);
+    }
+    std::lock_guard<std::mutex> fl(g_dabScanFileMtx);
+    if (empty) { ::unlink(path.c_str()); return; }
+    std::string err;
+    if (!vibedabscan::writeAtomic(path, text, &err))
+        LOGI("[DAB] band scan: could not save the list to %s (%s) \xe2\x80\x94 it is kept until the radio restarts", path.c_str(), err.c_str());
+}
 /* ★★★ THE OWNER'S SCANS FROM THE ADMIN PAGE (V12, 2026-11-04 — Stuart: "in here is where there should be a button for FM
  *  scan and DAB scan so a server admin can trigger a scan on a server", and "When a server owner has triggered a scan to
  *  store stations on a shared VFO it should say ADMIN Triggered SCAN In Progress, Please Wait and the controls get locked
@@ -1460,6 +1529,7 @@ static std::string dabBandJsonLocked() {
                   + ",\"seq\":" + std::to_string(st.seq);
     if (!st.why.empty()) j += ",\"why\":\"" + dabEscape(st.why) + "\"";
     if (st.lock) j += ",\"lock\":true";   // ★ V12: only when set — an older client never sees it
+    if (st.at > 0) j += ",\"at\":" + std::to_string((long long)st.at);   // ★ when it ended — a saved list says how old it is
     j += ",\"found\":[";
     bool first = true;
     for (const auto& h : st.hits) {
@@ -16523,7 +16593,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  cancelled ? "CANCELLED" : "finished", g_dabBand.secs, g_dabBand.hits.size(), g_dabBand.added,
                  fromSetup ? ", radio handed back" : userTuned ? ", left where the listener tuned" : prevCh >= 0 ? ", back on the block it was on" : "");
             g_dabBand.lock = false;
+            g_dabBand.at = (int64_t)time(nullptr);
         }
+        dabBandSaveFinished();   // ★ the list survives a restart (the DX sweep's run is skipped inside)
         // ★★ V12: the admin page's scan took the radio out of ADS-B — it goes back in, unless somebody tuned meanwhile
         if (dabScanReAdsb_ && !userTuned && !stopping.load() && !g_dabMode.load() && !g_adsbMode.load()) {
             LOGI("[DAB] band scan: back into ADS-B, where the radio was");
@@ -38809,6 +38881,12 @@ bool LocalSdrShim::isConfigured() { return g_vsConfigured.load(); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
 void LocalSdrShim::clearBookmarks() { bmClear(); }
 
+/** ★ The last DAB band scan's file, per radio (see g_dabScanFile). Read now; written at the end of every scan. */
+void LocalSdrShim::setDabScanFile(const std::string& path) {
+    { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabScanFile = path; g_dabScanFileExplicit = !path.empty(); }
+    if (!path.empty()) dabBandLoadSaved(path);
+}
+
 /** Give the shim a file to own. It loads immediately and saves on every change. */
 void LocalSdrShim::setBookmarksPath(const std::string& path) {
     std::string body;
@@ -38833,6 +38911,13 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);   // ★ beside the gain memory, same directory
           g_dabEnsFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-ensembles.txt"; }
         g_dabLogoDir = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-logos";
+        /* ★★ The last DAB band scan (g_dabScanFile) — beside the bookmarks, which are this radio's own file. The
+         *  standalone server names it per radio itself (setDabScanFile, before this); the phone has one radio. */
+        if (!g_dabScanFileExplicit) {
+            const std::string f = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-scan.txt";
+            { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabScanFile = f; }
+            dabBandLoadSaved(f);
+        }
         /* ★ The off-air slideshow store, beside the carousel and the RadioDNS logos: one file per
          *  service, so a station whose picture only exists on air is not re-read on every visit. */
         g_dab.setSlideDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-slides");
