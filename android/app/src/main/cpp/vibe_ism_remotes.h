@@ -112,10 +112,63 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace gecolor
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  MICROCHIP HCS361 KeeLoq encoders (car and gate remotes: Lear, Marelli, Jeep / Chrysler fobs) — Microchip HCS361
+//  datasheet DS40146F: PWM, TE 100–400 µs, a bit = 3 TE (1 TE high = 1, 2 TE high = 0), a 10 TE high + 10 TE low sync
+//  after a short preamble; 67 bits LSB first: 32 encrypted · 28 serial · buttons S3 S0 S1 S2 · VLOW · a 2-bit CRC over the
+//  first 65 (the datasheet's serial CRC; its VLOW-flipped value is accepted too). ★ PRIVACY: only "Key fob · Microchip
+//  HCS361 · button 2" — never the serial, never the hop code. The 2-bit CRC is weak: confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace hcs361 {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    for (size_t i = 0; i + 2 * 67 + 1 < r.size(); ++i) {
+        if (r[i] <= 0 || r[i + 1] >= 0) continue;
+        const double te = r[i] / 10.0;
+        if (te < 80 || te > 450 || !near(r[i + 1], 10 * te, 0.25)) continue;
+        Bits bits; size_t k = i + 2;
+        while (bits.size() < 67 && k < r.size() && r[k] > 0) {
+            const int mk = r[k];
+            const bool one = mk < 1.5 * te;
+            if (!near(mk, one ? te : 2 * te, 0.4)) break;
+            if (bits.size() < 66 && (k + 1 >= r.size() || r[k + 1] >= 0 || !near(mk - r[k + 1], 3 * te, 0.3))) break;
+            bits.push_back(one ? 1 : 0);
+            k += 2;
+        }
+        if (bits.size() != 67) continue;
+        int crc = 0, crcLow = 0;
+        for (int j = 0; j < 65; ++j) {
+            const int bit = bits[size_t(j)];
+            if (j == 64) { const int c = ((crc >> 1) ^ (bit ^ 1)) & 1; crcLow = c | (((c ^ crc) << 1) & 2); }
+            const int c = ((crc >> 1) ^ bit) & 1;
+            crc = c | (((c ^ crc) << 1) & 2);
+        }
+        const int got = bits[65] << 1 | bits[66];
+        if (got != crc && got != crcLow) continue;
+        uint32_t serial = 0; for (int j = 0; j < 28; ++j) serial |= uint32_t(bits[size_t(32 + j)]) << j;
+        if (serial == 0) continue;
+        const int s3 = bits[60], s0 = bits[61], s1 = bits[62], s2 = bits[63];
+        Reading rd = remoteReading("keyfob", "Microchip HCS361", "Key fob / remote", 22, serial);
+        std::string bt; const int bv[4] = {s0, s1, s2, s3};
+        for (int q = 0; q < 4; ++q) if (bv[q]) { if (!bt.empty()) bt += "+"; bt += char('1' + q); }
+        rd.button = bt;
+        rd.battOk = bits[64] ? 0 : 1;
+        rd.confirm = true;
+        rd.fact("button", (long long)(s0 | s1 << 1 | s2 << 2 | s3 << 3));
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+} // namespace hcs361
+
 /** The remote families, strongest checks first. */
 inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (lightwave::decode(b, out)) return true;
     if (gecolor::decode(b, out)) return true;
+    if (hcs361::decode(b, out)) return true;
     return false;
 }
 

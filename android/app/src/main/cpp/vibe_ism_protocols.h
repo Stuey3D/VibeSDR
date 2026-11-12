@@ -306,6 +306,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
         if (s0 && s1 && s2 && s3) { bt.clear(); rd.note = "learn"; }
         rd.button = bt;
         rd.battOk = vlow ? 0 : 1;
+        rd.fact("button", (long long)(s0 | s1 << 1 | s2 << 2 | s3 << 3));   // the bench's value (S0 = 1 … S3 = 8)
         out.push_back(rd);
         return true;
     }
