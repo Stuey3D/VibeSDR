@@ -201,6 +201,7 @@ import { tourRef, mergeRefs } from './Coachmark';
 import { screenNavRef } from './ScreenNav';
 import { isRotation, notifyRevealed, rotSlide } from '../services/rotateReveal';
 import { IS_TV } from '../utils/tv';
+import { serverZoneAt } from '../utils/serverZone';   // ★ the receiver's clock from the phone's own tz rules (2026-11-12)
 import { minuteKey } from '../services/renderChurn';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -401,7 +402,7 @@ function shortOffset(min: number): string {
   return (min > 0 ? '+' : '-') + Math.floor(a / 60) + (a % 60 ? ':' + String(a % 60).padStart(2, '0') : '');
 }
 
-function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
+function useClock(srvOffsetMin?: number | null, srvAbbr?: string, srvTzId?: string) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     // Background audio keeps JS alive when locked — don't re-render the
@@ -418,7 +419,7 @@ function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
     return () => clearInterval(id);
   }, []);
   const utc = now.toUTCString().slice(17, 22);
-  if (tzOffsetMin === null || tzOffsetMin === undefined) {
+  if (srvOffsetMin === null || srvOffsetMin === undefined) {
     const local = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     const tz    = now.toLocaleDateString([], { timeZoneName: 'short' }).split(', ')[1] || '';
     // ★ The PHONE's clock — so no server glyph: claiming this came from the receiver would be a lie.
@@ -427,7 +428,12 @@ function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
   }
   /* ★ Shift UTC by the receiver's offset and read it back in UTC: that gives its wall clock without
    *  needing an IANA zone name or the phone's tz database, and it is right for the half-hour and
-   *  three-quarter-hour zones too (India +330, the Chathams +765). */
+   *  three-quarter-hour zones too (India +330, the Chathams +765).
+   *  ★★★ The OFFSET, though, comes from the phone's own rules when the server named its zone and Intl knows
+   *      it (serverZone.ts) — Kiko's pre-2019 box sent -120 "BRST" in November; Sao_Paulo is -03 all year.
+   *      No name, no Intl timeZone, an unknown zone: the server's figures, exactly as before. Re-run per
+   *      minute (with `now`), so a DST change at the receiver lands on time. */
+  const { offsetMin: tzOffsetMin, abbr: tzAbbr } = serverZoneAt(now, srvTzId, srvOffsetMin, srvAbbr ?? '');
   const at  = new Date(now.getTime() + tzOffsetMin * 60_000);
   const hhmm = at.toISOString().slice(11, 16);
   const mins = Math.abs(tzOffsetMin);
@@ -542,6 +548,9 @@ export interface ControlsBarProps {
    *  a server too old to say, and the row then falls back to the phone's own time. See useClock. */
   srvTzOffsetMin?: number | null;
   srvTzAbbr?: string;
+  /** ★★★ The receiver's IANA zone name ('' from an older server). When the phone's Intl knows it, the
+   *  offset comes from the PHONE's rules (src/utils/serverZone.ts) — the server's device may be stale. */
+  srvTzId?: string;
   frequency:     number;
   mode:          SDRMode;
   step:          number;
@@ -3269,7 +3278,7 @@ function useRotateSlide(W: number, H: number, onSettled?: React.MutableRefObject
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function ControlsBar({
-  srvTzOffsetMin = null, srvTzAbbr = '',
+  srvTzOffsetMin = null, srvTzAbbr = '', srvTzId = '',
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
   fmStereo = false, activeDecoder = null, dabOn = false, dabMeter = null, drmOn = false, drmMeter = null,
@@ -3360,7 +3369,7 @@ function ControlsBar({
   /* ★★★ THE READOUT'S UNIT, for the mode box AND the LED / analogue scales: the signal readout setting,
    *  or FM-DX's dBf (the tuner screen passes its own label and has no such setting). */
   const meterUnit = meterUnitOf(signalMode, meterLabel !== undefined);
-  const clock     = useClock(srvTzOffsetMin, srvTzAbbr);
+  const clock     = useClock(srvTzOffsetMin, srvTzAbbr, srvTzId);
 
   const cycleStep = useCallback(() => {
     const list = stepList ?? stepsForFreq(frequency);

@@ -641,7 +641,9 @@ export interface SDRCallbacks {
    *  AERIAL, which is what explains the band you are hearing.
    *  ★ Stuart, 2026-09-21, having placed a Paraná receiver on US East Coast time and been two hours
    *    out: "this is precicely why having the server time and UTC is important". */
-  onServerClock?: (offsetMin: number, abbr: string) => void;
+  /*  ★★★ tz = the server's IANA zone name (2026-11-12; '' from an older server). The phone works the offset out from
+   *  ITS OWN rules where it knows the name — Kiko's pre-2019 box sent -120 "BRST" in November (serverZone.ts). */
+  onServerClock?: (offsetMin: number, abbr: string, tz?: string) => void;
   /** ★ The owner's notice to listeners ("antenna maintenance in progress"), pushed when it is
    *  posted or cleared. '' = nothing to show. */
   onNotice?: (text: string) => void;
