@@ -48,6 +48,8 @@ type Step = {
 };
 /** ★ The radio menu has the SDRplay AGC row (renderRspVagc drew it: an RSP whose server reports the choice). */
 const onVagcRow = (): boolean => { const r = document.getElementById('rowRspVagc'); return !!r && !r.hidden; };
+/** ★ SAVE FOR ALL is offered (main.ts shows #saveAllBlock only on a *.vibeserver.vibesdr.net address). */
+const saveAllShown = () => document.getElementById('saveAllBlock')?.hidden === false;
 /** ★ The server is serving an Icom transceiver (main.ts sets body.icom from hwinfo.radio.driver). */
 const onIcom = () => document.body.classList.contains('icom');
 /** ★★ V12 VFO A/B is offered here (main.ts abPaint shows the audio panel's STEREO row only where hwinfo says watch). */
@@ -67,7 +69,7 @@ const STEPS: Step[] = [
     body: () => (padTuck()
           ? 'These are your main controls. While a game controller, a keyboard or a remote is driving, the ‹ › tune keys '
             + 'and the − + zoom keys are tucked away to make room — touch the screen or use a mouse and they come back '
-            + '(MENU, GAME CONTROLLER, TUCK AWAY TUNE AND ZOOM KEYS turns this off). A controller tunes and zooms itself — '
+            + '(MENU, then CONTROLS: TUCK AWAY TUNE AND ZOOM KEYS under GAME CONTROLLER turns this off). A controller tunes and zooms itself — '
             + 'the face buttons, or the two sticks turned; SELECT opens the guide to say which. A keyboard tunes with < and > '
             + 'and zooms with − and +. Each tune '
             + 'moves the dial by the amount shown on the step button [[@mStep]] — press it to change the step. '
@@ -123,21 +125,29 @@ const STEPS: Step[] = [
     ids: ['mMenu'],
     title: 'MENU',
     // ★ 2026-10-30: SIGNAL LABELS (src/utils/knownSignals.ts) is in the display settings' SPECTRUM section.
-    body: () => "[[MENU]] opens the display settings and the receiver's hardware controls. "
-        + 'Under SPECTRUM, SIGNAL LABELS names the decoder to use on well-known signals in view \u2014 RTTY on DWD\u2019s '
+    // ★★ 2026-11-12: the menu FOLDS (menuCats.ts) — VFO CENTRE / CENTRE / FIT on top, then SDR HARDWARE · DISPLAY ·
+    //    CONTROLS · ABOUT, SAVE FOR ALL just above ABOUT. Every place below names its category (AGENTS.md copy rule).
+    body: () => '[[MENU]] keeps ' + (onIcom() ? 'CENTRE and FIT' : 'VFO CENTRE, CENTRE and FIT') + ' at the top; under '
+        + 'them, folded until you open one, are SDR HARDWARE (the receiver\u2019s own controls), DISPLAY, CONTROLS and ABOUT. '
+        + 'In DISPLAY, under SPECTRUM, SIGNAL LABELS names the decoder to use on well-known signals in view \u2014 RTTY on DWD\u2019s '
         + '4583 kHz, WEFAX on Northwood\u2019s 4610, NAVTEX, DSC, FT8, time signals \u2014 at the foot of the spectrum, with your bookmarks, the receiver\u2019s and FM names '
         + 'learnt from RDS by name \u2014 click or tap a label to tune to it and open its decoder. '
         + (onIcom()
-          ? 'On this Icom those are the radio\u2019s own: mode, filter, span, ATT, preamp, AGC, RF gain, and its noise '
+          ? 'On this Icom, SDR HARDWARE holds the radio\u2019s own controls: mode, filter, span, ATT, preamp, AGC, RF gain, and its noise '
             + 'blanker, noise reduction and notch. VibeSDR only listens through it \u2014 it never transmits. '
           : '')
         /* ★ 2026-10-30: the SDRplay AGC row (main.ts renderRspVagc) — only where it is drawn, i.e. an RSP on a server
          *  that reports the choice. Read from the page, so the card can never describe a row this receiver lacks. */
         + (onVagcRow()
-          ? 'On this SDRplay RSP, RADIO\u2019s AGC row says which gain control runs it \u2014 VibeAGC, VibeSDR\u2019s own, or '
+          ? 'On this SDRplay RSP, the AGC row in SDR HARDWARE says which gain control runs it \u2014 VibeAGC, VibeSDR\u2019s own, or '
             + 'the SDRplay\u2019s own \u2014 and once the protected settings are unlocked the owner can switch it there, live. '
           : '')
-        + 'Its CONTROLS section sets the colours of these controls, and how see-through the panels are.',
+        + 'CONTROLS sets the colours of these controls and how see-through the panels are, what the mouse wheel does, and '
+        + 'the game controller\u2019s guide and options.'
+        + (saveAllShown()
+          ? ' SAVE FOR ALL VIBESDR.NET SERVERS, just above ABOUT, makes these settings your default on every VibeSDR.net '
+            + 'server \u2014 never the radio\u2019s hardware, which belongs to each server.'
+          : ''),
   },
   {
     ids: ['mAudio'],

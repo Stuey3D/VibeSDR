@@ -10,6 +10,7 @@ import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
+import { initMenuCats, revealMenuCat } from './menuCats';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { kickedSentence } from '../../../src/services/kickedText';
@@ -1986,6 +1987,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //     success must un-hide it on the way back, or the way back does not exist.
         const pwRowBack = document.getElementById('adminPwRow');
         if (pwRowBack) pwRowBack.hidden = false;
+        // ★ …and where it can be FOUND: the box lives in SDR HARDWARE, which may be folded (menuCats.ts).
+        revealMenuCat('hw');
         refreshAdminRow();
         syncMediaSkip();
         return;
@@ -11053,7 +11056,8 @@ function showKicked(secs: number) { showRefusal('DISCONNECTED', kickedSentence(s
  *  "simply lock the admin controls with a little pill pop up warning"). */
 function showAdminRelocked(idleMin: number) {
   const mins = idleMin > 0 ? `${idleMin} minutes` : 'a while';
-  showPill(`Admin controls locked after ${mins} idle — unlock again in the menu`);
+  showPill(`Admin controls locked after ${mins} idle — unlock again in MENU → SDR HARDWARE`);
+  revealMenuCat('hw');   // ★ the password box is in there: open it, so the next MENU press lands on it
 }
 
 /** ★ A small transient notice at the top of the screen. Replaces any pill already showing
@@ -17894,6 +17898,8 @@ function nrPercent(strength: number): number {
 }
 
 function buildMenu() {
+  // ★★ The menu's folding categories (menuCats.ts, 2026-11-12) — first, so the handheld can add its own to them.
+  initMenuCats($('menu'));
   $('menuClose').onclick = () => $('menu').classList.remove('open');
   $('btnPadGuide').onclick = () => togglePadGuide();
   $('pgClose').onclick = () => closePanels();
@@ -18143,11 +18149,13 @@ function buildMenu() {
    *  user action), wrong for this one, which is purely local. So the page said TUNE after a reload while
    *  the wheel went on zooming (Onfliner, 2026-10-02: "not remembered when the page is refreshed"). */
   wheelTunes = prefs()['wheelAction'] === 1;
-  /* ★ FREQUENCY AT POINTER — local to this browser like the wheel (not a VIEW_KEY: it is about the
-   *  mouse in front of you, not the look of the waterfall). Only offered where there IS a mouse. */
+  /* ★ FREQUENCY AT POINTER — remembered in this browser like the wheel. Only offered where there IS a mouse.
+   *  ★★ A VIEW_KEY since 2026-11-12 (it was left out as "not the look of the waterfall"): every vibesdr.net server
+   *     is reached from this same browser, with this same mouse, and SAVE FOR ALL now carries the whole menu. */
   toggle('ptrFreqTg', (on) => { ptrFreqOn = on; if (!on) hidePtrFreq(); }, 'ptrFreq', true);
   /* ★★★ V12 TUCK AWAY TUNE AND ZOOM KEYS while a pad, keyboard or remote drives (Stuart, 2026-11-04) — MENU → GAME
-   *  CONTROLLER. Default ON; local to this browser (it is about the device in your hands, not the look of the waterfall). */
+   *  CONTROLLER (now CONTROLS → GAME CONTROLLER). Default ON; remembered in this browser, and travels with SAVE FOR ALL
+   *  (a VIEW_KEY since 2026-11-12 — the device in your hands is the same one on every vibesdr.net server). */
   toggle('padTuckTg', (on) => { padTuckOn = on; padTuckSync(); }, 'padTuck', true);
   onDriveInput(padTuckSync);
   const showPtrRow = () => { $('rowPtrFreq').hidden = !HOVER_MQ?.matches; };
@@ -18192,16 +18200,18 @@ function buildMenu() {
   applyCoarse((prefs().wfCoarse as string) || 'auto');
 
   /* ★ SAVE FOR ALL (portable.ts): what this server is showing becomes the master for every
-   *  *.vibeserver.vibesdr.net server, and this server's own overrides go — it now follows the master too. */
+   *  *.vibeserver.vibesdr.net server, and this server's own overrides go — it now follows the master too.
+   *  ★★ 2026-11-12: below every category, just above ABOUT, and it carries the WHOLE menu's listener settings
+   *     (VIEW_KEYS) — display, waterfall, spectrum, VFO, control colours, mouse and controller — never hardware. */
   if (onVibeDomain()) {
-    $('dispAllRow').hidden = false; $('dispAllCaption').hidden = false; $('dispAllHint').hidden = false;
+    $('saveAllBlock').hidden = false;
     $('dispSaveAll').onclick = async () => {
       const cur = prefs();
       if (!(await saveViewForAll(cur))) { showPill('Could not reach the VibeSDR.net settings store', 5000); return; }
       const lp = localPrefs();
       for (const k of VIEW_KEYS) delete lp[k];
       localStorage.setItem(LS_PREFS, JSON.stringify(lp));
-      showPill('Saved — these display settings are now your default on every VibeSDR.net server', 5000);
+      showPill('Saved — these menu settings are now your default on every VibeSDR.net server', 5000);
     };
   }
 

@@ -14,15 +14,14 @@
  *    when that radio returns. The look (palette, colours, display font …) and the handheld's own settings stay the
  *    device's, whichever radio is plugged in.
  *  · the hardware service's events (long-poll): the volume overlay, the 10 % banner, the reset toast, headphones.
- *  · the menu: three accordions — R36S HARDWARE · SDR HARDWARE · DISPLAY — one level, opening one closes the others,
- *    B / back collapses (gamepad pushBack). SDR HARDWARE and DISPLAY are the page's own existing rows, MOVED (every
- *    listener stays bound), never copied.
+ *  · the menu: R36S HARDWARE added to the page's own folding categories (menuCats.ts: SDR HARDWARE · DISPLAY ·
+ *    CONTROLS · ABOUT) — one open at a time, B / back folds it. The handheld's display rows go to the top of DISPLAY.
  *  · the Performance overlay: plain DOM text, ≤ 2 updates a second, no canvas.
  *  · recordings to the card (Cog has no downloads), the import/ folder, export/, EXPORT DIAGNOSTICS, the clock.
  *  · the device's location: typed (a locator or lat, lon) or SET FROM MAP — an in-page map (handheldMap.ts), from the
  *    menu's LOCATION row or from "Please connect an SDR" (no radio needed).
  */
-import { pushBack } from './gamepad';
+import { initMenuCats, addMenuCat, menuCatBody, onMenuCatOpen, setMenuCat } from './menuCats';
 import { openPadTest } from './handheldPadTest';
 import { startTutorial } from './tutorial';
 import { openMapPick, locatorToLatLon } from './handheldMap';
@@ -268,11 +267,6 @@ html[data-handheld] .hhHide { display: none !important; }
 #hhPerf { position: fixed; top: 2px; right: 2px; z-index: 8000; background: rgba(0,0,0,.55); color: #e8e8e8;
   font: 10px/1.25 ui-monospace, Menlo, monospace; padding: 2px 6px; border-radius: 4px; pointer-events: none; white-space: pre; }
 #hhPerf b { font-weight: 600; border: 1px solid rgba(232,232,232,.6); border-radius: 3px; padding: 0 3px; }
-.hhAcc { display: block; width: 100%; text-align: left; margin: 6px 0 0; padding: 10px 12px; font-weight: 700; letter-spacing: 2px; }
-.hhAcc::after { content: '▸'; float: right; }
-.hhAcc[aria-expanded="true"]::after { content: '▾'; }
-.hhAccBody { padding: 2px 0 8px 6px; border-left: 2px solid rgba(255,184,51,.35); margin-left: 4px; }
-.hhAccBody[hidden] { display: none !important; }
 .hhFig { font-variant-numeric: tabular-nums; }
 `;
   document.head.appendChild(st);
@@ -537,7 +531,7 @@ async function openLocationMap() {
   openMapPick({ start, onPick: (lat, lon) => void postLocation({ lat, lon }) });
 }
 
-// ── The menu: three accordions ──────────────────────────────────────────────────────────────────────────────────────
+// ── The menu: R36S HARDWARE among the page's categories ──────────────────────────────────────────────────────────────
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, text = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
@@ -567,43 +561,6 @@ function slider(id: string, min: number, max: number, value: number, onSet: (v: 
   return [i, v];
 }
 
-const accs: Array<{ btn: HTMLButtonElement; body: HTMLDivElement; unback?: () => void }> = [];
-function setOpen(i: number, open: boolean) {
-  accs.forEach((a, k) => {
-    const o = k === i && open;
-    a.btn.setAttribute('aria-expanded', String(o));
-    a.body.hidden = !o;
-    if (!o && a.unback) { a.unback(); a.unback = undefined; }
-    if (o && !a.unback) a.unback = pushBack(() => { a.unback = undefined; setOpen(k, false); });
-  });
-  if (open) refreshDeviceRows();
-}
-function accordion(menu: HTMLElement, before: Node | null, title: string): HTMLDivElement {
-  const btn = el('button', { class: 'btn hhAcc', 'aria-expanded': 'false' }, title) as HTMLButtonElement;
-  const body = el('div', { class: 'hhAccBody' }) as HTMLDivElement;
-  body.hidden = true;
-  const i = accs.length;
-  accs.push({ btn, body });
-  btn.onclick = () => setOpen(i, btn.getAttribute('aria-expanded') !== 'true');
-  menu.insertBefore(btn, before);
-  menu.insertBefore(body, before);
-  return body;
-}
-/** Every top-level child of `menu` from the <h2> named `from` up to (not including) the next <h2> in `stop`. */
-function sectionNodes(menu: HTMLElement, from: string, stop: string[]): Node[] {
-  const kids = Array.from(menu.childNodes);
-  const at = kids.findIndex((n) => n instanceof HTMLElement && n.tagName === 'H2' && n.textContent?.trim() === from);
-  if (at < 0) return [];
-  const out: Node[] = [];
-  for (let i = at; i < kids.length; i++) {
-    const n = kids[i];
-    if (i > at && n instanceof HTMLElement && (n.tagName === 'H2' && stop.includes(n.textContent?.trim() || '')
-        || n.id === 'adminServerRow')) break;
-    out.push(n);
-  }
-  return out;
-}
-
 let refreshDeviceRows: () => void = () => {};
 function paintVolumeRow(v: number) {
   const i = document.getElementById('hhVolume') as HTMLInputElement | null;
@@ -611,50 +568,44 @@ function paintVolumeRow(v: number) {
 }
 function paintBattery() { refreshDeviceRows(); }
 
-/** ★★ The handheld menu (Stuart 2026-11-05): R36S HARDWARE · SDR HARDWARE · DISPLAY at the top, one level, the
- *  rest of the menu (bookmarks, game controller, about) as it was. Called once the receiver's controls exist. */
+/** ★★ The handheld menu (Stuart 2026-11-05): R36S HARDWARE · SDR HARDWARE · DISPLAY at the top, one open at a time.
+ *  ★★ 2026-11-12: every server's menu now folds into categories (menuCats.ts — the R36S's own, brought to the web), so
+ *     this no longer builds an accordion of its own: it adds R36S HARDWARE before the page's SDR HARDWARE, and puts the
+ *     handheld's display rows (and the VFO CENTRE / CENTRE / FIT rows, which the R36S keeps in DISPLAY) at the top of
+ *     the page's DISPLAY. Called once the receiver's controls exist. */
 export function buildHandheldMenu(menu: HTMLElement) {
   if (!on || menu.dataset.hhBuilt) return;
   menu.dataset.hhBuilt = '1';
-  // ★ menu's OWN head — every panel has a #menuHead (the id is reused), so getElementById finds another panel's.
-  const head = Array.from(menu.children).find((c) => c.id === 'menuHead') || null;
-  const firstAfterHead = head ? head.nextSibling : menu.firstChild;
-  // SDR HARDWARE: the RADIO and ANTENNA sections, moved (their listeners move with them).
-  const radioNodes = sectionNodes(menu, 'RADIO', ['DISPLAY']);
-  const displayNodes = sectionNodes(menu, 'DISPLAY', ['GAME CONTROLLER', 'SERVER', 'ABOUT']);
-  const r36 = accordion(menu, firstAfterHead, 'R36S HARDWARE');
-  const sdr = accordion(menu, firstAfterHead, 'SDR HARDWARE');
-  const disp = accordion(menu, firstAfterHead, 'DISPLAY');
-  // ★ The VIEW rows that sit at the top of RADIO on a small screen (VFO CENTRE, CENTRE / FIT — .mOnly) are display,
-  //   not the radio's hardware: they go to DISPLAY.
-  const viewRows: Node[] = [];
-  for (const n of radioNodes) {
-    if (n instanceof HTMLElement && n.tagName === 'H2' && n.textContent?.trim() === 'RADIO') { n.remove(); continue; }
-    if (n instanceof HTMLElement && n.classList.contains('mOnly')) { viewRows.push(n); continue; }
-    sdr.appendChild(n);
-  }
-  // DISPLAY: the handheld's own rows first, then the page's look and view rows.
+  initMenuCats(menu);
+  const disp = menuCatBody('display');
+  const sdrHead = document.getElementById('mCatHw');
+  if (!disp || !sdrHead) { console.error('[handheld] the menu has no SDR HARDWARE / DISPLAY categories'); return; }
+  const r36 = addMenuCat('r36s', 'R36S HARDWARE', sdrHead);
+  // ★ The VIEW rows at the very top of every menu (VFO CENTRE, CENTRE / FIT — .mOnly) are display, not the radio's
+  //   hardware: on the handheld they go to DISPLAY, where the R36S's own menu has them (sec_display.h).
+  const viewRows = Array.from(menu.children).filter((n) => n.classList.contains('mOnly'));
+  // DISPLAY: the handheld's own rows first, then the view rows, then the page's look.
+  const top = document.createDocumentFragment();
   const s = hhSettings();
   const [bri, briV] = slider('hhBright', 1, 255, 120, (v) => { savedBright = v; void device({ set: 'brightness', value: v }); });
-  disp.appendChild(row('BRIGHTNESS', bri, briV));
-  disp.appendChild(row('SPECTRUM RATE<span class="sub">Real frames from the radio each second — every waterfall row is real</span>',
+  top.appendChild(row('BRIGHTNESS', bri, briV));
+  top.appendChild(row('SPECTRUM RATE<span class="sub">Real frames from the radio each second — every waterfall row is real</span>',
     segOf([['5', '5'], ['10', '10'], ['20', '20']], String(s.specRate), (v) => {
       saveHh({ specRate: Number(v) as 5 | 10 | 20 });
       const sr = handheldSpecRate(); host?.setSpectrumRate(sr.fps, sr.interpolate);
     })));
-  disp.appendChild(row('DRAWING RATE<span class="sub">How often the screen is redrawn</span>',
+  top.appendChild(row('DRAWING RATE<span class="sub">How often the screen is redrawn</span>',
     segOf([['30', '30 fps'], ['60', '60 fps']], String(s.uiFps), (v) => { saveHh({ uiFps: Number(v) as 30 | 60 }); host?.setUiFpsCap(Number(v)); })));
-  disp.appendChild(row('SCREEN OFF AFTER<span class="sub">Dims at half the time; audio keeps playing; any button wakes it</span>',
+  top.appendChild(row('SCREEN OFF AFTER<span class="sub">Dims at half the time; audio keeps playing; any button wakes it</span>',
     segOf([['0', 'NEVER'], ['1', '1 m'], ['2', '2 m'], ['5', '5 m'], ['10', '10 m']], String(s.screenOffMin),
           (v) => { saveHh({ screenOffMin: Number(v) }); noteInput(); })));
-  for (const n of viewRows) disp.appendChild(n);
-  for (const n of displayNodes) {
-    if (n instanceof HTMLElement && n.tagName === 'H2' && n.textContent?.trim() === 'DISPLAY') { n.remove(); continue; }
-    disp.appendChild(n);
-  }
+  for (const n of viewRows) top.appendChild(n);
+  disp.insertBefore(top, disp.firstChild);
   // ★ The page's waterfall SPEED / DATA / boost rows are a link's controls: the handheld's SPECTRUM RATE replaces them.
   for (const id of ['wfScrollSeg', 'wfDataSeg', 'wfBoostSeg']) document.getElementById(id)?.closest('.mrow')?.classList.add('hhHide');
   for (const id of ['wfScrollNote', 'wfDataNote', 'wfBoostNote']) document.getElementById(id)?.classList.add('hhHide');
+  // ★ Opening any category re-reads the device (the brightness in DISPLAY, the battery and clock in R36S HARDWARE).
+  onMenuCatOpen(() => refreshDeviceRows());
 
   // R36S HARDWARE
   const [vol, volV] = slider('hhVolume', 0, 100, 60, (v) => { void device({ set: 'volume', value: v }); });
@@ -781,6 +732,5 @@ export function buildHandheldMenu(menu: HTMLElement) {
 /** The DEVICE key (where CHAT sits on a server — the island keeps both cells): the menu, R36S HARDWARE open. */
 export function openDeviceMenu() {
   host?.openMenu();
-  const i = accs.findIndex((a) => a.btn.textContent === 'R36S HARDWARE');
-  if (i >= 0) setOpen(i, true);
+  setMenuCat('r36s');
 }

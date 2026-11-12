@@ -6,7 +6,7 @@
 //  · no radio: "Please connect an SDR", no landing page, no start-audio screen
 //  · a radio plugged in: the page reloads straight into the receiver; the status row says "Spectrum rate … fps" and
 //    nothing about the link (no KB/s, ping, buffer, no link bars); no CHAT, a DEVICE key in its cell
-//  · the menu: R36S HARDWARE / SDR HARDWARE / DISPLAY, one open at a time, ○ (back) collapses; the radio's own gain
+//  · the menu: R36S HARDWARE / SDR HARDWARE / DISPLAY / CONTROLS / ABOUT, one open at a time, ○ (back) collapses; the radio's own gain
 //    row lives in SDR HARDWARE; brightness, SPECTRUM RATE, DRAWING RATE and SCREEN OFF in DISPLAY
 //  · the drawing cap (30 fps) and the Performance overlay ("UI … fps", plain text)
 //  · the hardware service's volume event → the overlay; battery_low → the banner; a brightness change reaches it
@@ -213,7 +213,7 @@ try {
   await press(p, CIRCLE);
   ok(await p.until(`!${shown("#tutBox")}`, 5000), "○ ends the tour");
   // ★ back to a short menu for the checks below: R36S HARDWARE (opened by DEVICE) folded again
-  await p.js(`(() => { const a = document.querySelectorAll("#menu .hhAcc"), b = document.querySelectorAll("#menu .hhAccBody"); b.forEach((x, i) => { if (!x.hidden) a[i].click(); }); document.getElementById("menu").classList.remove("open"); })(); 1`);
+  await p.js(`(() => { const a = document.querySelectorAll("#menu > button.mCat"), b = document.querySelectorAll("#menu > .mCatBody"); b.forEach((x, i) => { if (!x.hidden) a[i].click(); }); document.getElementById("menu").classList.remove("open"); })(); 1`);
   ok(await p.until(`document.getElementById("status").textContent.startsWith("Spectrum rate")`, 6000),
      `the status row: "${await p.js(`document.getElementById("status").textContent`)}"`);
   const st = await p.js(`document.getElementById("status").textContent`);
@@ -223,14 +223,15 @@ try {
   console.log("── the menu ──");
   await p.js(`document.getElementById("mMenu").click(); 1`);
   ok(await p.until(`document.getElementById("menu").classList.contains("open")`), "the menu opens");
-  const accTitles = await p.js(`[...document.querySelectorAll("#menu .hhAcc")].map(b => b.textContent)`);
-  ok(JSON.stringify(accTitles) === JSON.stringify(["R36S HARDWARE", "SDR HARDWARE", "DISPLAY"]), `three accordions: ${accTitles}`);
-  ok(await p.js(`[...document.querySelectorAll("#menu .hhAccBody")].every(b => b.hidden)`), "all collapsed at first — the menu stays short");
-  ok(await p.js(`document.getElementById("rowGain").closest(".hhAccBody") === document.querySelectorAll("#menu .hhAccBody")[1]`), "the radio's GAIN row lives in SDR HARDWARE");
-  ok(await p.js(`!!document.getElementById("hhBright") && document.getElementById("hhBright").closest(".hhAccBody") === document.querySelectorAll("#menu .hhAccBody")[2]`), "BRIGHTNESS is in DISPLAY");
-  ok(await p.js(`document.querySelectorAll("#menu .hhAccBody")[2].textContent.includes("SPECTRUM RATE")`), "…with SPECTRUM RATE");
-  await p.js(`document.querySelectorAll("#menu .hhAcc")[0].click(); 1`);
-  ok(await p.js(`(() => { const b = document.querySelectorAll("#menu .hhAccBody"); return !b[0].hidden && b[1].hidden && b[2].hidden; })()`), "R36S HARDWARE expands in place");
+  const accTitles = await p.js(`[...document.querySelectorAll("#menu > button.mCat")].map(b => b.textContent)`);
+  // ★ 2026-11-12: every server's menu folds now (menuCats.ts); the handheld adds R36S HARDWARE in front of the page's own.
+  ok(JSON.stringify(accTitles) === JSON.stringify(["R36S HARDWARE", "SDR HARDWARE", "DISPLAY", "CONTROLS", "ABOUT"]), `the categories: ${accTitles}`);
+  ok(await p.js(`[...document.querySelectorAll("#menu > .mCatBody")].every(b => b.hidden)`), "all collapsed at first — the menu stays short");
+  ok(await p.js(`document.getElementById("rowGain").closest(".mCatBody") === document.querySelectorAll("#menu > .mCatBody")[1]`), "the radio's GAIN row lives in SDR HARDWARE");
+  ok(await p.js(`!!document.getElementById("hhBright") && document.getElementById("hhBright").closest(".mCatBody") === document.querySelectorAll("#menu > .mCatBody")[2]`), "BRIGHTNESS is in DISPLAY");
+  ok(await p.js(`document.querySelectorAll("#menu > .mCatBody")[2].textContent.includes("SPECTRUM RATE")`), "…with SPECTRUM RATE");
+  await p.js(`document.querySelectorAll("#menu > button.mCat")[0].click(); 1`);
+  ok(await p.js(`(() => { const b = document.querySelectorAll("#menu > .mCatBody"); return !b[0].hidden && b[1].hidden && b[2].hidden; })()`), "R36S HARDWARE expands in place");
   ok(await p.js(`document.getElementById("hhLocNow").textContent`) === "not set", "LOCATION: not set on a fresh card");
   await p.js(`(() => { const i = document.getElementById("hhLocIn"); i.value = "jo01ab"; document.getElementById("hhLocSet").click(); })()`);
   ok(await p.until(`document.getElementById("hhLocNow").textContent === "JO01ab"`, 5000), "a locator typed and SET");
@@ -257,30 +258,30 @@ try {
   ok(await (async () => { for (let i = 0; i < 40; i++) { try { const l = await (await fetch(`http://127.0.0.1:${port}/location`)).json();
        if (typeof l.lat === "number" ? Math.abs(l.lat - r1.lat) < 0.05 && Math.abs(l.lon - r1.lon) < 0.05 : (l.grid || "").slice(0, 4) === r1.locator.slice(0, 4)) return true; } catch {} await sleep(150); } return false; })(),
      `…the receiver's /location follows, live (${JSON.stringify(await (await fetch(`http://127.0.0.1:${port}/location`)).json()).slice(0, 120)})`);
-  ok(await p.js(`!document.querySelectorAll("#menu .hhAccBody")[0].hidden && document.getElementById("menu").classList.contains("open")`), "…the menu still open on R36S HARDWARE");
+  ok(await p.js(`!document.querySelectorAll("#menu > .mCatBody")[0].hidden && document.getElementById("menu").classList.contains("open")`), "…the menu still open on R36S HARDWARE");
   await p.js(`document.getElementById("hhLocMap").click(); 1`);
   ok(await p.until(shown("#hhMapPick"), 5000), "opened again");
   await press(p, RIGHT);
   await press(p, CIRCLE);
-  ok(await p.until(`!document.getElementById("hhMapPick")`, 3000) && await p.js(`!document.querySelectorAll("#menu .hhAccBody")[0].hidden`),
+  ok(await p.until(`!document.getElementById("hhMapPick")`, 3000) && await p.js(`!document.querySelectorAll("#menu > .mCatBody")[0].hidden`),
      "○ closes only the map — R36S HARDWARE stays open under it");
   const rl = await hhLoc();
   ok(Math.abs(parseFloat(rl.lat) - r1.lat) < 1e-5 && Math.abs(parseFloat(rl.lon) - r1.lon) < 1e-5, "…the location unchanged");
   ok(await p.until(`document.getElementById("hhBattVal").textContent.includes("83")`, 5000), `the battery from the hardware service (${await p.js(`document.getElementById("hhBattVal").textContent`)})`);
-  await p.js(`document.querySelectorAll("#menu .hhAcc")[2].click(); 1`);
-  ok(await p.js(`(() => { const b = document.querySelectorAll("#menu .hhAccBody"); return b[0].hidden && b[1].hidden && !b[2].hidden; })()`), "opening DISPLAY collapses R36S HARDWARE");
+  await p.js(`document.querySelectorAll("#menu > button.mCat")[2].click(); 1`);
+  ok(await p.js(`(() => { const b = document.querySelectorAll("#menu > .mCatBody"); return b[0].hidden && b[1].hidden && !b[2].hidden; })()`), "opening DISPLAY collapses R36S HARDWARE");
   await p.js(`__connect(); 1`);
   await press(p, CIRCLE);
-  ok(await p.js(`[...document.querySelectorAll("#menu .hhAccBody")].every(b => b.hidden)`) && await p.js(`document.getElementById("menu").classList.contains("open")`),
+  ok(await p.js(`[...document.querySelectorAll("#menu > .mCatBody")].every(b => b.hidden)`) && await p.js(`document.getElementById("menu").classList.contains("open")`),
      "○ (back) collapses it — the menu stays open");
   // the D-pad walks the accordion buttons; ✕ expands
-  await p.js(`document.querySelectorAll("#menu .hhAcc")[1].scrollIntoView(); 1`);
+  await p.js(`document.querySelectorAll("#menu > button.mCat")[1].scrollIntoView(); 1`);
   let reached = false;
-  for (let i = 0; i < 30 && !reached; i++) { await press(p, DOWN); reached = await p.js(`!!document.querySelector("#menu .hhAcc.gpFocus") && document.querySelector(".gpFocus").textContent === "SDR HARDWARE"`); }
-  if (!reached) for (let i = 0; i < 30 && !reached; i++) { await press(p, UP); reached = await p.js(`!!document.querySelector("#menu .hhAcc.gpFocus") && document.querySelector(".gpFocus").textContent === "SDR HARDWARE"`); }
+  for (let i = 0; i < 30 && !reached; i++) { await press(p, DOWN); reached = await p.js(`!!document.querySelector("#menu > button.mCat.gpFocus") && document.querySelector(".gpFocus").textContent === "SDR HARDWARE"`); }
+  if (!reached) for (let i = 0; i < 30 && !reached; i++) { await press(p, UP); reached = await p.js(`!!document.querySelector("#menu > button.mCat.gpFocus") && document.querySelector(".gpFocus").textContent === "SDR HARDWARE"`); }
   ok(reached, "the D-pad reaches SDR HARDWARE");
   await press(p, CROSS);
-  ok(await p.js(`!document.querySelectorAll("#menu .hhAccBody")[1].hidden`), "✕ expands it");
+  ok(await p.js(`!document.querySelectorAll("#menu > .mCatBody")[1].hidden`), "✕ expands it");
   await press(p, CIRCLE);
   // brightness → the hardware service
   await p.js(`(() => { const i = document.getElementById("hhBright"); i.value = "77"; i.dispatchEvent(new Event("input")); })()`);
@@ -345,10 +346,10 @@ try {
   await p.js(`__connect(); 1`);
   await sleep(1500);
   ok(!(await p.js(shown("#audioGate"))), "after the swap: the receiver, no START RADIO");
-  await p.js(`document.getElementById("mMenu").click(); document.querySelectorAll("#menu .hhAcc")[2].click(); 1`);
+  await p.js(`document.getElementById("mMenu").click(); document.querySelectorAll("#menu > button.mCat")[2].click(); 1`);
   const notes = [];
   for (const r of ["5", "10", "20"]) {
-    await p.js(`[...document.querySelectorAll("#menu .hhAccBody")[2].querySelectorAll("button[data-v]")].find(b => b.dataset.v === "${r}" && b.closest(".mrow").textContent.includes("SPECTRUM RATE")).click(); 1`);
+    await p.js(`[...document.querySelectorAll("#menu > .mCatBody")[2].querySelectorAll("button[data-v]")].find(b => b.dataset.v === "${r}" && b.closest(".mrow").textContent.includes("SPECTRUM RATE")).click(); 1`);
     await sleep(4000);
     const t0 = (await p.call("Performance.getMetrics")).result.metrics; const c0 = childPid(); const e0 = cpuOf(c0);
     await sleep(5000);
