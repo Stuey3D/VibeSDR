@@ -11,8 +11,11 @@
  *    keyboard stop (gamepad.ts visible()); a header is a <button>, so it is one, and enter on it opens it.
  * ★ REMEMBERED PER BROWSER: which one is open (or none), in localStorage, every access in try/catch — a private window
  *   or blocked storage simply starts folded. A first visit starts with everything folded.
- * ★ ATTENTION OPENS IT: revealMenuCat(id) for something inside a folded category that the listener must act on (the
- *   protected settings' password after an idle re-lock or a refused password — main.ts onAdmin).
+ * ★ ATTENTION OPENS IT: revealMenuCat(id) for something inside a folded category that the listener must act on.
+ * ★★ THE PASSWORD IS IN SERVER (Stuart, 2026-11-12: one owner password box, in SERVER at the bottom). SERVER is not a
+ *    folding category — it is two rows — so revealServerUnlock() folds the open category (the box sits right under the
+ *    headers then), scrolls to it and puts the cursor in it; with the menu shut (the idle re-lock, a refused password)
+ *    it does that the next time the menu opens. SDR HARDWARE's "locked — unlock under SERVER below" line calls it.
  * ★ The handheld page (handheld.ts) adds its own R36S HARDWARE category with addMenuCat and listens with onMenuCatOpen.
  */
 import { pushBack } from './gamepad';
@@ -25,6 +28,8 @@ const listeners: Array<(id: string) => void> = [];
 let menuEl: HTMLElement | null = null;
 let openId = '';
 let unback: (() => void) | null = null;
+/** The password box is wanted the next time the menu opens (revealServerUnlock with the menu shut). */
+let wantServer = false;
 
 function readSaved(): string {
   try { return localStorage.getItem(LS_OPEN) || ''; } catch { return ''; }
@@ -38,6 +43,7 @@ const menuOpen = () => !!menuEl?.classList.contains('open');
 /** ★ Back folds the open category — but only while the menu is up. A fold registered while the menu is shut would
  *  make the next back on the radio fold something nobody can see, instead of doing what back does there. */
 function syncBack() {
+  if (wantServer && menuOpen()) { wantServer = false; landOnServer(); }
   const want = !!openId && menuOpen();
   if (want && !unback) {
     unback = pushBack(() => {
@@ -140,3 +146,23 @@ export function revealMenuCat(id: string) { if (openId !== id) setOpen(id, true)
 
 /** Called with the id whenever a category opens. */
 export function onMenuCatOpen(f: (id: string) => void) { listeners.push(f); }
+
+/** ★ Scroll SERVER into view and put the cursor in its password box (a pad driving gets the highlight instead —
+ *  gamepad.ts focusin). Waits a frame so a category folded this instant has given its height back first. */
+function landOnServer() {
+  requestAnimationFrame(() => {
+    const blk = document.getElementById('srvBlock');
+    const inp = document.getElementById('adminPwInput') as HTMLInputElement | null;
+    if (!blk || blk.hidden) return;
+    blk.scrollIntoView({ block: 'nearest' });
+    if (inp && !inp.closest('[hidden]')) inp.focus({ preventScroll: true });
+  });
+}
+
+/** ★★ The password is wanted (SDR HARDWARE's locked line, the idle re-lock, a refused password): fold the open
+ *  category so SERVER sits right under the headers, and land on its password box — now if the menu is up, else the
+ *  next time it opens. */
+export function revealServerUnlock() {
+  setOpen('', true);
+  if (menuOpen()) landOnServer(); else wantServer = true;
+}

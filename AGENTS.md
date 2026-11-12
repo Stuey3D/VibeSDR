@@ -26,6 +26,11 @@ Anything that tells a user WHERE something is:
 - `src/components/AboutOverlay.tsx` — release notes AND the feature lists
 - `spike/WristSDR/WristSDR/*.swift` and `ios/VibeSDRWatch/*.swift` — `TutorialSheet` / `*TutorialTips`
 - `website/index.html`
+- `web/client/src/tutorial.ts` — the web client's tour (the MENU card names each category: SDR HARDWARE · DISPLAY ·
+  CONTROLS · SERVER · ALL SERVERS · ABOUT)
+- `web/client/src/main.ts` / `admin.ts` / `adminLazy.ts` — pills and alerts that say where to unlock ("MENU → SERVER",
+  the idle re-lock pill, "Enter the admin password first"), and `index.html`'s own in-menu notes (SDR HARDWARE's
+  "unlock under SERVER below" line)
 - ★ Icom (V12): the `sdrTour` drum + cog cards, `AboutOverlay` (V12 note + feature list) and the web tutorial say an
   Icom's controls are in the cog under the radio's name and that zoom steps its scope span. Move either, fix all three.
 

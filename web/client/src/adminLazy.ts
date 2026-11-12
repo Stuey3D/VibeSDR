@@ -55,7 +55,7 @@ export function initAdmin(getHost: () => string, getPassword: () => string): voi
     const pw = getPassword();
     // ★ A ticket is enough on its own. Only refuse when there is NEITHER (as admin.ts does).
     if (!pw && !inAdminMode()) {
-      alert('Enter the admin password first: MENU, SDR HARDWARE, PROTECTED SETTINGS.');
+      alert('Enter the admin password first: MENU, SERVER, PASSWORD.');
       return;
     }
     document.getElementById('menu')?.classList.remove('show');

@@ -15,7 +15,7 @@
  *    device's, whichever radio is plugged in.
  *  · the hardware service's events (long-poll): the volume overlay, the 10 % banner, the reset toast, headphones.
  *  · the menu: R36S HARDWARE added to the page's own folding categories (menuCats.ts: SDR HARDWARE · DISPLAY ·
- *    CONTROLS · ABOUT) — one open at a time, B / back folds it. The handheld's display rows go to the top of DISPLAY.
+ *    CONTROLS · ABOUT; the page's SERVER block — the owner's password — is hidden here) — one open at a time, B / back folds it. The handheld's display rows go to the top of DISPLAY.
  *  · the Performance overlay: plain DOM text, ≤ 2 updates a second, no canvas.
  *  · recordings to the card (Cog has no downloads), the import/ folder, export/, EXPORT DIAGNOSTICS, the clock.
  *  · the device's location: typed (a locator or lat, lon) or SET FROM MAP — an in-page map (handheldMap.ts), from the
@@ -241,8 +241,8 @@ function injectStyle() {
   // ★ Server furniture goes (§0.1 "No server furniture"): the landing page, admin, chat, listener counts, the link meter
   //   and every data-rate / compression choice. The RADIO's and the DSP's rows all stay.
   st.textContent = `
-html[data-handheld] #splash, html[data-handheld] #btnAdmin, html[data-handheld] #adminRow, html[data-handheld] #adminPwRow,
-html[data-handheld] #adminServerRow, html[data-handheld] #chatPanel, html[data-handheld] #secListeners,
+html[data-handheld] #splash, html[data-handheld] #btnAdmin, html[data-handheld] #srvBlock, html[data-handheld] #adminJump,
+html[data-handheld] #chatPanel, html[data-handheld] #secListeners,
 html[data-handheld] #srvHealth, html[data-handheld] #srvBattery,
 html[data-handheld] #linkBars, html[data-handheld] #rawAudioRow, html[data-handheld] #rawAudioNote, html[data-handheld] #mShared,
 html[data-handheld] .hhHide { display: none !important; }
