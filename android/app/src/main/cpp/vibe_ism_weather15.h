@@ -1,12 +1,13 @@
 // vibe_ism_weather15.h — V12 ISM decoder, weather pass 2 (2026-11-12): inFactory / nor-tec / DAY T/H, Esun EN2053 and
-// EN2058 BBQ, TFA Marbella pool, Fuzhou Emax W6 family; and the unchecked OOK ones — Eurochron T/H, Baldr E0666TH,
+// EN2058 BBQ, TFA Marbella pool, Fuzhou Emax W6 family, Rubicson 48942 pool; and the unchecked OOK ones — Eurochron T/H, Baldr E0666TH,
 // Missil ML0757.
 // Sources: the makers' pages / FCC IDs named per family and the protocol notes at the head of rtl_433's infactory.c,
-// esun_en2053.c (issue #1478), en2058.c, tfa_marbella.c (TFA's 30.3238.06 manual), emax.c (issues #2000 … #3463),
+// esun_en2053.c (issue #1478), en2058.c, rubicson_pool_48942.c, tfa_marbella.c (TFA's 30.3238.06 manual), emax.c (issues #2000 … #3463),
 // eurochron.c, baldr_therm.c, missil_ml0757.c — FACTS only (layout, timing, check, scaling); our own code on our own
 // slicers (vibe_ism_wxkit.h). Scored on the rtl_433_tests recordings (scripts/ism-corpus.mjs).
 #pragma once
 #include "vibe_ism_wxkit.h"
+#include <array>
 
 namespace vibeism {
 namespace wx15 {
@@ -237,8 +238,33 @@ inline bool missil(const Burst& b, std::vector<Reading>& out) {
     return true;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  RUBICSON 48942 pool thermometer — OOK PWM at a fixed ~720 µs period: ~240 µs mark = 0, ~480 µs = 1, after a preamble
+//  and four ~730 µs sync pulses; 41 bits, sent twice: channel − 1 4 · random ID 10 · 1 0 · battery low · temperature 11
+//  ((raw − 1024) / 10 °C) · 0000 · CRC-8 (0x31, init 0) of bytes 0–3 · 0.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool rubicsonPool(const Burst& b, std::vector<Reading>& out) {
+    for (const auto& tm : {std::array<double, 3>{240, 480, 730}, std::array<double, 3>{430, 650, 880}}) {
+        const auto rows = wx::pwm(b.ook, tm[0], tm[1], 900, 0, tm[2]);
+        const int i = wx::repeatedRow(rows, 2, 41, 41);
+        if (i < 0) continue;
+        const auto m = bytesAt(rows[size_t(i)], 0, 6);
+        if ((m[3] & 0xF) || m[5] || (m[1] & 3) != 2 || (m[0] == 0 && m[2] == 0 && m[4] == 0)) continue;
+        if (crc8(m.data(), 4, 0x31, 0) != m[4]) continue;
+        Reading r = wx::wxReading("Rubicson", "48942 pool", wx::hex(unsigned((m[0] & 0xF) << 6 | m[1] >> 2), 3));
+        r.channel = (m[0] >> 4) + 1;
+        r.battOk = (m[2] & 0x80) ? 0 : 1;
+        r.tempC = (((m[2] & 0x7F) << 4 | m[3] >> 4) - 1024) / 10.0;
+        if (!wx::tempOk(r.tempC)) continue;
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (en2058(b, out)) return true;
+    if (rubicsonPool(b, out)) return true;
     if (emax(b, out)) return true;
     if (marbella(b, out)) return true;
     /* ★ HELD (2026-11-12): infactory() reads its corpus folders 6/6, but alecto_ws_1200/03/g000 holds a second sensor

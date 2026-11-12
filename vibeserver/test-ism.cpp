@@ -860,6 +860,38 @@ static Runs missilTx(int id, double t) {
     const int raw = int(std::lround(t * 10)) & 0xFFF;
     return ppmRows(bytesToBits({uint8_t(id), 0x00, uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4 | 0x3), uint8_t(0x6F)}), 500, 975, 1950, 4000, 9);
 }
+/** EFTH-800 as a strong close unit sends it: every mark ~190 µs longer, the period kept. */
+static Runs efth800StretchedTx(int id, double t, int h) {
+    const int raw = int(std::lround(t * 10)) & 0x3FF;
+    std::vector<uint8_t> by = {uint8_t(0x10 | (id >> 8)), uint8_t(id), uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4), uint8_t((h / 10) << 4 | (h % 10))};
+    by.push_back(crc8(by.data(), 5, 0x31, 0));
+    return pwmRows(bytesToBits(by), 650, 440, 730, 2, 880, 4, 4900);
+}
+/** Rubicson 48942 pool: PWM at 720 µs, 480 = 1 / 240 = 0, four 730 µs syncs, 41 bits twice. */
+static Runs rubicsonPoolTx(int ch, int id, double t) {
+    const int raw = int(std::lround(t * 10)) + 1024;
+    std::vector<uint8_t> m = {uint8_t((ch - 1) << 4 | id >> 6), uint8_t((id & 0x3F) << 2 | 2), uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4)};
+    m.push_back(crc8(m.data(), 4, 0x31, 0));
+    Bits w = bytesToBits(m); w.push_back(0);
+    return pwmRows(w, 480, 240, 720, 2, 730, 4, 4900);
+}
+/** Ecowitt WN34 / WN38 and WH52: the Fine Offset FSK line (58.5 µs, AA… 2D D4), CRC-8 + sum. */
+static Runs wn38Tx(uint32_t id, double t) {
+    const int raw = int(std::lround(t * 10)) & 0xFFF;
+    std::vector<uint8_t> by = {0x38, uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(0x40 | raw >> 8), uint8_t(raw), 0x41};
+    by.push_back(crc8(by.data(), 7, 0x31, 0)); by.push_back(uint8_t(wx::addBytes(by.data(), 8)));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x2D, 0xD4}; f.insert(f.end(), by.begin(), by.end()); f.push_back(0x20);
+    return nrzFsk(bytesToBits(f), 58.5);
+}
+static Runs wh52Tx(uint32_t id, double t, int moist) {
+    const int raw = int(std::lround((t + 40) * 10));
+    std::vector<uint8_t> by(24, 0x11);
+    by[0] = 0xA2; by[1] = uint8_t(id >> 16); by[2] = uint8_t(id >> 8); by[3] = uint8_t(id); by[4] = uint8_t(raw >> 8); by[5] = uint8_t(raw);
+    by[6] = uint8_t(moist); by[8] = 0x00; by[9] = 0x0A; by[10] = 0xB0; by[20] = 79;
+    by[22] = crc8(by.data(), 22, 0x31, 0); by[23] = uint8_t(wx::addBytes(by.data(), 23));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x2D, 0xD4}; f.insert(f.end(), by.begin(), by.end()); f.push_back(0x55);
+    return nrzFsk(bytesToBits(f), 58.5);
+}
 
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
@@ -1311,6 +1343,10 @@ int main(int argc, char** argv) {
     cases.push_back({"Eurochron T/H", {eurochronTx(0x23, -13.3, 43)}, "T/H", -13.3});
     cases.push_back({"Baldr E0666TH", {baldrTx(0x9C, 3, 28.2, 45)}, "E0666TH", 28.2});
     cases.push_back({"Missil ML0757", {missilTx(0x2C, 23.1)}, "ML0757", 23.1});
+    cases.push_back({"EFTH-800 (stretched)", {efth800StretchedTx(0x6F4, -18.2, 35)}, "EFTH-800", -18.2});
+    cases.push_back({"Rubicson 48942 pool", {rubicsonPoolTx(1, 0x1AE, 26.6)}, "48942", 26.6});
+    { Sig s{wn38Tx(0x002885, 24.5)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"Ecowitt WN38", s, "WN38", 24.5}); }
+    { Sig s{wh52Tx(0x0058AC, 20.4, 44)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"Ecowitt WH52", s, "WH52", 20.4}); }
     {   // ★ weather pass 2: the checks restated from the notes, held to the notes' own worked frames
         const uint8_t a[] = {0x01, 0x1E, 0xD6, 0x03, 0x6C, 0xAA}, c[] = {0x01, 0x1E, 0xD6, 0x02, 0xFA, 0xAA};
         CHECK(wx13::tp211bCheck(a, 6) == 0x14FF && wx13::tp211bCheck(c, 6) == 0xC41E, "TP211B check on the notes' frames");

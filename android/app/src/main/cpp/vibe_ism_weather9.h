@@ -6,6 +6,7 @@
 // FACTS only. Our own code throughout.
 #pragma once
 #include "vibe_ism_wxkit.h"
+#include <array>
 
 namespace vibeism {
 namespace wx9 {
@@ -16,7 +17,11 @@ namespace wx9 {
 //  CRC-8 0x31 over all six = 0.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool efth800(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& w : wx::pwm(b.ook, 250, 500, 900, 0, 750)) {
+    /* ★ weather pass 2 (2026-11-12): a strong close sensor's marks come out stretched by ~190 µs (the corpus: 440 / 650
+     *  µs, syncs 880, the period unchanged at ~730 µs) — every mark then sat above the nominal midpoint and read as a 1.
+     *  The stretched timing is tried second; the CRC decides. */
+  for (const auto& tm : {std::array<double, 3>{250, 500, 750}, std::array<double, 3>{440, 650, 880}})
+    for (const Bits& w : wx::pwm(b.ook, tm[0], tm[1], 900, 0, tm[2])) {
         if (w.size() != 48 && w.size() != 49) continue;   // (a trailing bit is common)
         const auto by = bytesAt(w, 0, 6);
         if (crc8(by.data(), 6, 0x31, 0) != 0 || (!by[0] && !by[1] && !by[2] && !by[4])) continue;
