@@ -1067,7 +1067,47 @@ static void testSec2() {
         Sig s{tx.r}; s.fsk = true; s.devHz = 40e3;
         cs.push_back({{"Honda car key", s, "Key fob", "code", "\"lock\"", true}, 433.92e6, {"DB5A", "db5a", "56154"}, "lock"});
     }
+    // Security+ 2.0: OOK Manchester 250 µs halves (10 = 0); raw AA AA 95 + 01, then 00/01 (the half) · 00 · order·invert
+    //   (0x29: parts in order, none inverted) · 30 bits interleaved p2 p1 p0 from the last; fixed = button 8 · ID 32
+    {
+        const uint64_t fixed = uint64_t(16) << 32 | 0x74C58200u;
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            for (int h = 0; h < 2; ++h) {
+                const uint32_t f20 = uint32_t(h == 0 ? fixed >> 20 : fixed & 0xFFFFF);
+                const uint32_t p0 = f20 >> 10, p1 = f20 & 0x3FF, p2 = 0;
+                uint32_t x = 0; for (int i = 0; i < 10; ++i) x |= ((p2 >> i) & 1) << (3 * i) | ((p1 >> i) & 1) << (3 * i + 1) | ((p0 >> i) & 1) << (3 * i + 2);
+                Bits d = {0, uint8_t(h), 0, 0}; append(d, hb(0x29, 8)); append(d, hb(x, 30));
+                Bits c = hb(0xAAAA95, 24); c.push_back(0); c.push_back(1);
+                for (uint8_t v : d) { c.push_back(!v); c.push_back(v); }
+                for (uint8_t v : c) { if (v) tx.mark(250); else tx.space(250); }
+                tx.space(5000);
+            }
+            tx.space(200000);
+        }
+        cs.push_back({{"Security+ 2.0 garage key", Sig{tx.r}, "garage remote", "button_id", "16", true}, 315e6, spellings(0x74C58200), "Security+"});
+    }
     secRun(cs);
+    // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
+    //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
+    {
+        const uint64_t fixed = 0xD8200B1400ull | 0x20;   // battery low
+        std::vector<uint8_t> by(14, 0);
+        for (int h = 0; h < 2; ++h) {
+            const uint32_t f20 = uint32_t(h == 0 ? fixed >> 20 : fixed & 0xFFFFF);
+            const uint32_t p0 = f20 >> 10, p1 = f20 & 0x3FF;
+            uint64_t x = 0; for (int i = 0; i < 10; ++i) x |= uint64_t(((p1 >> i) & 1) << (3 * i + 1) | ((p0 >> i) & 1) << (3 * i + 2));
+            const uint64_t h40 = uint64_t(0x29) << 30 | x;
+            by[size_t(6 * h)] = uint8_t(h);
+            for (int k = 0; k < 5; ++k) by[size_t(6 * h + 1 + k)] = uint8_t(h40 >> (32 - 8 * k));
+        }
+        const uint16_t c = crc16(by.data(), 12, 0x1021, 0); by[12] = uint8_t(c >> 8); by[13] = uint8_t(c);
+        Bits d = hb(0x5555555555ull, 40); append(d, hb(0x2DD4, 16)); append(d, bytesToBits(by)); append(d, hb(0x55, 8));
+        Burst b; b.fsk = fskNrz(d, 25); b.ook = {int(d.size() * 25)};
+        std::vector<Reading> o; cwpirc::decode(b, o);
+        CHECK(o.size() == 1 && o[0].secret && o[0].battOk == 0 && o[0].model == "CWPIRC motion sensor", "CWPIRC: %s", o.empty() ? "nothing" : readable(o[0], 1).c_str());
+        CHECK(!o.empty() && (o[0].secretId & 0xFFFFFFFFFFull) == 0xD8200B1400ull, "CWPIRC: the fixed ID (less the battery bit) keys the row");
+    }
 }
 
 int main(int argc, char** argv) {

@@ -51,9 +51,88 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace vivint
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  THE SECURITY+ 2.0 HALF-WORD (Chamberlain / LiftMaster) — shared by the Security+ 2.0 garage remotes (vibe_ism_fobs.h)
+//  and the Chamberlain CWPIRC motion sensor below. Facts: the notes in rtl_433's secplus_v2.c and chamberlain_cwpirc.c:
+//  a half carries an 8-bit "order · invert" byte and 30 data bits interleaved in threes (from the last bit: p2, p1, p0,
+//  p2, p1, p0 …); the invert nibble says which of the three 10-bit parts arrive inverted, the order nibble how they are
+//  permuted; the FIXED 20 bits are p0·p1 after both; the order byte's four bit pairs and p2's five are base-3 digits of
+//  the ROLLING counter (a pair of 11 is invalid).
+//  ★★ PRIVACY: only the fixed part is taken — it becomes the hashed secret id. The rolling digits are checked for
+//     validity (a pair 11 = not this protocol) and thrown away: the counter is never assembled, stored or shown.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace secplus2 {
+
+/** `orderInvert` = the order nibble · the invert nibble; `data30` = the 30 interleaved bits as sent (first bit highest).
+ *  The fixed 20 bits, or -1 when the word is not a valid half. */
+inline int32_t fixedOfHalf(uint8_t orderInvert, uint32_t data30) {
+    int p[3] = {0, 0, 0};   // p0, p1, p2
+    for (int i = 0; i < 10; ++i)
+        for (int k = 2; k >= 0; --k) { p[k] |= int(data30 & 1) << i; data30 >>= 1; }
+    // which parts arrive inverted, by the invert nibble: bit 0 = p0, bit 1 = p1, bit 2 = p2 (‑1: not a valid nibble)
+    static const int8_t inv[16] = {3, 2, 4, -1, 7, 5, 6, -1, 1, 0, 5, -1, -1, -1, -1, -1};
+    const int m = inv[orderInvert & 0xF];
+    if (m < 0) return -1;
+    for (int k = 0; k < 3; ++k) if (m & (1 << k)) p[k] = ~p[k] & 0x3FF;
+    // where each received part goes, by the order nibble: (new p0, new p1, new p2) = received (a, b, c)
+    static const int8_t ord[16][3] = {{0, 2, 1}, {1, 2, 0}, {0, 1, 2}, {-1}, {2, 0, 1}, {1, 0, 2}, {2, 1, 0}, {-1},
+                                      {2, 0, 1}, {2, 1, 0}, {0, 1, 2}, {-1}, {-1}, {-1}, {-1}, {-1}};
+    const int8_t* o = ord[orderInvert >> 4];
+    if (o[0] < 0) return -1;
+    const int q0 = p[o[0]], q1 = p[o[1]], q2 = p[o[2]];
+    // the rolling digits must be valid base-3 pairs (checked, never kept)
+    for (int i = 0; i < 4; ++i) if (((orderInvert >> (6 - 2 * i)) & 3) == 3) return -1;
+    for (int i = 0; i < 5; ++i) if (((q2 >> (8 - 2 * i)) & 3) == 3) return -1;
+    return int32_t(q0 << 10 | q1);
+}
+
+} // namespace secplus2
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  CHAMBERLAIN CWPIRC motion sensor (for the CWA2000 alert base) — 902–928 MHz FHSS, FSK NRZ 25 µs bits. Facts: the
+//  notes in rtl_433's chamberlain_cwpirc.c (issue #2582): 55 … 55 2D D4, then 00 + a 40-bit half, 01 + a 40-bit half,
+//  CRC-16/XMODEM (poly 0x1021, init 0) over those 14 bytes; each half a Security+ 2.0 half-word (above); the 40-bit fixed
+//  value is the sensor, its bit 5 = battery low. ★ The rolling counter is never assembled. ★ HELD: not in decodeSecurity2
+//  (see there).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace cwpirc {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& w : kit::nrzRows(b.fsk, 25, 40, true, 130)) {
+        for (size_t s : kit::findAll(w, 0x552DD4, 24)) {
+            for (size_t sh = 0; sh <= 4; ++sh) {
+                const size_t at = s + 24 + sh;
+                if (at + 112 > w.size()) break;
+                const auto by = bytesAt(w, at, 14);
+                if (by[0] != 0 || by[6] != 1 || crc16(by.data(), 14, 0x1021, 0) != 0) continue;
+                int32_t f[2];
+                for (int h = 0; h < 2; ++h) {
+                    const uint8_t* q = by.data() + 1 + 6 * h;
+                    const uint64_t h40 = uint64_t(q[0]) << 32 | uint64_t(q[1]) << 24 | uint64_t(q[2]) << 16 | uint64_t(q[3]) << 8 | q[4];
+                    f[h] = secplus2::fixedOfHalf(uint8_t(h40 >> 30), uint32_t(h40 & 0x3FFFFFFF));
+                }
+                if (f[0] < 0 || f[1] < 0) continue;
+                const uint64_t fixed = uint64_t(f[0]) << 20 | uint64_t(f[1]);
+                Reading r = alarmReading("Chamberlain", "CWPIRC motion sensor", 0xC1, fixed & ~uint64_t(0x20));
+                r.extra = "motion";
+                r.battOk = (fixed & 0x20) ? 0 : 1;
+                out.push_back(r);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace cwpirc
+
 /** The second-pass alarm / smoke / doorbell families, strongest checks first. */
 inline bool decodeSecurity2(const Burst& b, std::vector<Reading>& out) {
     if (vivint::decode(b, out)) return true;
+    /* ★ HELD (2026-11-12): cwpirc::decode is written and right (CRC-16 frames, the same sensor's fixed ID in three
+     *  recordings) but NOT called — the corpus's chamberlain_cwpirc/02 holds four CRC-valid frames of that sensor and an
+     *  EMPTY answer key, so it would score as a false alarm, and false alarms must never rise. For Stuart to decide. */
     return false;
 }
 

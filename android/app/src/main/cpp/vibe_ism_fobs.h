@@ -234,8 +234,49 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace honda
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SECURITY+ 2.0 garage / gate remotes (Chamberlain, LiftMaster, Craftsman; 310 / 315 / 390 MHz) — OOK Manchester,
+//  250 µs halves. Facts: the notes in rtl_433's secplus_v2.c: raw chips AA AA 95 6 (28), Manchester from the 27th; a
+//  packet = 2 bits (00 / 01: which half) · 2 zero bits · the 8-bit order·invert byte · 30 data bits — a Security+ 2.0
+//  half-word (vibe_ism_security2.h); the two halves' fixed parts make 40 bits: button 8 · remote ID 32. A press sends
+//  both halves, repeated.
+//  ★★ PRIVACY: a rolling-code garage key — only "Key fob #n · Security+ 2.0 · button 16"; the remote ID only hashed;
+//     the rolling counter is never assembled. A burst holding only one half shows nothing (half an ID is not a sender).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace secplusv2 {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    int32_t half[2] = {-1, -1};
+    for (const Bits& c : kit::nrzRows(b.ook, 250, 6, false, 100)) {
+        for (size_t s : kit::findAll(c, 0xAAAA956, 28)) {
+            for (int conv = 0; conv < 2; ++conv) {
+                Bits d = kit::manchesterAt(c, s + 26, 42, conv == 0);
+                if (d.size() < 42) continue;
+                if (d[0] || d[2] || d[3]) continue;
+                const int32_t f = secplus2::fixedOfHalf(uint8_t(bitsAt(d, 4, 8)), bitsAt(d, 12, 30));
+                if (f < 0) continue;
+                half[d[1]] = f;
+                break;
+            }
+        }
+    }
+    if (half[0] < 0 || half[1] < 0) return false;
+    const uint64_t fixed = uint64_t(half[0]) << 20 | uint64_t(half[1]);
+    const int bt = int(fixed >> 32);
+    const uint32_t id = uint32_t(fixed);
+    if (id == 0) return false;
+    Reading r = remoteReading("keyfob", "Security+ 2.0", "garage remote", 0xD6, id);
+    r.button = std::to_string(bt);
+    r.fact("button_id", (long long)bt);
+    out.push_back(r);
+    return true;
+}
+
+} // namespace secplusv2
+
 /** The second-pass remote / fob families, strongest checks first. */
 inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
+    if (secplusv2::decode(b, out)) return true;
     if (caralarm::decode(b, out)) return true;
     if (ford::decode(b, out)) return true;
     if (honda::decode(b, out)) return true;
