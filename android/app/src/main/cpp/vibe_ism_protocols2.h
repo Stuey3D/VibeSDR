@@ -15,6 +15,7 @@
 #include "vibe_ism_weather9.h"   // ★ weather pass 2026-11-11: EFTH-800, ThermoPro, Rubicson, Bresser 3CH, WT450
 #include "vibe_ism_weather10.h"  // ★ weather pass 2026-11-11: Bresser 5/6/7-in-1 FSK family, Maverick ET-73x, Companion WTR001
 #include "vibe_ism_weather11.h"  // ★ weather pass 2026-11-11: TFA Drop, Inkbird ITH-20R
+#include "vibe_ism_weather12.h"  // ★ weather pass 2 2026-11-12: La Crosse View (LTV)
 #include "vibe_ism_tpms.h"     // ★ V12 2026-11-11: tyre-pressure sensors, make by make
 #include "vibe_ism_kit.h"        // ★ V12 2026-11-11: the home families' tools (Current Cost uses its NRZ rows)
 
@@ -485,6 +486,7 @@ inline bool bandPlausible(const Reading& r, double freqHz) {
 inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (oregon::decode(b, out)) return;
     if (fofsk::decode(b, out)) return;
+    if (wx12::decode(b, out)) return;
     if (fineoffset::decodeWh1080(b, out)) return;
     if (fineoffset::decodeWh2(b, out)) return;
     if (sl109h::decode(b, out)) return;      // ★ before the 609: a background 609 inside an SL109H's channel must not win

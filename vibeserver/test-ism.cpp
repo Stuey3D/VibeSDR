@@ -624,6 +624,31 @@ static Runs wt450Tx(int house, int ch, double t, int h) {
     return dmcTx(w, 976, 3, 20000);
 }
 
+// ── WEATHER PASS 2 (2026-11-12) — encoders from the frame facts in vibe_ism_weather12.h … ──
+/** La Crosse View LTV-TH3: FSK NRZ 104 µs, AA preamble, D2 AA 2D D4, ID 24 · seq · temperature 12 · humidity 12 · CRC-8. */
+static Runs ltvTh3Tx(uint32_t id, double t, int h) {
+    const int raw = int(std::lround(t * 10)) + 400;
+    std::vector<uint8_t> m = {uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x06, uint8_t(raw >> 4), uint8_t((raw & 0xF) << 4 | h >> 8), uint8_t(h)};
+    m.push_back(crc8(m.data(), 7, 0x31, 0));
+    std::vector<uint8_t> f = {0xAA, 0xAA, 0xAA, 0xAA, 0xD2, 0xAA, 0x2D, 0xD4}; f.insert(f.end(), m.begin(), m.end()); f.push_back(0x55);
+    return nrzFsk(bytesToBits(f), 104);
+}
+/** Bresser garden soil sensor 0x09: FSK NRZ 50 µs, AA preamble, F3 E9 10 5E 51, 33 bytes, CRC-16 0x1021 init 0xD636. */
+static Runs gardenSoilTx(uint32_t src, double tF, int moist) {
+    std::vector<uint8_t> m(33, 0);
+    const uint32_t dst = 0x1F000D9C;
+    for (int k = 0; k < 4; ++k) { m[size_t(k)] = uint8_t(dst >> (8 * k)); m[size_t(4 + k)] = uint8_t(src >> (8 * k)); }
+    const int16_t raw = int16_t(std::lround(tF * 10));
+    const uint8_t pay[] = {0x0E, 0x06, 0x00, 0x08, 0x88, uint8_t(moist), 0x85, uint8_t(raw), uint8_t(raw >> 8)};
+    m[8] = 15; m[9] = 0x09; m[10] = 9;
+    for (int k = 0; k < 9; ++k) m[size_t(11 + k)] = pay[k];
+    uint16_t c = 0xD636;
+    for (int i = 0; i < 31; ++i) { c ^= uint16_t(m[size_t(i)] << 8); for (int k = 0; k < 8; ++k) c = uint16_t(c & 0x8000 ? (c << 1) ^ 0x1021 : c << 1); }
+    m[31] = uint8_t(c >> 8); m[32] = uint8_t(c);
+    std::vector<uint8_t> f(12, 0xAA); f.insert(f.end(), {0xF3, 0xE9, 0x10, 0x5E, 0x51}); f.insert(f.end(), m.begin(), m.end()); f.push_back(0x55);
+    return nrzFsk(bytesToBits(f), 50);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -1049,6 +1074,9 @@ int main(int argc, char** argv) {
     { Sig s{bresser6Tx(3.8, 96)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"Bresser 6-in-1", s, "6-in-1", 3.8}); }
     cases.push_back({"Eurochron EFTH-800", {efth800Tx(0xE5A, 19.7, 44)}, "EFTH-800", 19.7});
     cases.push_back({"WT450", {wt450Tx(3, 2, 20.25, 51)}, "WT450", 20.25});
+    // ★ weather pass 2 (2026-11-12)
+    { Sig s{ltvTh3Tx(0x13EFB7, 18.2, 49)}; s.fsk = true; s.devHz = 40e3; cases.push_back({"La Crosse LTV-TH3", s, "LTV-TH3", 18.2}); }
+    { Sig s{gardenSoilTx(0x470005B5, 66.0, 47)}; s.fsk = true; s.devHz = 36e3; cases.push_back({"Bresser garden soil", s, "soil sensor", (66.0 - 32) / 1.8}); }
     printf(" end to end at 2.4 MS/s, +120 kHz, 20 dB-ish SNR\n");
     for (auto& c : cases) {
         c.s.offHz = 120e3;
