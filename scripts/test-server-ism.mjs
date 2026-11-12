@@ -1,5 +1,5 @@
 // test-server-ism.mjs — V12 ISM mode through the REAL server: a fake rtl_tcp replaying a synthetic 433 MHz clip
-// (`test-ism --write-clip`: an Oregon THGR810, a WH1080, a TPMS twice, a fixed-code remote), a spectrum socket, and the
+// (`test-ism --write-clip`: an Oregon THGR810, a WH1080, a Schrader TPMS twice, a fixed-code remote), a spectrum socket, and the
 // contract of docs/v12/ISM-DECODER.md: the capability (ism / ismBands / ismLanding), entering by band, the device list
 // with readable lines, the PRIVACY rule on the wire (no TPMS ID, no remote code), a band STEP, an exact frequency, and
 // leaving with the receiver given back exactly as found. Silent: no audio socket is opened.
@@ -78,10 +78,10 @@ try {
   ok(oregon && oregon.line === 'Oregon Scientific THGR810 / THGN801 · 18.4 °C · 62 % RH · battery OK · ch 2', `the Oregon line: ${oregon && oregon.line}`);
   ok(oregon && Math.abs(oregon.freq - 433.92e6) < 15e3, `its frequency: ${oregon && oregon.freq}`);
   const wire = msgs.join('\n');
-  // ★ PRIVACY on the wire: the TPMS ID 11223344 and the remote's code A5C3E8 (20-bit address A5C3E) never appear, in any form
-  for (const bad of ['11223344', '287454020', 'A5C3E', 'a5c3e', '678974', '10863592']) ok(!wire.includes(bad), `the wire never carries ${bad}`);
+  // ★ PRIVACY on the wire: the TPMS ID 1223344 (a Schrader GG4's 28 bits) and the remote's code A5C3E8 (20-bit address A5C3E) never appear, in any form
+  for (const bad of ['1223344', '19018564', 'A5C3E', 'a5c3e', '678974', '10863592']) ok(!wire.includes(bad), `the wire never carries ${bad}`);
   const tp = last.devices.find((d) => d.kind === 'tpms');
-  ok(tp && tp.nick === 1 && tp.id === undefined && tp.line === 'TPMS #1 · type B · 32 PSI · 18 °C', `the TPMS line: ${tp && tp.line}`);
+  ok(tp && tp.nick === 1 && tp.id === undefined && tp.line === 'TPMS #1 · Schrader · 32 PSI · 18 °C', `the TPMS line: ${tp && tp.line}`);
 
   // a band STEP up: 868, the list kept
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));

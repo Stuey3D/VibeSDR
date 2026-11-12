@@ -5,7 +5,7 @@ VibeServer's answer to OpenWebRX's "ISM" (rtl_433) mode, but **human-readable**:
 ```
 Oregon Scientific THGR810 / THGN801 · 18.4 °C · 62 % RH · battery OK · ch 2
 Fine Offset WH1080 · 12.5 °C · 90 % RH · wind 4 km/h S · gust 7 km/h · rain 23.4 mm · battery OK
-TPMS #1 · type B · 32 PSI · 18 °C
+TPMS #1 · Schrader · 32 PSI · 18 °C
 Key fob #1 · KeeLoq · button 2 · battery OK
 Doorbell / remote #1 · button A
 ```
@@ -25,6 +25,27 @@ only description is GPL source code is listed as "not done: no non-GPL descripti
 censored-mean noise floor, an NCO, a triangular decimator, a polar discriminator, hysteresis slicing, SipHash) is
 textbook. Where a write-up left a detail open, the choice is marked **ASSUMED** in the code and in the table — each is a
 thing a real capture will confirm or correct.
+
+**★ From the weather pass (2026-11-11), with Stuart's agreement:** rtl_433's device files (`src/devices/*.c`) MAY be
+read for protocol **facts** — frame layout, timing, sync, check polynomial / init / coverage, scaling — and were, for the
+families in `vibe_ism_weather2.h` … `vibe_ism_weather10.h` and the fixes to the phase-1 weather decoders. No code, table
+or identifier was copied: every decoder is ours, on our own slicers (`vibe_ism_wxkit.h`). Independent public write-ups
+are cited first wherever one exists (the Oregon "RF Protocols II" PDF, the tfd.hu Auriol/Alecto PDF, ala-paavola.fi's
+WT450H page, andreafabrizi's Bresser 5-in-1 notes, the f6fbb.org TX3 page, Ray Wang's AcuRite posts…). Each family was
+scored on the rtl_433_tests recordings (`scripts/ism-corpus.mjs` — test input only, never in the repository).
+
+**TPMS, 2026-11-11 (Stuart: *"we dont want to copy but if we can take inspiration"*).** For the tyre sensors
+(`vibe_ism_tpms.h`) rtl_433's device notes WERE read — for the FACTS of each frame only (bit timing, modulation, sync,
+field layout, check polynomial / start, scaling), most of which exist nowhere else. No code, table, comment or
+identifier was copied: the framing engine and every decoder are our own, checked against real recordings. Each family
+names its source above itself and in the table. The paragraph above still describes every decoder written before then.
+
+**★ 2026-11-11 — the rule widened (Stuart: "we dont want to copy but if we can take inspiration … only decoding 3% is
+pityful").** For the families that have NO other public description, the protocol notes at the head of rtl_433's device
+files (and its `conf/` format descriptions) may be read for FACTS — layout, timing, line code, sync, check polynomial,
+scaling — never code, tables, comments or identifiers; every decoder is still our own code on our own slicers, and each
+cites where its facts came from (a datasheet, patent, FCC report or write-up first where one exists). rtl_433's test
+recordings (`rtl_433_tests`) are used as test INPUT only, outside the repository — `scripts/ism-corpus.mjs`.
 
 ## Architecture — a whole-radio mode, not a passband decoder
 
@@ -60,7 +81,12 @@ exactly as found). Why not a decoder on the listener's DDC channel:
    lengths in µs (+mark / −space). The burst's carrier (or the tones' midpoint) refines the reported frequency.
    A burst under 6.5 dB, or with > 6000 transitions, is not decoded (noise reads ~4.5 dB — measured).
 5. **Bit slicers** (shared by every protocol): PWM, PPM, NRZ, Manchester (both conventions, re-phasing on a violation),
-   differential Manchester; CRC-8 / CRC-16 (MSB-first) and the helpers.
+   differential Manchester; CRC-8 / CRC-16 (MSB-first) and the helpers. **The weather kit** (`vibe_ism_wxkit.h`,
+   2026-11-11) adds the lenient forms real sensors need — a run is short or long by which side of the midpoint it
+   falls, only a run past the gap limit ends a row (a stretched pulse no longer costs the frame); PPM can absorb noise
+   slivers inside a space; PCM (NRZ / RZ), "first edge = 0" Manchester, biphase (DMC), repeated-row search, CRC-4,
+   reflected CRC-8/16, the LFSR digests (8 / 8-reflected / 16), and `fskRows` — NRZ from the discriminator AND from a
+   tone's own envelope (wide-deviation FSK opens a channel per tone: each is OOK of one tone).
 
 ### The protocols (`vibe_ism_protocols*.h`) — see the coverage table below
 
@@ -138,7 +164,11 @@ first · `count` times heard. Absent = not carried.
 - To tell cars apart: **a per-server nickname** ("TPMS #2"), a number handed out in first-heard order, keyed by a
   **SipHash-2-4 of the ID under a 128-bit salt drawn at every start and held only in the process's memory** — never sent,
   logged or stored. The raw ID is wiped from the reading the moment it is hashed (`Tracker::accept`). A restart
-  renumbers. (Our TPMS formats do not name a make — see the table; the nickname then reads "TPMS #2".)
+  renumbers. The make goes in the line, never the ID: "TPMS #2 · Toyota PMV-C210 · 34 PSI · 29 °C".
+- **One frame or two** (2026-11-11): a tyre whose frame carries a strong check (a CRC-8 or CRC-16 behind an exact sync,
+  or a CRC plus an inverted copy of the pressure) is listed from its first frame — a car passing at 50 km/h may be heard
+  once. A weak check (8-bit sum or XOR, 2- or 5-bit check, none) is listed only once heard twice alike within 90 s, and
+  an unconfirmed frame takes no nickname. Each family below says which it is.
 - **Key fobs** show only "Key fob #n · KeeLoq · button 2" — the button bits travel in clear on KeeLoq; **never the code,
   rolling or fixed, never raw bits**.
 - **Suspected key fobs** (2026-10-25, Stuart: "add them to a list that maybe says suspected keyfob"): an UNDECODED press
@@ -216,21 +246,142 @@ slicer's smoothing is in µs, so every family above slices as before. Everything
 | AcuRite 592TX-family T/H | 433 OOK PWM | **done** | Ray Wang, rayshobby.net parts 1–3 (CC BY-SA text) | temperature offset 1000 (author's empirical 1005); checksum identified by us on his examples |
 | AcuRite 00899 rain gauge | 433 OOK PWM | **done** (tips) | same | mm per tip unpublished — shown as "N bucket tips" |
 | AcuRite 00782 temperature | 433 OOK PPM | **done** | same | no checksum: 3 identical frames required |
-| Current Cost transmitters (electricity) | 433 FSK 3918 bps | **done** | Jack Kelly, rfm_edf_ecomanager wiki | counter (gas/water) packets not shown yet |
-| KeeLoq code-hopping fobs/remotes (Microchip HCS301 class) | 315/433 OOK PWM | **done, privacy** | Microchip HCS301 datasheet DS21143B | make unknown from the air: "KeeLoq" |
+| Current Cost transmitters (electricity), EnviR, impulse counters (gas / water / electricity) | 433 FSK 3918 bps | **done** (corpus 31/31) | Jack Kelly, rfm_edf_ecomanager wiki; EnviR preamble + counter layout from rtl_433's notes | — |
+| KeeLoq code-hopping fobs/remotes (Microchip HCS200/301 class) | 315/433 OOK PWM | **done, privacy** (corpus: HCS200 12/12 with the button) | Microchip HCS301 datasheet DS21143B | make unknown from the air: "KeeLoq" |
 | EV1527 / PT2262 fixed-code doorbells, PIRs, contacts, gate remotes | 315/433 OOK PWM | **done, privacy** | EV1527/SC1527 and PT2262 datasheets | 2 identical words required |
-| TPMS "type A" | FSK diff. Manchester | **done, privacy** (temperature) | Krstic et al., "Applying TPMS Devices for Traffic Management Purposes" (IHP/DLR) | **pressure scale not published** — shown without pressure; make not named |
-| TPMS "type B" | OOK, 240 µs symbols | **done, privacy** (kPa = raw × 2.5, °C) | same paper | **line code and preamble not published**: Manchester/NRZ both tried, frame after an 8-bit run-in, latest start wins; confirm-twice |
-| TPMS "type C" | FSK Manchester | not done | same paper | XOR checksum too weak without a published preamble; pressure scale not given |
-| TPMS by manufacturer (Schrader, Continental/VDO, Huf/Beru, Pacific/Toyota, TRW…) | 315/433 | **not done: no non-GPL description** | — | **so "Toyota TPMS" cannot be named yet** |
-| LaCrosse TX141TH-Bv2 / TX141-Bv3 | 433 OOK | not done: no non-GPL description | — | |
-| AcuRite 5-in-1 (VN1TXC), 606TX | 433 OOK | not done: no non-GPL description | — | |
-| Bresser 5/6/7-in-1 | 868 FSK | not done: no field description outside GPL-derived code | — | |
-| Ambient Weather F007TH | 433 Manchester | not done: half-bit period and the digest's byte range unpublished | forum + README (partial) | |
-| Efergy e2 / Elite | 433 FSK | not done: framing (preamble/sync) and bit rate unpublished | Elijah / Gough Lui blogs (layout only) | |
-| Fine Offset WH24/WH65/WS68/WH51, Ecowitt | 433/868 FSK | not done: not found in the research pass | — | worth a second look |
+| **TPMS — 34 decoders (≈ 40 sensor models) in `vibe_ism_tpms.h`** (2026-11-11) | | | rtl_433 device notes (`src/devices/tpms_*.c`, `schraeder.c`) **read for facts only** — layout, timing, check — plus FCC filings and the IHP/DLR paper where they exist; our own framing engine and code (see below) | corpus = the rtl_433_tests recordings (`scripts/ism-corpus.mjs`): match / of the folder's keyed recordings |
+| Schrader GG4 (EU/US OE) | 433 OOK Manch. 120 µs | **done, strong** (CRC-8) | schraeder.c notes | corpus 53/54 |
+| Schrader EG53MA4 (Opel/Vauxhall/Saab/GM) | 433 OOK Manch. 123 µs | **done, weak** (sum) | schraeder.c notes | corpus 10/10 (incl. the PA66GF35 type B misread); framed from the END |
+| Schrader SMD3MA4 (Subaru) / 3039 (Nissan, Infiniti, Renault Koleos) | 315 OOK PCM 120 µs | **done, weak** (2-bit) — no pressure | schraeder.c notes, JoeSc/Subaru-TPMS-Spoofing | same frame, two pressure scales: none shown; corpus 7/7 decoded |
+| Nissan (Schrader FSK) | 315 FSK 120 µs | **done, weak** (2-bit) | tpms_nissan.c notes | corpus 10/10 |
+| Schrader RDC3 motorcycle | 433 OOK Manch. 122 µs | **done, strong** (CRC-8) | tpms_schrader_motorcycle.c notes, FCC MRXRDC3 | not in corpus (test-ism only) |
+| Porsche 987 (was "type A") | 433 FSK diff. Manch. 52 µs | **done, strong** (CRC-16) — now with pressure | IHP/DLR paper + tpms_porsche.c notes | the notes' 2 worked frames in test-ism |
+| Toyota PMV-C210 (Pacific) | 433 FSK diff. Manch. 52 µs | **done, strong** (CRC-8 + inverted pressure) | tpms_toyota.c notes, issue #706 | corpus 8/15 — 6 old captures with ±75 kHz deviation the detector splits into two silent tones |
+| Toyota PMV-107J (Pacific, US) | 315 FSK diff. Manch. 100 µs | **done, strong** (CRC-8 + inverted pressure) | FCC PAXPMV107J + tpms_pmv107j.c notes | corpus 27/29 |
+| Renault (Clio, Captur, Zoe) | 433 FSK Manch. 52 µs | **done, strong** (CRC-8) | tpms_renault.c notes | corpus 2/4 (wide-deviation captures) |
+| Renault 0435R (VDO: Mégane III, Scénic III, Laguna III, Zoe) | 433 FSK Manch. | **done, weak** (XOR) | tpms_renault_0435r.c notes, VDO 2017 list | not in corpus; tried before Abarth (same XOR frame shape) |
+| Hyundai / Kia VDO TG1C (i30 …) | 433 FSK Manch. | **done, strong** (CRC-8) | tpms_hyundai_vdo.c notes, FCC KR5TIS-01 | not in corpus |
+| Kia Rio III / some Hyundai | 433 FSK Manch. 50 µs | **done, weak** (5-bit CRC) | tpms_kia.c notes | not in corpus |
+| Hyundai Elantra 2012 / Honda Civic (TRW GQ4-44T) | 315 FSK Manch. | **done, strong** (CRC-8) | tpms_elantra2012.c notes | corpus 4/4 |
+| Honda TRW PPA-GF33 (GQ4-36T) | 315 FSK Manch. 50 µs | **done, strong** (CRC-8) | tpms_honda.c notes | corpus 1/1 |
+| TRW GQ4-70T (Chrysler / Jeep / Dodge / Ram) | 315/433 OOK + FSK Manch. 52 µs | **done, strong** (CRC-8) | tpms_trw.c notes, FCC GQ4-70T | not in corpus |
+| Citroën / Peugeot / Jeep (VDO) | 433 FSK Manch. | **done, weak** (XOR) — temperature only | tpms_citroen.c, tpms_jeep.c notes | identical frames, pressure scale ×1 vs ×2: none shown; corpus 3/3 |
+| Ford (VDO S180084730Z) | 315/433 FSK Manch. | **done, weak** (sum + state) | tpms_ford.c notes | corpus 2/3; learn-tool frames shown without pressure |
+| Abarth 124 / Fiat 124 / Mazda MX-5 ND (VDO TG1C) | 433 FSK Manch. | **done, weak** (XOR) | tpms_abarth124.c notes | corpus 4/4 |
+| Shenzhen EGQ Q85 | 433 FSK Manch. | **done, strong** (CRC-16) | tpms_abarth124.c notes (#2556) | corpus 6/6 (needed the gated discriminator, below) |
+| BMW Gen4/Gen5 (Huf/Beru, Schrader-Sensata, Continental), Audi alert | 433 FSK Manch. 25 µs | **done, strong** (CRC-8 0x2F) | tpms_bmw.c notes | corpus: `continental_tpms` 3/4 (no answer key — IDs and values agree with its README); the BMW .cs16 captures start too close to the frame |
+| BMW Gen2 / Gen3 | 433 FSK diff. Manch. 52 µs | **done, strong** (CRC-16) | tpms_bmw_g3.c notes | not in corpus |
+| Mercedes-Benz Sprinter (2025) | 433 FSK Manch. 25 µs | **done, strong** (CRC-8 0x2F) | tpms_mercedes_benz.c notes | corpus 1/2 |
+| Truck solar TPMS | 433 FSK Manch. | **done, weak** (XOR) | tpms_truck.c notes | corpus 5/6 |
+| Jansite Solar | 433 FSK Manch. | **done, strong** (CRC-16) | tpms_jansite_solar.c notes | corpus 1/1 |
+| Jansite TY02S | 433 FSK Manch. | **done, weak** (no check — a fixed 16-bit trailer) | tpms_jansite.c notes (off in rtl_433: last byte unknown) | corpus 29/29 |
+| Airpuxem TYH11 (Senasic SNP739D) | 433 FSK Manch. | **done, strong** (CRC-8) | tpms_airpuxem.c notes | not in corpus |
+| Steelmate TP-S15 / R-Lake | 433 FSK Manch. 50 µs, LSB first | **done, weak** (sum) | steelmate.c notes (#3200) | corpus 24/31 (the rest start too close to the capture's start) |
+| SmarTire Vantage (Aston Martin DB9) | 433 OOK PCM 167 µs, diff. Manch. | **done, weak** (CRC-7) | tpms_smartire.c notes | corpus 1/1 |
+| EezTire E618 / Carchet / TST 507 | 433 OOK Manch. 50 µs | **done, weak** (sum) | tpms_eezrv.c notes | corpus 4/4 (EEZ + tst507) |
+| Gear Hive | 433 OOK Manch. 104 µs | **done, weak** (no check — 10 fixed bits) | tpms_gear_hive.c notes | corpus 2/2 |
+| GM aftermarket (EL-50448) | 433 OOK Manch. 120 µs | **done, weak** (sum) | tpms_gm.c notes | corpus 2/2 |
+| Sefis M3 / Careud / Sykik | 433 FSK Manch. | **done, strong** (CRC-16) — no ID in the frame | tpms_sefis_m3.c notes | corpus 2/2; all Sefis tyres share one line |
+| AVE | 433 FSK diff. Manch. 100 µs | **done, strong** (CRC-8) | tpms_ave.c notes | not in corpus |
+| TyreGuard 400 (Davies Craig, 434.1 MHz) | 433 OOK Manch. 100 µs | **done, strong** (CRC-8) | tpms_tyreguard400.c notes | not in corpus |
+| "Type B" (OOK, CRC-8 searched over every offset) | — | **retired** | — | on the corpus it read only weather sensors, remotes and doorbells — all 12 WRONG of the baseline — and misread real Schrader frames |
+| Schrader MRXBC5A4 (BMW) | 433 | not done | schraeder.c notes | its 4 captures are FSK where the notes say OOK; the framing could not be confirmed on them |
+| iMars T240 | 433 OOK | not done | tpms_imars_t240.c notes | no pressure/temperature mapping known, and its "checksum" is a constant per unit |
+| Jansite TY468 / TY588 | 433 | not done | — | no recordings, only code lists |
+| Efergy e2 / Elite | 433 FSK | **done 2026-11-11** — see the home families below | | |
 
-Twelve families with their variants (≈ 25 models) in phase 1.
+Twelve families with their variants (≈ 25 models) in phase 1; 34 tyre-sensor decoders added 2026-11-11.
+
+**TPMS framing (`vibe_ism_tpms.h`, 2026-11-11).** Every tyre family is a chip sync + a line code + a check at one of a
+handful of chip widths (25, 50-52, 100-104, 120-123, 167 µs). A burst's runs become fixed-width CHIPS — the width
+measured from the burst (the shortest marks and the shortest spaces measured apart, so an OOK transmitter's mark
+stretch comes out) and used when within ±25 % of a family's nominal — and each family searches its sync, reads
+Manchester or differential Manchester, and checks. FSK families try both polarities and also the burst's ENVELOPE:
+a wide-deviation sensor (±60-75 kHz) arrives as two OOK channels, one per tone, and each tone's on/off IS the frame.
+The front end's discriminator now also runs over a burst whose carrier drops BETWEEN repeated frames (EGQ Q85, Jansite
+Solar, Sefis: three frames 11 ms apart) — gated to the carrier's long stretches, the gaps read as the low tone.
+Sources: Stuart (2026-11-11) — *"we dont want to copy but if we can take inspiration"*: rtl_433's device notes were read
+for the FACTS of each frame; no code, table, comment or identifier was copied.
+
+**Score on the rtl_433_tests corpus** (`node scripts/ism-corpus.mjs`, .cu8 recordings): before the TPMS work 162 match ·
+259 decoded · 12 WRONG (all "type B") · 0 false alarms; after: 363 match · 254 decoded · 0 WRONG · 0 false alarms. The
+13 fewer "decoded" were type B's false TPMS on remotes and doorbells.
+
+### Weather and environment — the weather pass (2026-11-11)
+
+Scored on the rtl_433_tests corpus (3 724 recordings): **match 162 → 1 040** across the whole corpus (decoded-with-
+nothing-to-compare 259 → 350), **WRONG 12 → 5** (the five left are all TPMS "type B" on non-weather recordings),
+**false alarms 0 → 0**. test-ism: 245 checks (17 new end-to-end weather families). "Check" is what tells a frame from
+noise; weak checks are shown once heard twice (`confirm`). Header per family = the frame facts and their sources.
+
+| Family (models) | Band / mod | Check | File |
+|---|---|---|---|
+| Oregon v2.1 / v3 — **added** THGR968, THGR328N, RTGN318 / RTGN129 / RTGR328N (first ID nibble varies), THN129 / RTHN129, BTHR918 / BTHGN129 (+ barometer), WGR968, AWR129 BBQ (hundreds digit), THGR810 rolling IDs, PCR800 AU; sign = bit 3 of nibble 11 | 433 OOK Manchester | nibble sum | `vibe_ism_protocols.h` |
+| Oregon SL109H | 433 OOK PPM 2/4 ms | 4-bit sum + repeat (confirm) | `weather2` |
+| Fine Offset / Ecowitt FSK: WH24, WH65, WS69 (+ pressure), WH25, WH32 / WH32B, WH0290 PM2.5, WH51 soil, WH31E / WH31B, WH40 / WN20 rain, WS68 wind/light, the WWVB clock frame | 433/868/915 FSK 58 µs | CRC-8 + byte sum | `weather2` |
+| Fine Offset WH1080 / WH3080 — **fixed**: 7-one preamble, 10-bit OOK temperature, UV/light (type 7) and DCF77 time (type B) frames, frame = whole row; **added** WH1050 / TFA Stratos (OOK + FSK), WH0530, Alecto WS-1200 v1/v2 | 433/868 OOK PWM, FSK | CRC-8 (+ sum) | `protocols2` |
+| La Crosse IT+ — **fixed**: 9.58 kbps (TX35 / TX25U), short preamble; **added** TX34-IT rain | 868 FSK | CRC-8 | `protocols2` |
+| La Crosse TX141-Bv2/Bv3, TX141TH-Bv2/Bv3, TX141W / TX145wsdth; WS-2310 / WS-3600; TX-3 / TX-6U / TX-7U / TX5U; TX22U-IT | 433 OOK PWM, 915 FSK | LFSR digest / CRC-8 / nibble sums + parity | `weather3` |
+| AcuRite TXR family: 592TXR tower, 5-in-1, 3-in-1, Atlas (± lightning), Optimus, 515, 6045M, 899, 1190 leak; 00275 / 00276RM; 609TXC; 606TX / **00782** (the same format — its 4th byte is the 606 digest); 590TX; 985 / 986 fridge | 433 OOK PWM / PPM | byte sum + parity / CRC-16 / LFSR / CRC-8 | `weather4` |
+| S3318P family (Conrad, Esperanza EWS, Kedsum, Pearl), Digitech XC-0324, Hideki (TS04, Cresta, Bresser 5CH, Mebus, Sigma), GT-WT-02 / -03, WT0122 / WT0124 pool, Cotech 36-7959 (SwitchDoc, Sainlogic), TFA 30.3160 pool | 433 OOK PPM / PWM / DMC / Manchester | CRC-4 / XOR / CRC-8 / sums | `weather5` |
+| Auriol AFW 2 A1, AFT 77 B2, AHFL, HG02832 / Rubicson 48957; Vauno EN8822C; AlectoV1 (T/H, rain, wind); Prologue / ThermoPro TX2 (two sensors in one burst are both read) | 433 OOK PPM / PWM | sums / LFSR / CRC-8 / repeats | `weather6` |
+| WS 7000 / WS 2500 (ELV, La Crosse); Ambient F007TH family; Ambient TX-8300 / TFA 30.3211 | 433 OOK PWM / Manchester / PPM | XOR + sum / LFSR / inverted copy + Fletcher | `weather7` |
+| GT-TMBBQ-05; TFA Twin Plus 30.3049 / KW9010; Philips AJ7010 / AJ3650; TFA 30.3196 (868) | 433 OOK, 868 FSK | sums / XOR / CRC-4 / repeats | `weather8` |
+| Eurochron EFTH-800; ThermoPro TP11 / TP08 / TP12 / TP20; Rubicson / TFA 30.3197 / inFactory (before Nexus); Bresser 3CH; WT450 / WT260H / WT405H | 433 OOK | CRC-8 / LFSR / sums / parity | `weather9` |
+| TFA Drop 30.3233 rain; Inkbird ITH-20R / IBS-P01R | 433 OOK PWM, 433 FSK 100 µs | LFSR digest + repeat / CRC-16 | `weather11` |
+| Bresser 6-in-1 family (7-in-1 indoor, new 5-in-1, soil, pool, 3-in-1 wind, Froggit WH6000, Ventus, Sencor), 7-in-1 / 3-in-1 / 8-in-1 + PM / CO2 / HCHO, 5-in-1; Maverick ET-732/733; Companion WTR001 | 868 FSK 124 µs, 433 OOK | LFSR-16 + sum / inverted copy / repeats | `weather10` |
+
+**ASSUMED / open:** the Philips AJ7010 °C formula (raw / 353 − 9.2 — the only published fit); the TFA 30.3196's 16-bit
+check key is unknown (twice alike + confirm instead); the WH24 / WH65 split by preamble length; the Maverick digest
+hides a per-reset ID (raw pattern + confirm). **Left (and why):** XC-0324 recordings that start mid-transmission — the
+detector's first frames seed its floor, so a sensor on the air from sample 0 is never detected (`ism_replay --lead 0.3`
+reads all 58: a corpus artefact, not a live one); Cotech 36-9231 is LoRa (not this path); WH51 at 915 MHz (a ~430 kHz
+tone spacing — two channels, neither the whole signal); Oregon v1 / WMR500; La Crosse LTV (WR1, R1, TH2/3, W1,
+BreezePro) and WS-6868; Emax W6 family, Govee, ThermoPro TX7B / 211B / TP28B, TS-FT002, Oria, Esun, inFactory,
+Thermor, Holman — not yet written. Oil-tank level sensors (Watchman, ~380 recordings) were left to the home/energy pass.
+
+### Home families (2026-11-11): meters, alarm sensors, remotes — `vibe_ism_meters.h`, `vibe_ism_security.h`, `vibe_ism_remotes.h`
+
+Corpus = the rtl_433_tests recordings that decode (`scripts/ism-corpus.mjs`); "oracle" = the recording decodes when its
+channel is cut by hand, but the bench's detector misses the burst (it starts inside the detector's 64-frame floor seed —
+see Tests). Alarm sensors are kind `security` ("Alarm sensor #n"), remotes `doorbell`, car / gate fobs `keyfob`: all
+**secret** (identity hashed, never shown; rolling codes never decoded or shown).
+
+| Family | Band / mod | Corpus | Facts from | Check |
+|---|---|---|---|---|
+| Oil-tank gauges: Watchman Sonic, Apollo Ultrasonic Smart / Standard, Tekelek TEK377, Watchman Sonic Advanced | 433 FSK (or OOK) 500 µs / 1 ms chips, Manchester | **351/383** | rtl_433 oil_*.c notes | CRC-8 / CRC-16; Standard has none → confirm |
+| OpenEnergyMonitor emonTx (JeeLib RF12) | 433 FSK 49.2 kbit/s | test only (recordings in the seed) | jeelabs.org RF12 packet format | CRC-16 |
+| Efergy e2 classic clamp, Efergy optical | 433 FSK PWM | **11/19** | rtl_433 efergy_*.c notes | sum / CRC-16 |
+| Itron ERT SCM, SCM+, IDM / NetIDM | 912 OOK Manchester 30.5 µs | oracle 5/7 | rtlamr wiki "Protocol" | BCH / CRC-16 |
+| Neptune R900 | 912 OOK 30 µs | test only (envelope does not slice) | rtlamr wiki; rtl_433 notes | 42 symbols of 6 valid codes |
+| Wireless M-Bus (existing) | 868 | **38/43 + 2/2** (was 16/43: the bench read a `_0M_` name as 0 Hz) | EN 13757 | — |
+| KNX-RF (named, no address) | 868 | 11/11 | KNX RF 1.1 (Esc 0xFF) | wM-Bus block CRCs |
+| Interlogix / GE / UTC (ITI) | 319.5 OOK PPM | **30/38** | US patent 5 761 206; rtl_433 notes | 2 parity bits → confirm; marks checked |
+| Honeywell / Ademco 5800, 2GIG | 345 OOK Manchester 136 µs | **27/29** | L. Lamb, DEF CON 22 "Home Insecurity" | CRC-16 |
+| DSC contacts / motion | 433 OOK RZ 500 µs | **8/8** | FCC F5300NB912 report; rtl_433 notes | CRC-8 |
+| X10 security | 310/433 OOK NEC-like | **5/5** | rtl_433 notes | complements + parity |
+| SimpliSafe sensors (never keypad PINs) | 433 OOK PIWM | test only (seed) | rtl_433 notes | sum + twice alike |
+| Generic 433.3 MHz motion kit | 433 OOK PWM | **14/14** | rtl_433 notes | none: 3 copies, every gap agreeing with its mark |
+| LightwaveRF | 433 OOK | **43/43** | So Make It wiki | 16-of-256 symbols, whole frame, twice |
+| Nexa / KlikAanKlikUit / Proove / Intertechno self-learning | 433 OOK PPM | **17/17** | elektronikforumet wiki | pairs, twice |
+| X10 RF | 310/433 | **4/4** | WGL Designs W800RF32 doc | complements + fixed bits |
+| GE Color Effects | 433 FSK 52 µs | **14/16** | deepdarc.com; lukecyca.com | twice |
+| Somfy RTS | 433.42 OOK | 1/2 | pushstack.wordpress.com; US 8 189 620 | nibble XOR |
+| Microchip HCS361 (car / gate) | 315 OOK PWM | 3/10 | DS40146F | 2-bit CRC → confirm |
+| Clemsa, Ansonic, BETT, Elplast, Linear MultiCode / Delta-3, Roger, Allstar Firefly, Nice FLO (12-bit) | 433 OOK PWM | **13/27** | rtl_433 conf/ descriptions | none: whole words, twice |
+| Car fobs: Continental KR5V2X (Honda), Chrysler | 313.8 FSK Manchester / 315 OOK PWM | **7/7, 7/7** | rtl_433 *_car_remote.c notes (FCC IDs) | XOR / sum; Chrysler rows exactly one packet |
+| Car fobs: MIC 6SC2, GM ABO1502T | 315 OOK | 0/6, 0/5 (written, not yet on a real burst) | same | XOR / sums; confirm |
+| Paradox Magellan sensors and remotes | 433 OOK PWM | **5/5** | Flipper Zero protocol via rtl_433's notes | CRC-8 |
+| Honeywell ActivLink chimes / PIR / contacts | 916.8 OOK, 868 FSK, PWM | **5/6** | K. Lohner, honeywell-wireless-doorbell | parity + 15 zero bits, twice |
+| RadioHead ASK packets, Sensible Living moisture | 433 OOK NRZ | **9/10** | RadioHead RH_ASK docs | CRC-16 (data never shown) |
+| Vaillant VRT 340f thermostat | 868 OOK differential Manchester | **6/7** | R. Kainhofer's wiki | 16-bit checksum, HDLC stuffing |
+
+Not done (home area), and why: Owl CM130/160/180 (inside the Oregon v3 path the weather work owns), IKEA Sparsnäs
+(encrypted with its ID — not decrypted), Security+ 1/2, Chamberlain, car remotes (Ford, Honda, Nidec, Code Alarm,
+Compustar, Astroflex), Insteon, EC3k, ESIC EMT7110, Elster, Vivint (its status byte is enciphered), Visonic, Cavius,
+Honeywell CM921, Danfoss, Funkbus, Siemens, HCS362, Kerui/Chuango/Waveman naming (they ARE
+EV1527/PT2262 — told apart only by data patterns), 24-bit Nice FLO (a PT2262 word on the air) and ADLM (a La Crosse
+length) — the last two were tried and dropped for naming other devices.
 
 ## The gallery (2026-10-25)
 
@@ -300,6 +451,16 @@ armhf hop, more on a noisy band; ISM mode switches the audio chain off, which pa
   into noisy IQ at 2.4 MS/s +120 kHz, through the real front end; drift −150…+150 kHz; capture rates 1.024, 2.048, 2.4,
   2.56, 3.0, 6.0, 10 MS/s; sensitivity (Oregon decodes 6/6 down to +4 dB channel SNR, 2/6 at −1 dB); three transmitters
   at once; 20 s of pure noise and a CW carrier decode nothing; the privacy rule on the JSON; repeats, units, landing bands.
+- ★ 2026-11-11, the home families: `test-ism` encodes each from its frame facts (oil ×4, emonTx, Efergy, Current Cost
+  counter, Interlogix, Honeywell, DSC, generic motion, LightwaveRF, Nexa, X10 + X10 security, GE Color Effects, ERT SCM,
+  Somfy, Clemsa, Continental, Chrysler, RadioHead) through the real front end, the secret rule on each (225 checks).
+  **The real-recording score** is `scripts/ism-corpus.mjs` over rtl_433_tests (test input only): home area 56 → 678
+  of 884 recordings read; every family's cross-reads audited (none but real background devices: a LightwaveRF TRV in two
+  La Crosse captures and an Oregon one, a neighbour's ERT meter in a 915 MHz Ambient capture). ★ The bench cannot see a
+  burst that starts inside the detector's first 64 frames (~65 ms at 250 kS/s, ~20 ms at 2.4 MS/s — the floor seed):
+  every emonTx, SimpliSafe, ERT/IDM/SCM+ capture and many short ones — a bench limit, not a live one (live, the seed is
+  the first instant after a start). Two front-end fixes came out of the corpus: the FSK span ignores pre-roll blips
+  (+61 decodes, none lost), and the bench reads `_2500k` / decimal rates, `samplerate` files and README frequencies.
 - `scripts/test-server-ism.mjs` (27 checks): the real server on `fake-rtl-tcp.mjs --ism` replaying `test-ism
   --write-clip`: capability, entering, the four devices and their exact lines, the privacy rule **on the wire**, steps
   433 → 868 → 915 (clamped), back by name, an exact frequency, a mode change ignored, EXIT giving the dial back.

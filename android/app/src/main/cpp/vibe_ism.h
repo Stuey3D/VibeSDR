@@ -1053,7 +1053,32 @@ public:
         on = on0;
         // ── FSK: the discriminator, over the stretch where the carrier is up
         size_t first = n, last = 0, cnt = 0;
-        for (size_t i = 0; i < n; ++i) if (on[i]) { if (first == n) first = i; last = i; ++cnt; }
+        /* ★★ WHERE THE CARRIER IS UP, WITHOUT THE BLIPS AROUND IT (2026-11-11). A noise blip in the pre-roll — 16–24 µs, or
+         *  a stray 384 µs mark 34 ms before the burst — set `first` early, and the "constant envelope" test then saw a
+         *  burst up only 75 % of its span and gave it no FSK slice at all (every Current Cost EnviR recording: ±32 kHz FSK,
+         *  76 ms, read as one long mark; Efergy, many oil gauges). The span is now the busiest STRETCH of on-runs of at
+         *  least 100 µs, a stretch ending at a gap of over 5 ms (1 ms lost choppy weak bursts; 5 ms lost none of the corpus). An OOK
+         *  burst still fails the 85 % test as before. */
+        {
+            const size_t g = std::max<size_t>(3, size_t(std::lround(100.0 / us))), gap = size_t(std::lround(5000.0 / us));
+            size_t segA = n, segB = 0, segCnt = 0, bestCnt = 0;
+            size_t i = 0;
+            while (i < n) {
+                if (!on[i]) { ++i; continue; }
+                size_t j = i; while (j < n && on[j]) ++j;
+                if (j - i >= g) {
+                    if (segA != n && i - segB > gap) {   // a new stretch: keep the busier
+                        if (segCnt > bestCnt) { bestCnt = segCnt; first = segA; last = segB - 1; }
+                        segA = n; segCnt = 0;
+                    }
+                    if (segA == n) segA = i;
+                    segB = j; segCnt += j - i;
+                }
+                i = j;
+            }
+            if (segA != n && segCnt > bestCnt) { bestCnt = segCnt; first = segA; last = segB - 1; }
+            if (first < last) for (size_t k = first; k <= last; ++k) cnt += on[k];
+        }
         b.fsk.clear(); b.fskDevHz = 0;
         if (first < last) {
             // the carrier: the mean instantaneous frequency where it is up (refines the detector's bin centroid)
@@ -1061,7 +1086,28 @@ public:
             for (size_t i = first + 1; i <= last; ++i) if (on[i] && on[i - 1]) { acc += std::arg(bb[i] * std::conj(bb[i - 1])); ++na; }
             if (na) b.carrierHz = float(acc / double(na) * rate / (2 * M_PI));
         }
-        if (first < last && last - first > 32 && double(cnt) / double(last - first + 1) > 0.85) {
+        /* ★★ AN FSK SENSOR THAT REPEATS ITS FRAME INSIDE ONE BURST (V12 2026-11-11, the TPMS makes): the Shenzhen EGQ Q85
+         *  sends three 18 ms frames 11 ms apart, the Jansite Solar and Sefis likewise — 70 % carrier, so the one-stretch
+         *  rule below never ran the discriminator and the frames were lost. GATED: when the carrier is up in LONG
+         *  stretches (≥ 1 ms each, holding ≥ 85 % of the burst's on-time and spanning ≥ 85 % from the first stretch's start
+         *  to the last one's end once the gaps between them are left out), the discriminator runs over those stretches
+         *  only and every sample outside them reads as the low tone — a gap, long enough to end any decoder's row. A
+         *  burst of short OOK pulses never qualifies: its marks are far under 1 ms. */
+        std::vector<uint8_t> gate;
+        if (first < last && last - first > 32 && double(cnt) / double(last - first + 1) <= 0.85) {
+            const size_t minLen = size_t(rate * 0.001);
+            gate.assign(n, 0);
+            size_t inLong = 0, segs = 0, gFirst = n, gLast = 0;
+            for (size_t i = first; i <= last;) {
+                if (!on[i]) { ++i; continue; }
+                size_t j = i; while (j <= last && on[j]) ++j;
+                if (j - i >= minLen) { std::fill(gate.begin() + long(i), gate.begin() + long(j), 1); inLong += j - i; ++segs; gFirst = std::min(gFirst, i); gLast = j - 1; }
+                i = j;
+            }
+            if (segs < 2 || double(inLong) < 0.85 * double(cnt)) gate.clear();
+            else { first = gFirst; last = gLast; }
+        }
+        if (first < last && last - first > 32 && (!gate.empty() || double(cnt) / double(last - first + 1) > 0.85)) {
             const size_t m = last - first + 1;
             std::vector<float> fq(m);
             const float k = float(rate / (2 * M_PI));
@@ -1073,11 +1119,14 @@ public:
             const size_t kFw[3] = {kWins[0], kWins[1], kWins[2]};   // ★ 12, 36, 100 µs, as kWins
             for (size_t wi = 0; wi < 3; ++wi) {
                 boxcar(fq, kFw[wi], fs);
-                std::vector<float> s2(fs);
-                std::nth_element(s2.begin(), s2.begin() + size_t(m * 0.1), s2.end());
-                const float p10 = s2[size_t(m * 0.1)];
-                std::nth_element(s2.begin(), s2.begin() + size_t(m * 0.9), s2.end());
-                const float p90 = s2[size_t(m * 0.9)];
+                std::vector<float> s2;
+                if (gate.empty()) s2 = fs;
+                else { s2.reserve(m); for (size_t i = 0; i < m; ++i) if (gate[first + i]) s2.push_back(fs[i]); }
+                const size_t ms = s2.size();
+                std::nth_element(s2.begin(), s2.begin() + size_t(ms * 0.1), s2.end());
+                const float p10 = s2[size_t(ms * 0.1)];
+                std::nth_element(s2.begin(), s2.begin() + size_t(ms * 0.9), s2.end());
+                const float p90 = s2[size_t(ms * 0.9)];
                 const float dev = 0.5f * (p90 - p10), mid = 0.5f * (p90 + p10);
                 if (dev <= 4000.0f) continue;
                 if (b.fskAll.empty()) { b.fskDevHz = dev; b.carrierHz = mid; }
@@ -1085,6 +1134,7 @@ public:
                 bool sv = fs[0] > mid;
                 const float hy = dev * 0.15f;
                 for (size_t i = 0; i < m; ++i) {
+                    if (!gate.empty() && !gate[first + i]) { hiTone[i] = 0; sv = false; continue; }
                     if (!sv && fs[i] > mid + hy) sv = true; else if (sv && fs[i] < mid - hy) sv = false;
                     hiTone[i] = sv;
                 }

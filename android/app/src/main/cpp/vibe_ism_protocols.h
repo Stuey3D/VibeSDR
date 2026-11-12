@@ -4,6 +4,9 @@
 //     datasheet, a paper, a protocol write-up), cited above the decoder and in docs/v12/ISM-DECODER.md §Protocols.
 //     rtl_433 (GPL-2) and other GPL decoders were NOT read. A protocol whose only description is GPL source code is
 //     not here; the doc lists it as "not done: no non-GPL description".
+//     ★ From the weather pass (2026-11-11, Stuart's agreement) rtl_433's device files may be READ for protocol FACTS
+//     (layout, timing, check, scaling) — never copied. Additions made that way say so where they are (docs/v12/
+//     ISM-DECODER.md §Clean room).
 // ★★★ PRIVACY (Stuart, 2026-10-25). TPMS, key fobs and fixed-code remotes NEVER carry their identity out of here: the
 //     decoder puts it in Reading::secretId, the Tracker (vibe_ism_service.h) turns it into a per-server nickname with a
 //     salted hash kept only in memory, and clears it. No code, rolling or fixed, no raw bits, no sensor ID — on public
@@ -16,6 +19,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vibeism {
@@ -40,6 +44,14 @@ struct Reading {
     std::string extra;       ///< a reading in words, shown in the line ("13 bucket tips", "pairing", "new battery")
     double freqHz = 0;       ///< filled by the service: the burst's frequency
     float levelDb = -99, snrDb = 0;
+    /** ★ THE BENCH'S VALUES (2026-11-11): what the frame said, as name → value pairs named as the published write-ups
+     *  name them ("depth_cm", "button", "state"), so tools/ism-bench/ism_replay can score a reading against a recording's
+     *  answer key. Printed ONLY by the bench — the service's JSON never carries them. ★ PRIVACY: never an identity or a
+     *  code of a secret kind (the bench drops "id" on a secret reading as a second guard). */
+    std::vector<std::pair<std::string, std::string>> facts;
+    void fact(const char* k, long long v) { facts.emplace_back(k, std::to_string(v)); }
+    void fact(const char* k, double v) { char b[32]; std::snprintf(b, sizeof b, "%.3f", v); facts.emplace_back(k, b); }
+    void fact(const char* k, const char* v) { facts.emplace_back(k, std::string("\"") + v + "\""); }
     /** ★ V12 kind "meter" only (vibe_wmbus.h): what the meter's frame said — never its encrypted bytes. */
     std::shared_ptr<const wmbus::Meter> meter;
 };
@@ -58,17 +70,27 @@ struct Reading {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 namespace oregon {
 
-struct Sensor { const char* id; const char* model; int len; char kind; };   // kind: T th, t temp, U uv, W wind, R pcr800, r rgr968
+struct Sensor { const char* id; const char* model; int len; char kind; };   // kind: T th, t temp, U uv, W wind, R pcr800, r rgr968, w wgr968, B th+baro
+/* ★ 2026-11-11 (weather pass): more sensor IDs and lengths, cross-checked with rtl_433 oregon_scientific.c's ID table
+ *  (facts only): THGR968, THGR328N, BTHR918, BTHGN129 (baro), WGR968 (3-digit direction), AWR129 BBQ (a hundreds digit),
+ *  THN129 / RTHN129, RTGN318 / RTGN129 / RTGR328N (their first ID nibble varies — matched on the last three, '?'), the
+ *  THGR810's rolling IDs, the PCR800's AU ID. */
 inline const Sensor* find(const std::string& id) {
     static const Sensor k[] = {
         {"1D20", "THGR122NX / THGN123N", 17, 'T'}, {"F824", "THGR810 / THGN801", 17, 'T'}, {"F8B4", "THGR810", 17, 'T'},
-        {"EC40", "THN132N / THR238NF", 14, 't'}, {"C844", "THWR800", 14, 't'},
+        {"F024", "THGR810 / THGN801", 17, 'T'}, {"F224", "THGR810 / THGN801", 17, 'T'}, {"FA24", "THGR810 / THGN801", 17, 'T'},
+        {"1D30", "THGR968", 17, 'T'}, {"CC23", "THGR328N", 17, 'T'}, {"?CC3", "RTGN318 / RTGR328N", 17, 'T'},
+        {"EC40", "THN132N / THR238NF", 14, 't'}, {"C844", "THWR800", 14, 't'}, {"EC41", "AWR129 BBQ", 14, 't'},
+        {"CC43", "THN129", 14, 't'}, {"?CD3", "RTHN129", 14, 't'},
         {"EC70", "UVR128", 14, 'U'}, {"D874", "UVN800", 14, 'U'},
-        {"1984", "WGR800", 19, 'W'}, {"1994", "WGR800", 19, 'W'},
-        {"2914", "PCR800", 20, 'R'}, {"2D10", "RGR968", 18, 'r'},
-        {"5D60", "BTHR968", 21, 'T'},
+        {"1984", "WGR800", 19, 'W'}, {"1994", "WGR800", 19, 'W'}, {"3D00", "WGR968", 19, 'w'},
+        {"2914", "PCR800", 20, 'R'}, {"2D14", "PCR800", 20, 'R'}, {"2D10", "RGR968", 18, 'r'},
+        {"5D60", "BTHR968", 21, 'B'}, {"5D50", "BTHR918", 21, 'B'}, {"5D53", "BTHGN129", 21, 'B'},
     };
-    for (const auto& s : k) if (id == s.id) return &s;
+    for (const auto& s : k) {
+        if (id == s.id) return &s;
+        if (s.id[0] == '?' && id.compare(1, 3, s.id + 1) == 0) return &s;
+    }
     return nullptr;
 }
 
@@ -111,11 +133,24 @@ inline bool parse(const std::vector<int>& nb, bool v21, Reading& r) {
         return v;
     };
     switch (s->kind) {
-        case 'T': case 't': {
+        case 'T': case 't': case 'B': {
             const int t = digits(8, 3);
             if (t < 0) return false;
-            r.tempC = (nb[11] ? -1 : 1) * t / 10.0;
-            if (s->kind == 'T') { const int h = digits(12, 2); if (h < 0 || h > 100) return false; r.hum = h; }
+            // ★ nibble 11: bit 3 the sign; bits 0–2 the AWR129's hundreds digit (0 on every weather sensor)
+            r.tempC = ((nb[11] & 8) ? -1 : 1) * (t / 10.0 + (nb[11] & 7) * 100.0);
+            if (s->kind != 't') { const int h = digits(12, 2); if (h < 0 || h > 100) return false; r.hum = h; }
+            if (s->kind == 'B') {   // barometer: 8 bits, nibbles 15 (low) and 16 (high); the offset is per model
+                const int raw = nb[15] | nb[16] << 4;
+                if (id == "5D53") r.baroHpa = raw * 2 + (nb[17] & 1) + 600;
+                else r.baroHpa = raw + (id == "5D50" ? 795 : 856);
+            }
+            if (id == "EC41") r.kind = "sensor";   // a BBQ probe
+            break;
+        }
+        case 'w': {   // WGR968: direction 3 BCD digits; gust and average 0.1 m/s
+            const int d = digits(8, 3), g = digits(11, 3), a = digits(14, 3);
+            if (d < 0 || g < 0 || a < 0 || d > 359) return false;
+            r.windDir = d; r.gustKmh = g / 10.0 * 3.6; r.windKmh = a / 10.0 * 3.6;
             break;
         }
         case 'U': { const int u = digits(8, 2); if (u < 0) return false; r.uv = u; break; }
@@ -139,7 +174,7 @@ inline bool parse(const std::vector<int>& nb, bool v21, Reading& r) {
             break;
         }
     }
-    if (!(r.tempC != r.tempC) && (r.tempC < -50 || r.tempC > 70)) return false;
+    if (!(r.tempC != r.tempC) && (r.tempC < -50 || r.tempC > (id == "EC41" ? 300 : 70))) return false;
     return true;
 }
 
@@ -297,6 +332,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
         if (s0 && s1 && s2 && s3) { bt.clear(); rd.note = "learn"; }
         rd.button = bt;
         rd.battOk = vlow ? 0 : 1;
+        rd.fact("button", (long long)(s0 | s1 << 1 | s2 << 2 | s3 << 3));   // the bench's value (S0 = 1 … S3 = 8)
         out.push_back(rd);
         return true;
     }
@@ -306,15 +342,11 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 } // namespace keeloq
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  TPMS — the two formats of Krstic, Savic, Kraemer & Junghans, "Applying Tire Pressure Monitoring Devices for Traffic
-//  Management Purposes" (IHP / DLR; elib.dlr.de/81155). The paper does not name the manufacturers ("Sensor A/B/C").
-//   • Sensor A: FSK, differential Manchester, a preamble of 8 half-bit pulses, start of frame "10", then 10 bytes:
-//     ID (4), pressure (1, scale not given), temperature (1, °C + 40), 2 status bytes, CRC-16-CCITT (2).
-//   • Sensor B: OOK, 240 µs symbols; 3 LEARN bits, 1 status byte, ID (4), pressure (1, × 2.5 = kPa), temperature
-//     (1, °C + 50), CRC-8-CCITT (poly 0x07) over ID..temperature (LEARN and status not included).
-//   (Sensor C's checksum is a single XOR byte — too weak to tell a frame from noise without a published preamble — and
-//    its pressure scale is not given: not done.)
-//  ★ PRIVACY: the ID goes to secretId only. "Tyre sensor #2 · 32 PSI · 18 °C".
+//  TPMS — every tyre-pressure family lives in vibe_ism_tpms.h (V12 2026-11-11, make by make). The two formats this
+//  file used to hold were retired there: "type A" was the Porsche 987 frame and is decoded by name now, with its
+//  pressure; "type B" (OOK, CRC-8 searched over every offset) was never a real make — on the recorded corpus it read
+//  only weather sensors and remotes, and a real Schrader frame wrongly — so it is gone.
+//  Only the half-bit estimator stays here: the Fine Offset WH2 decoder (vibe_ism_protocols2.h) uses it too.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 namespace tpms {
 
@@ -328,94 +360,6 @@ inline double halfEstimate(const Runs& r) {
     double s = 0; int n = 0;
     for (int d : a) if (d < 1.5 * p20) { s += d; ++n; }
     return n ? s / n : 0;
-}
-
-inline bool decodeA(const Burst& b, std::vector<Reading>& out) {
-    if (b.fsk.empty()) return false;
-    for (int pol = 0; pol < 2; ++pol) {
-        Runs rr = b.fsk;
-        if (pol) for (auto& d : rr) d = -d;
-        const double h = halfEstimate(rr);
-        if (h < 15 || h > 400) continue;
-        for (const Bits& row : halfBits(rr, halfLimits(h))) {
-            for (int ph = 0; ph < 2; ++ph) {
-                const Bits bits = diffManchester(row, ph, true);
-                for (int inv = 0; inv < 2; ++inv) {
-                    const Bits bb = inv ? invert(bits) : bits;
-                    // start of frame "10" then 80 bits with a CRC-16-CCITT over the first 8 bytes
-                    for (size_t s = 0; s + 2 + 80 <= bb.size() && s < 40; ++s) {
-                        if (bb[s] != 1 || bb[s + 1] != 0) continue;
-                        const auto by = bytesAt(bb, s + 2, 10);
-                        const uint16_t want = uint16_t(by[8] << 8 | by[9]);
-                        if (crc16(by.data(), 8, 0x1021, 0xFFFF) != want && crc16(by.data(), 8, 0x1021, 0x0000) != want) continue;
-                        /* ★★ A FRAME OF NOTHING IS NOT A TYRE (2026-10-25, the Pi 500 on 868: "TPMS #1 · type A · −40 °C").
-                         *  With the CRC's 0x0000 start an all-zero frame checks out (the CRC of zeros is zero), and a steady
-                         *  tone slices to exactly that — temperature byte 0 → −40 °C. Neither does an ID of all ones, or eight
-                         *  equal bytes. And 640 offset/polarity/phase guesses per row against a 16-bit check pass noise now
-                         *  and then on a band of 2 000 unidentified bursts, so a type A reading must be heard twice alike. */
-                        { bool same = true; for (int i = 1; i < 8; ++i) same = same && by[size_t(i)] == by[0]; if (same) continue; }
-                        if ((by[0] | by[1] | by[2] | by[3]) == 0 || (by[0] & by[1] & by[2] & by[3]) == 0xFF) continue;
-                        const int t = int(by[5]) - 40;
-                        if (t < -40 || t > 125) continue;
-                        Reading rd;
-                        rd.confirm = true;
-                        rd.kind = "tpms"; rd.make = "TPMS"; rd.model = "type A";
-                        rd.secret = true;
-                        rd.secretId = (uint64_t(3) << 40) | (uint64_t(by[0]) << 24 | uint64_t(by[1]) << 16 | uint64_t(by[2]) << 8 | by[3]);
-                        rd.tempC = t;
-                        rd.note = "pressure scale unknown";
-                        out.push_back(rd);
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    return false;
-}
-
-inline bool tryB(const Bits& bb, std::vector<Reading>& out) {
-    // 3 LEARN bits, status, ID ×4, P, T, CRC — CRC over ID..T. ★ ASSUMED (the paper gives no preamble): the frame
-    // follows a run-in of at least 8 equal or alternating bits — without that, a CRC-8 searched over every offset of
-    // four line-code guesses finds a false match about one burst in three (test-ism caught it).
-    // ★★ AND THE LATEST such start wins: a frame read one bit early (inside the run-in) can pass the CRC too — every
-    //    byte halved, the carries chaining (test-ism: 88 → 44 kPa raw, 68 → 34). The real frame starts where the run-in
-    //    ENDS, never inside it.
-    int best = -1;
-    std::vector<uint8_t> bestBy;
-    for (size_t s = 8; s + 67 <= bb.size() && s < 48; ++s) {
-        const uint32_t pre = bitsAt(bb, s - 8, 8);
-        if (pre != 0xFF && pre != 0x00 && pre != 0xAA && pre != 0x55) continue;
-        const auto by = bytesAt(bb, s + 3, 8);   // status, ID0..3, P, T, CRC
-        if (crc8(by.data() + 1, 6, 0x07, 0x00) != by[7]) continue;
-        const int t = int(by[6]) - 50;
-        if (t < -40 || t > 125) continue;
-        if (by[1] == 0 && by[2] == 0 && by[3] == 0 && by[4] == 0) continue;   // an all-zero ID is noise's favourite
-        if (by[5] * 2.5 > 600) continue;                                       // 6 bar: no road tyre
-        best = int(s); bestBy = by;
-    }
-    if (best < 0) return false;
-    const auto& by = bestBy;
-    Reading rd;
-    rd.kind = "tpms"; rd.make = "TPMS"; rd.model = "type B";
-    rd.secret = true;
-    rd.secretId = (uint64_t(4) << 40) | (uint64_t(by[1]) << 24 | uint64_t(by[2]) << 16 | uint64_t(by[3]) << 8 | by[4]);
-    rd.kpa = by[5] * 2.5;
-    rd.tempC = int(by[6]) - 50;
-    rd.confirm = true;      // ★ CRC-8 over a searched offset: shown once heard twice alike
-    out.push_back(rd);
-    return true;
-}
-
-inline bool decodeB(const Burst& b, std::vector<Reading>& out) {
-    // 240 µs symbols. The paper does not say the line code: try Manchester (120 µs halves, both conventions) and NRZ.
-    for (const Bits& row : halfBits(b.ook, halfLimits(120))) {
-        for (int ph = 0; ph < 2; ++ph)
-            for (int conv = 0; conv < 2; ++conv)
-                if (tryB(manchester(row, ph, conv == 0), out)) return true;
-    }
-    for (const Bits& row : sliceNrz(b.ook, 240, 16)) if (tryB(row, out)) return true;
-    return false;
 }
 
 } // namespace tpms

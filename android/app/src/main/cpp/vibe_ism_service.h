@@ -86,6 +86,7 @@ inline const char* kindLabel(const std::string& k) {
     if (k == "keyfob") return "Key fob";
     if (k == "suspectfob") return "Suspected key fob";
     if (k == "doorbell") return "Doorbell / remote";
+    if (k == "security") return "Alarm sensor";   // ★ V12 2026-11-11 (vibe_ism_security.h): secret, like a remote
     return "";
 }
 /** The device's name: "Oregon Scientific THGR810", or for a secret kind "TPMS #2" / "Key fob #1". */
@@ -104,6 +105,10 @@ inline std::string readable(const Reading& r, int nick, const Units& u = Units()
     p.push_back(deviceName(r, nick));
     if (r.secret && r.kind == "tpms" && !r.model.empty()) p.push_back(r.model);   // "TPMS #2 · type B · …"
     if (r.secret && r.kind == "keyfob" && !r.make.empty()) p.push_back(r.make);    // "Key fob #1 · KeeLoq · …"
+    // ★ V12 2026-11-11: a NAMED remote or alarm sensor says what it is — "Alarm sensor #3 · Interlogix motion · …",
+    //   "Doorbell / remote #2 · Nexa · …" (the generic fixed-code family stays nameless: "Fixed-code" says nothing)
+    if (r.secret && (r.kind == "security" || r.kind == "doorbell") && !r.make.empty() && r.make != "Fixed-code")
+        p.push_back(r.model.empty() || r.model == "Doorbell / remote" ? r.make : r.make + " " + r.model);
     if (r.kind == "tpms" && r.kpa == r.kpa) {
         if (u.pressure == 1) p.push_back(fmt1(r.kpa, 0) + " kPa");
         else if (u.pressure == 2) p.push_back(fmt1(r.kpa / 100.0, 2) + " bar");
@@ -303,16 +308,10 @@ public:
     bool accept(Reading r, double t, Heard* out = nullptr) {
         std::string key;
         int nick = 0;
+        uint64_t h = 0;
         if (r.secret) {
-            const uint64_t h = sipHash24(k0_, k1_, r.secretId);
+            h = sipHash24(k0_, k1_, r.secretId);
             r.secretId = 0;                                         // ★ gone — only the hash remains, in memory only
-            const std::string fam = r.kind;
-            auto it = nickOf_.find(h);
-            if (it == nickOf_.end()) {
-                if (nickOf_.size() > 4096) nickOf_.clear();           // bounded; numbering restarts, which is harmless
-                it = nickOf_.emplace(h, ++nextNick_[fam]).first;
-            }
-            nick = it->second;
             char kb[40]; std::snprintf(kb, sizeof kb, "s%016llx", (unsigned long long)h);
             key = kb;                                                 // ★ internal map key; never sent (devices get "d<n>")
         } else if (r.kind == "meter" && r.meter) {
@@ -321,15 +320,31 @@ public:
             key = r.make + "|" + r.model + "|" + std::to_string(r.channel) + "|" + r.pubId;
         }
         if (r.kind == "meter" && r.meter) return acceptMeter(key, std::move(r), t, out);
+        /* ★★ ONE FRAME OR TWO? (V12 2026-11-11, the TPMS makes). A reading whose decoder checked it STRONGLY — a CRC-8 or
+         *  CRC-16 behind an exact sync, or a CRC plus a redundant field — is shown from one frame: noise passes such a
+         *  check far less often than a real sensor is heard, and a car driving past may be heard ONCE (a tyre sensor
+         *  sends a few frames a minute; at 50 km/h it is in range for seconds). A WEAK check (an 8-bit sum or XOR, a 2-bit
+         *  check, none at all) passes noise one time in 256 or worse, and a busy band offers thousands of bursts a day —
+         *  so those readings (Reading::confirm) are shown only once the same device says the same thing twice within
+         *  90 s. Each decoder sets confirm by its own check (vibe_ism_tpms.h says which TPMS families are which). */
         if (r.confirm) {
-            // ★ a weak check: the same values from the same device twice within 90 s, or nothing
-            const std::string sig = key + "|" + readable(r, nick);
+            const std::string sig = key + "|" + readable(r, 0);
             auto pit = pending_.find(sig);
             if (pit == pending_.end() || t - pit->second > 90) {
                 pending_[sig] = t;
                 if (pending_.size() > 512) pending_.clear();
                 return false;
             }
+        }
+        /* ★ the nickname only once a reading is shown: an unconfirmed frame (noise that passed a weak check once) must
+         *  not take "TPMS #7" and leave the day's numbering with holes */
+        if (r.secret) {
+            auto it = nickOf_.find(h);
+            if (it == nickOf_.end()) {
+                if (nickOf_.size() > 4096) nickOf_.clear();           // bounded; numbering restarts, which is harmless
+                it = nickOf_.emplace(h, ++nextNick_[r.kind]).first;
+            }
+            nick = it->second;
         }
         Dev& d = devs_[key];
         const std::string line = readable(r, nick);
@@ -732,6 +747,14 @@ public:
             wmbus::Meter m;
             const int k = wmbus::decodeBurst(b, hwCentreHz, m, wm);
             if (k == 2) return;
+            if (k == 1 && m.knx) {
+                // ★ KNX-RF (home automation: push buttons, sensors, actuators) — named, its address never shown
+                Reading r;
+                r.kind = "sensor"; r.make = "KNX-RF"; r.model = "device";
+                r.freqHz = hwCentreHz + b.offHz + m.carrierHz; r.levelDb = b.levelDb; r.snrDb = b.levelDb - b.noiseDb;
+                out.push_back(std::move(r));
+                return;
+            }
             if (k == 1) {
                 Reading r;
                 r.kind = "meter";
@@ -739,6 +762,15 @@ public:
                 r.make = mk ? mk : m.mfr;
                 r.model = wmbus::typeText(m.type);
                 r.pubId = m.id;                          // ★ the serial is shown (Stuart, 2026-10-25)
+                // the bench's values (Reading::facts, never in the JSON): the serial, maker, version, type as the
+                // write-ups name them — the serial's digits are its BCD bytes, so it reads as the decimal number
+                //   ★ via a repeater / converter (CI 0x72) the write-ups name the LINK layer's sender: its maker and serial
+                { const bool via = m.via.size() > 4;
+                  const std::string sid = via ? m.via.substr(m.via.find(' ') + 1) : m.id;
+                  char* e = nullptr; const long long v = std::strtoll(sid.c_str(), &e, 10);
+                  if (e && *e == 0 && !sid.empty()) r.fact("id", v);
+                  r.fact("M", via ? m.via.substr(0, m.via.find(' ')).c_str() : m.mfr.c_str());
+                  if (!via) { r.fact("version", (long long)m.ver); r.fact("type", (long long)m.type); } }
                 if (m.sts >= 0 && (m.sts & 0x04)) r.battOk = 0;
                 r.freqHz = hwCentreHz + b.offHz + m.carrierHz; r.levelDb = b.levelDb; r.snrDb = b.levelDb - b.noiseDb;
                 r.meter = std::make_shared<const wmbus::Meter>(std::move(m));

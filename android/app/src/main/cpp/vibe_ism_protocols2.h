@@ -2,8 +2,21 @@
 // ★★★ CLEAN ROOM — the same rule as vibe_ism_protocols.h: every decoder cites the published description it was written
 //     from (docs/v12/ISM-DECODER.md §Protocols has the table); no GPL decoder source was read. Where a write-up left a
 //     detail open, the choice made is marked ASSUMED and the doc lists it for a real-signal check.
+//     ★ The weather pass (2026-11-11) fixed the families here against real recordings, cross-checking frame FACTS with
+//     rtl_433's device files (read, never copied — see ISM-DECODER.md §Clean room); each change says so where it is.
 #pragma once
 #include "vibe_ism_protocols.h"
+#include "vibe_ism_weather2.h"   // ★ weather pass 2026-11-11: SL109H, Fine Offset / Ecowitt FSK
+#include "vibe_ism_weather3.h"   // ★ weather pass 2026-11-11: La Crosse (TX141 family, WS-2310/3600, TX-3/6U/7U, TX22U)
+#include "vibe_ism_weather4.h"   // ★ weather pass 2026-11-11: AcuRite (TXR family, 00275RM, 609, 606, 590, 985/986)
+#include "vibe_ism_weather5.h"   // ★ weather pass 2026-11-11: S3318P family, XC-0324, Hideki, GT-WT-02/03, WT0124, Cotech, TFA pool
+#include "vibe_ism_weather6.h"   // ★ weather pass 2026-11-11: Auriol, Vauno, AlectoV1, Prologue
+#include "vibe_ism_weather7.h"   // ★ weather pass 2026-11-11: WS 7000 / WS 2500, F007TH, TX-8300
+#include "vibe_ism_weather9.h"   // ★ weather pass 2026-11-11: EFTH-800, ThermoPro, Rubicson, Bresser 3CH, WT450
+#include "vibe_ism_weather10.h"  // ★ weather pass 2026-11-11: Bresser 5/6/7-in-1 FSK family, Maverick ET-73x, Companion WTR001
+#include "vibe_ism_weather11.h"  // ★ weather pass 2026-11-11: TFA Drop, Inkbird ITH-20R
+#include "vibe_ism_tpms.h"     // ★ V12 2026-11-11: tyre-pressure sensors, make by make
+#include "vibe_ism_kit.h"        // ★ V12 2026-11-11: the home families' tools (Current Cost uses its NRZ rows)
 
 namespace vibeism {
 
@@ -35,36 +48,129 @@ inline int evenParityOk(uint8_t v) { int n = 0; for (int i = 0; i < 8; ++i) n +=
 namespace fineoffset {
 
 inline bool wh1080Fields(const std::vector<uint8_t>& by, bool fsk, Reading& r) {
-    if ((by[0] >> 4) != 0xA) return false;
+    const int type = by[0] >> 4;
+    char id[4]; std::snprintf(id, sizeof id, "%02X", ((by[0] & 0xF) << 4) | (by[1] >> 4));
+    r.kind = "weather"; r.make = "Fine Offset"; r.pubId = id;
+    /* ★ 2026-11-11 (weather pass; field facts cross-checked with rtl_433 fineoffset_wh1080.c): the WH3080's UV / light
+     *  frame (type 7: 7 bytes, the CRC over 6) and the DCF77 / WWVB time frame (type B) are the station's too — read, not
+     *  dropped. And the OOK temperature is 10 bits: the top two of the 12 are flags, not sign or value. */
+    if (type == 0x7) {
+        if (crc8(by.data(), 6, 0x31, 0) != by[6]) return false;
+        r.model = "WH3080 UV / light";
+        r.uv = by[1] & 0xF;
+        const int light = by[3] << 16 | by[4] << 8 | by[5];
+        char e[40]; std::snprintf(e, sizeof e, "%.0f lux", light * 0.1); r.extra = e;
+        if (by[2] != 85) r.note = "UV sensor fault";
+        return true;
+    }
+    if (type != 0xA && type != 0xB) return false;
     if (crc8(by.data(), 9, 0x31, 0) != by[9]) return false;
-    r.kind = "weather"; r.make = "Fine Offset"; r.model = fsk ? "WH1080 (FSK)" : "WH1080";
-    char id[4]; std::snprintf(id, sizeof id, "%02X", ((by[0] & 0xF) << 4) | (by[1] >> 4)); r.pubId = id;
-    const int raw = ((by[1] & 0xF) << 8) | by[2];
-    r.tempC = fsk ? ((raw & 0x800) ? -1 : 1) * (raw & 0x7FF) / 10.0 : (raw - 400) / 10.0;
+    if (type == 0xB) {
+        auto bcd = [](int v) { return (v >> 4) * 10 + (v & 0xF); };
+        r.model = fsk ? "WH1080 (FSK) clock" : "WH1080 clock";
+        char e[48]; std::snprintf(e, sizeof e, "%s time %02d:%02d:%02d %04d-%02d-%02d", (by[1] & 0xF) == 10 ? "DCF77" : "WWVB/MSF",
+                                  bcd(by[2] & 0x3F), bcd(by[3]), bcd(by[4]), 2000 + bcd(by[5]), bcd(by[6] & 0x1F), bcd(by[7]));
+        r.extra = e;
+        return true;
+    }
+    r.model = fsk ? "WH1080 (FSK)" : "WH1080";
+    if (fsk) { const int raw = ((by[1] & 0xF) << 8) | by[2]; r.tempC = ((raw & 0x800) ? -1 : 1) * (raw & 0x7FF) / 10.0; }
+    else r.tempC = ((((by[1] & 0x3) << 8) | by[2]) - 400) / 10.0;
     r.hum = fsk ? (by[3] & 0x7F) : by[3];
     r.windKmh = by[4] * 0.34 * 3.6;
     r.gustKmh = by[5] * 0.34 * 3.6;
     r.rainMm = (((by[6] & 0xF) << 8) | by[7]) * 0.3;
     const int st = by[8] >> 4;
-    r.battOk = fsk ? ((st & 0x8) ? 0 : 1) : (st ? 0 : 1);
+    r.battOk = fsk ? ((st & 0x8) ? 0 : 1) : (st == 1 ? 0 : 1);
     r.windDir = (by[8] & 0xF) * 22.5;
     if (r.tempC < -40 || r.tempC > 70 || r.hum > 100) return false;
     return true;
 }
 
+/** ★ 2026-11-11 (weather pass): the rest of the family that shares the WH1080's OOK PWM and CRC — field facts from
+ *  rtl_433 fineoffset_wh1050.c and fineoffset.c (WH0530 / Alecto WS-1200 tables). After the ones: WH1050 / TFA Stratos
+ *  (type 5 weather, 6 time; 9 bytes, CRC-8 0x31 over 8; temperature 10 bits − 400, rain 16 bits × 0.3 mm, battery bit 2
+ *  of byte 1); WH0530 / Rosenborg 35926 rain + temperature (type 3; 8 bytes: temperature 11 bits − 400, rain 16 bits
+ *  little-endian × 0.3 mm, CRC over 6, byte sum over 7); Alecto WS-1200 v1 (type 3, 7 bytes, CRC over 6) and v2 (type 3,
+ *  11 bytes, CRC over 6, sum over 7; or 0x52 = its DCF77 clock frame, CRC over 9, sum over 10). */
+inline bool shortFamily(const Bits& row, size_t s, bool fsk, std::vector<Reading>& out) {
+    const size_t len = row.size() - s;
+    const auto by = bytesAt(row, s, 11);
+    const int type = by[0] >> 4;
+    char id[4]; std::snprintf(id, sizeof id, "%02X", ((by[0] & 0xF) << 4) | (by[1] >> 4));
+    Reading r; r.kind = "weather"; r.make = "Fine Offset"; r.pubId = id;
+    if ((type == 5 || type == 6) && (fsk ? len >= 72 : (len >= 72 && len <= 74))) {
+        if (crc8(by.data(), 8, 0x31, 0) != by[8]) return false;
+        r.battOk = (by[1] & 0x04) ? 0 : 1;
+        if (type == 6) {
+            auto bcd = [](int v) { return (v >> 4) * 10 + (v & 0xF); };
+            r.model = "WH1050 clock";
+            char e[48]; std::snprintf(e, sizeof e, "time %02d:%02d:%02d %04d-%02d-%02d", bcd(by[2] & 0x3F), bcd(by[3]), bcd(by[4]),
+                                      2000 + bcd(by[5]), bcd(by[6] & 0x1F), bcd(by[7]));
+            r.extra = e;
+        } else {
+            r.model = fsk ? "WH1050 (FSK) / TFA 30.3151" : "WH1050";
+            const int raw = ((by[1] & 0x03) << 8) | by[2];
+            r.tempC = fsk ? ((by[1] & 0x08) ? -1 : 1) * raw / 10.0 : (raw - 400) / 10.0;
+            r.hum = by[3];
+            r.windKmh = by[4] * 0.34 * 3.6; r.gustKmh = by[5] * 0.34 * 3.6;
+            r.rainMm = (by[6] << 8 | by[7]) * (fsk ? 0.5 : 0.3);
+            if (r.tempC < -40 || r.tempC > 70 || r.hum > 100) return false;
+        }
+        out.push_back(r);
+        return true;
+    }
+    if (fsk) return false;
+    const bool t3 = type == 3;
+    auto rainTemp = [&](const char* make, const char* model) {
+        r.make = make; r.model = model;
+        r.battOk = (by[1] & 0x08) ? 0 : 1;
+        r.tempC = (((by[1] & 0x07) << 8 | by[2]) - 400) / 10.0;
+        r.rainMm = (by[4] << 8 | by[3]) * 0.3;
+        if (r.tempC < -40 || r.tempC > 70) return false;
+        out.push_back(r);
+        return true;
+    };
+    if (t3 && len >= 64 && len <= 65 && crc8(by.data(), 6, 0x31, 0) == by[6] && (wx::addBytes(by.data(), 7) & 0xFF) == by[7])
+        return rainTemp("Fine Offset", "WH0530 rain / temperature");
+    if (t3 && len >= 56 && len <= 57 && crc8(by.data(), 6, 0x31, 0) == by[6])
+        return rainTemp("Alecto", "WS-1200 v1 rain / temperature");
+    if (t3 && len >= 88 && len <= 89 && crc8(by.data(), 6, 0x31, 0) == by[6] && (wx::addBytes(by.data(), 7) & 0xFF) == by[7])
+        return rainTemp("Alecto", "WS-1200 v2 rain / temperature");
+    if (by[0] == 0x52 && len >= 88 && len <= 89 && crc8(by.data(), 9, 0x31, 0) == by[9] && (wx::addBytes(by.data(), 10) & 0xFF) == by[10]) {
+        r.make = "Alecto"; r.model = "WS-1200 v2 clock"; r.pubId = wx::hex(by[1], 2);
+        r.battOk = (by[2] & 0x80) ? 0 : 1;
+        char e[40]; std::snprintf(e, sizeof e, "DCF77 time %02X:%02X:%02X 20%02X-%02X-%02X", by[6], by[7], by[8], by[3], by[4], by[5]);
+        r.extra = e;
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
 inline bool decodeWh1080(const Burst& b, std::vector<Reading>& out) {
+    // ★★ the frame is the whole row (88 / 87 bits, the UV frame 64 / 63): a CRC-8 tried at every offset of a noise row
+    //    passes now and then (the corpus: "WH3080 UV" on a doorbell) — so the preamble starts the row, and the row ends
+    //    where the frame does. ★ 2026-11-11: 8 ones on most units, 7 on newer ones.
     for (const Bits& row : slicePwm(b.ook, 500, 1500, 4000, true)) {
-        for (size_t s = 0; s + 88 <= row.size(); ++s) {
-            if (bitsAt(row, s, 8) != 0xFF) continue;
-            const auto by = bytesAt(row, s + 8, 10);
+        for (size_t s = 7; s <= 9 && s + 56 <= row.size(); ++s) {
+            if (bitsAt(row, s - 7, 7) != 0x7F) continue;
+            if (shortFamily(row, s, false, out)) return true;
+            const size_t len = row.size() - s, want = (row[s] == 0) ? 56 : 80;
+            if (len < want || len > want + 2) continue;
+            const auto by = bytesAt(row, s, 10);
             Reading r;
             if (wh1080Fields(by, false, r)) { out.push_back(r); return true; }
         }
     }
-    const double bit = tpms::halfEstimate(b.fsk);
-    for (const Bits& row : fskNrzRows(b, bit)) {
+    // ★ the FSK version: the bit from the preamble (shortest runs); both demodulations (wx::fskRows)
+    const double bit = tpms::halfEstimate(b.fsk.empty() ? b.ook : b.fsk);
+    if (bit < 20 || bit > 200) return false;
+    for (const Bits& row : wx::fskRows(b, bit, 40, 80)) {
         for (size_t s = findBits(row, 0x2DD4, 16); s != size_t(-1); s = findBits(row, 0x2DD4, 16, s + 1)) {
-            if (s + 16 + 80 > row.size()) break;
+            if (s + 16 + 72 > row.size()) break;
+            if (shortFamily(row, s + 16, true, out)) return true;
+            if (s + 16 + 80 > row.size()) continue;
             const auto by = bytesAt(row, s + 16, 10);
             Reading r;
             if (wh1080Fields(by, true, r)) { out.push_back(r); return true; }
@@ -148,25 +254,43 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 namespace lacrosse {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& row : fskNrzRows(b, 1e6 / 17241.0)) {
+    /* ★ 2026-11-11 (weather pass; facts cross-checked with rtl_433 lacrosse_tx35.c / lacrosse_tx34.c): the TX35DTH-IT and
+     *  TX25U send the same frame at ~9.58 kbps (105 µs), not 17.24; a short preamble (as little as 1010) is common, so the
+     *  sync is matched as 2D D4 + the model nibble; model 5 is the TX34-IT rain gauge (16-bit tip count × 0.222 mm);
+     *  humidity 0x6A = no hygrometer, 0x7D = the TX25U's second (probe) temperature. Both demodulations (wx::fskRows). */
+    for (double bit : {1e6 / 17241.0, 105.0}) {
+    for (const Bits& row : wx::fskRows(b, bit, 40, 56)) {
         for (size_t s = findBits(row, 0x2DD4, 16); s != size_t(-1); s = findBits(row, 0x2DD4, 16, s + 1)) {
             if (s + 16 + 40 > row.size()) break;
             const auto by = bytesAt(row, s + 16, 5);
-            if ((by[0] >> 4) != 9 || crc8(by.data(), 4, 0x31, 0) != by[4]) continue;
+            const int model = by[0] >> 4;
+            if ((model != 9 && model != 5) || crc8(by.data(), 4, 0x31, 0) != by[4]) continue;
+            Reading r;
+            r.kind = "weather"; r.make = "La Crosse";
+            const int id = ((by[0] & 0xF) << 2) | (by[1] >> 6);
+            if (model == 5) {
+                r.model = "TX34-IT rain";
+                char ib[4]; std::snprintf(ib, sizeof ib, "%02X", id); r.pubId = ib;
+                r.rainMm = (by[2] << 8 | by[3]) * 0.222;
+                r.battOk = (by[1] & 0x10) ? 0 : 1;
+                if (by[1] & 0x20) r.extra = "new battery";
+                out.push_back(r);
+                return true;
+            }
             const int d1 = by[1] & 0xF, d2 = by[2] >> 4, d3 = by[2] & 0xF;
             if (d1 > 9 || d2 > 9 || d3 > 9) continue;
-            Reading r;
-            r.kind = "weather"; r.make = "La Crosse"; r.model = "IT+ (TX29/TX35)";
-            const int id = ((by[0] & 0xF) << 2) | (by[1] >> 6);
-            char ib[4]; std::snprintf(ib, sizeof ib, "%02X", id); r.pubId = ib;
-            r.tempC = (d1 * 100 + d2 * 10 + d3) / 10.0 - 40.0;
+            r.model = bit > 80 ? "IT+ (TX35 / TX25U)" : "IT+ (TX29 / TX35)";
             const int h = by[3] & 0x7F;
+            char ib[4]; std::snprintf(ib, sizeof ib, "%02X", h == 0x7D ? id + 0x40 : id); r.pubId = ib;
+            r.tempC = (d1 * 100 + d2 * 10 + d3) / 10.0 - 40.0;
             if (h <= 100) r.hum = h;
+            if (h == 0x7D) r.note = "probe";
             r.battOk = (by[3] & 0x80) ? 0 : 1;
             if ((by[1] >> 5) & 1) r.extra = "new battery";
             out.push_back(r);
             return true;
         }
+    }
     }
     return false;
 }
@@ -260,16 +384,22 @@ inline bool decode782(const Burst& b, std::vector<Reading>& out) {
 } // namespace acurite
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  CURRENT COST energy transmitters (EnviR / Envi clip-on sensors) — 433.9 MHz FSK, 3918 bps
+//  CURRENT COST energy transmitters (EnviR / Envi clip-on sensors, OptiSmart, the IAM and impulse counters) — 433.9 MHz
+//  FSK, 3918 bps
 //  Source: Jack Kelly, "Technical details of Current Cost RF protocol", rfm_edf_ecomanager wiki (GitHub wiki prose).
 //  Preamble 55/AA, sync 2D D4, then 16 Manchester-coded bytes (10 = 1, 01 = 0; 00/11 illegal — the integrity check) =
 //  8 data bytes: byte 0 bit 7 pairing, bit 6 type (0 = electricity), bits 3–0 address 11–8 · byte 1 address 7–0 ·
-//  three 16-bit words, MSB = valid, 15-bit watts.
+//  three 16-bit words, MSB = valid, 15-bit watts. ★ 2026-11-11 (facts also checked against rtl_433's current_cost.c and
+//  its recordings): the EnviR-era transmitters send a plain 55 55 55 55 preamble before the sync, the older "classic"
+//  ones a half-rate 0011 0011 … — that names the model; a COUNTER packet (byte 0 bit 6) carries byte 3 = what it
+//  counts (2 electricity, 3 gas, 4 water) and bytes 4–7 = the impulse count. A frame's last chip is followed by the
+//  idle level: the rows keep it (kit::nrzRows) — without it the last Manchester pair, and the frame, were lost.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 namespace currentcost {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& row : fskNrzRows(b, 1e6 / 3918.0)) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& row : kit::nrzRows(b.fsk, 1e6 / 3918.0, 40, true, 140)) {
         for (size_t s = findBits(row, 0x2DD4, 16); s != size_t(-1); s = findBits(row, 0x2DD4, 16, s + 1)) {
             if (s + 16 + 128 > row.size()) break;
             Bits d; bool ok = true;
@@ -279,18 +409,32 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
             }
             if (!ok) continue;
             const auto by = bytesAt(d, 0, 8);
-            if (by[0] & 0x40) continue;                         // a counter packet (gas / water / impulses): not shown yet
+            if (by[0] & 0x30) continue;                         // bits 5–4: always 0
+            const bool envir = s >= 8 && bitsAt(row, s - 8, 8) == 0x55;
+            const int id = ((by[0] & 0xF) << 8) | by[1];
             Reading r;
-            r.kind = "energy"; r.make = "Current Cost"; r.model = "transmitter";
-            char id[5]; std::snprintf(id, sizeof id, "%03X", ((by[0] & 0xF) << 8) | by[1]); r.pubId = id;
-            double w = 0; int valid = 0;
-            for (int k = 0; k < 3; ++k) {
-                const int v = (by[size_t(2 + 2 * k)] << 8) | by[size_t(3 + 2 * k)];
-                if (v & 0x8000) { w += v & 0x7FFF; ++valid; }
+            r.kind = "energy"; r.make = "Current Cost"; r.model = envir ? "EnviR transmitter" : "transmitter";
+            char ib[5]; std::snprintf(ib, sizeof ib, "%03X", id); r.pubId = ib;
+            r.fact("id", (long long)id);
+            if (by[0] & 0x40) {                                 // ★ a COUNTER: gas / water / electricity impulses
+                const int what = by[3];
+                if (what < 2 || what > 4) continue;
+                const uint32_t n = uint32_t(by[4]) << 24 | uint32_t(by[5]) << 16 | uint32_t(by[6]) << 8 | by[7];
+                r.model = envir ? "EnviR impulse counter" : "impulse counter";
+                r.extra = std::string(what == 2 ? "electricity" : what == 3 ? "gas" : "water") + " meter \xc2\xb7 " + std::to_string(n) + " pulses";
+                r.fact("subtype", (long long)what); r.fact("power0", (long long)n);
+            } else {
+                double w = 0; int valid = 0;
+                for (int k = 0; k < 3; ++k) {
+                    const int v = (by[size_t(2 + 2 * k)] << 8) | by[size_t(3 + 2 * k)];
+                    const char key[] = {'p', 'o', 'w', 'e', 'r', char('0' + k), '_', 'W', 0};
+                    r.fact(key, (long long)((v & 0x8000) ? (v & 0x7FFF) : 0));
+                    if (v & 0x8000) { w += v & 0x7FFF; ++valid; }
+                }
+                if (!valid) continue;
+                r.watts = w;
             }
-            if (!valid) continue;
-            r.watts = w;
-            if (by[0] & 0x80) r.extra = "pairing";
+            if (by[0] & 0x80) r.extra = r.extra.empty() ? "pairing" : r.extra + " \xc2\xb7 pairing";
             out.push_back(r);
             return true;
         }
@@ -299,6 +443,13 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 }
 
 } // namespace currentcost
+
+} // namespace vibeism
+// ★ V12 2026-11-11: the HOME families — meters and monitors, alarm sensors, remotes (vibe_ism_kit.h has their tools)
+#include "vibe_ism_meters.h"
+#include "vibe_ism_security.h"
+#include "vibe_ism_remotes.h"
+namespace vibeism {
 
 /** Every decoder, in turn, on every smoothing of the burst (finest first). The first that accepts it wins (a burst is one
  *  transmitter). */
@@ -316,29 +467,48 @@ inline void decodeAll(const Burst& b, std::vector<Reading>& out) {
     }
 }
 /** ★★ A FAMILY HEARD WHERE IT NEVER TRANSMITS IS NOISE (2026-10-25: an AcuRite 00899 and a TPMS "decoded" on 868 MHz on
- *  the Pi 500). AcuRite, Oregon Scientific and both TPMS formats send on 315 / 433.92 / 915 only — never in the 863-870 MHz
+ *  the Pi 500). AcuRite and Oregon Scientific send on 315 / 433.92 / 915 only (TPMS: 315 / 433 only, below) — never in the 863-870 MHz
  *  SRD band — so a reading of theirs at 868 is refused. Families that do use 868 (La Crosse IT+, Fine Offset FSK,
  *  Current Cost, fixed-code remotes, KeeLoq) are untouched. Applied by Service::decodeBurst, which knows the frequency. */
 inline bool bandPlausible(const Reading& r, double freqHz) {
     // ★ V12 wM-Bus: a meter only at 868.2-868.4 (S) or 868.85-869.05 (T/C) — anywhere else its CRC passed by chance
     if (r.kind == "meter") return (freqHz >= 868.2e6 && freqHz <= 868.4e6) || (freqHz >= 868.85e6 && freqHz <= 869.05e6);
-    const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6;
+    /* ★ V12 2026-11-11: a tyre sensor transmits at 315 MHz (the Americas, Japan; 314.9-315.0) or in the 433 band
+     *  (433.92, TyreGuard 434.1) — nowhere else: not at 868, not at 915 (no TPMS uses either). */
+    if (r.kind == "tpms") return (freqHz >= 312e6 && freqHz <= 318e6) || (freqHz >= 433.0e6 && freqHz <= 435.0e6);
+    const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6, ism915 = freqHz >= 902e6 && freqHz <= 928e6;
+    // ★ V12 2026-11-11: the home families that only ever send at 300–440 MHz (bandOk in vibe_ism_kit.h's families)
+    if ((srd868 || ism915) && homeLowBandOnly(r)) return false;
     if (!srd868) return true;
     return !(r.make == "AcuRite" || r.make == "Oregon Scientific" || r.kind == "tpms");
 }
 inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (oregon::decode(b, out)) return;
+    if (fofsk::decode(b, out)) return;
     if (fineoffset::decodeWh1080(b, out)) return;
     if (fineoffset::decodeWh2(b, out)) return;
+    if (sl109h::decode(b, out)) return;      // ★ before the 609: a background 609 inside an SL109H's channel must not win
+    if (acurite2::decode(b, out)) return;
+    if (wx7::decode(b, out)) return;
+    if (wx8::decode(b, out)) return;
+    if (wx6::decode(b, out)) return;
+    if (wx5::decode(b, out)) return;
+    if (wx9::decode(b, out)) return;
+    if (wx10::decode(b, out)) return;
+    if (wx11::decode(b, out)) return;
     if (nexus::decode(b, out)) return;
     if (acurite::decodePwm(b, out)) return;
     if (acurite::decode782(b, out)) return;
     if (lacrosse::decode(b, out)) return;
     if (currentcost::decode(b, out)) return;
+    if (lacrosse::decodeWx3(b, out)) return;
+    if (wx9::bresser3ch(b, out)) return;
+    if (decodeMeters(b, out)) return;
+    if (decodeSecurity(b, out)) return;
+    if (decodeRemotes(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
-    if (tpms::decodeA(b, out)) return;
-    if (tpms::decodeB(b, out)) return;
+    if (tyre::decode(b, out)) return;
 }
 
 } // namespace vibeism

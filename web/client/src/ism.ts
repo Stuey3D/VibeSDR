@@ -49,7 +49,7 @@ export interface IsmUnits { mph: boolean; pressure: 'psi' | 'kpa' | 'bar' }
 /** The kinds the filter offers, in this order (Stuart's list). */
 export const ISM_KINDS: Array<{ id: string; label: string }> = [
   { id: 'all', label: 'ALL' }, { id: 'weather', label: 'WEATHER' }, { id: 'tpms', label: 'TPMS' },
-  { id: 'sensor', label: 'SENSOR' }, { id: 'doorbell', label: 'DOORBELL' }, { id: 'energy', label: 'ENERGY' },
+  { id: 'sensor', label: 'SENSOR' }, { id: 'doorbell', label: 'DOORBELL' }, { id: 'security', label: 'ALARM' }, { id: 'energy', label: 'ENERGY' },
   { id: 'keyfob', label: 'KEY FOB' }, { id: 'meter', label: 'METER' },
   // ★ V12 LoRa (868 / 433 / 915 bands): the mesh networks, LoRaWAN (with any LoRa frame we cannot name), the public messages
   { id: 'meshtastic', label: 'MESHTASTIC' }, { id: 'meshcore', label: 'MESHCORE' }, { id: 'lorawan', label: 'LORAWAN' },
@@ -206,10 +206,13 @@ export function compass(deg: number): string { return COMPASS[Math.floor((((deg 
 export function ismLine(d: IsmDevice, u: IsmUnits): string {
   if (!u.mph && u.pressure === 'psi') return d.line;
   if (d.kind === 'meter' || LORA_KINDS.includes(d.kind)) return d.line;   // ★ a meter's / a LoRa row's line has no unit choice
-  const secret = d.kind === 'tpms' || d.kind === 'keyfob' || d.kind === 'doorbell' || d.kind === 'suspectfob';
+  const secret = d.kind === 'tpms' || d.kind === 'keyfob' || d.kind === 'doorbell' || d.kind === 'suspectfob' || d.kind === 'security';
   const p: string[] = [d.name];
   if (secret && d.kind === 'tpms' && d.model) p.push(d.model);
   if (secret && d.kind === 'keyfob' && d.make) p.push(d.make);
+  // ★ V12 2026-11-11: a NAMED remote or alarm sensor says what it is (server readable(): "Alarm sensor #3 · Interlogix motion")
+  if (secret && (d.kind === 'security' || d.kind === 'doorbell') && d.make && d.make !== 'Fixed-code')
+    p.push(!d.model || d.model === 'Doorbell / remote' ? d.make : `${d.make} ${d.model}`);
   if (d.kind === 'tpms' && d.kpa !== undefined)
     p.push(u.pressure === 'kpa' ? `${Math.round(d.kpa)} kPa` : u.pressure === 'bar' ? `${(d.kpa / 100).toFixed(2)} bar` : `${Math.round(d.kpa * 0.1450377)} PSI`);
   if (d.temp !== undefined) p.push(`${d.kind === 'tpms' ? Math.round(d.temp) : d.temp.toFixed(1)} °C`);

@@ -176,6 +176,9 @@ struct Meter {
     std::string note;         ///< "manufacturer format 0xA2", "compact frame", "CI 0x51", "data not understood"
     std::vector<Record> recs;
     float carrierHz = 0;      ///< the demodulator's carrier, relative to the burst's channel centre
+    /** ★ 2026-11-11: a KNX-RF frame (KNX RF 1.1 rides the same S-mode PHY and block CRCs: L, C 0x44, then Esc 0xFF and
+     *  RF-Info where a meter has its maker) — not a meter; the service names it and shows no address. */
+    bool knx = false;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -389,6 +392,7 @@ inline bool parseFrame(const std::vector<uint8_t>& f, size_t good, Meter& m) {
     if (!meterTalking(m.c)) return false;
     const uint16_t M = uint16_t(f[2] | f[3] << 8);
     m.mfr = mfrLetters(M);
+    m.knx = f[2] == 0xFF;
     m.id = idText(&f[4]);
     m.ver = f[8]; m.type = f[9];
     m.damaged = good < f.size() || size_t(f[0]) + 1 > f.size();
