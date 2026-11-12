@@ -316,6 +316,19 @@ static Runs steelmateTx(uint16_t id, int pRaw, int tC, int batt = 0x85) {
     return chipsToRuns(c + "10", 50);
 }
 
+// Jansite TY02S: the VDO-style run-in, 7 bytes (ID 28, status 4, ×1.7 kPa, °C + 50, an unknown byte), then 0x7FFF.
+static Runs jansiteTx(uint32_t id28, int pRaw, int tC) {
+    std::vector<uint8_t> by = { uint8_t(id28 >> 20), uint8_t(id28 >> 12), uint8_t(id28 >> 4), uint8_t(((id28 & 0xF) << 4) | 0x2), uint8_t(pRaw), uint8_t(tC + 50), 0x64, 0x7F, 0xFF };
+    return vdoTx(bytesToBits(by), 20);
+}
+// Jansite Solar: Manchester (1,0) = 1 from the first chip: 0xDD33, ID (3), unknown, °C + 55, ×1.6 kPa, unknown, CRC-16 0x8005.
+static Runs jansiteSolarTx(uint32_t id24, int pRaw, int tC) {
+    std::vector<uint8_t> by = { 0xDD, 0x33, uint8_t(id24 >> 16), uint8_t(id24 >> 8), uint8_t(id24), 0x00, uint8_t(tC + 55), uint8_t(pRaw), 0x00 };
+    const uint16_t c = crc16(by.data() + 2, 7, 0x8005, 0); by.push_back(uint8_t(c >> 8)); by.push_back(uint8_t(c));
+    std::string ch = "0101 0101 0101 0101"; mcChips(ch, bytesToBits(by), true);
+    return chipsToRuns(ch + "0", 51);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -481,6 +494,8 @@ int main(int argc, char** argv) {
             {"Schrader EG53MA4", eg53Tx(0x2EAAF9, 88, 77), false, 123, "EG53MA4", 220, 25, true},
             {"Schrader SMD3MA4", smd3Tx(0x3F0650, 7, 164), false, 120, "SMD3MA4", NAN, NAN, true},
             {"Steelmate", steelmateTx(0x1A4E, 83, 25), true, 50, "Steelmate", 83 * 3.125, 25, true},
+            {"Jansite Solar", jansiteSolarTx(0x4C2A11, 140, 21), true, 51, "Jansite Solar", 140 * 1.6, 21, false},
+            {"Jansite TY02S", jansiteTx(0x55ADE73, 52, 22), true, 52, "TY02S", 52 * 1.7, 22, true},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},

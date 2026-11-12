@@ -160,6 +160,19 @@ inline bool plausible(double kpa, double tC) {
 }
 inline bool allSame(const uint8_t* d, size_t n) { for (size_t i = 1; i < n; ++i) if (d[i] != d[0]) return false; return true; }
 
+/** Every frame in a burst's chip rows (FSK or OOK at `nominal` µs) that follows `sync` and reads `nBits` clean
+ *  Manchester bits ((1,0) = 1 when hiLoIsOne): `f(bytes)` decides; true stops the search. */
+template <class F> bool eachMc(Chips& ch, bool fsk, double nominal, const char* sync, int nBits, bool hiLoIsOne, F&& f) {
+    const size_t n = patLen(sync);
+    for (const Bits& c : ch.rows(fsk, nominal))
+        for (size_t p = findChips(c, sync); p != size_t(-1); p = findChips(c, sync, p + 1)) {
+            Bits d;
+            if (!mcRead(c, p + n, nBits, hiLoIsOne, d)) continue;
+            if (f(pack(d), d)) return true;
+        }
+    return false;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  SCHRADER "GG4" (the long-running Schrader frame: FCC ID MRXGG4 — many European and US OE fitments)
 //  Facts: rtl_433 schraeder.c notes. OOK Manchester, 120 µs half-bit, a mark-then-space half pair = 1. A ~500 µs wake
@@ -396,18 +409,55 @@ inline bool steelmate(Chips& ch, std::vector<Reading>& out) {
     return false;
 }
 
-/** Every frame in a burst's chip rows (FSK or OOK at `nominal` µs) that follows `sync` and reads `nBits` clean
- *  Manchester bits ((1,0) = 1 when hiLoIsOne): `f(bytes)` decides; true stops the search. */
-template <class F> bool eachMc(Chips& ch, bool fsk, double nominal, const char* sync, int nBits, bool hiLoIsOne, F&& f) {
-    const size_t n = patLen(sync);
-    for (const Bits& c : ch.rows(fsk, nominal))
-        for (size_t p = findChips(c, sync); p != size_t(-1); p = findChips(c, sync, p + 1)) {
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  JANSITE TY02S (solar, internal / external) — aftermarket. Facts: rtl_433 tpms_jansite.c notes: the VDO-style run-in
+//  (…aaa9), then 7 bytes — ID (28), status (4), pressure (raw × 1.7 kPa), temperature (°C + 50), and a last byte whose
+//  rule nobody has found (rtl_433 leaves this decoder OFF for that reason; we could not find it either — no CRC-8 of any
+//  polynomial, no sum, and the corpus holds two frames with the same six bytes and different last bytes).
+//  ★ WHAT STANDS IN FOR A CHECK: on every corpus recording the frame is followed by "0111 1111 1111 1111" — 16 fixed
+//  bits — before the carrier drops, where the other VDO-style frames carry data. That trailer, the 24-chip sync and the
+//  plausible values are required. WEAK: confirm, and tried after every make with a real check.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool jansite(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, "1010 1010 1010 1010 1010 1001", 72, false, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (by[7] != 0x7F || by[8] != 0xFF) return false;
+        const uint32_t id = uint32_t(by[0]) << 20 | uint32_t(by[1]) << 12 | uint32_t(by[2]) << 4 | (by[3] >> 4);
+        if (id == 0 || id == 0x0FFFFFFF || allSame(by.data(), 7)) return false;
+        Reading r = tyre("Jansite", "Jansite TY02S", 17, id, true);
+        r.kpa = by[4] * 1.7;
+        r.tempC = int(by[5]) - 50;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  JANSITE SOLAR (jansite.cn) — aftermarket. Facts: rtl_433 tpms_jansite_solar.c notes. FSK ~51 µs chips, Manchester
+//  ((1,0) = 1) from the very start of the chips "1010 0110 1010 0110 0101 1010": 11 bytes — a 0xDD33 sync word, ID (24),
+//  unknown, temperature (°C + 55), pressure (raw × 1.6 kPa), unknown, CRC-16 poly 0x8005 init 0 (BUYPASS) over the
+//  seven bytes after the sync. STRONG.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool jansiteSolar(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "1010 0110 1010 0110 0101 1010";
+    for (const Bits& c : ch.rows(true, 51))
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
             Bits d;
-            if (!mcRead(c, p + n, nBits, hiLoIsOne, d)) continue;
-            if (f(pack(d), d)) return true;
+            if (!mcRead(c, p, 88, true, d)) continue;
+            const auto by = pack(d);
+            if (by[0] != 0xDD || by[1] != 0x33) continue;
+            if (crc16(by.data() + 2, 7, 0x8005, 0x0000) != uint16_t(by[9] << 8 | by[10])) continue;
+            if (allSame(by.data() + 2, 7)) continue;
+            const uint32_t id = uint32_t(by[2]) << 16 | uint32_t(by[3]) << 8 | by[4];
+            Reading r = tyre("Jansite", "Jansite Solar", 18, id, false);
+            r.tempC = int(by[6]) - 55;
+            r.kpa = by[7] * 1.6;
+            if (!plausible(r.kpa, r.tempC)) continue;
+            out.push_back(r);
+            return true;
         }
     return false;
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE "VDO" FAMILY OF FRAMES — Continental/VDO and the sensors that copied its air interface: FSK, ~52 µs chips (9.6
@@ -586,6 +636,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (hyundaiVdo(ch, out)) return true;
     if (egqQ85(ch, out)) return true;
     if (elantra2012(ch, out)) return true;
+    if (jansiteSolar(ch, out)) return true;
     // the weak checks last: a strong family's frame must never be taken by a weak one's 8-bit sum
     if (schraderEG53MA4(ch, out)) return true;
     if (schraderSMD3MA4(ch, out)) return true;
@@ -597,6 +648,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (citroenJeep(ch, out)) return true;
     if (ford(ch, out)) return true;
     if (truck(ch, out)) return true;
+    if (jansite(ch, out)) return true;   // no check at all, only a fixed trailer: after everything else
     return false;
 }
 
