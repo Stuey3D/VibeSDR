@@ -85,9 +85,19 @@ function sameSensorOtherFormat(o, exp) {
     return id.length >= 6 && sid.length >= 6 && (sid.endsWith(id) || id.endsWith(sid));
   });
 }
+/* ★ IDM AND NetIDM ARE ONE FRAME READ TWO WAYS (2026-11-12, the second home pass). rtl_433's own ert_idm.c notes:
+ *  the two share sync, packet type, length, version and CRC, "thus both will respond to the same packet" — nothing on
+ *  the air tells them apart, and its answer key for a recording lists whichever decoder the contributor kept. An IDM
+ *  reading of a recording keyed NETIDM, of the SAME meter (its ID in the key), is therefore not compared — it is
+ *  "decoded" — exactly as a TPMS sensor in its second format above. A different meter's IDM there is still compared. */
+function idmReadAsNetIdm(o, exp) {
+  if (o.make !== 'Itron ERT' || !/^IDM/.test(o.model || '') || !o.facts) return false;
+  if (!exp.length || !exp.every((e) => e.model === 'NETIDM')) return false;
+  return exp.some((e) => String(e.id) === String(o.facts.id));
+}
 function compare(ours, exp) {
   let comparable = false, agree = false;
-  ours = ours.filter((o) => !sameSensorOtherFormat(o, exp));
+  ours = ours.filter((o) => !sameSensorOtherFormat(o, exp) && !idmReadAsNetIdm(o, exp));
   for (const o of ours) for (const e of exp) {
     const eT = e.temperature_C ?? (typeof e.temperature_F === 'number' ? (e.temperature_F - 32) / 1.8 : undefined);
     const eK = e.pressure_kPa ?? (typeof e.pressure_PSI === 'number' ? e.pressure_PSI * 6.894757 : undefined)
