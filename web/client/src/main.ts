@@ -7930,7 +7930,7 @@ function dabRender() {
         + (Math.abs(d.rfCentreHz - d.centreHz) > 500 ? ` (asked ${(d.centreHz / 1e6).toFixed(4)})` : '') : '—')
     + row('Capture rate', d.rfRateHz ? (d.rfRateHz / 1e6).toFixed(3) + ' MS/s' : '—')
     + row('Null depth', tl(d.nullDepthDb.toFixed(1) + ' dB', d.nullDepthDb >= 14 ? 'ok' : d.nullDepthDb >= 8 ? 'warn' : 'bad'))
-    + row('Frequency offset', tl(`${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`, Math.abs(d.offsetPpm) < 1 ? 'ok' : Math.abs(d.offsetPpm) < 3 ? 'warn' : 'bad'))
+    + row('Frequency offset', tl(`${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`, Math.abs(d.offsetPpm) < 10 ? 'ok' : Math.abs(d.offsetPpm) < 30 ? 'warn' : 'bad'))   // ★ see DabPanel: <10 ppm costs < 3 dB of MER
     // ★★ V12 auto-PPM: the radio's clock is being corrected — the offset above is what is LEFT after it
     + (afcNow && afcNow.available && afcNow.inForce !== 0
         ? row('Clock corrected', `${afcNow.inForce >= 0 ? '+' : ''}${afcNow.inForce.toFixed(2)} ppm (auto${afcNow.state === 'checking' ? ', checking' : ''})`) : '')

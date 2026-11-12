@@ -2251,6 +2251,7 @@ int main(int argc, char** argv) {
         // ★ The port the DOOR bound, not the one the radio-selection left in `o.port`.
         d.port    = g_dirPort;
         d.publicUrl = srv.dirPublicUrl;
+        d.alias     = srv.dirAlias;
         d.shareForSec = ownerChanged ? srv.dirShareSec : -1;
         vibedir::apply(d);
     };

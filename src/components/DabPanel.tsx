@@ -958,7 +958,9 @@ export default function DabPanel(p: DabPanelProps) {
           <Row label="Null depth" value={`${d.nullDepthDb.toFixed(1)} dB`}
                tone={d.nullDepthDb >= 14 ? 'ok' : d.nullDepthDb >= 8 ? 'warn' : 'bad'} />
           <Row label="Frequency offset" value={`${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`}
-               tone={Math.abs(d.offsetPpm) < 1 ? 'ok' : Math.abs(d.offsetPpm) < 3 ? 'warn' : 'bad'} />
+               // ★ 2026-11-12 (dabdrift): an offset costs nothing up to ±48 carriers; what a ppm error costs is the sample clock —
+               //   MER 35.6 dB at 0 ppm, 33.2 at 4, 28.1 at 10, 22.7 at 20, 16.9 at 40. Red at 3 ppm alarmed over a healthy lock.
+               tone={Math.abs(d.offsetPpm) < 10 ? 'ok' : Math.abs(d.offsetPpm) < 30 ? 'warn' : 'bad'} />
           <Row label="Carrier shift" value={String(d.carrierShift)} />
           <Row label="Phase reference" value={d.prs.toFixed(3)
             + (d.prsRatio !== undefined ? ` (${d.prsRatio.toFixed(2)} of ref)` : '')} />
