@@ -58,12 +58,13 @@ static std::vector<cf> synth(const std::vector<Sig>& sigs, double rate, double l
     }
     return x;
 }
-static std::vector<Reading> runFront(const std::vector<cf>& x, double rate, std::vector<Burst>* bursts = nullptr, double chanRate = 0) {
+static std::vector<Reading> runFront(const std::vector<cf>& x, double rate, std::vector<Burst>* bursts = nullptr, double chanRate = 0,
+                                    double centreHz = 433.92e6) {
     FrontEnd fe(rate);
     fe.setDcGuardHz(15e3);
     if (chanRate > 0) { fe.setChanRate(chanRate); fe.setKeepBaseband(true); }   // ★ the 868 band's wider channel (V12 wM-Bus)
     std::vector<Reading> out;
-    auto on = [&](const Burst& b) { if (bursts) bursts->push_back(b); Service::decodeBurst(b, 433.92e6, out); };
+    auto on = [&](const Burst& b) { if (bursts) bursts->push_back(b); Service::decodeBurst(b, centreHz, out); };
     for (size_t i = 0; i < x.size(); i += 16384) fe.feed(x.data() + i, std::min<size_t>(16384, x.size() - i), on);
     fe.flush(on);
     return out;
@@ -939,6 +940,73 @@ static void testHome() {
     homeRun(cs);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★ V12 2026-11-12: THE SECOND HOME PASS (vibe_ism_meters2.h, vibe_ism_homeauto.h) — each family ENCODED FROM ITS FRAME
+//  FACTS (as cited above each decoder), through the real front end at the band it transmits in (bandPlausible holds).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+struct Home2Case { const char* name; Sig s; double centreHz; const char* model; const char* fact; const char* want; bool secret; };
+static void home2Run(std::vector<Home2Case>& cs, double rate = 2.4e6) {
+    for (auto& c : cs) {
+        if (c.s.offHz == 0) c.s.offHz = 120e3;
+        std::vector<Burst> bs;
+        const auto got = runFront(synth({c.s}, rate, 1.2, 0.02, 7), rate, &bs, 0, c.centreHz);
+        const Reading* r = findModel(got, c.model);
+        CHECK(r != nullptr, "%s: not decoded (%zu readings%s%s, %zu bursts)", c.name, got.size(), got.empty() ? "" : ", first: ",
+              got.empty() ? "" : got[0].model.c_str(), bs.size());
+        if (!r) continue;
+        if (c.fact) CHECK(factOf(*r, c.fact) == c.want, "%s: %s = %s, want %s", c.name, c.fact, factOf(*r, c.fact).c_str(), c.want);
+        CHECK(r->secret == c.secret && (!c.secret || r->pubId.empty()), "%s: secret %d, pubId '%s'", c.name, r->secret, r->pubId.c_str());
+        printf("   %-26s → %s\n", c.name, readable(*r, 1).c_str());
+    }
+}
+/** Oregon v3-rate OOK Manchester (bit 1 = on then off) of a preamble of ones and the nibbles LSB first — NO sync nibble
+ *  (the OWL CM180 / CM130 send none). */
+static Runs owlTx(const std::vector<int>& nb) {
+    Bits b(24, 1);
+    for (int n : nb) for (int i = 0; i < 4; ++i) b.push_back((n >> i) & 1);
+    for (int i = 0; i < 8; ++i) b.push_back(0);
+    Tx tx; manchesterTx(tx, b, 488.28, 138); return tx.r;
+}
+static void testHome2() {
+    printf(" home families, second pass (meters, home automation)\n");
+    std::vector<Home2Case> cs;
+    // IKEA Sparsnäs: 868 FSK NRZ 26 µs, AA AA AA AA D2 01, 20 bytes, bytes 5–17 XOR a key from (ID − 0x5D38E8CB), CRC-16 0x8005
+    {
+        const uint32_t id = 617633, k = id - 0x5D38E8CBu;
+        const uint8_t key[5] = {uint8_t(k >> 24), uint8_t(k), uint8_t(k >> 8), 0x47, uint8_t(k >> 16)};
+        const uint8_t plain[13] = {uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x05, 0x5F, 0x04, 0x86,
+                                   0x00, 0x36, 0x97, 0xDC, 100};
+        std::vector<uint8_t> by = {0x11, uint8_t(id), 0x07, 0x07, 0x0E};
+        for (int i = 0; i < 13; ++i) by.push_back(plain[i] ^ key[i % 5]);
+        const uint16_t c16 = crc16(by.data(), 18, 0x8005, 0xFFFF); by.push_back(uint8_t(c16 >> 8)); by.push_back(uint8_t(c16));
+        Bits c = hb(0xAAAAAAAAull, 32); append(c, hb(0xD201, 16)); append(c, bytesToBits(by)); append(c, hb(0xAA, 8));
+        Sig s{fskNrz(c, 26.04)}; s.fsk = true; s.devHz = 20e3;
+        cs.push_back({"IKEA Sparsnäs", s, 868.0e6, "Sparsn", "effect", "1158", false});
+    }
+    // OWL CM180: no sync; nibbles 2 6 · sequence 0 · ID 3 nibbles · battery · power 3 nibbles · lifetime 12 · Oregon sum
+    {
+        std::vector<int> nb = {2, 6, 0, 8, 3, 3, 0, 0x7, 0x7, 0x1};   // ID 0x3380, power (0x0177 << 4) = 6000 × 1.00625
+        const uint64_t ws = 560822400ull;                           // 155.784 kWh in watt-seconds
+        for (int i = 0; i < 12; ++i) nb.push_back(int((ws >> (4 * i)) & 0xF));
+        nb.push_back(0);
+        int sum = 0; for (size_t i = 1; i < nb.size(); ++i) sum += nb[i];
+        nb.push_back(sum & 0xF); nb.push_back((sum >> 4) & 0xF);
+        Sig s{owlTx(nb)};
+        cs.push_back({"OWL CM180", s, 433.92e6, "CM180", "id", "13184", false});
+    }
+    // OWL CM130: no sync; 6 0 first; nibble-swapped bytes: ID byte 2, LE16 power ÷ 16, LE32 lifetime; CRC-8 0x07 over 1–10
+    {
+        uint8_t m[12] = {0x06, 0x00, 133, 45, 0, 0, 0x00, 0x06, 0, 0, 0, 0};   // 45 × 16 = 720 W; 0x600 / 8192 kWh
+        uint8_t by[12];
+        for (int k = 0; k < 12; ++k) by[k] = uint8_t(m[k] << 4 | m[k] >> 4);
+        const uint8_t c8 = crc8(by + 1, 10, 0x07, 0); by[11] = uint8_t(c8 << 4 | c8 >> 4);
+        std::vector<int> nb; for (int k = 0; k < 12; ++k) { nb.push_back(by[k] >> 4); nb.push_back(by[k] & 0xF); }
+        Sig s{owlTx(nb)};
+        cs.push_back({"OWL CM130", s, 433.92e6, "CM130", "id", "133", false});
+    }
+    home2Run(cs);
+}
+
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     printf("test-ism — the V12 ISM decoder\n");
@@ -1562,6 +1630,7 @@ int main(int argc, char** argv) {
     }
 
     testHome();
+    testHome2();
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "ok", checks, fails);
     return fails ? 1 : 0;
 }
