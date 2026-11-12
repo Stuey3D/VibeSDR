@@ -260,6 +260,52 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace x10
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SOMFY RTS (blinds, awnings, shutters; 433.42 MHz) — OOK, ~604 µs symbols. Sources: "Somfy RTS protocol",
+//  pushstack.wordpress.com, and US patent 8 189 620: a hardware sync (2416 µs on / off, twice; seven times on a repeat),
+//  a ~4.8 ms software sync and a 604 µs gap, then 56 Manchester bits (low-then-high = 1), each byte XORed with the
+//  previous scrambled one; descrambled: a seed · command nibble + checksum nibble (all 14 nibbles XOR to 0) · a 16-bit
+//  rolling counter · the 24-bit address. A command of 0xF puts the button in the seed's low nibble (TEL-FIX and
+//  SCE-R1 remotes, per rtl_433's somfy_rts.c notes). ★ PRIVACY: the address and the rolling counter are never shown.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace somfy {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    static const char* const ctl[16] = {"? (0)", "My (1)", "Up (2)", "My + Up (3)", "Down (4)", "My + Down (5)", "Up + Down (6)",
+                                        "My + Up + Down (7)", "Prog (8)", "Sun + Flag (9)", "Flag (10)", "? (11)", "? (12)",
+                                        "? (13)", "? (14)", "? (15)"};
+    static const char* const seedCtl[16] = {"? (0)", "? (1)", "? (2)", "? (3)", "? (4)", "Stop (5)", "Up (6)", "? (7)",
+                                            "Down (8)", "? (9)", "? (10)", "? (11)", "Prog (12)", "? (13)", "? (14)", "? (15)"};
+    for (const Bits& row : kit::nrzRows(b.ook, 604, 20, false, 120)) {
+        // the end of a sync: … 1111 0000 then the software sync 1111 1111 (7 or 8 chips) and one 0
+        for (uint32_t pat : {0x1E1E1FEu, 0x0F0F0FEu}) {
+            const int n = pat == 0x1E1E1FEu ? 25 : 24;
+            for (size_t s : kit::findAll(row, pat, n)) {
+                const Bits d = kit::manchesterAt(row, s + size_t(n), 80);
+                if (d.size() < 56) continue;
+                auto by = bytesAt(d, 0, 7);
+                for (int i = 6; i > 0; --i) by[size_t(i)] ^= by[size_t(i - 1)];
+                uint8_t x = kit::xorBytes(by.data(), 7);
+                if (((x & 0xF) ^ (x >> 4)) != 0) continue;
+                const int control = by[1] >> 4;
+                const uint32_t addr = uint32_t(by[6]) << 16 | uint32_t(by[5]) << 8 | by[4];
+                if (addr == 0 || addr == 0xFFFFFF) continue;
+                const char* cs = control == 0xF ? seedCtl[by[0] & 0xF] : ctl[control];
+                Reading r = remoteReading("doorbell", "Somfy", "RTS remote", 25, addr);
+                std::string w = cs; const size_t sp = w.find(" ("); if (sp != std::string::npos) w.resize(sp);
+                for (auto& c : w) c = char(std::tolower(c));
+                r.extra = w;
+                r.fact("control", cs);
+                out.push_back(r);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace somfy
+
 /** The remote families, strongest checks first. */
 inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (lightwave::decode(b, out)) return true;
@@ -267,6 +313,7 @@ inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (hcs361::decode(b, out)) return true;
     if (nexa::decode(b, out)) return true;
     if (x10::decode(b, out)) return true;
+    if (somfy::decode(b, out)) return true;
     return false;
 }
 
