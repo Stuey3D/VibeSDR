@@ -10,7 +10,7 @@
  */
 import {
   classifyDabWindow, DabQualityMeter, dabQualityLine, DAB_SEARCHING, type DabWindow,
-  dabWithPlayback, DAB_NO_AUDIO_ADVICE, type DabQuality,
+  dabWithPlayback, DAB_NO_AUDIO_ADVICE, DAB_STARTING_ADVICE, DAB_CHOOSE_ADVICE, DAB_NO_AUDIO_MS, type DabQuality,
 } from '../src/utils/dabQuality.ts';
 
 let fails = 0, passes = 0;
@@ -35,6 +35,8 @@ eq('MER 12 → moderate', lvl({ mer: 12 }), 2);
 eq('9A MER 8.5, FIB 98-99 % → weak (MER outranks a good FIC)', lvl({ mer: 8.5, fibRate: 0.985 }), 1);
 eq('10C FIB 23-55 % → weak', lvl({ fibRate: 0.4, fibNow: 0.4, mer: 0 }), 1);
 eq('FIB 95 % → moderate', lvl({ fibRate: 0.95, fibNow: 0.95, mer: 20 }), 2);
+eq('FIB 98–99 % at MER 23 (7D/11A/11D on the RSP1A, 2026-11-12) → strong', lvl({ fibRate: 0.985, fibNow: 0.985, mer: 23 }), 3);
+eq('FIB 97 % → moderate', lvl({ fibRate: 0.97, fibNow: 0.97, mer: 23 }), 2);
 eq('raw BER 9 % (10D) → weak', lvl({ mer: 9.1, mscBer: 0.09 }), 1);
 eq('raw BER 4.1 % detail', classifyDabWindow(W({ mer: 20, mscBer: 0.041 })).detail, 'BER 4.1 %');
 eq('raw BER 4.1 %, nothing decoding yet → moderate (weak is 8.5 %+)', lvl({ mer: 20, mscBer: 0.041 }), 2);
@@ -150,6 +152,76 @@ eq('searching placeholder', [DAB_SEARCHING.level, DAB_SEARCHING.short], [0, 'No 
   eq('no service picked: unchanged', dabWithPlayback(strong, 0, 9000), strong);
   eq('muted / tap-to-start (cannot judge): unchanged', dabWithPlayback(strong, 50279, undefined), strong);
   eq('searching: unchanged', dabWithPlayback(DAB_SEARCHING, 50279, 9000), DAB_SEARCHING);
+}
+
+// ★★★ 2026-11-12, Stuart's RSP1A (beta70): 7D / 11A / 11D at MER 22–24 dB, FIB 1–2 % errors, steady lock, read
+//     "Multiplex weak · No or heavily broken audio · 100 % frames lost" — no station chosen yet (and an older server
+//     still decoding the previous multiplex's sub-channel), or one chosen whose first unit had not decoded.
+eq('window with audio NOT started: frames lost are not evidence → strong on MER 23',
+   lvl({ mer: 23, sfTried: 40, sfOk: 0, audioStarted: false }), 3);
+eq('…and "100 % audio lost" is not either', lvl({ mer: 23, sfTried: 40, sfOk: 0, auIn: 80, auBad: 80, audioStarted: false }), 3);
+eq('…nor Layer II garbage', lvl({ mer: 23, mp2In: 200, mp2Bad: 190, audioStarted: false }), 3);
+eq('not started, but the signal itself is weak → still weak (MER 8.5)', lvl({ mer: 8.5, sfTried: 40, sfOk: 0, audioStarted: false }), 1);
+eq('not started, FIC 95 % → moderate', lvl({ mer: 20, fibRate: 0.95, fibNow: 0.95, sfTried: 40, sfOk: 0, audioStarted: false }), 2);
+eq('audio started: the counters decide as before', lvl({ mer: 23, sfTried: 40, sfOk: 32, audioStarted: true }), 1);
+{
+  // No service selected (sid 0) — an older server's garbage counters from the last multiplex's slice.
+  const m = new DabQualityMeter();
+  let t = 0, tried = 0;
+  let q: DabQuality | null = null;
+  for (let i = 0; i < 6; i++) {
+    tried += 8;
+    q = m.push({ channel: '11D', locked: true, fibRate: 0.985, mer: 23.4, sid: 0, sfTried: tried, sfOk: 0, mscBer: 0.2 }, (t += 1000));
+  }
+  eq('no service, 100 % "frames lost", MER 23 → strong', q!.level, 3);
+  eq('…"Choose a station", no frames-lost figure', dabQualityLine(q!), 'Multiplex strong · ' + DAB_CHOOSE_ADVICE);
+  eq('…the playback check leaves it alone (no service)', dabWithPlayback(q!, 0, Infinity).advice, DAB_CHOOSE_ADVICE);
+}
+{
+  // A service chosen; its audio has not decoded a first unit (the Signal pane's codec "—").
+  const m = new DabQualityMeter();
+  let t = 0, tried = 0, ok = 0;
+  const rep = (dTried: number, dOk: number) => {
+    tried += dTried; ok += dOk;
+    return m.push({ channel: '7D', locked: true, fibRate: 0.99, mer: 22.8, sid: 0xc479, sfTried: tried, sfOk: ok }, (t += 1000));
+  };
+  let q = rep(8, 0);
+  eq('start-up: no codec yet, sfTried > 0, sfOk 0, MER 23 → strong', q.level, 3);
+  eq('…"Starting audio…"', dabQualityLine(q), 'Multiplex strong · ' + DAB_STARTING_ADVICE);
+  eq('…marked starting', q.starting, true);
+  eq('…and the playback check does not override it (this client heard nothing yet)',
+     dabWithPlayback(q, 0xc479, Infinity).advice, DAB_STARTING_ADVICE);
+  q = rep(8, 0); q = rep(8, 0);
+  eq('still strong after 3 s of failed attempts', q.level, 3);
+  for (let i = 0; i * 1000 < DAB_NO_AUDIO_MS; i++) q = rep(8, 0);
+  eq('nothing after the grace: says so', q.advice, DAB_NO_AUDIO_ADVICE);
+  eq('…but a MER-23 multiplex is never called weak for it', q.level, 3);
+  // The first super frame decodes, after many failed attempts: those attempts are not held against it.
+  q = rep(8, 1);
+  eq('first good unit: the failed start-up does not make it weak', q.level, 3);
+  eq('…no longer starting', q.starting, undefined);
+  eq('…clear audio', q.advice, 'Clear audio');
+  const seen: number[] = [];
+  for (let i = 0; i < 6; i++) seen.push(rep(8, 8).level);
+  eq('clean frames after the start: strong throughout', seen.every(l => l === 3), true);
+  // REAL breakage after a good start still reads weak.
+  rep(8, 4);
+  q = rep(8, 4);
+  eq('real loss after a good start → weak', q.level, 1);
+  eq('…with the figure', dabQualityLine(q).startsWith('Multiplex weak · No or heavily broken audio · '), true);
+}
+{
+  // DAB+ on a server with the AU counter: a header that passed its firecode but every unit failed is NOT a start.
+  const m = new DabQualityMeter();
+  let q: DabQuality | null = null;
+  for (let i = 1; i <= 4; i++) q = m.push({ channel: '11A', locked: true, fibRate: 1, mer: 24, sid: 1, sfTried: 8 * i, sfOk: 0, auIn: 20 * i, auBad: 20 * i }, i * 1000);
+  eq('every AU failed, none good: still starting, still strong (MER 24)', [q!.level, q!.starting], [3, true]);
+}
+{
+  // Layer II: the first good frame is the start.
+  const m = new DabQualityMeter();
+  const q = m.push({ channel: '12B', locked: true, fibRate: 1, mer: 20, sid: 2, mp2In: 30, mp2Bad: 30 }, 1000);
+  eq('MP2 with every frame bad so far: starting, not weak', [q.level, q.advice], [3, DAB_STARTING_ADVICE]);
 }
 
 console.log(`dab quality: ${passes} passed, ${fails} failed`);

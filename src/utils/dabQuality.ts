@@ -58,6 +58,9 @@ export interface DabQuality {
   advice: string;
   /** The error figure behind the verdict, when there is one worth showing: "14 % frames lost", "BER 4.1 %". */
   detail?: string;
+  /** ★ A service is selected and has not yet produced its first good audio unit (DAB+ super frame / access
+   *  unit, Layer II frame): the verdict is the multiplex's signal alone, and the advice says audio is starting. */
+  starting?: boolean;
   /** ★ The multiplex's MER (dB), averaged over the window — the SECOND box's reading (2026-10-06, Stuart: "the
    *  2nd box can have a different metric in it rather than repeating the same thing"). MER is DAB's SNR: the
    *  verdict sits in the bar, the measurement in the box where SNR/S-units sit for every other mode. */
@@ -74,6 +77,11 @@ const ADVICE: Record<DabLevel, string> = {
   2: 'Expect occasional audio break-ups',
   3: 'Clear audio',
 };
+
+/** ★ While the selected service has not produced its first good audio unit — see DabWindow.audioStarted. */
+export const DAB_STARTING_ADVICE = 'Starting audio\u2026';
+/** ★ No service selected on this multiplex (sid 0) — the bars are the signal's; nothing is meant to be playing. */
+export const DAB_CHOOSE_ADVICE = 'Choose a station';
 
 /** ★ Shown between entering DAB (or changing multiplex) and the first report — never the last mux's verdict. */
 export const DAB_SEARCHING: DabQuality = {
@@ -104,8 +112,12 @@ export const BER_MODERATE = 0.015, BER_WEAK = 0.085;
 /** MER (dB): DabPanel ok ≥ 16, bad < 10. ✓ MER 8.5–9.6 broke up every time; 12B at 16.1 played clean. */
 export const MER_STRONG = 16, MER_WEAK = 10;
 /** FIC pass rate: DabPanel ok ≥ 99 %, bad < 90 %. ✓ 10C at 23–55 % never decoded; FIB dipped to 88–95 %
- *  exactly when Layer II went bad (2026-09-07). ★ The server's own no-FIC watchdog line is 5 %. */
-export const FIB_STRONG = 0.99, FIB_WEAK = 0.90, FIB_NONE = 0.05;
+ *  exactly when Layer II went bad (2026-09-07). ★ The server's own no-FIC watchdog line is 5 %.
+ *  ★★ The STRONG line is 97.5 %, NOT DabPanel's 99 % (2026-11-12, Stuart's RSP1A): 7D, 11A and 11D at MER 22–24 dB
+ *     read 1–2 % FIB errors and played clean once a station was chosen. While nothing is decoding the FIC is the
+ *     meter's main witness, and 99 % called those multiplexes "moderate" for a percent of FIB loss. The trouble
+ *     cases above sit at 95 % and below. */
+export const FIB_STRONG = 0.975, FIB_WEAK = 0.90, FIB_NONE = 0.05;
 /* ★ NULL DEPTH IS NOT JUDGED, deliberately. DabPanel colours it (bad < 8 dB), but 9A on the Pi decoded its
  *  whole station list at 4.5 dB (2026-09-08 — "below the old 6 dB gate, the whole story"): it says how deep
  *  the null symbol dips, not whether the audio survives. MER and the FIC already carry the same news. */
@@ -152,6 +164,17 @@ export interface DabWindow {
   mer?: number; mscBer?: number;
   sfTried: number; sfOk: number; mp2In: number; mp2Bad: number; frames: number; erased: number;
   scfConcealed?: number; auIn?: number; auBad?: number; rsLost?: number;
+  /** ★★★ false = no audio evidence may be used: no service is selected (sid 0 — Stuart, 2026-11-12: "Tuning to a
+   *  multiplex doesnt auto select a station which is why you get the meter bug"; an older server still decoded the
+   *  previous multiplex's sub-channel then, so its counters described garbage), or one is selected and NOTHING it has
+   *  sent has decoded yet. The audio counters then hold only
+   *  the attempts made before the first good unit — the super-frame phase search sliding one logical frame at a
+   *  time (vibe_dab_service.h pumpDabPlus: ++sfTried_ before the firecode, "SLIDE BY ONE on failure"), the time
+   *  de-interleaver filling — and those are start-up, not reception. Stuart, 2026-11-12, RSP1A, beta70: 7D, 11A and
+   *  11D at MER 22–24 dB, FIB 1–2 % errors, steady lock, read "Multiplex weak · 100 % frames lost" with the codec
+   *  still "—". Judge the multiplex on its signal (MER, FIC, BER while a service is selected) until the first unit
+   *  decodes. Undefined = a caller that cannot say: the audio counters are used as they stand. */
+  audioStarted?: boolean;
 }
 
 /** ★ The verdict for one window, with no memory — the pure core the meter wraps in hysteresis. */
@@ -164,7 +187,8 @@ export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: str
   // The worst of the audio counters, then the BER/MER backstop below.
   let audio: { level: DabLevel; detail?: string } | null = null;
   const worseA = (l: DabLevel, d?: string) => { if (!audio || l < audio.level) audio = { level: l, detail: d }; };
-  if (w.auIn !== undefined && w.auIn >= MIN_AU) {
+  if (w.audioStarted === false) { /* start-up: no audio evidence yet — the prediction below decides */ }
+  else if (w.auIn !== undefined && w.auIn >= MIN_AU) {
     const lost = Math.min(w.auBad ?? 0, w.auIn) / w.auIn;
     worseA(lost >= AU_BAD_WEAK ? 1 : lost >= AU_BAD_STRONG ? 2 : 3, lost > 0 ? `${pct(lost)} % audio lost` : undefined);
   } else if (w.sfTried >= MIN_SF) {
@@ -173,7 +197,7 @@ export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: str
     // ★ A server without the AU counter: Reed-Solomon giving up means AUs were lost inside "OK" frames.
     if ((w.rsLost ?? 0) > 0) worseA(2, `${w.rsLost} RS failures`);
   }
-  if (w.mp2In >= MIN_MP2) {
+  if (w.audioStarted !== false && w.mp2In >= MIN_MP2) {
     const bad = Math.min(w.mp2Bad, w.mp2In) / w.mp2In;
     worseA(bad >= MP2_BAD_WEAK ? 1 : bad >= MP2_BAD_STRONG ? 2 : 3, bad > 0 ? `${pct(bad)} % frames bad` : undefined);
     if (w.scfConcealed !== undefined) {
@@ -240,9 +264,13 @@ export class DabQualityMeter {
   private shown: DabLevel | null = null;
   private pending: { level: DabLevel; n: number } | null = null;
   private last: DabQuality | null = null;
+  /** The selected service, and when it began waiting for its first good audio unit (null once it has one). */
+  private sid = 0;
+  private startingSince: number | null = null;
 
   reset(): void {
     this.samples = []; this.channel = undefined; this.shown = null; this.pending = null; this.last = null;
+    this.sid = 0; this.startingSince = null;
   }
 
   /** The current verdict without pushing anything (null before the first report). */
@@ -269,6 +297,21 @@ export class DabQualityMeter {
     if (prev && (['frames', 'erased', 'mp2In', 'mp2Bad', 'sfTried', 'sfOk', 'scfConcealed', 'auIn', 'auBad', 'rsLost'] as const)
         .some(k => prev[k] !== undefined && s[k] !== undefined && (s[k] as number) < (prev[k] as number))) {
       this.samples = [];
+      if (this.startingSince !== null) this.startingSince = nowMs;   // a new service starts its own wait
+    }
+    /* ★★★ HAS THIS SERVICE PLAYED YET? The server's audio counters are per service — zeroed on a service or block
+     *  change (vibe_dab_service.h resetAudioCounters) — so their running totals answer it: one good super frame, one
+     *  access unit that passed its CRC, or one Layer II frame that was not bad. */
+    const started = !!sid
+      && ((s.sfOk ?? 0) > 0 || (s.auIn ?? 0) - (s.auBad ?? 0) > 0 || (s.mp2In ?? 0) - (s.mp2Bad ?? 0) > 0);
+    if (sid !== this.sid) { this.sid = sid; this.startingSince = started === false ? nowMs : null; }
+    if (!sid) this.startingSince = null;
+    else if (!started) { if (this.startingSince === null) this.startingSince = nowMs; }
+    else if (this.startingSince !== null) {
+      /* ★ The first good unit has just arrived. The window so far is the failed attempts before it — judge from
+       *  HERE: this report becomes the base the next ones are measured from (a copy, so its own totals count 0). */
+      this.startingSince = null;
+      this.samples = [{ ...s }];
     }
     this.samples.push(s);
     // Keep the newest sample at or beyond the window's far edge, so a full window is always spanned.
@@ -300,6 +343,7 @@ export class DabQualityMeter {
       // ★ frames/erased are the multiplex's, never zeroed with a service — but a fresh window has no
       //   history for them, and a session total is exactly what this meter must not judge on.
       frames: this.samples.length > 1 ? d('frames') : 0, erased: this.samples.length > 1 ? d('erased') : 0,
+      audioStarted: started,
     };
     const v = classifyDabWindow(win);
 
@@ -323,6 +367,14 @@ export class DabQualityMeter {
       advice: lvl === 0 && v.level === 0 && v.detail === 'no station list' ? 'Locked, but nothing decodes' : ADVICE[lvl],
       ...(detail && lvl !== 0 ? { detail } : {}),
     };
+    /* ★★ Starting: the bars say what the signal predicts; the advice says the audio has not begun — and after the
+     *  same grace the playback check gives (DAB_NO_AUDIO_MS), that nothing has arrived. Never "No or heavily broken
+     *  audio" for a service that has not had time to play: that blamed a strong multiplex for its own start-up. */
+    if (lvl !== 0 && !sid) this.last.advice = DAB_CHOOSE_ADVICE;
+    else if (lvl !== 0 && !started && this.startingSince !== null) {
+      this.last.starting = true;
+      this.last.advice = nowMs - this.startingSince >= DAB_NO_AUDIO_MS ? DAB_NO_AUDIO_ADVICE : DAB_STARTING_ADVICE;
+    }
     return this.last;
   }
 }
@@ -339,6 +391,9 @@ export class DabQualityMeter {
 export const DAB_NO_AUDIO_MS = 4000;
 export const DAB_NO_AUDIO_ADVICE = 'No audio reaching you';
 export function dabWithPlayback(q: DabQuality, sid: number | undefined, audioAgeMs: number | undefined): DabQuality {
+  // ★ A service still starting is the meter's to describe (its own clock, from the selection — this client's audio
+  //   stamp still belongs to the last station, or to nothing).
+  if (q.starting) return q;
   if (!sid || audioAgeMs === undefined || q.level === 0 || audioAgeMs < DAB_NO_AUDIO_MS) return q;
   return { ...q, advice: DAB_NO_AUDIO_ADVICE };
 }

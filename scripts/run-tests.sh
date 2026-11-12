@@ -838,6 +838,8 @@ if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fa
 # ★★★ THE DAB RECEPTION METER (2026-10-06): three bars + a sentence in place of the signal bar, judged on ~5 s
 #     of the server's counters with hysteresis; thresholds held to the on-air cases (app + web share it).
 if node --no-warnings scripts/test_dab_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the R36S's port of it (handheld-ui/src/dab_quality.h) replays the TS meter's own outputs, line for line.
+if bash handheld-ui/test/run_dab_quality_test.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE DRM RECEPTION METER (V12, 2026-11-12): DAB's meter for DRM — the decoder's own SNR in the box (Stuart: 17–20 dB
 #     decoded on a signal the meter read as 42 dB), the verdict on the programme's MER against its QAM and the audio frames.
 if node --no-warnings scripts/test_drm_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
