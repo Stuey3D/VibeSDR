@@ -840,6 +840,7 @@ std::string toJson(const ServerConfig& c) {
     B("mdnsAdvertise", c.mdnsAdvertise); S("mdnsName", c.mdnsName);
     B("dirList", c.dirList); S("dirName", c.dirName);
     N("dirShareSec", (double)c.dirShareSec); S("dirPublicUrl", c.dirPublicUrl);
+    B("dirAlias", c.dirAlias);
     B("dirResume", c.dirResume);
     if (c.tunnelResume >= 0) B("tunnelResume", c.tunnelResume == 1);   // ★ absent = never chosen (see the header)
     B("locFollow", c.locFollow);
@@ -922,6 +923,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     S("locator", c.locator); S("lat", c.lat); S("lon", c.lon);
     B("mdnsAdvertise", c.mdnsAdvertise); S("mdnsName", c.mdnsName);
     B("dirList", c.dirList); S("dirName", c.dirName); S("dirPublicUrl", c.dirPublicUrl);
+    B("dirAlias", c.dirAlias);
     { double d2; if (getNum(j, "dirShareSec", d2)) c.dirShareSec = (long long)d2; }
     B("dirResume", c.dirResume);
     { bool tr; if (getBool(j, "tunnelResume", tr)) c.tunnelResume = tr ? 1 : 0; }

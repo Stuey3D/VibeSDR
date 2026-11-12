@@ -842,6 +842,11 @@ struct ServerConfig {
      *  machine. Offering both matters: a tunnel is the only option that works behind CGNAT, and a
      *  DDNS owner should not be forced through somebody else's edge. */
     std::string dirPublicUrl;
+    /** ★★ "Also give it a vibesdr.net address (name.vibeserver.vibesdr.net)" — for a listing at the owner's OWN address
+     *  only (2026-11-12, a tester with his own domain). true = as every server always had it; false = the directory
+     *  links straight to dirPublicUrl and serves no alias (directory/migrations/0009-alias.sql). Meaningless on the
+     *  tunnel — the alias is how a tunnel is reached — so it is never sent there. */
+    bool        dirAlias = true;
     /** ★★★ THE OWNER'S STANDING MESSAGE ON THE LANDING SCREEN — house rules, a donation link, or
      *  an explanation of behaviour that looks wrong and is not. Stuart's own case: the demo drops
      *  to 5 fps when idle, which is deliberate and reversible in the menu, but to a first-time

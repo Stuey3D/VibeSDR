@@ -306,6 +306,8 @@ deps_for() {
     test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
     # ★★★ Going back from a V12 beta keeps V12's settings: unknown config keys survive a load + save (11.0.10-4).
     test-config-keep)   echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★ "Also give it a vibesdr.net address" (dirAlias) round-trips, and an older config keeps the alias.
+    test-config-alias)  echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h) and their config round trip.
     test-fm-defaults)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
@@ -954,7 +956,7 @@ if node --no-warnings scripts/test_wholeModeResume.ts >/dev/null; then pass=$((p
 #     (the hold, or a hard limit sooner), the permission asked once — and a CLOSED SQUELCH NEVER QUIET (read from source).
 if node --no-warnings scripts/test_sessionHoldNotice.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_sessionHoldNotice.ts"; fi
 # ★ The directory Worker against real SQLite: dead-address pages, and the 90-day retention (PRIVACY.md, Play form).
-for t in directory/scripts/test-gone.mjs directory/scripts/test-retention.mjs directory/scripts/test-lan.mjs; do
+for t in directory/scripts/test-gone.mjs directory/scripts/test-retention.mjs directory/scripts/test-lan.mjs directory/scripts/test-alias.mjs; do
   if node --no-warnings "$t" >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ $t"; fi
 done
 if node --no-warnings scripts/test_rtty_spec.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_rtty_spec.ts"; fi

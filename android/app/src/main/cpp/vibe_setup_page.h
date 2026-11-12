@@ -156,6 +156,15 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
      than patched per selector — which is the pattern that guarantees a fourth. */
   [hidden]{display:none !important}
   .hide{display:none}
+  /* ★ How listeners reach it (Advertise card): three choices, each with its own line of explanation under it. */
+  .reach label{display:flex;gap:10px;align-items:flex-start;margin:10px 0 0}
+  .reach input{accent-color:var(--amber);width:16px;height:16px;margin:4px 0 0;flex:none}
+  .reach .hint{display:block;margin-top:2px}
+  details.how{margin:12px 0 0}
+  details.how summary{cursor:pointer;color:var(--amber);font-size:13.5px}
+  details.how p{margin:8px 0}
+  details.how pre{background:#0a0704;border:1px solid var(--line);border-radius:7px;padding:8px 10px;
+                  overflow-x:auto;font-size:12px;line-height:1.45;margin:6px 0;color:var(--ink)}
   select:disabled,input:disabled{opacity:.45;cursor:not-allowed}
   .modalWrap{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.72);
              display:flex;align-items:center;justify-content:center;padding:20px}
@@ -582,16 +591,71 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <input type="text" id="dirName" maxlength="48" placeholder="e.g. Moulton RSP1B">
           <div class="hint" id="dirNameHint">The shareable address is made from this name, the same
             way the <code>.local</code> name is. Shown to strangers, so nothing private.</div></label>
-        <label><span class="lbl">Address (optional)</span>
-          <input type="url" id="dirPublicUrl" placeholder="https://my-sdr.example.com">
-          <!-- ★★ THE COPY FOLLOWED THE BUILD. This said "needs cloudflared installed", which was
-               true for about an hour and is a dead end on a Pi in a loft: it is not in Debian's
-               repositories, so the instruction really meant "go and find one". We ship it now, so
-               the sentence that sent people looking had to go with it (Stuart, 2026-08-23: "I
-               thought we were bundling cloudflare"). -->
-          <div class="hint">Leave empty and a Cloudflare tunnel is created for you &mdash; nothing
-            to install, and the only option that works behind CGNAT. Fill it in if you already
-            have a DDNS name or a port forward.</div></label>
+        <!-- ★★★ HOW LISTENERS REACH IT — THREE CHOICES, SAID PLAINLY (Stuart, 2026-11-12: "yes please make the options
+             clear on the setup page", for a tester with his own domain). UI over the SAME key: Automatic is an empty
+             dirPublicUrl (the tunnel, exactly as before), the other two are the address's scheme — http:// is a port
+             forward, https:// has something in front (VibeServer has no TLS of its own). Nothing extra is stored, so an
+             existing server opens on the choice it already has.
+             ★★ THE COPY FOLLOWED THE BUILD (2026-08-23). cloudflared is bundled; nothing here may send anyone to
+             install it. -->
+        <div class="lbl" style="margin-top:16px">How listeners reach it</div>
+        <div class="reach">
+          <label><input type="radio" name="dirReach" id="reachAuto" value="auto">
+            <span><b>Automatic</b> (recommended)
+              <span class="hint">A free Cloudflare tunnel. There&rsquo;s nothing to set up, and it works behind CGNAT.
+                The address is <span class="addr">name.vibeserver.vibesdr.net</span>, with HTTPS.</span></span></label>
+          <label><input type="radio" name="dirReach" id="reachOwn" value="own">
+            <span><b>My own address</b> (port forward / DDNS)
+              <span class="hint"><code>http://host:port</code>. Browsers will call plain http &ldquo;not secure&rdquo;.
+                Forward the main port, <span class="reachPort">48000</span>, on your router. Forward that port only.</span></span></label>
+          <label><input type="radio" name="dirReach" id="reachHttps" value="https">
+            <span><b>My own domain with HTTPS</b> (reverse proxy)
+              <span class="hint"><code>https://&hellip;</code> from Caddy, nginx or your own Cloudflare in front of
+                port <span class="reachPort">48000</span>. Put the proxy in <b>Trusted proxy addresses</b> below.</span></span></label>
+        </div>
+        <label id="dirPublicUrlRow" class="hide"><span class="lbl">Address</span>
+          <input type="url" id="dirPublicUrl" placeholder="https://sdr.example.org">
+          <div class="hint" id="dirPublicUrlHint"></div></label>
+        <!-- ★★ THE vibesdr.net ADDRESS IS OPTIONAL HERE, AND ONLY HERE. On the tunnel it is how the server is reached at
+             all, so the switch is not drawn there (Automatic already says it gets one). Off: the directory links straight
+             to the address above and its name.vibeserver.vibesdr.net answers "not found" (directory/migrations/0009). -->
+        <div id="dirAliasRow" class="hide">
+          <label style="display:flex;align-items:center;gap:10px;margin:12px 0 0">
+            <input type="checkbox" id="dirAlias" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Also give it a vibesdr.net address (<span class="addr">name.vibeserver.vibesdr.net</span>)</span></label>
+          <div class="hint" style="margin-left:26px">Off: the listing links straight to your address, and the vibesdr.net
+            name is held for you but not served. The directory page can show live listener counts only through the
+            vibesdr.net address.</div>
+        </div>
+        <details id="reachHow" class="hide how">
+          <summary>How: your own domain with HTTPS</summary>
+          <div class="hint">
+            <p>Point the proxy at <code>127.0.0.1:<span class="reachPort">48000</span></code> (or this machine&rsquo;s LAN
+              address) and nothing else. Each radio&rsquo;s own port answers on this machine only. Forward 443 (and 80, for
+              the certificate) to the proxy. Serve it at the root of a host: <code>https://sdr.example.org</code>, not
+              <code>/sdr</code>.</p>
+            <p><b>Let WebSockets through.</b> Audio, waterfall and controls all run over them. Caddy does this by itself:</p>
+            <pre>sdr.example.org {
+    reverse_proxy 127.0.0.1:<span class="reachPort">48000</span>
+}</pre>
+            <p>nginx needs it spelt out (inside a <code>server { listen 443 ssl; &hellip; }</code> with your certificate):</p>
+            <pre>location / {
+    proxy_pass http://127.0.0.1:<span class="reachPort">48000</span>;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+}</pre>
+            <p>Then add the proxy&rsquo;s address to <b>Trusted proxy addresses</b> below (<code>127.0.0.1, ::1</code> on
+              this machine), so listeners show as themselves, not as the proxy.</p>
+            <p>The directory checks the address <b>from the internet</b> when it lists it and every 15 minutes after:
+              it fetches <code>/vibeserver.json</code> and this server must answer, signed, within 15 seconds. Test it
+              from a phone on mobile data.</p>
+          </div>
+        </details>
       <h3 style="margin-top:18px">Battery</h3>
       <p class="why">For a host with a battery — a phone on a solar panel, a laptop. The level is
         shown on the admin page and beside this server in the directory. At the floor the server
@@ -2474,6 +2538,82 @@ async function benchRun(force) {
   }
 }
 
+/** ★★★ HOW LISTENERS REACH IT — the choice, read from the address itself: empty is the tunnel, https:// has a proxy in
+ *  front, anything else is the owner's own plain address. No stored choice, so nothing can disagree with the key. */
+function dirReachOf(url) {
+  const u = String(url || "").trim();
+  return !u ? "auto" : /^https:/i.test(u) ? "https" : "own";
+}
+function dirReach() {
+  return $("reachHttps").checked ? "https" : $("reachOwn").checked ? "own" : "auto";
+}
+/** The ports this machine's radios use behind the door (portForRadio in vibeserver_config.cpp): base+1… unless a radio
+ *  names its own. None of them answers from outside, so none belongs in a public address. */
+function dirRadioPorts(base, radios) {
+  const out = new Set();
+  let k = 0;
+  for (const r of (Array.isArray(radios) ? radios : [])) {
+    if (!r) continue;
+    k++;
+    out.add(r.port > 0 ? Number(r.port) : base + k);
+  }
+  return out;
+}
+/** ★★ Is this address usable for this choice? "" = yes, else the reason in words. Pure, so
+ *  scripts/test-setup-dir-reach.mjs runs it against the page source. Rules: the right scheme for the choice (VibeServer
+ *  has no TLS, so https:// always means something in front), a host the directory can reach from the internet (it
+ *  refuses private and local ones anyway, silently from here), no path (it keeps only scheme://host:port), and never a
+ *  radio's own port. */
+function dirReachCheck(reach, url, base, radioPorts) {
+  if (reach === "auto") return "";
+  const v = String(url || "").trim();
+  if (!v) return reach === "https" ? "Type your https:// address." : "Type your http:// address.";
+  let u;
+  try { u = new URL(v); } catch (e) { return "That is not a web address. It starts with " + (reach === "https" ? "https://" : "http://") + "."; }
+  if (reach === "https" && u.protocol !== "https:")
+    return "This choice needs an https:// address. A plain http:// address is \u201cMy own address\u201d.";
+  if (reach === "own" && u.protocol !== "http:")
+    return u.protocol === "https:"
+      ? "An https:// address means something sits in front of VibeServer. Choose \u201cMy own domain with HTTPS\u201d."
+      : "The address starts with http://.";
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!h) return "The address needs a host name.";
+  if (h === "localhost" || /\.(local|localhost|internal|home\.arpa)$/.test(h) || h === "0.0.0.0"
+      || /^(127|10)\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^169\.254\./.test(h)
+      || h === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h))
+    return "That address only works on your own network. The directory checks it from the internet.";
+  if ((u.pathname && u.pathname !== "/") || u.search || u.hash)
+    return "Give the address without a path: " + u.protocol + "//" + u.host + ". VibeServer must sit at the root of the host.";
+  const port = u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80);
+  if (radioPorts && radioPorts.has(port))
+    return "Port " + port + " is a radio\u2019s own port. It answers this machine only. Use the main port, " + base + ", or the port your router forwards to it.";
+  return "";
+}
+function dirReachBase() {
+  return parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 48000;
+}
+function dirReachProblem() {
+  const base = dirReachBase();
+  return dirReachCheck(dirReach(), $("dirPublicUrl").value, base, dirRadioPorts(base, cfg && cfg.radios));
+}
+function renderDirReach() {
+  const reach = dirReach();
+  $("dirPublicUrlRow").classList.toggle("hide", reach === "auto");
+  $("dirAliasRow").classList.toggle("hide", reach === "auto");
+  $("reachHow").classList.toggle("hide", reach !== "https");
+  $("dirPublicUrl").placeholder = reach === "https" ? "https://sdr.example.org" : "http://my-sdr.ddns.net:" + dirReachBase();
+  document.querySelectorAll(".reachPort").forEach(el => { el.textContent = String(dirReachBase()); });
+  const hint = $("dirPublicUrlHint");
+  const bad = dirReachProblem();
+  if (bad && $("dirPublicUrl").value.trim()) { hint.textContent = bad; hint.style.color = "#ffb833"; }
+  else {
+    hint.style.color = "";
+    hint.textContent = reach === "https"
+      ? "Your domain, as listeners will type it. The directory checks it answers before listing it."
+      : "Your DDNS name or public IP, and the port your router forwards to " + dirReachBase() + ".";
+  }
+}
+
 function renderDirStatus(st) {
   const el = $("dirStatus"); if (!el) return;
   const on = $("dirList") && $("dirList").checked;
@@ -2492,9 +2632,15 @@ function renderDirStatus(st) {
     return;
   }
   const addr = String(st.address || "");
+  const own = String(st.publicUrl || "");
   if (st.listed && addr) {
     el.innerHTML = `<b>Listed.</b> Accessible from <a href="https://${esc(addr)}/" target="_blank" rel="noopener"`
-      + ` style="color:var(--amber)">https://${esc(addr)}</a>` + (st.tunnelUrl ? ` &mdash; through a Cloudflare tunnel.` : `.`);
+      + ` style="color:var(--amber)">https://${esc(addr)}</a>` + (st.tunnelUrl ? ` &mdash; through a Cloudflare tunnel.`
+      : /^https?:\/\//i.test(own) ? ` and from <a href="${esc(own)}/" target="_blank" rel="noopener" style="color:var(--amber)">${esc(own)}</a>.` : `.`);
+  } else if (st.listed && st.alias === false && /^https?:\/\//i.test(own)) {
+    // ★★ Opted out of the vibesdr.net address: there is no `address`, and that is not "registering".
+    el.innerHTML = `<b>Listed.</b> The directory links straight to <a href="${esc(own)}/" target="_blank" rel="noopener"`
+      + ` style="color:var(--amber)">${esc(own)}</a> &mdash; no vibesdr.net address.`;
   } else if (st.error) {
     el.innerHTML = `<b style="color:#ff8a7d">Not listed:</b> ${esc(String(st.error))}`;
   } else if (st.running) {
@@ -6159,6 +6305,11 @@ function fill() {
   renderDirStatus(cfg.dirStatus);
   $("dirName").value          = cfg.dirName || "";
   $("dirPublicUrl").value     = cfg.dirPublicUrl || "";
+  { const reach = dirReachOf(cfg.dirPublicUrl);
+    $("reachAuto").checked = reach === "auto"; $("reachOwn").checked = reach === "own"; $("reachHttps").checked = reach === "https"; }
+  // ★ An older server sends no dirAlias: it always had the alias, so the box reads on.
+  $("dirAlias").checked       = cfg.dirAlias !== false;
+  renderDirReach();
   if ($("batteryPauseAt")) { $("batteryPauseAt").value = cfg.batteryPauseAt || 0; $("batteryResumeAt").value = cfg.batteryResumeAt || 40; }
   $("dirShareSec").value      = String(cfg.dirShareSec || 0);
   $("landingMessage").value   = cfg.landingMessage || "";
@@ -7458,7 +7609,8 @@ function stashServer() {
   cfg.dirList       = $("dirList").checked;
   cfg.tunnelResume  = $("tunnelResume").checked;
   cfg.dirName       = $("dirName").value.trim();
-  cfg.dirPublicUrl  = $("dirPublicUrl").value.trim();
+  cfg.dirPublicUrl  = dirReach() === "auto" ? "" : $("dirPublicUrl").value.trim();
+  cfg.dirAlias      = $("dirAlias").checked;
   cfg.dirShareSec   = parseInt($("dirShareSec").value, 10) || 0;
   cfg.landingMessage = $("landingMessage").value.trim();
   cfg.landingLinkUrl = $("landingLinkUrl").value.trim();
@@ -7494,7 +7646,9 @@ function collect() {
     dirList:          $("dirList").checked,
     tunnelResume:     $("tunnelResume").checked,
     dirName:          $("dirName").value.trim(),
-    dirPublicUrl:     $("dirPublicUrl").value.trim(),
+    // ★ Automatic IS an empty address — whatever is still typed in the hidden box is not sent.
+    dirPublicUrl:     dirReach() === "auto" ? "" : $("dirPublicUrl").value.trim(),
+    dirAlias:         $("dirAlias").checked,
     batteryPauseAt:   parseInt($("batteryPauseAt").value || "0", 10),
     batteryResumeAt:  parseInt($("batteryResumeAt").value || "40", 10),
     dirShareSec:      parseInt($("dirShareSec").value, 10) || 0,
@@ -7546,6 +7700,7 @@ document.addEventListener("change", (e) => {
   const t = e.target;
   if (t && (t.id === "releaseWhenIdle")) syncSpectroOffer();
   if (t && (t.id === "srvPort")) renderPortHint();
+  if (t && (t.name === "dirReach" || t.id === "srvPort")) renderDirReach();
 });
 // ★ `input` as well as `change`: the derived range is the whole point of the field, and a hint
 //   that only catches up when the box loses focus reads as broken.
@@ -7553,6 +7708,7 @@ document.addEventListener("input", (e) => {
   if (!e.target) return;
   if (e.target.id === "srvPort") renderPortHint();
   if (e.target.id === "landingLinkUrl") landingLinkCheck();
+  if (e.target.id === "dirPublicUrl" || e.target.id === "srvPort") renderDirReach();
 });
 
 async function signIn(fromTicket) {
@@ -8688,6 +8844,8 @@ $("saveRadioBtn").onclick = async () => {
   $("saveErr").textContent = "";
   const list = radioList();
   if (!list.length) return;
+  // ★ This posts the whole machine too (collect()), so the same address rule holds here.
+  if (dirReachStops()) return;
   // ★ The same wait as the master save: this button is the ONE most likely to be pressed straight
   //   after opening a tab, which is precisely the window where the form is still the last radio's.
   await hwPending;
@@ -8738,8 +8896,23 @@ $("saveRadioBtn").onclick = async () => {
   $("saveRadioBtn").disabled = false;
 };
 
+/** ★★ A LISTING WHOSE ADDRESS CANNOT WORK IS NOT SAVED (2026-11-12). Only while "List this server publicly" is on —
+ *  an unlisted server never sends the address anywhere, so a half-typed one must not block an unrelated save. Says
+ *  why where the owner is looking, and takes them to the box. true = stop. */
+function dirReachStops() {
+  if (!$("dirList").checked) return false;
+  const bad = dirReachProblem();
+  if (!bad) return false;
+  $("saveErr").textContent = "Not saved \u2014 the VibeSDR.net address: " + bad;
+  renderDirReach();
+  const el = $("dirPublicUrl");
+  if (el && !$("dirPublicUrlRow").classList.contains("hide")) { el.scrollIntoView({behavior: "smooth", block: "center"}); el.focus(); }
+  return true;
+}
+
 $("saveBtn").onclick = async () => {
   $("saveErr").textContent = "";
+  if (dirReachStops()) return;
   $("saveBtn").disabled = true;
   $("barMsg").textContent = "Saving…";
   // ★★★ WAIT FOR THE FORM TO BELONG TO THIS RADIO. stashRadio() refuses to read a form that is

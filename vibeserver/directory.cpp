@@ -762,11 +762,17 @@ bool publishOnce(const Settings& want, const std::string& url) {
     //    restarted under us must be given it again before the directory next challenges us.
     if (!key.empty()) vibe::LocalSdrShim::setDirectoryKey(key);
 
+    /* ★★ HOW IT IS REACHED, ON THE PING TOO. `kind` lets the directory follow an owner who moves a listed server between
+     *  the tunnel and their own address without re-registering; `alias` (direct only) is the owner's "also give it a
+     *  vibesdr.net address". An older directory ignores both; a directory that never hears `alias` keeps the alias. */
+    const bool direct = !want.publicUrl.empty();
+    const std::string reach = std::string(",\"kind\":\"") + (direct ? "direct" : "tunnel") + "\""
+                            + (direct ? std::string(",\"alias\":") + (want.alias ? "true" : "false") : std::string());
     std::string body;
     if (!id.empty() && !key.empty()) {
         body = "{\"id\":\"" + esc(id) + "\",\"key\":\"" + esc(key) + "\""
              + ",\"url\":\"" + esc(url) + "\",\"grid\":\"" + esc(want.locator) + "\""
-             + ",\"name\":\"" + esc(want.name) + "\",\"status\":" + status
+             + ",\"name\":\"" + esc(want.name) + "\",\"status\":" + status + reach
              + lanAddressesJson(want.port);   // ★ SAME NETWORK → GO DIRECT — see lanAddressesJson
         // ★★★ THREE STATES. -1 omits (a renewal must leave the window alone), 0 is explicitly
         //     permanent, >0 sets one. Two states were not enough on Android: with 0 doing double
@@ -816,8 +822,8 @@ bool publishOnce(const Settings& want, const std::string& url) {
      *   taken falls back to the derived one below, so a lost name never blocks the listing. */
     const std::string remembered = jsonStr(loadState(), "slug");
     body = "{\"name\":\"" + esc(want.name) + "\",\"grid\":\"" + esc(want.locator) + "\""
-         + ",\"url\":\"" + esc(url) + "\",\"kind\":\"" + (want.publicUrl.empty() ? "tunnel" : "direct")
-         + "\",\"locator\":\"" + esc(want.locator) + "\",\"status\":" + status;
+         + ",\"url\":\"" + esc(url) + "\"" + reach
+         + ",\"locator\":\"" + esc(want.locator) + "\",\"status\":" + status;
     // ★★★ THE SHARE LENGTH TRAVELS ON THE REGISTRATION TOO. It was on the ping only, and a
     //     temporary share set up from scratch was recorded as PERMANENT — the path every new user
     //     takes first was the one path that could not work.
@@ -1275,6 +1281,10 @@ std::string statusJson() {
          + ",\"address\":\"" + esc(g_address) + "\""
          + ",\"tunnelUrl\":\"" + esc(g_tunnelUrl) + "\""
          + ",\"error\":\"" + esc(g_error) + "\""
+         // ★★ The owner's own address and whether it also has the vibesdr.net one, so the setup page can say where an
+         //    opted-out listing points (it has no `address` then) rather than "registering…" for ever.
+         + ",\"publicUrl\":\"" + esc(g_want.publicUrl) + "\""
+         + ",\"alias\":" + (g_want.publicUrl.empty() || g_want.alias ? "true" : "false")
          + ",\"internet\":" + (g_netUp.load() ? "true" : "false") + "}";
 }
 
