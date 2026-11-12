@@ -114,7 +114,7 @@ await session('rec', {}, async ({ ev, shot, until, click }) => {
   ok(await until(`window.__vibeAB && ${'window.__vibeAB()'}?.max === 1`, 8000), 'hwinfo offers VFO A/B');
   await click('#mAudio'); await sleep(500);
   await click('[data-rb="0"]'); await sleep(200);   // ★ the REC BUFFER off first (its default is 30 s) — tested at the end
-  ok(await ev(`document.getElementById('mRecBRow').hidden && document.getElementById('mRecLbl').textContent === 'REC'`), 'B off: one REC, no REC B row');
+  ok(await ev(`document.getElementById('mRecBRow').hidden && getComputedStyle(document.getElementById('mRecBRow')).display === 'none' && document.getElementById('mRecLbl').textContent === 'REC'`), 'B off: one REC, no REC B row');
   await ev(`${S}.setAB(true), 0`);
   ok(await until(`${S}.abOn && ${S}.watchRecVfo`, 4000), 'B on, and the server offers per-VFO recording');
   await ev(`${S}.tuneVfo('B', ${B_HZ}, 'am'), 0`);
@@ -165,7 +165,7 @@ await session('rec', {}, async ({ ev, shot, until, click }) => {
   // ── B off mid-recording
   await ev(`${S}.setAB(false), 0`);
   await sleep(1500);
-  ok(await ev(`document.getElementById('mRecBRow').hidden && document.getElementById('mRecLbl').textContent === 'REC'`), 'B off: the row goes, REC is plain REC again');
+  ok(await ev(`document.getElementById('mRecBRow').hidden && getComputedStyle(document.getElementById('mRecBRow')).display === 'none' && document.getElementById('mRecLbl').textContent === 'REC'`), 'B off: the row goes, REC is plain REC again');
   ok(await until(`${sentWatch}.some(m => m.off === true)`, 1000), '…the server told B is off');
   const recs2 = JSON.parse(await ev(RECS) || '[]');
   ok(recs2.filter((r) => /_VFO-B\.wav$/.test(r.name)).length === 2, 'and the recording that was running is kept');

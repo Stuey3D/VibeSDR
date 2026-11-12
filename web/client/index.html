@@ -1036,6 +1036,9 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .mOnly { display: flex; }
 .mOnly.mrow { align-items: center; gap: 0.6em; }
 .mOnlyGrid { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 0.5em; }
+/* ★ hidden still wins (2026-11-12): .mOnlyGrid's display:grid !important comes after the global [hidden] rule and has the
+   same specificity, so it beat it — REC B showed with VFO B off (Stuart). */
+.mOnlyGrid[hidden] { display: none !important; }
 .mPanelBtn {
   background: var(--btn-bg); color: var(--btn-text);
   border: 1px solid var(--btn-border); border-radius: 7px;
