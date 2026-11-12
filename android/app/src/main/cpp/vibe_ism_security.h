@@ -120,10 +120,133 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace honeywell
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  DSC (Digital Security Controls) contacts, motion, smoke, water — 433.92 MHz OOK, return-to-zero: 500 µs bits, a 250 µs
+//  pulse in the second half = 1, none = 0 (the WS4945 / EV-DW4927 double every time). Source: the FCC test report for
+//  FCC ID F5300NB912 (the timing and the 48-bit packet: 4 sync 1s, then a 1 before every further 8 bits, status 8 · ESN
+//  24 · CRC 8); the CRC — reflected, poly 0xF5, init 0x3D over the 5 bytes, 0 when right — and the status bits (0x02
+//  closed, 0x40 heartbeat, 0x08 battery low, 0x10 / ¬0x01 tamper) from rtl_433's dsc.c notes.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace dsc {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (double per : {500.0, 1072.0}) {
+        for (Bits row : kit::rzRows(b.ook, per, per * 0.25, per * 0.8, per * 9.5)) {
+            if (row.size() < 40 || row.size() > 48) continue;
+            row.resize(48, 0);                                  // a CRC ending in zeros sends nothing at its end
+            if (bitsAt(row, 0, 4) != 0xF || !row[12] || !row[21] || !row[30] || !row[39]) continue;
+            uint8_t by[5] = {uint8_t(bitsAt(row, 4, 8)), uint8_t(bitsAt(row, 13, 8)), uint8_t(bitsAt(row, 22, 8)),
+                             uint8_t(bitsAt(row, 31, 8)), uint8_t(bitsAt(row, 40, 8))};
+            if (by[0] == 0xFF && by[1] == 0xFF && by[2] == 0xFF && by[3] == 0xFF) continue;
+            if (kit::crc8r(by, 5, 0xF5, 0x3D) != 0) continue;
+            const int st = by[0];
+            const uint32_t esn = uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+            Reading r = alarmReading("DSC", "sensor", 12, esn);
+            std::string w = (st & 0x02) ? "closed" : "open";
+            const bool tamper = !(st & 0x01) || (st & 0x10);
+            if (tamper) addWord(w, "tamper");
+            if (st & 0x40) addWord(w, "check-in");
+            r.extra = w;
+            r.battOk = (st & 0x08) ? 0 : 1;
+            r.fact("closed", (long long)((st >> 1) & 1)); r.fact("event", (long long)!(st & 0x40));
+            r.fact("tamper", (long long)tamper); r.fact("status", (long long)st);
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace dsc
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SIMPLISAFE (gen 1/2) sensors — 433.92 MHz OOK, every mark and gap a bit: ~500 µs = 0, ~1000 µs = 1; bytes LSB first.
+//  Facts: the notes in rtl_433's simplisafe.c (A. Callis): a row arrives inverted, starting CC 5F; inverted, byte 2 =
+//  0x88 for a sensor; bytes 3–7 a 5-character ID; byte 8 sequence; byte 9 state (1 contact open, 2 closed, 3 alarm
+//  off); byte 10 = sequence + state. Two identical rows are required. (Keypad PIN frames are NEVER decoded here.)
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace simplisafe {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = kit::piwmRows(b.ook, 500, 1000, 0.3);
+    for (const Bits& row : rows) {
+        if (row.size() != 92 || !kit::twice(rows, row)) continue;
+        const Bits inv = invert(row);
+        if (bitsAt(inv, 0, 16) != 0x33A0 || bitsAt(inv, 16, 8) != 0x88) continue;
+        const auto by = bytesAt(inv, 0, 11);
+        const int seq = kit::rev8(by[8]), state = kit::rev8(by[9]), cs = kit::rev8(by[10]);
+        if (((seq + state) & 0xFF) != cs) continue;
+        uint64_t id = 0; for (int k = 3; k <= 7; ++k) id = id << 8 | kit::rev8(by[size_t(k)]);
+        Reading r = alarmReading("SimpliSafe", "sensor", 13, id);
+        r.extra = state == 1 ? "open" : state == 2 ? "closed" : state == 3 ? "alarm off" : "state " + std::to_string(state);
+        r.fact("state", (long long)state); r.fact("seq", (long long)seq);
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace simplisafe
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  GENERIC 433.3 MHz MOTION SENSOR / ALARM (off-brand kits) — OOK PWM: ~888 µs pulse = 1, ~1332–1784 µs = 0, gaps
+//  ≤ 1.2 ms, ~1.7 ms between the 8 copies of a 20-bit code, the packets alternating 888/1332 and 1332/1784 µs marks with
+//  472 / 920 µs gaps (a constant period). Facts: the notes in rtl_433's generic_motion.c (example codes 80042 arm, 80002
+//  disarm, 80008 ping, 800a2 / 800c2 / 800e2 motion). No check: three copies alike, every gap agreeing with its mark.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace genericmotion {
+
+/** Rows of 20 (mark, gap-before) bits: a short mark (~888 µs in one packet, ~1332 in the next) = 1, a long one = 0 —
+ *  AND the gap before each mark must say the same (~920 µs before a 1, ~472 before a 0): mark + gap is one bit period,
+ *  so a packet whose marks and gaps disagree is not this sender. */
+inline std::vector<Bits> rows(const Runs& r) {
+    std::vector<Bits> out;
+    Bits row; double per = 0;
+    auto close = [&] { if (!row.empty()) out.push_back(row); row.clear(); per = 0; };
+    for (size_t i = 0; i + 1 < r.size(); ++i) {
+        if (r[i] <= 0) continue;
+        const int m = r[i];
+        const int gapBefore = i ? -r[i - 1] : 99999;
+        if (gapBefore > 1500 || row.empty()) {           // a packet's first mark: after the repeat gap
+            close();
+            if (m >= 700 && m <= 1500) { row.push_back(1); per = m + 920; }   // every packet opens with a 1
+            continue;
+        }
+        const bool one = gapBefore >= 650 && gapBefore <= 1250, zero = gapBefore >= 300 && gapBefore < 650;
+        if (!one && !zero) { close(); continue; }
+        if (std::fabs(m + gapBefore - per) > 0.15 * per) { close(); continue; }
+        row.push_back(one ? 1 : 0);
+    }
+    close();
+    return out;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const auto rs = rows(b.ook);
+    for (const Bits& row : rs) {
+        if (row.size() != 20) continue;
+        int same = 0; for (const Bits& o : rs) same += o == row;
+        if (same < 3) continue;
+        const uint32_t code = bitsAt(row, 0, 20);
+        if ((code & 0xFFF) == 0 || code == 0xFFFFF || (code >> 8) == 0xFFF) continue;
+        Reading r = alarmReading("Generic", "motion sensor", 14, code >> 8);
+        const int ev = code & 0xFF;
+        r.extra = ev == 0x42 ? "arm" : ev == 0x02 ? "disarm" : ev == 0x08 ? "check-in" : (ev & 0x0F) == 0x02 ? "motion" : "event";
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace genericmotion
+
 /** The alarm-sensor families, strongest checks first. */
 inline bool decodeSecurity(const Burst& b, std::vector<Reading>& out) {
     if (honeywell::decode(b, out)) return true;
     if (interlogix::decode(b, out)) return true;
+    if (dsc::decode(b, out)) return true;
+    if (simplisafe::decode(b, out)) return true;
+    if (genericmotion::decode(b, out)) return true;
     return false;
 }
 

@@ -103,6 +103,46 @@ inline std::vector<Bits> ppmRows(const Runs& r, double shortGap, double longGap,
     return rows;
 }
 
+/** RETURN-TO-ZERO rows: a mark in a bit slot = 1, an empty slot = 0; marks [markMin, markMax], slots of `periodUs`
+ *  counted from mark START to mark START; a gap over `rowGapUs` (or a mark out of range) ends the row. Trailing zeros
+ *  are not on the air: callers pad. */
+inline std::vector<Bits> rzRows(const Runs& r, double periodUs, double markMin, double markMax, double rowGapUs) {
+    std::vector<Bits> rows(1);
+    double t = 0, lastStart = -1;
+    for (size_t i = 0; i < r.size(); ++i) {
+        const int d = r[i];
+        if (d > 0) {
+            if (d < markMin || d > markMax) { if (!rows.back().empty()) rows.emplace_back(); lastStart = -1; }
+            else {
+                if (lastStart >= 0) {
+                    const double k = (t - lastStart) / periodUs;
+                    const long n = std::lround(k);
+                    if (n < 1 || std::fabs(k - double(n)) > 0.3) { if (!rows.back().empty()) rows.emplace_back(); }
+                    else for (long z = 1; z < n; ++z) rows.back().push_back(0);
+                }
+                rows.back().push_back(1);
+                lastStart = t;
+            }
+        } else if (-d > rowGapUs) { if (!rows.back().empty()) rows.emplace_back(); lastStart = -1; }
+        t += std::abs(d);
+    }
+    if (rows.back().empty()) rows.pop_back();
+    return rows;
+}
+
+/** PIWM: every run, mark AND gap, is one bit — ~shortUs = 0, ~longUs = 1 (`tol` relative); anything else ends a row. */
+inline std::vector<Bits> piwmRows(const Runs& r, double shortUs, double longUs, double tol = 0.3) {
+    std::vector<Bits> rows(1);
+    for (int d0 : r) {
+        const double d = std::abs(d0);
+        if (std::fabs(d - shortUs) <= shortUs * tol) rows.back().push_back(0);
+        else if (std::fabs(d - longUs) <= longUs * tol) rows.back().push_back(1);
+        else if (!rows.back().empty()) rows.emplace_back();
+    }
+    if (rows.back().empty()) rows.pop_back();
+    return rows;
+}
+
 /** Every position of `pattern` (`n` ≤ 32 bits, MSB first) in `b`. */
 inline std::vector<size_t> findAll(const Bits& b, uint32_t pattern, int n) {
     std::vector<size_t> at;
