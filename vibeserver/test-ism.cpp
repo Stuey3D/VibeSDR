@@ -404,6 +404,57 @@ static Runs bmwTx(uint32_t id, int pRaw, int tC) {
     return chipsToRuns(c + "0", 25);
 }
 
+// BMW Gen3: FSK 52 µs, sync 1100 1100 1100 1101, a reference chip, differential Manchester (1 = no change), CRC-16 0x1021.
+static Runs bmwG3Tx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(pRaw), uint8_t(tC + 40), 0xF8, 0x02, 0x03 };
+    const uint16_t c = crc16(by.data(), 9, 0x1021, 0); by.push_back(uint8_t(c >> 8)); by.push_back(uint8_t(c));
+    std::string ch = "1010 1100 1100 1100 1101 0"; dmcChips(ch, bytesToBits(by), false);
+    return chipsToRuns(ch + "10", 52);
+}
+// AVE: FSK 100 µs, sync 1100 ×7 1101, a reference chip, differential Manchester, CRC-8 0x31 init 0xFF over all eight = 0.
+static Runs aveTx(uint32_t id, int pRaw, int tC, int mode = 1) {
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(pRaw), uint8_t(tC + 50), uint8_t(mode << 6) };
+    by.push_back(crc8(by.data(), 7, 0x31, 0xFF));
+    std::string ch = "1100 1100 1100 1100 1100 1100 1100 1101 0"; dmcChips(ch, bytesToBits(by), false);
+    return chipsToRuns(ch + "10", 100);
+}
+// Airpuxem: the VDO run-in, Manchester (0,1) = 1: 0x5, ID (4), flags, kPa + 100, °C, battery, CRC-8 0x2F init 0xAA, again.
+static Runs airpuxemTx(uint32_t id, int kpa, int tC) {
+    const int raw = kpa + 100;
+    std::vector<uint8_t> by = { uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(((raw >> 8 & 1) << 7) | ((raw >> 9 & 1) << 3) | 0x01),
+                                uint8_t(raw), uint8_t(int8_t(tC)), 0x7E };
+    const uint8_t c = crc8(by.data(), 8, 0x2F, 0xAA); by.push_back(c); by.push_back(c);
+    Bits d = bitsOf(0x5, 4); Bits b = bytesToBits(by); d.insert(d.end(), b.begin(), b.end());
+    return vdoTx(d, 20);
+}
+// TyreGuard 400: OOK 100 µs Manchester: 0xFD5FD5F, ID (28), kPa, °C + 40, flags, CRC-8 0x31 init 0xDD over all eleven = 0.
+static Runs tyreGuardTx(uint32_t id28, int kpa, int tC) {
+    Bits d = bitsOf(0xFD5FD5F, 28);
+    for (const Bits& x : {bitsOf(id28, 28), bitsOf(uint64_t(kpa & 0xFF), 8), bitsOf(uint64_t(tC + 40), 8), bitsOf(uint64_t((kpa >> 8 & 7) << 4), 8)})
+        d.insert(d.end(), x.begin(), x.end());
+    std::vector<uint8_t> by; for (size_t i = 0; i < 10; ++i) by.push_back(uint8_t(bitsAt(d, 8 * i, 8)));
+    const Bits c8 = bitsOf(crc8(by.data(), 10, 0x31, 0xDD), 8); d.insert(d.end(), c8.begin(), c8.end());
+    std::string c = "0101"; mcChips(c, d, true);
+    return chipsToRuns(c + "0", 100);
+}
+// Schrader RDC3 motorcycle: OOK 122 µs Manchester: twelve ones, 6 ones + ID (24) + ×0.5 kPa (10) + °C + 50, CRC-8 0x07 init 0xE0.
+static Runs motoTx(uint32_t id24, int pRaw10, int tC) {
+    std::vector<uint8_t> by = { uint8_t(0xFC | (id24 >> 22)), uint8_t(id24 >> 14), uint8_t(id24 >> 6), uint8_t(((id24 & 0x3F) << 2) | (pRaw10 >> 8)), uint8_t(pRaw10), uint8_t(tC + 50) };
+    by.push_back(crc8(by.data(), 6, 0x07, 0xE0));
+    Bits d(12, 1); Bits b = bytesToBits(by); d.insert(d.end(), b.begin(), b.end());
+    std::string c = "0101 01"; mcChips(c, d, false);
+    return chipsToRuns(c + "10", 122);
+}
+// TRW GQ4-70T (Chrysler): OOK 52 µs Manchester: 0x0001, mode, ID (4), flags, ×0.4 PSI, °C + 50, motion, CRC-8 0x07, a nibble.
+static Runs trwTx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { 0x5C, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x61, uint8_t(pRaw), uint8_t(tC + 50), 0x0E };
+    by.push_back(crc8(by.data(), 9, 0x07, 0));
+    Bits d = bitsOf(0x0001, 16); Bits b = bytesToBits(by); d.insert(d.end(), b.begin(), b.end());
+    for (const Bits& x : {bitsOf(0x4, 4)}) d.insert(d.end(), x.begin(), x.end());
+    std::string c; mcChips(c, d, true);
+    return chipsToRuns(c + "0", 52);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -581,6 +632,12 @@ int main(int argc, char** argv) {
             {"Sefis M3", sefisTx(4, 0x0C00, 0x48), true, 52, "Sefis", ((1 << 13 | 0x0C00) - 0x0E00) / 102.4, 14 + ((0x48 + 0x00) & 0x0F), false},
             {"Mercedes Sprinter", sprinterTx(0x247E80B6, 179, 22), true, 25, "Sprinter", 179 / 2.75 * 6.894757, 22, false},
             {"BMW Gen5 (Huf)", bmwTx(0x23E136A1, 92, 10), true, 25, "BMW Gen4/Gen5", 92 * 2.45, 10, false},
+            {"BMW Gen3", bmwG3Tx(0x1C50F175, 133, 29), true, 52, "BMW Gen3", (133 - 43) * 2.5, 29, false},
+            {"AVE", aveTx(0x0A1B2C3D, 95, 19), true, 100, "AVE", 95 * 2.352, 19, false},
+            {"Airpuxem", airpuxemTx(0x3344AA55, 240, 21), true, 52, "Airpuxem", 240, 21, false},
+            {"TyreGuard 400", tyreGuardTx(0x6B20D21, 232, 7), false, 100, "TyreGuard", 232, 7, false},
+            {"Schrader RDC3 moto", motoTx(0x420B3D, 0x2DC, 33), false, 122, "RDC3", 0x2DC * 0.5, 33, false},
+            {"TRW Chrysler", trwTx(0x3E52852E, 83, 25), false, 52, "TRW (Chrysler", 83 * 0.4 * 6.894757, 25, false},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},

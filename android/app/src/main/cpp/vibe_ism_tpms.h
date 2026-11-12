@@ -193,6 +193,26 @@ template <class F> bool eachMc(Chips& ch, bool fsk, double nominal, const char* 
     return false;
 }
 
+/** A run of BITS ("0111 1111", spaces ignored) as the chips Manchester sends for it — for syncs that the notes give
+ *  after decoding. */
+inline std::string mcPat(const char* bits, bool hiLoIsOne) {
+    std::string c;
+    for (const char* q = bits; *q; ++q) if (*q == '0' || *q == '1') c += ((*q == '1') == hiLoIsOne) ? "10" : "01";
+    return c;
+}
+/** eachMc with a sync given as decoded BITS, tried in both Manchester conventions — for the "zero-bit" OOK frames
+ *  whose notes say nothing of which way round a pair is read (the check decides). */
+template <class F> bool eachMcBits(Chips& ch, bool fsk, double nominal, const char* syncBits, int nBits, F&& f) {
+    for (int conv = 0; conv < 2; ++conv) {
+        const std::string pat = mcPat(syncBits, conv == 0);
+        if (eachMc(ch, fsk, nominal, pat.c_str(), nBits, conv == 0, f)) return true;
+    }
+    return false;
+}
+
+/** Bits written as text ("0101 1110") — a decoded sync the frame's check covers. */
+inline Bits mcBitsFromSync(const char* bits) { Bits b; for (const char* q = bits; *q; ++q) if (*q == '0' || *q == '1') b.push_back(uint8_t(*q - '0')); return b; }
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  SCHRADER "GG4" (the long-running Schrader frame: FCC ID MRXGG4 — many European and US OE fitments)
 //  Facts: rtl_433 schraeder.c notes. OOK Manchester, 120 µs half-bit, a mark-then-space half pair = 1. A ~500 µs wake
@@ -680,6 +700,146 @@ inline bool bmwHuf(Chips& ch, std::vector<Reading>& out) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  BMW GEN2 / GEN3 — facts: rtl_433 tpms_bmw_g3.c notes (issues #2893, #3300; their worked frames' CRCs checked). FSK
+//  ~52 µs chips, sync "1100 1100 1100 1101", a reference chip, differential Manchester (1 = no change at the start): ID
+//  (32), pressure ((raw − 43) × 2.5 kPa), temperature (°C + 40), flags (3 on Gen3, 2 on Gen2), CRC-16 poly 0x1021 init 0
+//  over the frame = 0. STRONG. Not in the corpus as a recording.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool bmwGen23(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "1100 1100 1100 1101";
+    for (const Bits& c : ch.rows(true, 52))
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1))
+            for (int len : {11, 10}) {
+                Bits d;
+                if (!dmcRead(c, p + patLen(kSync) + 1, 8 * len, false, d)) continue;
+                const auto by = pack(d);
+                if (crc16(by.data(), size_t(len), 0x1021, 0x0000) != 0 || allSame(by.data(), size_t(len))) continue;
+                const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+                if (id == 0 || id == 0xFFFFFFFF) continue;
+                Reading r = tyre("BMW", len == 11 ? "BMW Gen3" : "BMW Gen2", 29, id, false);
+                r.kpa = std::max(0.0, (int(by[4]) - 43) * 2.5);
+                r.tempC = int(by[5]) - 40;
+                if (!plausible(r.kpa, r.tempC)) continue;
+                out.push_back(r);
+                return true;
+            }
+    return false;
+}
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  AVE (aftermarket) — facts: rtl_433 tpms_ave.c notes. FSK ~100 µs chips, sync "1100 1100 1100 1100 1100 1100 1100
+//  1101", a reference chip, differential Manchester: ID (32), pressure (raw by a mode table: modes 0/1 × 2.352 kPa less
+//  47 / 0 raw, modes 2/3 × 5.491 kPa less 18.2 / 0 raw), temperature (°C + 50), flags (mode 2, battery 3: 7 low), CRC-8
+//  poly 0x31 init 0xFF over all eight = 0. STRONG. Not in the corpus as a recording.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool ave(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "1100 1100 1100 1100 1100 1100 1100 1101";
+    for (const Bits& c : ch.rows(true, 100))
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            Bits d;
+            if (!dmcRead(c, p + patLen(kSync) + 1, 64, false, d)) continue;
+            const auto by = pack(d);
+            if (crc8(by.data(), 8, 0x31, 0xFF) != 0 || allSame(by.data(), 8)) continue;
+            const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+            if (id == 0 || id == 0xFFFFFFFF) continue;
+            const int mode = by[6] >> 6 & 3, batt = by[6] >> 3 & 7;
+            static const double kRatio[4] = {2.352, 2.352, 5.491, 5.491}, kOff[4] = {47, 0, 18.2, 0};
+            Reading r = tyre("AVE", "AVE", 30, id, false);
+            r.kpa = std::max(0.0, (by[4] - kOff[mode]) * kRatio[mode]);
+            r.tempC = int(by[5]) - 50;
+            r.battOk = batt == 7 ? 0 : 1;
+            if (!plausible(r.kpa, r.tempC)) continue;
+            out.push_back(r);
+            return true;
+        }
+    return false;
+}
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  AIRPUXEM TYH11_EU6_ZQ (Senasic SNP739D; a white-label Jansite) — facts: rtl_433 tpms_airpuxem.c notes. The VDO-style
+//  run-in, Manchester ((0,1) = 1): a 0x5 nibble, ID (32), flags / pressure MSBs / position, pressure LSBs (kPa + 100
+//  offset, 10 bits), temperature (signed °C), battery, CRC-8 poly 0x2F init 0xAA over the eight bytes after the
+//  nibble. STRONG. Not in the corpus as a recording.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool airpuxem(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, true, 52, "1010 1010 1010 1010 1010 1001", 84, false, [&](const std::vector<uint8_t>&, const Bits& d) {
+        if (bitsAt(d, 0, 4) != 0x5) return false;
+        const auto by = pack(d, 4);   // 8 payload bytes, then the CRC
+        if (crc8(by.data(), 8, 0x2F, 0xAA) != bitsAt(d, 68, 8) || allSame(by.data(), 8)) return false;
+        const uint32_t id = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("Airpuxem", "Airpuxem TYH11", 31, id, false);
+        r.kpa = std::max(0, int(by[5] | ((by[4] >> 7 & 1) << 8) | ((by[4] >> 3 & 1) << 9)) - 100);
+        r.tempC = int8_t(by[6]);
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  TYREGUARD 400 (Davies Craig; 434.1 MHz) — facts: rtl_433 tpms_tyreguard400.c notes. OOK Manchester ("zero-bit"),
+//  100 µs half-bits: 88 bits from a fixed 28-bit sync 0xFD5FD5F — sync, ID (28), pressure (8 bits + 3 more in the flags,
+//  kPa), temperature (°C + 40), flags (leak, acknowledge, pairing), CRC-8 poly 0x31 init 0xDD over all eleven bytes =
+//  0. STRONG. Not in the corpus as a recording.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool tyreGuard400(Chips& ch, std::vector<Reading>& out) {
+    return eachMcBits(ch, false, 100, "1111 1101 0101 1111 1101 0101 1111", 60, [&](const std::vector<uint8_t>&, const Bits& d) {
+        Bits all = mcBitsFromSync("1111 1101 0101 1111 1101 0101 1111");
+        all.insert(all.end(), d.begin(), d.end());
+        const auto by = pack(all);
+        if (crc8(by.data(), 11, 0x31, 0xDD) != 0) return false;
+        const uint32_t id = bitsAt(all, 28, 28);
+        if (id == 0 || id == 0x0FFFFFFF) return false;
+        Reading r = tyre("TyreGuard", "TyreGuard 400", 32, id, false);
+        r.kpa = by[7] | ((by[9] & 0x70) << 4);
+        r.tempC = int(by[8]) - 40;
+        if ((by[9] & 0x03) == 0x03) r.extra = "pairing";
+        else if (by[9] & 0x03) r.extra = "leak";
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SCHRADER RDC3 MOTORCYCLE (FCC ID MRXRDC3) — facts: rtl_433 tpms_schrader_motorcycle.c notes (issue #3512; its worked
+//  frames' CRCs checked). OOK Manchester ("zero-bit"), 122 µs half-bits: twelve ones, then 56 bits — 6 fixed ones, ID
+//  (24), pressure (10 bits, × 0.5 kPa), temperature (°C + 50), CRC-8 poly 0x07 init 0xE0 over all seven bytes = 0.
+//  STRONG. Not in the corpus as a recording.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool schraderMoto(Chips& ch, std::vector<Reading>& out) {
+    return eachMcBits(ch, false, 122, "1111 1111 1111", 56, [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc8(by.data(), 7, 0x07, 0xE0) != 0 || allSame(by.data(), 7)) return false;
+        const uint32_t id = uint32_t(by[0] & 0x03) << 22 | uint32_t(by[1]) << 14 | uint32_t(by[2]) << 6 | (by[3] >> 2);
+        if (id == 0 || id == 0xFFFFFF) return false;
+        Reading r = tyre("Schrader", "Schrader RDC3 (motorcycle)", 33, id, false);
+        r.kpa = (((by[3] & 0x03) << 8) | by[4]) * 0.5;
+        r.tempC = int(by[5]) - 50;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  TRW GQ4-70T (Chrysler / Jeep / Dodge / Ram 2014-2022, OE and clone) — facts: rtl_433 tpms_trw.c notes (issue #3256;
+//  FCC GQ4-70T filing; their worked frames' CRCs checked). Manchester ("zero-bit"), ~52 µs half-bits, sent as OOK and
+//  then as FSK: a 16-bit start (OOK 0x0001, FSK 0x7FFF), then mode, ID (32), flags + sequence, pressure (raw × 0.4 PSI),
+//  temperature (°C + 50), motion status, CRC-8 poly 0x07 init 0 over the nine before it. STRONG. Not in the corpus.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool trwChrysler(Chips& ch, std::vector<Reading>& out) {
+    auto take = [&](const std::vector<uint8_t>& by, const Bits&) {
+        if (crc8(by.data(), 9, 0x07, 0x00) != by[9] || allSame(by.data(), 10)) return false;
+        if (by[0] < 0x5C || by[0] > 0x5E) return false;   // mode / model: 0x5C, 0x5D or 0x5E — the only values known
+        const uint32_t id = uint32_t(by[1]) << 24 | uint32_t(by[2]) << 16 | uint32_t(by[3]) << 8 | by[4];
+        if (id == 0 || id == 0xFFFFFFFF) return false;
+        Reading r = tyre("TRW", "TRW (Chrysler / Jeep)", 34, id, false);
+        r.kpa = by[6] * 0.4 * kPaPerPsi;
+        r.tempC = int(by[7]) - 50;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    };
+    return eachMcBits(ch, false, 52, "0000 0000 0000 0001", 80, take) || eachMcBits(ch, true, 52, "0111 1111 1111 1111", 80, take);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  JANSITE TY02S (solar, internal / external) — aftermarket. Facts: rtl_433 tpms_jansite.c notes: the VDO-style run-in
 //  (…aaa9), then 7 bytes — ID (28), status (4), pressure (raw × 1.7 kPa), temperature (°C + 50), and a last byte whose
 //  rule nobody has found (rtl_433 leaves this decoder OFF for that reason; we could not find it either — no CRC-8 of any
@@ -911,6 +1071,12 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (sefisM3(ch, out)) return true;
     if (mercedesSprinter(ch, out)) return true;
     if (bmwHuf(ch, out)) return true;
+    if (bmwGen23(ch, out)) return true;
+    if (ave(ch, out)) return true;
+    if (airpuxem(ch, out)) return true;
+    if (tyreGuard400(ch, out)) return true;
+    if (schraderMoto(ch, out)) return true;
+    if (trwChrysler(ch, out)) return true;
     // the weak checks last: a strong family's frame must never be taken by a weak one's 8-bit sum
     if (schraderEG53MA4(ch, out)) return true;
     if (schraderSMD3MA4(ch, out)) return true;
