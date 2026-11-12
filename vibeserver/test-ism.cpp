@@ -467,7 +467,7 @@ static Runs kiaTx(uint32_t id, int pRaw, int tC) {
 }
 
 // ── WEATHER PASS (2026-11-11) — encoders written from the frame facts in vibe_ism_weather*.h, through the real front end ──
-static Bits cat(Bits a, const Bits& b) { a.insert(a.end(), b.begin(), b.end()); return a; }
+[[nodiscard]] static Bits cat(Bits a, const Bits& b) { a.insert(a.end(), b.begin(), b.end()); return a; }
 /** PPM: every bit a `mark` then its space; each row ends with a mark and `rowGap`. */
 static Runs ppmRows(const Bits& w, double mark, double s0, double s1, double rowGap, int reps) {
     Tx tx;
@@ -654,6 +654,291 @@ static int writeClip(const char* out, double centre, double rate) {
     return 0;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★ V12 2026-11-11: THE HOME FAMILIES (vibe_ism_meters.h, vibe_ism_security.h, vibe_ism_remotes.h) — each ENCODED FROM
+//  ITS FRAME FACTS (as cited above each decoder), modulated into noisy IQ, through the real front end and the decoders.
+//  The encoders build bits from the facts; they share no code path with the decoders but the CRC routines.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+static std::string factOf(const Reading& r, const char* k) { for (const auto& kv : r.facts) if (kv.first == k) return kv.second; return ""; }
+static Bits hb(uint64_t v, int n) { Bits o; for (int i = n - 1; i >= 0; --i) o.push_back((v >> i) & 1); return o; }
+static void append(Bits& a, const Bits& b) { a.insert(a.end(), b.begin(), b.end()); }
+static Bits manch01(const Bits& d) { Bits o; for (uint8_t x : d) { o.push_back(x ? 0 : 1); o.push_back(x ? 1 : 0); } return o; }   // 01 = 1
+struct HomeCase { const char* name; Sig s; const char* model; const char* fact; const char* want; bool secret; };
+static void homeRun(std::vector<HomeCase>& cs, double rate = 2.4e6) {
+    for (auto& c : cs) {
+        if (c.s.offHz == 0) c.s.offHz = 120e3;
+        std::vector<Burst> bs;
+        const auto got = runFront(synth({c.s}, rate, 1.2, 0.02, 7), rate, &bs);
+        const Reading* r = findModel(got, c.model);
+        if (!r && std::getenv("ISM_HOME_DIAG"))
+            for (const auto& b : bs) { printf("     burst %.3f s %+.0f Hz dev %.0f ook %zu fsk %zu:", b.tSec, b.offHz + b.carrierHz, b.fskDevHz, b.ook.size(), b.fsk.size());
+                                       for (size_t i = 0; i < b.fsk.size() && i < 80; ++i) printf(" %d", b.fsk[i]); printf("\n");
+                                       if (const char* us = std::getenv("ISM_HOME_DIAG_US")) for (const Bits& row : kit::nrzRowsAny(b, std::atof(us), 160, 16)) { printf("      "); for (auto x : row) printf("%d", x); printf("\n"); } }
+        CHECK(r != nullptr, "%s: not decoded (%zu readings%s%s)", c.name, got.size(), got.empty() ? "" : ", first: ", got.empty() ? "" : got[0].model.c_str());
+        if (!r) continue;
+        if (c.fact) CHECK(factOf(*r, c.fact) == c.want, "%s: %s = %s, want %s", c.name, c.fact, factOf(*r, c.fact).c_str(), c.want);
+        CHECK(r->secret == c.secret && (!c.secret || r->pubId.empty()), "%s: secret %d, pubId '%s'", c.name, r->secret, r->pubId.c_str());
+        printf("   %-26s → %s\n", c.name, readable(*r, 1).c_str());
+    }
+}
+/** NRZ chips → runs with the edges at their true times (Tx rounds each chip to a whole µs: 57 chips of 20.3 µs would
+ *  come out a chip short). */
+static Runs fskNrz(const Bits& chips, double us) {
+    Runs r; long prev = 0;
+    for (size_t i = 0; i < chips.size(); ++i) {
+        if (i + 1 < chips.size() && chips[i + 1] == chips[i]) continue;
+        const long edge = std::lround(double(i + 1) * us);
+        const int d = int(edge - prev); prev = edge;
+        r.push_back(chips[i] ? d : -d);
+    }
+    return r;
+}
+static void testHome() {
+    printf(" home families (meters, alarm sensors, remotes)\n");
+    std::vector<HomeCase> cs;
+    // Watchman Sonic: 1 ms chips, 111000, 64 Manchester bits (01 = 1), the last chip twice more
+    {
+        std::vector<uint8_t> by = {0x28, 0xC7, 0x4E, 0x0F, 0x80, uint8_t(17 << 2 | 0), 92};
+        by.push_back(kit::crc8r(by.data(), 7, 0x31, 0));
+        Bits c = hb(0x55, 8); append(c, hb(0x38, 6)); append(c, manch01(bytesToBits(by)));
+        const uint8_t last = by[7] & 1; c.push_back(last); c.push_back(last); append(c, hb(last ? 0 : 0xFF, 8));
+        Sig s{fskNrz(c, 1000)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"oil: Watchman Sonic", s, "Watchman Sonic", "depth_cm", "92", false});
+    }
+    // Apollo Smart: 500 µs chips, …5558, 64 Manchester bits, CRC-8 reflected over all 8 = 0
+    {
+        std::vector<uint8_t> by = {0x12, 0x5D, 0x82, 0xAB, 0x46, 0xB0, 48};
+        by.push_back(kit::crc8r(by.data(), 7, 0x31, 0));
+        Bits c = hb(0x5555, 16); append(c, hb(0x5558, 16)); append(c, manch01(bytesToBits(by))); append(c, hb(0xF0, 8));
+        Sig s{fskNrz(c, 500)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"oil: Apollo Smart", s, "Apollo Ultrasonic Smart", "depth_cm", "48", false});
+    }
+    // Apollo Standard: 500 µs chips, 0x555D (last two chips = the first pair), 32 Manchester bits, ends in a violation
+    {
+        std::vector<uint8_t> by = {0x60, 0xFB, 0x00, 135};
+        Bits m = manch01(bytesToBits(by));
+        Bits c = hb(0x5555, 16); append(c, hb((by[0] & 0x80 ? 0x555D : 0x5562) >> 2, 14)); append(c, m);   // its last 2 chips = the 1st pair
+        const uint8_t l = m.back(); for (int i = 0; i < 4; ++i) c.push_back(l); append(c, hb(l ? 0 : 0xFF, 8));
+        Tx tx; for (int rep = 0; rep < 2; ++rep) { for (uint8_t x : c) { if (x) tx.mark(500); else tx.space(500); } tx.space(20000); }
+        Sig s{tx.r}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"oil: Apollo Standard", s, "Apollo Ultrasonic / Tekelek", "depth_cm", "135", false});
+    }
+    // Watchman Sonic Advanced: 500 µs NRZ, AA… 2D D4, length 0E, model 0401, serial, … CRC-16 0x8005 init 0
+    {
+        std::vector<uint8_t> by = {0x0E, 0x04, 0x01, 0x00, 0x25, 0x9E, 0x98, 0x4F + 0x10, 0xAA, 0x60, 0x28, 0x01, 0x05, 0x03, 0x00};
+        const uint16_t c16 = crc16(by.data(), 15, 0x8005, 0); by.push_back(uint8_t(c16 >> 8)); by.push_back(uint8_t(c16));
+        Bits c = hb(0xAAAAAAAAAAull, 40); append(c, hb(0x2DD4, 16)); append(c, bytesToBits(by)); append(c, hb(0, 8));
+        Sig s{fskNrz(c, 500)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"oil: Watchman Advanced", s, "Watchman Sonic Advanced", "depth_cm", "40", false});
+    }
+    // emonTx: JeeLib RF12 — AA AA AA 2D, group D2, header (node 8), length 26, 13 LE words, CRC-16/IBM LE, AA
+    {
+        std::vector<uint8_t> by = {0xD2, 0x08, 26};
+        const int w[13] = {7, 0, 0, 0, 23665, 3000, 3000, 3000, 3000, 3000, 3000, 1, 0};
+        for (int v : w) { by.push_back(uint8_t(v)); by.push_back(uint8_t(v >> 8)); }
+        const uint16_t c16 = kit::crc16r(by.data(), by.size(), 0xA001, 0xFFFF); by.push_back(uint8_t(c16)); by.push_back(uint8_t(c16 >> 8));
+        Bits c = hb(0xAAAAAA, 24); append(c, hb(0x2D, 8)); append(c, bytesToBits(by)); append(c, hb(0xAA, 8));
+        Sig s{fskNrz(c, 2e6 / (49230 + 49261))}; s.fsk = true; s.devHz = 45e3;
+        cs.push_back({"emonTx", s, "emonTx", "ct1", "7", false});
+    }
+    // Efergy e2 classic: FSK PWM, 500 µs sync, 64 µs mark = 1, 136 µs = 0, 200 µs a bit; bytes sum check
+    {
+        std::vector<uint8_t> by = {0x00, 0x34, 0xEA, 0x40, 0x09, 0xEB, 0x03};
+        by.push_back(uint8_t(kit::sumBytes(by.data(), 7)));
+        Tx tx; for (int i = 0; i < 16; ++i) { tx.mark(64); tx.space(60); }
+        tx.space(1000); tx.mark(500); tx.space(150);
+        for (uint8_t x : bytesToBits(by)) { tx.mark(x ? 64 : 136); tx.space(x ? 136 : 64); }
+        tx.space(2000);
+        Sig s{tx.r}; s.fsk = true; s.devHz = 40e3;
+        cs.push_back({"Efergy e2 classic", s, "e2 classic", "id", "59956", false});
+    }
+    // Current Cost EnviR: 55 55 55 55 2D D4, Manchester 10 = 1; a counter packet (gas, 4321 pulses)
+    {
+        Bits c = hb(0x55555555ull, 32); append(c, hb(0x2DD4, 16));
+        for (uint8_t x : bytesToBits(hexBytes("404D0003000010E1"))) { c.push_back(x); c.push_back(!x); }
+        append(c, hb(0x55, 8));
+        Sig s{fskNrz(c, 1e6 / 3918.0)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Current Cost counter", s, "EnviR impulse counter", "power0", "4321", false});
+    }
+    // Interlogix contact: PPM, ~120 µs marks, 122 µs gap = 0, 244 µs = 1; 12 zeros + a 1, then LSB-first fields
+    {
+        Bits d;
+        auto lsb = [&](uint32_t v, int n) { for (int i = 0; i < n; ++i) d.push_back((v >> i) & 1); };
+        lsb(0x7106D, 20); lsb(0xA, 4);                    // sensor ID, then device type A (contact), each LSB first
+        lsb(0, 3); d.push_back(0); d.push_back(1); d.push_back(1); lsb(0, 9);   // trigger 0, battery OK, F1 latch + level set, the rest clear
+        // patent bit 55 = even parity over the odd bits 15–55 (the start bit 15 is a 1), bit 56 = odd parity over 16–56
+        int odd = 1, even = 0; for (size_t i = 0; i < 39; ++i) (i & 1 ? odd : even) ^= d[i];
+        d.push_back(uint8_t(odd ^ 0)); d.push_back(uint8_t(even ^ 1));   // index 39 makes the odd set even with the start bit; 40 makes the even set odd
+        d.push_back(0);                                   // bit 57, programmable
+        int ones = 1; for (size_t i = 0; i < 39; ++i) ones += d[i];
+        d.push_back(0); d.push_back(1); for (int i = 0; i < 3; ++i) d.push_back((ones >> i) & 1); d.push_back(0);   // 58 … 63
+        Bits all = hb(0x0001, 12 + 1); append(all, d);
+        Tx tx; tx.mark(976);
+        for (uint8_t x : all) { tx.space(x ? 244 : 122); tx.mark(122); }
+        tx.space(20000);
+        cs.push_back({"Interlogix contact", Sig{tx.r}, "contact", "subtype", "\"contact\"", true});
+    }
+    // Honeywell 5800: OOK Manchester 136 µs chips, raw preamble 55 55 56, then 01 = 1 pairs: ch 8 · id · event · CRC-16 0x8005
+    {
+        std::vector<uint8_t> by = {0x8A, 0xA9, 0x9B, 0x80};
+        const uint16_t c16 = crc16(by.data(), 4, 0x8005, 0); by.push_back(uint8_t(c16 >> 8)); by.push_back(uint8_t(c16));
+        Bits c = hb(0x5555, 16); append(c, hb(0x555556, 24)); append(c, manch01(bytesToBits(by))); append(c, hb(0, 4));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t x : c) { if (x) tx.mark(136); else tx.space(136); } tx.space(8000); }
+        cs.push_back({"Honeywell 5800 contact", Sig{tx.r}, "5800 series", "contact_open", "1", true});
+    }
+    // DSC: RZ, 500 µs bits, a 250 µs pulse in a 1's second half; 4 sync 1s, a 1 before every 8 further bits; CRC
+    {
+        uint8_t by[5] = {0x81, 0x24, 0xBD, 0xC8, 0};
+        for (int c = 0; c < 256; ++c) { by[4] = uint8_t(c); if (kit::crc8r(by, 5, 0xF5, 0x3D) == 0) break; }
+        Bits d = hb(0xF, 4);
+        for (int k = 0; k < 4; ++k) { append(d, hb(by[k], 8)); d.push_back(1); }
+        append(d, hb(by[4], 8));                 // the 1 before the CRC, then the CRC: 48 bits
+        const Bits& frame = d;
+        Tx tx; tx.mark(2500);
+        for (uint8_t x : frame) { if (x) { tx.space(250); tx.mark(250); } else tx.space(500); }
+        tx.space(20000);
+        cs.push_back({"DSC contact", Sig{tx.r}, "sensor", "status", "129", true});
+    }
+    // Generic 433.3 MHz motion: 8 copies of a 20-bit code, alternating 888/1332 and 1332/1784 µs marks, 920/472 µs gaps
+    {
+        const uint32_t code = 0x800A2;
+        Tx tx; tx.mark(9000);
+        for (int p = 0; p < 8; ++p) {
+            const double m1 = p & 1 ? 1332 : 888, m0 = p & 1 ? 1784 : 1332;
+            tx.space(p ? 1672 : 1672);
+            for (int i = 19; i >= 0; --i) { const bool one = (code >> i) & 1; if (i != 19) tx.space(one ? 920 : 472); tx.mark(one ? m1 : m0); }
+        }
+        tx.space(5000);
+        cs.push_back({"Generic motion sensor", Sig{tx.r}, "motion sensor", nullptr, nullptr, true});
+    }
+    // LightwaveRF: 250 µs pulses; the line 1 + 10 × (1 + symbol) as short (1) / long (1 then 0) gaps; 6 repeats
+    {
+        static const uint8_t symb[16] = {0xF6, 0xEE, 0xED, 0xEB, 0xDE, 0xDD, 0xDB, 0xBE, 0xBD, 0xBB, 0xB7, 0x7E, 0x7D, 0x7B, 0x77, 0x6F};
+        const int nib[10] = {0, 0, 2, 1, 0xF, 0x2, 0xF, 0x3, 0xD, 0x5};   // param 00, sub-unit 2, on, ID F2F3D5
+        Bits line; line.push_back(1);
+        for (int k = 0; k < 10; ++k) { line.push_back(1); append(line, hb(symb[nib[k]], 8)); }
+        line.push_back(1);
+        Tx tx;
+        for (int rep = 0; rep < 6; ++rep) {
+            for (size_t i = 0; i < line.size(); ) {          // each 1 is a pulse; a 0 after it lengthens its gap
+                if (!line[i]) { ++i; continue; }
+                tx.mark(250);
+                const bool z = i + 1 < line.size() && !line[i + 1];
+                if (i + 1 < line.size()) tx.space(z ? 1250 : 250);
+                i += z ? 2 : 1;
+            }
+            tx.space(10000);
+        }
+        cs.push_back({"LightwaveRF switch", Sig{tx.r}, "switch", "subunit", "2", true});
+    }
+    // Nexa / KlikAanKlikUit self-learning: T 270 µs; sync gap 10T; each data bit as two PPM bits (1 → 1 0, 0 → 0 1)
+    {
+        Bits d = hb(0x129ACDE, 26); d.push_back(0); d.push_back(1); append(d, hb(0x3, 4));   // group 0, on, unit bits
+        Tx tx;
+        for (int rep = 0; rep < 6; ++rep) {
+            tx.mark(270); tx.space(2650);
+            for (uint8_t x : d) { tx.mark(270); tx.space(x ? 1300 : 270); tx.mark(270); tx.space(x ? 270 : 1300); }
+            tx.mark(270); tx.space(10000);
+        }
+        cs.push_back({"Nexa self-learning", Sig{tx.r}, "self-learning", "state", "\"ON\"", true});
+    }
+    // X10 RF: 9 ms + 4.5 ms sync, 562 µs marks, a long gap reads 1 here; house B (0111), unit 1, on; 5 copies
+    {
+        const uint8_t b0 = 0x70, b2 = 0x00;
+        std::vector<uint8_t> by = {b0, uint8_t(~b0), b2, uint8_t(~b2)};
+        Tx tx;
+        for (int rep = 0; rep < 5; ++rep) { tx.mark(9000); tx.space(4500); for (uint8_t x : bytesToBits(by)) { tx.mark(562); tx.space(x ? 1687 : 562); } tx.mark(562); tx.space(40000); }
+        cs.push_back({"X10 remote", Sig{tx.r}, "remote", "channel", "\"B\"", true});
+    }
+    // GE Color Effects: 52 µs FSK chips; 1100 ×5, FF 00, then 10 = 0 / 1100 = 1: 00 · ID 6 · command 8 · 0; 3 repeats
+    {
+        Bits d = hb(0, 2); append(d, hb(63, 6)); append(d, hb(0x5A, 8)); d.push_back(0);
+        Bits c;
+        for (int rep = 0; rep < 3; ++rep) {
+            for (int i = 0; i < 5; ++i) append(c, hb(0xC, 4));
+            append(c, hb(0xFF00, 16));
+            for (uint8_t x : d) append(c, x ? hb(0xC, 4) : hb(0x2, 2));
+            append(c, hb(0, 20));
+        }
+        Sig s{fskNrz(c, 52)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"GE Color Effects remote", s, "Color Effects", "command", "\"change\"", true});
+    }
+    // ERT SCM: OOK Manchester, 30.5 µs chips; preamble 0x1F2A60 (21 bits), the rest, BCH 0x6F63 over bytes 2–11
+    {
+        std::vector<uint8_t> by = {0xF9, 0x53, 0x02 | 0x01, uint8_t(12 << 2), 0x08, 0x95, 0x18, 0x41, 0x0C, 0x0C, 0, 0};
+        by[2] = (by[2] & ~0x07) | 0x02;   // ID's high bits, 0b01 → 1 << 24 here
+        for (uint32_t c = 0; c < 65536; ++c) { by[10] = uint8_t(c >> 8); by[11] = uint8_t(c); if (crc16(by.data() + 2, 10, 0x6F63, 0) == 0) break; }
+        Bits d = bytesToBits(by);
+        Bits c; for (uint8_t x : d) { c.push_back(x ? 1 : 0); c.push_back(x ? 0 : 1); }   // 10 = 1
+        Tx tx; for (uint8_t x : c) { if (x) tx.mark(30.52); else tx.space(30.52); }
+        Sig s{fskNrz(c, 30.52)}; s.runs.erase(s.runs.begin(), s.runs.begin() + (s.runs[0] < 0 ? 1 : 0));
+        cs.push_back({"ERT SCM meter", s, "SCM", "ert_type", "12", false});
+    }
+    // Somfy RTS: 604 µs symbols; sync 4×(2416 on, 2416 off)…, a 4.8 ms soft sync, 604 off, 56 Manchester bits (01 = 1)
+    {
+        uint8_t pl[7] = {0xA7, 0x40, 0x00, 0x09, 0xAB, 0xC4, 0x37};   // seed, Down (4) + checksum nibble, counter 9, address
+        uint8_t x = 0; for (int i = 0; i < 7; ++i) x ^= pl[i];
+        pl[1] |= uint8_t((x & 0xF) ^ (x >> 4));
+        uint8_t sc[7]; sc[0] = pl[0]; for (int i = 1; i < 7; ++i) sc[i] = uint8_t(pl[i] ^ sc[i - 1]);
+        Tx tx;
+        for (int rep = 0; rep < 3; ++rep) {
+            for (int k = 0; k < (rep ? 7 : 2); ++k) { tx.mark(2416); tx.space(2416); }
+            tx.mark(4832); tx.space(604);
+            for (int i = 0; i < 56; ++i) { const bool one = (sc[i / 8] >> (7 - i % 8)) & 1; if (one) { tx.space(604); tx.mark(604); } else { tx.mark(604); tx.space(604); } }
+            tx.space(30400);
+        }
+        cs.push_back({"Somfy RTS remote", Sig{tx.r}, "RTS remote", "control", "\"Down (4)\"", true});
+    }
+    // Clemsa: PWM 385 / 2695 µs marks, inverted (a long mark is a 1), 18 bits, 4 copies 10 ms apart
+    {
+        const uint32_t w = 0x0CE2C | 0x1;
+        Tx tx;
+        for (int rep = 0; rep < 4; ++rep) { for (int i = 17; i >= 0; --i) { const bool one = (w >> i) & 1; tx.mark(one ? 2695 : 385); tx.space(one ? 385 : 2695); } tx.space(10000); }
+        cs.push_back({"Clemsa gate remote", Sig{tx.r}, "gate remote", "button", "1", true});
+    }
+    // Continental KR5V2X: FSK Manchester 100 µs halves (01 = 1), …f0f06, ID · · button · · sequence · code · XOR = 0
+    {
+        std::vector<uint8_t> by = {0x2A, 0x79, 0x17, 0x80, 0x00, 0x30, 0x00, 0xD4, 0x85, 0xB9, 0x00, 0x57, 0xD2, 0};
+        by[13] = kit::xorBytes(by.data(), 13);
+        Bits d = hb(0xFFFFF0F06ull, 36); append(d, bytesToBits(by)); append(d, hb(0, 4));
+        Sig s{fskNrz(manch01(d), 100)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({"Continental car key", s, "Key fob", "button_code", "3", true});
+    }
+    // Chrysler: PWM TE 350 µs (a short mark = 1, then the whole word inverted), two packets 49 + 48 bits, bytes reflected
+    {
+        uint8_t by[6] = {0x40, 0xE8, 0xCA, 0x2E, 0x40, 0};
+        by[5] = uint8_t(kit::sumBytes(by, 5));
+        Bits w; for (uint8_t v : by) { const uint8_t r = kit::rev8(v); for (int i = 7; i >= 0; --i) w.push_back(!((r >> i) & 1)); }
+        Tx tx;
+        for (int p = 0; p < 2; ++p) {
+            Bits pk = w; if (p == 0) pk.push_back(1);
+            for (uint8_t x : pk) { tx.mark(x ? 350 : 700); tx.space(x ? 700 : 350); }
+            tx.space(12000);
+        }
+        cs.push_back({"Chrysler car key", Sig{tx.r}, "Key fob", "button_code", "4", true});
+    }
+    // RadioHead ASK: 500 µs NRZ; 0101… then 0xB38 LSB first, bytes as two 4-to-6 symbols LSB first, CRC-16 (~CCITT LSB)
+    {
+        static const uint8_t k6[16] = {0x0D, 0x0E, 0x13, 0x15, 0x16, 0x19, 0x1A, 0x1C, 0x23, 0x25, 0x26, 0x29, 0x2A, 0x2C, 0x32, 0x34};
+        std::vector<uint8_t> p = {12, 0xFF, 0x07, 0x00, 0x00, 'h', 'e', 'l', 'l', 'o'};
+        const uint16_t c = uint16_t(~kit::crc16r(p.data(), p.size(), 0x8408, 0xFFFF)); p.push_back(uint8_t(c)); p.push_back(uint8_t(c >> 8));
+        Bits d = hb(0x555555, 24); append(d, hb(0x5551CD, 24));
+        for (uint8_t v : p) for (int half = 0; half < 2; ++half) { const uint8_t sym = k6[half ? (v & 0xF) : (v >> 4)]; for (int i = 0; i < 6; ++i) d.push_back((sym >> i) & 1); }
+        append(d, hb(0, 8));
+        Tx tx; for (uint8_t x : d) { if (x) tx.mark(500); else tx.space(500); }
+        cs.push_back({"RadioHead ASK packet", Sig{tx.r}, "ASK packet", "from", "7", false});
+    }
+    // X10 security: X10 RF line, 41 bits: ID · its top nibble · low nibble XOR · code · ¬code · ID 2 · even parity
+    {
+        const uint8_t id = 0x5A, code = 0x0C;   // motion
+        std::vector<uint8_t> by = {id, uint8_t(id ^ 0x0F), code, uint8_t(~code), 0x3C};
+        Bits w = bytesToBits(by); int par = 0; for (uint8_t x : w) par ^= x; w.push_back(uint8_t(par));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { tx.mark(9000); tx.space(4500); for (uint8_t x : w) { tx.mark(562); tx.space(x ? 1687 : 562); } tx.mark(562); tx.space(20000); }
+        cs.push_back({"X10 motion sensor", Sig{tx.r}, "security sensor", "event", "\"MOTION TRIPPED\"", true});
+    }
+    homeRun(cs);
+}
+
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     printf("test-ism — the V12 ISM decoder\n");
@@ -771,7 +1056,7 @@ int main(int argc, char** argv) {
         std::vector<Burst> bs;
         const auto got = runFront(x, 2.4e6, &bs);
         const Reading* r = findModel(got, c.model);
-        CHECK(r != nullptr, "%s: not decoded (%zu bursts, %zu readings)", c.name, bs.size(), got.size());
+        CHECK(r != nullptr, "%s: not decoded (%zu bursts, %zu readings%s%s)", c.name, bs.size(), got.size(), got.empty() ? "" : " — ", got.empty() ? "" : (got[0].make + " " + got[0].model).c_str());
         if (r && c.temp == c.temp) CHECK(approx(r->tempC, c.temp, 0.051), "%s: %.2f °C, want %.2f", c.name, r->tempC, c.temp);
         if (r) {
             CHECK(approx(r->freqHz, 433.92e6 + 120e3, 12e3), "%s: frequency %.0f", c.name, r->freqHz);
@@ -1276,6 +1561,7 @@ int main(int argc, char** argv) {
         CHECK(on.lines.size() >= 6, "the six sensors away from the emitters decode (%zu readings)", on.lines.size());
     }
 
+    testHome();
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "ok", checks, fails);
     return fails ? 1 : 0;
 }

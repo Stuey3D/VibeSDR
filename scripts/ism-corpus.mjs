@@ -11,7 +11,7 @@
 //   match   we decoded it AND a reading agrees on a value both report (temperature ±0.25 °C, humidity ±1 %, tyre
 //           pressure ±2.5 kPa, power ±2 %, wind ±0.5 km/h)
 //   decoded we decoded it, but neither side carries a value to compare (a remote, a doorbell, a key fob)
-//   wrong   we decoded it, values to compare exist, none agree
+//   wrong   we decoded it, values to compare exist, none agree (facts: no reading agrees on ALL its shared facts)
 //   miss    the corpus decodes it, we do not
 //   fp      the corpus decodes nothing there, we report something (a false alarm)
 // A protocol folder counts as READ when at least one of its recordings is a match or decoded, and none is wrong.
@@ -97,6 +97,23 @@ function compare(ours, exp) {
     const pairs = [[o.temperature_C, eT, 0.25], [o.humidity, e.humidity, 1.01], [o.pressure_kPa, eK, 2.5], [o.wind_avg_km_h, eW, 0.5]];
     for (const [a, b, t] of pairs) if (typeof a === 'number' && typeof b === 'number') { comparable = true; if (near(a, b, t)) agree = true; }
     if (typeof o.power_W === 'number' && typeof eP === 'number') { comparable = true; if (Math.abs(o.power_W - eP) <= Math.max(2, 0.02 * eP)) agree = true; }
+    // ★ the frame's own values (Reading::facts — a button, a state, a tank depth, a meter count), named as the answer
+    //   key names them. EVERY shared one must agree for the pair to agree: one lucky field is not a reading.
+    if (o.facts) {
+      let shared = 0, same = 0;
+      for (const [k, v] of Object.entries(o.facts)) {
+        if (!(k in e)) continue;
+        ++shared;
+        const w = e[k];
+        if (typeof v === 'number' && typeof w === 'number') { if (Math.abs(v - w) <= Math.max(0.0051, Math.abs(w) * 0.001)) ++same; }
+        else if (String(v).toLowerCase() === String(w).toLowerCase()) ++same;
+      }
+      // ★ an ID alone says nothing about WHICH device it is (another sensor in the same recording — a US capture
+      //   holds the neighbours' ERT meters — shares the key "id" and nothing else): it must come with a fact of the
+      //   device's own kind to be compared
+      const onlyId = shared === 1 && 'id' in o.facts && 'id' in e;
+      if (shared && !onlyId) { comparable = true; if (same === shared) agree = true; }
+    }
   }
   return { comparable, agree };
 }

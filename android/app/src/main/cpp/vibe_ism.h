@@ -1053,7 +1053,32 @@ public:
         on = on0;
         // ── FSK: the discriminator, over the stretch where the carrier is up
         size_t first = n, last = 0, cnt = 0;
-        for (size_t i = 0; i < n; ++i) if (on[i]) { if (first == n) first = i; last = i; ++cnt; }
+        /* ★★ WHERE THE CARRIER IS UP, WITHOUT THE BLIPS AROUND IT (2026-11-11). A noise blip in the pre-roll — 16–24 µs, or
+         *  a stray 384 µs mark 34 ms before the burst — set `first` early, and the "constant envelope" test then saw a
+         *  burst up only 75 % of its span and gave it no FSK slice at all (every Current Cost EnviR recording: ±32 kHz FSK,
+         *  76 ms, read as one long mark; Efergy, many oil gauges). The span is now the busiest STRETCH of on-runs of at
+         *  least 100 µs, a stretch ending at a gap of over 5 ms (1 ms lost choppy weak bursts; 5 ms lost none of the corpus). An OOK
+         *  burst still fails the 85 % test as before. */
+        {
+            const size_t g = std::max<size_t>(3, size_t(std::lround(100.0 / us))), gap = size_t(std::lround(5000.0 / us));
+            size_t segA = n, segB = 0, segCnt = 0, bestCnt = 0;
+            size_t i = 0;
+            while (i < n) {
+                if (!on[i]) { ++i; continue; }
+                size_t j = i; while (j < n && on[j]) ++j;
+                if (j - i >= g) {
+                    if (segA != n && i - segB > gap) {   // a new stretch: keep the busier
+                        if (segCnt > bestCnt) { bestCnt = segCnt; first = segA; last = segB - 1; }
+                        segA = n; segCnt = 0;
+                    }
+                    if (segA == n) segA = i;
+                    segB = j; segCnt += j - i;
+                }
+                i = j;
+            }
+            if (segA != n && segCnt > bestCnt) { bestCnt = segCnt; first = segA; last = segB - 1; }
+            if (first < last) for (size_t k = first; k <= last; ++k) cnt += on[k];
+        }
         b.fsk.clear(); b.fskDevHz = 0;
         if (first < last) {
             // the carrier: the mean instantaneous frequency where it is up (refines the detector's bin centroid)

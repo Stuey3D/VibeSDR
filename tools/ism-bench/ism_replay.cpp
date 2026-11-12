@@ -4,7 +4,8 @@
 // test INPUT only, never shipped or committed; our decoders are our own code).
 //
 //   ism_replay [--dc HZ] [--lead S] FILE.cu8 …   8-bit unsigned I/Q; the rate and centre from the name: …_433.92M_250k.cu8
-//                                          (.cs8 = 8-bit signed, .cs16 = 16-bit signed little-endian I/Q, by extension)
+//                                          (or …_2500k.cu8, or a `samplerate` file beside it; else 250 k at 433.92;
+//                                           .cs8 = 8-bit signed, .cs16 = 16-bit signed little-endian I/Q, by extension)
 //
 // ★ --dc: the detector's DC guard. Live, the service tunes OFF the band so a sensor never sits on the dongle's DC spike
 //   and guards ±15 kHz; these recordings were made tuned ON the sensor (it sits within a few kHz of DC), so the replay
@@ -47,14 +48,30 @@ int main(int argc, char** argv) {
         else files.push_back(a);
     }
     /* ★ the rate and the centre are read SEPARATELY (2026-11-11): 143 corpus recordings carry only a rate
-     *  ("g003_1000k.cu8", "…_2000k.cu8", "….250k.cu8") or a fractional one ("_2359.3k"), and were replayed at 250 k */
+     *  ("g003_1000k.cu8", "…_2000k.cu8", "….250k.cu8") or a fractional one ("_2359.3k"), and were replayed at 250 k —
+     *  every emonTx, IDM and SCM+ recording was sliced at a tenth of its real speed. With no rate in the name, a
+     *  `samplerate` file beside it; a name that says "_0M_" (m-bus/02) takes the folder README's `-f`. */
     const std::regex centreRx(R"(_([0-9.]+)M[_.])"), rateRx(R"([_.]([0-9.]+)k[_.])");
     for (const auto& path : files) {
         double rate = 250e3, centre = 433.92e6;
+        bool haveRate = false;
         std::smatch m;
-        const std::string base = path.substr(path.find_last_of('/') + 1);
+        const std::string base = path.substr(path.find_last_of('/') + 1), dir = path.substr(0, path.find_last_of('/') + 1);
         if (std::regex_search(base, m, centreRx)) centre = std::stod(m[1]) * 1e6;
-        if (std::regex_search(base, m, rateRx)) rate = std::stod(m[1]) * 1e3;
+        if (std::regex_search(base, m, rateRx)) { rate = std::stod(m[1]) * 1e3; haveRate = true; }
+        if (centre < 1e6) {
+            centre = 433.92e6;
+            if (FILE* rd = std::fopen((dir + "README.md").c_str(), "r")) {
+                std::string t; char buf[4096]; size_t k; while ((k = std::fread(buf, 1, sizeof buf, rd)) > 0) t.append(buf, k);
+                std::fclose(rd);
+                std::smatch fm;
+                if (std::regex_search(t, fm, std::regex(R"(-f\s+([0-9]{8,10})\b)"))) centre = std::stod(fm[1]);
+            }
+        }
+        if (!haveRate) if (FILE* sr = std::fopen((dir + "samplerate").c_str(), "r")) {
+            double v = 0; if (std::fscanf(sr, "%lf", &v) == 1 && v > 1e4) rate = v;
+            std::fclose(sr);
+        }
         FILE* f = std::fopen(path.c_str(), "rb");
         if (!f) { std::printf("{\"file\":%s,\"error\":\"open\"}\n", jstr(path).c_str()); continue; }
         std::vector<uint8_t> raw;
@@ -117,6 +134,15 @@ int main(int argc, char** argv) {
                 num(o, "wind_avg_km_h", r.windKmh); num(o, "wind_max_km_h", r.gustKmh); num(o, "wind_dir_deg", r.windDir);
                 num(o, "rain_mm", r.rainMm); num(o, "uv", r.uv); num(o, "power_W", r.watts); num(o, "pressure_hPa", r.baroHpa);
                 if (r.battOk >= 0) o += ",\"battery_ok\":" + std::to_string(r.battOk);
+                // ★ the frame's own values for the scorer (Reading::facts) — never an identity of a secret kind
+                if (!r.facts.empty()) {
+                    std::string f;
+                    for (const auto& kv : r.facts) {
+                        if (r.secret && kv.first == "id") continue;
+                        f += (f.empty() ? "" : ",") + jstr(kv.first) + ":" + kv.second;
+                    }
+                    if (!f.empty()) o += ",\"facts\":{" + f + "}";
+                }
                 num(o, "t", b.tSec - lead);
                 o += "}";
                 std::puts(o.c_str());

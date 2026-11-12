@@ -16,6 +16,7 @@
 #include "vibe_ism_weather10.h"  // ★ weather pass 2026-11-11: Bresser 5/6/7-in-1 FSK family, Maverick ET-73x, Companion WTR001
 #include "vibe_ism_weather11.h"  // ★ weather pass 2026-11-11: TFA Drop, Inkbird ITH-20R
 #include "vibe_ism_tpms.h"     // ★ V12 2026-11-11: tyre-pressure sensors, make by make
+#include "vibe_ism_kit.h"        // ★ V12 2026-11-11: the home families' tools (Current Cost uses its NRZ rows)
 
 namespace vibeism {
 
@@ -383,16 +384,22 @@ inline bool decode782(const Burst& b, std::vector<Reading>& out) {
 } // namespace acurite
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  CURRENT COST energy transmitters (EnviR / Envi clip-on sensors) — 433.9 MHz FSK, 3918 bps
+//  CURRENT COST energy transmitters (EnviR / Envi clip-on sensors, OptiSmart, the IAM and impulse counters) — 433.9 MHz
+//  FSK, 3918 bps
 //  Source: Jack Kelly, "Technical details of Current Cost RF protocol", rfm_edf_ecomanager wiki (GitHub wiki prose).
 //  Preamble 55/AA, sync 2D D4, then 16 Manchester-coded bytes (10 = 1, 01 = 0; 00/11 illegal — the integrity check) =
 //  8 data bytes: byte 0 bit 7 pairing, bit 6 type (0 = electricity), bits 3–0 address 11–8 · byte 1 address 7–0 ·
-//  three 16-bit words, MSB = valid, 15-bit watts.
+//  three 16-bit words, MSB = valid, 15-bit watts. ★ 2026-11-11 (facts also checked against rtl_433's current_cost.c and
+//  its recordings): the EnviR-era transmitters send a plain 55 55 55 55 preamble before the sync, the older "classic"
+//  ones a half-rate 0011 0011 … — that names the model; a COUNTER packet (byte 0 bit 6) carries byte 3 = what it
+//  counts (2 electricity, 3 gas, 4 water) and bytes 4–7 = the impulse count. A frame's last chip is followed by the
+//  idle level: the rows keep it (kit::nrzRows) — without it the last Manchester pair, and the frame, were lost.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 namespace currentcost {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& row : fskNrzRows(b, 1e6 / 3918.0)) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& row : kit::nrzRows(b.fsk, 1e6 / 3918.0, 40, true, 140)) {
         for (size_t s = findBits(row, 0x2DD4, 16); s != size_t(-1); s = findBits(row, 0x2DD4, 16, s + 1)) {
             if (s + 16 + 128 > row.size()) break;
             Bits d; bool ok = true;
@@ -402,18 +409,32 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
             }
             if (!ok) continue;
             const auto by = bytesAt(d, 0, 8);
-            if (by[0] & 0x40) continue;                         // a counter packet (gas / water / impulses): not shown yet
+            if (by[0] & 0x30) continue;                         // bits 5–4: always 0
+            const bool envir = s >= 8 && bitsAt(row, s - 8, 8) == 0x55;
+            const int id = ((by[0] & 0xF) << 8) | by[1];
             Reading r;
-            r.kind = "energy"; r.make = "Current Cost"; r.model = "transmitter";
-            char id[5]; std::snprintf(id, sizeof id, "%03X", ((by[0] & 0xF) << 8) | by[1]); r.pubId = id;
-            double w = 0; int valid = 0;
-            for (int k = 0; k < 3; ++k) {
-                const int v = (by[size_t(2 + 2 * k)] << 8) | by[size_t(3 + 2 * k)];
-                if (v & 0x8000) { w += v & 0x7FFF; ++valid; }
+            r.kind = "energy"; r.make = "Current Cost"; r.model = envir ? "EnviR transmitter" : "transmitter";
+            char ib[5]; std::snprintf(ib, sizeof ib, "%03X", id); r.pubId = ib;
+            r.fact("id", (long long)id);
+            if (by[0] & 0x40) {                                 // ★ a COUNTER: gas / water / electricity impulses
+                const int what = by[3];
+                if (what < 2 || what > 4) continue;
+                const uint32_t n = uint32_t(by[4]) << 24 | uint32_t(by[5]) << 16 | uint32_t(by[6]) << 8 | by[7];
+                r.model = envir ? "EnviR impulse counter" : "impulse counter";
+                r.extra = std::string(what == 2 ? "electricity" : what == 3 ? "gas" : "water") + " meter \xc2\xb7 " + std::to_string(n) + " pulses";
+                r.fact("subtype", (long long)what); r.fact("power0", (long long)n);
+            } else {
+                double w = 0; int valid = 0;
+                for (int k = 0; k < 3; ++k) {
+                    const int v = (by[size_t(2 + 2 * k)] << 8) | by[size_t(3 + 2 * k)];
+                    const char key[] = {'p', 'o', 'w', 'e', 'r', char('0' + k), '_', 'W', 0};
+                    r.fact(key, (long long)((v & 0x8000) ? (v & 0x7FFF) : 0));
+                    if (v & 0x8000) { w += v & 0x7FFF; ++valid; }
+                }
+                if (!valid) continue;
+                r.watts = w;
             }
-            if (!valid) continue;
-            r.watts = w;
-            if (by[0] & 0x80) r.extra = "pairing";
+            if (by[0] & 0x80) r.extra = r.extra.empty() ? "pairing" : r.extra + " \xc2\xb7 pairing";
             out.push_back(r);
             return true;
         }
@@ -422,6 +443,13 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 }
 
 } // namespace currentcost
+
+} // namespace vibeism
+// ★ V12 2026-11-11: the HOME families — meters and monitors, alarm sensors, remotes (vibe_ism_kit.h has their tools)
+#include "vibe_ism_meters.h"
+#include "vibe_ism_security.h"
+#include "vibe_ism_remotes.h"
+namespace vibeism {
 
 /** Every decoder, in turn, on every smoothing of the burst (finest first). The first that accepts it wins (a burst is one
  *  transmitter). */
@@ -448,7 +476,9 @@ inline bool bandPlausible(const Reading& r, double freqHz) {
     /* ★ V12 2026-11-11: a tyre sensor transmits at 315 MHz (the Americas, Japan; 314.9-315.0) or in the 433 band
      *  (433.92, TyreGuard 434.1) — nowhere else: not at 868, not at 915 (no TPMS uses either). */
     if (r.kind == "tpms") return (freqHz >= 312e6 && freqHz <= 318e6) || (freqHz >= 433.0e6 && freqHz <= 435.0e6);
-    const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6;
+    const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6, ism915 = freqHz >= 902e6 && freqHz <= 928e6;
+    // ★ V12 2026-11-11: the home families that only ever send at 300–440 MHz (bandOk in vibe_ism_kit.h's families)
+    if ((srd868 || ism915) && homeLowBandOnly(r)) return false;
     if (!srd868) return true;
     return !(r.make == "AcuRite" || r.make == "Oregon Scientific" || r.kind == "tpms");
 }
@@ -473,6 +503,9 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (currentcost::decode(b, out)) return;
     if (lacrosse::decodeWx3(b, out)) return;
     if (wx9::bresser3ch(b, out)) return;
+    if (decodeMeters(b, out)) return;
+    if (decodeSecurity(b, out)) return;
+    if (decodeRemotes(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
     if (tyre::decode(b, out)) return;
