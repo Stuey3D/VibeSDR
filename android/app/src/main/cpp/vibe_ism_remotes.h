@@ -123,10 +123,21 @@ namespace hcs361 {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
     const Runs& r = b.ook;
-    for (size_t i = 0; i + 2 * 67 + 1 < r.size(); ++i) {
+    for (size_t i = 0; i + 2 + 67 <= r.size(); ++i) {   // (PIWM: one run a bit; PWM needs twice that, checked below)
         if (r[i] <= 0 || r[i + 1] >= 0) continue;
-        const double te = r[i] / 10.0;
-        if (te < 80 || te > 450 || !near(r[i + 1], 10 * te, 0.25)) continue;
+        double te = r[i] / 10.0;
+        if (te < 80 || te > 450 || !near(r[i + 1], 10 * te, 0.25)) {
+            /* ★ 2026-11-12: the other sync (rtl_433's hcs361.c notes, the corpus's Microchip/HCS361/04): a preamble of TE
+             *  marks with 2 TE gaps (reads AAA…), then the 10 TE header gap */
+            if (i < 12) continue;
+            te = r[i];
+            if (te < 80 || te > 450 || !near(r[i + 1], 10 * te, 0.2)) continue;
+            int pulses = 0;
+            for (size_t k = i; k >= 2 && near(r[k - 2], te, 0.25) && near(r[k - 1], 2 * te, 0.25); k -= 2) ++pulses;
+            if (pulses < 5) continue;
+        }
+        // the data: PWM (a mark a bit, 3 TE each) — or ★ 2026-11-12 the VPWM / "PIWM, direct coding" format of the notes
+        // and the datasheet's modes, after either sync: EVERY run, mark and gap alike, a bit — 1 TE = 1, 2 TE = 0
         Bits bits; size_t k = i + 2;
         while (bits.size() < 67 && k < r.size() && r[k] > 0) {
             const int mk = r[k];
@@ -135,6 +146,14 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
             if (bits.size() < 66 && (k + 1 >= r.size() || r[k + 1] >= 0 || !near(mk - r[k + 1], 3 * te, 0.3))) break;
             bits.push_back(one ? 1 : 0);
             k += 2;
+        }
+        if (bits.size() != 67) {
+            bits.clear();
+            for (k = i + 2; bits.size() < 67 && k < r.size(); ++k) {
+                if (near(r[k], te, 0.3)) bits.push_back(1);
+                else if (near(r[k], 2 * te, 0.25)) bits.push_back(0);
+                else break;
+            }
         }
         if (bits.size() != 67) continue;
         int crc = 0, crcLow = 0;

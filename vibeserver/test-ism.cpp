@@ -1160,6 +1160,26 @@ static void testSec2() {
         for (int rep = 0; rep < 7; ++rep) { tx.mark(400); tx.space(6000); for (int i = 15; i >= 0; --i) { tx.mark(400); tx.space((w >> i) & 1 ? 2812 : 1692); } tx.mark(400); tx.space(6000); }
         cs.push_back({{"Dish TV remote", Sig{tx.r}, "UHF remote 6.3", nullptr, nullptr, true}, 384e6, {}, "Dish Network"});
     }
+    // Microchip HCS361, VPWM ("PIWM, direct coding"): TE 200 µs marks with 2 TE gaps, a 10 TE header gap, then every run
+    //   a bit (1 TE = 1, 2 TE = 0), 67 bits LSB first: hop 32 · serial 28 · S3 S0 S1 S2 · VLOW · 2-bit CRC
+    {
+        const uint32_t hop = 0x6225C0F8, serial = 0x24DDB57;
+        Bits d;
+        for (int j = 0; j < 32; ++j) d.push_back((hop >> j) & 1);
+        for (int j = 0; j < 28; ++j) d.push_back((serial >> j) & 1);
+        d.push_back(1); d.push_back(0); d.push_back(1); d.push_back(0);   // S3 S0 S1 S2 → button 2 + 8 = 10
+        d.push_back(1);                                                   // VLOW
+        int crc = 0; for (int j = 0; j < 65; ++j) { const int c = ((crc >> 1) ^ d[size_t(j)]) & 1; crc = c | (((c ^ crc) << 1) & 2); }
+        d.push_back(uint8_t(crc >> 1)); d.push_back(uint8_t(crc & 1));
+        const double T = 200;
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            for (int k = 0; k < 12; ++k) { tx.mark(T); tx.space(k < 11 ? 2 * T : 10 * T); }
+            for (size_t j = 0; j < d.size(); ++j) { const double w = d[j] ? T : 2 * T; if (j % 2 == 0) tx.mark(w); else tx.space(w); }
+            tx.space(26000);
+        }
+        cs.push_back({{"HCS361 key (VPWM)", Sig{tx.r}, "Key fob / remote", "button", "10", true}, 315e6, {"24DDB57", "24ddb57", "6225C0F8", "6225c0f8", "38657879"}, "Microchip HCS361"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
