@@ -136,6 +136,25 @@ inline void mapOpenPage(App& a, const std::string& id, double lat = NAN, double 
     u.closedAt = 0;
     if (!mapCoversScreen(a)) a.open(App::S_MAP);
 }
+/** ★★ The map's perf line: one window (30 s, or up to the close), its re-renders BY CAUSE. Starts a new window.
+ *  (handheld66's line carried the last session's counts into the first frame of the next map — "23 re-renders,
+ *  31 ms each, 0 indices" was the previous map's renders beside a new map's empty first one.) */
+inline void mapPerfLine(const char* tag, double now) {
+    MapUi& u = mapUi();
+    MapRender& R = mapRender();
+    MapStore& st = mapStore();
+    if (u.perfFrames > 0) {
+        std::string causes;
+        for (int k = 0; k < MapRender::RC_N; k++) if (R.byCause[k]) { char b[32]; std::snprintf(b, sizeof b, "%s%s %ld", causes.empty() ? "" : " ", MapRender::causeName(k), R.byCause[k]); causes += b; }
+        std::fprintf(stderr, "vibe-hhui: %s — %ld frames in %.0f s, map page %.2f ms a frame (incl. re-renders) · %ld re-renders [%s], %.1f ms each, max %.1f, %ld drew nothing "
+                     "(last %.1f ms, %ld indices in %ld draws) · %ld uploads %.0f ms · %ld labels · resident %.1f MB in %d files + buffer %.1f MB · z%d\n",
+                     tag, u.perfFrames, now - u.perfAt, u.perfDraw * 1e3 / std::max(1L, u.perfFrames), R.renders, causes.c_str(), R.renders ? R.renderMs / R.renders : 0.0, R.maxMs,
+                     R.emptyRenders, R.lastMs, R.vertsLast, R.drawsLast, st.uploads, st.uploadMs, R.labelsLast, st.residentBytes() / 1048576.0, st.residentFiles(),
+                     R.gpuBytes / 1048576.0, u.view.z);
+    }
+    R.resetPerf(); st.uploads = 0; st.uploadMs = 0;
+    u.perfAt = now; u.perfFrames = 0; u.perfDraw = 0;
+}
 /** Close the sheet (the page's own exit decides what else happens). */
 inline void mapClosePage(App& a) {
     MapUi& u = mapUi();
@@ -145,6 +164,8 @@ inline void mapClosePage(App& a) {
      *  the off-screen buffer released: the next map starts from nothing, as the first one did. Costs a fresh read of
      *  the visible files from the card on each open. */
     if (u.started) {
+        mapPerfLine("map perf (closed)", nowSec());
+        u.perfAt = 0;
         mapStore().flush();
         mapRender().release();
         u.view.dirty = true;
@@ -579,17 +600,8 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
 
     // ★ the map's own cost, beside the UI's perf line
     u.perfFrames++; u.perfDraw += App::threadCpu() - t0;
-    if (now - u.perfAt >= 30) {
-        if (u.perfAt > 0) {
-            MapRender& R = mapRender();
-            std::fprintf(stderr, "vibe-hhui: map perf — %ld frames, map page %.2f ms a frame (incl. re-renders) · %ld re-renders, %.1f ms each (last %.1f ms, %ld indices in %ld draws) · "
-                         "%ld labels · resident %.1f MB in %d files + buffer %.1f MB · z%d\n",
-                         u.perfFrames, u.perfDraw * 1e3 / std::max(1L, u.perfFrames), R.renders, R.renders ? R.renderMs / R.renders : 0.0, R.lastMs,
-                         R.vertsLast, R.drawsLast, R.labelsLast, mapStore().residentBytes() / 1048576.0, mapStore().residentFiles(), R.gpuBytes / 1048576.0, u.view.z);
-            R.renders = 0; R.renderMs = 0;
-        }
-        u.perfAt = now; u.perfFrames = 0; u.perfDraw = 0;
-    }
+    if (u.perfAt <= 0) u.perfAt = now;
+    else if (now - u.perfAt >= 30) mapPerfLine("map perf", now);
 }
 
 /** (The 90 s release is gone: a closed map is flushed at once — mapClosePage.) */

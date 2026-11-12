@@ -135,7 +135,9 @@ public:
         if (dirty || R.fz != z || outside || gen || settle || repair || frame == 0) {
             c.g.flush();
             const uint64_t g0 = st.generation();
-            R.render(st, c.tc, mapFonts(), cx, cy, z, mapProfile(profile), frame);
+            const int cause = dirty || frame == 0 || R.fz < 0 ? MapRender::RC_OPEN : R.fz != z ? MapRender::RC_ZOOM : outside ? MapRender::RC_PAN
+                            : gen ? MapRender::RC_DATA : repair ? MapRender::RC_REPAIR : MapRender::RC_SETTLE;
+            R.render(st, c.tc, mapFonts(), cx, cy, z, mapProfile(profile), frame, cause);
             gen_ = g0; renderedAt_ = now; dirty = false; loadRender_ = loadingNow;
             glViewport(0, 0, W, H);
             dx = 0; lastOx_ = lastOy_ = 0;

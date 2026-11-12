@@ -492,15 +492,20 @@ public:
                 got.push_back(f);
             }
         }
+        const double u0 = now();
         for (auto& f : got) {
             upload(*f);
+            uploads++;
             f->used = frame;
             files_[f->name] = f;
             total_ += f->bytes;
             gen_++;
         }
+        if (!got.empty()) uploadMs += (now() - u0) * 1e3;
         if (total_ > kMapCacheBytes) evict();
     }
+    /** The perf line's: files put on the GPU (and the UI-thread time it took) since the last reset. */
+    long uploads = 0; double uploadMs = 0;
     /** The frame of the last basemap render (MapRender::render): the files it touched carry this `used`, and they are
      *  the picture on screen — evict() never takes one (see there). */
     void noteRender(uint64_t frame) { lastRender_ = frame; }

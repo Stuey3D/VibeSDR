@@ -79,7 +79,14 @@ public:
     int fboW = 0, fboH = 0, margin = 0;
     GLuint tex = 0;
     // measurements (the perf line)
-    long renders = 0; double renderMs = 0, lastMs = 0; long vertsLast = 0, labelsLast = 0, drawsLast = 0;
+    long renders = 0; double renderMs = 0, lastMs = 0, maxMs = 0; long vertsLast = 0, labelsLast = 0, drawsLast = 0;
+    /* ★★ WHY EACH RE-RENDER HAPPENED (2026-11-12 — handheld66's log said "28 re-renders, 47 ms each" and could not say
+     *  what asked for them). MapView::draw names a cause for every render; the perf line counts them by cause, and
+     *  counts the renders that drew nothing at all. */
+    enum Cause { RC_OPEN, RC_ZOOM, RC_PAN, RC_SETTLE, RC_DATA, RC_REPAIR, RC_N };
+    static const char* causeName(int c) { static const char* n[RC_N] = {"open", "zoom", "pan", "settle", "data", "repair"}; return n[c]; }
+    long byCause[RC_N] = {}; long emptyRenders = 0;
+    void resetPerf() { renders = 0; renderMs = 0; maxMs = 0; emptyRenders = 0; for (auto& c : byCause) c = 0; }
     bool msaa = false;
 
     bool init(int screenW, int screenH, int marginPx) {
@@ -156,14 +163,15 @@ public:
     size_t gpuBytes = 0;
 
     /** Draw the basemap for centre (cx, cy) in world units at zoom z. `tc` / `mf` for the labels. */
-    void render(MapStore& st, TextCache& tc, MapFonts& mf, double cx, double cy, int z, const MapProfile& P, uint64_t frame) {
+    void render(MapStore& st, TextCache& tc, MapFonts& mf, double cx, double cy, int z, const MapProfile& P, uint64_t frame, int cause = RC_OPEN) {
         if (!ok_) return;
+        if (cause >= 0 && cause < RC_N) byCause[cause]++;
         const double t0 = clk();
         fcx = cx; fcy = cy; fz = z;
         wpx_ = worldPx(z);
         ox_ = cx - fboW / 2.0 / wpx_; oy_ = cy - fboH / 2.0 / wpx_;
         box_[0] = (float)ox_; box_[1] = (float)oy_; box_[2] = (float)(ox_ + fboW / wpx_); box_[3] = (float)(oy_ + fboH / wpx_);
-        st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0;
+        st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0; drawn.clear();
         st.noteRender(frame);   // ★ the files this render touches are the picture — evict() keeps them (map_data.h)
         glBindFramebuffer(GL_FRAMEBUFFER, drawFbo_ ? drawFbo_ : resolveFbo_);
         glViewport(0, 0, fboW, fboH);
@@ -184,9 +192,14 @@ public:
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         renders++;
-        lastMs = (clk() - t0) * 1e3; renderMs += lastMs;
+        lastMs = (clk() - t0) * 1e3; renderMs += lastMs; maxMs = std::max(maxMs, lastMs);
         vertsLast = verts_; drawsLast = draws_;
+        if (!draws_) emptyRenders++;
     }
+
+    /** What the last render drew, a row per file and use (the tests' check that no layer is drawn from two tiers). */
+    struct Drawn { std::string layer; int tier; const char* what; };
+    std::vector<Drawn> drawn;
 
     /** The place labels / POIs that were drawn, for the pointer's hit test (FBO pixel boxes). */
     struct Placed { float x, y, w, h; std::string text, kind; double lat, lon; };
@@ -282,6 +295,10 @@ private:
             flushRun();
         }
     }
+    void note(const MapFile* f, const char* what) {
+        const int tier = f->name.size() > 5 && f->name.compare(0, 4, "tier") == 0 ? f->name[4] - '0' : -1;
+        drawn.push_back({mapLayerOf(f->name), tier, what});
+    }
     void use() {
         g_.flush();
         glUseProgram(prog_);
@@ -312,6 +329,7 @@ private:
             bindGroup(g, f->kind == MF_LINE);
             runs(g, true, GL_TRIANGLES);
             any = true;
+            note(f, "fill");
         }
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         if (any) {
@@ -337,6 +355,7 @@ private:
             bindGroup(g, f->kind == MF_LINE);
             glUniform1f(uDash_, f->kind == MF_LINE ? dash : 0);
             runs(g, false, GL_LINES);
+            note(f, f->kind == MF_LINE ? "line" : "outline");
         }
         glLineWidth(1);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
