@@ -17,7 +17,7 @@ namespace wx9 {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool efth800(const Burst& b, std::vector<Reading>& out) {
     for (const Bits& w : wx::pwm(b.ook, 250, 500, 900, 0, 750)) {
-        if (w.size() != 48) continue;
+        if (w.size() != 48 && w.size() != 49) continue;   // (a trailing bit is common)
         const auto by = bytesAt(w, 0, 6);
         if (crc8(by.data(), 6, 0x31, 0) != 0 || (!by[0] && !by[1] && !by[2] && !by[4])) continue;
         int t = (by[2] & 0x3F) << 4 | by[3] >> 4; if (t & 0x200) t -= 0x400;
