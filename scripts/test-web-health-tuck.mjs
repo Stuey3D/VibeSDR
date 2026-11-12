@@ -184,6 +184,9 @@ try {
   ok(s.tucked && s.pref === "tucked", "the › tucks it");
   ok(s.card.l >= s.vw, `the card is off the screen (left ${s.card.l})`);
   ok(s.tab.r === s.vw && s.tab.l < s.vw && s.tab.h === 52, `the tab is on the edge (${s.tab.l}–${s.tab.r}, ${s.tab.h} px tall)`);
+  { await sleep(400);
+    const b = await p.js(`(() => { const e = document.getElementById("rxBadge"); if (!e || e.hidden) return null; const r = e.getBoundingClientRect(); return { r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom) }; })()`);
+    ok(!b || b.r <= s.tab.l || b.t >= s.tab.t + s.tab.h || b.b <= s.tab.t, `the server name stays clear of the tab (badge right ${b && b.r}, tab left ${s.tab.l})`); }
   ok(s.hc && s.tabBorder && s.tabBorder !== "rgba(0, 0, 0, 0)", `the tab wears the health colour (${s.hc} / ${s.tabBorder})`);
   console.log(`   shot ${await p.shot("Web-health-pill-tucked.png")}`);
 

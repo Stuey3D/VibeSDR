@@ -377,6 +377,8 @@ html[data-frontdoor] #splashListeners { display: none !important; }
   text-align: right; pointer-events: none;
   text-shadow: 0 0 6px #000, 0 0 2px #000;   /* legible over a bright waterfall */
 }
+/* ★ The health pill tucked: its 26 px tab waits on the right edge, so the badge steps left of it (healthTuck.ts). */
+html.hTucked #rxBadge { right: calc(12px + 30px + env(safe-area-inset-right, 0px)); transition: right .26s; }
 #rxName  { font-size: 0.95em; color: var(--amber); letter-spacing: 0.04em; }
 #rxUsers { font-size: 0.8em; color: var(--text-dim); letter-spacing: 0.04em; }
 #rxWhere { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }

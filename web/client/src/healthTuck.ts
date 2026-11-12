@@ -42,6 +42,9 @@ function apply(): void {
   if (!dock) return;
   const out = chipOut(pref, boxOpen, hot);
   dock.classList.toggle('tucked', !out);
+  // ★ the tab sits on the right edge — the receiver badge (name, locator, time) steps left of it (Stuart, 2026-11-12:
+  //   "when collapsed the card slightly fouls the server name")
+  document.documentElement.classList.toggle('hTucked', !out);
   dock.dataset.pref = pref;
   const card = dock.querySelector<HTMLElement>('.hCard'), tab = dock.querySelector<HTMLElement>('.hTab');
   // ★ The hidden half leaves the tab order and the accessibility tree, so a keyboard never lands on a control that is
