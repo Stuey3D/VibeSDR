@@ -56,6 +56,17 @@ inline std::string memBody(App& a, const RadioState& s) {
         if (s.hw("tunerBw").kind == Json::Num || s.hw("tunerBwAuto").kind == Json::Bool)
             j += ",\"ifbw\":" + memNum(s.hw("tunerBwAuto").boolean() ? -1 : s.hw("tunerBw").num(0));
     }
+    // ★★ THE AUDIO MENU'S OWN DSP — NOISE REDUCTION (+ strength), AUTO NOTCH, NOISE BLANKER (Stuart, 2026-11-12, on
+    //    the R36S: "I prefer it on so I would want this to be remembered setting"). Listener settings with no owner
+    //    default on the server, exactly like the squelch below, so they live here with it. The radio's REPORT, never
+    //    the switch's drawing. (The Broadcast FM row is different: it has owner defaults, and on the handheld the engine
+    //    keeps the user's change AS them — vibe_fm_defaults.h adoptAsDefaults — so it is not restored from here.)
+    if (h.has("nr")) {
+        j += std::string(",\"nr\":") + (h["nr"].boolean() ? "true" : "false");
+        if (h["nrStrength"].kind == Json::Num && h["nrStrength"].num(-1) >= 0) j += ",\"nrStr\":" + memNum(h["nrStrength"].num(0));
+    }
+    if (h.has("notch")) j += std::string(",\"notch\":") + (h["notch"].boolean() ? "true" : "false");
+    if (h.has("nbx")) j += std::string(",\"nbx\":") + (h["nbx"].boolean() ? "true" : "false");
     {
         const auto& S = aud::st();
         if (a.num_.count("audio.sqlDb")) j += ",\"sql\":" + memNum(a.num_["audio.sqlDb"]);
@@ -97,6 +108,24 @@ inline void memRestore(App& a, const RadioState& s, const Json& m) {
         if (m.has("span") && m["span"].num(0) > 0) e.zoom(f, m["span"].num(0));
         a.wfp_.setView(f, m.has("span") ? m["span"].num(0) : s.spanHz);
         a.wfp_.notifyInteraction(nowSec());
+    }
+    {   // ★ the audio menu's DSP (see memBody) — only what differs from what the radio reports, and only what it offers
+        const Json& h = s.msg("hwinfo");
+        auto jb = [](bool v) { return v ? "true" : "false"; };
+        if (m.has("nr") && h.has("nr")) {
+            const bool on = m["nr"].boolean();
+            const double str = m.has("nrStr") ? m["nrStr"].num(-1) : -1;
+            const double now = h["nrStrength"].kind == Json::Num ? h["nrStrength"].num(-1) : -1;
+            if (on != h["nr"].boolean() || (str >= 0 && std::fabs(str - now) > 1e-3)) {
+                std::string b = std::string("{\"type\":\"nr\",\"on\":") + jb(on);
+                if (str >= 0) b += ",\"strength\":" + memNum(str);
+                e.send(b + "}");
+            }
+        }
+        if (m.has("notch") && h.has("notch") && m["notch"].boolean() != h["notch"].boolean())
+            e.send(std::string("{\"type\":\"notch\",\"on\":") + jb(m["notch"].boolean()) + "}");
+        if (m.has("nbx") && h.has("nbx") && m["nbx"].boolean() != h["nbx"].boolean())
+            e.send(std::string("{\"type\":\"nbx\",\"on\":") + jb(m["nbx"].boolean()) + "}");
     }
     if (m.has("sql")) aud::applySquelch(a, m["sql"].num(aud::SQL_OFF), true);
     if (m.has("vol")) { aud::st().vol = m["vol"].num(80); aud::sendLevel(a); }
