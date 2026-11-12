@@ -239,6 +239,29 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (what == "lod") {
+        // ★ the world-view fans (z ≤ 4) must look like the full ones: the same view both ways, pixel by pixel
+        h.v.area = {0, 0, 640, 480};
+        h.v.profile = "spots";
+        struct V { double lat, lon; int z; } views[] = {{30, 0, 2}, {52.24, -0.9, 3}, {50, 12, 4}, {-35, 150, 4}, {60, -150, 3}};
+        for (auto& w : views) {
+            h.v.centreOn(w.lat, w.lon, w.z);
+            settle(h, none);
+            std::vector<uint8_t> a(640 * 480 * 4), b(640 * 480 * 4);
+            long ia, ib;
+            mapRender().setLod(true); h.v.dirty = true; frameOnce(h, none); glReadPixels(0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, a.data()); ia = mapRender().vertsLast;
+            mapRender().setLod(false); h.v.dirty = true; frameOnce(h, none); glReadPixels(0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, b.data()); ib = mapRender().vertsLast;
+            mapRender().setLod(true);
+            long diff = 0, any = 0; int mx = 0;
+            for (size_t i = 0; i < a.size(); i += 4) { int m = 0; for (int c = 0; c < 3; c++) m = std::max(m, std::abs((int)a[i + c] - (int)b[i + c])); if (m > 40) diff++; if (m > 0) any++; mx = std::max(mx, m); }
+            const double pct = diff * 100.0 / (640 * 480);
+            char t[200]; std::snprintf(t, sizeof t, "z%d (%.0f, %.0f): world-view fans %ld indices against %ld — %.3f %% of pixels differ visibly (> 40), %.2f %% at all, most by %d",
+                                       w.z, w.lat, w.lon, ia, ib, pct, any * 100.0 / (640 * 480), mx);
+            check(pct < 0.3, t);
+        }
+        return fails ? 1 : 0;
+    }
+
     if (what == "zoom") {
         // ★ Stuart's sequence: in on central Europe, then out a step at a time, then back in — each step held long
         //   enough for some of its files to land (the R36S pace), the way a person zooms while looking.
@@ -281,6 +304,8 @@ int main(int argc, char** argv) {
         std::vector<Spot> spots;
         uint32_t rnd = 12345;
         auto next = [&] { rnd = rnd * 1103515245u + 12345u; return (rnd >> 8) / 16777216.0; };
+        // ★ a box that has been listening a while: 250 spots already held (it keeps 300, one per call · band · mode)
+        for (int i = 0; i < 250; i++) spots.push_back({-50 + next() * 115, -170 + next() * 340, rgb(next() < 0.8 ? 0x5be36b : 0x46e0ff), "G" + std::to_string(i) + "ABC"});
         double nextSpot = wall();
         auto feed = [&](double t) {
             if (t < nextSpot) return;

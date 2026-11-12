@@ -20,12 +20,15 @@
 #include "text.h"
 
 #include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
+#include <SDL2/SDL.h>
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -118,7 +121,29 @@ public:
         GLint maxS = 0; glGetIntegerv(GL_MAX_SAMPLES, &maxS);
         const int samples = std::min(4, (int)maxS);
         bool ok = false;
-        if (samples >= 2 && !std::getenv("VIBE_HHUI_MAP_NOMSAA")) {
+        /* ★★ 4× MSAA RESOLVED IN THE TILE, when the driver offers EXT_multisampled_render_to_texture (Mesa's Panfrost
+         *  does): the 4× samples live only in the GPU's tile memory and are resolved straight into the texture as each
+         *  tile is written out — no 4× colour and depth-stencil buffers in RAM (22.6 MB → 5.3 MB for the 896 × 736
+         *  buffer, on a 730 MB device whose map already holds up to 96 MB), and no resolve pass (the blit read all
+         *  10.5 MB of 4× colour back). Else the renderbuffers below, as before. VIBE_HHUI_MAP_NOMSRTT=1 forces those. */
+        const bool noMsaa = std::getenv("VIBE_HHUI_MAP_NOMSAA") != nullptr;
+        if (samples >= 2 && !noMsaa && !std::getenv("VIBE_HHUI_MAP_NOMSRTT") && hasExt("GL_EXT_multisampled_render_to_texture")) {
+            auto texMs = (PFNGLFRAMEBUFFERTEXTURE2DMULTISAMPLEEXTPROC)SDL_GL_GetProcAddress("glFramebufferTexture2DMultisampleEXT");
+            auto rbMs = (PFNGLRENDERBUFFERSTORAGEMULTISAMPLEEXTPROC)SDL_GL_GetProcAddress("glRenderbufferStorageMultisampleEXT");
+            if (texMs && rbMs) {
+                while (glGetError() != GL_NO_ERROR) {}   // (an older error is not this one's)
+                glGenFramebuffers(1, &msFbo_);
+                glBindFramebuffer(GL_FRAMEBUFFER, msFbo_);
+                texMs(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0, samples);
+                glGenRenderbuffers(1, &dsRb_); glBindRenderbuffer(GL_RENDERBUFFER, dsRb_);
+                rbMs(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, fboW, fboH);
+                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, dsRb_);
+                ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE && glGetError() == GL_NO_ERROR;
+                if (ok) { msaa = true; inTile = true; gpuBytes = (size_t)fboW * fboH * 8; }
+                else { glDeleteFramebuffers(1, &msFbo_); glDeleteRenderbuffers(1, &dsRb_); msFbo_ = dsRb_ = 0; }
+            }
+        }
+        if (!ok && samples >= 2 && !noMsaa) {
             glGenFramebuffers(1, &drawFbo_);
             glBindFramebuffer(GL_FRAMEBUFFER, drawFbo_);
             glGenRenderbuffers(1, &colorRb_); glBindRenderbuffer(GL_RENDERBUFFER, colorRb_);
@@ -143,22 +168,26 @@ public:
         glBindRenderbuffer(GL_RENDERBUFFER, 0);
         GLfloat lw[2] = {1, 1}; glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, lw); maxLine_ = lw[1];
         if (!gInit_) { g_.init(fboW, fboH); gInit_ = true; }   // (Gfx has no teardown: made once)
-        std::fprintf(stderr, "vibe-hhui: map buffer %dx%d%s (%.1f MB), line widths ≤ %.1f, %s\n", fboW, fboH, msaa ? " 4×MSAA" : "",
+        std::fprintf(stderr, "vibe-hhui: map buffer %dx%d%s (%.1f MB), line widths ≤ %.1f, %s\n", fboW, fboH,
+                     inTile ? " 4×MSAA in the tile (EXT_multisampled_render_to_texture)" : msaa ? " 4×MSAA renderbuffers + resolve" : "",
                      gpuBytes / 1048576.0, maxLine_, ok ? "ready" : "INCOMPLETE");
         ok_ = ok;
         return ok;
     }
     bool ready() const { return ok_; }
+    bool inTile = false;   // ★ MSAA resolved in the tile (no 4× buffers, no blit)
+    void setLod(bool on) { noLod_ = !on; }   // (tests: the world-view fans against the full ones)
     /** Every GL object gone (the map shut for a while); init() makes them again. */
     void release() {
         if (!prog_) return;
         glDeleteProgram(prog_); glDeleteVertexArrays(1, &vao_); glDeleteTextures(1, &tex);
         if (drawFbo_) glDeleteFramebuffers(1, &drawFbo_);
         if (resolveFbo_) glDeleteFramebuffers(1, &resolveFbo_);
+        if (msFbo_) glDeleteFramebuffers(1, &msFbo_);
         if (colorRb_) glDeleteRenderbuffers(1, &colorRb_);
         if (dsRb_) glDeleteRenderbuffers(1, &dsRb_);
-        prog_ = vao_ = tex = drawFbo_ = resolveFbo_ = colorRb_ = dsRb_ = 0;
-        ok_ = false; msaa = false; fz = -1; gpuBytes = 0;
+        prog_ = vao_ = tex = drawFbo_ = resolveFbo_ = colorRb_ = dsRb_ = msFbo_ = 0;
+        ok_ = false; msaa = false; inTile = false; fz = -1; gpuBytes = 0;
     }
     size_t gpuBytes = 0;
 
@@ -175,7 +204,7 @@ public:
         st_ = &st; frame_ = frame; P_ = P; z_ = z; verts_ = 0; draws_ = 0; noted_ = 0; drawn.clear(); waits_.clear();
         indexAtRender_ = st.indexReady();
         st.noteRender(frame);   // ★ the files this render touches are the picture — evict() keeps them (map_data.h)
-        glBindFramebuffer(GL_FRAMEBUFFER, drawFbo_ ? drawFbo_ : resolveFbo_);
+        glBindFramebuffer(GL_FRAMEBUFFER, msFbo_ ? msFbo_ : drawFbo_ ? drawFbo_ : resolveFbo_);
         glViewport(0, 0, fboW, fboH);
         glDisable(GL_SCISSOR_TEST);
         glClearColor(mp::sea.r, mp::sea.g, mp::sea.b, 1);
@@ -237,7 +266,12 @@ public:
     std::vector<Placed> poi;
 
 private:
-    GLuint prog_ = 0, vao_ = 0, drawFbo_ = 0, resolveFbo_ = 0, colorRb_ = 0, dsRb_ = 0;
+    GLuint prog_ = 0, vao_ = 0, drawFbo_ = 0, resolveFbo_ = 0, colorRb_ = 0, dsRb_ = 0, msFbo_ = 0;
+    static bool hasExt(const char* name) {
+        GLint n = 0; glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+        for (GLint i = 0; i < n; i++) { const char* e = (const char*)glGetStringi(GL_EXTENSIONS, (GLuint)i); if (e && !std::strcmp(e, name)) return true; }
+        return false;
+    }
     GLint uOrigin_ = -1, uWorld_ = -1, uWrap_ = -1, uSize_ = -1, uColor_ = -1, uDash_ = -1;
     float maxLine_ = 1;
     bool ok_ = false, gInit_ = false;
@@ -250,6 +284,7 @@ private:
     float box_[4] = {0, 0, 1, 1};
     long verts_ = 0, draws_ = 0, noted_ = 0;
     bool dbg_ = std::getenv("VIBE_HHUI_MAP_LOG") != nullptr;
+    bool noLod_ = std::getenv("VIBE_HHUI_MAP_NOLOD") != nullptr;   // (tests: the full fans at every zoom)
     struct Box { float x, y, w, h; };
     std::vector<Box> placed_;
     struct Wait { std::vector<std::string> names; bool whole, land; };
@@ -321,10 +356,11 @@ private:
      *  chunks of a group are in vertex order, so a run's range is its first one's first vertex to its last one's last.
      *  Also returns the drawn pieces' box (world units, wrap applied) for the cover quad. */
     bool runs(const MapGroup& g, bool fan, GLenum prim, float* ub = nullptr) {
-        const std::vector<uint32_t>& at = fan ? g.fanAt : g.edgeAt;
+        const bool lo = fan && z_ <= 4 && g.loN > 0 && !noLod_;   // ★ the world-view fan (map_data.h mapLoFan)
+        const std::vector<uint32_t>& at = lo ? g.loAt : fan ? g.fanAt : g.edgeAt;
         const std::vector<float>& boxes = fan ? g.fanBoxes : g.boxes;   // ★ a fill's pieces have their own boxes (mapSplitFill)
         const std::vector<uint32_t>& vb = fan ? g.fanV : g.edgeV;
-        const uint32_t first = fan ? 0 : (uint32_t)g.fanN;
+        const uint32_t first = lo ? (uint32_t)(g.fanN + g.edgeN) : fan ? 0 : (uint32_t)g.fanN;
         const size_t nr = boxes.size() / 4;
         if (at.size() != nr + 1 || vb.size() != nr * 2) return false;
         bool any = false;
