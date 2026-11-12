@@ -164,11 +164,63 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace hcs361
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  NEXA / KLIKAANKLIKUIT / PROOVE / HOME EASY "self-learning" switches, remotes and door sensors (also Anslut, Intertechno
+//  ITLS, Smartwares, REV Telecontrol) — 433.92 MHz OOK. Source: "RF Protokoll – Proove self learning", elektronikforumet.com
+//  wiki: pulses of T ≈ 270 µs; a gap of T or 5T after each — every data bit sent as two such (1 → long-short as the
+//  first-of-pair rule reads it); a sync gap of ~10T before, ~40T after; 32 data bits (36 with a dim level): a 26-bit
+//  address · group · on/off · channel 2 + unit 2 (both inverted) — KlikAanKlikUit reads those last four as one unit
+//  number; an on/off pair sent "11" means DIM, with 4 level bits added (rtl_433's newkaku.c notes). Five to fifteen
+//  repeats: twice alike in the burst.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace nexa {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = kit::ppmRows(b.ook, 270, 1300, 2000, 120, 500, 0.45);
+    for (const Bits& row0 : rows) {
+        Bits row = row0;
+        if (row.size() == 65 || row.size() == 73) row.pop_back();   // the stop pulse's gap read as a bit
+        if (row.size() != 64 && row.size() != 72) continue;
+        if (!kit::twice(rows, row0)) continue;
+        Bits d; bool ok = true, dim = false;
+        for (size_t i = 0; i + 1 < row.size() && ok; i += 2) {
+            if (row[i] == row[i + 1]) { if (i == 54 && row[i] == 1) { dim = true; d.push_back(1); continue; } ok = false; break; }
+            d.push_back(row[i]);
+        }
+        if (!ok || d.size() < 32) continue;
+        const uint32_t id = bitsAt(d, 0, 26);
+        if (id == 0 || id == 0x3FFFFFF) continue;
+        const int group = d[26], on = d[27];
+        const int chan = int(bitsAt(d, 28, 2)) ^ 3, unitP = int(bitsAt(d, 30, 2)) ^ 3, unitK = int(bitsAt(d, 28, 4));
+        Reading r = remoteReading("doorbell", "Nexa / KlikAanKlikUit", "self-learning", 23, id);
+        r.button = std::to_string(unitK + 1);
+        r.extra = dim ? "dim" : on ? "on" : "off";
+        if (dim && d.size() >= 36) r.extra += " \xc2\xb7 level " + std::to_string(bitsAt(d, 32, 4));
+        if (group) r.extra += " \xc2\xb7 group";
+        // ★ the bench's values: the write-ups disagree on what to call these fields — rtl_433's Intertechno reading
+        //   (an address starting 0x56 / 0x69 on the air) reports raw on-air nibbles where the others report on/off
+        const uint32_t lead = bitsAt(row, 0, 8);
+        if (lead == 0x56 || lead == 0x69) {
+            r.fact("command", (long long)bitsAt(row, 53, 3)); r.fact("master", (long long)bitsAt(row, 56, 4)); r.fact("slave", (long long)bitsAt(row, 60, 4));
+        } else r.fact("command", on || dim ? "On" : "Off");
+        r.fact("state", on || dim ? "ON" : "OFF");
+        r.fact("group", (long long)group); r.fact("group_call", group ? "Yes" : "No"); r.fact("dim", dim ? "Yes" : "No");
+        r.fact("channel", (long long)chan);
+        (void)unitP;
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace nexa
+
 /** The remote families, strongest checks first. */
 inline bool decodeRemotes(const Burst& b, std::vector<Reading>& out) {
     if (lightwave::decode(b, out)) return true;
     if (gecolor::decode(b, out)) return true;
     if (hcs361::decode(b, out)) return true;
+    if (nexa::decode(b, out)) return true;
     return false;
 }
 
