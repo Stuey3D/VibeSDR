@@ -324,6 +324,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 } // namespace vibeism
 // ★ V12 2026-11-11: the HOME families — meters and monitors, alarm sensors, remotes (vibe_ism_kit.h has their tools)
 #include "vibe_ism_meters.h"
+#include "vibe_ism_security.h"
 namespace vibeism {
 
 /** Every decoder, in turn, on every smoothing of the burst (finest first). The first that accepts it wins (a burst is one
@@ -348,7 +349,9 @@ inline void decodeAll(const Burst& b, std::vector<Reading>& out) {
 inline bool bandPlausible(const Reading& r, double freqHz) {
     // ★ V12 wM-Bus: a meter only at 868.2-868.4 (S) or 868.85-869.05 (T/C) — anywhere else its CRC passed by chance
     if (r.kind == "meter") return (freqHz >= 868.2e6 && freqHz <= 868.4e6) || (freqHz >= 868.85e6 && freqHz <= 869.05e6);
-    const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6;
+    const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6, ism915 = freqHz >= 902e6 && freqHz <= 928e6;
+    // ★ V12 2026-11-11: the home families that only ever send at 300–440 MHz (bandOk in vibe_ism_kit.h's families)
+    if ((srd868 || ism915) && homeLowBandOnly(r)) return false;
     if (!srd868) return true;
     return !(r.make == "AcuRite" || r.make == "Oregon Scientific" || r.kind == "tpms");
 }
@@ -362,6 +365,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (lacrosse::decode(b, out)) return;
     if (currentcost::decode(b, out)) return;
     if (decodeMeters(b, out)) return;
+    if (decodeSecurity(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
     if (tpms::decodeA(b, out)) return;

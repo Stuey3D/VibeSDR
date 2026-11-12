@@ -71,6 +71,20 @@ inline std::vector<Bits> nrzRowsAny(const Burst& b, double bitUs, int maxBits, s
     return out;
 }
 
+/** The run lists an OOK-defined family should try: the envelope's, and the discriminator's both ways round — the same
+ *  keying sent as FSK (or a wide FSK pair recorded as one channel) reads as OOK from its tones. */
+inline std::vector<Runs> keyedRuns(const Burst& b) {
+    std::vector<Runs> v;
+    v.push_back(b.ook);
+    if (!b.fsk.empty()) {
+        Runs a = b.fsk, c = b.fsk;
+        for (auto& d : c) d = -d;
+        for (Runs* r : {&a, &c}) { size_t k = 0; while (k < r->size() && (*r)[k] < 0) ++k; r->erase(r->begin(), r->begin() + long(k)); }
+        v.push_back(std::move(a)); v.push_back(std::move(c));
+    }
+    return v;
+}
+
 /** Every position of `pattern` (`n` ≤ 32 bits, MSB first) in `b`. */
 inline std::vector<size_t> findAll(const Bits& b, uint32_t pattern, int n) {
     std::vector<size_t> at;
@@ -94,4 +108,13 @@ inline bool twice(const std::vector<Bits>& rows, const Bits& w) {
 }
 
 } // namespace kit
+
+/** ★ The home families that transmit only at 300–440 MHz (315 / 319.5 / 345 / 433.92): a reading of theirs at 868 or
+ *  915 MHz passed its check by chance (an Insteon burst at 915 read as an Interlogix heat sensor). bandPlausible. */
+inline bool homeLowBandOnly(const Reading& r) {
+    static const char* const low[] = {"Interlogix"};
+    for (const char* m : low) if (r.make == m) return true;
+    return false;
+}
+
 } // namespace vibeism

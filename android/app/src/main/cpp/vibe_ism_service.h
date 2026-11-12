@@ -86,6 +86,7 @@ inline const char* kindLabel(const std::string& k) {
     if (k == "keyfob") return "Key fob";
     if (k == "suspectfob") return "Suspected key fob";
     if (k == "doorbell") return "Doorbell / remote";
+    if (k == "security") return "Alarm sensor";   // ★ V12 2026-11-11 (vibe_ism_security.h): secret, like a remote
     return "";
 }
 /** The device's name: "Oregon Scientific THGR810", or for a secret kind "TPMS #2" / "Key fob #1". */
@@ -104,6 +105,10 @@ inline std::string readable(const Reading& r, int nick, const Units& u = Units()
     p.push_back(deviceName(r, nick));
     if (r.secret && r.kind == "tpms" && !r.model.empty()) p.push_back(r.model);   // "TPMS #2 · type B · …"
     if (r.secret && r.kind == "keyfob" && !r.make.empty()) p.push_back(r.make);    // "Key fob #1 · KeeLoq · …"
+    // ★ V12 2026-11-11: a NAMED remote or alarm sensor says what it is — "Alarm sensor #3 · Interlogix motion · …",
+    //   "Doorbell / remote #2 · Nexa · …" (the generic fixed-code family stays nameless: "Fixed-code" says nothing)
+    if (r.secret && (r.kind == "security" || r.kind == "doorbell") && !r.make.empty() && r.make != "Fixed-code")
+        p.push_back(r.model.empty() || r.model == "Doorbell / remote" ? r.make : r.make + " " + r.model);
     if (r.kind == "tpms" && r.kpa == r.kpa) {
         if (u.pressure == 1) p.push_back(fmt1(r.kpa, 0) + " kPa");
         else if (u.pressure == 2) p.push_back(fmt1(r.kpa / 100.0, 2) + " bar");
