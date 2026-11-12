@@ -474,6 +474,27 @@ async function findServer(env, id) {
   return env.DB.prepare('SELECT * FROM servers WHERE id = ?').bind(String(id || '')).first();
 }
 
+/* ★★ THE vibesdr.net ADDRESS IS OPTIONAL FOR A DIRECT SERVER (migrations/0009-alias.sql). A server reached at its
+ *  owner's own address may say `alias:false`: the listing then links straight to its url, list() publishes no
+ *  address and the slug host answers 404. ★ A TUNNEL is always aliased — the alias is how it is reached at all —
+ *  and a server that says nothing (every one older than this) keeps what it had: 1 at registration. */
+function aliasWanted(body, kind, prev) {
+  if (kind === 'tunnel') return 1;
+  if (body && body.alias === false) return 0;
+  if (body && body.alias === true) return 1;
+  return prev === 0 ? 0 : 1;
+}
+const aliasOn = (row) => !(row && Number(row.alias) === 0);
+/** ★ A query that reads `alias` where the column exists and runs WITHOUT it where migration 0009 has not been applied
+ *  — every alias then served exactly as before. The SQL carries the marker `/*ALIAS*\/` where `, alias` belongs. */
+async function withAliasCol(run, sql) {
+  try { return await run(sql.replace('/*ALIAS*/', ', alias')); } catch (e) {
+    if (!/no such column: alias/i.test(String((e && e.message) || e))) throw e;
+    console.warn('alias column missing — apply migrations/0009-alias.sql');
+    return run(sql.replace('/*ALIAS*/', ''));
+  }
+}
+
 /** Shared by ping and delist: the caller must hold the key. */
 async function authed(env, body) {
   const row = await findServer(env, body?.id);
@@ -617,6 +638,7 @@ async function register(request, env) {
   if (!url) return json({ error: 'url must be a plain http(s) address' }, 400);
 
   const kind = body.kind === 'tunnel' ? 'tunnel' : 'direct';
+  const alias = aliasWanted(body, kind, 1);
 
   // ★ Rate limit per source address. Registration is the only write a stranger can drive.
   const ip = request.headers.get('cf-connecting-ip') || '';
@@ -735,9 +757,23 @@ async function register(request, env) {
     console.error('register: gone_slugs cleanup failed', wanted, (e && e.stack) || String(e));
   }
 
+  // ★★ AN OPTED-OUT DIRECT SERVER (0009-alias.sql). Its own statement, after the row exists and outside the batch:
+  //    without the column (migration not applied) the listing still happens, aliased as before, and the log says why.
+  let aliased = true;
+  if (!alias) {
+    try {
+      await env.DB.prepare('UPDATE servers SET alias = 0 WHERE id = ?').bind(id).run();
+      aliased = false;
+    } catch (e) {
+      console.error('register: alias opt-out not stored (migration 0009?)', id, (e && e.stack) || String(e));
+    }
+  }
+
   // ★★★ THE ONLY TIME THE KEY IS EVER SENT. It cannot be recovered; a lost key means re-register.
-  //     `address` is what the switch shows underneath itself — the thing the owner shares.
-  return json({ id, key, pingSec: PING_SEC, slug: wanted, address: `${wanted}.${PUBLIC_ZONE}` });
+  //     `address` is what the switch shows underneath itself — the thing the owner shares. ★ None when the owner
+  //     opted out of the vibesdr.net address: the slug is still held for them, but nothing serves it.
+  return json({ id, key, pingSec: PING_SEC, slug: wanted, alias: aliased,
+                address: aliased ? `${wanted}.${PUBLIC_ZONE}` : null });
 }
 
 async function ping(request, env) {
@@ -789,10 +825,15 @@ async function ping(request, env) {
   const why = {};
   const verified = await verifyAddress(url, String(body.key || ''), why);
 
+  // ★★ HOW IT IS REACHED CAN CHANGE WITHOUT A NEW REGISTRATION — an owner who types their own address into a listed
+  //    tunnel server keeps the same id and key. A server that says (VibeServer from beta71) is believed; one that does
+  //    not keeps the kind it registered with.
+  const kind = body.kind === 'tunnel' || body.kind === 'direct' ? body.kind : row.kind;
+
   await env.DB.prepare(
     `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?,
                         verified = ?, grid = ?, lat = ?, lon = ?, until = ?,
-                        verify_note = ?
+                        verify_note = ?, kind = ?
      WHERE id = ?`
   ).bind(url, body.name ? clean(body.name, 60) : row.name,
          status, t, t + ttlSeconds(body), verified ? 1 : 0,
@@ -803,7 +844,23 @@ async function ping(request, env) {
          // ★ Why it failed, kept on the row so an owner (and whoever is debugging) can see it
          //   without a log pipeline. Cleared the moment it succeeds.
          verified ? '' : JSON.stringify(why).slice(0, 200),
+         kind,
          row.id).run();
+  /* ★★ THE vibesdr.net ADDRESS, ON OR OFF (0009-alias.sql) — only where the column exists (`SELECT *` returns it then),
+   *  and only written when it changes. A server that sends nothing keeps the row's value; a tunnel is always on. */
+  let aliased = true;
+  if ('alias' in row) {
+    const a = aliasWanted(body, kind, Number(row.alias));
+    aliased = a === 1;
+    if (a !== Number(row.alias)) {
+      try {
+        await env.DB.prepare('UPDATE servers SET alias = ? WHERE id = ?').bind(a, row.id).run();
+      } catch (e) {
+        console.error('ping: alias not stored', row.id, (e && e.stack) || String(e));
+        aliased = aliasOn(row);
+      }
+    }
+  }
   /* ★★ SAME NETWORK → GO DIRECT: the LAN columns (lanColumnsFor). Only where migration 0008 has been applied —
    *  `SELECT *` (findServer) returns lan_json exactly when the column exists — so a Worker deployed ahead of its
    *  migration never fails a ping over a feature. A separate statement rather than more columns in the one above
@@ -835,7 +892,8 @@ async function ping(request, env) {
     verifyWhy: verified ? undefined : why,
     pingSec: PING_SEC,
     slug: row.slug || null,
-    address: row.slug ? `${row.slug}.${PUBLIC_ZONE}` : null,
+    alias: aliased,
+    address: row.slug && aliased ? `${row.slug}.${PUBLIC_ZONE}` : null,
   });
 }
 
@@ -923,21 +981,23 @@ async function list(env, url, request) {
   };
   // ★★★ EXPIRY EVALUATED AT READ TIME. Nothing sweeps; a server that stopped pinging is simply
   //     not selected. See schema.sql.
-  const { results } = await env.DB.prepare(
+  const { results } = await withAliasCol((sql) => env.DB.prepare(sql).bind(now()).all(),
     `SELECT id, name, url, kind, grid, lat, lon, country, status_json, updated_at, expires_at, slug,
-            until
-       FROM servers WHERE ${LIVE_WHERE} ORDER BY country, name`
-  ).bind(now()).all();
+            until /*ALIAS*/
+       FROM servers WHERE ${LIVE_WHERE} ORDER BY country, name`);
 
   const servers = (results || []).map((r) => {
     let status = {};
     try { status = JSON.parse(r.status_json) || {}; } catch { status = {}; }
+    // ★★ Opted out of the vibesdr.net address (0009-alias.sql): no slug and no address, so every client links
+    //    straight to `url` — the app always did, and the directory page's listenUrl falls back to it.
+    const aliased = aliasOn(r);
     return {
       id: r.id, name: r.name, url: r.url, kind: r.kind,
-      slug: r.slug || null,
+      slug: aliased ? r.slug || null : null,
       // ★ The address a listener should be given and a friend should be sent. The tunnel hostname
       //   rotates; this does not.
-      address: r.slug ? `${r.slug}.${PUBLIC_ZONE}` : null,
+      address: aliased && r.slug ? `${r.slug}.${PUBLIC_ZONE}` : null,
       grid: r.grid, lat: r.lat, lon: r.lon, country: r.country,
       // ★ Passed through whole, `id` included — the page addresses each radio's own
       //   /r/<id>/vibeserver.json to refresh a count the ping cannot keep current.
@@ -1206,11 +1266,10 @@ const LIVE_WHERE = 'expires_at > ?1 AND verified = 1 AND (until = 0 OR until > ?
  *   nearest. A server-wide PIN is listed — the directory lists it — just not ahead of an open one.
  */
 async function suggestServers(env, { from, bands = [], country = '', exclude = '', coarse = false }) {
-  const { results } = await env.DB.prepare(
-    `SELECT name, url, slug, country, grid, lat, lon, status_json FROM servers WHERE ${LIVE_WHERE}`
-  ).bind(now()).all();
+  const { results } = await withAliasCol((sql) => env.DB.prepare(sql).bind(now()).all(),
+    `SELECT name, url, slug, country, grid, lat, lon, status_json /*ALIAS*/ FROM servers WHERE ${LIVE_WHERE}`);
   const want = new Set(bands);
-  const rows = (results || []).filter((r) => r.slug !== exclude).map((r) => {
+  const rows = (results || []).filter((r) => !r.slug || r.slug !== exclude).map((r) => {
     const status = parseStatus(r.status_json);
     const b = bandsFor(status);
     // ★ Measured at the SAME resolution as `from`: a gone server is held at its 4-character square,
@@ -1218,7 +1277,8 @@ async function suggestServers(env, { from, bands = [], country = '', exclude = '
     const pos = coarse ? coarsePos(r.grid, r.lat, r.lon)
       : Number.isFinite(+r.lat) && Number.isFinite(+r.lon) ? { lat: +r.lat, lon: +r.lon } : null;
     return {
-      name: r.name, slug: r.slug, url: r.url, country: r.country || '',
+      // ★ An opted-out server is suggested by its own url (hrefOf), never by a slug host that answers 404.
+      name: r.name, slug: aliasOn(r) ? r.slug : null, url: r.url, country: r.country || '',
       bands: b, shared: b.filter((k) => want.has(k)).length,
       km: from && pos ? kmBetween(from, pos) : null,
       pin: !!status.pin,
@@ -1455,10 +1515,9 @@ async function serveBySlug(host, request, env) {
   /* ★★★ VERIFIED ONLY, as list() has always required. This did not check, so a registration that
    *  never passed verifyAddress could still be SERVED under its slug — the attacker in the note
    *  above never had to run a real receiver at all. (Audit, 2026-09-10.) */
-  const row = await env.DB.prepare(
-    `SELECT url, name, expires_at, updated_at, created_at, grid, lat, lon, country, status_json
-       FROM servers WHERE slug = ? AND verified = 1`
-  ).bind(slug).first();
+  const row = await withAliasCol((sql) => env.DB.prepare(sql).bind(slug).first(),
+    `SELECT url, name, expires_at, updated_at, created_at, grid, lat, lon, country, status_json /*ALIAS*/
+       FROM servers WHERE slug = ? AND verified = 1`);
 
   const upstream = new URL(request.url);
   const page = wantsPage(request, upstream.pathname);
@@ -1491,6 +1550,17 @@ async function serveBySlug(host, request, env) {
     }
     if (!page) return plain(`No VibeServer is listed at ${slug}.${PUBLIC_ZONE}.`, 404);
     return unknownPage(env, slug, request);
+  }
+  /* ★★★ OPTED OUT OF THE vibesdr.net ADDRESS (0009-alias.sql): 404, NOT A REDIRECT. The owner chose their own address
+   *  as THE address. A redirect would keep this one working, so it would go on being shared and bookmarked — the alias
+   *  the owner switched off, alive in every link, and dead the day they delist or move. It would also make an
+   *  always-on vibesdr.net hostname bounce visitors to whatever URL was registered. So: a plain "not here", pointing at
+   *  the directory (which links to the server's own address), and the name stays held for the owner. */
+  if (!aliasOn(row)) {
+    return new Response(
+      `${row.name} does not use a vibesdr.net address — its owner gives out their own.\n`
+      + `Find it in the directory: https://${PUBLIC_ZONE}/`,
+      { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
   }
   if (Number(row.expires_at) <= now()) {
     // ★★ DO NOT PROMISE A RESERVATION THAT HAS LAPSED. Past the hold this name is up for grabs, so
