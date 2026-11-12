@@ -624,8 +624,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             <input type="checkbox" id="dirAlias" style="width:16px;height:16px;accent-color:var(--amber)">
             <span>Also give it a vibesdr.net address (<span class="addr">name.vibeserver.vibesdr.net</span>)</span></label>
           <div class="hint" style="margin-left:26px">Off: the listing links straight to your address, and the vibesdr.net
-            name is held for you but not served. The directory page can show live listener counts only through the
-            vibesdr.net address.</div>
+            name is held for you but not served. These work only through the vibesdr.net address, so they go too:
+            the directory's live listener counts, PIN unlock and per-radio join links, and the pairing code for raw
+            IQ out.</div>
         </div>
         <details id="reachHow" class="hide how">
           <summary>How: your own domain with HTTPS</summary>
