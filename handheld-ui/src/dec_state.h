@@ -57,7 +57,7 @@ struct DecDef {
 };
 inline const DecDef kDecs[] = {
     {"rtty",   "RTTY",    DK_TEXT, "",       false, true,  "AUTO finds the shift, centre, speed and polarity itself. If it cannot lock, pick a preset or set the signal by hand below."},
-    {"cw",     "CW",      DK_KB,   "cw",     true,  true,  "Tune the signal in CW — the decoder finds the speed itself (5–60 WPM). A wider USB filter lists every CW signal inside it. Press a row to read its text from the start; TUNE there tunes to it."},
+    {"cw",     "CW",      DK_KB,   "cw",     true,  true,  "Tune the signal in CW — the decoder finds the speed itself (5–60 WPM). A wider USB filter lists every CW signal inside it. Press a row to read its text back as far as it has been heard; TUNE there tunes to it."},
     {"psk",    "PSK",     DK_KB,   "psk",    true,  true,  "Tune USB with the PSK segment in your passband (e.g. 14.070). The signal in the middle of the passband is decoded; press a row to tune to it."},
     {"aprs",   "APRS",    DK_APRS, "aprs",   true,  true,  "Every station heard is listed, with its position, weather, messages and the digipeater that carried it."},
     {"navtex", "NAVTEX",  DK_TEXT, "",       true,  true,  "Tune 518 kHz (international) or 490 kHz (national) in USB, or 4209.5 kHz. Each message starts ZCZC and ends NNNN; a retune starts the next one."},
