@@ -1257,6 +1257,16 @@ static std::mutex       g_dabScanFileMtx;
 /** ★ The last COMPLETE picture of the band (loaded, or what the last scan left) — what a scan that stops part-way keeps
  *  for the blocks it never reached. Under g_dabBandMtx. */
 static std::vector<DabBandScanHit> g_dabBandPrev;
+/** ★ The last station played on each multiplex (vibe_dab_last_service.h) sits beside the band scan's file, per radio:
+ *  "dab-scan…txt" → "dab-last…txt" (handheld: radio-<serial>.dab-last.txt, which Start+Select's reset unlinks). */
+static std::string dabLastServiceFile(const std::string& scanFile) {
+    if (scanFile.empty()) return std::string();
+    std::string f = scanFile;
+    const size_t slash = f.find_last_of('/');
+    const size_t p = f.find("dab-scan", slash == std::string::npos ? 0 : slash);
+    if (p != std::string::npos) return f.replace(p, 8, "dab-last");
+    return f + ".dab-last";
+}
 /** Read the saved scan into g_dabBand — at start only, never over a scan that is running. */
 static void dabBandLoadSaved(const std::string& path) {
     vibedabscan::Saved sv;
@@ -20055,6 +20065,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return;
             }
             const bool dabWasOn = g_dabMode.load(std::memory_order_relaxed);   // ★ a block CHANGE, not an entry
+            const bool dabNewBlock = !dabWasOn || g_dabChannel.load() != idx;   // ★ for the station choice below
             g_dabChannel.store(idx);
             g_dabSeedPending.store(true, std::memory_order_relaxed);   // ★ see g_dabGainMem
             /* ★★ V12 (2026-11-04): AN ENTRY STARTS THE RECEIVER CLEAN, EVEN ON THE BLOCK IT LAST HELD. setChannel does
@@ -20432,7 +20443,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
             double sid = 0; jsonNum(msg, "sid", sid);
+            /* ★★★ WHICH STATION, WHEN NONE WAS NAMED (Stuart, 2026-11-12 — vibe_dab_last_service.h). A named service
+             *  always wins. A LISTENER's move to another multiplex (or into DAB) lets the server choose once the list
+             *  has arrived — the same station if this multiplex carries it, else the last one played here, else the
+             *  first — and every client shows it, because it is the report's `sid` (the shared-dial contract). The
+             *  server's own moves (sock == nullptr: the DX sweep, the band scans, their restores) never choose and
+             *  carry nothing: a sweep must not start audio on every block that happens to carry the last station. */
             if (sid > 0) g_dab.setService(uint32_t(sid));
+            else if (!sock) g_dab.disarmAutoChoice(/*clearWant=*/true);
+            else if (dabNewBlock && !g_dabScanActive.load() && !g_dxDabScan.load()) g_dab.armAutoChoice();
             sendDab(sock, dabParts());
             return;
         }
@@ -39225,6 +39244,7 @@ void LocalSdrShim::clearBookmarks() { bmClear(); }
 void LocalSdrShim::setDabScanFile(const std::string& path) {
     { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabScanFile = path; g_dabScanFileExplicit = !path.empty(); }
     if (!path.empty()) dabBandLoadSaved(path);
+    g_dab.setLastServiceFile(dabLastServiceFile(path));
 }
 
 /** Give the shim a file to own. It loads immediately and saves on every change. */
@@ -39257,6 +39277,7 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
             const std::string f = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-scan.txt";
             { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabScanFile = f; }
             dabBandLoadSaved(f);
+            g_dab.setLastServiceFile(dabLastServiceFile(f));
         }
         /* ★ The off-air slideshow store, beside the carousel and the RadioDNS logos: one file per
          *  service, so a station whose picture only exists on air is not re-read on every visit. */

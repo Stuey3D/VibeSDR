@@ -327,6 +327,11 @@ deps_for() {
     #     pinned there — the lock broke up hours into a listen. The window re-centres (advanceAfterPush); the old loop must
     #     still show the fault. ~2,000 synthetic frames through the real receiver, so optimised.
     test-dab-clockwalk) echo "-O2" ;;
+    # ★★★ WHAT PLAYS AFTER A BLOCK CHANGE (2026-11-12, Stuart's RSP1A: squeal + "100 % frames lost" with no station chosen):
+    #     the old service's sub-channel is no longer decoded from the new block, and the server's own choice — same
+    #     station, last on the multiplex (a file), first — never for a scan. The bench clip through DabService (exit 3 =
+    #     NOT RUN without it: vibeserver/bench-clip/make-clip.sh or VIBE_DAB_CLIP=). The rule alone: test-dab-last-service.
+    test-dab-station-choice) echo "-O2 -lpthread $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;

@@ -405,6 +405,7 @@ void applyResetLocked(const Radio& r) {
     ::unlink(enginePath(r.serial).c_str());
     ::unlink((enginePath(r.serial) + ".bak").c_str());
     ::unlink((g_o.hhDir + "/radio-" + hhcard::serialFile(r.serial) + ".dab-scan.txt").c_str());   // ★ its last DAB scan (main.cpp)
+    ::unlink((g_o.hhDir + "/radio-" + hhcard::serialFile(r.serial) + ".dab-last.txt").c_str());   // ★ and its last station per multiplex
     g_resetSeq = nowMs();
     g_resetSerial = r.serial;
     logf("Start+Select: %s (%s) back to its defaults", r.name.c_str(), r.serial.c_str());

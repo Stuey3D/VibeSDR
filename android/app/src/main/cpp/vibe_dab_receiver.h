@@ -694,6 +694,16 @@ public:
         return true;
     }
 
+    /** ★★ Decode NO service: nothing reaches the audio queue until selectService() succeeds. For a choice that is
+     *  not on this ensemble (yet) — a bookmark arriving before the FIC — so the PREVIOUS service's sub-channel is
+     *  not decoded meanwhile under the new one's name. reset() does the same for a block change. */
+    void clearSelection() {
+        flushMsc();
+        std::lock_guard<std::mutex> mlk(mscM_);
+        clearSelectionLocked_();
+    }
+    uint32_t selectedSid() const { return selSid_; }
+
     /* ── ★★★ THE PAD SCANNER: a few more sub-channels decoded for their labels only ──────
      *  Each slot is a second copy of the playing path's coding state, pumped from the same
      *  CIFs; its logical frames go to a PadTap (no audio). DabService rotates the slots
@@ -780,7 +790,18 @@ public:
             mscCount_ = mscBusy_ ? 1 : 0;
             mscIdleCv_.wait(lk, [this] { return mscCount_ == 0 && !mscBusy_; });
         }
-        { std::lock_guard<std::mutex> mlk(mscM_); mscBerEma_ = 0.0; mscBerPub_.store(0.0, std::memory_order_relaxed); }
+        /* ★★★ AND THE SELECTION GOES WITH THE ENSEMBLE. reset() emptied the ensemble but kept sel_ — the old
+         *  service's sub-channel position, protection profile and time de-interleaver — so after a block change
+         *  pumpService went on decoding THAT slice of the NEW multiplex's CIFs: someone else's capacity units read as
+         *  the old codec. DAB+ fed it to the super-frame search (sfTried climbing, sfOk 0 — "Multiplex weak · 100 %
+         *  frames lost" at MER 23, Stuart's RSP1A 2026-11-12, beta70); Layer II found the odd valid-looking header in
+         *  it and played it — the "squealy broken audio until I select a station". DabService had zeroed its own
+         *  sid_ believing this cleared the choice ("rx_.reset() empties the ensemble and with it the receiver's
+         *  chosen service"); now it does. No station chosen on this multiplex = nothing decoded = silence.
+         *  The PAD scan slots are the same shape (an old SId's sub-channel), so they go too. */
+        { std::lock_guard<std::mutex> mlk(mscM_);
+          mscBerEma_ = 0.0; mscBerPub_.store(0.0, std::memory_order_relaxed);
+          clearSelectionLocked_(); scan_.clear(); }
         sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; tii_.reset(); prsRef_ = 0.0f; untrustedRun_ = 0; }   // ★ the PRS reference belongs to the old block
     /** ★ The ppm figure was computed against 222.064 MHz (11D) whatever block was tuned — 8 %
      *  wrong at 5A, invisible on 12B. The service tells us the block; this is what it divides by. */
@@ -948,6 +969,10 @@ private:
         if (sl.frames.size() > 64) sl.frames.erase(sl.frames.begin());
     }
 
+    void clearSelectionLocked_() {
+        sel_ = SubChannel{}; prof_ = EepProfile{}; uprof_ = UepProfile{}; bitrate_ = 0; dataBits_ = 0;
+        selType_ = -1; selSid_ = 0; deint_.reset(); audio_.clear(); audioBer_.clear();
+    }
     void pumpService(const int8_t* cif) {
         if ((!prof_.valid && !uprof_.valid) || !deint_) return;
         const size_t coded = size_t(sel_.sizeCu) * size_t(kCuBits);

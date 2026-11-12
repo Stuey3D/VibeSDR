@@ -40,6 +40,7 @@
 #include "vibe_dab_spi.h"
 #include "vibe_thread.h"
 #include "vibe_dab_epg.h"
+#include "vibe_dab_last_service.h"
 #include "vibe_dab_stereo.h"
 #include "vibe_admin.h"   // vibeadmin::utf8Clean — esc() cleans what the air sent before it reaches JSON
 #include <dirent.h>
@@ -113,11 +114,23 @@ public:
         if (idx < 0 || idx >= int(kBandIIICount)) return 0;
         const size_t had = rx_.ensemble().services.size();
         tuneLocked_(idx);
+        autoArmed_ = false;   // ★ a scan's read never chooses a station (vibe_dab_last_service.h)
         return had;
     }
 private:
     /** The whole of a block change, under m_. */
     void tuneLocked_(int idx) {
+        /* ★ WHAT WAS PLAYING, for the next choice (armAutoChoice): its SId and its label, read before the ensemble goes.
+         *  A block left before its list arrived keeps the snapshot from the one before — that is still what was heard. */
+        {
+            const uint32_t was = sid_ ? sid_ : want_;
+            if (was) {
+                auto it = rx_.ensemble().services.find(was);
+                if (it != rx_.ensemble().services.end() && !it->second.label.empty()) prevLabel_ = it->second.label;
+                else if (was != prevSid_) prevLabel_.clear();
+                prevSid_ = was;
+            }
+        }
         channel_ = idx;
         blockCentre_.store(double(kBandIII[idx].centreHz), std::memory_order_relaxed);   // ★ the DDC thread reads it
         rx_.reset();
@@ -215,9 +228,14 @@ public:
     void setService(uint32_t sid) {
         std::lock_guard<std::mutex> lk(m_);
         want_ = sid;
+        autoArmed_ = false;         // ★ a named service always wins over the server's own choice
         holdScanForNewService_();   // ★ the new station gets the MSC thread to itself — see scanHoldUntil_
         resetAudioCounters();
-        if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
+        /* ★★★ NOT ON THIS ENSEMBLE (YET) = DECODE NOTHING. A failed select used to leave the receiver on the PREVIOUS
+         *  service's sub-channel while sid_ still named it — its audio under the new name, or a stale slice squealing.
+         *  want_ holds the choice; the worker selects it the moment the FIC lists it. */
+        if (!(rx_.ensemble().services.count(sid) && rx_.selectService(sid))) { rx_.clearSelection(); sid_ = 0; }
+        else sid_ = sid;
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         requestMp2Reset_();   // ★ vibe-mp2 owns the decoder — see mp2Loop_
         aac_.reset(); aacDry_ = 0;   // ★ a new service is a new codec configuration — see setChannel
@@ -252,6 +270,33 @@ public:
     /** ★ The service ASKED FOR — set before the ensemble has arrived, and what a resume should bring
      *  back if the listener left before it ever played (see the shim's g_dabWantSid). */
     uint32_t wantedService() const { return want_; }
+
+    /** ★★★ A LISTENER CHANGED MULTIPLEX WITHOUT NAMING A STATION: the server chooses one, once the list has arrived
+     *  (vibe_dab_last_service.h — the same station, else the last one played here, else the first). Until then the
+     *  multiplex is silent. Called by the shim AFTER setChannel/retuneChannel, only for a listener's own request —
+     *  never for the DX sweep or a band scan (disarmAutoChoice). */
+    void armAutoChoice() {
+        std::lock_guard<std::mutex> lk(m_);
+        autoArmed_ = true; autoPrevSid_ = prevSid_; autoPrevLabel_ = prevLabel_;
+        want_ = 0;
+        if (sid_) { rx_.clearSelection(); sid_ = 0; }
+    }
+    /** A block change by the server itself (a scan, the DX sweep): no choice — and with `clearWant`, nothing carried. */
+    void disarmAutoChoice(bool clearWant) {
+        std::lock_guard<std::mutex> lk(m_);
+        autoArmed_ = false;
+        if (clearWant) { want_ = 0; if (sid_) { rx_.clearSelection(); sid_ = 0; } }
+    }
+    bool autoChoiceArmed() { std::lock_guard<std::mutex> lk(m_); return autoArmed_; }
+    /** ★ The per-radio "last station on this multiplex" file (beside the band scan's). Loaded now. */
+    void setLastServiceFile(const std::string& path) {
+        std::lock_guard<std::mutex> lk(m_);
+        lastFile_ = path;
+        if (!path.empty()) lastStore_.load(path); else lastStore_.clear();
+        remSid_ = 0; remEid_ = 0;
+    }
+    /** ★ TEST HOOK: what the store would answer for this multiplex. */
+    uint32_t lastServiceForTest(uint32_t eid, const std::string& block) { std::lock_guard<std::mutex> lk(m_); return lastStore_.lookup(eid, block); }
     /** The receiver tells us where the radio actually is, so the two can be compared. */
     /* ★★★ CALLED ON vibe-dsp FOR EVERY BLOCK, so these never take m_ (2026-09-19, a Raspberry Pi 2).
      *  They did — two lock/unlocks per IQ block just to store a number — and the worker holds m_
@@ -635,6 +680,8 @@ private:
 
             if (want_ && sid_ != want_ && rx_.ensemble().services.count(want_))
                 if (rx_.selectService(want_)) sid_ = want_;
+            if (autoArmed_) autoChoose_();
+            rememberPlaying_();
 
             drainAudio();
             pumpScan();
@@ -2901,6 +2948,45 @@ private:
     std::vector<bool> tiiCodes_;
     bool              tiiHaveCodes_ = false;
     uint32_t sid_ = 0, want_ = 0;
+    // ★ The server's own choice on a block change (armAutoChoice) and the store behind rule 2.
+    bool autoArmed_ = false;
+    uint32_t prevSid_ = 0, autoPrevSid_ = 0;
+    std::string prevLabel_, autoPrevLabel_;
+    vibedablast::Store lastStore_;
+    std::string lastFile_;
+    uint32_t remSid_ = 0, remEid_ = 0; int remCh_ = -1;
+
+    /** Under m_. Waits for the list (MCI complete, EId known), then picks per vibe_dab_last_service.h and plays it. */
+    void autoChoose_() {
+        const Ensemble& e = rx_.ensemble();
+        if (!e.mciComplete() || e.eid == 0 || channel_ < 0) return;
+        std::vector<vibedablast::Candidate> list;
+        for (const auto& kv : e.services) {     // ★ the report's filter and order — what every client lists
+            const Service& sv = kv.second;
+            if (sv.isData || !sv.complete(e.subChannels)) continue;
+            const ServiceComponent* pc = sv.primaryComponent();
+            if (!pc || pc->tmid != 0 || pc->subChId < 0 || pc->ca) continue;
+            list.push_back({ kv.first, sv.label });
+        }
+        const char* why = "";
+        const uint32_t pick = vibedablast::chooseService(list, autoPrevSid_, autoPrevLabel_,
+                                                         lastStore_.lookup(uint32_t(e.eid), kBandIII[channel_].name), &why);
+        if (!pick) return;
+        autoArmed_ = false;
+        want_ = pick;
+        if (rx_.selectService(pick)) sid_ = pick;
+        std::fprintf(stderr, "[DAB] %s: no station named — playing %04X \"%s\" (%s)\n", kBandIII[channel_].name, unsigned(pick),
+                     e.services.count(pick) ? e.services.at(pick).label.c_str() : "", why);
+    }
+    /** Under m_. What plays on this multiplex is the next visit's rule 2 — remembered once per change, saved. */
+    void rememberPlaying_() {
+        const uint32_t eid = uint32_t(rx_.ensemble().eid);
+        if (!sid_ || !eid || channel_ < 0) return;
+        if (sid_ == remSid_ && eid == remEid_ && channel_ == remCh_) return;
+        remSid_ = sid_; remEid_ = eid; remCh_ = channel_;
+        // ★ Tiny file, and only on a station change; temp + fsync + rename (vibe_dab_last_service.h).
+        if (lastStore_.remember(eid, kBandIII[channel_].name, sid_) && !lastFile_.empty()) lastStore_.save(lastFile_);
+    }
 };
 
 }  // namespace vibedab
