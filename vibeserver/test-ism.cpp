@@ -1249,6 +1249,14 @@ int main(int argc, char** argv) {
         std::vector<Burst> bs;
         const auto g4 = runFront(synth({a}, 2.4e6, 3.0, 0.02, 44), 2.4e6, &bs);
         CHECK(bs.size() == 1 && g4.size() >= 1, "a burst at sample 0 then noise: %zu bursts (want 1), %zu readings", bs.size(), g4.size());
+        /* a steady spur on the air from sample 0 is FLOOR (the seed's busy-stretch rule leaves a still bin alone), so it
+         *  opens nothing — and a Schrader beside it, 40 ms in, is still read */
+        Sig cw; cw.runs = {2000000}; cw.offHz = 170e3; cw.startS = 0.0; cw.amp = 0.5;
+        Sig sc{schraderGG4Tx(0x1223344, 88, 18)}; sc.offHz = -150e3; sc.startS = 0.6;
+        std::vector<Burst> b5;
+        const auto g5 = runFront(synth({cw, sc}, 2.4e6, 1.5, 0.02, 48), 2.4e6, &b5);
+        CHECK(b5.size() == 1 && findModel(g5, "Schrader"), "a spur from sample 0: %zu bursts (want 1, the Schrader), Schrader %s",
+              b5.size(), findModel(g5, "Schrader") ? "read" : "lost");
     }
     {
         /* wide deviation: a Toyota PMV-C210 at ±75 kHz (the old captures the detector split into two silent tones) and an

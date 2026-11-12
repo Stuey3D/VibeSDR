@@ -551,14 +551,19 @@ private:
         std::copy(pw_.begin(), pw_.end(), seed_.begin() + long(frames_) * kN);
         seedAt_[size_t(frames_)] = total_;
         if (++frames_ < uint64_t(kSeedFrames)) return;
-        std::vector<float> col(kSeedFrames);
+        std::vector<float> col(kSeedFrames), spread(kN);
         for (int k = 0; k < kN; ++k) {
             for (int f = 0; f < kSeedFrames; ++f) col[size_t(f)] = seed_[size_t(f) * kN + size_t(k)];
             std::nth_element(col.begin(), col.begin() + kSeedQ, col.end());
             // ★ ×1.44 = the bin's MEAN power, where the old running-mean seed stood; the censored mean below then settles
             //   near 0.75 of it, as it always has
             floor_[size_t(k)] = std::max(1e-14f, col[size_t(kSeedQ)] * kSeedScale);
+            std::nth_element(col.begin(), col.begin() + kSeedFrames / 4, col.end());
+            const float q25 = col[size_t(kSeedFrames / 4)];
+            std::nth_element(col.begin(), col.begin() + 3 * kSeedFrames / 4, col.end());
+            spread[size_t(k)] = col[size_t(3 * kSeedFrames / 4)] / std::max(1e-20f, q25);
         }
+        seedBusy(spread);
         const uint64_t now = total_;
         std::vector<float> cur(pw_);
         for (int f = 0; f < kSeedFrames; ++f) {
@@ -569,6 +574,38 @@ private:
         total_ = now;
         pw_.swap(cur);
         seed_.clear(); seed_.shrink_to_fit(); seedAt_.clear(); seedAt_.shrink_to_fit();
+    }
+    /* ★★ A BURST FILLING THE WHOLE WINDOW (2026-11-12). A recording cut by a trigger often starts mid-frame: the burst is
+     *  in most of the 64 frames, its bins' medians are the burst, and it was learnt (steelmate, the oldest Toyota and
+     *  WH2303 captures). Such bins stand far over the band's own floor (the median of every usable bin's seed); so does
+     *  a steady spur — which IS floor, and must stay floor, or it is detected and held as a hog. What tells them apart is
+     *  how the power MOVES across the window: a sensor's data keys its bins on and off, tone to tone (the 75th/25th
+     *  percentile ratio well over noise's own ~4.8), a spur sits still (near 1). A stretch of ≥ kBusyRun bins ≥ kBusyOver
+     *  over the band's floor whose mean spread is ≥ kBusySpread gets the band's floor instead. */
+    static constexpr int kBusyRun = 3;
+    static constexpr float kBusyOver = 10.0f, kBusySpread = 15.0f;   ///< (≈ 3× noise's own spread; 8 lost a LightwaveRF, 30 one Fine Offset)
+    void seedBusy(const std::vector<float>& spread) {
+        if (!tablesOk_) buildTables();
+        std::vector<float> t; t.reserve(kN);
+        for (int k = 0; k < kN; ++k) if (usable_[size_t(k)]) t.push_back(floor_[size_t(k)]);
+        if (t.size() < 16) return;
+        std::nth_element(t.begin(), t.begin() + long(t.size() / 2), t.end());
+        const float band = t[t.size() / 2];
+        // in frequency order (order_), so a stretch is contiguous in frequency
+        int runA = -1;
+        for (int j = 0; j <= kN; ++j) {
+            const int k = j < kN ? order_[size_t(j)] : -1;
+            const bool hot = k >= 0 && usable_[size_t(k)] && floor_[size_t(k)] > band * kBusyOver;
+            if (hot) { if (runA < 0) runA = j; continue; }
+            if (runA >= 0 && j - runA >= kBusyRun) {
+                double sp = 0;
+                for (int i = runA; i < j; ++i) sp += spread[size_t(order_[size_t(i)])];
+                sp /= double(j - runA);
+                VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "seed    busy run %d bins at %+9.1f kHz  spread %.1f %s\n", j - runA, double(freq_[size_t(order_[size_t(runA)])]) / 1e3, sp, sp >= kBusySpread ? "-> band floor" : "(steady: kept)");)
+                if (sp >= kBusySpread) for (int i = runA; i < j; ++i) floor_[size_t(order_[size_t(i)])] = band;
+            }
+            runA = -1;
+        }
     }
     /* the floor: a CENSORED MEAN per bin — one FFT bin of noise is exponentially distributed, so a minimum-tracker
      *  settles at a fraction of the mean and calls 1 bin in 10 a signal. The mean of everything under 3× the floor
@@ -619,6 +656,7 @@ private:
          *  no open channel near them — an FSK's tones start together; a burst beside another already on the air is a
          *  second transmitter (oil gauges two at once; an OOK burst and the DC remnant its keying moves). */
         auto nearOpen = [&](double fq) { for (auto& c : ch_) if (c.on && std::fabs(c.offHz - fq) < kMatchHz) return true; return false; };
+        VIBE_ISM_P(if (prof_ && prof_->log && getenv("VIBE_ISM_GROUPS")) for (int g = 0; g < ng; ++g) std::fprintf(stderr, "group   %9.4f s  %+9.1f kHz  pmax %.3g  peak %.1f dB  w%d\n", double(total_) / w_, groups[g].f / groups[g].wsum / 1e3, double(groups[g].pmax), 10 * std::log10(groups[g].peak), groups[g].width);)
         for (int g = 0; g < ng; ++g) {
             G& a = groups[g];
             // ★ only the frame's strongest signals: a strong burst's keying splatter pairs with itself otherwise
