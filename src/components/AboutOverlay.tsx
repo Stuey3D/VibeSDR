@@ -58,6 +58,9 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 2026-11-12 — the server's IANA zone name ("tz", vibe_tz_id.h) and the client's own rules (src/utils/serverZone.ts).
+  //    Kiko's pre-2019 Android TV box in Paraná showed 20:20 BRST when it was 19:20 BRT: Brazil dropped DST in 2019.
+  { v: 'V12 (experimental)', detail: 'THE RECEIVER\u2019S LOCAL TIME, RIGHT EVEN ON AN OLD BOX \u2014 the clock beside UTC shows the time where the receiver is, and it used to take that from the server\u2019s own device. An old phone or TV box that has not had a time-zone update can still be keeping rules that have since changed \u2014 one in Brazil, which stopped putting its clocks forward in 2019, showed 20:20 BRST when it was 19:20. A VibeServer now also sends the name of its time zone (America/Sao_Paulo, say), and the app and the web page work out the time there from their own, up-to-date rules, trusting those over the server\u2019s when the two disagree. An older server, or a zone your device does not know, shows the time exactly as before.' },
   // ★★ V12 2026-11-12 — automatic frequency correction (android/app/src/main/cpp/vibe_afc.h, docs/v12/AUTO-PPM.md). On by
   //    default (Stuart: "it plays to our plug and play ethos"), with his safety rules: nothing until confident, checked
   //    after every change, reverted / suspended when worse, always shown, Reset and Turn off beside it.
