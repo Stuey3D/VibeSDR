@@ -155,7 +155,8 @@ import { sessionChoice, setSessionChoice } from '../services/decoderSession';   
 import { fullModeName } from '../services/autoModes';   // ★★★ AUTO's fallback rows (RTTY's pattern)
 import { hzReachable } from '../utils/tuneWindow';
 import DrmPanel from '../components/DrmPanel';
-import { drmOffered, type DrmState } from '../services/drm';
+import { drmOffered, type DrmIq, type DrmState } from '../services/drm';
+import { DrmQualityMeter } from '../utils/drmQuality';
 import { amSyncOffered, amSyncReadout, AM_SYNC_LABEL, AM_SYNC_NAME, isAmFamily, type AmSyncId, type AmSyncState } from '../services/amSync';   // ★ V12
 import { autoBwOffered, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
@@ -2620,6 +2621,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [bwAutoState, setBwAutoState] = useState<BwAutoState | null>(null);
   const [amSyncState, setAmSyncState] = useState<AmSyncState | null>(null);
   const [drmState, setDrmState] = useState<DrmState | null>(null);
+  /** ★★ V12 THE DRM CONSTELLATION (2026-11-12): the server's last drm_iq and when it came — sent only while the DRM Signal
+   *  pane asks (onDrmSignalPane); never from an older server, whose pane then has no picture. */
+  const [drmIq, setDrmIq] = useState<{ q: DrmIq; at: number } | null>(null);
+  /* ★★★ THE DRM RECEPTION METER (2026-11-12) — DAB's meter for DRM (utils/drmQuality.ts, shared with the web client):
+   *  the signal bar becomes the decoder's verdict and the mode box the decoder's own SNR. Stuart: the decoder read 17–20 dB
+   *  on a signal the S-meter called S9+20 (42 dB on the R36S) — both right, and the decoder's decides whether it plays.
+   *  Fed from `drmState` below; reset the moment DRM is left. */
+  const drmMeterRef = useRef<DrmQualityMeter | null>(null);
+  const [drmQuality, setDrmQuality] = useState<DabQuality | null>(null);
   const spotsBandCapRef = useRef<SpotsBandCap | undefined>(undefined);
   spotsBandCapRef.current = spotsBandCap;
   /** Band running (the subscription's scope is 'band'), and the governor's per-mode chips. */
@@ -4120,6 +4130,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const reloadServerBmRef = useRef<(() => void) | null>(null);
   /** ★ The DAB Signal pane: the scopes are sent only while it is open (dab=2). Stable, so the panel's effect is not re-run. */
   const onDabSignalPane = useCallback((open: boolean) => { client.current?.dabScopes?.(open); }, []);
+  /** ★★ V12 the DRM Signal pane: its constellation is sent only while it is open. Stable, as onDabSignalPane. */
+  const onDrmSignalPane = useCallback((open: boolean) => { client.current?.drmScopes?.(open); }, []);
   useEffect(() => { if (freqModalOpen) reloadServerBmRef.current?.(); }, [freqModalOpen]);
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
@@ -6515,7 +6527,20 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [openDecoder]);
   /* ★★ THE SKIMMER'S VFO IS ITS SEGMENT (CW's rule, and PSK's — the web's kbSkimOn): drawn only, never sent. */
   // ★ V12 DRM: a new mode forgets the old station (the web's setMode)
-  useEffect(() => { if (status.mode !== 'drm') setDrmState(null); }, [status.mode]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (status.mode !== 'drm') { setDrmState(null); setDrmIq(null); } }, [status.mode]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ One push per report, as DAB's. Out of DRM the meter is RESET; a report that changes nothing on screen keeps the old
+   *  object, so the controls do not re-render for it. A lost lock takes the picture with it. */
+  useEffect(() => {
+    if (status.mode !== 'drm') { drmMeterRef.current?.reset(); setDrmQuality(null); return; }
+    if (!drmState) { setDrmQuality(null); return; }
+    if (!drmState.sync) setDrmIq(null);
+    const m = drmMeterRef.current ?? (drmMeterRef.current = new DrmQualityMeter());
+    const q = dabWithPlayback(m.push(drmState, Date.now()), drmState.playable ? 1 : 0,
+      isMutedRef.current ? undefined : lastAudioAtRef.current ? Date.now() - lastAudioAtRef.current : Infinity);
+    setDrmQuality(p => (p && p.level === q.level && p.label === q.label && p.advice === q.advice
+                        && p.detail === q.detail && p.merDb !== undefined && q.merDb !== undefined
+                        && Math.round(p.merDb) === Math.round(q.merDb) ? p : q));
+  }, [status.mode, drmState]);   // eslint-disable-line react-hooks/exhaustive-deps
   const skimDrawn = (activeDecoder === 'cw' && cwSkim) || (activeDecoder === 'psk' && pskSkim);
   const skimDrawnW = activeDecoder === 'psk' ? pskWidth : cwWidth;
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (the web's renderFrame) — drawn where it is, never sent. */
@@ -7144,6 +7169,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       onNdbStats: (st) => { if (!destroyed.current) setNdbStats(st); },
       // ★ V12 DRM: a report after leaving DRM is a ghost (the web's onDrm)
       onDrm: (d) => { if (!destroyed.current && client.current?.getStatus().mode === 'drm') setDrmState(d); },
+      // ★★ V12 the DRM constellation — a picture after leaving DRM is a ghost, as a report is
+      onDrmIq: (q) => { if (!destroyed.current && client.current?.getStatus().mode === 'drm') setDrmIq({ q, at: Date.now() }); },
       // ★ V12 tone ID: NFM only (a label after leaving NFM is a ghost)
       onToneId: (l) => {
         if (destroyed.current) return;
@@ -14423,6 +14450,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           storms={storms}
           dabOn={dabOn}
           dabMeter={dabQuality}
+          drmOn={status.mode === 'drm' && !dabOn}
+          drmMeter={drmQuality}
           frequency={status.frequency}
           /* ★ In ADS-B the mode box reads ADSB, not the demod the receiver will come back to (status.mode stays on it,
            *  as in DAB) — the OWRX ADS-B profile already reads this way (constants/modeBox composeModeLabel). */
@@ -14826,6 +14855,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {status.mode === 'drm' && !activeDecoder && !spotsKind && !ismBoxOpen && !dabOn && (
         <PanelBoundary name="DRM" onClose={() => setDrmState(null)}>
         <DrmPanel state={drmState} topLimit={boxTopLimit} topSafe={boxTopSafe} tall={drmTall} onTall={onDrmTall}
+                  iq={drmIq?.q ?? null} iqAt={drmIq?.at ?? 0} onSignalPane={onDrmSignalPane}
                   bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH} />
         </PanelBoundary>
       )}
