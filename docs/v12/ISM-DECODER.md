@@ -351,15 +351,24 @@ noise; weak checks are shown once heard twice (`confirm`). Header per family = t
 | Eurochron EFTH-800; ThermoPro TP11 / TP08 / TP12 / TP20; Rubicson / TFA 30.3197 / inFactory (before Nexus); Bresser 3CH; WT450 / WT260H / WT405H | 433 OOK | CRC-8 / LFSR / sums / parity | `weather9` |
 | TFA Drop 30.3233 rain; Inkbird ITH-20R / IBS-P01R | 433 OOK PWM, 433 FSK 100 µs | LFSR digest + repeat / CRC-16 | `weather11` |
 | Bresser 6-in-1 family (7-in-1 indoor, new 5-in-1, soil, pool, 3-in-1 wind, Froggit WH6000, Ventus, Sencor), 7-in-1 / 3-in-1 / 8-in-1 + PM / CO2 / HCHO, 5-in-1; Maverick ET-732/733; Companion WTR001 | 868 FSK 124 µs, 433 OOK | LFSR-16 + sum / inverted copy / repeats | `weather10` |
+| **Weather pass 2 (2026-11-12)** — La Crosse View LTV-TH2 / TH3 / TH2i, R1, R3 / TFA 30.3802, W1 / W2, WR1, WSDTH01 Breeze Pro; Bresser SmartHome garden set (soil sensor, water timer, gateway — the soil reading, the rest named) | 915 / 868 FSK 104–107 µs; 433 FSK 50 µs | CRC-8 0x31 (init 0 / AC / B2) behind a 32-bit sync; CRC-16 0x1021 behind a 40-bit sync | `weather12` |
+| ThermoPro TX-7B, TP211B, TP28b, TempSpike XR; WG-PB12V1; Thermor DG950; Thermor A6N-132TX, Maverick ET-73 (unchecked: after every checked family) | 915 FSK ~105 µs; 433 OOK PWM / PPM | last-byte-first LFSR digest / a 16-bit LFSR check (restated from the notes' word list) / sum / CRC-8 / sums + repeats / none: copies + confirm | `weather13` |
+| AOK / Holman iWeather WS5029 (FSK PCM, ± UV / light) and its PWM form; TS-FT002 tank level + temperature; Emos TTX201 / IROX ETS69; Hyundai WS SENZOR (unchecked) | 917 FSK 100 µs, 433 FSK PWM, 433 OOK PPM / Manchester | XOR digest / even-odd XOR check / XOR / 6-bit nibble sum, two packets / none | `weather14` |
+| Esun EN2053, EN2058, TFA Marbella 30.3238, Rubicson 48942 pool, Fuzhou Emax W6 family (Altronics, Optex, inFactory FWS-1200 …; T/H sensor + station); unchecked: Eurochron T/H, Baldr E0666TH, Bresser 3CH V0, Missil ML0757. inFactory NC-3982 T/H written but **held** (see below) | 433 OOK PPM / PWM, 433 / 868 FSK 90–105 µs | sum + parities / sum / reflected LFSR / CRC-8 / byte sum; copies + confirm | `weather15` |
+| Fixed in place: Prologue decoder also reads the ThermoPro TX-2C / TX-2B (36 bits + zeros, battery bit inverted) and Springfield PreciseTemp soil (nibble XOR); Fine Offset FSK adds WN34 / WN34D / WN38 and WH52 soil, and reads a frame whose last 0 bits ran into the end; EFTH-800 tries stretched marks (a strong unit's) | | | `weather6`, `weather2`, `weather9` |
 
 **ASSUMED / open:** the Philips AJ7010 °C formula (raw / 353 − 9.2 — the only published fit); the TFA 30.3196's 16-bit
 check key is unknown (twice alike + confirm instead); the WH24 / WH65 split by preamble length; the Maverick digest
-hides a per-reset ID (raw pattern + confirm). **Left (and why):** XC-0324 recordings that start mid-transmission — the
-detector's first frames seed its floor, so a sensor on the air from sample 0 is never detected (`ism_replay --lead 0.3`
-reads all 58: a corpus artefact, not a live one); Cotech 36-9231 is LoRa (not this path); WH51 at 915 MHz (a ~430 kHz
-tone spacing — two channels, neither the whole signal); Oregon v1 / WMR500; La Crosse LTV (WR1, R1, TH2/3, W1,
-BreezePro) and WS-6868; Emax W6 family, Govee, ThermoPro TX7B / 211B / TP28B, TS-FT002, Oria, Esun, inFactory,
-Thermor, Holman — not yet written. Oil-tank level sensors (Watchman, ~380 recordings) were left to the home/energy pass.
+hides a per-reset ID (raw pattern + confirm). **Left (and why):** Cotech 36-9231 is LoRa (not this path); WH51 at 915 MHz (a ~430 kHz tone spacing); Oregon v1 /
+WMR500. **After weather pass 2 (2026-11-12):** Govee H5112 / H5310 / H5059 — their payload is XORed with a 128-byte key
+taken from a firmware dump: the only description IS that table, so not done (clean room); TFA 14.1504 v2 — the
+recordings' runs do not fit the notes' 360 µs bit; Oria WA150KM, La Crosse WS-6868, KlimaLogg, the one-recording
+families — not yet written; Bresser 6-in-1 ×4 and Oregon THGR122N ×4 — their bursts slice as noise (the channel sits
+off the signal), a front-end case. **inFactory T/H is held**: it reads its two folders 6/6, but alecto_ws_1200/03/g000
+carries a second sensor in exactly its format (7 copies, CRC-4 good, its 8 ms / 16 ms framing) that the answer key
+does not list, while the front end reports no burst for that recording's keyed Alecto (a strong 0.45 s signal at
+1.05 s) — the bench counts that WRONG; hook `wx15::infactory` back once that Alecto is read. Weather pass 2 corpus:
+match 1896 → 2006 on the old front end; 2189 → 2225 on ism2-front's; WRONG 0, false alarms 0 throughout. Oil-tank level sensors (Watchman, ~380 recordings) were left to the home/energy pass.
 
 ### Home families (2026-11-11): meters, alarm sensors, remotes — `vibe_ism_meters.h`, `vibe_ism_security.h`, `vibe_ism_remotes.h`
 
