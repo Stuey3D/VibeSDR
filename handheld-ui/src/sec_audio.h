@@ -590,7 +590,7 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
         double v = S.vol;
         const float sx = mk.r() + 18, sw = xr - 56 - sx;
         navRow({{"a.mute", mk.cx()}, {"a.vol", sx + sw / 2}});
-        if (slider(c, "a.vol", {sx, y + 4, sw, 40}, v, 0, 100, 5)) {
+        if (slider(c, "a.vol", {sx, y + 4, sw, 40}, v, 0, 100, 1)) {   // ★ 1 % (the web's step; it was 5 — hold slides it)
             S.vol = (int)v;
             if (S.vol == 0) S.mute = true;             // setVolumePct(0) = mute (main.ts:9757)
             else if (S.mute) S.mute = false;           // moving the level up hears it again
@@ -659,7 +659,7 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
         double v = cur;
         const float sx = x0 + (float)c.tc.width(c.f.bodyB, "NOISE REDUCTION") + 22, sw = xr - 64 - sx;
         navRow({{"a.nr", sx + sw / 2}});
-        if (slider(c, "a.nr", {sx, y + 2, sw, 40}, v, 0, 100, 5)) {
+        if (slider(c, "a.nr", {sx, y + 2, sw, 40}, v, 0, 100, 1)) {   // ★ 1 % (the web's step; it was 5)
             const int p = (int)v;
             pressed("nr", p);
             char b[96];
