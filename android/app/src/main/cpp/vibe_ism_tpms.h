@@ -18,9 +18,9 @@
 #pragma once
 
 #include "vibe_ism_protocols.h"
-#include <cstring>
+#include <algorithm>
 #include <map>
-#include <utility>
+#include <string>
 
 namespace vibeism {
 namespace tyre {
@@ -28,7 +28,7 @@ namespace tyre {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE FRAMING ENGINE — a burst's runs as fixed-width CHIPS (one per half-bit, or per PCM bit), then Manchester or
 //  differential Manchester read from a sync pattern found in the chips. Every TPMS family here is a chip sync + a line
-//  code + a check, at one of a handful of chip widths (25, 50, 100, 120, 167 µs).
+//  code + a check, at one of a handful of chip widths (25, 50-52, 100-104, 120-123, 167 µs).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Runs → rows of chips `w` µs wide (mark / high tone = 1). A run under a third of a chip is a glitch and ends the row; a
@@ -112,7 +112,7 @@ inline unsigned sum8(const uint8_t* d, size_t n) { unsigned s = 0; for (size_t i
 inline unsigned xor8(const uint8_t* d, size_t n) { unsigned s = 0; for (size_t i = 0; i < n; ++i) s ^= d[i]; return s; }
 
 /** One burst's chip rows, made once per (modulation, nominal width) and shared by every family that asks. The width is
- *  MEASURED (the shortest-run cluster, tpms::halfEstimate) and used when it lies within ±25 % of the family's nominal —
+ *  MEASURED from the burst (measure(), below) and used when it lies within ±25 % of the family's nominal —
  *  a tyre sensor's clock is an RC oscillator, several per cent off — and a burst whose measured width is nowhere near
  *  a family's is not offered to it at all (that is most of the CPU saved). FSK rows come in both polarities: which
  *  tone is "1" depends on the radio's spectrum orientation. */
@@ -211,7 +211,7 @@ template <class F> bool eachMcBits(Chips& ch, bool fsk, double nominal, const ch
 }
 
 /** Bits written as text ("0101 1110") — a decoded sync the frame's check covers. */
-inline Bits mcBitsFromSync(const char* bits) { Bits b; for (const char* q = bits; *q; ++q) if (*q == '0' || *q == '1') b.push_back(uint8_t(*q - '0')); return b; }
+inline Bits bitsOfText(const char* bits) { Bits b; for (const char* q = bits; *q; ++q) if (*q == '0' || *q == '1') b.push_back(uint8_t(*q - '0')); return b; }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  SCHRADER "GG4" (the long-running Schrader frame: FCC ID MRXGG4 — many European and US OE fitments)
@@ -251,8 +251,8 @@ inline bool schraderGG4(Chips& ch, std::vector<Reading>& out) {
 //  Management Purposes", elib.dlr.de/81155: its "Sensor A" — FSK, differential Manchester, ID 4 bytes, pressure,
 //  temperature °C + 40, two status bytes, CRC-16-CCITT) and rtl_433's tpms_porsche.c notes, which name the car and give
 //  the rest: ~52 µs chips, a run-in of chip pairs "0011…" ending "0010", CRC-16 poly 0x1021 init 0xFFFF over the eight
-//  data bytes, pressure raw × 2.5 − 100 kPa. Checked on that note's two worked frames in test-ism: the bit after the
-//  run-in's last chip is the first data bit, and a bit is 1 when the level does NOT change at its start.
+//  data bytes, pressure raw × 2.5 − 100 kPa. Checked on that note's two worked frames in test-ism: one more chip follows
+//  the run-in (the first bit's reference level), and a bit is 1 when the level does NOT change at its start.
 //  STRONG: CRC-16 behind a 20-chip sync.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool porsche987(Chips& ch, std::vector<Reading>& out) {
@@ -782,7 +782,7 @@ inline bool airpuxem(Chips& ch, std::vector<Reading>& out) {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline bool tyreGuard400(Chips& ch, std::vector<Reading>& out) {
     return eachMcBits(ch, false, 100, "1111 1101 0101 1111 1101 0101 1111", 60, [&](const std::vector<uint8_t>&, const Bits& d) {
-        Bits all = mcBitsFromSync("1111 1101 0101 1111 1101 0101 1111");
+        Bits all = bitsOfText("1111 1101 0101 1111 1101 0101 1111");
         all.insert(all.end(), d.begin(), d.end());
         const auto by = pack(all);
         if (crc8(by.data(), 11, 0x31, 0xDD) != 0) return false;
