@@ -27,6 +27,9 @@ struct Settings {
     /** ★ An address the owner already has — DDNS, a port forward, a reverse proxy. Empty means
      *  "make one for me", which is the Quick Tunnel path. */
     std::string publicUrl;
+    /** ★★ With a publicUrl: also serve it as <slug>.vibeserver.vibesdr.net (true, as always) or not. Sent with the
+     *  registration and every ping of a DIRECT listing; never on the tunnel, which is reached through the alias. */
+    bool        alias = true;
 };
 
 /** Apply the owner's wishes. Starts, updates or stops the listing as needed; returns immediately

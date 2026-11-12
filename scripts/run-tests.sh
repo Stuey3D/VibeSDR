@@ -306,6 +306,8 @@ deps_for() {
     test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
     # ★★★ Going back from a V12 beta keeps V12's settings: unknown config keys survive a load + save (11.0.10-4).
     test-config-keep)   echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★ "Also give it a vibesdr.net address" (dirAlias) round-trips, and an older config keeps the alias.
+    test-config-alias)  echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h) and their config round trip.
     test-fm-defaults)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
