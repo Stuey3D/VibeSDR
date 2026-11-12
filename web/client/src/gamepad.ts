@@ -349,11 +349,13 @@ function capPoll(gp: Gamepad, prof: string, id: string, btn: (i: number) => bool
 }
 
 // ★ Closers for whatever is up that is not a .open panel — newest last. See the header.
-const backStack: (() => void)[] = [];
+const backStack: (() => void | HTMLElement | undefined)[] = [];
 
 /** Register `close` as what back does while this menu/overlay is up. Call the returned function when it closes
- *  (by any route) so a later back does not close it twice. */
-export function pushBack(close: () => void): () => void {
+ *  (by any route) so a later back does not close it twice.
+ *  ★ `close` may return the control the highlight should land on afterwards (a folded menu category returns its
+ *    header — menuCats.ts); otherwise the highlight is cleared, as before. */
+export function pushBack(close: () => void | HTMLElement | undefined): () => void {
   backStack.push(close);
   return () => { const i = backStack.lastIndexOf(close); if (i >= 0) backStack.splice(i, 1); };
 }
@@ -365,7 +367,7 @@ function back() {
   //   go; only then what was already up before it (the first-visit tour, which stays on screen while you use the radio).
   if (grabbed && backStack.length <= grabDepth) { release(); return; }
   const top = backStack.pop();
-  if (top) { top(); highlight(null); return; }
+  if (top) { const to = top(); highlight(to instanceof HTMLElement && visible(to) ? to : null); return; }
   if (grabbed) { release(); return; }
   if (hooks?.back()) highlight(null);
 }

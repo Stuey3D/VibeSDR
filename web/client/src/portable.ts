@@ -24,10 +24,14 @@
  * ★ Only on *.vibeserver.vibesdr.net. A LAN, port-forwarded or raw tunnel address behaves exactly as before.
  */
 
-/** The settings that travel — what the Display menu's Reset already groups, plus the VFO look and a few
- *  personal ones. Hardware, tuning, squelch, DAB block and the like stay with the radio.
+/** The settings that travel — every LISTENER setting in the menu (Stuart, 2026-11-12: the save button sits "at the
+ *  bottom of the collapsed menus just above the about so that all settings are saved and transferred"): DISPLAY
+ *  (colour map, waterfall, spectrum, VFO), CONTROLS (colours and transparency, the mouse, the game controller), plus a
+ *  few personal ones from elsewhere that have always travelled (freqUnit, volume). Hardware, the antenna, the owner's
+ *  settings, tuning, squelch, DAB block and the like stay with the radio — they belong to the server, not to you.
  *  ★★ directory/public/store.html KEEPS ITS OWN COPY of this list and drops any other key a page
- *     writes (security audit, 2026-10-03) — add a key here, add it there, or it will not travel. */
+ *     writes (security audit, 2026-10-03) — add a key here, add it there, or it will not travel.
+ *  ★ scripts/test-web-menu-cats.mjs walks the menu's listener rows and fails if one has a pref missing from here. */
 export const VIEW_KEYS = [
   'palette', 'autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast', 'wfSharpness', 'wfCoarse',
   'wfSpeed', 'wfScroll', 'smoothingFrames', 'spatialSmooth', 'peakHold', 'specFloor', 'specPeakScale',
@@ -35,6 +39,9 @@ export const VIEW_KEYS = [
   // ★ The CONTROLS colours and transparency (controlColours.ts CTL_KEYS) — Stuart: "saved in the same way
   //   as the display settings so it can travel between servers".
   'ctlBg', 'ctlBtn', 'ctlFont', 'ctlSolid',
+  // ★★ 2026-11-12, when SAVE FOR ALL moved under the categories to carry the whole menu: the rest of DISPLAY (speed up
+  //    while tuning, DATA, signal labels) and of CONTROLS (mouse wheel, frequency at pointer, tuck away tune and zoom).
+  'wfBoost', 'wfData', 'knownLabels', 'wheelAction', 'ptrFreq', 'padTuck',
 ] as const;
 
 const DIRECTORY = 'https://vibeserver.vibesdr.net';
