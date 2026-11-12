@@ -1,0 +1,88 @@
+#!/bin/sh
+# vibe-clock restore|save — keep the R36S's clock across power-offs (fake-hwclock style, with the RTC when it works).
+#
+# ★★ THE RTC CANNOT BE TRUSTED ALONE. The RK817 has one (rtc0, read into the clock by the kernel at boot), but it runs
+#    off the main cell: a flat or pulled battery resets it, and on some clones it cannot be set at all — ROCKNIX ships
+#    an "RTC that can't be set" offset service for exactly that (rtc-offset). So we keep BOTH: the offset between the
+#    clock and the RTC, and the time of the save as a FLOOR. The clock never goes backwards past the last save.
+# ★ State: /var/lib/vibe-state/clock = "<offset> <saved epoch>", written temp + rename. The offset is "ms:<milliseconds>"
+#   from 2026-11-08 (whole seconds before — still read).
+# ★★★ TO THE MILLISECOND, NOT THE SECOND (Stuart, 2026-11-08: the clock came out ~3 s slow after setting it from DAB).
+#     The RTC counts whole seconds and the kernel copies that whole second into the clock at boot — up to 1 s slow every
+#     start, whatever the clock was set to. So both ends now meet the RTC AT ITS TICK: save waits for the RTC's second to
+#     turn over and records the clock's offset from it in ms; restore waits for the next tick and sets the clock to
+#     RTC + that offset at that instant. Each wait is at most a second.
+# ★ Saved: at shutdown (vibe-clock.service ExecStop), every 10 min by vibe-hwd, and after every {"set":"time"}.
+set -u
+STATE=${VIBE_STATE_DIR:-/var/lib/vibe-state}/clock
+RTC=/sys/class/rtc/rtc0/since_epoch
+# ★ the image's build time: no clock on this card can be earlier (systemd uses the same file as its own floor)
+FLOOR=$(stat -c %Y /usr/lib/clock-epoch 2>/dev/null || echo 0)
+
+# ★★ WAS THE CLOCK KNOWN AT BOOT? (Stuart, 2026-11-08: "if the battery fully dies then when it comes back up it will
+#    have a date/time in the past … the line says System Clock not set"). restore writes "rtc" when the RTC carried the
+#    time across the power-off, "guess" when it could not (a flat or pulled battery reset the RTC, or there is none) and
+#    the clock was only pushed forward to the last save or the image's build time. The UI reads it (MENU › R36S
+#    HARDWARE › CLOCK) and asks for a time source until a set this boot replaces the guess.
+BOOTSTATE=/run/vibe-clock.boot
+rtc_now() { cat "$RTC" 2>/dev/null || echo 0; }
+now_ms() { date +%s%3N; }
+# Wait (≤ 1.2 s) for the RTC's second to turn over; prints the NEW second, or nothing if it never ticked (no RTC, stopped).
+rtc_tick() {
+  r0=$(rtc_now); [ "$r0" -gt 0 ] || return 0
+  i=0
+  while [ $i -lt 240 ]; do
+    r=$(rtc_now)
+    if [ "$r" != "$r0" ]; then echo "$r"; return 0; fi
+    sleep 0.005; i=$((i + 1))
+  done
+}
+
+case "${1:-}" in
+  restore)
+    NOW=$(date +%s)
+    RTC_NOW=$(rtc_now)
+    OFFSET=0; SAVED=0
+    [ -r "$STATE" ] && read -r OFFSET SAVED < "$STATE" 2>/dev/null
+    case "$SAVED" in ''|*[!0-9]*) OFFSET=0; SAVED=0 ;; esac
+    case "$OFFSET" in ms:*) OFFSET_MS=${OFFSET#ms:} ;; *) OFFSET_MS=$((OFFSET * 1000)) ;; esac
+    case "$OFFSET_MS" in ''|*[!0-9-]*) OFFSET_MS=0 ;; esac
+    WANT=$NOW
+    # ★★ AT THE TICK: RTC + the saved offset, to the millisecond — when the RTC runs and that lands after the last save
+    #    (a reset RTC, behind the save, is caught here too: its offset was measured against a clock that was right)
+    TICK=$(rtc_tick)
+    if [ -n "$TICK" ]; then
+      T_MS=$((TICK * 1000 + OFFSET_MS))
+      if [ $((T_MS / 1000)) -ge "$SAVED" ] && [ $((T_MS / 1000)) -ge "$FLOOR" ]; then   # (a reset RTC on a fresh card reads 2000)
+        S=$((T_MS / 1000)); F=$((T_MS % 1000)); [ $F -lt 0 ] && F=0
+        echo rtc > "$BOOTSTATE" 2>/dev/null
+        date -u -s "@$S.$(printf %03d $F)" >/dev/null && echo "vibe-clock: clock set from the RTC tick to $(date -u '+%Y-%m-%d %H:%M:%S.%3N') UTC (offset ${OFFSET_MS} ms)"
+        exit 0
+      fi
+    fi
+    # ★ no tick (no RTC, or one that cannot be read), or an RTC that lost the time: whole seconds, as before — a GUESS
+    echo guess > "$BOOTSTATE" 2>/dev/null
+    if [ "$RTC_NOW" -gt 0 ] && [ "$RTC_NOW" -lt "$SAVED" ]; then
+      CAND=$((RTC_NOW + OFFSET_MS / 1000))
+      [ "$CAND" -ge "$SAVED" ] && WANT=$CAND
+    fi
+    [ "$WANT" -lt "$SAVED" ] && WANT=$SAVED
+    [ "$WANT" -lt "$FLOOR" ] && WANT=$FLOOR
+    if [ "$WANT" -gt "$NOW" ]; then
+      date -u -s "@$WANT" >/dev/null && echo "vibe-clock: clock set forward to $(date -u '+%Y-%m-%d %H:%M:%S') UTC (RTC $RTC_NOW, saved $SAVED)"
+    fi
+    ;;
+  save)
+    NOW=$(date +%s)
+    [ "$NOW" -ge "$FLOOR" ] || exit 0
+    # ★ try to keep the RTC itself right; harmless when it cannot be set (the offset covers it)
+    hwclock --systohc --utc >/dev/null 2>&1 || true
+    mkdir -p "$(dirname "$STATE")"
+    # ★★ the offset AT THE RTC'S TICK, in ms (see the header); whole seconds only if the RTC never ticks
+    TICK=$(rtc_tick)
+    if [ -n "$TICK" ]; then OFF="ms:$(( $(now_ms) - TICK * 1000 ))"; else OFF=$((NOW - $(rtc_now))); fi
+    echo "$OFF $NOW" > "$STATE.tmp" && sync "$STATE.tmp" 2>/dev/null; mv -f "$STATE.tmp" "$STATE"
+    ;;
+  *) echo "usage: vibe-clock restore|save" >&2; exit 2 ;;
+esac
+exit 0

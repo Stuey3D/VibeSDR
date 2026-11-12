@@ -286,3 +286,75 @@ export function drmSignalRows(s: DrmState | null): DrmSigRow[] {
   rows.push({ k: 'Text', v: s.text || '—', tip: 'The station\'s text message.' });
   return rows;
 }
+
+// ── ★★★ V12 THE CONSTELLATION (2026-11-12, Stuart: "for DRM is it possible to see the constellation like we do for DAB") ──
+// The equalised cells of the last super frame, from the server's {"type":"drm_iq"} (vibe_drm_report.h drmCellsJson), drawn
+// at the top of the Signal pane as DAB's is in its own: the programme (MSC), the service channel (SDC) and the fast access
+// channel (FAC) in three colours. Tight dots on the grid = a clean signal; a smear = noise, fading or echoes the receiver
+// could not undo — the same picture the decoder sees.
+// ★★ ASKED FOR, NEVER ASSUMED: the client sends {"type":"drm_scopes","on":1} while the pane is open (and 0 when it closes);
+//    the server sends cells only then (and copies none otherwise). An OLDER server never sends drm_iq, so the pane simply
+//    has no constellation — no empty box, no dead control (AGENTS.md: the app has no hard-coded settings versus a server).
+// ★ ONE RULE, TWO READERS: the web's Signal pane (web/client/src/drm.ts drmDrawConstellation) imports these.
+
+export interface DrmIq {
+  /** An ideal unit-power point sits at this radius (the server's Constellation::kScale, 60). */
+  scale: number;
+  mscQam?: number; sdcQam?: number;
+  /** x, y pairs, ±127. A channel the super frame did not decode is absent. */
+  msc?: number[]; sdc?: number[]; fac?: number[];
+}
+
+/** The budgets the server keeps (drm_receiver.h Constellation): anything longer is not a server's and is cut. */
+const DRM_IQ_MAX = { msc: 256 * 2, sdc: 64 * 2, fac: 65 * 2 } as const;
+
+/** A drm_iq off the wire, checked (lengths bounded and even, values integers clipped to ±127). null = not one. */
+export function drmIqSanitise(m: any): DrmIq | null {
+  if (!m || typeof m !== 'object' || m.type !== 'drm_iq') return null;
+  const scale = typeof m.scale === 'number' && Number.isFinite(m.scale) && m.scale > 0 && m.scale < 128 ? m.scale : 60;
+  const arr = (v: unknown, max: number): number[] | undefined => {
+    if (!Array.isArray(v) || v.length < 2) return undefined;
+    const n = Math.min(v.length, max) & ~1;
+    const out: number[] = new Array(n);
+    for (let i = 0; i < n; i++) { const x = Number(v[i]); out[i] = Number.isFinite(x) ? Math.max(-127, Math.min(127, Math.round(x))) : 0; }
+    return out;
+  };
+  const qam = (v: unknown) => (v === 4 || v === 16 || v === 64 ? v : undefined);
+  const out: DrmIq = { scale, mscQam: qam(m.mscQam), sdcQam: qam(m.sdcQam),
+                       msc: arr(m.msc, DRM_IQ_MAX.msc), sdc: arr(m.sdc, DRM_IQ_MAX.sdc), fac: arr(m.fac, DRM_IQ_MAX.fac) };
+  if (!out.msc && !out.sdc && !out.fac) return null;
+  for (const k of Object.keys(out) as Array<keyof DrmIq>) if (out[k] === undefined) delete out[k];
+  return out;
+}
+
+/** ★ Each channel's colour: the MSC in DAB's constellation yellow (the programme, the cloud a DXer reads first); the SDC
+ *  cyan and the FAC magenta — both 4- or 16-QAM, drawn UNDER the MSC so its cloud stays readable. */
+export const DRM_IQ_COLOURS = { msc: '#ffe566', sdc: '#5ad1ff', fac: '#ff7ad9' } as const;
+/** Draw order: the robust channels first, the programme on top. */
+export const DRM_IQ_ORDER = ['fac', 'sdc', 'msc'] as const;
+
+/** The legend under the picture: "MSC 16-QAM · SDC 4-QAM · FAC 4-QAM" (only the channels present). */
+export function drmIqLegend(q: DrmIq): Array<{ ch: 'msc' | 'sdc' | 'fac'; text: string; colour: string }> {
+  const out: Array<{ ch: 'msc' | 'sdc' | 'fac'; text: string; colour: string }> = [];
+  if (q.msc) out.push({ ch: 'msc', text: `MSC${q.mscQam ? ` ${q.mscQam}-QAM` : ''}`, colour: DRM_IQ_COLOURS.msc });
+  if (q.sdc) out.push({ ch: 'sdc', text: `SDC${q.sdcQam ? ` ${q.sdcQam}-QAM` : ''}`, colour: DRM_IQ_COLOURS.sdc });
+  if (q.fac) out.push({ ch: 'fac', text: 'FAC 4-QAM', colour: DRM_IQ_COLOURS.fac });
+  return out;
+}
+
+/** The plain words for the picture (the web's title, the app's accessibility hint). */
+export const DRM_IQ_TIP = 'The constellation: every dot is one received cell after the receiver has undone the echoes and fading — '
+  + 'the programme (MSC) in yellow, the service channel (SDC) in blue, the fast access channel (FAC) in pink. Tight dots '
+  + 'on a grid = a clean signal; a smear = noise, fading or echoes the receiver could not undo.';
+
+/** ★ A picture older than this is not shown (a lost lock, a stalled server): DAB's scopes go with their report. */
+export const DRM_IQ_STALE_MS = 6000;
+
+/** The grid of ideal points of a `qam` constellation, in the message's units (for the faint markers behind the MSC). */
+export function drmQamGrid(qam: number, scale: number): number[] {
+  const lv = qam === 64 ? 3 : qam === 16 ? 2 : 1, m = (1 << lv) - 1;
+  const a = scale / Math.sqrt(qam === 64 ? 42 : qam === 16 ? 10 : 2);
+  const out: number[] = [];
+  for (let i = 0; i <= m; i++) for (let q = 0; q <= m; q++) out.push((m - 2 * i) * a, (m - 2 * q) * a);
+  return out;
+}

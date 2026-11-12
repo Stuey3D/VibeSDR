@@ -33,6 +33,11 @@ namespace vibeism {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 namespace oiltank {
 
+/** ★ 2026-11-12: each row with the idle 0 that came before its first mark put back — a row starts AT the first run,
+ *  so a frame whose first chip is the preamble's first 1 (no blip before it) lost the 0 its 0x555D / 0x5558 sync
+ *  begins with (oil_watchman/08: 5 recordings once the bench's pad stopped adding a blip). */
+inline std::vector<Bits> withIdle(std::vector<Bits> rows) { for (auto& r : rows) r.insert(r.begin(), 0); return rows; }
+
 inline void depthWords(Reading& r, int cm, bool binding) {
     if (binding) r.extra = "pairing";
     else if (cm == 0) r.extra = "no echo";
@@ -67,7 +72,7 @@ inline bool sonic(const Burst& b, std::vector<Reading>& out) {
 }
 
 inline bool smart(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& row : kit::nrzRowsAny(b, 500, 12, 140)) {
+    for (const Bits& row : withIdle(kit::nrzRowsAny(b, 500, 12, 140))) {
         for (size_t s : kit::findAll(row, 0x5558, 16)) {
             const Bits d = kit::manchesterAt(row, s + 16, 64);
             if (d.size() != 64) continue;
@@ -118,8 +123,20 @@ inline bool standardRows(const std::vector<Bits>& rows, std::vector<Reading>& ou
     }
     return false;
 }
+/** ★ 2026-11-12 (second home pass): a run list with its slivers folded away — a run under `minUs` joins the run before
+ *  it. The 915 MHz TEK377A (oil_watchman/08, /09) arrives clipped, its marks broken by 16–90 µs envelope dips; one dip
+ *  ends an NRZ row (it rounds to 0 chips) and the frame was lost (40 of its recordings). */
+inline Runs foldSlivers(const Runs& in, int minUs) {
+    Runs o;
+    for (int d : in) {
+        if (std::abs(d) < minUs && !o.empty()) { o.back() += o.back() > 0 ? std::abs(d) : -std::abs(d); continue; }
+        if (!o.empty() && (o.back() > 0) == (d > 0)) o.back() += d; else o.push_back(d);
+    }
+    return o;
+}
 inline bool standard(const Burst& b, std::vector<Reading>& out) {
-    return standardRows(kit::nrzRowsAny(b, 500, 12, 78), out);
+    if (standardRows(withIdle(kit::nrzRowsAny(b, 500, 12, 78)), out)) return true;
+    return standardRows(withIdle(kit::nrzRows(foldSlivers(b.ook, 200), 500, 12, true, 78)), out);
 }
 
 inline bool advanced(const Burst& b, std::vector<Reading>& out) {

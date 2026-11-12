@@ -108,7 +108,14 @@ export interface Spot {
   how?: string;
   /** ★ …and every spot carries the call's country (the server's prefix table), "" when unknown. */
   country?: string;
+  /** ★ V12 (R36S handheld "Align to FT8"): WSJT-X's DT in seconds — absent from an older server. */
+  dt?: number;
 }
+
+/** ★★ V12 (R36S handheld "Set clock from <station>"): one time-station minute that passed its parity AND agreed with the
+ *  one before it (time_decoder.h), stated as the station's UTC and this server's clock at the boundary — see
+ *  vibe_decoder_host.h's onTime. A clock is set by applying (utcMs + rxDelayMs) − hostMs to "now". */
+export interface TimeSync { station: string; utcMs: number; hostMs: number; rxDelayMs: number }
 
 /** ★ V12 BAND GOVERNOR: one mode's state in Band (the spots box header's chips — {"type":"digital_spots_status"}). */
 export interface SpotModeState { mode: string; state: 'active' | 'light' | 'idle' | 'shed' | 'off' | 'out'; dials: number; idle: number; shed: number; live: number }
@@ -137,6 +144,8 @@ export interface DecoderCallbacks {
   onWefaxPhase?: (phase: number) => void;
   /** An FT8/FT4 decode. */
   onSpot?: (spot: Spot) => void;
+  /** ★ V12: a corroborated time-station minute (see TimeSync). */
+  onTimeSync?: (t: TimeSync) => void;
   /** ★ V12: Band's per-mode state (active / light / idle / shed / off), when it changes and every 15 s. */
   onSpotsStatus?: (st: SpotsStatus) => void;
   /** ★ CW: the signals being decoded (at most once a second, only when changed). */
@@ -491,7 +500,16 @@ export class DecoderClient {
         timestamp: d.timestamp ?? Date.now(),
         how: typeof d.how === 'string' ? d.how.replace(/[^A-Z]/g, '').slice(0, 8) : '',
         country: typeof d.country === 'string' ? d.country.replace(/[^ -~]/g, '').slice(0, 40) : '',
+        ...(typeof d.dt === 'number' && Number.isFinite(d.dt) ? { dt: d.dt } : {}),
       });
+    }
+    if (msg.type === 'time_sync' && msg.data) {
+      const d = msg.data;
+      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : NaN);
+      const t = { station: typeof d.station === 'string' ? d.station.replace(/[^A-Z0-9/]/g, '').slice(0, 12) : '',
+                  utcMs: n(d.utcMs), hostMs: n(d.hostMs), rxDelayMs: n(d.rxDelayMs) };
+      if (t.station && Number.isFinite(t.utcMs) && Number.isFinite(t.hostMs)) this.cb.onTimeSync?.({ ...t, rxDelayMs: Number.isFinite(t.rxDelayMs) ? t.rxDelayMs : 0 });
+      return;
     }
     if (msg.type === 'digital_spots_status' && msg.data && Array.isArray(msg.data.modes)) {
       // ★ Off the server, so bounded and checked: a state not in the five is dropped, names kept to a mode's alphabet.

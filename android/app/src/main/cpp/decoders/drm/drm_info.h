@@ -9,6 +9,39 @@
 
 namespace vibedrm {
 
+/** ★ DRM TEXT IS MEANT TO BE UTF-8 (ES 201 980 §6.5, SDC labels §6.4.3.x), but encoders on air send Latin-1:
+ *  RNZ Pacific, 2026-11-12, "El Ni\xF1o" — a lone 0xF1 byte, drawn as "Ni�o" on every client. So: text that is valid
+ *  UTF-8 passes as it is; text that is NOT is read as Windows-1252 / Latin-1 (what such encoders use) and re-encoded,
+ *  byte for byte — "Niño". Never both in one string: a valid UTF-8 "ñ" (C3 B1) is never turned into "Ã±". */
+inline bool validUtf8(const std::string& s) {
+    for (size_t i = 0; i < s.size();) {
+        const uint8_t c = uint8_t(s[i]);
+        const int n = c < 0x80 ? 0 : (c & 0xE0) == 0xC0 ? 1 : (c & 0xF0) == 0xE0 ? 2 : (c & 0xF8) == 0xF0 ? 3 : -1;
+        if (n < 0 || (n == 1 && c < 0xC2) || i + size_t(n) >= s.size()) return false;
+        for (int k = 1; k <= n; ++k) if ((uint8_t(s[i + size_t(k)]) & 0xC0) != 0x80) return false;
+        i += size_t(n) + 1;
+    }
+    return true;
+}
+inline std::string latin1ToUtf8(const std::string& s) {
+    // Windows-1252's 0x80–0x9F (curly quotes, dashes, €…); 0 = unassigned there → dropped
+    static const uint16_t w1252[32] = {0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0, 0x017D, 0, 0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161,
+        0x203A, 0x0153, 0, 0x017E, 0x0178};
+    std::string o;
+    for (char ch : s) {
+        const uint8_t c = uint8_t(ch);
+        uint32_t u = c < 0x80 ? c : c < 0xA0 ? w1252[c - 0x80] : c;
+        if (!u) continue;
+        if (u < 0x80) o.push_back(char(u));
+        else if (u < 0x800) { o.push_back(char(0xC0 | (u >> 6))); o.push_back(char(0x80 | (u & 0x3F))); }
+        else { o.push_back(char(0xE0 | (u >> 12))); o.push_back(char(0x80 | ((u >> 6) & 0x3F))); o.push_back(char(0x80 | (u & 0x3F))); }
+    }
+    return o;
+}
+inline std::string asUtf8(const std::string& s) { return validUtf8(s) ? s : latin1ToUtf8(s); }
+
+
 // ── FAC (§6.3) ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 struct Fac {
@@ -128,7 +161,7 @@ struct Sdc {
         for (uint8_t c : s) { if (c == 0) break; if (c >= 0x20 || c >= 0x80) o.push_back(char(c)); }
         // ★ trailing spaces are padding on air
         while (!o.empty() && o.back() == ' ') o.pop_back();
-        return o;
+        return asUtf8(o);   // ★ a Latin-1 label too (see asUtf8 below)
     }
 
 private:
@@ -267,7 +300,7 @@ public:
             for (int i = 0; i <= lastSeg_; ++i) t += parts_[size_t(i)];
             // ★ 0x0A = preferred line break, 0x0B = end of headline, 0x1F = preferred word break (§6.7) — shown as spaces
             for (char& c : t) if (c == 0x0A || c == 0x0B || c == 0x1F || c == 0x0D) c = ' ';
-            text_ = t; lastSeg_ = -1; have_ = 0;
+            text_ = asUtf8(t); lastSeg_ = -1; have_ = 0;
             return true;
         }
         return false;

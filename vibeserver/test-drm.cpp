@@ -275,8 +275,24 @@ static void cpu() {
     }
 }
 
+// ★ 2026-11-12: a Latin-1 text message (RNZ Pacific's "El Ni\xF1o") is shown as UTF-8, a UTF-8 one is left alone
+static void textCharset() {
+    auto run = [](const std::string& msg) {
+        TextMessageDecoder d; std::string got;
+        for (const auto& p : textMessagePieces(msg, false)) if (d.push(p.data())) got = d.text();
+        return got;
+    };
+    const std::string lat = "Cook Islands: Agriculture feels the heat as El Ni\xF1o dry spell bites";
+    const std::string want = "Cook Islands: Agriculture feels the heat as El Ni\xC3\xB1o dry spell bites";
+    CHECK(run(lat) == want, "a Latin-1 message reads as UTF-8: %s", run(lat).c_str());
+    CHECK(run(want) == want, "a UTF-8 message is untouched (never double-encoded): %s", run(want).c_str());
+    CHECK(asUtf8("caf\x92s") == "caf\xE2\x80\x99s", "Windows-1252 curly apostrophe");
+    CHECK(asUtf8("plain ASCII") == "plain ASCII" && validUtf8("\xE2\x82\xAC") && !validUtf8("\xE2\x82"), "ASCII; a cut sequence is not UTF-8");
+}
+
 int main() {
     tables();
+    textCharset();
     coding();
     endToEnd();
     falseLocks();

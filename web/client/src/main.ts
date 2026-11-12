@@ -7,6 +7,8 @@
  */
 
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
+import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
+import { healthTuckBody, healthTuckLevel } from './healthTuck';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
@@ -17,7 +19,9 @@ import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { fmLogoKey, retryDelay } from '../../../src/services/logoCachePolicy.ts';
 import { webLogos, webLogoOffer, webLogoOutranked, webLogoForget, webLogoDead, dabIdxKey, dabWebKey } from './logoStoreWeb';   // ★ V12 persistent logo cache
-import { drmRender, drmSignalRender, type DrmState } from './drm';
+import { drmRender, drmSignalRender, drmDrawConstellation, DRM_SCOPE_HTML, DRM_IQ_TIP, type DrmState } from './drm';
+import { DRM_IQ_STALE_MS, type DrmIq } from '../../../src/services/drm';
+import { DrmQualityMeter, type DrmQuality } from '../../../src/utils/drmQuality';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { recordingLabel } from '../../../src/services/recordingLabel';
@@ -161,6 +165,12 @@ import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
 import { RecordBufferAnchor, parseRecordBufferSeconds } from '../../../src/services/recordBuffer';
+// ★★★ V12 R36S: the handheld profile — everything behind isHandheld(), which only a handheld engine can switch on.
+import {
+  isHandheld, handheldHinted, handheldBoot, handheldStarted, handheldUiFps, handheldSpecRate, buildHandheldMenu,
+  openDeviceMenu, saveRecordingToCard, listCardRecordings, cardRecordingUrl, deleteCardRecording, noteTimeSync,
+  noteSpot as hhNoteSpot, toast as hhToast,
+} from './handheld';
 /* ★ The shared vector-basemap renderer, carried as a string — see ensureVibeMap(). ★★ FETCHED ONLY
  *  WHEN A MAP OPENS (openSpotsMap): ~98 KB that most listeners never use, so it is its own file and
  *  the page does not carry it (build-web.mjs splits every import() into one). */
@@ -545,6 +555,9 @@ function initSplash() {
       msg.textContent = e instanceof Error ? e.message : String(e);
       $<HTMLButtonElement>('btnConnect').disabled = false;
       $<HTMLButtonElement>('btnSaveConnect').disabled = false;
+      // ★ V12 R36S: there is no landing page to show the error on — try again while the radio is still plugged in
+      //   (a radio process that has just been started can answer its first socket slowly).
+      if (isHandheld()) setTimeout(() => { if (!document.getElementById('hhConnect')) { try { $<HTMLFormElement>('connForm').requestSubmit(); } catch { /* gone */ } } }, 2000);
     }
   };
 
@@ -1406,8 +1419,11 @@ async function connect(host: string, pin: string) {
   await loadAudioPolicy(httpBaseUrl);
   const forceOpus = new URLSearchParams(location.search).has('opus');
   const wantRaw = !forceOpus && (srvLocal || (srvUncompressed === 'choice' && prefersRawAudio()));
-  const wantOpus = !wantRaw && await AudioPlayer.supportsOpus();
-  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + '&bid=' + browserId() + '&proto=1' + (wantOpus ? '&codec=opus' : ''), auth)}`;
+  // ★★★ V12 R36S: the handheld's ENGINE plays the audio on the device's speaker (`speaker=1`, AudioPlayer.speakerMode) —
+  //     raw PCM, and the browser builds no audio chain at all (~1.1 of the four cores, handheld6's log).
+  const hhSpeaker = isHandheld();
+  const wantOpus = !hhSpeaker && !wantRaw && await AudioPlayer.supportsOpus();
+  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + '&bid=' + browserId() + '&proto=1' + (wantOpus ? '&codec=opus' : '') + (hhSpeaker ? '&speaker=1' : ''), auth)}`;
   // ★★★ WE CAN ALWAYS TAKE OPUS NOW, so this only ever says no when RAW was ASKED for. The old
   // gate answered "no Opus" on every plain-http LAN origin (WebCodecs is [SecureContext]) and the
   // server then refused the uncompressed socket it had just been asked for — silence, on the only
@@ -2651,7 +2667,21 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onDrm: (d) => {
       if (!spec || spec.mode !== 'drm') return;   // ★ a report after leaving DRM is a ghost
-      drmState = d; drmBoxSync(); updateVts();
+      drmState = d;
+      if (!d.sync) drmIq = null;   // ★ the lock gone: its picture goes with it
+      {
+        // ★★ V12 the DRM reception meter (src/utils/drmQuality.ts) — and whether audio is REACHING this page, as DAB's
+        const h = audio?.health;
+        const out = audio?.lastOutputAtMs ?? 0;
+        drmQuality = dabWithPlayback(drmQualityMeter.push(d, Date.now()), d.playable ? 1 : 0,
+          !audio || h === 'muted' || h === 'suspended' ? undefined : out ? performance.now() - out : Infinity) as DrmQuality;
+      }
+      drmBoxSync(); updateVts();
+    },
+    onDrmIq: (q) => {
+      if (!spec || spec.mode !== 'drm') return;
+      drmIq = q; drmIqAt = Date.now();
+      if (drmPane === 'signal') drmDrawScope();
     },
     // ★ V12 tone ID: NFM only (a label after leaving NFM is a ghost)
     onToneId: (l) => {
@@ -2775,6 +2805,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onBytes: (n) => { audioBytes += n; },
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
+  if (audio.speakerMode) audio.onSpeaker = sendSpeaker;   // ★ V12 R36S — the engine plays it (see audioUrl)
   applyRecBuf();
   if (adsbOn || ismOn || aisOn || ndbOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM / AIS / NDB stays quiet (syncAudioQuiet)
   // ★★★ TELL IT WHETHER THERE IS ANYWHERE TO FALL BACK TO. With the owner's policy OFF the
@@ -2835,7 +2866,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   //    gate can come BACK later if something suspends the context again, exactly as before.
   //    Without the second half a browser that suspends after the first press would be silent with
   //    nothing on screen to say so.
-  let gateDismissed = false;
+  // ★★★ V12 R36S: NOT on the handheld any more (Stuart 2026-11-06: "no having to click to start audio"). The engine plays
+  //     the audio itself (speaker mode), so there is no browser audio to unlock and the receiver opens straight away.
+  //     The tour stays in the menu. Every other browser keeps START RADIO exactly as before.
+  let gateDismissed = !!audio?.speakerMode;
   /** ★ Set by the gesture that presses the tutorial button, acted on once the gate is off screen:
    *  the tour points at controls the gate is covering, so it cannot start while it is up. */
   let gateWantsTutorial = false;
@@ -3094,6 +3128,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   }
 
   buildControls();
+  if (isHandheld()) { try { initHandheldApp(); } catch (e) { console.error('[handheld] menu', e); } }   // ★ never takes the receiver down
   initMediaSession();
   if (NO_DEC) console.warn('[bisect] decoders disabled by #nodec');
   else initDecoders(host, auth);
@@ -3113,6 +3148,97 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
    *  back (same session id) carries straight on — the whole-radio mode, the dial, the decoders' gap replayed. */
   window.addEventListener('pagehide', (e) => { if (!(e as PageTransitionEvent).persisted) { try { spec?.send({ type: 'leave' }); } catch { /* going */ } } });
   requestAnimationFrame(loop);
+}
+
+// ── ★★★ V12 R36S HANDHELD (handheld.ts) ──────────────────────────────────────────────────────────────────────────
+/** The receiver is up on a handheld: lend handheld.ts what it needs, build the three accordions, put DEVICE where CHAT
+ *  sits on a server (the island keeps both cells — a hidden key would change its shape). */
+function initHandheldApp() {
+  handheldStarted({
+    specFps: () => framesPerSec,
+    uiFps: () => hhUiFpsNow,
+    setSpectrumRate: (fps, interpolate) => {
+      hhSpecFps = fps;
+      // ★ Every row real (NATIVE: one row per received frame) — or, only where a measurement says 20 real is too
+      //   heavy, 10 real with each row repeated to 20 (DEFAULT's rule: min(20, 3 × feed)). No boost: an even pace.
+      wfScroll = interpolate ? 'default' : 'sharp';
+      wfBoostWanted = false;
+      applyWaterfallRates();
+    },
+    setUiFpsCap: (fps) => { hhUiCap = fps; },
+    setScreenOff: (off) => { hhScreenOff = off; },
+    importBookmarks: async (text) => {
+      const rows = parseBookmarksAny(text, '').filter((b) => b && b.name && b.frequency);
+      if (!rows.length) return { ok: false, imported: 0, message: 'No bookmarks found in that file' };
+      // ★ The receiver's list, in batches under the server's 60 KB ceiling (POST /bookmarks/import).
+      let n = 0, batch: unknown[] = [], size = 2;
+      const send = async () => {
+        if (!batch.length) return;
+        const r = await fetch(P('/bookmarks/import'), { method: 'POST', body: JSON.stringify(batch) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `the receiver refused it (${r.status})`);
+        n += Number(j.imported) || 0;
+        batch = []; size = 2;
+      };
+      for (const b of rows) {
+        const o = { name: String(b.name).slice(0, 64), frequency: Number(b.frequency), mode: b.mode || undefined,
+                    bandwidth_low: b.bandwidth_low, bandwidth_high: b.bandwidth_high };
+        const len = JSON.stringify(o).length + 1;
+        if (size + len > 55_000) await send();
+        batch.push(o); size += len;
+      }
+      await send();
+      void loadServerBookmarks(currentHost, authState?.query ?? '').then(() => applyKnownSignals());
+      return { ok: true, imported: n, message: `Imported ${n} bookmark${n === 1 ? '' : 's'} into the receiver's list` };
+    },
+    exportBookmarks: () => exportBookmarks(),
+    openMenu: () => { if (!isPanelOpen('menu')) togglePanel('menu'); },
+    // ★ the radio process applies it on its next tick (≤ 1 s): read it then, and once more to be sure
+    locationChanged: () => { for (const ms of [1300, 3000]) setTimeout(() => { serverLoc = null; void loadServerLocation(currentHost); }, ms); },
+  });
+  const menu = document.getElementById('menu');
+  if (menu) buildHandheldMenu(menu);
+  const chat = document.getElementById('mChat');
+  if (chat && !document.getElementById('mDevice')) {
+    const dev = document.createElement('button');
+    dev.className = 'mBtn'; dev.id = 'mDevice'; dev.title = 'This device: volume, battery, clock, card, power'; dev.textContent = 'DEVICE';
+    dev.onclick = () => openDeviceMenu();
+    chat.after(dev);
+    chat.classList.add('hhHide');
+  }
+}
+
+/** ★ The recordings panel on the handheld: the card's Recordings/ (play / delete), newest first. */
+async function renderCardRecordings() {
+  const host = $('recsList');
+  const list = await listCardRecordings();
+  host.innerHTML = '';
+  if (!list.length) {
+    host.innerHTML = '<div class="sres"><span class="n">No recordings on the card yet — press ● REC.</span></div>';
+    return;
+  }
+  for (const r of list) {
+    const row = document.createElement('div');
+    row.className = 'sres';
+    row.style.cursor = 'default';
+    const n = document.createElement('span'); n.className = 'n';
+    n.textContent = r.name.replace(/\.wav$/i, '');
+    const sz = document.createElement('span'); sz.className = 'src'; sz.textContent = ` · ${formatSize(r.bytes)}`;
+    n.appendChild(sz);
+    const del = document.createElement('button');
+    del.className = 'btn'; del.textContent = '✕';
+    let armed = 0;
+    del.onclick = async () => {
+      if (Date.now() - armed > 3000) { armed = Date.now(); del.textContent = 'DELETE?'; setTimeout(() => { del.textContent = '✕'; }, 3000); return; }
+      await deleteCardRecording(r.name); void renderRecordings();
+    };
+    const player = document.createElement('audio');
+    player.controls = true;
+    player.preload = 'none';
+    player.src = cardRecordingUrl(r.name);
+    row.append(n, del, player);
+    host.appendChild(row);
+  }
 }
 
 // ── Render loop ──────────────────────────────────────────────────────────────
@@ -3634,9 +3760,23 @@ function perfReport(secs: number) {
  *  drawn behind it (showAudioGate). Rows still arrive and are processed; only the drawing waits. */
 let startScreenUp = false;
 
+/* ★★ V12 R36S HANDHELD: DRAWN AT 30 FPS (Stuart — "as the Android app does"), 60 if the owner picks it in DISPLAY. The
+ *  panel runs at 60 Hz, so a 30 cap draws every other vsync: evenly spaced, never a burst. The spectrum's real frames
+ *  arrive on their own fixed clock and the trace still interpolates between them; only the redraw is capped.
+ *  ★ Everywhere else hhUiCap is 0 and this is one compare. */
+let hhUiCap = 0, hhLastDraw = 0, hhDrawn = 0, hhDrawnAt = 0, hhUiFpsNow = 0;
+/** ★ The screen is off (the power button's short press, or SCREEN OFF AFTER): nothing is drawn — the audio plays on. */
+let hhScreenOff = false;
 function loop(frameTs?: number) {
   if (!wf || !spec) return;
-  try { renderFrame(frameTs ?? performance.now()); }
+  const ts = frameTs ?? performance.now();
+  if (hhUiCap > 0 && (hhScreenOff || ts - hhLastDraw < 1000 / hhUiCap - 4)) {
+    if (hhScreenOff) { hhUiFpsNow = 0; hhDrawn = 0; hhDrawnAt = ts; }
+    requestAnimationFrame(loop); return;
+  }
+  hhLastDraw = ts;
+  if (hhUiCap > 0) { hhDrawn++; if (ts - hhDrawnAt >= 1000) { hhUiFpsNow = hhDrawn * 1000 / (ts - hhDrawnAt); hhDrawn = 0; hhDrawnAt = ts; } }
+  try { renderFrame(ts); }
   catch (e) { noteFault('web-render', 'frame', e); }
   requestAnimationFrame(loop);
 }
@@ -5886,7 +6026,11 @@ function updateStatus() {
    *  readout that way (2026-08-26) while we were using it to tell a bursty link from a slow box,
    *  which is exactly the moment ambiguity costs something. "ping" rather than "rtt": it is the
    *  word a listener already knows, and this row is read by listeners, not only by us. */
-  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ping ${rtt.toFixed(0)} ms${buf}${idle}`;
+  /* ★★ V12 R36S HANDHELD: the engine is local, so the link's figures mean nothing (Stuart: "remove the link-rate meter,
+   *  KB/s, ping and buffer"). What stays is the RADIO's own rate — real spectrum frames per second — named so it cannot
+   *  be read as the drawing rate, which the Performance overlay shows as "UI". Servers keep the line exactly as it was. */
+  if (isHandheld()) el.textContent = `Spectrum rate ${fps} fps${idle}`;
+  else el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ping ${rtt.toFixed(0)} ms${buf}${idle}`;
   /* ★★★ AND WHAT IS BEING DONE TO THE AUDIO. This page restores noise reduction, the auto-notch
    *  and the blanker on every connect and has never said so — see the note on #dspTags. Only the
    *  ones that are ON are drawn, so the row is unchanged whenever nothing is.
@@ -6292,7 +6436,9 @@ function antIcon(key?: unknown): string {
  *      on click; "the server would never send that" is exactly the assumption that makes a
  *      cross-site hole, and this client talks to servers we do not control.
  *  ★ Text is escaped and never linkified: parsing owner prose into markup is the other way this
- *    goes wrong, and a discrete URL field needs no parsing at all. */
+ *    goes wrong, and a discrete URL field needs no parsing at all.
+ *  ★★ V12 (Stuart, 2026-11-12): **bold** and *italic* — and nothing else. src/utils/landingMarkup.ts tokenises the
+ *     text into spans and escapes each one; the app and the directory draw the same spans. */
 function showLandingMessage(text?: unknown, linkUrl?: unknown, linkLabel?: unknown): void {
   const host = document.getElementById('splashOwnerMsg');
   if (!host) return;
@@ -6315,7 +6461,8 @@ function showLandingMessage(text?: unknown, linkUrl?: unknown, linkLabel?: unkno
   host.style.textAlign = long ? 'left' : 'center';
   host.style.maxWidth = long ? '560px' : '340px';
   host.innerHTML =
-      (msg ? `<div style="white-space:pre-wrap">${escapeHtml(msg)}</div>` : '')
+      // ★★ **bold** and *italic* only — landingMarkupHtml escapes every character and can emit nothing but <b>/<i>.
+      (msg ? `<div style="white-space:pre-wrap">${landingMarkupHtml(msg)}</div>` : '')
     + (url ? `<div style="margin-top:6px"><a href="${escapeHtml(url)}" target="_blank" `
            // ★ noopener is not decoration: without it the opened page gets window.opener and can
            //   navigate this tab somewhere else.
@@ -7092,6 +7239,15 @@ let dabCapable = false;
  *  where the server lists 'drm' in vibeserver.json's modes (an older server has no such mode — a dead button). */
 let drmCap = false;
 let drmState: DrmState | null = null;
+/** ★★ V12 THE DRM CONSTELLATION (2026-11-12): the last {"type":"drm_iq"} and when it came. The server sends one per super
+ *  frame only while this page's Signal pane is open (spec.drmScopes); an older server never does, and the scope stays hidden. */
+let drmIq: DrmIq | null = null;
+let drmIqAt = 0;
+/** ★★★ THE DRM RECEPTION METER (2026-11-12) — DAB's meter for DRM: the card's signal bar becomes the decoder's verdict and
+ *  the reading box the decoder's own SNR (Stuart: the decoder read 17–20 dB on a signal the meter read as 42 dB — both
+ *  right, and the decoder's is the one that says whether it plays). Pushed once per report; reset on leaving DRM. */
+const drmQualityMeter = new DrmQualityMeter();
+let drmQuality: DrmQuality | null = null;
 /** ★★ V12 CTCSS / DCS TONE ID (the server's `tone`): the NFM channel's tone — the VTS line's QUIET SUFFIX, in the message
  *  slot after a bookmark's name ("GB3NB: CTCSS 82.5 Hz") or alone; the app's SDRScreen does the same. '' = none. */
 let toneLabel = '';
@@ -7130,6 +7286,8 @@ function drmSetPane(p: 'station' | 'signal') {
 function drmBoxSync() {
   const on = !!spec && spec.mode === 'drm';
   let box = document.getElementById('drmBox');
+  // ★★ the constellation travels only while the Signal pane is on screen (DAB's dabSetPane rule)
+  spec?.drmScopes(on && drmPane === 'signal');
   if (!on) { if (box) box.classList.remove('open'); return; }
   if (!box) {
     box = document.createElement('div');
@@ -7141,7 +7299,10 @@ function drmBoxSync() {
     box.setAttribute('data-navbox', '');
     box.innerHTML = '<div id="drmBoxHead"><span class="drmTitle">DRM</span><span class="drmSub">Digital Radio Mondiale</span>'
       + '<button class="btn" id="drmPane" type="button"></button></div>'
-      + '<div id="drmBody"></div><div id="drmSignal" hidden></div>';
+      + '<div id="drmBody"></div><div id="drmSignal" hidden>'
+      // ★★ V12 the constellation at the top of the pane, as DAB's scopes; hidden until a server sends one
+      + `<div id="drmSigScopes" class="dabScopes" hidden title="${DRM_IQ_TIP.replace(/"/g, '&quot;')}">${DRM_SCOPE_HTML}</div>`
+      + '<div id="drmSigRows"></div></div>';
     (document.getElementById('wfWrap') ?? document.body).appendChild(box);
     (box.querySelector('#drmPane') as HTMLElement).onclick = () => drmSetPane(drmPane === 'signal' ? 'station' : 'signal');
   }
@@ -7154,7 +7315,17 @@ function drmBoxSync() {
   const body = box.querySelector('#drmBody') as HTMLElement, sg = box.querySelector('#drmSignal') as HTMLElement;
   body.hidden = sig; sg.hidden = !sig;
   // ★ Only the pane on screen is drawn (DAB's rule): the hidden one is rebuilt when it is shown
-  if (sig) drmSignalRender(sg, drmState); else drmRender(body, drmState);
+  if (sig) { drmSignalRender(sg.querySelector('#drmSigRows') as HTMLElement, drmState); drmDrawScope(); }
+  else drmRender(body, drmState);
+}
+/** ★★ The constellation: drawn from the last drm_iq while it is fresh; hidden with none (an older server, a lost lock). */
+function drmDrawScope() {
+  const sc = document.getElementById('drmSigScopes');
+  const cv = document.getElementById('drmConst') as HTMLCanvasElement | null;
+  if (!sc || !cv) return;
+  const fresh = drmIq && Date.now() - drmIqAt < DRM_IQ_STALE_MS ? drmIq : null;
+  const drawn = drmDrawConstellation(cv, document.getElementById('drmConstLeg'), fresh);
+  if (sc.hidden !== !drawn) sc.hidden = !drawn;
 }
 /** The owner has allowed DAB to borrow the capture rate it needs (2.048 MS/s natively since
  *  2026-09-08; 2.4 + resample only if a radio refuses 2.048), and whether that
@@ -9825,6 +9996,9 @@ function buildControls() {
     dabOn:         () => dabOn,
     // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
     dabQuality:    () => (dabOn && dabState ? dabQuality : null),
+    // ★★ V12 DRM's meter: only in DRM, and null before the first report (the card then says it is searching)
+    drmOn:         () => !!spec && spec.mode === 'drm' && !dabOn,
+    drmQuality:    () => (spec && spec.mode === 'drm' && drmState ? drmQuality : null),
     /* ★ DAB from ADS-B: the server leaves ADS-B itself (it sends adsb_off first), so only our UI unwinds here. */
     toggleDab:     toggleDabMode,
     adsbCap:       () => adsbCap,
@@ -10314,8 +10488,12 @@ function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
 /** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps): the DATA control's controller.
  *  ★ V12 2026-10-30: the speed keys never change it — they are display only. */
 function computeActiveFps(): number {
+  // ★ V12 R36S: no link to manage — the engine is local; the owner's SPECTRUM RATE is what is asked for (handheld.ts).
+  if (hhSpecFps > 0) return Math.min(hhSpecFps, serverFpsCap());
   return linkFps > 0 ? linkFps : serverFpsCap();
 }
+/** ★ The handheld's spectrum rate (0 = not a handheld). Set by handheld.ts through the host's setSpectrumRate. */
+let hhSpecFps = 0;
 
 /** ★ V12: the live rows/s on each Waterfall speed key, from the server's own rate (its advertised max — the rate NATIVE
  *  asks for). Unknown (no hwinfo yet) → names only. */
@@ -13103,7 +13281,9 @@ function initDecoders(host: string, auth: AuthState) {
     onSstvMode: (name) => { $('decStatus').textContent = name; },
     onStatus: (t) => { $('decStatus').textContent = t; },
     onSpotsStatus: (st) => { if (!bandSpots) return; spotModeStates = st.modes; renderSpotModeChips(); },
+    onTimeSync: (t) => { if (isHandheld()) noteTimeSync(t); },
     onSpot: (sp) => {
+      if (isHandheld()) hhNoteSpot(sp);
       // ★★★ No count cap (it held 500 reports, so an all-filters map dropped older stations — Stuart,
       //   2026-09-28). The newest report per call|band|mode replaces its older one: the list already
       //   shows only the newest per station, and memory grows with stations heard, not with time.
@@ -13749,6 +13929,10 @@ function renderHealthPill(h: {
     el.id = 'srvHealth';
     document.body.appendChild(el);
   }
+  /* ★★ V12 (2026-11-12): the pill is a card in a dock that tucks into the edge like the app's (healthTuck.ts). The
+   *  contents go in its body; the frame is the card; the dock carries `crit` and `tucked`. */
+  const body = healthTuckBody(el);
+  const card = el.querySelector<HTMLElement>('.hCard') ?? el;
   const slots: string[] = [
     healthGlyph('cpu', h.cpu, `Processor: ${HEALTH_WORDS[h.cpu]}`, h.cpuPos),
     healthGlyph('ram', h.ram, `Memory: ${HEALTH_WORDS[h.ram]}`, h.ramPos),
@@ -13793,7 +13977,7 @@ function renderHealthPill(h: {
       + `</svg></span>`;
   }
   const worst = Math.max(h.cpu, h.ram, h.temp.kind === 'none' ? 0 : h.temp.level, h.bat.level ?? 0);
-  el.className = worst >= 3 ? 'crit' : '';
+  el.classList.toggle('crit', worst >= 3);   // ★ a toggle, not className: the dock also carries `tucked`
   /* ★★★ THE FRAME BLENDS TOO, OR THE PILL SNAPS ROUND SMOOTH ICONS. The slots inside were given a
    *  continuous tint (see healthColour); this border kept a DISCRETE `HEALTH_COLOURS[worst]` and a
    *  two-step alpha, so the icons drifted while the ring around them jumped green->amber in one
@@ -13810,7 +13994,9 @@ function renderHealthPill(h: {
     h.temp.kind === 'none' ? 0 : (h.temp.pos ?? h.temp.level),
     h.bat.level ?? 0);
   const ringAlpha = Math.round(0x73 + (0xbf - 0x73) * Math.min(1, Math.max(0, worstPos)));
-  el.style.borderColor = `${healthColour(worst, worstPos)}${ringAlpha.toString(16).padStart(2, '0')}`;
+  card.style.borderColor = `${healthColour(worst, worstPos)}${ringAlpha.toString(16).padStart(2, '0')}`;
+  // ★ The tab and the › wear the same colour, solid — and level 3 brings a tucked pill back out.
+  healthTuckLevel(worst, healthColour(worst, worstPos));
   /* ★★ A DECODER TOO HEAVY FOR THIS MACHINE (Stuart, 2026-10-25: "a little addition to the health card that says
    *  something like Decoder too heavy"). The server names a decoder only when it threw input away in the last minute
    *  (vibe_health.h BehindWatch) — busy is not named, falling behind is. One short amber line each, under the icons;
@@ -13818,9 +14004,9 @@ function renderHealthPill(h: {
   const behind = Array.isArray(h.behind) ? h.behind.filter((b) => typeof b === 'string' && b).slice(0, 3) : [];
   const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
   const warn = behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('');
-  el.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
+  body.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
   /* ★ One sentence for a screen reader, since the icons carry no text. */
-  el.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
+  body.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
     + (h.temp.kind === 'sensor' ? `, temperature ${HEALTH_WORDS[h.temp.level]}`
        : h.temp.kind === 'none' ? '' : ', throttling')
     + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : '')
@@ -16777,6 +16963,10 @@ function recBufCheck() {
 }
 
 function initRecorder() {
+  // ★★ V12 R36S: OFF by default on the handheld — STORED as Off, so the recorder's own buttons show what is true. The
+  //    buffer taps the audio ALL the time, and in speaker mode that tap is the only audio the page handles: ~45 % of an
+  //    A35 core (the Worker + the network process, handheld8's log) for 30 s of pre-roll. Switch it on and it is kept.
+  if (isHandheld() && prefs().recbuf === undefined) savePref('recbuf', '0');
   recBufSec = parseRecordBufferSeconds(String(prefs().recbuf ?? ''));
   segment('recBufSeg', 'rb', (v) => { recBufSec = parseRecordBufferSeconds(String(v)); applyRecBuf(); vfoRecSync(); }, 'recbuf');
   applyRecBuf();
@@ -16801,6 +16991,13 @@ function initRecorder() {
     // Kept, not just downloaded — a recording you can't find again isn't a feature.
     // The RECORDINGS panel plays, downloads and deletes them.
     const at = new Date();
+    if (isHandheld()) {
+      // ★★ V12 R36S: the WAV goes to the engine, which writes the card's Recordings/ (temp + rename).
+      const detail = dabOn && dabState ? `DAB ${dabState.channel}` : String(spec.mode).toUpperCase();
+      try { await saveRecordingToCard(blob, spec.frequency, detail, at.getTime() - seconds * 1000); }
+      catch (e) { hhToast('Recording NOT saved', e instanceof Error ? e.message : String(e)); }
+      return;
+    }
     // ★★ DAB is named by its service (src/services/recordingLabel.ts — the app's and the handheld's rule too)
     const lab = recordingLabel(spec.frequency, String(spec.mode), dabOn ? dabState : null);
     await saveRecording({
@@ -17300,6 +17497,7 @@ function initDxLog() {
 }
 
 async function renderRecordings() {
+  if (isHandheld()) { await renderCardRecordings(); return; }
   const host = $('recsList');
   const list = await listRecordings();
   host.innerHTML = '';
@@ -18048,8 +18246,18 @@ function buildMenu() {
  * Client-side settings (palette, brightness, spectrum split…) don't appear here:
  * they're applied locally when the menu is built.
  */
+/** ★★ V12 R36S speaker mode: the page's volume / mute and the recording tap, to the engine that plays the audio. */
+function sendSpeaker(m: { tap?: boolean; level?: number }) {
+  const o: Record<string, unknown> = { type: 'speaker' };
+  if (m.tap !== undefined) o.tap = m.tap ? 1 : 0;
+  if (m.level !== undefined) o.level = Math.round(m.level * 1000) / 1000;
+  spec?.send(o);
+}
+
 function pushSettingsToServer() {
   if (!spec) return;
+  // ★ V12 R36S: a reconnect (or the first connect) tells the engine's speaker the level and the tap again
+  if (audio?.speakerMode) sendSpeaker({ level: audio.muted ? 0 : audio.volume, tap: audio.recording || audio.recordBufferOn });
   const p = prefs();
   const num = (k: string) => (typeof p[k] === 'number' ? p[k] as number : undefined);
   const bool = (k: string) => (typeof p[k] === 'boolean' ? p[k] as boolean : undefined);
@@ -18437,8 +18645,8 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   rdsLogoProvisional = false;
   logoFromIdentity = false;
   }
-  // ★ V12 DRM: the box follows the mode; a new mode forgets the old station
-  if (m !== 'drm') drmState = null;
+  // ★ V12 DRM: the box follows the mode; a new mode forgets the old station (and its meter and its picture)
+  if (m !== 'drm') { drmState = null; drmIq = null; drmQualityMeter.reset(); drmQuality = null; }
   amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second
   bwAutoState = null;                 // ★★ V12 …and so are AUTO's edges
   drmBoxSync();
@@ -21000,7 +21208,13 @@ function padTuckSync() {
   document.body.classList.toggle('padTuck', padTuckOn && driveInput() !== null);
 }
 
+let keyboardInited = false;
 function initKeyboard() {
+  /* ★★ V12 (2026-11-05, found on the R36S): the pad and the keyboard were wired only by buildControls — AFTER connect —
+   *  so the landing page's START and ADMIN never took the D-pad (or a TV remote's arrows). Now bootSplash wires them
+   *  first; this guard keeps it to once. Every hook below already checks `spec`, so they are safe before connect. */
+  if (keyboardInited) return;
+  keyboardInited = true;
   /* ★★★ ONE SCHEME FOR THE KEYBOARD AND THE GAME CONTROLLER (Stuart, 2026-10-18 — gamepad.ts, src/utils/keyActions.ts):
    *  arrows / W A S D move the highlight, Enter selects, Backspace and Escape go back, < > tune, - + zoom. Both feed
    *  the same actions in gamepad.ts. The older shortcuts (arrows tuning and zooming, Shift×10, [ ] for the step, M for
@@ -21025,6 +21239,8 @@ function initKeyboard() {
       return anyOpen;
     },
     guide: () => togglePadGuide(),
+    // ★ A pad press resumes the audio from the pad's own poll — WPE does not unlock it from the gate's synthetic click.
+    activate: () => { void audio?.resume(); },
   });
 }
 
@@ -21046,6 +21262,7 @@ function escapeHtml(s: unknown): string {
  *     boots exactly as before, synchronously, with nothing waited on. */
 function bootSplash(): void {
   initSplash();
+  initKeyboard();   // ★ the landing page's START / ADMIN on the D-pad — see keyboardInited
 
   // ★ Draw as soon as the page exists, then refresh while the visitor is still on the splash — a
   //   new row lands every second for the first five minutes, so a server that has just been set up
@@ -21057,7 +21274,19 @@ function bootSplash(): void {
 }
 {
   const lanOffer = lanOfferFromPage();
-  if (!lanOffer) bootSplash();
+  /* ★★★ V12 R36S HANDHELD: ?handheld (the image's Cog URL) asks the engine; only `vibeserver --handheld` answers. No
+   *  landing page — a radio plugged in goes straight into the receiver, none shows "Please connect an SDR". */
+  if (handheldHinted()) void handheldBoot().then((s) => {
+    if (!s) { document.documentElement.removeAttribute('data-hh-boot'); bootSplash(); return; }   // ★ index.html hid it
+    initSplash();
+    initKeyboard();
+    // ★ Only a RUNNING radio is joined; one still starting shows "Starting …" and its running event reloads the page.
+    if (s.state === 'running') {
+      const join = () => { try { $<HTMLFormElement>('connForm').requestSubmit(); } catch { /* old engine */ } };
+      if (document.readyState === 'complete') setTimeout(join, 0); else window.addEventListener('load', () => setTimeout(join, 0), { once: true });
+    }
+  });
+  else if (!lanOffer) bootSplash();
   else void lanHopAtBoot(lanOffer).catch(() => false).then((moving) => {
     if (moving) return;
     bootSplash();

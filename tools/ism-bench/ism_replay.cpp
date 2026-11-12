@@ -92,8 +92,24 @@ int main(int argc, char** argv) {
                 x[i] = cs8 ? cf(int8_t(raw[2 * i]) / 128.f, int8_t(raw[2 * i + 1]) / 128.f)
                            : cf((raw[2 * i] - 127.5f) / 128.f, (raw[2 * i + 1] - 127.5f) / 128.f);
         }
-        // ★ the rtl_433 recordings are short; pad with a quarter second of silence so the last burst closes
-        x.resize(x.size() + (size_t)(rate * 0.25), cf(0, 0));
+        /* ★ the rtl_433 recordings are short; a quarter second more so the last burst closes. ★★ 2026-11-12: the
+         *  recording's own quietest 10 ms (played forwards and backwards in turn, as --lead does), NOT digital silence:
+         *  a burst that ran to the end of a recording took exact zeros into its channel, its 10th-percentile "noise"
+         *  read −180 dB and the OOK slice was one long mark (ELV WS 2000, Fine Offset WH2…). A live capture is never
+         *  silent; the replay must not be either. */
+        {
+            const size_t n0 = x.size(), w = size_t(rate * 0.01), padN = size_t(rate * 0.25);
+            size_t best = 0; double bestP = 1e300;
+            if (n0 >= 2 * w) for (size_t s0 = 0; s0 + w <= n0; s0 += w / 2) {
+                double p = 0; for (size_t i = s0; i < s0 + w; ++i) p += std::norm(x[i]);
+                if (p < bestP) { bestP = p; best = s0; }
+            }
+            if (n0 >= 2 * w) {
+                x.reserve(n0 + padN + w);
+                for (int k = 0; x.size() < n0 + padN; ++k)
+                    for (size_t i = 0; i < w && x.size() < n0 + padN; ++i) x.push_back(x[best + ((k & 1) ? w - 1 - i : i)]);
+            } else x.resize(n0 + padN, cf(0, 0));
+        }
         // ★ --lead: the recording's own quietest stretch first (see the header) — its real noise, spectrum and all,
         //   played forwards and backwards in turn so the joins are continuous
         if (lead > 0 && raw.size() / 2 > size_t(rate * 0.02)) {

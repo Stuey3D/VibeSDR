@@ -1,0 +1,18 @@
+[Unit]
+Description=VibeSDR boot splash (artwork + progress until the receiver draws)
+Documentation=file:/usr/share/doc/vibesdr-r36s/README.md
+# ★ one of the very first units: only /run and /dev are needed, and the panel driver is built into the kernel
+DefaultDependencies=no
+After=systemd-tmpfiles-setup-dev-early.service
+Conflicts=shutdown.target
+Before=shutdown.target sysinit.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/vibesdr-r36s/vibe-splash
+# ★ it exits by itself once Cog's first frame is on the panel (or after 90 s of nothing)
+Restart=no
+Nice=-5
+
+[Install]
+WantedBy=sysinit.target

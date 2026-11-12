@@ -1,0 +1,29 @@
+[Unit]
+Description=VibeSDR receiver — the native UI (vibe-hhui: SDL2 on KMSDRM, OpenGL ES 3 on Panfrost)
+Documentation=file:/usr/share/doc/vibesdr-r36s/README.md
+After=vibeserver-handheld.service systemd-user-sessions.service systemd-udev-trigger.service
+Wants=vibeserver-handheld.service
+Conflicts=getty@tty1.service vibe-kiosk.service
+# ★★ THE DEFAULT INTERFACE (Stuart 2026-11-06: "we need to go fully native"). `vibe.browser` on the kernel command line
+#    (extlinux.conf on VIBEBOOT, from any computer) starts the browser kiosk (vibe-kiosk.service) instead.
+ConditionKernelCommandLine=!vibe.browser
+
+[Service]
+Type=simple
+User=vibe-kiosk
+Group=vibe-kiosk
+SupplementaryGroups=video render input audio
+RuntimeDirectory=vibe-hhui
+RuntimeDirectoryMode=0700
+Environment=HOME=/var/lib/vibe-kiosk
+Environment=XDG_RUNTIME_DIR=/run/vibe-hhui
+Environment=SDL_VIDEODRIVER=kmsdrm
+# ★ the engine answering → the splash hands the panel over (keeping its picture up) → we take the DRM master
+Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/
+ExecStartPre=+/usr/lib/vibesdr-r36s/vibe-wait-engine
+ExecStart=/usr/lib/vibesdr-r36s/vibe-hhui --port 48000
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

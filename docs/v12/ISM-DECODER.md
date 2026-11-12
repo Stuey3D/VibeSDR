@@ -68,12 +68,33 @@ exactly as found). Why not a decoder on the listener's DDC channel:
    in ten a signal). Bins ≥ 10 dB over their floor are grouped (one-bin gaps bridged); a lone bin must be ≥ 15 dB.
    Only the **band's own span** is searched (the tuner's filter skirts are where false detections clustered on the
    Pi 500's RTL), never the DC remnant (±15 kHz).
+   **The seed and the look back (2026-11-12).** The first 64 frames (~20 ms at 2.4 MS/s, ~65 ms at 250 kS/s) are only
+   STORED (64 KB, freed at once). Each bin's floor is then the **median** of its frames ×1.44 (an exponential's mean),
+   and the stored frames are **replayed through the detector at their own sample positions** — a burst already on the
+   air when ISM starts opens its channel from its own start (the mixer's ring still holds it). The old seed, a fast
+   running mean while detecting, learnt such a burst as floor — and, under a strong one, the RTL's gain dip (every
+   other bin ~18 dB down: the emonTx recordings), so every bin stood 10 dB over its floor after it. Not a lower
+   quantile: the 25th/12th percentile learnt that dip and lost every emonTx. A burst filling over half the window would
+   still be learnt, so a **busy stretch** — ≥ 3 adjacent bins ≥ 10 dB over the band's median seed whose power MOVES
+   across the window (75th/25th percentile ratio ≥ 15; noise ~4.8, a steady spur ~1) — takes the band's floor; a spur
+   keeps its own and opens nothing. Live, this is the first instant after ISM starts.
 2. **Candidate → channel** — a detection is a candidate until seen in a second frame; then a channel opens at the
    group's power centroid, **from a 6 ms pre-roll** kept in a 2¹⁸-sample ring, so the burst's start is not lost.
    Strongest first; a newcomer 25 dB under an open burst is its splatter (a strong OOK transmitter's keying edges).
    Up to 4 channels at once. A channel closes 25 ms after the last detection (PT2262's sync gap is ~15 ms), or at 1.6 s.
+   (2026-11-12) A sighting goes to the **nearest** open channel within 120 kHz (the first in slot order stole a second
+   burst's sightings). A sighting **20 dB over** everything an open channel has seen, > 10 kHz from its mix centre,
+   **takes it over**: the noise channel is cancelled and the burst opens its own, keeping the old start (≤ 50 ms back)
+   — a promoted noise blip used to swallow a burst 30–60 kHz away and mix it off-centre (oil gauges, Fine Offset WH2).
+   **Wide-deviation FSK is one channel** (±60–90 kHz: TPMS, an RFM12 emonTx at ±90 kHz): two groups BORN in the same
+   frame (no channel near either), each ≥ 15 dB over its floor, within 6 dB of each other and 100–200 kHz apart are one
+   sighting at their midpoint; a channel born on one tone is re-centred once (start kept) when the other tone is born
+   within 20 ms while it is on the air (a preamble may hold one tone ~4 ms). Only births pair: a 10 dB / 40 kHz rule
+   paired an OOK burst with the DC remnant its keying moves, and two oil gauges sending at once (−69 on the corpus).
 3. **Channel** — NCO mix and a **triangular (CIC-2) decimator** to ~250 kS/s. (A plain integrate-and-dump leaked a
-   strong burst one output rate away onto DC: test-ism's TPMS decoded twice.)
+   strong burst one output rate away onto DC: test-ism's TPMS decoded twice.) A wide pair whose half-spacing is over
+   0.22 of the channel rate is **mixed at twice the rate** (~500 kS/s): ±90 kHz tones at 250 kS/s turn the phase
+   ~2.2 rad a sample and noise wraps it past π. The slicer works in µs, so only that channel's cost changes.
 4. **Slicer, at the burst's end** — the envelope (OOK) and the discriminator (FSK, when the envelope is ≥ 85 % on
    across the burst and the tones are ≥ 4 kHz apart), each sliced with hysteresis at the dB midpoint between the
    pre-roll's level and the burst's, **at four smoothings** (12, 36, 100, 244 µs for OOK; three for FSK). A 17 kbps FSK
@@ -330,15 +351,24 @@ noise; weak checks are shown once heard twice (`confirm`). Header per family = t
 | Eurochron EFTH-800; ThermoPro TP11 / TP08 / TP12 / TP20; Rubicson / TFA 30.3197 / inFactory (before Nexus); Bresser 3CH; WT450 / WT260H / WT405H | 433 OOK | CRC-8 / LFSR / sums / parity | `weather9` |
 | TFA Drop 30.3233 rain; Inkbird ITH-20R / IBS-P01R | 433 OOK PWM, 433 FSK 100 µs | LFSR digest + repeat / CRC-16 | `weather11` |
 | Bresser 6-in-1 family (7-in-1 indoor, new 5-in-1, soil, pool, 3-in-1 wind, Froggit WH6000, Ventus, Sencor), 7-in-1 / 3-in-1 / 8-in-1 + PM / CO2 / HCHO, 5-in-1; Maverick ET-732/733; Companion WTR001 | 868 FSK 124 µs, 433 OOK | LFSR-16 + sum / inverted copy / repeats | `weather10` |
+| **Weather pass 2 (2026-11-12)** — La Crosse View LTV-TH2 / TH3 / TH2i, R1, R3 / TFA 30.3802, W1 / W2, WR1, WSDTH01 Breeze Pro; Bresser SmartHome garden set (soil sensor, water timer, gateway — the soil reading, the rest named) | 915 / 868 FSK 104–107 µs; 433 FSK 50 µs | CRC-8 0x31 (init 0 / AC / B2) behind a 32-bit sync; CRC-16 0x1021 behind a 40-bit sync | `weather12` |
+| ThermoPro TX-7B, TP211B, TP28b, TempSpike XR; WG-PB12V1; Thermor DG950; Thermor A6N-132TX, Maverick ET-73 (unchecked: after every checked family) | 915 FSK ~105 µs; 433 OOK PWM / PPM | last-byte-first LFSR digest / a 16-bit LFSR check (restated from the notes' word list) / sum / CRC-8 / sums + repeats / none: copies + confirm | `weather13` |
+| AOK / Holman iWeather WS5029 (FSK PCM, ± UV / light) and its PWM form; TS-FT002 tank level + temperature; Emos TTX201 / IROX ETS69; Hyundai WS SENZOR (unchecked) | 917 FSK 100 µs, 433 FSK PWM, 433 OOK PPM / Manchester | XOR digest / even-odd XOR check / XOR / 6-bit nibble sum, two packets / none | `weather14` |
+| Esun EN2053, EN2058, TFA Marbella 30.3238, Rubicson 48942 pool, Fuzhou Emax W6 family (Altronics, Optex, inFactory FWS-1200 …; T/H sensor + station); unchecked: Eurochron T/H, Baldr E0666TH, Bresser 3CH V0, Missil ML0757. inFactory NC-3982 T/H written but **held** (see below) | 433 OOK PPM / PWM, 433 / 868 FSK 90–105 µs | sum + parities / sum / reflected LFSR / CRC-8 / byte sum; copies + confirm | `weather15` |
+| Fixed in place: Prologue decoder also reads the ThermoPro TX-2C / TX-2B (36 bits + zeros, battery bit inverted) and Springfield PreciseTemp soil (nibble XOR); Fine Offset FSK adds WN34 / WN34D / WN38 and WH52 soil, and reads a frame whose last 0 bits ran into the end; EFTH-800 tries stretched marks (a strong unit's) | | | `weather6`, `weather2`, `weather9` |
 
 **ASSUMED / open:** the Philips AJ7010 °C formula (raw / 353 − 9.2 — the only published fit); the TFA 30.3196's 16-bit
 check key is unknown (twice alike + confirm instead); the WH24 / WH65 split by preamble length; the Maverick digest
-hides a per-reset ID (raw pattern + confirm). **Left (and why):** XC-0324 recordings that start mid-transmission — the
-detector's first frames seed its floor, so a sensor on the air from sample 0 is never detected (`ism_replay --lead 0.3`
-reads all 58: a corpus artefact, not a live one); Cotech 36-9231 is LoRa (not this path); WH51 at 915 MHz (a ~430 kHz
-tone spacing — two channels, neither the whole signal); Oregon v1 / WMR500; La Crosse LTV (WR1, R1, TH2/3, W1,
-BreezePro) and WS-6868; Emax W6 family, Govee, ThermoPro TX7B / 211B / TP28B, TS-FT002, Oria, Esun, inFactory,
-Thermor, Holman — not yet written. Oil-tank level sensors (Watchman, ~380 recordings) were left to the home/energy pass.
+hides a per-reset ID (raw pattern + confirm). **Left (and why):** Cotech 36-9231 is LoRa (not this path); WH51 at 915 MHz (a ~430 kHz tone spacing); Oregon v1 /
+WMR500. **After weather pass 2 (2026-11-12):** Govee H5112 / H5310 / H5059 — their payload is XORed with a 128-byte key
+taken from a firmware dump: the only description IS that table, so not done (clean room); TFA 14.1504 v2 — the
+recordings' runs do not fit the notes' 360 µs bit; Oria WA150KM, La Crosse WS-6868, KlimaLogg, the one-recording
+families — not yet written; Bresser 6-in-1 ×4 and Oregon THGR122N ×4 — their bursts slice as noise (the channel sits
+off the signal), a front-end case. **inFactory T/H is held**: it reads its two folders 6/6, but alecto_ws_1200/03/g000
+carries a second sensor in exactly its format (7 copies, CRC-4 good, its 8 ms / 16 ms framing) that the answer key
+does not list, while the front end reports no burst for that recording's keyed Alecto (a strong 0.45 s signal at
+1.05 s) — the bench counts that WRONG; hook `wx15::infactory` back once that Alecto is read. Weather pass 2 corpus:
+match 1896 → 2006 on the old front end; 2189 → 2225 on ism2-front's; WRONG 0, false alarms 0 throughout. Oil-tank level sensors (Watchman, ~380 recordings) were left to the home/energy pass.
 
 ### Home families (2026-11-11): meters, alarm sensors, remotes — `vibe_ism_meters.h`, `vibe_ism_security.h`, `vibe_ism_remotes.h`
 
@@ -360,28 +390,114 @@ see Tests). Alarm sensors are kind `security` ("Alarm sensor #n"), remotes `door
 | Honeywell / Ademco 5800, 2GIG | 345 OOK Manchester 136 µs | **27/29** | L. Lamb, DEF CON 22 "Home Insecurity" | CRC-16 |
 | DSC contacts / motion | 433 OOK RZ 500 µs | **8/8** | FCC F5300NB912 report; rtl_433 notes | CRC-8 |
 | X10 security | 310/433 OOK NEC-like | **5/5** | rtl_433 notes | complements + parity |
-| SimpliSafe sensors (never keypad PINs) | 433 OOK PIWM | test only (seed) | rtl_433 notes | sum + twice alike |
+| SimpliSafe sensors (never keypad PINs) | 433 OOK PIWM | **5/10** (2026-11-12: the row was inverted twice; the 5 left are keypads — one AGC-saturated carrier) | rtl_433 notes | sum + twice alike |
 | Generic 433.3 MHz motion kit | 433 OOK PWM | **14/14** | rtl_433 notes | none: 3 copies, every gap agreeing with its mark |
 | LightwaveRF | 433 OOK | **43/43** | So Make It wiki | 16-of-256 symbols, whole frame, twice |
 | Nexa / KlikAanKlikUit / Proove / Intertechno self-learning | 433 OOK PPM | **17/17** | elektronikforumet wiki | pairs, twice |
 | X10 RF | 310/433 | **4/4** | WGL Designs W800RF32 doc | complements + fixed bits |
 | GE Color Effects | 433 FSK 52 µs | **14/16** | deepdarc.com; lukecyca.com | twice |
 | Somfy RTS | 433.42 OOK | 1/2 | pushstack.wordpress.com; US 8 189 620 | nibble XOR |
-| Microchip HCS361 (car / gate) | 315 OOK PWM | 3/10 | DS40146F | 2-bit CRC → confirm |
+| Microchip HCS361 (car / gate) | 315 OOK PWM or VPWM | **20/22** (2026-11-12: + the VPWM data format and the 1/3-duty preamble sync; 2 have no burst) | DS40146F; rtl_433 hcs361.c notes | 2-bit CRC → confirm |
 | Clemsa, Ansonic, BETT, Elplast, Linear MultiCode / Delta-3, Roger, Allstar Firefly, Nice FLO (12-bit) | 433 OOK PWM | **13/27** | rtl_433 conf/ descriptions | none: whole words, twice |
 | Car fobs: Continental KR5V2X (Honda), Chrysler | 313.8 FSK Manchester / 315 OOK PWM | **7/7, 7/7** | rtl_433 *_car_remote.c notes (FCC IDs) | XOR / sum; Chrysler rows exactly one packet |
-| Car fobs: MIC 6SC2, GM ABO1502T | 315 OOK | 0/6, 0/5 (written, not yet on a real burst) | same | XOR / sums; confirm |
+| Car fobs: MIC 6SC2, GM ABO1502T | 315 OOK | **6/6, 5/5** (2026-11-12: 6SC2's zero-bit first half restored; GM's 112 bits end at the row's end) | same | XOR / sums; confirm |
 | Paradox Magellan sensors and remotes | 433 OOK PWM | **5/5** | Flipper Zero protocol via rtl_433's notes | CRC-8 |
 | Honeywell ActivLink chimes / PIR / contacts | 916.8 OOK, 868 FSK, PWM | **5/6** | K. Lohner, honeywell-wireless-doorbell | parity + 15 zero bits, twice |
 | RadioHead ASK packets, Sensible Living moisture | 433 OOK NRZ | **9/10** | RadioHead RH_ASK docs | CRC-16 (data never shown) |
 | Vaillant VRT 340f thermostat | 868 OOK differential Manchester | **6/7** | R. Kainhofer's wiki | 16-bit checksum, HDLC stuffing |
 
-Not done (home area), and why: Owl CM130/160/180 (inside the Oregon v3 path the weather work owns), IKEA Sparsnäs
-(encrypted with its ID — not decrypted), Security+ 1/2, Chamberlain, car remotes (Ford, Honda, Nidec, Code Alarm,
-Compustar, Astroflex), Insteon, EC3k, ESIC EMT7110, Elster, Vivint (its status byte is enciphered), Visonic, Cavius,
-Honeywell CM921, Danfoss, Funkbus, Siemens, HCS362, Kerui/Chuango/Waveman naming (they ARE
-EV1527/PT2262 — told apart only by data patterns), 24-bit Nice FLO (a PT2262 word on the air) and ADLM (a La Crosse
-length) — the last two were tried and dropped for naming other devices.
+Not done (home area) after the first pass: see the second pass below.
+
+### Home families, second pass (2026-11-12): meters, heating, smart home — `vibe_ism_meters2.h`, `vibe_ism_homeauto.h`
+
+Hooked into `decodeOne` after `decodeMeters` (OWL after `fixedcode::` — see its row); each family's band in
+`meters2BandOk` / `homeautoBandOk` (bandPlausible). Corpus = the bench as it stands; "padded" = with ism2-front-pad's
+front end and bench (real-noise padding, the floor-seed fix) — what these read once that lands. Thermostats are kind
+`sensor` with their ID shown (as the Vaillant); every remote — anything whose address commands a light, blind, fan,
+socket or heater — is kind `doorbell`, **secret**. Encoders for every family in test-ism (`testHome2`).
+
+| Family | Band / mod | Corpus (padded) | Facts from | Check |
+|---|---|---|---|---|
+| IKEA Sparsnäs energy monitor | 868 FSK 26 µs | **10/10** | kodarn/Sparsnas, strigeus/sparsnas_decoder; rtl_433 notes | CRC-16 + the ID's own XOR key (solved over the 4 096 six-digit IDs) |
+| OWL CM130 / CM180 / CM160 | 433 OOK Oregon v3 rate | **3/3, 1/1, 1/8** | rtl_433 oregon_scientific.c notes | CRC-8 / nibble sum; CM160 frame types 2–3 refused (the EBP50 thermostat sends them) |
+| Voltcraft EnergyCount 3000 (RT-110, NETBESEM4, RS3620) | 868 FSK 50 µs NRZI, scrambled, HDLC | **8/8** | AX5042 datasheet, sevenwatt.com, avian2/ec3k; rtl_433 notes | CRC-16 + zero pads; every frame in a burst |
+| ESIC EMT7110 | 868 FSK 104 µs | **5/5** | rtl_433 notes (P. Reinholdtsen) | byte sum + mains-volt sanity; confirm unless both packets agree |
+| RFXCOM RFXMeter / RFXPower | 433 OOK PPM (X10-like) | **2/2** | RFXCOM notes; rtl_433 #2141 | address complement + nibble sum; confirm unless two copies |
+| Revolt NC-5462 | 433 OOK PWM | 0/2 (front end: channel closes early at the capture's edge) | rtl_433 notes | byte sum + 50/60 Hz + volts; confirm |
+| Flowis water meter | 868 FSK 10 µs | 0/3 (front end; offline demod = the key) | rtl_433 notes | CRC-16 |
+| Insteon | 915 / 869.85 FSK 109.6 µs Manchester blocks | **5/12** (9/12) | evilpete/insteonrf; rtl_433 notes | our CRC rule / ext. sum |
+| ADLM FPRF heater programmer | 433 OOK PWM | **7/7** | rtl_433 conf + README | none: wake-up + 2 copies, or 3 |
+| Danfoss CFR thermostat | 433 FSK 100 µs, 6-bit nibble codes | **4/4** | rtl_433 notes (T. Vestermark) | CRC-16 |
+| Honeywell evohome / RAMSES II (CM921 …) | 868 FSK 38.4 k UART + Manchester | 1/4 (**4/4**) | Evsdd evohome wiki; rtl_433 notes | Manchester break + footer + byte sum |
+| Watts WFHT-RF | 433 OOK PWM | **2+2/2+2** | rtl_433 README + notes | byte sum; confirm unless two copies |
+| Watts WFHT-LCD-RF | 433 OOK Manchester 461 µs | **3+2/3+2** | S. Bontius, WATTS_WFHT_RF_PROTOCOL.md | CRC-8 + CRC-16 |
+| Watts Vision | 868 FSK 26 µs | 0/3 (**3/3**) | rtl_433 #2885 + notes | CRC-16/MODBUS + CRC-16 |
+| Funkbus / Instafunk (Berker, Gira, Jung) | 433.42 OOK biphase-mark | **5/5** | rtl_433 notes (Insta module doc) | XOR-nibble + parity; confirm unless twice |
+| Feron LED-light remotes | 433 OOK PWM | **3/3** | Flipper Zero notes via rtl_433 | inverted byte, two identical words |
+| Power Smart blinds | 433 OOK Manchester 225 µs | **3/3** | Flipper Zero notes via rtl_433 | 16 fixed bits + inverted copy + Y/W |
+| Martec MPLCD fan / light | 433 OOK PWM | **3/3** | rtl_433 PR #3133 | nibble sum, two identical rows |
+| FSL cricket scoreboard | 433.95 FSK 528 µs Manchester | **2/2** | rtl_433 notes (D. Woodhouse) | position markers, two identical blocks |
+| emonTx (first pass) | 433 FSK 49 k, ±93 kHz | 0/76 (**76/76**) | — | the decoder was right; front end (seed + wide tones) |
+
+Fixed in place: Apollo Standard / Smart get back the idle 0 before a row's first mark (their sync starts with it);
+Standard also folds envelope slivers (clipped TEK377A). **Scorer** (`ism-corpus.mjs`): an IDM reading on a recording
+keyed only NETIDM, same meter ID, is "decoded" — rtl_433's own notes say the two cannot be told apart and both answer
+the same packet; the NetIDM recordings' bytes 27–30 equal the IDM recording's consumption count.
+
+**Not cracked, and why:** Elster R2S/REXU type 2 (7 µs bits, FHSS — finer than any 250/500 kS/s channel); Itron ERT
+SCM / IDM / SCM+ remaining (frames start in the first ms: front end); Neptune R900 (envelope does not slice);
+Silver Spring mesh, Arad MS, Landis+Gyr GS, Elero (75 kbit/s GFSK, whitened + obfuscated), DeltaDore X3D, CTT tags,
+IBIS beacon, LoRa (not this path), Fanimation — not written this pass; Siemens 5WY72xx and Nidec are car keys, Blyss,
+Quhwa and Elro DB286A doorbells, RF-tech a temperature sensor (the security and weather passes). Owl CM160's other 7:
+~7 dB over a full-band 250 kS/s channel (front end). Efergy e2 classic 6/14 (7/14 padded): FSK slivers inside the PWM
+— a fold was tried and gained nothing, dropped.
+Security+, Chamberlain, the car remotes, Vivint, Visonic, Cavius, HCS362: see the second security / remotes pass below.
+
+### Second security / remotes pass (2026-11-12) — `vibe_ism_security2.h`, `vibe_ism_fobs.h`
+
+Facts from the notes at the head of rtl_433's device files and `conf/` descriptions (GPL: read for frame layout, timing
+and checks only — no code, tables or comments copied; button-name tables were NOT copied, so TV remotes and remote
+starters show the button number), the Microchip datasheets, and the rtl_433_tests READMEs. Scores are on the corpus with
+the ism2-front front end. Everything here is **secret** (identity hashed by the Tracker, never in any output; test-ism
+checks the JSON for each family's code in hex and decimal). Rolling / hopping codes are never read: KeeLoq hop words are
+skipped, the Security+ 2.0 rolling digits are checked for validity and thrown away, never assembled.
+
+| Family | Band / mod | Corpus | Facts from | Check |
+|---|---|---|---|---|
+| Vivint door/window, glass-break, motion | 345 OOK Manchester 135 µs | **6/6** | vivint.c notes | packed 12-bit CRC 0x8050; status enciphered → only the sensor kind shown |
+| Visonic PowerCode | 433 OOK PWM 400/800 | **2/2** | visonic_powercode.c (MCR-300 manual) | XOR nibble, twice |
+| Cavius smoke / heat / water alarms, door sensors | 869.67 FSK Manchester 206 µs / 868.7 NRZ 415 µs | **3/3** | cavius.c notes | CRC-8 Maxim + complement / CRC-8 0x07 |
+| Chamberlain CWPIRC motion | 915 FHSS FSK 25 µs | 4/4 decode — **HELD, not called** | chamberlain_cwpirc.c notes | CRC-16/XMODEM; corpus folder 02 has an EMPTY key over 4 CRC-valid frames of the same sensor → would score a false alarm; for Stuart |
+| Security+ 2.0 garage remotes | 310/315/390 OOK Manchester 250 µs | **1/1** | secplus_v2.c notes | both halves' order/invert/trit validity; fixed part only |
+| Chamberlain / LiftMaster DIP (7/8/9 switches) | 300–390 OOK 1 ms slots | **3/3** | chamberlain_code.c (Flipper Zero) | none: symbol + stop places, twice |
+| Microchip HCS362 (PWM and Manchester) | 315/433/868 | **4/4** | DS40189E; hcs362.c notes | 2-bit CRC → confirm |
+| 2GIG KEY2E (encrypted) | 345 OOK Manchester | **4/4** | twogig_key2e.c notes | CRC-16 0x8005 init 0x4C57; all enciphered → only the make |
+| Ford (EU) car keys | 433 OOK DMC 250 µs | **6/6** (decoded) | fordremote.c notes | none: confirm; no button / code shown |
+| Honda (EU) car keys — also Nidec OUCG8D (Honda OEM) | 433 / 313.8 FSK PWM 250/500 | **3/3** + nidec 4/6 | hondaremote.c notes | none: 26 fixed bits + length, confirm |
+| Code Alarm FRDPC2002 | 433 OOK zero-bit Manchester 550 µs | **5/5** | code_alarm_car_remote.c | none: confirm |
+| Astroflex Astrostart 2000/3000 | 372.4 OOK PPM | **5/5** | astrostart_2000.c | complement + 4-bit sum, confirm |
+| Compustar 1WG3R | 433 OOK PWM 740/1110 | **5/5** | compustar_1wg3r.c | complement byte + fixed bits, twice |
+| Audiovox PRO-OE3B | 303 OOK PWM 450/900 | **3/3** | audiovox_pro_oe3b.c | fixed bits, twice / confirm |
+| Alps FWB1U545 (Honda OEM) | 433 FSK zero-bit Manchester 500 µs | **4/4** | alps_fwb1u545.c | 55 + copied byte + length, confirm |
+| GangQi / Hollarm alarm remotes | 433 OOK PWM / PPM | **3/3, 3/3** | gangqi.c, hollarm.c (Flipper Zero) | 8-bit sums, twice / confirm |
+| King Gates Stylo 4k | 433 OOK | **2/2** | kinggates.c (Flipper Zero) | none: constants + two identical messages |
+| iDo 111/117 | 433 OOK PPM | **2/2** | ido.c (Flipper Zero) | none: two messages, same fixed part |
+| HT680-based remotes | 433 OOK PWM | 0/2 (written; the recordings slip bits) | ht680.c notes | sync + 12 fixed pin bits, confirm |
+| Revers RB2 | 433 OOK zero-bit Manchester 250 µs | **2/2** (decoded) | conf/Revers-RB2.conf | none: the word 3+ times with its 32 ones |
+| KeyFinder tags | 433 OOK PWM 400/1300 | **3/3** | conf/KeyFinder.conf | none: twice alike |
+| Roger, Nice FLO 12-bit (first-pass rows) | 433 OOK PWM | **3/3**, 1/3 | conf/ | one word a burst → confirm (only these two: doing it for every family misread weather / TPMS) |
+| DirecTV RC66RX, Dish UHF 6.3 TV remotes | 433 FSK / 384 OOK PPM | **4/4, 3/3** | directv.c (K. Lohner), dish_remote_6_3.c | nibble sum / fixed bits, twice |
+
+Left, and why: **Security+ 1.0** (no check, and the fixed ID cannot be separated from the rolling code without
+decoding it — privacy rule); **Cardin S466** (27.195 MHz — no band we listen on); **Kidde RF-SM** and **Honeywell
+5890PI** (the slice is broken on these recordings — glitched envelope / a saturated carrier); **Corradi HCS200** 2/3 (the
+preamble burst is distorted, the data burst alone has no sync); **SimpliSafe keypads** (saturated carrier; PIN frames
+never decoded anyway); **Allstar Firefly** and the other first-pass PWM rows one word a burst (single words of those
+shapes appear in other devices' recordings); **24-bit Nice FLO** (a PT2262 word); **Lynx / generic 1000-3000
+doorbells, generic 4-channel 315 remotes** (EV1527/PT2262-shaped, no check — not attempted this pass); **Opus XT300,
+Shenzhen Wale, Blueline, pt20tx (Bresser), axel (Esperanza)** — weather / energy, the other passes'.
+Also seen: in 6sc2/01/g001 two ~50 µs OOK bursts read as **Toyota PMV-C210 TPMS** (not 6SC2 frames — those are
+250 µs; rtl_433's key lists none): a TPMS-side question for whoever owns vibe_ism_tpms.h.
 
 ## The gallery (2026-10-25)
 
@@ -457,7 +573,11 @@ armhf hop, more on a noisy band; ISM mode switches the audio chain off, which pa
   **The real-recording score** is `scripts/ism-corpus.mjs` over rtl_433_tests (test input only): home area 56 → 678
   of 884 recordings read; every family's cross-reads audited (none but real background devices: a LightwaveRF TRV in two
   La Crosse captures and an Oregon one, a neighbour's ERT meter in a 915 MHz Ambient capture). ★ The bench cannot see a
-  burst that starts inside the detector's first 64 frames (~65 ms at 250 kS/s, ~20 ms at 2.4 MS/s — the floor seed):
+  burst that starts inside the detector's first 64 frames (~65 ms at 250 kS/s, ~20 ms at 2.4 MS/s — the floor seed)
+  [★ 2026-11-12: fixed in the detector — the median seed and the look back, §front end; XC-0324 14 → 58/58, emonTx 0 → 76/76;
+  the front-end pass took the corpus from match 1896 · decoded 341 · miss 886 to 2072 · 350 · 701, WRONG 0, false alarms
+  0; test-ism's "front end" block: a frame from sample 0 and 4 ms in, a WH2 40 ms in at 250 kS/s, a spur from sample 0
+  opening nothing, a Toyota at ±75 kHz as ONE burst, an emonTx at ±90 kHz]:
   every emonTx, SimpliSafe, ERT/IDM/SCM+ capture and many short ones — a bench limit, not a live one (live, the seed is
   the first instant after a start). Two front-end fixes came out of the corpus: the FSK span ignores pre-roll blips
   (+61 decodes, none lost), and the bench reads `_2500k` / decimal rates, `samplerate` files and README frequencies.

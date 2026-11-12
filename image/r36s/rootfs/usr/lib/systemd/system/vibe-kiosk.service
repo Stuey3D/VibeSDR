@@ -1,0 +1,55 @@
+[Unit]
+Description=VibeSDR kiosk — Cog (WPE WebKit) full screen on DRM/KMS, the GPU through Panfrost
+Documentation=file:/usr/share/doc/vibesdr-r36s/README.md
+After=vibeserver-handheld.service systemd-user-sessions.service systemd-udev-trigger.service
+Wants=vibeserver-handheld.service
+# ★ Cog has the panel; nothing else may (no getty on tty1, no compositor)
+Conflicts=getty@tty1.service
+# ★★ The FALLBACK interface since 2026-11-06: only with `vibe.browser` on the kernel command line — vibe-hhui.service
+#    (native) is the default.
+ConditionKernelCommandLine=vibe.browser
+
+[Service]
+Type=simple
+User=vibe-kiosk
+Group=vibe-kiosk
+SupplementaryGroups=video render input audio
+RuntimeDirectory=vibe-kiosk
+RuntimeDirectoryMode=0700
+Environment=HOME=/var/lib/vibe-kiosk
+Environment=XDG_RUNTIME_DIR=/run/vibe-kiosk
+Environment=XDG_CACHE_HOME=/run/vibe-kiosk/cache
+# ★★★ ?handheld=1 IS WHAT MAKES THE PAGE A HANDHELD (handheldHinted()). Without it the page boots as a web client,
+#     asks /vibeserver/auth and shows "auth probe failed: HTTP 503" (the first card, 2026-11-06).
+# ★★ which GL driver Mesa really loads (panfrost, or llvmpipe = software) goes to the journal at start-up — a handful of
+#    lines. The first card (2026-11-06) ran WPEWebProcess at 177 % CPU against day one's 54 % on Panfrost.
+Environment=EGL_LOG_LEVEL=info
+Environment=LIBGL_DEBUG=verbose
+# ★★ SKIA PAINTS ON THE CPU (WPE 2.48's default) — MEASURED BOTH WAYS. handheld6 set WEBKIT_SKIA_ENABLE_CPU_RENDERING=0
+#    (GPU painting, SkiaGPUWorker): WPEWebProcess the same 186 %, the whole device the same 92 %, and the screen slower
+#    by eye (Stuart). The G31 here has ONE shader core. The CPU goes on the page's AUDIO path (AudioWorklet, the decode
+#    Worker, GStreamer's queues) and its main thread — not on painting.
+# ★ GStreamer's warnings and errors in the journal: the browser's audio ran, but the ALSA device stayed "closed".
+Environment=GST_DEBUG=2
+Environment=VIBE_ENGINE_URL=http://127.0.0.1:48000/?handheld=1
+# ★ the engine answering → progress 75 → the splash drops the DRM master (keeping its picture up) → Cog starts
+ExecStartPre=+/usr/lib/vibesdr-r36s/vibe-wait-engine
+# ★ DEBUG: `vibe.gpuinfo` on the kernel command line shows WebKit's own GPU report (webkit://gpu) instead of the
+#   receiver — what WebKit really draws with, readable on the screen. The file is read at each start (after this runs).
+ExecStartPre=+/bin/sh -c 'if grep -qw vibe.gpuinfo /proc/cmdline; then echo VIBE_ENGINE_URL=webkit://gpu > /run/vibe-kiosk.env; else rm -f /run/vibe-kiosk.env; fi'
+EnvironmentFile=-/run/vibe-kiosk.env
+# ★★ -P drm --platform-params=renderer=gles: no compositor, the GPU through Mesa Panfrost (day one, §0).
+#    --gamepad=manette: the pad through libmanette (the udev rule makes it a gamepad). ★★★ ESSENTIAL: the page keeps
+#    its start / audio screen and a press on the pad is the gesture that starts the audio (Stuart 2026-11-05).
+#    WebKit's media defaults are left alone. (A plain --media-playback-requires-user-gesture=false does NOT let WebAudio
+#    start without a gesture in WPE 2.48 — measured 2026-11-05: the AudioContext stays suspended.)
+#    --bg-color: the splash's own background, so the frames before the page paints never flash white.
+ExecStart=/usr/bin/cog -P drm --platform-params=renderer=gles --gamepad=manette \
+  --enable-webgl=true --enable-2d-canvas-acceleration=true \
+  --enable-write-console-messages-to-stdout=true --bg-color=#070907FF ${VIBE_ENGINE_URL}
+Restart=always
+RestartSec=1
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

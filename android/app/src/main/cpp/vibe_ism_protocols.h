@@ -38,6 +38,7 @@ struct Reading {
     bool confirm = false;    ///< a weak check: shown only once heard twice alike (Tracker)
     double tempC = NAN, hum = NAN, windKmh = NAN, gustKmh = NAN, windDir = NAN, rainMm = NAN, rainRateMmH = NAN;
     double kpa = NAN, uv = NAN, watts = NAN, baroHpa = NAN;
+    double rainNewMm = NAN;  ///< ★ the Tracker's: rain since this server first heard the gauge (rainMm is the gauge's own total)
     int battOk = -1;         ///< 1 OK, 0 low, -1 not carried
     std::string button;      ///< a fob/remote's button, when that is not secret ("A", "1+2")
     std::string note;        ///< anything else worth a word ("learn", "pressure scale unknown")

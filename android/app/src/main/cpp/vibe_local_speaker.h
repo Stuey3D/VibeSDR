@@ -1,0 +1,363 @@
+// vibe_local_speaker.h — ★★★ V12 R36S: THE ENGINE PLAYS THE RECEIVER ITSELF (Linux, ALSA by its kernel interface).
+//
+// WHY (2026-11-06, Stuart's R36S, handheld6's log): the page's audio path — the decode Worker, the AudioWorklet and
+// GStreamer's queues inside WPEWebProcess — cost ~1.1 of the four A35 cores, and the browser would not start sound
+// without a button press. On the handheld the radio, the speaker and the engine are the same box, so the PCM the engine
+// already makes goes straight to the codec: no WebSocket audio, no decode, no WebAudio, no gesture. The native UI that
+// follows uses the same output.
+//
+// ★ Fed from the DSP thread (push): never blocks. A writer thread owns the device and blocks in WRITEI.
+// ★ Stereo, S16_LE, 48 kHz — the engine's rate (AUDIO_SR); mono is doubled on the way in.
+// ★ Jitter: ~60 ms target, at most ~250 ms queued (the oldest is dropped, so the speaker never lags the dial). An
+//   underrun is filled with silence — a glitch, never a stall.
+// ★ The device is opened on the first audio and closed after kIdleCloseMs with none (a stopped radio, a mode with no
+//   audio): the codec and amplifier then go idle and draw nothing.
+// ★ The card: VIBE_SPEAKER_CARD (an ALSA card number or its id, e.g. "rk817ext"), else card 0.
+#pragma once
+
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <chrono>
+#include <climits>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <sound/asound.h>
+
+namespace vibe {
+
+class LocalSpeaker {
+public:
+    static constexpr unsigned kRate = 48000;
+    static constexpr unsigned kPeriod = 480;            // 10 ms
+    static constexpr unsigned kPeriods = 8;             // 80 ms in the device
+    static constexpr size_t   kTargetFrames = 2880;     // ~60 ms queued before playing (absorbs DSP block jitter)
+    static constexpr size_t   kMaxFrames = 28800;       // 600 ms: past this the oldest goes — far over the 150 ms hold, so never in use
+    static constexpr int      kIdleCloseMs = 3000;
+
+    using LogFn = void (*)(const char*);
+    explicit LocalSpeaker(LogFn log = nullptr) : log_(log) {
+        /* ★★ START FROM WHAT THIS DEVICE NEEDS (Stuart, 2026-11-08: "DAB started slow sounding"; handheld38's log: the
+         *    converter learnt the codec's +2 % over ~6 minutes, from 0, every boot). The settled correction is kept in
+         *    $VIBESERVER_DATA_DIR/speaker-rate (written once a minute) and the next start begins there. */
+        const char* d = std::getenv("VIBESERVER_DATA_DIR");
+        if (d && *d) {
+            ratePath_ = std::string(d) + "/speaker-rate";
+            if (FILE* f = std::fopen(ratePath_.c_str(), "r")) {
+                double v = 0;
+                if (std::fscanf(f, "%lf", &v) == 1 && std::isfinite(v) && std::fabs(v) < 0.05) rateI_ = v;
+                std::fclose(f);
+            }
+        }
+    }
+    ~LocalSpeaker() { stop(); }
+
+    /** From the DSP thread. ch 1 or 2, interleaved. */
+    void push(const int16_t* pcm, int frames, int ch) {
+        if (frames <= 0 || (ch != 1 && ch != 2)) return;
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            for (int i = 0; i < frames; i++) {
+                const int16_t l = pcm[(size_t)i * ch], r = ch == 2 ? pcm[(size_t)i * 2 + 1] : l;
+                q_.push_back(l); q_.push_back(r);
+            }
+            while (q_.size() > kMaxFrames * 2) { q_.pop_front(); q_.pop_front(); dropped_++; }
+            lastPush_ = std::chrono::steady_clock::now();
+        }
+        if (!run_.load(std::memory_order_acquire)) start();
+        cv_.notify_one();
+    }
+
+    bool playing() const { return fd_.load() >= 0; }
+    std::string problem() const { std::lock_guard<std::mutex> lk(m_); return problem_; }
+
+    void stop() {
+        run_.store(false);
+        cv_.notify_all();
+        const int fd = fd_.load();
+        if (fd >= 0) ioctl(fd, SNDRV_PCM_IOCTL_DROP);       // wakes a blocked write
+        if (th_.joinable()) th_.join();
+    }
+
+private:
+    LogFn log_;
+    mutable std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<int16_t> q_;
+    std::chrono::steady_clock::time_point lastPush_{};
+    std::string problem_;
+    uint64_t dropped_ = 0;
+    // ★ the minute's figures (said once a minute while playing): device underruns, real starvations padded with silence,
+    //   the drift trims each way, the total buffered (queue + device) min / max
+    uint64_t xruns_ = 0, starved_ = 0, droppedSaid_ = 0;
+    double rateI_ = 0, phase_ = 0, corrSum_ = 0, avgTotal_ = 0; uint64_t corrN_ = 0;   // the rate converter (writer thread only)
+    long depthMin_ = LONG_MAX, depthMax_ = 0;
+    std::chrono::steady_clock::time_point statAt_{};
+    std::atomic<bool> run_{false};
+    std::atomic<int> fd_{-1};
+    std::thread th_;
+    std::mutex startMtx_;
+
+    void say(const std::string& s) { if (log_) log_(s.c_str()); }
+
+    void start() {
+        std::lock_guard<std::mutex> lk(startMtx_);
+        if (run_.load()) return;
+        if (th_.joinable()) th_.join();
+        run_.store(true, std::memory_order_release);
+        th_ = std::thread([this] { loop(); });
+    }
+
+    static int cardNumber() {
+        const char* e = std::getenv("VIBE_SPEAKER_CARD");
+        if (!e || !*e) return 0;
+        char* end = nullptr;
+        const long n = std::strtol(e, &end, 10);
+        if (end && *end == 0) return (int)n;
+        for (int c = 0; c < 16; c++) {                       // an id: /proc/asound/cardN/id
+            char p[64]; std::snprintf(p, sizeof p, "/proc/asound/card%d/id", c);
+            FILE* f = std::fopen(p, "r");
+            if (!f) continue;
+            char id[64] = {0};
+            const bool got = std::fgets(id, sizeof id, f) != nullptr;
+            std::fclose(f);
+            if (!got) continue;
+            std::string s(id);
+            while (!s.empty() && (s.back() == '\n' || s.back() == ' ')) s.pop_back();
+            if (s == e) return c;
+        }
+        return 0;
+    }
+
+    static void hwInit(snd_pcm_hw_params& p) {
+        std::memset(&p, 0, sizeof p);
+        for (int n = SNDRV_PCM_HW_PARAM_FIRST_MASK; n <= SNDRV_PCM_HW_PARAM_LAST_MASK; n++)
+            std::memset(p.masks[n - SNDRV_PCM_HW_PARAM_FIRST_MASK].bits, 0xFF, sizeof p.masks[0].bits);
+        for (int n = SNDRV_PCM_HW_PARAM_FIRST_INTERVAL; n <= SNDRV_PCM_HW_PARAM_LAST_INTERVAL; n++) {
+            snd_interval& i = p.intervals[n - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+            i.min = 0; i.max = ~0u;
+        }
+        p.rmask = ~0u; p.cmask = 0; p.info = ~0u;
+    }
+    static void hwMask(snd_pcm_hw_params& p, int n, unsigned bit) {
+        snd_mask& m = p.masks[n - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+        std::memset(m.bits, 0, sizeof m.bits);
+        m.bits[bit >> 5] |= 1u << (bit & 31);
+    }
+    static void hwInt(snd_pcm_hw_params& p, int n, unsigned v) {
+        snd_interval& i = p.intervals[n - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+        i.min = v; i.max = v; i.integer = 1;
+    }
+
+    int openDevice(std::string& err) {
+        const int card = cardNumber();
+        char path[64]; std::snprintf(path, sizeof path, "/dev/snd/pcmC%dD0p", card);
+        const int fd = ::open(path, O_RDWR | O_CLOEXEC);
+        if (fd < 0) {
+            err = std::string("could not open the speaker (") + path + "): " + std::strerror(errno)
+                + (errno == EBUSY ? " — another program has the sound card"
+                   : errno == EACCES ? " — the vibeserver user must be in the 'audio' group" : "");
+            return -1;
+        }
+        snd_pcm_hw_params hp; hwInit(hp);
+        hwMask(hp, SNDRV_PCM_HW_PARAM_ACCESS, SNDRV_PCM_ACCESS_RW_INTERLEAVED);
+        hwMask(hp, SNDRV_PCM_HW_PARAM_FORMAT, SNDRV_PCM_FORMAT_S16_LE);
+        hwMask(hp, SNDRV_PCM_HW_PARAM_SUBFORMAT, SNDRV_PCM_SUBFORMAT_STD);
+        hwInt(hp, SNDRV_PCM_HW_PARAM_CHANNELS, 2);
+        hwInt(hp, SNDRV_PCM_HW_PARAM_RATE, kRate);
+        hwInt(hp, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, kPeriod);
+        hwInt(hp, SNDRV_PCM_HW_PARAM_PERIODS, kPeriods);
+        if (ioctl(fd, SNDRV_PCM_IOCTL_HW_PARAMS, &hp) != 0) {
+            err = std::string("the speaker would not run at 48 kHz stereo 16-bit: ") + std::strerror(errno);
+            ::close(fd); return -1;
+        }
+        snd_pcm_sw_params sp; std::memset(&sp, 0, sizeof sp);
+        sp.tstamp_mode = SNDRV_PCM_TSTAMP_NONE;
+        sp.period_step = 1;
+        sp.avail_min = kPeriod;
+        sp.start_threshold = kPeriod * 2;                 // starts once two periods are in
+        sp.stop_threshold = kPeriod * kPeriods;           // an underrun stops it; the loop re-prepares
+        sp.boundary = (snd_pcm_uframes_t)kPeriod * kPeriods;
+        while (sp.boundary * 2 <= (snd_pcm_uframes_t)LONG_MAX - kPeriod * kPeriods) sp.boundary *= 2;
+        if (ioctl(fd, SNDRV_PCM_IOCTL_SW_PARAMS, &sp) != 0 || ioctl(fd, SNDRV_PCM_IOCTL_PREPARE) != 0) {
+            err = std::string("the speaker refused its settings: ") + std::strerror(errno);
+            ::close(fd); return -1;
+        }
+        return fd;
+    }
+
+    /** Frames still queued in the DEVICE (written, not yet played); -1 if it cannot say. */
+    long deviceDelay() const {
+        const int fd = fd_.load();
+        if (fd < 0) return -1;
+        snd_pcm_sframes_t d = 0;
+        return ioctl(fd, SNDRV_PCM_IOCTL_DELAY, &d) == 0 ? (long)d : -1;
+    }
+    /* ★★★ NEVER SILENCE WHILE THE DEVICE STILL HAS AUDIO (Stuart, 2026-11-07, handheld32: "the audio has a crackle in all
+     *     modes with AM being the worst and DAB seemed ever so slightly off speed like very slightly slow"). This padded
+     *     a period with silence whenever ITS queue held less than one period at a 5 ms wake — though the device behind it
+     *     still had up to 80 ms to play. At 2.048 MS/s the DSP hands over audio in blocks under a period, so the queue sat
+     *     short and tiny gaps were injected all the time: the crackle, and the gaps' added time made DAB run slow. Now the
+     *     writer waits while the device has more than two periods in hand, and pads only a real starvation.
+     * ★★ DRIFT: the RTL's crystal and the codec's never agree — and on this board the codec ran ~1.7 % slow (handheld33) —
+     *     so the total buffered (queue + device) is held near kHoldFrames by the rate converter below (PI, ±5 %). */
+    static constexpr long kHoldFrames = 7200;             // 150 ms held in all — the web clients' best-case jitter buffer (Stuart)
+    /* ★★ ADAPTIVE (Stuart, 2026-11-08, handheld38: "still getting the odd speaker crackle"; handheld36's log: the odd minute
+     *    with 2–3 starvations — a DSP block later than 150 ms). As the web clients' buffer: each starvation adds 50 ms to
+     *    the hold (to 400 ms in all), each calm minute gives 25 ms back (to 150) — it settles where this device needs it. */
+    long holdExtra_ = 0;
+    bool fadeIn_ = false;   // ★ the next period follows a gap: it fades in (writer thread only)
+    std::string ratePath_;  // ★ where the learnt correction is kept (constructor / the minute's line)
+    long hold() const { return kHoldFrames + holdExtra_; }
+    void loop() {
+        std::vector<int16_t> buf((size_t)kPeriod * 2);
+        bool primed = false;
+        auto lastFail = std::chrono::steady_clock::time_point{};
+        while (run_.load()) {
+            // ── wait for audio (and close the device when it has stopped coming) ──
+            {
+                std::unique_lock<std::mutex> lk(m_);
+                cv_.wait_for(lk, std::chrono::milliseconds(primed ? 5 : 50), [&] {
+                    return !run_.load() || q_.size() >= (primed ? kPeriod * 2 : kTargetFrames * 2);
+                });
+                if (!run_.load()) break;
+                const auto idle = std::chrono::steady_clock::now() - lastPush_;
+                if (idle > std::chrono::milliseconds(kIdleCloseMs)) {
+                    lk.unlock();
+                    closeDevice("no audio for 3 s");
+                    primed = false;
+                    std::unique_lock<std::mutex> lk2(m_);
+                    cv_.wait(lk2, [&] { return !run_.load() || !q_.empty(); });
+                    continue;
+                }
+                if (!primed && q_.size() < kTargetFrames * 2) continue;
+                primed = true;
+                const long qf = (long)(q_.size() / 2);
+                const long dev = deviceDelay();
+                const long total = qf + std::max(0L, dev);
+                /* ★★★ THE RATE CONVERTER (handheld33's log: the buffer sat full, ~50 000 frames a minute dropped — the
+                 *     codec plays ~1.7 % under 48 kHz; its I2S clock is not a clean 48 k on this board). A PI loop holds the
+                 *     total buffered near kHoldFrames by reading the queue at `ratio` input frames per output frame (up to
+                 *     ±5 %), with linear interpolation and the phase carried across periods — so speed AND pitch come out
+                 *     right on the device's real clock, and nothing is dropped or padded. Slow on purpose: ~10 s to settle. */
+                // ★ the loop steers on the SMOOTHED level (~2 s): the DSP's blocks make the instant level jump every period,
+                //   and steering on that wobbled the pitch. Gains from a simulation against a ±1.7 % codec and real block
+                //   sizes: the correction settles within ±0.07 % of the truth, ≤ 21 ppm a period, the hold ±20 ms.
+                avgTotal_ = avgTotal_ <= 0 ? (double)total : avgTotal_ + 0.005 * ((double)total - avgTotal_);
+                const double err = (avgTotal_ - (double)hold()) / (double)hold();
+                const double corr = std::max(-0.05, std::min(0.05, rateI_ + 0.02 * err));
+                const double ratio = 1.0 + corr;   // input frames per output frame
+                const double needF = phase_ + ratio * kPeriod + 2;
+                // ★ short of this period's input, but the device still has plenty: wait for the DSP's next block, insert nothing
+                if ((double)qf < needF && dev > (long)kPeriod * 2) continue;
+                depthMin_ = std::min(depthMin_, total); depthMax_ = std::max(depthMax_, total);
+                rateI_ = std::max(-0.05, std::min(0.05, rateI_ + 0.00005 * err));   // the integral, once per period written
+                corrSum_ += corr; corrN_++;
+                if ((double)qf >= needF) {
+                    double ph = phase_;
+                    for (unsigned o = 0; o < kPeriod; o++) {
+                        const size_t i0 = (size_t)ph; const double f = ph - (double)i0;
+                        for (int c = 0; c < 2; c++) {
+                            const double v = q_[i0 * 2 + c] * (1 - f) + q_[(i0 + 1) * 2 + c] * f;
+                            buf[o * 2 + c] = (int16_t)std::lround(std::max(-32768.0, std::min(32767.0, v)));
+                        }
+                        ph += ratio;
+                    }
+                    const size_t used = (size_t)ph;
+                    for (size_t i = 0; i < used * 2; i++) q_.pop_front();
+                    phase_ = ph - (double)used;
+                    if (fadeIn_) {   // ★ back from a gap: 2 ms up from silence
+                        for (unsigned k = 0; k < 96 && k < kPeriod; k++) { const float g = (float)k / 96.f; buf[k * 2] = (int16_t)(buf[k * 2] * g); buf[k * 2 + 1] = (int16_t)(buf[k * 2 + 1] * g); }
+                        fadeIn_ = false;
+                    }
+                } else {
+                    // ★ a REAL starvation (the device is nearly dry too): what there is, then silence, and refill first
+                    const size_t have = std::min(q_.size(), buf.size());
+                    for (size_t i = 0; i < have; i++) { buf[i] = q_.front(); q_.pop_front(); }
+                    for (size_t i = have; i < buf.size(); i++) buf[i] = 0;
+                    // ★★ A SOFT GAP, NOT A CLICK (handheld38: the starvations were a DAB multiplex change — a gap nobody can
+                    //    avoid): the last 2 ms before the silence fade out, and the first 2 ms after it fade in (fadeIn_)
+                    {
+                        const size_t hf = have / 2, n = std::min<size_t>(96, hf);
+                        for (size_t k = 0; k < n; k++) {
+                            const float g = (float)k / (float)n;   // 0 at the last frame … 1, n frames back
+                            const size_t fi = hf - 1 - k;
+                            buf[fi * 2] = (int16_t)(buf[fi * 2] * g); buf[fi * 2 + 1] = (int16_t)(buf[fi * 2 + 1] * g);
+                        }
+                    }
+                    fadeIn_ = true;
+                    primed = false;
+                    phase_ = 0;
+                    starved_++;
+                    // ★ (no adaptive growth: handheld39's starvations were RETUNES — a gap by nature, not jitter — and a hold
+                    //   grown to 400 ms for them overfilled the queue: ~1 s a minute dropped, the FM crackle. 150 held.)
+                }
+                const auto nowT = std::chrono::steady_clock::now();
+                if (statAt_.time_since_epoch().count() == 0) statAt_ = nowT;
+                if (nowT - statAt_ >= std::chrono::seconds(60)) {
+                    char b[240];
+                    std::snprintf(b, sizeof b, "speaker: the last minute — %llu starved, %llu device underruns, %llu dropped (queue full), "
+                                  "rate %+.2f %% (the device's clock against 48 kHz), buffered %ld–%ld ms, holding %ld ms",
+                                  (unsigned long long)starved_, (unsigned long long)xruns_, (unsigned long long)(dropped_ - droppedSaid_),
+                                  corrN_ ? 100.0 * corrSum_ / (double)corrN_ : 0.0,
+                                  depthMin_ == LONG_MAX ? 0 : depthMin_ / 48, depthMax_ / 48, hold() / 48);
+                    lk.unlock(); say(b); lk.lock();
+                    if (starved_ == 0 && xruns_ == 0) holdExtra_ = std::max(0L, holdExtra_ - 1200);   // ★ a calm minute: 25 ms back
+                    // ★ a calm minute: the correction it settled on is what the next start begins with
+                    if (starved_ == 0 && xruns_ == 0 && !ratePath_.empty()) {
+                        const std::string tmp = ratePath_ + ".tmp";
+                        if (FILE* f = std::fopen(tmp.c_str(), "w")) { std::fprintf(f, "%.6f\n", rateI_); std::fclose(f); std::rename(tmp.c_str(), ratePath_.c_str()); }
+                    }
+                    starved_ = xruns_ = 0; corrSum_ = 0; corrN_ = 0; droppedSaid_ = dropped_;
+                    depthMin_ = LONG_MAX; depthMax_ = 0; statAt_ = nowT;
+                }
+            }
+            // ── the device ──
+            if (fd_.load() < 0) {
+                if (std::chrono::steady_clock::now() - lastFail < std::chrono::seconds(2)) continue;
+                std::string err;
+                const int fd = openDevice(err);
+                if (fd < 0) {
+                    lastFail = std::chrono::steady_clock::now();
+                    bool changed;
+                    { std::lock_guard<std::mutex> lk(m_); changed = problem_ != err; problem_ = err; }
+                    if (changed) say("speaker: " + err);
+                    continue;
+                }
+                fd_.store(fd);
+                { std::lock_guard<std::mutex> lk(m_); problem_.clear(); }
+                say("speaker: playing (48 kHz stereo, the engine's own audio — no browser audio)");
+            }
+            snd_xferi x{}; x.buf = buf.data(); x.frames = kPeriod;
+            if (ioctl(fd_.load(), SNDRV_PCM_IOCTL_WRITEI_FRAMES, &x) == 0) continue;
+            if (!run_.load()) break;
+            if (errno == EPIPE) { xruns_++; ioctl(fd_.load(), SNDRV_PCM_IOCTL_PREPARE); continue; }   // underrun: carry on
+            if (errno == EINTR || errno == EAGAIN) continue;
+            closeDevice(std::string("write failed: ") + std::strerror(errno));
+            lastFail = std::chrono::steady_clock::now();
+        }
+        closeDevice("");
+    }
+
+    void closeDevice(const std::string& why) {
+        const int fd = fd_.exchange(-1);
+        if (fd < 0) return;
+        ioctl(fd, SNDRV_PCM_IOCTL_DRAIN);
+        ::close(fd);
+        if (!why.empty()) say("speaker: closed (" + why + ")");
+    }
+};
+
+}  // namespace vibe
+#endif

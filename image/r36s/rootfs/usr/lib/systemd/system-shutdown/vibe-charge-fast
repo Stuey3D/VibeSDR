@@ -1,0 +1,76 @@
+#!/usr/bin/python3 -I
+# vibe-charge-fast — systemd-shutdown hook ($1 = poweroff | reboot | halt | kexec), run after every service has stopped
+# and the filesystems are read-only, just before the kernel switches off.
+#
+# ★★ Powered off, nothing else draws from the charger, so the battery may take the RK817's full 1.5 A. While Linux runs
+#    it is held at 1.0 A (vibe-r36s.dts &battery: with 1.5 A into the battery the charge port hit its input limit and
+#    the RTL-SDR dropped off USB; vibe-hwd also lifts that limit to 2 A). The rk817 driver writes the charge current only at probe and keeps no cached copy of the register
+#    (REGCACHE_NONE, RK817_PMIC_CHRG_OUT volatile), so this write stands until the next boot sets 1.0 A again.
+#    Register 0xE4 (RK817_PMIC_CHRG_OUT), bits 2:0 = CHRG_CUR_SEL: 0 = 1 A, 1 = 1.5 A, 6 = 0.5 A. Bits 7:3 (voltage, enable) kept.
+#    Never fatal: any failure leaves the 1.0 A and the power-off goes on.
+import ctypes, fcntl, glob, os, sys
+
+if (sys.argv[1:2] or [""])[0] != "poweroff":
+    sys.exit(0)                     # a reboot comes straight back to the driver's 1.0 A
+
+# ★★★ CHRG_OUT also holds CHRG_EN (bit 7) and the battery's FULL VOLTAGE (bits 6:4: 4.10 + 0.05 × sel V, up to 4.45).
+#     So it is never read-modify-written from a read that could be wrong (handheld62's split read()/write() read
+#     another register one time in three — see vibe-hwd _smbus). The read is ONE atomic transfer, and the write happens
+#     only when it reads EXACTLY what the driver set from the device tree — 0xA0: charging on, 4.20 V (sel 2, the
+#     battery's constant-charge-voltage-max 4200000), 1.0 A (sel 0) — and writes the FIXED 0xA1 (the same, 1.5 A).
+#     Anything else: left alone.
+PMIC_ADDR, CHRG_OUT, EXPECT, FAST = 0x20, 0xE4, 0xA0, 0xA1
+class _SmbusData(ctypes.Union):
+    _fields_ = [("byte", ctypes.c_uint8), ("word", ctypes.c_uint16), ("block", ctypes.c_uint8 * 34)]
+
+class _SmbusIoctl(ctypes.Structure):
+    _fields_ = [("read_write", ctypes.c_uint8), ("command", ctypes.c_uint8), ("size", ctypes.c_uint32),
+                ("data", ctypes.POINTER(_SmbusData))]
+
+I2C_SLAVE_FORCE, I2C_SMBUS, SMBUS_BYTE_DATA, SMBUS_READ, SMBUS_WRITE = 0x0706, 0x0720, 2, 1, 0
+
+def _smbus(dev, rw, reg, val=0):
+    """ONE SMBus byte-data transfer (I2C_SMBUS ioctl): the register-pointer write and the read go as one i2c_transfer
+    with a repeated start, under the adapter's lock, so the kernel's own PMIC traffic (the fuel gauge polls it many
+    times a second) cannot land in between. ★★ handheld62 read with two plain read()/write() calls and the driver DID
+    land in between: about one second in three read ANOTHER register (0x24, 0x0f, 0x05 instead of 0xdb) — and the
+    read-modify-write then wrote those bits back (CHRG_IN 0x2d: the 4.5 V input floor switched off).
+    FORCE: the rk808 driver owns address 0x20."""
+    data = _SmbusData()
+    data.byte = val
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, I2C_SLAVE_FORCE, PMIC_ADDR)
+        fcntl.ioctl(fd, I2C_SMBUS, _SmbusIoctl(rw, reg, SMBUS_BYTE_DATA, ctypes.pointer(data)))
+    finally:
+        os.close(fd)
+    return data.byte
+
+def pmic_read(dev, reg):
+    return _smbus(dev, SMBUS_READ, reg)
+
+def pmic_write(dev, reg, val):
+    _smbus(dev, SMBUS_WRITE, reg, val)
+
+
+def bus():
+    """/dev/i2c-N of the PMIC's bus (i2c@ff180000) — found by its device node, never assumed to be 0."""
+    for d in glob.glob("/sys/bus/i2c/devices/*-0020"):
+        if "ff180000" in os.path.realpath(d):
+            return "/dev/i2c-" + os.path.basename(d).split("-")[0]
+    return None
+
+
+try:
+    dev = bus()
+    if not dev:
+        raise OSError("PMIC bus not found")
+    old = pmic_read(dev, CHRG_OUT)
+    if old != EXPECT:
+        raise OSError("CHRG_OUT reads 0x%02x, not the driver's 0x%02x — not touched" % (old, EXPECT))
+    pmic_write(dev, CHRG_OUT, FAST)
+    got = pmic_read(dev, CHRG_OUT)
+    print("vibe-charge-fast: charge current 1.5 A for power-off (0x%02x -> 0x%02x, read back 0x%02x)" % (old, FAST, got),
+          file=sys.stderr)
+except Exception as e:  # noqa: BLE001 — a power-off must never stop here
+    print("vibe-charge-fast: left at 1.0 A (%s)" % e, file=sys.stderr)

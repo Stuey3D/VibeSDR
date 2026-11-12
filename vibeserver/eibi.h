@@ -33,6 +33,17 @@ int loadedCount();
  *     not a failure, it is the normal state of the first days of a season. note() says so. */
 int refresh(std::string& err);
 
+/** ★★ V12 R36S: install a schedule the OWNER supplied. The handheld has no internet, so they download EiBi's
+ *  sked-xNN.csv on a computer and copy it to the card (Stuart, 2026-11-06). `path` is read capped (8 MB) and parsed by
+ *  the same parser as a download; a file with no entries is REFUSED and the cache is left exactly as it was. Otherwise
+ *  it is copied NEXT TO the cache and renamed over it, the season marker is set from the name when it is
+ *  sked-[ab]NN… (else cleared, so the daily check still asks when there is a network), and it is published to this
+ *  process's publisher (none in the handheld supervisor — the radio process re-reads the cache, see loadedCount).
+ *  Returns the entries, 0 with `err` set. `season` (optional) gets "B26 (winter)" or "". */
+int importFile(const std::string& path, std::string& err, std::string* season = nullptr);
+/** "a26" from "sked-a26.csv", "SKED-A26 (1).csv" …; "" when the name carries no season. Exposed for the test. */
+std::string seasonOfName(const std::string& fileName);
+
 /** Date the cache was last written (YYYY-MM-DD), or empty when there is none. */
 std::string status();
 

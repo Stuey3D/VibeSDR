@@ -1149,7 +1149,8 @@ int portForRadio(const ServerConfig& cfg, size_t index) {
     // ★★★ ARRAY ORDER ONLY. RadioConfig::order is for display and must never move a port.
     const int base = cfg.port > 0 ? cfg.port : 48000;
     if (index >= cfg.radios.size()) return base;
-    // ★ An explicit per-radio port always wins — an owner who pinned one did it for a router rule.
+    // ★ An explicit per-radio port always wins. ★ Behind the front door it answers this machine only (127.0.0.1,
+    //   see RadioConfig::port), so a router rule to it reaches nothing — the door's port is the one to forward.
     if (cfg.radios[index].port > 0) return cfg.radios[index].port;
 
     // ★★ WITH A FRONT DOOR, NO RADIO TAKES THE PUBLIC PORT. The front door has it, and every radio

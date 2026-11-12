@@ -1,6 +1,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VibeSDR</title>
+<!-- ★★ V12 R36S: THE HANDHELD NEVER SHOWS THE LANDING PAGE, NOT EVEN FOR A FRAME. ?handheld is known before first paint;
+     whether the engine really is a handheld is not (handheldBoot() asks it). Until it answers, the landing page (its
+     PIN box, CONNECT) is hidden; a non-handheld answer takes the mark off and the landing page draws as ever. Stuart
+     2026-11-06: "a VibeServer PIN entry screen flashes up and then disappears". -->
+<script>if (/[?&]handheld(=|&|$)/.test(location.search)) document.documentElement.setAttribute('data-hh-boot', '');</script>
+<style>html[data-hh-boot] #splash { visibility: hidden !important; }</style>
 <!-- A real URL, not a data: URI — Safari refuses data: favicons and falls back
      to its default arrow. The shim serves this from GET /favicon.png. -->
 <!-- ?v= is a CACHE KEY, not decoration. Safari keeps a separate, very sticky favicon cache and
@@ -1381,6 +1387,8 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
      RINGS's; --adsbTopH is the bar's measured height (adsbLayout in main.ts). The battery pill (an older
      server's) sits in the same corner. */
 body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48px) + 54px) !important; right: 10px !important; }
+/* ★ V12: the health pill joins the edge now (it tucks into it), so it keeps the map's height but not the 10 px gap. */
+body.adsbMap #srvHealth { right: 0 !important; }
 
 /* ── THE LIVE LIST — bottom left, clear of the toggles (top right), the zoom keys (top left) and the credits
    (bottom right). ~7 rows, then it scrolls; the head collapses it to a pill that covers almost nothing. */
@@ -1548,6 +1556,8 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
      RINGS's; --adsbTopH is the bar's measured height (adsbLayout in main.ts). The battery pill (an older
      server's) sits in the same corner. */
 body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48px) + 54px) !important; right: 10px !important; }
+/* ★ V12: the health pill joins the edge now (it tucks into it), so it keeps the map's height but not the 10 px gap. */
+body.adsbMap #srvHealth { right: 0 !important; }
 
 /* ── THE LIVE LIST — bottom left, clear of the toggles (top right), the zoom keys (top left) and the credits
    (bottom right). ~7 rows, then it scrolls; the head collapses it to a pill that covers almost nothing. */
@@ -2460,6 +2470,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    ★ A long value (the station's text message) wraps rather than scrolling: it changes too rarely for a marquee. */
 #drmSignal { padding: 2px 10px 10px; font-size: 11.5px; }
 #drmSignal .row > span:last-child { overflow-wrap: anywhere; }
+/* ★★ V12 the DRM constellation (drm.ts drmDrawConstellation): DAB's .dabScopes box, with the channels' legend under it */
+#drmSigScopes { margin: 8px 0 2px; }
+#drmSigScopes .drmConstLeg { letter-spacing: 0.5px; color: var(--text-dim); white-space: nowrap; }
+#drmSigScopes .drmConstLeg b { font-weight: 400; }
 #drmBody { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
 #drmBody .drmHead { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 #drmBody .drmLabel { font-size: 17px; font-weight: 700; color: var(--freq); overflow-wrap: anywhere; }
@@ -3886,9 +3900,44 @@ select.btn { padding: 6px 8px; }
       scale, where width costs spectrum (Stuart, 2026-09-25: "so it isnt too wide"). Height is the
       cheaper dimension. Content-width and right-anchored, so it grows leftwards when a slot
       appears and shrinks when one goes away. */
-#srvHealth { position: fixed; top: 8px; right: 8px; z-index: 60; pointer-events: none;
+/* ★★★ V12 (2026-11-12): IT TUCKS INTO THE EDGE, like the app's EdgeChip (healthTuck.ts). #srvHealth is now the DOCK —
+       fixed to the corner, no box of its own and no pointer events — holding the CARD (the frame you see, joined to
+       the screen edge with a › on its left) and the TAB (a + and a ‹ that waits past the edge). Tucking slides the
+       card out and the tab in. The dock keeps the id, so the ADS-B map, handheld mode and the tutorial still find it. */
+#srvHealth { position: fixed; top: 8px; right: 0; z-index: 60; pointer-events: none; --hc: #5BE36B; }
+#srvHealth .hCard { pointer-events: auto; display: flex; align-items: stretch; touch-action: pan-y; user-select: none;
+             -webkit-user-select: none; cursor: grab;
              background: var(--ov-health, rgba(8,12,8,0.86)); border: 1.5px solid rgba(120,200,120,0.45);
-             border-radius: 12px; padding: 4px 8px 5px; }
+             border-right-width: 0; border-radius: 12px 0 0 12px;
+             padding: 4px calc(8px + env(safe-area-inset-right, 0px)) 5px 0;
+             transition: transform .26s cubic-bezier(.215,.61,.355,1); }
+#srvHealth .hCard.dragging { transition: none; cursor: grabbing; }
+#srvHealth.tucked .hCard { transform: translateX(calc(100% + 4px)); pointer-events: none; }
+/* The › — inside the frame, on the left, pointing at the edge it tucks into (the app's arrow). */
+#srvHealth .hTuck { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+             width: 18px; margin: -4px 2px -5px 0; padding-left: 3px; cursor: pointer; color: var(--hc);
+             font: 700 18px/1 system-ui, sans-serif; border-radius: 10px 0 0 10px; }
+#srvHealth .hTuck:hover { background: rgba(255,255,255,0.06); }
+#srvHealth .hTuck:focus-visible, #srvHealth .hTab:focus-visible { outline: 2px solid var(--hc); outline-offset: 1px; }
+#srvHealth .hBody { min-width: 0; }
+/* The tab: the app's 26 x 52, rounded on the left and open on the right, in the pill's own colour. */
+#srvHealth .hTab { all: unset; box-sizing: border-box; position: absolute; top: 0; right: 0; pointer-events: auto;
+             width: calc(26px + env(safe-area-inset-right, 0px)); padding-right: env(safe-area-inset-right, 0px);
+             height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+             cursor: pointer; color: var(--hc); background: var(--ov-health, rgba(14,12,8,0.88));
+             border: 1.5px solid var(--hc); border-right-width: 0; border-radius: 12px 0 0 12px;
+             transform: translateX(calc(100% + 2px)); transition: transform .26s cubic-bezier(.215,.61,.355,1); }
+#srvHealth.tucked .hTab { transform: translateX(0); }
+#srvHealth:not(.tucked) .hTab { pointer-events: none; }
+#srvHealth .hTabPlus { font: 800 18px/18px system-ui, sans-serif; }
+#srvHealth .hTabChev { font: 700 20px/20px system-ui, sans-serif; margin-top: -2px; }
+/* ★ Critical and tucked: the tab breathes as the card's border does — it comes back out anyway, but a box that was
+     already sliding it home should not leave a silent red tab. */
+#srvHealth.crit .hTab { animation: hBorderPulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  #srvHealth .hCard, #srvHealth .hTab { transition: none; }
+  #srvHealth.crit .hTab { animation: none; }
+}
 /* ★ CENTRED, BOTH ROWS. Whichever line is wider sets the pill's width, and the other must sit
      under it rather than hang off one end: with no battery the icon row is NARROWER than the
      caption and it read as left-aligned under a wider title (Stuart, 2026-09-25: "No battery the
@@ -3918,14 +3967,14 @@ select.btn { padding: 6px 8px; }
                           50%     { box-shadow: 0 0 9px rgba(255,75,75,0.8); } }
 #srvHealth .crit svg { animation: hBreathe 1.4s ease-in-out infinite;
                        filter: drop-shadow(0 0 3px currentColor); }
-#srvHealth.crit { animation: hBorderPulse 1.4s ease-in-out infinite; }
+#srvHealth.crit .hCard { animation: hBorderPulse 1.4s ease-in-out infinite; }
 /* ★★ A NON-COLOUR CUE FROM "HIGH" UPWARDS. Elevated and High differ only by hue, which is exactly
       the pair a red/green colour-blind listener cannot separate — so from High the slot also wears
       a dot. It is not only for reduced motion; it is for everyone. */
 #srvHealth .dot::after { content: ''; position: absolute; top: -1px; right: -2px;
                          width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
 @media (prefers-reduced-motion: reduce) {
-  #srvHealth .crit svg, #srvHealth.crit { animation: none; box-shadow: none; }
+  #srvHealth .crit svg, #srvHealth.crit .hCard { animation: none; box-shadow: none; }
 }
 
 

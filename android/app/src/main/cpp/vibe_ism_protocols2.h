@@ -15,6 +15,10 @@
 #include "vibe_ism_weather9.h"   // ★ weather pass 2026-11-11: EFTH-800, ThermoPro, Rubicson, Bresser 3CH, WT450
 #include "vibe_ism_weather10.h"  // ★ weather pass 2026-11-11: Bresser 5/6/7-in-1 FSK family, Maverick ET-73x, Companion WTR001
 #include "vibe_ism_weather11.h"  // ★ weather pass 2026-11-11: TFA Drop, Inkbird ITH-20R
+#include "vibe_ism_weather12.h"  // ★ weather pass 2 2026-11-12: La Crosse View (LTV), Bresser garden
+#include "vibe_ism_weather13.h"  // ★ weather pass 2 2026-11-12: ThermoPro FSK, WG-PB12V1, Thermor, Maverick ET-73
+#include "vibe_ism_weather14.h"  // ★ weather pass 2 2026-11-12: AOK / Holman WS5029, TS-FT002, TTX201, WS SENZOR
+#include "vibe_ism_weather15.h"  // ★ weather pass 2 2026-11-12: inFactory, Esun, EN2058, Marbella, Emax; Eurochron, Baldr, Missil
 #include "vibe_ism_tpms.h"     // ★ V12 2026-11-11: tyre-pressure sensors, make by make
 #include "vibe_ism_kit.h"        // ★ V12 2026-11-11: the home families' tools (Current Cost uses its NRZ rows)
 
@@ -449,6 +453,11 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 #include "vibe_ism_meters.h"
 #include "vibe_ism_security.h"
 #include "vibe_ism_remotes.h"
+#include "vibe_ism_meters2.h"    // ★ V12 2026-11-12: meters and monitors, second pass
+#include "vibe_ism_homeauto.h"   // ★ V12 2026-11-12: heating, blinds, lighting, smart home
+// ★ V12 2026-11-12: the second security / remotes pass — more alarm sensors, smoke alarms, doorbells; car fobs, gates
+#include "vibe_ism_security2.h"
+#include "vibe_ism_fobs.h"
 namespace vibeism {
 
 /** Every decoder, in turn, on every smoothing of the burst (finest first). The first that accepts it wins (a burst is one
@@ -479,12 +488,17 @@ inline bool bandPlausible(const Reading& r, double freqHz) {
     const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6, ism915 = freqHz >= 902e6 && freqHz <= 928e6;
     // ★ V12 2026-11-11: the home families that only ever send at 300–440 MHz (bandOk in vibe_ism_kit.h's families)
     if ((srd868 || ism915) && homeLowBandOnly(r)) return false;
+    if (!meters2BandOk(r, freqHz) || !homeautoBandOk(r, freqHz)) return false;   // ★ 2026-11-12: the second home pass
     if (!srd868) return true;
     return !(r.make == "AcuRite" || r.make == "Oregon Scientific" || r.kind == "tpms");
 }
 inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (oregon::decode(b, out)) return;
     if (fofsk::decode(b, out)) return;
+    if (wx12::decode(b, out)) return;
+    if (wx13::decode(b, out)) return;
+    if (wx14::decode(b, out)) return;
+    if (wx15::decode(b, out)) return;
     if (fineoffset::decodeWh1080(b, out)) return;
     if (fineoffset::decodeWh2(b, out)) return;
     if (sl109h::decode(b, out)) return;      // ★ before the 609: a background 609 inside an SL109H's channel must not win
@@ -504,10 +518,18 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (lacrosse::decodeWx3(b, out)) return;
     if (wx9::bresser3ch(b, out)) return;
     if (decodeMeters(b, out)) return;
+    if (decodeMeters2(b, out)) return;
+    if (decodeHomeauto(b, out)) return;
     if (decodeSecurity(b, out)) return;
+    if (decodeSecurity2(b, out)) return;
     if (decodeRemotes(b, out)) return;
+    if (decodeFobs(b, out)) return;
+    if (wx13::decodeWeak(b, out)) return;   // ★ no published check: after every family with one
+    if (wx14::decodeWeak(b, out)) return;
+    if (wx15::decodeWeak(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
+    if (owl::decode(b, out)) return;          // ★ 2026-11-12: after the remotes (vibe_ism_meters2.h)
     if (tyre::decode(b, out)) return;
 }
 

@@ -19,8 +19,12 @@ import { pushBack } from './gamepad';
 import { openCwGuide } from './cwGuide';
 import { QRZ_HOME, QRZ_SIGN_IN_NOTE } from '../../../src/utils/cwFormat';
 import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
+import { DRM_SEARCHING, drmBoxReading, type DrmQuality } from '../../../src/utils/drmQuality';
 import { setModeLabel } from './modeIconDom';   // ★ V12 mode icons
 import { modeLegend, isAmSync, AM_SYNC_NAME } from '../../../src/services/amSync';
+
+/** The reading box's own tooltip (DRM swaps in the decoder's explanation while it is on — paintDab). */
+const SNR_TITLE = 'Signal reading: SNR / S-meter / dBFS';
 
 /** ★★ V12 beta25 — the DC spike, explained for listeners (the app's ModeSelector carries the same words). */
 export const DC_SPIKE_EXPLAINED =
@@ -90,6 +94,10 @@ export type MobileDeps = {
   dabOn: () => boolean;
   /** ★★★ The DAB reception verdict (src/utils/dabQuality.ts) — null before a multiplex's first report. */
   dabQuality?: () => DabQuality | null;
+  /** ★★★ V12 DRM's reception verdict (src/utils/drmQuality.ts): the same bar, in DRM — the decoder's verdict and its own
+   *  SNR, never the passband's (which read 42 dB on a signal the decoder measured at 17–20). Absent on an older page. */
+  drmOn?: () => boolean;
+  drmQuality?: () => DrmQuality | null;
   toggleDab: () => void;
   /** ★★ ADS-B (V12) — a whole-radio mode like DAB, offered beside it. null = an older server (no entry);
    *  ok false = drawn DISABLED with the server's reason, never hidden (docs/v12/ADSB.md). */
@@ -273,7 +281,7 @@ export function initMobileControls(deps: MobileDeps) {
     }, 0);
   };
   $('mSnr').onclick = () => openMeterMenu($('mSnr'));
-  $('mSnr').title = 'Signal reading: SNR / S-meter / dBFS';
+  $('mSnr').title = SNR_TITLE;
 
   // ★★ THE VTS SITS IN THE SAME CORNER AS THIS CARD (#vts is bottom:14px), so without an
   //    offset the station strip draws straight over the controls. Publish the card's MEASURED
@@ -599,10 +607,13 @@ export function initMobileControls(deps: MobileDeps) {
   function paintDab(): boolean {
     const pill = $('mPill');
     const bar = $('mDabQ');
-    const q = deps.dabOn() ? (deps.dabQuality?.() ?? DAB_SEARCHING) : null;
+    // ★★ V12 and in DRM, DRM's verdict in the same bar (Stuart, 2026-11-12: "the same issue we had with the DAB MER")
+    const drm = !deps.dabOn() && !!deps.drmOn?.();
+    const q: DabQuality | null = deps.dabOn() ? (deps.dabQuality?.() ?? DAB_SEARCHING) : drm ? (deps.drmQuality?.() ?? DRM_SEARCHING) : null;
     if (pill.classList.contains('dab') !== !!q) pill.classList.toggle('dab', !!q);
     if (!q) {
       if (!bar.hidden) { bar.hidden = true; dabShown = ''; }
+      const snrEl = $('mSnr'); if (snrEl.title !== SNR_TITLE) snrEl.title = SNR_TITLE;   // ★ DRM's tooltip leaves with DRM
       return false;
     }
     const mSig = $('mSig');
@@ -611,14 +622,17 @@ export function initMobileControls(deps: MobileDeps) {
     const snrEl = $('mSnr');
     if (snrEl.classList.contains('sql')) snrEl.classList.remove('sql');
     // ★ MER in the box (DAB's SNR); the verdict is already in the bar beside it (Stuart, 2026-10-06).
-    put(snrEl, q.merDb !== undefined ? `MER ${Math.round(q.merDb)} dB` : q.short);
+    // ★★ In DRM the DECODER's SNR (the FAC's MER after the echoes and fading are undone), with its plain-words tooltip.
+    put(snrEl, drm ? drmBoxReading(q) : q.merDb !== undefined ? `MER ${Math.round(q.merDb)} dB` : q.short);
+    const tip = drm ? (q as DrmQuality).explain : SNR_TITLE;
+    if (snrEl.title !== tip) snrEl.title = tip;
     // ★ Write on change: this runs on every spectrum frame, the verdict changes about once a second at most.
-    const key = `${q.level}|${q.label}|${q.advice}|${q.detail ?? ''}`;
+    const key = `${drm ? 'drm' : 'dab'}|${q.level}|${q.label}|${q.advice}|${q.detail ?? ''}`;
     if (key !== dabShown) {
       dabShown = key;
       bar.hidden = false;
       bar.dataset.level = String(q.level);
-      bar.title = [q.label, q.advice, q.detail].filter(Boolean).join(' · ');
+      bar.title = [q.label, q.advice, q.detail].filter(Boolean).join(' · ') + (drm ? `\n\n${(q as DrmQuality).explain}` : '');
       put($('mDabQLbl'), q.label);
       put($('mDabQAdv'), q.advice);
       put($('mDabQDet'), q.detail ?? '');

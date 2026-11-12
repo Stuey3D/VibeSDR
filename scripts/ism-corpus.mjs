@@ -85,9 +85,19 @@ function sameSensorOtherFormat(o, exp) {
     return id.length >= 6 && sid.length >= 6 && (sid.endsWith(id) || id.endsWith(sid));
   });
 }
+/* ★ IDM AND NetIDM ARE ONE FRAME READ TWO WAYS (2026-11-12, the second home pass). rtl_433's own ert_idm.c notes:
+ *  the two share sync, packet type, length, version and CRC, "thus both will respond to the same packet" — nothing on
+ *  the air tells them apart, and its answer key for a recording lists whichever decoder the contributor kept. An IDM
+ *  reading of a recording keyed NETIDM, of the SAME meter (its ID in the key), is therefore not compared — it is
+ *  "decoded" — exactly as a TPMS sensor in its second format above. A different meter's IDM there is still compared. */
+function idmReadAsNetIdm(o, exp) {
+  if (o.make !== 'Itron ERT' || !/^IDM/.test(o.model || '') || !o.facts) return false;
+  if (!exp.length || !exp.every((e) => e.model === 'NETIDM')) return false;
+  return exp.some((e) => String(e.id) === String(o.facts.id));
+}
 function compare(ours, exp) {
   let comparable = false, agree = false;
-  ours = ours.filter((o) => !sameSensorOtherFormat(o, exp));
+  ours = ours.filter((o) => !sameSensorOtherFormat(o, exp) && !idmReadAsNetIdm(o, exp));
   for (const o of ours) for (const e of exp) {
     const eT = e.temperature_C ?? (typeof e.temperature_F === 'number' ? (e.temperature_F - 32) / 1.8 : undefined);
     const eK = e.pressure_kPa ?? (typeof e.pressure_PSI === 'number' ? e.pressure_PSI * 6.894757 : undefined)
@@ -118,6 +128,16 @@ function compare(ours, exp) {
   return { comparable, agree };
 }
 
+/* ★ ANSWER KEYS KNOWN TO BE EMPTY WHERE THE DEVICE IS ON THE AIR (2026-11-12, Stuart: switch CWPIRC on). Each entry is
+ *  one recording, the make it holds, and why: a reading of THAT make there is "decoded, no key", not a false alarm;
+ *  anything else read there still is one. Never a folder, never a pattern — one checked recording at a time. */
+const KEY_GAPS = {
+  'chamberlain_cwpirc/02/g036_915M_1000k.cu8': { make: 'Chamberlain', why: 'four CRC-16-valid frames of the CWPIRC sensor in 01 and 03 (the same fixed ID); its .json is empty' },
+};
+const keyGap = (f, ours) => {
+  const g = KEY_GAPS[path.relative(CORPUS, f)];
+  return !!g && ours.length > 0 && ours.every((o) => o.make === g.make);
+};
 const results = [];
 const queue = [...groups.entries()].flatMap(([k, fs]) => { const c = []; for (let i = 0; i < fs.length; i += 12) c.push([k, fs.slice(i, i + 12)]); return c; });
 let done = 0;
@@ -130,7 +150,7 @@ async function worker() {
       const exp = expected(f);
       let status;
       if (exp === null) status = ours.length ? 'decoded-nokey' : 'nokey';
-      else if (!exp.length) status = ours.length ? 'fp' : 'quiet';
+      else if (!exp.length) status = !ours.length ? 'quiet' : keyGap(f, ours) ? 'decoded-nokey' : 'fp';
       else if (!ours.length) status = 'miss';
       else { const c = compare(ours, exp); status = !c.comparable ? 'decoded' : c.agree ? 'match' : 'wrong'; }
       results.push({ folder: k, file: path.relative(CORPUS, f), status, ours: ours.map((o) => `${o.make} ${o.model}`.trim()),

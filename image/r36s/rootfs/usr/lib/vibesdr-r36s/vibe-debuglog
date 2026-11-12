@@ -1,0 +1,120 @@
+#!/bin/sh
+# vibe-debuglog — ONLY with `vibe.debuglog` on the kernel command line (extlinux.conf on VIBEBOOT, editable from any
+# computer): every 60 s, a snapshot of the running system to the card — Diagnostic logs/debuglog-<boot>.txt.
+# ★★ LIGHT (Stuart, 2026-11-07: the 15 s snapshots were the "random" CPU bursts to 70 %+): the heavy probes (every fd of
+#    every process, the sound controls, GL maps, devices) run in the FIRST snapshot only; later ones are cpufreq + its
+#    residency, top / top -H, memory, the units and the journal lines SINCE the last snapshot (a cursor), appended —
+#    never the last 4000 lines re-copied. One snapshot ≈ a few tenths of a second of one core.
+#
+# ★★★ WHY. The handheld has no SSH and no network (Stuart), and the journal lives in RAM. When the receiver itself
+#     will not come up (the first card, 2026-11-06: no audio, a waterfall row every ~10 s, START RADIO dead), the
+#     page's EXPORT DIAGNOSTICS cannot be reached. This writes what that export would, from outside the page, while
+#     the fault is happening — and the last snapshot survives a crash or a pulled battery.
+# ★ OFF BY DEFAULT (ConditionKernelCommandLine): the card is not a log disk. Each write is temp file + rename.
+# ★ No card mounted: the boot partition is remounted read-write for these writes only — a debug aid, never normal use.
+set -u
+CARD=/media/VIBESDR
+BOOT=/boot/firmware
+ID=$(cut -c1-8 /proc/sys/kernel/random/boot_id 2>/dev/null || echo boot)
+
+target() {
+  if mountpoint -q "$CARD"; then mkdir -p "$CARD/Diagnostic logs" 2>/dev/null && { echo "$CARD/Diagnostic logs"; return; }; fi
+  if mountpoint -q "$BOOT"; then mount -o remount,rw "$BOOT" 2>/dev/null && { echo "$BOOT"; return; }; fi
+  echo ""
+}
+
+snap() {
+  echo "=== vibe-debuglog $(date -u '+%Y-%m-%d %H:%M:%S UTC') · up $(cut -d' ' -f1 /proc/uptime) s · load $(cat /proc/loadavg)"
+  echo "image $(cat /etc/vibesdr-r36s-version 2>/dev/null) · kernel $(uname -r)"
+  echo "cmdline $(cat /proc/cmdline)"
+  echo; echo "=== cpufreq"
+  for p in /sys/devices/system/cpu/cpufreq/policy*; do
+    echo "$p: gov=$(cat "$p/scaling_governor" 2>/dev/null) cur=$(cat "$p/scaling_cur_freq" 2>/dev/null) min=$(cat "$p/scaling_min_freq" 2>/dev/null) max=$(cat "$p/scaling_max_freq" 2>/dev/null) avail=[$(cat "$p/scaling_available_frequencies" 2>/dev/null)]"
+  done
+  # ★★ POWER (Stuart, 2026-11-07: "anything else we can do to improve the battery life" — ~1 h 45 left at 60–70 %):
+  #    the battery's own current + voltage each snapshot (the draw, measured — not guessed from the % slope), and the
+  #    memory + GPU clocks' residency (trans_stat), so a saving is a number before and after
+  # ★ rk817-charger voltage_avg = the CHARGE PORT's input voltage (2026-11-11: the radio dropped off USB on charge)
+  for b in /sys/class/power_supply/*; do
+    echo "power $(basename "$b"): status=$(cat "$b/status" 2>/dev/null) cap=$(cat "$b/capacity" 2>/dev/null) uA=$(cat "$b/current_now" 2>/dev/null) uV=$(cat "$b/voltage_now" 2>/dev/null) uVavg=$(cat "$b/voltage_avg" 2>/dev/null) online=$(cat "$b/online" 2>/dev/null) uAavg=$(cat "$b/current_avg" 2>/dev/null) uW=$(cat "$b/power_now" 2>/dev/null) charge=$(cat "$b/charge_now" 2>/dev/null)"
+  done
+  echo "backlight $(cat /sys/class/backlight/*/brightness 2>/dev/null)/$(cat /sys/class/backlight/*/max_brightness 2>/dev/null)"
+  for g in /sys/class/devfreq/*; do
+    echo "devfreq $(basename "$g"): $(cat "$g/governor" 2>/dev/null) cur=$(cat "$g/cur_freq" 2>/dev/null) max=$(cat "$g/max_freq" 2>/dev/null) avail=[$(cat "$g/available_frequencies" 2>/dev/null)]"
+    grep -E '^ *\*? *[0-9]+:' "$g/trans_stat" 2>/dev/null | awk '{t=$NF; f=$1; if (f=="*") f=$2; print "    " f " " t " ms"}'
+  done
+  # ★★ the clocks the speaker's speed hangs on (handheld33: audio speed changed with the screen) — the PLLs, the I2S and the
+  #    GPU, with their parents (debugfs, if mounted)
+  [ -r /sys/kernel/debug/clk/clk_summary ] || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+  grep -E "^ *(npll|gpll|cpll|apll|dpll|clk_i2s1|i2s1|clk_gpu|aclk_gpu|dclk_vop|mclk)" /sys/kernel/debug/clk/clk_summary 2>/dev/null | awk '{print "clk " $0}' | head -24
+  # ★★ every regulator's SET voltage (2026-11-08: the OTG port's BOOST, usb_midu, fixed at 5.2 V by vibe-r36s.dts) — the
+  #    figure the PMIC was told, not a measurement; Stuart's inline meter is the measurement
+  for r in /sys/class/regulator/regulator.*; do
+    n=$(cat "$r/name" 2>/dev/null); [ -n "$n" ] || continue
+    echo "regulator $n: $(cat "$r/microvolts" 2>/dev/null || echo -) uV $(cat "$r/state" 2>/dev/null)"
+  done
+  for z in /sys/class/thermal/thermal_zone*; do echo "$z $(cat "$z/type" 2>/dev/null) $(cat "$z/temp" 2>/dev/null)"; done
+  echo; echo "=== memory"; free -m; cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io 2>/dev/null
+  echo; echo "=== top"; top -b -n 1 -w 200 2>/dev/null | head -30
+  echo; echo "=== threads (top -H)"; top -H -b -n 1 -w 200 2>/dev/null | sed -n '7,30p'
+  # ★ who is running hwclock (seen at 99.9 % in two snapshots, 2026-11-06/07) — its parent says why
+  for h in $(pgrep -x hwclock); do echo "hwclock pid $h parent: $(ps -o pid=,args= -p "$(ps -o ppid= -p "$h" | tr -d ' ')" 2>/dev/null)"; done
+  echo; echo "=== cpufreq residency (time_in_state, 10 ms units since boot)"
+  for p in /sys/devices/system/cpu/cpufreq/policy*; do tr '\n' ' ' < "$p/stats/time_in_state" 2>/dev/null; echo; done
+  [ "$FIRST" = 1 ] || { light_tail; return; }
+  echo; echo "=== GPU clients (fdinfo: which processes hold a DRM device, and the GPU time they have used)"
+  # ★★ the question for the slowness: does WPEWebProcess draw on Panfrost (drm-driver panfrost, engine time rising
+  #    snapshot to snapshot) or in software (no panfrost fd at all, or engine time stuck at 0)?
+  for pd in /proc/[0-9]*; do
+    for fd in "$pd"/fd/*; do
+      t=$(readlink "$fd" 2>/dev/null) || continue
+      case "$t" in /dev/dri/*)
+        echo "pid $(basename "$pd") $(tr '\0' ' ' < "$pd/cmdline" 2>/dev/null | cut -c1-60) -> $t"
+        grep -E '^drm-(driver|client-id|engine|cycles|maxfreq|curfreq|total|resident)' "$pd/fdinfo/$(basename "$fd")" 2>/dev/null | sed 's/^/    /'
+      ;; esac
+    done
+  done
+  for g in /sys/class/devfreq/*; do echo "devfreq $(basename "$g"): $(cat "$g/governor" 2>/dev/null) cur=$(cat "$g/cur_freq" 2>/dev/null) max=$(cat "$g/max_freq" 2>/dev/null) load=$(cat "$g/load" 2>/dev/null)"; done
+  echo; echo "=== sound: is anything playing?"
+  for st in /proc/asound/card*/pcm*p/sub*/status /proc/asound/card*/pcm*p/sub*/hw_params; do echo "-- $st"; cat "$st" 2>&1 | head -12; done
+  echo; echo "=== GL libraries mapped by the browser (panfrost_dri / libgallium = Mesa; llvmpipe can't be told apart here — see fdinfo)"
+  for pid in $(pgrep -f 'WPEWebProcess|/usr/bin/cog|vibe-hhui'); do echo "-- $pid $(tr '\0' ' ' < /proc/$pid/cmdline | cut -c1-40)"; grep -o -E '/[^ ]*(gallium|dri|EGL|GLES|gbm|llvm)[^ ]*' /proc/$pid/maps 2>/dev/null | sort -u; done
+  echo; echo "=== sound controls"; aplay -l 2>&1; for c in /proc/asound/card[0-9]*; do n=${c##*card}; echo "-- card $n"; amixer -c "$n" contents 2>&1 | head -80; done
+  echo; echo "=== failed units"; systemctl --failed --no-pager --no-legend 2>&1
+  echo; echo "=== our units"
+  for u in vibe-splash vibe-state vibe-card vibe-hwd vibe-clock vibe-cpu vibe-bootkeys vibeserver-handheld vibe-kiosk vibe-hhui; do
+    echo "$u: $(systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus --value "$u" 2>/dev/null | tr '\n' ' ')"
+  done
+  echo; echo "=== GPU / display / input / sound"
+  ls -l /dev/dri 2>&1; lsmod 2>/dev/null | grep -E '^(panfrost|mali|rockchipdrm|gpu_sched)' ; cat /sys/kernel/debug/dri/0/name 2>/dev/null
+  cat /proc/bus/input/devices 2>/dev/null | grep -E '^N: Name'
+  cat /proc/asound/cards 2>/dev/null; amixer -c rk817ext contents 2>&1 | grep -A2 -E "Master Playback Volume|Playback Mux" | head -12
+  ls -l /run/vibe-hwd.sock 2>&1
+  for u in /sys/bus/usb/devices/*; do [ -f "$u/idVendor" ] && echo "usb $(basename "$u") $(cat "$u/idVendor"):$(cat "$u/idProduct") $(cat "$u/product" 2>/dev/null)"; done
+  light_tail
+}
+light_tail() {
+  echo; echo "=== our units"
+  for u in vibe-hwd vibeserver-handheld vibe-hhui vibe-kiosk; do
+    echo "$u: $(systemctl show -p ActiveState,SubState,NRestarts --value "$u" 2>/dev/null | tr '\n' ' ')"
+  done
+  # ★ only the journal lines since the last snapshot (the cursor file lives in /run — RAM)
+  echo; echo "=== journal (new since the last snapshot)"
+  journalctl -b --no-pager -o short-monotonic --cursor-file=/run/vibe-debuglog.cursor 2>&1 | tail -3000
+}
+
+FIRST=1
+rm -f /run/vibe-debuglog.cursor
+while :; do
+  D=$(target)
+  if [ -n "$D" ]; then
+    F="$D/debuglog-$ID.txt"
+    # ★ APPENDED: one snapshot a minute (each with only the new journal lines) — never the whole file rewritten. A pulled
+    #   battery can cut the LAST snapshot short, never an earlier one. Capped: past 20 MB the file rolls to .1.
+    [ -f "$F" ] && [ "$(stat -c %s "$F" 2>/dev/null || echo 0)" -gt 20000000 ] && mv -f "$F" "$F.1"
+    snap >> "$F" 2>&1; sync "$F" 2>/dev/null
+    [ "$D" = "$BOOT" ] && mount -o remount,ro "$BOOT" 2>/dev/null
+  fi
+  FIRST=0
+  sleep 60
+done

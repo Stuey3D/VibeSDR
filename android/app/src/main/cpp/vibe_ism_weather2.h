@@ -68,7 +68,10 @@ namespace fofsk {
 
 inline bool parseAt(const Bits& row, size_t p, size_t preBits, std::vector<Reading>& out) {
     const auto b = bytesAt(row, p, 25);   // (25: the longest frame, the WS69's)
-    const size_t avail = row.size() > p ? (row.size() - p) / 8 : 0;
+    /* ★ weather pass 2 (2026-11-12): a frame's last bits are lost when they are 0s running into the end of the
+     *  transmission (the slicer has no edge to end them on) — bytesAt reads them as the 0s they were, so a byte short by
+     *  up to 3 bits still counts; the checks decide (the corpus: six WH32B frames 55 bits long) */
+    const size_t avail = row.size() > p ? (row.size() - p + 3) / 8 : 0;
     const uint8_t fam = b[0];
     if (fam == 0x24 && avail >= 17) {
         if (crc8(b.data(), 15, 0x31, 0) != b[15] || (wx::addBytes(b.data(), 16) & 0xFF) != b[16]) return false;
@@ -121,6 +124,32 @@ inline bool parseAt(const Bits& row, size_t p, size_t preBits, std::vector<Readi
         const int mv = (b[4] & 0x1F) * 100;
         r.battOk = mv >= 1300 ? 1 : 0;
         char e[40]; std::snprintf(e, sizeof e, "soil moisture %d %%", b[6]); r.extra = e;
+        out.push_back(r);
+        return true;
+    }
+    /* ★ weather pass 2 (2026-11-12; field facts: rtl_433 fineoffset_wn34.c, fineoffset_wh52.c notes):
+     *   0x34 / 0x38 WN34 (S soil / L water / D) and WN38 black-globe: ID 24 · subtype 4 + temperature 12 (signed; subtype 4
+     *   (WN34D, WN38): / 10 °C, else / 10 − 40) · battery 7 (× 20 mV) · CRC-8 0x31 over 0–6 · sum over 0–7.
+     *   0xA2 WH52 soil moisture / temperature / EC: ID 24 · boost 3 + temperature 13 (/ 10 − 40 °C) · moisture % · ? ·
+     *   EC 20 bits (bytes 8–10, low nibble of 8 on top; / 25.6 µS/cm, the notes' fit) · … · battery (byte 20, × 20 mV) ·
+     *   CRC-8 0x31 over 0–21 · sum over 0–22. */
+    if ((fam == 0x34 || fam == 0x38) && avail >= 9 && crc8(b.data(), 7, 0x31, 0) == b[7] && (wx::addBytes(b.data(), 8) & 0xFF) == b[8]) {
+        const int sub = b[4] >> 4, raw = int16_t((b[4] & 0xF) << 12 | b[5] << 4) >> 4;
+        Reading r = wx::wxReading("Ecowitt", fam == 0x38 ? "WN38 black-globe" : sub == 4 ? "WN34D" : "WN34", wx::hex(unsigned(b[1] << 16 | b[2] << 8 | b[3]), 6));
+        r.tempC = sub == 4 ? raw / 10.0 : raw / 10.0 - 40;
+        if (!wx::tempOk(r.tempC, -55, 125)) return false;
+        r.battOk = (b[6] & 0x7F) * 20 > 1200 ? 1 : 0;
+        out.push_back(r);
+        return true;
+    }
+    if (fam == 0xA2 && avail >= 24 && crc8(b.data(), 22, 0x31, 0) == b[22] && (wx::addBytes(b.data(), 23) & 0xFF) == b[23]) {
+        Reading r = wx::wxReading("Ecowitt", "WH52 soil", wx::hex(unsigned(b[1] << 16 | b[2] << 8 | b[3]), 6));
+        r.kind = "sensor";
+        r.tempC = ((b[4] & 0x1F) << 8 | b[5]) / 10.0 - 40;
+        const double ec = ((b[8] & 0xF) << 16 | b[9] << 8 | b[10]) / 25.6;
+        char e[64]; std::snprintf(e, sizeof e, "soil moisture %d %% · %.0f µS/cm", b[6], ec); r.extra = e;
+        r.fact("moisture", (long long)b[6]);
+        r.battOk = b[20] * 20 >= 1300 ? 1 : 0;
         out.push_back(r);
         return true;
     }

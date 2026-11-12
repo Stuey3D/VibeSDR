@@ -159,11 +159,22 @@ try {
       ok(await enterAndVanish(S, sid), 'in ADS-B, then the socket goes');
       await waitFor(() => gaveBack(S), 12_000);
       ok(gaveBack(S) && /ADS-B stays up for 5 s/.test(S.log()), 'idle grace 0: the radio is given back after 5 s, as before');
-      const A2 = spectrum(S.port, sid);
+      /* ★★ V12 2026-11-12 (arrivalResume): the SAME session coming back is put back in the mode by the server at its
+       *  arrival — it no longer finds "the waterfall on the old dial" (Stuart's report, the line this used to pin). */
+      const A1 = spectrum(S.port, sid);
+      await waitFor(() => parsed(A1, 'adsb').length > 0, 6000);
+      const cfgA = parsed(A1, 'config')[0] || {};
+      ok(parsed(A1, 'adsb').length > 0 && Math.abs(centreOf(cfgA) - ADSB) < 2e6,
+         `★ the same session back: in ADS-B again from its FIRST config (centre ${centreOf(cfgA)}), without asking`);
+      ok(/\[ADS-B\] session \[[0-9a-f]{8}\] is back, .* so it goes back in/.test(S.log()), '…logged with its reason');
+      A1.drop();
+      await waitFor(() => (S.log().match(/\[ADS-B\] last listener left — the receiver goes back/g) || []).length >= 2, 12_000);
+      // ★ The ask itself (an app on a socket that lapsed, or a new session id): granted on the same terms
+      const A2 = spectrum(S.port, crypto.randomUUID());
       await waitFor(() => parsed(A2, 'config').length > 0, 3000);
       await sleep(1500);
       const cfg = parsed(A2, 'config').at(-1) || {};
-      ok(parsed(A2, 'adsb').length === 0 && centreOf(cfg) < 500e6, `the returning socket finds the waterfall on the old dial (centre ${centreOf(cfg)}) — Stuart's report`);
+      ok(parsed(A2, 'adsb').length === 0 && centreOf(cfg) < 500e6, `a new session finds the radio given back (centre ${centreOf(cfg)})`);
       A2.send({ type: 'mode_resume', mode: 'adsb' });
       await waitFor(() => parsed(A2, 'adsb').length > 0, 6000);
       const ans = parsed(A2, 'mode_resume')[0] || {};

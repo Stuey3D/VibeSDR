@@ -627,6 +627,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <label><span class="lbl">Message</span>
           <textarea id="landingMessage" rows="3" maxlength="500"
             placeholder="e.g. The waterfall slows to 5 fps when nobody is listening. That is normal — turn it off in the menu."></textarea></label>
+        <div class="hint"><code>**bold**</code> and <code>*italic*</code> are allowed &mdash; nothing else.
+          No HTML; a link goes in the box below.</div>
         <div class="row">
           <label><span class="lbl">Link (optional)</span>
             <input type="url" id="landingLinkUrl" placeholder="https://…"></label>
@@ -7519,6 +7521,9 @@ function collect() {
  *  ★★ So the page asks for ONE number and SHOWS what follows from it. Asking for a range would be
  *     asking the owner to make a decision the server has already made correctly, and inviting them
  *     to open ports on a router that nothing outside the machine needs to reach.
+ *  ★★★ "THIS MACHINE ONLY" IS LITERAL, AND UNTIL 2026-11-12 IT WAS NOT TRUE: the radios bound 0.0.0.0, so
+ *      48001+ answered the whole network. Each radio now binds 127.0.0.1 behind the door (setBindLocalOnly in
+ *      main.cpp) — a forwarded 48001 reaches nothing, which is exactly what this sentence has always said.
  */
 function renderPortHint() {
   const el = $("srvPortHint");
@@ -7530,8 +7535,8 @@ function renderPortHint() {
   if (served > 0) {
     const last = base + served;
     msg += served === 1
-      ? ` The radio behind it uses ${base + 1} on this machine only.`
-      : ` The ${served} radios behind it use ${base + 1}\u2013${last} on this machine only.`;
+      ? ` The radio behind it uses ${base + 1} on this machine only \u2014 every listener comes in on this one.`
+      : ` The ${served} radios behind it use ${base + 1}\u2013${last} on this machine only \u2014 every listener comes in on this one.`;
   }
   el.textContent = msg;
 }

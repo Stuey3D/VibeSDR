@@ -95,11 +95,15 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
   //   neon base, whose deeper red blurred thin Nixie One strokes; VCR / DOT / Hyperlegible are as they were.
   const dim = nixie ? NEON_TEXT.advice : lit ? rgba(litRgb, 0.9) : 'rgba(255,255,255,0.86)';
   const sentence = [q.label, q.advice, q.detail].filter(Boolean).join('. ');
+  // ★★ V12 the same meter in DRM (utils/drmQuality.ts): its verdict says DRM, and the hint says why the decoder's SNR is
+  //    not the signal meter's (DrmQuality.explain)
+  const explain = (q as { explain?: string }).explain;
 
   return (
     <View
       onLayout={(e: LayoutChangeEvent) => { const nw = Math.round(e.nativeEvent.layout.width); setW(p => (p === nw ? p : nw)); }}
-      accessible accessibilityRole="text" accessibilityLabel={`DAB reception: ${sentence}`}
+      accessible accessibilityRole="text" accessibilityLabel={`${explain ? 'DRM' : 'DAB'} reception: ${sentence}`}
+      accessibilityHint={explain}
       style={{
         height, alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center', paddingHorizontal: padH, gap: 6,
         // ★ The track the line it replaces drew (SignalCanvas: ct.meterTrack); the housing and the frame have their own.

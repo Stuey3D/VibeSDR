@@ -43,7 +43,11 @@ fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     { serial: 'bgfd-rtl', driver: 'rtlsdr', label: 'RTL', enabled: true, configured: true, users: 1, rate: 2048000 },
   ],
 }));
-const rtlPort = await freePort();
+// ★★ EVERY PORT DISTINCT (2026-11-12). freePort() can hand back P+1 — the RSP's own port. On macOS that used to pass by
+//    accident: the radio bound 0.0.0.0 beside the fake's 127.0.0.1 and the test's loopback probe reached the FAKE. Now
+//    the radio binds 127.0.0.1 itself (setBindLocalOnly) and the clash is an honest "already in use".
+let rtlPort = 0;
+while (!rtlPort || (rtlPort >= P && rtlPort <= P + 2)) rtlPort = await freePort();
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2048000'], { stdio: 'ignore' });
 await sleep(300);
 const env = { ...process.env, VIBESERVER_NO_RADIO_SPAWN: '1', VIBESERVER_BG_WAIT_SEC: '3',

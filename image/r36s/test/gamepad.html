@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<!-- gamepad.html — what the kiosk's page sees of the pads (navigator.getGamepads via Cog's libmanette backend), and
+     whether a pad button press is a gesture that starts WebAudio (the client keeps its start screen: A starts audio). -->
+<html><body style="background:#070907;color:#e8f5ec;font:18px sans-serif">
+<p id="o">gamepad test</p>
+<script>
+const say = (s) => { console.log('[gamepad] ' + s); document.getElementById('o').textContent += ' · ' + s; };
+const ctx = new AudioContext();
+const g = ctx.createGain(); g.gain.value = 0.03;
+const osc = ctx.createOscillator(); osc.frequency.value = 440; osc.connect(g).connect(ctx.destination); osc.start();
+say('audio ' + ctx.state);
+addEventListener('gamepadconnected', (e) => say('connected #' + e.gamepad.index + ' "' + e.gamepad.id + '" mapping=' + e.gamepad.mapping + ' buttons=' + e.gamepad.buttons.length + ' axes=' + e.gamepad.axes.length));
+let seen = '', last = [];
+function poll() {
+  const pads = [...navigator.getGamepads()].filter(Boolean);
+  const ids = pads.map((p) => p.id).join(' | ');
+  if (ids !== seen) { seen = ids; say('pads now: ' + (ids || 'none')); }
+  for (const p of pads) {
+    p.buttons.forEach((b, i) => {
+      const k = p.index + ':' + i;
+      if (b.pressed && !last.includes(k)) {
+        say('button ' + i + ' pressed on "' + p.id + '"');
+        ctx.resume().then(() => say('resume after pad button: ' + ctx.state)).catch((e) => say('resume rejected ' + e));
+        setTimeout(() => say('500 ms after the press: audio ' + ctx.state), 500);
+      }
+    });
+    last = p.buttons.map((b, i) => b.pressed ? p.index + ':' + i : null).filter(Boolean);
+  }
+  requestAnimationFrame(poll);
+}
+requestAnimationFrame(poll);
+setTimeout(() => osc.stop(), 25000);
+</script></body></html>

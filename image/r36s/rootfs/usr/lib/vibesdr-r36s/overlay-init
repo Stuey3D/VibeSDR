@@ -1,0 +1,34 @@
+#!/bin/sh
+# overlay-init — PID 1 for a moment: put a RAM overlay over the read-only root, then hand over to systemd.
+#
+# ★★★ WHY. The handheld's power can vanish at any instant (a flat battery, a pulled cell). The root filesystem is never
+#     written on the device: the kernel mounts it READ-ONLY (`ro` on the command line), and this script lays a tmpfs
+#     overlay on top so Debian's ordinary writes (/etc, /var, caches, logs) go to RAM and vanish at power-off. What must
+#     survive lives on the small ext4 state partition (/var/lib/vibe-state, journalled) and the exFAT VIBESDR card
+#     partition — both mounted later by systemd, both checked at every boot. Same idea as the Portable's overlayroot,
+#     without an initramfs: ROCKNIX's kernel has its own built in, which we skip (rdinit=, see README "Boot chain").
+# ★ The read-only root stays visible at /media/root-ro (developer fixes: `mount -o remount,rw /media/root-ro`), the
+#   RAM layer at /media/root-rw.
+# ★ Any failure: boot the read-only root as it is (exec systemd directly) rather than stop — a read-only Debian still
+#   runs the receiver; it only loses the writable /etc.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+fallback() { echo "overlay-init: $* — starting systemd on the read-only root" > /dev/kmsg 2>/dev/null; exec /sbin/init; }
+
+mount -t proc proc /proc 2>/dev/null
+grep -qw vibe.nooverlay /proc/cmdline && { umount /proc; exec /sbin/init; }
+
+mount -t tmpfs -o mode=0755,size=40% tmpfs /media/root-rw || fallback "no tmpfs"
+mkdir -p /media/root-rw/upper /media/root-rw/work /media/root-rw/newroot
+mount -t overlay -o lowerdir=/,upperdir=/media/root-rw/upper,workdir=/media/root-rw/work overlay /media/root-rw/newroot \
+  || fallback "overlay mount failed"
+cd /media/root-rw/newroot || fallback "no newroot"
+# pivot: the overlay becomes /, the ext4 root moves to /media/root-ro
+pivot_root . media/root-ro || fallback "pivot_root failed"
+# the tmpfs is still mounted under the old root; move it, and the kernel's /dev, into the new tree
+mount --move /media/root-ro/media/root-rw /media/root-rw 2>/dev/null
+mount --move /media/root-ro/dev /dev 2>/dev/null || mount -t devtmpfs devtmpfs /dev
+umount /media/root-ro/proc 2>/dev/null
+# ★★ no stdio redirect: PID 1 already holds the kernel's console, and a failed redirect (no /dev/console) would end the
+#    shell — PID 1 exiting is a kernel panic. A failed exec falls back to systemd on the read-only root.
+exec chroot . /sbin/init "$@"
+fallback "exec chroot failed"

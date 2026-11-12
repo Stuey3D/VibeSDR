@@ -290,6 +290,8 @@ export interface SDRBackend {
   dabScanGet?(): void;
   /** ★ The DAB Signal pane is open — scopes (constellation, impulse response) only then (dab=2, dabAssemble.ts). */
   dabScopes?(on: boolean): void;
+  /** ★★ V12 the DRM Signal pane is open — its constellation (drm_iq) only then (VibeServer; an older one sends none). */
+  drmScopes?(on: boolean): void;
   /** ★ Raw IQ out for this session (VibeServer). */
   iqOut?(on: boolean, rate?: number): void;
   /** True while a multiplex is being decoded. The UI locks the zoom drum and the VFO out on this:

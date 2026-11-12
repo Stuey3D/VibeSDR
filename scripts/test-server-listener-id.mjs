@@ -14,6 +14,10 @@
 //     • a server that predates `bid` ignores an unknown query parameter — shown by the address-only rule applying
 //       unchanged when the parameter is junk the server must discard (the server's own shape check).
 // ★ Connections come from the machine's LAN address, so the loopback exemption (which only an ADDRESS key gets) is out.
+// ★★ THROUGH THE FRONT DOOR (2026-11-12). A radio's own port behind the door answers 127.0.0.1 only now
+//    (setBindLocalOnly), so a LAN connection straight to it is refused — this test used to make exactly those. It now
+//    runs the door the way systemd does and connects to ws://<lan>:<door>/r/<id>/…, the path every real client takes;
+//    the handed-over socket is the client's own, so the radio still sees the LAN address.
 // ★ SILENT: audio sockets are opened only so each listener is a real one; their frames are counted, never played.
 //   usage: VIBESERVER_BIN=… node scripts/test-server-listener-id.mjs
 import net from 'node:net';
@@ -86,12 +90,20 @@ const APP = {
   audio: (sid, bid) => `/ws/audio?user_session_id=${sid}${bid ? `&bid=${bid}` : ''}&codec=opus`,
 };
 
-/** One listener on one radio: spectrum + audio. Resolves to 'in' (hwinfo/config arrived), or the refusal's radio name. */
-async function listen(kind, port, sid, bid) {
-  const spec = ws(port, kind.spec(sid, bid), lan);
+/** FNV-1a, as vsconfig::radioId — the /r/<id> the door routes. */
+const radioId = (serial) => {
+  let h = 1469598103934665603n; const M = (1n << 64n) - 1n;
+  for (const c of Buffer.from(serial)) { h ^= BigInt(c); h = (h * 1099511628211n) & M; }
+  return ((h ^ (h >> 32n)) & 0xffffffffn).toString(16).padStart(8, '0');
+};
+
+/** One listener on one radio: spectrum + audio. Resolves to 'in' (hwinfo/config arrived), or the refusal's radio name.
+ *  `to` = { port: the door's, prefix: '/r/<id>' }. */
+async function listen(kind, to, sid, bid) {
+  const spec = ws(to.port, to.prefix + kind.spec(sid, bid), lan);
   const verdict = await waitFor(() => spec.txt.some((t) => /"type":"(elsewhere|config|hwinfo)"/.test(t)), 6000);
   const el = spec.txt.find((t) => t.includes('"type":"elsewhere"'));
-  const audio = el ? null : ws(port, kind.audio(sid, bid), lan);
+  const audio = el ? null : ws(to.port, to.prefix + kind.audio(sid, bid), lan);
   if (audio) await waitFor(() => audio.bin > 0 || audio.closed, 4000);
   return { spec, audio, result: !verdict ? 'nothing' : el ? `elsewhere:${JSON.parse(el).radio}` : 'in',
            audioOk: !!audio && audio.bin > 0 && !audio.closed };
@@ -105,7 +117,8 @@ async function leave(...ls) {
 async function machine(tag, cap) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-lid-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
-  const cfg = { configured: true, name: 'Listener id test', adminPass: 'lid-test-admin',
+  const door = await freePort();
+  const cfg = { configured: true, name: 'Listener id test', adminPass: 'lid-test-admin', port: door,
     radios: [{ serial: 'lid-a', driver: 'rtlsdr', label: 'Radio A', enabled: true, configured: true, users: 4, rate: 2048000 },
              { serial: 'lid-b', driver: 'rtlsdr', label: 'Radio B', enabled: true, configured: true, users: 4, rate: 2048000 }] };
   if (cap !== null) cfg.maxRadiosPerIp = cap;   // ★ null = the owner never touched it: the default
@@ -114,8 +127,14 @@ async function machine(tag, cap) {
                 VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
   const ports = {};
   const logs = [];
+  { const lf = path.join(dir, 'door.log'); logs.push(lf);
+    const d = spawn('nice', ['-n', '19', BIN], { env, stdio: ['ignore', fs.openSync(lf, 'w'), fs.openSync(lf, 'a')] });
+    children.add(d); }
   for (const serial of ['lid-a', 'lid-b']) {
-    const rtlPort = await freePort(), port = await freePort();
+    // ★ every port distinct from the door's (freePort can hand the same one back once it is closed)
+    let rtlPort = door, port = door;
+    while (rtlPort === door) rtlPort = await freePort();
+    while (port === door || port === rtlPort) port = await freePort();
     const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2048000'], { stdio: 'ignore' });
     children.add(rtl);
     await sleep(300);
@@ -125,13 +144,16 @@ async function machine(tag, cap) {
     children.add(srv);
     ports[serial] = port;
   }
-  for (const p of Object.values(ports))
+  // ★ The radios' own ports answer loopback only; the door answers the LAN — wait for all three.
+  for (const [p, host] of [...Object.values(ports).map((q) => [q, '127.0.0.1']), [door, lan]])
     for (let i = 0; i < 150; i++) {
-      if (await new Promise((r) => { const c = net.connect(p, lan); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); })) break;
+      if (await new Promise((r) => { const c = net.connect(p, host); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); })) break;
       await sleep(100);
     }
+  // ★ …and for the radios to take their hand-off sockets (after their servers are up), or the door answers for them.
+  await waitFor(() => ['lid-a', 'lid-b'].every((sr) => fs.existsSync(path.join(dir, 'run', `${sr}.sock`))), 10_000);
   const occ = path.join(dir, 'run', 'occupants');
-  return { A: ports['lid-a'], B: ports['lid-b'], log: () => logs.map((l) => fs.readFileSync(l, 'utf8')).join('\n'),
+  return { A: { port: door, prefix: `/r/${radioId('lid-a')}` }, B: { port: door, prefix: `/r/${radioId('lid-b')}` }, log: () => logs.map((l) => fs.readFileSync(l, 'utf8')).join('\n'),
            // ★ Between cases: both radios' claims released (a leave clears the file; a stale one ages out at 15 s).
            settle: () => waitFor(() => !fs.existsSync(occ) || fs.readdirSync(occ).length === 0, 17_000),
            stop: () => killAll() };

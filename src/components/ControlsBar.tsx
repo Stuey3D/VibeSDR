@@ -55,6 +55,7 @@ import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
 import DabMeter from './DabMeter';
 import { DAB_SEARCHING, type DabQuality } from '../utils/dabQuality';
+import { DRM_SEARCHING } from '../utils/drmQuality';
 import { GhostGrid, SegDigits, VfdFilaments } from './VfdParts';
 import { TUBE_DESIGN, PIP_H, COLLAR_SHOWN, CLEAR, type NixieLayout } from '../constants/nixie';
 import { composeModeLabel, modeBoxFit, MODE_BOX, segModeFont, segModeFieldWidth, segReadingGeometry, segUnitFont } from '../constants/modeBox';
@@ -644,6 +645,11 @@ export interface ControlsBarProps {
   /** ★★★ The DAB reception verdict (utils/dabQuality.ts) — drawn in the signal bar's place while `dabOn`.
    *  Null before the first report of a multiplex: the meter then says it is searching. */
   dabMeter?: DabQuality | null;
+  /** ★★★ V12 DRM's reception verdict (utils/drmQuality.ts) — DAB's meter, in DRM (Stuart, 2026-11-12: the decoder read
+   *  17–20 dB on a signal the S-meter called S9+20 and the R36S 42 dB): the signal bar's slot draws the decoder's verdict
+   *  and the mode box the DECODER's own SNR, exactly as DAB. Drawn while `drmOn`; null before the first report. */
+  drmOn?: boolean;
+  drmMeter?: DabQuality | null;
   /** ★★ THE AIRBAND CHANNEL, when tuned on one (118–137 MHz, AM) — computed by the parent from
    *  utils/airband.ts, null everywhere else. Like an aviation radio the readout then shows the
    *  channel NAME ("118.010"), with the spacing and the true frequency ("8.33 · 118.0083") small
@@ -3266,7 +3272,7 @@ function ControlsBar({
   srvTzOffsetMin = null, srvTzAbbr = '',
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
-  fmStereo = false, activeDecoder = null, dabOn = false, dabMeter = null,
+  fmStereo = false, activeDecoder = null, dabOn = false, dabMeter = null, drmOn = false, drmMeter = null,
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onAudio, audioAsRecord = false, onFreqTap, onModeTap,
   // ★ The audio chain's standing state — drawn only when ON, see DspBadges.
@@ -3536,7 +3542,8 @@ function ControlsBar({
           See briefs/BRIEF-tvos-app.md §2. */}
       <FreqReadoutContext.Provider value={readout}>
       {/* ★ Only while DAB is on: a verdict that outlived the mode would describe a multiplex nobody is on. */}
-      <DabMeterContext.Provider value={dabOn ? (dabMeter ?? DAB_SEARCHING) : null}>
+      {/* ★★ V12 …and DRM's, in the same slots (one context: every meter slot already knows how to draw it) */}
+      <DabMeterContext.Provider value={dabOn ? (dabMeter ?? DAB_SEARCHING) : drmOn ? (drmMeter ?? DRM_SEARCHING) : null}>
       {band
         ? <UiScaleOverride.Provider value={bandScale}><LandscapeBar {...shared} /></UiScaleOverride.Provider>
         : <PortraitBar  {...shared} />

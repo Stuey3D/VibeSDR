@@ -47,6 +47,16 @@ public:
     // and has no authentication, so it must never leave loopback by accident.
     static void setServeOnLan(bool on);
     static bool serveOnLan();
+    /** ★★★ WHERE THE PORT IS BOUND, SEPARATELY FROM WHETHER WE ARE SERVING (2026-11-12 security pass).
+     *  serveOnLan() is BEHAVIOUR as well as an address: it switches off loopback-is-owner trust and
+     *  switches on the owner's rate, FFT and bandwidth caps and the gain locks. A radio process behind
+     *  the front door must keep all of that exactly as a serving radio — its listeners are remote people
+     *  whose sockets the door handed over — while its OWN TCP port answers this machine only. true =
+     *  bind 127.0.0.1 whatever serveOnLan says. Call BEFORE start(). Off by default, so every server
+     *  that is reached on its own port (Simple mode, the Android server app, the Mac's in-process
+     *  Simple server) binds exactly as before. */
+    static void setBindLocalOnly(bool on);
+    static bool bindLocalOnly();
 
     // VibeServer PIN auth. When a non-empty secret is set, incoming LAN clients
     // must pass an HMAC-SHA256(secret, nonce) challenge-response before the
@@ -738,6 +748,26 @@ public:
     };
     using PocketHttpFn = std::function<bool(const PocketHttpRequest&, PocketHttpReply&)>;
     static void setPocketHttpHandler(PocketHttpFn fn);
+    /** ★★★ THE HANDHELD PROFILE (R36S, docs/v12/R36S-HANDHELD-IMAGE.md §0.1-§0.2, 2026-11-05). One radio, one owner,
+     *  on 127.0.0.1: /vibeserver.json says `"handheld":true` so the page drops every piece of server furniture. Set by
+     *  `vibeserver --handheld-radio` (the radio process the handheld supervisor starts); false everywhere else. */
+    static void setHandheld(bool on);
+    static bool handheld();
+    /** ★ The web client's own bytes, for the handheld supervisor to serve while no radio is plugged in (it owns the
+     *  port, and the page must load to say "Please connect an SDR"). `path` "/" (the page) or "/vs/…"; `encoding` is
+     *  "", "gzip" or "br". False for anything else. */
+    static bool webAssetFor(const std::string& path, bool acceptsBr, bool acceptsGzip,
+                            std::string& body, std::string& contentType, std::string& encoding);
+    /** ★ The handheld's card layout for the gallery: items under `filesDir` ("<card>/Gallery"), one folder per decoder,
+     *  person-readable names, temp + rename writes (vibe_gallery.h CardLayout). Call BEFORE setGallery. "" = off. */
+    static void setGalleryCardLayout(const std::string& filesDir);
+    /** ★★ The map's files — /mapdata/v1/* (the bundled vector map and the detail pack) and /mapgl/* (the GPU map,
+     *  Range for its PMTiles) — answered on `fd` with the same lookup and rules a server uses (vibe_mapdata.h,
+     *  vibe_mapgl.h). For the handheld supervisor: the map is static files on the device and must work with NO radio
+     *  plugged in (the "Please connect an SDR" screen, Location's map). `path` without its query. The fd is the
+     *  caller's: it is dup()ed here and the copy closed. False for any other path (nothing sent). */
+    static bool serveMapAsset(int fd, const std::string& method, const std::string& path, bool acceptGzip,
+                              const std::string& range);
     /** ★ The box's own hotspot is up: requests for a FOREIGN host reach the pocket handler (it
      *  redirects them), and the front door stops refusing paths it does not know before it has
      *  seen the Host header. False everywhere but a pocket box in hotspot mode. */
@@ -821,6 +851,9 @@ public:
     /** File the shim persists bookmarks to. It owns them, so it saves them — the app's
      *  JS timer could not, being suspended whenever the server was actually serving. */
     static void setBookmarksPath(const std::string& path);
+    /** ★ The file the last DAB band scan is kept in — PER RADIO (the standalone server names it by serial). Call BEFORE
+     *  setBookmarksPath; without it the shim keeps "dab-scan.txt" beside the bookmarks. Read at once. */
+    static void setDabScanFile(const std::string& path);
     /** mDNS hostname responder: answer "<host>.local" with this IPv4. Renames itself
      *  (vibesdr-2, …) if the name is already taken on the network — RFC 6762 probing. */
     static void startMdns(const std::string& host, const std::string& ipv4);

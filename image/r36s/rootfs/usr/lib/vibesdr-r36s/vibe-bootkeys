@@ -1,0 +1,64 @@
+#!/usr/bin/python3 -I
+# vibe-bootkeys — is Start + Select held while the handheld powers on? Then write /run/vibe-handheld/reset-radio: the
+# engine resets the memory of the radio that connects next (§0.2), and the splash says so.
+#
+# ★★ READ BEFORE THE ENGINE STARTS (vibe-bootkeys.service is Before=vibeserver-handheld.service), straight from evdev.
+# ★★ THE PAD IS A POLLED DEVICE: rocknix-singleadc-joypad only samples its buttons while someone has it OPEN, so the
+#    key state means nothing until a poll or two has run. We open it, read for 0.4 s, and only then ask for the state.
+# ★ Waits up to 6 s for the pad: it is a module, loaded by udev's coldplug. No pad = no reset, never an error.
+import fcntl, glob, os, select, sys, time
+
+BTN_SELECT, BTN_START = 0x13A, 0x13B
+EVIOCGKEY = lambda n: (2 << 30) | (n << 16) | (ord("E") << 8) | 0x18
+FLAG_DIR = os.environ.get("VIBE_HANDHELD_RUN", "/run/vibe-handheld")
+FLAG = FLAG_DIR + "/reset-radio"
+
+def find_pad():
+    if os.environ.get("VIBE_BOOTKEYS_DEV"):          # ★ tests: a uinput stand-in for the pad
+        return os.environ["VIBE_BOOTKEYS_DEV"]
+    for p in glob.glob("/sys/class/input/event*"):
+        try:
+            if open(p + "/device/name").read().strip() == "r36s_Gamepad":
+                return "/dev/input/" + os.path.basename(p)
+        except OSError:
+            pass
+    return None
+
+def held(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 0.4:
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if r:
+                try:
+                    os.read(fd, 4096)
+                except BlockingIOError:
+                    pass
+        bits = bytearray(96)
+        fcntl.ioctl(fd, EVIOCGKEY(len(bits)), bits)
+        down = lambda c: bool(bits[c // 8] & (1 << (c % 8)))
+        return down(BTN_START) and down(BTN_SELECT)
+    finally:
+        os.close(fd)
+
+def main():
+    os.makedirs(FLAG_DIR, exist_ok=True)
+    t0 = time.monotonic()
+    pad = None
+    while time.monotonic() - t0 < 6 and not (pad := find_pad()):
+        time.sleep(0.1)
+    if not pad:
+        print("vibe-bootkeys: no r36s_Gamepad — nothing to check", file=sys.stderr)
+        return
+    if held(pad):
+        with open(FLAG + ".tmp", "w") as f:
+            f.write("start+select at power-on %d\n" % int(time.time()))
+        os.rename(FLAG + ".tmp", FLAG)
+        print("vibe-bootkeys: Start + Select held — radio settings will be reset", file=sys.stderr)
+        os.system("/usr/lib/vibesdr-r36s/vibe-splash-ctl message 'Radio settings reset'")
+    else:
+        print("vibe-bootkeys: normal start", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()

@@ -444,6 +444,8 @@ export interface SDRCallbacks {
   /** ★ V12 DRM, VIBESERVER-ONLY: this listener's DRM receiver's report (about once per 1.2 s super frame) while their mode
    *  is DRM (vibe_drm_listener.h; src/services/drm.ts checks it). */
   onDrm?:       (s: import('./drm').DrmState) => void;
+  /** ★★ V12 the DRM constellation ({"type":"drm_iq"}), only while the Signal pane asked for it (drmScopes). */
+  onDrmIq?:     (q: import('./drm').DrmIq) => void;
   /** ★ V12 CTCSS / DCS TONE ID, VIBESERVER-ONLY: the NFM channel's sub-audible tone or DCS code as the server reads it
    *  ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), sent when it changes; '' = none locked. Shown as the VTS line's quiet
    *  suffix (SDRScreen toneLabel). */

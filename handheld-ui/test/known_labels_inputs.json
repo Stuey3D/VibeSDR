@@ -1,0 +1,482 @@
+{
+ "eibi": [
+  {
+   "name": "GYA Northwood Meteo Fax",
+   "frequency": 2618500,
+   "comment": "0000-2400 · -TY"
+  },
+  {
+   "name": "NOJ Fax Kodiak",
+   "frequency": 4298000,
+   "comment": "0000-2400 · -TY"
+  },
+  {
+   "name": "Shannon HFDL (ID7)",
+   "frequency": 5547000,
+   "comment": "0000-2400 · -HF"
+  },
+  {
+   "name": "Shannon HFDL",
+   "frequency": 5547500,
+   "comment": "0000-2400 · -HF"
+  },
+  {
+   "name": "Tokyo Volmet x10,x40",
+   "frequency": 6679000,
+   "comment": "0000-2400 · E"
+  },
+  {
+   "name": "BBC World Service",
+   "frequency": 5875000,
+   "comment": "0500-0700 · E"
+  },
+  {
+   "name": "XYZ Telefax Station",
+   "frequency": 6000000,
+   "comment": "0000-2400 · E"
+  },
+  {
+   "name": "Kyiv Meteofax",
+   "frequency": 9500000,
+   "comment": "1200-1300 · -TY"
+  },
+  {
+   "name": "Some beacon",
+   "frequency": 7023000,
+   "comment": "0000-2400 · -CW"
+  },
+  {
+   "name": "NAVTEX Cullercoats",
+   "frequency": 8416500,
+   "comment": "0000-2400"
+  },
+  {
+   "name": "Night RTTY",
+   "frequency": 8000000,
+   "comment": "2300-0100 · -TY"
+  },
+  {
+   "name": "VFF Avenida Brigadeiro Faria Lima Fax",
+   "frequency": 3000000,
+   "comment": "0000-2400"
+  },
+  {
+   "name": "São Paulo Volmet",
+   "frequency": 4000000
+  },
+  {
+   "name": "Radio Taiwan Int RTTY (x2)",
+   "frequency": 11000000,
+   "comment": "1100-1400 · E"
+  },
+  {
+   "name": "DDK9 Pinneberg",
+   "frequency": 10100800,
+   "comment": "0000-2400 · -TY"
+  },
+  {
+   "name": "Hamburg Wx Fax 2",
+   "frequency": 7880500,
+   "comment": "0000-2400"
+  },
+  {
+   "name": "New York Volmet",
+   "frequency": 6604000,
+   "comment": "0000-2400 · E"
+  },
+  {
+   "name": "Gander HFDL",
+   "frequency": 6604500,
+   "comment": "0000-2400 · -HF"
+  },
+  {
+   "name": "Teletype",
+   "frequency": 4583000,
+   "comment": "0000-2400 · -TY"
+  },
+  {
+   "name": "Wxfax Bracknell",
+   "frequency": 4500000,
+   "comment": "0000-2400"
+  },
+  {
+   "name": "Ostend RTTY",
+   "frequency": 4565000,
+   "comment": "0000-2400 · -TY"
+  },
+  {
+   "name": "Unknown -TY",
+   "frequency": 4570000,
+   "comment": "0000-2400, -TY;E"
+  },
+  {
+   "name": "ABC123 Metfax Ship",
+   "frequency": 4580000,
+   "comment": "0600-0600"
+  }
+ ],
+ "bookmarks": [
+  {
+   "name": "BBC Radio 2",
+   "frequency": 88800000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "PIC204 89.1MHz",
+   "frequency": 89100000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Heart",
+   "frequency": 96900000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 1
+  },
+  {
+   "name": "Classic FM",
+   "frequency": 100900000,
+   "mode": "wfm",
+   "manual": false
+  },
+  {
+   "name": "My   long    favourite station name",
+   "frequency": 6195000,
+   "mode": "am",
+   "manual": true
+  },
+  {
+   "name": "DAB svc",
+   "frequency": 225648000,
+   "mode": "dab",
+   "manual": false,
+   "sid": 193
+  },
+  {
+   "name": "DAB saved",
+   "frequency": 225648000,
+   "mode": "dab",
+   "manual": true,
+   "sid": 194
+  },
+  {
+   "name": "Repeater",
+   "frequency": 145600000,
+   "mode": "nfm",
+   "manual": true,
+   "repeater": true
+  },
+  {
+   "name": "Northwood mine",
+   "frequency": 4610000,
+   "mode": "usb",
+   "manual": true
+  },
+  {
+   "name": "Capital",
+   "frequency": 95800000,
+   "mode": "wfm",
+   "manual": true
+  },
+  {
+   "name": "Capital learnt",
+   "frequency": 95800500,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 3
+  },
+  {
+   "name": "AM station",
+   "frequency": 909000,
+   "manual": true
+  },
+  {
+   "name": "Radio X",
+   "frequency": 104900000,
+   "mode": "WFM",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Airband",
+   "frequency": 118000000,
+   "mode": "am",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "NFM learnt",
+   "frequency": 90000000,
+   "mode": "nfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station A FM",
+   "frequency": 87600000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station B FM",
+   "frequency": 88700000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station C FM",
+   "frequency": 89800000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station D FM",
+   "frequency": 90900000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station E FM",
+   "frequency": 92000000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station F FM",
+   "frequency": 93100000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station G FM",
+   "frequency": 94200000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station H FM",
+   "frequency": 95300000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station I FM",
+   "frequency": 96400000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station J FM",
+   "frequency": 97500000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station K FM",
+   "frequency": 98600000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station L FM",
+   "frequency": 99700000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station M FM",
+   "frequency": 100800000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station N FM",
+   "frequency": 101900000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station O FM",
+   "frequency": 103000000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station P FM",
+   "frequency": 104100000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station Q FM",
+   "frequency": 105200000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  },
+  {
+   "name": "Station R FM",
+   "frequency": 106300000,
+   "mode": "wfm",
+   "manual": false,
+   "nameSrc": 2
+  }
+ ],
+ "nowMins": [
+  750,
+  30,
+  360,
+  1439
+ ],
+ "layoutNowMin": 750,
+ "views": [
+  {
+   "name": "hf4_6",
+   "lo": 4550000,
+   "span": 100000,
+   "width": 640,
+   "dial": 4608100,
+   "blocked": [
+    {
+     "row": 0,
+     "x0": 0,
+     "x1": 30
+    },
+    {
+     "row": 1,
+     "x0": 0,
+     "x1": 30
+    }
+   ]
+  },
+  {
+   "name": "40m",
+   "lo": 7000000,
+   "span": 100000,
+   "width": 640,
+   "dial": 7074000,
+   "blocked": [
+    {
+     "row": 0,
+     "x0": 0,
+     "x1": 30
+    },
+    {
+     "row": 1,
+     "x0": 0,
+     "x1": 30
+    }
+   ]
+  },
+  {
+   "name": "fm",
+   "lo": 87500000,
+   "span": 20500000,
+   "width": 640,
+   "dial": 93700000,
+   "blocked": [
+    {
+     "row": 0,
+     "x0": 0,
+     "x1": 30
+    },
+    {
+     "row": 1,
+     "x0": 0,
+     "x1": 30
+    },
+    {
+     "row": 0,
+     "x0": 190,
+     "x1": 290
+    }
+   ]
+  },
+  {
+   "name": "hf0_30",
+   "lo": 0,
+   "span": 30000000,
+   "width": 640,
+   "dial": 10000000,
+   "blocked": []
+  },
+  {
+   "name": "edge",
+   "lo": 4520000,
+   "span": 90000,
+   "width": 640,
+   "dial": 4560000,
+   "blocked": [
+    {
+     "row": 0,
+     "x0": 0,
+     "x1": 30
+    },
+    {
+     "row": 1,
+     "x0": 0,
+     "x1": 30
+    }
+   ]
+  },
+  {
+   "name": "mf",
+   "lo": 400000,
+   "span": 200000,
+   "width": 1280,
+   "dial": 518000,
+   "blocked": [
+    {
+     "row": 0,
+     "x0": 0,
+     "x1": 30
+    },
+    {
+     "row": 1,
+     "x0": 0,
+     "x1": 30
+    }
+   ],
+   "pad": 4
+  },
+  {
+   "name": "dial_nan",
+   "lo": 6580000,
+   "span": 120000,
+   "width": 640,
+   "dial": null,
+   "blocked": [
+    {
+     "row": 0,
+     "x0": 0,
+     "x1": 30
+    },
+    {
+     "row": 1,
+     "x0": 0,
+     "x1": 30
+    }
+   ]
+  }
+ ]
+}

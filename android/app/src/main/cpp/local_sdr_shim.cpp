@@ -45,6 +45,7 @@
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_room_passband.h"   // ★ the shared chain's passband edges, reported in config (2026-10-17)
 #include "vibe_hwinfo.h"
+#include "vibe_dab_scan_store.h"   // ★ the last DAB band scan, on disk — see g_dabScanFile
 #include "vibe_mqtt.h"        // ★ the external antenna switch (2026-10-09) — see g_ext below
 #include "vibe_antswitch.h"
 #include "vibe_port_names.h"  // ★ V12 the owner's names for the radio's own antenna ports — see g_portNamesJson
@@ -209,6 +210,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_watch.h"            // ★★ V12 VFO A/B: a listener's watch channels (docs/v12/VFO-AB.md)
 #include "vibe_vfo_dc.h"           // ★★ V12: a FREE VFO's DC spike moved out of its way (vfoDcPlace)
 #include "vibe_icom_decode.h"      // ★★ V12: the mode / filter an Icom needs for a decoder to hear its signal
+#include "vibe_local_speaker.h"    // ★★★ V12 R36S: the handheld engine plays its own audio (no browser audio)
 #if VIBE_HAVE_ICOM
 #include "icom_source.h"            // ★★★ an Icom transceiver as a RECEIVER (docs/ICOM-SUPPORT-PLAN.md)
 #endif
@@ -963,6 +965,7 @@ vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k) {
 // LAN bind flag + PIN secret + compatibility limits + audio-codec toggle. The
 // public setter methods that write these live after the Impl struct.
 static std::atomic<bool>   g_serveOnLan{false};
+static std::atomic<bool>   g_bindLocalOnly{false};   // ★ the bind ADDRESS only — see setBindLocalOnly
 static std::mutex          g_vsMtx;
 static std::string         g_vsSecret;                 // empty = no PIN (open)
 /** ★ THIS radio's own PIN — see setVibeServerRadioAuth. Empty = the server's setting alone
@@ -1177,13 +1180,34 @@ static vibefm::State vsFmChannelStart(const std::string& session) {
     g_fm.setRegion(vibebands::defaultRegion());
     return g_fm.channelStart(session);
 }
+static void vsPersist(const std::string& patch);   // ★ defined below — the config persist handler
 static void vsFmNote(const std::string& session, const vibefm::State& st) {
-    std::lock_guard<std::mutex> lk(g_fmMtx);
-    g_fm.note(session, st);
+    bool adopted = false;
+    { std::lock_guard<std::mutex> lk(g_fmMtx);
+      g_fm.note(session, st);
+      /* ★★★ THE HANDHELD: the owner's change IS the owner's default (vibe_fm_defaults.h adoptAsDefaults — Stuart,
+       *  2026-11-12: Broadcast FM NR "doesnt stay enabled on power off and on on the R36S"). Never on a server. */
+      if (LocalSdrShim::handheld()) {
+          g_fm.setRegion(vibebands::defaultRegion());
+          const vibefm::Defaults d = vibefm::adoptAsDefaults(g_fm.defaults(), st, vibebands::defaultRegion());
+          if (!(d == g_fm.defaults())) { g_fm.adoptDefaults(d); g_fmConfigured = true; adopted = true; }
+      } }
+    if (!adopted) return;
+    /* ★ Written as the LATEST defaults, read under the same lock that writes it — two quick presses on two threads can
+     *  never leave the older one on disk. The persist handler folds the fm* keys into this radio's entry (temp +
+     *  rename); the config watcher's re-read then finds them equal to g_fm's and forgets nobody. */
+    static std::mutex persistMtx;
+    std::lock_guard<std::mutex> pl(persistMtx);
+    std::string patch;
+    { std::lock_guard<std::mutex> lk(g_fmMtx); patch = "{" + vibefm::toJson(g_fm.defaults()) + "}"; }
+    vsPersist(patch);
+    LOGI("handheld: Broadcast FM row kept as this radio's starting values (%s)", patch.c_str());
 }
 static bool vsFmRemember() { std::lock_guard<std::mutex> lk(g_fmMtx); return g_fm.remember(); }
 /** Writes the shared pipeline's DESIRED record (g_dsp — defined further down) so a freshly built Impl starts there. */
 static void vsFmRecordDesired(const vibefm::State& st);
+/** ★ The shared pipeline's HF NOISE BLANKER into g_dsp, so a fresh Impl replays it (defined beside vsFmRecordDesired). */
+static void vsRecordNbx(bool on);
 /** ★ The owner's display name for this radio (Android's "SDR display name") — see setRadioLabel. */
 static std::mutex            g_vsRadioLabelMtx;
 static std::string           g_vsRadioLabel;
@@ -1203,13 +1227,8 @@ static std::atomic<bool>     g_dabScanCancel{false};
  *  ★ g_dabScanNoRestore: the scan was ended by somebody TUNING (a tap on a result, a block step, a mode change). The
  *    shared dial obeys the person tuning it, so the scan does not put the old block back over their choice. */
 static std::atomic<bool>     g_dabScanNoRestore{false};
-struct DabBandScanHit {
-    int idx = -1;
-    std::string ensemble;
-    std::vector<std::pair<uint32_t, std::string>> services;   // playable audio, labelled — what the station list offers
-    float fibRate = 0.0f, merDb = 0.0f;
-    bool complete = false;
-};
+/* ★ One ensemble the scan found — the on-disk store's own type (vibe_dab_scan_store.h), so what is saved is what is shown. */
+using DabBandScanHit = vibedabscan::Hit;
 struct DabBandScanState {
     bool running = false;
     std::string by;                 // "setup" (the owner, idle radio), "listener" (a single-user radio), "admin"
@@ -1221,9 +1240,82 @@ struct DabBandScanState {
     double startedAt = 0.0, secs = 0.0;
     uint32_t seq = 0;               // bumps on every change — the setup page polls on it
     bool lock = false;              // ★ V12: an owner's scan on a shared radio — listeners are locked out (g_scanLock)
+    int64_t at = 0;                 // ★ when the scan ENDED (unix seconds) — 0 while one runs; sent as "at" when known
 };
 static std::mutex       g_dabBandMtx;
 static DabBandScanState g_dabBand;
+/* ★★★ THE LAST SCAN SURVIVES A RESTART (2026-11-12, Stuart on the R36S: "after a DAB scan … if I power off and on again
+ *  the DAB multiplexes are forgotten and the scan button is present again"). g_dabBand was memory only, so EVERY server
+ *  forgot it too — on a settings save (which restarts the radio process), an update, a reboot. Now a finished scan is
+ *  written to g_dabScanFile (per radio — main.cpp names it by serial; Android derives it beside the bookmarks) and read
+ *  back at start, so dab_scan_get answers with it and MULTIPLEXES is offered again. The DX sweep's borrowed runs are
+ *  never written (they put the owner's list back themselves). A missing or read-only place: the list lives in memory,
+ *  as before, and one line says so. Under g_dabBandMtx for the name; the write itself under g_dabScanFileMtx. */
+static std::string      g_dabScanFile;
+static bool             g_dabScanFileExplicit = false;   // ★ main.cpp named it — setBookmarksPath's default stands aside
+static std::mutex       g_dabScanFileMtx;
+/** ★ The last COMPLETE picture of the band (loaded, or what the last scan left) — what a scan that stops part-way keeps
+ *  for the blocks it never reached. Under g_dabBandMtx. */
+static std::vector<DabBandScanHit> g_dabBandPrev;
+/** Read the saved scan into g_dabBand — at start only, never over a scan that is running. */
+static void dabBandLoadSaved(const std::string& path) {
+    vibedabscan::Saved sv;
+    const bool ok = vibedabscan::load(path, sv);
+    std::lock_guard<std::mutex> lk(g_dabBandMtx);
+    if (g_dabBand.running) return;
+    g_dabBand = DabBandScanState{};
+    g_dabBandPrev.clear();
+    if (!ok) return;   // ★ nothing saved (or not ours): no list, so the SCAN key shows
+    g_dabBand.finished = true;
+    g_dabBand.cancelled = sv.cancelled;
+    g_dabBand.by = sv.by;
+    g_dabBand.why = sv.why;
+    g_dabBand.secs = sv.secs;
+    g_dabBand.at = sv.at;
+    g_dabBand.total = int(vibedab::kBandIIICount);
+    g_dabBand.done = sv.cancelled ? 0 : int(vibedab::kBandIIICount);
+    g_dabBand.hits = std::move(sv.hits);
+    g_dabBandPrev = g_dabBand.hits;
+    LOGI("[DAB] band scan: the last scan's %zu ensemble(s) remembered from %s", g_dabBand.hits.size(), path.c_str());
+}
+/** A scan has just ENDED (never a running one, never the DX sweep's): settle its list and write it.
+ *  ★★ A SCAN THAT STOPS PART-WAY DOES NOT FORGET THE REST OF THE BAND. Cancelled at 7A, tuned away at 9C, or never
+ *     started ("another program has the radio"): the blocks it walked are this scan's answer, and the blocks it never
+ *     reached keep what the last scan found there. Without this a SCAN AGAIN pressed and cancelled at once would wipe
+ *     a good list — now for good, on disk.
+ *  ★ No ensembles at all after a FULL walk: nothing to remember — the file goes, so the next start offers SCAN. */
+static void dabBandSaveFinished() {
+    std::string path, text;
+    bool empty;
+    {
+        std::lock_guard<std::mutex> lk(g_dabBandMtx);
+        DabBandScanState& st = g_dabBand;
+        if (st.running || !st.finished || st.by == "dxscan") return;
+        const int walked = std::max(0, std::min(st.done, int(vibedab::kBandIIICount)));
+        if (walked < int(vibedab::kBandIIICount)) {
+            for (const auto& h : g_dabBandPrev) {
+                if (h.idx < walked) continue;
+                bool have = false;
+                for (const auto& n : st.hits) if (n.idx == h.idx) { have = true; break; }
+                if (!have) st.hits.push_back(h);
+            }
+            std::stable_sort(st.hits.begin(), st.hits.end(), [](const DabBandScanHit& x, const DabBandScanHit& y) { return x.idx < y.idx; });
+        }
+        g_dabBandPrev = st.hits;
+        if (g_dabScanFile.empty()) return;
+        path = g_dabScanFile;
+        empty = st.hits.empty();
+        vibedabscan::Saved sv;
+        sv.at = st.at; sv.secs = int(st.secs + 0.5); sv.cancelled = st.cancelled;
+        sv.by = st.by; sv.why = st.why; sv.hits = st.hits;
+        text = vibedabscan::serialise(sv);
+    }
+    std::lock_guard<std::mutex> fl(g_dabScanFileMtx);
+    if (empty) { ::unlink(path.c_str()); return; }
+    std::string err;
+    if (!vibedabscan::writeAtomic(path, text, &err))
+        LOGI("[DAB] band scan: could not save the list to %s (%s) \xe2\x80\x94 it is kept until the radio restarts", path.c_str(), err.c_str());
+}
 /* ★★★ THE OWNER'S SCANS FROM THE ADMIN PAGE (V12, 2026-11-04 — Stuart: "in here is where there should be a button for FM
  *  scan and DAB scan so a server admin can trigger a scan on a server", and "When a server owner has triggered a scan to
  *  store stations on a shared VFO it should say ADMIN Triggered SCAN In Progress, Please Wait and the controls get locked
@@ -1459,6 +1551,7 @@ static std::string dabBandJsonLocked() {
                   + ",\"seq\":" + std::to_string(st.seq);
     if (!st.why.empty()) j += ",\"why\":\"" + dabEscape(st.why) + "\"";
     if (st.lock) j += ",\"lock\":true";   // ★ V12: only when set — an older client never sees it
+    if (st.at > 0) j += ",\"at\":" + std::to_string((long long)st.at);   // ★ when it ended — a saved list says how old it is
     j += ",\"found\":[";
     bool first = true;
     for (const auto& h : st.hits) {
@@ -5686,6 +5779,7 @@ static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::SdrChangesGetFn g_vsSdrChangesGet;   // ★ guarded by g_vsConfigMtx
 static LocalSdrShim::SdrChangeSetFn  g_vsSdrChangeSet;
 static LocalSdrShim::PocketHttpFn    g_vsPocketHttp;      // ★ guarded by g_vsConfigMtx — see setPocketHttpHandler
+static std::atomic<bool>             g_vsHandheld{false}; // ★ the R36S handheld profile — see LocalSdrShim::setHandheld
 static std::atomic<bool>             g_vsCaptiveActive{false};
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
@@ -6608,6 +6702,143 @@ static int vsKickMinutes(double m, bool given) {
 }
 
 struct LocalSdrShim::Impl {
+#if defined(__linux__) && !defined(__ANDROID__)
+    /* ★★★ V12 R36S — THE SPEAKER SOCKETS (vibe_local_speaker.h). On the handheld the page opens its audio socket with
+     *  `speaker=1`: the session, the codec choice and every control stay exactly as they are, but the PCM meant for that
+     *  socket goes to the codec here instead of over the wire (sendWs). `speakerTap` = ALSO send it — while the page is
+     *  recording to the card, which taps the stream it is sent. Only on the handheld (g_vsHandheld, loopback only). */
+    std::mutex speakerMtx;
+    std::vector<std::weak_ptr<net::Socket>> speakerSocks;   // under speakerMtx
+    std::atomic<bool> speakerTap{false};
+    std::atomic<float> speakerLevel{1.0f};                   // the page's volume × mute, 0..1
+    std::unique_ptr<vibe::LocalSpeaker> speaker;             // made on first use, under speakerMtx
+    static void speakerLog(const char* s) { LOGI("%s", s); }
+    void speakerMark(const std::shared_ptr<net::Socket>& sock) {
+        std::lock_guard<std::mutex> lk(speakerMtx);
+        speakerSocks.erase(std::remove_if(speakerSocks.begin(), speakerSocks.end(),
+            [](const std::weak_ptr<net::Socket>& w) { auto p = w.lock(); return !p || !p->isOpen(); }), speakerSocks.end());
+        speakerSocks.push_back(sock);
+        if (!speaker) speaker.reset(new vibe::LocalSpeaker(&Impl::speakerLog));
+        LOGI("audio WS is the handheld's speaker socket — its PCM plays here, not in the browser");
+    }
+    /* ★★★ PLAYING A RECORDING ON THE HANDHELD (Stuart, 2026-11-08: "we need a way of playing the recordings on the device").
+     *  The speaker is the engine's (it holds the sound device), so the engine plays the file: {"type":"playRec","name":…}
+     *  starts it, "seek":±s moves it, "stop":1 ends it; the radio's own audio waits meanwhile (sendWs) and comes back when
+     *  it stops. Only from the card's Recordings/ (VIBE_HANDHELD_RECDIR, set by the supervisor), only a bare file name —
+     *  never a path. 16-bit PCM WAV (what REC writes), any rate (linear to 48 kHz), mono or stereo, through the page's
+     *  volume like the radio. Progress to the socket that asked: {"type":"playRec","name","pos","dur","playing"}. */
+    std::atomic<bool> recPlayOn_{false};
+    std::atomic<double> recPlaySeek_{0};
+    std::atomic<uint64_t> recPlayGen_{0};
+    std::atomic<int> recPlayRunning_{0};   // ★ detached players still alive (a joinable thread at exit would abort)
+    void recPlayStop() {
+        recPlayGen_.fetch_add(1);
+        for (int i = 0; i < 100 && recPlayRunning_.load() > 0; i++) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        recPlayOn_.store(false);
+    }
+    void recPlayStart(const std::shared_ptr<net::Socket>& sock, const std::string& name) {
+        recPlayStop();
+        const char* dirE = std::getenv("VIBE_HANDHELD_RECDIR");
+        auto refuse = [&](const char* why) { sendText(sock, std::string("{\"type\":\"playRec\",\"playing\":false,\"error\":\"") + why + "\"}"); };
+        if (!dirE || !*dirE || !g_vsHandheld.load()) { refuse("no card"); return; }
+        if (name.empty() || name.find('/') != std::string::npos || name.find("..") != std::string::npos || name[0] == '.') { refuse("no such recording"); return; }
+        const std::string path = std::string(dirE) + "/" + name;
+        FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) { refuse("no such recording"); return; }
+        // the RIFF chunks: fmt (16-bit PCM) and data
+        unsigned ch = 0, rate = 0, bits = 0; long dataAt = -1; uint32_t dataLen = 0;
+        char hd[12];
+        if (std::fread(hd, 1, 12, f) == 12 && std::memcmp(hd, "RIFF", 4) == 0 && std::memcmp(hd + 8, "WAVE", 4) == 0) {
+            char id[4]; uint32_t sz = 0;
+            while (std::fread(id, 1, 4, f) == 4 && std::fread(&sz, 4, 1, f) == 1) {
+                if (std::memcmp(id, "fmt ", 4) == 0) {
+                    uint8_t b[16] = {0};
+                    if (sz < 16 || std::fread(b, 1, 16, f) != 16) break;
+                    const unsigned fmt = b[0] | (b[1] << 8);
+                    ch = b[2] | (b[3] << 8); rate = b[4] | (b[5] << 8) | (b[6] << 16) | ((unsigned)b[7] << 24); bits = b[14] | (b[15] << 8);
+                    if (fmt != 1) ch = 0;
+                    std::fseek(f, (long)sz - 16 + (sz & 1), SEEK_CUR);
+                } else if (std::memcmp(id, "data", 4) == 0) { dataAt = std::ftell(f); dataLen = sz; break; }
+                else std::fseek(f, (long)sz + (sz & 1), SEEK_CUR);
+            }
+        }
+        if (dataAt < 0 || (ch != 1 && ch != 2) || bits != 16 || rate < 8000 || rate > 192000) { std::fclose(f); refuse("not a recording this can play"); return; }
+        const double dur = (double)(dataLen / (ch * 2)) / rate;
+        recPlaySeek_.store(0);
+        recPlayOn_.store(true);
+        const uint64_t gen = recPlayGen_.load();
+        std::weak_ptr<net::Socket> ws = sock;
+        recPlayRunning_.fetch_add(1);
+        std::thread([this, f, ch, rate, dataAt, dataLen, dur, gen, ws, name] {
+            const uint64_t frames = dataLen / (ch * 2);
+            double pos = 0;                                   // in source frames
+            const double step = (double)rate / 48000.0;       // source frames per output frame
+            const unsigned outBlk = 960;                      // 20 ms at 48 kHz
+            std::vector<int16_t> src, out((size_t)outBlk * 2);
+            auto tick = std::chrono::steady_clock::now();
+            double lastSaid = -1;
+            LOGI("playing a recording: %s (%.1f s, %u Hz, %u ch)", name.c_str(), dur, rate, ch);
+            while (recPlayGen_.load() == gen) {
+                const double sk = recPlaySeek_.exchange(0);
+                if (sk != 0) pos = std::max(0.0, std::min((double)frames - 1, pos + sk * rate));
+                if (pos >= (double)frames - 1) break;
+                const uint64_t need = (uint64_t)std::ceil(outBlk * step) + 2;
+                const uint64_t i0 = (uint64_t)pos;
+                src.assign((size_t)need * ch, 0);
+                std::fseek(f, dataAt + (long)(i0 * ch * 2), SEEK_SET);
+                const size_t got = std::fread(src.data(), 2, src.size(), f) / ch;
+                if (got < 2) break;
+                const float lv = speakerLevel.load(std::memory_order_relaxed);
+                unsigned made = 0;
+                for (; made < outBlk; made++) {
+                    const double p = pos - (double)i0 + made * step;
+                    const size_t k = (size_t)p; const double fr = p - (double)k;
+                    if (k + 1 >= got) break;
+                    for (unsigned c = 0; c < 2; c++) {
+                        const unsigned sc = ch == 2 ? c : 0;
+                        const double v = (src[k * ch + sc] * (1 - fr) + src[(k + 1) * ch + sc] * fr) * lv;
+                        out[made * 2 + c] = (int16_t)std::lround(std::max(-32768.0, std::min(32767.0, v)));
+                    }
+                }
+                if (made == 0) break;
+                pos += made * step;
+                {
+                    std::lock_guard<std::mutex> sl(speakerMtx);
+                    if (speaker) speaker->push(out.data(), (int)made, 2);
+                }
+                // ★ real time: 20 ms a block (the speaker's own converter matches the device's clock)
+                tick += std::chrono::microseconds((long long)made * 1000000 / 48000);
+                std::this_thread::sleep_until(tick);
+                const double at = pos / rate;
+                if (std::fabs(at - lastSaid) >= 0.25 || lastSaid < 0) {   // ★ either way: a seek BACK must be said too
+                    lastSaid = at;
+                    if (auto s = ws.lock()) {
+                        char b[400];
+                        std::snprintf(b, sizeof b, "{\"type\":\"playRec\",\"name\":\"%s\",\"pos\":%.2f,\"dur\":%.2f,\"playing\":true}", jsonEscape(name).c_str(), at, dur);
+                        sendText(s, b);
+                    }
+                }
+            }
+            std::fclose(f);
+            const bool mine = recPlayGen_.load() == gen;
+            if (mine) recPlayOn_.store(false);
+            if (auto s = ws.lock()) {
+                char b[400];
+                std::snprintf(b, sizeof b, "{\"type\":\"playRec\",\"name\":\"%s\",\"pos\":%.2f,\"dur\":%.2f,\"playing\":false}", jsonEscape(name).c_str(), pos / rate, dur);
+                sendText(s, b);
+            }
+            LOGI("recording playback ended: %s", name.c_str());
+            recPlayRunning_.fetch_sub(1);
+        }).detach();
+    }
+    /** ★ The speaker, if `sock` is a speaker socket; nullptr otherwise (every ordinary socket — the fast no). */
+    vibe::LocalSpeaker* speakerFor(const net::Socket* sock) {
+        if (!g_vsHandheld.load(std::memory_order_relaxed)) return nullptr;
+        std::lock_guard<std::mutex> lk(speakerMtx);
+        for (auto& w : speakerSocks) { auto p = w.lock(); if (p && p.get() == sock && p->isOpen()) return speaker.get(); }
+        return nullptr;
+    }
+#endif
     bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
     vibe::DecFeedResampler decFeed;       // feedDecoderPcm — ONE continuous resampler (vibe_decfeed_resampler.h)
     std::vector<float> pcmResid;          // upsample carry (fractional sample pos)
@@ -7164,6 +7395,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  completing transfers, so the capture thread sits there forever and any detection that waits
      *  for that call to return waits for ever too. Silence is the signal. */
     std::atomic<double> lastIqAt{0.0};
+    /** ★★ DID THE DONGLE'S USB DELIVER EVERY SAMPLE? (R36S, 2026-11-08.) Stuart's V4 has spikes on the R36S that
+     *  sound the same on every band, from DAB to ADS-B — the same dongle and antenna are clean on the Mac, moving
+     *  the dongle changes nothing, and the R36S's 5 V reads less steady than the Mac's on a meter. Our own IQ queue
+     *  already says when IT throws a buffer away ("IQ overrun", 0 in every R36S session). What nothing could see is
+     *  the step BEFORE us: a USB host that does not resubmit transfers in time lets the RTL2832's FIFO overflow,
+     *  and those samples never arrive — "short bytes, not corrupt bytes" (the XCover, see vibe-rtl). So the
+     *  callback counts what it receives against the rate the dongle was set to, over a minute measured by the
+     *  arrival of the buffers themselves (the first buffer of a window only starts the clock; its samples belong
+     *  to the time before it).
+     *  ★ Callback-thread state (rtlChk*) is touched by the capture thread only: it is reset there before
+     *    rtlsdr_read_async, whose callback runs on that same thread. The finished minute is handed to the
+     *    watchdog to print — the callback is the thread whose lateness loses data, so it never writes a log.
+     *  ★ Every rate change stops and relaunches capture, which resets the window: no minute spans two rates. */
+    double rtlChkStart = 0.0, rtlChkLast = 0.0, rtlChkMaxGap = 0.0, rtlChkRate = 0.0;
+    uint64_t rtlChkN = 0;
+    int rtlChkWindows = 0;                        // complete minutes since this capture started
+    struct RtlChkReport { double secs = 0, rate = 0, maxGap = 0; uint64_t got = 0; bool first = false; };
+    RtlChkReport rtlChkOut;                       // written by the callback while ready is false, then released
+    std::atomic<bool> rtlChkReady{false};
     // ★ When the RSP's tuner was last written. A retune burst (block-stepping through Band III at
     //   0.8 s a hop, 2026-09-15) pauses the callback for longer than the watchdog's 3 s, and a
     //   re-Init issued INTO that burst is what hung the API service. Recent writes widen the
@@ -9669,6 +9919,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (j.compare(0, kHead.size(), kHead) != 0) return j;
         return kHead + (moves ? ",\"zoomMovesRadio\":true" : ",\"zoomMovesRadio\":false") + j.substr(kHead.size());
     }
+    /** ★★ V12 THE DRM CONSTELLATION on a range-locked radio: this listener's own receiver sends to this listener's own
+     *  spectrum socket, and only while that socket has the Signal pane open (drmScopeSocks). Called under c->mtx — the
+     *  lock that guards c->drm — after a new receiver is built and whenever the pane opens or closes. Lock order c->mtx →
+     *  clientMtx (as drmSendStatus) → drmScopeMtx (a leaf). The sink holds only a weak socket: it never keeps one alive. */
+    void drmClientSinkSync(ClientDsp* c) {
+        if (!c || !c->drm) return;
+        std::shared_ptr<net::Socket> sp;
+        { std::lock_guard<std::mutex> lk(clientMtx); sp = c->spec; }
+        bool want = false;
+        if (sp) { std::lock_guard<std::mutex> lk(drmScopeMtx); want = drmScopeSocks.count(sp.get()) != 0; }
+        if (!want) { c->drm->setCellsSink(nullptr); return; }
+        std::weak_ptr<net::Socket> w = sp;
+        c->drm->setCellsSink([this, w](const std::string& j) {
+            if (auto sk = w.lock()) if (sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+        });
+    }
     /** ★ V12 DRM: the status report on this listener's spectrum socket, when it has changed (≤ once a super frame). */
     void drmSendStatus(ClientDsp* c) {
         uint64_t ver = 0;
@@ -9963,7 +10229,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     ★ setIqMinRate() is a no-op when the floor is unchanged (vibedsp.h) — it used to rebuild the audio chain on
         //       every call, which was a second, smaller hole in the IQ on the same zoom.
         if (c->mode == "drm") {
-            if (!c->drm || c->drmAtHz != c->vfoHz) { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->drmAtHz = c->vfoHz; }
+            if (!c->drm || c->drmAtHz != c->vfoHz) { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->drmAtHz = c->vfoHz; drmClientSinkSync(c); }
             c->rx->setIqMinRate(24000.0);
         }
         else if (c->drm) { c->drm.reset(); c->drmAtHz = 0; c->rx->setIqMinRate(0.0); }
@@ -14718,8 +14984,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     /** `preSaved`: the listener's state is already in adsbSaved_, handed over from DAB (dabHandOffToAdsb). */
+    /** ★★ ADS-B is on because KEEP RUNNING put it there with nobody here — the radio's idle default, not anybody's use of
+     *  it (set by adsbKeepTick, cleared by any other entry and by the leave). modeResume reads it: a listener coming back
+     *  to the mode they left may have it back over the idle default (2026-11-12). */
+    std::atomic<bool> adsbByKeep_{false};
     void adsbEnter(bool preSaved = false) {
         if (g_adsbMode.load()) { sendAdsbAll(); return; }
+        adsbByKeep_.store(false);
         AdsbSaved& s = adsbSaved_;
         if (!preSaved) {
         s.lockedCentre = g_vsLockedCentre.load(); s.lockedRate = g_vsLockedRate.load();
@@ -14811,6 +15082,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     /** Give the receiver back exactly as it was found. `tell`: send adsb_off + config to every listener. */
     void adsbLeave(bool tell) {
+        adsbByKeep_.store(false);
         if (!g_adsbMode.exchange(false)) {
             if (tell) {
                 std::vector<std::shared_ptr<net::Socket>> socks;
@@ -14895,6 +15167,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (stopping.load() || restarting.load() || frontDoorOnly || decoderOnly) return;
         if (!g_vsAdsbKeep.load(std::memory_order_relaxed)) { adsbKeepLoggedWhy_ = false; return; }
         if (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed)) return;
+        /* ★★★ NEVER OVER ANOTHER WHOLE-RADIO MODE — WAIT FOR ITS OWN LEAVE (2026-11-12). With ISM (or NDB, AIS) still on
+         *  and its leave due, this entered ADS-B through the ADS-B key, which threw ISM off through ismLeave(true) — so the
+         *  leave was never recorded as ours (noteModeAutoLeft), and the returning listener's resume was refused with
+         *  "restarted or used since you left" (Stuart, iPhone, the Pi 500's V4L: ISM backgrounded, back to ADS-B). The
+         *  leave comes from the housekeeping tick (leaveWholeRadioModesNow) within a pass; kept ADS-B follows it.
+         *  ★ A mode BACKGROUND DECODING put there is not waited for — kept ADS-B owns the idle radio (the docs'
+         *    precedence), exactly as before. */
+        if (modeLeaveDueAt.load() > 0.0) return;
+        {
+            bool bgOwns;
+            { std::lock_guard<std::mutex> op(bgOpMtx_); bgOwns = bgIsm_ || bgAis_; }
+            if (!bgOwns && (g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed)
+                            || g_aisMode.load(std::memory_order_relaxed))) return;
+        }
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
         if (anyone) return;
@@ -14928,7 +15214,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("[ADS-B] keep running: nobody is connected (%s) — entering ADS-B so the next listener finds the aircraft "
              "table warm", adsbKeepStarted_ ? "the last listener left" : "the server has started");
         handleControl(nullptr, "{\"type\":\"adsb\",\"on\":1}");
-        if (g_adsbMode.load(std::memory_order_relaxed)) { adsbKeepStarted_ = true; adsbKeepRetryAt_ = 0; }
+        if (g_adsbMode.load(std::memory_order_relaxed)) { adsbKeepStarted_ = true; adsbKeepRetryAt_ = 0; adsbByKeep_.store(true); }
         else LOGI("[ADS-B] keep running: the entry did not open — trying again in 60 s");
     }
 
@@ -15278,6 +15564,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ an exact frequency: inside a band this radio can reach (the box's own clamp is the client's)
             want = vibeism::bandNearest(hz);
             if (!ismReach(*want)) { if (sock) sendText(sock, "{\"type\":\"ism_error\",\"why\":\"this radio cannot tune there\"}"); return; }
+            /* ★★★ AND INSIDE THAT BAND'S ALLOCATION (vibeism::exactAllowed). The nearest band was the only test, so every
+             *  frequency an RTL reaches passed, and an `ism hz` from an app that still believed ISM put "ISM" on 1089.590 MHz
+             *  over the server's own ADS-B (Stuart, 2026-11-12). Inside ISM the band simply stays (the report says so);
+             *  outside it the asker is told why. */
+            if (!vibeism::exactAllowed(*want, hz)) {
+                LOGI("[ISM] an exact frequency of %.3f MHz refused — outside every ISM allocation (nearest: %s)", hz / 1e6, want->name);
+                if (!sock) return;
+                if (g_ismMode.load()) sendText(sock, g_ism.report());
+                else {
+                    char w[96]; std::snprintf(w, sizeof w, "%.3f MHz is outside the ISM bands", hz / 1e6);
+                    sendText(sock, "{\"type\":\"ism_error\",\"why\":\"" + dabEscape(w) + "\"}");
+                }
+                return;
+            }
         } else if (jsonNum(msg, "step", step) && step != 0 && g_ismMode.load()) {
             // ★ one band per press, CLAMPED at the ends (as DAB's blocks): 915 → 315 in one press is not a scan
             size_t i = 0;
@@ -16383,7 +16683,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  cancelled ? "CANCELLED" : "finished", g_dabBand.secs, g_dabBand.hits.size(), g_dabBand.added,
                  fromSetup ? ", radio handed back" : userTuned ? ", left where the listener tuned" : prevCh >= 0 ? ", back on the block it was on" : "");
             g_dabBand.lock = false;
+            g_dabBand.at = (int64_t)time(nullptr);
         }
+        dabBandSaveFinished();   // ★ the list survives a restart (the DX sweep's run is skipped inside)
         // ★★ V12: the admin page's scan took the radio out of ADS-B — it goes back in, unless somebody tuned meanwhile
         if (dabScanReAdsb_ && !userTuned && !stopping.load() && !g_dabMode.load() && !g_adsbMode.load()) {
             LOGI("[DAB] band scan: back into ADS-B, where the radio was");
@@ -17032,6 +17334,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
     }
 
+    /* ★★ V12 THE DRM CONSTELLATION (2026-11-12) — the sockets whose DRM Signal pane is open, from {"type":"drm_scopes",
+     *  "on":1|0} (the DAB pane's `dab_scopes`, for DRM). A leaf mutex: nothing else is ever taken while it is held. Declared
+     *  BEFORE drmShared, so it outlives the shared receiver whose sink reads it. A receiver gets a sink only while one of
+     *  ITS listeners is in here (drmSharedSinkSync / drmClientSinkSync), and with no sink it copies no cells at all — the
+     *  constellation costs nothing while nobody looks (vibe_drm_listener.h setCellsSink). An older client never sends
+     *  drm_scopes, so it never gets a drm_iq it would not understand. */
+    std::mutex drmScopeMtx;
+    std::map<net::Socket*, std::weak_ptr<net::Socket>> drmScopeSocks;
+    /** The sockets of `drmScopeSocks` still open, copied out under the leaf mutex. */
+    std::vector<std::shared_ptr<net::Socket>> drmScopeTargets() {
+        std::vector<std::shared_ptr<net::Socket>> to;
+        std::lock_guard<std::mutex> lk(drmScopeMtx);
+        for (auto& kv : drmScopeSocks) if (auto sk = kv.second.lock()) to.push_back(std::move(sk));
+        return to;
+    }
+    /** ★ The shared dial's one receiver: everybody hears it, so it sends to every socket that has the pane open. */
+    void drmSharedSinkSync() {
+        std::shared_ptr<vibe::DrmListener> d;
+        { std::lock_guard<std::mutex> lk(drmSharedMtx); d = drmShared; }
+        if (!d) return;
+        bool any;
+        { std::lock_guard<std::mutex> lk(drmScopeMtx); any = !drmScopeSocks.empty(); }
+        if (!any) { d->setCellsSink(nullptr); return; }
+        d->setCellsSink([this](const std::string& j) {
+            for (auto& sk : drmScopeTargets()) if (sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+        });
+    }
     std::mutex drmSharedMtx;
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
@@ -17285,6 +17614,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (mode == "drm") { drmShared = std::make_shared<vibe::DrmListener>(); drmSharedVer = 0; rx.setIqMinRate(std::max(24000.0, iqDirectRate())); }
             else if (drmShared) { drmShared.reset(); rx.setIqMinRate(iqDirectRate()); }
         }
+        if (mode == "drm") drmSharedSinkSync();   // ★ the constellation, if a Signal pane is already open (outside drmSharedMtx)
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         // ★★ The chain is back at the mode's DEFAULT width, so the edges a listener chose are no longer
         //    what anybody hears — config must stop reporting them (vibe_room_passband.h).
@@ -17391,6 +17721,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         return o;
     }
+    /** ★ 2026-11-12: as jsonEscape, but a line break survives as \n — the owner's standing message is drawn pre-wrap by
+     *  every client and typed in a textarea, yet jsonEscape dropped every break ("a\nb" arrived as "ab"). */
+    static std::string jsonEscapeLines(const std::string& s_raw) {
+        const std::string s = vibeadmin::utf8Clean(s_raw);
+        std::string o;
+        for (char c : s) {
+            if (c == '\n') { o += "\\n"; }
+            else if (c == '"' || c == '\\') { o.push_back('\\'); o.push_back(c); }
+            else if ((unsigned char)c >= 0x20) o.push_back(c);
+        }
+        return o;
+    }
     /** The landing fields for /vibeserver.json — the aerial and the owner's standing message.
      *  Each is omitted entirely when unset, so a client reads absence as "nothing to show".
      *  ★ A member because it needs jsonEscape, which is one. */
@@ -17403,7 +17745,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   so an older client and an unconfigured radio both see exactly what they saw before.
         if (!g_vsAntennaRanges.empty())  j += ",\"antennaRanges\":\""  + jsonEscape(g_vsAntennaRanges)  + "\"";
         if (!g_vsAntennaFilters.empty()) j += ",\"antennaFilters\":\"" + jsonEscape(g_vsAntennaFilters) + "\"";
-        if (!g_vsLandingMsg.empty()) j += ",\"landingMessage\":\"" + jsonEscape(g_vsLandingMsg) + "\"";
+        if (!g_vsLandingMsg.empty()) j += ",\"landingMessage\":\"" + jsonEscapeLines(g_vsLandingMsg) + "\"";
         // ★ The URL was checked before it was stored (setLandingInfo) — stored empty if it did
         //   not pass — so an unsafe value never became this string in the first place.
         if (!g_vsLandingUrl.empty()) {
@@ -17991,6 +18333,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void sendWs(const std::shared_ptr<net::Socket>& sock, uint8_t opcode,
                 const uint8_t* payload, size_t len, Out cls = Out::Control) {
         if (!sock || !sock->isOpen()) return;
+#if defined(__linux__) && !defined(__ANDROID__)
+        /* ★★★ V12 R36S: a speaker socket's raw PCM plays HERE (header [0]=ch, [1]=0 raw, [2..5]=rate, int16 PCM —
+         *  sendAudioPcm). Every audio path (shared, per-listener, squelched zeros, VFO B mixes) ends in this call, so
+         *  diverting here catches them all. Sent on as well only while the page records (speakerTap). */
+        if (cls == Out::Audio && opcode == 0x2 && len > 6 && payload[1] == 0
+            && (payload[0] == 1 || payload[0] == 2)) {
+            if (vibe::LocalSpeaker* spk = speakerFor(sock.get())) {
+                // ★★ a recording is playing (recPlay*): the radio's audio waits — the file has the speaker
+                if (recPlayOn_.load(std::memory_order_relaxed)) { if (!speakerTap.load(std::memory_order_relaxed)) return; goto speakerDone; }
+                const int ch = payload[0];
+                std::vector<int16_t> pcm((len - 6) / 2);
+                std::memcpy(pcm.data(), payload + 6, pcm.size() * 2);
+                const float lv = speakerLevel.load(std::memory_order_relaxed);
+                if (lv < 0.999f) {
+                    // ★ linear, exactly as the browser's GainNode applied the same slider — the level does not change
+                    const float g = lv;
+                    for (auto& x : pcm) x = (int16_t)std::lround((float)x * g);
+                }
+                spk->push(pcm.data(), (int)(pcm.size() / (size_t)ch), ch);
+                if (!speakerTap.load(std::memory_order_relaxed)) return;
+            }
+        }
+        speakerDone:
+#endif
         std::vector<uint8_t> f;
         f.reserve(len + 10);
         f.push_back(0x80 | opcode);
@@ -18643,6 +19009,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (auto c = dspFor(sock)) { c->lastAsk = Impl::nowSecs(); c->idleAskAt = 0; }
         // ★★ V12 VFO A/B — the listener's watch channels, on every kind of radio (handleWatch).
         if (type == "watch") { handleWatch(sock, msg); return; }
+#if defined(__linux__) && !defined(__ANDROID__)
+        if (type == "playRec") {   // ★★ the handheld plays a recording (recPlayStart) — loopback only (the handheld's own UI)
+            if (!g_vsHandheld.load()) return;
+            double stopV = 0;   // ★ "stop":true or "stop":1 (jsonOn reads only the word)
+            if (jsonOn(msg, "stop") || (jsonNum(msg, "stop", stopV) && stopV != 0)) { recPlayStop(); sendText(sock, "{\"type\":\"playRec\",\"playing\":false}"); return; }
+            double sk = 0;
+            if (jsonNum(msg, "seek", sk) && recPlayOn_.load()) { recPlaySeek_.store(sk); return; }
+            const std::string nm = jsonStr(msg, "name");
+            if (!nm.empty()) recPlayStart(sock, nm);
+            return;
+        }
+#endif
         // ★★★ PER-CLIENT CONTROL COMES FIRST, AND THE ORDER IS LOAD-BEARING. The shared handlers
         //     below (zoom, reset, tune…) return as soon as they match, so a per-client block
         //     placed after them is dead code for every message they claim. It was, for zoom: one
@@ -20154,6 +20532,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★ The Signal pane opened or closed (a `dab=2` client): the constellation + impulse response only while it
          *  is open. And `dab_resync`: the client's list / radio text does not match the revisions the live report
          *  names — send both again on the next report. */
+        /* ★★ V12 THE DRM CONSTELLATION (2026-11-12): the DRM Signal pane opened or closed. The cells travel as their own
+         *  {"type":"drm_iq"} (vibe_drm_report.h drmCellsJson), once per 1.2 s super frame, only to a socket that asked —
+         *  and the receiver only copies them while one has. Asking grants nothing: it is a picture of the signal this socket
+         *  already hears. */
+        if (type == "drm_scopes") {
+            double on = 0; jsonNum(msg, "on", on);
+            {
+                std::lock_guard<std::mutex> lk(drmScopeMtx);
+                if (on != 0) drmScopeSocks[sock.get()] = sock; else drmScopeSocks.erase(sock.get());
+            }
+            drmSharedSinkSync();
+            if (auto me = dspFor(sock)) { std::lock_guard<std::mutex> lk(me->mtx); drmClientSinkSync(me.get()); }
+            return;
+        }
         if (type == "dab_scopes") {
             double on = 0; jsonNum(msg, "on", on);
             {
@@ -20890,6 +21282,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  and AUTO switches it on, but nothing here said so: the log had "RTL AGC: off" and the radio at 49.6 dB while
              *  every client's status line still read "AGC 38.6 dB" from the last report. The server sends the full state
              *  (the shared-dial contract) — every listener's readout, not only the sender's, follows the radio. */
+            /* ★★ AND SAY SO. Neither branch reported the change: a client drew its slider from the last hwinfo, which still
+             *  said agc:1 — the R36S's GAIN stayed locked after VibeAGC was switched off until a sample-rate change made the
+             *  engine report again (Stuart, 2026-11-07). Every listener's readout follows the radio. */
             LocalSdrShim::instance().broadcastHwInfo();
             return;
         }
@@ -21095,6 +21490,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // to touch them. Exposing them here gives both remote clients the same
         // audio controls the local app has — and keeps the DSP server-side, so
         // the client stays a thin renderer (no duplicate DSP to drift).
+#if defined(__linux__) && !defined(__ANDROID__)
+        /* ★★ V12 R36S: {"type":"speaker", "tap":0|1, "level":0..1} from the handheld page (AudioPlayer speaker mode).
+         *  tap = the page is recording to the card (or keeps the record buffer): send the speaker socket its PCM too.
+         *  level = the page's volume / mute, applied to what the speaker plays (the hardware keys set the codec's own). */
+        if (type == "speaker") {
+            if (!g_vsHandheld.load()) return;
+            double v = 0;
+            if (jsonNum(msg, "tap", v)) speakerTap.store(v != 0);
+            if (jsonNum(msg, "level", v)) speakerLevel.store((float)std::max(0.0, std::min(1.0, v)));
+            return;
+        }
+#endif
         if (type == "squelch") {
             // ★ This listener's own gate, never the radio's — see sessionSquelch. On/off from
             //   vibe::squelchMsgOn (explicit `on`, else the legacy db <= -100 = off) — the SAME rule
@@ -21183,6 +21590,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             logDsp("HF noise blanker", jsonOn(msg));
             /* ★ The audio-menu NOISE BLANKER — the listener's own, every mode but WFM. */
             perListener(&vibedsp::RxPipeline::setNoiseBlankerHf, &ClientDsp::nbxOn, &nbxOn, jsonOn(msg));
+            // ★ the shared pipeline's value into the desired record too (vsFmRecordDesired covers only the FM row),
+            //   so a fresh Impl replays it; a per-listener channel keeps its own in ClientDsp as before
+            if (!dspFor(sock)) vsRecordNbx(jsonOn(msg));
             return;
         }
         if (type == "ceq") {
@@ -21455,6 +21865,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       /* ★★★ …and it takes {"type":"watch","balance":x} — the A ⟷ B balance. An older server never
                        *  says so, and the clients then draw no balance row (no dead control). */
                       + ",\"watchBal\":true"
+                      /* ★★ V12 the rate switch ("change the sample rate when a mode needs it" — g_dabRateBoost) in the radio's
+                       *  own report too, so a client can draw it beside the sample rate and see it flip at once (the handheld,
+                       *  Stuart 2026-11-07); /vibeserver.json has carried it for the web's setup page all along. */
+                      + std::string(",\"dabBoost\":") + (g_dabRateBoost.load(std::memory_order_relaxed) ? "true" : "false")
                       + std::string(",\"gainCap\":")
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))
@@ -22893,6 +23307,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sock->close(); return;
             }
             compatRecord(wsAudio ? "ws-audio" : "ws-spectrum", reqLine, userAgent);
+#if defined(__linux__) && !defined(__ANDROID__)
+            // ★★★ V12 R36S: the handheld page's audio socket — its PCM plays on the device's own speaker (speakerMark).
+            if (wsAudio && g_vsHandheld.load() && queryParam(reqLine, "speaker") == "1") speakerMark(sock);
+#endif
             acceptWs(sock, wsKey, wsAudio, vsSessionIdOf(reqLine),
                      // ★★★ ON A SHARED DIAL, OPUS IS NOT A REQUEST — IT IS THE STREAM. One encode
                      //     is fanned out to everybody, so an older client asking for raw would
@@ -24145,6 +24563,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              //       must read a MISSING key as "ordinary receiver" — which is
                              //       what `!== true` gives for free.
                              + (frontDoorOnly ? std::string(",\"frontDoor\":true") : std::string())
+                             // ★ The R36S handheld profile (setHandheld): the page drops every server-only piece of UI.
+                             + (g_vsHandheld.load() ? std::string(",\"handheld\":true") : std::string())
                              + ",\"rangeLo\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
                                    ? g_vsLockedCentre.load() - LocalSdrShim::instance().captureSpanHz() / 2 : 0))
                              + ",\"rangeHi\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
@@ -24863,7 +25283,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             const std::string pre = "/vibeserver/gallery/file/";
             std::string fpath, ctype;
-            if (path.rfind(pre, 0) != 0 || !g.resolve(path.substr(pre.size()), fpath, ctype)) {
+            /* ★ The handheld's card names ("NAVTEX/2026-11-05 1423 - 518.000 kHz NAVTEX.txt") arrive percent-encoded;
+             *  decoded HERE, then checked by resolve() exactly like a server's flat name (vibe_gallery.h CardLayout). */
+            const std::string itemName = path.rfind(pre, 0) != 0 ? std::string()
+                : (vibe::gallery::cardLayout().on ? urlDecode(path.substr(pre.size())) : path.substr(pre.size()));
+            if (path.rfind(pre, 0) != 0 || !g.resolve(itemName, fpath, ctype)) {
                 reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}");
                 return;
             }
@@ -24879,7 +25303,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else { ::close(fd); reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}"); return; }
                 ::close(fd);
             } else { reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}"); return; }
-            const std::string name = path.substr(pre.size());
+            const std::string& name = itemName;
             // ★ V12 2026-10-25: an item may carry its own download name ("ISM 433.92 2026-10-25.txt", Meta::dlName) —
             //   only letters, digits, spaces and . - _ ( ) (downloadSafe, again here), so the header cannot be broken.
             std::string dn = vibe::gallery::downloadSafe(g.field(name, "dn"));
@@ -26351,6 +26775,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   preTuned = true;
                   LOGI("session [%s] is back from its hold — landing skipped, it carries on where it was", session.c_str());
               } }
+            /* ★★★ V12 2026-11-12: THE LISTENER WHOSE LEAVING EMPTIED THE RADIO, BACK — put back in their whole-radio mode
+             *  before anything is sent to them (arrivalResume), and then, like a held session, never landed. */
+            //   ★ Not only when alone (firstOfSession): with somebody else here it is REFUSED, and the refusal is the
+            //     point — the returning listener is told its mode has gone (arrivalResume's `<mode>_off`).
+            if (arrivalResume(sock, session, othersAtArrival)) {
+                preTuned = true;
+                LOGI("session [%s] resumed its whole-radio mode — landing skipped", session.c_str());
+            }
             if (preTuned)
                 LOGI("session [%s] already tuned to %.3f kHz %s — landing skipped",
                      session.c_str(), audioFreq.load() / 1e3, mode.c_str());
@@ -26868,6 +27300,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   would have been without the hold.
         if (tuneHold.holding()) applyHeldTune();
         { std::lock_guard<std::mutex> pl(dabPeerMtx); dabPeers.erase(sock.get()); }
+        {   // ★ V12 the DRM constellation: a closed socket is no longer looking (and its receiver stops copying cells)
+            bool was;
+            { std::lock_guard<std::mutex> dl(drmScopeMtx); was = drmScopeSocks.erase(sock.get()) != 0; }
+            if (was) drmSharedSinkSync();
+        }
         { std::lock_guard<std::mutex> tl(teleMtx); teleLast.erase(sock.get()); }
         { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get()); sockCc.erase(sock.get());
           /* ★★ AND THE SESSION'S LIVENESS STAMP, WHEN THIS WAS ITS LAST SOCKET (audit 2026-10-03).
@@ -27313,6 +27750,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  (resumeCaptureIdle, the same early connect step that cancels the idle park), and the park is armed only
              *  once the leave has happened — a 3 s RELEASE under a running DAB pipeline is the one thing it cannot survive. */
             if (stillEmpty && !stopping.load() && wholeModeLeavesWhenEmpty()) {
+                noteLastGone(session);   // ★ whose mode it was — arrivalResume puts THEM back, nobody else
                 modeLeaveDueAt.store(nowSecs() + modeLeaveGraceS());
                 LOGI("last listener left — %s stays up for %.0f s in case they are only reconnecting",
                      g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : g_ndbMode.load() ? "NDB" : g_aisMode.load() ? "AIS" : "ADS-B", modeLeaveGraceS());
@@ -30354,6 +30792,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ Set on EVERY exit path, including the early returns below — a flag that is only
             //   correct on the happy path is worse than none, because it is trusted.
             struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{self};
+            self->rtlChkStart = 0.0; self->rtlChkRate = self->sampleRate; self->rtlChkWindows = 0;   // a fresh delivery window at this rate
             rtlsdr_read_async(self->dev, &Impl::asyncHandler, self, 0, bufLen);
             // We only reach here when the IQ stops. Three reasons, and they must not be confused:
             if (self->stopping.load() || self->restarting.load()) return;   // we asked for it
@@ -32400,6 +32839,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         broadcastUsersSafe();
         // ★ An empty radio now: what its last socket's close would have done, with the whole-radio mode left AT ONCE —
         //   they have had their three minutes (the leave still records itself, so mode_resume can give it back).
+        noteLastGone(sess);   // ★ whose mode it was — arrivalResume puts THEM back, nobody else
         radioEmptied(0.0);
     }
     /** House thread, every pass: holds that have run out end; ended holds are finished; kept decoders are judged. */
@@ -32537,12 +32977,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the dial it gave back. Read by modeResume: the same listener coming back may have it again, as long as the radio
      *  is still exactly where the leave put it (nobody has tuned it since) and nobody else is on it. Written on the
      *  housekeeping thread, read on a socket's reader, hence the lock. */
-    struct ModeAutoLeft { std::string kind; double at = 0, audio = 0, rtl = 0; };
+    /*  ★★ V12 2026-11-12: AND WHO LEFT IT, AND WHERE. `session` is the last listener's (lastGoneSession_ — the hold that ran
+     *  out, or the last socket to close), so the SAME listener coming back can be put back in the mode at its arrival
+     *  (arrivalResume) without asking; `ismBand` / `ismCustomHz` are where ISM was, because ismLeave forgets its band and an
+     *  entry with nothing named lands on the band nearest the server — not the one the listener chose. */
+    struct ModeAutoLeft { std::string kind; double at = 0, audio = 0, rtl = 0; std::string session, ismBand; double ismCustomHz = 0; };
     std::mutex   modeAutoLeftMtx_;
     ModeAutoLeft modeAutoLeft_;
-    void noteModeAutoLeft(const char* kind) {
+    std::string  lastGoneSession_;   // ★ modeAutoLeftMtx_ — the session whose departure emptied the radio
+    void noteLastGone(const std::string& sess) {
         std::lock_guard<std::mutex> lk(modeAutoLeftMtx_);
-        modeAutoLeft_ = { kind, nowSecs(), audioFreq.load(), rtlCenter.load() };
+        lastGoneSession_ = sess;
+    }
+    void noteModeAutoLeft(const char* kind, const std::string& ismBand = std::string(), double ismCustomHz = 0) {
+        std::lock_guard<std::mutex> lk(modeAutoLeftMtx_);
+        modeAutoLeft_ = { kind, nowSecs(), audioFreq.load(), rtlCenter.load(), lastGoneSession_, ismBand, ismCustomHz };
     }
     void leaveWholeRadioModesNow() {
         if (g_dabMode.load(std::memory_order_relaxed)) {
@@ -32591,8 +33040,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             { std::lock_guard<std::mutex> op(bgOpMtx_); bgOwns = bgIsm_; }
             if (!bgOwns) {
                 LOGI("[ISM] last listener left — the receiver goes back to where it was");
+                const std::string band = ismBand_ ? ismBand_->id : "";   // ★ before ismLeave forgets it
+                const double custom = ismCustomHz_;
                 ismLeave(false);
-                noteModeAutoLeft("ism");
+                noteModeAutoLeft("ism", band, custom);
             }
         }
         if (g_aisMode.load(std::memory_order_relaxed)) {
@@ -32627,6 +33078,58 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  Anything else is refused IN WORDS, to the asker only, and the app says why. Still in the mode (inside the grace)
      *  is a plain yes — the reports carry on. ★ Gated by "ask before tuning" at the reader like the mode keys (kGated).
      *  ★ An older server ignores the unknown type, and the app gives up after a few seconds: never a blind re-entry. */
+    /** ★★ THE ONE RULE for giving a returning listener their whole-radio mode back (modeResume, arrivalResume): "" = yes.
+     *  `here` = listeners on the radio, the asker included. Call WITHOUT clientMtx. */
+    std::string resumeWhyNot(const std::string& kind, const ModeAutoLeft& rec, int here) {
+        const char* name = kind == "adsb" ? "ADS-B" : kind == "ndb" ? "NDB" : kind == "ism" ? "ISM" : kind == "ais" ? "AIS" : "the mode";
+        const bool adsb = g_adsbMode.load(), ndb = g_ndbMode.load(), ism = g_ismMode.load(), ais = g_aisMode.load();
+        /* ★★★ KEPT-RUNNING ADS-B IS THE RADIO'S IDLE DEFAULT, NOT SOMEBODY'S USE OF IT (2026-11-12). Stuart, iPhone, the Pi
+         *  500's V4L (idle default ADS-B): ISM backgrounded past the hold came back to ADS-B for good — "it looks like the
+         *  keep awake is not working". The server itself moved the radio to ADS-B (and to the owner's landing before it)
+         *  because nobody was here; that is not "used since you left", so with nobody else here the mode comes back. */
+        const bool idleAdsb = adsb && adsbByKeep_.load() && kind != "adsb";
+        if (rec.kind != kind || rec.at <= 0.0)
+            return std::string("The receiver is no longer in ") + name + " \xe2\x80\x94 it has been restarted or used since you left.";
+        if (((adsb && !idleAdsb) || ndb || ism || ais || g_dabMode.load()))
+            return std::string("The receiver left ") + name + " while you were away and is in another mode now.";
+        if (!idleAdsb && (std::fabs(audioFreq.load() - rec.audio) > 1.0 || std::fabs(rtlCenter.load() - rec.rtl) > 1.0))
+            return std::string("The receiver left ") + name + " while you were away, and somebody has tuned it since.";
+        if (here > 1)
+            return std::string("The receiver left ") + name + " while you were away, and somebody else is listening now "
+                   "\xe2\x80\x94 it was not moved under them.";
+        return std::string();
+    }
+    /** ★ Back into the mode the record names — through the mode's own entry, exactly as its key (every refusal there, a
+     *  blocked mode or a rate it cannot run at, still answers with its own x_error). ISM goes back to ITS band. */
+    void resumeEnter(const std::shared_ptr<net::Socket>& sock, const ModeAutoLeft& rec, bool tellAsker) {
+        /* ★ Out of the idle default QUIETLY: nobody else is here (resumeWhyNot), and the mode's own entry would otherwise
+         *  send its leave's config — the owner's landing, 96.1 in the test — to the arriving socket before the mode's own,
+         *  a dial the listener was never on. The asker on an open socket (mode_resume) is told ADS-B has ended. */
+        if (g_adsbMode.load() && adsbByKeep_.load() && rec.kind != "adsb") {
+            LOGI("[ADS-B] the idle default gives way — %s is coming back for the listener who left it", rec.kind.c_str());
+            adsbLeave(false);
+            if (tellAsker && sock) sendText(sock, "{\"type\":\"adsb_off\"}");
+        }
+        std::string m = "{\"type\":\"" + rec.kind + "\",\"on\":1";
+        if (rec.kind == "ism") {
+            if (rec.ismCustomHz > 0) { char b[48]; std::snprintf(b, sizeof b, ",\"hz\":%.0f", rec.ismCustomHz); m += b; }
+            else if (!rec.ismBand.empty()) m += ",\"band\":\"" + rec.ismBand + "\"";
+        }
+        handleControl(sock, m + "}");
+    }
+
+    /** ★★★ `mode_resume` — A LISTENER COMING BACK TO THE WHOLE-RADIO MODE THEY LEFT IN (2026-10-27, Stuart's iPhone: the
+     *  NDB / ADS-B map "dropped back to a waterfall view on the previous frequency" after a switch to another app).
+     *  Past the grace (modeLeaveGraceS) the radio has been given back, telling nobody — nobody was here. The returning
+     *  app, which was in the mode when it went, asks for it again: a restoration of that listener's own last action,
+     *  so it is granted ONLY where nobody could be disturbed by it (resumeWhyNot) —
+     *    · the leave was ours, for want of listeners (modeAutoLeft_), and of this mode;
+     *    · nobody has moved the radio since: it is still on the dial the leave gave back, in no other whole-radio mode —
+     *      ★ except the server's own idle default, kept-running ADS-B (adsbByKeep_), which is nobody's use of it;
+     *    · nobody else is on it now (the shared-dial contract: a returning listener never yanks a room into ADS-B).
+     *  Anything else is refused IN WORDS, to the asker only, and the app says why. Still in the mode (inside the grace)
+     *  is a plain yes — the reports carry on. ★ Gated by "ask before tuning" at the reader like the mode keys (kGated).
+     *  ★ An older server ignores the unknown type, and the app gives up after a few seconds: never a blind re-entry. */
     void modeResume(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         if (!sock) return;
         const std::string kind = jsonStr(msg, "mode");
@@ -32645,16 +33148,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); rec = modeAutoLeft_; }
         int here;
         { std::lock_guard<std::mutex> lk(clientMtx); here = specListenerCountLocked(); }
-        std::string why;
-        if (rec.kind != kind || rec.at <= 0.0)
-            why = std::string("The receiver is no longer in ") + name + " \xe2\x80\x94 it has been restarted or used since you left.";
-        else if (adsb || ndb || ism || ais || g_dabMode.load())
-            why = std::string("The receiver left ") + name + " while you were away and is in another mode now.";
-        else if (std::fabs(audioFreq.load() - rec.audio) > 1.0 || std::fabs(rtlCenter.load() - rec.rtl) > 1.0)
-            why = std::string("The receiver left ") + name + " while you were away, and somebody has tuned it since.";
-        else if (here > 1)
-            why = std::string("The receiver left ") + name + " while you were away, and somebody else is listening now "
-                  "\xe2\x80\x94 it was not moved under them.";
+        const std::string why = resumeWhyNot(kind, rec, here);
         if (!why.empty()) {
             LOGI("[%s] a returning listener asked for it back \xe2\x80\x94 refused: %s", name, why.c_str());
             answer(false, why);
@@ -32664,9 +33158,46 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("[%s] a returning listener asked for it back %.0f s after the last listener left \xe2\x80\x94 nobody else is "
              "here and the radio is where it was left, so it goes back in", name, nowSecs() - rec.at);
         answer(true, "");
-        // ★ Through the mode's own entry, exactly as its key — every refusal there (a blocked mode, a rate it cannot run
-        //   at) still answers with its own x_error.
-        handleControl(sock, "{\"type\":\"" + kind + "\",\"on\":1}");
+        resumeEnter(sock, rec, true);
+    }
+
+    /** ★★★ THE SAME LISTENER ARRIVING BACK — PUT BACK IN THEIR MODE BEFORE THEIR FIRST CONFIG (V12, 2026-11-12).
+     *  Stuart, iPhone, the Pi 500's V4L (idle default: ADS-B, kept running): ISM, the app backgrounded, iOS suspends it;
+     *  past the hold the server leaves ISM and the idle default takes the radio. Coming back, the app was handed ADS-B's
+     *  config and reports and never told ISM had gone, so it kept its ISM screen over a radio at 1090 MHz — and its
+     *  frequency box, still ISM's, then put "ISM" on 1089.590 MHz.
+     *  ★★ The SERVER decides here, with the whole room in view — the session whose departure emptied the radio (the
+     *     record's `session`), back on its own (resumeWhyNot: nobody else here, nobody has moved the radio but the idle
+     *     default), gets the mode back through the mode's own entry, before the arrival is sent anything. That is the
+     *     held session's own promise, "the same session id coming back carries on", kept past the hold, and it asks
+     *     nothing of the client (the shared-dial contract: rejoining is the server's decision, never a client's tune).
+     *  ★★ REFUSED, THE LISTENER IS TOLD THE TRUTH: `<mode>_off` to this socket, so an app still showing the mode drops it —
+     *     never "ISM" on screen over a radio somewhere else.
+     *  @return true when the mode was entered (the caller skips the landing). Call WITHOUT clientMtx. */
+    bool arrivalResume(const std::shared_ptr<net::Socket>& sock, const std::string& session, int othersAtArrival) {
+        if (!sock || session.empty() || frontDoorOnly || decoderOnly) return false;
+        ModeAutoLeft rec;
+        { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); rec = modeAutoLeft_; }
+        if (rec.kind.empty() || rec.at <= 0.0 || rec.session != session) return false;
+        const bool on = rec.kind == "adsb" ? g_adsbMode.load() : rec.kind == "ndb" ? g_ndbMode.load()
+                      : rec.kind == "ism" ? g_ismMode.load() : g_aisMode.load();
+        if (on) { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); modeAutoLeft_ = {}; return true; }   // ★ already there
+        const std::string why = resumeWhyNot(rec.kind, rec, othersAtArrival + 1);
+        { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); modeAutoLeft_ = {}; }   // ★ answered either way, once
+        const char* name = rec.kind == "adsb" ? "ADS-B" : rec.kind == "ndb" ? "NDB" : rec.kind == "ism" ? "ISM" : "AIS";
+        if (!why.empty()) {
+            LOGI("[%s] session [%.8s] is back, %.0f s after it left the radio in %s \xe2\x80\x94 not resumed: %s", name,
+                 session.c_str(), nowSecs() - rec.at, name, why.c_str());
+            // ★ The reason first (the app says it — wholeModeResume.answered takes an answer it did not ask for), then the
+            //   mode's own off, which every client already obeys.
+            sendText(sock, "{\"type\":\"mode_resume\",\"mode\":\"" + rec.kind + "\",\"ok\":0,\"why\":\"" + dabEscape(why) + "\"}");
+            sendText(sock, "{\"type\":\"" + rec.kind + "_off\"}");
+            return false;
+        }
+        LOGI("[%s] session [%.8s] is back, %.0f s after it left the radio in %s \xe2\x80\x94 nobody else is here and only the "
+             "idle default has run since, so it goes back in", name, session.c_str(), nowSecs() - rec.at, name);
+        resumeEnter(sock, rec, false);
+        return g_adsbMode.load() || g_ndbMode.load() || g_ismMode.load() || g_aisMode.load();
     }
 
     void armIdlePark() {
@@ -34149,6 +34680,32 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
 
+                /* ★★ THE USB DELIVERY CHECK'S MINUTE (see rtlChkStart). A shortfall is printed every minute it happens;
+                 *    a clean run says so for the first minute after each start (handheld53: Stuart's rate changes
+                 *    restarted the count before a 10th minute ever came, so a clean session printed nothing), then once
+                 *    every 10 minutes, so a server is not filled with good news. ±0.02 % is
+                 *    far above clock error (the V4's TCXO is 1 ppm) and the timing jitter of a 60 s window, and below
+                 *    one lost USB buffer (~0.09 % of a minute at 2.4 MS/s). */
+                if (rtlChkReady.load(std::memory_order_acquire)) {
+                    const RtlChkReport r = rtlChkOut;
+                    rtlChkReady.store(false, std::memory_order_release);
+                    static int cleanRuns = 0;
+                    const double want = r.rate * r.secs;
+                    const double diffPct = want > 0 ? ((double)r.got - want) / want * 100.0 : 0.0;
+                    const bool shortfall = diffPct < -0.02;
+                    if (r.first) cleanRuns = 0;
+                    if (shortfall || r.first || ++cleanRuns >= 10) {
+                        if (!r.first) cleanRuns = 0;
+                        LOGI("USB IQ: %s — %llu of %.0f samples in %.1f s at %.3f MS/s (%+.3f %%), longest wait between "
+                             "buffers %.0f ms%s",
+                             shortfall ? "SAMPLES LOST in the last minute"
+                                       : r.first ? "every sample arrived (the first minute of this stream)"
+                                                 : "every sample arrived (10 min)",
+                             (unsigned long long)r.got, want, r.secs, r.rate / 1e6, diffPct, r.maxGap * 1000.0,
+                             shortfall ? " — the USB host did not collect in time; the dongle's FIFO overflowed" : "");
+                    }
+                }
+
                 // ★ SILENCE = GONE. 3s is far longer than any legitimate gap (a rate change is
                 // flagged by `restarting`, and normal delivery is continuous), and short enough
                 // that the message arrives while the user is still holding the plug.
@@ -35083,8 +35640,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Stamp FIRST, even while discarding: the watchdog measures "is IQ still
         // arriving", and it is — we are simply choosing not to want it. Skipping the
         // stamp would make an idle server look like a dead dongle.
-        self->lastIqAt.store(nowSecs(), std::memory_order_relaxed);
+        const double t = nowSecs();
+        self->lastIqAt.store(t, std::memory_order_relaxed);
         g_usbSamples.fetch_add(len / 2, std::memory_order_relaxed);
+        // ★★ the USB delivery check (see rtlChkStart) — counted before the idle discard: delivery is the dongle's,
+        //    whether or not anyone is listening
+        if (self->rtlChkStart <= 0.0) {
+            self->rtlChkStart = self->rtlChkLast = t; self->rtlChkN = 0; self->rtlChkMaxGap = 0.0;
+        } else {
+            self->rtlChkN += len / 2;
+            if (t - self->rtlChkLast > self->rtlChkMaxGap) self->rtlChkMaxGap = t - self->rtlChkLast;
+            self->rtlChkLast = t;
+            if (t - self->rtlChkStart >= 60.0) {
+                if (!self->rtlChkReady.load(std::memory_order_acquire)) {
+                    self->rtlChkOut = { t - self->rtlChkStart, self->rtlChkRate, self->rtlChkMaxGap, self->rtlChkN,
+                                        self->rtlChkWindows == 0 };
+                    self->rtlChkReady.store(true, std::memory_order_release);
+                }
+                self->rtlChkStart = t; self->rtlChkN = 0; self->rtlChkMaxGap = 0.0; self->rtlChkWindows++;
+            }
+        }
         if (self->idleDiscard.load(std::memory_order_relaxed)) return;   // nobody listening
         self->enqueueIq(buf, (int)(len / 2));
     }
@@ -35210,6 +35785,8 @@ struct DesiredDsp {
     std::atomic<bool>   imsOn{true};        // Impl::imsOn
     std::atomic<bool>   ceqOn{true};        // Impl::ceqOn
     std::atomic<bool>   nbOn{true};         // Impl::nbOn
+    std::atomic<bool>   nbxOn{false};       // Impl::nbxOn — the audio-menu (HF) NOISE BLANKER, every mode but WFM. ★ 2026-11-12:
+                                            //   never replayed, so a fresh Impl (rate change, reopen) switched it off mid-session
     std::atomic<bool>   stereoOn{true};     // RxPipeline defaults to stereo enabled
     // ★★ THE RSP CONTROLS TOO — same bug, separately reported: "RF gain on RSP1B not
     // remembered between sessions" (Stuart, 2026-07-27). The web client was innocent; it
@@ -35444,6 +36021,7 @@ static bool  vsAntennaLocked()     { return g_antennaLocked.load() != 0; }
 static float vsDesiredNrStrength() { return g_dsp.nrStrength.load(); }
 static double vsDesiredDeemph()    { return g_dsp.deempTau.load(); }
 static bool  vsDesiredStereo()     { return g_dsp.stereoOn.load(); }
+static void vsRecordNbx(bool on) { g_dsp.nbxOn.store(on); }
 static void vsFmRecordDesired(const vibefm::State& st) {
     g_dsp.deempTau.store(st.deemphTau); g_dsp.stereoOn.store(st.stereo);
     g_dsp.weakProcOn.store(st.nr); g_dsp.imsOn.store(st.ims); g_dsp.ceqOn.store(st.ceq); g_dsp.nbOn.store(st.nb);
@@ -35469,6 +36047,7 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
     impl->imsOn.store(g_dsp.imsOn.load());           impl->rx.setIms(g_dsp.imsOn.load());
     impl->ceqOn.store(g_dsp.ceqOn.load());           impl->rx.setCeq(g_dsp.ceqOn.load());
     impl->nbOn.store(g_dsp.nbOn.load());             impl->rx.setNoiseBlanker(g_dsp.nbOn.load());
+    impl->nbxOn.store(g_dsp.nbxOn.load());           impl->rx.setNoiseBlankerHf(g_dsp.nbxOn.load());
     impl->deempTau = g_dsp.deempTau.load();
     impl->rx.setDeemphasis(impl->deempTau);
     impl->rx.setNfmVoice(g_nfmVoiceShared.load());
@@ -35582,7 +36161,14 @@ void LocalSdrShim::startMdnsService(const std::string& host, const std::string& 
 void LocalSdrShim::stopMdns() { mdnsStop(); }
 std::string LocalSdrShim::mdnsHostname() { return mdnsHost(); }
 bool LocalSdrShim::serveOnLan() { return g_serveOnLan.load(); }
-static const char* bindHost() { return g_serveOnLan.load() ? "0.0.0.0" : "127.0.0.1"; }
+void LocalSdrShim::setBindLocalOnly(bool on) { g_bindLocalOnly.store(on); }
+bool LocalSdrShim::bindLocalOnly() { return g_bindLocalOnly.load(); }
+/** ★★★ THE ADDRESS, NOT THE BEHAVIOUR. g_serveOnLan still decides trust, caps and locks everywhere
+ *  else in this file; only the bind reads g_bindLocalOnly. A radio behind the front door is serving
+ *  (g_serveOnLan true) but answers 127.0.0.1 only — see setBindLocalOnly. */
+static const char* bindHost() {
+    return (g_serveOnLan.load() && !g_bindLocalOnly.load()) ? "0.0.0.0" : "127.0.0.1";
+}
 
 // VibeServer server-side config setter definitions (state declared above Impl).
 void LocalSdrShim::setVibeServerPort(int port) {
@@ -36159,6 +36745,44 @@ void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publi
     //    unlisted idents (data carriers read as Morse) on the cards already written are set aside (vibe_ndb_gallery_clean.h).
     //    After the first pass this is one stat().
     vibe::ndbgal::cleanUniformIdents(g);
+}
+void LocalSdrShim::setGalleryCardLayout(const std::string& filesDir) {
+    auto& c = vibe::gallery::cardLayout();
+    c.files = filesDir;
+    c.on = !filesDir.empty();
+    if (c.on) { ::mkdir(filesDir.c_str(), 0755); LOGI("gallery: handheld card layout — items under %s/<DECODER>/", filesDir.c_str()); }
+}
+void LocalSdrShim::setHandheld(bool on) { g_vsHandheld.store(on); if (on) LOGI("handheld profile: one radio, one owner, 127.0.0.1"); }
+bool LocalSdrShim::handheld() { return g_vsHandheld.load(); }
+bool LocalSdrShim::webAssetFor(const std::string& path, bool acceptsBr, bool acceptsGzip,
+                               std::string& body, std::string& contentType, std::string& encoding) {
+    int idx = -1;
+    if (path == "/" || path.rfind("/?", 0) == 0) idx = kVibeWebPageIdx;
+    else if (path.rfind("/vs/", 0) == 0) { const size_t q = path.find_first_of("?#"); idx = vibeWebAssetFind(q == std::string::npos ? path : path.substr(0, q)); }
+    if (idx < 0) return false;
+    const int enc = vibeWebPickEnc(idx, acceptsBr, acceptsGzip);
+    body = vibeWebAssetBody(idx, enc);
+    contentType = idx == kVibeWebPageIdx ? "text/html; charset=utf-8" : kVibeWebAssets[idx].type;
+    encoding = enc == kVibeEncBrotli ? "br" : enc == kVibeEncGzip ? "gzip" : "";
+    return true;
+}
+bool LocalSdrShim::serveMapAsset(int fd, const std::string& method, const std::string& path, bool acceptGzip,
+                                 const std::string& range) {
+    const bool head = method == "HEAD";
+    if (method != "GET" && !head) return false;
+    if (path.rfind("/mapdata/v1/", 0) == 0) {
+        const int d = ::dup(fd); if (d < 0) return false;
+        auto sock = std::make_shared<net::Socket>(d);
+        vibemap::serve(sock, path.substr(12), acceptGzip, head, /*paced=*/false);
+        return true;
+    }
+    if (path.rfind("/mapgl/", 0) == 0) {
+        const int d = ::dup(fd); if (d < 0) return false;
+        auto sock = std::make_shared<net::Socket>(d);
+        vibemapgl::serve(sock, path.substr(7), range, head, /*paced=*/false);
+        return true;
+    }
+    return false;
 }
 void LocalSdrShim::setGalleryRadioLabel(const std::string& label) { vibe::gallery::shared().setRadioLabel(label); }
 void LocalSdrShim::setGalleryRedact(const std::vector<std::string>& serials) { vibe::gallery::shared().setRedact(serials); }
@@ -37325,6 +37949,13 @@ static std::string vsAdsbWhyNot() {
     if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
     if (running < vibeadsb::Service::kMinRateHz) {
         char b[240];
+        // ★★ THE HANDHELD HAS NO OWNER BUT ITS HOLDER (Stuart, 2026-11-07: "it stated that it needed 2.4MHz but then talked
+        //    about owner setting as if it were the server"): there the switch is in the radio's own menu, named as it is.
+        if (g_vsHandheld.load(std::memory_order_relaxed))
+            std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 the radio runs at %.3f MS/s. "
+                          "Turn on DECODER RATE BOOST (MENU \xe2\x86\x92 SDR HARDWARE, under SAMPLE RATE), "
+                          "or choose 2.4 MS/s there", running / 1e6);
+        else
         std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s "
                       "(its owner can let it change rate for ADS-B in Setup)", running / 1e6);
         return b;
@@ -38590,6 +39221,12 @@ bool LocalSdrShim::isConfigured() { return g_vsConfigured.load(); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
 void LocalSdrShim::clearBookmarks() { bmClear(); }
 
+/** ★ The last DAB band scan's file, per radio (see g_dabScanFile). Read now; written at the end of every scan. */
+void LocalSdrShim::setDabScanFile(const std::string& path) {
+    { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabScanFile = path; g_dabScanFileExplicit = !path.empty(); }
+    if (!path.empty()) dabBandLoadSaved(path);
+}
+
 /** Give the shim a file to own. It loads immediately and saves on every change. */
 void LocalSdrShim::setBookmarksPath(const std::string& path) {
     std::string body;
@@ -38614,6 +39251,13 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);   // ★ beside the gain memory, same directory
           g_dabEnsFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-ensembles.txt"; }
         g_dabLogoDir = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-logos";
+        /* ★★ The last DAB band scan (g_dabScanFile) — beside the bookmarks, which are this radio's own file. The
+         *  standalone server names it per radio itself (setDabScanFile, before this); the phone has one radio. */
+        if (!g_dabScanFileExplicit) {
+            const std::string f = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-scan.txt";
+            { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabScanFile = f; }
+            dabBandLoadSaved(f);
+        }
         /* ★ The off-air slideshow store, beside the carousel and the RadioDNS logos: one file per
          *  service, so a station whose picture only exists on air is not re-read on every visit. */
         g_dab.setSlideDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-slides");

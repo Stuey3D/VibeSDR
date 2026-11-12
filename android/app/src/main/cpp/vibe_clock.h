@@ -30,6 +30,15 @@ inline std::atomic<int64_t>& clockOffsetUs() { static std::atomic<int64_t> v{0};
 /** Whether any SNTP answer has been accepted yet (so a log can say "unmeasured" rather than "exact"). */
 inline std::atomic<bool>& clockMeasured() { static std::atomic<bool> v{false}; return v; }
 
+/** ★★ THE SYSTEM CLOCK HAS JUST BEEN SET (V12, the R36S handheld, 2026-11-05) — by its owner, from a decoded time
+ *  station or from FT8's DT, through the root hardware service. An offset measured against the OLD clock would now
+ *  be added to a clock that is already right, so it goes: the decoders read the system clock as it stands. Called from
+ *  a signal handler (SIGUSR2, sent by the handheld supervisor after a set) — two lock-free atomic stores, nothing else. */
+inline void clockWasSet() {
+    clockOffsetUs().store(0, std::memory_order_relaxed);
+    clockMeasured().store(true, std::memory_order_relaxed);
+}
+
 /** UTC in seconds, corrected. The decoders' slot clock. */
 inline double vibeUtcNow() {
     struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);

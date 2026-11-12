@@ -216,6 +216,17 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     // ★ Upstream does default it on, so this is belt-and-braces — but a default we depend on
     // this heavily should be stated, not assumed.
     airspyhf_set_lib_dsp(impl_->dev, 1);
+#if defined(__aarch64__) && defined(__linux__) && !defined(__ANDROID__)
+    /* ★★★ THE LIGHT IQ BALANCER ON 64-BIT ARM LINUX TOO. libairspyhf picks its balancer's workload with
+     *  `#if defined(__arm__)` (iqbalancer.h) — a macro only 32-bit ARM defines. So a Pi 2 on armhf has always had the
+     *  light settings (every 5th buffer, FFT integration 2, overlap 1, correlation 4), and the SAME class of board on a
+     *  64-bit OS — the R36S, a Pi 3/4/5 on arm64 — got the desktop ones (every buffer, 4 / 2 / 16): measured on the R36S
+     *  (2026-11-06, 912 kS/s) the HF+ IQ thread alone took 44 % of an A35 core.
+     *  ★ Trade-off: the image-rejection search converges more slowly after a retune (the same as every armhf host,
+     *    where nobody has reported it); the correction it settles on is the same. Macs, x86 and Android keep the
+     *    library's own choice. */
+    airspyhf_iq_balancer_configure(impl_->dev, 4, 2, 1, 4);
+#endif
 
     if (!setSampleRate(sampleRateHz)) {
         err = "the Airspy HF+ refused that sample rate";

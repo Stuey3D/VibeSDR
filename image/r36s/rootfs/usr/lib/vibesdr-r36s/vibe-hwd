@@ -1,0 +1,665 @@
+#!/usr/bin/python3 -I
+# vibe-hwd — the R36S handheld's hardware service (root). The engine (`vibeserver --handheld`, not root) is its client.
+#
+# ★★★ THE INTERFACE IS docs/v12/R36S-HANDHELD-IMAGE.md §0.2 — newline-delimited JSON on /run/vibe-hwd.sock, ONE reply
+#     line per request, in order; after {"subscribe":true} the same connection also carries event lines (they have an
+#     "event" key, replies never do). The engine relays "This device" to the page; the page never talks to us.
+# ★★ WHAT IT OWNS: the backlight, ALSA master volume + the speaker/headphone mux, the volume and power buttons, the
+#    battery (warning at 10 %, clean shutdown at 3 %), the clock (set + kept across power-offs with no trusted RTC),
+#    and nothing else: there is NO SSH on the handheld — {"get":"ssh"} / {"set":"ssh"…} answer "not supported".
+# ★★ STDLIB ONLY (python3 -I): evdev, ALSA and the RTC are reached through ioctls and amixer, so nothing on the card
+#    can shadow a module and nothing extra has to be installed.
+# ★ Env (for tests): VIBE_HWD_SOCK, VIBE_STATE_DIR, VIBE_HWD_DRYRUN=1 (log poweroff/reboot instead of doing them),
+#   VIBE_SYSFS (prefix for /sys, a fake tree in tests), VIBE_ALSA_CARD.
+import asyncio, ctypes, fcntl, glob, grp, json, math, os, pwd, signal, struct, subprocess, sys, threading, time
+
+SOCK = os.environ.get("VIBE_HWD_SOCK", "/run/vibe-hwd.sock")
+STATE_DIR = os.environ.get("VIBE_STATE_DIR", "/var/lib/vibe-state")
+DRYRUN = os.environ.get("VIBE_HWD_DRYRUN") == "1"
+SYS = os.environ.get("VIBE_SYSFS", "") + "/sys"
+CARD = os.environ.get("VIBE_ALSA_CARD", "rk817ext")
+BL = SYS + "/class/backlight/backlight"
+BAT = SYS + "/class/power_supply/battery"
+CHG = SYS + "/class/power_supply/rk817-charger"
+HWD_JSON = os.path.join(STATE_DIR, "hwd.json")
+CLOCK = "/usr/lib/vibesdr-r36s/vibe-clock"
+SPLASH = "/usr/lib/vibesdr-r36s/vibe-splash"
+
+DEFAULT_BRIGHTNESS = 120      # Stuart 2026-11-05: 120/255 out of the box (stock firmware used 200)
+MIN_BRIGHTNESS = 5            # ★ a set to 0 would leave a black screen and no obvious way back; screen-off is the off
+DEFAULT_VOLUME = 60
+VOL_STEP = 5                  # per press / per auto-repeat of a volume button
+LONG_PRESS_S = 2.0            # power button held this long = clean power-off (the PMIC's own hard-off is ~6 s later)
+LOW_PCT, EMPTY_PCT = 10, 3    # Stuart 2026-11-05: warning at 10 %, clean automatic shutdown at 3 %
+ACK_WAIT_S = 5.0              # how long the engine gets to save every radio's memory before we power off
+
+# ── the PMIC's charge-port input limit ──────────────────────────────────────────────────────────────────────────────
+# ★★★ 2 A FROM THE CHARGER WHILE THE CONSOLE IS ON (Stuart 2026-11-11: "if we can tell the charger to give 2a when the
+#     unit is powered on then that will be good" — the R36S manual's charger is 5 V 2 A). The mainline rk817 driver
+#     hard-wires the USB input limit at 1.5 A and writes it again on every UNPLUG (its plug-out handler: the PMIC resets
+#     those bits when the cord comes out). At 1.5 A, ~1.0 A into the battery + the console + the radio pinned the port:
+#     the BOOST's supply sagged as the RTL-SDR started streaming and it dropped off USB every ~4 s (handheld61 logs
+#     2f39c04a / cac5d085). So: 2 A at start-up and again whenever the charger is in and the limit is not 2 A (i.e.
+#     after every plug-in), with the battery held at 1.0 A (vibe-r36s.dts &battery) — ~1.5 A drawn, ~0.5 A spare.
+#     ★ Register 0xE5 RK817_PMIC_CHRG_IN: bit 3 USB_ILIM_EN, bits 2:0 USB_ILIM_SEL — Rockchip's own rk817 driver's
+#       table: 0 = 450 mA, 1 = 80, 2 = 850, 3 = 1500, 4 = 1750, 5 = 2000, 6 = 2500, 7 = 3000. Bits 7:4 (the 4.5 V input
+#       voltage floor the driver set) are kept. The register is uncached in the kernel (REGCACHE_NONE, volatile), and the
+#       driver touches it only on unplug, so this write stands until then.
+PMIC_ADDR, CHRG_IN = 0x20, 0xE5
+# ★★ WRITTEN AS ONE FIXED VALUE, never read-modify-write: 0xDD = USB_VLIM_EN | 4.5 V floor (sel 5, the driver's own) |
+#    USB_ILIM_EN | 2 A (sel 5). The driver's value is 0xDB (the same with 1.5 A) — read at start-up on handheld62.
+CHRG_IN_2A = 0xDD
+class _SmbusData(ctypes.Union):
+    _fields_ = [("byte", ctypes.c_uint8), ("word", ctypes.c_uint16), ("block", ctypes.c_uint8 * 34)]
+
+class _SmbusIoctl(ctypes.Structure):
+    _fields_ = [("read_write", ctypes.c_uint8), ("command", ctypes.c_uint8), ("size", ctypes.c_uint32),
+                ("data", ctypes.POINTER(_SmbusData))]
+
+I2C_SLAVE_FORCE, I2C_SMBUS, SMBUS_BYTE_DATA, SMBUS_READ, SMBUS_WRITE = 0x0706, 0x0720, 2, 1, 0
+
+def _smbus(dev, rw, reg, val=0):
+    """ONE SMBus byte-data transfer (I2C_SMBUS ioctl): the register-pointer write and the read go as one i2c_transfer
+    with a repeated start, under the adapter's lock, so the kernel's own PMIC traffic (the fuel gauge polls it many
+    times a second) cannot land in between. ★★ handheld62 read with two plain read()/write() calls and the driver DID
+    land in between: about one second in three read ANOTHER register (0x24, 0x0f, 0x05 instead of 0xdb) — and the
+    read-modify-write then wrote those bits back (CHRG_IN 0x2d: the 4.5 V input floor switched off).
+    FORCE: the rk808 driver owns address 0x20."""
+    data = _SmbusData()
+    data.byte = val
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, I2C_SLAVE_FORCE, PMIC_ADDR)
+        fcntl.ioctl(fd, I2C_SMBUS, _SmbusIoctl(rw, reg, SMBUS_BYTE_DATA, ctypes.pointer(data)))
+    finally:
+        os.close(fd)
+    return data.byte
+
+def pmic_read(dev, reg):
+    return _smbus(dev, SMBUS_READ, reg)
+
+def pmic_write(dev, reg, val):
+    _smbus(dev, SMBUS_WRITE, reg, val)
+
+def pmic_bus():
+    """/dev/i2c-N of the RK817 (address 0x20 on i2c@ff180000) — found by its device node, never assumed."""
+    for d in glob.glob(SYS + "/bus/i2c/devices/*-0020"):
+        if "ff180000" in os.path.realpath(d):
+            return "/dev/i2c-" + os.path.basename(d).split("-")[0]
+    return None
+
+# ── evdev ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+EV_KEY, EV_SW = 0x01, 0x05
+KEY_VOLUMEDOWN, KEY_VOLUMEUP, KEY_POWER = 114, 115, 116
+SW_HEADPHONE_INSERT = 0x02
+EVENT = struct.Struct("llHHi")              # struct input_event on 64-bit: timeval (2 × long), type, code, value
+
+def _IOC(d, t, nr, size): return (d << 30) | (size << 16) | (ord(t) << 8) | nr
+EVIOCGRAB = _IOC(1, "E", 0x90, 4)
+def EVIOCGSW(n): return _IOC(2, "E", 0x1B, n)
+def EVIOCGKEY(n): return _IOC(2, "E", 0x18, n)
+
+def log(*a):
+    print("vibe-hwd:", *a, file=sys.stderr, flush=True)
+
+def rd(path, default=None):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+def wr(path, value):
+    with open(path, "w") as f:
+        f.write(str(value))
+
+def atomic_write(path, data, mode=0o644):
+    # ★ temp + fsync + rename + fsync(dir): a power cut leaves the old file or the new one, never half of either.
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        os.write(fd, data.encode() if isinstance(data, str) else data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, path)
+    dfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+def input_devices():
+    """[(name, /dev/input/eventN)] for every input device the kernel has right now (names can repeat)."""
+    out = []
+    for p in sorted(glob.glob(SYS + "/class/input/event*")):
+        name = rd(p + "/device/name")
+        if name:
+            out.append((name, "/dev/input/" + os.path.basename(p)))
+    return out
+
+# ── ALSA (amixer: tiny, always in alsa-utils, and the controls change rarely) ─────────────────────────────────────────
+def amixer(*args):
+    try:
+        r = subprocess.run(["amixer", "-q", "-c", CARD, *args], capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            log("amixer", *args, "failed:", r.stderr.strip())
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log("amixer", *args, "failed:", e)
+        return False
+
+def pct_to_raw(pct):
+    """0..100 → 'Master Playback Volume' 0..255, which the codec spans as −95..0 dB in even steps.
+    ★ alsamixer's own mapping (volume_mapping.c): equal steps sound like equal steps — linear raw values would put
+      all the audible change in the top quarter of the slider."""
+    if pct <= 0:
+        return 0
+    min_db, max_db = -95.0, 0.0
+    min_norm = 10 ** ((min_db - max_db) / 60.0)
+    n = (pct / 100.0) * (1 - min_norm) + min_norm
+    db = 60.0 * math.log10(n) + max_db
+    return max(0, min(255, round((db - min_db) / (max_db - min_db) * 255)))
+
+
+class Hwd:
+    def __init__(self):
+        self.clients = set()          # writers of every connection
+        self.subscribers = set()
+        self.acks = set()
+        # ★★ cpuMax: the CPU's cap, FIXED at 1008 MHz (Stuart, 2026-11-07: "try 1.0GHz" — 1.175 V against 1.30 V at 1104,
+        #    a quarter less energy per unit of work). The CPU SPEED row is gone (2026-11-09: "that isnt needed anymore since we
+        #    have determined 1GHz gives us good performance"), so a cap an older build saved is NOT read back — it could
+        #    otherwise strand a console at 408 MHz with no way to change it.
+        self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME, "cpuMax": 1008000}
+        try:
+            with open(HWD_JSON) as f:
+                self.cfg.update({k: v for k, v in json.load(f).items() if k in self.cfg and k != "cpuMax"})
+        except (OSError, ValueError):
+            pass
+        self.max_brightness = int(rd(BL + "/max_brightness", "255"))
+        self.screen = "on"
+        self.output = "speaker"
+        self.battery = {"pct": None, "charging": False, "status": "Unknown"}
+        self.low_warned = False
+        self.empty_count = 0
+        self.shutting_down = False
+        self.power_down_at = None
+        self.power_task = None
+        self.save_task = None
+        self.readers = {}             # path → task
+
+    # ── persistence ──
+    def save_soon(self):
+        # ★ debounced: holding a volume button sends ~30 auto-repeats a second; the card gets one write.
+        if self.save_task:
+            self.save_task.cancel()
+        async def later():
+            await asyncio.sleep(2)
+            try:
+                os.makedirs(STATE_DIR, exist_ok=True)
+                atomic_write(HWD_JSON, json.dumps(self.cfg))
+            except OSError as e:
+                log("could not save", HWD_JSON, e)
+        self.save_task = asyncio.get_running_loop().create_task(later())
+
+    # ── CPU speed ──
+    def cpu_steps(self):
+        steps = set()
+        for p in glob.glob("/sys/devices/system/cpu/cpufreq/policy*"):
+            for f in rd(p + "/scaling_available_frequencies", "").split():
+                if f.isdigit():
+                    steps.add(int(f))
+        return sorted(steps)
+
+    def apply_cpu(self):
+        steps = self.cpu_steps()
+        want = int(self.cfg.get("cpuMax", 1008000))
+        # ★★★ NO CPU BOOST EITHER (handheld43 log, 2026-11-08): with the GPU left at 300, 14 GPU timeouts still came
+        #     within ~1 s of the boost lifting the CPU to 1296 MHz (157–184 s), and none with the map up unboosted
+        #     (handheld40, 1277–1327 s). The map never needed it: the UI thread used 19–25 % of a core with the map up.
+        #     So the boost moves nothing; the request is still accepted and logged (an older UI sends it).
+        ok = [f for f in steps if f <= want] or steps[:1]
+        if not ok:
+            return
+        cap = ok[-1]
+        for p in glob.glob("/sys/devices/system/cpu/cpufreq/policy*"):
+            try:
+                wr(p + "/scaling_max_freq", cap)
+            except OSError as e:
+                log("cpu speed:", e)
+        log("cpu speed: capped at", cap // 1000, "MHz")
+
+
+    # ★★ THE MAP'S BOOST (Stuart, 2026-11-07: "the map is super slow and keeps looking like it is refreshing all the time"
+    #    — on handheld29's caps: the CPU 1008 MHz, the GPU 300 MHz, the memory 450 MHz). While the UI asks (the map is on
+    #    screen) every cap is lifted to the top step; off, the caps come straight back. NEVER saved — a restart, or a UI
+    #    that went away, always comes back capped (vibe-cpu.service sets the GPU and memory caps at boot).
+    DEVFREQ_CAPS = (("/sys/class/devfreq/ff400000.gpu", 300000000), ("/sys/class/devfreq/dmc", 450000000))
+    # ★★★ WHAT THE MAP BOOST MAY RAISE (handheld40 log, 2026-11-08). Boosting BOTH to their tops (GPU 560, memory 666) was
+    #     followed within ~1 s, every time, by Panfrost "gpu sched timeout"s (13 in one session: a GPU job over half a
+    #     second, the GPU reset) — and their burst starved the speaker (12 starved / 9 underruns that minute). The steady
+    #     boosted map was fine; the STEP was not. And at 300 the map page costs 1.4–5.6 ms a frame at 26–30 fps — the
+    #     boost bought little. So: the memory clock is never moved (a DDR frequency change stalls the bus under the GPU),
+    #     and the GPU steps one notch, to 400. If the timeouts persist, take the GPU out of the boost too.
+    # ★★★ THEY PERSISTED — WORSE (handheld42 log, 2026-11-08): at 400 the timeouts ran the WHOLE boost, one every
+    #     ~0.7 s (37 in two boosts: 209–226 s and 256–274 s), none before the first boost and none with it off. Each
+    #     reset cut a map render short and left the old picture in the buffer (Stuart: "a zoomed in UK over a zoomed
+    #     out USA"), and the renders it did finish took 84–193 ms. Unboosted at 300 the same map rendered in ~20 ms with
+    #     no timeouts at all (handheld40, 1277–1327 s). So the GPU is no longer boosted: ANY step off the 300 pin breaks
+    #     this board's GPU. The boost is the CPU's top step alone (apply_cpu); the GPU and memory stay on their caps.
+    BOOST_TARGETS = {}
+
+    def set_boost(self, v):
+        on = bool(int(v))
+        if on == getattr(self, "boost", False):
+            return
+        self.boost = on
+        self.apply_cpu()
+        for d, cap in self.DEVFREQ_CAPS:
+            avail = sorted(int(x) for x in rd(d + "/available_frequencies", "").split() if x.isdigit())
+            if not avail:
+                continue
+            if d not in self.BOOST_TARGETS:
+                continue                                    # ★ never moved by the boost (BOOST_TARGETS)
+            up = max([f for f in avail if f <= self.BOOST_TARGETS[d]] or [avail[0]])
+            target = up if on else min(cap, avail[-1])
+            # ★★★ the GPU is PINNED (min = max — vibe-cpu.service): its clock may share a PLL with the speaker's I2S, so it
+            #     never roams; the boost moves the pin (400 while the map is up, 300 after). Order keeps min ≤ max.
+            pin = d.endswith("ff400000.gpu")
+            try:
+                if on:
+                    wr(d + "/max_freq", target)
+                    if pin: wr(d + "/min_freq", target)
+                else:
+                    if pin: wr(d + "/min_freq", target)
+                    wr(d + "/max_freq", target)
+            except OSError as e:
+                log("boost:", d, e)
+        log("performance boost:", "ON (the map) — no clock moved" if on else "off")
+
+    # ── backlight ──
+    def apply_brightness(self):
+        if self.screen == "on":
+            try:
+                wr(BL + "/bl_power", 0)
+                wr(BL + "/brightness", self.cfg["brightness"])
+            except OSError as e:
+                log("backlight:", e)
+
+    def set_brightness(self, v):
+        v = int(v)
+        if not 0 <= v <= self.max_brightness:
+            raise ValueError("brightness out of range 0..%d" % self.max_brightness)
+        self.cfg["brightness"] = max(MIN_BRIGHTNESS, v)
+        self.apply_brightness()
+        self.save_soon()
+
+    def set_screen(self, on, why="request"):
+        want = "on" if on else "off"
+        if want == self.screen:
+            return
+        self.screen = want
+        log("screen", want, "(%s, %d listening)" % (why, len(self.subscribers)))
+        try:
+            if on:
+                self.apply_brightness()
+            else:
+                # ★ bl_power 4 = FB_BLANK_POWERDOWN: pwm-backlight drops its enable line and stops the PWM — the LEDs
+                #   are what cost the battery. The panel itself keeps scanning out: DPMS needs the DRM master, and that
+                #   is Cog. Audio is untouched (Stuart: short press = screen off, audio keeps playing).
+                wr(BL + "/brightness", 0)
+                wr(BL + "/bl_power", 4)
+        except OSError as e:
+            log("screen:", e)
+        self.emit({"event": "screen", "screen": self.screen})
+
+    # ── audio ──
+    def apply_volume(self):
+        raw = pct_to_raw(self.cfg["volume"])
+        amixer("cset", "name=Master Playback Volume", "%d,%d" % (raw, raw))
+
+    def set_volume(self, v, announce=False):
+        v = int(v)
+        if not 0 <= v <= 100:
+            raise ValueError("volume out of range 0..100")
+        self.cfg["volume"] = v
+        self.apply_volume()
+        self.save_soon()
+        if announce:
+            self.emit({"event": "volume", "volume": v, "muted": v == 0})
+
+    def set_output(self, headphones):
+        # ★ 'Playback Mux' (numid 6 on rk817_ext): item 0 = HP, 1 = SPK. The card is SILENT until it is set — day one
+        #   (2026-11-05, measured on the device: SPK = the speaker).
+        # ★★ This unit's tree is rk817-sound-AMPLIFIED: the speaker is an external amp ("Speaker Amp", GPIO enable) behind
+        #    a DAPM pin switch, 'Internal Speakers Switch'. Under ROCKNIX something had it on; here nothing did, so it is
+        #    set explicitly — on for the speaker, off with headphones in (2026-11-06, the first card: no audio).
+        self.output = "headphones" if headphones else "speaker"
+        amixer("cset", "name=Playback Mux", "HP" if headphones else "SPK")
+        if self.has_control("Internal Speakers Switch"):
+            amixer("cset", "name=Internal Speakers Switch", "off" if headphones else "on")
+        self.emit({"event": "output", "output": self.output})
+
+    def has_control(self, name):
+        cache = self.__dict__.setdefault("_controls", None)
+        if cache is None:
+            try:
+                r = subprocess.run(["amixer", "-c", CARD, "controls"], capture_output=True, text=True, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                return False                      # ★ not cached: asked again on the next switch
+            cache = self._controls = r.stdout
+            log("ALSA controls:", " | ".join(l.split("name=", 1)[-1] for l in r.stdout.splitlines()))
+        return ("name='%s'" % name) in cache
+
+    # ── battery ──
+    def read_battery(self):
+        pct = rd(BAT + "/capacity")
+        status = rd(BAT + "/status", "Unknown")
+        online = rd(CHG + "/online", "0") == "1"
+        return {"pct": int(pct) if pct and pct.lstrip("-").isdigit() else None,
+                "charging": status in ("Charging", "Full") or online, "status": status}
+
+    async def charger_loop(self):
+        """Hold the charge port's input limit at 2 A whenever the charger is in (see PMIC_ADDR above). A 1 s look at
+        sysfs; the PMIC is read only while charging (one atomic transfer), written only when it is not 0xDD."""
+        dev = pmic_bus()
+        if not dev:
+            log("charger: PMIC i2c bus not found — the input limit stays at the driver's 1.5 A")
+            return
+        try:   # ★ once, read only: the evidence for vibe-charge-fast's 0xA0 and for the driver's own CHRG_IN
+            log("charger: PMIC at start-up — CHRG_OUT 0x%02x (vibe-charge-fast expects 0xa0), CHRG_IN 0x%02x" %
+                (pmic_read(dev, 0xE4), pmic_read(dev, CHRG_IN)))
+        except OSError as e:
+            log("charger: PMIC not readable:", e)
+        while True:
+            if rd(CHG + "/online", "0") == "1":
+                try:
+                    old = pmic_read(dev, CHRG_IN)
+                    if old != CHRG_IN_2A:
+                        pmic_write(dev, CHRG_IN, CHRG_IN_2A)
+                        got = pmic_read(dev, CHRG_IN)
+                        log("charger: input limit 2 A (CHRG_IN 0x%02x -> 0x%02x)%s" %
+                            (old, got, "" if got == CHRG_IN_2A else " ✗ DID NOT STICK"))
+                except OSError as e:
+                    log("charger: input limit not set:", e)
+                    await asyncio.sleep(30)
+            await asyncio.sleep(1)
+
+    async def battery_loop(self):
+        while True:
+            b = self.read_battery()
+            if (b["pct"], b["charging"]) != (self.battery["pct"], self.battery["charging"]):
+                self.battery = b
+                if b["pct"] is not None:
+                    self.emit({"event": "battery", "pct": b["pct"], "charging": b["charging"]})
+            self.battery = b
+            pct = b["pct"]
+            if pct is not None and not b["charging"]:
+                if pct <= LOW_PCT and not self.low_warned:
+                    self.low_warned = True
+                    self.emit({"event": "battery_low", "pct": pct})
+                # ★ two readings in a row at or under 3 % — one glitchy fuel-gauge sample must not switch the radio off.
+                self.empty_count = self.empty_count + 1 if pct <= EMPTY_PCT else 0
+                if self.empty_count >= 2:
+                    await self.shutdown("battery", "poweroff")
+            else:
+                self.empty_count = 0
+                if pct is not None and pct > LOW_PCT + 2:
+                    self.low_warned = False
+            await asyncio.sleep(20 if (pct or 100) > 15 else 5)
+
+    # ── shutdown ──
+    async def shutdown(self, reason, how):
+        """Tell the engine, wait ≤ 5 s for its ack (every radio's memory saved), then a clean systemd power-off —
+        which stops the engine, unmounts the card and the state partition, and saves the clock on the way."""
+        if self.shutting_down:
+            return
+        self.shutting_down = True
+        log("shutdown:", reason, how)
+        self.acks.clear()
+        waiting = set(self.subscribers)
+        self.emit({"event": "shutdown", "reason": reason, "inSec": int(ACK_WAIT_S)})
+        t0 = time.monotonic()
+        while waiting - self.acks and time.monotonic() - t0 < ACK_WAIT_S:
+            await asyncio.sleep(0.1)
+        log("engine ack" if waiting and not (waiting - self.acks) else "no ack (%d subscriber(s))" % len(waiting),
+            "after %.1f s" % (time.monotonic() - t0))
+        os.sync()
+        if self.screen == "off":
+            self.set_screen(True)
+        msg = {"battery": "Battery empty — switching off", "power-button": "Switching off",
+               "request": "Restarting" if how == "reboot" else "Switching off"}[reason]
+        if DRYRUN:
+            log("DRYRUN: would stop the kiosk, show '%s' and systemctl %s" % (msg, how))
+            self.shutting_down = False
+            return
+        # ★ Cog holds the display; stop it so the splash can say what is happening while systemd shuts down.
+        subprocess.run(["systemctl", "stop", "vibe-kiosk.service"], timeout=10)
+        subprocess.Popen([SPLASH, "--message", msg, "--no-progress"], stdin=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "--no-block", how])
+
+    # ── clock ──
+    def set_time(self, utc_ms):
+        utc_ms = int(utc_ms)
+        if not 1577836800000 <= utc_ms <= 4102444800000:       # 2020 … 2100: anything else is a bad request
+            raise ValueError("time out of range")
+        time.clock_settime(time.CLOCK_REALTIME, utc_ms / 1000.0)
+        # ★ vibe-clock writes the RTC (when it can be written) and the saved floor/offset on the state partition.
+        # ★★ OFF THE LOOP (2026-11-08): a save now waits up to a second for the RTC's tick (vibe-clock's header), and the
+        #    loop is what answers the buttons — so it runs in a thread, after the clock itself is already set.
+        threading.Thread(target=lambda: subprocess.run([CLOCK, "save"], timeout=10), daemon=True).start()
+
+    async def clock_loop(self):
+        while True:
+            await asyncio.sleep(600)       # ★ every 10 min: a flat battery loses at most 10 min of the clock floor
+            await asyncio.get_running_loop().run_in_executor(None, lambda: subprocess.run([CLOCK, "save"], timeout=10))
+
+    # ── the socket ──
+    def emit(self, ev):
+        line = (json.dumps(ev) + "\n").encode()
+        for w in list(self.subscribers):
+            try:
+                w.write(line)
+            except Exception:
+                self.subscribers.discard(w)
+
+    def state(self):
+        b = self.battery if self.battery["pct"] is not None else self.read_battery()
+        return {"ok": True, "brightness": self.cfg["brightness"], "maxBrightness": self.max_brightness,
+                "volume": self.cfg["volume"], "muted": self.cfg["volume"] == 0, "output": self.output,
+                "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen}
+
+    async def handle(self, req, writer):
+        if not isinstance(req, dict):
+            raise ValueError("bad request")
+        if req.get("ack") == "shutdown":
+            self.acks.add(writer)
+            return None                                    # ★ an ack is not a request: no reply line
+        if req.get("subscribe") is True:
+            self.subscribers.add(writer)
+            return {"ok": True}
+        g, s, a = req.get("get"), req.get("set"), req.get("action")
+        if g == "state":
+            return self.state()
+        if g == "ssh" or s in ("ssh", "ssh-password"):
+            # ★★★ NO SSH ON THE HANDHELD (Stuart 2026-11-05: "we don't need SSH"). The image has no sshd at all and
+            #     nothing listens on any port but the engine on 127.0.0.1; debugging is the card's "Diagnostic logs/".
+            #     The §0.2 requests are answered — never silently ignored — and a password is never read or kept.
+            raise ValueError("not supported")
+        if s == "brightness":
+            self.set_brightness(req.get("value"))
+        elif s == "volume":
+            self.set_volume(req.get("value"))
+        elif s == "boost":
+            self.set_boost(req.get("value"))
+        elif s == "time":
+            self.set_time(req.get("utcMs"))
+        elif a in ("poweroff", "reboot"):
+            asyncio.get_running_loop().create_task(self.shutdown("request", a))
+        elif a == "screen-off":
+            self.set_screen(False)
+        elif a == "screen-on":
+            self.set_screen(True)
+        else:
+            raise ValueError("unknown request")
+        return {"ok": True}
+
+    async def client(self, reader, writer):
+        self.clients.add(writer)
+        try:
+            while True:
+                line = await reader.readline()
+                if not line:
+                    break
+                if len(line) > 8192:
+                    reply = {"ok": False, "error": "request too long"}
+                else:
+                    try:
+                        req = json.loads(line)
+                    except ValueError:
+                        req = None
+                    try:
+                        reply = await self.handle(req, writer)
+                    except (ValueError, TypeError) as e:
+                        reply = {"ok": False, "error": str(e) or "bad request"}
+                    except Exception as e:      # ★ one bad request must never take the service down
+                        log("request failed:", type(e).__name__)
+                        reply = {"ok": False, "error": "internal error"}
+                if reply is not None:
+                    writer.write((json.dumps(reply) + "\n").encode())
+                    await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            self.clients.discard(writer)
+            self.subscribers.discard(writer)
+            writer.close()
+
+    # ── input ──
+    def on_key(self, dev, code, value):
+        if code in (KEY_VOLUMEUP, KEY_VOLUMEDOWN) and value in (1, 2):        # press + auto-repeat
+            step = VOL_STEP if code == KEY_VOLUMEUP else -VOL_STEP
+            v = max(0, min(100, self.cfg["volume"] + step))
+            if v != self.cfg["volume"] or value == 1:
+                self.set_volume(v, announce=True)
+        elif code == KEY_POWER:
+            loop = asyncio.get_running_loop()
+            if value == 1:
+                self.power_down_at = time.monotonic()
+                async def held():
+                    await asyncio.sleep(LONG_PRESS_S)
+                    self.power_down_at = None
+                    await self.shutdown("power-button", "poweroff")
+                self.power_task = loop.create_task(held())
+            elif value == 0 and self.power_down_at is not None:
+                self.power_down_at = None
+                if self.power_task:
+                    self.power_task.cancel()
+                self.set_screen(self.screen == "off", "power button")         # short press: screen off / on
+        elif dev == "gamepad" and value == 1 and self.screen == "off":
+            self.set_screen(True, "pad button")                               # ★ any pad button wakes the screen
+
+    def on_switch(self, code, value):
+        if code == SW_HEADPHONE_INSERT:
+            self.set_output(bool(value))
+
+    async def read_dev(self, kind, path):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError as e:
+            log("cannot open", path, e)
+            return
+        try:
+            if kind in ("power", "volume"):
+                # ★ ours alone: Cog's libinput would otherwise hand KEY_POWER / volume keys to the page as keystrokes.
+                try:
+                    fcntl.ioctl(fd, EVIOCGRAB, 1)
+                except OSError:
+                    pass
+            if kind == "jack":
+                buf = bytearray(8)
+                fcntl.ioctl(fd, EVIOCGSW(len(buf)), buf)
+                self.set_output(bool(buf[0] & (1 << SW_HEADPHONE_INSERT)))
+            loop = asyncio.get_running_loop()
+            q = asyncio.Event()
+            loop.add_reader(fd, q.set)
+            try:
+                while True:
+                    await q.wait()
+                    q.clear()
+                    while True:
+                        try:
+                            data = os.read(fd, EVENT.size * 64)
+                        except BlockingIOError:
+                            break
+                        if not data:
+                            raise OSError("gone")
+                        for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                            _, _, typ, code, value = EVENT.unpack_from(data, i)
+                            if typ == EV_KEY:
+                                self.on_key(kind, code, value)
+                            elif typ == EV_SW:
+                                self.on_switch(code, value)
+            finally:
+                loop.remove_reader(fd)
+        except OSError as e:
+            log(path, "closed:", e)
+        finally:
+            os.close(fd)
+            self.readers.pop(path, None)
+
+    async def input_loop(self):
+        kinds = {"rk805 pwrkey": "power", "adc-keys": "volume", "gpio-keys": "volume",
+                 "rk817_ext Headphones": "jack", "r36s_Gamepad": "gamepad"}
+        jack_seen = False
+        while True:
+            for name, path in input_devices():
+                kind = kinds.get(name)
+                if kind and path not in self.readers:
+                    jack_seen |= kind == "jack"
+                    self.readers[path] = asyncio.get_running_loop().create_task(self.read_dev(kind, path))
+            if not jack_seen and self.output != "speaker":
+                self.set_output(False)
+            await asyncio.sleep(5)       # ★ the joypad is a module and can arrive late; a USB keyboard can come and go
+
+    async def main(self):
+        self.apply_brightness()
+        self.apply_cpu()          # ★ the CPU SPEED cap, after vibe-cpu.service set schedutil + the 1296 MHz ceiling
+        self.apply_volume()
+        if not any(n == "rk817_ext Headphones" for n, _ in input_devices()):
+            self.set_output(False)       # ★ no jack detector: the speaker, never the silent default (HP)
+        try:
+            os.unlink(SOCK)
+        except FileNotFoundError:
+            pass
+        old = os.umask(0o117)
+        server = await asyncio.start_unix_server(self.client, path=SOCK, limit=16384)
+        os.umask(old)
+        # ★ root:vibeserver 0660 — the engine connects, nobody else (§0.2).
+        try:
+            os.chown(SOCK, 0, grp.getgrnam("vibeserver").gr_gid)
+        except KeyError:
+            log("no vibeserver group — socket left root-only")
+        os.chmod(SOCK, 0o660)
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, server.close)
+        log("ready on", SOCK)
+        tasks = [loop.create_task(t) for t in (self.input_loop(), self.battery_loop(), self.charger_loop(), self.clock_loop())]
+        try:
+            await server.serve_forever()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            for t in tasks:
+                t.cancel()
+            if self.save_task and not self.save_task.done():
+                atomic_write(HWD_JSON, json.dumps(self.cfg))
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(Hwd().main())
+    except KeyboardInterrupt:
+        pass

@@ -1,0 +1,124 @@
+// vibe-r36s.dts — the VibeSDR handheld's own device-tree overlay, applied by U-Boot after ROCKNIX's mipi-panel.dtbo.
+// Built at image time: dtc -@ -I dts -O dtb -o vibe-r36s.dtbo vibe-r36s.dts
+//
+// ★★★ THE STOCK CPU STEPS, 408–1296 MHz (Stuart 2026-11-05: schedutil + the stock table). ROCKNIX's EE-clone tree gives
+//     the A35s only 1008 / 1296 (and 1416 as turbo): a receiver idling at 1008 MHz wastes the battery. These are the
+//     steps and voltages of the vendor tree that shipped on this unit (rf3536k3ka.dtb, cpu0-opp-table, its base
+//     `opp-microvolt` row — the highest of its PVTM L0–L3 rows, so never under-volted). vdd_arm allows 0.85–1.35 V.
+//     ★ NEVER ABOVE 1296: 1416 is switched off here (the vendor tree had it disabled; ROCKNIX makes it turbo) and 1512
+//     needs 1.35 V flat out — an overclock (§0).
+// ★ 1008 and 1296 already exist in ROCKNIX's table with the same voltages; restating them changes nothing.
+// ★★ The backlight's boot level 128 → 120, Stuart's default, so the kernel and vibe-hwd agree from the first frame.
+/dts-v1/;
+/plugin/;
+
+&cpu0_opp_table {
+	opp-408000000 {
+		opp-hz = /bits/ 64 <408000000>;
+		opp-microvolt = <950000 950000 1350000>;
+		clock-latency-ns = <40000>;
+		opp-suspend;
+	};
+	opp-600000000 {
+		opp-hz = /bits/ 64 <600000000>;
+		opp-microvolt = <950000 950000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-816000000 {
+		opp-hz = /bits/ 64 <816000000>;
+		opp-microvolt = <1050000 1050000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1008000000 {
+		opp-hz = /bits/ 64 <1008000000>;
+		opp-microvolt = <1175000 1175000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1104000000 {
+		opp-hz = /bits/ 64 <1104000000>;
+		opp-microvolt = <1300000 1300000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1200000000 {
+		opp-hz = /bits/ 64 <1200000000>;
+		opp-microvolt = <1300000 1300000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1248000000 {
+		opp-hz = /bits/ 64 <1248000000>;
+		opp-microvolt = <1350000 1350000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1296000000 {
+		opp-hz = /bits/ 64 <1296000000>;
+		opp-microvolt = <1350000 1350000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+	opp-1416000000 {
+		status = "disabled";
+	};
+};
+
+// ★★★ THE STOCK GPU STEPS, 200–520 MHz (Stuart, 2026-11-07: "what is the GPU doing can that be downclocked?"). ROCKNIX's
+//     tree gives the Mali-G31 ONE step, 560 MHz at 1.15 V — and the GPU shares vdd_logic with the memory controller
+//     (mali-supply and the dmc's center-supply are the same regulator), so a GPU pinned at 1.15 V held the whole rail
+//     there: the 450 MHz memory cap (vibe-cpu.service) could not take the rail down to its 0.95 V. These are the vendor
+//     tree's steps (rf3536k3ka.dtb gpu-opp-table) at its base `opp-microvolt` — the highest of its PVTM L0–L3 rows, so
+//     never under-volted. A 640×480 UI asks little of it: the devfreq governor (simple_ondemand) settles low by itself.
+// ★ ROCKNIX's own 560 MHz / 1.15 V stays, the top step for a heavy moment (the map).
+// ★★★ <target min max> — "this voltage OR HIGHER", as the CPU steps are written (handheld27: a bare <950000> asked the
+//     rail for EXACTLY 0.95 V while the memory controller on the same rail was holding at least 1.05 V; the regulator
+//     could meet both only with an empty range, refused (-22: "failed to set voltage (950000 950000 950000)"), and
+//     Panfrost gave up — the UI fell back to llvmpipe at 95 % CPU). With a range the rail settles at the higher of the
+//     two needs, and drops to 0.95 V when both are low.
+&gpu_opp_table {
+	opp-200000000 {
+		opp-hz = /bits/ 64 <200000000>;
+		opp-microvolt = <950000 950000 1350000>;
+	};
+	opp-300000000 {
+		opp-hz = /bits/ 64 <300000000>;
+		opp-microvolt = <975000 975000 1350000>;
+	};
+	opp-400000000 {
+		opp-hz = /bits/ 64 <400000000>;
+		opp-microvolt = <1050000 1050000 1350000>;
+	};
+	opp-480000000 {
+		opp-hz = /bits/ 64 <480000000>;
+		opp-microvolt = <1125000 1125000 1350000>;
+	};
+	opp-520000000 {
+		opp-hz = /bits/ 64 <520000000>;
+		opp-microvolt = <1175000 1175000 1350000>;
+	};
+};
+
+&backlight {
+	default-brightness-level = <120>;
+};
+
+// ★★ THE OTG PORT AT 5.2 V (Stuart, 2026-11-08: "can you do the force voltage to 5.2?"). The radio's 5 V is the RK817's
+//    BOOST (label usb_midu) through a GPIO load switch (vcc_host, a fixed regulator that only switches). ROCKNIX's tree
+//    lets BOOST sit anywhere in 4.9–5.4 V and fixes nothing. Stuart's inline meter, RTL-SDR V4 at 0.26 A: 4.83 V and
+//    unsteady on the R36S against 5.2 V and steady on his Mac; the V4 has spikes on every band on the R36S only.
+//    5.2 V gives the dongle's own regulators headroom back and stays inside USB's 5.25 V. BOOST feeds nothing but
+//    vcc_host (the only vin-supply = <&usb_midu> in the tree), so nothing else on the console sees it.
+//    ★ min = max makes the regulator core APPLY it at probe; the boot log prints the rail's set voltage (vibe-debuglog).
+&usb_midu {
+	regulator-min-microvolt = <5200000>;
+	regulator-max-microvolt = <5200000>;
+};
+
+// ★★ THE BATTERY CHARGES AT 1.0 A WHILE LINUX RUNS (2026-11-11, Stuart's option B). ROCKNIX's tree charges at 1.5 A and
+//    the mainline driver hard-wires the charge port's input limit at 1.5 A too, so ~1.0 A into the battery + ~0.7 A of
+//    console and radio pinned the port at its limit: as the RTL-SDR started streaming the BOOST's supply sagged and the
+//    dongle dropped off USB, re-enumerated 0.3 s later and dropped again (every ~4 s, handheld61 logs 2f39c04a /
+//    cac5d085). The one boot that charged at ~0.6 A never dropped it. Now: vibe-hwd lifts the input limit to 2 A (the
+//    R36S manual's 5 V 2 A charger; Rockchip's own driver defaults to 2 A) and the battery takes 1.0 A — ~1.5 A drawn,
+//    ~0.5 A spare. The RK817's charge steps are 0.5 / 1 / 1.5 A.
+//    ★ POWERED OFF it charges at 1.5 A: the systemd-shutdown hook vibe-charge-fast writes the PMIC's register as the
+//    last step, and the driver puts 1.0 A back at the next boot.
+&battery {
+	constant-charge-current-max-microamp = <1000000>;
+};

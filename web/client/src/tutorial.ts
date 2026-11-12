@@ -187,7 +187,11 @@ const STEPS: Step[] = [
         + 'line means it is your connection. A TORTOISE in the pill means the server is busy but running '
         + 'slower than it should: a tortoise with a FLAME means it is too hot and has slowed itself down to '
         + 'cool off; a tortoise with a LIGHTNING BOLT means its power supply cannot keep up and it has '
-        + 'slowed itself down to cope. A plain tortoise means it has slowed down and cannot tell why.',
+        + 'slowed itself down to cope. A plain tortoise means it has slowed down and cannot tell why. '
+        // ★ V12 (2026-11-12): it tucks into the edge now, as the app's does (healthTuck.ts).
+        + 'In the way? Flick it to the right, or press the › on its left, and it tucks into a small tab on the '
+        + 'edge of the screen in its own colour; press the tab to bring it back. It tucks itself away while a '
+        + 'decoder box is open, and comes back out on its own if the server gets into real trouble.',
   },
 ];
 
@@ -424,6 +428,8 @@ export function startTutorial() {
 
   panel = document.createElement('div');
   panel.id = 'tutBox';
+  // ★ V12 (R36S, no touchscreen): the tour's own box is where the D-pad moves — NEXT, BACK, SKIP — not the page under it.
+  panel.dataset.navscope = '';
   // ★ Inside #wfWrap so --decBoxBottom means the same thing here as it does for #decBox; body is
   //   the fallback for any page that has not built the waterfall yet.
   (document.getElementById('wfWrap') || document.body).appendChild(panel);

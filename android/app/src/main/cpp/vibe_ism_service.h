@@ -123,7 +123,11 @@ inline std::string readable(const Reading& r, int nick, const Units& u = Units()
         p.push_back(w);
     }
     if (r.gustKmh == r.gustKmh) p.push_back("gust " + speed(r.gustKmh));
-    if (r.rainMm == r.rainMm) p.push_back("rain " + fmt1(r.rainMm, 1) + " mm");
+    /* ★ V12 2026-11-12 (Stuart: "Rainfall since last started"): a gauge sends its running TOTAL since its batteries went
+     *  in (2754.3 mm on a Fine Offset is years, not today), so the line says the rain since this server first heard it —
+     *  the Tracker's rainNewMm. A reading not through the Tracker (the bench, the decoder tests) keeps the total. */
+    if (r.rainNewMm == r.rainNewMm) p.push_back("rain " + fmt1(r.rainNewMm, 1) + " mm since listening");
+    else if (r.rainMm == r.rainMm) p.push_back("rain " + fmt1(r.rainMm, 1) + " mm");
     if (r.rainRateMmH == r.rainRateMmH && r.rainRateMmH > 0) p.push_back(fmt1(r.rainRateMmH, 1) + " mm/h");
     if (r.uv == r.uv) p.push_back("UV " + fmt1(r.uv, 0));
     if (r.baroHpa == r.baroHpa) p.push_back(fmt1(r.baroHpa, 0) + " hPa");
@@ -347,6 +351,12 @@ public:
             nick = it->second;
         }
         Dev& d = devs_[key];
+        /* ★ rain since first heard: the gauge's total when this row began is the base; a total BELOW it (new batteries,
+         *  the counter wrapped) starts a new base rather than showing negative rain */
+        if (r.rainMm == r.rainMm) {
+            if (!(d.rainBase == d.rainBase) || r.rainMm < d.rainBase - 0.05) d.rainBase = r.rainMm;
+            r.rainNewMm = std::max(0.0, r.rainMm - d.rainBase);
+        }
         const std::string line = readable(r, nick);
         const bool fresh = d.count == 0;
         if (fresh) { d.id = ++nextId_; d.first = t; }
@@ -427,7 +437,7 @@ public:
             o += ",\"line\":\"" + jsonEsc(d->line) + "\"";
             auto num = [&](const char* k, double x, int dp) { if (x == x) { o += ",\""; o += k; o += "\":" + fmt1(x, dp); } };
             num("temp", r.tempC, 1); num("hum", r.hum, 0); num("wind", r.windKmh, 1); num("gust", r.gustKmh, 1);
-            num("dir", r.windDir, 0); num("rain", r.rainMm, 1); num("rainRate", r.rainRateMmH, 1); num("kpa", r.kpa, 1);
+            num("dir", r.windDir, 0); num("rain", r.rainMm, 1); num("rainNew", r.rainNewMm, 1); num("rainRate", r.rainRateMmH, 1); num("kpa", r.kpa, 1);
             num("uv", r.uv, 0); num("watts", r.watts, 0); num("baro", r.baroHpa, 1);
             if (r.battOk >= 0) o += ",\"batt\":" + std::to_string(r.battOk);
             if (!r.button.empty()) o += ",\"button\":\"" + jsonEsc(r.button) + "\"";
@@ -444,6 +454,7 @@ public:
 
 private:
     struct Dev { uint64_t id = 0; Reading r; int nick = 0; std::string line; double first = 0, last = 0; int count = 0;
+                 double rainBase = NAN;   // ★ the gauge's total when first heard (rain since listening)
                  std::string core; MeterTrack mt; };   // ★ core / mt: meters only
 
     /** ★ A METER (WMBUS-DECODER.md §4): one row per meter; a frame repeats only when its CORE line is the same inside 3 s

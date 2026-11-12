@@ -178,6 +178,10 @@ flags_for() {
     #     index counted inside it, per-kind counts, oldest-first eviction fair between kinds, append-only + compaction,
     #     two processes on one folder, the 1,000,000 backstop. ~2 s.
     test-gallery-store)    echo "-O2 -lpthread" ;;
+    # ★★ V12 R36S handheld (handheld_card.h, the gallery's CardLayout): card names in UTC, FAT-safe, " (2)" on a clash,
+    #    every write temp + rename (no .part left; the sweep removes a cut-off one), the JSON reader, the gallery's items
+    #    on the card with the index off it, traversal refused, and the layout OFF = the server's flat gallery. ~1 s.
+    test-handheld-card)    echo "-O2 -lpthread" ;;
     # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
     #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
     #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
@@ -189,7 +193,7 @@ flags_for() {
     # ★★ V12 DRM (decoders/drm/, docs/v12/DRM.md): the standard's tables, the coding layer, the test transmitter through annex
     #    B's channels in every robustness mode (every frame byte-checked), ±1.2 kHz / ±30 ppm, 10 min of noise + an AM signal =
     #    nothing, the audio framing, a CPU row. VIBE_TEST_AUDIO adds RRI off air (drm/). Optimised: ~2 min.
-    test-drm|test-drm-signal) echo "-O2 -I $VDSP -I $KISS" ;;
+    test-drm|test-drm-signal|test-drm-constellation) echo "-O2 -I $VDSP -I $KISS" ;;
     # ★★ DRM's AAC through FAAD2 on the real RRI recording: decodes, programme, concealment without clicks or gaps, CPU.
     test-drm-xaac)         echo "-O2 -I android/app/src/main/cpp -I $VDSP $XAAC_FLAGS" ;;
     test-drm-faad)         echo "-O2 -I $VDSP -I $KISS $FAAD_FLAGS $XAAC_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
@@ -370,7 +374,7 @@ deps_for() {
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
     test-ais|test-aprs|test-ais-store) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
-    test-drm|test-drm-signal) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
+    test-drm|test-drm-signal|test-drm-constellation) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
     test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;
     test-drm-xaac) echo "$XAAC_LIB" ;;   # ★ after the source, like FAAD2   # ★ pffft + kiss from cobjs_for
     test-dab-faad|test-dab-faad-queue|test-dab-tii-air) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
@@ -394,7 +398,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -510,6 +514,20 @@ if node scripts/test-setup-icom.mjs; then pass=$((pass+1)); else fail=$((fail+1)
 #     stations (their IQ images Suspect); a listener mid-hop gets the dial back and the hop is NOT logged; the cursor resumes;
 #     an old client works normally; promote / clear; DAB in DX mode on the 12D reference capture when VIBE_TEST_AUDIO has it.
 #     ~3 min. Same VIBESERVER_BIN rule (exit 3 = not run).
+# ★★★ V12 R36S HANDHELD end to end (vibeserver --handheld, docs/v12/R36S-HANDHELD-IMAGE.md §0.2): no radio → the page and
+#     "none"; a fake radio adopted with no setup step and reached through the hand-off; per-radio memory written on unplug
+#     and restored when THAT radio returns; hot swap; Start+Select; the card (recordings with Range, import → done/ + .txt,
+#     export, diagnostics); the fake hardware service (clamps, SSH password never logged, clock, events, shutdown ACK).
+#     ~1 min. Same VIBESERVER_BIN rule (exit 3 = not run).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-handheld.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 R36S HANDHELD — the PAGE (web/client/src/handheld.ts) in headless MUTED Edge at 640×480 with a simulated pad:
+#     "Please connect an SDR", straight into the receiver (no landing page, no start-audio screen), "Spectrum rate" and no
+#     link figures, the three accordions (one open, ○ collapses, the D-pad and ✕), the overlays, the 30 fps cap, per-radio
+#     memory across a hot swap, a recording onto the card, SPECTRUM RATE 5/10/20 (with indicative CPU figures), and an
+#     ordinary server's landing page on the D-pad. ~4 min. Same VIBESERVER_BIN rule (exit 3 = not run).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-handheld.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dx-scan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 THE OWNER'S SCANS (admin page DAB SCAN / FM SCAN) on a shared radio: the FM scan starts with a listener on,
@@ -809,6 +827,9 @@ if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fa
 # ★★★ THE DAB RECEPTION METER (2026-10-06): three bars + a sentence in place of the signal bar, judged on ~5 s
 #     of the server's counters with hysteresis; thresholds held to the on-air cases (app + web share it).
 if node --no-warnings scripts/test_dab_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE DRM RECEPTION METER (V12, 2026-11-12): DAB's meter for DRM — the decoder's own SNR in the box (Stuart: 17–20 dB
+#     decoded on a signal the meter read as 42 dB), the verdict on the programme's MER against its QAM and the audio frames.
+if node --no-warnings scripts/test_drm_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE STATION-LOGO CACHE (V12, 2026-10-30): air > RadioDNS > name, a failed fetch retried 1 min / 5 min / 30 min /
 #     daily (never a permanent blank), replaced only when the published logo changed, LRU-bounded (app + web share it).
 if node --no-warnings scripts/test_logo_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1079,6 +1100,7 @@ if npx tsx scripts/test_kb_handover.ts; then pass=$((pass+1)); else fail=$((fail
 if npx tsx scripts/test_kb_fonts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE BOOKMARK NAME, PRE-FILLED (decided 10-20): RDS name, then station name, then the frequency.
 if npx tsx scripts/test_bookmark_name.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_landing_markup.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ EDITING A BOOKMARK (V12, discussion #59): the shared form rules both clients use — frequency units, passband or the
 #    mode's default, "what I'm listening to now", the server edit query, an older server's left-behind row, your own list.
 if npx tsx scripts/test_bookmark_edit.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1153,6 +1175,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     nothing, switching it off gives the dial back. Front door + one radio process, as systemd runs them. ~40 s.
 printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE RADIO PORTS ARE THIS MACHINE ONLY (security pass, 2026-11-12): behind the front door each radio's own port
+#     (base+1+n) accepts on 127.0.0.1 and refuses on the LAN address; the door still serves /r/<id> in full (json,
+#     waterfall, audio) from loopback and the LAN, and the radio sees the CLIENT's address; a radio with no usable
+#     hand-off socket keeps its port on the network and says so. Door + three radio processes on fake rtl_tcp. ~25 s.
+printf '\n\033[1m── radio ports behind the front door answer this machine only (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-radio-ports-local.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 USRP (2026-11-02): a clone's FPGA image uploaded through /r/<serial>/… while that radio is NOT running — the
 #    front door takes it (the tester's "Refused (503)"); every other path of the down radio still 503s.
@@ -1230,6 +1259,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     reconcile (two visits 6 h apart, a weak day deletes nothing). Needs the bench clip. ~12 min — the longest suite.
 printf '\n\033[1m── the DAB band scan (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-bandscan.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12: THE LAST DAB SCAN SURVIVES A RESTART (2026-11-12, Stuart on the R36S: power off and on, "the DAB multiplexes are
+#     forgotten"). Scan, SIGKILL, start again: the same list to a fresh client; a cancelled rescan keeps the blocks it never
+#     reached; another radio's list is its own; a damaged file is no list; a scan that finds nothing removes it; the
+#     handheld's file sits with the radio's memory and Start+Select clears it. Needs the bench clip. ~7 min.
+printf '\n\033[1m── the DAB scan survives a restart (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-scan-persist.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12: THE DAB SCAN AND THE GAIN (2026-10-27, Stuart: "the AGC can work quick enough to allow the multiplex to be found
 #     but without taking forever"). An RTL front end that OBEYS the gain (fake-rtl-tcp --dab-mux): strong→weak locks in ~3 s
@@ -1406,6 +1442,14 @@ printf '\n\033[1m── DAB landing (end to end) ──\033[0m\n'
 node scripts/test-server-dab-landing.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ V12 ISM BACKGROUNDED ON AN ADS-B-IDLE RADIO (2026-11-12, Stuart's iPhone on the Pi 500's V4L: back to "ISM" at
+#     1089.590 MHz): kept ADS-B waits for ISM's own leave; the same session back past the hold is put back in ISM on its
+#     band before its first config; with somebody else on, it is told ism_off (and why); an exact ISM frequency outside
+#     every allocation is refused. Fake rtl_tcp noise only — needs VIBESERVER_BIN (exit 3 = not run). ~3 minutes.
+printf '\n\033[1m── ISM backgrounded, ADS-B the idle default (end to end) ──\033[0m\n'
+node scripts/test-server-ism-bg-return.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ V12 ISM MODE (docs/v12/ISM-DECODER.md): the real server on a fake rtl_tcp replaying a synthetic 433 MHz clip made by
 #     test-ism --write-clip — the capability, the device list and its readable lines, the privacy rule ON THE WIRE, band
 #     steps (clamped), an exact frequency, EXIT giving the dial back; then the web client in headless Edge (--mute-audio).
@@ -1521,6 +1565,23 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-cw.sh clip "$OUT/cw-clip.cu8" >/
   rm -f "$OUT/cw-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 THE DRM CONSTELLATION + RECEPTION METER (2026-11-12): the same shape on a SYNTHETIC DRM signal (the test
+#     transmitter, vibeserver/drm-synth-clip.cpp) — so it needs no recording: drm_iq only to a socket that asked, ~one per
+#     super frame, within budget, clustered on the QAM grid, off again, never to another listener (test-server-drm-
+#     constellation); then the web page: the constellation in the Signal pane, the meter in the signal bar's place with
+#     the decoder's SNR (test-web-drm-constellation, headless Edge --mute-audio).
+printf '\n\033[1m── DRM constellation + meter (synthetic signal: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && g++ -std=c++17 -O2 -I android/app/src/main/cpp -I android/app/src/main/cpp/vibedsp vibeserver/drm-synth-clip.cpp \
+     -o "$OUT/drm-synth-clip" 2>"$OUT/drm-synth-clip.buildlog" && "$OUT/drm-synth-clip" "$OUT/drm-synth.cu8" 30 24 16 B >/dev/null; then
+  VIBE_DRM_SYNTH="$OUT/drm-synth.cu8" node scripts/test-server-drm-constellation.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_DRM_SYNTH="$OUT/drm-synth.cu8" node scripts/test-web-drm-constellation.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/drm-synth.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the synthetic clip to build: vibeserver/drm-synth-clip.cpp)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 PSK31/63 (2026-10-26): the same shape — the real server on a fake rtl_tcp replaying the bench's synthetic clip

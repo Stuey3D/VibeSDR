@@ -54,6 +54,10 @@ export interface GamepadHooks {
   zoom(dir: 1 | -1): void;           // one zoom step in (+1) or out (−1)
   back(): boolean;                   // close the top panel/menu; false if there was nothing to close
   guide(): void;                     // SELECT: open the controller guide on activePadLayout(), or close it
+  /** ★★ V12 (found on the R36S in Cog, 2026-11-05): any button going DOWN, called from the pad's own poll BEFORE the
+   *  press acts. A pad press is not a DOM gesture, so the start screen's pointer/key/click resume never unlocked audio in
+   *  WPE — an AudioContext.resume() made from the poll itself does (measured by the image agent). */
+  activate?(): void;
   /** ★★ V12 VFO A/B: swap which VFO the controls tune (does nothing while A/B is off). V on a keyboard; on a pad △ in
    *  the two-stick layout, and a TAP of START in either (a hold still switches the layout). */
   swapVfo?(): void;
@@ -295,6 +299,53 @@ function enter() {
   el.click();
 }
 
+/* ★★ V12 R36S (handheldMap.ts, "SET FROM MAP"): A LAYER THAT TAKES THE WHOLE PAD. A full-screen map has no
+ *  highlight to move — the D-pad and left stick pan it, the shoulders zoom, enter / back pick or cancel. While a capture
+ *  is set every press goes to it (as the controller keyboard's do, kbPoll) and nothing underneath tunes, zooms, moves its
+ *  highlight or opens the guide; the keyboard's arrows, Enter, Escape, + / − and Page Up / Down go to it too. Setting
+ *  and clearing it both ignore the buttons that are down at that moment (suppressHeld) — the A that opened it must not
+ *  also pick, and the B that closed it must not also close the menu underneath. */
+export type PadCaptureAction = 'up' | 'down' | 'left' | 'right' | 'enter' | 'back' | 'zoomIn' | 'zoomOut';
+export interface PadCapture {
+  act(a: PadCaptureAction): void;
+  /** Every pad frame: the left and right sticks (−1…1, y down). */
+  sticks?(lx: number, ly: number, rx: number, ry: number): void;
+}
+let capture: PadCapture | null = null;
+/** Hand every press to `c` until the returned function is called. */
+export function setPadCapture(c: PadCapture): () => void {
+  capture = c;
+  suppressHeld();
+  return () => { if (capture === c) { capture = null; suppressHeld(); } };
+}
+const CAPTURED: ReadonlySet<string> = new Set(['up', 'down', 'left', 'right', 'enter', 'back', 'zoomIn', 'zoomOut']);
+
+/** The pad while a capture has it: standard layout, the same enter / back as everywhere for this layout. */
+function capPoll(gp: Gamepad, prof: string, id: string, btn: (i: number) => boolean) {
+  const c = capture!;
+  press(id + 'cup', btn(B_UP), () => c.act('up'));
+  press(id + 'cdown', btn(B_DOWN), () => c.act('down'));
+  press(id + 'cleft', btn(B_LEFT), () => c.act('left'));
+  press(id + 'cright', btn(B_RIGHT), () => c.act('right'));
+  // ★ L2 / R2 zoom in either layout; the shoulders zoom where they are not enter / back (two sticks); a stickless pad
+  //   keeps its own zoom buttons (top in, bottom out).
+  press(id + 'czout2', btn(6), () => c.act('zoomOut'));
+  press(id + 'czin2', btn(7), () => c.act('zoomIn'));
+  if (prof === 'buttons') {
+    press(id + 'center', btn(B_R1), () => c.act('enter'), false);
+    press(id + 'cback', btn(B_L1), () => c.act('back'), false);
+    press(id + 'czin', btn(B_NORTH), () => c.act('zoomIn'));
+    press(id + 'czout', btn(B_SOUTH), () => c.act('zoomOut'));
+  } else {
+    press(id + 'center', btn(B_SOUTH), () => c.act('enter'), false);
+    press(id + 'cback', btn(B_EAST), () => c.act('back'), false);
+    press(id + 'czout', btn(B_L1), () => c.act('zoomOut'));
+    press(id + 'czin', btn(B_R1), () => c.act('zoomIn'));
+  }
+  // ★ The capture may have been cleared by a press above (enter / back closed it): no sticks for a layer that is gone.
+  if (capture === c) c.sticks?.(gp.axes[0] ?? 0, gp.axes[1] ?? 0, gp.axes[2] ?? 0, gp.axes[3] ?? 0);
+}
+
 // ★ Closers for whatever is up that is not a .open panel — newest last. See the header.
 const backStack: (() => void)[] = [];
 
@@ -339,6 +390,16 @@ function typingIn(t: EventTarget | null): t is HTMLElement {
 }
 
 function onKey(e: KeyboardEvent) {
+  if (capture) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const a = e.key === 'PageUp' ? 'zoomIn' : e.key === 'PageDown' ? 'zoomOut' : keyAction(e.key, { ctrl: false, meta: false, alt: false });
+    if (!a || !CAPTURED.has(a)) return;
+    e.preventDefault();
+    if (e.repeat && (a === 'enter' || a === 'back')) return;
+    setDriven('keyboard'); mouseTravel = 0;
+    capture.act(a as PadCaptureAction);
+    return;
+  }
   // ★★ V12 VFO A/B — the one extra key: V swaps A↔B. Never while typing, never with a modifier, never repeated.
   if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !typingIn(e.target) && !padKbOpen()) {
     hooks?.swapVfo?.();
@@ -441,6 +502,7 @@ function poll() {
     const sWas = lastSticks.get(gp.index) ?? [false, false];
     lastSticks.set(gp.index, sticks);
     if (rising.some(Boolean) || sticks.some((v, i) => v && !sWas[i])) { notePadInput(); setDriven('pad'); mouseTravel = 0; }
+    if (rising.some(Boolean)) { try { hooks?.activate?.(); } catch { /* never blocks the press */ } }
     // ★★ A PAD PRESS WHILE A TEXT BOX HAS THE CURSOR (kbHandover: system / in place + pad).
     if (rising.some(Boolean) && padWhileTyping(rising[prof === 'buttons' ? B_L1 : B_EAST])) suppressHeld();
     const btn = (i: number) => {
@@ -449,6 +511,7 @@ function poll() {
       return down[i];
     };
     if (padKbOpen()) { kbPoll(gp, prof, id, btn); continue; }
+    if (capture) { capPoll(gp, prof, id, btn); continue; }
     // HOLD to switch: fires once when START has been down SWITCH_HOLD_MS, never on a tap.
     if (btn(B_START)) {
       const since = held.get(id + 'start');

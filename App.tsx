@@ -916,6 +916,9 @@ export default function App() {
   const [fontsLoaded, fontError] = useFonts({
     'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
+    // ★ V12 (2026-11-12): the bold face, for **bold** in an owner's landing message — iOS draws no bold a family
+    //   lacks (LandingMarkupText). Name = LandingMarkupText ATKINSON_BOLD.
+    'Atkinson Hyperlegible Bold': require('./assets/fonts/AtkinsonHyperlegible-Bold.ttf'),
     // ★ The faceplate displays (brief §7): Doto 900 for the dot-matrix VFD and the silver/black status
     //   window, DSEG14 Classic Bold Italic for the 14-segment VCR strip. Both OFL, licences beside
     //   them. Names are constants/faceplate.ts FONT_DOTO / FONT_SEG14 — keep the two in step. Same

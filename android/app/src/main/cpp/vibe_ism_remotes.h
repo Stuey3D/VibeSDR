@@ -123,10 +123,21 @@ namespace hcs361 {
 
 inline bool decode(const Burst& b, std::vector<Reading>& out) {
     const Runs& r = b.ook;
-    for (size_t i = 0; i + 2 * 67 + 1 < r.size(); ++i) {
+    for (size_t i = 0; i + 2 + 67 <= r.size(); ++i) {   // (PIWM: one run a bit; PWM needs twice that, checked below)
         if (r[i] <= 0 || r[i + 1] >= 0) continue;
-        const double te = r[i] / 10.0;
-        if (te < 80 || te > 450 || !near(r[i + 1], 10 * te, 0.25)) continue;
+        double te = r[i] / 10.0;
+        if (te < 80 || te > 450 || !near(r[i + 1], 10 * te, 0.25)) {
+            /* ★ 2026-11-12: the other sync (rtl_433's hcs361.c notes, the corpus's Microchip/HCS361/04): a preamble of TE
+             *  marks with 2 TE gaps (reads AAA…), then the 10 TE header gap */
+            if (i < 12) continue;
+            te = r[i];
+            if (te < 80 || te > 450 || !near(r[i + 1], 10 * te, 0.2)) continue;
+            int pulses = 0;
+            for (size_t k = i; k >= 2 && near(r[k - 2], te, 0.25) && near(r[k - 1], 2 * te, 0.25); k -= 2) ++pulses;
+            if (pulses < 5) continue;
+        }
+        // the data: PWM (a mark a bit, 3 TE each) — or ★ 2026-11-12 the VPWM / "PIWM, direct coding" format of the notes
+        // and the datasheet's modes, after either sync: EVERY run, mark and gap alike, a bit — 1 TE = 1, 2 TE = 0
         Bits bits; size_t k = i + 2;
         while (bits.size() < 67 && k < r.size() && r[k] > 0) {
             const int mk = r[k];
@@ -135,6 +146,14 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
             if (bits.size() < 66 && (k + 1 >= r.size() || r[k + 1] >= 0 || !near(mk - r[k + 1], 3 * te, 0.3))) break;
             bits.push_back(one ? 1 : 0);
             k += 2;
+        }
+        if (bits.size() != 67) {
+            bits.clear();
+            for (k = i + 2; bits.size() < 67 && k < r.size(); ++k) {
+                if (near(r[k], te, 0.3)) bits.push_back(1);
+                else if (near(r[k], 2 * te, 0.25)) bits.push_back(0);
+                else break;
+            }
         }
         if (bits.size() != 67) continue;
         int crc = 0, crcLow = 0;
@@ -309,7 +328,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  SIMPLE FIXED-CODE GATE / GARAGE REMOTES — each a short PWM word with no check, told apart by its pulse widths, its
 //  length and (where it has one) a fixed first bit. Facts: the format descriptions in rtl_433's conf/ files (Clemsa,
-//  Allstar-Firefly, BETT, Elplast, Nice-FLO, Ansonic, Linear-MultiCode, Roger) and the rtl_433_tests notes;
+//  Allstar-Firefly, BETT, Elplast, Nice-FLO, Ansonic, Linear-MultiCode, Roger, KeyFinder) and the rtl_433_tests notes;
 //  a short pulse is a 1 unless the description says "invert". Bit counts are exact, so a generic EV1527 / PT2262 word
 //  (24 bits, fixedcode::) is never taken. No check: a WHOLE word (gap to gap, every mark one of the two widths) twice
 //  alike in the burst. ★ The code is the key: secret; only the button, where the format has one, is shown.
@@ -332,6 +351,7 @@ inline const Fam* table(size_t& n) {
         {"Linear", "MultiCode remote", 450, 1500, 300, 2000, true, 10, 10, -1, -1, 0, 37},
         {"Linear", "Delta-3 remote", 500, 2000, 200, 4500, false, 8, 8, -1, -1, 0, 38},
         {"Roger", "gate remote", 450, 1000, 300, 6000, true, 28, 28, 1, 16, 4, 39},
+        {"KeyFinder", "key finder tag", 400, 1300, 250, 2500, false, 28, 28, -1, 20, 4, 0xE2},   // ★ 2026-11-12 (conf/KeyFinder.conf)
     };
     n = sizeof f / sizeof f[0];
     return f;
@@ -366,8 +386,14 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
             if (f.lead >= 0 && w[0] != f.lead) continue;
             uint64_t v = 0; for (uint8_t x : w) v = v << 1 | x;
             if (v == 0 || v == (uint64_t(1) << w.size()) - 1) continue;      // all one level: a carrier, not a code
-            if (!kit::twice(rs, w)) continue;   // ★ no check in the word: twice alike in the burst, always
+            // ★ no check in the word: twice alike in the burst — except (2026-11-12) Nice FLO and Roger, which send each
+            //   copy as its own burst (50–110 ms apart): one whole word, then the Tracker's confirm. Only those two: done for
+            //   every family, single words of Clemsa / Linear / BETT / Elplast / Ansonic shapes turned up in weather and
+            //   TPMS recordings across the corpus.
+            const bool rep = kit::twice(rs, w), once = f.family == 35 || f.family == 39;
+            if (!rep && !once) continue;
             Reading r = remoteReading("doorbell", f.make, f.model, f.family, v);
+            r.confirm = !rep;
             if (f.btnAt >= 0) { const uint32_t bt = bitsAt(w, size_t(f.btnAt), f.btnLen); r.button = std::to_string(bt); r.fact("button", (long long)bt); }
             out.push_back(r);
             return true;
@@ -417,7 +443,17 @@ inline bool continental(const Burst& b, std::vector<Reading>& out) {
 }
 
 inline bool sixsc2(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& d : kit::manchesterRows(b, 250, 80)) {
+    // ★ 2026-11-12: the frame's FIRST half-bit is a gap (the "zero-bit" Manchester of the notes) — the slice starts at the
+    //   first mark, so a row decoded from there lost the preamble's first bit (corpus 1/6). Each row is tried again with
+    //   that half-bit put back.
+    std::vector<Bits> rows = kit::manchesterRows(b, 250, 80);
+    for (const Bits& c0 : kit::nrzRows(b.ook, 250, 8, false, 160)) {
+        if (c0.empty() || !c0[0]) continue;
+        Bits c(1, 0); c.insert(c.end(), c0.begin(), c0.end());
+        const Bits d = kit::manchesterAt(c, 0, 200, false);
+        if (d.size() >= 80) rows.push_back(d);
+    }
+    for (const Bits& d : rows) {
         for (size_t s : kit::findAll(d, 0x5554, 16)) {
             if (s + 88 > d.size()) break;
             const auto by = bytesAt(d, s, 11);
@@ -439,12 +475,19 @@ inline bool sixsc2(const Burst& b, std::vector<Reading>& out) {
 inline bool gm(const Burst& b, std::vector<Reading>& out) {
     for (const Bits& w : kit::ppmRows(b.ook, 300, 500, 2000, 100, 700, 0.3)) {
         if (w.size() < 113) continue;
-        const auto by = bytesAt(w, w.size() - 113, 14);
-        if (by[0] != 0xFF) continue;
-        const int bs = (by[2] >> 4) + (by[2] & 0xF);
-        if (bs == 0 || (bs & 0xF) != 0) continue;
-        const unsigned sum = kit::sumBytes(by.data() + 1, 13);
-        if (sum == 0 || (sum & 0xFF) != 0) continue;
+        // ★ 2026-11-12: our PPM row ends at the last GAP — the frame's final bit, after the last mark, is not in it — so
+        //   the 112 bits end at the row's end (the corpus: 0/5 → 5/5); the one-bit-longer reading is still tried
+        std::vector<uint8_t> by;
+        for (size_t tail : {size_t(112), size_t(113)}) {
+            auto t = bytesAt(w, w.size() - tail, 14);
+            if (t[0] != 0xFF) continue;
+            const int bs = (t[2] >> 4) + (t[2] & 0xF);
+            if (bs == 0 || (bs & 0xF) != 0) continue;
+            const unsigned sum = kit::sumBytes(t.data() + 1, 13);
+            if (sum == 0 || (sum & 0xFF) != 0) continue;
+            by = t; break;
+        }
+        if (by.empty()) continue;
         const int bt = by[2] & 7;
         const char* wd = bt == 1 ? "unlock" : bt == 2 ? "lock" : bt == 3 ? "trunk" : bt == 4 ? "panic" : "?";
         const uint64_t id = uint64_t(by[1]) << 32 | uint64_t(by[3]) << 24 | uint64_t(by[4]) << 16 | uint64_t(by[5]) << 8 | by[6];

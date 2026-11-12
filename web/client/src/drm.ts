@@ -8,6 +8,9 @@
 //    codec. When the server cannot play the codec, its own sentence says why — prominently, because silence with no
 //    reason reads as a broken receiver (AGENTS.md: the user concludes the FEATURE is broken).
 
+import { DRM_IQ_COLOURS, DRM_IQ_ORDER, DRM_IQ_TIP, drmIqLegend, drmQamGrid, type DrmIq } from '../../../src/services/drm';
+import { DRM_SNR_EXPLAIN } from '../../../src/utils/drmQuality';
+
 export interface DrmState {
   type: 'drm';
   sync?: boolean; freq?: boolean; frame?: boolean; fac?: boolean; sdc?: boolean; msc?: boolean; locked?: boolean;
@@ -76,7 +79,7 @@ export function drmRender(host: HTMLElement, s: DrmState | null): boolean {
       .filter(Boolean).join(' · ');
     const snr = typeof s.snr === 'number' ? s.snr : NaN;
     const q = snr >= 15 ? 'good' : snr >= 9 ? 'fair' : 'poor';
-    parts.push(`<div class="drmSig"><span class="drmSnr ${q}" title="Decision SNR of the FAC cells (MER)">SNR ${isFinite(snr) ? snr.toFixed(1) : '—'} dB</span>`
+    parts.push(`<div class="drmSig"><span class="drmSnr ${q}" title="${esc(DRM_SNR_EXPLAIN)}">SNR ${isFinite(snr) ? snr.toFixed(1) : '—'} dB</span>`
              + `<span class="drmSigTxt">${sig}</span></div>`);
     if (s.codec) {
       const rate = s.audioRate ? `${(s.audioRate / 1000).toString()} kHz` : '';
@@ -254,4 +257,47 @@ export function drmSignalRender(host: HTMLElement, s: DrmState | null): void {
     if (v.dataset.src !== html) { v.dataset.src = html; v.innerHTML = html; }
     if (el.title !== r.tip) el.title = r.tip;
   }
+}
+
+// ── ★★★ V12 THE CONSTELLATION (2026-11-12) — the top of the Signal pane, DAB's scope for DRM ─────────────────────────
+// The server's drm_iq (src/services/drm.ts drmIqSanitise — the one checker, shared with the app), drawn on one canvas in
+// DAB's style (dabDrawScopes: the faint cross, small square dots, the same dark backing): the FAC and SDC first, the MSC on
+// top in DAB's yellow, faint ticks on the MSC's ideal points. Only while the pane is open, and only from a server that
+// sends it — an older one never does, and the pane then has no picture at all (main.ts hides the scope).
+export { DRM_IQ_TIP };
+
+/** The scope's HTML (built once — main.ts drmBoxSync): the canvas and its legend under the CONSTELLATION heading. */
+// ★ A 2× backing store at 200 CSS px: three clouds of 2-px dots stay crisp on a phone's and a zoomed desktop's screen.
+export const DRM_SCOPE_HTML = `<div><span>CONSTELLATION</span><canvas id="drmConst" width="400" height="400" style="width:200px;height:200px"></canvas>`
+  + `<span id="drmConstLeg" class="drmConstLeg"></span></div>`;
+
+/** Draw `q` on `cv` (200 × 200 CSS px — larger than DAB's 120: three clouds, up to 64-QAM). Returns false when there is nothing to draw. */
+export function drmDrawConstellation(cv: HTMLCanvasElement, legend: HTMLElement | null, q: DrmIq | null): boolean {
+  const g = cv.getContext('2d');
+  if (!g) return false;
+  const W = cv.width, H = cv.height, cx = W / 2, cy = H / 2;
+  g.clearRect(0, 0, W, H);
+  if (!q) { if (legend) legend.innerHTML = ''; return false; }
+  // ★ 1.25× the scale fits a 64-QAM corner (1.08 of unit power) with room for its cloud; points beyond are clipped by the box
+  const px = W / 200;                       // backing pixels per CSS pixel (200 CSS px — DRM_SCOPE_HTML)
+  const k = (W / 2 - 4 * px) / (q.scale * 1.25);
+  g.lineWidth = px;
+  g.strokeStyle = 'rgba(255,255,255,0.15)';
+  g.beginPath(); g.moveTo(cx, 0); g.lineTo(cx, H); g.moveTo(0, cy); g.lineTo(W, cy); g.stroke();
+  if (q.msc && q.mscQam) {
+    g.fillStyle = 'rgba(255,255,255,0.28)';
+    const gr = drmQamGrid(q.mscQam, q.scale);
+    for (let i = 0; i + 1 < gr.length; i += 2) g.fillRect(cx + gr[i] * k - px / 2, cy - gr[i + 1] * k - px / 2, px, px);
+  }
+  for (const ch of DRM_IQ_ORDER) {
+    const a = q[ch];
+    if (!a) continue;
+    g.fillStyle = DRM_IQ_COLOURS[ch];
+    for (let i = 0; i + 1 < a.length; i += 2) g.fillRect(cx + a[i] * k - px, cy - a[i + 1] * k - px, 2 * px, 2 * px);
+  }
+  if (legend) {
+    const html = drmIqLegend(q).map((l) => `<b style="color:${l.colour}">&#9679;</b> ${esc(l.text)}`).join(' &nbsp;');
+    if (legend.dataset.src !== html) { legend.dataset.src = html; legend.innerHTML = html; }
+  }
+  return true;
 }

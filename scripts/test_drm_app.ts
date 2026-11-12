@@ -7,7 +7,8 @@
  * Run: npx tsx scripts/test_drm_app.ts   (run-tests.sh does)
  */
 import { readFileSync } from 'node:fs';
-import { drmSanitise, drmView, drmViewText, drmOffered, drmSignalRows, DRM_LIGHTS, DRM_ZOOM_NOTE, type DrmState } from '../src/services/drm';
+import { drmSanitise, drmView, drmViewText, drmOffered, drmSignalRows, DRM_LIGHTS, DRM_ZOOM_NOTE, type DrmState,
+         drmIqSanitise, drmIqLegend, drmQamGrid } from '../src/services/drm';
 import { drmRender, drmSignalRows as webSignalRows, drmSignalRender, DRM_ZOOM_NOTE as WEB_ZOOM_NOTE } from '../web/client/src/drm';
 
 let fails = 0, passes = 0;
@@ -147,6 +148,33 @@ ok('app: the pane draws drmSignalRows', /drmSignalRows\(state\)/.test(panel));
 const main = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
 ok('web: the box is one pad stop (data-navbox) with its pane key', /box\.setAttribute\('data-navbox', ''\)/.test(main) && /id="drmPane"/.test(main));
 ok('the app passes the box its height limit', /<DrmPanel state=\{drmState\} topLimit=\{boxTopLimit\}/.test(scr));
+
+
+// ── ★★ V12 THE CONSTELLATION (2026-11-12): the one checker both clients use, and how each asks for it ──
+{
+  const msc = Array.from({ length: 600 }, (_, i) => (i % 3 ? 40 : -300));
+  const q = drmIqSanitise({ type: 'drm_iq', scale: 60, mscQam: 16, sdcQam: 4, msc, sdc: [1, 2, 3], fac: [5, -5, 7.6, 'x'] });
+  eq('drm_iq: the MSC cut to its budget (256 points)', q?.msc?.length, 512);
+  ok('drm_iq: values clipped to ±127', !!q?.msc && q.msc.every((v) => v >= -127 && v <= 127) && q.msc.includes(-127));
+  eq('drm_iq: an odd array loses its half point', q?.sdc, [1, 2]);
+  eq('drm_iq: junk reads as 0, fractions round', q?.fac, [5, -5, 8, 0]);
+  eq('drm_iq: the legend names what is there', drmIqLegend(q!).map((l) => l.text), ['MSC 16-QAM', 'SDC 4-QAM', 'FAC 4-QAM']);
+  eq('drm_iq: a channel not decoded is not in the legend', drmIqLegend(drmIqSanitise({ type: 'drm_iq', scale: 60, fac: [1, 1] })!).map((l) => l.ch), ['fac']);
+  eq('drm_iq: no cells at all is not a picture', drmIqSanitise({ type: 'drm_iq', scale: 60 }), null);
+  eq('drm_iq: another type is not one', drmIqSanitise({ type: 'drm', msc: [1, 2] }), null);
+  eq('drm_iq: a bad QAM is dropped', drmIqSanitise({ type: 'drm_iq', mscQam: 32, msc: [1, 2] })?.mscQam, undefined);
+  eq('the 16-QAM grid: 16 points at ±1/√10·scale and ±3/√10·scale', drmQamGrid(16, 60).length, 32);
+  ok('the 64-QAM grid reaches 7/√42 of unit power', Math.abs(Math.max(...drmQamGrid(64, 60)) - 7 * 60 / Math.sqrt(42)) < 1e-9);
+  // ★ asked for only while the pane is open, in both clients; an older server's pane has no picture
+  ok('app: the pane asks (onSignalPane) only while it is the Signal pane, and stops when the box goes',
+     /useEffect\(\(\) => \{ onSignalPane\?\.\(sig\); \}, \[sig, onSignalPane\]\)/.test(panel) && /useEffect\(\(\) => \(\) => \{ onSignalPane\?\.\(false\); \}/.test(panel));
+  ok('app: no picture without a fresh drm_iq (an older server never sends one)', /const showIq = sig && !!iq && !!state\?\.sync && Date\.now\(\) - iqAt < DRM_IQ_STALE_MS \? iq : null/.test(panel));
+  ok('app: one Skia Points node per channel, never a node per point', /<Points key=\{c\} points=\{p\}/.test(panel));
+  ok('web: asked for only while the Signal pane is on screen', /spec\?\.drmScopes\(on && drmPane === 'signal'\)/.test(main));
+  ok('web: hidden with no fresh picture', /if \(sc\.hidden !== !drawn\) sc\.hidden = !drawn;/.test(main));
+  ok('app: the screen hands the panel the picture and the pane hook', /iq=\{drmIq\?\.q \?\? null\} iqAt=\{drmIq\?\.at \?\? 0\} onSignalPane=\{onDrmSignalPane\}/.test(scr));
+  ok('app: DRM\'s meter goes to the controls', /drmOn=\{status\.mode === 'drm' && !dabOn\}/.test(scr) && /drmMeter=\{drmQuality\}/.test(scr));
+}
 
 console.log(`test_drm_app: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

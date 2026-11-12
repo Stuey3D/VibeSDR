@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!-- autoplay.html — does WebAudio start with NO user gesture in the kiosk? (kiosk-test.sh with a local http.server)
+     Logs the AudioContext state and plays a QUIET 440 Hz tone for 3 s, then stops. Also reports WebGL + WebCodecs. -->
+<html><body style="background:#070907;color:#e8f5ec;font:20px sans-serif">
+<p id="o">autoplay test</p>
+<script>
+const say = (s) => { console.log('[autoplay] ' + s); document.getElementById('o').textContent += ' · ' + s; };
+const ctx = new AudioContext();
+say('initial state ' + ctx.state + ' rate ' + ctx.sampleRate);
+const osc = ctx.createOscillator(); const g = ctx.createGain(); g.gain.value = 0.05;
+osc.frequency.value = 440; osc.connect(g).connect(ctx.destination); osc.start();
+ctx.resume().then(() => say('resume() resolved, state ' + ctx.state)).catch((e) => say('resume() rejected ' + e));
+setTimeout(() => say('after 1.5 s: state ' + ctx.state + ', currentTime ' + ctx.currentTime.toFixed(2)), 1500);
+setTimeout(() => { osc.stop(); say('tone stopped'); }, 3000);
+const gl = document.createElement('canvas').getContext('webgl');
+say('webgl ' + (gl ? gl.getParameter(gl.RENDERER) : 'NONE'));
+say('AudioDecoder ' + (typeof AudioDecoder));
+if (typeof AudioDecoder !== 'undefined')
+  AudioDecoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1 })
+    .then((r) => say('WebCodecs opus supported ' + r.supported)).catch((e) => say('opus check failed ' + e));
+</script></body></html>

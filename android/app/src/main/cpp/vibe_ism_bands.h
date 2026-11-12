@@ -35,6 +35,20 @@ inline const Band* bandNearest(double hz) {
     for (const auto& b : bands()) if (!best || std::fabs(b.centreHz - hz) < std::fabs(best->centreHz - hz)) best = &b;
     return best;
 }
+/** ★★★ MAY THE FREQUENCY BOX PUT ISM ON `hz`? Only inside the band's own allocation (V12, 2026-11-12). The exact-frequency
+ *  door took ANY frequency whose NEAREST band this radio reaches — so on an RTL every frequency on the dial passed (the
+ *  nearest of 315/433/868/915 always is), and an app still showing ISM over a radio the server had put in ADS-B sent
+ *  1089.59 MHz and got "ISM" at 1089.590 (Stuart, iPhone, the Pi 500's V4L). The allocations, generously:
+ *    315 — 310–320 MHz (US/Japan fobs and TPMS: 310, 314.9, 315, 318);  433 — 433.05–434.79 MHz (ITU Region 1 ISM);
+ *    868 — 863–870 MHz (the European SRD band, wM-Bus 868.3/868.95 inside it);  915 — 902–928 MHz (Region 2 ISM). */
+inline bool exactAllowed(const Band& b, double hz) {
+    const std::string id = b.id;
+    if (id == "315") return hz >= 310.0e6 && hz <= 320.0e6;
+    if (id == "433") return hz >= 433.05e6 && hz <= 434.79e6;
+    if (id == "868") return hz >= 863.0e6 && hz <= 870.0e6;
+    if (id == "915") return hz >= 902.0e6 && hz <= 928.0e6;
+    return std::fabs(hz - b.centreHz) <= b.needHz;
+}
 /** ★ The landing band by the server's location: the Americas (ITU Region 2) → 315 MHz (TPMS and fobs there; Stuart's
  *  rule "US → 315/915 by what's most common"), everywhere else → 433.92. NAN position → 433.92. `can(id)` = reachable. */
 template <class Can> inline const Band* landingBand(double lat, double lon, Can can) {

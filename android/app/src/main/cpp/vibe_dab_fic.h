@@ -180,6 +180,11 @@ struct Ensemble {
     std::map<uint32_t, FreqInfo> freqInfo;     ///< FIG 0/21, keyed by (R&M << 16) | Id
     /** ★ FIG 0/10 date and time (8.1.3.1): the DAB side of RDS's CT. -1 until heard. */
     int mjd = -1, utcHour = -1, utcMin = -1, utcSec = -1;
+    /** ★★ FOR SETTING A CLOCK (Stuart, 2026-11-08: the R36S set from DAB came out ~3 s slow). The long form's
+     *  milliseconds (0 in the short form), and THIS machine's wall clock (ms since 1970) at the moment the decoded
+     *  value CHANGED — taken here, in the decoder, not by a client that sees the report up to 0.5 s later. A client
+     *  setting its clock uses (utc − timeChangedAtMs) as the error at that instant. 0 = no change seen yet. */
+    int utcMilli = 0; double timeChangedAtMs = 0;
     std::map<uint32_t, Service> services;      ///< by SId, so repeats update rather than duplicate
     std::map<int, SubChannel>   subChannels;   ///< by SubChId
     /** ★★★ ANNOUNCEMENTS (8.1.6). 0/18 is the standing capability — which services support which
@@ -552,10 +557,16 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                 /* Rfu(1) MJD(17) LSI(1) Rfa(1) UTC flag(1) then hours(5) minutes(6), and in the long
                  * form seconds(6) milliseconds(10). The same fields sit in the same top bits either way. */
                 const uint32_t w = (uint32_t(q[0]) << 24) | (uint32_t(q[1]) << 16) | (uint32_t(q[2]) << 8) | q[3];
+                const int pm = e.mjd, ph = e.utcHour, pmi = e.utcMin, ps = e.utcSec, pms = e.utcMilli;
                 e.mjd     = int((w >> 14) & 0x1FFFF);
                 e.utcHour = int((w >> 6) & 0x1F);
                 e.utcMin  = int(w & 0x3F);
-                e.utcSec  = ((w >> 11) & 1) && qn >= 6 ? int(q[4] >> 2) : 0;
+                const bool longF = ((w >> 11) & 1) && qn >= 6;
+                e.utcSec  = longF ? int(q[4] >> 2) : 0;
+                e.utcMilli = longF ? int(((q[4] & 0x03) << 8) | q[5]) : 0;
+                if (pm >= 0 && (pm != e.mjd || ph != e.utcHour || pmi != e.utcMin || ps != e.utcSec || pms != e.utcMilli))
+                    e.timeChangedAtMs = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
             }
             /* ★★★ FIG 0/18 — ANNOUNCEMENT SUPPORT (8.1.6.1). Per service: SId, then the 16 ASu
              *  flags saying which of table 15's types it can carry, then a byte whose LOW FIVE
