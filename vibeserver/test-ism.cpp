@@ -1087,6 +1087,46 @@ static void testSec2() {
         }
         cs.push_back({{"Security+ 2.0 garage key", Sig{tx.r}, "garage remote", "button_id", "16", true}, 315e6, spellings(0x74C58200), "Security+"});
     }
+    // Chamberlain DIP (7 switches, 1010101): 1 ms slots — an opening 1 ms high, then low·high symbols of 4 ms: 0 = 1+3,
+    //   1 = 2+2, stop = 3+1 ms; 7 switches = D×6 S S D S; resent after a 36 ms gap
+    {
+        const int sym[10] = {1, 0, 1, 0, 1, 0, 2, 2, 1, 2};
+        Tx tx; tx.space(40000);
+        for (int rep = 0; rep < 3; ++rep) { tx.mark(1000); for (int v : sym) { tx.space(1000.0 * (v + 1)); tx.mark(1000.0 * (3 - v)); } tx.space(36000); }
+        cs.push_back({{"Chamberlain DIP garage key", Sig{tx.r}, "DIP-switch garage remote", "bits", "7", true}, 390e6, {"1010101", "85"}, "Chamberlain"});
+    }
+    // Microchip HCS362, both modes: 12 TE pulses (TE 200 µs), then PWM (3 TE gap; 1 TE mark = 1, 2 TE = 0, 3 TE a bit) or
+    //   Manchester (4 TE gap, start 1, a bit = its first half); 69 bits LSB first: hop 32 · serial 28 · S3 S0 S1 S2 · VLOW
+    //   · 2-bit CRC (Eq. 3-1) · queue 2
+    for (int mode = 0; mode < 2; ++mode) {
+        const uint32_t hop = 0x875C5D67, serial = 0x0109C11;
+        Bits d;
+        for (int j = 0; j < 32; ++j) d.push_back((hop >> j) & 1);
+        for (int j = 0; j < 28; ++j) d.push_back((serial >> j) & 1);
+        d.push_back(0); d.push_back(1); d.push_back(1); d.push_back(0);   // S3 S0 S1 S2: buttons 1+2 = 3
+        d.push_back(0);                                                   // VLOW
+        int crc = 0; for (int j = 0; j < 65; ++j) { const int c = ((crc >> 1) ^ d[size_t(j)]) & 1; crc = c | (((c ^ crc) << 1) & 2); }
+        d.push_back(uint8_t(crc >> 1)); d.push_back(uint8_t(crc & 1)); d.push_back(0); d.push_back(0);
+        const double T = 200;
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            for (int k = 0; k < 12; ++k) { tx.mark(T); if (k < 11) tx.space(T); }
+            if (mode == 0) { tx.space(3 * T); for (uint8_t x : d) { tx.mark(x ? T : 2 * T); tx.space(x ? 2 * T : T); } }
+            else { tx.space(4 * T); tx.mark(T); tx.space(T); for (uint8_t x : d) { if (x) { tx.mark(T); tx.space(T); } else { tx.space(T); tx.mark(T); } } tx.mark(2 * T); }
+            tx.space(100000);
+        }
+        cs.push_back({{mode ? "HCS362 key (Manchester)" : "HCS362 key (PWM)", Sig{tx.r}, "Key fob / remote", "button", "3", true}, 868.3e6,
+                      {"0109C11", "109c11", "1088529", "875C5D67", "875c5d67"}, "Microchip HCS362"});
+    }
+    // 2GIG KEY2E: OOK Manchester 136 µs chips, raw 55 55 56, then (01 = 1) 32 enciphered · 25 · 16 enciphered · CRC-16
+    //   0x8005 init 0x4C57 over the 7 bytes
+    {
+        std::vector<uint8_t> by = {0x00, 0x9A, 0xA0, 0x48, 0x25, 0x0E, 0x25, 0, 0};
+        const uint16_t c = crc16(by.data(), 7, 0x8005, 0x4C57); by[7] = uint8_t(c >> 8); by[8] = uint8_t(c);
+        Bits ch = hb(0x5555555556ull, 40); append(ch, manch01(bytesToBits(by)));
+        Tx tx; for (int rep = 0; rep < 2; ++rep) { for (uint8_t x : ch) { if (x) tx.mark(136); else tx.space(136); } tx.space(100000); }
+        cs.push_back({{"2GIG KEY2E key", Sig{tx.r}, "KEY2E (encrypted)", nullptr, nullptr, true}, 345e6, {"009AA048", "009aa048", "9AA048"}, "2GIG"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low

@@ -274,11 +274,176 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace secplusv2
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  CHAMBERLAIN / LIFTMASTER DIP-switch garage remotes (7, 8 or 9 switches; 300–390 MHz) — OOK in 1 ms slots. Facts: the
+//  notes in rtl_433's chamberlain_code.c (from the Flipper Zero protocol): a word follows a ~36 ms gap; each symbol is 4
+//  slots, low then high — 0 = 1 low 3 high, 1 = 2 low 2 high, stop = 3 low 1 high; the first stop's high slot opens the
+//  word. After it: 9 switches = D×9 S · 8 = D×5 S D D S · 7 = D×6 S S D S. No check beyond the symbol and stop places:
+//  the word must come twice alike (it is resent every ~80 ms).
+//  ★★ PRIVACY: the switches ARE the key of the garage (512 codes at most) — never shown; "Key fob #n · Chamberlain
+//     · garage remote", the code only hashed.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace chamberlaindip {
+
+/** Each word: the symbols after the opening slot, 0 / 1 / 2 (= stop); empty when the runs are not such a word. */
+inline std::vector<std::vector<int>> words(const Runs& r) {
+    std::vector<std::vector<int>> out;
+    for (size_t i = 0; i + 1 < r.size(); ++i) {
+        if (r[i] <= 0 || !near(r[i], 1000, 0.25) || (i > 0 && -r[i - 1] < 20000)) continue;
+        std::vector<int> w;
+        size_t k = i + 1;
+        while (k + 1 < r.size() && r[k] < 0 && r[k + 1] > 0) {
+            const int lo = -r[k], hi = r[k + 1];
+            if (!near(lo + hi, 4000, 0.12)) break;
+            const int s = near(lo, 1000, 0.3) ? 0 : near(lo, 2000, 0.2) ? 1 : near(lo, 3000, 0.15) ? 2 : -1;
+            if (s < 0) break;
+            w.push_back(s); k += 2;
+        }
+        if (k < r.size() && r[k] < 0 && -r[k] < 20000) continue;   // the word must end in the long gap
+        if (w.size() == 9 || w.size() == 10) out.push_back(w);
+        i = k;
+    }
+    return out;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const auto ws = words(b.ook);
+    for (size_t a = 0; a < ws.size(); ++a) {
+        const auto& w = ws[a];
+        auto at = [&](std::initializer_list<int> stops, size_t n) {
+            if (w.size() != n) return false;
+            for (size_t k = 0; k < n; ++k) {
+                const bool stop = std::find(stops.begin(), stops.end(), int(k)) != stops.end();
+                if ((w[k] == 2) != stop) return false;
+            }
+            return true;
+        };
+        int nsw = at({9}, 10) ? 9 : at({5, 8}, 9) ? 8 : at({6, 7, 9}, 10) ? 7 : 0;
+        if (!nsw) continue;
+        bool twice = false;
+        for (size_t c = 0; c < ws.size(); ++c) if (c != a && ws[c] == w) twice = true;
+        uint64_t code = uint64_t(nsw) << 16;
+        for (int s : w) code = code * 3 + uint64_t(s);
+        Reading r = remoteReading("keyfob", "Chamberlain", "DIP-switch garage remote", 0xD7, code);
+        r.fact("bits", (long long)nsw);
+        r.confirm = !twice;   // ★ no check: twice alike — in this burst, or by the Tracker
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace chamberlaindip
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  MICROCHIP HCS362 KeeLoq encoders (gate / garage / car remotes; 315 / 433 / 868 MHz) — Microchip datasheet DS40189E
+//  and the notes in rtl_433's hcs362.c: a preamble of 12 TE pulses (TE ≈ 200 µs), then EITHER (PWM mode) a ~3 TE gap and
+//  69 PWM bits of 3 TE (a 1 TE mark = 1, 2 TE = 0), OR (Manchester mode) a ~4 TE gap, a start bit 1, 69 Manchester bits
+//  (the first half-bit high = 1) and a stop. The 69 bits, LSB first: 32 encrypted (the hop code) · 28 serial · buttons
+//  S3 S0 S1 S2 · VLOW · a 2-bit CRC over the first 65 (datasheet Eq. 3-1, as the HCS361's) · 2 queue bits.
+//  ★★ PRIVACY: only "Key fob · Microchip HCS362 · button 3" — the serial only hashed, the hop code never read. The 2-bit
+//     CRC is weak: confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace hcs362 {
+
+inline bool crcOk(const Bits& d) {
+    int crc = 0;   // CRC0 << 1 | CRC1
+    for (int j = 0; j < 65; ++j) { const int c = ((crc >> 1) ^ d[size_t(j)]) & 1; crc = c | (((c ^ crc) << 1) & 2); }
+    return (d[65] << 1 | d[66]) == crc;
+}
+
+inline bool emit(const Bits& d, std::vector<Reading>& out) {
+    if (d.size() < 69 || !crcOk(d)) return false;
+    uint32_t serial = 0; for (int j = 0; j < 28; ++j) serial |= uint32_t(d[size_t(32 + j)]) << j;
+    if (serial == 0 || serial == 0x0FFFFFFF) return false;
+    const int s3 = d[60], s0 = d[61], s1 = d[62], s2 = d[63];
+    const int bt = s0 | s1 << 1 | s2 << 2 | s3 << 3;
+    if (bt == 0) return false;
+    Reading r = remoteReading("keyfob", "Microchip HCS362", "Key fob / remote", 0xD8, serial);
+    r.button = std::to_string(bt);
+    r.battOk = d[64] ? 0 : 1;
+    r.fact("button", (long long)bt);
+    r.confirm = true;   // ★ a 2-bit CRC: shown once heard twice alike
+    out.push_back(r);
+    return true;
+}
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    const Runs& r = b.ook;
+    for (size_t i = 0; i + 30 < r.size(); ++i) {
+        // 12 preamble pulses of one TE
+        if (r[i] <= 0) continue;
+        const double te = r[i];
+        if (te < 120 || te > 480) continue;
+        size_t j = i; int n = 0; double sum = 0;
+        while (j + 1 < r.size() && r[j] > 0 && near(r[j], te, 0.3) && r[j + 1] < 0 && near(r[j + 1], te, 0.35)) { sum += r[j] - r[j + 1]; j += 2; ++n; }
+        if (n < 10 || n > 12 || j + 1 >= r.size() || r[j] <= 0 || !near(r[j], te, 0.3)) { if (n) i = j; continue; }
+        const double T = (sum + r[j]) / (2 * n + 1);
+        const double g = -r[j + 1];
+        if (near(int(g), 3 * T, 0.2)) {                                         // PWM mode
+            Bits d; size_t k = j + 2;
+            while (d.size() < 69 && k < r.size() && r[k] > 0) {
+                const bool one = r[k] < 1.5 * T;
+                if (!near(r[k], one ? T : 2 * T, 0.35)) break;
+                if (d.size() < 68 && (k + 1 >= r.size() || r[k + 1] >= 0 || !near(r[k] - r[k + 1], 3 * T, 0.25))) break;
+                d.push_back(one); k += 2;
+            }
+            if (emit(d, out)) return true;
+        } else if (near(int(g), 4 * T, 0.2)) {                                  // Manchester mode
+            Bits c; size_t k = j + 2;
+            for (; k < r.size() && c.size() < 2 * 72; ++k) {
+                const int m = near(r[k], T, 0.3) ? 1 : near(r[k], 2 * T, 0.25) ? 2 : 0;
+                if (!m) { if (r[k] > 2 * T) c.push_back(1); break; }   // the stop: a long high — its first chip is the last bit's
+                for (int q = 0; q < m; ++q) c.push_back(r[k] > 0);
+            }
+            if (c.size() >= 2 + 2 * 69 && c[0] == 1 && c[1] == 0) {
+                const Bits d = kit::manchesterAt(c, 2, 69, false);
+                if (emit(d, out)) return true;
+            }
+        }
+        i = j;
+    }
+    return false;
+}
+
+} // namespace hcs362
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  2GIG KEY2E-345 encrypted key fobs (345 MHz) — the notes in rtl_433's twogig_key2e.c (issue #2584): the Honeywell /
+//  2GIG raw preamble 55 55 56 and OOK Manchester (~136 µs halves), then 72 bits: 32 encrypted · 0x25 · 16 encrypted ·
+//  CRC-16 poly 0x8005, init 0x4C57, over the first 7 bytes. Everything but the constant is enciphered ("eSeries
+//  Encrypted") — no ID and no button can be read. ★ So only "Key fob #n · 2GIG KEY2E (encrypted)"; the row is keyed by
+//  a hash of the enciphered word (a new row per press, as the 6SC2's).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace twogigkey {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    for (const Bits& row : kit::nrzRowsAny(b, 136, 12, 96)) {
+        for (size_t s : kit::findAll(row, 0x555556, 24)) {
+            const Bits d = kit::manchesterAt(row, s + 24, 72);
+            if (d.size() < 72) continue;
+            const auto by = bytesAt(d, 0, 9);
+            if (crc16(by.data(), 7, 0x8005, 0x4C57) != uint16_t(by[7] << 8 | by[8])) continue;
+            const uint32_t enc = uint32_t(by[0]) << 24 | uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+            Reading r = remoteReading("keyfob", "2GIG", "KEY2E (encrypted)", 0xD9, enc);
+            r.note = "encrypted";
+            out.push_back(r);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace twogigkey
+
 /** The second-pass remote / fob families, strongest checks first. */
 inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
+    if (twogigkey::decode(b, out)) return true;
     if (secplusv2::decode(b, out)) return true;
+    if (hcs362::decode(b, out)) return true;
     if (caralarm::decode(b, out)) return true;
     if (ford::decode(b, out)) return true;
+    if (chamberlaindip::decode(b, out)) return true;
     if (honda::decode(b, out)) return true;
     return false;
 }
