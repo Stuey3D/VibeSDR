@@ -10,6 +10,7 @@
 #include "vibe_ism_weather5.h"   // ★ weather pass 2026-11-11: S3318P family, XC-0324, Hideki, GT-WT-02/03, WT0124, Cotech, TFA pool
 #include "vibe_ism_weather6.h"   // ★ weather pass 2026-11-11: Auriol, Vauno, AlectoV1, Prologue
 #include "vibe_ism_weather7.h"   // ★ weather pass 2026-11-11: WS 7000 / WS 2500, F007TH, TX-8300
+#include "vibe_ism_weather9.h"   // ★ weather pass 2026-11-11: EFTH-800, ThermoPro, Rubicson, Bresser 3CH, WT450
 
 namespace vibeism {
 
@@ -454,12 +455,14 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (wx8::decode(b, out)) return;
     if (wx6::decode(b, out)) return;
     if (wx5::decode(b, out)) return;
+    if (wx9::decode(b, out)) return;
     if (nexus::decode(b, out)) return;
     if (acurite::decodePwm(b, out)) return;
     if (acurite::decode782(b, out)) return;
     if (lacrosse::decode(b, out)) return;
     if (currentcost::decode(b, out)) return;
     if (lacrosse::decodeWx3(b, out)) return;
+    if (wx9::bresser3ch(b, out)) return;
     if (keeloq::decode(b, out)) return;
     if (fixedcode::decode(b, out)) return;
     if (tpms::decodeA(b, out)) return;
