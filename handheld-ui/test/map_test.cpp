@@ -239,6 +239,23 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (what == "frame") {
+        // ★ the frame alone: a loaded z3 / z5 spots map, 250 spots, no re-render — 300 frames, as fast as they go
+        h.v.profile = "spots";
+        std::vector<Spot> spots;
+        uint32_t rnd = 777;
+        auto next = [&] { rnd = rnd * 1103515245u + 12345u; return (rnd >> 8) / 16777216.0; };
+        for (int i = 0; i < 250; i++) spots.push_back({-50 + next() * 115, -170 + next() * 340, rgb(0x5be36b), "G" + std::to_string(i) + "ABC"});
+        for (int z : {3, 5}) {
+            h.v.centreOn(30, 0, z);
+            settle(h, spots);
+            resetPerf(h);
+            for (int i = 0; i < 300; i++) frameOnce(h, spots);
+            std::printf("  frame z%d, 250 spots: %.2f ms a frame (map copy + spots + finish), %ld re-renders\n", z, h.frameCpu / h.frames, mapRender().renders);
+        }
+        return 0;
+    }
+
     if (what == "lod") {
         // ★ the world-view fans (z ≤ 4) must look like the full ones: the same view both ways, pixel by pixel
         h.v.area = {0, 0, 640, 480};
@@ -338,7 +355,10 @@ int main(int argc, char** argv) {
         const long renders = mapRender().renders;
         savePng(out + "/spots_z4.png");
         // ★ bounded: an open (everything loads), 3 zooms, 1 pan, their data — not one render per file
-        const long cap = std::getenv("MAP_TEST_RENDER_CAP") ? std::atol(std::getenv("MAP_TEST_RENDER_CAP")) : 24;
+        // (before the fix: 20 — data 9, one of them drawing nothing new; after: 14–15 — data 4–5)
+        const long cap = std::getenv("MAP_TEST_RENDER_CAP") ? std::atol(std::getenv("MAP_TEST_RENDER_CAP")) : 18;
+        const long dataR = mapRender().byCause[MapRender::RC_DATA];
+        check(dataR <= 6, "data re-renders coalesced (" + std::to_string(dataR) + " ≤ 6 for " + std::to_string(mapStore().uploads) + " uploads)");
         check(renders <= cap, "re-renders bounded (" + std::to_string(renders) + " ≤ " + std::to_string(cap) + " in 60 s)");
         check(gWastedData == 0, "no data re-render that draws nothing new (" + std::to_string(gWastedData) + ")");
         std::printf("  spots: %s\n", fails ? "FAILED" : "passed");
