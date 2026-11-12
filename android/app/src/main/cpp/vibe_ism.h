@@ -295,6 +295,7 @@ struct FeConst {
      *  83 kHz apart: at 80 kHz each tone opened its own channel and neither was the whole signal. Wide-deviation FSK
      *  (car keys) needs the pair kept together; the 250 kHz channel holds both tones. test-ism unchanged (105/0). */
     static constexpr int    kMaxChans = 4;
+    static constexpr size_t kRingSize = size_t(1) << 18;   ///< the mixer's pre-roll ring, work samples (~109 ms at 2.4 MS/s)
     static constexpr float  kMinBurstSnrDb = 6.5f; ///< see slice(): noise alone reads ~4.5 dB
     static constexpr size_t kMaxRuns = 6000;      ///< more transitions than any sensor sends in 1.6 s = noise; not decoded
     /* ★★ A HOG IS HELD, NOT RE-OPENED (2026-10-31, the Pi 2 thread split). Something that keeps a channel busy for the
@@ -324,6 +325,7 @@ struct ChanEvent {
     uint64_t at = 0;
     uint64_t start = 0;        ///< kOpen: the channel's first sample (the pre-roll before the detection)
     double offHz = 0;          ///< kOpen, kPromote: the centre to MIX at, relative to the capture centre (see DChan::mixHz)
+    bool wide = false;         ///< kOpen, kPromote: a wide FSK pair — mix at twice the channel rate (ChanMixer::tune)
 };
 
 /** A closed channel, mixed and not yet sliced: the mixer's output, the slicer's input. */
@@ -405,11 +407,18 @@ public:
      *  outside it are where the floor moves fastest and false bursts cluster (Pi 500 RTL, 433.92, 2026-10-25). */
     void setUsableHz(double lo, double hi) { useLo_ = lo; useHi_ = hi; tablesOk_ = false; }
     /** The channel rate the mixer runs at: a pending channel's mix centre may move by a quarter of it (DChan::mixHz). */
-    void setChanRate(double hz) { moveCapHz_ = 0.25 * hz; }
+    void setChanRate(double hz) { moveCapHz_ = 0.25 * hz; chanRateHz_ = hz; }
     static constexpr float kMoveOver = 4.0f;   ///< (6 dB) a sighting this far over the first is the burst itself
     static constexpr float kTakeOver = 100.0f; ///< (20 dB) a sighting this far over an open channel's peak takes it over (scan)
     static constexpr double kTakeOverHz = 10e3; ///< … when this far from where the channel is mixed
-    static constexpr double kTakeOverBackS = 0.05; ///< the new channel keeps the old one's start, up to this far back
+    static constexpr double kTakeOverBackS = 0.05;
+    static constexpr float kPairExcess = 30.0f;  ///< (15 dB) each tone of a wide FSK pair stands this far over its floor
+    static constexpr float kPairOver = 4.0f;     ///< (6 dB) … and within this of the other
+    static constexpr double kPairMinHz = 100e3, kPairMaxHz = 200e3;   ///< … this far apart (see scan)
+    static constexpr double kWideFrac = 0.22;    ///< a pair's half-spacing over this × the channel rate is mixed wide
+    /** a tone's sibling born this soon after it, while it is still on the air (seen within kPairLiveS), is the pair's
+     *  other tone: a frame's preamble may hold one tone for several ms (the Toyota PMV-C210's: ~4 ms) */
+    static constexpr double kPairYoungS = 0.02, kPairLiveS = 0.002; ///< the new channel keeps the old one's start, up to this far back
 #if defined(VIBE_ISM_PROF)
     IsmProf* prof_ = nullptr;
 #endif
@@ -481,11 +490,14 @@ private:
          *  holds differently; only the frequency the burst is mixed at, and reported at, is better. */
         double mixHz = 0;
         float firstPow = 0;
+        bool paired = false;    ///< centred on a wide FSK pair (scan): never re-centred again
+        uint64_t born = 0;      ///< the detector position of its first sighting
+        bool wide = false;      ///< a pair too wide for the channel rate: mixed at twice it
     };
     void emit(std::vector<ChanEvent>& ev, ChanEvent::Kind k, int slot) {
         ChanEvent e; e.kind = k; e.slot = uint8_t(slot); e.serial = ch_[slot].serial; e.at = total_;
         if (k == ChanEvent::kOpen) e.start = ch_[slot].start;
-        if (k == ChanEvent::kOpen || k == ChanEvent::kPromote) e.offHz = ch_[slot].mixHz;
+        if (k == ChanEvent::kOpen || k == ChanEvent::kPromote) { e.offHz = ch_[slot].mixHz; e.wide = ch_[slot].wide; }
         ev.push_back(e);
     }
     /** Capture sample `s` (absolute work position), from the current block or the history before it. */
@@ -529,6 +541,11 @@ private:
      *  opens its channel from its own start (the mixer's ring holds ~1 s at 250 kS/s, ~109 ms at 2.4 MS/s; the window is
      *  65 / 20 ms). Live this is the first instant after ISM starts; on a recording cut by a trigger it is the burst. */
     static constexpr int kSeedFrames = 64;
+    /* ★ the MEDIAN, not a lower quantile: the 25th or 12th percentile would survive a burst filling more of the window,
+     *  but an RTL's gain dip under a strong burst is a quarter of the window too, and those floors learnt the dip
+     *  (the corpus: every emonTx lost, 74 and 76 of 76). A burst filling over half the window is still learnt as floor. */
+    static constexpr int kSeedQ = kSeedFrames / 2;
+    static constexpr float kSeedScale = 1.44f;      ///< an exponential's median is 0.69 of its mean
     void seedFrame(std::vector<ChanEvent>& ev) {
         if (seed_.empty()) { seed_.assign(size_t(kSeedFrames) * kN, 0.0f); seedAt_.assign(kSeedFrames, 0); }
         std::copy(pw_.begin(), pw_.end(), seed_.begin() + long(frames_) * kN);
@@ -537,9 +554,10 @@ private:
         std::vector<float> col(kSeedFrames);
         for (int k = 0; k < kN; ++k) {
             for (int f = 0; f < kSeedFrames; ++f) col[size_t(f)] = seed_[size_t(f) * kN + size_t(k)];
-            std::nth_element(col.begin(), col.begin() + kSeedFrames / 2, col.end());
-            // ★ ×1.08: an exponential's median is 0.69 of its mean, the censored mean below settles near 0.75 of it
-            floor_[size_t(k)] = std::max(1e-14f, col[size_t(kSeedFrames / 2)] * 1.44f);
+            std::nth_element(col.begin(), col.begin() + kSeedQ, col.end());
+            // ★ ×1.44 = the bin's MEAN power, where the old running-mean seed stood; the censored mean below then settles
+            //   near 0.75 of it, as it always has
+            floor_[size_t(k)] = std::max(1e-14f, col[size_t(kSeedQ)] * kSeedScale);
         }
         const uint64_t now = total_;
         std::vector<float> cur(pw_);
@@ -569,16 +587,16 @@ private:
         const float thr = thr_;
         if (!tablesOk_) buildTables();
         // groups of over-threshold bins, scanned in frequency order (negative first), one-bin gaps bridged
-        struct G { double f, wsum; float peak, pmax; int width; };
+        struct G { double f, wsum; float peak, pmax; int width; bool pair; double sep; };
         G groups[16]; int ng = 0;
-        bool inG = false; int gapRun = 0; G cur{0, 0, 0, 0, 0};
+        bool inG = false; int gapRun = 0; G cur{0, 0, 0, 0, 0, false, 0};
         for (int j = 0; j < kN; ++j) {
             const int k = order_[size_t(j)];                // -N/2 .. N/2-1, as bins
             const float p = pw_[size_t(k)];
             // ★ no division: a bin is "over" when p > floor × thr; the ratio is worked out only for the few that are
             if (usable_[size_t(k)] && p > floor_[size_t(k)] * thr) {
                 const float ex = p / floor_[size_t(k)];
-                if (!inG) { cur = G{0, 0, 0, 0, 0}; inG = true; }
+                if (!inG) { cur = G{0, 0, 0, 0, 0, false, 0}; inG = true; }
                 gapRun = 0;
                 cur.f += double(freq_[size_t(k)]) * p; cur.wsum += p;
                 cur.peak = std::max(cur.peak, ex); cur.pmax = std::max(cur.pmax, p); ++cur.width;
@@ -591,28 +609,77 @@ private:
 
         // ★ strongest first, so a strong burst takes its channel before its own splatter can
         std::sort(groups, groups + ng, [](const G& a, const G& b) { return a.pmax > b.pmax; });
+        /* ★★ WIDE-DEVIATION FSK IS ONE SIGNAL (2026-11-12). A tyre sensor at ±60-75 kHz, an RFM12 (emonTx) at ±90 kHz:
+         *  its two tones are two groups up to ~180 kHz apart, and each opened a channel of its own centred on ONE tone —
+         *  the other tone outside it or on its edge, and the discriminator saw one tone (WH2303: "dev 12 kHz" where the
+         *  frame is ±64 kHz). Two groups in the SAME frame, both clearly strong (each ≥ kPairExcess over its floor) and
+         *  within kPairOver of each other, from kPairMinHz to kPairMaxHz apart, are one sighting at their MIDPOINT (an
+         *  FSK's tones sit either side of its carrier) — the channel then holds both tones, ±kPairMaxHz/2 at most. A
+         *  narrow pair inside kPairMinHz is one group, or matched to one channel, already. ★ Only BIRTHS pair: groups with
+         *  no open channel near them — an FSK's tones start together; a burst beside another already on the air is a
+         *  second transmitter (oil gauges two at once; an OOK burst and the DC remnant its keying moves). */
+        auto nearOpen = [&](double fq) { for (auto& c : ch_) if (c.on && std::fabs(c.offHz - fq) < kMatchHz) return true; return false; };
+        for (int g = 0; g < ng; ++g) {
+            G& a = groups[g];
+            // ★ only the frame's strongest signals: a strong burst's keying splatter pairs with itself otherwise
+            if (a.wsum <= 0 || a.peak < kPairExcess || a.pmax * kPairOver < groups[0].pmax) continue;
+            const double fa = a.f / a.wsum;
+            if (nearOpen(fa)) continue;
+            for (int h = g + 1; h < ng; ++h) {
+                G& b = groups[h];
+                if (b.wsum <= 0 || b.peak < kPairExcess || b.pmax * kPairOver < a.pmax) continue;
+                const double d = std::fabs(b.f / b.wsum - fa);
+                if (d < kPairMinHz || d > kPairMaxHz || nearOpen(b.f / b.wsum)) continue;
+                const double mid = 0.5 * (fa + b.f / b.wsum);
+                VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "pair    %9.4f s  %+9.1f kHz (%.3g, w%d) + %+9.1f kHz (%.3g, w%d) -> %+9.1f\n", double(total_) / w_, fa / 1e3, double(a.pmax), a.width, b.f / b.wsum / 1e3, double(b.pmax), b.width, mid / 1e3);)
+                a.wsum += b.wsum; a.f = mid * a.wsum; a.width += b.width; a.peak = std::max(a.peak, b.peak); a.pair = true; a.sep = d;
+                b.wsum = 0;
+                break;
+            }
+        }
         for (auto& c : ch_) if (c.on) c.framePow = 0;
         for (int g = 0; g < ng; ++g) {
             const G& gr = groups[g];
             if (gr.wsum <= 0) continue;
             // ★ a single bin must be clearly strong; a wider group may be weaker — a real burst spreads over bins
             if (gr.width < 2 && gr.peak < thr * 3.0f) continue;
-            const double f = gr.f / gr.wsum;
+            double f = gr.f / gr.wsum;
+            bool pair = gr.pair;
+            double sep = gr.sep;
             int hit = -1;
             uint64_t takeStart = UINT64_MAX;
-            for (int s = 0; s < kMaxChans; ++s) if (ch_[s].on && std::fabs(ch_[s].offHz - f) < kMatchHz) { hit = s; break; }
+            {   // ★ the NEAREST open channel (2026-11-12): the first in slot order stole a second burst's sightings
+                double best = kMatchHz;
+                for (int s = 0; s < kMaxChans; ++s) if (ch_[s].on && std::fabs(ch_[s].offHz - f) < best) { best = std::fabs(ch_[s].offHz - f); hit = s; }
+            }
             /* ★★ A BURST IS NOT SWALLOWED BY A NOISE CHANNEL (2026-11-12). A noise blip promoted by a second blip keeps a
              *  channel open at ITS frequency for 25 ms; a real burst arriving within kMatchHz of it was folded in — mixed
              *  up to 60 kHz off its own centre, the channel's start tens of ms before it, and lost (oil gauges, Fine
              *  Offset WH2: 30 dB bursts in a channel whose peak was the noise's). A sighting kTakeOver over everything the
              *  channel has seen, and away from its mix centre, now cancels it and opens its own channel (with its own
              *  pre-roll). Nothing real is lost: what the old channel held was 20 dB under this, and splatter if near it. */
-            if (hit >= 0 && !ch_[hit].pending && gr.pmax > ch_[hit].peakPow * kTakeOver &&
-                std::fabs(f - ch_[hit].mixHz) > kTakeOverHz) {
-                VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "takeover %8.4f s  slot %d  %+9.1f kHz over %+9.1f kHz\\n", double(total_) / w_, hit, f / 1e3, ch_[hit].mixHz / 1e3);)
+            /* ★ and a channel born on ONE tone of a wide FSK pair (the other tone's first sighting came a frame or two
+             *  later, too far away to match it) is re-centred on the pair: a birth within kPairYoungS of a channel's own,
+             *  kPairMinHz…kPairMaxHz from it, both strong and within kPairOver of each other. Once — never flapping. */
+            int sib = -1;
+            if (hit < 0 && !pair && gr.peak >= kPairExcess)
+                for (int s = 0; s < kMaxChans; ++s) {
+                    const DChan& c = ch_[s];
+                    const double d = std::fabs(c.offHz - f);
+                    if (c.on && !c.paired && double(total_ - c.born) <= kPairYoungS * w_ && double(total_ - c.lastHit) <= kPairLiveS * w_ &&
+                        d >= kPairMinHz && d <= kPairMaxHz &&
+                        gr.pmax * kPairOver >= c.peakPow && c.peakPow * kPairOver >= gr.pmax) { sib = s; break; }
+                }
+            const bool repair = sib >= 0;
+            if (repair) { sep = std::fabs(f - ch_[sib].offHz); hit = sib; f = 0.5 * (f + ch_[sib].offHz); pair = true; }
+            if (hit >= 0 && (repair || (!ch_[hit].pending && gr.pmax > ch_[hit].peakPow * kTakeOver &&
+                std::fabs(f - ch_[hit].mixHz) > kTakeOverHz))) {
+                VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "takeover %8.4f s  slot %d  %+9.1f kHz over %+9.1f kHz\n", double(total_) / w_, hit, f / 1e3, ch_[hit].mixHz / 1e3);)
                 ch_[hit].on = false; emit(ev, ChanEvent::kCancel, hit);
-                // ★ its start is kept (up to kTakeOverBackS back): the burst's own first frames often opened it
-                takeStart = std::max(ch_[hit].start, total_ > uint64_t(kTakeOverBackS * w_) ? total_ - uint64_t(kTakeOverBackS * w_) : 0);
+                /* ★ its start is kept: a noise channel's up to kTakeOverBackS back (the burst's own first frames often opened
+                 *  it); a re-centred pair's all the way (it IS this burst), within what the mixer's ring still holds */
+                const uint64_t back = repair ? uint64_t(0.8 * double(kRingSize)) : uint64_t(kTakeOverBackS * w_);
+                takeStart = std::max(ch_[hit].start, total_ > back ? total_ - back : 0);
                 hit = -1;
             }
             if (hit >= 0) {
@@ -620,6 +687,7 @@ private:
                 h.lastHit = total_; ++h.hits; h.peakPow = std::max(h.peakPow, gr.pmax); h.framePow = std::max(h.framePow, gr.pmax);
                 VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "sight   %9.4f s  slot %d  %+9.1f kHz  pow %.3g  pmax %.3g  width %d  %s (chan %+.1f)\n", double(total_) / w_, hit,
                                                               f / 1e3, gr.wsum, double(gr.pmax), gr.width, h.pending ? "PENDING" : "on", h.offHz / 1e3);)
+                if (pair) h.paired = true;
                 if (h.pending) {   // ★ a second sighting: now it is worth mixing — re-centred if this is the burst (DChan::mixHz)
                     VIBE_ISM_P(if (prof_) ++prof_->promotes;)
                     if (gr.pmax >= h.firstPow * kMoveOver && std::fabs(f - h.offHz) <= moveCapHz_) {
@@ -656,6 +724,9 @@ private:
             VIBE_ISM_P(if (prof_) ++prof_->opens;
                        if (prof_ && prof_->log) std::fprintf(stderr, "open    %9.4f s  slot %d  %+9.1f kHz  pow %.3g  pmax %.3g  width %d\n", double(total_) / w_, freeS, f / 1e3, gr.wsum, double(gr.pmax), gr.width);)
             openChan(freeS, f, ev, takeStart);
+            ch_[freeS].paired = pair;
+            // ★ mixed wide only where the tones would sit past ±0.22 of the channel rate (ChanMixer::tune)
+            ch_[freeS].wide = pair && 0.5 * sep > kWideFrac * chanRateHz_;
             ch_[freeS].peakPow = ch_[freeS].framePow = ch_[freeS].firstPow = gr.pmax;
         }
         // close channels that went quiet, or ran too long
@@ -725,6 +796,8 @@ private:
         c.start = total_ > pre ? total_ - pre : 0;
         if (startAt < c.start) c.start = startAt;
         c.lastHit = total_;
+        c.born = total_;
+        c.paired = false; c.wide = false;
         c.hits = 1;
         c.pending = true;
         c.peakPow = 0; c.framePow = 0;
@@ -734,7 +807,7 @@ private:
 
     int pre_ = 1, preCnt_ = 0, hop_ = kN, sinceFft_ = 0;
     cf preAcc_{0, 0};
-    double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0, useLo_ = -1e12, useHi_ = 1e12, moveCapHz_ = 0;
+    double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0, useLo_ = -1e12, useHi_ = 1e12, moveCapHz_ = 0, chanRateHz_ = 250e3;
     int clipWin_ = 0, clipFrames_ = 0;
     float blockPeak_ = 0;
     std::vector<cf> hist_;
@@ -763,7 +836,7 @@ public:
     explicit ChanMixer(double rateHz) {
         w_ = rateHz / preFor(rateHz);
         chanM_ = std::max(1, int(std::lround(w_ / kChanRate)));
-        ring_.assign(size_t(1) << 18, cf(0, 0));      // ~109 ms at 2.4 MS/s
+        ring_.assign(kRingSize, cf(0, 0));      // ~109 ms at 2.4 MS/s
     }
     double chanRate() const { return w_ / chanM_; }
     /** ★ V12 wM-Bus: a wider burst channel — the work rate over the integer nearest `hz` (2.4 MS/s → 480 kS/s, 2.048 →
@@ -805,7 +878,7 @@ public:
 
 private:
     struct Chan {
-        bool on = false, pending = false;
+        bool on = false, pending = false, wide = false;
         uint32_t serial = 0;
         double offHz = 0;
         cf rot{1, 0}, incM{1, 0};   ///< the mixer at the current output's first sample, and its step per output
@@ -826,7 +899,7 @@ private:
         if (!c.on || c.serial != e.serial) return;      // ★ its open was lost with a dropped block
         if (e.kind == ChanEvent::kPromote) {
             // ★ re-centred while pending (Detector::DChan::mixHz): nothing is mixed yet, so the tables are simply rebuilt
-            if (c.pending && e.offHz != c.offHz) { c.offHz = e.offHz; tune(c); }
+            if (c.pending && (e.offHz != c.offHz || e.wide != c.wide)) { c.offHz = e.offHz; c.wide = e.wide; tune(c); }
             c.pending = false; runChan(c, at); return;
         }
         if (e.kind == ChanEvent::kCancel) { abandon(c); return; }
@@ -835,7 +908,7 @@ private:
         RawBurst r;
         r.tSec = double(c.start) / w_;
         r.offHz = c.offHz;
-        r.chanRate = chanRate();
+        r.chanRate = w_ / c.M;
         r.peakAbs = c.peakAbs;
         r.bb = std::move(c.bb);     // ★ moved, not copied: a new buffer is reserved at the next open
         c.bb = std::vector<cf>();
@@ -923,6 +996,7 @@ private:
         c.pending = true;
         c.serial = e.serial;
         c.offHz = e.offHz;
+        c.wide = e.wide;
         c.start = std::max(e.start, validFrom_);   // ★ never into the hole a dropped block left
         c.next = c.start;
         tune(c);
@@ -933,7 +1007,11 @@ private:
     /** The channel's mixer tables for c.offHz, and its sums reset — at open, and at promotion if it moved. */
     void tune(Chan& c) {
         const double ph = -2.0 * M_PI * c.offHz / w_;
-        c.M = chanM_;
+        /* ★★ A WIDE FSK PAIR IS MIXED AT TWICE THE RATE (2026-11-12): an RFM12's ±90 kHz tones in a 250 kS/s channel
+         *  turn the phase ~2.2 rad a sample, and noise wraps it past π — the discriminator read garbage (emonTx). At
+         *  500 kS/s it is ~1.1 rad. The slicer works in µs, so nothing downstream changes but the cost: a paired
+         *  channel's output samples double (the mix per capture sample does not). */
+        c.M = c.wide && chanM_ >= 2 ? std::max(1, chanM_ / 2) : chanM_;
         c.wA.resize(size_t(4 * c.M)); c.wB.resize(size_t(4 * c.M));
         for (int j = 0; j < c.M; ++j) {   // incʲ in double: the table is exact where the per-sample recurrence drifted
             const double cr = std::cos(ph * j), ci = std::sin(ph * j);
