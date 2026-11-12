@@ -7,6 +7,7 @@
  */
 
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
+import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
@@ -6432,7 +6433,9 @@ function antIcon(key?: unknown): string {
  *      on click; "the server would never send that" is exactly the assumption that makes a
  *      cross-site hole, and this client talks to servers we do not control.
  *  ★ Text is escaped and never linkified: parsing owner prose into markup is the other way this
- *    goes wrong, and a discrete URL field needs no parsing at all. */
+ *    goes wrong, and a discrete URL field needs no parsing at all.
+ *  ★★ V12 (Stuart, 2026-11-12): **bold** and *italic* — and nothing else. src/utils/landingMarkup.ts tokenises the
+ *     text into spans and escapes each one; the app and the directory draw the same spans. */
 function showLandingMessage(text?: unknown, linkUrl?: unknown, linkLabel?: unknown): void {
   const host = document.getElementById('splashOwnerMsg');
   if (!host) return;

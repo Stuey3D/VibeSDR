@@ -856,7 +856,19 @@ struct ServerConfig {
      *      stored XSS on every VibeServer in the world the first time it is got wrong. A discrete
      *      URL needs no parsing, and the SCHEME IS CHECKED AT BOTH ENDS — a `javascript:` href is
      *      the whole vulnerability, and validating only where it is typed means the next client to
-     *      render it is the one that ships the hole. */
+     *      render it is the one that ships the hole.
+     *
+     *  ★★★ V12 (Stuart, 2026-11-12): **bold** AND *italic* ARE ALLOWED — AND NOTHING ELSE. "Italics
+     *      etc are fine but I don't want scripts that could potentially harm users being hosted on
+     *      VibeServers." The server still stores and serves the text EXACTLY AS TYPED, JSON-escaped,
+     *      and never interprets it. Each client runs it through ONE tokenizer
+     *      (src/utils/landingMarkup.ts — the web client and the app import it; the directory page
+     *      carries a tested port) which splits it into plain-text spans with two flags. The web
+     *      escapes every character of every span and the only tags it can emit are <b> and <i>; the
+     *      app nests <Text> styles. So an owner can make words bold or italic but cannot get a tag,
+     *      attribute, entity or URL onto anyone's page — `<script>`, `**<img onerror>**` and a typed
+     *      `</b>` all arrive as text (scripts/test_landing_markup.ts). Still NO links in the prose
+     *      and NO HTML: both would mean parsing owner text into markup, which is the hole above. */
     std::string landingMessage;
     std::string landingLinkUrl;      ///< http/https only, enforced on save AND on render
     std::string landingLinkLabel;    ///< what the link says; falls back to the URL's host
