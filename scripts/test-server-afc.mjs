@@ -166,7 +166,14 @@ try {
   let jump = 0; for (let i = 1; i < seq.length; i++) jump = Math.max(jump, Math.abs(seq[i].ppm - seq[i - 1].ppm) / Math.max(0.5, (seq[i].t - seq[i - 1].t) / 1000));
   ok(jump < 0.6, `it glided: the largest change between DAB reports was ${f2(jump)} ppm/s (no jump)`);
   ok(fs.existsSync(STORE) && /^VIBE-AFC 1\nppm \d\.\d{4} at \d+ hw 0\nsrc DAB 7D\n/.test(fs.readFileSync(STORE, 'utf8')), `stored per radio: ${path.basename(STORE)}`);
-  ok(!/\] ppm /.test(rtlLog) && !/ppm [1-9-]/.test(rtlLog), "the radio's own ppm was never written (the fake heard no ppm command)");
+  // ★ THE HAND-OVER: an RTL corrects its CRYSTAL (tuner and sample clock), so the whole ppm goes to the radio and the digital
+  //   shift steps down by the same amount — the frame timing (the sample clock) is then right too
+  ok(await c.until(() => c.hw.afc.hw === Math.round(learned), 60000), `the whole ppm handed to the radio's crystal correction (hw ${c.hw.afc.hw})`);
+  ok(/ppm 4\b/.test(rtlLog) && ![...rtlLog.matchAll(/ppm (-?\d+)/g)].some((m) => Number(m[1]) !== 4), `the fake heard ppm 4 and nothing else (${[...rtlLog.matchAll(/ppm (-?\d+)/g)].map((m) => m[1]).join(',')})`);
+  ok(/crystal correction 0 \u2192 4 ppm \(manual 0 \+ 4 learned\)/.test(serverLog()), 'logged: the crystal correction 0 → 4');
+  await sleep(10000);
+  ok(Math.abs(recentPpm(c)) < 0.25 && c.dab.locked, `after the hand-over DAB still reads ${f2(recentPpm(c))} ppm, locked (the dial did not move)`);
+  ok(/frame timing \+[34]\.\d\d ppm/.test(line), 'the change line carried the frame timing, agreeing with the carrier');
   await sleep(20000);
   ok(changeLines().length <= 2 && !/reverted|suspended/.test(serverLog()), `steady: ${changeLines().length} change(s), no reverts`);
   c.end(); await stopSrv('SIGKILL');
@@ -198,9 +205,10 @@ try {
   ok(await c.until(() => changeLines().length >= 1, 240000), 'it learns again');
   const learned2 = Number(((changeLines()[0] || '').match(/→ ([+-]\d+\.\d+) ppm/) || [])[1]);
   ok(Math.abs(learned2 - (CLOCK - 2 + intrinsic)) < 0.25, `…${f2(learned2)} ppm ON TOP of the manual 2 (expected ${f2(CLOCK - 2 + intrinsic)})`);
+  ok(await c.until(() => c.hw.afc.state === 'applied' && c.hw.afc.hw === 2, 90000), `applied, confirmed and handed over (hw ${c.hw.afc.hw})`);
   const ppmCmds = [...rtlLog.matchAll(/ppm (-?\d+)/g)].map((m) => Number(m[1]));
-  ok(ppmCmds.length >= 1 && ppmCmds.every((v) => v === 2), `the radio was only ever sent the owner's 2 (${JSON.stringify(ppmCmds)})`);
-  ok(await c.until(() => c.hw.afc.state === 'applied', 90000), 'applied and confirmed');
+  ok(ppmCmds[0] === 2 && ppmCmds[ppmCmds.length - 1] === 4 && ppmCmds.every((v) => v === 2 || v === 4),
+     `the radio was sent the owner's 2, then 2 + the learned 2 (${JSON.stringify(ppmCmds)})`);
   await sleep(8000);
   ok(Math.abs(recentPpm(c)) < 0.25, `DAB reads ${f2(recentPpm(c))} ppm`);
 
@@ -208,7 +216,10 @@ try {
   console.log('E. Reset and Turn off');
   const r1 = await afcHttp('reset=1', 'POST');
   ok(r1.state === 'learning' && r1.ppm === 0 && r1.manual === 2, `Reset: nothing learned, the manual 2 exactly (${r1.line})`);
-  ok(await c.until(() => c.hw.afc.inForce === 0, 5000), 'in force at once: 0 on top of the manual');
+  ok(await c.until(() => c.hw.afc.inForce === 0 && c.hw.afc.hw === 0, 5000), 'in force at once: 0 on top of the manual');
+  await sleep(500);
+  { const cmds = [...rtlLog.matchAll(/ppm (-?\d+)/g)].map((m) => Number(m[1]));
+    ok(cmds[cmds.length - 1] === 2, `the radio's crystal correction is the owner's 2 again, exactly (${JSON.stringify(cmds)})`); }
   ok(!/^ppm /m.test(fs.readFileSync(STORE, 'utf8')), 'the store forgets it');
   ok(serverLog().includes('the owner RESET it'), 'logged');
   await sleep(6000);

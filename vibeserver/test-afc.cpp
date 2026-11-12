@@ -183,6 +183,11 @@ int main() {
 
     std::printf("H. the caps and the glide\n");
     {
+        ok(hwAutoFor(4.02, 0, true) == 4, "an RTL: 4.02 learned — 4 handed to the radio's crystal correction, 0.02 digital");
+        ok(hwAutoFor(5.3, 4, true) == 4, "drifted to 5.3: the radio stays at 4 (1.3 digital, inside the 1.5 hysteresis)");
+        ok(hwAutoFor(5.6, 4, true) == 6, "5.6: past it — the radio moves to 6");
+        ok(hwAutoFor(0.4, 0, true) == 0, "0.4 learned: not worth a retune — all digital");
+        ok(hwAutoFor(4.02, 0, false) == 0, "an Airspy (no crystal correction): all digital");
         ok(capFor("rtl") == 100 && capFor("hackrf") == 30 && capFor("usrp") == 10 && capFor("sdrplay") == 10
            && capFor("airspy") == 10 && capFor("airspyhf") == 10, "caps: RTL 100, HackRF 30, the TCXO radios 10 ppm");
         double c = 0; for (int i = 0; i < 10; ++i) c = slewToward(c, 0.5, 0.5);
@@ -255,6 +260,27 @@ int main() {
         ok(a.kind == Action::None && slip.target() == 0 && slip.estimator().sourcesDisagree(),
            "a 1 kHz carrier slip on 12B (3.0 vs 7.4 ppm): the references disagree, NOTHING applied in 160 s");
         ok(slip.lastWhyNot().find("disagree") != std::string::npos, "…and it says why: " + slip.lastWhyNot());
+
+        // ── rule 2, the second measure: the sample clock's walk must agree with the carrier ──
+        auto feedW = [&](Controller& c, double carrierClock, double walkClock, double t0, int n) {
+            for (int i = 0; i < n; ++i) {
+                Reference r = dab(carrierClock, 0, t0 + 2 * i); r.walkPpm = walkClock + (i % 3 - 1) * 0.6;   // ±0.6 ppm of timing jitter
+                const Action x = c.offer(r, 14, 11, 0, t0 + 2 * i, U);
+                if (x.kind != Action::None) return x;
+            }
+            return Action{};
+        };
+        Controller wa(100);
+        a = feedW(wa, 3.0, 3.0, 0, 80);
+        ok(a.kind == Action::Apply && std::fabs(a.to - 3.0) < 1e-9, "carrier 3.0, frame timing 3.0 (±0.6 jitter): they agree — applied");
+        Controller ws(100);
+        a = feedW(ws, 3.0 + 1000 / 194.064, 3.0, 0, 80);   // ★ a 1 kHz carrier slip: the carrier says 8.15, the timing 3.0
+        ok(a.kind == Action::None && ws.target() == 0 && ws.walkRejects() > 0,
+           "a 1 kHz carrier slip (carrier 8.2, timing 3.0) on the ONLY block: the timing disagrees — NOTHING applied");
+        ok(ws.lastWhyNot().find("frame timing") != std::string::npos, "…and it says why: " + ws.lastWhyNot());
+        Controller hw(100); hw.setHwAuto(4);
+        a = feedW(hw, 4.2, 0.2, 0, 80);   // ★ 4 ppm already in the radio's crystal correction: the timing sees the 0.2 left
+        ok(a.kind == Action::Apply && std::fabs(a.to - 4.2) < 1e-9, "4 ppm handed to the RTL: the timing reads the 0.2 left, + 4 = the carrier's 4.2 — applied");
 
         // ── rule 1: beyond the cap ──
         Controller tc(capFor("usrp"));

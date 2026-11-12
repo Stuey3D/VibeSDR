@@ -916,14 +916,28 @@ public:
      *  whether anything disturbed the lock in that span. READ ONLY — the smallest hook there is: the receiver's tracking
      *  is not touched (the DAB drift work on its own branch owns that), this only copies DabStats::freqOffsetHz out
      *  beside the quality snapshot it already publishes after every frame, under the same small lock. */
+    /*  ★★★ AND THE SAMPLE CLOCK, MEASURED APART (2026-11-12, the drift investigation): where the null sits in the decode
+     *  window (lastAt_, frameAt in the report) walks by the radio's SAMPLE-clock error — 0.8 samples a frame at 4 ppm,
+     *  later on a fast clock — and a digital frequency shift does not move it. A least-squares slope over the span's
+     *  frames, in ppm (+ = the radio's clock fast), is a second, independent measure of the same crystal: it agrees with
+     *  the carrier offset unless the integer carrier shift is wrong (a 1 kHz slip is ~5 ppm on the carriers and nothing
+     *  on the timing). walkFrames = how many frames it is fitted over; a sync jump marks the span disturbed. */
     struct ClockRead { bool locked = false; int frames = 0; double offsetHz = 0; double blockHz = 0; int channel = -1;
-                       float merDb = 0, fibRate = 0; double mscBer = 0; bool disturbed = false; };
+                       float merDb = 0, fibRate = 0; double mscBer = 0; bool disturbed = false;
+                       double walkPpm = 0; int walkFrames = 0; };
     ClockRead clockRead() {
         std::lock_guard<std::mutex> qk(qM_);
         ClockRead r = clkAcc_;
         if (r.frames > 0) r.offsetHz /= r.frames;
         r.locked = r.frames > 0 && !clkUnlocked_;
+        const double n = double(clkW_.n), den = n * clkW_.kk - clkW_.k * clkW_.k;
+        if (clkW_.n >= 8 && den > 0) {
+            const double slope = (n * clkW_.kx - clkW_.k * clkW_.x) / den;   // samples per frame
+            r.walkPpm = slope / double(modeI().frameSamples) * 1e6;
+            r.walkFrames = clkW_.n;
+        }
         clkAcc_ = ClockRead{}; clkAcc_.channel = r.channel; clkAcc_.blockHz = r.blockHz; clkUnlocked_ = false;
+        clkW_ = Walk{};
         return r;
     }
     /** Called by the worker with m_ held, after anything that changes the receiver's state. */
@@ -940,6 +954,11 @@ public:
             if (s.framesSeen != clkFrames_) {
                 if (s.locked) { clkAcc_.offsetHz += s.freqOffsetHz; ++clkAcc_.frames; }
                 else clkUnlocked_ = true;
+                if (syncJumps_ != clkJumps_) { clkAcc_.disturbed = true; clkJumps_ = syncJumps_; }   // ★ m_ held here
+                if (s.locked && lastAt_ >= 0) {   // ★ the null's place, one point per frame (see ClockRead)
+                    const double k = double(clkW_.n), x = double(lastAt_);
+                    clkW_.k += k; clkW_.kk += k * k; clkW_.x += x; clkW_.kx += k * x; ++clkW_.n;
+                }
             }
             clkFrames_ = s.framesSeen; clkReacq_ = s.reacquires; clkAcc_.channel = channel_;
             clkAcc_.blockHz = channel_ >= 0 ? double(kBandIII[channel_].centreHz) : 0.0;
@@ -947,6 +966,8 @@ public:
         }
     }
     ClockRead clkAcc_;               // ★ under qM_ — see clockRead
+    struct Walk { int n = 0; double k = 0, kk = 0, x = 0, kx = 0; } clkW_;   // ★ the null's walk, fitted (clockRead)
+    uint32_t clkJumps_ = 0;
     int  clkFrames_ = -1, clkReacq_ = -1;
     bool clkUnlocked_ = false;
 

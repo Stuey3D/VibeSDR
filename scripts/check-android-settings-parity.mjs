@@ -33,6 +33,10 @@ const TABLE = [
   N(['claimPass', 'claimPass2', 'claimPin', 'pass'], 'the Setup page\'s own sign-in and first-run claim; the phone\'s screen is on the device itself'),
   N(['wifiIgnore', 'apSsid', 'apPsk', 'wifiCountry', 'sshPass', 'sshPass2'], 'Pocket (Pi image) Wi-Fi, hotspot and SSH — Android owns its own network'),
   N(['cpuGovernor'], 'Linux cpufreq governor — an Android app cannot set one'),
+  // ★★ V12 auto-PPM (vibe_afc.h): on by default; on the phone its switch, line, Reset and Turn off are the radio menu's (the app's
+  //    hardware panel and the web page — hwinfo `afc`), and the switch is kept in the radio's store beside the bookmarks, as the
+  //    R36S keeps it; the server screen has no row of its own.
+  N(['autoPpm'], 'auto-PPM is on by default; its switch, line, Reset and Turn off live in the radio menu (hwinfo afc), kept beside the bookmarks'),
   N(['srvPort'], 'the phone takes the first free port of 48000-48049 itself (one VibeServer per device)'),
   N(['rtlSerialNow', 'serialA', 'serialB'], 'radio serials that tell several radios apart on one box — a phone serves one radio'),
   N(['radioPin', 'radioPinClear'], 'a per-radio PIN on a multi-radio box — the phone has the server PIN (PIN — WHO MAY CONNECT)'),

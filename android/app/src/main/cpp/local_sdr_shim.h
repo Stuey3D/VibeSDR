@@ -1083,6 +1083,9 @@ public:
     void afcSetOn(bool on);
     std::string afcJson() const;
     static bool afcHandheldOn(bool dflt);   // ★ the handheld's switch as its file keeps it (dflt when the file has none)
+    bool afcHwCapable() const;              // ★ the driver corrects the crystal (LO + sample clock): an RTL, rtl_tcp
+    void afcWriteHw(int autoPpm);           // ★ manual + autoPpm into the radio's crystal correction
+    void afcSyncHw(bool allowMove);         // ★ the hand-over of the learned whole ppm to the radio (see the .cpp)
     /** ★★★ AN UP/DOWN-CONVERTER IN FRONT OF THIS RADIO — see RadioConfig::converterOffsetHz.
      *  Signed LO in Hz (a Ham It Up is −125e6, an LNB positive), plus the input passband the
      *  converter actually passes; hi <= lo means it declares none. The whole server keeps working

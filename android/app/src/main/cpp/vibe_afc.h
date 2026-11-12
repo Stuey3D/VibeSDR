@@ -40,13 +40,19 @@
 //          and said so everywhere until the owner resets it.
 //       4. ALWAYS VISIBLE, ALWAYS UNDOABLE — describe() is the one line every surface shows; Reset and Turn off return
 //          to the manual ppm EXACTLY, because:
-//       5./6. THE RADIO'S OWN PPM IS NEVER TOUCHED. The owner's manual ppm stays in the radio as they set it; the learned
-//          correction is a DIGITAL SHIFT ON TOP of it, which glides (0.1 ppm/s) so no listener ever sees the dial jump,
-//          and which is simply zero when the correction is reset, off or not yet confident.
-//       ★ Why not the integer part in the RTL's tuner, as first briefed: a hardware write retunes (a visible, audible
-//         disturbance under every listener), it would REPLACE the owner's manual value in the radio, and Reset could
-//         then only be as exact as the hardware write-back. All-digital costs the sample clock's own error (a few ppm
-//         of audio-rate drift that every server already lives with today) and moves the DC spike off centre by ε·f.
+//       5./6. THE OWNER'S MANUAL PPM IS THE STARTING POINT, NEVER REPLACED. The learned correction is applied first as a
+//          DIGITAL SHIFT ON TOP of it, which glides (0.1 ppm/s) so no listener ever sees the dial jump, and which is
+//          simply zero when the correction is reset, off or not yet confident.
+//       ★★ AND THE SAMPLE CLOCK (the DAB drift investigation, 2026-11-12): a digital shift fixes the FREQUENCY and leaves
+//          the SAMPLE clock as wrong as it was — and that is what costs DAB its MER (35.6 dB at 0 ppm, 33.2 at 4, 28.1 at
+//          10, 22.7 at 20, 16.9 at 40) and walks its null. On a radio whose driver corrects the CRYSTAL (an RTL —
+//          rtlsdr_set_freq_correction feeds the corrected crystal to the tuner's PLL AND the RTL2832's resampler; rtl_tcp
+//          the same, through its 0x05 command), the WHOLE ppm of a learned value is handed to the radio as manual +
+//          that integer (hwAutoFor), with the digital shift stepped by exactly the same amount at the same moment, so
+//          the dial does not move; only the sub-ppm remainder stays digital. Reset and Turn off write the manual figure
+//          back, exactly — it is an integer. Every other driver stays digital (see docs/v12/AUTO-PPM.md, per driver).
+//       ★★ TWO MEASURES MUST AGREE (rule 2): the carrier offset and the sample clock's walk (Reference::walkPpm) are the
+//          same crystal seen two ways; a wrong integer carrier shift moves the first by ~5 ppm and the second not at all.
 //
 // ★ Sign convention, librtlsdr's: +ppm = the radio's crystal runs FAST, so its LO sits high and a signal lands LOW
 //   (offset −ε·f). The digital correction of ε ppm shifts the IQ UP by ε·f (f = the radio's tuned frequency).
@@ -82,6 +88,9 @@ struct Reference {
     double confidence = 1;  ///< 0..1 — the source's own view (reserved for weighting; the gates already passed)
     double at = 0;          ///< monotonic seconds when the reading's span ENDED
     Kind kind = Kind::Primary;
+    /** ★ The SAMPLE clock's error as the reference's own timing saw it (DAB: the null's walk), ppm, + = fast; NaN = this
+     *  source cannot see it. It is what the hardware has NOT corrected (a digital shift does not move it). */
+    double walkPpm = std::nan("");
 };
 
 /** The reading as a residual clock error in ppm (+ = the signal landed high = the radio is SLOW by that much). */
@@ -294,6 +303,16 @@ inline double capFor(const std::string& driver) {
     return 100;
 }
 
+/** ★ The WHOLE ppm a crystal-correcting driver takes (on top of the manual): the learned value rounded, moved only on the
+ *  first hand-over or when the digital remainder would pass kHwHysteresis — each write retunes the radio, so it is rare. */
+constexpr double kHwHysteresis = 1.5;
+inline int hwAutoFor(double learned, int cur, bool capable) {
+    if (!capable) return 0;
+    if (cur != 0 && std::fabs(learned - cur) <= kHwHysteresis) return cur;
+    if (cur == 0 && std::fabs(learned) < 0.75) return 0;   // ★ nothing worth a retune
+    return int(std::lround(std::max(-100.0, std::min(100.0, learned))));
+}
+
 /** The digital correction glides: kSlewPpmPerS at most (0.5 ppm in 5 s — 100 Hz at 200 MHz over 50 DAB frames, ~2 Hz a
  *  frame, nothing a DQPSK decision notices; 1.4 Hz a second at 14 MHz, nothing an SSB ear notices). The FIRST acquisition
  *  glides too — 4 ppm takes 40 s — so no listener on a shared dial ever sees it jump (rule 5). */
@@ -412,15 +431,21 @@ public:
     /** The owner's manual ppm, already in the radio — the cap is on the radio's TOTAL error, manual + learned. */
     void setManual(int ppm) { manual_ = ppm; }
     void setCap(double c) { cap_ = c; }
+    /** The whole ppm already handed to the radio on top of the manual (crystal-correcting drivers) — the sample clock's
+     *  walk then reads the error LEFT, so walk + hwAuto is the crystal's whole error, comparable with the carrier's. */
+    void setHwAuto(int a) { if (a != hwAuto_) { hwAuto_ = a; walk_.clear(); } }
+    int hwAuto() const { return hwAuto_; }
+    double walkMedian() const { return medianOf(std::vector<double>(walk_.begin(), walk_.end())); }
+    size_t walkCount() const { return walk_.size(); }
     /** The owner changed the manual ppm: the radio was re-trimmed under the learned value, so it no longer applies.
      *  A suspension stands (only Reset lifts it). */
-    void forgetLearned() { target_ = 0; acquired_ = false; verify_ = Verify{}; est_.clear(); source_.clear(); learnedAt_ = confirmedAt_ = 0; }
+    void forgetLearned() { target_ = 0; acquired_ = false; verify_ = Verify{}; est_.clear(); walk_.clear(); source_.clear(); learnedAt_ = confirmedAt_ = 0; }
     int manual() const { return manual_; }
     // ── the switch and the owner's buttons ──
     bool on() const { return on_; }
     void setOn(bool v) { if (on_ == v) return; on_ = v; if (!v) { target_ = 0; verify_ = Verify{}; est_.clear(); } }
     /** Reset: forget everything learned and any suspension — back to the manual ppm exactly. */
-    void reset() { target_ = 0; acquired_ = false; verify_ = Verify{}; est_.clear(); reverts_ = 0; suspended_ = false;
+    void reset() { target_ = 0; acquired_ = false; verify_ = Verify{}; est_.clear(); reverts_ = 0; suspended_ = false; walk_.clear();
                    source_.clear(); learnedAt_ = 0; confirmedAt_ = 0; }
     /** At start: the saved state, if it was learned on top of the SAME manual ppm (else the radio was re-trimmed). */
     void restore(const Saved& s, int manualPpm) {
@@ -500,6 +525,10 @@ public:
             }
         }
         const auto v = est_.offer(r, inForce);
+        if ((v == Estimator::Verdict::Accepted || v == Estimator::Verdict::Regrouped) && !std::isnan(r.walkPpm)) {
+            walk_.push_back(r.walkPpm + hwAuto_);
+            while (walk_.size() > est_.config().window) walk_.pop_front();
+        }
         if (v == Estimator::Verdict::Accepted || v == Estimator::Verdict::Regrouped) {
             lastResid_[lastN_ % kVerifyReadings] = std::fabs(resid); lastMer_[lastN_ % kVerifyReadings] = merDb;
             lastBlock_[lastN_ % kVerifyReadings] = block; ++lastN_;
@@ -513,6 +542,17 @@ public:
             return a;
         }
         if (std::fabs(manual_ + next) > cap_) { why_ = "the estimate is beyond this radio's limit \xe2\x80\x94 nothing applied"; return a; }
+        // ── rule 2: the sample clock's walk must agree with the carrier (a 1 kHz carrier slip cannot) ──
+        if (!std::isnan(r.walkPpm)) {
+            if (walk_.size() < kWalkMin) { why_ = "waiting for the frame timing to confirm the carrier offset"; return a; }
+            const double w = walkMedian();
+            if (std::fabs(w - next) > kWalkAgreePpm) {
+                char b[200];
+                std::snprintf(b, sizeof b, "the frame timing (%+.1f ppm) disagrees with the carrier offset (%+.1f ppm) \xe2\x80\x94 nothing applied", w, next);
+                why_ = b; ++walkRejects_;
+                return a;
+            }
+        }
         // ── apply, and arm the self-check against the readings just before it ──
         prev_ = target_; prevAcquired_ = acquired_;
         a.kind = Action::Apply; a.from = target_; a.to = next;
@@ -547,16 +587,20 @@ public:
         return b;
     }
     int capRejects() const { return capRejects_; }
+    int walkRejects() const { return walkRejects_; }
 
 private:
     static constexpr int kVerifyReadings = 5;
+    static constexpr size_t kWalkMin = 10;          ///< walk readings before the timing can confirm anything
+    static constexpr double kWalkAgreePpm = 2.0;    ///< a 1 kHz slip is 4.2–5.7 ppm in Band III: well outside this
     struct Verify { bool active = false; double notBefore = -1e300; int block = -1; double oldResid = 0; float oldMer = 0;
                     int oldMerN = 0; double resid = 0; float mer = 0; int n = 0, merN = 0; };
     Estimator est_;
     double cap_;
     bool on_ = true, acquired_ = false, suspended_ = false, prevAcquired_ = false;
     double target_ = 0, prev_ = 0;
-    int reverts_ = 0, capRejects_ = 0, manual_ = 0;
+    int reverts_ = 0, capRejects_ = 0, manual_ = 0, hwAuto_ = 0, walkRejects_ = 0;
+    std::deque<double> walk_;
     std::string source_, why_;
     int64_t learnedAt_ = 0, confirmedAt_ = 0;
     Verify verify_;

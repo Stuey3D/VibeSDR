@@ -19,31 +19,55 @@ and is not built yet (see Phase 2).
 
 ## How it is applied
 
-The correction is a **digital shift of the whole capture**, on top of the owner's manual ppm. `Impl::afcMix` does it in
-place, right after the capture cleaner and before anything reads the IQ. It uses `vibedsp::NCO::mix`, the four-lane
-NEON/SSE mixer the DDC already uses, so on a Pi 2 it costs one SIMD pass.
+There are two parts. A crystal error moves two things: the **frequency** (the LO) and the **sample clock**.
 
-- A signal at f lands ε·f low on a radio ε ppm fast. The shift is ε at the radio's tuned frequency, so it is exact at
-  the centre and within ε·span/2 at the edges (5 Hz for 4 ppm across 2.4 MS/s).
-- **It glides** at 0.1 ppm/s. The first acquisition glides as well (4 ppm takes 40 s), so nobody on a shared dial
-  ever sees a jump. Only the owner's own Reset and Turn off move it at once.
-- **At zero the IQ is untouched.** With nothing learned, auto-PPM off, reset or suspended, not one sample changes.
-- **The radio's own ppm is never written.** The brief first put the whole ppm into the RTL's tuner, but that would:
-  - retune under every listener;
-  - replace the owner's manual value in the radio;
-  - make Reset only as exact as the write-back.
+- The DAB drift investigation (2026-11-12, `dabdrift`) showed that the sample clock is what costs DAB its MER, and it
+  is what walked the B210's null out of the decode window:
 
-  All-digital is the same for every driver:
-
-  | Radio | How the correction is applied |
+  | Clock error | MER |
   |---|---|
-  | RTL, rtl_tcp, RSP | The manual ppm stays in the radio as the owner set it; the learned part is digital |
-  | Airspy, HackRF, USRP, HF+ | No ppm register, so the learned part is digital (the HF+'s ppb stays the owner's) |
-  | SpyServer | Digital (the remote radio is not ours to touch) |
-  | Icom | Not offered (no IQ) |
+  | 0 ppm | 35.6 dB |
+  | 4 ppm | 33.2 dB |
+  | 10 ppm | 28.1 dB |
+  | 20 ppm | 22.7 dB |
+  | 40 ppm | 16.9 dB |
 
-  The cost is the sample clock's own error, which is a few ppm of audio-rate drift that every server lives with
-  already. The DC spike also moves ε·f off centre.
+- The frequency offset itself costs DAB nothing up to ±48 carriers.
+
+1. **The digital shift (every radio).** `Impl::afcMix` shifts the whole capture in place, right after the capture
+   cleaner and before anything reads the IQ. It uses `vibedsp::NCO::mix`, the four-lane NEON/SSE mixer the DDC already
+   uses, so on a Pi 2 it costs one SIMD pass.
+   - A signal at f lands ε·f low on a radio ε ppm fast. The shift is ε at the radio's tuned frequency, so it is exact
+     at the centre and within ε·span/2 at the edges (5 Hz for 4 ppm across 2.4 MS/s).
+   - It **glides** at 0.1 ppm/s. The first acquisition glides as well (4 ppm takes 40 s), so nobody on a shared dial
+     sees a jump.
+   - At zero, not one sample is altered.
+   - **It fixes the frequency only. The sample clock stays as wrong as it was.**
+2. **The hand-over to the radio's crystal correction (RTL and rtl_tcp).** `rtlsdr_set_freq_correction` feeds the
+   corrected crystal to both the tuner's PLL and the RTL2832's resampler, so it fixes both. rtl_tcp's 0x05 is the same
+   call at the far end.
+   - Once a learned value has glided in and been confirmed, its **whole ppm** is written to the radio as
+     `manual + round(learned)`.
+   - At the same moment the digital shift steps down by exactly that amount (`g_afcJump`), so the dial does not move.
+     Only the sub-ppm remainder stays digital.
+   - It moves only on the first hand-over, or when the remainder would pass 1.5 ppm.
+   - It happens only while the radio is in DAB, which gains most and rides a retune, or with nobody listening.
+     Otherwise it waits for the next start, where it is written before anybody listens.
+   - Reset and Turn off write the owner's manual figure back exactly; it is an integer.
+
+| Radio | Frequency | Sample clock |
+|---|---|---|
+| RTL (USB) | Whole ppm in the crystal correction, remainder digital | Corrected (whole ppm) |
+| rtl_tcp | The same, through 0x05 | Corrected (whole ppm) |
+| SDRplay RSP | Digital | **Not corrected.** The API's `ppm` retunes, and whether it moves the sample clock is not documented, so it is not guessed at. Candidate for phase 2 after a bench check |
+| Airspy R2/Mini, HackRF, USRP | Digital | **Not corrected** (no crystal register). The DAB DDC's resampler could take it in phase 2 |
+| Airspy HF+ | Digital (the owner's ppb stays the owner's) | Not corrected (it rarely meets DAB: 260 MHz top) |
+| SpyServer | Digital | Not corrected (the remote radio is not ours) |
+| Icom | Not offered (no IQ) | |
+
+On the digital-only radios the residual sample-clock error is what it was before auto-PPM, and DAB's re-centre fix
+(`advanceAfterPush`) now copes with the walk it causes. Correcting it through a resampler already in the path (the DAB
+DDC's) is phase 2.
 
 ## The safety rules (Stuart, 2026-11-12) and how each is met
 
@@ -69,6 +93,11 @@ NEON/SSE mixer the DDC already uses, so on a Pi 2 it costs one SIMD pass.
      - MER at least 8 dB;
      - no re-acquisition in the span or in the 10 s before it;
      - at least 8 frames averaged.
+   - **Two measures of the same crystal must agree.** The carrier offset, and the sample clock seen as the null's walk
+     through the decode window (`clockRead().walkPpm`, a least-squares slope of `frameAt` per frame, + the whole ppm
+     already in the radio). A wrong integer carrier shift moves the first by about 5 ppm and the second not at all.
+     They must agree within 2 ppm, from at least 10 readings, before any change is applied. `test-afc` J shows a 1 kHz
+     slip on the only block (carrier 8.2, timing 3.0) applying nothing.
    - **The first acquisition needs agreement**: 120 s of clean readings, or two blocks that agree.
    - **References that disagree stop every decision.** A 1 kHz slip is 5.7 ppm at 174 MHz and 4.2 at 240 MHz, so it
      cannot agree with another block. `test-afc` J shows a slip on 12B against a clean 7D applying nothing in 160 s.
