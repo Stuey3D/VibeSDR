@@ -616,6 +616,9 @@ private:
             const size_t adv = rx_.advanceAfterPush(size_t(modeI().frameSamples));
             if (adv != size_t(modeI().frameSamples)) {
                 ++recentres_;
+                // ★ Rare by design (hours apart on a few-ppm radio) — so a line in the owner's log is what confirms it
+                std::fprintf(stderr, "[DAB] null %ld samples from the front of the decode window — re-centred (offset %.2f ppm; a slow radio clock walks it there) (%u)\n",
+                             rx_.lastFrameStart(), double(rx_.stats().freqOffsetPpm), recentres_);
                 if (lastAt_ >= 0) lastAt_ += long(modeI().frameSamples) - long(adv);   // not a sync jump
             }
             rx_.syncConsumed(adv);
