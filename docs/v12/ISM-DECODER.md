@@ -68,12 +68,33 @@ exactly as found). Why not a decoder on the listener's DDC channel:
    in ten a signal). Bins ≥ 10 dB over their floor are grouped (one-bin gaps bridged); a lone bin must be ≥ 15 dB.
    Only the **band's own span** is searched (the tuner's filter skirts are where false detections clustered on the
    Pi 500's RTL), never the DC remnant (±15 kHz).
+   **The seed and the look back (2026-11-12).** The first 64 frames (~20 ms at 2.4 MS/s, ~65 ms at 250 kS/s) are only
+   STORED (64 KB, freed at once). Each bin's floor is then the **median** of its frames ×1.44 (an exponential's mean),
+   and the stored frames are **replayed through the detector at their own sample positions** — a burst already on the
+   air when ISM starts opens its channel from its own start (the mixer's ring still holds it). The old seed, a fast
+   running mean while detecting, learnt such a burst as floor — and, under a strong one, the RTL's gain dip (every
+   other bin ~18 dB down: the emonTx recordings), so every bin stood 10 dB over its floor after it. Not a lower
+   quantile: the 25th/12th percentile learnt that dip and lost every emonTx. A burst filling over half the window would
+   still be learnt, so a **busy stretch** — ≥ 3 adjacent bins ≥ 10 dB over the band's median seed whose power MOVES
+   across the window (75th/25th percentile ratio ≥ 15; noise ~4.8, a steady spur ~1) — takes the band's floor; a spur
+   keeps its own and opens nothing. Live, this is the first instant after ISM starts.
 2. **Candidate → channel** — a detection is a candidate until seen in a second frame; then a channel opens at the
    group's power centroid, **from a 6 ms pre-roll** kept in a 2¹⁸-sample ring, so the burst's start is not lost.
    Strongest first; a newcomer 25 dB under an open burst is its splatter (a strong OOK transmitter's keying edges).
    Up to 4 channels at once. A channel closes 25 ms after the last detection (PT2262's sync gap is ~15 ms), or at 1.6 s.
+   (2026-11-12) A sighting goes to the **nearest** open channel within 120 kHz (the first in slot order stole a second
+   burst's sightings). A sighting **20 dB over** everything an open channel has seen, > 10 kHz from its mix centre,
+   **takes it over**: the noise channel is cancelled and the burst opens its own, keeping the old start (≤ 50 ms back)
+   — a promoted noise blip used to swallow a burst 30–60 kHz away and mix it off-centre (oil gauges, Fine Offset WH2).
+   **Wide-deviation FSK is one channel** (±60–90 kHz: TPMS, an RFM12 emonTx at ±90 kHz): two groups BORN in the same
+   frame (no channel near either), each ≥ 15 dB over its floor, within 6 dB of each other and 100–200 kHz apart are one
+   sighting at their midpoint; a channel born on one tone is re-centred once (start kept) when the other tone is born
+   within 20 ms while it is on the air (a preamble may hold one tone ~4 ms). Only births pair: a 10 dB / 40 kHz rule
+   paired an OOK burst with the DC remnant its keying moves, and two oil gauges sending at once (−69 on the corpus).
 3. **Channel** — NCO mix and a **triangular (CIC-2) decimator** to ~250 kS/s. (A plain integrate-and-dump leaked a
-   strong burst one output rate away onto DC: test-ism's TPMS decoded twice.)
+   strong burst one output rate away onto DC: test-ism's TPMS decoded twice.) A wide pair whose half-spacing is over
+   0.22 of the channel rate is **mixed at twice the rate** (~500 kS/s): ±90 kHz tones at 250 kS/s turn the phase
+   ~2.2 rad a sample and noise wraps it past π. The slicer works in µs, so only that channel's cost changes.
 4. **Slicer, at the burst's end** — the envelope (OOK) and the discriminator (FSK, when the envelope is ≥ 85 % on
    across the burst and the tones are ≥ 4 kHz apart), each sliced with hysteresis at the dB midpoint between the
    pre-roll's level and the burst's, **at four smoothings** (12, 36, 100, 244 µs for OOK; three for FSK). A 17 kbps FSK
@@ -496,7 +517,11 @@ armhf hop, more on a noisy band; ISM mode switches the audio chain off, which pa
   **The real-recording score** is `scripts/ism-corpus.mjs` over rtl_433_tests (test input only): home area 56 → 678
   of 884 recordings read; every family's cross-reads audited (none but real background devices: a LightwaveRF TRV in two
   La Crosse captures and an Oregon one, a neighbour's ERT meter in a 915 MHz Ambient capture). ★ The bench cannot see a
-  burst that starts inside the detector's first 64 frames (~65 ms at 250 kS/s, ~20 ms at 2.4 MS/s — the floor seed):
+  burst that starts inside the detector's first 64 frames (~65 ms at 250 kS/s, ~20 ms at 2.4 MS/s — the floor seed)
+  [★ 2026-11-12: fixed in the detector — the median seed and the look back, §front end; XC-0324 14 → 58/58, emonTx 0 → 76/76;
+  the front-end pass took the corpus from match 1896 · decoded 341 · miss 886 to 2072 · 350 · 701, WRONG 0, false alarms
+  0; test-ism's "front end" block: a frame from sample 0 and 4 ms in, a WH2 40 ms in at 250 kS/s, a spur from sample 0
+  opening nothing, a Toyota at ±75 kHz as ONE burst, an emonTx at ±90 kHz]:
   every emonTx, SimpliSafe, ERT/IDM/SCM+ capture and many short ones — a bench limit, not a live one (live, the seed is
   the first instant after a start). Two front-end fixes came out of the corpus: the FSK span ignores pre-roll blips
   (+61 decodes, none lost), and the bench reads `_2500k` / decimal rates, `samplerate` files and README frequencies.
