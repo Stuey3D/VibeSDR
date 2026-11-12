@@ -35,7 +35,8 @@ eq('MER 12 → moderate', lvl({ mer: 12 }), 2);
 eq('9A MER 8.5, FIB 98-99 % → weak (MER outranks a good FIC)', lvl({ mer: 8.5, fibRate: 0.985 }), 1);
 eq('10C FIB 23-55 % → weak', lvl({ fibRate: 0.4, fibNow: 0.4, mer: 0 }), 1);
 eq('FIB 95 % → moderate', lvl({ fibRate: 0.95, fibNow: 0.95, mer: 20 }), 2);
-eq('FIB 98–99 % at MER 23 (7D/11A/11D on the RSP1A, 2026-11-12) → strong', lvl({ fibRate: 0.985, fibNow: 0.985, mer: 23 }), 3);
+eq('FIB 98–99 % at MER 23 while the AGC settles (7D/11A/11D, 2026-11-12) → moderate — they go strong once settled (Stuart)', lvl({ fibRate: 0.985, fibNow: 0.985, mer: 23 }), 2);
+eq('the same multiplexes settled, FIB 99.5 % → strong', lvl({ fibRate: 0.995, fibNow: 0.995, mer: 23 }), 3);
 eq('FIB 97 % → moderate', lvl({ fibRate: 0.97, fibNow: 0.97, mer: 23 }), 2);
 eq('raw BER 9 % (10D) → weak', lvl({ mer: 9.1, mscBer: 0.09 }), 1);
 eq('raw BER 4.1 % detail', classifyDabWindow(W({ mer: 20, mscBer: 0.041 })).detail, 'BER 4.1 %');
@@ -171,7 +172,7 @@ eq('audio started: the counters decide as before', lvl({ mer: 23, sfTried: 40, s
   let q: DabQuality | null = null;
   for (let i = 0; i < 6; i++) {
     tried += 8;
-    q = m.push({ channel: '11D', locked: true, fibRate: 0.985, mer: 23.4, sid: 0, sfTried: tried, sfOk: 0, mscBer: 0.2 }, (t += 1000));
+    q = m.push({ channel: '11D', locked: true, fibRate: 0.995, mer: 23.4, sid: 0, sfTried: tried, sfOk: 0, mscBer: 0.2 }, (t += 1000));
   }
   eq('no service, 100 % "frames lost", MER 23 → strong', q!.level, 3);
   eq('…"Choose a station", no frames-lost figure', dabQualityLine(q!), 'Multiplex strong · ' + DAB_CHOOSE_ADVICE);

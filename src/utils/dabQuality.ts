@@ -113,11 +113,10 @@ export const BER_MODERATE = 0.015, BER_WEAK = 0.085;
 export const MER_STRONG = 16, MER_WEAK = 10;
 /** FIC pass rate: DabPanel ok ≥ 99 %, bad < 90 %. ✓ 10C at 23–55 % never decoded; FIB dipped to 88–95 %
  *  exactly when Layer II went bad (2026-09-07). ★ The server's own no-FIC watchdog line is 5 %.
- *  ★★ The STRONG line is 97.5 %, NOT DabPanel's 99 % (2026-11-12, Stuart's RSP1A): 7D, 11A and 11D at MER 22–24 dB
- *     read 1–2 % FIB errors and played clean once a station was chosen. While nothing is decoding the FIC is the
- *     meter's main witness, and 99 % called those multiplexes "moderate" for a percent of FIB loss. The trouble
- *     cases above sit at 95 % and below. */
-export const FIB_STRONG = 0.975, FIB_WEAK = 0.90, FIB_NONE = 0.05;
+ *  ★★ 99 % stays (2026-11-12): 7D, 11A and 11D on Stuart's RSP1A read 1–2 % FIB errors at MER 22–24 dB just after a
+ *     block change, and "go strong after the AGC settles" (Stuart) — the moderate reading was true while it settled.
+ *     97.5 % was tried and put back. */
+export const FIB_STRONG = 0.99, FIB_WEAK = 0.90, FIB_NONE = 0.05;
 /* ★ NULL DEPTH IS NOT JUDGED, deliberately. DabPanel colours it (bad < 8 dB), but 9A on the Pi decoded its
  *  whole station list at 4.5 dB (2026-09-08 — "below the old 6 dB gate, the whole story"): it says how deep
  *  the null symbol dips, not whether the audio survives. MER and the FIC already carry the same news. */

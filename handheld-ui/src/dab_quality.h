@@ -22,7 +22,7 @@ constexpr double SF_OK_STRONG = 0.98, SF_OK_WEAK = 0.90;
 constexpr double MP2_BAD_STRONG = 0.01, MP2_BAD_WEAK = 0.10;
 constexpr double BER_MODERATE = 0.015, BER_WEAK = 0.085;
 constexpr double MER_STRONG = 16, MER_WEAK = 10;
-constexpr double FIB_STRONG = 0.975, FIB_WEAK = 0.90, FIB_NONE = 0.05;
+constexpr double FIB_STRONG = 0.99,  FIB_WEAK = 0.90, FIB_NONE = 0.05;
 constexpr double ERASED_MODERATE = 0.02, ERASED_WEAK = 0.10;
 constexpr double MIN_SF = 4, MIN_MP2 = 20, MIN_AU = 10;
 constexpr double AU_BAD_STRONG = 0.01, AU_BAD_WEAK = 0.08;
