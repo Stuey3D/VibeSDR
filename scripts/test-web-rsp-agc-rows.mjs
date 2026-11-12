@@ -127,7 +127,7 @@ const drive = async (wsUrl, initMode = 0) => {
     await ev(`document.getElementById('rspSysGain').scrollIntoView({ block: 'start' })`);
     await sleep(300);
     const q = JSON.parse(await ev(`JSON.stringify((() => { const a = document.getElementById('rspSysGain').closest('.mrow').getBoundingClientRect();
-      const b = (document.getElementById('adminRow').hidden ? document.getElementById('rowRspNotch') : document.getElementById('adminRow')).getBoundingClientRect();
+      const b = document.getElementById('rowRspNotch').getBoundingClientRect();
       const m = document.getElementById('menu').getBoundingClientRect();
       return { x: m.x, y: Math.max(0, a.y - 34), w: m.width, h: Math.min(1100, b.bottom - a.y + 44) }; })())`));
     const sh = await send('Page.captureScreenshot', { format: 'png', clip: { x: q.x, y: q.y, width: q.w, height: q.h, scale: 1 } });
@@ -145,11 +145,11 @@ try {
   const A = await drive(list.find((t) => t.type === 'page').webSocketDebuggerUrl);
 
   console.log('── the owner, unlocked: VibeAGC running under AUTO ──');
-  await A.click('#adminUnlock');
+  // ★ The password box is in the menu's SERVER block (2026-11-12), always there while locked.
   await A.until(`!document.getElementById('adminPwRow').hidden`);
   await A.ev(`(() => { const i = document.getElementById('adminPwInput'); i.value = ${JSON.stringify(ADMIN)}; return true; })()`);
   await A.click('#adminPwGo');
-  ok(await A.until(`document.getElementById('adminUnlock').textContent === 'UNLOCKED'`, 6000), 'unlocked through the page');
+  ok(await A.until(`!document.getElementById('adminServerRow').hidden`, 6000), 'unlocked through the page (SERVER shows SERVER ADMIN)');
   await A.until(`(document.getElementById('rspIfAgcBy')?.textContent || '') === ' · VIBEAGC'`, 4000);
   ok(await A.ev(`!document.getElementById('rowRspVagc').hidden && document.getElementById('rspVagcSeg').style.display !== 'none'`), 'AGC row with its keys');
   ok(await A.ev(`[...document.querySelectorAll('#rspVagcSeg button')].map(b => b.textContent + (b.classList.contains('on') ? '*' : '')).join(' ')`) === 'AUTO* VIBEAGC SDRPLAY',
