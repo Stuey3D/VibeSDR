@@ -407,6 +407,9 @@ public:
     /** The channel rate the mixer runs at: a pending channel's mix centre may move by a quarter of it (DChan::mixHz). */
     void setChanRate(double hz) { moveCapHz_ = 0.25 * hz; }
     static constexpr float kMoveOver = 4.0f;   ///< (6 dB) a sighting this far over the first is the burst itself
+    static constexpr float kTakeOver = 100.0f; ///< (20 dB) a sighting this far over an open channel's peak takes it over (scan)
+    static constexpr double kTakeOverHz = 10e3; ///< … when this far from where the channel is mixed
+    static constexpr double kTakeOverBackS = 0.05; ///< the new channel keeps the old one's start, up to this far back
 #if defined(VIBE_ISM_PROF)
     IsmProf* prof_ = nullptr;
 #endif
@@ -501,11 +504,67 @@ private:
         for (int i = 0; i < kN; ++i) pw_[size_t(i)] = std::norm(fbuf_[size_t(i)]) * norm;
         // ★ the overload meter: a block of capture that neared full scale (an 8-bit RTL clips at 1.0)
         clipWin_ += blockPeak_ > 0.85f ? 1 : 0; ++clipFrames_; blockPeak_ = 0;
-        if (frames_ < 64) {
-            // ★ the first frames SEED the floor fast (signals present at start would otherwise stay "noise" for a while)
-            for (int i = 0; i < kN; ++i) floor_[size_t(i)] = frames_ == 0 ? pw_[size_t(i)] : floor_[size_t(i)] + 0.15f * (pw_[size_t(i)] - floor_[size_t(i)]);
+        if (frames_ < kSeedFrames) {
+            seedFrame(ev);
+        } else {
+            ++frames_;
+            scan(ev);
+            updateFloor();
         }
-        ++frames_;
+        if ((frames_ & 255) == 0) {
+            std::vector<float> t(floor_.begin(), floor_.end());
+            std::nth_element(t.begin(), t.begin() + kN / 2, t.end());
+            noiseDb_ = 10.0 * std::log10(std::max(1e-14f, t[size_t(kN / 2)]));
+        }
+        if (clipFrames_ >= int(w_ / hop_)) { clipFrac_ = double(clipWin_) / clipFrames_; clipWin_ = 0; clipFrames_ = 0; }
+    }
+    /* ★★★ THE SEED, THEN A LOOK BACK (2026-11-12). The floor used to be SEEDED from the first 64 frames by a fast running
+     *  mean, detecting as it went. A burst already on the air in those frames (~65 ms at 250 kS/s, ~20 ms at 2.4 MS/s) was
+     *  learnt as floor and never detected — and, worse, a strong one pulls an RTL's whole band DOWN while it lasts (the
+     *  dongle's gain control: the emonTx recordings' median bin falls ~18 dB under a 37 dB burst), so the floor learnt
+     *  that dip and, when the burst ended, every bin stood 10 dB over it: a flurry of false channels. Now the opening
+     *  frames are only STORED (kSeedFrames × kN floats, 64 KB, freed at once after); then each bin's floor is the MEDIAN
+     *  of its frames — a burst or a dip filling under half the window cannot move it — and the stored frames are
+     *  replayed through the detector against that floor, each at its own sample position, so a burst inside the window
+     *  opens its channel from its own start (the mixer's ring holds ~1 s at 250 kS/s, ~109 ms at 2.4 MS/s; the window is
+     *  65 / 20 ms). Live this is the first instant after ISM starts; on a recording cut by a trigger it is the burst. */
+    static constexpr int kSeedFrames = 64;
+    void seedFrame(std::vector<ChanEvent>& ev) {
+        if (seed_.empty()) { seed_.assign(size_t(kSeedFrames) * kN, 0.0f); seedAt_.assign(kSeedFrames, 0); }
+        std::copy(pw_.begin(), pw_.end(), seed_.begin() + long(frames_) * kN);
+        seedAt_[size_t(frames_)] = total_;
+        if (++frames_ < uint64_t(kSeedFrames)) return;
+        std::vector<float> col(kSeedFrames);
+        for (int k = 0; k < kN; ++k) {
+            for (int f = 0; f < kSeedFrames; ++f) col[size_t(f)] = seed_[size_t(f) * kN + size_t(k)];
+            std::nth_element(col.begin(), col.begin() + kSeedFrames / 2, col.end());
+            // ★ ×1.08: an exponential's median is 0.69 of its mean, the censored mean below settles near 0.75 of it
+            floor_[size_t(k)] = std::max(1e-14f, col[size_t(kSeedFrames / 2)] * 1.44f);
+        }
+        const uint64_t now = total_;
+        std::vector<float> cur(pw_);
+        for (int f = 0; f < kSeedFrames; ++f) {
+            std::copy(seed_.begin() + long(f) * kN, seed_.begin() + long(f + 1) * kN, pw_.begin());
+            total_ = seedAt_[size_t(f)];
+            scan(ev);
+        }
+        total_ = now;
+        pw_.swap(cur);
+        seed_.clear(); seed_.shrink_to_fit(); seedAt_.clear(); seedAt_.shrink_to_fit();
+    }
+    /* the floor: a CENSORED MEAN per bin — one FFT bin of noise is exponentially distributed, so a minimum-tracker
+     *  settles at a fraction of the mean and calls 1 bin in 10 a signal. The mean of everything under 3× the floor
+     *  (≈ 0.75 of the true mean), with whatever is over it — a signal — barely moving it. */
+    void updateFloor() {
+        for (int k = 0; k < kN; ++k) {
+            float& fl = floor_[size_t(k)];
+            const float p = pw_[size_t(k)];
+            const float a = p < fl * 3.0f ? 0.01f : 0.0003f;
+            fl = std::max(1e-14f, fl + a * (p - fl));
+        }
+    }
+    /** One frame's detection, against the floor as it stands: groups → channels → closes → holds. */
+    void scan(std::vector<ChanEvent>& ev) {
         if (thrDbCached_ != threshDb) { thrDbCached_ = threshDb; thr_ = std::pow(10.0f, threshDb / 10.0f); }
         const float thr = thr_;
         if (!tablesOk_) buildTables();
@@ -529,21 +588,6 @@ private:
             }
         }
         if (inG && ng < 16) groups[ng++] = cur;
-        /* the floor: a CENSORED MEAN per bin — one FFT bin of noise is exponentially distributed, so a minimum-tracker
-         *  settles at a fraction of the mean and calls 1 bin in 10 a signal. The mean of everything under 3× the floor
-         *  (≈ 0.85 of the true mean), with whatever is over it — a signal — barely moving it. */
-        for (int k = 0; k < kN; ++k) {
-            float& fl = floor_[size_t(k)];
-            const float p = pw_[size_t(k)];
-            const float a = p < fl * 3.0f ? 0.01f : 0.0003f;
-            fl = std::max(1e-14f, fl + a * (p - fl));
-        }
-        if ((frames_ & 255) == 0) {
-            std::vector<float> t(floor_.begin(), floor_.end());
-            std::nth_element(t.begin(), t.begin() + kN / 2, t.end());
-            noiseDb_ = 10.0 * std::log10(std::max(1e-14f, t[size_t(kN / 2)]));
-        }
-        if (clipFrames_ >= int(w_ / hop_)) { clipFrac_ = double(clipWin_) / clipFrames_; clipWin_ = 0; clipFrames_ = 0; }
 
         // ★ strongest first, so a strong burst takes its channel before its own splatter can
         std::sort(groups, groups + ng, [](const G& a, const G& b) { return a.pmax > b.pmax; });
@@ -555,7 +599,22 @@ private:
             if (gr.width < 2 && gr.peak < thr * 3.0f) continue;
             const double f = gr.f / gr.wsum;
             int hit = -1;
+            uint64_t takeStart = UINT64_MAX;
             for (int s = 0; s < kMaxChans; ++s) if (ch_[s].on && std::fabs(ch_[s].offHz - f) < kMatchHz) { hit = s; break; }
+            /* ★★ A BURST IS NOT SWALLOWED BY A NOISE CHANNEL (2026-11-12). A noise blip promoted by a second blip keeps a
+             *  channel open at ITS frequency for 25 ms; a real burst arriving within kMatchHz of it was folded in — mixed
+             *  up to 60 kHz off its own centre, the channel's start tens of ms before it, and lost (oil gauges, Fine
+             *  Offset WH2: 30 dB bursts in a channel whose peak was the noise's). A sighting kTakeOver over everything the
+             *  channel has seen, and away from its mix centre, now cancels it and opens its own channel (with its own
+             *  pre-roll). Nothing real is lost: what the old channel held was 20 dB under this, and splatter if near it. */
+            if (hit >= 0 && !ch_[hit].pending && gr.pmax > ch_[hit].peakPow * kTakeOver &&
+                std::fabs(f - ch_[hit].mixHz) > kTakeOverHz) {
+                VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "takeover %8.4f s  slot %d  %+9.1f kHz over %+9.1f kHz\\n", double(total_) / w_, hit, f / 1e3, ch_[hit].mixHz / 1e3);)
+                ch_[hit].on = false; emit(ev, ChanEvent::kCancel, hit);
+                // ★ its start is kept (up to kTakeOverBackS back): the burst's own first frames often opened it
+                takeStart = std::max(ch_[hit].start, total_ > uint64_t(kTakeOverBackS * w_) ? total_ - uint64_t(kTakeOverBackS * w_) : 0);
+                hit = -1;
+            }
             if (hit >= 0) {
                 DChan& h = ch_[hit];
                 h.lastHit = total_; ++h.hits; h.peakPow = std::max(h.peakPow, gr.pmax); h.framePow = std::max(h.framePow, gr.pmax);
@@ -596,7 +655,7 @@ private:
             if (freeS < 0) continue;                           // ★ four bursts at once already: the fifth is lost
             VIBE_ISM_P(if (prof_) ++prof_->opens;
                        if (prof_ && prof_->log) std::fprintf(stderr, "open    %9.4f s  slot %d  %+9.1f kHz  pow %.3g  pmax %.3g  width %d\n", double(total_) / w_, freeS, f / 1e3, gr.wsum, double(gr.pmax), gr.width);)
-            openChan(freeS, f, ev);
+            openChan(freeS, f, ev, takeStart);
             ch_[freeS].peakPow = ch_[freeS].framePow = ch_[freeS].firstPow = gr.pmax;
         }
         // close channels that went quiet, or ran too long
@@ -657,13 +716,14 @@ private:
         }
         tablesOk_ = true;
     }
-    void openChan(int s, double f, std::vector<ChanEvent>& ev) {
+    void openChan(int s, double f, std::vector<ChanEvent>& ev, uint64_t startAt = UINT64_MAX) {
         DChan& c = ch_[s];
         c.on = true;
         c.offHz = f;
         c.mixHz = f;
         const uint64_t pre = uint64_t(kPrerollS * w_) + kN;
         c.start = total_ > pre ? total_ - pre : 0;
+        if (startAt < c.start) c.start = startAt;
         c.lastHit = total_;
         c.hits = 1;
         c.pending = true;
@@ -680,6 +740,8 @@ private:
     std::vector<cf> hist_;
     const cf* xCur_ = nullptr;
     uint64_t xBase_ = 0, total_ = 0, frames_ = 0;
+    std::vector<float> seed_;        ///< the opening frames' bin powers (seedFrame), freed once the floor is seeded
+    std::vector<uint64_t> seedAt_;
     DetFft fft_;
     std::vector<float> win_, floor_, pw_, freq_;
     std::vector<int> order_;
