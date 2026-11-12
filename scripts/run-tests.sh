@@ -655,6 +655,9 @@ if node --no-warnings scripts/test_rsp_agc_readout.ts; then pass=$((pass+1)); el
 if node --no-warnings scripts/test_mpx_power.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ LOCKED VFO CENTRE (tuneWindow.ts): every app tune clamps into the owner's window, the server's own rule (Stuart 2026-10-18: the app tuned into the black).
 if node --no-warnings scripts/test_tune_window.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE RECEIVER'S CLOCK FROM OUR OWN TZ RULES (serverZone.ts, 2026-11-12): the server's "tz" name, offset worked out here —
+#    Kiko's pre-2019 box sent -120 "BRST" in November; Sao_Paulo is -03 all year. No tz / unknown zone = the old figures.
+if node --no-warnings scripts/test_server_zone.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE APP'S LISTENER ID (listenerIdCore.ts): the web's `bid`, one per install, on every VibeServer socket — so the server's
 #    radios-per-listener rule judges the app exactly as a browser (Stuart 2026-10-27, two radios on one server).
 if node --no-warnings scripts/test_listener_id.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

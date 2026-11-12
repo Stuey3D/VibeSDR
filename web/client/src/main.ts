@@ -74,6 +74,7 @@ import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAu
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
+import { serverZoneAt } from '../../../src/utils/serverZone';   // ★ the receiver's clock from OUR tz rules (2026-11-12)
 import { buildBookmarkHoverIndex, bookmarkAt, newBookmarkHit, type BookmarkHoverIndex } from '../../../src/utils/bookmarkHover';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
@@ -2146,7 +2147,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     /* ★ Both halves, as the note on the removed setToggleTo said: a control that must not COMMAND
      *   from storage has to READ from the radio — and it has to read the SAME flag it commands. */
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
-    onServerClock: (offsetMin, abbr) => { srvTzOffsetMin = offsetMin; srvTzAbbr = abbr; },
+    onServerClock: (offsetMin, abbr, tz) => { srvTzOffsetMin = offsetMin; srvTzAbbr = abbr; srvTzId = tz; },
     onDsActive: (on, setting) => {
       hwDsActive = on;
       // ★ Absent on a server that predates the field — leave the defaults and do not offer AUTO.
@@ -3483,7 +3484,15 @@ let hwAutoDs = false, hwDsBelowHz = 24e6, hwHasAutoDs = false;
  *     East Coast time, two hours out, and nothing on screen was ever going to correct him.
  *  ★ null = the server has not said (an older build). Then, and only then, fall back to the
  *    browser's clock so the row never goes blank. */
-let srvTzOffsetMin: number | null = null, srvTzAbbr = '';
+let srvTzOffsetMin: number | null = null, srvTzAbbr = '', srvTzId = '';
+/** ★★★ The receiver's offset + label NOW — from this browser's own tz rules when the server named its zone
+ *  (serverZone.ts: Kiko's pre-2019 box said -120 "BRST" in November; Sao_Paulo is -03 all year), else the
+ *  server's own figures exactly as before. null = an older server that sends no clock at all. */
+function srvClockNow(): { offsetMin: number; abbr: string } | null {
+  if (srvTzOffsetMin === null) return null;
+  const z = serverZoneAt(new Date(), srvTzId, srvTzOffsetMin, srvTzAbbr);
+  return { offsetMin: z.offsetMin, abbr: z.abbr };
+}
 /** ★ Last reported gain state, so a CHANGE can be shown — see the breathing indicator. */
 /** ★★★ HOW MANY LNA STATES THE RADIO HAS **RIGHT NOW**, straight from rspstat. The RSP's state
  *  count is per BAND, not per model — seven below 60 MHz where hwinfo's per-model figure says ten
@@ -9959,7 +9968,7 @@ function buildControls() {
   // ── The control card — the only control surface, at every width ──────────
   mobileUi = initMobileControls({
     // ★ The receiver's clock for the deck's "UTC · local" line — see clock() in mobile.ts.
-    serverClock: () => (srvTzOffsetMin === null ? null : { offsetMin: srvTzOffsetMin, abbr: srvTzAbbr }),
+    serverClock: srvClockNow,
     nudgeSteps: (n) => nudge(n * step),
     /* ★★★ THE TUNE PADS SWEEP THROUGH attachHoldSweep — the accelerating, ECHO-PACED sweep Stuart asked
      *  for on 2026-09-27/28 ("it often goes faster than the connection can keep up with"; "it can
@@ -16472,8 +16481,8 @@ function modeColour(m) { for (const x of MODES) if (x.m === m) return x.colour; 
 const GL = ${kit ? safe(kit) : 'null'};
 // ★ The receiver's clock, handed over as it stood when this window opened (the old code read the
 //   opener's variables by name, which do not exist in this window).
-const TZ_OFF = ${safe(srvTzOffsetMin)};
-const TZ_ABBR = ${safe(srvTzAbbr)};
+const TZ_OFF = ${safe(srvClockNow()?.offsetMin ?? null)};
+const TZ_ABBR = ${safe(srvClockNow()?.abbr ?? '')};
 // ★ The Leaflet fallback's renderer (web/mapkit/vibemap.js), as a string for a script element.
 const VIBEMAP_SRC = ${safe(VIBEMAP_JS)};
 // ★ Its data, on the server that opened this window — absolute, since this window is about:blank.

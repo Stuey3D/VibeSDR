@@ -3053,7 +3053,8 @@ export abstract class VibeServerWsClient {
       // ★ Absent on a server too old to send it — the clock then keeps showing the phone's time
       //   rather than going blank.
       if (typeof msg.tzOffsetMin === 'number')
-        this.callbacks.onServerClock?.(Number(msg.tzOffsetMin), String(msg.tzAbbr || ''));
+        this.callbacks.onServerClock?.(Number(msg.tzOffsetMin), String(msg.tzAbbr || ''),
+                                       typeof msg.tz === 'string' ? msg.tz : '');
       }
       // ★★★ THE SESSION CLOCK RIDES HWINFO, NOT CONFIG — the exact trap that made Jr's whole
       // session-limit feature silently never happen (jr_vibeserver_release_pass). The phone was

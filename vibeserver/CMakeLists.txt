@@ -1070,6 +1070,14 @@ vibe_sanitize(test-thread-rank)
 target_link_libraries(test-thread-rank PRIVATE Threads::Threads)
 add_test(NAME thread-rank COMMAND test-thread-rank)
 set_tests_properties(thread-rank PROPERTIES SKIP_RETURN_CODE 77)
+# ★★★ THE SERVER'S ZONE NAME (vibe_tz_id.h, 2026-11-12): the "tz" field a client uses to correct a stale device's
+#     offset (Kiko's pre-2019 box: BRST in November). Pure chooser, every source injected — silent, no real zone touched.
+add_executable(test-tz-id "${CMAKE_CURRENT_SOURCE_DIR}/test-tz-id.cpp")
+target_include_directories(test-tz-id PRIVATE "${CPP_DIR}")
+if(APPLE)
+  target_link_libraries(test-tz-id PRIVATE "-framework CoreFoundation")
+endif()
+add_test(NAME tz-id COMMAND test-tz-id)
 # ★★★ VibeAGC (2026-10-20): the retune-forget split, carrierless headroom, the bursty channel level and the bounded
 #     record (vibe_agc_rules.h, vibe_agc_record.h) — pure, no radio. Silent: synthetic SSB speech, nothing played.
 # ★★★ WHICH RSP DRIVER AND WHOSE SERVICE (vibe_sdrplay_lib.h, 2026-10-22): an installed SDRplay stack wins, the

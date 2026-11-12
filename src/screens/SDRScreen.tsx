@@ -3880,7 +3880,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // all slow with the data; any touch restores full rate instantly.
   /** ★ The RECEIVER's clock, from hwinfo — shown in the status row instead of the phone's own time,
    *  which the phone is already displaying two centimetres higher. null = not yet told. */
-  const [srvTz, setSrvTz] = useState<{ offsetMin: number | null; abbr: string }>({ offsetMin: null, abbr: '' });
+  const [srvTz, setSrvTz] = useState<{ offsetMin: number | null; abbr: string; id: string }>({ offsetMin: null, abbr: '', id: '' });
   // Adaptive waterfall-rate policy — see services/linkManager.ts. 'adaptive' is the default:
   // follow what the link will actually carry rather than asking for the maximum and stuttering.
   // ★★ V12 2026-10-30: this is the DATA control — LOW · AUTO · FULL on screen (wfSpeedCap.ts DATA_LABEL; 'lowData' /
@@ -7689,8 +7689,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       //     nothing behind it. Either way the owner sees a countdown the server is not keeping.
       /* ★ The RECEIVER's clock, for the status row — see ControlsBar's useClock. Stored rather than
        *  formatted here: the bar ticks every second and only it knows when it is visible. */
-      onServerClock: (offsetMin: number, abbr: string) => {
-        setSrvTz({ offsetMin, abbr });
+      onServerClock: (offsetMin: number, abbr: string, tz?: string) => {
+        setSrvTz({ offsetMin, abbr, id: tz ?? '' });
       },
       onSessionWarning: (secs: number) => {
         if (destroyed.current) return;
@@ -14580,6 +14580,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <ControlsBar
           srvTzOffsetMin={srvTz.offsetMin}
           srvTzAbbr={srvTz.abbr}
+          srvTzId={srvTz.id}
           readOnly={readOnly}
           activeDecoder={activeDecoder}
           adminMode={adminOk}
