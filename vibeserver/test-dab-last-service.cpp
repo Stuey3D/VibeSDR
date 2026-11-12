@@ -53,6 +53,14 @@ int main() {
     t.remember(0x7777, "12B", 0x8888);
     CHECK(t.lookup(0x7777, "12B") == 0x8888 && t.entries().size() == kMaxEntries, "a loaded store keeps its bound and its order");
     Store u; CHECK(!u.parse("garbage\nL 1 2 3 4\n") && u.entries().empty(), "not ours: not read");
+    // ★★ The last BLOCK (vibe_dab_landing.h rule 1) rides in the same file as a "B" line.
+    { Store b; CHECK(b.lastBlock().empty(), "no last block to begin with");
+      CHECK(b.setLastBlock("10D") && !b.setLastBlock("10D"), "set once; the same again is no change");
+      CHECK(!b.setLastBlock("") && !b.setLastBlock("TOOLONG"), "empty or impossible names are refused");
+      b.remember(0xC1B2, "10D", 0xC0D3);
+      Store c; CHECK(c.parse(b.serialise()) && c.lastBlock() == "10D" && c.lookup(0xC1B2, "") == 0xC0D3, "block and stations round trip");
+      Store o; CHECK(o.parse("VIBE-DAB-LAST 1\nL 1 C1B2 10D C0D3\n") && o.lastBlock().empty(), "an older file: no block, entries kept");
+      c.clear(); CHECK(c.lastBlock().empty(), "clear() forgets the block too (Start+Select's reset)"); }
     CHECK(!u.parse(std::string("VIBE-DAB-LAST 1\n") + std::string(kMaxFileBytes, 'x')), "too big: not read");
     unlink(tmpl);
 

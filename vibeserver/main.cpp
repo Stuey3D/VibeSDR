@@ -3432,6 +3432,7 @@ int main(int argc, char** argv) {
         } catch (...) { have = false; }
         if (!have && !g_runtimeConfig.locator.empty()) have = vssolar::gridToLatLon(g_runtimeConfig.locator, la, lo);
         if (have) LocalSdrShim::setReceiverPosition(la, lo);
+        LocalSdrShim::setReceiverCountry(g_runtimeConfig.country);   // ★ which block DAB opens on (vibe_dab_landing.h)
         LocalSdrShim::loadDabTransmitterLists(vsDataDir());
     }
     LocalSdrShim::setStationLogoHandler([](const std::string& pi, const std::string& ecc,
@@ -5100,6 +5101,7 @@ int main(int argc, char** argv) {
                 double la = 0, lo = 0; bool have = false;
                 try { if (!fresh.lat.empty() && !fresh.lon.empty()) { la = std::stod(fresh.lat); lo = std::stod(fresh.lon); have = true; } } catch (...) {}
                 if (!have && !fresh.locator.empty()) have = vssolar::gridToLatLon(fresh.locator, la, lo);
+                LocalSdrShim::setReceiverCountry(fresh.country);
                 if (have) { LocalSdrShim::setReceiverPosition(la, lo); vibebands::defaultRegion() = vibebands::ituRegion(la, lo, true); LocalSdrShim::setBandRegion(vibebands::defaultRegion(), true); }
                 std::printf("VibeServer: location now %s\n", !fresh.locator.empty() ? fresh.locator.c_str()
                             : !fresh.lat.empty() ? (fresh.lat + ", " + fresh.lon).c_str() : "not set");

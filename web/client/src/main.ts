@@ -79,7 +79,7 @@ import { buildBookmarkHoverIndex, bookmarkAt, newBookmarkHit, type BookmarkHover
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
 import { hopStrip, ismHopIndex, ismHopStrip, spotsHopIndex, spotsHopStrip, spotsShortName, type HopStrip } from '../../../src/services/hopKeys';
-import { parseDabScan, parseFmScan, dabScanKey, dabScanMayTune, scanLocked, scanLockLine, SCAN_LOCK_FLIP_MS, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
+import { parseDabScan, parseFmScan, dabScanKey, dabUnscannedLine, dabScanMayTune, scanLocked, scanLockLine, SCAN_LOCK_FLIP_MS, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
          type DabScanState } from '../../../src/services/dabBandScan';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { lrDisplay } from '../../../src/services/lrMeter';
@@ -7750,14 +7750,18 @@ function dabRender() {
    *  marquee restarted ("scrolls for a second then resets"). Now the list is built only when the
    *  set or order of services changes; otherwise each row's class, logo, name, text and codec
    *  are written only where they differ, and a marquee restarts only when its own text did. */
-  const skeleton = d.services.map(sv => sv.sid).join(',') + (d.held ? '|held' : '') + (d.services.length ? '' : `|empty|${d.truncated ? 't' : d.locked ? 'l' : 's'}`);
+  // ★★ V12: opened on 12B with nothing to go on (the server's `unscanned`) — say so, and suggest SCAN only to someone who
+  //    may press it (dabUnscannedLine; the same dabScanOk that draws the key).
+  const unscannedLine = d.services.length ? '' : dabUnscannedLine(!!d.unscanned, dabScanState, dabScanOk);
+  const skeleton = d.services.map(sv => sv.sid).join(',') + (d.held ? '|held' : '') + (d.services.length ? '' : `|empty|${d.truncated ? 't' : d.locked ? 'l' : 's'}|${unscannedLine}`);
   if (skeleton !== dabLastListHtml) {
     dabLastListHtml = skeleton;
     st.innerHTML = d.services.length
       ? d.services.map(sv => `<div class="dabSvc" role="button" tabindex="0" data-sid="${Number(sv.sid) || 0}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
         + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
       : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
-          : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
+          : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`
+        + (unscannedLine ? `<div class="dabUnscanned" style="padding:0 14px 14px;opacity:.75;line-height:1.35">${escapeHtml(unscannedLine)}</div>` : '');
     for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
       el.onclick = () => { dabPickedAt = performance.now(); dabPcmRunStart = 0; dabPcmRoseAt = 0; audio?.holdHealing(6000); spec?.dabService(Number(el.dataset.sid)); dabRender(); };
     // ★ A station row is a button (role + tabindex above), so a game controller's highlight and the Tab key land on it —

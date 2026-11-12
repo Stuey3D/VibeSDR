@@ -37,7 +37,7 @@ import { limiter } from '../utils/limit';
 import { dabLogoKey } from '../services/logoCachePolicy';
 import { forgetShownLogo, logoDue, offerAirLogo, peekLogo, peekLogoEntry, resolveLogo, useLogoStoreVersion } from '../services/logoStore';
 import { cuPct, dabCuSegments } from '../utils/dabCapacity';
-import { dabScanKey, dabScanRows, dabScanLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle, type DabScanState } from '../services/dabBandScan';
+import { dabScanKey, dabUnscannedLine, dabScanRows, dabScanLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle, type DabScanState } from '../services/dabBandScan';
 
 /** ★ Three RadioDNS lookups at a time — under the server's cap of four (src/utils/limit.ts). */
 const dabLogoQueue = limiter(3);
@@ -788,6 +788,11 @@ export default function DabPanel(p: DabPanelProps) {
             <Text style={s.notice}>
               {d.locked ? 'Locked — reading the service list…' : 'Searching for the multiplex…'}
             </Text>
+          )}
+          {/* ★★ V12: opened on 12B with nothing to go on (the server's `unscanned`) — SCAN suggested only where this
+              listener may press it (dabUnscannedLine; canScan is the key's own rule). */}
+          {d.services.length === 0 && !!dabUnscannedLine(!!d.unscanned, p.scan ?? null, canScan) && (
+            <Text style={s.notice}>{dabUnscannedLine(!!d.unscanned, p.scan ?? null, canScan)}</Text>
           )}
           {d.services.map(sv => (
             <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base} readAuth={p.readAuth ?? ''}

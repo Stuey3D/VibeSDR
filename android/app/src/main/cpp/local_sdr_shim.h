@@ -664,6 +664,8 @@ public:
     static void setLogoBytesFetcher(LogoBytesFn fn);
     /** ★ Where this receiver is, so DAB transmitter identities can carry a distance. */
     static void setReceiverPosition(double lat, double lon);
+    /** ★ The owner's country (two letters, "" = not set) — which block DAB opens on with nothing remembered (vibe_dab_landing.h). */
+    static void setReceiverCountry(const std::string& iso);
     /** ★ Load per-country DAB transmitter lists (dab-tii-<ecc>.csv) from a data directory. */
     static void loadDabTransmitterLists(const std::string& dir);
     /** ★★ EMPTY THE SERVER'S STATION-LOGO CACHE. A logo is looked up once and remembered — hits

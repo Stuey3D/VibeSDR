@@ -462,6 +462,9 @@ export interface DabState {
   truncated?: number;
   /** Client-side: the list is the last good one, held while the server reports none. */
   held?: boolean;
+  /** ★ V12: the server opened on 12B with no scan list and no national multiplex for its country (vibe_dab_landing.h) —
+   *  the box says "no scan yet" (dabUnscannedLine). Absent on an older server = false. */
+  unscanned?: boolean;
 }
 
 export interface SpectrumCallbacks {
