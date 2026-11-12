@@ -22,7 +22,7 @@ constexpr double SF_OK_STRONG = 0.98, SF_OK_WEAK = 0.90;
 constexpr double MP2_BAD_STRONG = 0.01, MP2_BAD_WEAK = 0.10;
 constexpr double BER_MODERATE = 0.015, BER_WEAK = 0.085;
 constexpr double MER_STRONG = 16, MER_WEAK = 10;
-constexpr double FIB_STRONG = 0.99, FIB_WEAK = 0.90, FIB_NONE = 0.05;
+constexpr double FIB_STRONG = 0.975, FIB_WEAK = 0.90, FIB_NONE = 0.05;
 constexpr double ERASED_MODERATE = 0.02, ERASED_WEAK = 0.10;
 constexpr double MIN_SF = 4, MIN_MP2 = 20, MIN_AU = 10;
 constexpr double AU_BAD_STRONG = 0.01, AU_BAD_WEAK = 0.08;
@@ -36,6 +36,11 @@ inline const char* advice(int l) {
     static const char* t[] = {"Searching for the multiplex", "No or heavily broken audio", "Expect occasional audio break-ups", "Clear audio"};
     return t[l & 3];
 }
+/** DAB_STARTING_ADVICE / DAB_CHOOSE_ADVICE / DAB_NO_AUDIO_ADVICE, and DAB_NO_AUDIO_MS. */
+constexpr const char* STARTING_ADVICE = "Starting audio…";
+constexpr const char* CHOOSE_ADVICE = "Choose a station";
+constexpr const char* NO_AUDIO_ADVICE = "No audio reaching you";
+constexpr double NO_AUDIO_MS = 4000;
 /** dabQuality.ts pct(): "14", "4.1", "0.3" */
 inline std::string pct(double f) {
     const double p = f * 100;
@@ -52,6 +57,8 @@ struct DabQuality {
     int level = 0;
     std::string label = dabq::label(0), shortL = dabq::shortLabel(0), advice = dabq::advice(0), detail;
     bool hasMer = false; double merDb = 0;
+    /** A service is selected and has not produced its first good audio unit (dabQuality.ts `starting`). */
+    bool starting = false;
 };
 
 /** One `dab` report's counters (absent = NaN, the TS's undefined). */
@@ -67,6 +74,8 @@ struct DabWindow {
     double fibRate = NAN, fibNow = NAN, mer = NAN, mscBer = NAN;
     double sfTried = 0, sfOk = 0, mp2In = 0, mp2Bad = 0, frames = 0, erased = 0;
     double scfConcealed = NAN, auIn = NAN, auBad = NAN, rsLost = NAN;
+    /** dabQuality.ts audioStarted: -1 undefined, 0 = no audio evidence may be used (no service, or none decoded yet), 1. */
+    int audioStarted = -1;
 };
 
 /** classifyDabWindow — the verdict for one window, no memory. */
@@ -78,7 +87,8 @@ inline void dabClassify(const DabWindow& w, int& level, std::string& detail) {
     if (has(w.fibNow) && w.fibNow < FIB_NONE) { level = 0; detail = "no station list"; return; }
     bool haveA = false; int aL = 3; std::string aD;
     auto worseA = [&](int l, const std::string& d) { if (!haveA || l < aL) { haveA = true; aL = l; aD = d; } };
-    if (has(w.auIn) && w.auIn >= MIN_AU) {
+    if (w.audioStarted == 0) { /* start-up / no service: the prediction below decides */ }
+    else if (has(w.auIn) && w.auIn >= MIN_AU) {
         const double lost = std::min(has(w.auBad) ? w.auBad : 0.0, w.auIn) / w.auIn;
         worseA(lost >= AU_BAD_WEAK ? 1 : lost >= AU_BAD_STRONG ? 2 : 3, lost > 0 ? pct(lost) + " % audio lost" : "");
     } else if (w.sfTried >= MIN_SF) {
@@ -86,7 +96,7 @@ inline void dabClassify(const DabWindow& w, int& level, std::string& detail) {
         worseA(1 - lost <= SF_OK_WEAK ? 1 : 1 - lost <= SF_OK_STRONG ? 2 : 3, lost > 0 ? pct(lost) + " % frames lost" : "");
         if (has(w.rsLost) && w.rsLost > 0) worseA(2, std::to_string((long)w.rsLost) + " RS failures");
     }
-    if (w.mp2In >= MIN_MP2) {
+    if (w.audioStarted != 0 && w.mp2In >= MIN_MP2) {
         const double bad = std::min(w.mp2Bad, w.mp2In) / w.mp2In;
         worseA(bad >= MP2_BAD_WEAK ? 1 : bad >= MP2_BAD_STRONG ? 2 : 3, bad > 0 ? pct(bad) + " % frames bad" : "");
         if (has(w.scfConcealed)) {
@@ -130,7 +140,7 @@ inline void dabClassify(const DabWindow& w, int& level, std::string& detail) {
 /** DabQualityMeter — feed it every `dab` report; reset() on leaving DAB (no verdict may outlive the mode). */
 class DabQualityMeter {
 public:
-    void reset() { samples_.clear(); channel_.clear(); haveChannel_ = false; shown_ = -1; pendL_ = -1; pendN_ = 0; have_ = false; }
+    void reset() { samples_.clear(); channel_.clear(); haveChannel_ = false; shown_ = -1; pendL_ = -1; pendN_ = 0; have_ = false; sid_ = 0; startingSince_ = NAN; }
     bool has() const { return have_; }
     const DabQuality& current() const { return last_; }
 
@@ -149,7 +159,21 @@ public:
             const DabQSample& p = samples_.back();
             const double DabQSample::*ks[] = {&DabQSample::frames, &DabQSample::erased, &DabQSample::mp2In, &DabQSample::mp2Bad, &DabQSample::sfTried,
                                               &DabQSample::sfOk, &DabQSample::scfConcealed, &DabQSample::auIn, &DabQSample::auBad, &DabQSample::rsLost};
-            for (auto k : ks) if (!std::isnan(p.*k) && !std::isnan(s.*k) && s.*k < p.*k) { samples_.clear(); break; }
+            for (auto k : ks) if (!std::isnan(p.*k) && !std::isnan(s.*k) && s.*k < p.*k) {
+                samples_.clear();
+                if (!std::isnan(startingSince_)) startingSince_ = nowMs;   // a new service starts its own wait
+                break;
+            }
+        }
+        // ★ Has this service played yet? (dabQuality.ts) — the server's per-service totals answer it.
+        auto z = [](double v) { return std::isnan(v) ? 0.0 : v; };
+        const bool started = sid && (z(s.sfOk) > 0 || z(s.auIn) - z(s.auBad) > 0 || z(s.mp2In) - z(s.mp2Bad) > 0);
+        if (sid != sid_) { sid_ = sid; startingSince_ = (sid && !started) ? nowMs : NAN; }
+        if (!sid) startingSince_ = NAN;
+        else if (!started) { if (std::isnan(startingSince_)) startingSince_ = nowMs; }
+        else if (!std::isnan(startingSince_)) {
+            startingSince_ = NAN;
+            samples_.clear(); samples_.push_back(s);   // the first good unit: judge from HERE (a base copy)
         }
         samples_.push_back(s);
         while (samples_.size() > 2 && nowMs - samples_[1].t >= dabq::WINDOW_MS) samples_.pop_front();
@@ -177,6 +201,7 @@ public:
         w.rsLost = std::isnan(s.rsLost) ? NAN : d(&DabQSample::rsLost);
         w.frames = samples_.size() > 1 ? d(&DabQSample::frames) : 0;
         w.erased = samples_.size() > 1 ? d(&DabQSample::erased) : 0;
+        w.audioStarted = started ? 1 : 0;
         int vl; std::string vd;
         dabClassify(w, vl, vd);
         if (shown_ < 0) shown_ = vl;
@@ -190,6 +215,11 @@ public:
         q.hasMer = w.locked && !std::isnan(w.mer) && w.mer > 0; q.merDb = q.hasMer ? w.mer : 0;
         q.advice = (lvl == 0 && vl == 0 && vd == "no station list") ? "Locked, but nothing decodes" : dabq::advice(lvl);
         if (lvl == vl && lvl != 0) q.detail = vd;
+        if (lvl != 0 && !sid) q.advice = dabq::CHOOSE_ADVICE;
+        else if (lvl != 0 && !started && !std::isnan(startingSince_)) {
+            q.starting = true;
+            q.advice = nowMs - startingSince_ >= dabq::NO_AUDIO_MS ? dabq::NO_AUDIO_ADVICE : dabq::STARTING_ADVICE;
+        }
         last_ = q; have_ = true;
         return last_;
     }
@@ -199,6 +229,7 @@ private:
     std::string channel_; bool haveChannel_ = false;
     int shown_ = -1, pendL_ = -1, pendN_ = 0;
     DabQuality last_; bool have_ = false;
+    double sid_ = 0, startingSince_ = NAN;
 };
 
 }  // namespace hh

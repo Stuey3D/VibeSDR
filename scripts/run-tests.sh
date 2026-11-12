@@ -331,6 +331,11 @@ deps_for() {
     #     pinned there — the lock broke up hours into a listen. The window re-centres (advanceAfterPush); the old loop must
     #     still show the fault. ~2,000 synthetic frames through the real receiver, so optimised.
     test-dab-clockwalk) echo "-O2" ;;
+    # ★★★ WHAT PLAYS AFTER A BLOCK CHANGE (2026-11-12, Stuart's RSP1A: squeal + "100 % frames lost" with no station chosen):
+    #     the old service's sub-channel is no longer decoded from the new block, and the server's own choice — same
+    #     station, last on the multiplex (a file), first — never for a scan. The bench clip through DabService (exit 3 =
+    #     NOT RUN without it: vibeserver/bench-clip/make-clip.sh or VIBE_DAB_CLIP=). The rule alone: test-dab-last-service.
+    test-dab-station-choice) echo "-O2 -lpthread $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;
@@ -840,6 +845,8 @@ if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fa
 # ★★★ THE DAB RECEPTION METER (2026-10-06): three bars + a sentence in place of the signal bar, judged on ~5 s
 #     of the server's counters with hysteresis; thresholds held to the on-air cases (app + web share it).
 if node --no-warnings scripts/test_dab_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the R36S's port of it (handheld-ui/src/dab_quality.h) replays the TS meter's own outputs, line for line.
+if bash handheld-ui/test/run_dab_quality_test.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE DRM RECEPTION METER (V12, 2026-11-12): DAB's meter for DRM — the decoder's own SNR in the box (Stuart: 17–20 dB
 #     decoded on a signal the meter read as 42 dB), the verdict on the programme's MER against its QAM and the audio frames.
 if node --no-warnings scripts/test_drm_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1306,6 +1313,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     (make-clip.sh) as well as VIBESERVER_BIN — NOT RUN without either.
 printf '\n\033[1m── the DAB report in pieces (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-report-pieces.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ WHAT PLAYS AFTER A LISTENER CHANGES MULTIPLEX (2026-11-12): silent until the list, then the first; the same
+#     station by SId on another block; a named one wins; the last one here across a restart. VIBESERVER_BIN + the bench
+#     clip (VIBE_DAB_CLIP=), NOT RUN without either. ~40 s.
+printf '\n\033[1m── the DAB station choice (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-station-choice.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ A LONG SESSION COSTS NO MORE THAN A SHORT ONE (2026-10-19): Stuart's app read 93-103 KB/s in DAB after 23 minutes
