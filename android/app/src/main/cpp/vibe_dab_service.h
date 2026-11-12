@@ -1061,9 +1061,13 @@ public:
          *  the symptom was indistinguishable from a dead decoder. A separate, short append cannot
          *  drift out of step with its own arguments. */
         {
-            char rb[96];
-            snprintf(rb, sizeof rb, ",\"reacquires\":%d,\"preTuneDropped\":%u,\"aacRestarts\":%d,\"aacRebuilds\":%u",
-                     s.reacquires, preTuneDropped_, aac_.restarts(), aacRebuilds_);
+            char rb[160];
+            /* ★ wideDropped (2026-11-12): capture samples the WIDE path's DDC queue threw away for falling behind (a USRP at
+             *  8 MS/s and the like). They were counted and never reported — "IQ dropped" in the pane (`dropped`) is only
+             *  the worker's own backlog guard, so a wide radio's losses read as 0 there. */
+            snprintf(rb, sizeof rb, ",\"reacquires\":%d,\"preTuneDropped\":%u,\"aacRestarts\":%d,\"aacRebuilds\":%u,\"wideDropped\":%llu",
+                     s.reacquires, preTuneDropped_, aac_.restarts(), aacRebuilds_,
+                     (unsigned long long)wDropped_.load(std::memory_order_relaxed));
             j += rb;
         }
         {
