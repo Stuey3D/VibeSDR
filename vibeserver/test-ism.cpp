@@ -1531,6 +1531,57 @@ int main(int argc, char** argv) {
         CHECK(ao && approx(ao->tempC, -25.0, 1e-9), "three at once: Oregon −25.0 °C");
     }
 
+    /* 5b. ★ THE FRONT END'S OPENING AND WIDE FSK (2026-11-12, docs/v12/ISM-DECODER.md §front end). A burst on the air
+     *  from the FIRST sample — inside the detector's 64-frame floor seed (~20 ms at 2.4 MS/s, ~65 ms at 250 kS/s) — used
+     *  to be learnt as floor and never found; now the seed is the median of those frames and they are looked back over. */
+    printf(" front end: a burst from the first sample, wide-deviation FSK\n");
+    {
+        Sig a{schraderGG4Tx(0x1223344, 88, 18)}; a.offHz = -60e3; a.startS = 0.0;
+        const auto g1 = runFront(synth({a}, 2.4e6, 0.3, 0.02, 41), 2.4e6);
+        CHECK(findModel(g1, "Schrader") != nullptr, "a Schrader frame from sample 0 (inside the floor seed) at 2.4 MS/s: not decoded");
+        Sig b{schraderGG4Tx(0x1223344, 88, 18)}; b.offHz = 40e3; b.startS = 0.004;
+        const auto g2 = runFront(synth({b}, 2.4e6, 0.3, 0.02, 42), 2.4e6);
+        CHECK(findModel(g2, "Schrader") != nullptr, "a Schrader frame 4 ms in (inside the floor seed): not decoded");
+        /* a 250 kS/s capture (the corpus' rate): the window is 65 ms; a WH2 (~100 ms) 40 ms in. ★ A burst filling over HALF
+         *  the window is still learnt as floor (the seed is a median — see Detector::kSeedQ): not tested, not claimed. */
+        Sig c{wh2(0x1A5, 21.3, 55)}; c.offHz = 30e3; c.startS = 0.040; c.amp = 0.3;
+        const auto g3 = runFront(synth({c}, 250e3, 0.4, 0.02, 43), 250e3);
+        const Reading* r3 = findModel(g3, "WH2");
+        CHECK(r3 && approx(r3->tempC, 21.3, 0.051), "a WH2 40 ms in (inside the floor seed) at 250 kS/s: %s", r3 ? "wrong value" : "not decoded");
+        // and the seed must not invent bursts: noise that starts with a strong burst, then 3 s of nothing
+        std::vector<Burst> bs;
+        const auto g4 = runFront(synth({a}, 2.4e6, 3.0, 0.02, 44), 2.4e6, &bs);
+        CHECK(bs.size() == 1 && g4.size() >= 1, "a burst at sample 0 then noise: %zu bursts (want 1), %zu readings", bs.size(), g4.size());
+        /* a steady spur on the air from sample 0 is FLOOR (the seed's busy-stretch rule leaves a still bin alone), so it
+         *  opens nothing — and a Schrader beside it, 40 ms in, is still read */
+        Sig cw; cw.runs = {2000000}; cw.offHz = 170e3; cw.startS = 0.0; cw.amp = 0.5;
+        Sig sc{schraderGG4Tx(0x1223344, 88, 18)}; sc.offHz = -150e3; sc.startS = 0.6;
+        std::vector<Burst> b5;
+        const auto g5 = runFront(synth({cw, sc}, 2.4e6, 1.5, 0.02, 48), 2.4e6, &b5);
+        CHECK(b5.size() == 1 && findModel(g5, "Schrader"), "a spur from sample 0: %zu bursts (want 1, the Schrader), Schrader %s",
+              b5.size(), findModel(g5, "Schrader") ? "read" : "lost");
+    }
+    {
+        /* wide deviation: a Toyota PMV-C210 at ±75 kHz (the old captures the detector split into two silent tones) and an
+         *  emonTx (RFM12) at ±90 kHz — one channel at the tones' midpoint, mixed wide; and narrow FSK unchanged */
+        Sig t{repeatRuns(toyotaC210Tx(0x0D5AEE3, 165, 69), 2, 4000)}; t.fsk = true; t.devHz = 75e3; t.offHz = 120e3;
+        std::vector<Burst> bs;
+        const auto g1 = runFront(synth({t}, 2.4e6, 0.5, 0.02, 45), 2.4e6, &bs);
+        CHECK(findModel(g1, "PMV-C210") != nullptr, "Toyota PMV-C210 at ±75 kHz: not decoded (%zu bursts)", bs.size());
+        CHECK(bs.size() == 1 && bs[0].fskDevHz > 55e3, "Toyota at ±75 kHz: %zu bursts, deviation %.0f Hz (want one burst, ~75 kHz)",
+              bs.size(), bs.empty() ? 0.0 : double(bs[0].fskDevHz));
+        std::vector<uint8_t> by = {0xD2, 0x08, 26};
+        const int w[13] = {7, 0, 0, 0, 23665, 3000, 3000, 3000, 3000, 3000, 3000, 1, 0};
+        for (int v : w) { by.push_back(uint8_t(v)); by.push_back(uint8_t(v >> 8)); }
+        const uint16_t c16 = kit::crc16r(by.data(), by.size(), 0xA001, 0xFFFF); by.push_back(uint8_t(c16)); by.push_back(uint8_t(c16 >> 8));
+        Bits c = hb(0xAAAAAA, 24); append(c, hb(0x2D, 8)); append(c, bytesToBits(by)); append(c, hb(0xAA, 8));
+        Sig e{fskNrz(c, 2e6 / (49230 + 49261))}; e.fsk = true; e.devHz = 90e3; e.offHz = 150e3;
+        const auto g2 = runFront(synth({e}, 2.4e6, 0.3, 0.02, 46), 2.4e6);
+        CHECK(findModel(g2, "emonTx") != nullptr, "emonTx at ±90 kHz: not decoded");
+        Sig n{repeatRuns(toyotaC210Tx(0x0D5AEE3, 165, 69), 2, 4000)}; n.fsk = true; n.devHz = 20e3; n.offHz = -120e3;
+        CHECK(findModel(runFront(synth({n}, 2.4e6, 0.5, 0.02, 47), 2.4e6), "PMV-C210") != nullptr, "Toyota at ±20 kHz: not decoded");
+    }
+
     // 6. Pure noise: nothing — 20 s at 2.4 MS/s, two seeds; and a CW carrier that never stops
     printf(" false positives\n");
     {
