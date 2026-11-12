@@ -455,6 +455,9 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 #include "vibe_ism_remotes.h"
 #include "vibe_ism_meters2.h"    // ★ V12 2026-11-12: meters and monitors, second pass
 #include "vibe_ism_homeauto.h"   // ★ V12 2026-11-12: heating, blinds, lighting, smart home
+// ★ V12 2026-11-12: the second security / remotes pass — more alarm sensors, smoke alarms, doorbells; car fobs, gates
+#include "vibe_ism_security2.h"
+#include "vibe_ism_fobs.h"
 namespace vibeism {
 
 /** Every decoder, in turn, on every smoothing of the burst (finest first). The first that accepts it wins (a burst is one
@@ -518,7 +521,9 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (decodeMeters2(b, out)) return;
     if (decodeHomeauto(b, out)) return;
     if (decodeSecurity(b, out)) return;
+    if (decodeSecurity2(b, out)) return;
     if (decodeRemotes(b, out)) return;
+    if (decodeFobs(b, out)) return;
     if (wx13::decodeWeak(b, out)) return;   // ★ no published check: after every family with one
     if (wx14::decodeWeak(b, out)) return;
     if (wx15::decodeWeak(b, out)) return;

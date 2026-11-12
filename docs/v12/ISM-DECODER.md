@@ -390,17 +390,17 @@ see Tests). Alarm sensors are kind `security` ("Alarm sensor #n"), remotes `door
 | Honeywell / Ademco 5800, 2GIG | 345 OOK Manchester 136 µs | **27/29** | L. Lamb, DEF CON 22 "Home Insecurity" | CRC-16 |
 | DSC contacts / motion | 433 OOK RZ 500 µs | **8/8** | FCC F5300NB912 report; rtl_433 notes | CRC-8 |
 | X10 security | 310/433 OOK NEC-like | **5/5** | rtl_433 notes | complements + parity |
-| SimpliSafe sensors (never keypad PINs) | 433 OOK PIWM | test only (seed) | rtl_433 notes | sum + twice alike |
+| SimpliSafe sensors (never keypad PINs) | 433 OOK PIWM | **5/10** (2026-11-12: the row was inverted twice; the 5 left are keypads — one AGC-saturated carrier) | rtl_433 notes | sum + twice alike |
 | Generic 433.3 MHz motion kit | 433 OOK PWM | **14/14** | rtl_433 notes | none: 3 copies, every gap agreeing with its mark |
 | LightwaveRF | 433 OOK | **43/43** | So Make It wiki | 16-of-256 symbols, whole frame, twice |
 | Nexa / KlikAanKlikUit / Proove / Intertechno self-learning | 433 OOK PPM | **17/17** | elektronikforumet wiki | pairs, twice |
 | X10 RF | 310/433 | **4/4** | WGL Designs W800RF32 doc | complements + fixed bits |
 | GE Color Effects | 433 FSK 52 µs | **14/16** | deepdarc.com; lukecyca.com | twice |
 | Somfy RTS | 433.42 OOK | 1/2 | pushstack.wordpress.com; US 8 189 620 | nibble XOR |
-| Microchip HCS361 (car / gate) | 315 OOK PWM | 3/10 | DS40146F | 2-bit CRC → confirm |
+| Microchip HCS361 (car / gate) | 315 OOK PWM or VPWM | **20/22** (2026-11-12: + the VPWM data format and the 1/3-duty preamble sync; 2 have no burst) | DS40146F; rtl_433 hcs361.c notes | 2-bit CRC → confirm |
 | Clemsa, Ansonic, BETT, Elplast, Linear MultiCode / Delta-3, Roger, Allstar Firefly, Nice FLO (12-bit) | 433 OOK PWM | **13/27** | rtl_433 conf/ descriptions | none: whole words, twice |
 | Car fobs: Continental KR5V2X (Honda), Chrysler | 313.8 FSK Manchester / 315 OOK PWM | **7/7, 7/7** | rtl_433 *_car_remote.c notes (FCC IDs) | XOR / sum; Chrysler rows exactly one packet |
-| Car fobs: MIC 6SC2, GM ABO1502T | 315 OOK | 0/6, 0/5 (written, not yet on a real burst) | same | XOR / sums; confirm |
+| Car fobs: MIC 6SC2, GM ABO1502T | 315 OOK | **6/6, 5/5** (2026-11-12: 6SC2's zero-bit first half restored; GM's 112 bits end at the row's end) | same | XOR / sums; confirm |
 | Paradox Magellan sensors and remotes | 433 OOK PWM | **5/5** | Flipper Zero protocol via rtl_433's notes | CRC-8 |
 | Honeywell ActivLink chimes / PIR / contacts | 916.8 OOK, 868 FSK, PWM | **5/6** | K. Lohner, honeywell-wireless-doorbell | parity + 15 zero bits, twice |
 | RadioHead ASK packets, Sensible Living moisture | 433 OOK NRZ | **9/10** | RadioHead RH_ASK docs | CRC-16 (data never shown) |
@@ -451,6 +451,53 @@ IBIS beacon, LoRa (not this path), Fanimation — not written this pass; Siemens
 Quhwa and Elro DB286A doorbells, RF-tech a temperature sensor (the security and weather passes). Owl CM160's other 7:
 ~7 dB over a full-band 250 kS/s channel (front end). Efergy e2 classic 6/14 (7/14 padded): FSK slivers inside the PWM
 — a fold was tried and gained nothing, dropped.
+Security+, Chamberlain, the car remotes, Vivint, Visonic, Cavius, HCS362: see the second security / remotes pass below.
+
+### Second security / remotes pass (2026-11-12) — `vibe_ism_security2.h`, `vibe_ism_fobs.h`
+
+Facts from the notes at the head of rtl_433's device files and `conf/` descriptions (GPL: read for frame layout, timing
+and checks only — no code, tables or comments copied; button-name tables were NOT copied, so TV remotes and remote
+starters show the button number), the Microchip datasheets, and the rtl_433_tests READMEs. Scores are on the corpus with
+the ism2-front front end. Everything here is **secret** (identity hashed by the Tracker, never in any output; test-ism
+checks the JSON for each family's code in hex and decimal). Rolling / hopping codes are never read: KeeLoq hop words are
+skipped, the Security+ 2.0 rolling digits are checked for validity and thrown away, never assembled.
+
+| Family | Band / mod | Corpus | Facts from | Check |
+|---|---|---|---|---|
+| Vivint door/window, glass-break, motion | 345 OOK Manchester 135 µs | **6/6** | vivint.c notes | packed 12-bit CRC 0x8050; status enciphered → only the sensor kind shown |
+| Visonic PowerCode | 433 OOK PWM 400/800 | **2/2** | visonic_powercode.c (MCR-300 manual) | XOR nibble, twice |
+| Cavius smoke / heat / water alarms, door sensors | 869.67 FSK Manchester 206 µs / 868.7 NRZ 415 µs | **3/3** | cavius.c notes | CRC-8 Maxim + complement / CRC-8 0x07 |
+| Chamberlain CWPIRC motion | 915 FHSS FSK 25 µs | 4/4 decode — **HELD, not called** | chamberlain_cwpirc.c notes | CRC-16/XMODEM; corpus folder 02 has an EMPTY key over 4 CRC-valid frames of the same sensor → would score a false alarm; for Stuart |
+| Security+ 2.0 garage remotes | 310/315/390 OOK Manchester 250 µs | **1/1** | secplus_v2.c notes | both halves' order/invert/trit validity; fixed part only |
+| Chamberlain / LiftMaster DIP (7/8/9 switches) | 300–390 OOK 1 ms slots | **3/3** | chamberlain_code.c (Flipper Zero) | none: symbol + stop places, twice |
+| Microchip HCS362 (PWM and Manchester) | 315/433/868 | **4/4** | DS40189E; hcs362.c notes | 2-bit CRC → confirm |
+| 2GIG KEY2E (encrypted) | 345 OOK Manchester | **4/4** | twogig_key2e.c notes | CRC-16 0x8005 init 0x4C57; all enciphered → only the make |
+| Ford (EU) car keys | 433 OOK DMC 250 µs | **6/6** (decoded) | fordremote.c notes | none: confirm; no button / code shown |
+| Honda (EU) car keys — also Nidec OUCG8D (Honda OEM) | 433 / 313.8 FSK PWM 250/500 | **3/3** + nidec 4/6 | hondaremote.c notes | none: 26 fixed bits + length, confirm |
+| Code Alarm FRDPC2002 | 433 OOK zero-bit Manchester 550 µs | **5/5** | code_alarm_car_remote.c | none: confirm |
+| Astroflex Astrostart 2000/3000 | 372.4 OOK PPM | **5/5** | astrostart_2000.c | complement + 4-bit sum, confirm |
+| Compustar 1WG3R | 433 OOK PWM 740/1110 | **5/5** | compustar_1wg3r.c | complement byte + fixed bits, twice |
+| Audiovox PRO-OE3B | 303 OOK PWM 450/900 | **3/3** | audiovox_pro_oe3b.c | fixed bits, twice / confirm |
+| Alps FWB1U545 (Honda OEM) | 433 FSK zero-bit Manchester 500 µs | **4/4** | alps_fwb1u545.c | 55 + copied byte + length, confirm |
+| GangQi / Hollarm alarm remotes | 433 OOK PWM / PPM | **3/3, 3/3** | gangqi.c, hollarm.c (Flipper Zero) | 8-bit sums, twice / confirm |
+| King Gates Stylo 4k | 433 OOK | **2/2** | kinggates.c (Flipper Zero) | none: constants + two identical messages |
+| iDo 111/117 | 433 OOK PPM | **2/2** | ido.c (Flipper Zero) | none: two messages, same fixed part |
+| HT680-based remotes | 433 OOK PWM | 0/2 (written; the recordings slip bits) | ht680.c notes | sync + 12 fixed pin bits, confirm |
+| Revers RB2 | 433 OOK zero-bit Manchester 250 µs | **2/2** (decoded) | conf/Revers-RB2.conf | none: the word 3+ times with its 32 ones |
+| KeyFinder tags | 433 OOK PWM 400/1300 | **3/3** | conf/KeyFinder.conf | none: twice alike |
+| Roger, Nice FLO 12-bit (first-pass rows) | 433 OOK PWM | **3/3**, 1/3 | conf/ | one word a burst → confirm (only these two: doing it for every family misread weather / TPMS) |
+| DirecTV RC66RX, Dish UHF 6.3 TV remotes | 433 FSK / 384 OOK PPM | **4/4, 3/3** | directv.c (K. Lohner), dish_remote_6_3.c | nibble sum / fixed bits, twice |
+
+Left, and why: **Security+ 1.0** (no check, and the fixed ID cannot be separated from the rolling code without
+decoding it — privacy rule); **Cardin S466** (27.195 MHz — no band we listen on); **Kidde RF-SM** and **Honeywell
+5890PI** (the slice is broken on these recordings — glitched envelope / a saturated carrier); **Corradi HCS200** 2/3 (the
+preamble burst is distorted, the data burst alone has no sync); **SimpliSafe keypads** (saturated carrier; PIN frames
+never decoded anyway); **Allstar Firefly** and the other first-pass PWM rows one word a burst (single words of those
+shapes appear in other devices' recordings); **24-bit Nice FLO** (a PT2262 word); **Lynx / generic 1000-3000
+doorbells, generic 4-channel 315 remotes** (EV1527/PT2262-shaped, no check — not attempted this pass); **Opus XT300,
+Shenzhen Wale, Blueline, pt20tx (Bresser), axel (Esperanza)** — weather / energy, the other passes'.
+Also seen: in 6sc2/01/g001 two ~50 µs OOK bursts read as **Toyota PMV-C210 TPMS** (not 6SC2 frames — those are
+250 µs; rtl_433's key lists none): a TPMS-side question for whoever owns vibe_ism_tpms.h.
 
 ## The gallery (2026-10-25)
 

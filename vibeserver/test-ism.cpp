@@ -1470,6 +1470,393 @@ static void testHome2() {
     home2Run(cs);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★ V12 2026-11-12: THE SECOND SECURITY / REMOTES PASS (vibe_ism_security2.h, vibe_ism_fobs.h) — each family ENCODED
+//  FROM ITS FRAME FACTS, through the real front end at the band it sends on, then through the Tracker twice: the JSON
+//  must name the make and NEVER carry the sender's code / ID / serial (hex upper and lower, decimal).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+struct SecCase { HomeCase h; double centre; std::vector<std::string> banned; const char* line; };
+static std::vector<std::string> spellings(uint64_t v) {
+    char a[32], b[32], c[32];
+    std::snprintf(a, sizeof a, "%llX", (unsigned long long)v); std::snprintf(b, sizeof b, "%llx", (unsigned long long)v);
+    std::snprintf(c, sizeof c, "%llu", (unsigned long long)v);
+    return {a, b, c};
+}
+static void secRun(std::vector<SecCase>& cs, double rate = 2.4e6) {
+    for (auto& sc : cs) {
+        HomeCase& c = sc.h;
+        if (c.s.offHz == 0) c.s.offHz = 120e3;
+        FrontEnd fe(rate); fe.setDcGuardHz(15e3);
+        std::vector<Reading> got;
+        auto on = [&](const Burst& b) { Service::decodeBurst(b, sc.centre, got); };
+        const auto x = synth({c.s}, rate, 1.2, 0.02, 7);
+        for (size_t i = 0; i < x.size(); i += 16384) fe.feed(x.data() + i, std::min<size_t>(16384, x.size() - i), on);
+        fe.flush(on);
+        const Reading* r = findModel(got, c.model);
+        CHECK(r != nullptr, "%s: not decoded (%zu readings%s%s)", c.name, got.size(), got.empty() ? "" : ", first: ", got.empty() ? "" : got[0].model.c_str());
+        if (!r) continue;
+        if (c.fact) CHECK(factOf(*r, c.fact) == c.want, "%s: %s = %s, want %s", c.name, c.fact, factOf(*r, c.fact).c_str(), c.want);
+        CHECK(r->secret == c.secret && (!c.secret || r->pubId.empty()), "%s: secret %d, pubId '%s'", c.name, r->secret, r->pubId.c_str());
+        Tracker tr; tr.accept(*r, 10.0); tr.accept(*r, 11.0);
+        const std::string j = tr.json(12.0);
+        for (const auto& bnd : sc.banned) CHECK(j.find(bnd) == std::string::npos, "%s: the JSON carries the code (%s)", c.name, bnd.c_str());
+        CHECK(j.find("\"id\"") == std::string::npos, "%s: an id field on a secret kind", c.name);
+        if (sc.line) CHECK(j.find(sc.line) != std::string::npos, "%s: the line lacks '%s': %s", c.name, sc.line, j.substr(0, 300).c_str());
+        printf("   %-26s → %s\n", c.name, readable(*r, 1).c_str());
+    }
+}
+static void dmcTx2(Tx& tx, const Bits& d, double half, bool startLevel) {   // differential Manchester, 1 = no mid change
+    bool lv = startLevel;
+    for (uint8_t x : d) {
+        if (lv) tx.mark(half); else tx.space(half);
+        if (!x) lv = !lv;
+        if (lv) tx.mark(half); else tx.space(half);
+        lv = !lv;
+    }
+}
+static void testSec2() {
+    printf(" second security / remotes pass (alarm sensors, smoke, doorbells, car fobs, gates)\n");
+    std::vector<SecCase> cs;
+    // Vivint door/window: OOK Manchester 135 µs halves, FFFE, type 7A · counter · status · TXID · packed 12-bit CRC 0x8050
+    {
+        const uint32_t id = 0x0137BEDA;
+        std::vector<uint8_t> by = {0x7A, 0x00, 0x42, 0x10, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), 0x40, 0};
+        const uint16_t c = crc16(by.data(), 9, 0x8050, 0) >> 4; by[8] = uint8_t(0x40 | (c >> 8)); by[9] = uint8_t(c);
+        Bits d = hb(0xFFFE, 16); append(d, bytesToBits(by));
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { manchesterTx(tx, d, 135, 0); tx.space(20000); }
+        Sig s{tx.r};
+        cs.push_back({{"Vivint door / window", s, "door / window", "event_type", "122", true}, 345e6, spellings(id), "Vivint"});
+    }
+    // Ford (EU) car key: 250 µs mark, 500/500 pairs, 250 µs mark, 3.5 ms sync, 80 DMC bits at 250 µs halves; resent 100 ms on
+    {
+        const uint64_t hi = 0x03E001E4E0ull, lo = 0x9052973960ull;
+        Bits d = hb(hi, 40); append(d, hb(lo, 40));
+        Tx tx;
+        for (int rep = 0; rep < 3; ++rep) {
+            tx.mark(250); for (int k = 0; k < 4; ++k) { tx.space(500); tx.mark(500); } tx.space(500); tx.mark(250); tx.space(3500);
+            dmcTx2(tx, d, 250, true); tx.space(60000);
+        }
+        cs.push_back({{"Ford car key", Sig{tx.r}, "Key fob", nullptr, nullptr, true}, 433.92e6, {"03E001E4E0", "03e001e4e0", "9052973960"}, "Ford"});
+    }
+    // GM ABO1502T: OOK PPM, ~230 µs marks, a 270 µs gap = 0, 470 µs = 1; a run of 1s (wake-up), then FF · byte · button
+    //   byte (nibbles sum to 0 mod 16) · ID 32 · sequence 24 · rolling 24 · byte sum of bytes 1–13 = 0
+    {
+        std::vector<uint8_t> by = {0xFF, 0x4B, 0xF1, 0xDB, 0x3B, 0x73, 0xEA, 0x00, 0x00, 0x0C, 0x82, 0x10, 0x31, 0};
+        by[13] = uint8_t(0x100 - (kit::sumBytes(by.data() + 1, 12) & 0xFF));
+        Bits d(60, 1); append(d, bytesToBits(by));
+        Tx tx; for (uint8_t x : d) { tx.mark(230); tx.space(x ? 470 : 270); } tx.mark(230); tx.space(30000);
+        cs.push_back({{"GM car key", Sig{tx.r}, "Key fob", "button_code", "1", true}, 315e6, {"DB3B73EA", "db3b73ea", "3678106602"}, "unlock"});
+    }
+    // Code Alarm FRDPC2002: OOK Manchester 550 µs halves, a bit = its first half, the first half-bit implied (not sent);
+    //   60 bits: 19 zero bits · button 4 · rolling 36 · a final bit; resent 90 ms on
+    {
+        Bits d(19, 0); append(d, hb(0x6, 4)); append(d, hb(0x57E65FD7Cull, 36)); d.push_back(0);
+        Bits c; for (uint8_t x : d) { c.push_back(x); c.push_back(!x); }
+        c.erase(c.begin());
+        Tx tx; for (int rep = 0; rep < 2; ++rep) { tx.space(1000); for (uint8_t x : c) { if (x) tx.mark(550); else tx.space(550); } tx.space(90000); }
+        cs.push_back({{"Code Alarm car key", Sig{tx.r}, "Key fob", "button_code", "6", true}, 433.92e6, {"57E65FD7C", "57e65fd7c"}, "lock"});
+    }
+    // Astrostart 2000: OOK PPM, 125 µs marks, 280 µs gap = 0, 480 µs = 1; button · ¬button · ID 32 · nibble sum 4; ×3
+    {
+        const uint32_t id = 0x3410DE88;
+        std::vector<uint8_t> by = {0x2B, uint8_t(~0x2B), 0x34, 0x10, 0xDE, 0x88, 0};
+        int ck = 0; for (int i = 2; i < 6; ++i) ck = (ck + (by[size_t(i)] >> 4) + by[size_t(i)]) & 0xF;
+        by[6] = uint8_t(ck << 4);
+        Bits d = bytesToBits(by); d.resize(52);
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t x : d) { tx.mark(125); tx.space(x ? 480 : 280); } tx.mark(125); tx.space(300000); }
+        cs.push_back({{"Astrostart remote starter", Sig{tx.r}, "Astrostart", "button_code", "43", true}, 372.4e6, spellings(id), "Astroflex"});
+    }
+    // Compustar 1WG3R: OOK PWM, a 740 µs mark = 1, 1110 µs = 0 (gaps as long as the marks), a 1480 µs mark between words;
+    //   ID 16 · 111 · ¬button · button
+    {
+        Bits d = hb(0x9EB4, 16); append(d, hb(7, 3)); append(d, hb(0xF8, 8)); append(d, hb(0x07, 8));
+        Tx tx; for (int rep = 0; rep < 6; ++rep) { for (int k = 0; k < 3; ++k) { tx.mark(1480); tx.space(1480); } for (uint8_t x : d) { tx.mark(x ? 740 : 1110); tx.space(x ? 740 : 1110); } }
+        tx.space(20000);
+        cs.push_back({{"Compustar car key", Sig{tx.r}, "Key fob", "button_code", "7", true}, 433.92e6, spellings(0x9EB4), "Compustar"});
+    }
+    // Audiovox PRO-OE3B: OOK PWM, 450 µs mark = 1, 900 µs = 0 (1330 µs a bit); ID 16 · 110b1b1b · 1, all inverted
+    {
+        Bits d = hb(uint16_t(~0x2EA9), 16); append(d, hb(0x54, 8)); d.push_back(0);
+        Tx tx; for (int rep = 0; rep < 4; ++rep) { for (uint8_t x : d) { tx.mark(x ? 450 : 900); tx.space(x ? 880 : 430); } tx.space(15000); }
+        cs.push_back({{"Audiovox car key", Sig{tx.r}, "Key fob", "button_str", "\"Lock\"", true}, 303e6, spellings(0x2EA9), "lock"});
+    }
+    // MIC 6SC2: OOK Manchester 250 µs halves, a bit = its first half, the first half-bit a GAP; 55 54 · rolling 32 ·
+    //   button byte (reflected; low nibble) · sequence 16 · a byte · XOR of bytes 2–10 = 0; each frame its own burst
+    {
+        std::vector<uint8_t> by = {0x55, 0x54, 0x03, 0x37, 0x69, 0x2D, kit::rev8(0x01), 0x46, 0x84, 0x00, 0};
+        by[10] = kit::xorBytes(by.data() + 2, 8);
+        Bits c; for (uint8_t x : bytesToBits(by)) { c.push_back(x); c.push_back(!x); }
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { tx.space(2000); for (uint8_t x : c) { if (x) tx.mark(250); else tx.space(250); } tx.space(120000); }
+        cs.push_back({{"MIC 6SC2 car key", Sig{tx.r}, "Key fob", "button_code", "1", true}, 315e6, {"0337692D", "0337692d", "B496ECC0", "b496ecc0"}, "unlock"});
+    }
+    // Honda (EU) car key: FSK, the tone held 250 µs = 1, 500 µs = 0 (and as long apart); byte 0 FF, byte 38 FF, device
+    //   44–45, byte 46 = AC (lock); 390 bits; no check
+    {
+        std::vector<uint8_t> by(49, 0x5A); by[0] = 0xFF; by[38] = 0xFF; by[44] = 0xDB; by[45] = 0x5A; by[46] = 0xAC;
+        Bits d = bytesToBits(by); d.resize(390);
+        Tx tx; for (size_t i = 0; i < d.size(); ++i) { const double w = d[i] ? 250 : 500; tx.mark(w); tx.space(w); }
+        Sig s{tx.r}; s.fsk = true; s.devHz = 40e3;
+        cs.push_back({{"Honda car key", s, "Key fob", "code", "\"lock\"", true}, 433.92e6, {"DB5A", "db5a", "56154"}, "lock"});
+    }
+    // Security+ 2.0: OOK Manchester 250 µs halves (10 = 0); raw AA AA 95 + 01, then 00/01 (the half) · 00 · order·invert
+    //   (0x29: parts in order, none inverted) · 30 bits interleaved p2 p1 p0 from the last; fixed = button 8 · ID 32
+    {
+        const uint64_t fixed = uint64_t(16) << 32 | 0x74C58200u;
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            for (int h = 0; h < 2; ++h) {
+                const uint32_t f20 = uint32_t(h == 0 ? fixed >> 20 : fixed & 0xFFFFF);
+                const uint32_t p0 = f20 >> 10, p1 = f20 & 0x3FF, p2 = 0;
+                uint32_t x = 0; for (int i = 0; i < 10; ++i) x |= ((p2 >> i) & 1) << (3 * i) | ((p1 >> i) & 1) << (3 * i + 1) | ((p0 >> i) & 1) << (3 * i + 2);
+                Bits d = {0, uint8_t(h), 0, 0}; append(d, hb(0x29, 8)); append(d, hb(x, 30));
+                Bits c = hb(0xAAAA95, 24); c.push_back(0); c.push_back(1);
+                for (uint8_t v : d) { c.push_back(!v); c.push_back(v); }
+                for (uint8_t v : c) { if (v) tx.mark(250); else tx.space(250); }
+                tx.space(5000);
+            }
+            tx.space(200000);
+        }
+        cs.push_back({{"Security+ 2.0 garage key", Sig{tx.r}, "garage remote", "button_id", "16", true}, 315e6, spellings(0x74C58200), "Security+"});
+    }
+    // Chamberlain DIP (7 switches, 1010101): 1 ms slots — an opening 1 ms high, then low·high symbols of 4 ms: 0 = 1+3,
+    //   1 = 2+2, stop = 3+1 ms; 7 switches = D×6 S S D S; resent after a 36 ms gap
+    {
+        const int sym[10] = {1, 0, 1, 0, 1, 0, 2, 2, 1, 2};
+        Tx tx; tx.space(40000);
+        for (int rep = 0; rep < 3; ++rep) { tx.mark(1000); for (int v : sym) { tx.space(1000.0 * (v + 1)); tx.mark(1000.0 * (3 - v)); } tx.space(36000); }
+        cs.push_back({{"Chamberlain DIP garage key", Sig{tx.r}, "DIP-switch garage remote", "bits", "7", true}, 390e6, {"1010101", "85"}, "Chamberlain"});
+    }
+    // Microchip HCS362, both modes: 12 TE pulses (TE 200 µs), then PWM (3 TE gap; 1 TE mark = 1, 2 TE = 0, 3 TE a bit) or
+    //   Manchester (4 TE gap, start 1, a bit = its first half); 69 bits LSB first: hop 32 · serial 28 · S3 S0 S1 S2 · VLOW
+    //   · 2-bit CRC (Eq. 3-1) · queue 2
+    for (int mode = 0; mode < 2; ++mode) {
+        const uint32_t hop = 0x875C5D67, serial = 0x0109C11;
+        Bits d;
+        for (int j = 0; j < 32; ++j) d.push_back((hop >> j) & 1);
+        for (int j = 0; j < 28; ++j) d.push_back((serial >> j) & 1);
+        d.push_back(0); d.push_back(1); d.push_back(1); d.push_back(0);   // S3 S0 S1 S2: buttons 1+2 = 3
+        d.push_back(0);                                                   // VLOW
+        int crc = 0; for (int j = 0; j < 65; ++j) { const int c = ((crc >> 1) ^ d[size_t(j)]) & 1; crc = c | (((c ^ crc) << 1) & 2); }
+        d.push_back(uint8_t(crc >> 1)); d.push_back(uint8_t(crc & 1)); d.push_back(0); d.push_back(0);
+        const double T = 200;
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            for (int k = 0; k < 12; ++k) { tx.mark(T); if (k < 11) tx.space(T); }
+            if (mode == 0) { tx.space(3 * T); for (uint8_t x : d) { tx.mark(x ? T : 2 * T); tx.space(x ? 2 * T : T); } }
+            else { tx.space(4 * T); tx.mark(T); tx.space(T); for (uint8_t x : d) { if (x) { tx.mark(T); tx.space(T); } else { tx.space(T); tx.mark(T); } } tx.mark(2 * T); }
+            tx.space(100000);
+        }
+        cs.push_back({{mode ? "HCS362 key (Manchester)" : "HCS362 key (PWM)", Sig{tx.r}, "Key fob / remote", "button", "3", true}, 868.3e6,
+                      {"0109C11", "109c11", "1088529", "875C5D67", "875c5d67"}, "Microchip HCS362"});
+    }
+    // 2GIG KEY2E: OOK Manchester 136 µs chips, raw 55 55 56, then (01 = 1) 32 enciphered · 25 · 16 enciphered · CRC-16
+    //   0x8005 init 0x4C57 over the 7 bytes
+    {
+        std::vector<uint8_t> by = {0x00, 0x9A, 0xA0, 0x48, 0x25, 0x0E, 0x25, 0, 0};
+        const uint16_t c = crc16(by.data(), 7, 0x8005, 0x4C57); by[7] = uint8_t(c >> 8); by[8] = uint8_t(c);
+        Bits ch = hb(0x5555555556ull, 40); append(ch, manch01(bytesToBits(by)));
+        Tx tx; for (int rep = 0; rep < 2; ++rep) { for (uint8_t x : ch) { if (x) tx.mark(136); else tx.space(136); } tx.space(100000); }
+        cs.push_back({{"2GIG KEY2E key", Sig{tx.r}, "KEY2E (encrypted)", nullptr, nullptr, true}, 345e6, {"009AA048", "009aa048", "9AA048"}, "2GIG"});
+    }
+    // Alps FWB1U545: FSK "zero-bit" Manchester, 500 µs halves, a bit = its first half; 76 bits: 55 · ID · button ·
+    //   its copy · sequence · nibble; frames apart by a 2 ms stretch of the space tone
+    {
+        std::vector<uint8_t> by = {0x55, 0x48, 0x17, 0xE6, 0x1E, 0xE5, 0xE5, 0x87, 0xE4, 0x30};
+        Bits d = bytesToBits(by); d.resize(76);
+        Tx tx;
+        for (int rep = 0; rep < 3; ++rep) { tx.space(2000); for (uint8_t x : d) { if (x) { tx.mark(500); tx.space(500); } else { tx.space(500); tx.mark(500); } } }
+        tx.space(2000);
+        Sig s{tx.r}; s.fsk = true; s.devHz = 32e3;
+        cs.push_back({{"Alps car key", s, "Key fob", "button_code", "14", true}, 433.92e6, spellings(0x4817E61E), "lock"});
+    }
+    // DirecTV RC66RX: FSK 600 µs symbols; sync 000 1111111111 00, then 1 symbol = 0, 2 = 1 between transitions: 0x10 ·
+    //   ID 20 · button 8 · the low nibble of the nine nibbles' sum
+    {
+        const uint32_t id = 123456; const int bt = 0x30;
+        std::vector<uint8_t> by = {0x10, uint8_t(id >> 12), uint8_t(id >> 4), uint8_t((id & 0xF) << 4 | bt >> 4), uint8_t((bt & 0xF) << 4)};
+        int sum = 0; for (int q = 0; q < 9; ++q) sum += (by[size_t(q / 2)] >> (q & 1 ? 0 : 4)) & 0xF;
+        by[4] |= uint8_t(sum & 0xF);
+        Tx tx; tx.space(1800); tx.mark(6000); tx.space(1200);
+        bool lv = true;
+        for (uint8_t x : bytesToBits(by)) { const double w = x ? 1200 : 600; if (lv) tx.mark(w); else tx.space(w); lv = !lv; }
+        if (lv) tx.mark(600); else tx.space(600);
+        tx.space(1800); tx.mark(600); tx.space(3000);
+        Sig s{tx.r}; s.fsk = true; s.devHz = 50e3;
+        cs.push_back({{"DirecTV remote", s, "RC66RX", "button_id", "48", true}, 433.92e6, {"123456", "1E240", "1e240"}, "DirecTV"});
+    }
+    // Dish UHF 6.3: OOK PPM, 400 µs marks, 1692 µs gap = 0, 2812 µs = 1; a start mark + 6 ms, 16 bits BBBBBB10 101x1xxx
+    {
+        const uint16_t w = uint16_t(0x0B << 10 | 0x2 << 8 | 0xA8 | 0x5);
+        Tx tx;
+        for (int rep = 0; rep < 7; ++rep) { tx.mark(400); tx.space(6000); for (int i = 15; i >= 0; --i) { tx.mark(400); tx.space((w >> i) & 1 ? 2812 : 1692); } tx.mark(400); tx.space(6000); }
+        cs.push_back({{"Dish TV remote", Sig{tx.r}, "UHF remote 6.3", nullptr, nullptr, true}, 384e6, {}, "Dish Network"});
+    }
+    // Microchip HCS361, VPWM ("PIWM, direct coding"): TE 200 µs marks with 2 TE gaps, a 10 TE header gap, then every run
+    //   a bit (1 TE = 1, 2 TE = 0), 67 bits LSB first: hop 32 · serial 28 · S3 S0 S1 S2 · VLOW · 2-bit CRC
+    {
+        const uint32_t hop = 0x6225C0F8, serial = 0x24DDB57;
+        Bits d;
+        for (int j = 0; j < 32; ++j) d.push_back((hop >> j) & 1);
+        for (int j = 0; j < 28; ++j) d.push_back((serial >> j) & 1);
+        d.push_back(1); d.push_back(0); d.push_back(1); d.push_back(0);   // S3 S0 S1 S2 → button 2 + 8 = 10
+        d.push_back(1);                                                   // VLOW
+        int crc = 0; for (int j = 0; j < 65; ++j) { const int c = ((crc >> 1) ^ d[size_t(j)]) & 1; crc = c | (((c ^ crc) << 1) & 2); }
+        d.push_back(uint8_t(crc >> 1)); d.push_back(uint8_t(crc & 1));
+        const double T = 200;
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            for (int k = 0; k < 12; ++k) { tx.mark(T); tx.space(k < 11 ? 2 * T : 10 * T); }
+            for (size_t j = 0; j < d.size(); ++j) { const double w = d[j] ? T : 2 * T; if (j % 2 == 0) tx.mark(w); else tx.space(w); }
+            tx.space(26000);
+        }
+        cs.push_back({{"HCS361 key (VPWM)", Sig{tx.r}, "Key fob / remote", "button", "10", true}, 315e6, {"24DDB57", "24ddb57", "6225C0F8", "6225c0f8", "38657879"}, "Microchip HCS361"});
+    }
+    // GangQi: OOK PWM, 1200 µs mark = 1, 500 µs = 0 (period 1700); serial 16 · D · button · 0xC8 − the bytes · 00; ×4
+    {
+        std::vector<uint8_t> by = {0x1A, 0x2B, 0xDD, 0};
+        by[3] = uint8_t(0xC8 - by[0] - by[1] - by[2]);
+        Bits d = bytesToBits(by); d.push_back(0); d.push_back(0);
+        Tx tx; for (int rep = 0; rep < 4; ++rep) { for (uint8_t x : d) { tx.mark(x ? 1200 : 500); tx.space(x ? 500 : 1200); } tx.space(2200); }
+        tx.space(20000);
+        cs.push_back({{"GangQi alarm remote", Sig{tx.r}, "alarm remote", "button", "13", true}, 433.92e6, spellings(0x1A2B), "arm"});
+    }
+    // Hollarm: OOK PPM, 200 µs marks, 1000 µs gap = 0, 1600 µs = 1; serial 24 · 4 · button · sum · 00 (the last bit lost)
+    {
+        std::vector<uint8_t> by = {0xC0, 0xFF, 0xEE, 0x08, 0};
+        by[4] = uint8_t(by[0] + by[1] + by[2] + by[3]);
+        Bits d = bytesToBits(by); d.push_back(0); d.push_back(0);
+        Tx tx; for (int rep = 0; rep < 4; ++rep) { for (size_t j = 0; j < d.size(); ++j) { tx.mark(200); tx.space(j + 1 == d.size() ? 2400 : d[j] ? 1600 : 1000); } }
+        tx.space(20000);
+        cs.push_back({{"Hollarm alarm remote", Sig{tx.r}, "alarm remote", "button", "8", true}, 433.92e6, spellings(0xC0FFEE), "ring"});
+    }
+    // King Gates Stylo 4k: 12 × 400/400 µs, 2.2 ms, an 800 µs start, 89 bits (1 = 400 gap + 1100 mark, 0 = 1100 + 400),
+    //   LSB first: serial low 16 · 1 · button 4 · serial high 16 · 16 zeros · hop 32 · 4 zeros; sent twice
+    {
+        const uint32_t serial = 0x1A2B3C4D, hop = 0xCC92D33D; const int bt = 0xE;
+        Bits d;
+        for (int j = 0; j < 16; ++j) d.push_back((serial >> j) & 1);
+        d.push_back(1);
+        for (int j = 0; j < 4; ++j) d.push_back((bt >> j) & 1);
+        for (int j = 0; j < 16; ++j) d.push_back((serial >> (16 + j)) & 1);
+        for (int j = 0; j < 16; ++j) d.push_back(0);
+        for (int j = 0; j < 32; ++j) d.push_back((hop >> j) & 1);
+        for (int j = 0; j < 4; ++j) d.push_back(0);
+        Tx tx;
+        for (int rep = 0; rep < 2; ++rep) {
+            tx.space(9500); for (int k = 0; k < 12; ++k) { tx.mark(400); tx.space(k < 11 ? 400 : 2200); }
+            tx.mark(800); for (uint8_t x : d) { tx.space(x ? 400 : 1100); tx.mark(x ? 1100 : 400); }
+        }
+        tx.space(20000);
+        cs.push_back({{"King Gates gate remote", Sig{tx.r}, "Stylo 4k", "button", "14", true}, 433.92e6,
+                      {"1A2B3C4D", "1a2b3c4d", "439041101", "CC92D33D", "cc92d33d"}, "King Gates"});
+    }
+    // iDo gate remote: 4.5 ms mark + 4.5 ms gap, 48 bits on 450 µs marks (450 µs gap = 1, 1450 = 0), LSB first: serial 20
+    //   · button 4 · hop 24 (new each message); three messages back to back
+    {
+        const uint32_t serial = 0xFEDCB; const int bt = 8;
+        Tx tx;
+        for (int rep = 0; rep < 3; ++rep) {
+            const uint32_t hop = 0x4B6EA0 + uint32_t(rep) * 0x1357;
+            Bits d; for (int j = 0; j < 20; ++j) d.push_back((serial >> j) & 1); for (int j = 0; j < 4; ++j) d.push_back((bt >> j) & 1);
+            for (int j = 0; j < 24; ++j) d.push_back((hop >> j) & 1);
+            tx.mark(4500); tx.space(4500); for (uint8_t x : d) { tx.mark(450); tx.space(x ? 450 : 1450); }
+        }
+        tx.mark(4500); tx.space(20000);
+        cs.push_back({{"iDo gate remote", Sig{tx.r}, "gate remote", "button", "8", true}, 433.92e6, {"FEDCB", "fedcb", "1043915", "4B6EA0", "4b6ea0"}, "iDo"});
+    }
+    // Visonic PowerCode: OOK PWM 400 µs mark = 1, 800 µs = 0 (1200 µs a bit); start 1 · ID 24 · status · XOR nibble; ×6
+    {
+        std::vector<uint8_t> m = {0x6F, 0x47, 0x70, 0x4C, 0};
+        const uint8_t x = kit::xorBytes(m.data(), 4); m[4] = uint8_t(((x >> 4) ^ (x & 0xF)) << 4);
+        Bits d(1, 1); Bits mb = bytesToBits(m); mb.resize(36); append(d, mb);
+        Tx tx; for (int rep = 0; rep < 6; ++rep) { for (uint8_t v : d) { tx.mark(v ? 400 : 800); tx.space(v ? 800 : 400); } tx.space(4000); }
+        cs.push_back({{"Visonic PowerCode contact", Sig{tx.r}, "PowerCode sensor", "alarm", "1", true}, 433.92e6, spellings(0x6F4770), "alarm"});
+    }
+    // HT680 remote: OOK PWM ~260 µs mark = 1, ~660 µs = 0; 10101, then 18 tri-state pins (11 = 1, 00 = 0, 10 = open)
+    {
+        const char* tri = "1ZZZZZ01ZZZ01Z1ZZZ";
+        Bits d = hb(0x15, 5);
+        for (const char* p = tri; *p; ++p) { const int v = *p == '1' ? 3 : *p == '0' ? 0 : 2; d.push_back(uint8_t(v >> 1)); d.push_back(uint8_t(v & 1)); }
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (uint8_t v : d) { tx.mark(v ? 260 : 660); tx.space(v ? 840 : 440); } tx.space(12000); }
+        cs.push_back({{"HT680 remote", Sig{tx.r}, "HT680", "button2", "\"PRESSED\"", true}, 433.92e6, {"961082", "EAA3A", "eaa3a"}, "HT680 remote"});
+    }
+    // SimpliSafe contact (the first-pass decoder, polarity fixed 2026-11-12): PIWM — every run a bit, ~500 µs = 0, ~1000 µs
+    //   = 1; 1000/1000 preamble, a 2 ms gap + 2 ms mark before each copy; 33 A0 · 88 · ID 5 bytes · seq · state · seq+state,
+    //   bytes LSB first
+    {
+        const uint8_t idc[5] = {'1', 'J', 'V', '7', 'T'};
+        std::vector<uint8_t> by = {0x33, 0xA0, 0x88};
+        for (uint8_t c : idc) by.push_back(kit::rev8(c));
+        by.push_back(kit::rev8(197)); by.push_back(kit::rev8(1)); by.push_back(kit::rev8(198));
+        Bits d = bytesToBits(by); d.resize(92, 1);
+        Tx tx; for (int k = 0; k < 20; ++k) { tx.mark(1000); tx.space(1000); }
+        for (int rep = 0; rep < 2; ++rep) { tx.space(2000); tx.mark(2000); for (size_t j = 0; j < d.size(); ++j) { const double w = d[j] ? 1000 : 500; if (j % 2 == 0) tx.space(w); else tx.mark(w); } }
+        tx.space(25000);
+        cs.push_back({{"SimpliSafe contact", Sig{tx.r}, "sensor", "state", "1", true}, 433.92e6, {"1JV7T"}, "open"});
+    }
+    // Cavius door sensor: FSK NRZ 415 µs; AA AA AA D3 15 27 · counter · ID 6 · 25 (open) · CRC-8 0x07 over the 8 bytes
+    {
+        std::vector<uint8_t> by = {0xFE, 0xDC, 0x3C, 0xE3, 0x12, 0x65, 0x33, 0x25, 0};
+        by[8] = crc8(by.data(), 8, 0x07, 0);
+        Bits d = hb(0xAAAAAAD31527ull, 48); append(d, bytesToBits(by)); append(d, hb(0xAA, 8));
+        Sig s{fskNrz(d, 415)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({{"Cavius door sensor", s, "door sensor", "state", "\"open\"", true}, 868.68e6, {"DC3CE3126533", "dc3ce3126533"}, "open"});
+    }
+    // Cavius smoke alarm: FSK 206 µs; AA… "Cavi", then Manchester (01 = 1): net ID 4 · message · ¬message · CRC-8 (Maxim,
+    //   reflected 0x31) over the 6 · sender ID 4; message 0x20 = ALARM
+    {
+        std::vector<uint8_t> by = {0x00, 0x04, 0x1F, 0xDF, 0x20, 0xDF, 0, 0x00, 0x04, 0x1F, 0xDF};
+        by[6] = kit::crc8r(by.data(), 6, 0x31, 0);
+        Bits d = hb(0xAAAAAAAA, 32); append(d, hb(0x43617669, 32)); append(d, manch01(bytesToBits(by))); append(d, hb(0xAA, 8));
+        Sig s{fskNrz(d, 206)}; s.fsk = true; s.devHz = 30e3;
+        cs.push_back({{"Cavius smoke alarm", s, "smoke / heat / water", "message", "32", true}, 869.67e6, spellings(0x00041FDF), "ALARM"});
+    }
+    // KeyFinder tag: OOK PWM, 400 µs mark = 1, 1300 µs = 0; 28 bits: ID 20 · button 4 · 4; repeated in the burst
+    {
+        const uint32_t w = 0xC0FFE4F;
+        Tx tx; for (int rep = 0; rep < 6; ++rep) { for (int i = 27; i >= 0; --i) { const bool one = (w >> i) & 1; tx.mark(one ? 400 : 1300); tx.space(one ? 1300 : 400); } tx.space(5000); }
+        cs.push_back({{"KeyFinder tag", Sig{tx.r}, "key finder", "button", "4", true}, 433.92e6, {"C0FFE", "c0ffe", "790526"}, "KeyFinder"});
+    }
+    // Roger gate remote: OOK PWM 450 / 1000 µs, inverted (a long mark = 1), 28 bits led by a 1; ONE word a burst, 100 ms
+    //   apart — shown via the Tracker's confirm
+    {
+        const uint32_t w = 0x8F2A1C3;
+        Tx tx; for (int rep = 0; rep < 3; ++rep) { for (int i = 27; i >= 0; --i) { const bool one = (w >> i) & 1; tx.mark(one ? 1000 : 500); tx.space(one ? 500 : 1000); } tx.space(100000); }
+        cs.push_back({{"Roger gate remote", Sig{tx.r}, "gate remote", "button", "1", true}, 433.92e6, {"8F2A", "8f2a"}, "Roger"});
+    }
+    // Revers RB2: OOK zero-bit Manchester 250 µs (a bit = its first half, the first half-bit idle); a preamble, then the
+    //   32-bit word (ID 22 · 10) and 32 ones, seven times
+    {
+        const uint32_t w = 0xEAF37A00;
+        Bits d = hb(0x803FFFFFFFC0ull, 42); d.erase(d.begin(), d.begin() + 0);
+        for (int k = 0; k < 7; ++k) { append(d, hb(w, 32)); if (k < 6) append(d, hb(0xFFFFFFFF, 32)); }
+        Bits c; for (uint8_t x : d) { c.push_back(x); c.push_back(!x); }
+        Tx tx; tx.space(2000); for (size_t j = 1; j < c.size(); ++j) { if (c[j]) tx.mark(250); else tx.space(250); } tx.space(20000);
+        cs.push_back({{"Revers RB2 remote", Sig{tx.r}, "RB2 remote", nullptr, nullptr, true}, 433.92e6, spellings(0x3ABCDE), "Revers"});
+    }
+    secRun(cs);
+    // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
+    //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
+    {
+        const uint64_t fixed = 0xD8200B1400ull | 0x20;   // battery low
+        std::vector<uint8_t> by(14, 0);
+        for (int h = 0; h < 2; ++h) {
+            const uint32_t f20 = uint32_t(h == 0 ? fixed >> 20 : fixed & 0xFFFFF);
+            const uint32_t p0 = f20 >> 10, p1 = f20 & 0x3FF;
+            uint64_t x = 0; for (int i = 0; i < 10; ++i) x |= uint64_t(((p1 >> i) & 1) << (3 * i + 1) | ((p0 >> i) & 1) << (3 * i + 2));
+            const uint64_t h40 = uint64_t(0x29) << 30 | x;
+            by[size_t(6 * h)] = uint8_t(h);
+            for (int k = 0; k < 5; ++k) by[size_t(6 * h + 1 + k)] = uint8_t(h40 >> (32 - 8 * k));
+        }
+        const uint16_t c = crc16(by.data(), 12, 0x1021, 0); by[12] = uint8_t(c >> 8); by[13] = uint8_t(c);
+        Bits d = hb(0x5555555555ull, 40); append(d, hb(0x2DD4, 16)); append(d, bytesToBits(by)); append(d, hb(0x55, 8));
+        Burst b; b.fsk = fskNrz(d, 25); b.ook = {int(d.size() * 25)};
+        std::vector<Reading> o; cwpirc::decode(b, o);
+        CHECK(o.size() == 1 && o[0].secret && o[0].battOk == 0 && o[0].model == "CWPIRC motion sensor", "CWPIRC: %s", o.empty() ? "nothing" : readable(o[0], 1).c_str());
+        CHECK(!o.empty() && (o[0].secretId & 0xFFFFFFFFFFull) == 0xD8200B1400ull, "CWPIRC: the fixed ID (less the battery bit) keys the row");
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     printf("test-ism — the V12 ISM decoder\n");
@@ -2190,6 +2577,7 @@ int main(int argc, char** argv) {
 
     testHome();
     testHome2();
+    testSec2();
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "ok", checks, fails);
     return fails ? 1 : 0;
 }
