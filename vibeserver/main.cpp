@@ -3578,6 +3578,7 @@ int main(int argc, char** argv) {
             r.idleGrace = disk.idleGrace;
             r.rfNotch = disk.rfNotch; r.dabNotch = disk.dabNotch; r.zoomSpectrum = disk.zoomSpectrum;
             r.biasT = disk.biasT; r.ppm = disk.ppm; r.ppb = disk.ppb;
+            r.autoPpm = disk.autoPpm;   // ★ V12 auto-PPM's switch (the owner's Turn off / on, persisted live)
             r.directSampling = disk.directSampling; r.dabRateBoost = disk.dabRateBoost; r.adsb256 = disk.adsb256;
             r.rawIq = disk.rawIq; r.rawIqMax = disk.rawIqMax; r.rawIqLanMaxHz = disk.rawIqLanMaxHz; r.nbWide = disk.nbWide; r.vfoB = disk.vfoB;
             r.blockedModes = disk.blockedModes;
@@ -4288,6 +4289,26 @@ int main(int argc, char** argv) {
     //   RADIO, so a value left by another program (or by this owner on a different radio) would
     //   otherwise be inherited silently. 0 / -1 mean "leave the radio's default alone".
     if (g_runtimeConfig.ppm != 0) LocalSdrShim::instance().setPpm(g_runtimeConfig.ppm);
+    /* ★★ V12 AUTOMATIC FREQUENCY CORRECTION (vibe_afc.h, docs/v12/AUTO-PPM.md) — AFTER the manual ppm, which it sits on
+     *  top of and never changes. Its store is per radio serial, like the DAB scan's; on the handheld it sits with that
+     *  radio's memory (handheld/radio-<serial>.*), which Start+Select's reset also clears, and it keeps the switch too
+     *  (the handheld has no setup page). ON by default: a config with no key reads as on, and nothing is applied until a
+     *  confident measurement exists. */
+    {
+        std::string afcPath;
+        if (g_handheldChild) {
+            const char* hs = std::getenv("VIBE_HANDHELD_SERIAL");
+            const std::string ser = hs && *hs ? std::string(hs) : g_myRadioSerial;
+            afcPath = vsDataDir() + "/handheld/radio-" + hhcard::serialFile(ser) + ".afc.txt";
+        } else {
+            std::string tag;
+            for (char c : g_myRadioSerial) if (std::isalnum((unsigned char)c) || c == '-' || c == '_') tag += c;
+            afcPath = tag.empty() ? vsDataDir() + "/afc.txt" : vsDataDir() + "/afc-" + tag + ".txt";
+        }
+        LocalSdrShim::setAfcFile(afcPath, g_handheldChild);
+        LocalSdrShim::instance().setAutoPpm(g_handheldChild ? LocalSdrShim::afcHandheldOn(g_runtimeConfig.autoPpm)
+                                                            : g_runtimeConfig.autoPpm);
+    }
     /* ★★★ A RADIO CHILD IS BEHIND OUR OWN FRONT DOOR, SO IT MUST TRUST ITS X-Forwarded-For.
      *
      *  setTunnelLoopbackTrust() lives in directory.cpp, which runs in the FRONT DOOR ONLY. The

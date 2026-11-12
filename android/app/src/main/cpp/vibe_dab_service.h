@@ -906,7 +906,7 @@ public:
      *  is not touched (the DAB drift work on its own branch owns that), this only copies DabStats::freqOffsetHz out
      *  beside the quality snapshot it already publishes after every frame, under the same small lock. */
     struct ClockRead { bool locked = false; int frames = 0; double offsetHz = 0; double blockHz = 0; int channel = -1;
-                       float merDb = 0, fibRate = 0; bool disturbed = false; };
+                       float merDb = 0, fibRate = 0; double mscBer = 0; bool disturbed = false; };
     ClockRead clockRead() {
         std::lock_guard<std::mutex> qk(qM_);
         ClockRead r = clkAcc_;
@@ -932,7 +932,7 @@ public:
             }
             clkFrames_ = s.framesSeen; clkReacq_ = s.reacquires; clkAcc_.channel = channel_;
             clkAcc_.blockHz = channel_ >= 0 ? double(kBandIII[channel_].centreHz) : 0.0;
-            clkAcc_.merDb = s.merDb; clkAcc_.fibRate = float(s.fibRate);
+            clkAcc_.merDb = s.merDb; clkAcc_.fibRate = float(s.fibRate); clkAcc_.mscBer = s.mscBer;
         }
     }
     ClockRead clkAcc_;               // ★ under qM_ — see clockRead

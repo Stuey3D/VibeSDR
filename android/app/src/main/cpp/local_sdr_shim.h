@@ -1071,6 +1071,18 @@ public:
     /** ★ Re-decide the tuner's centre and move it if the answer changed (VibeClarity). */
     void applyCentreNow();
     void setPpm(int ppm);
+    /** ★★ V12 AUTOMATIC FREQUENCY CORRECTION (vibe_afc.h, docs/v12/AUTO-PPM.md). The learned correction is a digital shift
+     *  ON TOP of the manual ppm; the radio's own ppm is never written by it.
+     *  setAfcFile: this radio's store (per serial) — read at once. `handheld`: the switch is kept in the file too.
+     *  setAutoPpm: the owner's switch (the config's autoPpm; on by default). afcTick: the housekeeping reading (2 s).
+     *  afcReset / afcSetOn: the owner's Reset and Turn off/on (socket, HTTP, handheld) — persisted. afcJson: hwinfo's. */
+    static void setAfcFile(const std::string& path, bool handheld);
+    void setAutoPpm(bool on);
+    void afcTick();
+    void afcReset();
+    void afcSetOn(bool on);
+    std::string afcJson() const;
+    static bool afcHandheldOn(bool dflt);   // ★ the handheld's switch as its file keeps it (dflt when the file has none)
     /** ★★★ AN UP/DOWN-CONVERTER IN FRONT OF THIS RADIO — see RadioConfig::converterOffsetHz.
      *  Signed LO in Hz (a Ham It Up is −125e6, an LNB positive), plus the input passband the
      *  converter actually passes; hi <= lo means it declares none. The whole server keeps working

@@ -83,6 +83,9 @@ struct Settings {
     bool ppm = false;         ///< crystal correction in ppm (RTL, RSP)
     bool ppb = false;         ///< calibration in ppb (HF+)
     bool biasT = false;       ///< DC on the aerial socket (an RSP's is per model — the page asks rspCaps)
+    /** ★★ V12 automatic frequency correction (vibe_afc.h) — it LEARNS from DAB only (DRM merely confirms), so a radio that
+     *  cannot reach Band III could never use it: the switch is not drawn there (AGENTS.md, one-radio controls). */
+    bool autoPpm = false;
 };
 
 struct Caps {
@@ -202,6 +205,7 @@ inline Caps compute(const Facts& f) {
     s.ppm = d == "rtl" || d == "sdrplay";
     s.ppb = d == "airspyhf";
     s.biasT = d == "rtl" || d == "sdrplay" || d == "hackrf" || d == "airspy";
+    s.autoPpm = !icom && c.has("dab");
 
     // ── what the owner could change (one line each) ──
     if (icom)
@@ -226,7 +230,7 @@ inline std::string toJson(const Caps& c) {
         { "usage", s.usage }, { "vfoB", s.vfoB }, { "rawIq", s.rawIq }, { "nbWide", s.nbWide }, { "landing", s.landing },
         { "gain", s.gain }, { "hardware", s.hardware }, { "fmDefaults", s.fmDefaults }, { "dabLanding", s.dabLanding },
         { "adsbLanding", s.adsbLanding }, { "dxScan", s.dxScan }, { "bgDecode", s.bgDecode }, { "converter", s.converter },
-        { "directSampling", s.directSampling }, { "ppm", s.ppm }, { "ppb", s.ppb }, { "biasT", s.biasT },
+        { "directSampling", s.directSampling }, { "ppm", s.ppm }, { "ppb", s.ppb }, { "biasT", s.biasT }, { "autoPpm", s.autoPpm },
     };
     bool first = true;
     for (const auto& p : kv) { j += std::string(first ? "" : ",") + "\"" + p.first + "\":" + (p.second ? "true" : "false"); first = false; }

@@ -345,6 +345,7 @@ struct Config {
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
     int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
+    bool autoPpm = true;                          // see RadioConfig — ★ ON by default (absent = on)
     bool autoDirectSampling = false;             // see RadioConfig
     double directSamplingBelowHz = 24e6;         // see RadioConfig
     /** ★ DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. Opt-in: on a
@@ -684,6 +685,11 @@ struct RadioConfig {
     double converterInputLoHz = 0, converterInputHiHz = 0;
 
     int    ppm = 0;             // RTL frequency correction, parts per million
+    /** ★★ V12 AUTOMATIC FREQUENCY CORRECTION (android/app/src/main/cpp/vibe_afc.h, docs/v12/AUTO-PPM.md): learn this
+     *  radio's clock error from a clean DAB lock and correct it digitally ON TOP of `ppm` (which it never changes).
+     *  ★ ON BY DEFAULT, and a config written before it existed reads as ON (Stuart, 2026-11-12: "it plays to our plug
+     *    and play ethos") — safely, because nothing is applied until a confident measurement exists (vibe_afc.h's rules). */
+    bool   autoPpm = true;
     int    ppb = 0;             // Airspy HF+ calibration, parts per billion
     bool   dabRateBoost = false;   // per radio — see Config::dabRateBoost
     bool   adsb256 = false;    // per radio — see Config::adsb256

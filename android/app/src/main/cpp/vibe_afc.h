@@ -376,6 +376,16 @@ inline bool save(const std::string& path, const Saved& s, std::string* err = nul
     return vibedabscan::writeAtomic(path, serialise(s), err);
 }
 
+inline std::string jsonEsc(const std::string& in) {
+    std::string o;
+    for (unsigned char c : in) {
+        if (c == '"' || c == '\\') { o += '\\'; o += char(c); }
+        else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", c); o += b; }
+        else o += char(c);
+    }
+    return o;
+}
+
 /** "Auto-corrected +4.0 ppm from DAB 7D, 2 min ago" — the owner's line (setup page, admin page, the app, the handheld). */
 inline std::string agoText(int64_t secs) {
     char when[48];
@@ -401,6 +411,10 @@ public:
 
     /** The owner's manual ppm, already in the radio — the cap is on the radio's TOTAL error, manual + learned. */
     void setManual(int ppm) { manual_ = ppm; }
+    void setCap(double c) { cap_ = c; }
+    /** The owner changed the manual ppm: the radio was re-trimmed under the learned value, so it no longer applies.
+     *  A suspension stands (only Reset lifts it). */
+    void forgetLearned() { target_ = 0; acquired_ = false; verify_ = Verify{}; est_.clear(); source_.clear(); learnedAt_ = confirmedAt_ = 0; }
     int manual() const { return manual_; }
     // ── the switch and the owner's buttons ──
     bool on() const { return on_; }

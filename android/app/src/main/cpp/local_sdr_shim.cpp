@@ -46,6 +46,7 @@
 #include "vibe_room_passband.h"   // ★ the shared chain's passband edges, reported in config (2026-10-17)
 #include "vibe_hwinfo.h"
 #include "vibe_dab_scan_store.h"   // ★ the last DAB band scan, on disk — see g_dabScanFile
+#include "vibe_afc.h"               // ★★ V12 automatic frequency correction — see g_afc
 #include "vibe_mqtt.h"        // ★ the external antenna switch (2026-10-09) — see g_ext below
 #include "vibe_antswitch.h"
 #include "vibe_port_names.h"  // ★ V12 the owner's names for the radio's own antenna ports — see g_portNamesJson
@@ -4023,6 +4024,31 @@ static const int kIfRungs[] = { 350000, 500000, 700000, 1000000,
  *  trusting over the wire (rtl_tcp has none at all), and a stepper that shows this phone's own idea
  *  of the ppm is a readout of our memory presented as the radio's state — the gainNow lesson. */
 static std::atomic<int>      g_ppmNow{0};
+/* ★★ V12 AUTOMATIC FREQUENCY CORRECTION ("auto-PPM", vibe_afc.h, docs/v12/AUTO-PPM.md). The radio's clock error learned
+ *  from a clean DAB lock (a GPS-locked SFN) and corrected for everything this radio does, as a DIGITAL shift of the
+ *  whole capture ON TOP of the owner's manual ppm (Impl::afcMix, right after the capture cleaner). The radio's own ppm
+ *  is never written by it, so Reset and Turn off are exact.
+ *  ★ g_afc under g_afcMtx (the housekeeping tick, the socket and HTTP handlers, hwinfo). The DSP thread reads only the
+ *    two atomics: g_afcTarget (what should be in force, ppm) and g_afcJump (an owner's Reset/Turn off: no glide); it
+ *    publishes where its glide has got to in g_afcNow, which is what every reading is paired with. */
+static std::mutex             g_afcMtx;
+static vibeafc::Controller    g_afc;
+static std::string            g_afcFile;
+static bool                   g_afcHandheld = false, g_afcCapSet = false;
+static double                 g_afcStableSince = 0.0, g_afcLastRejectLog = 0.0;
+static int64_t                g_afcSavedConfirm = 0;
+static std::atomic<double>    g_afcTarget{0.0}, g_afcNow{0.0};
+static std::atomic<bool>      g_afcJump{false};
+/** Write the store (under g_afcMtx). */
+static void afcSaveLocked() {
+    if (g_afcFile.empty()) return;
+    vibeafc::Saved sv = g_afc.saved(g_ppmNow.load(std::memory_order_relaxed));
+    if (g_afcHandheld) sv.on = g_afc.on() ? 1 : 0;
+    std::string err;
+    if (!vibeafc::save(g_afcFile, sv, &err))
+        LOGI("auto-PPM: could not save %s (%s) \xe2\x80\x94 kept until the radio restarts", g_afcFile.c_str(), err.c_str());
+    g_afcSavedConfirm = g_afc.confirmedAt();
+}
 /** ★★★ AUTO: THE IF FILTER FOLLOWS THE ZOOM, and that is the whole of it.
  *
  *  ★★★ WHY THIS AND NOT AN AUTOMATIC ONE THAT CHOOSES. A previous attempt measured the band and
@@ -21326,6 +21352,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             vsPersist(std::string("{\"ifAgc\":") + (on ? "1" : "0") + "}");
             return;
         }
+        /* ★★ V12 AUTO-PPM, the owner's two buttons (rule 4): Turn off / on, and Reset (forget what was learned, lift a
+         *  suspension). Admin-gated as the ppm itself is. The switch persists in the radio's config (a server) or its
+         *  store (the handheld, which has no setup page). */
+        if (type == "autoppm") {
+            if (!adminGate("ppm")) return;
+            const bool on = jsonOn(msg);
+            LocalSdrShim::instance().afcSetOn(on);
+            vsPersist(std::string("{\"autoPpm\":") + (on ? "true" : "false") + "}");
+            LocalSdrShim::instance().broadcastHwInfo();
+            return;
+        }
+        if (type == "autoppm_reset") {
+            if (!adminGate("ppm")) return;
+            LocalSdrShim::instance().afcReset();
+            LocalSdrShim::instance().broadcastHwInfo();
+            return;
+        }
         if (type == "ppm") {
             if (!adminGate("ppm")) return;
             if (jsonNum(msg,"value",v)) { LocalSdrShim::instance().setPpm((int)v);
@@ -22062,6 +22105,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
            /* ★ The frequency correction in force — reported so a remote client ADOPTS it rather
             *  than drawing its own remembered figure (gainNow's lesson, one control over). */
            + ",\"ppm\":" + std::to_string(g_ppmNow.load(std::memory_order_relaxed))
+           /* ★★ V12 AUTO-PPM: what the automatic correction is doing ON TOP of that — state, the learned figure, where it
+            *  came from and the owner's line. Every surface that shows the ppm shows this beside it (rule 4). */
+           + ",\"afc\":" + LocalSdrShim::instance().afcJson()
            /* ★★★ AND THE OWNER'S CEILING FOR THIS BAND, SO THE READOUT CAN SAY SO. Stuart wants
             *  the chip to read "IF 1200 kHz" with a padlock where he has fixed it, exactly as a
             *  locked gain band reads "RF 7 · IF 25 🔒". A ceiling the client does not know about
@@ -23687,7 +23733,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h) — the red line beside the setup page's
             //    rate switch. Nothing private in it.
             if (!noRadio) j += ",\"rateGuard\":" + g_rateGuard.json();
+            // ★★ V12 auto-PPM: what it is doing on this radio — the setup page's line beside the ppm (vibe_afc.h)
+            if (!noRadio && !lost) j += ",\"afc\":" + LocalSdrShim::instance().afcJson();
             j += "}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(j.size()) + "\r\n\r\n" + j);
+            sock->close();
+            return;
+
+        } else if (reqLine.rfind("GET /vibeserver/autoppm", 0) == 0 ||
+                   reqLine.rfind("POST /vibeserver/autoppm", 0) == 0) {
+            /* ★★ V12 AUTO-PPM for the setup page and the admin page (vibe_afc.h): GET = what it is doing; POST ?reset=1 =
+             *  forget what was learned (and lift a suspension); POST ?on=0|1 = Turn off / on (persisted). Admin-gated, as
+             *  the ppm is. Answered by the RADIO's process (/r/<serial>/…). */
+            if (!vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }
+            if (reqLine.rfind("POST", 0) == 0) {
+                if (queryParam(reqLine, "reset") == "1") LocalSdrShim::instance().afcReset();
+                const std::string onq = queryParam(reqLine, "on");
+                if (onq == "0" || onq == "1") {
+                    LocalSdrShim::instance().afcSetOn(onq == "1");
+                    vsPersist(std::string("{\"autoPpm\":") + (onq == "1" ? "true" : "false") + "}");
+                }
+                LocalSdrShim::instance().broadcastHwInfo();
+            }
+            const std::string j = LocalSdrShim::instance().afcJson();
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(j.size()) + "\r\n\r\n" + j);
@@ -27916,6 +27986,38 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
     }
+    // ── ★★ V12 AUTO-PPM: the digital correction of the radio's clock (vibe_afc.h) ─────────────
+    /* ★★★ THE WHOLE CAPTURE, ONCE, BEFORE ANYBODY READS IT — the spectrum, every listener's channel, DAB, the decoders,
+     *  raw IQ out: the correction is the RADIO's, so it sits under everyone (the shared dial never sees a listener's
+     *  correction because there is no such thing). A signal at f lands ε·f low on a radio ε ppm fast; the whole block is
+     *  shifted up by ε at the radio's tuned frequency — exact at the centre, within ε·span/2 at the edges (5 Hz for 4 ppm
+     *  across 2.4 MS/s), far inside any channel's tolerance.
+     *  ★ vibedsp::NCO::mix — the DDC's own four-lane NEON/SSE mixer, one pass, in place: the same cost as one stage of
+     *    the capture cleaner above it, and on a Pi 2 about a third of what the old scalar mixer cost.
+     *  ★★ ZERO = UNTOUCHED: nothing learned, off, reset or suspended, and not one sample is altered — the radio hears
+     *     exactly as it did before this existed.
+     *  ★★ IT GLIDES (rule 5): the target moves at most 0.1 ppm a second here, block by block, so a listener on the shared
+     *     dial never sees a jump; only the owner's own Reset / Turn off (g_afcJump) moves it at once. */
+    vibedsp::NCO afcNco_;
+    double afcCur_ = 0.0, afcNcoHz_ = 0.0, afcNcoRate_ = 0.0;
+    void afcMix(cf32* z, int n) {
+        if (n <= 0) return;
+        const double tgt = g_afcTarget.load(std::memory_order_relaxed);
+        if (g_afcJump.exchange(false, std::memory_order_relaxed)) afcCur_ = tgt;
+        else if (afcCur_ != tgt) afcCur_ = vibeafc::slewToward(afcCur_, tgt, double(n) / sampleRate);
+        g_afcNow.store(afcCur_, std::memory_order_relaxed);
+        if (afcCur_ == 0.0) {
+            if (afcNcoHz_ != 0.0) { afcNcoHz_ = 0.0; afcNco_.reset(); }
+            return;
+        }
+        const double radioHz = rtlCenter.load() - convOffsetHz.load(std::memory_order_relaxed) + hwOffsetHz();
+        const double hz = afcCur_ * 1e-6 * radioHz;
+        if (hz != afcNcoHz_ || sampleRate != afcNcoRate_) {
+            afcNcoHz_ = hz; afcNcoRate_ = sampleRate;
+            afcNco_.setFreq(-hz / sampleRate);   // ★ NCO::mix shifts +f DOWN; a negative f shifts the capture UP
+        }
+        afcNco_.mix(z, z, n);
+    }
     // ── the capture cleaner and the owner's wide blanker ─────────────────────────────────
     vibedsp::IqCleaner     iqCapClean_;
     vibedsp::ImpulseBlanker nbWide_;
@@ -30527,6 +30629,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     the owner's wide impulse blanker, below 30 MHz on auto. Both are one SIMD pass
              *     each over the block; VIBE_IQ_CLEAN=0 switches the cleaner off for A/B tests. */
             cleanCapture(buf.data(), (int)buf.size());
+            afcMix(buf.data(), (int)buf.size());   // ★★ V12 auto-PPM: the radio's clock, corrected for everything below
             /* ★★★ NOT IN ADS-B (Stuart's Pi 500 V4, 2026-10-24: "the message rate seems a little low"). The smoother
              *  measures the level either side of our own gain write — and at 1090 MHz that window is full of replies, so
              *  a 1.3 dB write read as "+12.7 dB", "+21.2 dB", and the level was HELD: the whole capture turned down by
@@ -34540,6 +34643,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LocalSdrShim::instance().autoBandwidthTick();
                 LocalSdrShim::instance().batteryTick();
                 LocalSdrShim::instance().healthTick();   // ★ its own 1 Hz gate inside
+                LocalSdrShim::instance().afcTick();      // ★★ V12 auto-PPM: one DAB reading per tick (vibe_afc.h)
                 specGovernorTick();                       // ★★ after health: it reads the CPU level health just set
                 /* ★★★ AND FLUSH THE CONNECTION LOG HERE, WHERE EVERY HOST RUNS. It is written
                  *     lazily — open()/close() only mark it dirty — and the only thing calling
@@ -43306,7 +43410,20 @@ void LocalSdrShim::setPpm(int ppm) {
     // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
     //   and already the one held across engine rebuilds.
     VIBE_RTL_CTL_LOCK();   // ★ devMtx too — see VIBE_RTL_CTL_LOCK
-    g_ppmNow.store(ppm, std::memory_order_relaxed);   // ★ the intent, reported by hwinfo
+    const int was = g_ppmNow.exchange(ppm, std::memory_order_relaxed);   // ★ the intent, reported by hwinfo
+    /* ★★ V12 AUTO-PPM: the learned correction sits ON TOP of this. A new manual figure re-trims the radio under it, so
+     *  what was learned no longer applies — forgotten (a suspension stands), saved, learned again from the next clean lock. */
+    if (was != ppm) {
+        std::lock_guard<std::mutex> ak(g_afcMtx);
+        g_afc.setManual(ppm);
+        if (g_afc.acquired()) {
+            LOGI("auto-PPM: the manual ppm changed (%d \xe2\x86\x92 %d) \xe2\x80\x94 the learned %+.2f ppm is forgotten", was, ppm, g_afc.target());
+            g_afc.forgetLearned();
+            g_afcTarget.store(g_afc.target(), std::memory_order_relaxed);
+            g_afcJump.store(true, std::memory_order_relaxed);
+            afcSaveLocked();
+        }
+    }
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useSpy()) return;   // no ppm setting in the SpyServer protocol
 
@@ -43322,6 +43439,124 @@ void LocalSdrShim::setPpm(int ppm) {
     if (!p->dev) return;
     rtlsdr_set_freq_correction(p->dev, ppm); LOGI("ppm: %d", ppm);
 }
+/* ── ★★ V12 AUTOMATIC FREQUENCY CORRECTION — the shim's half (vibe_afc.h holds the rules) ─────────────────────────── */
+static double afcMono() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+void LocalSdrShim::setAfcFile(const std::string& path, bool handheld) {
+    std::lock_guard<std::mutex> lk(g_afcMtx);
+    g_afcFile = path; g_afcHandheld = handheld;
+    vibeafc::Saved sv;
+    const bool ok = vibeafc::load(path, sv);
+    g_afc.restore(ok ? sv : vibeafc::Saved{}, g_ppmNow.load(std::memory_order_relaxed));
+    if (ok && sv.have && !g_afc.acquired())
+        LOGI("auto-PPM: the saved %+.2f ppm was learned on a manual ppm of %d (now %d) \xe2\x80\x94 not restored", sv.ppm, sv.hw,
+             g_ppmNow.load(std::memory_order_relaxed));
+    g_afcTarget.store(g_afc.target(), std::memory_order_relaxed);
+    g_afcJump.store(true, std::memory_order_relaxed);   // ★ at start, before anybody listens: in force at once
+    if (g_afc.suspended()) LOGI("auto-PPM: SUSPENDED for this radio (it made reception worse twice) \xe2\x80\x94 the owner can reset it");
+    else if (g_afc.acquired()) LOGI("auto-PPM: %+.2f ppm restored from %s (learned from %s)", g_afc.target(), path.c_str(), g_afc.source().c_str());
+}
+bool LocalSdrShim::afcHandheldOn(bool dflt) {
+    std::lock_guard<std::mutex> lk(g_afcMtx);
+    vibeafc::Saved sv;
+    if (!vibeafc::load(g_afcFile, sv) || sv.on < 0) return dflt;
+    return sv.on == 1;
+}
+void LocalSdrShim::setAutoPpm(bool on) {
+    std::lock_guard<std::mutex> lk(g_afcMtx);
+    g_afc.setManual(g_ppmNow.load(std::memory_order_relaxed));
+    const bool was = g_afc.on();
+    if (!on && was) {
+        // ★ off keeps nothing in force but remembers nothing either: the store keeps the learned value for when it is
+        //   turned on again on the same manual ppm (restore checks)
+        vibeafc::Saved keep = g_afc.saved(g_ppmNow.load(std::memory_order_relaxed));
+        g_afc.setOn(false);
+        g_afc.restore(keep, g_ppmNow.load(std::memory_order_relaxed));
+        g_afc.setOn(false);
+    } else if (on && !was) {
+        g_afc.setOn(true);
+        vibeafc::Saved sv;
+        if (vibeafc::load(g_afcFile, sv)) g_afc.restore(sv, g_ppmNow.load(std::memory_order_relaxed));
+    }
+    g_afcTarget.store(g_afc.target(), std::memory_order_relaxed);
+    g_afcJump.store(true, std::memory_order_relaxed);
+    if (g_afcHandheld) afcSaveLocked();
+    LOGI("auto-PPM: %s%s", on ? "on" : "off", on && g_afc.acquired() ? "" : on ? " (learning \xe2\x80\x94 nothing applied until a clean DAB lock is confident)" : "");
+}
+void LocalSdrShim::afcSetOn(bool on) {
+    setAutoPpm(on);
+    std::lock_guard<std::mutex> lk(g_afcMtx);
+    LOGI("auto-PPM: the owner turned it %s \xe2\x80\x94 %s", on ? "ON" : "OFF",
+         on ? "it learns again from the next clean DAB lock" : "this radio is back on its manual ppm exactly");
+    afcSaveLocked();
+}
+void LocalSdrShim::afcReset() {
+    std::lock_guard<std::mutex> lk(g_afcMtx);
+    const double was = g_afc.target();
+    g_afc.reset();
+    g_afcTarget.store(0.0, std::memory_order_relaxed);
+    g_afcJump.store(true, std::memory_order_relaxed);
+    LOGI("auto-PPM: the owner RESET it (%+.2f \xe2\x86\x92 +0.00 ppm, the manual %d ppm exactly; suspension lifted)", was,
+         g_ppmNow.load(std::memory_order_relaxed));
+    afcSaveLocked();
+}
+std::string LocalSdrShim::afcJson() const {
+    std::lock_guard<std::mutex> lk(g_afcMtx);
+    const int64_t unixNow = (int64_t)time(nullptr);
+    const char* state = !g_afc.on() ? "off" : g_afc.suspended() ? "suspended" : g_afc.acquired() ? (g_afc.verifying() ? "checking" : "applied") : "learning";
+    char b[256];
+    std::snprintf(b, sizeof b, "{\"on\":%s,\"state\":\"%s\",\"ppm\":%.3f,\"inForce\":%.3f,\"manual\":%d,\"cap\":%.0f,\"at\":%lld,\"now\":%lld,\"reverts\":%d",
+                  g_afc.on() ? "true" : "false", state, g_afc.target(), g_afcNow.load(std::memory_order_relaxed),
+                  g_ppmNow.load(std::memory_order_relaxed), g_afc.cap(), (long long)g_afc.confirmedAt(), (long long)unixNow, g_afc.reverts());
+    std::string j = b;
+    j += ",\"source\":\"" + vibeafc::jsonEsc(g_afc.source()) + "\",\"line\":\"" + vibeafc::jsonEsc(g_afc.describe(unixNow))
+       + "\",\"why\":\"" + vibeafc::jsonEsc(g_afc.lastWhyNot()) + "\"}";
+    return j;
+}
+void LocalSdrShim::afcTick() {
+    if (!p) return;
+    const double now = afcMono();
+    const int64_t unixNow = (int64_t)time(nullptr);
+    std::unique_lock<std::mutex> lk(g_afcMtx);
+    if (!g_afcCapSet) {
+        g_afcCapSet = true;
+        const std::string drv = isSdrplay() ? "sdrplay" : isAirspyHf() ? "airspyhf" : isHackRf() ? "hackrf"
+                              : isAirspy() ? "airspy" : isUsrp() ? "usrp" : "rtl";
+        g_afc.setCap(vibeafc::capFor(drv));
+    }
+    auto publish = [&]() { g_afcTarget.store(g_afc.target(), std::memory_order_relaxed); };
+    if (!g_afc.on() || g_afc.suspended() || !g_dabMode.load(std::memory_order_relaxed)) { g_afcStableSince = 0; publish(); return; }
+    const auto c = g_dab.clockRead();
+    vibeafc::DabRead d;
+    d.locked = c.locked; d.frames = c.frames; d.offsetHz = c.offsetHz; d.blockHz = c.blockHz;
+    d.merDb = c.merDb; d.fibRate = c.fibRate; d.mscBer = c.mscBer; d.disturbed = c.disturbed;
+    if (!d.locked || d.disturbed || g_afcStableSince == 0) g_afcStableSince = now;
+    // ★ a change still gliding in: nothing it reads can be paired with one value — wait for the glide, then 5 s more
+    const double inForce = g_afcNow.load(std::memory_order_relaxed);
+    if (std::fabs(inForce - g_afc.target()) > 1e-9) { g_afc.settleUntil(now + 5.0); publish(); return; }
+    if (p->convOffsetHz.load(std::memory_order_relaxed) != 0.0) { g_afc.noteWhyNot("a converter is fitted"); publish(); return; }
+    if (const char* w = vibeafc::dabWhyNot(d, now - g_afcStableSince)) { g_afc.noteWhyNot(w); publish(); return; }
+    vibeafc::Reference r;
+    r.source = std::string("DAB ") + (c.channel >= 0 && c.channel < int(vibedab::kBandIIICount) ? vibedab::kBandIII[c.channel].name : "?");
+    r.rfHz = c.blockHz; r.offsetHz = c.offsetHz; r.at = now; r.kind = vibeafc::Kind::Primary;
+    const vibeafc::Action a = g_afc.offer(r, c.merDb, c.channel, inForce, now, unixNow);
+    publish();
+    if (a.kind != vibeafc::Action::None) {
+        // ★ rule 4: one line per change — from → to, the reference, MER and offset
+        LOGI("auto-PPM: %s", a.why.c_str());
+        afcSaveLocked();
+        lk.unlock();
+        broadcastHwInfo();   // ★ after the lock: hwinfo reads afcJson
+        return;
+    } else if (!a.why.empty() && now - g_afcLastRejectLog > 60.0) {
+        g_afcLastRejectLog = now;   // ★ a rejected reading (beyond the cap) is LOGGED — once a minute, not every 2 s
+        LOGI("auto-PPM: %s", a.why.c_str());
+    } else if (g_afc.acquired() && g_afc.confirmedAt() - g_afcSavedConfirm >= 600) {
+        afcSaveLocked();   // ★ "2 min ago" survives a restart without writing every 2 s
+    }
+}
+
 void LocalSdrShim::setBiasTee(bool on) {
     if (!p) return;
     // ★★ THE SAME LOCK THE RSP AND AIRSPY SETTERS ALREADY USE (VIBE_HW_LOCK). The RTL ones

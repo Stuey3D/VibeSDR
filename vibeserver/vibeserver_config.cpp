@@ -443,6 +443,12 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
      *  admin's live toggle, the boosted-rate guard switching it off) was dropped and the switch came back at the next
      *  start. Found by scripts/test-rate-guard.mjs. Absent = unchanged (getBool writes only when the key is present). */
     getBool(s, "dabRateBoost", c.dabRateBoost);
+    /* ★★ V12 AUTO-PPM's switch on the same live path (the owner's Turn off / on from a socket or the admin endpoint persists
+     *  {"autoPpm":…}), and the manual ppm with it — {"ppm":…} from the radio menu was dropped here exactly as the rate
+     *  switch was, so a manual ppm set live came back at the next start, and auto-PPM's saved value (learned ON TOP of
+     *  the manual figure) would then be thrown away as learned on another one. */
+    getBool(s, "autoPpm", c.autoPpm);
+    if (getNum(s, "ppm", d)) c.ppm = (int)std::lround(d);
     getStr(s, "cpuGovernor", c.cpuGovernor);
     getStr(s, "trustedProxies", c.trustedProxies);
     // ★ Absent = true (the rule enforced). getBool only writes when the key is present, so an older
@@ -631,6 +637,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     I("agcSet", r.agcSet); B("agcSetLock", r.agcSetLock);
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
+    B("autoPpm", r.autoPpm);   // ★ V12 auto-PPM — read AND written (radioToJson); absent = on
     B("autoDirectSampling", r.autoDirectSampling); N("directSamplingBelowHz", r.directSamplingBelowHz);
     N("converterOffsetHz", r.converterOffsetHz);
     N("converterInputLoHz", r.converterInputLoHz); N("converterInputHiHz", r.converterInputHiHz);
@@ -710,6 +717,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("agcSet", r.agcSet); B("agcSetLock", r.agcSetLock);
     B("biasT", r.biasT);
     N("ppm", r.ppm); N("ppb", r.ppb); N("directSampling", r.directSampling);
+    B("autoPpm", r.autoPpm);
     B("autoDirectSampling", r.autoDirectSampling); N("directSamplingBelowHz", r.directSamplingBelowHz);
     N("converterOffsetHz", r.converterOffsetHz);
     N("converterInputLoHz", r.converterInputLoHz); N("converterInputHiHz", r.converterInputHiHz);
@@ -817,6 +825,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.sessionLimitMin = one.sessionLimitMin;
     r.biasT = one.biasT;
     r.ppm = one.ppm; r.ppb = one.ppb; r.directSampling = one.directSampling;
+    r.autoPpm = one.autoPpm;
     r.autoDirectSampling = one.autoDirectSampling;
     r.directSamplingBelowHz = one.directSamplingBelowHz;
     r.converterOffsetHz = one.converterOffsetHz;
@@ -1341,6 +1350,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.rtlAgc      = r.rtlAgc;
     c.biasT = r.biasT;
     c.ppm = r.ppm; c.ppb = r.ppb; c.directSampling = r.directSampling;
+    c.autoPpm = r.autoPpm;
     c.autoDirectSampling = r.autoDirectSampling;
     c.directSamplingBelowHz = r.directSamplingBelowHz;
     c.converterOffsetHz = r.converterOffsetHz;
