@@ -346,6 +346,37 @@ static Runs hondaTx(uint32_t id, int pRaw, int tC) {
     return chipsToRuns(c + "10", 50);
 }
 
+// Gear Hive: OOK ~104 µs, Manchester (1,0) = 1: zeros, 0x2594, 9 bytes XOR-chained (seeded 0x94), fixed flag bits.
+static Runs gearHiveTx(uint32_t id24, int cls, int pRaw, int tC) {
+    const int t4 = tC - 21;
+    uint8_t p[9] = { 0x60, uint8_t(0x70 | cls), uint8_t(id24 >> 16), uint8_t(id24 >> 8), uint8_t(id24), uint8_t((pRaw + 80 + cls * 64) & 0xFF),
+                     uint8_t(0x20 | ((t4 >> 2) & 3)), uint8_t(((t4 & 3) << 6) | 0x35), 0x5A };
+    std::vector<uint8_t> raw(9); raw[0] = p[0] ^ 0x94; for (int i = 1; i < 9; ++i) raw[size_t(i)] = p[i] ^ raw[size_t(i - 1)];
+    Bits d(24, 0); for (const Bits& x : {bitsOf(0x2594, 16), bytesToBits(raw)}) d.insert(d.end(), x.begin(), x.end());
+    d.push_back(0); d.push_back(0);
+    std::string c; mcChips(c, d, true);
+    return chipsToRuns(c + "0", 104);
+}
+// SmarTire: OOK PCM 167 µs, sync 0011 0010 1011 0100, a reference chip, differential Manchester (1 = no change), CRC-7;
+// the transmitter stops halfway through the last bit.
+static Runs smartireTx(uint32_t id22, int type, int value) {
+    std::vector<uint8_t> by = { uint8_t(value + 40), uint8_t((type << 6) | (id22 >> 16)), uint8_t(id22 >> 8), uint8_t(id22), 0x03 };
+    by.push_back(uint8_t(tyre::crc7(by.data(), 5, 0x45, 0x6F) << 1));
+    std::string c = "0000 0011 0010 1011 0100 1";
+    Bits d = bytesToBits(by); d.resize(47);
+    dmcChips(c, d, false);
+    c.pop_back();
+    return chipsToRuns(c + "0", 167);
+}
+// EezTire E618: OOK 50 µs, Manchester (0,1) = 1 from the first mark: 16 zeros, checksum, ID (3), P, T, flags (2).
+static Runs eezTx(uint32_t id24, int pRaw, int tC) {
+    std::vector<uint8_t> by = { 0, uint8_t(id24 >> 16), uint8_t(id24 >> 8), uint8_t(id24), uint8_t(pRaw), uint8_t(tC + 50), 0x00, 0x00 };
+    unsigned sm = 0; for (int i = 1; i < 8; ++i) sm += by[size_t(i)]; if (sm > 0xFF) sm |= 0x80; by[0] = uint8_t(sm);
+    Bits d(16, 0); Bits b = bytesToBits(by); d.insert(d.end(), b.begin(), b.end());
+    std::string c; mcChips(c, d, false);
+    return chipsToRuns(c + "0", 50);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -516,6 +547,10 @@ int main(int argc, char** argv) {
             {"Nissan (FSK)", smd3Tx(0x6C253C, 5, 4 * (26 + 3)), true, 120, "Nissan", 26 * 6.894757, NAN, true},
             {"GM aftermarket", gmTx(0x787847C1A7ull, 80, 27), false, 120, "GM aftermarket", 220, 27, true},
             {"Honda TRW", hondaTx(0x8D3F6D67, 160, 20), true, 50, "Honda (TRW)", 160 * 0.2 * 6.894757, 20, false},
+            {"Gear Hive", gearHiveTx(0x2B4EA1, 3, 18, 33), false, 104, "Gear Hive", 18 * 6.25, 33, true},
+            {"SmarTire (pressure)", smartireTx(17489, 0, 92), false, 167, "SmarTire", 92 * 2.5, NAN, true},
+            {"SmarTire (temperature)", smartireTx(17489, 1, 24), false, 167, "SmarTire", NAN, 24, true},
+            {"EezTire E618", eezTx(0x54E328, 136, 23), false, 50, "EezTire", 340, 23, true},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},
@@ -533,7 +568,7 @@ int main(int argc, char** argv) {
             CHECK(r->kind == "tpms" && r->secret && r->secretId != 0 && r->pubId.empty(), "TPMS %s: secret", t.name);
             CHECK(r->confirm == t.weak, "TPMS %s: confirm %d, want %d (the check's strength)", t.name, int(r->confirm), int(t.weak));
             if (t.kpa == t.kpa) CHECK(approx(r->kpa, t.kpa, 0.01), "TPMS %s: %.2f kPa, want %.2f", t.name, r->kpa, t.kpa);
-            else CHECK(r->kpa != r->kpa, "TPMS %s: a pressure where the scale is not known", t.name);
+            else CHECK(r->kpa != r->kpa, "TPMS %s: a pressure where the frame has none or its scale is not known", t.name);
             if (t.tC == t.tC) CHECK(approx(r->tempC, t.tC, 1e-9), "TPMS %s: %.1f °C, want %.1f", t.name, r->tempC, t.tC);
             else CHECK(r->tempC != r->tempC, "TPMS %s: a temperature the frame does not carry", t.name);
             for (const auto& o : got) CHECK(o.kind == "tpms" && o.model == r->model, "TPMS %s: also read as %s %s", t.name, o.kind.c_str(), o.model.c_str());

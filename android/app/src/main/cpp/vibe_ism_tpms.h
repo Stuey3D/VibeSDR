@@ -35,12 +35,12 @@ namespace tyre {
  *  run of more than `maxRun` chips ends it too, keeping `maxRun` of them on both sides (a long preamble tone or a gap
  *  still borders the frame). `pad`: space chips added at both ends of every row — for OOK, where the carrier-off before
  *  and after a frame IS a space the run list does not hold. */
-inline std::vector<Bits> chipRows(const Runs& r, double w, int maxRun, int pad) {
+inline std::vector<Bits> chipRows(const Runs& r, double w, int maxRun, int pad, double markBias = 0) {
     std::vector<Bits> rows(1);
     auto padRow = [&](Bits& b) { if (pad > 0) b.insert(b.begin(), size_t(pad), 0); };
     padRow(rows.back());
     for (int d : r) {
-        const double a = std::abs(d);
+        const double a = std::abs(d) + (d > 0 ? -markBias : markBias);
         const uint8_t lv = d > 0 ? 1 : 0;
         if (a < w / 3) {   // a glitch: the row's timing is lost here
             if (rows.back().size() > size_t(pad)) { rows.back().insert(rows.back().end(), size_t(pad), 0); rows.emplace_back(); padRow(rows.back()); }
@@ -119,8 +119,28 @@ inline unsigned xor8(const uint8_t* d, size_t n) { unsigned s = 0; for (size_t i
 class Chips {
 public:
     explicit Chips(const Burst& b) : b_(b) {
-        wOok_ = tpms::halfEstimate(b.ook);
-        wFsk_ = b.fsk.empty() ? 0 : tpms::halfEstimate(b.fsk);
+        measure(b.ook, wOok_, biasOok_);
+        if (!b.fsk.empty()) measure(b.fsk, wFsk_, biasFsk_);
+    }
+    /** The chip width and the MARK STRETCH of a run list: the shortest marks and the shortest spaces are measured apart.
+     *  An OOK transmitter's carrier rings on past its keying and a slicer's threshold sits below the middle, so marks
+     *  come out longer and spaces shorter by the same amount (the corpus' EEZ and Gear Hive sensors: 66 / 37 µs and
+     *  124 / 84 µs for one 52 / 104 µs chip). The chip is their mean; half their difference comes off every mark and
+     *  goes onto every space before counting chips. */
+    static void measure(const Runs& r, double& w, double& bias) {
+        auto shortest = [&](bool marks) {
+            std::vector<int> a;
+            for (int d : r) if ((d > 0) == marks) a.push_back(std::abs(d));
+            if (a.size() < 8) return 0.0;
+            std::sort(a.begin(), a.end());
+            const double p20 = a[a.size() / 5];
+            double s = 0; int n = 0;
+            for (int d : a) if (d < 1.5 * p20) { s += d; ++n; }
+            return n ? s / n : 0.0;
+        };
+        const double m = shortest(true), sp = shortest(false);
+        if (m > 0 && sp > 0 && m < 2 * sp && sp < 2 * m) { w = 0.5 * (m + sp); bias = 0.5 * (m - sp); }
+        else { w = tpms::halfEstimate(r); bias = 0; }
     }
     const std::vector<Bits>& rows(bool fsk, double nominal) {
         const int key = (fsk ? 100000 : 0) + int(nominal);
@@ -129,17 +149,17 @@ public:
         std::vector<Bits>& out = cache_[key];
         auto fits = [&](double w) { return w >= 0.75 * nominal && w <= 1.33 * nominal; };
         auto both = [&](std::vector<Bits> rs) { for (auto& r : rs) { out.push_back(invert(r)); out.push_back(std::move(r)); } };
-        if (!fsk) { if (fits(wOok_)) out = chipRows(b_.ook, wOok_, 24, 6); return out; }
-        if (fits(wFsk_)) both(chipRows(b_.fsk, wFsk_, 24, 0));
+        if (!fsk) { if (fits(wOok_)) out = chipRows(b_.ook, wOok_, 24, 6, biasOok_); return out; }
+        if (fits(wFsk_)) both(chipRows(b_.fsk, wFsk_, 24, 0, biasFsk_));
         /* ★★ AN FSK SENSOR WITH A WIDE DEVIATION ARRIVES AS TWO "OOK" BURSTS (the corpus' older Renault, Ford and Toyota
          *  recordings: tones ±60-75 kHz apart). The detector opens a channel on each tone, and each channel's ENVELOPE is
          *  the frame's chips — the tone on or off. So an FSK family is offered the envelope's chips too, both ways up. */
-        if (fits(wOok_)) both(chipRows(b_.ook, wOok_, 24, 6));
+        if (fits(wOok_)) both(chipRows(b_.ook, wOok_, 24, 6, biasOok_));
         return out;
     }
 private:
     const Burst& b_;
-    double wOok_ = 0, wFsk_ = 0;
+    double wOok_ = 0, wFsk_ = 0, biasOok_ = 0, biasFsk_ = 0;
     std::map<int, std::vector<Bits>> cache_;
 };
 
@@ -491,6 +511,100 @@ inline bool hondaTrw(Chips& ch, std::vector<Reading>& out) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  GEAR HIVE (unbranded aftermarket, CMT2220LY receiver) — facts: rtl_433 tpms_gear_hive.c notes. OOK Manchester
+//  ((1,0) = 1), ~104 µs half-bits (marks stretched ~20 µs), a run of zeros, sync word 0x2594, then 9 bytes XOR-chained
+//  (each byte XOR the one before; the first XOR 0x94): a 12-bit counter, a sensor class (4), ID (24), pressure
+//  ((raw − (80 + class × 64)) mod 256 × 6.25 kPa), temperature (4 bits + 21 °C) and fixed flag bits (byte 6 & 0x3C =
+//  0x20, byte 7 & 0x3F = 0x35). NO checksum — the 10 fixed bits stand in for one. WEAK: confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool gearHive(Chips& ch, std::vector<Reading>& out) {
+    return eachMc(ch, false, 104, "0101 0101 0101 1001 0110 0110 1001 0110 0110 0101", 72, true, [&](const std::vector<uint8_t>& raw, const Bits&) {
+        uint8_t p[9];
+        p[0] = raw[0] ^ 0x94;
+        for (int i = 1; i < 9; ++i) p[i] = raw[size_t(i)] ^ raw[size_t(i - 1)];
+        if ((p[6] & 0x3C) != 0x20 || (p[7] & 0x3F) != 0x35) return false;
+        const uint32_t id = uint32_t(p[2]) << 16 | uint32_t(p[3]) << 8 | p[4];
+        if (id == 0 || id == 0xFFFFFF) return false;
+        const int cls = p[1] & 0x0F, base = (80 + cls * 64) & 0xFF;
+        Reading r = tyre("Gear Hive", "Gear Hive", 22, id, true);
+        r.kpa = ((p[5] - base + 256) & 0xFF) * 6.25;
+        r.tempC = ((p[7] >> 6) | ((p[6] & 0x03) << 2)) + 21;
+        if (!plausible(r.kpa, r.tempC)) return false;
+        out.push_back(r);
+        return true;
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SMARTIRE (Vantage; Aston Martin DB9 2005-2011) — facts: rtl_433 tpms_smartire.c notes (issue #3067). OOK PCM,
+//  ~167 µs chips: sync "0011 0010 1011 0100", a reference chip, then differential Manchester (1 = no change at the bit's
+//  start): a value (8), message type (2: 0 pressure, 1 temperature), ID (22), flags (8), CRC-7 poly 0x45 init 0x6F
+//  over the first five bytes. A pressure message (value − 40) × 2.5 kPa, then a temperature one (value − 40 °C), five
+//  times each. ★ The transmitter stops halfway through the CRC's last bit (the corpus, and the notes, agree) — but a
+//  differential-Manchester bit is known from its FIRST half, so it is read from that. WEAK: a 7-bit CRC — confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline uint8_t crc7(const uint8_t* d, size_t n, uint8_t poly, uint8_t init) {
+    unsigned c = unsigned(init) << 1;   // the 7-bit register in the top of a byte
+    for (size_t i = 0; i < n; ++i) { c ^= d[i]; for (int k = 0; k < 8; ++k) c = (c & 0x80) ? ((c << 1) ^ (unsigned(poly) << 1)) & 0xFF : (c << 1) & 0xFF; }
+    return uint8_t(c >> 1);
+}
+inline bool smartire(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "0011 0010 1011 0100";
+    for (const Bits& c : ch.rows(false, 167))
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            const size_t s = p + patLen(kSync) + 1;
+            Bits d;
+            if (!dmcRead(c, s, 46, false, d) || s + 92 >= c.size()) continue;
+            d.push_back(uint8_t(c[s + 92] == c[s + 91]));   // the 47th bit, from its first half
+            d.push_back(0);
+            const auto by = pack(d);
+            if (crc7(by.data(), 5, 0x45, 0x6F) != (by[5] >> 1)) continue;
+            const int type = by[1] >> 6;
+            if (type > 1) continue;
+            const uint32_t id = uint32_t(by[1] & 0x3F) << 16 | uint32_t(by[2]) << 8 | by[3];
+            if (id == 0 || id == 0x3FFFFF) continue;
+            Reading r = tyre("SmarTire", "SmarTire", 23, id, true);
+            if (type == 0) r.kpa = std::max(0.0, (int(by[0]) - 40) * 2.5);
+            else r.tempC = int(by[0]) - 40;
+            if (!plausible(r.kpa, r.tempC)) continue;
+            out.push_back(r);
+            return true;
+        }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  EEZTIRE E618 / CARCHET / TST 507 (RV and trailer kits) — facts: rtl_433 tpms_eezrv.c notes (issues #2384, #2657 …;
+//  github.com/cterwilliger/tst_tpms). OOK Manchester, ~50 µs half-bits, (0,1) = 1 read from the first mark: 16 zeros,
+//  then a checksum byte, ID (24), pressure (8 bits + a ninth in the last byte, × 2.5 kPa), temperature (°C + 50), two
+//  flag bytes (0x80 battery low, 0x10 fast leak, 0x30 inflating). The checksum is the sum of the seven bytes after it,
+//  with 0x80 set whenever that sum passed 0xFF. Each frame is sent twice. WEAK: an 8-bit sum — confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool eezTire(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "00 1010 1010 1010 1010 1010 1010 1010 1010";   // the space before it, 16 zeros
+    for (const Bits& c : ch.rows(false, 50))
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            Bits d;
+            if (!mcRead(c, p + patLen(kSync), 64, false, d)) continue;
+            const auto by = pack(d);
+            unsigned sm = 0; for (int i = 1; i < 8; ++i) sm += by[size_t(i)];
+            if (sm > 0xFF) sm |= 0x80;
+            if ((sm & 0xFF) != by[0] || allSame(by.data(), 8)) continue;
+            const uint32_t id = uint32_t(by[1]) << 16 | uint32_t(by[2]) << 8 | by[3];
+            if (id == 0 || id == 0xFFFFFF) continue;
+            Reading r = tyre("EezTire", "EezTire E618 / Carchet", 24, id, true);
+            r.kpa = (((by[7] & 0x01) << 8) + by[4]) * 2.5;
+            r.tempC = int(by[5]) - 50;
+            r.battOk = (by[6] & 0x80) ? 0 : 1;
+            if ((by[6] & 0x30) == 0x10) r.extra = "fast leak";
+            if (!plausible(r.kpa, r.tempC)) continue;
+            out.push_back(r);
+            return true;
+        }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  JANSITE TY02S (solar, internal / external) — aftermarket. Facts: rtl_433 tpms_jansite.c notes: the VDO-style run-in
 //  (…aaa9), then 7 bytes — ID (28), status (4), pressure (raw × 1.7 kPa), temperature (°C + 50), and a last byte whose
 //  rule nobody has found (rtl_433 leaves this decoder OFF for that reason; we could not find it either — no CRC-8 of any
@@ -732,6 +846,9 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (citroenJeep(ch, out)) return true;
     if (ford(ch, out)) return true;
     if (truck(ch, out)) return true;
+    if (smartire(ch, out)) return true;
+    if (eezTire(ch, out)) return true;
+    if (gearHive(ch, out)) return true;  // no check at all, only fixed bits
     if (jansite(ch, out)) return true;   // no check at all, only a fixed trailer: after everything else
     return false;
 }
