@@ -122,16 +122,22 @@ inline int nfmWant(const State& S) { return S.aprsNfmRaw ? 0 : S.nfmPref; }
 inline std::string fmtDb(double v) { char b[32]; std::snprintf(b, sizeof b, "%.0f", v); return b; }
 inline const char* jb(bool b) { return b ? "true" : "false"; }
 
-/** vibeSquelch.ts vsSquelchMsg. */
-inline void sendSquelch(App& a, double db) {
+/** vibeSquelch.ts vsSquelchMsg. ★ `user` (the person's own drag, or anything while a slider is HELD — the ABOVE NOISE
+ *  margin moves the auto threshold): through the latest-value sender, so a held slider sends at most 10 a second and
+ *  its last value always (key_repeat.h). Otherwise at once (the auto gate opening must not wait), and anything a hold
+ *  left waiting is dropped — this is newer. */
+inline void sendSquelch(App& a, double db, bool user = false) {
     const bool on = sqlOn(db);
-    a.eng_->send(std::string("{\"type\":\"squelch\",\"db\":") + fmtDb(on ? db : SQL_LEGACY_OFF_DB) + ",\"on\":" + jb(on) + "}");
+    std::string m = std::string("{\"type\":\"squelch\",\"db\":") + fmtDb(on ? db : SQL_LEGACY_OFF_DB) + ",\"on\":" + jb(on) + "}";
+    if (user || a.lrHolding()) { a.sendLatest("squelch", [&a, m] { if (a.eng_) a.eng_->send(m); }); return; }
+    a.dropLatest("squelch");
+    a.eng_->send(m);
 }
 /** main.ts applySquelch. `persist` = it is the person's own threshold (an automatic one never overwrites it). */
 inline void applySquelch(App& a, double db, bool persist) {
     State& S = st();
     S.applied = db;
-    sendSquelch(a, db);
+    sendSquelch(a, db, persist);
     if (persist) S.manual = db;
     a.num_["audio.sqlDb"] = S.applied;     // ★ for the deck: the SQL chip + #mSqlLine read the same figure (§1.4, §1.7)
 }
@@ -178,10 +184,13 @@ inline void setSquelchAuto(App& a, const RadioState& s, bool on) {
     else { applySquelch(a, S.manual, false); a.num_.erase("audio.sqlShown"); }
 }
 
-/** The tap and the level, to the engine (main.ts sendSpeaker). */
-inline void sendLevel(App& a) {
+/** The tap and the level, to the engine (main.ts sendSpeaker). `slider`: the VOLUME slider's (latest-value, key_repeat.h). */
+inline void sendLevel(App& a, bool slider = false) {
     const State& S = st();
-    a.eng_->speakerLevel(S.mute ? 0.0 : S.vol / 100.0);
+    const double v = S.mute ? 0.0 : S.vol / 100.0;
+    if (slider) { a.sendLatest("speaker", [&a, v] { if (a.eng_) a.eng_->speakerLevel(v); }); return; }
+    a.dropLatest("speaker");
+    a.eng_->speakerLevel(v);
 }
 inline void syncTap(App& a, const RadioState& s) {
     State& S = st();
@@ -501,13 +510,14 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
         }
         y += 36;
         const Rect bar{x0, y, w, 32};
-        const Nav::Hit h = c.nav.item("a.sql", bar, true);
+        const Nav::Hit h = c.nav.item("a.sql", bar, true, true);   // ★ held LEFT / RIGHT slide it
         navRow({{"a.sql", bar.cx()}});
         if (h.adjust) {
             // ★ the web's drag, on the D-pad: 1 dB a press (3 dB when pressed in quick succession); fully left = OFF.
             //   From OFF, the first press right puts the threshold on the live level the fill shows (the web's ball
             //   starts at the far left — 100 dB of single presses below anything a channel reads).
-            const double step = now - S.lastAdjAt < 0.35 ? 3 : 1;
+            //   ★ HELD (h.repeat): 1 dB a step — the hold's own pace speeds it up (key_repeat.h)
+            const double step = h.repeat ? 1 : now - S.lastAdjAt < 0.35 ? 3 : 1;
             S.lastAdjAt = now;
             double base = S.applied;
             if (S.autoOn) { base = std::isfinite(S.shown) ? std::round(S.shown) : S.manual; setSquelchAuto(*this, s, false); }   // a drag while AUTO is on turns AUTO off first
@@ -584,7 +594,7 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
             S.vol = (int)v;
             if (S.vol == 0) S.mute = true;             // setVolumePct(0) = mute (main.ts:9757)
             else if (S.mute) S.mute = false;           // moving the level up hears it again
-            sendLevel(*this);
+            sendLevel(*this, true);
         }
         c.tc.draw(c.g, c.f.body, std::to_string(S.vol), xr, y + 24 - c.f.body.lineHeight() / 2.f, th::dim, 2);
         y += 48 + 18;

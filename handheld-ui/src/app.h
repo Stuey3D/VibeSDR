@@ -7,6 +7,7 @@
 #include "text.h"
 #include "tuning.h"
 #include "ui.h"
+#include "key_repeat.h"   // ★ hold LEFT / RIGHT on a slider to slide it; a held slider's sends coalesced
 #include "kb/controller_keyboard.h"
 #include "kb/kb_layouts.h"
 #include "wf/waterfall.h"   // ★ the APP's waterfall + spectrum, ported (src/wf/README.md)
@@ -251,6 +252,19 @@ public:
     int sweepDir_ = 0; double sweepZoneAt_ = 0, sweepStart_ = 0, sweepNext_ = 0, sweepEchoAt_ = 0;
     bool sweepAwaiting_ = false; uint64_t sweepSeq_ = 0;
     void holdSweep();
+    // ★★ HOLD LEFT / RIGHT ON A SLIDER TO SLIDE IT (Stuart, 2026-11-12 — key_repeat.h): which direction is down now
+    //    (-1 / +1 / 0, from the pad's, the joystick's, the hat's and the keyboard's own down / up), the repeat it drives
+    //    (only for the slider the press began on) and the latest-value sender a held slider's messages go through.
+    int lrHeld_ = 0, hatBits_ = 0;
+    KeyRepeat lrRep_;
+    LatestSender latest_;
+    void lrDown(int dir) { lrHeld_ = dir; }
+    void lrUp(int dir) { if (lrHeld_ == dir) { lrHeld_ = 0; lrRep_.up(dir); latest_.flush(nowSec()); } }
+    /** A slider's message: at once, or — while one is being held — at most every 100 ms, the latest value, never the
+     *  last one lost (key_repeat.h LatestSender). `key` names what it sets (one slot each). */
+    void sendLatest(const std::string& key, std::function<void()> f) { latest_.send(key, nowSec(), std::move(f)); }
+    void dropLatest(const std::string& key) { latest_.drop(key); }
+    bool lrHolding() const { return lrRep_.active(); }
     // ★ PROFILE: the UI thread's own CPU per stage (CLOCK_THREAD_CPUTIME_ID), summed and logged every 30 s — the
     //   handheld13 log had vibe-hhui at 77–85 % of a core on FM, far more than 30 fps of drawing should cost
     struct Prof { double pre = 0, wf = 0, ui = 0, swap = 0, idle = 0; long loops = 0, frames = 0, batches = 0; double since = 0; } prof_;

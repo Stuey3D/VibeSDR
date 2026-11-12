@@ -230,16 +230,31 @@ inline void App::pollInput() {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { presses_.clear(); quit_ = true; }
         else if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_JOYDEVICEADDED) openPads();
-        else if (e.type == SDL_CONTROLLERBUTTONDOWN) { const Btn b = fromController(e.cbutton.button); if (b != B_NONE) press(b); }
+        else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+            const Btn b = fromController(e.cbutton.button);
+            if (b == B_LEFT) lrDown(-1); else if (b == B_RIGHT) lrDown(1);   // ★ held = slide a slider (key_repeat.h)
+            if (b != B_NONE) press(b);
+        } else if (e.type == SDL_CONTROLLERBUTTONUP) {
+            const Btn b = fromController(e.cbutton.button);
+            if (b == B_LEFT) lrUp(-1); else if (b == B_RIGHT) lrUp(1);
+        }
         else if (e.type == SDL_JOYBUTTONDOWN && joy_ && !pad_) {
             const Btn b = fromJoystick(e.jbutton.button);
             if (b == B_L2) joyL2_ = true; else if (b == B_R2) joyR2_ = true;
+            if (b == B_LEFT) lrDown(-1); else if (b == B_RIGHT) lrDown(1);
             if (b != B_NONE) press(b);
         } else if (e.type == SDL_JOYBUTTONUP && joy_ && !pad_) {
             const Btn b = fromJoystick(e.jbutton.button);
             if (b == B_L2) joyL2_ = false; else if (b == B_R2) joyR2_ = false;
+            if (b == B_LEFT) lrUp(-1); else if (b == B_RIGHT) lrUp(1);
         }
         else if (e.type == SDL_JOYHATMOTION && joy_ && !pad_) {
+            const int v = e.jhat.value, was = hatBits_;
+            hatBits_ = v;
+            if ((was & SDL_HAT_LEFT) && !(v & SDL_HAT_LEFT)) lrUp(-1);
+            if ((was & SDL_HAT_RIGHT) && !(v & SDL_HAT_RIGHT)) lrUp(1);
+            if ((v & SDL_HAT_LEFT) && !(was & SDL_HAT_LEFT)) lrDown(-1);
+            if ((v & SDL_HAT_RIGHT) && !(was & SDL_HAT_RIGHT)) lrDown(1);
             if (e.jhat.value & SDL_HAT_UP) press(B_UP);
             if (e.jhat.value & SDL_HAT_DOWN) press(B_DOWN);
             if (e.jhat.value & SDL_HAT_LEFT) press(B_LEFT);
@@ -251,9 +266,14 @@ inline void App::pollInput() {
         } else if (e.type == SDL_KEYUP) {
             if (e.key.keysym.sym == SDLK_COMMA) kbL2_ = false;
             if (e.key.keysym.sym == SDLK_PERIOD) kbR2_ = false;
+            if (e.key.keysym.sym == SDLK_LEFT || e.key.keysym.sym == SDLK_a) lrUp(-1);
+            if (e.key.keysym.sym == SDLK_RIGHT || e.key.keysym.sym == SDLK_d) lrUp(1);
         } else if (e.type == SDL_KEYDOWN) {
-            // ★ < > held = the hold-sweep (holdSweep), not the keyboard's own repeat
+            // ★ < > held = the hold-sweep (holdSweep), not the keyboard's own repeat; ← → held = the slider's own (lrRep_)
             if (e.key.repeat && (e.key.keysym.sym == SDLK_COMMA || e.key.keysym.sym == SDLK_PERIOD)) continue;
+            if (e.key.repeat && (e.key.keysym.sym == SDLK_LEFT || e.key.keysym.sym == SDLK_a || e.key.keysym.sym == SDLK_RIGHT || e.key.keysym.sym == SDLK_d)) continue;
+            if (e.key.keysym.sym == SDLK_LEFT || e.key.keysym.sym == SDLK_a) lrDown(-1);
+            if (e.key.keysym.sym == SDLK_RIGHT || e.key.keysym.sym == SDLK_d) lrDown(1);
             // ★ a USB keyboard: the ONE keyboard scheme (memory gamepad_mapping 10-18): arrows + WASD move, Enter select,
             //   Backspace AND Escape back, < > (, .) tune, - + (=) zoom; Tab = the menu
             switch (e.key.keysym.sym) {
@@ -1348,12 +1368,20 @@ inline int App::run(int argc, char** argv) {
 
         // one press per frame for the highlight (a fast D-pad still lands every press: 30 a second)
         Input in;
+        const std::string top = sheets_.empty() ? "deck" : layerName(sheets_.back());
+        const std::string where = top + "|" + nav_.focus(top);
         if (!presses_.empty()) {
             const Btn b = presses_.front(); presses_.pop_front();
             if (b == B_UP) in.nav = D_UP; else if (b == B_DOWN) in.nav = D_DOWN; else if (b == B_LEFT) in.nav = D_LEFT; else if (b == B_RIGHT) in.nav = D_RIGHT;
             else if (b == B_ENTER) in.enter = true; else if (b == B_BACK) in.back = true;
+            // ★★ a LEFT / RIGHT still held when its press is used: the slider it lands on keeps sliding (key_repeat.h) —
+            //    only that slider (where it was when the press was used), only while the direction stays down
+            keyRepeatFrame(lrRep_, b == B_LEFT ? -1 : b == B_RIGHT ? 1 : 2, lrHeld_, t, where, nav_.focusRepeats(top));
+        } else if (lrRep_.active()) {
+            in.repeat = keyRepeatFrame(lrRep_, 0, lrHeld_, t, where, false);
+            if (in.repeat) lastInput_ = nowSec();   // (a hold is input: the idle power save stays off)
         }
-        const std::string top = sheets_.empty() ? "deck" : layerName(sheets_.back());
+        latest_.pump(t);
         nav_.begin(top, in);
         Ctx c{g_, tc_, f_, nav_, t};
 

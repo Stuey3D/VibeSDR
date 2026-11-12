@@ -30,7 +30,7 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
     y = menuRow(c, a, y, "VOLUME", "");
     {
         double v = volume_ < 0 ? 60 : volume_;
-        if (hwRowSlider(c, "hw.vol", {a.x, y0, a.w, 44}, {a.x + 150, y0 + 2, a.w - 230, 40}, v, 0, 100, 5)) { volume_ = (int)v; eng_->device("{\"set\":\"volume\",\"value\":" + std::to_string(volume_) + "}"); }
+        if (hwRowSlider(c, "hw.vol", {a.x, y0, a.w, 44}, {a.x + 150, y0 + 2, a.w - 230, 40}, v, 0, 100, 5)) { volume_ = (int)v; const std::string m = "{\"set\":\"volume\",\"value\":" + std::to_string(volume_) + "}"; sendLatest("hw.vol", [this, m] { eng_->device(m); }); }   // ★ a held slider: ≤ 10 POSTs a second, the last always
         c.tc.draw(c.g, c.f.body, std::to_string(volume_ < 0 ? 60 : volume_), a.r() - 6, y0 + valY, th::dim, 2);
     }
     // BATTERY

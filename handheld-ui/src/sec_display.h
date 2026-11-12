@@ -72,7 +72,8 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
     {
         double v = brightness_;
         if (sliderRow("d.bri", "BRIGHTNESS", "", v, 5, 255, 10, std::to_string(brightness_))) {
-            brightness_ = (int)v; eng_->device("{\"set\":\"brightness\",\"value\":" + std::to_string(brightness_) + "}");
+            brightness_ = (int)v; const std::string m = "{\"set\":\"brightness\",\"value\":" + std::to_string(brightness_) + "}";
+            sendLatest("d.bri", [this, m] { eng_->device(m); });   // ★ a held slider: ≤ 10 POSTs a second, the last always
         }
     }
     // DISPLAY RATE (display_rate.h — Stuart, 2026-11-07: screen noise on FM)

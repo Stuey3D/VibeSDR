@@ -5,7 +5,7 @@
 //   • holding: scrolled back with UP, the rows on screen do not move while text keeps arriving — RAW and EXPLAIN;
 //   • EXPLAIN ↔ RAW while scrolled back stays on the same decoded line; ENTER on the text follows again; CLR resets;
 //   • a SIGNAL's history joined from the server's rolling 120-character windows (decHistMerge) reads back whole.
-// Silent (no audio). Run in the arm64 test image: handheld-ui/test/run_cw_log_test.sh
+// Silent (no audio). Run in the arm64 test image: handheld-ui/test/run_offscreen_tests.sh cw_log_test
 #include "../src/app.h"
 
 #include <cstdio>

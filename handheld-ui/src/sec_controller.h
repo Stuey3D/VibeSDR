@@ -46,7 +46,7 @@ inline float App::secController(Ctx& c, const RadioState& s, Rect a, float y) {
     struct G { int face; const char* key; const char* what; };
     // face: −1 = a named key; 0..3 = a face button by position (top, left, right, bottom)
     const G receiver[] = {
-        {-1, "D-pad", "move the highlight · left / right adjust a slider"},
+        {-1, "D-pad", "move the highlight · left / right adjust a slider — hold to slide it"},
         {FACE_BOTTOM, "", "press the highlighted control"},
         {FACE_RIGHT, "", "back · fold a menu section · close"},
         {-1, "L1 · R1", "zoom out · zoom in"},

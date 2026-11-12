@@ -66,6 +66,16 @@ inline void sendGain(S& x, int tenths) { if (x.A.eng_) x.A.eng_->gain(tenths); }
 inline void sendKV(S& x, const char* type, const char* key, long v) {
     send(x, std::string("{\"type\":\"") + type + "\",\"" + key + "\":" + std::to_string(v) + "}");
 }
+/** ★ A SLIDER's message (key_repeat.h LatestSender): at once, or while it is HELD at most 10 a second, the latest value
+ *  and never the last one lost — a held gain slider would otherwise send the radio 30 gain changes a second. */
+inline void sendSlider(S& x, const std::string& json) {
+    App* A = &x.A;
+    const size_t c = json.rfind(':');
+    A->sendLatest("sdr|" + json.substr(0, c == std::string::npos ? json.size() : c), [A, json] { if (A->eng_) A->eng_->send(json); });
+}
+inline void sendKVSlider(S& x, const char* type, const char* key, long v) {
+    sendSlider(x, std::string("{\"type\":\"") + type + "\",\"" + key + "\":" + std::to_string(v) + "}");
+}
 
 // ── drawing ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline float textW(S& x, const Font& f, const std::string& t) { return (float)x.c.tc.width(f, t); }
@@ -98,8 +108,8 @@ inline void textRow(S& x, float& y, const std::string& label, const std::string&
 //    a row is then further "across" from a full-width slider above it than the row after it is "along" — so DOWN from
 //    GAIN jumped straight past VIBE AGC and it could not be reached at all. Every row here registers {area.x, row, area.w}
 //    and draws its control (and the ring) where it sits, so UP / DOWN walk the rows in order.
-inline Nav::Hit rowItem(S& x, const std::string& id, float top, float h, bool takesLR) {
-    return x.c.nav.item(id, {x.a.x, top, x.a.w, h}, takesLR);
+inline Nav::Hit rowItem(S& x, const std::string& id, float top, float h, bool takesLR, bool repeats = false) {
+    return x.c.nav.item(id, {x.a.x, top, x.a.w, h}, takesLR, repeats);
 }
 
 /** The slider, or — when the radio owns the value — the same track drawn dim and out of the D-pad's reach (a control
@@ -114,7 +124,7 @@ inline bool sliderAt(S& x, const std::string& id, Rect r, double& v, double lo, 
         x.c.g.circle(r.x + r.w * frac, r.cy(), 9, 0, th::dimmer);
         return false;
     }
-    const Nav::Hit h = rowItem(x, id, navTop, navH, true);
+    const Nav::Hit h = rowItem(x, id, navTop, navH, true, true);   // ★ held LEFT / RIGHT slide it
     if (pressed) *pressed = h.pressed;
     bool changed = false;
     if (h.adjust) {

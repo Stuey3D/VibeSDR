@@ -96,7 +96,7 @@ inline bool hwRowButton(Ctx& c, const std::string& id, Rect row, Rect btn, const
 
 /** ui.h's slider() with a ROW-WIDE highlight box (see above): the track where it sits, the amber ring round the track. */
 inline bool hwRowSlider(Ctx& c, const std::string& id, Rect row, Rect r, double& v, double lo, double hi, double step) {
-    const Nav::Hit h = c.nav.item(id, row, true);
+    const Nav::Hit h = c.nav.item(id, row, true, true);   // ★ held LEFT / RIGHT slide it
     bool changed = false;
     if (h.adjust) {
         const double nv = std::max(lo, std::min(hi, std::round((v + h.adjust * step - lo) / step) * step + lo));
