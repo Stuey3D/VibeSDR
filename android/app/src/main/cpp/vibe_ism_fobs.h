@@ -436,6 +436,113 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 
 } // namespace twogigkey
 
+/** "ZERO-BIT" MANCHESTER frames (a frame's first half-bit is the idle level, so the slice starts at its second): every
+ *  NRZ row of `r` at `half` µs, both polarities, given back that first half-bit and read with a bit = its FIRST half;
+ *  each decoded frame of at least `minBits`. */
+inline std::vector<Bits> zerobitFrames(const Runs& r, double half, size_t minBits, int maxChips = 3) {
+    std::vector<Bits> out;
+    for (const Bits& c0 : kit::nrzRows(r, half, maxChips, true, 2 * minBits - 1)) {
+        if (c0.empty() || !c0[0]) continue;
+        Bits c(1, 0); c.insert(c.end(), c0.begin(), c0.end());
+        Bits d = kit::manchesterAt(c, 0, 100000, false);
+        if (d.size() >= minBits) out.push_back(std::move(d));
+    }
+    return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ALPS FWB1U545 car keys (Honda OEM, 433.92 MHz) — facts from the notes in rtl_433's alps_fwb1u545.c: FSK "zero-bit"
+//  Manchester, 500 µs halves; exactly 76 bits: 55 · ID 32 · button byte · its copy · sequence 16 · 4 unknown; button
+//  (high nibble) E lock, C panic, 5 panic held, 1 unlock. A fixed ID — ★ only hashed; the sequence is never shown.
+//  The check is weak (the 55, the copied byte, the exact length): confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace alps {
+
+inline bool decode(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    for (const Bits& d : zerobitFrames(b.fsk, 500, 76)) {
+        if (d.size() != 76) continue;
+        const auto by = bytesAt(d, 0, 10);
+        if (by[0] != 0x55 || by[5] != by[6]) continue;
+        const uint32_t id = uint32_t(by[1]) << 24 | uint32_t(by[2]) << 16 | uint32_t(by[3]) << 8 | by[4];
+        if (id == 0 || id == 0xFFFFFFFF) continue;
+        const int bt = by[5] >> 4;
+        const char* w = bt == 0xE ? "lock" : bt == 0xC ? "panic" : bt == 0x5 ? "panic (held)" : bt == 0x1 ? "unlock" : nullptr;
+        if (!w) continue;
+        Reading r = caralarm::carFob("Alps", 0xDA, id, bt, w);
+        r.confirm = true;
+        out.push_back(r);
+        return true;
+    }
+    return false;
+}
+
+} // namespace alps
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  TV / SATELLITE BOX RF REMOTES — kind "doorbell" (the list's "Doorbell / remote"), the remote's address secret as for
+//  every remote.
+//  · DirecTV RC66RX (433.92 FSK, 600 µs symbols) — facts from K. Lohner's notes in rtl_433's directv.c: a row = a sync
+//    (3 low, then 10 high — the first time — or 5 high — a repeat —, then 2 low) and a message read by the symbol count
+//    between transitions (1 = 0, 2 = 1): 40 bits — 0x10 · device ID 20 · button 8 · a nibble = the low nibble of the sum
+//    of the nine before it.
+//  · Dish Network UHF remote 6.3 (384 MHz OOK PPM) — facts from the notes in rtl_433's dish_remote_6_3.c: 400 µs marks, a
+//    1692 µs gap = 0, 2812 µs = 1; a 400 µs start mark and a ~6 ms gap, then 16 bits BBBBBB10 101x1xxx (B = the button);
+//    seven copies per press — only six fixed bits, so the word must come at least twice alike in the burst.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+namespace tvremote {
+
+inline bool directv(const Burst& b, std::vector<Reading>& out) {
+    if (b.fsk.empty()) return false;
+    Runs inv0 = b.fsk; for (auto& d : inv0) d = -d;
+    const Runs& inv = inv0;
+    for (const Runs* rp : {&b.fsk, &inv}) {
+        const Runs& r = *rp;
+        std::vector<int> n(r.size());
+        for (size_t i = 0; i < r.size(); ++i) n[i] = int(std::lround(std::abs(r[i]) / 600.0));
+        for (size_t i = 1; i + 2 < r.size(); ++i) {
+            if (r[i] <= 0 || (n[i] != 10 && n[i] != 5) || n[i - 1] != 3 || n[i + 1] != 2) continue;
+            if (!near(r[i], n[i] * 600.0, 0.12)) continue;
+            Bits d; size_t k = i + 2;
+            for (; k < r.size() && d.size() < 42; ++k) {
+                if (n[k] == 1 && near(r[k], 600, 0.3)) d.push_back(0);
+                else if (n[k] == 2 && near(r[k], 1200, 0.2)) d.push_back(1);
+                else break;
+            }
+            if (d.size() != 40 && d.size() != 41) continue;   // (41: the row's last symbol, before the next sync's 3 low)
+            const auto by = bytesAt(d, 0, 5);
+            if (by[0] != 0x10) continue;
+            int sum = 0; for (int q = 0; q < 9; ++q) sum += (by[size_t(q / 2)] >> (q & 1 ? 0 : 4)) & 0xF;
+            if ((sum & 0xF) != (by[4] & 0xF)) continue;
+            const uint32_t id = uint32_t(by[1]) << 12 | uint32_t(by[2]) << 4 | uint32_t(by[3] >> 4);
+            const int bt = (by[3] & 0xF) << 4 | by[4] >> 4;
+            Reading rd = remoteReading("doorbell", "DirecTV", "RC66RX TV remote", 0xDB, id);
+            rd.button = std::to_string(bt);
+            rd.fact("button_id", (long long)bt);
+            out.push_back(rd);
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool dish(const Burst& b, std::vector<Reading>& out) {
+    const auto rows = kit::ppmRows(b.ook, 1692, 2812, 4500, 250, 600, 0.2);
+    for (const Bits& w : rows) {
+        if (w.size() != 16 || !kit::twice(rows, w)) continue;
+        if (w[6] != 1 || w[7] != 0 || w[8] != 1 || w[9] != 0 || w[10] != 1 || w[12] != 1) continue;
+        const uint32_t v = bitsAt(w, 0, 16);
+        const int bt = int(v >> 10);
+        Reading rd = remoteReading("doorbell", "Dish Network", "UHF remote 6.3", 0xDC, v & 0x3FF);
+        rd.button = std::to_string(bt);
+        out.push_back(rd);
+        return true;
+    }
+    return false;
+}
+
+} // namespace tvremote
+
 /** The second-pass remote / fob families, strongest checks first. */
 inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (twogigkey::decode(b, out)) return true;
@@ -445,6 +552,9 @@ inline bool decodeFobs(const Burst& b, std::vector<Reading>& out) {
     if (ford::decode(b, out)) return true;
     if (chamberlaindip::decode(b, out)) return true;
     if (honda::decode(b, out)) return true;
+    if (alps::decode(b, out)) return true;
+    if (tvremote::directv(b, out)) return true;
+    if (tvremote::dish(b, out)) return true;
     return false;
 }
 

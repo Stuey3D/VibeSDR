@@ -1127,6 +1127,39 @@ static void testSec2() {
         Tx tx; for (int rep = 0; rep < 2; ++rep) { for (uint8_t x : ch) { if (x) tx.mark(136); else tx.space(136); } tx.space(100000); }
         cs.push_back({{"2GIG KEY2E key", Sig{tx.r}, "KEY2E (encrypted)", nullptr, nullptr, true}, 345e6, {"009AA048", "009aa048", "9AA048"}, "2GIG"});
     }
+    // Alps FWB1U545: FSK "zero-bit" Manchester, 500 µs halves, a bit = its first half; 76 bits: 55 · ID · button ·
+    //   its copy · sequence · nibble; frames apart by a 2 ms stretch of the space tone
+    {
+        std::vector<uint8_t> by = {0x55, 0x48, 0x17, 0xE6, 0x1E, 0xE5, 0xE5, 0x87, 0xE4, 0x30};
+        Bits d = bytesToBits(by); d.resize(76);
+        Tx tx;
+        for (int rep = 0; rep < 3; ++rep) { tx.space(2000); for (uint8_t x : d) { if (x) { tx.mark(500); tx.space(500); } else { tx.space(500); tx.mark(500); } } }
+        tx.space(2000);
+        Sig s{tx.r}; s.fsk = true; s.devHz = 32e3;
+        cs.push_back({{"Alps car key", s, "Key fob", "button_code", "14", true}, 433.92e6, spellings(0x4817E61E), "lock"});
+    }
+    // DirecTV RC66RX: FSK 600 µs symbols; sync 000 1111111111 00, then 1 symbol = 0, 2 = 1 between transitions: 0x10 ·
+    //   ID 20 · button 8 · the low nibble of the nine nibbles' sum
+    {
+        const uint32_t id = 123456; const int bt = 0x30;
+        std::vector<uint8_t> by = {0x10, uint8_t(id >> 12), uint8_t(id >> 4), uint8_t((id & 0xF) << 4 | bt >> 4), uint8_t((bt & 0xF) << 4)};
+        int sum = 0; for (int q = 0; q < 9; ++q) sum += (by[size_t(q / 2)] >> (q & 1 ? 0 : 4)) & 0xF;
+        by[4] |= uint8_t(sum & 0xF);
+        Tx tx; tx.space(1800); tx.mark(6000); tx.space(1200);
+        bool lv = true;
+        for (uint8_t x : bytesToBits(by)) { const double w = x ? 1200 : 600; if (lv) tx.mark(w); else tx.space(w); lv = !lv; }
+        if (lv) tx.mark(600); else tx.space(600);
+        tx.space(1800); tx.mark(600); tx.space(3000);
+        Sig s{tx.r}; s.fsk = true; s.devHz = 50e3;
+        cs.push_back({{"DirecTV remote", s, "RC66RX", "button_id", "48", true}, 433.92e6, {"123456", "1E240", "1e240"}, "DirecTV"});
+    }
+    // Dish UHF 6.3: OOK PPM, 400 µs marks, 1692 µs gap = 0, 2812 µs = 1; a start mark + 6 ms, 16 bits BBBBBB10 101x1xxx
+    {
+        const uint16_t w = uint16_t(0x0B << 10 | 0x2 << 8 | 0xA8 | 0x5);
+        Tx tx;
+        for (int rep = 0; rep < 7; ++rep) { tx.mark(400); tx.space(6000); for (int i = 15; i >= 0; --i) { tx.mark(400); tx.space((w >> i) & 1 ? 2812 : 1692); } tx.mark(400); tx.space(6000); }
+        cs.push_back({{"Dish TV remote", Sig{tx.r}, "UHF remote 6.3", nullptr, nullptr, true}, 384e6, {}, "Dish Network"});
+    }
     secRun(cs);
     // Chamberlain CWPIRC (HELD out of the decoder order — see decodeSecurity2 — but checked): FSK NRZ 25 µs, 55… 2D D4,
     //   00 + half, 01 + half (Security+ 2.0 half-words), CRC-16/XMODEM over the 14 bytes; fixed bit 5 = battery low
