@@ -21,16 +21,23 @@
  *   dial is still the radio's, and the box is something to read.
  * ★ No dead controls: no key here sets anything on the radio — DRM has nothing to set (the server cuts its own channel,
  *   so the width control is not offered in DRM either).
+ * ★★★ V12 THE CONSTELLATION (2026-11-12, Stuart: "for DRM is it possible to see the constellation like we do for DAB"): at
+ *    the top of the Signal pane, as DabPanel's sits among its rows — the equalised cells of the last super frame, MSC in
+ *    DAB's yellow over the SDC and FAC (services/drm.ts DRM_IQ_COLOURS, the web's very colours), ONE Skia Points node per
+ *    channel (DabPanel's lesson: never an element per point). The pane asks for it (onSignalPane → drm_scopes) only while
+ *    it is open; an OLDER server sends none and the pane simply has no picture — no empty box.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { captureRegion, capturedRegion, useListNav, useNavFocus } from './PanelNav';
 import { screenNavRef } from './ScreenNav';
 import { drmView, drmViewText, drmSignalRows, DRM_LIGHT_ON, DRM_LIGHT_OFF, DRM_SNR_COLOURS,
-         type DrmState, type DrmTone } from '../services/drm';
+         DRM_IQ_COLOURS, DRM_IQ_ORDER, DRM_IQ_TIP, DRM_IQ_STALE_MS, drmIqLegend, drmQamGrid,
+         type DrmIq, type DrmState, type DrmTone } from '../services/drm';
 
 /** Wide enough for the signal line on one row on a tablet; a phone's window narrows it (DecoderShell). */
 const DRM_MAX_W = 560;
@@ -46,11 +53,36 @@ export interface DrmPanelProps {
   /** ★ BIG / SMALL, remembered by the screen (lsv_drm_tall) like the ISM box's. */
   tall?: boolean;
   onTall?: (v: boolean) => void;
+  /** ★★ V12 the constellation (the server's drm_iq) and when it came — null until a server sends one (an older one never does). */
+  iq?: DrmIq | null;
+  iqAt?: number;
+  /** ★ The Signal pane opened / closed — the server sends the constellation only while it is open (DabPanel's onSignalPane). */
+  onSignalPane?: (open: boolean) => void;
 }
 
 type NavKey = { key: string; row: number };
 
-export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall: tallPref = false, onTall }: DrmPanelProps) {
+/** ★★ The constellation: ONE Skia Points node per channel (FAC, SDC, then the MSC on top), the faint ideal points of the
+ *  MSC's QAM behind them, DabPanel's backing and cross. `size` pt square; 1.25 × the unit-power radius fits a 64-QAM cloud. */
+const DrmConstellation = React.memo(function DrmConstellation({ iq, size, plot, axis }: { iq: DrmIq; size: number; plot: string; axis: string }) {
+  const sets = useMemo(() => {
+    const half = size / 2, k = (half - 3) / (iq.scale * 1.25);
+    const pts = (a?: number[]) => { const o: { x: number; y: number }[] = []; if (a) for (let i = 0; i + 1 < a.length; i += 2) o.push({ x: half + a[i] * k, y: half - a[i + 1] * k }); return o; };
+    return { grid: iq.msc && iq.mscQam ? pts(drmQamGrid(iq.mscQam, iq.scale)) : [],
+             ch: DRM_IQ_ORDER.map((c) => ({ c, p: pts(iq[c]) })).filter((x) => x.p.length) };
+  }, [iq, size]);
+  return (
+    <Canvas style={{ width: size, height: size }}>
+      <Rect x={0} y={0} width={size} height={size} color={plot} />
+      <Rect x={size / 2 - 0.5} y={0} width={1} height={size} color={axis} />
+      <Rect x={0} y={size / 2 - 0.5} width={size} height={1} color={axis} />
+      {sets.grid.length > 0 && <Points points={sets.grid} mode="points" style="stroke" strokeWidth={1.2} strokeCap="round" color="rgba(255,255,255,0.3)" />}
+      {sets.ch.map(({ c, p }) => <Points key={c} points={p} mode="points" style="stroke" strokeWidth={2.2} strokeCap="round" color={DRM_IQ_COLOURS[c]} />)}
+    </Canvas>
+  );
+});
+
+export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall: tallPref = false, onTall, iq = null, iqAt = 0, onSignalPane }: DrmPanelProps) {
   const tk = useDecoderTokens();
   const s = useDecoderStyles(makeStyles);
   const { height: winH } = useWindowDimensions();
@@ -61,6 +93,13 @@ export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall:
   const playing = !!state?.msc && !!state?.playable;
   const sig = pane === 'signal' && !min;
   const togglePane = () => { setMin(false); setPane((p) => (p === 'signal' ? 'station' : 'signal')); };
+  // ★★ the constellation travels only while the Signal pane is on screen — and stops when the box goes (DabPanel's rule)
+  useEffect(() => { onSignalPane?.(sig); }, [sig, onSignalPane]);
+  useEffect(() => () => { onSignalPane?.(false); }, [onSignalPane]);
+  // ★ a picture is shown only while fresh (a lost lock or a stalled server takes it away) and only with a lock in hand
+  const [, tick] = useState(0);
+  useEffect(() => { if (!iq || !sig) return; const t = setTimeout(() => tick((n) => n + 1), DRM_IQ_STALE_MS + 100); return () => clearTimeout(t); }, [iq, iqAt, sig]);
+  const showIq = sig && !!iq && !!state?.sync && Date.now() - iqAt < DRM_IQ_STALE_MS ? iq : null;
 
   // ★ The Signal pane's height: up to the screen's limit (the DAB/ISM boxes' arithmetic), else a fixed 200 like ISM's
   const HEADER_H = 46;
@@ -165,6 +204,18 @@ export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall:
           {/* ★ The web's #drmSignal: a small heading per group, amber label, the value in its traffic-light colour where it
               has a nominal range. Each row carries its plain-English explanation as its accessibility hint (the web's tooltip). */}
           <ScrollView ref={listRef} style={{ maxHeight: bodyH, ...(tall ? { height: bodyH } : null) }} contentContainerStyle={[scrollLane, s.pane]} showsVerticalScrollIndicator>
+            {!!showIq && (
+              <View style={s.scope} accessible accessibilityRole="image"
+                    accessibilityLabel={`Constellation: ${drmIqLegend(showIq).map((l) => l.text).join(', ')}`} accessibilityHint={DRM_IQ_TIP}>
+                <Text style={[s.plotLbl, { color: tk.muted }]}>CONSTELLATION</Text>
+                <DrmConstellation iq={showIq} size={tall ? 200 : 150} plot={tk.plot} axis={tk.axis} />
+                <View style={s.legend}>
+                  {drmIqLegend(showIq).map((l) => (
+                    <Text key={l.ch} style={[s.legendTxt, { color: tk.muted }]}><Text style={{ color: l.colour }}>●</Text> {l.text}</Text>
+                  ))}
+                </View>
+              </View>
+            )}
             {rows.map((r, i) => ('h' in r
               ? <Text key={`h${i}`} style={[s.section, { color: tk.label }]}>{r.h}</Text>
               : (
@@ -215,4 +266,9 @@ const makeStyles = (_T: DecoderTokens) => StyleSheet.create({
   lbl:     { fontFamily: DECODER_FONT, fontSize: 12, letterSpacing: 1, width: 124 },
   val:     { fontFamily: DECODER_FONT, fontSize: 14, flex: 1, fontVariant: ['tabular-nums'] },
   valBad:  { fontWeight: '700' },
+  // ── ★★ V12 the constellation: DabPanel's plot label and spacing ──
+  scope:     { marginTop: 6, marginBottom: 2, alignSelf: 'flex-start' },
+  plotLbl:   { fontFamily: DECODER_FONT, fontSize: 9, letterSpacing: 1, marginBottom: 2 },
+  legend:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 3 },
+  legendTxt: { fontFamily: DECODER_FONT, fontSize: 9, letterSpacing: 0.5 },
 });

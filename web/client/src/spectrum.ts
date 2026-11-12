@@ -35,6 +35,7 @@ import { parseIcomStatus, icomControlMsg, nearestSpanIndex, spanStep,
          type IcomStatus, type IcomRadio, type IcomControlFields } from '../../../src/services/icomRadio';
 
 import type { DrmState } from './drm';
+import { drmIqSanitise, type DrmIq } from '../../../src/services/drm';
 import { AM_SYNC_PASSBAND, AM_SYNC_MAX_BW, parseAmSync, type AmSyncState } from '../../../src/services/amSync';
 import { parseAutoBwModes, parseBwAuto, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
 import type { WholeKind } from '../../../src/services/wholeModeResume';   // ★ V12: coming back to a whole-radio mode
@@ -664,6 +665,8 @@ export interface SpectrumCallbacks {
   onDab?: (d: DabState) => void;
   /** ★ V12 DRM: the listener's DRM receiver reports (vibe_drm_listener.h) — see drm.ts. */
   onDrm?: (d: DrmState) => void;
+  /** ★★ V12 the DRM constellation ({"type":"drm_iq"}, already checked — drmIqSanitise): only after drmScopes(true). */
+  onDrmIq?: (q: DrmIq) => void;
   /** ★ V12 CTCSS / DCS tone ID on NFM: the label on change ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), '' = none locked. */
   onToneId?: (label: string) => void;
   /** ★ V12 the AM family's carrier lock, applied auto-bandwidth edges and AM-stereo pilot (shim sendAmSync). */
@@ -1198,9 +1201,23 @@ export class SpectrumClient {
        *  straight through. */
       case 'amsync': { const a = parseAmSync(msg); if (a) this.cb.onAmSync?.(a); return; }
       case 'bwauto': { const b = parseBwAuto(msg); if (b) this.cb.onBwAuto?.(b); return; }
-      case 'drm':
+      case 'drm': {
+        /* ★ Self-healing, as DAB's scopes: a new socket (a reconnect) starts with the constellation off, so while the pane
+         *  is open and no cells have come for a while, say so again — at most every 5 s. An older server never sends any;
+         *  restating to it is a message it ignores. */
+        const now = Date.now();
+        if (this.drmScopesOn && msg.locked === true && now - this.drmIqAt > 5000 && now - this.drmScopesSaidAt > 5000) {
+          this.drmScopesSaidAt = now;
+          this._send({ type: 'drm_scopes', on: 1 });
+        }
         this.cb.onDrm?.(msg as DrmState);
         return;
+      }
+      case 'drm_iq': {
+        const q = drmIqSanitise(msg);
+        if (q) { this.drmIqAt = Date.now(); this.cb.onDrmIq?.(q); }
+        return;
+      }
       case 'tone':
         this.cb.onToneId?.(typeof msg.label === 'string' ? msg.label.replace(/[^\x20-\x7e]/g, '').slice(0, 40) : '');
         return;
@@ -2385,6 +2402,17 @@ export class SpectrumClient {
     return true;
   }
   private dabAsm = new DabAssembler();
+  private drmScopesOn = false;
+  private drmScopesSaidAt = 0;
+  private drmIqAt = 0;
+  /** ★★ V12 the DRM Signal pane is showing: the server sends its constellation ({"type":"drm_iq"}) only then, and copies no
+   *  cells while nobody looks. Sent only on a change; restated by the self-healing check in 'drm' after a reconnect. */
+  drmScopes(on: boolean) {
+    if (on === this.drmScopesOn) return;
+    this.drmScopesOn = on;
+    this.drmScopesSaidAt = Date.now();
+    this._send({ type: 'drm_scopes', on: on ? 1 : 0 });
+  }
   private dabScopesOn = false;
   private dabScopesSaidAt = 0;
   /** ★ The DAB Signal pane is showing (dab=2): the constellation + impulse response come with each report only then.

@@ -323,6 +323,7 @@ inline int runApp(int argc, char** argv) { App a; return a.run(argc, argv); }
 namespace hh { inline bool decSkimSegment(int& lo, int& hi); }
 #include "hw_pump.h"
 #include "dab_box.h"
+#include "drm_quality.h"   // ★ V12 the DRM reception meter (the pill's reading in DRM — app_impl.h drawDeck)
 #include "app_impl.h"
 #include "sec_audio.h"
 #include "sec_display.h"

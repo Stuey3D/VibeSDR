@@ -17,7 +17,9 @@ import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { fmLogoKey, retryDelay } from '../../../src/services/logoCachePolicy.ts';
 import { webLogos, webLogoOffer, webLogoOutranked, webLogoForget, webLogoDead, dabIdxKey, dabWebKey } from './logoStoreWeb';   // ★ V12 persistent logo cache
-import { drmRender, drmSignalRender, type DrmState } from './drm';
+import { drmRender, drmSignalRender, drmDrawConstellation, DRM_SCOPE_HTML, DRM_IQ_TIP, type DrmState } from './drm';
+import { DRM_IQ_STALE_MS, type DrmIq } from '../../../src/services/drm';
+import { DrmQualityMeter, type DrmQuality } from '../../../src/utils/drmQuality';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
@@ -2662,7 +2664,21 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onDrm: (d) => {
       if (!spec || spec.mode !== 'drm') return;   // ★ a report after leaving DRM is a ghost
-      drmState = d; drmBoxSync(); updateVts();
+      drmState = d;
+      if (!d.sync) drmIq = null;   // ★ the lock gone: its picture goes with it
+      {
+        // ★★ V12 the DRM reception meter (src/utils/drmQuality.ts) — and whether audio is REACHING this page, as DAB's
+        const h = audio?.health;
+        const out = audio?.lastOutputAtMs ?? 0;
+        drmQuality = dabWithPlayback(drmQualityMeter.push(d, Date.now()), d.playable ? 1 : 0,
+          !audio || h === 'muted' || h === 'suspended' ? undefined : out ? performance.now() - out : Infinity) as DrmQuality;
+      }
+      drmBoxSync(); updateVts();
+    },
+    onDrmIq: (q) => {
+      if (!spec || spec.mode !== 'drm') return;
+      drmIq = q; drmIqAt = Date.now();
+      if (drmPane === 'signal') drmDrawScope();
     },
     // ★ V12 tone ID: NFM only (a label after leaving NFM is a ghost)
     onToneId: (l) => {
@@ -7216,6 +7232,15 @@ let dabCapable = false;
  *  where the server lists 'drm' in vibeserver.json's modes (an older server has no such mode — a dead button). */
 let drmCap = false;
 let drmState: DrmState | null = null;
+/** ★★ V12 THE DRM CONSTELLATION (2026-11-12): the last {"type":"drm_iq"} and when it came. The server sends one per super
+ *  frame only while this page's Signal pane is open (spec.drmScopes); an older server never does, and the scope stays hidden. */
+let drmIq: DrmIq | null = null;
+let drmIqAt = 0;
+/** ★★★ THE DRM RECEPTION METER (2026-11-12) — DAB's meter for DRM: the card's signal bar becomes the decoder's verdict and
+ *  the reading box the decoder's own SNR (Stuart: the decoder read 17–20 dB on a signal the meter read as 42 dB — both
+ *  right, and the decoder's is the one that says whether it plays). Pushed once per report; reset on leaving DRM. */
+const drmQualityMeter = new DrmQualityMeter();
+let drmQuality: DrmQuality | null = null;
 /** ★★ V12 CTCSS / DCS TONE ID (the server's `tone`): the NFM channel's tone — the VTS line's QUIET SUFFIX, in the message
  *  slot after a bookmark's name ("GB3NB: CTCSS 82.5 Hz") or alone; the app's SDRScreen does the same. '' = none. */
 let toneLabel = '';
@@ -7254,6 +7279,8 @@ function drmSetPane(p: 'station' | 'signal') {
 function drmBoxSync() {
   const on = !!spec && spec.mode === 'drm';
   let box = document.getElementById('drmBox');
+  // ★★ the constellation travels only while the Signal pane is on screen (DAB's dabSetPane rule)
+  spec?.drmScopes(on && drmPane === 'signal');
   if (!on) { if (box) box.classList.remove('open'); return; }
   if (!box) {
     box = document.createElement('div');
@@ -7265,7 +7292,10 @@ function drmBoxSync() {
     box.setAttribute('data-navbox', '');
     box.innerHTML = '<div id="drmBoxHead"><span class="drmTitle">DRM</span><span class="drmSub">Digital Radio Mondiale</span>'
       + '<button class="btn" id="drmPane" type="button"></button></div>'
-      + '<div id="drmBody"></div><div id="drmSignal" hidden></div>';
+      + '<div id="drmBody"></div><div id="drmSignal" hidden>'
+      // ★★ V12 the constellation at the top of the pane, as DAB's scopes; hidden until a server sends one
+      + `<div id="drmSigScopes" class="dabScopes" hidden title="${DRM_IQ_TIP.replace(/"/g, '&quot;')}">${DRM_SCOPE_HTML}</div>`
+      + '<div id="drmSigRows"></div></div>';
     (document.getElementById('wfWrap') ?? document.body).appendChild(box);
     (box.querySelector('#drmPane') as HTMLElement).onclick = () => drmSetPane(drmPane === 'signal' ? 'station' : 'signal');
   }
@@ -7278,7 +7308,17 @@ function drmBoxSync() {
   const body = box.querySelector('#drmBody') as HTMLElement, sg = box.querySelector('#drmSignal') as HTMLElement;
   body.hidden = sig; sg.hidden = !sig;
   // ★ Only the pane on screen is drawn (DAB's rule): the hidden one is rebuilt when it is shown
-  if (sig) drmSignalRender(sg, drmState); else drmRender(body, drmState);
+  if (sig) { drmSignalRender(sg.querySelector('#drmSigRows') as HTMLElement, drmState); drmDrawScope(); }
+  else drmRender(body, drmState);
+}
+/** ★★ The constellation: drawn from the last drm_iq while it is fresh; hidden with none (an older server, a lost lock). */
+function drmDrawScope() {
+  const sc = document.getElementById('drmSigScopes');
+  const cv = document.getElementById('drmConst') as HTMLCanvasElement | null;
+  if (!sc || !cv) return;
+  const fresh = drmIq && Date.now() - drmIqAt < DRM_IQ_STALE_MS ? drmIq : null;
+  const drawn = drmDrawConstellation(cv, document.getElementById('drmConstLeg'), fresh);
+  if (sc.hidden !== !drawn) sc.hidden = !drawn;
 }
 /** The owner has allowed DAB to borrow the capture rate it needs (2.048 MS/s natively since
  *  2026-09-08; 2.4 + resample only if a radio refuses 2.048), and whether that
@@ -9949,6 +9989,9 @@ function buildControls() {
     dabOn:         () => dabOn,
     // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
     dabQuality:    () => (dabOn && dabState ? dabQuality : null),
+    // ★★ V12 DRM's meter: only in DRM, and null before the first report (the card then says it is searching)
+    drmOn:         () => !!spec && spec.mode === 'drm' && !dabOn,
+    drmQuality:    () => (spec && spec.mode === 'drm' && drmState ? drmQuality : null),
     /* ★ DAB from ADS-B: the server leaves ADS-B itself (it sends adsb_off first), so only our UI unwinds here. */
     toggleDab:     toggleDabMode,
     adsbCap:       () => adsbCap,
@@ -18457,8 +18500,8 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   rdsLogoProvisional = false;
   logoFromIdentity = false;
   }
-  // ★ V12 DRM: the box follows the mode; a new mode forgets the old station
-  if (m !== 'drm') drmState = null;
+  // ★ V12 DRM: the box follows the mode; a new mode forgets the old station (and its meter and its picture)
+  if (m !== 'drm') { drmState = null; drmIq = null; drmQualityMeter.reset(); drmQuality = null; }
   amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second
   bwAutoState = null;                 // ★★ V12 …and so are AUTO's edges
   drmBoxSync();

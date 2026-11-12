@@ -9886,6 +9886,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (j.compare(0, kHead.size(), kHead) != 0) return j;
         return kHead + (moves ? ",\"zoomMovesRadio\":true" : ",\"zoomMovesRadio\":false") + j.substr(kHead.size());
     }
+    /** ★★ V12 THE DRM CONSTELLATION on a range-locked radio: this listener's own receiver sends to this listener's own
+     *  spectrum socket, and only while that socket has the Signal pane open (drmScopeSocks). Called under c->mtx — the
+     *  lock that guards c->drm — after a new receiver is built and whenever the pane opens or closes. Lock order c->mtx →
+     *  clientMtx (as drmSendStatus) → drmScopeMtx (a leaf). The sink holds only a weak socket: it never keeps one alive. */
+    void drmClientSinkSync(ClientDsp* c) {
+        if (!c || !c->drm) return;
+        std::shared_ptr<net::Socket> sp;
+        { std::lock_guard<std::mutex> lk(clientMtx); sp = c->spec; }
+        bool want = false;
+        if (sp) { std::lock_guard<std::mutex> lk(drmScopeMtx); want = drmScopeSocks.count(sp.get()) != 0; }
+        if (!want) { c->drm->setCellsSink(nullptr); return; }
+        std::weak_ptr<net::Socket> w = sp;
+        c->drm->setCellsSink([this, w](const std::string& j) {
+            if (auto sk = w.lock()) if (sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+        });
+    }
     /** ★ V12 DRM: the status report on this listener's spectrum socket, when it has changed (≤ once a super frame). */
     void drmSendStatus(ClientDsp* c) {
         uint64_t ver = 0;
@@ -10180,7 +10196,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     ★ setIqMinRate() is a no-op when the floor is unchanged (vibedsp.h) — it used to rebuild the audio chain on
         //       every call, which was a second, smaller hole in the IQ on the same zoom.
         if (c->mode == "drm") {
-            if (!c->drm || c->drmAtHz != c->vfoHz) { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->drmAtHz = c->vfoHz; }
+            if (!c->drm || c->drmAtHz != c->vfoHz) { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->drmAtHz = c->vfoHz; drmClientSinkSync(c); }
             c->rx->setIqMinRate(24000.0);
         }
         else if (c->drm) { c->drm.reset(); c->drmAtHz = 0; c->rx->setIqMinRate(0.0); }
@@ -17244,6 +17260,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
     }
 
+    /* ★★ V12 THE DRM CONSTELLATION (2026-11-12) — the sockets whose DRM Signal pane is open, from {"type":"drm_scopes",
+     *  "on":1|0} (the DAB pane's `dab_scopes`, for DRM). A leaf mutex: nothing else is ever taken while it is held. Declared
+     *  BEFORE drmShared, so it outlives the shared receiver whose sink reads it. A receiver gets a sink only while one of
+     *  ITS listeners is in here (drmSharedSinkSync / drmClientSinkSync), and with no sink it copies no cells at all — the
+     *  constellation costs nothing while nobody looks (vibe_drm_listener.h setCellsSink). An older client never sends
+     *  drm_scopes, so it never gets a drm_iq it would not understand. */
+    std::mutex drmScopeMtx;
+    std::map<net::Socket*, std::weak_ptr<net::Socket>> drmScopeSocks;
+    /** The sockets of `drmScopeSocks` still open, copied out under the leaf mutex. */
+    std::vector<std::shared_ptr<net::Socket>> drmScopeTargets() {
+        std::vector<std::shared_ptr<net::Socket>> to;
+        std::lock_guard<std::mutex> lk(drmScopeMtx);
+        for (auto& kv : drmScopeSocks) if (auto sk = kv.second.lock()) to.push_back(std::move(sk));
+        return to;
+    }
+    /** ★ The shared dial's one receiver: everybody hears it, so it sends to every socket that has the pane open. */
+    void drmSharedSinkSync() {
+        std::shared_ptr<vibe::DrmListener> d;
+        { std::lock_guard<std::mutex> lk(drmSharedMtx); d = drmShared; }
+        if (!d) return;
+        bool any;
+        { std::lock_guard<std::mutex> lk(drmScopeMtx); any = !drmScopeSocks.empty(); }
+        if (!any) { d->setCellsSink(nullptr); return; }
+        d->setCellsSink([this](const std::string& j) {
+            for (auto& sk : drmScopeTargets()) if (sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+        });
+    }
     std::mutex drmSharedMtx;
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
@@ -17497,6 +17540,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (mode == "drm") { drmShared = std::make_shared<vibe::DrmListener>(); drmSharedVer = 0; rx.setIqMinRate(std::max(24000.0, iqDirectRate())); }
             else if (drmShared) { drmShared.reset(); rx.setIqMinRate(iqDirectRate()); }
         }
+        if (mode == "drm") drmSharedSinkSync();   // ★ the constellation, if a Signal pane is already open (outside drmSharedMtx)
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         // ★★ The chain is back at the mode's DEFAULT width, so the edges a listener chose are no longer
         //    what anybody hears — config must stop reporting them (vibe_room_passband.h).
@@ -20402,6 +20446,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★ The Signal pane opened or closed (a `dab=2` client): the constellation + impulse response only while it
          *  is open. And `dab_resync`: the client's list / radio text does not match the revisions the live report
          *  names — send both again on the next report. */
+        /* ★★ V12 THE DRM CONSTELLATION (2026-11-12): the DRM Signal pane opened or closed. The cells travel as their own
+         *  {"type":"drm_iq"} (vibe_drm_report.h drmCellsJson), once per 1.2 s super frame, only to a socket that asked —
+         *  and the receiver only copies them while one has. Asking grants nothing: it is a picture of the signal this socket
+         *  already hears. */
+        if (type == "drm_scopes") {
+            double on = 0; jsonNum(msg, "on", on);
+            {
+                std::lock_guard<std::mutex> lk(drmScopeMtx);
+                if (on != 0) drmScopeSocks[sock.get()] = sock; else drmScopeSocks.erase(sock.get());
+            }
+            drmSharedSinkSync();
+            if (auto me = dspFor(sock)) { std::lock_guard<std::mutex> lk(me->mtx); drmClientSinkSync(me.get()); }
+            return;
+        }
         if (type == "dab_scopes") {
             double on = 0; jsonNum(msg, "on", on);
             {
@@ -27140,6 +27198,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   would have been without the hold.
         if (tuneHold.holding()) applyHeldTune();
         { std::lock_guard<std::mutex> pl(dabPeerMtx); dabPeers.erase(sock.get()); }
+        {   // ★ V12 the DRM constellation: a closed socket is no longer looking (and its receiver stops copying cells)
+            bool was;
+            { std::lock_guard<std::mutex> dl(drmScopeMtx); was = drmScopeSocks.erase(sock.get()) != 0; }
+            if (was) drmSharedSinkSync();
+        }
         { std::lock_guard<std::mutex> tl(teleMtx); teleLast.erase(sock.get()); }
         { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get()); sockCc.erase(sock.get());
           /* ★★ AND THE SESSION'S LIVENESS STAMP, WHEN THIS WAS ITS LAST SOCKET (audit 2026-10-03).

@@ -389,6 +389,25 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
     // (the station's RDS name is the VTS bar's now — vts.h)
 }
 
+/** ★★★ V12 THE DRM RECEPTION METER (drm_quality.h, the app's drmQuality.ts): fed once per `drm` report while the mode is
+ *  DRM, reset the moment it is not — no verdict outlives the station. nullptr outside DRM (and in DAB, whose pill is its
+ *  own). Before the first report it is the meter's default: "No DRM signal" (DRM_SEARCHING). */
+struct DrmMeterUi { DrmQualityMeter meter; uint64_t seen = 0; bool on = false; };
+inline DrmMeterUi& drmMeterUi() { static DrmMeterUi u; return u; }
+inline const DrmQuality* drmMeterFor(const RadioState& s) {
+    DrmMeterUi& u = drmMeterUi();
+    auto it = s.seq.find("drm");
+    const uint64_t q = it == s.seq.end() ? 0 : it->second;
+    if (s.mode != "drm" || dabActive() || s.session != "running") {
+        if (u.on) { u.meter.reset(); u.on = false; }
+        u.seen = q;   // ★ a report from before this DRM session is not evidence about it
+        return nullptr;
+    }
+    u.on = true;
+    if (q != u.seen) { u.seen = q; u.meter.push(s.msg("drm"), nowSec() * 1000.0); }
+    return &u.meter.current();
+}
+
 /** The portrait control island: the pill (signal gradient · frequency · mode · reading), the four buttons, the status line. */
 inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     c.g.rrect(r.x, r.y, r.w, r.h, 14, rgb(0x0e0700));   // ★ solid: nothing is drawn behind it any more (see the waterfall's scissor)
@@ -397,8 +416,13 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     // ── the pill ──
     const Rect pill{lay::pillX, lay::pillY, lay::pillW, lay::pillH};
     if (!dabDrawPill(*this, c, s, pill)) {   // ★ in DAB the pill is the DAB reception meter (dab_box.h)
+    /* ★★★ V12 IN DRM THE READING IS THE DECODER'S (Stuart, 2026-11-12: this pill read 42 dB SNR on Music4Joy while the
+     *  decoder measured 17–20 and the audio dropped out). As DAB's pill: the gradient and the squelch line go — power in
+     *  the passband is not whether DRM decodes — and the reading chip carries the decoder's verdict in three bars and the
+     *  decoder's own SNR. Pressing it says, in words, why that number is not the meter's. */
+    const DrmQuality* drmQ = drmMeterFor(s);
     c.g.rrect(pill.x, pill.y, pill.w, pill.h, 9, th::pillBg);
-    {
+    if (!drmQ) {
         // ★ the meter IS the pill's background (#mSig): red → amber → green, its width the smoothed level
         const float w = (float)std::max(0.0, std::min(1.0, sigSmooth_)) * (pill.w - 2);
         if (w > 1) {
@@ -410,8 +434,8 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
         }
     }
     c.g.rframe(pill.x, pill.y, pill.w, pill.h, 9, 1, th::btnBorder);
-    // the squelch threshold on the meter's own scale (#mSqlLine: amber, below the readouts)
-    {
+    // the squelch threshold on the meter's own scale (#mSqlLine: amber, below the readouts) — not in DRM (see drmQ)
+    if (!drmQ) {
         const double sq = num_.count("audio.sqlDb") ? num_["audio.sqlDb"] : -999;
         if (sq > -998) {
             const float x = pill.x + 1 + (float)std::max(0.0, std::min(1.0, (sq + 121) / 108.0)) * (pill.w - 2);
@@ -447,6 +471,7 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     const double sqlDb = num_.count("audio.sqlDb") ? num_["audio.sqlDb"] : -999;
     const bool sqlOn = sqlDb > -998;
     if (live && sqlOn && lastSigDb_ < sqlDb) reading = "SQL";
+    if (live && drmQ) reading = drmQ->boxReading();   // ★ V12 DRM: the decoder's SNR ("SNR 18 dB"), never the passband's
     // widths reserved for the widest reading THIS RADIO CAN SHOW (the web's 8ch rule: nothing moves as the numbers change)
     // ★ from its own top frequency — "96100.000" kHz ran into the unit when 8 characters were reserved (Stuart, 2026-11-07)
     double topHz = 1.8e9;
@@ -461,7 +486,8 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     // ★ + room for the STEREO badge (#mStereo), reserved always so nothing moves when the pilot comes and goes
     const float stW = 30;
     const float modeW = std::max(84.f, (float)c.tc.width(c.f.btn, "ECSS-U") + 24) + stW;
-    const float rdW = std::max(118.f, (float)c.tc.width(c.f.small, "SNR 99 dB") + 22);
+    const float drmBarsW = drmQ ? 30.f : 0.f;   // ★ V12 DRM: the verdict's three bars, left of the reading
+    const float rdW = std::max(118.f, (float)c.tc.width(c.f.small, "SNR 99 dB") + 22) + drmBarsW;
     const float gap = 10;
     const float avail = pill.w - 12 - modeW - rdW - 2 * gap;
     // the readout's face: the big one, smaller only if this unit's widest reading would not fit beside the chips
@@ -515,9 +541,16 @@ inline void App::drawDeck(Ctx& c, const RadioState& s, Rect r) {
     const Nav::Hit hr = c.nav.item("snr", rb);
     c.g.rrect(rb.x, rb.y, rb.w, rb.h, 15, rgb(0, 0.62f));
     c.g.rframe(rb.x, rb.y, rb.w, rb.h, 15, 1, rgb(0xffffff, 0.38f));
-    textIn(c, c.f.small, reading, rb, th::white);
+    if (drmQ && live) {
+        dabBars(c, rb.x + 12, rb.b() - 7, rb.h - 12, drmQ->level);   // ★ DAB's bars (dab_box.h), the verdict's colours
+        textIn(c, c.f.small, reading, {rb.x + drmBarsW, rb.y, rb.w - drmBarsW, rb.h}, th::white);
+    } else textIn(c, c.f.small, reading, rb, th::white);
     if (hr.focused) focusRing(c, rb, 15);
-    if (hr.pressed) { set_.meterMode = (set_.meterMode + 1) % 3; dirty(); }   // ★ the web's meter cycle: SNR → S → dBFS
+    // ★ the web's meter cycle: SNR → S → dBFS — but in DRM the chip is the decoder's, so it says what it is instead
+    if (hr.pressed) {
+        if (drmQ && live) toastLong(drmQ->line() + ". " + drmq::EXPLAIN_SHORT);
+        else { set_.meterMode = (set_.meterMode + 1) % 3; dirty(); }
+    }
 
     }
 

@@ -24,7 +24,7 @@ import { parseAdsbMessage } from './adsbTypes';
 import { AdsbInfoStore } from './adsbInfo';
 import { ismSanitise } from './ism';
 import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
-import { drmSanitise } from './drm';   // ★ V12 DRM
+import { drmSanitise, drmIqSanitise } from './drm';   // ★ V12 DRM
 import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
@@ -121,6 +121,17 @@ export class VibeServerClient extends VibeServerWsClient {
     this.dabScopesOn = on;
     this.dabScopesSaidAt = Date.now();
     this.sendSpectrum({ type: 'dab_scopes', on: on ? 1 : 0 });
+  }
+  /** ★★ V12 THE DRM CONSTELLATION (2026-11-12): the DRM Signal pane is open — the server sends {"type":"drm_iq"} only then
+   *  (and copies no cells while nobody looks). Remembered, so a reconnect restates it (the self-healing check in 'drm'). */
+  private drmScopesOn = false;
+  private drmScopesSaidAt = 0;
+  private drmIqAt = 0;
+  drmScopes(on: boolean) {
+    if (on === this.drmScopesOn) return;
+    this.drmScopesOn = on;
+    this.drmScopesSaidAt = Date.now();
+    this.sendSpectrum({ type: 'drm_scopes', on: on ? 1 : 0 });
   }
 
   /** Switch service WITHIN the tuned multiplex — no retune, no re-acquire. */
@@ -410,7 +421,18 @@ export class VibeServerClient extends VibeServerWsClient {
       case 'ndb_stats': this.callbacks.onNdbStats?.(parseNdbStats(msg)); return true;
       /* ★★ V12 DRM — the listener's own DRM receiver's report (only while their mode is DRM; a ghost after leaving is
        *  dropped by the screen, which checks the mode as the web's onDrm does). */
-      case 'drm': { const d = drmSanitise(msg); if (d) this.callbacks.onDrm?.(d); return true; }
+      case 'drm': {
+        // ★ Self-healing, as DAB's scopes: a reconnected socket starts with the constellation off — restate while the pane
+        //   is open and none has come for 5 s (an older server never sends one; it ignores the restatement).
+        const now = Date.now();
+        if (this.drmScopesOn && msg.locked === true && now - this.drmIqAt > 5000 && now - this.drmScopesSaidAt > 5000) {
+          this.drmScopesSaidAt = now;
+          this.sendSpectrum({ type: 'drm_scopes', on: 1 });
+        }
+        const d = drmSanitise(msg); if (d) this.callbacks.onDrm?.(d); return true;
+      }
+      // ★★ V12 the DRM constellation — only ever after drmScopes(true); checked and bounded (drmIqSanitise)
+      case 'drm_iq': { const q = drmIqSanitise(msg); if (q) { this.drmIqAt = Date.now(); this.callbacks.onDrmIq?.(q); } return true; }
       /* ★ V12 CTCSS / DCS tone ID on NFM (decoders/tone_id.h): the label on change, '' = nothing locked. The server's own
        *  fixed text ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), still bounded and cleaned as any server text. */
       case 'tone': this.callbacks.onToneId?.(dabSafeText(msg.label, 40)); return true;

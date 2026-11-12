@@ -20,6 +20,12 @@ section: `DECODER-RESEARCH.md` §4.4.
   - when the server cannot play the codec, the server's own sentence saying why.
 - **The Signal pane** (2026-10-26) — the box's second view, behind **SIGNAL ▸** in its header (◂ STATION goes back),
   on the web page and in the app. See [The Signal pane](#the-signal-pane-2026-10-26) below.
+- **The constellation** (2026-11-12) — at the top of the Signal pane, as DAB's sits in its own: the equalised cells of the
+  last super frame, the programme (MSC), the service channel (SDC) and the FAC in three colours. Web and app; not the
+  R36S (Stuart). See [The constellation](#the-constellation-2026-11-12).
+- **The reception meter** (2026-11-12) — in DRM, as in DAB, the signal bar becomes three bars and a sentence ("DRM strong ·
+  Clear audio · decoded SNR 18 dB") and the reading box beside the mode shows the decoder's own SNR. Web, app and the
+  R36S's pill. See [The reception meter](#the-reception-meter-2026-11-12).
 - **A zoom does not touch the receiver** (2026-10-29). A zoom or pan updates only the listener's view
   (`clientRetuneView` on a range-locked radio; the shared zoom handler keeps the `DrmListener`); the receiver is rebuilt
   only when the mode or the dial changes. `scripts/test-server-drm.mjs` zooms ten times, restates the tune and resets,
@@ -296,6 +302,94 @@ delivered (the ~10 of 150 not delivered are acquisition):
 The harness had a second, unrelated race: a free port taken before the server bound it ("port already in use"). It now
 starts again on fresh ports.
 
+## The constellation (2026-11-12)
+
+Stuart: "for DRM is it possible to see the constellation like we do for DAB on the server (the r36s doesnt need this)".
+
+**What it shows.** Every point is one EQUALISED cell — the value the demapper decides on, after the channel estimate has
+undone the echoes and fading — so a smear here is exactly what the decoder is fighting. One picture, three channels in
+three colours (no selector: DAB's scope has none either):
+
+| Channel | Colour | Points per super frame | QAM |
+|---|---|---|---|
+| MSC (the programme) | DAB's constellation yellow `#ffe566`, drawn on top | 256 | 16 or 64 |
+| SDC (service channel) | blue `#5ad1ff` | 64 | 4 or 16 |
+| FAC (fast access channel) | pink `#ff7ad9` | 65 (one frame's, all of them) | 4 |
+
+Faint ticks mark the MSC's ideal points; a legend names the channels present ("MSC 16-QAM · SDC 4-QAM · FAC 4-QAM").
+The MSC and SDC points are picked EVENLY across the super frame (every frame, every carrier), so the picture is the whole
+channel, not one symbol.
+
+**Where:**
+- Receiver: `drm_receiver.h` `Constellation` / `wantConstellation`; `drm_receiver.cpp` `sampleCells` (FAC in `frameDone`,
+  SDC and MSC in `superFrameDone`). int8 x/y pairs, an ideal unit-power point at radius 60 (DAB's scale), clipped at ±127.
+- Listener: `vibe_drm_listener.h` `setCellsSink`; the wire: `vibe_drm_report.h` `drmCellsJson`.
+- Server: `local_sdr_shim.cpp` `drm_scopes`, `drmScopeSocks`, `drmSharedSinkSync` (the shared dial: every socket that
+  asked), `drmClientSinkSync` (range-locked: the listener's own socket).
+- Web: `web/client/src/drm.ts` `drmDrawConstellation`, `main.ts` `drmDrawScope`, `spectrum.ts` `drmScopes`.
+- App: `src/components/DrmPanel.tsx` `DrmConstellation` (one Skia `Points` node per channel — DabPanel's lesson),
+  `VibeServerClient.drmScopes`. One checker for both: `src/services/drm.ts` `drmIqSanitise`.
+
+**The wire.** A NEW message type, so no old client ever sees one:
+`{"type":"drm_iq","scale":60,"mscQam":16,"sdcQam":4,"msc":[x,y,…],"sdc":[…],"fac":[…]}` — ~2.8 KB per 1.2 s super
+frame (≈ 2.3 KB/s while somebody looks; DAB's scopes are ~1.8 KB per 0.5 s). A channel not decoded that super frame is
+absent, never empty or stale.
+
+**Asked for, as DAB's scopes are (`dab_scopes`).** The client sends `{"type":"drm_scopes","on":1}` when the Signal pane
+opens and `0` when it closes or the box goes; it restates `on` after a reconnect (no cells for 5 s with the pane open).
+- **It costs nothing while nobody looks.** With no socket asking, the receiver's sink is null, `wantConstellation` is
+  false and not one cell is copied (`test-drm-constellation` §1, §5: no cells and no measurable CPU).
+- **Thread priority.** The cells are copied on the `vibe-drm` thread (decoder priority) and the message is built and
+  queued there too, never on the audio callback or the pipeline; the server's sinks only copy their target sockets
+  under a leaf mutex (`drmScopeMtx`) and hand the frame to the outbox.
+- **An older server** never sends `drm_iq`: the pane simply has no constellation — no empty box (both clients hide it
+  without a fresh one, `DRM_IQ_STALE_MS` = 6 s, and with a lost lock).
+
+**Tests:** `vibeserver/test-drm-constellation.cpp` (56 checks: nothing while off; within budget in modes A, B, D; one per
+super frame; empty again when switched off; 16/64 clusters filled and tight at 22–30 dB, the FAC visibly wide at 6 dB; the
+wire; CPU off vs on — 0.396 % vs 0.393 % of a Mac core). `scripts/test-server-drm-constellation.mjs` (42 checks, one-pipeline
+/ shared dial / range-locked: nothing unasked, ~0.83 per second once asked, within budget, clusters 16/4/4, stops on `off`,
+never to another listener). `scripts/test-web-drm-constellation.mjs` (26 checks, headless Edge `--mute-audio`). Both
+end-to-end tests run on a SYNTHETIC signal, `vibeserver/drm-synth-clip.cpp` (the test transmitter, AWGN, ×12 windowed sinc
+to 288 kS/s, rtl_tcp u8 — `drm-clip.py`'s format), so they need no recording.
+
+## The reception meter (2026-11-12)
+
+Stuart, Music4Joy in xHE-AAC: "the decoder states 17-20db SNR on the server which was registering a S9+20 signal and on
+the R36S the main signal meter was reading 42db SNR but it was dropping out more than the server … This is the same issue
+we had with the DAB MER not matching the standard signal meter and why we made a DAB specific signal readout."
+
+**Both numbers are right.** The meter's SNR is the carrier over the noise floor beside it in the passband — strength. The
+decoder's SNR is the FAC cells' MER after equalisation: what is left once the receiver has undone the echoes and the
+fading, so multipath, Doppler and phase noise count against it. A strong, smeared signal reads 42 dB on the first and 17
+on the second, and the second decides whether the audio plays.
+
+**So DRM does what DAB does** (`src/utils/dabQuality.ts` → `src/utils/drmQuality.ts`, the same shape so the same meter
+draws it):
+- the signal bar's slot carries three bars and a sentence — `DRM strong · Clear audio · decoded SNR 18 dB`,
+  `DRM weak · No or heavily broken audio · 20 % audio lost`, `DRM moderate · … · MSC MER 6.5 dB (16-QAM needs 8)`;
+- the reading box (where SNR / S-units sit for every other mode) shows `SNR 18 dB` — the DECODER's, the FAC's MER;
+- its tooltip (web), accessibility hint (app) and a press of the chip (R36S) say in plain words why it is lower than the
+  signal meter (`DRM_SNR_EXPLAIN`).
+
+**How it judges** (the Signal pane's own lines, nothing new; ~6 s of reports, DAB's hysteresis — 2 reports down, 3 up):
+- audio frames first, when they are arriving: lost ≥ 8 % weak, ≥ 1 % moderate (DAB's AU lines);
+- before audio (MSC not reached, or a codec this server cannot play): the FAC's errors (≥ 10 % weak, ≥ 2 % moderate) and
+  the MSC MER against its QAM — about 8 dB decodes 16-QAM, 14 dB 64-QAM (weak 3 dB under) — or the SNR row's 15 / 9 dB;
+- the MSC MER against its QAM is a ceiling even with clean audio (DAB's raw-BER rule): clean frames below the need are luck;
+- **no lock:** level 0 at once (no hysteresis), "No DRM signal · Searching for a DRM signal", or "DRM found · Reading its
+  parameters" once the timing is found; no SNR in the box (the verdict's word instead). Reset on leaving DRM.
+- a codec this server cannot play: the bars are the signal's, the advice says `This server cannot play its audio`.
+
+**Where:** web `mobile.ts` `paintDab` (the same `#mDabQ` bar) fed by `main.ts` `drmQualityMeter`; app `ControlsBar`
+(`drmOn` / `drmMeter` into DAB's meter context, `DabMeter` draws it) fed by `SDRScreen`; R36S `handheld-ui/src/drm_quality.h`
+(a line-for-line port) in `app_impl.h` `drawDeck` — no gradient or squelch line in DRM, the chip shows the bars and the
+decoder's SNR, a press shows the sentence and why.
+
+**Tests:** `scripts/test_drm_quality.ts` (39 cases, Stuart's report among them, an older server's report, no lock);
+`handheld-ui/test/run_drm_quality_test.sh` (the TS meter's outputs replayed through the R36S port: 41 pushes, 0
+differences); `scripts/test-web-drm-constellation.mjs` (the bar, the box equal to the decoder's SNR, the tooltip, gone in AM).
+
 ## Codecs — the honest position
 
 > **Update, 2026-10-26:** Stuart chose to build **FAAD2's DRM build into the server** (VIBE_DRM_FAAD2), so DRM's AAC now plays — RRI end to end. It is never in the App Store app. See [DRM-AUDIO-ROUTES.md](DRM-AUDIO-ROUTES.md). The table below is the position before that.
@@ -303,7 +397,7 @@ starts again on fresh ports.
 
 | Station codec | Who can decode it | Status |
 |---|---|---|
-| **xHE-AAC (USAC)** | Linux and Mac servers: **libxaac 0.1.14, in process** (since 2026-10-29 — [LIBXAAC.md](LIBXAAC.md)). Android 10+ MediaCodec where listed | **Built, NOT verified on air.** No xHE-AAC station was receivable. Verified: ISO's USAC conformance streams to ±1.2 LSB (SNR 66–89 dB), and USAC SBR / switched FD-LPD / ACELP / MPS 2-1-2 streams against macOS AudioToolbox (median block SNR 70–97 dB; ACELP-only 51 dB, float rounding) — `test-drm-xaac`. The FFmpeg 8.1 bundled before produced garbage on every USAC stream with SBR. |
+| **xHE-AAC (USAC)** | Linux and Mac servers: **libxaac 0.1.14, in process** (since 2026-10-29 — [LIBXAAC.md](LIBXAAC.md)). Android 10+ MediaCodec where listed | **Verified on air, 2026-11-12:** Stuart decoded **Music4Joy** in xHE-AAC, stereo, 19 kbit/s, 32 kHz, on a VibeServer and on the R36S. Verified before that, off air: ISO's USAC conformance streams to ±1.2 LSB (SNR 66–89 dB), and USAC SBR / switched FD-LPD / ACELP / MPS 2-1-2 streams against macOS AudioToolbox (median block SNR 70–97 dB; ACELP-only 51 dB, float rounding) — `test-drm-xaac`. The FFmpeg 8.1 bundled before produced garbage on every USAC stream with SBR. |
 | **DRM AAC / HE-AAC** (ER AAC Scalable, object type 20, with HCR + VCB11 and 960-sample frames; SBR stored backwards) | **None of the platform decoders.** FFmpeg 9.0.1 says "AAC data resilience (flags 5) is not implemented". AudioToolbox refuses the format. | Frames are found and counted. The box says why there is no sound. |
 
 **Radio Romania International (all its DRM tested) uses DRM AAC, 12 kHz, mono, ~11.6 kbit/s.** Most of the older
@@ -404,8 +498,10 @@ interleaver):
 ## What remains
 
 1. **The AAC repack.** Without it, the older stations — RRI among them — have no sound.
-2. **xHE-AAC verified on a real station**, on libxaac (Linux and Mac servers) and MediaCodec (Android), including whether the SDC's rate is
-   `usacSamplingFrequency` (assumed). The xHE frames-per-super-frame count will settle it.
+2. ~~**xHE-AAC verified on a real station**~~ — **done 2026-11-12**: Music4Joy (stereo, 19 kbit/s, 32 kHz) decoded on a
+   VibeServer and on the R36S (both Linux/Mac-style servers, so libxaac's route). The audio played, which is the on-air
+   check of that route; the SDC's 32 kHz agreeing with it is consistent with the rate being `usacSamplingFrequency`, but
+   that was not measured on its own. MediaCodec (Android) is still unheard on a real station.
 3. **Multipath under fast fading** — channels 4/5 mostly fixed 2026-10-29 (the blanker); 64-QAM on channel 5 still
    loses ~20 % of frames in bursts. Diffuse night-time scatter (5970 kHz) is beyond any guard-interval receiver.
 4. **Pulse interference** — subtraction instead of blanking (9720 kHz).

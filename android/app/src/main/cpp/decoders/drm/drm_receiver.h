@@ -82,6 +82,22 @@ struct RxStatus {
 /** One logical frame of an MSC stream (400 ms). */
 struct LogicalFrame { int stream = 0; std::vector<uint8_t> bytes; int lenA = 0; };
 
+/** ★★ V12 THE CONSTELLATION (2026-11-12, Stuart: "for DRM is it possible to see the constellation like we do for DAB").
+ *  A snapshot of the EQUALISED cells of the last super frame, the very values the demappers decide on — so a smear here is
+ *  exactly what the decoder is fighting. Three channels, drawn in three colours: the programme (MSC), the service channel
+ *  (SDC) and the fast access channel (FAC, always 4-QAM). Each is a FIXED budget of points picked evenly across the
+ *  super frame (all three frames, every carrier), so the picture is bounded whatever the mode or occupancy.
+ *  ★ int8 x/y pairs, an ideal unit-power point at radius kConstScale (DAB's snapshot uses the same 60), clipped at ±127.
+ *  ★★ COSTS NOTHING UNLESS ASKED: the receiver copies cells only while `wantConstellation` is set — the DRM listener sets
+ *     it only while some listener has the Signal pane open (vibe_drm_listener.h setCellsSink). */
+struct Constellation {
+    static constexpr int kMsc = 256, kSdc = 64, kFac = 65;   // points per channel: ~2.8 KB of JSON per 1.2 s super frame
+    static constexpr float kScale = 60.0f;
+    std::vector<int8_t> msc, sdc, fac;                      // x0, y0, x1, y1, …
+    int mscQam = 0, sdcQam = 0;                             // 4 / 16 / 64, 0 = that channel not decoded this super frame
+    uint64_t seq = 0;                                        // moves on every new snapshot
+};
+
 class Receiver {
 public:
     Receiver();
@@ -98,6 +114,11 @@ public:
     std::function<void()> onSuperFrame;
 
     const RxStatus& status() const { return st_; }
+    /** ★ Set by the owner, on the receiver's own thread, while somebody is looking at the constellation (see Constellation).
+     *  False: not one cell is copied. */
+    bool wantConstellation = false;
+    /** The last snapshot (valid after onSuperFrame); empty channels while not wanted or not decoded. */
+    const Constellation& constellation() const { return constel_; }
     /** Samples processed since reset, and the DSP time those cost (for the CPU row). */
     int64_t samplesIn() const { return samplesIn24_; }
     /** Fraction of samples the pulse blanker has zeroed. */
@@ -200,6 +221,9 @@ private:
     cf dop1_{0, 0}, dop2_{0, 0}; int dopN_ = 0;
     void dopplerAccumulate(const Sym& now);
     void channelStats();                        // once per super frame: the two numbers from their accumulators
+    // ── ★★ V12 the constellation (only while wantConstellation) ──
+    Constellation constel_;
+    std::vector<int8_t> constelFac_;            // the last frame's 65 FAC cells, taken in frameDone
 };
 
 }  // namespace vibedrm
