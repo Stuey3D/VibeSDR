@@ -306,6 +306,16 @@ static Runs smd3Tx(uint32_t id24, int flags3, int pRaw) {
     return chipsToRuns(c + "0", 120);
 }
 
+// Steelmate: FSK 50 µs, Manchester (0,1) = 1, every byte LSB first: 16+ zeros, 0x01, ID (2), bar × 32, °C + 50, battery, sum.
+static Runs steelmateTx(uint16_t id, int pRaw, int tC, int batt = 0x85) {
+    std::vector<uint8_t> by = { uint8_t(id >> 8), uint8_t(id), uint8_t(pRaw), uint8_t(tC + 50), uint8_t(batt) };
+    unsigned sm = 1; for (uint8_t v : by) sm += v; by.push_back(uint8_t(sm));
+    Bits d(24, 0); d.push_back(1); for (int i = 0; i < 7; ++i) d.push_back(0);
+    for (uint8_t v : by) for (int k = 0; k < 8; ++k) d.push_back(uint8_t((v >> k) & 1));
+    std::string c; mcChips(c, d, false);
+    return chipsToRuns(c + "10", 50);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -470,6 +480,7 @@ int main(int argc, char** argv) {
             {"Elantra 2012", elantraTx(0x5A5A1234, 230, 26), true, 52, "Elantra", 230, 26, false},
             {"Schrader EG53MA4", eg53Tx(0x2EAAF9, 88, 77), false, 123, "EG53MA4", 220, 25, true},
             {"Schrader SMD3MA4", smd3Tx(0x3F0650, 7, 164), false, 120, "SMD3MA4", NAN, NAN, true},
+            {"Steelmate", steelmateTx(0x1A4E, 83, 25), true, 50, "Steelmate", 83 * 3.125, 25, true},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},

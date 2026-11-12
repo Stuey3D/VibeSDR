@@ -36,11 +36,15 @@ int main(int argc, char** argv) {
         if (a == "--dc" && i + 1 < argc) dc = std::atof(argv[++i]);
         else files.push_back(a);
     }
-    const std::regex nameRx(R"(_([0-9.]+)M_([0-9]+)k)");
+    /* ★ the rate and the centre are read SEPARATELY (2026-11-11): 143 corpus recordings carry only a rate
+     *  ("g003_1000k.cu8", "…_2000k.cu8", "….250k.cu8") or a fractional one ("_2359.3k"), and were replayed at 250 k */
+    const std::regex centreRx(R"(_([0-9.]+)M[_.])"), rateRx(R"([_.]([0-9.]+)k[_.])");
     for (const auto& path : files) {
         double rate = 250e3, centre = 433.92e6;
         std::smatch m;
-        if (std::regex_search(path, m, nameRx)) { centre = std::stod(m[1]) * 1e6; rate = std::stod(m[2]) * 1e3; }
+        const std::string base = path.substr(path.find_last_of('/') + 1);
+        if (std::regex_search(base, m, centreRx)) centre = std::stod(m[1]) * 1e6;
+        if (std::regex_search(base, m, rateRx)) rate = std::stod(m[1]) * 1e3;
         FILE* f = std::fopen(path.c_str(), "rb");
         if (!f) { std::printf("{\"file\":%s,\"error\":\"open\"}\n", jstr(path).c_str()); continue; }
         std::vector<uint8_t> raw;

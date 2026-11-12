@@ -360,6 +360,42 @@ inline bool schraderSMD3MA4(Chips& ch, std::vector<Reading>& out) {
     return false;
 }
 
+/** Bytes read LSB-first from `b` at `pos` (some aftermarket chips send each byte least significant bit first). */
+inline std::vector<uint8_t> packLsb(const Bits& b, size_t pos, int n) {
+    std::vector<uint8_t> o(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) o[size_t(i)] = uint8_t(bitsAtLsb(b, pos + size_t(8 * i), 8));
+    return o;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  STEELMATE TP-S15 (and R-Lake) — aftermarket. Facts: rtl_433 steelmate.c notes (issue #3200). FSK, 50 µs Manchester
+//  half-bits. Read with (0,1) = 1 and every byte LSB first (checked on the corpus): 16 zeros, a 0x01 byte, ID (16),
+//  pressure (raw × 3.125 kPa — bar × 32), temperature (°C + 50), battery (3.9 V − raw × 10 mV; 0xFF / 0xFE = fast /
+//  slow leak alarm), and the sum of the six bytes from the 0x01 on. On the air: "10" × 16, "01", "10" × 7 — the lone
+//  one is the only place the run-in's phase is certain, so it is the sync. WEAK: an 8-bit sum — confirm.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool steelmate(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "1010 1010 1010 1010 01 10 1010 1010 1010";   // zeros, then the 0x01 byte: a 1 + 7 zeros
+    for (const Bits& c : ch.rows(true, 50))
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            Bits d;
+            if (!mcRead(c, p + patLen(kSync), 48, false, d)) continue;
+            const auto by = packLsb(d, 0, 6);
+            if (((0x01 + by[0] + by[1] + by[2] + by[3] + by[4]) & 0xFF) != by[5]) continue;
+            const uint32_t id = uint32_t(by[0]) << 8 | by[1];
+            if (id == 0 || id == 0xFFFF) continue;
+            Reading r = tyre("Steelmate", "Steelmate", 16, id, true);
+            r.kpa = by[2] * 3.125;
+            r.tempC = int(by[3]) - 50;
+            if (by[4] == 0xFF) r.extra = "fast leak";
+            else if (by[4] == 0xFE) r.extra = "slow leak";
+            if (!plausible(r.kpa, r.tempC)) continue;
+            out.push_back(r);
+            return true;
+        }
+    return false;
+}
+
 /** Every frame in a burst's chip rows (FSK or OOK at `nominal` µs) that follows `sync` and reads `nBits` clean
  *  Manchester bits ((1,0) = 1 when hiLoIsOne): `f(bytes)` decides; true stops the search. */
 template <class F> bool eachMc(Chips& ch, bool fsk, double nominal, const char* sync, int nBits, bool hiLoIsOne, F&& f) {
@@ -553,6 +589,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     // the weak checks last: a strong family's frame must never be taken by a weak one's 8-bit sum
     if (schraderEG53MA4(ch, out)) return true;
     if (schraderSMD3MA4(ch, out)) return true;
+    if (steelmate(ch, out)) return true;
     // ★ the 0435R before the Abarth: both are nine bytes with an XOR of zero after a long run-in, and nothing else in the
     //   Abarth frame is fixed — the 0435R's flag nibble and tick rule make it the stricter test (test-ism caught it)
     if (renault0435R(ch, out)) return true;
