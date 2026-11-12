@@ -12,6 +12,7 @@
 #include "vibe_ism_weather7.h"   // ★ weather pass 2026-11-11: WS 7000 / WS 2500, F007TH, TX-8300
 #include "vibe_ism_weather9.h"   // ★ weather pass 2026-11-11: EFTH-800, ThermoPro, Rubicson, Bresser 3CH, WT450
 #include "vibe_ism_weather10.h"  // ★ weather pass 2026-11-11: Bresser 5/6/7-in-1 FSK family, Maverick ET-73x, Companion WTR001
+#include "vibe_ism_weather11.h"  // ★ weather pass 2026-11-11: TFA Drop, Inkbird ITH-20R
 
 namespace vibeism {
 
@@ -458,6 +459,7 @@ inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (wx5::decode(b, out)) return;
     if (wx9::decode(b, out)) return;
     if (wx10::decode(b, out)) return;
+    if (wx11::decode(b, out)) return;
     if (nexus::decode(b, out)) return;
     if (acurite::decodePwm(b, out)) return;
     if (acurite::decode782(b, out)) return;
