@@ -4,6 +4,7 @@
 // test INPUT only, never shipped or committed; our decoders are our own code).
 //
 //   ism_replay [--dc HZ] FILE.cu8 …        8-bit unsigned I/Q; the rate and centre from the name: …_433.92M_250k.cu8
+//                                          (.cs8 = 8-bit signed, .cs16 = 16-bit signed little-endian I/Q, by extension)
 //
 // ★ --dc: the detector's DC guard. Live, the service tunes OFF the band so a sensor never sits on the dongle's DC spike
 //   and guards ±15 kHz; these recordings were made tuned ON the sensor (it sits within a few kHz of DC), so the replay
@@ -50,8 +51,21 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> raw;
         { uint8_t b[1 << 16]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) raw.insert(raw.end(), b, b + n); }
         std::fclose(f);
-        std::vector<cf> x(raw.size() / 2);
-        for (size_t i = 0; i < x.size(); ++i) x[i] = cf((raw[2 * i] - 127.5f) / 128.f, (raw[2 * i + 1] - 127.5f) / 128.f);
+        std::vector<cf> x;
+        const bool cs16 = path.size() > 5 && path.compare(path.size() - 5, 5, ".cs16") == 0;
+        const bool cs8 = !cs16 && path.size() > 4 && path.compare(path.size() - 4, 4, ".cs8") == 0;
+        if (cs16) {
+            x.resize(raw.size() / 4);
+            for (size_t i = 0; i < x.size(); ++i) {
+                const int16_t re = int16_t(raw[4 * i] | raw[4 * i + 1] << 8), im = int16_t(raw[4 * i + 2] | raw[4 * i + 3] << 8);
+                x[i] = cf(re / 32768.f, im / 32768.f);
+            }
+        } else {
+            x.resize(raw.size() / 2);
+            for (size_t i = 0; i < x.size(); ++i)
+                x[i] = cs8 ? cf(int8_t(raw[2 * i]) / 128.f, int8_t(raw[2 * i + 1]) / 128.f)
+                           : cf((raw[2 * i] - 127.5f) / 128.f, (raw[2 * i + 1] - 127.5f) / 128.f);
+        }
         // ★ the rtl_433 recordings are short; pad with a quarter second of silence so the last burst closes
         x.resize(x.size() + (size_t)(rate * 0.25), cf(0, 0));
         FrontEnd fe(rate);

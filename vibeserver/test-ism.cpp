@@ -395,6 +395,15 @@ static Runs sprinterTx(uint32_t id, int pRaw, int tC) {
     return chipsToRuns(c + "0", 25);
 }
 
+// BMW Gen4/Gen5 (Huf/Beru): FSK 25 µs, sync 1010 1010 0101 1001, Manchester (1,0) = 1: brand, ID (4), ×2.45 kPa,
+// °C + 52, 3 status, CRC-8 0x2F init 0xAA over all eleven = 0.
+static Runs bmwTx(uint32_t id, int pRaw, int tC) {
+    std::vector<uint8_t> by = { 0x03, uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id), uint8_t(pRaw), uint8_t(tC + 52), 0x01, 0x6B, 0x68 };
+    by.push_back(crc8(by.data(), 10, 0x2F, 0xAA));
+    std::string c = "1010 1010 1010 1010 1010 1010 0101 1001"; mcChips(c, bytesToBits(by), true);
+    return chipsToRuns(c + "0", 25);
+}
+
 static const Reading* findModel(const std::vector<Reading>& v, const std::string& modelPart) {
     for (const auto& r : v) if (r.model.find(modelPart) != std::string::npos) return &r;
     return nullptr;
@@ -571,6 +580,7 @@ int main(int argc, char** argv) {
             {"EezTire E618", eezTx(0x54E328, 136, 23), false, 50, "EezTire", 340, 23, true},
             {"Sefis M3", sefisTx(4, 0x0C00, 0x48), true, 52, "Sefis", ((1 << 13 | 0x0C00) - 0x0E00) / 102.4, 14 + ((0x48 + 0x00) & 0x0F), false},
             {"Mercedes Sprinter", sprinterTx(0x247E80B6, 179, 22), true, 25, "Sprinter", 179 / 2.75 * 6.894757, 22, false},
+            {"BMW Gen5 (Huf)", bmwTx(0x23E136A1, 92, 10), true, 25, "BMW Gen4/Gen5", 92 * 2.45, 10, false},
             {"Abarth 124", abarthTx(0x0BADCAFE, 160, 23), true, 52, "Abarth 124", 160 * 1.38, 23, true},
             {"Citroen / Jeep", citroenTx(0x7E57AB1E, 170, 24), true, 52, "PSA / Jeep", NAN, 24, true},
             {"Renault 0435R", renault0435RTx(0xA1B2C3, 170, 18), true, 52, "0435R", 170 / 0.75, 18, true},

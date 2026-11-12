@@ -4,7 +4,7 @@
 // expected output (the .json beside each recording). The corpus is test INPUT only — kept outside the repository
 // (~/VibeSDR-test-audio/rtl_433_tests), never committed or shipped; every decoder is our own code.
 //
-//   node scripts/ism-corpus.mjs [--corpus DIR] [--bin PATH] [--jobs N] [--only SUBSTR] [--out results.json]
+//   node scripts/ism-corpus.mjs [--corpus DIR] [--bin PATH] [--jobs N] [--only SUBSTR] [--out results.json] [--all-formats]
 //
 // Per recording:
 //   match   we decoded it AND a reading agrees on a value both report (temperature ±0.25 °C, humidity ±1 %, tyre
@@ -26,6 +26,9 @@ const BIN = arg('--bin', path.join(homedir(), 'R36S-debug/ism/ism_replay'));
 const JOBS = Number(arg('--jobs', Math.min(8, cpus().length)));
 const ONLY = arg('--only', '');
 const OUT = arg('--out', '');
+// ★ --all-formats: the .cs8 / .cs16 recordings too (BMW, Schrader MRXBC5A4 …). OFF by default so the headline score
+//   stays comparable with every earlier run (it has always been the .cu8 recordings only).
+const ALL_FORMATS = process.argv.includes('--all-formats');
 if (!existsSync(CORPUS) || !existsSync(BIN)) { console.error(`need the corpus (${CORPUS}) and ism_replay (${BIN})`); process.exit(3); }
 
 const files = [];
@@ -33,7 +36,7 @@ const files = [];
   for (const e of readdirSync(d)) {
     const p = path.join(d, e);
     if (statSync(p).isDirectory()) walk(p);
-    else if (e.endsWith('.cu8') && (!ONLY || p.includes(ONLY))) files.push(p);
+    else if ((e.endsWith('.cu8') || (ALL_FORMATS && /\.cs(8|16)$/.test(e))) && (!ONLY || p.includes(ONLY))) files.push(p);
   }
 })(CORPUS);
 
@@ -50,7 +53,7 @@ function run(list) {
   });
 }
 function expected(f) {
-  const j = f.replace(/\.cu8$/, '.json');
+  const j = f.replace(/\.(cu8|cs8|cs16)$/, '.json');
   if (!existsSync(j)) return null;   // no answer key: not scored
   return readFileSync(j, 'utf8').split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((x) => x && x.model);
 }
@@ -67,6 +70,7 @@ const RTL_NAMES = {
   'Toyota PMV-C210': ['Toyota'], 'Toyota PMV-107J': ['PMV-107J'], 'Renault': ['Renault'], 'Renault 0435R': ['Renault-0435R'],
   'Hyundai / Kia (VDO)': ['Hyundai-VDO'], 'EGQ Q85': ['Shenzhen-EGQQ85'], 'Abarth 124 / MX-5 (VDO TG1C)': ['Abarth-124Spider'],
   'PSA / Jeep (VDO)': ['Citroen', 'Jeep'], 'Ford (VDO)': ['Ford'], 'Truck solar TPMS': ['Truck'], 'Steelmate': ['Steelmate'], 'Jansite TY02S': ['Jansite'], 'Jansite Solar': ['Jansite-Solar'], 'Nissan (Schrader FSK)': ['Nissan'], 'GM aftermarket': ['GM-Aftermarket'], 'Honda (TRW)': ['Honda-TRW'], 'Gear Hive': ['Gear-Hive'], 'SmarTire': ['SmarTire-AM'], 'EezTire E618 / Carchet': ['EezTire-E618'], 'Sefis M3': ['Sefis-M3'], 'Mercedes-Benz Sprinter': ['MercedesBenz-Sprinter'],
+  'BMW Gen4/Gen5': ['BMW-GEN4', 'BMW-GEN5'], 'Audi pressure alert': ['Audi-PressureAlert'],
   'Elantra 2012 / Civic (TRW)': ['Elantra2012'],
 };
 function sameSensorOtherFormat(o, exp) {

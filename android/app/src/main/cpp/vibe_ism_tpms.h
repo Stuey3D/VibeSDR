@@ -651,6 +651,35 @@ inline bool mercedesSprinter(Chips& ch, std::vector<Reading>& out) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  BMW GEN4 / GEN5 (Huf / Beru, Schrader-Sensata, Continental) and AUDI pressure alert — facts: rtl_433 tpms_bmw.c
+//  notes (issue #2821). FSK, 25 µs Manchester half-bits, sync chips "1010 1010 0101 1001", then (1,0) = 1: 11 bytes —
+//  brand (0x03 Huf/Beru, 0x23 Schrader/Sensata, 0x80 Continental, 0x88 Audi), ID (32), pressure (raw × 2.45 kPa),
+//  temperature (°C + 52), three status bytes, CRC-8 poly 0x2F init 0xAA over all eleven = 0. The Audi alert frame is
+//  the first seven and its own CRC (8 bytes). STRONG.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+inline bool bmwHuf(Chips& ch, std::vector<Reading>& out) {
+    static const char* kSync = "1010 1010 0101 1001";
+    for (const Bits& c : ch.rows(true, 25))
+        for (size_t p = findChips(c, kSync); p != size_t(-1); p = findChips(c, kSync, p + 1)) {
+            for (int len : {11, 8}) {
+                Bits d;
+                if (!mcRead(c, p + patLen(kSync), 8 * len, true, d)) continue;
+                const auto by = pack(d);
+                if (crc8(by.data(), size_t(len), 0x2F, 0xAA) != 0 || allSame(by.data(), size_t(len))) continue;
+                const uint32_t id = uint32_t(by[1]) << 24 | uint32_t(by[2]) << 16 | uint32_t(by[3]) << 8 | by[4];
+                if (id == 0 || id == 0xFFFFFFFF) continue;
+                Reading r = tyre("BMW / Audi", len == 11 ? "BMW Gen4/Gen5" : "Audi pressure alert", 27, id, false);
+                r.kpa = by[5] * 2.45;
+                r.tempC = int(by[6]) - 52;
+                if (!plausible(r.kpa, r.tempC)) continue;
+                out.push_back(r);
+                return true;
+            }
+        }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  JANSITE TY02S (solar, internal / external) — aftermarket. Facts: rtl_433 tpms_jansite.c notes: the VDO-style run-in
 //  (…aaa9), then 7 bytes — ID (28), status (4), pressure (raw × 1.7 kPa), temperature (°C + 50), and a last byte whose
 //  rule nobody has found (rtl_433 leaves this decoder OFF for that reason; we could not find it either — no CRC-8 of any
@@ -881,6 +910,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
     if (hondaTrw(ch, out)) return true;
     if (sefisM3(ch, out)) return true;
     if (mercedesSprinter(ch, out)) return true;
+    if (bmwHuf(ch, out)) return true;
     // the weak checks last: a strong family's frame must never be taken by a weak one's 8-bit sum
     if (schraderEG53MA4(ch, out)) return true;
     if (schraderSMD3MA4(ch, out)) return true;
