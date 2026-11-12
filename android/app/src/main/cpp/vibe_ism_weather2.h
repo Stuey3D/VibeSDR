@@ -67,7 +67,7 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 namespace fofsk {
 
 inline bool parseAt(const Bits& row, size_t p, size_t preBits, std::vector<Reading>& out) {
-    const auto b = bytesAt(row, p, 25);
+    const auto b = bytesAt(row, p, 25);   // (25: the longest frame, the WS69's)
     const size_t avail = row.size() > p ? (row.size() - p) / 8 : 0;
     const uint8_t fam = b[0];
     if (fam == 0x24 && avail >= 17) {
@@ -121,6 +121,54 @@ inline bool parseAt(const Bits& row, size_t p, size_t preBits, std::vector<Readi
         const int mv = (b[4] & 0x1F) * 100;
         r.battOk = mv >= 1300 ? 1 : 0;
         char e[40]; std::snprintf(e, sizeof e, "soil moisture %d %%", b[6]); r.extra = e;
+        out.push_back(r);
+        return true;
+    }
+    /* ★ Ecowitt / Ambient Weather on the same sync (field facts: rtl_433 ambientweather_wh31e.c): every one checks a
+     *  CRC-8 0x31 AND a byte sum, at its own length.
+     *   0x30 / 0x37 WH31E / WH31B T/H: ID · 1 + channel 3 + 0 + battery low + temperature 10 bits ((raw − 400) / 10) ·
+     *   humidity · CRC over 0–4 · sum over 0–5.   0x40 WH40 rain: ID 20 bits · battery (× 0.1 V) · tips 16 (0.1 mm) · CRC
+     *   over 0–6 · sum over 0–7.   0x20 WN20 rain: 0 · ID 16 · battery (× 0.02 V) · tips 16 (0.1 mm) · ? · CRC over 0–7 ·
+     *   sum over 0–8.   0x68 WS68 wind / light / UV: ? · ID 16 · lux / 10 · battery · MSBs + flags · 2 · speed, direction,
+     *   gust (0.1 m/s, °) · UV × 10 · CRC over 0–13 · sum over 0–14.   0x52 the clock frame (BCD date and time). */
+    auto crcSum = [&](int n) { return avail >= size_t(n + 2) && crc8(b.data(), size_t(n), 0x31, 0) == b[size_t(n)] &&
+                                      (wx::addBytes(b.data(), size_t(n + 1)) & 0xFF) == b[size_t(n + 1)]; };
+    if ((fam == 0x30 || fam == 0x37) && crcSum(5)) {
+        Reading r = wx::wxReading("Ecowitt / Ambient", fam == 0x30 ? "WH31E" : "WH31B", wx::hex(b[1], 2));
+        r.channel = ((b[2] >> 4) & 7) + 1;
+        r.battOk = (b[2] & 0x04) ? 0 : 1;
+        r.tempC = (((b[2] & 3) << 8 | b[3]) - 400) / 10.0;
+        if (!wx::tempOk(r.tempC, -40, 60) || b[4] > 100) return false;
+        r.hum = b[4];
+        out.push_back(r);
+        return true;
+    }
+    if (fam == 0x40 && crcSum(7)) {
+        Reading r = wx::wxReading("Ecowitt", "WH40 rain", wx::hex(unsigned(b[1] & 0xF) << 16 | b[2] << 8 | b[3], 5));
+        r.rainMm = (b[5] << 8 | b[6]) * 0.1;
+        out.push_back(r);
+        return true;
+    }
+    if (fam == 0x20 && crcSum(8)) {
+        Reading r = wx::wxReading("Ecowitt", "WN20 rain", wx::hex(unsigned(b[2] << 8 | b[3]), 4));
+        r.rainMm = (b[5] << 8 | b[6]) * 0.1;
+        out.push_back(r);
+        return true;
+    }
+    if (fam == 0x68 && crcSum(14)) {
+        Reading r = wx::wxReading("Ecowitt", "WS68 wind / light", wx::hex(unsigned(b[2] << 8 | b[3]), 4));
+        r.windKmh = (((b[7] & 0x10) << 4) | b[10]) * 0.1 * 3.6;
+        r.windDir = ((b[7] & 0x20) << 3) | b[11];
+        r.gustKmh = (((b[7] & 0x40) << 2) | b[12]) * 0.1 * 3.6;
+        r.uv = int(b[13] * 0.1);
+        char e[32]; std::snprintf(e, sizeof e, "%d lux", (b[4] << 8 | b[5]) * 10); r.extra = e;
+        out.push_back(r);
+        return true;
+    }
+    if (fam == 0x52 && crcSum(9)) {
+        Reading r = wx::wxReading("Ecowitt / Ambient", "WH31E clock", wx::hex(b[1], 2));
+        char e[48]; std::snprintf(e, sizeof e, "WWVB time 20%02X-%02X-%02X %02X:%02X:%02X", b[3], b[4] & 0x1F, b[5] & 0x3F, b[6] & 0x3F, b[7] & 0x7F, b[8] & 0x7F);
+        r.extra = e;
         out.push_back(r);
         return true;
     }
