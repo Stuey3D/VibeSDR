@@ -53,8 +53,10 @@ For someone who has not got the original card, has a damaged one, or knows what 
 
 ## 2. Rules it never breaks
 
-- **Never write to the wrong disk.** Only removable disks; never the computer's own; the size and what is on it shown
-  before any write; a card that is neither a stock R36S card nor a VibeSDR card needs Advanced and an extra confirm.
+- **Never write to the wrong disk.** Cards are written only on removable disks, never the computer's own; the size and
+  what is on it shown before any write; a card that is neither a stock R36S card nor a VibeSDR card needs Advanced and
+  an extra confirm. The **only** thing ever written to the computer's own disks is a **backup**, to a folder the person
+  chooses (Stuart, 2026-11-13).
 - **Back up before every write**, and check the backup reads back before the card is touched.
 - **Check everything**: the downloaded image against its published checksum (and signature), the card after writing.
 - **Keep the last backup** until the new card has booted (the app says so; the person deletes it when happy).
@@ -75,7 +77,7 @@ For someone who has not got the original card, has a damaged one, or knows what 
 
 ## 4. What has to change in the image first
 
-**A fixed-size system partition (~3 GB).** Today p2 is sized to its contents + 15 % + 320 MiB, so a later, bigger
+**A fixed-size system partition: 3 GB** (agreed with Stuart, 2026-11-13). Today p2 is sized to its contents + 15 % + 320 MiB, so a later, bigger
 system would not fit an older card, and making room would mean moving the settings and VIBESDR partitions — exactly the
 risk an updater must never take with people's data. From the next image p2 is a fixed ~3 GB. Cards written before that
 take one last full write (after a backup) to get the new layout; the app says so when it meets one.
@@ -85,7 +87,17 @@ take one last full write (after a backup) to get the new layout; the app says so
 Stuart's EE clone only (the one unit we have). Other clones are "should work" until someone tries one — Generic ROCKNIX
 and own `.dtb` (Advanced) are the way round a board it does not recognise.
 
-## 6. Not yet decided
+## 6. Always up to date
 
-- The toolkit (one codebase for the three systems, small download).
-- Whether the app checks for its own updates.
+Stuart, 2026-11-13: **the app always checks for updates, so the user always has the latest VibeSDR.** On every start it
+checks our repo for:
+- **a newer VibeSDR R36S image** — Make and Update always use the newest (downloaded once, kept, checked);
+- **a newer version of the app itself** — offered before anything else is done.
+
+## 7. Decided
+
+- **System partition: 3 GB, fixed** (Stuart, 2026-11-13) — see §4.
+
+## 8. Not yet decided
+
+- The toolkit (one codebase for the three systems, small download) — ours to choose.
