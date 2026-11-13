@@ -1089,6 +1089,13 @@ public:
         }
         tiiResolveShared(shared, tiiHaveCodes_,
                          [&](int m, int s) { const size_t i = size_t(m * 24 + s); return i < tiiCodes_.size() && tiiCodes_[i]; },
+                         /* ★ Between equally small explanations the nearest site is the likely one (2026-11-13:
+                          *  "≈ Scalloway, 541 mi" beside Daventry). Only codes the directory holds get here. */
+                         [&](int m, int s) {
+                             if (!txdb_ || e.ecc < 0) return 0.0;
+                             const DabTxMatch t = txdb_->lookup(e.ecc, e.eid, m, s, rxLat_, rxLon_);
+                             return (t.found && t.km >= 0) ? t.km : 0.0;
+                         },
                          hits);
         return hits;
     }

@@ -151,6 +151,50 @@ int main() {
             tiiResolveShared(det.shared(), true, [](int m, int s) { return m == 1 && s == 2; }, none);
             CHECK(none.empty(), "a directory that holds neither code names nothing");
         }
+        /* ★★★ "≈ Scalloway, 541 mi" (Stuart, 2026-11-13): a clean Daventry 23/2 and one or two blocks barely lit
+         *  beside it. The old resolver named every directory code on Sub 2 that fitted the lit blocks. */
+        {
+            const uint8_t dav = tiiPattern(23);
+            int xb = -1, yb = -1;                       // two blocks Daventry does not use
+            for (int b = 0; b < 8; ++b) if (!(dav & (0x80 >> b))) { if (xb < 0) xb = b; else if (yb < 0) yb = b; }
+            auto mk = [&](float vx, float vy) {
+                TiiShared sc; sc.subId = 2; sc.noise = 1.0f; sc.sigma = 0.25f; sc.alongside = true;
+                sc.active = uint8_t(dav | (0x80 >> xb) | (0x80 >> yb));
+                for (int b = 0; b < 8; ++b) sc.v[b] = (dav & (0x80 >> b)) ? 2000.0f : 0.0f;
+                sc.v[xb] = vx; sc.v[yb] = vy;
+                return std::vector<TiiShared>{sc};
+            };
+            auto clean = [] { std::vector<TiiHit> h(1); h[0].mainId = 23; h[0].subId = 2; h[0].strength = 33.0f; return h; };
+            auto everySub2 = [](int, int s) { return s == 2; };          // the UK: Sub 2 on dozens of sites
+            // 1.0 and 1.9 dB blocks (1.26 and 1.55 x the noise): not a transmitter
+            { auto h = clean(); tiiResolveShared(mk(1.26f, 1.55f), true, everySub2, h);
+              CHECK(h.size() == 1 && h[0].mainId == 23, "★ blocks 1–2 dB over the noise beside Daventry name NO extra site"); }
+            // one real 10 dB block: ONE site explains it — the nearest of those that fit, not all of them
+            { auto h = clean();
+              auto km = [&](int m, int) { return m == 59 ? 228.0 : m == 45 ? 870.0 : 40.0 + m; };
+              tiiResolveShared(mk(10.0f, 0.0f), true, everySub2, km, h);
+              int extra = 0; const TiiHit* x = nullptr;
+              for (const auto& t : h) if (!(t.mainId == 23 && t.subId == 2)) { ++extra; x = &t; }
+              printf("  Daventry + one 10 dB block: %d extra", extra); if (x) printf(" (main %d, c%d)", x->mainId, x->from); printf("\n");
+              int fits = 0, nearest = -1; double nk = 1e9;
+              for (int p = 0; p < 70; ++p) { const uint8_t bits = tiiPattern(p);
+                  if (p != 23 && (bits & uint8_t(dav | (0x80 >> xb))) == bits) { ++fits; if (km(p, 2) < nk) { nk = km(p, 2); nearest = p; } } }
+              CHECK(fits > 1, "…(several codes fit those five blocks)");
+              CHECK(extra == 1 && x && x->mainId == nearest && x->from == kTiiResolved, "★ one extra block = ONE site, the nearest that fits, resolved"); }
+            // the same with no position to choose by: a tie, so candidates, never a confident name
+            { auto h = clean(); tiiResolveShared(mk(10.0f, 0.0f), true, everySub2, h);
+              bool allCand = h.size() > 1; for (size_t i = 1; i < h.size(); ++i) if (h[i].from != kTiiCandidate) allCand = false;
+              CHECK(h[0].mainId == 23 && h[0].from == kTiiClean && allCand, "★ equally near (no position): candidates, not resolved"); }
+        }
+        // ★ The Wellingborough/Aylesbury collision with distances: still both (the only cover of five blocks).
+        {
+            TiiDetector det; frames({ {23, 6, 1.0f, true}, {22, 6, 0.8f, true} }, 0.05f, det);
+            std::vector<TiiHit> h = det.hits();
+            tiiResolveShared(det.shared(), true, [](int m, int s) { return s == 6 && (m == 23 || m == 22 || m == 40); },
+                             [](int m, int) { return m == 22 ? 60.0 : 20.0; }, h);
+            CHECK(h.size() == 2 && find(h, 23, 6) && find(h, 22, 6) && find(h, 22, 6)->from == kTiiResolved,
+                  "★ a real two-site collision still resolves both, with distances given");
+        }
         // ★ Cap: candidates never push a measured hit out.
         {
             std::vector<TiiShared> sh(1); sh[0].subId = 4; sh[0].active = 0xFF; sh[0].noise = 1.0f;

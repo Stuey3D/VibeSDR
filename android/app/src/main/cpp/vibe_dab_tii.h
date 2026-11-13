@@ -119,30 +119,103 @@ struct TiiShared {
     uint8_t active = 0;          ///< the lit blocks, bit 0x80 >> b as in tiiPattern
     float   v[8]   = {0};
     float   noise  = 0;
+    float   sigma  = 0;          ///< the noise of one averaged block, same units (the lit bar's sigma)
     bool    alongside = false;   ///< this comb ALSO gave a measured (clean) hit
 };
 
-/** ★★ Resolve shared combs into hits. `known(main, sub)`: does the transmitter directory hold a site
- *  with this code on this ensemble; `haveDirectory`: does it hold ANY TII code for the ensemble (when
- *  false, every fitting pattern is reported as a candidate). Appends to `hits`, then orders the lot —
- *  measured and resolved first, strongest first, candidates after — and caps it at `cap`.
- *  The strength of a collision hit is its WEAKEST block: the others may also carry a co-channel site. */
-template <class Known>
-inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDirectory, Known known,
+/** ★★★ WHY "≈ SCALLOWAY, 541 mi" (Stuart, 2026-11-13: "unrealistic transmitter IDs on the other
+ *  multiplexes"). The first resolver named EVERY directory code whose four blocks were all lit. Beside a
+ *  clean site that is almost any code on the same Sub Id: Daventry 23/2 lights four blocks, one more block
+ *  lit by anything at all makes C(5,4) = 5 patterns fit, two more make 15 — and the UK reuses Sub Id 2 on
+ *  dozens of sites, so 12B (BBC National) named Bilsdale, Felixstowe, Kirkconnel, Jedburgh and Scalloway
+ *  at 1.0–1.9 dB, and 11A seven more. Three in the same handful of blocks cannot all be on the air; at
+ *  most one of them explains the extra block. So a shared comb is now resolved as an EXPLANATION:
+ *   1. the blocks the comb's clean hit already accounts for are spoken for; only the REST need a site;
+ *   2. a block counts as evidence of a second site only if it stands kTiiSharedSigma clear (twice the
+ *      lit bar — a block barely over the noise is not a transmitter, and it was all the 1 dB names had);
+ *   3. the fewest directory codes that cover the rest, each adding a block of its own — one extra block,
+ *      ONE site; and where several sets cover it equally, the nearest (cost = distance) is the one named;
+ *   4. a genuine tie (no position to choose by, or no directory) is reported as candidates, never resolved.
+ *  The collision it was built for — Wellingborough 23/6 + Aylesbury 22/6, no clean hit, five blocks — is the
+ *  same answer as before: two codes, the only cover of the five. */
+static constexpr float kTiiSharedSigma = 8.0f;
+
+/** ★★ Resolve shared combs into hits (see above). `known(main, sub)`: does the transmitter directory hold a
+ *  site with this code on this ensemble; `haveDirectory`: does it hold ANY TII code for the ensemble (when
+ *  false, every fitting pattern is weighed, as candidates); `cost(main, sub)`: how unlikely that site is —
+ *  its distance in km, 0 when unknown — used only to choose between equally small explanations.
+ *  Appends to `hits`, then orders the lot — measured and resolved first, strongest first, candidates
+ *  after — and caps it at `cap`. The strength of a collision hit is its WEAKEST block. */
+template <class Known, class Cost>
+inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDirectory, Known known, Cost cost,
                              std::vector<TiiHit>& hits, size_t cap = 8) {
     const size_t measured = hits.size();
     for (const auto& sc : shared) {
         if (sc.alongside && !haveDirectory) continue;   // a measured site already speaks for this Sub Id
+        // 1. what the clean hit(s) on this Sub Id already explain
+        uint8_t spoken = 0;
+        for (size_t i = 0; i < measured; ++i)
+            if (hits[i].subId == sc.subId && hits[i].from == kTiiClean) spoken |= tiiPattern(hits[i].mainId);
+        // 2. the rest: lit, not spoken for, and clear enough to be a transmitter
+        const float bar = kTiiSharedSigma * sc.sigma;
+        uint8_t rest = 0;
+        for (int b = 0; b < 8; ++b) {
+            const uint8_t m = uint8_t(0x80 >> b);
+            if ((sc.active & m) && !(spoken & m) && sc.v[b] > bar) rest |= m;
+        }
+        if (!rest) continue;
+        const uint8_t usable = uint8_t(spoken | rest);
+        // the codes that could be the second site: wholly in usable blocks, adding at least one of the rest
+        int cand[70]; float cc[70]; int nc = 0;
         for (int p = 0; p < 70; ++p) {
             const uint8_t bits = tiiPattern(p);
-            if ((bits & sc.active) != bits) continue;               // every one of its blocks must be lit
-            if (haveDirectory && !known(p, sc.subId)) continue;      // no such site on this ensemble
+            if ((bits & usable) != bits || !(bits & rest)) continue;
+            if (haveDirectory && !known(p, sc.subId)) continue;
             bool dup = false;
             for (size_t i = 0; i < measured; ++i) if (hits[i].mainId == p && hits[i].subId == sc.subId) dup = true;
             if (dup) continue;
+            cand[nc] = p; cc[nc] = float(cost(p, sc.subId)); ++nc;
+        }
+        if (!nc) continue;
+        // 3. the smallest covers of `rest` (up to three codes), the cheapest of them
+        float best = 1e30f; uint64_t pick[2] = {0, 0}; bool tie = false; bool found = false;
+        auto mark = [](uint64_t* set, int i) { set[i >> 6] |= uint64_t(1) << (i & 63); };
+        for (int k = 1; k <= 3 && !found; ++k) {
+            int ix[3] = {0, 1, 2};
+            if (k > nc) break;
+            for (;;) {
+                uint8_t u = 0; float c = 0;
+                for (int j = 0; j < k; ++j) { u |= tiiPattern(cand[ix[j]]); c += cc[ix[j]]; }
+                if ((u & rest) == rest) {
+                    // every code must add a block of the rest no other code in the set covers
+                    bool minimal = true;
+                    for (int j = 0; j < k && minimal; ++j) {
+                        uint8_t others = 0;
+                        for (int q = 0; q < k; ++q) if (q != j) others |= tiiPattern(cand[ix[q]]);
+                        if (!(tiiPattern(cand[ix[j]]) & rest & uint8_t(~others))) minimal = false;
+                    }
+                    if (minimal) {
+                        found = true;
+                        if (c < best - 1e-3f) { best = c; pick[0] = pick[1] = 0; tie = false; for (int j = 0; j < k; ++j) mark(pick, ix[j]); }
+                        else if (c <= best + 1e-3f) { tie = true; for (int j = 0; j < k; ++j) mark(pick, ix[j]); }
+                    }
+                }
+                int j = k - 1;
+                while (j >= 0 && ix[j] == nc - k + j) --j;
+                if (j < 0) break;
+                ++ix[j];
+                for (int q = j + 1; q < k; ++q) ix[q] = ix[q - 1] + 1;
+            }
+        }
+        if (!found) continue;
+        // 4. a single cheapest explanation is resolved; a tie, or no directory, stays a candidate
+        const uint8_t from = (haveDirectory && !tie) ? kTiiResolved : kTiiCandidate;
+        for (int i = 0; i < nc; ++i) {
+            if (!(pick[i >> 6] & (uint64_t(1) << (i & 63)))) continue;
+            const uint8_t bits = tiiPattern(cand[i]);
             float weakest = 1e30f;
             for (int b = 0; b < 8; ++b) if (bits & (0x80 >> b)) weakest = std::min(weakest, sc.v[b]);
-            TiiHit h; h.mainId = p; h.subId = sc.subId; h.from = haveDirectory ? kTiiResolved : kTiiCandidate;
+            TiiHit h; h.mainId = cand[i]; h.subId = sc.subId; h.from = from;
             h.strength = 10.0f * std::log10(std::max(weakest, 1e-20f) / (sc.noise + 1e-20f));
             hits.push_back(h);
         }
@@ -153,6 +226,12 @@ inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDire
         return a.strength > b.strength;
     });
     if (hits.size() > cap) hits.resize(cap);
+}
+/** Without a way to weigh sites: every equally small explanation is a tie. */
+template <class Known>
+inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDirectory, Known known,
+                             std::vector<TiiHit>& hits, size_t cap = 8) {
+    tiiResolveShared(shared, haveDirectory, known, [](int, int) { return 0.0; }, hits, cap);
 }
 
 /** ★ Accumulates pair products over TII frames and reports the transmitters it can see. */
@@ -323,7 +402,7 @@ private:
              *  directory may still name (tiiResolveShared skips the clean one, and offers no candidates
              *  on a Sub Id that already has a measured hit). */
             if (n > 4) {
-                TiiShared sc; sc.subId = c; sc.active = lit; sc.noise = float(P); sc.alongside = taken[c];
+                TiiShared sc; sc.subId = c; sc.active = lit; sc.noise = float(P); sc.sigma = sigma; sc.alongside = taken[c];
                 for (int b = 0; b < 8; ++b) sc.v[b] = v[c][b];
                 shared_.push_back(sc);
             }
