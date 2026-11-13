@@ -48,7 +48,10 @@ try {
   ok(st.ism === true, `vibeserver.json: ism ${JSON.stringify(st.ism)} ${st.ismWhy || ''}`);
   const ids = (st.ismBands || []).map((b) => b.id);
   // ★ V12 2026-11-12: the 902–928 MHz mesh bands (907 Meshtastic US, 910 MeshCore US, 920 Meshtastic ANZ, 923 MeshCore BR/AU, AS923)
-  ok(JSON.stringify(ids) === JSON.stringify(['315', '433', '868', '907', '910', '915', '920', '923']), `ismBands (an R820T reaches all eight, in frequency order): ${ids.join(' ')}`);
+  // ★ beta72: the world LoRa blocks join the sensor and mesh bands — an R820T reaches all seventeen, in frequency order
+  ok(JSON.stringify(ids) === JSON.stringify(['315', '433', '479', '865', '867', '868', '904', '907', '910', '913', '915', '917', '920', '922', '923', '925', '927']),
+     `ismBands (an R820T reaches all seventeen, in frequency order): ${ids.join(' ')}`);
+  ok((st.ismBands || []).every((b) => typeof b.region === 'string' && b.region.length > 0), `every band names its region (the BANDS list): ${(st.ismBands || []).filter((b) => !b.region).map((b) => b.id).join(' ') || 'all'}`);
   ok((st.ismBands || []).every((b) => b.name.length <= 40), 'every band name fits the clients (≤ 40 characters)');
   ok(st.ismLanding === '433', `ismLanding for a UK locator: ${st.ismLanding}`);
   ok(Array.isArray(st.modes) && st.modes.includes('ism'), 'modes lists ism');
@@ -85,10 +88,12 @@ try {
   const tp = last.devices.find((d) => d.kind === 'tpms');
   ok(tp && tp.nick === 1 && tp.id === undefined && tp.line === 'TPMS #1 · Schrader · 32 PSI · 18 °C', `the TPMS line: ${tp && tp.line}`);
 
-  // a band STEP up: 868, the list kept
+  // a band STEP up: 479 (beta72's China block), the list kept; then 868 by name for the meters
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));
-  ok(await until(() => last.band === '868', 5000), `step +1 → ${last.band}`);
+  ok(await until(() => last.band === '479', 5000), `step +1 → ${last.band}`);
   ok(last.devices.length >= 4, `the list is kept across a band step (${last.devices.length})`);
+  ws.send(JSON.stringify({ type: 'ism', on: 1, band: '868' }));
+  ok(await until(() => last.band === '868', 5000), `868 by name: ${last.band}`);
   if (CLIP868 && fs.existsSync(CLIP868)) {
     // ★★ V12 wM-Bus METERS on the wire: the Sensus (encrypted) and the Kamstrup (readings), their serials, never a payload byte
     const meter = (id) => last.devices.find((d) => d.kind === 'meter' && d.id === id);
@@ -109,17 +114,20 @@ try {
     ok(leak === 0, `the encrypted payload never on the wire (${leak})`);
   } else console.log('   (meters not run — set VIBE_WMBUS_CLIP: test-wmbus --write-clip clip868.u8 868800000 2400000)');
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));
-  ok(await until(() => last.band === '907', 5000), `step +1 → ${last.band} (${last.bandName})`);
+  ok(await until(() => last.band === '904', 5000), `step +1 → ${last.band} (${last.bandName})`);
+  ok(last.lora && last.lora.chans >= 1, `904 (US915 FSB2) runs LoRa channels: ${JSON.stringify(last.lora)}`);
   ws.send(JSON.stringify({ type: 'ism', on: 1, band: '923' }));
   ok(await until(() => last.band === '923', 5000), `923 by name: ${last.bandName}`);
   ok(last.lora && last.lora.chans >= 1, `923 runs LoRa channels: ${JSON.stringify(last.lora)}`);
+  ws.send(JSON.stringify({ type: 'ism', on: 1, band: '927' }));
+  ok(await until(() => last.band === '927', 5000), `927 by name: ${last.bandName}`);
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));
   await sleep(1500);
-  ok(last.band === '923', 'clamped at the top (no wrap to 315)');
+  ok(last.band === '927', 'clamped at the top (no wrap to 315)');
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: -1 }));
-  ok(await until(() => last.band === '920', 5000), `step −1 → ${last.band}`);
+  ok(await until(() => last.band === '925', 5000), `step −1 → ${last.band}`);
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: -1 }));
-  ok(await until(() => last.band === '915', 5000), `step −1 → ${last.band}`);
+  ok(await until(() => last.band === '923', 5000), `step −1 → ${last.band}`);
   ws.send(JSON.stringify({ type: 'ism', on: 1, band: '433' }));
   ok(await until(() => last.band === '433' && !last.custom, 5000), 'back to 433 by name');
   // an exact frequency (the frequency box): a `tune` in ISM mode
