@@ -231,7 +231,7 @@ inline void App::drawSearch(Ctx& c, const RadioState& s) {
         std::string ei;
         if (stLoading && stN == 0) ei = "Loading the EiBi schedule…";
         else if (stN > 0) ei = "EiBi schedule: " + std::to_string(stN) + " stations";
-        else if (eibiN == 0) ei = "No EiBi schedule — put sked-b26.csv (eibispace.de) in the card's EiBi folder, then BOOKMARKS → IMPORT EIBI";
+        else if (eibiN == 0) ei = "No EiBi schedule — put " + eibiSeasonFile() + " (eibispace.de) in the card's EiBi folder, then BOOKMARKS → IMPORT EIBI";
         if (!ei.empty()) c.tc.draw(c.g, c.f.small, bmFit(c.f.small, ei, (int)area.w - 4), area.x + 2, y, stN > 0 ? th::dimmer : th::amber);
         y += c.f.small.lineHeight() + 8;
     }

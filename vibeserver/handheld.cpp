@@ -34,6 +34,7 @@
 #include "vibe_mapgl.h"
 
 #include <algorithm>
+#include <ctime>
 #include <atomic>
 #include <cctype>
 #include <cerrno>
@@ -1156,20 +1157,36 @@ int askRadioToReloadEibi() {
  *  SEARCH finds the stations at once and after every reboot. The file stays on the card: it is the owner's copy. */
 void hEibiImport(Req& r) {
     if (g_o.cardDir.empty()) { json(r.fd, errJson("no card"), 503); return; }
-    std::string pick, from;
-    int64_t newest = -1;
+    /* ★★★ ANY EIBI CSV, NOT ONLY ONE NAMED sked-[ab]NN (Stuart, 2026-11-13: "the EiBi is only after B26 … after that
+     *  the server will need an update … we need to make the EiBi accept any EiBi .csv"). Only files named for a season
+     *  were looked at, so one saved as eibi.csv — or whatever EiBi names it next — was never tried. Now every .csv in EiBi\
+     *  (and import\) is a candidate: those named for a season first, the NEWEST SEASON first (A27 after B26: a season's
+     *  year and letter, not the file's date), then the rest newest file first. Each is judged by what is IN it — the
+     *  parser must find stations (vseibi::importFile) — so a CSV that is not a schedule is passed over and never replaces
+     *  a working one. Nothing here names a season, so no release is needed when the seasons turn. */
+    struct Cand { std::string path, from; int rank; int64_t mtime; };
+    std::vector<Cand> cands;
+    auto seasonRank = [](const std::string& code) {   // a26 = summer 2026 → 52, b26 = winter from Oct 2026 → 53, a27 → 54
+        return code.size() == 3 ? std::atoi(code.c_str() + 1) * 2 + (code[0] == 'b' ? 1 : 0) : -1;
+    };
     for (const char* sub : { "EiBi", "import" }) {
         const std::string dir = cardSub(sub);
         if (std::string(sub) == "EiBi") hhcard::ensureDir(dir);
         for (const auto& e : hhcard::listFiles(dir)) {
-            if (vseibi::seasonOfName(e.name).empty() || e.name.size() < 4) continue;
+            if (e.name.size() < 5) continue;
             std::string ext = e.name.substr(e.name.size() - 4);
             for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
             if (ext != ".csv") continue;
-            if (e.mtime > newest) { newest = e.mtime; pick = dir + "/" + e.name; from = std::string(sub) + "/" + e.name; }
+            cands.push_back({ dir + "/" + e.name, std::string(sub) + "/" + e.name, seasonRank(vseibi::seasonOfName(e.name)), e.mtime });
         }
     }
-    if (pick.empty()) {
+    std::sort(cands.begin(), cands.end(), [](const Cand& x, const Cand& y) {
+        if (x.rank != y.rank) return x.rank > y.rank;
+        return x.mtime > y.mtime;
+    });
+    const std::string nowFile = "sked-" + vseibi::seasonCodeAt(std::time(nullptr)) + ".csv";
+    std::string pick, from;
+    if (cands.empty()) {
         // ★ eibispace.de also offers the SAME data as printable lists (freq-b26.txt, time-b26.txt: fixed-width, a banner
         //   header). Only the CSV is read — so when that is what the owner brought, say exactly which file to fetch.
         for (const char* sub : { "EiBi", "import" }) {
@@ -1178,20 +1195,27 @@ void hEibiImport(Req& r) {
                 for (auto& c : lo) c = (char)std::tolower((unsigned char)c);
                 if (lo.size() < 9 || (lo.compare(0, 5, "freq-") != 0 && lo.compare(0, 5, "time-") != 0)) continue;
                 const std::string code = vseibi::seasonOfName("sked-" + lo.substr(5));
-                const std::string want = "sked-" + (code.empty() ? std::string("b26") : code) + ".csv";
+                const std::string want = code.empty() ? nowFile : "sked-" + code + ".csv";
                 json(r.fd, errJson("found " + e.name + " — that is the printable list; download " + want
                                    + " from eibispace.de instead (the CSV, not the freq-/time- .txt versions)"), 404);
                 return;
             }
         }
-        json(r.fd, errJson("No EiBi file on the card — download sked-b26.csv from eibispace.de (the CSV, not the "
+        json(r.fd, errJson("No EiBi file on the card — download " + nowFile + " from eibispace.de (the CSV, not the "
                            "freq-/time- .txt versions) and put it in the card's EiBi folder"), 404);
         return;
     }
     vseibi::setDir(g_o.dataDir);
-    std::string err, season;
-    const int n = vseibi::importFile(pick, err, &season);
-    if (n <= 0) { logf("EiBi import: %s refused — %s", from.c_str(), err.c_str()); json(r.fd, errJson(from + ": " + err), 400); return; }
+    std::string err, season, firstErr;
+    int n = 0;
+    for (const auto& c : cands) {
+        n = vseibi::importFile(c.path, err, &season);
+        if (n > 0) { pick = c.path; from = c.from; break; }
+        logf("EiBi import: %s passed over — %s", c.from.c_str(), err.c_str());
+        if (firstErr.empty()) firstErr = c.from + ": " + err;
+    }
+    if (n <= 0) { json(r.fd, errJson(cands.size() == 1 ? firstErr : "none of the " + std::to_string(cands.size())
+                                     + " CSV files on the card is an EiBi schedule (" + firstErr + ")"), 400); return; }
     const int loaded = askRadioToReloadEibi();
     logf("EiBi import: %s — %d entries%s%s", from.c_str(), n, season.empty() ? "" : (", " + season).c_str(),
          loaded < 0 ? " (no radio running: loaded when one starts)" : "");

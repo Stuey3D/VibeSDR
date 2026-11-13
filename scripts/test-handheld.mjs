@@ -255,6 +255,29 @@ try {
   const st = await getJ('/stations');
   ok(Array.isArray(st) && st.filter((x) => x.name === 'Card Test Radio').length === 12, 'SEARCH\'s /stations has them at once');
   ok(fs.existsSync(path.join(card, 'EiBi', 'sked-b26.csv')), 'the card keeps the owner\'s copy');
+  /* ★★★ ANY EIBI CSV (Stuart, 2026-11-13: "we need to make the EiBi accept any EiBi .csv") — no release when the seasons
+   *  turn: a newer season wins over an older one whatever the files' dates; a schedule under any name imports; a CSV that
+   *  is not a schedule is passed over for one that is. */
+  const old = new Date(Date.now() - 86400e3);
+  fs.writeFileSync(path.join(card, 'EiBi', 'sked-a27.csv'), skedRows('Summer 2027 Radio', 7));
+  fs.utimesSync(path.join(card, 'EiBi', 'sked-a27.csv'), old, old);   // older FILE, newer SEASON
+  r = await postJ('/handheld/eibi/import', '');
+  ok(r.j?.ok && r.j.file === 'EiBi/sked-a27.csv' && r.j.entries === 7 && r.j.season === 'A27 (summer)',
+     `★ next summer's sked-a27.csv is taken over B26 — the season decides, not the file's date (${r.j?.file}, ${r.j?.season})`);
+  for (const f of ['sked-a27.csv', 'sked-b26.csv']) fs.unlinkSync(path.join(card, 'EiBi', f));
+  fs.writeFileSync(path.join(card, 'EiBi', 'stations list.csv'), 'name,colour\nfoo,red\n');
+  fs.writeFileSync(path.join(card, 'EiBi', 'eibi.csv'), skedRows('Any Name Radio', 9));
+  fs.utimesSync(path.join(card, 'EiBi', 'eibi.csv'), old, old);       // the non-schedule is the NEWER file
+  r = await postJ('/handheld/eibi/import', '');
+  ok(r.j?.ok && r.j.file === 'EiBi/eibi.csv' && r.j.entries === 9,
+     `★ a schedule named eibi.csv imports, and the newer "stations list.csv" (not a schedule) is passed over (${r.j?.file}, ${r.j?.entries})`);
+  fs.unlinkSync(path.join(card, 'EiBi', 'eibi.csv'));
+  r = await postJ('/handheld/eibi/import', '');
+  ok(r.status === 400 && /stations list\.csv/.test(r.j?.error || '') && fs.existsSync(path.join(data, 'eibi.csv')),
+     `only a CSV that is not a schedule: refused by name, the working schedule kept (${r.j?.error})`);
+  fs.unlinkSync(path.join(card, 'EiBi', 'stations list.csv'));
+  fs.writeFileSync(path.join(card, 'EiBi', 'sked-b26.csv'), skedRows('Card Test Radio', 12));
+  await postJ('/handheld/eibi/import', '');
   fs.writeFileSync(path.join(card, 'import', 'sked-a26.csv'), skedRows('x', 1));
   ok(!(await getJ('/handheld/import')).files.some((f) => f.name === 'sked-a26.csv'), 'a schedule in import/ is not offered to the BOOKMARK import');
   fs.unlinkSync(path.join(card, 'import', 'sked-a26.csv'));

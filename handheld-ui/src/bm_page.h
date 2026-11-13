@@ -287,12 +287,12 @@ inline void App::drawBookmarks(Ctx& c, const RadioState& s) {
         // what the two imports read, and the schedule SEARCH has now
         c.tc.draw(c.g, c.f.small, "IMPORT: bookmark backups from the card's import folder", area.x + 2, y, th::dim);
         y += c.f.small.lineHeight();
-        c.tc.draw(c.g, c.f.small, "IMPORT EIBI: sked-b26.csv from its EiBi folder — the CSV, not the freq-/time- .txt",
+        c.tc.draw(c.g, c.f.small, "IMPORT EIBI: any EiBi schedule CSV (" + eibiSeasonFile() + " now) from its EiBi folder — not the .txt lists",
                   area.x + 2, y, th::dim);
         y += c.f.small.lineHeight();
         std::string ei;
         if (eibiN > 0) ei = "EiBi schedule: " + std::to_string(eibiN) + " stations" + (eibiAt.empty() ? "" : " · " + eibiAt);
-        else if (eibiN == 0) ei = "No EiBi schedule yet — put sked-b26.csv from eibispace.de in the card's EiBi folder";
+        else if (eibiN == 0) ei = "No EiBi schedule yet — put " + eibiSeasonFile() + " from eibispace.de in the card's EiBi folder";
         if (!ei.empty()) c.tc.draw(c.g, c.f.small, bmFit(c.f.small, ei, (int)area.w - 4), area.x + 2, y, eibiN > 0 ? th::dimmer : th::amber);
         y += c.f.small.lineHeight() + 8;
     }

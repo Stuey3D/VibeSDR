@@ -18,11 +18,29 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <ctime>
 #include <mutex>
 #include <string>
 #include <vector>
 
 namespace hh {
+
+/** ★★ "sked-b26.csv" — the EiBi file for the season ON THE CLOCK NOW, for the words that tell the owner what to fetch
+ *  (Stuart, 2026-11-13: the screens said sked-b26.csv, which is last season's file from the end of March). The same
+ *  rule as the server's vseibi::seasonCodeAt (vibeserver/eibi.cpp): A from ~the last Sunday of March, B from ~the last
+ *  Sunday of October, B named for the year it STARTED. The import itself takes any EiBi CSV (handheld.cpp). */
+inline std::string eibiSeasonFile() {
+    const std::time_t t = std::time(nullptr);
+    std::tm g{};
+    gmtime_r(&t, &g);
+    const int m = g.tm_mon + 1, day = g.tm_mday, y = g.tm_year + 1900;
+    const bool summer = (m > 3 && m < 10) || (m == 3 && day >= 25) || (m == 10 && day < 25);
+    const int yy = (!summer && m <= 3) ? y - 1 : y;
+    char s[24];
+    std::snprintf(s, sizeof s, "sked-%c%02d.csv", summer ? 'a' : 'b', ((yy % 100) + 100) % 100);
+    return s;
+}
 
 struct BmRow {
     std::string name, mode, lname;   // lname: the name in lower case (SEARCH matches case-blind)
