@@ -38,6 +38,15 @@ class VibeUpdateReceiver : BroadcastReceiver() {
             return
         }
         Log.i(TAG, "updated while serving — restarting the server")
+        /* ★★★ AN UPDATE TAKES THE RADIO AWAY, SO SAY SO (beta72, the Sony, 2026-11-13). Killing the old process
+         *  closes its USB handle, and the TV's host re-enumerated the dongle ~0.6 s later (removed 08:24:36.4,
+         *  added 08:24:37.1) — after the old process had died and before this one's detach watch existed. So the
+         *  departure was never stamped, and the attach that followed read "never seen to leave a running server
+         *  (a restart?)" and DISARMED (attachResumeWanted): the service's restore then said "not armed" and the
+         *  public server stayed off until a hand on the remote pressed Start. The departure is real and it began
+         *  now — stamping it makes the re-attach the blip it is (resume), and a radio that does NOT come back is
+         *  still given up on after RADIO_BLIP_WINDOW_MS as before. The fresh start's arm() spends the stamp. */
+        VibeServerRestore.noteRadioGone(ctx, "the app was updated")
         val svc = Intent(ctx, RtlTcpServerService::class.java)
             .putExtra(RtlTcpServerService.EXTRA_RESTORE, true)
         try {
