@@ -52,13 +52,17 @@ export const ISM_UNITS_DEFAULT: IsmUnits = { mph: false, pressure: 'psi' };
 
 /** What a radio's /vibeserver.json says about ISM. `undefined` = no control at all (an HF+ reaches no ISM band, or an
  *  older server); `ok: false` = drawn greyed with `why` on a press; `bands` = the bands THIS radio reaches, in step order. */
+/** ★ A bound on the server's list (untrusted input), not a design limit — the arrows step through any length. Was 8,
+ *  which beta71's eight bands (315…923) filled; raised for the worldwide LoRa blocks (Stuart 11-13: ISM is V12-beta-only,
+ *  no released app to stay compatible with). Same number in web/client/src/main.ts and handheld-ui/src/map_modes.h. */
+export const ISM_MAX_BANDS = 64;
 export interface IsmCap { ok: boolean; why: string; bands: IsmBand[]; landing: string }
 export function parseIsmCapability(j: unknown): IsmCap | undefined {
   if (!j || typeof j !== 'object') return undefined;
   const o = j as Record<string, unknown>;
   const bands: IsmBand[] = Array.isArray(o.ismBands)
     ? (o.ismBands as unknown[]).filter((b: any) => b && typeof b.id === 'string' && typeof b.name === 'string' && typeof b.hz === 'number')
-        .slice(0, 8).map((b: any) => ({ id: String(b.id).slice(0, 8), name: String(b.name).slice(0, 40), hz: Number(b.hz) }))
+        .slice(0, ISM_MAX_BANDS).map((b: any) => ({ id: String(b.id).slice(0, 8), name: String(b.name).slice(0, 40), hz: Number(b.hz) }))
     : [];
   if ((o.ism !== true && o.ism !== false) || !bands.length) return undefined;
   const why = typeof o.ismWhy === 'string' ? o.ismWhy.trim().slice(0, 200) : '';
