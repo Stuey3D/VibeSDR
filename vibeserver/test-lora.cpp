@@ -663,6 +663,29 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < x.size(); i += 65536) sh.feed(x.data() + i, std::min<size_t>(65536, x.size() - i));
         const double cpu = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         ok(sh.take().empty(), "the found-on-air search: 20 s of noise → nothing LoRa-shaped");
+        /* ★★ 2-FSK is not LoRa (2026-11-13, Stuart's 867 block, Pi 500 V4L): a carrier, then tones ±11.7 kHz at random,
+         *  ~90 ms twice a second at 867.8 — it visits a 62.5 kHz span and the max-hold paints it flat, so it passed as LoRa
+         *  and discovery ran detectors there that never decoded a frame. A chirp's peak moves one way; FSK's does not. */
+        {
+            std::vector<cf> y(size_t(fs * 10));
+            for (auto& v : y) v = cf(g(rng), g(rng));
+            std::uniform_int_distribution<int> bit(0, 1);
+            const double off = 867.8e6 - 867.2e6, bitSec = 1.0 / 9600;
+            for (double t0 = 0.2; t0 + 0.1 < 10; t0 += 0.5) {
+                double ph = 0, f = 0, nextBit = 0;
+                for (size_t i = size_t(t0 * fs), e = size_t((t0 + 0.09) * fs); i < e; ++i) {
+                    const double t = double(i) / fs - t0;
+                    if (t >= nextBit) { f = t < 0.012 ? 0 : (bit(rng) ? 11.7e3 : -11.7e3); nextBit += bitSec; }
+                    ph += 2 * M_PI * (off + f) / fs;
+                    y[i] += cf(0.2f * float(std::cos(ph)), 0.2f * float(std::sin(ph)));
+                }
+            }
+            Shaper fk; fk.reset(fs, 867.2e6);
+            for (size_t i = 0; i < y.size(); i += 65536) fk.feed(y.data() + i, std::min<size_t>(65536, y.size() - i));
+            const auto got = fk.take();
+            ok(got.empty(), "the found-on-air search: 2-FSK at 867.8 (±11.7 kHz, twice a second) → nothing LoRa-shaped (" + std::to_string(got.size())
+               + ", " + std::to_string(fk.counts().noDirection) + " turned away as not one-way)");
+        }
         std::printf("    CPU the found-on-air search: %.2f %% of one core at 2.4 MS/s\n", 100 * cpu / secs);
     }
 

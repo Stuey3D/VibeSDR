@@ -43,7 +43,7 @@ class Shaper {
 public:
     static constexpr int N = 256;          ///< ~9.4 kHz bins at 2.4 MS/s (a 62.5 kHz channel is ~7 bins)
     static constexpr int kEvery = 4;       ///< one frame in every four: ~0.43 ms apart at 2.4 MS/s
-    struct Counts { uint64_t shapes = 0, narrow = 0, wide = 0, notFlat = 0, noSweep = 0, tooShort = 0, tooLong = 0, weak = 0; };
+    struct Counts { uint64_t shapes = 0, narrow = 0, wide = 0, notFlat = 0, noSweep = 0, noDirection = 0, tooShort = 0, tooLong = 0, weak = 0; };
 
     void reset(double rateHz, double hwCentreHz) {
         rate_ = rateHz; hc_ = hwCentreHz; binHz_ = rateHz / N; hopSec_ = double(N * kEvery) / rateHz;
@@ -154,6 +154,27 @@ private:
             int visited = 0; const int need = std::max(1, int(e.peaks.size()) / 40);
             for (int h : hits) visited += h >= need;
             if (visited < 5) { ++c_.noSweep; return; }
+            /* ★★ AND ONE WAY (2026-11-13, Stuart's 867 band: "huge amounts of bursts … hardly any decodes"). Visiting the
+             *  span is not sweeping it: a 2-FSK sender at 867.8 (a carrier, then tones ±11.7 kHz, ~90 ms twice a second)
+             *  visits five eighths of a 62.5 kHz span by hopping between its tones, and the max-hold paints it flat — so it
+             *  passed as LoRa, and with the 866 MHz short bursts gave eight "found" channels that never decoded a frame. A
+             *  chirp's peak moves ONE way, in small steps, and wraps once a symbol (an up-chirp's wrap is a big step down —
+             *  counted as up; a LoRaWAN downlink is the mirror); FSK steps up and down alike. */
+            const int span = b - a + 1;
+            int up = 0, down = 0, prev = -1;
+            for (int p : e.peaks) {
+                if (p < a || p > b) continue;
+                if (prev >= 0) {
+                    const int d = p - prev;
+                    if (d >= 1 && 2 * d < span) ++up;
+                    else if (d <= -1 && -2 * d < span) ++down;
+                    else if (2 * d <= -span) ++up;       // an up-chirp's wrap
+                    else if (2 * d >= span) ++down;      // a down-chirp's wrap
+                }
+                prev = p;
+            }
+            const int one = std::max(up, down), other = std::min(up, down);
+            if (one < 8 || one < 2 * other) { ++c_.noDirection; return; }
         }
         // ★ long enough for a preamble at SF7 (12.25 symbols) — and the largest SF whose preamble alone fits
         const double minDur = 12.25 * 128.0 / bw;
