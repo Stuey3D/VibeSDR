@@ -18274,7 +18274,7 @@ function buildMenu() {
       (on ? $('resetAllNo') : $('dispResetAll')).focus({ preventScroll: true });
       if (on) ask.scrollIntoView({ block: 'nearest' });
     };
-    $('dispResetAll').onclick = () => showAsk(ask.hidden);
+    $('dispResetAll').onclick = () => showAsk(ask.hidden !== false)   // ★ hidden may be 'until-found' in newer DOM types;
     $('resetAllNo').onclick = () => showAsk(false);
     $('resetAllYes').onclick = async () => {
       if (!(await clearViewForAll())) { showPill('Could not reach the VibeSDR.net settings store — nothing was reset', 5000); return; }
