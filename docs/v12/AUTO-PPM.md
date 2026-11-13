@@ -209,8 +209,9 @@ End to end (`test-server-afc`, the bench multiplex with a +4 ppm clock), DAB's m
      taking it for the source's measurement (DAB ~2 min, a mast ~1 min, RWM ~10 min — hence daily for RWM, so other
      background decoding is barely disturbed), then back to the background profiles. Stuart's example: an RSP1A on
      NAVTEX, NDB and 160 m digital spots, sent to 12B for a couple of minutes every hour.
-  - ★ **Prerequisite for that example: the RSP is not corrected yet** (table above — the API's `ppm` vs the sample
-    clock needs a bench check). That bench check and the RSP path come first.
+  - That example works with what is built: the RSP's **frequency** is corrected (the digital shift, every radio — Stuart's
+    RSP1A learned −0.78 ppm from DAB 11A on 11-13 and restores it at every start). Only its **sample clock** is not
+    (table above), which at a TCXO's <1 ppm costs DAB a fraction of a dB. The scheduler is the missing piece.
   - Queued after the R36S flasher.
 - **The handheld's SDR menu** has the row. The Apple Watch spike's PPM cell (WristSDR ControlMenu) does not show the
   line yet.
