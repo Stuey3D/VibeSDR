@@ -24,6 +24,8 @@ const Vibe = NativeModules.VibePowerModule as {
                        wsBase: string) => void;
   pushExternalOpus?:  (b64: string, sampleRate: number, channels: number) => void;
   sendLocalTune?:     (json: string) => void;
+  /** ★ beta73: replace the pump's remembered hello WITHOUT sending it — the server's own dial (see the effect below). */
+  noteLocalTune?:     (json: string) => void;
   stopLocalAudio?:    () => void;
   /** A renewed admin credential for the pump's NEXT handshake; the open socket is left alone. */
   refreshLocalAudioAuth?: (authSuffix: string) => void;
@@ -581,6 +583,21 @@ export default function LocalAudioPlayer(
       }
     }
   }, [frequency, mode, bandwidthLow, bandwidthHigh, userTuneSeq]);
+
+  /* ★★★ THE PUMP'S HELLO FOLLOWS THE SERVER'S DIAL — SILENTLY (beta73, Stuart's video 2026-11-13). The native pump
+   *  replays the last tune IT sent on every reconnect of a one-listener radio (laTune / lastLocalTune), and only a tune
+   *  that went through it ever updated that. So whatever moved the radio from the server's side — an ISM band picked
+   *  from BANDS, a whole-radio mode's own landing, the owner — left a stale hello behind, and each return from the
+   *  background put the radio back on it: the Pi 500's V4L jumped from 868.600 to 867.197 three times in a minute.
+   *  The server's word is the one value entitled to overwrite it (noteServerFreq's rule for the UberSDR engine), and it
+   *  never reaches the wire from here. In the screen's tune shape, hardware Hz, the room's passband when it said one. */
+  useEffect(() => {
+    if (!serverDial || !(serverDial.frequency > 0)) return;
+    if (!USE_NATIVE_PUMP || transportRef.current === 'aux') return;
+    Vibe?.noteLocalTune?.(tuneJson(serverDial.frequency, serverDial.mode ?? mode,
+                                   serverDial.bandwidthLow ?? bandwidthLow, serverDial.bandwidthHigh ?? bandwidthHigh));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverDial?.frequency, serverDial?.mode, serverDial?.bandwidthLow, serverDial?.bandwidthHigh]);
 
   useEffect(() => {
     Vibe?.setInstanceName?.(instanceName ?? 'Local Hardware');

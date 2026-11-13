@@ -8048,8 +8048,11 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  (local_sdr_shim.cpp, "THE SHARED DIAL: REMEMBER WHO MOVED IT"), so the dial state is
          *  already current here: ours, or nobody else listening, says nothing.
          *  ★ No number either — "Another user", in Stuart's words. The chat keeps its User N. */
+        /* ★★ NO DIAL STATE = NO SHARED DIAL = NOBODY ELSE (beta73, Stuart's video 2026-11-13). A one-listener radio sends
+         *  no `dial` at all (sendDialState returns before it), so `d` is null there — and this said "Another user has
+         *  tuned" on every ISM band he picked himself on the Pi 500's V4L, a radio only he could be on. */
         const d = dialStateRef.current;
-        if (d && (d.mine || (d.you > 0 && d.tuner === d.you) || d.listeners <= 1)) return;
+        if (!d || d.mine || (d.you > 0 && d.tuner === d.you) || d.listeners <= 1) return;
         setDialHint(`Another user has tuned to ${(hz / 1e6).toFixed(3)} MHz`);
       },
       onDialRefused: () => {
@@ -8700,6 +8703,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *   is the same ordering the rest of this screen uses.
      * ★ Session-scoped by construction: this runs per connection, so it cannot go stale. */
     setDialState(null);
+    dialStateRef.current = null;   // ★ the ref too — onDialMoved reads it, and a shared server's state must not outlive it
     watchProvider.sendDial({ mode: 'exclusive', tuner: 0, mine: false, you: 0,
                              listeners: 0, decoding: false });
     // Apply the persisted VFO-lock follow mode to the fresh connection.

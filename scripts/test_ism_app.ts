@@ -282,5 +282,27 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('the MAP key is drawn for ismnodes- items only', [web.ismIsNodeCard({ s: 'ismnodes-868-2025-11-01' }), web.ismIsNodeCard({ s: 'ismsum-868-x' }), web.ismIsNodeCard({})], [true, false, false]);
 }
 
+// ── ★ beta73 (Stuart's video, 2026-11-13): his own BANDS picks said "Another user has tuned to …" on a one-listener radio,
+//    and every return from the background put ISM back on 867.197 (the native pump replayed a stale hello) ──
+{
+  const scr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  const moved = scr.slice(scr.indexOf('onDialMoved: (hz: number) => {'), scr.indexOf('onDialRefused: () => {'));
+  eq('onDialMoved: no dial state (a one-listener radio sends none) says nothing', /if \(!d \|\| d\.mine/.test(moved), true);
+  eq('…the banner is still there for somebody else on a shared dial', /Another user has tuned to/.test(moved), true);
+  eq('a new connection forgets the last server\'s dial state in the REF too', /setDialState\(null\);\s*\n\s*dialStateRef\.current = null;/.test(scr), true);
+  const lap = readFileSync(new URL('../src/components/LocalAudioPlayer.tsx', import.meta.url), 'utf8');
+  const fx = lap.slice(lap.indexOf('THE PUMP\'S HELLO FOLLOWS THE SERVER\'S DIAL'));
+  eq('LocalAudioPlayer keeps the pump\'s hello on the server\'s dial (noteLocalTune, never sendLocalTune)',
+     /Vibe\?\.noteLocalTune\?\.\(tuneJson\(serverDial\.frequency/.test(fx) && !/sendLocalTune/.test(fx.slice(0, fx.indexOf('}, [serverDial'))), true);
+  const swift = readFileSync(new URL('../ios/VibeSDR/VibePowerModule.swift', import.meta.url), 'utf8');
+  const objc = readFileSync(new URL('../ios/VibeSDR/VibePowerModule.m', import.meta.url), 'utf8');
+  const kmod = readFileSync(new URL('../android/app/src/main/java/com/vibesdr/app/VibeStreamModule.kt', import.meta.url), 'utf8');
+  const ksvc = readFileSync(new URL('../android/app/src/main/java/com/vibesdr/app/VibeStreamService.kt', import.meta.url), 'utf8');
+  eq('iOS: noteLocalTune stores the hello and sends nothing',
+     /@objc func noteLocalTune\(_ json: String\) \{\s*\n\s*if !json\.isEmpty && laAssert \{ laTune = json \}/.test(swift) && /RCT_EXTERN_METHOD\(noteLocalTune:/.test(objc), true);
+  eq('Android: noteLocalTune stores the hello and sends nothing',
+     /@ReactMethod\s*\n\s*fun noteLocalTune\(json: String\)/.test(kmod) && /fun noteLocalTune\(json: String\) \{\s*\n\s*if \(json\.isNotEmpty\(\) && laWanted && laAssert\) lastLocalTune = json/.test(ksvc), true);
+}
+
 console.log(`ism app: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

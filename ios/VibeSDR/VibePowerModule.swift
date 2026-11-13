@@ -2839,6 +2839,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     conn.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
   }
 
+  /** ★ beta73: the server's own dial becomes the hello a reconnect replays — NOT sent (LocalAudioPlayer's
+   *  serverDial effect). A replayed stale tune put an ISM band back on an old frequency after every background. */
+  @objc func noteLocalTune(_ json: String) {
+    if !json.isEmpty && laAssert { laTune = json }   // ★ a shared dial replays nothing anyway (laAssert)
+  }
+
   @objc func sendLocalTune(_ json: String) {
     laTune = json
     guard let conn = laConn, let data = json.data(using: .utf8) else { return }

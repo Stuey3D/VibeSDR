@@ -11389,6 +11389,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         dialSession = session;
         dialTouched = Impl::nowSecs();
     }
+    /** ★★ THIS SOCKET JUST MOVED THE RADIO — note its session as the tuner and, if that changed who it was, tell
+     *  everybody (the "Another user has tuned…" line is drawn from it). Call WITHOUT clientMtx held. A one-listener
+     *  radio has no shared dial and skips it. ★ beta73 (Stuart's video, 2026-11-13): a whole-radio mode's own band
+     *  change (ISM's BANDS, ADS-B in/out) moves the radio for everybody exactly as a `tune` does, and never stamped. */
+    void noteDialMover(const std::shared_ptr<net::Socket>& sock) {
+        if (!sock || !vsSharedDial()) return;
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            auto it = sockSession.find(sock.get());
+            const std::string me = it == sockSession.end() ? std::string() : it->second;
+            const std::string was = dialSession;
+            if (!me.empty()) dialTouchLocked(me);
+            changed = was != dialSession;
+        }
+        if (changed) sendDialState();
+    }
 
     /** ★★★ MAY THIS SESSION TURN THE KNOB — the one place that decides, so every control path
      *  gets the same answer. Call WITH clientMtx held.
@@ -15642,7 +15659,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double onV = 0; jsonNum(msg, "on", onV);
         // ★ A listener's control: what they hear is theirs ("live") — background decoding stopped before they got here.
         if (!g_ismMode.load()) { ismOrigin_ = "live"; ismProfile_.clear(); }
-        if (onV == 0) { ismLeave(true); return; }
+        if (onV == 0) { if (g_ismMode.load()) noteDialMover(sock); ismLeave(true); return; }
         const std::string why = vsIsmWhyNot();
         if (!why.empty()) { if (sock) sendText(sock, "{\"type\":\"ism_error\",\"why\":\"" + dabEscape(why) + "\"}"); return; }
         std::vector<const vibeism::Band*> can;
@@ -15695,6 +15712,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         LOGI("[ISM] %s asked%s: %s%s", g_ismMode.load() ? "a band change" : "ON", sock ? " by a client" : " internally", want->name,
              hz > 0 ? " (an exact frequency)" : "");
+        noteDialMover(sock);   // ★ the asker is the tuner — before ismEnter's config reaches the others
         ismEnter(*want, hz > 0 ? hz : 0);
     }
 
@@ -20010,12 +20028,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             double onV = 0; jsonNum(msg, "on", onV);
             LOGI("[ADS-B] %s asked%s (ADS-B is %s)", onV != 0 ? "ON" : "OFF", sock ? " by a client" : " internally",
                  g_adsbMode.load() ? "on" : "off");
-            if (onV == 0) { adsbLeave(true); return; }
+            if (onV == 0) { if (g_adsbMode.load()) noteDialMover(sock); adsbLeave(true); return; }
             const std::string why = vsAdsbWhyNot();
             if (!why.empty()) {
                 if (sock) sendText(sock, "{\"type\":\"adsb_error\",\"why\":\"" + dabEscape(why) + "\"}");
                 return;
             }
+            noteDialMover(sock);
             // ★ One whole-radio mode at a time: DAB leaves through its own door, which tells every listener
             if (g_ismMode.load(std::memory_order_relaxed)) ismLeave(true);   // ★ ISM leaves through its own door first
             if (g_ndbMode.load(std::memory_order_relaxed)) ndbLeave(true);   // ★ …and NDB
@@ -20864,18 +20883,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                    type == "tune" || type == "mode" || type == "bandwidth"
                 || type == "gain" || type == "rsp_control" || type == "ahf_control"
                 || type == "hackrf_control" || type == "antenna";
-            if (movesTheRadio && vsSharedDial()) {
-                bool changed = false;
-                {
-                    std::lock_guard<std::mutex> lk(clientMtx);
-                    auto it = sockSession.find(sock.get());
-                    const std::string me = it == sockSession.end() ? std::string() : it->second;
-                    const std::string was = dialSession;
-                    if (!me.empty()) dialTouchLocked(me);
-                    changed = was != dialSession;
-                }
-                if (changed) sendDialState();
-            }
+            if (movesTheRadio) noteDialMover(sock);
         }
 
         if (type == "say") {
@@ -21002,6 +21010,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         if (type == "tune" && g_ismMode.load(std::memory_order_relaxed)) {
+            /* ★★★ BUT NOT FROM AN AUDIO SOCKET (beta73, Stuart's video 2026-11-13). The app's native audio pump says
+             *  hello with the last tune IT sent, on every reconnect — and an ISM band pick never goes through it. So each
+             *  return from the background put the capture back on an old exact frequency (867.197, the session's dial
+             *  868.600: Pi 500 radio 00000001, 11:39:43 / 11:40:21 / 11:40:41). Every deliberate ISM frequency comes on the
+             *  SPECTRUM socket ({"type":"ism","hz"} from the app and the web, an old client's `tune` there); an audio
+             *  socket's `tune` is only ever a restatement, and in ISM it means nothing. */
+            bool fromSpectrum = !sock;
+            if (sock) {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                for (auto& sk : allSpecClientsLocked()) if (sk.get() == sock.get()) { fromSpectrum = true; break; }
+            }
+            if (!fromSpectrum) {
+                LOGI("[ISM] a tune on an audio socket ignored — ISM keeps its band (a reconnect's hello, not a person)");
+                return;
+            }
             double f = 0;
             if (jsonNum(msg, "frequency", f) && f > 0) {
                 char b[96]; std::snprintf(b, sizeof b, "{\"type\":\"ism\",\"on\":1,\"hz\":%.0f}", f);

@@ -1286,6 +1286,13 @@ class VibeStreamService : MediaBrowserServiceCompat() {
      *  card's "I'm still here" (a ping) to a background server. A person's tap, never automatic. */
     fun sendLocalText(json: String) { localAudioWs?.send(json) }
 
+    /** ★★ beta73: replace the hello a reconnect replays with the SERVER's dial, sending nothing. Only a tune through
+     *  sendLocalTune ever updated it, so a band moved from the server's side (ISM's BANDS) left a stale one, replayed
+     *  on every return from the background (Stuart's video, 2026-11-13: 868.600 → 867.197). Only while running. */
+    fun noteLocalTune(json: String) {
+        if (json.isNotEmpty() && laWanted && laAssert) lastLocalTune = json   // ★ a shared dial replays nothing anyway
+    }
+
     fun sendLocalTune(json: String) {
         lastLocalTune = json
         localAudioWs?.send(json)

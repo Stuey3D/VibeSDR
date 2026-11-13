@@ -282,6 +282,10 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun sendLocalTune(json: String) { VibeStreamService.instance?.sendLocalTune(json) }
 
+    /** ★ beta73: the server's own dial becomes the hello a reconnect replays — NOT sent (LocalAudioPlayer). */
+    @ReactMethod
+    fun noteLocalTune(json: String) { VibeStreamService.instance?.noteLocalTune(json) }
+
     /** ★ A RENEWED admin ticket for the NEXT handshake of the local pump — the open socket keeps
      *  going (the server decided admin when it accepted it). Without this a recovery reopen, or a
      *  service revival, would present the ticket the pump STARTED with, long expired, and come
