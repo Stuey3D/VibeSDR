@@ -410,7 +410,7 @@ let txOrder = 0;
 function rememberTransmitters(d: DabState): Array<{ t: DabTx; lost: boolean }> {
   if (d.channel !== txChannel) { txSeen.clear(); txChannel = d.channel; }
   /* ★ A CANDIDATE (c 2: one of several on a shared Sub Id, no directory to choose by) is shown while it
-   *  is offered and never remembered — a "not received" line for a guess would be clutter. Same in
+   *  is offered and never remembered — a "signal lost" line for a guess would be clutter. Same in
    *  dabTxRemember (web). */
   for (const t of d.tii ?? []) {
     if (t.c === 2) continue;
@@ -893,7 +893,7 @@ export default function DabPanel(p: DabPanelProps) {
                           + (e.t.c === 2 ? ' · one of several on a shared Sub Id' : '')
                           + (e.t.area && e.t.area !== e.t.site ? ` (${e.t.area})` : '')
                           + (e.t.km !== undefined && e.t.km >= 0 ? ` · ${(e.t.km * 0.621371).toFixed(e.t.km < 16 ? 1 : 0)} mi` : '')
-                          + (e.lost ? ' · not received' : ` · ${e.t.db.toFixed(1).padStart(4, '\u2007')} dB`)
+                          + (e.lost ? ' · signal lost' : ` · ${e.t.db.toFixed(1).padStart(4, '\u2007')} dB`)
                           + (e.t.ambiguous ? ' · ambiguous' : '')}
                      tone={e.lost ? 'warn' : undefined} />
               ))

@@ -8252,7 +8252,7 @@ function dabTxRemember(d: DabState): Array<{ t: DabTx; lost: boolean }> {
   const now = Date.now();
   if (d.channel !== dabTxChannel) { dabTxSeen.clear(); dabTxChannel = d.channel; }
   /* ★ A CANDIDATE (c 2: one of several on a shared Sub Id, no directory to choose by) is shown while it
-   *  is offered and never remembered — a "not received" line for a guess would be clutter. Same in the
+   *  is offered and never remembered — a "signal lost" line for a guess would be clutter. Same in the
    *  app's rememberTransmitters. */
   for (const t of d.tii ?? []) {
     if (t.c === 2) continue;
@@ -8265,7 +8265,8 @@ function dabTxRemember(d: DabState): Array<{ t: DabTx; lost: boolean }> {
    *  the row was created, expired, created again — and each time it was absent the Ofcom
    *  "Licensed sites" rows took its place, so the whole box grew and shrank with the fading
    *  (Stuart, 2026-09-08: "if a real transmitter has been seen it stays on the line just fades
-   *  when it drops to 0 dB SNR"). It now stays, dimmed and marked "not received", until the block
+   *  when it drops to 0 dB SNR"). It now stays, dimmed and marked "signal lost" (Stuart, 2026-11-13: "not received" read as
+   *  though the site had never been heard), until the block
    *  changes — which is the one event that makes it genuinely stale (dabTxSeen.clear() above). */
   void now;
   const live = new Set((d.tii ?? []).map(t => `${t.main}/${t.sub}`));
@@ -8278,7 +8279,7 @@ function dabTxRows(d: DabState, row: (k: string, v: string) => string): string {
    *  is rewritten — which restarted the scroll each time ("it looks like it's trying to scroll
    *  then it gets snapped back to the start", Stuart, 2026-09-08). */
   return dabTxRemember(d).map((e, i) => { const p = dabTxParts(e.t); return row(i === 0 ? 'Transmitters' : '',
-        `<span class="dls${e.lost ? ' txLost' : ''}"><span class="dlsIn">${p.text}</span></span><span class="lvl${e.lost ? ' txLost' : ''}">${e.lost ? 'not received' : p.level}</span>`); }).join('');
+        `<span class="dls${e.lost ? ' txLost' : ''}"><span class="dlsIn">${p.text}</span></span><span class="lvl${e.lost ? ' txLost' : ''}">${e.lost ? 'signal lost' : p.level}</span>`); }).join('');
 }
 
 /** FIG 0/9's local time offset applied to the ensemble's UTC clock, in signed half hours. */
@@ -8385,7 +8386,7 @@ function dabPatchRows(el: HTMLElement, html: string, keys: string[]) {
         newBox.replaceWith(oldBox);
         spans[i].replaceChildren(...Array.from(tmp.childNodes));
         /* ★★★ RE-MEASURE THE TRAVEL. The box is kept so the marquee runs on — but its WIDTH is
-         *  not constant: the level beside it is "14 dB" one block and "not received" the next
+         *  not constant: the level beside it is "14 dB" one block and "signal lost" the next
          *  (74c81b37), and the travel was measured once, when the label was armed. So a line that
          *  had scrolled fully stopped short by the width the level had grown (Stuart, 2026-09-09:
          *  "the scrolling on the transmitter line has reverted back to not scrolling fully").

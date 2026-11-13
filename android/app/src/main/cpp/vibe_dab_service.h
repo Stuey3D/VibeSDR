@@ -1079,6 +1079,15 @@ public:
      *  has none for it, offered as candidates (vibe_dab_tii.h). The codes are read once per ensemble;
      *  the resolving is a few pattern checks per shared comb, at report time. Caller holds m_. */
     std::vector<TiiHit> tiiHitsLocked_(const Ensemble& e) {
+        /* ★★★ ONLY WHAT COMES BACK (TiiConfirm, vibe_dab_tii.h — 7D's "constantly growing" list, 2026-11-13). Judged once
+         *  per verdict; the reports between verdicts reuse it. Verdict 0 = nothing decided on this block yet. */
+        const unsigned n = rx_.tiiDiag().verdicts;
+        if (n == 0) { tiiConfirm_.reset(); return {}; }
+        if (n != tiiConfirm_.lastVerdict()) tiiConfirm_.verdict(n, tiiVerdictLocked_(e));
+        return tiiConfirm_.confirmed();
+    }
+    /** One verdict's whole list, before TiiConfirm: measured hits plus shared combs resolved (see above). */
+    std::vector<TiiHit> tiiVerdictLocked_(const Ensemble& e) {
         std::vector<TiiHit> hits = rx_.tii();
         const auto& shared = rx_.tiiShared();
         if (shared.empty()) return hits;
@@ -3010,6 +3019,7 @@ private:
     int               tiiCodesEcc_ = -2;
     int               tiiCodesEid_ = -1;
     std::vector<bool> tiiCodes_;
+    TiiConfirm        tiiConfirm_;   ///< ★ a code is reported once it is in 2 of the last 3 verdicts (vibe_dab_tii.h)
     bool              tiiHaveCodes_ = false;
     uint32_t sid_ = 0, want_ = 0;
     // ★ The server's own choice on a block change (armAutoChoice) and the store behind rule 2.

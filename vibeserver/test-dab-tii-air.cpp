@@ -81,6 +81,15 @@ int main() {
         { "tii/11D-v4l48004-2026-11-04.vbu8", { "23/2 Daventry", "22/9 Bow Brickhill" } },
         { "tii/10D-v4l48004-2026-11-04.vbu8", { "22/9 Bow Brickhill", "22/3 Sandy Heath" } },
         { "12B-bbc-2026-10-26.vbu8",          { "23/2 Daventry", "23/15 Northampton" }, { "22/9 Bow Brickhill" } },
+        /* ★★★ 2026-11-13 (beta73 → beta74), the same V4L: "Multiplexes that worked before now give me loads of phantom
+         *  transmitters". 11A named Bilsdale 59/2 in 15 of 31 verdicts — Daventry 23/2's own spill (+2..+4 dB in two of
+         *  its comb's other blocks) read as a second site on Sub 2; kTiiSelfLeak stops it. Sutton Coldfield 19/18 is REAL
+         *  (its own four blocks in comb 18, the neighbouring combs at noise) but weak, so allowed, not required. */
+        { "tii/11A-v4l-2026-11-13.vbu8", { "23/2 Daventry", "22/9 Bow Brickhill" }, { "19/18 Sutton Coldfield" } },
+        { "tii/12B-v4l-2026-11-13.vbu8", { "23/2 Daventry", "23/15 Northampton" }, { "22/9 Bow Brickhill" } },
+        { "tii/7D-v4l-2026-11-13.vbu8",  { "1/5 ?" } },
+        { "tii/11D-v4l-2026-11-13.vbu8", { "23/2 Daventry", "22/9 Bow Brickhill" } },
+        { "tii/10D-v4l-2026-11-13.vbu8", { "22/9 Bow Brickhill", "22/3 Sandy Heath" }, { "22/14 Zouches Farm" } },
     };
     int ran = 0;
     for (const auto& c : cases) {

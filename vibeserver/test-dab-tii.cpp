@@ -195,6 +195,35 @@ int main() {
             CHECK(h.size() == 2 && find(h, 23, 6) && find(h, 22, 6) && find(h, 22, 6)->from == kTiiResolved,
                   "★ a real two-site collision still resolves both, with distances given");
         }
+        /* ★★★ "that list is constantly growing" (7D, 2026-11-13): a code is reported only once it is in 2 of the last 3
+         *  verdicts — a one-verdict ghost never reaches the panels, which remember every code they are shown. */
+        {
+            auto H = [](int m, int s, float db) { TiiHit h; h.mainId = m; h.subId = s; h.strength = db; return h; };
+            TiiConfirm cf;
+            cf.verdict(1, {H(1, 5, 32.0f), H(44, 12, 4.0f)});
+            CHECK(cf.confirmed().empty(), "the first verdict alone names nothing");
+            cf.verdict(2, {H(1, 5, 32.5f), H(44, 13, 4.1f)});
+            CHECK(cf.confirmed().size() == 1 && cf.confirmed()[0].mainId == 1 && cf.confirmed()[0].subId == 5,
+                  "★ the real site (in both verdicts) is named; 2C/0C and 2C/0D (one verdict each) are not");
+            CHECK(std::fabs(cf.confirmed()[0].strength - 32.5f) < 0.01f, "…at the newest verdict's strength");
+            cf.verdict(3, {H(1, 5, 32.6f), H(44, 14, 4.0f), H(44, 12, 4.2f)});
+            bool ghost = false; for (const auto& h : cf.confirmed()) if (h.mainId == 44 && h.subId != 12) ghost = true;
+            CHECK(!ghost && cf.confirmed().size() == 2, "a ghost that came back once (2C/0C in verdicts 1 and 3) counts; one-offs never do");
+            cf.verdict(4, {H(1, 5, 32.0f)});
+            cf.verdict(5, {H(1, 5, 32.0f)});
+            CHECK(cf.confirmed().size() == 1, "a code no longer in two of the last three verdicts drops out");
+            // a weak site missing one verdict in three stays on the panel throughout
+            TiiConfirm fl;
+            bool steady = true;
+            for (unsigned n = 1; n <= 9; ++n) {
+                fl.verdict(n, n % 3 ? std::vector<TiiHit>{H(22, 9, 6.0f)} : std::vector<TiiHit>{});
+                if (n >= 2 && fl.confirmed().size() != 1) steady = false;
+            }
+            CHECK(steady, "a weak site in two verdicts of every three stays named through the one it misses (no flicker)");
+            // a new block (the count starts again) forgets the old block's history
+            cf.verdict(1, {H(1, 5, 30.0f)});
+            CHECK(cf.confirmed().empty(), "a new block starts the history again");
+        }
         // ★ Cap: candidates never push a measured hit out.
         {
             std::vector<TiiShared> sh(1); sh[0].subId = 4; sh[0].active = 0xFF; sh[0].noise = 1.0f;

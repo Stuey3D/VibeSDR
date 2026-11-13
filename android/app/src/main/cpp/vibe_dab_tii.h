@@ -139,6 +139,13 @@ struct TiiShared {
  *  The collision it was built for — Wellingborough 23/6 + Aylesbury 22/6, no clean hit, five blocks — is the
  *  same answer as before: two codes, the only cover of the five. */
 static constexpr float kTiiSharedSigma = 8.0f;
+/** ★★ AND CLEAR OF ITS OWN SITE'S SPILL (2026-11-13, 11A on the Pi 500's V4L): Daventry 23/2 at ~34 dB lights its own
+ *  four blocks of Sub 2 and leaves a steady +2..+4 dB in two of the other four, every verdict — ~30 dB down, not noise.
+ *  Over the 8-sigma bar (+3 dB) about half the time, it named Bilsdale 59/2 (blocks 0,1,4,6: one spill block and three of
+ *  Daventry's) in 15 of 31 verdicts. The guard the detector already applies across neighbouring combs (kTiiLeak, −18 dB)
+ *  now applies inside a comb with a measured site too, at −24 dB: a genuine second site on the same Sub Id up to 24 dB
+ *  under the first still counts. */
+static constexpr float kTiiSelfLeak = 0.004f;
 
 /** ★★ Resolve shared combs into hits (see above). `known(main, sub)`: does the transmitter directory hold a
  *  site with this code on this ensemble; `haveDirectory`: does it hold ANY TII code for the ensemble (when
@@ -156,8 +163,11 @@ inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDire
         uint8_t spoken = 0;
         for (size_t i = 0; i < measured; ++i)
             if (hits[i].subId == sc.subId && hits[i].from == kTiiClean) spoken |= tiiPattern(hits[i].mainId);
-        // 2. the rest: lit, not spoken for, and clear enough to be a transmitter
-        const float bar = kTiiSharedSigma * sc.sigma;
+        // 2. the rest: lit, not spoken for, and clear enough to be a transmitter — of the noise, and of the comb's own
+        //    measured site's spill (kTiiSelfLeak)
+        float spokenMax = 0.0f;
+        for (int b = 0; b < 8; ++b) if (spoken & (0x80 >> b)) spokenMax = std::max(spokenMax, sc.v[b]);
+        const float bar = std::max(kTiiSharedSigma * sc.sigma, kTiiSelfLeak * spokenMax);
         uint8_t rest = 0;
         for (int b = 0; b < 8; ++b) {
             const uint8_t m = uint8_t(0x80 >> b);
@@ -233,6 +243,52 @@ inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDire
                              std::vector<TiiHit>& hits, size_t cap = 8) {
     tiiResolveShared(shared, haveDirectory, known, [](int, int) { return 0.0; }, hits, cap);
 }
+
+/** ★★★ A TRANSMITTER IS ONE THAT COMES BACK (Stuart, 2026-11-13, 7D NNDAB beside Moulton Park at 2.7 mi: "that list
+ *  is constantly growing"). One verdict is ~0.8 s of null symbols; now and then one of them throws up a code nobody
+ *  sent — 2C/0C, 2C/0D, 2C/10 … 2C/14, one Main Id across a run of Sub Ids — and the panels remember every code they
+ *  are ever shown for the rest of the multiplex ("not received"), so a few odd verdicts an hour became a list that only
+ *  grows. A real site is in verdict after verdict (Daventry and Bow Brickhill were in every one of 11-04's captures).
+ *  So a code is reported only once it is in kTiiConfirmOf of the last kTiiConfirmWindow verdicts — about 1.6 s to
+ *  appear, and a site at the edge that flickers in one verdict in three is no longer named: the trade, stated. The
+ *  strength reported is the newest verdict's. A new block (the verdict count starting again) forgets the history. */
+static constexpr int kTiiConfirmWindow = 3;
+static constexpr int kTiiConfirmOf = 2;
+class TiiConfirm {
+public:
+    /** One verdict's full list (measured + resolved + candidates), with that verdict's number (Diag::verdicts). */
+    void verdict(unsigned n, const std::vector<TiiHit>& hits) {
+        if (n < last_) hist_.clear();
+        if (n == last_ && !hist_.empty()) { hist_.back() = hits; }
+        else { hist_.push_back(hits); if (int(hist_.size()) > kTiiConfirmWindow) hist_.erase(hist_.begin()); }
+        last_ = n;
+        /* every code in the window that is in enough of its verdicts, at its newest reading — so a weak site in two
+         *  verdicts out of three stays named through the one it missed, instead of flickering on and off the panel */
+        out_.clear();
+        for (size_t i = hist_.size(); i-- > 0;)
+            for (const auto& h : hist_[i]) {
+                bool have = false;
+                for (const auto& o : out_) if (o.mainId == h.mainId && o.subId == h.subId) have = true;
+                if (have) continue;
+                int seen = 0;
+                for (const auto& v : hist_)
+                    for (const auto& x : v) if (x.mainId == h.mainId && x.subId == h.subId) { ++seen; break; }
+                if (seen >= kTiiConfirmOf) out_.push_back(h);
+            }
+        std::stable_sort(out_.begin(), out_.end(), [](const TiiHit& a, const TiiHit& b) {
+            const bool ca = a.from == kTiiCandidate, cb = b.from == kTiiCandidate;
+            if (ca != cb) return cb;
+            return a.strength > b.strength;
+        });
+    }
+    const std::vector<TiiHit>& confirmed() const { return out_; }
+    unsigned lastVerdict() const { return last_; }
+    void reset() { hist_.clear(); out_.clear(); last_ = 0; }
+private:
+    std::vector<std::vector<TiiHit>> hist_;
+    std::vector<TiiHit> out_;
+    unsigned last_ = 0;
+};
 
 /** ★ Accumulates pair products over TII frames and reports the transmitters it can see. */
 class TiiDetector {
