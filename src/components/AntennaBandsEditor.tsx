@@ -19,8 +19,10 @@ import {
 /** ★ The server screen's palette by role (constants/serverPalette.ts): text = TEXT colour, keys = CONTROLS colour. */
 import type { ServerPalette as Colours } from '../constants/serverPalette';
 type RangeRow = { name: string; lo: string; hi: string; unit: BandUnit };
-type FilterRow = { kind: FilterKind; lo: string; hi: string; unit: BandUnit; name: string };
-const KINDS: FilterKind[] = ['bandstop', 'bandpass', 'highpass', 'lowpass'];
+/** ★ kind '' = not chosen yet: a new row has no type until the owner ticks one, and is never written until then. */
+type FilterRow = { kind: FilterKind | ''; lo: string; hi: string; unit: BandUnit; name: string };
+/** The tick boxes' order — band-pass first, the one an aerial filter most often is (same as the setup page). */
+const KINDS: FilterKind[] = ['bandpass', 'bandstop', 'highpass', 'lowpass'];
 const UNITS: BandUnit[] = ['kHz', 'MHz'];
 
 const rangesFrom = (t: string): RangeRow[] => parseAntennaRanges(t).map((r) => ({
@@ -32,7 +34,7 @@ const filtersFrom = (t: string): FilterRow[] => parseAntennaFilters(t).map((f) =
 const rangesText = (rows: RangeRow[]) => formatAntennaRanges(parseAntennaRanges(
   rows.filter((r) => r.lo.trim() && r.hi.trim()).map((r) => `${r.lo.trim()}-${r.hi.trim()}${r.unit} ${r.name.trim()}`).join('; ')));
 const filtersText = (rows: FilterRow[]) => formatAntennaFilters(parseAntennaFilters(
-  rows.filter((f) => f.lo.trim() && ((f.kind !== 'bandstop' && f.kind !== 'bandpass') || f.hi.trim()))
+  rows.filter((f) => f.kind && f.lo.trim() && ((f.kind !== 'bandstop' && f.kind !== 'bandpass') || f.hi.trim()))
       .map((f) => `${f.kind} ${f.kind === 'bandstop' || f.kind === 'bandpass' ? `${f.lo.trim()}-${f.hi.trim()}` : f.lo.trim()}${f.unit} ${f.name.trim()}`)
       .join('; ')));
 
@@ -60,6 +62,14 @@ export default function AntennaBandsEditor({ ranges, filters, onChange, C, F }: 
     <TouchableOpacity key={label} onPress={onPress} accessibilityRole="button"
       style={{ borderWidth: 1, borderRadius: 7, paddingHorizontal: 9, paddingVertical: 6,
                borderColor: on ? C.keySelBorder : C.border, backgroundColor: on ? C.keySelBg : 'transparent' }}>
+      <Text style={{ color: on ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>{label}</Text>
+    </TouchableOpacity>
+  );
+  /** A tick box: ☑ / ☐ and its label — one of the filter types (only one is ever ticked). */
+  const tick = (label: string, on: boolean, onPress: () => void) => (
+    <TouchableOpacity key={label} onPress={onPress} accessibilityRole="checkbox" accessibilityState={{ checked: on }}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 5, paddingRight: 8 }}>
+      <Text style={{ color: on ? C.keySel : C.key, fontFamily: F, fontSize: 15 }}>{on ? '☑' : '☐'}</Text>
       <Text style={{ color: on ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>{label}</Text>
     </TouchableOpacity>
   );
@@ -102,9 +112,19 @@ export default function AntennaBandsEditor({ ranges, filters, onChange, C, F }: 
       {hint('A listener tuned into one is told, e.g. "FM band-stop filter fitted — reception here is deliberately reduced", so they blame the filter, not the receiver.')}
       {fr.map((f, i) => (
         <View key={`f${i}`} style={{ borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 8, marginTop: 6 }}>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-            {KINDS.map((k) => chip(FILTER_KIND_LABEL[k] ?? k, f.kind === k, () => { const n = fr.slice(); n[i] = { ...f, kind: k }; setF(n); }))}
+          {/* ★★ FOUR TICK BOXES, NONE TICKED ON A NEW ROW (Stuart, 2026-11-13: "most of our users seem to accidentally set
+              their antennas to band stop not bandpass") — the row used to open on Band-stop. Tick one; ticking another moves
+              the tick; the frequencies appear once a type is chosen. Same as the setup page. */}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }} accessibilityLabel="Filter type — tick one">
+            {KINDS.map((k) => tick(FILTER_KIND_LABEL[k] ?? k, f.kind === k,
+              () => { const n = fr.slice(); n[i] = { ...f, kind: f.kind === k ? '' : k }; setF(n); }))}
           </View>
+          {!f.kind ? (
+            <View style={{ flexDirection: 'row', marginTop: 6, alignItems: 'center', gap: 8 }}>
+              <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12, flex: 1 }}>Tick the type of filter first</Text>
+              {chip('✕', false, () => setF(fr.filter((_, k) => k !== i)))}
+            </View>
+          ) : (<>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6, alignItems: 'center' }}>
             {field(f.lo, (t) => { const n = fr.slice(); n[i] = { ...f, lo: t }; setF(n); },
                    f.kind === 'highpass' ? 'passes above' : f.kind === 'lowpass' ? 'passes below' : 'from', 80, true)}
@@ -118,10 +138,11 @@ export default function AntennaBandsEditor({ ranges, filters, onChange, C, F }: 
           <View style={{ marginTop: 6, flexDirection: 'row' }}>
             {field(f.name, (t) => { const n = fr.slice(); n[i] = { ...f, name: t.slice(0, 40) }; setF(n); }, 'name, e.g. FM band-stop')}
           </View>
+          </>)}
         </View>
       ))}
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-        {chip('+ Add filter', false, () => setF([...fr, { kind: 'bandstop', lo: '', hi: '', unit: 'MHz', name: '' }]))}
+        {chip('+ Add filter', false, () => setF([...fr, { kind: '', lo: '', hi: '', unit: 'MHz', name: '' }]))}
         {chip('Fill in a filter…', presets === 'filter', () => setPresets(presets === 'filter' ? '' : 'filter'))}
       </View>
       {presets === 'filter' && (

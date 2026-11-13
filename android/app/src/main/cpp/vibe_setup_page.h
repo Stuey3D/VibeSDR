@@ -82,6 +82,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .abRow select{width:auto;flex:0 0 auto;padding:7px 8px}
   .abRow input[type=text]{flex:1 1 auto;width:auto;min-width:0;padding:7px 8px}
   .abRow .abDash{color:var(--dim)}
+  .abRow .abKinds{display:flex;flex-wrap:wrap;gap:4px 12px;flex:1 1 100%}
+  .abRow .abKind{display:inline-flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;white-space:nowrap}
+  .abRow .abKind input{width:auto;margin:0}
+  .abRow .abNeed{color:var(--dim);font-size:12px}
   .abRow button.abX{background:none;border:1px solid var(--line);color:var(--dim);border-radius:7px;
          width:34px;height:34px;padding:0;font-size:16px;line-height:1;flex:0 0 34px}
   .abRow button.abX:hover{color:var(--bad);border-color:var(--bad)}
@@ -6090,6 +6094,8 @@ const AB_FILTER_PRESETS = [
   ["2 m band-pass 144–146 MHz", "bandpass", "144", "146", "MHz", "2 m band-pass"],
 ];
 const AB_KIND_NAMES = { bandstop: "Band-stop", bandpass: "Band-pass", highpass: "High-pass", lowpass: "Low-pass" };
+/** The tick boxes' order — band-pass first, the one an aerial filter most often is. */
+const AB_KIND_ORDER = ["bandpass", "bandstop", "highpass", "lowpass"];
 
 /* ★★★ THE ROWS LIVE PER RADIO OBJECT, NOT IN THE FORM. A WeakMap keyed by the radio, so an
  *  unfinished row (a "from" with no "to" yet) survives a tab switch without ever being written —
@@ -6120,7 +6126,7 @@ function antBandEdit(r, list, i, field, value) {
 function antBandAdd(r, list, row) {
   antRowsFor(r)[list].push(row || (list === "ranges"
     ? { from: "", to: "", unit: "MHz", name: "", port: "" }
-    : { kind: "bandstop", from: "", to: "", unit: "MHz", name: "", port: "" }));
+    : { kind: "", from: "", to: "", unit: "MHz", name: "", port: "" }));   // ★ no type until the owner ticks one (see renderAntBands)
   antCommit(r);
 }
 function antBandRemove(r, list, i) {
@@ -6237,21 +6243,36 @@ function renderAntBands() {
     + unitSel(row) + `</span>`
     + `<span class="abName">` + nameIn(row.name, "Name, e.g. 2 m (optional)") + x + `</span></div>`).join("");
   hostF.innerHTML = m.filters.map((row, i) => {
+    /* ★★ FOUR TICK BOXES, NONE TICKED ON A NEW ROW (Stuart, 2026-11-13: "most of our users seem to accidentally set
+     *  their antennas to band stop not bandpass"). The type was a dropdown that opened on Band-stop, so a row added to
+     *  say "this is a band-pass" was saved as a band-stop unless its first box was noticed — and listeners were then told
+     *  the band the aerial is FOR had been deliberately cut. Now the owner ticks one (ticking another moves the tick), the
+     *  frequencies appear only once a type is chosen, and an unticked row is never written (antFormatFilters). */
     const band = row.kind === "bandstop" || row.kind === "bandpass";
+    const kinds = `<span class="abKinds" role="group" aria-label="Filter type — tick one">`
+      + AB_KIND_ORDER.map(k => `<label class="abKind"><input type="checkbox" data-kind="${k}"${k === row.kind ? " checked" : ""}>`
+                              + `${AB_KIND_NAMES[k]}</label>`).join("") + `</span>`;
     return `<div class="abRow" data-l="filters" data-i="${i}">`
       + portSel(row)
-      + `<select data-f="kind" aria-label="Filter type">`
-      + AB_KINDS.map(k => `<option value="${k}"${k === row.kind ? " selected" : ""}>${AB_KIND_NAMES[k]}</option>`).join("")
-      + `</select>`
-      + `<span class="abNums">`
-      + (band ? num("from", row.from, "From") + `<span class="abDash">–</span>` + num("to", row.to, "To")
-              : num("from", row.from, row.kind === "highpass" ? "Passes above" : "Passes below"))
-      + unitSel(row) + `</span>`
+      + kinds
+      + (row.kind
+        ? `<span class="abNums">`
+          + (band ? num("from", row.from, "From") + `<span class="abDash">–</span>` + num("to", row.to, "To")
+                  : num("from", row.from, row.kind === "highpass" ? "Passes above" : "Passes below"))
+          + unitSel(row) + `</span>`
+        : `<span class="abNeed">Tick the type of filter first</span>`)
       + `<span class="abName">` + nameIn(row.name, "Name, e.g. FM band-stop (optional)") + x + `</span></div>`;
   }).join("");
   [hostR, hostF].forEach(host => {
     Array.from(host.querySelectorAll(".abRow")).forEach(rowEl => {
       const list = rowEl.getAttribute("data-l"), i = parseInt(rowEl.getAttribute("data-i"), 10);
+      Array.from(rowEl.querySelectorAll("input[data-kind]")).forEach(box => {
+        box.onchange = () => {
+          // ★ one type per filter: ticking a box moves the tick here; unticking the ticked one leaves none
+          antBandEdit(r, list, i, "kind", box.checked ? box.getAttribute("data-kind") : "");
+          renderAntBands();
+        };
+      });
       Array.from(rowEl.querySelectorAll("[data-f]")).forEach(inp => {
         const f = inp.getAttribute("data-f");
         // ★ input, not change: typing then switching tab must already be on the radio object.
