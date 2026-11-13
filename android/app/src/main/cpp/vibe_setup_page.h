@@ -6918,12 +6918,21 @@ const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodula
 const BG_ISM_BANDS = [
   { id: "315", label: "315 MHz (US / Japan: tyre sensors, key fobs, remotes)" },
   { id: "433", label: "433.92 MHz (weather stations, sensors, doorbells, tyre sensors)" },
+  { id: "479", label: "479 MHz \u2014 China LoRa (CN470, Meshtastic CN)" },
+  { id: "865", label: "865 MHz \u2014 India LoRaWAN (IN865), Meshtastic India / NZ_865" },
+  { id: "867", label: "867 MHz \u2014 EU LoRaWAN 867.1\u2013867.9, Meshtastic Kazakhstan / Nepal" },
   { id: "868", label: "868 MHz SRD \u2014 sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)" },
+  { id: "904", label: "904.6 MHz \u2014 US LoRaWAN (FSB2, The Things Network), Meshtastic Brazil" },
   { id: "907", label: "907 MHz \u2014 Meshtastic US (LongFast 906.875)" },
   { id: "910", label: "910 MHz \u2014 MeshCore US / Canada (910.525)" },
+  { id: "913", label: "913 MHz \u2014 Meshtastic US MediumFast (913.125)" },
   { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset; MeshCore AU, LoRaWAN AU915)" },
+  { id: "917", label: "917.4 MHz \u2014 AU/NZ LoRaWAN (AU915 FSB2), MeshCore NZ, AS923-3/-4" },
   { id: "920", label: "920 MHz \u2014 Meshtastic ANZ (LongFast 919.875), MeshCore Vietnam / Thailand" },
+  { id: "922", label: "921.7 MHz \u2014 AS923-2 and Korea LoRaWAN, MeshCore Thailand" },
   { id: "923", label: "923 MHz \u2014 MeshCore Brazil / Australia (923.125), AS923, Meshtastic JP / KR / TW" },
+  { id: "925", label: "925 MHz \u2014 US / AU LoRaWAN downlinks" },
+  { id: "927", label: "927 MHz \u2014 MeshCore Southern California (927.875)" },
 ];
 /* ★★ V12 2026-11-02 — MAY A PROFILE HERE DECODE AIS (ships on 162 MHz, the whole radio)? Only where the radio reaches
  *  162 MHz (not an Airspy HF+, not an Icom — the server's vsAisReach), it is not locked (background never moves a locked

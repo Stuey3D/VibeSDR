@@ -100,8 +100,8 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
     static const unsigned NA = homeBit(Region::NorthAmerica), SA = homeBit(Region::SouthAmerica),
                           OC = homeBit(Region::Oceania), AS = homeBit(Region::Asia);
     static const std::vector<int> SF7_10 = {7, 8, 9, 10};
-    /* ★ US915 FSB2 (903.9–905.3, TTN's and most public US networks') is NOT in any capture here: a 904 block
-     *  (LORA-WORLD-BANDS.md) is beta72's. The 915 band's FSB8 914.3–914.9 stays for whoever uses it. */
+    /* ★ US915 FSB2 (903.9–905.3, TTN's and most public US networks') is the 904 block's (beta72, below). The 915 band's
+     *  FSB8 914.3–914.9 stays for whoever uses it. */
     static const std::vector<PlanCh> b907 = {
         {"Meshtastic US LongFast 906.875", "meshtastic", 906.875e6, 250e3, {11}, MT, false, 0},
         {"Meshtastic BR_902 MediumFast 906.625", "meshtastic", 906.625e6, 250e3, {9}, MT, false, 1, SA},
@@ -150,7 +150,112 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
         {"LoRaWAN AS923 923.4", "lorawan", 923.4e6, 125e3, SF7_10, LW, false, 1, AS},
         {"MeshCore 923.125 SF7", "meshcore", 923.125e6, 62.5e3, {7}, MC, false, 2},
     };
+    /* ★★ V12 beta72 — THE WORLD BLOCKS' PLANS (docs/v12/LORA-WORLD-BANDS.md: Meshtastic slots computed from the firmware's
+     *  djb2 formula and checked in test-lora; MeshCore from its preset list; LoRaWAN from RP002-1.0.4 / TTN frequency
+     *  plans). Tier 0 = each block's regional DEFAULT channels — what a Pi 2 runs; `home` drops another region's defaults
+     *  to tier 2 where the server's position is known. LoRaWAN uplinks SF7–10 where the plan's dwell limit caps them
+     *  (US915/AU915/AS923), SF7–12 elsewhere. 500 kHz downlinks are 4× an SF's cost at 125 k: tier 2 only. */
+    static const unsigned IN = homeBit(Region::India), CN = homeBit(Region::China);
+    static const std::vector<PlanCh> b479 = {
+        {"Meshtastic CN LongFast 478.875", "meshtastic", 478.875e6, 250e3, {11}, MT, false, 0},
+        {"LoRaWAN CN470 479.9 (join)", "lorawan", 479.9e6, 125e3, {7, 8, 9, 10, 11}, LW, false, 0, CN},
+    };
+    static const std::vector<PlanCh> b865 = {
+        {"Meshtastic IN LongFast 865.875", "meshtastic", 865.875e6, 250e3, {11}, MT, false, 0},
+        {"Meshtastic NZ_865 LongFast 864.875", "meshtastic", 864.875e6, 250e3, {11}, MT, false, 0, OC},
+        /* ★ SF7–11 in the default set and SF12 at tier 2: with SF12 the block's default set (no position) cost 28.1 units
+         *  against the 868 band's 25.85 — the Pi 2's measured budget */
+        {"LoRaWAN IN865 865.0625", "lorawan", 865.0625e6, 125e3, {7, 8, 9, 10, 11}, LW, false, 0, IN},
+        {"LoRaWAN IN865 865.4025", "lorawan", 865.4025e6, 125e3, {7, 8, 9, 10, 11}, LW, false, 0, IN},
+        {"LoRaWAN IN865 865.985", "lorawan", 865.985e6, 125e3, {7, 8, 9, 10, 11}, LW, false, 0, IN},
+        {"LoRaWAN IN865 865.0625 SF12", "lorawan", 865.0625e6, 125e3, {12}, LW, false, 2, IN},
+        {"LoRaWAN IN865 865.4025 SF12", "lorawan", 865.4025e6, 125e3, {12}, LW, false, 2, IN},
+        {"LoRaWAN IN865 865.985 SF12", "lorawan", 865.985e6, 125e3, {12}, LW, false, 2, IN},
+        {"Meshtastic EU_866 LiteFast 866.3", "meshtastic", 866.3e6, 125e3, {9}, MT, false, 1},
+        {"Meshtastic EU_866 LiteSlow 865.7", "meshtastic", 865.7e6, 125e3, {10}, MT, false, 1},
+        {"LoRaWAN IN865 RX2 866.55 (downlink)", "lorawan", 866.55e6, 125e3, {10}, LW, true, 2, IN},
+    };
+    static const std::vector<PlanCh> b867 = {
+        {"Meshtastic KZ_863 LongFast 866.875", "meshtastic", 866.875e6, 250e3, {11}, MT, false, 0},
+        {"Meshtastic NP_865 LongFast 867.875", "meshtastic", 867.875e6, 250e3, {11}, MT, false, 0},
+        {"LoRaWAN 867.1", "lorawan", 867.1e6, 125e3, ALL, LW, false, 1},
+        {"LoRaWAN 867.3", "lorawan", 867.3e6, 125e3, ALL, LW, false, 1},
+        {"LoRaWAN 867.5", "lorawan", 867.5e6, 125e3, ALL, LW, false, 1},
+        {"LoRaWAN 867.7", "lorawan", 867.7e6, 125e3, ALL, LW, false, 1},
+        {"LoRaWAN 867.9", "lorawan", 867.9e6, 125e3, ALL, LW, false, 1},
+    };
+    /* US915 FSB2 = channels 8–15 (902.3 + 0.2n) + the 500 kHz channel 65 (903.0 + 1.6n) — TTN US_902_928_FSB_2 */
+    static const std::vector<PlanCh> b904 = {
+        {"LoRaWAN US915 FSB2 903.9", "lorawan", 903.9e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"LoRaWAN US915 FSB2 904.1", "lorawan", 904.1e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"LoRaWAN US915 FSB2 904.3", "lorawan", 904.3e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"LoRaWAN US915 FSB2 904.5", "lorawan", 904.5e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"Meshtastic BR_902 LongFast 903.875", "meshtastic", 903.875e6, 250e3, {11}, MT, false, 0, SA},
+        {"LoRaWAN US915 FSB2 904.7", "lorawan", 904.7e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 FSB2 904.9", "lorawan", 904.9e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 FSB2 905.1", "lorawan", 905.1e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 FSB2 905.3", "lorawan", 905.3e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 FSB2 904.6 (500 kHz)", "lorawan", 904.6e6, 500e3, {8}, LW, false, 2, NA},
+    };
+    static const std::vector<PlanCh> b913 = {
+        {"Meshtastic US MediumFast 913.125", "meshtastic", 913.125e6, 250e3, {9}, MT, false, 0, NA},
+        {"LoRaWAN US915 913.5", "lorawan", 913.5e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 913.7", "lorawan", 913.7e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 913.9", "lorawan", 913.9e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 914.1", "lorawan", 914.1e6, 125e3, SF7_10, LW, false, 2, NA},
+    };
+    /* AU915 FSB2 = channels 8–15 (915.2 + 0.2n) + 500 kHz channel 65 (915.9 + 1.6n) — TTN AU_915_928_FSB_2 */
+    static const std::vector<PlanCh> b917 = {
+        {"MeshCore NZ Narrow 917.375", "meshcore", 917.375e6, 62.5e3, {7}, MC, false, 0, OC},
+        {"MeshCore Australia (Narrow) 916.575", "meshcore", 916.575e6, 62.5e3, {7}, MC, false, 0, OC | SA},
+        {"Meshtastic SG/PH LongFast 917.875", "meshtastic", 917.875e6, 250e3, {11}, MT, false, 0, AS},
+        {"LoRaWAN AU915 FSB2 916.8", "lorawan", 916.8e6, 125e3, SF7_10, LW, false, 0, OC | SA},
+        {"LoRaWAN AU915 FSB2 917.0", "lorawan", 917.0e6, 125e3, SF7_10, LW, false, 0, OC | SA},
+        {"LoRaWAN AS923-3 916.6", "lorawan", 916.6e6, 125e3, SF7_10, LW, false, 0, AS},
+        {"LoRaWAN AS923-4 917.3", "lorawan", 917.3e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN AS923-4 917.5", "lorawan", 917.5e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN AU915 FSB2 917.2", "lorawan", 917.2e6, 125e3, SF7_10, LW, false, 1, OC | SA},
+        {"LoRaWAN AU915 FSB2 917.4", "lorawan", 917.4e6, 125e3, SF7_10, LW, false, 1, OC | SA},
+        {"LoRaWAN AU915 FSB2 917.6", "lorawan", 917.6e6, 125e3, SF7_10, LW, false, 1, OC | SA},
+        {"LoRaWAN AU915 FSB2 917.8", "lorawan", 917.8e6, 125e3, SF7_10, LW, false, 1, OC | SA},
+        {"LoRaWAN AU915 FSB2 918.0", "lorawan", 918.0e6, 125e3, SF7_10, LW, false, 2, OC | SA},
+        {"LoRaWAN AU915 FSB2 918.2", "lorawan", 918.2e6, 125e3, SF7_10, LW, false, 2, OC | SA},
+        {"MeshCore NZ Gisborne 917.375", "meshcore", 917.375e6, 250e3, {11}, MC, false, 2, OC},
+        {"LoRaWAN AU915 FSB2 917.5 (500 kHz)", "lorawan", 917.5e6, 500e3, {8}, LW, false, 2, OC | SA},
+    };
+    static const std::vector<PlanCh> b922 = {
+        {"LoRaWAN AS923-2 921.4", "lorawan", 921.4e6, 125e3, SF7_10, LW, false, 0, AS},
+        {"LoRaWAN AS923-2 921.6", "lorawan", 921.6e6, 125e3, SF7_10, LW, false, 0, AS},
+        {"LoRaWAN KR920 922.1", "lorawan", 922.1e6, 125e3, ALL, LW, false, 0, AS},
+        {"MeshCore Thailand 921.000", "meshcore", 921.0e6, 62.5e3, {7}, MC, false, 0, AS},
+        {"LoRaWAN KR920 922.3", "lorawan", 922.3e6, 125e3, ALL, LW, false, 1, AS},
+        {"LoRaWAN KR920 922.5", "lorawan", 922.5e6, 125e3, ALL, LW, false, 1, AS},
+        {"LoRaWAN KR920 RX2 921.9 (downlink)", "lorawan", 921.9e6, 125e3, {12}, LW, true, 2, AS},
+    };
+    static const std::vector<PlanCh> b925 = {
+        {"LoRaWAN UZ923 926.2 (draft)", "lorawan", 926.2e6, 125e3, SF7_10, LW, false, 0},
+        {"Meshtastic US MediumTurbo 925.25", "meshtastic", 925.25e6, 500e3, {9}, MT, false, 1, NA},
+        {"LoRaWAN US/AU 925.1 (downlink, 500 kHz)", "lorawan", 925.1e6, 500e3, {7, 8, 9, 10, 11, 12}, LW, true, 2, NA | OC | SA},
+        {"LoRaWAN US/AU 925.7 (downlink, 500 kHz)", "lorawan", 925.7e6, 500e3, {7, 8, 9, 10, 11, 12}, LW, true, 2, NA | OC | SA},
+    };
+    static const std::vector<PlanCh> b927 = {
+        {"MeshCore USA Southern California 927.875", "meshcore", 927.875e6, 62.5e3, {7}, MC, false, 0},
+        {"LoRaWAN UZ923 926.4 (draft)", "lorawan", 926.4e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN UZ923 926.6 (draft)", "lorawan", 926.6e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN UZ923 926.8 (draft)", "lorawan", 926.8e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN US/AU 926.9 (downlink, 500 kHz)", "lorawan", 926.9e6, 500e3, {7, 8, 9, 10, 11, 12}, LW, true, 2, NA | OC | SA},
+        {"LoRaWAN US/AU 927.5 (downlink, 500 kHz)", "lorawan", 927.5e6, 500e3, {7, 8, 9, 10, 11, 12}, LW, true, 2, NA | OC | SA},
+    };
     static const std::vector<PlanCh> none;
+    if (band == "479") return b479;
+    if (band == "865") return b865;
+    if (band == "867") return b867;
+    if (band == "904") return b904;
+    if (band == "913") return b913;
+    if (band == "917") return b917;
+    if (band == "922") return b922;
+    if (band == "925") return b925;
+    if (band == "927") return b927;
     if (band == "868") return eu868;
     if (band == "433") return eu433;
     if (band == "907") return b907;

@@ -406,18 +406,42 @@ int main(int argc, char** argv) {
         // every plan channel's slot / preset is inside its band's capture at 2.4 MS/s (the radio where ismHwCentre puts it)
         auto hwOf = [](const vibeism::Band& b, double rate) {
             return b.dcOffsetHz <= 0 ? b.centreHz : b.centreHz + std::max(40e3, std::min(b.dcOffsetHz, rate * 0.45 - b.needHz)); };
-        for (const char* id : {"907", "910", "915", "920", "923"}) {
+        // ★ beta72: every LoRa band and world block, with the allocation a typed frequency must stay inside
+        struct Alloc { const char* id; double lo, hi; };
+        for (const Alloc& al : {Alloc{"479", 470e6, 510e6}, Alloc{"865", 863e6, 870e6}, Alloc{"867", 863e6, 870e6},
+                                Alloc{"904", 902e6, 928e6}, Alloc{"907", 902e6, 928e6}, Alloc{"910", 902e6, 928e6},
+                                Alloc{"913", 902e6, 928e6}, Alloc{"915", 902e6, 928e6}, Alloc{"917", 902e6, 928e6},
+                                Alloc{"920", 915e6, 928e6}, Alloc{"922", 902e6, 928e6}, Alloc{"923", 915e6, 928e6},
+                                Alloc{"925", 902e6, 928e6}, Alloc{"927", 902e6, 928e6}}) {
+            const char* id = al.id;
             const auto* b = vibeism::bandById(id);
-            const double lo = std::string(id) >= "920" ? 915.0e6 : 902.0e6;
-            ok(b && vibeism::exactAllowed(*b, lo) && vibeism::exactAllowed(*b, 928.0e6) && !vibeism::exactAllowed(*b, lo - 0.1e6)
-               && !vibeism::exactAllowed(*b, 928.1e6), std::string(id) + ": a typed frequency is allowed inside its allocation only");
+            ok(b != nullptr, std::string(id) + ": the band exists");
+            if (!b) continue;
+            ok(vibeism::exactAllowed(*b, al.lo) && vibeism::exactAllowed(*b, al.hi) && !vibeism::exactAllowed(*b, al.lo - 0.1e6)
+               && !vibeism::exactAllowed(*b, al.hi + 0.1e6), std::string(id) + ": a typed frequency is allowed inside its allocation only");
+            ok(!planFor(id).empty(), std::string(id) + ": has a channel plan");
+            {   // ★ the block's DEFAULT channels (every region's, no position) all fit at 2.048 MS/s — the research's rule
+                size_t t0 = 0; for (const auto& c : planFor(id)) if (c.tier == 0) ++t0;
+                const size_t in2048 = choose(planFor(id), hwOf(*b, 2.048e6), 2.048e6, 0, 0.45, Region::Unknown).size();
+                ok(std::string(id) == "915" || std::string(id) == "920" || in2048 == t0,
+                   std::string(id) + ": all " + std::to_string(t0) + " default channels fit at 2.048 MS/s (" + std::to_string(in2048) + ")");
+                // ★ and the radio's DC is not inside a narrow (≤ 125 kHz) default channel
+                const double hc = hwOf(*b, 2.048e6);
+                bool clear = true;
+                for (const auto& c : planFor(id)) if (c.tier == 0 && c.bw <= 125e3 && std::fabs(c.hz - hc) < c.bw / 2) clear = false;
+                ok(clear || std::string(id) == "923" || std::string(id) == "915",   // ★ beta71's two, unchanged (on-air tested)
+                   std::string(id) + ": the DC is outside every narrow default channel");
+            }
             const auto& plan = planFor(id);
             const size_t fit24 = choose(plan, hwOf(*b, 2.4e6), 2.4e6, INFINITY).size();
             const size_t main2048 = choose(plan, hwOf(*b, 2.048e6), 2.048e6, 0, 0.45, Region::Other).size();
             std::printf("    %s %-28s radio %.3f MHz: %zu of %zu channels fit at 2.4 MS/s; the band's main channel at 2.048: %zu\n",
                         id, b->name, hwOf(*b, 2.4e6) / 1e6, fit24, plan.size(), main2048);
             ok(fit24 == plan.size() || std::string(id) == "920", std::string(id) + ": every plan channel fits at 2.4 MS/s");
-            ok(std::string(id) == "915" || main2048 >= 1, std::string(id) + ": its main (no-home) channel runs at 2.048 MS/s too");
+            // ★ beta71's mesh bands are named for one network everyone shares; beta72's regional blocks (904 US/BR, 913 US,
+            //   917 AU/NZ/AS, 922 AS) have none by design — elsewhere they run on the budget (tier 2) and found on air
+            const bool regional = std::string(id) == "904" || std::string(id) == "913" || std::string(id) == "917" || std::string(id) == "922";
+            ok(std::string(id) == "915" || regional || main2048 >= 1, std::string(id) + ": its main (no-home) channel runs at 2.048 MS/s too");
         }
         {   // ★ the 868 band at 2.048 MS/s (LORA-WORLD-BANDS.md found it): Meshtastic LongFast 869.525 was out of reach at 868.6
             const auto* b8 = vibeism::bandById("868");
@@ -440,8 +464,21 @@ int main(int argc, char** argv) {
            && br915.find("US915") == std::string::npos, "Brazil, 915: " + br915);
         const std::string us915 = names(tier0("915", Region::NorthAmerica));
         ok(us915.find("US915 914.3") != std::string::npos && us915.find("AU915") == std::string::npos, "US, 915: " + us915);
-        for (const char* id : {"907", "910", "915", "920", "923"})
-            for (Region r : {Region::NorthAmerica, Region::SouthAmerica, Region::Oceania, Region::Asia, Region::Unknown}) {
+        // ★ beta72 world blocks: the right networks by default where the server is
+        const std::string us904 = names(tier0("904", Region::NorthAmerica)), br904 = names(tier0("904", Region::SouthAmerica));
+        ok(us904.find("FSB2 903.9") != std::string::npos && us904.find("BR_902") == std::string::npos, "US, 904: FSB2 — " + us904);
+        ok(br904 == "Meshtastic BR_902 LongFast 903.875; ", "Brazil, 904: Meshtastic BR_902 — " + br904);
+        const std::string nz917 = names(tier0("917", Region::Oceania));
+        ok(nz917.find("MeshCore NZ Narrow 917.375") != std::string::npos && nz917.find("AU915 FSB2 916.8") != std::string::npos
+           && nz917.find("AS923") == std::string::npos, "NZ/AU, 917: " + nz917);
+        ok(names(tier0("479", Region::China)).find("CN470 479.9") != std::string::npos, "China, 479: CN470 join channel");
+        ok(names(tier0("865", Region::India)).find("IN865 865.0625") != std::string::npos
+           && names(tier0("865", Region::India)).find("NZ_865") == std::string::npos, "India, 865: IN865, not NZ_865");
+        ok(names(tier0("922", Region::Asia)).find("KR920 922.1") != std::string::npos, "Asia, 922: KR920");
+        ok(names(tier0("927", Region::NorthAmerica)).find("Southern California") != std::string::npos, "US, 927: MeshCore SoCal");
+        for (const char* id : {"479", "865", "867", "904", "907", "910", "913", "915", "917", "920", "922", "923", "925", "927"})
+            for (Region r : {Region::NorthAmerica, Region::SouthAmerica, Region::Oceania, Region::Asia, Region::India, Region::China,
+                             Region::Other, Region::Unknown}) {
                 double u = 0; for (auto* c : tier0(id, r)) u += chanCost(*c);
                 double eu = 0; for (const auto& c : planFor("868")) if (c.tier == 0) eu += chanCost(c);
                 if (r == Region::Unknown) std::printf("    %s default set, no position: %.2f units (868's: %.2f)\n", id, u, eu);
