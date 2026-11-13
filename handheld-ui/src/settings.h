@@ -31,7 +31,7 @@ struct Settings {
     bool followVfo = true;         // VFO CENTRE: LOCKED (the view follows the dial)
     int meterMode = 0;             // 0 SNR · 1 S-units · 2 dBFS (the web's meter cycle)
     int volume = -1;               // last known (the hardware service owns it)
-    int dispClock = 0, dispProven = 1;   // the KEPT display mode (pixel clock kHz; 0 = the panel's default) — display_rate.h
+    int dispClock = 0, dispProven = 1;   // ✗ IGNORED since 2026-11-13 (the display-rate switcher was removed): still read so an old settings file loads
     int stickDeg = 30;             // ★ the TUNING STICK FEEL: degrees of turn a step (Stuart, 2026-11-07: "more of a turn before
                                    //   it steps so a user can dial in the feel they want") — 30 = the web's Jog
     /** ★★ REC BUFFER seconds: 0 / 30 / 60 — 30 by default and KEPT through a restart (Stuart, 2026-11-11: "make 30

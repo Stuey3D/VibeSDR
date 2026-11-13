@@ -75,7 +75,7 @@ inline void App::holdSweep() {
     const double t = nowSec();
     const bool inKb = !sheets_.empty() && sheets_.back() == S_KB;
     const bool l = l2Down_ || joyL2_ || kbL2_ || testHold_ < 0, r = r2Down_ || joyR2_ || kbR2_ || testHold_ > 0;
-    const int dir = (!screenOff_ && !inKb && !dispRateWaiting() && l != r) ? (r ? 1 : -1) : 0;
+    const int dir = (!screenOff_ && !inKb && l != r) ? (r ? 1 : -1) : 0;
     if (dir == 0 || dir != sweepDir_) { sweepDir_ = dir; sweepZoneAt_ = t; sweepStart_ = 0; sweepAwaiting_ = false; return; }
     if (sweepStart_ == 0) {
         if (t - sweepZoneAt_ < 0.35) return;          // HOLD_MS (the press itself has made the first step)
@@ -169,7 +169,6 @@ inline void App::updateSignal(const uint8_t* bins, int n, double centreHz, doubl
 inline void App::press(Btn b) {
     lastInput_ = nowSec();
     if (screenOff_) { screenOff_ = false; eng_->device("{\"action\":\"screen-on\"}"); return; }
-    if (dispRatePress(*this, b)) return;   // a display-rate change waiting to be kept (display_rate.h)
     if (!sheets_.empty() && sheets_.back() == S_KB) { kbInput(b); return; }   // ★ the keyboard takes every button while it is up
     if (mapPress(*this, b)) return;   // ★ the map: L1/R1 zoom IT, the bottom face selects under the pointer (map_view.h mapControl)
     const bool inFreq = !sheets_.empty() && sheets_.back() == S_KB;
@@ -1192,7 +1191,6 @@ inline int App::run(int argc, char** argv) {
     eng_ = &eng;
     eng.start();
     lastInput_ = nowSec();
-    dispRateStartup(*this);   // the display rate the person KEPT, if any
 
     // ★ tests: VIBE_HHUI_SCRIPT="frame:BUTTON,…" presses buttons at drawn frames
     std::vector<std::pair<int, Btn>> script;
@@ -1264,7 +1262,6 @@ inline int App::run(int argc, char** argv) {
         memTick(*this, s);
         clockTick(*this, s);
         clockAutoTick(*this);
-        dispRateTick(*this);
         if (s.session != lastSession) { if (s.session == "running") { nav_.setFocus("deck", "freq"); lastDevPoll = 0; } lastSession = s.session; }
         idleNow_ = set_.idleSave && !screenOff_ && nowSec() - lastInput_ > idleSec();
         {
@@ -1473,7 +1470,6 @@ inline int App::run(int argc, char** argv) {
         if (nav_.backPressed() && !sheets_.empty()) closeTop();
         nav_.end();
         drawToasts(c);
-        dispRateDraw(*this, c);
         g_.flush();
 
         if (shot && (int)frame == shotFrame) {

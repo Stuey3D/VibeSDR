@@ -76,8 +76,9 @@ inline float App::secDisplay(Ctx& c, const RadioState& s, Rect a, float y) {
             sendLatest("d.bri", [this, m] { eng_->device(m); });   // ★ a held slider: ≤ 10 POSTs a second, the last always
         }
     }
-    // DISPLAY RATE (display_rate.h — Stuart, 2026-11-07: screen noise on FM)
-    y = dispRateRow(*this, c, a, y);
+    /* ★ (DISPLAY RATE is gone — Stuart, 2026-11-13: "we can remove the screen refresh selection option from the system
+     *  menu, it was there to try and figure out the SDR interference which turns out wasnt the screen". The panel runs its
+     *  default mode; a mode kept earlier (Settings.dispClock) is no longer applied.) */
     // ★★ (SPECTRUM RATE is gone — Stuart, 2026-11-07: "loose the 5/10/20 raw data and simply stick with 5FPS and use the
     //    interpolator for scrolling": the engine always sends 5, WATERFALL SPEED below says how it scrolls)
     float y0 = y;

@@ -284,13 +284,6 @@ public:
 // the AUDIO sheet's per-frame work (sec_audio.h): auto squelch, the recording tap, re-sends on reconnect
 void audioTick(App&, const RadioState&);
 void audioSpecFrame(App&, const uint8_t*, int, double, double);
-// DISPLAY RATE (display_rate.h): the panel's modes, live, with keep-or-revert
-inline bool dispRatePress(App&, Btn);
-inline void dispRateTick(App&);
-inline void dispRateDraw(App&, Ctx&);
-inline void dispRateStartup(App&);
-inline float dispRateRow(App&, Ctx&, Rect, float);
-inline bool dispRateWaiting();
 inline bool& decBoxTallShown();
 inline bool decPicFullOpen();
 // SET CLOCK FROM RDS / DAB (clock_rds.h): watches their clocks, offers a corroborated one
@@ -353,7 +346,6 @@ namespace hh { inline bool decSkimSegment(int& lo, int& hi); }
 #include "map_page.h"
 #include "map_modes.h"
 #include "memory.h"
-#include "display_rate.h"
 #include "clock_rds.h"
 #include "adv_rds.h"
 #include "adv_rds_dec.h"
