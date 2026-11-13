@@ -110,8 +110,8 @@ inline void mapFetchCaps(int port) {
             if (m.id == "adsb" && inModes) m.cap = 1;
             m.why = j[m.id + "Why"].str().substr(0, 200);
         }
-        x.ismBands.clear();
-        for (auto& b : j["ismBands"].a) if (b["id"].kind == Json::Str && b["name"].kind == Json::Str && b["hz"].kind == Json::Num && x.ismBands.size() < 8) x.ismBands.push_back({b["id"].s, b["name"].s});
+        x.ismBands.clear();   // ★ ≤ 64: a bound on the server's list, not a design limit (src/services/ism.ts ISM_MAX_BANDS)
+        for (auto& b : j["ismBands"].a) if (b["id"].kind == Json::Str && b["name"].kind == Json::Str && b["hz"].kind == Json::Num && x.ismBands.size() < 64) x.ismBands.push_back({b["id"].s, b["name"].s});
         x.ismLanding = j["ismLanding"].str();
         for (auto& m : x.m) if (m.id == "ism" && x.ismBands.empty()) m.cap = -1;   // ★ no bands = no ISM (main.ts ismReadCap)
     });

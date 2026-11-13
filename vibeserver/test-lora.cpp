@@ -180,6 +180,24 @@ int main(int argc, char** argv) {
         std::printf("wrote %s: %.1f s at %.0f S/s around %.3f MHz\n", argv[2], double(x.size()) / rate, rate, centre / 1e6);
         return 0;
     }
+    if (argc >= 5 && std::string(argv[1]) == "--write-clip-found") {
+        // ★ V12 found on air (test-server-lora-found.mjs): a MeshCore repeater on 915.000 MHz BW125 SF9 — no plan's channel —
+        //   every 2.5 s for 20 s, at the 915 band's capture (radio at 915.25 MHz)
+        const double centre = std::atof(argv[3]), rate = std::atof(argv[4]);
+        std::mt19937 r(13);
+        std::vector<Tx> txs;
+        for (int k = 0; k < 8; ++k) txs.push_back({915.0e6, 125e3, 9, 1, 0x12, 16, mcAdvert("Torre Paran\xc3\xa1 " + std::to_string(k + 1), -25.43, -49.27, 2), 0.6 + 2.5 * k, 1800, false});
+        const auto x = render(txs, rate, centre, 20.0, 10, r);
+        FILE* f = std::fopen(argv[2], "wb");
+        if (!f) return 1;
+        std::vector<uint8_t> u(x.size() * 2);
+        for (size_t i = 0; i < x.size(); ++i) {
+            u[2 * i] = uint8_t(std::max(0.0f, std::min(255.0f, std::round(x[i].real() * 3.5f * 128 + 127.5f))));
+            u[2 * i + 1] = uint8_t(std::max(0.0f, std::min(255.0f, std::round(x[i].imag() * 3.5f * 128 + 127.5f))));
+        }
+        std::fwrite(u.data(), 1, u.size(), f); std::fclose(f);
+        return 0;
+    }
     std::mt19937 rng(5);
 
     std::printf("── the primitives on their standards' test vectors ──\n");
@@ -388,18 +406,42 @@ int main(int argc, char** argv) {
         // every plan channel's slot / preset is inside its band's capture at 2.4 MS/s (the radio where ismHwCentre puts it)
         auto hwOf = [](const vibeism::Band& b, double rate) {
             return b.dcOffsetHz <= 0 ? b.centreHz : b.centreHz + std::max(40e3, std::min(b.dcOffsetHz, rate * 0.45 - b.needHz)); };
-        for (const char* id : {"907", "910", "915", "920", "923"}) {
+        // ★ beta72: every LoRa band and world block, with the allocation a typed frequency must stay inside
+        struct Alloc { const char* id; double lo, hi; };
+        for (const Alloc& al : {Alloc{"479", 470e6, 510e6}, Alloc{"865", 863e6, 870e6}, Alloc{"867", 863e6, 870e6},
+                                Alloc{"904", 902e6, 928e6}, Alloc{"907", 902e6, 928e6}, Alloc{"910", 902e6, 928e6},
+                                Alloc{"913", 902e6, 928e6}, Alloc{"915", 902e6, 928e6}, Alloc{"917", 902e6, 928e6},
+                                Alloc{"920", 915e6, 928e6}, Alloc{"922", 902e6, 928e6}, Alloc{"923", 915e6, 928e6},
+                                Alloc{"925", 902e6, 928e6}, Alloc{"927", 902e6, 928e6}}) {
+            const char* id = al.id;
             const auto* b = vibeism::bandById(id);
-            const double lo = std::string(id) >= "920" ? 915.0e6 : 902.0e6;
-            ok(b && vibeism::exactAllowed(*b, lo) && vibeism::exactAllowed(*b, 928.0e6) && !vibeism::exactAllowed(*b, lo - 0.1e6)
-               && !vibeism::exactAllowed(*b, 928.1e6), std::string(id) + ": a typed frequency is allowed inside its allocation only");
+            ok(b != nullptr, std::string(id) + ": the band exists");
+            if (!b) continue;
+            ok(vibeism::exactAllowed(*b, al.lo) && vibeism::exactAllowed(*b, al.hi) && !vibeism::exactAllowed(*b, al.lo - 0.1e6)
+               && !vibeism::exactAllowed(*b, al.hi + 0.1e6), std::string(id) + ": a typed frequency is allowed inside its allocation only");
+            ok(!planFor(id).empty(), std::string(id) + ": has a channel plan");
+            {   // ★ the block's DEFAULT channels (every region's, no position) all fit at 2.048 MS/s — the research's rule
+                size_t t0 = 0; for (const auto& c : planFor(id)) if (c.tier == 0) ++t0;
+                const size_t in2048 = choose(planFor(id), hwOf(*b, 2.048e6), 2.048e6, 0, 0.45, Region::Unknown).size();
+                ok(std::string(id) == "915" || std::string(id) == "920" || in2048 == t0,
+                   std::string(id) + ": all " + std::to_string(t0) + " default channels fit at 2.048 MS/s (" + std::to_string(in2048) + ")");
+                // ★ and the radio's DC is not inside a narrow (≤ 125 kHz) default channel
+                const double hc = hwOf(*b, 2.048e6);
+                bool clear = true;
+                for (const auto& c : planFor(id)) if (c.tier == 0 && c.bw <= 125e3 && std::fabs(c.hz - hc) < c.bw / 2) clear = false;
+                ok(clear || std::string(id) == "923" || std::string(id) == "915",   // ★ beta71's two, unchanged (on-air tested)
+                   std::string(id) + ": the DC is outside every narrow default channel");
+            }
             const auto& plan = planFor(id);
             const size_t fit24 = choose(plan, hwOf(*b, 2.4e6), 2.4e6, INFINITY).size();
             const size_t main2048 = choose(plan, hwOf(*b, 2.048e6), 2.048e6, 0, 0.45, Region::Other).size();
             std::printf("    %s %-28s radio %.3f MHz: %zu of %zu channels fit at 2.4 MS/s; the band's main channel at 2.048: %zu\n",
                         id, b->name, hwOf(*b, 2.4e6) / 1e6, fit24, plan.size(), main2048);
             ok(fit24 == plan.size() || std::string(id) == "920", std::string(id) + ": every plan channel fits at 2.4 MS/s");
-            ok(std::string(id) == "915" || main2048 >= 1, std::string(id) + ": its main (no-home) channel runs at 2.048 MS/s too");
+            // ★ beta71's mesh bands are named for one network everyone shares; beta72's regional blocks (904 US/BR, 913 US,
+            //   917 AU/NZ/AS, 922 AS) have none by design — elsewhere they run on the budget (tier 2) and found on air
+            const bool regional = std::string(id) == "904" || std::string(id) == "913" || std::string(id) == "917" || std::string(id) == "922";
+            ok(std::string(id) == "915" || regional || main2048 >= 1, std::string(id) + ": its main (no-home) channel runs at 2.048 MS/s too");
         }
         {   // ★ the 868 band at 2.048 MS/s (LORA-WORLD-BANDS.md found it): Meshtastic LongFast 869.525 was out of reach at 868.6
             const auto* b8 = vibeism::bandById("868");
@@ -422,8 +464,21 @@ int main(int argc, char** argv) {
            && br915.find("US915") == std::string::npos, "Brazil, 915: " + br915);
         const std::string us915 = names(tier0("915", Region::NorthAmerica));
         ok(us915.find("US915 914.3") != std::string::npos && us915.find("AU915") == std::string::npos, "US, 915: " + us915);
-        for (const char* id : {"907", "910", "915", "920", "923"})
-            for (Region r : {Region::NorthAmerica, Region::SouthAmerica, Region::Oceania, Region::Asia, Region::Unknown}) {
+        // ★ beta72 world blocks: the right networks by default where the server is
+        const std::string us904 = names(tier0("904", Region::NorthAmerica)), br904 = names(tier0("904", Region::SouthAmerica));
+        ok(us904.find("FSB2 903.9") != std::string::npos && us904.find("BR_902") == std::string::npos, "US, 904: FSB2 — " + us904);
+        ok(br904 == "Meshtastic BR_902 LongFast 903.875; ", "Brazil, 904: Meshtastic BR_902 — " + br904);
+        const std::string nz917 = names(tier0("917", Region::Oceania));
+        ok(nz917.find("MeshCore NZ Narrow 917.375") != std::string::npos && nz917.find("AU915 FSB2 916.8") != std::string::npos
+           && nz917.find("AS923") == std::string::npos, "NZ/AU, 917: " + nz917);
+        ok(names(tier0("479", Region::China)).find("CN470 479.9") != std::string::npos, "China, 479: CN470 join channel");
+        ok(names(tier0("865", Region::India)).find("IN865 865.0625") != std::string::npos
+           && names(tier0("865", Region::India)).find("NZ_865") == std::string::npos, "India, 865: IN865, not NZ_865");
+        ok(names(tier0("922", Region::Asia)).find("KR920 922.1") != std::string::npos, "Asia, 922: KR920");
+        ok(names(tier0("927", Region::NorthAmerica)).find("Southern California") != std::string::npos, "US, 927: MeshCore SoCal");
+        for (const char* id : {"479", "865", "867", "904", "907", "910", "913", "915", "917", "920", "922", "923", "925", "927"})
+            for (Region r : {Region::NorthAmerica, Region::SouthAmerica, Region::Oceania, Region::Asia, Region::India, Region::China,
+                             Region::Other, Region::Unknown}) {
                 double u = 0; for (auto* c : tier0(id, r)) u += chanCost(*c);
                 double eu = 0; for (const auto& c : planFor("868")) if (c.tier == 0) eu += chanCost(c);
                 if (r == Region::Unknown) std::printf("    %s default set, no position: %.2f units (868's: %.2f)\n", id, u, eu);
@@ -484,6 +539,106 @@ int main(int argc, char** argv) {
         ok(ni == 1 && tx == 1, "Meshtastic US node info and a LongFast text, opened with the worldwide default key");
     }
 
+    std::printf("── FOUND ON AIR (V12 2026-11-12): LoRa where no plan listens, and never a sensor ──\n");
+    {
+        const auto* b = vibeism::bandById("915");
+        const double fs = 2.4e6, hc = b->centreHz + 250e3;    // 915.25, where ismHwCentre puts the radio
+        const double secs = 9.0;
+        std::mt19937 r2(41);
+        // ★ a network on 915.000 MHz, BW125 SF9 — 75 kHz from MeshCore AU (Mid) 915.075, 200 kHz from AU915 915.2: no plan's
+        std::vector<Tx> lora;
+        for (int k = 0; k < 4; ++k)
+            lora.push_back({915.0e6, 125e3, 9, 1, 0x12, 16, mcAdvert("Torre " + std::to_string(k + 1), -25.4, -49.3, 2), 0.4 + 2.2 * k, 2500, false});
+        auto x = render(lora, fs, hc, secs, 6.0, r2);
+        // ★ and what must NEVER start a detector: OOK sensors, FSK hops (an AMI meter), a carrier with bursty sidebands
+        auto add = [&](double hz, double t0, double len, auto&& sig) {
+            const double off = hz - hc; const size_t s0 = size_t(t0 * fs);
+            for (size_t i = 0; i < size_t(len * fs) && s0 + i < x.size(); ++i) {
+                const double t = double(i) / fs; const std::complex<double> v = sig(t) * std::polar(1.0, 2 * M_PI * off * t);
+                x[s0 + i] += cf(float(v.real()), float(v.imag()));
+            }
+        };
+        std::uniform_int_distribution<int> bit(0, 1);
+        for (int k = 0; k < 12; ++k) {
+            const double t0 = 0.1 + 0.7 * k;
+            add(915.30e6, t0, 0.03, [](double t) { return std::fmod(t, 1e-3) < 5e-4 ? 0.05 : 0.0; });            // OOK, 1 kHz PWM
+            std::vector<int> bits(400); for (auto& v : bits) v = bit(r2);
+            double ph = 0, last = 0;
+            add(914.60e6 + 40e3 * (k % 5), t0 + 0.2, 0.02, [&, ph, last](double t) mutable {                     // 2-FSK ±60 kHz, 19.2 kbaud
+                const int bi = std::min(399, int(t * 19200)); ph += 2 * M_PI * (bits[size_t(bi)] ? 60e3 : -60e3) * (t - last); last = t;
+                return std::polar(0.04, ph); });
+            add(915.75e6, t0 + 0.4, 0.15, [](double t) {                                                          // a carrier, ±75 kHz sidebands
+                return std::complex<double>(0.08, 0) + 0.012 * std::cos(2 * M_PI * 75e3 * t) * (std::fmod(t, 0.02) < 0.01 ? 1.0 : 0.0); });
+        }
+        const std::string store = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") + "/test-lora-found.txt";
+        std::remove(store.c_str());
+        FoundStore fst; fst.setPath(store);
+        FoundBook& bk = fst.book("915");
+        Engine e;
+        e.setDiscover(true);
+        const auto region = vibeism::Region::SouthAmerica;
+        e.startInline("915", hc, fs, INFINITY, 0.45, region, &bk.list, 1000.0);
+        const size_t planRun = e.channelsRun();
+        int found = 0, restarts = 0;
+        std::vector<Shape> shapes;
+        const size_t chunk = size_t(fs * 0.1);
+        for (size_t i = 0; i < x.size(); i += chunk) {
+            e.process(x.data() + i, std::min(chunk, x.size() - i));
+            const double now = 1000.0 + double(i) / fs;
+            std::vector<StdCh> plan; const auto run = e.channelNames();
+            for (const auto& c : planFor("915")) plan.push_back({c.name, c.hz, c.bw, c.sfs, std::find(run.begin(), run.end(), std::string(c.name)) != run.end()});
+            bool changed = false;
+            for (const auto& sh : e.takeShapes()) { shapes.push_back(sh); changed |= bk.offer(sh, now, plan, run); }
+            for (auto& h : e.take()) if (h.m.found) {
+                ++found; changed |= bk.decoded(h.f.chan, h.f.sf, now);
+                std::printf("    %-34s SF%d %+6.0f Hz  %s\n", h.f.chan.c_str(), h.f.sf, h.f.cfoHz, meshcore::line(h.m).c_str());
+            }
+            if (changed) { e.startInline("915", hc, fs, INFINITY, 0.45, region, &bk.list, now); ++restarts; }
+        }
+        const auto c = e.shapeCounts();
+        std::printf("    shapes %llu (narrow %llu, wide %llu, not flat %llu, no sweep %llu, too short %llu, too long %llu, weak %llu); %d restarts\n",
+                    (unsigned long long)c.shapes, (unsigned long long)c.narrow, (unsigned long long)c.wide, (unsigned long long)c.notFlat,
+                    (unsigned long long)c.noSweep, (unsigned long long)c.tooShort, (unsigned long long)c.tooLong, (unsigned long long)c.weak, restarts);
+        bool onlyLora = !shapes.empty();
+        for (const auto& sh : shapes) { onlyLora = onlyLora && std::fabs(sh.hz - 915.0e6) < 20e3 && sh.bw == 125e3;
+            std::printf("    shape %.4f MHz BW%g %.0f ms SNR %.0f dB SF≤%d\n", sh.hz / 1e6, sh.bw / 1e3, sh.durSec * 1e3, sh.snrDb, sh.sfMax); }
+        ok(onlyLora, "every LoRa-shaped burst is the 915.000 network (BW125): no OOK, FSK or carrier was taken for LoRa");
+        ok(bk.list.size() == 1 && std::fabs(bk.list[0].hz - 915.0e6) < 10e3 && bk.list[0].bw == 125e3 && bk.list[0].std.empty(),
+           "one channel found on air at 915.000 MHz BW125 (" + std::to_string(bk.list.size()) + ")");
+        ok(found >= 1 && !bk.list.empty() && bk.list[0].good == std::vector<int>{9}, "…and decoded there after two bursts, SF9 kept (" + std::to_string(found) + " frames)");
+        ok(e.foundRun() == 1 && e.channelsRun() == planRun + 1, "the plan channels still run beside it: " + std::to_string(planRun) + " + 1 found");
+        // ★ the budget rules: with the default set's budget only (a Pi 2 with no benchmark) the found channel waits
+        { Engine p2; p2.startInline("915", hc, fs, 0, 0.45, region, &bk.list, 2000.0);
+          ok(p2.foundRun() == 0, "no budget (the Pi 2's default set only): known, not run"); }
+        // ★ remembered: saved atomically, read back, and a restart starts on it
+        ok(fst.save(), "saved to " + store);
+        FoundStore back; back.setPath(store);
+        auto& bl = back.book("915").list;
+        ok(bl.size() == 1 && bl[0].hz == bk.list[0].hz && bl[0].sfs == bk.list[0].sfs && bl[0].good == bk.list[0].good && bl[0].frames == bk.list[0].frames,
+           "read back after a restart: " + (bl.empty() ? std::string("nothing") : bl[0].name()));
+        {
+            std::mt19937 r3(43);
+            const auto y = render({{915.0e6, 125e3, 9, 1, 0x12, 16, mcAdvert("Torre 9", -25.4, -49.3, 2), 0.3, -1500, false}}, fs, hc, 1.5, 6.0, r3);
+            Engine e2; e2.startInline("915", hc, fs, INFINITY, 0.45, region, &bl, 3000.0);
+            for (size_t i = 0; i < y.size(); i += 65536) e2.process(y.data() + i, std::min<size_t>(65536, y.size() - i));
+            int got = 0; std::string line;
+            for (auto& h : e2.take()) if (h.m.found && h.m.longName == "Torre 9") { ++got; MeshTable mt; mt.accept(h.m, 1); for (auto& r : mt.rowsJson(1)) line = r.second; }
+            ok(got == 1, "after the restart the FIRST packet on 915.000 decodes (no re-discovery)");
+            ok(line.find("found on air") != std::string::npos && line.find("\"onAir\":1") != std::string::npos, "its row says \"found on air\": " + line.substr(0, 160));
+        }
+        // ★ forgotten after a week of silence; an SF set that hears bursts and decodes nothing is retired for the next
+        {
+            FoundBook t; FoundCh f; f.hz = 916.1e6; f.bw = 62.5e3; f.order = {8, 7, 9, 10, 11}; f.sfs = {8, 7, 9}; f.first = f.last = 0; t.list.push_back(f);
+            t.list[0].bursts = FoundBook::kRetireBursts;
+            ok(t.tick(10) && t.list[0].sfs == std::vector<int>{10, 11} && t.list[0].tried.size() == 3, "four bursts, nothing decoded: SF8/7/9 retired, SF10/11 tried next");
+            t.list[0].bursts = FoundBook::kRetireBursts;
+            ok(t.tick(20) && t.list[0].sfs.empty() && t.list[0].retiredUntil > 20, "everything tried: resting for an hour");
+            t.list[0].last = 30;
+            ok(t.tick(30 + FoundBook::kForgetSec + 1) && t.list.empty(), "silent for a week: forgotten");
+        }
+        std::remove(store.c_str());
+    }
+
     std::printf("── pure noise: nothing, and the CPU rows ──\n");
     {
         const double fs = 2.4e6, hc = 868.6e6, secs = 20;
@@ -502,6 +657,13 @@ int main(int argc, char** argv) {
                         100 * cpu / secs, e.channelsRun(), e.detectors());
             for (auto& n : e.channelNames()) std::printf("      %s\n", n.c_str());
         }
+        // ★ V12 found on air: the search alone over the same 20 s of noise — nothing LoRa-shaped, and what it costs
+        Shaper sh; sh.reset(fs, hc);
+        const auto t0 = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < x.size(); i += 65536) sh.feed(x.data() + i, std::min<size_t>(65536, x.size() - i));
+        const double cpu = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        ok(sh.take().empty(), "the found-on-air search: 20 s of noise → nothing LoRa-shaped");
+        std::printf("    CPU the found-on-air search: %.2f %% of one core at 2.4 MS/s\n", 100 * cpu / secs);
     }
 
     std::printf("%s\n", fails ? "FAILED" : "all passed");

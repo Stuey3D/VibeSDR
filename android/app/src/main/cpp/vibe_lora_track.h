@@ -103,6 +103,7 @@ public:
         if (m.hopStart >= 0 && m.hopLimit >= 0 && m.hopStart >= m.hopLimit) r.hops = m.hopStart - m.hopLimit;
         if (m.pathLen >= 0) r.hops = m.pathLen;
         if (!m.channel.empty()) r.channel = m.channel;
+        r.found = m.found;   // ★ V12: on a channel found on air (the latest frame says)
         if (m.privateCh) ++r.priv; else ++r.open;
         r.lastWhat = m.what;
         if (m.proto == "lorawan") { r.mtype = m.mtype; r.fcnt = m.fcnt; r.fport = m.fport; r.encLen = m.encLen; r.net = m.net; r.lineLw = lorawan::line(m); }
@@ -189,6 +190,7 @@ private:
         double lat = NAN, lon = NAN, alt = NAN, posT = -1; int prec = 0;
         int batt = -1; double volt = NAN, temp = NAN, hum = NAN, hpa = NAN, chUtil = NAN;
         int hops = -1, fcnt = -1, fport = -1, encLen = -1;
+        bool found = false;
         std::deque<Text> msgs;
     };
     static std::string hex2(uint8_t v) { char b[4]; std::snprintf(b, sizeof b, "%02X", v); return b; }
@@ -203,7 +205,9 @@ private:
         if (!r.shortName.empty() && r.shortName != r.longName) n += " (" + r.shortName + ")";
         return n;
     }
-    static std::string lineOf(const Row& r) {
+    /** ★ V12 2026-11-12: a row heard on a channel found on air says so — on the list, the map and the gallery alike. */
+    static std::string lineOf(const Row& r) { return lineOf0(r) + (r.found ? mkDot() + "found on air" : std::string()); }
+    static std::string lineOf0(const Row& r) {
         const std::string d = mkDot();
         if (r.proto == "lorawan") return r.lineLw + d + "SF" + std::to_string(r.sf);
         if (r.proto == "lora") return r.lineLora + (r.count > 1 ? d + std::to_string(r.count) + " frames" : "");
@@ -232,6 +236,7 @@ private:
         auto str = [&](const char* k, const std::string& v) { if (!v.empty()) { o += ",\""; o += k; o += "\":\"" + jesc(v) + "\""; } };
         auto num = [&](const char* k, double v, int dp) { if (v == v) { o += ",\""; o += k; o += "\":" + f1(v, dp); } };
         str("node", r.node); str("short", r.shortName); str("long", r.longName); str("hw", r.hw); str("role", r.role);
+        if (r.found) o += ",\"onAir\":1";   // ★ found on air, not a standard channel
         str("chan", r.channel); str("net", r.net); str("mtype", r.mtype); str("what", r.lastWhat);
         if (r.lat == r.lat) {
             const PubPos p = publishedPos(r.proto, r.role, r.lat, r.lon);

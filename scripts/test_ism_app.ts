@@ -89,6 +89,17 @@ const cap = app.parseIsmCapability({ ism: true, ismBands: [{ id: '433', name: '4
   { id: '868', name: '868 MHz SRD', hz: 868_600_000 }, { id: 9 }], ismLanding: '433' });
 eq('live, the bands this radio reaches', cap, { ok: true, why: '', bands: [{ id: '433', name: '433.92 MHz ISM', hz: 433_920_000 },
   { id: '868', name: '868 MHz SRD', hz: 868_600_000 }], landing: '433' });
+{ // ★ the band list is BOUNDED, not capped at a design number — beta71 filled the old 8 exactly (315…923); the worldwide
+  //   LoRa blocks need more. The three clients must agree (the web page and the R36S read the same vibeserver.json).
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `b${i}`, name: `Band ${i}`, hz: 300_000_000 + i * 1_000_000 }));
+  eq('20 bands: all kept, in order', app.parseIsmCapability({ ism: true, ismBands: many(20) })!.bands.map((b: any) => b.id), many(20).map((b) => b.id));
+  eq('a runaway list stops at ISM_MAX_BANDS', app.parseIsmCapability({ ism: true, ismBands: many(5000) })!.bands.length, app.ISM_MAX_BANDS);
+  eq('the bound is generous (> 8)', app.ISM_MAX_BANDS > 8, true);
+  const webSrc = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  const hhSrc = readFileSync(new URL('../handheld-ui/src/map_modes.h', import.meta.url), 'utf8');
+  eq('web page: same bound', (webSrc.match(/typeof b\.hz === 'number'\)\.slice\(0, (\d+)\)/) || [])[1], String(app.ISM_MAX_BANDS));
+  eq('R36S: same bound', (hhSrc.match(/x\.ismBands\.size\(\) < (\d+)\)/) || [])[1], String(app.ISM_MAX_BANDS));
+}
 eq('refused: greyed with the reason', app.parseIsmCapability({ ism: false, ismWhy: 'Locked centre on a shared dial', ismBands: [{ id: '433', name: 'x', hz: 1 }] }),
    { ok: false, why: 'Locked centre on a shared dial', bands: [{ id: '433', name: 'x', hz: 1 }], landing: '433' });
 eq('neighbours at the bottom', app.ismNeighbours(cap, a).prev, null);
@@ -136,7 +147,7 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
 {
   const lr = {
     type: 'ism', band: '868', bandName: '868 MHz SRD', centre: 868_600_000, bursts: 10,
-    lora: { chans: 13, plan: 16, dets: 42, frames: 31, badCrc: 1, texts: 2, mapped: 2, dropped: 0 },
+    lora: { chans: 13, plan: 16, dets: 42, frames: 31, badCrc: 1, texts: 2, mapped: 2, dropped: 0, found: 2, foundKnown: 3 },
     msgs: [{ ago: 14, net: 'meshcore', from: 'Alice', node: '', ch: 'Public', freq: 869_617_000, text: 'anyone on the mesh tonight?' },
            { ago: 40, net: 'meshtastic', from: '!55667788', node: '!55667788', ch: 'LongFast', freq: 869_521_000, text: 'Hello <b>Racecourse</b>' },
            { ago: 'x', text: 5 }],
@@ -165,6 +176,8 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('app: the same two', a2.devices.filter(app.ismOnMap).map((d) => d.key), ['m1', 'm2']);
   eq('the status line, both', app.ismStatus(a2), web.ismStatus(w));
   eq('…which counts the LoRa frames and channels', /LoRa 31 frames · 13 of 16 channels/.test(web.ismStatus(w)), true);
+  // ★ V12 2026-11-12: the channels found on air, and the one the CPU budget holds back, said honestly
+  eq('…and the channels found on air', / \+ 2 found on air \(1 more found, waiting for CPU\)/.test(web.ismStatus(w)), true);
   const u = { mph: true, pressure: 'bar' as const };
   for (const d of w.devices) eq(`a LoRa line has no unit choice: ${d.key}`, web.ismLine(d, u), d.line);
   const rx = { lat: 52.2405, lon: -0.9025 };

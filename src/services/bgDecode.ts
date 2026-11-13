@@ -35,12 +35,21 @@ export const BG_DEMODS: Record<string, string> = { usb: 'USB', lsb: 'LSB', nfm: 
 export const BG_ISM_WORDS: Record<string, string> = {
   '315': '315 MHz (US / Japan: tyre sensors, key fobs, remotes)',
   '433': '433.92 MHz (weather stations, sensors, doorbells, tyre sensors)',
+  '479': '479 MHz — China LoRa (CN470, Meshtastic CN)',
+  '865': '865 MHz — India LoRaWAN (IN865), Meshtastic India / NZ_865',
+  '867': '867 MHz — EU LoRaWAN 867.1–867.9, Meshtastic Kazakhstan / Nepal',
   '868': '868 MHz SRD — sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)',
+  '904': '904.6 MHz — US LoRaWAN (FSB2, The Things Network), Meshtastic Brazil',
   '907': '907 MHz — Meshtastic US (LongFast 906.875)',
   '910': '910 MHz — MeshCore US / Canada (910.525)',
+  '913': '913 MHz — Meshtastic US MediumFast (913.125)',
   '915': '915 MHz (US: LaCrosse, Ambient, Fine Offset; MeshCore AU, LoRaWAN AU915)',
+  '917': '917.4 MHz — AU/NZ LoRaWAN (AU915 FSB2), MeshCore NZ, AS923-3/-4',
   '920': '920 MHz — Meshtastic ANZ (LongFast 919.875), MeshCore Vietnam / Thailand',
+  '922': '921.7 MHz — AS923-2 and Korea LoRaWAN, MeshCore Thailand',
   '923': '923 MHz — MeshCore Brazil / Australia (923.125), AS923, Meshtastic JP / KR / TW',
+  '925': '925 MHz — US / AU LoRaWAN downlinks',
+  '927': '927 MHz — MeshCore Southern California (927.875)',
 };
 export const BG_WAIT_CHOICES = [1, 2, 5, 10, 15, 30, 60];
 export const BG_NDB_LO = 190000, BG_NDB_HI = 535000, BG_NDB_MIN = 100000, BG_NDB_LEGACY_CENTRE = 362750;

@@ -1540,6 +1540,11 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-lora" --write-clip "$OUT/lora-clip.u8" 868800000 2400000 >/dev/null
   VIBE_LORA_CLIP="$OUT/lora-clip.u8" node scripts/test-server-lora.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 LoRa FOUND ON AIR (2026-11-12): a repeater on no plan's channel, found, decoded, labelled, remembered over a restart
+  "$OUT/test-lora" --write-clip-found "$OUT/lora-found-clip.u8" 915250000 2400000
+  VIBE_LORA_FOUND_CLIP="$OUT/lora-found-clip.u8" node scripts/test-server-lora-found.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/lora-found-clip.u8"
   VIBE_LORA_CLIP="$OUT/lora-clip.u8" node scripts/test-web-lora.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★★ V12 the ISM map (2026-11-01): icons by type, approximate people, position links, the time filter, a live push,

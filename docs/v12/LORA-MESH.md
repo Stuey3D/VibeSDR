@@ -158,6 +158,53 @@ FSB2 916.8–918.2, Meshtastic SG/PH LongFast 917.875, Meshtastic US MediumFast 
 LongFast 903.875, **US915 FSB2 903.9–905.3 (TTN's and most public US networks' — beta72's 904 block)**, MeshCore S. California 927.875. A ninth band would need
 the clients' eight-band cap raised first.
 
+### Found on air (V12 2026-11-12, `vibe_lora_discover.h`)
+
+Stuart: in ISM mode "we decoded the entire band that is visible on screen". The plans name where networks SHOULD be;
+Kiko's 915 band in Brazil (81 bursts, 81 unidentified, LoRa 0) showed traffic where none listened. So on top of the
+plans, LoRa searches the whole capture for itself:
+
+1. **Shaper** (the vibe-lora thread, before the channeliser): a 256-point FFT of one frame in four (~2 300 a second at
+   2.4 MS/s) into a **decaying max-hold** (−6 dB in ~70 ms). One frame is ~0.1 ms, inside which a chirp is a single
+   moving tone; held, its sweep paints its whole band while a tone, two FSK tones or a carrier stay narrow. The floor is
+   tracked on the held spectrum (and frozen under a burst). A burst is LoRa-SHAPED when it is 62.5 / 125 / 250 / 500 kHz
+   wide (±45 %), flat over the middle 60 % of that width (within 6 dB), the frame-by-frame peak visits ≥ 5 of its eight
+   sub-bands (a sweep), 8 dB over the floor, and long enough for a preamble (12.25 symbols at SF7; the largest SF whose
+   preamble fits bounds the guesses). Cost: 0.18 % of an M5 core at 2.4 MS/s against 1.3 % for the 868 default set —
+   ~14 % of the default set's, so it runs only where a found channel could (budget > 0: never on a Pi 2 with no benchmark).
+2. **FoundBook** (the ISM service's housekeeping): a burst a RUNNING channel explains is ignored; one a STANDARD channel
+   explains (any plan channel of the band within ±BW/4 or ±50 ppm — another region's, or a tier past the budget) brings
+   that channel in under its own name + "(found on air)"; **two** LoRa-shaped bursts within five minutes at a centre
+   nothing covers start "Found on air 915.002 MHz BW125". SFs are tried three at a time — the band's presets at that
+   width first, then SF7 up to the bursts' bound; four bursts heard (while it is actually running) with nothing decoded
+   retire that set for the next; a decode keeps just the SFs that decoded; everything tried: resting an hour; silent a
+   week: forgotten; eight per band at most. A change restarts LoRa at most once per 20 s.
+3. **Budget**: found channels run after the default set and before tiers 1 and 2 (`choose`), only while the budget
+   allows. The report says so: `lora.chans` (plan channels), `found` (found running), `foundKnown`, `foundList`; the
+   clients: "LoRa 31 frames · 13 of 16 channels + 2 found on air (1 more found, waiting for CPU)".
+4. **Remembered**: per radio, every band, one text file beside its bookmarks (`bookmarks-x.lora-found.txt`), written
+   atomically (temporary file + rename) on every restart of the set and when ISM stops; read at the next start, so a
+   restarted server listens there from its first packet.
+5. **Labelled**: a row heard on a found channel carries `onAir: 1` and its line ends "· found on air" — the list, the
+   map and the gallery's lines alike.
+
+Tests: test-lora "FOUND ON AIR" — a MeshCore repeater on 915.000 MHz BW125 SF9 (75 kHz from 915.075, 200 from 915.2: no
+plan's) at +6 dB among OOK sensors, 2-FSK ±60 kHz hops and a carrier with ±75 kHz sidebands: only the repeater is
+LoRa-shaped, one channel is found, its third and fourth packets decode on SF9, the budget-0 case holds it back, the file
+round-trips and a fresh engine on it decodes the first packet; the retire / rest / forget rules; 20 s of noise → no
+shape. test-server-lora-found.mjs — the same through the real server (a GG33if server lands on 923; on 915 the
+repeater is found, decoded and labelled; the report says "13 plan + 1 found"; restarted, it runs from the start).
+
+**Kiko's 915 band (Stuart's screenshot, 22:37 UTC; reasoned, never connected):** the capture 914.3–916.2 MHz (radio at
+915.25). (1) 914.95–915.02 MHz, ~120–150 kHz blocks of tens to hundreds of ms, many a minute: LoRa-like at BW125, but on
+no standard channel — not US915 914.9 (+85 kHz = 93 ppm, more than an RTL's usual error) nor AU915 915.2 / MeshCore AU
+Mid 915.075 (−90 kHz); exactly the case found-on-air is for (it will say what it is, or retire it). (2) 915.15–915.35 with
+a narrow spike at 915.25: **915.25 is the radio's own DC**; the thin 240 kHz lines round it are short wideband pulses —
+FSK/FHSS utility meters are the likeliest (Brazil's AMI meshes hop across 902–907.5 / 915–928); not LoRa-shaped, so no
+detector. (3) 915.7–915.8: a steady carrier with ~150 kHz bursty sidebands — RFID-like (a reader's carrier and tag
+replies); AU915 915.8 and MeshCore AU 915.800 (BW250 SF10) sit there too and now run in South America's default set.
+The meters (2) are not an open format we read (proprietary FHSS AMI; wM-Bus is EU 868/169 MHz) — noted, not built.
+
 ★ **Frequency error.** The detector folds CFO into timing and separates them at the SFD: ±BW/4 is safe (test-lora: a
 MeshCore 923.125 frame 12 kHz off its 62.5 kHz channel decodes). An RTL without a TCXO can be 20–50 ppm out — 18–46 kHz
 at 923 MHz, past a 62.5 kHz channel's reach — so **Auto-PPM** (AUTO-PPM.md, on by default) matters most on these bands:

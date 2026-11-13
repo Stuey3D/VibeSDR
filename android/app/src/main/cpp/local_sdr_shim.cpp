@@ -39475,6 +39475,13 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         g_bmPath = path;
     }
     if (path.empty()) return;
+    /* ★★ V12 2026-11-12: this radio's LoRa channels FOUND ON AIR (vibe_lora_discover.h), every band, one file beside its
+     *  bookmarks (which are this radio's own) — "bookmarks-x.json" → "bookmarks-x.lora-found.txt". Read at the next ISM start. */
+    {
+        const size_t slash = path.find_last_of('/'), dot = path.find_last_of('.');
+        const std::string stem = dot != std::string::npos && (slash == std::string::npos || dot > slash) ? path.substr(0, dot) : path;
+        g_ism.setFoundFile(stem + ".lora-found.txt");
+    }
     /* ★ The DAB+ decoder's learnt sample-rate ratio lives beside the bookmarks — the one
      *  writable place every server already has. See DabService::setRatioFile. */
     {

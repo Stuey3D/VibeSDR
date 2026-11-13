@@ -9013,7 +9013,7 @@ let ismReport: IsmReport | null = null;
 let ismBox: IsmBox | null = null;
 function ismReadCap(j: any) {
   const bands: IsmBand[] = Array.isArray(j?.ismBands)
-    ? j.ismBands.filter((b: any) => b && typeof b.id === 'string' && typeof b.name === 'string' && typeof b.hz === 'number').slice(0, 8)
+    ? j.ismBands.filter((b: any) => b && typeof b.id === 'string' && typeof b.name === 'string' && typeof b.hz === 'number').slice(0, 64)   // ★ a bound on untrusted input, not a design limit (src/services/ism.ts ISM_MAX_BANDS)
     : [];
   if ((j?.ism === true || j?.ism === false) && bands.length) {
     const why = typeof j.ismWhy === 'string' ? j.ismWhy.trim().slice(0, 200) : '';

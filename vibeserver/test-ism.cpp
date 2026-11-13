@@ -2430,7 +2430,15 @@ int main(int argc, char** argv) {
         CHECK(std::string(landingBand(-36.85, 174.76, all)->id) == "920", "New Zealand (Auckland) lands on 920");
         CHECK(std::string(landingBand(35.68, 139.69, all)->id) == "923", "Japan (Tokyo) lands on 923 (AS923, Meshtastic JP)");
         CHECK(std::string(landingBand(25.03, 121.56, all)->id) == "923", "Taiwan lands on 923");
-        CHECK(std::string(landingBand(39.9, 116.4, all)->id) == "433", "mainland China (Beijing) is not AS923: 433.92");
+        // ★ beta72: China and India land on their own blocks (CN470 / IN865), not 433.92
+        CHECK(std::string(landingBand(39.9, 116.4, all)->id) == "479", "mainland China (Beijing) is not AS923: 479 (CN470)");
+        CHECK(std::string(landingBand(31.23, 121.47, all)->id) == "479", "Shanghai (121.5° E) is China too");
+        CHECK(std::string(landingBand(37.57, 126.98, all)->id) == "923", "Seoul stays AS923: 923");
+        CHECK(std::string(landingBand(28.61, 77.21, all)->id) == "865", "India (Delhi) lands on 865 (IN865)");
+        CHECK(std::string(landingBand(19.08, 72.88, all)->id) == "865", "India (Mumbai) lands on 865");
+        CHECK(std::string(landingBand(24.86, 67.0, all)->id) == "433", "Karachi (outside the India box) stays 433.92");
+        auto noCn = [](const Band& b) { return std::string(b.id) != "479"; };
+        CHECK(std::string(landingBand(39.9, 116.4, noCn)->id) == "433", "China on a radio without 479 falls to 433.92");
         CHECK(std::string(landingBand(NAN, NAN, all)->id) == "433", "no position lands on 433.92");
         CHECK(regionAt(9.93, -84.08) == Region::NorthAmerica && regionAt(-34.6, -58.4) == Region::SouthAmerica
               && regionAt(52.2, -0.9) == Region::Other && regionAt(NAN, 1) == Region::Unknown, "regions: Costa Rica, Buenos Aires, UK, none");
@@ -2438,15 +2446,21 @@ int main(int argc, char** argv) {
         CHECK(std::string(landingBand(40.7, -74.0, noMesh)->id) == "315", "US without the mesh bands → 315");
         auto only433 = [](const Band& b) { return std::string(b.id) == "433"; };
         CHECK(std::string(landingBand(-22.62, -48.63, only433)->id) == "433", "a radio reaching only 433 still lands, anywhere");
-        // ★ the step order is frequency order, ≤ 8 bands (what every client draws), names ≤ 40 characters
+        // ★ the step order is frequency order, ≤ 64 bands (every client's bound since beta72; it was 8), names ≤ 40 characters
         double lastHz = 0; bool ordered = true, shortNames = true;
         for (const auto& b : bands()) { ordered = ordered && b.centreHz > lastHz; lastHz = b.centreHz; shortNames = shortNames && std::strlen(b.name) <= 40; }
-        CHECK(ordered && bands().size() <= 8 && shortNames, "%zu bands in frequency order, names short enough for every client", bands().size());
+        CHECK(ordered && bands().size() <= 64 && bands().size() >= 17 && shortNames, "%zu bands in frequency order, names short enough for every client", bands().size());
         CHECK(exactAllowed(*bandById("923"), 923.125e6) && exactAllowed(*bandById("907"), 902.0e6) && !exactAllowed(*bandById("923"), 929e6)
               && !exactAllowed(*bandById("907"), 900e6) && exactAllowed(*bandById("910"), 912.0e6) && exactAllowed(*bandById("920"), 915.0e6)
               && !exactAllowed(*bandById("920"), 914.9e6) && !exactAllowed(*bandById("923"), 914.0e6) && exactAllowed(*bandById("923"), 928.0e6),
               "exactAllowed: 906/910/915 take 902–928 MHz, 920/923 take 915–928 (Brazil, AU/NZ, AS923), nothing outside");
         CHECK(std::string(bandById("923")->name) == "923 MHz ISM (MeshCore BR/AU, AS923)", "923's readout: %s", bandById("923")->name);
+        // ★ beta72: the eight beta71 bands are untouched (on-air tested; background profiles name them)
+        CHECK(bandById("315")->centreHz == 315.00e6 && bandById("433")->centreHz == 433.92e6 && bandById("868")->centreHz == 868.60e6
+              && bandById("907")->centreHz == 906.60e6 && bandById("910")->centreHz == 910.40e6 && bandById("915")->centreHz == 915.00e6
+              && bandById("920")->centreHz == 920.65e6 && bandById("923")->centreHz == 923.30e6, "beta71's eight bands keep their centres");
+        CHECK(exactAllowed(*bandById("479"), 470e6) && !exactAllowed(*bandById("479"), 469.9e6) && exactAllowed(*bandById("865"), 864.875e6)
+              && exactAllowed(*bandById("904"), 903.9e6) && !exactAllowed(*bandById("904"), 901.9e6), "exactAllowed: the world blocks' allocations");
         auto none = [](const Band&) { return false; };
         CHECK(landingBand(52.2, -0.9, none) == nullptr, "an HF+ (no band) has no landing");
     }

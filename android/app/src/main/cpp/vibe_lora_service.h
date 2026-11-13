@@ -18,6 +18,7 @@
 #include "vibe_lorawan.h"
 #include "vibe_meshtastic.h"
 #include "vibe_meshcore.h"
+#include "vibe_lora_discover.h"   // ★ V12 2026-11-12: LoRa channels found on air
 #include "vibe_thread.h"
 #include <atomic>
 #include <cstdlib>
@@ -42,6 +43,7 @@ struct PlanCh {
     int tier;                  ///< 0 = the default set (runs on the minimum-spec Pi 2); 1, 2 = added as the budget allows
     unsigned home = 0;         ///< ★ 902–928 MHz: the regions (homeBit) whose network this is; 0 = everywhere. Away from
                                ///<   home a channel drops to tier 2 (still there with the budget or "lora+all")
+    bool found = false;        ///< ★ a channel FOUND ON AIR (vibe_lora_discover.h), not a standard one
 };
 inline unsigned homeBit(vibeism::Region r) { return 1u << unsigned(r); }
 /** A channel's tier where the receiver is: its own at home and where the region is unknown (no position set: every
@@ -98,8 +100,8 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
     static const unsigned NA = homeBit(Region::NorthAmerica), SA = homeBit(Region::SouthAmerica),
                           OC = homeBit(Region::Oceania), AS = homeBit(Region::Asia);
     static const std::vector<int> SF7_10 = {7, 8, 9, 10};
-    /* ★ US915 FSB2 (903.9–905.3, TTN's and most public US networks') is NOT in any capture here: a 904 block
-     *  (LORA-WORLD-BANDS.md) is beta72's. The 915 band's FSB8 914.3–914.9 stays for whoever uses it. */
+    /* ★ US915 FSB2 (903.9–905.3, TTN's and most public US networks') is the 904 block's (beta72, below). The 915 band's
+     *  FSB8 914.3–914.9 stays for whoever uses it. */
     static const std::vector<PlanCh> b907 = {
         {"Meshtastic US LongFast 906.875", "meshtastic", 906.875e6, 250e3, {11}, MT, false, 0},
         {"Meshtastic BR_902 MediumFast 906.625", "meshtastic", 906.625e6, 250e3, {9}, MT, false, 1, SA},
@@ -148,7 +150,112 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
         {"LoRaWAN AS923 923.4", "lorawan", 923.4e6, 125e3, SF7_10, LW, false, 1, AS},
         {"MeshCore 923.125 SF7", "meshcore", 923.125e6, 62.5e3, {7}, MC, false, 2},
     };
+    /* ★★ V12 beta72 — THE WORLD BLOCKS' PLANS (docs/v12/LORA-WORLD-BANDS.md: Meshtastic slots computed from the firmware's
+     *  djb2 formula and checked in test-lora; MeshCore from its preset list; LoRaWAN from RP002-1.0.4 / TTN frequency
+     *  plans). Tier 0 = each block's regional DEFAULT channels — what a Pi 2 runs; `home` drops another region's defaults
+     *  to tier 2 where the server's position is known. LoRaWAN uplinks SF7–10 where the plan's dwell limit caps them
+     *  (US915/AU915/AS923), SF7–12 elsewhere. 500 kHz downlinks are 4× an SF's cost at 125 k: tier 2 only. */
+    static const unsigned IN = homeBit(Region::India), CN = homeBit(Region::China);
+    static const std::vector<PlanCh> b479 = {
+        {"Meshtastic CN LongFast 478.875", "meshtastic", 478.875e6, 250e3, {11}, MT, false, 0},
+        {"LoRaWAN CN470 479.9 (join)", "lorawan", 479.9e6, 125e3, {7, 8, 9, 10, 11}, LW, false, 0, CN},
+    };
+    static const std::vector<PlanCh> b865 = {
+        {"Meshtastic IN LongFast 865.875", "meshtastic", 865.875e6, 250e3, {11}, MT, false, 0},
+        {"Meshtastic NZ_865 LongFast 864.875", "meshtastic", 864.875e6, 250e3, {11}, MT, false, 0, OC},
+        /* ★ SF7–11 in the default set and SF12 at tier 2: with SF12 the block's default set (no position) cost 28.1 units
+         *  against the 868 band's 25.85 — the Pi 2's measured budget */
+        {"LoRaWAN IN865 865.0625", "lorawan", 865.0625e6, 125e3, {7, 8, 9, 10, 11}, LW, false, 0, IN},
+        {"LoRaWAN IN865 865.4025", "lorawan", 865.4025e6, 125e3, {7, 8, 9, 10, 11}, LW, false, 0, IN},
+        {"LoRaWAN IN865 865.985", "lorawan", 865.985e6, 125e3, {7, 8, 9, 10, 11}, LW, false, 0, IN},
+        {"LoRaWAN IN865 865.0625 SF12", "lorawan", 865.0625e6, 125e3, {12}, LW, false, 2, IN},
+        {"LoRaWAN IN865 865.4025 SF12", "lorawan", 865.4025e6, 125e3, {12}, LW, false, 2, IN},
+        {"LoRaWAN IN865 865.985 SF12", "lorawan", 865.985e6, 125e3, {12}, LW, false, 2, IN},
+        {"Meshtastic EU_866 LiteFast 866.3", "meshtastic", 866.3e6, 125e3, {9}, MT, false, 1},
+        {"Meshtastic EU_866 LiteSlow 865.7", "meshtastic", 865.7e6, 125e3, {10}, MT, false, 1},
+        {"LoRaWAN IN865 RX2 866.55 (downlink)", "lorawan", 866.55e6, 125e3, {10}, LW, true, 2, IN},
+    };
+    static const std::vector<PlanCh> b867 = {
+        {"Meshtastic KZ_863 LongFast 866.875", "meshtastic", 866.875e6, 250e3, {11}, MT, false, 0},
+        {"Meshtastic NP_865 LongFast 867.875", "meshtastic", 867.875e6, 250e3, {11}, MT, false, 0},
+        {"LoRaWAN 867.1", "lorawan", 867.1e6, 125e3, ALL, LW, false, 1},
+        {"LoRaWAN 867.3", "lorawan", 867.3e6, 125e3, ALL, LW, false, 1},
+        {"LoRaWAN 867.5", "lorawan", 867.5e6, 125e3, ALL, LW, false, 1},
+        {"LoRaWAN 867.7", "lorawan", 867.7e6, 125e3, ALL, LW, false, 1},
+        {"LoRaWAN 867.9", "lorawan", 867.9e6, 125e3, ALL, LW, false, 1},
+    };
+    /* US915 FSB2 = channels 8–15 (902.3 + 0.2n) + the 500 kHz channel 65 (903.0 + 1.6n) — TTN US_902_928_FSB_2 */
+    static const std::vector<PlanCh> b904 = {
+        {"LoRaWAN US915 FSB2 903.9", "lorawan", 903.9e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"LoRaWAN US915 FSB2 904.1", "lorawan", 904.1e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"LoRaWAN US915 FSB2 904.3", "lorawan", 904.3e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"LoRaWAN US915 FSB2 904.5", "lorawan", 904.5e6, 125e3, SF7_10, LW, false, 0, NA},
+        {"Meshtastic BR_902 LongFast 903.875", "meshtastic", 903.875e6, 250e3, {11}, MT, false, 0, SA},
+        {"LoRaWAN US915 FSB2 904.7", "lorawan", 904.7e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 FSB2 904.9", "lorawan", 904.9e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 FSB2 905.1", "lorawan", 905.1e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 FSB2 905.3", "lorawan", 905.3e6, 125e3, SF7_10, LW, false, 1, NA},
+        {"LoRaWAN US915 FSB2 904.6 (500 kHz)", "lorawan", 904.6e6, 500e3, {8}, LW, false, 2, NA},
+    };
+    static const std::vector<PlanCh> b913 = {
+        {"Meshtastic US MediumFast 913.125", "meshtastic", 913.125e6, 250e3, {9}, MT, false, 0, NA},
+        {"LoRaWAN US915 913.5", "lorawan", 913.5e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 913.7", "lorawan", 913.7e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 913.9", "lorawan", 913.9e6, 125e3, SF7_10, LW, false, 2, NA},
+        {"LoRaWAN US915 914.1", "lorawan", 914.1e6, 125e3, SF7_10, LW, false, 2, NA},
+    };
+    /* AU915 FSB2 = channels 8–15 (915.2 + 0.2n) + 500 kHz channel 65 (915.9 + 1.6n) — TTN AU_915_928_FSB_2 */
+    static const std::vector<PlanCh> b917 = {
+        {"MeshCore NZ Narrow 917.375", "meshcore", 917.375e6, 62.5e3, {7}, MC, false, 0, OC},
+        {"MeshCore Australia (Narrow) 916.575", "meshcore", 916.575e6, 62.5e3, {7}, MC, false, 0, OC | SA},
+        {"Meshtastic SG/PH LongFast 917.875", "meshtastic", 917.875e6, 250e3, {11}, MT, false, 0, AS},
+        {"LoRaWAN AU915 FSB2 916.8", "lorawan", 916.8e6, 125e3, SF7_10, LW, false, 0, OC | SA},
+        {"LoRaWAN AU915 FSB2 917.0", "lorawan", 917.0e6, 125e3, SF7_10, LW, false, 0, OC | SA},
+        {"LoRaWAN AS923-3 916.6", "lorawan", 916.6e6, 125e3, SF7_10, LW, false, 0, AS},
+        {"LoRaWAN AS923-4 917.3", "lorawan", 917.3e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN AS923-4 917.5", "lorawan", 917.5e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN AU915 FSB2 917.2", "lorawan", 917.2e6, 125e3, SF7_10, LW, false, 1, OC | SA},
+        {"LoRaWAN AU915 FSB2 917.4", "lorawan", 917.4e6, 125e3, SF7_10, LW, false, 1, OC | SA},
+        {"LoRaWAN AU915 FSB2 917.6", "lorawan", 917.6e6, 125e3, SF7_10, LW, false, 1, OC | SA},
+        {"LoRaWAN AU915 FSB2 917.8", "lorawan", 917.8e6, 125e3, SF7_10, LW, false, 1, OC | SA},
+        {"LoRaWAN AU915 FSB2 918.0", "lorawan", 918.0e6, 125e3, SF7_10, LW, false, 2, OC | SA},
+        {"LoRaWAN AU915 FSB2 918.2", "lorawan", 918.2e6, 125e3, SF7_10, LW, false, 2, OC | SA},
+        {"MeshCore NZ Gisborne 917.375", "meshcore", 917.375e6, 250e3, {11}, MC, false, 2, OC},
+        {"LoRaWAN AU915 FSB2 917.5 (500 kHz)", "lorawan", 917.5e6, 500e3, {8}, LW, false, 2, OC | SA},
+    };
+    static const std::vector<PlanCh> b922 = {
+        {"LoRaWAN AS923-2 921.4", "lorawan", 921.4e6, 125e3, SF7_10, LW, false, 0, AS},
+        {"LoRaWAN AS923-2 921.6", "lorawan", 921.6e6, 125e3, SF7_10, LW, false, 0, AS},
+        {"LoRaWAN KR920 922.1", "lorawan", 922.1e6, 125e3, ALL, LW, false, 0, AS},
+        {"MeshCore Thailand 921.000", "meshcore", 921.0e6, 62.5e3, {7}, MC, false, 0, AS},
+        {"LoRaWAN KR920 922.3", "lorawan", 922.3e6, 125e3, ALL, LW, false, 1, AS},
+        {"LoRaWAN KR920 922.5", "lorawan", 922.5e6, 125e3, ALL, LW, false, 1, AS},
+        {"LoRaWAN KR920 RX2 921.9 (downlink)", "lorawan", 921.9e6, 125e3, {12}, LW, true, 2, AS},
+    };
+    static const std::vector<PlanCh> b925 = {
+        {"LoRaWAN UZ923 926.2 (draft)", "lorawan", 926.2e6, 125e3, SF7_10, LW, false, 0},
+        {"Meshtastic US MediumTurbo 925.25", "meshtastic", 925.25e6, 500e3, {9}, MT, false, 1, NA},
+        {"LoRaWAN US/AU 925.1 (downlink, 500 kHz)", "lorawan", 925.1e6, 500e3, {7, 8, 9, 10, 11, 12}, LW, true, 2, NA | OC | SA},
+        {"LoRaWAN US/AU 925.7 (downlink, 500 kHz)", "lorawan", 925.7e6, 500e3, {7, 8, 9, 10, 11, 12}, LW, true, 2, NA | OC | SA},
+    };
+    static const std::vector<PlanCh> b927 = {
+        {"MeshCore USA Southern California 927.875", "meshcore", 927.875e6, 62.5e3, {7}, MC, false, 0},
+        {"LoRaWAN UZ923 926.4 (draft)", "lorawan", 926.4e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN UZ923 926.6 (draft)", "lorawan", 926.6e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN UZ923 926.8 (draft)", "lorawan", 926.8e6, 125e3, SF7_10, LW, false, 1},
+        {"LoRaWAN US/AU 926.9 (downlink, 500 kHz)", "lorawan", 926.9e6, 500e3, {7, 8, 9, 10, 11, 12}, LW, true, 2, NA | OC | SA},
+        {"LoRaWAN US/AU 927.5 (downlink, 500 kHz)", "lorawan", 927.5e6, 500e3, {7, 8, 9, 10, 11, 12}, LW, true, 2, NA | OC | SA},
+    };
     static const std::vector<PlanCh> none;
+    if (band == "479") return b479;
+    if (band == "865") return b865;
+    if (band == "867") return b867;
+    if (band == "904") return b904;
+    if (band == "913") return b913;
+    if (band == "917") return b917;
+    if (band == "922") return b922;
+    if (band == "925") return b925;
+    if (band == "927") return b927;
     if (band == "868") return eu868;
     if (band == "433") return eu433;
     if (band == "907") return b907;
@@ -166,11 +273,21 @@ inline double chanCost(const PlanCh& c) { double u = 0; for (int sf : c.sfs) u +
 
 /** Which plan channels run: everything inside the capture, the default tier always (never hidden by the benchmark —
  *  only the owner switches LoRa off), then the next tiers while `budgetUnits` lasts (∞ = all; "all" forced by the owner). */
+/** ★ `found` (V12 2026-11-12, vibe_lora_discover.h): channels found on air — after the default set, before tiers 1 and 2,
+ *  while the budget lasts (they never push the default set out, and never run on a Pi 2 with no benchmark). */
 inline std::vector<const PlanCh*> choose(const std::vector<PlanCh>& plan, double hwCentreHz, double rateHz, double budgetUnits,
-                                         double edge = 0.45, vibeism::Region region = vibeism::Region::Unknown) {
+                                         double edge = 0.45, vibeism::Region region = vibeism::Region::Unknown,
+                                         const std::vector<PlanCh>* found = nullptr) {
     std::vector<const PlanCh*> out;
     double used = 0;
-    for (int tier = 0; tier <= 2; ++tier)
+    for (int tier = 0; tier <= 2; ++tier) {
+        if (tier == 1 && found)
+            for (const auto& c : *found) {
+                if (std::fabs(c.hz - hwCentreHz) + c.bw / 2 > edge * rateHz + 1) continue;
+                const double u = chanCost(c);
+                if (used + u > budgetUnits) continue;
+                used += u; out.push_back(&c);
+            }
         for (const auto& c : plan) {
             if (tierAt(c, region) != tier) continue;
             if (std::fabs(c.hz - hwCentreHz) + c.bw / 2 > edge * rateHz + 1) continue;
@@ -178,6 +295,7 @@ inline std::vector<const PlanCh*> choose(const std::vector<PlanCh>& plan, double
             if (tier > 0 && used + u > budgetUnits) continue;
             used += u; out.push_back(&c);
         }
+    }
     return out;
 }
 
@@ -228,15 +346,35 @@ public:
     ~Engine() { stop(); }
     /** Start on `band` ("868"…) with the radio at `hwCentreHz`, `rateHz`. Returns the channels that run. */
     size_t start(const std::string& band, double hwCentreHz, double rateHz, double budgetUnits, double edge = 0.45,
-                 vibeism::Region region = vibeism::Region::Unknown) {
+                 vibeism::Region region = vibeism::Region::Unknown, const std::vector<FoundCh>* found = nullptr, double now = 0) {
         stop();
         std::lock_guard<std::mutex> lk(mtx_);
         hc_ = hwCentreHz; rate_ = rateHz;
         chans_.clear(); demods_.clear(); streams_.clear(); names_.clear();
         const auto& plan = planFor(band);
         planSize_ = plan.size();
-        chosen_ = choose(plan, hwCentreHz, rateHz, budgetUnits, edge, region);
-        if (chosen_.empty()) return 0;
+        /* ★ the found channels as plan channels: the engine OWNS their names (the book may change while this runs) */
+        foundPlan_.clear(); foundNames_.clear();
+        if (found) {
+            for (const auto& f : *found) if (f.active(now)) foundNames_.push_back(f.name());
+            size_t ni = 0;
+            for (const auto& f : *found) if (f.active(now)) {
+                PlanCh c{foundNames_[ni++].c_str(), "meshcore", f.hz, f.bw, f.sfs, {0x12, 0x2B, 0x34}, false, 1};
+                c.found = true;
+                foundPlan_.push_back(c);
+            }
+        }
+        chosen_ = choose(plan, hwCentreHz, rateHz, budgetUnits, edge, region, &foundPlan_);
+        foundRun_ = 0; for (auto* c : chosen_) foundRun_ += c->found;
+        if (discover_) { std::lock_guard<std::mutex> sl(shapeMtx_); shaper_.reset(rateHz, hwCentreHz); shapes_.clear(); }
+        if (chosen_.empty() && !discover_) return 0;
+        if (chosen_.empty()) {   // ★ nothing to decode yet, but the capture is still searched for LoRa (one thread)
+            ch_.reset(); lanes_.clear(); nLanes_ = 1;
+            queue_.clear(); queued_ = 0; dropped_ = 0;
+            run_ = true;
+            worker_ = std::thread([this] { loop(); });
+            return 0;
+        }
         ch_.reset(new Channeliser(rateHz));
         // ★ one stream per distinct (frequency, bandwidth) — Meshtastic's two 869.525 entries share theirs
         for (const PlanCh* c : chosen_) {
@@ -352,6 +490,12 @@ public:
         return n;
     }
     size_t channelsRun() const { return chosen_.size(); }
+    /** ★ V12 found on air: how many of channelsRun() are found channels; search the capture for LoRa-shaped bursts. */
+    size_t foundRun() const { return foundRun_; }
+    void setDiscover(bool on) { discover_ = on; }
+    bool discovering() const { return discover_; }
+    std::vector<Shape> takeShapes() { std::lock_guard<std::mutex> sl(shapeMtx_); std::vector<Shape> v; v.swap(shapes_); return v; }
+    Shaper::Counts shapeCounts() { std::lock_guard<std::mutex> sl(shapeMtx_); return shaper_.counts(); }
     size_t planSize() const { return planSize_; }
     size_t detectors() const { return demods_.size(); }
     std::vector<std::string> channelNames() const { std::vector<std::string> v; for (auto* c : chosen_) v.push_back(c->name); return v; }
@@ -383,8 +527,8 @@ public:
     void process(const cf* x, size_t n) { work(x, n); }
     /** `edge`: how far out a channel may reach, as a share of the rate (0.5 = a narrow recording made for ONE channel). */
     void startInline(const std::string& band, double hwCentreHz, double rateHz, double budgetUnits, double edge = 0.45,
-                     vibeism::Region region = vibeism::Region::Unknown) {
-        start(band, hwCentreHz, rateHz, budgetUnits, edge, region);
+                     vibeism::Region region = vibeism::Region::Unknown, const std::vector<FoundCh>* found = nullptr, double now = 0) {
+        start(band, hwCentreHz, rateHz, budgetUnits, edge, region, found, now);
         stop();      // the worker is not wanted; the channels and detectors stay built
     }
 
@@ -402,7 +546,13 @@ private:
         std::thread t2, t3;
     };
     struct ChF { double hz, bw; };
+    void shapeFeed(const cf* x, size_t n) {
+        std::lock_guard<std::mutex> sl(shapeMtx_);
+        shaper_.feed(x, n);
+        for (auto& s : shaper_.take()) if (shapes_.size() < 256) shapes_.push_back(s);
+    }
     void work(const cf* x, size_t n) {
+        if (discover_) shapeFeed(x, n);
         if (!ch_) return;
         VIBE_ISM_P(const double tp0 = vibeism::ismProfNow();)
         ch_->feed(x, n);
@@ -420,7 +570,7 @@ private:
             auto& dt = demods_[lane ? lane->dets[k] : k];
             dt.d->run(*streams_[dt.stream], [&](Frame&& f) {
                 f.freqHz = dt.ch->hz + f.cfoHz;
-                Heard h; h.m = interpret(f, dt.ch->net); h.f = std::move(f);
+                Heard h; h.m = interpret(f, dt.ch->net); h.m.found = dt.ch->found; h.f = std::move(f);
                 got.push_back(std::move(h));
             });
         }
@@ -453,6 +603,8 @@ private:
                 busy1_ = true;
                 lk.unlock();
                 space_.notify_all();
+                if (discover_) shapeFeed(blk.data(), blk.size());
+                if (!ch_) { lk.lock(); busy1_ = false; continue; }
                 auto batch = std::make_shared<std::vector<Channeliser::Spectra>>();
                 ch_->feedSpectra(blk.data(), blk.size(), [&](Channeliser::Spectra&& sp) { batch->push_back(std::move(sp)); });
                 // ★ one batch per capture block, to every lane: the detectors then run exactly as often as on one thread
@@ -545,6 +697,13 @@ private:
     std::vector<const PlanCh*> chosen_;
     std::vector<std::string> names_;
     size_t planSize_ = 0;
+    std::vector<PlanCh> foundPlan_;
+    std::vector<std::string> foundNames_;
+    size_t foundRun_ = 0;
+    bool discover_ = false;
+    std::mutex shapeMtx_;
+    Shaper shaper_;
+    std::vector<Shape> shapes_;
     std::deque<std::vector<cf>> queue_;
     size_t queued_ = 0;
     uint64_t dropped_ = 0, okN_ = 0, hdrN_ = 0, crcN_ = 0;

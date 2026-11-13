@@ -31,7 +31,9 @@ export interface IsmDevice {
 }
 /** A public mesh message (Meshtastic's default channel, MeshCore's Public channel — nothing else is ever sent). */
 export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number }
-export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number }
+export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number;
+  /** ★ V12 2026-11-12: channels FOUND ON AIR running / known on this band (absent on an older server = 0) */
+  found: number; foundKnown: number }
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 export interface IsmBand { id: string; name: string; hz: number }
 export interface IsmReport {
@@ -50,13 +52,17 @@ export const ISM_UNITS_DEFAULT: IsmUnits = { mph: false, pressure: 'psi' };
 
 /** What a radio's /vibeserver.json says about ISM. `undefined` = no control at all (an HF+ reaches no ISM band, or an
  *  older server); `ok: false` = drawn greyed with `why` on a press; `bands` = the bands THIS radio reaches, in step order. */
+/** ★ A bound on the server's list (untrusted input), not a design limit — the arrows step through any length. Was 8,
+ *  which beta71's eight bands (315…923) filled; raised for the worldwide LoRa blocks (Stuart 11-13: ISM is V12-beta-only,
+ *  no released app to stay compatible with). Same number in web/client/src/main.ts and handheld-ui/src/map_modes.h. */
+export const ISM_MAX_BANDS = 64;
 export interface IsmCap { ok: boolean; why: string; bands: IsmBand[]; landing: string }
 export function parseIsmCapability(j: unknown): IsmCap | undefined {
   if (!j || typeof j !== 'object') return undefined;
   const o = j as Record<string, unknown>;
   const bands: IsmBand[] = Array.isArray(o.ismBands)
     ? (o.ismBands as unknown[]).filter((b: any) => b && typeof b.id === 'string' && typeof b.name === 'string' && typeof b.hz === 'number')
-        .slice(0, 8).map((b: any) => ({ id: String(b.id).slice(0, 8), name: String(b.name).slice(0, 40), hz: Number(b.hz) }))
+        .slice(0, ISM_MAX_BANDS).map((b: any) => ({ id: String(b.id).slice(0, 8), name: String(b.name).slice(0, 40), hz: Number(b.hz) }))
     : [];
   if ((o.ism !== true && o.ism !== false) || !bands.length) return undefined;
   const why = typeof o.ismWhy === 'string' ? o.ismWhy.trim().slice(0, 200) : '';
@@ -113,7 +119,8 @@ export function ismSanitise(msg: any): IsmReport | null {
     noise: num(msg.noise), dropped: num(msg.dropped), capture: num(msg.capture), gain: num(msg.gain), gainAuto: num(msg.gainAuto),
     meters: num(msg.meters), damaged: num(msg.damaged), collector: num(msg.collector), wmGap: num(msg.wmGap),
     lora: lo ? { chans: num(lo.chans) ?? 0, plan: num(lo.plan) ?? 0, dets: num(lo.dets) ?? 0, frames: num(lo.frames) ?? 0, badCrc: num(lo.badCrc) ?? 0,
-                 texts: num(lo.texts) ?? 0, mapped: num(lo.mapped) ?? 0, dropped: num(lo.dropped) ?? 0 } : undefined,
+                 texts: num(lo.texts) ?? 0, mapped: num(lo.mapped) ?? 0, dropped: num(lo.dropped) ?? 0,
+                 found: num(lo.found) ?? 0, foundKnown: num(lo.foundKnown) ?? 0 } : undefined,
     msgs: lo ? msgsOf(msg.msgs) : undefined,
     devices,
   };
@@ -295,7 +302,10 @@ export function ismStatus(r: IsmReport): string {
   if (r.wmGap === 1 && r.rate) parts.push(`868.95 not covered at ${(r.rate / 1e6).toFixed(r.rate % 1e6 ? 1 : 0)} MS/s`);
   if (r.bursts !== undefined) parts.push(`${r.bursts} bursts${r.unknown ? ` (${r.unknown} unidentified)` : ''}`);
   // ★ V12 LoRa: frames decoded, and how many of the band's LoRa channels this capture holds
-  if (r.lora) parts.push(`LoRa ${r.lora.frames} ${r.lora.frames === 1 ? 'frame' : 'frames'} · ${r.lora.chans} of ${r.lora.plan} channels`);
+  //   ★ V12 2026-11-12 + the channels FOUND ON AIR (vibe_lora_discover.h), and any the CPU budget holds back — said honestly
+  if (r.lora) parts.push(`LoRa ${r.lora.frames} ${r.lora.frames === 1 ? 'frame' : 'frames'} · ${r.lora.chans} of ${r.lora.plan} channels`
+    + (r.lora.found ? ` + ${r.lora.found} found on air` : '')
+    + (r.lora.foundKnown > r.lora.found ? ` (${r.lora.foundKnown - r.lora.found} more found, waiting for CPU)` : ''));
   /* ★ THE GAIN ISM IS ACTUALLY USING (Stuart, 2026-10-25) — ISM sets the radio's gain itself and the dongle AGC off, so the
    *  ordinary gain readout has nothing true to say; the report's `gain` is the figure. */
   if (r.gain !== undefined && r.gain >= 0) parts.push(`gain ${r.gain.toFixed(1)} dB${r.gainAuto === 1 ? ' auto' : ''}`);
