@@ -51,9 +51,15 @@ type Event struct {
 // Reporter receives progress.
 type Reporter func(Event)
 
-// FileReporter appends events to a file the window reads.
+// FileReporter appends events to a file the window reads — at most one line per 0.25 % of the bar unless the words
+// change, and always the last one.
 func FileReporter(p string) Reporter {
+	lastFrac, lastText := -1.0, ""
 	return func(e Event) {
+		if !e.Done && e.Error == "" && e.Text == lastText && e.Frac-lastFrac < 0.0025 {
+			return
+		}
+		lastFrac, lastText = e.Frac, e.Text
 		f, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 		if err != nil {
 			return

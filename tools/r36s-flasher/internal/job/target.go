@@ -18,13 +18,15 @@ func openTarget(j *Job) (*os.File, error) {
 	return os.OpenFile(j.Target, flag, 0)
 }
 
-// syncTarget flushes the card all the way to the media (F_FULLFSYNC on a device: plain fsync on macOS only reaches
-// the drive's cache).
+// syncTarget flushes the card. ★★ On a raw device (/dev/rdiskN) neither fsync nor F_FULLFSYNC applies — both answer
+// "inappropriate ioctl for device" (found 2026-11-13 on an hdiutil-attached raw disk: it would have failed every real
+// write at its last step). Writes to a raw device are unbuffered — they have reached the driver when WriteAt returns —
+// so F_FULLFSYNC is asked where a device takes it, and otherwise the READ-BACK that follows is the proof, and
+// `diskutil eject` at the end flushes the reader before it lets go. A file (tests) is fsynced.
 func syncTarget(f *os.File) error {
-	if strings.HasPrefix(f.Name(), "/dev/") {
-		if _, err := unix.FcntlInt(f.Fd(), unix.F_FULLFSYNC, 0); err == nil {
-			return nil
-		}
+	if !strings.HasPrefix(f.Name(), "/dev/") {
+		return f.Sync()
 	}
-	return f.Sync()
+	_, _ = unix.FcntlInt(f.Fd(), unix.F_FULLFSYNC, 0)
+	return nil
 }

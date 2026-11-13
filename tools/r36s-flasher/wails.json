@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "VibeSDR Flasher",
+  "outputfilename": "VibeSDR Flasher",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dir": "./frontend",
+  "wailsjsdir": "./frontend",
+  "author": {
+    "name": "VibeSDR"
+  },
+  "info": {
+    "companyName": "VibeSDR",
+    "productName": "VibeSDR Flasher",
+    "productVersion": "0.1.0",
+    "copyright": "VibeSDR",
+    "comments": "Makes VibeSDR cards for the R36S"
+  }
+}
