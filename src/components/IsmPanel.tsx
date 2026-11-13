@@ -1,7 +1,7 @@
 /**
  * ISM on a VibeServer (V12, docs/v12/ISM-DECODER.md) — the box over the lower waterfall, the web client's IsmBox.
  *
- *   header: EXIT ISM · ◀ band ▶ · BIG/SMALL
+ *   header: the band · BANDS (the list — beta72, replacing ◀ ▶) · BIG/SMALL · MAP · EXIT ISM
  *   the status: "433.92 MHz ISM · 6 devices · 41 bursts (3 unidentified) · gain 33.8 dB auto · capture 100 %"
  *   chips:  ALL WEATHER TPMS SENSOR DOORBELL ENERGY KEY FOB METER · KM/H|MPH · PSI|KPA|BAR
  *   ★ V12 meters (wM-Bus, 868 band): a tap on a meter's row opens its detail (mode, signal, reception, readings)
@@ -30,7 +30,8 @@ import { captureRegion, capturedRegion, useKeyboardMode, useListNav, useNavFocus
 import { screenNavRef } from './ScreenNav';
 import { ISM_KINDS, ismAged, ismAgo, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
          ismNavKeys, ismLoraDetail, ismMsgLines, ismOnMap, ismPosSplit, ismMapLabel, LORA_KINDS, type IsmDevice, type IsmNavKey, type IsmReport,
-         type IsmUnits } from '../services/ism';
+         type IsmUnits, type IsmBand } from '../services/ism';
+import IsmBandSheet from './IsmBandSheet';
 
 const ISM_MAX_W = 760;
 const PREF_KEY = 'lsv_ism_prefs';
@@ -42,10 +43,11 @@ export interface IsmPanelProps {
   /** True while the receiver is in ISM; false after a refusal (the exit key then only closes). */
   on: boolean;
   onExit: () => void;
-  /** ±1 band — the box's arrows. */
-  onStep: (d: number) => void;
-  canDown: boolean;
-  canUp: boolean;
+  /** ★ beta72 (Stuart 11-13): the BANDS list replaces the box's ◀ ▶, which only duplicated the main tune keys. Every band
+   *  this radio reaches, with its region; a pick jumps there (the screen's stepper — one retune). */
+  bands: IsmBand[];
+  currentBand: string;
+  onPickBand: (id: string) => void;
   bottomOffset: number;
   tall: boolean;
   onTall: (v: boolean) => void;
@@ -64,7 +66,8 @@ export default function IsmPanel(p: IsmPanelProps) {
   const tk = useDecoderTokens();
   const { height: winH } = useWindowDimensions();
   const [filter, setFilter] = useState('all');
-  const [openKey, setOpenKey] = useState('');   // ★ the meter row whose detail is open
+  const [openKey, setOpenKey] = useState('');
+  const [bandsOpen, setBandsOpen] = useState(false);   // ★ beta72: the BANDS list (IsmBandSheet)   // ★ the meter row whose detail is open
   const [units, setUnits] = useState<IsmUnits>({ mph: false, pressure: 'psi' });
   useEffect(() => {
     AsyncStorage.getItem(PREF_KEY).then((v) => { const pr = parseIsmPrefs(v); setFilter(pr.filter); setUnits(pr.units); }).catch(() => {});
@@ -121,14 +124,13 @@ export default function IsmPanel(p: IsmPanelProps) {
   // ★ the rows whose line carries a position link (only where there is a map to open)
   const posRows = p.onMap && !p.error && r && filter !== 'msgs'
     ? rows.map((d, i) => (ismOnMap(d) && ismPosSplit(ismLine(d, units)) ? i : -1)).filter((i) => i >= 0) : [];
-  const keys = ismNavKeys({ on: p.on, big: bigUseful, chips: !p.error, rows: p.error || !r ? 0 : rows.length, map: canMap, pos: posRows });
+  const keys = ismNavKeys({ on: p.on, bands: p.bands.length > 1, big: bigUseful, chips: !p.error, rows: p.error || !r ? 0 : rows.length, map: canMap, pos: posRows });
   const nav = useRef({ keys, filter, units }); nav.current = { keys, filter, units };
   const listRef = useRef<ScrollView | null>(null);
   const rowY = useRef<number[]>([]);
   const press = (k: IsmNavKey) => {
     const { units: u } = nav.current;
-    if (k === 'down') { if (p.canDown) p.onStep(-1); }
-    else if (k === 'up') { if (p.canUp) p.onStep(1); }
+    if (k === 'bands') { if (p.bands.length > 1) setBandsOpen(true); }
     else if (k === 'big') p.onTall(!tall);
     else if (k === 'map') p.onMap?.();
     else if (k.startsWith('p:')) { const d = rowsRef.current[Number(k.slice(2))]; if (d) p.onMap?.(d.key); }
@@ -145,7 +147,7 @@ export default function IsmPanel(p: IsmPanelProps) {
   const chipsRef = useRef<ScrollView | null>(null);
   const chipX = useRef<Record<string, number>>({});
   const focus = useListNav(
-    grab, keys.length,
+    grab && !bandsOpen, keys.length,   // ★ the BANDS list owns the keys while it is open
     (i) => { const k = nav.current.keys[i]; if (k) press(k.key); },
     (i) => {
       const k = nav.current.keys[i];
@@ -172,11 +174,9 @@ export default function IsmPanel(p: IsmPanelProps) {
         <DecoderTitle>ISM</DecoderTitle>
         {/* ★ The band name gives way, never the keys: EXIT must always be reachable (the DAB box's SE lesson). */}
         <View style={s.bandRow}>
-          {p.on && <DecoderKey onPress={() => p.onStep(-1)} disabled={!p.canDown} label="◀"
-                               accessibilityLabel="Previous band" style={[!p.canDown && s.off, hl('down')]} />}
           <Text style={s.band} numberOfLines={1}>{band}</Text>
-          {p.on && <DecoderKey onPress={() => p.onStep(1)} disabled={!p.canUp} label="▶"
-                               accessibilityLabel="Next band" style={[!p.canUp && s.off, hl('up')]} />}
+          {p.on && p.bands.length > 1 && <DecoderKey onPress={() => setBandsOpen(true)} label="BANDS" style={hl('bands')}
+                               accessibilityLabel="Every ISM band this receiver reaches, and where each is used" />}
         </View>
         {bigUseful && <DecoderKey active={tall} onPress={() => p.onTall(!tall)} label={tall ? 'SMALL' : 'BIG'} style={hl('big')} />}
         {canMap && <DecoderKey onPress={() => p.onMap?.()} label="MAP" style={hl('map')}
@@ -258,6 +258,8 @@ export default function IsmPanel(p: IsmPanelProps) {
           )}
         </ScrollView>
       </DecoderBody>
+      <IsmBandSheet visible={bandsOpen} bands={p.bands} currentId={p.currentBand}
+                    onPick={(id) => { if (id !== p.currentBand) p.onPickBand(id); }} onClose={() => setBandsOpen(false)} />
     </DecoderShell>
   );
 }

@@ -34,7 +34,7 @@ export interface IsmLora { chans: number; plan: number; dets: number; frames: nu
   /** ★ V12 2026-11-12: channels FOUND ON AIR running / known on this band (absent on an older server = 0) */
   found: number; foundKnown: number }
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
-export interface IsmBand { id: string; name: string; hz: number }
+export interface IsmBand { id: string; name: string; hz: number; region?: string }   // ★ region: beta72, the BANDS list
 export interface IsmReport {
   type: 'ism'; band?: string; bandName?: string; centre: number; custom?: number; rate?: number; now?: number;
   bursts?: number; decoded?: number; unknown?: number; noise?: number; dropped?: number; capture?: number;
@@ -330,7 +330,9 @@ export function ismEmptyText(filter: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  THE BOX — over the lower part of the waterfall; header: EXIT ISM, ◀ band ▶, the status; the filter chips; the list.
+//  THE BOX — over the lower part of the waterfall; header: EXIT ISM, the band, BANDS, the status; the filter chips; the list.
+//  ★ beta72 (Stuart 11-13): BANDS replaces ◀ ▶ (they only duplicated the main tune keys) — every band this radio reaches,
+//    with where it is used, in a scrolling list over the box; a pick jumps there. No region lock: every band is listed.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const CSS = `
 #ismBox { position: fixed; left: 50%; transform: translateX(-50%); bottom: 96px; z-index: 30; width: min(760px, calc(100vw - 32px));
@@ -342,6 +344,15 @@ const CSS = `
   background: transparent; border: 1px solid rgba(255, 176, 0, 0.35); border-radius: 6px; cursor: pointer; }
 #ismHead button:hover, #ismChips button:hover { background: rgba(255, 160, 0, 0.14); }
 #ismHead button:disabled { opacity: 0.35; cursor: default; }
+#ismBandList { position: absolute; left: 0; right: 0; top: 46px; bottom: 0; z-index: 2; overflow-y: auto; padding: 6px 8px 8px;
+  background: rgba(9, 6, 2, 0.98); border-top: 1px solid rgba(255, 176, 0, 0.25); border-radius: 0 0 10px 10px; display: flex; flex-direction: column; gap: 5px; }
+#ismBandList[hidden] { display: none; }
+#ismBandList .ismBandRow { display: block; width: 100%; text-align: left; font: inherit; color: #ffb000; background: transparent; cursor: pointer;
+  border: 1px solid rgba(255, 176, 0, 0.3); border-radius: 6px; padding: 6px 10px; min-height: 44px; }
+#ismBandList .ismBandRow:hover, #ismBandList .ismBandRow:focus-visible { background: rgba(255, 160, 0, 0.14); }
+#ismBandList .ismBandRow.cur { background: rgba(255, 176, 0, 0.18); border-color: rgba(255, 196, 64, 0.8); }
+#ismBandList .ismBandName { display: block; font-size: 13px; letter-spacing: 0.5px; }
+#ismBandList .ismBandRegion { display: block; font-size: 11px; color: rgba(255, 190, 40, 0.7); margin-top: 2px; }
 #ismExit { font-weight: 600; border-color: rgba(255, 184, 51, 0.55) !important; }
 #ismBandName { font-size: 14px; letter-spacing: 1.5px; min-width: 9.5em; text-align: center; }
 #ismStat { flex: 1 1 12em; min-width: 0; font-size: 11px; color: rgba(255, 190, 40, 0.7); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -380,8 +391,10 @@ export class IsmBox {
   private openKey = '';   // ★ the meter row whose detail is open (a tap toggles it)
   /** EXIT ISM, and the band steps (±1). The page decides what they send. ★ V12 LoRa: `onMap` opens the map of everything
    *  with a position (main.ts ismMapOpen); `rx` is the receiver's position, for range and bearing in a row's detail. */
-  constructor(private onExit: () => void, private onStep: (d: number) => void, private onMap: (key?: string) => void = () => {},
-              private rx: () => { lat: number; lon: number } | null = () => null) {}
+  constructor(private onExit: () => void, private onPick: (id: string) => void, private onMap: (key?: string) => void = () => {},
+              private rx: () => { lat: number; lon: number } | null = () => null,
+              /** ★ beta72: the bands this radio reaches and the one it is on (or heading for) — the BANDS list */
+              private bandList: () => { bands: IsmBand[]; current: string } = () => ({ bands: [], current: '' })) {}
 
   private mount(): HTMLElement {
     if (this.el) return this.el;
@@ -393,16 +406,26 @@ export class IsmBox {
     el.setAttribute('role', 'region'); el.setAttribute('aria-label', 'ISM sensors');
     el.setAttribute('data-navbox', '');
     el.innerHTML = `<div id="ismHead"><button id="ismExit" title="Leave ISM — the receiver goes back to where it was">EXIT ISM</button>`
-      + `<button id="ismDown" title="Previous band" aria-label="Previous band">◀</button><span id="ismBandName"></span>`
-      + `<button id="ismUp" title="Next band" aria-label="Next band">▶</button><span id="ismStat"></span>`
+      + `<span id="ismBandName"></span>`
+      + `<button id="ismBands" hidden title="Every ISM band this receiver reaches, and where each is used" aria-haspopup="listbox"`
+      + ` aria-expanded="false">BANDS</button><span id="ismStat"></span>`
       // ★★ V12 MAP (Stuart, 2026-10-27: "add a map button to the ISM decoder to switch to a Map view for the nodes"): drawn
       //    only while something listed has a position — the spots MAP's rule, no dead button
       + `<button id="ismMap" hidden title="Everything heard with a position, on a map">MAP</button></div>`
-      + `<div id="ismChips"></div><div id="ismList" aria-live="polite"></div>`;
+      + `<div id="ismChips"></div><div id="ismList" aria-live="polite"></div>`
+      + `<div id="ismBandList" hidden role="listbox" aria-label="ISM bands"></div>`;
     document.body.appendChild(el);
     (el.querySelector('#ismExit') as HTMLButtonElement).onclick = () => this.onExit();
-    (el.querySelector('#ismDown') as HTMLButtonElement).onclick = () => this.onStep(-1);
-    (el.querySelector('#ismUp') as HTMLButtonElement).onclick = () => this.onStep(1);
+    (el.querySelector('#ismBands') as HTMLButtonElement).onclick = () => this.toggleBands();
+    const bl = el.querySelector('#ismBandList') as HTMLElement;
+    bl.onclick = (e) => {
+      const row = (e.target as HTMLElement).closest('.ismBandRow') as HTMLElement | null;
+      if (!row) return;
+      const id = row.dataset.id || '';
+      this.closeBands();
+      if (id && id !== this.bandList().current) this.onPick(id);
+    };
+    bl.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.closeBands(); } };
     (el.querySelector('#ismMap') as HTMLButtonElement).onclick = () => this.onMap('');
     (el.querySelector('#ismList') as HTMLElement).onclick = (e) => {
       // ★ a position link: the map, on that node — not the row's detail
@@ -437,7 +460,31 @@ export class IsmBox {
       };
     });
   }
-  private bandsCan: { down: boolean; up: boolean } = { down: true, up: true };
+  private bandsCan = false;   // ★ more than one band: BANDS drawn
+  get bandsOpen() { return !!this.el && !(this.el.querySelector('#ismBandList') as HTMLElement).hidden; }
+  /** ★ beta72: the BANDS list — every band, its region underneath, the current one marked, scrolled into view. */
+  toggleBands() { if (this.bandsOpen) this.closeBands(); else this.openBands(); }
+  openBands() {
+    const el = this.mount();
+    const { bands, current } = this.bandList();
+    if (bands.length < 2) return;
+    const bl = el.querySelector('#ismBandList') as HTMLElement;
+    const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+    bl.innerHTML = bands.map((b) => `<button class="ismBandRow${b.id === current ? ' cur' : ''}" role="option" data-id="${esc(b.id)}"`
+      + ` aria-selected="${b.id === current}"><span class="ismBandName">${b.id === current ? '● ' : ''}${esc(b.name)}</span>`
+      + (b.region ? `<span class="ismBandRegion">${esc(b.region)}</span>` : '') + `</button>`).join('');
+    const head = el.querySelector('#ismHead') as HTMLElement;
+    bl.style.top = `${head.offsetHeight}px`;
+    bl.hidden = false;
+    (el.querySelector('#ismBands') as HTMLElement).setAttribute('aria-expanded', 'true');
+    const cur = bl.querySelector('.ismBandRow.cur') as HTMLElement | null;
+    if (cur) { bl.scrollTop = Math.max(0, cur.offsetTop - bl.clientHeight / 2 + cur.offsetHeight / 2); cur.focus({ preventScroll: true }); }
+  }
+  closeBands() {
+    if (!this.el) return;
+    (this.el.querySelector('#ismBandList') as HTMLElement).hidden = true;
+    (this.el.querySelector('#ismBands') as HTMLElement).setAttribute('aria-expanded', 'false');
+  }
 
   private at = 0;                                  // ★ when the last report arrived (ms)
   private ager: ReturnType<typeof setInterval> | null = null;
@@ -463,21 +510,22 @@ export class IsmBox {
     el.style.maxHeight = `${Math.round(Math.max(150, (top - gap - 70) * 0.62))}px`;
   }
   hide() {
+    this.closeBands();
     if (this.el) this.el.hidden = true; this.last = null; this.lastHtml = '';
     if (this.ager) { clearInterval(this.ager); this.ager = null; }
     if (this.onResize) { window.removeEventListener('resize', this.onResize); this.onResize = null; }
   }
   get visible() { return !!this.el && !this.el.hidden; }
 
-  /** A report. `can`: whether a band exists below / above (the arrows grey at the ends — the server clamps). */
-  update(r: IsmReport, can: { down: boolean; up: boolean }) {
+  /** A report. `can`: more than one band to choose from (BANDS drawn). */
+  update(r: IsmReport, can: boolean) {
     const el = this.mount();
     if (r !== this.last) this.at = Date.now();
     this.last = r; this.bandsCan = can;
     (el.querySelector('#ismBandName') as HTMLElement).textContent = r.custom ? `${(r.centre / 1e6).toFixed(3)} MHz` : (r.bandName || 'ISM');
     (el.querySelector('#ismStat') as HTMLElement).textContent = ismStatus(r);
-    (el.querySelector('#ismDown') as HTMLButtonElement).disabled = !can.down;
-    (el.querySelector('#ismUp') as HTMLButtonElement).disabled = !can.up;
+    (el.querySelector('#ismBands') as HTMLButtonElement).hidden = !can;
+    if (!can) this.closeBands();
     (el.querySelector('#ismMap') as HTMLButtonElement).hidden = !r.devices.some(ismOnMap);
     this.place();
     this.drawList();

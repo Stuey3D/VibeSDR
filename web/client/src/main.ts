@@ -9014,6 +9014,8 @@ let ismBox: IsmBox | null = null;
 function ismReadCap(j: any) {
   const bands: IsmBand[] = Array.isArray(j?.ismBands)
     ? j.ismBands.filter((b: any) => b && typeof b.id === 'string' && typeof b.name === 'string' && typeof b.hz === 'number').slice(0, 64)   // ★ a bound on untrusted input, not a design limit (src/services/ism.ts ISM_MAX_BANDS)
+        .map((b: any) => ({ id: String(b.id).slice(0, 8), name: String(b.name).slice(0, 40), hz: Number(b.hz),
+                            ...(typeof b.region === 'string' && b.region.trim() ? { region: b.region.trim().slice(0, 60) } : {}) }))
     : [];
   if ((j?.ism === true || j?.ism === false) && bands.length) {
     const why = typeof j.ismWhy === 'string' ? j.ismWhy.trim().slice(0, 200) : '';
@@ -9051,6 +9053,15 @@ function ismStepperFor(n: number): DabBlockStepper {
 function ismHopReset() { ismStepper?.s.cancel(); ismAsk.clear(); ismHopIdx = -1; }
 /** The ISM arrows' and current band's labels (syncDialTips). */
 function ismWebStrip(): HopStrip | undefined { return ismHopStrip(ismCap, ismReport, ismHopIdx, 'clamp'); }
+/** ★ beta72: a band picked from the ISM box's BANDS list — the keys' stepper, a step of (target − current): one retune,
+ *  the same ask guard (src/screens/SDRScreen.tsx ismPickBand). */
+function ismPickBand(id: string) {
+  const bands = ismCap?.bands ?? [];
+  const to = bands.findIndex((b) => b.id === id);
+  const cur = ismHopIdx >= 0 ? ismHopIdx : ismHopIndex(ismCap, ismReport);
+  if (!ismOn || to < 0 || cur < 0 || to === cur) return;
+  ismStepperFor(bands.length).step(cur, to - cur);
+}
 function ismStep(d: number) {
   const bands = ismCap?.bands ?? [];
   const cur = ismHopIdx >= 0 ? ismHopIdx : ismHopIndex(ismCap, ismReport);
@@ -9077,7 +9088,8 @@ function ismUiOn() {
   ismOn = true;
   syncAudioQuiet();
   if (spec) spec.ismHeld = true;
-  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d), (key) => ismMapOpen(key), () => myPos());
+  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (id) => ismPickBand(id), (key) => ismMapOpen(key), () => myPos(),
+                                   () => ({ bands: ismCap?.bands ?? [], current: ismCap?.bands[ismHopIdx >= 0 ? ismHopIdx : ismHopIndex(ismCap, ismReport)]?.id ?? '' }));
   ismBox.show();
   ismLockControls(true);
   if (wf) wf.vfoHidden = true;   // ★ no LISTEN needle on a band capture
@@ -9205,7 +9217,7 @@ function onIsmReport(r: IsmReport | null) {
   if (!ismOn) ismUiOn();   // ★ somebody else put the receiver in ISM (or we joined it)
   audio?.holdHealing(8000);   // ★ nothing to hear on a band: the server sends no audio (as in ADS-B)
   const n = ismNeighbours();
-  ismBox?.update(r, { down: !!n.prev, up: !!n.next });
+  ismBox?.update(r, !!(n.prev || n.next));   // ★ beta72: BANDS while there is another band
   ismMapRender();
   // ★ V12: the band the arrows show lets go to the server's once it names ours, the hold runs out, or a third band shows
   //   somebody else moved the dial — never mid-burst (see ismStepperFor).

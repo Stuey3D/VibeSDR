@@ -6,12 +6,14 @@
 #   slider_hold_test  hold LEFT / RIGHT on a slider: the repeat's timing, release, focus, the latest-value sender
 #   wide_vfo_render_test  V12 DAB's VFO is the 1.536 MHz block (drawOverlays, read back): filled at 7 and 2.048 MHz, edges
 #                     drawn, no wash on a view narrower than the block, WFM unchanged
+#   ism_bands_test    the ISM box's BANDS list: ismBands with their regions, opens on the server's band, the D-pad walks
+#                     and scrolls 17 bands, ENTER queues that band's id (none for the band already on), BACK leaves it
 #   handheld-ui/test/run_offscreen_tests.sh [test …]   (default: all)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 IMG=${IMG:-vibe-hh-map:trixie}
-TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test}
+TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test}
 docker run --rm --platform linux/arm64 -v "$REPO/handheld-ui:/w:ro" -v "$REPO/assets/fonts:/fonts:ro" "$IMG" sh -c "
   set -e; cd /w; T=\$(mktemp -d)
   for t in $TESTS; do

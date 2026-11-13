@@ -2455,6 +2455,10 @@ int main(int argc, char** argv) {
               && !exactAllowed(*bandById("920"), 914.9e6) && !exactAllowed(*bandById("923"), 914.0e6) && exactAllowed(*bandById("923"), 928.0e6),
               "exactAllowed: 906/910/915 take 902–928 MHz, 920/923 take 915–928 (Brazil, AU/NZ, AS923), nothing outside");
         CHECK(std::string(bandById("923")->name) == "923 MHz ISM (MeshCore BR/AU, AS923)", "923's readout: %s", bandById("923")->name);
+        {   // ★ beta72 (Stuart 11-13): every band names where it is used — the BANDS list's second line
+            bool reg = true; for (const auto& b : bands()) reg = reg && b.region && *b.region && std::strlen(b.region) <= 48 && !std::strchr(b.region, '"');
+            CHECK(reg, "every band has a region (≤ 48 characters, JSON-safe) for the BANDS list");
+        }
         // ★ beta72: the eight beta71 bands are untouched (on-air tested; background profiles name them)
         CHECK(bandById("315")->centreHz == 315.00e6 && bandById("433")->centreHz == 433.92e6 && bandById("868")->centreHz == 868.60e6
               && bandById("907")->centreHz == 906.60e6 && bandById("910")->centreHz == 910.40e6 && bandById("915")->centreHz == 915.00e6

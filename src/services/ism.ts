@@ -35,7 +35,8 @@ export interface IsmLora { chans: number; plan: number; dets: number; frames: nu
   /** ★ V12 2026-11-12: channels FOUND ON AIR running / known on this band (absent on an older server = 0) */
   found: number; foundKnown: number }
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
-export interface IsmBand { id: string; name: string; hz: number }
+/** ★ `region` (beta72): where the band is used — the BANDS list's second line; absent from an older server. */
+export interface IsmBand { id: string; name: string; hz: number; region?: string }
 export interface IsmReport {
   type: 'ism'; band?: string; bandName?: string; centre: number; custom?: number; rate?: number; now?: number;
   bursts?: number; decoded?: number; unknown?: number; noise?: number; dropped?: number; capture?: number;
@@ -62,7 +63,8 @@ export function parseIsmCapability(j: unknown): IsmCap | undefined {
   const o = j as Record<string, unknown>;
   const bands: IsmBand[] = Array.isArray(o.ismBands)
     ? (o.ismBands as unknown[]).filter((b: any) => b && typeof b.id === 'string' && typeof b.name === 'string' && typeof b.hz === 'number')
-        .slice(0, ISM_MAX_BANDS).map((b: any) => ({ id: String(b.id).slice(0, 8), name: String(b.name).slice(0, 40), hz: Number(b.hz) }))
+        .slice(0, ISM_MAX_BANDS).map((b: any) => ({ id: String(b.id).slice(0, 8), name: String(b.name).slice(0, 40), hz: Number(b.hz),
+                                                       ...(typeof b.region === 'string' && b.region.trim() ? { region: b.region.trim().slice(0, 60) } : {}) }))
     : [];
   if ((o.ism !== true && o.ism !== false) || !bands.length) return undefined;
   const why = typeof o.ismWhy === 'string' ? o.ismWhy.trim().slice(0, 200) : '';
@@ -346,12 +348,12 @@ export function nextPressure(p: IsmUnits['pressure']): IsmUnits['pressure'] { re
  *  (every kind, then the two unit keys), then each device row (reveal-only: a row is read, not pressed — except a METER row, whose Enter opens its detail). `row` is the
  *  visual row the up/down arrows move between: 0 the header, 1 the chips, 2… the list. ◀ / ▶ are stops even at an end
  *  (pressing one there does nothing, as the touch key does), so the order never shifts under the highlight. */
-export type IsmNavKey = 'down' | 'up' | 'big' | 'map' | 'exit' | `k:${string}` | 'u:speed' | 'u:pressure' | `r:${number}` | `p:${number}`;
+export type IsmNavKey = 'bands' | 'big' | 'map' | 'exit' | `k:${string}` | 'u:speed' | 'u:pressure' | `r:${number}` | `p:${number}`;
 /** ★ V12 `pos`: the rows (by index) whose line carries a position link — each gets a stop of its own after its row ('p:i',
  *  the same visual row), so a pad or keyboard reaches "show on the map" as a finger does. */
-export function ismNavKeys(o: { on: boolean; big: boolean; chips: boolean; rows: number; map?: boolean; pos?: number[] }): Array<{ key: IsmNavKey; row: number }> {
+export function ismNavKeys(o: { on: boolean; bands?: boolean; big: boolean; chips: boolean; rows: number; map?: boolean; pos?: number[] }): Array<{ key: IsmNavKey; row: number }> {
   const out: Array<{ key: IsmNavKey; row: number }> = [];
-  if (o.on) { out.push({ key: 'down', row: 0 }, { key: 'up', row: 0 }); }
+  if (o.on && o.bands !== false) out.push({ key: 'bands', row: 0 });   // ★ beta72: BANDS replaces ◀ ▶ (the tune keys step)
   if (o.big) out.push({ key: 'big', row: 0 });
   if (o.map) out.push({ key: 'map', row: 0 });   // ★ V12: MAP, only while something has a position
   out.push({ key: 'exit', row: 0 });

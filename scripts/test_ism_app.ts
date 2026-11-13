@@ -98,7 +98,7 @@ eq('live, the bands this radio reaches', cap, { ok: true, why: '', bands: [{ id:
   const webSrc = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
   const hhSrc = readFileSync(new URL('../handheld-ui/src/map_modes.h', import.meta.url), 'utf8');
   eq('web page: same bound', (webSrc.match(/typeof b\.hz === 'number'\)\.slice\(0, (\d+)\)/) || [])[1], String(app.ISM_MAX_BANDS));
-  eq('R36S: same bound', (hhSrc.match(/x\.ismBands\.size\(\) < (\d+)\)/) || [])[1], String(app.ISM_MAX_BANDS));
+  eq('R36S: same bound', (hhSrc.match(/b\["hz"\]\.kind == Json::Num && out\.size\(\) < (\d+)\)/) || [])[1], String(app.ISM_MAX_BANDS));
 }
 eq('refused: greyed with the reason', app.parseIsmCapability({ ism: false, ismWhy: 'Locked centre on a shared dial', ismBands: [{ id: '433', name: 'x', hz: 1 }] }),
    { ok: false, why: 'Locked centre on a shared dial', bands: [{ id: '433', name: 'x', hz: 1 }], landing: '433' });
@@ -112,17 +112,30 @@ eq('prefs kept', app.parseIsmPrefs('{"filter":"tpms","mph":true,"pressure":"bar"
 eq('prefs junk', app.parseIsmPrefs('{"filter":"evil","pressure":"atm"}'), { filter: 'all', units: { mph: false, pressure: 'psi' } });
 eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.nextPressure('kpa'), app.nextPressure('bar')], ['kpa', 'bar', 'psi']);
 
+// ── ★ beta72 BANDS (Stuart 11-13): one key replaces ◀ ▶; the list carries each band's region; no stop with one band ──
+{
+  eq('one band: no BANDS stop', app.ismNavKeys({ on: true, bands: false, big: false, chips: false, rows: 0 }).map((k) => k.key), ['exit']);
+  const cap = app.parseIsmCapability({ ism: true, ismBands: [{ id: '433', name: '433.92 MHz ISM', region: ' Europe, UK ', hz: 433_920_000 },
+    { id: '868', name: '868 MHz SRD', hz: 868_600_000 }] })!;
+  eq('region read and trimmed', cap.bands[0].region, 'Europe, UK');
+  eq('no region from an older server: none invented', 'region' in cap.bands[1], false);
+  const panelSrc = readFileSync(new URL('../src/components/IsmPanel.tsx', import.meta.url), 'utf8');
+  eq('the box has no ◀ ▶ any more', /label="◀"|label="▶"/.test(panelSrc), false);
+  eq('…and a BANDS key opening IsmBandSheet', /label="BANDS"/.test(panelSrc) && /<IsmBandSheet/.test(panelSrc), true);
+  const sheetSrc = readFileSync(new URL('../src/components/IsmBandSheet.tsx', import.meta.url), 'utf8');
+  eq('the list scrolls and shows the region', /<ScrollView/.test(sheetSrc) && /b\.region/.test(sheetSrc), true);
+}
 // ── The box by pad and keyboard: every key and chip is a stop, in the order drawn, on its visual row ──
 {
   const k = app.ismNavKeys({ on: true, big: true, chips: true, rows: 3 });
-  eq('the stops, in order', k.map((x) => x.key), ['down', 'up', 'big', 'exit', ...app.ISM_KINDS.map((c) => `k:${c.id}`), 'u:speed', 'u:pressure', 'r:0', 'r:1', 'r:2']);
-  eq('rows: header 0, chips 1, the list 2…', k.map((x) => x.row), [0, 0, 0, 0, ...app.ISM_KINDS.map(() => 1), 1, 1, 2, 3, 4]);
+  eq('the stops, in order', k.map((x) => x.key), ['bands', 'big', 'exit', ...app.ISM_KINDS.map((c) => `k:${c.id}`), 'u:speed', 'u:pressure', 'r:0', 'r:1', 'r:2']);
+  eq('rows: header 0, chips 1, the list 2…', k.map((x) => x.row), [0, 0, 0, ...app.ISM_KINDS.map(() => 1), 1, 1, 2, 3, 4]);
   eq('after a refusal: CLOSE only (no arrows, no chips)', app.ismNavKeys({ on: false, big: false, chips: false, rows: 0 }).map((x) => x.key), ['exit']);
   eq('every chip drawn is a stop', app.ismNavKeys({ on: true, big: false, chips: true, rows: 0 }).filter((x) => x.row === 1).length, app.ISM_KINDS.length + 2);
   const panel = readFileSync(new URL('../src/components/IsmPanel.tsx', import.meta.url), 'utf8');
   eq('the panel walks ismNavKeys with useListNav', /ismNavKeys\(/.test(panel) && /useListNav\(/.test(panel), true);
   eq('the screen highlight can land on the box', panel.includes("screenNavRef('ismBox'"), true);
-  for (const c of ['k:${k.id}', 'u:speed', 'u:pressure', 'down', 'up', 'exit', 'big'])
+  for (const c of ['k:${k.id}', 'u:speed', 'u:pressure', 'bands', 'exit', 'big'])
     eq(`the ${c} key draws the highlight`, panel.includes(`hl(${c.startsWith('k:') ? '`' + c + '`' : "'" + c + "'"})`), true);
 }
 
@@ -199,8 +212,8 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   const items = app.ismMapItems(a2, rx);
   eq('the app\'s pins', items.map((i) => [i.key, i.lat, i.lon, i._lb]), [['m1', 52.24, -0.895, 'Northampton Base'], ['m2', 52.29, -0.84, 'Moulton Rptr']]);
   eq('the app\'s rows nearest first', app.ismMapRows(a2, rx).map((r) => r.key), ['m1', 'm2']);
-  eq('the MAP key is a stop only when offered', app.ismNavKeys({ on: true, big: false, chips: false, rows: 0, map: true }).map((k) => k.key), ['down', 'up', 'map', 'exit']);
-  eq('…and not otherwise', app.ismNavKeys({ on: true, big: false, chips: false, rows: 0 }).map((k) => k.key), ['down', 'up', 'exit']);
+  eq('the MAP key is a stop only when offered', app.ismNavKeys({ on: true, big: false, chips: false, rows: 0, map: true }).map((k) => k.key), ['bands', 'map', 'exit']);
+  eq('…and not otherwise', app.ismNavKeys({ on: true, big: false, chips: false, rows: 0 }).map((k) => k.key), ['bands', 'exit']);
   eq('the chips, both', app.ISM_KINDS, web.ISM_KINDS);
 
   // ── ★★ V12 2026-11-01 THE ISM MAP: types, privacy, no messages, position links, the gallery's card ──

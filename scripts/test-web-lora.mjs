@@ -70,7 +70,7 @@ try {
   ok(await ev(`document.getElementById('ismMap')?.hidden === true`), 'no MAP key while nothing has a position (no dead key)');
   // the UK landing is 433: step up to 868
   await until(`/433/.test(document.getElementById('ismBandName')?.textContent || '')`, 6000);
-  await ev(`document.getElementById('ismUp')?.click()`);
+  await ev(`(() => { document.getElementById('ismBands')?.click(); const rows = [...document.querySelectorAll('#ismBandList .ismBandRow')]; const i = rows.findIndex((r) => r.classList.contains('cur')); rows[i + 1]?.click(); return rows.length; })()`);   // ★ beta72: BANDS → the next row (the box's ◀ ▶ are gone)
   ok(await until(`/868/.test(document.getElementById('ismBandName')?.textContent || '')`, 6000), 'stepped to the 868 band');
   for (const c of ['MESHTASTIC', 'MESHCORE', 'LORAWAN', 'MESSAGES'])
     ok(await ev(`[...document.querySelectorAll('#ismChips button')].some(x => x.textContent.trim() === '${c}')`), `the ${c} chip`);

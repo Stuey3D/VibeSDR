@@ -55,7 +55,9 @@ struct MapModes {
     std::mutex capMtx;
     bool capFetching = false; double capAt = -1e9, capDoneAt = -1e9;
     std::string enterAfterCaps; double enterAskedAt = 0;   // ★ a refused mode, entered again once fresh caps say yes
-    std::vector<std::pair<std::string, std::string>> ismBands;   // id, name
+    /** ★ beta72: the band's region too (vibeserver.json ismBands[].region) — the BANDS list's second line */
+    struct IsmBand { std::string id, name, region; };
+    std::vector<IsmBand> ismBands;
     std::string ismLanding;
     // ISM band stepper (main.ts ismStepperFor: the band the person STOPPED on, once, 450 ms after the last press)
     int ismHop = -1; double ismSendAt = 0; double ismAskUntil = 0; int ismAsk = -1;
@@ -88,6 +90,18 @@ inline MapMode* mapMode(const std::string& id) { for (auto& m : mapModes().m) if
 inline MapMode* mapModeOn() { for (auto& m : mapModes().m) if (m.on) return &m; return nullptr; }
 /** ★ V12 for drawOverlays' whole-channel passband (wide_vfo.h): the running map mode's id, or "". */
 inline std::string wideMapModeId() { const MapMode* m = mapModeOn(); return m ? m->id : std::string(); }
+/** vibeserver.json's ismBands → the stepper's list: id, name (the readout) and region (the BANDS list's second line; an
+ *  older server sends none). ≤ 64: a bound on the server's list, not a design limit (src/services/ism.ts ISM_MAX_BANDS). */
+inline void mapIsmParseBands(const Json& j, std::vector<MapModes::IsmBand>& out) {
+    out.clear();
+    for (auto& b : j["ismBands"].a)
+        if (b["id"].kind == Json::Str && b["name"].kind == Json::Str && b["hz"].kind == Json::Num && out.size() < 64)
+            out.push_back({b["id"].s.substr(0, 8), b["name"].s.substr(0, 40), b["region"].str().substr(0, 60)});
+}
+inline int mapIsmIndex(const MapModes& x, const std::string& id) {
+    for (size_t i = 0; i < x.ismBands.size(); i++) if (x.ismBands[i].id == id) return (int)i;
+    return -1;
+}
 inline const Json& mapReport(const RadioState& s, const MapMode& m) { return mapModes().canned == m.id ? m.canned : s.msg(m.id); }
 inline uint64_t mapArrived(const RadioState& s, const std::string& t) { auto it = s.seq.find(t); return it == s.seq.end() ? 0 : it->second; }
 
@@ -111,7 +125,7 @@ inline void mapFetchCaps(int port) {
             m.why = j[m.id + "Why"].str().substr(0, 200);
         }
         x.ismBands.clear();   // ★ ≤ 64: a bound on the server's list, not a design limit (src/services/ism.ts ISM_MAX_BANDS)
-        for (auto& b : j["ismBands"].a) if (b["id"].kind == Json::Str && b["name"].kind == Json::Str && b["hz"].kind == Json::Num && x.ismBands.size() < 64) x.ismBands.push_back({b["id"].s, b["name"].s});
+        mapIsmParseBands(j, x.ismBands);
         x.ismLanding = j["ismLanding"].str();
         for (auto& m : x.m) if (m.id == "ism" && x.ismBands.empty()) m.cap = -1;   // ★ no bands = no ISM (main.ts ismReadCap)
     });
@@ -256,6 +270,75 @@ inline bool mapAdsbGainPop(App& a, Ctx& c, const RadioState& s) {
     else { char t[64]; std::snprintf(t, sizeof t, "ADS-B gain %.1f dB — set by you (AUTO to hand back)", set / 10.0); a.toast(t); }
     return false;
 }
+/* ★★ ISM BANDS — ONE KEY, THE WHOLE LIST (Stuart, 2026-11-13: the box's own band arrows "operate the same as the tune up
+ *  and down buttons in the main controls so are a duplicate … replace the 2 buttons in the decoder box for 1 that says
+ *  bands … pops open the full list of ISM frequencies with their title and region … scrollable on smaller screens").
+ *  On the R36S the band was only ever stepped by L2/R2 (the main tune keys, kept), so BANDS is added to the box's header;
+ *  the list is the ADS-B GAIN pop-up's pattern: the current band lit and in view, D-pad moves, ENTER picks, BACK closes.
+ *  A pick goes through the stepper's own send (mapTick: ismHop → one {"type":"ism","band":…}, then the ask hold), so the
+ *  label and the server cannot disagree — the same path as L2/R2, minus the 450 ms burst wait. */
+/** Pick band `i` from the list: sent on the next tick; the band already playing (and nothing pending) sends nothing. */
+inline void mapIsmPick(const RadioState& s, int i) {
+    MapModes& x = mapModes();
+    if (i < 0 || i >= (int)x.ismBands.size()) return;
+    MapMode* m = mapMode("ism");
+    const int on = m ? mapIsmIndex(x, mapReport(s, *m)["band"].str()) : -1;
+    if (i == on) { x.ismHop = -1; x.ismSendAt = 0; return; }   // ★ back to where the server is: cancel a burst, send nothing
+    x.ismHop = i; x.ismSendAt = nowSec();
+}
+inline bool mapIsmBandsPop(App& a, Ctx& c, const RadioState& s) {
+    MapUi& u = mapUi();
+    MapModes& x = mapModes();
+    const size_t n = x.ismBands.size();
+    if (!n) return false;
+    MapMode* m = mapMode("ism");
+    const int on = m ? mapIsmIndex(x, mapReport(s, *m)["band"].str()) : -1;
+    const int lit = x.ismHop >= 0 ? x.ismHop : on;   // ★ a burst on its way: the band it is heading for
+    auto rid = [&](size_t i) { return "map.b." + x.ismBands[i].id; };
+    const float rh = 50, w = 400, headH = 30;
+    const size_t kShow = (size_t)std::max(3.f, std::floor((480 - mapl::headH - 8 - headH - 12 - 40) / rh));   // (room for the hint line)
+    const size_t shown = std::min(n, kShow);
+    const Rect p{640 - w - 6, mapl::headH + 4, w, headH + shown * rh + 12};
+    if (a.nav_.focus("map").compare(0, 6, "map.b.") != 0) {   // ★ first frame: on the current band, in view
+        const size_t f = lit >= 0 ? (size_t)lit : 0;
+        a.nav_.setFocus("map", rid(f));
+        u.popScroll = Scroller{};
+        u.popScroll.y = u.popScroll.target = std::max(0.f, std::min(f * rh - (shown - 1) * rh / 2.f, (n - shown) * rh));
+    }
+    c.g.rect(0, 0, 640, 480, rgb(0, 0.35f));
+    c.g.rrect(p.x, p.y, p.w, p.h, 8, rgb(0x0d0d0d, 0.98f));
+    c.g.rframe(p.x, p.y, p.w, p.h, 8, 1, th::amber);
+    c.tc.draw(c.g, c.f.bodyB, "ISM BANDS", p.x + 12, p.y + 6, th::btnText);
+    const Rect view{p.x + 6, p.y + headH + 4, p.w - 12, shown * rh};
+    u.popScroll.contentH = n * rh;
+    int pick = -1;
+    c.g.clip(view.x - 4, view.y - 4, view.w + 8, view.h + 8);
+    for (size_t i = 0; i < n; i++) {
+        const Rect b{view.x, view.y + i * rh - u.popScroll.y, view.w - (n > shown ? 8.f : 0.f), rh - 2};
+        const Nav::Hit h = c.nav.item(rid(i), b);
+        if (h.pressed) pick = (int)i;
+        if (b.b() < view.y - rh || b.y > view.b() + rh) continue;
+        const MapModes::IsmBand& bd = x.ismBands[i];
+        const bool isLit = (int)i == lit;
+        std::string name = bd.name;
+        if ((int)i == on) name += "  · ON NOW";   // ★ where the server is now (lit = where it is going)
+        const float ty = b.y + 4;
+        c.tc.draw(c.g, c.f.btn, name, b.x + 12, ty, isLit ? th::activeTx : rgb(0xdddddd));
+        std::string reg = bd.region;
+        while (!reg.empty() && c.tc.width(c.f.small, reg) > b.w - 24) reg.pop_back();
+        if (!reg.empty()) c.tc.draw(c.g, c.f.small, reg, b.x + 12, ty + c.f.btn.lineHeight() + 1, th::dim);
+        if (h.focused) focusRing(c, b, 5);
+    }
+    c.g.unclip();
+    u.popScroll.follow(c.nav.focusedRect(), view, 4);
+    if (n > shown) {
+        const float frac = view.h / u.popScroll.contentH, top = u.popScroll.y / u.popScroll.contentH;
+        c.g.rrect(view.r() - 4, view.y + top * view.h, 3, std::max(10.f, frac * view.h), 1.5f, th::dim);
+    }
+    if (pick < 0) return true;
+    mapIsmPick(s, pick);
+    return false;
+}
 inline bool mapTune(App& a, int n) {
     MapMode* m = mapModeOn();
     if (!m || n == 0) return false;
@@ -264,7 +347,7 @@ inline bool mapTune(App& a, int n) {
         MapModes& x = mapModes();
         std::string band = mapReport(a.eng_->state(), *m)["band"].str();
         int cur = x.ismHop;
-        if (cur < 0) for (size_t i = 0; i < x.ismBands.size(); i++) if (x.ismBands[i].first == band) cur = (int)i;
+        if (cur < 0) cur = mapIsmIndex(x, band);
         if (cur < 0 || x.ismBands.size() < 2) return true;
         const int nx = std::max(0, std::min((int)x.ismBands.size() - 1, cur + (n < 0 ? -1 : 1)));   // ★ clamped, never wrapped
         if (nx == cur) return true;
@@ -554,7 +637,7 @@ inline void mapIsmBuild(App&, const RadioState& s, std::vector<MapListRow>& rows
     }
     MapModes& x = mapModes();
     std::string band = r["bandName"].str();
-    if (x.ismHop >= 0 && x.ismHop < (int)x.ismBands.size()) band = x.ismBands[(size_t)x.ismHop].second + " …";
+    if (x.ismHop >= 0 && x.ismHop < (int)x.ismBands.size()) band = x.ismBands[(size_t)x.ismHop].name + " …";
     char b[200];
     std::snprintf(b, sizeof b, "%s · %zu devices · %d on the map · L2/R2 band", band.c_str(), r["devices"].size(), withPos);
     status = r.isNull() ? "starting the band…" : b;
@@ -750,13 +833,20 @@ inline void mapRegisterModes() {
                 const bool au = r["gainAuto"].num(0) != 0;
                 k.push_back({mapFmt("GAIN %.1f", r["gain"].n) + (au ? " AUTO" : ""), [&a, &s] {
                     if (s.gains.empty()) { a.toast("This radio has no gain steps to set"); return; }
-                    mapUi().pop = mapAdsbGainPop;
+                    mapUi().popFrom = "map.k.gain"; mapUi().pop = mapAdsbGainPop;
                 }});
             };
         }
         if (id == "ais") { d.build = mapAisBuild; d.card = mapAisCard; d.empty = "listening on 161.975 and 162.025 MHz — ships appear as they report"; }
         if (id == "ndb") { d.build = mapNdbBuild; d.card = mapNdbCard; d.empty = "skimming the beacon band — each carrier is listed as it is found, its ident as it is read"; }
-        if (id == "ism") { d.build = mapIsmBuild; d.card = mapIsmCard; d.empty = "listening — sensors, meters and mesh nodes appear as they are decoded"; d.listFirst = true; }
+        if (id == "ism") {
+            d.build = mapIsmBuild; d.card = mapIsmCard; d.empty = "listening — sensors, meters and mesh nodes appear as they are decoded"; d.listFirst = true;
+            // ★ BANDS — the whole band list (mapIsmBandsPop); only where there is more than one band to pick
+            d.keys = [](App&, const RadioState&, std::vector<std::pair<std::string, std::function<void()>>>& k) {
+                if (mapModes().ismBands.size() < 2) return;
+                k.push_back({"BANDS", [] { mapUi().popFrom = "map.k.BANDS"; mapUi().pop = mapIsmBandsPop; }});
+            };
+        }
         mapRegisterPage(d);
     }
     MapPageDef ap; ap.id = "dec:aprs"; ap.title = "APRS MAP"; ap.profile = "spots"; ap.startZ = 8; ap.build = mapAprsBuild; ap.card = mapAprsCard;
@@ -813,7 +903,7 @@ inline void mapTick(App& a, const RadioState& s) {
     if (x.ismHop >= 0 && x.ismSendAt > 0 && now >= x.ismSendAt) {
         x.ismSendAt = 0;
         if (MapMode* m = mapMode("ism"); m && m->on && x.ismHop < (int)x.ismBands.size()) {
-            if (x.canned != "ism") a.eng_->send("{\"type\":\"ism\",\"on\":1,\"band\":" + jsonQuote(x.ismBands[(size_t)x.ismHop].first) + "}");
+            if (x.canned != "ism") a.eng_->send("{\"type\":\"ism\",\"on\":1,\"band\":" + jsonQuote(x.ismBands[(size_t)x.ismHop].id) + "}");
             x.ismAsk = x.ismHop; x.ismAskUntil = now + 4;
         }
     }
@@ -821,7 +911,7 @@ inline void mapTick(App& a, const RadioState& s) {
         // ★ the label lets go to the server's once it names ours, or the hold runs out (DabAskGuard)
         MapMode* m = mapMode("ism");
         const std::string band = m ? mapReport(s, *m)["band"].str() : "";
-        if ((x.ismAsk < (int)x.ismBands.size() && band == x.ismBands[(size_t)x.ismAsk].first) || now > x.ismAskUntil) { x.ismAsk = -1; x.ismHop = -1; }
+        if ((x.ismAsk < (int)x.ismBands.size() && band == x.ismBands[(size_t)x.ismAsk].id) || now > x.ismAskUntil) { x.ismAsk = -1; x.ismHop = -1; }
     }
     // a whole-radio mode keeps its map up: a sheet that went (the menu took the screen) comes back when it closes
     if (MapMode* m = mapModeOn(); m && a.sheets_.empty()) mapOpenPage(a, "mode:" + m->id);
@@ -883,14 +973,14 @@ inline void mapCannedTick(App& a, const RadioState& s) {
             "{\"id\":5,\"hz\":423500,\"snr\":19,\"active\":true,\"ident\":\"LA\",\"copy\":\"LA LA\"}],"
             "\"log\":[{\"ident\":\"BIA\",\"hz\":391500,\"lat\":50.78,\"lon\":-1.84},{\"ident\":\"EAS\",\"hz\":391500,\"lat\":50.95,\"lon\":-1.36}]}";
     } else if (x.canned == "ism") {
-        std::snprintf(b, sizeof b, "{\"type\":\"ism\",\"band\":\"%s\",\"bandName\":\"%s\",\"devices\":[", x.ismAsk >= 0 && x.ismAsk < (int)x.ismBands.size() ? x.ismBands[(size_t)x.ismAsk].first.c_str() : "868",
-                      x.ismAsk >= 0 && x.ismAsk < (int)x.ismBands.size() ? x.ismBands[(size_t)x.ismAsk].second.c_str() : "868 MHz (EU)");
+        std::snprintf(b, sizeof b, "{\"type\":\"ism\",\"band\":\"%s\",\"bandName\":\"%s\",\"devices\":[", x.ismAsk >= 0 && x.ismAsk < (int)x.ismBands.size() ? x.ismBands[(size_t)x.ismAsk].id.c_str() : "868",
+                      x.ismAsk >= 0 && x.ismAsk < (int)x.ismBands.size() ? x.ismBands[(size_t)x.ismAsk].name.c_str() : "868 MHz (EU)");
         j = b;
         j += "{\"key\":\"t1\",\"kind\":\"sensor\",\"make\":\"Oregon\",\"model\":\"THGR810\",\"line\":\"Temperature 11.4 °C · humidity 78 %\",\"freq\":433920000,\"snr\":18,\"age\":12},"
              "{\"key\":\"m1\",\"kind\":\"meshtastic\",\"name\":\"Bob's base\",\"short\":\"BOB\",\"line\":\"Meshtastic · ROUTER · 3 hops\",\"lat\":52.30,\"lon\":-0.80,\"freq\":869525000,\"snr\":7,\"age\":40},"
              "{\"key\":\"m2\",\"kind\":\"meshcore\",\"name\":\"NN-Repeater\",\"short\":\"NNR\",\"line\":\"MeshCore repeater\",\"lat\":52.21,\"lon\":-0.95,\"freq\":869618000,\"snr\":3,\"age\":5},"
              "{\"key\":\"w1\",\"kind\":\"meter\",\"make\":\"Kamstrup\",\"model\":\"Multical 21\",\"line\":\"Water 123.456 m³\",\"freq\":868950000,\"snr\":11,\"age\":2}]}";
-        if (x.ismBands.empty()) { std::lock_guard<std::mutex> lk(x.capMtx); x.ismBands = {{"433", "433 MHz"}, {"868", "868 MHz (EU)"}, {"915", "915 MHz (US)"}}; }
+        if (x.ismBands.empty()) { std::lock_guard<std::mutex> lk(x.capMtx); x.ismBands = {{"433", "433 MHz", "Europe, UK"}, {"868", "868 MHz (EU)", "Europe, UK"}, {"915", "915 MHz (US)", "The Americas"}}; }
     } else if (x.canned == "aprs") {
         if (k % 3 == 0) mapDecFeed(a, "aprs_list", Json::parse("{\"stations\":[{\"key\":\"M0ABC-9\",\"from\":\"M0ABC-9\",\"kind\":\"position\",\"sym\":\"/>\",\"symName\":\"Car\",\"line\":\"car, 48 km/h · via MB7UH\",\"lat\":52.25,\"lon\":-0.88,\"speed\":48,\"course\":120,\"seen\":3},"
                                                             "{\"key\":\"MB7UH\",\"from\":\"MB7UH\",\"kind\":\"position\",\"sym\":\"/#\",\"symName\":\"Digipeater\",\"line\":\"digipeater\",\"lat\":52.33,\"lon\":-0.71,\"seen\":40},"

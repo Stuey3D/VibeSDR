@@ -67,6 +67,7 @@ struct MapUi {
     std::function<bool(App&, Ctx&, const RadioState&)> pop;
     Scroller popScroll;
     bool popRefocus = false;          // ★ the frame after a pop-up closes: the highlight back on GAIN (not EXIT beside it)
+    std::string popFrom = "map.k.gain";   // ★ the key that opened the pop-up (ADS-B GAIN, ISM BANDS) — where popRefocus lands
     uint64_t frame = 0;
     bool started = false;
     double perfAt = 0;
@@ -379,7 +380,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     const double t0 = App::threadCpu();
     u.frame++;
     if (u.pop) c.nav.layer("map.under");   // ★ the pop-up has the pad (drawn last, on "map")
-    if (u.popRefocus) { u.popRefocus = false; a.nav_.setFocus("map", "map.k.gain"); }
+    if (u.popRefocus) { u.popRefocus = false; a.nav_.setFocus("map", u.popFrom); }
     // ★ a page that opened before the receiver's location arrived goes there once it does
     double mlat = 0, mlon = 0;
     const bool me = mapMe(mlat, mlon);

@@ -86,8 +86,8 @@ try {
   console.log('   screenshot', await shot('phone'));
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   await sleep(800);
-  await ev(`document.getElementById('ismUp').click()`);
-  ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz SRD'`, 6000), `▶ steps one band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
+  await ev(`(() => { document.getElementById('ismBands')?.click(); const rows = [...document.querySelectorAll('#ismBandList .ismBandRow')]; const i = rows.findIndex((r) => r.classList.contains('cur')); rows[i + 1]?.click(); return rows.length; })()`);   // ★ beta72: BANDS → the next row (the box's ◀ ▶ are gone)
+  ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz SRD'`, 6000), `BANDS → the next band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
   ok(await ev(`document.querySelectorAll('#ismList .ismRow').length >= 4`), 'the list is kept across the step');
   if (CLIP868 && fs.existsSync(CLIP868)) {
     // ★★ V12 wM-Bus: the METER chip, the meter rows (serial shown), a tap opens the detail; desktop and 390 px
@@ -121,7 +121,29 @@ try {
   await ev(`(() => { const b = document.getElementById('mVfoUp'); if (!b) return 0; b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); return 1; })()`);
   // ★ V12 2026-11-12: above 868 come the 902–928 mesh bands (907 910 915 920 923), so 907 is next and ▶ stays live
   ok(await until(`document.getElementById('ismBandName')?.textContent === '907 MHz ISM (Meshtastic US)'`, 6000), `the card's ▶ steps a band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
-  ok(await until(`document.getElementById('ismUp')?.disabled === false`, 3000), 'the box ▶ stays live below the top band (923)');
+  ok(await until(`document.getElementById('ismBands')?.hidden === false && !document.getElementById('ismDown') && !document.getElementById('ismUp')`, 3000),
+     'the box has BANDS, not ◀ ▶ (beta72)');
+  {   // ★★ beta72 BANDS (Stuart 11-13): every band with its region, the current one marked, scrolls on a phone, Escape closes
+    await ev(`document.getElementById('ismBands').click()`);
+    const L = JSON.parse(await ev(`JSON.stringify((() => { const bl = document.getElementById('ismBandList'); const rows = [...bl.querySelectorAll('.ismBandRow')];
+      return { open: !bl.hidden, n: rows.length, cur: rows.filter((r) => r.classList.contains('cur')).map((r) => r.dataset.id),
+               reg433: rows.find((r) => r.dataset.id === '433')?.querySelector('.ismBandRegion')?.textContent || '',
+               reg904: rows.find((r) => r.dataset.id === '904')?.querySelector('.ismBandRegion')?.textContent || '' }; })())`));
+    ok(L.open && L.n >= 17 && L.cur.length === 1 && L.cur[0] === '907', `the list: ${L.n} bands, on ${L.cur}`);
+    ok(/Europe/.test(L.reg433) && /USA/.test(L.reg904), `regions shown: 433 "${L.reg433}", 904 "${L.reg904}"`);
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await sleep(900);
+    await ev(`document.getElementById('ismBands').click()`); await ev(`document.getElementById('ismBands').click()`);   // reopen at the phone's size
+    const P = JSON.parse(await ev(`JSON.stringify((() => { const bl = document.getElementById('ismBandList'), box = document.getElementById('ismBox').getBoundingClientRect(), r = bl.getBoundingClientRect();
+      return { scrolls: bl.scrollHeight > bl.clientHeight + 4, inBox: r.left >= box.left - 1 && r.right <= box.right + 1 && r.bottom <= box.bottom + 1,
+               curSeen: (() => { const c = bl.querySelector('.cur').getBoundingClientRect(); return c.top >= r.top - 1 && c.bottom <= r.bottom + 1; })() }; })())`));
+    ok(P.scrolls && P.inBox && P.curSeen, `at 390 px the list scrolls inside the box with the current band in view: ${JSON.stringify(P)}`);
+    console.log('   screenshot', await shot('bands-phone'));
+    await ev(`document.querySelector('#ismBandList .ismBandRow.cur').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    ok(await ev(`document.getElementById('ismBandList').hidden`), 'Escape closes the list without a change');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await sleep(600);
+  }
   {   // ★★ V12 hop keys (2026-11-03): the current band bold over the glyph, the neighbours on the arrows, the spoken line
     const lab = JSON.parse(await ev(`JSON.stringify({ cur: document.getElementById('mTuneCur')?.textContent, hid: document.getElementById('mTuneCur')?.hidden,
       d: document.getElementById('mStepCapD')?.textContent, u: document.getElementById('mStepCapU')?.textContent,

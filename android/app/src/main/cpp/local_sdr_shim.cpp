@@ -38676,8 +38676,9 @@ static std::string vsTunableJson() {
         bool first = true;
         for (const auto& b : vibeism::bands()) {
             if (!vsIsmReach(b)) continue;
-            char e[160];
-            std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"hz\":%.0f}", first ? "" : ",", b.id, b.name, b.centreHz);
+            char e[256];   // ★ beta72: + "region" (the BANDS list's second line)
+            std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"region\":\"%s\",\"hz\":%.0f}", first ? "" : ",", b.id, b.name,
+                          b.region, b.centreHz);
             j += e; first = false;
         }
         j += "]";
