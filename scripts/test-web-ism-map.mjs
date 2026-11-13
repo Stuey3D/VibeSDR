@@ -113,7 +113,7 @@ try {
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'ISM'); b && b.click(); return !!b; })()`);
   ok(await until(`!!document.getElementById('ismBox') && !document.getElementById('ismBox').hidden`, 8000), 'the ISM box opens');
   await until(`/433/.test(document.getElementById('ismBandName')?.textContent || '')`, 6000);
-  await ev(`(() => { document.getElementById('ismBands')?.click(); const rows = [...document.querySelectorAll('#ismBandList .ismBandRow')]; const i = rows.findIndex((r) => r.classList.contains('cur')); rows[i + 1]?.click(); return rows.length; })()`);   // ★ beta72: BANDS → the next row (the box's ◀ ▶ are gone)
+  await ev(`(() => { document.getElementById('ismBands')?.click(); const r = document.querySelector('#ismBandList .ismBandRow[data-id="868"]'); r?.click(); return !!r; })()`);   // ★ beta72: BANDS → 868 by its row (the box's ◀ ▶ are gone; 479–867 now sit between 433 and 868)
   ok(await until(`/868/.test(document.getElementById('ismBandName')?.textContent || '')`, 8000), 'stepped to the 868 band');
   ok(await until(`/Benson/.test(document.getElementById('ismList')?.textContent || '')`, 15000), 'the nodes are listed');
 

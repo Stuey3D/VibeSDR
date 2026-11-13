@@ -86,8 +86,8 @@ try {
   console.log('   screenshot', await shot('phone'));
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   await sleep(800);
-  await ev(`(() => { document.getElementById('ismBands')?.click(); const rows = [...document.querySelectorAll('#ismBandList .ismBandRow')]; const i = rows.findIndex((r) => r.classList.contains('cur')); rows[i + 1]?.click(); return rows.length; })()`);   // ★ beta72: BANDS → the next row (the box's ◀ ▶ are gone)
-  ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz SRD'`, 6000), `BANDS → the next band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
+  await ev(`(() => { document.getElementById('ismBands')?.click(); const r = document.querySelector('#ismBandList .ismBandRow[data-id="868"]'); r?.click(); return !!r; })()`);   // ★ beta72: BANDS → 868 by its row (the box's ◀ ▶ are gone; 479–867 now sit between 433 and 868)
+  ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz SRD'`, 6000), `BANDS → 868, a jump of four: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
   ok(await ev(`document.querySelectorAll('#ismList .ismRow').length >= 4`), 'the list is kept across the step');
   if (CLIP868 && fs.existsSync(CLIP868)) {
     // ★★ V12 wM-Bus: the METER chip, the meter rows (serial shown), a tap opens the detail; desktop and 390 px
@@ -119,8 +119,8 @@ try {
   } else console.log('   (meters not run — set VIBE_WMBUS_CLIP)');
   // the arrows on the card step bands too (nudge)
   await ev(`(() => { const b = document.getElementById('mVfoUp'); if (!b) return 0; b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); return 1; })()`);
-  // ★ V12 2026-11-12: above 868 come the 902–928 mesh bands (907 910 915 920 923), so 907 is next and ▶ stays live
-  ok(await until(`document.getElementById('ismBandName')?.textContent === '907 MHz ISM (Meshtastic US)'`, 6000), `the card's ▶ steps a band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
+  // ★ beta72: above 868 comes the 904.6 world block (US915 FSB2), then the mesh bands
+  ok(await until(`document.getElementById('ismBandName')?.textContent === '904.6 MHz LoRa (US FSB2, BR)'`, 6000), `the card's ▶ steps a band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
   ok(await until(`document.getElementById('ismBands')?.hidden === false && !document.getElementById('ismDown') && !document.getElementById('ismUp')`, 3000),
      'the box has BANDS, not ◀ ▶ (beta72)');
   {   // ★★ beta72 BANDS (Stuart 11-13): every band with its region, the current one marked, scrolls on a phone, Escape closes
@@ -129,7 +129,7 @@ try {
       return { open: !bl.hidden, n: rows.length, cur: rows.filter((r) => r.classList.contains('cur')).map((r) => r.dataset.id),
                reg433: rows.find((r) => r.dataset.id === '433')?.querySelector('.ismBandRegion')?.textContent || '',
                reg904: rows.find((r) => r.dataset.id === '904')?.querySelector('.ismBandRegion')?.textContent || '' }; })())`));
-    ok(L.open && L.n >= 17 && L.cur.length === 1 && L.cur[0] === '907', `the list: ${L.n} bands, on ${L.cur}`);
+    ok(L.open && L.n >= 17 && L.cur.length === 1 && L.cur[0] === '904', `the list: ${L.n} bands, on ${L.cur}`);
     ok(/Europe/.test(L.reg433) && /USA/.test(L.reg904), `regions shown: 433 "${L.reg433}", 904 "${L.reg904}"`);
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await sleep(900);
@@ -150,16 +150,16 @@ try {
       say: document.getElementById('mTuneGlyph')?.getAttribute('aria-label'),
       bold: getComputedStyle(document.getElementById('mTuneCur')).fontWeight,
       cardH: document.getElementById('mVfoDial')?.getBoundingClientRect().height })`));
-    ok(lab.cur === '907' && lab.hid === false, `the current band over the glyph: ${lab.cur}`);
-    ok(lab.d === '868' && lab.u === '910', `the arrows name the neighbours: ${lab.d} ‹ › ${lab.u || '(none)'}`);
-    ok(lab.say === 'Band 907. Previous 868, next 910', `spoken: ${lab.say}`);
+    ok(lab.cur === '904' && lab.hid === false, `the current band over the glyph: ${lab.cur}`);
+    ok(lab.d === '868' && lab.u === '907', `the arrows name the neighbours: ${lab.d} ‹ › ${lab.u || '(none)'}`);
+    ok(lab.say === 'Band 904. Previous 868, next 907', `spoken: ${lab.say}`);
     ok(Number(lab.bold) >= 700, `the current band is bold (${lab.bold})`);
     // a press moves the label AT ONCE — before the server's report
     await ev(`(() => { const b = document.getElementById('mVfoDown'); b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); })()`);
     ok(await ev(`document.getElementById('mTuneCur')?.textContent`) === '868', 'the press moves the current band at once');
     ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz SRD'`, 6000), `and the server follows to 868 (one send, by band id): ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
     await ev(`(() => { const b = document.getElementById('mVfoUp'); b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); })()`);
-    ok(await until(`document.getElementById('ismBandName')?.textContent === '907 MHz ISM (Meshtastic US)'`, 6000), 'back to 907 for the rest');
+    ok(await until(`document.getElementById('ismBandName')?.textContent === '904.6 MHz LoRa (US FSB2, BR)'`, 6000), 'back to 904 for the rest');
   }
   // filter chips
   await ev(`document.querySelector('#ismChips [data-k="tpms"]').click()`);
