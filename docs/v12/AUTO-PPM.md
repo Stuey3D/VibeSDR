@@ -196,5 +196,21 @@ End to end (`test-server-afc`, the bench multiplex with a +4 ppm clock), DAB's m
   - It gives way to a listener at once.
   - The owner also gets a "calibrate now" button.
   - The hook is `afcTick`, which already learns from whatever DAB the radio is playing.
+- **Stuart's decisions, 2026-11-13** (these supersede the bullets above where they differ):
+  1. **Automatic** whenever a radio is on a source: **DAB** (built), **DRM** (wire the feed), **mobile phone masts**
+     (GSM FCCH, LTE PSS/SSS — the frequency error only, as above; to build).
+  2. **Manual: a button in the time-signal decoder** on supported carriers — RWM 4996/9996/14996 kHz, WWV/WWVH, CHU,
+     BPM (and MSF/DCF77 where a radio reaches LF). A live reading ("carrier 9996.000 kHz · your radio reads it +7.8 Hz
+     high (+0.78 ppm)", with a steadiness mark); **SET RADIO OFFSET** lights once steady (~30 s) with enough SNR, greyed
+     with the reason before; applied through the same correction (same Reset). **Owner-only on a shared server** — it
+     moves the radio for every listener. (Stuart: RWM is what he used in Fldigi — "if it lent you adjusted the PPM".)
+  3. **Scheduled, in Background Decoding**: a calibration entry with a **source** the owner chooses (a DAB block, a DRM
+     station, a phone mast, a time station) and an **interval** (hourly … daily), run only while the radio is idle,
+     taking it for the source's measurement (DAB ~2 min, a mast ~1 min, RWM ~10 min — hence daily for RWM, so other
+     background decoding is barely disturbed), then back to the background profiles. Stuart's example: an RSP1A on
+     NAVTEX, NDB and 160 m digital spots, sent to 12B for a couple of minutes every hour.
+  - ★ **Prerequisite for that example: the RSP is not corrected yet** (table above — the API's `ppm` vs the sample
+    clock needs a bench check). That bench check and the RSP path come first.
+  - Queued after the R36S flasher.
 - **The handheld's SDR menu** has the row. The Apple Watch spike's PPM cell (WristSDR ControlMenu) does not show the
   line yet.
