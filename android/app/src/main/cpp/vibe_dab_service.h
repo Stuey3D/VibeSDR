@@ -222,7 +222,7 @@ public:
         scfChecked_ = 0; scfOk_[0] = scfOk_[1] = scfOk_[2] = scfOk_[3] = 0;
         lsfOrphans_ = 0; aacDecoded_ = 0; aacPcmPerAu_ = 0;
         sfFrames_ = sfBadLen_ = sfTried_ = sfOk_ = 0; ausOut_ = 0;
-        rsCorrected_ = rsUncorrected_ = 0; sfInvalid_ = 0; sfFireBad_ = 0; auIn_ = auBad_ = 0;
+        rsCorrected_ = rsUncorrected_ = 0; sfInvalid_ = 0; sfFireBad_ = 0; auIn_ = auBad_ = 0; lastGoodSf_ = -1; sfCountedBad_ = 0;
         pcmFilled_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcmPushed_ = 0; }
     }
     void setService(uint32_t sid) {
@@ -2462,6 +2462,7 @@ private:
         // ★★★ Per ACCESS UNIT, not per super frame — see SuperFrame::auBad. A header that passed its
         //     firecode is a real super frame, so its AU count is the audio that was due.
         if (s.firecodeOk) { auIn_ += uint32_t(s.auTotal); auBad_ += uint32_t(s.auBad); }
+        if (s.firecodeOk && !s.valid) ++sfCountedBad_;   // ★ its units are in auIn_/auBad_ already (see the gap count below)
         if (onAuSlotForTest && s.firecodeOk) {   // ★ before the `valid` test: a frame whose every unit failed is a real hole
             const uint64_t sfAt = pcmOwed_ / (uint64_t(kAudioRateHz) * 120 / 1000);
             size_t k = 0;
@@ -2479,6 +2480,20 @@ private:
         if (!s.valid || !s.firecodeOk) { sf_.pop_front(); return; }
         sf_.clear();
         ++sfOk_;
+        /* ★★ A LOST SUPER FRAME'S UNITS ARE LOST AUDIO TOO (Stuart, 2026-11-13, 10D: "Audio units 0 of 2014 lost" beside
+         *  "super frames 1007 of 1009" — and two skips heard). A super frame whose header failed never reached the unit
+         *  count above, so the line that names what was heard said nothing was missing. On the programme clock the gap
+         *  between this good super frame and the last is the units that were due and never came: counted here (less those
+         *  whose header passed and were counted already). A gap of more than ~3 s is a break, not a loss — not counted. */
+        {
+            const uint64_t per = uint64_t(kAudioRateHz) * 120 / 1000;
+            const int64_t sfIdx = int64_t(pcmOwed_ / per);
+            if (lastGoodSf_ >= 0 && sfIdx > lastGoodSf_ + 1 && sfIdx - lastGoodSf_ <= 25) {
+                const int64_t missing = sfIdx - lastGoodSf_ - 1 - int64_t(sfCountedBad_);
+                if (missing > 0) { auIn_ += uint32_t(missing * s.auTotal); auBad_ += uint32_t(missing * s.auTotal); }
+            }
+            lastGoodSf_ = sfIdx; sfCountedBad_ = 0;
+        }
 
         afmt_       = s.fmt;
         aacCoreCh_  = s.stereo ? 2 : 1;
@@ -2723,7 +2738,9 @@ private:
     uint64_t   pcmOwed_   = 0;     ///< 48 kHz frames the programme clock says we should have sent
     uint32_t   pcmFilled_ = 0;
     uint32_t   rsCorrected_ = 0, rsUncorrected_ = 0;  ///< Reed-Solomon: bytes fixed / codewords lost
-    uint32_t   auIn_ = 0, auBad_ = 0;                 ///< DAB+ access units due / failed their CRC (the audio heard)
+    uint32_t   auIn_ = 0, auBad_ = 0;                 ///< DAB+ access units due / lost — CRC failures AND lost super frames
+    int64_t    lastGoodSf_ = -1;                      ///< the programme-clock index of the last super frame that decoded
+    uint32_t   sfCountedBad_ = 0;                     ///< super frames since it whose header passed (their units counted)
     uint32_t   sfInvalid_ = 0, sfFireBad_ = 0;
     size_t     settleDrop_ = 0;      ///< IQ samples still to discard after a retune
     uint32_t   preTuneDropped_ = 0;  ///< how many were discarded, ever — published

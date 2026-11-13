@@ -343,6 +343,13 @@ int main(int argc, char** argv) {
     for (const std::string& path : paths) {
         Log L; if (!loadLog(path, L)) { std::printf("   %s: not a unit log, skipped\n", path.c_str()); continue; }
         ++ran;
+        /* ★ VIBE_DAB_DROP_SF=N: lose every Nth whole super frame (its units emptied) — a clean log made into the 10D night of
+         *  2026-11-13 ("a little crunch … like a CD skip"), so the concealment can be heard and measured on demand. */
+        if (const char* e = getenv("VIBE_DAB_DROP_SF")) if (const int n = std::atoi(e); n > 1) {
+            size_t dropped = 0;
+            for (auto& u : L.s) if (u.sf % uint32_t(n) == 0 && !u.adts.empty()) { u.adts.clear(); ++dropped; }
+            std::printf("   VIBE_DAB_DROP_SF=%d: %zu units emptied (every %dth super frame lost)\n", n, dropped, n);
+        }
         size_t bad = 0;
         { std::map<std::pair<uint32_t, int>, bool> good; for (auto& s : L.s) { bool& g = good[{s.sf, s.slot}]; g = g || !s.adts.empty(); }
           for (auto& kv : good) bad += !kv.second; }

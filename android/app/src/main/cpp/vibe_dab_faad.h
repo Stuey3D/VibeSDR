@@ -107,7 +107,7 @@ public:
     int64_t decoded() const { return decoded_; }
     int64_t concealed() const { return concealed_; }
     int64_t faadErrors() const { return faadErrors_; }
-    /** ★ Test knob: the concealment's shape. 0 = repeat-and-fade (the default), 1 = silence at once (what a plain
+    /** ★ Test knob: the concealment's shape. 0 = a quick fade (the default, kFadeOutMs), 1 = silence at once (what a plain
      *  "drop the unit" decoder would sound like, if it kept the clock). */
     void setConcealMode(int m) { mode_ = m; }
 
@@ -192,28 +192,28 @@ private:
         }
         out.interleaved.insert(out.interleaved.end(), o.begin(), o.end());
     }
-    /** ★★ ONE missing unit. The first: the last good unit decoded again, fading to nothing over its length (raised
-     *  cosine) — the decoder's overlap-add joins it to what played before without a step. Any after it: silence, the
-     *  decoder untouched. The next good unit fades back in (emit). Before any unit has decoded there is nothing to
-     *  conceal with and nothing to keep in time: the caller has no clock to hold yet either. */
+    /** ★★ ONE missing unit — FADE, NOT REPEAT (Stuart, 2026-11-13, 10D: "like a little crunch … more like a CD skip";
+     *  "Fade would be better that is what the car stereos do too"). It was repeat-and-fade over 120 ms: the last good
+     *  unit decoded again, fading across two or more units — up to 120 ms of the same sound played twice, which is
+     *  exactly a skip. Now the first missing unit is the last good one decoded again ONLY to carry the overlap-add on
+     *  without a step, faded to nothing within kFadeOutMs (raised cosine); the rest of it, and every unit after it, is
+     *  silence; the next good unit fades back in (emit). A short dip, no repeat. Before any unit has decoded there is
+     *  nothing to conceal with and nothing to keep in time: the caller has no clock to hold yet either. */
     void concealOne(AacPcm& out) {
         if (!unitFrames_) return;
         ++concealed_; ++run_;
         std::vector<float>& st = runBuf_;
-        if (mode_ == 0 && run_ <= fadeUnits() && !last_.empty() && h_ && run(last_.data(), last_.size(), st)) {
+        if (mode_ == 0 && run_ == 1 && gain_ > 0.0f && !last_.empty() && h_ && run(last_.data(), last_.size(), st)) {
             const size_t base = out.interleaved.size();
             emit(st, out, true);
             const size_t frames = (out.interleaved.size() - base) / 2;
-            // ★ one raised-cosine fade across fadeUnits_ units: this unit covers [run_-1, run_] of it, from the gain
-            //   the last one left (a fade-in cut short by a new hole starts lower, never jumps up)
-            const float g0 = gain_, g1 = 0.5f * (1.0f + std::cos(float(M_PI) * float(run_) / float(fadeUnits())));
-            const float gEnd = std::min(g0, g1);
+            const size_t fade = std::min(frames, size_t(std::max(1, fadeOutMs_) * 48));
+            const float g0 = gain_;
             for (size_t i = 0; i < frames; ++i) {
-                const float u = 0.5f * (1.0f - std::cos(float(M_PI) * float(i + 1) / float(frames)));
-                const float g = g0 + (gEnd - g0) * u;
+                const float g = i < fade ? g0 * 0.5f * (1.0f + std::cos(float(M_PI) * float(i + 1) / float(fade))) : 0.0f;
                 out.interleaved[base + 2 * i] *= g; out.interleaved[base + 2 * i + 1] *= g;
             }
-            gain_ = gEnd;
+            gain_ = 0.0f;
             return;
         }
         // ★ Past the fade: silence, at the gain the fade reached (0) — exact, not a step: the fade ended at 0.
@@ -226,17 +226,16 @@ private:
         gain_ = 0.0f;
     }
 public:
-    /** ★ How long the repeat-and-fade lasts before silence: kFadeMs of programme, in whole units (60 ms units → 2, 20 ms
-     *  units → 6). Long enough that a one-unit hole is a −6 dB dip rather than a drop-out, short enough that a longer
-     *  hole never sounds like a stuck record. setFadeMs is the test knob. */
-    void setFadeMs(int ms) { fadeMs_ = std::max(1, ms); }
-    int fadeUnits() const { return unitFrames_ ? std::max(1, int(std::lround(double(fadeMs_) * 48.0 / double(unitFrames_)))) : 1; }
+    /** ★ How fast a hole fades out (ms) — kFadeOutMs by default, a car radio's quick fade: long enough that the cut
+     *  makes no click, short enough that nothing is heard twice. setFadeMs is the test knob. */
+    static constexpr int kFadeOutMs = 25;
+    void setFadeMs(int ms) { fadeOutMs_ = std::max(1, ms); }
 private:
 
     /* ★ LEVEL: FAAD2's float output is already ±1.0 full scale (it divides by 2^15 itself). */
     static constexpr float kScale = 1.0f;
     NeAACDecHandle h_ = nullptr;
-    int prof_ = -1, sfi_ = -1, ch_ = -1, rate_ = 0, unitFrames_ = 0, run_ = 0, mode_ = 0, reopened_ = 0, fadeMs_ = 120;
+    int prof_ = -1, sfi_ = -1, ch_ = -1, rate_ = 0, unitFrames_ = 0, run_ = 0, mode_ = 0, reopened_ = 0, fadeOutMs_ = kFadeOutMs;
     float gain_ = 1.0f;
     bool mono_ = false;
     std::vector<uint8_t> last_;
