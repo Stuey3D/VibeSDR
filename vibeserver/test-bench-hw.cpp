@@ -56,6 +56,7 @@ int main() {
         Hw hw; hw.radios.push_back(benchhw::radioFor("usrp", 0, 0, 0, false, 3, true));
         ok(hasWide(hw, 8e6) && hasWide(hw, 16e6) && hasWide(hw, 20e6) && hasWide(hw, 28e6) && hasWide(hw, 30.72e6) && hasWide(hw, 32e6),
            "USRP USB 3: wide rows 8 … 32 MS/s, 30.72 among them");
+        ok(hasWide(hw, 40e6) && hasWide(hw, 50e6) && hasWide(hw, 56e6), "USRP USB 3: the benchmark measures 40, 50 and 56 MS/s too (beta74)");
         ok(benchhw::anyLocked(hw), "USRP locked: judged by the locked-range rows");
         ok(!runs(hw, "dec_rtty") && !runs(hw, "dec_ndb") && !runs(hw, "dec_wefax"), "USRP: no HF decoders (50 MHz floor)");
         ok(runs(hw, "dab") && runs(hw, "adsb") && runs(hw, "dec_ais") && runs(hw, "lk_wfm"), "USRP: DAB, ADS-B, AIS, WFM run");
@@ -95,6 +96,10 @@ int main() {
            "verdict 28 MS/s: 20, 25, 28 offered, 30.72 not");
         const auto g32 = ratesFor(3, 32e6);
         ok(hasRate(g32, 30720000) && hasRate(g32, 32000000), "verdict 32 MS/s: 30.72 and 32 offered");
+        ok(!hasRate(g32, 40000000) && !hasRate(g32, 56000000), "verdict 32 MS/s: 40 and 56 not offered");
+        const auto g56 = ratesFor(3, 56e6);
+        ok(hasRate(g56, 40000000) && hasRate(g56, 50000000) && hasRate(g56, 56000000), "★ verdict 56 MS/s (beta74): 40, 50 and 56 offered");
+        ok(!hasRate(ratesFor(3), 56000000) && !hasRate(ratesFor(2, 56e6), 56000000), "…never without a verdict, never on USB 2");
         ok(!hasRate(ratesFor(2, 32e6), 10000000) && !hasRate(ratesFor(2, 32e6), 20000000), "USB 2: no wide rate whatever the verdict");
         ok(!hasRate(ratesFor(0, 32e6), 20000000), "link unknown: treated as USB 2");
         const auto keep = ratesFor(3, 0, 30.72e6);

@@ -108,7 +108,12 @@ inline Host thisHost() {
  *     (the radio's saved rate or locked rate) stays offered even if a later benchmark says no — the default is set by the
  *     benchmark, the owner's choice is never taken away. */
 inline const std::vector<uint32_t>& gatedRates() {
-    static const std::vector<uint32_t> g = { 20000000u, 25000000u, 28000000u, 30720000u, 32000000u };
+    /* ★★ V12 beta74 (Stuart, 2026-11-13: "on the B210 do we go up to 56MSPS" … "the dude is running an 11th gen i7"):
+     *  40, 50 and 56 MS/s — the AD9361's single-channel top. Like the rest of this list they are offered ONLY where the
+     *  benchmark measured this machine carrying them (ratesFor), so a smaller host never sees them. 56 MS/s of sc16 is
+     *  ~224 MB/s over USB 3; UHD chooses the B2xx master clock for the rate asked (none is set here). */
+    static const std::vector<uint32_t> g = { 20000000u, 25000000u, 28000000u, 30720000u, 32000000u,
+                                             40000000u, 50000000u, 56000000u };
     return g;
 }
 inline std::vector<uint32_t> ratesFor(int usbSpeed, double gateHz = 0, double keepHz = 0) {
