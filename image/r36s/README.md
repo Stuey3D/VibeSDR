@@ -25,8 +25,12 @@ Docker on the Mac (colima, arm64 — native, no QEMU), `--cpus 6`, about 10 minu
 `--no-install-recommends`, so the builder installs it explicitly: `--mapdata <deb>`, else the newest in
 `~/VibeSDR-r36s-build/cache/mapdata`, else `scripts/build-mapdata-deb.sh` builds it from `assets/mapdata/v1`. It lands in
 `/usr/lib/vibeserver/mapdata` beside the basic pack — the engine's first place to look (`vibe_mapdata.h`: the binary's
-`../lib/vibeserver/mapdata`); `verify.sh` fails an image without it. The root partition is sized from what it holds
-(+15 % +320 MiB free), so it grows by itself — about +260 MiB for the pack.
+`../lib/vibeserver/mapdata`); `verify.sh` fails an image without it.
+
+**The root partition is a fixed 3 GB** (2026-11-13, `docs/v12/R36S-FLASHER.md` §4): the flasher's UPDATE rewrites boot
+and root in place and never moves the owner's `vibestate` and `VIBESDR`, so every card must have room for every later
+system. The build fails if the system plus its margin (+15 % +320 MiB) ever outgrows 3 GB; `verify.sh` fails a card
+whose p2 is not 3072 MiB. (Before this it was sized from its contents — cards written then take one full write.)
 
 Inputs, all checked: the ROCKNIX 20261101 b image (downloaded once into `~/VibeSDR-r36s-build/cache`, sha256 pinned in
 `build-image.sh`; `ROCKNIX_IMG=<file>` uses a local copy), Debian trixie (`SNAPSHOT=YYYYMMDDTHHMMSSZ` pins it to
@@ -43,7 +47,8 @@ gunzip -c vibesdr-r36s-<version>.img.gz | sudo dd of=/dev/rdiskN bs=4m
 diskutil eject /dev/diskN
 ```
 
-The image is ~1.75 GB; the rest of the card becomes the `VIBESDR` drive on the first boot.
+The image is ~3.5 GB (most of it the root's free room, which compresses to nothing); the rest of the card becomes the
+`VIBESDR` drive on the first boot.
 
 ## What is on the card
 
@@ -51,7 +56,7 @@ The image is ~1.75 GB; the rest of the card becomes the `VIBESDR` drive on the f
 |---|---|
 | 32 KiB … 16 MiB | ROCKNIX's loader `b_uboot.bin.uart5` (U-Boot v2025.10 + rkbin), byte-identical to what ROCKNIX's own updater wrote on Stuart's unit |
 | p1 FAT32 `VIBEBOOT`, 128 MiB | `KERNEL`, `rk3326-gameconsole-eeclone.dtb`, `boot.scr` (ROCKNIX's), `extlinux/extlinux.conf` (ours), `overlays/mipi-panel.dtbo` (60 Hz default), `overlays/vibe-r36s.dtbo`, `overlays/mipi-panel.rocknix-80hz.dtbo` (the untouched original), `stock/rf3536k3ka.dtb`, `SOURCES.txt`, `README.txt` |
-| p2 ext4 `vibe-root`, ~1.6 GB (with the map pack) | Debian 13 trixie arm64, **mounted read-only**, a RAM overlay on top |
+| p2 ext4 `vibe-root`, **3 GB fixed** (~1.6 GB used, with the map pack) | Debian 13 trixie arm64, **mounted read-only**, a RAM overlay on top |
 | p3 ext4 `vibestate`, 256 MiB | what must survive a power cut: the engine's data (`/var/lib/vibeserver`), the browser's storage, `hwd.json` (brightness, volume), the clock, the card-check result |
 | p4 exFAT `VIBESDR`, the rest | made on the first boot: `Recordings/`, `Gallery/`, `import/` (+ `done/`), `export/`, `Diagnostic logs/`, `README.txt` |
 

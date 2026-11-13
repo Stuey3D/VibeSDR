@@ -22,6 +22,7 @@ read -r S3 Z3 <<< "$(sed -n 's/.*3 : start= *\([0-9]*\), size= *\([0-9]*\).*/\1 
 [ $((S1 + Z1)) -le "$S2" ] && [ $((S2 + Z2)) -le "$S3" ] || fail "partitions overlap"
 [ $(( (S3 + Z3) * 512 )) -le "$(stat -c %s "$IMG")" ] || fail "p3 runs past the end of the file"
 DISKID=$(sed -n 's/^label-id: 0x//p' "$T/pt")
+[ "$((Z2 / 2048))" = 3072 ] || fail "p2 (root) is $((Z2 / 2048)) MiB — every card's root is a fixed 3072 MiB so the flasher can update in place (R36S-FLASHER.md §4)"
 ok "MBR: id $DISKID, p1 boot $((Z1/2048)) MiB @16 MiB, p2 root $((Z2/2048)) MiB, p3 state $((Z3/2048)) MiB; VIBESDR comes on first boot"
 
 # ── the loader ──

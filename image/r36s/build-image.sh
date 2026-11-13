@@ -30,7 +30,12 @@ LOADER_SHA256=689724d71558cd9a3d2490c89344b9fbdcf16f2f92cfeff6e39f8bdfe981fab4
 KVER=7.1.2
 BOOT_MIB=128      # FAT32 boot partition: KERNEL (24 MB) + DTB + overlays + room for a newer kernel
 STATE_MIB=256     # ext4 state partition (never grown)
-ROOT_HEAD_MIB=320 # free room left in the read-only root (developer hot-fixes, a newer engine)
+ROOT_HEAD_MIB=320 # free room the read-only root must still have once filled (developer hot-fixes, a newer engine)
+# ★★★ THE ROOT IS A FIXED 3 GB (Stuart, 2026-11-13 — docs/v12/R36S-FLASHER.md §4). It was sized from its contents
+#     (+15 % +320 MiB), so a later, bigger system would not fit an older card, and the flasher's UPDATE (rewrite p1 + p2,
+#     never p3/p4: the owner's settings and recordings) would have had to move partitions to make room. Fixed, every card
+#     from here on takes every later system in place. The build FAILS if the system ever outgrows it — never shrinks it.
+ROOT_MIB_FIXED=3072
 H=/repo/image/r36s
 W=/work
 say() { printf '==> %s\n' "$*"; }
@@ -331,10 +336,12 @@ chmod 0750 "$ST/vibeserver"
 # ── 9. Filesystems in files, then the card image ─────────────────────────────────────────────────────────────────────
 P=$W/parts
 ROOT_KIB=$(du -sk --apparent-size "$R" | cut -f1)
-ROOT_MIB=$(( (ROOT_KIB * 115 / 100 / 1024 + ROOT_HEAD_MIB + 3) / 4 * 4 ))
+ROOT_NEED_MIB=$(( (ROOT_KIB * 115 / 100 / 1024 + ROOT_HEAD_MIB + 3) / 4 * 4 ))
+[ "$ROOT_NEED_MIB" -le "$ROOT_MIB_FIXED" ] || die "the system needs $ROOT_NEED_MIB MiB with its margin — over the fixed $ROOT_MIB_FIXED MiB root every card has (R36S-FLASHER.md §4): make it smaller, do not grow the partition"
+ROOT_MIB=$ROOT_MIB_FIXED
 UUID_ROOT=$(printf '%s-root' "$DISKID" | sha256sum | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')
 UUID_STATE=$(printf '%s-state' "$DISKID" | sha256sum | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')
-say "root filesystem: $((ROOT_KIB / 1024)) MiB of files in a $ROOT_MIB MiB partition"
+say "root filesystem: $((ROOT_KIB / 1024)) MiB of files (needs $ROOT_NEED_MIB MiB with its margin) in the fixed $ROOT_MIB MiB partition"
 truncate -s "${ROOT_MIB}M" "$P/root.ext4"
 mkfs.ext4 -q -L vibe-root -U "$UUID_ROOT" -E hash_seed="$UUID_ROOT",root_owner=0:0 -m 0 \
   -d "$R" "$P/root.ext4"
