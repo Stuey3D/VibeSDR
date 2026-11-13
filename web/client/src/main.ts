@@ -18443,32 +18443,14 @@ function pushSettingsToServer() {
    *     The client only sends one when the listener PRESSES it — the shared-dial contract. NFM Voice stays: it is
    *     not part of the row, and its restore is guarded (onDspState re-states it only if the server disagrees). */
   const nfmV = bool('nfmVoice');    if (nfmV !== undefined) spec.setNfmVoice(nfmV);
-  // ★★★ HARDWARE SETTINGS ARE THE OWNER'S, AND ONLY AN ADMIN MAY SEND THEM. Everything above this
-  //     line is THIS listener's own processing — squelch, noise reduction, de-emphasis — and is
-  //     rightly restored on every connect. PPM, bias-T, the tuner AGC and direct sampling are
-  //     properties of somebody else's RADIO: pushing a value stored in this browser at a receiver
-  //     we have no rights over is asserting a setting we cannot hold.
-  //  ★★ The server refuses them, correctly — "refused bias-T — admin password required" appears
-  //     in the log every time an ordinary listener connects (Stuart, 2026-08-22: "why is the
-  //     iPhone asking for Bias-T though that is odd"). It is harmless and it is still wrong: it
-  //     is a request that should never have been made, and it puts a refusal in the owner's log
-  //     for a listener who did nothing.
-  //  ★★★ AND IT WOULD NOT STAY HARMLESS. The refusal is the only thing standing between a stale
-  //      local preference and a stranger's front end — bias-T feeds DC to an aerial. A client that
-  //      only asks for what it may have does not depend on the server's refusal being perfect.
-  //  ★ An ADMIN still restores them, because on their own receiver these ARE their settings.
-  if (adminUnlocked) {
-    const ppm = num('ppm');           if (ppm !== undefined) spec.setHwPpm(ppm);
-    const biasT = bool('biasT');      if (biasT !== undefined) spec.setHwBiasT(biasT);
-    /* ★★★ NOT THE AGC — THE SERVER PERSISTS THAT ONE ITSELF. `rtlAgc` is a config field, applied
-     *     at startup (main.cpp), so it is the RADIO's setting and survives a restart. Re-asserting
-     *     a value out of browser storage on every admin connect therefore does not restore a
-     *     preference, it OVERRIDES the owner's saved configuration with whatever this tab last saw
-     *     — which is why Stuart had to switch it back on "every time i connect". ppm, bias-T and
-     *     direct sampling stay because they have no server-side home; the moment one of them gains
-     *     a config field it should leave this list too. */
-    const ds = num('directSampling'); if (ds !== undefined) spec.setHwDirectSampling(ds as 0 | 1 | 2);
-  }
+  /* ★★★ NO HARDWARE SETTING IS REPLAYED FROM THIS BROWSER — NOT EVEN FOR AN ADMIN (Stuart, 2026-11-13: "not sure why the
+   *  app should be sending a bias-t command from memory, if i was logged in as admin to bypass the time limits it will be
+   *  enabling the Bias-T for no reason"). PPM, bias-T and direct sampling were re-sent from browser storage on every admin
+   *  connect, because they once "had no server-side home". They all have one now (the server persists each: biasT, ppm,
+   *  directSampling in its config), so a replay restored nothing — it OVERRODE the radio's saved setting with whatever
+   *  this tab last saw. Bias-T puts DC on the feedline: a browser must never switch it because its owner signed in. And a
+   *  tab that still believed it was admin after a server restart sent it unauthorised — refused at 22:59:59, which is
+   *  what put a false "password not accepted" on the owner's app. The server is the only memory for the radio. */
 
   // Re-assert the frame rate: the shim keeps whatever it was last set to, so a
   // reconnect could otherwise land in a stuck 5 fps with no way back.

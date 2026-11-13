@@ -19397,9 +19397,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("refused %s — %s", what,
                  needed ? "admin password required"
                         : "no admin password is set, so only this machine may change the radio");
-            std::shared_ptr<net::Socket> sc;
-            { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
-            if (sc) sendText(sc, "{\"type\":\"admin\",\"ok\":false,\"refused\":true}");
+            /* ★★★ TO THE ONE WHO ASKED (Stuart, 2026-11-13: a red "That password was not accepted" on the Mac app at 23:05
+             *  — "I never even attempted a password entry"). This went to the radio's PRIMARY listener (specClient), so a
+             *  control refused for somebody else — a browser at 22:59:59 re-sending a stored bias-T — landed on the owner's
+             *  screen as a failed password. Now the refusal goes to the socket whose request it was; with no socket (an
+             *  internal caller) nobody is told. */
+            if (sock) sendText(sock, "{\"type\":\"admin\",\"ok\":false,\"refused\":true}");
             return false;
         };
         if (type == "admin_unlock") {

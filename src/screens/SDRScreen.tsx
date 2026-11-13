@@ -8141,7 +8141,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         //     with the countdown carrying on unchanged from where it was). Whoever stops a clock
         //     has to stop the thing that WINDS it.
         if (st.ok) setSessionEndsAt(null);
-        if (st.refused) { setAdminRefused(true); setAdminFailReason('wrong'); adminAskedAt.current = 0; }
+        /* ★★★ A REFUSAL IS A WRONG PASSWORD ONLY IF A PASSWORD WAS JUST TRIED (2026-11-13: "That password was not accepted"
+         *  with no password entered). The server sends the same {admin, refused} when it turns down a locked CONTROL — so
+         *  unless this app asked in the last 10 s, it is the control's refusal: the panel says "That control is locked …". */
+        if (st.refused) {
+          const asked = !!adminAskedAt.current && Date.now() - adminAskedAt.current < 10000;
+          setAdminRefused(true); setAdminFailReason(asked ? 'wrong' : null); adminAskedAt.current = 0;
+        }
         else if (!st.ok && adminAskedAt.current && Date.now() - adminAskedAt.current < 10000) {
           // ★ We asked, and the answer is "not admin". On every server that ships today that IS
           //   the refusal — see the note on adminAskedAt.
