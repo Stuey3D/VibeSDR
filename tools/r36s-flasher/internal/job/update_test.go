@@ -104,7 +104,9 @@ func TestUpdateKeepsSettingsAndRecordings(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	last := evs[len(evs)-1]
-	if !last.Done || !strings.Contains(last.Text, "Updated from an earlier VibeSDR to new-test") {
+	// ★ a card that records its version (h73 on) is named; an older one is "an earlier VibeSDR"
+	if !last.Done || !(strings.Contains(last.Text, "Updated from an earlier VibeSDR to new-test") ||
+		(strings.Contains(last.Text, "Updated from 12.0.0-") && strings.Contains(last.Text, " to new-test"))) {
 		t.Fatalf("done text: %+v", last)
 	}
 	if span(t, cardPath, 512, parts[0].Offset()-512) != loader {
