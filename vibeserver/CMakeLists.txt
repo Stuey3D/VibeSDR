@@ -1003,6 +1003,11 @@ foreach(t ${VIBE_DAB_TESTS})
   add_test(NAME dab-${t} COMMAND test-dab-${t})
   add_dependencies(dab-tests test-dab-${t})
 endforeach()
+# ★ The 8-bit IQ conversion and its ADC statistics (vibe_u8_conv.h) against a reference — the path this machine builds
+#   (NEON on ARM, SSE2 on x86). The SSE2 path once dropped the statistics: VibeAGC blind on every x86 RTL server.
+add_executable(test-u8-conv "${CMAKE_CURRENT_SOURCE_DIR}/test-u8-conv.cpp")
+target_include_directories(test-u8-conv PRIVATE "${CPP_DIR}")
+add_test(NAME u8-conv COMMAND test-u8-conv)
 # ★ The receive over-buffer (vibe_iq_slot_ring.h): order, holes carried with the next block, a full ring drops — two threads.
 add_executable(test-iq-slot-ring "${CMAKE_CURRENT_SOURCE_DIR}/test-iq-slot-ring.cpp")
 target_include_directories(test-iq-slot-ring PRIVATE "${CPP_DIR}")
