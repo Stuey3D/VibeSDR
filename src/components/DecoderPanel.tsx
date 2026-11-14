@@ -122,6 +122,9 @@ export interface DecoderPanelProps {
   cw?:             { skim: boolean; list: CwList | null; spots: CwSpot[]; onTune: (hz: number) => void } | null;
   /** ★ V12 PSK31/63 (VibeServer): CW's list exactly (CwView with its mode where CW has its speed) — set while PSK runs. */
   psk?:            { skim: boolean; list: CwList | null; spots: CwSpot[]; onTune: (hz: number) => void } | null;
+  /** ★ V12 the RTTY skimmer (VibeServer 'rttyskim'): CW's list again, each signal's whole text by id (`history`) for its
+   *  card — set only while RTTY runs as the SKIMMER (ONE SIGNAL is the ordinary RTTY text body). */
+  rtty?:           { skim: boolean; list: CwList | null; spots: CwSpot[]; history: Record<number, string>; onTune: (hz: number) => void } | null;
   /** ★ V12 JTTY (VibeServer): the stations and spots (JttyView) and its tune (USB, 1500 Hz below) — set while JTTY runs. */
   jtty?:           { list: JttySignal[]; spots: JttySpot[]; onTune: (rfHz: number) => void } | null;
   /** ★ V12 DSC (VibeServer): the calls newest first (DscView) and MAP for a position — set while DSC runs. */
@@ -301,12 +304,15 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, jtty = null, dsc = null, aprs = null, scanner = null,
+  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, rtty = null, jtty = null, dsc = null, aprs = null, scanner = null,
   spotModes, spotsTitle, spotModeStates,
 }: DecoderPanelProps) {
   const sfModes = React.useMemo(() => spotFilterModes(spotModes ?? SF_MODES_UBERSDR), [spotModes]);
   /* ★ V12: CW and PSK share one list view (the web's #cwList) — whichever is the decoder fills it. */
-  const cw = activeDecoder === 'psk' ? psk : cwProp;
+  const cw = activeDecoder === 'psk' ? psk : activeDecoder === 'rtty' ? rtty : cwProp;
+  /** ★ V12 the RTTY skimmer's card: the signal whose whole text is open (null = none). */
+  const [rttyCard, setRttyCard] = useState<number | null>(null);
+  useEffect(() => { if (!rtty) setRttyCard(null); }, [rtty]);
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
   //
@@ -425,7 +431,7 @@ export default function DecoderPanel({
    *  ★ Between messages it says STANDING BY, as WEFAX does between charts. */
   const isNavtex = activeDecoder === 'navtex' && !!navtex && !isSpotsMode && !isDabMode && !isImageMode && !isAircraftMode;
   /** ★ V12 CW: the list + spots view (CwView) in place of the plain text body. */
-  const isCw = (activeDecoder === 'cw' || activeDecoder === 'psk') && !!cw && !isSpotsMode && !isDabMode && !isAircraftMode;
+  const isCw = (activeDecoder === 'cw' || activeDecoder === 'psk' || activeDecoder === 'rtty') && !!cw && !isSpotsMode && !isDabMode && !isAircraftMode;
   /** ★ V12 JTTY / DSC: their own list views in place of the text body. */
   const isJtty = activeDecoder === 'jtty' && !!jtty && !isSpotsMode && !isDabMode && !isAircraftMode;
   const isDsc = activeDecoder === 'dsc' && !!dsc && !isSpotsMode && !isDabMode && !isAircraftMode;
@@ -932,7 +938,12 @@ export default function DecoderPanel({
   const hdrIdxRef = useRef(hdrIdx);   hdrIdxRef.current = hdrIdx;
   const listIdxRef = useRef(listIdx); listIdxRef.current = listIdx;
   const cwSelectRef = useRef<((i: number) => void) | null>(null);
-  cwSelectRef.current = isCw ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) cw!.onTune(r.hz); }
+  cwSelectRef.current = isCw ? (i: number) => {
+      const r = cwRows[i];
+      const rid = (r as { id?: number } | undefined)?.id;
+      if (activeDecoder === 'rtty' && rid !== undefined) { setRttyCard(rid); return; }   // ★ a signal row opens its card
+      if (r && r.hz > 0) cw!.onTune(r.hz);
+    }
     : isJtty ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) jtty!.onTune(r.hz); }
     // ★ DSC: Enter on a call with a position is its MAP (rows are otherwise read, not pressed)
     : isDsc ? (i: number) => {
@@ -1101,7 +1112,7 @@ export default function DecoderPanel({
     ? 'DAB'
     : isSpotsMode
     ? (spotsKind === 'cw' ? 'CW SPOTS' : (spotsTitle || 'DIGITAL SPOTS'))
-    : isCw && cw!.skim ? (activeDecoder === 'psk' ? 'PSK SKIMMER' : 'CW SKIMMER')
+    : isCw && cw!.skim ? (activeDecoder === 'psk' ? 'PSK SKIMMER' : activeDecoder === 'rtty' ? 'RTTY SKIMMER' : 'CW SKIMMER')
     : isAprs && aprs!.baud === 300 ? 'APRS · HF 300'
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
@@ -1537,6 +1548,7 @@ export default function DecoderPanel({
         )}
         {!minimised && isCw && (
           <CwView skim={cw!.skim} psk={activeDecoder === 'psk'} plain={cwPlain} list={cw!.list} spots={cw!.spots} text={decoderText} bodySize={bodySize}
+                  rttyHistory={activeDecoder === 'rtty' ? rtty?.history : undefined} cardId={rttyCard} onCard={setRttyCard}
                   focusIdx={kbZone === 'list' ? listIdx : -1} onTune={cw!.onTune}
                   scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}

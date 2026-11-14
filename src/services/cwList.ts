@@ -24,7 +24,11 @@ export interface CwSignal {
   wpmLo?: number; wpmHi?: number;
   /** ★ V12 PSK only: 31 or 63, and the IMD (dB, 0 = not measured). One list draws both decoders (the web's rule). */
   baud?: 31 | 63; imd?: number;
+  /** ★ V12 RTTY skimmer only (rtty_signals): the shift heard (listed at once), and — once `set` — the settings found for
+   *  this signal ("45 baud / 170 Hz / Reverse"; they are inside `text` too, and scroll away with it). */
+  rtty?: RttyRowInfo;
 }
+export interface RttyRowInfo { set: boolean; shift: number; baud: number; reverse: boolean; settings: string }
 export interface CwList { skimmer: boolean; centre: number; width: number; primary: number; signals: CwSignal[] }
 export interface CwSpot {
   callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number;
@@ -51,7 +55,7 @@ export const CW_Q_COLOURS: Record<CwQ, string> = {
 
 /** The list from the wire, sanitised as the web's DecoderClient does: plain fields of the types read, at most 80 rows,
  *  strings cut short. null = not a list. ★ `psk`: a psk_signals frame — the same list with the mode (31/63) and IMD. */
-export function parseCwSignals(d: any, psk = false): CwList | null {
+export function parseCwSignals(d: any, psk = false, rtty = false): CwList | null {
   if (!d || typeof d !== 'object' || !Array.isArray(d.signals)) return null;
   const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '');
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -64,12 +68,14 @@ export function parseCwSignals(d: any, psk = false): CwList | null {
       call: str(x?.call, 16), country: str(x?.country, 40), text: str(x?.text, 160),
       ...(psk ? {} : cwWpmRangeOf(x)),
       ...(psk ? { baud: (num(x?.baud) > 40 ? 63 : 31) as 31 | 63, imd: num(x?.imd) } : {}),
+      ...(rtty ? { rtty: { set: x?.set === true, shift: num(x?.shift), baud: num(x?.baud), reverse: x?.reverse === true,
+                           settings: str(x?.settings, 40) } } : {}),
     })),
   };
 }
 
 /** A spot from the wire; null without a callsign. `now` stands in for a missing timestamp. ★ `psk`: a psk_spot. */
-export function parseCwSpot(d: any, now: number, psk = false): CwSpot | null {
+export function parseCwSpot(d: any, now: number, psk = false, rtty = false): CwSpot | null {
   if (!d || typeof d.callsign !== 'string' || !d.callsign) return null;
   return {
     callsign: d.callsign.slice(0, 16), frequency: Number(d.frequency) || 0, audio: Number(d.audio) || 0,
@@ -77,7 +83,45 @@ export function parseCwSpot(d: any, now: number, psk = false): CwSpot | null {
     country: String(d.country || '').slice(0, 40), timestamp: Number(d.timestamp) || now,
     ...(psk ? {} : cwWpmRangeOf(d)),
     ...(psk ? { mode: d.mode === 'BPSK63' ? 'BPSK63' : 'BPSK31' } : {}),
+    ...(rtty ? { mode: typeof d.mode === 'string' && d.mode.startsWith('RTTY') ? d.mode.slice(0, 16) : 'RTTY' } : {}),
   };
+}
+
+/* ★★ V12 THE RTTY SKIMMER (docs/v12/RTTY-SKIMMER.md) — CW's list view again ('rttyskim', a 24/48/96 kHz segment centred on
+ *  the dial). A signal is listed as soon as it is heard, before its settings are found; then each one's own speed, shift
+ *  and polarity, written into its text. A row opens its card (the whole of what it sent, its settings at the top). */
+export const RTTY_WAITING = 'RTTY detected \u2014 waiting for parameter detection';
+/** A row's text line: what it sent, or the waiting words until its settings are found. */
+export function rttyRowText(sg: CwSignal): string {
+  return sg.rtty && !sg.rtty.set ? RTTY_WAITING : sg.text.trim();
+}
+/** The row's rate column: the shift heard (known from the moment it is listed). */
+export function rttyRateText(sg: CwSignal): string {
+  return sg.rtty && sg.rtty.shift > 0 ? `${Math.round(sg.rtty.shift)} Hz` : 'RTTY';
+}
+/** The hint under the RTTY key's VIEW — the web's rttySkimHint. */
+export function rttySkimHintText(width: number): string {
+  return `Every RTTY signal ${width / 2000} kHz either side of your dial, each with its own speed, shift and polarity `
+    + 'found for it — listed as soon as it is heard. Tap a row to read all it sent.';
+}
+/** ★★ THE CARD'S WHOLE TEXT: each list carries a signal's last 160 characters only, so the app joins them — the new text
+ *  from where it overlaps what is held (the longest tail of the old that starts the new). No overlap (a gap of more than
+ *  a list) = a line break and the new. At most `cap` characters a signal; signals no longer listed are dropped. */
+export function mergeRttyHistory(hist: Readonly<Record<number, string>>, sigs: readonly CwSignal[], cap = 8000): Record<number, string> {
+  const out: Record<number, string> = {};
+  for (const s of sigs) {
+    const prev = hist[s.id] ?? '';
+    const t = s.text;
+    let next = prev;
+    if (!prev) next = t;
+    else if (t && !prev.endsWith(t)) {
+      let k = Math.min(prev.length, t.length);
+      for (; k > 0; k--) if (prev.endsWith(t.slice(0, k))) break;
+      next = k > 0 ? prev + t.slice(k) : prev + '\n' + t;
+    }
+    out[s.id] = next.length > cap ? next.slice(next.length - cap) : next;
+  }
+  return out;
 }
 
 /* ★★ V12 PSK31/63 (docs/v12/PSK.md) — CW's two views exactly, on the same list: ONE SIGNAL ('psk', the listener's audio

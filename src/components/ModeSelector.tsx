@@ -31,7 +31,7 @@ const SHEET_BG = 'rgba(8,6,1,0.97)';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
-import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText } from '../services/cwList';
+import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText, rttySkimHintText } from '../services/cwList';
 import { JTTY_HINT } from '../services/jtty';
 import ModeIcon, { ModeLabel, modeKeyIcon } from './ModeIcon';   // ★ V12 mode icons (Stuart 2026-10-28)
 import { DECODER_PLACES, RADIO_BANDS, WHOLE_RADIO_IDS, WHOLE_RADIO_LABEL, WHOLE_RADIO_HINT, decoderGroupIcon, decoderGroupLabel, decoderDim, openingBand,
@@ -505,6 +505,9 @@ interface ModeSelectorProps {
     /** ★★ V12 PSK31/63 — CW's two views (ONE SIGNAL / SKIMMER over 6/12/24 kHz), only where `"psk": true`. */
     pskAvail?: boolean; pskSkim?: boolean; pskWidth?: number;
     onPskView?: (skim: boolean) => void; onPskWidth?: (w: number) => void;
+    /** ★★ V12 the RTTY skimmer — RTTY's VIEW (ONE SIGNAL / SKIMMER over 24/48/96 kHz), only where `"rttyskim": true`. */
+    rttySkimAvail?: boolean; rttySkim?: boolean; rttyWidth?: number;
+    onRttyView?: (skim: boolean) => void; onRttyWidth?: (w: number) => void;
     /** ★★ V12 JTTY — only where `"jtty": true`; its settings are the announced calling frequencies THIS radio reaches. */
     jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
     /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches: `dscChans` the distress
@@ -1472,8 +1475,25 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (id === 'transcribe') return txShown ? transcribeCallout : null;
     if (!dc || dc.decMode !== id) return null;
     switch (id) {
+      /* ★★ V12 RTTY: the VIEW row first where this server has the skimmer (docs/v12/RTTY-SKIMMER.md) — ONE SIGNAL keeps
+       *  the decoder's own settings under it; SKIMMER has only its WIDTH (every signal's settings are found for it). */
       case 'rtty':
-        return dc.rttySettings && dc.onRttySettings ? <RttySettingsRows s={dc.rttySettings} onChange={dc.onRttySettings} /> : null;
+        return (<>
+          {!!dc.rttySkimAvail && dc.skimAvail !== false && (<>
+            <SubLabel label="VIEW" />
+            <OptRow>
+              <SegBtn label="ONE SIGNAL" active={!dc.rttySkim} onPress={() => dc.onRttyView?.(false)} />
+              <SegBtn label="SKIMMER" active={!!dc.rttySkim} onPress={() => dc.onRttyView?.(true)} />
+            </OptRow>
+          </>)}
+          {dc.rttySkimAvail && dc.rttySkim ? (<>
+            <SubLabel label="WIDTH" />
+            <OptRow>{CW_WIDTHS.map((w) => (
+              <SegBtn key={w} label={`${w / 1000} kHz`} active={(dc.rttyWidth ?? CW_DEFAULT_WIDTH) === w} onPress={() => dc.onRttyWidth?.(w)} />
+            ))}</OptRow>
+            <Text style={capText}>{rttySkimHintText(dc.rttyWidth ?? CW_DEFAULT_WIDTH)}</Text>
+          </>) : dc.rttySettings && dc.onRttySettings ? <RttySettingsRows s={dc.rttySettings} onChange={dc.onRttySettings} /> : null}
+        </>);
       /* ★★ THE STATION IS AUTO-PICKED FROM THE DIAL, and this is the override. Auto is right nearly always — nobody lands
           on 77.5 kHz by accident — but 60 kHz is genuinely TWO stations (MSF in the UK, WWVB in the US) and the tell is the
           RECEIVER's location, which not every server publishes (Stuart, 2026-08-13). AUTO is a real choice and the default. */

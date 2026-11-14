@@ -312,6 +312,10 @@ export class DecoderClient {
    *  Hz of the passband's middle, set by the caller before start). Changing any is a re-attach, as CW's. */
   pskSkim = false;
   pskWidth: number = PSK_DEFAULT_WIDTH;
+  /** ★ V12 RTTY: SKIMMER ('rttyskim' over `rttyWidth` Hz centred on the dial — every RTTY signal, each with its own settings
+   *  found by the server) or ONE SIGNAL (false: 'fsk' with rttySettings, as always). A change is a re-attach. */
+  rttySkim = false;
+  rttyWidth: number = CW_DEFAULT_WIDTH;
   pskCentre = 1500;
   /** ★ V12 DSC: the attach parameters for the dial and mode (dsc.ts dscParams) — set by the caller before start. */
   dscParams: Record<string, unknown> = { band: 'hf', center_frequency: 1700 };
@@ -647,6 +651,15 @@ export class DecoderClient {
             if (this.active !== 'psk') return;
             const sp = parseCwSpot(m.data, Date.now(), true);
             if (sp) this.cb.onCwSpot?.(sp);
+          } else if (m.type === 'rtty_signals' && m.data) {
+            // ★ V12 the RTTY skimmer: CW's list exactly, with each signal's shift and settings — the one list view again.
+            if (this.active !== 'rtty' || !this.rttySkim) return;
+            const l = parseCwSignals(m.data, false, true);
+            if (l) this.cb.onCwSignals?.(l);
+          } else if (m.type === 'rtty_spot' && m.data) {
+            if (this.active !== 'rtty' || !this.rttySkim) return;
+            const sp = parseCwSpot(m.data, Date.now(), false, true);
+            if (sp) this.cb.onCwSpot?.(sp);
           } else if (m.type === 'jtty_signals' && m.data) {
             if (this.active !== 'jtty') return;
             const l = parseJttySignals(m.data);
@@ -770,6 +783,8 @@ export class DecoderClient {
   private _paramsFor(name: DecoderName): { extension_name: string; params: Record<string, unknown> } {
     switch (name) {
       case 'rtty': {
+        // ★ V12 the RTTY skimmer: its segment as `width` (24/48/96 kHz) — the server finds every signal's own settings
+        if (this.rttySkim) return { extension_name: 'rttyskim', params: { width: this.rttyWidth } };
         const S = this.rttySettings;
         return { extension_name: 'fsk', params: {
           center_frequency: 1000, shift: S.shift, baud_rate: S.baud,

@@ -452,6 +452,10 @@ export interface ServerOccupancy {
   skim?: boolean;
   /** ★ V12 PSK31/63, JTTY, DSC (docs/v12/PSK.md, JTTY.md, DSC.md): this server's own decoders. False or absent = no key. */
   psk?: boolean;
+  /** ★ V12 the RTTY skimmer ('rttyskim' — docs/v12/RTTY-SKIMMER.md): this server lists every RTTY signal across a
+   *  segment with each one's own settings. False or absent (an older server, RTTY switched off, an Icom) = RTTY offers
+   *  ONE SIGNAL only — no SKIMMER view that could not work. */
+  rttyskim?: boolean;
   jtty?: boolean;
   dsc?: boolean;
   /** ★ V12 SITOR-A: this server's maritime ARQ listener ('sitora'). False or absent = no key. */
