@@ -40,6 +40,11 @@
  *   vibe_psk_run.h): CW's frames exactly, the list and spot named psk_ and carrying the mode instead of a speed
  *     {"type":"psk_signals","data":{skimmer,centre?,width?,primary,signals:[{id,hz,audio,baud,snr,imd,q,active,last,first,call,country,text}]}}
  *     {"type":"psk_spot","data":{callsign,frequency,audio,mode,snr,how,country,timestamp}}
+ *   RTTY SKIMMER ('rttyskim' on IQ around the dial — V12 2026-11-14, vibe_rtty_skim_run.h): every RTTY signal across the
+ *   segment, each with its own settings found for it. CW's list shape, plus each row's settings:
+ *     {"type":"rtty_signals","data":{skimmer:true,centre,width,workers,primary:0,signals:[{id,hz,shift,set,baud,reverse,
+ *        settings,snr,q,active,last,first,call,country,text}]}}   (set:false = "RTTY detected — waiting for parameter detection")
+ *     {"type":"rtty_spot","data":{callsign,frequency,mode,snr,how,country,timestamp}}
  *   APRS ('aprs' on the listener's audio — V12, vibe_aprs_run.h; "baud_rate": 300 for HF)
  *     {"type":"aprs_packet","data":{key,from,kind,line,raw,lat?,lon?,to?,text?}}       each new packet
  *     {"type":"aprs_list","data":{baud,frames,repaired,dupes,stations:[…],messages:[…]}} every 2 s when changed, and to a joiner
@@ -75,7 +80,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | null;
+export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -86,6 +91,8 @@ export interface CwSignal {
   wpmLo?: number; wpmHi?: number;
   /** ★ PSK only: 31 or 63, and the IMD (dB, 0 = not measured). One list draws both decoders. */
   baud?: number; imd?: number;
+  /** ★ RTTY skimmer only: its settings once found (set false = still waiting for parameter detection). */
+  rtty?: { set: boolean; shift: number; baud: number; reverse: boolean; settings: string };
 }
 export interface CwList { skimmer: boolean; centre: number; width: number; primary: number; signals: CwSignal[] }
 export interface CwSpot { callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number; mode?: string;
@@ -214,6 +221,8 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   // ★ V12 PSK31/63: the same two views (decoders/psk_skimmer.h on the server).
   psk: 'psk',
   pskskim: 'pskskim',
+  // ★ V12 the RTTY skimmer: every RTTY signal across a segment around the dial, each with its own settings
+  rttyskim: 'rttyskim',
   // ★ V12 APRS — 1200 Bd VHF / 300 Bd HF ("baud_rate")
   aprs: 'aprs',
   // ★ V12 DSC: MF/HF on SSB or VHF channel 70 on NFM — which is a parameter ("band"), as the time station is.
@@ -414,9 +423,9 @@ export class DecoderClient {
       this.cb.onRefused?.(String(msg.message || 'The server could not start that decoder.'), what);
       return;
     }
-    if ((msg.type === 'cw_signals' || msg.type === 'psk_signals') && msg.data && Array.isArray(msg.data.signals)) {
-      const psk = msg.type === 'psk_signals';
-      if (psk ? this.mode !== 'psk' && this.mode !== 'pskskim' : this.mode !== 'cw' && this.mode !== 'cwskim') return;
+    if ((msg.type === 'cw_signals' || msg.type === 'psk_signals' || msg.type === 'rtty_signals') && msg.data && Array.isArray(msg.data.signals)) {
+      const psk = msg.type === 'psk_signals', rtty = msg.type === 'rtty_signals';
+      if (rtty ? this.mode !== 'rttyskim' : psk ? this.mode !== 'psk' && this.mode !== 'pskskim' : this.mode !== 'cw' && this.mode !== 'cwskim') return;
       const d = msg.data;
       const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '');
       const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -427,8 +436,10 @@ export class DecoderClient {
           id: num(x?.id), hz: num(x?.hz), audio: num(x?.audio), wpm: num(x?.wpm), snr: num(x?.snr), q: q(x?.q),
           active: x?.active === true, last: num(x?.last), first: num(x?.first),
           call: str(x?.call, 16), country: str(x?.country, 40), text: str(x?.text, 160),
-          ...(psk ? {} : cwWpmRangeOf(x)),
+          ...(psk || rtty ? {} : cwWpmRangeOf(x)),
           ...(psk ? { baud: num(x?.baud) > 40 ? 63 : 31, imd: num(x?.imd) } : {}),
+          ...(rtty ? { rtty: { set: x?.set === true, shift: num(x?.shift), baud: num(x?.baud), reverse: x?.reverse === true,
+                               settings: str(x?.settings, 40) } } : {}),
         })),
       });
       return;
@@ -473,17 +484,18 @@ export class DecoderClient {
       this.cb.onDscCall?.(msg.data);
       return;
     }
-    if ((msg.type === 'cw_spot' || msg.type === 'psk_spot') && msg.data) {
+    if ((msg.type === 'cw_spot' || msg.type === 'psk_spot' || msg.type === 'rtty_spot') && msg.data) {
       const d = msg.data;
       if (typeof d.callsign !== 'string' || !d.callsign) return;
-      const psk = msg.type === 'psk_spot';
-      if (psk ? this.mode !== 'psk' && this.mode !== 'pskskim' : this.mode !== 'cw' && this.mode !== 'cwskim') return;
+      const psk = msg.type === 'psk_spot', rtty = msg.type === 'rtty_spot';
+      if (rtty ? this.mode !== 'rttyskim' : psk ? this.mode !== 'psk' && this.mode !== 'pskskim' : this.mode !== 'cw' && this.mode !== 'cwskim') return;
       this.cb.onCwSpot?.({
         callsign: d.callsign.slice(0, 16), frequency: Number(d.frequency) || 0, audio: Number(d.audio) || 0,
         wpm: Number(d.wpm) || 0, snr: Number(d.snr) || 0, how: String(d.how || '').slice(0, 8),
         country: String(d.country || '').slice(0, 40), timestamp: Number(d.timestamp) || Date.now(),
-        ...(psk ? {} : cwWpmRangeOf(d)),
+        ...(psk || rtty ? {} : cwWpmRangeOf(d)),
         ...(psk ? { mode: d.mode === 'BPSK63' ? 'BPSK63' : 'BPSK31' } : {}),
+        ...(rtty ? { mode: typeof d.mode === 'string' ? d.mode.replace(/[^0-9A-Za-z /.]/g, '').slice(0, 16) || 'RTTY' : 'RTTY' } : {}),
       });
       return;
     }
@@ -541,6 +553,8 @@ export class DecoderClient {
       // ★ PSK: the same — the primary signal's text, the state, and JSON lists.
       case 'psk':
       case 'pskskim':
+      // ★ the RTTY skimmer: the state only (its rows are JSON)
+      case 'rttyskim':
       // ★ DSC: a call's line (the box draws from the JSON instead) and the state.
       case 'dsc':
       // ★ SITOR-A: the link's text (both stations, labelled) and its state; the status line comes as JSON.
