@@ -246,6 +246,46 @@ static void changeOfSettings() {
        + (f ? " — now [" + f->settings + "]" : std::string(" — not found")));
 }
 
+/** ★★ ONE ROW PER STATION (Stuart, 2026-11-14): a station that pauses between overs keeps its row; a call heard again
+ *  after it moved joins its row; and two DIFFERENT stations in turn on (nearly) the same frequency stay two rows. */
+static void oneRowPerStation() {
+    const double rate = 24000;
+    auto rowsWith = [](const std::vector<rttysk::SignalView>& v, const char* call) {
+        int n = 0; for (auto& s : v) n += s.chars > 0 && upper(s.text).find(call) != std::string::npos; return n; };
+    {   // a pause of 15 s, back 10 Hz up
+        RSig a; a.hz = 2000; a.startSec = 1; a.endSec = 16; a.text = "CQ TEST G4ABC G4ABC TEST\n";
+        RSig b = a; b.hz = 2010; b.startSec = 31; b.endSec = 1e9;
+        const auto x = synth({ a, b }, {}, rate, 50, 31);
+        rttysk::Skimmer sk(cfgFor(rate)); feed(sk, x, 0);
+        const auto v = sk.signals(true);
+        ok(rowsWith(v, "G4ABC") == 1 && sk.rowsReused() >= 1 && sk.jobsRun() == 1,
+           "a station back after a 15 s pause (+10 Hz): ONE row (" + std::to_string(rowsWith(v, "G4ABC")) + "), taken back "
+           + std::to_string(sk.rowsReused()) + "×, searched " + std::to_string(sk.jobsRun()) + "× (not again)");
+    }
+    {   // the same call 400 Hz away after a pause: the callsign joins the rows
+        RSig a; a.hz = 2000; a.startSec = 1; a.endSec = 16; a.text = "CQ TEST G4ABC G4ABC TEST\n";
+        RSig b = a; b.hz = 2400; b.startSec = 31; b.endSec = 1e9; b.text = "CQ CQ DE G4ABC G4ABC PSE K\n";
+        const auto x = synth({ a, b }, {}, rate, 55, 32);
+        rttysk::Skimmer sk(cfgFor(rate)); feed(sk, x, 0);
+        const auto v = sk.signals(true);
+        int n = 0; const rttysk::SignalView* r = nullptr; for (auto& s : v) if (s.call == "G4ABC" || (s.chars && upper(s.text).find("G4ABC") != std::string::npos)) { ++n; r = &s; }
+        ok(n == 1 && sk.rowsMerged() >= 1 && r && upper(r->text).find("CQ TEST G4ABC") != std::string::npos && upper(r->text).find("CQ CQ DE G4ABC") != std::string::npos,
+           "the same call back 400 Hz away: ONE row with both overs (" + std::to_string(n) + " rows, " + std::to_string(sk.rowsMerged()) + " merge)");
+    }
+    {   // a DIFFERENT station 15 Hz from where the first one was, after it stopped
+        RSig a; a.hz = 2000; a.startSec = 1; a.endSec = 16; a.text = "CQ TEST G4ABC G4ABC TEST\n";
+        RSig b = a; b.hz = 2015; b.startSec = 31; b.endSec = 1e9; b.text = "CQ TEST DL1XYZ DL1XYZ TEST\n";
+        const auto x = synth({ a, b }, {}, rate, 55, 33);
+        rttysk::Skimmer sk(cfgFor(rate)); feed(sk, x, 0);
+        const auto v = sk.signals(true);
+        const rttysk::SignalView *ra = nullptr, *rb = nullptr;
+        for (auto& s : v) { if (s.call == "G4ABC") ra = &s; if (s.call == "DL1XYZ") rb = &s; }
+        ok(ra && rb && ra->id != rb->id && upper(ra->text).find("DL1XYZ") == std::string::npos && upper(rb->text).find("G4ABC") == std::string::npos,
+           "a DIFFERENT station 15 Hz away after the first stopped: TWO rows, neither with the other's text (split "
+           + std::to_string(sk.rowsSplit()) + "×)");
+    }
+}
+
 /** ★ Weaker signals: the mixed window at lower SNRs (in 2.5 kHz) — how many are found and set right. */
 static void weaker() {
     for (double snr : { 6.0, 0.0 }) {
@@ -464,6 +504,13 @@ static int replayWav(const char* path, double centre) {
     std::printf("  totals: %llu pairs rejected, %llu not RTTY, %llu jobs, %llu requeues, %llu characters held back by the text gate\n",
                 (unsigned long long)sk.candidatesRejected(), (unsigned long long)sk.notRtty(), (unsigned long long)sk.jobsRun(),
                 (unsigned long long)sk.requeues(), (unsigned long long)sk.charsSuppressed());
+    std::printf("  one row per station: %llu rows taken back after a pause, %llu joined by callsign, %llu split off (another station)\n",
+                (unsigned long long)sk.rowsReused(), (unsigned long long)sk.rowsMerged(), (unsigned long long)sk.rowsSplit());
+    {   // ★ rows per call: a station with more than one row is a duplicate
+        std::map<std::string, int> per; for (const auto& s : sk.signals(true)) if (!s.call.empty()) per[s.call]++;
+        std::string dup; for (auto& kv : per) if (kv.second > 1) dup += " " + kv.first + "×" + std::to_string(kv.second);
+        std::printf("  calls with more than one row:%s\n", dup.empty() ? " none" : dup.c_str());
+    }
     const auto v = sk.signals(true);
     std::printf("  signals listed (active, then gone): %zu\n", v.size());
     for (const auto& s : v) {
@@ -496,6 +543,7 @@ int main(int argc, char** argv) {
         mixedWindow(4, false);
         noiseForcedOpen();
         changeOfSettings();
+        oneRowPerStation();
         weaker();
         hostPath();
     }

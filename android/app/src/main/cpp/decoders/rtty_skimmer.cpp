@@ -240,6 +240,12 @@ struct Skimmer::Impl {
         double secScore = 0, badSec = 0, secClock = 0, fq = 0;
         // text
         std::string pend, held; bool textOk = false; bool lastCr = false;
+        /** ★ A row taken back by a returning pair (reuseRow): what it was, so it can be given back if the station that
+         *  came back turns out to be ANOTHER one (a different call identified) — splitRow. Null once the same call is heard. */
+        struct Prev { int id = 0; std::string text, call, settings; unsigned chars = 0; std::map<std::string, int> heard;
+                      std::map<std::string, double> spotted; int64_t firstMs = 0, lastMs = 0; double listedSec = -1, setSec = -1, fq = 0; };
+        std::unique_ptr<Prev> prev;
+        std::string sinceReuse;   // the text shown since the row was taken back (what a split keeps)
         std::string text, settings, call, word;
         std::vector<std::string> words;
         std::map<std::string, int> heard;
@@ -265,7 +271,7 @@ struct Skimmer::Impl {
     std::vector<std::unique_ptr<Sig>> sigs, gone;
     std::vector<std::pair<double, double>> holdOff;   // (Hz, until)
     int nextId = 1;
-    uint64_t rejected = 0, notRttyN = 0, suppressed = 0, requeuesN = 0;
+    uint64_t rejected = 0, notRttyN = 0, suppressed = 0, requeuesN = 0, reusedN = 0, mergedN = 0, splitsN = 0;
     std::atomic<uint64_t> jobsRunN{0};
     // ★ the queue — the only lock, taken a handful of times per signal, never per hop
     mutable std::mutex jm;
@@ -643,6 +649,9 @@ struct Skimmer::Impl {
                 // ★★ LISTED AT ONCE — "RTTY detected — waiting for parameter detection"
                 g.stage = Sig::Listed; g.id = nextId++; g.listedSec = now;
                 g.firstMs = nowMs() - (int64_t)(std::min(chanSec(g), now - g.bornSec + 1.0) * 1000.0); g.lastMs = nowMs();
+                // ★★ A STATION BACK AFTER A PAUSE (Stuart, the 40 m replay: EA7TG listed three times, S51A twice): a row
+                //    that went quiet in the last cfg.reuseSec, same shift, within kReuseHz — the same row again.
+                if (Sig* o = goneNear(g)) reuseRow(g, *o);
             } else if (now - g.bornSec > kProbeMaxSec) {
 #ifdef RTTY_TRACE
                 std::fprintf(stderr, "[%.2f] - %.1f Hz rejected alt %.2f\n", now, g.fc, g.alt);
@@ -842,6 +851,7 @@ struct Skimmer::Impl {
         commit(g, t, true);
     }
     void commit(Sig& g, const std::string& t, bool words) {
+        if (g.prev) { g.sinceReuse += t; if (g.sinceReuse.size() > 1200) g.sinceReuse.erase(0, g.sinceReuse.size() - 1000); }
         for (char c : t) {
             g.text.push_back(c); if (words) { ++g.chars; spotWord(g, c); }
         }
@@ -860,6 +870,7 @@ struct Skimmer::Impl {
         int& n = g.heard[call];
         ++n;
         if (n < cfg.spotRepeats) return;
+        identityConfirmed(g, call);
         const double now = nowSec();
         auto it = g.spotted.find(call);
         if (it != g.spotted.end() && now - it->second < cfg.respotSec) return;
@@ -870,6 +881,111 @@ struct Skimmer::Impl {
             sp.mode = m; sp.utcMs = nowMs(); sp.signalId = g.id;
             owner->onSpot(sp);
         }
+    }
+
+    // ── ONE ROW PER STATION (Stuart, 2026-11-14: "fix duplicates, especially if we can extract a callsign out of them") ──
+    static constexpr double kReuseHz = 40.0;
+    /** A row that went quiet recently, set, with this pair's shift, its centre within kReuseHz — the nearest. */
+    Sig* goneNear(const Sig& g) {
+        const int64_t nm = nowMs();
+        Sig* best = nullptr;
+        for (auto& o : gone) {
+            if (o->shift != g.shift || o->settings.empty() || nm - o->lastMs > (int64_t)(cfg.reuseSec * 1000)) continue;
+            if (std::fabs(o->fc - g.fc) < kReuseHz && (!best || std::fabs(o->fc - g.fc) < std::fabs(best->fc - g.fc))) best = o.get();
+        }
+        return best;
+    }
+    /** The decoder for settings already found — a returning station is not searched again while they still frame
+     *  (frames going bad re-queue it as ever). It starts at the oldest stored audio: the pair was heard from there. */
+    void decoderFor(Sig& g) {
+        g.dec.reset(new FskDecoder((int)kChRate, (fsCh / 4 + g.delta) * fsScale, g.shift * fsScale, g.st.baud,
+                                   g.st.oneStop ? "5N1" : "5N1.5", "ITA2", g.st.inv));
+        g.dec->setAfc(true);
+        Sig* gp = &g;
+        g.dec->onChar = [gp](char32_t ch) { if (ch < 0x80) gp->pend.push_back((char)ch); };
+        const size_t cap = g.ring.size();
+        g.decAt = g.wr > cap ? g.wr - cap : 0;
+        g.lastGood = g.lastBad = 0; g.secGood = g.secBad = 0; g.secScore = 0; g.badSec = 0;
+        g.stage = Sig::Set;
+        feedDec(g);
+        g.lastGood = g.dec->goodFrames(); g.lastBad = g.dec->framingErrors();
+        if (!g.pend.empty()) { show(g, g.pend); g.pend.clear(); }
+    }
+    /** Take row `o` (gone) back for the returning pair `g`: its id, text, settings, call — and remember what it was. */
+    void reuseRow(Sig& g, Sig& o) {
+        std::unique_ptr<Sig::Prev> p(new Sig::Prev());
+        p->id = o.id; p->text = o.text; p->call = o.call; p->settings = o.settings; p->chars = o.chars; p->heard = o.heard;
+        p->spotted = o.spotted; p->firstMs = o.firstMs; p->lastMs = o.lastMs; p->listedSec = o.listedSec; p->setSec = o.setSec; p->fq = o.fq;
+        g.id = o.id; g.text = o.text; g.call = o.call; g.settings = o.settings; g.st = o.st; g.chars = o.chars;
+        g.heard = o.heard; g.spotted = o.spotted; g.firstMs = o.firstMs; g.listedSec = o.listedSec; g.setSec = o.setSec; g.fq = o.fq;
+        g.textOk = true;
+        ++reusedN;
+        gone.erase(std::remove_if(gone.begin(), gone.end(), [&](const std::unique_ptr<Sig>& x) { return x.get() == &o; }), gone.end());
+        g.prev = std::move(p); g.sinceReuse.clear();
+        commit(g, "\n", false);
+        decoderFor(g);
+    }
+    /** ★ The station that came back is ANOTHER one (a different call identified): the old row goes back as it was, and
+     *  this signal becomes a row of its own — two stations close in frequency are never merged. */
+    void splitRow(Sig& g) {
+        Sig::Prev& p = *g.prev;
+        std::unique_ptr<Sig> o(new Sig());
+        o->id = p.id; o->active = false; o->stage = Sig::Set; o->fc = g.fc; o->shift = g.shift; o->st = g.st;
+        o->text = p.text; o->call = p.call; o->settings = p.settings; o->chars = p.chars; o->heard = p.heard; o->spotted = p.spotted;
+        o->firstMs = p.firstMs; o->lastMs = p.lastMs; o->listedSec = p.listedSec; o->setSec = p.setSec; o->fq = p.fq;
+        gone.insert(gone.begin(), std::move(o));
+        const unsigned since = (unsigned)std::count_if(g.sinceReuse.begin(), g.sinceReuse.end(), [](char ch) { return ch != '\n'; });
+        g.id = nextId++; g.text = "[" + g.settings + "] " + g.sinceReuse; g.chars = since;
+        g.call.clear(); g.heard.clear(); g.spotted.clear();
+        g.firstMs = nowMs(); g.listedSec = nowSec();
+        g.prev.reset(); g.sinceReuse.clear();
+        ++splitsN;
+    }
+    /** `in` joins `g`: the older row's id, its history first, its calls heard and spotted. */
+    void mergeFrom(Sig& g, Sig& in) {
+        g.text = in.text + "\n" + g.text;
+        if (g.text.size() > (size_t)kMaxShowCarry + 400) g.text.erase(0, g.text.size() - kMaxShowCarry);
+        g.chars += in.chars; g.id = in.id;
+        g.firstMs = std::min(g.firstMs, in.firstMs);
+        if (in.listedSec >= 0) g.listedSec = g.listedSec < 0 ? in.listedSec : std::min(g.listedSec, in.listedSec);
+        for (auto& kv : in.heard) g.heard[kv.first] += kv.second;
+        for (auto& kv : in.spotted) { auto& t = g.spotted[kv.first]; t = std::max(t, kv.second); }
+        ++mergedN;
+    }
+    /** ★★ A CALL CONFIRMED (heard identifying itself spotRepeats times): a returning station that is someone else splits
+     *  off; a row of the SAME call heard recently — gone, or gone quiet — joins this one (a station that moved a little,
+     *  or came back beyond kReuseHz), keeping its history. */
+    void identityConfirmed(Sig& g, const std::string& call) {
+        if (g.prev) {
+            if (!g.prev->call.empty() && g.prev->call != call) splitRow(g);
+            else g.prev.reset();
+        }
+        if (g.call == call) return;
+        const int64_t nm = nowMs();
+        for (auto it = gone.begin(); it != gone.end(); ++it) {
+            Sig& o = **it;
+            if (o.call != call || nm - o.lastMs > (int64_t)cfg.mergeSec * 1000) continue;
+            mergeFrom(g, o);
+            gone.erase(it);
+            break;
+        }
+        for (auto& o : sigs) {
+            if (o.get() == &g || !o->active || o->stage != Sig::Set || o->call != call) continue;
+            mergeFrom(g, *o);
+            if (o->quietSec >= 2.0) {
+                o->active = false; o->chars = 0;   // ★ its history is in g now: dropped, not listed as gone
+                if (o->queued) dropJobsOf(o->id);
+            } else {
+                // ★ still busy: a station on the move (S&P in a contest) left its old frequency to others — measured on the
+                //   40 m replay, F4JQH at 7059.96 then 7054.93 while DR5M carried on at 7059.96. The STATION's history goes
+                //   with the station; the frequency carries on as a fresh row for whoever is there now.
+                o->id = nextId++; o->text = "[" + o->settings + "] "; o->chars = 0; o->call.clear();
+                o->heard.clear(); o->spotted.clear(); o->words.clear(); o->firstMs = nowMs(); o->listedSec = nowSec();
+                o->prev.reset(); o->sinceReuse.clear();
+            }
+            break;
+        }
+        g.call = call;
     }
 
     void housekeeping() {
@@ -956,6 +1072,9 @@ uint64_t Skimmer::candidatesRejected() const { return d_->rejected; }
 uint64_t Skimmer::notRtty() const { return d_->notRttyN; }
 uint64_t Skimmer::jobsRun() const { return d_->jobsRunN.load(); }
 uint64_t Skimmer::requeues() const { return d_->requeuesN; }
+uint64_t Skimmer::rowsReused() const { return d_->reusedN; }
+uint64_t Skimmer::rowsMerged() const { return d_->mergedN; }
+uint64_t Skimmer::rowsSplit() const { return d_->splitsN; }
 uint64_t Skimmer::charsSuppressed() const { return d_->suppressed; }
 const char* Skimmer::simdName() {
 #if VIBE_NEON

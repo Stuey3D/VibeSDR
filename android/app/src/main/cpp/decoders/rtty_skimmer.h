@@ -92,6 +92,11 @@ public:
         int    workers = 0;             ///< 0: jobs run INLINE at the end of a hop (tests, and a caller with no threads);
                                         ///<   ≥ 1: the caller runs workOnce() on that many threads (onWork wakes them)
         int    keepGoneSec = 600;       ///< how long a signal that has gone stays in signals()
+        /** ★ ONE ROW PER STATION: a pair back within this long (same shift, within 40 Hz of a row that went quiet) takes
+         *  that row back — its id, text and settings, no search while they still frame; and a confirmed call joins a row
+         *  of the same call heard within mergeSec. A different call on a returning row splits it off again. */
+        double reuseSec = 180;
+        int    mergeSec = 600;
         int    respotSec = 600;
         int    spotRepeats = 2;
         double candidateDb = 4.0;       ///< each tone's power (±2 bins) over the floor for a pair to be tried
@@ -144,6 +149,9 @@ public:
     uint64_t notRtty() const;              ///< listed signals that would not frame at any setting
     uint64_t jobsRun() const;
     uint64_t requeues() const;
+    uint64_t rowsReused() const;    ///< pairs that took a quiet row back
+    uint64_t rowsMerged() const;    ///< rows joined by their callsign
+    uint64_t rowsSplit() const;     ///< returning rows that turned out to be another station
     uint64_t charsSuppressed() const;      ///< decoded but never shown (the text gate)
     /** ★ When each listed signal was listed and when it was set (input seconds) — the tests' "listed before settings". */
     bool timesOf(int id, double& listedSec, double& setSec) const;
