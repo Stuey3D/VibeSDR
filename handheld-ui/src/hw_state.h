@@ -252,7 +252,7 @@ inline void hwNoteFt8Dt(double dt) {
     d.push_back({dt, hwNow()});
     while (d.size() > 200) d.pop_front();
     HwFt8Clock& k = hwFt8Clock();
-    if (hwNow() < k.holdUntil || std::fabs(dt) >= 5) return;
+    if (hwNow() < k.holdUntil || std::fabs(dt) >= 7.5) return;   // ★ half a slot: the decoder's clock hunt reports DTs out to ±7 s (2026-11-14)
     const long long slot = hwUtcMsNow() / 15000;
     if (k.cycles.empty() || k.cycles.back().slot != slot) k.cycles.push_back({slot, {}});
     k.cycles.back().dts.push_back(dt);
@@ -264,11 +264,11 @@ inline void hwFt8ClockForget(double holdSec) {
     k.cycles.clear(); k.agreeing = 0; k.holdUntil = hwNow() + holdSec;
     hwFt8Dts().clear();
 }
-/** ft8Median: ≥ 3 decodes in 2 min with |dt| < 5 s. */
+/** ft8Median: ≥ 3 decodes in 2 min with |dt| < 7.5 s (half a slot — the clock hunt finds errors that large). */
 inline bool hwFt8Median(double& dt, int& n) {
     std::vector<double> v;
     const double now = hwNow();
-    for (auto& x : hwFt8Dts()) if (now - x.second < 120 && std::fabs(x.first) < 5) v.push_back(x.first);
+    for (auto& x : hwFt8Dts()) if (now - x.second < 120 && std::fabs(x.first) < 7.5) v.push_back(x.first);
     if (v.size() < 3) return false;
     std::sort(v.begin(), v.end());
     const size_t k = v.size();

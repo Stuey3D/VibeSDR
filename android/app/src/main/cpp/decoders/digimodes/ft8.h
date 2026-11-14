@@ -18,6 +18,7 @@ public:
             if (!onSpot) return;
             Spot s; s.mode = ft4_ ? "FT4" : "FT8"; s.call = de; s.grid = grid; s.snr = snr; s.audioHz = hz;
             s.slotUtc = d_.decodingSlotUtc();   // ★ the slot's start (onSpot runs inside that slot's decode)
+            s.dt = d_.decodingDt();             // ★★ WSJT-X's DT — the R36S's FT8 clock auto-set reads it (was always 0)
             onSpot(s);
         };
         d_.loadProbe = [this] { return loaded ? loaded() : false; };

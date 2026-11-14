@@ -1276,8 +1276,10 @@ void Ft8Decoder::advance(int count, double captureUtc) {
      *  against UTC without chasing one late block. A stamp a whole second later means audio was LOST (the host
      *  drops what it is 4 s behind on): the count no longer says the time, so re-anchor and re-pick the slot. */
     const double est = captureUtc - (double)total_ / rate;
-    if (!anchored_ || est - utc0_ > 1.0) {
-        if (anchored_) reanchors.fetch_add(1);
+    // ★ A stamp a second or more EARLIER than the anchor is a clock set backwards, not a quicker block: re-anchor too
+    //   (and both put the clock hunt back to 0 — the error it found is gone).
+    if (!anchored_ || est - utc0_ > 1.0 || utc0_ - est > 1.0) {
+        if (anchored_) { reanchors.fetch_add(1); huntLead_.store(0.0); huntReset_.store(true); }
         utc0_ = est; anchored_ = true; nextSlot_ = NAN;
         floor_ = total_ - count;       // ★ audio from before the gap has no true time any more: never cut from it
     } else if (est < utc0_) {
@@ -1286,7 +1288,8 @@ void Ft8Decoder::advance(int count, double captureUtc) {
         utc0_ += (est - utc0_) * std::min(1.0, (double)count / rate / 30.0);
     }
     const int64_t oldest = std::max<int64_t>(floor_, total_ - R);
-    const double lead = Ft8SlotDecoder::leadSec(ft4);
+    const double hunt = huntLead_.load(std::memory_order_relaxed);
+    const double lead = Ft8SlotDecoder::leadSec(ft4) + hunt;
     if (std::isnan(nextSlot_)) {
         // the first slot whose whole window is still ahead of (or in) what we hold
         const double oldestUtc = utc0_ + (double)oldest / rate;
@@ -1302,6 +1305,7 @@ void Ft8Decoder::advance(int count, double captureUtc) {
                 for (int i = 0; i < window_; ++i) work_[(size_t)i] = ring_[(size_t)((i0 + i) % R)];
                 workSlotEnd_ = captureUtc;     // ★ when the window was complete, on the capture clock
                 workSlotUtc_ = nextSlot_;      // ★ and the slot it is — the spots' time (WSJT-X's)
+                workHunt_ = hunt;
                 pending = true;
                 wcv.notify_one();
             } else {
@@ -1347,6 +1351,14 @@ void Ft8Decoder::runDecode() {
     lastDecodeMs.store(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     slotsDecoded.fetch_add(1);
     if (abortDecode.load()) return;
+    // ★ THE CLOCK HUNT (see huntStep): only FT8, only while the clock is unmeasured
+    if (huntReset_.exchange(false)) hunt_ = HuntState{};
+    if (mode_ == FtxMode::FT8 && !vibe::clockMeasured().load(std::memory_order_relaxed)) {
+        if (workHunt_ == kHuntLeads[hunt_.idx]) huntLead_.store(huntStep(hunt_, res.size()));
+    } else if (huntLead_.load() != 0.0) {
+        hunt_ = HuntState{};
+        huntLead_.store(0.0);
+    }
 
     for (const Ft8Result& r : res) {
         char callTo[24] = {}, callDe[24] = {}, grid[24] = {};
@@ -1364,6 +1376,7 @@ void Ft8Decoder::runDecode() {
             && grid[2] >= '0' && grid[2] <= '9' && grid[3] >= '0' && grid[3] <= '9'
             && std::strcmp(grid, "RR73") != 0;
         if (!realGrid) grid[0] = 0;
+        curDt_ = (float)(r.dt + workHunt_);   // ★ the lead the window was cut at is part of the signal's DT
         if (onSpot) onSpot(callTo, deCall, grid, r.snr, r.hz);
     }
 }

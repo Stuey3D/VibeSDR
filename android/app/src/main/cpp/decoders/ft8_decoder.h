@@ -321,6 +321,34 @@ public:
     std::function<void(const std::string& callTo, const std::string& callDe,
                        const std::string& grid, int snr, float audioHz)> onSpot;
 
+    /** ★ The DT of the spot being reported (seconds; read inside onSpot, like decodingSlotUtc) — WSJT-X's DT: how far
+     *  the signal started from where OUR clock put the slot's nominal start. ★★ FT8 never sent it until 2026-11-14:
+     *  every FT8 spot went out with dt 0, so the R36S's FT8 clock auto-set always found the clock "synchronised". */
+    float decodingDt() const { return curDt_; }
+
+    /* ★★★ THE CLOCK HUNT (2026-11-14, Stuart's R36S 4.1 s slow after a fresh card — 1 FT8 decode where the same audio
+     *  gives 67). A window cut at slot + 0 holds a signal only if our clock is within ~±2 s of the senders'; past that
+     *  nothing decodes, so nothing can measure the error either (the clock auto-set needs decodes). While this machine's
+     *  clock is UNMEASURED (no SNTP answer, no clock set — vibe_clock.h clockMeasured), a slot with fewer than
+     *  kHuntMinDecodes moves the window to the next lead in kHuntLeads; a lead that decodes stays (two thin slots in a
+     *  row before it is left). The spots then carry the true DT (lead included), which is what the clock auto-set
+     *  reads. A measured clock, or a clock step (re-anchor), puts the lead back to 0. FT8 only (FT4's 7.5 s window
+     *  is covered once FT8 has set the clock). Pure, so it is tested (test-ft8-hunt). */
+    static constexpr int kHuntMinDecodes = 2;
+    static constexpr int kHuntLeadCount = 7;
+    static constexpr double kHuntLeads[kHuntLeadCount] = { 0.0, -2.4, 2.4, -4.8, 4.8, -7.2, 7.2 };
+    struct HuntState { int idx = 0; int misses = 0; bool locked = false; };
+    /** After one slot's decode: the lead (s, added to leadSec) the next window is cut at. */
+    static double huntStep(HuntState& h, size_t decodes) {
+        if ((int)decodes >= kHuntMinDecodes) { h.locked = true; h.misses = 0; return kHuntLeads[h.idx]; }
+        if (h.locked && ++h.misses < 2) return kHuntLeads[h.idx];
+        h.locked = false; h.misses = 0;
+        h.idx = (h.idx + 1) % kHuntLeadCount;
+        return kHuntLeads[h.idx];
+    }
+    /** The lead the clock hunt has the window at now (0 when not hunting). */
+    double huntLead() const { return huntLead_.load(); }
+
     /** ★ The server's load, read before every extra pass: true = loaded, decode ONE pass (today's cost). Set
      *  before audio flows; empty = never loaded (a decoder-only sidecar, the bench). */
     std::function<bool()> loadProbe;
@@ -378,6 +406,11 @@ private:
     std::vector<float> work_;      // the window being decoded (the worker's, subtracted in place)
     double  workSlotEnd_ = 0;      // capture UTC at which that window's last sample arrived
     double  workSlotUtc_ = NAN;    // ★ that window's slot boundary (UTC) — the spots' time
+    double  workHunt_ = 0;         // ★ the clock-hunt lead that window was cut at (added to every DT)
+    float   curDt_ = 0;            // the DT of the spot onSpot is reporting
+    std::atomic<double> huntLead_{0.0};
+    std::atomic<bool>   huntReset_{false};
+    HuntState hunt_;               // the worker's
     std::thread worker;
     std::mutex  wm;
     std::condition_variable wcv;
