@@ -22,6 +22,11 @@ const oldDiskID = 0xdeadbeef
 // firstBootCard: the image as Make writes it, then the R36S's first boot (p4 after p3), the owner's data, the debug log.
 func firstBootCard(t *testing.T, size int64) (string, []card.Part) {
 	img, _ := testImage(t)
+	// ★ VIBE_TEST_FROM_IMAGE: make the card from an OLDER image (h72) and update it with VIBE_TEST_IMAGE (h73) — a real
+	//   version-to-version update, the different disk ids and all.
+	if from := os.Getenv("VIBE_TEST_FROM_IMAGE"); from != "" {
+		img = from
+	}
 	cardPath := filepath.Join(t.TempDir(), "card.img")
 	gunzipTo(t, img, cardPath, size)
 	f, err := os.OpenFile(cardPath, os.O_RDWR, 0)
