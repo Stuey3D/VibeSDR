@@ -6399,6 +6399,7 @@ static vibe::dx::Log       g_dxLog;
 static std::string         g_dxLogPath;
 static bool                g_dxLogLoaded = false;
 static double              g_dxLogFlushedAt = 0;
+static std::atomic<int>    g_dxIfHz{0};          // ★ the DX scanner's own IF width for this capture (0 = the ordinary auto-IF rule) — dxFmHop
 static std::atomic<bool>   g_dxDabScan{false};    // ★ the DAB band scan is running in DX mode — the learn-on-air path holds off
 /** Load the log once (under g_dxLogMtx). A missing or unreadable file starts a fresh one — and its bootstrap. */
 static void dxLogLoadLocked() {
@@ -7834,6 +7835,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *    the sample rate gives them the same selectivity, decided once at setup instead of
          *    moving under their listeners. This mode is left exactly as it was. */
         if (g_vsLockedCentre.load() > 0.0) return;
+        /* ★★ THE DX SCANNER'S WIDTH (dxFmHop): an idle radio has no listener's view to follow, so the scan says what it is
+         *  looking at — the hop's span, or one station's channel for a close look. Same "auto" switch; a manual width
+         *  (above) and a locked window (just above) are left alone, as for a listener. */
+        if (const int dxw = g_dxIfHz.load(std::memory_order_relaxed); dxw > 0) {
+            if (g_tunerBwHz.load(std::memory_order_relaxed) != dxw) {
+                noteHwMoved();
+                LocalSdrShim::instance().setTunerBandwidth(dxw);
+            }
+            return;
+        }
         const double rf = rtlCenter.load() + hwOffsetHz();
         /* ★★★ EVERY LISTENER'S VIEW, NOT JUST ONE. On a shared receiver the filter is the RADIO's,
          *     so one person zooming into a station would leave everyone else staring at dead band.
@@ -32434,8 +32445,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     /** The FM hops this radio can make now, inside the owner's permitted bands. */
-    std::vector<vibe::dx::FmHopPlan> dxFmPlan(const vibe::dx::Config& c) {
-        auto plan = vibe::dx::planFm(sampleRate, c.rasterKhz);
+    /** `dxLog`: the DX scanner's plan — behind kDxFmIfHz on a radio that can narrow (dxCloseLooks' note). The owner's FM
+     *  band scan (bookmarks) keeps its wide hops. */
+    std::vector<vibe::dx::FmHopPlan> dxFmPlan(const vibe::dx::Config& c, bool dxLog = true) {
+        auto plan = vibe::dx::planFm(sampleRate, c.rasterKhz, vibe::dx::kFmBandLoHz, vibe::dx::kFmBandHiHz,
+                                     dxLog && dxCanNarrow() ? kDxFmIfHz : 0.0);
         const vibebands::Ranges perm = vsPermittedRanges(vibebands::Ranges{{0.0, 2.0e9}});
         if (perm.empty()) return plan;
         std::vector<vibe::dx::FmHopPlan> out;
@@ -32465,6 +32479,94 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
     }
 
+    /* ★★★ THE DX LOG LOOKS AS A ZOOMED-IN LISTENER WOULD (Stuart 2026-11-14: "the DX log needs to do its scan on a narrow
+     *  IF filter as if I were zoomed in with the auto IF filter on" — 97.2 audible in stereo, no RDS, not logged, with
+     *  Heart 96.6 "super strong next to it").
+     *  1. Each hop runs behind a 1400 kHz IF filter — Stuart's FM balance on the RTLs beside Heart and BBC Northampton —
+     *     and owns only what that filter passes whole (planFm's ifHz). Before, a hop had no IF rule of its own: it kept
+     *     whatever the last listener's zoom left — wider folds strong stations in, narrower cuts the hop's edges.
+     *  2. ★ A CLOSE LOOK: a real station the hop could not name (pilot locked, or strong — the same test that extends its
+     *     dwell) is visited again ON ITS OWN, the IF narrowed to one channel, the capture's DC put on the side AWAY from
+     *     its strongest neighbour, so that neighbour sits outside the filter and the AGC can climb (narrowing "takes
+     *     energy away", applyAutoIf). Its RDS then has the chance a zoomed-in listener's would.
+     *  ★ Cost (stated, feedback_state_efficiency_tradeoffs): up to kDxLooks x ~5-9 s per hop, ONLY where such a station
+     *    was heard — a hop of named stations costs nothing more. Local RTL only: the filter is librtlsdr's (an RSP /
+     *    Airspy / rtl_tcp radio keeps its ordinary hop). */
+    static constexpr int    kDxLooks = 3;
+    static constexpr float  kDxShadowSnrDb = 6.0f, kDxShadowDb = 15.0f;   // ★ a carrier this far over the floor, this far under a neighbour
+    static constexpr double kDxFmIfHz = 1400000.0;   // ★ Stuart's FM balance on the RTLs (see planFm)
+    static constexpr double kDxChanHz = 200000.0, kDxLookIfHz = 500000.0, kDxLookDcOffHz = 120000.0, kDxLookSettleS = 1.0;
+    static int dxIfRung(double hz) { for (int r : kIfRungs) if (r >= hz) return r; return 0; }
+    bool dxCanNarrow() const { return dev != nullptr && g_tunerBwAuto.load(std::memory_order_relaxed) && g_vsLockedCentre.load() <= 0.0; }
+    void dxSetIf(int hz) { g_dxIfHz.store(dxCanNarrow() ? hz : 0, std::memory_order_relaxed); }
+    int dxCloseLooks(const vibe::dx::Config& cfg, std::vector<vibe::dx::FmHit>& hits) {
+        if (!dxCanNarrow()) return 0;
+        const vibe::dx::FmHopEngine::Params def;
+        std::vector<size_t> want;
+        for (size_t i = 0; i < hits.size(); ++i) {
+            const auto& h = hits[i];
+            if (h.pi && vibe::dx::fmConfirmed(h.groups, h.psComplete)) continue;
+            // ★ …or a weaker carrier in the SHADOW of a much stronger neighbour (Stuart: "104.7 Horizon … usually fairly
+            //   strong when 104.2 BBC Northampton is filtered out") — inside the hop the big one holds the gain down, so
+            //   its pilot may never lock there; behind a filter that leaves the neighbour out, it can
+            bool shadow = false;
+            if (h.snrDb >= kDxShadowSnrDb)
+                for (const auto& o : hits)
+                    if (&o != &h && std::abs(o.khz - h.khz) <= 1000 && o.levelDb - h.levelDb >= kDxShadowDb) { shadow = true; break; }
+            if (!h.pilot && h.snrDb < def.extendSnrDb && !shadow) continue;
+            want.push_back(i);
+        }
+        std::sort(want.begin(), want.end(), [&](size_t a, size_t b) { return hits[a].snrDb > hits[b].snrDb; });
+        if ((int)want.size() > kDxLooks) want.resize(kDxLooks);
+        const double off = hwOffsetHz();
+        int n = 0;
+        for (size_t i : want) {
+            if (dxCancel_.load() || stopping.load()) break;
+            auto& h = hits[i];
+            const double f = h.khz * 1e3;
+            // ★ the strongest other station within 1 MHz decides which side the DC (and the filter's centre) goes
+            float nb = -300.0f; double nbHz = 0;
+            for (const auto& o : hits) if (&o != &h && std::fabs(o.khz * 1e3 - f) < 1.0e6 && o.levelDb > nb) { nb = o.levelDb; nbHz = o.khz * 1e3; }
+            const double dc = f + (nbHz != 0 && nbHz < f ? kDxLookDcOffHz : -kDxLookDcOffHz);
+            {
+                std::lock_guard<std::mutex> lk(dxStatMtx_);
+                char b[96]; std::snprintf(b, sizeof b, "FM close look: %.1f MHz on a narrow filter", f / 1e6);
+                dxNow_ = b;
+            }
+            dxSetIf((int)kDxLookIfHz);
+            bgPlace(dc - off, dc - off, f);
+            applyAutoIf();
+            for (double t0 = nowSecs(); nowSecs() - t0 < kDxLookSettleS && !dxCancel_.load() && !stopping.load();)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));   // ★ the AGC's climb behind the narrower filter
+            vibe::dx::FmHopEngine::Params p;
+            p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
+            p.rasterKhz = cfg.rasterKhz; p.loHz = f - cfg.rasterKhz * 500.0; p.hiHz = f + cfg.rasterKhz * 500.0;
+            p.peaksPerRound = 1;
+            dxFm_.start(p);
+            dxFmFeed_.store(true);
+            const double t0 = nowSecs();
+            while (!dxFm_.done() && !dxCancel_.load() && !stopping.load() && nowSecs() - t0 < (p.dwellSec + p.extendSec) * 8 + 20)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            dxFmFeed_.store(false);
+            const bool ok = dxFm_.done() && !dxCancel_.load() && !stopping.load();
+            dxFm_.abort();
+            if (!ok) break;
+            ++n;
+            bool named = false;
+            for (const auto& c : dxFm_.results()) {
+                if (std::abs(c.khz - h.khz) > std::max(1, cfg.rasterKhz / 2)) continue;
+                // ★ what the close look decoded; the LEVEL and SNR stay the hop's (one floor for the whole hop — openings
+                //   and alerts compare like with like)
+                if (c.pi && vibe::dx::fmConfirmed(c.groups, c.psComplete)) { h.pi = c.pi; h.ps = c.ps; h.psComplete = c.psComplete; h.groups = c.groups; named = true; }
+                h.pilot = h.pilot || c.pilot;
+            }
+            char got[64] = "still no RDS";
+            if (named) std::snprintf(got, sizeof got, "RDS %04X%s%s%s", h.pi, h.psComplete ? " \"" : "", h.psComplete ? h.ps.c_str() : "", h.psComplete ? "\"" : "");
+            LOGI("DX scanner: close look %.1f MHz (IF %.0f kHz, DC %+.0f kHz, neighbour %.1f MHz): %s", f / 1e6, kDxLookIfHz / 1e3,
+                 (dc - f) / 1e3, nbHz / 1e6, got);
+        }
+        return n;
+    }
     /** ★ ONE FM HOP: tune, settle, decode, commit — or, cut short, nothing at all. */
     void dxFmHop(const vibe::dx::Config& cfg, const std::vector<vibe::dx::FmHopPlan>& plan, const vibe::dx::Job& job) {
         const auto& hop = plan[(size_t)job.index];
@@ -32477,7 +32579,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (job.index == 0) dxSweepStartFm_ = nowSecs();
         if (dxCancel_.load()) return;
+        // ★★ however the hop ends (cut short by a listener included), the DX width never outlives it
+        struct IfBack { Impl* s; ~IfBack() { if (g_dxIfHz.exchange(0) > 0 && !s->stopping.load()) s->applyAutoIf(); } } ifBack{ this };
+        dxSetIf(dxIfRung(2.0 * std::max(hop.hiHz - hop.centreHz, hop.centreHz - hop.loHz) + kDxChanHz));
         bgPlace(centre, centre, hop.centreHz);
+        applyAutoIf();
         vibe::dx::FmHopEngine::Params p;
         p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
         p.rasterKhz = cfg.rasterKhz; p.loHz = hop.loHz; p.hiHz = hop.hiHz;
@@ -32499,6 +32605,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<vibe::dx::FmHit> hits;
         for (const auto& h : dxFm_.results()) if (perm.empty() || vibebands::allows(perm, h.khz * 1e3)) hits.push_back(h);
         const auto st = dxFm_.stats();
+        const int looks = dxCloseLooks(cfg, hits);
+        dxSetIf(0);
+        applyAutoIf();   // ★ back to the ordinary rule — a widening arms the AGC's fast cut, as it should
         vibe::dx::VisitResult vr;
         int confirmed = 0;
         std::string names;
@@ -32525,6 +32634,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             dxLast_ = line = b;
             if (wrapped && dxSweepStartFm_ > 0) dxSweepSecsFm_ = nowSecs() - dxSweepStartFm_;
         }
+        if (looks) line += ", " + std::to_string(looks) + " close look(s)";
         LOGI("DX scanner: %s \xe2\x80\x94 %d new, %d new opening(s), %d alert(s), %d suspect; %d worker(s), %.2f s CPU%s%s",
              line.c_str(), vr.newEntries, vr.newOpenings, vr.alerts, vr.suspects, st.workers, st.cpuSec,
              st.extended ? (", dwell extended " + std::to_string(st.extended) + "× for a strong station not yet confirmed").c_str() : "",
@@ -32686,7 +32796,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
         }
         sv.centre = rtlCenter.load(); sv.view = viewCenter.load(); sv.audio = audioFreq.load();
-        const auto plan = dxFmPlan(cfg);
+        const auto plan = dxFmPlan(cfg, false);
         { std::lock_guard<std::mutex> lk(g_fmScanMtx); g_fmScan.total = int(plan.size()); }
         std::map<int, FmScanHit> best;   // khz -> the strongest confirmed sighting
         const double off = hwOffsetHz();

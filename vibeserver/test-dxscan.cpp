@@ -51,6 +51,13 @@ int main() {
             }
         ok(planFm(2.4e6, 100).size() <= 13, "an RTL at 2.4 MS/s sweeps the band in about ten hops (" + std::to_string(planFm(2.4e6, 100).size()) + ")");
         ok(planFm(0.25e6, 100).empty(), "a capture too narrow for one channel plans nothing");
+        {   // ★ behind a 1400 kHz IF filter (Stuart's FM balance): every hop inside what the filter passes, every channel once
+            const auto q = planFm(2.4e6, 100, kFmBandLoHz, kFmBandHiHz, 1.4e6);
+            bool inside = !q.empty(); long chans = 0;
+            for (const auto& h : q) { inside = inside && h.hiHz - h.centreHz <= 600e3 + 1 && h.centreHz - h.loHz <= 600e3 + 1; chans += std::lround((h.hiHz - h.loHz) / 1e5) + 1; }
+            for (size_t i = 1; i < q.size(); ++i) inside = inside && std::fabs(q[i].loHz - q[i - 1].hiHz - 1e5) < 1;
+            ok(inside && chans == 206, "★ 1400 kHz IF: each hop within ±600 kHz of its centre, 87.5–108 covered once (" + std::to_string(q.size()) + " hops, " + std::to_string(chans) + " channels)");
+        }
     }
 
     std::printf("── stations without RDS (Stuart: \"like a digital HiFi tuner doing a scan\") ──\n");

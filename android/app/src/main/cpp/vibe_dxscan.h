@@ -140,9 +140,14 @@ struct FmHopPlan {
 };
 /** The hops that cover every raster channel of [loHz, hiHz] once each. A capture centre sits half a raster step off the
  *  raster, so no channel lands on the dongle's DC. Empty when the capture is too narrow to hold one channel. */
-inline std::vector<FmHopPlan> planFm(double rateHz, int rasterKhz, double loHz = kFmBandLoHz, double hiHz = kFmBandHiHz) {
+/** ★ `ifHz` > 0: the tuner's IF filter the hop will run behind (a local RTL on auto IF — the shim's dxFmPlan). A hop then
+ *  owns no more than the filter passes whole: half = (ifHz - one 200 kHz channel) / 2. Stuart 2026-11-14: 1400 kHz is the
+ *  FM balance found on the RTLs beside Heart and BBC Northampton — 600 kHz each side, ~18 hops for 87.5-108 instead of ~12. */
+inline std::vector<FmHopPlan> planFm(double rateHz, int rasterKhz, double loHz = kFmBandLoHz, double hiHz = kFmBandHiHz, double ifHz = 0) {
     std::vector<FmHopPlan> out;
-    const double half = fmHalfUse(rateHz), r = rasterKhz * 1000.0;
+    double half = fmHalfUse(rateHz);
+    if (ifHz > 0) half = std::min(half, std::max(0.0, (ifHz - 200e3) / 2.0));
+    const double r = rasterKhz * 1000.0;
     if (half < r || hiHz < loHz) return out;
     // the raster: 87.5 + n·r (100 kHz: 87.5, 87.6 …; 50 kHz: 87.50, 87.55 …)
     const long nCh = (long)std::floor((hiHz - loHz) / r + 1e-6) + 1;
