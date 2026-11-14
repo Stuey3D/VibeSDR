@@ -21,7 +21,7 @@ import (
 )
 
 // Version of the flasher.
-const Version = "0.2.1-localtest"
+const Version = "0.3.0-localtest"
 
 // App is what the window calls.
 type App struct {
@@ -30,6 +30,11 @@ type App struct {
 	img     *release.Image
 	imgErr  string
 	running bool
+	// ★ MAKE ON A NEW CARD: what reading the original card produced, held while the person swaps cards.
+	prep     *job.Prepared
+	prepWork string
+	prepImg  string
+	prepVer  string
 }
 
 func NewApp() *App { return &App{} }
@@ -169,6 +174,180 @@ func (a *App) finish(err error, backupDir, doneText string) {
 		msg = err.Error()
 	}
 	runtime.EventsEmit(a.ctx, "finished", map[string]string{"error": msg, "backup": backupDir, "done": doneText})
+}
+
+// cacheImage copies the image into the cache (checked) and returns the cached path.
+func (a *App) cacheImage(img *release.Image) (string, error) {
+	a.emit(job.Event{Stage: "image", Frac: 0, Text: "Getting the VibeSDR image ready…"})
+	cached := filepath.Join(release.CacheDir(), filepath.Base(img.Path))
+	if got, err := release.FileSHA256(cached, nil); err != nil || got != img.SHA256 {
+		if err := copyFile(img.Path, cached, func(d, t int64) {
+			a.emit(job.Event{Stage: "image", Frac: 0.02 * float64(d) / float64(t), Text: "Getting the VibeSDR image ready…"})
+		}); err != nil {
+			return "", fmt.Errorf("could not copy the VibeSDR image: %w", err)
+		}
+	}
+	return cached, nil
+}
+
+// opener opens a card through macOS's authopen — one system password prompt — as the person, never as root.
+func (a *App) opener(why string) func(string, int) (*os.File, error) {
+	return func(path string, flags int) (*os.File, error) {
+		a.emit(job.Event{Stage: "open", Frac: 0.02, Text: "Waiting for your password…"})
+		f, err := authopen.Open(path, flags, why)
+		if errors.Is(err, authopen.ErrCancelled) {
+			return nil, job.ErrCancelled
+		}
+		return f, err
+	}
+}
+
+// moveBackup puts the staged backup where the person asked; returns that folder, or "" when there was none.
+func moveBackup(staged, folder string) string {
+	if _, err := os.Stat(staged); err == nil {
+		if err := os.MkdirAll(filepath.Dir(folder), 0o755); err == nil {
+			if err := moveDir(filepath.Dir(staged), folder); err == nil {
+				return folder
+			}
+		}
+	}
+	return ""
+}
+
+// StartNew — MAKE ON A NEW CARD, step 1: back up and read the ORIGINAL card (never written), then ask for the new one
+// ("needTarget"). Step 2 is WriteToNew.
+func (a *App) StartNew(diskID, kind, folder string, confirmedLarge bool) error {
+	a.mu.Lock()
+	if a.running {
+		a.mu.Unlock()
+		return errors.New("already running")
+	}
+	img := a.img
+	a.mu.Unlock()
+	if img == nil {
+		return errors.New("there is no VibeSDR image to write yet")
+	}
+	if kind != "whole" && kind != "boot" {
+		return errors.New("choose what to back up")
+	}
+	d, err := findDisk(diskID)
+	if err != nil {
+		return err
+	}
+	if d.Large && !confirmedLarge {
+		return errors.New("this disk is over 256 GB — confirm it really is the R36S's card")
+	}
+	a.CancelNew()
+	a.mu.Lock()
+	a.running = true
+	a.mu.Unlock()
+	go func() {
+		work := filepath.Join(release.CacheDir(), "newcard-"+time.Now().Format("20060102-150405"))
+		if err := os.MkdirAll(work, 0o755); err != nil {
+			a.finish(err, "", "")
+			return
+		}
+		cached, err := a.cacheImage(img)
+		if err != nil {
+			os.RemoveAll(work)
+			a.finish(err, "", "")
+			return
+		}
+		staged := filepath.Join(work, "backup", filepath.Base(folder)+".img.gz")
+		j := job.Job{Target: d.Raw, Disk: d.Device, Size: d.Size, BackupKind: kind, BackupPath: staged, ImagePath: cached,
+			ImageSHA256: img.SHA256, ImageVersion: img.Version, Tmp: work,
+			Open: a.opener("VibeSDR Flasher needs your password to back up and read your R36S's card.")}
+		p, err := job.Prepare(&j, func(e job.Event) { a.emit(e) })
+		backupDir := moveBackup(staged, folder)
+		if err != nil {
+			os.RemoveAll(work)
+			a.finish(err, backupDir, "")
+			return
+		}
+		a.mu.Lock()
+		a.prep, a.prepWork, a.prepImg, a.prepVer = p, work, cached, img.SHA256
+		a.running = false
+		a.mu.Unlock()
+		runtime.EventsEmit(a.ctx, "needTarget", map[string]string{"backup": backupDir, "summary": p.Summary, "sourceId": d.ID})
+	}()
+	return nil
+}
+
+// WriteToNew — MAKE ON A NEW CARD, step 2: VibeSDR onto the card now inserted.
+func (a *App) WriteToNew(diskID string, confirmedLarge bool) error {
+	a.mu.Lock()
+	if a.running {
+		a.mu.Unlock()
+		return errors.New("already running")
+	}
+	p, work, cached, sum := a.prep, a.prepWork, a.prepImg, a.prepVer
+	a.mu.Unlock()
+	if p == nil {
+		return errors.New("the original card has not been read yet — start again")
+	}
+	d, err := findDisk(diskID)
+	if err != nil {
+		return err
+	}
+	if d.Large && !confirmedLarge {
+		return errors.New("this disk is over 256 GB — confirm it really is the card for VibeSDR")
+	}
+	a.mu.Lock()
+	a.running = true
+	a.mu.Unlock()
+	go func() {
+		j := job.Job{Target: d.Raw, Disk: d.Device, Size: d.Size, ImagePath: cached, ImageSHA256: sum, Tmp: work,
+			Open: a.opener("VibeSDR Flasher needs your password to write VibeSDR to the new card.")}
+		doneText := ""
+		err := job.WriteNew(&j, p, func(e job.Event) {
+			if e.Done {
+				doneText = e.Text
+			} else {
+				a.emit(e)
+			}
+		})
+		if err == nil {
+			a.CancelNewLocked()
+		} else {
+			a.mu.Lock()
+			a.running = false
+			a.mu.Unlock()
+			// ★ the original was read and its drivers are ready — a refused card (the original put back, too small)
+			//   lets the person insert another without starting again
+			runtime.EventsEmit(a.ctx, "needTarget", map[string]string{"error": err.Error(), "summary": p.Summary})
+			return
+		}
+		a.finish(nil, "", doneText)
+	}()
+	return nil
+}
+
+// CancelNew forgets a read original card (its backup is kept where it was saved).
+func (a *App) CancelNew() { a.CancelNewLocked() }
+
+func (a *App) CancelNewLocked() {
+	a.mu.Lock()
+	p, work := a.prep, a.prepWork
+	a.prep, a.prepWork = nil, ""
+	a.mu.Unlock()
+	p.Discard()
+	if work != "" {
+		os.RemoveAll(work)
+	}
+}
+
+// findDisk looks the card up AGAIN — never write to a disk from a list that may be out of date.
+func findDisk(diskID string) (*disks.Disk, error) {
+	list, err := disks.List()
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].ID == diskID {
+			return &list[i], nil
+		}
+	}
+	return nil, errors.New("that card is no longer there — put it back in and choose it again")
 }
 
 func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {

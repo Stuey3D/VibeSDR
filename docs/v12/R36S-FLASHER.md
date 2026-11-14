@@ -25,6 +25,17 @@ For someone holding the card that came in their R36S.
 No questions in between. If anything is not as expected it stops and says so in one sentence, with what to do, and
 the backup is already safe on the computer.
 
+**On the same card, or a new one** (Stuart, 2026-11-14 — "someone using their old card to extract the drivers for a
+fresh card"): after the card is chosen, *"Where should VibeSDR go?"* — **This card** (above) or **A new card**:
+1. The card with the current R36S system is opened READ-ONLY, backed up (whole or boot, as above) and its drivers read.
+   It is never written; the window says so.
+2. *"Now insert the card you want VibeSDR written to."* The window waits until the original is taken out, then offers
+   the card put in its place. The original put back is refused (same size and first MiB); a card too small is refused.
+3. The new card is NOT backed up — the person chose it for VibeSDR. If it is not empty the confirm names what is on it
+   and says it will be lost (Stuart: "Warn, then write"). Then write, read back, done.
+Make on a card that is ALREADY VibeSDR warns in red that its settings and VIBESDR drive go (a boot backup does not keep
+them) and points at Update.
+
 ### 1.2 ADVANCED
 
 For someone who has not got the original card, has a damaged one, or knows what they are doing. Same flow, but the

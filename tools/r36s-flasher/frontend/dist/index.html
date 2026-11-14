@@ -87,6 +87,15 @@
     <div class="row"><button class="btn plain" data-home>Back</button><button class="btn go" id="toBackup" disabled>Next</button></div>
   </section>
 
+  <!-- 1b. WHERE VIBESDR GOES (Make only) -->
+  <section class="screen" id="where">
+    <h2>Where should VibeSDR go?</h2>
+    <p class="lead">Either way, this card is backed up first and this R36S's drivers are read from it.</p>
+    <button class="big sel" id="wSame"><b>This card</b><span>VibeSDR replaces what is on it. Your backup lets you put it back.</span></button>
+    <button class="big" id="wNew"><b>A new card</b><span>This card is only read and backed up — it stays exactly as it is. You insert the card for VibeSDR afterwards.</span></button>
+    <div class="row"><button class="btn plain" id="whereBack">Back</button><button class="btn go" id="whereNext">Next</button></div>
+  </section>
+
   <!-- 2. THE BACKUP -->
   <section class="screen" id="backup">
     <h2 id="backupTitle">Back up the card first</h2>
@@ -95,6 +104,15 @@
     <button class="big" id="kBoot" data-kind="boot"><b>Boot partition only</b><span>Small and quick — enough to make another VibeSDR card, not to restore the old system.</span></button>
     <div class="folder">Backup goes to <code id="folder"></code><button class="link" id="chFolder">Change…</button></div>
     <div class="row"><button class="btn plain" id="backToPick">Back</button><button class="btn go" id="start">Start</button></div>
+  </section>
+
+  <!-- 2b. SWAP CARDS (Make on a new card) -->
+  <section class="screen" id="swap">
+    <h2>Now insert the card you want VibeSDR written to</h2>
+    <p class="lead" id="swapLead">Take your original card out — it is backed up and has not been changed — and put in the card for VibeSDR.</p>
+    <div class="status" id="swapMsg" hidden></div>
+    <div id="swapList"></div>
+    <div class="row"><button class="btn plain" id="swapCancel">Cancel</button><button class="btn go" id="swapNext" disabled>Next</button></div>
   </section>
 
   <!-- 3. WORKING -->
@@ -126,10 +144,12 @@ const App = () => window.go.main.App;
 const $ = (id) => document.getElementById(id);
 const gb = (b) => (b / 1e9).toFixed(1) + ' GB';
 let disks = [], chosen = null, kind = 'whole', folder = '', poll = null, status = null, updating = false;
+let newCard = false, writingNew = false, sourceId = '', sourceGone = false, target = null, swapPoll = null;
 
 function show(id) {
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.id === id));
   if (id === 'pick') startPoll(); else stopPoll();
+  if (id === 'swap') { listSwap(); swapPoll = setInterval(listSwap, 1500); } else if (swapPoll) { clearInterval(swapPoll); swapPoll = null; }
 }
 document.querySelectorAll('[data-home]').forEach((b) => b.onclick = () => { show('home'); refreshStatus(); });
 
@@ -147,7 +167,8 @@ window.runtime.EventsOn('status', refreshStatus);
 
 function begin(up) {
   updating = up; chosen = null; $('toBackup').disabled = true;
-  $('pickTitle').textContent = up ? 'Insert your VibeSDR card' : "Insert your R36S's SD card";
+  newCard = false; writingNew = false;
+  $('pickTitle').textContent = up ? 'Insert your VibeSDR card' : 'Insert the card with your current R36S system on it';
   show('pick');
 }
 $('bMake').onclick = () => begin(false);
@@ -173,7 +194,13 @@ async function listDisks() {
   });
 }
 
-$('toBackup').onclick = async () => {
+function setWhere(n) { newCard = n; $('wSame').classList.toggle('sel', !n); $('wNew').classList.toggle('sel', n); }
+$('wSame').onclick = () => setWhere(false);
+$('wNew').onclick = () => setWhere(true);
+$('whereBack').onclick = () => show('pick');
+$('whereNext').onclick = () => toBackupScreen();
+$('toBackup').onclick = () => { if (updating) toBackupScreen(); else { setWhere(newCard); show('where'); } };
+const toBackupScreen = async () => {
   folder = await App().DefaultBackupDir(chosen.name || chosen.id);
   $('folder').textContent = folder;
   /* ★ UPDATE: no backup choice — the boot partition is always backed up (the system is rewritten; settings and
@@ -186,7 +213,7 @@ $('toBackup').onclick = async () => {
   $('start').textContent = updating ? 'Update' : 'Start';
   setKind(updating ? 'update' : 'whole'); show('backup');
 };
-$('backToPick').onclick = () => show('pick');
+$('backToPick').onclick = () => show(updating ? 'pick' : 'where');
 function setKind(k) { kind = k; $('kWhole').classList.toggle('sel', k === 'whole'); $('kBoot').classList.toggle('sel', k === 'boot'); }
 $('kWhole').onclick = () => { if (!updating) setKind('whole'); };
 $('kBoot').onclick = () => { if (!updating) setKind('boot'); };
@@ -195,18 +222,24 @@ $('chFolder').onclick = async () => { folder = await App().ChooseFolder(folder);
 $('start').onclick = () => {
   $('confirmText').innerHTML = '';
   const p = document.createElement('p');
-  $('confirmTitle').textContent = updating ? 'Update this card to VibeSDR ' + status.version + '?' : 'Replace everything on this card?';
-  $('cYes').textContent = updating ? 'Yes — update my card' : 'Yes — make my VibeSDR card';
+  writingNew = false;
+  $('confirmTitle').textContent = updating ? 'Update this card to VibeSDR ' + status.version + '?'
+    : newCard ? 'Back up and read this card?' : 'Replace everything on this card?';
+  $('cYes').textContent = updating ? 'Yes — update my card' : newCard ? 'Yes — back up and read it' : 'Yes — make my VibeSDR card';
   p.textContent = updating
     ? 'The VibeSDR system on "' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ') will be updated to '
       + status.version + '. Your settings, bookmarks and recordings are not touched. First, its boot partition is backed up to ' + folder
       + '. If this is not a VibeSDR card, or it is too old to update in place, nothing is changed and it says why.'
+    : newCard
+    ? '"' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ') will be backed up to ' + folder
+      + ' (' + (kind === 'whole' ? 'the whole card' : 'its boot partition') + ') and this R36S\'s drivers read from it. It is NOT changed. '
+      + 'Then you will be asked for the card VibeSDR ' + status.version + ' goes on.'
     : 'Everything on "' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ') will be replaced with VibeSDR '
       + status.version + '. First, ' + (kind === 'whole' ? 'the whole card' : 'its boot partition') + ' is backed up to ' + folder + '.';
   $('confirmText').appendChild(p);
   // ★★ MAKE ON A CARD THAT IS ALREADY VIBESDR replaces its settings AND its VIBESDR drive (recordings, gallery) — and a
   //    boot-only backup does not keep them. Say so, and point at Update, which keeps both.
-  if (!updating && /vibesdr/i.test(chosen.looks || '')) {
+  if (!updating && !newCard && /vibesdr/i.test(chosen.looks || '')) {
     const w = document.createElement('p'); w.style.color = 'var(--bad)'; w.style.fontWeight = '600';
     w.textContent = 'This is already a VibeSDR card. Making it again replaces its settings and its VIBESDR drive (recordings, gallery)'
       + (kind === 'whole' ? ' — they will be in the whole-card backup.' : ', and a boot-partition backup does NOT keep them.')
@@ -221,14 +254,18 @@ $('start').onclick = () => {
 };
 $('cNo').onclick = () => $('confirm').close();
 $('cYes').onclick = async () => {
-  if (chosen.large && !$('largeOk').checked) return;
+  if ((writingNew ? target : chosen).large && !$('largeOk').checked) return;
   $('confirm').close();
   $('barFill').style.width = '0%'; $('stage').textContent = 'Starting…';
   $('workTitle').textContent = updating ? 'Updating your VibeSDR card' : 'Making your VibeSDR card';
   show('work');
   // ★★ The flow decides the job, never a leftover choice: Update always sends "update", Make never does.
   const job = updating ? 'update' : (kind === 'boot' ? 'boot' : 'whole');
-  try { await App().Start(chosen.id, job, folder, $('largeOk').checked); }
+  try {
+    if (writingNew) { $('workTitle').textContent = 'Writing VibeSDR to the new card'; await App().WriteToNew(target.id, $('largeOk').checked); }
+    else if (newCard && !updating) { $('workTitle').textContent = 'Backing up and reading your card'; await App().StartNew(chosen.id, job, folder, $('largeOk').checked); }
+    else await App().Start(chosen.id, job, folder, $('largeOk').checked);
+  }
   catch (e) { finished({ error: String(e), backup: '' }); }
 };
 
@@ -236,9 +273,63 @@ window.runtime.EventsOn('progress', (e) => {
   $('barFill').style.width = Math.round((e.frac || 0) * 100) + '%';
   if (e.text) $('stage').textContent = e.text;
 });
+// ★ MAKE ON A NEW CARD — the original has been read and ejected; wait for it to go, then offer the cards that appear.
+window.runtime.EventsOn('needTarget', (r) => {
+  target = null; $('swapNext').disabled = true;
+  if (r.sourceId) { sourceId = r.sourceId; sourceGone = false; lastBackup = r.backup || ''; }
+  const msg = $('swapMsg');
+  msg.hidden = !r.error; msg.innerHTML = r.error ? '<span class="e"></span>' : '';
+  if (r.error) msg.querySelector('.e').textContent = r.error;
+  $('swapLead').textContent = 'Take your original card out — it is backed up' + (lastBackup ? ' (' + lastBackup + ')' : '')
+    + ' and has not been changed — and put in the card for VibeSDR. Drivers: ' + (r.summary || '') + '.';
+  show('swap');
+});
+async function listSwap() {
+  let list = [];
+  try { list = await App().Disks() || []; } catch (e) { list = []; }
+  if (!sourceGone && !list.some((d) => d.id === sourceId)) sourceGone = true;   // the original has been taken out
+  const box = $('swapList');
+  const cands = sourceGone ? list : [];
+  if (!sourceGone) { box.innerHTML = '<div class="empty">Take your original card out…</div>'; return; }
+  if (!cands.length) { box.innerHTML = '<div class="empty">Now put in the card you want VibeSDR written to.</div>'; target = null; $('swapNext').disabled = true; return; }
+  if (target && !cands.some((d) => d.id === target.id)) { target = null; $('swapNext').disabled = true; }
+  box.innerHTML = '';
+  cands.forEach((d) => {
+    const b = document.createElement('button');
+    b.className = 'big disk' + (target && target.id === d.id ? ' sel' : '');
+    b.innerHTML = '<div><b></b><span></span></div><div class="sz"></div>';
+    b.querySelector('b').textContent = d.name || d.id;
+    b.querySelector('span').textContent = (d.volumes && d.volumes.length ? 'has ' + d.volumes.join(', ') : (d.looks || 'empty')) + ' · ' + d.device;
+    b.querySelector('.sz').textContent = gb(d.size);
+    b.onclick = () => { target = d; $('swapNext').disabled = false; listSwap(); };
+    box.appendChild(b);
+  });
+}
+$('swapCancel').onclick = async () => { try { await App().CancelNew(); } catch (e) {} show('home'); refreshStatus(); };
+$('swapNext').onclick = () => {
+  writingNew = true;
+  $('confirmTitle').textContent = 'Write VibeSDR to this card?';
+  $('cYes').textContent = 'Yes — write VibeSDR';
+  $('confirmText').innerHTML = '';
+  const p = document.createElement('p');
+  p.textContent = 'VibeSDR ' + status.version + ' will be written to "' + (target.name || target.id) + '" (' + gb(target.size) + ', ' + target.device + '). Everything on it is erased.';
+  $('confirmText').appendChild(p);
+  // ★ Stuart: warn, then write — the new card is not backed up, so say what is on it
+  if ((target.volumes && target.volumes.length) || (target.looks && !/empty/i.test(target.looks))) {
+    const w = document.createElement('p'); w.style.color = 'var(--bad)'; w.style.fontWeight = '600';
+    w.textContent = 'This card is not empty' + (target.volumes && target.volumes.length ? ' — it has ' + target.volumes.join(', ') : ' (' + target.looks + ')')
+      + '. It is NOT backed up: everything on it will be lost.';
+    $('confirmText').appendChild(w);
+  }
+  const q = document.createElement('p'); q.className = 'small'; q.textContent = 'Your Mac will ask for your password again.';
+  $('confirmText').appendChild(q);
+  $('largeRow').hidden = !target.large; $('largeOk').checked = false;
+  $('confirm').showModal();
+};
+
 let lastBackup = '';
 function finished(r) {
-  lastBackup = r.backup || '';
+  lastBackup = r.backup || (writingNew ? lastBackup : '');   // ★ a new-card write keeps the original card's backup to show
   if (!r.error) {
     $('endIcon').innerHTML = '<div class="done-ic">✓</div>';
     $('endMsg').textContent = r.done || 'Done — put the card in your R36S and switch it on.';
