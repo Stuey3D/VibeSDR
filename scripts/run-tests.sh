@@ -1653,6 +1653,21 @@ else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-psk.sh)'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 THE RTTY SKIMMER (2026-11-14): the real server on a fake rtl_tcp replaying test-rtty-skimmer's synthetic clip (four
+#     RTTY stations of different settings around 14.080 MHz): every station listed with its own settings, listed before
+#     set, spotted at its RF, on a one-pipeline and a range-locked radio (test-server-rtty-skim); then the web client in
+#     headless Edge (--mute-audio) — RTTY's VIEW › SKIMMER, the rows, the card, 390 px (test-web-rtty-skim).
+printf '\n\033[1m── RTTY skimmer (end to end: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-rtty-skimmer" ] && "$OUT/test-rtty-skimmer" clip "$OUT/rtty-clip.cu8" 40 >/dev/null; then
+  VIBE_RTTY_CLIP="$OUT/rtty-clip.cu8" node scripts/test-server-rtty-skim.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_RTTY_CLIP="$OUT/rtty-clip.cu8" node scripts/test-web-rtty-skim.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/rtty-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-rtty-skimmer built above)'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 DSC (2026-10-26): the real server on a fake rtl_tcp replaying the bench's synthetic clips — a distress alert and an
 #     all-ships safety call on 2187.5 kHz, and the same two as an FM subcarrier on channel 70: a listener's MF/HF and VHF
 #     decoder, the gallery's day log and pinned distress item, and background decoding on a DSC VFO (test-server-dsc); then

@@ -13084,7 +13084,7 @@ function renderCwRows(rows: HTMLElement, l: typeof cwLast) {
       `<span class="f">${escapeHtml(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
       `<span class="c">${callHtml(s.callsign, escapeHtml)}</span>` +
       `<span class="ct">${escapeHtml(s.country)}</span>` +
-      `<span class="w">${s.mode ? escapeHtml(s.mode.replace('BPSK', 'PSK')) : cwWpmText(s)}</span>`;
+      `<span class="w">${s.mode ? escapeHtml(s.mode.replace('BPSK', 'PSK').replace(/^RTTY /, '')) : cwWpmText(s)}</span>`;   // ★ RTTY's box is all RTTY: "45/170" fits the column
     wireQrz(r);
     r.title = `${s.callsign} · ${s.how}${s.mode ? ' · ' + s.mode : ''} · ${Math.round(s.snr)} dB — tap to tune`;
     r.onclick = () => cwTune(s.frequency);

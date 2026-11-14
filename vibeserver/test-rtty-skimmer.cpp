@@ -380,7 +380,45 @@ static void bench() {
     }
 }
 
+/** ★ The synthetic HF clip the server/web tests replay (scripts/test-server-rtty-skim.mjs, test-web-rtty-skim.mjs): unsigned
+ *  8-bit IQ at 960 kHz centred on 14.080 MHz, the four mixed stations of mixedFour() at their offsets, +15 dB, repeating.
+ *  Written as it is made — 40 s at 960 kHz is 38 M samples, never held. */
+static int writeClip(const char* out, double rate, double seconds) {
+    auto sigs = mixedFour();
+    struct Live { std::vector<uint8_t> hb; double hbSec, A, ph = 0, t = 0; const RSig* s; };
+    std::vector<Live> L;
+    for (const RSig& s : sigs) { Live l; l.hb = halfBits(s); l.hbSec = 1.0 / (2 * s.baud); l.A = std::sqrt(std::pow(10.0, s.snrDb / 10) * 2500.0 / rate); l.s = &s; L.push_back(l); }
+    FILE* f = std::fopen(out, "wb"); if (!f) { std::perror(out); return 1; }
+    std::mt19937 rng(77); std::normal_distribution<float> g(0.0f, std::sqrt(0.5f));
+    const size_t n = (size_t)(seconds * rate), blk = 65536;
+    std::vector<uint8_t> buf(blk * 2);
+    auto q = [](double v) { const int x = (int)std::lround(127.5 + v * 18.0); return (uint8_t)std::max(0, std::min(255, x)); };
+    for (size_t i0 = 0; i0 < n; i0 += blk) {
+        const size_t k = std::min(blk, n - i0);
+        for (size_t j = 0; j < k; ++j) {
+            const double t = (double)(i0 + j) / rate;
+            double re = g(rng), im = g(rng);
+            for (auto& l : L) {
+                if (t < l.s->startSec) continue;
+                size_t h = (size_t)(l.t / l.hbSec);
+                if (h >= l.hb.size()) { l.t -= l.hb.size() * l.hbSec; h = 0; }
+                const bool mark = l.hb[h] != 0;
+                l.ph += 2 * M_PI * (l.s->hz + ((mark != l.s->rev) ? l.s->shift / 2 : -l.s->shift / 2)) / rate;
+                if (l.ph > M_PI) l.ph -= 2 * M_PI; else if (l.ph < -M_PI) l.ph += 2 * M_PI;
+                re += l.A * std::cos(l.ph); im += l.A * std::sin(l.ph);
+                l.t += 1.0 / rate;
+            }
+            buf[2 * j] = q(re); buf[2 * j + 1] = q(im);
+        }
+        std::fwrite(buf.data(), 1, 2 * k, f);
+    }
+    std::fclose(f);
+    std::printf("%s: %.0f s at %.0f Hz, %zu RTTY stations\n", out, seconds, rate, L.size());
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 2 && std::string(argv[1]) == "clip") return writeClip(argv[2], 960000, argc > 3 ? std::atof(argv[3]) : 40);
     const bool benchOnly = argc > 1 && std::string(argv[1]) == "bench";
     std::printf("RTTY skimmer [%s]\n", rttysk::Skimmer::simdName());
     if (!benchOnly) {
