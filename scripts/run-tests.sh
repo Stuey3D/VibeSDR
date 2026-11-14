@@ -1668,6 +1668,15 @@ else
   echo '   not run — needs VIBESERVER_BIN (and test-rtty-skimmer built above)'; notrun=$((notrun+1))
 fi
 
+# ★★ …and a REAL capture, opt-in: VIBE_RTTY_WAV=<stereo int16 I/Q .wav> VIBE_RTTY_WAV_CENTRE=<Hz> replays it through the
+#    engine and prints what it listed, the settings, text, calls and CPU (a report, never a pass/fail; the recording is
+#    never committed). Not run without it.
+if [ -n "${VIBE_RTTY_WAV:-}" ] && [ -x "$OUT/test-rtty-skimmer" ]; then
+  printf '\n\033[1m── RTTY skimmer: a real capture (%s) ──\033[0m\n' "$VIBE_RTTY_WAV"
+  "$OUT/test-rtty-skimmer" wav "$VIBE_RTTY_WAV" "${VIBE_RTTY_WAV_CENTRE:-0}"; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+fi
+
 # ★★★ V12 DSC (2026-10-26): the real server on a fake rtl_tcp replaying the bench's synthetic clips — a distress alert and an
 #     all-ships safety call on 2187.5 kHz, and the same two as an FM subcarrier on channel 70: a listener's MF/HF and VHF
 #     decoder, the gallery's day log and pinned distress item, and background decoding on a DSC VFO (test-server-dsc); then

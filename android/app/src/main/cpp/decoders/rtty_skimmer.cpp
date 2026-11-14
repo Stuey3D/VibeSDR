@@ -418,6 +418,13 @@ struct Skimmer::Impl {
             if (np < 256) pk[np++] = { s, ex, hz };
             else { int w = 0; for (int i = 1; i < np; ++i) if (pk[i].ex < pk[w].ex) w = i; if (pk[w].ex < ex) pk[w] = { s, ex, hz }; }
         }
+#ifdef RTTY_TRACE
+        if (hopsDone % 236 == 0) {
+            std::fprintf(stderr, "[%.1f] %d peaks:", nowSec(), np);
+            for (int i = 0; i < np; ++i) std::fprintf(stderr, " %.0f(%.0f)", pk[i].hz, 10 * std::log10(1 + pk[i].ex));
+            std::fprintf(stderr, "\n");
+        }
+#endif
         struct Pair { double fc, shift, strength, err, lo, hi; int a, b; };
         Pair pr[64]; int npr = 0;
         for (int a = 0; a < np; ++a) for (int b = 0; b < np; ++b) {

@@ -22,6 +22,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <random>
@@ -417,7 +418,69 @@ static int writeClip(const char* out, double rate, double seconds) {
     return 0;
 }
 
+/** ★ A REAL CAPTURE, replayed (opt-in; the recording is never in the repo): `test-rtty-skimmer wav <file.wav> <centreHz>`
+ *  — stereo int16 I (left) / Q (right) at the file's rate, streamed through the engine in 1024-sample blocks with its
+ *  jobs inline. Prints what was listed, the settings found, the text and calls, and the CPU per second of radio. Exit 3
+ *  (not run) when the file is absent. Nothing here is a pass/fail: it reports what the engine made of the air. */
+static int replayWav(const char* path, double centre) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::printf("   not run — %s is not here\n", path); return 3; }
+    char hdr[12]; if (std::fread(hdr, 1, 12, f) != 12 || std::memcmp(hdr, "RIFF", 4) || std::memcmp(hdr + 8, "WAVE", 4)) { std::printf("not a WAV\n"); std::fclose(f); return 1; }
+    uint32_t rate = 0; uint16_t ch = 0, bits = 0; long dataLen = -1;
+    for (;;) {
+        char id[4]; uint32_t len;
+        if (std::fread(id, 1, 4, f) != 4 || std::fread(&len, 4, 1, f) != 1) break;
+        if (!std::memcmp(id, "fmt ", 4)) { std::vector<uint8_t> b(len); if (std::fread(b.data(), 1, len, f) != len) break; ch = (uint16_t)(b[2] | b[3] << 8); std::memcpy(&rate, &b[4], 4); bits = (uint16_t)(b[14] | b[15] << 8); }
+        else if (!std::memcmp(id, "data", 4)) { dataLen = (long)len; break; }
+        else std::fseek(f, (long)len + (len & 1), SEEK_CUR);
+    }
+    if (ch != 2 || bits != 16 || rate == 0 || dataLen < 0) { std::printf("want stereo int16 I/Q (got %u ch, %u bits, %u Hz)\n", ch, bits, rate); std::fclose(f); return 1; }
+    rttysk::Skimmer::Config c; c.rate = rate; c.loHz = -0.47 * (double)rate; c.hiHz = 0.47 * (double)rate; c.maxSignals = 64; c.workers = 0;   // ★ (double): -rate on a uint32 wraps
+    rttysk::Skimmer sk(c);
+    std::vector<rttysk::Spot> spots;
+    sk.onSpot = [&](const rttysk::Spot& s) { spots.push_back(s); };
+    std::vector<int16_t> raw(2048); std::vector<cf> iq(1024);
+    double cpu = 0; size_t total = 0; double nextReport = 30;
+    std::printf("replay %s: %u Hz, centre %.3f kHz, N %d (%.2f Hz bins), channel %.1f Hz, %s\n", path, rate, centre / 1e3,
+                sk.fftSize(), sk.binHz(), sk.channelRate(), rttysk::Skimmer::simdName());
+    for (;;) {
+        const size_t got = std::fread(raw.data(), sizeof(int16_t), raw.size(), f) / 2;
+        if (got == 0) break;
+        for (size_t i = 0; i < got; ++i) iq[i] = cf(raw[2 * i] / 32768.0f, raw[2 * i + 1] / 32768.0f);
+        const auto t0 = std::chrono::steady_clock::now();
+        sk.feedIq(iq.data(), (int)got);
+        cpu += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        total += got;
+        if (sk.nowSec() >= nextReport) {
+            std::printf("  t=%3.0f s: %d listed, %d set, %llu pairs rejected (not alternating), %llu not RTTY, %llu jobs\n", sk.nowSec(), sk.listed(), sk.settled(),
+                        (unsigned long long)sk.candidatesRejected(), (unsigned long long)sk.notRtty(), (unsigned long long)sk.jobsRun());
+            nextReport += 30;
+        }
+    }
+    std::fclose(f);
+    const double secs = (double)total / rate;
+    std::printf("  %.1f s of radio, %.2f ms of one core per second of radio (%.3f %%), jobs inline\n", secs, 1000 * cpu / secs, 100 * cpu / secs);
+    std::printf("  hops %llu, channels open at the end %d\n", (unsigned long long)sk.hops(), sk.tracked());
+    std::printf("  totals: %llu pairs rejected, %llu not RTTY, %llu jobs, %llu requeues, %llu characters held back by the text gate\n",
+                (unsigned long long)sk.candidatesRejected(), (unsigned long long)sk.notRtty(), (unsigned long long)sk.jobsRun(),
+                (unsigned long long)sk.requeues(), (unsigned long long)sk.charsSuppressed());
+    const auto v = sk.signals(true);
+    std::printf("  signals listed (active, then gone): %zu\n", v.size());
+    for (const auto& s : v) {
+        double ls = -1, ss = -1; sk.timesOf(s.id, ls, ss);
+        std::string t = s.text; for (auto& ch2 : t) if (ch2 == '\n') ch2 = '|';
+        if (t.size() > 220) t = "…" + t.substr(t.size() - 220);
+        std::printf("   #%d %9.2f kHz shift %3.0f %s %-28s snr %4.1f dB %-6s listed %.1f s set %.1f s chars %u call %s\n      \"%s\"\n",
+                    s.id, (centre + s.offsetHz) / 1e3, s.shiftHz, s.active ? "active" : "gone  ", s.set ? s.settings.c_str() : "(waiting / not set)",
+                    s.snrDb, rttysk::qualityWord(s.quality), ls, ss, s.chars, s.call.empty() ? "-" : s.call.c_str(), t.c_str());
+    }
+    std::printf("  spots: %zu\n", spots.size());
+    for (auto& s : spots) std::printf("   %s %.2f kHz %s %s\n", s.call.c_str(), (centre + s.offsetHz) / 1e3, s.how.c_str(), s.mode.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 2 && std::string(argv[1]) == "wav") return replayWav(argv[2], argc > 3 ? std::atof(argv[3]) : 0);
     if (argc > 2 && std::string(argv[1]) == "clip") return writeClip(argv[2], 960000, argc > 3 ? std::atof(argv[3]) : 40);
     const bool benchOnly = argc > 1 && std::string(argv[1]) == "bench";
     std::printf("RTTY skimmer [%s]\n", rttysk::Skimmer::simdName());
