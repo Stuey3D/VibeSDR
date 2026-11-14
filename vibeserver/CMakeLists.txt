@@ -993,7 +993,7 @@ target_link_libraries(adsb-data-tool PRIVATE Threads::Threads)
 enable_testing()
 
 set(VIBE_DAB_TESTS modes channels prs sync ofdm interleave fec punct fic ficdec msc receiver
-                   resample ddc superframe aac mp2 pad tii epg mot)
+                   resample ddc superframe aac mp2 pad tii epg mot shift-hold)
 add_custom_target(dab-tests)
 foreach(t ${VIBE_DAB_TESTS})
   add_executable(test-dab-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-${t}.cpp")
@@ -1218,6 +1218,8 @@ vibe_sanitize(dab-offline)
 target_compile_definitions(dab-offline PRIVATE VIBE_DAB_PFFFT=1)
 target_sources(test-dab-receiver PRIVATE "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_compile_definitions(test-dab-receiver PRIVATE VIBE_DAB_PFFFT=1)
+target_sources(test-dab-shift-hold PRIVATE "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
+target_compile_definitions(test-dab-shift-hold PRIVATE VIBE_DAB_PFFFT=1)
 if(APPLE)
   target_link_libraries(dab-offline PRIVATE "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation")   # the platform decoder it now exercises
 endif()

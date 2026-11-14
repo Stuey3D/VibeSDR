@@ -106,6 +106,7 @@ struct DabStats {
     double fibRate       = 0.0;    ///< running pass rate, 0..1
     int    prsReanchors  = 0;      ///< times the PRS reference was re-anchored after a level step
     int    shiftFullSearches = 0;  ///< near-window integer-offset searches that were not conclusive and ran in full
+    int    shiftHeld     = 0;      ///< frames whose search said another shift, overruled by the established one — see shiftStreak_
     int    framesSeen    = 0;
     int    intOffsetCarriers = 0;   ///< whole carriers of offset, from the phase reference
     /** ★ Frames handed to the decoders as ERASURES because the phase reference said the window
@@ -310,6 +311,32 @@ public:
                 if (!found) { best = -1.0f; bestShift = 0; ++stats_.shiftFullSearches; }
             }
             if (!found) searchShifts(-span, span);
+            /* ★★★ AN ESTABLISHED SHIFT IS NOT THROWN AWAY ON ONE FRAME'S SAY-SO (Stuart, 2026-11-14: a B210 at 56 MS/s,
+             *  MER 15+, "lock keeps dropping"). Its USB link lost ~2 chunks a second; each hole tore a frame, the torn
+             *  frame's full search picked a carrier 12–14 away, and the next frames were decoded there — the offset
+             *  flipped 777 Hz ↔ 11–14 kHz on screen and the audio went with it. A crystal cannot move a whole carrier
+             *  (1 kHz) between frames, so once a shift has won three frames running, a different answer must ALSO win
+             *  three running before it replaces it; until then this frame is read at the established shift (and erased
+             *  downstream if it really is bad, as any damaged frame is).
+             *  ★ Only once ESTABLISHED: on first lock — weak, noisy, nothing to defend — every answer is taken exactly
+             *    as before, so the weak-signal acquisition is untouched. reset() (a retune) clears all of it. */
+            if (bestShift == intShift_) { if (shiftStreak_ < 1000) ++shiftStreak_; shiftPendCount_ = 0; }
+            else if (shiftStreak_ >= kShiftConfirm && prsRef_ > 0.0f) {
+                if (bestShift == shiftPend_) ++shiftPendCount_; else { shiftPend_ = bestShift; shiftPendCount_ = 1; }
+                if (shiftPendCount_ < kShiftConfirm) {
+                    double re = 0, im = 0;                    // the established shift's own correlation, honestly reported
+                    for (int k = 0; k + 1 < K; ++k) {
+                        const int src = k + intShift_;
+                        if (src < 0 || src + 1 >= K) continue;
+                        const C32 a2 = D[size_t(src)], b2 = prsDiff_[size_t(k)];
+                        re += double(a2.real()) * b2.real() + double(a2.imag()) * b2.imag();
+                        im += double(a2.imag()) * b2.real() - double(a2.real()) * b2.imag();
+                    }
+                    best = float(std::sqrt(re * re + im * im));
+                    bestShift = intShift_;
+                    ++stats_.shiftHeld;
+                } else { shiftStreak_ = kShiftConfirm; shiftPendCount_ = 0; }   // it really moved: the new one is established
+            } else { shiftStreak_ = 1; shiftPendCount_ = 0; }
             intShift_ = bestShift;
             stats_.intOffsetCarriers = bestShift;
             stats_.freqOffsetHz += float(bestShift) * float(mode_->spacingHz);
@@ -802,7 +829,7 @@ public:
         { std::lock_guard<std::mutex> mlk(mscM_);
           mscBerEma_ = 0.0; mscBerPub_.store(0.0, std::memory_order_relaxed);
           clearSelectionLocked_(); scan_.clear(); }
-        sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; tii_.reset(); prsRef_ = 0.0f; untrustedRun_ = 0; }   // ★ the PRS reference belongs to the old block
+        sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; tii_.reset(); prsRef_ = 0.0f; untrustedRun_ = 0; shiftStreak_ = 0; shiftPendCount_ = 0; }   // ★ the PRS reference belongs to the old block
     /** ★ The ppm figure was computed against 222.064 MHz (11D) whatever block was tuned — 8 %
      *  wrong at 5A, invisible on 12B. The service tells us the block; this is what it divides by. */
     void setCentreHz(double hz) { if (hz > 1e6) centreHz_ = hz; }
@@ -1038,6 +1065,9 @@ private:
     double fibHist_ = 0;
     double centreHz_ = 222.064e6;   ///< the tuned block, for the ppm readout
     int    intShift_ = 0;
+    /** ★★ How long intShift_ has held (frames whose search agreed), and a challenger's run — see "AN ESTABLISHED SHIFT". */
+    int    shiftStreak_ = 0, shiftPend_ = 0, shiftPendCount_ = 0;
+    static constexpr int kShiftConfirm = 3;
     std::vector<C32>    prsDiff_;
     // ★ Per-frame scratch, kept between frames — see push().
     std::vector<Cplx> work_;
