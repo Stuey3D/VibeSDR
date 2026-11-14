@@ -161,6 +161,23 @@ int main() {
         ok(ids == 4, "the 50 kHz raster finds the same four RDS stations (" + std::to_string(ids) + ")");
     }
 
+    std::printf("── the Sony's 104 MHz hop (2026-11-14): BBC Northampton just below it, Horizon 150 kHz under the DC ──\n");
+    {
+        const double fs2 = 2.048e6, c2 = 104.85e6;   // the TV's rate; the 1400 kHz-IF plan's hop 104.3–105.4
+        auto iq2 = capture(fs2, 5.0, { { -650e3, 0xCF11, "BBC Nhtn", 0.30, true },     // 104.2: outside the hop, strong
+                                       { -150e3, 0xC0BB, "Horizon ", 0.10, true } },   // 104.7
+                           0.002, 11);
+        for (auto& v : iq2) v += cf32(0.08f, 0.06f);   // ★ the RTL's DC spike at the hop's centre, as strong as a station (an RTL at scan gain)
+        FmHopEngine e6; FmHopEngine::Params q;
+        q.rateHz = fs2; q.centreHz = c2; q.dcHz = c2; q.rasterKhz = 100; q.loHz = 104.3e6; q.hiHz = 105.4e6; q.dwellSec = 4.0;
+        const auto h6 = runHop(e6, q, iq2);
+        const FmHit* hz = nullptr; bool edge = false, dc = false;
+        for (const auto& h : h6) { if (h.khz == 104700) hz = &h; if (h.khz == 104300) edge = true; if (h.khz == 104800) dc = true; }
+        ok(!edge, "★ no peak on the hop's first channel (104.3) from BBC 104.2's skirt below it");
+        ok(!dc, "★ no peak on 104.8 from the capture's DC spike");
+        ok(hz && hz->pi == 0xC0BB && fmConfirmed(hz->groups, hz->psComplete), "★ Horizon is found on 104.7 and named (C0BB)");
+    }
+
     std::printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }

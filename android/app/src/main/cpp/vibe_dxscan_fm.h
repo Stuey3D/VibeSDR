@@ -74,6 +74,7 @@ public:
         double rateHz = 2.4e6;
         double centreHz = 0;       // where the capture is tuned
         double dcHz = 0;           // where its DC sits (centre + the radio's offset)
+        double dcGuardHz = 15e3;   // ★ bins this close to DC are no station's power (pickPeaks)
         int    rasterKhz = 100;
         double loHz = 0, hiHz = 0; // the raster channels this hop owns (planFm)
         double settleSec = 0.05;   // ★ brief §4: discard after every retune (tune per device)
@@ -283,16 +284,28 @@ private:
         auto pickPeaks = [&] {
             // channel power on the raster: the bins within ±80 kHz of each channel, from the summed spectrum
             const double r = p_.rasterKhz * 1000.0;
-            struct C { double hz; double p; };
+            struct C { double hz; double p; bool own; };
             std::vector<C> cs;
             const int w = std::max(1, (int)std::lround(80e3 / binHz));
-            for (double f = p_.loHz; f <= p_.hiHz + 1; f += r) {
+            /* ★★ THE CAPTURE'S OWN DC IS NOT A STATION (the Sony, 2026-11-14: Horizon 104.7 lost to "104.8" — the hop's DC
+             *  at 104.85 sat inside 104.8's ±80 kHz and its spike outweighed a real S9 station 100 kHz away). The bins
+             *  within dcGuardHz of DC are left out of every channel's sum, the rest scaled up to the same width. */
+            const int kDc = (int)std::lround((p_.dcHz - p_.centreHz) / binHz), dcG = std::max(1, (int)std::lround(p_.dcGuardHz / binHz));
+            const int reach = p_.rasterKhz == 50 ? 2 : 1;   // a peak is the highest within ±100 kHz
+            /* ★★ AND THE CHANNELS JUST OUTSIDE THE HOP ARE MEASURED TOO (this comment was here; the code was not): a hop's
+             *  first channel holds the upper half of a strong station one channel below it (104.3 = BBC 104.2's skirt, 98.3
+             *  = R1 98.2's) and, with nothing below it to compare, was a "peak" — decoded as that station: the spill rows.
+             *  They are judged against, never picked (`own` false). */
+            for (double f = p_.loHz - reach * r; f <= p_.hiHz + reach * r + 1; f += r) {
                 const int k = (int)std::lround((f - p_.centreHz) / binHz);
-                double s = 0;
-                for (int d = -w; d <= w; ++d) s += pw[(size_t)(((k + d) % N + N) % N)];
-                cs.push_back({ f, s / std::max(1, specBlocks) });
+                double s = 0; int n = 0;
+                for (int d = -w; d <= w; ++d) {
+                    if (std::abs(k + d - kDc) <= dcG) continue;
+                    s += pw[(size_t)(((k + d) % N + N) % N)]; ++n;
+                }
+                if (n > 0) s *= double(2 * w + 1) / n;
+                cs.push_back({ f, s / std::max(1, specBlocks), f >= p_.loHz - 1 && f <= p_.hiHz + 1 });
             }
-            // also the channels just outside the hop, so a peak at the hop's edge is judged against its real neighbours
             if (cs.empty()) return;
             /* ★ THE FLOOR FROM THE BINS, NOT THE CHANNELS: on a busy band every raster channel is within 200 kHz of some
              *  station and a channel's ±80 kHz holds part of its skirt, so a percentile of CHANNEL powers measured skirts
@@ -307,9 +320,9 @@ private:
             const double floorP = std::max(1e-30, (double)bins[bins.size() / 10] / std::max(1, specBlocks) * (2 * w + 1));
             const double n2 = (double)N * (double)N / 4.0;   // ★ a full-scale tone through the Hann window: (Σw)² = (N/2)²
             stats_.floorDb = (float)(10.0 * std::log10(floorP / n2));
-            const int reach = p_.rasterKhz == 50 ? 2 : 1;   // a peak is the highest within ±100 kHz
             std::vector<C> peaks;
             for (size_t i = 0; i < cs.size(); ++i) {
+                if (!cs[i].own) continue;
                 const double snr = 10.0 * std::log10(cs[i].p / floorP);
                 if (snr < p_.minSnrDb) continue;
                 bool top = true;
