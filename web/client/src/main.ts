@@ -137,7 +137,7 @@ import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
 import { mpxPowerParts } from '../../../src/services/mpxPower';
 import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
-import { DecoderClient, type Spot, type DecoderMode, type CwList, type CwSpot, type SpotModeState } from './decoders';
+import { DecoderClient, type Spot, type DecoderMode, type CwList, type CwSignal, type CwSpot, type SpotModeState } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
 import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, type AskState } from '../../../src/services/dialChat';
@@ -197,6 +197,7 @@ import {
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../../../src/services/wholeModeResume';
 import { plainEnglish } from '../../../src/utils/cwVocab';
 import { cwHasWpmRange, cwWpmText } from '../../../src/utils/cwFormat';
+import { RTTY_WAITING, rttyShort, rttyJoin } from './rttySkim';   // ★★ V12 the RTTY skimmer's rows and card
 import { callHtml, wireQrz } from './qrzLink';
 import { autoBwOffered, shownEdges, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
 import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, modeLegend, type AmSyncId, type AmSyncState } from '../../../src/services/amSync';
@@ -861,6 +862,7 @@ async function loadAudioPolicy(httpBase: string) {
   aprsCap = false;             // ★ …nor an APRS decoder
   cwCap = false;               // ★ …nor a CW decoder
   pskCap = false;              // ★ …nor a PSK one
+  rttySkimCap = false;         // ★ …nor an RTTY skimmer
   dscCap = false;              // ★ …nor DSC
   sitoraCap = false;           // ★ …nor SITOR-A
   sameCap = false;             // ★ …nor EAS / SAME
@@ -920,6 +922,13 @@ async function loadAudioPolicy(httpBase: string) {
     { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
       if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
     pskCap = j.psk === true || !!decWhy.psk;     // ★ PSK31/63 (V12): this server's own decoder and skimmer
+    /* ★★ THE RTTY SKIMMER (V12 2026-11-14): RTTY's VIEW row (ONE SIGNAL / SKIMMER) only where this server has one and the
+     *  radio gives IQ — absent on an older server, false on an Icom or where the owner blocked RTTY (AGENTS.md: no dead
+     *  control). A SKIMMER left selected goes back to ONE SIGNAL. */
+    rttySkimCap = j.rttyskim === true && j.skim !== false;
+    { const row = document.getElementById('rttyView')?.closest('.mrow') as HTMLElement | null;
+      if (row) row.hidden = !rttySkimCap;
+      if (!rttySkimCap && rttySkim) (document.querySelector('#rttyView [data-rttyview="one"]') as HTMLButtonElement | null)?.click(); }
     { const b = document.querySelector('#decodersPanel [data-dec="psk"]') as HTMLElement | null;
       if (b) b.hidden = !pskCap || blockedModes.has('psk'); }
     /* ★★ V12 `skim`:false (an Icom — one demodulated audio channel, no IQ): the CW / PSK keys are ONE SIGNAL only, so the
@@ -3845,7 +3854,7 @@ function renderFrame(frameTs: number) {
    *  Tuning moves the dial as ever, and the server's skimmer follows it. */
   //   ★ The PSK skimmer's the same (V12 2026-10-26).
   const skim = kbSkimOn();
-  const segW = activeDec === 'psk' ? pskWidth : cwWidth;
+  const segW = activeDec === 'psk' ? pskWidth : activeDec === 'rtty' ? rttyWidth : cwWidth;
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (V12, 2026-10-26) — the extra-wide passband the server cuts and every
    *  mode's decoder reads its own dial from, drawn where it is (it need not be centred: an exact frequency typed inside
    *  the band moves the dial, the span stays on the modes). Drawn only, never sent, as the skimmer's. */
@@ -12917,16 +12926,21 @@ const CW_PLAIN_KEY = 'vibe.cwPlain';
 let cwPlainOn = (() => { try { return localStorage.getItem(CW_PLAIN_KEY) === '1'; } catch { return false; } })();
 let cwPlainQueued = false;
 /** A row's text as the PLAIN key says to show it. */
-function cwRead(t: string): string { return cwPlainOn && activeDec === 'cw' ? plainEnglish(t) : t; }
+function cwRead(t: string): string { return cwPlainOn && explainHere() ? plainEnglish(t) : t; }
+/** ★★ V12 (2026-11-14) EXPLAIN is CW's AND RTTY's — RTTY uses the same codes (Stuart: "the same CW translator needs to
+ *  be added as RTTY seems to use the same abbreviation codes as CW"): ONE dictionary (src/utils/cwVocab), one key, one
+ *  setting — the one-signal text, the skimmer's rows and its card. */
+function explainHere(): boolean { return activeDec === 'cw' || activeDec === 'rtty'; }
 /** The PLAIN key, the box's class and ONE SIGNAL's plain text, to the current state. */
 function syncCwPlain() {
   const key = document.getElementById('cwPlain');
-  const cw = activeDec === 'cw';
+  const cw = explainHere();
+  const what = activeDec === 'rtty' ? 'RTTY' : 'CW';
   // ★ EXPLAIN ↔ RAW: the legend names what a press does (Stuart, 2026-10-30) — never lit, the legend carries the state.
   if (key) {
     key.style.display = cw ? '' : 'none'; key.setAttribute('aria-pressed', String(cwPlainOn));
     key.textContent = cwPlainOn ? 'RAW' : 'EXPLAIN';
-    key.title = cwPlainOn ? 'Show the CW as sent' : 'Explain the CW in plain English (press again for the CW as sent)';
+    key.title = cwPlainOn ? `Show the ${what} as sent` : `Explain the ${what} in plain English (press again for the ${what} as sent)`;
   }
   document.getElementById('decBox')?.classList.toggle('cwplain', cw && cwPlainOn);
   queueCwPlainText();
@@ -12939,7 +12953,7 @@ function queueCwPlainText() {
     cwPlainQueued = false;
     const out = document.getElementById('cwPlainText');
     if (!out) return;
-    if (!(cwPlainOn && activeDec === 'cw')) { if (out.textContent) out.textContent = ''; return; }
+    if (!(cwPlainOn && explainHere())) { if (out.textContent) out.textContent = ''; return; }
     const raw = document.getElementById('decText')?.textContent || '';
     const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 24;
     out.textContent = plainEnglish(raw);
@@ -12951,6 +12965,7 @@ function toggleCwPlain() {
   try { localStorage.setItem(CW_PLAIN_KEY, cwPlainOn ? '1' : '0'); } catch { /* private mode */ }
   syncCwPlain();
   renderCw();
+  renderRttyCard();
 }
 /* ★★ PSK31/63 (V12, 2026-10-26) — the server's own (decoders/psk_skimmer.h), CW's two views exactly: ONE SIGNAL decodes
  *  the passband ('psk' — the signal nearest the middle of it is the box's, a PSK program's cursor) and lists every PSK
@@ -12960,10 +12975,20 @@ function toggleCwPlain() {
 let pskCap = false;
 let pskSkim = false;
 let pskWidth = 12000;
-/** A keyboard-mode list decoder (CW or PSK) is open. */
-function kbOn(): boolean { return activeDec === 'cw' || activeDec === 'psk'; }
+/* ★★ THE RTTY SKIMMER (V12, 2026-11-14 — docs/v12/RTTY-SKIMMER.md): RTTY's SKIMMER view ('rttyskim') lists every RTTY
+ *  signal across a segment centred on the dial in CW's list box — each listed as soon as it is heard ("RTTY detected —
+ *  waiting for parameter detection"), its text once the server has found its speed, shift and polarity (those words are
+ *  IN the text and scroll away with it). A row opens its CARD: the whole message from when it was first heard, the
+ *  settings at the top. Offered only where vibeserver.json says "rttyskim": true. */
+let rttySkimCap = false;
+let rttySkim = false;
+let rttyWidth = 48000;
+const rttyHist = new Map<number, string>();   // ★ each signal's whole text, joined from the list's windows (rttyJoin)
+let rttyCardId = 0;                            // the signal whose card is open (0 = none)
+/** A keyboard-mode list decoder (CW, PSK or the RTTY skimmer) is open. */
+function kbOn(): boolean { return activeDec === 'cw' || activeDec === 'psk' || (activeDec === 'rtty' && rttySkim); }
 /** …and it is the SKIMMER view (its VFO is drawn as its segment). */
-function kbSkimOn(): boolean { return (activeDec === 'cw' && cwSkim) || (activeDec === 'psk' && pskSkim); }
+function kbSkimOn(): boolean { return (activeDec === 'cw' && cwSkim) || (activeDec === 'psk' && pskSkim) || (activeDec === 'rtty' && rttySkim); }
 /** The middle of the listener's passband, audio Hz — ONE SIGNAL's cursor for PSK (USB 200–2800 → 1500). */
 function passbandCentreHz(): number {
   if (!spec) return 1500;
@@ -12975,6 +13000,7 @@ function passbandCentreHz(): number {
 function decExt(mode: string): Exclude<DecoderMode, null> {
   if (mode === 'cw') return cwSkim ? 'cwskim' : 'cw';
   if (mode === 'psk') return pskSkim ? 'pskskim' : 'psk';
+  if (mode === 'rtty') return rttySkim ? 'rttyskim' : 'rtty';
   return mode as Exclude<DecoderMode, null>;
 }
 function cwAge(ms: number): string {
@@ -13010,7 +13036,9 @@ function renderCwRows(rows: HTMLElement, l: typeof cwLast) {
   if (!l || !l.signals.length) {
     const d = document.createElement('div'); d.className = 'idle';
     const psk = activeDec === 'psk', what = psk ? 'PSK' : 'CW';
-    d.textContent = (psk ? pskSkim : cwSkim) ? `listening across the segment — each ${what} signal appears here as it is decoded`
+    d.textContent = activeDec === 'rtty' ? 'listening across the segment — each RTTY signal appears here as soon as it is heard, '
+                                         + 'then its text once its speed, shift and polarity are found'
+                  : (psk ? pskSkim : cwSkim) ? `listening across the segment — each ${what} signal appears here as it is decoded`
                   : psk ? 'listening — every PSK signal in your passband appears here; the one in the middle is decoded above'
                         : 'listening — tune a CW signal into the passband';
     rows.appendChild(d);
@@ -13029,6 +13057,7 @@ function renderCwRows(rows: HTMLElement, l: typeof cwLast) {
     r.dataset.ra = 'cw-s' + sg.id;
     // ★ PSK: its mode where CW has its speed, and its IMD (where measured) in the title
     const psk = sg.baud !== undefined;
+    if (sg.rtty) { rttyRow(r, sg); rows.appendChild(r); continue; }
     r.innerHTML =
       `<span class="f">${escapeHtml(cwFreq(sg))}</span>` +
       `<span class="c${sg.call ? '' : ' none'}">${sg.call ? callHtml(sg.call, escapeHtml) : '—'}</span>` +
@@ -13061,12 +13090,46 @@ function renderCwRows(rows: HTMLElement, l: typeof cwLast) {
       `<span class="f">${escapeHtml(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
       `<span class="c">${callHtml(s.callsign, escapeHtml)}</span>` +
       `<span class="ct">${escapeHtml(s.country)}</span>` +
-      `<span class="w">${s.mode ? escapeHtml(s.mode.replace('BPSK', 'PSK')) : cwWpmText(s)}</span>`;
+      `<span class="w">${s.mode ? escapeHtml(s.mode.replace('BPSK', 'PSK').replace(/^RTTY /, '')) : cwWpmText(s)}</span>`;   // ★ RTTY's box is all RTTY: "45/170" fits the column
     wireQrz(r);
     r.title = `${s.callsign} · ${s.how}${s.mode ? ' · ' + s.mode : ''} · ${Math.round(s.snr)} dB — tap to tune`;
     r.onclick = () => cwTune(s.frequency);
     sp.appendChild(r);
   }
+}
+/** ★ An RTTY skimmer row: `7002.00 · call · 45/170 R · SNR · quality · age`, then its text scrolling along — or, until its
+ *  parameters are found, "RTTY detected — waiting for parameter detection". A tap opens its card. */
+function rttyRow(r: HTMLElement, sg: CwSignal) {
+  const rt = sg.rtty!;
+  r.innerHTML =
+    `<span class="f">${escapeHtml(cwFreq(sg))}</span>` +
+    `<span class="c${sg.call ? '' : ' none'}">${sg.call ? callHtml(sg.call, escapeHtml) : '—'}</span>` +
+    `<span class="w">${escapeHtml(rttyShort(rt))}</span>` +
+    `<span class="s">${sg.snr >= 0 ? '+' : ''}${Math.round(sg.snr)} dB</span>` +
+    `<span class="q ${sg.q}">${rt.set ? sg.q : ''}</span>` +
+    `<span class="a">${cwAge(sg.last)}</span>` +
+    `<span class="tx${rt.set ? '' : ' wait'}"><bdi>${escapeHtml(rt.set ? cwRead(sg.text.trim()) : RTTY_WAITING)}</bdi></span>`;
+  wireQrz(r);
+  r.title = `${sg.call ? sg.call + (sg.country ? ' · ' + sg.country : '') + ' · ' : ''}${cwFreq(sg)} kHz · `
+          + (rt.set ? rt.settings : `${Math.round(rt.shift)} Hz shift — its speed and polarity are being worked out`)
+          + ` · tones ${Math.round(sg.snr)} dB over the noise · ${sg.active ? 'heard' : 'last heard'} ${cwAge(sg.last)} ago — tap for the whole message`;
+  r.onclick = (e) => { if ((e.target as HTMLElement).closest('a')) return; openRttyCard(sg.id); };
+}
+/** ★ The CARD: one signal's whole message (from when it was first heard), its settings at the top, TUNE and CLOSE. */
+function openRttyCard(id: number) { rttyCardId = id; renderRttyCard(); }
+function renderRttyCard() {
+  const card = document.getElementById('rttyCard');
+  if (!card) return;
+  const sg = rttyCardId && activeDec === 'rtty' && rttySkim ? cwLast?.signals.find((x) => x.id === rttyCardId) : undefined;
+  card.classList.toggle('on', !!sg);
+  $('cwList').classList.toggle('card', !!sg);
+  if (!sg || !sg.rtty) return;
+  $('rttyCardHead').textContent = `${cwFreq(sg)} kHz${sg.call ? ' · ' + sg.call + (sg.country ? ' (' + sg.country + ')' : '') : ''}`;
+  $('rttyCardSet').textContent = sg.rtty.set ? sg.rtty.settings : RTTY_WAITING;
+  const pre = $('rttyCardText');
+  const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+  pre.textContent = cwRead(rttyHist.get(sg.id) || (sg.rtty.set ? sg.text : ''));
+  if (atBottom) pre.scrollTop = pre.scrollHeight;
 }
 /** ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (cwList readAnchorsOf / readAnchorRestore; Stuart, 2026-10-31: "do not
  *  keep pulling the view away from me when I am reading a message"). Rebuild the keyed rows ([data-ra]) inside the scroll
@@ -13235,6 +13298,7 @@ let grpPrev = { tot: 0, at: 0 };
 
 /** Params for the current mode — the shim's startDecoder reads these. */
 function decParams(mode: string): Record<string, unknown> {
+  if (mode === 'rtty' && rttySkim) return { width: rttyWidth };   // ★ the skimmer finds every signal's settings itself
   if (mode === 'rtty') {
     return {
       center_frequency: 1000, shift: rtty.shift, baud_rate: rtty.baud,
@@ -13331,7 +13395,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (node.length > 8000 + DEC_TRIM_SLACK) node.deleteData(0, node.length - 8000);
       if (atBottom) el.scrollTop = el.scrollHeight;
       setDecLive(true);
-      if (activeDec === 'cw' && cwPlainOn) queueCwPlainText();   // ★ V12 the PLAIN key's reading of ONE SIGNAL
+      if (explainHere() && cwPlainOn) queueCwPlainText();   // ★ V12 the EXPLAIN key's reading of ONE SIGNAL (CW and RTTY)
     },
     onState: (st) => {
       // ★ Its status is the broadcast's — see renderNavtex. A lock lost mid-message ends it [end lost] (NickB 2026-10-12:
@@ -13348,6 +13412,7 @@ function initDecoders(host: string, auth: AuthState) {
       }
       decStateText = activeDec === 'dsc' ? (st ? 'receiving a call…' : 'listening…')
                    : activeDec === 'jtty' ? (st ? 'decoding…' : 'listening…')
+                   : activeDec === 'rtty' && rttySkim ? (st >= 3 ? 'decoding…' : st ? 'RTTY found — working out its settings…' : 'listening…')
                    : kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
       if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
@@ -13472,7 +13537,13 @@ function initDecoders(host: string, auth: AuthState) {
       dscCalls.push(c); renderDsc(); setDecLive(true);
     },
     //   (PSK's arrive here too, with its mode — decoders.ts; one list box serves both)
-    onCwSignals: (list) => { if (!kbOn()) return; cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active)); },
+    onCwSignals: (list) => {
+      if (!kbOn()) return;
+      // ★ the RTTY skimmer: each signal's window joined onto its history, for the card
+      if (activeDec === 'rtty') for (const s of list.signals) if (s.rtty?.set && s.text) rttyHist.set(s.id, rttyJoin(rttyHist.get(s.id) ?? '', s.text));
+      cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active));
+      if (activeDec === 'rtty') renderRttyCard();
+    },
     onCwSpot: (sp) => {
       if (!kbOn()) return;
       const i = cwSpotsSeen.findIndex((o) => o.callsign === sp.callsign);
@@ -13630,6 +13701,30 @@ function initDecoders(host: string, auth: AuthState) {
   syncRttyControls();   // ★ the page's buttons show the starting settings (AUTO), not the HTML's defaults
   const usosBtn = $<HTMLButtonElement>('rttyUsos');
   usosBtn.onclick = () => { rtty.usos = !rtty.usos; rtty.auto = false; syncRttyControls(); reattachIf('rtty'); };
+  // ★★ V12 the RTTY skimmer: ONE SIGNAL (the settings below) ↔ SKIMMER (every RTTY signal across a segment, each one's
+  //    settings found for it — the manual rows do not apply and are hidden), and the skimmer's segment.
+  const rttySkimHint = () => {
+    $('rttySettings').classList.toggle('skim', rttySkim);
+    $('rttyWidthRow').hidden = !rttySkim;
+    $('rttySkimHint').hidden = !rttySkim;
+    $('rttySkimHint').innerHTML = `Every RTTY signal ${rttyWidth / 2000} kHz either side of your dial — each listed as soon as `
+      + 'it is heard, then decoded once its speed, shift and polarity are found (they are written into its text). '
+      + 'Tap a row for the whole message.';
+  };
+  segButtons('rttyView', 'rttyview', (v) => {
+    rttySkim = v === 'skim'; rttySkimHint();
+    if (activeDec === 'rtty') { cwLast = null; rttyHist.clear(); rttyCardId = 0; showDecBox('rtty'); reattachIf('rtty'); }
+  });
+  segButtons('rttyWidth', 'rttywidth', (v) => {
+    rttyWidth = Number(v) || 48000; rttySkimHint();
+    if (rttySkim) { cwLast = null; rttyHist.clear(); rttyCardId = 0; renderCw(); renderRttyCard(); reattachIf('rtty'); }
+  });
+  rttySkimHint();
+  $('rttyCardClose').onclick = () => { rttyCardId = 0; renderRttyCard(); };
+  $('rttyCardTune').onclick = () => {
+    const sg = cwLast?.signals.find((x) => x.id === rttyCardId);
+    if (sg && spec && sg.hz > 0) { decTune(clampTune(Math.round(sg.hz))); renderFreq(); }
+  };
   segButtons('wefaxLpm', 'lpm', (v) => { wefaxLpm = Number(v); reattachIf('wefax'); });
   // ★ CW: one signal ↔ skimmer, and the skimmer's segment — each a re-attach (a different decoder on the server).
   const cwHint = () => {
@@ -13716,7 +13811,7 @@ function initDecoders(host: string, auth: AuthState) {
   $('cwPlain').onclick = () => toggleCwPlain();
   $('decClr').onclick = () => {
     $('decText').textContent = '';
-    if (activeDec === 'cw') queueCwPlainText();
+    if (explainHere()) queueCwPlainText();
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
     if (activeDec === 'hell') clearHellPage();
@@ -14272,6 +14367,7 @@ function showDecBox(what: string) {
                             : what === 'rds'   ? 'ADV RDS'
                             : what === 'cw'    ? (cwSkim ? 'CW SKIMMER' : 'CW')
                             : what === 'psk'   ? (pskSkim ? 'PSK SKIMMER' : 'PSK')
+                            : what === 'rtty' && rttySkim ? 'RTTY SKIMMER'
                             : what === 'aprs'  ? (aprsBaud === 300 ? 'APRS · HF 300' : 'APRS')
                             : what === 'sitora' ? 'SITOR-A'
                             : isTextFamily(what) ? TEXT_FAMILY_KEY[what]
@@ -14295,8 +14391,10 @@ function showDecBox(what: string) {
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
   // ★ CW: the list under the primary signal's text (ONE SIGNAL), or the list alone (SKIMMER — it is all list).
-  const isCw = what === 'cw' || what === 'psk';   // ★ PSK's list is the same box
-  const listSkim = (what === 'cw' && cwSkim) || (what === 'psk' && pskSkim);
+  const isCw = what === 'cw' || what === 'psk' || (what === 'rtty' && rttySkim);   // ★ PSK's list and the RTTY skimmer's are the same box
+  const listSkim = (what === 'cw' && cwSkim) || (what === 'psk' && pskSkim) || (what === 'rtty' && rttySkim);
+  if (what !== 'rtty' || !rttySkim) { rttyHist.clear(); rttyCardId = 0; }
+  renderRttyCard();
   $('cwList').classList.toggle('on', isCw);
   // ★ APRS: the station list and the packets are the whole box (no text pane); MAP opens the map
   const isAprs = what === 'aprs';
@@ -14305,7 +14403,7 @@ function showDecBox(what: string) {
   if (isAprs) { $('decText').classList.add('off'); aprsLast = null; aprsLog.length = 0; aprsTrails.clear(); renderAprs(); }
   else aprsView?.hide();
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
-  syncCwPlain();   // ★ V12 the PLAIN key: CW only
+  syncCwPlain();   // ★ V12 the EXPLAIN key: CW and RTTY
   const isDsc = what === 'dsc';
   $('dscList').classList.toggle('on', isDsc);
   if (isDsc) { dscCalls.clear(); renderDsc(); }

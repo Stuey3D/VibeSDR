@@ -161,6 +161,13 @@ export const CW_TERMS: CwTerm[] = [
   { code: 'AGE', kind: 'abbr', plain: 'age', meaning: 'Age (the operator\'s).' },
   { code: 'BURO', kind: 'abbr', plain: 'the QSL bureau', meaning: 'The QSL bureau, which posts QSL cards for its members.' },
   { code: 'LOTW', kind: 'abbr', plain: 'Logbook of the World', meaning: 'Logbook of the World — online QSL confirmation.' },
+  // ── RTTY's own (V12 2026-11-14: RTTY uses the same codes as CW — Stuart — and these few besides; one list for both) ──
+  { code: 'RYRY', kind: 'term', plain: 'test pattern', meaning: 'RY repeated is the RTTY test pattern: R and Y are opposite bit patterns in the teleprinter code, so it exercises every bit — sent to check tuning or to say "I am here".',
+    example: 'RYRYRYRY CQ CQ DE G4ABC', aliases: ['RYRYRY', 'RYRYRYRY', 'RYRYRYRYRY', 'RYRYRYRYRYRY'] },
+  { code: 'QTC', kind: 'q', plain: 'messages', meaning: 'Messages — "I have messages for you". In the WAE contest a QTC is a short logged report (time, call, serial) passed from one station to another.',
+    example: 'QTC 62/10 — QTC series 62, ten messages', ask: 'have you messages for me?' },
+  { code: 'NNNN', kind: 'term', plain: 'end of message', meaning: 'End of message — teleprinter traffic (weather, NAVTEX) ends with NNNN.' },
+  { code: 'ZCZC', kind: 'term', plain: 'start of message', meaning: 'Start of message — teleprinter traffic (weather, NAVTEX) begins with ZCZC.' },
 ];
 
 /** Look-alikes the guide warns about. */
@@ -180,7 +187,7 @@ export const CW_LOOKALIKES: { title: string; text: string }[] = [
 ];
 
 /** ★ The terms guide's opening lines (app CwTermsGuide + web cwGuide.ts — one wording). */
-export const CW_GUIDE_INTRO = 'The codes and short words used in Morse (CW) contacts. The PLAIN key in the CW skimmer box reads them for you.';
+export const CW_GUIDE_INTRO = 'The codes and short words used in Morse (CW) and RTTY contacts. The EXPLAIN key in the CW and RTTY boxes reads them for you.';
 export const CW_GUIDE_RST_LINE = 'RST is the signal report: R = readability (1–5), S = strength (1–9), T = tone (1–9). 599 is perfect.';
 export const CW_KIND_LABEL: Record<CwKind, string> = { q: 'Q-CODE', abbr: 'ABBREVIATION', prosign: 'PROSIGN', term: 'TERM', number: 'NUMBER' };
 

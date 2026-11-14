@@ -120,6 +120,7 @@ inline std::string decTitle(const std::string& view) {
     }
     if (view == "cw") return u.cwSkim ? "CW SKIMMER" : "CW";
     if (view == "psk") return u.pskSkim ? "PSK SKIMMER" : "PSK";
+    if (view == "rtty" && u.rttySkim) return "RTTY SKIMMER";
     if (view == "aprs") return u.aprsBaud == 300 ? "APRS · HF 300" : "APRS";
     if (view == "time") { for (auto& t : kTimeStations) if (u.timeStation == t.id) return std::string("TIME · ") + upper(t.id); }
     if (view == "refused") return "DECODER";
@@ -143,8 +144,10 @@ inline bool decKey(Ctx& c, const std::string& id, Rect r, const std::string& lab
  *  to see a new one. The highlight still brings its own row into view (Scroller::follow). */
 struct DecAnchor { std::vector<std::pair<std::string, float>> rows; };
 
-/** ★ CW (not PSK — typed, not abbreviated — nor JTTY) read in plain English: the EXPLAIN key (settings cwPlain). */
-inline bool decCwPlain(const App& a) { return a.set_.cwPlain && decUi().active == "cw"; }
+/** ★ CW and RTTY (not PSK — typed, not abbreviated — nor JTTY) read in plain English: the EXPLAIN key (settings cwPlain).
+ *  ★ V12 2026-11-14 RTTY too (Stuart: "RTTY seems to use the same abbreviation codes as CW") — the SAME reading
+ *  (cw_plain.h, generated from the app's cwVocab), the one-signal text, the skimmer's rows and a row's history. */
+inline bool decCwPlain(const App& a) { return a.set_.cwPlain && (decUi().active == "cw" || decUi().active == "rtty"); }
 
 /** A scrolling column of full-width rows (registered under prefix + key(k)); returns the row pressed, or -1.
  *  `hold` (optional): keep the rows being read in place as the list changes (DecAnchor). */
@@ -274,14 +277,15 @@ inline DecAnchor& decSigAnchor() { static DecAnchor h; return h; }
 /** CW / PSK / JTTY signals: frequency · speed or mode · SNR · call · text — press = tune to it. */
 inline void decPaneSignals(App& a, Ctx& c, const RadioState& s, Rect view) {
     DecUi& u = decUi();
-    const bool jtty = u.view == "jtty", psk = u.view == "psk";
-    if (u.sigs.empty()) { decNone(c, view, jtty ? "listening — every JTTY signal in your passband is listed here as it starts" : psk ? "listening — every PSK signal in your passband is listed here" : "listening — every CW signal in your passband is listed here"); return; }
+    const bool jtty = u.view == "jtty", psk = u.view == "psk", rtty = u.view == "rtty";
+    if (u.sigs.empty()) { decNone(c, view, jtty ? "listening — every JTTY signal in your passband is listed here as it starts" : psk ? "listening — every PSK signal in your passband is listed here"
+                                         : rtty ? "listening — every RTTY signal in the segment is listed here as soon as it is heard" : "listening — every CW signal in your passband is listed here"); return; }
     const int hit = decRows(c, decListScroll(), view, (int)u.sigs.size(), 30, "dec.sig.", [&](int k) { return std::to_string((long long)u.sigs[(size_t)k].id); },
         [&](int k, Rect rr, bool) {
             const DecSig& g = u.sigs[(size_t)k];
             decRowBg(c, rr, g.active);
             std::string spd;
-            if (jtty) spd = std::to_string((int)g.snr) + " dB";
+            if (jtty || rtty) spd = std::to_string((int)g.snr) + " dB";
             else if (psk) spd = (g.baud == 63 ? "BPSK63 " : "BPSK31 ") + std::to_string((int)g.snr) + " dB";
             else {
                 const int lo = (int)std::lround(std::min(g.wpmLo, g.wpmHi)), hi = (int)std::lround(std::max(g.wpmLo, g.wpmHi));
@@ -296,13 +300,15 @@ inline void decPaneSignals(App& a, Ctx& c, const RadioState& s, Rect view) {
             c.tc.draw(c.g, c.f.small, spd, rr.r() - 8, cy - c.f.small.lineHeight() / 2.f, th::dim, 2);
             float x = rr.x + 8 + 92;
             if (!g.call.empty()) x += (float)c.tc.draw(c.g, c.f.body, g.call, x, cy - c.f.body.lineHeight() / 2.f, g.active ? th::white : th::white68) + 12;
-            const std::string tx = !psk && !jtty && decCwPlain(a) ? cwPlainEnglish(g.text) : g.text;
+            // ★ RTTY: the settings found are inside the text ("[45 baud / 170 Hz / Reverse] ") and scroll away with it
+            const std::string tx = rtty ? (g.set ? (decCwPlain(a) ? cwPlainEnglish(g.text) : g.text) : std::string("RTTY detected — waiting for parameter detection"))
+                                 : !psk && !jtty && decCwPlain(a) ? cwPlainEnglish(g.text) : g.text;
             c.tc.draw(c.g, c.f.body, decFitTail(c, c.f.body, tx, (int)(rr.r() - 8 - tw - x)), x, cy - c.f.body.lineHeight() / 2.f,
-                      g.active ? th::white : th::white68);
+                      rtty && !g.set ? th::amber : g.active ? th::white : th::white68);
         }, &decSigAnchor());
     if (hit >= 0) {
         const DecSig& g = u.sigs[(size_t)hit];
-        // ★★ CW: a press READS the signal (its own history, RTTY's reading — decPaneRead); TUNE there tunes to it
+        // ★★ CW and the RTTY skimmer: a press READS the signal (its own history — decPaneRead); TUNE there tunes to it
         if (!psk && !jtty) { decReadSig((long long)g.id); a.nav_.forget("dec"); return; }
         if (!(g.hz > 0)) return;
         if (jtty) decTune(a, s, g.hz - 1500, "usb");          // jtty.ts jttyTuneFor: tone 0 mid-passband
@@ -324,10 +330,13 @@ inline void decPaneRead(App& a, Ctx& c, const RadioState& s, Rect view) {
     std::string head = g ? (g->hz > 0 ? decKHz(g->hz) + " kHz" : std::to_string((int)g->audio) + " Hz") : std::string("no longer heard");
     if (g && !g->call.empty()) head += "  " + g->call;
     if (g && g->wpm > 0) head += "  · " + std::to_string((int)std::lround(g->wpm)) + " wpm";
+    // ★ the RTTY skimmer: the settings found, at the top of its messages (the card)
+    if (g && u.view == "rtty") head += g->set && !g->settings.empty() ? "  · " + g->settings : std::string("  · waiting for parameter detection");
     const float hh = (float)c.f.small.lineHeight() + 2;
     c.tc.draw(c.g, c.f.small, decFit(c, c.f.small, head, (int)view.w - 16), view.x + 8, view.y, g ? decQCol(g->q) : th::dim);
     const Rect body{view.x, view.y + hh, view.w, view.h - hh};
-    decDrawLog(a, c, body, "nothing decoded from this signal yet — its text appears here as it is heard", &u.sigLog);
+    decDrawLog(a, c, body, u.view == "rtty" && g && !g->set ? "RTTY detected — waiting for parameter detection; its text appears here, from when it was first heard, once its settings are found"
+                                                                : "nothing decoded from this signal yet — its text appears here as it is heard", &u.sigLog);
     (void)s;
 }
 /** The callsigns heard (cw_spot / psk_spot / jtty_spot), newest first — press = tune. */
@@ -345,7 +354,7 @@ inline void decPaneCalls(App& a, Ctx& c, const RadioState& s, Rect view) {
     if (hit >= 0) {
         const DecCall& x = u.calls[(size_t)hit];
         if (u.view == "jtty") decTune(a, s, x.hz - 1500, "usb");
-        else if (u.view == "psk") decTune(a, s, x.hz - decPassbandCentre(s), "usb");
+        else if (u.view == "psk" || u.view == "rtty") decTune(a, s, x.hz - decPassbandCentre(s), "usb");
         else decTune(a, s, x.hz, "cwu");
     }
 }
@@ -486,6 +495,19 @@ inline void decOptionRows(App& a, const RadioState& s, const std::string& id, st
     };
     auto hint = [&](const std::string& t) { if (t.empty()) return; DecPRow r{DecPRow::HINT}; r.id = "h." + id; r.label = t; out.push_back(std::move(r)); };
     if (id == "rtty") {
+        // ★★ V12 VIEW: ONE SIGNAL (RTTY AUTO / the settings below) or SKIMMER — only where the server has it ("rttyskim")
+        //    and its radio gives IQ ("skim"), as CW / PSK (AGENTS.md: no control that cannot work here)
+        bool skimOk; { std::lock_guard<std::mutex> lk(u.capMtx); auto it = u.caps.find("rttyskim"); skimOk = u.skimOk && it != u.caps.end() && it->second; }
+        if (!skimOk && u.rttySkim) { u.rttySkim = false; decReattachSoon("rtty"); }
+        if (skimOk) choice("rtty.view", "VIEW", {"ONE SIGNAL", "SKIMMER"}, u.rttySkim ? 1 : 0, [](int i) {
+            DecUi& x = decUi(); x.rttySkim = i == 1; x.sub = 0; decReadSig(0); decReattachSoon("rtty"); });
+        if (skimOk && u.rttySkim) {
+            static const int ws[] = {24000, 48000, 96000};
+            int sel = 1; for (int i = 0; i < 3; i++) if (u.rttyWidth == ws[i]) sel = i;
+            choice("rtty.w", "SEGMENT", {"24 kHz", "48 kHz", "96 kHz"}, sel, [](int i) { decUi().rttyWidth = ws[i]; decReattachSoon("rtty"); });
+            hint("Every RTTY signal in the segment is listed as soon as it is heard, then its speed, shift and polarity are found for it — each signal its own. Press a row to read its text, the settings at the top.");
+            return;   // ★ the one-signal settings below do not apply: the skimmer finds each signal's own
+        }
         auto& R = u.rtty;
         // PRESET (RTTY_PRESETS — verbatim from the app): AUTO is the default, one press
         struct P { const char* k; double sh, bd; const char* enc; bool inv; };
@@ -807,6 +829,7 @@ inline std::vector<std::string> decSubs(const std::string& view) {
     const DecUi& u = decUi();
     if (view == "cw") return u.cwSkim ? std::vector<std::string>{"SIGNALS", "CALLS"} : std::vector<std::string>{"TEXT", "SIGNALS", "CALLS"};
     if (view == "psk") return u.pskSkim ? std::vector<std::string>{"SIGNALS", "CALLS"} : std::vector<std::string>{"TEXT", "SIGNALS", "CALLS"};
+    if (view == "rtty" && u.rttySkim) return {"SIGNALS", "CALLS"};
     if (view == "jtty") return {"SIGNALS", "CALLS"};
     if (view == "aprs") return {"STATIONS", "PACKETS"};
     return {};
@@ -835,7 +858,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
         if (c.nav.backPressed()) { u.pane = DecUi::P_OUT; a.nav_.forget("dec"); }
     }
     // ★ …and a CW signal being read goes back to the list first (its row keeps the highlight)
-    if (grabbed && !a.sheets_.empty() && a.sheets_.back() == App::S_DEC && u.pane == DecUi::P_OUT && u.readSig && u.view == "cw" && c.nav.input().back) {
+    if (grabbed && !a.sheets_.empty() && a.sheets_.back() == App::S_DEC && u.pane == DecUi::P_OUT && u.readSig && (u.view == "cw" || (u.view == "rtty" && u.rttySkim)) && c.nav.input().back) {
         if (c.nav.backPressed()) { const long long id = u.readSig; decReadSig(0); a.nav_.setFocus("dec", "dec.sig." + std::to_string(id)); }
     }
     // ★ a picture full screen, or the gallery: drawn from the sheet loop (decDrawFull) — the box draws nothing under it.
@@ -881,8 +904,8 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (d && d->kind == DK_PICTURE) { std::vector<PicKey> pk; decPicKeys(a, view, pk); for (auto& k : pk) ks.push_back({k.id, k.label, k.act, k.on}); }
             ks.push_back({"dec.k.pick", "DECODERS", 1, false});
             // ★★ EXPLAIN ↔ RAW (the app's key, Stuart 2026-10-30): the legend names what a press DOES; CW only
-            if (view == "cw") ks.push_back({"dec.k.plain", a.set_.cwPlain ? "RAW" : "EXPLAIN", 4, false});
-            if (view == "cw" && u.readSig && decSubs(view)[(size_t)std::max(0, std::min(u.sub, (int)decSubs(view).size() - 1))] == "SIGNALS")
+            if (view == "cw" || view == "rtty") ks.push_back({"dec.k.plain", a.set_.cwPlain ? "RAW" : "EXPLAIN", 4, false});   // ★ and RTTY's (2026-11-14)
+            if ((view == "cw" || (view == "rtty" && u.rttySkim)) && u.readSig && decSubs(view)[(size_t)std::max(0, std::min(u.sub, (int)decSubs(view).size() - 1))] == "SIGNALS")
                 ks.push_back({"dec.k.tune", "TUNE", 5, false});
             // ★ CLR only where there is something it clears (an external decoder: only with its own clear action)
             if (view != "refused" && (!xv || xv->clear)) ks.push_back({"dec.k.clr", "CLR", 2, false});
@@ -910,12 +933,12 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
         else if (d && d->kind == DK_PICTURE) decPicPane(a, c, s, body, grabbed);
         else if (d && d->kind == DK_DSC) decPaneDsc(a, c, s, body);
         else if (d && d->kind == DK_APRS) decPaneAprs(a, c, s, body);
-        else if (d && (d->kind == DK_KB || d->kind == DK_JTTY)) {
+        else if (d && (d->kind == DK_KB || d->kind == DK_JTTY || (view == "rtty" && u.rttySkim))) {
             const auto subs = decSubs(view);
             const std::string sp = u.sub >= 0 && u.sub < (int)subs.size() ? subs[(size_t)u.sub] : "SIGNALS";
             if (sp == "TEXT") decDrawLog(a, c, body, "listening — the signal in the middle of your passband is decoded here");
             else if (sp == "CALLS") decPaneCalls(a, c, s, body);
-            else if (view == "cw" && u.readSig) decPaneRead(a, c, s, body);
+            else if ((view == "cw" || view == "rtty") && u.readSig) decPaneRead(a, c, s, body);
             else decPaneSignals(a, c, s, body);
         } else {
             std::string idle = u.status;
@@ -938,9 +961,13 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); decRelease(a); }
             else a.nav_.forget("dec");
         } else if (act == 4) { a.set_.cwPlain = a.set_.cwPlain ? 0 : 1; a.dirty();
-            a.toast(a.set_.cwPlain ? "CW in plain English — RAW shows it as sent" : "CW as sent");
+            { const char* w = decUi().active == "rtty" ? "RTTY" : "CW";
+              a.toast(a.set_.cwPlain ? std::string(w) + " in plain English — RAW shows it as sent" : std::string(w) + " as sent"); }
         } else if (act == 5) {
-            for (auto& g : u.sigs) if ((long long)g.id == u.readSig && g.hz > 0) decTune(a, s, g.hz, "cwu");
+            for (auto& g : u.sigs) if ((long long)g.id == u.readSig && g.hz > 0) {
+                if (view == "rtty") decTune(a, s, g.hz - decPassbandCentre(s), "usb");   // ★ its tones mid-passband
+                else decTune(a, s, g.hz, "cwu");
+            }
         } else if (act == 50) { mapOpenDecoder(a, view);
         } else if (act == 10) { u.view = view == "spots" ? u.active : "spots"; u.sub = 0; decListScroll() = {}; decSigAnchor() = {}; a.nav_.forget("dec"); }
         else if (act >= 60) decPicKeyPress(a, act, view);

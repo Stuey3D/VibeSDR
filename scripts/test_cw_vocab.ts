@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs';
 import {
-  CW_LOOKALIKES, CW_TERMS, matchCwLookalikes, plainEnglish, searchCwTerms, CW_GUIDE_RST_LINE,
+  CW_LOOKALIKES, CW_TERMS, matchCwLookalikes, plainEnglish, searchCwTerms, CW_GUIDE_RST_LINE, cwTerm,
 } from '../src/utils/cwVocab.ts';
 import { cwHasWpmRange, cwWpmRangeOf, cwWpmText, qrzBaseCall, qrzCallUrl, QRZ_HOME } from '../src/utils/cwFormat.ts';
 import { kbRateText, kbSpotRateText, parseCwSignals, parseCwSpot } from '../src/services/cwList.ts';
@@ -110,6 +110,23 @@ eq('the home page', QRZ_HOME, 'https://www.qrz.com');
   const html = rd('web/client/index.html');
   ok('web: #cwPlain beside #decClr', /id="decClr"[^\n]*>CLR<\/button>\s*\n(?:\s*<!--[^\n]*-->\s*\n)?\s*<button class="btn" id="cwPlain"/.test(html));
   ok('web: #cwPlainText follows #decText', /<pre id="decText"><\/pre>\s*\n\s*<pre id="cwPlainText"/.test(html));
+}
+
+// ── V12 2026-11-14: RTTY reads through the SAME dictionary (Stuart: "RTTY seems to use the same abbreviation codes as CW") ──
+{
+  for (const code of ['RYRY', 'RYRYRY', 'QTC', 'BTU', 'NNNN', 'ZCZC']) ok(`vocab: ${code} is one entry`, !!cwTerm(code));
+  ok('vocab: no code twice', new Set(CW_TERMS.map((t) => t.code)).size === CW_TERMS.length);
+  const p = plainEnglish('RYRYRYRY CQ TEST DE G4ABC G4ABC');
+  ok(`plain: an RTTY CQ ("${p}")`, /test pattern/.test(p) && /G4ABC/.test(p) && /contest/.test(p));
+  ok('plain: QTC and NNNN', /messages/.test(plainEnglish('QTC 62/10')) && /end of message/.test(plainEnglish('73 NNNN')));
+  const web = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  ok('web: EXPLAIN is CW\'s and RTTY\'s', /function explainHere\(\): boolean \{ return activeDec === 'cw' \|\| activeDec === 'rtty'; \}/.test(web)
+     && /cwRead\(sg\.text\.trim\(\)\) : RTTY_WAITING/.test(web) && /pre\.textContent = cwRead\(/.test(web));
+  const panel = readFileSync(new URL('../src/components/DecoderPanel.tsx', import.meta.url), 'utf8');
+  ok('app: the EXPLAIN key on RTTY too, and its one-signal text read through plainEnglish',
+     /isCwOnly = \(isCw && activeDecoder === 'cw'\) \|\| activeDecoder === 'rtty'/.test(panel) && /activeDecoder === 'rtty' && cwPlain \? plainEnglish\(decoderText\)/.test(panel));
+  const hh = readFileSync(new URL('../handheld-ui/src/dec_box.h', import.meta.url), 'utf8');
+  ok('R36S: EXPLAIN on RTTY too', /decUi\(\)\.active == "cw" \|\| decUi\(\)\.active == "rtty"/.test(hh) && /view == "cw" \|\| view == "rtty"\) ks\.push_back\(\{"dec\.k\.plain"/.test(hh));
 }
 
 console.log(`${fails ? '✗' : '✓'} test_cw_vocab: ${passes} passed, ${fails} failed`);

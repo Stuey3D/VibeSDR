@@ -336,6 +336,7 @@ std::string toJson(const Config& c) {
     B("oneRadioPerIp", c.oneRadioPerIp);
     N("maxRadiosPerIp", c.maxRadiosPerIp);
     N("decoderMax", c.decoderMax);
+    N("rttySkimWorkers", c.rttySkimWorkers);
     N("port", c.port);
     j += "  \"web\": " + std::string(c.web ? "true" : "false") + "\n}\n";
     return j;
@@ -462,6 +463,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     if (getNum(s, "maxRadiosPerIp", d)) c.maxRadiosPerIp = (int)(d < 0 ? 0 : d);
     c.oneRadioPerIp = (c.maxRadiosPerIp != 0);
     if (getNum(s, "decoderMax", d)) c.decoderMax = (int)(d < 0 ? 0 : d);
+    if (getNum(s, "rttySkimWorkers", d)) c.rttySkimWorkers = (int)(d < 0 ? 0 : d > 8 ? 8 : d);
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
     if (getNum(s, "port", d))        c.port = (int)d;
     getBool(s, "web", c.web);
@@ -778,6 +780,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     out.oneRadioPerIp = one.oneRadioPerIp;
     out.maxRadiosPerIp = one.maxRadiosPerIp;
     out.decoderMax   = one.decoderMax;
+    out.rttySkimWorkers = one.rttySkimWorkers;
     out.port         = one.port;
     out.web          = one.web;
 
@@ -864,6 +867,7 @@ std::string toJson(const ServerConfig& c) {
     B("oneRadioPerIp", c.oneRadioPerIp);
     N("maxRadiosPerIp", c.maxRadiosPerIp);
     N("decoderMax", c.decoderMax);
+    N("rttySkimWorkers", c.rttySkimWorkers);
     // ★★ V12 the gallery — machine-level, read below too.
     N("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     // ★ The owner's standing message for the landing screen, and its link. See ServerConfig.
@@ -957,6 +961,8 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     c.oneRadioPerIp = (c.maxRadiosPerIp != 0);
     I("decoderMax", c.decoderMax);
     if (c.decoderMax < 0) c.decoderMax = 0;
+    I("rttySkimWorkers", c.rttySkimWorkers);
+    c.rttySkimWorkers = std::max(0, std::min(8, c.rttySkimWorkers));
     I("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     if (c.galleryMb < 0) c.galleryMb = 0;
     if (c.galleryMb > 1024 * 1024) c.galleryMb = 1024 * 1024;

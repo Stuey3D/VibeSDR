@@ -778,6 +778,13 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           once. The next one past the limit is refused and the listener is told why. The benchmark
           above measures each decoder on this machine and sets this for you; blank uses a cautious
           figure for this hardware.</div></label>
+      <!-- ★★ V12 THE RTTY SKIMMER'S SEARCH WORKERS (docs/v12/RTTY-SKIMMER.md §3). The benchmark fills it in at first setup. -->
+      <label><span class="lbl">RTTY skimmer: signals set up at once</span>
+        <input type="number" id="rttySkimWorkers" min="0" max="8" placeholder="automatic">
+        <div class="hint">The RTTY skimmer lists every RTTY signal it hears straight away, then works out each one's
+          speed, shift and polarity in turn. This is how many it works out at the same time &mdash; one on a Raspberry
+          Pi 2 or a handheld, two on a Pi 4 or 5, four on a PC or Mac. The benchmark above sets it for you; blank uses
+          the figure for this hardware.</div></label>
       <!-- ★★ V12 THE GALLERY (2026-10-22): what the decoders heard — background decoding's, and a listener's own.
            MACHINE-level: one folder every radio writes into. The owner sets its size beside the space left on the
            disk (Stuart: "showing the REMAINING disk/SD space beside it"); when it is full the OLDEST items go. ★ 2026-11-01:
@@ -2445,6 +2452,13 @@ function benchApplyDefaults() {
     $("decoderMax").value = String(dec);
     benchNote($("decoderMax"), "Set to " + dec + " — what this box measured with "
               + (BENCH.decoders.forUsers || 0) + " listeners on it.");
+  }
+  // ★★ V12 THE RTTY SKIMMER'S SEARCH WORKERS — the benchmark's figure on a fresh setup (BENCHMARK SETS THE DEFAULT,
+  //    NEVER HIDES: the owner can type another). Same rule as ServerModeScreen.tsx applyBench.
+  const rw = BENCH.decoders && Number(BENCH.decoders.rttySkimWorkers);
+  if (rw > 0 && $("rttySkimWorkers") && !$("rttySkimWorkers").value) {
+    $("rttySkimWorkers").value = String(rw);
+    benchNote($("rttySkimWorkers"), "Set to " + rw + " \u2014 what the RTTY skimmer measured on this box.");
   }
 }
 
@@ -6352,6 +6366,7 @@ function fill() {
       : (cfg.oneRadioPerIp === false ? 0 : 1));
   // ★ Blank = 0 = the default for this hardware, which is what an older config means too.
   $("decoderMax").value = cfg.decoderMax > 0 ? String(cfg.decoderMax) : "";
+  if ($("rttySkimWorkers")) $("rttySkimWorkers").value = cfg.rttySkimWorkers > 0 ? String(cfg.rttySkimWorkers) : "";
   // ★★ V12 the gallery. Absent = the defaults (100 MB, everyone, listeners kept) — what an older config means.
   $("galleryMb").value = String(cfg.galleryMb != null ? cfg.galleryMb : 100);
   $("galleryPublic").checked = cfg.galleryPublic !== false;
@@ -7690,6 +7705,7 @@ function stashServer() {
   //   limit, which is the safer of the two answers an older build can hold.
   cfg.oneRadioPerIp  = cfg.maxRadiosPerIp !== 0;
   cfg.decoderMax     = Math.max(0, parseInt($("decoderMax").value || "0", 10) || 0);
+  cfg.rttySkimWorkers = $("rttySkimWorkers") ? Math.max(0, Math.min(8, parseInt($("rttySkimWorkers").value || "0", 10) || 0)) : 0;
   cfg.galleryMb = Math.max(0, parseInt($("galleryMb").value || "0", 10) || 0);
   cfg.galleryPublic = $("galleryPublic").checked;
   cfg.gallerySaveLive = $("gallerySaveLive").checked;
@@ -7727,6 +7743,7 @@ function collect() {
     maxRadiosPerIp: parseInt($("maxRadiosPerIp").value, 10) || 0,
     oneRadioPerIp: (parseInt($("maxRadiosPerIp").value, 10) || 0) !== 0,
     decoderMax:       Math.max(0, parseInt($("decoderMax").value || "0", 10) || 0),
+    rttySkimWorkers:  $("rttySkimWorkers") ? Math.max(0, Math.min(8, parseInt($("rttySkimWorkers").value || "0", 10) || 0)) : 0,
     galleryMb:        Math.max(0, parseInt($("galleryMb").value || "0", 10) || 0),
     galleryPublic:    $("galleryPublic").checked,
     gallerySaveLive:  $("gallerySaveLive").checked,

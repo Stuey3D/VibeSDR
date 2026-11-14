@@ -99,6 +99,8 @@ export type VibeServerConfig = {
   /** ★ How many decoders the server runs at once (RTTY, WEFAX, SSTV, time, FT8). 0 = the default for
    *  this device; the benchmark recommends a measured figure. See vibe_decoder_host.h. */
   decoderMax?: number;
+  /** ★ V12 the RTTY skimmer's search workers (vibeserver.json "rttySkimWorkers"); 0 / absent = this device's default. */
+  rttySkimWorkers?: number;
   /** Seconds after the last listener before the capture parks to save power. The device stays
    *  CLAIMED so it restarts instantly.
    *  ★ NOT the Linux "release to another program": Android's permission model means nothing else

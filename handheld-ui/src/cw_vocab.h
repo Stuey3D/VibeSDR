@@ -130,6 +130,14 @@ inline constexpr CwVocabTerm kCwVocab[] = {
     {"AGE", 'a', "age", nullptr, false},
     {"BURO", 'a', "the QSL bureau", nullptr, false},
     {"LOTW", 'a', "Logbook of the World", nullptr, false},
+    {"RYRY", 't', "test pattern", nullptr, false},
+    {"RYRYRY", 't', "test pattern", nullptr, false},
+    {"RYRYRYRY", 't', "test pattern", nullptr, false},
+    {"RYRYRYRYRY", 't', "test pattern", nullptr, false},
+    {"RYRYRYRYRYRY", 't', "test pattern", nullptr, false},
+    {"QTC", 'q', "messages", "have you messages for me?", false},
+    {"NNNN", 't', "end of message", nullptr, false},
+    {"ZCZC", 't', "start of message", nullptr, false},
 };
 inline constexpr const char* kCwForeignWords[] = {
     "IL", "LA", "LE", "DI", "DEL", "DELLA", "CHE", "NON", "PER", "UNA", "UNO", "SONO", "MOLTO", "GRAZIE", "CIAO", "QUI", "TUTTO", "TUTTA", "ANCHE", "COME", "STATO", "BUONA", "SERA", "BUONGIORNO", "CON", "NELLA", "FILARE", "SI", "GLI", "HO", "EL", "LOS", "LAS", "MUY", "BUENAS", "NOCHES", "GRACIAS", "AQUI", "PARA", "ESTA", "ESTOY", "COMO", "SALUDOS", "QUE", "LES", "DU", "DES", "ET", "EST", "MERCI", "BONSOIR", "BONJOUR", "TRES", "AVEC", "ICI", "JE", "SUIS", "VOUS", "NOUS", "DER", "DIE", "DAS", "UND", "ICH", "BIN", "NICHT", "MIT", "HIER", "DANKE", "GUTEN", "ABEND", "SEHR", "GUT", "IST", "EIN", "EINE", "OBRIGADO", "MUITO", "BOA", "NOITE", "EEN", "HET", "EN", "IK", "BEDANKT", "GOEDE", "AVOND",

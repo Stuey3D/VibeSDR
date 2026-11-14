@@ -10,7 +10,9 @@ import { readFileSync } from 'node:fs';
 import {
   CW_Q_COLOURS, cwAge, cwDrawnPassband, cwFreqText, cwHintText, readAnchorsOf, readAnchorRestore, cwSnrText, cwWidthOf,
   mergeCwSpot, parseCwSignals, parseCwSpot, sortCwSignals, type CwSignal, type CwSpot,
+  mergeRttyHistory, rttyRowText, rttyRateText, RTTY_WAITING,
 } from '../src/services/cwList.ts';
+import { rttyJoin, rttyShort } from '../web/client/src/rttySkim.ts';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -114,6 +116,27 @@ eq('not skimming: the listener’s own', cwDrawnPassband(false, 96000, 300, 900)
      (k) => new Map([['s1', 44]]).get(k), 0), 44);
   eq('nothing keyed (idle text): leave the view', readAnchorRestore(readAnchorsOf([]), () => 0, 0), null);
   eq('never above the top', readAnchorRestore([{ key: 's1', top: 50, bottom: 90 }], () => 10, 30), 0);
+}
+
+// ── V12 THE RTTY SKIMMER (2026-11-14): rtty_signals in the app's list shape, the waiting row, the card's history ──
+{
+  const l = parseCwSignals({ skimmer: true, centre: 7040000, width: 48000, signals: [
+    { id: 1, hz: 7002000, shift: 170, set: false, baud: 0, reverse: false, settings: '', snr: 12, q: 'high', active: true, last: 1, first: 1, call: '', country: '', text: '' },
+    { id: 2, hz: 7005000, shift: 450, set: true, baud: 50, reverse: true, settings: '50 baud / 450 Hz / Reverse', snr: 9, q: 'medium', active: true, last: 1, first: 1, call: 'G4ABC', country: 'England', text: '[50 baud / 450 Hz / Reverse] CQ CQ DE G4ABC' },
+  ] }, false, true)!;
+  eq('rtty: a row not yet set says it is waiting, with its shift', [rttyRowText(l.signals[0]), rttyRateText(l.signals[0])], [RTTY_WAITING, '170 Hz']);
+  eq('rtty: a set row carries its settings, the text starts with them', [l.signals[1].rtty!.set, l.signals[1].rtty!.settings, rttyRowText(l.signals[1]).startsWith('[50 baud')],
+     [true, '50 baud / 450 Hz / Reverse', true]);
+  let h = mergeRttyHistory({}, l.signals);
+  const l2 = parseCwSignals({ signals: [{ id: 2, text: 'CQ CQ DE G4ABC G4ABC PSE K' }] }, false, true)!;
+  h = mergeRttyHistory(h, l2.signals);
+  eq('rtty: the card\'s history joins the windows, drops a signal no longer listed', [h[2], h[1]], ['[50 baud / 450 Hz / Reverse] CQ CQ DE G4ABC G4ABC PSE K', undefined]);
+  eq('rtty: a spot keeps its mode', parseCwSpot({ callsign: 'G4ABC', frequency: 7005000, mode: 'RTTY 50/450' }, 0, false, true)!.mode, 'RTTY 50/450');
+  // the web's own join and label (web/client/src/rttySkim.ts)
+  eq('rtty (web): a window that overlaps is joined', rttyJoin('CQ CQ DE G4ABC', 'DE G4ABC G4ABC K'), 'CQ CQ DE G4ABC G4ABC K');
+  eq('rtty (web): the same window adds nothing', rttyJoin('CQ CQ DE G4ABC', 'DE G4ABC'), 'CQ CQ DE G4ABC');
+  eq('rtty (web): a gap is marked', rttyJoin('CQ CQ DE G4ABC', 'TEST DL1XYZ'), 'CQ CQ DE G4ABC … TEST DL1XYZ');
+  eq('rtty (web): the row label', [rttyShort({ set: true, shift: 170, baud: 45.45, reverse: true }), rttyShort({ set: false, shift: 850, baud: 0, reverse: false })], ['45/170 R', '…']);
 }
 
 console.log(`cw list: ${passes} passed, ${fails} failed`);

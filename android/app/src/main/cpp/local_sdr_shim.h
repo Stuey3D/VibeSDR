@@ -351,6 +351,9 @@ public:
      *  (decoderDefaultMax); the benchmark recommends a measured figure. The next decoder past it is
      *  refused with a message the listener sees. See vibe_decoder_host.h. */
     static void setDecoderMax(int max);
+    /** ★ V12 the RTTY skimmer's search workers (vibeserver.json "rttySkimWorkers"); 0 = the default for this box. */
+    static void setRttySkimWorkers(int n);
+    static int  rttySkimWorkers();   ///< what a new skimmer gets: the owner's figure, else the default
     static int  decoderDefaultMax();
     /** ★★ V12 BACKGROUND DECODING (vibe_bgdecode.h): this radio's profiles, as RadioConfig::bgDecode stores them. Live.
      *  @return false (and `err`) when the JSON does not parse — the old settings stay. */

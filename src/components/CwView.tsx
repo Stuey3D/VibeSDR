@@ -15,7 +15,7 @@
  *   only).
  */
 import React, { useEffect, useMemo, useRef } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, type ViewStyle } from 'react-native';
 import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { fmtSpotTime } from '../utils/spotTime';   // ★ HH:MM:SS UTC (one helper for every spot list)
@@ -24,7 +24,7 @@ import { cwHasWpmRange, qrzCallUrl } from '../utils/cwFormat';
 import { openWebPage } from '../utils/openWebPage';
 import {
   CW_Q_COLOURS, cwAge, cwFreqText, cwSnrText, kbIdleText, kbRateText, kbSpotRateText,
-  sortCwSignals, type CwList, type CwSignal, type CwSpot,
+  rttyRateText, rttyRowText, RTTY_WAITING, sortCwSignals, type CwList, type CwSignal, type CwSpot,
 } from '../services/cwList';
 
 /** ★★ V12 (2026-10-29) A CALLSIGN OPENS ITS QRZ.COM PAGE — in the same in-app browser as the Signal ID wiki
@@ -54,9 +54,9 @@ export function CallLink({ call, style, children, inline, label }: {
 export const CW_SPOTS_SHOWN = 60;
 
 /** Every row a keyboard / pad can land on, in the order drawn: the signals, then the spots. */
-export function cwItems(list: CwList | null, spots: readonly CwSpot[]): Array<{ hz: number }> {
+export function cwItems(list: CwList | null, spots: readonly CwSpot[]): Array<{ hz: number; id?: number }> {
   const sigs = sortCwSignals(list?.signals ?? []);
-  return [...sigs.map((s) => ({ hz: s.hz })), ...spots.slice(0, CW_SPOTS_SHOWN).map((s) => ({ hz: s.frequency }))];
+  return [...sigs.map((s) => ({ hz: s.hz, id: s.id })), ...spots.slice(0, CW_SPOTS_SHOWN).map((s) => ({ hz: s.frequency }))];
 }
 
 /** ★ The confidence marker, short enough for an SE in Display Zoom; the colour carries it as much as the word. */
@@ -111,10 +111,17 @@ export interface CwViewProps {
   /** ★★ V12 (2026-10-29) THE PLAIN ENGLISH KEY (DecoderPanel's header): every row's text, and ONE SIGNAL's, read
    *  through utils/cwVocab plainEnglish — codes in plain words, callsigns / names / numbers as sent. CW only. */
   plain?: boolean;
+  /** ★★ V12 THE RTTY SKIMMER: each signal's whole text so far (by id, joined from the lists — cwList mergeRttyHistory).
+   *  Present = the RTTY list: rows show the shift and "waiting for parameter detection" until set, and a row opens its
+   *  CARD (`cardId` / `onCard`, held by the panel so the keyboard can open it too) instead of tuning. */
+  rttyHistory?: Readonly<Record<number, string>>;
+  cardId?: number | null;
+  onCard?: (id: number | null) => void;
 }
 
 export default function CwView({ skim, psk = false, list, spots, text, bodySize, focusIdx, onTune, scrollRef, onScrollY,
-                                 plain = false }: CwViewProps) {
+                                 plain = false, rttyHistory, cardId = null, onCard }: CwViewProps) {
+  const rtty = !!rttyHistory;
   const tk = useDecoderTokens();
   const cs = useDecoderStyles(makeCs);
   const sigs = useMemo(() => sortCwSignals(list?.signals ?? []), [list]);
@@ -123,7 +130,9 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
   const { scrollProps, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
 
   const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
+  // ★ EXPLAIN: CW's and the RTTY skimmer's text (PSK is typed, not abbreviated) — one dictionary, utils/cwVocab
   const read = (t: string) => (plain && !psk ? plainEnglish(t) : t);
+  const card = rtty && cardId != null ? sigs.find((s) => s.id === cardId) ?? null : null;
   // ★ A speed RANGE ("17–21 wpm") needs a wider column — only while a row shows one, so an older server's list keeps
   //   its call column as wide as before.
   const wideRows = !psk && sigs.some(cwHasWpmRange);
@@ -140,7 +149,7 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
         <Text style={[cs.primary, { color: tk.value }]} selectable>{read(text)}</Text>
       )}
       {!sigs.length && (
-        <Text style={[cs.idle, { color: tk.muted }]}>{kbIdleText(psk, skim)}</Text>
+        <Text style={[cs.idle, { color: tk.muted }]}>{rtty ? 'listening across the segment \u2014 each RTTY signal appears here as soon as it is heard' : kbIdleText(psk, skim)}</Text>
       )}
       {sigs.map((sg: CwSignal, i: number) => {
         const primary = !!list && !list.skimmer && sg.id === list.primary;
@@ -149,20 +158,23 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
           <TouchableOpacity key={`s${sg.id}`} activeOpacity={0.6}
             onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}
             accessibilityLabel={`${sg.call || 'unidentified'} ${cwFreqText(sg.hz, sg.audio)}${sg.hz > 0 ? ' kilohertz' : ''}, `
-              + `${sg.baud !== undefined ? `PSK${sg.baud}` : `${Math.round(sg.wpm)} words a minute`}, ${cwSnrText(sg.snr)}, `
-              + `${sg.q} confidence — tap to tune`}
+              + `${rtty ? (sg.rtty?.set ? sg.rtty.settings : RTTY_WAITING) : sg.baud !== undefined ? `PSK${sg.baud}` : `${Math.round(sg.wpm)} words a minute`}, ${cwSnrText(sg.snr)}, `
+              + `${sg.q} confidence — ${rtty ? 'tap to read all it sent' : 'tap to tune'}`}
             style={[cs.row, { borderBottomColor: tk.divider }, primary && { backgroundColor: tk.selectedBg }, ring(i),
                     !sg.active && cs.gone]}
-            onPress={() => onTune(sg.hz)}>
+            onPress={() => (rtty ? onCard?.(sg.id) : onTune(sg.hz))}>
             <View style={cs.line}>
               <Text style={[cs.cell, cs.freq, { color: tk.value }]} numberOfLines={1}>{cwFreqText(sg.hz, sg.audio)}</Text>
               <CallLink call={sg.call} style={[cs.cell, cs.call, { color: sg.call ? tk.accent : tk.muted }]}>{sg.call || '—'}</CallLink>
-              <Text style={[cs.cell, cs.wpm, wideRows && cs.wpmWide, { color: tk.value }]} numberOfLines={1}>{kbRateText(sg)}</Text>
+              <Text style={[cs.cell, cs.wpm, wideRows && cs.wpmWide, { color: tk.value }]} numberOfLines={1}>{rtty ? rttyRateText(sg) : kbRateText(sg)}</Text>
               <Text style={[cs.cell, cs.snr, { color: tk.value }]} numberOfLines={1}>{cwSnrText(sg.snr)}</Text>
               <Text style={[cs.cell, cs.q, { color: qc, borderColor: qc }]} numberOfLines={1}>{Q_SHORT[sg.q]}</Text>
               <Text style={[cs.cell, cs.age, { color: tk.muted }]} numberOfLines={1}>{cwAge(sg.last, now)}</Text>
             </View>
-            {!!sg.text.trim() && (
+            {/* ★ RTTY: the waiting words until its settings are found; then what it sent (the settings scroll away in it) */}
+            {rtty ? (
+              <Text style={[cs.tx, { color: sg.rtty?.set ? qc : tk.muted }]} numberOfLines={2} ellipsizeMode="head">{sg.rtty?.set ? read(rttyRowText(sg)) : rttyRowText(sg)}</Text>
+            ) : !!sg.text.trim() && (
               <Text style={[cs.tx, { color: qc }]} numberOfLines={2}>{read(sg.text.trim())}</Text>
             )}
           </TouchableOpacity>
@@ -192,6 +204,33 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
           </TouchableOpacity>
         );
       })}
+      {rtty && (
+        <Modal visible={!!card} transparent animationType="fade" onRequestClose={() => onCard?.(null)} supportedOrientations={['portrait', 'landscape']}>
+          <View style={cs.cardBack}>
+            <View style={[cs.card, { backgroundColor: tk.selectedBg, borderColor: tk.divider }]}>
+              {card && (<>
+                <View style={cs.line}>
+                  <Text style={[cs.cardTitle, { color: tk.value }]} numberOfLines={1}>{`${cwFreqText(card.hz, card.audio)} kHz`}</Text>
+                  <CallLink call={card.call} style={[cs.cell, cs.call, { color: card.call ? tk.accent : tk.muted }]}>{card.call || ''}</CallLink>
+                  <TouchableOpacity accessibilityRole="button" accessibilityLabel="Close" onPress={() => onCard?.(null)}
+                    style={[cs.cardBtn, { borderColor: tk.divider }]}>
+                    <Text style={[cs.headTxt, { color: tk.label }]}>CLOSE</Text>
+                  </TouchableOpacity>
+                </View>
+                {/* ★ its settings at the top (they also ran through its text, where they were found) */}
+                <Text style={[cs.cardSet, { color: card.rtty?.set ? tk.label : tk.muted }]}>
+                  {card.rtty?.set ? card.rtty.settings : RTTY_WAITING}
+                </Text>
+                <ScrollView style={cs.cardBody} contentContainerStyle={scrollLane}>
+                  <Text style={[cs.tx, { color: CW_Q_COLOURS[card.q] }]} selectable>
+                    {read((rttyHistory?.[card.id] ?? card.text).trim()) || '\u2014'}
+                  </Text>
+                </ScrollView>
+              </>)}
+            </View>
+          </View>
+        </Modal>
+      )}
     </ScrollView>
   );
 }
@@ -222,4 +261,11 @@ const makeCs = (T: DecoderTokens) => StyleSheet.create({
   tx:      { fontFamily: DECODER_FONT, fontSize: 12, letterSpacing: 0.6, lineHeight: 17, marginTop: 2 },
   head:    { paddingTop: 10, paddingBottom: 4, paddingHorizontal: 6, borderBottomWidth: StyleSheet.hairlineWidth },
   headTxt: { fontFamily: DECODER_FONT, fontSize: 10, fontWeight: '700', letterSpacing: 1.4 },
+  // ★ V12 the RTTY card
+  cardBack: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 16 },
+  card:     { maxHeight: '80%', width: '100%', maxWidth: 560, alignSelf: 'center', borderRadius: 10, borderWidth: 1, padding: 12 },
+  cardTitle: { fontFamily: DECODER_FONT, fontSize: 14, fontWeight: '700', letterSpacing: 0.5, fontVariant: ['tabular-nums'] },
+  cardBtn:  { minHeight: 44, minWidth: 64, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderRadius: 6, paddingHorizontal: 10 },
+  cardSet:  { fontFamily: DECODER_FONT, fontSize: 12, letterSpacing: 0.6, marginTop: 6, marginBottom: 8 },
+  cardBody: { flexGrow: 0 },
 });

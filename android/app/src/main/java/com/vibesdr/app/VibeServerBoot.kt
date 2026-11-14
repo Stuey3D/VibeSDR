@@ -400,6 +400,8 @@ object VibeServerBoot {
             // ★ Decoders at once (B6). Absent/0 = this device's default — applied on EVERY start, so a
             //   limit from a previous run can never outlive the config that set it.
             VibeLocalSDR.setDecoderMax(cfg.i("decoderMax", 0).coerceAtLeast(0))
+            // ★ V12 the RTTY skimmer's search workers — the same rule: absent/0 = this device's default, every start
+            VibeLocalSDR.setRttySkimWorkers(cfg.i("rttySkimWorkers", 0).coerceIn(0, 8))
             /* ★★★ READ AS NUMBERS (cfg.i), NOT optString().toIntOrNull() (2026-11-04). The app's map arrives through
              *  ReadableMap.toHashMap, where every number is a DOUBLE, and org.json's optString of 1.0 is "1.0" —
              *  toIntOrNull() of that is null, so a fresh Start fell back to the default every time: VFO B could never be

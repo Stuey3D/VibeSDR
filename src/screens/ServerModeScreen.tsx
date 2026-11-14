@@ -271,6 +271,7 @@ const K = {
   keepAlive: 'vs_keepalive',
   rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanMaxHz: 'vs_rawiqlanmaxhz',
   decoderMax: 'vs_decodermax',
+  rttySkimWorkers: 'vs_rttyskimworkers',   // ★ V12 the RTTY skimmer's search workers (0 = this device's default)
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
   idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon', antSwitch: 'vs_antswitch', antRanges: 'vs_antranges', antFilters: 'vs_antfilters',
   antNames: 'vs_antnames', antPorts: 'vs_antports',   // ★ V12 per-port names, and the ports the radio last listed
@@ -385,6 +386,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /** ★★ DECODERS AT ONCE (RTTY, WEFAX, SSTV, time signals, FT8) — 0 = the default for this device.
    *  The benchmark measures each decoder here and sets it at first setup (see applyBench). */
   const [decoderMax, setDecoderMax] = useState(0);
+  const [rttySkimWorkers, setRttySkimWorkers] = useState(0);
   /** Machine-wide spectrum slowdown when nobody is looking — lives with the frame rate. */
   /** ★ Locked mode only: the captured window everyone shares, and real bins at deep zoom. */
   const [lockedCentre, setLockedCentre] = useState(0);
@@ -655,8 +657,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       setDecoderMax(rec); AsyncStorage.setItem(K.decoderMax, String(rec));
       notes.push(`Decoders at once set to ${rec} — what this device measured with ${j.decoders.forUsers || 0} listeners on it.`);
     }
+    /* ★★ V12 THE RTTY SKIMMER'S SEARCH WORKERS — the benchmark's figure, only where the owner has not chosen one. The
+     *  SAME rule as vibe_setup_page.h benchApplyDefaults. */
+    const rw = j.decoders && Number(j.decoders.rttySkimWorkers);
+    if (rw > 0 && rttySkimWorkers === 0) {
+      setRttySkimWorkers(rw); AsyncStorage.setItem(K.rttySkimWorkers, String(rw));
+      notes.push(`RTTY skimmer set to ${rw} signal${rw === 1 ? '' : 's'} set up at once — what this device measured.`);
+    }
     setBenchNote(notes.join(' '));
-  }, [blockedModes, dabScanLabels, usersText, decoderMax, zoomSpec]);
+  }, [blockedModes, dabScanLabels, usersText, decoderMax, rttySkimWorkers, zoomSpec]);
 
   const runBench = React.useCallback(async (manual: boolean) => {
     const mod = (NativeModules as any).VibeLocalSDR;
@@ -1407,6 +1416,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           setRawIqMax(Number(s(K.rawIqMax)) || 0);
           setRawIqLanMaxHz(Number(s(K.rawIqLanMaxHz)) || 0);
           setDecoderMax(Number(s(K.decoderMax)) || 0);
+          setRttySkimWorkers(Number(s(K.rttySkimWorkers)) || 0);
           setLockedCentre(Number(s(K.lockedCentre)) || 0);
           // ★ Absent means "never chosen", which must read as the DEFAULT (on) and not as off —
           //   the same trap as any stored boolean whose default is true.
@@ -2060,7 +2070,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   live.current = {
     limitSoft, askFirst, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
-    landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters, antNames,
+    landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, rttySkimWorkers, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
     dxJson,
@@ -2146,6 +2156,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     rawIqLanMaxHz: radioUseEff !== 'locked' ? live.current.rawIqLanMaxHz : 0,
     // ★ Decoders at once — the benchmark's figure unless the owner chose another; 0 = the default.
     decoderMax: live.current.decoderMax,
+    rttySkimWorkers: live.current.rttySkimWorkers,   // ★ V12 0 = this device's default
     idleGraceSec: live.current.idleGrace,
     antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
     // ★ The external antenna switch: antennaSwitch / antennaMap / antennaLocked — VibeServerBoot applies them.
@@ -2242,7 +2253,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.askFirst, live.current.askFirst ? '1' : '0'], [K.idleKick, String(live.current.idleKick)], [K.batteryPauseAt, String(batteryPauseAt)],
       [K.keepAlive, keepAlive ? '1' : '0'],
       [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)], [K.rawIqLanMaxHz, String(live.current.rawIqLanMaxHz)],
-      [K.decoderMax, String(live.current.decoderMax)],
+      [K.decoderMax, String(live.current.decoderMax)], [K.rttySkimWorkers, String(live.current.rttySkimWorkers)],
       [K.lockedCentre, String(live.current.lockedCentre)],
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon], [K.antSwitch, JSON.stringify(live.current.antSwitch)], [K.antRanges, live.current.antRanges], [K.antFilters, live.current.antFilters],
@@ -4318,6 +4329,24 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     at once. On a locked range every listener decodes their own frequency; on a shared
                     dial everyone shares one. The next one past the limit is refused, and the listener
                     is told why. The benchmark sets this from what this device measured.
+                  </Text>
+                  {/* ★★ V12 the RTTY skimmer's search workers (docs/v12/RTTY-SKIMMER.md §3) */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                    <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>RTTY skimmer</Text>
+                    <TextInput
+                      value={rttySkimWorkers > 0 ? String(rttySkimWorkers) : ''}
+                      onChangeText={(t) => setRttySkimWorkers(Math.max(0, Math.min(8, parseInt(t.replace(/[^0-9]/g, ''), 10) || 0)))}
+                      keyboardType="number-pad" placeholder="auto" placeholderTextColor={C.placeholderDim}
+                      style={[styles.input, { width: 64, textAlign: 'center', color: C.text, borderColor: C.border, fontFamily: F }]} />
+                    <TouchableOpacity onPress={() => setRttySkimWorkers(0)}
+                      style={[styles.card, { borderColor: C.border, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
+                      <Text style={{ color: C.key, fontFamily: F, fontSize: 12 }}>Default</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                    The RTTY skimmer lists every RTTY signal at once, then works out each one's speed, shift and
+                    polarity in turn — this is how many at the same time. One suits an older phone, two a recent one.
+                    The benchmark sets it from what this device measured.
                   </Text>
                 </View>
                 </>)}

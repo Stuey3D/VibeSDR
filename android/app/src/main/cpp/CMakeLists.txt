@@ -162,6 +162,7 @@ add_library(vibelocalsdr SHARED
     decoders/ndb_skimmer.cpp
     decoders/drm/drm_receiver.cpp   # ★ V12 DRM (decoders/drm/, vibe_drm_listener.h)
     decoders/psk_skimmer.cpp
+    decoders/rtty_skimmer.cpp
     decoders/dsc_decoder.cpp
     decoders/sitor_a.cpp
     decoders/jtty_decoder.cpp

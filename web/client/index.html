@@ -3177,6 +3177,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #galList .sres.galUrgency { border-left: 3px solid #FF8A3D; }
 #galList .sres .galMap { margin-left: auto; align-self: center; padding: 1px 8px; font-size: 11px; }
 #cwList { display: none; margin-top: 6px; }
+/* ★★ V12 the RTTY skimmer: the manual rows hide in SKIMMER view; a row waiting for its settings is dim; the card */
+#rttySettings.skim .mrow:not(.skimrow), #rttySettings.skim > .hint:not(#rttySkimHint) { display: none; }
+#cwList .tx.wait { color: var(--text-dim); font-style: italic; }
+#rttyCard { display: none; margin-top: 6px; border: 1px solid var(--border, rgba(255,255,255,0.15)); border-radius: 6px; padding: 6px 8px; }
+#rttyCard.on { display: block; }
+#cwList.on.card { display: none; }   /* the card replaces the list while it is open */
+#rttyCardBar { display: flex; align-items: center; gap: 8px; }
+#rttyCardBar .sp { flex: 1 1 auto; }
+#rttyCardHead { color: var(--freq); font-variant-numeric: tabular-nums; }
+#rttyCardSet { color: var(--unit); margin: 4px 0; }
+#rttyCardText { margin: 0; max-height: 40vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--text); }
 #cwList.on { display: block; }
 #cwList .cwr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 4.8em 4.2em 4.4em 3.4em; gap: 2px 8px;
                align-items: baseline; font-size: 11px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
@@ -4422,6 +4434,11 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ CW: every signal the server is decoding — frequency, call (once spotted), speed, SNR, quality, last heard,
          and its recent text — then the callsigns spotted. The primary signal's text is #decText above it. -->
     <div id="cwList"><div id="cwRows"></div><div id="cwSpotsHead">SPOTS</div><div id="cwSpots"></div></div>
+    <!-- ★★ V12 the RTTY skimmer's CARD: one signal's whole message, its settings at the top (a row opens it). -->
+    <div id="rttyCard"><div id="rttyCardBar"><span id="rttyCardHead"></span><span class="sp"></span>
+      <button class="btn" id="rttyCardTune" title="Tune the dial to this signal">TUNE</button>
+      <button class="btn" id="rttyCardClose" title="Back to the list">CLOSE</button></div>
+      <div id="rttyCardSet"></div><pre id="rttyCardText"></pre></div>
     <!-- ★★ V12 APRS: the stations heard, the messages, and the packets as they arrive. -->
     <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div></div>
     <!-- ★★ DSC: the calls, newest first — the server's line, coloured by distress / urgency / safety / routine (dsc.ts). -->
@@ -5715,6 +5732,25 @@ select.btn { padding: 6px 8px; }
   </div>
 
   <div class="subPanel" id="rttySettings" hidden>
+    <!-- ★★ V12 THE RTTY SKIMMER (2026-11-14): ONE SIGNAL = the settings below; SKIMMER = every RTTY signal across a segment
+         centred on your dial, each one's settings found for it (the rows below do not apply, and hide). Drawn only where
+         the server has one (vibeserver.json "rttyskim"). -->
+    <div class="mrow skimrow" hidden>
+      <label>VIEW</label>
+      <div class="seg" id="rttyView">
+        <button class="btn on" data-rttyview="one" title="Your passband: one RTTY signal, with the settings below (AUTO finds them)">ONE SIGNAL</button>
+        <button class="btn" data-rttyview="skim" title="Every RTTY signal across a segment centred on your dial, each with its own settings">SKIMMER</button>
+      </div>
+    </div>
+    <div class="mrow skimrow" id="rttyWidthRow" hidden>
+      <label>SEGMENT</label>
+      <div class="seg" id="rttyWidth">
+        <button class="btn" data-rttywidth="24000" title="12 kHz either side of the dial">24 kHz</button>
+        <button class="btn on" data-rttywidth="48000" title="24 kHz either side of the dial">48 kHz</button>
+        <button class="btn" data-rttywidth="96000" title="48 kHz either side of the dial (where the radio's capture is that wide)">96 kHz</button>
+      </div>
+    </div>
+    <div class="hint" id="rttySkimHint" hidden></div>
     <div class="mrow">
       <label>PRESET</label>
       <div class="seg" id="rttyPreset">

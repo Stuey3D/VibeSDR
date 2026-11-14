@@ -163,6 +163,45 @@ static void testHistory() {
     decReadSig(0);
 }
 
+/** ★★ V12 THE RTTY SKIMMER (docs/v12/RTTY-SKIMMER.md): RTTY's VIEW › SKIMMER attaches "rttyskim" with its segment, its
+ *  rtty_signals list is CW's (a waiting row, a set row, the settings), a row pressed reads its history, spots are calls. */
+static void testRttySkim() {
+    App& a = *gA;
+    DecUi& u = decUi();
+    RadioState s; s.mode = "usb"; s.bwLow = 200; s.bwHigh = 2800;
+    u.rttySkim = false;
+    CHECK(decExtFor("rtty") == "fsk", "rtty: ONE SIGNAL is fsk");
+    u.rttySkim = true; u.rttyWidth = 96000;
+    const std::string at = decAttachJson(s, "rtty");
+    CHECK(decExtFor("rtty") == "rttyskim" && at.find("\"width\":96000") != std::string::npos && at.find("shift") == std::string::npos,
+          "rtty skimmer: attaches rttyskim with its segment and none of the one-signal settings (%s)", at.c_str());
+    u.active = "rtty"; u.view = "rtty"; u.sigs.clear(); u.sigHist.clear(); u.calls.clear(); u.clrFor.clear();
+    int lo = 0, hi = 0;
+    CHECK(decSkimSegment(lo, hi) && lo == -48000 && hi == 48000, "rtty skimmer: its VFO is the segment");
+    CHECK(decSubs("rtty") == std::vector<std::string>({"SIGNALS", "CALLS"}), "rtty skimmer: SIGNALS / CALLS");
+    const char* js = "{\"type\":\"rtty_signals\",\"data\":{\"skimmer\":true,\"centre\":7040000,\"width\":96000,\"primary\":0,\"signals\":["
+        "{\"id\":1,\"hz\":7041250,\"shift\":170,\"set\":true,\"baud\":45.45,\"reverse\":true,\"settings\":\"45 baud / 170 Hz / Reverse\",\"snr\":21,\"q\":\"high\",\"active\":true,\"call\":\"DL0ABC\",\"country\":\"Germany\",\"text\":\"[45 baud / 170 Hz / Reverse] CQ TEST DL0ABC DL0ABC TEST\"},"
+        "{\"id\":2,\"hz\":7043900,\"shift\":450,\"set\":false,\"baud\":0,\"reverse\":false,\"settings\":\"\",\"snr\":12,\"q\":\"medium\",\"active\":true,\"call\":\"\",\"country\":\"\",\"text\":\"\"}]}}";
+    decOnJson(a, s, js);
+    CHECK(u.sigs.size() == 2, "rtty skimmer: both rows listed (%zu)", u.sigs.size());
+    const DecSig* g1 = nullptr; const DecSig* g2 = nullptr;
+    for (auto& g : u.sigs) { if (g.id == 1) g1 = &g; if (g.id == 2) g2 = &g; }
+    CHECK(g1 && g1->set && g1->settings == "45 baud / 170 Hz / Reverse" && g1->shift == 170, "rtty skimmer: a set row keeps its settings");
+    CHECK(g2 && !g2->set, "rtty skimmer: a row still waiting for its parameters");
+    CHECK(u.sigHist.count(1) && u.sigHist[1].find("[45 baud / 170 Hz / Reverse] CQ TEST") == 0, "rtty skimmer: its history starts with the settings");
+    decOnJson(a, s, "{\"type\":\"rtty_spot\",\"data\":{\"callsign\":\"DL0ABC\",\"frequency\":7041250,\"mode\":\"RTTY 45/170\",\"snr\":21,\"how\":\"TEST\",\"country\":\"Germany\"}}");
+    CHECK(!u.calls.empty() && u.calls.front().call == "DL0ABC" && u.calls.front().mode == "RTTY 45/170", "rtty skimmer: a spot is a call");
+    decReadSig(1);
+    a.nav_.forget("dec"); frame(&u.sigLog);
+    CHECK(u.sigLog.rows() > 0, "rtty skimmer: a row pressed reads its history");
+    decReadSig(0);
+    // the one-signal decoder ignores a skimmer's list
+    u.rttySkim = false; u.sigs.clear();
+    decOnJson(a, s, js);
+    CHECK(u.sigs.empty(), "rtty ONE SIGNAL: a skimmer list is not drawn");
+    u.active.clear(); u.view.clear();
+}
+
 int main() {
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (SDL_Init(SDL_INIT_VIDEO) != 0 || TTF_Init() != 0) { std::fprintf(stderr, "init failed\n"); return 1; }
@@ -181,6 +220,7 @@ int main() {
     testMode(true);
     testSwitch();
     testHistory();
+    testRttySkim();
     std::printf("cw_log_test: %d / %d checks pass\n", checks - fails, checks);
     return fails ? 1 : 0;
 }

@@ -84,6 +84,7 @@ struct Config {
     bool        oneRadioPerIp = true;  ///< see ServerConfig::oneRadioPerIp
     int         maxRadiosPerIp = 1;    ///< see ServerConfig::maxRadiosPerIp
     int         decoderMax = 0;        ///< see ServerConfig::decoderMax
+    int         rttySkimWorkers = 0;   ///< see ServerConfig::rttySkimWorkers
     std::string allowRanges, blockRanges;   ///< see RadioConfig::allowRanges
     std::string pin, adminPass;
     /** ★★ THIS radio's own PIN, if the owner set one — see effectiveFor(). Empty for almost every
@@ -953,6 +954,10 @@ struct ServerConfig {
      *  measures each decoder here and writes its recommendation into this field; the owner can
      *  change it on the setup page, the admin page or in the app. */
     int         decoderMax = 0;
+    /** ★★ V12 THE RTTY SKIMMER'S SEARCH WORKERS (docs/v12/RTTY-SKIMMER.md §3): how many signals have their settings
+     *  searched for at once. 0 = the default — the benchmark's figure on a fresh setup, else this hardware's class
+     *  (vibe::rttySkimDefaultWorkers: Pi 2 / R36S 1, Pi 4-5 2, PCs and Macs 4). The owner can change it. */
+    int         rttySkimWorkers = 0;
     /** ★★ V12 THE GALLERY (vibe_gallery.h): what the decoders heard — background decoding's, and a listener's own
      *  unless `gallerySaveLive` is off. MACHINE-level: one directory every radio writes into, under the data dir.
      *  `galleryMb` is the owner's size (the setup page shows the disk's free space beside it); when full, the OLDEST

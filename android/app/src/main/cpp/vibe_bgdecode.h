@@ -537,9 +537,10 @@ public:
         // ★★ V12 2026-10-25: the SAME summary for CW (meta.kind "cw") — the listener's CW decoder and the skimmer: spots,
         //    calls, countries, the most-heard call and the busiest kHz, per hour and for the last 10 minutes.
         //    And PSK's (V12 2026-10-26): the same keyboard-mode summary, without a speed.
-        cw_ = meta_.kind == "cw" || meta_.kind == "psk";
-        psk_ = meta_.kind == "psk";
-        label_ = psk_ ? "PSK" : cw_ ? "CW" : "FT8";
+        // ★ …and the RTTY skimmer's (V12 2026-11-14, meta.kind "rttyskim"): the PSK shape, labelled RTTY.
+        cw_ = meta_.kind == "cw" || meta_.kind == "psk" || meta_.kind == "rttyskim";
+        psk_ = meta_.kind == "psk" || meta_.kind == "rttyskim";
+        label_ = meta_.kind == "rttyskim" ? "RTTY" : psk_ ? "PSK" : cw_ ? "CW" : "FT8";
         hour_.cw = cw_; hour_.speed = !psk_;
         const int64_t now = this->now();
         start_ = hourFrom_ = rollWrite_ = now;

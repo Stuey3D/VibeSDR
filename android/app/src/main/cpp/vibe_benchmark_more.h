@@ -251,6 +251,7 @@ inline Row hostAudioRow(const std::string& id, const std::string& label, const s
     env.tap = [tap](const std::string&, const std::string&) { return tap; };
     env.cwSpotTap = [tap](bool) { return tap; };
     env.pskSpotTap = [tap](bool) { return tap; };
+    env.rttySkimSpotTap = [tap] { return tap; };
     double fedSec = 0, pct = -1;
     {
         DecoderHost h(env, "bench");
@@ -401,6 +402,49 @@ inline std::vector<float> rttyText(const std::string& text, double cf) {
     std::vector<float> a;
     fskBits(a, bits, 45.45, cf + 85, cf - 85);
     return a;
+}
+/** ★★ V12 THE RTTY SKIMMER'S CLIP (2026-11-14): 20 s of 48 kHz IQ with twelve RTTY signals of mixed settings (45.45 /
+ *  50 / 75 baud, 170 / 450 / 850 Hz, normal and reverse) at +15 dB in 2.5 kHz — synthesised, so the row measures on every
+ *  box whether or not the decoder clip is there. ITA2 letters + figures, 1.5 stop bits, phase-continuous FSK. */
+inline DecClip rttySkimClip() {
+    DecClip c; c.id = "rttysk"; c.rate = 48000; c.centre = 7040000;
+    const double rate = c.rate, secs = 20;
+    c.iq.assign((size_t)(rate * secs), std::complex<float>(0, 0));
+    uint32_t s = 12345;
+    auto gauss = [&] { double u = 0; for (int k = 0; k < 6; ++k) { s = s * 1664525u + 1013904223u; u += (s >> 8) / 16777216.0; } return (u - 3.0) * 1.414; };
+    for (auto& v : c.iq) v = std::complex<float>((float)(gauss() * 0.707), (float)(gauss() * 0.707));
+    const double bauds[] = { 45.45, 45.45, 50, 75 }, shifts[] = { 170, 170, 450, 850 };
+    for (int k = 0; k < 12; ++k) {
+        const double hz = -20000 + k * 3600, baud = bauds[k % 4], shift = shifts[k % 4];
+        const bool rev = k % 3 == 1;
+        const std::string text = "CQ CQ DE G" + std::to_string(k % 10) + "ABC G" + std::to_string(k % 10) + "ABC PSE K 599 0" + std::to_string(10 + k) + "\n";
+        std::vector<uint8_t> hb;   // half bits
+        auto frame = [&](int code) { hb.push_back(0); hb.push_back(0); for (int b = 0; b < 5; ++b) { hb.push_back((code >> b) & 1); hb.push_back((code >> b) & 1); } hb.push_back(1); hb.push_back(1); hb.push_back(1); };
+        static const char* L = "\0E\nA SIU\rDRJNFCKTZLWHYPQOBG\0MXV\0";
+        static const char* F = "\0" "3\n- \a87\r$4',!:(5\")2#6019?&\0./;\0";
+        for (int i = 0; i < 20; ++i) hb.push_back(1);
+        bool figs = false; frame(31);
+        for (char ch : text) {
+            int code = ch == ' ' ? 4 : ch == '\n' ? 2 : -1; bool f = figs;
+            for (int i = 1; i < 32 && code < 0; ++i) if (L[i] == ch) { code = i; f = false; }
+            for (int i = 1; i < 32 && code < 0; ++i) if (F[i] == ch) { code = i; f = true; }
+            if (code < 0) continue;
+            if (f != figs) { frame(f ? 27 : 31); figs = f; }
+            frame(code);
+        }
+        const double A = std::sqrt(std::pow(10.0, 1.5) * 2500.0 / rate), hbSec = 1.0 / (2 * baud);
+        double ph = 0, t = 0;
+        for (size_t i = (size_t)(rate * (0.5 + 0.2 * k)); i < c.iq.size(); ++i) {
+            size_t h = (size_t)(t / hbSec);
+            if (h >= hb.size()) { t -= hb.size() * hbSec; h = 0; }
+            const bool mark = hb[h] != 0;
+            ph += 2 * M_PI * (hz + ((mark != rev) ? shift / 2 : -shift / 2)) / rate;
+            if (ph > M_PI) ph -= 2 * M_PI;
+            c.iq[i] += std::complex<float>((float)(A * std::cos(ph)), (float)(A * std::sin(ph)));
+            t += 1.0 / rate;
+        }
+    }
+    return c;
 }
 /** EAS / SAME (47 CFR § 11.31): 520.83 Bd AFSK, mark 2083.3 Hz (1) / space 1562.5 Hz (0), LSB first, a 16-byte 0xAB
  *  preamble, the header three times with a second's silence between. */
@@ -631,6 +675,7 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_lora_all", { "lora+all", false, false } },
         { "dec_cw",       { "cw",     true,  true  } }, { "dec_cwskim",   { "cw",     false, true  } },
         { "dec_psk",      { "psk",    true,  true  } }, { "dec_pskskim",  { "psk",    false, true  } },
+        { "dec_rttyskim", { "rtty",   false, true  } },   // ★ inside RTTY's switch, which carries the green one-signal decoder
         { "dec_jtty",     { "jtty",   true,  true  } }, { "dec_sitora",   { "sitora", true,  true  } },
         { "dec_dsc",      { "dsc",    true,  true  } }, { "dec_same",     { "same",   true,  true  } },
         { "dec_selcal",   { "selcal", true,  true  } }, { "dec_mfsk",     { "mfsk",   true,  true  } },
@@ -741,6 +786,13 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     run("dec_pskskim", "Decoder: PSK skimmer", [&] {
         return hostIqRow("dec_pskskim", "Decoder: PSK skimmer (48 kHz)", "pskskim", attach + "\"extension_name\":\"pskskim\",\"width\":48000}",
                          clipNamed(clips, "psk20"), "psk_signals");
+    });
+    /* ★★ V12 the RTTY skimmer (docs/v12/RTTY-SKIMMER.md): twelve signals of mixed settings at 48 kHz, its search workers
+     *  at this box's default. The figure also sets that default (vibe_benchmark.h: "rttySkimWorkers"). */
+    run("dec_rttyskim", "Decoder: RTTY skimmer", [&] {
+        const DecClip c = rttySkimClip();
+        return hostIqRow("dec_rttyskim", "Decoder: RTTY skimmer (48 kHz, 12 signals)", "rttyskim",
+                         attach + "\"extension_name\":\"rttyskim\",\"width\":48000}", &c, "rtty_signals");
     });
     run("dec_jtty", "Decoder: JTTY", [&] {
         return hostAudioRow("dec_jtty", "Decoder: JTTY", "jtty", attach + "\"extension_name\":\"jtty\"}", jttyMessage("CQ G4ABC IO91", 48000, 1000), Count::Any);

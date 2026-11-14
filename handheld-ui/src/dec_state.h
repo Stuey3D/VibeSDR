@@ -56,7 +56,7 @@ struct DecDef {
     const char* hint;     // index.html's hint, for under the options
 };
 inline const DecDef kDecs[] = {
-    {"rtty",   "RTTY",    DK_TEXT, "",       false, true,  "AUTO finds the shift, centre, speed and polarity itself. If it cannot lock, pick a preset or set the signal by hand below."},
+    {"rtty",   "RTTY",    DK_TEXT, "",       false, true,  "AUTO finds the shift, centre, speed and polarity itself. If it cannot lock, pick a preset or set the signal by hand below. VIEW › SKIMMER (where this server has it) lists every RTTY signal across the segment instead, each with its own settings found for it; press a row to read its text."},
     {"cw",     "CW",      DK_KB,   "cw",     true,  true,  "Tune the signal in CW — the decoder finds the speed itself (5–60 WPM). A wider USB filter lists every CW signal inside it. Press a row to read its text back as far as it has been heard; TUNE there tunes to it."},
     {"psk",    "PSK",     DK_KB,   "psk",    true,  true,  "Tune USB with the PSK segment in your passband (e.g. 14.070). The signal in the middle of the passband is decoded; press a row to tune to it."},
     {"aprs",   "APRS",    DK_APRS, "aprs",   true,  true,  "Every station heard is listed, with its position, weather, messages and the digipeater that carried it."},
@@ -350,9 +350,11 @@ private:
     }
 };
 
-/** One CW / PSK signal (cw_signals / psk_signals — decoders.ts), and one JTTY signal. */
-struct DecSig { double id = 0, hz = 0, audio = 0, wpm = 0, wpmLo = 0, wpmHi = 0, snr = 0, baud = 0, imd = 0, last = 0, frames = 0;
-                std::string q, call, country, text, raw; bool active = false; };   // raw = text as the server sent it
+/** One CW / PSK / RTTY-skimmer signal (cw_signals / psk_signals / rtty_signals — decoders.ts), and one JTTY signal.
+ *  ★ RTTY: `set` false = listed, its settings not found yet ("RTTY detected — waiting for parameter detection");
+ *    `settings` = "45 baud / 170 Hz / Reverse" once found (also written into its text by the server). */
+struct DecSig { double id = 0, hz = 0, audio = 0, wpm = 0, wpmLo = 0, wpmHi = 0, snr = 0, baud = 0, imd = 0, last = 0, frames = 0, shift = 0;
+                std::string q, call, country, text, raw, settings; bool active = false, set = true; };   // raw = text as the server sent it
 /** A call heard identifying itself (cw_spot / psk_spot / jtty_spot). */
 struct DecCall { std::string call, country, how, mode; double hz = 0, snr = 0, wpm = 0, at = 0; };
 /** A digital spot (digital_spot). */
@@ -408,6 +410,9 @@ struct DecUi {
                   double stop = 1.5; int bits = 7; char parity = 'N'; } rtty;
     std::string timeStation = "msf";
     bool cwSkim = false; int cwWidth = 48000;
+    // ★★ V12 THE RTTY SKIMMER (docs/v12/RTTY-SKIMMER.md): RTTY's VIEW › SKIMMER — "rttyskim" over `rttyWidth` Hz, every
+    //    RTTY signal listed, each with its own settings; drawn as CW's skimmer (SIGNALS / CALLS, a row pressed is read).
+    bool rttySkim = false; int rttyWidth = 48000;
     // ★★ A CW SIGNAL'S OWN HISTORY (Stuart, 2026-11-12: "selected the user should be able to scroll back to see the
     //    decoded history"): the server sends each signal's LAST 120 characters (vibe_cw_run.h sendList), so the history
     //    is joined here from those windows (decHistMerge), by id, while the signal is listed. A row pressed opens it
@@ -615,7 +620,8 @@ inline const DecDef* decSole(const RadioState& s) {
 }
 inline bool decSkimSegment(int& lo, int& hi) {
     const DecUi& u = decUi();
-    const int w = u.active == "cw" && u.cwSkim ? u.cwWidth : u.active == "psk" && u.pskSkim ? u.pskWidth : 0;
+    const int w = u.active == "cw" && u.cwSkim ? u.cwWidth : u.active == "psk" && u.pskSkim ? u.pskWidth
+                : u.active == "rtty" && u.rttySkim ? u.rttyWidth : 0;
     if (w <= 0) return false;
     lo = -w / 2; hi = w / 2;
     return true;
@@ -635,7 +641,7 @@ inline void decFetchCaps(int port) {
         if (r.status != 200) return;
         const Json j = Json::parse(r.body);
         u.caps.clear(); u.why.clear();
-        for (const char* k : {"cw", "psk", "aprs", "dsc", "sitora", "same", "selcal", "navtex", "mfsk", "jtty", "hell"}) {
+        for (const char* k : {"cw", "psk", "rttyskim", "aprs", "dsc", "sitora", "same", "selcal", "navtex", "mfsk", "jtty", "hell"}) {
             u.caps[k] = j[k].boolean();
             const std::string& w = j[std::string(k) + "Why"].str();
             if (j[k].kind == Json::Bool && !j[k].b && !w.empty()) u.why[k] = w.substr(0, 200);
@@ -664,7 +670,7 @@ inline std::string decExtFor(const std::string& id) {
     const DecUi& u = decUi();
     if (id == "cw") return u.cwSkim ? "cwskim" : "cw";
     if (id == "psk") return u.pskSkim ? "pskskim" : "psk";
-    if (id == "rtty") return "fsk";   // ★ the shim's name for it
+    if (id == "rtty") return u.rttySkim ? "rttyskim" : "fsk";   // ★ the shim's name for it (the skimmer: its own)
     return id;
 }
 /** src/utils/rttySpec.ts rttyFraming — what the server parses (<data><parity><stop>, or SITOR-B's 4/7). */
@@ -678,7 +684,8 @@ inline std::string decNum(double v) { char b[32]; std::snprintf(b, sizeof b, "%.
 inline std::string decAttachJson(const RadioState& s, const std::string& id) {
     const DecUi& u = decUi();
     std::string j = "{\"type\":\"audio_extension_attach\",\"extension_name\":" + jsonQuote(decExtFor(id));
-    if (id == "rtty") {
+    if (id == "rtty" && u.rttySkim) j += ",\"width\":" + std::to_string(u.rttyWidth);   // ★ each signal's settings are its own
+    else if (id == "rtty") {
         const auto& r = u.rtty;
         j += ",\"center_frequency\":1000,\"shift\":" + decNum(r.shift) + ",\"baud_rate\":" + decNum(r.baud) + ",\"encoding\":" + jsonQuote(r.enc)
            + ",\"inverted\":" + (r.inv ? "true" : "false") + ",\"framing\":" + jsonQuote(decRttyFraming(r));
@@ -837,6 +844,7 @@ inline void decOnState(const RadioState& s, int st) {
     if (m == "dsc") u.status = st ? "receiving a call…" : "listening…";
     else if (m == "jtty") u.status = st ? "decoding…" : "listening…";
     else if (m == "cw" || m == "psk") u.status = st >= 3 ? "decoding…" : st ? "carriers found…" : "listening…";
+    else if (m == "rtty" && u.rttySkim) u.status = st >= 3 ? "decoding…" : st ? "RTTY found — finding each one's settings…" : "listening…";
     else if (m == "navtex") u.status = st >= 3 ? "receiving…" : st ? "syncing…" : "standing by";
     else u.status = st >= 3 ? "decoding…" : st ? "syncing…" : "listening…";
     u.live = st != 0;
@@ -931,9 +939,9 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
         if (u.view == "spots") { u.live = true; u.liveAt = now; }
         return;
     }
-    if ((type == "cw_signals" || type == "psk_signals") && d["signals"].kind == Json::Arr) {
-        const bool psk = type == "psk_signals";
-        if (u.active != (psk ? "psk" : "cw")) return;
+    if ((type == "cw_signals" || type == "psk_signals" || type == "rtty_signals") && d["signals"].kind == Json::Arr) {
+        const bool psk = type == "psk_signals", rtty = type == "rtty_signals";
+        if (rtty ? (u.active != "rtty" || !u.rttySkim) : u.active != (psk ? "psk" : "cw")) return;
         u.sigs.clear();
         bool any = false;
         for (auto& x : d["signals"].a) {
@@ -942,22 +950,23 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             g.id = x["id"].num(0); g.hz = x["hz"].num(0); g.audio = x["audio"].num(0); g.wpm = x["wpm"].num(0); g.snr = x["snr"].num(0);
             g.wpmLo = x["wpmLo"].num(0); g.wpmHi = x["wpmHi"].num(0); g.q = x["q"].str(); g.active = x["active"].boolean(); g.last = x["last"].num(0);
             g.call = decClip(x["call"].str(), 16); g.country = decClip(x["country"].str(), 40); g.text = decClip(x["text"].str(), 160);
-            g.baud = psk ? (x["baud"].num(0) > 40 ? 63 : 31) : 0; g.imd = x["imd"].num(0);
+            g.baud = psk ? (x["baud"].num(0) > 40 ? 63 : 31) : rtty ? x["baud"].num(0) : 0; g.imd = x["imd"].num(0);
+            if (rtty) { g.set = x["set"].boolean(); g.shift = x["shift"].num(0); g.settings = decClip(x["settings"].str(), 40); }
             any = any || g.active;
             u.sigs.push_back(std::move(g));
         }
         decApplyClr(u.sigs);
         decSortSigs(u.sigs);   // ★★ the app's order (cwList sortCwSignals) — the server's order moves every update
-        if (!psk) decCwHistories();
+        if (!psk) decCwHistories();   // ★ CW's and the RTTY skimmer's: a row pressed reads its history
         u.live = any; if (any) u.liveAt = now;
         return;
     }
-    if ((type == "cw_spot" || type == "psk_spot" || type == "jtty_spot") && d["callsign"].kind == Json::Str && !d["callsign"].str().empty()) {
-        const std::string want = type == "cw_spot" ? "cw" : type == "psk_spot" ? "psk" : "jtty";
+    if ((type == "cw_spot" || type == "psk_spot" || type == "jtty_spot" || type == "rtty_spot") && d["callsign"].kind == Json::Str && !d["callsign"].str().empty()) {
+        const std::string want = type == "cw_spot" ? "cw" : type == "psk_spot" ? "psk" : type == "rtty_spot" ? "rtty" : "jtty";
         if (u.active != want) return;
         DecCall c;
         c.call = decClip(d["callsign"].str(), 16); c.country = decClip(d["country"].str(), 40); c.how = decClip(d["how"].str(), 8);
-        c.hz = d["frequency"].num(0); c.snr = d["snr"].num(0); c.wpm = d["wpm"].num(0); c.mode = decClip(d["mode"].str(), 8); c.at = (double)std::time(nullptr);
+        c.hz = d["frequency"].num(0); c.snr = d["snr"].num(0); c.wpm = d["wpm"].num(0); c.mode = decClip(d["mode"].str(), 12); c.at = (double)std::time(nullptr);
         for (auto it = u.calls.begin(); it != u.calls.end(); ++it)
             if (it->call == c.call) { if (want == "jtty" && it->how == "CQ") c.how = "CQ"; u.calls.erase(it); break; }   // ★ once a CQ, a CQ spot
         u.calls.push_front(c);
@@ -1203,7 +1212,22 @@ inline void decCannedTick(App& a, const RadioState& s) {
     const int k = u.cannedN++;
     const std::string& m = u.active;
     if (k == 0 && !m.empty()) decOnJson(a, s, "{\"type\":\"audio_extension_attached\"}");
-    if (m == "rtty") {
+    if (m == "rtty" && u.rttySkim) {
+        // ★ the RTTY skimmer's list (vibe_rtty_skim_run.h): one set, one still waiting for its parameters
+        if (k == 1) decOnBinary(a, s, std::string("\x03\x01", 2));
+        if (k % 4 == 0) {
+            const bool set2 = k >= 12;
+            const std::string t1 = std::string("[45 baud / 170 Hz / Reverse] CQ CQ TEST DL0ABC DL0ABC TEST ").substr(0, (size_t)std::min(58, 30 + k));
+            char j[1400];
+            std::snprintf(j, sizeof j, "{\"type\":\"rtty_signals\",\"data\":{\"skimmer\":true,\"centre\":7040000,\"width\":48000,\"primary\":0,\"signals\":["
+                "{\"id\":1,\"hz\":7041250,\"shift\":170,\"set\":true,\"baud\":45.45,\"reverse\":true,\"settings\":\"45 baud / 170 Hz / Reverse\",\"snr\":21,\"q\":\"high\",\"active\":true,\"call\":\"DL0ABC\",\"country\":\"Germany\",\"text\":\"%s\"},"
+                "{\"id\":2,\"hz\":7043900,\"shift\":450,\"set\":%s,\"baud\":%s,\"reverse\":false,\"settings\":\"%s\",\"snr\":12,\"q\":\"medium\",\"active\":true,\"call\":\"\",\"country\":\"\",\"text\":\"%s\"}]}}",
+                t1.c_str(), set2 ? "true" : "false", set2 ? "50" : "0", set2 ? "50 baud / 450 Hz / Normal" : "", set2 ? "[50 baud / 450 Hz / Normal] ZCZC WX 0600 UTC" : "");
+            decOnJson(a, s, j);
+        }
+        if (k == 13) decOnBinary(a, s, std::string("\x03\x03", 2));
+        if (k == 10) decOnJson(a, s, "{\"type\":\"rtty_spot\",\"data\":{\"callsign\":\"DL0ABC\",\"frequency\":7041250,\"mode\":\"RTTY 45/170\",\"snr\":21,\"how\":\"TEST\",\"country\":\"Germany\"}}");
+    } else if (m == "rtty") {
         static const std::string txt = "RYRYRYRY CQ CQ CQ DE DL0ABC DL0ABC DL0ABC PSE K\r\r\nDL0ABC DE G4XYZ UR 599 599 IN LONDON NAME JOHN JOHN HW? BK\r\r\n"
                                        "WX REPORT 0600 UTC: NORTH SEA WIND SW 5 TO 7 BACKING S 6 TO GALE 8 LATER. RAIN, GOOD BECOMING MODERATE.\r\r\n";
         if (k == 1) decOnBinary(a, s, std::string("\x03\x03", 2));

@@ -1,7 +1,9 @@
 # RTTY skimmer — spec
 
 Stuart, 2026-11-14 ("this morning there was loads of RTTY on 40m"): a skimmer for RTTY like the CW and PSK skimmers —
-**CPU-light and user friendly**. Agreed in conversation the same evening; not built yet.
+**CPU-light and user friendly**. Agreed in conversation the same evening.
+
+**BUILT 2026-11-14 on branch `v12-rtty-skimmer` — see §6.** Not yet proven on air (§5).
 
 ## 1. What the listener sees
 
@@ -67,3 +69,18 @@ input, a lighter default width on slow boxes.
 
 A real 40 m RTTY IQ capture (Stuart's UberSDR, standing OK) of the RTTY area: detection count, settings found, text
 gate (no text on noise / non-RTTY data modes), and the CPU on the Pi 2 and the R36S.
+
+## 6. As built (2026-11-14, branch `v12-rtty-skimmer`)
+
+- Engine `decoders/rtty_skimmer.{h,cpp}` (namespace `vibe::rttysk`); server `vibe_rtty_skim_run.h`, extension
+  `rttyskim` {width 12–96 kHz}, `rtty_signals` / `rtty_spot`; web, app and R36S clients; the owner's
+  `rttySkimWorkers` (0 = the benchmark's / hardware's default); benchmark row `dec_rttyskim`.
+- ★ **The channel is 3000 samples a second, not "a few hundred"**: the inverse's size is chosen so every channel comes
+  out at exactly 3000 Hz whatever the slicer's rate, because FskDecoder's bit clock needs whole samples per bit (45.45
+  baud 1.5 stop = 33 a half bit; at 1500 Hz it would be 16.5 and the clock slips). The ring is 10 s of int16 (60 KB a
+  signal). Measured cost is still inside §4's figures.
+- ★ **Crowded windows**: pairs ranked by how close their spacing is to the standard shift, each tone peak in one pair a
+  hop, a pair inside (or half inside) a listed signal's tones is that signal's own spectrum, and a wider pair round
+  candidates waits for its own alternation test. Without these, 30 signals in 24 kHz lost 6 and 96 kHz grew 3 false ones.
+- Tests: `vibeserver/test-rtty-skimmer.cpp`, `scripts/test-server-rtty-skim.mjs`, `scripts/test-web-rtty-skim.mjs`,
+  `scripts/test_cw_list.ts`, handheld-ui `cw_log_test`.

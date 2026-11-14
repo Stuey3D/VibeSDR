@@ -27938,6 +27938,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy") key = "time";
         else if (ext == "cwskim") key = "cw";        // ★ the skimmer is CW's too — one owner switch
         else if (ext == "pskskim") key = "psk";      // ★ …and PSK's skimmer is PSK's
+        else if (ext == "rttyskim") key = "rtty";    // ★ …and the RTTY skimmer is RTTY's — one owner switch
         return !key.empty() && vsModeBlocked(key);
     }
 
@@ -28500,6 +28501,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 m.freqHz = dial ? dial() : 0.0;
                 return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
             };
+            // ★★ …and the RTTY skimmer (V12 2026-11-14): the same keyboard-mode summary, labelled RTTY.
+            e.rttySkimSpotTap = [dial, modeOf]() -> vibe::DecoderTapPtr {
+                if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
+                vibe::gallery::Meta m;
+                m.kind = "rttyskim"; m.origin = "live"; m.decoder = "rttyskim";
+                m.mode = modeOf();
+                m.freqHz = dial ? dial() : 0.0;
+                return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
+            };
+            e.rttySkimWorkers = [] { return LocalSdrShim::rttySkimWorkers(); };
             // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.
             e.spotTap = [dial](bool band) -> vibe::DecoderTapPtr {
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
@@ -28608,7 +28619,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★★ V12 DECODER REACH: a fixed-frequency decoder this radio cannot tune is refused with the same words its
                  *  greyed key shows (vibe_decoder_reach.h) — an old client or a hand-rolled tool cannot make it live. */
                 {
-                    const std::string key = ext == "cwskim" ? "cw" : ext == "pskskim" ? "psk" : ext;
+                    const std::string key = ext == "cwskim" ? "cw" : ext == "pskskim" ? "psk" : ext == "rttyskim" ? "rtty" : ext;
                     const std::string why = vsDecoderWhyNot(key);
                     if (!why.empty()) {
                         LOGI("decoder %s refused — %s", ext.c_str(), why.c_str());
@@ -36857,6 +36868,15 @@ void LocalSdrShim::setPublicSharing(bool on) {
     g_vsPublicSharing.store(on);
     LOGI("sharing: %s", on ? "public — full admin tools" : "local — simple admin");
 }
+static std::atomic<int> g_vsRttySkimWorkers{0};   // ★ 0 = vibe::rttySkimDefaultWorkers()
+void LocalSdrShim::setRttySkimWorkers(int n) {
+    g_vsRttySkimWorkers.store(std::max(0, std::min(8, n)), std::memory_order_relaxed);
+    LOGI("RTTY skimmer: %d search worker(s) (%s)", rttySkimWorkers(), n > 0 ? "the owner's figure" : "the default for this hardware");
+}
+int LocalSdrShim::rttySkimWorkers() {
+    const int n = g_vsRttySkimWorkers.load(std::memory_order_relaxed);
+    return n > 0 ? n : vibe::rttySkimDefaultWorkers();
+}
 void LocalSdrShim::setDecoderMax(int max) {
     g_vsDecoderMax.store(max > 0 ? max : 0, std::memory_order_relaxed);
     vsDecoderMaxPublish();
@@ -38583,6 +38603,10 @@ static std::string vsTunableJson() {
     /* ★★ V12 THE SKIMMERS read IQ across a segment; an Icom gives one demodulated audio channel, so its CW and PSK keys
      *  draw ONE SIGNAL only (`skim`:false — absent everywhere else, so every older client and every SDR is unchanged). */
     if (g_icomOn.load()) j += ",\"skim\":false";
+    /* ★★ V12 THE RTTY SKIMMER (2026-11-14, docs/v12/RTTY-SKIMMER.md): every RTTY signal across a segment, each with its own
+     *  settings. Absent on an older server, so its clients offer the one-signal RTTY decoder only; false where the owner
+     *  has blocked RTTY, or on an Icom (one audio channel, no IQ — AGENTS.md: no control that cannot work here). */
+    j += std::string(",\"rttyskim\":") + (vsModeBlocked("rtty") || g_icomOn.load() ? "false" : "true");
     /* ★★ DSC (V12, 2026-10-26): maritime Digital Selective Calling (decoders/dsc_decoder.h). Absent on an older server, so
      *  its clients draw no DSC button there; false where the owner has blocked it on this receiver. */
     j += vsDecoderCapJson("dsc", reach);
@@ -38981,7 +39005,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";
