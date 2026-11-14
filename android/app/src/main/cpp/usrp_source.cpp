@@ -210,6 +210,14 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
         if (fpga.empty()) { err = std::string("the USRP FPGA image (") + fpgaName + ") is missing from this install — reinstall VibeServer"; return false; }
         addr["fw"] = fw;
         addr["fpga"] = fpga;
+        /* ★★★ ROOM FOR A HICCUP ON THE HOST (2026-11-14, the B210 at 56 MS/s: ~2 overflows a second with our CPU at 17 %,
+         *  and "on 32 it was breaking a bit as well"). UHD's B200 default is 16 USB receive frames of ~8 KB — 128 KB in
+         *  flight, 0.6 ms of samples at 56 MS/s and 1 ms at 32. Our recv thread also hands each ~5 ms block to the DSP
+         *  queue before it calls recv() again, so any pause longer than that on the host (a page fault, the scheduler, the
+         *  hand-off itself) overflowed the radio's FIFO — an 'O', a hole, a torn DAB frame. 256 frames is ~2 MB: 9 ms at
+         *  56 MS/s, 16 ms at 32 — Ettus's own advice for high rates. Costs 2 MB of RAM on a box that runs a USRP, and no
+         *  latency anyone can hear (samples are only buffered when the host is late). An owner's own value is kept. */
+        if (!addr.has_key("num_recv_frames")) addr["num_recv_frames"] = "256";
         std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
         impl_->usrp = uhd::usrp::multi_usrp::make(addr);
         auto& u = *impl_->usrp;
