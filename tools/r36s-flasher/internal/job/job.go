@@ -37,6 +37,9 @@ type Job struct {
 	UID          int    `json:"uid"`          // the person's — the backup files are theirs, not root's
 	GID          int    `json:"gid"`
 	Tmp          string `json:"tmp"`
+
+	// Open opens the card (the app: through authopen, one system password prompt). nil = open it directly (tests).
+	Open func(path string, flags int) (*os.File, error) `json:"-"`
 }
 
 // Event is one progress line.
@@ -135,7 +138,10 @@ func Run(j *Job, rep Reporter) (err error) {
 	}
 	dev, err := openTarget(j)
 	if err != nil {
-		return Friendly{"Could not open the card: " + err.Error()}
+		if j.Disk != "" {
+			_ = exec.Command("/usr/sbin/diskutil", "mountDisk", j.Disk).Run()
+		}
+		return openFailure(err)
 	}
 	defer dev.Close()
 

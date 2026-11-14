@@ -21,6 +21,12 @@
         <string>13.0.0</string>
         <key>NSHighResolutionCapable</key>
         <string>true</string>
+        <key>NSRemovableVolumesUsageDescription</key>
+        <string>VibeSDR Flasher backs up and writes your R36S's SD card.</string>
+        <key>NSDesktopFolderUsageDescription</key>
+        <string>VibeSDR Flasher reads the VibeSDR image from your Desktop and can save the backup there.</string>
+        <key>NSDocumentsFolderUsageDescription</key>
+        <string>VibeSDR Flasher saves the backup of your SD card in Documents › VibeSDR Backups.</string>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
         {{if .Info.FileAssociations}}

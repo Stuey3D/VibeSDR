@@ -1,6 +1,7 @@
 package job
 
 import (
+	"errors"
 	"os"
 	"strings"
 
@@ -15,7 +16,26 @@ func openTarget(j *Job) (*os.File, error) {
 	if strings.HasPrefix(j.Target, "/dev/") {
 		flag |= unix.O_EXLOCK
 	}
+	if j.Open != nil {
+		return j.Open(j.Target, flag)
+	}
 	return os.OpenFile(j.Target, flag, 0)
+}
+
+// ErrCancelled is what an Open returns when the person cancels the password prompt.
+var ErrCancelled = errors.New("cancelled")
+
+// openFailure says, in one sentence, why the card could not be opened — nothing has been read or written yet.
+func openFailure(err error) error {
+	switch {
+	case errors.Is(err, ErrCancelled):
+		return Friendly{"The password was cancelled, so nothing was done. Your card has not changed."}
+	case errors.Is(err, unix.EPERM) || strings.Contains(err.Error(), "not permitted"):
+		return Friendly{"macOS did not let VibeSDR Flasher open the card. In System Settings › Privacy & Security › Files & Folders, turn on Removable Volumes for VibeSDR Flasher, then try again. Your card has not changed."}
+	case errors.Is(err, unix.EBUSY) || errors.Is(err, unix.EAGAIN):
+		return Friendly{"The card is busy — another app is using it. Close it (Finder windows on the card too) and try again. Your card has not changed."}
+	}
+	return Friendly{"Could not open the card (" + err.Error() + "). Your card has not changed."}
 }
 
 // syncTarget flushes the card. ★★ On a raw device (/dev/rdiskN) neither fsync nor F_FULLFSYNC applies — both answer

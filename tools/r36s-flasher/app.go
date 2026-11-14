@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"vibesdr.net/r36s-flasher/internal/authopen"
 	"vibesdr.net/r36s-flasher/internal/disks"
 	"vibesdr.net/r36s-flasher/internal/job"
 	"vibesdr.net/r36s-flasher/internal/release"
@@ -102,8 +101,17 @@ func (a *App) DefaultBackupDir(name string) string {
 
 // ChooseFolder asks where the backup should go.
 func (a *App) ChooseFolder(def string) string {
+	// ★ the dialog refuses to open at a folder that does not exist yet (Wails) — and "VibeSDR Backups" does not until
+	//   the first backup: Stuart's Change… did nothing (2026-11-14). Start at the nearest folder that does exist.
+	start := filepath.Dir(def)
+	for start != "/" {
+		if st, err := os.Stat(start); err == nil && st.IsDir() {
+			break
+		}
+		start = filepath.Dir(start)
+	}
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Where should the backup go?", DefaultDirectory: filepath.Dir(def), CanCreateDirectories: true,
+		Title: "Where should the backup go?", DefaultDirectory: start, CanCreateDirectories: true,
 	})
 	if err != nil || dir == "" {
 		return def
@@ -170,8 +178,7 @@ func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 		return
 	}
 	defer os.RemoveAll(work)
-	// 1. the image into the cache, checked as this person (the helper runs as root, and macOS keeps root's hands off the
-	//    Desktop and Documents — so it is given only files here)
+	// 1. the image into the cache, checked as this person
 	a.emit(job.Event{Stage: "image", Frac: 0, Text: "Getting the VibeSDR image ready…"})
 	cached := filepath.Join(release.CacheDir(), filepath.Base(img.Path))
 	if got, err := release.FileSHA256(cached, nil); err != nil || got != img.SHA256 {
@@ -182,29 +189,25 @@ func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 			return
 		}
 	}
-	// 2. the job, for the helper
+	// 2. the job — run here, as the person. Only the card itself needs permission, and macOS's own authopen opens it
+	//    after one system password prompt and hands it back (internal/authopen). Nothing runs as root.
 	staged := filepath.Join(work, "backup", filepath.Base(folder)+".img.gz")
 	j := job.Job{Target: d.Raw, Disk: d.Device, Size: d.Size, BackupKind: kind, BackupPath: staged, ImagePath: cached,
-		ImageSHA256: img.SHA256, ImageVersion: img.Version, ProgressPath: filepath.Join(work, "progress.jsonl"),
-		UID: os.Getuid(), GID: os.Getgid(), Tmp: work}
-	jb, _ := json.Marshal(j)
-	jobPath := filepath.Join(work, "job.json")
-	if err := os.WriteFile(jobPath, jb, 0o644); err != nil {
-		a.finish(err, "")
-		return
-	}
-	exe, _ := os.Executable()
-	// 3. the helper, as root — one password prompt
-	stop := make(chan struct{})
-	go a.tail(j.ProgressPath, stop)
-	cmd := exec.Command("/usr/bin/osascript",
-		"-e", "on run argv",
-		"-e", `do shell script (quoted form of item 1 of argv) & " --helper " & (quoted form of item 2 of argv) with prompt "VibeSDR Flasher needs your password to write the SD card." with administrator privileges`,
-		"-e", "end run", exe, jobPath)
-	out, runErr := cmd.CombinedOutput()
-	close(stop)
-	last := lastEvent(j.ProgressPath)
-	// 4. the backup to where the person asked — whatever happened, it is theirs
+		ImageSHA256: img.SHA256, ImageVersion: img.Version, Tmp: work,
+		Open: func(path string, flags int) (*os.File, error) {
+			a.emit(job.Event{Stage: "open", Frac: 0.02, Text: "Waiting for your password…"})
+			f, err := authopen.Open(path, flags, "VibeSDR Flasher needs your password to back up and write the SD card.")
+			if errors.Is(err, authopen.ErrCancelled) {
+				return nil, job.ErrCancelled
+			}
+			return f, err
+		}}
+	runErr := job.Run(&j, func(e job.Event) {
+		if !e.Done && e.Error == "" { // the end is reported once, by finish
+			a.emit(e)
+		}
+	})
+	// 3. the backup to where the person asked — whatever happened, it is theirs
 	backupDir := ""
 	if _, err := os.Stat(staged); err == nil {
 		if err := os.MkdirAll(filepath.Dir(folder), 0o755); err == nil {
@@ -213,64 +216,7 @@ func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 			}
 		}
 	}
-	switch {
-	case last != nil && last.Done:
-		a.finish(nil, backupDir)
-	case last != nil && last.Error != "":
-		a.finish(errors.New(last.Error), backupDir)
-	case runErr != nil && strings.Contains(string(out), "-128"):
-		a.finish(errors.New("The password was cancelled, so nothing was done. Your card has not changed."), backupDir)
-	case runErr != nil:
-		a.finish(fmt.Errorf("the writer stopped unexpectedly: %s", strings.TrimSpace(string(out))), backupDir)
-	default:
-		a.finish(errors.New("the writer finished without saying it had succeeded — check the card before using it"), backupDir)
-	}
-}
-
-func (a *App) tail(p string, stop chan struct{}) {
-	var off int64
-	t := time.NewTicker(250 * time.Millisecond)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-		}
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		f.Seek(off, io.SeekStart)
-		r := bufio.NewReader(f)
-		for {
-			ln, err := r.ReadBytes('\n')
-			if err != nil {
-				break
-			}
-			off += int64(len(ln))
-			var e job.Event
-			if json.Unmarshal(ln, &e) == nil && !e.Done && e.Error == "" {
-				a.emit(e)
-			}
-		}
-		f.Close()
-	}
-}
-
-func lastEvent(p string) *job.Event {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return nil
-	}
-	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		var e job.Event
-		if json.Unmarshal([]byte(lines[i]), &e) == nil && (e.Done || e.Error != "") {
-			return &e
-		}
-	}
-	return nil
+	a.finish(runErr, backupDir)
 }
 
 func copyFile(src, dst string, prog func(d, t int64)) error {

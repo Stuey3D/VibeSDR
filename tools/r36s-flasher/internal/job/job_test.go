@@ -18,6 +18,7 @@ import (
 	"vibesdr.net/r36s-flasher/internal/card"
 
 	"github.com/diskfs/go-diskfs/backend/file"
+	"golang.org/x/sys/unix"
 	"github.com/diskfs/go-diskfs/filesystem/fat32"
 	"github.com/klauspost/pgzip"
 )
@@ -293,5 +294,34 @@ func TestBadImageChecksum(t *testing.T) {
 	}
 	if _, err := os.Stat(j.BackupPath); err == nil {
 		t.Fatal("a backup was made before the image was checked")
+	}
+}
+
+// The app opens the card through Job.Open (authopen); a refusal stops before anything is read or written, in one plain
+// sentence (Stuart's first real run, 2026-11-14: "Could not open the card: open /dev/rdisk4: operation not permitted").
+func TestOpenRefusalsAreOneSentence(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{ErrCancelled, "The password was cancelled"},
+		{&os.PathError{Op: "open", Path: "/dev/rdisk4", Err: unix.EPERM}, "Removable Volumes"},
+		{unix.EBUSY, "another app is using it"},
+		{errors.New("something odd"), "Your card has not changed"},
+	}
+	for _, c := range cases {
+		j := &Job{Target: "/dev/rdisk99", Open: func(string, int) (*os.File, error) { return nil, c.err }}
+		_, err := openTarget(j)
+		got := openFailure(err).Error()
+		if !strings.Contains(got, c.want) || strings.Contains(got, "/dev/") {
+			t.Errorf("%v → %q", c.err, got)
+		}
+	}
+	// the hook gets the raw device with the exclusive lock asked for
+	var gotFlags int
+	j := &Job{Target: "/dev/rdisk99", Open: func(_ string, f int) (*os.File, error) { gotFlags = f; return nil, ErrCancelled }}
+	openTarget(j)
+	if gotFlags&unix.O_EXLOCK == 0 || gotFlags&os.O_RDWR == 0 {
+		t.Errorf("flags %#x", gotFlags)
 	}
 }
