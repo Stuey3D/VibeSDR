@@ -5,6 +5,7 @@
 #include <cstdint>
 #if defined(__ARM_NEON)
   #include <arm_neon.h>
+  #include "vibedsp/neon_compat.h"   // ★ vaddvq / vmaxvq / vminvq on 32-bit ARM (the armhf build, Android armeabi-v7a)
 #elif defined(__SSE2__)
   #include <emmintrin.h>
 #endif
