@@ -1,0 +1,4 @@
+build/bin/
+frontend/wailsjs/
+# the window IS frontend/dist (hand-written, embedded) — not a build output
+!frontend/dist/

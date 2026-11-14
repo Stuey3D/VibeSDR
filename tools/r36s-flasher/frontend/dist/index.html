@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VibeSDR Flasher</title>
+<style>
+  :root {
+    --bg: #0e0c0a; --panel: #1a1612; --panel2: #221d17; --line: #3a3128; --text: #f3e9da; --dim: #a8998a;
+    --gold: #f0b84b; --gold2: #ffcf6e; --ok: #7dffb0; --warn: #ff9a4a; --bad: #ff6b5b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; user-select: none; }
+  header { padding: 34px 28px 10px; --wails-draggable: drag; }
+  h1 { margin: 0; font-size: 22px; letter-spacing: .5px; color: var(--gold); font-weight: 700; }
+  h1 small { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  .local { margin-top: 4px; font-size: 11px; color: var(--warn); letter-spacing: .3px; }
+  main { padding: 6px 28px 28px; }
+  .screen { display: none; }
+  .screen.on { display: block; }
+  h2 { font-size: 18px; margin: 10px 0 14px; font-weight: 600; }
+  p.lead { color: var(--dim); margin: -6px 0 16px; }
+  .big { display: block; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    border-radius: 14px; padding: 18px 20px; margin: 0 0 12px; cursor: pointer; font: inherit; }
+  .big:hover:not(:disabled) { border-color: var(--gold); background: var(--panel2); }
+  .big b { display: block; font-size: 17px; color: var(--gold2); margin-bottom: 3px; }
+  .big span { color: var(--dim); font-size: 13px; }
+  .big:disabled { opacity: .45; cursor: default; }
+  .big.sel { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; background: var(--panel2); }
+  .soon { float: right; font-size: 11px; color: var(--dim); border: 1px solid var(--line); border-radius: 20px; padding: 2px 8px; }
+  .btn { border: 0; border-radius: 12px; padding: 13px 26px; font: 600 15px/1 inherit; cursor: pointer; }
+  .go { background: var(--gold); color: #1a1208; }
+  .go:hover:not(:disabled) { background: var(--gold2); }
+  .go:disabled { opacity: .35; cursor: default; }
+  .plain { background: transparent; color: var(--dim); border: 1px solid var(--line); }
+  .plain:hover { color: var(--text); border-color: var(--dim); }
+  .row { display: flex; gap: 12px; justify-content: flex-end; margin-top: 18px; }
+  .status { margin-top: 18px; padding: 12px 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; color: var(--dim); }
+  .status .v { color: var(--ok); }
+  .status .e { color: var(--warn); }
+  .disk { display: flex; justify-content: space-between; align-items: center; }
+  .disk .sz { font-size: 15px; color: var(--text); white-space: nowrap; margin-left: 12px; }
+  .empty { padding: 26px; text-align: center; color: var(--dim); border: 1px dashed var(--line); border-radius: 14px; }
+  .folder { margin-top: 8px; font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 10px; }
+  .folder code { color: var(--text); background: var(--panel); padding: 4px 8px; border-radius: 6px; font: 12px ui-monospace, Menlo, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; user-select: text; }
+  .link { background: none; border: 0; color: var(--gold); cursor: pointer; font: inherit; padding: 0; }
+  .bar { height: 18px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); overflow: hidden; margin: 18px 0 10px; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #c98a2a, var(--gold2)); transition: width .3s; }
+  .stage { font-size: 16px; min-height: 24px; }
+  .careful { color: var(--warn); font-size: 13px; margin-top: 14px; }
+  .done-ic { font-size: 54px; color: var(--ok); margin: 10px 0 0; }
+  .bad-ic { font-size: 46px; color: var(--bad); margin: 10px 0 0; }
+  .msg { font-size: 16px; margin: 8px 0 6px; }
+  .small { font-size: 12px; color: var(--dim); }
+  dialog { background: var(--panel2); color: var(--text); border: 1px solid var(--gold); border-radius: 16px; padding: 22px 24px; max-width: 520px; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog h3 { margin: 0 0 10px; color: var(--gold2); }
+  label.chk { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 13px; color: var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>VibeSDR Flasher <small id="ver"></small></h1>
+  <div class="local" id="local"></div>
+</header>
+<main>
+  <!-- HOME -->
+  <section class="screen on" id="home">
+    <h2>What would you like to do?</h2>
+    <button class="big" id="bMake"><b>Make a VibeSDR card</b><span>Put your R36S's own SD card in, press Start — it backs it up and does the rest.</span></button>
+    <button class="big" disabled><span class="soon">Coming soon</span><b>Update a VibeSDR card</b><span>Bring a VibeSDR card up to date. Your settings and recordings stay.</span></button>
+    <button class="big" disabled><span class="soon">Coming soon</span><b>Advanced</b><span>Drivers from a saved backup, generic ROCKNIX drivers or your own .dtb files; blank cards.</span></button>
+    <div class="status" id="imgStatus">Looking for the VibeSDR image…</div>
+  </section>
+
+  <!-- 1. THE CARD -->
+  <section class="screen" id="pick">
+    <h2>Insert your R36S's SD card</h2>
+    <p class="lead">Choose it below. Only removable cards are shown — never your Mac's own disks.</p>
+    <div id="diskList"></div>
+    <div class="row"><button class="btn plain" data-home>Back</button><button class="btn go" id="toBackup" disabled>Next</button></div>
+  </section>
+
+  <!-- 2. THE BACKUP -->
+  <section class="screen" id="backup">
+    <h2>Back up the card first</h2>
+    <p class="lead">Your backup is saved on this Mac before anything on the card is changed.</p>
+    <button class="big sel" id="kWhole" data-kind="whole"><b>Whole card (recommended)</b><span>Every byte — you can put your R36S back exactly as it was.</span></button>
+    <button class="big" id="kBoot" data-kind="boot"><b>Boot partition only</b><span>Small and quick — enough to make another VibeSDR card, not to restore the old system.</span></button>
+    <div class="folder">Backup goes to <code id="folder"></code><button class="link" id="chFolder">Change…</button></div>
+    <div class="row"><button class="btn plain" id="backToPick">Back</button><button class="btn go" id="start">Start</button></div>
+  </section>
+
+  <!-- 3. WORKING -->
+  <section class="screen" id="work">
+    <h2>Making your VibeSDR card</h2>
+    <div class="bar"><i id="barFill"></i></div>
+    <div class="stage" id="stage">Starting…</div>
+    <div class="careful">Leave the card in until it says Done.</div>
+  </section>
+
+  <!-- 4. DONE / STOPPED -->
+  <section class="screen" id="end">
+    <div id="endIcon"></div>
+    <div class="msg" id="endMsg"></div>
+    <div class="small" id="endBackup"></div>
+    <div class="row"><button class="btn plain" id="showBackup" hidden>Show the backup</button><button class="btn go" data-home>Back to the start</button></div>
+  </section>
+</main>
+
+<dialog id="confirm">
+  <h3>Replace everything on this card?</h3>
+  <div id="confirmText"></div>
+  <label class="chk" id="largeRow" hidden><input type="checkbox" id="largeOk"> This disk is over 256 GB. I am sure it is my R36S's SD card.</label>
+  <div class="row"><button class="btn plain" id="cNo">Cancel</button><button class="btn go" id="cYes">Yes — make my VibeSDR card</button></div>
+</dialog>
+
+<script>
+const App = () => window.go.main.App;
+const $ = (id) => document.getElementById(id);
+const gb = (b) => (b / 1e9).toFixed(1) + ' GB';
+let disks = [], chosen = null, kind = 'whole', folder = '', poll = null, status = null;
+
+function show(id) {
+  document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.id === id));
+  if (id === 'pick') startPoll(); else stopPoll();
+}
+document.querySelectorAll('[data-home]').forEach((b) => b.onclick = () => { show('home'); refreshStatus(); });
+
+async function refreshStatus() {
+  status = await App().Rescan();
+  $('ver').textContent = status.flasher;
+  $('local').textContent = status.localTest ? 'Local test build — image from your Desktop (~/Desktop/VibeSDR-Flasher)' : '';
+  $('imgStatus').innerHTML = status.imageOk
+    ? 'VibeSDR <span class="v">' + status.version + '</span> is ready to write.'
+    : '<span class="e">No VibeSDR image yet: ' + status.imageErr + '</span>';
+  $('bMake').disabled = !status.imageOk;
+}
+window.runtime.EventsOn('status', refreshStatus);
+
+$('bMake').onclick = () => { chosen = null; $('toBackup').disabled = true; show('pick'); };
+
+function startPoll() { listDisks(); poll = setInterval(listDisks, 2000); }
+function stopPoll() { if (poll) clearInterval(poll); poll = null; }
+async function listDisks() {
+  try { disks = await App().Disks() || []; } catch (e) { disks = []; }
+  const box = $('diskList');
+  if (!disks.length) { box.innerHTML = '<div class="empty">No SD card found yet. Put the card in this Mac\'s SD slot or a USB card reader.</div>'; chosen = null; $('toBackup').disabled = true; return; }
+  if (chosen && !disks.some((d) => d.id === chosen.id)) { chosen = null; $('toBackup').disabled = true; }
+  box.innerHTML = '';
+  disks.forEach((d) => {
+    const b = document.createElement('button');
+    b.className = 'big disk' + (chosen && chosen.id === d.id ? ' sel' : '');
+    b.innerHTML = '<div><b></b><span></span></div><div class="sz"></div>';
+    b.querySelector('b').textContent = d.name || d.id;
+    b.querySelector('span').textContent = d.looks + ' · ' + (d.bus || 'removable') + ' · ' + d.device;
+    b.querySelector('.sz').textContent = gb(d.size);
+    b.onclick = () => { chosen = d; $('toBackup').disabled = false; listDisks(); };
+    box.appendChild(b);
+  });
+}
+
+$('toBackup').onclick = async () => {
+  folder = await App().DefaultBackupDir(chosen.name || chosen.id);
+  $('folder').textContent = folder; setKind('whole'); show('backup');
+};
+$('backToPick').onclick = () => show('pick');
+function setKind(k) { kind = k; $('kWhole').classList.toggle('sel', k === 'whole'); $('kBoot').classList.toggle('sel', k === 'boot'); }
+$('kWhole').onclick = () => setKind('whole');
+$('kBoot').onclick = () => setKind('boot');
+$('chFolder').onclick = async () => { folder = await App().ChooseFolder(folder); $('folder').textContent = folder; };
+
+$('start').onclick = () => {
+  $('confirmText').innerHTML = '';
+  const p = document.createElement('p');
+  p.textContent = 'Everything on "' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ') will be replaced with VibeSDR '
+    + status.version + '. First, ' + (kind === 'whole' ? 'the whole card' : 'its boot partition') + ' is backed up to ' + folder + '.';
+  $('confirmText').appendChild(p);
+  const q = document.createElement('p'); q.className = 'small';
+  q.textContent = 'Your Mac will ask for your password — writing an SD card needs it.';
+  $('confirmText').appendChild(q);
+  $('largeRow').hidden = !chosen.large; $('largeOk').checked = false;
+  $('confirm').showModal();
+};
+$('cNo').onclick = () => $('confirm').close();
+$('cYes').onclick = async () => {
+  if (chosen.large && !$('largeOk').checked) return;
+  $('confirm').close();
+  $('barFill').style.width = '0%'; $('stage').textContent = 'Starting…';
+  show('work');
+  try { await App().Start(chosen.id, kind, folder, $('largeOk').checked); }
+  catch (e) { finished({ error: String(e), backup: '' }); }
+};
+
+window.runtime.EventsOn('progress', (e) => {
+  $('barFill').style.width = Math.round((e.frac || 0) * 100) + '%';
+  if (e.text) $('stage').textContent = e.text;
+});
+let lastBackup = '';
+function finished(r) {
+  lastBackup = r.backup || '';
+  if (!r.error) {
+    $('endIcon').innerHTML = '<div class="done-ic">✓</div>';
+    $('endMsg').textContent = 'Done — put the card in your R36S and switch it on.';
+  } else {
+    $('endIcon').innerHTML = '<div class="bad-ic">!</div>';
+    $('endMsg').textContent = r.error;
+  }
+  $('endBackup').textContent = lastBackup ? 'Your backup: ' + lastBackup : '';
+  $('showBackup').hidden = !lastBackup;
+  show('end');
+}
+window.runtime.EventsOn('finished', finished);
+$('showBackup').onclick = () => App().RevealBackup(lastBackup);
+
+refreshStatus();
+</script>
+</body>
+</html>
