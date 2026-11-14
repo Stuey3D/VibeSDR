@@ -126,6 +126,19 @@ struct Rig {
 };
 
 static void scenarios() {
+    {   // ★★ BOOKMARKS + EiBi (Stuart, 2026-11-14, handheld74: "eibi nor local saved bookmarks are triggering the VTS like
+        //    they do on the main app") — SDRScreen vtsCheck: the nearest, popped only when ON it (≤ 99 Hz)
+        static const std::vector<VtsStation> list = {{9410000, "BBC World Service", "user"}, {6195000, "BBC WS (EiBi)", "eibi"},
+                                                     {7074000, "FT8 40 m", "heard"}};
+        Rig r; r.in.mode = "am"; r.in.vfoHz = 9410050; r.in.stations = &list; r.step(600);
+        expect(r.bar.shown() && r.line().find("BBC World Service") != std::string::npos, "ON a saved bookmark (50 Hz off) → its name: " + r.line());
+        Rig e; e.in.mode = "am"; e.in.vfoHz = 6195000; e.in.stations = &list; e.step(600);
+        expect(e.bar.shown() && e.line().find("BBC WS (EiBi)") != std::string::npos, "ON an EiBi station → its name: " + e.line());
+        Rig o; o.in.mode = "am"; o.in.vfoHz = 9411000; o.in.stations = &list; o.step(600);
+        expect(!o.bar.shown() || o.line().find("BBC World Service") == std::string::npos, "1 kHz off it → no pop (VTS_ON_HZ 99): " + o.line());
+        Rig l; l.in.vfoHz = 96.1e6; l.in.stations = &list; l.rds("BBC R2", "", 0xC202); l.step(600);
+        expect(l.line().find("BBC R2") != std::string::npos, "a live RDS station still owns the bar: " + l.line());
+    }
     {   // RDS: PI alone, then the name, then RadioText — one held bar, updated in place
         Rig r; r.step(500);
         expect(!r.bar.shown(), "nothing to say → no bar");

@@ -17,8 +17,11 @@
 //   src/components/VTSBar.tsx      the bar itself: entrance / in-place update / timed exit, the pixel slide (the
 //                                  default HYPER style — Atkinson; the R36S never draws the VFD strip)
 //
-// ★ Not ported, because the handheld has no source for them: bookmarks (no bookmark list on the device), the EiBi
-//   schedule, station logos (no internet lookup), band CONDITIONS (UberSDR-only), the VFD (dot / seg) strip, the DX-log
+// ★★ BOOKMARKS AND THE EiBi SCHEDULE ARE PORTED NOW (Stuart, 2026-11-14, handheld74: "eibi nor local saved bookmarks
+//   are triggering the VTS like they do on the main app") — the device has had both since (BOOKMARKS, IMPORT EIBI):
+//   Inputs::stations (the receiver's saved + heard bookmarks, then EiBi, as SDRScreen's merged vtsBookmarks), the
+//   nearest within VTS_ON_HZ pops "station-on" exactly as vtsCheck does; a live RDS / DAB station still owns the bar.
+// ★ Not ported, because the handheld has no source for them: station logos (no internet lookup), band CONDITIONS (UberSDR-only), the VFD (dot / seg) strip, the DX-log
 //   alerts (needs a server DX log poll), OWRX log messages. Each is a source that never fires here, never a dead control.
 #pragma once
 #include "bandplan_gen.h"
@@ -405,6 +408,10 @@ inline std::string bandKey(const std::vector<const BandDef*>& bands) {
 
 // ── what the bar shows (VTSBar.tsx VtsNotifData) ────────────────────────────────────────────────────────────────────
 
+/** One entry of the VTS's station list (SDRScreen vtsBookmarks): the receiver's bookmarks, then EiBi. */
+struct VtsStation { double hz = 0; std::string name; std::string source; };   // source: "user" · "heard" · "eibi"
+constexpr double kVtsOnHz = 99;   // src/services/stations.ts VTS_ON_HZ — ON a station
+
 struct Notif {
     uint64_t key = 0;
     enum Kind { StationOn, Band, Notice } kind = StationOn;
@@ -445,6 +452,7 @@ struct Inputs {
     double drmSid = 0;
     // tone ({"type":"tone","label":…})
     bool toneNew = false; std::string toneLabel;
+    const std::vector<VtsStation>* stations = nullptr;   // ★ the bookmarks + EiBi (null = none, as the goldens run)
     // notice ({"type":"notice"} — `why` (a refusal) or `vts` (a server line for the bar); `ask` refusals are dropped)
     bool noticeNew = false; std::string noticeText;
     // the radio, for the app's own notices
@@ -466,6 +474,7 @@ public:
     void timedEnd(uint64_t key) { if (notif_ && notif_->key == key) notif_.reset(); }
 
     void update(const Inputs& in) {
+        stations_ = in.stations;
         now_ = in.now;
         if (in.connectedEdge) { gainMinShown_ = false; rtlExplained_ = false; }
         // the timers the app arms (setTimeout) land first
@@ -502,6 +511,8 @@ private:
     double noticeUntil_ = 0, noticeEndAt_ = 0, startedAt_ = 0;
     bool noticeEnded_ = false;
     std::string lastStation_;              // vtsLastStation
+    std::string bmLast_;                   // the bookmark / EiBi station last popped (SDRScreen vtsLastStation, bookmark side)
+    const std::vector<VtsStation>* stations_ = nullptr;
     // the band crossing (vtsCheck)
     bool bandInit_ = false; std::string bandKey_; bool bandKeyNull_ = true;
     double lastHz_ = 0, checkAt_ = 0;
@@ -604,9 +615,21 @@ private:
                 notif_ = x;
             }
         }
-        // a live RDS / DAB station owns the station display; with no bookmarks on the device the rest is the latch
+        // a live RDS / DAB station owns the station display (the app: liveStationRef → no bookmark match)
         if (!liveRef_.empty()) return;
-        lastStation_.clear();
+        // ★ the nearest bookmark / EiBi station (SDRScreen vtsCheck): popped ONLY when on it (≤ VTS_ON_HZ); off it resets
+        //   the latch so landing on the same station again pops again; a notice keeps its turn
+        const VtsStation* best = nullptr; double bd = 1e18;
+        if (stations_) for (const auto& st : *stations_) { const double d = std::fabs(st.hz - hz); if (d < bd) { bd = d; best = &st; } }
+        if (!best) { bmLast_.clear(); return; }
+        if (noticeUp()) return;
+        if (bd > kVtsOnHz) { bmLast_.clear(); return; }
+        if (best->name != bmLast_) {
+            bmLast_ = best->name;
+            Notif x; x.key = ++key_; x.kind = Notif::StationOn; x.name = best->name;
+            x.rt = toneLabel_; x.hold = !toneLabel_.empty();
+            notif_ = x;
+        }
     }
 
     // ── the live station ──

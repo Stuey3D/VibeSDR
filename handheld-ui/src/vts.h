@@ -19,10 +19,12 @@
 // ★ Include AFTER the App class (it defines App::drawVts). State lives here (vtsState), not in App.
 #pragma once
 #include "vts_core.h"
+#include "bm_state.h"
 #include "vts_marks.h"
 
 #include <SDL2/SDL_ttf.h>
 #include <cctype>
+#include <set>
 #include <cstdlib>
 
 namespace hh {
@@ -61,9 +63,34 @@ struct State {
     Bar bar;
     Arrival rds, dab, dabOff, dabErr, drm, tone, notice, device;
     bool wasConnected = false;
+    double listsAt = -1e9;   // when the bookmarks / EiBi were last asked for (drawVts)
     std::map<std::pair<const void*, char32_t>, bool> glyphs;   // TTF_GlyphIsProvided32, cached
 };
 inline State& vtsState() { static State s; return s; }
+
+/** ★ The VTS's station list (SDRScreen's merged vtsBookmarks): the owner's SAVED bookmarks first, then the stations this
+ *  receiver HEARD, then the EiBi schedule — the first of a name|frequency pair wins. Rebuilt only when either list
+ *  changes (their seqs); DAB rows are left out (the native UI's DAB has its own labels). */
+inline const std::vector<VtsStation>& vtsStations() {
+    static std::vector<VtsStation> list;
+    static uint64_t seenRows = ~0ull, seenSt = ~0ull;
+    BmShared& b = bmShared();
+    std::lock_guard<std::mutex> lk(b.m);
+    if (b.seq == seenRows && b.stationsSeq == seenSt) return list;
+    seenRows = b.seq; seenSt = b.stationsSeq;
+    list.clear();
+    std::set<std::string> seen;
+    auto add = [&](double hz, const std::string& name, const char* src) {
+        if (hz <= 0 || name.empty()) return;
+        const std::string k = name + "|" + std::to_string((long long)std::llround(hz));
+        if (!seen.insert(k).second) return;
+        list.push_back({hz, name, src});
+    };
+    for (const auto& r : b.rows) if (r.manual && r.mode != "dab") add(r.frequency, r.name, "user");
+    for (const auto& r : b.rows) if (!r.manual && r.mode != "dab") add(r.frequency, r.name, "heard");
+    for (const auto& s : b.stations) add(s.frequency, s.name, "eibi");
+    return list;
+}
 
 inline std::string numSig(const Json& j, const char* k) { char b[32]; std::snprintf(b, sizeof b, "%.3f", j[k].num(-9999)); return b; }
 
@@ -74,6 +101,7 @@ inline Inputs readInputs(State& st, const RadioState& s, double nowMs, int regio
     in.mode = s.mode;
     in.vfoHz = s.vfoHz;
     in.region = region;
+    in.stations = &vtsStations();
     in.connectedEdge = s.connected && !st.wasConnected;
     st.wasConnected = s.connected;
     // rds — the shim sends the whole state on every change (ps, radiotext, pi, ecc, ber, sig, tp, ta, af, call)
@@ -267,6 +295,14 @@ inline void App::drawVts(Ctx& c, const RadioState& s, Rect r) {
     using namespace vts;
     State& st = vtsState();
     const double now = c.t * 1000.0;
+    // ★ the bookmarks and the EiBi schedule the VTS matches against: fetched at start and kept fresh (once a minute — the
+    //   lists are cached; the EiBi schedule is loaded once, as the SEARCH page loads it)
+    if (eng_ && c.t - st.listsAt > 60) {
+        st.listsAt = c.t;
+        bmRefresh(eng_->port());
+        bool haveStations; { BmShared& b = bmShared(); std::lock_guard<std::mutex> lk(b.m); haveStations = b.stationsSeq > 0; }
+        if (!haveStations) bmLoadStations(eng_->port());
+    }
     const Inputs in = readInputs(st, s, now, region());
     st.screen.update(in);
     const uint64_t ended = st.bar.update(st.screen.notif(), now);
