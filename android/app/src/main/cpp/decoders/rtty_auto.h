@@ -24,6 +24,28 @@
 
 namespace vibe {
 
+/** ★★ THE SEARCH'S RULES, SHARED (V12, 2026-11-14): the one-signal decoder (RttyAuto) and the RTTY skimmer
+ *  (decoders/rtty_skimmer.h) try the same settings, score them the same way and pick a winner by the same rule — so a
+ *  fix to one improves both (Stuart: "shared with the one-signal decoder so both improve together"). */
+namespace rttyscore {
+struct Setting { double baud; bool inv; bool oneStop; };
+/** The standard speeds (45.45, 50, 75 baud) and shifts (170, 200, 425, 450, 850 Hz). */
+const std::vector<double>& bauds();
+const std::vector<double>& shifts();
+/** The twelve settings a full search tries — every speed × 1.5 or 1 stop bit × normal or reverse, in RttyAuto's order. */
+const std::vector<Setting>& all();
+/** ★ The NEAREST standard shift within 12 % of a measured spacing (445 Hz measured is DWD's 450, not 425); 0 = none. */
+double snapShift(double measuredHz);
+/** A candidate's score for a stretch: frames that passed the start/stop check, less three for each that failed. */
+inline double frameScore(double good, double bad) { return good - 3.0 * bad; }
+/** ★ THE WINNER RULE: the best score, at least `minScore`, and at least `margin` ahead of every candidate with a
+ *  DIFFERENT speed or polarity (a 1-stop decoder that waits for each start bit reads a 1.5-stop signal too, so the two
+ *  stop lengths of the right speed tie — between them the higher score wins). Returns its index, or -1. */
+int pickWinner(const Setting* s, const double* score, int n, double minScore = 12, double margin = 6);
+/** "45" / "50" / "75" — how a speed is written to a person. */
+const char* baudWord(double baud);
+}
+
 class RttyAuto {
 public:
     explicit RttyAuto(int sampleRate);

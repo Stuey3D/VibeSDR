@@ -29,8 +29,36 @@ void fft(std::vector<std::complex<float>>& a) {
         }
     }
 }
-const double kBauds[] = { 45.45, 50.0, 75.0 };
-const double kShifts[] = { 170.0, 200.0, 425.0, 450.0, 850.0 };
+}
+
+namespace rttyscore {
+const std::vector<double>& bauds() { static const std::vector<double> b{ 45.45, 50.0, 75.0 }; return b; }
+const std::vector<double>& shifts() { static const std::vector<double> s{ 170.0, 200.0, 425.0, 450.0, 850.0 }; return s; }
+const std::vector<Setting>& all() {
+    // ★ 1.5 AND 1 stop bit (PBB Den Helder sends 1, 2026-10-04). A 1-stop decoder that waits for each start bit also
+    //   reads 2-stop signals (the extra stop is idle to it), so these two framings cover every async ITA2 station.
+    static const std::vector<Setting> a = [] {
+        std::vector<Setting> v;
+        for (double b : bauds()) for (int one = 0; one < 2; one++) for (int inv = 0; inv < 2; inv++) v.push_back({ b, inv != 0, one != 0 });
+        return v;
+    }();
+    return a;
+}
+double snapShift(double shift) {
+    double bestS = 0, bestD = 1e9;
+    for (double s : shifts()) { const double d = std::fabs(shift - s); if (d <= s * 0.12 && d < bestD) { bestD = d; bestS = s; } }
+    return bestS;
+}
+int pickWinner(const Setting* s, const double* score, int n, double minScore, double margin) {
+    int best = -1;
+    for (int i = 0; i < n; i++) if (best < 0 || score[i] > score[best]) best = i;
+    if (best < 0) return -1;
+    double second = -1e9;
+    for (int i = 0; i < n; i++)
+        if (i != best && (s[i].baud != s[best].baud || s[i].inv != s[best].inv)) second = std::max(second, score[i]);
+    return score[best] >= minScore && score[best] >= second + margin ? best : -1;
+}
+const char* baudWord(double b) { return b < 47 ? "45" : b < 60 ? "50" : "75"; }
 }
 
 RttyAuto::RttyAuto(int sampleRate) : sr_(sampleRate), ring_(kN, 0.0f), psd_(kN / 2 + 1, 0.0) {}
@@ -52,11 +80,10 @@ void RttyAuto::hint_(int audioHz) {
 void RttyAuto::startCandidates_(double centre, double shift) {
     cands_.clear(); winner_ = -1; chosenText_.clear(); searchSamples_ = 0; badWinnerSec_ = 0;
     centre_ = centre; shift_ = shift;
-    // ★ 1.5 AND 1 stop bit (PBB Den Helder sends 1, 2026-10-04). A 1-stop decoder that waits for each start bit also
-    //   reads 2-stop signals (the extra stop is idle to it), so these two framings cover every async ITA2 station.
-    for (double b : kBauds) for (int one = 0; one < 2; one++) for (int inv = 0; inv < 2; inv++) {
-        Cand c; c.baud = b; c.inv = inv != 0; c.oneStop = one != 0;
-        c.d.reset(new FskDecoder(sr_, centre, shift, b, c.oneStop ? "5N1" : "5N1.5", "ITA2", c.inv));
+    // ★ The settings and their order are rttyscore::all() — shared with the RTTY skimmer.
+    for (const auto& st : rttyscore::all()) {
+        Cand c; c.baud = st.baud; c.inv = st.inv; c.oneStop = st.oneStop;
+        c.d.reset(new FskDecoder(sr_, centre, shift, c.baud, c.oneStop ? "5N1" : "5N1.5", "ITA2", c.inv));
         c.d->setAfc(false);   // ★ AFC on the WINNER only (evaluate_) — twelve of them would double the search's CPU
         cands_.push_back(std::move(c));
     }
@@ -124,9 +151,7 @@ void RttyAuto::spectrumStep_() {
     if (std::min(f1, f2) < kLoEdge || std::max(f1, f2) > kHiEdge) hint_(round100(kAim - centre));
     else hint_(0);
     double shift = std::fabs(f1 - f2);
-    { double bestS = 0, bestD = 1e9;   // ★ the NEAREST standard shift within 12 % (445 Hz measured is DWD's 450, not 425)
-      for (double s : kShifts) { const double d = std::fabs(shift - s); if (d <= s * 0.12 && d < bestD) { bestD = d; bestS = s; } }
-      if (bestS > 0) shift = bestS; }
+    { const double s = rttyscore::snapShift(shift); if (s > 0) shift = s; }   // ★ the nearest standard shift within 12 %
     lastCentre_ = centre; lastShift_ = shift;
     // New tones, or the old ones moved (a retune): start again.
     // ★ AFC (2026-10-05): against where the WINNER is tuned now — its AFC follows a drifting station, so a slow drift no
@@ -141,26 +166,22 @@ void RttyAuto::spectrumStep_() {
 
 void RttyAuto::evaluate_() {
     if (cands_.empty()) return;
-    int best = -1;
-    for (size_t i = 0; i < cands_.size(); i++) {
+    rttyscore::Setting st[16]; double sc[16];   // ★ twelve candidates: no allocation each second
+    const size_t nc = std::min<size_t>(cands_.size(), 16);
+    for (size_t i = 0; i < nc; i++) {
         auto& c = cands_[i];
         const unsigned long g = c.d->goodFrames(), b = c.d->framingErrors();
         const double dg = (double)(g - c.lastGood), db = (double)(b - c.lastBad);
         c.lastGood = g; c.lastBad = b;
-        c.score = c.score * 0.7 + (dg - 3.0 * db);
-        if (best < 0 || c.score > cands_[best].score) best = (int)i;
+        c.score = c.score * 0.7 + rttyscore::frameScore(dg, db);
+        st[i] = { c.baud, c.inv, c.oneStop }; sc[i] = c.score;
     }
     char buf[96];
     if (winner_ < 0) {
-        // ★ Choose once the best is clearly a decode: a few seconds of mostly clean frames, and ahead of the rest.
-        // ★ Against candidates with a DIFFERENT speed or polarity only: a 1-stop decoder that waits for each start bit reads
-        //   a 1.5-stop signal too, so the two stop lengths of the right speed tie — and waiting for one to pull 6 ahead of
-        //   the other never ended (2026-10-04). Between them, the higher score wins.
-        double second = -1e9;
-        for (size_t i = 0; i < cands_.size(); i++)
-            if ((int)i != best && (cands_[i].baud != cands_[best].baud || cands_[i].inv != cands_[best].inv))
-                second = std::max(second, cands_[i].score);
-        if (cands_[best].score >= 12 && cands_[best].score >= second + 6) {
+        // ★ Choose once the best is clearly a decode: a few seconds of mostly clean frames, and ahead of the rest —
+        //   rttyscore::pickWinner (the rule, and why stop lengths do not compete, is written there).
+        const int best = rttyscore::pickWinner(st, sc, (int)nc);
+        if (best >= 0) {
             winner_ = best;
             const auto& c = cands_[best];
             c.d->setAfc(true);
