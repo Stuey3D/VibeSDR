@@ -59,6 +59,7 @@ const TABLE = [
   P(['trustedProxies'], 'BEHIND A REVERSE PROXY', 'trustedProxies'),
   P(['maxRadiosPerIp'], 'oneRadioPerIp', 'oneRadioPerIp'),
   P(['decoderMax'], 'DECODERS', 'decoderMax'),
+  P(['rttySkimWorkers'], 'RTTY skimmer', 'rttySkimWorkers'),   // ★ V12 the RTTY skimmer's search workers, under DECODERS
   P(['galleryMb'], 'Gallery size', 'galleryMb'),
   P(['galleryPublic'], 'Everyone may see the gallery', 'galleryPublic'),
   P(['gallerySaveLive'], 'Keep listeners', 'gallerySaveLive'),

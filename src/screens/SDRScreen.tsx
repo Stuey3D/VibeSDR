@@ -6667,7 +6667,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const rttySkimRef = useRef(false);
   const rttyWidthRef = useRef<number>(CW_DEFAULT_WIDTH);
   useEffect(() => {
-    AsyncStorage.multiGet(['lsv_rtty_view', 'lsv_rtty_width']).then((kv) => {
+    AsyncStorage.multiGet(['lsv_skim_rtty_view', 'lsv_skim_rtty_width']).then((kv) => {
       const v = kv[0]?.[1], w = kv[1]?.[1];
       if (v === 'skim') { rttySkimRef.current = true; setRttySkim(true); }
       if (w) { rttyWidthRef.current = cwWidthOf(w); setRttyWidth(rttyWidthRef.current); }
@@ -6675,14 +6675,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   const onRttyView = useCallback((skim: boolean) => {
     rttySkimRef.current = skim; setRttySkim(skim);
-    AsyncStorage.setItem('lsv_rtty_view', skim ? 'skim' : 'one').catch(() => {});
+    AsyncStorage.setItem('lsv_skim_rtty_view', skim ? 'skim' : 'one').catch(() => {});
     setCwList(null); setCwSpots([]);
     if (activeDecRef.current === 'rtty') openDecoder('rtty');
   }, [openDecoder]);
   const onRttyWidth = useCallback((w: number) => {
     const v = cwWidthOf(w);
     rttyWidthRef.current = v; setRttyWidth(v);
-    AsyncStorage.setItem('lsv_rtty_width', String(v)).catch(() => {});
+    AsyncStorage.setItem('lsv_skim_rtty_width', String(v)).catch(() => {});
     if (activeDecRef.current === 'rtty' && rttySkimRef.current) openDecoder('rtty');
   }, [openDecoder]);
   /* ★★ No RTTY skimmer on this server (an older one, RTTY blocked, an Icom): a remembered SKIMMER view is ONE SIGNAL here —
