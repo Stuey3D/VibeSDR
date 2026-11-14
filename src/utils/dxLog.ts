@@ -96,9 +96,9 @@ export function dxSubline(e: DxEntry, now = Date.now() / 1000): string {
     ? [`PI ${e.pi}`, e.psVariants && e.psVariants.length > 1 ? `${e.psVariants.length} PS` : ''].filter(Boolean).join(' · ')
     : [`EId ${e.eid}`, e.services && e.services.length ? `${e.services.length} service${e.services.length === 1 ? '' : 's'}` : '',
        e.tii ? `TII ${e.tii.main}/${e.tii.sub}` : ''].filter(Boolean).join(' · ');
-  /* ★ "multiplex heard in 3000 scans" (Stuart, 2026-11-14: "heard 3000× in 5 openings" was confusing — openings are
-   *  still counted and still sort the log, they are just not spelled out on the row). */
-  const heard = `${e.band === 'FM' ? 'station' : 'multiplex'} heard in ${e.timesHeard} scan${e.timesHeard === 1 ? '' : 's'}`;
+  /* ★ "heard in 3443 scans" (Stuart, 2026-11-14: "heard 3443× in 2 openings" was confusing; "the scans completed at the
+   *  bottom and heard in x amount of scans is enough"). Openings are still counted and still sort the log. */
+  const heard = `heard in ${e.timesHeard} scan${e.timesHeard === 1 ? '' : 's'}`;
   const snr = `peak ${Math.round(e.peakSnrDb)} dB`;
   return [id, heard, snr, `last ${dxWhen(e.lastHeard, now)}`].join(' · ');
 }
@@ -123,7 +123,7 @@ export function dxFooter(p: DxPage, shown: number): string {
   bits.push(`${p.total} shown`);
   const c = p.counts;
   bits.push(`${c.dx + c.provisional} DX · ${c.local} local · ${c.suspect} suspect`);
-  if (p.sweeps) bits.push(`${p.sweeps.fm} FM · ${p.sweeps.dab} DAB sweeps`);
+  if (p.sweeps) bits.push(`${p.sweeps.fm} FM · ${p.sweeps.dab} DAB scans completed`);   // ★ the same word as each row's "heard in N scans"
   let s = bits.join(' · ');
   if (p.bootstrap) s += ` — building this server's baseline until ${dxWhen(p.bootstrapEnds, p.now)}: everything is marked BASELINE and nothing alerts until then.`;
   void shown;
