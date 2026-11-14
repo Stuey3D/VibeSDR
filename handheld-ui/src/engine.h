@@ -105,6 +105,8 @@ public:
         std::vector<WsMessage> msgs;
         spec_.drain(msgs);
         st_.connected = spec_.alive();
+        if (tunePending_ && std::chrono::steady_clock::now() - tuneSentAt_ >= std::chrono::duration<double>(kTuneGapS))
+            sendTune(tunePendingHz_, std::chrono::steady_clock::now());
         for (auto& m : msgs) {
             if (!m.text) {
                 // ★ SPWB (the full-capture layer, wide=1) first: an unknown magic must never reach the SPEC parse
@@ -124,10 +126,21 @@ public:
     }
 
     const RadioState& state() const { return st_; }
+    static constexpr double kTuneGapS = 0.04, kEchoHoldS = 0.8;
 
     // ── what the person did ──
     void tune(double hz) {
         st_.vfoHz = hz;                                // ★ the readout moves at once (the app predicts the same)
+        /* ★★★ AT MOST ONE TUNE EVERY kTuneGapS, ALWAYS THE LATEST (Stuart, 2026-11-14, handheld74: spinning the stick
+         *  "bounce[d] up and down the band and keep bouncing about for a few seconds after I stopped"). A tune a frame
+         *  was a backlog the engine worked through after the stick stopped; now a tune within the gap is HELD and the
+         *  newest one goes when the gap is up (pump). */
+        const auto now = std::chrono::steady_clock::now();
+        if (now - tuneSentAt_ < std::chrono::duration<double>(kTuneGapS)) { tunePending_ = true; tunePendingHz_ = hz; return; }
+        sendTune(hz, now);
+    }
+    void sendTune(double hz, std::chrono::steady_clock::time_point now) {
+        tunePending_ = false; tuneSentHz_ = hz; tuneSentAt_ = now;
         char b[256];
         std::snprintf(b, sizeof b, "{\"type\":\"tune\",\"frequency\":%.0f,\"mode\":%s,\"bandwidthLow\":%d,\"bandwidthHigh\":%d}",
                       hz, jsonQuote(st_.mode).c_str(), st_.bwLow, st_.bwHigh);
@@ -186,6 +199,10 @@ private:
     std::condition_variable cv_;
     WsClient spec_, audio_;
     RadioState st_;
+    // ★ the stick's tunes: the last sent (and when), and the newest one held for the gap — see tune()
+    std::chrono::steady_clock::time_point tuneSentAt_{};
+    double tuneSentHz_ = 0, tunePendingHz_ = 0;
+    bool tunePending_ = false;
     // session (written by the link worker, read by pump)
     std::mutex sm_;
     bool sessionDirty_ = false;
@@ -319,7 +336,16 @@ private:
             st_.binBwHz = j["binBandwidth"].num(st_.binBwHz);
             st_.spanHz = j["totalBandwidth"].num(st_.spanHz);
             st_.maxSpanHz = j["maxBandwidth"].num(st_.maxSpanHz);
-            st_.vfoHz = j["vfo"].num(st_.vfoHz);
+            /* ★★★ OUR OWN TUNES' ECHOES DO NOT MOVE THE DIAL BACK: the engine answers each tune in turn, so while the stick
+             *  turns its replies carry frequencies we have already left. Taken as the dial, the next steps were counted
+             *  from them and the dial walked back and forth (handheld74). For kEchoHoldS after we sent one — or while one
+             *  is held — only a reply AT our last frequency is taken; anything else is a stale echo. Somebody else's tune
+             *  (a shared dial) arrives after the hold and is taken as before. */
+            {
+                const double v = j["vfo"].num(st_.vfoHz);
+                const bool ours = tunePending_ || std::chrono::steady_clock::now() - tuneSentAt_ < std::chrono::duration<double>(kEchoHoldS);
+                if (!ours || std::fabs(v - tuneSentHz_) < 0.5) st_.vfoHz = v;
+            }
             st_.locked = j["locked"].boolean(); st_.shared = j["shared"].boolean();
             const std::string m = j["mode"].str();
             if (!m.empty() && m != st_.mode) { st_.mode = m; modePassband(m, st_.bwLow, st_.bwHigh); }

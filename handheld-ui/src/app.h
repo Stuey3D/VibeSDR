@@ -46,13 +46,18 @@ public:
     void setDegPerStep(double d) { if (d > 0 && d != per_) { per_ = d; acc_ = 0; } }   // ★ CONTROLLER → TUNING STICK FEEL
     int feed(double x, double y, double tMs) {
         const double mag = std::hypot(x, y);
-        if (mag < (has_ ? kRelease : kEngage)) { has_ = false; acc_ = 0; speed_ = 0; return 0; }
+        if (mag < (has_ ? kRelease : kEngage)) { has_ = false; acc_ = 0; speed_ = 0; dir_ = 0; return 0; }
         const double a = std::atan2(y, x) * 180.0 / M_PI;
         if (!has_) { has_ = true; last_ = a; lastT_ = tMs; return 0; }
         double d = a - last_;
         if (d > 180) d -= 360;
         if (d < -180) d += 360;
         last_ = a;
+        /* ★★ A TURN TOO FAST TO READ KEEPS ITS DIRECTION (Stuart, 2026-11-14: spun hard, the dial "bounce[d] up and down
+         *  the band"). Read once a frame, a stick spun faster than half a turn a frame aliases — 200° forward reads as
+         *  160° BACK. Past kAlias the sign of the turn already under way is kept (its size is real, its sign is not). */
+        if (std::fabs(d) > kAlias && dir_ != 0 && (d > 0) != (dir_ > 0)) d = dir_ * (360.0 - std::fabs(d));
+        if (std::fabs(d) > 1.0) dir_ = d > 0 ? 1 : -1;
         const double dt = std::max(1.0, tMs - lastT_) / 1000.0;
         const double v = std::fabs(d) / dt;
         if (speed_ == 0) speed_ = v;
@@ -66,7 +71,8 @@ public:
         return steps;
     }
 private:
-    static constexpr double kEngage = 0.6, kRelease = 0.35, kCount = 0.7;
+    static constexpr double kEngage = 0.6, kRelease = 0.35, kCount = 0.7, kAlias = 140.0;
+    int dir_ = 0;                      // the way the stick has been turning (+1 / −1), 0 = not yet
     double per_, last_ = 0, lastT_ = 0, acc_ = 0, speed_ = 0;
     bool has_ = false;
     double degPerStep(double speed) const {

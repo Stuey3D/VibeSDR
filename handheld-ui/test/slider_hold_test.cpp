@@ -146,9 +146,30 @@ static void sender() {
     CHECK(sent.size() == n0 + 5, "taps go at once");
 }
 
+/* ★★ THE TUNING STICK SPUN HARD (Stuart, 2026-11-14, handheld74: "bounce up and down the band"). Read once a frame, a
+ *  stick turning faster than half a turn a frame aliased: 200° forward read as 160° back. The Jog keeps the sign. */
+static void jog() {
+    hh::Jog j(30);
+    double t = 0, a = 0;
+    auto at = [&](double deg) { return j.feed(std::cos(deg * M_PI / 180), std::sin(deg * M_PI / 180), t); };
+    at(a);
+    int sum = 0, back = 0;
+    for (int k = 0; k < 30; k++) { t += 16; a += 40; const int s2 = at(a); sum += s2; if (s2 < 0) back++; }   // a steady turn up
+    CHECK(sum > 0 && back == 0, "a steady clockwise turn only tunes up (%d steps, %d back)", sum, back);
+    int sum2 = 0, back2 = 0;
+    for (int k = 0; k < 20; k++) { t += 16; a += 200; const int s2 = at(a); sum2 += s2; if (s2 < 0) back2++; }  // spun faster than ½ turn a frame
+    CHECK(sum2 > 0 && back2 == 0, "spun faster than half a turn a frame it still tunes UP, never back (%d steps, %d back)", sum2, back2);
+    j.feed(0, 0, t += 16);                                                                  // let go
+    t += 16; at(a = 0);
+    int sum3 = 0;
+    for (int k = 0; k < 30; k++) { t += 16; a -= 40; sum3 += at(a); }
+    CHECK(sum3 < 0, "after a release, turning the other way tunes down (%d)", sum3);
+}
+
 int main() {
     timing();
     sender();
+    jog();
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (SDL_Init(SDL_INIT_VIDEO) != 0 || TTF_Init() != 0) { std::fprintf(stderr, "init failed\n"); return 1; }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
