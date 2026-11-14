@@ -363,6 +363,9 @@ object VibeLocalSDR {
     /** ★ Decoders at once on this server (RTTY, WEFAX, SSTV, time, FT8); 0 = this device's default. */
     fun setDecoderMax(max: Int) { ensureLoaded(); nativeSetDecoderMax(max) }
     private external fun nativeSetDecoderMax(max: Int)
+    /** ★ V12 the RTTY skimmer's search workers (vibeserver.json "rttySkimWorkers"); 0 = this device's default. */
+    fun setRttySkimWorkers(n: Int) { ensureLoaded(); nativeSetRttySkimWorkers(n) }
+    private external fun nativeSetRttySkimWorkers(n: Int)
     fun setNbWide(mode: Int) { ensureLoaded(); nativeSetNbWide(mode) }
     private external fun nativeSetNbWide(mode: Int)
     /** ★★ V12 VFO A/B — may listeners add a VFO B (default on)? */

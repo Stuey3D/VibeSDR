@@ -3629,6 +3629,7 @@ int main(int argc, char** argv) {
         if (patched("updateAllDay"))  srv.updateAllDay  = next.updateAllDay;
         // ★ The decoder limit is the machine's too — the admin page's "decoders" post rides here.
         if (patched("decoderMax"))    srv.decoderMax    = next.decoderMax;
+        if (patched("rttySkimWorkers")) { srv.rttySkimWorkers = next.rttySkimWorkers; LocalSdrShim::setRttySkimWorkers(next.rttySkimWorkers); }
 
         // ★ Do NOT touch `configured` here. Only the setup page finishing means "set up"; a gain
         //   tweak on a half-configured server must not silently declare it done.
@@ -4674,6 +4675,7 @@ int main(int argc, char** argv) {
         //     vibe_decoder_host.h), released by the kernel if a radio process dies holding one.
         LocalSdrShim::setDecoderSlotDir(handoffDir());
         LocalSdrShim::setDecoderMax(o.decoderMax >= 0 ? o.decoderMax : g_serverConfig.decoderMax);
+        LocalSdrShim::setRttySkimWorkers(g_serverConfig.rttySkimWorkers);   // ★ V12 the RTTY skimmer's search workers
         // ★ Per radio, like everything else here: one machine may run a shared FM-DX dial and a
         //   private HF receiver at the same time, and they want opposite answers.
         // ★ Nothing to set for the shared dial: it IS "unlocked centre + more than one listener",

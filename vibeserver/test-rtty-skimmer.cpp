@@ -13,6 +13,7 @@
 //   • the cost: ms per second of radio for 24 and 96 kHz windows with 0 / 10 / 30 signals, searching and settled.
 // ★ Silent: nothing is played. Deterministic signals: fixed seeds.
 #include "decoders/rtty_skimmer.h"
+#include "vibe_decoder_host.h"
 
 #include <atomic>
 #include <chrono>
@@ -49,7 +50,7 @@ static std::vector<uint8_t> halfBits(const RSig& s) {
     bool figs = false; frame(31);                  // LTRS
     for (char c : s.text) {
         bool f = figs;
-        const int code = rtty::ita2Code(c, f);
+        const int code = rttysk::ita2Code(c, f);
         if (code < 0) continue;
         if (f != figs) { frame(f ? 27 : 31); figs = f; }
         frame(code);
@@ -105,17 +106,17 @@ static std::vector<cf> synth(const std::vector<RSig>& sigs, const std::vector<Ca
 }
 
 struct Run {
-    std::map<int, std::string> text; std::map<int, double> hz; std::vector<rtty::Spot> spots;
+    std::map<int, std::string> text; std::map<int, double> hz; std::vector<rttysk::Spot> spots;
 };
-static rtty::Skimmer::Config cfgFor(double rate, int workers = 0) {
-    rtty::Skimmer::Config c; c.rate = rate; c.loHz = -rate * 0.47; c.hiHz = rate * 0.47; c.workers = workers; c.maxSignals = 64;
+static rttysk::Skimmer::Config cfgFor(double rate, int workers = 0) {
+    rttysk::Skimmer::Config c; c.rate = rate; c.loHz = -rate * 0.47; c.hiHz = rate * 0.47; c.workers = workers; c.maxSignals = 64;
     return c;
 }
 /** Feed in 1024-sample blocks; `workers` threads call workOnce() while it runs (the server's shape). */
-static Run feed(rtty::Skimmer& sk, const std::vector<cf>& x, int workers) {
+static Run feed(rttysk::Skimmer& sk, const std::vector<cf>& x, int workers) {
     Run r;
     sk.onText = [&](int id, double hz, const std::string& t) { r.text[id] += t; r.hz[id] = hz; };
-    sk.onSpot = [&](const rtty::Spot& s) { r.spots.push_back(s); };
+    sk.onSpot = [&](const rttysk::Spot& s) { r.spots.push_back(s); };
     std::mutex m; std::condition_variable cv; bool stop = false; int wake = 0;
     sk.onWork = [&] { { std::lock_guard<std::mutex> lk(m); ++wake; } cv.notify_one(); };
     std::vector<std::thread> th;
@@ -137,8 +138,8 @@ static Run feed(rtty::Skimmer& sk, const std::vector<cf>& x, int workers) {
     for (auto& t : th) t.join();
     return r;
 }
-static const rtty::SignalView* nearest(const std::vector<rtty::SignalView>& v, double hz, double tol) {
-    const rtty::SignalView* b = nullptr;
+static const rttysk::SignalView* nearest(const std::vector<rttysk::SignalView>& v, double hz, double tol) {
+    const rttysk::SignalView* b = nullptr;
     for (auto& s : v) if (std::fabs(s.offsetHz - hz) < tol && (!b || std::fabs(s.offsetHz - hz) < std::fabs(b->offsetHz - hz))) b = &s;
     return b;
 }
@@ -166,7 +167,7 @@ static void mixedWindow(int workers, bool full) {
         { 18000, 0, 18 }, { 18170, 0, 18 },       // two steady carriers
     };
     const auto x = synth(sigs, cars, rate, 40, 7);
-    rtty::Skimmer sk(cfgFor(rate, workers));
+    rttysk::Skimmer sk(cfgFor(rate, workers));
     const Run r = feed(sk, x, workers);
     // one more quiet hop so any result posted at the very end is applied
     { std::vector<cf> z((size_t)sk.fftSize(), cf(0, 0)); sk.feedIq(z.data(), (int)z.size()); }
@@ -177,7 +178,7 @@ static void mixedWindow(int workers, bool full) {
                 (unsigned long long)sk.notRtty(), (unsigned long long)sk.jobsRun(), (unsigned long long)sk.charsSuppressed());
     int setRight = 0;
     for (const RSig& s : sigs) {
-        const rtty::SignalView* f = nearest(v, s.hz, 40);
+        const rttysk::SignalView* f = nearest(v, s.hz, 40);
         std::snprintf(b, sizeof b, "%+.0f Hz (%.2f baud / %.0f Hz / %s)", s.hz, s.baud, s.shift, s.rev ? "Reverse" : "Normal");
         if (!f) { ok(false, std::string(b) + ": found"); continue; }
         const bool right = f->set && std::fabs(f->baud - s.baud) < 1 && f->shiftHz == s.shift && f->reverse == s.rev;
@@ -214,7 +215,7 @@ static void noiseForcedOpen() {
     const double rate = 24000;
     const auto x = synth({}, {}, rate, 60, 11);
     auto c = cfgFor(rate); c.alternation = -2; c.candidateDb = 1.5;
-    rtty::Skimmer sk(c);
+    rttysk::Skimmer sk(c);
     const Run r = feed(sk, x, 0);
     size_t shown = 0; for (auto& s : sk.signals(true)) shown += s.chars;
     char b[200];
@@ -223,7 +224,7 @@ static void noiseForcedOpen() {
                   (unsigned long long)sk.charsSuppressed());
     ok(shown == 0, b);
     // and plainly: nothing listed on noise
-    rtty::Skimmer sk2(cfgFor(rate));
+    rttysk::Skimmer sk2(cfgFor(rate));
     feed(sk2, x, 0);
     ok(sk2.signals(true).empty(), "NOISE, 60 s, as configured: nothing listed (" + std::to_string(sk2.candidatesRejected()) + " pairs tested and rejected)");
 }
@@ -234,10 +235,10 @@ static void changeOfSettings() {
     RSig a; a.hz = 2000; a.shift = 170; a.baud = 45.45; a.startSec = 1; a.endSec = 20; a.text = "CQ CQ DE G4ABC G4ABC PSE K\n";
     RSig b = a; b.baud = 50; b.rev = true; b.startSec = 20; b.endSec = 1e9; b.text = "QRZ DE G4ABC G4ABC NOW 50 BAUD REVERSE K\n";
     const auto x = synth({ a, b }, {}, rate, 50, 21);
-    rtty::Skimmer sk(cfgFor(rate));
+    rttysk::Skimmer sk(cfgFor(rate));
     feed(sk, x, 0);
     const auto v = sk.signals(false);
-    const rtty::SignalView* f = nearest(v, 2000, 30);
+    const rttysk::SignalView* f = nearest(v, 2000, 30);
     ok(f && f->set && f->baud == 50 && f->reverse && sk.requeues() >= 1 && f->text.find("[45 baud / 170 Hz / Normal]") != std::string::npos
        && f->text.find("[50 baud / 170 Hz / Reverse]") != std::string::npos && upper(f->text).find("NOW 50 BAUD REVERSE") != std::string::npos,
        "a station that changes 45/170 normal → 50/170 reverse: searched again (" + std::to_string(sk.requeues()) + " requeue) and both settings in its text"
@@ -249,28 +250,96 @@ static void weaker() {
     for (double snr : { 6.0, 0.0 }) {
         auto sigs = mixedFour(); for (auto& s : sigs) s.snrDb = snr;
         const auto x = synth(sigs, {}, 48000, 40, 9);
-        rtty::Skimmer sk(cfgFor(48000));
+        rttysk::Skimmer sk(cfgFor(48000));
         feed(sk, x, 0);
         const auto v = sk.signals(false);
         int found = 0, right = 0;
-        for (auto& s : sigs) { const rtty::SignalView* f = nearest(v, s.hz, 40); found += f != nullptr; right += f && f->set && std::fabs(f->baud - s.baud) < 1 && f->shiftHz == s.shift && f->reverse == s.rev; }
+        for (auto& s : sigs) { const rttysk::SignalView* f = nearest(v, s.hz, 40); found += f != nullptr; right += f && f->set && std::fabs(f->baud - s.baud) < 1 && f->shiftHz == s.shift && f->reverse == s.rev; }
         std::printf("  — the mixed window at %+.0f dB SNR (2.5 kHz): %d of 4 listed, %d set right, %zu listed in all\n", snr, found, right, v.size());
         if (snr >= 6) ok(right == 4 && v.size() == 4, "the mixed window at +6 dB SNR: all four found and set right");
         else ok(v.size() <= 4, "the mixed window at 0 dB SNR: nothing invented (" + std::to_string(right) + " of 4 set right)");
     }
 }
 
+// ── "rttyskim" through a DecoderHost: the wire the clients read ──
+struct Peer : DecoderPeer {
+    std::mutex m; std::vector<std::vector<uint8_t>> bin; std::vector<std::string> txt;
+    bool open() const override { return true; }
+    void binary(const uint8_t* d, size_t n) override { std::lock_guard<std::mutex> lk(m); bin.emplace_back(d, d + n); }
+    void text(const std::string& s) override { std::lock_guard<std::mutex> lk(m); txt.push_back(s); }
+    std::string last(const std::string& needle) { std::lock_guard<std::mutex> lk(m); for (size_t i = txt.size(); i-- > 0;) if (txt[i].find(needle) != std::string::npos) return txt[i]; return ""; }
+    int count(const std::string& needle) { std::lock_guard<std::mutex> lk(m); int n = 0; for (auto& t : txt) n += t.find(needle) != std::string::npos; return n; }
+    bool state(uint8_t s) { std::lock_guard<std::mutex> lk(m); for (auto& b : bin) if (b.size() == 2 && b[0] == 0x03 && b[1] == s) return true; return false; }
+};
+struct SpyTap : DecoderTap {
+    std::mutex m; std::vector<std::string> calls; std::vector<double> rf; std::atomic<int> finished{0};
+    void cwSpot(const std::string& c, double hz, float, float, const std::string&) override { std::lock_guard<std::mutex> lk(m); calls.push_back(c); rf.push_back(hz); }
+    void finish(bool) override { finished++; }
+};
+static void hostPath() {
+    const double rate = 48000, centre = 14080000;
+    auto sigs = mixedFour();
+    const auto x = synth(sigs, {}, rate, 30, 13);
+    auto peer = std::make_shared<Peer>();
+    auto tap = std::make_shared<SpyTap>();
+    DecoderHost::Env env;
+    env.dialHz = [centre] { return centre; };
+    env.rttySkimSpotTap = [tap] { return tap; };
+    env.rttySkimWorkers = [] { return 2; };
+    const int before = DecoderHost::skimmersRunning().load();
+    {
+        DecoderHost h(env, "t");
+        h.addPeer(peer);
+        ok(h.start("rttyskim", "{\"type\":\"audio_extension_attach\",\"extension_name\":\"rttyskim\",\"width\":48000}") == DecoderHost::Start::Ok,
+           "host: \"rttyskim\" starts");
+        ok(h.kind() == "rttyskim" && h.wantsIq() && std::fabs(h.iqWidthHz() - 48000) < 1 && DecoderHost::skimmersRunning().load() == before + 1,
+           "host: it is the RTTY skimmer, wants IQ, 48 kHz, counted as a running skimmer");
+        const size_t blk = 960;
+        for (size_t i = 0; i < x.size(); i += blk) {
+            while (h.queuedIq() > 0.5) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            h.feedIq(x.data() + i, (int)std::min(blk, x.size() - i), rate, centre);
+        }
+        for (int i = 0; i < 4000 && h.queuedIq() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // ★ the list goes out at most once a stream second: one more second of input
+        for (size_t i = 0; i < (size_t)rate * 2; i += blk) h.feedIq(x.data() + i, (int)blk, rate, centre);
+        for (int i = 0; i < 4000 && h.queuedIq() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const std::string list = peer->last("\"rtty_signals\"");
+        bool allRf = true;
+        for (auto& s : sigs) {
+            bool f = false;
+            for (size_t p = list.find("\"hz\":"); p != std::string::npos; p = list.find("\"hz\":", p + 5))
+                f |= std::fabs(std::atof(list.c_str() + p + 5) - (centre + s.hz)) < 3;
+            allRf &= f;
+        }
+        ok(allRf, "host: rtty_signals lists all four at their RF (centre + offset)");
+        ok(list.find("\"settings\":\"45 baud / 170 Hz / Normal\"") != std::string::npos && list.find("\"settings\":\"45 baud / 170 Hz / Reverse\"") != std::string::npos
+           && list.find("\"settings\":\"50 baud / 450 Hz / Normal\"") != std::string::npos && list.find("\"settings\":\"75 baud / 850 Hz / Normal\"") != std::string::npos,
+           "host: …each with its settings");
+        ok(list.find("\"set\":true") != std::string::npos && peer->count("[45 baud / 170 Hz / Reverse] ") > 0, "host: the settings line went out in the row's text (and scrolls away with it)");
+        ok(peer->count("\"set\":false") > 0, "host: a list went out with signals still waiting for their parameters (\"set\":false) first");
+        ok(peer->state(1) && peer->state(3), "host: state 1 (listed, none set) then 3 (decoding)");
+        ok(peer->count("\"rtty_spot\"") > 0 && peer->last("\"rtty_spot\"").find("\"mode\":\"RTTY") != std::string::npos, "host: rtty_spot sent");
+        bool tapOk = false; { std::lock_guard<std::mutex> lk(tap->m); for (size_t i = 0; i < tap->calls.size(); ++i) tapOk |= tap->calls[i] == "G4ABC" && std::fabs(tap->rf[i] - (centre - 9000)) < 20; }
+        ok(tapOk, "host: the gallery's summary tap hears G4ABC at its RF");
+        ok(list.find("\"workers\":2") != std::string::npos, "host: the owner's worker count (2) is used");
+        h.stop();
+        ok(DecoderHost::skimmersRunning().load() == before && !h.wantsIq(), "host: stopped — no longer counted, no IQ wanted");
+    }
+    ok(tap->finished.load() >= 1, "host: the summary tap is finished when it stops");
+}
+
 static void textGate() {
-    ok(rtty::readsAsText("CQ CQ CQ DE G4ABC G4ABC G4ABC PSE K"), "text gate: a CQ reads as text");
-    ok(rtty::readsAsText("ZCZC FREQUENCIES 4583 KHZ 7646 KHZ 10100.8 KHZ"), "text gate: a weather bulletin reads as text");
-    ok(rtty::readsAsText("TEST DL1XYZ 599 001 TU G4ABC 599 002"), "text gate: a contest exchange reads as text");
-    ok(!rtty::readsAsText("EXQKVTHZOBPLRNWJUYDMCSGAFI EOTRUWQYP"), "text gate: random letters do not");
-    ok(!rtty::readsAsText("-'!:(5\")#&?-'!:3(/ -;8!:)\"#&?-' "), "text gate: a spray of figures does not");
-    ok(!rtty::readsAsText("RYRYRYRYRYRYRYRYRYRYRYRYRY"), "text gate: RYRY does not (not words)");
+    ok(rttysk::readsAsText("CQ CQ CQ DE G4ABC G4ABC G4ABC PSE K"), "text gate: a CQ reads as text");
+    ok(rttysk::readsAsText("ZCZC FREQUENCIES 4583 KHZ 7646 KHZ 10100.8 KHZ"), "text gate: a weather bulletin reads as text");
+    ok(rttysk::readsAsText("TEST DL1XYZ 599 001 TU G4ABC 599 002"), "text gate: a contest exchange reads as text");
+    ok(!rttysk::readsAsText("EXQKVTHZOBPLRNWJUYDMCSGAFI EOTRUWQYP"), "text gate: random letters do not");
+    ok(!rttysk::readsAsText("-'!:(5\")#&?-'!:3(/ -;8!:)\"#&?-' "), "text gate: a spray of figures does not");
+    ok(!rttysk::readsAsText("RYRYRYRYRYRYRYRYRYRYRYRYRY"), "text gate: RYRY does not (not words)");
 }
 
 static void bench() {
-    std::printf("  — the cost (%s): ms of one core per second of radio\n", rtty::Skimmer::simdName());
+    std::printf("  — the cost (%s): ms of one core per second of radio\n", rttysk::Skimmer::simdName());
     for (double rate : { 24000.0, 96000.0 }) {
         for (int nsig : { 0, 10, 30 }) {
             std::vector<RSig> v;
@@ -283,7 +352,7 @@ static void bench() {
             }
             const double secs = 24;
             const auto x = synth(v, {}, rate, secs, 5);
-            rtty::Skimmer sk(cfgFor(rate));
+            rttysk::Skimmer sk(cfgFor(rate));
             const size_t half = (size_t)(rate * 12);
             auto t0 = std::chrono::steady_clock::now();
             for (size_t i = 0; i < half; i += 1024) sk.feedIq(x.data() + i, (int)std::min<size_t>(1024, half - i));
@@ -296,14 +365,14 @@ static void bench() {
                         rate / 1000, nsig, a, a / 10, sk.settled(), nsig, b, b / 10, sk.fftSize(), sk.channelSize(), sk.channelRate());
             if (std::getenv("RS_DEBUG")) for (auto& q : v) std::printf("       TRUE %+8.1f Hz %.0f Hz %.2f %s\n", q.hz, q.shift, q.baud, q.rev ? "R" : "N");
             if (std::getenv("RS_DEBUG")) for (auto& s : sk.signals(false)) {
-                const rtty::SignalView* t = nullptr; double bd = 1e9;
+                const rttysk::SignalView* t = nullptr; double bd = 1e9;
                 for (auto& q : v) if (std::fabs(q.hz - s.offsetHz) < bd) { bd = std::fabs(q.hz - s.offsetHz); (void)t; }
                 std::printf("       %+8.1f Hz %.0f Hz [%s] nearest true %.1f Hz off: %s\n", s.offsetHz, s.shiftHz, s.settings.c_str(), bd, s.text.substr(0, 40).c_str());
             }
             if (nsig > 0) {
                 const auto got = sk.signals(false);
                 int right = 0;
-                for (auto& q : v) { const rtty::SignalView* f = nearest(got, q.hz, 15); right += f && f->set && std::fabs(f->baud - q.baud) < 1 && f->shiftHz == q.shift && f->reverse == q.rev; }
+                for (auto& q : v) { const rttysk::SignalView* f = nearest(got, q.hz, 15); right += f && f->set && std::fabs(f->baud - q.baud) < 1 && f->shiftHz == q.shift && f->reverse == q.rev; }
                 ok(right == nsig && (int)got.size() == nsig, "bench window " + std::to_string((int)(rate / 1000)) + " kHz, " + std::to_string(nsig)
                    + " signals: " + std::to_string(right) + " found with their own settings, " + std::to_string((int)got.size()) + " listed");
             }
@@ -313,10 +382,10 @@ static void bench() {
 
 int main(int argc, char** argv) {
     const bool benchOnly = argc > 1 && std::string(argv[1]) == "bench";
-    std::printf("RTTY skimmer [%s]\n", rtty::Skimmer::simdName());
+    std::printf("RTTY skimmer [%s]\n", rttysk::Skimmer::simdName());
     if (!benchOnly) {
         {
-            rtty::Skimmer sk(cfgFor(31250));
+            rttysk::Skimmer sk(cfgFor(31250));
             char b[160]; std::snprintf(b, sizeof b, "an odd input rate (31.25 kHz): channel %.2f Hz (N %d, M %d) — within 0.2 %% of 3000", sk.channelRate(), sk.fftSize(), sk.channelSize());
             ok(std::fabs(sk.channelRate() - 3000) < 6, b);
         }
@@ -327,6 +396,7 @@ int main(int argc, char** argv) {
         noiseForcedOpen();
         changeOfSettings();
         weaker();
+        hostPath();
     }
     bench();
     std::printf(fails ? "%d FAILED\n" : "all passed\n", fails);

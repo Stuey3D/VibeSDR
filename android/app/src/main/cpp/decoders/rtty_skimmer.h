@@ -50,7 +50,7 @@
 #include <vector>
 
 namespace vibe {
-namespace rtty {
+namespace rttysk {
 
 /** One callsign heard identifying itself. */
 struct Spot {
@@ -160,5 +160,5 @@ int ita2Code(char c, bool& figs);
 /** Plausible teleprinter text? The gate the skimmer shows text through (exposed for the tests). */
 bool readsAsText(const std::string& t);
 
-} // namespace rtty
+} // namespace rttysk
 } // namespace vibe

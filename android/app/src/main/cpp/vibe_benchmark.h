@@ -646,6 +646,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     /* ★★★ …AND EVERY DECODER AFTER THE FIRST EIGHT (2026-10-31) — vibe_benchmark_more.h. The clip rows (the skimmers,
      *  NDB, ISM) read decoders-bench.vbu8 when the host has it, and "not measured" when it has not. */
     double heaviestDec = 0; std::string heaviestId;
+    double rttySkimPct = -1;           // ★ V12 the RTTY skimmer's row — its search workers' default (below)
     std::string defaultOff, flagged;   // ★ JSON arrays' bodies — the defaults rule's answer (benchdec::ruleFor)
     {
         auto stepFn = [&](const std::string& l) { benchStep(l); if (progress) progress(N, N, l); };
@@ -662,6 +663,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
              *  decoders can actually be made of on this box. Band spots, LoRa and the whole-radio modes are not slots;
              *  a slot that is not green is off by default (its switch) or, alone, more than the green budget already. */
             if (rule.slot && g == "green" && d.pct > heaviestDec) { heaviestDec = d.pct; heaviestId = d.id; }
+            if (d.id == "dec_rttyskim") rttySkimPct = d.pct;
             if (g == "green" || g == "none") continue;
             char b[160];
             if (rule.primary && rule.sw[0] && !offSw.count(rule.sw)) {
@@ -795,7 +797,16 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
          *  ServerModeScreen.tsx applyBench only APPLY it, on a fresh setup): `defaultOff` — the owner's switches that
          *  start OFF, each with the row that measured below green (offered, never hidden); `flagged` — rows below green
          *  whose switch stays on because it also carries a green decoder (a skimmer, RTTY AUTO, a digital-spots mode). */
-        j += ",\"defaultOff\":[" + defaultOff + "],\"flagged\":[" + flagged + "]}";
+        j += ",\"defaultOff\":[" + defaultOff + "],\"flagged\":[" + flagged + "]";
+        /* ★★ V12 THE RTTY SKIMMER'S SEARCH WORKERS (docs/v12/RTTY-SKIMMER.md §3: "slower devices one at a time, more
+         *  powerful devices more workers"): from what its row cost here and the cores there are — a Pi 2 / R36S / old
+         *  phone 1, a Pi 4-5 / phone 2, a PC or Mac 4. The setup page and the app write it as the owner's default on a
+         *  fresh setup (benchApplyDefaults / applyBench); the owner can change it. Unmeasured = the hardware's class. */
+        {
+            int w = vibe::rttySkimDefaultWorkers();
+            if (rttySkimPct >= 0) w = (rttySkimPct <= 1.5 && cores >= 6) ? 4 : (rttySkimPct <= 6.0 && cores >= 4) ? 2 : 1;
+            j += ",\"rttySkimWorkers\":" + std::to_string(w) + "}";
+        }
     }
     // ★ How long the whole measurement took, seconds — shown to the owner beside the table (Stuart: a two-minute blank is
     //   a hang to a human; a number that says what it cost is not).

@@ -19,7 +19,7 @@
 #include <mutex>
 
 namespace vibe {
-namespace rtty {
+namespace rttysk {
 
 const char* qualityWord(float q) { return q >= 0.75f ? "high" : q >= 0.5f ? "medium" : q >= 0.3f ? "low" : "poor"; }
 
@@ -960,5 +960,5 @@ const char* Skimmer::simdName() {
 #endif
 }
 
-} // namespace rtty
+} // namespace rttysk
 } // namespace vibe

@@ -1512,6 +1512,11 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetRawIq(JNIEnv*, jobject, jint mode, ji
     vibe::LocalSdrShim::setVibeServerRawIq((int)mode, (int)max, (int)lanMaxHz);
 }
 extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetRttySkimWorkers(JNIEnv*, jobject, jint n) {
+    // ★ V12 the RTTY skimmer's search workers; 0 = this device's default (vibe::rttySkimDefaultWorkers)
+    vibe::LocalSdrShim::setRttySkimWorkers(n < 0 ? 0 : (int)n);
+}
+extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDecoderMax(JNIEnv*, jobject, jint max) {
     // ★ One process, one radio on Android: no slot directory, so the limit is counted in-process.
     vibe::LocalSdrShim::setDecoderMax(max < 0 ? 0 : (int)max);

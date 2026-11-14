@@ -33,7 +33,7 @@ namespace vibeicomdec {
 
 /** A decoder the Icom cannot run at all: "" = it can, else the plain words a refusal carries. */
 inline std::string notOfferedWhy(const std::string& ext) {
-    if (ext == "cwskim" || ext == "pskskim")
+    if (ext == "cwskim" || ext == "pskskim" || ext == "rttyskim")
         return "the skimmer needs a wideband capture \xe2\x80\x94 an Icom gives one demodulated audio channel (use ONE SIGNAL)";
     if (ext == "paging") return "paging needs the radio's IQ, and an Icom has none";
     if (ext == "drm") return "DRM needs at least 4.5 kHz of RF with its phase intact \xe2\x80\x94 the radio's widest SSB filter is 3.6 kHz";
