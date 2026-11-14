@@ -12,8 +12,8 @@ using namespace vibe::dx;
 static int pass = 0, fail = 0;
 static void ok(bool c, const std::string& what) { c ? ++pass : ++fail; std::printf("   %s %s\n", c ? "ok  " : "FAIL", what.c_str()); }
 
-static FmHit fm(int khz, uint16_t pi, const char* ps, int groups, bool psc = false, float lvl = -40, float snr = 30) {
-    FmHit h; h.khz = khz; h.pi = pi; h.ps = ps; h.groups = groups; h.psComplete = psc; h.levelDb = lvl; h.snrDb = snr; return h;
+static FmHit fm(int khz, uint16_t pi, const char* ps, int groups, bool psc = false, float lvl = -40, float snr = 30, bool pilot = false) {
+    FmHit h; h.khz = khz; h.pi = pi; h.ps = ps; h.groups = groups; h.psComplete = psc; h.levelDb = lvl; h.snrDb = snr; h.pilot = pilot; return h;
 }
 static const int64_t T0 = 1'800'000'000;   // a fixed UTC
 
@@ -53,6 +53,35 @@ int main() {
         ok(planFm(0.25e6, 100).empty(), "a capture too narrow for one channel plans nothing");
     }
 
+    std::printf("── stations without RDS (Stuart: \"like a digital HiFi tuner doing a scan\") ──\n");
+    {
+        Log log(T0);
+        log.commitFm(95900, 97200, 96550, 100, { fm(96100, 0, "", 0, false, -40, 14, true) }, T0 + 10);
+        const Entry* e = log.findKey(fmKey(0, 96100));
+        ok(e && e->pi == 0 && e->stereo, "★ a station with its pilot locked and no RDS is logged by frequency, as stereo");
+        log.commitFm(95900, 97200, 96550, 100, { fm(96300, 0, "", 0, false, -40, 26) }, T0 + 20);
+        ok(log.findKey(fmKey(0, 96300)) && !log.findKey(fmKey(0, 96300))->stereo, "a strong mono carrier is logged too (mono)");
+        log.commitFm(95900, 97200, 96550, 100, { fm(96800, 0, "", 0, false, -40, 20) }, T0 + 30);
+        ok(!log.findKey(fmKey(0, 96800)), "a moderate carrier with no pilot and no RDS is not (a hi-fi tuner's stop level)");
+        // ★ RDS found later on the no-RDS frequency: ONE entry, the first heard carried
+        log.commitFm(95900, 97200, 96550, 100, { fm(96100, 0xCF9F, "FLEX FM", 3, false, -40, 14, true) }, T0 + 40);
+        const Entry* r = log.findKey(fmKey(0xCF9F, 96100));
+        ok(r && !log.findKey(fmKey(0, 96100)) && r->firstHeard == T0 + 10 && r->stereo, "★ RDS decoded later: the no-RDS entry becomes the RDS one (first heard kept)");
+        log.commitFm(95900, 97200, 96550, 100, { fm(96100, 0, "", 0, false, -40, 14, true) }, T0 + 50);
+        ok(!log.findKey(fmKey(0, 96100)), "and a later visit without RDS is not filed again on that frequency");
+        // ★ the image of a much stronger carrier, mirrored about the capture's DC, is a SUSPECT, not a station
+        Log l2(T0 + 2 * 86400 * 30);   // past the bootstrap
+        const int64_t t2 = T0 + 2 * 86400 * 30 + 3 * 86400;
+        l2.commitFm(95900, 97200, 96550, 100, { fm(96600, 0xC363, "Heart", 30, true, -2, 49, true), fm(96500, 0, "", 0, false, -40, 26) }, t2);
+        const Entry* im = l2.findKey(fmKey(0, 96500));
+        ok(im && im->cls == Cls::Suspect, "★ a no-RDS carrier on a much stronger station's mirror is SUSPECT (" + (im ? im->suspectWhy : std::string("none")) + ")");
+        // ★ saved and loaded with its stereo flag
+        Log l3(T0); l3.fromFileJson(log.toFileJson());
+        const Entry* st = l3.findKey(fmKey(0, 96300));
+        ok(st && !st->stereo && l3.findKey(fmKey(0xCF9F, 96100)) && l3.findKey(fmKey(0xCF9F, 96100))->stereo, "saved and loaded (stereo kept)");
+        ok(log.listJson(Log::Query{}, T0 + 60).find("\"rds\":false") != std::string::npos, "the API says rds:false for a station without RDS");
+    }
+
     std::printf("── confirmation (brief §6) ──\n");
     {
         ok(!fmConfirmed(1, false), "★ a single CRC-valid RDS group is never enough");
@@ -60,8 +89,9 @@ int main() {
         ok(fmConfirmed(3, false), "the PI in 3 CRC-valid groups confirms");
         ok(fmConfirmed(1, true), "or the PS fully assembled");
         Log log(T0);
-        log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 1) }, T0 + 10);
-        ok(log.size() == 0, "★ a visit hearing one group on a PI creates no entry");
+        // ★ (a weak mono carrier: a strong one, or one with a pilot, is now logged without RDS — see "stations without RDS")
+        log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 1, false, -40, 10) }, T0 + 10);
+        ok(log.size() == 0, "★ a visit hearing one group on a PI (weak, no pilot) creates no entry");
         log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "", 3) }, T0 + 20);
         ok(log.size() == 1, "three groups do");
         ok(!dabConfirmed(0x0000, 4) && !dabConfirmed(0xC1C0, 0) && dabConfirmed(0xC1C0, 1), "DAB: the first CRC-valid FIB carrying an EId");

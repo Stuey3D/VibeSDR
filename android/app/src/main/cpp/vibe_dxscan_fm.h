@@ -80,12 +80,21 @@ public:
         double specSec = 0.30;     // the spectrum's integration before peaks are picked
         double dwellSec = 4.0;     // ★ brief §4: "about 3–5 s per chunk"; tune from field results
         double minDwellSec = 1.5;  // a round may end early once every peak is identified, never before this
+        /** ★★ THE DWELL EXTENDS FOR A STATION THAT IS CLEARLY THERE (Stuart, 2026-11-14: "a slightly longer dwell time is
+         *  not the end of the world, the DX log works best when signals are actually added to it"). Flex FM on 96.1 —
+         *  34 dB SNR, full RDS on the listener's receiver — was found as a peak sweep after sweep and never logged: no
+         *  RDS confirmation within 4 s (scrolling PS, overmodulated, 18 % block errors on the live decoder). At the end
+         *  of the dwell, a round with a station whose PILOT is locked (or, mono, ≥ extendSnrDb) but not yet confirmed
+         *  carries on, up to extendSec more,
+         *  and stops as soon as everything is confirmed. A window with nothing strong unconfirmed never waits. */
+        double extendSec = 4.0;
+        float  extendSnrDb = 15.0f;
         int    maxPeaks = 24;
         int    peaksPerRound = 64; // ★ the benchmark's budget (a weak box decodes the peaks in rounds)
         int    workers = 0;        // 0 = one per core to spare, at most 4
         float  minSnrDb = 8.0f;    // a channel this far over the hop's floor is a peak
     };
-    struct Stats { int peaks = 0, rounds = 0, workers = 0; double wallSec = 0, cpuSec = 0; long droppedBlocks = 0; float floorDb = -200; };
+    struct Stats { int peaks = 0, rounds = 0, workers = 0, extended = 0; double wallSec = 0, cpuSec = 0; long droppedBlocks = 0; float floorDb = -200; };
 
     FmHopEngine() = default;
     ~FmHopEngine() { abort(); }
@@ -144,6 +153,13 @@ private:
         uint16_t psPi = 0;
         std::string ps;
         bool active = false;
+        /** What the LOG needs (vibe_dxscan.h fmConfirmed): 3 clean groups, or the PS complete — NOT identified()'s PS too,
+         *  which a scrolling PS may never give. */
+        bool confirmed() const {
+            int best = 0; for (const auto& kv : clean) best = std::max(best, kv.second);
+            const auto* b = rds.best();
+            return fmConfirmed(best, b && b->psComplete() && psPi != 0);
+        }
         bool identified() const {
             int best = 0; for (const auto& kv : clean) best = std::max(best, kv.second);
             const auto* b = rds.best();
@@ -233,6 +249,7 @@ private:
         size_t roundStart = 0, roundEnd = 0;
         long long roundSamples = 0;
         const long long dwellN = (long long)(p_.dwellSec * rate), minDwellN = (long long)(p_.minDwellSec * rate);
+        const long long extendN = (long long)(p_.extendSec * rate);
 
         Pool pool;
         int nWorkers = 0;
@@ -347,6 +364,14 @@ private:
             if (want != nWorkers) { pool.stopAll(); pool.quit = false; pool.start(want); nWorkers = want; stats_.workers = std::max(stats_.workers, want); }
             return true;
         };
+        // ★ a strong peak of this round the log could not yet use — the reason to extend the dwell (Params::extendSec)
+        auto roundWantsMore = [&] {
+            for (size_t i = roundStart; i < roundEnd; ++i)
+                // ★ Stuart: "signal with pilot detected — dwell on it". A locked 19 kHz pilot is a real FM station, whatever
+                //   its level; a strong carrier without one (a mono station) qualifies on its SNR.
+                if ((chans[i]->pll.locked() || chans[i]->snrDb >= p_.extendSnrDb) && !chans[i]->confirmed()) return true;
+            return false;
+        };
         auto roundIdentified = [&] {
             for (size_t i = roundStart; i < roundEnd; ++i) if (!chans[i]->identified()) return false;
             return true;
@@ -397,7 +422,9 @@ private:
                 roundSamples += cz.hop();
                 if (nb == kBatch) {
                     flush();
-                    const bool long_enough = roundSamples >= dwellN || (roundSamples >= minDwellN && roundIdentified());
+                    const bool extend = roundSamples >= dwellN && roundSamples < dwellN + extendN && roundWantsMore();
+                    if (extend && roundSamples - cz.hop() * kBatch < dwellN) ++stats_.extended;   // counted once, as it starts
+                    const bool long_enough = (roundSamples >= dwellN && !extend) || (roundSamples >= minDwellN && roundIdentified());
                     if (long_enough) {
                         if (!startRound()) finished = true;
                     }
@@ -418,6 +445,7 @@ private:
                     h.psComplete = b && b->psComplete();
                 }
                 h.levelDb = c->levelDb; h.snrDb = c->snrDb;
+                h.pilot = c->pll.locked();   // ★ a stereo station is logged even without RDS (vibe_dxscan.h commitFm)
                 results_.push_back(h);
             }
         }

@@ -32426,7 +32426,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         dxFm_.start(p);
         dxFmFeed_.store(true);
         const double t0 = nowSecs();
-        while (!dxFm_.done() && !dxCancel_.load() && !stopping.load() && nowSecs() - t0 < p.dwellSec * 8 + 20)
+        while (!dxFm_.done() && !dxCancel_.load() && !stopping.load() && nowSecs() - t0 < (p.dwellSec + p.extendSec) * 8 + 20)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         dxFmFeed_.store(false);
         const bool ok = dxFm_.done() && !dxCancel_.load() && !stopping.load();
@@ -32465,8 +32465,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             dxLast_ = line = b;
             if (wrapped && dxSweepStartFm_ > 0) dxSweepSecsFm_ = nowSecs() - dxSweepStartFm_;
         }
-        LOGI("DX scanner: %s \xe2\x80\x94 %d new, %d new opening(s), %d alert(s), %d suspect; %d worker(s), %.2f s CPU%s",
+        LOGI("DX scanner: %s \xe2\x80\x94 %d new, %d new opening(s), %d alert(s), %d suspect; %d worker(s), %.2f s CPU%s%s",
              line.c_str(), vr.newEntries, vr.newOpenings, vr.alerts, vr.suspects, st.workers, st.cpuSec,
+             st.extended ? (", dwell extended " + std::to_string(st.extended) + "× for a strong station not yet confirmed").c_str() : "",
              st.droppedBlocks ? (", " + std::to_string(st.droppedBlocks) + " IQ block(s) dropped").c_str() : "");
     }
 
@@ -32645,7 +32646,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             dxFm_.start(p);
             dxFmFeed_.store(true);
             const double th = nowSecs();
-            while (!dxFm_.done() && !g_fmScanCancel.load() && !stopping.load() && nowSecs() - th < p.dwellSec * 8 + 20)
+            while (!dxFm_.done() && !g_fmScanCancel.load() && !stopping.load() && nowSecs() - th < (p.dwellSec + p.extendSec) * 8 + 20)
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
             dxFmFeed_.store(false);
             const bool ok = dxFm_.done() && !g_fmScanCancel.load() && !stopping.load();

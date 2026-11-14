@@ -60,6 +60,8 @@ static constexpr int64_t kWindowSec   = 7 * 86400;
 static constexpr int64_t kBootstrapSec = 24 * 3600;
 static constexpr double kLocalRatio   = 0.90;
 static constexpr int    kLocalMinVisitsBootstrap = 3;   // a baseline local must have been visited at least this often
+static constexpr float  kFmNoRdsPilotSnr = 12.0f;   // ★ a station with no RDS: its pilot locked and this far over the floor
+static constexpr float  kFmNoRdsMonoSnr  = 25.0f;   // …or, mono, this far (a hi-fi tuner's stop level, over any local's skirt)
 static constexpr int    kFmMinGroups  = 3;      // ★ brief §6: PI in at least 3 CRC-valid groups within one dwell
 static constexpr double kFmBandLoHz   = 87.5e6, kFmBandHiHz = 108.0e6;
 
@@ -173,6 +175,7 @@ struct FmHit {
     int      groups = 0;       // CRC-valid groups carrying `pi` in this dwell
     float    levelDb = -200;   // channel power, dB full scale (uncalibrated — not dBm)
     float    snrDb = 0;        // over the hop's noise floor
+    bool     pilot = false;    // ★ the 19 kHz stereo pilot locked at the end of the dwell — a real FM station, RDS or not
 };
 struct DabHit {
     int      block = -1;       // index into vibedab::kBandIII
@@ -218,6 +221,7 @@ struct Entry {
     int      dcKhz = 0, halfKhz = 0;     // ★ the capture it was last heard in (its DC and half-width) — the image check
     std::string psLast;
     std::vector<std::string> psVariants;
+    bool     stereo = false;              // ★ a pilot was locked when it was heard (shown for a station with no RDS)
     // DAB
     int      block = -1;
     std::string blockName;
@@ -312,26 +316,38 @@ public:
         classifyBootstrapEnd(now);
         std::vector<int> heard;
         for (const auto& h : hits) {
-            if (!fmConfirmed(h.groups, h.psComplete) || h.pi == 0) continue;
-            const std::string k = fmKey(h.pi, h.khz);
+            /* ★★★ STATIONS WITHOUT RDS ARE STATIONS (Stuart, 2026-11-14: "we still need to include non RDS stations like a
+             *  digital HiFi tuner doing a scan too"). A hit whose RDS did not confirm is logged by its FREQUENCY (PI 0000)
+             *  when its 19 kHz pilot locked (a real stereo station) at ≥ kFmNoRdsPilotSnr, or — mono — at ≥ kFmNoRdsMonoSnr
+             *  (a hi-fi tuner's stop level; well above a strong local's skirt). The image / intermod checks below apply as
+             *  to any station. A frequency that already has an RDS station logged is not filed again without RDS. */
+            const bool rds = fmConfirmed(h.groups, h.psComplete) && h.pi != 0;
+            const bool noRds = !rds && ((h.pilot && h.snrDb >= kFmNoRdsPilotSnr) || h.snrDb >= kFmNoRdsMonoSnr);
+            if (!rds && !noRds) continue;
+            if (noRds && hasRdsAt(h.khz)) continue;
+            const uint16_t pi = rds ? h.pi : 0;
+            const std::string k = fmKey(pi, h.khz);
             int id;
             auto it = byKey_.find(k);
             const bool isNew = it == byKey_.end();
             if (isNew) {
                 if (!makeRoom()) continue;
-                Entry e; e.id = nextId_++; e.dab = false; e.key = k; e.khz = h.khz; e.pi = h.pi; e.firstHeard = now;
+                Entry e; e.id = nextId_++; e.dab = false; e.key = k; e.khz = h.khz; e.pi = pi; e.firstHeard = now;
                 e.cls = bootstrapping(now) ? Cls::Provisional : Cls::Dx;
                 e.dcKhz = dcKhz; e.halfKhz = std::max(dcKhz - loKhz, hiKhz - dcKhz);
-                const std::string mirror = mirrorOf(h, hits, dcKhz, rasterKhz);
-                const std::string why = !mirror.empty() ? mirror : suspectWhy(h.khz, h.pi, dcKhz, e.halfKhz, rasterKhz);
+                const std::string mirror = rds ? mirrorOf(h, hits, dcKhz, rasterKhz) : mirrorByLevel(h, hits, dcKhz, rasterKhz);
+                const std::string why = !mirror.empty() ? mirror : suspectWhy(h.khz, pi, dcKhz, e.halfKhz, rasterKhz);
                 // ★ A mirror heard IN THIS VERY VISIT (the same PI, far weaker, on the other side of the DC) is an image
                 //   whatever the class — the bootstrap included, so a new server's first day does not log its locals twice.
                 if (!mirror.empty() || (!why.empty() && e.cls != Cls::Provisional)) { e.cls = Cls::Suspect; e.suspectWhy = why; ++vr.suspects; }
                 else if (!why.empty()) e.suspectWhy = why;   // ★ remembered: the bootstrap's end decides with it
+                // ★ the same frequency's no-RDS entry becomes this RDS one: first heard and the count carried, never two rows
+                if (rds) foldNoRdsInto(e, h.khz);
                 entries_[e.id] = e; byKey_[k] = e.id; id = e.id;
                 ++vr.newEntries;
             } else id = it->second;
             Entry& e = entries_[id];
+            if (h.pilot) e.stereo = true;
             e.dcKhz = dcKhz; e.halfKhz = std::max(dcKhz - loKhz, hiKhz - dcKhz); rasterKhz_ = rasterKhz;
             const std::string ps = trimRight(h.ps);
             /* ★ ONLY A WHOLE PS IS A NAME (2026-11-04: an interrupted dwell logged "FR INT" for "FR INTER"). A half-built PS is
@@ -441,7 +457,7 @@ public:
         if (!e.suspectWhy.empty() && e.cls == Cls::Suspect) j += ",\"suspectWhy\":\"" + esc(e.suspectWhy) + "\"";
         char b[160];
         if (!e.dab) {
-            std::snprintf(b, sizeof b, ",\"freqKhz\":%d,\"pi\":\"%04X\"", e.khz, e.pi); j += b;
+            std::snprintf(b, sizeof b, ",\"freqKhz\":%d,\"pi\":\"%04X\",\"rds\":%s,\"stereo\":%s", e.khz, e.pi, e.pi ? "true" : "false", e.stereo ? "true" : "false"); j += b;
             j += ",\"ps\":\"" + esc(e.psLast) + "\",\"psVariants\":[";
             for (size_t i = 0; i < e.psVariants.size(); ++i) j += (i ? ",\"" : "\"") + esc(e.psVariants[i]) + "\"";
             j += "]";
@@ -557,8 +573,8 @@ public:
             first = false;
             j += entryJson(e, true);
             j.pop_back();   // reopen the object for the private fields
-            std::snprintf(b, sizeof b, ",\"khz\":%d,\"piN\":%u,\"dc\":%d,\"hw\":%d,\"blk\":%d,\"eidN\":%u,\"tm\":%d,\"ts\":%d,\"lastSweep\":%u,\"mv\":%u,\"buckets\":[",
-                          e.khz, e.pi, e.dcKhz, e.halfKhz, e.block, e.eid, e.tiiMain, e.tiiSub, e.lastSweep, e.missedVisits);
+            std::snprintf(b, sizeof b, ",\"khz\":%d,\"piN\":%u,\"st\":%d,\"dc\":%d,\"hw\":%d,\"blk\":%d,\"eidN\":%u,\"tm\":%d,\"ts\":%d,\"lastSweep\":%u,\"mv\":%u,\"buckets\":[",
+                          e.khz, e.pi, e.stereo ? 1 : 0, e.dcKhz, e.halfKhz, e.block, e.eid, e.tiiMain, e.tiiSub, e.lastSweep, e.missedVisits);
             j += b;
             bool fb = true;
             for (int i = 0; i < kBuckets; ++i) {
@@ -603,6 +619,7 @@ public:
                 e.khz = (int)num(o, "khz", 0); e.pi = (uint16_t)num(o, "piN", 0);
                 e.dcKhz = (int)num(o, "dc", 0); e.halfKhz = (int)num(o, "hw", 0);
                 e.psLast = o.str("ps");
+                e.stereo = num(o, "st", 0) != 0;
                 if (const Json* pv = o.get("psVariants"); pv && pv->kind == Json::Arr)
                     for (const auto& s : pv->a) if (s.kind == Json::Str && (int)e.psVariants.size() < kMaxVariants) e.psVariants.push_back(s.s);
                 e.block = (int)num(o, "blk", -1); e.blockName = o.str("block"); e.eid = (uint32_t)num(o, "eidN", 0);
@@ -887,6 +904,37 @@ private:
                     std::snprintf(b, sizeof b, "intermod of %.1f and %.1f MHz", a->khz / 1000.0, c->khz / 1000.0);
                     return b;
                 }
+            }
+        return "";
+    }
+
+    /** Is an RDS station already logged on this frequency? */
+    bool hasRdsAt(int khz) const {
+        for (const auto& kv : entries_) if (!kv.second.dab && kv.second.khz == khz && kv.second.pi != 0) return true;
+        return false;
+    }
+    /** A frequency's no-RDS entry, folded into its new RDS entry `e` (first heard, times heard) and removed. */
+    void foldNoRdsInto(Entry& e, int khz) {
+        auto it = byKey_.find(fmKey(0, khz));
+        if (it == byKey_.end()) return;
+        auto en = entries_.find(it->second);
+        if (en != entries_.end()) {
+            const Entry& o = en->second;
+            if (o.firstHeard && (!e.firstHeard || o.firstHeard < e.firstHeard)) e.firstHeard = o.firstHeard;
+            e.timesHeard += o.timesHeard;
+            e.stereo = e.stereo || o.stereo;
+            entries_.erase(en);
+        }
+        byKey_.erase(it);
+    }
+    /** ★ A NO-RDS hit has no PI to match its mirror by: an image is a hit on the mirror frequency about the DC that is at
+     *  least 20 dB STRONGER in this same visit (RTL images sit 25–45 dB down). "" = not one. */
+    static std::string mirrorByLevel(const FmHit& h, const std::vector<FmHit>& all, int dcKhz, int rasterKhz) {
+        const int tol = std::max(1, rasterKhz / 2);
+        for (const auto& g : all)
+            if (&g != &h && std::abs((2 * dcKhz - g.khz) - h.khz) < tol && g.levelDb - h.levelDb >= 20.0f) {
+                char b[96]; std::snprintf(b, sizeof b, "image of %.1f MHz (%.0f dB weaker, no RDS)", g.khz / 1000.0, g.levelDb - h.levelDb);
+                return b;
             }
         return "";
     }

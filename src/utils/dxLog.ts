@@ -20,6 +20,9 @@ export interface DxEntry {
   freqKhz?: number; pi?: string; ps?: string; psVariants?: string[];
   block?: string; eid?: string; ecc?: number; ensemble?: string; services?: { sid: number; label: string }[];
   tii?: { main: number; sub: number };
+  /** ★ FM: false for a station logged WITHOUT RDS (PI 0000 — Stuart: "include non RDS stations like a digital HiFi
+   *  tuner doing a scan"); stereo = its pilot locked. Absent on an older server (then judged by the PI). */
+  rds?: boolean; stereo?: boolean;
   firstHeard: number; lastHeard: number; timesHeard: number; presence: number; openings: number; live: boolean;
   peakLevelDb?: number; peakSnrDb: number; promoted?: string;
   openingList?: DxOpening[];
@@ -76,8 +79,10 @@ export function dxWhere(e: DxEntry): string {
   return e.band === 'FM' ? ((e.freqKhz || 0) / 1000).toFixed(e.freqKhz && e.freqKhz % 100 ? 2 : 1) : (e.block || '');
 }
 /** The row's title: the PS (or the PI) on FM; the ensemble (or its EId) on DAB. */
+/** An FM station logged without RDS (no PI to show). */
+export function dxNoRds(e: DxEntry): boolean { return e.band === 'FM' && (e.rds === false || e.pi === '0000'); }
 export function dxTitle(e: DxEntry): string {
-  if (e.band === 'FM') return (e.ps || '').trim() || `PI ${e.pi}`;
+  if (e.band === 'FM') return (e.ps || '').trim() || (dxNoRds(e) ? 'No RDS' : `PI ${e.pi}`);
   return (e.ensemble || '').trim() || `EId ${e.eid}`;
 }
 /** The tags beside the title, in order: LIVE NOW, the class (never "DX" — that is the default), PROMOTED. */
@@ -93,7 +98,8 @@ export function dxTags(e: DxEntry): string[] {
 /** The row's second line: identity, how often, when. */
 export function dxSubline(e: DxEntry, now = Date.now() / 1000): string {
   const id = e.band === 'FM'
-    ? [`PI ${e.pi}`, e.psVariants && e.psVariants.length > 1 ? `${e.psVariants.length} PS` : ''].filter(Boolean).join(' · ')
+    ? (dxNoRds(e) ? (e.stereo ? 'stereo · no RDS' : 'mono · no RDS')
+       : [`PI ${e.pi}`, e.psVariants && e.psVariants.length > 1 ? `${e.psVariants.length} PS` : ''].filter(Boolean).join(' · '))
     : [`EId ${e.eid}`, e.services && e.services.length ? `${e.services.length} service${e.services.length === 1 ? '' : 's'}` : '',
        e.tii ? `TII ${e.tii.main}/${e.tii.sub}` : ''].filter(Boolean).join(' · ');
   /* ★ "heard in 3443 scans" (Stuart, 2026-11-14: "heard 3443× in 2 openings" was confusing; "the scans completed at the

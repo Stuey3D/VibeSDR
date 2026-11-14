@@ -1043,6 +1043,11 @@ add_executable(test-dxscan-fm "${CMAKE_CURRENT_SOURCE_DIR}/test-dxscan-fm.cpp")
 target_include_directories(test-dxscan-fm PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
 target_link_libraries(test-dxscan-fm PRIVATE vibedsp Threads::Threads)
 add_test(NAME dxscan-fm COMMAND test-dxscan-fm)
+# ★ dxscan-fm-replay: a recorded .cu8 capture through the FM hop engine as a sweep runs it (dev tool; captures stay in
+#   ~/VibeSDR-test-audio/fm). Peaks found and each one's clean RDS groups — why a station is or is not identified.
+add_executable(dxscan-fm-replay "${CMAKE_CURRENT_SOURCE_DIR}/dxscan-fm-replay.cpp")
+target_include_directories(dxscan-fm-replay PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
+target_link_libraries(dxscan-fm-replay PRIVATE vibedsp Threads::Threads)
 # ★ The POWER card's verdict (vibe_power.h): brief supply dips amber, sustained / continuous / USB loss red.
 add_executable(test-power-dips "${CMAKE_CURRENT_SOURCE_DIR}/test-power-dips.cpp")
 target_include_directories(test-power-dips PRIVATE "${CPP_DIR}")
