@@ -487,7 +487,12 @@ private:
         const int z = z_;
         const MapIndex& ix = st_->index();
         // shelf — UNDER the land (the 200 m contour: drawn above, it would flood every coast)
-        fill(resolve("shelf", mapTierFor("shelf", z)), mp::shelf);
+        /* ★★★ NOT BELOW z4 ON THE R36S (Stuart, 2026-11-14: the map "behaves when it is zoomed in but when you zoom out
+         *  again it has this issue" — squares of the previous zoom left in the picture). There is no tier0 shelf, so the
+         *  world zooms drew tier1-shelf: 199 131 of z2's 457 256 indices (map_test bench), for a faint band along the
+         *  coasts the relief already shows. On the Mali-G31 at 300 MHz with 4×MSAA those renders ran past Panfrost's
+         *  job timeout (24 "gpu sched timeout" in one map session) and each killed render left the old picture showing. */
+        if (z >= 4) fill(resolve("shelf", mapTierFor("shelf", z)), mp::shelf);
         // ★★★ the land: a coastline dataset from z10 (OSM, the runway platforms on land), country polygons below that
         bool coastDrawn = false;
         if (z >= 10 && ix.detail()) {

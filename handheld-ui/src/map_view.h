@@ -143,13 +143,20 @@ public:
          *  a map, while its files were going up — and a reset throws away the render in flight, leaving the buffer's old
          *  picture under the new one. A render made while files were still loading is redone 1.5 s after the last one
          *  arrived, so whatever a reset cut short is drawn again whole. */
-        const bool repair = loadRender_ && !loadingNow && now - renderedAt_ > 1.5;
+        /* ★★ …AND ONCE MORE AFTER A ZOOM-OUT (2026-11-14): Panfrost kills a render that runs past its job timeout and the
+         *  buffer keeps whatever the killed render had not reached — squares of the previous zoom. A zoom-out render is
+         *  the heaviest the map makes, so it is redone once, quietly, 1 s after the last zoom-out: a cut-short picture
+         *  is filled in instead of staying until the next pan. */
+        const bool repair = (loadRender_ && !loadingNow && now - renderedAt_ > 1.5) || (zoomOutRender_ && now - renderedAt_ > 1.0);
         if (dirty || R.fz != z || outside || gen || settle || repair || frame == 0) {
             c.g.flush();
             const uint64_t g0 = st.generation();
             const int cause = dirty || frame == 0 || R.fz < 0 ? MapRender::RC_OPEN : R.fz != z ? MapRender::RC_ZOOM : outside ? MapRender::RC_PAN
                             : gen ? MapRender::RC_DATA : repair ? MapRender::RC_REPAIR : MapRender::RC_SETTLE;
             R.render(st, c.tc, mapFonts(), cx, cy, z, mapProfile(profile), frame, cause);
+            zoomOutRender_ = R.fz >= 0 && z < lastZ_ && !repair;   // ★ the zoom-out render itself — repaired once (above)
+            if (repair) zoomOutRender_ = false;
+            lastZ_ = z;
             gen_ = g0; renderedAt_ = now; dirty = false; loadRender_ = loadingNow;
             glViewport(0, 0, W, H);
             dx = 0; lastOx_ = lastOy_ = 0;
@@ -209,6 +216,8 @@ public:
 private:
     static constexpr int W = 640, H = 480;
     double last_ = 0, rimSince_ = 0, renderedAt_ = 0, movedAt_ = 0, lastOx_ = 0, lastOy_ = 0;
+    bool zoomOutRender_ = false;   // the last render was a zoom-out (repaired once, 1 s later — see repair)
+    int  lastZ_ = 99;              // the zoom the last render was made at
     bool loadRender_ = false;   // the last render was made while files were still loading (the repair render)
     uint64_t gen_ = ~0ull;
     void clampY() {
