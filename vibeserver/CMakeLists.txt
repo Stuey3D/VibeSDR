@@ -763,6 +763,11 @@ foreach(t ${VIBE_DAB_TESTS})
   add_test(NAME dab-${t} COMMAND test-dab-${t})
   add_dependencies(dab-tests test-dab-${t})
 endforeach()
+# ★ The 8-bit IQ conversion and its ADC statistics (vibe_u8_conv.h) against a reference — the path this machine builds
+#   (NEON on ARM, SSE2 on x86). The SSE2 path once dropped the statistics: VibeAGC blind on every x86 RTL server.
+add_executable(test-u8-conv "${CMAKE_CURRENT_SOURCE_DIR}/test-u8-conv.cpp")
+target_include_directories(test-u8-conv PRIVATE "${CPP_DIR}")
+add_test(NAME u8-conv COMMAND test-u8-conv)
 # ★ The throttle snail (vibe_health.h), driven through a fake sysfs tree. Built TWICE: this machine's own
 #   path (cpuinfo_max on ARM, calibrated peak on x86) and the x86 calibrated path forced, so both are
 #   exercised whichever box runs the tests.
