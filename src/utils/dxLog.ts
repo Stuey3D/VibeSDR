@@ -96,7 +96,9 @@ export function dxSubline(e: DxEntry, now = Date.now() / 1000): string {
     ? [`PI ${e.pi}`, e.psVariants && e.psVariants.length > 1 ? `${e.psVariants.length} PS` : ''].filter(Boolean).join(' · ')
     : [`EId ${e.eid}`, e.services && e.services.length ? `${e.services.length} service${e.services.length === 1 ? '' : 's'}` : '',
        e.tii ? `TII ${e.tii.main}/${e.tii.sub}` : ''].filter(Boolean).join(' · ');
-  const heard = `heard ${e.timesHeard}×${e.openings > 1 ? ` in ${e.openings} openings` : ''}`;
+  /* ★ "multiplex heard in 3000 scans" (Stuart, 2026-11-14: "heard 3000× in 5 openings" was confusing — openings are
+   *  still counted and still sort the log, they are just not spelled out on the row). */
+  const heard = `${e.band === 'FM' ? 'station' : 'multiplex'} heard in ${e.timesHeard} scan${e.timesHeard === 1 ? '' : 's'}`;
   const snr = `peak ${Math.round(e.peakSnrDb)} dB`;
   return [id, heard, snr, `last ${dxWhen(e.lastHeard, now)}`].join(' · ');
 }
