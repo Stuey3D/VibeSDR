@@ -89,6 +89,40 @@ int main() {
         ok(log.listJson(Log::Query{}, T0 + 60).find("\"rds\":false") != std::string::npos, "the API says rds:false for a station without RDS");
     }
 
+    std::printf("── spill of a strong local (the Sony's log, 2026-11-14) ──\n");
+    {
+        Log log(T0);
+        // the hop holding 103.6 and 104.2 (BBC Northampton, CF11, really on both) and 104.3 — 104.2's skirt
+        const std::vector<FmHit> h1 = { fm(103600, 0xCF11, "BBC Nhtn", 20, true, -13, 25, true), fm(104200, 0xCF11, "BBC Nhtn", 40, true, 3, 44, true),
+                                        fm(104300, 0xCF11, "BBC Nhtn", 8, true, -6, 35, true) };
+        log.commitFm(103100, 104300, 103700, 100, h1, T0 + 10);
+        const Entry* sk = log.findKey(fmKey(0xCF11, 104300));
+        ok(sk && sk->cls == Cls::Suspect, "★ the same PI 100 kHz off a far stronger hit is SUSPECT (" + (sk ? sk->suspectWhy : std::string("none")) + ")");
+        const Entry* real = log.findKey(fmKey(0xCF11, 103600));
+        ok(real && real->cls != Cls::Suspect, "★ BBC Northampton on 103.6 — the same PI 600 kHz away — is NOT spill");
+        // the next hop: 104.8 carrying CF11 = 2·104.2 − 103.6, the front end's product
+        log.commitFm(104400, 105500, 104950, 100, { fm(104800, 0xCF11, "", 4, false, -17, 26, false) }, T0 + 20, &h1);
+        const Entry* im = log.findKey(fmKey(0xCF11, 104800));
+        ok(im && im->cls == Cls::Suspect, "★ CF11 on 104.8 (2·104.2 − 103.6) is SUSPECT (" + (im ? im->suspectWhy : std::string("none")) + ")");
+        // spill filed one hop BEFORE its strong station was heard: the next hop marks it
+        const std::vector<FmHit> a = { fm(101800, 0xC2A1, "Classic", 5, true, -17, 25, true) };
+        log.commitFm(100700, 101800, 101250, 100, a, T0 + 30);
+        const std::vector<FmHit> b = { fm(101900, 0xC2A1, "Classic", 30, true, -7, 33, true) };
+        const int n = log.markSpill(a, b);
+        const Entry* c = log.findKey(fmKey(0xC2A1, 101800));
+        ok(n == 1 && c && c->cls == Cls::Suspect, "★ the hop after marks 101.8 Classic as spill of 101.9 (" + (c ? c->suspectWhy : std::string("none")) + ")");
+        const Entry* c2 = log.findKey(fmKey(0xC2A1, 101900));
+        ok(!c2, "(101.9 itself is filed by its own hop's commit, not by the marking)");
+        // a no-RDS pilot right beside a strong station is its skirt
+        log.commitFm(96000, 97100, 96550, 100, { fm(96600, 0xC363, "Heart", 30, true, 3, 49, true), fm(96700, 0, "", 0, false, -20, 30, true) }, T0 + 40);
+        const Entry* sk2 = log.findKey(fmKey(0, 96700));
+        ok(sk2 && sk2->cls == Cls::Suspect, "★ a no-RDS pilot 100 kHz off Heart, 23 dB down, is SUSPECT (" + (sk2 ? sk2->suspectWhy : std::string("none")) + ")");
+        // 97.2 — 600 kHz from Heart, real — is a station
+        log.commitFm(96000, 97300, 96550, 100, { fm(96600, 0xC363, "Heart", 30, true, 3, 49, true), fm(97200, 0, "", 0, false, -43, 14, true) }, T0 + 50);
+        const Entry* s97 = log.findKey(fmKey(0, 97200));
+        ok(s97 && s97->cls != Cls::Suspect, "★ 97.2 (no RDS, stereo, 600 kHz from Heart) is a station");
+    }
+
     std::printf("── confirmation (brief §6) ──\n");
     {
         ok(!fmConfirmed(1, false), "★ a single CRC-valid RDS group is never enough");

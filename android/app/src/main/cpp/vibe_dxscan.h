@@ -316,7 +316,10 @@ public:
     /** ★★ COMMIT ONE COMPLETED FM VISIT: the hop covering [loKhz, hiKhz] with its capture DC at `dcKhz` heard `hits`
      *  (already through fmConfirmed or not — unconfirmed hits are dropped here too). Every entry inside the hop counts one
      *  visit, and one hit if heard. A visit cut short is never committed. */
-    VisitResult commitFm(int loKhz, int hiKhz, int dcKhz, int rasterKhz, const std::vector<FmHit>& hits, int64_t now) {
+    /** `near`: the hits of the hops either side, this sweep (the shim's dxFmHop) — a strong local just over a hop boundary
+     *  spills into this one (104.2 BBC Northampton → "104.3 CF11", the Sony 2026-11-14), so the spill rule sees them too. */
+    VisitResult commitFm(int loKhz, int hiKhz, int dcKhz, int rasterKhz, const std::vector<FmHit>& hits, int64_t now,
+                         const std::vector<FmHit>* near = nullptr) {
         VisitResult vr;
         classifyBootstrapEnd(now);
         std::vector<int> heard;
@@ -340,7 +343,8 @@ public:
                 Entry e; e.id = nextId_++; e.dab = false; e.key = k; e.khz = h.khz; e.pi = pi; e.firstHeard = now;
                 e.cls = bootstrapping(now) ? Cls::Provisional : Cls::Dx;
                 e.dcKhz = dcKhz; e.halfKhz = std::max(dcKhz - loKhz, hiKhz - dcKhz);
-                const std::string mirror = rds ? mirrorOf(h, hits, dcKhz, rasterKhz) : mirrorByLevel(h, hits, dcKhz, rasterKhz);
+                std::string mirror = rds ? mirrorOf(h, hits, dcKhz, rasterKhz) : mirrorByLevel(h, hits, dcKhz, rasterKhz);
+                if (mirror.empty()) mirror = spillOf(h, hits, near);
                 const std::string why = !mirror.empty() ? mirror : suspectWhy(h.khz, pi, dcKhz, e.halfKhz, rasterKhz);
                 // ★ A mirror heard IN THIS VERY VISIT (the same PI, far weaker, on the other side of the DC) is an image
                 //   whatever the class — the bootstrap included, so a new server's first day does not log its locals twice.
@@ -932,6 +936,70 @@ private:
         }
         byKey_.erase(it);
     }
+ public:
+    /** ★★ SPILL OF A STRONG LOCAL (the Sony's log, 2026-11-14: BBC Northampton CF11 filed at 104.2, 104.3 and 104.8; R1
+     *  at 98.2 and 98.3; Classic at 101.8 and 101.9). A strong station's skirt — and, from a front end it is pushing,
+     *  its products a few hundred kHz off — decode as that station: the SAME PI, far weaker, close by. No network puts two
+     *  transmitters of one PI that close together within one listener's reach, so it is filed Suspect, never a station:
+     *    · RDS: the same PI within kSpillKhz of a hit at least kSpillDb stronger (kSpillNextDb on the next channel) — or on 2·f1 − f2 of two stronger hits of
+     *      that PI (a front end pushed by both: 2·104.2 − 103.6 = 104.8). ✗ Not "same PI within 1 MHz": BBC Northampton
+     *      really is on 103.6 AND 104.2, 600 kHz apart;
+     *    · no RDS: within kSkirtKhz of any hit at least kSkirtDb stronger (a pilot heard through the neighbour's skirt).
+     *  Heard here or in the hops either side (`near`). "" = not spill. */
+    static constexpr int   kSpillKhz = 300, kSkirtKhz = 200;
+    static constexpr float kSpillDb = 10.0f, kSpillNextDb = 6.0f, kSkirtDb = 15.0f;
+    static std::string spillOf(const FmHit& h, const std::vector<FmHit>& hits, const std::vector<FmHit>* near) {
+        const bool rds = fmConfirmed(h.groups, h.psComplete) && h.pi != 0;
+        auto test = [&](const std::vector<FmHit>& v) -> std::string {
+            for (const auto& g : v) {
+                if (&g == &h || g.khz == h.khz) continue;
+                const int d = std::abs(g.khz - h.khz);
+                const float db = g.levelDb - h.levelDb;
+                // ★ the next channel needs less: the Sony's 104.3 sat 9 dB under 104.2
+                const bool spill = rds ? (g.pi == h.pi && d <= kSpillKhz && db >= (d <= 100 ? kSpillNextDb : kSpillDb))
+                                       : (d <= kSkirtKhz && db >= kSkirtDb);
+                if (!spill) continue;
+                char b[112];
+                if (rds) std::snprintf(b, sizeof b, "spill of %.1f MHz (same PI %04X, %.0f dB weaker)", g.khz / 1000.0, g.pi, db);
+                else std::snprintf(b, sizeof b, "beside %.1f MHz (%.0f dB weaker, no RDS)", g.khz / 1000.0, db);
+                return b;
+            }
+            return "";
+        };
+        std::string w = test(hits);
+        if (w.empty() && near) w = test(*near);
+        if (w.empty() && rds) {   // ★ the third-order product of two stronger carriers of this PI
+            std::vector<const FmHit*> big;
+            // ★ the product is weaker than both: f1 (doubled) well above it, f2 merely above it (103.6 is ~4 dB over 104.8)
+            for (const auto& g : hits) if (&g != &h && g.pi == h.pi && g.khz != h.khz && g.levelDb > h.levelDb) big.push_back(&g);
+            if (near) for (const auto& g : *near) if (g.pi == h.pi && g.khz != h.khz && g.levelDb > h.levelDb) big.push_back(&g);
+            for (const FmHit* a : big) for (const FmHit* b : big)
+                if (a->khz != b->khz && a->levelDb - h.levelDb >= kSpillDb && std::abs(2 * a->khz - b->khz - h.khz) <= 100) {
+                    char b2[112]; std::snprintf(b2, sizeof b2, "intermod of %.1f and %.1f MHz (same PI %04X)", a->khz / 1000.0, b->khz / 1000.0, h.pi);
+                    return b2;
+                }
+        }
+        return w;
+    }
+    /** ★ The hop AFTER can show that the hop before filed a spill (101.8 "Classic" committed one hop before 101.9 itself
+     *  was heard): `older` = the previous hop's hits, `newer` = this one's. An entry filed from `older` that spillOf now
+     *  names is made Suspect — never a Local (it has a week of presence behind it) or a promoted one. Returns how many. */
+    int markSpill(const std::vector<FmHit>& older, const std::vector<FmHit>& newer) {
+        int n = 0;
+        const std::vector<FmHit> none;
+        for (const auto& h : older) {
+            const bool rds = fmConfirmed(h.groups, h.psComplete) && h.pi != 0;
+            const std::string w = spillOf(h, none, &newer);
+            if (w.empty()) continue;
+            auto it = byKey_.find(fmKey(rds ? h.pi : 0, h.khz));
+            if (it == byKey_.end()) continue;
+            Entry& e = entries_[it->second];
+            if (e.cls == Cls::Suspect || e.cls == Cls::Local || !e.promoted.empty()) continue;
+            e.cls = Cls::Suspect; e.suspectWhy = w; dirty_ = true; ++n;
+        }
+        return n;
+    }
+ private:
     /** ★ A NO-RDS hit has no PI to match its mirror by: an image is a hit on the mirror frequency about the DC that is at
      *  least 20 dB STRONGER in this same visit (RTL images sit 25–45 dB down). "" = not one. */
     static std::string mirrorByLevel(const FmHit& h, const std::vector<FmHit>& all, int dcKhz, int rasterKhz) {

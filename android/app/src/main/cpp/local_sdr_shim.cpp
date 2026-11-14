@@ -32492,6 +32492,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ Cost (stated, feedback_state_efficiency_tradeoffs): up to kDxLooks x ~5-9 s per hop, ONLY where such a station
      *    was heard — a hop of named stations costs nothing more. Local RTL only: the filter is librtlsdr's (an RSP /
      *    Airspy / rtl_tcp radio keeps its ordinary hop). */
+    std::vector<vibe::dx::FmHit> dxPrevHits_;   // ★ the previous hop's hits (vibe_dxscan.h spillOf / markSpill)
+    int dxPrevHopIdx_ = -1;
     static constexpr int    kDxLooks = 3;
     static constexpr float  kDxShadowSnrDb = 6.0f, kDxShadowDb = 15.0f;   // ★ a carrier this far over the floor, this far under a neighbour
     static constexpr double kDxFmIfHz = 1400000.0;   // ★ Stuart's FM balance on the RTLs (see planFm)
@@ -32514,6 +32516,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 for (const auto& o : hits)
                     if (&o != &h && std::abs(o.khz - h.khz) <= 1000 && o.levelDb - h.levelDb >= kDxShadowDb) { shadow = true; break; }
             if (!h.pilot && h.snrDb < def.extendSnrDb && !shadow) continue;
+            // ★ ✗ the SKIRT of a strong neighbour is not a station to look at (the Sony: "close look 104.3" beside 104.2)
+            if (!vibe::dx::Log::spillOf(h, hits, &dxPrevHits_).empty()) continue;
             want.push_back(i);
         }
         std::sort(want.begin(), want.end(), [&](size_t a, size_t b) { return hits[a].snrDb > hits[b].snrDb; });
@@ -32527,6 +32531,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ the strongest other station within 1 MHz decides which side the DC (and the filter's centre) goes
             float nb = -300.0f; double nbHz = 0;
             for (const auto& o : hits) if (&o != &h && std::fabs(o.khz * 1e3 - f) < 1.0e6 && o.levelDb > nb) { nb = o.levelDb; nbHz = o.khz * 1e3; }
+            // ★ …and the hop before's (104.2 sat one hop down from 104.3's: the DC went right on top of it)
+            for (const auto& o : dxPrevHits_) if (o.khz != h.khz && std::fabs(o.khz * 1e3 - f) < 1.0e6 && o.levelDb > nb) { nb = o.levelDb; nbHz = o.khz * 1e3; }
             const double dc = f + (nbHz != 0 && nbHz < f ? kDxLookDcOffHz : -kDxLookDcOffHz);
             {
                 std::lock_guard<std::mutex> lk(dxStatMtx_);
@@ -32619,7 +32625,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool wrapped;
         {
             std::lock_guard<std::mutex> lk(g_dxLogMtx);
-            vr = g_dxLog.commitFm((int)std::lround(hop.loHz / 1e3), (int)std::lround(hop.hiHz / 1e3), (int)std::lround(p.dcHz / 1e3), cfg.rasterKhz, hits, utc);
+            // ★ the hop just before, when it WAS just before (the spill rule looks across the boundary both ways)
+            const bool adjacent = dxPrevHopIdx_ >= 0 && dxPrevHopIdx_ + 1 == job.index;
+            if (!adjacent) dxPrevHits_.clear();
+            vr = g_dxLog.commitFm((int)std::lround(hop.loHz / 1e3), (int)std::lround(hop.hiHz / 1e3), (int)std::lround(p.dcHz / 1e3), cfg.rasterKhz, hits, utc,
+                                  &dxPrevHits_);
+            vr.suspects += g_dxLog.markSpill(dxPrevHits_, hits);
+            dxPrevHits_ = hits; dxPrevHopIdx_ = job.index;
             const uint32_t sw = g_dxLog.sweeps(false);
             vibe::dx::advance(g_dxLog, cfg, job, plan, cfg.dab ? int(vibedab::kBandIIICount) : 0);
             wrapped = g_dxLog.sweeps(false) != sw;
