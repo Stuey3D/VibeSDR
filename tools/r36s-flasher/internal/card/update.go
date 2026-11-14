@@ -26,11 +26,14 @@ func ReadVersion(fsys filesystem.FileSystem) string {
 
 // DiskID is the card's MBR disk signature as the kernel spells it in PARTUUID ("4bd2a6f1" → PARTUUID=4bd2a6f1-02).
 func DiskID(r io.ReaderAt) (string, error) {
-	b := make([]byte, 4)
-	if _, err := r.ReadAt(b, 440); err != nil {
+	// ★★★ THE WHOLE SECTOR, NEVER 4 BYTES AT 440: macOS reads a raw card (/dev/rdiskN) only in whole 512-byte sectors on
+	//     sector boundaries — anything else is "invalid argument" (Stuart's first real Update, 2026-11-14; the tests used
+	//     plain files, which read anything). TestRawCardReads holds every card read to that rule.
+	b := make([]byte, 512)
+	if _, err := r.ReadAt(b, 0); err != nil {
 		return "", fmt.Errorf("could not read the card's disk id: %w", err)
 	}
-	return fmt.Sprintf("%08x", binary.LittleEndian.Uint32(b)), nil
+	return fmt.Sprintf("%08x", binary.LittleEndian.Uint32(b[440:444])), nil
 }
 
 var rootPartUUID = regexp.MustCompile(`root=PARTUUID=[0-9A-Fa-f]{8}-02\b`)
