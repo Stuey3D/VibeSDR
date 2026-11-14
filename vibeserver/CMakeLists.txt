@@ -279,6 +279,8 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/drm/drm_receiver.cpp"
     # ★ V12: PSK31/63 — the listener's decoder and the skimmer (one FFT is finder and channeliser; decoders/psk_skimmer.h)
     "${CPP_DIR}/decoders/psk_skimmer.cpp"
+    # ★ V12: the RTTY skimmer — every RTTY signal in a 24–96 kHz segment, each with its own settings (decoders/rtty_skimmer.h)
+    "${CPP_DIR}/decoders/rtty_skimmer.cpp"
     # ★ V12: DSC — maritime Digital Selective Calling, MF/HF and VHF ch 70 (ITU-R M.493; decoders/dsc_decoder.h)
     "${CPP_DIR}/decoders/dsc_decoder.cpp"
     # ★ V12: SITOR-A — the maritime ARQ teleprinter listener (decoders/sitor_a.h, ITU-R M.476/M.625)
