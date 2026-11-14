@@ -2,7 +2,7 @@
 // from a radio tuned to it at 2.048 MS/s: flat across the ensemble, nothing folded in, the exact rate, and the same
 // output however the input is chopped up.
 //
-// For every capture rate a radio offers (2.048 … 30.72 MS/s) and block offsets that fit:
+// For every capture rate a radio offers (2.048 … 56 MS/s — the USRP's 40/50/56 added 2026-11-14) and block offsets that fit:
 //   1. PASSBAND — tones across the ensemble (±768 kHz of the block centre) within ±0.1 dB and above 70 dB SNDR
 //      (the old 2.4 path's own test asks 1 dB / 40 dB; it measures 0.25 dB / 75 dB);
 //   2. ALIASES — a tone anywhere that would fold INTO the ensemble at 2.048 (|f| ≥ 1.248 MHz from the block centre, up
@@ -66,7 +66,7 @@ static void measure(const std::vector<float>& out, double fOut, size_t skip, dou
 
 int main() {
     const double rates[] = { 2048000, 2400000, 2500000, 3000000, 3200000, 4000000, 5000000, 6000000, 8000000, 10000000,
-                             12500000, 16000000, 20000000, 25000000, 28000000, 30720000, 32000000 };
+                             12500000, 16000000, 20000000, 25000000, 28000000, 30720000, 32000000, 40000000, 50000000, 56000000 };
     std::mt19937 rng(7);
     std::printf("rate MS/s  shift MHz   hb  mid MS/s   L/M        taps(hb..|rat)   pass dB [min,max]  SNDR min  alias worst\n");
     for (double fs : rates) {
@@ -141,7 +141,7 @@ int main() {
     }
     // ★ The COST, per input sample, and as % of one core in real time
     std::printf("\ncost (this machine): rate MS/s  ns/sample  %%core real time\n");
-    for (double fs : { 2400000.0, 2500000.0, 4000000.0, 8000000.0, 10000000.0, 16000000.0, 20000000.0, 30720000.0 }) {
+    for (double fs : { 2400000.0, 2500000.0, 4000000.0, 8000000.0, 10000000.0, 16000000.0, 20000000.0, 30720000.0, 56000000.0 }) {
         DabDdc d; d.configure(fs, fs >= 8e6 ? 2.5e6 : 0.0);
         std::vector<float> in(2 * size_t(fs * 0.005)); std::normal_distribution<float> g(0, 0.3f); for (auto& v : in) v = g(rng);
         std::vector<float> out; out.reserve(2 * 20000);
