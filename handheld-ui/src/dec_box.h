@@ -144,8 +144,10 @@ inline bool decKey(Ctx& c, const std::string& id, Rect r, const std::string& lab
  *  to see a new one. The highlight still brings its own row into view (Scroller::follow). */
 struct DecAnchor { std::vector<std::pair<std::string, float>> rows; };
 
-/** ★ CW (not PSK — typed, not abbreviated — nor JTTY) read in plain English: the EXPLAIN key (settings cwPlain). */
-inline bool decCwPlain(const App& a) { return a.set_.cwPlain && decUi().active == "cw"; }
+/** ★ CW and RTTY (not PSK — typed, not abbreviated — nor JTTY) read in plain English: the EXPLAIN key (settings cwPlain).
+ *  ★ V12 2026-11-14 RTTY too (Stuart: "RTTY seems to use the same abbreviation codes as CW") — the SAME reading
+ *  (cw_plain.h, generated from the app's cwVocab), the one-signal text, the skimmer's rows and a row's history. */
+inline bool decCwPlain(const App& a) { return a.set_.cwPlain && (decUi().active == "cw" || decUi().active == "rtty"); }
 
 /** A scrolling column of full-width rows (registered under prefix + key(k)); returns the row pressed, or -1.
  *  `hold` (optional): keep the rows being read in place as the list changes (DecAnchor). */
@@ -299,7 +301,7 @@ inline void decPaneSignals(App& a, Ctx& c, const RadioState& s, Rect view) {
             float x = rr.x + 8 + 92;
             if (!g.call.empty()) x += (float)c.tc.draw(c.g, c.f.body, g.call, x, cy - c.f.body.lineHeight() / 2.f, g.active ? th::white : th::white68) + 12;
             // ★ RTTY: the settings found are inside the text ("[45 baud / 170 Hz / Reverse] ") and scroll away with it
-            const std::string tx = rtty ? (g.set ? g.text : std::string("RTTY detected — waiting for parameter detection"))
+            const std::string tx = rtty ? (g.set ? (decCwPlain(a) ? cwPlainEnglish(g.text) : g.text) : std::string("RTTY detected — waiting for parameter detection"))
                                  : !psk && !jtty && decCwPlain(a) ? cwPlainEnglish(g.text) : g.text;
             c.tc.draw(c.g, c.f.body, decFitTail(c, c.f.body, tx, (int)(rr.r() - 8 - tw - x)), x, cy - c.f.body.lineHeight() / 2.f,
                       rtty && !g.set ? th::amber : g.active ? th::white : th::white68);
@@ -902,7 +904,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (d && d->kind == DK_PICTURE) { std::vector<PicKey> pk; decPicKeys(a, view, pk); for (auto& k : pk) ks.push_back({k.id, k.label, k.act, k.on}); }
             ks.push_back({"dec.k.pick", "DECODERS", 1, false});
             // ★★ EXPLAIN ↔ RAW (the app's key, Stuart 2026-10-30): the legend names what a press DOES; CW only
-            if (view == "cw") ks.push_back({"dec.k.plain", a.set_.cwPlain ? "RAW" : "EXPLAIN", 4, false});
+            if (view == "cw" || view == "rtty") ks.push_back({"dec.k.plain", a.set_.cwPlain ? "RAW" : "EXPLAIN", 4, false});   // ★ and RTTY's (2026-11-14)
             if ((view == "cw" || (view == "rtty" && u.rttySkim)) && u.readSig && decSubs(view)[(size_t)std::max(0, std::min(u.sub, (int)decSubs(view).size() - 1))] == "SIGNALS")
                 ks.push_back({"dec.k.tune", "TUNE", 5, false});
             // ★ CLR only where there is something it clears (an external decoder: only with its own clear action)
@@ -959,7 +961,8 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); decRelease(a); }
             else a.nav_.forget("dec");
         } else if (act == 4) { a.set_.cwPlain = a.set_.cwPlain ? 0 : 1; a.dirty();
-            a.toast(a.set_.cwPlain ? "CW in plain English — RAW shows it as sent" : "CW as sent");
+            { const char* w = decUi().active == "rtty" ? "RTTY" : "CW";
+              a.toast(a.set_.cwPlain ? std::string(w) + " in plain English — RAW shows it as sent" : std::string(w) + " as sent"); }
         } else if (act == 5) {
             for (auto& g : u.sigs) if ((long long)g.id == u.readSig && g.hz > 0) {
                 if (view == "rtty") decTune(a, s, g.hz - decPassbandCentre(s), "usb");   // ★ its tones mid-passband

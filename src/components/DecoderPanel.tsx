@@ -11,6 +11,7 @@
  * Matches VibeSDR_Mockup_SAVE.html #lsv-decoder-panel exactly.
  */
 
+import { plainEnglish } from '../utils/cwVocab';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { digiModeStyle } from '../utils/digiModes';
 import { fmtSpotTime } from '../utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
@@ -447,7 +448,10 @@ export default function DecoderPanel({
   /* ★★ V12 (2026-10-29) PLAIN ENGLISH — the CW box's header key: one press reads every row (and ONE SIGNAL's text) through
    *  utils/cwVocab plainEnglish, the next shows the CW as sent. Lit while on; remembered on this device (the web keeps
    *  the same choice in its own localStorage). CW only — PSK's text is typed, not abbreviated Morse. */
-  const isCwOnly = isCw && activeDecoder === 'cw';
+  /* ★★ V12 (2026-11-14) …and RTTY's (Stuart: "RTTY seems to use the same abbreviation codes as CW"): the same key, the
+   *  same setting, the same dictionary — RTTY's one-signal text, and the RTTY skimmer's rows and card. */
+  const isCwOnly = (isCw && activeDecoder === 'cw') || activeDecoder === 'rtty';
+  const what = activeDecoder === 'rtty' ? 'RTTY' : 'CW';
   const [cwPlain, setCwPlain] = useState(false);
   useEffect(() => {
     AsyncStorage.getItem(CW_PLAIN_KEY).then((v: string | null) => { if (v === '1') setCwPlain(true); }).catch(() => {});
@@ -1266,7 +1270,7 @@ export default function DecoderPanel({
            *  language) nor DECODE (reads as a decoder like RTTY). Never lit — the legend carries the state. */}
           {isCwOnly && (
             <HBtn run hitSlop={6}
-              accessibilityLabel={cwPlain ? 'Show the CW as sent' : 'Explain the CW in plain English'}
+              accessibilityLabel={cwPlain ? `Show the ${what} as sent` : `Explain the ${what} in plain English`}
               accessibilityState={{ selected: cwPlain }}
               onPress={(e: any) => { e?.stopPropagation(); toggleCwPlain(); }}>
               <DecoderKeyLabel>{cwPlain ? 'RAW' : 'EXPLAIN'}</DecoderKeyLabel>
@@ -1597,6 +1601,7 @@ export default function DecoderPanel({
                   by the call, the spoken words kept as its label). Every other text decoder draws its text as is. */}
               {activeDecoder === 'transcribe'
                 ? <TranscriptText text={decoderText} linkStyle={{ color: tk.accent, fontWeight: '700' }} />
+                : activeDecoder === 'rtty' && cwPlain ? plainEnglish(decoderText)   // ★ EXPLAIN: RTTY's codes in plain English
                 : decoderText}
             </Text>
           </ScrollView>

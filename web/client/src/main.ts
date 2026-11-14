@@ -12926,16 +12926,21 @@ const CW_PLAIN_KEY = 'vibe.cwPlain';
 let cwPlainOn = (() => { try { return localStorage.getItem(CW_PLAIN_KEY) === '1'; } catch { return false; } })();
 let cwPlainQueued = false;
 /** A row's text as the PLAIN key says to show it. */
-function cwRead(t: string): string { return cwPlainOn && activeDec === 'cw' ? plainEnglish(t) : t; }
+function cwRead(t: string): string { return cwPlainOn && explainHere() ? plainEnglish(t) : t; }
+/** ★★ V12 (2026-11-14) EXPLAIN is CW's AND RTTY's — RTTY uses the same codes (Stuart: "the same CW translator needs to
+ *  be added as RTTY seems to use the same abbreviation codes as CW"): ONE dictionary (src/utils/cwVocab), one key, one
+ *  setting — the one-signal text, the skimmer's rows and its card. */
+function explainHere(): boolean { return activeDec === 'cw' || activeDec === 'rtty'; }
 /** The PLAIN key, the box's class and ONE SIGNAL's plain text, to the current state. */
 function syncCwPlain() {
   const key = document.getElementById('cwPlain');
-  const cw = activeDec === 'cw';
+  const cw = explainHere();
+  const what = activeDec === 'rtty' ? 'RTTY' : 'CW';
   // ★ EXPLAIN ↔ RAW: the legend names what a press does (Stuart, 2026-10-30) — never lit, the legend carries the state.
   if (key) {
     key.style.display = cw ? '' : 'none'; key.setAttribute('aria-pressed', String(cwPlainOn));
     key.textContent = cwPlainOn ? 'RAW' : 'EXPLAIN';
-    key.title = cwPlainOn ? 'Show the CW as sent' : 'Explain the CW in plain English (press again for the CW as sent)';
+    key.title = cwPlainOn ? `Show the ${what} as sent` : `Explain the ${what} in plain English (press again for the ${what} as sent)`;
   }
   document.getElementById('decBox')?.classList.toggle('cwplain', cw && cwPlainOn);
   queueCwPlainText();
@@ -12948,7 +12953,7 @@ function queueCwPlainText() {
     cwPlainQueued = false;
     const out = document.getElementById('cwPlainText');
     if (!out) return;
-    if (!(cwPlainOn && activeDec === 'cw')) { if (out.textContent) out.textContent = ''; return; }
+    if (!(cwPlainOn && explainHere())) { if (out.textContent) out.textContent = ''; return; }
     const raw = document.getElementById('decText')?.textContent || '';
     const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 24;
     out.textContent = plainEnglish(raw);
@@ -12960,6 +12965,7 @@ function toggleCwPlain() {
   try { localStorage.setItem(CW_PLAIN_KEY, cwPlainOn ? '1' : '0'); } catch { /* private mode */ }
   syncCwPlain();
   renderCw();
+  renderRttyCard();
 }
 /* ★★ PSK31/63 (V12, 2026-10-26) — the server's own (decoders/psk_skimmer.h), CW's two views exactly: ONE SIGNAL decodes
  *  the passband ('psk' — the signal nearest the middle of it is the box's, a PSK program's cursor) and lists every PSK
@@ -13102,7 +13108,7 @@ function rttyRow(r: HTMLElement, sg: CwSignal) {
     `<span class="s">${sg.snr >= 0 ? '+' : ''}${Math.round(sg.snr)} dB</span>` +
     `<span class="q ${sg.q}">${rt.set ? sg.q : ''}</span>` +
     `<span class="a">${cwAge(sg.last)}</span>` +
-    `<span class="tx${rt.set ? '' : ' wait'}"><bdi>${escapeHtml(rt.set ? sg.text.trim() : RTTY_WAITING)}</bdi></span>`;
+    `<span class="tx${rt.set ? '' : ' wait'}"><bdi>${escapeHtml(rt.set ? cwRead(sg.text.trim()) : RTTY_WAITING)}</bdi></span>`;
   wireQrz(r);
   r.title = `${sg.call ? sg.call + (sg.country ? ' · ' + sg.country : '') + ' · ' : ''}${cwFreq(sg)} kHz · `
           + (rt.set ? rt.settings : `${Math.round(rt.shift)} Hz shift — its speed and polarity are being worked out`)
@@ -13122,7 +13128,7 @@ function renderRttyCard() {
   $('rttyCardSet').textContent = sg.rtty.set ? sg.rtty.settings : RTTY_WAITING;
   const pre = $('rttyCardText');
   const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
-  pre.textContent = rttyHist.get(sg.id) || (sg.rtty.set ? sg.text : '');
+  pre.textContent = cwRead(rttyHist.get(sg.id) || (sg.rtty.set ? sg.text : ''));
   if (atBottom) pre.scrollTop = pre.scrollHeight;
 }
 /** ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (cwList readAnchorsOf / readAnchorRestore; Stuart, 2026-10-31: "do not
@@ -13389,7 +13395,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (node.length > 8000 + DEC_TRIM_SLACK) node.deleteData(0, node.length - 8000);
       if (atBottom) el.scrollTop = el.scrollHeight;
       setDecLive(true);
-      if (activeDec === 'cw' && cwPlainOn) queueCwPlainText();   // ★ V12 the PLAIN key's reading of ONE SIGNAL
+      if (explainHere() && cwPlainOn) queueCwPlainText();   // ★ V12 the EXPLAIN key's reading of ONE SIGNAL (CW and RTTY)
     },
     onState: (st) => {
       // ★ Its status is the broadcast's — see renderNavtex. A lock lost mid-message ends it [end lost] (NickB 2026-10-12:
@@ -13805,7 +13811,7 @@ function initDecoders(host: string, auth: AuthState) {
   $('cwPlain').onclick = () => toggleCwPlain();
   $('decClr').onclick = () => {
     $('decText').textContent = '';
-    if (activeDec === 'cw') queueCwPlainText();
+    if (explainHere()) queueCwPlainText();
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
     if (activeDec === 'hell') clearHellPage();
@@ -14397,7 +14403,7 @@ function showDecBox(what: string) {
   if (isAprs) { $('decText').classList.add('off'); aprsLast = null; aprsLog.length = 0; aprsTrails.clear(); renderAprs(); }
   else aprsView?.hide();
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
-  syncCwPlain();   // ★ V12 the PLAIN key: CW only
+  syncCwPlain();   // ★ V12 the EXPLAIN key: CW and RTTY
   const isDsc = what === 'dsc';
   $('dscList').classList.toggle('on', isDsc);
   if (isDsc) { dscCalls.clear(); renderDsc(); }

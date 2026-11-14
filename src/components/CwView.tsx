@@ -130,7 +130,8 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
   const { scrollProps, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
 
   const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
-  const read = (t: string) => (plain && !psk && !rtty ? plainEnglish(t) : t);
+  // ★ EXPLAIN: CW's and the RTTY skimmer's text (PSK is typed, not abbreviated) — one dictionary, utils/cwVocab
+  const read = (t: string) => (plain && !psk ? plainEnglish(t) : t);
   const card = rtty && cardId != null ? sigs.find((s) => s.id === cardId) ?? null : null;
   // ★ A speed RANGE ("17–21 wpm") needs a wider column — only while a row shows one, so an older server's list keeps
   //   its call column as wide as before.
@@ -172,7 +173,7 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
             </View>
             {/* ★ RTTY: the waiting words until its settings are found; then what it sent (the settings scroll away in it) */}
             {rtty ? (
-              <Text style={[cs.tx, { color: sg.rtty?.set ? qc : tk.muted }]} numberOfLines={2} ellipsizeMode="head">{rttyRowText(sg)}</Text>
+              <Text style={[cs.tx, { color: sg.rtty?.set ? qc : tk.muted }]} numberOfLines={2} ellipsizeMode="head">{sg.rtty?.set ? read(rttyRowText(sg)) : rttyRowText(sg)}</Text>
             ) : !!sg.text.trim() && (
               <Text style={[cs.tx, { color: qc }]} numberOfLines={2}>{read(sg.text.trim())}</Text>
             )}
@@ -222,7 +223,7 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
                 </Text>
                 <ScrollView style={cs.cardBody} contentContainerStyle={scrollLane}>
                   <Text style={[cs.tx, { color: CW_Q_COLOURS[card.q] }]} selectable>
-                    {(rttyHistory?.[card.id] ?? card.text).trim() || '\u2014'}
+                    {read((rttyHistory?.[card.id] ?? card.text).trim()) || '\u2014'}
                   </Text>
                 </ScrollView>
               </>)}
