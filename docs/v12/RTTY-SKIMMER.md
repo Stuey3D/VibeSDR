@@ -15,7 +15,10 @@ full messages.
 
 - A signal is listed **as soon as it is detected**, with "RTTY detected — waiting for parameter detection", before any
   text. Its text appears once its settings are found — from when it was first heard (see §3).
-- The settings shown are the ones found: baud (45, 50, 75), shift (170, 200, 425, 450, 850 Hz), Normal / Reverse.
+- The settings found (baud 45 / 50 / 75, shift 170 / 200 / 425 / 450 / 850 Hz, Normal / Reverse) are written INTO the
+  line's text when they are set — and **scroll away with it**, as the one-signal decoder's "[RTTY auto: 50 baud,
+  450 Hz shift, reverse]" does (Stuart: "the parameters do not need to stay on the screen"). They are not a fixed
+  column; the card keeps them at the top of the full messages.
 - A callsign heard in CQ / DE / TEST is picked out, as the CW and PSK skimmers do (shared callsign rules).
 - Opened from the RTTY decoder's key — one signal, or a skimmer across 24–96 kHz (as CW). Every decoder has a toggle;
   its options sit under it.
