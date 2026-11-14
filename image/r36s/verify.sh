@@ -34,7 +34,7 @@ ok "loader: b_uboot.bin.uart5 at 32 KiB (the bytes ROCKNIX wrote on Stuart's uni
 dd if="$IMG" of="$T/boot.vfat" bs=512 skip="$S1" count="$Z1" status=none
 mdir -i "$T/boot.vfat" -/ -b :: > "$T/boot.ls"
 for f in ::/KERNEL ::/boot.scr ::/rk3326-gameconsole-eeclone.dtb ::/extlinux/extlinux.conf ::/overlays/mipi-panel.dtbo \
-         ::/overlays/vibe-r36s.dtbo ::/stock/rf3536k3ka.dtb ::/SOURCES.txt; do
+         ::/overlays/vibe-r36s.dtbo ::/stock/rf3536k3ka.dtb ::/SOURCES.txt ::/vibesdr-version.txt; do
   grep -qx "$f" "$T/boot.ls" || fail "boot partition lacks ${f#::}"
 done
 mtype -i "$T/boot.vfat" ::/extlinux/extlinux.conf > "$T/ext"

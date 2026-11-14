@@ -282,6 +282,8 @@ DISKID=$(printf '%s' "vibesdr-r36s-$IMAGE_VERSION" | sha256sum | cut -c1-8)
 sed -e "s/@DISKID@/$DISKID/g" "$H/board/extlinux.conf" > "$B/extlinux/extlinux.conf"
 grep -q ' $' "$B/extlinux/extlinux.conf" && die "extlinux.conf has a trailing space (U-Boot's parser breaks on it)"
 cp "$H/rootfs/usr/share/vibesdr-r36s/VIBESDR-README.txt" "$B/README.txt"
+# ★ The version, where the flasher's Update can read it without an ext4 reader ("beta75 → beta76", R36S-FLASHER.md §1.3)
+echo "$IMAGE_VERSION" > "$B/vibesdr-version.txt"
 
 # ── 7. SOURCES (GPL: where every binary came from) ───────────────────────────────────────────────────────────────────
 S=$R/usr/share/doc/vibesdr-r36s/SOURCES

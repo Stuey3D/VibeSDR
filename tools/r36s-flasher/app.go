@@ -21,7 +21,7 @@ import (
 )
 
 // Version of the flasher.
-const Version = "0.1.0-localtest"
+const Version = "0.2.0-localtest"
 
 // App is what the window calls.
 type App struct {
@@ -131,7 +131,7 @@ func (a *App) Start(diskID, kind, folder string, confirmedLarge bool) error {
 	if img == nil {
 		return errors.New("there is no VibeSDR image to write yet")
 	}
-	if kind != "whole" && kind != "boot" {
+	if kind != "whole" && kind != "boot" && kind != "update" {
 		return errors.New("choose what to back up")
 	}
 	// ★ the card is looked up AGAIN, now: never write to a disk from a list that may be out of date
@@ -160,7 +160,7 @@ func (a *App) Start(diskID, kind, folder string, confirmedLarge bool) error {
 
 func (a *App) emit(e job.Event) { runtime.EventsEmit(a.ctx, "progress", e) }
 
-func (a *App) finish(err error, backupDir string) {
+func (a *App) finish(err error, backupDir, doneText string) {
 	a.mu.Lock()
 	a.running = false
 	a.mu.Unlock()
@@ -168,13 +168,13 @@ func (a *App) finish(err error, backupDir string) {
 	if err != nil {
 		msg = err.Error()
 	}
-	runtime.EventsEmit(a.ctx, "finished", map[string]string{"error": msg, "backup": backupDir})
+	runtime.EventsEmit(a.ctx, "finished", map[string]string{"error": msg, "backup": backupDir, "done": doneText})
 }
 
 func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 	work := filepath.Join(release.CacheDir(), "run-"+time.Now().Format("20060102-150405"))
 	if err := os.MkdirAll(work, 0o755); err != nil {
-		a.finish(err, "")
+		a.finish(err, "", "")
 		return
 	}
 	defer os.RemoveAll(work)
@@ -185,14 +185,18 @@ func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 		if err := copyFile(img.Path, cached, func(d, t int64) {
 			a.emit(job.Event{Stage: "image", Frac: 0.02 * float64(d) / float64(t), Text: "Getting the VibeSDR image ready…"})
 		}); err != nil {
-			a.finish(fmt.Errorf("could not copy the VibeSDR image: %w", err), "")
+			a.finish(fmt.Errorf("could not copy the VibeSDR image: %w", err), "", "")
 			return
 		}
 	}
 	// 2. the job — run here, as the person. Only the card itself needs permission, and macOS's own authopen opens it
 	//    after one system password prompt and hands it back (internal/authopen). Nothing runs as root.
 	staged := filepath.Join(work, "backup", filepath.Base(folder)+".img.gz")
-	j := job.Job{Target: d.Raw, Disk: d.Device, Size: d.Size, BackupKind: kind, BackupPath: staged, ImagePath: cached,
+	mode, bk := "make", kind
+	if kind == "update" { // ★ Update backs up the boot partition (and the loader) only — see internal/job/update.go
+		mode, bk = "update", "boot"
+	}
+	j := job.Job{Mode: mode, Target: d.Raw, Disk: d.Device, Size: d.Size, BackupKind: bk, BackupPath: staged, ImagePath: cached,
 		ImageSHA256: img.SHA256, ImageVersion: img.Version, Tmp: work,
 		Open: func(path string, flags int) (*os.File, error) {
 			a.emit(job.Event{Stage: "open", Frac: 0.02, Text: "Waiting for your password…"})
@@ -202,7 +206,11 @@ func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 			}
 			return f, err
 		}}
+	doneText := ""
 	runErr := job.Run(&j, func(e job.Event) {
+		if e.Done {
+			doneText = e.Text
+		}
 		if !e.Done && e.Error == "" { // the end is reported once, by finish
 			a.emit(e)
 		}
@@ -216,7 +224,7 @@ func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 			}
 		}
 	}
-	a.finish(runErr, backupDir)
+	a.finish(runErr, backupDir, doneText)
 }
 
 func copyFile(src, dst string, prog func(d, t int64)) error {

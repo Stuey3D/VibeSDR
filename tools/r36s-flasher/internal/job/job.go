@@ -37,6 +37,8 @@ type Job struct {
 	UID          int    `json:"uid"`          // the person's — the backup files are theirs, not root's
 	GID          int    `json:"gid"`
 	Tmp          string `json:"tmp"`
+	// Mode: "" or "make" = Simple mode (the whole card); "update" = system only, settings and recordings kept (update.go).
+	Mode string `json:"mode"`
 
 	// Open opens the card (the app: through authopen, one system password prompt). nil = open it directly (tests).
 	Open func(path string, flags int) (*os.File, error) `json:"-"`
@@ -130,6 +132,10 @@ func Run(j *Job, rep Reporter) (err error) {
 		return Friendly{"The VibeSDR image does not match its checksum, so it was not used. Nothing on the card has changed."}
 	}
 
+	if j.Mode == "update" {
+		return runUpdate(j, rep, tmp, stage)
+	}
+
 	// 2. the card
 	if j.Disk != "" {
 		if out, err := exec.Command("/usr/sbin/diskutil", "unmountDisk", j.Disk).CombinedOutput(); err != nil {
@@ -194,7 +200,7 @@ func Run(j *Job, rep Reporter) (err error) {
 
 	// 5. write — the image as published, with its boot partition replaced by the prepared one
 	s = stage("write", pWrite)
-	wroteSum, err := writeImage(dev, j.ImagePath, imgEnd, bootPart.Offset(), newBoot, func(d int64) {
+	wroteSum, err := writeImage(dev, j.ImagePath, 0, imgEnd, bootPart.Offset(), newBoot, func(d int64) {
 		s(float64(d)/float64(imgEnd), fmt.Sprintf("Writing VibeSDR… %d%%", d*100/imgEnd))
 	})
 	if err != nil {
@@ -206,7 +212,7 @@ func Run(j *Job, rep Reporter) (err error) {
 
 	// 6. read back what was written
 	s = stage("verify", pVerify)
-	got, err := hashSpan(dev, imgEnd, func(d int64) { s(float64(d)/float64(imgEnd), fmt.Sprintf("Checking the card… %d%%", d*100/imgEnd)) })
+	got, err := hashSpan(dev, 0, imgEnd, func(d int64) { s(float64(d)/float64(imgEnd), fmt.Sprintf("Checking the card… %d%%", d*100/imgEnd)) })
 	if err != nil || got != wroteSum {
 		return Friendly{"The card did not read back correctly — it may be faulty. Try another card. Your backup is safe."}
 	}
@@ -337,20 +343,21 @@ func hashFile(p string, prog func(d, t int64)) (string, error) {
 	}
 }
 
-func hashSpan(r io.ReaderAt, span int64, prog func(int64)) (string, error) {
+// hashSpan: the SHA-256 of [from, end) of r; prog gets the bytes done since `from`.
+func hashSpan(r io.ReaderAt, from, end int64, prog func(int64)) (string, error) {
 	h := sha256.New()
 	buf := make([]byte, chunk)
-	for off := int64(0); off < span; {
+	for off := from; off < end; {
 		n := int64(len(buf))
-		if span-off < n {
-			n = span - off
+		if end-off < n {
+			n = end - off
 		}
 		if _, err := r.ReadAt(buf[:n], off); err != nil && err != io.EOF {
 			return "", err
 		}
 		h.Write(buf[:n])
 		off += n
-		prog(off)
+		prog(off - from)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -431,9 +438,10 @@ func prepareBoot(p1 *os.File, info *card.Info, dev io.ReaderAt, tmp string) (str
 	return plan.Summary, p1.Sync()
 }
 
-// writeImage streams the image onto the target with [bootOff, bootOff+len(boot)) replaced by boot; returns the
-// SHA-256 of exactly what was written.
-func writeImage(dev io.WriterAt, img string, end, bootOff int64, boot []byte, prog func(int64)) (string, error) {
+// writeImage streams [from, end) of the image onto the same place on the target, with [bootOff, bootOff+len(boot))
+// replaced by boot; returns the SHA-256 of exactly what was written. prog gets the bytes done since `from`.
+// from = 0 is the whole card (Make); Update writes the boot and system partitions only.
+func writeImage(dev io.WriterAt, img string, from, end, bootOff int64, boot []byte, prog func(int64)) (string, error) {
 	f, err := os.Open(img)
 	if err != nil {
 		return "", err
@@ -447,7 +455,12 @@ func writeImage(dev io.WriterAt, img string, end, bootOff int64, boot []byte, pr
 	h := sha256.New()
 	buf := make([]byte, chunk)
 	bootEnd := bootOff + int64(len(boot))
-	for off := int64(0); off < end; {
+	if from > 0 {
+		if _, err := io.CopyN(io.Discard, zr, from); err != nil {
+			return "", fmt.Errorf("the image ended early: %w", err)
+		}
+	}
+	for off := from; off < end; {
 		n := int64(len(buf))
 		if end-off < n {
 			n = end - off
@@ -468,7 +481,7 @@ func writeImage(dev io.WriterAt, img string, end, bootOff int64, boot []byte, pr
 			return "", fmt.Errorf("at %d MB: %w", off>>20, err)
 		}
 		off += n
-		prog(off)
+		prog(off - from)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

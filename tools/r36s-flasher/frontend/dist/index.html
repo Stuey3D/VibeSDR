@@ -70,14 +70,14 @@
   <section class="screen on" id="home">
     <h2>What would you like to do?</h2>
     <button class="big" id="bMake"><b>Make a VibeSDR card</b><span>Put your R36S's own SD card in, press Start — it backs it up and does the rest.</span></button>
-    <button class="big" disabled><span class="soon">Coming soon</span><b>Update a VibeSDR card</b><span>Bring a VibeSDR card up to date. Your settings and recordings stay.</span></button>
+    <button class="big" id="bUpdate"><b>Update a VibeSDR card</b><span>Bring a VibeSDR card up to date. Your settings and recordings stay.</span></button>
     <button class="big" disabled><span class="soon">Coming soon</span><b>Advanced</b><span>Drivers from a saved backup, generic ROCKNIX drivers or your own .dtb files; blank cards.</span></button>
     <div class="status" id="imgStatus">Looking for the VibeSDR image…</div>
   </section>
 
   <!-- 1. THE CARD -->
   <section class="screen" id="pick">
-    <h2>Insert your R36S's SD card</h2>
+    <h2 id="pickTitle">Insert your R36S's SD card</h2>
     <p class="lead">Choose it below. Only removable cards are shown — never your Mac's own disks.</p>
     <div id="diskList"></div>
     <div class="row"><button class="btn plain" data-home>Back</button><button class="btn go" id="toBackup" disabled>Next</button></div>
@@ -85,8 +85,8 @@
 
   <!-- 2. THE BACKUP -->
   <section class="screen" id="backup">
-    <h2>Back up the card first</h2>
-    <p class="lead">Your backup is saved on this Mac before anything on the card is changed.</p>
+    <h2 id="backupTitle">Back up the card first</h2>
+    <p class="lead" id="backupLead">Your backup is saved on this Mac before anything on the card is changed.</p>
     <button class="big sel" id="kWhole" data-kind="whole"><b>Whole card (recommended)</b><span>Every byte — you can put your R36S back exactly as it was.</span></button>
     <button class="big" id="kBoot" data-kind="boot"><b>Boot partition only</b><span>Small and quick — enough to make another VibeSDR card, not to restore the old system.</span></button>
     <div class="folder">Backup goes to <code id="folder"></code><button class="link" id="chFolder">Change…</button></div>
@@ -95,7 +95,7 @@
 
   <!-- 3. WORKING -->
   <section class="screen" id="work">
-    <h2>Making your VibeSDR card</h2>
+    <h2 id="workTitle">Making your VibeSDR card</h2>
     <div class="bar"><i id="barFill"></i></div>
     <div class="stage" id="stage">Starting…</div>
     <div class="careful">Leave the card in until it says Done.</div>
@@ -111,7 +111,7 @@
 </main>
 
 <dialog id="confirm">
-  <h3>Replace everything on this card?</h3>
+  <h3 id="confirmTitle">Replace everything on this card?</h3>
   <div id="confirmText"></div>
   <label class="chk" id="largeRow" hidden><input type="checkbox" id="largeOk"> This disk is over 256 GB. I am sure it is my R36S's SD card.</label>
   <div class="row"><button class="btn plain" id="cNo">Cancel</button><button class="btn go" id="cYes">Yes — make my VibeSDR card</button></div>
@@ -121,7 +121,7 @@
 const App = () => window.go.main.App;
 const $ = (id) => document.getElementById(id);
 const gb = (b) => (b / 1e9).toFixed(1) + ' GB';
-let disks = [], chosen = null, kind = 'whole', folder = '', poll = null, status = null;
+let disks = [], chosen = null, kind = 'whole', folder = '', poll = null, status = null, updating = false;
 
 function show(id) {
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.id === id));
@@ -137,10 +137,17 @@ async function refreshStatus() {
     ? 'VibeSDR <span class="v">' + status.version + '</span> is ready to write.'
     : '<span class="e">No VibeSDR image yet: ' + status.imageErr + '</span>';
   $('bMake').disabled = !status.imageOk;
+  $('bUpdate').disabled = !status.imageOk;
 }
 window.runtime.EventsOn('status', refreshStatus);
 
-$('bMake').onclick = () => { chosen = null; $('toBackup').disabled = true; show('pick'); };
+function begin(up) {
+  updating = up; chosen = null; $('toBackup').disabled = true;
+  $('pickTitle').textContent = up ? 'Insert your VibeSDR card' : "Insert your R36S's SD card";
+  show('pick');
+}
+$('bMake').onclick = () => begin(false);
+$('bUpdate').onclick = () => begin(true);
 
 function startPoll() { listDisks(); poll = setInterval(listDisks, 2000); }
 function stopPoll() { if (poll) clearInterval(poll); poll = null; }
@@ -164,7 +171,16 @@ async function listDisks() {
 
 $('toBackup').onclick = async () => {
   folder = await App().DefaultBackupDir(chosen.name || chosen.id);
-  $('folder').textContent = folder; setKind('whole'); show('backup');
+  $('folder').textContent = folder;
+  /* ★ UPDATE: no backup choice — the boot partition is always backed up (the system is rewritten; settings and
+   *   recordings are never touched, so there is nothing else to save). */
+  $('kWhole').hidden = $('kBoot').hidden = updating;
+  $('backupTitle').textContent = updating ? 'Update this VibeSDR card' : 'Back up the card first';
+  $('backupLead').textContent = updating
+    ? 'Only the VibeSDR system is replaced. Your settings, bookmarks and recordings stay on the card exactly as they are. The boot partition is backed up to this Mac first.'
+    : 'Your backup is saved on this Mac before anything on the card is changed.';
+  $('start').textContent = updating ? 'Update' : 'Start';
+  setKind(updating ? 'update' : 'whole'); show('backup');
 };
 $('backToPick').onclick = () => show('pick');
 function setKind(k) { kind = k; $('kWhole').classList.toggle('sel', k === 'whole'); $('kBoot').classList.toggle('sel', k === 'boot'); }
@@ -175,8 +191,14 @@ $('chFolder').onclick = async () => { folder = await App().ChooseFolder(folder);
 $('start').onclick = () => {
   $('confirmText').innerHTML = '';
   const p = document.createElement('p');
-  p.textContent = 'Everything on "' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ') will be replaced with VibeSDR '
-    + status.version + '. First, ' + (kind === 'whole' ? 'the whole card' : 'its boot partition') + ' is backed up to ' + folder + '.';
+  $('confirmTitle').textContent = updating ? 'Update this card to VibeSDR ' + status.version + '?' : 'Replace everything on this card?';
+  $('cYes').textContent = updating ? 'Yes — update my card' : 'Yes — make my VibeSDR card';
+  p.textContent = updating
+    ? 'The VibeSDR system on "' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ') will be updated to '
+      + status.version + '. Your settings, bookmarks and recordings are not touched. First, its boot partition is backed up to ' + folder
+      + '. If this is not a VibeSDR card, or it is too old to update in place, nothing is changed and it says why.'
+    : 'Everything on "' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ') will be replaced with VibeSDR '
+      + status.version + '. First, ' + (kind === 'whole' ? 'the whole card' : 'its boot partition') + ' is backed up to ' + folder + '.';
   $('confirmText').appendChild(p);
   const q = document.createElement('p'); q.className = 'small';
   q.textContent = 'Your Mac will ask for your password — writing an SD card needs it.';
@@ -189,6 +211,7 @@ $('cYes').onclick = async () => {
   if (chosen.large && !$('largeOk').checked) return;
   $('confirm').close();
   $('barFill').style.width = '0%'; $('stage').textContent = 'Starting…';
+  $('workTitle').textContent = updating ? 'Updating your VibeSDR card' : 'Making your VibeSDR card';
   show('work');
   try { await App().Start(chosen.id, kind, folder, $('largeOk').checked); }
   catch (e) { finished({ error: String(e), backup: '' }); }
@@ -203,7 +226,7 @@ function finished(r) {
   lastBackup = r.backup || '';
   if (!r.error) {
     $('endIcon').innerHTML = '<div class="done-ic">✓</div>';
-    $('endMsg').textContent = 'Done — put the card in your R36S and switch it on.';
+    $('endMsg').textContent = r.done || 'Done — put the card in your R36S and switch it on.';
   } else {
     $('endIcon').innerHTML = '<div class="bad-ic">!</div>';
     $('endMsg').textContent = r.error;

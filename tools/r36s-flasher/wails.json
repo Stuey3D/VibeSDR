@@ -12,7 +12,7 @@
   "info": {
     "companyName": "VibeSDR",
     "productName": "VibeSDR Flasher",
-    "productVersion": "0.1.0",
+    "productVersion": "0.2.0",
     "copyright": "VibeSDR",
     "comments": "Makes VibeSDR cards for the R36S"
   }
