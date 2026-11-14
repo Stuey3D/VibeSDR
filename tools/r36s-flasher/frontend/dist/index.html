@@ -27,6 +27,10 @@
   .big b { display: block; font-size: 17px; color: var(--gold2); margin-bottom: 3px; }
   .big span { color: var(--dim); font-size: 13px; }
   .big:disabled { opacity: .45; cursor: default; }
+  /* ★★★ [hidden] MUST WIN. `.big { display: block }` beat the hidden attribute, so the backup choices stayed on the
+   *  UPDATE screen, and pressing one turned the run into MAKE — the card was rebuilt from scratch, VIBESDR's partition
+   *  entry gone (Stuart's first Update test, 2026-11-14). */
+  [hidden] { display: none !important; }
   .big.sel { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; background: var(--panel2); }
   .soon { float: right; font-size: 11px; color: var(--dim); border: 1px solid var(--line); border-radius: 20px; padding: 2px 8px; }
   .btn { border: 0; border-radius: 12px; padding: 13px 26px; font: 600 15px/1 inherit; cursor: pointer; }
@@ -184,8 +188,8 @@ $('toBackup').onclick = async () => {
 };
 $('backToPick').onclick = () => show('pick');
 function setKind(k) { kind = k; $('kWhole').classList.toggle('sel', k === 'whole'); $('kBoot').classList.toggle('sel', k === 'boot'); }
-$('kWhole').onclick = () => setKind('whole');
-$('kBoot').onclick = () => setKind('boot');
+$('kWhole').onclick = () => { if (!updating) setKind('whole'); };
+$('kBoot').onclick = () => { if (!updating) setKind('boot'); };
 $('chFolder').onclick = async () => { folder = await App().ChooseFolder(folder); $('folder').textContent = folder; };
 
 $('start').onclick = () => {
@@ -200,6 +204,15 @@ $('start').onclick = () => {
     : 'Everything on "' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ') will be replaced with VibeSDR '
       + status.version + '. First, ' + (kind === 'whole' ? 'the whole card' : 'its boot partition') + ' is backed up to ' + folder + '.';
   $('confirmText').appendChild(p);
+  // ★★ MAKE ON A CARD THAT IS ALREADY VIBESDR replaces its settings AND its VIBESDR drive (recordings, gallery) — and a
+  //    boot-only backup does not keep them. Say so, and point at Update, which keeps both.
+  if (!updating && /vibesdr/i.test(chosen.looks || '')) {
+    const w = document.createElement('p'); w.style.color = 'var(--bad)'; w.style.fontWeight = '600';
+    w.textContent = 'This is already a VibeSDR card. Making it again replaces its settings and its VIBESDR drive (recordings, gallery)'
+      + (kind === 'whole' ? ' — they will be in the whole-card backup.' : ', and a boot-partition backup does NOT keep them.')
+      + ' To keep them, Cancel and use "Update a VibeSDR card" instead.';
+    $('confirmText').appendChild(w);
+  }
   const q = document.createElement('p'); q.className = 'small';
   q.textContent = 'Your Mac will ask for your password — writing an SD card needs it.';
   $('confirmText').appendChild(q);
@@ -213,7 +226,9 @@ $('cYes').onclick = async () => {
   $('barFill').style.width = '0%'; $('stage').textContent = 'Starting…';
   $('workTitle').textContent = updating ? 'Updating your VibeSDR card' : 'Making your VibeSDR card';
   show('work');
-  try { await App().Start(chosen.id, kind, folder, $('largeOk').checked); }
+  // ★★ The flow decides the job, never a leftover choice: Update always sends "update", Make never does.
+  const job = updating ? 'update' : (kind === 'boot' ? 'boot' : 'whole');
+  try { await App().Start(chosen.id, job, folder, $('largeOk').checked); }
   catch (e) { finished({ error: String(e), backup: '' }); }
 };
 

@@ -21,7 +21,7 @@ import (
 )
 
 // Version of the flasher.
-const Version = "0.2.0-localtest"
+const Version = "0.2.1-localtest"
 
 // App is what the window calls.
 type App struct {
