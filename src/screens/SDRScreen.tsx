@@ -7905,6 +7905,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             ? { present: true, pct: h.bat.pct, charging: h.bat.charging, level: healthLevel(h.bat.level ?? 0) }
             : { present: false },
           behind: h.behind,   // ★ the "TOO HEAVY" line — rebuilt objects must carry every field (HealthPill.tsx)
+          usb: healthLevel(h.usb ?? 0),   // ★ the USB slot — same rule
         });
       },
       onRadioCaps:  (caps) => {

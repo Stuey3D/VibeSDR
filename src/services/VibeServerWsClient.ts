@@ -133,6 +133,8 @@ export type ServerHealth = {
   bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
   /** ★ Decoders that dropped input in the last minute (vibe_health.h BehindWatch). Absent = none, or an older server. */
   behind?: string[];
+  /** ★ The radio's USB link losing samples, 1–3 (vibe_health.h UsbWatch). 0/absent = none, or an older server. */
+  usb?: number;
 };
 
 /** ★★★ ADDITIVE, SO THE CALLBACK LIVES HERE AND NOT IN THE SHARED SHAPE'S FILE.
@@ -2961,6 +2963,7 @@ export abstract class VibeServerWsClient {
               level: Number(b.level) || 0 }
           : { present: false },
         behind: Array.isArray(msg.behind) ? msg.behind.filter((x: unknown) => typeof x === 'string') : undefined,
+        usb: Number(msg.usb) || 0,
       });
       return;
     }

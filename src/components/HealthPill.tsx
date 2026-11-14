@@ -38,6 +38,9 @@ export interface Health {
   bat: { present: boolean; pct?: number; charging?: boolean; level?: HealthLevel };
   /** ★ Decoders too heavy for this server: they dropped input in the last minute (vibe_health.h BehindWatch). */
   behind?: string[];
+  /** ★★ The radio's USB link losing samples (vibe_health.h UsbWatch) — 0/absent = no slot drawn. Stuart, 2026-11-14:
+   *  "Maybe put a USB icon to indicate USB issue" (a B210 at 56 MS/s, CPU at 17 %, the pill said all was well). */
+  usb?: HealthLevel;
 }
 
 /** 0 OK · 1 Elevated · 2 High · 3 Critical. Verbatim from the web client's HEALTH_COLOURS. */
@@ -80,7 +83,9 @@ const clampLevel = (n: number): number => Math.max(0, Math.min(3, Math.round(n) 
  * are copied VERBATIM from HEALTH_ICONS in web/client/src/main.ts (which took them from the brief):
  * they were drawn and checked for legibility at 16 px on the design reference's icon boards, and a
  * redraw here would quietly fork the two clients' glyphs.                                          */
-type GlyphName = 'cpu' | 'ram' | 'temp' | 'snailFire' | 'snailBolt' | 'snail';
+type GlyphName = 'cpu' | 'ram' | 'temp' | 'snailFire' | 'snailBolt' | 'snail' | 'usb';
+/** ★ The USB slot's words — holes in the last minute: 1–5, 6–59, one a second or more. Same as the web client's USB_WORDS. */
+const USB_WORDS = ['OK', 'lost samples once or twice', 'losing samples often', 'losing samples constantly'];
 
 /** ★ THE TORTOISE (Stuart, 2026-11-01) — neck, head and two legs; the shell's height differs per glyph. */
 const TORTOISE_NECK = 'M11.5 11.7l1.2-.6';
@@ -124,6 +129,16 @@ function glyphBody(name: GlyphName, color: string) {
         <>
           <Rect x={1.8} y={4.5} width={12.4} height={7} rx={1} />
           <Path d="M4.6 11.5v2.2M8 11.5v2.2M11.4 11.5v2.2M5 7v2M8 7v2M11 7v2" />
+        </>
+      );
+    case 'usb':        // the USB trident — ✗ same shapes as web/client/src/main.ts HEALTH_ICONS.usb, change both or neither
+      return (
+        <>
+          <Path d="M8 12V3.2M8 10.4L4.6 8.4V6.6M8 8.6l3.4-2V5.4" />
+          <Path d="M8 1l-1.5 2.4h3z" fill={color} stroke="none" />
+          <Circle cx={8} cy={13.2} r={1.4} fill={color} stroke="none" />
+          <Circle cx={4.6} cy={5.6} r={1} />
+          <Rect x={10.5} y={3.6} width={1.8} height={1.8} fill={color} stroke="none" />
         </>
       );
     case 'temp':       // thermometer — a REAL reading, never an inferred one
@@ -213,9 +228,10 @@ export function healthSummary(health: Health): { worst: HealthLevel; colour: str
   const cpu = clampLevel(health.cpu);
   const ram = clampLevel(health.ram);
   const batLevel = clampLevel(health.bat.level ?? 0);
-  const worst = Math.max(cpu, ram, temp ? temp.level : 0, health.bat.present ? batLevel : 0) as HealthLevel;
+  const usb = clampLevel(health.usb ?? 0);
+  const worst = Math.max(cpu, ram, temp ? temp.level : 0, health.bat.present ? batLevel : 0, usb) as HealthLevel;
   const worstPos = Math.max(health.cpuPos ?? cpu, health.ramPos ?? ram,
-    temp ? (temp.pos ?? temp.level) : 0, health.bat.present ? batLevel : 0);
+    temp ? (temp.pos ?? temp.level) : 0, health.bat.present ? batLevel : 0, usb);
   return { worst, colour: healthColour(worst, worstPos) };
 }
 
@@ -231,7 +247,8 @@ export default function HealthPill({
   /* ★★ The border takes the WORST VISIBLE slot — visible being the point. A battery level from a
    *    machine that reports `present: false`, or a temp level under `kind: 'none'`, must not colour
    *    a pill that is not showing that slot: the reader would see red with nothing red in it. */
-  const worst = Math.max(cpu, ram, temp ? temp.level : 0, health.bat.present ? batLevel : 0);
+  const usb = clampLevel(health.usb ?? 0);
+  const worst = Math.max(cpu, ram, temp ? temp.level : 0, health.bat.present ? batLevel : 0, usb);
 
   /* ── Reduced motion ────────────────────────────────────────────────────────────────────────────
    * ★ Read the CURRENT setting, don't wait for a change event: `reduceMotionChanged` only fires on a
@@ -283,6 +300,7 @@ export default function HealthPill({
   const label = 'Server health: processor ' + HEALTH_WORDS[cpu] + ', memory ' + HEALTH_WORDS[ram]
     + (temp ? `, ${temp.word}` : '')
     + (health.bat.present ? `, battery ${batPct}%${health.bat.charging ? ' on power' : ''}` : '')
+    + (usb > 0 ? `, radio USB link ${USB_WORDS[usb]}` : '')
     + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : '');
 
   /* ★★ THE WORST POSITION, not the worst level — and the alpha ramps with it instead of stepping
@@ -291,7 +309,7 @@ export default function HealthPill({
   const worstPos = Math.max(
     health.cpuPos ?? cpu, health.ramPos ?? ram,
     temp ? (temp.pos ?? temp.level) : 0,
-    health.bat.present ? batLevel : 0);
+    health.bat.present ? batLevel : 0, usb);
   const ringAlpha = Math.round(0x73 + (0xbf - 0x73) * Math.min(1, Math.max(0, worstPos)));
   const borderColor = healthColour(worst, worstPos) + ringAlpha.toString(16).padStart(2, '0');
 
@@ -317,6 +335,7 @@ export default function HealthPill({
         <Slot name="cpu" level={cpu} pos={health.cpuPos} breathe={breathe} />
         <Slot name="ram" level={ram} pos={health.ramPos} breathe={breathe} />
         {temp ? <Slot name={temp.name} level={temp.level} pos={temp.pos} breathe={breathe} /> : null}
+        {usb > 0 ? <Slot name="usb" level={usb} breathe={breathe} /> : null}
         {health.bat.present ? (
           <>
             <View style={styles.divider} />
@@ -325,6 +344,7 @@ export default function HealthPill({
         ) : null}
       </View>
       {behind.map((b) => <Text key={b} style={styles.warn} numberOfLines={1}>{b}: TOO HEAVY</Text>)}
+      {usb >= 2 ? <Text style={styles.warn} numberOfLines={1}>RADIO USB: LOSING SAMPLES</Text> : null}
     </Animated.View>
   );
 }

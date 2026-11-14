@@ -13973,6 +13973,10 @@ let healthPillLive = false;
 const HEALTH_ICONS: Record<string, string> = {
   cpu:  '<rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M6.5 1.8v2.7M9.5 1.8v2.7M6.5 11.5v2.7M9.5 11.5v2.7M1.8 6.5h2.7M1.8 9.5h2.7M11.5 6.5h2.7M11.5 9.5h2.7"/>',
   ram:  '<rect x="1.8" y="4.5" width="12.4" height="7" rx="1"/><path d="M4.6 11.5v2.2M8 11.5v2.2M11.4 11.5v2.2M5 7v2M8 7v2M11 7v2"/>',
+  /* ★★ THE USB TRIDENT (Stuart, 2026-11-14: "Maybe put a USB icon to indicate USB issue") — the radio's link losing
+   *  samples, which no CPU figure shows. Drawn only when the server sends `usb` (a hole in the last minute).
+   *  ✗ Same shapes as src/components/HealthPill.tsx's 'usb' — change both or neither. */
+  usb:  '<path d="M8 12V3.2M8 10.4L4.6 8.4V6.6M8 8.6l3.4-2V5.4"/><path d="M8 1l-1.5 2.4h3z" fill="currentColor" stroke="none"/><circle cx="8" cy="13.2" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.6" cy="5.6" r="1"/><rect x="10.5" y="3.6" width="1.8" height="1.8" fill="currentColor" stroke="none"/>',
   temp: '<path d="M8 2.6a1.7 1.7 0 0 1 1.7 1.7v4.4a3 3 0 1 1-3.4 0V4.3A1.7 1.7 0 0 1 8 2.6z"/><circle cx="8" cy="11.4" r="1.2" fill="currentColor" stroke="none"/>',
   /* ★★★ TWO TORTOISES, AND THE DIFFERENCE IS THE CAUSE (Stuart): flame = thermal, bolt = power limit.
    *  A plain tortoise says only "slow" and leaves the owner guessing, and the two causes want opposite
@@ -14025,6 +14029,8 @@ function healthGlyph(name: string, level: number, label: string, pos?: number): 
 }
 
 const HEALTH_WORDS = ['OK', 'elevated', 'high', 'critical'];
+/** ★ The USB slot's own words — holes in the last minute: 1–5, 6–59, one a second or more (vibe_health.h UsbWatch). */
+const USB_WORDS = ['OK', 'lost samples once or twice', 'losing samples often', 'losing samples constantly'];
 
 function renderHealthPill(h: {
   cpu: number; ram: number;
@@ -14032,6 +14038,7 @@ function renderHealthPill(h: {
   cpuPos?: number; ramPos?: number;
   bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
   behind?: string[];
+  usb?: number;
 }): void {
   /* ★★★ A LATCH, NOT A ONE-OFF REMOVAL. Removing #srvBattery here only worked until the next
    *  `battery` message, which recreates it — so the old pill reappeared ON TOP of the new one
@@ -14059,6 +14066,8 @@ function renderHealthPill(h: {
   else if (h.temp.kind === 'thermal') slots.push(healthGlyph('snailFire', Math.max(2, h.temp.level), 'Throttling: too hot'));
   else if (h.temp.kind === 'power') slots.push(healthGlyph('snailBolt', Math.max(2, h.temp.level), 'Throttling: power limit'));
   else if (h.temp.kind === 'throttle') slots.push(healthGlyph('snail', Math.max(2, h.temp.level), 'Throttling'));
+  const usb = Math.max(0, Math.min(3, Number(h.usb) || 0));
+  if (usb > 0) slots.push(healthGlyph('usb', usb, `Radio USB link: ${USB_WORDS[usb]}`));
 
   let batHtml = '';
   if (h.bat.present) {
@@ -14093,7 +14102,7 @@ function renderHealthPill(h: {
           + `fill="#ffb833" stroke="none" text-anchor="middle">${pct}</text>`)
       + `</svg></span>`;
   }
-  const worst = Math.max(h.cpu, h.ram, h.temp.kind === 'none' ? 0 : h.temp.level, h.bat.level ?? 0);
+  const worst = Math.max(h.cpu, h.ram, h.temp.kind === 'none' ? 0 : h.temp.level, h.bat.level ?? 0, usb);
   el.classList.toggle('crit', worst >= 3);   // ★ a toggle, not className: the dock also carries `tucked`
   /* ★★★ THE FRAME BLENDS TOO, OR THE PILL SNAPS ROUND SMOOTH ICONS. The slots inside were given a
    *  continuous tint (see healthColour); this border kept a DISCRETE `HEALTH_COLOURS[worst]` and a
@@ -14109,7 +14118,7 @@ function renderHealthPill(h: {
   const worstPos = Math.max(
     h.cpuPos ?? h.cpu, h.ramPos ?? h.ram,
     h.temp.kind === 'none' ? 0 : (h.temp.pos ?? h.temp.level),
-    h.bat.level ?? 0);
+    h.bat.level ?? 0, usb);
   const ringAlpha = Math.round(0x73 + (0xbf - 0x73) * Math.min(1, Math.max(0, worstPos)));
   card.style.borderColor = `${healthColour(worst, worstPos)}${ringAlpha.toString(16).padStart(2, '0')}`;
   // ★ The tab and the › wear the same colour, solid — and level 3 brings a tucked pill back out.
@@ -14120,13 +14129,15 @@ function renderHealthPill(h: {
    *  the audio is unaffected by design, and the screen-reader sentence says so. */
   const behind = Array.isArray(h.behind) ? h.behind.filter((b) => typeof b === 'string' && b).slice(0, 3) : [];
   const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
-  const warn = behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('');
+  const warn = behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('')
+    + (usb >= 2 ? '<div class="hWarn">RADIO USB: LOSING SAMPLES</div>' : '');
   body.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
   /* ★ One sentence for a screen reader, since the icons carry no text. */
   body.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
     + (h.temp.kind === 'sensor' ? `, temperature ${HEALTH_WORDS[h.temp.level]}`
        : h.temp.kind === 'none' ? '' : ', throttling')
     + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : '')
+    + (usb > 0 ? `, radio USB link ${USB_WORDS[usb]}` : '')
     + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : ''));
 }
 

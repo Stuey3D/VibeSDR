@@ -288,6 +288,25 @@ int main() {
         vibehealth::Health h2 = h; h2.behind.clear();
         ok(vibehealth::differs(h, h2), "a change in the list is news (sent on change)");
     }
+    std::printf("\nUSB link (Stuart 2026-11-14: a B210 at 56 MS/s lost 2 chunks/s with the CPU at 17 %%)\n");
+    {
+        vibehealth::UsbWatch w;
+        ok(w.note(8000, 0) == vibehealth::OK, "the first count is a baseline, not 8000 holes (server already running)");
+        ok(w.note(8000, 2000) == vibehealth::OK, "no new holes → OK");
+        ok(w.note(8001, 4000) == vibehealth::WARM, "one hole → amber");
+        ok(w.note(8007, 6000) == vibehealth::HIGH, "seven in a minute → high");
+        int64_t t = 6000; uint64_t n = 8007; vibehealth::Level l = vibehealth::OK;
+        for (int i = 0; i < 30; i++) { t += 2000; n += 4; l = w.note(n, t); }   // the B210: 2 a second
+        ok(l == vibehealth::CRIT, "two holes a second (the B210 at 56 MS/s) → critical");
+        for (int i = 0; i < 31; i++) { t += 2000; l = w.note(n, t); }
+        ok(l == vibehealth::OK, "a quiet minute later → OK again (it falls on its own)");
+        ok(w.note(3, t + 2000) == vibehealth::OK, "a count that goes DOWN is a restarted radio, not a hole");
+        ok(w.note(4, t + 4000) == vibehealth::WARM, "and counting starts again from there");
+        vibehealth::Health a, b; b.usb = vibehealth::CRIT;
+        ok(vibehealth::json(a).find("usb") == std::string::npos, "OK omits the field (no USB slot drawn)");
+        ok(vibehealth::json(b).find("\"usb\":3") != std::string::npos, "critical is sent as usb:3");
+        ok(vibehealth::differs(a, b), "a USB change is news (sent on change)");
+    }
     fs::remove_all(g_root);
     std::printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;

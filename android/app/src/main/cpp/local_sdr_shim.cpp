@@ -3477,9 +3477,13 @@ static std::atomic<double>    g_iqLastDropAt{0.0};
  *    only symptom is fewer samples per second than the rate (usbSamples, on the dongle). */
 static std::atomic<unsigned long long> g_usbDropEvents{0}, g_usbDropSamples{0};
 static std::atomic<double>             g_usbLastDropAt{0.0};   // epoch seconds, 0 = never
-static void noteUsbDrop(unsigned long long samples, unsigned long long events = 1) {
+/** ★★ The holes a radio's library REPORTED (not the RSP's inferred ones) — what the health pill's USB slot judges.
+ *  The RSP's count is diagnostic only (SampleSeqWatch), so it never lights the slot. See vibehealth::UsbWatch. */
+static std::atomic<unsigned long long> g_usbReportedEvents{0};
+static void noteUsbDrop(unsigned long long samples, unsigned long long events = 1, bool reported = true) {
     if (!samples && !events) return;
     g_usbDropEvents.fetch_add(events, std::memory_order_relaxed);
+    if (reported) g_usbReportedEvents.fetch_add(events, std::memory_order_relaxed);
     g_usbDropSamples.fetch_add(samples, std::memory_order_relaxed);
     g_usbLastDropAt.store((double)::time(nullptr), std::memory_order_relaxed);
 }
@@ -39127,6 +39131,8 @@ void LocalSdrShim::healthTick() {
     lastAt = now;
     vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
     h.behind = decodersBehind(now);
+    { static vibehealth::UsbWatch usbWatch;
+      h.usb = usbWatch.note(g_usbReportedEvents.load(std::memory_order_relaxed), now); }
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
     //   so they follow every sample, not only the ones that changed a level.
     g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);
@@ -40366,7 +40372,7 @@ int LocalSdrShim::startSdrplay(int index,
          *  counted them, so the deltas are exact. */
         { const uint64_t ev = self->sdrp->usbDropEvents(), sm = self->sdrp->usbDroppedSamples();
           if (ev < seenEv || sm < seenS) { seenEv = 0; seenS = 0; }   // defensive: never underflow
-          if (ev != seenEv) { noteUsbDrop(sm - seenS, ev - seenEv); seenEv = ev; seenS = sm; } }
+          if (ev != seenEv) { noteUsbDrop(sm - seenS, ev - seenEv, /*reported=*/false); seenEv = ev; seenS = sm; } }
         // ★★★ The API flagged a gain change in THIS packet (grChanged) — same thread as the count. See smoothGainSteps.
         const uint64_t gr = self->sdrp->gainChangePackets();
         const bool step = gr != seenGr; seenGr = gr;

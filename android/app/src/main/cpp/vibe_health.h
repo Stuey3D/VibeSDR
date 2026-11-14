@@ -60,6 +60,32 @@ struct Health {
     /** ★★ DECODERS THAT CANNOT KEEP UP (Stuart, 2026-10-25: "a little addition to the health card that says something
      *  like Decoder too heavy"). Their readable names, sorted — see BehindWatch. Empty = all keeping up. */
     std::vector<std::string> behind;
+    /** ★★ THE RADIO'S USB LINK LOSING SAMPLES (Stuart, 2026-11-14: a B210 at 56 MS/s dropped two chunks a second
+     *  while the CPU sat at 17 %, so the pill said all was well and DAB kept losing lock — "Maybe put a USB icon to
+     *  indicate USB issue"). OK = no hole in the last minute; the slot is only drawn when it is not OK. See UsbWatch. */
+    Level usb = OK;
+};
+
+/** ★★ HOW BADLY THE RADIO'S LINK IS LOSING SAMPLES — holes the radio's own library reported (UHD overflows, libairspy
+ *  / libairspyhf dropped buffers) in the last minute. Fed every health tick with the running count of holes.
+ *    · none in a minute → OK (no slot)   · 1–5 → WARM   · 6–59 → HIGH   · 60+ (one a second) → CRIT
+ *  ★ It FALLS on its own: a hole older than a minute stops counting, so a single hiccup shows amber for a minute
+ *    and goes. A count that goes DOWN is a restarted radio — a fresh baseline, not a hole. */
+class UsbWatch {
+public:
+    Level note(uint64_t events, int64_t nowMs) {
+        if (!started_ || events < last_) { started_ = true; last_ = events; marks_.clear(); }
+        if (events > last_) { marks_.push_back({nowMs, events - last_}); last_ = events; }
+        while (!marks_.empty() && nowMs - marks_.front().first >= kWindowMs) marks_.erase(marks_.begin());
+        uint64_t n = 0;
+        for (auto& m : marks_) n += m.second;
+        return n >= 60 ? CRIT : n >= 6 ? HIGH : n >= 1 ? WARM : OK;
+    }
+    static constexpr int64_t kWindowMs = 60000;
+private:
+    bool started_ = false;
+    uint64_t last_ = 0;
+    std::vector<std::pair<int64_t, uint64_t>> marks_;   ///< one per health tick that saw holes: ≤ 30 entries
 };
 
 /** ★★ WHICH DECODER IS TOO HEAVY FOR THIS MACHINE — judged by what it THREW AWAY, not by CPU %. Every decoder queue
@@ -810,6 +836,8 @@ inline std::string json(const Health& h) {
         for (size_t i = 0; i < h.behind.size(); ++i) j += (i ? ",\"" : "\"") + h.behind[i] + "\"";
         j += "]";
     }
+    // ★ ADDITIVE and omitted when OK: an older client ignores it, and a newer one draws no USB slot.
+    if (h.usb != OK) j += ",\"usb\":" + std::to_string((int)h.usb);
     return j + "}";
 }
 
@@ -817,7 +845,7 @@ inline std::string json(const Health& h) {
 inline bool differs(const Health& a, const Health& b) {
     return a.cpu != b.cpu || a.ram != b.ram || a.temp != b.temp || a.tempKind != b.tempKind
         || a.bat != b.bat || a.batPresent != b.batPresent || a.batCharging != b.batCharging
-        || a.batPct != b.batPct || a.behind != b.behind;
+        || a.batPct != b.batPct || a.behind != b.behind || a.usb != b.usb;
 }
 
 }  // namespace vibehealth
