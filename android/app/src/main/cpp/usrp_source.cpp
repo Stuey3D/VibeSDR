@@ -8,6 +8,7 @@
 #if defined(VIBE_HAVE_USRP)
 #include "vibe_usrp_caps.h"
 #include "vibe_thread.h"
+#include "vibe_iq_slot_ring.h"
 
 #include <uhd/device.hpp>
 #include <uhd/exception.hpp>
@@ -20,6 +21,7 @@
 #include <libusb.h>
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -131,6 +133,8 @@ struct UsrpSource::Impl {
     double                      rate = 0, centre = 0;
     std::recursive_mutex        mtx;          // every UHD call on the device
     std::thread                 thr;
+    std::thread                 handThr;      // ★ hands full slots of `ring` to the DSP — see vibe_iq_slot_ring.h
+    vibe::IqSlotRing            ring;
     std::atomic<bool>           run{false};
     std::atomic<bool>           rxEnded{false};   // ★ the recv thread left its loop on its own (a recv exception) — see start()
     std::atomic<bool>           paused{false};
@@ -365,8 +369,30 @@ bool UsrpSource::start(std::string& err) {
         const size_t pkt = std::max<size_t>(rx->get_max_num_samps(), 1024);
         const size_t want = impl_->rate > 0 ? (size_t)(impl_->rate * 0.005) : pkt;
         const size_t maxN = std::max(pkt, std::min<size_t>(want, 262144));
-        impl_->buf.assign(maxN * 2, 0.0f);
+        /* ★★★ THE OVER-BUFFER (Stuart, 2026-11-14: "can we make an over buffer?"). recv() writes straight into a slot of
+         *  the ring and this thread goes straight back to recv(); the DSP hand-off runs on its own thread (below). ~100 ms
+         *  of slots, at most 64 MB (56 MS/s: 21 slots of 2 MB). The radio is never kept waiting by the DSP. */
+        const double slotSecs = impl_->rate > 0 ? double(maxN) / impl_->rate : 0.005;
+        const size_t bytesPerSlot = maxN * 2 * sizeof(float);
+        size_t nSlots = (size_t)std::ceil(0.1 / std::max(slotSecs, 1e-4));
+        nSlots = std::max<size_t>(4, std::min<size_t>(nSlots, std::max<size_t>(4, (64u << 20) / bytesPerSlot)));
+        impl_->ring.init(nSlots, maxN * 2);
+        impl_->buf.assign(pkt * 2, 0.0f);   // ★ only stop()'s drain uses this now
+        std::fprintf(stderr, "VibeServer: USRP: receive over-buffer %zu x %.1f ms (%.0f MB)\n",
+                     nSlots, slotSecs * 1e3, double(nSlots * bytesPerSlot) / 1048576.0);
+        impl_->handThr = std::thread([this] {
+            vibeIqThread("vibe-usrp-hand");
+            const float* data = nullptr; size_t n = 0; uint64_t holes = 0;
+            while (impl_->run.load(std::memory_order_relaxed)) {
+                if (!impl_->ring.pop(data, n, holes, 200)) continue;
+                // ★ the hole is counted just BEFORE the block after it, so the sink's takeOverflows() marks that block
+                if (holes) impl_->overflows.fetch_add(holes, std::memory_order_relaxed);
+                if (sink_ && n) sink_(data, (int)n);
+                impl_->ring.release();
+            }
+        });
         uhd::rx_metadata_t md;
+        uint64_t lastFull = 0;
         while (impl_->run.load(std::memory_order_relaxed)) {
             /* ★★★ THE BUFFER ITSELF, NEVER &pointer (the first real B210, 2026-11-03 — found by the memory-check build:
              *     "SEGV … usrp_source.cpp:353", every start, within a second). recv() takes uhd::ref_vector<void*>, and its
@@ -374,18 +400,23 @@ bool UsrpSource::start(std::string& err) {
              *     address of the local `bp` as the buffer and wrote each block of samples over this thread's STACK —
              *     smashing the locals (the streamer's shared_ptr among them) and the heap beside them. The float*
              *     goes straight in. */
-            float* const bp = impl_->buf.data();
+            float* const bp = impl_->ring.acquire();
             size_t n = 0;
             try { n = rx->recv(bp, maxN, md, 0.2); }
             catch (const std::exception& e) { std::fprintf(stderr, "VibeServer: USRP recv: %s\n", e.what()); break; }
-            if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_OVERFLOW) { impl_->overflows.fetch_add(1, std::memory_order_relaxed); continue; }
+            if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_OVERFLOW) { impl_->ring.noteHole(); continue; }
             if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) continue;
             if (md.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE) continue;
             if (n == 0) continue;
             // ★ Liveness before the drop — this buffer proves the radio is alive whether or not we keep it.
             impl_->lastRx.store(nowSecsMono(), std::memory_order_relaxed);
             if (impl_->paused.load(std::memory_order_relaxed)) continue;
-            if (sink_) sink_(impl_->buf.data(), (int)n);
+            impl_->ring.commit(n, 0);
+            const uint64_t full = impl_->ring.fullDrops();
+            if (full != lastFull && (full & (full - 1)) == 0)   // ★ 1, 2, 4, 8 … — the owner's log, never a flood
+                std::fprintf(stderr, "VibeServer: USRP: the DSP fell a whole over-buffer behind — %llu blocks dropped\n",
+                             (unsigned long long)full);
+            lastFull = full;
         }
     });
     return true;
@@ -393,14 +424,21 @@ bool UsrpSource::start(std::string& err) {
 
 void UsrpSource::stop() {
     wantStreaming_ = false;
-    if (!impl_->run.exchange(false)) { if (impl_->thr.joinable()) impl_->thr.join(); return; }
+    if (!impl_->run.exchange(false)) {
+        impl_->ring.stop();
+        if (impl_->thr.joinable()) impl_->thr.join();
+        if (impl_->handThr.joinable()) impl_->handThr.join();
+        return;
+    }
     {
         std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
         try {
             if (impl_->rx) impl_->rx->issue_stream_cmd(uhd::stream_cmd_t(uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS));
         } catch (const std::exception&) {}
     }
+    impl_->ring.stop();
     if (impl_->thr.joinable()) impl_->thr.join();
+    if (impl_->handThr.joinable()) impl_->handThr.join();
     // ★ Drain what is in flight, so a restart does not begin with a stale buffer and an overflow.
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (impl_->rx) {

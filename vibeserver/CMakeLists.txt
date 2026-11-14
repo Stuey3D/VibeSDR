@@ -1003,6 +1003,11 @@ foreach(t ${VIBE_DAB_TESTS})
   add_test(NAME dab-${t} COMMAND test-dab-${t})
   add_dependencies(dab-tests test-dab-${t})
 endforeach()
+# ★ The receive over-buffer (vibe_iq_slot_ring.h): order, holes carried with the next block, a full ring drops — two threads.
+add_executable(test-iq-slot-ring "${CMAKE_CURRENT_SOURCE_DIR}/test-iq-slot-ring.cpp")
+target_include_directories(test-iq-slot-ring PRIVATE "${CPP_DIR}")
+target_link_libraries(test-iq-slot-ring PRIVATE Threads::Threads)
+add_test(NAME iq-slot-ring COMMAND test-iq-slot-ring)
 # ★ The throttle snail (vibe_health.h), driven through a fake sysfs tree. Built TWICE: this machine's own
 #   path (cpuinfo_max on ARM, calibrated peak on x86) and the x86 calibrated path forced, so both are
 #   exercised whichever box runs the tests.
