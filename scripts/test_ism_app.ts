@@ -304,5 +304,18 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
      /@ReactMethod\s*\n\s*fun noteLocalTune\(json: String\)/.test(kmod) && /fun noteLocalTune\(json: String\) \{\s*\n\s*if \(json\.isNotEmpty\(\) && laWanted && laAssert\) lastLocalTune = json/.test(ksvc), true);
 }
 
+// ★★ THE BAND COLUMN (Stuart, 2026-11-14: "3sec ago | 868 | Meshcore Message") — one rule in the web and the app
+{
+  const bands = [{ id: '433', name: '433.92 MHz ISM', hz: 433.92e6 }, { id: '867', name: '867', hz: 867.2e6 },
+                 { id: '868', name: '868 MHz SRD', hz: 868.6e6 }, { id: '915', name: '915', hz: 915e6 }];
+  for (const [freq, want] of [[433.92e6, '433'], [869.618e6, '868'], [868.1e6, '868'], [867.1e6, '867'], [915.2e6, '915'], [315e6, '315'], [0, '']] as Array<[number, string]>) {
+    eq(`band of ${freq / 1e6} MHz → "${want}" (app)`, app.ismBandLabel(freq, bands), want);
+    eq(`band of ${freq / 1e6} MHz → "${want}" (web)`, web.ismBandLabel(freq, bands), want);
+  }
+  const w = web.ismSanitise({ type: 'ism', band: '868', centre: 868.6e6, devices: [{ key: 'k', kind: 'weather', make: 'X', model: 'Y', name: 'n', line: 'Garden 12.1 °C', freq: 433.92e6, level: -40, snr: 20, seen: 3, age: 3, count: 2 }], lora: { chans: 1 }, msgs: [{ ago: 3, from: 'Bob', text: 'hi', net: 'meshcore', freq: 869.618e6 }] });
+  eq('the web row carries its band column', /class="ismBand">433</.test(web.ismListHtml(w!, 'all', app.ISM_UNITS_DEFAULT, '', null, bands)), true);
+  eq('a message row carries its band column', /class="ismBand">868</.test(web.ismListHtml(w!, 'msgs', app.ISM_UNITS_DEFAULT, '', null, bands)), true);
+}
+
 console.log(`ism app: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

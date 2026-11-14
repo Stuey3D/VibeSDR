@@ -28,7 +28,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DEC
 import { scrollLane } from '../constants/popupTokens';
 import { captureRegion, capturedRegion, useKeyboardMode, useListNav, useNavFocus } from './PanelNav';
 import { screenNavRef } from './ScreenNav';
-import { ISM_KINDS, ismAged, ismAgo, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
+import { ISM_KINDS, ismAged, ismAgo, ismBandLabel, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
          ismNavKeys, ismLoraDetail, ismMsgLines, ismOnMap, ismPosSplit, ismMapLabel, LORA_KINDS, type IsmDevice, type IsmNavKey, type IsmReport,
          type IsmUnits, type IsmBand } from '../services/ism';
 import IsmBandSheet from './IsmBandSheet';
@@ -97,7 +97,7 @@ export default function IsmPanel(p: IsmPanelProps) {
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
   const r = p.report && arrived ? ismAged(p.report, Math.floor((Date.now() - arrived) / 1000)) : p.report;
   const rows = ismRows(r, filter);
-  const msgLines = filter === 'msgs' ? ismMsgLines(r) : [];
+  const msgLines = filter === 'msgs' ? ismMsgLines(r, p.bands) : [];
   const canMap = !!p.onMap && !p.error && !!r && r.devices.some(ismOnMap);
   // ★ a row with a detail: a meter, or a LoRa row (a node / a LoRaWAN device)
   const detailOf = (d: IsmDevice): string[] => (d.kind === 'meter' ? ismMeterDetail(d) : LORA_KINDS.includes(d.kind) ? ismLoraDetail(d, p.rx ?? null) : []);
@@ -209,6 +209,7 @@ export default function IsmPanel(p: IsmPanelProps) {
           ) : filter === 'msgs' ? (msgLines.length ? msgLines.map((m, i) => (
             <View key={i} style={[s.row, i % 2 === 0 && s.rowAlt]}>
               <Text style={s.ago} numberOfLines={1}>{m.ago}</Text>
+              <Text style={s.rowBand} numberOfLines={1}>{m.band}</Text>
               <View style={s.txtCol}><Text style={s.txt}>{m.text}</Text></View>
             </View>
           )) : <Text style={s.note}>{ismEmptyText(filter)}</Text>
@@ -225,6 +226,7 @@ export default function IsmPanel(p: IsmPanelProps) {
             const body = (
               <>
                 <Text style={s.ago} numberOfLines={1}>{ismAgo(d.seen)}</Text>
+                <Text style={s.rowBand} numberOfLines={1}>{ismBandLabel(d.freq, p.bands)}</Text>
                 <View style={s.txtCol}>
                   {sp ? (
                     <Text style={s.txt}>{sp.pre}<Text style={[s.txt, s.posLink, posHl && { backgroundColor: ring, color: '#000' }]} suppressHighlighting={false}
@@ -295,6 +297,8 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   row:     { flexDirection: 'row', gap: 10, paddingHorizontal: 10, paddingVertical: 4 },
   rowAlt:  { backgroundColor: T.rowActive },
   ago:     { width: 54, textAlign: 'right', fontFamily: F, fontSize: 12, color: T.muted, fontVariant: ['tabular-nums'] },
+  // ★ the band it was heard on (ismBandLabel) — between the age and the reading, Stuart's "3sec ago | 868 | Meshcore Message"
+  rowBand: { width: 32, textAlign: 'right', fontFamily: F, fontSize: 12, color: T.muted, fontVariant: ['tabular-nums'] },
   txt:     { fontFamily: F, fontSize: 12, lineHeight: 17, color: T.value },
   txtCol:  { flex: 1, minWidth: 0 },
   posLink: { textDecorationLine: 'underline' },

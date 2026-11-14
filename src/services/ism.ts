@@ -190,8 +190,17 @@ export function rangeKm(rx: { lat: number; lon: number }, lat: number, lon: numb
   return { km, brg };
 }
 /** ★ V12 LoRa: the MESSAGES chip's lines, newest first — the web's ismMsgsHtml, as text. */
-export function ismMsgLines(r: IsmReport | null): Array<{ ago: string; text: string }> {
-  return (r?.msgs ?? []).map((x) => ({ ago: ismAgo(x.ago), text: `${ismNetName(x.net || '')}${x.ch ? ' ' + x.ch : ''} · ${x.from || x.node || '?'}: ${x.text}` }));
+/** ★★ THE BAND A READING WAS HEARD ON (Stuart, 2026-11-14: "3sec ago | 868 | Meshcore Message"): the radio's own ISM band
+ *  nearest the reading's frequency (within 2 MHz — MeshCore on 869.618 is the 868 band), else its whole MHz. ONE RULE,
+ *  three readers: web/client/src/ism.ts ismBandLabel and the R36S (handheld-ui). */
+export function ismBandLabel(freq: number | undefined, bands: IsmBand[]): string {
+  if (!freq || !(freq > 0)) return '';
+  let best: IsmBand | null = null, bd = 2e6;
+  for (const b of bands) { const d = Math.abs(b.hz - freq); if (d <= bd) { bd = d; best = b; } }
+  return best ? best.id : String(Math.round(freq / 1e6));
+}
+export function ismMsgLines(r: IsmReport | null, bands: IsmBand[] = []): Array<{ ago: string; band: string; text: string }> {
+  return (r?.msgs ?? []).map((x) => ({ ago: ismAgo(x.ago), band: ismBandLabel(x.freq, bands), text: `${ismNetName(x.net || '')}${x.ch ? ' ' + x.ch : ''} · ${x.from || x.node || '?'}: ${x.text}` }));
 }
 /** A meter's own fields, sanitised. */
 function meterFields(d: any, num: (v: any) => number | undefined, str: (v: any, n?: number) => string | undefined): Partial<IsmDevice> {

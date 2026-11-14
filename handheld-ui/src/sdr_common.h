@@ -194,7 +194,7 @@ inline void afcRows(S& x, float& y) {
     const Json& a = x.hwi()["afc"];
     if (a.kind != Json::Obj || !a["available"].boolean()) return;
     const bool on = held(x, "afc", a["on"].boolean() ? 1 : 0) > 0.5;
-    if (rowToggle(x, y, "sdr.afc", "AUTO PPM", "Learns this radio's clock error from DAB", on)) {
+    if (rowToggle(x, y, "sdr.afc", "AUTO PPM", "Corrects the radio's clock from DAB, DX Log scans too", on)) {
         hold(x, "afc", on ? 0 : 1);
         send(x, std::string("{\"type\":\"autoppm\",\"on\":") + (on ? "false" : "true") + "}");
     }

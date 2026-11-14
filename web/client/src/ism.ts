@@ -277,9 +277,21 @@ export function ismStatus(r: IsmReport): string {
 
 function esc(s: string): string { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 
+/** ★★ THE BAND A READING WAS HEARD ON (Stuart, 2026-11-14: "a column next to the reading to show the band the signal was
+ *  received on … 3sec ago | 868 | Meshcore Message"). The radio's own ISM band nearest the reading's frequency (within
+ *  2 MHz — MeshCore on 869.618 is the 868 band), else its whole MHz. Same rule in the app (src/services/ism.ts) and the
+ *  R36S (handheld-ui). */
+export function ismBandLabel(freq: number | undefined, bands: IsmBand[]): string {
+  if (!freq || !(freq > 0)) return '';
+  let best: IsmBand | null = null, bd = 2e6;
+  for (const b of bands) { const d = Math.abs(b.hz - freq); if (d <= bd) { bd = d; best = b; } }
+  return best ? best.id : String(Math.round(freq / 1e6));
+}
+
 /** The list's HTML: newest first (the server's order), filtered by kind. */
-export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey = '', rx: { lat: number; lon: number } | null = null): string {
-  if (filter === 'msgs') return ismMsgsHtml(r);
+export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey = '', rx: { lat: number; lon: number } | null = null,
+                            bands: IsmBand[] = []): string {
+  if (filter === 'msgs') return ismMsgsHtml(r, bands);
   // ★ KEY FOB shows the suspected ones too (vibe_ism_service.h FobWatch): a car key we cannot name is still a key fob;
   //   LORAWAN shows the LoRa frames we cannot name as well
   const rows = r.devices.filter((d) => filter === 'all' || d.kind === filter || (filter === 'keyfob' && d.kind === 'suspectfob')
@@ -293,7 +305,8 @@ export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey =
     const tip = detail.length ? [...detail, heard].join('\n') : `${mhz} MHz · ${d.snr.toFixed(0)} dB over the noise · ${heard}`;
     const open = detail.length && openKey === d.key;
     return `<div class="ismRow k-${esc(d.kind)}${detail.length ? ' ismTap' : ''}" data-key="${esc(d.key)}" title="${esc(tip)}">`
-         + `<span class="ismAgo">${esc(ismAgo(d.seen))}</span><span class="ismTxt">${ismPosLinked(d, esc(ismLine(d, u)))}`
+         + `<span class="ismAgo">${esc(ismAgo(d.seen))}</span><span class="ismBand">${esc(ismBandLabel(d.freq, bands))}</span>`
+         + `<span class="ismTxt">${ismPosLinked(d, esc(ismLine(d, u)))}`
          + (open ? `<span class="ismDetail">${detail.map(esc).join('<br>')}</span>` : '') + `</span></div>`;
   }).join('');
 }
@@ -314,10 +327,10 @@ function ismPosLinked(d: IsmDevice, escLine: string): string {
   return `${sp.pre}<a class="qrz ismPos" href="#" role="button" data-pos="${esc(d.key)}" aria-label="${who}" title="${who}">${sp.pos}</a>${sp.post}`;
 }
 /** ★ V12 LoRa: the public messages, newest first — "12 s · Meshtastic LongFast · Bob: hello". */
-export function ismMsgsHtml(r: IsmReport): string {
+export function ismMsgsHtml(r: IsmReport, bands: IsmBand[] = []): string {
   const m = r.msgs ?? [];
   if (!m.length) return `<div class="ismEmpty">${esc(ismEmptyText('msgs'))}</div>`;
-  return m.map((x) => `<div class="ismRow k-msg"><span class="ismAgo">${esc(ismAgo(x.ago))}</span><span class="ismTxt">`
+  return m.map((x) => `<div class="ismRow k-msg"><span class="ismAgo">${esc(ismAgo(x.ago))}</span><span class="ismBand">${esc(ismBandLabel(x.freq, bands))}</span><span class="ismTxt">`
     + `${esc(ismNetName(x.net || ''))}${x.ch ? ' ' + esc(x.ch) : ''} · <b>${esc(x.from || x.node || '?')}</b>: ${esc(x.text)}</span></div>`).join('');
 }
 /** What an empty list says (the app's ismEmptyText — the same words). */
@@ -365,6 +378,7 @@ const CSS = `
 .ismRow { display: flex; gap: 10px; padding: 3px 10px; }
 .ismRow:nth-child(odd) { background: rgba(255, 176, 0, 0.04); }
 .ismAgo { flex: 0 0 4.6em; text-align: right; color: rgba(255, 190, 40, 0.6); font-variant-numeric: tabular-nums; }
+.ismBand { flex: 0 0 2.6em; text-align: right; color: rgba(255, 190, 40, 0.75); font-variant-numeric: tabular-nums; }
 .ismTxt { flex: 1 1 auto; min-width: 0; }
 .ismEmpty { padding: 12px; color: rgba(255, 190, 40, 0.6); }
 .ismTap { cursor: pointer; }
@@ -533,7 +547,7 @@ export class IsmBox {
   private drawList() {
     if (!this.el || !this.last) return;
     const r = ismAged(this.last, Math.floor((Date.now() - this.at) / 1000));
-    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey, this.rx());
+    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey, this.rx(), this.bandList().bands);
     if (html !== this.lastHtml) {
       const list = this.el.querySelector('#ismList') as HTMLElement;
       // ★ a focused position link survives the redraw (the ages tick every second) — keyboard and pad keep their place

@@ -1957,15 +1957,18 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <div id="hwAutoPpm" class="hide" style="margin-top:10px">
         <label style="display:flex;gap:8px;align-items:center">
           <input type="checkbox" id="autoPpm" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Automatic frequency correction — learn this radio's clock error from DAB</span></label>
+          <span>Automatic frequency correction</span></label>
         <div class="hint" id="autoPpmNow"></div>
         <div id="autoPpmBtns" class="hide" style="display:none;gap:8px;margin-top:6px">
           <button type="button" class="btn" id="autoPpmReset">Reset</button>
           <button type="button" class="btn" id="autoPpmOff">Turn off</button>
         </div>
-        <p class="why">While this radio plays a clean DAB multiplex it measures how far its own clock is out and corrects
-          every mode for it, on top of the ppm above (which it never changes). It changes nothing until it is sure.
-          <b>If tuning looks off on this radio, turn this off to return to your manual setting.</b></p>
+        <p class="why">DAB multiplexes are transmitted on exact, calibrated frequencies. While this radio receives a clean
+          one, the server measures how far the radio's own clock is out (its offset in ppm) and corrects every mode for
+          it, on top of the ppm above (which it never changes). The DX Log's background scan uses the multiplexes it
+          finds to keep the correction up to date too, stopping briefly on the strongest when a check is due. Nothing
+          changes until the readings agree. <b>If tuning looks worse on this radio, turn this off to go back to your
+          manual setting.</b></p>
       </div>
       <!-- ★★★ AN UP/DOWN-CONVERTER IN FRONT OF THE AERIAL, and it is a SERVER setting for the
            reason the hint spells out: every listener on this radio is behind the same box, so the

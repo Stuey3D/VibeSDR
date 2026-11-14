@@ -16480,6 +16480,52 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::function<void(int idx, const vibe::dx::DabHit* hit, double secs)> onBlock;
     };
     DabDxRun dabDx_;
+    /* ★★ AUTO-PPM FROM THE DX SWEEP (Stuart 2026-11-14: "does it have enough time to correct the ppm?" — it did not: a
+     *  sweep visit is 1-3 s, auto-PPM needs a lock settled 10 s before its first reading, vibe_afc.h DabGate). So at the
+     *  END of a completed sweep, and only when auto-PPM WANTS readings — on, not suspended, and either not acquired yet or
+     *  not confirmed for an hour — the sweep stops on its strongest clean multiplexes (MER >= kDxCalMinMerDb, FIB >= 0.95)
+     *  long enough for the ordinary learn path (afcTick) to take a few readings from each. Nothing else changes: the same
+     *  gates, the same caps, the same Reset / Turn off. Several blocks = the estimator's agreement ACROSS blocks, which is
+     *  what lets a first acquisition happen without 2 minutes on one mux. Cost: up to kDxCalStops x kDxCalMaxS per sweep,
+     *  and none once it is acquired and fresh (then one stop an hour, to confirm). A listener arriving cancels it at once. */
+    static constexpr float  kDxCalMinMerDb = 12.0f;
+    static constexpr int    kDxCalStops = 3, kDxCalReadings = 4;
+    static constexpr double kDxCalMaxS = 26.0, kDxCalFreshS = 3600.0;
+    void dxCalibrate(std::vector<std::pair<float, int>> cand) {
+        if (cand.empty()) return;
+        int stops;
+        {
+            std::lock_guard<std::mutex> lk(g_afcMtx);
+            if (!g_afc.on() || g_afc.suspended()) return;
+            const bool fresh = g_afc.acquired() && (int64_t)time(nullptr) - g_afc.confirmedAt() < (int64_t)kDxCalFreshS;
+            if (fresh) return;
+            stops = g_afc.acquired() ? 1 : kDxCalStops;   // ★ acquired but stale: one stop confirms it
+        }
+        if (convOffsetHz.load(std::memory_order_relaxed) != 0.0) return;   // ★ afcTick refuses a converter anyway
+        std::sort(cand.begin(), cand.end(), [](auto& a, auto& b) { return a.first > b.first; });
+        if ((int)cand.size() > stops) cand.resize((size_t)stops);
+        for (const auto& c : cand) {
+            if (g_dabScanCancel.load() || stopping.load() || !g_dabMode.load(std::memory_order_relaxed)) return;
+            const int idx = c.second;
+            const std::string src = std::string("DAB ") + vibedab::kBandIII[idx].name;
+            { std::lock_guard<std::mutex> lk(dxStatMtx_); dxNow_ = "auto-PPM: calibrating on " + src; }
+            LOGI("DX scanner: auto-PPM calibration stop on %s (MER %.1f dB)", src.c_str(), c.first);
+            if (g_dabChannel.load() != idx) handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(idx) + "}");
+            const double tb = nowSecs();
+            double lastAt = -1; int got = 0;
+            while (nowSecs() - tb < kDxCalMaxS && got < kDxCalReadings) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                if (g_dabScanCancel.load() || stopping.load() || !g_dabMode.load(std::memory_order_relaxed)) return;
+                std::lock_guard<std::mutex> lk(g_afcMtx);
+                if (!g_afc.on() || g_afc.suspended()) return;
+                const auto& e = g_afc.estimator();
+                if (e.lastSource() == src && e.lastAt() != lastAt) { lastAt = e.lastAt(); ++got; }
+            }
+            std::string line;
+            { std::lock_guard<std::mutex> lk(g_afcMtx); line = g_afc.describe((int64_t)time(nullptr)); }
+            LOGI("DX scanner: auto-PPM %s gave %d reading(s) in %.1f s (DX sweep) \xe2\x80\x94 %s", src.c_str(), got, nowSecs() - tb, line.c_str());
+        }
+    }
     void dabBandScanRun(bool fromSetup, int prevCh, uint32_t prevSid) {
         const bool dx = dabDx_.on;
         const double noLockS = dx ? kDxNoLockS : kNoLockS, weakLockS = dx ? kDxWeakLockS : kWeakLockS,
@@ -16501,6 +16547,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!entered) stopWhy = "the radio would not open Band III";
             }
         }
+        std::vector<std::pair<float, int>> calCand;   // ★ DX mode: (MER, block) of the clean multiplexes — dxCalibrate
         for (size_t idx = dx ? (size_t)std::max(0, dabDx_.startIdx) : 0; entered && idx < vibedab::kBandIIICount; ++idx) {
             if (g_dabScanCancel.load() || stopping.load() || !g_dabMode.load(std::memory_order_relaxed)) { cancelled = true; break; }
             { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabBand.current = int(idx); }
@@ -16605,6 +16652,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (everLocked && fibAt >= 0) dabDxReportExtras(dh);
                 const bool dxFound = found || (everLocked && fibAt >= 0 && dh.eid != 0);
                 if (dabDx_.onBlock) dabDx_.onBlock(int(idx), dxFound ? &dh : nullptr, nowSecs() - tb);
+                if (dxFound && q.merDb >= kDxCalMinMerDb && q.fibRate >= 0.95f) calCand.push_back({q.merDb, int(idx)});
             } else if (found) {
                 const double hz = double(vibedab::kBandIII[idx].centreHz);
                 if (q.fibRate > 0.9f) dabEnsRemember(int(idx), ens);   // ★ the ensemble memory's own bar
@@ -16626,6 +16674,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             dabBandBroadcast();
         }
+        if (dx && !cancelled && entered && !stopping.load()) dxCalibrate(calCand);
         if (stopping.load()) {   // ★ the server is going: touch nothing, the teardown owns the radio now
             std::lock_guard<std::mutex> lk(g_dabBandMtx);
             g_dabBand.running = false; g_dabBand.cancelled = true; g_dabBand.finished = true; g_dabBand.lock = false;

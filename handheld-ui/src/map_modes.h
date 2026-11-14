@@ -56,7 +56,7 @@ struct MapModes {
     bool capFetching = false; double capAt = -1e9, capDoneAt = -1e9;
     std::string enterAfterCaps; double enterAskedAt = 0;   // ★ a refused mode, entered again once fresh caps say yes
     /** ★ beta72: the band's region too (vibeserver.json ismBands[].region) — the BANDS list's second line */
-    struct IsmBand { std::string id, name, region; };
+    struct IsmBand { std::string id, name, region; double hz = 0; };   // ★ hz: the band column on each row
     std::vector<IsmBand> ismBands;
     std::string ismLanding;
     // ISM band stepper (main.ts ismStepperFor: the band the person STOPPED on, once, 450 ms after the last press)
@@ -96,7 +96,7 @@ inline void mapIsmParseBands(const Json& j, std::vector<MapModes::IsmBand>& out)
     out.clear();
     for (auto& b : j["ismBands"].a)
         if (b["id"].kind == Json::Str && b["name"].kind == Json::Str && b["hz"].kind == Json::Num && out.size() < 64)
-            out.push_back({b["id"].s.substr(0, 8), b["name"].s.substr(0, 40), b["region"].str().substr(0, 60)});
+            out.push_back({b["id"].s.substr(0, 8), b["name"].s.substr(0, 40), b["region"].str().substr(0, 60), b["hz"].num(0)});
 }
 inline int mapIsmIndex(const MapModes& x, const std::string& id) {
     for (size_t i = 0; i < x.ismBands.size(); i++) if (x.ismBands[i].id == id) return (int)i;
@@ -612,6 +612,14 @@ inline std::vector<std::string> mapNdbCard(App&, const RadioState& s, const std:
 }
 
 // ISM ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** ★ The band a device was heard on (Stuart 11-14: "3sec ago | 868 | Meshcore Message"): the nearest of the server's ISM
+ *  bands within 2 MHz gives its id, else whole MHz — the same rule as web/client/src/ism.ts ismBandLabel. */
+inline std::string mapIsmBandLabel(double freq, const std::vector<MapModes::IsmBand>& bands) {
+    if (!(freq > 0)) return "";
+    const MapModes::IsmBand* best = nullptr; double bd = 2e6;
+    for (auto& b : bands) { const double d = std::fabs(b.hz - freq); if (d <= bd) { bd = d; best = &b; } }
+    return best ? best->id : std::to_string((long long)std::llround(freq / 1e6));
+}
 inline void mapIsmBuild(App&, const RadioState& s, std::vector<MapListRow>& rows, std::vector<MapMarker>& mk, std::string& status) {
     const Json& r = mapReport(s, *mapMode("ism"));
     int withPos = 0;
@@ -624,7 +632,8 @@ inline void mapIsmBuild(App&, const RadioState& s, std::vector<MapListRow>& rows
         if (name.empty()) name = mapTrim(d["make"].str().substr(0, 30) + " " + d["model"].str().substr(0, 40));
         row.title = name.empty() ? d["kind"].str() : name;
         row.right = agoText(d["age"].num(0));
-        row.sub = d["line"].str().substr(0, 120);
+        const std::string bl = mapIsmBandLabel(d["freq"].num(0), mapModes().ismBands);
+        row.sub = (bl.empty() ? "" : bl + " | ") + d["line"].str().substr(0, 120);
         const std::string kind = d["kind"].str();
         row.col = kind == "meshtastic" || kind == "meshcore" || kind == "lorawan" ? rgb(0x7cff9b) : kind == "meter" ? rgb(0x9fb3c8) : th::amber;
         double lat, lon;
