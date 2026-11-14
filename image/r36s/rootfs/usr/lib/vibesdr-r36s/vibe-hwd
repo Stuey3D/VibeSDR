@@ -180,7 +180,8 @@ class Hwd:
         self.max_brightness = int(rd(BL + "/max_brightness", "255"))
         self.screen = "on"
         self.output = "speaker"
-        self.battery = {"pct": None, "charging": False, "status": "Unknown"}
+        self.battery = {"pct": None, "raw": None, "charging": False, "online": False, "status": "Unknown"}
+        self.bat_against = 0
         self.low_warned = False
         self.empty_count = 0
         self.shutting_down = False
@@ -357,8 +358,42 @@ class Hwd:
         pct = rd(BAT + "/capacity")
         status = rd(BAT + "/status", "Unknown")
         online = rd(CHG + "/online", "0") == "1"
-        return {"pct": int(pct) if pct and pct.lstrip("-").isdigit() else None,
-                "charging": status in ("Charging", "Full") or online, "status": status}
+        raw = int(pct) if pct and pct.lstrip("-").isdigit() else None
+        # ★★ CHARGING = THE CORD IS IN (Stuart 2026-11-14: "the battery meter seems a bit erratic when charging"). The
+        #    battery's own status flips Charging / Not charging / Discharging while the console + radio share the 2 A port
+        #    with it (the charge current falls to ~0 and back), so the bolt came and went; the charger's `online` is the
+        #    plug itself. "Full" with the cord in is still "on the charger".
+        return {"pct": raw, "raw": raw, "charging": online or status in ("Charging", "Full"), "online": online, "status": status}
+
+    # ★★★ WHAT THE METER SHOWS IS SMOOTHED; WHAT SWITCHES THE RADIO OFF IS NOT. The rk817 fuel gauge's capacity is an
+    #     estimate that leans on the battery voltage, and charging lifts that voltage (the charge current through the
+    #     cell's resistance) — so on the charger it jumps up, sags when the radio's draw rises, and drops several % the
+    #     moment the cord comes out. The meter therefore only moves the way the battery can: never DOWN while the cord is
+    #     in (the battery is not emptying), never UP without it, and at most kBatStep % per reading — fast enough to follow
+    #     ~1 A into the cell (about 1 % in 20 s). A real move in the "wrong" direction (a charger too weak for the load,
+    #     a gauge re-calibration) is followed once it has held for kBatHold readings. The 3 % shutdown and the 10 %
+    #     warning read the RAW figure, as before.
+    BAT_STEP, BAT_HOLD = 2, 3
+    def smooth_battery(self, b):
+        raw, shown = b["raw"], self.battery.get("pct")
+        if raw is None or shown is None or b["online"] != self.battery.get("online"):
+            self.bat_against = 0
+            out = raw if shown is None or raw is None else shown   # ★ a plug change holds what was shown, then follows
+        else:
+            d = raw - shown
+            wrong = (d < 0) if b["online"] else (d > 0)
+            if wrong:
+                self.bat_against = getattr(self, "bat_against", 0) + 1
+                d = 0 if self.bat_against < self.BAT_HOLD else d
+            else:
+                self.bat_against = 0
+            out = shown + max(-self.BAT_STEP, min(self.BAT_STEP, d))
+            if raw == 100 and b["status"] == "Full": out = 100
+        if raw is not None and shown is not None and abs(raw - shown) >= 3:
+            # ★ the evidence for the next debug-log read: what the gauge said, and why it may have said it
+            log("battery: gauge %d %% (showing %d %%), %s, online %d, %s uV, %s uA" % (raw, out, b["status"], b["online"],
+                rd(BAT + "/voltage_now", "?"), rd(BAT + "/current_now", "?")))
+        return dict(b, pct=out)
 
     async def charger_loop(self):
         """Hold the charge port's input limit at 2 A whenever the charger is in (see PMIC_ADDR above). A 1 s look at
@@ -388,13 +423,13 @@ class Hwd:
 
     async def battery_loop(self):
         while True:
-            b = self.read_battery()
+            b = self.smooth_battery(self.read_battery())
             if (b["pct"], b["charging"]) != (self.battery["pct"], self.battery["charging"]):
                 self.battery = b
                 if b["pct"] is not None:
                     self.emit({"event": "battery", "pct": b["pct"], "charging": b["charging"]})
             self.battery = b
-            pct = b["pct"]
+            pct = b["raw"]   # ★ the floor and the warning judge the gauge itself, not the smoothed meter
             if pct is not None and not b["charging"]:
                 if pct <= LOW_PCT and not self.low_warned:
                     self.low_warned = True
