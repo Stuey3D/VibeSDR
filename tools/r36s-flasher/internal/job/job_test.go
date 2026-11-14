@@ -203,7 +203,7 @@ func TestStockKnownBoard(t *testing.T) {
 	dtb, _ := os.ReadFile("../card/testdata/rf3536k3ka.dtb")
 	dir := t.TempDir()
 	cardPath := filepath.Join(dir, "card.img")
-	const size = int64(3) << 30
+	const size = int64(4) << 30 // ★ room for a 3 GB-root image (beta75+, ~3.5 GB)
 	stockCard(t, cardPath, size, dtb)
 	j, _, err := runJob(t, cardPath, size, "boot")
 	if err != nil {
@@ -245,7 +245,7 @@ func TestCorruptWriteCaught(t *testing.T) {
 	dtb, _ := os.ReadFile("../card/testdata/rf3536k3ka.dtb")
 	dir := t.TempDir()
 	cardPath := filepath.Join(dir, "card.img")
-	const size = int64(3) << 30
+	const size = int64(4) << 30 // ★ room for a 3 GB-root image (beta75+)
 	stockCard(t, cardPath, size, dtb)
 	testCorrupt = func(off int64, b []byte) {
 		if off == 200<<20 {
