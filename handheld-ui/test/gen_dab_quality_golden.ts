@@ -57,4 +57,11 @@ const L = (o: DabQualityReport): DabQualityReport => ({ channel: '11D', locked: 
   for (let i = 4; i <= 6; i++) seq.push([i * 1000, { channel: '5A', locked: false }]);
   run('false-lock', seq);
 }
+// ★ 2026-11-15: the line under the verdict is the audio — Almere 7D (BER 2.8 %, nothing lost) then units starting to go
+{
+  const seq: Array<[number, DabQualityReport]> = [];
+  for (let i = 1; i <= 6; i++) seq.push([i * 1000, L({ channel: '7D', mer: 13, sid: 0x80d9, mscBer: 0.028, sfTried: 8 * i, sfOk: 8 * i, auIn: 24 * i, auBad: 0, rsLost: 0 })]);
+  for (let i = 1; i <= 6; i++) seq.push([6000 + i * 1000, L({ channel: '7D', mer: 13, sid: 0x80d9, mscBer: 0.028, sfTried: 48 + 8 * i, sfOk: 48 + 8 * i, auIn: 144 + 50 * i, auBad: 2 * i, rsLost: 0 })]);
+  run('clear-corrected-then-breakups', seq);
+}
 console.log(out.join('\n'));

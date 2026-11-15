@@ -10,8 +10,7 @@
  */
 import {
   classifyDabWindow, DabQualityMeter, dabQualityLine, DAB_SEARCHING, type DabWindow,
-  dabWithPlayback, DAB_NO_AUDIO_ADVICE, DAB_STARTING_ADVICE, DAB_CHOOSE_ADVICE, DAB_NO_AUDIO_MS, type DabQuality,
-} from '../src/utils/dabQuality.ts';
+  dabWithPlayback, DAB_NO_AUDIO_ADVICE, DAB_STARTING_ADVICE, DAB_CHOOSE_ADVICE, DAB_NO_AUDIO_MS, type DabQuality, DAB_BREAKUP_ADVICE, dabClearCorrectedAdvice } from '../src/utils/dabQuality.ts';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -223,6 +222,25 @@ eq('audio started: the counters decide as before', lvl({ mer: 23, sfTried: 40, s
   const m = new DabQualityMeter();
   const q = m.push({ channel: '12B', locked: true, fibRate: 1, mer: 20, sid: 2, mp2In: 30, mp2Bad: 30 }, 1000);
   eq('MP2 with every frame bad so far: starting, not weak', [q.level, q.advice], [3, DAB_STARTING_ADVICE]);
+}
+
+{
+  // ★★★ THE LINE UNDER THE VERDICT IS THE AUDIO (Stuart, 2026-11-15, the Almere B210 on 7D): BER 2.8 % holds the bars at
+  //     Moderate, but no unit is lost — the advice must not promise break-ups that are not happening.
+  const m = new DabQualityMeter();
+  let q: DabQuality | null = null;
+  for (let i = 1; i <= 6; i++) q = m.push({ channel: '7D', locked: true, fibRate: 1, mer: 13, mscBer: 0.028, sid: 0x80d9,
+    sfTried: 8 * i, sfOk: 8 * i, auIn: 24 * i, auBad: 0, rsFixed: 1, rsLost: 0 }, i * 1000);
+  eq('Almere 7D: Moderate, the BER it corrects in the line, not repeated', [q!.level, q!.advice, q!.detail], [2, 'Clear \u00b7 BER 2.8 % corrected', undefined]);
+  const n = new DabQualityMeter();
+  for (let i = 1; i <= 6; i++) q = n.push({ channel: '7D', locked: true, fibRate: 1, mer: 13, mscBer: 0.028, sid: 0x80d9,
+    sfTried: 8 * i, sfOk: 8 * i, auIn: 50 * i, auBad: 2 * i }, i * 1000);
+  eq('4 % of units lost: Moderate, break-ups', [q!.level, q!.advice], [2, DAB_BREAKUP_ADVICE]);
+  const k = new DabQualityMeter();
+  for (let i = 1; i <= 6; i++) q = k.push({ channel: '11D', locked: true, fibRate: 1, mer: 24, mscBer: 0.004, sid: 1,
+    sfTried: 8 * i, sfOk: 8 * i, auIn: 24 * i, auBad: 0 }, i * 1000);
+  eq('clean audio, low BER: Strong, plain "Clear audio"', [q!.level, q!.advice], [3, 'Clear audio']);
+  eq('both lines fit the R36S (≤ 33 characters, at the widest BER 8.4 %)', dabClearCorrectedAdvice('BER 8.4 %').length <= 33 && DAB_BREAKUP_ADVICE.length <= 33, true);
 }
 
 console.log(`dab quality: ${passes} passed, ${fails} failed`);

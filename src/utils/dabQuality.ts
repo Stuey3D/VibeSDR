@@ -71,6 +71,16 @@ const LABEL: Record<DabLevel, string> = {
   0: 'No signal', 1: 'Multiplex weak', 2: 'Multiplex moderate', 3: 'Multiplex strong',
 };
 const SHORT: Record<DabLevel, string> = { 0: 'No signal', 1: 'Weak', 2: 'Moderate', 3: 'Strong' };
+/* ★★★ THE VERDICT IS THE MARGIN, THE LINE UNDER IT IS THE AUDIO (Stuart, 2026-11-15, the Almere B210 on 7D: "Multiplex
+ *  moderate · Expect occasional audio break-ups · BER 2.8 %" with 359/359 super frames and 0 of 1077 units lost). The
+ *  bars keep the 2026-10-09 rule — a signal living on its error correction is not Strong — but once audio is decoding,
+ *  the advice says what the listener HEARS: clean audio under a BER-held verdict is "Clear · BER 2.8 % corrected";
+ *  audio actually losing units is "Break-ups · errors uncorrected" (Weak keeps "No or heavily broken audio"). Short for the R36S (≤ the old 33 characters). */
+/** Clean audio under a BER/MER-held verdict: the figure being corrected goes IN the line (Stuart: "you could put the
+ *  BER … there instead"), so the detail is not repeated after it. "Clear · BER 2.8 % corrected". */
+export const dabClearCorrectedAdvice = (detail?: string) =>
+  detail && /^BER /.test(detail) ? `Clear \u00b7 ${detail} corrected` : 'Clear \u00b7 errors corrected';
+export const DAB_BREAKUP_ADVICE = 'Break-ups \u00b7 errors uncorrected';
 const ADVICE: Record<DabLevel, string> = {
   0: 'Searching for the multiplex',
   1: 'No or heavily broken audio',
@@ -177,7 +187,9 @@ export interface DabWindow {
 }
 
 /** ★ The verdict for one window, with no memory — the pure core the meter wraps in hysteresis. */
-export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: string } {
+/** `audioClean`: set only when audio evidence decided — true = the audio counters lost nothing worth a level (any lower
+ *  verdict came from the BER/MER ceiling, i.e. margin), false = the audio itself is losing units / frames. */
+export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: string; audioClean?: boolean } {
   if (!w.locked) return { level: 0, detail: 'searching' };
   // ★ Locked but no FIC is the server's own "false lock" (vibe_dab_service.h noFib): nothing will decode.
   if (w.fibNow !== undefined && w.fibNow < FIB_NONE) return { level: 0, detail: 'no station list' };
@@ -205,7 +217,8 @@ export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: str
     }
   }
   if (audio) {
-    let a: { level: DabLevel; detail?: string } = audio;
+    const audioClean = (audio as { level: DabLevel }).level === 3;
+    let a: { level: DabLevel; detail?: string; audioClean?: boolean } = { ...(audio as { level: DabLevel; detail?: string }), audioClean };
     /* ★★★ THE RAW BER IS A CEILING, WHATEVER THE AUDIO SAYS (Stuart, 2026-10-09, Coventry 12D from the loft at 6.7 %
      *  before Viterbi: "its a weak multiplex so expected but the signal meter said strong and clear audio when the
      *  audio was not starting"; "we need to monitor the errors before viterbi as that seems like a good metric").
@@ -214,8 +227,8 @@ export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: str
      *  on its error correction. This overrules the 10D reasoning below for BER (one radio played clean at 9 %).
      *  Same lines as the prediction (BER_WEAK 8.5 %, BER_MODERATE 1.5 %). */
     if (w.mscBer !== undefined) {
-      if (w.mscBer >= BER_WEAK && a.level > 1) a = { level: 1, detail: `BER ${pct(w.mscBer)} %` };
-      else if (w.mscBer >= BER_MODERATE && a.level > 2) a = { level: 2, detail: `BER ${pct(w.mscBer)} %` };
+      if (w.mscBer >= BER_WEAK && a.level > 1) a = { level: 1, detail: `BER ${pct(w.mscBer)} %`, audioClean };
+      else if (w.mscBer >= BER_MODERATE && a.level > 2) a = { level: 2, detail: `BER ${pct(w.mscBer)} %`, audioClean };
     }
     /* ★ The backstop applies only when the counter that SEES mud is missing — an older server's DAB+
      *  (super frames only) or a Layer II report without ScF-CRC. With it, the audio counters are the
@@ -223,7 +236,7 @@ export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: str
      *  AU / ScF counters tell those apart where BER cannot. Without it, a high BER cannot be Strong. */
     const seesMud = (w.auIn !== undefined && w.auIn >= MIN_AU) || (w.mp2In >= MIN_MP2 && w.scfConcealed !== undefined);
     if (!seesMud && a.level === 3 && w.mer !== undefined && w.mer > 0 && w.mer < MER_WEAK) {
-      a = { level: 2, detail: `MER ${w.mer.toFixed(1)} dB` };
+      a = { level: 2, detail: `MER ${w.mer.toFixed(1)} dB`, audioClean };
     }
     return a;
   }
@@ -363,8 +376,11 @@ export class DabQualityMeter {
     this.last = {
       level: lvl, label: LABEL[lvl], short: SHORT[lvl],
       ...(r.locked && win.mer !== undefined && win.mer > 0 ? { merDb: win.mer } : {}),
-      advice: lvl === 0 && v.level === 0 && v.detail === 'no station list' ? 'Locked, but nothing decodes' : ADVICE[lvl],
-      ...(detail && lvl !== 0 ? { detail } : {}),
+      advice: lvl === 0 && v.level === 0 && v.detail === 'no station list' ? 'Locked, but nothing decodes'
+        : lvl >= 2 && v.audioClean === false ? DAB_BREAKUP_ADVICE
+        : lvl !== 0 && lvl < 3 && v.audioClean === true ? dabClearCorrectedAdvice(detail)
+        : ADVICE[lvl],
+      ...(detail && lvl !== 0 && !(lvl < 3 && v.audioClean === true && /^BER /.test(detail)) ? { detail } : {}),
     };
     /* ★★ Starting: the bars say what the signal predicts; the advice says the audio has not begun — and after the
      *  same grace the playback check gives (DAB_NO_AUDIO_MS), that nothing has arrived. Never "No or heavily broken

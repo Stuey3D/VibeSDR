@@ -32,6 +32,11 @@ constexpr double WINDOW_MS = 5000;
 
 inline const char* label(int l) { static const char* t[] = {"No signal", "Multiplex weak", "Multiplex moderate", "Multiplex strong"}; return t[l & 3]; }
 inline const char* shortLabel(int l) { static const char* t[] = {"No signal", "Weak", "Moderate", "Strong"}; return t[l & 3]; }
+/** DAB_BREAKUP_ADVICE / dabClearCorrectedAdvice (2026-11-15): the verdict is the margin, the line under it is the audio. */
+constexpr const char* BREAKUP_ADVICE = "Break-ups \u00b7 errors uncorrected";
+inline std::string clearCorrectedAdvice(const std::string& detail) {
+    return detail.rfind("BER ", 0) == 0 ? "Clear \u00b7 " + detail + " corrected" : std::string("Clear \u00b7 errors corrected");
+}
 inline const char* advice(int l) {
     static const char* t[] = {"Searching for the multiplex", "No or heavily broken audio", "Expect occasional audio break-ups", "Clear audio"};
     return t[l & 3];
@@ -79,10 +84,13 @@ struct DabWindow {
 };
 
 /** classifyDabWindow — the verdict for one window, no memory. */
-inline void dabClassify(const DabWindow& w, int& level, std::string& detail) {
+/** `audioClean`: -1 = no audio evidence decided, 1 = the audio counters lost nothing worth a level (a lower verdict is the
+ *  BER/MER ceiling — margin), 0 = the audio itself is losing units / frames (classifyDabWindow's audioClean). */
+inline void dabClassify(const DabWindow& w, int& level, std::string& detail, int* audioCleanOut = nullptr) {
     using namespace dabq;
     auto has = [](double v) { return !std::isnan(v); };
     detail.clear();
+    if (audioCleanOut) *audioCleanOut = -1;
     if (!w.locked) { level = 0; detail = "searching"; return; }
     if (has(w.fibNow) && w.fibNow < FIB_NONE) { level = 0; detail = "no station list"; return; }
     bool haveA = false; int aL = 3; std::string aD;
@@ -106,6 +114,7 @@ inline void dabClassify(const DabWindow& w, int& level, std::string& detail) {
     }
     if (haveA) {
         int l = aL; std::string d = aD;
+        if (audioCleanOut) *audioCleanOut = aL == 3 ? 1 : 0;
         if (has(w.mscBer)) {
             if (w.mscBer >= BER_WEAK && l > 1) { l = 1; d = "BER " + pct(w.mscBer) + " %"; }
             else if (w.mscBer >= BER_MODERATE && l > 2) { l = 2; d = "BER " + pct(w.mscBer) + " %"; }
@@ -202,8 +211,8 @@ public:
         w.frames = samples_.size() > 1 ? d(&DabQSample::frames) : 0;
         w.erased = samples_.size() > 1 ? d(&DabQSample::erased) : 0;
         w.audioStarted = started ? 1 : 0;
-        int vl; std::string vd;
-        dabClassify(w, vl, vd);
+        int vl; std::string vd; int clean = -1;
+        dabClassify(w, vl, vd, &clean);
         if (shown_ < 0) shown_ = vl;
         else if (vl != shown_) {
             if (pendL_ == vl) pendN_++; else { pendL_ = vl; pendN_ = 1; }
@@ -213,8 +222,12 @@ public:
         DabQuality q;
         q.level = lvl; q.label = dabq::label(lvl); q.shortL = dabq::shortLabel(lvl);
         q.hasMer = w.locked && !std::isnan(w.mer) && w.mer > 0; q.merDb = q.hasMer ? w.mer : 0;
-        q.advice = (lvl == 0 && vl == 0 && vd == "no station list") ? "Locked, but nothing decodes" : dabq::advice(lvl);
-        if (lvl == vl && lvl != 0) q.detail = vd;
+        const std::string held = lvl == vl ? vd : std::string();
+        q.advice = (lvl == 0 && vl == 0 && vd == "no station list") ? "Locked, but nothing decodes"
+                 : (lvl >= 2 && clean == 0) ? dabq::BREAKUP_ADVICE
+                 : (lvl != 0 && lvl < 3 && clean == 1) ? dabq::clearCorrectedAdvice(held)
+                 : dabq::advice(lvl);
+        if (lvl == vl && lvl != 0 && !(lvl < 3 && clean == 1 && vd.rfind("BER ", 0) == 0)) q.detail = vd;
         if (lvl != 0 && !sid) q.advice = dabq::CHOOSE_ADVICE;
         else if (lvl != 0 && !started && !std::isnan(startingSince_)) {
             q.starting = true;
