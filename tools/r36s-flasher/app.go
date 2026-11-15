@@ -21,7 +21,7 @@ import (
 )
 
 // Version of the flasher.
-const Version = "0.3.1-localtest"
+const Version = "0.4.0-localtest"
 
 // App is what the window calls.
 type App struct {
@@ -159,7 +159,7 @@ func (a *App) Start(diskID, kind, folder string, confirmedLarge bool) error {
 	a.mu.Lock()
 	a.running = true
 	a.mu.Unlock()
-	go a.run(d, kind, folder, img)
+	go a.run(d, kind, folder, img, nil)
 	return nil
 }
 
@@ -350,23 +350,27 @@ func findDisk(diskID string) (*disks.Disk, error) {
 	return nil, errors.New("that card is no longer there — put it back in and choose it again")
 }
 
-func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
+func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image, extra func(*job.Job)) {
 	work := filepath.Join(release.CacheDir(), "run-"+time.Now().Format("20060102-150405"))
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		a.finish(err, "", "")
 		return
 	}
 	defer os.RemoveAll(work)
-	// 1. the image into the cache, checked as this person
-	a.emit(job.Event{Stage: "image", Frac: 0, Text: "Getting the VibeSDR image ready…"})
-	cached := filepath.Join(release.CacheDir(), filepath.Base(img.Path))
-	if got, err := release.FileSHA256(cached, nil); err != nil || got != img.SHA256 {
-		if err := copyFile(img.Path, cached, func(d, t int64) {
-			a.emit(job.Event{Stage: "image", Frac: 0.02 * float64(d) / float64(t), Text: "Getting the VibeSDR image ready…"})
-		}); err != nil {
-			a.finish(fmt.Errorf("could not copy the VibeSDR image: %w", err), "", "")
-			return
+	// 1. the image into the cache, checked as this person (a RESTORE writes no VibeSDR image: img is nil)
+	cached, imgSum, imgVer := "", "", ""
+	if img != nil {
+		a.emit(job.Event{Stage: "image", Frac: 0, Text: "Getting the VibeSDR image ready…"})
+		cached = filepath.Join(release.CacheDir(), filepath.Base(img.Path))
+		if got, err := release.FileSHA256(cached, nil); err != nil || got != img.SHA256 {
+			if err := copyFile(img.Path, cached, func(d, t int64) {
+				a.emit(job.Event{Stage: "image", Frac: 0.02 * float64(d) / float64(t), Text: "Getting the VibeSDR image ready…"})
+			}); err != nil {
+				a.finish(fmt.Errorf("could not copy the VibeSDR image: %w", err), "", "")
+				return
+			}
 		}
+		imgSum, imgVer = img.SHA256, img.Version
 	}
 	// 2. the job — run here, as the person. Only the card itself needs permission, and macOS's own authopen opens it
 	//    after one system password prompt and hands it back (internal/authopen). Nothing runs as root.
@@ -376,7 +380,7 @@ func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 		mode, bk = "update", "boot"
 	}
 	j := job.Job{Mode: mode, Target: d.Raw, Disk: d.Device, Size: d.Size, BackupKind: bk, BackupPath: staged, ImagePath: cached,
-		ImageSHA256: img.SHA256, ImageVersion: img.Version, Tmp: work,
+		ImageSHA256: imgSum, ImageVersion: imgVer, Tmp: work,
 		Open: func(path string, flags int) (*os.File, error) {
 			a.emit(job.Event{Stage: "open", Frac: 0.02, Text: "Waiting for your password…"})
 			f, err := authopen.Open(path, flags, "VibeSDR Flasher needs your password to back up and write the SD card.")
@@ -385,6 +389,9 @@ func (a *App) run(d *disks.Disk, kind, folder string, img *release.Image) {
 			}
 			return f, err
 		}}
+	if extra != nil {
+		extra(&j)
+	}
 	doneText := ""
 	runErr := job.Run(&j, func(e job.Event) {
 		if e.Done {

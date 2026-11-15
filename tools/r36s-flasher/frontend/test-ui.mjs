@@ -26,9 +26,19 @@ const MOCK = `
   const card = { id: 'disk4', name: 'Built In SDXC Reader', size: 15.9e9, device: '/dev/disk4', looks: 'VibeSDR card', bus: 'SD', large: false };
   // ★ the new card in the SAME reader gets the same disk id — the window must wait for the original to go first
   const fresh = { id: 'disk4', name: 'Built In SDXC Reader', size: 31.9e9, device: '/dev/disk4', looks: 'other', volumes: ['EASYROMS'], bus: 'SD', large: false };
+  const blankC = { id: 'disk5', name: 'USB Reader', size: 31.9e9, device: '/dev/disk5', looks: 'No readable volumes', volumes: [], bus: 'USB', large: false };
+  const bks = [{ path: '/b/2026-11-15 1031 SD/2026-11-15 1031 SD.img.gz', name: '2026-11-15 1031 SD', kind: 'whole', bytes: 63.9e9, written: '12.0.0-beta78' }];
   window.go = { main: { App: {
+    Backups: async () => bks,
+    CheckDrivers: async (d) => { if (d.kind === 'own') throw 'my.dtb is not for an RK3326 (it is for GA36)'; return d.kind === 'generic' ? 'the generic ROCKNIX drivers built into VibeSDR (Generic EE clone)' : 'the R36S (EE clone) drivers from ' + d.file; },
+    ChooseImageFile: async () => '/x/other.img.xz',
+    ChooseDTB: async () => '/x/my.dtb',
+    ChooseOverlays: async () => [],
+    PreviewRestore: async (p) => ({ name: p.split('/').pop(), bytes: 63.9e9, whole: true, checked: true }),
+    StartAdvanced: async (id, kind, folder, large, d) => { window.__starts.push('adv:' + id + ':' + kind + ':' + d.kind + (d.file ? ':' + d.file : '')); },
+    StartRestore: async (id, kind, folder, large, p) => { window.__starts.push('restore:' + id + ':' + kind + ':' + p); },
     Rescan: async () => ({ flasher: '0.2.1-localtest', localTest: true, imageOk: true, version: '12.0.0-beta77+handheld73', imageErr: '' }),
-    Disks: async () => window.__phase === 'source' ? [card] : window.__phase === 'out' ? [] : [fresh],
+    Disks: async () => window.__phase === 'source' ? [card] : window.__phase === 'out' ? [] : window.__phase === 'blank' ? [blankC] : [fresh],
     DefaultBackupDir: async () => '/Users/x/Documents/VibeSDR Backups/test',
     ChooseFolder: async (d) => d,
     Start: async (id, kind, folder, large) => { window.__starts.push(kind); },
@@ -107,6 +117,66 @@ try {
   ok(/not empty/.test(t) && /EASYROMS/.test(t) && /NOT backed up/.test(t) && /write VibeSDR/.test(t), '★ warn, then write: names what is on the new card and that it is not backed up');
   await ev(`document.getElementById('cYes').click()`); await sleep(200);
   ok(JSON.stringify(await ev('window.__starts')) === '["new:boot","write:disk4"]', `★★ the write goes to the NEW card through WriteToNew (${JSON.stringify(await ev('window.__starts'))})`);
+
+  // ★★ ADVANCED — generic drivers onto a BLANK card, no backup by default for a blank card
+  const fresh2 = async () => { await send('Page.navigate', { url: 'file://' + PAGE }); await sleep(700); };
+  const conf = () => ev(`document.getElementById('confirmText').textContent + ' | ' + document.getElementById('cYes').textContent`);
+  await fresh2(); await ev(`window.__phase = 'blank'`);
+  await ev(`document.getElementById('bAdv').click()`); await ev(`document.getElementById('aMake').click()`); await sleep(100);
+  ok(await ev(`document.getElementById('advSrcNext').disabled`), 'ADVANCED: Next waits for a choice of drivers');
+  await ev(`document.getElementById('dGeneric').click()`); await sleep(200);
+  ok(!(await ev(`document.getElementById('advSrcNext').disabled`)) && /generic ROCKNIX/.test(await ev(`document.getElementById('dCheck').textContent`)), 'ADVANCED generic: checked, says what it uses, Next on');
+  await ev(`document.getElementById('advSrcNext').click()`); await sleep(2300);
+  await ev(`document.querySelector('#diskList .big').click()`); await sleep(100);
+  await ev(`document.getElementById('toBackup').click()`); await sleep(200);
+  ok(await ev(`document.getElementById('backup').classList.contains('on')`), 'ADVANCED goes straight from the card to the backup choice (no "where")');
+  ok(await ev(`document.getElementById('kNone').offsetParent !== null && document.getElementById('kNone').classList.contains('sel')`), '★ a BLANK card: "Don\'t back up" offered and chosen');
+  await ev(`document.getElementById('start').click()`); await sleep(100);
+  t = await conf();
+  ok(/Write VibeSDR/.test(await ev(`document.getElementById('confirmTitle').textContent`)) && /generic ROCKNIX/.test(t) && /not backed up first/.test(t) && !/NOT backed up/.test(t), 'ADVANCED confirm names the drivers; a blank card is not backed up, calmly');
+  await ev(`document.getElementById('cYes').click()`); await sleep(200);
+  ok(JSON.stringify(await ev('window.__starts')) === '["adv:disk5:none:generic"]', `★★ ADVANCED sends StartAdvanced with no backup and the generic drivers (${JSON.stringify(await ev('window.__starts'))})`);
+
+  // ADVANCED — drivers from one of your backups, onto a VibeSDR card: whole backup by default, the VibeSDR warning
+  await fresh2();
+  await ev(`document.getElementById('bAdv').click()`); await ev(`document.getElementById('aMake').click()`); await sleep(100);
+  await ev(`document.getElementById('dFile').click()`); await sleep(200);
+  await ev(`document.querySelector('#dBackups .big').click()`); await sleep(300);
+  ok(/EE clone/.test(await ev(`document.getElementById('dCheck').textContent`)), 'ADVANCED file: one of your backups, its drivers read');
+  await ev(`document.getElementById('advSrcNext').click()`); await sleep(2300);
+  await ev(`document.querySelector('#diskList .big').click()`); await sleep(100);
+  await ev(`document.getElementById('toBackup').click()`); await sleep(200);
+  ok(await ev(`document.getElementById('kWhole').classList.contains('sel')`), 'a card with something on it: Whole card backup by default');
+  await ev(`document.getElementById('start').click()`); await sleep(100);
+  t = await conf();
+  ok(/VibeSDR card/.test(t) && /Update a VibeSDR card/.test(t) && /whole card is backed up/.test(t), 'ADVANCED onto a VibeSDR card: warns, points at Update, says it is backed up');
+  await ev(`document.getElementById('cYes').click()`); await sleep(200);
+  ok((await ev('window.__starts'))[0].startsWith('adv:disk4:whole:file:/b/'), `ADVANCED file → StartAdvanced with the backup's path (${JSON.stringify(await ev('window.__starts'))})`);
+
+  // ADVANCED — own device tree refused: the reason shown, Next stays off
+  await fresh2();
+  await ev(`document.getElementById('bAdv').click()`); await ev(`document.getElementById('aMake').click()`); await sleep(100);
+  await ev(`document.getElementById('dOwn').click()`); await ev(`document.getElementById('dPickDtb').click()`); await sleep(300);
+  ok(/not for an RK3326/.test(await ev(`document.getElementById('dCheck').textContent`)) && await ev(`document.getElementById('advSrcNext').disabled`), '★ own .dtb refused: the reason shown, Next stays off');
+
+  // RESTORE — a backup back on a card, with this card's boot partition backed up first
+  await fresh2();
+  await ev(`document.getElementById('bAdv').click()`); await ev(`document.getElementById('aRestore').click()`); await sleep(200);
+  await ev(`document.querySelector('#rBackups .big').click()`); await sleep(300);
+  ok(/a whole card/.test(await ev(`document.getElementById('rCheck').textContent`)) && !(await ev(`document.getElementById('advRestoreNext').disabled`)), 'RESTORE: your backup chosen and described');
+  await ev(`document.getElementById('advRestoreNext').click()`); await sleep(2300);
+  await ev(`document.querySelector('#diskList .big').click()`); await sleep(100);
+  await ev(`document.getElementById('toBackup').click()`); await sleep(200);
+  ok(/Put it back/.test(await ev(`document.getElementById('start').textContent`)), 'RESTORE: the button says Put it back');
+  await ev(`document.getElementById('kBoot').click()`); await ev(`document.getElementById('start').click()`); await sleep(100);
+  t = await conf();
+  ok(/replaced by the backup/.test(t) && /put it back/.test(t), 'RESTORE confirm: the card is replaced by the backup');
+  await ev(`document.getElementById('cYes').click()`); await sleep(200);
+  ok((await ev('window.__starts'))[0].startsWith('restore:disk4:boot:/b/'), `★★ RESTORE sends StartRestore with the card's own backup choice (${JSON.stringify(await ev('window.__starts'))})`);
+
+  // ★ SIMPLE MAKE never offers "Don't back up"
+  r = await run('make', ['kNone']);
+  ok(JSON.stringify(r.starts) === '["whole"]', `★ MAKE: "Don't back up" is Advanced only — pressing it changes nothing (sent ${JSON.stringify(r.starts)})`);
 
   r = await run('make', ['kBoot']);
   ok(JSON.stringify(r.starts) === '["boot"]', `MAKE with Boot partition only sends "boot" (sent ${JSON.stringify(r.starts)})`);

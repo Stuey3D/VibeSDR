@@ -50,6 +50,13 @@ For someone who has not got the original card, has a damaged one, or knows what 
 
 …and **onto a blank card** (or any card), as well as the original. Advanced also lists the backups this app has made.
 
+**BUILT 2026-11-15 (flasher 0.4.0)** — see tools/r36s-flasher/README.md "Advanced". As built: the drivers are checked
+when chosen, before any card; the target card's backup may be **Don't back up** (Advanced only — a blank or spare card;
+in red on the confirm when the card is not empty); and **Put a backup back on a card** restores a whole-card backup (the
+way back every backup's README promises), checked end to end against its `.sha256` first. A stock (Rockchip 4.4) DTB
+given as "your own" is refused unless it is a board we know — VibeSDR's kernel cannot boot with one; the panel-overlay
+generator for other EE clones (an overlay made from the unit's own stock DTB, as ROCKNIX does) is the next step for those.
+
 ### 1.3 UPDATE EXISTING VIBESDR CARD
 
 "Does what it says on the tin." Insert the card, press UPDATE:

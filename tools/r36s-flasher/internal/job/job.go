@@ -37,8 +37,18 @@ type Job struct {
 	UID          int    `json:"uid"`          // the person's — the backup files are theirs, not root's
 	GID          int    `json:"gid"`
 	Tmp          string `json:"tmp"`
-	// Mode: "" or "make" = Simple mode (the whole card); "update" = system only, settings and recordings kept (update.go).
+	// Mode: "" or "make" = Simple mode (the whole card); "update" = system only, settings and recordings kept (update.go);
+	// "restore" = a backup put back on the card (advanced.go).
 	Mode string `json:"mode"`
+
+	// ★ ADVANCED (advanced.go): where the drivers come from instead of the card itself — "" (the card: Simple mode),
+	//   "file" (DriverFile: an image or backup), "generic" (the image's own ROCKNIX drivers) or "own" (OwnDTB + OwnOverlays).
+	//   BackupKind may also be "none" in Advanced (a blank or spare card).
+	Drivers     string   `json:"drivers,omitempty"`
+	DriverFile  string   `json:"driverFile,omitempty"`
+	OwnDTB      string   `json:"ownDtb,omitempty"`
+	OwnOverlays []string `json:"ownOverlays,omitempty"`
+	RestorePath string   `json:"restorePath,omitempty"` // Mode "restore": the backup or image to put back
 
 	// Open opens the card (the app: through authopen, one system password prompt). nil = open it directly (tests).
 	Open func(path string, flags int) (*os.File, error) `json:"-"`
@@ -123,6 +133,11 @@ func Run(j *Job, rep Reporter) (err error) {
 		}
 	}
 
+	// ★ RESTORE puts a backup back — the VibeSDR image is not used
+	if j.Mode == "restore" {
+		return runRestore(j, rep, tmp, stage)
+	}
+
 	// 1. the image is what was published
 	s := stage("image", pImgCheck)
 	s(0, "Checking the VibeSDR image…")
@@ -134,6 +149,20 @@ func Run(j *Job, rep Reporter) (err error) {
 
 	if j.Mode == "update" {
 		return runUpdate(j, rep, tmp, stage)
+	}
+	// ★ ADVANCED: the drivers come from somewhere else — decided BEFORE the card is backed up or touched
+	var adv *AdvancedBoot
+	if j.Drivers != "" {
+		s(1, "Reading the drivers you chose…")
+		a, err := PrepareAdvanced(j, tmp)
+		if err != nil {
+			return err
+		}
+		defer a.Close()
+		if a.ImgEnd > j.Size {
+			return Friendly{fmt.Sprintf("This card is too small: VibeSDR needs %.1f GB and the card holds %.1f GB. Nothing on the card has changed.", float64(a.ImgEnd)/1e9, float64(j.Size)/1e9)}
+		}
+		adv = a
 	}
 
 	// 2. the card
@@ -151,59 +180,60 @@ func Run(j *Job, rep Reporter) (err error) {
 	}
 	defer dev.Close()
 
-	// 3. back up, then check the backup reads back to the same bytes
-	span := j.Size
-	if j.BackupKind == "boot" {
-		span = bootSpan(dev, j.Size)
+	// 3. back up, then check the backup reads back to the same bytes (Advanced: unless the person chose no backup)
+	if j.BackupKind != "none" {
+		if err := backupAndCheck(j, dev, stage, pBackup, pBackChk); err != nil {
+			return err
+		}
+	} else {
+		at += pBackup + pBackChk
 	}
-	s = stage("backup", pBackup)
-	rawSum, err := backup(dev, span, j.BackupPath, func(d int64) { s(float64(d)/float64(span), backupText(j.BackupKind, d, span)) })
-	if err != nil {
-		return Friendly{"The backup could not be made (" + err.Error() + "). Nothing on the card has changed."}
-	}
-	s = stage("backupcheck", pBackChk)
-	s(0, "Checking the backup…")
-	if got, n, err := gunzipHash(j.BackupPath, func(d int64) { s(float64(d)/float64(span), "Checking the backup…") }); err != nil || got != rawSum || n != span {
-		return Friendly{"The backup did not read back correctly, so the card was not touched. Your card is exactly as it was."}
-	}
-	writeBackupNotes(j, span, rawSum)
 
 	// 4. what is on the card, and what its new boot partition needs
 	s = stage("prepare", pPrepare)
-	s(0, "Reading this R36S's drivers…")
-	info, err := card.Inspect(dev, tmp)
-	if err != nil {
-		return Friendly{"Could not read the card: " + err.Error() + ". Your backup is safe."}
+	var newBoot []byte
+	var imgEnd, bootOff int64
+	if adv != nil {
+		newBoot, imgEnd, bootOff = adv.Boot, adv.ImgEnd, adv.BootOffset
+		s(1, "Using "+adv.Summary)
+	} else {
+		s(0, "Reading this R36S's drivers…")
+		info, err := card.Inspect(dev, tmp)
+		if err != nil {
+			return Friendly{"Could not read the card: " + err.Error() + ". Your backup is safe."}
+		}
+		if info.Kind == card.Unknown {
+			return Friendly{"Stopped before writing: " + info.Why + ". Your backup is safe and nothing on the card has changed."}
+		}
+		p1, imgParts, err := imageBoot(j.ImagePath, tmp)
+		if err != nil {
+			return Friendly{"The VibeSDR image could not be read: " + err.Error() + ". Nothing on the card has changed."}
+		}
+		defer p1.Close()
+		imgEnd = card.ImageEnd(imgParts)
+		if imgEnd > j.Size {
+			return Friendly{fmt.Sprintf("This card is too small: VibeSDR needs %.1f GB and the card holds %.1f GB. Nothing on the card has changed.", float64(imgEnd)/1e9, float64(j.Size)/1e9)}
+		}
+		summary, err := prepareBoot(p1, info, dev, tmp)
+		if err != nil {
+			return Friendly{"Stopped before writing: " + err.Error() + ". Your backup is safe and nothing on the card has changed."}
+		}
+		s(1, "Using "+summary)
+		if newBoot, err = os.ReadFile(p1.Name()); err != nil {
+			return err
+		}
+		bootOff = imgParts[0].Offset()
 	}
-	if info.Kind == card.Unknown {
-		return Friendly{"Stopped before writing: " + info.Why + ". Your backup is safe and nothing on the card has changed."}
-	}
-	p1, imgParts, err := imageBoot(j.ImagePath, tmp)
-	if err != nil {
-		return Friendly{"The VibeSDR image could not be read: " + err.Error() + ". Nothing on the card has changed."}
-	}
-	defer p1.Close()
-	imgEnd := card.ImageEnd(imgParts)
-	if imgEnd > j.Size {
-		return Friendly{fmt.Sprintf("This card is too small: VibeSDR needs %.1f GB and the card holds %.1f GB. Nothing on the card has changed.", float64(imgEnd)/1e9, float64(j.Size)/1e9)}
-	}
-	summary, err := prepareBoot(p1, info, dev, tmp)
-	if err != nil {
-		return Friendly{"Stopped before writing: " + err.Error() + ". Your backup is safe and nothing on the card has changed."}
-	}
-	s(1, "Using "+summary)
-	newBoot, err := os.ReadFile(p1.Name())
-	if err != nil {
-		return err
-	}
-	bootPart := imgParts[0]
 
 	// 5. write — the image as published, with its boot partition replaced by the prepared one
 	s = stage("write", pWrite)
-	wroteSum, err := writeImage(dev, j.ImagePath, 0, imgEnd, bootPart.Offset(), newBoot, func(d int64) {
+	wroteSum, err := writeImage(dev, j.ImagePath, 0, imgEnd, bootOff, newBoot, func(d int64) {
 		s(float64(d)/float64(imgEnd), fmt.Sprintf("Writing VibeSDR… %d%%", d*100/imgEnd))
 	})
 	if err != nil {
+		if j.BackupKind == "none" {
+			return Friendly{"Writing the card failed (" + err.Error() + ")."}
+		}
 		return Friendly{"Writing the card failed (" + err.Error() + "). Your backup is safe: " + filepath.Base(j.BackupPath)}
 	}
 	if err := syncTarget(dev); err != nil {
@@ -221,6 +251,26 @@ func Run(j *Job, rep Reporter) (err error) {
 		_ = exec.Command("/usr/sbin/diskutil", "eject", j.Disk).Run()
 	}
 	rep(Event{Stage: "done", Frac: 1, Done: true, Text: "Done — put the card in your R36S and switch it on."})
+	return nil
+}
+
+// backupAndCheck backs the card up (whole, or boot only) and checks the backup reads back to the same bytes.
+func backupAndCheck(j *Job, dev io.ReaderAt, stage func(string, float64) func(float64, string), share, checkShare float64) error {
+	span := j.Size
+	if j.BackupKind == "boot" {
+		span = bootSpan(dev, j.Size)
+	}
+	s := stage("backup", share)
+	rawSum, err := backup(dev, span, j.BackupPath, func(d int64) { s(float64(d)/float64(span), backupText(j.BackupKind, d, span)) })
+	if err != nil {
+		return Friendly{"The backup could not be made (" + err.Error() + "). Nothing on the card has changed."}
+	}
+	s = stage("backupcheck", checkShare)
+	s(0, "Checking the backup…")
+	if got, n, err := gunzipHash(j.BackupPath, func(d int64) { s(float64(d)/float64(span), "Checking the backup…") }); err != nil || got != rawSum || n != span {
+		return Friendly{"The backup did not read back correctly, so the card was not touched. Your card is exactly as it was."}
+	}
+	writeBackupNotes(j, span, rawSum)
 	return nil
 }
 
@@ -502,7 +552,7 @@ func min64(a, b int64) int64 {
 func writeBackupNotes(j *Job, span int64, raw string) {
 	base := filepath.Base(j.BackupPath)
 	os.WriteFile(j.BackupPath+".sha256", []byte(raw+"  "+strings.TrimSuffix(base, ".gz")+"\n"), 0o644)
-	what := "the WHOLE card — every byte. To put your R36S back exactly as it was, write it back to the card (VibeSDR Flasher › Advanced, or: gunzip -c \"" + base + "\" | sudo dd of=/dev/rdiskN bs=4m)."
+	what := "the WHOLE card — every byte. To put your R36S back exactly as it was, write it back to the card (VibeSDR Flasher › Advanced › Put a backup back on a card, or: gunzip -c \"" + base + "\" | sudo dd of=/dev/rdiskN bs=4m)."
 	if j.BackupKind == "boot" {
 		what = "the card's first 16 MB and its boot partition — its drivers. Enough to make another VibeSDR card for this R36S; not enough to restore its old system."
 	}

@@ -17,6 +17,11 @@ type Info struct {
 	Compatible []string
 }
 
+// IsDTB: the flattened device tree magic and a sane header — a .dtb or a .dtbo overlay.
+func IsDTB(b []byte) bool {
+	return len(b) >= 40 && binary.BigEndian.Uint32(b) == magic && int(binary.BigEndian.Uint32(b[4:])) <= len(b)
+}
+
 // Parse reads the root node's model and compatible properties.
 func Parse(b []byte) (Info, error) {
 	var in Info

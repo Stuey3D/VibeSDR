@@ -61,6 +61,12 @@
   dialog { background: var(--panel2); color: var(--text); border: 1px solid var(--gold); border-radius: 16px; padding: 22px 24px; max-width: 520px; }
   dialog::backdrop { background: rgba(0,0,0,.6); }
   dialog h3 { margin: 0 0 10px; color: var(--gold2); }
+  .blist { max-height: 210px; overflow-y: auto; margin: 4px 0 10px; }
+  .blist .big { padding: 11px 16px; margin-bottom: 8px; }
+  .blist .big b { font-size: 14px; }
+  .check { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
+  .check .v { color: var(--ok); } .check .e { color: var(--warn); }
+  .sub { margin: 10px 0 2px 4px; font-size: 12px; color: var(--dim); letter-spacing: .3px; text-transform: uppercase; }
   label.chk { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 13px; color: var(--warn); }
 </style>
 </head>
@@ -75,16 +81,56 @@
     <h2>What would you like to do?</h2>
     <button class="big" id="bMake"><b>Make a VibeSDR card</b><span>Put your R36S's own SD card in, press Start — it backs it up and does the rest.</span></button>
     <button class="big" id="bUpdate"><b>Update a VibeSDR card</b><span>Bring a VibeSDR card up to date. Your settings and recordings stay.</span></button>
-    <button class="big" disabled><span class="soon">Coming soon</span><b>Advanced</b><span>Drivers from a saved backup, generic ROCKNIX drivers or your own .dtb files; blank cards.</span></button>
+    <button class="big" id="bAdv"><b>Advanced</b><span>Drivers from a saved backup, generic ROCKNIX drivers or your own .dtb files; blank cards; put a backup back on a card.</span></button>
     <div class="status" id="imgStatus">Looking for the VibeSDR image…</div>
+  </section>
+
+  <!-- ADVANCED: what to do -->
+  <section class="screen" id="advHome">
+    <h2>Advanced</h2>
+    <p class="lead">For a card without its R36S's original system, a damaged card, or when you know which drivers you want.</p>
+    <button class="big" id="aMake"><b>Make a VibeSDR card — choose the drivers</b><span>From a saved backup or image, the generic ROCKNIX drivers, or your own device tree. Onto any card, blank ones too.</span></button>
+    <button class="big" id="aRestore"><b>Put a backup back on a card</b><span>A whole-card backup made by this app (or any R36S card image) written back — your R36S as it was.</span></button>
+    <div class="row"><button class="btn plain" data-home>Back</button></div>
+  </section>
+
+  <!-- ADVANCED: where the drivers come from -->
+  <section class="screen" id="advSrc">
+    <h2>Where do this R36S's drivers come from?</h2>
+    <p class="lead">The drivers are what differ between R36S boards — the screen, the buttons, the power. Everything else is the same.</p>
+    <button class="big" id="dFile"><b>A saved backup or image</b><span>A backup made by this app, or an image of an R36S card (.img, .img.gz, .img.xz, .iso, .zip). Its drivers are read from it.</span></button>
+    <div id="dFileMore" hidden>
+      <div class="sub">Your backups</div>
+      <div class="blist" id="dBackups"></div>
+      <button class="link" id="dPick">Choose another file…</button>
+    </div>
+    <button class="big" id="dGeneric"><b>Generic ROCKNIX drivers</b><span>The drivers built into VibeSDR (ROCKNIX's, proven on the R36S EE clone). For a card that never had its own, or to try when the R36S's own do not work.</span></button>
+    <button class="big" id="dOwn"><b>Your own device tree</b><span>A .dtb made for ROCKNIX for your board, and optionally its panel overlay (.dtbo).</span></button>
+    <div id="dOwnMore" hidden>
+      <div class="folder">Device tree <code id="dDtb">none chosen</code><button class="link" id="dPickDtb">Choose…</button></div>
+      <div class="folder">Panel overlay <code id="dOv">none (optional)</code><button class="link" id="dPickOv">Choose…</button></div>
+    </div>
+    <div class="check" id="dCheck" hidden></div>
+    <div class="row"><button class="btn plain" id="advSrcBack">Back</button><button class="btn go" id="advSrcNext" disabled>Next</button></div>
+  </section>
+
+  <!-- ADVANCED: the backup to put back -->
+  <section class="screen" id="advRestore">
+    <h2>Which backup should go back on a card?</h2>
+    <p class="lead">It is checked all the way through before anything is written.</p>
+    <div class="sub">Your backups</div>
+    <div class="blist" id="rBackups"></div>
+    <button class="link" id="rPick">Choose another file…</button>
+    <div class="check" id="rCheck" hidden></div>
+    <div class="row"><button class="btn plain" id="advRestoreBack">Back</button><button class="btn go" id="advRestoreNext" disabled>Next</button></div>
   </section>
 
   <!-- 1. THE CARD -->
   <section class="screen" id="pick">
     <h2 id="pickTitle">Insert your R36S's SD card</h2>
-    <p class="lead">Choose it below. Only removable cards are shown — never your Mac's own disks.</p>
+    <p class="lead" id="pickLead">Choose it below. Only removable cards are shown — never your Mac's own disks.</p>
     <div id="diskList"></div>
-    <div class="row"><button class="btn plain" data-home>Back</button><button class="btn go" id="toBackup" disabled>Next</button></div>
+    <div class="row"><button class="btn plain" id="pickBack">Back</button><button class="btn go" id="toBackup" disabled>Next</button></div>
   </section>
 
   <!-- 1b. WHERE VIBESDR GOES (Make only) -->
@@ -102,6 +148,7 @@
     <p class="lead" id="backupLead">Your backup is saved on this Mac before anything on the card is changed.</p>
     <button class="big sel" id="kWhole" data-kind="whole"><b>Whole card (recommended)</b><span>Every byte — you can put your R36S back exactly as it was.</span></button>
     <button class="big" id="kBoot" data-kind="boot"><b>Boot partition only</b><span>Small and quick — enough to make another VibeSDR card, not to restore the old system.</span></button>
+    <button class="big" id="kNone" data-kind="none" hidden><b>Don't back up this card</b><span>For a blank or spare card. Whatever is on it now is lost.</span></button>
     <div class="folder">Backup goes to <code id="folder"></code><button class="link" id="chFolder">Change…</button></div>
     <div class="row"><button class="btn plain" id="backToPick">Back</button><button class="btn go" id="start">Start</button></div>
   </section>
@@ -145,6 +192,8 @@ const $ = (id) => document.getElementById(id);
 const gb = (b) => (b / 1e9).toFixed(1) + ' GB';
 let disks = [], chosen = null, kind = 'whole', folder = '', poll = null, status = null, updating = false;
 let newCard = false, writingNew = false, sourceId = '', sourceGone = false, target = null, swapPoll = null;
+// ★ ADVANCED: adv = '' | 'make' | 'restore'; drivers = what the window chose (checked by the Go side before any card)
+let adv = '', drivers = { kind: '', file: '', dtb: '', overlays: [] }, driversSummary = '', restorePath = '', restoreInfo = null;
 
 function show(id) {
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.id === id));
@@ -162,15 +211,102 @@ async function refreshStatus() {
     : '<span class="e">No VibeSDR image yet: ' + status.imageErr + '</span>';
   $('bMake').disabled = !status.imageOk;
   $('bUpdate').disabled = !status.imageOk;
+  $('aMake').disabled = !status.imageOk;   // ★ putting a backup back needs no VibeSDR image
 }
 window.runtime.EventsOn('status', refreshStatus);
 
 function begin(up) {
   updating = up; chosen = null; $('toBackup').disabled = true;
-  newCard = false; writingNew = false;
+  newCard = false; writingNew = false; adv = '';
   $('pickTitle').textContent = up ? 'Insert your VibeSDR card' : 'Insert the card with your current R36S system on it';
+  $('pickLead').textContent = 'Choose it below. Only removable cards are shown — never your Mac\'s own disks.';
   show('pick');
 }
+$('pickBack').onclick = () => { if (adv === 'make') show('advSrc'); else if (adv === 'restore') show('advRestore'); else { show('home'); refreshStatus(); } };
+
+// ── ADVANCED ──
+$('bAdv').onclick = () => { adv = ''; show('advHome'); };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const baseName = (p) => (p || '').split('/').pop();
+function backupRow(b, sel, onPick) {
+  const el = document.createElement('button');
+  el.className = 'big' + (sel ? ' sel' : '');
+  el.innerHTML = '<b></b><span></span>';
+  el.querySelector('b').textContent = b.name;
+  el.querySelector('span').textContent = (b.kind === 'whole' ? 'Whole card' : 'Boot partition') + (b.bytes ? ' · ' + gb(b.bytes) : '')
+    + (b.written ? ' · before ' + b.written : '');
+  el.onclick = onPick;
+  return el;
+}
+async function listBackups(box, filter, selPath, onPick) {
+  let l = [];
+  try { l = await App().Backups() || []; } catch (e) { l = []; }
+  l = l.filter(filter);
+  box.innerHTML = '';
+  if (!l.length) { box.innerHTML = '<div class="empty">No backups made by this app yet.</div>'; return; }
+  l.forEach((b) => box.appendChild(backupRow(b, b.path === selPath, () => onPick(b.path))));
+}
+function setDrivers(kind) {
+  drivers.kind = kind;
+  ['dFile', 'dGeneric', 'dOwn'].forEach((id) => $(id).classList.toggle('sel', id === { file: 'dFile', generic: 'dGeneric', own: 'dOwn' }[kind]));
+  $('dFileMore').hidden = kind !== 'file'; $('dOwnMore').hidden = kind !== 'own';
+  if (kind === 'file') listBackups($('dBackups'), () => true, drivers.file, (p) => { drivers.file = p; setDrivers('file'); });
+  checkDrivers();
+}
+async function checkDrivers() {
+  const c = $('dCheck'); $('advSrcNext').disabled = true; driversSummary = '';
+  const ready = drivers.kind === 'generic' || (drivers.kind === 'file' && drivers.file) || (drivers.kind === 'own' && drivers.dtb);
+  $('dDtb').textContent = drivers.dtb ? baseName(drivers.dtb) : 'none chosen';
+  $('dOv').textContent = drivers.overlays.length ? drivers.overlays.map(baseName).join(', ') : 'none (optional)';
+  if (!ready) { c.hidden = true; return; }
+  c.hidden = false; c.innerHTML = 'Reading the drivers…';
+  const want = JSON.stringify(drivers);
+  try {
+    const s = await App().CheckDrivers(drivers);
+    if (JSON.stringify(drivers) !== want) return;   // the choice changed while it was read
+    driversSummary = s; c.innerHTML = 'Using <span class="v"></span>'; c.querySelector('.v').textContent = s;
+    $('advSrcNext').disabled = false;
+  } catch (e) {
+    if (JSON.stringify(drivers) !== want) return;
+    c.innerHTML = '<span class="e"></span>'; c.querySelector('.e').textContent = String(e).replace(/^Error: /, '');
+  }
+}
+$('aMake').onclick = () => { adv = 'make'; drivers = { kind: '', file: '', dtb: '', overlays: [] }; setDrivers(''); show('advSrc'); };
+$('dFile').onclick = () => setDrivers('file');
+$('dGeneric').onclick = () => setDrivers('generic');
+$('dOwn').onclick = () => setDrivers('own');
+$('dPick').onclick = async () => { const p = await App().ChooseImageFile('Choose a backup or R36S card image'); if (p) { drivers.file = p; setDrivers('file'); } };
+$('dPickDtb').onclick = async () => { const p = await App().ChooseDTB(); if (p) { drivers.dtb = p; checkDrivers(); } };
+$('dPickOv').onclick = async () => { const l = await App().ChooseOverlays(); if (l && l.length) { drivers.overlays = l; checkDrivers(); } };
+$('advSrcBack').onclick = () => show('advHome');
+function pickFor(title, lead) {
+  updating = false; newCard = false; writingNew = false; chosen = null; $('toBackup').disabled = true;
+  $('pickTitle').textContent = title; $('pickLead').textContent = lead;
+  show('pick');
+}
+$('advSrcNext').onclick = () => pickFor('Insert the card VibeSDR goes on', 'Any removable card — a blank one is fine. Your Mac\'s own disks are never shown.');
+
+$('aRestore').onclick = () => { adv = 'restore'; restorePath = ''; restoreInfo = null; $('rCheck').hidden = true; $('advRestoreNext').disabled = true; listRestore(); show('advRestore'); };
+function listRestore() { listBackups($('rBackups'), () => true, restorePath, choseRestore); }
+async function choseRestore(p) {
+  restorePath = p; restoreInfo = null; listRestore();
+  const c = $('rCheck'); c.hidden = false; c.textContent = 'Reading ' + baseName(p) + '…'; $('advRestoreNext').disabled = true;
+  try {
+    const r = await App().PreviewRestore(p);
+    if (restorePath !== p) return;
+    restoreInfo = r;
+    c.innerHTML = '<span class="v"></span>';
+    c.querySelector('.v').textContent = r.name + ' — ' + (r.whole ? 'a whole card' : 'the start of a card only (its loader and boot partition)')
+      + (r.bytes > 0 ? ', ' + gb(r.bytes) : '') + (r.checked ? '; its checksum is checked as it goes back' : '');
+    $('advRestoreNext').disabled = false;
+  } catch (e) {
+    if (restorePath !== p) return;
+    c.innerHTML = '<span class="e"></span>'; c.querySelector('.e').textContent = String(e).replace(/^Error: /, '');
+  }
+}
+$('rPick').onclick = async () => { const p = await App().ChooseImageFile('Choose the backup to put back'); if (p) choseRestore(p); };
+$('advRestoreBack').onclick = () => show('advHome');
+$('advRestoreNext').onclick = () => pickFor('Insert the card to put the backup on', 'Everything on it is replaced by the backup. Only removable cards are shown.');
 $('bMake').onclick = () => begin(false);
 $('bUpdate').onclick = () => begin(true);
 
@@ -199,30 +335,35 @@ $('wSame').onclick = () => setWhere(false);
 $('wNew').onclick = () => setWhere(true);
 $('whereBack').onclick = () => show('pick');
 $('whereNext').onclick = () => toBackupScreen();
-$('toBackup').onclick = () => { if (updating) toBackupScreen(); else { setWhere(newCard); show('where'); } };
+$('toBackup').onclick = () => { if (updating || adv) toBackupScreen(); else { setWhere(newCard); show('where'); } };
 const toBackupScreen = async () => {
   folder = await App().DefaultBackupDir(chosen.name || chosen.id);
   $('folder').textContent = folder;
   /* ★ UPDATE: no backup choice — the boot partition is always backed up (the system is rewritten; settings and
    *   recordings are never touched, so there is nothing else to save). */
   $('kWhole').hidden = $('kBoot').hidden = updating;
-  $('backupTitle').textContent = updating ? 'Update this VibeSDR card' : 'Back up the card first';
+  $('kNone').hidden = !adv;   // ★ Advanced only: a blank or spare card needs no backup
+  $('backupTitle').textContent = updating ? 'Update this VibeSDR card' : adv ? 'Back this card up first?' : 'Back up the card first';
   $('backupLead').textContent = updating
     ? 'Only the VibeSDR system is replaced. Your settings, bookmarks and recordings stay on the card exactly as they are. The boot partition is backed up to this Mac first.'
+    : adv ? 'If it holds anything you want to keep, back it up to this Mac first. A blank card needs no backup.'
     : 'Your backup is saved on this Mac before anything on the card is changed.';
-  $('start').textContent = updating ? 'Update' : 'Start';
-  setKind(updating ? 'update' : 'whole'); show('backup');
+  $('start').textContent = updating ? 'Update' : adv === 'restore' ? 'Put it back' : 'Start';
+  const blank = !(chosen.volumes && chosen.volumes.length) && /empty|blank|no readable/i.test(chosen.looks || '');
+  setKind(updating ? 'update' : adv && blank ? 'none' : 'whole'); show('backup');
 };
-$('backToPick').onclick = () => show(updating ? 'pick' : 'where');
-function setKind(k) { kind = k; $('kWhole').classList.toggle('sel', k === 'whole'); $('kBoot').classList.toggle('sel', k === 'boot'); }
+$('backToPick').onclick = () => show(updating || adv ? 'pick' : 'where');
+function setKind(k) { kind = k; $('kWhole').classList.toggle('sel', k === 'whole'); $('kBoot').classList.toggle('sel', k === 'boot'); $('kNone').classList.toggle('sel', k === 'none'); }
 $('kWhole').onclick = () => { if (!updating) setKind('whole'); };
 $('kBoot').onclick = () => { if (!updating) setKind('boot'); };
+$('kNone').onclick = () => { if (adv) setKind('none'); };
 $('chFolder').onclick = async () => { folder = await App().ChooseFolder(folder); $('folder').textContent = folder; };
 
 $('start').onclick = () => {
   $('confirmText').innerHTML = '';
   const p = document.createElement('p');
   writingNew = false;
+  if (adv) { advConfirm(); return; }
   $('confirmTitle').textContent = updating ? 'Update this card to VibeSDR ' + status.version + '?'
     : newCard ? 'Back up and read this card?' : 'Replace everything on this card?';
   $('cYes').textContent = updating ? 'Yes — update my card' : newCard ? 'Yes — back up and read it' : 'Yes — make my VibeSDR card';
@@ -252,6 +393,43 @@ $('start').onclick = () => {
   $('largeRow').hidden = !chosen.large; $('largeOk').checked = false;
   $('confirm').showModal();
 };
+// ★ ADVANCED's confirm: what goes on the card, from where, and whether the card is backed up — in red when it is not
+function advConfirm() {
+  const card = '"' + (chosen.name || chosen.id) + '" (' + gb(chosen.size) + ', ' + chosen.device + ')';
+  $('confirmText').innerHTML = '';
+  const p = document.createElement('p');
+  if (adv === 'make') {
+    $('confirmTitle').textContent = 'Write VibeSDR to this card?';
+    $('cYes').textContent = 'Yes — write VibeSDR';
+    p.textContent = 'VibeSDR ' + status.version + ' will be written to ' + card + ', using ' + driversSummary + '. Everything on the card is replaced.';
+  } else {
+    $('confirmTitle').textContent = 'Put this backup back on this card?';
+    $('cYes').textContent = 'Yes — put it back';
+    p.textContent = baseName(restorePath) + ' will be written to ' + card + '. Everything on the card is replaced by the backup. The backup is checked all the way through first.';
+  }
+  $('confirmText').appendChild(p);
+  const b = document.createElement('p');
+  if (kind === 'none') {
+    const notEmpty = (chosen.volumes && chosen.volumes.length) || (chosen.looks && !/empty|blank|no readable/i.test(chosen.looks));
+    b.style.color = notEmpty ? 'var(--bad)' : 'var(--dim)'; if (notEmpty) b.style.fontWeight = '600';
+    b.textContent = notEmpty ? 'This card is not empty' + (chosen.volumes && chosen.volumes.length ? ' — it has ' + chosen.volumes.join(', ') : ' (' + chosen.looks + ')')
+      + '. It is NOT backed up: everything on it will be lost.' : 'This card is not backed up first (you chose not to).';
+  } else {
+    b.textContent = 'First, ' + (kind === 'whole' ? 'the whole card' : 'its boot partition') + ' is backed up to ' + folder + '.';
+  }
+  $('confirmText').appendChild(b);
+  if (/vibesdr/i.test(chosen.looks || '')) {
+    const w = document.createElement('p'); w.style.color = 'var(--bad)'; w.style.fontWeight = '600';
+    w.textContent = 'This is a VibeSDR card: its settings and its VIBESDR drive (recordings, gallery) are replaced'
+      + (kind === 'whole' ? ' — they will be in the whole-card backup.' : '.') + (adv === 'make' ? ' To keep them, use "Update a VibeSDR card" instead.' : '');
+    $('confirmText').appendChild(w);
+  }
+  const q = document.createElement('p'); q.className = 'small';
+  q.textContent = 'Your Mac will ask for your password — writing an SD card needs it.';
+  $('confirmText').appendChild(q);
+  $('largeRow').hidden = !chosen.large; $('largeOk').checked = false;
+  $('confirm').showModal();
+}
 $('cNo').onclick = () => $('confirm').close();
 $('cYes').onclick = async () => {
   if ((writingNew ? target : chosen).large && !$('largeOk').checked) return;
@@ -262,6 +440,8 @@ $('cYes').onclick = async () => {
   // ★★ The flow decides the job, never a leftover choice: Update always sends "update", Make never does.
   const job = updating ? 'update' : (kind === 'boot' ? 'boot' : 'whole');
   try {
+    if (adv === 'make' && !writingNew) { $('workTitle').textContent = 'Making your VibeSDR card'; await App().StartAdvanced(chosen.id, kind, folder, $('largeOk').checked, drivers); return; }
+    if (adv === 'restore' && !writingNew) { $('workTitle').textContent = 'Putting the backup back'; await App().StartRestore(chosen.id, kind, folder, $('largeOk').checked, restorePath); return; }
     if (writingNew) { $('workTitle').textContent = 'Writing VibeSDR to the new card'; await App().WriteToNew(target.id, $('largeOk').checked); }
     else if (newCard && !updating) { $('workTitle').textContent = 'Backing up and reading your card'; await App().StartNew(chosen.id, job, folder, $('largeOk').checked); }
     else await App().Start(chosen.id, job, folder, $('largeOk').checked);

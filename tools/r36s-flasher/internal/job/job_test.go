@@ -1,7 +1,7 @@
 package job
 
 // End-to-end: the whole Simple-mode run against image FILES as the "card" — never a real disk.
-// Needs a real VibeSDR image: VIBE_TEST_IMAGE, else ~/R36S-images/vibesdr-r36s-12.0.0-beta75+handheld72-20261113.img.gz.
+// Needs a real VibeSDR image: VIBE_TEST_IMAGE, else the one ~/R36S-images/LATEST names.
 
 import (
 	"bytes"
@@ -26,8 +26,10 @@ import (
 func testImage(t *testing.T) (string, string) {
 	p := os.Getenv("VIBE_TEST_IMAGE")
 	if p == "" {
+		// ★ the newest image built (~/R36S-images/LATEST names it) — a fixed name went stale with every release
 		h, _ := os.UserHomeDir()
-		p = filepath.Join(h, "R36S-images", "vibesdr-r36s-12.0.0-beta75+handheld72-20261113.img.gz")
+		v, _ := os.ReadFile(filepath.Join(h, "R36S-images", "LATEST"))
+		p = filepath.Join(h, "R36S-images", "vibesdr-r36s-"+strings.TrimSpace(string(v))+".img.gz")
 	}
 	b, err := os.ReadFile(p + ".sha256")
 	if err != nil {

@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/klauspost/pgzip v1.3.0
+	github.com/ulikunitz/xz v0.5.15
 	github.com/wailsapp/wails/v2 v2.17.1
 	golang.org/x/sys v0.48.0
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9
