@@ -887,6 +887,14 @@ void hDevicePost(Req& r) {
         const hhjson::Value* x = v.get("value");
         if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
         line = std::string("{\"set\":\"boost\",\"value\":") + (x->n != 0 ? "1" : "0") + "}";
+    } else if (action == "calibrate") {
+        // ★★ battery calibration (vibe-hwd BatteryCal): NORMAL = use the radio until it switches itself off at a safe
+        //    empty; STRESS = the fastest way there (full backlight, every core busy). The service refuses unless Full.
+        const std::string mode = v.str("mode");
+        if (mode != "normal" && mode != "stress") { json(r.fd, errJson("mode must be normal or stress"), 400); return; }
+        line = "{\"action\":\"calibrate\",\"mode\":\"" + mode + "\"}";
+    } else if (action == "calibrate-cancel") {
+        line = "{\"action\":\"calibrate-cancel\"}";
     } else if (action == "poweroff" || action == "reboot" || action == "screen-off" || action == "screen-on") {
         if (action == "poweroff" || action == "reboot") saveAllMemory(action.c_str());
         line = "{\"action\":\"" + action + "\"}";

@@ -1,7 +1,7 @@
 // sec_hardware.h — MENU → R36S HARDWARE (handheld.ts buildHandheldMenu, inventory §4c.2) (one of the menu's parts; see
 // app.h for the App's state and helpers, ui.h for the widgets).
 //
-// Rows, in the web's order: VOLUME · BATTERY · CLOCK · NUDGE · SET UTC · SET CLOCK FROM <station> / ALIGN TO FT8 (only
+// Rows, in the web's order: VOLUME · BATTERY (+ the live block and CALIBRATE, R36S only) · CLOCK · NUDGE · SET UTC · SET CLOCK FROM <station> / ALIGN TO FT8 (only
 // with fresh evidence) · the note · LOCATION · SET LOCATION · CARD · FILES ·
 // POWER. ★ BRIGHTNESS is DISPLAY's first row, as on the web page (sec_display.h).
 // Left out: TOUR / VIEW TUTORIAL (no native
@@ -45,6 +45,51 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
             if (!charging_ && mins >= 0) t += " · about " + std::to_string(mins / 60) + " h " + std::to_string(mins % 60) + " min left";
         } else if (!ok) t = "the hardware service is not running";
         c.tc.draw(c.g, c.f.body, t, a.r() - 6, y0 + valY, th::dim, 2);
+    }
+    // ★★★ THE BATTERY BLOCK (Stuart, 2026-11-15): what the battery is doing NOW, once a second — measured on battery;
+    //     on the charger the unit's own use and the charger's current are worked out (≈, battery_math.h) — and the
+    //     CALIBRATION beside it: this cell's real capacity, measured on a discharge from Full (vibe-hwd BatteryCal).
+    {
+        static double lastPoll = 0;
+        if (nowSec() - lastPoll >= 1.0) { lastPoll = nowSec(); if (port) hwRefreshDevice(port); }
+        BattLive b; BattCal k; bool busy;
+        { std::lock_guard<std::mutex> lk(sh.m); b = sh.bat; k = sh.cal; busy = sh.calBusy; }
+        for (auto& l : battLiveLines(b)) { c.tc.draw(c.g, c.f.small, l, a.x + 6, y - 6, th::white68); y += c.f.small.lineHeight(); }
+        y += 4;
+        for (auto& l : battCalResultLines(k, b.fullMah)) { c.tc.draw(c.g, c.f.small, l, a.x + 6, y - 6, k.hasResult ? th::green : th::dim); y += c.f.small.lineHeight(); }
+        const std::string ph = battCalPhaseLine(k);
+        std::string say = !ph.empty() ? ph : k.note;   // (the last run's note: "calibration cancelled — …", "… failed …")
+        if (!say.empty()) say[0] = (char)std::toupper((unsigned char)say[0]);
+        if (!say.empty()) for (auto& l : c.tc.wrap(c.f.small, say, (int)a.w - 12)) { c.tc.draw(c.g, c.f.small, l, a.x + 6, y - 6, th::amber); y += c.f.small.lineHeight(); }
+        y += 8;
+        // CALIBRATE — NORMAL · STRESS (press twice: a stray press must not start a run that ends in a power-off);
+        // while waiting for the unplug, CANCEL. Running: no key — charging before empty is what cancels it.
+        y0 = y;
+        y = menuRow(c, a, y, "CALIBRATE", k.phase == "idle"
+            ? "Measures this battery's real capacity. Charge to Full, press NORMAL (use the radio until it switches itself "
+              "off) or STRESS (the fastest: full brightness, every core busy, a screen of its own — hold POWER to stop it), "
+              "then unplug. A power-off part-way does not spoil it."
+            : "");
+        static double armedN = 0, armedS = 0;
+        const double t = nowSec();
+        const float x0 = a.x + 150, gap = 8, bw = (a.r() - 6 - x0 - gap) / 2;
+        BtnStyle st; st.font = &c.f.body; st.radius = 7;
+        if (k.phase == "idle") {
+            st.disabled = busy;
+            st.on = t - armedN < 3;
+            if (hwRowButton(c, "hw.calN", {a.x, y0, a.w, 44}, {x0, y0 + 3, bw, 38}, st.on ? "PRESS AGAIN" : "NORMAL", st)) {
+                if (st.on) { armedN = 0; hwCalibrate(port, "normal"); } else { armedN = t; armedS = 0; toast("Press again to calibrate as you use it"); }
+            }
+            st.on = t - armedS < 3;
+            if (button(c, "hw.calS", {x0 + bw + gap, y0 + 3, bw, 38}, st.on ? "PRESS AGAIN" : "STRESS (FASTEST)", st)) {
+                if (st.on) { armedS = 0; hwCalibrate(port, "stress"); } else { armedS = t; armedN = 0; toast("Press again for the fast calibration"); }
+            }
+        } else if (k.phase == "running") {
+            c.tc.draw(c.g, c.f.body, k.mode == "stress" ? "under way (fast)" : "under way", a.r() - 6, y0 + valY, th::amber, 2);
+        } else if (k.phase == "armed") {
+            st.disabled = busy;
+            if (hwRowButton(c, "hw.calX", {a.x, y0, a.w, 44}, {x0, y0 + 3, bw, 38}, "CANCEL", st)) hwCalibrate(port, "");
+        }
     }
     // CLOCK (UTC — the device's clock, a tenth of a second)
     y0 = y;

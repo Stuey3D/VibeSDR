@@ -301,6 +301,9 @@ inline void memTick(App&, const RadioState&);
 inline void decTick(App&, const RadioState&);
 inline void decDrawBox(App&, Ctx&, const RadioState&);
 inline void decDrawFull(App&, Ctx&, const RadioState&);   // the picture / gallery full screen (dec_pic_box.h)
+// the STRESS battery calibration's own screen (battery_cal.h), drawn in place of the radio while it runs
+inline bool calScreenUp();
+inline void calDrawScreen(App&, Ctx&);
 inline void decModeEntries(const RadioState&, std::vector<ModeDef>&);
 inline bool decModeLit(const std::string&);
 inline bool decRunning();   // a decoder (or Spots) is on (dec_state.h) — App::tuneTyped keeps its mode
@@ -344,6 +347,7 @@ namespace hh { inline bool decSkimSegment(int& lo, int& hi); }
 #include "sec_audio.h"
 #include "sec_display.h"
 #include "sec_hardware.h"
+#include "battery_cal.h"
 #include "sec_sdr.h"
 #include "sec_controller.h"
 #include "bm_page.h"

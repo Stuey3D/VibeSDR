@@ -5,8 +5,8 @@
 #     line per request, in order; after {"subscribe":true} the same connection also carries event lines (they have an
 #     "event" key, replies never do). The engine relays "This device" to the page; the page never talks to us.
 # ★★ WHAT IT OWNS: the backlight, ALSA master volume + the speaker/headphone mux, the volume and power buttons, the
-#    battery (warning at 10 %, clean shutdown at 3 %), the clock (set + kept across power-offs with no trusted RTC),
-#    and nothing else: there is NO SSH on the handheld — {"get":"ssh"} / {"set":"ssh"…} answer "not supported".
+#    battery (warning at 10 %, clean shutdown at 3 %; its live V / A / W and the CALIBRATION — BatteryCal), the charge
+#    port's input limit (ChargerWatch), the clock (set + kept across power-offs with no trusted RTC), and nothing else: there is NO SSH on the handheld — {"get":"ssh"} / {"set":"ssh"…} answer "not supported".
 # ★★ STDLIB ONLY (python3 -I): evdev, ALSA and the RTC are reached through ioctls and amixer, so nothing on the card
 #    can shadow a module and nothing extra has to be installed.
 # ★ Env (for tests): VIBE_HWD_SOCK, VIBE_STATE_DIR, VIBE_HWD_DRYRUN=1 (log poweroff/reboot instead of doing them),
@@ -22,6 +22,7 @@ BL = SYS + "/class/backlight/backlight"
 BAT = SYS + "/class/power_supply/battery"
 CHG = SYS + "/class/power_supply/rk817-charger"
 HWD_JSON = os.path.join(STATE_DIR, "hwd.json")
+CPUFREQ = SYS + "/devices/system/cpu/cpufreq"
 CLOCK = "/usr/lib/vibesdr-r36s/vibe-clock"
 SPLASH = "/usr/lib/vibesdr-r36s/vibe-splash"
 
@@ -174,6 +175,288 @@ def _f(v, unit, signed=False):
     return "?" if v is None else (("%+.3f" if signed else "%.3f") % v) + unit
 
 
+# ── the battery's live figures + calibration ──────────────────────────────────────────────────────────────────────────
+CAL_JSON = os.path.join(STATE_DIR, "battery-cal.json")
+THERMAL = SYS + "/class/thermal/thermal_zone0/temp"
+CAL_EMPTY_V = 3.50            # ★ a safe empty: the battery UNDER LOAD at or below this …
+CAL_EMPTY_HOLD_S = 8.0        #   … for this long without a reading above it (one dip is a load step, not empty)
+USE_TAU_S = 60.0              # the "unit using" figure: discharge power smoothed over about a minute
+STRESS_MAX_KHZ = 1296000      # ★★ the image's own ceiling (vibe-cpu.service) — NEVER the 1416 / 1512 overclock OPPs
+STRESS_BURNERS = 4            # one per core
+STRESS_HOT_C, STRESS_HOTTER_C, STRESS_COOL_C = 75.0, 80.0, 70.0
+
+def rd_num(path, scale=1e6):
+    """A sysfs µ-unit figure scaled (µV → V by default); None when missing or not a number."""
+    v = rd(path)
+    try:
+        return int(v) / scale
+    except (TypeError, ValueError):
+        return None
+
+def cal_pct(q_now_uah, result):
+    """★ THE % ON THE MEASURED CAPACITY: where the counter is between this unit's own empty and full, as calibrated —
+    (now − the counter at empty) / the measured capacity. None when not calibrated or the counter cannot be read."""
+    if not result or q_now_uah is None:
+        return None
+    try:
+        span = float(result["mah"]) * 1000.0
+        q_empty = float(result["qEmpty"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if span <= 0:
+        return None
+    return int(max(0, min(100, round((q_now_uah - q_empty) * 100.0 / span))))
+
+def cal_plausible(mah, design_mah):
+    """A measured capacity worth keeping: 30 … 150 % of what the gauge assumes (or ≥ 200 mAh when it says nothing)."""
+    if mah is None or mah <= 0:
+        return False
+    if not design_mah:
+        return mah >= 200
+    return 0.3 * design_mah <= mah <= 1.5 * design_mah
+
+class EmptyDetector:
+    """CAL_EMPTY_V or under, held CAL_EMPTY_HOLD_S with no reading above it (a reading of None changes nothing)."""
+    def __init__(self, volts=CAL_EMPTY_V, hold_s=CAL_EMPTY_HOLD_S):
+        self.volts, self.hold_s, self.since = volts, hold_s, None
+    def feed(self, t, v):
+        if v is None:
+            return False
+        if v > self.volts:
+            self.since = None
+            return False
+        if self.since is None:
+            self.since = t
+        return t - self.since >= self.hold_s
+
+class UseSmoother:
+    """★ WHAT THE UNIT ITSELF USES. The rk817 driver reports no input current and no system draw, so on the charger
+    the console's own use is not measured at all. The best figure is the last one measured: the battery's discharge
+    power, smoothed (exponential, USE_TAU_S), kept from before the cord went in. Fed only while on battery."""
+    def __init__(self, tau=USE_TAU_S):
+        self.tau, self.w, self.t = tau, None, None
+    def feed(self, t, watts):
+        if watts is None or watts <= 0:
+            return self.w
+        if self.w is None or self.t is None:
+            self.w = watts
+        else:
+            k = 1.0 - math.exp(-max(0.0, t - self.t) / self.tau)
+            self.w += (watts - self.w) * k
+        self.t = t
+        return self.w
+
+def live_power(online, status, bat_v, bat_a, port_v, use_w, charge_now_uah, full_uah):
+    """The figures the Battery block shows (rounded for the wire). bat_a is a magnitude; `dir` says which way."""
+    discharging = not online or status == "Discharging"
+    r = lambda x, n: None if x is None else round(x, n)
+    return {"online": online, "status": status, "batV": r(bat_v, 3), "batA": r(None if bat_a is None else abs(bat_a), 3),
+            "batW": r(None if bat_a is None or bat_v is None else abs(bat_a) * bat_v, 2),
+            "dir": "discharge" if discharging else "charge", "portV": r(port_v, 3) if online else None,
+            "useW": r(use_w, 2), "chargeMah": None if charge_now_uah is None else int(charge_now_uah // 1000),
+            "fullMah": None if full_uah is None else int(full_uah // 1000)}
+
+
+class BatteryCal:
+    """★★★ BATTERY CALIBRATION (Stuart, 2026-11-15): the rk817 gauge assumes a full-charge capacity (boot log "fcc 2808
+    mAh") bigger than this owner's cell — it reads ~93 % at a true full. Every unit differs, so nothing is hard-coded:
+    the DISCHARGE leg is measured. It starts only on Full (else "charge to Full first"); the owner unplugs; the PMIC's
+    coulomb counter (charge_now) is read at Full and again at a SAFE empty (CAL_EMPTY_V under load, held — EmptyDetector);
+    the difference is this cell's capacity. Then a CLEAN shutdown (never the hard cut-off).
+    ★★ The PMIC's counter keeps counting while the console is off, so a power-off mid-way does not spoil it: the state
+       is on the state partition (CAL_JSON) and the next boot carries on — in NORMAL mode always (a STRESS run is ended
+       by holding POWER; the next boot is the ordinary radio). Only CHARGING before empty cancels it.
+    Phases: idle → armed (on Full, the cord still in; the counter at Full kept fresh) → running (unplugged) → idle."""
+    def __init__(self, path=CAL_JSON):
+        self.path = path
+        self.phase, self.mode, self.q0, self.started, self.note, self.result = "idle", "normal", None, None, "", None
+        self.empty = EmptyDetector()
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            self.phase = d.get("phase", "idle") if d.get("phase") in ("idle", "armed", "running") else "idle"
+            self.q0, self.started, self.note = d.get("q0"), d.get("started"), d.get("note", "")
+            self.result = d.get("result") if isinstance(d.get("result"), dict) else None
+            if self.phase != "idle":
+                # ★ a boot in the middle: carry on, as an ordinary radio (a stress run never resumes)
+                self.mode = "normal"
+                log("battery calibration: resumed after a restart (%s, counter at Full %s µAh) — normal mode" % (self.phase, self.q0))
+        except (OSError, ValueError):
+            pass
+
+    def save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            atomic_write(self.path, json.dumps({"phase": self.phase, "mode": self.mode, "q0": self.q0,
+                                                "started": self.started, "note": self.note, "result": self.result}))
+        except OSError as e:
+            log("battery calibration: could not save", self.path, e)
+
+    def start(self, mode, online, status, q_now):
+        if mode not in ("normal", "stress"):
+            raise ValueError("mode must be normal or stress")
+        if self.phase != "idle":
+            raise ValueError("a calibration is already under way")
+        if not (online and status == "Full"):
+            raise ValueError("charge to Full first")
+        if q_now is None:
+            raise ValueError("this battery has no charge counter to read")
+        self.phase, self.mode, self.q0, self.started, self.note = "armed", mode, q_now, time.time(), ""
+        self.empty = EmptyDetector()
+        self.save()
+        log("battery calibration: armed (%s) — counter at Full %d µAh; unplug to start" % (mode, q_now))
+
+    def cancel(self, note):
+        if self.phase == "idle":
+            return False
+        log("battery calibration:", note)
+        self.phase, self.note, self.q0 = "idle", note, None
+        self.save()
+        return True
+
+    def step(self, t, online, status, bat_v, q_now, design_uah):
+        """Once a second. Returns None, ("running",), ("cancelled", note) or ("done", result-or-None, note)."""
+        if self.phase == "armed":
+            if online:
+                if status == "Full" and q_now is not None:
+                    self.q0 = q_now                        # ★ the counter at Full, as of the moment the cord comes out
+                return None
+            self.phase = "running"
+            self.save()
+            log("battery calibration: unplugged — counting from %s µAh down to %.2f V" % (self.q0, CAL_EMPTY_V))
+            return ("running",)
+        if self.phase != "running":
+            return None
+        if online:
+            n = "calibration cancelled — it was charged before empty"
+            self.cancel(n)
+            return ("cancelled", n)
+        if self.empty.feed(t, bat_v):
+            return self.finish(q_now, design_uah, "%.2f V held %.0f s" % (bat_v, CAL_EMPTY_HOLD_S))
+        return None
+
+    def finish(self, q_now, design_uah, why):
+        """The empty point: the capacity is the counter's fall since Full."""
+        if self.phase != "running":
+            return None
+        mah = None if q_now is None or self.q0 is None else (self.q0 - q_now) / 1000.0
+        design = None if not design_uah else design_uah / 1000.0
+        if cal_plausible(mah, design):
+            self.result = {"mah": int(round(mah)), "design": None if design is None else int(round(design)),
+                           "qEmpty": q_now, "qFull": self.q0, "utc": int(time.time())}
+            self.note = ""
+            log("battery calibration: empty (%s) — measured %d mAh (the gauge assumes %s)" % (why, self.result["mah"], self.result["design"]))
+        else:
+            self.note = "calibration failed — the charge counter read %s mAh" % ("?" if mah is None else int(round(mah)))
+            log("battery calibration:", self.note, "(%s)" % why)
+        self.phase, self.q0 = "idle", None
+        self.save()
+        return ("done", self.result if not self.note else None, self.note)
+
+    def wire(self, q_now):
+        """The calibration's part of {"get":"state"}."""
+        counted = None if self.phase != "running" or self.q0 is None or q_now is None else int((self.q0 - q_now) // 1000)
+        return {"phase": self.phase, "mode": self.mode, "countedMah": counted, "note": self.note, "result": self.result}
+
+
+class Stress:
+    """★★ STRESS calibration's load (the FAST way to empty): the backlight at full, the CPU on `performance` at the
+    image's own ceiling (STRESS_MAX_KHZ — never the overclock steps), a busy loop per core (nice 10, killed with us),
+    the speaker muted — none of it saved, all of it put back by stop() (and by any restart: hwd.json is untouched).
+    ★ Thermal: over STRESS_HOT_C two burners pause, over STRESS_HOTTER_C all four; under STRESS_COOL_C they run again.
+    ★ No GPU load: any clock step off the 300 MHz pin has reset this board's GPU (BOOST_TARGETS' notes), and a
+      synthetic GL load means a second display client — not cheap, not safe. The radio is left running as it is."""
+    def __init__(self, hwd, spawn=None):
+        self.hwd, self.procs, self.running, self.gov = hwd, [], 0, {}
+        self._spawn = spawn or self._spawn_burner
+
+    @staticmethod
+    def _spawn_burner():
+        def child():
+            try:   # ★ PR_SET_PDEATHSIG: if vibe-hwd dies, so does the load
+                ctypes.CDLL(None).prctl(1, signal.SIGKILL)
+            except Exception:
+                pass
+        return subprocess.Popen(["nice", "-n", "10", "sh", "-c", "while :; do :; done"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=child)
+
+    @property
+    def on(self):
+        return bool(self.procs)
+
+    def start(self):
+        if self.procs:
+            return
+        h = self.hwd
+        try:
+            wr(BL + "/bl_power", 0)
+            wr(BL + "/brightness", h.max_brightness)
+        except OSError as e:
+            log("stress: backlight:", e)
+        for p in glob.glob(CPUFREQ + "/policy*"):
+            self.gov[p] = rd(p + "/scaling_governor")
+            avail = sorted(int(f) for f in rd(p + "/scaling_available_frequencies", "").split() if f.isdigit())
+            top = max([f for f in avail if f <= STRESS_MAX_KHZ] or avail[:1] or [0])
+            try:
+                if top:
+                    wr(p + "/scaling_max_freq", top)
+                wr(p + "/scaling_governor", "performance")
+            except OSError as e:
+                log("stress: cpufreq:", e)
+        amixer("cset", "name=Master Playback Volume", "0,0")
+        try:
+            self.procs = [self._spawn() for _ in range(STRESS_BURNERS)]
+        except OSError as e:
+            log("stress: load not started:", e)
+        self.running = len(self.procs)
+        log("stress: on — backlight %d, CPU performance ≤ %d MHz, %d busy loops, speaker muted" %
+            (h.max_brightness, STRESS_MAX_KHZ // 1000, len(self.procs)))
+
+    def thermal(self):
+        """Once a second while on: pause / resume burners by the SoC temperature."""
+        if not self.procs:
+            return
+        t = rd_num(THERMAL, 1000.0)
+        if t is None:
+            return
+        want = 0 if t >= STRESS_HOTTER_C else STRESS_BURNERS // 2 if t >= STRESS_HOT_C else \
+            len(self.procs) if t < STRESS_COOL_C else self.running
+        want = min(want, len(self.procs))
+        if want != self.running:
+            for i, pr in enumerate(self.procs):
+                try:
+                    os.kill(pr.pid, signal.SIGCONT if i < want else signal.SIGSTOP)
+                except OSError:
+                    pass
+            log("stress: %.1f °C — %d of %d busy loops running" % (t, want, len(self.procs)))
+            self.running = want
+
+    def stop(self):
+        if not self.procs and not self.gov:
+            return
+        for pr in self.procs:
+            try:
+                os.kill(pr.pid, signal.SIGCONT)
+                pr.kill()
+                pr.wait(timeout=2)
+            except Exception:
+                pass
+        self.procs, self.running = [], 0
+        for p, g in self.gov.items():
+            if g:
+                try:
+                    wr(p + "/scaling_governor", g)
+                except OSError as e:
+                    log("stress: governor back:", e)
+        self.gov = {}
+        h = self.hwd
+        h.apply_cpu()
+        if h.screen == "on":
+            h.apply_brightness()
+        h.apply_volume()
+        log("stress: off — clocks, backlight and volume back")
+
+
 class ChargerWatch:
     """★★★ THE CHARGE PORT, WATCHED CLOSELY (Stuart, 2026-11-15 log): vibe-hwd took up to 58 s to notice a plug-in (a
     1 s look, and a 30 s back-off after any PMIC error), the SDR dropped off USB at the very moment of plug-in, and the
@@ -316,6 +599,11 @@ class Hwd:
         self.power_task = None
         self.save_task = None
         self.readers = {}             # path → task
+        self.cal = BatteryCal()       # ★ battery calibration (BatteryCal) — resumes a run a power-off interrupted
+        self.stress = Stress(self)
+        self.use = UseSmoother()
+        self.power = {}               # the live figures (power_tick, once a second)
+        self.q_now = self.full_uah = None
 
     # ── persistence ──
     def save_soon(self):
@@ -411,7 +699,9 @@ class Hwd:
         if self.screen == "on":
             try:
                 wr(BL + "/bl_power", 0)
-                wr(BL + "/brightness", self.cfg["brightness"])
+                # ★ a STRESS calibration holds the backlight at full (Stress) — a screen woken mid-run stays at full
+                st = getattr(self, "stress", None)
+                wr(BL + "/brightness", self.max_brightness if st and st.on else self.cfg["brightness"])
             except OSError as e:
                 log("backlight:", e)
 
@@ -486,6 +776,12 @@ class Hwd:
         status = rd(BAT + "/status", "Unknown")
         online = rd(CHG + "/online", "0") == "1"
         raw = int(pct) if pct and pct.lstrip("-").isdigit() else None
+        # ★★ CALIBRATED: the % on this unit's MEASURED capacity (BatteryCal), not the gauge's assumed one — the meter,
+        #    the 10 % warning, the 3 % floor and the engine's time-left (its slope of this %) all follow it
+        cal = getattr(self, "cal", None)
+        cp = cal_pct(rd_num(BAT + "/charge_now", 1), cal.result) if cal else None
+        if cp is not None:
+            raw = 100 if status == "Full" else cp
         # ★★ CHARGING = THE CORD IS IN (Stuart 2026-11-14: "the battery meter seems a bit erratic when charging"). The
         #    battery's own status flips Charging / Not charging / Discharging while the console + radio share the 2 A port
         #    with it (the charge current falls to ~0 and back), so the bolt came and went; the charger's `online` is the
@@ -556,12 +852,71 @@ class Hwd:
                 # ★ two readings in a row at or under 3 % — one glitchy fuel-gauge sample must not switch the radio off.
                 self.empty_count = self.empty_count + 1 if pct <= EMPTY_PCT else 0
                 if self.empty_count >= 2:
+                    # ★ a calibration reaching the floor before its own empty point: that IS its empty point
+                    if self.cal.phase == "running":
+                        self.cal_event(self.cal.finish(rd_num(BAT + "/charge_now", 1), self.full_uah, "the %d %% floor" % EMPTY_PCT))
                     await self.shutdown("battery", "poweroff")
             else:
                 self.empty_count = 0
                 if pct is not None and pct > LOW_PCT + 2:
                     self.low_warned = False
             await asyncio.sleep(20 if (pct or 100) > 15 else 5)
+
+    # ── the live figures + calibration (once a second) ──
+    def power_tick(self, t):
+        online = rd(CHG + "/online", "0") == "1"
+        status = rd(BAT + "/status", "Unknown")
+        bat_v = rd_num(BAT + "/voltage_avg")
+        if bat_v is None:
+            bat_v = rd_num(BAT + "/voltage_now")
+        bat_a = rd_num(BAT + "/current_avg")
+        if bat_a is None:
+            bat_a = rd_num(BAT + "/current_now")
+        port_v = rd_num(CHG + "/voltage_avg")
+        q = rd_num(BAT + "/charge_now", 1)
+        full = rd_num(BAT + "/charge_full", 1) or rd_num(BAT + "/charge_full_design", 1)
+        if not online and bat_v is not None and bat_a is not None:
+            self.use.feed(t, abs(bat_a) * bat_v)
+        self.q_now, self.full_uah = q, full
+        self.power = live_power(online, status, bat_v, bat_a, port_v, self.use.w, q, full)
+        self.cal_event(self.cal.step(t, online, status, bat_v, q, full))
+        self.stress.thermal()
+
+    def cal_event(self, ev):
+        """What a calibration step decided: the load on / off, an event for the UI, the clean power-off at empty."""
+        if not ev:
+            return
+        if ev[0] == "running":
+            if self.cal.mode == "stress":
+                self.stress.start()
+            self.emit({"event": "battery_cal", "phase": "running", "mode": self.cal.mode})
+        elif ev[0] == "cancelled":
+            self.stress.stop()
+            self.emit({"event": "battery_cal", "phase": "cancelled", "note": ev[1]})
+        elif ev[0] == "done":
+            self.stress.stop()
+            res, note = ev[1], ev[2]
+            self.emit({"event": "battery_cal", "phase": "done", "mah": res["mah"] if res else None, "note": note})
+            if not self.shutting_down:
+                asyncio.get_running_loop().create_task(self.shutdown("battery-cal", "poweroff"))
+
+    def cal_start(self, mode):
+        online = rd(CHG + "/online", "0") == "1"
+        self.cal.start(mode, online, rd(BAT + "/status", "Unknown"), rd_num(BAT + "/charge_now", 1))
+        self.emit({"event": "battery_cal", "phase": "armed", "mode": mode})
+
+    def cal_cancel(self):
+        if self.cal.cancel("calibration cancelled"):
+            self.stress.stop()
+            self.emit({"event": "battery_cal", "phase": "cancelled", "note": "calibration cancelled"})
+
+    async def power_loop(self):
+        while True:
+            try:
+                self.power_tick(time.monotonic())
+            except Exception as e:          # ★ a sysfs oddity must never stop the clean shutdown at empty
+                log("power:", type(e).__name__, e)
+            await asyncio.sleep(1)
 
     # ── shutdown ──
     async def shutdown(self, reason, how):
@@ -571,6 +926,7 @@ class Hwd:
             return
         self.shutting_down = True
         log("shutdown:", reason, how)
+        self.stress.stop()
         self.acks.clear()
         waiting = set(self.subscribers)
         self.emit({"event": "shutdown", "reason": reason, "inSec": int(ACK_WAIT_S)})
@@ -583,6 +939,7 @@ class Hwd:
         if self.screen == "off":
             self.set_screen(True)
         msg = {"battery": "Battery empty — switching off", "power-button": "Switching off",
+               "battery-cal": "Battery calibrated — switching off",
                "request": "Restarting" if how == "reboot" else "Switching off"}[reason]
         if DRYRUN:
             log("DRYRUN: would stop the kiosk, show '%s' and systemctl %s" % (msg, how))
@@ -622,7 +979,8 @@ class Hwd:
         b = self.battery if self.battery["pct"] is not None else self.read_battery()
         return {"ok": True, "brightness": self.cfg["brightness"], "maxBrightness": self.max_brightness,
                 "volume": self.cfg["volume"], "muted": self.cfg["volume"] == 0, "output": self.output,
-                "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen}
+                "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen,
+                "power": self.power, "calib": self.cal.wire(self.q_now)}
 
     async def handle(self, req, writer):
         if not isinstance(req, dict):
@@ -651,8 +1009,14 @@ class Hwd:
             self.set_time(req.get("utcMs"))
         elif a in ("poweroff", "reboot"):
             asyncio.get_running_loop().create_task(self.shutdown("request", a))
+        elif a == "calibrate":
+            self.cal_start(req.get("mode"))
+        elif a == "calibrate-cancel":
+            self.cal_cancel()
         elif a == "screen-off":
-            self.set_screen(False)
+            # ★ not while a STRESS calibration runs: the lit backlight is part of the load (the power button still can)
+            if not self.stress.on:
+                self.set_screen(False)
         elif a == "screen-on":
             self.set_screen(True)
         else:
@@ -800,7 +1164,8 @@ class Hwd:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, server.close)
         log("ready on", SOCK)
-        tasks = [loop.create_task(t) for t in (self.input_loop(), self.battery_loop(), self.charger_loop(), self.clock_loop())]
+        tasks = [loop.create_task(t) for t in (self.input_loop(), self.battery_loop(), self.charger_loop(), self.clock_loop(),
+                                                    self.power_loop())]
         try:
             await server.serve_forever()
         except asyncio.CancelledError:
@@ -808,6 +1173,7 @@ class Hwd:
         finally:
             for t in tasks:
                 t.cancel()
+            self.stress.stop()
             if self.save_task and not self.save_task.done():
                 atomic_write(HWD_JSON, json.dumps(self.cfg))
 

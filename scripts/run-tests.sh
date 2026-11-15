@@ -868,6 +868,13 @@ if bash handheld-ui/test/run_dab_quality_test.sh; then pass=$((pass+1)); else fa
 # ★★ V12 The R36S's port of the tuned station's label (handheld-ui/src/tuned_label.h) replays tunedStation.ts's own
 #    outputs, line for line (Docker arm64 when the image is there, else the host compiler).
 if sh handheld-ui/test/run_tuned_label.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE R36S BATTERY BLOCK + CALIBRATION (2026-11-15): the live lines and the ≈ figures (battery_math.h), vibe-hwd's
+#    calibration (Full → a safe empty, resumed over a power-off, cancelled by charging, the stress load) and its
+#    charge-port watch (the 2 A limit at the plug edge, the 5 s trace) — fake sysfs, no device.
+if bash handheld-ui/test/run_battery_math_test.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+for t in battery-smooth-test battery-cal-test charger-watch-test; do
+  if python3 image/r36s/test/$t.py > /dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED: image/r36s/test/$t.py"; fi
+done
 # ★★★ THE DRM RECEPTION METER (V12, 2026-11-12): DAB's meter for DRM — the decoder's own SNR in the box (Stuart: 17–20 dB
 #     decoded on a signal the meter read as 42 dB), the verdict on the programme's MER against its QAM and the audio frames.
 if node --no-warnings scripts/test_drm_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

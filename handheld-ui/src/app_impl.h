@@ -1254,6 +1254,13 @@ inline int App::run(int argc, char** argv) {
                 std::fprintf(stderr, "vibe-hhui: screen %s (the hardware service's event)\n", screenOff_ ? "off" : "on");
             }
             else if (de.kind == "shutdown") toast("Switching off");
+            else if (de.kind == "battery_cal") {   // ★ the battery calibration's milestones (vibe-hwd BatteryCal)
+                const std::string ph = de.body["phase"].str(), note = de.body["note"].str();
+                if (ph == "running") toast(de.body["mode"].str() == "stress" ? "Calibrating fast — hold POWER to stop" : "Calibrating — use the radio until it switches itself off");
+                else if (ph == "cancelled") toast(note.empty() ? std::string("Calibration cancelled") : (char)std::toupper((unsigned char)note[0]) + note.substr(1));
+                else if (ph == "done") toast(de.body["mah"].kind == Json::Num ? "Battery measured: " + std::to_string((int)de.body["mah"].n) + " mAh — switching off" : note);
+                hwRefreshDevice(eng.port());
+            }
         }
         const RadioState& s = eng.state();
         audioTick(*this, s);
@@ -1405,7 +1412,9 @@ inline int App::run(int argc, char** argv) {
         Ctx c{g_, tc_, f_, nav_, t};
 
         nav_.layer("deck");
-        if (mapCoversScreen(*this)) {
+        if (calScreenUp()) {
+            calDrawScreen(*this, c);   // ★ a STRESS battery calibration: its own page, no waterfall (battery_cal.h)
+        } else if (mapCoversScreen(*this)) {
             // ★ the map covers the screen: no waterfall, spectrum or deck underneath (the web's adsbViewUp)
         } else if (s.session != "running") {
             drawNoRadio(c, s);

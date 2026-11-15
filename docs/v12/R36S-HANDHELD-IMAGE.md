@@ -205,11 +205,13 @@ connection also carries **unsolicited event lines** (they have an `"event"` key;
 
 | Request | Reply |
 |---|---|
-| `{"get":"state"}` | `{"ok":true,"brightness":120,"maxBrightness":255,"volume":60,"muted":false,"output":"speaker"\|"headphones","battery":{"pct":83,"charging":false,"status":"Discharging"},"screen":"on"\|"off"}` |
+| `{"get":"state"}` | `{"ok":true,"brightness":120,"maxBrightness":255,"volume":60,"muted":false,"output":"speaker"\|"headphones","battery":{"pct":83,"charging":false,"status":"Discharging"},"screen":"on"\|"off","power":{…},"calib":{…}}` — `power` (2026-11-15, once a second): `online`, `status`, `batV`, `batA` (a magnitude), `batW`, `dir` `"discharge"`\|`"charge"`, `portV` (the charge port, on the cord only), `useW` (the last measured discharge power, smoothed — the driver reports no input current), `chargeMah`, `fullMah`; `calib`: `phase` `"idle"`\|`"armed"`\|`"running"`, `mode`, `countedMah`, `note`, `result` `{mah,design,qEmpty,qFull,utc}` or null. Once calibrated, `battery.pct` is on the measured capacity |
 | `{"set":"brightness","value":N}` | `{"ok":true}` or `{"ok":false,"error":"…"}` |
 | `{"set":"volume","value":0..100}` | same |
 | `{"set":"time","utcMs":1793900000000}` | same (the service is root; the engine is not) |
 | `{"action":"poweroff"\|"reboot"\|"screen-off"\|"screen-on"}` | same |
+| `{"action":"calibrate","mode":"normal"\|"stress"}` | same — `"charge to Full first"` unless the charger reports Full (vibe-hwd BatteryCal) |
+| `{"action":"calibrate-cancel"}` | same |
 | `{"subscribe":true}` | `{"ok":true}`, then events on this connection |
 
 **SSH: removed 2026-11-05 — no SSH on the handheld** (Stuart). The `get ssh`, `set ssh` and `set ssh-password` requests
@@ -221,10 +223,12 @@ are gone from this interface; the engine refuses them and never relays them.
 - `{"event":"output","output":"headphones"}` — or `"speaker"`.
 - `{"event":"battery","pct":N,"charging":B}`
 - `{"event":"battery_low","pct":10}` — the page shows the 10 % banner.
-- `{"event":"shutdown","reason":"battery"|"power-button"|"request","inSec":5}` — the engine MUST save every radio's memory
+- `{"event":"shutdown","reason":"battery"|"battery-cal"|"power-button"|"request","inSec":5}` — the engine MUST save every radio's memory
   and flush, then send **`{"ack":"shutdown"}`** on the same connection. The service waits **≤ 5 s** for the ack, then shuts
   down anyway.
 - `{"event":"screen","screen":"off"}` — or `"on"`.
+- `{"event":"battery_cal","phase":"armed"|"running"|"cancelled"|"done",…}` — the battery calibration (`mode`, `note`, `mah`).
+  `done` is followed by a `shutdown` with reason `"battery-cal"` (a clean power-off at the safe empty).
 
 **Files the two halves share.**
 - `/run/vibe-handheld/reset-radio` — written by the boot check when Start + Select are held (absent = normal). The engine

@@ -3,10 +3,12 @@
 // ★ Workers never touch App: they fill HwShared; the UI thread (hwPump / the sections) copies what it needs into App
 //   and turns queued messages into toasts.
 #pragma once
+#include "battery_math.h"
 #include "http.h"
 #include "json.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -25,6 +27,8 @@ struct HwShared {
     // GET /handheld/device
     bool devKnown = false, hwdOk = true;
     int brightness = -1, volume = -1, batt = -1; bool charging = false;
+    BattLive bat; BattCal cal; double batAt = 0;   // ★ state.power / state.calib (vibe-hwd, 2026-11-15) — when last read
+    bool calBusy = false;
     // GET /handheld/perf
     bool perfKnown = false;
     double cpu = -1, tempC = -1, engineCpu = -1; int ramUsed = -1, ramTotal = -1, minutesLeft = -1;
@@ -54,6 +58,66 @@ inline void hwParseLocation(const Json& j) {
     h.lat = s(j["lat"]); h.lon = s(j["lon"]);
 }
 
+/** state.power + state.calib (vibe-hwd) into HwShared — under h.m. */
+inline void hwParseBattery(HwShared& h, const Json& st) {
+    const Json& p = st["power"];
+    BattLive b;
+    b.known = p.kind == Json::Obj && p["batV"].kind == Json::Num;
+    b.online = p["online"].boolean(); b.status = p["status"].str(); b.dir = p["dir"].str();
+    b.batV = p["batV"].num(-1); b.batA = p["batA"].num(-1); b.batW = p["batW"].num(-1);
+    b.portV = p["portV"].num(-1); b.useW = p["useW"].num(-1);
+    b.chargeMah = (int)p["chargeMah"].num(-1); b.fullMah = (int)p["fullMah"].num(-1);
+    h.bat = b;
+    const Json& c = st["calib"];
+    BattCal k;
+    if (c.kind == Json::Obj) {
+        k.phase = c["phase"].str().empty() ? "idle" : c["phase"].str();
+        k.mode = c["mode"].str(); k.note = c["note"].str();
+        k.countedMah = (int)c["countedMah"].num(-1);
+        const Json& r = c["result"];
+        k.hasResult = r.kind == Json::Obj && r["mah"].num(0) > 0;
+        if (k.hasResult) { k.mah = (int)r["mah"].num(); k.design = (int)r["design"].num(0); k.utc = (long long)r["utc"].num(0); k.qEmptyMah = r["qEmpty"].num(0) / 1000.0; }
+    }
+    h.cal = k;
+    h.batAt = hwNow();
+}
+
+/** /handheld/device alone — the Battery block once a second while it is on screen, and the calibration screen. */
+inline void hwRefreshDevice(int port) {
+    hwAsync([port] {
+        const HttpResult d = httpRequest(port, "GET", "/handheld/device", "", 3);
+        if (d.status != 200) return;
+        const Json st = Json::parse(d.body)["state"];
+        HwShared& h = hwShared();
+        std::lock_guard<std::mutex> lk(h.m);
+        if (st["battery"]["pct"].kind == Json::Num) { h.batt = (int)st["battery"]["pct"].n; h.charging = st["battery"]["charging"].boolean(); }
+        hwParseBattery(h, st);
+    });
+}
+
+/** CALIBRATE (mode "normal" / "stress") or CANCEL ("" = cancel): the service's refusal ("charge to Full first") is
+ *  the toast; the state is read again at once so the block (and the stress screen) follow without waiting. */
+inline void hwCalibrate(int port, const std::string& mode) {
+    { HwShared& h = hwShared(); std::lock_guard<std::mutex> lk(h.m); if (h.calBusy) return; h.calBusy = true; }
+    hwAsync([port, mode] {
+        const std::string body = mode.empty() ? "{\"action\":\"calibrate-cancel\"}" : "{\"action\":\"calibrate\",\"mode\":\"" + mode + "\"}";
+        const HttpResult r = httpRequest(port, "POST", "/handheld/device", body, 5);
+        const Json j = Json::parse(r.body);
+        std::string msg;
+        if (r.status != 200 || !j["ok"].boolean()) {
+            msg = j["error"].str().empty() ? std::string("The hardware service did not answer") : j["error"].str();
+            if (!msg.empty()) msg[0] = (char)std::toupper((unsigned char)msg[0]);
+        } else if (mode.empty()) msg = "Calibration cancelled";
+        else msg = mode == "stress" ? "Unplug the charger to start the fast calibration" : "Unplug the charger to start — then use the radio as normal";
+        const HttpResult d = httpRequest(port, "GET", "/handheld/device", "", 3);
+        HwShared& h = hwShared();
+        std::lock_guard<std::mutex> lk(h.m);
+        if (d.status == 200) hwParseBattery(h, Json::parse(d.body)["state"]);
+        h.toasts.push_back(msg);
+        h.calBusy = false;
+    });
+}
+
 /** refreshDeviceRows (handheld.ts): /handheld/device, /card, /perf, /location — every time a section opens. */
 inline void hwRefresh(int port) {
     hwAsync([port] {
@@ -69,6 +133,7 @@ inline void hwRefresh(int port) {
                 if (st["volume"].kind == Json::Num) h.volume = (int)st["volume"].n;
                 if (st["battery"]["pct"].kind == Json::Num) { h.batt = (int)st["battery"]["pct"].n; h.charging = st["battery"]["charging"].boolean(); }
                 else h.batt = -1;
+                hwParseBattery(h, st);
             }
         }
         const HttpResult c = httpRequest(port, "GET", "/handheld/card", "", 4);
