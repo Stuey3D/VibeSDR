@@ -32517,17 +32517,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (it != g_bandGainMem.end()) steps = it->second;
         }
         if (steps >= 0) dabSeedGain(this, steps, nowSecs(), what);
+        dxGainTrace(key, "enter", steps);
         // ★ the dwell starts once the ADC has been OFF the rail for kDxGainCleanS (one clean window is not "settled")
-        double cleanSince = -1;
+        double cleanSince = -1, lastTrace = nowSecs();
         for (double t0 = nowSecs(); nowSecs() - t0 < kDxGainWaitS && !dxCancel_.load() && !stopping.load();) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             const double t = nowSecs();
+            if (t - lastTrace >= 0.5) { lastTrace = t; dxGainTrace(key, "wait", -1); }
             if (g_adcClipRun.load(std::memory_order_relaxed) > 0) { cleanSince = -1; continue; }
             if (cleanSince < 0) cleanSince = t;
             if (t - cleanSince >= kDxGainCleanS) break;
         }
     }
+    /** ★ DIAGNOSTIC (2026-11-15, the Sony's 104-108 MHz hops: 53 % on the rail at a commanded 3.7 dB, which a broadcast
+     *  station cannot do — is the commanded gain the radio's gain?). One line per call: the commanded gain, the AGC's
+     *  steps, the ADC's peak and how many 1-s windows have been on the rail. */
+    void dxGainTrace(int key, const char* at, int seeded) {
+        LOGI("DX gain %.2f MHz %s: commanded %.1f dB (%d steps below the ceiling%s), ADC peak %.1f dBFS, on the rail %d s, clean %d s",
+             key / 1e3, at, lastGainTenthDb / 10.0, g_ovlSteps.load(std::memory_order_relaxed),
+             seeded >= 0 ? ", seeded" : "", g_adcPeakDbfs.load(std::memory_order_relaxed),
+             g_adcClipRun.load(std::memory_order_relaxed), g_adcCleanRun.load(std::memory_order_relaxed));
+    }
     void dxGainLearn(int key) {
+        dxGainTrace(key, "end", -1);
         if (g_adcClipRun.load(std::memory_order_relaxed) > 0) return;   // ★ never remember a gain that ended on the rail
         dxGainMem_[key] = g_ovlSteps.load(std::memory_order_relaxed);
     }
