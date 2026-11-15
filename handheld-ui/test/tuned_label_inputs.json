@@ -1,0 +1,354 @@
+{
+ "rows": [
+  {
+   "frequency": 9580000,
+   "name": "China Radio Int",
+   "source": "eibi",
+   "comment": "0000-2400 · E"
+  },
+  {
+   "frequency": 9580050,
+   "name": "Radio Caroline",
+   "source": "server"
+  },
+  {
+   "frequency": 9580090,
+   "name": "Flex FM",
+   "source": "user"
+  },
+  {
+   "frequency": 6175000,
+   "name": "BBC World Service",
+   "source": "eibi",
+   "comment": "1800-2000 · E"
+  },
+  {
+   "frequency": 6175140,
+   "name": "Heard here",
+   "source": "server",
+   "comment": ""
+  },
+  {
+   "frequency": 5975000,
+   "name": "Night owl",
+   "source": "eibi",
+   "comment": "2300-0100 · R"
+  },
+  {
+   "frequency": 5975000,
+   "name": "Pre-filtered",
+   "source": "eibi",
+   "comment": "E"
+  },
+  {
+   "frequency": 7199920,
+   "name": "Far",
+   "source": "user"
+  },
+  {
+   "frequency": 7200080,
+   "name": "Farther",
+   "source": "user"
+  },
+  {
+   "frequency": 7200010,
+   "name": "Near",
+   "source": "user"
+  },
+  {
+   "frequency": 7200010,
+   "name": "Near twin",
+   "source": "user"
+  },
+  {
+   "frequency": 225648000,
+   "name": "BBC Radio 1",
+   "source": "server",
+   "mode": "dab"
+  },
+  {
+   "frequency": 1000000,
+   "name": "Odd source",
+   "source": "heard"
+  },
+  {
+   "frequency": 1000000,
+   "name": "   ",
+   "source": "user"
+  },
+  {
+   "frequency": 15000000,
+   "name": "Voice of the Islamic Republic of Iran External Service",
+   "source": "eibi"
+  },
+  {
+   "frequency": 98500000,
+   "name": "Радио Ретро",
+   "source": "user"
+  }
+ ],
+ "queries": [
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "BBC R4",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "  ",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "",
+   "vts": true,
+   "settled": true
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": false
+  },
+  {
+   "dial": 9579901,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 9580190,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 9580189,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 6175000,
+   "now": 1080,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 6175000,
+   "now": 180,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 6175060,
+   "now": 1080,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 6175100,
+   "now": 180,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 6174960,
+   "now": 1199,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 5975000,
+   "now": 1410,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 5975000,
+   "now": 30,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 5975000,
+   "now": 120,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 7200000,
+   "now": 0,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 225648000,
+   "now": 0,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 1000000,
+   "now": 0,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 15000000,
+   "now": 0,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 98500000,
+   "now": 0,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 0,
+   "now": 0,
+   "live": "",
+   "vts": false,
+   "settled": true
+  },
+  {
+   "dial": 3000000,
+   "now": 0,
+   "live": "",
+   "vts": false,
+   "settled": true
+  }
+ ],
+ "place": [
+  {
+   "nx": 100,
+   "w": 80,
+   "width": 390
+  },
+  {
+   "nx": 350,
+   "w": 80,
+   "width": 390
+  },
+  {
+   "nx": 40,
+   "w": 80,
+   "width": 100
+  },
+  {
+   "nx": -30,
+   "w": 80,
+   "width": 390
+  },
+  {
+   "nx": 200,
+   "w": 500,
+   "width": 390
+  },
+  {
+   "nx": 600,
+   "w": 120,
+   "width": 640
+  },
+  {
+   "nx": 320.5,
+   "w": 141.25,
+   "width": 640
+  },
+  {
+   "nx": 0,
+   "w": 60,
+   "width": 640
+  },
+  {
+   "nx": 640,
+   "w": 60,
+   "width": 640
+  }
+ ],
+ "colours": [
+  {
+   "needle": "#ff8c1a",
+   "lut": null
+  },
+  {
+   "needle": "#ff8c1a",
+   "lut": [
+    "#ff6000",
+    "#ffd000",
+    "#ffffff"
+   ]
+  },
+  {
+   "needle": "#20e040",
+   "lut": [
+    "#003060",
+    "#00a040",
+    "#ffff00"
+   ]
+  },
+  {
+   "needle": "#20e040",
+   "lut": [
+    "#202020",
+    "#808080",
+    "#e0e0e0"
+   ]
+  },
+  {
+   "needle": "#c0c0c0",
+   "lut": [
+    "#c00000",
+    "#c0c0c0",
+    "#ff0000"
+   ]
+  },
+  {
+   "needle": "#ff2020",
+   "lut": [
+    "#0000ff",
+    "#00ffff",
+    "#ffff00"
+   ]
+  },
+  {
+   "needle": "#ff2020",
+   "lut": [
+    "#0000ff",
+    "#00ffff",
+    "#ff3040"
+   ]
+  }
+ ]
+}

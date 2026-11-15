@@ -339,6 +339,7 @@ namespace hh { inline bool decSkimSegment(int& lo, int& hi); }
 #include "wide_vfo.h"   // ★ V12 a whole-channel mode's drawn passband (DAB's 1.536 MHz block — app_impl.h drawOverlays)
 #include "drm_quality.h"   // ★ V12 the DRM reception meter (the pill's reading in DRM — app_impl.h drawDeck)
 #include "known_labels_app.h"   // ★ SIGNAL LABELS on the spectrum (the app's knownSignals.ts, ported)
+#include "tuned_label_app.h"    // ★ V12 the tuned station's name beside the needle once the VTS has let it go (tunedStation.ts)
 #include "app_impl.h"
 #include "sec_audio.h"
 #include "sec_display.h"

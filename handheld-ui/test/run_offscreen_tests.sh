@@ -10,12 +10,14 @@
 #                     and scrolls 17 bands, ENTER queues that band's id (none for the band already on), BACK leaves it
 #   wefax_adj_test    WEFAX's ADJ row is pressed into: LEFT / RIGHT walk MARGIN · SLANT · AUTO · RAW until ENTER edits one;
 #                     ENTER or BACK finishes (BACK consumed, the box not released); DOWN off it or closing ADJ ends it
+#   tuned_label_render_test  V12 the tuned station's label (drawOverlays, read back): beside the needle at the waterfall's
+#                     top once the dial rests, flipped left at the right edge, nothing while it moves or on nothing
 #   handheld-ui/test/run_offscreen_tests.sh [test …]   (default: all)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 IMG=${IMG:-vibe-hh-map:trixie}
-TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test wefax_adj_test}
+TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test wefax_adj_test tuned_label_render_test}
 docker run --rm --platform linux/arm64 -v "$REPO/handheld-ui:/w:ro" -v "$REPO/assets/fonts:/fonts:ro" "$IMG" sh -c "
   set -e; cd /w; T=\$(mktemp -d)
   for t in $TESTS; do

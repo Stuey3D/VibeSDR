@@ -289,6 +289,15 @@ constexpr float kLegendH = 11, kLegendGap = 5, kAnnunML = 6, kAnnunMR = 2, kMark
 
 }  // namespace vts
 
+/** ★★ V12 the tuned station's label (tuned_label_app.h): the live name the bar holds, and whether it is showing a
+ *  station's name right now (a station line, before it fades) — the label waits for both to be gone. */
+inline void vtsTunedInputs(std::string& liveName, bool& showing) {
+    const vts::Screen& sc = vts::vtsState().screen;
+    liveName = sc.liveName();
+    const auto& n = sc.notif();
+    showing = n && n->kind == vts::Notif::StationOn && !n->name.empty();
+}
+
 /** The VTS bar in `r` (see the header for what and when). Call once a frame while the receiver screen is up, after the
  *  waterfall and before the sheets. Draws nothing while the bar has nothing to say. */
 inline void App::drawVts(Ctx& c, const RadioState& s, Rect r) {

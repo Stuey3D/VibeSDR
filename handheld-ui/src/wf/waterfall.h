@@ -69,6 +69,8 @@ class Waterfall {
   void drawSpectrum(int x, int y, int w, int h, int fbW, int fbH) { spec_.draw(model_, x, y, w, h, fbW, fbH); }
 
   WaterfallModel& model() { return model_; }
+  /** The palette in force (256 × RGBA) — the tuned station's label picks a colour that does not clash with it. */
+  const Palette& palette() const { return pal_; }
   double dbMin() const { return model_.dbMin(); }
   double dbMax() const { return model_.dbMax(); }
 

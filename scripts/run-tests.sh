@@ -865,6 +865,9 @@ if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fa
 if node --no-warnings scripts/test_dab_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the R36S's port of it (handheld-ui/src/dab_quality.h) replays the TS meter's own outputs, line for line.
 if bash handheld-ui/test/run_dab_quality_test.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 The R36S's port of the tuned station's label (handheld-ui/src/tuned_label.h) replays tunedStation.ts's own
+#    outputs, line for line (Docker arm64 when the image is there, else the host compiler).
+if sh handheld-ui/test/run_tuned_label.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE DRM RECEPTION METER (V12, 2026-11-12): DAB's meter for DRM — the decoder's own SNR in the box (Stuart: 17–20 dB
 #     decoded on a signal the meter read as 42 dB), the verdict on the programme's MER against its QAM and the audio frames.
 if node --no-warnings scripts/test_drm_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

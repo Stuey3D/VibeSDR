@@ -470,6 +470,9 @@ class Screen {
 public:
     /** The notif the bar is handed (VTSBar `notif`), or none. */
     const std::optional<Notif>& notif() const { return notif_; }
+    /** The live station name held (RDS PS, DAB service, DRM label — liveStationRef), "" = none. The tuned label reads it
+     *  (tuned_label_app.h): no label while a station names itself. */
+    const std::string& liveName() const { return liveRef_; }
     /** VTSBar onTimedEnd: a timed notif has had its time — forget it if it is still ours. */
     void timedEnd(uint64_t key) { if (notif_ && notif_->key == key) notif_.reset(); }
 
