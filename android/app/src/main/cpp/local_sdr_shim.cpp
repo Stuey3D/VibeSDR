@@ -32504,7 +32504,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::map<int, int> dxGainMem_;   // hop centre kHz -> g_ovlSteps
     // ★ Stuart 2026-11-15: "the FM scan can take longer if needed … enough time to try IF filtering and allow the AGC to
     //   work" — an idle server's DX log, so time is cheap; a sweep stays minutes, not hours (18 hops × ≤ ~25 s worst case).
-    static constexpr double kDxGainWaitS = 6.0, kDxGainCleanS = 1.0;
+    static constexpr double kDxGainWaitS = 10.0, kDxGainCleanS = 1.0;
+    /* ★ …AND NOT SO QUIET THE STATIONS SINK INTO THE ADC'S OWN STEPS (the Sony 00:50: 105.5-108 entered at 3.7 dB with the
+     *  ADC peaking at -32 to -36 dBFS; the hop saw no peaks, ended in 0.3 s, the AGC never climbed and the memory learned
+     *  3.7 dB again — stuck). The wait also lasts until the ADC peak is at least kDxQuietDbfs (the AGC's "recovering"
+     *  takes ~5 dB a second), or the gain is at its ceiling. */
+    static constexpr double kDxQuietDbfs = -20.0;
     void dxGainEnter(int key, const char* what) {
         int steps = -1;
         if (auto it = dxGainMem_.find(key); it != dxGainMem_.end()) steps = it->second;
@@ -32526,7 +32531,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (t - lastTrace >= 0.5) { lastTrace = t; dxGainTrace(key, "wait", -1); }
             if (g_adcClipRun.load(std::memory_order_relaxed) > 0) { cleanSince = -1; continue; }
             if (cleanSince < 0) cleanSince = t;
-            if (t - cleanSince >= kDxGainCleanS) break;
+            const bool loudEnough = g_adcPeakDbfs.load(std::memory_order_relaxed) >= kDxQuietDbfs
+                                    || g_ovlSteps.load(std::memory_order_relaxed) <= 0;
+            if (t - cleanSince >= kDxGainCleanS && loudEnough) break;
         }
     }
     /** ★ DIAGNOSTIC (2026-11-15, the Sony's 104-108 MHz hops: 53 % on the rail at a commanded 3.7 dB, which a broadcast
