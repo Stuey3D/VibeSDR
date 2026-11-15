@@ -22,7 +22,6 @@ inline const KnownSigDef kKnownSignals[] = {
     {2189500, -1, -1, "DSC", "dsc", 2187800, "usb", 5},
     {2500000, -1, -1, "TIME · WWV/WWVH", "time", 2500000, "am", 6},
     {2618500, -1, -1, "WEFAX · Northwood", "wefax", 2616600, "usb", 6},
-    {3330000, -1, -1, "CHU · time", "", 3330000, "am", 6},
     {3414500, 3413300, 3415700, "VOLMET · Shannon", "", 3413000, "usb", 6},
     {3570100, 3570000, 3570200, "WSPR", "spots", 3568600, "usb", 6},
     {3573000, 3573000, 3576000, "FT8", "spots", 3573000, "usb", 6},
@@ -50,7 +49,6 @@ inline const KnownSigDef kKnownSignals[] = {
     {7074000, 7074000, 7077000, "FT8", "spots", 7074000, "usb", 6},
     {7078000, 7078000, 7081000, "JS8", "spots", 7078000, "usb", 6},
     {7646000, -1, -1, "RTTY · DWD", "rtty", 7645000, "usb", 6},
-    {7850000, -1, -1, "CHU · time", "", 7850000, "am", 6},
     {7880000, -1, -1, "WEFAX · DWD", "wefax", 7878100, "usb", 6},
     {8040000, -1, -1, "WEFAX · Northwood", "wefax", 8038100, "usb", 6},
     {8414500, -1, -1, "DSC · distress", "dsc", 8412800, "usb", 7},
@@ -78,7 +76,6 @@ inline const KnownSigDef kKnownSignals[] = {
     {14080000, 14080000, 14083000, "FT4", "spots", 14080000, "usb", 6},
     {14097100, 14097000, 14097200, "WSPR", "spots", 14095600, "usb", 6},
     {14467300, -1, -1, "RTTY · DWD", "rtty", 14466300, "usb", 6},
-    {14670000, -1, -1, "CHU · time", "", 14670000, "am", 6},
     {14996000, -1, -1, "TIME · RWM", "time", 14996000, "cwu", 6},
     {15000000, -1, -1, "TIME · WWV/WWVH", "time", 15000000, "am", 6},
     {16804500, -1, -1, "DSC · distress", "dsc", 16802800, "usb", 7},
@@ -129,5 +126,5 @@ inline const KnownSigDef kKnownSignals[] = {
     {432174000, 432174000, 432177000, "FT8", "spots", 432174000, "usb", 6},
     {1296050000, 1296050200, 1296126800, "Q65", "spots", 1296050000, "usb", 6},
 };
-inline const int kKnownSignalsN = 124;
+inline const int kKnownSignalsN = 121;
 }  // namespace hh

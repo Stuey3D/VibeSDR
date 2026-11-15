@@ -39,7 +39,7 @@ const ft8 = at(14074000, 'FT8');
 ok(!!ft8 && ft8.dec === 'spots' && ft8.lo === 14074000 && ft8.hi === 14077000, 'FT8 14.074: marker at the dial, signals 0–3 kHz above');
 ok(at(14097100, 'WSPR')?.dialHz === 14095600, 'WSPR 14.0956: marker on its 1400–1600 Hz window');
 ok(at(60000, 'TIME')?.dec === 'time' && at(77500, 'TIME')?.label === 'TIME · DCF77' && at(10000000, 'TIME')?.dec === 'time', 'MSF/DCF77/WWV are TIME');
-ok(at(3330000)?.dec === '' && !at(3330000)!.label.startsWith('TIME'), 'CHU: labelled, but NOT sent to the TIME decoder (it does not read CHU)');
+ok(!KNOWN_SIGNALS.some((s) => /\bCHU\b/.test(s.label)), 'CHU: no label anywhere (NRC ended the shortwave broadcast 2026-06-22)');
 ok(at(3414500, 'VOLMET')?.dialHz === 3413000 && at(3414500)?.dec === '', 'Shannon VOLMET 3413 USB: speech, no decoder');
 ok(KNOWN_SIGNALS.every((s, i) => i === 0 || KNOWN_SIGNALS[i - 1].hz <= s.hz), 'the table is sorted by frequency');
 

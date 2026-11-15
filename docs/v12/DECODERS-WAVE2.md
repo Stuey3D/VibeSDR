@@ -382,10 +382,16 @@ Checked, not built:
   signal will no longer be available"; recordings of the final minutes exist). A decoder for a station that no longer
   transmits cannot be tested on air and would show nothing to anyone, so it was dropped from the queue. ★ Question
   for Stuart: the CHU known-signal labels (3.330 / 7.850 / 14.670 MHz) now name a silent channel — remove them?
+  **→ DECIDED 2026-11-15 (Stuart): removed** — knownSignals.ts, the scanner's Time Signals preset, the R36S table.
 
 ---
 
 ## 6. ACARS → VDL2 → HFDL → RS41 — BLOCKED this run, nothing built (2026-10-31, second run)
+
+> **★ SUPERSEDED (2026-11-15):** ACARS, VDL2 and HFDL were built afterwards on branch `v12-aviation` from real Pi 500
+> captures (docs/v12/AVIATION.md there, "RESUME HERE") — not yet wired into the server. RS41: Stuart, 2026-11-15 —
+> listener documentation is acceptable as the standard; build it from that and wait for real reports to confirm.
+> Own code everywhere (no libacars); link a library only where ours is impossible and GPL-3 + App Store exception holds.
 
 - **No primary standard to hand.** ACARS (ARINC 618/620), HFDL (ARINC 635) and VDL2 (ICAO VDL Mode 2 Technical
   Manual, Doc 9776) are published but sold, not free; RS41 is Vaisala's and unpublished (only listener

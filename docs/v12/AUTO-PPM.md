@@ -199,7 +199,7 @@ End to end (`test-server-afc`, the bench multiplex with a +4 ppm clock), DAB's m
 - **Stuart's decisions, 2026-11-13** (these supersede the bullets above where they differ):
   1. **Automatic** whenever a radio is on a source: **DAB** (built), **DRM** (wire the feed), **mobile phone masts**
      (GSM FCCH, LTE PSS/SSS — the frequency error only, as above; to build).
-  2. **Manual: a button in the time-signal decoder** on supported carriers — RWM 4996/9996/14996 kHz, WWV/WWVH, CHU,
+  2. **Manual: a button in the time-signal decoder** on supported carriers — RWM 4996/9996/14996 kHz, WWV/WWVH (not CHU: off the air since 2026-06-22),
      BPM (and MSF/DCF77 where a radio reaches LF). A live reading ("carrier 9996.000 kHz · your radio reads it +7.8 Hz
      high (+0.78 ppm)", with a steadiness mark); **SET RADIO OFFSET** lights once steady (~30 s) with enough SNR, greyed
      with the reason before; applied through the same correction (same Reset). **Owner-only on a shared server** — it

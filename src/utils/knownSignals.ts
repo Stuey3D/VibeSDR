@@ -57,7 +57,7 @@ export interface KnownSignal {
   lo?: number; hi?: number;
   /** The label: "RTTY · DWD", "WEFAX · Northwood", "FT8", "NAVTEX", "DSC". */
   label: string;
-  /** The decoder it wants ('' = none — VOLMET is speech, CHU has no decoder here). */
+  /** The decoder it wants ('' = none — VOLMET is speech). */
   dec: KnownDecoder;
   /** Where to tune for it, and in which mode. */
   dialHz: number; mode: string;
@@ -138,8 +138,9 @@ function digi(mode: 'FT8' | 'FT4' | 'WSPR' | 'JS8' | 'Q65', dial: number, top = 
  *    Speech — no decoder; the label says USB.
  *  • Time signals: MSF / WWVB 60 kHz, DCF77 77.5 kHz, RBU 66.666 kHz, RWM 4996 / 9996 / 14996 kHz, WWV(H) 2.5 / 5 /
  *    10 / 15 MHz, WWV 20 / 25 MHz — the stations DecoderClient's timeStationFor decodes (decoderBands.ts
- *    TIME_SIGNAL_HZ). CHU (Ottawa) 3330 / 7850 / 14670 kHz is labelled as a time station WITHOUT a decoder — the
- *    TIME decoder does not read CHU's format, and a "TIME" label there would send people to a decoder that stays silent.
+ *    TIME_SIGNAL_HZ).
+ *  • ✗ NOT CHU (Ottawa, 3330 / 7850 / 14670 kHz): NRC ended the shortwave broadcast on 2026-06-22, so a label there
+ *    names a silent channel (Stuart, 2026-11-15: "no point supporting a time station that doesn't exist").
  */
 const DWD_RTTY = [147.3, 4583, 7646, 10100.8, 11039, 14467.3];
 const DWD_FAX = [3855, 7880, 13882.5];
@@ -203,7 +204,6 @@ function buildTable(): KnownSignal[] {
   for (const f of [4_996_000, 9_996_000, 14_996_000]) t.push(time(f, 'RWM', 'cwu', 'time', ['rwm']));
   for (const f of [2_500_000, 5_000_000, 10_000_000, 15_000_000]) t.push(time(f, 'WWV/WWVH', 'am', 'time', ['wwv']));
   for (const f of [20_000_000, 25_000_000]) t.push(time(f, 'WWV', 'am', 'time', ['wwv']));
-  for (const k of [3330, 7850, 14670]) t.push(time(kHz(k), 'CHU', 'am', ''));
   return t.sort((a, b) => a.hz - b.hz);
 }
 

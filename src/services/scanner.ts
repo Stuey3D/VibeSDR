@@ -1265,7 +1265,7 @@ export class ScannerController {
 /**
  * ★ Discrete-frequency sets only — anything that is a BAND is one tap in the band picker and is not duplicated here.
  * Frequencies from the published schedules: VOLMET from the ICAO EUR HF VOLMET allocations (Shannon, RAF), the time
- * stations from their operators (NIST WWV/WWVH, NRC CHU, VNIIFTRI RWM), marine distress and safety voice from the ITU
+ * stations from their operators (NIST WWV/WWVH, VNIIFTRI RWM — not NRC's CHU, off the air since 2026-06-22), marine distress and safety voice from the ITU
  * Radio Regulations Appendix 15. Read-only: Clone, then edit.
  */
 function tagsOf(prefix: string, list: [number, SDRMode, string][]): ScanTag[] {
@@ -1285,8 +1285,8 @@ export const BUNDLED_PRESETS: ScanPreset[] = [
   {
     id: 'bundled-time', name: 'Time Signals', source: 'list', bundled: true, config: { ...DEFAULT_CONFIG },
     channels: tagsOf('time', [
-      [2_500_000, 'am', 'WWV / WWVH'], [3_330_000, 'am', 'CHU'], [4_996_000, 'am', 'RWM'], [5_000_000, 'am', 'WWV / WWVH'],
-      [7_850_000, 'am', 'CHU'], [9_996_000, 'am', 'RWM'], [10_000_000, 'am', 'WWV / WWVH'], [14_670_000, 'am', 'CHU'],
+      [2_500_000, 'am', 'WWV / WWVH'], [4_996_000, 'am', 'RWM'], [5_000_000, 'am', 'WWV / WWVH'],
+      [9_996_000, 'am', 'RWM'], [10_000_000, 'am', 'WWV / WWVH'],
       [14_996_000, 'am', 'RWM'], [15_000_000, 'am', 'WWV / WWVH'], [20_000_000, 'am', 'WWV'],
     ]),
   },
