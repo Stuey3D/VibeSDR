@@ -8,12 +8,14 @@
 #                     drawn, no wash on a view narrower than the block, WFM unchanged
 #   ism_bands_test    the ISM box's BANDS list: ismBands with their regions, opens on the server's band, the D-pad walks
 #                     and scrolls 17 bands, ENTER queues that band's id (none for the band already on), BACK leaves it
+#   wefax_adj_test    WEFAX's ADJ row is pressed into: LEFT / RIGHT walk MARGIN · SLANT · AUTO · RAW until ENTER edits one;
+#                     ENTER or BACK finishes (BACK consumed, the box not released); DOWN off it or closing ADJ ends it
 #   handheld-ui/test/run_offscreen_tests.sh [test …]   (default: all)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 IMG=${IMG:-vibe-hh-map:trixie}
-TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test}
+TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test wefax_adj_test}
 docker run --rm --platform linux/arm64 -v "$REPO/handheld-ui:/w:ro" -v "$REPO/assets/fonts:/fonts:ro" "$IMG" sh -c "
   set -e; cd /w; T=\$(mktemp -d)
   for t in $TESTS; do

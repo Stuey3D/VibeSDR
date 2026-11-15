@@ -9,8 +9,10 @@
 //    3 → 4 → FIT, the D-pad pans while zoomed; at FIT DOWN reaches the keys under it (PREV / LIVE · GALLERY), LEFT /
 //    RIGHT step PREV ⇄ LIVE. BACK closes it.
 // ★★ WEFAX's ADJ (main.ts decAdjRow, the app's DecoderPanel): MARGIN · SLANT · AUTO · RAW — MARGIN and SLANT are
-//    full-width-style adjusters (LEFT / RIGHT move the chart 1 px / the slant 0.001; held, ×5 from the 8th step), the
-//    figures shown are the ones APPLIED (AUTO until set by hand). AUTO and RAW are the mode pair.
+//    adjusters PRESSED INTO (see picAdjRow): highlighted, LEFT / RIGHT move along the row like any key; ENTER starts
+//    editing (amber ring) and then LEFT / RIGHT move the chart 1 px / the slant 0.001 (pressed quickly, ×5 from the 8th
+//    step); ENTER or BACK finishes. The figures shown are the ones APPLIED (AUTO until set by hand). AUTO and RAW are
+//    the mode pair.
 #pragma once
 #include "dec_pic_gallery.h"
 
@@ -47,17 +49,29 @@ inline void decPicKeys(App& a, const std::string& view, std::vector<PicKey>& out
 inline void decPicKeyPress(App& a, int act, const std::string& view) {
     PicUi& u = picUi();
     if (act == 60) { if (u.prev) u.viewingPrev = !u.viewingPrev; u.scrollBack = 0; }
-    else if (act == 61) { u.adjOpen = !u.adjOpen; u.adjWantFocus = u.adjOpen; }
+    else if (act == 61) { u.adjOpen = !u.adjOpen; u.adjWantFocus = u.adjOpen; u.adjEdit.clear(); }
     else if (act == 62) galOpen(a, view == "sstv" ? 1 : 0);
 }
 
 // ── the ADJ row ──────────────────────────────────────────────────────────────────────────────────────────────────────
-inline void picAdjRow(App& a, Ctx& c, Rect r) {
+/** ★★★ PRESS TO EDIT (Stuart, 2026-11-15: MARGIN and SLANT took LEFT / RIGHT the moment they had the highlight, so the
+ *  row was a trap — nothing could get from MARGIN across to SLANT, AUTO or RAW). Now the web page's and the app's rule
+ *  (gamepad.ts: "Enter on a slider ADJUSTS it … enter or back finishes"): highlighted, an adjuster is a key like the
+ *  others and LEFT / RIGHT move along the row; ENTER presses into it (amber ring, PicUi::adjEdit) and only then do
+ *  LEFT / RIGHT nudge; ENTER again or BACK comes out. ★ BACK is taken here while editing — this row is drawn inside
+ *  decDrawBox, before the run loop's closeTop, so the one press ends the edit and never also releases the box. The edit
+ *  ends by itself when the highlight leaves the adjuster (UP / DOWN still move) or the row closes (picReset, ADJ,
+ *  the box let go). The keyboard is the same Nav input (← → Enter, Esc / Backspace = BACK: app_impl.h pollInput).
+ *  Returns what the hint should say: 0 nothing, 1 "adjust" (an adjuster highlighted), 2 editing. */
+inline int picAdjRow(App& a, Ctx& c, Rect r) {
     PicUi& u = picUi();
-    if (!u.live || u.live->kind != PK_WEFAX) return;
+    if (!u.live || u.live->kind != PK_WEFAX) { u.adjEdit.clear(); return 0; }
     Pic& p = *u.live;
-    // ★ the highlight lands on MARGIN as the row opens (set before it registers, so the Nav keeps it)
-    if (u.adjWantFocus) { a.nav_.setFocus("dec", "dec.adj.m"); u.adjWantFocus = false; }
+    // ★ the highlight lands on MARGIN as the row opens (set before it registers, so the Nav keeps it) — not editing
+    if (u.adjWantFocus) { a.nav_.setFocus("dec", "dec.adj.m"); u.adjWantFocus = false; u.adjEdit.clear(); }
+    // ★ an edit whose adjuster no longer has the highlight is over (UP / DOWN moved off it, the box was re-grabbed)
+    if (!u.adjEdit.empty() && a.nav_.focus("dec") != u.adjEdit) u.adjEdit.clear();
+    int hint = 0;
     const wfx::Align al = picCorr(p);
     const std::string m = p.rawMode ? "MARGIN RAW" : std::string("MARGIN ") + (p.hasManual ? "MANUAL " : "AUTO ") + picSignedPx(al.shift) + " px";
     const std::string sl = p.rawMode ? "SLANT RAW" : std::string("SLANT ") + (picSlantManual(p) ? "MANUAL " : "AUTO ") + picSignedSlant(al.slant);
@@ -65,15 +79,21 @@ inline void picAdjRow(App& a, Ctx& c, Rect r) {
     float x = r.x;
     auto adjuster = [&](const std::string& id, float w, const std::string& label, bool lit) -> int {
         const Rect b{x, r.y, w, r.h};
-        const Nav::Hit h = c.nav.item(id, b, true);
+        const bool editing = u.adjEdit == id;
+        const Nav::Hit h = c.nav.item(id, b, editing);   // ★ takes LEFT / RIGHT only while pressed into
+        bool edNow = editing;
+        if (h.pressed) { edNow = !editing; if (edNow) u.adjEdit = id; else u.adjEdit.clear(); }
+        else if (editing && h.focused && c.nav.input().back && c.nav.backPressed()) { edNow = false; u.adjEdit.clear(); }
         c.g.rrect(b.x, b.y, b.w, b.h, 6, lit ? th::activeBg : th::btnBg);
         c.g.rframe(b.x, b.y, b.w, b.h, 6, 1, lit ? th::activeBdr : th::btnBorder);
-        c.g.triangle(b.x + 12, b.cy() - 5, b.x + 12, b.cy() + 5, b.x + 5, b.cy(), th::btnText);
-        c.g.triangle(b.r() - 12, b.cy() - 5, b.r() - 12, b.cy() + 5, b.r() - 5, b.cy(), th::btnText);
+        // ★ the ◀ ▶ arrows are bright only while editing — they are what LEFT / RIGHT do then
+        const Rgba ar = edNow ? th::activeTx : th::dim;
+        c.g.triangle(b.x + 12, b.cy() - 5, b.x + 12, b.cy() + 5, b.x + 5, b.cy(), ar);
+        c.g.triangle(b.r() - 12, b.cy() - 5, b.r() - 12, b.cy() + 5, b.r() - 5, b.cy(), ar);
         textIn(c, c.f.tiny, label, b, lit ? th::activeTx : th::btnText);
-        if (h.focused) focusRing(c, b, 6, true);
+        if (h.focused) { focusRing(c, b, 6, edNow); hint = edNow ? 2 : 1; }
         x += w + gap;
-        return h.adjust;
+        return editing ? h.adjust : 0;
     };
     const int dm = adjuster("dec.adj.m", wm, m, !p.rawMode && p.hasManual);
     if (dm) picNudgeShift(-dm * picHoldMult(dm));   // ★ ◀ moves the chart left (the shift grows)
@@ -85,20 +105,35 @@ inline void picAdjRow(App& a, Ctx& c, Rect r) {
     x += wa + gap;
     st.lit = p.rawMode;
     if (button(c, "dec.adj.raw", {x, r.y, wr, r.h}, "RAW", st)) picToggleRaw();
+    return hint;
 }
 
 // ── the box's body ───────────────────────────────────────────────────────────────────────────────────────────────────
 inline void decPicPane(App& a, Ctx& c, const RadioState& s, Rect body, bool grabbed) {
     (void)s;
     PicUi& u = picUi(); DecUi& d = decUi();
+    int adjHint = 0;
     if (u.adjOpen && d.view == "wefax" && u.live && !u.viewingPrev && grabbed) {
-        picAdjRow(a, c, {body.x + 4, body.y + 2, body.w - 8, 28});
+        adjHint = picAdjRow(a, c, {body.x + 4, body.y + 2, body.w - 8, 28});
         body.y += 34; body.h -= 34;
-    }
+    } else u.adjEdit.clear();
+    // ★ the ADJ row's hint, in the picture's corner where "full screen" sits (the picture has no highlight then)
+    auto adjHintDraw = [&c, body, adjHint] {
+        if (!adjHint) return;
+        const std::vector<std::pair<int, std::string>> hs = adjHint == 2
+            ? std::vector<std::pair<int, std::string>>{{-1, "LEFT / RIGHT nudge"}, {FACE_BOTTOM, "done"}}
+            : std::vector<std::pair<int, std::string>>{{FACE_BOTTOM, "adjust"}};
+        float hw = 6;
+        for (auto& h : hs) hw += (h.first >= 0 ? 24 : 0) + (float)c.tc.width(c.f.small, h.second) + 14;
+        const Rect hb{body.r() - hw - 10, body.b() - 30, hw, 26};
+        c.g.rrect(hb.x, hb.y, hb.w, hb.h, 13, rgb(0, 0.85f));
+        hints(c, hb.x + 8, hb.cy(), hs, adjHint == 2 ? th::amber : th::focus);
+    };
     const Pic* p = picShown();
     if (!p || p->maxY < 0 || p->w <= 0) {
         // ★ the last picture, while the next is awaited, is under PREV — say so rather than look empty
         decNone(c, body, picIdle(d.view) + (u.prev ? "  The last one is under PREV." : ""));
+        adjHintDraw();
         return;
     }
     const Nav::Hit h = c.nav.item("dec.pic", body);
@@ -171,6 +206,7 @@ inline void decPicPane(App& a, Ctx& c, const RadioState& s, Rect body, bool grab
             c.tc.draw(c.g, c.f.tiny, "PREV", body.x + 15, body.y + 5, th::amber);
         }
     }
+    adjHintDraw();
     if (h.focused) {
         c.g.rframe(body.x - 1, body.y - 1, body.w + 2, body.h + 2, 7, 3, th::focus);
         const std::string t = "full screen";

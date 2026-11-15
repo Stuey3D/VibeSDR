@@ -179,6 +179,7 @@ struct PicUi {
     std::string pendingMode;         // the last SSTV mode named (0x02)
     // the box
     bool adjOpen = false, adjWantFocus = false;
+    std::string adjEdit;             // ★ the ADJ adjuster pressed into ("dec.adj.m" / "dec.adj.s"), "" = none (dec_pic_box.h picAdjRow)
     int adjDir = 0, adjRun = 0; double adjAt = 0;   // a held key steps ×5 after 8 (useHoldRepeat)
     double lineAt = 0;               // the LED: a line in the last 2.5 s (until the server reports WEFAX phases)
     float scrollBack = 0;            // HELL in the box: rows scrolled up from the newest (WEFAX fits whole)
@@ -373,7 +374,7 @@ inline void picReset() {
     if (u.prev) picFree(*u.prev);
     u.live.reset(); u.prev.reset();
     u.viewingPrev = false; u.phaseKnown = false; u.lineBase = 0; u.rebase = false; u.chartHz = 0; u.hellBase = -1; u.redrawing = false;
-    u.adjOpen = false; u.alignKey = INT32_MIN; u.scrollBack = 0; u.full = 0;
+    u.adjOpen = false; u.adjEdit.clear(); u.alignKey = INT32_MIN; u.scrollBack = 0; u.full = 0;
 }
 /** CLR on a picture (clearDecImage / clearHellPage): the picture so far goes under PREV, the next line starts a fresh one. */
 inline void picClear(const std::string& why = "") {
