@@ -282,9 +282,7 @@ namespace {
  *  for all servers"). The rule and its reasons live in vibe_thread_layout.h; it is applied HERE, in the code every
  *  server shares, at library load — before any RxPipeline or DabService starts, and in the same process as the
  *  setup page's benchmark, which therefore measures the layout that runs. The owner's own environment wins. */
-#if !defined(_WIN32)
 [[maybe_unused]] const bool g_vsSplitDefault = vibe::vibeApplyDefaultThreadLayout();
-#endif
 
 // V5: the on-device DSP is now the clean-room GPL-free engine. These local
 // aliases replace the old SDR++ dsp:: sample types so the decoder/audio feed
@@ -22799,6 +22797,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/sdr-change", 0) == 0
                 // ★ The pocket image's Wi-Fi + first-run routes — the MACHINE's network, not a radio's.
                 || path0.rfind("/vibeserver/pocket/", 0) == 0
+                // ★ Windows: the TV-stick switch and start-at-boot — the MACHINE's drivers, not a radio's.
+                || path0.rfind("/vibeserver/windows/", 0) == 0
                 || path0.rfind("/vibeserver/benchmark", 0) == 0
                 // ★ V12: the owner's USRP image folder is the MACHINE's — and the radio may not be running at all
                 //   (a clone whose FPGA would not load), so the door must be able to take the upload itself.
@@ -23165,7 +23165,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★★★ THE POCKET VIBESERVER'S ROUTES AND ITS CAPTIVE PORTAL — before anything else answers.
          *  Only when the daemon registered a handler (the pocket image's front door), and only for its
          *  own namespace or while its hotspot is up. Everywhere else this is one atomic load. */
-        if (g_vsCaptiveActive.load() || reqPath.rfind("/vibeserver/pocket/", 0) == 0) {
+        /* ★★ AND WINDOWS' /vibeserver/windows/ (2026-10-26) — the same hook, registered by the Windows front door for
+         *  the TV-stick switch and start-at-boot (vibeserver/windows/win_dongles.cpp); never both on one machine. */
+        const bool daemonRoute = reqPath.rfind("/vibeserver/pocket/", 0) == 0 || reqPath.rfind("/vibeserver/windows/", 0) == 0;
+        if (g_vsCaptiveActive.load() || daemonRoute) {
             LocalSdrShim::PocketHttpFn fn;
             { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsPocketHttp; }
             if (fn) {
@@ -23173,7 +23176,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 prq.method = reqLine.substr(0, reqLine.find(' '));
                 prq.path = reqPath; prq.host = hostHeader; prq.peer = sock->peerAddress();
                 prq.viaTunnel = viaTunnel(*sock);
-                if (reqPath.rfind("/vibeserver/pocket/", 0) == 0) {
+                if (daemonRoute) {
                     // ★ The admin proof, exactly as /vibeserver/config does it — lockout and all.
                     std::string secret;
                     { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
@@ -40966,7 +40969,7 @@ void LocalSdrShim::stopLocked() {
     //   can be handed straight to the next socket opened — so the fd is closed once nobody waits on it.
     STOP_STAGE("the hand-off thread");
     joinSafely(impl->handoffThread, "hand-off thread");
-    if (impl->handoffFd >= 0) { ::close(impl->handoffFd); impl->handoffFd = -1; }
+    if (impl->handoffFd >= 0) { vibe::fdListenClose(impl->handoffFd); impl->handoffFd = -1; }
     // ★ Leave no stale socket behind: the next process to start would bind() onto a file nothing
     //   is listening on, and every hand-off to it would fail with "connection refused".
     if (!impl->handoffPath.empty()) ::unlink(impl->handoffPath.c_str());
@@ -45782,7 +45785,7 @@ std::string LocalSdrShim::antSwitchSearch(const std::string& host, int port, int
     std::vector<std::string> brokers;
     if (!host.empty()) {
         const int fd = mqtt::tcpConnect(host, port, 1500);
-        if (fd >= 0) { ::close(fd); brokers.push_back(host); }
+        if (fd >= 0) { vibesock::close(fd); brokers.push_back(host); }
     } else {
         std::vector<std::string> cands = { "127.0.0.1" };
         const std::string me = primaryIpv4();
@@ -45796,10 +45799,10 @@ std::string LocalSdrShim::antSwitchSearch(const std::string& host, int port, int
             if (fd < 0) continue;
             fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
             sockaddr_in sa{}; sa.sin_family = AF_INET; sa.sin_port = htons(uint16_t(port));
-            if (inet_pton(AF_INET, a.c_str(), &sa.sin_addr) != 1) { ::close(fd); continue; }
+            if (inet_pton(AF_INET, a.c_str(), &sa.sin_addr) != 1) { vibesock::close(fd); continue; }
             const int rc = ::connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof sa);
-            if (rc == 0) { brokers.push_back(a); ::close(fd); continue; }
-            if (errno != EINPROGRESS) { ::close(fd); continue; }
+            if (rc == 0) { brokers.push_back(a); vibesock::close(fd); continue; }
+            if (!vibesock::connectPending(vibesock::lastError())) { vibesock::close(fd); continue; }
             pend.push_back({fd, a});
         }
         const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
@@ -45811,11 +45814,11 @@ std::string LocalSdrShim::antSwitchSearch(const std::string& host, int port, int
                 if (!(pf[i].revents & (POLLOUT | POLLERR | POLLHUP))) { still.push_back(pend[i]); continue; }
                 int err = 0; socklen_t el = sizeof err; getsockopt(pend[i].first, SOL_SOCKET, SO_ERROR, &err, &el);
                 if (!err) brokers.push_back(pend[i].second);
-                ::close(pend[i].first);
+                vibesock::close(pend[i].first);
             }
             pend.swap(still);
         }
-        for (auto& p2 : pend) ::close(p2.first);
+        for (auto& p2 : pend) vibesock::close(p2.first);
     }
     if (brokers.size() > 4) brokers.resize(4);
     std::string j = "{\"brokers\":[";

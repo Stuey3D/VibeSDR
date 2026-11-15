@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <unistd.h>
+#include "vibe_sock.h"
 
 namespace net {
 
@@ -63,7 +64,7 @@ public:
      *  ★ Here we drop OUR reference only. The connection lives on for as long as anyone still
      *    holds one, which is exactly the semantics a hand-off needs.
      */
-    void releaseFd() { open_ = false; if (fd_ >= 0) { ::close(fd_); fd_ = -1; } }
+    void releaseFd() { open_ = false; if (fd_ >= 0) { vibesock::close(fd_); fd_ = -1; } }
 
     /** ★ The raw descriptor. Needed for two things and nothing else: peeking at a request without
      *  consuming it (MSG_PEEK), and handing the whole connection to another process

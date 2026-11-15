@@ -215,6 +215,48 @@
       vibe::vibeFlushDenormals();
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   }
+#elif defined(_WIN32)
+  /* ★★★ WINDOWS (2026-10-26, the port's Milestone 1): THE SAME LADDER IN WINDOWS' SEVEN LEVELS.
+   *  Network > Audio > Spectrum > Decoders, read the same way:
+   *     IQ input: MMCSS "Pro Audio" (the multimedia scheduler — the v6 lesson was USB INPUT starvation,
+   *               and a sample the reader fails to collect is gone for everyone), HIGHEST if refused
+   *     audio send / network: HIGHEST   ·   audio chain (DSP, demod, DAB, encode): ABOVE_NORMAL
+   *     waterfall send, spectrum: NORMAL ·   decoders: BELOW_NORMAL   ·   bulk HTTP: LOWEST
+   *  ★★ Windows has too few rungs to keep the waterfall's send strictly above the spectrum work; both
+   *     sit at NORMAL, below every audio rung, which is the half of the rule that is heard.
+   *  ★ No privilege is needed for any of these (TIME_CRITICAL is deliberately not used: a busy loop at
+   *    that level starves the USB stack it depends on). Names via SetThreadDescription, which a debugger,
+   *    Process Explorer and a crash dump all show. */
+  inline void vibeWinName_(const char* name) {
+      wchar_t w[64];
+      if (MultiByteToWideChar(CP_UTF8, 0, name, -1, w, 64) > 0) SetThreadDescription(GetCurrentThread(), w);
+  }
+  inline void vibeWinPrio_(const char* name, int prio) {
+      vibeWinName_(name);
+      SetThreadPriority(GetCurrentThread(), prio);
+  }
+  inline void vibeThreadName(const char* name) { vibeWinName_(name); }
+  inline void vibeAudioThread(const char* name) {
+      vibe::vibeFlushDenormals();
+      vibeWinPrio_(name, THREAD_PRIORITY_ABOVE_NORMAL);
+  }
+  inline void vibeNetThread(const char* name) { vibeWinPrio_(name, THREAD_PRIORITY_HIGHEST); }
+  inline void vibeSendRank(bool audio) {
+      if (audio) { vibeNetThread("vibeTx-audio"); return; }
+      vibeWinPrio_("vibeTx-wf", THREAD_PRIORITY_NORMAL);
+  }
+  inline void vibeSpectrumThread(const char* name) { vibe::vibeFlushDenormals(); vibeWinPrio_(name, THREAD_PRIORITY_NORMAL); }
+  inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeWinPrio_(name, THREAD_PRIORITY_BELOW_NORMAL); }
+  inline void vibeBulkThread(const char* name)     { vibeWinPrio_(name, THREAD_PRIORITY_LOWEST); }
+  inline void vibeIqThread(const char* name) {
+      vibe::vibeFlushDenormals();
+      vibeWinName_(name);
+      // ★ avrt.dll is part of every Windows since Vista; loaded by name so nothing extra is linked.
+      typedef HANDLE (WINAPI *AvSet_t)(LPCWSTR, LPDWORD);
+      static AvSet_t avSet = (AvSet_t)(void*)GetProcAddress(LoadLibraryW(L"avrt.dll"), "AvSetMmThreadCharacteristicsW");
+      DWORD task = 0;
+      if (!avSet || !avSet(L"Pro Audio", &task)) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+  }
 #else
   inline void vibeThreadName(const char*) {}
   inline void vibeAudioThread(const char*) { vibe::vibeFlushDenormals(); }

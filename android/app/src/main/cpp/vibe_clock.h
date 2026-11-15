@@ -7,6 +7,7 @@
 //     align to UTC read vibeUtcNow() instead of CLOCK_REALTIME.
 // ★ Never steers the machine: the offset is ours alone, so nothing else on the box is surprised.
 #pragma once
+#include "vibe_sock.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <chrono>
@@ -54,7 +55,12 @@ inline bool sntpQuery(const char* host, double& offset, double& rtt) {
     if (getaddrinfo(host, "123", &hints, &res) != 0 || !res) return false;
     const int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { freeaddrinfo(res); return false; }
+#ifdef _WIN32
+    // ★ Windows takes SO_RCVTIMEO as a DWORD of milliseconds, not a timeval (a timeval would read as 2 ms).
+    const DWORD tvms = 2000; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tvms, sizeof tvms);
+#else
     timeval tv{2, 0}; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+#endif
     auto now = [] { timespec t; clock_gettime(CLOCK_REALTIME, &t); return (double)t.tv_sec + t.tv_nsec / 1e9; };
     constexpr double kNtpEpoch = 2208988800.0;   // 1900 -> 1970
     uint8_t pkt[48]{}; pkt[0] = 0x23;            // LI 0, version 4, mode 3 (client)
@@ -66,7 +72,7 @@ inline bool sntpQuery(const char* host, double& offset, double& rtt) {
     uint8_t r[48]{};
     ok = ok && ::recv(fd, r, sizeof r, 0) == (ssize_t)sizeof r;
     const double t3 = now();
-    ::close(fd);
+    vibesock::close(fd);
     if (!ok) return false;
     if ((r[0] & 0x07) != 4 || r[1] == 0 || r[1] > 15) return false;   // not a server reply / unsynchronised
     auto ts = [&](int o) { uint32_t s, f; memcpy(&s, r + o, 4); memcpy(&f, r + o + 4, 4);

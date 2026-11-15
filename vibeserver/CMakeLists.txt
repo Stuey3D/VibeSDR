@@ -200,6 +200,39 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4
   message(STATUS "32-bit x86: ${VIBE_X86_32_FLAGS}")
 endif()
 
+# ── Windows (2026-10-26, docs/WINDOWS-PORT-PLAN.md, Milestone 1) ──────────────────────────────
+# ★★★ ONE CORE, NOT A FORK. The POSIX surface the server uses is answered by windows/compat: a
+#     force-included vibe_win_compat.h (Winsock2 under the BSD names, poll → WSAPoll, fcntl's
+#     O_NONBLOCK → FIONBIO, setenv, mkdir(path, mode), …) and stand-ins for the POSIX headers MinGW
+#     lacks (<sys/socket.h>, <poll.h>, <netinet/in.h>, …), so the shared sources compile unchanged
+#     wherever the meaning is the same. Where it is NOT the same — fork/exec, SCM_RIGHTS, signals,
+#     /proc — the code says so itself under #ifdef _WIN32, next to the POSIX path it replaces.
+# ★★ -static: libc++, libunwind and winpthreads linked in, so vibeserver.exe needs only Windows' own
+#    DLLs (KERNEL32, WS2_32, SETUPAPI, the UCRT that ships in Windows 10+) — Stuart's no-dependency rule.
+if(WIN32)
+  set(VIBE_WIN_COMPAT "${CMAKE_CURRENT_SOURCE_DIR}/windows/compat")
+  include_directories(BEFORE SYSTEM "${VIBE_WIN_COMPAT}")
+  add_compile_options("SHELL:-include ${VIBE_WIN_COMPAT}/vibe_win_compat.h")
+  # ★ A descriptor is an int in the core and a SOCKET (64-bit unsigned) in Winsock: `pollfd{fd, …}` is a
+  #   narrowing brace-init. The value is preserved exactly (sockets fit in 32 bits, -1 = INVALID_SOCKET).
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-c++11-narrowing>)
+  add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX NOGDI
+                          _POSIX_THREAD_SAFE_FUNCTIONS _USE_MATH_DEFINES rtlsdr_STATIC)
+  add_link_options(-static)
+  enable_language(RC)
+  # ★ Each .exe carries the manifest (UTF-8 code page, asInvoker) and a version block. Configured, not
+  #   -D'd: windres and quoted strings with spaces do not mix.
+  function(vibe_win_resources tgt desc manifest)
+    set(VIBE_RC_DESC "${desc}")
+    set(VIBE_RC_FILE "${tgt}.exe")
+    set(VIBE_RC_MANIFEST "${manifest}")
+    set(VIBE_RC_VERCOMMA "${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/windows/exe.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/${tgt}.rc" @ONLY)
+    target_sources(${tgt} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${tgt}.rc")
+  endfunction()
+  link_libraries(ws2_32 iphlpapi setupapi cfgmgr32 advapi32 shell32 ole32 bcrypt psapi)
+endif()
+
 add_library(vibedsp STATIC
     ${VIBEDSP_SRC}
     "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fft.c"
@@ -408,6 +441,10 @@ if(APPLE AND VIBE_MAC_DEPS)
 elseif(VIBE_LINUX_SELFCONTAINED)
   set(VIBE_DEPS_PREFIX "${VIBE_LINUX_DEPS}")
   set(_deps_hint "run vibeserver/linux/build-deps.sh, or rebuild the build image")
+elseif(WIN32)
+  # ★★ Windows: the prefix windows/build-deps.sh fills — the ONLY source, as on the Mac and Linux.
+  set(VIBE_DEPS_PREFIX "${VIBE_WIN_DEPS}")
+  set(_deps_hint "run scripts/build-windows.sh (it builds windows/deps first)")
 endif()
 if(VIBE_DEPS_PREFIX)
   foreach(_f lib/librtlsdr.a lib/libusb-1.0.a lib/libopus.a include/rtl-sdr.h
@@ -938,6 +975,38 @@ target_include_directories(vibeserver_core PUBLIC "${OPUS_INC}")
 target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_OPUS)
 target_link_libraries(vibeserver_core PUBLIC "${OPUS_LIB}")
 target_link_libraries(vibeserver PRIVATE vibeserver_core)
+if(WIN32)
+  vibe_win_resources(vibeserver "VibeServer — SDR server" "${CMAKE_CURRENT_SOURCE_DIR}/windows/vibeserver.manifest")
+  # ★★ Which driver Windows has on each radio, and the USB path (WinUSB / UsbDk borrow) — windows/win_usb.h.
+  target_sources(vibeserver_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_usb.cpp"
+    # ★★★ The TV-stick switch (one UAC prompt, Microsoft's in-box winusb.inf) and start-at-boot — Stuart, 2026-10-26.
+    "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_switch.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_bind.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_autostart.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_dongles.cpp")
+  target_include_directories(vibeserver_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/windows"
+                             "${VIBE_DEPS_PREFIX}/include/libusb-1.0")
+  target_link_libraries(vibeserver_core PUBLIC version)
+  # ★★★ vibe-usbprobe.exe — Milestone 1's driver test (docs/WINDOWS-M1-TEST.md). Its own small program,
+  #     not a mode of the server: it needs administrator rights for one step and the server never does.
+  add_executable(vibe-usbprobe "${CMAKE_CURRENT_SOURCE_DIR}/windows/usbprobe.cpp"
+                               "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_usb.cpp"
+                               "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_bind.cpp")
+  target_include_directories(vibe-usbprobe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/windows" "${RTLSDR_INC}"
+                             "${VIBE_DEPS_PREFIX}/include/libusb-1.0")
+  target_compile_definitions(vibe-usbprobe PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}")
+  target_link_libraries(vibe-usbprobe PRIVATE "${RTLSDR_LIB}" "${USB_LIB}" version Threads::Threads)
+  vibe_win_resources(vibe-usbprobe "VibeServer USB driver probe" "${CMAKE_CURRENT_SOURCE_DIR}/windows/usbprobe.manifest")
+  # ★★ The front door's hand-off on Windows (WSADuplicateSocketW over AF_UNIX), tested as the POSIX one is:
+  #    by the CONNECTION surviving, not by a handle arriving.
+  add_executable(test-fd-passing-win "${CMAKE_CURRENT_SOURCE_DIR}/windows/test/test-fd-passing-win.cpp"
+                                     "${CPP_DIR}/fd_passing.cpp")
+  target_include_directories(test-fd-passing-win PRIVATE "${CPP_DIR}")
+  # ★★ The switch's rules (which sticks are offered, what the elevated helper refuses) and start-at-boot's pure parts,
+  #    with made-up devices — no USB, no admin, runs under Wine.
+  add_executable(test-win-switch "${CMAKE_CURRENT_SOURCE_DIR}/windows/test/test-win-switch.cpp")
+  target_link_libraries(test-win-switch PRIVATE vibeserver_core)
+endif()
 
 # ★★ THE RADIO-LIST API, UNDER TEST. Unlike the tests in scripts/run-tests.sh — which compile a
 #    single .cpp with a named handful of deps — this one needs the WHOLE core linked (it probes

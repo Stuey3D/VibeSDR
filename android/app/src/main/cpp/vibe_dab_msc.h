@@ -9,6 +9,7 @@
 //   · 11.3.2 + tables 18/20 — the EEP profiles, as formulas in n.
 #pragma once
 
+#include <algorithm>   // std::fill — libc++ (llvm-mingw) does not pull it in through <vector>
 #include <cstdint>
 #include <cstring>
 #include <vector>

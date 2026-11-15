@@ -1,0 +1,26 @@
+// ★ Resources for each Windows .exe (configured per target by vibe_win_resources() in CMakeLists.txt): the manifest (UTF-8 code page, no elevation) and the version block
+//   that Explorer's Properties → Details shows — the first place anyone looks for "which version is this?".
+#include <winver.h>
+1 24 "@VIBE_RC_MANIFEST@"
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     @VIBE_RC_VERCOMMA@
+PRODUCTVERSION  @VIBE_RC_VERCOMMA@
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "080904b0"
+    BEGIN
+      VALUE "CompanyName",      "VibeSDR"
+      VALUE "FileDescription",  "@VIBE_RC_DESC@"
+      VALUE "FileVersion",      "@VIBESERVER_VERSION@"
+      VALUE "ProductName",      "VibeServer"
+      VALUE "ProductVersion",   "@VIBESERVER_VERSION@"
+      VALUE "LegalCopyright",   "GPL-3.0 — see LICENSE"
+      VALUE "OriginalFilename", "@VIBE_RC_FILE@"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x809, 1200
+  END
+END
