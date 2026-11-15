@@ -47,5 +47,12 @@ const L = (o: DrmQualityReport): DrmQualityReport => ({ sync: true, locked: true
   for (let i = 1; i <= 10; i++) { u += 10; b += i < 5 ? 3 : 0; seq.push([i * 1200, L({ snr: 14.5, mscMer: 9, mscQam: 16, facOk: 3 * i, facBad: 0, audioUnits: u, audioBad: b, codec: 'AAC', playable: true })]); }
   run('loss-recovery', seq);
 }
+// ★ 2026-11-15: DAB's lines — clean frames under the MER margin, then frames lost
+{
+  const seq: Array<[number, DrmQualityReport]> = [];
+  let u = 0, b = 0;
+  for (let i = 1; i <= 12; i++) { u += 40; b += i > 6 ? 2 : 0; seq.push([i * 1200, L({ snr: 9, mscMer: i > 6 ? 12 : 6, mscQam: 16, facOk: 3 * i, facBad: 0, audioUnits: u, audioBad: b, codec: 'AAC', playable: true })]); }
+  run('clear-corrected-then-breakups', seq);
+}
 writeFileSync(process.argv[2], out.join('\n') + '\n');
 console.log(`gen_drm_quality_golden: ${out.length} pushes`);

@@ -26,7 +26,7 @@
  *    the next few will.
  */
 import type { DabLevel, DabQuality } from './dabQuality.ts';
-import { HOLD_DOWN, HOLD_UP } from './dabQuality.ts';
+import { HOLD_DOWN, HOLD_UP, DAB_BREAKUP_ADVICE, dabClearCorrectedAdvice } from './dabQuality.ts';
 
 /** The report fields the meter reads — a subset of DrmState (src/services/drm.ts, web/client/src/drm.ts). */
 export interface DrmQualityReport {
@@ -95,7 +95,9 @@ export interface DrmWindow {
 }
 
 /** ★ The verdict for one window, with no memory — the pure core the meter wraps in hysteresis. */
-export function classifyDrmWindow(w: DrmWindow): { level: DabLevel; detail?: string } {
+/** `audioClean` as DAB's: set only when audio evidence decided — true = no loss worth a level (a lower verdict is the MER
+ *  margin), false = the audio itself is losing frames. */
+export function classifyDrmWindow(w: DrmWindow): { level: DabLevel; detail?: string; audioClean?: boolean } {
   if (!w.locked) return { level: 0, detail: w.sync ? 'found' : 'searching' };
   const need = DRM_MER_NEED[w.mscQam ?? 16] ?? 12;
   const merDetail = (m: number) => `MSC MER ${m.toFixed(1)} dB${w.mscQam ? ` (${w.mscQam}-QAM needs ${need})` : ''}`;
@@ -103,10 +105,11 @@ export function classifyDrmWindow(w: DrmWindow): { level: DabLevel; detail?: str
   // ── Audio evidence: the frames the listener would hear ──
   if (w.audioIn !== undefined && w.audioIn >= MIN_AUDIO) {
     const lost = Math.min(w.audioBad ?? 0, w.audioIn) / w.audioIn;
-    let a: { level: DabLevel; detail?: string } =
-      { level: lost >= AUDIO_BAD_WEAK ? 1 : lost >= AUDIO_BAD_STRONG ? 2 : 3, detail: lost > 0 ? `${pct(lost)} % audio lost` : undefined };
+    const aLevel: DabLevel = lost >= AUDIO_BAD_WEAK ? 1 : lost >= AUDIO_BAD_STRONG ? 2 : 3;
+    let a: { level: DabLevel; detail?: string; audioClean?: boolean } =
+      { level: aLevel, detail: lost > 0 ? `${pct(lost)} % audio lost` : undefined, audioClean: aLevel === 3 };
     // ★ The margin is a ceiling, as DAB's raw BER: clean frames on a programme living below its QAM's need are luck.
-    if (a.level === 3 && w.mscMer !== undefined && w.mscMer > 0 && w.mscMer < need) a = { level: 2, detail: merDetail(w.mscMer) };
+    if (a.level === 3 && w.mscMer !== undefined && w.mscMer > 0 && w.mscMer < need) a = { level: 2, detail: merDetail(w.mscMer), audioClean: true };
     return a;
   }
 
@@ -202,7 +205,12 @@ export class DrmQualityMeter {
       level: lvl,
       label: found ? DRM_FOUND_LABEL : LABEL[lvl],
       short: found ? 'Locking' : SHORT[lvl],
-      advice: found ? DRM_FOUND_ADVICE : lvl !== 0 && win.unplayable ? DRM_UNPLAYABLE_ADVICE : ADVICE[lvl],
+      advice: found ? DRM_FOUND_ADVICE : lvl !== 0 && win.unplayable ? DRM_UNPLAYABLE_ADVICE
+        // ★★ DAB's 2026-11-15 rule (Stuart: "DRM can take the same labels as DAB"): the verdict is the margin, the line
+        //    under it is the audio. DRM's ceiling is the MSC MER, not a BER, so the clean line is the plain one.
+        : lvl >= 2 && v.audioClean === false ? DAB_BREAKUP_ADVICE
+        : lvl !== 0 && lvl < 3 && v.audioClean === true ? dabClearCorrectedAdvice()
+        : ADVICE[lvl],
       ...(showDetail ? { detail: showDetail } : {}),
       // ★ the decoder's own SNR (the FAC's MER) — the box's reading, where SNR sits for every other mode
       ...(r.locked && win.snr !== undefined ? { merDb: win.snr } : {}),

@@ -28,6 +28,10 @@ constexpr double WINDOW_MS = 6000;
 
 inline const char* label(int l) { static const char* t[] = {"No DRM signal", "DRM weak", "DRM moderate", "DRM strong"}; return t[l & 3]; }
 inline const char* shortLabel(int l) { static const char* t[] = {"No signal", "Weak", "Moderate", "Strong"}; return t[l & 3]; }
+/** DAB's lines (dab_quality.h BREAKUP_ADVICE / clearCorrectedAdvice, 2026-11-15): the verdict is the margin, the line
+ *  under it is the audio. DRM's ceiling is the MSC MER, so the clean line is the plain one (drmQuality.ts). */
+constexpr const char* BREAKUP_ADVICE = "Break-ups \xc2\xb7 errors uncorrected";
+constexpr const char* CLEAR_CORRECTED_ADVICE = "Clear \xc2\xb7 errors corrected";
 inline const char* advice(int l) {
     static const char* t[] = {"Searching for a DRM signal", "No or heavily broken audio", "Expect occasional audio break-ups", "Clear audio"};
     return t[l & 3];
@@ -84,8 +88,9 @@ struct DrmWindow {
 };
 
 /** classifyDrmWindow — the pure core. */
-inline void drmClassify(const DrmWindow& w, int& level, std::string& detail) {
+inline void drmClassify(const DrmWindow& w, int& level, std::string& detail, int* audioCleanOut = nullptr) {
     detail.clear();
+    if (audioCleanOut) *audioCleanOut = -1;
     if (!w.locked) { level = 0; detail = w.sync ? "found" : "searching"; return; }
     const double need = drmq::merNeed(w.mscQam);
     auto merDetail = [&](double m) {
@@ -97,6 +102,7 @@ inline void drmClassify(const DrmWindow& w, int& level, std::string& detail) {
         const double lost = std::min(std::isnan(w.audioBad) ? 0 : w.audioBad, w.audioIn) / w.audioIn;
         level = lost >= drmq::AUDIO_BAD_WEAK ? 1 : lost >= drmq::AUDIO_BAD_STRONG ? 2 : 3;
         if (lost > 0) detail = drmq::pct(lost) + " % audio lost";
+        if (audioCleanOut) *audioCleanOut = level == 3 ? 1 : 0;
         if (level == 3 && !std::isnan(w.mscMer) && w.mscMer > 0 && w.mscMer < need) { level = 2; detail = merDetail(w.mscMer); }
         return;
     }
@@ -155,8 +161,8 @@ public:
         w.facIn = d(&DrmQSample::facOk) + d(&DrmQSample::facBad); w.facBad = d(&DrmQSample::facBad);
         if (!std::isnan(s.audioUnits) && samples_.size() > 1) { w.audioIn = d(&DrmQSample::audioUnits) + d(&DrmQSample::audioBad); w.audioBad = d(&DrmQSample::audioBad); }
         w.unplayable = locked && !r["codec"].str().empty() && !(r["playable"].kind == Json::Bool && r["playable"].boolean());
-        int vl; std::string vd;
-        drmClassify(w, vl, vd);
+        int vl; std::string vd; int clean = -1;
+        drmClassify(w, vl, vd, &clean);
         if (shown_ < 0) shown_ = vl;
         else if (vl != shown_) {
             if (pendL_ == vl) pendN_++; else { pendL_ = vl; pendN_ = 1; }
@@ -169,7 +175,10 @@ public:
         q.level = lvl;
         q.label = found ? drmq::FOUND_LABEL : drmq::label(lvl);
         q.shortL = found ? "Locking" : drmq::shortLabel(lvl);
-        q.advice = found ? drmq::FOUND_ADVICE : (lvl != 0 && w.unplayable) ? drmq::UNPLAYABLE_ADVICE : drmq::advice(lvl);
+        q.advice = found ? drmq::FOUND_ADVICE : (lvl != 0 && w.unplayable) ? drmq::UNPLAYABLE_ADVICE
+                 : (lvl >= 2 && clean == 0) ? drmq::BREAKUP_ADVICE
+                 : (lvl != 0 && lvl < 3 && clean == 1) ? drmq::CLEAR_CORRECTED_ADVICE
+                 : drmq::advice(lvl);
         if (lvl == vl && lvl != 0 && !vd.empty()) q.detail = vd;
         else if (lvl != 0 && !std::isnan(w.snr)) { char b[48]; std::snprintf(b, sizeof b, "decoded SNR %ld dB", drmq::jsRound(w.snr)); q.detail = b; }
         q.hasSnr = locked && !std::isnan(w.snr); q.snrDb = q.hasSnr ? w.snr : 0;

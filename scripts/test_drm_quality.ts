@@ -109,5 +109,24 @@ eq('a bad FAC does not outrank clean audio (the audio is what is heard)', lvl({ 
   eq('reset(): forgotten', m.current(), null);
 }
 
+{
+  // ★★ DAB's line rule on DRM (Stuart, 2026-11-15): the verdict is the margin, the line under it is the audio.
+  const m = new DrmQualityMeter();
+  let q = DRM_SEARCHING; let t = 0, units = 0, fac = 0;
+  for (let i = 0; i < 8; i++) {
+    units += 10; fac += 3; t += 1200;
+    q = m.push({ sync: true, locked: true, msc: true, snr: 9, mscMer: 6, mscQam: 16, facOk: fac, facBad: 0,
+                 audioUnits: units, audioBad: 0, codec: 'AAC', playable: true }, t);
+  }
+  eq('clean audio under the MER margin: moderate, "Clear · errors corrected"', [q.level, q.advice], [2, 'Clear \u00b7 errors corrected']);
+  const n = new DrmQualityMeter(); units = 0; fac = 0; t = 0;
+  for (let i = 0; i < 8; i++) {
+    units += 48; fac += 3; t += 1200;
+    q = n.push({ sync: true, locked: true, msc: true, snr: 14, mscMer: 12, mscQam: 16, facOk: fac, facBad: 0,
+                 audioUnits: units, audioBad: 2 * (i + 1), codec: 'AAC', playable: true }, t);
+  }
+  eq('frames lost at moderate: "Break-ups · errors uncorrected"', [q.level, q.advice], [2, 'Break-ups \u00b7 errors uncorrected']);
+}
+
 console.log(`test_drm_quality: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);
