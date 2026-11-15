@@ -22,7 +22,6 @@ BOLD = os.path.join(repo, "assets/fonts/AtkinsonHyperlegible-Bold.ttf")
 GREEN = (0x5C, 0xE0, 0x7A)      # the icon's green (vibe-splash BAR_ON)
 GREEN_DIM = (0x2E, 0x70, 0x3D)
 TXT = (0xE8, 0xF5, 0xEC)
-TXT_DIM = (0xA8, 0xB8, 0xAC)
 
 # ★★★ THE CONTROLS ON THE BOOT SCREEN, EVERY BOOT (Stuart, 2026-11-07: "make it the permanent boot screen then anybody
 #     goes back to it gets a reminder. Keep the status bar"). 2026-11-11: no longer a portrait outline of the R36S with
@@ -119,8 +118,10 @@ Y0, RH = 4, 30                                       # ★ twelve rows above the
 #    the divider in its middle — centred on the panel, so the two outer margins are equal.
 f_big = F(BOLD, 38)
 word = "VibeSDR"
-sub = "the radio in your pocket"
-LOGO_W = max(132, d.textlength(word, font=f_big) / S, d.textlength(sub, font=f_small) / S)
+# ★ No tagline under the wordmark (Stuart, 2026-11-15: "the radio in your pocket" read as cheesy). The logo column is
+#   now the icon and the wordmark only; its width is the wider of the two (132 = the icon), and the pair moves down 8 px
+#   so its middle stays where the old three-line block's middle was — level with the control rows' middle.
+LOGO_W = max(132, d.textlength(word, font=f_big) / S)
 WIDEST = max(max(d.textlength(k, font=f_key), d.textlength(w_, font=f_small)) for _, k, w_ in ROWS) / S
 GLYPH_W, GAP = 60, 44
 M = (W - (LOGO_W + GAP + GLYPH_W + WIDEST)) / 2
@@ -129,9 +130,8 @@ GX = int(round(M + LOGO_W + GAP)); TX = GX + GLYPH_W
 DIV = int(round(M + LOGO_W + GAP / 2))
 d.line(R([DIV, 22, DIV, 350]), fill=GREEN_DIM, width=S)
 ic = icon.resize((132 * S, 132 * S), Image.LANCZOS)
-big.paste(ic, (int(round((LCX - 66) * S)), 96 * S))
-d.text((LCX * S - d.textlength(word, font=f_big) / 2, 240 * S), word, font=f_big, fill=TXT)
-d.text((LCX * S - d.textlength(sub, font=f_small) / 2, 288 * S), sub, font=f_small, fill=TXT_DIM)
+big.paste(ic, (int(round((LCX - 66) * S)), 104 * S))
+d.text((LCX * S - d.textlength(word, font=f_big) / 2, 248 * S), word, font=f_big, fill=TXT)
 TMAX = W - 8 - TX
 for i, (glyph, key, what) in enumerate(ROWS):
     y = Y0 + i * RH
