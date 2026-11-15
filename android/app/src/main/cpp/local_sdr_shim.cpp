@@ -32492,6 +32492,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ Cost (stated, feedback_state_efficiency_tradeoffs): up to kDxLooks x ~5-9 s per hop, ONLY where such a station
      *    was heard — a hop of named stations costs nothing more. Local RTL only: the filter is librtlsdr's (an RSP /
      *    Airspy / rtl_tcp radio keeps its ordinary hop). */
+    /* ★★★ EVERY FM HOP STARTS AT THE GAIN THAT LAST WORKED THERE (the Sony, 2026-11-15 00:06: the 104 MHz hops ran at
+     *  44.5 dB with 55 % of the samples on the rail — Stuart listens at 9 dB — and the AGC, forgetting at every retune and
+     *  taking ~5 s to cut, spent the whole 4.4 s dwell overloaded. BBC Northampton's intermod was decoded as "104.8 CF11"
+     *  and "102.8 CF11", Horizon 104.7 was buried, and the hops after it, cut to 3.7 dB, heard nothing at all).
+     *  DAB's shape (g_dabGainMem): learned at the END of a hop that finished with nothing on the rail, seeded on entry —
+     *  from this hop's memory, else the nearest hop's, else the FM band's settled gain (a listener's) — and the dwell does
+     *  not start while the ADC is still on the rail (up to kDxGainWaitS: the AGC's one-move cut lands in ~1-2 s).
+     *  In-process, like g_bandGainMem; a radio with no gain table (RSP, HF+) is untouched (dabSeedGain declines). */
+    std::map<int, int> dxGainMem_;   // hop centre kHz -> g_ovlSteps
+    static constexpr double kDxGainWaitS = 3.0;
+    void dxGainEnter(int key, const char* what) {
+        int steps = -1;
+        if (auto it = dxGainMem_.find(key); it != dxGainMem_.end()) steps = it->second;
+        else if (!dxGainMem_.empty()) {
+            int bd = INT_MAX;
+            for (const auto& kv : dxGainMem_) if (std::abs(kv.first - key) < bd) { bd = std::abs(kv.first - key); steps = kv.second; }
+        } else {
+            std::lock_guard<std::mutex> lk(g_bandGainMtx);
+            auto it = g_bandGainMem.find(vibeagc::agcBandKey(key * 1e3));
+            if (it != g_bandGainMem.end()) steps = it->second;
+        }
+        if (steps >= 0) dabSeedGain(this, steps, nowSecs(), what);
+        for (double t0 = nowSecs(); nowSecs() - t0 < kDxGainWaitS && !dxCancel_.load() && !stopping.load();) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (nowSecs() - t0 >= 0.5 && g_adcClipRun.load(std::memory_order_relaxed) <= 0) break;
+        }
+    }
+    void dxGainLearn(int key) {
+        if (g_adcClipRun.load(std::memory_order_relaxed) > 0) return;   // ★ never remember a gain that ended on the rail
+        dxGainMem_[key] = g_ovlSteps.load(std::memory_order_relaxed);
+    }
     std::vector<vibe::dx::FmHit> dxPrevHits_;   // ★ the previous hop's hits (vibe_dxscan.h spillOf / markSpill)
     int dxPrevHopIdx_ = -1;
     static constexpr int    kDxLooks = 3;
@@ -32590,6 +32621,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         dxSetIf(dxIfRung(2.0 * std::max(hop.hiHz - hop.centreHz, hop.centreHz - hop.loHz) + kDxChanHz));
         bgPlace(centre, centre, hop.centreHz);
         applyAutoIf();
+        const int hopKey = (int)std::lround(hop.centreHz / 1e3);
+        dxGainEnter(hopKey, "FM hop");
         vibe::dx::FmHopEngine::Params p;
         p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
         p.rasterKhz = cfg.rasterKhz; p.loHz = hop.loHz; p.hiHz = hop.hiHz;
@@ -32611,6 +32644,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<vibe::dx::FmHit> hits;
         for (const auto& h : dxFm_.results()) if (perm.empty() || vibebands::allows(perm, h.khz * 1e3)) hits.push_back(h);
         const auto st = dxFm_.stats();
+        dxGainLearn(hopKey);   // ★ before the close looks move the filter and the gain
         const int looks = dxCloseLooks(cfg, hits);
         dxSetIf(0);
         applyAutoIf();   // ★ back to the ordinary rule — a widening arms the AGC's fast cut, as it should
