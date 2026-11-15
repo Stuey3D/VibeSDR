@@ -66,6 +66,70 @@ VM**, because pi-gen keeps a root filesystem per stage. The Mac's colima VM had 
 2026-10-10, so this route is for a Linux build host or a bigger VM. The login it creates (`vibe`)
 gets a random password that is not kept. SSH is off.
 
+## A new card checks for a VibeServer update once, during setup
+
+From 11.0.16, a card checks for a newer VibeServer one time, during setup. A card carries the VibeServer it was built
+with, so it can be weeks old. Stuart, 2026-10-28: *"Make the SBC cards check for a VibeServer update on first install
+if connected to the internet … then the owner can choose auto updates thereafter."* This covers the Raspberry Pi cards
+and the board cards (`image/sbc`), which share `customise.sh`.
+
+1. The owner flashes the card and connects to it.
+2. They set up the network on the setup page.
+3. **Then the setup page runs one step: "Checking for a VibeServer update…".** It ends with one of these lines:
+   - "Updated to VibeServer 11.0.x."
+   - "VibeServer is up to date (11.0.x)."
+   - "VibeServer cannot check for updates — proceeding with setup." (no internet)
+   - "The update check did not finish — VibeServer 11.0.x is unchanged." (anything that failed)
+   - "Update cancelled — VibeServer 11.0.x is unchanged."
+
+   Setup then carries on.
+4. **It never runs again by itself.** This holds for every outcome, including offline, failed, cancelled and a power
+   cut. From then on, updates come from **Update VibeServer** (Admin › Maintenance) or from the schedule the owner
+   chooses there.
+
+**Cancel** is shown while the check and the download run. It stops the download, and the installed VibeServer is not
+touched. Once dpkg has started, there is no Cancel: the page says *"This part cannot be cancelled"*. A press that
+arrives just then gets *"Too late to cancel — the install has started and is finishing safely"*. A package is never
+left half-installed.
+
+How it works:
+
+- **Armed by the card only.** `customise.sh` writes `/etc/vibeserver-pocket/first-update` when the package has the
+  feature. A box that updated to 11.0.16 from an older package was set up long ago, so it never runs the check.
+- **The root helper does the work.** The page asks for the maintenance action `first-update`, which runs
+  `first_update` in `vibeserver-maintenance`. It is the `update` action with four additions:
+  - a quick look first, at apt.vibesdr.net only, into a throwaway list directory in `/run`. When nothing is newer,
+    nothing is written anywhere;
+  - time limits: 90 s for the look, 600 s for the indexes, 900 s for the download;
+  - the cancel;
+  - a record of the run.
+
+  Everything else is the same as `update`. It installs `vibeserver` alone with `--only-upgrade`, at the exact version
+  it found, so it never touches the OS and never goes down a version. It uses `apt_do`, which works through
+  `overlayroot-chroot` on a sealed card. It runs `pocket_converge`, and it **reboots on a sealed card** (the read-only
+  root's own rule). Without a seal, the package's own try-restart restarts VibeServer.
+- **Once means once.** The record `/var/lib/vibeserver-pocket/first-update` is on the settings partition. It is
+  written **before** anything touches the network, and the helper refuses to run while the record exists. The steps
+  are: `state=checking | downloading | installing`, then `updated | uptodate | offline | failed | cancelled`, followed
+  by `from=`, `to=` and `why=`. Admin status carries it as `updates.first`, so a page reloaded during a run follows
+  that run.
+- **Cancel** is one empty file, `/var/lib/vibeserver/first-update.cancel`. The daemon writes it into its own
+  directory, and the helper only checks that it exists. The helper then signals **apt-get and its download methods
+  only**, never `overlayroot-chroot`, which must finish its own clean-up and remount the real root read-only. The last
+  point at which a Cancel is honoured is the moment just before dpkg starts.
+- **The restart never strands the page.** The step is the whole page while it runs, so nothing typed can be lost.
+  After an update the page waits for a **new server instance**, the same proof the Save uses, and then carries on.
+  This covers the reboot of a sealed card, after which the box comes back on the same network under the same setup
+  name.
+- **Never on the open setup hotspot.** There is no internet there, and the network is not set up yet (step 2).
+- **Beta.** A card built from a `~beta` package also gets `vibesdr-beta.list`, the same file as the admin page's
+  **Receive beta updates** tick. Its check therefore looks in the beta suite, the page shows the box ticked, and
+  unticking it is the existing way back to stable.
+- Tests:
+  - `vibeserver/linux/test_first_update_docker.sh`, 47 checks. Real apt and dpkg against a local repository, in a
+    Debian bookworm container with no network.
+  - `scripts/test-setup-first-update.mjs`, 27 checks. The page's own functions against a fake server.
+
 ## Updating a Portable: no new card needed
 
 **A Portable updates fully through the admin page's Install updates. A new image is only for a brand-new
