@@ -96,7 +96,7 @@ import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan
 import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
-import { tunedLabel as tunedLabelFor, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
+import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
 import { displayMap, fanRefresh, fanRow, motionImageRows, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { ringCapFromDeviceClass, ringNextRows, RING_MIN_ROWS } from '../utils/wfRingSize';
 import { growRing } from '../utils/wfRingGrow';
@@ -2819,12 +2819,15 @@ function WaterfallView({
     return p.length ? p : null;
   }, [knownSignals, visStart, bwHz, width, tuneHz, knownNX, knownCX]);
 
-  // ★★ V12 the tuned station's label: a supplement to the labels above — passed over when one of them names it already
-  const tunedLabel = useMemo(() => {
+  // ★★ V12 the tuned station: its own label beside the needle, OR — when one of the labels above already names it — that
+  //    label drawn in the tuned colour instead (tunedPick: never both, never a second name in its place)
+  const tunedPicked = useMemo(() => {
     if (!tunedStation) return null;
-    return tunedLabelFor(tunedStation.rows, tuneHz, utcMinutes(), { settled: true, vtsShowing: false, passband: tunedStation.passband,
-                                                                   shown: knownPlaced ? knownPlaced.map(p => p.sig) : [] });
+    return tunedPick(tunedStation.rows, tuneHz, utcMinutes(), { settled: true, vtsShowing: false, passband: tunedStation.passband,
+                                                               shown: knownPlaced ? knownPlaced.map(p => p.sig) : [] });
   }, [tunedStation, tuneHz, knownPlaced]);
+  const tunedLabel = tunedPicked ? tunedPicked.label : null;
+  const tunedHi = tunedPicked ? tunedPicked.highlight : -1;
 
   // ── Visible tiles (deckOcclusion) ───────────────────────────────────────────
   // The deck arrives in WINDOW coordinates; this view's own window origin turns it into canvas coordinates.
@@ -3374,9 +3377,12 @@ function WaterfallView({
           const tickBot = specShow && specH > 40 ? wfTop : top + 13;
           const s = p.sig;
           const bx0 = s.lo != null ? Math.max(0, hzToX(s.lo)) : 0, bx1 = s.hi != null ? Math.min(width, hzToX(s.hi)) : 0;
+          // ★★ V12 the label naming the station you are tuned to: the tuned label's colour (stampCol) and dark halo
+          const hi = i === tunedHi;
           return (
             <React.Fragment key={'ks' + i + ':' + s.hz}>
-              <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) }]} />
+              <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) },
+                                                 hi && { backgroundColor: stampCol, opacity: 1 }]} />
               {bx1 - bx0 >= 3 && (
                 <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }]} />
               )}
@@ -3387,7 +3393,7 @@ function WaterfallView({
                     onAccessibilityTap={onKnownTap ? () => onKnownTap(s) : undefined}
                     ref={onKnownTap ? screenNavRef('known' + i, () => onKnownTap(s)) : undefined}
                     style={[styles.knownBox, { left: p.lx, top }]}>
-                <Text numberOfLines={1} style={[styles.knownText, { fontFamily }]}>{s.label}</Text>
+                <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
               </View>
             </React.Fragment>
           );
@@ -3546,6 +3552,8 @@ const styles = StyleSheet.create({
   knownText: { fontSize: 9, fontWeight: 'bold', color: KNOWN_LABEL_COLOUR },
   // ★★ V12 the tuned station's label (utils/tunedStation.ts) — the scale stamps' dark band and halo, in the stamp colour
   tunedBox: { position: 'absolute', height: 14, paddingHorizontal: 4, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center' },
+  // ★★ …and a signal label that names the tuned station: its size, the tuned colour (set inline) and the same dark halo
+  knownHiText: { textShadowColor: 'rgba(0,0,0,0.95)', textShadowRadius: 2, textShadowOffset: { width: 0, height: 1 } },
   tunedText: { fontSize: 9.5, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.95)', textShadowRadius: 2,
                textShadowOffset: { width: 0, height: 1 } },
   dbLabel: {

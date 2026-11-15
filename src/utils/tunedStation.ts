@@ -24,8 +24,11 @@
  *     "[User] Flex FM" under it): the spectrum's own labels (knownSignals.ts — your bookmarks, the server's, learnt FM
  *     names, EiBi's utility rows) already name what they mark. So a candidate whose own marker is DRAWN at the needle
  *     right now (`shown` — the placed labels, straight from the code that draws them: off, decluttered or off screen
- *     = not drawn) is passed over, and the next one is considered. EiBi's broadcast rows are never drawn there, which is
- *     what this label is chiefly for.
+ *     = not drawn) gets NO tuned label — and nothing else is offered in its place (Stuart: no "[EiBi] …" under a drawn
+ *     bookmark). Instead that one spectrum label is HIGHLIGHTED (tunedPick.highlight): drawn in the tuned label's colour
+ *     (stampColour), so the station you are on stands out the same way whichever names it. Same rules for when: the
+ *     dial at rest, the VTS done, no live name — so the highlight never flickers through labels while tuning. EiBi's
+ *     broadcast rows are never drawn there, which is what the tuned label is chiefly for.
  *  ★ WHERE (tunedLabelX): beside the needle, flipped to its other side near the right edge and kept on screen at both.
  *    The vertical slot is each client's: just below its LISTEN readout, never over it.
  */
@@ -49,18 +52,27 @@ export interface TunedStation { source: TunedSource; name: string; hz: number }
 /** A label the spectrum is DRAWING now (knownSignals.ts PlacedLabel.sig): its marker, its dial, and where it came from. */
 export interface ShownMarker { hz: number; dialHz?: number; src: string }
 
-/** Is this candidate already named on the spectrum? A bookmark (yours or the server's) by a personal / server / learnt
- *  label, an EiBi row by an EiBi label — at its frequency, by the marker or its dial, within `tolHz`. */
-export function markerCovers(row: { frequency: number; source?: string }, shown: readonly ShownMarker[] | undefined,
-                             tolHz: number = TUNED_TOL_HZ): boolean {
-  if (!shown || !shown.length) return false;
+/** Which drawn spectrum label names this station, or −1: a bookmark (yours or the server's) by a personal / server /
+ *  learnt label, an EiBi row by an EiBi label — at its frequency, by the marker or its dial, within `tolHz`; the nearest
+ *  when several do, the first on a tie. */
+export function markerIndex(row: { frequency: number; source?: string }, shown: readonly ShownMarker[] | undefined,
+                            tolHz: number = TUNED_TOL_HZ): number {
+  if (!shown || !shown.length) return -1;
   const eibi = row.source === 'eibi';
-  for (const m of shown) {
+  let best = -1, bestD = Infinity;
+  for (let i = 0; i < shown.length; i++) {
+    const m = shown[i];
     const mine = eibi ? m.src === 'eibi' : m.src === 'personal' || m.src === 'server' || m.src === 'learnt';
     if (!mine) continue;
-    if (Math.abs(m.hz - row.frequency) <= tolHz || (m.dialHz != null && Math.abs(m.dialHz - row.frequency) <= tolHz)) return true;
+    const d = Math.min(Math.abs(m.hz - row.frequency), m.dialHz != null ? Math.abs(m.dialHz - row.frequency) : Infinity);
+    if (d <= tolHz && d < bestD) { best = i; bestD = d; }
   }
-  return false;
+  return best;
+}
+/** Is this station already named on the spectrum? (markerIndex ≥ 0) */
+export function markerCovers(row: { frequency: number; source?: string }, shown: readonly ShownMarker[] | undefined,
+                             tolHz: number = TUNED_TOL_HZ): boolean {
+  return markerIndex(row, shown, tolHz) >= 0;
 }
 
 /** ±Hz of the dial that counts as ON a station — the VTS's own (stations.ts VTS_ON_HZ = 99; the test checks they agree).
@@ -117,12 +129,11 @@ function sourceOf(s: string | undefined): TunedSource | null {
  * The station being received, or null: the best-ranked source inside the passband `pb` (inPassband — user → server →
  * EiBi), the nearest to the dial within
  * a source, the first listed on an exact tie. An EiBi row off air at `nowMin` (minutes past 00:00 UTC) is not a candidate;
- * a row whose own label the spectrum is drawing (`shown`, markerCovers) is passed over for the next; a row with no
- * name, no usable frequency or an unknown source is skipped, and so is a DAB service (mode "dab" — the
+ * a row with no name, no usable frequency or an unknown source is skipped, and so is a DAB service (mode "dab" — the
  * block's frequency names none of its services; in DAB the playing service is the live name anyway).
  */
 export function tunedStation(rows: readonly TunedRow[], dialHz: number, nowMin: number,
-                             pb: Passband = ON_TUNE, shown?: readonly ShownMarker[]): TunedStation | null {
+                             pb: Passband = ON_TUNE): TunedStation | null {
   if (!(dialHz > 0)) return null;
   let best: TunedStation | null = null;
   let bestRank = 9, bestOff = Infinity;
@@ -136,7 +147,6 @@ export function tunedStation(rows: readonly TunedRow[], dialHz: number, nowMin: 
     const rank = RANK[src];
     if (rank > bestRank || (rank === bestRank && off >= bestOff)) continue;
     if (src === 'eibi' && !eibiOnAir(r.comment, nowMin)) continue;
-    if (markerCovers(r, shown)) continue;
     best = { source: src, name, hz: r.frequency };
     bestRank = rank; bestOff = off;
   }
@@ -163,11 +173,19 @@ export interface TunedLabelState {
   shown?: readonly ShownMarker[];
 }
 
-/** The label to draw at the VFO, or null for none. */
+/** What to draw for the station being received: the tuned label's text, OR the index into `shown` of the spectrum label
+ *  that already names it (to draw in the tuned colour) — never both; neither = nothing. */
+export interface TunedPick { label: string | null; highlight: number }
+export function tunedPick(rows: readonly TunedRow[], dialHz: number, nowMin: number, st: TunedLabelState): TunedPick {
+  if (!st.settled || st.vtsShowing || String(st.liveName ?? '').trim()) return { label: null, highlight: -1 };
+  const t = tunedStation(rows, dialHz, nowMin, st.passband);
+  if (!t) return { label: null, highlight: -1 };
+  const i = markerIndex({ frequency: t.hz, source: t.source }, st.shown);
+  return i >= 0 ? { label: null, highlight: i } : { label: tunedLabelText(t), highlight: -1 };
+}
+/** The label to draw at the VFO, or null for none (tunedPick's text). */
 export function tunedLabel(rows: readonly TunedRow[], dialHz: number, nowMin: number, st: TunedLabelState): string | null {
-  if (!st.settled || st.vtsShowing || String(st.liveName ?? '').trim()) return null;
-  const t = tunedStation(rows, dialHz, nowMin, st.passband, st.shown);
-  return t ? tunedLabelText(t) : null;
+  return tunedPick(rows, dialHz, nowMin, st).label;
 }
 
 /**

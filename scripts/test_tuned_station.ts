@@ -7,7 +7,8 @@
  *   • tolerance — on the dial is the VTS's own ±99 Hz (stations.ts VTS_ON_HZ is read from the file); beyond it the label
  *     matches anything INSIDE the receive passband (Stuart: a listener slightly off who still hears it gets the name) —
  *     the demodulator's filter, else a mode default, never wider than ±100 kHz;
- *   • a supplement, never a repeat — a candidate the spectrum's own labels already name is passed over;
+ *   • a supplement, never a repeat — a station the spectrum's own labels already name gets no tuned label (and nothing
+ *     else in its place); that spectrum label is highlighted instead (tunedPick.highlight);
  *   • EiBi only while ON AIR NOW ("HHMM-HHMM" in the comment, across midnight too; no time = on air);
  *   • suppression — no label while a live RDS / DAB / DRM name exists, while the VTS is showing the name, or while the
  *     dial moves; the tags are exactly [User] / [Server] / [EiBi]; a long name is cut with "…";
@@ -15,7 +16,7 @@
  * Run: node --no-warnings scripts/test_tuned_station.ts
  */
 import { readFileSync } from 'node:fs';
-import { tunedStation, tunedLabel, tunedLabelText, tunedLabelX, utcMinutes, markerCovers, tunedPassband, inPassband,
+import { tunedStation, tunedLabel, tunedPick, tunedLabelText, tunedLabelX, utcMinutes, markerCovers, markerIndex, tunedPassband, inPassband,
          TUNED_TOL_HZ, TUNED_MAX_CHARS, TUNED_TAG, type TunedRow } from '../src/utils/tunedStation.ts';
 
 let pass = 0, fail = 0;
@@ -108,12 +109,20 @@ ok(tunedLabel(flex, 9_580_000, 600, { ...settled, shown: [{ hz: 9_590_000, src: 
    'a different bookmark labelled elsewhere does not hide this one');
 ok(tunedLabel(flex, 9_580_000, 600, { ...settled, shown: [{ hz: 9_580_000, src: 'eibi' }] }) === '[User] Flex FM',
    'an EiBi label at the same place does not hide a bookmark');
-ok(tunedLabel(rows.slice(0, 2), 9_580_000, 600, { ...settled, shown: [{ hz: 9_580_050, src: 'server' }] }) === '[EiBi] China Radio Int',
-   'the server\'s bookmark labelled: passed over for the EiBi name the spectrum does not show');
-ok(tunedLabel(rows.slice(0, 2), 9_580_000, 600, { ...settled, shown: [{ hz: 9_580_050, src: 'learnt' }] }) === '[EiBi] China Radio Int',
+{ const pk = tunedPick(rows.slice(0, 2), 9_580_000, 600, { ...settled, shown: [{ hz: 7e6, src: 'personal' }, { hz: 9_580_050, src: 'server' }] });
+  ok(pk.label === null && pk.highlight === 1,
+     'the server\'s bookmark labelled: NO tuned label, no EiBi name in its place — that label (index 1) is highlighted'); }
+ok(tunedPick(rows.slice(0, 2), 9_580_000, 600, { ...settled, shown: [{ hz: 9_580_050, src: 'learnt' }] }).highlight === 0,
    'a learnt FM name counts as the server\'s label');
-ok(tunedLabel(rows.slice(0, 1), 9_580_000, 600, { ...settled, shown: [{ hz: 9_581_000, dialHz: 9_580_000, src: 'eibi' }] }) === null,
-   'an EiBi row already labelled (by its dial — HFDL / voice markers sit above it): no label');
+{ const pk = tunedPick(flex, 9_580_000, 600, { ...settled, shown: [] });
+  ok(pk.label === '[User] Flex FM' && pk.highlight === -1, 'no label drawn: the tuned label, nothing highlighted'); }
+for (const [st, why] of [[{ vtsShowing: false, settled: false }, 'while the dial moves'], [{ vtsShowing: true, settled: true }, 'while the VTS shows the name'],
+                         [{ ...settled, liveName: 'BBC R4' }, 'while a live name is held']] as const)
+  ok(tunedPick(flex, 9_580_000, 600, { ...st, shown: [{ hz: 9_580_000, src: 'personal' }] }).highlight === -1, `no highlight ${why} (the same rules as the label)`);
+ok(markerIndex({ frequency: 9e6, source: 'user' }, [{ hz: 9e6 + 80, src: 'personal' }, { hz: 9e6 + 10, src: 'server' }, { hz: 9e6 + 10, src: 'personal' }]) === 1,
+   'the nearest drawn label is the one highlighted; the first on a tie');
+ok(tunedPick(rows.slice(0, 1), 9_580_000, 600, { ...settled, shown: [{ hz: 9_581_000, dialHz: 9_580_000, src: 'eibi' }] }).highlight === 0,
+   'an EiBi row already labelled (by its dial — HFDL / voice markers sit above it): no label, that one highlighted');
 ok(markerCovers({ frequency: 7_000_000, source: 'server' }, [{ hz: 7_000_099, src: 'server' }])
    && !markerCovers({ frequency: 7_000_000, source: 'server' }, [{ hz: 7_000_100, src: 'server' }]), 'covered within the VTS\'s ±99 Hz');
 
