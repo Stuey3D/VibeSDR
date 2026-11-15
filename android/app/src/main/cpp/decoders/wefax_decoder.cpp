@@ -57,6 +57,7 @@ WefaxDecoder::WefaxDecoder(int sampleRate, const Config& cfg)
     samples.assign(samplesPerLine, 0);
     demodData.assign(samplesPerLine, 0);
     phasingPos.assign(phasingLines, 0);
+    std::fill(lookRing, lookRing + LOOK_WINDOW, -1);
 
     imgData.assign((size_t)imageWidth * 2, 0);   // ★ two lines, not the image — see decodeFaxLine
     outImage.assign(imageWidth, 0);
@@ -129,23 +130,103 @@ WefaxDecoder::HeaderType WefaxDecoder::detectLineType(const uint8_t* buf, int le
     return HeaderImage;
 }
 
-int WefaxDecoder::faxPhasingLinePosition(const uint8_t* image) {
-    int n = (int)((double)samplesPerLine * 0.07);
-    int minTotal = -1, minPos = 0;
-    int pixelResolution = 4;
-    int sampsIncr = (samplesPerLine / imageWidth) * pixelResolution;
-    if (sampsIncr < 1) sampsIncr = 1;
-
-    for (int i = 0; i < samplesPerLine; i += sampsIncr) {
-        int total = 0;
-        for (int j = 0; j < n; j += pixelResolution) {
-            int wedge = n / 2 - std::abs(j - n / 2);
-            int idx = (i + j) % samplesPerLine;
-            total += wedge * (255 - (int)image[idx]);
-        }
-        if (total < minTotal || minTotal == -1) { minTotal = total; minPos = i; }
+/* ★★ ON BIN AVERAGES, NOT RAW SAMPLES (2026-11-15). The pulse search ran on the raw demod: at 48 kHz the 17-tap FIR passes
+ *  the mixer's 2f image, so a black or white run demodulates as a ripple that saturates sample by sample (a phasing line
+ *  is 0 and 255 interleaved, its bins average ~16 black and ~45 white), and the ripple follows the carrier's phase against
+ *  the line. Some alignments then read a pulse that is not there, on EVERY line — the "one phasing line in seven reads
+ *  3.7 %" artefact the phasing test recorded, and, found while building the new-chart rule, a synthetic phasing at 30 %
+ *  read 3.5 % on all 38 lines and was phased a quarter of a line wrong. Averaged over LOOK_BINS bins (~47 samples; the
+ *  old search stepped 52) the ripple is gone. Same window (7 % of the line, wedge-weighted), same answer (its centre,
+ *  in samples) — and 512 × 36 adds per line instead of 462 × 420. */
+void WefaxDecoder::binLine(const uint8_t* image) {
+    for (int b = 0; b < LOOK_BINS; b++) {
+        const int lo = (int)((long)b * samplesPerLine / LOOK_BINS), hi = (int)((long)(b + 1) * samplesPerLine / LOOK_BINS);
+        int s = 0;
+        for (int i = lo; i < hi; i++) s += image[i];
+        lookBin[b] = hi > lo ? s / (hi - lo) : 0;
     }
-    return (minPos + n / 2) % samplesPerLine;
+}
+
+int WefaxDecoder::pulseFromBins() const {
+    const int nb = std::max(3, (int)std::lround(LOOK_BINS * 0.07)), h = nb / 2;
+    long best = -1; int at = 0;
+    for (int i = 0; i < LOOK_BINS; i++) {
+        long t = 0;
+        for (int j = 0; j < nb; j++) t += (long)(h - std::abs(j - h)) * lookBin[(i + j) % LOOK_BINS];
+        if (t > best) { best = t; at = i; }
+    }
+    // the window's centre bin, at that bin's middle, in samples
+    return (int)(((2L * (at + h) + 1) * samplesPerLine / (2L * LOOK_BINS)) % samplesPerLine);
+}
+
+int WefaxDecoder::faxPhasingLinePosition(const uint8_t* image) {
+    binLine(image);
+    return pulseFromBins();
+}
+
+/* ★ DOES THIS LINE LOOK LIKE PHASING? (see the ★★★ note in decodeFaxLine). Phasing is black across the line but for
+ *  ONE short white pulse (5 % of the line sent; DDK off air and our own synthesis both read 3.1–3.3 % above half
+ *  level). One pass of adds folds the line into LOOK_BINS bins; then, all on the bins: the brightest pulse-wide window,
+ *  how far it stands above the rest (the contrast), how wide the bright part is, and how LEVEL the rest is — the rest
+ *  judged on LOOK_SEGS coarse segments, so receiver noise (which averages out over a segment) does not count against
+ *  it but chart content (paper and ink, which does not) does. The position it
+ *  returns is the phasing window's own measure (pulseFromBins, on the same bins), so the positions handed to the
+ *  window agree with the ones it takes itself. Returns the pulse position in samples, or −1. */
+int WefaxDecoder::phasingLook() {
+    if (samplesPerLine < LOOK_BINS) return -1;
+    binLine(demodData.data());
+    const int* bin = lookBin;
+    // the brightest window one pulse wide (circular, running sum)
+    const int pw = LOOK_BINS / 20;            // 5 % of the line: the pulse as sent
+    int run = 0;
+    for (int i = 0; i < pw; i++) run += bin[i];
+    int best = run, at = 0;
+    for (int i = 1; i < LOOK_BINS; i++) {
+        run += bin[(i + pw - 1) % LOOK_BINS] - bin[i - 1];
+        if (run > best) { best = run; at = i; }
+    }
+    const int c = (at + pw / 2) % LOOK_BINS;  // its centre
+    auto cd = [&](int b) { int d = std::abs(b - c); return std::min(d, LOOK_BINS - d); };
+    // the rest: everything clear of the pulse and its edges, in LOOK_SEGS segments
+    const int clear = pw;                     // a pulse width either side of the centre
+    long restSum = 0; int restN = 0;
+    int segSum[LOOK_SEGS] = {0}, segN[LOOK_SEGS] = {0};
+    for (int k = 0; k < LOOK_BINS; k++) {
+        const int b = (c + k) % LOOK_BINS;    // walk from the pulse round the line, so the segments are contiguous
+        if (cd(b) <= clear) continue;
+        restSum += bin[b]; restN++;
+        const int sg = (int)((long)k * LOOK_SEGS / LOOK_BINS);
+        segSum[sg] += bin[b]; segN[sg]++;
+    }
+    if (restN == 0) return -1;
+    const double rest = (double)restSum / restN, pulse = (double)best / pw;
+    const double contrast = pulse - rest;
+    // the spread of the segments' levels, the single highest and lowest set aside (one fade or click is not content)
+    double seg[LOOK_SEGS]; int ns = 0;
+    for (int sg = 0; sg < LOOK_SEGS; sg++) if (segN[sg] > 0) seg[ns++] = (double)segSum[sg] / segN[sg];
+    if (ns < 4) return -1;
+    std::sort(seg, seg + ns);
+    const double spread = seg[ns - 2] - seg[1];
+    // how wide the bright part is: out from the centre while above half-way between the rest and the pulse
+    //   (one dark bin is a noise dip, two end it)
+    const double half = rest + contrast / 2;
+    int wide = 1;
+    for (int dir = -1; dir <= 1; dir += 2) {
+        int miss = 0;
+        for (int k = 1; k < LOOK_BINS / 4 && miss < 2; k++) {
+            if (bin[((c + dir * k) % LOOK_BINS + LOOK_BINS) % LOOK_BINS] > half) { wide += 1 + miss; miss = 0; } else miss++;
+        }
+    }
+    const double frac = (double)wide / LOOK_BINS;
+#ifdef WEFAX_DIAG_LOOK
+    if (onDiag) { std::string m = "look: " + std::to_string(contrast) + " " + std::to_string(frac) + " "
+        + std::to_string(100.0 * pulseFromBins() / samplesPerLine) + " segs";
+        for (int sg = 0; sg < LOOK_SEGS; sg++) m += " " + std::to_string(segN[sg] ? segSum[sg] / segN[sg] : -1);
+        onDiag(m); }
+#endif
+    if (contrast < LOOK_CONTRAST || frac < LOOK_PULSE_MIN || frac > LOOK_PULSE_MAX || spread > LOOK_REST_SPREAD * contrast)
+        return -1;
+    return pulseFromBins();
 }
 
 void WefaxDecoder::decodeFaxLine() {
@@ -188,16 +269,70 @@ void WefaxDecoder::decodeFaxLine() {
         havePhasing = false;
         autoStopped = false;
         if (autoStart && !autoStarted) autoStarted = true;
+        chartOver = false; chartLines = 0;
+        std::fill(lookRing, lookRing + LOOK_WINDOW, -1);
         if (onDiag) onDiag("start tone on " + std::to_string(startHits) + " of the last " + std::to_string(TONE_WINDOW)
                            + " lines — new chart, phasing window open (" + std::to_string(phasingLines) + " lines)");
         if (onStart) onStart();
     }
     if (!skipHeaderDetection && stopHits >= TONE_HITS && !stopLatched) {
         stopLatched = true;
+        chartOver = true;   // ★ the chart is over: whatever chart follows is a NEW one, start tone or not
         if (autoStop) autoStopped = true;
         if (autoStart && autoStarted) autoStarted = false;
         if (onDiag) onDiag("stop tone on " + std::to_string(stopHits) + " of the last " + std::to_string(TONE_WINDOW) + " lines");
         if (onStop) onStop();
+    }
+
+    /* ★★★ A NEW CHART WITHOUT ITS START TONE (2026-11-15, Stuart's R36S): a chart ended on its stop tone, the next
+     *  transmission's start tone was lost in a fade, its phasing was heard clearly — and the decoder kept counting lines
+     *  from the old chart and never sent "image start", so every client drew the new chart onto the end of the old one
+     *  and the per-chart auto-align judged the mixture. The start tone is not the only mark of a new chart:
+     *   1. AFTER A STOP TONE the chart is over (chartOver). When chart-like lines come back (the corrAvg chart verdict
+     *      below) they are a NEW chart: line 0, "image start". If that line looks like phasing the phasing window opens
+     *      on it, as the start tone's does; if not (chart content, no phasing) nothing is swallowed — the old phasing
+     *      still holds, the station's line timing does not change between charts.
+     *   2. PHASING ON ITS OWN (no tone either side): LOOK_HITS of the last LOOK_WINDOW lines are phasing-like
+     *      (phasingLook: black across the line but for one short white pulse) with their pulse within ±LOOK_TOL (1 %) of
+     *      this line's — while no phasing window is open, and only once the picture is MIN_CHART_LINES old (or a stop tone
+     *      came before), so the tail of a phasing the start tone already opened (60 lines sent, the window takes ~43)
+     *      cannot start a second chart. The lines that found it are handed to the phasing window as its first
+     *      measurements, so it is judged on the same 38 lines a start tone's would be.
+     *   ✗ NOT A STANDING-BY GAP. Ending a chart after minutes of "standing by" was tried and dropped: a real chart can
+     *      read standing-by for longer than any fade — NOJ's Alaska sea-ice analysis (grey shading, corpus PTCA89) did for
+     *      over 3 minutes of its own content under noise, and was split in two. What follows a gap is a new chart only
+     *      if it brings a start tone, a phasing, or comes after a stop tone; a fade, however long, never splits one.
+     *  ★ MEASURED (2026-11-15) — LOOK_HITS 14 of LOOK_WINDOW 20 within ±LOOK_TOL 1 %:
+     *    · Northwood 4610 off air, 70 min live from Stuart's RX888: no start tone heard at 19:24 or 19:36 UTC; the
+     *      phasing reached 16 and 19 of 20 (15 when it fired) — two new charts, both phased (36/38, 38/38), where the
+     *      old decoder drew all four charts as one 8364-line picture (the station's own addon drew two of them as one).
+     *    · 88 real charts re-sent as audio under noise (69 Northwood/DDK off-air decodes from that addon's archive, the
+     *      16 NOAA charts of the WEFAX-world corpus, 3 from the R36S gallery), each alone, each after a stop tone and
+     *      noise, each before a toneless phasing: NO split inside any chart's content. Toneless phasing found 88 of 88.
+     *      Four archive images already held two charts the addon drew as one (phasing band mid-image, checked by eye):
+     *      split there, and only there. One trap shaped the thresholds: a NOAA IR satellite picture (corpus
+     *      evpz11), where cloud at the line's edge on dark ocean drifts like a pulse, was split at 10 of 16 within 2 %
+     *      and contrast 10 — so 14 of 20 within 1 %, and the contrast floor 20 (cloud on ocean reads 7–17, phasing
+     *      26–35 off air). A chart after the stop tone with no phasing was found 74 of 88; the 14 missed are pictures
+     *      the chart/noise verdict never accepts within 300 lines (noise, or streaked decodes) — drawn on as before.
+     *    · No new chart in DDK 7880 (70 min live, noise; 15 min, one start tone), the Northwood chart of 2026-10-05, or
+     *      3.5 h of other modes and noise (NAVTEX, FT8, SSTV, MSF/DCF77). */
+    int lookAt = -1;
+    {
+        const bool windowOpen = usePhasing && phasingLinesLeft >= -phasingSkipLines;
+        if (!skipHeaderDetection && !windowOpen && lineType == HeaderImage) lookAt = phasingLook();
+        lookRing[lookPos] = lookAt;
+        lookPos = (lookPos + 1) % LOOK_WINDOW;
+        if (lookAt >= 0 && (chartOver || chartLines >= MIN_CHART_LINES)) {
+            const int tol = std::max(1, (int)std::lround(samplesPerLine * LOOK_TOL));
+            int agree = 0;
+            for (int i = 0; i < LOOK_WINDOW; i++)
+                if (lookRing[i] >= 0) { int d = std::abs(lookRing[i] - lookAt) % samplesPerLine; if (std::min(d, samplesPerLine - d) <= tol) agree++; }
+            if (agree >= LOOK_HITS)
+                beginChart("phasing without a start tone (" + std::to_string(agree) + " of the last " + std::to_string(LOOK_WINDOW)
+                           + " lines" + (chartOver ? ", after the stop tone" : ", " + std::to_string(chartLines) + " lines into the old chart") + ")",
+                           true, lookAt);
+        }
     }
 
     {
@@ -221,6 +356,12 @@ void WefaxDecoder::decodeFaxLine() {
         if (phase == 3) {
             const bool chart = lastPhase == 3 ? corrAvg >= CORR_OFF : corrAvg >= CORR_ON;
             if (!chart) phase = 0;
+        }
+        // ★ A chart after the stop tone is a new chart, start tone or not — see the ★★★ note above.
+        if (!skipHeaderDetection && phase == 3 && chartOver) {
+            beginChart(std::string("a chart after the stop tone, no start tone") + (lookAt >= 0 ? " — it looks like phasing" : ""),
+                       lookAt >= 0, lookAt);
+            if (usePhasing && phasingLinesLeft > 0) { phase = 2; corrAvg = 1.0; }
         }
         // ★ And a change must hold for two lines before it is reported, so the status cannot flicker.
         if (phase == pendingPhase) pendingCount++; else { pendingPhase = phase; pendingCount = 1; }
@@ -256,8 +397,9 @@ void WefaxDecoder::decodeFaxLine() {
             for (int p : slice) if (cdist(p, centre) <= tol)
                 agree.push_back(((p - centre + half) % samplesPerLine + samplesPerLine) % samplesPerLine - half);
             phasingSkipData = ((centre + (agree.empty() ? 0 : medianOf(agree))) % samplesPerLine + samplesPerLine) % samplesPerLine;
-            /* ★ A THIRD, NOT HALF (measured, test-wefax-phasing): the decoder itself misreads ~1 phasing line in 7 even on
-             *  perfect audio, so a quarter of the lines faded on top left 17 of 38 — a real phasing thrown away. Chance
+            /* ★ A THIRD, NOT HALF (measured, test-wefax-phasing): the decoder itself misread ~1 phasing line in 7 even on
+             *  perfect audio (until 2026-11-15 — see pulseFromBins), so a quarter of the lines faded on top left 17 of 38 —
+             *  a real phasing thrown away. Real fading still needs the third. Chance
              *  agreement is tiny: 38 random positions put ~5–6 in any 4 %-wide window (70 % noise managed 9). */
             const bool rejected = bestCount * 3 < n || bestCount < 8;
 #ifdef WEFAX_DIAG_POSITIONS
@@ -290,7 +432,35 @@ void WefaxDecoder::decodeFaxLine() {
             havePhasing = true;
         }
         imageLine++;
+        chartLines++;
     }
+}
+
+/** ★ A new chart found without its start tone — see the ★★★ note in decodeFaxLine. Same reset as the start tone's;
+ *  `curPos` (this line's pulse, ≥ 0 when it looks like phasing) seeds the phasing window with the run that found it. */
+void WefaxDecoder::beginChart(const std::string& why, bool openPhasing, int curPos) {
+    if (!includeHeaders) { imageLine = 0; imgPos = 0; lineIncrAcc = 0; }
+    chartOver = false; chartLines = 0;
+    if (openPhasing && usePhasing && curPos >= 0) {
+        const int win = phasingLines - 2;   // phasingSkipLines: the window's measured lines
+        const int tol = std::max(1, (int)std::lround(samplesPerLine * LOOK_TOL));
+        int k = 0;
+        // oldest first; the newest slot (this line) is left for the window code, which measures it next
+        for (int i = 0; i < LOOK_WINDOW - 1 && k < win - 1; i++) {
+            const int r = lookRing[(lookPos + i) % LOOK_WINDOW];
+            if (r < 0) continue;
+            int d = std::abs(r - curPos) % samplesPerLine;
+            if (std::min(d, samplesPerLine - d) <= tol) phasingPos[win - 1 - k++] = r;
+        }
+        phasingLinesLeft = win - k;
+        phasingSkipData = 0;
+        havePhasing = false;
+    }
+    std::fill(lookRing, lookRing + LOOK_WINDOW, -1);
+    autoStopped = false;
+    if (autoStart) autoStarted = true;
+    if (onDiag) onDiag(why + " — new chart" + (usePhasing && phasingLinesLeft > 0 ? ", phasing window open" : ""));
+    if (onStart) onStart();
 }
 
 // Running contrast stretch: accumulate this line into a lifetime histogram, then rebuild a LUT that

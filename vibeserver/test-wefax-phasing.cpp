@@ -11,9 +11,10 @@
 // ★ Fax audio is SYNTHESISED here (FM, black 1500 Hz / white 2300 Hz, 120 lpm): a 300 Hz start tone, 30 s of phasing
 // (black lines, a white pulse), then a white chart with one black bar a known distance after the pulse. A phased
 // chart draws that bar where it belongs; an unphased one draws it wherever the decoder's line started.
-// ★ KNOWN DECODER ARTEFACT (measured here): even on perfect audio about one phasing line in seven misreads the pulse,
-//   in a repeating rhythm (59 %, 3.7 %, 46.6 % against 52.5 %) — 28 of 38 agree at best, and Stuart's off-air JMH scored
-//   28 too. The majority test absorbs it; finding it would give real fading far more margin. Not chased yet.
+// ★ DECODER ARTEFACT, FOUND 2026-11-15: about one phasing line in seven misread the pulse (59 %, 3.7 %, 46.6 % against
+//   52.5 %) — 28 of 38 agreed at best — and some alignments misread EVERY line. The pulse search ran on raw demod
+//   samples, which saturate in a ripple from the FIR's passed mixer image; it now runs on ~47-sample bin averages
+//   (wefax_decoder.cpp pulseFromBins) and clean phasing agrees 38 of 38.
 // ★ SILENT: audio is generated and decoded, never played.
 #include "decoders/wefax_decoder.h"
 
@@ -124,6 +125,69 @@ static int flips(bool chart, double noiseAmp, int lines, unsigned seed, int* las
     return n;
 }
 
+
+// ★★★ A NEW CHART WITHOUT ITS START TONE (2026-11-15, Stuart's R36S: a stop tone, the next start tone lost in a fade, its
+// phasing heard — and the new chart was drawn onto the end of the old one, no "image start", line numbers running on).
+// Transmissions are built from parts; the decoder runs with the clients' options; every START and every line number is
+// recorded, so a test can say how many pictures a client would draw and where each began.
+struct Tx {
+    Synth s; std::mt19937 r2;
+    explicit Tx(unsigned seed) : r2(seed + 5) { s.rng.seed(seed); }
+    void startTone(int lines = 10) { for (int k = 0; k < lines * SPL; k++) s.tone(((k * 300 * 2) / FS) & 1 ? 1.0 : 0.0); }
+    void stopTone() { for (int k = 0; k < 10 * SPL; k++) s.tone(((k * 450 * 2) / FS) & 1 ? 1.0 : 0.0); for (int k = 0; k < 10 * SPL; k++) s.tone(0.0); }
+    void phasing(int lines, double pulseStart = 0.40) {
+        for (int l = 0; l < lines; l++) for (int i = 0; i < SPL; i++) {
+            double x = (double)i / SPL, d = x - pulseStart; if (d < 0) d += 1;
+            s.tone(d < PULSE_W ? 1.0 : 0.0);
+        }
+    }
+    // a chart: dark strokes on white that run down the page (as coasts and isobars do), a new pattern every few lines
+    void chart(int lines, double noiseAmp = 0.15) {
+        std::normal_distribution<double> g(0, 1); std::vector<double> row(SPL, 1.0);
+        for (int l = 0; l < lines; l++) {
+            if (l % 6 == 0) {
+                std::fill(row.begin(), row.end(), 1.0);
+                std::uniform_int_distribution<int> at(0, SPL - 400);
+                for (int k = 0; k < 30; k++) { int a = at(r2); for (int i = 0; i < 300; i++) row[a + i] = 0.0; }
+            }
+            for (int i = 0; i < SPL; i++) { double v = row[i] + noiseAmp * g(s.rng); s.tone(v < 0 ? 0 : (v > 1 ? 1 : v)); }
+        }
+    }
+    // a white chart with one black bar BAR_AT after the pulse (as run() above): where it lands says whether it was phased
+    void barChart(int lines, double pulseStart = 0.40) {
+        const double pc = pulseStart + PULSE_W / 2;
+        for (int l = 0; l < lines; l++) for (int i = 0; i < SPL; i++) {
+            double x = (double)i / SPL, d = x - (pc + BAR_AT); d -= std::floor(d);
+            s.tone(d < BAR_W ? 0.0 : 1.0);
+        }
+    }
+    void noise(double sec) { s.noise((int)(sec * FS)); }
+};
+struct Pictures { int starts = 0; std::vector<int> firstLine, lines; std::vector<std::vector<double>> colSum; bool backwards = false; std::string diag; };
+static Pictures decode(const std::vector<int16_t>& a) {
+    WefaxDecoder::Config cfg; cfg.lpm = 120; cfg.usePhasing = true; cfg.autoStart = false; cfg.autoStop = false;
+    WefaxDecoder dec(FS, cfg);
+    Pictures p; p.firstLine.push_back(-1); p.lines.push_back(0); p.colSum.emplace_back(dec.width(), 0.0);
+    int last = -1;
+    dec.onDiag = [&](const std::string& m) { if (getenv("WEFAX_TEST_VERBOSE")) std::printf("      %s\n", m.c_str()); p.diag += m + " | "; };
+    dec.onStart = [&]() { p.starts++; p.firstLine.push_back(-1); p.lines.push_back(0); p.colSum.emplace_back(dec.width(), 0.0); last = -1; };
+    dec.onLine = [&](uint32_t ln, uint32_t w, const uint8_t* px) {
+        if ((int)ln <= last) p.backwards = true;   // a client would start a new picture here
+        last = (int)ln;
+        if (p.firstLine.back() < 0) p.firstLine.back() = (int)ln;
+        p.lines.back()++;
+        if (p.lines.back() > 40) for (uint32_t x = 0; x < w; x++) p.colSum.back()[x] += px[x];
+    };
+    for (size_t i = 0; i < a.size(); i += 4096) dec.process(&a[i], (int)std::min<size_t>(4096, a.size() - i));
+    return p;
+}
+static int barColumn(const std::vector<double>& colSum) {
+    const int W = (int)colSum.size(), bw = (int)std::lround(BAR_W * W);
+    double best = 1e18; int at = -1;
+    for (int x = 0; x < W; x++) { double sum = 0; for (int k = 0; k < bw; k++) sum += colSum[(x + k) % W]; if (sum < best) { best = sum; at = x; } }
+    return at;
+}
+
 int main() {
     const int W = 1809, wantBar = (int)std::lround(BAR_AT * W);
     auto colErr = [&](int c) { int d = std::abs(c - wantBar) % W; return std::min(d, W - d); };
@@ -175,6 +239,59 @@ int main() {
       int f2 = flips(false, 2.1, 400, 22, &last);
       std::printf("   .. pure noise, 400 lines: %d status changes, ends %s\n", f2, last == 3 ? "receiving" : "standing by");
       check(last != 3 && f2 == 0, "pure noise never reads 'receiving'"); }
+    // ── A NEW CHART WITHOUT ITS START TONE ────────────────────────────────────────────────────────────────────────
+    { // (a) chart A, its stop tone, noise, NO start tone, phasing, chart B — the R36S case
+      Tx t(31); t.noise(3.1); t.startTone(); t.phasing(60); t.chart(300); t.stopTone(); t.noise(40); t.phasing(60, 0.70); t.barChart(300, 0.70);
+      auto p = decode(t.s.out);
+      const int last = (int)p.firstLine.size() - 1;
+      std::printf("   .. chart, stop tone, no start tone, phasing, chart: %d START(s), picture B from line %d, %d lines, bar at col %d\n",
+                  p.starts, p.firstLine[last], p.lines[last], barColumn(p.colSum[last]));
+      check(p.starts == 2, "★ a chart after the stop tone, its start tone lost, is a NEW picture — image start sent once for it");
+      // ★ "line 0": imageLine is reset to 0 exactly as the start tone resets it; the line blend emits its first line at 1–2
+      //   either way, so the test is that picture B begins where a start tone's picture (A) began.
+      check(p.firstLine[last] == p.firstLine[1] && p.firstLine[1] <= 2, "★ …and it starts at line 0, as the start tone's picture does (first line "
+            + std::to_string(p.firstLine[last]) + " vs " + std::to_string(p.firstLine[1]) + ")");
+      check(p.diag.find("no start tone — it looks like phasing") != std::string::npos && p.diag.rfind("used") != std::string::npos,
+            "…its phasing is found and used");
+      check(colErr(barColumn(p.colSum[last])) <= 20, "…so chart B is drawn phased (the bar where it belongs)");
+      check(p.lines[1] >= 290, "chart A keeps its own lines (" + std::to_string(p.lines[1]) + ")"); }
+    { // (b) chart, stop tone, a chart with neither start tone nor phasing
+      Tx t(32); t.noise(3.1); t.startTone(); t.phasing(60); t.chart(300); t.stopTone(); t.noise(30); t.chart(300);
+      auto p = decode(t.s.out);
+      const int last = (int)p.firstLine.size() - 1;
+      std::printf("   .. chart, stop tone, chart with no start tone or phasing: %d START(s), picture B from line %d, %d lines\n",
+                  p.starts, p.firstLine[last], p.lines[last]);
+      check(p.starts == 2 && p.firstLine[last] == p.firstLine[1], "★ a chart after the stop tone with no start tone and no phasing is a new picture from line 0");
+      check(p.lines[last] >= 280, "…and none of it is swallowed as phasing (" + std::to_string(p.lines[last]) + " of 300 lines)"); }
+    { // (c) one long chart with a 40 s fade in the middle: ONE picture
+      Tx t(33); t.noise(3.1); t.startTone(); t.phasing(60); t.chart(400); t.noise(40); t.chart(400);
+      auto p = decode(t.s.out);
+      std::printf("   .. one chart with a 40 s fade: %d START(s), %d lines\n", p.starts, p.lines.back());
+      check(p.starts == 1 && !p.backwards, "★ a fade in the middle of a chart never splits it — one picture, line numbers never go back"); }
+    { // (d) a chart with no stop tone, then the next transmission's phasing with no start tone either
+      Tx t(34); t.noise(3.1); t.startTone(); t.phasing(60); t.chart(400); t.phasing(60, 0.70); t.barChart(300, 0.70);
+      auto p = decode(t.s.out);
+      const int last = (int)p.firstLine.size() - 1;
+      std::printf("   .. chart, then phasing with no tone either side: %d START(s), picture B from line %d, bar at col %d\n",
+                  p.starts, p.firstLine[last], barColumn(p.colSum[last]));
+      check(p.starts == 2 && p.firstLine[last] == p.firstLine[1], "★ phasing on its own, well into a chart, starts a new picture from line 0");
+      check(colErr(barColumn(p.colSum[last])) <= 20, "…phased on those very lines"); }
+    { // (e) the tail of a start tone's own phasing (it runs past the window) must not start a second chart
+      Tx t(35); t.noise(3.1); t.startTone(); t.phasing(90); t.chart(300);
+      auto p = decode(t.s.out);
+      std::printf("   .. 45 s of phasing after a start tone: %d START(s)\n", p.starts);
+      check(p.starts == 1, "the rest of a long phasing after a start tone is not a second chart"); }
+    { // (f) a black band across the whole chart with white margins — the nearest a chart gets to phasing — 8 lines tall
+      Tx t(36); t.noise(3.1); t.startTone(); t.phasing(60); t.chart(200);
+      for (int l = 0; l < 8; l++) for (int i = 0; i < SPL; i++) { double x = (double)i / SPL; t.s.tone(x < 0.03 || x > 0.98 ? 1.0 : 0.0); }
+      t.chart(200);
+      auto p = decode(t.s.out);
+      std::printf("   .. a chart with an 8-line black band: %d START(s)\n", p.starts);
+      check(p.starts == 1, "a short black band in a chart is not phasing"); }
+    { // ten minutes of noise
+      Tx t(37); t.noise(600);
+      auto p = decode(t.s.out);
+      check(p.starts == 0, "ten minutes of noise starts no chart"); }
     std::printf(fails ? "\n%d FAILED\n" : "\nall good\n", fails);
     return fails ? 1 : 0;
 }

@@ -63,6 +63,10 @@ private:
     double fourierTransformSub(const uint8_t* buf, int len, int freq);
     HeaderType detectLineType(const uint8_t* buf, int len);
     int faxPhasingLinePosition(const uint8_t* img);
+    void binLine(const uint8_t* img);
+    int pulseFromBins() const;
+    int phasingLook();
+    void beginChart(const std::string& why, bool openPhasing, int curPos);
     void decodeImageLine();
 
     // Config
@@ -121,6 +125,27 @@ private:
     int lastPhase = -1, pendingPhase = -1, pendingCount = 0;
     double corrAvg = 0.0;   // smoothed line-to-line correlation — chart vs noise (decodeImageLine)
     static constexpr double CORR_ON = 0.25, CORR_OFF = 0.12;   // chart noticed / given up — see decodeFaxLine
+
+    /* ★ A NEW CHART WITHOUT ITS START TONE — see the ★★★ note in decodeFaxLine (2026-11-15). */
+    bool chartOver = false;     // a stop tone latched: whatever chart follows is a new one
+    int  chartLines = 0;        // lines since this picture began (imageLine may not reset: includeHeaders)
+    static constexpr int LOOK_WINDOW = 20, LOOK_HITS = 14;    // phasing-like lines that agree, of the last LOOK_WINDOW
+    static constexpr double LOOK_TOL = 0.01;                  // …agree: pulses this close (fraction of a line, on the circle)
+    static constexpr int LOOK_BINS = 512;                     // the cheap look's resolution across a line
+    static constexpr int LOOK_SEGS = 16;                      // …and the coarse segments the rest is judged in
+    /* ★ Measured (2026-11-15; demod levels, which run ~10 black to ~45 white here — the FIR's ripple, see pulseFromBins):
+     *  a phasing line's pulse window stands 26–35 above its rest off air (DDK, Northwood), 22+ for 95 % of synthetic
+     *  lines under heavy noise; a satellite picture's cloud on grey ocean (NOAA IR, corpus evpz11) only 7–17, and at 10
+     *  it was taken for phasing — hence 20. The bright part is 3.1–3.3 % of the line clean, up to ~6 % under noise; the
+     *  rest's segments (one high, one low set aside) spread ≤ 0.12 of the contrast clean and ≤ 0.35 for 88 % of noisy
+     *  lines, while chart lines spread far wider (paper and ink). */
+    static constexpr double LOOK_CONTRAST = 20;               // pulse window above the rest, demod levels
+    static constexpr double LOOK_PULSE_MIN = 0.015, LOOK_PULSE_MAX = 0.08;   // the bright part's share of the line
+    static constexpr double LOOK_REST_SPREAD = 0.35;          // the rest's segments' spread, share of the contrast
+    static constexpr int MIN_CHART_LINES = 120;               // a chart this young cannot be followed by another's phasing
+    int  lookRing[LOOK_WINDOW];                               // pulse position of each recent line, −1 not phasing-like
+    int  lookPos = 0;
+    int  lookBin[LOOK_BINS];
 };
 
 } // namespace vibe
