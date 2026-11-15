@@ -1062,6 +1062,9 @@ if node --no-warnings scripts/test_wf_boost_taper.ts; then pass=$((pass+1)); els
 # ★★ The rest of the V12 waterfall backported for 11.0.16: the scale stamps (and a jump that keeps the history), the
 #    history ring growing by RAM tier, and thinned frames COMBINED into the row (MINIMUM 2 · LOW 5 · ECO 10, display only).
 if node --no-warnings scripts/test_wf_stamps.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE TUNED STATION'S LABEL AT THE VFO (src/utils/tunedStation.ts, V12 2026-11-15): [User] → [Server] → [EiBi] within the
+#    VTS's ±99 Hz, EiBi only on air now, none while a live RDS/DAB/DRM name, the VTS's own line or a moving dial shows.
+if node --no-warnings scripts/test_tuned_station.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_wf_ring_grow.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_wf_combine.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE 10-FPS DEFAULT (2026-10-20): the serving phone's tiers read Smoother · 20 / Default · 10 / Half · 5, the stored
