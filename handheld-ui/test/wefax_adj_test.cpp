@@ -2,7 +2,8 @@
 // they had the highlight, so nothing could get from MARGIN to SLANT, AUTO or RAW). Through the R36S's own code
 // (dec_pic_box.h picAdjRow) offscreen, with the real fonts and the real D-pad Nav:
 //   • the row opens with the highlight on MARGIN, NOT editing;
-//   • highlighted, LEFT / RIGHT move along MARGIN · SLANT · AUTO · RAW and change nothing;
+//   • highlighted, LEFT / RIGHT move along MARGIN · SLANT · AUTO · RAW and change nothing — and stay in the row, never
+//     up to the header's keys just above it (ui.h Nav::row);
 //   • ENTER presses into an adjuster: LEFT / RIGHT then nudge it and the highlight stays;
 //   • ENTER again finishes; BACK finishes too and is CONSUMED (the box is not released by the same press);
 //   • UP / DOWN off an adjuster being edited ends the edit; closing ADJ ends it.
@@ -29,6 +30,10 @@ static void frame(Input in = {}) {
     picAdjRow(a, c, {10, 160, 620, 28});
     // something under the row, as the picture is in the box (so DOWN has somewhere to go)
     c.nav.item("dec.pic", {10, 200, 620, 100});
+    // ★ and the header's keys just above it, right-aligned, registered after the body as dec_box.h does — with PREV and
+    //   GALLERY up they reach left past SLANT's centre, close enough that LEFT / RIGHT once jumped up to them
+    const float hx[6] = {190, 251, 312, 408, 514, 570}, hw[6] = {55, 55, 90, 100, 50, 60};
+    for (int i = 0; i < 6; i++) c.nav.item("dec.k." + std::to_string(i), {hx[i], 128, hw[i], 24});
     gBackLeft = a.nav_.backPressed();
     a.nav_.end();
     a.g_.flush();

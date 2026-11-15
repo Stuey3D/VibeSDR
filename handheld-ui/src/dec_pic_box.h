@@ -72,6 +72,7 @@ inline int picAdjRow(App& a, Ctx& c, Rect r) {
     // ★ an edit whose adjuster no longer has the highlight is over (UP / DOWN moved off it, the box was re-grabbed)
     if (!u.adjEdit.empty() && a.nav_.focus("dec") != u.adjEdit) u.adjEdit.clear();
     int hint = 0;
+    c.nav.row("dec.adj");   // ★ LEFT / RIGHT stay in this row (ui.h Nav::row) — the header's keys sit just above it
     const wfx::Align al = picCorr(p);
     const std::string m = p.rawMode ? "MARGIN RAW" : std::string("MARGIN ") + (p.hasManual ? "MANUAL " : "AUTO ") + picSignedPx(al.shift) + " px";
     const std::string sl = p.rawMode ? "SLANT RAW" : std::string("SLANT ") + (picSlantManual(p) ? "MANUAL " : "AUTO ") + picSignedSlant(al.slant);
@@ -105,6 +106,7 @@ inline int picAdjRow(App& a, Ctx& c, Rect r) {
     x += wa + gap;
     st.lit = p.rawMode;
     if (button(c, "dec.adj.raw", {x, r.y, wr, r.h}, "RAW", st)) picToggleRaw();
+    c.nav.row("");
     return hint;
 }
 

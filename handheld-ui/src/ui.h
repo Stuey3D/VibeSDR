@@ -84,8 +84,13 @@ public:
 
     /** Start a frame: `top` is the layer that takes the pad this frame. */
     void begin(const std::string& top, const Input& in) {
-        top_ = top; in_ = in; items_.clear(); consumed_ = false; layerNow_.clear();
+        top_ = top; in_ = in; items_.clear(); consumed_ = false; layerNow_.clear(); rowNow_.clear();
     }
+    /** ★★ A ROW (2026-11-15, WEFAX's MARGIN · SLANT · AUTO · RAW): the items registered until row("") are one row, and
+     *  LEFT / RIGHT from one of them go to the next IN THE ROW while there is one that way — never up to a header key
+     *  that happens to score nearer (pickNext's across-penalty let SLANT's LEFT reach PREV). Off the row's end, the
+     *  whole layer is the route again. The web's [data-navrow]. */
+    void row(const std::string& g) { rowNow_ = g; }
     /** The layer the following items belong to. */
     void layer(const std::string& l) { layerNow_ = l; }
     bool topLayer() const { return layerNow_ == top_; }
@@ -100,7 +105,7 @@ public:
             // not the top layer: drawn, never highlighted
             return h;
         }
-        items_.push_back({id, r, takesLR, takesLR && repeats});
+        items_.push_back({id, r, takesLR, takesLR && repeats, rowNow_});
         std::string& f = focus_[top_];
         if (f.empty() && !pendingDefault_.count(top_)) pendingDefault_[top_] = id;
         if (f == id) {
@@ -147,20 +152,22 @@ public:
         if (consumed_ || in_.nav == D_NONE || items_.empty()) return;
         const Item* cur = nullptr;
         for (auto& i : items_) if (i.id == f) cur = &i;
-        const int k = pickNext(cur ? &cur->r : nullptr, in_.nav);
+        int k = -1;
+        if (cur && !cur->row.empty() && (in_.nav == D_LEFT || in_.nav == D_RIGHT)) k = pickNext(&cur->r, in_.nav, &cur->row);
+        if (k < 0) k = pickNext(cur ? &cur->r : nullptr, in_.nav);
         if (k >= 0) f = items_[(size_t)k].id;
     }
 
 private:
-    struct Item { std::string id; Rect r; bool takesLR; bool repeats; };
-    std::string top_, layerNow_;
+    struct Item { std::string id; Rect r; bool takesLR; bool repeats; std::string row; };
+    std::string top_, layerNow_, rowNow_;
     Input in_;
     bool consumed_ = false;
     std::vector<Item> items_;
     std::map<std::string, std::string> focus_, pendingDefault_;
 
     // src/utils/gamepadNav.ts pickNext — the nearest box that way; across-distance penalised ×2.5
-    int pickNext(const Rect* cur, Dir dir) const {
+    int pickNext(const Rect* cur, Dir dir, const std::string* row = nullptr) const {
         if (!cur) {
             int best = 0;
             for (size_t i = 1; i < items_.size(); i++)
@@ -170,6 +177,7 @@ private:
         int best = -1;
         double bestScore = 1e30;
         for (size_t i = 0; i < items_.size(); i++) {
+            if (row && items_[i].row != *row) continue;
             const Rect& b = items_[i].r;
             if (b.x == cur->x && b.y == cur->y && b.w == cur->w && b.h == cur->h) continue;
             const double dx = b.cx() - cur->cx(), dy = b.cy() - cur->cy();
