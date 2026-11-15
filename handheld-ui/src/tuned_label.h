@@ -11,7 +11,8 @@
 //    HEARD) → EiBi on air now; the nearest to the dial within a source; RECEIVED: inside the receive passband (the
 //    demodulator's filter, else a mode default, never past ±100 kHz) or on the dial (±99 Hz, the VTS's own). A DAB service
 //    never (its frequency is its block's). WHEN: the dial has rested, the VTS has let the name go, no live RDS/DAB/DRM name.
-//  ★★ A SUPPLEMENT, NEVER A REPEAT: a candidate the spectrum's own SIGNAL LABELS are drawing now is passed over.
+//  ★★ A SUPPLEMENT, NEVER A REPEAT: when the spectrum's own SIGNAL LABELS already name the station, no tuned label (and no
+//     other name in its place) — that label is HIGHLIGHTED instead, drawn in the tuned colour (tunedPick).
 #pragma once
 #include <algorithm>
 #include <cctype>
@@ -86,23 +87,26 @@ inline bool inPassband(double hz, double dialHz, const Passband& pb) {
     const double off = hz - dialHz;
     return std::fabs(off) <= kTolHz || (off >= pb.lo && off <= pb.hi);
 }
-/** markerCovers: a bookmark named by a personal / server / learnt label, an EiBi row by an EiBi label, within kTolHz. */
-inline bool markerCovers(const Row& r, const std::vector<Shown>* shown) {
-    if (!shown) return false;
-    const bool eibi = r.source == "eibi";
-    for (const Shown& m : *shown) {
+/** markerIndex: the drawn label naming this station (a bookmark by a personal / server / learnt label, an EiBi row by an
+ *  EiBi label, by marker or dial within kTolHz) — the nearest, the first on a tie; −1 = none. */
+inline int markerIndex(double frequency, const std::string& source, const std::vector<Shown>* shown) {
+    if (!shown) return -1;
+    const bool eibi = source == "eibi";
+    int best = -1; double bestD = INFINITY;
+    for (size_t i = 0; i < shown->size(); i++) {
+        const Shown& m = (*shown)[i];
         const bool mine = eibi ? m.src == "eibi" : m.src == "personal" || m.src == "server" || m.src == "learnt";
         if (!mine) continue;
-        if (std::fabs(m.hz - r.frequency) <= kTolHz || std::fabs(m.dialHz - r.frequency) <= kTolHz) return true;
+        const double d = std::min(std::fabs(m.hz - frequency), std::fabs(m.dialHz - frequency));
+        if (d <= kTolHz && d < bestD) { best = (int)i; bestD = d; }
     }
-    return false;
+    return best;
 }
 
 inline int rankOf(const std::string& s) { return s == "user" ? 0 : s == "server" ? 1 : s == "eibi" ? 2 : -1; }
 
 /** tunedStation: the best-ranked source within `tol` (user → server → EiBi), the nearest within it, the first on a tie. */
-inline Station tunedStation(const std::vector<Row>& rows, double dialHz, int nowMin, const Passband& pb = Passband{},
-                            const std::vector<Shown>* shown = nullptr) {
+inline Station tunedStation(const std::vector<Row>& rows, double dialHz, int nowMin, const Passband& pb = Passband{}) {
     Station best;
     if (!(dialHz > 0)) return best;
     int bestRank = 9; double bestOff = INFINITY;
@@ -115,7 +119,6 @@ inline Station tunedStation(const std::vector<Row>& rows, double dialHz, int now
         if (name.empty()) continue;
         if (rank > bestRank || (rank == bestRank && off >= bestOff)) continue;
         if (rank == 2 && !onAir(r.comment, nowMin)) continue;
-        if (markerCovers(r, shown)) continue;
         best.source = r.source; best.name = name; best.hz = r.frequency; best.ok = true;
         bestRank = rank; bestOff = off;
     }
@@ -134,13 +137,23 @@ inline std::string labelText(const Station& st) {
     return tag + " " + name;
 }
 
+/** tunedPick: the tuned label's text, OR the index into `shown` of the drawn label that names the station — never both. */
+struct Pick { std::string label; int highlight = -1; };
+inline Pick tunedPick(const std::vector<Row>& rows, double dialHz, int nowMin, const std::string& liveName,
+                      bool vtsShowing, bool settled, const Passband& pb = Passband{}, const std::vector<Shown>* shown = nullptr) {
+    Pick p;
+    if (!settled || vtsShowing || !trim(liveName).empty()) return p;
+    const Station t = tunedStation(rows, dialHz, nowMin, pb);
+    if (!t.ok) return p;
+    p.highlight = markerIndex(t.hz, t.source, shown);
+    if (p.highlight < 0) p.label = labelText(t);
+    return p;
+}
 /** tunedLabel: "" = no label. */
 inline std::string tunedLabel(const std::vector<Row>& rows, double dialHz, int nowMin, const std::string& liveName,
                               bool vtsShowing, bool settled, const Passband& pb = Passband{},
                               const std::vector<Shown>* shown = nullptr) {
-    if (!settled || vtsShowing || !trim(liveName).empty()) return "";
-    const Station t = tunedStation(rows, dialHz, nowMin, pb, shown);
-    return t.ok ? labelText(t) : "";
+    return tunedPick(rows, dialHz, nowMin, liveName, vtsShowing, settled, pb, shown).label;
 }
 
 /** tunedLabelX: the box's left edge — `gap` right of the needle when it fits, else left of it; kept on screen. */

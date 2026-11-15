@@ -33,9 +33,10 @@ int main(int argc, char** argv) {
         if (q.has("mode")) pb = tl::tunedPassband(q["mode"].str(), q["bwLow"].num(NAN), q["bwHigh"].num(NAN), q.has("bwLow") && q.has("bwHigh"));
         std::vector<tl::Shown> shown;
         for (auto& m : q["shown"].a) shown.push_back({m["hz"].num(), m["dialHz"].num(), m["src"].str()});
-        const tl::Station st = tl::tunedStation(rows, dial, now, pb, &shown);
-        const std::string lb = tl::tunedLabel(rows, dial, now, q["live"].str(), q["vts"].boolean(), q["settled"].boolean(), pb, &shown);
-        got.push_back("Q " + jsNum(dial) + " " + jsNum(now) + " " + (st.ok ? st.source + " " + jsNum(st.hz) : "-") + " |" + lb);
+        const tl::Station st = tl::tunedStation(rows, dial, now, pb);
+        const tl::Pick pk = tl::tunedPick(rows, dial, now, q["live"].str(), q["vts"].boolean(), q["settled"].boolean(), pb, &shown);
+        got.push_back("Q " + jsNum(dial) + " " + jsNum(now) + " " + (st.ok ? st.source + " " + jsNum(st.hz) : "-") + " H"
+                      + std::to_string(pk.highlight) + " |" + pk.label);
     }
     for (auto& p : in["passbands"].a) {
         const bool known = p.has("bwLow") && p.has("bwHigh");

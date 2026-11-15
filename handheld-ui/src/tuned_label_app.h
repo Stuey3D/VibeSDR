@@ -13,7 +13,8 @@
 //   one of those, a list or the minute changes; a frame that changes none costs one box and its glyphs.
 // ★★ A SUPPLEMENT, NEVER A REPEAT (Stuart, 2026-11-15 — this file's first render showed "Flex FM" on the spectrum and
 //    "[User] Flex FM" under it): the SIGNAL LABELS drawn this frame (known_labels_app.h, knownLabelsUi().k.placed() —
-//    empty when they are off) are handed over, and a station they already name is passed over.
+//    empty when they are off) are handed over (tunedPickNow, called between their layout and their drawing). A station
+//    they already name gets NO tuned label and no other name in its place: that label is drawn in the tuned colour.
 // ★ RECEIVED, not only dead on: matched inside the receive passband (s.bwLow / s.bwHigh, the demodulator's filter).
 #pragma once
 #include "bm_state.h"
@@ -33,6 +34,8 @@ inline void vtsTunedInputs(std::string& liveName, bool& showing);
 struct TunedLabelUi {
     double hz = -1, restAt = 0;      // the dial last seen, and when it counts as rested (s)
     std::string key, text;           // what `text` was worked out for
+    int highlight = -1;              // the placed SIGNAL LABEL naming the tuned station (drawn in the tuned colour), −1 none
+    double pickedAt = -1;            // the frame (Ctx::t) the pick was last made for
 };
 inline TunedLabelUi& tunedLabelUi() { static TunedLabelUi u; return u; }
 
@@ -48,15 +51,16 @@ inline std::vector<tl::Row> tunedRowsNear(double hz, const tl::Passband& pb) {
     return out;
 }
 
-/** Called from drawOverlays with the waterfall's rect: the label beside the needle at its top, or nothing. */
-inline void tunedLabelDraw(Ctx& c, const RadioState& s, Rect wfr, const unsigned char* lut) {
+/** ★★ This frame's choice (tl::tunedPick) against the SIGNAL LABELS placed this frame: the tuned label's text, or the
+ *  index of the placed label to draw in the tuned colour (never both). Called by knownLabelsDraw between its layout and
+ *  its drawing (so the highlight lands on the right label in the same frame), else by tunedLabelDraw with none placed.
+ *  Returns the highlight (−1 none). */
+inline int tunedPickNow(Ctx& c, const RadioState& s, const std::vector<PlacedLabel>& placed) {
     TunedLabelUi& u = tunedLabelUi();
     const double now = c.t;
+    u.pickedAt = now;
     if (s.vfoHz != u.hz) { u.hz = s.vfoHz; u.restAt = now + tl::kSettleMs / 1000.0; }
-    if (!(s.vfoHz > 0) || !(s.spanHz > 0) || now < u.restAt || !c.f.small.get()) return;
-    const double lo = s.viewCentreHz - s.spanHz / 2;
-    const float nx = wfr.x + (float)((s.vfoHz - lo) / s.spanHz) * wfr.w;
-    if (nx < wfr.x || nx > wfr.r()) return;
+    if (!(s.vfoHz > 0) || !(s.spanHz > 0) || now < u.restAt) { u.text.clear(); u.highlight = -1; u.key.clear(); return -1; }
     std::string live; bool showing = false;
     vtsTunedInputs(live, showing);
     uint64_t bs, ss;
@@ -68,7 +72,7 @@ inline void tunedLabelDraw(Ctx& c, const RadioState& s, Rect wfr, const unsigned
     const tl::Passband pb = tl::tunedPassband(s.mode, s.bwLow, s.bwHigh);
     std::vector<tl::Shown> shown;
     std::string shownKey;
-    for (const PlacedLabel& p : knownLabelsUi().k.placed()) if (p.sig) {
+    for (const PlacedLabel& p : placed) if (p.sig) {
         shown.push_back({p.sig->hz, p.sig->dialHz, p.sig->src});
         shownKey += std::to_string((long long)std::llround(p.sig->hz)) + p.sig->src + ",";
     }
@@ -77,10 +81,21 @@ inline void tunedLabelDraw(Ctx& c, const RadioState& s, Rect wfr, const unsigned
                           + std::to_string((int)pb.hi) + "|" + shownKey;
     if (key != u.key) {
         u.key = key;
-        u.text = showing || !tl::trim(live).empty() ? ""
-               : tl::tunedLabel(tunedRowsNear(s.vfoHz, pb), s.vfoHz, nowMin, live, showing, true, pb, &shown);
+        tl::Pick pk;
+        if (!showing && tl::trim(live).empty()) pk = tl::tunedPick(tunedRowsNear(s.vfoHz, pb), s.vfoHz, nowMin, live, showing, true, pb, &shown);
+        u.text = pk.label; u.highlight = pk.highlight;
     }
-    if (u.text.empty()) return;
+    return u.highlight;
+}
+
+/** Called from drawOverlays with the waterfall's rect: the label beside the needle at its top, or nothing. */
+inline void tunedLabelDraw(Ctx& c, const RadioState& s, Rect wfr, const unsigned char* lut) {
+    TunedLabelUi& u = tunedLabelUi();
+    if (u.pickedAt != c.t) tunedPickNow(c, s, {});   // the SIGNAL LABELS are off (or not drawn): nothing placed
+    if (u.text.empty() || !c.f.small.get()) return;
+    const double lo = s.viewCentreHz - s.spanHz / 2;
+    const float nx = wfr.x + (float)((s.vfoHz - lo) / s.spanHz) * wfr.w;
+    if (nx < wfr.x || nx > wfr.r()) return;
     const Font& f = c.f.small;
     const float pad = 4, bh = (float)f.lineHeight() + 2;
     const float bw = std::min(wfr.w - 4, (float)c.tc.width(f, u.text) + 2 * pad);

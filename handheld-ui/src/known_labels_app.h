@@ -12,6 +12,7 @@
 #include "bm_state.h"
 #include "disp_settings.h"
 #include "known_labels.h"
+#include "tuned_label.h"
 
 #include <ctime>
 #include <memory>
@@ -36,6 +37,9 @@ struct KnownLabelsUi {
     int eibiBucket = -1;
 };
 inline KnownLabelsUi& knownLabelsUi() { static KnownLabelsUi u; return u; }
+
+/** ★★ V12 the tuned station (tuned_label_app.h, after this file): which placed label names it, −1 = none. */
+inline int tunedPickNow(Ctx& c, const RadioState& s, const std::vector<PlacedLabel>& placed);
 
 inline int knownUtcMinutes() {
     const std::time_t t = std::time(nullptr);
@@ -111,7 +115,9 @@ inline void knownLabelsDraw(App& a, Ctx& c, const RadioState& s, Rect spec) {
     const float nx = spec.x + (float)((s.vfoHz - lo) / s.spanHz) * spec.w;
     const float needle = s.vfoHz > 0 && nx >= spec.x && nx <= spec.r() ? nx : -1;
     u.k.layout(c.tc, c.f.tiny, spec, lo, s.spanHz, s.vfoHz, needle);
-    u.k.draw(c.g, c.tc, c.f.tiny, spec, lo, s.spanHz);
+    // ★★ V12 the label naming the station you are tuned to is drawn in the tuned label's colour (tuned_label_app.h)
+    const int hi = tunedPickNow(c, s, u.k.placed());
+    u.k.draw(c.g, c.tc, c.f.tiny, spec, lo, s.spanHz, hi, hi >= 0 ? rgb(tl::stampColour(dispSet().needle, a.wfp_.palette().rgba)) : Rgba{});
 }
 
 }  // namespace hh

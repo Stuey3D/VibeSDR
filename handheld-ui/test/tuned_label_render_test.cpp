@@ -1,7 +1,8 @@
 // tuned_label_render_test.cpp — THE TUNED STATION'S LABEL ON THE R36S, drawn by the real App::drawOverlays offscreen at
 // 640×480 (Stuart, 2026-11-15: "When the VTS disappears can we have a label on the VFO with the current station name").
 //   • the dial at rest on a saved row WITH the SIGNAL LABELS on: the spectrum already says "Flex FM", so NO "[User] Flex FM"
-//     under it (Stuart, 2026-11-15: a supplement, never a repeat); with them off: "[User] Flex FM" beside the needle;
+//     under it (Stuart, 2026-11-15: a supplement, never a repeat) — "Flex FM" itself turns the tuned colour instead (lilac
+//     while the dial is moving); with them off: "[User] Flex FM" beside the needle;
 //   • 2 kHz off the saved row, still inside the 9 kHz AM passband: still named;
 //   • at the right edge, an EiBi row on air (no hours = on air): "[EiBi] …" flipped LEFT of the needle, on screen;
 //   • the dial just moved: nothing (it waits tl::kSettleMs); a dial on nothing: nothing.
@@ -57,6 +58,26 @@ static int bright(int x0, int x1) {
         }
     return n;
 }
+/** Lilac (the SIGNAL LABELS' own 0xd9b8ff) text pixels in the spectrum's label row, between columns x0 and x1. */
+static int lilac(int x0, int x1) {
+    int n = 0;
+    for (int y = (int)kSpec.b() - 20; y < (int)kSpec.b(); y++)
+        for (int x = std::max(0, x0); x < std::min(gA->W, x1); x++) {
+            const uint8_t* p = &px[((size_t)(gA->H - 1 - y) * gA->W + x) * 4];
+            if (p[2] > 200 && p[0] > 150 && p[0] < 240 && p[2] - p[1] > 40) n++;
+        }
+    return n;
+}
+/** Text pixels in the tuned colour (white here: the default red needle clashes with Jet) in that row. */
+static int whiteish(int x0, int x1) {
+    int n = 0;
+    for (int y = (int)kSpec.b() - 20; y < (int)kSpec.b(); y++)
+        for (int x = std::max(0, x0); x < std::min(gA->W, x1); x++) {
+            const uint8_t* p = &px[((size_t)(gA->H - 1 - y) * gA->W + x) * 4];
+            if (p[0] > 200 && p[1] > 200 && p[2] > 200) n++;
+        }
+    return n;
+}
 static int xOf(double hz) { return (int)std::lround((hz - (9600000 - 48000)) / 96000 * 640); }
 
 int main() {
@@ -88,10 +109,16 @@ int main() {
     // ── at rest on a saved row, SIGNAL LABELS on: the spectrum names it, so no duplicate ──
     const int nx = xOf(9580000);
     dispSet().knownLabels = true;
+    // the SIGNAL LABELS' list is built on a worker (known_labels_app.h): a first frame starts it, then it lands
+    for (int i = 0; i < 20; i++) { render("warm", 9500000, 90.0 + i * 0.01); SDL_Delay(25); }
     render("moving", 9580000, 100.0);          // the first frame on this dial: not rested yet
     CHECK(bright(nx + 4, nx + 200) == 0, "the dial just arrived: no label yet (%d bright px)", bright(nx + 4, nx + 200));
+    CHECK(lilac(nx, nx + 120) > 20 && whiteish(nx, nx + 120) == 0, "…and \"Flex FM\" on the spectrum in its own lilac (%d lilac, %d white)",
+          lilac(nx, nx + 120), whiteish(nx, nx + 120));
     render("user-labels-on-no-duplicate", 9580000, 100.7);
     CHECK(bright(0, 640) == 0, "SIGNAL LABELS on, \"Flex FM\" on the spectrum: no \"[User] Flex FM\" under it (%d bright px)", bright(0, 640));
+    CHECK(whiteish(nx, nx + 120) > 20 && lilac(nx, nx + 120) == 0, "…\"Flex FM\" itself drawn in the tuned colour instead (%d tuned, %d lilac)",
+          whiteish(nx, nx + 120), lilac(nx, nx + 120));
     // ── SIGNAL LABELS off: [User], right of the needle ──
     dispSet().knownLabels = false;
     render("user-labels-off", 9580000, 100.8);

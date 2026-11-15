@@ -432,6 +432,72 @@
      "src": "eibi"
     }
    ]
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "shown": [
+    {
+     "hz": 7000000,
+     "dialHz": 7000000,
+     "src": "personal"
+    },
+    {
+     "hz": 9580020,
+     "dialHz": 9580020,
+     "src": "server"
+    },
+    {
+     "hz": 9580090,
+     "dialHz": 9580090,
+     "src": "personal"
+    }
+   ]
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": false,
+   "shown": [
+    {
+     "hz": 9580090,
+     "dialHz": 9580090,
+     "src": "personal"
+    }
+   ]
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "",
+   "vts": true,
+   "settled": true,
+   "shown": [
+    {
+     "hz": 9580090,
+     "dialHz": 9580090,
+     "src": "personal"
+    }
+   ]
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "BBC R4",
+   "vts": false,
+   "settled": true,
+   "shown": [
+    {
+     "hz": 9580090,
+     "dialHz": 9580090,
+     "src": "personal"
+    }
+   ]
   }
  ],
  "place": [
