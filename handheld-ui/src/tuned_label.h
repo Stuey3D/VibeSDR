@@ -8,8 +8,10 @@
 //     spectrum as they would swamp it, but we could have the current tuned one shown."
 //         [EiBi] China Radio Int     [Server] Radio Caroline     [User] Flex FM
 //  ★ WHICH: the listener's own (the handheld: the rows its owner SAVED on it) → the server's (the stations this receiver
-//    HEARD) → EiBi on air now; the nearest within a source; within the VTS's ±99 Hz (vts_core.h kVtsOnHz). A DAB service
+//    HEARD) → EiBi on air now; the nearest to the dial within a source; RECEIVED: inside the receive passband (the
+//    demodulator's filter, else a mode default, never past ±100 kHz) or on the dial (±99 Hz, the VTS's own). A DAB service
 //    never (its frequency is its block's). WHEN: the dial has rested, the VTS has let the name go, no live RDS/DAB/DRM name.
+//  ★★ A SUPPLEMENT, NEVER A REPEAT: a candidate the spectrum's own SIGNAL LABELS are drawing now is passed over.
 #pragma once
 #include <algorithm>
 #include <cctype>
@@ -24,11 +26,16 @@ namespace tl {
 /** One candidate (TunedRow). `source`: "user" · "server" · "eibi" — anything else is skipped. */
 struct Row { double frequency = 0; std::string name, source, comment, mode; };
 struct Station { std::string source, name; double hz = 0; bool ok = false; };
+/** A spectrum label drawn now (known_labels.h PlacedLabel's sig): marker, dial, source. */
+struct Shown { double hz = 0, dialHz = 0; std::string src; };
+/** The receive passband as offsets from the dial (Hz). */
+struct Passband { double lo = -99, hi = 99; };
 
 constexpr double kTolHz = 99;        // TUNED_TOL_HZ = stations.ts VTS_ON_HZ (vts_core.h kVtsOnHz)
 constexpr double kSettleMs = 600;    // TUNED_SETTLE_MS
 constexpr size_t kMaxChars = 28;     // TUNED_MAX_CHARS
 constexpr int kHueClash = 35;        // wfStamps.ts STAMP_HUE_CLASH
+constexpr double kMaxHalfHz = 100000; // TUNED_MAX_HALF_HZ
 
 inline size_t cpLen(const std::string& s) { size_t n = 0; for (unsigned char c : s) if ((c & 0xC0) != 0x80) n++; return n; }
 inline std::string cpHead(const std::string& s, size_t n) {
@@ -58,10 +65,44 @@ inline bool onAir(const std::string& c, int nowMin) {
     return true;
 }
 
+/** tunedPassband: the demodulator's own when sane (low < high), else the mode's default; clamped to ±kMaxHalfHz. */
+inline Passband tunedPassband(const std::string& modeIn, double bwLow, double bwHigh, bool known = true) {
+    auto clamp = [](double v) { return std::max(-kMaxHalfHz, std::min(kMaxHalfHz, v)); };
+    if (known && std::isfinite(bwLow) && std::isfinite(bwHigh) && bwHigh > bwLow) return {clamp(bwLow), clamp(bwHigh)};
+    std::string m = modeIn;
+    for (auto& ch : m) ch = (char)std::tolower((unsigned char)ch);
+    Passband p;
+    if (m == "wfm") p = {-75000, 75000};
+    else if (m == "nfm" || m == "fm") p = {-6000, 6000};
+    else if (m == "usb" || m == "ecssu") p = {0, 3000};
+    else if (m == "lsb" || m == "ecssl") p = {-3000, 0};
+    else if (m == "cw" || m == "cwu" || m == "cwl") p = {-300, 300};
+    else if (m == "am" || m == "sam" || m == "sau" || m == "sal" || m == "amst" || m == "drm") p = {-5000, 5000};
+    else p = {-1500, 1500};
+    return {clamp(p.lo), clamp(p.hi)};
+}
+/** inPassband: inside it, or on the dial (±kTolHz). */
+inline bool inPassband(double hz, double dialHz, const Passband& pb) {
+    const double off = hz - dialHz;
+    return std::fabs(off) <= kTolHz || (off >= pb.lo && off <= pb.hi);
+}
+/** markerCovers: a bookmark named by a personal / server / learnt label, an EiBi row by an EiBi label, within kTolHz. */
+inline bool markerCovers(const Row& r, const std::vector<Shown>* shown) {
+    if (!shown) return false;
+    const bool eibi = r.source == "eibi";
+    for (const Shown& m : *shown) {
+        const bool mine = eibi ? m.src == "eibi" : m.src == "personal" || m.src == "server" || m.src == "learnt";
+        if (!mine) continue;
+        if (std::fabs(m.hz - r.frequency) <= kTolHz || std::fabs(m.dialHz - r.frequency) <= kTolHz) return true;
+    }
+    return false;
+}
+
 inline int rankOf(const std::string& s) { return s == "user" ? 0 : s == "server" ? 1 : s == "eibi" ? 2 : -1; }
 
 /** tunedStation: the best-ranked source within `tol` (user → server → EiBi), the nearest within it, the first on a tie. */
-inline Station tunedStation(const std::vector<Row>& rows, double dialHz, int nowMin, double tol = kTolHz) {
+inline Station tunedStation(const std::vector<Row>& rows, double dialHz, int nowMin, const Passband& pb = Passband{},
+                            const std::vector<Shown>* shown = nullptr) {
     Station best;
     if (!(dialHz > 0)) return best;
     int bestRank = 9; double bestOff = INFINITY;
@@ -69,11 +110,12 @@ inline Station tunedStation(const std::vector<Row>& rows, double dialHz, int now
         const int rank = rankOf(r.source);
         if (rank < 0 || !(r.frequency > 0) || r.mode == "dab") continue;
         const double off = std::fabs(r.frequency - dialHz);
-        if (!(off <= tol)) continue;
+        if (!inPassband(r.frequency, dialHz, pb)) continue;
         const std::string name = trim(r.name);
         if (name.empty()) continue;
         if (rank > bestRank || (rank == bestRank && off >= bestOff)) continue;
         if (rank == 2 && !onAir(r.comment, nowMin)) continue;
+        if (markerCovers(r, shown)) continue;
         best.source = r.source; best.name = name; best.hz = r.frequency; best.ok = true;
         bestRank = rank; bestOff = off;
     }
@@ -94,9 +136,10 @@ inline std::string labelText(const Station& st) {
 
 /** tunedLabel: "" = no label. */
 inline std::string tunedLabel(const std::vector<Row>& rows, double dialHz, int nowMin, const std::string& liveName,
-                              bool vtsShowing, bool settled, double tol = kTolHz) {
+                              bool vtsShowing, bool settled, const Passband& pb = Passband{},
+                              const std::vector<Shown>* shown = nullptr) {
     if (!settled || vtsShowing || !trim(liveName).empty()) return "";
-    const Station t = tunedStation(rows, dialHz, nowMin, tol);
+    const Station t = tunedStation(rows, dialHz, nowMin, pb, shown);
     return t.ok ? labelText(t) : "";
 }
 

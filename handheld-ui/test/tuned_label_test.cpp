@@ -29,9 +29,19 @@ int main(int argc, char** argv) {
     std::vector<std::string> got;
     for (auto& q : in["queries"].a) {
         const double dial = q["dial"].num(); const int now = (int)q["now"].num();
-        const tl::Station st = tl::tunedStation(rows, dial, now);
-        const std::string lb = tl::tunedLabel(rows, dial, now, q["live"].str(), q["vts"].boolean(), q["settled"].boolean());
+        tl::Passband pb;
+        if (q.has("mode")) pb = tl::tunedPassband(q["mode"].str(), q["bwLow"].num(NAN), q["bwHigh"].num(NAN), q.has("bwLow") && q.has("bwHigh"));
+        std::vector<tl::Shown> shown;
+        for (auto& m : q["shown"].a) shown.push_back({m["hz"].num(), m["dialHz"].num(), m["src"].str()});
+        const tl::Station st = tl::tunedStation(rows, dial, now, pb, &shown);
+        const std::string lb = tl::tunedLabel(rows, dial, now, q["live"].str(), q["vts"].boolean(), q["settled"].boolean(), pb, &shown);
         got.push_back("Q " + jsNum(dial) + " " + jsNum(now) + " " + (st.ok ? st.source + " " + jsNum(st.hz) : "-") + " |" + lb);
+    }
+    for (auto& p : in["passbands"].a) {
+        const bool known = p.has("bwLow") && p.has("bwHigh");
+        const tl::Passband b = tl::tunedPassband(p["mode"].str(), p["bwLow"].num(NAN), p["bwHigh"].num(NAN), known);
+        const std::string m = p["mode"].str();
+        got.push_back("P " + (m.empty() ? std::string("-") : m) + " " + jsNum(b.lo) + " " + jsNum(b.hi));
     }
     for (auto& p : in["place"].a) {
         char b[64]; std::snprintf(b, sizeof b, "X %.4f", tl::labelX(p["nx"].num(), p["w"].num(), p["width"].num()));

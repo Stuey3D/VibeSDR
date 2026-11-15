@@ -11,9 +11,14 @@
 // ★ WHEN: the dial has rested tl::kSettleMs (a stick sweep never flickers a name per channel), the VTS bar has let the
 //   name go and no live RDS / DAB / DRM name is held (vts.h vtsTunedInputs — the bar's own Screen). Worked out only when
 //   one of those, a list or the minute changes; a frame that changes none costs one box and its glyphs.
+// ★★ A SUPPLEMENT, NEVER A REPEAT (Stuart, 2026-11-15 — this file's first render showed "Flex FM" on the spectrum and
+//    "[User] Flex FM" under it): the SIGNAL LABELS drawn this frame (known_labels_app.h, knownLabelsUi().k.placed() —
+//    empty when they are off) are handed over, and a station they already name is passed over.
+// ★ RECEIVED, not only dead on: matched inside the receive passband (s.bwLow / s.bwHigh, the demodulator's filter).
 #pragma once
 #include "bm_state.h"
 #include "disp_settings.h"
+#include "known_labels_app.h"
 #include "tuned_label.h"
 
 #include <ctime>
@@ -31,12 +36,12 @@ struct TunedLabelUi {
 };
 inline TunedLabelUi& tunedLabelUi() { static TunedLabelUi u; return u; }
 
-/** The candidates within the tolerance only (the schedule is ~9000 rows; only the few near the dial are copied). */
-inline std::vector<tl::Row> tunedRowsNear(double hz) {
+/** The candidates inside the passband only (the schedule is ~9000 rows; only the few near the dial are copied). */
+inline std::vector<tl::Row> tunedRowsNear(double hz, const tl::Passband& pb) {
     std::vector<tl::Row> out;
     BmShared& b = bmShared();
     std::lock_guard<std::mutex> lk(b.m);
-    auto near = [&](double f) { return std::fabs(f - hz) <= tl::kTolHz; };
+    auto near = [&](double f) { return tl::inPassband(f, hz, pb); };
     for (const BmRow& r : b.rows) if (r.manual && near(r.frequency)) out.push_back({r.frequency, r.name, "user", "", r.mode});
     for (const BmRow& r : b.rows) if (!r.manual && near(r.frequency)) out.push_back({r.frequency, r.name, "server", "", r.mode});
     for (const StationRow& r : b.stations) if (near(r.frequency)) out.push_back({r.frequency, r.name, "eibi", r.comment, r.mode});
@@ -60,11 +65,20 @@ inline void tunedLabelDraw(Ctx& c, const RadioState& s, Rect wfr, const unsigned
     std::tm g{};
     gmtime_r(&tt, &g);
     const int nowMin = g.tm_hour * 60 + g.tm_min;
+    const tl::Passband pb = tl::tunedPassband(s.mode, s.bwLow, s.bwHigh);
+    std::vector<tl::Shown> shown;
+    std::string shownKey;
+    for (const PlacedLabel& p : knownLabelsUi().k.placed()) if (p.sig) {
+        shown.push_back({p.sig->hz, p.sig->dialHz, p.sig->src});
+        shownKey += std::to_string((long long)std::llround(p.sig->hz)) + p.sig->src + ",";
+    }
     const std::string key = std::to_string((long long)std::llround(s.vfoHz)) + "|" + std::to_string(bs) + "|" + std::to_string(ss) + "|"
-                          + std::to_string(nowMin) + "|" + live + "|" + (showing ? "1" : "0");
+                          + std::to_string(nowMin) + "|" + live + "|" + (showing ? "1" : "0") + "|" + std::to_string((int)pb.lo) + ":"
+                          + std::to_string((int)pb.hi) + "|" + shownKey;
     if (key != u.key) {
         u.key = key;
-        u.text = showing || !tl::trim(live).empty() ? "" : tl::tunedLabel(tunedRowsNear(s.vfoHz), s.vfoHz, nowMin, live, showing, true);
+        u.text = showing || !tl::trim(live).empty() ? ""
+               : tl::tunedLabel(tunedRowsNear(s.vfoHz, pb), s.vfoHz, nowMin, live, showing, true, pb, &shown);
     }
     if (u.text.empty()) return;
     const Font& f = c.f.small;

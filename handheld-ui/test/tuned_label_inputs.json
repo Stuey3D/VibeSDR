@@ -85,6 +85,32 @@
    "frequency": 98500000,
    "name": "Радио Ретро",
    "source": "user"
+  },
+  {
+   "frequency": 7074000,
+   "name": "Below",
+   "source": "user",
+   "mode": "usb"
+  },
+  {
+   "frequency": 11583000,
+   "name": "Farther",
+   "source": "eibi"
+  },
+  {
+   "frequency": 11581000,
+   "name": "Nearer",
+   "source": "eibi"
+  },
+  {
+   "frequency": 13600000,
+   "name": "Flex FM 2",
+   "source": "user"
+  },
+  {
+   "frequency": 13600030,
+   "name": "Under it",
+   "source": "eibi"
   }
  ],
  "queries": [
@@ -248,6 +274,164 @@
    "live": "",
    "vts": false,
    "settled": true
+  },
+  {
+   "dial": 9582000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "am",
+   "bwLow": -4500,
+   "bwHigh": 4500
+  },
+  {
+   "dial": 9590000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "am",
+   "bwLow": -4500,
+   "bwHigh": 4500
+  },
+  {
+   "dial": 7075000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "usb",
+   "bwLow": 300,
+   "bwHigh": 2700
+  },
+  {
+   "dial": 7074000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "usb",
+   "bwLow": 300,
+   "bwHigh": 2700
+  },
+  {
+   "dial": 7073000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "usb",
+   "bwLow": 300,
+   "bwHigh": 2700
+  },
+  {
+   "dial": 11580000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "am",
+   "bwLow": -4500,
+   "bwHigh": 4500
+  },
+  {
+   "dial": 9582000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "am"
+  },
+  {
+   "dial": 9582000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "lsb"
+  },
+  {
+   "dial": 13600000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "mode": "am",
+   "bwLow": -4500,
+   "bwHigh": 4500
+  },
+  {
+   "dial": 13600000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "shown": [
+    {
+     "hz": 13600000,
+     "dialHz": 13600000,
+     "src": "personal"
+    }
+   ],
+   "mode": "am",
+   "bwLow": -4500,
+   "bwHigh": 4500
+  },
+  {
+   "dial": 13600000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "shown": [
+    {
+     "hz": 13600030,
+     "dialHz": 13600030,
+     "src": "eibi"
+    },
+    {
+     "hz": 13600000,
+     "dialHz": 13600000,
+     "src": "personal"
+    }
+   ],
+   "mode": "am",
+   "bwLow": -4500,
+   "bwHigh": 4500
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "shown": [
+    {
+     "hz": 9580090,
+     "dialHz": 9580090,
+     "src": "personal"
+    },
+    {
+     "hz": 9580050,
+     "dialHz": 9580050,
+     "src": "learnt"
+    }
+   ]
+  },
+  {
+   "dial": 9580000,
+   "now": 600,
+   "live": "",
+   "vts": false,
+   "settled": true,
+   "shown": [
+    {
+     "hz": 9580090,
+     "dialHz": 9580090,
+     "src": "eibi"
+    }
+   ]
   }
  ],
  "place": [
@@ -349,6 +533,59 @@
     "#00ffff",
     "#ff3040"
    ]
+  }
+ ],
+ "passbands": [
+  {
+   "mode": "am"
+  },
+  {
+   "mode": "sam"
+  },
+  {
+   "mode": "wfm"
+  },
+  {
+   "mode": "nfm"
+  },
+  {
+   "mode": "fm"
+  },
+  {
+   "mode": "usb"
+  },
+  {
+   "mode": "lsb"
+  },
+  {
+   "mode": "ecssu"
+  },
+  {
+   "mode": "cwu"
+  },
+  {
+   "mode": "drm"
+  },
+  {
+   "mode": "ft8"
+  },
+  {
+   "mode": ""
+  },
+  {
+   "mode": "wfm",
+   "bwLow": -400000,
+   "bwHigh": 400000
+  },
+  {
+   "mode": "am",
+   "bwLow": 3000,
+   "bwHigh": -3000
+  },
+  {
+   "mode": "usb",
+   "bwLow": 300,
+   "bwHigh": 2700
   }
  ]
 }

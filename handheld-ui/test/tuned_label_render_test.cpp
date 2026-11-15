@@ -1,6 +1,8 @@
 // tuned_label_render_test.cpp — THE TUNED STATION'S LABEL ON THE R36S, drawn by the real App::drawOverlays offscreen at
 // 640×480 (Stuart, 2026-11-15: "When the VTS disappears can we have a label on the VFO with the current station name").
-//   • the dial at rest on a saved row: "[User] Flex FM" beside the needle at the waterfall's top, right of it;
+//   • the dial at rest on a saved row WITH the SIGNAL LABELS on: the spectrum already says "Flex FM", so NO "[User] Flex FM"
+//     under it (Stuart, 2026-11-15: a supplement, never a repeat); with them off: "[User] Flex FM" beside the needle;
+//   • 2 kHz off the saved row, still inside the 9 kHz AM passband: still named;
 //   • at the right edge, an EiBi row on air (no hours = on air): "[EiBi] …" flipped LEFT of the needle, on screen;
 //   • the dial just moved: nothing (it waits tl::kSettleMs); a dial on nothing: nothing.
 // Pixels are read back from the frame; PNGs written to $TUNED_LABEL_OUT (if set) for a look. Silent: no audio.
@@ -83,25 +85,35 @@ int main() {
         b.seq++; b.stationsSeq++;
     }
 
-    // ── at rest on a saved row: [User], right of the needle ──
+    // ── at rest on a saved row, SIGNAL LABELS on: the spectrum names it, so no duplicate ──
     const int nx = xOf(9580000);
+    dispSet().knownLabels = true;
     render("moving", 9580000, 100.0);          // the first frame on this dial: not rested yet
     CHECK(bright(nx + 4, nx + 200) == 0, "the dial just arrived: no label yet (%d bright px)", bright(nx + 4, nx + 200));
-    render("user", 9580000, 100.7);
-    CHECK(bright(nx + 4, nx + 200) > 40, "at rest on a saved row: the label right of the needle (%d bright px)", bright(nx + 4, nx + 200));
+    render("user-labels-on-no-duplicate", 9580000, 100.7);
+    CHECK(bright(0, 640) == 0, "SIGNAL LABELS on, \"Flex FM\" on the spectrum: no \"[User] Flex FM\" under it (%d bright px)", bright(0, 640));
+    // ── SIGNAL LABELS off: [User], right of the needle ──
+    dispSet().knownLabels = false;
+    render("user-labels-off", 9580000, 100.8);
+    CHECK(bright(nx + 4, nx + 200) > 40, "labels off, at rest on a saved row: the label right of the needle (%d bright px)", bright(nx + 4, nx + 200));
     CHECK(bright(nx - 200, nx - 4) == 0, "…and nothing left of it");
+    // ── 2 kHz off, inside the ±4.5 kHz AM passband: still named ──
+    const int ox = xOf(9582000);
+    render("2k-off-moving", 9582000, 100.9);
+    render("2k-off", 9582000, 101.6);
+    CHECK(bright(ox + 4, ox + 200) > 40, "2 kHz off, still received: still named (%d)", bright(ox + 4, ox + 200));
 
     // ── the right edge, EiBi: flipped left, on screen ──
     const int ex = xOf(9640000);
-    render("eibi-moving", 9640000, 101.0);
+    render("eibi-moving", 9640000, 102.0);
     CHECK(bright(0, 640) == 0, "a new dial: nothing until it rests (%d)", bright(0, 640));
-    render("eibi-right-edge", 9640000, 101.7);
+    render("eibi-right-edge", 9640000, 102.7);
     CHECK(bright(ex - 260, ex - 4) > 40, "EiBi at the right edge: flipped left of the needle (%d)", bright(ex - 260, ex - 4));
     CHECK(bright(ex + 4, 640) == 0, "…nothing right of it, off the edge");
 
     // ── on nothing ──
-    render("nothing", 9600000, 102.0);
-    render("nothing-rest", 9600000, 102.7);
+    render("nothing", 9600000, 103.0);
+    render("nothing-rest", 9600000, 103.7);
     CHECK(bright(0, 640) == 0, "a dial on nothing: no label (%d)", bright(0, 640));
 
     std::printf("tuned_label_render_test: %d / %d checks pass\n", checks - fails, checks);
