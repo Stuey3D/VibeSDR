@@ -72,7 +72,9 @@ await sleep(300);
 const GRANT_IDLE_S = 10;
 // ★ TEST-ONLY: the place in the order is kept across a reconnect for 2 minutes (kGoneForgetS); shortened to RANK_FORGET_S.
 const RANK_FORGET_S = 4;
-const env = { ...process.env, VIBE_ASK_GRANT_IDLE_S: String(GRANT_IDLE_S), VIBE_ASK_RANK_FORGET_S: String(RANK_FORGET_S), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
+/** ★ A listener whose socket closed still counts this long (a socket swap) — 8 s on a server, short here. */
+const GONE_GRACE_S = 3;
+const env = { ...process.env, VIBE_ASK_GRANT_IDLE_S: String(GRANT_IDLE_S), VIBE_ASK_RANK_FORGET_S: String(RANK_FORGET_S), VIBE_ASK_GONE_GRACE_S: String(GONE_GRACE_S), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
               VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const logPath = path.join(dir, 'server.log');
 const log = fs.openSync(logPath, 'w');
@@ -91,7 +93,7 @@ const until = async (f, ms = 4000) => { for (let t = 0; t < ms; t += 100) { if (
 
 try {
   console.log('── alone, nothing is locked ──');
-  const a = await join('aaaa0001');
+  let a = await join('aaaa0001');
   const da = a.last('dial');
   ok(!!da && da.askFirst !== true && da.tuneLocked !== true, 'a lone listener is told no lock (askFirst absent: one listener is not company)');
 
@@ -148,6 +150,19 @@ try {
   ok(refusedLines('squelch', 'bbbb0002') === sqlBefore, 'squelch stays free — it is this listener\'s own gate');
   a.send({ type: 'stereo', on: true }); await sleep(300);
   ok(refusedLines('stereo', 'aaaa0001') === 0, 'the longest-connected listener may still change the receiver');
+
+  console.log('── a socket swap is not an empty room (Almere B210, 2026-11-15: a tap landed in the gap) ──');
+  {
+    const at = vfo(b);
+    a.close();                                     // ★ the longest-connected listener's socket swaps (DAB entry, a blip)
+    await sleep(1500);
+    b.send({ type: 'tune', frequency: 97300000, mode: 'wfm' });   // ★ the newcomer taps in the gap
+    await sleep(1200);
+    ok(vfo(b) === at, `★ the held-back listener is still refused while the other is mid-swap (still ${vfo(b)})`);
+    a = await join('aaaa0001');                    // ★ back within the grace, same session
+    await until(() => a.last('dial')?.tuneLocked === false);
+    ok(a.last('dial')?.tuneLocked === false && b.last('dial')?.tuneLocked === true, '…and comes back first in the order, the newcomer still held');
+  }
 
   console.log('── the free listener tunes as ever ──');
   a.send({ type: 'tune', frequency: 96600000, mode: 'wfm' });
@@ -240,7 +255,7 @@ try {
   b.close(); c.close();
   ok(await until(() => a.last('dial')?.askFirst !== true, 6000), 'alone again: the dial says no lock');
   a.close();
-  await sleep(1500);
+  await sleep(GONE_GRACE_S * 1000 + 1500);   // ★ past the socket-swap grace: the room is really empty
 
   // ★★★ Stuart, 2026-10-22: his app left and came back 12 s later with full control over a friend who had joined
   //     after him — the place was the session limit's, remembered for 15 minutes away. "It would be a bit unfair for

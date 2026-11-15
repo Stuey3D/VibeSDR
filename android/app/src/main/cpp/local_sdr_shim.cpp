@@ -11420,7 +11420,42 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Is the lock in force right now? Switch on, a shared dial, company. Call WITH clientMtx held. */
     /* ★ A HELD session (V12) is not company here: nobody can ask a listener whose phone is suspended, so the one person
      *   actually present has the dial as normal. */
-    bool askInForceLocked() { return g_vsAskBeforeTuning.load() && vsSharedDial() && specListenerCountLocked() - heldCountLocked() > 1; }
+    bool askInForceLocked() {
+        return g_vsAskBeforeTuning.load() && vsSharedDial() && specListenerCountLocked() - heldCountLocked() + askGoneCountLocked() > 1;
+    }
+    /* ★★★ A LISTENER WHOSE SOCKET IS SWAPPING IS STILL IN THE ROOM (Stuart, 2026-11-15, Almere B210, beta77): the other
+     *  listener put the radio on 7D; entering DAB swaps a client's socket, and for that moment the room was Stuart alone —
+     *  "alone, nothing is locked" — so his tap on KINK DISTORTION changed the station for everybody "just as the first
+     *  station started to play". DAB itself already outlives a socket swap (kModeLeaveGraceS); the lock did not. A session
+     *  whose last socket closed is kept here for askGoneGraceS() (8 s, longer than that 5 s) — counted as company and kept in the
+     *  order by its own arrival — and forgotten the moment it is back or the grace is over. Under clientMtx.
+     *  ★ Every dropped socket is HELD (heldSessions_, 180 s) and a held session is not company (a pocketed phone nobody can
+     *    ask) — that is what emptied the room. Within this grace it still is company; after it, the hold rule stands. */
+    /** 8 s on a server (longer than DAB's 5 s socket swap); VIBE_ASK_GONE_GRACE_S for the tests (1..60). */
+    static double askGoneGraceS() {
+        static const double v = [] { const char* e = std::getenv("VIBE_ASK_GONE_GRACE_S"); const double d = e ? std::atof(e) : 0;
+                                     return d >= 1 && d <= 60 ? d : 8.0; }();
+        return v;
+    }
+    struct AskGone { double at = 0, arrived = 0; int handle = 0; std::string rankKey; };
+    std::map<std::string, AskGone> askGone_;
+    int askGoneCountLocked() {
+        if (askGone_.empty()) return 0;
+        const double now = Impl::nowSecs();
+        int n = 0;
+        for (auto it = askGone_.begin(); it != askGone_.end();) {
+            bool back = false;
+            for (auto& kv : sockSession) if (kv.second == it->first) { back = true; break; }
+            // ★ …or back under a NEW session from the same browser (the app makes one on a reconnect): that is the same
+            //   person, who carries their own place — the ghost must not compete with them. ONLY a browser key ("b:…"): a key
+            //   without one is the bare address, which two people behind one router share (occKeyFor)
+            if (!back && it->second.rankKey.rfind("b:", 0) == 0)
+                for (auto& kv : sockRankKey) if (kv.second == it->second.rankKey) { back = true; break; }
+            if (back || now - it->second.at > askGoneGraceS()) { it = askGone_.erase(it); continue; }
+            ++n; ++it;
+        }
+        return n;
+    }
 
     /** ★★ THE ROOM, AS THE RULE NEEDS IT. Call WITH clientMtx held.
      *  ★★ "LONGEST-CONNECTED" IS askSeniority — keyed on the browser and address like the turn clock, so a reload
@@ -11455,6 +11490,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             p.overLimit = limitMin > 0 && !p.admin && !v.loopback && (now - v.turn) >= (double)limitMin * 60.0;
             auto h = dialHandles.find(sess);
             p.handle = h != dialHandles.end() ? h->second : 0;
+            r.people.push_back(p);
+        }
+        // ★★ …and a listener mid-swap keeps their place (askGoneCountLocked has just pruned the list)
+        for (auto& [sess, g] : askGone_) {
+            if (seen.count(sess)) continue;
+            vibeask::Person p;
+            p.session = sess;
+            p.admin = isAdminSessionLocked(sess);
+            p.since = g.arrived;
+            p.handle = g.handle;
             r.people.push_back(p);
         }
         return r;
@@ -27771,6 +27816,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   bool left = false;
                   for (auto& kv : sockSession) if (kv.second == ses) { left = true; break; }
                   if (!left && !heldNow) sessionSquelch.erase(ses);   // ★ V12: a HELD listener keeps their squelch
+                  if (!left) {   // ★★ ask before tuning: the room keeps them through a socket swap (askGone_) — a just-HELD one too (every drop is held)
+                      const double nowS = Impl::nowSecs();
+                      AskGone g; g.at = nowS;
+                      auto rk = sockRankKey.find(sock.get());
+                      g.arrived = rk != sockRankKey.end() ? askSeniority.since(rk->second, nowS) : nowS;
+                      if (rk != sockRankKey.end()) g.rankKey = rk->second;
+                      auto h = dialHandles.find(ses); g.handle = h != dialHandles.end() ? h->second : 0;
+                      askGone_[ses] = g;
+                      if (askGone_.size() > 256) askGone_.clear();   // ★ bounded
+                  }
               }
           }
           sockSince.erase(sock.get());
