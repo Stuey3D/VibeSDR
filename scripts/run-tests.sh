@@ -234,6 +234,10 @@ flags_for() {
     #    step cap and interval, DRM only corroborating, the loop on a simulated warming radio with latency (no reversals),
     #    the DAB/DRM gates, the hardware/digital split, the glide, the per-radio store. Fast.
     test-afc)              echo "-O2" ;;
+    # ★ V12 aviation: -O2 — each test times its receiver against real time (CPU per capture second).
+    test-acars|test-vdl2|test-hfdl|test-avi-service) echo "-O2 -lpthread" ;;
+    # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
+    test-tz-id) [ "$(uname)" = Darwin ] && echo "-framework CoreFoundation" || echo "" ;;
     *)               echo "" ;;
   esac
 }
@@ -399,6 +403,9 @@ deps_for() {
     test-dab-faad|test-dab-faad-queue|test-dab-tii-air) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
     test-ndb|test-ndb-suspect) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
+    # ★ V12 AVIATION DATALINK (docs/v12/AVIATION.md): ACARS, VDL2, HFDL and the service that runs them share one front end
+    #   (vibe_avi_front.h — the channeliser, FFT and decimators); pffft + kiss_fft from cobjs_for.
+    test-acars|test-vdl2|test-hfdl|test-avi-service) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     *)                  echo "" ;;
   esac
 }
@@ -417,7 +424,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-vdl2|test-hfdl|test-avi-service)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
