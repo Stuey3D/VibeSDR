@@ -272,6 +272,7 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, type KnownSignal, type KnownAvail } from '../utils/knownSignals';
+import { tunedLabel, utcMinutes, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
@@ -12494,6 +12495,27 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [status.frequency, vtsCheck]);
 
+  /* ★★ V12 THE TUNED STATION'S LABEL AT THE VFO (utils/tunedStation.ts — Stuart, 2026-11-15: "When the VTS disappears can
+   *  we have a label on the VFO with the current station name … [EiBi] China Radio Int / [Server] Radio Caroline / [User]
+   *  Flex FM"). From the VTS's own merged list (vtsBookmarks — yours, the server's, EiBi on air now), once the dial has
+   *  RESTED (TUNED_SETTLE_MS — a sweep never flickers a name per channel), the VTS has let the name go, and there is no
+   *  live RDS / DAB / DRM name. `restHz` is 0 while the dial moves; setting 0 again is a no-op render. */
+  const [restHz, setRestHz] = useState(0);
+  useEffect(() => {
+    const hz = status.frequency;
+    setRestHz(0);
+    if (!hz) return;
+    const t = setTimeout(() => setRestHz(hz), TUNED_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [status.frequency]);
+  const tunedVfoLabel = useMemo(() => {
+    if (!restHz || restHz !== status.frequency) return null;
+    const vtsShowing = !!vtsNotif && vtsNotif.kind.startsWith('station') && !!vtsNotif.name;
+    return tunedLabel(vtsBookmarks.current, restHz, utcMinutes(), { liveName: liveStation.name, vtsShowing, settled: true });
+  // ★ searchBookmarks is the same merged list, as state — it re-runs this when the lists change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restHz, status.frequency, vtsNotif, liveStation.name, searchBookmarks]);
+
   // Live RDS/DAB station name arrives async (no frequency change to trigger
   // vtsCheck), so react to it directly: drive the VTS station readout + popup,
   // uniform with the bookmark-derived station-on notif. Cleared name hands the
@@ -13981,6 +14003,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         needleHidden={ismOn}
         wideVfo={!!wideDrawn}
         needleLabel={wideLabel}
+        tunedLabel={tunedVfoLabel}
         filterLow={wideDrawn ? wideDrawn[0] : bandDrawn ? bandDrawn[0] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).low}
         filterHigh={wideDrawn ? wideDrawn[1] : bandDrawn ? bandDrawn[1] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).high}
         /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing

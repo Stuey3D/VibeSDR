@@ -96,6 +96,7 @@ import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan
 import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
+import { tunedLabelX } from '../utils/tunedStation';
 import { displayMap, fanRefresh, fanRow, motionImageRows, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { ringCapFromDeviceClass, ringNextRows, RING_MIN_ROWS } from '../utils/wfRingSize';
 import { growRing } from '../utils/wfRingGrow';
@@ -268,6 +269,9 @@ export interface WaterfallViewProps {
   wideVfo?:        boolean;
   /** The needle's label in place of "LISTEN: <frequency>" (V12: "DAB 7D · 194.064M" — wideVfoLabel). */
   needleLabel?:    string;
+  /** ★★ V12 THE TUNED STATION'S LABEL (utils/tunedStation.ts — "[EiBi] China Radio Int"): drawn beside the needle, just
+   *  below its LISTEN row, once the VTS has let the name go. null = none (the caller decides when: tunedLabel). */
+  tunedLabel?:     string | null;
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
   needleIntensity?: number;
@@ -660,7 +664,7 @@ function WaterfallView({
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30, clipFloorDb = null,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
-  needleHidden = false, wideVfo = false, needleLabel, secondVfo = null, activeVfo = null,
+  needleHidden = false, wideVfo = false, needleLabel, tunedLabel = null, secondVfo = null, activeVfo = null,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
   smoothTune = true, wfBoost: wfBoostOn = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
@@ -3417,6 +3421,25 @@ function WaterfallView({
           </Text>
         )}
 
+        {/* ★★ V12 THE TUNED STATION'S LABEL (utils/tunedStation.ts — Stuart, 2026-11-15: "When the VTS disappears can we have
+            a label on the VFO with the current station name"). Beside the needle, one row BELOW its LISTEN readout (the
+            top of the waterfall with the spectrum on; under LISTEN's row without it), so it never covers it. The scale
+            stamps' look: the VFO colour, white where that clashes with the palette (stampCol), a dark halo on a dark box.
+            Flipped to the needle's left near the right edge and kept on screen (tunedLabelX). RN cannot measure text
+            here, so the width is estimated (generously) and a flipped box is pinned by its RIGHT edge to the needle. */}
+        {tunedLabel && needle && needle.nX >= 0 && needle.nX <= width && (() => {
+          const est = Math.min(width - 4, estimateLabelWidth(tunedLabel, 9.5, 4, 0.62));
+          const lx = tunedLabelX(needle.nX, est, width);
+          const top = specShow && specH > 40 ? wfTop + 3 : markerLabelBase + 16;
+          const pos = lx < needle.nX ? { right: Math.max(2, width - (lx + est)) } : { left: lx };
+          return (
+            <View pointerEvents="none" accessible accessibilityLabel={'Tuned to ' + tunedLabel}
+                  style={[styles.tunedBox, pos, { top, maxWidth: width - 4 }]}>
+              <Text numberOfLines={1} style={[styles.tunedText, { fontFamily, color: stampCol }]}>{tunedLabel}</Text>
+            </View>
+          );
+        })()}
+
         {/* ── ★★ V12 VFO A/B: each needle's letter and the ear it is heard in, at the top of the spectrum ── */}
         {activeVfo && needle && needle.nX >= 0 && needle.nX <= width && (
           <Text pointerEvents="none" numberOfLines={1}
@@ -3513,6 +3536,10 @@ const styles = StyleSheet.create({
   knownSpan: { position: 'absolute', height: 2, backgroundColor: KNOWN_LABEL_COLOUR, opacity: 0.55 },
   knownBox: { position: 'absolute', height: 13, paddingHorizontal: 3, backgroundColor: KNOWN_LABEL_BOX, justifyContent: 'center' },
   knownText: { fontSize: 9, fontWeight: 'bold', color: KNOWN_LABEL_COLOUR },
+  // ★★ V12 the tuned station's label (utils/tunedStation.ts) — the scale stamps' dark band and halo, in the stamp colour
+  tunedBox: { position: 'absolute', height: 14, paddingHorizontal: 4, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center' },
+  tunedText: { fontSize: 9.5, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.95)', textShadowRadius: 2,
+               textShadowOffset: { width: 0, height: 1 } },
   dbLabel: {
     position: 'absolute', left: 4,
     fontSize: 11, fontWeight: 'bold', color: 'rgba(255,180,60,0.90)',
