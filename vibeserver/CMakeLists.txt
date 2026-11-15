@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 11.0.16 LANGUAGES CXX C)
+project(vibeserver VERSION 11.0.17 LANGUAGES CXX C)
 # ★★★ V11 (2026-09-28): the app, Jr, every VibeServer host, Lite and the Mac app all move to major 11
 #     together (docs/BRIEF-v11-compatibility.md). A PRE-RELEASE is named on its OWN line, read by every
 #     reader of the line above (android CMake, lite gradle, mac/build-app.sh): the package becomes
@@ -763,6 +763,11 @@ foreach(t ${VIBE_DAB_TESTS})
   add_test(NAME dab-${t} COMMAND test-dab-${t})
   add_dependencies(dab-tests test-dab-${t})
 endforeach()
+# ★ The 8-bit IQ conversion and its ADC statistics (vibe_u8_conv.h) against a reference — the path this machine builds
+#   (NEON on ARM, SSE2 on x86). The SSE2 path once dropped the statistics: VibeAGC blind on every x86 RTL server.
+add_executable(test-u8-conv "${CMAKE_CURRENT_SOURCE_DIR}/test-u8-conv.cpp")
+target_include_directories(test-u8-conv PRIVATE "${CPP_DIR}")
+add_test(NAME u8-conv COMMAND test-u8-conv)
 # ★ The throttle snail (vibe_health.h), driven through a fake sysfs tree. Built TWICE: this machine's own
 #   path (cpuinfo_max on ARM, calibrated peak on x86) and the x86 calibrated path forced, so both are
 #   exercised whichever box runs the tests.
