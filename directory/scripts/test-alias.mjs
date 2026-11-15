@@ -91,7 +91,9 @@ console.log('\nA direct server that opts out at registration');
   const r = await slugGet(env, 'loft-rsp');
   ok(r.status === 404 && !r.headers.get('location'), '★★ the slug host answers 404, not a redirect');
   const t = await r.text();
-  ok(t.includes('does not use a vibesdr.net address') && !t.includes(OWN), '…saying why, and not doubling as a link to the server');
+  // ★ "the owner's URL appears nowhere in the page" — split, not includes(): CodeQL reads includes(<url>) as a URL check
+  //   (js/incomplete-url-substring-sanitization); this is an absence test on a page body, nothing is being sanitised.
+  ok(t.includes('does not use a vibesdr.net address') && t.split(OWN).length === 1, '…saying why, and not doubling as a link to the server');
   ok(db.prepare('SELECT slug, alias FROM servers WHERE id = ?').get(reg.id).slug === 'loft-rsp', 'the slug is still held on the row');
 
   console.log('…and switches the address back on');
