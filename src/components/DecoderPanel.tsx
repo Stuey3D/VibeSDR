@@ -31,7 +31,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { screenNavRef } from './ScreenNav';
-import { captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS, useNavFocus } from './PanelNav';
+import { captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS, useNavFocus, NAV_ADJUST } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
@@ -597,7 +597,9 @@ export default function DecoderPanel({
    *  figures actually applied (this chart's shift, the slant drawn), each a key, then AUTO and RAW (a mode pair). MARGIN opens the drag
    *  cover over the chart (DecoderImageCanvas alignPreview) with ◀ ▶ DONE; SLANT opens − + DONE; DONE goes back.
    *  Every arrow is the same 44 pt key and repeats while held, speeding up (useHoldRepeat). The shift is still THIS
-   *  chart's only; the slant is still saved per frequency; AUTO (was RESET) returns both to automatic. */
+   *  chart's only; the slant is still saved per frequency; AUTO (was RESET) returns both to automatic.
+   *  ★ A keyboard / pad / TV remote controls MARGIN or SLANT IN PLACE instead (ENTER, amber ring, left / right step,
+   *    ENTER or BACK out onto the same key), and BACK in the ◀ ▶ / − + row returns here (see kbAdj). */
   /* ★ The shift as the listener reads it: px, signed, the short way round on this chart's width (from "1809x…"). */
   const chartW = parseInt(imageInfo, 10) || 1809;
   const signedPx = (s: number) => { const v = Math.round((((s % chartW) + chartW + chartW / 2) % chartW) - chartW / 2);
@@ -752,6 +754,17 @@ export default function DecoderPanel({
   // Keyboard Access takes Space); with every key now meaning the same thing everywhere, Enter selects and Space is not
   // ours at all — Full Keyboard Access and VoiceOver keep it.
   const [kbZone, setKbZone] = useState<null | 'header' | 'list' | 'popup'>(null);
+  // ★★★ MARGIN / SLANT ARE PRESSED INTO (Stuart, 2026-11-15: "BACK should step back one level on all systems" — the
+  //     R36S's picAdjRow, the web's padAdjuster). From a keyboard, a pad or a TV remote, MARGIN and SLANT in ADJ's
+  //     summary are keys like AUTO and RAW (left / right move on); ENTER controls one IN PLACE — the amber NAV_ADJUST
+  //     ring, left / right step it (◀ moves the chart left, as the ◀ key does) — and ENTER or BACK comes out onto the
+  //     same key. BACK in MARGIN's / SLANT's key row (opened by a tap) returns to the summary, on that key, instead of
+  //     leaving the box; BACK again is the next level out. Touch is unchanged.
+  const [kbAdj, setKbAdj] = useState<null | 'margin' | 'slant'>(null);
+  const kbAdjRef = useRef(kbAdj); kbAdjRef.current = kbAdj;
+  const hdrAdj = useRef(new Map<number, { id: 'margin' | 'slant'; begin(): void; step(d: 1 | -1): void }>());
+  const hdrIds = useRef(new Map<string, number>());   // a key's navId → its place in the header bank (as last drawn)
+  const hdrFocusNext = useRef<string | null>(null);
   const [speedIdx, setSpeedIdx] = useState(0);
   const [hdrIdx, setHdrIdx] = useState(0);
   const [listIdx, setListIdx] = useState(0);
@@ -814,7 +827,7 @@ export default function DecoderPanel({
   // way, which is what a real control does when it lights up. (Stuart's idea.)
   const { value: flash, flash: announce, flashThen } = useAnnounce();
 
-  const leave = useCallback(() => { setKbZone(null); captureRegion(null); }, []);
+  const leave = useCallback(() => { setKbZone(null); setKbAdj(null); captureRegion(null); }, []);
   // ★ On a TIMEOUT, flash once more and let it be seen before closing — an announcement of
   // departure, so the box handing the keyboard back is deliberate rather than mysterious.
   const leaveAnnounced = useCallback(() => { flashThen(leave); }, [flashThen, leave]);
@@ -879,6 +892,18 @@ export default function DecoderPanel({
     // Any key the box acts on counts as activity — see armIdle.
     if (kbZoneRef.current) armIdleRef.current();
     if (!kbZoneRef.current) return;               // not ours until Enter on the box says so
+    if (kbAdjRef.current) {
+      // controlling MARGIN / SLANT: left / right step it; ENTER or BACK come out onto the same key; up / down move on
+      if (k === 'ArrowLeft' || k === 'ArrowRight') { hdrAdj.current.get(hdrIdxRef.current)?.step(k === 'ArrowRight' ? 1 : -1); return true; }
+      setKbAdj(null);
+      if (k === 'Back' || k === 'Enter') return true;
+    }
+    if (k === 'Back' && kbZoneRef.current !== 'popup' && adjModeRef.current !== 'summary') {
+      // ★ one level: MARGIN's / SLANT's key row → the summary, the highlight on the key that opened it
+      hdrFocusNext.current = adjModeRef.current === 'slant' ? 'slant' : 'margin';
+      setAdjMode('summary');
+      return true;
+    }
     if (k === 'Back') {
       // Deepest first: close the speed popup before anything else, without changing it.
       if (kbZoneRef.current === 'popup') { popCloseRef.current(); return true; }
@@ -921,6 +946,8 @@ export default function DecoderPanel({
       return true;
     }
     if (k === 'Enter') {
+      const pa = kbZoneRef.current === 'header' ? hdrAdj.current.get(hdrIdxRef.current) : undefined;
+      if (pa) { pa.begin(); setKbAdj(pa.id); return true; }
       if (kbZoneRef.current === 'header') hdrDone.current[hdrIdxRef.current]?.();
       else if (isScannerRef.current) scanNav.current.press(listIdxRef.current);
       else if (listLenRef.current > 0 && cwSelectRef.current) cwSelectRef.current(listIdxRef.current);
@@ -940,6 +967,16 @@ export default function DecoderPanel({
   // Refs so the listener above, installed once, never reads a stale value.
   const kbZoneRef = useRef(kbZone);   kbZoneRef.current = kbZone;
   const hdrIdxRef = useRef(hdrIdx);   hdrIdxRef.current = hdrIdx;
+  const adjModeRef = useRef(adjMode); adjModeRef.current = adjMode;
+  // ★ back from MARGIN's / SLANT's key row: once the summary is drawn again, the highlight onto the key that opened it
+  useEffect(() => {
+    const want = hdrFocusNext.current;
+    if (!want || adjMode !== 'summary') return;
+    hdrFocusNext.current = null;
+    const i = hdrIds.current.get(want);
+    if (i !== undefined) { setKbZone('header'); setHdrIdx(i); }
+  }, [adjMode]);
+  useEffect(() => { if (!adjOpen || adjMode !== 'summary') setKbAdj(null); }, [adjOpen, adjMode]);
   const listIdxRef = useRef(listIdx); listIdxRef.current = listIdx;
   const cwSelectRef = useRef<((i: number) => void) | null>(null);
   cwSelectRef.current = isCw ? (i: number) => {
@@ -1092,10 +1129,13 @@ export default function DecoderPanel({
   //   render, so React remounted every header key each time — which a dome key cannot survive:
   //   its snap and its 45 ms press click (useDomeKey) were torn down mid-press. Only the keyboard
   //   focus it draws can change what it renders.
-  const HBtn = useCallback(({ onPress, style, children, run, ...rest }: any) => {
+  const HBtn = useCallback(({ onPress, style, children, run, padAdjust, navId, ...rest }: any) => {
     const i = hdrSlots.current.length;
     hdrSlots.current.push(onPress ?? (() => {}));
+    if (padAdjust) hdrAdj.current.set(i, padAdjust); else hdrAdj.current.delete(i);
+    if (navId) hdrIds.current.set(navId, i);
     const on = kbZone === 'header' && hdrIdx === i;
+    const ring = on && padAdjust && kbAdj === padAdjust.id ? NAV_ADJUST : focusC.ring;   // ★ amber while controlled
     const mine = !!run;
     if (mine) runIdx.current.add(i); else runIdx.current.delete(i);
     return (
@@ -1104,11 +1144,11 @@ export default function DecoderPanel({
           const { x, width } = e.nativeEvent.layout;
           hdrBtnX.current[i] = { x, width };
         } : undefined}
-        style={[style, on && { borderColor: focusC.ring, borderWidth: 2 }]} {...rest}>
+        style={[style, on && { borderColor: ring, borderWidth: 2 }]} {...rest}>
         {children}
       </DecoderKey>
     );
-  }, [kbZone, hdrIdx]);
+  }, [kbZone, hdrIdx, kbAdj]);
 
   if (!panelOn) return null;
 
@@ -1458,6 +1498,7 @@ export default function DecoderPanel({
               {/* ★ The figures APPLIED: this chart's shift (auto-align's, or the listener's) and the slant drawn. */}
               {!viewingPrev && (
                 <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the margin: drag the chart sideways"
+                  navId="margin" padAdjust={{ id: 'margin', begin: () => setRawChart(false), step: (d: 1 | -1) => nudgeShift(-d) }}
                   onPress={() => { setRawChart(false); setAdjMode('align'); }}>
                   <DecoderKeyLabel active={!rawChart && manualShift != null} style={dp.bigKeyTxt}>
                     {rawChart ? 'MARGIN RAW' : `MARGIN ${manualShift != null ? 'MANUAL' : 'AUTO'} ${signedPx(curShift)} px`}
@@ -1465,6 +1506,7 @@ export default function DecoderPanel({
                 </HBtn>
               )}
               <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the slant"
+                navId="slant" padAdjust={{ id: 'slant', begin: () => setRawChart(false), step: (d: 1 | -1) => nudgeSlant(SLANT_STEP * d) }}
                 onPress={() => { setRawChart(false); setAdjMode('slant'); }}>
                 <DecoderKeyLabel active={!rawChart && slantManual} style={dp.bigKeyTxt}>
                   {rawChart ? 'SLANT RAW' : `SLANT ${slantManual ? 'MANUAL' : 'AUTO'} ${signedSlant(drawSlant)}`}
