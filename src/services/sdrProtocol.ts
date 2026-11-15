@@ -23,6 +23,7 @@ export interface AfcState {
   ppm: number; inForce: number; manual: number; cap: number;
   at: number; now: number; reverts: number;
   source: string; line: string; why: string;
+  pll?: string;          // ★ beta79: "PLL −45.0 Hz removed" — an RTL's tuning step taken out of the IQ (absent otherwise)
   receivedAt?: number;   // ★ this client's clock when it arrived — "N min ago" counts on from the server's `now`
 }
 

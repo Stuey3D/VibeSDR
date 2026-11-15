@@ -2,8 +2,8 @@
 
 V12, 2026-11-12. Code: `android/app/src/main/cpp/vibe_afc.h` (the rules), `local_sdr_shim.cpp` (`afcMix`, `afcTick`,
 `afcJson`, `afcPllHz`, the socket messages and the two HTTP endpoints), `vibe_dab_service.h` (`clockRead`, the one hook into DAB),
-`vibe_r82xx_if.h` (`r82xxTuneOffsetHz`, the R820T's tuning step taken out of every RTL reading).
-Tests: `vibeserver/test-afc.cpp` (K: the tuning step), `scripts/test-server-afc.mjs`.
+`vibe_r82xx_if.h` (`r82xxTuneOffsetHz`, the R820T's tuning step, taken out of the IQ for every listener).
+Tests: `vibeserver/test-afc.cpp` (K: the tuning step), `vibeserver/test-pll-iq.cpp` (the step out of the IQ), `scripts/test-server-afc.mjs`.
 
 ## What it does
 
@@ -99,22 +99,72 @@ included. A crystal error scales with frequency and cannot make the RTL pattern.
   - The likely mechanism is the sigma-delta modulator's dither. R18 bit 4 is left at 0 by osmocom, which leaves the
     dither on. **The figure is measured, from two dongles on three blocks.** Re-fit it if more data disagrees.
 
-**The fix.** `vibertl::r82xxTuneOffsetHz` (`vibe_r82xx_if.h`) works out that offset for the tune in force from what the
-server already knows:
+**The fix, for every listener (beta79 — Stuart: "if it makes RTLs more accurate it's worth having").**
+`vibertl::r82xxTuneOffsetHz` (`vibe_r82xx_if.h`) works out that offset for what is on the tuner, from what the server
+already knows:
 
-- the physical centre, using `tuneHw`'s arithmetic;
+- the centre the hardware writer last **put on the tuner** (`g_rtlHwTunedHz`). This is the physical LO's dial, and it
+  includes the 15 kHz offset tuning. At 97.65 MHz the step at the tuner's 97.665 is −3.2 Hz, while at the dial's 97.650
+  it would be −6.9 Hz. `test-pll-iq` B shows the dial's figure would leave the station 3.7 Hz out.
 - `int_freq`, from the IF filter written (DAB writes 2.048 MHz, which gives 1.625 MHz);
 - the integer ppm in the radio (the owner's figure plus the hand-over's);
 - the tuner crystal, recorded at open by `afcNoteRtlTuner`. An R820T uses 28.8 MHz. An R828D uses 16 MHz, except the
   Blog V4, which uses 28.8 MHz, as librtlsdr does.
 
-`afcTick` subtracts the offset from the DAB reading before it becomes a `vibeafc::Reference`, so the reading measures
-only the crystal. Each block change logs one line, and hwinfo `afc.pllHz` shows the figure. With the offset removed:
+**It is taken out of the IQ, in the one mix pass that already existed** (`afcMix`):
 
-- the V4L's three on-air readings give −0.512, −0.511 and −0.511 ppm;
-- the Sony's two give +0.611 and +0.612 ppm.
+- The shift is `vibeafc::captureShiftHz`: the learned ppm at the radio's frequency, less the step, as **one** phase
+  increment. There is still at most one mix pass, and it runs whenever that combined shift is not zero.
+- The IQ producer stamps every buffer with the step for the tune it was captured on (`IqBuf::pllHz`, from
+  `rtlPllStamp`). A retune therefore changes the increment at the first buffer the new tune produced.
+- The NCO keeps its phase when the increment changes, so there is no phase jump. `test-pll-iq` D checks that the
+  increment across the boundary is either the old one or the new one.
+- **Every consumer gets the corrected stream**, because the mix runs before all of them:
+  - the spectrum and the waterfall;
+  - the shared and per-listener demodulators;
+  - the decoders;
+  - DAB;
+  - the full-capture raw IQ out (`iqTapFull`) and every listener's iqout.
 
-So the V4L's crystal is about −0.51 ppm. The −0.28 it learned living on 7D was 0.23 ppm of tuning step.
+  A station at RF X is therefore at X everywhere. `test-pll-iq` A checks this through the real capture cleaner, the mix
+  and a listener's channel on 7D, 11D, 12B, FM 97.65 (offset tune) and airband 118.7 (offset tune). On each, the station
+  lands within 1 Hz of its RF with the step removed, and the full step (−45.0, −34.3, +5.8, −3.2, −34.5 Hz) out without
+  it.
+  - That 1 Hz check uses the model on both sides, so it proves the sign, the frame and the order of the chain. Whether
+    the model matches a real dongle is shown by the on-air readings above.
+- **Who gets it:**
+  - only a USB R82xx dongle in tuner mode, and only while auto-PPM is on and not suspended (`vibeafc::pllToRemoveHz`);
+  - Turn off and a suspension still mean the radio exactly as the owner set it;
+  - `VIBE_PLL_IQ=0` leaves the step in the IQ, for A/B tests.
+- **The DAB reading cannot have the step taken out twice.** There is one rule, `vibeafc::pllLeftInReading`: the step
+  the tune has, less what `afcMix` removed from the IQ the reading was measured on.
+  - Normally it was removed, so nothing is left to subtract.
+  - With the correction off or `VIBE_PLL_IQ=0`, all of it is left, so all of it is subtracted.
+  - `test-pll-iq` E checks both cases.
+- **Shown:**
+  - hwinfo `afc.pllHz` gives the step for the tune in force, and `afc.pllRemovedHz` what is out of the IQ now;
+  - `afc.pll` gives the words "PLL −45.0 Hz removed", shown after the line beside the ppm on the setup page, the web
+    radio menu, the app's hardware panel and the R36S's SDR menu;
+  - each block change logs one line.
+- **Cost:** one NCO mix (NEON, SSE2 or scalar, in place, with no allocation per block).
+  - On the M5 Pro it measures 26.3 µs per 65536-sample block (0.40 ns a sample). That is 0.08 % of a core at
+    2.048 MS/s, 0.10 % at 2.4 MS/s and 0.13 % at 3.2 MS/s.
+  - A Pi 2-class core was not measured. A Cortex-A7 is perhaps 15–25 times slower per sample, which would be roughly
+    1.5–3 % of a core at 2.4 MS/s.
+  - The pass only becomes new work on a dongle with nothing learned yet. Once auto-PPM has learned a value, the pass was
+    already running.
+
+**The DC spike.** In the DSP loop the order is: the capture cleaner (`cleanCapture`, which takes out DC and the I/Q
+image on the raw capture), then `afcMix`, then everything else. That order is the same for the old ppm mix and the new
+combined one, and nothing after the mix assumes the spike sits exactly at the hardware centre.
+
+- **Placement uses the tuner's frame.** The DC-avoidance decisions (the 15 kHz offset tuning, `vfoDcOff` /
+  `vfoDcZone` / `vfoDcCentre` for a free VFO) are made against the tuner's centre. The mix moves what is left of the
+  spike by the shift: tens of Hz plus the ppm, nothing against a 15 kHz margin.
+- **The label uses the corrected position.** The spike's red label (`dcSpikeHz`) follows the shift, rounded to 10 Hz so
+  that a gliding correction does not send a `dc` message every 100 ms.
+- **Checked:** `test-pll-iq` C runs an offset tune with a spike. The cleaner measures the spike first, and what is left
+  after the mix sits 150 dB under the station's channel.
 
 **What it does not cover:**
 
@@ -122,18 +172,14 @@ So the V4L's crystal is about −0.51 ppm. The −0.28 it learned living on 7D w
   IF filter are not known here.
 - E4000, FC0012/13 and FC2580 tuners have their own PLLs, which are not modelled, so they are left alone.
 - Direct sampling is not covered.
+- **The retune boundary is the writer's.** A USB transfer already in flight when the tune lands, a few milliseconds of
+  IQ, is stamped with the new step. This is the same ambiguity every consumer already has at a retune.
+- An IF filter or ppm write inside librtlsdr retunes without moving the centre. The stamp follows from the next buffer
+  on.
 
-**Not done: shifting every listener's dial by the same figure.** That would make an RTL's dial exact for every mode:
-
-- **Cost:** one SIMD mix pass. `afcMix` already runs that pass whenever a correction is in force, but on a dongle with
-  no correction it would now run all the time.
-- **Risks:**
-  - the shift changes at each retune, so a few milliseconds of IQ already in the queue are shifted by the new tune's
-    figure;
-  - the DAB reading must then stop subtracting the offset, or it is removed twice;
-  - it would not reach rtl_tcp.
-
-At most about 60 Hz is at stake, which matters for SSB, CW and narrow digital modes at VHF. It is left for a decision.
+With the step out of the readings, the V4L's three on-air readings give −0.512, −0.511 and −0.511 ppm, and the Sony's
+two give +0.611 and +0.612. So the V4L's crystal is about −0.51 ppm. The −0.28 it learned living on 7D was 0.23 ppm of
+tuning step.
 
 **Grading DAB references by transmitter count (considered on 2026-11-15, not built).** The proposal was to trust a
 multiplex with two or more confirmed TII transmitters more than a one-transmitter small-scale one. It was based on 7D
@@ -242,7 +288,7 @@ End to end (`test-server-afc`, the bench multiplex with a +4 ppm clock), DAB's m
 
 - **hwinfo `afc`** (and `GET /vibeserver/hardware`): `available` (the radio can reach DAB), `on`, `state`
   (`off`/`learning`/`checking`/`applied`/`suspended`), `ppm`, `inForce`, `manual`, `cap`, `at`, `now`, `reverts`,
-  `source`, `line`, `why`, and `pllHz` (the R820T tuning step removed from the last DAB reading; present only on a USB R82xx dongle).
+  and `source`, `line`, `why`. On a USB R82xx dongle it also has `pllHz` (the tuning step of the tune in force), `pllRemovedHz` (what is out of the IQ now) and `pll` ("PLL −45.0 Hz removed").
 - **Socket** (admin-gated, like the ppm): `{"type":"autoppm","on":bool}` and `{"type":"autoppm_reset"}`.
 - **HTTP** (admin-gated): `/vibeserver/autoppm` (setup page) and `/vibeserver/admin/autoppm` (admin page). GET returns
   the state; POST `?reset=1` resets and `?on=0|1` turns it off or on.

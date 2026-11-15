@@ -334,6 +334,33 @@ inline int hwAutoFor(double learned, int cur, bool capable) {
     return int(std::lround(std::max(-100.0, std::min(100.0, learned))));
 }
 
+/* ── THE TUNER'S OWN STEP, TAKEN OUT OF THE CAPTURE (2026-11-15, beta79 — Stuart: "if it makes RTLs more accurate it's
+ *  worth having") ────────────────────────────────────────────────────────────────────────────────────────────────────
+ *  An R82xx dongle's tune lands each channel a known few tens of Hz from the dial (vibe_r82xx_if.h r82xxTuneOffsetHz).
+ *  The capture shift (afcMix: ONE SIMD mix pass for the whole capture, before every consumer) now removes it together
+ *  with the learned correction, so a station at RF X is at X for every listener, the spectrum, the decoders and raw IQ
+ *  out. Two rules, each in one place:
+ *    • captureShiftHz — what the one mix pass shifts the capture UP by: the learned ppm at the radio's frequency, less
+ *      the step (a step of +P means signals land P high, so they are moved P down).
+ *    • pllLeftInReading — what of the step a DAB reading still contains: the step the tune has, less what the capture
+ *      shift removed from the IQ that reading was measured on. Removed → 0 (nothing to subtract twice); not removed
+ *      (the switch off, VIBE_PLL_IQ=0, a radio it does not model) → all of it. NaN reads as 0 on both sides. */
+inline double captureShiftHz(double learnedPpm, double radioHz, double pllHz) {
+    return learnedPpm * 1e-6 * radioHz - (std::isfinite(pllHz) ? pllHz : 0.0);
+}
+inline double pllLeftInReading(double knownPllHz, double removedPllHz) {
+    return (std::isfinite(knownPllHz) ? knownPllHz : 0.0) - (std::isfinite(removedPllHz) ? removedPllHz : 0.0);
+}
+/** ★ Is the step taken out of the capture at all? Only on a USB R82xx dongle in tuner mode (rtl_tcp: the far end's
+ *  librtlsdr and filter are unknown; direct sampling bypasses the tuner), and only while auto-PPM is on and not
+ *  suspended — Turn off and a suspension still mean the radio EXACTLY as the owner set it. `figure` NaN = not modelled.
+ *  Returns the Hz to remove (0 = nothing). */
+struct PllGate { bool usbR82xx = false, tcp = false, directSampling = false, autoOn = false, enabled = true; };
+inline double pllToRemoveHz(const PllGate& g, double figure) {
+    if (!g.usbR82xx || g.tcp || g.directSampling || !g.autoOn || !g.enabled || !std::isfinite(figure)) return 0.0;
+    return figure;
+}
+
 /** The digital correction glides: kSlewPpmPerS at most (0.5 ppm in 5 s — 100 Hz at 200 MHz over 50 DAB frames, ~2 Hz a
  *  frame, nothing a DQPSK decision notices; 1.4 Hz a second at 14 MHz, nothing an SSB ear notices). The FIRST acquisition
  *  glides too — 4 ppm takes 40 s — so no listener on a shared dial ever sees it jump (rule 5). */

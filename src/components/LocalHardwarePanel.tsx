@@ -359,7 +359,7 @@ function afcLine(a: AfcState): string {
   if (a.state !== 'applied' && a.state !== 'checking') return a.line;
   const ago = Math.max(0, a.now - a.at + (Date.now() - (a.receivedAt ?? Date.now())) / 1000);
   const when = ago < 90 ? 'just now' : ago < 5400 ? `${Math.floor(ago / 60)} min ago` : ago < 172800 ? `${Math.floor(ago / 3600)} h ago` : `${Math.floor(ago / 86400)} days ago`;
-  return `Auto-corrected ${a.ppm >= 0 ? '+' : ''}${a.ppm.toFixed(1)} ppm${a.source ? ` from ${a.source}` : ''}, ${when}`;
+  return `Auto-corrected ${a.ppm >= 0 ? '+' : ''}${a.ppm.toFixed(1)} ppm${a.source ? ` from ${a.source}` : ''}, ${when}${a.pll ? ` · ${a.pll}` : ''}`;
 }
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {

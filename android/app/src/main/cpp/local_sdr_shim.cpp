@@ -3986,6 +3986,21 @@ static std::atomic<bool>      g_afcJump{false};
  *  librtlsdr's 28.8 MHz HF upconversion. Read by afcTick (afcPllHz), which takes the rest from state it already keeps. */
 static std::atomic<uint32_t>  g_rtlTunXtalHz{0};
 static std::atomic<bool>      g_rtlBlogV4{false};
+/** ★★ beta79 — THE STEP IS TAKEN OUT OF THE CAPTURE FOR EVERY LISTENER (vibe_afc.h captureShiftHz / pllToRemoveHz).
+ *  g_rtlHwTunedHz: the centre the hardware writer last PUT ON THE TUNER (rtlsdr_set_center_freq returned 0) — the
+ *  physical LO's dial, 15 kHz offset tuning included; it changes the moment the writer's tune lands, which is the
+ *  retune boundary the IQ producer stamps each buffer against (Impl::rtlPllStamp). g_afcHwA / g_afcOnA: atomic mirrors
+ *  of g_afcHw and "auto-PPM on and not suspended", published by afcPublishLocked for the producer thread.
+ *  g_pllRemovedHz: what afcMix last took out of the IQ (its buffer's stamp); g_captureShiftHz: the whole shift it
+ *  applied (Hz, + = up), for the DC spike's label. */
+static std::atomic<uint32_t>  g_rtlHwTunedHz{0};
+static std::atomic<int>       g_afcHwA{0};
+static std::atomic<bool>      g_afcOnA{true};
+static std::atomic<double>    g_pllRemovedHz{0.0}, g_captureShiftHz{0.0};
+static bool pllIqEnabled() {   // ★ VIBE_PLL_IQ=0: the step stays in the IQ (A/B tests); readings then subtract it
+    static const bool on = !(std::getenv("VIBE_PLL_IQ") && std::getenv("VIBE_PLL_IQ")[0] == '0');
+    return on;
+}
 static void afcNoteRtlTuner(rtlsdr_dev_t* dev) {
     uint32_t x = 0; bool v4 = false;
     if (dev) {
@@ -4002,6 +4017,7 @@ static void afcNoteRtlTuner(rtlsdr_dev_t* dev) {
     }
     g_rtlTunXtalHz.store(x, std::memory_order_relaxed);
     g_rtlBlogV4.store(v4, std::memory_order_relaxed);
+    g_rtlHwTunedHz.store(0, std::memory_order_relaxed);   // ★ a fresh open: nothing is on the tuner until the writer tunes
 }
 /** Write the store (under g_afcMtx). */
 static void afcSaveLocked() {
@@ -7497,7 +7513,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  instead of ~25 blocks of the decoder's confusion counted as link errors. */
     /** ★ `gainStep`: the SOURCE flagged a gain change taking effect in this buffer (SDRplay grChanged) —
      *  see GainStepSmoother::noteStepAtStart. */
-    struct IqBuf { std::vector<cf32> v; bool gap = false; bool gainStep = false; };
+    /** `pllHz`: the R82xx tuning step to take out of THIS buffer (rtlPllStamp, stamped when it was captured, so a
+     *  retune changes it at the buffer the new tune produced). 0 = nothing to take out. */
+    struct IqBuf { std::vector<cf32> v; bool gap = false; bool gainStep = false; float pllHz = 0.0f; };
     std::deque<IqBuf> iqQueue;
     /** ★★ SPENT IQ BUFFERS, KEPT FOR THE NEXT BLOCK (efficiency audit 2026-10-03). Every block
      *  used to be a fresh std::vector — ~600 KB at 2.4 Msps, ~31 a second — value-initialised
@@ -28163,18 +28181,57 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     dial never sees a jump; only the owner's own Reset / Turn off (g_afcJump) moves it at once. */
     vibedsp::NCO afcNco_;
     double afcCur_ = 0.0, afcNcoHz_ = 0.0, afcNcoRate_ = 0.0;
-    void afcMix(cf32* z, int n) {
+    /** ★★ beta79 — the R82xx tuning step for what is ON THE TUNER now (vibe_r82xx_if.h r82xxTuneOffsetHz), Hz, + = signals
+     *  land above; NaN when this is not a USB R82xx dongle in tuner mode. From g_rtlHwTunedHz (the centre the writer last
+     *  put on the tuner — the PHYSICAL LO's dial, the 15 kHz offset tuning included), the IF filter written (int_freq),
+     *  and the integer ppm in the radio (the owner's + the hand-over's). Atomics only: safe on the IQ producer's thread. */
+    double rtlPllNow() const {
+        const uint32_t xt = g_rtlTunXtalHz.load(std::memory_order_relaxed);
+        const uint32_t hz = g_rtlHwTunedHz.load(std::memory_order_relaxed);
+        if (xt == 0 || hz == 0 || !dev || !rtlPllUsb()) return std::nan("");
+        const int bw = g_tunerBwHz.load(std::memory_order_relaxed);
+        const int32_t intF = vibertl::r82xxIntFreqForBw(bw > 0 ? bw : (int32_t)std::lround(sampleRate));
+        const int ppm = g_ppmNow.load(std::memory_order_relaxed) + g_afcHwA.load(std::memory_order_relaxed);
+        return vibertl::r82xxTuneOffsetHz(hz, intF, xt, 28800000u, ppm, g_rtlBlogV4.load(std::memory_order_relaxed));
+    }
+    /** A USB dongle (not rtl_tcp, a SpyServer or any other driver), not lent away. */
+    bool rtlPllUsb() const {
+        return dev && !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf() && !useAirspy() && !useHackRf() && !useUsrp()
+               && !useIcom() && !radioReleased.load(std::memory_order_relaxed);
+    }
+    /** ★ The stamp for a buffer captured NOW (IqBuf::pllHz): what afcMix is to take out of it — vibeafc::pllToRemoveHz
+     *  decides (auto-PPM on, a USB R82xx, tuner mode, VIBE_PLL_IQ not 0). */
+    double rtlPllStamp() const {
+        vibeafc::PllGate g;
+        g.usbR82xx = g_rtlTunXtalHz.load(std::memory_order_relaxed) != 0 && rtlPllUsb();
+        g.tcp = useTcp();
+        g.directSampling = g_dsNow.load(std::memory_order_relaxed) > 0;
+        g.autoOn = g_afcOnA.load(std::memory_order_relaxed);
+        g.enabled = pllIqEnabled();
+        if (!g.usbR82xx || g.tcp || g.directSampling || !g.autoOn || !g.enabled) return 0.0;   // ★ no arithmetic per block
+        return vibeafc::pllToRemoveHz(g, rtlPllNow());
+    }
+    /** ★★ ONE SIMD MIX PASS for the whole capture (vibe_afc.h captureShiftHz): the learned correction's shift AND this
+     *  buffer's R82xx tuning step (`pllHz`, its IqBuf stamp) as one phase increment. The NCO keeps its phase when the
+     *  increment changes (NCO::setFreq leaves cur_ alone), so a retune — which changes the step — is phase-continuous:
+     *  the frequency moves at the first buffer the new tune produced, the phase does not jump.
+     *  ★ AFTER the capture cleaner (cleanCapture removes the tuner's DC and image first, on the raw capture) and before
+     *    everything else that reads the IQ: the spectrum, the shared and per-listener demodulators, the decoders, DAB,
+     *    the full-capture raw IQ out (iqTapFull) and every listener's iqout — all of them get the corrected stream. */
+    void afcMix(cf32* z, int n, float pllHz = 0.0f) {
         if (n <= 0) return;
         const double tgt = g_afcTarget.load(std::memory_order_relaxed);
         if (g_afcJump.exchange(false, std::memory_order_relaxed)) afcCur_ = tgt;
         else if (afcCur_ != tgt) afcCur_ = vibeafc::slewToward(afcCur_, tgt, double(n) / sampleRate);
         g_afcNow.store(afcCur_, std::memory_order_relaxed);
-        if (afcCur_ == 0.0) {
+        g_pllRemovedHz.store((double)pllHz, std::memory_order_relaxed);
+        const double radioHz = rtlCenter.load() - convOffsetHz.load(std::memory_order_relaxed) + hwOffsetHz();
+        const double hz = vibeafc::captureShiftHz(afcCur_, radioHz, (double)pllHz);   // ★ + = the capture moves UP
+        g_captureShiftHz.store(hz, std::memory_order_relaxed);
+        if (hz == 0.0) {
             if (afcNcoHz_ != 0.0) { afcNcoHz_ = 0.0; afcNco_.reset(); }
             return;
         }
-        const double radioHz = rtlCenter.load() - convOffsetHz.load(std::memory_order_relaxed) + hwOffsetHz();
-        const double hz = afcCur_ * 1e-6 * radioHz;
         if (hz != afcNcoHz_ || sampleRate != afcNcoRate_) {
             afcNcoHz_ = hz; afcNcoRate_ = sampleRate;
             afcNco_.setFreq(-hz / sampleRate);   // ★ NCO::mix shifts +f DOWN; a negative f shifts the capture UP
@@ -29090,7 +29147,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 dropOldestLocked();                       // USB: bounded by chunk count
             }
             iqQueuedSamples += v.size();
-            iqQueue.push_back(IqBuf{std::move(v), std::exchange(iqGapNext, false)});
+            iqQueue.push_back(IqBuf{std::move(v), std::exchange(iqGapNext, false), false, (float)rtlPllStamp()});
         }
         iqCv.notify_one();
     }
@@ -30725,6 +30782,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 ~IqReturn() { std::lock_guard<std::mutex> lk(self->iqMtx); self->recycleIqLocked(std::move(b)); }
             } iqReturn{this, buf};
             bool gap = false, gainStepFlag = false;
+            float pllStamp = 0.0f;   // ★ beta79: this buffer's R82xx tuning step (IqBuf::pllHz)
             {
                 std::unique_lock<std::mutex> lk(iqMtx);
                 // One-shot prefill at stream start. The DSP is NOT paced by this
@@ -30745,6 +30803,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 buf = std::move(iqQueue.front().v);
                 gap = iqQueue.front().gap;
                 gainStepFlag = iqQueue.front().gainStep;
+                pllStamp = iqQueue.front().pllHz;
                 iqQueue.pop_front();
                 iqQueuedSamples -= buf.size();
             }
@@ -30802,7 +30861,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     the owner's wide impulse blanker, below 30 MHz on auto. Both are one SIMD pass
              *     each over the block; VIBE_IQ_CLEAN=0 switches the cleaner off for A/B tests. */
             cleanCapture(buf.data(), (int)buf.size());
-            afcMix(buf.data(), (int)buf.size());   // ★★ V12 auto-PPM: the radio's clock, corrected for everything below
+            afcMix(buf.data(), (int)buf.size(), pllStamp);   // ★★ V12 auto-PPM: the clock (and an RTL's tuning step), corrected for everything below
             /* ★★★ NOT IN ADS-B (Stuart's Pi 500 V4, 2026-10-24: "the message rate seems a little low"). The smoother
              *  measures the level either side of our own gain write — and at 1090 MHz that window is full of replies, so
              *  a 1.3 dB write read as "+12.7 dB", "+21.2 dB", and the level was HELD: the whole capture turned down by
@@ -31706,7 +31765,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed)
             || g_aisMode.load(std::memory_order_relaxed))
             return 0.0;
-        return rtlCenter.load() + off;
+        /* ★ beta79: the spike is where the TUNER put it, and afcMix (after the capture cleaner, which has already taken
+         *  most of it out) then moves the whole capture by the correction's shift — the learned ppm plus an RTL's
+         *  tuning step, tens of Hz. The label follows, to 10 Hz (so a gliding correction does not send a `dc` message
+         *  every 100 ms; the label is pixels wide). The DC-avoidance decisions (vfoDcOff / vfoDcZone, 15 kHz margins)
+         *  stay in the TUNER's frame: a 60 Hz difference is nothing to a 15 kHz margin. */
+        const double shift = 10.0 * std::round(g_captureShiftHz.load(std::memory_order_relaxed) / 10.0);
+        return rtlCenter.load() + off + shift;
     }
     std::string dcSpikeJson() const {
         const double dc = dcSpikeHz();
@@ -35877,6 +35942,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         }
                         const int frc = rtlsdr_set_center_freq(dev, hz);
                         hwWrLastHz = hz;
+                        // ★ beta79: the retune boundary for the PLL step (Impl::rtlPllStamp) — buffers from here on
+                        g_rtlHwTunedHz.store(frc == 0 ? hz : 0u, std::memory_order_relaxed);
                         if (frc != 0)
                             LOGI("tuner centre -> %.3f MHz REFUSED (rc=%d, readback %.3f MHz)", hz / 1e6, frc,
                                  rtlsdr_get_center_freq(dev) / 1e6);
@@ -43856,7 +43923,11 @@ static double afcMono() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 /** The digital shift the DSP should glide to (under g_afcMtx). */
-static void afcPublishLocked() { g_afcTarget.store(g_afc.target() - g_afcHw, std::memory_order_relaxed); }
+static void afcPublishLocked() {
+    g_afcTarget.store(g_afc.target() - g_afcHw, std::memory_order_relaxed);
+    g_afcHwA.store(g_afcHw, std::memory_order_relaxed);                              // ★ beta79: for rtlPllNow
+    g_afcOnA.store(g_afc.on() && !g_afc.suspended(), std::memory_order_relaxed);   // ★ …and rtlPllStamp
+}
 /** Can this radio's driver correct its CRYSTAL (LO and sample clock together)? An RTL over USB (rtlsdr_set_freq_correction)
  *  and rtl_tcp (0x05, which is the same call at the far end). ✗ the RSP: its API's ppm moves the tuning, and whether it
  *  moves the sample clock with it is not documented — so it stays digital rather than guessed at. */
@@ -43961,6 +44032,15 @@ void LocalSdrShim::afcReset() {
     }
     afcSyncHw(false);   // ★ back to the manual figure in the radio, exactly
 }
+/** ★ beta79: "PLL −45.0 Hz removed" — shown beside the ppm wherever the line is (empty when nothing is removed).
+ *  `joined` = with the " · " that sets it after the line. */
+static std::string afcPllWords(double removedHz, bool joined) {
+    if (removedHz == 0.0 || !std::isfinite(removedHz)) return std::string();
+    char b[64];
+    std::snprintf(b, sizeof b, "%sPLL %s%.1f Hz removed", joined ? " \xc2\xb7 " : "", removedHz < 0 ? "\xe2\x88\x92" : "+",
+                  std::fabs(removedHz));
+    return b;
+}
 std::string LocalSdrShim::afcJson() const {
     const bool avail = vsRadioCaps().s.autoPpm;   // ★ before g_afcMtx — it reads the radio's own state
     std::lock_guard<std::mutex> lk(g_afcMtx);
@@ -43974,10 +44054,18 @@ std::string LocalSdrShim::afcJson() const {
                   g_afcHw + g_afcNow.load(std::memory_order_relaxed), g_afcHw,
                   g_ppmNow.load(std::memory_order_relaxed), g_afc.cap(), (long long)g_afc.confirmedAt(), (long long)unixNow, g_afc.reverts());
     std::string j = b;
-    j += ",\"source\":\"" + vibeafc::jsonEsc(g_afc.source()) + "\",\"line\":\"" + vibeafc::jsonEsc(g_afc.describe(unixNow))
+    j += ",\"source\":\"" + vibeafc::jsonEsc(g_afc.source()) + "\",\"line\":\"" + vibeafc::jsonEsc(g_afc.describe(unixNow) + afcPllWords(g_pllRemovedHz.load(std::memory_order_relaxed), true))
        + "\",\"why\":\"" + vibeafc::jsonEsc(g_afc.lastWhyNot()) + "\"";
-    // ★ pllHz: the R82xx's PLL step removed from the last DAB reading (vibe_r82xx_if.h); absent on every other radio
-    if (std::isfinite(g_afcPllHz)) { char pb[48]; std::snprintf(pb, sizeof pb, ",\"pllHz\":%.1f", g_afcPllHz); j += pb; }
+    /* ★ beta79: pllHz = the R82xx tuning step of the tune in force (vibe_r82xx_if.h; absent on every other radio);
+     *  pllRemovedHz = what is taken out of the IQ for everyone now; pll = the words shown beside the ppm. */
+    const double pllNow = afcPllHz(), pllRem = g_pllRemovedHz.load(std::memory_order_relaxed);
+    if (std::isfinite(pllNow)) { char pb[48]; std::snprintf(pb, sizeof pb, ",\"pllHz\":%.1f", pllNow); j += pb; }
+    if (pllRem != 0.0) {
+        char pb[96];
+        std::snprintf(pb, sizeof pb, ",\"pllRemovedHz\":%.1f", pllRem);
+        j += pb;
+        j += ",\"pll\":\"" + vibeafc::jsonEsc(afcPllWords(pllRem, false)) + "\"";
+    }
     j += "}";
     return j;
 }
@@ -43987,17 +44075,8 @@ std::string LocalSdrShim::afcJson() const {
  *  is what this server already wrote: the physical centre (tuneHw's arithmetic), the IF filter (int_freq), and the
  *  integer ppm in the radio (the owner's + the hand-over's). */
 double LocalSdrShim::afcPllHz() const {
-    const uint32_t xt = g_rtlTunXtalHz.load(std::memory_order_relaxed);
-    if (!p || xt == 0 || !p->dev || p->useTcp() || p->useSpy() || p->useSdrplay() || p->useAirspyHf() || p->useAirspy()
-        || p->useHackRf() || p->useUsrp() || p->useIcom() || g_dsNow.load(std::memory_order_relaxed) > 0)
-        return std::nan("");
-    const double phys = p->rtlCenter.load() - p->convOffsetHz.load(std::memory_order_relaxed) + p->hwOffsetHz();
-    if (!(phys > 0 && phys < 4.0e9)) return std::nan("");
-    const int bw = g_tunerBwHz.load(std::memory_order_relaxed);
-    const int32_t intF = vibertl::r82xxIntFreqForBw(bw > 0 ? bw : (int32_t)std::lround(p->sampleRate));
-    const int ppm = g_ppmNow.load(std::memory_order_relaxed) + g_afcHw;
-    return vibertl::r82xxTuneOffsetHz((uint32_t)std::llround(phys), intF, xt, 28800000u, ppm,
-                                      g_rtlBlogV4.load(std::memory_order_relaxed));
+    if (!p || g_dsNow.load(std::memory_order_relaxed) > 0) return std::nan("");   // ★ direct sampling bypasses the tuner
+    return p->rtlPllNow();
 }
 void LocalSdrShim::afcTick() {
     if (!p) return;
@@ -44049,16 +44128,18 @@ void LocalSdrShim::afcTick() {
                 /* ★★ THE TUNE'S OWN PART COMES OUT FIRST (vibe_r82xx_if.h): on an R82xx dongle the PLL's step puts each
                  *  block a known few tens of Hz from the dial, a different amount on each — not the crystal, so not
                  *  for auto-PPM to learn. Every other radio: nothing to remove. */
+                /* ★★ beta79: normally the step is already OUT of the IQ (afcMix) and nothing is left to subtract; with it
+                 *  left in (VIBE_PLL_IQ=0) all of it is. ONE rule decides (vibeafc::pllLeftInReading) — never twice. */
                 const double pll = afcPllHz();
+                const double removed = g_pllRemovedHz.load(std::memory_order_relaxed);
+                const double left = vibeafc::pllLeftInReading(pll, removed);
                 g_afcPllHz = pll;
-                if (std::isfinite(pll)) {
-                    r.offsetHz -= pll;
-                    if (c.channel != g_afcPllLogBlock) {
-                        g_afcPllLogBlock = c.channel;
-                        LOGI("auto-PPM: %s \xe2\x80\x94 the R82xx's PLL step puts this tune %+.1f Hz from the dial; "
-                             "removed from every reading (measured %+.1f Hz, the clock's part %+.1f Hz)",
-                             r.source.c_str(), pll, c.offsetHz, r.offsetHz);
-                    }
+                r.offsetHz -= left;
+                if (std::isfinite(pll) && c.channel != g_afcPllLogBlock) {
+                    g_afcPllLogBlock = c.channel;
+                    LOGI("auto-PPM: %s \xe2\x80\x94 the R82xx's PLL step puts this tune %+.1f Hz from the dial; %+.1f Hz "
+                         "taken out of the IQ for everyone, %+.1f Hz left to take out of the reading (measured %+.1f Hz)",
+                         r.source.c_str(), pll, removed, left, c.offsetHz);
                 }
                 if (c.walkFrames >= 8) r.walkPpm = c.walkPpm;   // ★ the sample clock, seen through the frame timing
                 const vibeafc::Action a = g_afc.offer(r, c.merDb, c.channel, inForce, now, unixNow);

@@ -188,7 +188,9 @@ inline std::string afcLine(const Json& a) {
     std::string when = ago < 90 ? "just now" : ago < 5400 ? fmtI("%d min ago", (int)(ago / 60))
                      : ago < 172800 ? fmtI("%d h ago", (int)(ago / 3600)) : fmtI("%d days ago", (int)(ago / 86400));
     const std::string src = a["source"].str();
-    return fmt("Auto-corrected %+.1f ppm", a["ppm"].num(0)) + (src.empty() ? "" : " from " + src) + ", " + when;
+    const std::string pll = a["pll"].str();   // ★ beta79: "PLL −45.0 Hz removed" (an RTL's tuning step), else empty
+    return fmt("Auto-corrected %+.1f ppm", a["ppm"].num(0)) + (src.empty() ? "" : " from " + src) + ", " + when
+           + (pll.empty() ? "" : " \xc2\xb7 " + pll);
 }
 inline void afcRows(S& x, float& y) {
     const Json& a = x.hwi()["afc"];

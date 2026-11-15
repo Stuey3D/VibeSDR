@@ -234,6 +234,9 @@ flags_for() {
     #    step cap and interval, DRM only corroborating, the loop on a simulated warming radio with latency (no reversals),
     #    the DAB/DRM gates, the hardware/digital split, the glide, the per-radio store. Fast.
     test-afc)              echo "-O2" ;;
+    # ★★ V12 beta79 the R820T's tuning step out of the capture (test-pll-iq): a tone through the modelled tune, the capture
+    #    cleaner, the one mix pass and a listener's channel lands within 1 Hz; DC; phase across a retune; the gate; the cost.
+    test-pll-iq)           echo "-O2" ;;
     # ★ V12 aviation: -O2 — each test times its receiver against real time (CPU per capture second).
     test-acars|test-vdl2|test-hfdl|test-avi-service) echo "-O2 -lpthread" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
@@ -268,6 +271,7 @@ deps_for() {
     test-passband-cost)   echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-pll-iq)          echo "$VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;
     test-am-sync)         echo "$VDSP/amsync.cpp $VDSP/ddc.cpp $VDSP/fft.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-auto-bw)         echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \

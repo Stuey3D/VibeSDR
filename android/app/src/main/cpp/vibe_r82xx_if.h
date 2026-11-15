@@ -151,7 +151,7 @@ inline bool r82xxLoMatches(double actualLoHz, double wantLoHz) {
  *         against −51). Without it the model reads +28.9, +69.5 and −59.8 — 10 Hz out on all three. The likely mechanism
  *         is the sigma-delta modulator's dither (R18 bit 4, which osmocom leaves at 0 = dither ON) averaging a fraction
  *         of an LSB high; the figure is MEASURED, from two dongles on three blocks — re-fit it if more data disagrees.
- *     Removed from a DAB reading before auto-PPM sees it, the three V4L readings imply −0.232, −0.231, −0.231 ppm and the
+ *     beta79: it is taken out of the CAPTURE for every listener (vibe_afc.h captureShiftHz, afcMix); out of a reading, the three V4L readings imply −0.232, −0.231, −0.231 ppm and the
  *     Sony's two −0.030, −0.031: one clock each, as it should be. Left in, a radio living on 7D learned 0.23 ppm of PLL.
  * ★ This mirrors osmocom rtl-sdr 2.0.3 (the pin in sdr-kit/build-librtlsdr.sh and vibeserver/linux/build-deps.sh):
  *   r82xx_set_freq (the Blog V4/V4L 28.8 MHz upconversion below 28.8 MHz, lo = freq + int_freq), r82xx_set_pll (the
