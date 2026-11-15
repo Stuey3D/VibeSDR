@@ -2466,6 +2466,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   color: var(--text, #e8dcc0); font-size: 12px;
 }
 #drmBox.open { display: block; }
+/* ★ – folds the DRM box to its header (DRM keeps running), as the decoder box's #decMin does */
+#drmBox.min #drmBody, #drmBox.min #drmSignal { display: none; }
+#drmBoxHead #drmExit, #drmBoxHead #drmMin { flex: 0 0 auto; font-size: 10px; letter-spacing: 1px; padding: 2px 8px; }
 #drmBoxHead { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--bar-border); }
 #drmBoxHead .drmTitle { color: var(--amber); font-weight: 700; letter-spacing: 1px; }
 #drmBoxHead .drmSub { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

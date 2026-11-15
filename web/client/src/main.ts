@@ -2715,7 +2715,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       amSyncState = a; amSyncSync();
     },
     onDrm: (d) => {
-      if (!spec || spec.mode !== 'drm') return;   // ★ a report after leaving DRM is a ghost
+      if (!spec || spec.mode !== 'drm' || dabOn) return;   // ★ a report after leaving DRM (or under DAB) is a ghost
       drmState = d;
       if (!d.sync) drmIq = null;   // ★ the lock gone: its picture goes with it
       {
@@ -7399,7 +7399,10 @@ function drmSetPane(p: 'station' | 'signal') {
 }
 /** The DRM box: shown while the mode is DRM, filled from the last report (drm.ts). */
 function drmBoxSync() {
-  const on = !!spec && spec.mode === 'drm';
+  /* ★★ …and never while DAB has the radio (Stuart, 2026-11-15, the Sony on 12B: a DRM box "Lock: searching" over DAB).
+   *    DAB is a whole-radio mode of its own — the demodulator's mode can still read 'drm' underneath it (a listener who
+   *    was on DRM when the shared dial went to DAB), so the mode alone is not the answer. */
+  const on = !!spec && spec.mode === 'drm' && !dabOn;
   let box = document.getElementById('drmBox');
   // ★★ the constellation travels only while the Signal pane is on screen (DAB's dabSetPane rule)
   spec?.drmScopes(on && drmPane === 'signal');
@@ -7413,13 +7416,20 @@ function drmBoxSync() {
      *  nothing at all. */
     box.setAttribute('data-navbox', '');
     box.innerHTML = '<div id="drmBoxHead"><span class="drmTitle">DRM</span><span class="drmSub">Digital Radio Mondiale</span>'
-      + '<button class="btn" id="drmPane" type="button"></button></div>'
+      + '<button class="btn" id="drmPane" type="button"></button>'
+      /* ★★★ THE WAY OUT MUST BE ON THE BOX (DAB's rule, index.html #dabExit — Stuart, 2026-11-15: someone had switched DRM
+       *  on by accident on the Sony "but there is no way of closing the DRM box"). EXIT DRM is the mode keys' own path
+       *  back to AM (setMode, so the server's shared-dial rules apply); – folds the box to its header, DRM still on. */
+      + '<button class="btn" id="drmExit" type="button" title="Leave DRM and return to AM">EXIT DRM</button>'
+      + '<button class="btn" id="drmMin" type="button" title="Minimise">&ndash;</button></div>'
       + '<div id="drmBody"></div><div id="drmSignal" hidden>'
       // ★★ V12 the constellation at the top of the pane, as DAB's scopes; hidden until a server sends one
       + `<div id="drmSigScopes" class="dabScopes" hidden title="${DRM_IQ_TIP.replace(/"/g, '&quot;')}">${DRM_SCOPE_HTML}</div>`
       + '<div id="drmSigRows"></div></div>';
     (document.getElementById('wfWrap') ?? document.body).appendChild(box);
     (box.querySelector('#drmPane') as HTMLElement).onclick = () => drmSetPane(drmPane === 'signal' ? 'station' : 'signal');
+    (box.querySelector('#drmExit') as HTMLElement).onclick = () => { setMode('am', true); airbandFollowPassband(); renderFreq(); };
+    (box.querySelector('#drmMin') as HTMLElement).onclick = () => box!.classList.toggle('min');
   }
   box.classList.add('open');
   const sig = drmPane === 'signal';
@@ -8548,6 +8558,7 @@ function dabUiOn() {
   setTimeout(syncDialTips, 0);
   if (!dabOn) spec?.dabScanGet();   // ★★ V12: the last scan's list (MULTIPLEXES), for anyone — an older server ignores it
   dabOn = true;
+  drmBoxSync();        // ★★ a DRM box left from before DAB closes now (it follows dabOn as well as the mode)
   syncStereoLight();   // ★ the service's, not the pilot's — off until the service is known
   wf?.applySettings({ minRangeDb: 15 });   // ★ a DAB block is flat and a few dB up — see SignalProcessorSettings.minRangeDb
   /* ★ THE ADVANCED RDS PANEL SHARES THIS BOX. Entering DAB with it open left it showing under
@@ -8724,6 +8735,9 @@ function dabSetMode(on: boolean) {
   dabRender();
 }
 function dabUiOff() {
+  // ★★ the DRM box may come back once DAB has let go (a listener still on DRM underneath) — after the caller has
+  //    cleared dabOn, which some paths do just after this call
+  setTimeout(drmBoxSync, 0);
   dabScanMine = false;   // ★ V12: out of DAB the scan pane has nowhere to be (a running scan ends with the mode)
   dabStepper.cancel(); dabAsk.clear();   // ★ leaving DAB: a burst still settling dies, nothing is awaited
   spec?.dabScopes(false);

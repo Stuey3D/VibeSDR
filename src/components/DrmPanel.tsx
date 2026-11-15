@@ -53,6 +53,9 @@ export interface DrmPanelProps {
   /** ★ BIG / SMALL, remembered by the screen (lsv_drm_tall) like the ISM box's. */
   tall?: boolean;
   onTall?: (v: boolean) => void;
+  /** ★★★ THE WAY OUT IS ON THE BOX (DAB's rule — Stuart, 2026-11-15: DRM switched on by accident "and there is no way of
+   *  closing the DRM box"): EXIT DRM returns to AM through the screen's own mode path (onMode: ask-before-tuning). */
+  onExit?: () => void;
   /** ★★ V12 the constellation (the server's drm_iq) and when it came — null until a server sends one (an older one never does). */
   iq?: DrmIq | null;
   iqAt?: number;
@@ -82,7 +85,7 @@ const DrmConstellation = React.memo(function DrmConstellation({ iq, size, plot, 
   );
 });
 
-export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall: tallPref = false, onTall, iq = null, iqAt = 0, onSignalPane }: DrmPanelProps) {
+export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall: tallPref = false, onTall, iq = null, iqAt = 0, onSignalPane, onExit }: DrmPanelProps) {
   const tk = useDecoderTokens();
   const s = useDecoderStyles(makeStyles);
   const { height: winH } = useWindowDimensions();
@@ -120,14 +123,14 @@ export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall:
   const [grab, setGrab] = useState(false);
   useEffect(() => { if (grab) captureRegion('drm'); else if (capturedRegion() === 'drm') captureRegion(null); }, [grab]);
   useEffect(() => () => { if (capturedRegion() === 'drm') captureRegion(null); }, []);
-  const keys: NavKey[] = [{ key: 'pane', row: 0 }, ...(bigUseful ? [{ key: 'big', row: 0 }] : []), { key: 'min', row: 0 }];
+  const keys: NavKey[] = [{ key: 'pane', row: 0 }, ...(bigUseful ? [{ key: 'big', row: 0 }] : []), ...(onExit ? [{ key: 'exit', row: 0 }] : []), { key: 'min', row: 0 }];
   if (sig) rows.forEach((r, i) => { if (!('h' in r)) keys.push({ key: `r:${i}`, row: keys.length }); });
   const nav = useRef(keys); nav.current = keys;
   const listRef = useRef<ScrollView | null>(null);
   const rowY = useRef<Record<number, number>>({});
   const focus = useListNav(
     grab, keys.length,
-    (i) => { const k = nav.current[i]?.key; if (k === 'pane') togglePane(); else if (k === 'big') onTall?.(!tall); else if (k === 'min') setMin((m) => !m); },
+    (i) => { const k = nav.current[i]?.key; if (k === 'pane') togglePane(); else if (k === 'big') onTall?.(!tall); else if (k === 'exit') onExit?.(); else if (k === 'min') setMin((m) => !m); },
     (i) => {
       const k = nav.current[i]?.key;
       if (!k || !k.startsWith('r:')) return;
@@ -156,6 +159,8 @@ export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall:
                     accessibilityLabel={pane === 'signal' ? 'Back to the station box' : 'Advanced signal information'} />
         {bigUseful && !min && <DecoderKey active={tall} onPress={() => onTall?.(!tall)} label={tall ? 'SMALL' : 'BIG'} style={hl('big')}
                                           accessibilityLabel={tall ? 'Make the DRM box smaller' : 'Make the DRM box bigger'} />}
+        {!!onExit && <DecoderKey label="EXIT DRM" onPress={onExit} style={hl('exit')}
+                                 accessibilityLabel="Leave DRM and return to AM" />}
         <DecoderKey label={min ? 'SHOW' : 'MIN'} onPress={() => setMin((m) => !m)} style={hl('min')}
                     accessibilityLabel={min ? 'Show the DRM box' : 'Fold the DRM box to its title'} />
       </DecoderHeader>
