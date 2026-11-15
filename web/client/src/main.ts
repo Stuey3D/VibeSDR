@@ -17599,6 +17599,7 @@ async function renderDxLog(page = dxPage) {
   dxPage = Math.min(Math.max(1, page), pages);
   host.innerHTML = '';
   note.textContent = dxFooter(j, j.entries.length);
+  $('dxClearRow').hidden = !(j.canPromote || adminUnlocked);   // ★ the owner's CLEAR LOG (initDxLog)
   if (!j.entries.length) {
     const row = document.createElement('div'); row.className = 'sres';
     const n = document.createElement('span'); n.className = 'n'; n.textContent = dxEmptyLine(j, dxShowLocal);
@@ -17694,6 +17695,26 @@ async function openDxEntry(id: number) {
   };
 }
 function initDxLog() {
+  /* ★ CLEAR THE LOG (Stuart 2026-11-15: "I'm logged in as admin but i dont know how to reset the DX Log" — the server
+   *  had POST /vibeserver/dxlog/clear and no client offered it). Owner only; two presses (the first arms it for 4 s). */
+  let clearArmedAt = 0;
+  const cb = $('dxClear') as HTMLButtonElement;
+  cb.onclick = async () => {
+    if (Date.now() - clearArmedAt > 4000) {
+      clearArmedAt = Date.now(); cb.textContent = 'PRESS AGAIN TO CLEAR';
+      setTimeout(() => { if (Date.now() - clearArmedAt >= 4000) cb.textContent = 'CLEAR LOG'; }, 4100);
+      return;
+    }
+    clearArmedAt = 0; cb.textContent = 'CLEAR LOG'; cb.disabled = true;
+    try {
+      const q = await resolveAdminOverride(httpBase(currentHost), adminPassword);
+      const r = await fetch(P(`/vibeserver/dxlog/clear${q ? `?${q}` : ''}`), { method: 'POST' });
+      const j = await r.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (r.ok && j.ok) { dxPage = 1; void renderDxLog(1); }
+      else vtsNotice('dx', j.error || 'Only the server owner can clear the DX log.', '', 6000);
+    } catch { /* the server is away: the button stays as it was */ }
+    finally { cb.disabled = false; }
+  };
   $('dxLogBtn').onclick = () => { togglePanel('dxLogPanel'); if (isPanelOpen('dxLogPanel')) { dxPage = 1; void renderDxLog(1); } };
   $('dxClose').onclick = () => $('dxLogPanel').classList.remove('open');
   $('dxBack').onclick = () => { void renderDxLog(dxPage); };

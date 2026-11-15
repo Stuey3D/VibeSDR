@@ -79,6 +79,21 @@ export default function DxLogOverlay({ visible, base, readAuth = '', ownerQuery 
   };
   const pages = data ? dxPageCount(data.total) : 1;
   const canPromote = !!(data?.canPromote || ownerQuery);
+  /* ★ CLEAR THE LOG (Stuart 2026-11-15: "I'm logged in as admin but i dont know how to reset the DX Log" — the server had
+   *  POST /vibeserver/dxlog/clear and no client offered it). Owner only, two presses (the first arms it for 4 s); the
+   *  server keeps promoted entries. */
+  const [clearArmed, setClearArmed] = useState(false);
+  useEffect(() => { if (!clearArmed) return; const t = setTimeout(() => setClearArmed(false), 4000); return () => clearTimeout(t); }, [clearArmed]);
+  const clearLog = async () => {
+    if (!clearArmed) { setClearArmed(true); return; }
+    setClearArmed(false);
+    try {
+      const r = await fetch(`${b}/vibeserver/dxlog/clear${ownerQuery ? `?${ownerQuery}` : ''}`, { method: 'POST' });
+      const j = await r.json().catch(() => ({})) as { ok?: boolean; removed?: number; error?: string };
+      if (r.ok && j.ok) { setPage(1); setErr(''); void load(); }
+      else setErr(j.error || 'Only the server owner can clear the DX log.');
+    } catch { setErr('Could not reach the server.'); }
+  };
   const sel = (on: boolean) => on ? { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg } : null;
   const selT = (on: boolean) => on ? { color: pt.ink.selected } : null;
   const close = () => { setOpen(null); onClose(); };
@@ -190,6 +205,15 @@ export default function DxLogOverlay({ visible, base, readAuth = '', ownerQuery 
                 )} />
             )}
             {!!data && <Text style={s.dim}>{dxFooter(data, data.entries.length)}</Text>}
+            {canPromote && (
+              <View style={s.filters}>
+                <TouchableOpacity onPress={() => { void clearLog(); }} style={[s.key, clearArmed && { borderColor: '#ff6a5a' }]}
+                                  accessibilityRole="button" accessibilityLabel="Clear the DX log (bookmarked entries are kept)">
+                  <Text style={[s.keyText, clearArmed && { color: '#ff6a5a' }]}>{clearArmed ? 'PRESS AGAIN TO CLEAR' : 'CLEAR LOG'}</Text>
+                </TouchableOpacity>
+                <Text style={[s.dim, { marginTop: 8, flex: 1 }]}>Owner · bookmarked entries are kept</Text>
+              </View>
+            )}
             <View style={s.alertRow}>
               <Switch value={alertsOn} onValueChange={onAlerts} accessibilityLabel="Tell me about new DX on this server" />
               <Text style={[s.dim, { marginTop: 0, marginLeft: 8, flex: 1 }]}>Tell me about new DX here (this device)</Text>
