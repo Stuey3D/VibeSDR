@@ -39,7 +39,10 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #include "airspyhf.h"
 #include "airspyhf_commands.h"
 
-#ifndef bool
+/* ★ VibeSDR: C23 (GCC 15's default) makes bool / true / false keywords, so the typedef no longer compiles there —
+ * CodeQL's C/C++ build on GitHub's runner stopped on it (2026-11-15). Older standards keep the original typedef
+ * exactly; bool is only this file's own flags (streaming, stop_requested, threads/packing state). */
+#if !defined(bool) && (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L)
 typedef int bool;
 #define true 1
 #define false 0
