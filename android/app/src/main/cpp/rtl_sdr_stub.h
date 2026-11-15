@@ -48,4 +48,10 @@ static inline int         rtlsdr_open(rtlsdr_dev_t**, uint32_t)               { 
 static inline const char* rtlsdr_get_device_name(uint32_t)                    { return ""; }
 static inline int         rtlsdr_get_device_usb_strings(uint32_t, char*, char*, char*) { return -1; }
 
+// ★ V12 auto-PPM (2026-11-15): the tuner type and the USB strings decide the R82xx's crystal (vibe_r82xx_if.h).
+enum rtlsdr_tuner { RTLSDR_TUNER_UNKNOWN = 0, RTLSDR_TUNER_E4000, RTLSDR_TUNER_FC0012, RTLSDR_TUNER_FC0013,
+                    RTLSDR_TUNER_FC2580, RTLSDR_TUNER_R820T, RTLSDR_TUNER_R828D };
+static inline enum rtlsdr_tuner rtlsdr_get_tuner_type(rtlsdr_dev_t*)  { return RTLSDR_TUNER_UNKNOWN; }
+static inline int         rtlsdr_get_usb_strings(rtlsdr_dev_t*, char*, char*, char*) { return -1; }
+
 } // extern "C"

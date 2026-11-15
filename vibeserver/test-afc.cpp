@@ -16,7 +16,11 @@
 //      disagrees with another and nothing is applied, a reading beyond the cap is rejected, auto-revert on a step that
 //      made things worse, suspension after the second, Reset and Turn off back to the manual ppm exactly, a saved value
 //      learned on another manual ppm is not restored, and the owner's line
+//   K. THE R820T's PLL STEP (vibe_r82xx_if.h, 2026-11-15): the arithmetic against the chip's own registers, the Pi 500
+//      V4L's three blocks under one correction (0 / +17 / +58 Hz) and the Sony's (12B −1, 7D −51) reproduced from it,
+//      and what auto-PPM learns living on 7D with the tune's part left in (the bug) and removed (the crystal)
 #include "vibe_afc.h"
+#include "vibe_r82xx_if.h"
 
 #include <cmath>
 #include <cstdio>
@@ -29,6 +33,7 @@ static void ok(bool c, const std::string& what) { std::printf("   %s %s\n", c ? 
 static std::string f(const char* fmt, double a, double b = 0, double c = 0) { char s[200]; std::snprintf(s, sizeof s, fmt, a, b, c); return s; }
 
 using namespace vibeafc;
+static const int64_t U0 = 1789000000;
 
 static Reference dab(double clockPpm, double applied, double at, double noisePpm = 0, double blockHz = 194.064e6) {
     Reference r; r.source = "DAB 7D"; r.rfHz = blockHz; r.at = at; r.kind = Kind::Primary;
@@ -362,6 +367,70 @@ int main() {
         Controller r2; r2.restore(sv, 5);
         ok(r2.target() == 0, "…but not once the owner has changed the manual ppm (5): the radio was re-trimmed");
         ok(r1.describe(U + 120) == "Auto-corrected +3.0 ppm from DAB 7D, 2 min ago", r1.describe(U + 120));
+    }
+
+    std::printf("K. the R820T's PLL step (vibe_r82xx_if.h) — the three-channel V4L case, from the register maths\n");
+    {
+        using namespace vibertl;
+        // ── the arithmetic against the CHIP: the Sony's Nooelec (R820T2, 28.8 MHz, ppm 0), its own logged register reads ──
+        struct T { double centre, ifMHz, loChip; };
+        const T chip[] = { {176.640, 1.625, 178.264984}, {190.640, 1.625, 192.265027}, {213.360, 1.625, 214.984973},
+                           {218.640, 1.625, 220.265002}, {224.096, 1.625, 225.721033}, {225.648, 1.625, 227.272961},
+                           {229.072, 1.625, 230.696960}, {106.720, 2.025, 108.745010}, {94.065, 1.575, 95.639996} };
+        int agree = 0; double worst = 0;
+        for (const T& t : chip) {
+            const uint32_t lo = (uint32_t)std::llround((t.centre + t.ifMHz) * 1e6);
+            const double d = r82xxProgrammedLoHz(lo, 28800000u) - t.loChip * 1e6;
+            worst = std::max(worst, std::fabs(d)); if (std::fabs(d) < 1.0) ++agree;
+        }
+        ok(agree == 9, f("the programmed LO matches the chip's own registers on all 9 logged tunes (worst %.2f Hz, the log's 1 Hz)", worst));
+        // ── the on-air readings (2026-11-15) — every UK transmitter is right (the RSP1A: all six blocks within 4 Hz) ──
+        const double f7 = 194.064e6, f11 = 222.064e6, f12 = 225.648e6;
+        const int32_t intF = r82xxIntFreqForBw(2048000);   // the DAB IF filter → 1.625 MHz
+        ok(intF == 1625000, "DAB's 2.048 MHz filter leaves int_freq at 1.625 MHz");
+        auto pll = [&](double fHz) { return r82xxTuneOffsetHz((uint32_t)fHz, intF, 28800000u, 28800000u, 0); };
+        const double p7 = pll(f7), p11 = pll(f11), p12 = pll(f12);
+        std::printf("      the tune alone puts a signal at: 7D %+.1f Hz, 11D %+.1f Hz, 12B %+.1f Hz\n", p7, p11, p12);
+        // a radio with clock ε and a correction a in force reads −(ε − a)·f + pll(f)
+        auto reading = [&](double eps, double a, double fHz) { return -(eps - a) * 1e-6 * fHz + pll(fHz); };
+        // the V4L: corrected on 7D to read 0 → what 11D and 12B read under that one correction
+        const double aV = -0.28;
+        const double epsV = aV + p7 / f7 * 1e6;   // the clock that makes 7D read 0 with −0.28 applied
+        const double r7 = reading(epsV, aV, f7), r11 = reading(epsV, aV, f11), r12 = reading(epsV, aV, f12);
+        ok(std::fabs(r7) < 1e-6 && std::fabs(r11 - 17) < 3 && std::fabs(r12 - 58) < 3,
+           f("the Pi 500's V4L, one correction: 7D 0, 11D %+.1f, 12B %+.1f Hz — on air it read 0, +17, +58", r11, r12));
+        // the Sony: corrected on 12B to read −1 → what 7D reads (on air: −51)
+        const double aS = 0.581, epsS = aS + (p12 + 1.0) / f12 * 1e6;
+        const double s7 = reading(epsS, aS, f7);
+        ok(std::fabs(s7 + 51) < 3, f("the Sony's Nooelec, 12B −1 Hz: 7D %+.1f Hz — on air it read −51 (predicted, not fitted)", s7));
+        // with the tune's part removed, the readings are one clock
+        auto implied = [&](double rd, double a, double fHz) { return a - (rd - pll(fHz)) / fHz * 1e6; };
+        const double i7 = implied(0, aV, f7), i11 = implied(17, aV, f11), i12 = implied(58, aV, f12);
+        ok(std::fabs(i7 - i11) < 0.02 && std::fabs(i7 - i12) < 0.02,
+           f("the V4L's three ON-AIR readings, the tune removed: %.3f / %.3f / %.3f ppm — one clock", i7, i11, i12));
+        const double j12 = implied(-1, aS, f12), j7 = implied(-51, aS, f7);
+        ok(std::fabs(j12 - j7) < 0.02, f("the Sony's two: %.3f / %.3f ppm — one clock", j12, j7));
+        // ── what auto-PPM learns living on 7D: without the fix the PLL's 0.23 ppm, with it the crystal ──
+        auto learn = [&](bool fix, double eps) {
+            Controller c(100); double inForce = 0, t = 0;
+            for (int i = 0; i < 400; ++i, t += 2) {
+                Reference r; r.source = "DAB 7D"; r.rfHz = f7; r.at = t; r.kind = Kind::Primary;
+                r.offsetHz = reading(eps, inForce, f7) + ((i % 2) ? 1.0 : -1.0) - (fix ? pll(f7) : 0.0);
+                const Action a = c.offer(r, 20, 11, inForce, t, U0 + int64_t(t));
+                if (a.kind == Action::Apply) { inForce = a.to; c.settleUntil(t + 1); }
+            }
+            return c.target();
+        };
+        const double bad = learn(false, i7), good = learn(true, i7);
+        ok(std::fabs(bad - (i7 - p7 / f7 * 1e6)) < 0.03, f("the V4L on 7D, the PLL left in: learns %+.2f ppm (the bug — 0.23 ppm of tuning step)", bad));
+        ok(std::fabs(good - i7) < 0.03, f("…removed: learns %+.2f ppm, the crystal", good));
+        const double lo12 = reading(i7, good, f12) - pll(f12), lo11 = reading(i7, good, f11) - pll(f11);
+        ok(std::fabs(lo12) < 3 && std::fabs(lo11) < 3, f("…and then 12B and 11D read %+.1f / %+.1f Hz once their tune is removed", lo12, lo11));
+        // ── the arithmetic's edges ──
+        ok(std::isnan(r82xxTuneOffsetHz(10000000u, intF, 28800000u, 28800000u, 0)), "an LO the PLL cannot make (11.6 MHz): no figure");
+        ok(!std::isnan(r82xxTuneOffsetHz(10000000u, intF, 28800000u, 28800000u, 0, true)), "…a Blog V4 upconverts it by 28.8 MHz: a figure");
+        ok(std::fabs(r82xxTuneOffsetHz((uint32_t)f12, intF, 28800000u, 28800000u, 3) - p12) > 1,
+           "the owner's integer ppm moves the crystal librtlsdr divides by, so it moves the step (computed per correction)");
     }
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

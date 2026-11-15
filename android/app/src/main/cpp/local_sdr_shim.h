@@ -1089,6 +1089,7 @@ public:
     std::string afcJson() const;
     static bool afcHandheldOn(bool dflt);   // ★ the handheld's switch as its file keeps it (dflt when the file has none)
     bool afcHwCapable() const;              // ★ the driver corrects the crystal (LO + sample clock): an RTL, rtl_tcp
+    double afcPllHz() const;                // ★ the R82xx PLL step for the tune in force, Hz (NaN = not a USB R82xx; vibe_r82xx_if.h)
     void afcWriteHw(int autoPpm);           // ★ manual + autoPpm into the radio's crystal correction
     void afcSyncHw(bool allowMove);         // ★ the hand-over of the learned whole ppm to the radio (see the .cpp)
     /** ★★★ AN UP/DOWN-CONVERTER IN FRONT OF THIS RADIO — see RadioConfig::converterOffsetHz.

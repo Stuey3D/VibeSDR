@@ -1,8 +1,9 @@
 # Automatic frequency correction ("auto-PPM")
 
 V12, 2026-11-12. Code: `android/app/src/main/cpp/vibe_afc.h` (the rules), `local_sdr_shim.cpp` (`afcMix`, `afcTick`,
-`afcJson`, the socket messages and the two HTTP endpoints), `vibe_dab_service.h` (`clockRead`, the one hook into DAB).
-Tests: `vibeserver/test-afc.cpp`, `scripts/test-server-afc.mjs`.
+`afcJson`, `afcPllHz`, the socket messages and the two HTTP endpoints), `vibe_dab_service.h` (`clockRead`, the one hook into DAB),
+`vibe_r82xx_if.h` (`r82xxTuneOffsetHz`, the R820T's tuning step taken out of every RTL reading).
+Tests: `vibeserver/test-afc.cpp` (K: the tuning step), `scripts/test-server-afc.mjs`.
 
 ## What it does
 
@@ -68,6 +69,78 @@ There are two parts. A crystal error moves two things: the **frequency** (the LO
 On the digital-only radios the residual sample-clock error is what it was before auto-PPM, and DAB's re-centre fix
 (`advanceAfterPush`) now copes with the walk it causes. Correcting it through a resampler already in the path (the DAB
 DDC's) is phase 2.
+
+## The R820T's tuning step (2026-11-15)
+
+An RTL dongle's tune puts each DAB block a few tens of hertz from the dial, by a different amount on each block. Without
+removing it, auto-PPM learned that as clock error.
+
+**What was seen on air.** Each radio had one correction in force when it read these:
+
+| Radio | 7D (NNDAB) | 11D | 12B | Correction |
+|---|---|---|---|---|
+| Pi 500, RTL-SDR Blog V4L (R820T) | 0 Hz | +17 Hz | +58 Hz | −0.28 ppm, learned on 7D |
+| Sony, Nooelec SMArt v5 (R820T2) | −51 Hz | | −1 Hz | +0.58 ppm, learned on 12B |
+| Lenovo, SDRplay RSP1A (fine PLL) | +1 Hz | +1 Hz | +1 Hz | −0.78 ppm |
+
+The RSP1A also read 10C +1, 10D −4 (MER 9 dB, weak) and 11A +1. So every UK transmitter is right, the small-scale 7D
+included. A crystal error scales with frequency and cannot make the RTL pattern. The cause is the tuner's PLL:
+
+- `r82xx_set_pll` (osmocom rtl-sdr 2.0.3) sets VCO = 2·xtal·(nint + sdm/65536). That is a step of 879 Hz at the VCO:
+  55 Hz at the LO on the /16 divider (Band III up to about 215 MHz) and 110 Hz on /8 above it. The LO lands up to half
+  a step from where it was asked, by an amount that is different on every block.
+- The RTL2832's IF register is 22-bit: 1.625 MHz lands 5.3 Hz low, the same on every block.
+- **The chip adds a quarter of an SDM step on top** (`kR82xxSdmMeanLsb`). librtlsdr's arithmetic does not include it.
+  - The model of the registers agrees with the Sony's own register reads on all 43 tunes it logged (to the log's 1 Hz).
+  - Without the quarter step the model predicts the V4L at +28.9 and +69.5 Hz and the Sony's 7D at −59.8 Hz. That is
+    about 10 Hz out on all three.
+  - Fitted on the V4L's two figures (+17.2 and +58.0 Hz), the quarter step then predicts the Sony's 7D at −50.8 Hz,
+    against −51 on air. That figure was not used in the fit.
+  - The likely mechanism is the sigma-delta modulator's dither. R18 bit 4 is left at 0 by osmocom, which leaves the
+    dither on. **The figure is measured, from two dongles on three blocks.** Re-fit it if more data disagrees.
+
+**The fix.** `vibertl::r82xxTuneOffsetHz` (`vibe_r82xx_if.h`) works out that offset for the tune in force from what the
+server already knows:
+
+- the physical centre, using `tuneHw`'s arithmetic;
+- `int_freq`, from the IF filter written (DAB writes 2.048 MHz, which gives 1.625 MHz);
+- the integer ppm in the radio (the owner's figure plus the hand-over's);
+- the tuner crystal, recorded at open by `afcNoteRtlTuner`. An R820T uses 28.8 MHz. An R828D uses 16 MHz, except the
+  Blog V4, which uses 28.8 MHz, as librtlsdr does.
+
+`afcTick` subtracts the offset from the DAB reading before it becomes a `vibeafc::Reference`, so the reading measures
+only the crystal. Each block change logs one line, and hwinfo `afc.pllHz` shows the figure. With the offset removed:
+
+- the V4L's three on-air readings give −0.512, −0.511 and −0.511 ppm;
+- the Sony's two give +0.611 and +0.612 ppm.
+
+So the V4L's crystal is about −0.51 ppm. The −0.28 it learned living on 7D was 0.23 ppm of tuning step.
+
+**What it does not cover:**
+
+- **Only USB R82xx dongles in tuner mode.** It does not apply to rtl_tcp, because the far end's librtlsdr version and
+  IF filter are not known here.
+- E4000, FC0012/13 and FC2580 tuners have their own PLLs, which are not modelled, so they are left alone.
+- Direct sampling is not covered.
+
+**Not done: shifting every listener's dial by the same figure.** That would make an RTL's dial exact for every mode:
+
+- **Cost:** one SIMD mix pass. `afcMix` already runs that pass whenever a correction is in force, but on a dongle with
+  no correction it would now run all the time.
+- **Risks:**
+  - the shift changes at each retune, so a few milliseconds of IQ already in the queue are shifted by the new tune's
+    figure;
+  - the DAB reading must then stop subtracting the offset, or it is removed twice;
+  - it would not reach rtl_tcp.
+
+At most about 60 Hz is at stake, which matters for SSB, CW and narrow digital modes at VHF. It is left for a decision.
+
+**Grading DAB references by transmitter count (considered on 2026-11-15, not built).** The proposal was to trust a
+multiplex with two or more confirmed TII transmitters more than a one-transmitter small-scale one. It was based on 7D
+looking 0.26 ppm off on the RTLs, and the RSP1A disproved that: 7D is exact, and it was the tuner. The existing rules
+already stop a disagreement larger than 1 ppm (a 1 kHz slip is 4–6 ppm), and nothing now suggests UK transmitters are
+off by less. If a genuinely off small-scale transmitter is ever measured on a fine-PLL radio, the TII confirmation is the
+place to start (`TiiConfirm`, `vibe_dab_tii.h`).
 
 ## The safety rules (Stuart, 2026-11-12) and how each is met
 
@@ -169,7 +242,7 @@ End to end (`test-server-afc`, the bench multiplex with a +4 ppm clock), DAB's m
 
 - **hwinfo `afc`** (and `GET /vibeserver/hardware`): `available` (the radio can reach DAB), `on`, `state`
   (`off`/`learning`/`checking`/`applied`/`suspended`), `ppm`, `inForce`, `manual`, `cap`, `at`, `now`, `reverts`,
-  `source`, `line`, `why`.
+  `source`, `line`, `why`, and `pllHz` (the R820T tuning step removed from the last DAB reading; present only on a USB R82xx dongle).
 - **Socket** (admin-gated, like the ppm): `{"type":"autoppm","on":bool}` and `{"type":"autoppm_reset"}`.
 - **HTTP** (admin-gated): `/vibeserver/autoppm` (setup page) and `/vibeserver/admin/autoppm` (admin page). GET returns
   the state; POST `?reset=1` resets and `?on=0|1` turns it off or on.

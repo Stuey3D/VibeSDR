@@ -20,6 +20,7 @@
 //   sdr-kit/build-librtlsdr.sh builds) so the diagnostics can print what librtlsdr's int_freq is
 //   for the filter we asked for, and so test-r82xx-if.cpp can pin the arithmetic.
 #pragma once
+#include <cmath>
 #include <cstdint>
 
 namespace vibertl {
@@ -131,6 +132,67 @@ inline bool r82xxLoMatches(double actualLoHz, double wantLoHz) {
     const double tol = 5000.0;
     const double d1 = actualLoHz - wantLoHz, d2 = actualLoHz - (wantLoHz + 28.8e6);
     return (d1 < tol && d1 > -tol) || (d2 < tol && d2 > -tol);
+}
+
+/* ═══════════════════════ THE PLL'S OWN STEP — WHY AN RTL READS EACH DAB BLOCK A FEW TENS OF HZ APART ═══════════════════════
+ *
+ * ★★★ WHY (2026-11-15, auto-PPM). Under ONE correction the Pi 500's RTL-SDR Blog V4L read 7D 0 Hz, 11D +17, 12B +58; the
+ *     Sony's Nooelec read 12B −1, 7D −51. A crystal error is proportional to frequency and cannot do that. The owner's RSP1A
+ *     (a fine PLL) read +1, +1, −4, +1, +1, +1 Hz on 7D, 10C, 10D, 11A, 11D and 12B under one correction — every UK
+ *     transmitter, NNDAB's small-scale 7D included, is right. It is the R820T's PLL:
+ *       • r82xx_set_pll() sets VCO = 2·xtal·(nint + sdm/65536) — a step of 2·28.8 MHz/65536 = 879 Hz at the VCO, 55 Hz at
+ *         the LO on /16 (Band III below ~215 MHz) and 110 Hz on /8 above. The LO lands up to half a step from the
+ *         dial, by an amount that is different on every channel and does not scale with frequency.
+ *       • the RTL2832's IF register is 22-bit (2^22 steps of the crystal): 1.625 MHz lands 5.3 Hz low. Small, common.
+ *       • ★ and the chip adds a QUARTER of an SDM step (kR82xxSdmMeanLsb) — not in librtlsdr's arithmetic. The register
+ *         decode (r82xxDecodePll) matches this file's arithmetic on all 43 tunes the Sony logged (within the log's 1 Hz),
+ *         so the registers are what librtlsdr meant; but the on-air readings need +0.25 LSB more: fitted on the V4L's two
+ *         figures (0.25 gives 11D +17.2, 12B +58.0, against +17 and +58) it PREDICTS the Sony's independently (7D −49.9
+ *         against −51). Without it the model reads +28.9, +69.5 and −59.8 — 10 Hz out on all three. The likely mechanism
+ *         is the sigma-delta modulator's dither (R18 bit 4, which osmocom leaves at 0 = dither ON) averaging a fraction
+ *         of an LSB high; the figure is MEASURED, from two dongles on three blocks — re-fit it if more data disagrees.
+ *     Removed from a DAB reading before auto-PPM sees it, the three V4L readings imply −0.232, −0.231, −0.231 ppm and the
+ *     Sony's two −0.030, −0.031: one clock each, as it should be. Left in, a radio living on 7D learned 0.23 ppm of PLL.
+ * ★ This mirrors osmocom rtl-sdr 2.0.3 (the pin in sdr-kit/build-librtlsdr.sh and vibeserver/linux/build-deps.sh):
+ *   r82xx_set_freq (the Blog V4/V4L 28.8 MHz upconversion below 28.8 MHz, lo = freq + int_freq), r82xx_set_pll (the
+ *   divider from the kHz-rounded LO, vco_div rounded to the nearest 1/65536), rtlsdr_set_if_freq (truncated toward
+ *   zero) and rtlsdr_get_xtal_freq (the owner's integer ppm applied, truncated to whole Hz). The fine-tune divider
+ *   adjustment is assumed not to fire (it is the factor-of-two fault above, which checkTunerChip catches). */
+
+/** ★ The chip's own quarter LSB on top of the programmed SDM (see above) — measured, not from a datasheet. */
+constexpr double kR82xxSdmMeanLsb = 0.25;
+
+/** The LO librtlsdr PROGRAMS for `loHz` with a tuner crystal of `xtalHz` (already ppm-corrected) — what the registers
+ *  say, without kR82xxSdmMeanLsb. `divOut` = the divider. 0 when no divider puts the VCO in range. */
+inline double r82xxProgrammedLoHz(uint32_t loHz, uint32_t xtalHz, int* divOut = nullptr, double extraLsb = 0.0) {
+    const uint32_t khz = (loHz + 500u) / 1000u;
+    uint32_t div = 2;
+    while (div <= 64 && !((uint64_t)khz * div >= 1770000u && (uint64_t)khz * div < 3540000u)) div <<= 1;
+    if (div > 64 || xtalHz == 0) return 0.0;
+    const uint64_t vcoDiv = ((uint64_t)xtalHz + 65536ull * ((uint64_t)loHz * div)) / (2ull * xtalHz);
+    if (divOut) *divOut = (int)div;
+    return ((double)vcoDiv + extraLsb) * 2.0 * xtalHz / 65536.0 / div;
+}
+
+/** ★★ Where a signal at EXACTLY `f` lands relative to the dial on an R82xx tuned to `centreHz`, in Hz (+ = above —
+ *  the sign of the DAB receiver's measured offset), from the tuning arithmetic alone: the PLL's step, the chip's quarter
+ *  LSB and the RTL2832's IF register. `intFreq` = the tuner's int_freq (r82xxIntFreqForBw of the filter written);
+ *  `tunXtal`/`rtlXtal` = the crystals BEFORE correction (28.8 MHz; an R828D that is not a Blog V4 has a 16 MHz tuner
+ *  crystal); `ppm` = the integer correction in librtlsdr. NaN when the PLL cannot make the LO. The crystal's own error
+ *  is NOT in it — that is what is left for auto-PPM to measure. */
+inline double r82xxTuneOffsetHz(uint32_t centreHz, int32_t intFreq, uint32_t tunXtal, uint32_t rtlXtal, int ppm,
+                                bool blogV4 = false) {
+    const uint32_t xt = (uint32_t)(tunXtal * (1.0 + ppm / 1e6));
+    const uint32_t xr = (uint32_t)(rtlXtal * (1.0 + ppm / 1e6));
+    if (xt == 0 || xr == 0 || intFreq <= 0) return std::nan("");
+    const uint32_t up = (blogV4 && centreHz < 28800000u) ? centreHz + 28800000u : centreHz;
+    const uint32_t lo = up + (uint32_t)intFreq;
+    const double loAct = r82xxProgrammedLoHz(lo, xt, nullptr, kR82xxSdmMeanLsb);
+    if (loAct <= 0) return std::nan("");
+    const int32_t ifReg = (int32_t)(((double)intFreq * 4194304.0) / xr);   // librtlsdr: (freq * 2^22 / xtal), toward 0
+    const double ifAct = (double)ifReg * xr / 4194304.0;
+    // a station at DC is RF = LO − IF; one at the dial lands at dial − (LO − IF), i.e. −(LO error) + (IF error)
+    return -(loAct - (double)lo) + (ifAct - (double)intFreq);
 }
 
 }  // namespace vibertl

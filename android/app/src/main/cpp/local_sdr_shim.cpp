@@ -3970,6 +3970,8 @@ static std::string            g_afcFile;
 static bool                   g_afcHandheld = false, g_afcCapSet = false;
 static double                 g_afcStableSince = 0.0, g_afcLastRejectLog = 0.0;
 static int64_t                g_afcSavedConfirm = 0;
+static double                 g_afcPllHz = std::nan("");   // ★ the last reading's PLL step (afcPllHz), for hwinfo; under g_afcMtx
+static int                    g_afcPllLogBlock = -1;
 static std::string            g_afcSig;   // ★ what clients last saw (afcTick re-sends hwinfo when it changes)
 /** g_afcHw: the WHOLE ppm handed to the radio's crystal correction on top of the manual (an RTL or rtl_tcp only — see
  *  afcSyncHw); the DSP's digital shift is then the learned value LESS that, so the two always add up to the learned
@@ -3977,6 +3979,30 @@ static std::string            g_afcSig;   // ★ what clients last saw (afcTick 
 static int                    g_afcHw = 0;
 static std::atomic<double>    g_afcTarget{0.0}, g_afcNow{0.0};
 static std::atomic<bool>      g_afcJump{false};
+/** ★★ THE R820T's PLL STEP (vibe_r82xx_if.h, 2026-11-15): an RTL's tune alone puts each DAB block up to ~60 Hz from the
+ *  dial, a different amount per block (the Pi 500's V4L: 7D 0 / 11D +17 / 12B +58 Hz under one correction), and a
+ *  reading taken with it in is a channel-dependent error auto-PPM would learn as clock. g_rtlTunXtalHz = the R82xx's
+ *  tuner crystal BEFORE correction, set when a USB dongle opens (0 = not an R82xx, or not a USB dongle); g_rtlBlogV4 =
+ *  librtlsdr's 28.8 MHz HF upconversion. Read by afcTick (afcPllHz), which takes the rest from state it already keeps. */
+static std::atomic<uint32_t>  g_rtlTunXtalHz{0};
+static std::atomic<bool>      g_rtlBlogV4{false};
+static void afcNoteRtlTuner(rtlsdr_dev_t* dev) {
+    uint32_t x = 0; bool v4 = false;
+    if (dev) {
+        char m[256] = {0}, pr[256] = {0}, se[256] = {0};
+        const bool strings = rtlsdr_get_usb_strings(dev, m, pr, se) == 0;
+        const bool blog = strings && std::strcmp(m, "RTLSDRBlog") == 0;
+        v4 = blog && (std::strcmp(pr, "Blog V4") == 0 || std::strcmp(pr, "Blog V4L") == 0);
+        switch (rtlsdr_get_tuner_type(dev)) {
+            case RTLSDR_TUNER_R820T: x = 28800000u; break;   // ★ the V4L is an R820T on the RTL2832's 28.8 MHz
+            // ★ librtlsdr 2.0.3: an R828D has its own 16 MHz crystal unless it is the Blog V4 (strcmp, so not the V4L)
+            case RTLSDR_TUNER_R828D: x = (blog && std::strcmp(pr, "Blog V4") == 0) ? 28800000u : 16000000u; break;
+            default: break;   // E4000, FC0012/13, FC2580: other PLLs — left alone (not modelled)
+        }
+    }
+    g_rtlTunXtalHz.store(x, std::memory_order_relaxed);
+    g_rtlBlogV4.store(v4, std::memory_order_relaxed);
+}
 /** Write the store (under g_afcMtx). */
 static void afcSaveLocked() {
     if (g_afcFile.empty()) return;
@@ -34772,6 +34798,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         } else
 #endif
         if (rtlsdr_open(&dev, (uint32_t)idx) != 0 || !dev) { dev = nullptr; return false; }
+        afcNoteRtlTuner(dev);   // ★ auto-PPM: the R82xx's crystal, for its PLL step (vibe_r82xx_if.h)
 
         // Re-apply everything the device forgot by being unplugged. Same order as start().
         rtlsdr_set_sample_rate(dev, (uint32_t)sampleRate);
@@ -39900,6 +39927,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         { char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
           if (rtlsdr_get_device_usb_strings((uint32_t)index, mfr, prd, ser) == 0) impl->usbSerial = ser; }
     }
+    afcNoteRtlTuner(impl->dev);   // ★ auto-PPM: the R82xx's crystal, for its PLL step (vibe_r82xx_if.h)
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)sampleRate);
     // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.
     /* ★★★ THE SAME RULE, AND THIS IS THE THIRD PLACE THAT READS IT. The first fix went into
@@ -43618,6 +43646,7 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
             err = rc == -6 ? "the radio is in use by another program on this machine"
                            : "the radio would not open (rtlsdr_open " + std::to_string(rc) + ")";
         } else {
+            afcNoteRtlTuner(impl->dev);   // ★ auto-PPM: the R82xx's crystal (vibe_r82xx_if.h)
             rtlsdr_set_sample_rate(impl->dev, (uint32_t)impl->sampleRate);
             // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.
             /* ★ And the third reader — see the note at the main open path. */
@@ -43891,8 +43920,29 @@ std::string LocalSdrShim::afcJson() const {
                   g_ppmNow.load(std::memory_order_relaxed), g_afc.cap(), (long long)g_afc.confirmedAt(), (long long)unixNow, g_afc.reverts());
     std::string j = b;
     j += ",\"source\":\"" + vibeafc::jsonEsc(g_afc.source()) + "\",\"line\":\"" + vibeafc::jsonEsc(g_afc.describe(unixNow))
-       + "\",\"why\":\"" + vibeafc::jsonEsc(g_afc.lastWhyNot()) + "\"}";
+       + "\",\"why\":\"" + vibeafc::jsonEsc(g_afc.lastWhyNot()) + "\"";
+    // ★ pllHz: the R82xx's PLL step removed from the last DAB reading (vibe_r82xx_if.h); absent on every other radio
+    if (std::isfinite(g_afcPllHz)) { char pb[48]; std::snprintf(pb, sizeof pb, ",\"pllHz\":%.1f", g_afcPllHz); j += pb; }
+    j += "}";
     return j;
+}
+/** ★★ The R82xx's PLL step for the tune in force (vibe_r82xx_if.h r82xxTuneOffsetHz): where a signal at exactly its
+ *  frequency lands from the dial, + = above, in Hz — or NaN when this is not a USB R82xx dongle in tuner mode (rtl_tcp:
+ *  the far end's librtlsdr and filter are not known here; E4000/FC00xx: other PLLs, not modelled). Everything it needs
+ *  is what this server already wrote: the physical centre (tuneHw's arithmetic), the IF filter (int_freq), and the
+ *  integer ppm in the radio (the owner's + the hand-over's). */
+double LocalSdrShim::afcPllHz() const {
+    const uint32_t xt = g_rtlTunXtalHz.load(std::memory_order_relaxed);
+    if (!p || xt == 0 || !p->dev || p->useTcp() || p->useSpy() || p->useSdrplay() || p->useAirspyHf() || p->useAirspy()
+        || p->useHackRf() || p->useUsrp() || p->useIcom() || g_dsNow.load(std::memory_order_relaxed) > 0)
+        return std::nan("");
+    const double phys = p->rtlCenter.load() - p->convOffsetHz.load(std::memory_order_relaxed) + p->hwOffsetHz();
+    if (!(phys > 0 && phys < 4.0e9)) return std::nan("");
+    const int bw = g_tunerBwHz.load(std::memory_order_relaxed);
+    const int32_t intF = vibertl::r82xxIntFreqForBw(bw > 0 ? bw : (int32_t)std::lround(p->sampleRate));
+    const int ppm = g_ppmNow.load(std::memory_order_relaxed) + g_afcHw;
+    return vibertl::r82xxTuneOffsetHz((uint32_t)std::llround(phys), intF, xt, 28800000u, ppm,
+                                      g_rtlBlogV4.load(std::memory_order_relaxed));
 }
 void LocalSdrShim::afcTick() {
     if (!p) return;
@@ -43941,6 +43991,20 @@ void LocalSdrShim::afcTick() {
                 vibeafc::Reference r;
                 r.source = std::string("DAB ") + (c.channel >= 0 && c.channel < int(vibedab::kBandIIICount) ? vibedab::kBandIII[c.channel].name : "?");
                 r.rfHz = c.blockHz; r.offsetHz = c.offsetHz; r.at = now; r.kind = vibeafc::Kind::Primary;
+                /* ★★ THE TUNE'S OWN PART COMES OUT FIRST (vibe_r82xx_if.h): on an R82xx dongle the PLL's step puts each
+                 *  block a known few tens of Hz from the dial, a different amount on each — not the crystal, so not
+                 *  for auto-PPM to learn. Every other radio: nothing to remove. */
+                const double pll = afcPllHz();
+                g_afcPllHz = pll;
+                if (std::isfinite(pll)) {
+                    r.offsetHz -= pll;
+                    if (c.channel != g_afcPllLogBlock) {
+                        g_afcPllLogBlock = c.channel;
+                        LOGI("auto-PPM: %s \xe2\x80\x94 the R82xx's PLL step puts this tune %+.1f Hz from the dial; "
+                             "removed from every reading (measured %+.1f Hz, the clock's part %+.1f Hz)",
+                             r.source.c_str(), pll, c.offsetHz, r.offsetHz);
+                    }
+                }
                 if (c.walkFrames >= 8) r.walkPpm = c.walkPpm;   // ★ the sample clock, seen through the frame timing
                 const vibeafc::Action a = g_afc.offer(r, c.merDb, c.channel, inForce, now, unixNow);
                 publish();
