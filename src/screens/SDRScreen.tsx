@@ -272,7 +272,7 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, type KnownSignal, type KnownAvail } from '../utils/knownSignals';
-import { tunedLabel, utcMinutes, TUNED_SETTLE_MS } from '../utils/tunedStation';
+import { tunedPassband, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
@@ -12508,13 +12508,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     const t = setTimeout(() => setRestHz(hz), TUNED_SETTLE_MS);
     return () => clearTimeout(t);
   }, [status.frequency]);
-  const tunedVfoLabel = useMemo(() => {
+  // ★★ The candidates and the receive passband go to WaterfallView, which makes the final choice: only it knows which of
+  //    the spectrum's own labels are DRAWN (knownPlaced), and a name already on the spectrum is never repeated.
+  //    ★ The passband (Stuart, 2026-11-15): a station still being received a little off the dial keeps its name.
+  const tunedVfo = useMemo(() => {
     if (!restHz || restHz !== status.frequency) return null;
     const vtsShowing = !!vtsNotif && vtsNotif.kind.startsWith('station') && !!vtsNotif.name;
-    return tunedLabel(vtsBookmarks.current, restHz, utcMinutes(), { liveName: liveStation.name, vtsShowing, settled: true });
+    if (vtsShowing || (liveStation.name ?? '').trim()) return null;
+    return { rows: vtsBookmarks.current, passband: tunedPassband(status.mode, status.bandwidthLow, status.bandwidthHigh) };
   // ★ searchBookmarks is the same merged list, as state — it re-runs this when the lists change
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restHz, status.frequency, vtsNotif, liveStation.name, searchBookmarks]);
+  }, [restHz, status.frequency, vtsNotif, liveStation.name, searchBookmarks, status.mode, status.bandwidthLow, status.bandwidthHigh]);
 
   // Live RDS/DAB station name arrives async (no frequency change to trigger
   // vtsCheck), so react to it directly: drive the VTS station readout + popup,
@@ -14003,7 +14007,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         needleHidden={ismOn}
         wideVfo={!!wideDrawn}
         needleLabel={wideLabel}
-        tunedLabel={tunedVfoLabel}
+        tunedStation={tunedVfo}
         filterLow={wideDrawn ? wideDrawn[0] : bandDrawn ? bandDrawn[0] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).low}
         filterHigh={wideDrawn ? wideDrawn[1] : bandDrawn ? bandDrawn[1] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).high}
         /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing

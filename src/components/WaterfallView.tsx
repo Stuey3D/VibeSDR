@@ -96,7 +96,7 @@ import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan
 import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
-import { tunedLabelX } from '../utils/tunedStation';
+import { tunedLabel as tunedLabelFor, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
 import { displayMap, fanRefresh, fanRow, motionImageRows, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { ringCapFromDeviceClass, ringNextRows, RING_MIN_ROWS } from '../utils/wfRingSize';
 import { growRing } from '../utils/wfRingGrow';
@@ -269,9 +269,10 @@ export interface WaterfallViewProps {
   wideVfo?:        boolean;
   /** The needle's label in place of "LISTEN: <frequency>" (V12: "DAB 7D · 194.064M" — wideVfoLabel). */
   needleLabel?:    string;
-  /** ★★ V12 THE TUNED STATION'S LABEL (utils/tunedStation.ts — "[EiBi] China Radio Int"): drawn beside the needle, just
-   *  below its LISTEN row, once the VTS has let the name go. null = none (the caller decides when: tunedLabel). */
-  tunedLabel?:     string | null;
+  /** ★★ V12 THE TUNED STATION'S LABEL (utils/tunedStation.ts — "[EiBi] China Radio Int"): the candidates and the receive
+   *  passband once the dial has rested and the VTS has let the name go (null = no label). The choice is made HERE, so a
+   *  station the spectrum's own labels already name (knownPlaced) is never repeated under them. */
+  tunedStation?:   { rows: readonly TunedRow[]; passband: Passband } | null;
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
   needleIntensity?: number;
@@ -664,7 +665,7 @@ function WaterfallView({
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30, clipFloorDb = null,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
-  needleHidden = false, wideVfo = false, needleLabel, tunedLabel = null, secondVfo = null, activeVfo = null,
+  needleHidden = false, wideVfo = false, needleLabel, tunedStation = null, secondVfo = null, activeVfo = null,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
   smoothTune = true, wfBoost: wfBoostOn = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
@@ -2817,6 +2818,13 @@ function WaterfallView({
     const p = labelLayout(knownSignals, visStart, bwHz, width, (t) => estimateLabelWidth(t, 9, 3, 0.62), tuneHz, blocked, 4);
     return p.length ? p : null;
   }, [knownSignals, visStart, bwHz, width, tuneHz, knownNX, knownCX]);
+
+  // ★★ V12 the tuned station's label: a supplement to the labels above — passed over when one of them names it already
+  const tunedLabel = useMemo(() => {
+    if (!tunedStation) return null;
+    return tunedLabelFor(tunedStation.rows, tuneHz, utcMinutes(), { settled: true, vtsShowing: false, passband: tunedStation.passband,
+                                                                   shown: knownPlaced ? knownPlaced.map(p => p.sig) : [] });
+  }, [tunedStation, tuneHz, knownPlaced]);
 
   // ── Visible tiles (deckOcclusion) ───────────────────────────────────────────
   // The deck arrives in WINDOW coordinates; this view's own window origin turns it into canvas coordinates.
