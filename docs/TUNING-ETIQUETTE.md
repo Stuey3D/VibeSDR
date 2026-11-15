@@ -43,16 +43,19 @@ Replies are **canned ids with a meaning**, never parsed text:
 `listening_few_min` is the gentler replacement-in-spirit for the requested "Do you mind, I am listening here":
 it says why and asks for a little time, and it is the line that the five-minute limit below honours.
 
-A reply counts only from somebody **ranked above the asker**. While the ask is open, the **highest-ranked**
-reply so far stands (the admin's always wins):
-- **YES** → unlocked at once.
+A reply counts only from somebody **ranked above the asker**. **Any one NO blocks** (Stuart, 2026-11-15: a change
+of station or multiplex takes the audio from everyone listening, so each of them may say "nope, I'm listening"; it
+was "the highest-ranked reply wins", which let a longer-connected YES overrule them):
+- **YES** with no NO standing → unlocked at once.
 - **No answer in 15 s** (`kAskWindowS`) → unlocked.
-- **NO** → stays locked, for at most **5 minutes** (`kNoHoldS` in `vibe_tune_etiquette.h`, one constant to
-  change). Then the asker is **unlocked automatically** — they do not have to ask again. Asking again would
-  hand the same listener another "no", for ever: the limit exists so nobody can monopolise the server, and
-  an automatic end is the only form of it that cannot be talked around. During a NO the banner counts down.
-- A standing NO also ends early if its sayer leaves, or is no longer ranked above the asker (their time
-  limit ran out), or someone ranked above the sayer says YES.
+- **NO** (said inside the 15 s window) → stays locked while **any** NO stands, each for at most **5 minutes**
+  (`kNoHoldS` in `vibe_tune_etiquette.h`, one constant to change). Then the asker is **unlocked automatically** —
+  they do not have to ask again. After the window only a YES counts, and a repeated NO never extends its own
+  5 minutes, so nobody — alone or taking turns — can monopolise the server. During a NO the banner counts down.
+- A NO ends early when **its own sayer says YES** (once every NO-sayer has, the asker is in at once — no waiting
+  out the 5 minutes), or leaves, or is no longer ranked above the asker (their time limit ran out). Another
+  listener's YES cannot lift somebody else's NO; the **admin's** YES lifts every NO, and only the admin lifts the
+  admin's own.
 
 ### ★★ How long a grant lasts (Stuart, 2026-10-22)
 *"If actively tuning they stay up but if left on a station for a few mins they lock again."* A grant lasts

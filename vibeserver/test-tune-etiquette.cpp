@@ -95,7 +95,34 @@ int main() {
     ok(!b.locked(r, "b"), "…so nobody answered, and the asker is let in at 15 s");
   }
 
-  {   // ★ Conflicts: the highest-ranked wins.
+  {   // ★★★ ANY NO BLOCKS (Stuart, 2026-11-15) — a newer listener's "nope, I'm listening" holds against an older YES,
+      //     and the asker is let in the moment every NO-sayer says YES, without waiting out the 5 minutes.
+    Book b; Room r; r.inForce = true; r.people = { P("a", 100), P("b", 200), P("c", 300), P("d", 400) };
+    double t = 1000;
+    b.onSaid(r, "d", "ask_tune", t);
+    b.onSaid(r, "a", "go_ahead", t + 1);
+    ok(!b.locked(r, "d"), "user a (the longest-connected) says YES: d may tune…");
+    ok(b.onSaid(r, "b", "listening_few_min", t + 2) && b.locked(r, "d"), "…but user b says NO (listening): d is held");
+    b.onSaid(r, "c", "please_hold", t + 3);
+    ok(!b.onSaid(r, "a", "please_hold", t + 25), "after the window a new NO buys nothing (only YESes count then)");
+    b.tick(r, t + 20);
+    ok(b.locked(r, "d") && b.view(r, "d", t + 20).state == "no", "two NOs stand after the window");
+    ok(b.onSaid(r, "b", "go_ahead", t + 30) && b.locked(r, "d"), "b changes to YES: one NO fewer, c's still holds");
+    ok(b.onSaid(r, "c", "go_ahead", t + 40) && !b.locked(r, "d"), "★ c changes to YES too: d is let in at once, not after 5 minutes");
+  }
+  {   // ★ …and a NO still lapses on its own after 5 minutes
+    Book b; Room r; r.inForce = true; r.people = { P("a", 100), P("b", 200), P("c", 300) };
+    double t = 1000;
+    b.onSaid(r, "c", "ask_tune", t);
+    b.onSaid(r, "a", "go_ahead", t + 1);
+    b.onSaid(r, "b", "please_hold", t + 2);
+    b.tick(r, t + 2 + 5 * 60 - 1);
+    ok(b.locked(r, "c"), "b's NO holds until its 5 minutes are up…");
+    b.tick(r, t + 2 + 5 * 60 + 1);
+    ok(!b.locked(r, "c"), "…then lapses, and nobody can hold the server for ever");
+  }
+
+  {   // ★ Conflicts: any NO from above the asker holds; a YES lifts only its own sayer's NO.
     Book b; Room r; r.inForce = true; r.people = { P("a", 100), P("b", 200), P("c", 300) };
     double t = 1000;
     b.onSaid(r, "c", "ask_tune", t);
@@ -103,7 +130,7 @@ int main() {
     ok(!b.locked(r, "c"), "a YES from User b unlocks…");
     ok(b.onSaid(r, "a", "yes_hold", t + 3), "…but a NO from the longest-connected inside the window…");
     ok(b.locked(r, "c"), "…overrules it");
-    ok(!b.onSaid(r, "b", "go_ahead", t + 5), "a lower-ranked YES cannot overrule the higher NO back");
+    ok(!b.onSaid(r, "b", "go_ahead", t + 5), "another listener's YES cannot lift somebody else's NO");
     b.tick(r, t + 15);
     ok(b.locked(r, "c"), "the NO stands after the window");
     // The admin's answer always wins — even after the window.

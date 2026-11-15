@@ -98,7 +98,11 @@ public:
         double deadline = 0;       ///< when the window closes
         std::string bestBy;        ///< the highest-ranked replier so far (open window), or the NO's sayer
         Reply  best = Reply::None;
-        double noUntil = 0;        ///< a standing NO ends here
+        double noUntil = 0;        ///< the LAST standing NO ends here (the latest of `nos`; 0 = none)
+        /** ★★★ EVERY STANDING NO, by its sayer (Stuart, 2026-11-15: "any listener's no blocks it … and if user 1 answers
+         *  yes and then user 2 answers yes it unlocks so it doesn't have to wait the full 5 minutes"). Each lasts noHoldS;
+         *  it ends early when its sayer says YES, goes, or drops below the asker. The asker is let in once none stands. */
+        std::map<std::string, double> nos;
         double lastSeen = 0;
         double lastAct = 0;        ///< ★ the grant's idle clock: when it was granted, or its last accepted change
     };
@@ -166,34 +170,46 @@ public:
         Req& q = reqs[s];
         q.lastSeen = now;
         if (q.open || q.noUntil > now) return false;
-        q.open = true; q.deadline = now + askWindowS; q.best = Reply::None; q.bestBy.clear(); q.noUntil = 0;
+        q.open = true; q.deadline = now + askWindowS; q.best = Reply::None; q.bestBy.clear(); q.noUntil = 0; q.nos.clear();
         return true;
     }
 
-    /** ★★★ A REPLY COUNTS ONLY FROM ABOVE THE ASKER, AND THE HIGHEST-RANKED REPLY WINS. */
+    /** ★★★ A REPLY COUNTS ONLY FROM ABOVE THE ASKER, AND ANY ONE NO BLOCKS (Stuart, 2026-11-15 — it was "the
+     *  highest-ranked reply wins", so a longer-connected YES overruled a listener saying "nope, I'm listening"; a change of
+     *  station or multiplex takes the audio from EVERYONE listening, so every one of them may hold it). A YES lifts only its
+     *  own sayer's NO; the asker is let in when no NO stands (and a YES has come, or the 15 s pass). The ADMIN's YES lifts
+     *  every NO, and only the admin lifts the admin's own NO. */
     bool reply(const Room& r, const std::string& from, Reply m, double now) {
         const auto order = rankOrder(r.people);
         const int fr = rankOf(order, from);
         if (fr < 0) return false;
+        const Person* fp = find(r, from);
+        const bool admin = fp && fp->admin;
         bool changed = false;
         for (auto& [asker, q] : reqs) {
             const int ar = rankOf(order, asker);
             if (ar < 0 || fr >= ar) continue;                  // not above the asker: does not count
-            const bool standingNo = !q.open && q.noUntil > now;
-            if (!q.open && !standingNo) continue;              // nothing asked of this listener
-            const int br = q.bestBy.empty() ? -1 : rankOf(order, q.bestBy);
-            const bool outranks = br < 0 || fr < br || from == q.bestBy;
-            if (!outranks) continue;
-            if (standingNo) {
-                // ★ After the window only a YES matters — from above the NO's sayer. A second NO buys no time.
-                if (m != Reply::Yes) continue;
-                q.noUntil = 0; grant(q, now); q.best = Reply::Yes; q.bestBy = from;
-                changed = true;
-                continue;
+            const bool standingNo = !q.nos.empty();
+            if (!q.open && !standingNo && !q.granted) continue;  // nothing asked of this listener
+            if (m == Reply::No) {
+                // ★ A NO counts inside the 15 s window only; after it only a YES matters, and a repeated NO never extends
+                //   its own 5 minutes — so nobody, alone or taking turns, can hold the server for ever.
+                if (!q.open || now >= q.deadline || q.nos.count(from)) continue;
+                const bool had = false;
+                q.nos[from] = now + noHoldS;
+                q.noUntil = 0; for (auto& [_, u] : q.nos) q.noUntil = std::max(q.noUntil, u);
+                q.best = Reply::No; q.bestBy = from;
+                if (q.granted || !had) changed = true;
+                q.granted = false;
+            } else {
+                const size_t before = q.nos.size();
+                if (admin) q.nos.clear(); else q.nos.erase(from);
+                q.noUntil = 0; for (auto& [_, u] : q.nos) q.noUntil = std::max(q.noUntil, u);
+                if (q.nos.empty()) {
+                    q.best = Reply::Yes; q.bestBy = from;
+                    if (!q.granted) { grant(q, now); changed = true; }
+                } else if (q.nos.size() != before) changed = true;   // ★ one NO fewer: the countdown may have moved
             }
-            q.best = m; q.bestBy = from;
-            if (m == Reply::Yes) { if (!q.granted) { changed = true; grant(q, now); } q.noUntil = 0; }
-            else                 { if (q.granted || q.noUntil <= now) changed = true; q.granted = false; q.noUntil = now + noHoldS; }
         }
         return changed;
     }
@@ -211,20 +227,23 @@ public:
             // ★★★ AN IDLE GRANT LAPSES: back to a newcomer — no ask open, no NO standing, they must ask again. The
             //     clock keeps running through a short absence (it is the Req's, which a reconnect keeps).
             if (q.granted && now - q.lastAct >= grantIdleS) {
-                q.granted = false; q.open = false; q.noUntil = 0; q.best = Reply::None; q.bestBy.clear();
+                q.granted = false; q.open = false; q.noUntil = 0; q.nos.clear(); q.best = Reply::None; q.bestBy.clear();
                 changed = true;
+            }
+            // ★★ EACH NO ENDS on time, or when its sayer has gone or is no longer above the asker.
+            if (!q.nos.empty()) {
+                for (auto n = q.nos.begin(); n != q.nos.end(); ) {
+                    const int nr = rankOf(order, n->first);
+                    if (now >= n->second || nr < 0 || (ar >= 0 && nr >= ar)) { n = q.nos.erase(n); changed = true; }
+                    else ++n;
+                }
+                q.noUntil = 0; for (auto& [_, u] : q.nos) q.noUntil = std::max(q.noUntil, u);
+                if (q.nos.empty() && !q.open && !q.granted) { grant(q, now); changed = true; }   // ★ the last NO is over
             }
             if (q.open && now >= q.deadline) {
                 q.open = false;
-                if (q.best != Reply::No && !q.granted) grant(q, now);   // ★ a YES, or nobody answered
+                if (q.nos.empty() && !q.granted) grant(q, now);   // ★ a YES, or nobody answered — and no NO stands
                 changed = true;
-            }
-            if (!q.open && q.noUntil > 0) {
-                // ★★ A NO ENDS: on time, or when its sayer has gone or is no longer above the asker.
-                const int nr = rankOf(order, q.bestBy);
-                if (now >= q.noUntil || nr < 0 || (ar >= 0 && nr >= ar)) {
-                    q.noUntil = 0; grant(q, now); changed = true;
-                }
             }
             ++it;
         }
@@ -241,7 +260,7 @@ public:
             const Req& q = it->second;
             // ★ A NO inside the window is said at once — the asker should not watch "waiting" count down to a
             //   refusal. (A higher-ranked YES can still overrule it until the window closes.)
-            if (q.open && q.best != Reply::No) { v.state = "open"; v.secs = (int)(q.deadline - now + 0.999); }
+            if (q.open && q.nos.empty()) { v.state = "open"; v.secs = (int)(q.deadline - now + 0.999); }
             else if (q.noUntil > now)  { v.state = "no";   v.secs = (int)(q.noUntil - now + 0.999); }
             if (v.secs < 0) v.secs = 0;
         } else if (!v.locked && it != reqs.end() && it->second.granted && lockedWithoutGrant(r, s)) {
