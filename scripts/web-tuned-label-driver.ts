@@ -55,7 +55,7 @@ const S: any = (window as any).__tl = {
     const nX = wf.hzToX(hz, W);
     const ly = wf.markerLabelY(H, 0);
     const lx = nX + 6 * dpr + tw > W ? nX - tw - 6 * dpr : nX + 6 * dpr;
-    return { W, H, nX, tuned: wf.tunedDrawn, listen: { x: lx - 3 * dpr, y: ly - 9 * dpr, w: tw + 6 * dpr, h: 13 * dpr } };
+    return { W, H, nX, tuned: wf.tunedDrawn, highlight: wf.tunedHighlight, listen: { x: lx - 3 * dpr, y: ly - 9 * dpr, w: tw + 6 * dpr, h: 13 * dpr } };
   },
   png() { return (document.getElementById('wf') as HTMLCanvasElement).toDataURL('image/png'); },
 };

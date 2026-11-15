@@ -77,9 +77,10 @@ try {
     // ★ a supplement, never a repeat: the spectrum's own label for the bookmark is drawn → no "[User] Flex FM" under it
     const dup = await ev(`__tl.draw(9580000, 'Flex FM', 'user', true)`);
     ok(dup.tuned === null, `${tag}: the bookmark's own spectrum label is drawn — no duplicate under it`);
+    ok(dup.highlight === 0, `${tag}: …and that label is drawn in the tuned colour instead (highlight ${dup.highlight})`);
     if (PNG && sz.name === 'phone' && spec) { const u = await ev('__tl.png()'); fs.writeFileSync(path.join(PNG, 'phone-spectrum-no-duplicate.png'), Buffer.from(u.split(',')[1], 'base64')); }
     const solo = await ev(`__tl.draw(9580000, 'Flex FM', 'user', false)`);
-    ok(solo.tuned?.text === '[User] Flex FM', `${tag}: signal labels off — the bookmark gets the label`);
+    ok(solo.tuned?.text === '[User] Flex FM' && solo.highlight === -1, `${tag}: signal labels off — the bookmark gets the label, nothing highlighted`);
   }
   wsC.close();
 } catch (e) { fail++; console.log('   FAIL ' + (e?.message || e)); }

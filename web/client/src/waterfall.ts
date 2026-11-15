@@ -60,7 +60,7 @@ import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRo
 import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
-import { tunedLabel, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../../../src/utils/tunedStation.ts';
+import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow, type TunedPick } from '../../../src/utils/tunedStation.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -268,6 +268,15 @@ export class Waterfall {
   tunedCand: { key: string; rows: TunedRow[]; passband: Passband } | null = null;
   /** The label chosen on the last frame ('' = none). */
   tunedLabel = '';
+  /** This frame's choice (tunedPick): the label, or the placed signal label to draw in the tuned colour. Null until made. */
+  private tunedPicked: TunedPick | null = null;
+  /** Which placed signal label was drawn in the tuned colour on the last frame (−1 = none) — for the drivers. */
+  tunedHighlight = -1;
+  private _pickTuned(shown: readonly { hz: number; dialHz?: number; src: string }[]): TunedPick {
+    const cand = this.tunedCand;
+    return cand ? tunedPick(cand.rows, this.vfoHz, utcMinutes(), { settled: true, vtsShowing: false, passband: cand.passband, shown })
+                : { label: null, highlight: -1 };
+  }
   /** Where the last frame drew it (device px) — for the drivers (scripts/test-web-tuned-label.mjs). */
   tunedDrawn: { x: number; y: number; w: number; h: number; text: string } | null = null;
   /** What the last frame drew for the selected needle's passband (device px) — for the drivers (scripts/test-web-dab-vfo.mjs). */
@@ -1214,6 +1223,7 @@ export class Waterfall {
       this._drawSpec(ctx, W, specH);
       this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
     }
+    this.tunedPicked = null;   // ★ made in _drawKnown against this frame's placed labels, else in _drawTuned
     if (this.knownSignals && this.knownSignals.length && this.spanHz > 0) this._drawKnown(ctx, W, H);
     this._drawVfo(ctx, W, H);
   }
@@ -1384,10 +1394,9 @@ export class Waterfall {
    *  a dark shadow, on markerLabel's dark box. Beside the needle, flipped left at the right edge, kept on screen. */
   private _drawTuned(ctx: CanvasRenderingContext2D, W: number, H: number) {
     this.tunedDrawn = null;
-    const cand = this.tunedCand;
-    const shown = this.knownSignals && this.knownSignals.length ? this.knownPlaced.map(p => p.sig) : [];
-    const text = this.tunedLabel = cand ? tunedLabel(cand.rows, this.vfoHz, utcMinutes(), { settled: true, vtsShowing: false,
-                                                     passband: cand.passband, shown }) || '' : '';
+    const pick = this.tunedPicked ?? this._pickTuned([]);
+    this.tunedHighlight = pick.highlight;
+    const text = this.tunedLabel = pick.label || '';
     if (!text || !this.vfoHz) return;
     const nX = this.hzToX(this.vfoHz, W);
     if (nX < 0 || nX > W) return;
@@ -1745,17 +1754,23 @@ export class Waterfall {
       this.knownPlaced = labelLayout(this.knownSignals!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
       ctx.restore();
     }
+    // ★★ V12 the tuned station against the labels placed THIS frame: its own label, or one of these in the tuned colour
+    this.tunedPicked = this._pickTuned(this.knownPlaced.map(p => p.sig));
     if (!this.knownPlaced.length) return;
+    const hiIdx = this.tunedPicked.highlight;
+    const hiCol = hiIdx >= 0 ? stampColour(this.vfoLiveColor || this.vfoColor, this.lut) : '';
     const specH = H - this.wf.height;
     ctx.save();
     ctx.font = font;
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
     const tickW = Math.max(1, Math.round(dpr));
-    for (const p of this.knownPlaced) {
+    for (let pi = 0; pi < this.knownPlaced.length; pi++) {
+      const p = this.knownPlaced[pi];
+      const hi = pi === hiIdx;   // ★★ names the station you are tuned to: the tuned label's colour and dark shadow
       const y = this.markerLabelY(H, p.row);
       const boxTop = y - 9 * dpr, boxBot = y + 4 * dpr;
-      ctx.fillStyle = KNOWN_LABEL_COLOUR;
+      ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;
       ctx.globalAlpha = 0.8;
       // the tick: from the box down to the spectrum's floor, or beside the box on the waterfall
       const t0 = boxTop, t1 = showSpec ? specH : boxBot;
@@ -1768,8 +1783,10 @@ export class Waterfall {
       ctx.globalAlpha = 1;
       ctx.fillStyle = KNOWN_LABEL_BOX;
       ctx.fillRect(p.lx, boxTop, p.w, 13 * dpr);
-      ctx.fillStyle = KNOWN_LABEL_COLOUR;
+      ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;
+      if (hi) { ctx.shadowColor = 'rgba(0,0,0,0.95)'; ctx.shadowOffsetY = Math.max(1, Math.round(dpr)); ctx.shadowBlur = NO_GLOW ? 0 : Math.round(2 * dpr); }
       ctx.fillText(s.label, p.lx + 3 * dpr, y);
+      if (hi) { ctx.shadowColor = 'transparent'; ctx.shadowOffsetY = 0; ctx.shadowBlur = 0; }
     }
     ctx.restore();
   }
