@@ -2715,7 +2715,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       amSyncState = a; amSyncSync();
     },
     onDrm: (d) => {
-      if (!spec || spec.mode !== 'drm' || dabOn) return;   // ★ a report after leaving DRM (or under DAB) is a ghost
+      if (!spec || spec.mode !== 'drm' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;   // ★ a report after leaving DRM (or under a whole-radio mode) is a ghost
       drmState = d;
       if (!d.sync) drmIq = null;   // ★ the lock gone: its picture goes with it
       {
@@ -7401,8 +7401,9 @@ function drmSetPane(p: 'station' | 'signal') {
 function drmBoxSync() {
   /* ★★ …and never while DAB has the radio (Stuart, 2026-11-15, the Sony on 12B: a DRM box "Lock: searching" over DAB).
    *    DAB is a whole-radio mode of its own — the demodulator's mode can still read 'drm' underneath it (a listener who
-   *    was on DRM when the shared dial went to DAB), so the mode alone is not the answer. */
-  const on = !!spec && spec.mode === 'drm' && !dabOn;
+   *    was on DRM when the shared dial went to DAB), so the mode alone is not the answer. Stuart: "the DRM box needs to
+   *    go … as soon as another mode is opened" — so ADS-B, ISM, NDB and AIS close it too (each re-checks as it flips). */
+  const on = !!spec && spec.mode === 'drm' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
   let box = document.getElementById('drmBox');
   // ★★ the constellation travels only while the Signal pane is on screen (DAB's dabSetPane rule)
   spec?.drmScopes(on && drmPane === 'signal');
@@ -8837,7 +8838,7 @@ function syncAudioQuiet() {
   updateMediaSession();
 }
 function adsbUiOn() {
-  adsbOn = true;
+  adsbOn = true; setTimeout(drmBoxSync, 0);
   syncAudioQuiet();
   if (spec) spec.adsbHeld = true;
   setTimeout(syncDialTips, 0);
@@ -8896,7 +8897,7 @@ function initWholeResume() {
 
 /** The UI half of leaving ADS-B — the map gone, every control given back. */
 function adsbUiOff() {
-  adsbOn = false;
+  adsbOn = false; setTimeout(drmBoxSync, 0);
   adsbReport = null;
   adsbFirstSeen.clear();   // ★ the next visit's first report is "already there", not new
   adsbListLast = '';
@@ -9160,7 +9161,7 @@ function ismLockControls(on: boolean) {
   }
 }
 function ismUiOn() {
-  ismOn = true;
+  ismOn = true; setTimeout(drmBoxSync, 0);
   syncAudioQuiet();
   if (spec) spec.ismHeld = true;
   if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (id) => ismPickBand(id), (key) => ismMapOpen(key), () => myPos(),
@@ -9171,7 +9172,7 @@ function ismUiOn() {
   setTimeout(syncDialTips, 0);
 }
 function ismUiOff() {
-  ismOn = false;
+  ismOn = false; setTimeout(drmBoxSync, 0);
   syncAudioQuiet();
   ismReport = null;
   ismHopReset();   // ★ V12: a burst still settling goes with the mode — never a band sent after it
@@ -9216,7 +9217,7 @@ function ndbReadCap(j: any) {
 /** ★ The UI half of entering NDB — ADS-B's (adsbUiOn): a running decoder stopped, the box closed, the controls held,
  *  the audio let go (nothing to hear), the map view up over the (throttled) waterfall. */
 function ndbUiOn() {
-  ndbOn = true;
+  ndbOn = true; setTimeout(drmBoxSync, 0);
   syncAudioQuiet();
   if (spec) spec.ndbHeld = true;
   setTimeout(syncDialTips, 0);
@@ -9248,7 +9249,7 @@ let ndbInerted: HTMLElement[] = [];
 /** ★ The map is covering the page: renderFrame skips the waterfall (ADS-B's adsbViewUp). */
 let ndbViewUp = false;
 function ndbUiOff() {
-  ndbOn = false;
+  ndbOn = false; setTimeout(drmBoxSync, 0);
   ndbReport = null;
   if (spec) spec.ndbHeld = false;
   setTimeout(syncDialTips, 0);
@@ -9665,7 +9666,7 @@ function aisReadCap(j: any) {
   } else aisCap = null;
 }
 function aisUiOn() {
-  aisOn = true;
+  aisOn = true; setTimeout(drmBoxSync, 0);
   syncAudioQuiet();
   if (spec) spec.aisHeld = true;
   closePanels();
@@ -9681,7 +9682,7 @@ function aisUiOn() {
   void navPoll(true);
 }
 function aisUiOff() {
-  aisOn = false;
+  aisOn = false; setTimeout(drmBoxSync, 0);
   syncAudioQuiet();
   aisReport = null;
   if (spec) spec.aisHeld = false;

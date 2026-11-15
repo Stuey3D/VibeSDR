@@ -15097,7 +15097,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★★ V12 THE DRM BOX — while the mode is DRM, where the decoder box sits (it stands down while a decoder or the
           spots are open, and for the whole-radio modes, which leave DRM anyway). */}
       <RotateFade>
-      {status.mode === 'drm' && !activeDecoder && !spotsKind && !ismBoxOpen && !dabOn && (
+      {/* ★★ the DRM box goes the moment another mode has the radio — DAB, ADS-B, ISM, AIS, NDB (Stuart, 2026-11-15) */}
+      {status.mode === 'drm' && !activeDecoder && !spotsKind && !ismBoxOpen && !dabOn && !adsbOn && !ismOn && !aisOn && !ndbOn && (
         <PanelBoundary name="DRM" onClose={() => setDrmState(null)}>
         <DrmPanel state={drmState} topLimit={boxTopLimit} topSafe={boxTopSafe} tall={drmTall} onTall={onDrmTall}
                   iq={drmIq?.q ?? null} iqAt={drmIq?.at ?? 0} onSignalPane={onDrmSignalPane} onExit={() => onMode('am')}
