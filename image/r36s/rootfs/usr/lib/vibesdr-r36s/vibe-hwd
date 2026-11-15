@@ -45,7 +45,7 @@ ACK_WAIT_S = 5.0              # how long the engine gets to save every radio's m
 #       table: 0 = 450 mA, 1 = 80, 2 = 850, 3 = 1500, 4 = 1750, 5 = 2000, 6 = 2500, 7 = 3000. Bits 7:4 (the 4.5 V input
 #       voltage floor the driver set) are kept. The register is uncached in the kernel (REGCACHE_NONE, volatile), and the
 #       driver touches it only on unplug, so this write stands until then.
-PMIC_ADDR, CHRG_IN = 0x20, 0xE5
+PMIC_ADDR, CHRG_OUT, CHRG_IN = 0x20, 0xE4, 0xE5
 # ★★ WRITTEN AS ONE FIXED VALUE, never read-modify-write: 0xDD = USB_VLIM_EN | 4.5 V floor (sel 5, the driver's own) |
 #    USB_ILIM_EN | 2 A (sel 5). The driver's value is 0xDB (the same with 1.5 A) — read at start-up on handheld62.
 CHRG_IN_2A = 0xDD
@@ -160,6 +160,133 @@ def pct_to_raw(pct):
     n = (pct / 100.0) * (1 - min_norm) + min_norm
     db = 60.0 * math.log10(n) + max_db
     return max(0, min(255, round((db - min_db) / (max_db - min_db) * 255)))
+
+
+def _uv(path):
+    """A sysfs µV / µA figure as V / A (None when missing)."""
+    v = rd(path)
+    try:
+        return int(v) / 1e6
+    except (TypeError, ValueError):
+        return None
+
+def _f(v, unit, signed=False):
+    return "?" if v is None else (("%+.3f" if signed else "%.3f") % v) + unit
+
+
+class ChargerWatch:
+    """★★★ THE CHARGE PORT, WATCHED CLOSELY (Stuart, 2026-11-15 log): vibe-hwd took up to 58 s to notice a plug-in (a
+    1 s look, and a 30 s back-off after any PMIC error), the SDR dropped off USB at the very moment of plug-in, and the
+    charge LED goes off / on at ~20 % while the bank still puts out 5.2 V. Suspected: the port's voltage (4.67–4.85 V
+    measured while the bank gives 5.1–5.2 V — cable + connector drop) dipping under CHRG_IN's 4.5 V input floor (VLIM),
+    where the PMIC stops taking current from the port. So:
+      • the plug edge is seen within POLL_S (sysfs `online`, read 10 times a second — one small file) and the 2 A
+        input limit goes on AT the edge, not up to a second (or 30 s) later;
+      • for TRACE_S after every plug-in AND plug-out, a line every POLL_S: the port's voltage, the battery's voltage,
+        current and status, and the PMIC's CHRG_IN / CHRG_OUT — the sag (or not) at the moment the SDR drops;
+      • a line whenever the battery's status flips (Charging ↔ Not charging / Discharging / Full) with the cord still
+        in, with the port voltage at that moment — the LED symptom.
+    ★★ CHRG_IN's VALUE IS NOT CHANGED HERE (0xDD stays — the VLIM decision waits for this data).
+    ★ Bounded: a handful of numbers, no history; the flip lines are capped at FLIP_MAX a minute (the rest counted).
+    The PMIC reads are the same atomic SMBus transfers as the limit's (pmic_read), never a read-modify-write."""
+    POLL_S, TRACE_S, CHECK_S, ERR_BACKOFF_S, FLIP_MAX = 0.1, 5.0, 1.0, 5.0, 20
+
+    def __init__(self, dev):
+        self.dev = dev
+        self.online = None            # last `online` seen (None before the first look)
+        self.status = None
+        self.trace_t0 = None          # the edge's time; tracing until trace_t0 + TRACE_S
+        self.trace_edge = ""
+        self.next_check = 0.0
+        self.err_logged_at = -1e9
+        self.flip_min, self.flip_n, self.flip_dropped = -1, 0, 0
+
+    def _pmic(self, reg):
+        if not self.dev:
+            return None
+        try:
+            return pmic_read(self.dev, reg)
+        except OSError as e:
+            self._err("read", e)
+            return None
+
+    def _err(self, what, e):
+        now = time.monotonic()
+        if now - self.err_logged_at >= 30:              # ★ one line per 30 s, however often the bus fails
+            self.err_logged_at = now
+            log("charger: PMIC %s failed:" % what, e)
+
+    def apply_limit(self, why, now):
+        """CHRG_IN to 0xDD if it is not (one atomic read; a write only when needed). True when it is (or was) 0xDD."""
+        if not self.dev:
+            return False
+        try:
+            old = pmic_read(self.dev, CHRG_IN)
+            if old == CHRG_IN_2A:
+                return True
+            pmic_write(self.dev, CHRG_IN, CHRG_IN_2A)
+            got = pmic_read(self.dev, CHRG_IN)
+            log("charger: input limit 2 A at %s (CHRG_IN 0x%02x -> 0x%02x)%s" %
+                (why, old, got, "" if got == CHRG_IN_2A else " ✗ DID NOT STICK"))
+            return got == CHRG_IN_2A
+        except OSError as e:
+            self._err("input limit", e)
+            self.next_check = now + self.ERR_BACKOFF_S     # ★ 5 s, not 30: a plug-in still gets its limit soon
+            return False
+
+    def sample(self):
+        """The trace line's figures: port V, battery V / A, status, CHRG_IN, CHRG_OUT."""
+        return {"port": _uv(CHG + "/voltage_avg"), "batV": _uv(BAT + "/voltage_avg"), "batA": _uv(BAT + "/current_avg"),
+                "status": rd(BAT + "/status", "Unknown")}
+
+    def trace_line(self, now, online, s):
+        cin, cout = self._pmic(CHRG_IN), self._pmic(CHRG_OUT)
+        return ("charger: %s %+.1fs online %d port %s bat %s %s %s IN %s OUT %s" %
+                (self.trace_edge, now - self.trace_t0, online, _f(s["port"], "V"), _f(s["batV"], "V"),
+                 _f(s["batA"], "A", True), s["status"], "?" if cin is None else "0x%02x" % cin,
+                 "?" if cout is None else "0x%02x" % cout))
+
+    def tick(self, now):
+        online = rd(CHG + "/online", "0") == "1"
+        status = rd(BAT + "/status", "Unknown")
+        if self.online is None:
+            self.online, self.status = online, status
+            if online:
+                self.apply_limit("start-up", now)
+            return
+        if online != self.online:
+            # ★ the edge: the limit FIRST (the SDR is drawing through this port right now), then the trace begins
+            if online and self.apply_limit("plug-in", now):
+                self.next_check = now + self.CHECK_S
+            self.trace_t0, self.trace_edge = now, "plug-in" if online else "plug-out"
+            log("charger: %s seen (within %.1f s) — tracing the port for %.0f s" % (self.trace_edge, self.POLL_S, self.TRACE_S))
+        elif online and status != self.status:
+            self._flip(now, status)
+        self.online, self.status = online, status
+        if self.trace_t0 is not None:
+            if now - self.trace_t0 <= self.TRACE_S + 1e-6:
+                log(self.trace_line(now, online, self.sample()))
+            else:
+                self.trace_t0 = None
+        if online and now >= self.next_check:
+            self.next_check = now + self.CHECK_S
+            self.apply_limit("check", now)            # (a failure moves next_check out to ERR_BACKOFF_S)
+
+    def _flip(self, now, status):
+        m = int(now // 60)
+        if m != self.flip_min:
+            if self.flip_dropped:
+                log("charger: (%d more status flips on the cord that minute, not logged)" % self.flip_dropped)
+            self.flip_min, self.flip_n, self.flip_dropped = m, 0, 0
+        self.flip_n += 1
+        if self.flip_n > self.FLIP_MAX:
+            self.flip_dropped += 1
+            return
+        s = self.sample()
+        cin = self._pmic(CHRG_IN)
+        log("charger: battery %s -> %s with the cord in — port %s, bat %s %s, CHRG_IN %s" %
+            (self.status, status, _f(s["port"], "V"), _f(s["batV"], "V"), _f(s["batA"], "A", True),
+             "?" if cin is None else "0x%02x" % cin))
 
 
 class Hwd:
@@ -396,30 +523,22 @@ class Hwd:
         return dict(b, pct=out)
 
     async def charger_loop(self):
-        """Hold the charge port's input limit at 2 A whenever the charger is in (see PMIC_ADDR above). A 1 s look at
-        sysfs; the PMIC is read only while charging (one atomic transfer), written only when it is not 0xDD."""
+        """Hold the charge port's input limit at 2 A whenever the charger is in (see PMIC_ADDR above), and log what the
+        port does around every plug-in / plug-out (ChargerWatch). A 100 ms look at sysfs; the PMIC is touched only on
+        a plug edge, once a second while charging, and during the 5 s trace after an edge."""
         dev = pmic_bus()
         if not dev:
-            log("charger: PMIC i2c bus not found — the input limit stays at the driver's 1.5 A")
-            return
-        try:   # ★ once, read only: the evidence for vibe-charge-fast's 0xA0 and for the driver's own CHRG_IN
-            log("charger: PMIC at start-up — CHRG_OUT 0x%02x (vibe-charge-fast expects 0xa0), CHRG_IN 0x%02x" %
-                (pmic_read(dev, 0xE4), pmic_read(dev, CHRG_IN)))
-        except OSError as e:
-            log("charger: PMIC not readable:", e)
+            log("charger: PMIC i2c bus not found — the input limit stays at the driver's 1.5 A (the port is still traced)")
+        else:
+            try:   # ★ once, read only: the evidence for vibe-charge-fast's 0xA0 and for the driver's own CHRG_IN
+                log("charger: PMIC at start-up — CHRG_OUT 0x%02x (vibe-charge-fast expects 0xa0), CHRG_IN 0x%02x" %
+                    (pmic_read(dev, CHRG_OUT), pmic_read(dev, CHRG_IN)))
+            except OSError as e:
+                log("charger: PMIC not readable:", e)
+        w = ChargerWatch(dev)
         while True:
-            if rd(CHG + "/online", "0") == "1":
-                try:
-                    old = pmic_read(dev, CHRG_IN)
-                    if old != CHRG_IN_2A:
-                        pmic_write(dev, CHRG_IN, CHRG_IN_2A)
-                        got = pmic_read(dev, CHRG_IN)
-                        log("charger: input limit 2 A (CHRG_IN 0x%02x -> 0x%02x)%s" %
-                            (old, got, "" if got == CHRG_IN_2A else " ✗ DID NOT STICK"))
-                except OSError as e:
-                    log("charger: input limit not set:", e)
-                    await asyncio.sleep(30)
-            await asyncio.sleep(1)
+            w.tick(time.monotonic())
+            await asyncio.sleep(ChargerWatch.POLL_S)
 
     async def battery_loop(self):
         while True:

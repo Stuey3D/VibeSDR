@@ -172,6 +172,9 @@ damage the card.
 
 - `test/capacity-test.py rootfs/usr/lib/vibesdr-r36s/vibe-card` — the check against simulated honest / wrap / drop
   cards, verdicts and restore (Mac, no hardware).
+- `test/battery-smooth-test.py` · `test/charger-watch-test.py` — `vibe-hwd`'s battery meter and its charge-port watch
+  (the 2 A input limit at the plug edge, the 5 s port trace after each edge, status flips on the cord) against a fake
+  sysfs and PMIC (Mac, no hardware).
 - `test/card-loop-test.sh <img>` — first + second boot of `vibe-card` on a loop device, a dirty exFAT, the `flush`
   option (needs a kernel with exFAT: the R36S, not colima).
 - `test/device-hwd-test.sh` + `test/fake-keys.py` + `test/hwd-client.py` — `vibe-hwd` on the R36S against the real
