@@ -94,6 +94,7 @@ import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../servi
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
+import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
@@ -329,6 +330,13 @@ export interface WaterfallViewProps {
    *  tunes to the signal's dial and opens its decoder (SDRScreen onKnownTap). Only a TAP: a drag starting on a label pans
    *  as ever. Absent = the labels are not tappable (and not screen-nav stops). */
   onKnownTap?: (sig: KnownSignal) => void;
+  /** ★★ V12 DAB BLOCK LABELS (utils/dabBlockView.ts — Stuart, 2026-11-15, the Almere B210 at 56 MS/s): every Band III
+   *  block as a label row while in DAB ("DAB 8A — 8A regio Alphen"), null = not in DAB. Laid out with the signal labels
+   *  only while the span shown holds two whole blocks, so a narrow radio — or a wide one zoomed in — draws none. */
+  dabBlocks?: readonly DabBlockSignal[] | null;
+  /** ★★ …and on such a view a TAP inside a block's bandwidth = go to that multiplex (SDRScreen: dabGoTo, the MULTIPLEXES
+   *  pick's road). Outside every block a tap does nothing — DAB has no dial. */
+  onDabBlockTap?: (index: number) => void;
   /**
    * ★★ THE OPAQUE CONTROL DECK, in WINDOW coordinates (x, y, w, h, corner radius) — or null when nothing opaque
    * covers the waterfall (Transparency on, the deck hidden, mid-rotation). The waterfall shader is then drawn only
@@ -670,7 +678,7 @@ function WaterfallView({
   smoothTune = true, wfBoost: wfBoostOn = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
   centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0, knownSignals = null,
-  onKnownTap, deckOcclusion = null,
+  onKnownTap, deckOcclusion = null, dabBlocks = null, onDabBlockTap,
 }: WaterfallViewProps) {
 
   // ── Vertical layout ─────────────────────────────────────────────────────────
@@ -2810,14 +2818,16 @@ function WaterfallView({
   //      is estimated (estimateLabelWidth) — generous, and the box sizes itself to the text when drawn.
   const knownNX = needle && showCenterMarker ? needle.nX : null;
   const knownCX = centerMarker ? centerMarker.x : null;
+  // ★★ V12 in DAB on a view holding two whole blocks, the Band III blocks join the list (utils/dabBlockView.ts)
+  const labelList = useMemo(() => withDabBlocks(knownSignals, dabBlocks, bwHz), [knownSignals, dabBlocks, bwHz]);
   const knownPlaced = useMemo(() => {
-    if (!knownSignals || !knownSignals.length || !(bwHz > 0) || !(width > 0)) return null;
+    if (!labelList || !labelList.length || !(bwHz > 0) || !(width > 0)) return null;
     const blocked: BlockedBox[] = [{ row: 0, x0: 0, x1: 30 }, { row: 1, x0: 0, x1: 30 }];
     if (knownNX !== null) { const l = Math.min(width - 96, knownNX + 3); blocked.push({ row: 0, x0: l, x1: l + 90 }); }
     if (knownCX !== null) { const l = Math.min(width - 96, knownCX + 3); blocked.push({ row: 1, x0: l, x1: l + 96 }); }
-    const p = labelLayout(knownSignals, visStart, bwHz, width, (t) => estimateLabelWidth(t, 9, 3, 0.62), tuneHz, blocked, 4);
+    const p = labelLayout(labelList, visStart, bwHz, width, (t) => estimateLabelWidth(t, 9, 3, 0.62), tuneHz, blocked, 4);
     return p.length ? p : null;
-  }, [knownSignals, visStart, bwHz, width, tuneHz, knownNX, knownCX]);
+  }, [labelList, visStart, bwHz, width, tuneHz, knownNX, knownCX]);
 
   // ★★ V12 the tuned station: its own label beside the needle, OR — when one of the labels above already names it — that
   //    label drawn in the tuned colour instead (tunedPick: never both, never a second name in its place)
@@ -2999,6 +3009,14 @@ function WaterfallView({
          *  nearer box winning where the two rows' areas overlap. Only a TAP — no further than the slop from where it went
          *  down, no longer than LABEL_TAP_MAX_MS: a drag starting on a label is the Pan gesture's, as before. A miss tunes
          *  to the point exactly as it always did. */
+        /* ★★ V12 DAB ON A WIDE VIEW: A BLOCK SWAPPER (utils/dabBlockView.ts — Stuart, 2026-11-15: "simply a block swapper
+         *  without having to walk up all blocks"). A tap inside a block's 1.536 MHz goes to that multiplex — on its label
+         *  too; outside every block, nothing (DAB has no dial). A narrow view is untouched. */
+        if (dabBlocks && onDabBlockTap && dabWideView(bwHz)) {
+          const i = dabBlockHit(visStart + (e.x / width) * bwHz, bwHz);
+          if (i >= 0) onDabBlockTap(i);
+          return;
+        }
         if (onKnownTap && knownPlaced) {
           const hit = knownLabelHit(knownPlaced, e.x, e.y, (row) => (row === 0 ? markerLabelBase : markerLabelBase - 14), 13);
           const t0 = tapStart.current;
@@ -3018,7 +3036,8 @@ function WaterfallView({
           }
         }
         onTapTune?.(Math.round(hzOnRow(e.x / width, geo, visStart, bwHz)));
-      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop, wfTop, stampRowPt, engine, onKnownTap, knownPlaced, markerLabelBase]);
+      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop, wfTop, stampRowPt, engine, onKnownTap, knownPlaced, markerLabelBase,
+           dabBlocks, onDabBlockTap]);
 
   // Pan runs as a WORKLET (UI thread): event delivery + accumulation never wait
   // on the JS thread, so a laggy connection / heavy data can't make the drag
@@ -3377,8 +3396,11 @@ function WaterfallView({
           const tickBot = specShow && specH > 40 ? wfTop : top + 13;
           const s = p.sig;
           const bx0 = s.lo != null ? Math.max(0, hzToX(s.lo)) : 0, bx1 = s.hi != null ? Math.min(width, hzToX(s.hi)) : 0;
-          // ★★ V12 the label naming the station you are tuned to: the tuned label's colour (stampCol) and dark halo
-          const hi = i === tunedHi;
+          // ★★ V12 the label naming the station you are tuned to — or, in DAB, the block being received: the tuned label's
+          //    colour (stampCol) and dark halo
+          const dab = isDabBlockSignal(s) ? s : null;
+          const hi = i === tunedHi || !!dab?.dabCurrent;
+          const tapLabel = dab ? (onDabBlockTap ? () => onDabBlockTap(dab.dabIdx) : undefined) : onKnownTap ? () => onKnownTap(s) : undefined;
           return (
             <React.Fragment key={'ks' + i + ':' + s.hz}>
               <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) },
@@ -3387,11 +3409,11 @@ function WaterfallView({
                 <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }]} />
               )}
               {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot, LABEL_MAX at most. */}
-              <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ')}
-                    accessibilityRole={onKnownTap ? 'button' : undefined}
-                    accessibilityHint={onKnownTap ? (s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
-                    onAccessibilityTap={onKnownTap ? () => onKnownTap(s) : undefined}
-                    ref={onKnownTap ? screenNavRef('known' + i, () => onKnownTap(s)) : undefined}
+              <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ').replace(' — ', ', ')}
+                    accessibilityRole={tapLabel ? 'button' : undefined}
+                    accessibilityHint={tapLabel ? (dab ? 'Goes to this multiplex' : s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
+                    onAccessibilityTap={tapLabel}
+                    ref={tapLabel ? screenNavRef('known' + i, tapLabel) : undefined}
                     style={[styles.knownBox, { left: p.lx, top }]}>
                 <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
               </View>

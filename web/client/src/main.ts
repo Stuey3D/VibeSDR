@@ -124,6 +124,7 @@ import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBand
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, type KnownSignal, type KnownAvail } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
+import { dabBlockSignals, dabMuxNames, dabWideView, dabBlockHit, dabBlockHint } from '../../../src/utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, inPassband, TUNED_SETTLE_MS, type Passband, type TunedRow } from '../../../src/utils/tunedStation';   // ★★ the tuned station's label at the VFO
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
@@ -2008,6 +2009,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (!d.eid) d.eid = prev.eid;
         d.held = true;
       }
+      { const mem = (d as { blocks?: Record<string, string> }).blocks;   // ★★ V12 the server's block memory (dabTypes.ts DabState.blocks)
+        if (mem && typeof mem === 'object' && Object.keys(mem).length) dabBlockMemory = mem; }
       dabState = d; dabRender(); updateVts(); syncStereoLight();
       {
         // ★ And whether audio is REACHING this page (dabWithPlayback) — the player's own output stamp. Muted, or held
@@ -7544,6 +7547,43 @@ const dabStepper = new DabBlockStepper(DAB_BLOCKS.length,
   },
   DAB_STEP_SETTLE_MS, undefined, 'clamp');
 
+/* ★★ V12 DAB BLOCK LABELS AND THE BLOCK SWAPPER (src/utils/dabBlockView.ts — Stuart, 2026-11-15, the Almere B210 at
+ *  56 MS/s showing all of Band III: "add the spectrum labels to show the blocks and, if in the memory, show the MUX name
+ *  next to it … allow clicking the waterfall to tune to the specific DAB block … simply a block swapper"). While in DAB
+ *  the waterfall is handed every block as a label row; it draws them only while the span shown holds two whole blocks.
+ *  Names come only from what the server said: the live ensemble, its block memory (`blocks` on the report — kept here,
+ *  as dabState is cleared on every block change) and the last band scan. A click inside a block = dabBlockPick. */
+let dabBlockMemory: Record<string, string> = {};
+let dabBlocksKey = '';
+let dabNamesCache: Map<string, string> = new Map();
+function dabCurrentBlock(): number {
+  const ch = dabState?.channel;
+  return ch ? DAB_BLOCKS.findIndex(b => b.name === ch) : dabChannel;
+}
+function dabBlocksSync() {
+  if (!wf) return;
+  if (!dabOn) { if (wf.dabBlocks) { wf.dabBlocks = null; wf.knownGen++; } dabBlocksKey = ''; return; }
+  const names = dabMuxNames({ live: dabState ? { channel: dabState.channel, label: dabState.label } : null,
+                              memory: dabBlockMemory, scan: dabScanState?.found ?? null });
+  const cur = dabCurrentBlock();
+  const key = `${cur}|${[...names].map(([k, v]) => `${k}=${v}`).join('\u0001')}`;
+  if (key === dabBlocksKey && wf.dabBlocks) return;
+  dabBlocksKey = key; dabNamesCache = names;
+  wf.dabBlocks = dabBlockSignals(names, cur);
+  wf.knownGen++;
+}
+/** ★★ A CLICK INSIDE A BLOCK on a wide DAB view: the MULTIPLEXES pick's own road (dabGoTo — the shared dial, the server's
+ *  block change, its service auto-select). Refused BEFORE anything moves while this listener is held back: the usual
+ *  "ask in chat" nudge, and nothing at all during an owner's scan (its slot already says so). The block already playing:
+ *  nothing. */
+function dabBlockPick(i: number) {
+  if (!spec || !dabOn || i < 0 || i >= DAB_BLOCKS.length) return;
+  if (scanLockOn && !adminUnlocked) return;
+  if (askLocked(askNow) || spec.isTuneLocked()) { nudgeAsk(); return; }
+  if (i === dabCurrentBlock()) return;
+  dabGoTo(DAB_BLOCKS[i].hz, -1);
+}
+
 /** TS 101 756 table 12 — the international programme type codes carried in FIG 0/17. */
 const DAB_PTY: string[] = ['None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
   'Culture', 'Science', 'Varied', 'Pop Music', 'Rock Music', 'Easy Listening', 'Light Classical',
@@ -7627,6 +7667,7 @@ function dabScanOnMessage(m: unknown) {
     return;
   }
   dabScanState = s;
+  dabBlocksSync();   // ★★ V12 a scan's names label the blocks (dabBlockView.ts)
   scanLockSet(s.running && s.lock === true, s.done, s.total);
   // ★ Somebody else's scan (the admin, on a shared radio): say so once, so nobody thinks the radio has gone mad.
   const others = dabScanOthersLine(s);
@@ -7695,6 +7736,7 @@ function dabScanRender() {
 }
 
 function dabRender() {
+  dabBlocksSync();   // ★★ V12 the block labels follow the block and the names (dabBlockView.ts)
   const st = document.getElementById('dabStations');
   const sg = document.getElementById('dabSignal');
   const lbl = document.getElementById('dabMuxLbl');
@@ -8739,6 +8781,7 @@ function dabUiOff() {
   // ★★ the DRM box may come back once DAB has let go (a listener still on DRM underneath) — after the caller has
   //    cleared dabOn, which some paths do just after this call
   setTimeout(drmBoxSync, 0);
+  setTimeout(dabBlocksSync, 0);   // ★★ V12 the block labels go with the mode (after dabOn is cleared)
   dabScanMine = false;   // ★ V12: out of DAB the scan pane has nowhere to be (a running scan ends with the mode)
   dabStepper.cancel(); dabAsk.clear();   // ★ leaving DAB: a burst still settling dies, nothing is awaited
   spec?.dabScopes(false);
@@ -21175,6 +21218,13 @@ function initWaterfallInput() {
        *  decoder?"): a click on its box (hit over ≥ 30 px) tunes to the signal's dial and opens its decoder. A press that
        *  moved is a pan (moved, above) and never reaches here; one held long on a label does nothing rather than tune to
        *  the box's own pixel. */
+      /* ★★ V12 DAB ON A WIDE VIEW: A BLOCK SWAPPER (dabBlockView.ts — Stuart, 2026-11-15: "simply a block swapper without
+       *  having to walk up all blocks"). A click inside a block's 1.536 MHz goes to that multiplex; outside every block,
+       *  nothing — DAB has no dial, and ordinary click-to-tune stays off. A narrow view is untouched (below). */
+      if (dabOn && dabWideView(wf.spanHz)) {
+        dabBlockPick(dabBlockHit(wf.xyToHz(e.clientX - rect.left, e.clientY - rect.top), wf.spanHz));
+        return;
+      }
       const ks = wf.knownLabelAt(e.clientX - rect.left, e.clientY - rect.top);
       if (ks) {
         if (isLabelTap(e.clientX - startX, e.clientY - startY, performance.now() - downAt)) knownTap(ks);
@@ -21274,20 +21324,44 @@ function initPointerFreq(c: HTMLCanvasElement) {
   const setShown = (on: boolean) => {
     if (on !== shown) { shown = on; el.classList.toggle('show', on); if (on) measure = true; }
   };
-  const stop = () => { over = false; if (raf) { cancelAnimationFrame(raf); raf = 0; } setShown(false); };
+  // ★★ V12 the DAB block swapper's pointer (dabBlockView.ts): over a block on a wide DAB view, else the canvas's own
+  let ptrOn = false;
+  const setPtr = (on: boolean) => { if (on !== ptrOn) { ptrOn = on; c.style.cursor = on ? 'pointer' : ''; } };
+  const stop = () => { over = false; if (raf) { cancelAnimationFrame(raf); raf = 0; } setShown(false); setPtr(false); };
   hidePtrFreq = () => setShown(false);
 
   const frame = () => {
     raf = 0;
     if (!over) { setShown(false); return; }
     raf = requestAnimationFrame(frame);
-    if (held || !ptrFreqOn || dabOn || adsbOn || !spec || !wf || document.hidden) { setShown(false); return; }
+    // ★★ V12 DAB on a wide view: the block swapper's hint ("go to 8A — 8A regio Alphen") and a pointer, whatever the
+    //    frequency-at-pointer switch says — it is how the click explains itself (dabBlockView.ts)
+    const dabWide = dabOn && !!wf && dabWideView(wf.spanHz);
+    if (!dabWide) setPtr(false);
+    if (held || (!ptrFreqOn && !dabWide) || (dabOn && !dabWide) || adsbOn || !spec || !wf || document.hidden) { setShown(false); return; }
     // ── reads first (layout is clean at the start of a frame) ──
     if (!rect) { rect = c.getBoundingClientRect(); cw = c.clientWidth; }
     const W = rect.width, H = rect.height;
     const x = px - rect.left, y = py - rect.top;
     if (x < 0 || y < 0 || x > W || y > H) { setShown(false); return; }
     if (measure && shown) { measure = false; lw = el.offsetWidth; lh = el.offsetHeight; }
+    if (dabWide) {
+      const bi = dabBlockHit(wf.xyToHz(x, y, cw, H), wf.spanHz);
+      setPtr(bi >= 0);
+      if (bi < 0) { setShown(false); return; }
+      const hint = dabBlockHint(bi, dabNamesCache, dabCurrentBlock());
+      if (mEl.textContent !== hint) {
+        mEl.textContent = hint; fEl.textContent = ''; uEl.textContent = '';
+        if (shownBm) { el.classList.toggle('hasBm', false); shownBm = ''; if (bnEl) bnEl.textContent = ''; }
+        if (shownOut) { shownOut = false; el.classList.toggle('out', false); }
+        shownHz = NaN; measure = true;
+      }
+      const nx0 = Math.round(lw && x + 14 + lw > W - 2 ? Math.max(2, x - 14 - lw) : x + 14);
+      const ny0 = Math.round(lh && y + 18 + lh > H - 2 ? Math.max(2, y - 8 - lh) : y + 18);
+      if (nx0 !== tx || ny0 !== ty) { tx = nx0; ty = ny0; el.style.transform = `translate3d(${nx0}px,${ny0}px,0)`; }
+      setShown(true);
+      return;
+    }
     const t = clickTarget(wf.xyToHz(x, y, cw, H));   // ★★ the row under the pointer's own scale (#57)
     // ── then writes ──
     if (t.hz !== shownHz || freqUnit !== shownUnit) {

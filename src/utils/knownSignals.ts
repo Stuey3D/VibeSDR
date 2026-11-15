@@ -63,7 +63,7 @@ export interface KnownSignal {
   dialHz: number; mode: string;
   /** Higher wins a collision (PRIO_*). */
   prio: number;
-  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt';
+  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab';   // 'dab' = a Band III block (dabBlockView.ts)
   /** The decoder's settings for this signal, where they are published (curated entries only). */
   preset?: KnownPreset;
 }

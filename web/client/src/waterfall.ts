@@ -61,6 +61,7 @@ import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow, type TunedPick } from '../../../src/utils/tunedStation.ts';
+import { withDabBlocks, isDabBlockSignal, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -302,6 +303,13 @@ export class Waterfall {
    *  main.ts sets it; bump `knownGen` whenever the list changes. */
   knownSignals: readonly KnownSignal[] | null = null;
   knownGen = 0;
+  /** ★★ V12 DAB BLOCK LABELS (src/utils/dabBlockView.ts — Stuart, 2026-11-15, the Almere B210 at 56 MS/s): every Band III
+   *  block as a label row ("DAB 8A — 8A regio Alphen"), set by main.ts while in DAB; null = not in DAB. Laid out with the
+   *  signal labels only while the span shown holds two whole blocks (withDabBlocks), so a narrow radio — or a wide one
+   *  zoomed in — draws none. The block being received is drawn in the tuned colour. Bump `knownGen` when it changes. */
+  dabBlocks: readonly DabBlockSignal[] | null = null;
+  /** The list _drawKnown laid out this frame (the signal labels, with the blocks merged in on a wide DAB view). */
+  private labelList: readonly KnownSignal[] | null = null;
   private knownKey = '';
   private knownPlaced: PlacedLabel[] = [];
   private knownWidth = new Map<string, number>();
@@ -1224,7 +1232,9 @@ export class Waterfall {
       this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
     }
     this.tunedPicked = null;   // ★ made in _drawKnown against this frame's placed labels, else in _drawTuned
-    if (this.knownSignals && this.knownSignals.length && this.spanHz > 0) this._drawKnown(ctx, W, H);
+    this.labelList = this.spanHz > 0 ? withDabBlocks(this.knownSignals, this.dabBlocks, this.spanHz) : null;
+    if (this.labelList && this.labelList.length) this._drawKnown(ctx, W, H);
+    else if (this.knownPlaced.length) { this.knownPlaced = []; this.knownKey = ''; }
     this._drawVfo(ctx, W, H);
   }
 
@@ -1738,8 +1748,11 @@ export class Waterfall {
       this.knownKey = key;
       ctx.save(); ctx.font = font;
       const measure = (t: string) => {
-        let w = this.knownWidth.get(t);
-        if (w === undefined) { w = ctx.measureText(t).width + 6 * dpr; if (this.knownWidth.size > 512) this.knownWidth.clear(); this.knownWidth.set(t, w); }
+        // ★ keyed by dpr too: the font is 10 × dpr, so a width measured on one screen is wrong on the next (a window
+        //   dragged to another display, a phone emulator) — boxes half their text's width overlapped (2026-11-15)
+        const k = `${dpr}|${t}`;
+        let w = this.knownWidth.get(k);
+        if (w === undefined) { w = ctx.measureText(t).width + 6 * dpr; if (this.knownWidth.size > 512) this.knownWidth.clear(); this.knownWidth.set(k, w); }
         return w;
       };
       // The boxes LISTEN (row 0) and RF CENTRE (row 1) draw — markerLabel's own geometry — and the dB axis at the left.
@@ -1751,14 +1764,14 @@ export class Waterfall {
       };
       if (this.vfoHz && !this.vfoHidden) box(0, this.hzToX(this.vfoHz, W), this.liveLabel());
       if (this.rfCenterHz != null) box(1, this.hzToX(this.rfCenterHz, W), `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M${this.rfCenterNote}`);
-      this.knownPlaced = labelLayout(this.knownSignals!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
+      this.knownPlaced = labelLayout(this.labelList!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
       ctx.restore();
     }
     // ★★ V12 the tuned station against the labels placed THIS frame: its own label, or one of these in the tuned colour
     this.tunedPicked = this._pickTuned(this.knownPlaced.map(p => p.sig));
     if (!this.knownPlaced.length) return;
     const hiIdx = this.tunedPicked.highlight;
-    const hiCol = hiIdx >= 0 ? stampColour(this.vfoLiveColor || this.vfoColor, this.lut) : '';
+    const hiCol = stampColour(this.vfoLiveColor || this.vfoColor, this.lut);
     const specH = H - this.wf.height;
     ctx.save();
     ctx.font = font;
@@ -1767,7 +1780,9 @@ export class Waterfall {
     const tickW = Math.max(1, Math.round(dpr));
     for (let pi = 0; pi < this.knownPlaced.length; pi++) {
       const p = this.knownPlaced[pi];
-      const hi = pi === hiIdx;   // ★★ names the station you are tuned to: the tuned label's colour and dark shadow
+      // ★★ names the station you are tuned to — or, in DAB, the block being received: the tuned label's colour and shadow
+      const dabHi = isDabBlockSignal(p.sig) && p.sig.dabCurrent;
+      const hi = pi === hiIdx || dabHi;
       const y = this.markerLabelY(H, p.row);
       const boxTop = y - 9 * dpr, boxBot = y + 4 * dpr;
       ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;

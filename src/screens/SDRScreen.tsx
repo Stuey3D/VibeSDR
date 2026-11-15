@@ -272,6 +272,7 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, type KnownSignal, type KnownAvail } from '../utils/knownSignals';
+import { dabBlockSignals, dabMuxNames } from '../utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
@@ -11938,6 +11939,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [knownLabels, eibiEnabled, eibiBookmarks, serverBookmarks, knownClock, userBookmarks, bookmarkScope, legacyScopes,
       isLocal, route.params.serverType]);
 
+  /* ★★ V12 DAB BLOCK LABELS AND THE BLOCK SWAPPER (utils/dabBlockView.ts — Stuart, 2026-11-15, the Almere B210 at 56 MS/s
+   *  showing all of Band III: "add the spectrum labels to show the blocks and, if in the memory, show the MUX name next to
+   *  it … allow clicking the waterfall to tune to the specific DAB block … simply a block swapper"). While in DAB the
+   *  waterfall gets every block as a label row; it draws them, and takes a tap inside a block, only while the span shown
+   *  holds two whole blocks. Names only from the server: the live ensemble, its block memory (DabState.blocks — kept
+   *  here, as dabState is cleared on each block change) and the last band scan. Rebuilt only when a name or the block
+   *  changes, not on every report. */
+  const dabMemoryRef = useRef<Record<string, string>>({});
+  if (dabState?.blocks && Object.keys(dabState.blocks).length) dabMemoryRef.current = dabState.blocks;
+  const dabCurBlock = dabState?.channel ? dabBlockIndex(dabState.channel) : dabBlock;
+  const dabNames = dabOn ? dabMuxNames({ live: dabState ? { channel: dabState.channel, label: dabState.label } : null,
+                                         memory: dabMemoryRef.current, scan: dabScan?.found ?? null }) : null;
+  const dabNamesKey = dabNames ? `${dabCurBlock}|${[...dabNames].map(([k, v]) => `${k}=${v}`).join('\u0001')}` : '';
+  const dabNamesRef = useRef(dabNames); dabNamesRef.current = dabNames;
+  const dabBlockRows = useMemo(() => (dabNamesRef.current ? dabBlockSignals(dabNamesRef.current, dabCurBlock) : null),
+    [dabNamesKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** A tap inside a block: the MULTIPLEXES pick's own road (dabGoTo — ask before tuning, the shared dial, the server's
+   *  block change and service auto-select). The block already playing: nothing. */
+  const onDabBlockTap = useCallback((i: number) => {
+    const b = DAB_BLOCKS[i];
+    if (!b || !dabOnRef.current) return;
+    markInteract();
+    if (askGate()) return;                     // ★★ ask before tuning — refused before anything moves
+    if (i === dabBlockRef.current) return;
+    dabGoTo(b.hz, -1);
+  }, [dabGoTo, askGate]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   // Push the car browse tree (Bookmarks + Band Plan folders) to the native
   // media-browser service. Bookmarks come from the merged list; the band plan is
   // region-deduped. Native caches it and serves Android Auto / CarPlay; a no-op
@@ -14097,6 +14125,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         dcSpikeHz={dcSpikeShown ? hwDcHz : 0}
         knownSignals={knownSignals}
         onKnownTap={onKnownTap}
+        dabBlocks={dabBlockRows}
+        onDabBlockTap={onDabBlockTap}
       />
       </PanelBoundary>
       </View>
