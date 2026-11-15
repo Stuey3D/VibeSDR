@@ -219,7 +219,7 @@ int main() {
                     if (has(l, 44, 12) || has(l, 43, 9)) ghost = true;
                 }
                 CHECK(!early, "nothing is listed before a code has been read kTiiTrackConfirm times");
-                CHECK(onTime, "★ a steady site is listed on its tenth verdict (~8 s)");
+                CHECK(onTime, "★ a steady site is listed on its seventh verdict (~5.6 s)");
                 CHECK(!ghost, "★ a code read once, and one read for six verdicts running, are never listed");
             }
             // 2. same-comb misreadings: 0D/06 (0011 1010) read now and then as 2B/06 (1001 1010) or 02/06 (0001 1011)

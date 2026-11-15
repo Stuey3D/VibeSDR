@@ -106,15 +106,15 @@ int main() {
             printf("     %-28s listed from verdict %d, on the air in %d%s\n", kv.first.c_str(), kv.second,
                    r.seen.count(kv.first) ? r.seen.at(kv.first) : 0, r.held.count(kv.first) ? ", held at times" : "");
         CHECK(r.verdicts >= 25, "a verdict about every 0.8 s (the whole 25 s capture)");
-        /* ★ Confirmation (kTiiTrackConfirm of kTiiTrackWindow): a steady site is listed on about its tenth verdict and on
-         *  the air in every one after; nothing is listed before the tenth. */
+        /* ★ Confirmation (kTiiTrackConfirm of kTiiTrackWindow): a steady site is listed on about its seventh verdict and
+         *  on the air in every one after; nothing is listed before the seventh. */
         for (const auto& kv : r.first) {
-            const std::string msg = kv.first + " not listed before its tenth verdict";
+            const std::string msg = kv.first + " not listed before its seventh verdict";
             CHECK(kv.second >= kTiiTrackConfirm, msg.c_str());
         }
         for (const auto& w : c.want) {
             const auto f = r.first.find(w), it = r.seen.find(w);
-            const std::string msg = w + " listed by verdict 12 and on the air in every verdict after";
+            const std::string msg = w + " listed by verdict 9 and on the air in every verdict after";
             CHECK(f != r.first.end() && f->second <= kTiiTrackConfirm + 2 && it != r.seen.end()
                   && it->second >= r.verdicts - f->second + 1, msg.c_str());
         }

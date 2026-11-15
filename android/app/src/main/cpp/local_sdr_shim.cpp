@@ -32931,7 +32931,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         };
         if (!h.eid) { const long e = num("\"eid\":"); if (e > 0) h.eid = (uint32_t)e; }
         if (h.ecc < 0) { const long e = num("\"ecc\":"); if (e >= 0) h.ecc = (int)e; }
-        /* ★ The strongest code read in two of the last three verdicts — not the panel's list, which waits ~8 s to confirm
+        /* ★ The strongest code read in two of the last three verdicts — not the panel's list, which waits ~6 s to confirm
          *  a code (TiiTrack, vibe_dab_tii.h, 2026-11-15): a DX visit is often shorter, and logs what it heard. */
         int tm = -1, ts = -1;
         if (g_dab.tiiStrongestRecent(tm, ts)) { h.tiiMain = tm; h.tiiSub = ts; }

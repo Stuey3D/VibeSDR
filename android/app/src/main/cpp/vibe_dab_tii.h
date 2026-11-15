@@ -253,13 +253,16 @@ inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDire
  *  lost" for ever after. Three things now, all here on the server so every client gets the same list:
  *
  *   1. CONFIRMED BEFORE LISTED. A code is listed once it is in kTiiTrackConfirm of the last kTiiTrackWindow verdicts
- *      (10 of 32: the window is ~25 s). From the captures (dab/tii, 2026-11-13: 11A, 12B, 7D, 11D, 10D, 32 verdicts each):
+ *      (7 of 32: the window is ~25 s). From the captures (dab/tii, 2026-11-13: 11A, 12B, 7D, 11D, 10D, 32 verdicts each):
  *      every real site but the weakest is in 30–32 of 32 — Daventry 23/2, Northampton 23/15, Bow Brickhill 22/9, Sandy
- *      Heath 22/3, 1/5 at NNDAB — and Sutton Coldfield 19/18 (real, 1–3 dB) in 16; the only stray (23/5, one verdict of
- *      12B, on a frame where every figure jumped 4 dB) is in 1. So a steady site is listed ~8 s after the block is
- *      tuned (it was ~1.6 s — the trade, stated), a site in half the verdicts in ~16 s, and a code must hold for 10
- *      verdicts of 32 before a panel ever shows it: a few-second flicker never appears. Bow Brickhill on 12B (2–6 dB,
- *      8 of 31) and Zouches Farm 22/14 on 10D (3 of 32) stay unlisted on 25 s; they are at the edge.
+ *      Heath 22/3, 1/5 at NNDAB — Sutton Coldfield 19/18 (real, 1–3 dB) in 16, Bow Brickhill on 12B (2–6 dB) in 8 of 31;
+ *      the only stray (23/5, one verdict of 12B, on a frame where every figure jumped 4 dB) is in 1.
+ *      ★ WHY 7 (2026-11-15). 10 was tried first and lost Bow Brickhill on 12B — a real weak site, and to a DX listener a
+ *      weak site is worth more than a rare ghost costs; the same-comb rule (2) now takes the misreadings the Almere list
+ *      was full of. 7 is the LOWEST that never lists a code read six verdicts running (~5 s) and gone: the flicker the
+ *      owner's recording showed. At 7 a steady site is listed ~5.6 s after the block is tuned (it was ~1.6 s under 2 of
+ *      3 — the trade, stated), Sutton Coldfield at verdict 15 (~12 s), Bow Brickhill on 12B at 18 (~14 s; 8 of 32 listed
+ *      it only at 30). Zouches Farm 22/14 on 10D (3 of 32) stays unlisted: it is at the very edge.
  *   2. SAME-COMB MISREADINGS. Table 26's patterns are the 70 bytes with four ones; a weak site whose comb loses one of
  *      its four blocks under a noise peak is read as the pattern with that block swapped — another Main Id sharing
  *      THREE blocks with it. The 15th's three are exactly that: 2B (1001 1010) and 02 (0001 1011) each share three of
@@ -279,7 +282,7 @@ inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDire
  *  The list is in the order codes were confirmed, so lines do not jump. A block change starts it afresh; a re-acquire
  *  on the same block (the verdict count starting again) does not. Times are the caller's milliseconds. */
 static constexpr int     kTiiTrackWindow   = 32;      ///< verdicts (~25 s)
-static constexpr int     kTiiTrackConfirm  = 10;      ///< own sightings in the window to be listed
+static constexpr int     kTiiTrackConfirm  = 7;       ///< own sightings in the window to be listed (why 7: above)
 static constexpr int     kTiiLiveWindow    = 3;       ///< listed and seen in one of the last 3 verdicts = on the air
 static constexpr int64_t kTiiStallMs       = 5000;    ///< no verdict for this long: every line is "signal lost"
 static constexpr int64_t kTiiExpireMs      = 5 * 60 * 1000;   ///< unseen this long: the line is removed
@@ -364,7 +367,7 @@ public:
         return out;
     }
     /** ★ The strongest code read in two of the last three verdicts, listed or not — for a DX scan's short visit,
-     *  which logs the transmitter it heard and cannot wait the ~8 s a line takes (local_sdr_shim's DX log). */
+     *  which logs the transmitter it heard and cannot wait the ~6 s a line takes (local_sdr_shim's DX log). */
     bool strongestRecent(TiiHit& out) const {
         bool any = false;
         for (const auto& e : e_) {
