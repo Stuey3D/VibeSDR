@@ -67,6 +67,7 @@ public:
         std::function<void(const std::string&)> json;       ///< a JSON text frame
         std::function<void(const rttysk::Spot&, double rfHz)> spot;
         std::function<void(uint64_t ns)> cpu;               ///< the workers' CPU, added to the host's (health)
+        std::function<void(const std::string&)> log;        ///< ★ one line per signal set (which settings are on the air)
     };
     RttySkimRun(double widthHz, int workers, Out out) : width_(widthHz), out_(std::move(out)) {
         nWorkers_ = std::max(1, std::min(8, workers));
@@ -114,6 +115,15 @@ private:
         c.maxSignals = std::max(16, std::min(64, (int)(2.0 * half() / 400.0)));
         std::shared_ptr<rttysk::Skimmer> s(new rttysk::Skimmer(c));
         s->onSpot = [this](const rttysk::Spot& sp) { onSpot(sp); };
+        // ★ ONE LOG LINE PER SIGNAL SET (Stuart, 2026-11-15: "pull the logs off the lenovo to confirm" 45/170 is what
+        //   everybody uses — the log had nothing to count): its frequency, settings, and whether the first try found them
+        s->onSet = [this](const rttysk::SignalView& v, bool firstTry, double secs) {
+            if (!out_.log) return;
+            char b[160];
+            std::snprintf(b, sizeof b, "RTTY skimmer: %.2f kHz %s — set %.1f s after it was listed (%s)", rf(v.offsetHz) / 1000.0,
+                          v.settings.c_str(), secs, firstTry ? "first try, 45 baud" : "full search");
+            out_.log(b);
+        };
         s->onWork = [this] { { std::lock_guard<std::mutex> lk(m_); ++wake_; } cv_.notify_one(); };
         { std::lock_guard<std::mutex> lk(m_); sk_ = s; }   // ★ workers hold their own reference: the old one dies with its last job
         lastList_.clear(); pinned_.clear();

@@ -64,6 +64,7 @@ constexpr int    kW = 2;                // a tone's power: ±2 bins (≈ ±12 Hz
 constexpr double kLostSec = 6.0;        // tones under the floor this long: the signal has gone
 constexpr double kProbeMinSec = 1.5;    // channel seconds before the alternation test is read
 constexpr double kProbeMaxSec = 4.0;    // …and the longest a candidate is tested before it is dropped
+constexpr unsigned long kFastGood = 6;   // ★ the early try's clean frames (all of them clean) — see search()
 constexpr double kRejectHoldSec = 30.0; // a pair that did not alternate is not tried again for this long
 constexpr int    kMaxShowCarry = 600;
 
@@ -202,6 +203,7 @@ struct Job {
     uint64_t endSample = 0;       // the channel sample just after the copy
     double centre = 0, shift = 0; // audio Hz at kChRate
     bool requeue = false;
+    bool fastOnly = false;        // ★ the early first try: 45.45 only, nothing found unless it frames cleanly
     // the result
     bool found = false;
     rttyscore::Setting win{};
@@ -219,6 +221,7 @@ struct Skimmer::Impl {
         int k0 = 0; double delta = 0;    // the channel's centre bin, and fc − k0·Δ
         std::vector<float> mask;
         double strength = 0;             // dB, the weaker tone over the floor (as last measured)
+        double heardDb = 0;              // ★ …as last HEARD (strength while the tones were up) — what the row shows
         double lo = 0, hi = 0, fitErr = 0;   // the tones as found, and how far their spacing was from the standard shift
         double bornSec = 0, listedSec = -1, setSec = -1, quietSec = 0;
         bool catchup = true;
@@ -231,7 +234,7 @@ struct Skimmer::Impl {
         double n = 0, sm = 0, ss = 0, smm = 0, sss = 0, sms = 0;
         double alt = 0;
         // parameters
-        bool queued = false;
+        bool queued = false, fastTried = false;
         int searches = 0;
         std::unique_ptr<FskDecoder> dec;
         rttyscore::Setting st{};
@@ -271,7 +274,7 @@ struct Skimmer::Impl {
     std::vector<std::unique_ptr<Sig>> sigs, gone;
     std::vector<std::pair<double, double>> holdOff;   // (Hz, until)
     int nextId = 1;
-    uint64_t rejected = 0, notRttyN = 0, suppressed = 0, requeuesN = 0, reusedN = 0, mergedN = 0, splitsN = 0;
+    uint64_t earlyMissN = 0, rejected = 0, notRttyN = 0, suppressed = 0, requeuesN = 0, reusedN = 0, mergedN = 0, splitsN = 0;
     std::atomic<uint64_t> jobsRunN{0};
     // ★ the queue — the only lock, taken a handful of times per signal, never per hop
     mutable std::mutex jm;
@@ -619,6 +622,9 @@ struct Skimmer::Impl {
         const double own = std::min(excessAt(g.fc - g.shift / 2), excessAt(g.fc + g.shift / 2));
         g.strength = 10 * std::log10(1 + std::max(0.0, own));
         if (own < 0.26) g.quietSec += H / cfg.rate; else g.quietSec = 0;   // ★ both tones within 1 dB of the floor
+        // ★ THE ROW'S LEVEL (Stuart's 40 m screenshot, 2026-11-15: most rows "+0 dB"): a station in receive between overs
+        //   measures nothing; the row keeps what it was HEARD at, smoothed over a few hops while it transmits
+        if (own >= 0.26) g.heardDb = g.heardDb <= 0 ? g.strength : g.heardDb + (g.strength - g.heardDb) * 0.2;
         if (g.stage == Sig::Cand) {
             if (chanSec(g) < kProbeMinSec || g.n < 20) return;
             const double vm = g.smm / g.n - (g.sm / g.n) * (g.sm / g.n), vs = g.sss / g.n - (g.ss / g.n) * (g.ss / g.n);
@@ -663,7 +669,10 @@ struct Skimmer::Impl {
         }
         if (g.quietSec < 0.5) g.lastMs = nowMs();
         if (g.stage == Sig::Listed) {
-            if (!g.queued && chanSec(g) >= cfg.jobSec) enqueue(g, false);
+            if (!g.queued) {
+                if (!g.fastTried && cfg.fastSec < cfg.jobSec && chanSec(g) >= cfg.fastSec) enqueue(g, false, true);
+                else if (chanSec(g) >= cfg.jobSec) enqueue(g, false);
+            }
             return;
         }
         // ── Set: the text gate, and frames going bad ──
@@ -701,9 +710,10 @@ struct Skimmer::Impl {
     }
 
     // ── the queue ──
-    void enqueue(Sig& g, bool again) {
+    void enqueue(Sig& g, bool again, bool fastOnly = false) {
         auto j = std::make_shared<Job>();
-        j->sigId = g.id; j->strength = g.strength; j->requeue = again;
+        j->sigId = g.id; j->strength = g.strength; j->requeue = again; j->fastOnly = fastOnly;
+        if (fastOnly) g.fastTried = true;
         const size_t cap = g.ring.size();
         // ★ the whole store on a first search (the signal from when it was first heard); the last jobSec + 2 s on a
         //   repeat (the frames that went bad are the station's NEW settings)
@@ -772,8 +782,15 @@ struct Skimmer::Impl {
             const auto& d = *c[(size_t)b].d;
             // ★ "frames cleanly": the winner rule, AND eight good frames for every bad one
             if (sc[(size_t)b] >= 12 && sc[(size_t)b] >= sc[(size_t)o] + 6 && d.goodFrames() >= 8 * std::max(1ul, d.framingErrors())) win = b;
+            // ★ THE EARLY TRY (fastSec, ≈ 2 s ≈ 12 characters at 45.45): a clean signal has framed 7–10 by then (the 40 m
+            //   capture), short of the score of 12 — so EVERY frame clean, at least kFastGood, and the other polarity
+            //   nowhere. A 50 or 75 baud signal read at 45.45 breaks frames within a few characters (the mixed windows).
+            else if (j.fastOnly && d.framingErrors() == 0 && d.goodFrames() >= kFastGood
+                     && c[(size_t)o].d->goodFrames() * 4 <= d.goodFrames()) win = b;
         }
-        // 2. the full contest — only when the fast path did not frame cleanly
+        // 2. the full contest — only when the fast path did not frame cleanly (an early first try stops here: the signal
+        //    waits for jobSec and comes back with the whole store)
+        if (win < 0 && j.fastOnly) return;
         if (win < 0) {
             for (int i = 0; i < n; ++i) if (!c[(size_t)i].ran) { runC(i); sc[(size_t)i] = score(i); }
             win = rttyscore::pickWinner(all.data(), sc.data(), n);
@@ -795,6 +812,7 @@ struct Skimmer::Impl {
             for (auto& s : sigs) if (s->id == j->sigId && s->active) { g = s.get(); break; }
             if (!g || g->stage != Sig::Listed || !g->queued) continue;
             g->queued = false; ++g->searches;
+            if (!j->found && j->fastOnly) { ++earlyMissN; continue; }   // ★ not 45.45 (or not yet clean): the full contest at jobSec
             if (!j->found) {
                 // ★ NOT RTTY: nothing framed at any setting — dropped, and not tried again here for a while
                 ++notRttyN;
@@ -825,6 +843,7 @@ struct Skimmer::Impl {
             feedDec(*g);
             if (!g->pend.empty()) { show(*g, g->pend); g->pend.clear(); }
             g->lastGood = g->dec->goodFrames(); g->lastBad = g->dec->framingErrors();
+            if (owner->onSet) owner->onSet(view(*g), j->fastOnly, g->setSec - g->listedSec);
         }
     }
 
@@ -1024,7 +1043,7 @@ struct Skimmer::Impl {
         v.id = g.id; v.offsetHz = g.fc; v.shiftHz = g.shift; v.active = g.active;
         v.set = g.stage == Sig::Set || (!g.active && !g.settings.empty());
         if (v.set) { v.baud = g.st.baud; v.reverse = g.st.inv; v.oneStop = g.st.oneStop; v.settings = g.settings; }
-        v.snrDb = (float)g.strength; v.quality = (float)std::max(0.0, std::min(1.0, g.fq));
+        v.snrDb = (float)(g.heardDb > 0 ? g.heardDb : g.strength); v.quality = (float)std::max(0.0, std::min(1.0, g.fq));
         v.firstMs = g.firstMs; v.lastMs = g.lastMs; v.call = g.call; v.text = g.text; v.chars = g.chars;
         if (v.text.size() > 400) v.text.erase(0, v.text.size() - 400);
         return v;
@@ -1072,6 +1091,7 @@ uint64_t Skimmer::candidatesRejected() const { return d_->rejected; }
 uint64_t Skimmer::notRtty() const { return d_->notRttyN; }
 uint64_t Skimmer::jobsRun() const { return d_->jobsRunN.load(); }
 uint64_t Skimmer::requeues() const { return d_->requeuesN; }
+uint64_t Skimmer::earlyMisses() const { return d_->earlyMissN; }
 uint64_t Skimmer::rowsReused() const { return d_->reusedN; }
 uint64_t Skimmer::rowsMerged() const { return d_->mergedN; }
 uint64_t Skimmer::rowsSplit() const { return d_->splitsN; }

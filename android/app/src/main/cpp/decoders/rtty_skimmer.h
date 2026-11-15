@@ -25,7 +25,8 @@
 // ── 2. Then set each signal's parameters (a queue, run by workers) ────────────────────────────────────────────────
 //   • Listed signals with a few seconds stored queue, STRONGEST FIRST. A worker (workOnce(), on the CALLER's thread —
 //     nothing here makes threads) takes one and runs over a COPY of its stored channel, much faster than real time:
-//       1. the fast path — 45.45 baud at the measured shift, normal and reverse (1.5 stop);
+//       1. the fast path — 45.45 baud at the measured shift, normal and reverse (1.5 stop) — tried EARLY, once
+//          Config::fastSec is stored (most RTTY on the air is 45/170); a clean win sets it there and then;
 //       2. only if that does not frame cleanly, the full contest (rttyscore::all(): 45.45 / 50 / 75 baud, 1 or 1.5 stop,
 //          both polarities) scored as RTTY AUTO scores (frames passing the start/stop check against frames failing).
 //   • The winner is SET for that signal: its decoder (already through the stored audio) is handed back, caught up from
@@ -72,7 +73,7 @@ struct SignalView {
     double  baud = 0;       ///< 45.45 / 50 / 75 once set
     bool    reverse = false, oneStop = false;
     std::string settings;   ///< "45 baud / 170 Hz / Reverse" once set ("" before)
-    float   snrDb = 0;      ///< the weaker tone over the floor, dB
+    float   snrDb = 0;      ///< the weaker tone over the floor, dB — as last HEARD (a station listening keeps its level)
     float   quality = 0;    ///< 0..1 (framing, once set)
     int64_t firstMs = 0, lastMs = 0;
     std::string call;
@@ -105,7 +106,12 @@ public:
          *  alone keeps noise silent. */
         double alternation = 0.35;
         double storeSec = 10;           ///< each listed signal's stored channel
-        double jobSec = 4;              ///< stored before its parameters are searched for
+        double jobSec = 4;              ///< stored before its parameters are searched for (the full contest)
+        /** ★★ THE FIRST TRY, EARLIER (Stuart, 2026-11-15: "170Hz 45 baud seems to be the rate everybody uses" — every
+         *  row on 40 m that morning, and all 30 of the 2026-11-14 capture): 45.45 baud at the measured shift, both
+         *  polarities, is tried once this much is stored. Only a clean win sets it; anything else waits for jobSec and the
+         *  full contest exactly as before. ≥ jobSec turns it off. */
+        double fastSec = 2;
         double notRttyHoldSec = 90;     ///< a centre that would not frame is not tried again for this long
     };
     explicit Skimmer(const Config& c);
@@ -127,6 +133,9 @@ public:
     /** Shown text as it is committed, per SET signal (the settings line included). */
     std::function<void(int id, double offsetHz, const std::string& text)> onText;
     std::function<void(const Spot&)> onSpot;
+    /** A signal's settings found: its row, whether the 45.45 first try found them (false = the full contest), and the
+     *  seconds from listed to set — for the server's log (which settings are actually on the air). Feeding thread. */
+    std::function<void(const SignalView& v, bool firstTry, double listedToSetSec)> onSet;
 
     /** Listed signals: active first (lowest offset first), then the recently gone (newest first). */
     std::vector<SignalView> signals(bool includeGone = true) const;
@@ -149,6 +158,7 @@ public:
     uint64_t notRtty() const;              ///< listed signals that would not frame at any setting
     uint64_t jobsRun() const;
     uint64_t requeues() const;
+    uint64_t earlyMisses() const;   ///< early 45.45 tries that did not set (the signal waited for the full search)
     uint64_t rowsReused() const;    ///< pairs that took a quiet row back
     uint64_t rowsMerged() const;    ///< rows joined by their callsign
     uint64_t rowsSplit() const;     ///< returning rows that turned out to be another station

@@ -248,6 +248,32 @@ static void changeOfSettings() {
 
 /** ★★ ONE ROW PER STATION (Stuart, 2026-11-14): a station that pauses between overs keeps its row; a call heard again
  *  after it moved joins its row; and two DIFFERENT stations in turn on (nearly) the same frequency stay two rows. */
+/** ★★ THE EARLY FIRST TRY (Stuart, 2026-11-15: 45/170 is what everybody uses): a clean 45/170 station is set within
+ *  a second of being listed (it was ≈ 2.5 s — the full search waited for 4 s of channel); a 50 baud one is NOT taken
+ *  for 45.45 by the early try, and is still set right by the full search. The 40 m capture: median 2.5 → 0.5 s. */
+static void earlyFirstTry() {
+    const double rate = 24000;
+    for (int k = 0; k < 2; ++k) {
+        RSig a; a.hz = 2000; a.startSec = 1;
+        a.text = "CQ CQ TEST G4ABC G4ABC TEST QRZ? 599 001 001 TU G4ABC TEST\n";
+        if (k == 1) { a.baud = 50; a.rev = true; }
+        const auto x = synth({ a }, {}, rate, 50, 20);
+        rttysk::Skimmer sk(cfgFor(rate)); feed(sk, x, 0);
+        const auto v = sk.signals(true);
+        const rttysk::SignalView* f = v.empty() ? nullptr : &v[0];
+        double ls = -1, ss = -1; if (f) sk.timesOf(f->id, ls, ss);
+        char m[160];
+        if (k == 0) {
+            std::snprintf(m, sizeof m, "early try: a clean 45/170 station set %.2f s after it was listed (≤ 1 s), %s", ss - ls, f ? f->settings.c_str() : "none");
+            ok(f && f->set && std::fabs(f->baud - 45.45) < 0.1 && !f->reverse && ls >= 0 && ss - ls <= 1.0, m);
+        } else {
+            std::snprintf(m, sizeof m, "early try: a 50 baud reverse station is not taken for 45.45 — set %s (%llu early miss)", f ? f->settings.c_str() : "none",
+                          (unsigned long long)sk.earlyMisses());
+            ok(f && f->set && std::fabs(f->baud - 50) < 0.1 && f->reverse, m);
+        }
+    }
+}
+
 static void oneRowPerStation() {
     const double rate = 24000;
     auto rowsWith = [](const std::vector<rttysk::SignalView>& v, const char* call) {
@@ -258,9 +284,11 @@ static void oneRowPerStation() {
         const auto x = synth({ a, b }, {}, rate, 50, 31);
         rttysk::Skimmer sk(cfgFor(rate)); feed(sk, x, 0);
         const auto v = sk.signals(true);
-        ok(rowsWith(v, "G4ABC") == 1 && sk.rowsReused() >= 1 && sk.jobsRun() == 1,
+        // ★ searched ONCE: an early 45.45 try that did not set is not a search (it waited for the full one)
+        const uint64_t searched = sk.jobsRun() - sk.earlyMisses();
+        ok(rowsWith(v, "G4ABC") == 1 && sk.rowsReused() >= 1 && searched == 1,
            "a station back after a 15 s pause (+10 Hz): ONE row (" + std::to_string(rowsWith(v, "G4ABC")) + "), taken back "
-           + std::to_string(sk.rowsReused()) + "×, searched " + std::to_string(sk.jobsRun()) + "× (not again)");
+           + std::to_string(sk.rowsReused()) + "×, searched " + std::to_string(searched) + "× (not again)");
     }
     {   // the same call 400 Hz away after a pause: the callsign joins the rows
         RSig a; a.hz = 2000; a.startSec = 1; a.endSec = 16; a.text = "CQ TEST G4ABC G4ABC TEST\n";
@@ -543,6 +571,7 @@ int main(int argc, char** argv) {
         mixedWindow(4, false);
         noiseForcedOpen();
         changeOfSettings();
+        earlyFirstTry();
         oneRowPerStation();
         weaker();
         hostPath();

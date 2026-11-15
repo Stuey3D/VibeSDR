@@ -1181,6 +1181,7 @@ private:
             if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
         };
         o.cpu = [this](uint64_t ns) { cpuNs_.fetch_add(ns, std::memory_order_relaxed); };
+        o.log = [this](const std::string& l) { log(l); };
         const int nw = env_.rttySkimWorkers ? env_.rttySkimWorkers() : rttySkimDefaultWorkers();
         rttySkim_.reset(new RttySkimRun(w, nw > 0 ? nw : rttySkimDefaultWorkers(), std::move(o)));
         cwWidth_.store(w, std::memory_order_relaxed);

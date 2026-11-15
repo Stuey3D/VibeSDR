@@ -84,3 +84,10 @@ gate (no text on noise / non-RTTY data modes), and the CPU on the Pi 2 and the R
   candidates waits for its own alternation test. Without these, 30 signals in 24 kHz lost 6 and 96 kHz grew 3 false ones.
 - Tests: `vibeserver/test-rtty-skimmer.cpp`, `scripts/test-server-rtty-skim.mjs`, `scripts/test-web-rtty-skim.mjs`,
   `scripts/test_cw_list.ts`, handheld-ui `cw_log_test`.
+- ★★ **The early first try (2026-11-15, Stuart: "170Hz 45 baud seems to be the rate everybody uses" — every row on
+  40 m that morning, all 30 of the 11-14 capture):** 45.45 baud at the measured shift, both polarities, is tried once
+  2 s of channel is stored (`Config::fastSec`), not 4. It sets only if EVERY frame is clean, at least 6 of them, and the
+  other polarity is nowhere; otherwise the signal waits for the full contest at 4 s exactly as before. 40 m capture:
+  listed → set median **2.5 s → 0.5 s**, same 30 signals, same 20 calls, same text. A 50 baud reverse station is not
+  taken for 45.45 (test). The server logs one line per signal set (frequency, settings, first try or full search), and a
+  row keeps the level it was last HEARD at (stations between overs no longer show +0 dB).
