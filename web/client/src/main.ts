@@ -124,6 +124,7 @@ import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBand
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, type KnownSignal, type KnownAvail } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
+import { tunedLabel, utcMinutes, TUNED_SETTLE_MS, TUNED_TOL_HZ, type TunedRow } from '../../../src/utils/tunedStation';   // ★★ the tuned station's label at the VFO
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
@@ -4664,7 +4665,53 @@ function fitVtsDrops() {
 // A rotate or a window resize changes the answer even when nothing on the pill has.
 window.addEventListener('resize', () => { vtsFitSig = ''; });
 
+/* ★★ V12 THE TUNED STATION'S LABEL AT THE VFO (src/utils/tunedStation.ts — Stuart, 2026-11-15: "When the VTS disappears
+ *  can we have a label on the VFO with the current station name … [EiBi] China Radio Int / [Server] Radio Caroline / [User]
+ *  Flex FM"). Worked out after every updateVts (every tune, RDS message, DAB / DRM state and the bar's own timers — so
+ *  the moment the bar lets a bookmark's name go, the label takes it) and once the dial has RESTED TUNED_SETTLE_MS: none
+ *  while it moves, so a sweep never flickers a name per channel. The VTS's own lists — yours, the server's, the schedule
+ *  (on air now: the server's rows carry their hours) — and none while a live RDS / DAB / DRM name owns the bar. */
+let tunedHz = -1;
+let tunedRestAt = 0;
+let tunedTimer: ReturnType<typeof setTimeout> | null = null;
+let tunedQueued = false;
+function queueTunedLabel() {
+  if (tunedQueued) return;
+  tunedQueued = true;
+  queueMicrotask(() => { tunedQueued = false; syncTunedLabel(); });
+}
+/** The candidates within the tolerance only — the schedule is ~10k rows, and only the few near the dial are copied. */
+function tunedRowsNear(hz: number): TunedRow[] {
+  const out: TunedRow[] = [];
+  const near = (f: number) => Math.abs(f - hz) <= TUNED_TOL_HZ;
+  for (const b of getBookmarks()) if (near(b.frequency)) out.push({ frequency: b.frequency, name: b.name, source: 'user', mode: b.mode });
+  for (const b of getServerBookmarks()) if (near(b.frequency)) out.push({ frequency: b.frequency, name: b.name, source: 'server', mode: b.mode });
+  for (const st of getStations()) if (near(st.frequency))
+    out.push({ frequency: st.frequency, name: st.name, source: st.source === 'server' ? 'server' : 'eibi', comment: st.comment, mode: st.mode });
+  return out;
+}
+function syncTunedLabel() {
+  if (!wf) return;
+  const hz = spec?.frequency ?? 0;
+  const now = Date.now();
+  if (hz !== tunedHz) {
+    tunedHz = hz; tunedRestAt = now + TUNED_SETTLE_MS;
+    if (tunedTimer) clearTimeout(tunedTimer);
+    tunedTimer = setTimeout(() => { tunedTimer = null; syncTunedLabel(); }, TUNED_SETTLE_MS + 20);
+  }
+  const settled = hz > 0 && now >= tunedRestAt;
+  const liveName = rdsName
+    || (dabOn && dabState?.sid ? (dabState.services.find(x => x.sid === dabState!.sid)?.label || 'DAB') : '')
+    || (spec?.mode === 'drm' && drmState?.locked ? drmState.label || '' : '');
+  const vtsEl = document.getElementById('vts');
+  const vtsShowing = !!vtsEl && vtsEl.classList.contains('show') && !!($('vtsName').textContent || '').trim();
+  const text = settled && !liveName && !vtsShowing
+    ? tunedLabel(tunedRowsNear(hz), hz, utcMinutes(), { liveName, vtsShowing, settled }) : null;
+  wf.tunedLabel = text || '';
+}
+
 function updateVts() {
+  queueTunedLabel();
   expireRdsIfRetuned();
   clearNavtexIfRetuned();   // ★ every tune lands here — NAVTEX clears at once, not only when the next character arrives
   syncDecIdentity();   // ★ the decoder header follows the CURRENT station — see syncDecIdentity

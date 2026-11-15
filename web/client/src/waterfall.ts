@@ -60,6 +60,7 @@ import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRo
 import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
+import { tunedLabelX } from '../../../src/utils/tunedStation.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -261,6 +262,11 @@ export class Waterfall {
    *  `vfoWideLabel` replaces "LISTEN …" ("DAB 7D · 194.064M"). Drawn only — nothing here is ever sent. */
   vfoWide = false;
   vfoWideLabel = '';
+  /** ★★ V12 THE TUNED STATION'S LABEL (src/utils/tunedStation.ts — "[EiBi] China Radio Int"), set by main.ts once the VTS
+   *  has let the name go; '' = none. Drawn beside the selected needle, one row below its LISTEN readout. */
+  tunedLabel = '';
+  /** Where the last frame drew it (device px) — for the drivers (scripts/test-web-tuned-label.mjs). */
+  tunedDrawn: { x: number; y: number; w: number; h: number; text: string } | null = null;
   /** What the last frame drew for the selected needle's passband (device px) — for the drivers (scripts/test-web-dab-vfo.mjs). */
   vfoDrawn: { loX: number; hiX: number; nX: number; W: number; fill: boolean; frost: boolean; label: string } | null = null;
   /** ★ Appended to the RF CENTRE label — e.g. " — controlled by VibeClarity" when the suite is
@@ -1365,6 +1371,39 @@ export class Waterfall {
     if (v2 && v2.hz) this._drawNeedle(ctx, W, H, v2.hz, v2.lo, v2.hi, v2.col, v2.label, v2.alpha, false, v2.parked, 2);
     this._drawNeedle(ctx, W, H, this.vfoHz, this.filterLow, this.filterHigh, this.vfoLiveColor || this.vfoColor,
                      this.liveLabel(), this.vfoLiveAlpha, true, false, 0);
+    this._drawTuned(ctx, W, H);
+  }
+
+  /** ★★ V12 THE TUNED STATION'S LABEL (src/utils/tunedStation.ts — Stuart, 2026-11-15: "When the VTS disappears can we
+   *  have a label on the VFO with the current station name"). One row BELOW LISTEN — the top of the waterfall with the
+   *  spectrum on (LISTEN sits just above the boundary), under the DC spike's row without it — so it never covers the
+   *  frequency readout. The scale stamps' look: the VFO colour, white where that clashes with the palette (stampColour),
+   *  a dark shadow, on markerLabel's dark box. Beside the needle, flipped left at the right edge, kept on screen. */
+  private _drawTuned(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    this.tunedDrawn = null;
+    const text = this.tunedLabel;
+    if (!text || !this.vfoHz) return;
+    const nX = this.hzToX(this.vfoHz, W);
+    if (nX < 0 || nX > W) return;
+    const dpr = renderDpr();
+    const specH = H - this.wf.height;
+    const y = specH > 40 * dpr && this._showSpec ? specH + 15 * dpr : this.markerLabelY(H, 5);
+    ctx.save();
+    ctx.font = `bold ${10 * dpr}px ui-monospace, Menlo, monospace`;
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    const tw = ctx.measureText(text).width, pad = 4 * dpr, bw = Math.min(W - 4 * dpr, tw + 2 * pad), bh = 14 * dpr;
+    const bx = tunedLabelX(nX, bw, W, 6 * dpr, 2 * dpr);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(bx, y - 10 * dpr, bw, bh);
+    ctx.beginPath(); ctx.rect(bx, y - 10 * dpr, bw, bh); ctx.clip();
+    ctx.shadowColor = 'rgba(0,0,0,0.95)';
+    ctx.shadowOffsetX = 0; ctx.shadowOffsetY = Math.max(1, Math.round(dpr));
+    ctx.shadowBlur = NO_GLOW ? 0 : Math.round(2 * dpr);
+    ctx.fillStyle = stampColour(this.vfoLiveColor || this.vfoColor, this.lut);
+    ctx.fillText(text, bx + pad, y);
+    ctx.restore();
+    this.tunedDrawn = { x: bx, y: y - 10 * dpr, w: bw, h: bh, text };
   }
 
   /** The selected needle's label: VFO A/B's, else a whole-channel mode's ("DAB 7D · 194.064M"), else LISTEN. */

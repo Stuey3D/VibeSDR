@@ -588,6 +588,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    Edge, --mute-audio, the real server. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-web-waterfall-history.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 THE TUNED STATION'S LABEL on the web waterfall (headless Edge, --mute-audio, no server): drawn at phone, tablet
+#    and desktop widths, spectrum on and off, beside the needle, on screen at both edges, never over LISTEN's readout.
+node scripts/test-web-tuned-label.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 the full-capture row (SPWB): only to a socket that asked `wide=1`, only while zoomed, one per 8 SPEC frames, no
 #    extra frames, the capture's centre/span, a one-bin carrier outside the view kept. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-wide-rows.mjs; rc=$?

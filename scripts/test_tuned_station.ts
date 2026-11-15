@@ -36,6 +36,8 @@ const two: TunedRow[] = [
 ok(tunedStation(two, 100_000_000, 0)?.name === 'Near', 'nearest within a source; the first listed on a tie');
 ok(tunedStation([{ frequency: 1e6, name: 'x', source: 'heard' }, { frequency: 1e6, name: '  ', source: 'user' }], 1e6, 0) === null,
    'an unknown source or a blank name is no candidate');
+ok(tunedStation([{ frequency: 225_648_000, name: 'BBC Radio 1', source: 'server', mode: 'dab' }], 225_648_000, 0) === null,
+   'a DAB service is no candidate (its block\'s frequency names none of them)');
 
 console.log('tolerance');
 let vtsOn = NaN;

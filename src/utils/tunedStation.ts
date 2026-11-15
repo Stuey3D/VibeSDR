@@ -28,6 +28,8 @@ export interface TunedRow {
   frequency: number;
   name: string;
   source?: string;
+  /** A DAB service ("dab") is skipped: its frequency is its multiplex's, shared with every other service in the block. */
+  mode?: string;
   /** EiBi: the server's "HHMM-HHMM · E" (time + language) — the time decides whether it is on air now. */
   comment?: string;
 }
@@ -53,7 +55,8 @@ function sourceOf(s: string | undefined): TunedSource | null {
 /**
  * The station the dial is ON, or null: the best-ranked source within `tolHz` (user → server → EiBi), the nearest within
  * a source, the first listed on an exact tie. An EiBi row off air at `nowMin` (minutes past 00:00 UTC) is not a candidate;
- * a row with no name, no usable frequency or an unknown source is skipped.
+ * a row with no name, no usable frequency or an unknown source is skipped, and so is a DAB service (mode "dab" — the
+ * block's frequency names none of its services; in DAB the playing service is the live name anyway).
  */
 export function tunedStation(rows: readonly TunedRow[], dialHz: number, nowMin: number,
                              tolHz: number = TUNED_TOL_HZ): TunedStation | null {
@@ -62,7 +65,7 @@ export function tunedStation(rows: readonly TunedRow[], dialHz: number, nowMin: 
   let bestRank = 9, bestOff = Infinity;
   for (const r of rows) {
     const src = sourceOf(r.source);
-    if (!src || !(r.frequency > 0)) continue;
+    if (!src || !(r.frequency > 0) || r.mode === 'dab') continue;
     const off = Math.abs(r.frequency - dialHz);
     if (!(off <= tolHz)) continue;
     const name = String(r.name ?? '').trim();
