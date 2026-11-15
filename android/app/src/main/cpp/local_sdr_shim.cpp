@@ -32509,7 +32509,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ADC peaking at -32 to -36 dBFS; the hop saw no peaks, ended in 0.3 s, the AGC never climbed and the memory learned
      *  3.7 dB again — stuck). The wait also lasts until the ADC peak is at least kDxQuietDbfs (the AGC's "recovering"
      *  takes ~5 dB a second), or the gain is at its ceiling. */
-    static constexpr double kDxQuietDbfs = -20.0;
+    static constexpr double kDxQuietDbfs = -20.0, kDxFreshS = 1.5;
     void dxGainEnter(int key, const char* what) {
         int steps = -1;
         if (auto it = dxGainMem_.find(key); it != dxGainMem_.end()) steps = it->second;
@@ -32533,7 +32533,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (cleanSince < 0) cleanSince = t;
             const bool loudEnough = g_adcPeakDbfs.load(std::memory_order_relaxed) >= kDxQuietDbfs
                                     || g_ovlSteps.load(std::memory_order_relaxed) <= 0;
-            if (t - cleanSince >= kDxGainCleanS && loudEnough) break;
+            // ★ and never on the previous hop's reading: the ADC figures are 1-s windows (the Sony 01:39 — 105.5 left at
+            //   once on 104.85's -6.6 dBFS and then saw -32.6), so nothing is judged before kDxFreshS
+            if (t - t0 >= kDxFreshS && t - cleanSince >= kDxGainCleanS && loudEnough) break;
         }
     }
     /** ★ DIAGNOSTIC (2026-11-15, the Sony's 104-108 MHz hops: 53 % on the rail at a commanded 3.7 dB, which a broadcast
@@ -32548,6 +32550,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void dxGainLearn(int key) {
         dxGainTrace(key, "end", -1);
         if (g_adcClipRun.load(std::memory_order_relaxed) > 0) return;   // ★ never remember a gain that ended on the rail
+        // ★ …nor one that ended too quiet to show a station (it would seed the next visit just as deaf)
+        if (g_adcPeakDbfs.load(std::memory_order_relaxed) < kDxQuietDbfs && g_ovlSteps.load(std::memory_order_relaxed) > 0) return;
         dxGainMem_[key] = g_ovlSteps.load(std::memory_order_relaxed);
     }
     std::vector<vibe::dx::FmHit> dxPrevHits_;   // ★ the previous hop's hits (vibe_dxscan.h spillOf / markSpill)
