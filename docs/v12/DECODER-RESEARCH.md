@@ -629,6 +629,40 @@ SDRplay is a driver test bench, not a product, but it shows that the bandwidth i
 
 ## 5. Signal identification and tags
 
+> **Status: paused 2026-10-29 (Stuart: decoders come first).** No code has been written yet. Branch `v12-signal-tags`
+> (from `adfb37d0c`) has this note only. What the survey of the code found, so the next pass can start straight away:
+>
+> - **Stage-1 hook (server):** `LocalSdrShim::onSpectrum` in `android/app/src/main/cpp/local_sdr_shim.cpp`, next to
+>   `measureBands()` / `spectroFeed()`. After `++accumCount < FFT_AVG` the averaged wide row is `fftAccum[i] * inv`
+>   (fftshifted, DC at `bins/2`, centre `rtlCenter + hwOffsetHz()`, bin `sampleRate / bins`). No new FFT is needed.
+> - **The bins are coarse:** `fftSizeForRate` targets ~75 Hz (about 47–75 Hz in practice, max 32768 points). So stage 1
+>   cannot resolve FT8 tones, a 170 Hz RTTY pair is only ~2–3 bins apart, and PSK31 looks like a carrier. What it CAN
+>   do: the FT8/FT4 15 s / 7.5 s slot cadence inside the layer-A sub-band, CW on/off keying of a 1–2-bin peak, SSB
+>   width and sideband asymmetry, AM carrier with symmetric sidebands, and the DRM flat block. RTTY/PSK need stage 2,
+>   or a "Likely" grade only where layer A agrees.
+> - **CPU plan (coordinator's hard limits):** peak finding and classification at ≤ 1 Hz, only while someone is
+>   watching. CW keying needs time resolution, so the plan is to read only the tracked candidate bins (≤ 32 floats)
+>   per averaged row and classify once a second. Stage 2 stays optional, K = 1 on a Pi 2, and gets a new
+>   `vibe_benchmark_decoders.h` row (the benchmark sets the default and never hides the feature). Stop and report if
+>   stage 1 alone measures above 1 % of a Pi 2 core. Nothing has been measured yet.
+> - **Confirmed tags:** `DecoderHost` in `vibe_decoder_host.h`: FT8/FT4/WSPR/JS8 spots at the `spotTap_->spot(...)`
+>   call (~line 1210), CW and PSK at `o.spot` in `buildCwLocked_` / `buildPskLocked_`, NAVTEX at
+>   `NavtexRx::onMessageEnd`. A small process-wide confirm sink called from those sites is enough.
+> - **Layer A:** EiBi is already in the shim as `g_stationsJson` (`setStationsJson`), and `vibe_chat_share.h` has
+>   `eibiOnAir()` for the time window. Parse it once on set, sorted by frequency. The dial frequencies are already
+>   typed in at `decoders/digi_bands.h` `publishedDials()`. Generate the shared table the way
+>   `scripts/gen-navtex-stations.mjs` does (a `.ts` plus a `.h`).
+> - **Wire:** add a `sigtags` text message beside `sig`/`adc`/`lx` (`sendText`, its own `Out::` class). Web:
+>   `web/client/src/spectrum.ts` needs a new `case 'sigtags':` (a case of its own, see the `lx` note), and
+>   `waterfall.ts` has `hzToX`, `centerHz` and `spanHz`. App: `src/services/VibeServerWsClient.ts` and
+>   `src/components/WaterfallView.tsx`.
+> - **Client limits (coordinator):** lay labels out only when the tag set or the zoom changes. A pan moves the layer
+>   with one transform. Use DOM nodes or static views, with no canvas text in the waterfall loop. At most 12 visible
+>   labels, with the rest merged ("FT8 ×N"). The default is **Detected only**. Measure the web frame time with tags on
+>   and off (headless, `--mute-audio`).
+> - **Corpus on hand:** `~/VibeSDR-test-audio`, with `cw/` (192 k IQ, 20/40 m), `iq/` (SSB, 192 k), `bandall/`
+>   (96 k IQ of the FT8/FT4/PSK/JTTY clusters), `drm/` (48 k IQ, RRI), `rtty/` (audio only) and `psk/`.
+
 ### 5.1 What users want, and what must not happen
 
 - A Discord request asked for OpenWebRX+-style digital-mode markings on the top bar (WSPR, SSTV, FT8 spots).
