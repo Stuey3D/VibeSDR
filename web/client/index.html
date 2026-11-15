@@ -4381,20 +4381,23 @@ select.btn { padding: 6px 8px; }
        ★★ …and only the keys in use (Stuart, same day): ADJ opens on the SUMMARY — the margin and slant actually
        applied, each a key — and MARGIN / SLANT swap it for that one's keys + DONE. MARGIN has ◀ ▶ only: four arrows +
        DONE at 44 px do not fit an SE-width row, and a held key goes ×5 anyway. Then AUTO · RAW, a mode pair: AUTO = automatic (it replaced RESET),
-       RAW = this chart exactly as received (per chart; the correction stays underneath). -->
-  <div id="decAdjRow" style="display:none">
+       RAW = this chart exactly as received (per chart; the correction stays underneath).
+       ★★ A PAD / KEYBOARD (2026-11-15): ENTER on MARGIN or SLANT controls it in place — amber ring, left / right step
+       it — and ENTER or BACK comes out onto the same key; BACK in MARGIN's / SLANT's key row returns to this summary
+       (main.ts padAdjuster / setDecAdjMode). -->
+  <div id="decAdjRow" data-navrow style="display:none">
     <button class="btn adjKey" id="decAlign" title="Adjust the margin: drag the chart sideways">MARGIN AUTO 0 px</button>
     <button class="btn adjKey" id="decSlant" title="Adjust the slant">SLANT AUTO 0.000</button>
     <button class="btn adjKey" id="decAdjReset" title="Automatic margin and slant">AUTO</button>
     <button class="btn adjKey" id="decRaw" title="Show the chart exactly as received, no correction" aria-pressed="false">RAW</button>
   </div>
-  <div id="decAlignRow" style="display:none">
+  <div id="decAlignRow" data-navrow style="display:none">
     <button class="btn adjKey arrowKey" id="decShiftL" title="Move the chart left (hold to repeat)" aria-label="Move the chart left">&#9664;</button>
     <button class="btn adjKey arrowKey" id="decShiftR" title="Move the chart right (hold to repeat)" aria-label="Move the chart right">&#9654;</button>
     <span id="decAlignVal">0 px</span>
     <button class="btn adjKey on" id="decAlignDone" title="Finish aligning">DONE</button>
   </div>
-  <div id="decSlantRow" style="display:none">
+  <div id="decSlantRow" data-navrow style="display:none">
     <button class="btn adjKey arrowKey" id="decSlantDn" title="Slant less (hold to repeat)" aria-label="Slant less">−</button>
     <button class="btn adjKey arrowKey" id="decSlantUp" title="Slant more (hold to repeat)" aria-label="Slant more">+</button>
     <span id="decSlantVal">0.000</span>

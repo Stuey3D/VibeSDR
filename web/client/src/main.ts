@@ -60,7 +60,7 @@ import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeL
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
 import { renderIcomPanel, icomPassband } from './icomUi';
 import { initPocketConn } from './pocketConn';
-import { initGamepad, pushBack, activePadLayout, padRehighlight, driveInput, onDriveInput } from './gamepad';
+import { initGamepad, pushBack, padAdjuster, activePadLayout, padRehighlight, driveInput, onDriveInput } from './gamepad';
 import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
@@ -13909,6 +13909,13 @@ function initDecoders(host: string, auth: AuthState) {
   holdRepeat($('decShiftR'), (m) => nudgeShift(-m));
   holdRepeat($('decSlantDn'), (m) => nudgeSlant(-SLANT_STEP * m));
   holdRepeat($('decSlantUp'), (m) => nudgeSlant(SLANT_STEP * m));
+  // ★★★ A PAD OR A KEYBOARD PRESSES INTO MARGIN / SLANT (Stuart, 2026-11-15: "BACK should step back one level on all
+  //     systems" — the R36S's picAdjRow, the app's DecoderPanel). Highlighted, they are keys like AUTO and RAW and the
+  //     D-pad / arrows move on; ENTER controls one in place (the amber .gpAdjust ring, left / right step it — ◀ moves
+  //     the chart left, as the ◀ key does); ENTER or BACK comes out onto the same key. A click opens the key row and
+  //     the drag cover as before.
+  padAdjuster($('decAlign'), { begin: unRaw, step: (d) => nudgeShift(-d) });
+  padAdjuster($('decSlant'), { begin: unRaw, step: (d) => nudgeSlant(SLANT_STEP * d) });
   initDecAlignDrag();
   $('decAdjReset').onclick = () => { decManualShift = null; decRaw = false; decSlantTouched = false; setDecAlign(null); };
   $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
@@ -16095,11 +16102,23 @@ let decAligning = false;
 let decDragging = false;
 /** ★ ADJ shows ONE row: the summary, MARGIN's keys (+ the drag cover) or SLANT's — only the keys in use. */
 let decAdjMode: 'summary' | 'align' | 'slant' = 'summary';
+// ★★ BACK IN MARGIN'S / SLANT'S KEY ROW STEPS BACK ONE LEVEL (Stuart, 2026-11-15): to the summary row, the highlight on
+//    the key that opened it — never the whole decoder box let go (it was; DONE was the only neat way out). A back
+//    handler (gamepad.ts pushBack — the pad's back and the keyboard's Escape alike) for as long as the row is up.
+let decAdjBackOff: (() => void) | null = null;
 function setDecAdjMode(m: 'summary' | 'align' | 'slant') {
   if (m === 'align' && (decViewingPrev || activeDec !== 'wefax')) m = 'summary';
   decAdjMode = m;
   decAligning = m === 'align';
   const adjOpen = $('decAdj').classList.contains('on');
+  if (adjOpen && m !== 'summary') {
+    if (!decAdjBackOff) decAdjBackOff = pushBack(() => {
+      decAdjBackOff = null;
+      const key = decAdjMode === 'slant' ? $('decSlant') : $('decAlign');
+      setDecAdjMode('summary');
+      return key;
+    });
+  } else if (decAdjBackOff) { decAdjBackOff(); decAdjBackOff = null; }
   $('decAdjRow').style.display = adjOpen && m === 'summary' ? '' : 'none';
   $('decAlignRow').style.display = adjOpen && m === 'align' ? '' : 'none';
   $('decSlantRow').style.display = adjOpen && m === 'slant' ? '' : 'none';

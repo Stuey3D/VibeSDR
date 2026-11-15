@@ -169,6 +169,59 @@ try {
   await hold(p, 9, 1200);
   ok(await p.until(`/two sticks/.test(document.getElementById("gpToast")?.textContent || "")`, 3000), "holding START again: back to two sticks");
   await p.js(`localStorage.removeItem("vibe.padProfile"); 1`);
+
+  // ── WEFAX's MARGIN / SLANT: pressed into, BACK one level (Stuart, 2026-11-15 — the R36S's picAdjRow, the app's) ──
+  await p.js(`document.getElementById("mMode").click(); 1`);
+  await sleep(500);
+  await p.js(`(() => { const b = [...document.querySelectorAll(".mModeOpt")].find(x => /^DECODERS/.test(x.textContent.trim())); b && b.click(); })(); 1`);
+  ok(await p.until(`document.getElementById("decodersPanel")?.classList.contains("open")`, 4000), "WEFAX: the DECODERS panel opens");
+  await p.js(`(() => { const t = [...document.querySelectorAll("#decodersPanel [data-band-tab], #decodersPanel .decTab, #decodersPanel [role=tab]")].find(x => x.textContent.trim() === "HF"); t && t.click(); })(); 1`);
+  await sleep(300);
+  await p.js(`document.querySelector('#decodersPanel [data-dec="wefax"]').click(); 1`);
+  ok(await p.until(`getComputedStyle(document.getElementById("decAdj")).display !== "none"`, 8000), "WEFAX runs: its ADJ key is in the box");
+  if (await p.js(`document.getElementById("decodersPanel").classList.contains("open")`)) { await press(p, 1); await sleep(300); }
+  await p.js(`document.getElementById("decAdj").click(); 1`);                       // (ADJ opened by hand: touch is unchanged)
+  ok(await p.until(`getComputedStyle(document.getElementById("decAdjRow")).display !== "none"`), "ADJ shows the summary row");
+  const FOCUS = `(document.querySelector(".gpFocus")?.id || "")`;
+  const GRAB = `document.getElementById("decBox").classList.contains("gpGrab")`;
+  // the box: walk to it, ✕ grabs it, then walk inside to MARGIN
+  // ★ ✕ only ON the box — a press on whatever else the walk stopped at could open anything (the admin sign-in did)
+  for (let i = 0; i < 160 && (await p.js(FOCUS)) !== "decBox" && !(await p.js(GRAB)); i++) await press(p, [12, 15, 13, 14][Math.floor(i / 4) % 4]);
+  if (!(await p.js(GRAB)) && (await p.js(FOCUS)) === "decBox") await press(p, 0);
+  ok(await p.js(GRAB), "the decoder box has the D-pad");
+  for (let i = 0; i < 40 && (await p.js(FOCUS)) !== "decAlign"; i++) await press(p, [13, 14, 12, 15][Math.floor(i / 5) % 4]);
+  ok((await p.js(FOCUS)) === "decAlign", "the D-pad reaches MARGIN");
+  const m0 = await p.js(`document.getElementById("decAlign").textContent`);
+  await press(p, 15);
+  ok((await p.js(FOCUS)) === "decSlant" && (await p.js(`document.getElementById("decAlign").textContent`)) === m0,
+     "★ highlighted, RIGHT moves MARGIN → SLANT and changes nothing");
+  await press(p, 14);
+  ok((await p.js(FOCUS)) === "decAlign", "LEFT back to MARGIN");
+  await press(p, 0);
+  ok(await p.js(`document.getElementById("decAlign").classList.contains("gpAdjust")`), "★ ✕ on MARGIN controls it: the ring turns amber");
+  await press(p, 14);
+  const m1 = await p.js(`document.getElementById("decAlign").textContent`);
+  ok((await p.js(FOCUS)) === "decAlign" && /MANUAL/.test(m1) && m1 !== m0, `…LEFT now steps the margin, the highlight stays (${m0} → ${m1})`);
+  ok(await p.js(`getComputedStyle(document.getElementById("decAlignRow")).display === "none"`), "…in place: the summary row stays (no key row for a pad)");
+  await press(p, 1);
+  ok(!(await p.js(`document.getElementById("decAlign").classList.contains("gpAdjust")`)) && (await p.js(FOCUS)) === "decAlign" && (await p.js(GRAB)),
+     "★ ○ steps back ONE level: MARGIN, the normal ring, the box still held");
+  await press(p, 15);
+  ok((await p.js(FOCUS)) === "decSlant", "…and the D-pad moves on again (SLANT)");
+  // the keyboard's Escape is the same back
+  await press(p, 0);
+  ok(await p.js(`document.getElementById("decSlant").classList.contains("gpAdjust")`), "✕ on SLANT controls it");
+  await p.js(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); 1`); await sleep(150);
+  ok(!(await p.js(`document.getElementById("decSlant").classList.contains("gpAdjust")`)) && (await p.js(FOCUS)) === "decSlant" && (await p.js(GRAB)),
+     "★ Escape steps back one level too: SLANT, the box still held");
+  // MARGIN's key row (opened by a click): BACK returns to the summary, on MARGIN, the box still held
+  await p.js(`document.getElementById("decAlign").click(); 1`);
+  ok(await p.until(`getComputedStyle(document.getElementById("decAlignRow")).display !== "none"`), "a click on MARGIN opens its key row (unchanged)");
+  await press(p, 1);
+  ok((await p.js(`getComputedStyle(document.getElementById("decAdjRow")).display !== "none" && getComputedStyle(document.getElementById("decAlignRow")).display === "none"`))
+     && (await p.js(FOCUS)) === "decAlign" && (await p.js(GRAB)), "★ ○ in MARGIN's key row: back to the summary, on MARGIN, the box still held");
+  await press(p, 1);
+  ok(!(await p.js(GRAB)), "○ again: the next level out — the box lets go");
   ok(p.errors.length === 0, "no JavaScript errors" + (p.errors.length ? ": " + p.errors.slice(0, 2).join(" | ") : ""));
   p.ws.close();
 

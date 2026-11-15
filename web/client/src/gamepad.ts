@@ -29,6 +29,9 @@
  *    The app's DecoderPanel does exactly this (enterBox / leave / autoOwn).
  * ★ Nothing runs until a pad is connected: no polling loop, no listener work, no cost to anyone without one.
  * ★ Enter on a slider or a drop-down ADJUSTS it: D-pad left/right changes the value, enter or back finishes.
+ *   A key registered with padAdjuster() (WEFAX's MARGIN / SLANT) is the same: highlighted it is a key like the rest
+ *   and left/right move on; enter presses INTO it (the amber .gpAdjust ring) and left/right step it; enter or back
+ *   comes out again onto the same key — back is ONE level, never the box let go (the R36S's picAdjRow, the app's).
  *
  * ★★★ THE KEYBOARD DRIVES THE SAME HIGHLIGHT (Stuart, 2026-10-18 — src/utils/keyActions.ts): arrows and W A S D are the
  *   D-pad, Enter is enter, Backspace and Escape are back, < > tune and - + zoom. One set of actions below, fed by the
@@ -86,6 +89,10 @@ let current: HTMLElement | null = null;
 //   highlighted button with a new one; the next press carries on from here instead of jumping to the top.
 let lastBox: Box | null = null;
 let adjusting = false;
+/** ★ A key the pad and the keyboard press INTO and step with left / right (padAdjuster). A click is unchanged. */
+export interface PadAdjuster { begin?(): void; step(d: 1 | -1): void; }
+const adjusters = new WeakMap<HTMLElement, PadAdjuster>();
+export function padAdjuster(el: HTMLElement, a: PadAdjuster) { adjusters.set(el, a); }
 let grabbed: HTMLElement | null = null;         // the [data-navbox] that has the D-pad, if any
 let autoTaken = '';
 let grabDepth = 0;                              // backStack depth when the box took the D-pad (see back)                             // the data-navauto token already taken (once per appearance)
@@ -274,7 +281,13 @@ function move(dir: Dir) {
   //   padTuck): carry on from where it stood, never back to the top of the page.
   const from = cur ? box(cur) : current && (!current.isConnected || root.contains(current)) ? lastBox : null;
   const fromWide = !!cur?.hasAttribute('data-navwide');
-  const i = pickNext(from, list.map((e) => navBox(e, from, dir, fromWide)), dir);
+  // ★★ A ROW KEEPS LEFT / RIGHT ([data-navrow] — WEFAX's MARGIN · SLANT · AUTO · RAW, 2026-11-15): sideways from a key
+  //    in a row goes to the next key IN THAT ROW while there is one, never up to a header key that happens to score
+  //    nearer (SLANT's LEFT landed on SAVE). Off the row's end the whole page is the route again. Opt-in.
+  const row = cur && (dir === 'left' || dir === 'right') ? cur.closest<HTMLElement>('[data-navrow]') : null;
+  const inRow = row ? list.filter((e) => row.contains(e)) : [];
+  const j = row ? pickNext(from, inRow.map((e) => navBox(e, from, dir, fromWide)), dir) : -1;
+  const i = j >= 0 ? list.indexOf(inRow[j]) : pickNext(from, list.map((e) => navBox(e, from, dir, fromWide)), dir);
   if (i >= 0) highlight(list[i]);
   else if (!from && list.length) highlight(list[0]);
   else if (root === grabbed && (dir === 'up' || dir === 'down')) {
@@ -286,6 +299,8 @@ function move(dir: Dir) {
 
 function adjust(d: 1 | -1) {
   const el = current;
+  const pa = el ? adjusters.get(el) : undefined;
+  if (pa) { pa.step(d); return; }
   if (el instanceof HTMLInputElement && el.type === 'range') {
     d > 0 ? el.stepUp() : el.stepDown();
     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -303,6 +318,13 @@ function enter() {
   if (!current || !root.contains(current) || !visible(current)) { move('down'); return; }
   const el = current;
   if (el !== grabbed && el.matches(NAVBOX)) { grab(el); return; }
+  const pa = adjusters.get(el);
+  if (pa) {
+    adjusting = !adjusting;
+    if (adjusting) pa.begin?.();
+    el.classList.toggle('gpAdjust', adjusting);
+    return;
+  }
   if ((el instanceof HTMLInputElement && el.type === 'range') || el instanceof HTMLSelectElement) {
     adjusting = !adjusting;
     el.classList.toggle('gpAdjust', adjusting);
