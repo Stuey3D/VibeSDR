@@ -51,7 +51,7 @@ try {
   await send('Page.enable'); await send('Runtime.enable');
 
   const SIZES = [{ name: 'phone', w: 390, h: 700, dpr: 3 }, { name: 'tablet', w: 768, h: 900, dpr: 2 }, { name: 'desktop', w: 1400, h: 900, dpr: 1 }];
-  const LABEL = '[EiBi] China Radio Int';
+  const NAME = 'China Radio Int', LABEL = '[EiBi] ' + NAME;
   for (const sz of SIZES) for (const spec of [0.3, 0]) {
     await send('Emulation.setDeviceMetricsOverride', { width: sz.w, height: sz.h, deviceScaleFactor: sz.dpr, mobile: sz.w < 800 });
     await send('Page.navigate', { url: 'file://' + path.join(dir, 'index.html') });
@@ -60,7 +60,7 @@ try {
     await ev(`__tl.setup(${sz.w}, ${sz.h}, ${JSON.stringify(palette)}, ${spec}, '#ff8c1a')`);
     const tag = `${sz.name} ${sz.w}px, spectrum ${spec ? 'on' : 'off'}`;
     for (const [where, hz] of [['middle', 9_580_000], ['right edge', 9_647_500], ['left edge', 9_552_500]]) {
-      const d = await ev(`__tl.draw(${hz}, ${JSON.stringify(LABEL)})`);
+      const d = await ev(`__tl.draw(${hz}, ${JSON.stringify(NAME)})`);
       const t = d.tuned;
       ok(!!t && t.text === LABEL, `${tag}, needle at the ${where}: drawn`);
       if (!t) continue;
@@ -74,6 +74,12 @@ try {
     }
     const none = await ev(`__tl.draw(9580000, '')`);
     ok(none.tuned === null, `${tag}: no label, nothing drawn`);
+    // ★ a supplement, never a repeat: the spectrum's own label for the bookmark is drawn → no "[User] Flex FM" under it
+    const dup = await ev(`__tl.draw(9580000, 'Flex FM', 'user', true)`);
+    ok(dup.tuned === null, `${tag}: the bookmark's own spectrum label is drawn — no duplicate under it`);
+    if (PNG && sz.name === 'phone' && spec) { const u = await ev('__tl.png()'); fs.writeFileSync(path.join(PNG, 'phone-spectrum-no-duplicate.png'), Buffer.from(u.split(',')[1], 'base64')); }
+    const solo = await ev(`__tl.draw(9580000, 'Flex FM', 'user', false)`);
+    ok(solo.tuned?.text === '[User] Flex FM', `${tag}: signal labels off — the bookmark gets the label`);
   }
   wsC.close();
 } catch (e) { fail++; console.log('   FAIL ' + (e?.message || e)); }

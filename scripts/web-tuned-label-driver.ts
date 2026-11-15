@@ -36,10 +36,14 @@ const S: any = (window as any).__tl = {
     for (let i = 0; i < 120; i++) { frame(S.centre, S.span, S.bins); wf.push(S.bins, S.centre, S.span); wf.tick(10000 + i * 50); }
     return true;
   },
-  /** Put the needle at `hz` with `label` and draw one frame; returns what was drawn, in device px. */
-  draw(hz: number, label: string) {
+  /** Put the needle at `hz` with one candidate (`name` '' = none) of `source` and draw one frame; `marker` = the spectrum's
+   *  own label for it is on (a personal / eibi known-signal label at `hz`). Returns what was drawn, in device px. */
+  draw(hz: number, name: string, source = 'eibi', marker = false) {
     const wf = S.wf as any;
-    wf.vfoHz = hz; wf.tunedLabel = label;
+    wf.vfoHz = hz;
+    wf.tunedCand = name ? { key: String(Math.random()), rows: [{ frequency: hz, name, source }], passband: { lo: -4500, hi: 4500 } } : null;
+    wf.knownSignals = marker ? [{ hz, label: name, dec: '', dialHz: hz, mode: 'am', prio: 4, src: source === 'eibi' ? 'eibi' : 'personal' }] : null;
+    wf.knownGen = (wf.knownGen || 0) + 1;
     frame(S.centre, S.span, S.bins); wf.push(S.bins, S.centre, S.span);
     wf.tick(performance.now()); wf.draw();
     const W = wf.canvas.width, H = wf.canvas.height;

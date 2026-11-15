@@ -124,7 +124,7 @@ import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBand
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, type KnownSignal, type KnownAvail } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
-import { tunedLabel, utcMinutes, TUNED_SETTLE_MS, TUNED_TOL_HZ, type TunedRow } from '../../../src/utils/tunedStation';   // ★★ the tuned station's label at the VFO
+import { tunedPassband, inPassband, TUNED_SETTLE_MS, type Passband, type TunedRow } from '../../../src/utils/tunedStation';   // ★★ the tuned station's label at the VFO
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
@@ -4670,7 +4670,9 @@ window.addEventListener('resize', () => { vtsFitSig = ''; });
  *  Flex FM"). Worked out after every updateVts (every tune, RDS message, DAB / DRM state and the bar's own timers — so
  *  the moment the bar lets a bookmark's name go, the label takes it) and once the dial has RESTED TUNED_SETTLE_MS: none
  *  while it moves, so a sweep never flickers a name per channel. The VTS's own lists — yours, the server's, the schedule
- *  (on air now: the server's rows carry their hours) — and none while a live RDS / DAB / DRM name owns the bar. */
+ *  (on air now: the server's rows carry their hours) — and none while a live RDS / DAB / DRM name owns the bar.
+ *  ★★ The final choice is the waterfall's (_drawTuned): it knows which spectrum labels are drawn, and never repeats one.
+ *  ★ Matched inside the receive passband (spec.bandwidthLow/High), so a station heard a little off the dial keeps its name. */
 let tunedHz = -1;
 let tunedRestAt = 0;
 let tunedTimer: ReturnType<typeof setTimeout> | null = null;
@@ -4680,10 +4682,10 @@ function queueTunedLabel() {
   tunedQueued = true;
   queueMicrotask(() => { tunedQueued = false; syncTunedLabel(); });
 }
-/** The candidates within the tolerance only — the schedule is ~10k rows, and only the few near the dial are copied. */
-function tunedRowsNear(hz: number): TunedRow[] {
+/** The candidates inside the passband only — the schedule is ~10k rows, and only the few near the dial are copied. */
+function tunedRowsNear(hz: number, pb: Passband): TunedRow[] {
   const out: TunedRow[] = [];
-  const near = (f: number) => Math.abs(f - hz) <= TUNED_TOL_HZ;
+  const near = (f: number) => inPassband(f, hz, pb);
   for (const b of getBookmarks()) if (near(b.frequency)) out.push({ frequency: b.frequency, name: b.name, source: 'user', mode: b.mode });
   for (const b of getServerBookmarks()) if (near(b.frequency)) out.push({ frequency: b.frequency, name: b.name, source: 'server', mode: b.mode });
   for (const st of getStations()) if (near(st.frequency))
@@ -4705,9 +4707,11 @@ function syncTunedLabel() {
     || (spec?.mode === 'drm' && drmState?.locked ? drmState.label || '' : '');
   const vtsEl = document.getElementById('vts');
   const vtsShowing = !!vtsEl && vtsEl.classList.contains('show') && !!($('vtsName').textContent || '').trim();
-  const text = settled && !liveName && !vtsShowing
-    ? tunedLabel(tunedRowsNear(hz), hz, utcMinutes(), { liveName, vtsShowing, settled }) : null;
-  wf.tunedLabel = text || '';
+  if (!settled || liveName || vtsShowing) { wf.tunedCand = null; return; }
+  const pb = tunedPassband(spec?.mode, spec?.bandwidthLow, spec?.bandwidthHigh);
+  const key = `${hz}|${pb.lo}|${pb.hi}|${getBookmarks().length}|${getServerBookmarks().length}|${getStations().length}`;
+  if (wf.tunedCand && wf.tunedCand.key === key) return;
+  wf.tunedCand = { key, rows: tunedRowsNear(hz, pb), passband: pb };
 }
 
 function updateVts() {

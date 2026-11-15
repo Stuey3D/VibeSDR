@@ -60,7 +60,7 @@ import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRo
 import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
-import { tunedLabelX } from '../../../src/utils/tunedStation.ts';
+import { tunedLabel, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../../../src/utils/tunedStation.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -262,8 +262,11 @@ export class Waterfall {
    *  `vfoWideLabel` replaces "LISTEN …" ("DAB 7D · 194.064M"). Drawn only — nothing here is ever sent. */
   vfoWide = false;
   vfoWideLabel = '';
-  /** ★★ V12 THE TUNED STATION'S LABEL (src/utils/tunedStation.ts — "[EiBi] China Radio Int"), set by main.ts once the VTS
-   *  has let the name go; '' = none. Drawn beside the selected needle, one row below its LISTEN readout. */
+  /** ★★ V12 THE TUNED STATION'S LABEL (src/utils/tunedStation.ts — "[EiBi] China Radio Int"): the candidates and the
+   *  receive passband, set by main.ts once the dial rests and the VTS has let the name go; null = no label. The choice is
+   *  made in _drawTuned, against the spectrum labels actually drawn (knownPlaced) — a name already there is not repeated. */
+  tunedCand: { key: string; rows: TunedRow[]; passband: Passband } | null = null;
+  /** The label chosen on the last frame ('' = none). */
   tunedLabel = '';
   /** Where the last frame drew it (device px) — for the drivers (scripts/test-web-tuned-label.mjs). */
   tunedDrawn: { x: number; y: number; w: number; h: number; text: string } | null = null;
@@ -1381,7 +1384,10 @@ export class Waterfall {
    *  a dark shadow, on markerLabel's dark box. Beside the needle, flipped left at the right edge, kept on screen. */
   private _drawTuned(ctx: CanvasRenderingContext2D, W: number, H: number) {
     this.tunedDrawn = null;
-    const text = this.tunedLabel;
+    const cand = this.tunedCand;
+    const shown = this.knownSignals && this.knownSignals.length ? this.knownPlaced.map(p => p.sig) : [];
+    const text = this.tunedLabel = cand ? tunedLabel(cand.rows, this.vfoHz, utcMinutes(), { settled: true, vtsShowing: false,
+                                                     passband: cand.passband, shown }) || '' : '';
     if (!text || !this.vfoHz) return;
     const nX = this.hzToX(this.vfoHz, W);
     if (nX < 0 || nX > W) return;
