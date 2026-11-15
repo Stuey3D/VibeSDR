@@ -195,34 +195,165 @@ int main() {
             CHECK(h.size() == 2 && find(h, 23, 6) && find(h, 22, 6) && find(h, 22, 6)->from == kTiiResolved,
                   "★ a real two-site collision still resolves both, with distances given");
         }
-        /* ★★★ "that list is constantly growing" (7D, 2026-11-13): a code is reported only once it is in 2 of the last 3
-         *  verdicts — a one-verdict ghost never reaches the panels, which remember every code they are shown. */
+        /* ★★★ THE LIST (TiiTrack, vibe_dab_tii.h): "that list is constantly growing" (7D NNDAB, 2026-11-13) and the Almere
+         *  B210's forty "signal lost" lines (7D MTVNL, 2026-11-15). Confirmed before listed, a comb's misreadings folded into
+         *  its site, lost lines held then removed. One verdict ~0.8 s; times here are stated milliseconds. */
         {
-            auto H = [](int m, int s, float db) { TiiHit h; h.mainId = m; h.subId = s; h.strength = db; return h; };
-            TiiConfirm cf;
-            cf.verdict(1, {H(1, 5, 32.0f), H(44, 12, 4.0f)});
-            CHECK(cf.confirmed().empty(), "the first verdict alone names nothing");
-            cf.verdict(2, {H(1, 5, 32.5f), H(44, 13, 4.1f)});
-            CHECK(cf.confirmed().size() == 1 && cf.confirmed()[0].mainId == 1 && cf.confirmed()[0].subId == 5,
-                  "★ the real site (in both verdicts) is named; 2C/0C and 2C/0D (one verdict each) are not");
-            CHECK(std::fabs(cf.confirmed()[0].strength - 32.5f) < 0.01f, "…at the newest verdict's strength");
-            cf.verdict(3, {H(1, 5, 32.6f), H(44, 14, 4.0f), H(44, 12, 4.2f)});
-            bool ghost = false; for (const auto& h : cf.confirmed()) if (h.mainId == 44 && h.subId != 12) ghost = true;
-            CHECK(!ghost && cf.confirmed().size() == 2, "a ghost that came back once (2C/0C in verdicts 1 and 3) counts; one-offs never do");
-            cf.verdict(4, {H(1, 5, 32.0f)});
-            cf.verdict(5, {H(1, 5, 32.0f)});
-            CHECK(cf.confirmed().size() == 1, "a code no longer in two of the last three verdicts drops out");
-            // a weak site missing one verdict in three stays on the panel throughout
-            TiiConfirm fl;
-            bool steady = true;
-            for (unsigned n = 1; n <= 9; ++n) {
-                fl.verdict(n, n % 3 ? std::vector<TiiHit>{H(22, 9, 6.0f)} : std::vector<TiiHit>{});
-                if (n >= 2 && fl.confirmed().size() != 1) steady = false;
+            auto H = [](int m, int s, float db, uint8_t from = kTiiClean) { TiiHit h; h.mainId = m; h.subId = s; h.strength = db; h.from = from; return h; };
+            auto has = [](const std::vector<TiiLine>& l, int m, int s, int live = -1) {
+                for (const auto& x : l) if (x.hit.mainId == m && x.hit.subId == s && (live < 0 || x.live == bool(live))) return true;
+                return false;
+            };
+            const int64_t V = 800;   // ms per verdict
+            // 1. a steady site is listed on its kTiiTrackConfirm-th verdict, not before; a one-off and a few-second flicker never
+            {
+                TiiTrack t; bool early = false, onTime = false, ghost = false;
+                for (int n = 1; n <= 40; ++n) {
+                    std::vector<TiiHit> v{H(13, 1, 36.0f)};
+                    if (n == 3) v.push_back(H(44, 12, 14.0f));                 // once
+                    if (n >= 15 && n < 21) v.push_back(H(43, 9, 15.0f));        // six verdicts running (~5 s), then gone
+                    t.verdict(v, n * V);
+                    const auto l = t.lines(n * V);
+                    if (n < kTiiTrackConfirm && !l.empty()) early = true;
+                    if (n == kTiiTrackConfirm && has(l, 13, 1, 1)) onTime = true;
+                    if (has(l, 44, 12) || has(l, 43, 9)) ghost = true;
+                }
+                CHECK(!early, "nothing is listed before a code has been read kTiiTrackConfirm times");
+                CHECK(onTime, "★ a steady site is listed on its tenth verdict (~8 s)");
+                CHECK(!ghost, "★ a code read once, and one read for six verdicts running, are never listed");
             }
-            CHECK(steady, "a weak site in two verdicts of every three stays named through the one it misses (no flicker)");
-            // a new block (the count starts again) forgets the old block's history
-            cf.verdict(1, {H(1, 5, 30.0f)});
-            CHECK(cf.confirmed().empty(), "a new block starts the history again");
+            // 2. same-comb misreadings: 0D/06 (0011 1010) read now and then as 2B/06 (1001 1010) or 02/06 (0001 1011)
+            {
+                CHECK(__builtin_popcount(unsigned(tiiPattern(0x0D) & tiiPattern(0x2B))) == 3
+                      && __builtin_popcount(unsigned(tiiPattern(0x0D) & tiiPattern(0x02))) == 3,
+                      "Table 26: 2B and 02 each share three of 0D's four blocks (the Almere codes)");
+                TiiTrack t; bool ghost = false, flicker = false;
+                for (int n = 1; n <= 64; ++n) {
+                    std::vector<TiiHit> v{H(0x0D, 0x01, 36.0f), H(0x0D, 0x15, 22.0f)};
+                    // 0D/06 itself in ~5 of 8 verdicts, the rest misread as 2B/06 or 02/06 — a little weaker, as a misreading is
+                    v.push_back(n % 8 == 2 || n % 8 == 5 ? H(0x2B, 0x06, 12.5f) : n % 8 == 7 ? H(0x02, 0x06, 12.0f) : H(0x0D, 0x06, 13.5f));
+                    t.verdict(v, n * V);
+                    const auto l = t.lines(n * V);
+                    if (has(l, 0x2B, 0x06) || has(l, 0x02, 0x06)) ghost = true;
+                    if (n > 24 && !has(l, 0x0D, 0x06, 1)) flicker = true;
+                }
+                const auto l = t.lines(64 * V);
+                CHECK(l.size() == 3 && has(l, 0x0D, 0x01, 1) && has(l, 0x0D, 0x15, 1) && has(l, 0x0D, 0x06, 1),
+                      "★ the three real codes are listed, on the air");
+                CHECK(!ghost, "★ 2B/06 and 02/06 (0D/06 misread) are never listed — not even from readings before 0D/06 was");
+                CHECK(!flicker, "★ …and 0D/06 stays on the air through the verdicts that misread it");
+                // a misreading that came first and most often still loses to the site once the site is listed
+                TiiTrack u; bool g2 = false;
+                for (int n = 1; n <= 40; ++n) {
+                    u.verdict({n % 3 == 0 ? H(0x2B, 0x06, 12.0f) : H(0x0D, 0x06, 13.0f)}, n * V);
+                    if (has(u.lines(n * V), 0x2B, 0x06)) g2 = true;
+                }
+                CHECK(!g2 && has(u.lines(40 * V), 0x0D, 0x06), "a misreading in a third of the verdicts is folded into its site");
+            }
+            // 3. two codes READ TOGETHER that share three blocks are two sites (a resolved collision): both listed
+            {
+                TiiTrack t;
+                for (int n = 1; n <= 20; ++n) t.verdict({H(0x0D, 0x06, 20.0f), H(0x2B, 0x06, 17.0f, kTiiResolved)}, n * V);
+                const auto l = t.lines(20 * V);
+                CHECK(has(l, 0x0D, 0x06, 1) && has(l, 0x2B, 0x06, 1), "★ two overlapping codes read in the same verdicts are both listed");
+                // and a code much STRONGER than the listed one is not its misreading
+                TiiTrack s2;
+                for (int n = 1; n <= 12; ++n) s2.verdict({H(0x0D, 0x06, 8.0f)}, n * V);
+                for (int n = 13; n <= 30; ++n) s2.verdict({H(0x2B, 0x06, 25.0f)}, n * V);
+                CHECK(has(s2.lines(30 * V), 0x2B, 0x06, 1), "a code well above the listed one on its Sub Id is a site of its own");
+            }
+            // 4. lost, then gone; a stall; a re-acquire keeps the list; the cap
+            {
+                TiiTrack t;
+                for (int n = 1; n <= 12; ++n) t.verdict({H(13, 1, 36.0f), H(22, 9, 6.0f)}, n * V);
+                int n = 12;
+                for (int k = 0; k < kTiiLiveWindow; ++k) { ++n; t.verdict({H(13, 1, 36.0f)}, n * V); }
+                auto l = t.lines(n * V);
+                CHECK(has(l, 22, 9, 0) && has(l, 13, 1, 1), "★ a listed site missing three verdicts is held, signal lost");
+                const int64_t lastSeen = 12 * V;
+                // keep the strong one coming, a verdict every 0.8 s, until just before / just after the expiry
+                int64_t now = n * V;
+                while (now + V < lastSeen + kTiiExpireMs) { now += V; t.verdict({H(13, 1, 36.0f)}, now); }
+                CHECK(has(t.lines(now), 22, 9, 0), "…for up to five minutes after it was last read");
+                now += 2 * V; t.verdict({H(13, 1, 36.0f)}, now);
+                CHECK(!has(t.lines(now), 22, 9) && has(t.lines(now), 13, 1, 1), "★ …then removed entirely");
+                // no verdicts at all (signal gone): every line lost after kTiiStallMs, removed after kTiiExpireMs
+                CHECK(has(t.lines(now + kTiiStallMs + 1), 13, 1, 0), "no verdict for 5 s: the site is signal lost");
+                CHECK(t.lines(now + kTiiExpireMs + 1).empty(), "…and gone after five minutes");
+                // the cap: thirty real sites come and go — never more than kTiiListCap lines
+                TiiTrack c; size_t most = 0; int64_t tm = 0;
+                for (int site = 0; site < 30; ++site)
+                    for (int k = 0; k < 12; ++k) { tm += V; c.verdict({H(site % 70, site % 24, 10.0f + site)}, tm); most = std::max(most, c.lines(tm).size()); }
+                CHECK(most <= kTiiListCap && most >= kTiiListCap - 1, "★ the list is capped at 24 lines");
+            }
+            // 5. a candidate is listed when confirmed, never held; the DX log's quick reading
+            {
+                TiiTrack t;
+                for (int n = 1; n <= 12; ++n) t.verdict({H(13, 1, 36.0f), H(40, 6, 5.0f, kTiiCandidate)}, n * V);
+                CHECK(has(t.lines(12 * V), 40, 6, 1), "a confirmed candidate is listed while it is read");
+                for (int n = 13; n <= 17; ++n) t.verdict({H(13, 1, 36.0f)}, n * V);
+                CHECK(!has(t.lines(17 * V), 40, 6), "★ …and dropped, not held, once it is not");
+                TiiTrack d; TiiHit best;
+                d.verdict({H(13, 1, 30.0f)}, V);
+                CHECK(!d.strongestRecent(best), "the DX log's reading needs two verdicts");
+                d.verdict({H(13, 1, 30.0f), H(5, 2, 33.0f)}, 2 * V);
+                CHECK(d.strongestRecent(best) && best.mainId == 13, "★ …of the last three (the strongest of those), long before the list");
+            }
+            // 6. a block change starts afresh
+            {
+                TiiTrack t;
+                for (int n = 1; n <= 12; ++n) t.verdict({H(13, 1, 36.0f)}, n * V);
+                t.reset();
+                CHECK(t.lines(12 * V).empty(), "a new block starts the list afresh");
+            }
+        }
+        /* ★★ END TO END: the detector on a synthesised SFN null, its verdicts through TiiTrack. A strong 0D/01, and a weak
+         *  0D/06 that in every third verdict loses its block 2 under the noise while a stray on block 0 shows — so the
+         *  detector reads 2B/06 (its pattern with that block swapped). The list must hold 0D/01 and 0D/06, never 2B/06. */
+        {
+            struct Tb { uint8_t bits; int c; float amp; };
+            auto framesBits = [&](const std::vector<Tb>& txs, float noiseAmp, TiiDetector& det) {
+                for (int f = 0; f < TiiDetector::kFramesPerVerdict; ++f) {
+                    std::vector<TiiC32> z(size_t(K), TiiC32{});
+                    for (const Tb& t : txs)
+                        for (int s = 0; s < 4; ++s) for (int b = 0; b < 8; ++b) {
+                            if (!(t.bits & (0x80 >> b))) continue;
+                            const int k = tiiPairCarrier(s, t.c, b);
+                            const C32 a = prs[size_t(tiiCarrierPos(k))];
+                            z[size_t(tiiCarrierPos(k))]     += t.amp * TiiC32(a.real(), a.imag());
+                            z[size_t(tiiCarrierPos(k + 1))] += t.amp * TiiC32(a.real(), a.imag());
+                        }
+                    for (auto& v : z) v += TiiC32(noiseAmp * gauss(), noiseAmp * gauss());
+                    det.feed(z.data(), K);
+                }
+            };
+            const uint8_t p0D = tiiPattern(0x0D), swapped = uint8_t((p0D & ~0x20) | 0x80);   // block 2 out, block 0 in
+            CHECK(tiiPatternIndex(swapped) == 0x2B, "0D with block 2 swapped for block 0 is 2B");
+            TiiDetector det; TiiTrack t; int read2B = 0, read0D = 0; bool ghost = false;
+            for (int n = 1; n <= 40; ++n) {
+                framesBits({ {p0D, 1, 1.0f}, {n % 3 == 0 ? swapped : p0D, 6, 0.35f} }, 0.1f, det);
+                for (const auto& h : det.hits()) { if (h.subId == 6 && h.mainId == 0x2B) ++read2B; if (h.subId == 6 && h.mainId == 0x0D) ++read0D; }
+                t.verdict(det.hits(), n * 800);
+                for (const auto& l : t.lines(n * 800)) if (l.hit.subId == 6 && l.hit.mainId != 0x0D) ghost = true;
+            }
+            const auto l = t.lines(40 * 800);
+            printf("  end to end: the detector read 0D/06 %d times and 2B/06 %d times in 40 verdicts; listed:", read0D, read2B);
+            for (const auto& x : l) printf(" %02X/%02X%s", x.hit.mainId, x.hit.subId, x.live ? "" : "(lost)");
+            printf("\n");
+            CHECK(read2B >= 10, "(the detector really does read the swapped pattern as 2B/06)");
+            CHECK(l.size() == 2 && !ghost, "★ a strong code and a weak site misread in its comb: the two real codes listed, no 2B/06");
+            // a strong code with a weak HALF pattern (two of another code's blocks) in its own comb, every other verdict
+            const uint8_t half = uint8_t(tiiPattern(0x2B) & ~p0D);   // 2B's two blocks that 0D does not use
+            TiiDetector d2; TiiTrack t2;
+            for (int n = 1; n <= 40; ++n) {
+                std::vector<Tb> txs{ {p0D, 6, 1.0f} };
+                if (n % 2) txs.push_back({half, 6, 0.25f});
+                framesBits(txs, 0.1f, d2);
+                t2.verdict(d2.hits(), n * 800);
+            }
+            const auto l2 = t2.lines(40 * 800);
+            CHECK(l2.size() == 1 && l2[0].hit.mainId == 0x0D && l2[0].hit.subId == 6 && l2[0].live,
+                  "★ a strong code plus a weak half pattern in its comb: ONE line, the strong code");
         }
         // ★ Cap: candidates never push a measured hit out.
         {

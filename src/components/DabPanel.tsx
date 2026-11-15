@@ -408,6 +408,16 @@ const txSeen = new Map<string, { t: DabTx; order: number }>();
 let txChannel = '';
 let txOrder = 0;
 function rememberTransmitters(d: DabState): Array<{ t: DabTx; lost: boolean }> {
+  /* ★★★ THE SERVER KEEPS THE LIST (2026-11-15, the Almere B210's forty "signal lost" lines — vibe_dab_tii.h TiiTrack).
+   *  A server that sends `tiiHeld` confirms a code before listing it, holds it "signal lost" and removes it after five
+   *  minutes unseen: drawn as sent, in its order (`o`), candidates last, nothing remembered here. An older server
+   *  sends `tii` alone, and the memory below still applies to it. */
+  if (d.tiiHeld) {
+    txSeen.clear(); txChannel = d.channel;
+    const key = (t: DabTx) => (t.c === 2 ? 1e6 : 0) + (t.o ?? 0);
+    return [...(d.tii ?? []).map(t => ({ t, lost: false })), ...d.tiiHeld.map(t => ({ t, lost: true }))]
+      .sort((a, b) => key(a.t) - key(b.t));
+  }
   if (d.channel !== txChannel) { txSeen.clear(); txChannel = d.channel; }
   /* ★ A CANDIDATE (c 2: one of several on a shared Sub Id, no directory to choose by) is shown while it
    *  is offered and never remembered — a "signal lost" line for a guess would be clutter. Same in

@@ -27,7 +27,9 @@ using namespace vibedab;
 static int fails = 0;
 #define CHECK(c, msg) do { if (!(c)) { printf("  FAIL: %s\n", msg); ++fails; } else printf("  ok: %s\n", msg); } while (0)
 
-struct Run { int verdicts = 0; std::map<std::string, int> seen; };   // "main/sub site" -> verdicts named in
+/* ★ Per verdict, the LIST as a panel draws it (TiiTrack, 2026-11-15): `tii` = on the air, `tiiHeld` = signal lost.
+ *  seen: verdicts a code was listed on the air in; first: the verdict it was first listed (live or held); held: ever held. */
+struct Run { int verdicts = 0; std::map<std::string, int> seen, first; std::set<std::string> held; };
 
 static bool replay(const std::string& path, double secs, const DabTxDb& db, Run& out) {
     FILE* fp = std::fopen(path.c_str(), "rb");
@@ -55,15 +57,18 @@ static bool replay(const std::string& path, double secs, const DabTxDb& db, Run&
         const std::string diag = j.substr(d, j.find('}', d) - d);
         if (diag == lastDiag || diag.find("\"frames\":0") != std::string::npos) continue;
         lastDiag = diag; ++out.verdicts;
-        // each hit: "main":M,"sub":S … "site":"X"
-        const size_t end = j.find(']', t);
+        // each line: "main":M,"sub":S … "site":"X" — in `tii` (live) or `tiiHeld` (lost)
+        const size_t hs = j.find("\"tiiHeld\":[", t);
+        const size_t end = hs != std::string::npos ? j.find(']', hs) : j.find(']', t);
         for (size_t p = j.find("{\"main\":", t); p != std::string::npos && p < end; p = j.find("{\"main\":", p + 1)) {
             const int m = std::atoi(j.c_str() + p + 8);
             const size_t sp = j.find("\"sub\":", p); const int s = std::atoi(j.c_str() + sp + 6);
             const size_t close = j.find('}', p), ss = j.find("\"site\":\"", p);
             std::string site = "?";
             if (ss != std::string::npos && ss < close) { const size_t a = ss + 8; site = j.substr(a, j.find('"', a) - a); }
-            out.seen[std::to_string(m) + "/" + std::to_string(s) + " " + site]++;
+            const std::string key = std::to_string(m) + "/" + std::to_string(s) + " " + site;
+            if (!out.first.count(key)) out.first[key] = out.verdicts;
+            if (hs != std::string::npos && p > hs) out.held.insert(key); else out.seen[key]++;
         }
     }
     svc.stopWorker();
@@ -94,22 +99,31 @@ int main() {
     int ran = 0;
     for (const auto& c : cases) {
         Run r;
-        if (!replay(dir + c.file, 12.0, db, r)) { printf("  (no %s — skipped)\n", c.file); continue; }
+        if (!replay(dir + c.file, 30.0, db, r)) { printf("  (no %s — skipped)\n", c.file); continue; }
         ++ran;
         printf("── %s: %d verdicts\n", c.file, r.verdicts);
-        for (const auto& kv : r.seen) printf("     %-28s in %d\n", kv.first.c_str(), kv.second);
-        CHECK(r.verdicts >= 10, "a verdict about every 0.8 s");
-        for (const auto& w : c.want) {
-            const auto it = r.seen.find(w);
-            const std::string msg = w + " named in at least 80 % of verdicts";
-            CHECK(it != r.seen.end() && it->second * 5 >= r.verdicts * 4, msg.c_str());
+        for (const auto& kv : r.first)
+            printf("     %-28s listed from verdict %d, on the air in %d%s\n", kv.first.c_str(), kv.second,
+                   r.seen.count(kv.first) ? r.seen.at(kv.first) : 0, r.held.count(kv.first) ? ", held at times" : "");
+        CHECK(r.verdicts >= 25, "a verdict about every 0.8 s (the whole 25 s capture)");
+        /* ★ Confirmation (kTiiTrackConfirm of kTiiTrackWindow): a steady site is listed on about its tenth verdict and on
+         *  the air in every one after; nothing is listed before the tenth. */
+        for (const auto& kv : r.first) {
+            const std::string msg = kv.first + " not listed before its tenth verdict";
+            CHECK(kv.second >= kTiiTrackConfirm, msg.c_str());
         }
-        // nothing else NAMED steadily: a site in more than a fifth of the verdicts must be one we expect
-        for (const auto& kv : r.seen) {
+        for (const auto& w : c.want) {
+            const auto f = r.first.find(w), it = r.seen.find(w);
+            const std::string msg = w + " listed by verdict 12 and on the air in every verdict after";
+            CHECK(f != r.first.end() && f->second <= kTiiTrackConfirm + 2 && it != r.seen.end()
+                  && it->second >= r.verdicts - f->second + 1, msg.c_str());
+        }
+        // ★ nothing else EVER listed, on the air or held
+        for (const auto& kv : r.first) {
             bool expected = false;
             for (const auto& w : c.want) if (kv.first == w) expected = true;
             for (const auto& w : c.allow) if (kv.first == w) expected = true;
-            if (!expected && kv.second * 5 > r.verdicts) { const std::string msg = "no steady unexpected site: " + kv.first; CHECK(false, msg.c_str()); }
+            if (!expected) { const std::string msg = "no unexpected site listed: " + kv.first; CHECK(false, msg.c_str()); }
         }
     }
     if (!ran) { printf("  NOT RUN — no captures in %s\n", dir.c_str()); return 3; }

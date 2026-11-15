@@ -472,13 +472,17 @@ inline void dabPaneSignal(App& a, Ctx& c, const RadioState& s, Rect view) {
             }
         }
         rows.push_back({"Frames erased", std::to_string((long)r["erased"].num(0)) + " / " + std::to_string((long)r["frames"].num(0))});
-        for (auto& t : r["tii"].a) {
+        /* ★ `tii` = on the air; `tiiHeld` = listed but not heard now, which the server keeps for five minutes then drops
+         *  (vibe_dab_tii.h TiiTrack, 2026-11-15) — "signal lost" in place of a level that is no longer true. */
+        auto txRow = [&](const auto& t, bool lost) {
             std::string v = t["site"].str().empty() ? f1("TII %.0f", t["main"].num(0)) + f1("/%.0f", t["sub"].num(0)) : t["site"].str();
             if (!t["area"].str().empty()) v += ", " + t["area"].str();
             if (t.has("km")) v += f1(" · %.0f km", t["km"].num(0));
-            v += f1(" · %.1f dB", t["db"].num(0));
+            v += lost ? std::string(" · signal lost") : f1(" · %.1f dB", t["db"].num(0));
             rows.push_back({"Transmitter", v});
-        }
+        };
+        for (auto& t : r["tii"].a) txRow(t, false);
+        for (auto& t : r["tiiHeld"].a) txRow(t, true);
         if (r.has("utc")) rows.push_back({"Multiplex time", r["utc"].str() + " UTC"});
         if (r["announce"].size()) {
             std::string an;

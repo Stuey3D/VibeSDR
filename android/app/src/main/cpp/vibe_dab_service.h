@@ -134,6 +134,7 @@ private:
         channel_ = idx;
         blockCentre_.store(double(kBandIII[idx].centreHz), std::memory_order_relaxed);   // ★ the DDC thread reads it
         rx_.reset();
+        tiiTrack_.reset(); tiiLastVerdict_ = 0;   // ★ a new block's transmitters start afresh (a re-acquire keeps them)
         dlsAll_.clear(); scanCursor_ = 0; scanRotatedAt_ = 0;
         holdScanForNewService_();   // ★ a new multiplex is a new station too
         for (auto& t : taps_) t.reset();
@@ -636,6 +637,7 @@ private:
         while (iq_.size() - iqHead_ >= need) {
             ++pushCalls_;
             if (rx_.push(iq_.data() + iqHead_, need)) ++pushOk_;
+            tiiTrackLocked_();   // ★ every verdict, whether or not anyone is asking for reports
             publishQuality_();
             /* ★★★ TRACK ACROSS THE BOUNDARY — DO NOT RE-ACQUIRE EVERY FRAME.
              *  This used to call resetSync() here, throwing the lock away and acquiring afresh on
@@ -1078,15 +1080,36 @@ public:
      *  one Sub Id) resolved against the directory's codes for THIS ensemble — or, where the directory
      *  has none for it, offered as candidates (vibe_dab_tii.h). The codes are read once per ensemble;
      *  the resolving is a few pattern checks per shared comb, at report time. Caller holds m_. */
-    std::vector<TiiHit> tiiHitsLocked_(const Ensemble& e) {
-        /* ★★★ ONLY WHAT COMES BACK (TiiConfirm, vibe_dab_tii.h — 7D's "constantly growing" list, 2026-11-13). Judged once
-         *  per verdict; the reports between verdicts reuse it. Verdict 0 = nothing decided on this block yet. */
-        const unsigned n = rx_.tiiDiag().verdicts;
-        if (n == 0) { tiiConfirm_.reset(); return {}; }
-        if (n != tiiConfirm_.lastVerdict()) tiiConfirm_.verdict(n, tiiVerdictLocked_(e));
-        return tiiConfirm_.confirmed();
+    std::vector<TiiLine> tiiLinesLocked_() {
+        /* ★★★ CONFIRMED, HELD, EXPIRED (TiiTrack, vibe_dab_tii.h — 7D's "constantly growing" list, 2026-11-13, and the
+         *  Almere B210's forty "signal lost" lines, 2026-11-15). The verdicts are taken as the worker makes them
+         *  (tiiTrackLocked_); a report only reads the list at the time it is sent. */
+        tiiTrackLocked_();
+        return tiiTrack_.lines(tiiNowMs_());
     }
-    /** One verdict's whole list, before TiiConfirm: measured hits plus shared combs resolved (see above). */
+    /** ★ Hand a new verdict to the tracker. From the worker after every frame, and from a report — whichever sees it
+     *  first; one verdict is taken once. The count restarts at a re-acquire (rx_.reset) — the tracker carries on. */
+    void tiiTrackLocked_() {
+        const unsigned n = rx_.tiiDiag().verdicts;
+        if (n == 0) { tiiLastVerdict_ = 0; return; }
+        if (n == tiiLastVerdict_) return;
+        tiiLastVerdict_ = n;
+        tiiTrack_.verdict(tiiVerdictLocked_(rx_.ensemble()), tiiNowMs_());
+    }
+    static int64_t tiiNowMs_() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    /** ★ The strongest transmitter read in two of the last three verdicts — the DX log's, for a visit too short for the
+     *  list's confirmation (TiiTrack::strongestRecent). False when none. */
+    bool tiiStrongestRecent(int& mainId, int& subId) {
+        std::lock_guard<std::mutex> lk(m_);
+        tiiTrackLocked_();
+        TiiHit h;
+        if (!tiiTrack_.strongestRecent(h)) return false;
+        mainId = h.mainId; subId = h.subId;
+        return true;
+    }
+    /** One verdict's whole list, before TiiTrack: measured hits plus shared combs resolved (see above). */
     std::vector<TiiHit> tiiVerdictLocked_(const Ensemble& e) {
         std::vector<TiiHit> hits = rx_.tii();
         const auto& shared = rx_.tiiShared();
@@ -1503,15 +1526,20 @@ public:
         }
         {
             /* ★ TII: which transmitter(s) of the SFN we are hearing — main id, sub id, dB over
-             *  the null's noise. The figure a DX-er wants beside the ensemble name. */
-            j += ",\"tii\":[";
-            bool f1 = true;
-            for (const auto& h : tiiHitsLocked_(e)) {
-                char tb[112];
+             *  the null's noise. The figure a DX-er wants beside the ensemble name.
+             *  ★★★ `tii` is what is on the air now; `tiiHeld` the listed codes that are not ("signal lost"), at their last
+             *  reading, until they expire (TiiTrack, vibe_dab_tii.h, 2026-11-15). `o` is each line's place, the same
+             *  across both. A panel that finds `tiiHeld` draws the two as the server keeps them and remembers nothing
+             *  itself; an older panel reads `tii` as before — it is still only the live lines, now confirmed. */
+            const std::vector<TiiLine> lines = tiiLinesLocked_();
+            auto tiiItem = [&](const TiiLine& l, bool& first) {
+                const TiiHit& h = l.hit;
+                char tb[128];
                 /* ★ `c`: 1 = resolved from a shared Sub Id by the directory, 2 = one of several
                  *  candidates on a shared Sub Id (no directory for this ensemble). Absent = measured. */
-                snprintf(tb, sizeof tb, "%s{\"main\":%d,\"sub\":%d,\"db\":%.1f", f1 ? "" : ",", h.mainId, h.subId, h.strength);
-                j += tb; f1 = false;
+                snprintf(tb, sizeof tb, "%s{\"main\":%d,\"sub\":%d,\"db\":%.1f,\"o\":%u", first ? "" : ",", h.mainId, h.subId,
+                         h.strength, unsigned(l.order));
+                j += tb; first = false;
                 if (h.from != kTiiClean) { snprintf(tb, sizeof tb, ",\"c\":%d", int(h.from)); j += tb; }
                 /* ★ Named from the country's directory when there is one for this ensemble's ECC;
                  *  nearest site when the code is reused; distance only when we know where we are. */
@@ -1527,7 +1555,13 @@ public:
                     }
                 }
                 j += "}";
-            }
+            };
+            j += ",\"tii\":[";
+            bool f1 = true;
+            for (const auto& l : lines) if (l.live) tiiItem(l, f1);
+            j += "],\"tiiHeld\":[";
+            f1 = true;
+            for (const auto& l : lines) if (!l.live) tiiItem(l, f1);
             j += "]";
             if (txdb_ && e.eid) {
                 /* ★ The block too: a regulator that publishes no EIds (BAKOM) is matched on the
@@ -3036,7 +3070,8 @@ private:
     int               tiiCodesEcc_ = -2;
     int               tiiCodesEid_ = -1;
     std::vector<bool> tiiCodes_;
-    TiiConfirm        tiiConfirm_;   ///< ★ a code is reported once it is in 2 of the last 3 verdicts (vibe_dab_tii.h)
+    TiiTrack          tiiTrack_;     ///< ★ confirmed, held "signal lost", expired (vibe_dab_tii.h)
+    unsigned          tiiLastVerdict_ = 0;   ///< the receiver's verdict count last handed to tiiTrack_
     bool              tiiHaveCodes_ = false;
     uint32_t sid_ = 0, want_ = 0;
     // ★ The server's own choice on a block change (armAutoChoice) and the store behind rule 2.

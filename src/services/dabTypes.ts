@@ -41,7 +41,11 @@ export interface DabState {
   /*  ★ `c` (2026-11-04): 1 = resolved from a SHARED Sub Id (several sites on one comb) by the transmitter
    *    directory; 2 = one of several candidates on a shared Sub Id where no directory covers the ensemble.
    *    Absent = measured on its own. */
-  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number }[];
+  /*  ★★ `o` (2026-11-15): the line's place in the server's list (the order codes were confirmed). `tiiHeld`: the listed
+   *    codes NOT on the air now ("signal lost"), at their last reading, until the server expires them (5 min,
+   *    vibe_dab_tii.h TiiTrack). Its presence means the server keeps the list: a panel draws it and remembers nothing. */
+  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number }[];
+  tiiHeld?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number }[];
   /** Signal analysis: MER (dB), raw MSC bit error rate, PRS impulse response (128 x uint8 dB
    *  bins, 4 samples each, 255 = peak), constellation (192 int8 x,y pairs, ideal radius 60). */
   mer?: number; mscBer?: number; irPeak?: number; ir?: number[]; iq?: number[];
@@ -236,8 +240,16 @@ export function parseDabMessage(m: Record<string, unknown>): DabState {
     o.dlp = out;
   }
 
+  // ★ 24 = the server's list cap (kTiiListCap, vibe_dab_tii.h), live and held together.
   if (Array.isArray(m.tii)) {
-    o.tii = cap<NonNullable<DabState['tii']>[number]>(m.tii, 16).map(t => ({
+    o.tii = cap<NonNullable<DabState['tii']>[number]>(m.tii, 24).map(t => ({
+      ...t,
+      site: t.site !== undefined ? dabSafeText(t.site, 48) : undefined,
+      area: t.area !== undefined ? dabSafeText(t.area, 48) : undefined,
+    }));
+  }
+  if (Array.isArray(m.tiiHeld)) {
+    o.tiiHeld = cap<NonNullable<DabState['tiiHeld']>[number]>(m.tiiHeld, 24).map(t => ({
       ...t,
       site: t.site !== undefined ? dabSafeText(t.site, 48) : undefined,
       area: t.area !== undefined ? dabSafeText(t.area, 48) : undefined,

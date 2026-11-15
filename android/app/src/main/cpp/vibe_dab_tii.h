@@ -244,50 +244,209 @@ inline void tiiResolveShared(const std::vector<TiiShared>& shared, bool haveDire
     tiiResolveShared(shared, haveDirectory, known, [](int, int) { return 0.0; }, hits, cap);
 }
 
-/** ★★★ A TRANSMITTER IS ONE THAT COMES BACK (Stuart, 2026-11-13, 7D NNDAB beside Moulton Park at 2.7 mi: "that list
- *  is constantly growing"). One verdict is ~0.8 s of null symbols; now and then one of them throws up a code nobody
- *  sent — 2C/0C, 2C/0D, 2C/10 … 2C/14, one Main Id across a run of Sub Ids — and the panels remember every code they
- *  are ever shown for the rest of the multiplex ("not received"), so a few odd verdicts an hour became a list that only
- *  grows. A real site is in verdict after verdict (Daventry and Bow Brickhill were in every one of 11-04's captures).
- *  So a code is reported only once it is in kTiiConfirmOf of the last kTiiConfirmWindow verdicts — about 1.6 s to
- *  appear, and a site at the edge that flickers in one verdict in three is no longer named: the trade, stated. The
- *  strength reported is the newest verdict's. A new block (the verdict count starting again) forgets the history. */
-static constexpr int kTiiConfirmWindow = 3;
-static constexpr int kTiiConfirmOf = 2;
-class TiiConfirm {
+/** ★★★ A TRANSMITTER IS ONE THAT COMES BACK — AND ONE THAT GOES AWAY (Stuart, 2026-11-13, 7D NNDAB: "that list is
+ *  constantly growing"; 2026-11-15, the Almere B210 on 7D MTVNL: ~40 lines, nearly all "signal lost").
+ *  One verdict is ~0.8 s of null symbols. The 11-13 rule listed a code once it was in 2 of the last 3 verdicts, and the
+ *  panels then remembered every code they were ever shown for the life of the multiplex. In a big SFN that let through
+ *  codes that held for a couple of seconds — 0D/06, then 2B/06, then 02/06 (hex, as the panels write them), one at a
+ *  time at 13–15 dB, each "signal
+ *  lost" for ever after. Three things now, all here on the server so every client gets the same list:
+ *
+ *   1. CONFIRMED BEFORE LISTED. A code is listed once it is in kTiiTrackConfirm of the last kTiiTrackWindow verdicts
+ *      (10 of 32: the window is ~25 s). From the captures (dab/tii, 2026-11-13: 11A, 12B, 7D, 11D, 10D, 32 verdicts each):
+ *      every real site but the weakest is in 30–32 of 32 — Daventry 23/2, Northampton 23/15, Bow Brickhill 22/9, Sandy
+ *      Heath 22/3, 1/5 at NNDAB — and Sutton Coldfield 19/18 (real, 1–3 dB) in 16; the only stray (23/5, one verdict of
+ *      12B, on a frame where every figure jumped 4 dB) is in 1. So a steady site is listed ~8 s after the block is
+ *      tuned (it was ~1.6 s — the trade, stated), a site in half the verdicts in ~16 s, and a code must hold for 10
+ *      verdicts of 32 before a panel ever shows it: a few-second flicker never appears. Bow Brickhill on 12B (2–6 dB,
+ *      8 of 31) and Zouches Farm 22/14 on 10D (3 of 32) stay unlisted on 25 s; they are at the edge.
+ *   2. SAME-COMB MISREADINGS. Table 26's patterns are the 70 bytes with four ones; a weak site whose comb loses one of
+ *      its four blocks under a noise peak is read as the pattern with that block swapped — another Main Id sharing
+ *      THREE blocks with it. The 15th's three are exactly that: 2B (1001 1010) and 02 (0001 1011) each share three of
+ *      0D's four (0011 1010) on Sub Id 06. So a code that is not confirmed, on the Sub Id of a confirmed code with
+ *      kTiiGhostOverlap blocks in common, not more than kTiiGhostMarginDb above it, and in a verdict that did NOT also
+ *      read the confirmed code, is that code's misreading: it is never listed, and it counts as a sighting of the code
+ *      it misread (so the real site does not flicker to "signal lost" when it is misread). A misreading cannot be
+ *      stronger than its site (its mean holds a noise block), hence the margin; and two codes read in the SAME verdict
+ *      are two sites (a collision the directory resolved), so neither is touched. Readings of such a code from BEFORE
+ *      its site was listed are dropped too, except those beside it. The site must itself have been heard in the last
+ *      8 verdicts: a code that turns up after its "site" has gone quiet is not that site's misreading.
+ *   3. LOST, THEN GONE. A listed code not in one of the last kTiiLiveWindow verdicts — or every code, when no verdict has
+ *      come for kTiiStallMs (no signal) — is reported "signal lost" (`tiiHeld`), at its last reading, for kTiiExpireMs
+ *      (5 minutes) after it was last seen, then removed. At most kTiiListCap lines: past that, the longest-lost goes.
+ *   ★ A CANDIDATE (one of several on a shared Sub Id, no directory) is confirmed the same way but never held: a
+ *     "signal lost" line for a guess would be clutter (the panels' rule since 2026-11-04).
+ *  The list is in the order codes were confirmed, so lines do not jump. A block change starts it afresh; a re-acquire
+ *  on the same block (the verdict count starting again) does not. Times are the caller's milliseconds. */
+static constexpr int     kTiiTrackWindow   = 32;      ///< verdicts (~25 s)
+static constexpr int     kTiiTrackConfirm  = 10;      ///< own sightings in the window to be listed
+static constexpr int     kTiiLiveWindow    = 3;       ///< listed and seen in one of the last 3 verdicts = on the air
+static constexpr int64_t kTiiStallMs       = 5000;    ///< no verdict for this long: every line is "signal lost"
+static constexpr int64_t kTiiExpireMs      = 5 * 60 * 1000;   ///< unseen this long: the line is removed
+static constexpr size_t  kTiiListCap       = 24;      ///< lines listed, live and lost together
+static constexpr size_t  kTiiPendingCap    = 64;      ///< codes being weighed (not yet listed)
+static constexpr int     kTiiGhostOverlap  = 3;       ///< blocks in common with a confirmed code on its Sub Id
+static constexpr float   kTiiGhostMarginDb = 3.0f;    ///< …and not more than this above it
+static constexpr uint32_t kTiiGhostRecent  = 0xFFu;   ///< …which was itself heard in the last 8 verdicts (~6 s)
+
+/** One line of the list: the code at its newest reading, its place, and whether it is on the air now. */
+struct TiiLine {
+    TiiHit   hit;
+    uint32_t order = 0;
+    bool     live  = false;
+};
+
+class TiiTrack {
 public:
-    /** One verdict's full list (measured + resolved + candidates), with that verdict's number (Diag::verdicts). */
-    void verdict(unsigned n, const std::vector<TiiHit>& hits) {
-        if (n < last_) hist_.clear();
-        if (n == last_ && !hist_.empty()) { hist_.back() = hits; }
-        else { hist_.push_back(hits); if (int(hist_.size()) > kTiiConfirmWindow) hist_.erase(hist_.begin()); }
-        last_ = n;
-        /* every code in the window that is in enough of its verdicts, at its newest reading — so a weak site in two
-         *  verdicts out of three stays named through the one it missed, instead of flickering on and off the panel */
-        out_.clear();
-        for (size_t i = hist_.size(); i-- > 0;)
-            for (const auto& h : hist_[i]) {
-                bool have = false;
-                for (const auto& o : out_) if (o.mainId == h.mainId && o.subId == h.subId) have = true;
-                if (have) continue;
-                int seen = 0;
-                for (const auto& v : hist_)
-                    for (const auto& x : v) if (x.mainId == h.mainId && x.subId == h.subId) { ++seen; break; }
-                if (seen >= kTiiConfirmOf) out_.push_back(h);
+    /** One verdict's whole list (measured + resolved + candidates) at `nowMs`. */
+    void verdict(const std::vector<TiiHit>& hits, int64_t nowMs) {
+        for (auto& e : e_) { e.mask <<= 1; e.own <<= 1; e.beside <<= 1; }
+        auto inVerdict = [&](int m, int s) {
+            for (const auto& h : hits) if (h.mainId == m && h.subId == s) return true;
+            return false;
+        };
+        for (size_t i = 0; i < hits.size(); ++i) {
+            const TiiHit& h = hits[i];
+            if (h.mainId < 0 || h.mainId >= 70 || h.subId < 0 || h.subId >= 24) continue;
+            bool dup = false;
+            for (size_t j = 0; j < i; ++j) if (hits[j].mainId == h.mainId && hits[j].subId == h.subId) dup = true;
+            if (dup) continue;
+            Entry* e = find_(h.mainId, h.subId);
+            if (!e || !e->confirmed) {
+                if (Entry* c = misreadOf_(h, [&](const Entry& x) { return (x.mask & kTiiGhostRecent) && !inVerdict(x.hit.mainId, x.hit.subId); })) {
+                    c->mask |= 1u; c->lastSeen = nowMs;   // ★ rule 2: a sighting of the site it misread
+                    continue;
+                }
             }
-        std::stable_sort(out_.begin(), out_.end(), [](const TiiHit& a, const TiiHit& b) {
-            const bool ca = a.from == kTiiCandidate, cb = b.from == kTiiCandidate;
-            if (ca != cb) return cb;
-            return a.strength > b.strength;
+            if (!e) {
+                if (pending_() >= kTiiPendingCap) dropWeakestPending_();
+                e_.push_back(Entry{}); e = &e_.back();
+            }
+            e->hit = h; e->mask |= 1u; e->own |= 1u; e->lastSeen = nowMs;
+            for (const auto& x : hits)   // read beside an overlapping code: two sites, not a misreading
+                if (x.subId == h.subId && x.mainId != h.mainId && overlap_(x.mainId, h.mainId)) { e->beside |= 1u; break; }
+        }
+        // rule 1: confirm — the most-seen first, so of two overlapping codes the better-read one is the site
+        std::vector<size_t> ready;
+        for (size_t i = 0; i < e_.size(); ++i)
+            if (!e_[i].confirmed && seen_(e_[i].own) >= kTiiTrackConfirm) ready.push_back(i);
+        std::stable_sort(ready.begin(), ready.end(), [&](size_t a, size_t b) {
+            if (seen_(e_[a].own) != seen_(e_[b].own)) return seen_(e_[a].own) > seen_(e_[b].own);
+            return e_[a].hit.strength > e_[b].hit.strength;
         });
+        for (size_t i : ready) {
+            Entry& e = e_[i];
+            if (seen_(e.own) < kTiiTrackConfirm) continue;   // its lone readings went to a code confirmed just now
+            e.confirmed = true; e.order = nextOrder_++;
+            /* ★ What an overlapping code on this Sub Id read on its own, BEFORE this one was listed, was this one
+             *  misread (rule 2) — only its readings beside this one still count towards its own line. */
+            for (auto& u : e_)
+                if (!u.confirmed && u.hit.subId == e.hit.subId && overlap_(u.hit.mainId, e.hit.mainId)
+                    && u.hit.strength <= e.hit.strength + kTiiGhostMarginDb) { u.own &= u.beside; u.mask &= u.beside; }
+        }
+        // forget what has left the window unlisted
+        e_.erase(std::remove_if(e_.begin(), e_.end(), [](const Entry& e) { return !e.confirmed && e.mask == 0; }), e_.end());
+        lastVerdict_ = nowMs; haveVerdict_ = true;
+        trim_(nowMs);
     }
-    const std::vector<TiiHit>& confirmed() const { return out_; }
-    unsigned lastVerdict() const { return last_; }
-    void reset() { hist_.clear(); out_.clear(); last_ = 0; }
+    /** The list at `nowMs`, in the order the codes were confirmed: expired lines removed, lost candidates dropped. */
+    std::vector<TiiLine> lines(int64_t nowMs) {
+        trim_(nowMs);
+        std::vector<TiiLine> out;
+        for (const auto& e : e_) {
+            if (!e.confirmed) continue;
+            const bool live = live_(e, nowMs);
+            if (!live && e.hit.from == kTiiCandidate) continue;
+            TiiLine l; l.hit = e.hit; l.order = e.order; l.live = live;
+            out.push_back(l);
+        }
+        std::sort(out.begin(), out.end(), [](const TiiLine& a, const TiiLine& b) { return a.order < b.order; });
+        return out;
+    }
+    /** ★ The strongest code read in two of the last three verdicts, listed or not — for a DX scan's short visit,
+     *  which logs the transmitter it heard and cannot wait the ~8 s a line takes (local_sdr_shim's DX log). */
+    bool strongestRecent(TiiHit& out) const {
+        bool any = false;
+        for (const auto& e : e_) {
+            if (e.hit.from == kTiiCandidate || __builtin_popcount(e.own & 7u) < 2) continue;
+            if (!any || e.hit.strength > out.strength) { out = e.hit; any = true; }
+        }
+        return any;
+    }
+    void reset() { e_.clear(); nextOrder_ = 0; haveVerdict_ = false; lastVerdict_ = 0; }
+
 private:
-    std::vector<std::vector<TiiHit>> hist_;
-    std::vector<TiiHit> out_;
-    unsigned last_ = 0;
+    struct Entry {
+        TiiHit   hit;
+        uint32_t mask = 0;        ///< bit 0 = the newest verdict: read, or misread (rule 2)
+        uint32_t own  = 0;        ///< …read as itself
+        uint32_t beside = 0;      ///< …read in a verdict that also read an overlapping code on its Sub Id
+        bool     confirmed = false;
+        uint32_t order = 0;
+        int64_t  lastSeen = 0;
+    };
+    static_assert(kTiiTrackWindow <= 32, "the window is a 32-bit mask");
+    static int seen_(uint32_t m) {
+        const uint32_t w = kTiiTrackWindow >= 32 ? 0xFFFFFFFFu : ((1u << kTiiTrackWindow) - 1u);
+        return __builtin_popcount(m & w);
+    }
+    bool live_(const Entry& e, int64_t nowMs) const {
+        return (e.mask & ((1u << kTiiLiveWindow) - 1u)) && haveVerdict_ && nowMs - lastVerdict_ <= kTiiStallMs;
+    }
+    static bool overlap_(int a, int b) {
+        return __builtin_popcount(unsigned(tiiPattern(a) & tiiPattern(b))) >= kTiiGhostOverlap;
+    }
+    Entry* find_(int m, int s) {
+        for (auto& e : e_) if (e.hit.mainId == m && e.hit.subId == s) return &e;
+        return nullptr;
+    }
+    /** Rule 2: the confirmed code `h` would be a misreading of, or null. `eligible` narrows the confirmed codes. */
+    template <class Eligible>
+    Entry* misreadOf_(const TiiHit& h, Eligible eligible) {
+        Entry* best = nullptr;
+        for (auto& c : e_) {
+            if (!c.confirmed || c.hit.subId != h.subId || c.hit.mainId == h.mainId) continue;
+            if (!overlap_(c.hit.mainId, h.mainId)) continue;
+            if (h.strength > c.hit.strength + kTiiGhostMarginDb) continue;
+            if (!eligible(c)) continue;
+            if (!best || c.hit.strength > best->hit.strength) best = &c;
+        }
+        return best;
+    }
+    size_t pending_() const { size_t n = 0; for (const auto& e : e_) if (!e.confirmed) ++n; return n; }
+    void dropWeakestPending_() {
+        size_t w = e_.size();
+        for (size_t i = 0; i < e_.size(); ++i) {
+            if (e_[i].confirmed) continue;
+            if (w == e_.size() || seen_(e_[i].own) < seen_(e_[w].own)) w = i;
+        }
+        if (w < e_.size()) e_.erase(e_.begin() + long(w));
+    }
+    /** Rule 3: expire, drop candidates no longer heard, and hold the list to its cap (the longest-lost first). */
+    void trim_(int64_t nowMs) {
+        e_.erase(std::remove_if(e_.begin(), e_.end(), [&](const Entry& e) {
+            return e.confirmed && (nowMs - e.lastSeen > kTiiExpireMs || (e.hit.from == kTiiCandidate && !live_(e, nowMs)));
+        }), e_.end());
+        for (;;) {
+            size_t n = 0, out = e_.size();
+            for (size_t i = 0; i < e_.size(); ++i) {
+                if (!e_[i].confirmed) continue;
+                ++n;
+                const Entry& e = e_[i];
+                if (out == e_.size()) { out = i; continue; }
+                const Entry& o = e_[out];
+                const bool el = live_(e, nowMs), ol = live_(o, nowMs);
+                if (el != ol ? !el : (el ? e.hit.strength < o.hit.strength : e.lastSeen < o.lastSeen)) out = i;
+            }
+            if (n <= kTiiListCap || out == e_.size()) break;
+            e_.erase(e_.begin() + long(out));
+        }
+    }
+
+    std::vector<Entry> e_;
+    uint32_t nextOrder_ = 0;
+    int64_t  lastVerdict_ = 0;
+    bool     haveVerdict_ = false;
 };
 
 /** ★ Accumulates pair products over TII frames and reports the transmitters it can see. */

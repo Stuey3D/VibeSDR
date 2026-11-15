@@ -32931,18 +32931,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         };
         if (!h.eid) { const long e = num("\"eid\":"); if (e > 0) h.eid = (uint32_t)e; }
         if (h.ecc < 0) { const long e = num("\"ecc\":"); if (e >= 0) h.ecc = (int)e; }
-        const size_t t = j.find("\"tii\":[");
-        if (t == std::string::npos) return;
-        const size_t te = j.find(']', t);
-        float best = -1e9f;
-        for (size_t at = j.find("{\"main\":", t); at != std::string::npos && at < te; at = j.find("{\"main\":", at + 1)) {
-            const int m = (int)std::strtol(j.c_str() + at + 8, nullptr, 10);
-            const size_t sp = j.find("\"sub\":", at), dp = j.find("\"db\":", at);
-            if (sp == std::string::npos || dp == std::string::npos || sp > te) break;
-            const int sb = (int)std::strtol(j.c_str() + sp + 6, nullptr, 10);
-            const float db = std::strtof(j.c_str() + dp + 5, nullptr);
-            if (db > best && m >= 0 && sb >= 0) { best = db; h.tiiMain = m; h.tiiSub = sb; }
-        }
+        /* ★ The strongest code read in two of the last three verdicts — not the panel's list, which waits ~8 s to confirm
+         *  a code (TiiTrack, vibe_dab_tii.h, 2026-11-15): a DX visit is often shorter, and logs what it heard. */
+        int tm = -1, ts = -1;
+        if (g_dab.tiiStrongestRecent(tm, ts)) { h.tiiMain = tm; h.tiiSub = ts; }
     }
 
     // ── ★★★ V12 THE OWNER'S FM BAND SCAN (2026-11-04) — the DX scanner's FM hop, once, into the bookmarks ──────────────
