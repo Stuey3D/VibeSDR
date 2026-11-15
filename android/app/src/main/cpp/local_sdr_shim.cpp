@@ -32489,7 +32489,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     dwell) is visited again ON ITS OWN, the IF narrowed to one channel, the capture's DC put on the side AWAY from
      *     its strongest neighbour, so that neighbour sits outside the filter and the AGC can climb (narrowing "takes
      *     energy away", applyAutoIf). Its RDS then has the chance a zoomed-in listener's would.
-     *  ★ Cost (stated, feedback_state_efficiency_tradeoffs): up to kDxLooks x ~5-9 s per hop, ONLY where such a station
+     *  ★ Cost (stated, feedback_state_efficiency_tradeoffs): up to kDxLooks x ~7-11 s per hop (the AGC gets 2.5 s to
+     *    climb behind the narrower filter — Stuart: time is fine on an idle server's DX log), ONLY where such a station
      *    was heard — a hop of named stations costs nothing more. Local RTL only: the filter is librtlsdr's (an RSP /
      *    Airspy / rtl_tcp radio keeps its ordinary hop). */
     /* ★★★ EVERY FM HOP STARTS AT THE GAIN THAT LAST WORKED THERE (the Sony, 2026-11-15 00:06: the 104 MHz hops ran at
@@ -32501,7 +32502,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  not start while the ADC is still on the rail (up to kDxGainWaitS: the AGC's one-move cut lands in ~1-2 s).
      *  In-process, like g_bandGainMem; a radio with no gain table (RSP, HF+) is untouched (dabSeedGain declines). */
     std::map<int, int> dxGainMem_;   // hop centre kHz -> g_ovlSteps
-    static constexpr double kDxGainWaitS = 3.0;
+    // ★ Stuart 2026-11-15: "the FM scan can take longer if needed … enough time to try IF filtering and allow the AGC to
+    //   work" — an idle server's DX log, so time is cheap; a sweep stays minutes, not hours (18 hops × ≤ ~25 s worst case).
+    static constexpr double kDxGainWaitS = 6.0, kDxGainCleanS = 1.0;
     void dxGainEnter(int key, const char* what) {
         int steps = -1;
         if (auto it = dxGainMem_.find(key); it != dxGainMem_.end()) steps = it->second;
@@ -32514,9 +32517,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (it != g_bandGainMem.end()) steps = it->second;
         }
         if (steps >= 0) dabSeedGain(this, steps, nowSecs(), what);
+        // ★ the dwell starts once the ADC has been OFF the rail for kDxGainCleanS (one clean window is not "settled")
+        double cleanSince = -1;
         for (double t0 = nowSecs(); nowSecs() - t0 < kDxGainWaitS && !dxCancel_.load() && !stopping.load();) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            if (nowSecs() - t0 >= 0.5 && g_adcClipRun.load(std::memory_order_relaxed) <= 0) break;
+            const double t = nowSecs();
+            if (g_adcClipRun.load(std::memory_order_relaxed) > 0) { cleanSince = -1; continue; }
+            if (cleanSince < 0) cleanSince = t;
+            if (t - cleanSince >= kDxGainCleanS) break;
         }
     }
     void dxGainLearn(int key) {
@@ -32525,10 +32533,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     std::vector<vibe::dx::FmHit> dxPrevHits_;   // ★ the previous hop's hits (vibe_dxscan.h spillOf / markSpill)
     int dxPrevHopIdx_ = -1;
-    static constexpr int    kDxLooks = 3;
+    static constexpr int    kDxLooks = 5;
     static constexpr float  kDxShadowSnrDb = 6.0f, kDxShadowDb = 15.0f;   // ★ a carrier this far over the floor, this far under a neighbour
     static constexpr double kDxFmIfHz = 1400000.0;   // ★ Stuart's FM balance on the RTLs (see planFm)
-    static constexpr double kDxChanHz = 200000.0, kDxLookIfHz = 500000.0, kDxLookDcOffHz = 120000.0, kDxLookSettleS = 1.0;
+    static constexpr double kDxChanHz = 200000.0, kDxLookIfHz = 500000.0, kDxLookDcOffHz = 120000.0, kDxLookSettleS = 2.5;
     static int dxIfRung(double hz) { for (int r : kIfRungs) if (r >= hz) return r; return 0; }
     bool dxCanNarrow() const { return dev != nullptr && g_tunerBwAuto.load(std::memory_order_relaxed) && g_vsLockedCentre.load() <= 0.0; }
     void dxSetIf(int hz) { g_dxIfHz.store(dxCanNarrow() ? hz : 0, std::memory_order_relaxed); }
