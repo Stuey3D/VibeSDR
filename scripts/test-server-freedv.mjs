@@ -12,6 +12,12 @@
 //     report says which ("sb");
 //   • leaving FreeDV for SSB stops the reports and brings the SSB audio back;
 //   • a server whose libcodec2 does not load (VIBE_FREEDV_DISABLE=1) does not offer the mode, and refuses it.
+// ★★★ RADE V1 (2026-11-16 — what nearly every FreeDV station sends today, compiled in from rade_c): where the clip writer had
+//   rade_c's transmitter, a fourth station at +30 kHz carries a RADE over (14 s of the voice, then its end-of-over frame
+//   with "G4ABC", then noise to the loop). AUTO names RADE, its speech comes out, and once the over ends the report says
+//   "last":"G4ABC" — never as the talker's text. Then: a server WITHOUT libcodec2 (VIBE_CODEC2_DISABLE=1) still offers
+//   FreeDV, with RADE alone, and decodes it; the owner's "rade" switch off takes RADE out of freedvSubs and AUTO.
+//   Every listener here pings (the server drops a session that has said nothing for 30 s, and RADE's checks take longer).
 // Silent: audio frames are decoded to numbers, never played.
 //   VIBESERVER_BIN=…/vibeserver VIBE_FREEDV_CLIP=…/fdv.cu8 node scripts/test-server-freedv.mjs
 //   (make the clips: test-freedv clip fdv.cu8 288000 20 12; …clip fdv-lsb.cu8 288000 20 12 lsb → VIBE_FREEDV_CLIP_LSB)
@@ -34,7 +40,7 @@ if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP)) {
 const RATE = 288000;
 let CENTRE = 14200000, CLIPNOW = CLIP;
 let STATIONS = [];
-const stationsAt = (c) => [[c + 10000, '700D'], [c + 20000, '700E'], [c - 10000, '1600']];
+const stationsAt = (c) => [[c + 10000, '700D'], [c + 20000, '700E'], [c - 10000, '1600'], [c + 30000, 'RADE']];
 let pass = 0, fail = 0;
 const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -97,20 +103,20 @@ async function pcmOf(frames) {
 /** ★ "Port already in use": freePort() hands out a port that something else on this machine can take before the server
  *  binds it (other benches run beside this one). A server that says so is started again on fresh ports — a harness race,
  *  not a result. */
-async function server(args, tag, extraEnv) {
+async function server(args, tag, extraEnv, radioExtra) {
   for (let attempt = 0; ; attempt++) {
-    const S = await serverOnce(args, tag, extraEnv);
+    const S = await serverOnce(args, tag, extraEnv, radioExtra);
     if (S.ok || attempt >= 2 || !S.portTaken()) return S;
     console.log('   (the port was taken before the server bound it — starting again on fresh ports)');
     await S.stop();
   }
 }
-async function serverOnce(args, tag, extraEnv) {
+async function serverOnce(args, tag, extraEnv, radioExtra) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-fdv-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     configured: true, name: 'FreeDV test', locator: 'IO92nh', adminPass: 'fdv-test-admin',
-    radios: [{ serial: 'fdv-test', label: 'Test radio', enabled: true, configured: true }],
+    radios: [{ serial: 'fdv-test', label: 'Test radio', enabled: true, configured: true, ...(radioExtra || {}) }],
   }));
   const rtlPort = await freePort(), port = await freePort();
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
@@ -139,6 +145,10 @@ async function listener(port, sid, f, mode) {
   L.aud.countOnly = true;
   await sleep(400);
   L.spec.send({ type: 'tune', frequency: f, mode });
+  // ★ keepalive: the server drops a session that has said nothing for 30 s — RADE's end-of-over check alone waits longer
+  L.ping = setInterval(() => { try { L.spec.send({ type: 'ping' }); } catch {} }, 5000);
+  const close0 = L.spec.close;
+  L.spec.close = () => { clearInterval(L.ping); close0(); };
   await sleep(600);
   return L;
 }
@@ -152,6 +162,7 @@ async function scenario(label, args, tag, sb = 'usb') {
     const st = await S.status();
     ok(st && Array.isArray(st.modes) && st.modes.includes('freedv'), `vibeserver.json offers freedv (${JSON.stringify(st && st.modes)})`);
     ok(st && Array.isArray(st.freedvSubs) && st.freedvSubs.includes('700D'), `…with its sub-modes (${JSON.stringify(st && st.freedvSubs)})`);
+    if (HAVE_RADE) ok(st.freedvSubs[0] === 'RADE', `…RADE first (${JSON.stringify(st.freedvSubs)})`);
     const L = await listener(S.port, `fdv${tag}001`, STATIONS[0][0], 'freedv');
     L.aud.countOnly = false;
     const reps = () => jsons(L.spec, 'freedv');
@@ -165,6 +176,18 @@ async function scenario(label, args, tag, sb = 'usb') {
       const r = reps().slice(n0).filter((x) => x.state === 'sync').at(-1);
       ok(r && r.sub === 'auto' && typeof r.snr === 'number' && r.snr > 3, `…the report: sub auto, SNR ${r && r.snr} dB`);
       ok(r && r.sb === sb, `…demodulated on the ${sb.toUpperCase()} side, by FreeDV's convention (${r && r.sb})`);
+      if (sub === 'RADE') {
+        // ★ speech now, while the over is on (it ends 14 s into each 20 s loop)
+        L.aud.bin.length = 0;
+        await sleep(2000);
+        const pcm = await pcmOf(L.aud.bin);
+        ok(pcm.length > 48000 && rms(pcm) > 300, `…decoded speech on the audio socket (${(pcm.length / 48000).toFixed(1)} s, rms ${rms(pcm).toFixed(0)})`);
+        ok(!reps().slice(n0).some((x) => x.state === 'sync' && x.text), '…no "text" while in sync (the callsign is the last over\'s, never the talker\'s)');
+        // ★ the end-of-over frame: once the over ends (≤ 20 s round the loop) the report keeps the callsign as "last". 45 s =
+        //   two overs' ends: at the clip's level RADE reads ~8 dB here, at the callsign's own threshold (test-freedv.cpp writeClip)
+        ok(await until(() => reps().slice(n0).some((x) => x.last === 'G4ABC'), 45000), `…the end of the over: "last" ${JSON.stringify(reps().slice(n0).map((x) => x.last).filter(Boolean).at(-1))}`);
+        continue;
+      }
       // ★ 50 s: the text is shown once the same line has come twice (vibe_freedv.h); one line takes ~7 s, the clip's 20 s
       //   loop garbles one line each time round, and ~16 s after sync was measured on a clean feed (2026-11-16) —
       //   30 s failed ~1 run in 6 with three servers running at once
@@ -203,6 +226,12 @@ async function scenario(label, args, tag, sb = 'usb') {
     for (const k of ['spec', 'aud']) L[k].close();
   } finally { await S.stop(); }
 }
+
+// ★ RADE is in this server's build and in the clip when the server lists it (the clip writer had rade_c's transmitter too)
+let HAVE_RADE = false;
+{ const S = await server(['--freq', String(CENTRE), '--mode', 'usb', '--users', '1'], 'probe');
+  try { const st = await S.status(); HAVE_RADE = !!(st && Array.isArray(st.freedvSubs) && st.freedvSubs.includes('RADE')); } finally { await S.stop(); } }
+console.log(`   RADE V1 ${HAVE_RADE ? 'in this server' : 'NOT in this server (its checks are not run)'}`);
 
 STATIONS = stationsAt(CENTRE);
 await scenario('one-pipeline radio (the shared receiver), 20 m, USB', ['--freq', String(STATIONS[0][0]), '--mode', 'usb', '--users', '1'], 'one');
@@ -256,6 +285,42 @@ CENTRE = 7200000; CLIPNOW = CLIP; STATIONS = stationsAt(CENTRE);
 await overrideScenario('sideband override: a USB station at 7.21 MHz, one-pipeline radio', ['--freq', String(STATIONS[0][0]), '--mode', 'usb', '--users', '1'], 'ovone');
 await overrideScenario('sideband override: a USB station at 7.21 MHz, range-locked radio', ['--freq', String(CENTRE), '--lock-freq', String(CENTRE), '--users', '4', '--mode', 'usb', '--idle-grace', '0'], 'ovlock');
 CENTRE = 14200000; CLIPNOW = CLIP; STATIONS = stationsAt(CENTRE);
+
+if (HAVE_RADE) {
+  /* ★★ RADE needs no libcodec2: a server without it (VIBE_CODEC2_DISABLE=1 — the loader reports it "not installed")
+   *  still offers FreeDV, with RADE alone, and AUTO decodes the RADE station. */
+  console.log('── no libcodec2, RADE compiled in (VIBE_CODEC2_DISABLE=1) ──');
+  const S = await server(['--freq', String(STATIONS[3][0]), '--mode', 'usb', '--users', '1'], 'radeonly', { VIBE_CODEC2_DISABLE: '1' });
+  try {
+    const st = await S.status();
+    ok(st && st.modes.includes('freedv') && JSON.stringify(st.freedvSubs) === '["RADE"]', `vibeserver.json offers freedv with RADE alone (${JSON.stringify(st && st.freedvSubs)})`);
+    const L = await listener(S.port, 'fdvrade01', STATIONS[3][0], 'freedv');
+    const reps = () => jsons(L.spec, 'freedv');
+    ok(await until(() => reps().some((r) => r.state === 'sync' && r.mode === 'RADE'), 25000), `AUTO in sync on RADE (${JSON.stringify(reps().at(-1))})`);
+    const n0 = reps().length;
+    L.spec.send({ type: 'freedv_sub', sub: '700D' });
+    await sleep(1500);
+    ok(!reps().slice(n0).some((r) => r.sub === '700D'), 'a sub-mode this server cannot run (700D) is not applied');
+    for (const k of ['spec', 'aud']) L[k].close();
+  } finally { await S.stop(); }
+
+  /* ★★ The owner's RADE switch ("rade", under FreeDV): off, RADE is neither offered nor hunted — the codec2 sub-modes stay. */
+  console.log('── the owner switches RADE off (blockedModes "rade") ──');
+  const S2 = await server(['--freq', String(STATIONS[3][0]), '--mode', 'usb', '--users', '1'], 'radeoff', {}, { blockedModes: 'rade' });
+  try {
+    const st = await S2.status();
+    ok(st && st.modes.includes('freedv') && !st.freedvSubs.includes('RADE') && st.freedvSubs.includes('700D'), `freedvSubs without RADE (${JSON.stringify(st && st.freedvSubs)})`);
+    const L = await listener(S2.port, 'fdvroff01', STATIONS[3][0], 'freedv');
+    const reps = () => jsons(L.spec, 'freedv');
+    await sleep(8000);
+    ok(!reps().some((r) => r.state === 'sync'), `the RADE station: AUTO finds nothing (${JSON.stringify(reps().at(-1))})`);
+    const n0 = reps().length;
+    L.spec.send({ type: 'freedv_sub', sub: 'RADE' });
+    await sleep(1500);
+    ok(!reps().slice(n0).some((r) => r.sub === 'RADE'), 'RADE chosen by hand is not applied');
+    for (const k of ['spec', 'aud']) L[k].close();
+  } finally { await S2.stop(); }
+}
 
 {
   console.log('── no libcodec2 (VIBE_FREEDV_DISABLE=1) ──');

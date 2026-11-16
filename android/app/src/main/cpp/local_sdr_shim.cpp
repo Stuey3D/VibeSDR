@@ -1893,6 +1893,11 @@ static bool vsModeBlocked(const std::string& name) {
     return false;
 }
 
+/* ★★ V12 FreeDV RADE V1: the owner's "rade" switch (under FreeDV on the setup page) is asked by vibe_freedv.h itself —
+ *  every AUTO search, every manual choice and hwinfo's freedvSubs — through this hook, so a RADE switched off is neither
+ *  run nor offered. Set once, at static initialisation, before any listener exists. */
+static const bool g_fdvRadeHook = [] { vibe::freedv::radeBlockedFn() = [] { return vsModeBlocked("rade"); }; return true; }();
+
 /** A mode a client sent: refused when it is not one of ours, or the owner has switched it off. */
 static bool vsModeRefused(const std::string& m) {
     std::string want;
@@ -21572,7 +21577,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "freedv_sub") {
             const std::string want = jsonStr(msg, "sub");
             int sub = want.empty() ? -1 : vibe::freedv::subFromName(want);
-            if (sub > 0 && !vibe::freedv::api().sub[sub]) sub = -1;
+            if (sub > 0 && !vibe::freedv::runs(sub)) sub = -1;   // ★ incl. RADE switched off by the owner
             const std::string wantSb = jsonStr(msg, "sb");
             const int sb = wantSb.empty() ? -1 : vibe::freedv::sbFromName(wantSb);
             std::string j;
@@ -39821,6 +39826,10 @@ static vibecaps::Caps vsRadioCaps() {
     /* ★★ V12 FreeDV needs the system's libcodec2: without it the mode does not exist here — no switch on the setup page,
      *  no button in any client (no dead controls). */
     if (!vibe::freedv::available()) c.modes.erase(std::remove(c.modes.begin(), c.modes.end(), std::string("freedv")), c.modes.end());
+    /* ★ …and its RADE V1 switch only where RADE is in this build (librade_vibe.a) — and the FreeDV switch is there for it to
+     *  sit under. Asked WITHOUT the owner's block (radeBuilt), or unticking it would take the switch away with it. */
+    if (!vibe::freedv::radeBuilt() || std::find(c.modes.begin(), c.modes.end(), std::string("freedv")) == c.modes.end())
+        c.modes.erase(std::remove(c.modes.begin(), c.modes.end(), std::string("rade")), c.modes.end());
     // ★ V12 M17 likewise: its voice is Codec 2, from the same library
     if (!vibe::m17::available()) c.modes.erase(std::remove(c.modes.begin(), c.modes.end(), std::string("m17")), c.modes.end());
     return c;

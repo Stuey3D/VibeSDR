@@ -1945,7 +1945,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         {dabInGrid && ndbShown && ndbWhyLine}
         {dabInGrid && aisShown && aisWhyLine}
 
-        {/* ★★ V12 FreeDV: AUTO finds 700D / 700E / 1600; a sub-mode by hand is the fallback when it cannot settle (house
+        {/* ★★ V12 FreeDV: AUTO finds RADE / 700D / 700E / 1600; a sub-mode by hand is the fallback when it cannot settle (house
             rule: auto decoders keep manual controls underneath). Only while the mode is FreeDV, only the server's own
             sub-modes; the lit key is the one the server's report names. In place of the width row, which FreeDV does
             not offer — its passband is the SSB channel the server sets. */}

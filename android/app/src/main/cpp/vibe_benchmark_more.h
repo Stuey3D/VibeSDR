@@ -739,6 +739,9 @@ inline RowRule ruleFor(const std::string& id) {
         /* ★★ V12 FreeDV (vibe_freedv.h): a listener's MODE, not a decoder slot. Not green = "freedv" off by default on a fresh
          *  setup (the owner can always tick it back — the benchmark sets the default, never hides). */
         { "dec_freedv",   { "freedv", true,  false } },
+        /* ★★ V12 FreeDV RADE V1: its own switch UNDER FreeDV ("rade"). Not green = RADE off by default on a fresh setup, the
+         *  codec2 sub-modes untouched (the owner can always tick it back). */
+        { "dec_rade",     { "rade",   true,  false } },
         /* ★★ V12 M17 (vibe_m17.h): a listener's MODE, like FreeDV. Not green = "m17" off by default on a fresh setup (the
          *  owner can always tick it back — the benchmark sets the default, never hides). */
         { "dec_m17",      { "m17",    true,  false } },
@@ -1247,11 +1250,12 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
      *  is not installed (the mode is then not offered at all). */
     run("dec_freedv", "FreeDV (per listener, AUTO searching)", [&] {
         Row r; r.id = "dec_freedv"; r.label = "FreeDV (per listener, AUTO searching 700D/700E/1600)";
-        if (!vibe::freedv::available()) { r.label += " \xe2\x80\x94 libcodec2 not installed"; return r; }
+        // ★ the codec2 trio only: RADE V1 has its own row (dec_rade) and its own switch, so it cannot take the mode off
+        if (!vibe::freedv::api().ok) { r.label += " \xe2\x80\x94 libcodec2 not installed"; return r; }
         std::vector<float> a((size_t)48000 * 4);
         std::mt19937 g(11); std::normal_distribution<float> d(0.f, 0.1f);
         for (auto& v : a) v = d(g);
-        vibe::freedv::FreeDvListener L(vibe::freedv::kAuto);
+        vibe::freedv::FreeDvListener L(vibe::freedv::kAuto, vibe::freedv::kSbAuto, false, /*withRade*/ false);
         std::vector<float> out(960);
         const double t0 = wallNow(); double fedSec = 0, c0 = 0; size_t pos = 0; bool measuring = false;
         while (fedSec < 1.0 + kRowMinSec) {
@@ -1275,6 +1279,68 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
         r.decoded = (int)L.speechBlocks();
         if (L.droppedBlocks()) r.label += " (fell behind)";
+        return r;
+    });
+
+    /* ★★★ V12 FreeDV RADE V1 (docs/v12/FREEDV.md "RADE") — ONE LISTENER'S WORST CASE, the dearer of its two states:
+     *  SEARCHING (the pilot search over 960 timings × 40 frequencies every 120 ms — what a RADE receiver does whenever nobody
+     *  is transmitting) and DECODING (the neural decoder + the FARGAN vocoder, ~300 M multiply-adds a second). Both are fed
+     *  in real time as the audio callback does; vibe-freedv's own thread is in the process figure. The decoding half is a
+     *  real RADE over from rade_c's own transmitter (linked into the server for this row: librade_vibe_tx.a) at 10 dB, and
+     *  its speech blocks are the row's proof that it decodes. Not GREEN = the owner's "rade" switch (under FreeDV) starts
+     *  OFF on a fresh setup — offered, never hidden; the owner can tick it back. Not measured where RADE is not built in. */
+    run("dec_rade", "FreeDV RADE V1 (per listener)", [&] {
+        Row r; r.id = "dec_rade"; r.label = "FreeDV RADE V1 (per listener, the dearer of searching and decoding)";
+        if (!vibe::freedv::radeBuilt()) { r.label += " \xe2\x80\x94 not built in"; return r; }
+        std::mt19937 g(13); std::normal_distribution<float> d(0.f, 0.1f);
+        std::vector<float> out(960);
+        // ── searching: band noise ──
+        double searchPct = 0;
+        {
+            std::vector<float> a((size_t)48000 * 4);
+            for (auto& v : a) v = d(g);
+            vibe::freedv::FreeDvListener L(vibe::freedv::kRade);
+            const double t0 = wallNow(); double fedSec = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+            while (fedSec < 1.0 + kRowMinSec / 2) {
+                if (!measuring && fedSec >= 1.0) { c0 = processCpu(); measuring = true; }
+                L.feedAudio(a.data() + pos, 960, 1, 48000.0);
+                L.takePcm(out.data(), 960);
+                pos = (pos + 960) % a.size(); fedSec += 960 / 48000.0;
+                const double ahead = fedSec - (wallNow() - t0);
+                if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+            }
+            searchPct = 100.0 * (processCpu() - c0) / (fedSec - 1.0);
+            if (L.droppedBlocks()) r.label += " (fell behind searching)";
+        }
+        // ── decoding: a RADE over at 10 dB, measured once the receiver is in sync (2 s in) ──
+        double decodePct = -1;
+#if defined(VIBE_HAVE_RADE_TX)
+        {
+            const std::vector<float> sig = vibe::freedv::testAudio48k(vibe::freedv::kRade, 2.0 + kRowMinSec / 2 + 0.5, 0.1f);
+            const float ns = 0.0894f;   // ★ 10 dB in 3 kHz: the signal's rms 0.1, noise σ² · 3/24 kHz = 0.01 / 10
+            vibe::freedv::FreeDvListener L(vibe::freedv::kRade);
+            const double t0 = wallNow(); double fedSec = 0, c0 = 0; bool measuring = false;
+            std::vector<float> b(960);
+            for (size_t i = 0; i + 960 <= sig.size() && fedSec < 2.0 + kRowMinSec / 2; i += 960) {
+                if (!measuring && fedSec >= 2.0) { c0 = processCpu(); measuring = true; }
+                for (int k = 0; k < 960; ++k) b[size_t(k)] = sig[i + size_t(k)] + d(g) * (ns / 0.1f);
+                L.feedAudio(b.data(), 960, 1, 48000.0);
+                L.takePcm(out.data(), 960);
+                fedSec += 960 / 48000.0;
+                const double ahead = fedSec - (wallNow() - t0);
+                if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+            }
+            if (measuring) decodePct = 100.0 * (processCpu() - c0) / (fedSec - 2.0);
+            while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            r.decoded = (int)L.speechBlocks();
+            if (L.droppedBlocks()) r.label += " (fell behind decoding)";
+        }
+#endif
+        r.pct = std::max(searchPct, decodePct);
+        char b[96];
+        if (decodePct >= 0) std::snprintf(b, sizeof b, " \xe2\x80\x94 searching %.1f %%, decoding %.1f %%", searchPct, decodePct);
+        else std::snprintf(b, sizeof b, " \xe2\x80\x94 searching %.1f %% (decoding not measured)", searchPct);
+        r.label += b;
         return r;
     });
 

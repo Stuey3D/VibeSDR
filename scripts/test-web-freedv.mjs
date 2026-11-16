@@ -14,7 +14,11 @@
 //   • the SIDEBAND row (AUTO / USB / LSB) under the sub-modes: a USB station at 7.21 MHz never syncs on AUTO (LSB there);
 //     USB by hand is lit by the server's report, the line says "FreeDV USB · searching" until it syncs, the passband moves
 //     above the dial, and the row fits one line at 390 px;
-//   • a server whose libcodec2 did not load (VIBE_FREEDV_DISABLE=1): no FreeDV key at all.
+//   • RADE V1 (where the server has it built in and the clip has its station at +30 kHz): a RADE key first in the FREEDV
+//     row, "FreeDV RADE · N dB" in sync, then — once the over ends — "FreeDV · last G4ABC" (its end-of-over callsign); RADE
+//     by hand lit by the report; five sub-mode keys still one row at 390 px (checked above); a server without libcodec2
+//     (VIBE_CODEC2_DISABLE=1) still has the FreeDV key, with AUTO and RADE alone;
+//   • a server whose FreeDV is switched off altogether (VIBE_FREEDV_DISABLE=1): no FreeDV key at all.
 //   Screenshots: VIBE_SHOT_DIR (default the temp dir).
 //   node scripts/build-web.mjs   (then)
 //   VIBESERVER_BIN=…/vibeserver VIBE_FREEDV_CLIP=fdv.cu8 VIBE_FREEDV_CLIP_LSB=fdv-lsb.cu8 node scripts/test-web-freedv.mjs
@@ -143,6 +147,12 @@ async function scenario(title, { clip, centre, freq, env: extraEnv = {} }, body)
 }
 
 const shots = [];
+/* ★ RADE is in the server under test when its vibeserver.json lists it — asked of a throwaway server on the same clip. */
+let HAVE_RADE = false;
+await scenario('(probe: is RADE in this server?)', { clip: CLIP, centre: 14200000, freq: 14210000 }, async (P) => {
+  HAVE_RADE = !!(await P.ev(`fetch('/vibeserver.json').then(r => r.json()).then(j => (j.freedvSubs || []).includes('RADE'))`));
+  console.log(`   RADE V1 ${HAVE_RADE ? 'in this server' : 'NOT in this server (its checks are not run)'}`);
+});
 
 await scenario('20 m, USB: the key, the line, the sub-mode row', { clip: CLIP, centre: 14200000, freq: 14210000 }, async (P) => {
   await P.openPicker();
@@ -169,7 +179,7 @@ await scenario('20 m, USB: the key, the line, the sub-mode row', { clip: CLIP, c
   ok(await P.ev(`!!document.getElementById('mFreeDvSub')`), 'in the picker: the FREEDV row');
   ok(await P.ev(`[...document.querySelectorAll('#mModeMenu .mBwSep')].every(s => s.textContent !== 'BANDWIDTH')`), 'and no BANDWIDTH row (the width is the server\'s)');
   const subs = await P.ev(`[...document.querySelectorAll('#mFreeDvSub .mModeOpt')].map(b => b.textContent).join(' ')`);
-  ok(subs === 'AUTO 700D 700E 1600', `AUTO and the server's sub-modes: ${subs}`);
+  ok(subs === (HAVE_RADE ? 'AUTO RADE 700D 700E 1600' : 'AUTO 700D 700E 1600'), `AUTO and the server's sub-modes: ${subs}`);
   ok(await P.lit() === 'AUTO', `AUTO lit, from the server's report ("${await P.lit()}")`);
   shots.push(await P.shot('freedv-desktop.png'));
 
@@ -251,7 +261,31 @@ await scenario('the sideband override: a USB station at 7.21 MHz', { clip: CLIP,
   await P.closePicker();
 });
 
-await scenario('no libcodec2 (VIBE_FREEDV_DISABLE=1): no FreeDV key', { clip: CLIP, centre: 14200000, freq: 14210000, env: { VIBE_FREEDV_DISABLE: '1' } }, async (P) => {
+if (HAVE_RADE) {
+  await scenario('RADE V1: the key, the line in sync, the callsign once the over ends', { clip: CLIP, centre: 14200000, freq: 14230000 }, async (P) => {
+    ok(await P.pick('FreeDV'), 'FreeDV chosen at 14.230 MHz (the RADE station)');
+    ok(await P.until(`/^FreeDV RADE · -?\\d+ dB$/.test((document.getElementById('vtsName')?.textContent || '').trim())`, 45000), `in sync: "${await P.vts()}"`);
+    // ★ the over ends 14 s into the clip's 20 s loop, with G4ABC's end-of-over frame
+    ok(await P.until(`(document.getElementById('vtsName')?.textContent || '').trim() === 'FreeDV · last G4ABC'`, 45000), `once the over ends: "${await P.vts()}"`);
+    await P.openPicker();
+    await P.ev(`[...document.querySelectorAll('#mFreeDvSub .mModeOpt')].find(b => b.textContent === 'RADE').click(); 1`);
+    ok(await P.until(`window.__fdv.out.some(m => m.type === 'freedv_sub' && m.sub === 'RADE')`, 2000), 'tapping RADE sends freedv_sub RADE');
+    ok(await P.until(`[...document.querySelectorAll('#mFreeDvSub .mModeOpt.on')].map(b => b.textContent).join() === 'RADE'`, 5000), `RADE lit once the server's report says so ("${await P.lit()}")`);
+    ok(await P.until(`/^FreeDV RADE( · -?\\d+ dB| · last G4ABC)$/.test((document.getElementById('vtsName')?.textContent || '').trim())`, 45000), `by hand: "${await P.vts()}"`);
+    shots.push(await P.shot('freedv-rade.png'));
+    await P.closePicker();
+  });
+  await scenario('no libcodec2, RADE built in (VIBE_CODEC2_DISABLE=1): the FreeDV key with RADE alone', { clip: CLIP, centre: 14200000, freq: 14230000, env: { VIBE_CODEC2_DISABLE: '1' } }, async (P) => {
+    ok(await P.pick('FreeDV'), 'FreeDV offered and chosen');
+    await P.openPicker();
+    const subs = await P.ev(`[...document.querySelectorAll('#mFreeDvSub .mModeOpt')].map(b => b.textContent).join(' ')`);
+    ok(subs === 'AUTO RADE', `the FREEDV row: ${subs}`);
+    await P.closePicker();
+    ok(await P.until(`/^FreeDV RADE · -?\\d+ dB$/.test((document.getElementById('vtsName')?.textContent || '').trim())`, 45000), `in sync: "${await P.vts()}"`);
+  });
+}
+
+await scenario('FreeDV switched off (VIBE_FREEDV_DISABLE=1): no FreeDV key', { clip: CLIP, centre: 14200000, freq: 14210000, env: { VIBE_FREEDV_DISABLE: '1' } }, async (P) => {
   await P.openPicker();
   const keys = await P.keys();
   ok(keys.includes('USB') && !keys.includes('FreeDV'), `no FreeDV key (${keys.join(' ')})`);

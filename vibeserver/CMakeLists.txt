@@ -966,6 +966,51 @@ if(VIBE_XAAC)
   endif()
 endif()
 
+# ── FreeDV RADE V1 receive (V12, 2026-11-16 — docs/v12/FREEDV.md "RADE", vibe_freedv.h, linux/rade/vibe_rade.h) ────────
+# ★★ BSD only: FreeDV's rade_c (BSD-2-Clause) + Opus 1.6.1's DNN code and FARGAN vocoder (BSD-3-Clause) + freedv-backend's
+#    reliable text (BSD-2-Clause), built from pinned, SHA-256-checked source by linux/build-rade.sh (called by both
+#    build-deps.sh) into ONE archive whose only globals are vrade_* — its private copy of Opus's DNN code cannot meet the
+#    libopus.a below. Their licences ship beside the binary (deb: doc dir; Mac: Resources).
+# ★ Release builds take it from the deps prefix and its absence is a configure error unless -DVIBE_RADE=OFF. Dev builds:
+#   VIBE_RADE_PREFIX (a build-rade.sh prefix) or the Mac deps prefix if there is one, else without it — the FreeDV mode
+#   then has no RADE (and, without libcodec2 too, no FreeDV at all). Windows: not built yet.
+option(VIBE_RADE "FreeDV RADE V1 receive (rade_c + Opus FARGAN, BSD; server builds only)" ON)
+set(VIBE_RADE_PREFIX "" CACHE PATH "dev builds: a prefix with lib/librade_vibe.a (vibeserver/linux/build-rade.sh)")
+set(RADE_TX_LIB "")
+if(VIBE_RADE)
+  if(VIBE_DEPS_PREFIX AND NOT WIN32)
+    set(RADE_LIB "${VIBE_DEPS_PREFIX}/lib/librade_vibe.a" CACHE FILEPATH "" FORCE)
+    if(NOT EXISTS "${RADE_LIB}")
+      message(FATAL_ERROR "${VIBE_DEPS_PREFIX} has no lib/librade_vibe.a (FreeDV RADE) — ${_deps_hint}, or configure with -DVIBE_RADE=OFF")
+    endif()
+  else()
+    find_library(RADE_LIB NAMES librade_vibe.a NO_DEFAULT_PATH
+                 HINTS "${VIBE_RADE_PREFIX}/lib" "${CMAKE_CURRENT_SOURCE_DIR}/mac/deps/prefix/lib")
+  endif()
+  if(RADE_LIB)
+    get_filename_component(_rade_prefix "${RADE_LIB}/../.." ABSOLUTE)
+    message(STATUS "RADE V1:   ${RADE_LIB}")
+    target_include_directories(vibeserver_core PUBLIC "${_rade_prefix}/include")
+    target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_RADE)
+    # ★★ rade_c's TRANSMITTER too (librade_vibe_tx.a, before the receiver's archive it takes its end-of-over bits from):
+    #    the benchmark's dec_rade row measures a receiver DECODING a real RADE over, and only rade_c's own transmitter makes
+    #    one. Nothing else in the server calls it. ~1.4 MB of archive (the encoder's int8 weights and Opus's feature
+    #    extractor); never paged in unless the benchmark runs.
+    if(EXISTS "${_rade_prefix}/lib/librade_vibe_tx.a")
+      set(RADE_TX_LIB "${_rade_prefix}/lib/librade_vibe_tx.a")
+      target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_RADE_TX)
+      target_link_libraries(vibeserver_core PUBLIC "${RADE_TX_LIB}" "${RADE_LIB}")
+    endif()
+    foreach(_f LICENSE.rade_c COPYING.opus LICENSE.freedv-backend)
+      if(EXISTS "${_rade_prefix}/share/licences/${_f}")
+        install(FILES "${_rade_prefix}/share/licences/${_f}" DESTINATION share/doc/vibeserver)
+      endif()
+    endforeach()
+  else()
+    message(STATUS "RADE V1 not found — building without it: FreeDV offers only what libcodec2 runs (dev build)")
+  endif()
+endif()
+
 # ── libopus: compressed VibeServer audio (replaces IMA-ADPCM) ──────────────────
 # STATIC like the others, so the .app ships self-contained. VIBE_HAVE_OPUS gates every Opus code
 # path in the shim; where it is undefined (the Android build has no libopus yet — UberSDR decode

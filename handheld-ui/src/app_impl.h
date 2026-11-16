@@ -811,8 +811,8 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
     if (nav_.focus("mode").empty()) nav_.setFocus("mode", dabActive() ? std::string("m.dab") : "m." + s.mode);
 
     // ── ★ V12 FreeDV: no BANDWIDTH (the modem's 2.7 kHz side is the server's) — the sub-mode choice in its place. AUTO
-    //    finds 700D / 700E / 1600; a manual choice is the fallback when AUTO cannot settle. Only the sub-modes this
-    //    server's library runs (vibeserver.json freedvSubs). The lit one is the server's report ("sub"), not a guess. ──
+    //    finds RADE / 700D / 700E / 1600; a manual choice is the fallback when AUTO cannot settle. Only the sub-modes this
+    //    server runs (vibeserver.json freedvSubs). The lit one is the server's report ("sub"), not a guess. ──
     if (s.mode == "freedv" && !dabActive()) {
         std::vector<std::string> subs;
         { std::lock_guard<std::mutex> lk(srvMtx_); subs = srvFreedvSubs_; }
@@ -825,10 +825,13 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
         c.tc.draw(c.g, c.f.bodyB, "FREEDV", p.x + 14, p.y + 14, th::btnText);
         float y = p.y + 46;
         subs.insert(subs.begin(), "auto");
+        /* ★ V12 RADE made it five sub-mode keys + three sideband keys: at the old 48 px pitch the last line ran off the
+         *  panel's foot (472 px), so the pitch closes to 42 px when there are five. */
+        const float pitch = subs.size() > 4 ? 42.f : 48.f, keyH = pitch - 8.f;
         for (const auto& sb : subs) {
-            if (toggle(c, "fdv." + sb, {p.x + 14, y, p.w - 28, 40}, sb == chosen, sb == "auto" ? "AUTO" : sb, sb == "auto" ? "AUTO" : sb))
+            if (toggle(c, "fdv." + sb, {p.x + 14, y, p.w - 28, keyH}, sb == chosen, sb == "auto" ? "AUTO" : sb, sb == "auto" ? "AUTO" : sb))
                 eng_->send(freedvSubMessage(sb));
-            y += 48;
+            y += pitch;
         }
         /* ★ V12 the sideband (Stuart 2026-11-16): AUTO follows FreeDV's convention (LSB below 10 MHz, USB above); USB / LSB
          *  by hand for a station that does not. Lit by the report's "sbSel". */
@@ -836,9 +839,9 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
         y += 32;
         for (const char* sbk : kFreeDvSidebands) {
             const std::string k = sbk, lab = k == "auto" ? "AUTO" : k == "usb" ? "USB" : "LSB";
-            if (toggle(c, "fdvsb." + k, {p.x + 14, y, p.w - 28, 40}, k == sbChosen, lab, "Sideband " + lab))
+            if (toggle(c, "fdvsb." + k, {p.x + 14, y, p.w - 28, keyH}, k == sbChosen, lab, "Sideband " + lab))
                 eng_->send(freedvSubMessage("", k));
-            y += 48;
+            y += pitch;
         }
         c.tc.draw(c.g, c.f.small, s.bwHigh > 0 ? "ON USB" : "ON LSB", p.x + 14, y + 2, th::dim);   // the side the passband follows
         return;

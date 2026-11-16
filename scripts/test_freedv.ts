@@ -14,7 +14,11 @@ console.log('── offered only where the server lists it ──');
 ok(freedvOffered(undefined).length === 0 && freedvOffered({}).length === 0, 'no list (another backend, an older server) → none');
 ok(freedvOffered({ modes: ['usb', 'lsb', 'drm'], freedvSubs: ['700D'] }).length === 0, '"freedv" not in modes (no libcodec2) → none, whatever freedvSubs says');
 ok(eq(freedvOffered({ modes: ['freedv'], freedvSubs: ['1600', '700D'] }), ['700D', '1600']), 'our key order, only what the library runs');
-ok(eq(freedvOffered({ modes: ['freedv'], freedvSubs: ['700D', '700E', '1600', '2020'] }), [...FREEDV_SUBS]), 'unknown sub-modes ignored');
+ok(eq(freedvOffered({ modes: ['freedv'], freedvSubs: ['700D', '700E', '1600', '2020'] }), ['700D', '700E', '1600']), 'unknown sub-modes ignored');
+// ★ V12 RADE V1: first in key order; a server with RADE alone (no libcodec2) offers just it; RADE V2 is none of ours
+ok(eq(freedvOffered({ modes: ['freedv'], freedvSubs: ['700D', '700E', '1600', 'RADE'] }), [...FREEDV_SUBS]) && FREEDV_SUBS[0] === 'RADE', 'RADE first, then 700D 700E 1600');
+ok(eq(freedvOffered({ modes: ['freedv'], freedvSubs: ['RADE'] }), ['RADE']), 'RADE alone (a server without libcodec2)');
+ok(eq(freedvOffered({ modes: ['freedv'], freedvSubs: ['RADEV2', '700D'] }), ['700D']), 'RADEV2 is not RADE');
 
 console.log('── the report ──');
 ok(parseFreeDv({ type: 'drm' }) === null && parseFreeDv(null) === null, 'not a report → null');
@@ -31,6 +35,20 @@ ok(freedvVts(s0) === 'FreeDV · searching', 'AUTO searching');
 ok(freedvVts(parseFreeDv({ type: 'freedv', sub: '1600', state: 'search' })) === 'FreeDV 1600 · searching', 'a manual choice searching names it');
 ok(freedvVts(s1) === 'FreeDV 700D · 6 dB · G4ABC Stuart', 'in sync: mode · SNR · text');
 ok(freedvVts(s1).length <= 40, 'short enough for the R36S');
+
+console.log('── RADE: its end-of-over callsign is "last", shown only while searching ──');
+{
+  const r = parseFreeDv({ type: 'freedv', sub: 'auto', sb: 'usb', state: 'sync', mode: 'RADE', snr: 3.6, last: 'M0ABC' })!;
+  ok(r.sync && r.mode === 'RADE' && r.snr === 4 && r.last === 'M0ABC', 'RADE in sync: mode, SNR, the previous over\'s callsign kept');
+  ok(freedvVts(r) === 'FreeDV RADE · 4 dB', 'in sync the line never shows "last" — the talker may be the other station');
+  const q = parseFreeDv({ type: 'freedv', sub: 'auto', sb: 'lsb', state: 'search', mode: '', last: ' G4ABC\u0007 ' })!;
+  ok(q.last === 'G4ABC', '"last" kept printable and trimmed');
+  ok(freedvVts(q) === 'FreeDV · last G4ABC', 'searching: the over that has just ended, in place of "searching"');
+  ok(freedvVts(parseFreeDv({ type: 'freedv', sub: 'RADE', sbSel: 'usb', state: 'search', last: 'DG4SDX' })) === 'FreeDV RADE USB · last DG4SDX', '…with a manual choice and a side');
+  ok(freedvVts(parseFreeDv({ type: 'freedv', sub: 'RADE', sbSel: 'usb', state: 'search', last: 'DG4SDX' })).length <= 40, 'short enough for the R36S');
+  ok(parseFreeDv({ type: 'freedv', state: 'search', last: 'X'.repeat(30) })!.last!.length === 12, '"last" clipped');
+  ok(parseFreeDv({ type: 'freedv', sub: 'RADE', state: 'search' })!.sub === 'RADE', 'RADE chosen by hand reads back');
+}
 
 console.log('── the passband side and the message ──');
 ok(eq(freedvPassband('usb'), [50, 2700]) && eq(freedvPassband('lsb'), [-2700, -50]), 'USB above the dial, LSB below');

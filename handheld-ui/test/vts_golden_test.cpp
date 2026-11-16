@@ -102,7 +102,7 @@ static int golden(const char* path) {
             hh::FreeDvState st;
             if (hh::parseFreeDv(hh::Json::parse(unhex(js)), st))
                 got = "1 " + st.sub + " " + st.sb + " " + st.sbSel + " " + (st.sync ? "1" : "0") + " " + hex(st.mode) + " " + (st.hasSnr ? std::to_string(st.snr) : "-")
-                    + " " + hex(st.text) + " " + hex(hh::freedvVts(&st));
+                    + " " + hex(st.text) + " " + hex(st.last) + " " + hex(hh::freedvVts(&st));
             else got = "0 " + hex(hh::freedvVts(nullptr));
         } else if (op == "FO") {
             std::string js; is >> js;
