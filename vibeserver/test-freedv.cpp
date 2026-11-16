@@ -201,11 +201,59 @@ static Run throughPipeline(int sub, int listenSub, double snrDb, double offHz, d
     return r;
 }
 
+/** ★ The bench clip for scripts/test-server-freedv.mjs: unsigned 8-bit IQ (rtl_tcp's format) at `rate`, `sec` long, centred
+ *  on the fake dongle's --hf-centre, with three stations — 700D at +10 kHz, 700E at +20 kHz, 1600 at −10 kHz — at `snr` dB in
+ *  3 kHz each. The clip loops in the fake dongle, so each station's modem relocks once a loop (as a real station's overs do). */
+static int writeClip(const char* path, int rate, double sec, double snrDb) {
+    const fdv::Api& a = fdv::api();
+    if (!a.anySub() || !a.comptx) { std::printf("NOT RUN — %s\n", a.anySub() ? "no freedv_comptx" : a.why.c_str()); return 3; }
+    if (rate % 8000) { std::printf("the rate must be a multiple of 8 kHz\n"); return 2; }
+    const int n = int(sec * rate);
+    std::vector<cf> iq(static_cast<size_t>(n));
+    struct St { int sub; double off; } st[] = {{fdv::k700D, 10000}, {fdv::k700E, 20000}, {fdv::k1600, -10000}};
+    double ps = 0;
+    for (auto t : st) {
+        if (!a.sub[t.sub]) continue;
+        const std::vector<cf> m8 = modulate(t.sub, sec + 1);
+        ps = realPower(m8);
+        std::vector<float> I(m8.size()), Q(m8.size());
+        for (size_t i = 0; i < m8.size(); ++i) { I[i] = m8[i].real(); Q[i] = m8[i].imag(); }
+        vibedsp::RationalResampler ui(8000, rate), uq(8000, rate);
+        std::vector<float> Iu(static_cast<size_t>(ui.maxOut(int(I.size())))), Qu(Iu.size());
+        const int nu = ui.process(I.data(), int(I.size()), Iu.data());
+        uq.process(Q.data(), int(Q.size()), Qu.data());
+        for (int i = 0; i < n && i < nu; ++i) {
+            const double ph = 2 * M_PI * t.off * i / rate;
+            iq[size_t(i)] += cf(Iu[size_t(i)], Qu[size_t(i)]) * cf(float(std::cos(ph)), float(std::sin(ph)));
+        }
+    }
+    // complex noise over `rate`: a USB demodulator keeps 3 kHz of one side and the real part halves it — σc²·3000/(2·rate)
+    const double sc = std::sqrt(ps * 2.0 * rate / 3000.0 / std::pow(10.0, snrDb / 10));
+    std::mt19937 rng(21); std::normal_distribution<float> nd(0.f, float(sc / std::sqrt(2.0)));
+    double peak = 0;
+    for (auto& x : iq) { x += cf(nd(rng), nd(rng)); peak = std::max(peak, double(std::max(std::fabs(x.real()), std::fabs(x.imag())))); }
+    const double k = 100.0 / peak;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 2;
+    std::vector<uint8_t> u(static_cast<size_t>(n) * 2);
+    for (int i = 0; i < n; ++i) {
+        u[size_t(2 * i)] = uint8_t(std::lrint(127.5 + k * iq[size_t(i)].real()));
+        u[size_t(2 * i + 1)] = uint8_t(std::lrint(127.5 + k * iq[size_t(i)].imag()));
+    }
+    std::fwrite(u.data(), 1, u.size(), f);
+    std::fclose(f);
+    std::printf("wrote %s: %d S/s, %.0f s, 700D +10 kHz, 700E +20 kHz, 1600 −10 kHz, %.0f dB in 3 kHz\n", path, rate, sec, snrDb);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--probe") {   // the child for the VIBE_FREEDV_DISABLE check
         std::printf("%d\n", fdv::available() ? 1 : 0);
         return 0;
     }
+    // test-freedv clip OUT.cu8 [rate=288000] [sec=20] [snr=12]
+    if (argc > 2 && std::string(argv[1]) == "clip")
+        return writeClip(argv[2], argc > 3 ? std::atoi(argv[3]) : 288000, argc > 4 ? std::atof(argv[4]) : 20, argc > 5 ? std::atof(argv[5]) : 12);
     const fdv::Api& a = fdv::api();
     if (!a.anySub()) { std::printf("NOT RUN — %s\n", a.why.c_str()); return 3; }
     std::printf("libcodec2 %s (FreeDV API version %d), sub-modes %s\n", a.path.c_str(), a.version, a.subsJson().c_str());

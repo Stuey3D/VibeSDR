@@ -156,6 +156,7 @@
 #include "decoders/tone_id.h"         // ★ V12: CTCSS / DCS tone ID on NFM (its own discriminator on the channel IQ)
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
+#include "vibe_freedv.h"              // ★ V12 FreeDV: a per-listener mode — the system's libcodec2, dlopen'd (docs/v12/FREEDV.md)
 #include "vibe_dxscan.h"            // ★★★ V12: the idle DX scanner — the log and its rules (2026-11-04)
 #include "vibe_dxscan_fm.h"         // ★★★ V12: …and its FM hop (RDS on every station of one capture)
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
@@ -805,6 +806,10 @@ ModeParams paramsFor(const std::string& mode) {
     /* ★★ V12 DRM (vibe_drm_listener.h): an AM-shaped channel whose COMPLEX baseband goes to the DRM receiver; the AM
      *  detector's own audio is discarded and the decoded programme takes its place. 10 kHz = spectrum occupancy 3. */
     if (mode == "drm")            return {ModeParams::AM, 15000, 10000, 1};
+    /* ★★ V12 FreeDV (vibe_freedv.h): the ordinary USB demodulator — FreeDV is upper sideband on every band by convention —
+     *  whose audio goes to the FreeDV modem; the decoded speech takes its place. 700E is the widest at ~1.6 kHz, centred
+     *  on 1.5 kHz, so USB's own 2.7 kHz passes all three sub-modes with room for a mistuning. */
+    if (mode == "freedv")         return {ModeParams::SSB_USB, 24000, 2700, 1};
     if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 1200, 1};
     // ★ "fmdx" WAS a mode here and is gone: it widened the channel filter, which measured 10 dB
     // WORSE for RDS SNR (see pipeline.cpp chHalf). Accepted as an alias for wfm so a client with
@@ -1769,6 +1774,7 @@ static bool vsModeKnown(const std::string& m) {
                                           "fm", "nfm", "wfm", "fmdx", "dab", "drm",
                                           "sau", "sal", "ecssu", "ecssl", "amst" };   // ★ V12 AM sync
     for (const char* k : kModes) if (m == k) return true;
+    if (m == "freedv") return vibe::freedv::available();   // ★ V12 FreeDV: a mode only where libcodec2 loaded
     return false;
 }
 
@@ -9214,6 +9220,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double drmAtHz = 0;                         // ★ the dial `drm` was built for — a new receiver only when it moves
         std::atomic<bool> drmOn{false};             // ★ for the health watch, which must not take mtx (see there)
         std::atomic<uint64_t> drmDropped{0};
+        /** ★ V12 FreeDV: this listener's FreeDV receiver while their mode is "freedv" (vibe_freedv.h) — created/destroyed
+         *  under mtx in clientRetune, fed and drained in onClientAudio. `fdvSub` is their AUTO / sub-mode choice, kept
+         *  across retunes (freedv_sub). */
+        std::unique_ptr<vibe::freedv::FreeDvListener> fdv;
+        uint64_t fdvSentVer = 0;
+        double fdvAtHz = 0;
+        int fdvSub = vibe::freedv::kAuto;
         /** ★★ V12 CTCSS / DCS TONE ID (decoders/tone_id.h) — this listener's, while their mode is NFM. Fed in clientIqCb
          *  from the pipeline's CHANNEL IQ (post-NCO, the dial at DC, already cut to the passband — so a neighbouring
          *  12.5 kHz channel inside the wider slice cannot capture its discriminator). Everything below is touched under
@@ -9965,6 +9978,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
         if (sk && sk->isOpen()) { sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size()); c->drmSentVer = ver; }
     }
+    /** ★ V12 FreeDV: the receiver's report on this listener's spectrum socket when it has changed — the VTS line. */
+    void fdvSendStatus(ClientDsp* c) {
+        uint64_t ver = 0;
+        const std::string j = c->fdv->statusJson(&ver);
+        if (ver == c->fdvSentVer) return;
+        std::shared_ptr<net::Socket> sk;
+        { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
+        if (sk && sk->isOpen()) { sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size()); c->fdvSentVer = ver; }
+    }
 
     static void clientAudioCb(void* ctx, const float* pcm, int frames, int ch, int) {
         auto* c = (ClientDsp*)ctx;
@@ -10254,6 +10276,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         else if (c->drm) { c->drm.reset(); c->drmAtHz = 0; c->rx->setIqMinRate(0.0); }
         c->drmOn.store(c->mode == "drm");
+        /* ★ V12 FreeDV: a new receiver for a new station (> 50 Hz away — the modem itself tracks a small mistuning, so a
+         *  nudge to centre the signal keeps the lock); a zoom, a passband drag or a restated tune keep it. */
+        if (c->mode == "freedv") {
+            if (!c->fdv || std::fabs(c->fdvAtHz - c->vfoHz) > 50.0) {
+                c->fdv.reset(new vibe::freedv::FreeDvListener(c->fdvSub)); c->fdvSentVer = 0; c->fdvAtHz = c->vfoHz;
+            }
+        }
+        else if (c->fdv) { c->fdv.reset(); c->fdvAtHz = 0; }
         // ★ V12 tone ID: wanted on NFM only; the callback builds it, forgets a retuned repeater, and clears the label
         c->toneWant = (mp.kind == ModeParams::NFM) && !vsModeBlocked("tone");   // ★ V12 the owner's switch (setup page, under NFM)
         c->toneAtHz = c->vfoHz;
@@ -10384,6 +10414,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             pcm = drmPcm.data(); ch = 2;
             drmSendStatus(c);
             c->drmDropped.store(c->drm->droppedBlocks(), std::memory_order_relaxed);
+        }
+        /* ★★ V12 FreeDV: the USB audio goes to this listener's modem (a copy into its queue), and the same number of frames
+         *  of decoded speech — silence until there is some — goes out in its place, mono, so the listener's own NR and
+         *  notch still apply to it. */
+        std::vector<float> fdvPcm;
+        if (c->fdv) {
+            c->fdv->feedAudio(pcm, frames, ch, 48000.0);
+            fdvPcm.resize(size_t(frames));
+            c->fdv->takePcm(fdvPcm.data(), frames);
+            pcm = fdvPcm.data(); ch = 1;
+            fdvSendStatus(c);
         }
         // ★★★ THE DECODERS RUN FIRST, AND WITHOUT AN AUDIO SOCKET.
         //     This used to sit BELOW the `if (!sock || !sock->isOpen()) return;` guard, so in
@@ -11546,6 +11587,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
             "tunerbw", "sampleRate", "directSampling",
             "nr", "notch", "deemph", "stereo", "nfmvoice", "wsp", "nb", "nbx", "ceq", "ims", "autobw",
+            "freedv_sub",   // ★ V12 FreeDV's AUTO / sub-mode choice — what the room hears on a shared dial
             // ★ An Icom's own controls (mode, FIL, span, scope, ATT/preamp/AGC/RF gain/NB/NR/ANF) — the same rule as
             //   every other radio's front end (2026-11-04: an Icom "acts like the shared VFO does already").
             "icom_control",
@@ -17495,6 +17537,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (auto& sk : drmScopeTargets()) if (sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
         });
     }
+    /* ★ V12 FreeDV on the shared dial: one receiver everybody hears (its sub-mode is the room's — the last listener to
+     *  choose, like the mode itself). Built in buildAudio, re-made for a new station in onAudio, fed and drained there. */
+    std::mutex fdvSharedMtx;
+    std::shared_ptr<vibe::freedv::FreeDvListener> fdvShared;
+    uint64_t fdvSharedVer = 0;
+    double fdvSharedAtHz = 0;
+    std::atomic<int> fdvSharedSub{vibe::freedv::kAuto};
     std::mutex drmSharedMtx;
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
@@ -17510,6 +17559,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★★ V12 DRM, shared dial: the demodulator's frames are the clock; the decoded programme replaces them, and the
          *  status goes to every spectrum socket when it changes. */
         std::vector<stereo_t> drmBuf;
+        /* ★★ V12 FreeDV, shared dial: the USB audio goes to the one modem, and as many frames of decoded speech (silence
+         *  until there is some) go out in its place, mono; its report goes to every spectrum socket when it changes. A new
+         *  station (the dial moved > 50 Hz) gets a new receiver, so AUTO searches at once rather than after a lost lock. */
+        std::vector<stereo_t> fdvBuf;
+        if (!dabInject_) {
+            std::shared_ptr<vibe::freedv::FreeDvListener> d;
+            {
+                std::lock_guard<std::mutex> lk(fdvSharedMtx);
+                if (fdvShared && std::fabs(audioFreq.load() - fdvSharedAtHz) > 50.0) {
+                    fdvShared = std::make_shared<vibe::freedv::FreeDvListener>(fdvSharedSub.load()); fdvSharedVer = 0; fdvSharedAtHz = audioFreq.load();
+                }
+                d = fdvShared;
+            }
+            if (d) {
+                d->feedAudio(&data[0].l, count, 2, 48000.0);
+                std::vector<float> mono(static_cast<size_t>(count));
+                d->takePcm(mono.data(), count);
+                fdvBuf.resize(size_t(count));
+                for (int i = 0; i < count; ++i) { fdvBuf[size_t(i)].l = mono[size_t(i)]; fdvBuf[size_t(i)].r = mono[size_t(i)]; }
+                data = fdvBuf.data(); ch = 1;
+                uint64_t ver = 0;
+                const std::string j = d->statusJson(&ver);
+                if (ver != fdvSharedVer) {
+                    fdvSharedVer = ver;
+                    std::vector<std::shared_ptr<net::Socket>> socks;
+                    { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                    for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+                }
+            }
+        }
         if (!dabInject_) {
             std::shared_ptr<vibe::DrmListener> d;
             { std::lock_guard<std::mutex> lk(drmSharedMtx); d = drmShared; }
@@ -17749,6 +17828,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             else if (drmShared) { drmShared.reset(); rx.setIqMinRate(iqDirectRate()); }
         }
         if (mode == "drm") drmSharedSinkSync();   // ★ the constellation, if a Signal pane is already open (outside drmSharedMtx)
+        {   // ★ V12 FreeDV on the shared dial (perClientDsp() radios build theirs per listener in clientRetune)
+            std::lock_guard<std::mutex> lk(fdvSharedMtx);
+            if (mode == "freedv") {
+                if (!fdvShared) { fdvShared = std::make_shared<vibe::freedv::FreeDvListener>(fdvSharedSub.load()); fdvSharedVer = 0; fdvSharedAtHz = audioFreq.load(); }
+            } else fdvShared.reset();
+        }
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         // ★★ The chain is back at the mode's DEFAULT width, so the edges a listener chose are no longer
         //    what anybody hears — config must stop reporting them (vibe_room_passband.h).
@@ -20707,6 +20792,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             drmSharedSinkSync();
             if (auto me = dspFor(sock)) { std::lock_guard<std::mutex> lk(me->mtx); drmClientSinkSync(me.get()); }
+            return;
+        }
+        /* ★★ V12 FreeDV: {"type":"freedv_sub","sub":"auto"|"700D"|"700E"|"1600"} — AUTO, or one sub-mode by hand (the
+         *  fallback when AUTO cannot settle). Without "sub" it only asks for the report: a client entering the mode, or
+         *  joining a shared dial already in it, gets the VTS line at once rather than at the next change. On a range-locked
+         *  radio it is this listener's own receiver; on a shared dial it is the room's (gated with the mode, askRefuses).
+         *  A sub-mode this library cannot open is refused by not being applied — the report says what runs. */
+        if (type == "freedv_sub") {
+            const std::string want = jsonStr(msg, "sub");
+            int sub = want.empty() ? -1 : vibe::freedv::subFromName(want);
+            if (sub > 0 && !vibe::freedv::api().sub[sub]) sub = -1;
+            std::string j;
+            if (auto me = dspFor(sock)) {
+                std::lock_guard<std::mutex> lk(me->mtx);
+                if (sub >= 0) { me->fdvSub = sub; if (me->fdv) me->fdv->setSub(sub); }
+                if (me->fdv) j = me->fdv->statusJson(nullptr);
+            } else {
+                if (sub >= 0) fdvSharedSub.store(sub);
+                std::lock_guard<std::mutex> lk(fdvSharedMtx);
+                if (fdvShared) { if (sub >= 0) fdvShared->setSub(sub); j = fdvShared->statusJson(nullptr); }
+            }
+            if (!j.empty()) sendText(sock, j);
             return;
         }
         if (type == "dab_scopes") {
@@ -29589,6 +29696,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double hz = 0, bw = 0; std::string md;
         watchMainOf(sock, hz, md, bw);
         if (md == "drm") return "VFO B is not available in DRM";
+        if (md == "freedv") return "VFO B is not available in FreeDV";
         if (watchFmBroadcast(md, hz)) return "VFO A/B is not available on FM broadcast";
         return std::string();
     }
@@ -29861,7 +29969,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         std::string m = jsonStr(msg, "mode");
         if (!m.empty()) {
-            if (m == "dab" || m == "drm" || vsModeRefused(m)) { refuse("mode", "VFO B cannot use that mode here"); return; }
+            if (m == "dab" || m == "drm" || m == "freedv" || vsModeRefused(m)) { refuse("mode", "VFO B cannot use that mode here"); return; }
             if (m == "wfm") { refuse("mode", "VFO A/B is not available on FM broadcast"); return; }   // ★ round 3
             if (m != wd.mode) { wd.mode = m; wd.bwHz = paramsFor(m).bandwidth; }
         }
@@ -38655,7 +38763,11 @@ static vibecaps::Caps vsRadioCaps() {
                                       f.rtlHf);
     if (g_vsHwMaxRate.load(std::memory_order_relaxed) == 0) shim.maxSampleRateHz();
     f.maxRateHz = double(g_vsHwMaxRate.load(std::memory_order_relaxed));   // 0 = not known yet: no rate rule applied
-    return vibecaps::compute(f);
+    vibecaps::Caps c = vibecaps::compute(f);
+    /* ★★ V12 FreeDV needs the system's libcodec2: without it the mode does not exist here — no switch on the setup page,
+     *  no button in any client (no dead controls). */
+    if (!vibe::freedv::available()) c.modes.erase(std::remove(c.modes.begin(), c.modes.end(), std::string("freedv")), c.modes.end());
+    return c;
 }
 
 /** Why fixed-frequency decoder `id` cannot run on this radio, in words with the numbers — "" when it can, when it is not
@@ -39173,7 +39285,7 @@ static std::string vsTunableJson() {
          *  them, so an older VibeServer (which played "sam" as plain AM) never shows them. */
         static const char* kOffer[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "drm" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "drm", "freedv" };
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -39187,6 +39299,10 @@ static std::string vsTunableJson() {
             /* ★★ V12 NOR DRM: it needs ≥ 4.5 kHz of RF with its phase intact, and the IC-7300's widest SSB filter is 3.6 kHz
              *  (AM's 10 kHz goes through an envelope detector) — vibe_icom_decode.h. Never offered rather than never decoding. */
             if (k == "drm" && g_icomOn.load()) continue;
+            /* ★★ V12 FreeDV: only where the system's libcodec2 loaded (vsRadioCaps already drops it otherwise — said again
+             *  here because this list is what every client draws its mode buttons from). Never on an Icom: its audio is
+             *  the radio's own demodulator and the modem is not wired to it this round. */
+            if (k == "freedv" && (g_icomOn.load() || !vibe::freedv::available())) continue;
             if (k == "dab") { if (!vsDabCapable()) continue; }
             else if (k == "adsb") { if (!vsAdsbWhyNot().empty()) continue; }
             else if (k == "ism") { if (!vsIsmAnyBand() || !vsIsmWhyNot().empty()) continue; }
@@ -39199,6 +39315,8 @@ static std::string vsTunableJson() {
         }
         m += "]";
         j += ",\"modes\":" + m;
+        // ★ V12 FreeDV: the sub-modes this server's libcodec2 can run — the clients' manual choices under AUTO
+        if (m.find("\"freedv\"") != std::string::npos) j += ",\"freedvSubs\":" + vibe::freedv::api().subsJson();
         j += std::string(",\"rdsx\":") + ((!vsModeBlocked("rds") && !vsModeBlocked("wfm")) ? "true" : "false");
     }
     // ★ The same ranges in WORDS where the plan has words for them — "FM broadcast" is what a

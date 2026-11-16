@@ -1678,6 +1678,19 @@ else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 FreeDV AS A MODE (vibe_freedv.h, docs/v12/FREEDV.md): the real server on a fake rtl_tcp replaying test-freedv's
+#     synthetic clip (700D, 700E and 1600 stations made by codec2's own transmitter): AUTO names each, the report, the text,
+#     decoded speech on the audio socket, a manual sub-mode, USB again after, a one-pipeline and a range-locked radio, and no
+#     mode without libcodec2 (test-server-freedv). NOT RUN without VIBESERVER_BIN or libcodec2 (the clip writer exits 3).
+printf '\n\033[1m── FreeDV (end to end: the server) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-freedv" ] && "$OUT/test-freedv" clip "$OUT/freedv-clip.cu8" 288000 20 12 >/dev/null; then
+  VIBE_FREEDV_CLIP="$OUT/freedv-clip.cu8" node scripts/test-server-freedv.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/freedv-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and libcodec2 (apt install libcodec2-1.2 / brew install codec2)'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 THE DRM CONSTELLATION + RECEPTION METER (2026-11-12): the same shape on a SYNTHETIC DRM signal (the test
 #     transmitter, vibeserver/drm-synth-clip.cpp) — so it needs no recording: drm_iq only to a socket that asked, ~one per
 #     super frame, within budget, clustered on the QAM grid, off again, never to another listener (test-server-drm-

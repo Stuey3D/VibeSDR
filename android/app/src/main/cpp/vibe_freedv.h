@@ -265,6 +265,10 @@ private:
     static constexpr int kPrimeFrames = kOutRate * 3 / 10;   // 0.3 s — a 700D modem frame is 160 ms of speech
     static constexpr int kMaxFrames = kOutRate * 3 / 2;      // 1.5 s, then the oldest goes (latency never grows)
     static constexpr double kLockSec = 1.0;                  // AUTO: sync held this long wins
+    /* ★★ A SYNC IS BELIEVED ONLY ONCE IT HAS HELD (measured 2026-11-16, test-server-freedv): 1600's demodulator, chosen by
+     *  hand on a 700D station, flickered into sync for a frame or two — a "sync" on the VTS for a signal it cannot decode, and
+     *  a codec2 chirp if its squelch let that frame through. Reported and played only after 0.5 s held. */
+    static constexpr double kHeldSec = 0.5;
     static constexpr double kRelockSec = 8.0;                // AUTO: this long without sync searches again
     static constexpr double kSnrEverySec = 1.0;              // the report's SNR moves at most once a second
 
@@ -381,8 +385,8 @@ private:
             m.sync = sync != 0;
             if (m.sync) { m.syncSec += dt; m.lostSec = 0; m.snr = snr; }
             else { m.syncSec = 0; m.lostSec += dt; }
-            if (&m == active_ && nout > 0) {
-                if (m.sync) speechBlocks_.fetch_add(1, std::memory_order_relaxed);
+            if (&m == active_ && nout > 0 && m.syncSec >= kHeldSec) {
+                speechBlocks_.fetch_add(1, std::memory_order_relaxed);
                 spF_.resize(size_t(nout)); spO_.resize(size_t(m.up->maxOut(nout)));
                 for (int i = 0; i < nout; ++i) spF_[size_t(i)] = float(m.out[size_t(i)]) * (1.0f / 32768.0f);
                 const int no = m.up->process(spF_.data(), nout, spO_.data());
@@ -421,7 +425,7 @@ private:
                 return;
             }
         }
-        const bool in = active_ && active_->sync;
+        const bool in = active_ && active_->sync && active_->syncSec >= kHeldSec;
         locked_.store(in ? active_->sub : kAuto);
         snr_.store(in ? active_->snr : NAN);
     }
@@ -431,7 +435,7 @@ private:
     }
     /** {"type":"freedv","sub":"auto"|"700D"…,"state":"search"|"sync","mode":"700D"|"","snr":5,"text":"…"} */
     void publish(bool force) {
-        const bool in = active_ && active_->sync;
+        const bool in = active_ && active_->sync && active_->syncSec >= kHeldSec;
         int snr = 0;
         if (in) {
             const double now = streamSec_;   // ★ stream time, not the wall clock: the same signal, the same reports
