@@ -12,11 +12,12 @@ import { noteAudioEvent } from '../services/audioPathLog';
 import StepPicker from '../components/StepPicker';
 import { useIsFocused } from '@react-navigation/native';
 import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, ALL_REPEAT_KEYS, useNavFocus, useOverlay, useOverlayOpen, overlayOpenNow } from '../components/PanelNav';
-import { useScreenHighlight } from '../components/ScreenNav';
+import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
 import { SCREEN_PRIORITY, keyDirOf } from '../utils/hardwareKeys';
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../../App';
+import { RootStackParamList, splashBridge } from '../../App';
+import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { createBackend } from '../services/backendFactory';
 import type { SDRBackend, FmdxState, FmdxServerInfo } from '../services/SDRBackend';
 import { resolveStationLogo } from '../services/stationLogoCache';
@@ -351,6 +352,8 @@ export default function TunerScreen({ route, navigation }: Props) {
   // ★★ THE SCROLL AREA'S OWN SIZE — the window, not the device (fmdxLayout.ts). It is the ScrollView's frame
   // (flex: 1), which does not depend on its content, so the growth below cannot feed back into it.
   const [scrollBox, setScrollBox] = useState({ w: 0, h: 0 });
+  const scrollRef = useRef<ScrollView>(null);
+  const stationCardY = useRef(0);   // ★ the station card's y in the scroll content, so the tour can bring it into view
   const [forcedMono, setForcedMono] = useState(false);
   const [demodOpen, setDemodOpen] = useState(false);
   const [stepOpen, setStepOpen] = useState(false);
@@ -1167,6 +1170,57 @@ export default function TunerScreen({ route, navigation }: Props) {
   const cardFlag = st ? isoToFlag(countryOf(st)) : '';
   /* ★★★ BIG WINDOW → BIG DIAL + BIG LOGO (Stuart, 2026-10-04). Only the SPARE height of a WIDE window is handed
    *  out; a phone-sized window gets exactly today's sizes (fmdxLayout returns COMPACT, every scale 1). */
+  /* ★★ THE FM-DX TUNER TOUR (Stuart, 2026-11-16: every screen gets one). Short overviews in the SDR tour's style —
+   *  what the control is and what is in it, no manuals. AGENTS.md: every sentence was checked against THIS screen,
+   *  not the waterfall screen's — here the cog is a Back key, the frequency card has no bookmarks or search (FreqModal
+   *  is given no onSearchTune), the speaker is a REC-only sheet (AudioSheet recordingOnly) and the mode pill opens
+   *  this screen's own DEMODULATOR sheet (Stereo, cEQ, iMS, ANTENNA). Re-read them when any of those places changes.
+   *  ★ The dial and the station card live in a ScrollView, so their steps scroll it first — a target below the fold
+   *    would be spotlit off the window. A target that does not measure (none drawn) falls back to a centred card. */
+  const tunerTour = useCoachmarkTour([
+    { id: 'dial', title: 'The tuning dial',
+      body: 'This is the tuning dial. Tap it to tune, pinch to zoom into a busy part of the band, drag to move along it and double-tap to see the whole band again. Every station name you receive is written on the dial at its frequency.',
+      target: tourRef('fmdxDial'),
+      onEnter: () => scrollRef.current?.scrollTo({ y: 0, animated: false }), enterDelay: 200 },
+    { id: 'station', title: 'Station information',
+      body: 'This card shows the station you are tuned to: its PI code, logo and country flag, and the TP, TA and AF lights. The station name and radio text run along the strip above the controls, and the transmitter and alternative frequencies appear below when they are known.',
+      target: tourRef('fmdxStation'),
+      onEnter: () => scrollRef.current?.scrollTo({ y: Math.max(0, stationCardY.current - 14), animated: false }), enterDelay: 200 },
+    { id: 'freq', title: 'Type a frequency',
+      body: 'Tap the frequency to type one in directly.',
+      target: tourRef('freqBox') },
+    { id: 'mode', title: 'The demodulator menu',
+      body: 'Tap the mode to open the demodulator menu: stereo or mono, the server’s cEQ and iMS options, and a choice of antenna where the server has more than one.',
+      target: tourRef('modeBtn') },
+    { id: 'drum', title: 'Tune with the drum',
+      body: 'Spin the drum to tune up and down by the step shown on the step button; tap that button to change the step. The DRUMS / KEYS button at the top swaps the drum for tap keys and back.',
+      target: tourRef('vfoDrum') },
+    { id: 'rec', title: 'The recorder',
+      body: 'This is the record menu. In here you can record what you are hearing, keep up to a minute from before you pressed REC, and open your saved recordings.',
+      target: tourRef('audioBtn') },
+    { id: 'chat', title: 'One tuner, shared',
+      body: 'Everyone on this server shares one tuner, so tuning moves it for every listener. The SHARED TUNER banner says whether anyone else is listening; if they are, ask in chat before you retune.',
+      target: tourRef('chatBtn') },
+    { id: 'back', title: 'Back to the servers',
+      body: 'This is your Back button: it returns you to the server list, or, where it can, lets you listen to a second server alongside this one. The heart at the top favourites this server, and the ? up there replays this tour.',
+      target: tourRef('menuBtn') },
+  ], { storageKey: 'lsv_tour_fmdx_v1' });
+  // Auto-start once on the first connection, as the SDR screen does: after the launch splash has cleared, and never
+  // over the SHARED TUNER notice — that is a <Modal>, which the in-tree tour cannot draw above. The effect re-runs
+  // when the notice is dismissed; maybeAutoStart's own guard keeps it to once.
+  useEffect(() => {
+    if (!connected || showNotice) return;
+    let t: ReturnType<typeof setTimeout>;
+    const unsub = splashBridge.whenDismissed(() => {
+      t = setTimeout(() => {
+        if (showNoticeRef.current || AppState.currentState !== 'active') return;
+        tunerTour.maybeAutoStart();
+      }, 1500);
+    });
+    return () => { unsub(); clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, showNotice]);
+
   const lay = useMemo(() => fmdxLayout(
     scrollBox.w - 28 - insets.left - insets.right,
     scrollBox.h - 14 - (14 + bottomH + (vtsH ? vtsH + 8 : 0)),
@@ -1204,6 +1258,17 @@ export default function TunerScreen({ route, navigation }: Props) {
         >
           <Text style={styles.ctrlModeTxt}>{vfoKeys ? 'KEYS' : 'DRUMS'}</Text>
         </TouchableOpacity>
+        {/* ★ Replay the tour — this screen has no settings menu to hold REPLAY TUTORIAL (its menu slot is Back). */}
+        <TouchableOpacity
+          ref={screenNavRef('fmdxTourBtn', tunerTour.restart)}
+          style={styles.ctrlModeBtn}
+          onPress={tunerTour.restart}
+          accessibilityLabel="Replay the tour"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.ctrlModeTxt}>?</Text>
+        </TouchableOpacity>
         {/* REC + recordings library moved into the AUDIO sheet (control island). */}
         {!!st && !paused && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
@@ -1222,13 +1287,14 @@ export default function TunerScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
 
-      <ScrollView style={{ flex: 1 }}
+      <ScrollView ref={scrollRef} style={{ flex: 1 }}
         onLayout={(e) => { const { width, height } = e.nativeEvent.layout;
           setScrollBox(b => (b.w === width && b.h === height ? b : { w: width, h: height })); }}
         contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + bottomH + (vtsH ? vtsH + 8 : 0), paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
 
         {/* Vintage tuning dial — every RDS name we decode is pinned to its freq */}
+        <View ref={tourRef('fmdxDial')} collapsable={false}>
         <FmdxDial
           freqHz={displayFreq}
           loHz={fmLo}
@@ -1242,6 +1308,7 @@ export default function TunerScreen({ route, navigation }: Props) {
           height={lay.dialH}
           scale={lay.dialScale}
         />
+        </View>
 
         {/* Band extent. Absent entirely on a normal server — the dial reads
             87.5–108 as it always has. It appears only once the dial has GROWN,
@@ -1273,7 +1340,8 @@ export default function TunerScreen({ route, navigation }: Props) {
             portrait strip has no room for lives here — RDS mark, flag and PI on the left, the station's logo CENTRED,
             TP · TA · AF on the right. The two sides are equal flex columns, so the logo sits on the card's centre
             whatever either side holds. Shown in landscape too (the strip keeps its own icons there). */}
-        <View style={[styles.panel, styles.idRow]}>
+        <View ref={tourRef('fmdxStation')} collapsable={false} style={[styles.panel, styles.idRow]}
+              onLayout={(e) => { stationCardY.current = e.nativeEvent.layout.y; }}>
           <View style={[styles.idSide, big && { gap: Math.round(6 * cs) }]}>
             <RdsMark kind="plain" height={Math.round(15 * cs)} color={fp.vts.mark} glow={fp.vts.markGlow} />
             <View style={styles.idPiRow}>
@@ -1523,6 +1591,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         onHideUser={(name: string) => hideChatUser(name, myCallsign)}
         onShowHidden={showChatHidden}
       />
+      {tunerTour.overlay}
     </SafeAreaView>
   );
 }
