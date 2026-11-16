@@ -294,6 +294,34 @@ if stamp_ok libxaac "$XAAC_STAMP" "$PREFIX/lib/libxaacdec.a"; then echo "==> lib
   echo "$XAAC_STAMP" > "$PREFIX/.stamp-libxaac"
 fi
 
+# ── FreeDV RADE V1 receiver — V12 (docs/v12/FREEDV.md "RADE"): the same pins and the same builder as Linux ─────────────
+# ★ rade_c (BSD-2-Clause) + Opus 1.6.1's DNN code and FARGAN (BSD-3-Clause, the libopus tarball above) + freedv-backend's
+#   reliable text (BSD-2-Clause) → librade_vibe.a (the server) and librade_vibe_tx.a (the tests). Licences to Resources.
+RADE_C_COMMIT=77980d6eb02f16e3f59a60243b4d7578b364b67e                       # = linux/build-deps.sh
+RADE_C_SHA=01f16e517b7961796d959de5921b4cfec40b9a2dc72b4625ece019a53bc3dfaf
+FDVB_COMMIT=49006b029853061ca4e992f9632a51875aa3ecf1
+FDVB_SHA=d8d8e158f770c9dd26b870a40c6562affae9cd5cda7d87bb6ef21382470d7cc7
+RADE_SCRIPT="$MAC/../linux/build-rade.sh"
+RADE_WRAP_SUM="$(cat "$RADE_SCRIPT" "$MAC/../../android/app/src/main/cpp/rade/"vibe_rade* | shasum -a 256 | cut -c1-16)"
+RADE_STAMP="rade $RADE_C_COMMIT $RADE_C_SHA fdvb $FDVB_COMMIT $FDVB_SHA opus $OPUS_VER $OPUS_SHA min=$MIN arch=$ARCH $CCVER src=$RADE_WRAP_SUM"
+if stamp_ok rade "$RADE_STAMP" "$PREFIX/lib/librade_vibe.a"; then echo "==> RADE V1: up to date"; else
+  echo "==> RADE V1: building for macOS $MIN"
+  fetch "https://github.com/freedv/rade_c/archive/$RADE_C_COMMIT.tar.gz" "rade_c-$RADE_C_COMMIT.tar.gz" "$RADE_C_SHA"
+  fetch "https://github.com/freedv/freedv-backend/archive/$FDVB_COMMIT.tar.gz" "freedv-backend-$FDVB_COMMIT.tar.gz" "$FDVB_SHA"
+  fetch "https://downloads.xiph.org/releases/opus/opus-$OPUS_VER.tar.gz" "opus-$OPUS_VER.tar.gz" "$OPUS_SHA"
+  rm -rf "$WORK/rade_c" "$WORK/fdvb" "$WORK/opus-rade"; mkdir -p "$WORK/rade_c" "$WORK/fdvb" "$WORK/opus-rade"
+  tar -xzf "$SRC/rade_c-$RADE_C_COMMIT.tar.gz" -C "$WORK/rade_c" --strip-components 1 '*/src/*' '*/LICENSE'
+  tar -xzf "$SRC/freedv-backend-$FDVB_COMMIT.tar.gz" -C "$WORK/fdvb" --strip-components 1
+  tar -xzf "$SRC/opus-$OPUS_VER.tar.gz" -C "$WORK/opus-rade" --strip-components 1
+  AR=/usr/bin/ar NM=/usr/bin/nm JOBS="$JOBS" bash "$RADE_SCRIPT" "$WORK/rade_c" "$WORK/opus-rade" "$WORK/fdvb" "$PREFIX" >"$WORK/rade.log" 2>&1 \
+    || { tail -30 "$WORK/rade.log"; echo "!! RADE build failed"; exit 1; }
+  tail -1 "$WORK/rade.log"
+  check_log "$WORK/rade.log"
+  verify_archive "$PREFIX/lib/librade_vibe.a"
+  rm -rf "$WORK/rade_c" "$WORK/fdvb" "$WORK/opus-rade" "$WORK/rade.log"
+  echo "$RADE_STAMP" > "$PREFIX/.stamp-rade"
+fi
+
 # ── UHD 4.9.0.1 (Ettus USRP B2xx only) + Boost 1.83 subset + the B2xx images — V12, docs/v12/USRP.md ────────────
 # ★★★ PLUG AND PLAY (Stuart, 2026-11-02): a USRP needs nothing installed beside the app. ../linux/build-uhd.sh is the
 #     one builder for the Mac and Linux (amd64/arm64); it fetches the pinned source and images (SHA-256 checked, the

@@ -4,7 +4,7 @@
 #   build-deps.sh <prefix> [native|armhf|armv6|arm64]
 #
 # Run inside the build images (Dockerfile.build, Dockerfile.cross-armhf, Dockerfile.cross-arm64). Output:
-#   <prefix>/lib/{libusb-1.0.a,libopus.a,librtlsdr.a,libfaad_drm.a,libfaad_dab.a,libxaacdec.a}
+#   <prefix>/lib/{libusb-1.0.a,libopus.a,librtlsdr.a,libfaad_drm.a,libfaad_dab.a,libxaacdec.a,librade_vibe.a,librade_vibe_tx.a}
 #   <prefix>/include/{libusb-1.0/libusb.h,opus/*.h,rtl-sdr.h,rtl-sdr_export.h}
 #   <prefix>/uhd/{lib,include,images,share}  UHD (USRP B2xx) + Boost + the B2xx images — amd64 / arm64 only (build-uhd.sh)
 #   <prefix>/BUILT-FROM                  what went in, one line per library
@@ -52,6 +52,10 @@ FAAD_VER=2.11.3
 FAAD_SHA=860ab62087e336c1844a70e33196c1790b525fb9a9e7b6ac4fab1a1a4e4d5ce8   # = mac/build-deps.sh (GitHub tag tarball)
 XAAC_VER=0.1.14
 XAAC_SHA=f467a6e5bcf3941ce5d1a4d811442835fba7eb3744ae986f3ea37e110584b611   # = mac/build-deps.sh (GitHub tag tarball, = commit 2fbadd57)
+RADE_C_COMMIT=77980d6eb02f16e3f59a60243b4d7578b364b67e                       # = mac/build-deps.sh (freedv/rade_c main, 2026-11-16)
+RADE_C_SHA=01f16e517b7961796d959de5921b4cfec40b9a2dc72b4625ece019a53bc3dfaf   # its GitHub archive tarball
+FDVB_COMMIT=49006b029853061ca4e992f9632a51875aa3ecf1                         # = mac/build-deps.sh (freedv/freedv-backend main, 2026-11-12)
+FDVB_SHA=d8d8e158f770c9dd26b870a40c6562affae9cd5cda7d87bb6ef21382470d7cc7     # its GitHub archive tarball
 
 # ── the toolchain, per profile ───────────────────────────────────────────────────────────────
 HOSTOPT=(); CMAKE_TC=(); OPUS_EXTRA=()
@@ -136,6 +140,31 @@ mkdir -p "$WORK/opus" && tar -xzf "$WORK/opus.tar.gz" -C "$WORK/opus" --strip-co
   && make -j"$JOBS" install >>"$WORK/opus.log" 2>&1 ) || { tail -40 "$WORK/opus.log"; echo "!! libopus build failed"; exit 1; }
 cp "$WORK/opus/inst/lib/libopus.a" "$PREFIX/lib/"
 mkdir -p "$PREFIX/include/opus" && cp "$WORK/opus/inst/include/opus/"*.h "$PREFIX/include/opus/"
+
+# ── FreeDV RADE V1 receiver (V12, docs/v12/FREEDV.md "RADE") — rade_c + Opus 1.6.1's DNN code and FARGAN + FreeDV's ──
+#    reliable text, built by build-rade.sh into librade_vibe.a (the server) and librade_vibe_tx.a (the tests' transmitter).
+# ★★ BSD only: rade_c BSD-2-Clause, Opus BSD-3-Clause, freedv-backend BSD-2-Clause — their licences ship in the doc dir.
+# ★ Opus is the SAME pinned 1.6.1 tarball as above, unpacked afresh (the libopus build tree is not reused). Its FARGAN
+#   decodes bit-identically to the model rade_c pins (opus 940d4e5a + model 4ed9445b), measured 2026-11-16 on 5 minutes of
+#   off-air RADE — see FREEDV.md. The one change to it (a buffer RADE's decoder needs) is build-rade.sh's.
+fetch "https://github.com/freedv/rade_c/archive/$RADE_C_COMMIT.tar.gz" "rade_c.tar.gz" "$RADE_C_SHA"
+fetch "https://github.com/freedv/freedv-backend/archive/$FDVB_COMMIT.tar.gz" "freedv-backend.tar.gz" "$FDVB_SHA"
+mkdir -p "$WORK/rade_c" "$WORK/fdvb" "$WORK/opus-rade"
+# ★ only what the receiver needs: rade_c's src/ and LICENSE (its tarball also carries ~40 MB of WAV files and V2 weights)
+tar -xzf "$WORK/rade_c.tar.gz" -C "$WORK/rade_c" --strip-components 1 --wildcards '*/src/*' '*/LICENSE'
+tar -xzf "$WORK/freedv-backend.tar.gz" -C "$WORK/fdvb" --strip-components 1
+tar -xzf "$WORK/opus.tar.gz" -C "$WORK/opus-rade" --strip-components 1
+# ★ the C++ compiler for its three C++ files: the profile's own, else the C compiler's sibling (armhf exports none;
+#   ARMv6's is clang with the same --target/--sysroot line)
+case "$PROFILE" in
+  armv6) RADE_CXX="clang++ ${CC#clang }" ;;
+  *)     RADE_CXX="${CXX:-${CC%gcc}g++}" ;;
+esac
+CXX="$RADE_CXX" JOBS="$JOBS" OBJCOPY="${NM%nm}objcopy" \
+  bash "$(cd "$(dirname "$0")" && pwd)/build-rade.sh" "$WORK/rade_c" "$WORK/opus-rade" "$WORK/fdvb" "$PREFIX" >"$WORK/rade.log" 2>&1 \
+  || { tail -30 "$WORK/rade.log"; echo "!! RADE build failed"; exit 1; }
+tail -1 "$WORK/rade.log"
+rm -rf "$WORK/rade_c" "$WORK/fdvb" "$WORK/opus-rade"
 
 # ── librtlsdr 2.0.3 (osmocom/rtl-sdr 797f814), static, against the libusb above ───────────────
 git init -q "$WORK/rtl"
@@ -301,7 +330,7 @@ esac
 
 # ── every object for the architecture the profile promises ───────────────────────────────────
 X="$WORK/x"; mkdir -p "$X"
-for a in libusb-1.0 libopus librtlsdr libfaad_drm libfaad_dab libxaacdec; do
+for a in libusb-1.0 libopus librtlsdr libfaad_drm libfaad_dab libxaacdec librade_vibe; do
   rm -rf "$X"/*; ( cd "$X" && "$AR" x "$PREFIX/lib/$a.a" )
   if [ -n "$WANT_FILE" ]; then
     bad="$(file "$X"/*.o | count -v "$WANT_FILE")"
@@ -326,6 +355,7 @@ fi
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_drm, float, GPL-2.0-or-later; VibeSDR patches:${FAAD_SERIES:- none})"
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_dab: the plain build, globals prefixed vibedab_, float, GPL-2.0-or-later; $FAAD_DAB_OPT; VibeSDR patches:${FAAD_SERIES:- none})"
   echo "libxaac $XAAC_VER sha256 $XAAC_SHA (decoder only, $XAAC_VARIANT code path, Apache-2.0; VibeSDR patches: $XAAC_PATCH_LIST)"
+  echo "rade_c $RADE_C_COMMIT sha256 $RADE_C_SHA + freedv-backend $FDVB_COMMIT sha256 $FDVB_SHA + opus $OPUS_VER DNN (librade_vibe, RADE V1 receive, BSD-2/BSD-3; build-rade.sh)"
   [ -z "$UHD_BUILT" ] || echo "$UHD_BUILT"
   echo "profile $PROFILE, CFLAGS '$CFLAGS', $CCVER"; } > "$PREFIX/BUILT-FROM"
 ls -l "$PREFIX/lib"

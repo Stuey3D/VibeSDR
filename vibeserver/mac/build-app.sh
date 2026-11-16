@@ -293,6 +293,11 @@ fi
 for f in LICENSE.libxaac NOTICE.libxaac; do
   if [ -f "$DEPS/prefix/share/licences/$f" ]; then cp "$DEPS/prefix/share/licences/$f" "$APP/Contents/Resources/$f"; fi
 done
+# ★ V12: FreeDV RADE V1 (rade_c BSD-2-Clause, Opus's DNN/FARGAN BSD-3-Clause, freedv-backend BSD-2-Clause) is linked into
+#   the server — the BSD licences ask for their notices to travel with the binary
+for f in LICENSE.rade_c COPYING.opus LICENSE.freedv-backend; do
+  if [ -f "$DEPS/prefix/share/licences/$f" ]; then cp "$DEPS/prefix/share/licences/$f" "$APP/Contents/Resources/$f"; fi
+done
 # ★★★ THE USRP B2xx IMAGES (V12, docs/v12/USRP.md) — firmware + FPGA, pinned to UHD 4.9.0.1's manifest by
 #     build-uhd.sh. usrp_source.cpp finds them at <exe>/../Resources/uhd-images; nothing is downloaded on a user's Mac.
 #  ★ Only when the build linked UHD (VIBE_UHD_LINK) — images without the driver would be 14 MB of nothing.
