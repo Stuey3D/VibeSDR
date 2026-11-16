@@ -231,7 +231,7 @@ let cols = 3;
 // ── ★★★ OPTIONS POP OUT OF THEIR KEY ─────────────────────────────────────────────────────────────────────────────────
 const OPTION_PANELS: Record<string, string> = {
   rtty: 'rttySettings', wefax: 'wefaxSettings', time: 'timeSettings', cw: 'cwSettings', psk: 'pskSettings',
-  aprs: 'aprsSettings', dsc: 'dscSettings', jtty: 'jttySettings',
+  aprs: 'aprsSettings', dsc: 'dscSettings', jtty: 'jttySettings', ncdxf: 'ncdxfSettings',
   mfsk: 'tmSettings', olivia: 'tmSettings', thor: 'tmSettings',   // ★ V12 the MFSK keyboard modes share one MODE panel
 };
 let openDec: string | null = null;

@@ -32,6 +32,7 @@ import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText, rttySkimHintText } from '../services/cwList';
+import { NCDXF_HINT } from '../services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_HINT } from '../services/jtty';
 import ModeIcon, { ModeLabel, modeKeyIcon } from './ModeIcon';   // ★ V12 mode icons (Stuart 2026-10-28)
 import { DECODER_PLACES, RADIO_BANDS, WHOLE_RADIO_IDS, WHOLE_RADIO_LABEL, WHOLE_RADIO_HINT, decoderGroupIcon, decoderGroupLabel, decoderDim, openingBand,
@@ -45,7 +46,7 @@ import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } fro
 import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, type GroupedMode } from '../services/autoModes';   // ★★★ AUTO's fallback rows
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -510,6 +511,8 @@ interface ModeSelectorProps {
     onRttyView?: (skim: boolean) => void; onRttyWidth?: (w: number) => void;
     /** ★★ V12 JTTY — only where `"jtty": true`; its settings are the announced calling frequencies THIS radio reaches. */
     jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
+    /** ★★ V12 NCDXF beacons — only where `"ncdxf"` is offered; its settings are the beacon frequencies THIS radio reaches. */
+    ncdxfAvail?: boolean; ncdxfBands?: Array<{ hz: number; label: string }>; onNcdxfBand?: (hz: number) => void;
     /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches: `dscChans` the distress
      *  set, `dscRoutine` the routine channels (ITU-R M.541) of the band the dial is on, named `dscBandLabel`. */
     dscAvail?: boolean; dscChans?: Array<{ hz: number; label: string; vhf: boolean }>;
@@ -625,6 +628,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   // ★ V12 the server's own PSK / JTTY / DSC — each only where this radio's vibeserver.json names it, and not blocked
   const pskShown = !!decoderControls?.pskAvail && !isBlocked('psk');
   const jttyShown = !!decoderControls?.jttyAvail && !isBlocked('jtty');
+  const ncdxfShown = !!decoderControls?.ncdxfAvail && !isBlocked('ncdxf');   // ★ V12 NCDXF beacons
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
   const sitoraShown = !!decoderControls?.sitoraAvail && !isBlocked('sitora');   // ★ V12 SITOR-A
   const sameShown = !!decoderControls?.sameAvail && !isBlocked('same');   // ★ V12 EAS / SAME
@@ -633,7 +637,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
   const tmShown = (f: TextFamily) => !!decoderControls?.tmModes?.[f] && !isBlocked(f);   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
-  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || sameShown || selcalShown || hellShown || pagingShown || aprsShown
+  const srvDecShown = cwShown || pskShown || jttyShown || ncdxfShown || dscShown || sitoraShown || sameShown || selcalShown || hellShown || pagingShown || aprsShown
     || tmShown('mfsk');
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
@@ -708,6 +712,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (cwShown) addLegend('CW', 'cw');
     if (pskShown) addLegend('PSK', 'psk');
     if (jttyShown) addLegend('JTTY', 'jtty');
+    if (ncdxfShown) addLegend('BEACONS', 'ncdxf');
     if (dscShown) addLegend('DSC', 'dsc');
     if (aprsShown) addLegend('APRS', 'aprs');
     if (advRdsShown) addLegend(advRdsLabel, 'rds');
@@ -816,7 +821,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     // ★★ V12 out of this radio's reach: greyed, and a press says why (never starts it)
     const why = dc.decWhy?.[id];
@@ -1141,6 +1146,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'cw':   return cwShown ? srvKey('cw', 'CW', 'CW decoder') : null;
       case 'psk':  return pskShown ? srvKey('psk', 'PSK', 'PSK31 and PSK63 decoder') : null;
       case 'jtty': return jttyShown ? srvKey('jtty', 'JTTY', 'JTTY keyboard-mode decoder') : null;
+      case 'ncdxf': return ncdxfShown ? srvKey('ncdxf', 'BEACONS', 'NCDXF beacon tracker') : null;
       case 'dsc':  return dscShown ? srvKey('dsc', 'DSC', 'Maritime DSC decoder') : null;
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
       case 'same':   return sameShown ? srvKey('same', 'SAME', 'EAS and SAME emergency alert header decoder') : null;
@@ -1161,7 +1167,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (!decoderControls) return false;
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
-      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;
+      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;
       case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'hell': return hellShown; case 'paging': return pagingShown;
       case 'mfsk': return tmShown('mfsk'); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
@@ -1552,6 +1558,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             ))}</OptRow>
           </>)}
           <Text style={capText}>{JTTY_HINT}</Text>
+        </>);
+      /* ★ V12 NCDXF beacons: the five beacon frequencies this radio reaches (CW) and the hint. */
+      case 'ncdxf':
+        return (<>
+          {!!dc.ncdxfBands?.length && (<>
+            <SubLabel label="BAND" />
+            <OptRow>{dc.ncdxfBands.map((d) => (
+              <SegBtn key={d.hz} label={d.label} active={Math.abs((dc.tunedHz ?? 0) - d.hz) < 1500} onPress={() => dc.onNcdxfBand?.(d.hz)} />
+            ))}</OptRow>
+          </>)}
+          <Text style={capText}>{NCDXF_HINT}</Text>
         </>);
       /* ★★ V12 DSC: DISTRESS (every band this radio reaches) and the ROUTINE channels (ITU-R M.541) of the band the dial is
           on — each tuned as a DSC receiver does (USB 1.7 kHz below the ASSIGNED frequency, or Ch 70 NFM) — and the hint. */

@@ -51,6 +51,7 @@ import { guard, guardJson } from './faultLog';
 import { cleanText, cleanMode } from '../utils/safeText';
 import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, type CwList, type CwSpot } from './cwList';
 import { parseJttySignals, parseJttySpot, jttyStateText, type JttySignal, type JttySpot } from './jtty';
+import { ncdxfSanitise, ncdxfStatus, type NcdxfReport } from './ncdxf';   // ★ V12 NCDXF beacons
 import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
@@ -65,6 +66,7 @@ import { parseSpotsStatus, type SpotModeState } from './spotsBand';
  *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
 /** ★ V12 PSK31/63 ('psk' / 'pskskim' — `pskSkim`), JTTY ('jtty') and DSC ('dsc') — a VibeServer's own decoders. */
 export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw' | 'psk' | 'jtty' | 'dsc'
+  | 'ncdxf'   // ★ V12 the NCDXF / IARU beacon tracker — a VibeServer's own (ncdxf.ts): a line per beacon heard, 0x03, the grid JSON
   | 'mfsk'   // ★ V12 the MFSK keyboard modes — MFSK16/32, OLIVIA, CONTESTIA, THOR on ONE key (textModes.ts): text as it decodes, 0x03, textmode_status
   | 'hell'    // ★ V12 FELD HELL — drawn by a VibeServer (feldHell.ts): WEFAX's grey lines (re-sent as a strip fills), hell_status
   | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
@@ -221,6 +223,8 @@ export interface DecoderCallbacks {
   /** ★ V12 JTTY (VibeServer): the stations list (once a second, when it changed) and each call heard. */
   onJttySignals?: (list: JttySignal[]) => void;
   onJttySpot?:    (spot: JttySpot) => void;
+  /** ★ V12 NCDXF beacons (VibeServer): the grid and the last slot, every ten seconds. */
+  onNcdxf?:       (r: NcdxfReport) => void;
   /** ★ V12 DSC (VibeServer): one call (a repeat comes again with the same id and a higher count). */
   onDscCall?:     (call: DscCall) => void;
   /** ★ V12 BAND GOVERNOR: Band's per-mode state (active / light / idle / shed / off), when it changes and every 15 s. */
@@ -661,6 +665,10 @@ export class DecoderClient {
             if (this.active !== 'rtty' || !this.rttySkim) return;
             const sp = parseCwSpot(m.data, Date.now(), false, true);
             if (sp) this.cb.onCwSpot?.(sp);
+          } else if (m.type === 'ncdxf' && m.data) {
+            if (this.active !== 'ncdxf') return;
+            const r = ncdxfSanitise(m.data);
+            if (r) { this.cb.onNcdxf?.(r); this.cb.onStatus(ncdxfStatus(r)); }
           } else if (m.type === 'jtty_signals' && m.data) {
             if (this.active !== 'jtty') return;
             const l = parseJttySignals(m.data);
@@ -840,6 +848,7 @@ export class DecoderClient {
         : { extension_name: 'psk', params: { centre: this.pskCentre } };
       // ★ V12 JTTY: every JTTY signal in the passband — nothing to set.
       case 'jtty':    return { extension_name: 'jtty', params: {} };
+      case 'ncdxf':   return { extension_name: 'ncdxf', params: {} };
       // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.
       case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };
       // ★ V12 SITOR-A: the tones around 1 kHz (as RTTY); polarity, timing and each station's offset are found.
@@ -870,7 +879,7 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || isTextFamily(name)) {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || isTextFamily(name)) {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);
@@ -902,6 +911,11 @@ export class DecoderClient {
         if (this.sitorLast) this.sitorLast.link = s;
         this.cb.onStatus(sitorStatusText(this.sitorLast, s));
         this.cb.onDot(s >= 2 && s <= 6 ? 'active' : s === 1 ? 'sync' : 'idle');
+      } else if (name === 'ncdxf' && t === 0x03) {
+        // ★ NCDXF: 0 not on a beacon frequency · 3 tracking a band (the status line comes with the grid JSON)
+        if (u8.length < 2) return;
+        if (!u8[1]) this.cb.onStatus(ncdxfStatus(null));
+        this.cb.onDot(u8[1] ? 'active' : 'idle');
       } else if ((name === 'jtty' || name === 'dsc') && t === 0x03) {
         if (u8.length < 2) return;
         const s = u8[1];

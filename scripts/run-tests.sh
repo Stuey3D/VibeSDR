@@ -741,6 +741,8 @@ if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=
 if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 AIS + APRS in the app (src/services/tracks.ts) against the web's tracks.ts — one rule, two readers
 if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 NCDXF beacons: the shared client half (src/services/ncdxf.ts) and both clients' keys (2026-11-16).
+if npx tsx scripts/test_ncdxf_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
