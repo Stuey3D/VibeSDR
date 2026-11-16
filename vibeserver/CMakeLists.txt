@@ -1657,8 +1657,8 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #    the 404 wording in vibe_mapdata.h.
   # ★★ V12 FreeDV (docs/v12/FREEDV.md): the distribution's Codec 2 library, dlopen'd at run time — RECOMMENDS, never
   #    Depends (the guard below would refuse it, and rightly: a missing one costs only the FreeDV mode, which the server
-  #    then simply does not offer). The soname differs by release: 1.2 on Debian 12/13, Ubuntu 24.04 and Raspberry Pi OS
-  #    bookworm; 1.0 on Debian 11 and Ubuntu 22.04 — apt installs the first alternative that exists.
+  #    then simply does not offer). The soname differs by release: libcodec2-1.0 on Debian 12 bookworm (1.0.5), libcodec2-1.2
+  #    on Debian 13 trixie (1.2.0) — apt installs the first alternative that exists.
   set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "vibeserver-mapdata-detail, libcodec2-1.2 | libcodec2-1.1 | libcodec2-1.0")
   # ★★★ THE GUARD: a release package whose Depends names ANY library but libc6 is refused and
   #     deleted, so "nothing from the system but glibc" cannot regress quietly — a -dev package

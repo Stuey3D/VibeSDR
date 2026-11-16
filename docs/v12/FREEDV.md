@@ -85,8 +85,9 @@ No codec2 or FreeDV source is in this tree. `vibe_freedv.h` declares the few Fre
 signatures (`freedv_api.h`) and finds them with `dlsym` in the **system's** library:
 
 - **Linux:** `libcodec2.so.1.2`, `.1.1`, `.1.0`, then `.so`, by soname through the system loader.
-  - Debian 12/13, Ubuntu 24.04 and Raspberry Pi OS bookworm: 1.2.
-  - Debian 11 and Ubuntu 22.04: 1.0.
+  - Checked 2026-11-16 in arm64 containers, test-freedv 45/45 on both: Debian 12 bookworm ships libcodec2-1.0 (1.0.5),
+    and Debian 13 trixie ships libcodec2-1.2 (1.2.0). Both offer 700D, 700E and 1600.
+  - Raspberry Pi OS follows its Debian base. The Ubuntu versions have not been checked.
 - **macOS:** Homebrew `codec2` (`/opt/homebrew/opt/codec2/lib`, `/usr/local/opt/codec2/lib`) or MacPorts. A file is
   loaded only when its real path is owned by root or by the server's own user, and nobody else can write to it. The Mac
   app runs with disable-library-validation, so nothing else checks what `dlopen` loads.
@@ -106,7 +107,7 @@ Why dynamic, and why not a hard dependency:
 
 | Test | What it does | Result |
 |---|---|---|
-| `vibeserver/test-freedv.cpp` (run-tests.sh; exit 3 when libcodec2 is missing) | codec2's own transmitter on a synthetic voice, noise measured in 3 kHz. Each sub-mode by hand at 10 dB, AUTO naming each one, 700D at 4 dB, 700E and 1600 at 5 dB, 30 s of noise in AUTO (no lock, no sound), the real `RxPipeline` USB chain from IQ 6 kHz off centre with a +25 Hz error, a live sub-mode switch, and `VIBE_FREEDV_DISABLE` | 45/45 on the M5, Homebrew codec2 1.2.0 |
+| `vibeserver/test-freedv.cpp` (run-tests.sh; exit 3 when libcodec2 is missing; also passes in Debian bookworm and trixie arm64 containers) | codec2's own transmitter on a synthetic voice, noise measured in 3 kHz. Each sub-mode by hand at 10 dB, AUTO naming each one, 700D at 4 dB, 700E and 1600 at 5 dB, 30 s of noise in AUTO (no lock, no sound), the real `RxPipeline` USB chain from IQ 6 kHz off centre with a +25 Hz error, a live sub-mode switch, and `VIBE_FREEDV_DISABLE` | 45/45 on the M5, Homebrew codec2 1.2.0 |
 | `test-freedv clip OUT.cu8 [rate sec snr usb\|lsb]` | writes the bench clip: 700D at +10 kHz, 700E at +20 kHz, 1600 at −10 kHz | tool |
 | `test-freedv wav FILE [sub]` | replays off-air audio and prints every report | tool |
 | `scripts/test-server-freedv.mjs` (run-tests.sh; silent) | the real server on a fake rtl_tcp replaying the clips. 20 m USB and 40 m LSB, each on a one-pipeline radio and a range-locked one: AUTO names each sub-mode, the report's sideband and SNR, the text, decoded speech on the audio socket, silence on a manual sub-mode that is not on air, AUTO back again, SSB audio after leaving, and no mode without the library | see the commit log |

@@ -149,7 +149,7 @@ inline Api loadApi() {
         if (h) { a.path = p; break; }
     }
 #else
-    // ★ Debian 12/13, Ubuntu 24.04, Raspberry Pi OS bookworm: 1.2 · Ubuntu 22.04, Debian 11: 1.0 · some: 1.1
+    // ★ measured 2026-11-16: Debian 12 bookworm libcodec2-1.0 (1.0.5), Debian 13 trixie libcodec2-1.2 (1.2.0)
     static const char* const kTry[] = { "libcodec2.so.1.2", "libcodec2.so.1.1", "libcodec2.so.1.0", "libcodec2.so" };
     for (const char* p : kTry) {
         h = ::dlopen(p, RTLD_NOW | RTLD_LOCAL);
