@@ -110,6 +110,19 @@ modes this receiver runs — have become legacy modes that hardly anyone sends.
 | V2 | 14 carriers, ~860 Hz, 40 ms frames, ML sync. The README says on-air use is not yet recommended and the waveform, weights and API may change — yet it is already on Reporter |
 | Specification | **none published** beyond the V1 paper and the reference code; a V2 paper is "planned" |
 
+**Off air, 2026-11-16 16:55–17:05 UTC** (Stuart's UberSDR, standing permission; ten minutes each, recorded at once with
+`tools/ubersdr-rec`, kept in `~/VibeSDR-test-audio/freedv/` with a README): 14.236 USB, 7.177 LSB, 7.160 LSB, 7.065 LSB,
+3.643 LSB and 5.3685 USB, while Reporter showed 69 of 73 stations on RADE and none on the legacy modes. Replayed through
+our receiver (`test-freedv wav`, AUTO, `VIBE_FREEDV_LOG=1`):
+
+- **No sync on any recording** — not one held sync, not one frame passed the FEC, no text, no speech.
+- There **were** signals: on 7.065 (five RADEV1 stations on Reporter) the 0.7–2.2 kHz band stood 6 dB over its edges
+  for 22 % of the recording, on 3.643 for 28 % (1.2–2.0 kHz), on 7.177 for 7 %. 20 m and 60 m were empty from the UK
+  at that hour.
+- So the honest reading: what was on air was (by Reporter's count) RADE, and our receiver correctly found nothing it
+  knows. It is not proof our 700D path works off air — that still needs a 700D transmission (an SM1000 / ezDV user, or a
+  scheduled test). It does say why Stuart has never heard FreeDV decode: there is almost no 700D/700E/1600 left to hear.
+
 **Recommendation**
 
 1. Keep 700D/700E/1600 as they are: they cost nothing when nobody sends them, and the hardware users (SM1000, ezDV) can
