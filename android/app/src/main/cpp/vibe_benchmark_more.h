@@ -48,6 +48,7 @@
 #include "vibe_ais_service.h"
 #include "vibe_ism_service.h"
 #include "vibe_hdlc.h"
+#include "vibe_freedv.h"             // ★ V12 FreeDV as a mode (the dec_freedv row) — the system's libcodec2, dlopen'd
 #include "benchsynth/cw_synth.h"
 #include "benchsynth/psk_synth.h"
 #include "benchsynth/sitor_synth.h"
@@ -686,6 +687,9 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_tone",     { "",       false, false } }, { "dec_nr",       { "",       false, false } },
         { "dec_notch",    { "",       false, false } },
         { "dec_dxscan",   { "",       false, false } },   // ★★★ V12 the DX scanner: flagged, never switched off (no BLOCKABLE switch)
+        /* ★★ V12 FreeDV (vibe_freedv.h): a listener's MODE, not a decoder slot. Not green = "freedv" off by default on a fresh
+         *  setup (the owner can always tick it back — the benchmark sets the default, never hides). */
+        { "dec_freedv",   { "freedv", true,  false } },
     };
     for (const auto& e : t) if (id == e.id) return e.r;
     if (id.rfind("spot_", 0) == 0) return { "spots", false, true };   // ★ every digital-spots mode: inside "Digital spots"
@@ -1068,6 +1072,43 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     run("dec_lora_all", "Decoder: LoRa (868, every channel)", [&] {
         Row r = loraRealTimeRow("dec_lora_all", "Decoder: LoRa (868, every channel)", INFINITY);
         r.ms = -1;   // ★ run() times the row itself
+        return r;
+    });
+
+    /* ★★ V12 FreeDV AS A MODE — the WORST case of one listener: AUTO searching, all three sub-modes' demodulators at once
+     *  (once one locks the other two close, so a decoding listener costs about a third of this). Fed in real time, as the
+     *  audio callback does, on band noise; vibe-freedv's own thread is in the process figure. Not measured where libcodec2
+     *  is not installed (the mode is then not offered at all). */
+    run("dec_freedv", "FreeDV (per listener, AUTO searching)", [&] {
+        Row r; r.id = "dec_freedv"; r.label = "FreeDV (per listener, AUTO searching 700D/700E/1600)";
+        if (!vibe::freedv::available()) { r.label += " \xe2\x80\x94 libcodec2 not installed"; return r; }
+        std::vector<float> a((size_t)48000 * 4);
+        std::mt19937 g(11); std::normal_distribution<float> d(0.f, 0.1f);
+        for (auto& v : a) v = d(g);
+        vibe::freedv::FreeDvListener L(vibe::freedv::kAuto);
+        std::vector<float> out(960);
+        const double t0 = wallNow(); double fedSec = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+        while (fedSec < 1.0 + kRowMinSec) {
+            if (!measuring && fedSec >= 1.0) { c0 = processCpu(); measuring = true; }   // ★ past the modems' opening
+            L.feedAudio(a.data() + pos, 960, 1, 48000.0);
+            L.takePcm(out.data(), 960);
+            pos = (pos + 960) % a.size(); fedSec += 960 / 48000.0;
+            const double ahead = fedSec - (wallNow() - t0);
+            if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+        }
+        r.pct = 100.0 * (processCpu() - c0) / (fedSec - 1.0);
+        // ★ …then, unmeasured, 6 s of a 700D station from the library's own transmitter: the row's proof that it decodes
+        const std::vector<float> sig = vibe::freedv::testAudio48k(vibe::freedv::k700D, 6.0);
+        for (size_t i = 0; i + 960 <= sig.size(); i += 960) {
+            std::vector<float> b(sig.begin() + long(i), sig.begin() + long(i) + 960);
+            for (auto& v : b) v += d(g) * 0.3f;
+            L.feedAudio(b.data(), 960, 1, 48000.0);
+            L.takePcm(out.data(), 960);
+            while (L.queuedFrames() > 24000) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        r.decoded = (int)L.speechBlocks();
+        if (L.droppedBlocks()) r.label += " (fell behind)";
         return r;
     });
 

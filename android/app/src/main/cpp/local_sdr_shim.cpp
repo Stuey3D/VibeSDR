@@ -806,9 +806,11 @@ ModeParams paramsFor(const std::string& mode) {
     /* ★★ V12 DRM (vibe_drm_listener.h): an AM-shaped channel whose COMPLEX baseband goes to the DRM receiver; the AM
      *  detector's own audio is discarded and the decoded programme takes its place. 10 kHz = spectrum occupancy 3. */
     if (mode == "drm")            return {ModeParams::AM, 15000, 10000, 1};
-    /* ★★ V12 FreeDV (vibe_freedv.h): the ordinary USB demodulator — FreeDV is upper sideband on every band by convention —
-     *  whose audio goes to the FreeDV modem; the decoded speech takes its place. 700E is the widest at ~1.6 kHz, centred
-     *  on 1.5 kHz, so USB's own 2.7 kHz passes all three sub-modes with room for a mistuning. */
+    /* ★★ V12 FreeDV (vibe_freedv.h): the ordinary SSB demodulator whose audio goes to the FreeDV modem; the decoded speech
+     *  takes its place. 700E is the widest at ~1.6 kHz, centred on 1.5 kHz, so SSB's own 2.7 kHz passes all three
+     *  sub-modes with room for a mistuning. ★ THE SIDEBAND FOLLOWS THE DIAL (fdvLowerSideband): FreeDV keeps the SSB
+     *  convention — LSB below 10 MHz, USB from 10 MHz up (freedv.org, "What you need") — and an inverted modem signal
+     *  never syncs, so USB here is only the default; both demodulator sites apply the rule. */
     if (mode == "freedv")         return {ModeParams::SSB_USB, 24000, 2700, 1};
     if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 1200, 1};
     // ★ "fmdx" WAS a mode here and is gone: it widened the channel filter, which measured 10 dB
@@ -818,6 +820,9 @@ ModeParams paramsFor(const std::string& mode) {
     if (mode == "wfm")            return {ModeParams::WFM, 250000, 200000, 2};  // NB: ifRate field is unused/dead
     /* nfm / fm */                return {ModeParams::NFM, 50000, 12500, 1};
 }
+
+/** ★ V12 FreeDV's sideband by the SSB convention FreeDV follows: LSB below 10 MHz, USB from 10 MHz up. */
+static inline bool fdvLowerSideband(double dialHz) { return dialHz > 0 && dialHz < 10e6; }
 
 // Map the shim's mode kind onto the V5 engine's demod mode.
 vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k);
@@ -7739,6 +7744,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
     // sits HW_OFFSET_HZ below DC.
     double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() - hwOffsetHz() + demodOffset; }
+    /** ★★ V12 the shared demodulator's mode for the dial it is on — rxMode, except in FreeDV, whose sideband follows the
+     *  dial (fdvLowerSideband): every shared retune goes through rx.setTune(vfoOffsetNow(), rxModeDial(), …), so crossing
+     *  10 MHz in FreeDV flips the sideband in the same move. */
+    std::atomic<bool> fdvMode_{false};
+    vibedsp::RxPipeline::Mode rxModeDial() const {
+        if (fdvMode_.load(std::memory_order_relaxed))
+            return fdvLowerSideband(audioFreq.load()) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
+        return rxMode;
+    }
 
     // Margin keeping the VFO inside the usable capture: above the 50 kHz auto-
     // retune threshold AND clear of the RTL anti-alias rolloff (~10%). MUST
@@ -10176,7 +10190,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   scores outlive a retune, and a stale one beats the correct one on a weak signal.
             if (c->rx) c->rx->requestRdsResync();
         }
-        const auto mp = paramsFor(c->mode);
+        auto mp = paramsFor(c->mode);
+        if (c->mode == "freedv" && fdvLowerSideband(c->vfoHz)) mp.kind = ModeParams::SSB_LSB;   // ★ V12 FreeDV's sideband
         double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
         /* ★★★ THE SAME LIMITS THE SHARED PATH HAS, BEFORE THE CHANNEL IS SIZED FROM THEM. This path
          *  took `bandwidthHigh - bandwidthLow` as sent and sized the listener's channel from it —
@@ -10284,6 +10299,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
         else if (c->fdv) { c->fdv.reset(); c->fdvAtHz = 0; }
+        if (c->fdv) c->fdv->setSideband(fdvLowerSideband(c->vfoHz));
         // ★ V12 tone ID: wanted on NFM only; the callback builds it, forgets a retuned repeater, and clears the label
         c->toneWant = (mp.kind == ModeParams::NFM) && !vsModeBlocked("tone");   // ★ V12 the owner's switch (setup page, under NFM)
         c->toneAtHz = c->vfoHz;
@@ -15249,7 +15265,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rx.setAutoBandwidth(0.0);
         g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
         updateZoomView();
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         applyAutoIf();
         LOGI("[ADS-B] mode OFF: radio back at %.3f MHz (VFO %.3f MHz)", s.rtl / 1e6, s.audio / 1e6);
         if (tell) {
@@ -15631,7 +15647,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rx.setAutoBandwidth(0.0);
         g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
         updateZoomView();
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         applyAutoIf();
         LOGI("[ISM] mode OFF: radio back at %.3f MHz (VFO %.3f MHz)", s.rtl / 1e6, s.audio / 1e6);
         if (tell) {
@@ -15802,7 +15818,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         for (auto& v : views) clientRetune(v.get());
         updateZoomView();
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         applyAutoIf();
         ndbLastReport_ = nowSecs();
         recomputeEngineRate();               // ★ the waterfall slows to a crawl behind the map
@@ -15830,7 +15846,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (s.view > 0.0) viewCenter.store(s.view);
         if (s.rtl > 0.0) { rtlCenter.store(s.rtl); tuneHw(s.rtl); }
         updateZoomView();
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         applyAutoIf();
         recomputeEngineRate();               // ★ the waterfall back at the listeners' rate
         LOGI("[NDB] mode OFF: radio back at %.3f MHz (VFO %.3f MHz)", s.rtl / 1e6, s.audio / 1e6);
@@ -16035,7 +16051,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rx.setAutoBandwidth(0.0);
         g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
         updateZoomView();
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         applyAutoIf();
         LOGI("[AIS] mode OFF: radio back at %.3f MHz (VFO %.3f MHz)", s.rtl / 1e6, s.audio / 1e6);
         if (tell) {
@@ -16196,7 +16212,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rx.setAutoBandwidth(0.0);
         g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
         updateZoomView();
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         /* ★★★ AND RE-ASSERT IT ON THE DSP THREAD, AFTER ANY REBUILD HAS LANDED.
          *  A rebuild is applied by the DSP thread on a later block, and the open path re-stores
          *  rtlCenter from g_vsLockedCentre and re-tunes there (see the locked-centre block in the
@@ -17573,6 +17589,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 d = fdvShared;
             }
             if (d) {
+                d->setSideband(fdvLowerSideband(audioFreq.load()));
                 d->feedAudio(&data[0].l, count, 2, 48000.0);
                 std::vector<float> mono(static_cast<size_t>(count));
                 d->takePcm(mono.data(), count);
@@ -17814,6 +17831,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         demodOffset = (mp.kind == ModeParams::CW) ? -mp.bandwidth * 0.5 : 0.0;
 
         rxMode = rxModeFor(mp);
+        fdvMode_.store(mode == "freedv", std::memory_order_relaxed);   // ★ V12 FreeDV: rxModeDial picks the sideband
         toneSharedWant.store(mp.kind == ModeParams::NFM && !vsModeBlocked("tone"));   // ★ V12 tone ID (toneFeedShared); "tone" = the owner switched it off
         // Clamp to what the IQ can actually carry. Most public SpyServers cap the
         // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
@@ -17834,7 +17852,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!fdvShared) { fdvShared = std::make_shared<vibe::freedv::FreeDvListener>(fdvSharedSub.load()); fdvSharedVer = 0; fdvSharedAtHz = audioFreq.load(); }
             } else fdvShared.reset();
         }
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         // ★★ The chain is back at the mode's DEFAULT width, so the edges a listener chose are no longer
         //    what anybody hears — config must stop reporting them (vibe_room_passband.h).
         roomPb.forget();
@@ -18372,7 +18390,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 freq = freq < lo ? lo : hi;
             }
             audioFreq.store(freq);
-            rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+            rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
             { std::lock_guard<std::mutex> rl(rdsS.rdsMtx); rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; }
             rdsS.stereoDetected.store(false);
             // ★★★ AND ASK FOR IT BACK. The stereo report is EDGE-triggered and a retune inside the
@@ -18527,7 +18545,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             }
         }
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         // New frequency -> drop the cached RDS so a different station doesn't keep
         // showing the previous one's PS/RadioText until its own RDS re-syncs.
         { std::lock_guard<std::mutex> rl(rdsS.rdsMtx); rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; }
@@ -20963,7 +20981,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         pendingDongle = 0.0;
                         rtlCenter.store(dongle);
                         tuneHw(dongle);
-                        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+                        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
                         /* ★★★ AND ASK FOR THE STEREO REPORT BACK — retune() has done this for a
                          *     year and THIS PATH NEVER DID, though it moves the radio just as
                          *     physically. Two ways to retune, one of them mute about it.
@@ -22704,10 +22722,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             rxBwHz = std::min(paramsFor(mode).bandwidth, sampleRate * 0.8);  // restore CW filter width
             vfoBwHz.store(rxBwHz);
             demodOffset = -rxBwHz * 0.5;
-            rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+            rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
             return;
         }
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
     }
 
     // ── HTTP/WS server ─────────────────────────────────────────────────────
@@ -29379,7 +29397,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         lastDongleMoveMs = nowMs;
         rtlCenter.store(dongle);
         tuneHw(dongle);
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         updateZoomView();   // ★ the zoom channel is measured from rtlCenter + hwOffsetHz() — see retune()'s recentre
         LOGI("deferred retune applied: dongle -> %.0f Hz", dongle);
     }
@@ -30105,7 +30123,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             rtlCenter.store(c);
             viewCenter.store(viewHz);   // ★ the view goes to the VFO being tuned, as retune() sends it to A's dial
             tuneHw(c);
-            rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+            rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
             updateZoomView();   // ★ the zoom channel is measured from rtlCenter + hwOffsetHz() — see retune()'s recentre
         }
         applyAutoIf();   // ★ the IF filter follows the capture, as after any retune
@@ -30949,7 +30967,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  the note in dabRestore. Here, on the thread that owns the hardware, is after. */
             if (g_dabRetuneAfterRebuild.exchange(false, std::memory_order_relaxed)) {
                 updateZoomView();
-                rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+                rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
                 LOGI("[DAB] VFO re-applied after the source settled: %.3f MHz (centre %.3f)",
                      audioFreq.load() / 1e6, rtlCenter.load() / 1e6);
             }
@@ -31851,8 +31869,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     vibe::VfoDcZone mainDcZone(double dialHz, double off) const {
         const double bw = rxBwHz, ch = demodOffset;
         double pbLo = ch - bw * 0.5, pbHi = ch + bw * 0.5;
-        if (rxMode == vibedsp::RxPipeline::Mode::SSB_USB || rxMode == vibedsp::RxPipeline::Mode::CW) { pbLo = ch; pbHi = ch + bw; }
-        else if (rxMode == vibedsp::RxPipeline::Mode::SSB_LSB)                                      { pbLo = ch - bw; pbHi = ch; }
+        // ★ V12 FreeDV's sideband follows the dial (rxModeDial) — at THIS dial, which may be the one about to be tuned
+        const vibedsp::RxPipeline::Mode rm = !fdvMode_.load(std::memory_order_relaxed) ? rxMode
+                                           : fdvLowerSideband(dialHz) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
+        if (rm == vibedsp::RxPipeline::Mode::SSB_USB || rm == vibedsp::RxPipeline::Mode::CW) { pbLo = ch; pbHi = ch + bw; }
+        else if (rm == vibedsp::RxPipeline::Mode::SSB_LSB)                                  { pbLo = ch - bw; pbHi = ch; }
         return vibe::vfoDcZone(dialHz, pbLo, pbHi, off);
     }
     /** ★ VFO B's zone (its own mode and width). */
@@ -31906,7 +31927,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         lastDongleMoveMs = nowMs;
         rtlCenter.store(c);
         tuneHw(c);
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         updateZoomView();
         applyAutoIf();
     }
@@ -31993,7 +32014,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              where == 2 ? ("ON " + m).c_str() : where == 1 ? "inside a slice" : "outside the slices");
         rtlCenter.store(want);
         tuneHw(want);
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);   // ★ the shared demodulator: every listener's audio, exactly where it was
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);   // ★ the shared demodulator: every listener's audio, exactly where it was
         updateZoomView();                              // ★ the zoom channel is measured from rtlCenter + hwOffsetHz()
         applyAutoIf();
         rx.requestStereoReport();
@@ -32090,7 +32111,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!useSpy()) viewCenter.store(view);
         audioFreq.store(audio);
         tuneHw(centre);
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
     }
     /** Start profile `idx`. Caller holds bgOpMtx_. */
     /** ★ Is this radio's window LOCKED (the owner pinned the centre)? Then background decoding never moves it. */

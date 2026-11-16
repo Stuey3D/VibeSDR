@@ -196,6 +196,39 @@ inline const Api& api() {
 /** ★ The one question every reader asks — hwinfo's `modes`, vsModeKnown, the clients' picker through hwinfo. */
 inline bool available() { return api().anySub(); }
 
+/** ★ A FreeDV signal as 48 kHz USB audio, made by the library's OWN transmitter (freedv_tx) from a synthetic voice — the
+ *  benchmark's proof that its row decodes (vibe_benchmark_more.h dec_freedv). Empty when the library is not here. */
+inline std::vector<float> testAudio48k(int sub, double sec, float rms = 0.1f) {
+    const Api& a = api();
+    std::vector<float> out;
+    if (!a.ok || sub < k700D || sub > k1600 || !a.sub[sub]) return out;
+    FdvOpaque* f = a.open(codec2Mode(sub));
+    if (!f) return out;
+    const int ns = a.nSpeech(f), nm = a.nNomModem(f);
+    std::vector<short> sp(static_cast<size_t>(ns)), mod(static_cast<size_t>(nm));
+    std::vector<float> m8;
+    double ph = 0; long n = 0;
+    for (double t = 0; t < sec; t += double(ns) / 8000) {
+        for (int i = 0; i < ns; ++i, ++n) {
+            const double tt = double(n) / 8000, f0 = 120 + 30 * std::sin(2 * M_PI * 0.7 * tt);
+            ph += 2 * M_PI * f0 / 8000;
+            double v = 0;
+            for (int h = 1; h * f0 < 3500; ++h) v += std::sin(h * ph) / h;
+            sp[size_t(i)] = short(std::lrint(4000 * v * std::max(0.0, std::sin(2 * M_PI * 3.5 * tt))));
+        }
+        a.tx(f, mod.data(), sp.data());
+        for (short v : mod) m8.push_back(float(v));
+    }
+    a.close(f);
+    double p = 0; for (float v : m8) p += double(v) * v;
+    const float k = m8.empty() ? 0.f : float(rms / std::sqrt(p / double(m8.size())));
+    for (float& v : m8) v *= k;
+    vibedsp::RationalResampler up(8000, 48000);
+    out.resize(static_cast<size_t>(up.maxOut(int(m8.size()))));
+    out.resize(static_cast<size_t>(up.process(m8.data(), int(m8.size()), out.data())));
+    return out;
+}
+
 // ── One receiver ──────────────────────────────────────────────────────────────────────────────────────────────────────
 class FreeDvListener {
 public:
@@ -240,6 +273,9 @@ public:
 
     /** ★ The listener's choice: AUTO or one sub-mode. Applied by the worker before its next block. */
     void setSub(int sub) { if (sub >= kAuto && sub <= k1600) want_.store(sub); }
+    /** ★ Which sideband the radio demodulates for it (the server's rule: FreeDV's SSB convention) — reported, so a client
+     *  draws the passband on the right side of the dial without a rule of its own. */
+    void setSideband(bool lsb) { lsb_.store(lsb, std::memory_order_relaxed); }
     int sub() const { return want_.load(); }
 
     /** ★ The report and a counter that moves when it changes (the caller sends on change). */
@@ -433,7 +469,7 @@ private:
     static void jsonText(std::string& j, const std::string& s) {
         for (char c : s) { if (c == '"' || c == '\\') j += '\\'; j += c; }
     }
-    /** {"type":"freedv","sub":"auto"|"700D"…,"state":"search"|"sync","mode":"700D"|"","snr":5,"text":"…"} */
+    /** {"type":"freedv","sub":"auto"|"700D"…,"sb":"usb"|"lsb","state":"search"|"sync","mode":"700D"|"","snr":5,"text":"…"} */
     void publish(bool force) {
         const bool in = active_ && active_->sync && active_->syncSec >= kHeldSec;
         int snr = 0;
@@ -445,6 +481,7 @@ private:
         wasIn_ = in;
         std::string j = "{\"type\":\"freedv\",\"sub\":\"";
         j += subName(cur_);
+        j += lsb_.load(std::memory_order_relaxed) ? "\",\"sb\":\"lsb" : "\",\"sb\":\"usb";
         j += "\",\"state\":\""; j += in ? "sync" : "search";
         j += "\",\"mode\":\""; j += in ? subName(active_->sub) : "";
         j += "\"";
@@ -456,6 +493,7 @@ private:
     }
 
     std::atomic<int> want_;
+    std::atomic<bool> lsb_{false};
     int cur_ = -1;
     std::vector<std::unique_ptr<Modem>> modems_;   // worker thread only
     Modem* active_ = nullptr;                       // worker thread only
@@ -480,7 +518,7 @@ private:
     uint64_t underruns_ = 0;
 
     mutable std::mutex sm_;
-    std::string status_ = "{\"type\":\"freedv\",\"sub\":\"auto\",\"state\":\"search\",\"mode\":\"\"}";
+    std::string status_ = "{\"type\":\"freedv\",\"sub\":\"auto\",\"sb\":\"usb\",\"state\":\"search\",\"mode\":\"\"}";
     uint64_t statusVer_ = 1;
 
     std::thread th_;

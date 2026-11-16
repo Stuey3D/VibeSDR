@@ -223,7 +223,7 @@ inline Need needFor(const std::string& id) {
     //   SELCAL (HF aviation), MFSK / Olivia / Contestia / THOR, Feld Hell. A listener's CW, PSK31 and SSTV run on any band.
     if (id == "dec_rtty" || id == "dec_rttyauto" || id == "dec_wefax" || id == "dec_cwskim" || id == "dec_pskskim"
         || id == "dec_jtty" || id == "dec_sitora" || id == "dec_dsc" || id == "dec_selcal" || id == "dec_mfsk"
-        || id == "dec_hell")
+        || id == "dec_hell" || id == "dec_freedv")   // ★ V12 FreeDV: the HF amateur bands
         return Need::Hf;
     return Need::None;
 }

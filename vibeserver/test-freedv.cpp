@@ -18,6 +18,7 @@
 #include <complex>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 #include <string>
 #include <thread>
@@ -204,7 +205,7 @@ static Run throughPipeline(int sub, int listenSub, double snrDb, double offHz, d
 /** ★ The bench clip for scripts/test-server-freedv.mjs: unsigned 8-bit IQ (rtl_tcp's format) at `rate`, `sec` long, centred
  *  on the fake dongle's --hf-centre, with three stations — 700D at +10 kHz, 700E at +20 kHz, 1600 at −10 kHz — at `snr` dB in
  *  3 kHz each. The clip loops in the fake dongle, so each station's modem relocks once a loop (as a real station's overs do). */
-static int writeClip(const char* path, int rate, double sec, double snrDb) {
+static int writeClip(const char* path, int rate, double sec, double snrDb, bool lsb) {
     const fdv::Api& a = fdv::api();
     if (!a.anySub() || !a.comptx) { std::printf("NOT RUN — %s\n", a.anySub() ? "no freedv_comptx" : a.why.c_str()); return 3; }
     if (rate % 8000) { std::printf("the rate must be a multiple of 8 kHz\n"); return 2; }
@@ -214,7 +215,7 @@ static int writeClip(const char* path, int rate, double sec, double snrDb) {
     double ps = 0;
     for (auto t : st) {
         if (!a.sub[t.sub]) continue;
-        const std::vector<cf> m8 = modulate(t.sub, sec + 1);
+        const std::vector<cf> m8 = modulate(t.sub, sec + 1);   // (the same voice and text for each)
         ps = realPower(m8);
         std::vector<float> I(m8.size()), Q(m8.size());
         for (size_t i = 0; i < m8.size(); ++i) { I[i] = m8[i].real(); Q[i] = m8[i].imag(); }
@@ -224,7 +225,9 @@ static int writeClip(const char* path, int rate, double sec, double snrDb) {
         uq.process(Q.data(), int(Q.size()), Qu.data());
         for (int i = 0; i < n && i < nu; ++i) {
             const double ph = 2 * M_PI * t.off * i / rate;
-            iq[size_t(i)] += cf(Iu[size_t(i)], Qu[size_t(i)]) * cf(float(std::cos(ph)), float(std::sin(ph)));
+            // ★ lower sideband: the station's spectrum mirrored below its dial (the conjugate of the analytic signal)
+            const cf v = lsb ? cf(Iu[size_t(i)], -Qu[size_t(i)]) : cf(Iu[size_t(i)], Qu[size_t(i)]);
+            iq[size_t(i)] += v * cf(float(std::cos(ph)), float(std::sin(ph)));
         }
     }
     // complex noise over `rate`: a USB demodulator keeps 3 kHz of one side and the real part halves it — σc²·3000/(2·rate)
@@ -242,18 +245,58 @@ static int writeClip(const char* path, int rate, double sec, double snrDb) {
     }
     std::fwrite(u.data(), 1, u.size(), f);
     std::fclose(f);
-    std::printf("wrote %s: %d S/s, %.0f s, 700D +10 kHz, 700E +20 kHz, 1600 −10 kHz, %.0f dB in 3 kHz\n", path, rate, sec, snrDb);
+    std::printf("wrote %s: %d S/s, %.0f s, 700D +10 kHz, 700E +20 kHz, 1600 −10 kHz, %s, %.0f dB in 3 kHz\n", path, rate, sec, lsb ? "LSB" : "USB", snrDb);
+    return 0;
+}
+
+/** ★ Off-air audio (a 16-bit PCM WAV of a USB/LSB demodulation — tools/ubersdr-rec) through the receiver, as the audio
+ *  callback feeds it, printing every report that changes: `test-freedv wav FILE [auto|700D|700E|1600]`. A tool, not a
+ *  pass/fail — what it prints is what a listener's VTS would have shown. */
+static int playWav(const char* path, int sub) {
+    if (!fdv::available()) { std::printf("NOT RUN — %s\n", fdv::api().why.c_str()); return 3; }
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::printf("cannot open %s\n", path); return 2; }
+    std::vector<uint8_t> b; { uint8_t t[65536]; size_t n; while ((n = std::fread(t, 1, sizeof t, f)) > 0) b.insert(b.end(), t, t + n); }
+    std::fclose(f);
+    // the RIFF chunks: fmt (rate, channels, 16-bit) and data
+    int rate = 0, ch = 1; size_t at = 12, dataAt = 0, dataLen = 0;
+    while (at + 8 <= b.size()) {
+        const uint32_t len = uint32_t(b[at + 4]) | uint32_t(b[at + 5]) << 8 | uint32_t(b[at + 6]) << 16 | uint32_t(b[at + 7]) << 24;
+        if (!std::memcmp(&b[at], "fmt ", 4)) { ch = b[at + 10] | b[at + 11] << 8; rate = int(uint32_t(b[at + 12]) | uint32_t(b[at + 13]) << 8 | uint32_t(b[at + 14]) << 16); }
+        if (!std::memcmp(&b[at], "data", 4)) { dataAt = at + 8; dataLen = std::min<size_t>(len, b.size() - dataAt); break; }
+        at += 8 + len + (len & 1);
+    }
+    if (!rate || !dataAt) { std::printf("not a PCM WAV\n"); return 2; }
+    const size_t frames = dataLen / 2 / size_t(ch);
+    std::vector<float> x(frames);
+    for (size_t i = 0; i < frames; ++i) x[i] = float(int16_t(b[dataAt + 2 * i * size_t(ch)] | b[dataAt + 2 * i * size_t(ch) + 1] << 8)) / 32768.0f;
+    std::printf("%s: %d Hz, %d ch, %.1f s\n", path, rate, ch, double(frames) / rate);
+    FreeDvListener L(sub);
+    const int blk = rate / 50;
+    std::vector<float> out(static_cast<size_t>(blk));
+    uint64_t ver = 0; double e = 0; size_t nz = 0;
+    for (size_t i = 0; i + size_t(blk) <= x.size(); i += size_t(blk)) {
+        L.feedAudio(x.data() + i, blk, 1, double(rate));
+        while (L.queuedFrames() > size_t(rate) / 2) std::this_thread::sleep_for(std::chrono::microseconds(200));
+        L.takePcm(out.data(), blk);
+        for (float v : out) { e += double(v) * v; if (v != 0.0f) ++nz; }
+        uint64_t v = 0; const std::string j = L.statusJson(&v);
+        if (v != ver) { ver = v; std::printf("  %7.1f s  %s\n", double(i) / rate, j.c_str()); }
+    }
+    std::printf("speech blocks %llu, audible %.0f %% of the time\n", (unsigned long long)L.speechBlocks(), 100.0 * double(nz) / double(std::max<size_t>(1, x.size())));
     return 0;
 }
 
 int main(int argc, char** argv) {
+    if (argc > 2 && std::string(argv[1]) == "wav") return playWav(argv[2], argc > 3 ? std::max(0, fdv::subFromName(argv[3])) : fdv::kAuto);
     if (argc > 1 && std::string(argv[1]) == "--probe") {   // the child for the VIBE_FREEDV_DISABLE check
         std::printf("%d\n", fdv::available() ? 1 : 0);
         return 0;
     }
-    // test-freedv clip OUT.cu8 [rate=288000] [sec=20] [snr=12]
+    // test-freedv clip OUT.cu8 [rate=288000] [sec=20] [snr=12] [usb|lsb]
     if (argc > 2 && std::string(argv[1]) == "clip")
-        return writeClip(argv[2], argc > 3 ? std::atoi(argv[3]) : 288000, argc > 4 ? std::atof(argv[4]) : 20, argc > 5 ? std::atof(argv[5]) : 12);
+        return writeClip(argv[2], argc > 3 ? std::atoi(argv[3]) : 288000, argc > 4 ? std::atof(argv[4]) : 20, argc > 5 ? std::atof(argv[5]) : 12,
+                         argc > 6 && std::string(argv[6]) == "lsb");
     const fdv::Api& a = fdv::api();
     if (!a.anySub()) { std::printf("NOT RUN — %s\n", a.why.c_str()); return 3; }
     std::printf("libcodec2 %s (FreeDV API version %d), sub-modes %s\n", a.path.c_str(), a.version, a.subsJson().c_str());

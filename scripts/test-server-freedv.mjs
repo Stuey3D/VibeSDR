@@ -8,11 +8,13 @@
 //   • {"type":"freedv_sub"} with no sub answers with the report at once; a manual sub-mode that is not on air finds nothing,
 //     AUTO again finds it; a new station gets a new search (AUTO names each of the three);
 //   • on a ONE-PIPELINE radio (the shared receiver) and on a RANGE-LOCKED one (the listener's own channel);
-//   • leaving FreeDV for USB stops the reports and brings the SSB audio back;
+//   • the sideband follows FreeDV's own SSB convention — USB on 20 m, LSB on 40 m (a second, mirrored clip) — and the
+//     report says which ("sb");
+//   • leaving FreeDV for SSB stops the reports and brings the SSB audio back;
 //   • a server whose libcodec2 does not load (VIBE_FREEDV_DISABLE=1) does not offer the mode, and refuses it.
 // Silent: audio frames are decoded to numbers, never played.
 //   VIBESERVER_BIN=…/vibeserver VIBE_FREEDV_CLIP=…/fdv.cu8 node scripts/test-server-freedv.mjs
-//   (make the clip: test-freedv clip fdv.cu8 288000 20 12 — run-tests.sh does)
+//   (make the clips: test-freedv clip fdv.cu8 288000 20 12; …clip fdv-lsb.cu8 288000 20 12 lsb → VIBE_FREEDV_CLIP_LSB)
 import net from 'node:net';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -24,12 +26,15 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = process.env.VIBESERVER_BIN || '';
 const CLIP = process.env.VIBE_FREEDV_CLIP || '';
+const CLIP_LSB = process.env.VIBE_FREEDV_CLIP_LSB || '';   // ★ the same stations on the lower sideband, for 40 m
 if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP)) {
   console.log('   not run — set VIBESERVER_BIN and VIBE_FREEDV_CLIP (test-freedv clip …; exit 3 there = no libcodec2)');
   process.exit(3);
 }
-const RATE = 288000, CENTRE = 14200000;
-const STATIONS = [[CENTRE + 10000, '700D'], [CENTRE + 20000, '700E'], [CENTRE - 10000, '1600']];
+const RATE = 288000;
+let CENTRE = 14200000, CLIPNOW = CLIP;
+let STATIONS = [];
+const stationsAt = (c) => [[c + 10000, '700D'], [c + 20000, '700E'], [c - 10000, '1600']];
 let pass = 0, fail = 0;
 const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -109,7 +114,7 @@ async function serverOnce(args, tag, extraEnv) {
   }));
   const rtlPort = await freePort(), port = await freePort();
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
-                                       '--hf', CLIP, '--hf-centre', String(CENTRE)], { stdio: 'ignore' });
+                                       '--hf', CLIPNOW, '--hf-centre', String(CENTRE)], { stdio: 'ignore' });
   await sleep(400);
   const env = { ...process.env, ...(extraEnv || {}), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
                 VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
@@ -140,7 +145,7 @@ async function listener(port, sid, f, mode) {
 
 const rms = (pcm) => { let e = 0; for (const v of pcm) e += v * v; return Math.sqrt(e / Math.max(1, pcm.length)); };
 
-async function scenario(label, args, tag) {
+async function scenario(label, args, tag, sb = 'usb') {
   console.log(`── ${label} ──`);
   const S = await server(args, tag);
   try {
@@ -159,6 +164,7 @@ async function scenario(label, args, tag) {
       ok(await until(got, 15000), `${(hz / 1e6).toFixed(3)} MHz: AUTO in sync on ${sub} within 15 s (${JSON.stringify(last())})`);
       const r = reps().slice(n0).filter((x) => x.state === 'sync').at(-1);
       ok(r && r.sub === 'auto' && typeof r.snr === 'number' && r.snr > 3, `…the report: sub auto, SNR ${r && r.snr} dB`);
+      ok(r && r.sb === sb, `…demodulated on the ${sb.toUpperCase()} side, by FreeDV's convention (${r && r.sb})`);
       ok(await until(() => reps().slice(n0).some((x) => x.text === 'VIBE TEST'), 30000), `…the station's text: ${JSON.stringify(reps().slice(n0).map((x) => x.text).filter(Boolean).at(-1))}`);
       L.aud.bin.length = 0;
       await sleep(3000);
@@ -184,19 +190,27 @@ async function scenario(label, args, tag) {
       L.spec.send({ type: 'freedv_sub', sub: 'auto' });
       ok(await until(() => reps().slice(n1).some((r) => r.sub === 'auto' && r.state === 'sync' && r.mode === '700D'), 15000), 'back to AUTO: 700D again'); }
     // ★ leaving FreeDV: no more reports, the SSB audio back (noise is not silence)
-    { L.spec.send({ type: 'tune', frequency: STATIONS[0][0], mode: 'usb' });
+    { L.spec.send({ type: 'tune', frequency: STATIONS[0][0], mode: sb });
       await sleep(1500);
       const n0 = reps().length;
       L.aud.bin.length = 0; await sleep(3000);
       const pcm = await pcmOf(L.aud.bin);
-      ok(reps().length === n0, `USB: no FreeDV reports (${reps().length - n0})`);
-      ok(rms(pcm) > 50, `USB: the demodulator's own audio again (rms ${rms(pcm).toFixed(0)})`); }
+      ok(reps().length === n0, `${sb.toUpperCase()}: no FreeDV reports (${reps().length - n0})`);
+      ok(rms(pcm) > 50, `${sb.toUpperCase()}: the demodulator's own audio again (rms ${rms(pcm).toFixed(0)})`); }
     for (const k of ['spec', 'aud']) L[k].close();
   } finally { await S.stop(); }
 }
 
-await scenario('one-pipeline radio (the shared receiver)', ['--freq', String(STATIONS[0][0]), '--mode', 'usb', '--users', '1'], 'one');
-await scenario('range-locked radio (the listener\'s own channel)', ['--freq', String(CENTRE), '--lock-freq', String(CENTRE), '--users', '4', '--mode', 'usb', '--idle-grace', '0'], 'lock');
+STATIONS = stationsAt(CENTRE);
+await scenario('one-pipeline radio (the shared receiver), 20 m, USB', ['--freq', String(STATIONS[0][0]), '--mode', 'usb', '--users', '1'], 'one');
+await scenario('range-locked radio (the listener\'s own channel), 20 m, USB', ['--freq', String(CENTRE), '--lock-freq', String(CENTRE), '--users', '4', '--mode', 'usb', '--idle-grace', '0'], 'lock');
+if (CLIP_LSB && fs.existsSync(CLIP_LSB)) {
+  // ★ 40 m: FreeDV's convention puts it on LSB below 10 MHz — the server picks the sideband from the dial
+  CENTRE = 7200000; CLIPNOW = CLIP_LSB; STATIONS = stationsAt(CENTRE);
+  await scenario('one-pipeline radio, 40 m, LSB', ['--freq', String(STATIONS[0][0]), '--mode', 'lsb', '--users', '1'], 'onel', 'lsb');
+  await scenario('range-locked radio, 40 m, LSB', ['--freq', String(CENTRE), '--lock-freq', String(CENTRE), '--users', '4', '--mode', 'lsb', '--idle-grace', '0'], 'lockl', 'lsb');
+  CENTRE = 14200000; CLIPNOW = CLIP; STATIONS = stationsAt(CENTRE);
+} else console.log('   (40 m LSB scenarios not run — set VIBE_FREEDV_CLIP_LSB)');
 
 {
   console.log('── no libcodec2 (VIBE_FREEDV_DISABLE=1) ──');
