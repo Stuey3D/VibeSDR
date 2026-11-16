@@ -164,6 +164,8 @@ No GPL or LGPL code is involved, and there are no patents to declare beyond Opus
 - `vibe_rade.h` / `.c`: a small C API for the receiver.
 - `vibe_rade_tx.c`: the transmitter, for the tests and the benchmark.
 - `vibe_rade_acq.c`: the vectorised pilot search (see "Cost" below).
+- `vibe_rade_arch.c`: which of Opus's DNN code paths this CPU runs (see "SIMD" under "Cost").
+- `rade-bench.cpp`: a standalone cost tool, never part of the server (see "Cost").
 
 **Why build it ourselves, and not use a system library:** no distribution packages rade_c, and freedv-gui builds its own
 copy too.
@@ -200,7 +202,8 @@ The script refuses an archive that defines any other global, or that leaves an O
 **Builds checked:** macOS arm64 (Apple clang); Linux arm64 (bookworm image, also linked against `libopus.a` with
 `--whole-archive`, no clash); armhf `-marm -mfpu=neon-vfpv4`; ARMv6 (clang + Raspbian sysroot); x86_64; and i686
 `-msse2`. The x86_64 and i686 builds were cross-built and run under qemu: both decoded the same signal, with the same
-frames and callsign.
+frames and callsign. All six again after the runtime dispatch ("SIMD" under "Cost" below): each says which DNN code it
+carries (`arm64`, `armhf`, `x86` with dispatch; `scalar` on ARMv6).
 
 CMake defines `VIBE_HAVE_RADE` when it finds the archive:
 
@@ -233,49 +236,132 @@ CMake defines `VIBE_HAVE_RADE` when it finds the archive:
   - When the row is not GREEN, `"rade"` starts OFF on a fresh setup. The codec2 sub-modes are untouched, and the owner
     can tick RADE back on.
   - `dec_freedv` now measures the codec2 trio alone (`withRade = false`).
-  - **M5 Pro:** searching 2.6 %, decoding 2.0 %, 29 speech blocks decoded (test-bench-decoders, 2026-11-16).
+  - **M5 Pro:** searching 2.6 %, decoding 2.0 %, 29 speech blocks decoded (test-bench-decoders, 2026-11-16); after the
+    SIMD work below, searching 1.4 %, decoding 1.0 % (the same code on the Mac — the difference is the machine's load).
 
 ### Cost
 
-Instruction counts are per second of audio. The method is `PI2-REAL-CPU.md` / `AVIATION.md`'s: static builds, counted
-under qemu with the TCG instruction-count plugin. "Searching" is 30 s of noise. "Decoding" is 52 s of real speech
-(rade_c's `wav/all.wav`) at 10 dB, including 1.4 s of search before sync. "Decoder alone" is the neural decoder plus
-FARGAN on synthetic latents (`vrade_bench_decode`).
+Two kinds of figure, and the tables say which is which:
 
-| Build | Searching | Decoding | Decoder alone |
+- **Measured on hardware** (2026-11-16, the evening the receiver was built): `vibeserver/linux/rade/rade-bench.cpp`, a
+  standalone tool that links only the RADE archives. It decodes the same three 8 kHz signals on every machine (made once
+  on the Mac with rade_c's own transmitter): **searching** is 60 s of band noise; **decoding** is 52 s of real speech
+  (rade_c's `wav/all.wav`) at 10 dB, including 1.4 s of search before sync; **off air** is rade_c's own 5-minute
+  recording (`FDV_offair.wav`, VK5KVA and VK3TPM). The figure is that thread's CPU time divided by the audio's length,
+  the **median of five runs** (one or three for off air), as % of **one** core. It is the receiver alone — the server's
+  `vibe-freedv` thread adds a 48 → 8 kHz and a 16 → 48 kHz resampler to it.
+- **Counted under qemu** (instructions per second of audio, the TCG plugin of `PI2-REAL-CPU.md` / `AVIATION.md`): the
+  same signals through the same tool, static builds with the release's flags. A count is not a time; it is how x86 was
+  judged, as no x86 machine was measured.
+
+**Measured on hardware — % of one core for one RADE receiver**
+
+| Machine | Build | DNN path | Searching | Decoding | Off air |
+|---|---|---|---|---|---|
+| **Pi 2** (Cortex-A7, 900 MHz, `performance`, armhf) | before | NEON (compile time) | 96.5 | 87.1 | 87.5 |
+| **Pi 2** | **after** | **NEON** (no dot product on an A7) | **91.6** | **87.8** | **88.1** |
+| **Pi 500** (Cortex-A76, 2.2 GHz, arm64) | before | NEON (compile time) | 5.19 | 5.32 | 5.32 |
+| **Pi 500** | **after** | **dot product** | **5.11** | **3.55** | **3.54** |
+| Pi 500, the armhf binary (32-bit, AArch32) | after | dot product / NEON forced | 5.31 | 4.42 / 6.58 | — |
+| M5 Pro, Linux arm64 (Docker VM) | before → after | NEON → dot product | 1.32 → 1.31 | 1.05 → 0.84 | — |
+| M5 Pro, macOS | before → after | dot product → dot product | 1.59 → 1.59 | 1.01 → 1.02 | 1.02 → 1.01 |
+| M5 Pro, macOS | after | NEON forced | 1.58 | 1.39 | 1.12 |
+
+- **Pi 2:** run beside its live VibeServer (0 listeners before every run, the server at 0–0.3 % of a core, clock 900 MHz,
+  `get_throttled` 0x50000 = under-voltage and throttling *have occurred* since boot, neither at the time). The Pi 2's
+  search was 92–97 % in the two builds although the code and its instruction count are identical; that spread is the
+  run-to-run and layout noise on that box, not a change.
+- **Pi 500:** beside its live VibeServer (five radios, 0 listeners on every port), `schedutil`, 2.2 GHz under the load.
+- **Decoded output** is bit-identical before and after, and between the NEON and dot-product paths, on every ARM build
+  (same speech hash); the off-air run found the same 5 syncs, 2622 frames and callsign VK5KVA everywhere.
+
+**Counted under qemu — M instructions per second of audio**
+
+| Build | Path | Searching | Decoding |
 |---|---|---|---|
-| armhf (Pi 2), rade_c's search | 1035 M/s | 395 M/s | 249 M/s |
-| **armhf (Pi 2), ours** | **244 M/s** | **312 M/s** | 249 M/s |
-| arm64, rade_c's search | 338 M/s | 286 M/s | 167 M/s |
-| **arm64, ours** | **223 M/s** | **234 M/s** | 167 M/s |
-| ARMv6 (scalar, rade_c's search) | 1859 M/s | 2158 M/s | 2040 M/s |
+| armhf (Pi 2), before / after | NEON | 244 / 244 | 313 / 313 |
+| arm64, before | NEON (compile time) | 223 | 234 |
+| arm64, after, no dot product (Cortex-A72, A53, A55…) | NEON | 223 | 234 |
+| **arm64, after, dot product** (A76, Apple) | dot product | 223 | **181** |
+| x86_64, before | SSE2 (compile time), scalar search | **1499** | 505 |
+| x86_64, after, SSE2 CPU | SSE2 | **434** | 408 |
+| x86_64, after, SSE4.1 CPU (~2008 on) | SSE4.1 | 434 | 265 |
+| **x86_64, after, AVX2 + FMA CPU** (~2013 on) | AVX2 | 434 | **169** |
+| i686 (`-msse2`), before / after | scalar search → SSE2 search | 1563 / 491 | not counted |
+| ARMv6 (scalar, unchanged) | C | 1859 | 2158 |
 
-- **Where the time goes:** in sync, 63 % of the armhf count is Opus's int8 GEMV (`cgemv8x4`, FARGAN and the decoder),
-  which is already NEON.
-- **The search** is rade_c's brute-force pilot correlation: 960 timings × 40 frequencies × 160 samples, twice, every
-  120 ms. That is ~100 M complex multiply-adds a second. It cost **more than decoding** on every platform.
-- **`vibe_rade_acq.c` is our reorganisation of that search.** The arithmetic is the same; only the loop order changes,
-  with eight frequency bins summed in registers. SSE2 is left to the compiler. NEON is written by hand: GCC vectorised
-  neither 32-bit NEON (no IEEE floats there) nor AArch64's loop. On AArch64 it uses the fused `fmla`. The in-sync grid
-  refresh (5 % a frame) uses the same kernel.
-- **Effect of the search change:**
-  - M5: 3.6 % → 1.3 % of a core.
-  - armhf: 1035 → 244 M/s.
-  - On the Mac, the 5-minute off-air decode is bit-identical before and after.
+#### SIMD: runtime dispatch (2026-11-16)
 
-| Machine | Estimate for one RADE listener | Basis |
+Opus's DNN code — the int8 matrix-vector products (`cgemv8x4`) that are most of the decoder network and FARGAN — comes in
+several builds of one source, and Opus 1.6.1 can choose between them at run time (`OPUS_HAVE_RTCD`). `build-rade.sh`
+now builds them all into the one archive, and the CPU picks:
+
+| Target | Floor (always there) | Chosen at run time when the CPU has it |
 |---|---|---|
-| Mac M5 Pro | **1–2.6 % of a core** | measured (rt harness 1.1–1.3 %; test-freedv 1.1 %; benchmark row 2.6 % with its thread) |
-| Pi 500 (A76, 2.4 GHz) | ~4–7 % | 234 M/s at IPC 1.5–2.5 |
-| Pi 3 (A53, 1.2 GHz) | ~20–33 % | 234 M/s at IPC 0.6–1.0 |
-| R36S (A35, ~1 GHz) | **~30–47 %** — runs, with room | 234 M/s at IPC 0.5–0.8 (the A35's NEON is 64 bits wide); not run on the device |
-| **Pi 2 (A7, 900 MHz)** | **~72–99 % of one core decoding, 56–77 % searching** | 312 / 244 M/s at the measured NEON IPC 0.35–0.48 (PI2-REAL-CPU.md) |
+| x86 (amd64; i386 at the package's `-msse2` floor) | SSE2 | SSE4.1, then AVX2 + FMA (`dnn/x86/nnet_{sse2,sse4_1,avx2}.c`) |
+| arm64 | NEON | the int8 dot product (`dnn/arm/nnet_dotprod.c`): Cortex-A76/A78/X1 (Pi 5, Pi 500), Apple silicon, recent phones |
+| armhf (`-mfpu=neon-vfpv4`) | NEON | the dot product, on an A76-class core running a 32-bit OS (Linux 6.2+ reports it); never on a Pi 2 |
+| ARMv6 | scalar C | nothing: no dispatch, exactly as before |
+
+- **The floors do not move.** Each dearer tier is its own object compiled with its own ISA flags; it is reached only
+  when the CPU says it has the instructions. Nothing needs AVX2 or the dot product to run.
+- **The crux: rade_c never asked.** Its `rade_rx.c` passes a hard-coded `int arch = 0` to its decoder, so a dispatching
+  build alone would have changed nothing there. `build-rade.sh` compiles a checked copy whose `arch` comes from
+  `vrade_rx_arch()` (`vibe_rade_arch.c`, asked once — Opus's ARM detection reads `/proc/cpuinfo`), and FARGAN is given
+  the same number. The script refuses to build if that line is not found exactly once, as it does for `nnet.c`'s.
+- **A second opinion that can only lower the choice:** AVX2 also needs the OS to save the 256-bit registers (OSXSAVE,
+  XCR0); on Linux ARM the kernel's `getauxval(AT_HWCAP)` must agree with `/proc/cpuinfo`. Found the hard way: under
+  qemu-user `/proc/cpuinfo` is the host's, and an armhf binary emulated as a Cortex-A7 read "asimddp" and died on the
+  dot product.
+- **Still one archive, still only `vrade_*` global.** The dispatch tables, `opus_select_arch` and every tier are local
+  symbols; the script refuses an archive missing a tier. Linked with `--whole-archive` against `libopus.a` (armhf) and
+  `-all_load` against Homebrew's (macOS): no clash.
+- **`MAX_CONV_INPUTS_ALL 2048`** is in `nnet.c`, the one file every tier shares (`compute_generic_conv1d` is not per-tier),
+  so the one change covers every path.
+- **Apple's clang turns the dot product on by default**, so the Mac build was already using it at compile time — hence
+  no change on the M5. The NEON tier and the C table entries are now built for plain ARMv8-A on arm64, so there is a
+  real NEON path to fall back to and to compare against.
+- **The test switch, `VIBE_RADE_ARCH`** (tests only, never on a server): forces a LOWER path — a number, or `c`, `sse2`,
+  `sse4.1`, `avx2`, `neon`, `dotprod`. It is clamped to what the CPU has. `vrade_rx_arch_name()` says what ran
+  (`rade-bench` prints it).
+- **Decode correctness on every path:** test-freedv's RADE checks (sync, speech, callsign, no false sync in 60 s of
+  noise, never a wrong win) pass on the M5 on `dotprod`, `neon` and `c`. Under qemu the x86_64 and i686 builds decode the
+  10 dB over on SSE2, SSE4.1 and AVX2 CPU models: same sync time, 411 frames, no unique-word errors, callsign G4ABC.
+  SSE2 and SSE4.1 give bit-identical speech to the old build; AVX2 differs in the last bits (its FMA), as expected.
+- **The search on x86 was scalar.** This section used to say GCC vectorised `vibe_rade_acq.c`'s plain loop on x86. It did
+  not: the qemu count showed 1499 M instructions a second searching on x86_64, against arm64's 223 M (mulss/addss in the
+  disassembly). It is now written in SSE2 by hand, beside the NEON: 1499 → 434 M/s, with sums bit-identical to the
+  scalar loop's.
+
+**What it changes, in short:** a Pi 5 / Pi 500 decodes RADE for a third less CPU (5.3 → 3.5 % of a core, measured); any
+x86 made since about 2013 decodes it in about a third of the instructions and searches in under a third (counted). A
+Pi 2 is unchanged — the Cortex-A7 has no dot product — and so is the Mac, whose compiler already used it.
+
+- **Where the time goes** (armhf, in sync): 63 % of the count is Opus's int8 GEMV (`cgemv8x4`, FARGAN and the decoder).
+- **The search** is rade_c's brute-force pilot correlation: 960 timings × 40 frequencies × 160 samples, twice, every
+  120 ms — ~100 M complex multiply-adds a second. `vibe_rade_acq.c` is our reorganisation of it: the same arithmetic in a
+  loop order that keeps eight frequency bins' sums in registers, written in NEON (fused `fmla` on AArch64) and SSE2. On
+  the M5 it took searching from 3.6 % to 1.3 % of a core; armhf 1035 → 244 M/s. The in-sync grid refresh (5 % a frame)
+  uses the same kernel.
+
+**One RADE listener, by machine**
+
+| Machine | One RADE listener | Basis |
+|---|---|---|
+| Mac M5 Pro | **~1–1.6 % of a core** | measured (above; the dec_rade row read searching 1.4 %, decoding 1.0 %) |
+| Pi 500 (A76, 2.2 GHz) | **~3.5 % decoding, ~5 % searching** | measured (above) |
+| Pi 3 (A53, 1.2 GHz) | ~20–33 % | 234 / 223 M/s at IPC 0.6–1.0; no dot product, so unchanged; not measured |
+| R36S (A35, ~1 GHz) | ~30–47 % — runs, with room | 234 M/s at IPC 0.5–0.8; no dot product; not run on the device |
+| **Pi 2 (A7, 900 MHz)** | **~88 % of one core decoding, ~92–97 % searching** | **measured** (above). The estimate before this was 72–99 % and 56–77 %: the A7 runs the search at an IPC of only ~0.28 |
+| x86 since ~2013 (AVX2) | well under 1 % of a modern core | 169 / 434 M/s counted; not measured |
 | Pi Zero / Pi 1 (ARMv6) | impossible (> 2 cores) | 2040 M/s for the decoder alone |
 
-**So, on a Pi 2,** one RADE listener needs most of one core. That is real time on a quiet box, with nothing to spare. The
-dec_rade row will not be GREEN there, and RADE will start off on a fresh setup; the owner can tick it on. ARMv6 boards
-are hopeless. x86 machines were not counted; the M5 figure and SSE2 suggest a small fraction of a core on anything
-since ~2010.
+**So, on a Pi 2,** one RADE listener takes nearly a whole core whether it is decoding or only searching — and searching
+is what it does whenever nobody is transmitting. It runs in real time on one of the four cores, with nothing to spare on
+that core; two would take two cores. AUTO adds the three codec2 modems while it searches. dec_rade will grade it RED
+(the row's own figure is this plus the resamplers; over 85 % is red, and anything from 70 % is not green), so `"rade"`
+starts OFF on a fresh Pi 2 setup, which the owner can tick back on. The dispatch does nothing for the Pi 2; the FFT search (decision 6 below)
+is the lever that would.
 
 **Memory:**
 
@@ -290,7 +376,7 @@ since ~2010.
 - About 2.4 MB is the receiver: `__TEXT` +3.7 MB and `__DATA` +0.8 MB in total.
 - About 1.4 MB is rade_c's transmitter, linked in only for the benchmark row's decoding measurement. ⚠ See the
   decisions below.
-- The archives are the same size on Linux: receiver 2.2 MB, transmitter 1.4 MB.
+- The archives are the same size on Linux: receiver 2.2 MB, transmitter 1.4 MB. The dispatch tiers add ~30–70 KB.
 
 ### Off air (Stuart's UberSDR, standing permission; recordings in `~/VibeSDR-test-audio/freedv/`, never committed)
 
@@ -356,16 +442,26 @@ are not intelligible, which is RADE's own limit. 700D is still unproven off air:
   - Without libcodec2, the row is AUTO + RADE.
 - **`test_freedv.ts`: 38/38.** The R36S golden: 2454 checks, 0 failed.
 - **`test-bench-decoders`:** `dec_rade` measures (> 0 %), decodes 29 blocks, and has its defaults rule.
+- **After the runtime dispatch (2026-11-16, macOS arm64):** test-freedv 82/82 with RADE on the chosen path and again with
+  `VIBE_RADE_ARCH=neon` and `=c`, 57/57 without RADE; test-bench-decoders all passed (dec_rade 1.4 %, 29 blocks);
+  test-server-freedv 146 passed, 0 failed; test-bench-defaults all passed. test-web-freedv was not re-run (no client
+  change).
+- **`rade-bench`** (`vibeserver/linux/rade/rade-bench.cpp`) is the cost tool used for the tables above; it is not part of
+  the test run.
 
 ### Verified, and not
 
 - ✓ Built and run on macOS arm64. The tests above were run there.
 - ✓ `build-rade.sh` run inside the bookworm arm64 and armhf/ARMv6 cross images, and cross-built for x86_64 and i686.
 - ✓ ARM builds counted under qemu, and x86 decodes checked under qemu.
+- ✓ **Measured on a real Pi 2 and Pi 500** (2026-11-16), a standalone `rade-bench` beside each live server — see "Cost".
+  The armhf build's dot-product path was run for real on the Pi 500's A76 in 32-bit mode (bit-identical to NEON).
+- ✓ x86 dispatch checked under qemu on SSE2 (core2duo), SSE4.1 (Nehalem) and AVX2 (Haswell, max) CPU models.
 - ✗ **Not run:**
   - The full `build-deps.sh` (Linux images or Mac), a .deb, or `build-app.sh`. The fetch-and-unpack lines are new and
-    untested end to end.
-  - A real Pi 2, R36S or Pi 500. The figures above are counts with an IPC range.
+    untested end to end. (`build-rade.sh` itself was run in the images, with each profile's flags.)
+  - An R36S, a Pi 3, or any real x86 machine. Their figures are counts with an IPC range.
+  - The dec_rade row ON a Pi 2 (the server's own benchmark): only the receiver alone was measured there.
   - The app on a phone. Its logic is tested in TypeScript.
   - The R36S UI on the device (golden lines only).
   - The setup page's new switch in a browser.
@@ -378,8 +474,8 @@ linking is fine on iOS and on Android.
 - **What it would take:** `build-rade.sh`'s source list built with the NDK (four ABIs) and for iOS, then lifting the
   `VIBE_FREEDV_NO_DLOPEN` gate for RADE alone. FreeDV would then be offered on phones with RADE only.
 - **The cost to weigh:**
-  - CPU: ~234–312 M instructions a second per listener. That is a few per cent of a modern arm64 phone core, but
-    heavy on the 32-bit 1 GB phones the users include.
+  - CPU: ~181–312 M instructions a second per listener (181 with the dot product most phones since ~2019 have). That is
+    a few per cent of a modern arm64 phone core, but heavy on the 32-bit 1 GB phones the users include.
   - Battery.
   - APK size: ~2.5 MB per ABI.
 
@@ -388,15 +484,18 @@ linking is fine on iOS and on Android.
 1. **The transmitter in the server (+1.4 MB):** it is there only so `dec_rade` can measure a receiver decoding a real
    over. Without it, the row would measure searching plus the decoder alone (`vrade_bench_decode`), which reads ~20 % low on
    armhf (249 against 312 M/s). Keep it, or drop it for the smaller binary?
-2. **Pi 2:** one RADE listener ≈ 0.7–1.0 of a core, so expect RADE off by default there, with the owner able to tick it
-   on. Should RADE also be capped to one listener at a time on such boxes? Not built.
+2. **Pi 2 (now measured):** one RADE listener is ~0.9 of a core — 88 % decoding, 92–97 % searching. It runs in real
+   time, but that core is gone, and two listeners would take two. RADE starts off there (dec_rade RED), the owner can
+   tick it on. Should RADE also be capped to one listener at a time on such boxes? Not built.
 3. **ARMv6:** RADE cannot run. Its switch stays offered and starts off (the rule is "never hide"). Agree?
 4. **The callsign line:** `FreeDV · last G4ABC` replaces "searching" once a RADE over ends. It was "· searching · last",
    but that was 41 characters, past the R36S's 40.
 5. **RADE V2** (7 of 73 stations on Reporter) is not decoded: its README says the waveform will change. Revisit when
    FreeDV announces it.
 6. **The search**, our vectorised `vibe_rade_acq.c`, could go further with an FFT correlation (~10× fewer operations).
-   It is not needed while decoding (FARGAN) costs as much as searching.
+   ★ Now measured: on a Pi 2 searching is the DEARER state (92–97 % of a core, against 88 % decoding), and it is what a
+   RADE receiver does whenever nobody transmits. The runtime dispatch cannot help an A7; an FFT search is the one change
+   that would bring an idle RADE listener on a Pi 2 down to a fraction of a core. Worth building?
 
 ## The protocol
 

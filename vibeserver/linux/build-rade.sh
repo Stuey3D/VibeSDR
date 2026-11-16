@@ -113,8 +113,9 @@ TX_C=("$RC/src/rade_tx.c" "$RC/src/rade_enc.c" "$RC/src/rade_enc_data.c"
 
 # ★ every object compiled once, in parallel (the two weight files are ~24 MB of C each and dominate)
 # ★★ The pilot search (vibe_rade_acq.c): rade_c's rade_acq_detect_pilots is renamed where it is defined and ours takes its
-#    name — the same arithmetic in a loop order the compiler vectorises, at -O3 (see that file: the search was 3× the cost
-#    of decoding). -fno-math-errno lets the |Dt| loop vectorise too; nothing there reads errno.
+#    name — the same arithmetic in a register-friendly loop order, written in NEON and SSE2 by hand (GCC vectorised none of
+#    them; see that file: the search was 3× the cost of decoding), at -O3. -fno-math-errno lets the |Dt| loop vectorise;
+#    nothing there reads errno.
 # ★★ DNN dispatch: Opus's layer code, its tables and its CPU detection — and our arch helper — get the RTCD defines; nothing
 #    else does (fargan.c, pitch.c and the rest keep the plain build, so celt's own pitch dispatch is never pulled in).
 #    Each dearer tier gets its ISA flags on ITS file only, as Opus's own build does. ★ arm64's NEON tier and the C table
