@@ -344,20 +344,21 @@ inline int hwAutoFor(double learned, int cur, bool capable) {
  *      the step (a step of +P means signals land P high, so they are moved P down).
  *    • pllLeftInReading — what of the step a DAB reading still contains: the step the tune has, less what the capture
  *      shift removed from the IQ that reading was measured on. Removed → 0 (nothing to subtract twice); not removed
- *      (the switch off, VIBE_PLL_IQ=0, a radio it does not model) → all of it. NaN reads as 0 on both sides. */
+ *      (VIBE_PLL_IQ=0) → all of it; a radio it does not model → nothing either way. NaN reads as 0 on both sides. */
 inline double captureShiftHz(double learnedPpm, double radioHz, double pllHz) {
     return learnedPpm * 1e-6 * radioHz - (std::isfinite(pllHz) ? pllHz : 0.0);
 }
 inline double pllLeftInReading(double knownPllHz, double removedPllHz) {
     return (std::isfinite(knownPllHz) ? knownPllHz : 0.0) - (std::isfinite(removedPllHz) ? removedPllHz : 0.0);
 }
-/** ★ Is the step taken out of the capture at all? Only on a USB R82xx dongle in tuner mode (rtl_tcp: the far end's
- *  librtlsdr and filter are unknown; direct sampling bypasses the tuner), and only while auto-PPM is on and not
- *  suspended — Turn off and a suspension still mean the radio EXACTLY as the owner set it. `figure` NaN = not modelled.
- *  Returns the Hz to remove (0 = nothing). */
-struct PllGate { bool usbR82xx = false, tcp = false, directSampling = false, autoOn = false, enabled = true; };
+/** ★ Is the step taken out of the capture at all? On every USB R82xx dongle in tuner mode, WHATEVER the auto-PPM switch
+ *  (Stuart's call, beta79: it is the tuner's exact arithmetic, not a learned value — so a server with auto-PPM off, or
+ *  suspended, still gets it; with nothing learned the one mix pass carries the step alone). Not over rtl_tcp (the far
+ *  end's librtlsdr and filter are unknown), not in direct sampling (the tuner is bypassed), not on other tuners, and not
+ *  with VIBE_PLL_IQ=0 (A/B). `figure` NaN = not modelled. Returns the Hz to remove (0 = nothing). */
+struct PllGate { bool usbR82xx = false, tcp = false, directSampling = false, enabled = true; };
 inline double pllToRemoveHz(const PllGate& g, double figure) {
-    if (!g.usbR82xx || g.tcp || g.directSampling || !g.autoOn || !g.enabled || !std::isfinite(figure)) return 0.0;
+    if (!g.usbR82xx || g.tcp || g.directSampling || !g.enabled || !std::isfinite(figure)) return 0.0;
     return figure;
 }
 

@@ -3989,13 +3989,12 @@ static std::atomic<bool>      g_rtlBlogV4{false};
 /** ★★ beta79 — THE STEP IS TAKEN OUT OF THE CAPTURE FOR EVERY LISTENER (vibe_afc.h captureShiftHz / pllToRemoveHz).
  *  g_rtlHwTunedHz: the centre the hardware writer last PUT ON THE TUNER (rtlsdr_set_center_freq returned 0) — the
  *  physical LO's dial, 15 kHz offset tuning included; it changes the moment the writer's tune lands, which is the
- *  retune boundary the IQ producer stamps each buffer against (Impl::rtlPllStamp). g_afcHwA / g_afcOnA: atomic mirrors
+ *  retune boundary the IQ producer stamps each buffer against (Impl::rtlPllStamp). g_afcHwA: an atomic mirror
  *  of g_afcHw and "auto-PPM on and not suspended", published by afcPublishLocked for the producer thread.
  *  g_pllRemovedHz: what afcMix last took out of the IQ (its buffer's stamp); g_captureShiftHz: the whole shift it
  *  applied (Hz, + = up), for the DC spike's label. */
 static std::atomic<uint32_t>  g_rtlHwTunedHz{0};
 static std::atomic<int>       g_afcHwA{0};
-static std::atomic<bool>      g_afcOnA{true};
 static std::atomic<double>    g_pllRemovedHz{0.0}, g_captureShiftHz{0.0};
 static bool pllIqEnabled() {   // ★ VIBE_PLL_IQ=0: the step stays in the IQ (A/B tests); readings then subtract it
     static const bool on = !(std::getenv("VIBE_PLL_IQ") && std::getenv("VIBE_PLL_IQ")[0] == '0');
@@ -28200,15 +28199,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                && !useIcom() && !radioReleased.load(std::memory_order_relaxed);
     }
     /** ★ The stamp for a buffer captured NOW (IqBuf::pllHz): what afcMix is to take out of it — vibeafc::pllToRemoveHz
-     *  decides (auto-PPM on, a USB R82xx, tuner mode, VIBE_PLL_IQ not 0). */
+     *  decides (a USB R82xx in tuner mode, VIBE_PLL_IQ not 0 — whatever the auto-PPM switch: it is the tuner's exact
+     *  arithmetic, not a learned value). */
     double rtlPllStamp() const {
         vibeafc::PllGate g;
         g.usbR82xx = g_rtlTunXtalHz.load(std::memory_order_relaxed) != 0 && rtlPllUsb();
         g.tcp = useTcp();
         g.directSampling = g_dsNow.load(std::memory_order_relaxed) > 0;
-        g.autoOn = g_afcOnA.load(std::memory_order_relaxed);
         g.enabled = pllIqEnabled();
-        if (!g.usbR82xx || g.tcp || g.directSampling || !g.autoOn || !g.enabled) return 0.0;   // ★ no arithmetic per block
+        if (!g.usbR82xx || g.tcp || g.directSampling || !g.enabled) return 0.0;   // ★ no arithmetic per block
         return vibeafc::pllToRemoveHz(g, rtlPllNow());
     }
     /** ★★ ONE SIMD MIX PASS for the whole capture (vibe_afc.h captureShiftHz): the learned correction's shift AND this
@@ -43890,6 +43889,7 @@ void LocalSdrShim::setPpm(int ppm) {
             LOGI("auto-PPM: the manual ppm changed (%d \xe2\x86\x92 %d) \xe2\x80\x94 the learned %+.2f ppm is forgotten", was, ppm, g_afc.target());
             g_afc.forgetLearned();
             g_afcHw = 0; g_afc.setHwAuto(0);   // ★ the radio gets the new manual figure alone (written below)
+            g_afcHwA.store(0, std::memory_order_relaxed);
             g_afcTarget.store(0.0, std::memory_order_relaxed);
             g_afcJump.store(true, std::memory_order_relaxed);
             afcSaveLocked();
@@ -43917,8 +43917,7 @@ static double afcMono() {
 /** The digital shift the DSP should glide to (under g_afcMtx). */
 static void afcPublishLocked() {
     g_afcTarget.store(g_afc.target() - g_afcHw, std::memory_order_relaxed);
-    g_afcHwA.store(g_afcHw, std::memory_order_relaxed);                              // ★ beta79: for rtlPllNow
-    g_afcOnA.store(g_afc.on() && !g_afc.suspended(), std::memory_order_relaxed);   // ★ …and rtlPllStamp
+    g_afcHwA.store(g_afcHw, std::memory_order_relaxed);
 }
 /** Can this radio's driver correct its CRYSTAL (LO and sample clock together)? An RTL over USB (rtlsdr_set_freq_correction)
  *  and rtl_tcp (0x05, which is the same call at the far end). ✗ the RSP: its API's ppm moves the tuning, and whether it

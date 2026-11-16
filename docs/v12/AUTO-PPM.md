@@ -133,13 +133,19 @@ already knows:
   - That 1 Hz check uses the model on both sides, so it proves the sign, the frame and the order of the chain. Whether
     the model matches a real dongle is shown by the on-air readings above.
 - **Who gets it:**
-  - only a USB R82xx dongle in tuner mode, and only while auto-PPM is on and not suspended (`vibeafc::pllToRemoveHz`);
-  - Turn off and a suspension still mean the radio exactly as the owner set it;
+  - every USB R82xx dongle in tuner mode, **whatever the auto-PPM switch** (`vibeafc::pllToRemoveHz`). This was
+    Stuart's call: the step is the tuner's exact arithmetic, not a learned value.
+    - With auto-PPM off, or suspended, nothing is learned, so the one mix pass carries the step alone and the owner's
+      manual ppm is handled exactly as before.
+    - Turn off and Reset therefore mean the manual ppm exactly, with the tuning step still taken out.
+  - not over rtl_tcp, not in direct sampling, and not on other tuners;
   - `VIBE_PLL_IQ=0` leaves the step in the IQ, for A/B tests.
+  - `test-pll-iq` H checks every combination of auto-PPM on, off or suspended with the step removed or left in: the
+    station's position, and what the reading hands auto-PPM.
 - **The DAB reading cannot have the step taken out twice.** There is one rule, `vibeafc::pllLeftInReading`: the step
   the tune has, less what `afcMix` removed from the IQ the reading was measured on.
   - Normally it was removed, so nothing is left to subtract.
-  - With the correction off or `VIBE_PLL_IQ=0`, all of it is left, so all of it is subtracted.
+  - With `VIBE_PLL_IQ=0`, all of it is left, so all of it is subtracted.
   - `test-pll-iq` E checks both cases.
 - **Shown:**
   - hwinfo `afc.pllHz` gives the step for the tune in force, and `afc.pllRemovedHz` what is out of the IQ now;
@@ -269,6 +275,25 @@ the glide. Over 30 minutes:
 
 End to end (`test-server-afc`, the bench multiplex with a +4 ppm clock), DAB's measured offset falls from −4.00 to
 0.00 ppm.
+
+**The intermittent "it glided" failure (10.4 ppm/s), traced on 2026-11-16.** The glide check fails about one run in
+three, and it is not the glide or the hand-over. A run that dumped the DAB reports caught it mid-glide:
+
+| Report time | Offset |
+|---|---|
+| 147.7 s | −510 Hz |
+| 148.2 s | **−1499 Hz** |
+| 148.7 s | −490 Hz |
+
+One report is a whole carrier spacing (1 kHz, 5.15 ppm) off, and the next is back. The DAB receiver's reported offset
+momentarily takes the wrong integer carrier while the frequency ramps at 0.1 ppm/s.
+
+- **Auto-PPM is not affected.** Readings are blanked while a change glides (`settleUntil`), and a 1 kHz slip would also
+  fail the frame-timing agreement.
+- **What it costs:** one wrong figure in the DAB pane for half a second.
+- **Ruled out:** stamping the integer-ppm hand-over per buffer was tried and taken out again. It made no difference
+  (it failed two runs in three), and the slip happens before the hand-over.
+- **Fix belongs in DAB:** the receiver's integer-offset tracking is the DAB work's to fix.
 
 ## Persistence
 

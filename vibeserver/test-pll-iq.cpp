@@ -9,7 +9,8 @@
 //   C. the DC spike: removed by the cleaner BEFORE the mix, and what is left lands outside the channel after it
 //   D. a retune changes the step mid-stream: the mix stays phase-continuous (no jump beyond the frequency change)
 //   E. the DAB reading: nothing subtracted twice (removed from the IQ → 0 left; left in → all of it)
-//   F. the gate: rtl_tcp, direct sampling, auto-PPM off or VIBE_PLL_IQ=0 → nothing removed
+//   F. the gate: rtl_tcp, direct sampling, another tuner or VIBE_PLL_IQ=0 → nothing removed; the auto-PPM switch does not matter
+//   H. every combination of auto-PPM on / off / suspended and the step removed or not: the station, and the reading
 //   G. the cost of the one mix pass on this host at 2.048 / 2.4 / 3.2 MS/s (SIMD path, no allocation per block)
 #include "vibe_afc.h"
 #include "vibe_r82xx_if.h"
@@ -156,15 +157,42 @@ int main() {
 
     std::printf("F. the gate\n");
     {
-        vibeafc::PllGate g; g.usbR82xx = true; g.autoOn = true;
-        ok(vibeafc::pllToRemoveHz(g, -45.0) == -45.0, "a USB R820T in tuner mode, auto-PPM on: removed");
+        vibeafc::PllGate g; g.usbR82xx = true;
+        ok(vibeafc::pllToRemoveHz(g, -45.0) == -45.0, "a USB R820T in tuner mode: removed — whatever the auto-PPM switch (exact arithmetic, not learned)");
         vibeafc::PllGate t = g; t.tcp = true;            ok(vibeafc::pllToRemoveHz(t, -45.0) == 0.0, "rtl_tcp: untouched");
         vibeafc::PllGate d = g; d.directSampling = true; ok(vibeafc::pllToRemoveHz(d, -45.0) == 0.0, "direct sampling (the tuner bypassed): untouched");
-        vibeafc::PllGate o = g; o.autoOn = false;        ok(vibeafc::pllToRemoveHz(o, -45.0) == 0.0, "auto-PPM off or suspended: the radio exactly as set");
         vibeafc::PllGate e = g; e.enabled = false;       ok(vibeafc::pllToRemoveHz(e, -45.0) == 0.0, "VIBE_PLL_IQ=0: untouched");
         vibeafc::PllGate n = g; n.usbR82xx = false;      ok(vibeafc::pllToRemoveHz(n, -45.0) == 0.0, "another tuner (E4000, FC0012 …): untouched");
         ok(vibeafc::pllToRemoveHz(g, std::nan("")) == 0.0, "no figure: nothing");
         ok(vibeafc::captureShiftHz(0.0, 97.665e6, 0.0) == 0.0, "nothing learned and no step: shift 0 — afcMix alters not one sample");
+    }
+
+    std::printf("H. every combination: auto-PPM on / off / suspended x the step removed or not\n");
+    {
+        // the station's error after the one mix pass, for a radio with crystal ε and the learned value L in force (0 when
+        // auto-PPM is off or suspended), and what the DAB reading hands auto-PPM after pllLeftInReading
+        const double C = 194.064e6, P = vibertl::r82xxTuneOffsetHz((uint32_t)C, 1625000, kX, kX, 0);
+        struct M { const char* name; double L; } modes[] = { {"auto-PPM on (0.6 learned)", kEps}, {"auto-PPM off", 0.0}, {"auto-PPM suspended", 0.0} };
+        bool all = true;
+        for (const M& m : modes)
+            for (int pllOn = 0; pllOn < 2; ++pllOn) {
+                const double removed = pllOn ? P : 0.0;
+                const double err = P - kEps * 1e-6 * C + vibeafc::captureShiftHz(m.L, C, removed);   // where a station at X lands, less X
+                const double want = (m.L - kEps) * 1e-6 * C + (pllOn ? 0.0 : P);                   // the crystal not yet learned (+ the step if left)
+                const double reading = err - vibeafc::pllLeftInReading(P, removed);                // the reading auto-PPM is given
+                const bool good = std::fabs(err - want) < 1e-6 && std::fabs(reading - (m.L - kEps) * 1e-6 * C) < 1e-6;
+                all = all && good;
+                std::printf("      %-27s step %s: station %+7.1f Hz, reading's clock part %+7.1f Hz%s\n", m.name,
+                            pllOn ? "removed " : "left in", err, reading, good ? "" : "   <-- WRONG");
+            }
+        ok(all, "the step is gone from the station whenever it is removed, and the reading always holds the crystal alone — never the step twice");
+        vibedsp::NCO m; const double rate = 2048000;
+        m.setFreq(-vibeafc::captureShiftHz(0.0, C, P) / rate);
+        std::vector<cf32> z(kBlock); double ph = 0; const double fb = 123456.0 + P;   // no crystal error: the step alone
+        for (auto& x : z) { x = cf32((float)std::cos(ph), (float)std::sin(ph)); ph += 2 * M_PI * fb / rate; }
+        m.mix(z.data(), z.data(), kBlock);
+        const double got = measureHz(z, rate) - 123456.0;
+        ok(std::fabs(got) < 1.0, f("auto-PPM off, nothing learned: the one pass carries the step alone and the station lands %+.3f Hz from its RF", got));
     }
 
     std::printf("G. the cost of the one mix pass (this host; the SIMD path; one %d-sample block, no allocation)\n", kBlock);
