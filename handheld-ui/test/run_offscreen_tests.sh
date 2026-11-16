@@ -15,12 +15,15 @@
 #   paging_box_test   V12 PAGE: offered only where the engine says, the speaker glyph / VTS line while it runs with the
 #                     person's own mute untouched (from on, from muted, from APRS), the page list (parse, newest first,
 #                     bounded, ENTER reads one whole), nothing written to disk
+#   battery_screen_test  MENU → R36S HARDWARE's Battery block + the STRESS calibration page in every charge state and
+#                     calibration phase (started on the charger; "full" from the charger, never the gauge's 100 %): every
+#                     line fits, the right keys (START idle, CANCEL while waiting / armed, none while counting)
 #   handheld-ui/test/run_offscreen_tests.sh [test …]   (default: all)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 IMG=${IMG:-vibe-hh-map:trixie}
-TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test wefax_adj_test tuned_label_render_test paging_box_test}
+TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test wefax_adj_test tuned_label_render_test paging_box_test battery_screen_test}
 docker run --rm --platform linux/arm64 -v "$REPO/handheld-ui:/w:ro" -v "$REPO/assets/fonts:/fonts:ro" "$IMG" sh -c "
   set -e; cd /w; T=\$(mktemp -d)
   for t in $TESTS; do

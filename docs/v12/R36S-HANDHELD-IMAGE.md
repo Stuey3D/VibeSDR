@@ -205,12 +205,12 @@ connection also carries **unsolicited event lines** (they have an `"event"` key;
 
 | Request | Reply |
 |---|---|
-| `{"get":"state"}` | `{"ok":true,"brightness":120,"maxBrightness":255,"volume":60,"muted":false,"output":"speaker"\|"headphones","battery":{"pct":83,"charging":false,"status":"Discharging"},"screen":"on"\|"off","power":{…},"calib":{…}}` — `power` (2026-11-15, once a second): `online`, `status`, `batV`, `batA` (a magnitude), `batW`, `dir` `"discharge"`\|`"charge"`, `portV` (the charge port, on the cord only), `useW` (the last measured discharge power, smoothed — the driver reports no input current), `chargeMah`, `fullMah`; `calib`: `phase` `"idle"`\|`"armed"`\|`"running"`, `mode`, `countedMah`, `note`, `result` `{mah,design,qEmpty,qFull,utc}` or null. Once calibrated, `battery.pct` is on the measured capacity |
+| `{"get":"state"}` | `{"ok":true,"brightness":120,"maxBrightness":255,"volume":60,"muted":false,"output":"speaker"\|"headphones","battery":{"pct":83,"charging":false,"status":"Discharging"},"screen":"on"\|"off","power":{…},"calib":{…}}` — `power` (2026-11-15, once a second): `online`, `status`, `batV`, `batA` (a magnitude), `batW`, `dir` `"discharge"`\|`"charge"`, `portV` (the charge port, on the cord only), `useW` (the last measured discharge power, smoothed — the driver reports no input current), `useAgeS` (how long ago it was measured; the UI drops its ≈ input estimate after 10 min), `chargeMah`, `fullMah`, `gaugePct` (the gauge's own % — never the judge of full), `charge` (on the cord, else null — vibe-hwd FullJudge, 2026-11-16: `state` `"cc"`\|`"cv"`\|`"hold"`\|`"full"`\|`"paused"`, `by` `"charger"`\|`"taper"`, `cvV`, `ccA`, `termA`, `vlimV` read from the rk817 (CHRG_OUT 0xE4 / CHRG_TERM 0xE6 / CHRG_IN 0xE5, sysfs and the device tree behind; `cvSrc` / `termSrc` say which, `"assumed"` = 4.20 V / 150 mA fallbacks), `nearVlim` (the port within 0.15 V of VLIM — the "shorter cable" hint), `limited` (within 0.05 V, or CHRG_STS 0xEB's input clamp — never judged full), `holdLeftS`); `calib`: `phase` `"idle"`\|`"charging"`\|`"armed"`\|`"running"`, `mode`, `plugged` (false = pulled out before full), `countedMah`, `note`, `result` `{mah,design,qEmpty,qFull,utc}` or null. Once calibrated, `battery.pct` is on the measured capacity |
 | `{"set":"brightness","value":N}` | `{"ok":true}` or `{"ok":false,"error":"…"}` |
 | `{"set":"volume","value":0..100}` | same |
 | `{"set":"time","utcMs":1793900000000}` | same (the service is root; the engine is not) |
 | `{"action":"poweroff"\|"reboot"\|"screen-off"\|"screen-on"}` | same |
-| `{"action":"calibrate","mode":"normal"\|"stress"}` | same — `"charge to Full first"` unless the charger reports Full (vibe-hwd BatteryCal) |
+| `{"action":"calibrate","mode":"normal"\|"stress"}` | same — `"plug in the charger first — it starts from a full charge"` off the cord. On the cord it is accepted at any charge: `charging` (waiting for a GENUINE full — the charger's CHARGE_FINISH, or the battery's current under the termination current within 60 mV of CV, smoothed and held 5 min; never the gauge's %), then `armed` (unplug to start); the count begins at the unplug (vibe-hwd BatteryCal + FullJudge) |
 | `{"action":"calibrate-cancel"}` | same |
 | `{"subscribe":true}` | `{"ok":true}`, then events on this connection |
 
@@ -227,7 +227,9 @@ are gone from this interface; the engine refuses them and never relays them.
   and flush, then send **`{"ack":"shutdown"}`** on the same connection. The service waits **≤ 5 s** for the ack, then shuts
   down anyway.
 - `{"event":"screen","screen":"off"}` — or `"on"`.
-- `{"event":"battery_cal","phase":"armed"|"running"|"cancelled"|"done",…}` — the battery calibration (`mode`, `note`, `mah`).
+- `{"event":"battery_cal","phase":"charging"|"armed"|"notfull"|"running"|"cancelled"|"done",…}` — the battery calibration
+  (`mode`, `note`, `mah`; `start: true` on START's own event). `armed` = genuinely full, unplug now; `notfull` = unplugged
+  before full (nothing starts; it waits for the cord); `charging` without `start` = the cord is back in.
   `done` is followed by a `shutdown` with reason `"battery-cal"` (a clean power-off at the safe empty).
 
 **Files the two halves share.**

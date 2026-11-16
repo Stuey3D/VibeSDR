@@ -67,12 +67,21 @@ inline void hwParseBattery(HwShared& h, const Json& st) {
     b.batV = p["batV"].num(-1); b.batA = p["batA"].num(-1); b.batW = p["batW"].num(-1);
     b.portV = p["portV"].num(-1); b.useW = p["useW"].num(-1);
     b.chargeMah = (int)p["chargeMah"].num(-1); b.fullMah = (int)p["fullMah"].num(-1);
+    b.useAgeS = (int)p["useAgeS"].num(-1); b.gaugePct = (int)p["gaugePct"].num(-1);
+    const Json& ch = p["charge"];   // ★ vibe-hwd FullJudge (2026-11-16): is it REALLY full — never the gauge's %
+    if (ch.kind == Json::Obj) {
+        b.charge.state = ch["state"].str(); b.charge.by = ch["by"].str();
+        b.charge.cvV = ch["cvV"].num(-1); b.charge.termA = ch["termA"].num(-1); b.charge.vlimV = ch["vlimV"].num(-1);
+        b.charge.nearVlim = ch["nearVlim"].boolean(); b.charge.limited = ch["limited"].boolean();
+        b.charge.holdLeftS = (int)ch["holdLeftS"].num(-1);
+    }
     h.bat = b;
     const Json& c = st["calib"];
     BattCal k;
     if (c.kind == Json::Obj) {
         k.phase = c["phase"].str().empty() ? "idle" : c["phase"].str();
         k.mode = c["mode"].str(); k.note = c["note"].str();
+        k.plugged = c["plugged"].kind != Json::Bool || c["plugged"].boolean();
         k.countedMah = (int)c["countedMah"].num(-1);
         const Json& r = c["result"];
         k.hasResult = r.kind == Json::Obj && r["mah"].num(0) > 0;
@@ -95,8 +104,8 @@ inline void hwRefreshDevice(int port) {
     });
 }
 
-/** CALIBRATE (mode "normal" / "stress") or CANCEL ("" = cancel): the service's refusal ("charge to Full first") is
- *  the toast; the state is read again at once so the block (and the stress screen) follow without waiting. */
+/** CALIBRATE (mode "normal" / "stress") or CANCEL ("" = cancel): the service's refusal ("plug in the charger first —
+ *  it starts from a full charge") is the toast; the state is read again at once so the block (and the stress screen) follow without waiting. */
 inline void hwCalibrate(int port, const std::string& mode) {
     { HwShared& h = hwShared(); std::lock_guard<std::mutex> lk(h.m); if (h.calBusy) return; h.calBusy = true; }
     hwAsync([port, mode] {
@@ -108,11 +117,14 @@ inline void hwCalibrate(int port, const std::string& mode) {
             msg = j["error"].str().empty() ? std::string("The hardware service did not answer") : j["error"].str();
             if (!msg.empty()) msg[0] = (char)std::toupper((unsigned char)msg[0]);
         } else if (mode.empty()) msg = "Calibration cancelled";
-        else msg = mode == "stress" ? "Unplug the charger to start the fast calibration" : "Unplug the charger to start — then use the radio as normal";
         const HttpResult d = httpRequest(port, "GET", "/handheld/device", "", 3);
         HwShared& h = hwShared();
         std::lock_guard<std::mutex> lk(h.m);
         if (d.status == 200) hwParseBattery(h, Json::parse(d.body)["state"]);
+        // ★★ started ON THE CHARGER (2026-11-16): already genuinely full → unplug now; else it waits for full
+        if (msg.empty() && !mode.empty())
+            msg = h.cal.phase == "armed" ? std::string("Full — unplug the charger to start")
+                                         : std::string("Waiting for a full charge — leave the charger in");
         h.toasts.push_back(msg);
         h.calBusy = false;
     });

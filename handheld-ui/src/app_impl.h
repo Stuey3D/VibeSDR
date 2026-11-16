@@ -1292,7 +1292,11 @@ inline int App::run(int argc, char** argv) {
             else if (de.kind == "shutdown") toast("Switching off");
             else if (de.kind == "battery_cal") {   // ★ the battery calibration's milestones (vibe-hwd BatteryCal)
                 const std::string ph = de.body["phase"].str(), note = de.body["note"].str();
-                if (ph == "running") toast(de.body["mode"].str() == "stress" ? "Calibrating fast — hold POWER to stop" : "Calibrating — use the radio until it switches itself off");
+                if (de.body["start"].boolean()) {}   // (the START reply's own toast says it — hwCalibrate)
+                else if (ph == "armed") toast("Battery full — unplug the charger to start the calibration");
+                else if (ph == "notfull") toast("Not full yet — plug the charger back in, or cancel");
+                else if (ph == "charging") toast("Charger back — waiting for a full charge");
+                else if (ph == "running") toast(de.body["mode"].str() == "stress" ? "Calibrating fast — hold POWER to stop" : "Calibrating — use the radio until it switches itself off");
                 else if (ph == "cancelled") toast(note.empty() ? std::string("Calibration cancelled") : (char)std::toupper((unsigned char)note[0]) + note.substr(1));
                 else if (ph == "done") toast(de.body["mah"].kind == Json::Num ? "Battery measured: " + std::to_string((int)de.body["mah"].n) + " mAh — switching off" : note);
                 hwRefreshDevice(eng.port());
