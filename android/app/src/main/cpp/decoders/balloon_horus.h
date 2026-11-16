@@ -77,18 +77,19 @@ inline uint16_t golay23Hard(uint32_t r, int* errs = nullptr) {
     if (errs) *errs = __builtin_popcount(e);
     return (uint16_t)(((r ^ e) >> 11) & 0xFFF);
 }
-/** ★ Soft (Chase-II): 23 soft values, soft[0] = bit 22 (data MSB), > 0 = 1. The four least sure bits are tried both ways,
+/** ★ Soft (Chase-II): 23 soft values, soft[0] = bit 22 (data MSB), > 0 = 1. The kChase least sure bits are tried both ways,
  *  each test word decoded hard, and the codeword nearest the soft values wins. `errs` = received bits it disagrees with. */
+constexpr int kChase = 6;   ///< the least sure bits tried both ways (64 test words, 22 codewords a v2 frame)
 inline uint16_t golay23Soft(const float* soft, int* errs = nullptr) {
     uint32_t r = 0;
     for (int i = 0; i < 23; ++i) r = (r << 1) | (soft[i] > 0 ? 1u : 0u);
     int idx[23];
     for (int i = 0; i < 23; ++i) idx[i] = i;
-    std::partial_sort(idx, idx + 4, idx + 23, [&](int a, int b) { return std::fabs(soft[a]) < std::fabs(soft[b]); });
+    std::partial_sort(idx, idx + kChase, idx + 23, [&](int a, int b) { return std::fabs(soft[a]) < std::fabs(soft[b]); });
     double bestScore = -1e30; uint32_t bestCw = r;
-    for (int m = 0; m < 16; ++m) {
+    for (int m = 0; m < (1 << kChase); ++m) {
         uint32_t t = r;
-        for (int k = 0; k < 4; ++k) if ((m >> k) & 1) t ^= 1u << (22 - idx[k]);
+        for (int k = 0; k < kChase; ++k) if ((m >> k) & 1) t ^= 1u << (22 - idx[k]);
         const uint32_t cw = t ^ golay23Table()[syndrome23(t)];
         double score = 0;
         for (int i = 0; i < 23; ++i) score += ((cw >> (22 - i)) & 1) ? soft[i] : -soft[i];
@@ -276,6 +277,10 @@ inline std::vector<uint8_t> transmission(const std::vector<uint8_t>& packet, int
 class Demod {
 public:
     static constexpr int kFs = 12000, kBits = 1024;
+    /** ★ The UW may have 2 of its 16 bits wrong (measured on Project Horus's own v2 recording, horus_v2_100bd.raw: 1 wrong
+     *  allowed found 6 of its 10 packets, 2 found 9 — the tenth is cut off by the file's end). Each extra try costs one
+     *  Golay decode; the CRC and the field checks still judge every one (test-balloon: minutes of noise, nothing). */
+    static constexpr int kUwErr = 2;
     std::function<void(const Telemetry&)> onPacket;
     explicit Demod(double baud = 100) { setBaud(baud); }
     void setBaud(double baud) {
@@ -428,7 +433,11 @@ private:
     }
     void symbol_(const float* e) {
         afc_(e);
-        const float sum = e[0] + e[1] + e[2] + e[3] + 1e-20f;
+        // ★ scaled by the AVERAGE symbol's strongest tone, not this symbol's own sum: a symbol hit by noise (all four alike)
+        //   then says "unsure" instead of being as sure as a clean one — what Chase needs to pick the right bits to try
+        const float mx = std::max(std::max(e[0], e[1]), std::max(e[2], e[3]));
+        eAvg_ += (mx - eAvg_) * (eAvg_ > 0 ? 0.02f : 1.0f);
+        const float sum = eAvg_ + 1e-20f;
         // natural binary: the first bit is the symbol's high bit (tones 2, 3), the second its low (tones 1, 3)
         const float b1 = (std::max(e[2], e[3]) - std::max(e[0], e[1])) / sum;
         const float b0 = (std::max(e[1], e[3]) - std::max(e[0], e[2])) / sum;
@@ -438,10 +447,10 @@ private:
         bits_[(size_t)(nb_ % kBits)] = v;
         ++nb_;
         hard_ = (uint16_t)((hard_ << 1) | (v > 0 ? 1 : 0));
-        // ★ the UW, either tone order (reversed tones turn every bit over): at most one bit wrong
+        // ★ the UW, either tone order (reversed tones turn every bit over): at most kUwErr bits wrong
         if (nb_ >= 16) {
             const int dn = __builtin_popcount((unsigned)(uint16_t)(hard_ ^ 0x2424)), di = __builtin_popcount((unsigned)(uint16_t)(hard_ ^ 0xDBDB));
-            if ((dn <= 1 || di <= 1) && pend_.size() < 8) { pend_.push_back({ nb_, di <= 1 && dn > 1, false }); ++uwHits; }
+            if ((dn <= kUwErr || di <= kUwErr) && pend_.size() < 8) { pend_.push_back({ nb_, di < dn, false }); ++uwHits; }
         }
         for (size_t i = 0; i < pend_.size();) {
             Pend& p = pend_[i];
@@ -478,6 +487,7 @@ private:
     std::vector<double> metric_;
     float bits_[kBits] = {0};
     uint16_t hard_ = 0;
+    float eAvg_ = 0;
     std::vector<Pend> pend_;
 };
 

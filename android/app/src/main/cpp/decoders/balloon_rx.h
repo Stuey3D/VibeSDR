@@ -53,6 +53,8 @@ public:
     std::function<void(const Telemetry&)> onTelemetry;
     /** A picture got a new packet (`im` is valid during the call only). */
     std::function<void(ssdv::Image& im, const ssdv::Packet& p)> onImagePacket;
+    /** A line that looked like a sentence but failed its CRC (`cand` = which RTTY candidate) — for logs and tests. */
+    std::function<void(const std::string& line, int cand)> onRejected;
 
     explicit Receiver(const Config& c = Config()) : cfg_(c), horus_(c.horusBaud) {
         horus_.onPacket = [this](const Telemetry& t) { lastHorusAt_ = sec_; deliver_(t, -1); };
@@ -90,6 +92,8 @@ public:
     bool   horusTones(double t[4]) const { if (!horus_.haveTones()) return false; for (int k = 0; k < 4; ++k) t[k] = horus_.tones()[k]; return true; }
     const horus::Demod& horus() const { return horus_; }
     int    candidates() const { return (int)cands_.size(); }
+    /** "300 Bd 8N1" for candidate i (logs). */
+    std::string candName(int i) const { if (i < 0 || i >= (int)cands_.size()) return "?"; char b[48]; std::snprintf(b, sizeof b, "%g Bd %dN1%s", cands_[(size_t)i]->baud, cands_[(size_t)i]->bits, cands_[(size_t)i]->inv ? " rev" : ""); return b; }
     unsigned long sentences() const { return sentences_; }
     unsigned long crcFails() const { unsigned long n = 0; for (auto& c : cands_) n += c->fr.bad; return n; }
     unsigned long ssdvPackets() const { return ssdvPackets_; }
@@ -141,6 +145,7 @@ private:
             Cand* cp = c.get();
             const int idx = (int)cands_.size();
             c->fr.onSentence = [this, idx](const Telemetry& t) { deliver_(t, idx); };
+            c->fr.onRejected = [this, idx](const std::string& l) { if (onRejected) onRejected(l, idx); };
             c->d->onChar = [cp](char32_t ch) { if (ch < 0x80) cp->fr.put((char)ch); };
             if (nb == 8) {
                 c->sf.reset(new ssdv::Framer());

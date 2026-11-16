@@ -135,6 +135,8 @@ class SentenceFramer {
 public:
     static constexpr size_t kMaxLen = 300;
     std::function<void(const Telemetry&)> onSentence;
+    /** A line that looked like a sentence ("$$…*XXXX") and failed its CRC or fields — never telemetry. */
+    std::function<void(const std::string&)> onRejected;
     unsigned long good = 0, bad = 0;          ///< sentences that passed / failed their CRC
     void put(char c) {
         if (c == '$') {
@@ -159,7 +161,7 @@ private:
             Telemetry t;
             const int r = parseSentence(buf_, t);
             if (r > 0) { ++good; if (onSentence) onSentence(t); }
-            else if (r < 0) ++bad;
+            else if (r < 0) { ++bad; if (onRejected) onRejected(buf_); }
         }
         buf_.clear();
     }

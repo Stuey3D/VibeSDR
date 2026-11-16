@@ -573,7 +573,46 @@ static int writeClip(const char* out, double rate, double seconds) {
     return 0;
 }
 
+/** ★ `test-balloon wav <file.wav | file.raw> [rate]` — a recording through the receiver (a .raw is mono s16 at `rate`,
+ *  default 48000). Resampled to 48 kHz (linear), every report printed. Exit 0 when anything decoded, 1 when nothing. */
+static int replay(const char* path, double rawRate) {
+    FILE* f = std::fopen(path, "rb"); if (!f) { std::perror(path); return 2; }
+    std::vector<uint8_t> d; { uint8_t b[65536]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) d.insert(d.end(), b, b + n); }
+    std::fclose(f);
+    double rate = rawRate; int ch = 1; size_t off = 0, len = d.size();
+    if (d.size() > 44 && std::memcmp(d.data(), "RIFF", 4) == 0) {
+        size_t p = 12;
+        while (p + 8 <= d.size()) {
+            const uint32_t sz = d[p + 4] | d[p + 5] << 8 | d[p + 6] << 16 | (uint32_t)d[p + 7] << 24;
+            if (std::memcmp(&d[p], "fmt ", 4) == 0) { ch = d[p + 10] | d[p + 11] << 8; rate = d[p + 12] | d[p + 13] << 8 | d[p + 14] << 16 | (uint32_t)d[p + 15] << 24; }
+            if (std::memcmp(&d[p], "data", 4) == 0) { off = p + 8; len = std::min<size_t>(sz, d.size() - off); break; }
+            p += 8 + sz + (sz & 1);
+        }
+    }
+    std::vector<float> in;
+    for (size_t i = off; i + 2 * (size_t)ch <= off + len; i += 2 * (size_t)ch) in.push_back((int16_t)(d[i] | d[i + 1] << 8) / 32768.0f);
+    std::vector<float> a;
+    for (double t = 0; t < in.size() - 1; t += rate / 48000.0) { const size_t i = (size_t)t; const double fr = t - (double)i; a.push_back((float)(in[i] * (1 - fr) + in[i + 1] * fr)); }
+    std::printf("%s: %.1f s at %.0f Hz, %d channel(s)\n", path, in.size() / rate, rate, ch);
+    Receiver rx;
+    int n = 0;
+    rx.onTelemetry = [&](const Telemetry& t) {
+        ++n;
+        std::printf("  %6.1f s  %-5s %s%s\n", rx.seconds(), t.source.c_str(), t.sentence.c_str(), t.source == "horus" ? (" (Golay fixed " + std::to_string(t.fecFixed) + " bits)").c_str() : "");
+    };
+    if (std::getenv("VIBE_BALLOON_REJECTS"))
+        rx.onRejected = [&](const std::string& l, int c) { std::printf("  %6.1f s  ✗ CRC [%s] %s\n", rx.seconds(), rx.candName(c).c_str(), l.c_str()); };
+    rx.onImagePacket = [&](ssdv::Image& im, const ssdv::Packet& p) { ++n; std::printf("  %6.1f s  ssdv  %s image %d packet %d (RS %d)\n", rx.seconds(), im.call.c_str(), im.imageId, p.id, p.rsFixed); };
+    for (size_t i = 0; i < a.size(); i += 960) rx.feed48k(a.data() + i, (int)std::min<size_t>(960, a.size() - i));
+    double t4[4];
+    std::printf("  %d decoded · RTTY %s (centre %.0f, shift %.0f) · Horus tones %s · CRC failures %lu\n", n, rx.rttySettings().c_str(), rx.rttyCentre(), rx.rttyShift(),
+                rx.horusTones(t4) ? (std::to_string((int)t4[0]) + "/" + std::to_string((int)t4[1]) + "/" + std::to_string((int)t4[2]) + "/" + std::to_string((int)t4[3])).c_str() : "none", rx.crcFails());
+    std::printf("  Horus: %lu packets passed (repeats included), UW %lu, tone placements %lu, v2 CRC failures %lu\n", rx.horus().packets, rx.horus().uwHits, rx.horus().toneSets, rx.horus().crcFails);
+    return n > 0 ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 2 && std::string(argv[1]) == "wav") return replay(argv[2], argc > 3 ? std::atof(argv[3]) : 48000);
     if (argc > 2 && std::string(argv[1]) == "clip") return writeClip(argv[2], argc > 3 ? std::atof(argv[3]) : 288000, argc > 4 ? std::atof(argv[4]) : 60);
     testChecks();
     testGolay();
