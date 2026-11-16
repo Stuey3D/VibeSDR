@@ -173,8 +173,12 @@ async function scenario(label, args, tag, sb = 'usb') {
       L.spec.send({ type: 'tune', frequency: hz, mode: 'freedv' });
       const got = () => reps().slice(n0).some((r) => r.state === 'sync' && r.mode === sub);
       ok(await until(got, 15000), `${(hz / 1e6).toFixed(3)} MHz: AUTO in sync on ${sub} within 15 s (${JSON.stringify(last())})`);
-      const r = reps().slice(n0).filter((x) => x.state === 'sync').at(-1);
-      ok(r && r.sub === 'auto' && typeof r.snr === 'number' && r.snr > 3, `…the report: sub auto, SNR ${r && r.snr} dB`);
+      // ★ the SNR estimate is still settling at the moment of the win (700D read 2.9 dB at its win in one run, 7.5 in the
+      //   next, same clip) — the report must show a real SNR within 5 s of sync, not on the very first sync report
+      const snrOk = (x) => x.state === 'sync' && x.mode === sub && typeof x.snr === 'number' && x.snr > 3;
+      await until(() => reps().slice(n0).some(snrOk), 5000);
+      const r = reps().slice(n0).find(snrOk) || reps().slice(n0).filter((x) => x.state === 'sync').at(-1);
+      ok(r && r.sub === 'auto' && typeof r.snr === 'number' && r.snr > 3, `…the report: sub auto, SNR ${r && r.snr} dB (settled within 5 s of sync)`);
       ok(r && r.sb === sb, `…demodulated on the ${sb.toUpperCase()} side, by FreeDV's convention (${r && r.sb})`);
       if (sub === 'RADE') {
         // ★ speech now, while the over is on (it ends 14 s into each 20 s loop)
