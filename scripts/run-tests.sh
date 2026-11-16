@@ -1687,10 +1687,14 @@ fi
 #     synthetic clip (700D, 700E and 1600 stations made by codec2's own transmitter): AUTO names each, the report, the text,
 #     decoded speech on the audio socket, a manual sub-mode, USB again after, a one-pipeline and a range-locked radio, and no
 #     mode without libcodec2 (test-server-freedv). NOT RUN without VIBESERVER_BIN or libcodec2 (the clip writer exits 3).
-printf '\n\033[1m── FreeDV (end to end: the server) ──\033[0m\n'
+printf '\n\033[1m── FreeDV (end to end: the server, then the web client) ──\033[0m\n'
 if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-freedv" ] && "$OUT/test-freedv" clip "$OUT/freedv-clip.cu8" 288000 20 12 >/dev/null \
    && "$OUT/test-freedv" clip "$OUT/freedv-clip-lsb.cu8" 288000 20 12 lsb >/dev/null; then
   VIBE_FREEDV_CLIP="$OUT/freedv-clip.cu8" VIBE_FREEDV_CLIP_LSB="$OUT/freedv-clip-lsb.cu8" node scripts/test-server-freedv.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ …then the web page (headless Edge, --mute-audio): the key, the VTS line, the FREEDV row, 390 px, LSB on 40 m —
+  #   served from this tree's web/dist (node scripts/build-web.mjs), exit 3 without it.
+  VIBE_FREEDV_CLIP="$OUT/freedv-clip.cu8" VIBE_FREEDV_CLIP_LSB="$OUT/freedv-clip-lsb.cu8" node scripts/test-web-freedv.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/freedv-clip.cu8" "$OUT/freedv-clip-lsb.cu8"
 else
