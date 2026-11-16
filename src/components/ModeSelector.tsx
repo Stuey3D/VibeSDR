@@ -492,6 +492,8 @@ interface ModeSelectorProps {
     /** ★★ V12 AIS — ISM's kind of key, beside it, and the same three states: absent (`aisAvail` false — the radio cannot
      *  reach 162 MHz, an HF+, an Icom; or Apple TV, which has no map), dimmed with the server's reason (`aisWhy`), live. */
     aisAvail?: boolean; aisWhy?: string; aisOn?: boolean; onAis?: () => void;
+    /** ★★ V12 AIRCRAFT DATALINK (ACARS / VDL2) — AIS's three states: absent (no band reachable), dimmed with the reason, live. */
+    avdataAvail?: boolean; avdataWhy?: string; avdataOn?: boolean; onAvdata?: () => void;
     /** ★★ V12 APRS — a VibeServer's own packet decoder, only where vibeserver.json says `"aprs": true`. Its settings:
      *  PACKET VHF 1200 / HF 300, a TUNE key (the region's channel `aprsHz` in NFM, or 10.1476 USB) and the hint. */
     aprsAvail?: boolean; aprsBaud?: AprsBaud; aprsHz?: number;
@@ -646,8 +648,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
   const ndbShown = !!decoderControls?.ndbAvail && !isBlocked('ndb');   // ★ V12 NDB
   const aisShown = !!decoderControls?.aisAvail && !isBlocked('ais');   // ★ V12 AIS
+  const avShown = !!decoderControls?.avdataAvail && !isBlocked('avdata');   // ★ V12 Aircraft datalink
   const scanShown = !!decoderControls?.scanAvail && !isBlocked('scanner');
-  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || ndbShown || aisShown;
+  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || ndbShown || aisShown || avShown;
   const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !srvDecShown && !scanShown;
   const decSectionShown = !!decoderControls && !dabInGrid
     && (clientDecs.length > 0 || advRdsShown || wholeAvail || srvDecShown || scanShown || spotsShown);
@@ -700,6 +703,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   if (decSectionShown && decoderControls) {
     if (adsbShown) addLegend('ADS-B', 'adsb');
     if (aisShown) addLegend('AIS', 'ais');
+    if (avShown) addLegend('DATALINK', 'acars');
     if (decoderControls.dabAvail) addLegend('DAB', 'dab');
     if (ismShown) addLegend('ISM', 'ism');
     if (ndbShown) addLegend('NDB', 'ndb');
@@ -942,6 +946,32 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★ V12 THE AIRCRAFT DATALINK KEY — AIS's key, for ACARS / VDL2. */
+  const avOff = !!decoderControls?.avdataWhy;
+  const avLit = !!decoderControls?.avdataOn;
+  const avKey = () => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="avdata" onPress={() => dc.onAvdata?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="DATALINK" active={avLit} pip iconId="acars" stack={stackIco}
+          onPress={() => dc.onAvdata?.()} fontSize={12}
+          style={avOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={avOff ? `Aircraft datalink, unavailable: ${dc.avdataWhy}` : 'Aircraft datalink — ACARS and VDL2'}
+        style={[st.btn, { borderColor: avLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : 10 },
+                avLit && { backgroundColor: decBg },
+                avOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onAvdata?.()} activeOpacity={0.8}>
+        <ModeLabel id="acars" stack={stackIco} numberOfLines={1} color={avLit ? dec : t.btnText}
+              style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: avLit ? dec : t.btnText }]}>
+          DATALINK
+        </ModeLabel>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
   const clientKey = (k: DecId) => {
                 // ★★ V12 out of this radio's reach (NAVTEX on a radio with no HF): greyed, a press says why
                 const why = decoderControls!.decWhy?.[k];
@@ -1123,6 +1153,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     switch (id) {
       case 'adsb': return { id, node: adsbShown ? adsbKey(false) : null };
       case 'ais':  return { id, node: aisShown ? aisKey(false) : null };
+      case 'avdata': return { id, node: avShown ? avKey() : null };
       case 'dab':  return { id, node: decoderControls.dabAvail ? dabKey() : null };
       case 'ism':  return { id, node: ismShown ? ismKey(false) : null };
       case 'ndb':  return { id, node: ndbShown ? ndbKey(false) : null };
@@ -1180,6 +1211,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const aisWhyLine = aisOff ? (
     <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
       {`AIS unavailable — ${decoderControls!.aisWhy}`}
+    </Text>
+  ) : null;
+  const avWhyLine = avOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`Aircraft datalink unavailable — ${decoderControls!.avdataWhy}`}
     </Text>
   ) : null;
   const ismWhyLine = ismOff ? (
@@ -2003,6 +2039,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             {ismShown && ismWhyLine}
             {ndbShown && ndbWhyLine}
             {aisShown && aisWhyLine}
+            {avShown && avWhyLine}
           </View>
         )}
 

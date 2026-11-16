@@ -66,6 +66,7 @@ import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioC
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
+import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -2615,6 +2616,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hfdlCapable, setHfdlCapable] = useState(false);       // ★ V12 HFDL: this VibeServer decodes it on the dial
   const hfdlCapRef = useRef(false); hfdlCapRef.current = hfdlCapable;
   const [avCap, setAvCap] = useState<{ ok: boolean; why: string; bands: AvBand[]; text: boolean } | undefined>(undefined);   // ★ V12 Aircraft datalink
+  /* ★★ V12 THE AIRCRAFT DATALINK (ACARS / VDL2) — a whole-radio mode in AIS's pattern, ISM's box (AvdataPanel). The
+   *  server leaves the other whole-radio modes itself (their _off arrives); here it is the box and its reports. */
+  const [avOn, setAvOn] = useState(false);
+  const avOnRef = useRef(false);
+  const [avReport, setAvReport] = useState<AvReport | null>(null);
+  const [avError, setAvError] = useState<string | undefined>(undefined);
+  const [avBoxOpen, setAvBoxOpen] = useState(false);
+  const avUiOff = useCallback(() => { avOnRef.current = false; setAvOn(false); setAvReport(null); setAvBoxOpen(false); setAvError(undefined); }, []);
   const [hellCapable, setHellCapable] = useState(false);       // ★ V12 FELD HELL: this VibeServer draws it
   /** ★ V12 MFSK / OLIVIA / THOR: each family this VibeServer offers, with its choices (AUTO first); absent = not offered. */
   const [tmModes, setTmModes] = useState<Partial<Record<TextFamily, TextMode[]>>>({});
@@ -7378,6 +7387,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       /* ★ V12 AIS: a report (on — arriving MEANS AIS is on, whoever put the receiver there: the map opens on the transition),
        *  the server's ais_off (null), or a refusal (the map that opened on the press closes; the reason as an alert, after
        *  the modal has gone — onAdsb's note). */
+      /* ★ V12 AIRCRAFT DATALINK: a report (its arrival MEANS the mode is on, whoever put the receiver there — the box opens on
+       *  the transition), the server's avdata_off (null), or a refusal (the box says why, and its key reads CLOSE). */
+      onAvdata: (r, why) => {
+        if (destroyed.current) return;
+        if (why) { avOnRef.current = false; setAvOn(false); setAvError(why); setAvBoxOpen(true); return; }
+        if (!r) { avUiOff(); return; }
+        if (!avOnRef.current) { avOnRef.current = true; setAvBoxOpen(true); }
+        setAvOn(true); setAvError(undefined);
+        setAvReport(r);
+      },
       onAis: (r, why) => {
         if (destroyed.current) return;
         if (why) {
@@ -15156,6 +15175,32 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       )}
       </RotateFade>
+      {/* ★★ V12 THE AIRCRAFT DATALINK BOX — ISM's place (AvdataPanel); the waterfall live above it. */}
+      <RotateFade>
+      {avBoxOpen && (
+        <PanelBoundary name="Datalink" onClose={() => setAvBoxOpen(false)}>
+        <AvdataPanel
+          report={avReport}
+          error={avError}
+          on={avOn}
+          onExit={() => {
+            const c = client.current as unknown as { avdata?: (on: boolean) => void } | null;
+            if (avOnRef.current && askLocked(dialStateRef.current)) { setAvBoxOpen(false); askGate(); return; }
+            if (avOnRef.current) c?.avdata?.(false);
+            avUiOff();
+          }}
+          bands={avCap?.bands ?? []}
+          onPickBand={(id) => {
+            markInteract();
+            if (askGate()) return;
+            (client.current as unknown as { avdata?: (on: boolean, band?: string) => void } | null)?.avdata?.(true, id);
+          }}
+          topLimit={boxTopLimit}
+          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+        />
+        </PanelBoundary>
+      )}
+      </RotateFade>
       {/* ★★ V12 THE ISM BOX — over the lower waterfall, the waterfall live above it (IsmPanel). */}
       <RotateFade>
       {ismBoxOpen && (
@@ -15713,6 +15758,22 @@ export default function SDRScreen({ route, navigation }: Props) {
           aisAvail: !IS_APPLE_TV && (aisCap?.ok === true || aisOn),   // ★ refused = not drawn (see ADS-B above)
           aisWhy: !aisOn && aisCap && !aisCap.ok ? aisCap.why : undefined,
           aisOn,
+          /* ★★ V12 AIRCRAFT DATALINK — AIS's three states, VibeServer only (the capability is per radio). */
+          avdataAvail: (avCap?.ok === true || avOn) && !!(client.current as any)?.isVibe,
+          avdataWhy: !avOn && avCap && !avCap.ok ? avCap.why : undefined,
+          avdataOn: avOn,
+          onAvdata: () => {
+            markInteract();
+            const c = client.current as unknown as { avdata?: (on: boolean, band?: string) => void } | null;
+            if (!c?.avdata) return;
+            if (!avOnRef.current && avCap && !avCap.ok) { appAlert('Aircraft datalink unavailable', avCap.why); return; }
+            setModeSelOpen(false);
+            if (askGate()) return;   // ★★ ask before tuning — entering or leaving moves everybody's radio
+            if (avOnRef.current) { c.avdata(false); avUiOff(); return; }
+            setAvError(undefined); setAvReport(null); setAvBoxOpen(true);
+            avOnRef.current = true; setAvOn(true);
+            c.avdata(true);
+          },
           onAis: () => {
             markInteract();
             if (!aisOnRef.current && aisCap && !aisCap.ok) { appAlert('AIS unavailable', aisCap.why || 'AIS is not available on this receiver'); return; }

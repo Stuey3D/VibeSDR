@@ -739,6 +739,8 @@ if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fai
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if npx tsx scripts/test_decoder_bands.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 aviation, the clients' half (src/services/aviation.ts): the datalink report parsed defensively, the HFDL status line
+if npx tsx scripts/test_aviation_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 (2026-10-26, M7EIW): every spot's time is HH:MM:SS UTC, its slot's START — one helper for web, app and maps.
