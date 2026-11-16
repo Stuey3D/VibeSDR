@@ -285,7 +285,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
-import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, type KnownSignal, type KnownAvail } from '../utils/knownSignals';
+import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, type KnownSignal, type KnownAvail, type DxDialEntry } from '../utils/knownSignals';
 import { dabBlockSignals, dabMuxNames, dabFreshGrades, type DabBlockGrade } from '../utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
@@ -12158,16 +12158,60 @@ export default function SDRScreen({ route, navigation }: Props) {
   //     server and personal ones could apply"): the user's own for this server, the owner's saved list, and FM names this
   //     receiver learnt from RDS (knownSignals.ts bookmarkSignals). An UberSDR's list mixes the schedule in and says
   //     nothing per row, so its rows are not labels; an OpenWebRX's / Kiwi's are the owner's.
-  const knownSignals = useMemo(() => {
+  /* ★★★ V12 DX CATCHES ON THE DIAL (utils/knownSignals.ts dxDialSignals — Stuart, 2026-11-16: "show DX catches on the dial
+   *     as signal labels too, marked as sporadic"). The server's own list — GET /vibeserver/dxlog.json?dial=1: real DX
+   *     catches heard this week, one a channel, compact, ≤ 100 (an older server sends its ordinary page, filtered by the
+   *     same rules). Fetched only while the labels are ON and the server has a DX Log (hwinfo `dxLog`): on connect, then
+   *     every ten minutes (the scanner sweeps only while nobody listens). ★★ NEVER A LEAK: the DX LOG overlay's own request
+   *     and read auth, so its gate — the PIN and the owner's "admin lock on viewing" (a 403 → no labels). The "2 h ago" is
+   *     re-worked each minute while any are held. */
+  const [dxDial, setDxDial] = useState<{ entries: DxDialEntry[]; now: number; at: number } | null>(null);
+  const [dxDialClock, setDxDialClock] = useState(0);
+  useEffect(() => {
+    setDxDial(null);
+    if (!knownLabels || !dxLogOk) return;
+    let dead = false;
+    const b = connectBase.replace(/\/+$/, '');
+    const load = async () => {
+      try {
+        const r = await fetch(withReadAuth(`${b}/vibeserver/dxlog.json?dial=1&limit=100`, radioAuthSuffix || route.params.authSuffix || ''), { cache: 'no-store' } as any);
+        if (dead) return;
+        if (!r.ok) { setDxDial(null); return; }
+        const j = await r.json() as { entries?: DxDialEntry[]; now?: number };
+        if (dead) return;
+        const entries = Array.isArray(j.entries) ? j.entries.slice(0, 100) : [];
+        setDxDial(entries.length ? { entries, now: typeof j.now === 'number' ? j.now : 0, at: Date.now() } : null);
+      } catch { /* offline — the next round */ }
+    };
+    void load();
+    const t = setInterval(() => { void load(); }, DX_DIAL_FETCH_MS);
+    return () => { dead = true; clearInterval(t); };
+  }, [knownLabels, dxLogOk, connectBase, radioAuthSuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!dxDial) return;
+    const t = setInterval(() => setDxDialClock((n) => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, [dxDial]);
+  const knownBase = useMemo(() => {
     if (!knownLabels) return null;
     const d = new Date();
     const rows = [...(eibiEnabled ? eibiBookmarks : []), ...serverBookmarks.filter((b: ServerBookmark) => b.source === 'eibi')];
     const st = route.params.serverType ?? 'ubersdr';
     const unmarkedIsSaved = isLocal || st !== 'ubersdr';
-    const bms = bookmarkSignals(bookmarksForInstance(userBookmarks, bookmarkScope, legacyScopes), serverBookmarks, unmarkedIsSaved);
-    return knownSignalList(eibiKnownSignals(rows, d.getUTCHours() * 60 + d.getUTCMinutes()), bms);
+    const mine = bookmarksForInstance(userBookmarks, bookmarkScope, legacyScopes);
+    const bms = bookmarkSignals(mine, serverBookmarks, unmarkedIsSaved);
+    const eibi = eibiKnownSignals(rows, d.getUTCHours() * 60 + d.getUTCMinutes());
+    return { eibi, bms, list: knownSignalList(eibi, bms),
+             bmHz: [...mine, ...serverBookmarks].map((b: { frequency: number }) => b.frequency) };
   }, [knownLabels, eibiEnabled, eibiBookmarks, serverBookmarks, knownClock, userBookmarks, bookmarkScope, legacyScopes,
       isLocal, route.params.serverType]);
+  // ★★ V12 the DX catches, clear of every channel the labels above — or any bookmark at all — hold
+  const dxDialSigs = useMemo(() => (knownBase && dxDial
+    ? dxDialSignals(dxDial.entries, dxServerNow(dxDial.now, dxDial.at), knownBase.list, knownBase.bmHz) : []),
+    [knownBase, dxDial, dxDialClock]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const knownSignals = useMemo(() => (!knownBase ? null
+    : dxDialSigs.length ? knownSignalList(knownBase.eibi, knownBase.bms, dxDialSigs) : knownBase.list),
+    [knownBase, dxDialSigs]);
 
   /* ★★ V12 DAB BLOCK LABELS AND THE BLOCK SWAPPER (utils/dabBlockView.ts — Stuart, 2026-11-15, the Almere B210 at 56 MS/s
    *  showing all of Band III: "add the spectrum labels to show the blocks and, if in the memory, show the MUX name next to
@@ -12185,10 +12229,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const dabGradeRef = useRef<Record<string, DabBlockGrade>>({});
   if (dabState?.blockQ) dabGradeRef.current = dabState.blockQ;
   const dabGrades = dabOn ? dabFreshGrades(dabGradeRef.current, Date.now() / 1000) : null;
-  const dabNamesKey = dabNames ? `${dabCurBlock}|${[...dabNames].map(([k, v]) => `${k}=${v}`).join('\u0001')}|${[...(dabGrades ?? [])].map(([k, v]) => `${k}=${v.g}${v.t}`).join(',')}` : '';
+  // ★★ V12 + the DAB DX catches: a wide view names an otherwise unnamed block by its catch ("DX · Far Away")
+  const dxDab = dabOn ? dxDialSigs.filter((s) => s.dx?.block) : [];
+  const dabNamesKey = dabNames ? `${dabCurBlock}|${[...dabNames].map(([k, v]) => `${k}=${v}`).join('\u0001')}|${[...(dabGrades ?? [])].map(([k, v]) => `${k}=${v.g}${v.t}`).join(',')}|${dxDab.map((s) => s.label).join('\u0001')}` : '';
   const dabNamesRef = useRef(dabNames); dabNamesRef.current = dabNames;
   const dabGradesRef = useRef(dabGrades); dabGradesRef.current = dabGrades;
-  const dabBlockRows = useMemo(() => (dabNamesRef.current ? dabBlockSignals(dabNamesRef.current, dabCurBlock, dabGradesRef.current) : null),
+  const dxDabRef = useRef(dxDab); dxDabRef.current = dxDab;
+  const dabBlockRows = useMemo(() => (dabNamesRef.current ? dabBlockSignals(dabNamesRef.current, dabCurBlock, dabGradesRef.current, dxDabRef.current) : null),
     [dabNamesKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** A tap inside a block: the MULTIPLEXES pick's own road (dabGoTo — ask before tuning, the shared dial, the server's
    *  block change and service auto-select). The block already playing: nothing. */
