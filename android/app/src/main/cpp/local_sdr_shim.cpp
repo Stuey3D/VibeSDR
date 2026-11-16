@@ -2560,9 +2560,13 @@ static std::set<long long> bmDabKeys() {
     return k;
 }
 struct DabScanBmRow { uint32_t sid; std::string label; int eid; int ecc; };
-static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std::set<long long>* before) {
+/* ★★ V12 2026-11-16 `addMissing` / `heardAt` — for the DX log's LOCALS (dxLocalsToBookmarks): a local the owner has
+ *  already been handed is only REFRESHED (addMissing false: a row that is gone — deleted by the owner, cleared — stays
+ *  gone), and it is stamped with when the scanner last heard it, never later (heardAt; 0 = now). */
+static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std::set<long long>* before,
+                     bool addMissing = true, long long heardAt = 0) {
     if (hz <= 0) return 0;
-    const long long now = (long long)time(nullptr);
+    const long long now = heardAt > 0 ? heardAt : (long long)time(nullptr);
     int added = 0;
     bool changed = false;
     std::lock_guard<std::mutex> lk(g_bmMtx);
@@ -2578,13 +2582,13 @@ static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std
             b.missedAt = 0;   // ★ heard: any pending removal is off (vibedab::reconcilePlan)
             // ★ The heartbeat alone is persisted at most daily: a rescan of an unchanged list must not rewrite the file.
             if (now - b.lastHeard > 24 * 3600) changed = true;
-            b.name = n; b.eid = r.eid; b.ecc = r.ecc; b.scanned = true; b.lastHeard = now; b.nameSrc = kNameHeard;
+            b.name = n; b.eid = r.eid; b.ecc = r.ecc; b.scanned = true; b.lastHeard = std::max(b.lastHeard, now); b.nameSrc = kNameHeard;
             // ★ "added" means new SINCE THE SCAN BEGAN: the ordinary learn path (every 5 s on the DSP thread) may have
             //   written it a moment ago while the scan dwelt here — that is still this scan's find.
             if (before && !before->count(key)) ++added;
             continue;
         }
-        if (g_bookmarks.size() >= kBmMax) continue;   // ★ the hard ceiling holds for a scan too
+        if (!addMissing || g_bookmarks.size() >= kBmMax) continue;   // ★ the hard ceiling holds for a scan too
         LearnedBm b;
         b.name = n; b.pi = -1; b.hz = (long long)llround(hz); b.mode = "dab";
         b.lastHeard = now; b.manual = false; b.sid = int(r.sid); b.eid = r.eid; b.ecc = r.ecc; b.scanned = true;
@@ -2605,35 +2609,43 @@ static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std
  *    - saved by hand              → left exactly as the owner made it.
  *  One save, only if something changed. @return how many were NEW. */
 struct FmScanBmRow { int khz; int pi; std::string ps; bool psComplete; };
-static int bmScanFm(const std::vector<FmScanBmRow>& rows) {
-    const long long now = (long long)time(nullptr);
+/* ★★ V12 2026-11-16 `addMissing` / `heardAt` — as bmScanDab's, for the DX log's LOCALS. And `pi` 0 is a station with NO
+ *  RDS (the DX log files those by frequency — a hi-fi tuner's scan): named "104.2MHz (no RDS)", provisional, pi -1; it
+ *  never displaces a row already at that frequency (an RDS station or anything else), and RDS learning replaces it the
+ *  moment a listener's tune hears a PI there (bmLearn: a new PI drops a learned row). The owner's band scan sends none. */
+static int bmScanFm(const std::vector<FmScanBmRow>& rows, bool addMissing = true, long long heardAt = 0) {
+    const long long now = heardAt > 0 ? heardAt : (long long)time(nullptr);
     int added = 0;
     bool changed = false;
     std::lock_guard<std::mutex> lk(g_bmMtx);
     for (const auto& r : rows) {
-        if (r.pi <= 0 || r.khz <= 0) continue;
+        if (r.pi < 0 || r.khz <= 0) continue;
         const double hz = bmSnapFm(r.khz * 1000.0);
         if (hz <= 0) continue;
         const long long key = bmKey(hz);
-        const std::string ps = r.psComplete ? bmClean(r.ps, 64) : std::string();
+        const std::string ps = r.psComplete && r.pi > 0 ? bmClean(r.ps, 64) : std::string();
         char prov[64];
-        std::snprintf(prov, sizeof prov, "PI: %04X %.1fMHz", (unsigned)r.pi, hz / 1e6);
+        if (r.pi > 0) std::snprintf(prov, sizeof prov, "PI: %04X %.1fMHz", (unsigned)r.pi, hz / 1e6);
+        else std::snprintf(prov, sizeof prov, "%.1fMHz (no RDS)", hz / 1e6);
         auto it = g_bookmarks.find(key);
         if (it != g_bookmarks.end()) {
             LearnedBm& b = it->second;
             if (b.manual) continue;
-            if (b.pi == r.pi) {
+            const bool same = r.pi > 0 ? b.pi == r.pi : b.pi <= 0;
+            if (same) {
                 if (!b.scanned || now - b.lastHeard > 24 * 3600) changed = true;
-                b.scanned = true; b.lastHeard = now;
+                b.scanned = true; b.lastHeard = std::max(b.lastHeard, now);
                 if (b.nameSrc < kNameGuess && !ps.empty()) { b.name = ps; b.nameSrc = kNameGuess; changed = true; }
                 continue;
             }
+            // ★ a no-RDS sighting never displaces a station with an identity; a refresh never replaces anything
+            if (r.pi == 0 || !addMissing) continue;
             g_bookmarks.erase(it);   // ★ another station is here now — the old one's name would be a lie
-        } else if (g_bookmarks.size() >= kBmMax) continue;
+        } else if (!addMissing || g_bookmarks.size() >= kBmMax) continue;
         LearnedBm b;
         b.name = ps.empty() ? std::string(prov) : ps;
         b.nameSrc = ps.empty() ? kNameProvisional : kNameGuess;
-        b.pi = r.pi; b.hz = (long long)llround(hz); b.mode = "wfm";
+        b.pi = r.pi > 0 ? r.pi : -1; b.hz = (long long)llround(hz); b.mode = "wfm";
         b.lastHeard = now; b.manual = false; b.scanned = true;
         g_bookmarks[key] = b;
         ++added; changed = true;
@@ -6580,6 +6592,50 @@ static void dxLogFlushLocked(const char* why) {
     std::fclose(f);
     if (ok && std::rename(tmp.c_str(), g_dxLogPath.c_str()) == 0) { g_dxLog.clean(); LOGI("DX log: %zu entries written (%s, %zu bytes)", g_dxLog.size(), why, j.size()); }
     else { std::remove(tmp.c_str()); LOGE("DX log: writing %s failed", g_dxLogPath.c_str()); }
+}
+/** ★★★ THE DX LOG'S LOCALS INTO THE DISCOVERED BOOKMARKS (V12, 2026-11-16 — Stuart: "Once the DX Log has established the
+ *  locals then we can add them to the RDS discovered bookmarks, same with the DAB multiplexes too").
+ *  The locals are the log's own judgement (vibe_dxscan.h: present in ≥ 90 % of a week's visits, every day — or the
+ *  bootstrap's baseline); nothing else is asked here. ★★ ONLY LOCALS: a DX catch (Sporadic-E, tropo, meteor scatter), a
+ *  provisional or a suspect stays in the DX Log and never becomes a bookmark (Stuart, the same day).
+ *  They go in exactly as the owner's band scans put stations in — bmScanFm / bmScanDab, the same keys as RDS and DAB
+ *  learning (frequency+PI, block+SId), origin SCANNED (the year-long expiry, "Clear learned stations" takes them):
+ *    - already there (learned on air, or scanned) → refreshed in place, never a second row;
+ *    - saved or edited BY HAND                     → left exactly as the owner made it;
+ *    - a local handed over before (Entry::bmLocal) → REFRESH ONLY. A row the owner deleted, or "Clear learned" took, is
+ *      not written back: the bookmarks keep no tombstones, so this one-shot mark is what stops it returning every sweep.
+ *  Stamped with when the SCANNER last heard it, not now. Called from the tick once a minute, after evaluate(), never
+ *  under both locks at once (the log's is dropped before the bookmarks' is taken). Bounded: ≤ kMaxEntries locals. */
+static void dxLocalsToBookmarks() {
+    std::vector<vibe::dx::Log::LocalBm> locals;
+    {
+        std::lock_guard<std::mutex> lk(g_dxLogMtx);
+        if (!g_dxLogLoaded) return;
+        locals = g_dxLog.localsForBookmarks();
+    }
+    if (locals.empty()) return;
+    std::vector<int> handed;
+    int addedFm = 0, addedDab = 0;
+    for (const auto& l : locals) {
+        if (!l.dab) {
+            std::vector<FmScanBmRow> rows{ { l.khz, int(l.pi), l.ps, !l.ps.empty() } };
+            addedFm += bmScanFm(rows, l.fresh, (long long)l.lastHeard);
+        } else {
+            const double hz = l.block >= 0 && l.block < (int)vibedab::kBandIIICount ? double(vibedab::kBandIII[l.block].centreHz)
+                                                                                    : l.khz * 1000.0;
+            std::vector<DabScanBmRow> rows;
+            for (const auto& sv : l.services) rows.push_back({ sv.first, sv.second, int(l.eid), l.ecc });
+            addedDab += bmScanDab(hz, rows, nullptr, l.fresh, (long long)l.lastHeard);
+        }
+        if (l.fresh) handed.push_back(l.id);
+    }
+    if (handed.empty()) return;
+    {
+        std::lock_guard<std::mutex> lk(g_dxLogMtx);
+        for (int id : handed) g_dxLog.markLocalBookmarked(id);
+    }
+    LOGI("DX log: %zu local(s) handed to the discovered bookmarks \xe2\x80\x94 %d new FM station(s), %d new DAB service(s)",
+         handed.size(), addedFm, addedDab);
 }
 /** ★ TEST-ONLY knobs, read from the environment so no build differs from the one that ships:
  *  VIBESERVER_BG_WAIT_SEC overrides the owner's wait; VIBESERVER_BG_TEST_CLOCK names a file holding "HH:MM" that
@@ -33592,13 +33648,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibe::dx::Config cfg;
         { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
         const double now = nowSecs();
+        bool dxLocalsDue = false;
         {
             std::lock_guard<std::mutex> lk(g_dxLogMtx);
             if (cfg.on) dxLogLoadLocked();
             g_dxLog.setGapMin(cfg.gapMin);
             if (now - g_dxLogFlushedAt >= 300) { g_dxLogFlushedAt = now; dxLogFlushLocked("the 5-minute flush"); }
-            if (now >= dxEvalAt_ && g_dxLogLoaded) { dxEvalAt_ = now + 60; g_dxLog.evaluate((int64_t)time(nullptr)); }
+            if (now >= dxEvalAt_ && g_dxLogLoaded) { dxEvalAt_ = now + 60; g_dxLog.evaluate((int64_t)time(nullptr)); dxLocalsDue = true; }
         }
+        // ★★ V12 2026-11-16: the locals it has established, into the discovered bookmarks — once a minute, after the re-judge
+        if (dxLocalsDue && cfg.on) dxLocalsToBookmarks();
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
         std::string why = dxWhyNot(cfg);
