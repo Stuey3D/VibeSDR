@@ -396,6 +396,9 @@ deps_for() {
     #     settle and span, the memory (written on a change or a 30-min refresh), its JSON and file. Header only.
     test-dab-block-quality) echo "-O2" ;;
     test-dab-station-choice) echo "-O2 -lpthread $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
+    # ★★ V12 DAB OWN STATION (docs/v12/DAB-OWN-STATION.md): the rule, the roster, and three stations on the bench clip each
+    #    playing their own service while the radio's own decode reads as with none attached.
+    test-dab-own) echo "-O2 -lpthread $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;

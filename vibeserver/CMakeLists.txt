@@ -1368,6 +1368,12 @@ add_executable(dab-weak "${CMAKE_CURRENT_SOURCE_DIR}/dab-weak.cpp")
 target_include_directories(dab-weak PRIVATE "${CPP_DIR}")
 target_compile_options(dab-weak PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(dab-weak PRIVATE vibeserver_core)
+# ★★ V12 DAB own station (docs/v12/DAB-OWN-STATION.md): the rule, the roster, three stations on the bench clip — built here
+#    as well as by run-tests.sh so the stations decode DAB+ with the server's own FAAD2 (the harness's build has AudioToolbox).
+add_executable(test-dab-own "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-own.cpp")
+target_include_directories(test-dab-own PRIVATE "${CPP_DIR}")
+target_compile_options(test-dab-own PRIVATE -O2)
+target_link_libraries(test-dab-own PRIVATE vibeserver_core)
 
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
