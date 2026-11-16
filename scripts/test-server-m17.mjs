@@ -165,11 +165,14 @@ async function scenario(label, args, tag) {
     const r0 = sync();
     ok(r0 && typeof r0.ber === 'number' && r0.ber < 5 && typeof r0.off === 'number' && Math.abs(r0.off) <= 500, `…its BER ${r0 && r0.ber} % and tuning offset ${r0 && r0.off} Hz`);
     // ★ speech while in sync: collect the audio of one whole over
-    L.aud.bin.length = 0;
+    // ★ one WHOLE over: wait for the gap before it, then its first sync report; the audio from there to its end. (The report
+    //   is republished about once a second while in sync, so "a sync report" alone can be the tail of the last over.)
+    { const nA = reps().length; await until(() => reps().slice(nA).some((r) => r.state === 'search'), 15000); }
     const n0 = reps().length;
     await until(() => reps().slice(n0).some((r) => r.state === 'sync' && r.kind === 'voice'), 15000);
     L.aud.bin.length = 0;   // ★ from the start of an over to its end
-    await until(() => reps().slice(n0).some((r) => r.state === 'search' || r.kind === 'packet'), 8000);
+    const n1 = reps().length;
+    await until(() => reps().slice(n1).some((r) => r.state === 'search' || r.kind === 'packet'), 8000);
     const pcm = await pcmOf(L.aud.bin);
     ok(pcm.length > 48000 && rms(pcm) > 300, `…Codec 2 speech on the audio socket during the over (${(pcm.length / 48000).toFixed(1)} s, rms ${rms(pcm).toFixed(0)})`);
     // ★ the SMS
