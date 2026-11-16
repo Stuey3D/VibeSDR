@@ -85,6 +85,13 @@ const KIWI_MODE: Record<SDRMode, { mod: string; lo: number; hi: number }> = {
   cwl: { mod: 'cw',   lo:  -700, hi:  -300 },
   wfm: { mod: 'nbfm', lo: -6000, hi:  6000 }, // unused (Kiwi has no WFM) — local-only mode
   drm: { mod: 'am',   lo: -5000, hi:  5000 }, // unused — V12 DRM is offered only on a VibeServer that lists it
+  // ★ unused — the V12 synchronous AM family and FreeDV are offered only on a VibeServer that lists them
+  sau:   { mod: 'am',  lo: -4900, hi:  4900 },
+  sal:   { mod: 'am',  lo: -4900, hi:  4900 },
+  ecssu: { mod: 'usb', lo:   300, hi:  2700 },
+  ecssl: { mod: 'lsb', lo: -2700, hi:  -300 },
+  amst:  { mod: 'am',  lo: -4900, hi:  4900 },
+  freedv: { mod: 'usb', lo:  300, hi:  2700 },
 };
 
 /** Which dialect of the Kiwi URL a receiver wants. Same wire protocol either way — the ONLY

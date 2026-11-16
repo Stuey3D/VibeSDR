@@ -169,7 +169,10 @@ export function composeModeLabel(mode: string, decoder: string | null | undefine
   /* ★ V12 with a decoder riding, the synchronous AM family reads as its FAMILY — SAM (SAM-U/L and ECSS are synchronous
    *  detection too) or AM (AM stereo): "SAM-U: NAVTEX" / "ECSS-L: WHISPER" did not fit the field on any faceplate
    *  (test_faceplate_segfield / dotfield / meters / landscape caught all of them). Bare, the box keeps the exact name. */
-  const base = dec && isAmSync(String(mode).toLowerCase()) ? (String(mode).toLowerCase() === 'amst' ? 'AM' : 'SAM') : modeDisplay(mode);
+  const ml = String(mode).toLowerCase();
+  /* ★ V12 FreeDV the same: "FREEDV: NAVTEX" does not fit the field either, so with a decoder riding it reads FDV (the
+   *  length of USB). Bare, the box keeps FREEDV. */
+  const base = dec && isAmSync(ml) ? (ml === 'amst' ? 'AM' : 'SAM') : dec && ml === 'freedv' ? 'FDV' : modeDisplay(mode);
   return base + (dec && dec.toLowerCase() !== String(mode).toLowerCase()
     && dec.toUpperCase() !== base ? `: ${dec.toUpperCase()}` : '');
 }
@@ -188,7 +191,7 @@ const everyDecoderListed: [MissingDecoder] extends [never] ? true : MissingDecod
 
 /** Every demod the app can be in (sdrTypes' SDRMode, held to it exactly by `satisfies`). */
 export const DEMODS = { usb: 1, lsb: 1, am: 1, sam: 1, fm: 1, nfm: 1, cwu: 1, cwl: 1, wfm: 1, drm: 1,
-                        sau: 1, sal: 1, ecssu: 1, ecssl: 1, amst: 1 } as const satisfies
+                        sau: 1, sal: 1, ecssu: 1, ecssl: 1, amst: 1, freedv: 1 } as const satisfies
   Record<SDRMode, 1>;
 
 /**

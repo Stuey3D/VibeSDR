@@ -44,6 +44,7 @@ import { HELL_HINT } from '../services/feldHell';   // ★ V12 FELD HELL
 import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
 import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, type GroupedMode } from '../services/autoModes';   // ★★★ AUTO's fallback rows
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
+import { FREEDV_HINT, type FreeDvChoice, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
@@ -160,6 +161,9 @@ function fmtHz(hz: number) {
 // ★ V12 'drm' is a demodulator beside AM (a VibeServer's DRM receiver; OpenWebRX's own DRM too) — a main key, not a decoder
 // ★ V12 the synchronous AM family (sau … amst) — VibeServer's own, offered only where its server lists them (amSync.ts)
 const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'drm', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
+/* ★ V12 FreeDV is a main key only where SDRScreen marks it so (`demod: true` — a VibeServer that lists it, withFreeDv).
+ *  An OpenWebRX names its own FreeDV mode "freedv" too, and that one stays in the dropdown where it has always been. */
+const isCommon = (m: { id: string; demod?: boolean }) => COMMON_IDS.includes(m.id.toLowerCase()) || m.demod === true;
 const DEC_COL = '#52dc64';   // active-decoder accent (matches VTS live-data green)
 
 // ── Decoder-settings helpers (moved with the decoders from MenuSheet §4.3) ──────
@@ -410,7 +414,10 @@ interface ModeSelectorProps {
   current:  Mode;
   /** Gated demodulator list (OWRX reports its own, incl. WFM/digital). When
    *  absent, the default UberSDR MODES are shown. */
-  modes?:   { id: string; label: string }[];
+  modes?:   { id: string; label: string; a11y?: string; demod?: boolean }[];
+  /** ★ V12 FreeDV (VibeServer): while the mode is FreeDV, the manual fallback under AUTO — AUTO and the sub-modes THIS
+   *  server runs, `sub` lit as the server reports it. Absent = no row (no dead controls). */
+  freedv?: { subs: readonly FreeDvSub[]; sub: FreeDvChoice; onSub: (s: FreeDvChoice) => void } | null;
   /** OWRX secondary decoder running on top of the carrier (e.g. 'sstv'/'fax').
    *  Highlighted separately so the carrier demod (`current`) stays lit too. */
   activeDecoder?: string;
@@ -601,7 +608,7 @@ interface ModeSelectorProps {
   } | null;
 }
 
-export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose,
+export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, freedv,
   filterLow: ownLow = 0, filterHigh: ownHigh = 0, bwEdgeMax = 6000, bwEdgeMin = 0, onFilterBoth, autoBw,
   showServerMaps = false, onServerMap, owrxPages,
   decoderControls, spotsControls, transcribeControls, blocked, dcSpikeOnScreen = false, dialHz }: ModeSelectorProps) {
@@ -1435,11 +1442,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   useEffect(() => { if (!visible) setMoreOpen(false); }, [visible]);
 
   const list = modes && modes.length ? modes : MODES.map(m => ({ id: m, label: m.toUpperCase() }));
-  const common = list.filter(m => COMMON_IDS.includes(m.id.toLowerCase()));
+  const common = list.filter(isCommon);
   // Decoder/digital list — OWRX reports these in server-add order (no order at
   // all), so sort alphabetically by label to make the long list scannable.
   const others = useMemo(
-    () => list.filter(m => !COMMON_IDS.includes(m.id.toLowerCase()))
+    () => list.filter(m => !isCommon(m))
               .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })),
     [list],
   );
@@ -1774,6 +1781,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         {dabInGrid && ismShown && ismWhyLine}
         {dabInGrid && ndbShown && ndbWhyLine}
         {dabInGrid && aisShown && aisWhyLine}
+
+        {/* ★★ V12 FreeDV: AUTO finds 700D / 700E / 1600; a sub-mode by hand is the fallback when it cannot settle (house
+            rule: auto decoders keep manual controls underneath). Only while the mode is FreeDV, only the server's own
+            sub-modes; the lit key is the one the server's report names. In place of the width row, which FreeDV does
+            not offer — its passband is the SSB channel the server sets. */}
+        {String(current).toLowerCase() === 'freedv' && !!freedv && freedv.subs.length > 0 && (<>
+          <SubLabel label="FREEDV MODE" />
+          <OptRow>
+            {(['auto', ...freedv.subs] as FreeDvChoice[]).map((v) => (
+              <SegBtn key={v} label={v === 'auto' ? 'AUTO' : v} active={freedv.sub === v} onPress={() => freedv.onSub(v)} />
+            ))}
+          </OptRow>
+          <Text style={capText}>{FREEDV_HINT}</Text>
+        </>)}
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
             LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the

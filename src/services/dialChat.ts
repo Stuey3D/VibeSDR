@@ -264,6 +264,7 @@ export const ASK_SHARED_SETTINGS = new Set<string>([
   'tunerbw', 'sampleRate', 'directSampling',
   'nr', 'notch', 'deemph', 'stereo', 'nfmvoice', 'wsp', 'nb', 'nbx', 'ceq', 'ims', 'autobw',
   'icom_control',   // ★ an Icom's own controls — the same rule as every radio's front end (2026-11-04)
+  'freedv_sub',     // ★ V12 FreeDV's AUTO / sub-mode choice — what the room hears on a shared dial
 ]);
 
 

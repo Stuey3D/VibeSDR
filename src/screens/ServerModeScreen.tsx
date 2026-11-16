@@ -41,6 +41,8 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'ecssu', label: 'ECSS-U' }, { id: 'ecssl', label: 'ECSS-L' }, { id: 'amst', label: 'AM Stereo (C-QUAM compatible)' },
   { id: 'lsb', label: 'LSB' }, { id: 'cwu', label: 'CW-U' }, { id: 'cwl', label: 'CW-L' },
   { id: 'drm', label: 'DRM' },
+  /* ★ V12 FreeDV is NOT here, on purpose: the setup page lists it only where the system's libcodec2 loaded, and the
+   *  server in this phone never loads it (vibe_freedv.h VIBE_FREEDV_NO_DLOPEN on Android) — a switch here would be dead. */
   { id: 'dab', label: 'DAB' }, { id: 'dabScan', label: '', parent: 'dab', node: 'dabScan' },
   { id: 'rtty', label: 'RTTY (and RTTY AUTO)' }, { id: 'navtex', label: 'NAVTEX' },
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },

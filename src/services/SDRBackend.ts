@@ -292,6 +292,8 @@ export interface SDRBackend {
   dabScopes?(on: boolean): void;
   /** ★★ V12 the DRM Signal pane is open — its constellation (drm_iq) only then (VibeServer; an older one sends none). */
   drmScopes?(on: boolean): void;
+  /** ★ V12 FreeDV (VibeServer): AUTO or one sub-mode by hand; null asks for the current report (freedv.ts). */
+  freedvSub?(sub: import('./freedv').FreeDvChoice | null): void;
   /** ★ Raw IQ out for this session (VibeServer). */
   iqOut?(on: boolean, rate?: number): void;
   /** True while a multiplex is being decoded. The UI locks the zoom drum and the VFO out on this:

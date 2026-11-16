@@ -26,6 +26,7 @@ import { ismSanitise } from './ism';
 import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
 import { drmSanitise, drmIqSanitise } from './drm';   // ★ V12 DRM
 import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
+import { parseFreeDv, freedvSubMessage, type FreeDvChoice } from './freedv';   // ★ V12 FreeDV digital voice
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseDabScan, parseFmScan } from './dabBandScan';
@@ -122,6 +123,14 @@ export class VibeServerClient extends VibeServerWsClient {
     this.dabScopesSaidAt = Date.now();
     this.sendSpectrum({ type: 'dab_scopes', on: on ? 1 : 0 });
   }
+  /** ★★ V12 FreeDV: AUTO or one sub-mode by hand (the fallback when AUTO cannot settle); null only asks for the current
+   *  report (entering the mode, a reconnect). On a shared dial the choice is the room's, so it asks before tuning
+   *  (dialChat ASK_SHARED_SETTINGS has "freedv_sub", as the server's list does). */
+  freedvSub(sub: FreeDvChoice | null) {
+    if (sub && this.askBlocked()) return;
+    this.sendSpectrum(freedvSubMessage(sub));
+  }
+
   /** ★★ V12 THE DRM CONSTELLATION (2026-11-12): the DRM Signal pane is open — the server sends {"type":"drm_iq"} only then
    *  (and copies no cells while nobody looks). Remembered, so a reconnect restates it (the self-healing check in 'drm'). */
   private drmScopesOn = false;
@@ -460,6 +469,15 @@ export class VibeServerClient extends VibeServerWsClient {
       /* ★ V12 the AM family's state (carrier lock + offset, the applied AUTO BW edges, AM stereo's pilot) — once a second
        *  on a change, only while the listener is in AM, SAM, ECSS or AM stereo (shim sendAmSync). */
       case 'amsync': { const a = parseAmSync(msg); if (a) this.callbacks.onAmSync?.(a); return true; }
+      /* ★★ V12 FreeDV — the receiver's report when it changes (search / sync, the sub-mode heard, SNR, the station's text),
+       *  and the sideband it demodulates, which the drawn passband follows. A ghost after leaving is the screen's to drop. */
+      case 'freedv': {
+        const f = parseFreeDv(msg);
+        if (!f) return true;
+        this.adoptFreeDvSideband(f.sb);
+        this.callbacks.onFreeDv?.(f);
+        return true;
+      }
       /* ★★ V12 what AUTO has done to this listener's passband — the sliders show it while it cuts (bwAuto.ts). */
       case 'bwauto': { const b = parseBwAuto(msg); if (b) this.callbacks.onBwAuto?.(b); return true; }
       /* ★ V12 AIS: a report about once a second — ITS ARRIVAL MEANS AIS IS ON (a second listener joining a radio somebody
