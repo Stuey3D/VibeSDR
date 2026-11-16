@@ -375,6 +375,9 @@ deps_for() {
     #     the old service's sub-channel is no longer decoded from the new block, and the server's own choice — same
     #     station, last on the multiplex (a file), first — never for a scan. The bench clip through DabService (exit 3 =
     #     NOT RUN without it: vibeserver/bench-clip/make-clip.sh or VIBE_DAB_CLIP=). The rule alone: test-dab-last-service.
+    # ★★ V12 each block's grade — working / marginal / not working (vibe_dab_block_quality.h): the rule, the live grader's
+    #     settle and span, the memory (written on a change or a 30-min refresh), its JSON and file. Header only.
+    test-dab-block-quality) echo "-O2" ;;
     test-dab-station-choice) echo "-O2 -lpthread $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.

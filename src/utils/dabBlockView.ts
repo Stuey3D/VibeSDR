@@ -91,23 +91,110 @@ export function dabBlockLabel(block: string, mux?: string): string {
   return n ? `DAB ${block} — ${n}` : `DAB ${block}`;
 }
 
+/** ★★ The tuned box's first line — the needle's frequency and its block: "194.064M: DAB 7D". */
+export function dabTunedHead(hz: number, block: string): string {
+  return `${(hz / 1e6).toFixed(3)}M: DAB ${block}`;
+}
+
+/** The ensemble's name as drawn under its block: whitespace tidied, at most DAB_MUX_NAME_MAX characters (an ellipsis). */
+export function dabMuxShort(mux?: string): string {
+  const n = clean(mux);
+  return n.length > DAB_MUX_NAME_MAX ? n.slice(0, DAB_MUX_NAME_MAX - 1).trimEnd() + '…' : n;
+}
+
+/** ★ The fewest characters a shortened name keeps before its ellipsis. At a whole Band III span on a 1190-px window a block
+ *  is ~33 px wide — three characters and the ellipsis ("MTV…", "Gel…"); the hint over a block still gives the whole name
+ *  (dabBlockHint). Fewer than three says nothing, and the whole name is lifted to a free pair of rows instead. */
+export const DAB_MUX_KEEP_MIN = 3;
+
+/** ★★ The name shortened (ellipsis) until its box is no wider than `maxW` (the block's width), keeping at least
+ *  DAB_MUX_KEEP_MIN characters; the whole name when it already fits; null when even the shortest will not fit. */
+export function dabFitName(name: string, maxW: number, measure: (t: string) => number): string | null {
+  if (!name) return null;
+  if (measure(name) <= maxW) return name;
+  const base = name.endsWith('…') ? name.slice(0, -1) : name;
+  for (let n = base.length - 1; n >= DAB_MUX_KEEP_MIN; n--) {
+    const head = base.slice(0, n).trimEnd();
+    if (head.length < DAB_MUX_KEEP_MIN) break;
+    const t = head + '…';
+    if (measure(t) <= maxW) return t;
+  }
+  return null;
+}
+
+// ── How well each block decodes here (the server's grade — vibe_dab_block_quality.h) ─────────────────────────────────
+/* ★★ STUART (2026-11-16, Almere 6C plays and 6D "locked, but nothing decodes" at the same level): "label working, marginal
+ *    and non working ones". The server grades each block from what it MEASURED there (the live decode once settled, the
+ *    band and DX scans) and sends the grades as `blockQ` beside `blocks`. A grade older than DAB_GRADE_MAX_AGE_S is not
+ *    shown — a week-old reading is a guess about today. An older server sends none: no mark at all. */
+export type DabGradeName = 'good' | 'marginal' | 'bad';
+export interface DabBlockGrade { g: DabGradeName; mer: number; fib: number; t: number }
+export const DAB_GRADE_MAX_AGE_S = 7 * 24 * 3600;
+/** The mark's colours: working, marginal, not working. */
+export const DAB_GRADE_COLOUR: Record<DabGradeName, string> = { good: '#3ddc84', marginal: '#ffb020', bad: '#ff4d4d' };
+const GRADE_WORD: Record<DabGradeName, string> = { good: 'decoding', marginal: 'marginal', bad: 'not decoding' };
+
+/** `blockQ` parsed defensively — at most 64 blocks, known grades only, finite numbers. {} for anything else. */
+export function parseDabBlockQ(raw: unknown): Record<string, DabBlockGrade> {
+  const out: Record<string, DabBlockGrade> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>).slice(0, 64)) {
+    if (!/^\d{1,2}[A-N]$/.test(k) || !v || typeof v !== 'object') continue;
+    const o = v as Record<string, unknown>;
+    const g = o.g, mer = Number(o.mer), fib = Number(o.fib), t = Number(o.t);
+    if ((g !== 'good' && g !== 'marginal' && g !== 'bad') || !Number.isFinite(t) || t <= 0) continue;
+    out[k] = { g, mer: Number.isFinite(mer) ? mer : 0, fib: Number.isFinite(fib) ? Math.max(0, Math.min(1, fib)) : 0, t };
+  }
+  return out;
+}
+
+/** The grades still worth showing at `nowS` (unix seconds): no older than DAB_GRADE_MAX_AGE_S. */
+export function dabFreshGrades(q: Readonly<Record<string, DabBlockGrade>> | null | undefined, nowS: number): Map<string, DabBlockGrade> {
+  const m = new Map<string, DabBlockGrade>();
+  for (const [k, v] of Object.entries(q ?? {})) if (nowS - v.t <= DAB_GRADE_MAX_AGE_S) m.set(k, v);
+  return m;
+}
+
+/** "not decoding, MER 7 dB, measured 16:47" (a time today) or "… measured 14 Nov" (an older one). */
+export function dabGradeText(q: DabBlockGrade, nowS: number): string {
+  const d = new Date(q.t * 1000), now = new Date(nowS * 1000);
+  const two = (n: number) => String(n).padStart(2, '0');
+  const sameDay = d.toDateString() === now.toDateString();
+  const when = sameDay ? `${two(d.getHours())}:${two(d.getMinutes())}`
+    : `${d.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()]}`;
+  return `${GRADE_WORD[q.g]}, MER ${Math.round(q.mer)} dB, measured ${when}`;
+}
+/** "6D — not decoding, MER 7 dB, measured 16:47" (the app's accessibility text). */
+export function dabGradeLine(block: string, q: DabBlockGrade, nowS: number): string {
+  return `${block} — ${dabGradeText(q, nowS)}`;
+}
+
 /** A block label row for the shared layout: which block, and whether it is the one being received. */
 export interface DabBlockSignal extends KnownSignal {
   dabIdx: number; dabCurrent: boolean;
-  /** The block's bare label ("DAB 8A") — what is drawn when its name cannot fit. */
+  /** The block's bare label ("DAB 8A") — the one-line text for accessibility and hints. */
   bare: string;
+  /** ★★ The two-line box's parts (Stuart, 2026-11-16: "taller instead of wider"): the block ("8A") on top, the ensemble's
+   *  name ('' = none known) underneath — no "DAB " and no " — " (the band bar already says DAB). */
+  block: string; mux: string;
+  /** ★★ How well it decodes here (the server's grade, fresh ones only) — absent = never measured / an older server. */
+  grade?: DabBlockGrade;
 }
 
 /** Every Band III block as a label (sorted by frequency — labelLayout takes the ones in view). `current` = index into
  *  DAB_BLOCKS of the block being received, −1 = none. */
-export function dabBlockSignals(names: ReadonlyMap<string, string>, current: number): DabBlockSignal[] {
+export function dabBlockSignals(names: ReadonlyMap<string, string>, current: number,
+                                grades?: ReadonlyMap<string, DabBlockGrade> | null): DabBlockSignal[] {
   return DAB_BLOCKS.map((b, i) => {
     const mux = names.get(b.name);
+    const grade = grades?.get(b.name);
     return {
+      ...(grade ? { grade } : {}),
       hz: b.hz, lo: b.hz - DAB_BLOCK_HALF_HZ, hi: b.hz + DAB_BLOCK_HALF_HZ,
       label: dabBlockLabel(b.name, mux), dec: '', dialHz: b.hz, mode: 'dab',
       prio: i === current ? PRIO_DAB_CURRENT : mux ? PRIO_DAB_NAMED : PRIO_DAB_BLOCK,
       src: 'dab', dabIdx: i, dabCurrent: i === current, bare: dabBlockLabel(b.name),
+      block: b.name, mux: dabMuxShort(mux),
     } as DabBlockSignal;
   });
 }
@@ -146,11 +233,14 @@ export function dabBlockHit(hz: number, spanHz: number): number {
 }
 
 /** The hover hint on the web: "go to 8A — 8A regio Alphen", "go to 5A", "on 7D — MTVNL" for the block already playing. */
-export function dabBlockHint(idx: number, names: ReadonlyMap<string, string>, current: number): string {
+export function dabBlockHint(idx: number, names: ReadonlyMap<string, string>, current: number,
+                             grades?: ReadonlyMap<string, DabBlockGrade> | null, nowS = Date.now() / 1000): string {
   const b = DAB_BLOCKS[idx];
   if (!b) return '';
   const n = clean(names.get(b.name));
-  return `${idx === current ? 'on' : 'go to'} ${b.name}${n ? ' — ' + n : ''}`;
+  const g = grades?.get(b.name);
+  // ★ the grade after it: "go to 6D · not decoding, MER 7 dB, measured 16:47"
+  return `${idx === current ? 'on' : 'go to'} ${b.name}${n ? ' — ' + n : ''}${g ? ' · ' + dabGradeText(g, nowS) : ''}`;
 }
 
 // ── The wide view's own layout ────────────────────────────────────────────────────────────────────────────────────────
@@ -169,19 +259,38 @@ export function isDabWideList(list: readonly KnownSignal[] | null | undefined): 
   return !!list && list.some(isDabBlockSignal);
 }
 
-/** The wide view's layout: the boxes, how many block rows it used, the tuned block's row (= rows) and LISTEN's (rows + 1). */
-export interface DabLabelPlan { placed: PlacedLabel[]; rows: number; tunedRow: number; liveRow: number }
+/** ★★ A block label's box: CENTRED on the block's centre `x` (so it sits over its own block, not over it and the next one
+ *  to the right), moved only as far as it must to stay on screen (0..width). */
+export function dabBlockBoxX(x: number, w: number, width: number): number {
+  return Math.max(0, Math.min(Math.max(0, width - w), x - w / 2));
+}
+
+/** The wide view's layout: the boxes, how many block rows it used, the tuned block's (lowest) row (= rows) and LISTEN's
+ *  (above the tuned box: rows + 2 for a named two-line box, rows + 1 for a bare one). */
+export interface DabLabelPlan {
+  placed: PlacedLabel[]; rows: number; tunedRow: number; liveRow: number;
+  /** ★★ The tuned box carries the needle's readout — the caller draws NO separate LISTEN/readout label (false = no block
+   *  being received is in view: the caller draws its readout as usual, on `liveRow`). */
+  merged: boolean;
+}
 
 /**
  * ★★★ THE WIDE DAB VIEW'S LAYOUT (same units and conventions as knownSignals.ts labelLayout; `blocked` boxes on the block
  * rows — RF CENTRE, the DC spike, the dB axis). Tried with DAB_BLOCK_ROWS_MIN rows, then one more at a time up to `maxRows`,
- * until every block in view is placed and every known name fits. In order:
- *   1. the block being received, alone on the row above the block rows (its full name) — so it covers nothing;
- *   2. every other block in view, BARE, left to right, on the lowest block row it fits — so none is dropped;
- *   3. each named block (nearest the dial first) widened to its name in place, or moved to the lowest row where the whole
- *      name fits; where it fits nowhere it stays bare;
+ * until every block in view is placed and every known name fits.
+ * ★★ TALLER, NOT WIDER (Stuart, 2026-11-16 — the Almere B210: "DAB 8B — 8B N-H / Flevo" covered the multiplexes beside
+ *    it): a named block is a TWO-LINE box (PlacedLabel.span 2, .lines), the block on top and its name underneath, both
+ *    centred, CENTRED ON ITS OWN BLOCK and no wider than the block where it can be. In order:
+ *   1. the block being received, alone on the row(s) above the block rows, CENTRED ON THE NEEDLE (`dialHz`) and kept on
+ *      screen: ONE box with the needle's readout and its whole name ("194.064M: DAB 7D" over "MTVNL") — `merged`, so the
+ *      caller draws no separate readout;
+ *   2. every other block in view as a one-line box ("8A"), left to right, on the lowest block row it fits — none dropped;
+ *   3. each named block (nearest the dial first) grown into the two-line box: its name as it is, else shortened with an
+ *      ellipsis to the block's width (dabFitName) — in place (its row and the one above) or on the lowest free pair of
+ *      rows; ONLY a name that cannot be shortened to the block's width is drawn whole and wider, on a pair of rows where it
+ *      overlaps nothing; where nothing fits the block stays one line;
  *   4. the other labels in view (decoders, bookmarks…) in what is left of the block rows, at most LABEL_MAX of them.
- * LISTEN (the needle's own label) is the caller's, on `liveRow`.
+ * With no received block in view the needle's readout is the caller's, on `liveRow`, CENTRED ON THE NEEDLE (dabBlockBoxX).
  */
 export function dabLabelLayout(list: readonly KnownSignal[], lo: number, span: number, width: number,
                                measure: (label: string) => number, dialHz: number,
@@ -193,63 +302,79 @@ export function dabLabelLayout(list: readonly KnownSignal[], lo: number, span: n
   const floor = blocked.reduce((m, b) => Math.max(m, b.row + 1), DAB_BLOCK_ROWS_MIN);
   for (let rows = Math.min(floor, maxRows); rows <= maxRows; rows++) {
     const r = layoutRows(list, lo, span, width, measure, dialHz, blocked, pad, gap, rows);
-    plan = { placed: r.placed, rows, tunedRow: rows, liveRow: rows + 1 };
+    plan = { placed: r.placed, rows, tunedRow: rows, liveRow: rows + r.tunedSpan, merged: r.placed.some((p) => isDabBlockSignal(p.sig) && p.sig.dabCurrent) };
     if (r.complete) break;
   }
-  return plan ?? { placed: [], rows: 0, tunedRow: 0, liveRow: 1 };
+  return plan ?? { placed: [], rows: 0, tunedRow: 0, liveRow: 1, merged: false };
 }
 
 function layoutRows(list: readonly KnownSignal[], lo: number, span: number, width: number,
                     measure: (label: string) => number, dialHz: number,
                     blocked: readonly BlockedBox[], pad: number, gap: number,
-                    rows: number): { placed: PlacedLabel[]; complete: boolean } {
+                    rows: number): { placed: PlacedLabel[]; complete: boolean; tunedSpan: number } {
   const placed: PlacedLabel[] = [];
-  if (!(span > 0 && width > 0)) return { placed, complete: true };
+  if (!(span > 0 && width > 0)) return { placed, complete: true, tunedSpan: 1 };
   const vis = signalsInView(list, lo, lo + span);
-  if (!vis.length) return { placed, complete: true };
+  if (!vis.length) return { placed, complete: true, tunedSpan: 1 };
   let complete = true;
   const d = Number.isFinite(dialHz) ? dialHz : lo + span / 2;
-  const taken: Array<Array<[number, number]>> = Array.from({ length: rows + 2 }, () => []);
+  const taken: Array<Array<[number, number]>> = Array.from({ length: rows + 3 }, () => []);
   for (const b of blocked) if (b.row >= 0 && b.row < rows) taken[b.row].push([b.x0, b.x1]);
-  const free = (r: number, x0: number, x1: number) => taken[r].every(([a, b]) => x1 + gap <= a || x0 >= b + gap);
+  const free = (r: number, x0: number, x1: number) => r >= 0 && r < taken.length && taken[r].every(([a, b]) => x1 + gap <= a || x0 >= b + gap);
+  const take = (r: number, x0: number, x1: number) => taken[r].push([x0, x1]);
+  const drop = (r: number, x0: number, x1: number) => { const k = taken[r].findIndex(([a, c]) => a === x0 && c === x1); if (k >= 0) taken[r].splice(k, 1); };
   const boxAt = (x: number, w: number) => (x + pad + w > width ? Math.max(0, x - pad - w) : x + pad);
+  // ★★ a BLOCK's box is centred on its own block (Stuart, 2026-11-16: the labels "straddle 2 blocks, the actual block and
+  //    the one to the right of it") — dabBlockBoxX; every other label keeps the marker-and-box-to-the-right look
+  const blockAt = (x: number, w: number) => dabBlockBoxX(x, w, width);
   const xOf = (hz: number) => (hz - lo) / span * width;
+  const blockW = (2 * DAB_BLOCK_HALF_HZ) / span * width;   // ★ the block's own width on screen: the box's budget
   const blocks = vis.filter(isDabBlockSignal);
   const current = blocks.find((b) => b.dabCurrent) ?? null;
+  const two = (b: DabBlockSignal, name: string, x: number, lx: number, w: number, row: number): PlacedLabel =>
+    ({ sig: b, x, lx, w, row, span: 2, lines: [b.block, name] });
 
-  // 1. the tuned block, on its own row
+  // 1. the tuned block, on its own row(s), centred on the NEEDLE — ONE box: the needle's readout and the ensemble's name
+  //    (Stuart, 2026-11-16: "7D" shown once — "194.064M: DAB 7D" over "MTVNL"; the separate readout is not drawn here)
+  let tunedSpan = 1;
   if (current) {
-    const x = xOf(current.hz), w = measure(current.label), lx = boxAt(x, w);
-    taken[rows].push([lx, lx + w]);
-    placed.push({ sig: current, x, lx, w, row: rows });
+    const needleHz = Number.isFinite(dialHz) ? dialHz : current.hz;
+    const x = xOf(needleHz), head = dabTunedHead(needleHz, current.block);
+    const lines = current.mux ? [head, current.mux] : [head];
+    const w = Math.max(...lines.map(measure)), lx = dabBlockBoxX(x, w, width);
+    for (let r = 0; r < lines.length; r++) take(rows + r, lx, lx + w);
+    placed.push({ sig: current, x, lx, w, row: rows, span: lines.length, lines });
+    tunedSpan = lines.length;
   }
-  // 2. every other block, bare, left to right
+  // 2. every other block, one line, left to right
   const slot = new Map<DabBlockSignal, PlacedLabel>();
   for (const b of blocks) {
     if (b === current) continue;
-    const bare = b.bare || b.label, x = xOf(b.hz), w = measure(bare), lx = boxAt(x, w);
+    const x = xOf(b.hz), w = measure(b.block), lx = blockAt(x, w);
     for (let r = 0; r < rows; r++) {
       if (!free(r, lx, lx + w)) continue;
-      taken[r].push([lx, lx + w]);
-      const p: PlacedLabel = { sig: bare === b.label ? b : { ...b, label: bare } as DabBlockSignal, x, lx, w, row: r };
+      take(r, lx, lx + w);
+      const p: PlacedLabel = { sig: b, x, lx, w, row: r, span: 1, lines: [b.block] };
       placed.push(p); slot.set(b, p);
       break;
     }
     if (!slot.has(b)) complete = false;
   }
-  // 3. the names, nearest the dial first
-  const named = blocks.filter((b) => b !== current && slot.has(b) && b.bare && b.label !== b.bare)
+  // 3. the names, nearest the dial first: two lines, as narrow as the block
+  const named = blocks.filter((b) => b !== current && slot.has(b) && b.mux)
                       .sort((a, b) => Math.abs(a.hz - d) - Math.abs(b.hz - d) || a.hz - b.hz);
   for (const b of named) {
     const p = slot.get(b)!;
-    const own = taken[p.row], k = own.findIndex(([a, c]) => a === p.lx && c === p.lx + p.w);
-    if (k >= 0) own.splice(k, 1);
-    const w = measure(b.label), lx = boxAt(p.x, w);
-    let row = free(p.row, lx, lx + w) ? p.row : -1;
-    for (let r = 0; row < 0 && r < rows; r++) if (free(r, lx, lx + w)) row = r;
-    if (row < 0) { own.push([p.lx, p.lx + p.w]); complete = false; continue; }
-    taken[row].push([lx, lx + w]);
-    p.sig = b; p.lx = lx; p.w = w; p.row = row;
+    drop(p.row, p.lx, p.lx + p.w);
+    const fit = dabFitName(b.mux, blockW, measure);
+    const name = fit ?? b.mux;
+    const w = Math.max(measure(b.block), measure(name)), lx = blockAt(p.x, w);
+    const pairFree = (r: number) => r + 1 < rows && free(r, lx, lx + w) && free(r + 1, lx, lx + w);
+    let row = pairFree(p.row) ? p.row : -1;
+    for (let r = 0; row < 0 && r + 1 < rows; r++) if (pairFree(r)) row = r;
+    if (row < 0) { take(p.row, p.lx, p.lx + p.w); complete = false; continue; }
+    take(row, lx, lx + w); take(row + 1, lx, lx + w);
+    Object.assign(p, two(b, name, p.x, lx, w, row));
   }
   // 4. everything else in view, in what is left
   const others = vis.filter((s) => !isDabBlockSignal(s))
@@ -260,10 +385,10 @@ function layoutRows(list: readonly KnownSignal[], lo: number, span: number, widt
     const x = xOf(s.hz), w = measure(s.label), lx = boxAt(x, w);
     for (let r = 0; r < rows; r++) {
       if (!free(r, lx, lx + w)) continue;
-      taken[r].push([lx, lx + w]);
+      take(r, lx, lx + w);
       placed.push({ sig: s, x, lx, w, row: r }); n++;
       break;
     }
   }
-  return { placed, complete };
+  return { placed, complete, tunedSpan };
 }

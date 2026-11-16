@@ -61,7 +61,7 @@ import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow, type TunedPick } from '../../../src/utils/tunedStation.ts';
-import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
+import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -359,6 +359,9 @@ export class Waterfall {
   vfoLiveLabel = '';
   /** ★★ V12 LISTEN's label row (markerLabelY's stack): 0, or above the block rows on a wide DAB view (dabLiveRow). */
   private liveRow = 0;
+  /** ★★ the wide DAB view's tuned box carries the needle's readout this frame (dabLabelLayout `merged`) */
+  private readoutMerged = false;
+  private knownMerged = false;
   private knownLiveRow = 0;
   vfoLiveAlpha = 1;
   vfo2: { hz: number; lo: number; hi: number; col: string; label: string; alpha: number; parked: boolean } | null = null;
@@ -1238,7 +1241,7 @@ export class Waterfall {
     this.labelList = this.spanHz > 0 ? withDabBlocks(this.knownSignals, this.dabBlocks, this.spanHz) : null;
     // ★★ V12 on a wide DAB view the VFO-coloured labels sit ABOVE the block rows (dabBlockView.ts dabLabelLayout):
     //    _drawKnown sets LISTEN's row from the layout it makes; anything else, row 0
-    if (!isDabWideList(this.labelList)) this.liveRow = 0;
+    if (!isDabWideList(this.labelList)) { this.liveRow = 0; this.readoutMerged = false; }
     if (this.labelList && this.labelList.length) this._drawKnown(ctx, W, H);
     else if (this.knownPlaced.length) { this.knownPlaced = []; this.knownKey = ''; }
     this._drawVfo(ctx, W, H);
@@ -1553,7 +1556,11 @@ export class Waterfall {
       // needle is ambiguous — which line is the one you're listening to?
       const dpr2 = renderDpr();
       void dpr2;
-      this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? this.liveRow : this.liveRow ? this.liveRow + 1 : 2), label, col);
+      // ★★ a wide DAB view with the received block in view: its box IS the readout ("194.064M: DAB 7D" over the name —
+      //    dabBlockView.ts dabLabelLayout `merged`), so the needle draws none of its own; without one, centred on the needle
+      if (!(primary && this.readoutMerged))
+        this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? this.liveRow : this.liveRow ? this.liveRow + 1 : 2), label, col,
+                         primary && this.liveRow > 0);
     }
 
     ctx.restore();
@@ -1644,12 +1651,14 @@ export class Waterfall {
 
   private markerLabel(
     ctx: CanvasRenderingContext2D, x: number, W: number, y: number,
-    text: string, colour: string,
+    text: string, colour: string, centred = false,
   ) {
     const dpr = renderDpr();
     ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
     const tw = ctx.measureText(text).width;
-    const lx = x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
+    // ★★ centred on the needle (a wide DAB view — Stuart, 2026-11-16), kept on screen; else beside it, flipped at the edge
+    const lx = centred ? dabBlockBoxX(x, tw + 6 * dpr, W) + 3 * dpr
+             : x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
     ctx.fillRect(lx - 3 * dpr, y - 9 * dpr, tw + 6 * dpr, 13 * dpr);
     ctx.fillStyle = colour;
@@ -1783,14 +1792,14 @@ export class Waterfall {
       }
       if (dabWide) {
         const plan = dabLabelLayout(this.labelList!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
-        this.knownPlaced = plan.placed; this.knownLiveRow = plan.liveRow;
+        this.knownPlaced = plan.placed; this.knownLiveRow = plan.liveRow; this.knownMerged = plan.merged;
       } else {
         this.knownPlaced = labelLayout(this.labelList!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
-        this.knownLiveRow = 0;
+        this.knownLiveRow = 0; this.knownMerged = false;
       }
       ctx.restore();
     }
-    this.liveRow = this.knownLiveRow;
+    this.liveRow = this.knownLiveRow; this.readoutMerged = this.knownMerged;
     // ★★ V12 the tuned station against the labels placed THIS frame: its own label, or one of these in the tuned colour
     this.tunedPicked = this._pickTuned(this.knownPlaced.map(p => p.sig));
     if (!this.knownPlaced.length) return;
@@ -1807,7 +1816,7 @@ export class Waterfall {
     for (let pi = 0; pi < this.knownPlaced.length; pi++) {
       const p = this.knownPlaced[pi], hi = isHi(pi);
       const y = this.markerLabelY(H, p.row);
-      const boxTop = y - 9 * dpr, boxBot = y + 4 * dpr;
+      const boxTop = this.markerLabelY(H, p.row + (p.span ?? 1) - 1) - 9 * dpr, boxBot = y + 4 * dpr;
       ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;
       ctx.globalAlpha = 0.8;
       // the tick: from the box down to the spectrum's floor, or beside the box on the waterfall
@@ -1824,13 +1833,22 @@ export class Waterfall {
       const p = this.knownPlaced[pi], s = p.sig;
       // ★★ names the station you are tuned to — or, in DAB, the block being received: the tuned label's colour and shadow
       const hi = isHi(pi);
-      const y = this.markerLabelY(H, p.row);
-      const boxTop = y - 9 * dpr;
+      const y = this.markerLabelY(H, p.row), span = Math.max(1, p.span ?? 1);
+      const topY = this.markerLabelY(H, p.row + span - 1), boxTop = topY - 9 * dpr;
       ctx.fillStyle = KNOWN_LABEL_BOX;
-      ctx.fillRect(p.lx, boxTop, p.w, 13 * dpr);
+      ctx.fillRect(p.lx, boxTop, p.w, y + 4 * dpr - boxTop);   // ★ 13 × dpr for one line; a two-line box is a row taller
+      // ★★ how well this block decodes here (the server's grade — dabBlockView.ts): a bar along the box's foot, green /
+      //    amber / red, so the name keeps its own colour and stays readable
+      const grade = isDabBlockSignal(s) ? (s as DabBlockSignal).grade : undefined;
+      if (grade) { ctx.fillStyle = DAB_GRADE_COLOUR[grade.g]; ctx.fillRect(p.lx, y + 4 * dpr - 2 * dpr, p.w, 2 * dpr); }
       ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;
       if (hi) { ctx.shadowColor = 'rgba(0,0,0,0.95)'; ctx.shadowOffsetY = Math.max(1, Math.round(dpr)); ctx.shadowBlur = NO_GLOW ? 0 : Math.round(2 * dpr); }
-      ctx.fillText(s.label, p.lx + 3 * dpr, y);
+      if (p.lines) {
+        // ★★ a DAB block: its lines centred in the box, the block on top (dabBlockView.ts — "taller instead of wider")
+        ctx.textAlign = 'center';
+        p.lines.forEach((t, li) => ctx.fillText(t, p.lx + p.w / 2, this.markerLabelY(H, p.row + span - 1 - li)));
+        ctx.textAlign = 'left';
+      } else ctx.fillText(s.label, p.lx + 3 * dpr, y);
       if (hi) { ctx.shadowColor = 'transparent'; ctx.shadowOffsetY = 0; ctx.shadowBlur = 0; }
     }
     ctx.restore();

@@ -951,7 +951,11 @@ public:
         return labelSnap_;
     }
     struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer;
-                     float merDb; };   // ★ merDb: the gain loop hill-climbs on it — see vsSdrplayDabGainTick
+                     float merDb;   // ★ merDb: the gain loop hill-climbs on it — see vsSdrplayDabGainTick
+                     // ★★ V12 the block measured and its audio so far (vibe_dab_block_quality.h grades a block on them):
+                     //    channel = index into kBandIII (−1 none); audio units due / lost since the block was entered —
+                     //    DAB+ access units (CRC failures and lost super frames) plus MP2 frames
+                     int channel = -1; uint32_t audioIn = 0, audioBad = 0; };
     std::chrono::steady_clock::time_point noFibSince_{};
     uint32_t fibWatchdog_ = 0;   // ★ false locks broken by the no-FIB watchdog
     std::mutex  qM_;                                  // ★ the snapshot's own lock — see quality()
@@ -999,7 +1003,8 @@ public:
     /** Called by the worker with m_ held, after anything that changes the receiver's state. */
     void publishQuality_() {
         const DabStats& s = rx_.stats();
-        const Quality q{ s.locked, float(s.fibRate), s.nullDepthDb, s.mscBer, s.merDb };
+        const Quality q{ s.locked, float(s.fibRate), s.nullDepthDb, s.mscBer, s.merDb,
+                         channel_, auIn_ + mp2In_, auBad_ + mp2Bad_ };
         std::string label = rx_.ensemble().label;
         std::lock_guard<std::mutex> qk(qM_);
         qSnap_ = q; labelSnap_.swap(label);

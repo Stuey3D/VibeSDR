@@ -94,7 +94,7 @@ import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../servi
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
-import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, type DabBlockSignal } from '../utils/dabBlockView';
+import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, dabGradeText, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
@@ -2836,13 +2836,15 @@ function WaterfallView({
     const measure = (t: string) => estimateLabelWidth(t, 9, 3, 0.62);
     if (dabWideNow) {
       const plan = dabLabelLayout(labelList, visStart, bwHz, width, measure, tuneHz, blocked, 4);
-      return { placed: plan.placed.length ? plan.placed : null, liveRow: plan.liveRow };
+      return { placed: plan.placed.length ? plan.placed : null, liveRow: plan.liveRow, merged: plan.merged };
     }
     const p = labelLayout(labelList, visStart, bwHz, width, measure, tuneHz, blocked, 4);
-    return { placed: p.length ? p : null, liveRow: 0 };
+    return { placed: p.length ? p : null, liveRow: 0, merged: false };
   }, [labelList, visStart, bwHz, width, tuneHz, knownNX, knownCX, dabWideNow, dcSpikeX]);
   const knownPlaced = knownPlan ? knownPlan.placed : null;
   const liveRow = knownPlan ? knownPlan.liveRow : 0;
+  // ★★ the wide DAB view's tuned box IS the needle's readout ("194.064M: DAB 7D" over the name) — no separate one drawn
+  const readoutMerged = !!knownPlan?.merged;
   const labelBase = liveRow > 1 && !(specShow && specH > 40) ? markerLabelBase + 14 * (liveRow - 1) : markerLabelBase;
   const rowTop = useCallback((r: number) => labelBase - 14 * r, [labelBase]);
 
@@ -3410,8 +3412,8 @@ function WaterfallView({
             RF CENTRE's dark box in a fixed pale lilac — never the VFO colour, which LISTEN uses on the same row. */}
         {/* ★ the ticks and span bars first, every box after — an upper row's tall tick never crosses another's text */}
         {knownPlaced && knownPlaced.map((p, i) => {
-          const top = rowTop(p.row);
-          const tickBot = specShow && specH > 40 ? wfTop : top + 13;
+          const top = rowTop(p.row + (p.span ?? 1) - 1);   // ★ a two-line DAB box's top
+          const tickBot = specShow && specH > 40 ? wfTop : rowTop(p.row) + 13;
           const s = p.sig;
           const bx0 = s.lo != null ? Math.max(0, hzToX(s.lo)) : 0, bx1 = s.hi != null ? Math.min(width, hzToX(s.hi)) : 0;
           const hi = i === tunedHi || (isDabBlockSignal(s) && s.dabCurrent);
@@ -3426,7 +3428,8 @@ function WaterfallView({
           );
         })}
         {knownPlaced && knownPlaced.map((p, i) => {
-          const top = rowTop(p.row);
+          const span = Math.max(1, p.span ?? 1);
+          const top = rowTop(p.row + span - 1);   // ★ a two-line DAB box's top: one 14-pt row taller
           const s = p.sig;
           // ★★ V12 the label naming the station you are tuned to — or, in DAB, the block being received: the tuned label's
           //    colour (stampCol) and dark halo
@@ -3436,13 +3439,24 @@ function WaterfallView({
           return (
             <React.Fragment key={'ks' + i + ':' + s.hz}>
               {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot (all of Band III on a wide DAB view). */}
-              <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ').replace(' — ', ', ')}
+              <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ').replace(' — ', ', ') + (dab?.grade ? '. ' + dabGradeText(dab.grade, Date.now() / 1000) : '')}
                     accessibilityRole={tapLabel ? 'button' : undefined}
                     accessibilityHint={tapLabel ? (dab ? 'Goes to this multiplex' : s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
                     onAccessibilityTap={tapLabel}
                     ref={tapLabel ? screenNavRef('known' + i, tapLabel) : undefined}
-                    style={[styles.knownBox, { left: p.lx, top }]}>
-                <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
+                    style={[styles.knownBox, { left: p.lx, top }, dab && { width: p.w, alignItems: 'center', height: 13 + 14 * (span - 1) }]}>
+                {/* ★★ a DAB block's box is laid out CENTRED on its own block (dabBlockBoxX) at the estimated width — so it is drawn
+                    at that width with the text centred, or an estimate wider than the text would shift it right again. A named
+                    block is TWO lines, the block over its name ("taller instead of wider", dabBlockView.ts). */}
+                {/* ★★ how well this block decodes here (the server's grade — dabBlockView.ts): a bar along the box's foot */}
+                {dab?.grade && (
+                  <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 2, backgroundColor: DAB_GRADE_COLOUR[dab.grade.g] }} />
+                )}
+                {p.lines ? p.lines.map((t, li) => (
+                  <Text key={li} numberOfLines={1} style={[styles.knownText, { fontFamily, lineHeight: 14, textAlign: 'center' }, hi && [styles.knownHiText, { color: stampCol }]]}>{t}</Text>
+                )) : (
+                  <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
+                )}
               </View>
             </React.Fragment>
           );
@@ -3473,12 +3487,14 @@ function WaterfallView({
 
         {/* The needle's own label. With an RF-centre marker on screen too, an
             unlabelled needle is ambiguous — which line am I listening to? */}
-        {needle && showCenterMarker && (
+        {needle && showCenterMarker && !readoutMerged && (
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: needleColor,
-                  left: Math.min(width - (needleLabel ? 124 : 96), needle.nX + 3), top: rowTop(liveRow),
-                  width: needleLabel ? 124 : 96, textAlign: 'left', fontSize: 9,
+                  // ★★ a wide DAB view: CENTRED on the needle, kept on screen (Stuart, 2026-11-16); else beside it
+                  left: liveRow > 0 ? dabBlockBoxX(needle.nX, needleLabel ? 124 : 96, width) : Math.min(width - (needleLabel ? 124 : 96), needle.nX + 3),
+                  top: rowTop(liveRow),
+                  width: needleLabel ? 124 : 96, textAlign: liveRow > 0 ? 'center' : 'left', fontSize: 9,
                 }]}>
             {needleLabel || 'LISTEN: ' + fmtHz(tuneHz)}
           </Text>

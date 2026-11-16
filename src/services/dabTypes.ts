@@ -10,6 +10,8 @@
 //     that is the standard the Advanced RDS panel set and the DAB panel keeps. A row we cannot
 //     measure says so rather than showing a plausible number.
 
+import { parseDabBlockQ, type DabBlockGrade } from '../utils/dabBlockView';
+
 export interface DabState {
   channel: string; centreHz: number; label: string; eid: number;
   locked: boolean; nullDepthDb: number; offsetHz: number; offsetPpm: number;
@@ -21,6 +23,9 @@ export interface DabState {
    *  and a picker without it is a column of bare numbers. Absent until the server has heard
    *  something; a MEMORY, not a reading, so the live `label` outranks it wherever they differ. */
   blocks?: Record<string, string>;
+  /** ★★ V12 how well each block decodes here — the server's grade (utils/dabBlockView.ts parseDabBlockQ): working /
+   *  marginal / not working, the MER and FIB rate it was judged on, and when (unix seconds). Absent on an older server. */
+  blockQ?: Record<string, DabBlockGrade>;
   services: { sid: number; label: string; codec: string; subch: number; short?: string; pty?: number;
               slides?: boolean; kbps?: number; prot?: string; cuStart?: number; cuSize?: number;
               scids?: number; ecc?: number; dls?: string; dlsAge?: number; logoAir?: boolean; logoSlide?: boolean; ptyDyn?: boolean;
@@ -210,6 +215,7 @@ export function parseDabMessage(m: Record<string, unknown>): DabState {
     }
     o.blocks = out;
   }
+  if (m.blockQ !== undefined) o.blockQ = parseDabBlockQ(m.blockQ);   // ★★ V12 the per-block grades, sanitised
   o.channel  = dabSafeText(m.channel, 8);
   o.label    = dabSafeText(m.label, 32);
   o.protection = dabSafeText(m.protection, 16);
