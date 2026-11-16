@@ -288,7 +288,7 @@ Two kinds of figure, and the tables say which is which:
 | x86_64, after, SSE4.1 CPU (~2008 on) | SSE4.1 | 434 | 265 |
 | **x86_64, after, AVX2 + FMA CPU** (~2013 on) | AVX2 | 434 | **169** |
 | i686 (`-msse2`), before / after | scalar search → SSE2 search | 1563 / 491 | not counted |
-| ARMv6 (scalar, unchanged) | C | 1859 | 2158 |
+| ARMv6 (scalar; no dispatch — counted earlier, with rade_c's own search) | C | 1859 | 2158 |
 
 #### SIMD: runtime dispatch (2026-11-16)
 
