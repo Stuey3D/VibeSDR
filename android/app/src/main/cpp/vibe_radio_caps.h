@@ -59,7 +59,7 @@ inline const std::vector<const char*>& allModes() {
     static const std::vector<const char*> v = {
         "wfm", "rds", "nfm", "tone", "am", "usb", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "lsb", "cwu", "cwl",
         "drm", "freedv", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
-        "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb",
+        "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
     };
     return v;
 }
@@ -169,6 +169,10 @@ inline Caps compute(const Facts& f) {
             for (const auto& b : vibeism::bands()) if (holds(R, b.centreHz - b.needHz, b.centreHz + b.needHz)) return true;
             return false;
         }
+        /* ★ V12 the LoRa networks with their own switches: only where the radio reaches their channels (433.175–433.775 MHz;
+         *  FANET 868.2, or zone 2's 920.8) at an ISM capture rate */
+        if (id == "loraaprs" || id == "meshcom") return rateAtLeast(vibeism::kMinRateHz) && holds(R, 433.05e6, 434.79e6);
+        if (id == "fanet") return rateAtLeast(vibeism::kMinRateHz) && (holds(R, 868.05e6, 868.35e6) || holds(R, 920.5e6, 921.1e6));
         if (id == "ndb") {
             if (d == "rtl" && !f.converter && f.rtlHf != 2) return false;   // ★ vsNdbReach: the Q branch, or nothing
             double best = 0;
@@ -194,6 +198,7 @@ inline Caps compute(const Facts& f) {
         if (!c.has(parent)) c.modes.erase(std::remove(c.modes.begin(), c.modes.end(), std::string(child)), c.modes.end());
     };
     drop("rds", "wfm"); drop("tone", "nfm"); drop("lora", "ism"); drop("aisstore", "ais"); drop("spotsband", "spots"); drop("commb", "adsb");
+    drop("loraaprs", "lora"); drop("fanet", "lora"); drop("meshcom", "lora");
 
     // ── the settings ──
     Settings& s = c.s;
