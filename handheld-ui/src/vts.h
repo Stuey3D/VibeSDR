@@ -20,6 +20,7 @@
 #pragma once
 #include "vts_core.h"
 #include "freedv.h"
+#include "m17.h"
 #include "bm_state.h"
 #include "vts_marks.h"
 
@@ -62,7 +63,8 @@ struct Arrival {
 struct State {
     Screen screen;
     Bar bar;
-    Arrival rds, dab, dabOff, dabErr, drm, tone, notice, device, fdv;
+    Arrival rds, dab, dabOff, dabErr, drm, tone, notice, device, fdv, m17;
+    bool m17Have = false; M17State m17Last;      // ★ V12 the newest M17 report THIS time in the mode (none = searching)
     bool fdvHave = false; FreeDvState fdvLast;   // ★ V12 the newest FreeDV report THIS time in the mode (none = searching)
     bool wasConnected = false;
     double listsAt = -1e9;   // when the bookmarks / EiBi were last asked for (drawVts)
@@ -175,6 +177,17 @@ inline Inputs readInputs(State& st, const RadioState& s, double nowMs, int regio
         if (s.mode != "freedv") st.fdvHave = false;
         else if (fresh) { FreeDvState f; if (parseFreeDv(j, f)) { st.fdvLast = f; st.fdvHave = true; } }
         in.fdvLine = s.mode == "freedv" ? freedvVts(st.fdvHave ? &st.fdvLast : nullptr) : "";
+    }
+    // ★ V12 M17 the same way: its line (the VTS line and what the station sends besides its voice) while in the mode
+    {
+        const Json& j = s.msg("m17");
+        const std::string sig = j["state"].str() + "\x1f" + j["kind"].str() + "\x1f" + j["src"].str() + "\x1f" + j["dst"].str() + "\x1f"
+            + j["enc"].str() + "\x1f" + j["last"].str() + "\x1f" + j["text"].str() + "\x1f" + j["via"].str() + "\x1f" + numSig(j, "ber")
+            + "\x1f" + numSig(j["gnss"], "lat") + numSig(j["gnss"], "lon") + "\x1f" + numSig(j["msg"], "id") + j["msg"]["text"].str();
+        const bool fresh = st.m17(j, sig);
+        if (s.mode != "m17") st.m17Have = false;
+        else if (fresh) { M17State f; if (parseM17(j, f)) { st.m17Last = f; st.m17Have = true; } }
+        in.m17Line = s.mode == "m17" ? m17Line(st.m17Have ? &st.m17Last : nullptr) : "";
     }
     // tone
     {

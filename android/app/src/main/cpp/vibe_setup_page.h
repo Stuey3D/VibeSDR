@@ -3108,6 +3108,8 @@ const BLOCKABLE = [
   { id: "drm",    label: "DRM"      },
   /* ★ V12 FreeDV digital voice (docs/v12/FREEDV.md) — a demodulator; listed by the server only where libcodec2 is installed. */
   { id: "freedv", label: "FreeDV (digital voice)" },
+  /* ★ V12 M17 digital voice (docs/v12/M17.md) — a demodulator on 2 m / 70 cm; listed only where libcodec2 is installed. */
+  { id: "m17",    label: "M17 (digital voice)" },
   { id: "dab",    label: "DAB"      },
   /* ★ The whole-multiplex label scan, moved here from the radio's hardware card (2026-10-31). Still drawn only on a
    *  small 32-bit machine ("lite" in vibeserver.json) — the only place it is a choice; elsewhere it is simply on. */

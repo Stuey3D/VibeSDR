@@ -23,6 +23,7 @@ import { DRM_SEARCHING, drmBoxReading, type DrmQuality } from '../../../src/util
 import { setModeLabel } from './modeIconDom';   // ★ V12 mode icons
 import { modeLegend, isAmSync, AM_SYNC_NAME } from '../../../src/services/amSync';
 import { FREEDV_LABEL, FREEDV_NAME } from '../../../src/services/freedv';
+import { M17_NAME } from '../../../src/services/m17';
 
 /** A demodulator's key legend: amSync.ts's (SAM-U, ECSS-L, AM-ST … everything else upper-cased), with FreeDV written as
  *  its own name ("FreeDV", not "FREEDV"). The page's one legend — the picker, the card's chip and Now Playing use it. */
@@ -330,6 +331,7 @@ export function initMobileControls(deps: MobileDeps) {
       b.textContent = modeLegendWeb(m);   // ★ V12: SAM-U, ECSS-L, AM-ST … (amSync.ts), FreeDV; everything else upper-cased as before
       if (isAmSync(m)) { b.title = AM_SYNC_NAME[m]; b.setAttribute('aria-label', AM_SYNC_NAME[m]); }
       else if (m === 'freedv') { b.title = FREEDV_NAME; b.setAttribute('aria-label', FREEDV_NAME); }
+      else if (m === 'm17') { b.title = M17_NAME; b.setAttribute('aria-label', M17_NAME); }
       b.className = 'mModeOpt' + (m.toLowerCase() === cur ? ' on' : '');
       b.onclick = () => { deps.setMode(m); close(); refresh(); };
       grid.appendChild(b);

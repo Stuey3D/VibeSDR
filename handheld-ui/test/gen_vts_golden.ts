@@ -17,6 +17,8 @@
  *   FV json | ok sub sb sync mode snr text vts  parseFreeDv + freedvVts (src/services/freedv.ts; snr '-' = none)
  *   FO json | subs                              freedvOffered (subs comma-joined, '-' = not offered)
  *   FS hz sb | side lo hi                       freedvSidebandAt(hz) + freedvPassband(sb)
+ *   MV json | ok vts info line                  parseM17 + m17Vts / m17Info / m17Line (src/services/m17.ts)
+ *   MO json | 0/1                               m17Offered
  * Run: node --no-warnings --import ./ts_resolve.mjs --import ./ts_transform.mjs gen_vts_golden.ts <outFile>
  */
 import { writeFileSync } from 'node:fs';
@@ -28,6 +30,7 @@ import { eccPiToIso } from '../../src/services/rdsCountry.ts';
 import { getBandsAtRegion, type Band } from '../../src/constants/bandPlan.ts';
 import { fmtBandFreq } from '../../src/services/stations.ts';
 import { parseFreeDv, freedvVts, freedvOffered, freedvSidebandAt, freedvPassband } from '../../src/services/freedv.ts';
+import { parseM17, m17Vts, m17Info, m17Line, m17Offered } from '../../src/services/m17.ts';
 
 const outFile = process.argv[2] ?? 'vts_golden.txt';
 const L: string[] = [];
@@ -174,6 +177,37 @@ const OFFERS: unknown[] = [
 for (const j of OFFERS) L.push(`FO ${hex(JSON.stringify(j))} | ${freedvOffered(j as never).join(',') || '-'}`);
 for (const hz of [0, -5, 1, 3573000, 7177000, 9999999, 10000000, 14236000, 28330000])
   for (const sb of ['usb', 'lsb'] as const) { const [lo, hi] = freedvPassband(sb); L.push(`FS ${hz} ${sb} | ${freedvSidebandAt(hz)} ${lo} ${hi}`); }
+
+// ── V12 M17 (m17.ts → handheld-ui/src/m17.h) ──
+const M17C: unknown[] = [
+  { type: 'm17', state: 'search' },
+  { type: 'm17', state: 'search', last: 'G4ABC' },
+  { type: 'm17', state: 'sync', kind: 'voice', src: 'G4ABC', dst: '@ALL', can: 0, ber: 0, off: 0 },
+  { type: 'm17', state: 'sync', kind: 'voice', src: 'G4ABC/P', dst: 'M17-M17 C', ber: 4.6, text: 'VIBE TEST' },
+  { type: 'm17', state: 'sync', kind: 'voicedata', src: 'M0XYZ', dst: 'ECHO', ber: 7.4, via: 'G7XYZ via M17-GBR A' },
+  { type: 'm17', state: 'sync', kind: 'voice', src: 'G4ABC', enc: 'aes' },
+  { type: 'm17', state: 'sync', kind: 'packet', src: 'G4ABC', dst: 'M0XYZ' },
+  { type: 'm17', state: 'sync', kind: 'data' },
+  { type: 'm17', state: 'sync', kind: 'bogus', src: '  AB\u0007CD  ', dst: 'x'.repeat(30), enc: 'rot13', ber: -3 },
+  { type: 'm17', state: 'search', last: 'G4ABC', text: 'Hello\tthere   world', gnss: { lat: 52.62346, lon: -1.12346, alt: 120.5, spd: 48.5, brg: 271, r: 8 } },
+  { type: 'm17', state: 'search', gnss: { lat: -33.86882, lon: 151.20929 } },
+  { type: 'm17', state: 'search', gnss: { lat: 95, lon: 0 } },
+  { type: 'm17', state: 'search', gnss: { lat: 10.5, lon: 20.25, spd: 0, alt: -12.5 } },
+  { type: 'm17', state: 'search', last: 'G4ABC', msg: { id: 3, src: 'G4ABC', dst: 'M0XYZ', ptype: 5, bytes: 23, text: 'Hello from VibeServer' } },
+  { type: 'm17', state: 'search', msg: { id: 4, src: 'M0XYZ', ptype: 2, bytes: 41, text: 'not shown' } },
+  { type: 'm17', state: 'search', msg: { id: 5, ptype: 5, bytes: 3, text: 'Ö3 Ärzte \u2003 73' } },
+  { type: 'm17', state: 'search', msg: { id: 6, dst: 'M0XYZ', ptype: 5, bytes: 3, text: '' } },
+  { type: 'm17', state: 'sync', kind: 'voice', src: 'ABCDEFGHIJKLMNOP', dst: 'QRSTUVWXYZ0123456789', text: 'y'.repeat(70) },
+  { type: 'm17', state: 'sync', kind: 'voice', src: 'G4 ABC DEF GHIJ' },
+  { type: 'm17' },
+  { type: 'freedv', state: 'sync' },
+  { state: 'sync' },
+];
+for (const m of M17C) {
+  const st = parseM17(m);
+  L.push(`MV ${hex(JSON.stringify(m))} | ` + (st ? `1 ${hex(m17Vts(st))} ${hex(m17Info(st))} ${hex(m17Line(st))}` : `0 ${hex(m17Vts(null))}`));
+}
+for (const j of [{ modes: ['nfm', 'm17'] }, { modes: ['nfm', 'freedv'] }, {}, { modes: 'm17' }]) L.push(`MO ${hex(JSON.stringify(j))} | ${m17Offered(j as never) ? 1 : 0}`);
 
 writeFileSync(outFile, L.join('\n') + '\n');
 console.error(`vts golden: ${L.length} lines → ${outFile}`);

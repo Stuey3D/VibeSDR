@@ -294,6 +294,8 @@ export interface SDRBackend {
   drmScopes?(on: boolean): void;
   /** ★ V12 FreeDV (VibeServer): AUTO or one sub-mode by hand; null asks for the current report (freedv.ts). */
   freedvSub?(sub: import('./freedv').FreeDvChoice | null): void;
+  /** ★ V12 M17 (VibeServer): ask for the receiver's current report (m17.ts). Read-only. */
+  m17Status?(): void;
   /** ★ Raw IQ out for this session (VibeServer). */
   iqOut?(on: boolean, rate?: number): void;
   /** True while a multiplex is being decoded. The UI locks the zoom drum and the VFO out on this:

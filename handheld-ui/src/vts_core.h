@@ -455,6 +455,8 @@ struct Inputs {
     // ★ V12 FreeDV: the line while in the mode (freedv.h freedvVts — "FreeDV · searching", "FreeDV 700D · 6 dB · G4ABC"),
     //   "" outside it. A state, not an arrival: the line is held for as long as the mode is on.
     std::string fdvLine;
+    // ★ V12 M17: likewise its line while in the mode (m17.h m17Line — "M17 · G4ABC · VIBE TEST"), "" outside it
+    std::string m17Line;
     const std::vector<VtsStation>* stations = nullptr;   // ★ the bookmarks + EiBi (null = none, as the goldens run)
     // notice ({"type":"notice"} — `why` (a refusal) or `vts` (a server line for the bar); `ask` refusals are dropped)
     bool noticeNew = false; std::string noticeText;
@@ -495,7 +497,10 @@ public:
         else if (in.dabNew) onDab(in);
         if (in.drmNew) onDrm(in);
         else if (in.mode != "drm" && live_.badge == "DRM") dropDrm();   // ★ leaving DRM takes its station with it
-        if (in.fdvLine != fdvLine_) onFreeDv(in.fdvLine);               // ★ V12 FreeDV owns the bar in its mode, gone on leaving
+        // ★ V12 FreeDV owns the bar in its mode, gone on leaving — and M17 the same way (one digital-voice line at a time:
+        //   a listener is in one mode)
+        { const std::string& ml = in.fdvLine.empty() ? in.m17Line : in.fdvLine;
+          if (ml != fdvLine_) onFreeDv(ml); }
         if (in.toneNew) setTone(in.mode == "nfm" || in.mode == "fm" ? in.toneLabel : "");
         if (in.noticeNew && !in.noticeText.empty()) show(in.noticeText, 7000);
         ownNotices(in);

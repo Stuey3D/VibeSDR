@@ -831,8 +831,8 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
         c.tc.draw(c.g, c.f.small, s.bwHigh > 0 ? "ON USB" : "ON LSB", p.x + 14, y + 4, th::dim);   // the side the passband follows
         return;
     }
-    // ── BANDWIDTH (hidden in DRM, as the web's syncBw) ──
-    if (s.mode == "drm" || s.mode.empty() || dabActive()) return;
+    // ── BANDWIDTH (hidden in DRM, as the web's syncBw — and in M17, whose receiver cuts its own channel) ──
+    if (s.mode == "drm" || s.mode == "m17" || s.mode.empty() || dabActive()) return;
     const Rect p{444, 8, 184, 464};
     c.g.rrect(p.x, p.y, p.w, p.h, 10, rgb(0x101010, 0.97f));
     c.tc.draw(c.g, c.f.bodyB, "BANDWIDTH", p.x + 14, p.y + 14, th::btnText);

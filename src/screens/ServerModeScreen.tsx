@@ -42,7 +42,8 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'lsb', label: 'LSB' }, { id: 'cwu', label: 'CW-U' }, { id: 'cwl', label: 'CW-L' },
   { id: 'drm', label: 'DRM' },
   /* ★ V12 FreeDV is NOT here, on purpose: the setup page lists it only where the system's libcodec2 loaded, and the
-   *  server in this phone never loads it (vibe_freedv.h VIBE_FREEDV_NO_DLOPEN on Android) — a switch here would be dead. */
+   *  server in this phone never loads it (vibe_freedv.h VIBE_FREEDV_NO_DLOPEN on Android) — a switch here would be dead.
+   *  ★ V12 M17 is not here for the same reason: its voice is Codec 2 from the same library. */
   { id: 'dab', label: 'DAB' }, { id: 'dabScan', label: '', parent: 'dab', node: 'dabScan' },
   { id: 'rtty', label: 'RTTY (and RTTY AUTO)' }, { id: 'navtex', label: 'NAVTEX' },
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },

@@ -92,6 +92,7 @@ const KIWI_MODE: Record<SDRMode, { mod: string; lo: number; hi: number }> = {
   ecssl: { mod: 'lsb', lo: -2700, hi:  -300 },
   amst:  { mod: 'am',  lo: -4900, hi:  4900 },
   freedv: { mod: 'usb', lo:  300, hi:  2700 },
+  m17:    { mod: 'nbfm', lo: -4500, hi: 4500 },   // ★ unused — V12 M17 is offered only on a VibeServer that lists it
 };
 
 /** Which dialect of the Kiwi URL a receiver wants. Same wire protocol either way — the ONLY

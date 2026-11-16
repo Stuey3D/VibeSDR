@@ -96,6 +96,10 @@ flags_for() {
     # ★★ V12 FreeDV as a mode (vibe_freedv.h): codec2's own transmitter → noise → our modem host and the real USB chain.
     #    NOT RUN (exit 3) without libcodec2 (apt install libcodec2-1.2 / brew install codec2) — it is dlopen'd, never linked.
     test-freedv)           echo "-O2 -I $VDSP -I $KISS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
+    # ★★ V12 M17 as a mode (vibe_m17_fec.h, vibe_m17.h): our own encoder from the spec → RRC 4-FSK → noise → our receiver, and
+    #    the real RxPipeline in NFM. The voice checks are NOT RUN (exit 3) without libcodec2 — the FEC, packets and callsigns
+    #    still run and must pass.
+    test-m17)              echo "-O2 -I $VDSP -I $KISS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
     # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
     #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
     test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
@@ -290,7 +294,7 @@ deps_for() {
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-pll-iq)          echo "$VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;
     test-am-sync)         echo "$VDSP/amsync.cpp $VDSP/ddc.cpp $VDSP/fft.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-auto-bw|test-freedv) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-auto-bw|test-freedv|test-m17) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
@@ -750,6 +754,8 @@ if npx tsx scripts/test_drm_app.ts; then pass=$((pass+1)); else fail=$((fail+1))
 if node --no-warnings scripts/test_am_sync.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 synchronous AM (amSync.ts)
 if node --no-warnings scripts/test_freedv.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV as a mode (freedv.ts)
 if node --no-warnings scripts/test_freedv_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV in the app (key, VTS, sub-mode row, sideband)
+if npx tsx scripts/test_m17.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 as a mode (m17.ts)
+if npx tsx scripts/test_m17_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 in the app (key, VTS, no width, ghost reports)
 if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
 #    NM, rows, tiles, the map feed, Find / stats, the readings' memory, the capability, the wiring (V12 NDB).
@@ -1747,6 +1753,19 @@ fi
 #     synthetic clip (700D, 700E and 1600 stations made by codec2's own transmitter): AUTO names each, the report, the text,
 #     decoded speech on the audio socket, a manual sub-mode, USB again after, a one-pipeline and a range-locked radio, and no
 #     mode without libcodec2 (test-server-freedv). NOT RUN without VIBESERVER_BIN or libcodec2 (the clip writer exits 3).
+# ★★ A CLIP WRITER IS TODAY'S SOURCE (2026-11-16: a stale $OUT/test-rs41 wrote yesterday's clip). The loop above builds every
+#    test-*.cpp, but a build that FAILS leaves the old binary behind — and the end-to-end suites below would then replay a
+#    clip from code that is no longer in the tree. So each clip writer is rebuilt here when a source it reads is newer, and
+#    removed when that rebuild fails (its suite then reports NOT RUN, never a pass on old code).
+fresh_clip_writer() {   # name  source…
+  local name="$1"; shift
+  local bin="$OUT/$name"
+  if [ ! -x "$bin" ] || [ -n "$(find "$SRC/$name.cpp" "$@" -newer "$bin" 2>/dev/null | head -1)" ]; then
+    local cobj; cobj="$(cobjs_for "$name")" && g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for "$name") -o "$bin" "$SRC/$name.cpp" $(deps_for "$name") $cobj 2>"$OUT/$name.clipbuildlog" \
+      || { rm -f "$bin"; echo "   ($name did not build — its clip is not made: $OUT/$name.clipbuildlog)"; }
+  fi
+}
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-freedv android/app/src/main/cpp/vibe_freedv.h
 printf '\n\033[1m── FreeDV (end to end: the server, then the web client) ──\033[0m\n'
 if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-freedv" ] && "$OUT/test-freedv" clip "$OUT/freedv-clip.cu8" 288000 20 12 >/dev/null \
    && "$OUT/test-freedv" clip "$OUT/freedv-clip-lsb.cu8" 288000 20 12 lsb >/dev/null; then
@@ -1757,6 +1776,23 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-freedv" ] && "$OUT/test-freed
   VIBE_FREEDV_CLIP="$OUT/freedv-clip.cu8" VIBE_FREEDV_CLIP_LSB="$OUT/freedv-clip-lsb.cu8" node scripts/test-web-freedv.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/freedv-clip.cu8" "$OUT/freedv-clip-lsb.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and libcodec2 (apt install libcodec2-1.2 / brew install codec2)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 M17 AS A MODE (vibe_m17.h, docs/v12/M17.md): the real server on a fake rtl_tcp replaying test-m17's synthetic clip
+#     (our own M17 transmitter from the spec on 433.425 MHz: a voice over with META text, then an SMS, on a 10 s loop): the
+#     offer, the report (callsigns, kind, text, the SMS), Codec 2 speech on the audio socket, silence between overs, a
+#     one-pipeline and a range-locked radio, NFM again after, and no mode without libcodec2 (test-server-m17); then the web
+#     page (test-web-m17, headless Edge --mute-audio). NOT RUN without VIBESERVER_BIN or libcodec2.
+printf '\n\033[1m── M17 (end to end: the server, then the web client) ──\033[0m\n'
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-m17 android/app/src/main/cpp/vibe_m17.h android/app/src/main/cpp/vibe_m17_fec.h android/app/src/main/cpp/vibe_freedv.h
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-m17" ] && [ "$("$OUT/test-m17" --probe 2>/dev/null)" = 1 ] && "$OUT/test-m17" clip "$OUT/m17-clip.cu8" 288000 10 20 >/dev/null; then
+  VIBE_M17_CLIP="$OUT/m17-clip.cu8" node scripts/test-server-m17.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_M17_CLIP="$OUT/m17-clip.cu8" node scripts/test-web-m17.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/m17-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN and libcodec2 (apt install libcodec2-1.2 / brew install codec2)'; notrun=$((notrun+1))
 fi

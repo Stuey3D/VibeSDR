@@ -224,6 +224,8 @@ the NAVTEX channels.
 7. **Effort M** (700D/E/1600), L (RADE; and only for strong servers). Test: freedv test files in codec2's repo; RX888.
 
 ### 2.3 M17 — **build later (soon): the one digital-voice system we can fully offer**
+★ **Built 2026-11-16 as a mode beside NFM — docs/v12/M17.md** (our own receiver from the spec; Codec 2 through FreeDV's
+libcodec2 loader; synthetic signals only so far).
 1. **Standard:** the M17 specification (spec.m17project.org), free ✓.
 2. **Open:** m17-cxx-demod (**GPL-3** ✓), SDR++'s m17 decoder (GPL-3 ✓); libm17 is GPL-2 (treat as GPL-2-only: ✗ do
    not read).
