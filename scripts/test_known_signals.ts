@@ -18,7 +18,9 @@ import { readFileSync } from 'node:fs';
 import { KNOWN_SIGNALS, DIGI_DIALS, eibiKnownSignals, eibiPlace, eibiOnAir, knownSignalList, signalsInView, labelLayout,
          estimateLabelWidth, bookmarkSignals, bookmarkLabel, isLearntFm, LABEL_MAX, PRIO_SAFETY, PRIO_PERSONAL, PRIO_SERVER,
          PRIO_LEARNT, PRIO_EIBI, PRIO_TABLE, labelStems, LABEL_ROWS_MAX, knownTapPlan, knownLabelHit, isLabelTap, LABEL_HIT_MIN_H, type KnownSignal,
-         type PlacedLabel } from '../src/utils/knownSignals.ts';
+         type PlacedLabel, dxDialSignals, dxDialAgo, dxDialHint, dxServerNow, isDxLabel, PRIO_DX, DX_DIAL_MAX, DX_DIAL_MAX_AGE_S,
+         DX_LABEL_COLOUR, KNOWN_LABEL_COLOUR, type DxDialEntry } from '../src/utils/knownSignals.ts';
+import { dabBlockSignals, withDabBlocks, dabBlockHint, DAB_GRADE_COLOUR } from '../src/utils/dabBlockView.ts';
 import { RTTY_WEATHER, RTTY_SHIFTS, RTTY_BAUD_ROWS } from '../src/utils/rttySpec.ts';
 import { dscTuneFor, DSC_ALL } from '../src/utils/dscChannels.ts';
 
@@ -288,6 +290,89 @@ ok(hitL(400, 106) === null && knownLabelHit(null, 230, 106, rowTop, 13) === null
 ok(isLabelTap(0, 0, 80) && isLabelTap(6, -5, 250), 'a tap: still, short');
 ok(!isLabelTap(14, 0, 80) && !isLabelTap(0, 30, 120), 'a drag starting on a label is not a tap (it pans)');
 ok(!isLabelTap(0, 0, 900), 'a long hold is not a tap');
+
+console.log('DX catches on the dial (Stuart, 2026-11-16)');
+{
+  const NOW = 1_800_000_000, H = 3600, D = 86400;
+  const E = (o: Partial<DxDialEntry>): DxDialEntry => ({ band: 'FM', class: 'dx', lastHeard: NOW - 2 * H, ...o });
+  const entries: DxDialEntry[] = [
+    E({ freqKhz: 98800, pi: '5202', ps: 'RNE 1', rds: true, range: 'fm' }),
+    E({ freqKhz: 98800, pi: '5201', ps: 'RAI R1', lastHeard: NOW - 5 * H }),                 // older on the same channel
+    E({ freqKhz: 69800, pi: '0000', ps: '', rds: false, range: 'oirt', lastHeard: NOW - 3 * D }),
+    E({ freqKhz: 86650, pi: '0000', ps: '', rds: false, range: 'ext', lastHeard: NOW - 40 * 60 }),
+    E({ freqKhz: 99300, pi: 'C363', ps: '', lastHeard: NOW - 30 }),
+    E({ freqKhz: 101100, ps: 'SUSPECT', class: 'suspect' }),
+    E({ freqKhz: 101300, ps: 'BASELINE', class: 'provisional' }),
+    E({ freqKhz: 101500, ps: 'LOCAL', class: 'local' }),
+    E({ freqKhz: 102100, ps: 'WEEK IN', lastHeard: NOW - DX_DIAL_MAX_AGE_S }),
+    E({ freqKhz: 102300, ps: 'WEEK OUT', lastHeard: NOW - DX_DIAL_MAX_AGE_S - 1 }),
+    E({ freqKhz: 95800, ps: 'MY BM' }),                                                      // under a personal bookmark
+    E({ freqKhz: 94600, ps: 'NO LABEL' }),                                                   // under a bookmark with no label
+    E({ band: 'DAB', block: '12C', eid: 'E0F1', ensemble: 'Far Away', freqKhz: 227360, lastHeard: NOW - D - H }),
+  ];
+  const bms = bookmarkSignals([{ name: 'Flex FM', frequency: 95_800_000, mode: 'wfm' }], [], false);
+  const known = knownSignalList([], bms);
+  const dx = dxDialSignals(entries, NOW, known, [94_600_000]);
+  const by = (khz: number) => dx.find((s) => s.hz === khz * 1000);
+  ok(by(98800)?.label === 'RNE 1 · DX · 2 h ago', `the look: name · DX · when ("${by(98800)?.label}")`);
+  ok(dx.filter((s) => s.hz === 98_800_000).length === 1, 'one label a channel: the most recently heard of two PIs');
+  ok(by(69800)?.label === '69.80 · DX · 3 days ago', `★ OIRT without RDS: two decimals ("${by(69800)?.label}")`);
+  ok(by(86650)?.label === '86.65 · DX · 40 min ago' && by(99300)?.label === 'PI C363 · DX · just now',
+     'the extended range to two decimals off the 100 kHz raster; no PS → the PI; "just now"');
+  ok(!by(101100) && !by(101300) && !by(101500), '★ only class dx — never a Suspect, a Provisional or a Local');
+  ok(!!by(102100) && !by(102300), '★ the WEEK: shown up to 7 days after last heard, gone a second later');
+  ok(!by(95800) && known.some((s) => s.hz === 95_800_000 && s.src === 'personal'), '★ a bookmark on the same channel WINS (no DX label)');
+  ok(!by(94600), '★ …and so does a bookmark that draws no label (a local in the discovered bookmarks)');
+  ok(dx.every((s) => s.src === 'dx' && isDxLabel(s) && s.prio === PRIO_DX && s.prio < PRIO_LEARNT && s.prio < PRIO_EIBI + 0.5),
+     'every one is flagged DX (italic, its own colour) and ranks below every bookmark');
+  ok(DX_LABEL_COLOUR.toLowerCase() !== KNOWN_LABEL_COLOUR.toLowerCase() && DX_LABEL_COLOUR.toLowerCase() !== '#ff2020'
+     && !Object.values(DAB_GRADE_COLOUR).includes(DX_LABEL_COLOUR), 'its colour is not the labels\' lilac, the VFO\'s red or a DAB grade');
+  const dab = dx.find((s) => s.mode === 'dab');
+  ok(!!dab && dab.hz === 227_360_000 && dab.label === '12C Far Away · DX · 1 day ago' && dab.dx?.block === '12C' && dab.dx?.ensemble === 'Far Away',
+     `DAB: on its block's centre ("${dab?.label}")`);
+  ok(dxDialSignals([E({ band: 'DAB', block: '12C', eid: 'E0F1', ensemble: '', freqKhz: 0 })], NOW)[0]?.hz === 227_360_000,
+     'a DAB catch without freqKhz finds its block in Band III\'s table, named by its EId');
+  ok(dxDialAgo(NOW - 59 * 60, NOW) === '59 min ago' && dxDialAgo(NOW - 23 * H - 59 * 60, NOW) === '23 h ago'
+     && dxDialAgo(NOW - D, NOW) === '1 day ago' && dxDialAgo(NOW - 6 * D, NOW) === '6 days ago', 'ages: min, h, 1 day, days');
+  ok(dxDialSignals(null, NOW).length === 0 && dxDialSignals([E({ freqKhz: 145500 })], NOW).length === 0
+     && dxDialSignals([E({ freqKhz: 98800, lastHeard: NOW + 2 * H })], NOW).length === 0,
+     'nothing from nothing; nothing outside the FM ranges; nothing heard in the future (a clock wrong by hours)');
+  const many = Array.from({ length: 150 }, (_, k) => E({ freqKhz: 88000 + k * 100, ps: `S${k}`, lastHeard: NOW - k }));
+  ok(dxDialSignals(many, NOW).length === DX_DIAL_MAX && !dxDialSignals(many, NOW).some((s) => s.dx!.name === 'S149'),
+     `bounded at ${DX_DIAL_MAX}, the most recently heard kept`);
+  ok(Math.abs(dxServerNow(NOW, 1_000_000, 1_060_000) - (NOW + 60)) < 1e-6, 'the age runs on the server\'s clock');
+  // placement: the same layout as every label — centred on its carrier, a line to it, stacked; below a bookmark
+  const all = knownSignalList([], bms, dx);
+  const m = (t: string) => estimateLabelWidth(t, 9);
+  const pl = labelLayout(all, 98_000_000, 2_000_000, 400, m, 98_800_000);
+  const pDx = pl.find((p) => p.sig.hz === 98_800_000);
+  ok(!!pDx && Math.abs(pDx.lx + pDx.w / 2 - pDx.x) < 0.5 && pDx.sig.src === 'dx', 'a DX label is centred on its carrier');
+  const crowd = knownSignalList([], bookmarkSignals([{ name: 'Flex FM', frequency: 98_700_000, mode: 'wfm' }], [], false),
+                                dxDialSignals([E({ freqKhz: 98800, ps: 'RNE 1' }), E({ freqKhz: 98900, ps: 'RAI 1' })], NOW));
+  const pc = labelLayout(crowd, 98_000_000, 2_000_000, 400, m, 98_000_000);
+  const pBm = pc.find((p) => p.sig.src === 'personal');
+  ok(pc[0].sig.src === 'personal' && pBm!.row === 0 && pc.filter((p) => p.sig.src === 'dx').every((p) => p.row > 0),
+     'crowded: the bookmark is placed first, the DX catches stack above it');
+  const tight = labelLayout(crowd, 98_000_000, 2_000_000, 200, m, 98_000_000, [], 3, 1);
+  ok(tight.length === 1 && tight[0].sig.src === 'personal' && !tight[0].lines,
+     'one row, no room: the bookmark keeps its whole name, the DX catches give way');
+  const tap = knownTapPlan(by(98800)!, {});
+  ok(tap.hz === 98_800_000 && tap.mode === 'wfm' && tap.dec === '', 'tap: tunes the channel in WFM');
+  ok(knownTapPlan(dab!, {}).mode === 'dab', 'tap on a DAB catch: the block (the clients\' DAB road)');
+  ok(/^DX catch 69\.80 MHz, 69\.80, last heard 3 days ago$/.test(dxDialHint(by(69800)!, NOW)), `the hint: "${dxDialHint(by(69800)!, NOW)}"`);
+  // DAB: a wide view folds the catch into its block
+  const names = new Map([['12B', 'Digital One']]);
+  const blocks = dabBlockSignals(names, 32, null, dx);   // 12B (index 32) being received
+  const b12c = blocks.find((b) => b.block === '12C')!;
+  ok(b12c.mux === 'DX · Far Away' && isDxLabel(b12c), `★ a wide DAB view: an unnamed block a DX catch names reads "${b12c.mux}", flagged DX`);
+  const named = dabBlockSignals(new Map([['12C', 'Known Mux']]), -1, null, dx).find((b) => b.block === '12C')!;
+  ok(named.mux === 'Known Mux' && !isDxLabel(named), '★ a name the receiver knows wins over the DX catch');
+  ok(!dabBlockSignals(names, 33, null, dx).find((b) => b.block === '12C')!.dx, 'the block being received keeps its live name, no DX');
+  const wl = withDabBlocks(all, blocks, 56e6)!;
+  ok(!wl.some((s) => s.src === 'dx' && s.mode === 'dab') && wl.some((s) => s.src === 'dx' && s.mode === 'wfm'),
+     'withDabBlocks: on a wide DAB view the separate DAB DX label is left out (its block names it)');
+  ok(dabBlockHint(33, names, 32, null, NOW, dx) === 'go to 12C — DX catch Far Away, last heard 1 day ago', 'the hover hint names the catch');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

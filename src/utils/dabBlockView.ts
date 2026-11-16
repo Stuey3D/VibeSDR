@@ -29,7 +29,7 @@
  *    where it fits), and the VFO-coloured pair — the tuned block's name, then LISTEN — on two rows of their own above.
  */
 import { DAB_BLOCKS } from '../services/dabBlocks.ts';
-import { signalsInView, LABEL_GAP, LABEL_MAX, type KnownSignal, type PlacedLabel, type BlockedBox } from './knownSignals.ts';
+import { signalsInView, dxDialAgo, LABEL_GAP, LABEL_MAX, type KnownSignal, type PlacedLabel, type BlockedBox } from './knownSignals.ts';
 
 /** Half a DAB ensemble's occupied bandwidth (1.536 MHz / 2). */
 export const DAB_BLOCK_HALF_HZ = 768_000;
@@ -182,17 +182,27 @@ export interface DabBlockSignal extends KnownSignal {
 }
 
 /** Every Band III block as a label (sorted by frequency — labelLayout takes the ones in view). `current` = index into
- *  DAB_BLOCKS of the block being received, −1 = none. */
+ *  DAB_BLOCKS of the block being received, −1 = none.
+ *  ★★ V12 DX CATCHES (knownSignals.ts dxDialSignals — Stuart, 2026-11-16): on a wide DAB view a block the receiver has NO
+ *  name for (live, memory, scan, bookmark) but the DX Log caught an ensemble on this week takes that as its name, marked:
+ *  "DX · Far Away" under the block, drawn italic in DX_LABEL_COLOUR (`dx` set). A name the receiver knows always wins —
+ *  the DX catch never replaces it. Not on the block being received (its live name is what plays). */
 export function dabBlockSignals(names: ReadonlyMap<string, string>, current: number,
-                                grades?: ReadonlyMap<string, DabBlockGrade> | null): DabBlockSignal[] {
+                                grades?: ReadonlyMap<string, DabBlockGrade> | null,
+                                dx?: readonly KnownSignal[] | null): DabBlockSignal[] {
+  const dxBy = new Map<string, KnownSignal>();
+  for (const s of dx ?? []) if (s.dx?.block && !dxBy.has(s.dx.block)) dxBy.set(s.dx.block, s);
   return DAB_BLOCKS.map((b, i) => {
-    const mux = names.get(b.name);
+    let mux = names.get(b.name);
+    const dxs = !mux && i !== current ? dxBy.get(b.name) : undefined;
+    if (dxs) mux = `DX · ${dxs.dx!.ensemble || dxs.dx!.name}`;
     const grade = grades?.get(b.name);
     return {
       ...(grade ? { grade } : {}),
+      ...(dxs ? { dx: dxs.dx } : {}),
       hz: b.hz, lo: b.hz - DAB_BLOCK_HALF_HZ, hi: b.hz + DAB_BLOCK_HALF_HZ,
       label: dabBlockLabel(b.name, mux), dec: '', dialHz: b.hz, mode: 'dab',
-      prio: i === current ? PRIO_DAB_CURRENT : mux ? PRIO_DAB_NAMED : PRIO_DAB_BLOCK,
+      prio: i === current ? PRIO_DAB_CURRENT : mux && !dxs ? PRIO_DAB_NAMED : PRIO_DAB_BLOCK,
       src: 'dab', dabIdx: i, dabCurrent: i === current, bare: dabBlockLabel(b.name),
       block: b.name, mux: dabMuxShort(mux),
     } as DabBlockSignal;
@@ -216,8 +226,11 @@ export function dabBlocksInView(lo: number, hi: number): number[] {
 export function withDabBlocks(known: readonly KnownSignal[] | null | undefined, blocks: readonly DabBlockSignal[] | null | undefined,
                               spanHz: number): readonly KnownSignal[] | null {
   if (!blocks || !blocks.length || !dabWideView(spanHz)) return known && known.length ? known : null;
-  if (!known || !known.length) return blocks;
-  return [...known, ...blocks].sort((a, b) => a.hz - b.hz);
+  // ★★ V12 a DAB DX catch's own label sits on its block's centre — on a wide view the BLOCK names it (dabBlockSignals's
+  //    `dx`), so the separate label is left out rather than drawn over its block
+  const rest = (known ?? []).filter((s) => !(s.src === 'dx' && s.mode === 'dab'));
+  if (!rest.length) return blocks;
+  return [...rest, ...blocks].sort((a, b) => a.hz - b.hz);
 }
 
 /** ★★ THE CLICK: the block a click at `hz` lands in (index into DAB_BLOCKS), or −1 — outside every block, or a view too
@@ -234,13 +247,17 @@ export function dabBlockHit(hz: number, spanHz: number): number {
 
 /** The hover hint on the web: "go to 8A — 8A regio Alphen", "go to 5A", "on 7D — MTVNL" for the block already playing. */
 export function dabBlockHint(idx: number, names: ReadonlyMap<string, string>, current: number,
-                             grades?: ReadonlyMap<string, DabBlockGrade> | null, nowS = Date.now() / 1000): string {
+                             grades?: ReadonlyMap<string, DabBlockGrade> | null, nowS = Date.now() / 1000,
+                             dx?: readonly KnownSignal[] | null): string {
   const b = DAB_BLOCKS[idx];
   if (!b) return '';
   const n = clean(names.get(b.name));
   const g = grades?.get(b.name);
+  // ★★ V12 a block named only by a DX catch: "go to 12C — DX catch Far Away, last heard 2 h ago"
+  const d = !n && idx !== current ? (dx ?? []).find((s) => s.dx?.block === b.name)?.dx : undefined;
+  const dn = d ? ` — DX catch ${d.ensemble || d.name}, last heard ${dxDialAgo(d.heard, nowS)}` : '';
   // ★ the grade after it: "go to 6D · not decoding, MER 7 dB, measured 16:47"
-  return `${idx === current ? 'on' : 'go to'} ${b.name}${n ? ' — ' + n : ''}${g ? ' · ' + dabGradeText(g, nowS) : ''}`;
+  return `${idx === current ? 'on' : 'go to'} ${b.name}${n ? ' — ' + n : dn}${g ? ' · ' + dabGradeText(g, nowS) : ''}`;
 }
 
 // ── The wide view's own layout ────────────────────────────────────────────────────────────────────────────────────────
