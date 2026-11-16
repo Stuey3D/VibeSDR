@@ -4,7 +4,7 @@
  *  known_labels_inputs.json, which both sides read — one copy of the data.
  *  Run: node --no-warnings --import ./ts_resolve.mjs gen_known_labels_golden.ts <out.txt> */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { eibiKnownSignals, bookmarkSignals, knownSignalList, labelLayout, labelStems, KNOWN_SIGNALS, type KnownSignal, type BlockedBox }
+import { eibiKnownSignals, bookmarkSignals, knownSignalList, labelLayout, labelStems, dxDialSignals, KNOWN_SIGNALS, type KnownSignal, type BlockedBox }
   from '../../src/utils/knownSignals.ts';
 
 const inp = JSON.parse(readFileSync(new URL('./known_labels_inputs.json', import.meta.url), 'utf8'));
@@ -34,5 +34,16 @@ for (const v of inp.views) {
   for (const q of p) out.push(`P ${q.row} ${q.x.toFixed(3)} ${q.lx.toFixed(3)} ${q.w} ${q.sig.hz} |${q.sig.label}|${q.lines ? q.lines[0] : ''}`);
   // ★★ the marker lines above them (labelStems): rows 14 apart from y 100 up, boxes 13 tall, 8 past the stack
   for (const st of labelStems(p, (r) => 100 - 14 * r, 13, 8)) out.push(`S ${st.x} ${st.y0.toFixed(3)} ${st.y1.toFixed(3)}`);
+}
+// ★★ V12 the DX catches on the dial (dxDialSignals): the labels, then laid out with everything else
+const dx = dxDialSignals(inp.dx.entries, inp.dx.now, list, inp.dx.bmHz);
+out.push(`X ${dx.length}`);
+for (const s of dx) out.push(`${sig('X', s)} ${s.dx!.heard}`);
+const listDx = knownSignalList(eibiKnownSignals(eibiRows, inp.layoutNowMin), bm, dx);
+out.push(`AX ${listDx.length}`);
+for (const v of inp.dx.views) {
+  const p = labelLayout(listDx, v.lo, v.span, v.width, measure, v.dial, [], 3);
+  out.push(`VX ${v.name} ${p.length}`);
+  for (const q of p) out.push(`P ${q.row} ${q.x.toFixed(3)} ${q.lx.toFixed(3)} ${q.w} ${q.sig.hz} |${q.sig.label}|${q.lines ? q.lines[0] : ''}`);
 }
 writeFileSync(process.argv[2], out.join('\n') + '\n');

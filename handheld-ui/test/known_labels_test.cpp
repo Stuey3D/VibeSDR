@@ -78,6 +78,44 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ★★ V12 the DX catches on the dial (dxDialSignals), then laid out with everything else
+    {
+        const Json& d = in["dx"];
+        std::vector<DxDialIn> es;
+        for (auto& o : d["entries"].a) {
+            DxDialIn e;
+            e.band = o["band"].str(); e.cls = o["class"].str(); e.range = o["range"].str(); e.pi = o["pi"].str(); e.ps = o["ps"].str();
+            e.block = o["block"].str(); e.eid = o["eid"].str(); e.ensemble = o["ensemble"].str();
+            e.freqKhz = o["freqKhz"].num(0); e.lastHeard = o["lastHeard"].num(0); e.rds = o["rds"].boolean(true);
+            es.push_back(e);
+        }
+        std::vector<double> bmHz;
+        for (auto& h : d["bmHz"].a) bmHz.push_back(h.num());
+        const auto dx = dxDialSignals(es, d["now"].num(), list, bmHz);
+        got.push_back("X " + std::to_string(dx.size()));
+        for (auto& s : dx) got.push_back(sigLine("X", s) + " " + jsNum(s.heard));
+        const auto listDx = knownSignalList(eibiKnownSignals(rows, (int)in["layoutNowMin"].num()), bm, dx);
+        got.push_back("AX " + std::to_string(listDx.size()));
+        for (auto& v : d["views"].a) {
+            const auto p = labelLayout(listDx, v["lo"].num(), v["span"].num(), v["width"].num(), measure, v["dial"].num(), {}, 3);
+            got.push_back("VX " + v["name"].str() + " " + std::to_string(p.size()));
+            for (auto& q : p) {
+                char b[96];
+                std::snprintf(b, sizeof b, "P %d %.3f %.3f %s %s |", q.row, q.x, q.lx, jsNum(q.w).c_str(), jsNum(q.sig->hz).c_str());
+                got.push_back(b + q.sig->label + "|" + q.text);
+            }
+        }
+        // the parser reads the engine's own answer (the ?dial=1 page) the same way
+        double pn = 0;
+        const auto parsed = dxDialParse("{\"ok\":true,\"dial\":true,\"now\":1800000000,\"entries\":[{\"id\":3,\"band\":\"FM\",\"class\":\"dx\",\"freqKhz\":69800,"
+                                        "\"range\":\"oirt\",\"pi\":\"0000\",\"rds\":false,\"ps\":\"\",\"lastHeard\":1799992800}]}", &pn);
+        const auto one = dxDialSignals(parsed, pn, {}, {});
+        if (!(pn == 1800000000 && one.size() == 1 && one[0].label == "69.80 \xc2\xb7 DX \xc2\xb7 2 h ago" && one[0].dx)) {
+            std::printf("  FAIL dxDialParse: %zu, %s\n", one.size(), one.empty() ? "" : one[0].label.c_str());
+            got.push_back("<parse failed>");
+        }
+    }
+
     // ── against the app ──
     std::vector<std::string> want;
     { std::istringstream ss(readAll(argv[2])); std::string l; while (std::getline(ss, l)) want.push_back(l); }
