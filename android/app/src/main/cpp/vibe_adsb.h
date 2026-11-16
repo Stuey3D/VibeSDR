@@ -36,6 +36,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "vibe_adsb_commb.h"
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
 #include "vibedsp/neon_compat.h"   // ★ GCC/ARMv7: vcgeq_f32 as ONE instruction, not four scalar compares (2026-10-31)
@@ -642,6 +643,8 @@ struct Aircraft {
     bool     haveE = false, haveO = false, cprSurface = false;
     double   tE = 0, tO = 0; uint32_t latE = 0, lonE = 0, latO = 0, lonO = 0;
     double   pendLat = 0, pendLon = 0;   ///< a single-frame fix near the receiver, awaiting a second to agree
+    /// ★ V12 Comm-B (vibe_adsb_commb.h): made only when the aircraft answers a radar with DF20/21 — ~4 KB then
+    std::unique_ptr<commb::State> cb;
 };
 
 class Tracker {
@@ -682,16 +685,34 @@ public:
             ++rejected_; return false;
         }
         // address/parity replies: the syndrome IS the address
-        if (!known(s, now)) { ++rejected_; return false; }
+        int dp = -1;
+        if (!known(s, now)) {
+            // ★ V12 Comm-B data parity: the radar asked the aircraft to overlay its parity with the address XOR the
+            //   requested register's number in the top 8 bits — exactly one register giving a known aircraft says which
+            if (df == 20 || df == 21) {
+                for (int r = 0; r < commb::kRegs; ++r) {
+                    const uint32_t c = s ^ (uint32_t(commb::regCode(r)) << 16);
+                    if (!known(c, now)) continue;
+                    if (dp >= 0) { dp = -2; break; }
+                    dp = r;
+                }
+            }
+            if (dp < 0) { ++rejected_; return false; }
+            s ^= uint32_t(commb::regCode(dp)) << 16;
+        }
         Aircraft& a = touch(s, f, now);
         if (df == 0 || df == 4 || df == 16 || df == 20) {
             int ft; if (altitude13(bits(m, 20, 32), ft)) { a.hasAlt = true; a.altBaro = ft; }
             a.onGround = (df == 4 || df == 20) && (m[0] & 7) == 1 ? true : a.onGround;
         }
         if (df == 5 || df == 21) a.squawk = squawk13(bits(m, 20, 32));
+        if (df == 20 || df == 21) commB(a, m, now, dp >= 0 ? commb::regCode(dp) : -1);
         ++good_;
         return true;
     }
+
+    /** Comm-B counters: MB fields read, registers identified, confirmed, ambiguous. */
+    const commb::Stats& commbStats() const { return cbStats_; }
 
     /** Forget aircraft not heard for `age` seconds. */
     void expire(double now, double age = 60.0) {
@@ -749,15 +770,20 @@ public:
     std::string json(double now) const {
         std::string o;
         o.reserve(96 + ac_.size() * 220);
-        char t[64];
-        std::snprintf(t, sizeof t, "{\"now\":%.1f,\"messages\":%llu,\"aircraft\":[", now, (unsigned long long)good_);
+        char t[128];
+        std::snprintf(t, sizeof t, "{\"now\":%.1f,\"messages\":%llu,", now, (unsigned long long)good_);
         o += t;
+        // ★ V12 Comm-B: how many radar replies were read, and how many said which register they were
+        std::snprintf(t, sizeof t, "\"commb\":{\"fields\":%llu,\"confirmed\":%llu,\"ambiguous\":%llu},",
+                      (unsigned long long)cbStats_.fields, (unsigned long long)cbStats_.confirmed, (unsigned long long)cbStats_.ambiguous);
+        o += t;
+        o += "\"aircraft\":[";
         bool first = true;
         for (const auto& kv : ac_) {
             const Aircraft& a = kv.second;
             if (!first) o += ',';
             first = false;
-            char b[512];
+            char b[1024];
             int n = std::snprintf(b, sizeof b, "{\"hex\":\"%s%06x\"", a.nonIcao ? "~" : "", a.icao);
 #define VIBE_ADSB_ADD(...) (n += std::snprintf(b + n, sizeof b - size_t(n), __VA_ARGS__))
             if (!a.callsign.empty()) VIBE_ADSB_ADD(",\"flight\":\"%s\"", a.callsign.c_str());
@@ -774,6 +800,7 @@ public:
             if (a.squawk >= 0) VIBE_ADSB_ADD(",\"squawk\":\"%04d\"", a.squawk);
             if (a.emergency) VIBE_ADSB_ADD(",\"emergency\":%d", a.emergency);
             if (a.trackedNm >= 0.5) VIBE_ADSB_ADD(",\"tracked_nm\":%.0f", a.trackedNm);
+            if (a.cb) { const std::string cb = commb::json(*a.cb, now); if (!cb.empty() && n + cb.size() < sizeof b - 96) { std::memcpy(b + n, cb.data(), cb.size()); n += int(cb.size()); b[n] = 0; } }
             VIBE_ADSB_ADD(",\"seen\":%.1f,\"messages\":%u,\"rssi\":%.1f}", now - a.seen, a.messages, a.level);
             o.append(b, size_t(std::min(n, int(sizeof b) - 1)));
 #undef VIBE_ADSB_ADD
@@ -802,6 +829,27 @@ private:
         ++a.messages;
         a.level += (f.level - a.level) * 0.25f;
         return a;
+    }
+
+    /** ★ V12: one Comm-B reply's MB field (vibe_adsb_commb.h) — inferred, cross-checked against this aircraft's own
+     *  ADS-B, and kept only once confirmed. A confirmed 2,0 names an aircraft that sends no identification of its own. */
+    void commB(Aircraft& a, const uint8_t* m, double now, int dpCode) {
+        const uint64_t v = commb::mbOf(m);
+        if (!v) return;
+        ++cbStats_.fields;
+        if (dpCode >= 0) ++cbStats_.dataParity;
+        commb::Ref r;
+        r.hasGs = a.hasGs; r.gs = a.gs; r.hasTrack = a.hasTrack && !a.onGround; r.track = a.track;
+        r.hasAlt = a.hasAlt && !a.onGround; r.altFt = a.altBaro; r.hasVr = a.hasVr; r.vr = a.vr;
+        const commb::Inference in = commb::infer(v, r, dpCode);
+        if (in.ambiguous) { ++cbStats_.ambiguous; return; }
+        if (in.reg < 0) { ++cbStats_.unknown; return; }
+        ++cbStats_.identified[in.reg];
+        if (!a.cb) a.cb = std::make_unique<commb::State>();
+        if (commb::apply(*a.cb, in, now)) {
+            ++cbStats_.confirmed;
+            if (in.reg == commb::R20 && a.callsign.empty()) a.callsign = in.b20;
+        }
     }
 
     void extended(Aircraft& a, const uint8_t* me, double now) {
@@ -952,6 +1000,7 @@ private:
     bool haveRx_ = false; double rxLat_ = 0, rxLon_ = 0;
     double maxRangeNm_ = 400;
     uint64_t good_ = 0, rejected_ = 0, repaired_ = 0;
+    commb::Stats cbStats_;
 };
 
 } // namespace vibeadsb

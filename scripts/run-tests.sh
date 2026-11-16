@@ -162,6 +162,9 @@ flags_for() {
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
+    # ★ V12 Mode S Comm-B (vibe_adsb_commb.h): the Riddle's BDS examples, then inference through the Tracker — ADS-B
+    #   cross-checks, second-reply confirmation, data parity, the 1,7 veto, ACAS RA, 2,0 naming, random-field false rate.
+    test-adsb-commb)       echo "-O2" ;;
     # ★ V12 TDF / ALS162 (decoders/tdf_phase.h): synthetic phase code through the TIME decoder — noise, drift, timing, CPU.
     #   `test-tdf --wav <file> [start_utc]` replays an UberSDR recording (docs/v12/TIME-TDF.md).
     test-tdf)              echo "-O2" ;;
