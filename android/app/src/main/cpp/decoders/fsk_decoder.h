@@ -50,6 +50,9 @@ public:
     int nbits() const { return nbits_; }
     uint16_t msb() const { return (uint16_t)(1 << (nbits_ - 1)); }
     bool checkBits(uint16_t code) const;
+    /** ★ V12 balloons: a frame's data bits as a number (the character's code before any table) — 8-bit RTTY carries SSDV
+     *  pictures as raw bytes, which processChar's printable-ASCII filter would drop. Not for the 5N1.5 doubled framing. */
+    uint8_t dataOf(uint16_t code) const { return (uint8_t)((code >> 1) & ((1 << (unsigned)dataBits) - 1)); }
     // Returns decoded char (0 = none).
     char32_t processChar(uint16_t code);
 private:
@@ -201,6 +204,9 @@ public:
 
     std::function<void(char32_t)> onChar;   // decoded character
     std::function<void(int)>      onState;  // State change (0..3)
+    /** ★ V12 balloons: every frame that passed its start/stop check, as its raw data bits (ASCII framings only) — the
+     *  SSDV packet framer reads these. Empty = nothing (every existing decoder). */
+    std::function<void(uint8_t)>  onData;
 
     // ── ★★★ HEALTH, for the admin page ─────────────────────────────────────────────────────
     // ★★ `resyncs` is the diagnostic that matters. Whenever the envelope falls below
@@ -244,6 +250,7 @@ private:
     std::string framing, encoding;
 
     double lowpassFilterF = 140.0, markSpaceFilterQ = 0, markF = 0, spaceF = 0;
+    double bpBw_ = 0;   ///< ★ V12: the tone filters' width above 110 baud (0 = the 45–100 baud filters)
     double audioAverageTC = 0, audioMinimum = 256.0;
     int bitSampleCount = 0, halfBitSampleCount = 0;
 
