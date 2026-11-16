@@ -169,6 +169,12 @@ export function isDabWideList(list: readonly KnownSignal[] | null | undefined): 
   return !!list && list.some(isDabBlockSignal);
 }
 
+/** ★★ A block label's box: CENTRED on the block's centre `x` (so it sits over its own block, not over it and the next one
+ *  to the right), moved only as far as it must to stay on screen (0..width). */
+export function dabBlockBoxX(x: number, w: number, width: number): number {
+  return Math.max(0, Math.min(Math.max(0, width - w), x - w / 2));
+}
+
 /** The wide view's layout: the boxes, how many block rows it used, the tuned block's row (= rows) and LISTEN's (rows + 1). */
 export interface DabLabelPlan { placed: PlacedLabel[]; rows: number; tunedRow: number; liveRow: number }
 
@@ -213,13 +219,16 @@ function layoutRows(list: readonly KnownSignal[], lo: number, span: number, widt
   for (const b of blocked) if (b.row >= 0 && b.row < rows) taken[b.row].push([b.x0, b.x1]);
   const free = (r: number, x0: number, x1: number) => taken[r].every(([a, b]) => x1 + gap <= a || x0 >= b + gap);
   const boxAt = (x: number, w: number) => (x + pad + w > width ? Math.max(0, x - pad - w) : x + pad);
+  // ★★ a BLOCK's box is centred on its own block (Stuart, 2026-11-16: the labels "straddle 2 blocks, the actual block and
+  //    the one to the right of it") — dabBlockBoxX; every other label keeps the marker-and-box-to-the-right look
+  const blockAt = (x: number, w: number) => dabBlockBoxX(x, w, width);
   const xOf = (hz: number) => (hz - lo) / span * width;
   const blocks = vis.filter(isDabBlockSignal);
   const current = blocks.find((b) => b.dabCurrent) ?? null;
 
   // 1. the tuned block, on its own row
   if (current) {
-    const x = xOf(current.hz), w = measure(current.label), lx = boxAt(x, w);
+    const x = xOf(current.hz), w = measure(current.label), lx = blockAt(x, w);
     taken[rows].push([lx, lx + w]);
     placed.push({ sig: current, x, lx, w, row: rows });
   }
@@ -227,7 +236,7 @@ function layoutRows(list: readonly KnownSignal[], lo: number, span: number, widt
   const slot = new Map<DabBlockSignal, PlacedLabel>();
   for (const b of blocks) {
     if (b === current) continue;
-    const bare = b.bare || b.label, x = xOf(b.hz), w = measure(bare), lx = boxAt(x, w);
+    const bare = b.bare || b.label, x = xOf(b.hz), w = measure(bare), lx = blockAt(x, w);
     for (let r = 0; r < rows; r++) {
       if (!free(r, lx, lx + w)) continue;
       taken[r].push([lx, lx + w]);
@@ -244,7 +253,7 @@ function layoutRows(list: readonly KnownSignal[], lo: number, span: number, widt
     const p = slot.get(b)!;
     const own = taken[p.row], k = own.findIndex(([a, c]) => a === p.lx && c === p.lx + p.w);
     if (k >= 0) own.splice(k, 1);
-    const w = measure(b.label), lx = boxAt(p.x, w);
+    const w = measure(b.label), lx = blockAt(p.x, w);
     let row = free(p.row, lx, lx + w) ? p.row : -1;
     for (let r = 0; row < 0 && r < rows; r++) if (free(r, lx, lx + w)) row = r;
     if (row < 0) { own.push([p.lx, p.lx + p.w]); complete = false; continue; }

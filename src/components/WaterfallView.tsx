@@ -3441,7 +3441,9 @@ function WaterfallView({
                     accessibilityHint={tapLabel ? (dab ? 'Goes to this multiplex' : s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
                     onAccessibilityTap={tapLabel}
                     ref={tapLabel ? screenNavRef('known' + i, tapLabel) : undefined}
-                    style={[styles.knownBox, { left: p.lx, top }]}>
+                    style={[styles.knownBox, { left: p.lx, top }, dab && { width: p.w, alignItems: 'center' }]}>
+                {/* ★★ a DAB block's box is laid out CENTRED on its own block (dabBlockBoxX) at the estimated width — so it is drawn
+                    at that width with the text centred, or an estimate wider than the text would shift it right again */}
                 <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
               </View>
             </React.Fragment>

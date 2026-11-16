@@ -132,6 +132,17 @@ eq('a long name is shortened', dabBlockLabel('12B', 'An extremely long ensemble 
         for (let k = 1; k < row.length; k++) if (row[k].lx < row[k - 1].lx + row[k - 1].w) overlap = `${row[k - 1].sig.label} / ${row[k].sig.label}`;
       }
       eq(`${tag}: no two labels overlap`, overlap, '');
+      // ★★ each block's box sits over ITS OWN block (Stuart 2026-11-16: centred, not straddling it and the next one)
+      const pxOf = (h: number) => (h - lsts) / span * W;
+      const ov = (a0: number, a1: number, b0: number, b1: number) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+      const straddle = placed.filter((p) => isDabBlockSignal(p.sig)).filter((p) => {
+        const own = DAB_BLOCKS[(p.sig as DabBlockSignal).dabIdx];
+        const mine = ov(p.lx, p.lx + p.w, pxOf(own.hz - DAB_BLOCK_HALF_HZ), pxOf(own.hz + DAB_BLOCK_HALF_HZ));
+        return DAB_BLOCKS.some((o) => o !== own && ov(p.lx, p.lx + p.w, pxOf(o.hz - DAB_BLOCK_HALF_HZ), pxOf(o.hz + DAB_BLOCK_HALF_HZ)) > mine + 0.5);
+      }).map((p) => p.sig.label);
+      eq(`${tag}: every block's label covers its own block more than any other`, straddle, []);
+      const offCentre = placed.filter((p) => isDabBlockSignal(p.sig) && p.lx > 0 && p.lx + p.w < W && Math.abs(p.lx + p.w / 2 - p.x) > 0.5).map((p) => p.sig.label);
+      eq(`${tag}: a block label away from the edges is centred on its block`, offCentre, []);
       const e8a = placed.find((p) => p.sig.label.startsWith('DAB 8A'));
       eq(`${tag}: 8A (beside the tuned block) is labelled on a block row`, !!e8a && e8a.row < TOP, true);
       const namedInView = inView.filter((i) => names.has(DAB_BLOCKS[i].name) && i !== cur);
