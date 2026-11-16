@@ -12,7 +12,7 @@ import { DAB_BLOCKS, dabBlockIndex } from '../src/services/dabBlocks.ts';
 import { DAB_BLOCK_HALF_HZ, DAB_WIDE_MIN_SPAN_HZ, PRIO_DAB_CURRENT, PRIO_DAB_NAMED, PRIO_DAB_BLOCK, dabWideView, dabMuxNames,
          dabBlockLabel, dabBlockSignals, isDabBlockSignal, dabBlocksInView, withDabBlocks, dabBlockHit, dabBlockHint }
   from '../src/utils/dabBlockView.ts';
-import { labelLayout, knownLabelHit, KNOWN_SIGNALS, estimateLabelWidth, LABEL_MAX, LABEL_ROWS, type KnownSignal, type PlacedLabel } from '../src/utils/knownSignals.ts';
+import { labelLayout, knownLabelHit, KNOWN_SIGNALS, estimateLabelWidth, LABEL_MAX, LABEL_ROWS_MAX, type KnownSignal, type PlacedLabel } from '../src/utils/knownSignals.ts';
 import { dabLabelLayout, dabFitName, parseDabBlockQ, dabFreshGrades, dabGradeLine, DAB_GRADE_COLOUR, isDabWideList, DAB_BLOCK_ROWS, DAB_BLOCK_ROWS_MIN, DAB_LABEL_MAX, type DabBlockSignal, dabBlockSignals as dabBlockSignals2, withDabBlocks as withDabBlocks2 } from '../src/utils/dabBlockView.ts';
 
 let fails = 0, passes = 0;
@@ -211,7 +211,7 @@ eq('a long name is shortened', dabBlockLabel('12B', 'An extremely long ensemble 
   {
     const lo = 7_000_000, sp = 12_000_000;
     const p = labelLayout(KNOWN_SIGNALS, lo, sp, 2400, (t) => t.length * 6 + 6, 10_000_000, [], 4);
-    eq('HF view: still at most LABEL_MAX labels on LABEL_ROWS rows', p.length <= LABEL_MAX && p.every((x) => x.row < LABEL_ROWS), true);
+    eq('HF view: still at most LABEL_MAX labels on LABEL_ROWS_MAX rows', p.length <= LABEL_MAX && p.every((x) => x.row < LABEL_ROWS_MAX), true);
   }
 }
 

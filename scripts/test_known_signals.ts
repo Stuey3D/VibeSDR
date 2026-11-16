@@ -7,7 +7,8 @@
  *   • EiBi rows are classed by EiBi's codes / the name, filtered to on-air, named shortly, de-duplicated against ours;
  *     broadcasts never label;
  *   • the visible set is exactly the view; the layout keeps priority, then nearness to the dial; overlaps drop to row 2,
- *     then out; a blocked box (LISTEN) is never overdrawn; the cap holds; a label near the right edge flips left;
+ *     then out; a blocked box (LISTEN) is never overdrawn; the cap holds; every label CENTRED on its carrier (Stuart,
+ *     2026-11-16), shifted inward at both edges; a crowded cluster (the 0.9 MHz BBC stations) stacks without overlaps;
  *   • TAPPED (Stuart, 2026-10-30: "can they be tapped to tune and chose the decoder?"): every curated entry's dial, mode
  *     and decoder preset are valid; the plan opens only a decoder the receiver runs; a tap hits a box over ≥ 30 pt, the
  *     nearer box where two rows' areas overlap; a drag or a hold is never a tap.
@@ -16,7 +17,7 @@
 import { readFileSync } from 'node:fs';
 import { KNOWN_SIGNALS, DIGI_DIALS, eibiKnownSignals, eibiPlace, eibiOnAir, knownSignalList, signalsInView, labelLayout,
          estimateLabelWidth, bookmarkSignals, bookmarkLabel, isLearntFm, LABEL_MAX, PRIO_SAFETY, PRIO_PERSONAL, PRIO_SERVER,
-         PRIO_LEARNT, PRIO_EIBI, PRIO_TABLE, knownTapPlan, knownLabelHit, isLabelTap, LABEL_HIT_MIN_H, type KnownSignal,
+         PRIO_LEARNT, PRIO_EIBI, PRIO_TABLE, labelStems, LABEL_ROWS_MAX, knownTapPlan, knownLabelHit, isLabelTap, LABEL_HIT_MIN_H, type KnownSignal,
          type PlacedLabel } from '../src/utils/knownSignals.ts';
 import { RTTY_WEATHER, RTTY_SHIFTS, RTTY_BAUD_ROWS } from '../src/utils/rttySpec.ts';
 import { dscTuneFor, DSC_ALL } from '../src/utils/dscChannels.ts';
@@ -128,13 +129,13 @@ ok(signalsInView(list, 4500000, 4500000).length === 0, 'an empty view holds noth
 const W = 1000, measure = (l: string) => estimateLabelWidth(l, 9);
 // 4.205–4.215 MHz: DSC distress 4207.5, three routine, NAVTEX 4209.5 — all within 2 kHz of each other
 const L = labelLayout(list, 4205000, 10000, W, measure, 4206000);
-ok(L.length > 0 && L.length <= 2 * 3, `a crowded 10 kHz: ${L.length} labels on two rows, the rest dropped`);
+ok(L.length > 0 && L.length <= LABEL_MAX, `a crowded 10 kHz: ${L.length} labels stacked`);
 ok(L[0].sig.prio === PRIO_SAFETY, 'the first placed is safety-of-life (DSC distress / NAVTEX)');
 ok(L.every((a, i) => L.every((b, j) => i === j || a.row !== b.row || a.lx + a.w + 6 <= b.lx || b.lx + b.w + 6 <= a.lx)), 'no two labels on one row overlap');
-ok(L.every(p => p.row < 2), 'never more than two rows');
+ok(L.every(p => p.row < LABEL_ROWS_MAX), 'never more than LABEL_ROWS_MAX rows');
 // a blocked box at row 0 over the whole width → everything goes to row 1
 const B = labelLayout(list, 4500000, 200000, W, measure, 4600000, [{ row: 0, x0: 0, x1: W }]);
-ok(B.length > 0 && B.every(p => p.row === 1), 'a blocked row (LISTEN\'s box) is never drawn over');
+ok(B.length > 0 && B.every(p => p.row >= 1), 'a blocked row (LISTEN\'s box) is never drawn over');
 // cap
 const many: KnownSignal[] = Array.from({ length: 50 }, (_, i) => ({ hz: 1e6 + i * 10000, label: 'X', dec: 'rtty', dialHz: 0, mode: 'usb', prio: 3, src: 'table' }));
 ok(labelLayout(many, 1e6, 500000, 10000, () => 10, 1.2e6).length === LABEL_MAX, `capped at ${LABEL_MAX}`);
@@ -146,7 +147,89 @@ const two: KnownSignal[] = [
 const T = labelLayout(two, 990000, 20000, 400, () => 60, 1000100, [], 3, 1);
 ok(T.length === 1 && T[0].sig.label === 'B', 'equal priority: the one nearer the dial keeps the row');
 const edge = labelLayout(two.slice(0, 1), 990000, 10100, 400, () => 60, 0);
-ok(edge.length === 1 && edge[0].lx + edge[0].w <= edge[0].x, 'near the right edge a label flips to the left of its marker');
+ok(edge.length === 1 && edge[0].lx === 400 - 60 && edge[0].lx < edge[0].x, 'near the right edge a label shifts inward, wholly on screen');
+
+console.log('centred on the carrier (Stuart, 2026-11-16: "centre all signal labels on their carrier frequency")');
+{
+  const sg = (hz: number, label: string, prio = PRIO_SERVER): KnownSignal => ({ hz, label, dec: '', dialHz: hz, mode: 'am', prio, src: 'server' });
+  const one = labelLayout([sg(700000, 'Radio Caroline')], 400000, 550000, 1200, measure, 0);
+  ok(one.length === 1 && Math.abs(one[0].lx + one[0].w / 2 - one[0].x) < 1e-9, 'a label\'s box is centred on its carrier');
+  const lft = labelLayout([sg(401000, 'WSPR · 474k')], 400000, 550000, 1200, measure, 0);
+  ok(lft[0].lx === 0 && lft[0].lx + lft[0].w > lft[0].x, 'near the left edge: shifted inward, starts at 0');
+  const rgt = labelLayout([sg(949000, 'BBC Radio 5')], 400000, 550000, 1200, measure, 0);
+  ok(rgt[0].lx + rgt[0].w === 1200, 'near the right edge: shifted inward, ends at the edge');
+  // ★ Stuart's screenshot (Lenovo RSP1A, 0.4–0.95 MHz on a 1400-px page): the labels he saw, and the BBC cluster near 0.9 MHz
+  const am = [sg(518000, 'NAVTEX', PRIO_SAFETY), sg(474200, 'WSPR', PRIO_TABLE), sg(558000, 'Panjab Radio'), sg(648000, 'Radio Caroline'),
+              sg(810000, 'BBC Radio Scotl…'), sg(837000, 'BBC Asian Netwo…'), sg(882000, 'BBC Radio Wales'), sg(855000, 'BBC Radio Norfo…'),
+              sg(873000, 'BBC Radio Norfo…'), sg(909000, 'BBC Radio 5'), sg(891000, 'Absolute Radio'), sg(927000, 'BBC Radio 5'), sg(936000, 'Smooth')];
+  am.sort((a, b) => a.hz - b.hz);
+  const textOverlap = (P: PlacedLabel[]) => P.some((a, i) => P.some((b, j) => i !== j && a.row === b.row && a.lx < b.lx + b.w + 6 && b.lx < a.lx + a.w + 6));
+  // ★★ the marker line ABOVE each label (Stuart, 2026-11-16): rows 14 apart (row 0 lowest), boxes 13 tall, 8 above the stack
+  const rowTop = (r: number) => 100 - 14 * r;
+  /** Every label's line rises from its top edge at its TRUE carrier x, past the whole stack, crossing no other box. */
+  const linesClear = (P: PlacedLabel[]) => {
+    const ST = labelStems(P, rowTop, 13, 8), stackTop = Math.min(...P.map(p => rowTop(p.row)));
+    return ST.length === P.length && ST.every((st, i) => st.x === Math.round(P[i].x) && st.y1 === rowTop(P[i].row) && st.y0 === stackTop - 8
+      && !P.some((q, j) => j !== i && st.x >= q.lx && st.x <= q.lx + q.w && st.y0 < rowTop(q.row) + 13 && st.y1 > rowTop(q.row)));
+  };
+  for (const Wd of [390, 1400]) {
+    const P = labelLayout(am, 400000, 550000, Wd, measure, 648000);
+    const onScreen = P.every(p => p.lx >= 0 && p.lx + p.w <= Wd);
+    ok(!textOverlap(P) && onScreen && P.every(p => p.row < LABEL_ROWS_MAX),
+       `${Wd} px, the AM band 0.4–0.95 MHz: ${P.length} of ${am.length} placed (cap ${LABEL_MAX}), on screen, none overlapping, ≤ ${LABEL_ROWS_MAX} rows`);
+    ok(P.every(p => p.lx - 1 <= p.x && p.x <= p.lx + p.w + 1), `${Wd} px: every box sits over its own carrier`);
+    const cen = P.filter(p => Math.abs(p.lx + p.w / 2 - p.x) < 1e-6 || p.lx === 0 || p.lx + p.w === Wd).length;
+    if (Wd === 1400) ok(cen >= P.length * 0.6, `${Wd} px: most centred on their carrier (${cen} of ${P.length}; the rest slid along their row to stack)`);
+    ok(linesClear(P), `${Wd} px: every label's line rises from its top edge at its TRUE carrier x past the stack, crossing no other label`);
+    if (Wd === 1400) ok(P.length === Math.min(LABEL_MAX, am.length), '1400 px: nothing dropped but the cap');
+  }
+  // ★★★ THE PILE-UP (Stuart, 2026-11-16): BBC Radio Norfolk 873, BBC Radio Wales 882, BBC Radio 5 909 at 0.4–0.95 MHz on
+  //     a 1400-px page — three labels within a label-width of each other: all visible, stacked, no text overlapping, each
+  //     line reaching its own carrier
+  {
+    const pile = [sg(873000, 'BBC Radio Norfo…'), sg(882000, 'BBC Radio Wales'), sg(909000, 'BBC Radio 5')];
+    const P = labelLayout(pile, 400000, 550000, 1400, measure, 648000);
+    const xs = pile.map(p => (p.hz - 400000) / 550000 * 1400);
+    const wW = measure('BBC Radio Wales');
+    ok(xs[1] - xs[0] < wW && xs[2] - xs[1] < wW, `the pile-up: Wales within a label's width of each neighbour (${(xs[1] - xs[0]).toFixed(0)} / ${(xs[2] - xs[1]).toFixed(0)} px < ${wW} px)`);
+    ok(P.length === 3 && P.every(p => !p.lines), 'the pile-up: all three visible, none shortened (there are rows to spare)');
+    const row = (l: string) => P.find(p => p.sig.label === l)!.row;
+    ok(row('BBC Radio Wales') !== row('BBC Radio Norfo…') && row('BBC Radio Wales') !== row('BBC Radio 5'),
+       `the pile-up: Wales stacked off both its neighbours' rows (${P.map(p => p.sig.label + ' → row ' + p.row).join(', ')})`);
+    ok(!textOverlap(P), 'the pile-up: no text overlapping');
+    ok(linesClear(P), 'the pile-up: each line reaches past the whole stack at its own carrier x, crossing no other label');
+  }
+  // shortened only once the rows are used up (one row here): a name squeezed by two others is cut with "…" to fit
+  {
+    const three = [sg(600000, 'Station number 1', PRIO_TABLE), sg(627500, 'Station number 2'), sg(655000, 'Station number 3', PRIO_TABLE)];
+    const P = labelLayout(three, 400000, 550000, 1400, measure, 0, [], 3, 1);
+    const cut = P.find(p => p.lines);
+    ok(P.length === 3 && !!cut?.lines?.[0]?.endsWith('…') && cut.lines[0].length >= 4 && cut.lx <= cut.x && cut.x <= cut.lx + cut.w && !textOverlap(P),
+       `one row, three names close together: all three shown, one shortened to "${cut?.lines?.[0]}" over its carrier, nothing overlapping`);
+    const P4 = labelLayout(three, 400000, 550000, 1400, measure, 0);
+    ok(P4.length === 3 && P4.every(p => !p.lines), 'the same with rows to spare: stacked whole, none shortened');
+  }
+  // ★★ ZOOMED IN (Stuart's 0.59–0.80 MHz screenshot, tuned to 693): Radio Caroline sat RIGHT of its own peak
+  {
+    const z = [sg(648000, 'Radio Caroline'), sg(603000, 'Panjab Radio'), sg(756000, 'BBC Radio Cornw…')];
+    z.sort((a, b) => a.hz - b.hz);
+    const P = labelLayout(z, 590000, 210000, 1400, measure, 693000);
+    const car = P.find(p => p.sig.label === 'Radio Caroline')!;
+    ok(Math.abs(car.lx + car.w / 2 - car.x) < 1e-9 && car.x === (648000 - 590000) / 210000 * 1400,
+       `0.59–0.80 MHz: "Radio Caroline" centred on 648 kHz (box ${car.lx.toFixed(0)}–${(car.lx + car.w).toFixed(0)}, carrier ${car.x.toFixed(0)})`);
+    // zooming in and out: every label stays exactly centred on its carrier at every step — no lag, no jump
+    let worst = 0;
+    for (let k = 0; k <= 40; k++) {
+      const spanZ = 210000 * Math.pow(4, k / 40 - 0.5), loZ = 693000 - spanZ / 2;
+      for (const p of labelLayout(z, loZ, spanZ, 1400, measure, 693000))
+        if (p.lx > 0 && p.lx + p.w < 1400) worst = Math.max(worst, Math.abs(p.lx + p.w / 2 - (p.sig.hz - loZ) / spanZ * 1400));
+    }
+    ok(worst < 1e-6, `zooming 105 → 420 kHz in 41 steps: every label centred on its carrier at every step (worst ${worst.toExponential(1)} px)`);
+  }
+  const cl = labelLayout([sg(401000, 'WSPR · 474k')], 400000, 550000, 1200, measure, 0);
+  const cs = labelStems(cl, (r) => 100 - 14 * r, 13, 8)[0];
+  ok(cs.x === Math.round(cl[0].x) && cs.x < cl[0].lx + cl[0].w / 2, 'an edge-clamped label: the line stays at the carrier, off the box\'s centre');
+}
 
 console.log('tapped: the preset table');
 const MODES = new Set(['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl', 'wfm', 'drm']);   // sdrTypes.ts SDRMode

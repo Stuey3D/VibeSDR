@@ -81,8 +81,13 @@ export const PRIO_EIBI = 1;
 
 /** The most labels drawn at once — a hard cap, whatever is in view (Pi-2-class browsers, 1 GB phones). */
 export const LABEL_MAX = 12;
-/** Rows of labels (the two boundary rows). */
+/** Rows of labels always kept for them (the two boundary rows) — the VFO's own box sits above at least these. */
 export const LABEL_ROWS = 2;
+/** ★★ The most rows the signal labels may STACK on (Stuart, 2026-11-16: closely spaced signals "must still stack, never
+ *  overlap or drop a label") — as few as the labels in view need; a name is shortened ("…") only once these are used up. */
+export const LABEL_ROWS_MAX = 4;
+/** The fewest characters a shortened label keeps (before its "…"). */
+export const LABEL_MIN_CHARS = 3;
 /** Clear space between two labels on one row (px, caller's units). */
 export const LABEL_GAP = 6;
 
@@ -374,15 +379,26 @@ export interface BlockedBox { row: number; x0: number; x1: number }
 
 /**
  * Lay out the labels in view: `lo`..`lo + span` Hz across `width` px; `measure(label)` = the label's box width (px);
- * `dialHz` breaks priority ties (nearer wins). Each label sits to the RIGHT of its marker (`pad` px), or to its left
- * near the right edge (as RF CENTRE's does). A label that overlaps one already placed (or a blocked box) tries the next
- * row; if every row is taken it is dropped. Never more than `max` (LABEL_MAX unless a caller — the wide DAB view —
- * says otherwise). Returned in the order placed.
+ * `dialHz` breaks priority ties (nearer wins). Placed highest priority first, never more than `max` (LABEL_MAX unless
+ * a caller — the wide DAB view — says otherwise); returned in the order placed.
+ * ★★★ THE VINTAGE DIAL'S WAY (Stuart, 2026-11-16: "centre all signal labels on their carrier frequency", "make it look
+ *     like the vintage tuning dial if needed" — FmdxDial.tsx: each name centred on its frequency, cascading onto the
+ *     next row where the one before is taken):
+ *   • each label's box is CENTRED on its marker (labelBoxX), shifted inward at an edge;
+ *   • it STACKS: the lowest row (0 = by the boundary, up to `rows`, LABEL_ROWS_MAX) where it overlaps no box already there
+ *     (nor a `blocked` one) — and where its MARKER LINE is clear: every label has a line rising from its top edge to its
+ *     carrier (labelStems), so a box may not cover the line of a label on a row below it, and a label may not sit under a
+ *     box on a row above it. Where centred does not fit on a row, the box slides along it (nearest to centred first) as
+ *     far as it still sits over its own carrier;
+ *   • only when every row is used up is the name shortened with "…" (to LABEL_MIN_CHARS) to fit — `lines` then carries
+ *     the shortened text; a label that fits nowhere even so is dropped.
+ * `pad` is no longer used (kept so callers need not change).
  */
 export function labelLayout(list: readonly KnownSignal[], lo: number, span: number, width: number,
                             measure: (label: string) => number, dialHz: number,
-                            blocked: readonly BlockedBox[] = [], pad = 3, rows = LABEL_ROWS, gap = LABEL_GAP,
+                            blocked: readonly BlockedBox[] = [], pad = 3, rows = LABEL_ROWS_MAX, gap = LABEL_GAP,
                             max = LABEL_MAX): PlacedLabel[] {
+  void pad;
   const out: PlacedLabel[] = [];
   if (!(span > 0 && width > 0)) return out;
   const vis = signalsInView(list, lo, lo + span);
@@ -391,20 +407,83 @@ export function labelLayout(list: readonly KnownSignal[], lo: number, span: numb
   vis.sort((a, b) => (b.prio - a.prio) || (Math.abs(a.hz - d) - Math.abs(b.hz - d)) || (a.hz - b.hz));
   const taken: Array<Array<[number, number]>> = Array.from({ length: rows }, () => []);
   for (const b of blocked) if (b.row >= 0 && b.row < rows) taken[b.row].push([b.x0, b.x1]);
-  const free = (row: number, x0: number, x1: number) => taken[row].every(([a, b]) => x1 + gap <= a || x0 >= b + gap);
+  const LINE = 1;   // a marker line's half-clearance (px)
+  /** Where a `w`-wide box for a marker at `x` can go on row `r` (its left edge), nearest to centred; NaN = nowhere. */
+  const slot = (r: number, x: number, w: number): number => {
+    // its own line must not run up through a box on a row above
+    if (out.some((p) => p.row > r && x >= p.lx - LINE && x <= p.lx + p.w + LINE)) return NaN;
+    const c = labelBoxX(x, w, width);
+    const ok = (lx: number) => lx >= 0 && lx + w <= width && lx - LINE <= x && x <= lx + w + LINE
+      && taken[r].every(([a, b]) => lx + w + gap <= a || lx >= b + gap)
+      && out.every((p) => p.row >= r || p.x < lx - LINE || p.x > lx + w + LINE);   // no line from a row below under it
+    if (ok(c)) return c;
+    const cands: number[] = [];
+    for (const [a, b] of taken[r]) cands.push(a - gap - w, b + gap);
+    for (const p of out) if (p.row < r) cands.push(p.x - LINE - 0.5 - w, p.x + LINE + 0.5);
+    cands.sort((u, v) => Math.abs(u - c) - Math.abs(v - c));
+    for (const lx of cands) if (ok(lx)) return lx;
+    return NaN;
+  };
+  const tryRows = (sig: KnownSignal, x: number, text: string, w: number): boolean => {
+    for (let r = 0; r < rows; r++) {
+      const lx = slot(r, x, w);
+      if (Number.isNaN(lx)) continue;
+      taken[r].push([lx, lx + w]);
+      const p: PlacedLabel = { sig, x, lx, w, row: r };
+      if (text !== sig.label) p.lines = [text];
+      out.push(p);
+      return true;
+    }
+    return false;
+  };
   for (const sig of vis) {
     if (out.length >= max) break;
     const x = (sig.hz - lo) / span * width;
-    const w = measure(sig.label);
-    const lx = x + pad + w > width ? Math.max(0, x - pad - w) : x + pad;
-    for (let r = 0; r < rows; r++) {
-      if (!free(r, lx, lx + w)) continue;
-      taken[r].push([lx, lx + w]);
-      out.push({ sig, x, lx, w, row: r });
-      break;
+    if (tryRows(sig, x, sig.label, measure(sig.label))) continue;
+    // every row used up: shorten with "…", longest first
+    const cps = Array.from(sig.label.replace(/…$/, ''));
+    for (let n = cps.length - 1; n >= LABEL_MIN_CHARS; n--) {
+      const t = cps.slice(0, n).join('').trimEnd() + '…';
+      if (tryRows(sig, x, t, measure(t))) break;
     }
   }
   return out;
+}
+
+/** ★★ A label's box: CENTRED on its marker `x`, moved inward only as far as it must to stay within 0..width (a box wider
+ *  than the view starts at 0). The same rule as DAB's blocks (dabBlockView.ts dabBlockBoxX). */
+export function labelBoxX(x: number, w: number, width: number): number {
+  return Math.max(0, Math.min(Math.max(0, width - w), x - w / 2));
+}
+
+/** ★★ A LABEL'S MARKER LINE (Stuart, 2026-11-16 — "a short vertical line ABOVE the label, rising from the centre of the
+ *  label's top edge up toward the signal"): one per placed box, at the TRUE carrier `x` (off the box's centre only where
+ *  the box was shifted inward at an edge), from the box's top edge (`y1`) up to `rise` above the highest box in the stack
+ *  (`y0`) — so a label on a lower row still points past the rows above it to its carrier. Where another box (a placed
+ *  label, or one of `extra` — the VFO's) sits in the way, the line stops `gap` short of that box's bottom edge: it never
+ *  crosses another label's text, drawn in the gap instead. A line shorter than `minLen` is still drawn at `minLen`
+ *  (inside the gap rows leave). `rowTop(row)` = a box's top on that row and `boxH` its height, in the caller's units
+ *  (y grows downward); a taller box (span) is topped by its highest row. Skipped (null) for none placed. */
+export interface LabelStem { x: number; y0: number; y1: number }
+export function labelStems(placed: readonly PlacedLabel[], rowTop: (row: number) => number, boxH: number, rise: number,
+                           extra: readonly { lx: number; w: number; row: number; span?: number }[] = [], gap = 1,
+                           minLen = 2): LabelStem[] {
+  const top = (p: { row: number; span?: number }) => rowTop(p.row + Math.max(1, p.span ?? 1) - 1);
+  const bot = (p: { row: number }) => rowTop(p.row) + boxH;
+  if (!placed.length) return [];
+  const stackTop = Math.min(...placed.map(top));
+  const boxes = [...placed, ...extra];
+  return placed.map((p) => {
+    const x = Math.round(p.x), y1 = top(p);
+    let y0 = stackTop - rise;
+    for (const q of boxes) {
+      if (q === p || x < q.lx || x > q.lx + q.w) continue;
+      const qb = bot(q);
+      if (qb <= y1 && qb + gap > y0) y0 = qb + gap;   // a box above it, in the way: stop under it
+    }
+    if (y1 - y0 < minLen) y0 = y1 - minLen;
+    return { x, y0, y1 };
+  });
 }
 
 /** A label's width estimate where text cannot be measured synchronously (React Native): `chars × fontSize × k` + the

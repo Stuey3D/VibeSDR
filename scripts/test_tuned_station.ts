@@ -165,10 +165,12 @@ console.log('vfoLabelLayout — the readout and the name, one box centred on the
   const RD = 'LISTEN 9.580M';
   const dial = 9_580_000, nx = xOf(dial);
 
-  // the readout alone: centred, row 0
+  // the readout alone: centred, row 0 with the labels off, above them (row 2) with them on — the same row as with a name
   let plan = vfoLabelLayout([], lo, span, W, measure, dial, [], RD, noPick);
   ok(!!plan.box && plan.box.row === 0 && plan.box.lines.join('|') === RD && !plan.box.named
-     && Math.abs(plan.box.lx + plan.box.w / 2 - nx) < 1e-9, 'no name: the readout alone, centred on the needle, on row 0');
+     && Math.abs(plan.box.lx + plan.box.w / 2 - nx) < 1e-9, 'labels off, no name: the readout alone, centred on the needle, on row 0');
+  plan = vfoLabelLayout([sig(9_590_000, 'WSPR', 'table', 6)], lo, span, W, measure, dial, [], RD, noPick);
+  ok(plan.box?.row === 2 && !plan.box.named, 'labels on, no name: the readout already above the label rows (row 2) — it never jumps when a name arrives');
 
   // an EiBi station, no spectrum label for it: "[EiBi] R.Algiers Int." over the readout, both centred
   const alg: TunedRow[] = [{ frequency: dial, name: 'R.Algiers Int.', source: 'eibi' }];
@@ -176,8 +178,10 @@ console.log('vfoLabelLayout — the readout and the name, one box centred on the
   plan = vfoLabelLayout(neigh, lo, span, W, measure, dial, [], RD, pickWith(alg, dial));
   ok(!!plan.box && plan.box.named && plan.box.lines.join('|') === '[EiBi] R.Algiers Int.|' + RD,
      'a tuned EiBi station: one box, its name over the readout');
-  ok(!!plan.box && Math.abs(plan.box.lx + plan.box.w / 2 - nx) < 1e-9 && plan.box.row === 0,
-     '…centred on the needle (the box\'s middle IS the VFO line), the readout on row 0, the name on row 1');
+  { const top = Math.max(...plan.placed.map((p) => p.row));
+    ok(!!plan.box && Math.abs(plan.box.lx + plan.box.w / 2 - nx) < 1e-9 && plan.box.row === Math.max(2, top + 1),
+       `…centred on the needle (the box\'s middle IS the VFO line), RAISED above every label row: readout on row ${plan.box?.row}, name above`);
+    ok(plan.placed.every((p, i) => i === plan.box!.sigIdx || p.row < plan.box!.row), '…every neighbour below it'); }
   ok(clear(plan), `…no neighbour overlaps it (${plan.placed.length} neighbours placed)`);
   ok(plan.pick.label === '[EiBi] R.Algiers Int.' && plan.box!.sigIdx === -1, '…the tuned label\'s text; no spectrum label stands for it');
 
@@ -195,7 +199,7 @@ console.log('vfoLabelLayout — the readout and the name, one box centred on the
 
   // the label path never repeats: a matching spectrum label left out even when it was not drawn in the first pass
   const crowd = [sig(dial + 50, 'Radio Caroline', 'server', 3)];
-  plan = vfoLabelLayout(crowd, lo, span, W, measure, dial, [{ row: 0, x0: 0, x1: W }, { row: 1, x0: 0, x1: W, labelsOnly: true }], RD, pickWith(car, dial));
+  plan = vfoLabelLayout(crowd, lo, span, W, measure, dial, [0, 1, 2, 3].map((row) => ({ row, x0: 0, x1: W, labelsOnly: true })), RD, pickWith(car, dial));
   ok(plan.box?.lines[0] === '[Server] Radio Caroline' && !plan.placed.some((p) => p.sig.label === 'Radio Caroline'),
      'its own label crowded out at first: the tagged name in the box, and that label never drawn beside it');
 
@@ -209,7 +213,9 @@ console.log('vfoLabelLayout — the readout and the name, one box centred on the
 
   // a fixed box (RF CENTRE on row 1) under it: the pair rises above it; the dB axis (labelsOnly) does not move it
   plan = vfoLabelLayout([], lo, span, W, measure, dial, [{ row: 1, x0: nx - 10, x1: nx + 90 }], RD, pickWith(alg, dial));
-  ok(plan.box?.row === 2, `RF CENTRE across row 1 at the needle: the box rises to rows 2–3 (row ${plan.box?.row})`);
+  ok(plan.box?.row === 2, `labels off, RF CENTRE across row 1 at the needle: the box rises to rows 2–3 (row ${plan.box?.row})`);
+  plan = vfoLabelLayout(neigh, lo, span, W, measure, dial, [{ row: 3, x0: nx - 10, x1: nx + 90 }], RD, pickWith(alg, dial));
+  ok(plan.box?.row === 4 && plan.placed.every((p) => p.row !== 3 || p.lx > nx + 96 || p.lx + p.w < nx - 16), `labels on, the DC spike's box on row 3 at the needle: the box rises past it (row ${plan.box?.row})`);
   plan = vfoLabelLayout([], lo, span, W, measure, lo + 100, [{ row: 0, x0: 0, x1: 30, labelsOnly: true }, { row: 1, x0: 0, x1: 30, labelsOnly: true }], RD,
                         pickWith([{ frequency: lo + 100, name: 'X', source: 'user' }], lo + 100));
   ok(plan.box?.row === 0 && plan.box.lx === 0, 'the dB axis\'s boxes keep the labels clear, not the VFO\'s box (row 0, at the edge)');
@@ -219,6 +225,10 @@ console.log('vfoLabelLayout — the readout and the name, one box centred on the
   for (let f = lo + 1000; f < lo + span; f += 2500) if (Math.abs(f - dial) > 99) dense.push(sig(f, 'STN ' + f / 1000, 'table', 6));
   plan = vfoLabelLayout(dense, lo, span, W, measure, dial, [], RD, pickWith(alg, dial));
   ok(clear(plan) && plan.placed.length > 0, `a crowded band: ${plan.placed.length} labels placed, none over the VFO box`);
+  ok(plan.placed.every((p) => p.lx >= 0 && p.lx + p.w <= W && p.lx - 1 <= p.x && p.x <= p.lx + p.w + 1),
+     '…each over its own carrier, on screen (centred where the row allows — test_known_signals proves the rule)');
+  { const plan2 = vfoLabelLayout([sig(9_565_000, 'Panjab Radio', 'server', 3), sig(9_574_000, 'Radio Caroline', 'server', 3)], lo, span, W, measure, dial, [], RD, pickWith(alg, dial));
+    ok(plan2.placed.every((p) => Math.abs(p.lx + p.w / 2 - p.x) < 1e-9), 'zoomed in, the neighbours sparse: each label exactly centred on its carrier'); }
   // no readout (the needle's label hidden): the name alone, centred
   plan = vfoLabelLayout([], lo, span, W, measure, dial, [], null, pickWith(alg, dial));
   ok(plan.box?.lines.length === 1 && plan.box.lines[0] === '[EiBi] R.Algiers Int.' && Math.abs(plan.box.lx + plan.box.w / 2 - nx) < 1e-9,

@@ -37,7 +37,7 @@
  *     not drawn at its own marker as well: it IS the name in that box (still tappable there). DAB's wide view keeps its
  *     own layout (dabLabelLayout), unchanged.
  */
-import { eibiOnAir, labelLayout, LABEL_GAP, type KnownSignal, type PlacedLabel, type BlockedBox } from './knownSignals.ts';
+import { eibiOnAir, labelLayout, LABEL_GAP, LABEL_ROWS, type KnownSignal, type PlacedLabel, type BlockedBox } from './knownSignals.ts';
 
 export type TunedSource = 'user' | 'server' | 'eibi';
 
@@ -237,14 +237,16 @@ const NO_PICK: TunedPick = { label: null, highlight: -1 };
  * ★★★ THE VFO'S LABELS AND THE SPECTRUM'S, LAID OUT TOGETHER (Stuart, 2026-11-16: "Can we centre the frequency and
  * bookmark reading on the VFO please") — the same units and conventions as knownSignals.ts labelLayout (`list` may be
  * empty: the labels off). In order:
- *   1. the spectrum's labels with the readout's box centred on the needle on row 0 (as it is drawn when no name is
- *      shown), so `pickFor` — the caller's tunedPick — chooses against what would be drawn there;
- *   2. with no name: that layout and the readout's box, done;
- *   3. with a name — the tuned label's text, or the text of the spectrum label that names the station — ONE box,
- *      centred on the needle (tunedLabelX, margin 0), the readout on its lowest row and the name on the row above, on
- *      the lowest pair of rows nothing fixed (RF CENTRE, the DC spike: `blocked` without `labelsOnly`) is on there;
- *   4. the spectrum's labels laid out again around it, every label naming the station left out (the box names it); the
- *      one the pick chose is added back AS the box, so a tap on the box still finds it.
+ *   0. ★★ RAISED ABOVE THE NEIGHBOURS (as DAB's tuned box): with the signal labels on (`list` not empty) the VFO's box
+ *      sits on the row above the highest row the labels stack on (at least LABEL_ROWS), so no label is ever under or
+ *      over it and none needs to make room for it; with them off, on row 0 as LISTEN always was. Either way it rises
+ *      further past anything fixed at the needle (RF CENTRE, the DC spike: `blocked` without `labelsOnly`);
+ *   1. the spectrum's labels as laid out alone, so `pickFor` — the caller's tunedPick — chooses against what is drawn;
+ *   2. with no name: those labels and the readout's box, done;
+ *   3. with a name — the tuned label's text, or the text of the spectrum label that names the station — the labels laid
+ *      out again with every label naming the station left out (the box names it), then ONE box centred on the needle
+ *      (tunedLabelX, margin 0), the readout on its lowest row and the name on the row above; the label the pick chose is
+ *      added back AS the box, so a tap on the box still finds it.
  * The needle off screen: no box, and the labels as in 1.
  */
 export function vfoLabelLayout(list: readonly KnownSignal[] | null | undefined, lo: number, span: number, width: number,
@@ -253,40 +255,34 @@ export function vfoLabelLayout(list: readonly KnownSignal[] | null | undefined, 
                                pickFor: (shown: readonly ShownMarker[]) => TunedPick,
                                pad = 3, gap = LABEL_GAP): VfoLabelPlan {
   const items = list ?? [];
-  const lay = (l: readonly KnownSignal[], b: readonly BlockedBox[]) => (l.length ? labelLayout(l, lo, span, width, measure, dialHz, b, pad) : []);
+  const lay = (l: readonly KnownSignal[]) => (l.length ? labelLayout(l, lo, span, width, measure, dialHz, blocked, pad) : []);
   const x = span > 0 ? (dialHz - lo) / span * width : NaN;
   const onScreen = dialHz > 0 && Number.isFinite(x) && x >= 0 && x <= width;
   const rd = onScreen && readout ? readout : null;
-  // 1. as drawn with no name: the readout centred on row 0
-  const b1: BlockedBox[] = blocked.slice();
-  let rdBox: VfoBox | null = null;
-  if (rd) {
-    const w = measure(rd), lx = tunedLabelX(x, w, width, 0);
-    b1.push({ row: 0, x0: lx, x1: lx + w });
-    rdBox = { x, lx, w, row: 0, lines: [rd], named: false, sigIdx: -1 };
-  }
-  const placed1 = lay(items, b1);
+  const hard = blocked.filter((b) => !b.labelsOnly);
+  /** The VFO's box for these lines over these labels: centred on the needle, above them and past the fixed boxes. */
+  const boxOver = (placed: readonly PlacedLabel[], lines: string[], named: boolean, sigIdx: number): VfoBox => {
+    const w = Math.max(...lines.map(measure)), lx = tunedLabelX(x, w, width, 0);
+    const top = placed.reduce((m, p) => Math.max(m, p.row + Math.max(1, p.span ?? 1)), 0);
+    const rowFree = (r: number) => hard.every((b) => b.row !== r || lx + w + gap <= b.x0 || lx >= b.x1 + gap);
+    let row = items.length ? Math.max(LABEL_ROWS, top) : 0;
+    for (let k = 0; k < 8 && !lines.every((_, i) => rowFree(row + i)); k++) row++;
+    return { x, lx, w, row, lines, named, sigIdx };
+  };
+  // 1. the labels alone
+  const placed1 = lay(items);
   const pick = pickFor(placed1.map((p) => p.sig)) ?? NO_PICK;
   const hiSig = pick.highlight >= 0 && pick.highlight < placed1.length ? placed1[pick.highlight].sig : null;
   const name = pick.label || hiSig?.label || '';
   // 2. no name (or nowhere to put one)
-  if (!name || !onScreen) return { placed: placed1, pick, box: rdBox };
-  // 3. the one box, centred on the needle, on the lowest pair of rows free of the fixed boxes
-  const lines = rd ? [name, rd] : [name];
-  const w = Math.max(...lines.map(measure)), lx = tunedLabelX(x, w, width, 0);
-  const hard = blocked.filter((b) => !b.labelsOnly);
-  const rowFree = (r: number) => hard.every((b) => b.row !== r || lx + w + gap <= b.x0 || lx >= b.x1 + gap);
-  let row = 0;
-  while (row < 8 && !lines.every((_, i) => rowFree(row + i))) row++;
-  const b2: BlockedBox[] = blocked.slice();
-  for (let i = 0; i < lines.length; i++) b2.push({ row: row + i, x0: lx, x1: lx + w });
-  // 4. the rest around it, with nothing else naming the station
+  if (!name || !onScreen) return { placed: placed1, pick, box: rd ? boxOver(placed1, [rd], false, -1) : null };
+  // 3. the rest without anything naming the station, then the one box above them
   const st = pick.station;
   const names = (s: KnownSignal) => s === hiSig || (!!st && markerIndex({ frequency: st.hz, source: st.source }, [s]) >= 0);
-  const placed = lay(items.filter((s) => !names(s)), b2);
-  let sigIdx = -1;
-  if (hiSig) { sigIdx = placed.length; placed.push({ sig: hiSig, x, lx, w, row, span: lines.length, lines }); }
-  return { placed, pick: { ...pick, highlight: sigIdx }, box: { x, lx, w, row, lines, named: true, sigIdx } };
+  const placed = lay(items.filter((s) => !names(s)));
+  const box = boxOver(placed, rd ? [name, rd] : [name], true, hiSig ? placed.length : -1);
+  if (hiSig) placed.push({ sig: hiSig, x, lx: box.lx, w: box.w, row: box.row, span: box.lines.length, lines: box.lines });
+  return { placed, pick: { ...pick, highlight: box.sigIdx }, box };
 }
 
 /** Minutes past 00:00 UTC — the clock EiBi's times are in. */
