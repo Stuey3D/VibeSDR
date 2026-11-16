@@ -47,6 +47,7 @@ ACK_WAIT_S = 5.0              # how long the engine gets to save every radio's m
 #       voltage floor the driver set) are kept. The register is uncached in the kernel (REGCACHE_NONE, volatile), and the
 #       driver touches it only on unplug, so this write stands until then.
 PMIC_ADDR, CHRG_OUT, CHRG_IN = 0x20, 0xE4, 0xE5
+CHRG_TERM, CHRG_STS = 0xE6, 0xEB         # read only (FullJudge): the termination current, the charger's state + input clamp
 # ★★ WRITTEN AS ONE FIXED VALUE, never read-modify-write: 0xDD = USB_VLIM_EN | 4.5 V floor (sel 5, the driver's own) |
 #    USB_ILIM_EN | 2 A (sel 5). The driver's value is 0xDB (the same with 1.5 A) — read at start-up on handheld62.
 CHRG_IN_2A = 0xDD
@@ -229,10 +230,156 @@ class EmptyDetector:
             self.since = t
         return t - self.since >= self.hold_s
 
+# ── is the battery REALLY full? (Stuart 2026-11-16) ──────────────────────────────────────────────────────────────────
+# ★★★ THE GAUGE'S % IS NEVER THE JUDGE. On Stuart's unit the gauge read 100 % for ~30 min with 0.96 A still going into
+#     the cell at 4.15 V — the charger still in constant CURRENT, nowhere near full. An uncalibrated gauge says 100 % when
+#     its believed capacity is used up, which is exactly the number calibration exists to find. So "full" is judged from
+#     the CHARGER'S PHYSICS, from what the rk817 itself is set to and reports:
+#       • CV — the constant-voltage ceiling: CHRG_OUT 0xE4 bits 6:4, 4.10 + 0.05 × sel V (the driver reads the same
+#         register for sysfs constant_charge_voltage_max; 0xA0 here = 4.20 V). Never assumed to be 4.20.
+#       • TERMINATION — CHRG_TERM 0xE6: bit 2 = digital mode (the mainline driver always sets analog, 0), bits 1:0 =
+#         150 / 200 / 300 / 400 mA. Fallback: the device tree's charge-term-current-microamp, clamped as the driver
+#         clamps it (outside 150–400 mA → 200); last resort 150 mA, the rk817's lowest step (the strictest).
+#       • VLIM — the port's input-voltage floor: CHRG_IN 0xE5 bit 7 enable, bits 6:4 = 4.0 + 0.1 × sel V (0xDD = 4.5 V).
+#       • CHRG_STS 0xEB: bits 6:4 the charger's state (4 = CHARGE_FINISH — what sysfs reports as "Full"), bit 2
+#         CHRG_IN_CLAMP — the charger is held back by its input.
+#     FULL = the charger's own CHARGE_FINISH, OR (the backstop when it never says so — its termination is judged on its
+#     own output, which the console's load shares) the BATTERY'S measured current tapered to the termination current
+#     or below WITH the voltage within FULL_NEAR_CV_V of CV, smoothed (FULL_TAU_S) and held FULL_HOLD_S with no failing
+#     reading, never while the input is clamped or at its floor (a starved charger's current falls too — that is not
+#     a full cell). The voltage need not reach CV exactly: a cell sits a little under it for a long time while the
+#     current tapers; the CURRENT decides. Once full it stays full until the cord comes out.
+FULL_NEAR_CV_V = 0.06         # within 60 mV of CV (Stuart's 4.16 V against 4.20 is "close" only once the current is low)
+FULL_TAU_S = 30.0             # the current and voltage smoothed over ~30 s (the gauge's own average is noisy at ±50 mA)
+FULL_HOLD_S = 300.0           # … and held 5 min: the CV taper takes tens of minutes, so 5 min under it is real
+TERM_FALLBACK_A = 0.15        # nothing readable: the rk817's lowest termination step
+VLIM_NEAR_V = 0.15            # the port this close to VLIM: the hint ("a shorter cable charges faster")
+VLIM_AT_V = 0.05              # … this close: treated as limited (never judged full)
+TERM_STEPS_MA = (150, 200, 300, 400)
+CC_FRACTION = 0.85            # the current this close to the CC setting: still constant current
+CHG_FINISH = 4
+
+def cv_from_chrg_out(reg):
+    return None if reg is None else round(4.10 + 0.05 * ((reg >> 4) & 7), 2)
+
+def term_from_chrg_term(reg):
+    """Amps, or None in the digital mode (an ADC count that needs the sense resistor) / unreadable."""
+    if reg is None or reg & 0x04:
+        return None
+    return TERM_STEPS_MA[reg & 3] / 1000.0
+
+def term_from_dt(ua):
+    """The device tree's charge-term-current-microamp as the driver programs it: 150–400 mA, else 200; analog steps."""
+    if ua is None:
+        return None
+    ma = ua // 1000
+    if ma < 150 or ma > 400:
+        ma = 200
+    return TERM_STEPS_MA[(ma - 100) // 100] / 1000.0
+
+def vlim_from_chrg_in(reg):
+    if reg is None or not reg & 0x80:
+        return None
+    return round(4.0 + 0.1 * ((reg >> 4) & 7), 2)
+
+def read_charger_cfg(pmic):
+    """{cvV, termA, vlimV, src} — the rk817's own settings (pmic(reg) → byte or None), sysfs / device tree behind."""
+    cv = rd_num(BAT + "/constant_charge_voltage_max")
+    cv_src = "sysfs"
+    if cv is None:
+        cv, cv_src = cv_from_chrg_out(pmic(CHRG_OUT)), "register"
+    if cv is None:
+        cv, cv_src = 4.20, "assumed"            # ★ nothing readable: the Li-ion standard, and said so on the wire
+    term, t_src = term_from_chrg_term(pmic(CHRG_TERM)), "register"
+    if term is None:
+        raw = None
+        try:
+            with open(SYS + "/firmware/devicetree/base/battery/charge-term-current-microamp", "rb") as f:
+                b = f.read(4)
+            raw = int.from_bytes(b, "big") if len(b) == 4 else None
+        except OSError:
+            pass
+        term, t_src = term_from_dt(raw), "devicetree"
+    if term is None:
+        term, t_src = TERM_FALLBACK_A, "assumed"
+    cc = rd_num(BAT + "/constant_charge_current_max")   # (the driver's decode of CHRG_OUT 2:0; None = not known)
+    return {"cvV": round(cv, 2), "ccA": cc, "termA": term, "vlimV": vlim_from_chrg_in(pmic(CHRG_IN)), "cvSrc": cv_src, "termSrc": t_src}
+
+class FullJudge:
+    """Once a second: is the battery genuinely full? (see FULL_NEAR_CV_V above). States:
+       off (no cord) · paused (on the cord, the battery not taking charge) · cc (below the CV ceiling) · cv (topping up) ·
+       hold (tapered; counting FULL_HOLD_S) · full (latched until unplug; `by` = "charger" | "taper").
+    `limited` is separate (the hint): the port within VLIM_NEAR_V of VLIM, or the PMIC's input clamp."""
+    def __init__(self, tau=FULL_TAU_S, hold=FULL_HOLD_S):
+        self.tau, self.hold = tau, hold
+        self.reset()
+
+    def reset(self):
+        self.state, self.by, self.v, self.a, self.t, self.since = "off", None, None, None, None, None
+        self.limited = self.near = False
+
+    def _ema(self, old, x, dt):
+        if old is None:
+            return x
+        return old + (x - old) * (1.0 - math.exp(-max(0.0, dt) / self.tau))
+
+    def feed(self, t, online, status, bat_v, bat_a, port_v, cfg, chg_sts=None):
+        """bat_a signed: + into the battery. cfg = read_charger_cfg(). chg_sts = CHRG_STS 0xEB or None."""
+        if not online:
+            self.reset()
+            return self.state
+        clamp = chg_sts is not None and bool(chg_sts & 0x04)
+        vlim = cfg.get("vlimV")
+        self.near = port_v is not None and vlim is not None and port_v <= vlim + VLIM_NEAR_V
+        self.limited = clamp or (port_v is not None and vlim is not None and port_v <= vlim + VLIM_AT_V)
+        if self.state == "full":
+            return self.state
+        hw_full = status == "Full" or (chg_sts is not None and (chg_sts >> 4) & 7 == CHG_FINISH)
+        if hw_full:
+            self.state, self.by = "full", "charger"
+            return self.state
+        if bat_v is None or bat_a is None:
+            return self.state                       # ★ a missing reading changes nothing
+        dt = 0.0 if self.t is None else t - self.t
+        self.t = t
+        self.v, self.a = self._ema(self.v, bat_v, dt), self._ema(self.a, bat_a, dt)
+        if status not in ("Charging", "Full") or bat_a <= 0:
+            self.state, self.since = "paused", None     # the console's load has the port; nothing is going in
+            return self.state
+        near_cv = self.v >= cfg["cvV"] - FULL_NEAR_CV_V
+        # ★ still at the charger's constant current (≥ 85 % of it) is CC whatever the voltage says — Stuart's 4.15 V
+        #   at 0.96 A of a 1.0 A setting is not topping up yet
+        at_cc = bool(cfg.get("ccA")) and self.a >= CC_FRACTION * cfg["ccA"]
+        tapered = 0.0 < self.a <= cfg["termA"] and bat_a <= 2 * cfg["termA"]   # (a burst far over it: not tapered)
+        if near_cv and tapered and not self.limited:
+            if self.since is None:
+                self.since = t
+            if t - self.since >= self.hold:
+                self.state, self.by = "full", "taper"
+            else:
+                self.state = "hold"
+        else:
+            self.since = None
+            self.state = "cv" if near_cv and not at_cc else "cc"
+        return self.state
+
+    def wire(self, t, cfg):
+        """The `charge` part of state.power."""
+        left = None if self.state != "hold" or self.since is None else max(0, int(round(self.hold - (t - self.since))))
+        r = lambda x, n: None if x is None else round(x, n)
+        return {"state": self.state, "by": self.by, "cvV": cfg.get("cvV"), "ccA": cfg.get("ccA"), "termA": cfg.get("termA"),
+                "vlimV": cfg.get("vlimV"), "nearVlim": self.near, "limited": self.limited, "holdLeftS": left,
+                "smoothA": r(self.a, 3), "cvSrc": cfg.get("cvSrc"), "termSrc": cfg.get("termSrc")}
+
+
 class UseSmoother:
     """★ WHAT THE UNIT ITSELF USES. The rk817 driver reports no input current and no system draw, so on the charger
     the console's own use is not measured at all. The best figure is the last one measured: the battery's discharge
-    power, smoothed (exponential, USE_TAU_S), kept from before the cord went in. Fed only while on battery."""
+    power, smoothed (exponential, USE_TAU_S), kept from before the cord went in.
+    ★★ Fed ONLY with a genuine discharge (the signed current below zero, 2026-11-16): the old feed took abs(current)
+       whenever `online` read 0, so a charge current read in a plug edge's gap could have been taken for the unit's use.
+    ★ `t` is when it was last fed — the wire carries its age (useAgeS): on the charger it goes stale, and the input
+       estimate built on it is dropped after kUseStaleS (battery_math.h)."""
     def __init__(self, tau=USE_TAU_S):
         self.tau, self.w, self.t = tau, None, None
     def feed(self, t, watts):
@@ -245,42 +392,64 @@ class UseSmoother:
             self.w += (watts - self.w) * k
         self.t = t
         return self.w
+    def feed_battery(self, t, bat_v, bat_a_signed):
+        """The battery's own figures: only a discharge (current < 0) is the unit's use."""
+        if bat_v is None or bat_a_signed is None or bat_a_signed >= 0:
+            return self.w
+        return self.feed(t, -bat_a_signed * bat_v)
+    def age(self, t):
+        return None if self.t is None else max(0, int(t - self.t))
 
-def live_power(online, status, bat_v, bat_a, port_v, use_w, charge_now_uah, full_uah):
-    """The figures the Battery block shows (rounded for the wire). bat_a is a magnitude; `dir` says which way."""
+def live_power(online, status, bat_v, bat_a, port_v, use_w, charge_now_uah, full_uah, use_age_s=None, gauge_pct=None,
+               charge=None):
+    """The figures the Battery block shows (rounded for the wire). bat_a is a magnitude; `dir` says which way.
+    `charge` = FullJudge.wire() on the cord (None off it); `gaugePct` = the gauge's own % (never the judge of full)."""
     discharging = not online or status == "Discharging"
     r = lambda x, n: None if x is None else round(x, n)
     return {"online": online, "status": status, "batV": r(bat_v, 3), "batA": r(None if bat_a is None else abs(bat_a), 3),
             "batW": r(None if bat_a is None or bat_v is None else abs(bat_a) * bat_v, 2),
             "dir": "discharge" if discharging else "charge", "portV": r(port_v, 3) if online else None,
-            "useW": r(use_w, 2), "chargeMah": None if charge_now_uah is None else int(charge_now_uah // 1000),
-            "fullMah": None if full_uah is None else int(full_uah // 1000)}
+            "useW": r(use_w, 2), "useAgeS": use_age_s,
+            "chargeMah": None if charge_now_uah is None else int(charge_now_uah // 1000),
+            "fullMah": None if full_uah is None else int(full_uah // 1000), "gaugePct": gauge_pct,
+            "charge": charge if online else None}
 
 
 class BatteryCal:
     """★★★ BATTERY CALIBRATION (Stuart, 2026-11-15): the rk817 gauge assumes a full-charge capacity (boot log "fcc 2808
-    mAh") bigger than this owner's cell — it reads ~93 % at a true full. Every unit differs, so nothing is hard-coded:
-    the DISCHARGE leg is measured. It starts only on Full (else "charge to Full first"); the owner unplugs; the PMIC's
-    coulomb counter (charge_now) is read at Full and again at a SAFE empty (CAL_EMPTY_V under load, held — EmptyDetector);
-    the difference is this cell's capacity. Then a CLEAN shutdown (never the hard cut-off).
+    mAh") that is not this owner's cell. Every unit differs, so nothing is hard-coded: the DISCHARGE leg is measured —
+    the PMIC's coulomb counter (charge_now) at a GENUINE full and again at a SAFE empty (CAL_EMPTY_V under load, held —
+    EmptyDetector); the difference is this cell's capacity. Then a CLEAN shutdown (never the hard cut-off).
+    ★★★ STARTED ON THE CHARGER (Stuart 2026-11-16 — it refused to start for 30 min at a gauge "100 %" with 0.96 A still
+       going in: the old rule waited for the charger's Full, which an uncalibrated gauge cannot hurry and the owner
+       cannot see coming). START needs the cord in; the run then WAITS for a genuine full (FullJudge — the charger's
+       physics, never the gauge's %), then asks for the unplug, and the count begins at the unplug. Pulled out before
+       full: nothing starts — it says so and waits for the cord to come back (or CANCEL). STRESS's load starts only at
+       the unplug (on the charger it would only slow the charge).
     ★★ The PMIC's counter keeps counting while the console is off, so a power-off mid-way does not spoil it: the state
-       is on the state partition (CAL_JSON) and the next boot carries on — in NORMAL mode always (a STRESS run is ended
-       by holding POWER; the next boot is the ordinary radio). Only CHARGING before empty cancels it.
-    Phases: idle → armed (on Full, the cord still in; the counter at Full kept fresh) → running (unplugged) → idle."""
+       is on the state partition (CAL_JSON) and the next boot carries on — a RUNNING one in NORMAL mode always (a STRESS
+       run is ended by holding POWER; the next boot is the ordinary radio). Only CHARGING before empty cancels it.
+    Phases: idle → charging (the cord in, waiting for full; `plugged` false = pulled out early) → armed (genuinely
+    full, the cord still in; the counter at Full kept fresh to the unplug) → running (unplugged) → idle."""
+    PHASES = ("idle", "charging", "armed", "running")
+
     def __init__(self, path=CAL_JSON):
         self.path = path
         self.phase, self.mode, self.q0, self.started, self.note, self.result = "idle", "normal", None, None, "", None
+        self.plugged = True
         self.empty = EmptyDetector()
         try:
             with open(path) as f:
                 d = json.load(f)
-            self.phase = d.get("phase", "idle") if d.get("phase") in ("idle", "armed", "running") else "idle"
+            self.phase = d.get("phase", "idle") if d.get("phase") in self.PHASES else "idle"
             self.q0, self.started, self.note = d.get("q0"), d.get("started"), d.get("note", "")
+            self.mode = d.get("mode") if d.get("mode") in ("normal", "stress") else "normal"
             self.result = d.get("result") if isinstance(d.get("result"), dict) else None
-            if self.phase != "idle":
+            if self.phase == "running":
                 # ★ a boot in the middle: carry on, as an ordinary radio (a stress run never resumes)
                 self.mode = "normal"
-                log("battery calibration: resumed after a restart (%s, counter at Full %s µAh) — normal mode" % (self.phase, self.q0))
+            if self.phase != "idle":
+                log("battery calibration: resumed after a restart (%s, %s, counter at Full %s µAh)" % (self.phase, self.mode, self.q0))
         except (OSError, ValueError):
             pass
 
@@ -292,33 +461,56 @@ class BatteryCal:
         except OSError as e:
             log("battery calibration: could not save", self.path, e)
 
-    def start(self, mode, online, status, q_now):
+    def start(self, mode, online, full, q_now):
+        """`full` = FullJudge says genuinely full now. On the cord only."""
         if mode not in ("normal", "stress"):
             raise ValueError("mode must be normal or stress")
         if self.phase != "idle":
             raise ValueError("a calibration is already under way")
-        if not (online and status == "Full"):
-            raise ValueError("charge to Full first")
+        if not online:
+            raise ValueError("plug in the charger first — it starts from a full charge")
         if q_now is None:
             raise ValueError("this battery has no charge counter to read")
-        self.phase, self.mode, self.q0, self.started, self.note = "armed", mode, q_now, time.time(), ""
+        self.phase = "armed" if full else "charging"
+        self.mode, self.q0, self.started, self.note, self.plugged = mode, q_now, time.time(), "", True
         self.empty = EmptyDetector()
         self.save()
-        log("battery calibration: armed (%s) — counter at Full %d µAh; unplug to start" % (mode, q_now))
+        log("battery calibration: %s (%s) — counter %d µAh" % ("full already, unplug to start" if full else
+                                                                 "waiting on the charger for a genuine full", mode, q_now))
 
     def cancel(self, note):
         if self.phase == "idle":
             return False
         log("battery calibration:", note)
-        self.phase, self.note, self.q0 = "idle", note, None
+        self.phase, self.note, self.q0, self.plugged = "idle", note, None, True
         self.save()
         return True
 
-    def step(self, t, online, status, bat_v, q_now, design_uah):
-        """Once a second. Returns None, ("running",), ("cancelled", note) or ("done", result-or-None, note)."""
+    def step(self, t, online, status, bat_v, q_now, design_uah, full=False):
+        """Once a second. Returns None, ("armed",), ("notfull",), ("charging",), ("running",), ("cancelled", note) or
+        ("done", result-or-None, note). `full` = FullJudge's verdict this second."""
+        if self.phase == "charging":
+            if not online:
+                if self.plugged:
+                    self.plugged = False
+                    log("battery calibration: unplugged before full — waiting for the charger to come back")
+                    return ("notfull",)
+                return None
+            if not self.plugged:
+                self.plugged = True
+                log("battery calibration: the charger is back — waiting for full")
+                return ("charging",)
+            if full:
+                self.phase = "armed"
+                if q_now is not None:
+                    self.q0 = q_now
+                self.save()
+                log("battery calibration: genuinely full — counter %s µAh; unplug to start" % self.q0)
+                return ("armed",)
+            return None
         if self.phase == "armed":
             if online:
-                if status == "Full" and q_now is not None:
+                if q_now is not None:
                     self.q0 = q_now                        # ★ the counter at Full, as of the moment the cord comes out
                 return None
             self.phase = "running"
@@ -356,7 +548,8 @@ class BatteryCal:
     def wire(self, q_now):
         """The calibration's part of {"get":"state"}."""
         counted = None if self.phase != "running" or self.q0 is None or q_now is None else int((self.q0 - q_now) // 1000)
-        return {"phase": self.phase, "mode": self.mode, "countedMah": counted, "note": self.note, "result": self.result}
+        return {"phase": self.phase, "mode": self.mode, "plugged": self.plugged, "countedMah": counted, "note": self.note,
+                "result": self.result}
 
 
 class Stress:
@@ -604,6 +797,33 @@ class Hwd:
         self.use = UseSmoother()
         self.power = {}               # the live figures (power_tick, once a second)
         self.q_now = self.full_uah = None
+        # ★★ is it REALLY full (FullJudge): the charger's own settings, read from the PMIC (read only, atomic transfers)
+        self.pmic_dev = pmic_bus()
+        self.judge = FullJudge()
+        self.chg_cfg, self.chg_cfg_at = None, -1e9
+        self._pmic_err_at = -1e9
+
+    def pmic(self, reg):
+        """One PMIC register (read only), or None — no bus, or the read failed (logged once a minute)."""
+        if not self.pmic_dev:
+            return None
+        try:
+            return pmic_read(self.pmic_dev, reg)
+        except OSError as e:
+            if time.monotonic() - self._pmic_err_at > 60:
+                self._pmic_err_at = time.monotonic()
+                log("full judge: PMIC read failed:", e)
+            return None
+
+    def charger_cfg(self, t):
+        """read_charger_cfg, again once a minute (the driver sets these at probe; CHRG_IN is rewritten on unplug)."""
+        if self.chg_cfg is None or t - self.chg_cfg_at >= 60:
+            cfg = read_charger_cfg(self.pmic)
+            if cfg != self.chg_cfg:
+                log("full judge: CV %.2f V (%s), termination %.2f A (%s), input floor %s" % (cfg["cvV"], cfg["cvSrc"],
+                    cfg["termA"], cfg["termSrc"], "?" if cfg["vlimV"] is None else "%.2f V" % cfg["vlimV"]))
+            self.chg_cfg, self.chg_cfg_at = cfg, t
+        return self.chg_cfg
 
     # ── persistence ──
     def save_soon(self):
@@ -875,18 +1095,27 @@ class Hwd:
         port_v = rd_num(CHG + "/voltage_avg")
         q = rd_num(BAT + "/charge_now", 1)
         full = rd_num(BAT + "/charge_full", 1) or rd_num(BAT + "/charge_full_design", 1)
-        if not online and bat_v is not None and bat_a is not None:
-            self.use.feed(t, abs(bat_a) * bat_v)
+        if not online:
+            self.use.feed_battery(t, bat_v, bat_a)       # ★ only a genuine discharge is the unit's use
         self.q_now, self.full_uah = q, full
-        self.power = live_power(online, status, bat_v, bat_a, port_v, self.use.w, q, full)
-        self.cal_event(self.cal.step(t, online, status, bat_v, q, full))
+        # ★★★ GENUINELY FULL? the charger's physics, never the gauge's % (FullJudge)
+        cfg = self.charger_cfg(t)
+        sts = self.pmic(CHRG_STS) if online else None
+        self.judge.feed(t, online, status, bat_v, bat_a, port_v, cfg, sts)
+        gp = rd(BAT + "/capacity")
+        self.power = live_power(online, status, bat_v, bat_a, port_v, self.use.w, q, full, self.use.age(t),
+                                int(gp) if gp and gp.lstrip("-").isdigit() else None, self.judge.wire(t, cfg))
+        self.cal_event(self.cal.step(t, online, status, bat_v, q, full, self.judge.state == "full"))
         self.stress.thermal()
 
     def cal_event(self, ev):
         """What a calibration step decided: the load on / off, an event for the UI, the clean power-off at empty."""
         if not ev:
             return
-        if ev[0] == "running":
+        if ev[0] in ("armed", "notfull", "charging"):
+            # ★ on the charger: genuinely full (unplug now) · pulled out before full · the cord back in. No load yet.
+            self.emit({"event": "battery_cal", "phase": ev[0], "mode": self.cal.mode})
+        elif ev[0] == "running":
             if self.cal.mode == "stress":
                 self.stress.start()
             self.emit({"event": "battery_cal", "phase": "running", "mode": self.cal.mode})
@@ -902,8 +1131,8 @@ class Hwd:
 
     def cal_start(self, mode):
         online = rd(CHG + "/online", "0") == "1"
-        self.cal.start(mode, online, rd(BAT + "/status", "Unknown"), rd_num(BAT + "/charge_now", 1))
-        self.emit({"event": "battery_cal", "phase": "armed", "mode": mode})
+        self.cal.start(mode, online, self.judge.state == "full", rd_num(BAT + "/charge_now", 1))
+        self.emit({"event": "battery_cal", "phase": self.cal.phase, "mode": mode})
 
     def cal_cancel(self):
         if self.cal.cancel("calibration cancelled"):
