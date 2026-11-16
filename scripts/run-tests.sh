@@ -1675,6 +1675,11 @@ fi
 #     temperature before the calibration is whole, the band step, the receiver given back, the owner's switch; then the web
 #     client (headless Edge, --mute-audio). Needs VIBESERVER_BIN (exit 3 = not run). ★ Nothing here was heard on air.
 printf '\n\033[1m── Sondes mode (RS41 radiosondes, end to end: the server, then the web client) ──\033[0m\n'
+# ★ the clip writer must be today's source (a stale $OUT/test-rs41 from an earlier run wrote its third sonde outside the
+#   402–404 MHz band, 2026-11-16): rebuilt here whenever a source it reads is newer
+if [ -n "${VIBESERVER_BIN:-}" ] && { [ ! -x "$OUT/test-rs41" ] || [ -n "$(find vibeserver/test-rs41.cpp android/app/src/main/cpp/vibe_rs41*.h -newer "$OUT/test-rs41" 2>/dev/null | head -1)" ]; }; then
+  cobj="$(cobjs_for test-rs41)" && g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for test-rs41) -o "$OUT/test-rs41" vibeserver/test-rs41.cpp $(deps_for test-rs41) $cobj
+fi
 if [ -x "$OUT/test-rs41" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-rs41" --write-clip "$OUT/rs41-clip.cu8" 2400000 >/dev/null 2>&1
   VIBE_RS41_CLIP="$OUT/rs41-clip.cu8" node scripts/test-server-sondes.mjs; rc=$?

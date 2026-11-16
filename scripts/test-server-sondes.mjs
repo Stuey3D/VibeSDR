@@ -57,7 +57,12 @@ function ws(port, pathq) {
     if (b.length < 126) { h[1] = 0x80 | b.length; h.writeUInt32BE(0, 2); } else { h[1] = 0x80 | 126; h.writeUInt16BE(b.length, 2); h.writeUInt32BE(0, 4); }
     s.write(Buffer.concat([h, b]));
   };
-  st.close = () => { try { s.write(Buffer.from([0x88, 0x80, 0, 0, 0, 0])); } catch {} s.end(); };
+  /* ★ THE REAL CLIENT'S KEEPALIVE (web/client/src/spectrum.ts sends {type:'ping'}): the server releases a proto-1 session
+   *  that sends no application message for 30 s, and this test waits up to 30 s for three sondes — without it, a slow
+   *  first pass closed the socket and every later step failed after it (2026-11-16). */
+  const keep = setInterval(() => { if (st.open) st.send({ type: 'ping' }); }, 8000);
+  s.on('close', () => clearInterval(keep));
+  st.close = () => { clearInterval(keep); try { s.write(Buffer.from([0x88, 0x80, 0, 0, 0, 0])); } catch {} s.end(); };
   return st;
 }
 const jsons = (st, type) => st.txt.filter((t) => t.includes(`"type":"${type}"`)).map((t) => { try { return JSON.parse(t); } catch { return null; } }).filter(Boolean);
@@ -105,7 +110,8 @@ async function server(tag, radioExtra = {}) {
     const cfg = lastOf(sp, 'config');
     ok(cfg && Math.abs(cfg.centerFreq - 403.005e6) < 1, `the radio on 403.005 MHz, the default band (centre ${cfg && cfg.centerFreq})`);
     const three = () => { const r = lastOf(sp, 'sondes'); return r && r.sondes.filter((s) => s.lat != null).length >= 3 ? r : null; };
-    ok(await until(() => !!three(), 30000), `three sondes with positions: ${(lastOf(sp, 'sondes')?.sondes || []).map((s) => `${s.serial}@${s.hz}`).join(', ')}`);
+    ok(await until(() => !!three(), 30000), `three sondes with positions: ${(lastOf(sp, 'sondes')?.sondes || []).map((s) => `${s.serial}@${s.hz}`).join(', ')}`
+       + ((lastOf(sp, 'sondes')?.sondes || []).some((s) => s.serial === 'U0912345') ? '' : ' (no U0912345: a clip from an older test-rs41 put it at 404.2 MHz, outside this band — rebuild test-rs41)'));
     const r = lastOf(sp, 'sondes');
     ok(r && r.band === 'mid' && r.lo === 402000000 && r.hi === 404000000, `band mid, searching ${r && r.lo}–${r && r.hi}`);
     const a = r && r.sondes.find((s) => s.serial === 'S3310411');
