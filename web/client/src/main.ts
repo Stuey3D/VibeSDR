@@ -212,7 +212,7 @@ import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, type 
 import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME, FREEDV_HINT,
          type FreeDvSub, type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
 // ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
-import { m17Offered, m17Vts, m17Info, m17MergeMsgs, type M17State, type M17Msg } from '../../../src/services/m17';
+import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
  *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
@@ -2765,7 +2765,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onM17: (f) => {
       if (!spec || spec.mode !== 'm17' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
       m17State = f;
-      m17Msgs = m17MergeMsgs(m17Msgs, f);
       updateVts();
     },
     onFreeDv: (f) => {
@@ -7474,10 +7473,9 @@ let amSyncState: AmSyncState | null = null;
 let freedvSubs: FreeDvSub[] = [];
 /** ★★ V12 FreeDV: the server's last report while in the mode (null before the first, and on leaving — a ghost otherwise). */
 let fdvState: FreeDvState | null = null;
-/** ★★ V12 M17: offered by THIS server (vibeserver.json modes), its last report while in the mode, and the packets heard. */
+/** ★★ V12 M17: offered by THIS server (vibeserver.json modes), and its last report while in the mode. */
 let m17Cap = false;
 let m17State: M17State | null = null;
-let m17Msgs: M17Msg[] = [];
 /** The demodulators to offer: the fixed set, plus the synchronous AM family and DRM where this server has them (beside
  *  AM, where an AM listener looks), FreeDV beside USB / LSB — minus what the owner switched off. */
 function offeredModes(): SDRMode[] {
@@ -19376,7 +19374,7 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   // ★ V12 DRM: the box follows the mode; a new mode forgets the old station (and its meter and its picture)
   if (m !== 'drm') { drmState = null; drmIq = null; drmQualityMeter.reset(); drmQuality = null; }
   if (m !== 'freedv') fdvState = null;   // ★ V12 FreeDV: its line goes with the mode
-  if (m !== 'm17') m17State = null;      // ★ V12 M17 likewise (the packets heard are kept)
+  if (m !== 'm17') m17State = null;      // ★ V12 M17 likewise
   else if (!send && !m17State) spec.m17Status();   // ★ adopted (a room already in M17): ask for its report now
   else if (!send && !fdvState) spec.freedvSub(null);   // ★ adopted (a room already in FreeDV): ask for its report now
   amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second

@@ -428,6 +428,14 @@ static void listenerAndPipeline(bool haveVoice) {
     const auto tx = m::voiceTransmission("@ALL", "G4ABC", 100, sp);
     std::vector<cf> iq = withSilence(m::modulate(tx, 48000, 0), 48000, 0.5, 1.0);
     addNoise(iq, 48000, 22, 21);
+    {   // ★ the cost, for the docs: one receiver (no thread) on this IQ, against real time
+        Rx rx;
+        const auto t0 = std::chrono::steady_clock::now();
+        rx.feed(iq);
+        const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("   (cost: %.2f %% of one core for one listener decoding a voice over, 48 kHz channel IQ, %s ACS)\n",
+                    100.0 * wall / (double(iq.size()) / 48000.0), m::acsName());
+    }
     {
         m::M17Listener L;
         std::vector<float> out(480);
@@ -448,8 +456,9 @@ static void listenerAndPipeline(bool haveVoice) {
         check(silentBefore >= 48000 / 4, "listener: silence before the transmission (nothing until there is speech)");
         check(st.find("\"last\":\"G4ABC\"") != std::string::npos, "listener: the report", st);
     }
-    // ★ the server's path: a 240 kHz capture, the station 37 kHz off the capture's centre, through RxPipeline in NFM
-    {
+    // ★ the server's path: a 240 kHz capture, the station 37 kHz off the capture's centre, through RxPipeline in NFM — on the
+    //   dial, and 1.5 kHz off it (a radio's clock error at 70 cm is a few hundred Hz a ppm: the 12.5 kHz channel must hold it)
+    for (const double errHz : {0.0, 1500.0, -2000.0}) {
         const int fs = 240000;
         std::vector<float> I(iq.size()), Q(iq.size());
         for (size_t i = 0; i < iq.size(); ++i) { I[i] = iq[i].real(); Q[i] = iq[i].imag(); }
@@ -459,7 +468,7 @@ static void listenerAndPipeline(bool haveVoice) {
         uq.process(Q.data(), int(Q.size()), Qu.data());
         std::vector<cf> wide(static_cast<size_t>(n));
         const double off = 37000;
-        for (int i = 0; i < n; ++i) { const double ph = 2 * M_PI * off * i / fs; wide[size_t(i)] = cf(Iu[size_t(i)], Qu[size_t(i)]) * cf(float(std::cos(ph)), float(std::sin(ph))); }
+        for (int i = 0; i < n; ++i) { const double ph = 2 * M_PI * (off + errHz) * i / fs; wide[size_t(i)] = cf(Iu[size_t(i)], Qu[size_t(i)]) * cf(float(std::cos(ph)), float(std::sin(ph))); }
         std::mt19937 rr(8); std::normal_distribution<float> nd(0.f, 0.02f);
         for (auto& v : wide) v += cf(nd(rr), nd(rr));
         m::M17Listener L;
@@ -483,7 +492,7 @@ static void listenerAndPipeline(bool haveVoice) {
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         const std::string st = L.statusJson(nullptr);
         check(st.find("\"last\":\"G4ABC\"") != std::string::npos && (!haveVoice || L.voiceFrames() >= 95),
-              fmt("RxPipeline NFM (channel IQ at %.0f Hz): the transmission decoded through the server's own chain", ctx.rate).c_str(),
+              fmt("RxPipeline NFM (channel IQ at %.0f Hz), the station %+.0f Hz off the dial: decoded through the server's own chain", ctx.rate, errHz).c_str(),
               fmt("%d voice frames, out rms %.3f  %s", L.voiceFrames(), std::sqrt(ctx.e / double(std::max<size_t>(1, ctx.tot))), st.c_str()));
     }
 }
