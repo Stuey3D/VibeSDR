@@ -20,7 +20,7 @@
 //   ★ Each row carries WHICH SOURCES heard it (a bit each) and when each last did.
 //
 // ── The file: <runtime dir>/aircraft-live.dat ─────────────────────────────────────────────────────────────────────────
-//   header (64 B) · HFDL ground stations heard (128 × 16 B) · records (kCap × 256 B, fixed) = 266 304 B, made at full size.
+//   header (64 B) · HFDL ground stations heard (128 × 16 B) · records (kCap × 256 B, fixed) = 264 256 B, made at full size.
 //   ★★ BOUNDED BY CONSTRUCTION: kCap rows. Full: the row heard longest ago gives its slot up. A row unheard for kKeepSec
 //      is free. Nothing grows.
 //   ★★ IN RAM, NOT ON THE SD CARD: the runtime directory (vibeserver/main.cpp handoffDir: /run/vibeserver, a tmpfs, on a

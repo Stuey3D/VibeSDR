@@ -2,7 +2,9 @@
 // Riddle" (Junzi Sun, 2nd ed.), then the demodulator end to end on frames modulated into noisy IQ at the
 // capture rates the radios actually run (2.0, 2.048, 2.4 MS/s).
 #include "vibe_adsb.h"
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <random>
 #include <string>
@@ -86,7 +88,59 @@ static std::vector<std::complex<float>> modulate(const std::vector<Frame>& frame
     return iq;
 }
 
-int main() {
+/** A DF17 identification (TC 4, category A3) for `icao` with callsign `cs` (≤ 8 of A–Z, 0–9, space), CRC set. */
+static Frame idFrame(uint32_t icao, const char* cs) {
+    static const char* set = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ##### ###############0123456789######";
+    uint64_t me = (uint64_t(4) << 51) | (uint64_t(3) << 48);
+    for (int i = 0; i < 8; ++i) {
+        const char c = i < (int)std::strlen(cs) ? cs[i] : ' ';
+        const char* at = std::strchr(set, c);
+        const uint64_t v = (at && c != '#') ? uint64_t(at - set) : 32;
+        me |= v << (42 - 6 * i);
+    }
+    Frame f; f.len = 14;
+    f.b[0] = 0x8D; f.b[1] = uint8_t(icao >> 16); f.b[2] = uint8_t(icao >> 8); f.b[3] = uint8_t(icao);
+    for (int k = 0; k < 7; ++k) f.b[4 + k] = uint8_t(me >> (48 - 8 * k));
+    const uint32_t p = syndrome(f.b, 14);
+    f.b[11] = uint8_t(p >> 16); f.b[12] = uint8_t(p >> 8); f.b[13] = uint8_t(p);
+    return f;
+}
+
+/** ★★ V12 2026-11-16 `test-adsb --write-clip out.u8 [seconds]`: a 2.4 MS/s rtl_tcp-style u8 capture at 1090 MHz with three
+ *  aircraft (identification + airborne positions, even and odd) for the server end-to-end tests — fake-rtl-tcp.mjs --adsb
+ *  replays it. ★ 4CA97B is EI-EST and 406B90 G-EZWK: the SAME aircraft `test-vdl2 --write-clip` puts on VDL2, so a server
+ *  with one radio on each shows each aircraft ONCE with both sources (scripts/test-server-avmap.mjs). 400F11 is ADS-B only. */
+static int writeClip(const char* path, double secs) {
+    struct Ac { uint32_t icao; const char* cs; double lat, lon; int alt; };
+    const Ac ac[3] = { { 0x4CA97B, "RYR12AB", 52.60, -1.30, 36000 }, { 0x406B90, "EZY45KL", 52.10, -0.80, 24000 }, { 0x400F11, "BAW117", 52.40, -1.60, 31000 } };
+    const double rate = 2.4e6;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) { std::perror(path); return 2; }
+    const int chunks = std::max(1, (int)std::lround(secs / 0.5));
+    for (int c = 0; c < chunks; ++c) {
+        std::vector<Frame> frames;
+        for (int k = 0; k < 6; ++k)
+            for (const auto& a : ac) {
+                if (k == 0) frames.push_back(idFrame(a.icao, a.cs));
+                frames.push_back(posFrame(a.icao, a.lat, a.lon, a.alt, (k & 1) != 0));   // ★ still: the clip loops, a jump back would read as an impossible speed
+            }
+        // ★ 0.5 s a chunk: the frames, then quiet to the half second
+        std::vector<std::complex<float>> iq = modulate(frames, rate, 0.6, 0.02, 1234u + (uint32_t)c, 1500);
+        iq.resize((size_t)(rate * 0.5), std::complex<float>(0, 0));
+        std::vector<uint8_t> u(iq.size() * 2);
+        for (size_t i = 0; i < iq.size(); ++i) {
+            u[2 * i] = (uint8_t)std::max(0.0, std::min(255.0, std::round(127.4 + 127.0 * iq[i].real())));
+            u[2 * i + 1] = (uint8_t)std::max(0.0, std::min(255.0, std::round(127.4 + 127.0 * iq[i].imag())));
+        }
+        std::fwrite(u.data(), 1, u.size(), f);
+    }
+    std::fclose(f);
+    printf("wrote %s: %d s at 2.4 MS/s, aircraft 4CA97B RYR12AB, 406B90 EZY45KL, 400F11 BAW117\n", path, chunks / 2);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc > 2 && !std::strcmp(argv[1], "--write-clip")) return writeClip(argv[2], argc > 3 ? std::atof(argv[3]) : 4.0);
     printf("test-adsb\n");
 
     // ── CRC on real frames ───────────────────────────────────────────────────────────────────────────
