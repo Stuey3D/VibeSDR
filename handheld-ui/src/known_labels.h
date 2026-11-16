@@ -60,6 +60,8 @@ constexpr int PRIO_SAFETY = 7, PRIO_TABLE = 6, PRIO_ROUTINE = 5, PRIO_PERSONAL =
 /** The app's cap (knownSignals.ts LABEL_MAX) and the R36S's — 640 px, and a Mali-G31. */
 constexpr int LABEL_MAX = 12, HH_LABEL_MAX = 8;
 constexpr int LABEL_ROWS = 2;
+/** knownSignals.ts LABEL_ROWS_MAX / LABEL_MIN_CHARS: the most rows labels stack on; the fewest characters a shortened one keeps. */
+constexpr int LABEL_ROWS_MAX = 4, LABEL_MIN_CHARS = 3;
 constexpr double LABEL_GAP = 6;
 constexpr int BOOKMARK_LABEL_MAX = 16;
 
@@ -298,21 +300,31 @@ inline std::vector<KnownSig> knownSignalList(const std::vector<KnownSig>& eibi, 
 
 // ── in view, and laid out ──────────────────────────────────────────────────────────────────────────────────────────
 
-struct PlacedLabel { const KnownSig* sig = nullptr; double x = 0, lx = 0, w = 0; int row = 0; };
+struct PlacedLabel {
+    const KnownSig* sig = nullptr; double x = 0, lx = 0, w = 0; int row = 0;
+    std::string text;   // ★ the shortened name ("…") when every row was used up; empty = sig->label (the TS's `lines`)
+    const std::string& shown() const { return text.empty() ? sig->label : text; }
+};
 struct BlockedBox { int row; double x0, x1; };
 
+/** knownSignals.ts labelBoxX: a box CENTRED on its marker, moved inward only as far as it must to stay on screen. */
+inline double labelBoxX(double x, double w, double width) { return std::max(0.0, std::min(std::max(0.0, width - w), x - w / 2)); }
+
 /**
- * knownSignals.ts labelLayout, line for line: the labels inside [lo, lo + span] across `width` px; higher PRIORITY
- * first, then the one nearer the dial. Each sits RIGHT of its marker (`pad`), or LEFT of it near the right edge; one
- * that overlaps a placed label or a blocked box tries the next row, and with every row taken it is dropped. At most
- * `maxN`. Two R36S additions, both defaulting to the TS's behaviour: `maxN` (LABEL_MAX there) and `blockGap`, the clear
- * space kept from a BLOCKED box (the TS keeps `gap` from both) — the needle is 2 px wide and a label for the very
- * station you are on must still fit beside it.
+ * knownSignals.ts labelLayout, line for line (Stuart, 2026-11-16: "centre all signal labels on their carrier frequency",
+ * close signals "must still stack, never overlap or drop a label"): the labels inside [lo, lo + span] across `width` px;
+ * higher PRIORITY first, then the one nearer the dial. Each box CENTRED on its marker (shifted inward at an edge), on the
+ * lowest row where it overlaps no box and keeps every marker line clear (no box over a lower label's line, no line under a
+ * higher label's box), sliding along the row (nearest to centred, still over its own carrier) where centred does not fit;
+ * only with every row used is the name shortened with "…" (to LABEL_MIN_CHARS). At most `maxN`. Two R36S additions, both
+ * defaulting to the TS's behaviour: `maxN` (LABEL_MAX there) and `blockGap`, the clear space kept from a BLOCKED box (the
+ * TS keeps `gap` from both). `pad` is no longer used.
  */
 inline std::vector<PlacedLabel> labelLayout(const std::vector<KnownSig>& list, double lo, double span, double width,
                                             const std::function<double(const std::string&)>& measure, double dialHz,
-                                            const std::vector<BlockedBox>& blocked = {}, double pad = 3, int rows = LABEL_ROWS,
+                                            const std::vector<BlockedBox>& blocked = {}, double pad = 3, int rows = LABEL_ROWS_MAX,
                                             double gap = LABEL_GAP, int maxN = LABEL_MAX, double blockGap = -1) {
+    (void)pad;
     std::vector<PlacedLabel> out;
     if (!(span > 0 && width > 0)) return out;
     const double hi = lo + span;
@@ -331,21 +343,76 @@ inline std::vector<PlacedLabel> labelLayout(const std::vector<KnownSig>& list, d
     struct Box { double a, b, g; };
     std::vector<std::vector<Box>> taken((size_t)rows);
     for (const BlockedBox& b : blocked) if (b.row >= 0 && b.row < rows) taken[(size_t)b.row].push_back({b.x0, b.x1, blockGap});
-    auto freeAt = [&](int row, double x0, double x1) {
-        for (const Box& t : taken[(size_t)row]) if (!(x1 + t.g <= t.a || x0 >= t.b + t.g)) return false;
-        return true;
+    const double LINE = 1;   // a marker line's half-clearance (px)
+    // where a w-wide box for a marker at x can go on row r (its left edge), nearest to centred; NaN = nowhere
+    auto slot = [&](int r, double x, double w) -> double {
+        for (const PlacedLabel& p : out) if (p.row > r && x >= p.lx - LINE && x <= p.lx + p.w + LINE) return NAN;
+        const double c = labelBoxX(x, w, width);
+        auto ok = [&](double lx) {
+            if (!(lx >= 0 && lx + w <= width && lx - LINE <= x && x <= lx + w + LINE)) return false;
+            for (const Box& t : taken[(size_t)r]) if (!(lx + w + t.g <= t.a || lx >= t.b + t.g)) return false;
+            for (const PlacedLabel& p : out) if (p.row < r && !(p.x < lx - LINE || p.x > lx + w + LINE)) return false;
+            return true;
+        };
+        if (ok(c)) return c;
+        std::vector<double> cands;
+        for (const Box& t : taken[(size_t)r]) { cands.push_back(t.a - t.g - w); cands.push_back(t.b + t.g); }
+        for (const PlacedLabel& p : out) if (p.row < r) { cands.push_back(p.x - LINE - 0.5 - w); cands.push_back(p.x + LINE + 0.5); }
+        std::stable_sort(cands.begin(), cands.end(), [c](double u, double v) { return std::fabs(u - c) < std::fabs(v - c); });
+        for (double lx : cands) if (ok(lx)) return lx;
+        return NAN;
+    };
+    auto tryRows = [&](const KnownSig* sig, double x, const std::string& text, double w) {
+        for (int r = 0; r < rows; r++) {
+            const double lx = slot(r, x, w);
+            if (std::isnan(lx)) continue;
+            taken[(size_t)r].push_back({lx, lx + w, gap});
+            PlacedLabel p{sig, x, lx, w, r, {}};
+            if (text != sig->label) p.text = text;
+            out.push_back(std::move(p));
+            return true;
+        }
+        return false;
     };
     for (const KnownSig* sig : vis) {
         if ((int)out.size() >= maxN) break;
         const double x = (sig->hz - lo) / span * width;
-        const double w = measure(sig->label);
-        const double lx = x + pad + w > width ? std::max(0.0, x - pad - w) : x + pad;
-        for (int r = 0; r < rows; r++) {
-            if (!freeAt(r, lx, lx + w)) continue;
-            taken[(size_t)r].push_back({lx, lx + w, gap});
-            out.push_back({sig, x, lx, w, r});
-            break;
+        if (tryRows(sig, x, sig->label, measure(sig->label))) continue;
+        // every row used up: shorten with "…", longest first
+        std::string base = sig->label;
+        static const std::string ell = "\xE2\x80\xA6";
+        if (base.size() >= 3 && base.compare(base.size() - 3, 3, ell) == 0) base.resize(base.size() - 3);
+        std::vector<size_t> cut;   // byte offset after each code point
+        for (size_t i = 0; i < base.size(); i++) if (i + 1 == base.size() || (((unsigned char)base[i + 1]) & 0xC0) != 0x80) cut.push_back(i + 1);
+        for (int n = (int)cut.size() - 1; n >= LABEL_MIN_CHARS; n--) {
+            std::string t = base.substr(0, cut[(size_t)n - 1]);
+            while (!t.empty() && std::isspace((unsigned char)t.back())) t.pop_back();
+            t += ell;
+            if (tryRows(sig, x, t, measure(t))) break;
         }
+    }
+    return out;
+}
+
+/** knownSignals.ts labelStems, line for line: each placed label's marker line, at its TRUE carrier x, from its box's top
+ *  (y1) up to `rise` above the highest box (y0), stopping `gap` short of any box in the way; at least `minLen` long. */
+struct LabelStem { double x, y0, y1; };
+inline std::vector<LabelStem> labelStems(const std::vector<PlacedLabel>& placed, const std::function<double(int)>& rowTop,
+                                         double boxH, double rise, double gap = 1, double minLen = 2) {
+    std::vector<LabelStem> out;
+    if (placed.empty()) return out;
+    double stackTop = INFINITY;
+    for (const PlacedLabel& p : placed) stackTop = std::min(stackTop, rowTop(p.row));
+    for (const PlacedLabel& p : placed) {
+        const double x = std::round(p.x), y1 = rowTop(p.row);
+        double y0 = stackTop - rise;
+        for (const PlacedLabel& q : placed) {
+            if (&q == &p || x < q.lx || x > q.lx + q.w) continue;
+            const double qb = rowTop(q.row) + boxH;
+            if (qb <= y1 && qb + gap > y0) y0 = qb + gap;
+        }
+        if (y1 - y0 < minLen) y0 = y1 - minLen;
+        out.push_back({x, y0, y1});
     }
     return out;
 }
@@ -370,7 +437,7 @@ public:
     const std::vector<PlacedLabel>& placed() const { return placed_; }
     int layouts() const { return layouts_; }
     float boxH(const Font& f) const { return (float)std::max(12, f.lineHeight() - 3); }
-    /** The top of a row's box: row 0 by the spectrum's floor, row 1 above it. */
+    /** The top of a row's box: row 0 by the spectrum's floor, rows 1–3 stacked above it. */
     float rowTop(Rect spec, const Font& f, int row) const { const float h = boxH(f); return spec.b() - 2 - h - row * (h + 1); }
 
     /** Lay out for this view. `needleX` < 0: no dial on screen. */
@@ -389,24 +456,33 @@ public:
             widths_[t] = w;
             return w;
         };
-        // ★ never over where you are tuned (the needle) or the dB axis — the web blocks LISTEN and its axis the same way
+        // ★ never over the dB axis. ★★ (2026-11-16) No longer kept off the needle: as on the app and the web, the labels are
+        //   centred on their carriers and stack; the one naming the station you are on is drawn as the tuned label, on
+        //   the needle at the waterfall's top (tuned_label_app.h), and not here
         std::vector<BlockedBox> blocked = {{0, 0, kAxisW}, {1, 0, kAxisW}};
-        if (needleX >= 0) { const double nx = needleX - spec.x; blocked.push_back({0, nx - 1, nx + 1}); blocked.push_back({1, nx - 1, nx + 1}); }
-        placed_ = labelLayout(list_, lo, span, spec.w, measure, dialHz, blocked, kMarkPad, LABEL_ROWS, kGap, HH_LABEL_MAX, 1);
+        (void)needleX;
+        placed_ = labelLayout(list_, lo, span, spec.w, measure, dialHz, blocked, kMarkPad, LABEL_ROWS_MAX, kGap, HH_LABEL_MAX, 1);
     }
 
     /** Draw the last layout. Every quad goes into the frame's one batch; glyphs come from the atlas. ★★ V12 `hi` (≥ 0): the
-     *  placed label naming the station you are tuned to — its tick and name in `hiCol` (the tuned label's colour) with a
-     *  dark shadow (tuned_label_app.h). */
+     *  placed label naming the station you are tuned to — NOT drawn here: its name is the tuned label's, centred on the
+     *  needle (tuned_label_app.h — Stuart, 2026-11-16: "centre the frequency and bookmark reading on the VFO"), so it is
+     *  never drawn twice. `hiCol` is no longer used (kept so callers need not change). */
     void draw(Gfx& g, TextCache& tc, const Font& f, Rect spec, double lo, double span, int hi = -1, Rgba hiCol = Rgba{}) const {
         if (placed_.empty()) return;
         const float h = boxH(f), ty = (h - f.lineHeight()) / 2.f + 0.5f;
         const Rgba tick = rgb(0xd9b8ff, 0.8f), bar = rgb(0xd9b8ff, 0.55f);
+        // ★★★ each label's MARKER LINE ABOVE it (Stuart, 2026-11-16): from its top edge at the TRUE carrier, up past the
+        //     stack, never through another label (labelStems — the label being drawn as the tuned one left out)
+        std::vector<PlacedLabel> ps;
+        for (size_t pi = 0; pi < placed_.size(); pi++) if ((int)pi != hi) ps.push_back(placed_[pi]);
+        const auto stems = labelStems(ps, [&](int r) { return (double)rowTop(spec, f, r); }, h, 6);
+        for (size_t i = 0; i < ps.size(); i++)
+            g.rect(spec.x + (float)stems[i].x, (float)stems[i].y0, 1, (float)(stems[i].y1 - stems[i].y0), tick);
         for (size_t pi = 0; pi < placed_.size(); pi++) {
             const PlacedLabel& p = placed_[pi];
-            const bool isHi = (int)pi == hi;
-            const float top = rowTop(spec, f, p.row), x = spec.x + (float)std::round(p.x);
-            g.rect(x, top, 1, spec.b() - top, isHi ? hiCol : tick);
+            if ((int)pi == hi) continue;   // ★★ drawn as the tuned label, on the needle
+            const float top = rowTop(spec, f, p.row);
             const KnownSig& s = *p.sig;
             if (s.lo >= 0 && s.hi >= 0) {
                 const float x0 = std::max(spec.x, spec.x + (float)((s.lo - lo) / span * spec.w));
@@ -414,8 +490,9 @@ public:
                 if (x1 - x0 >= 3) g.rect(x0, spec.b() - 2, x1 - x0, 2, bar);
             }
             g.rect(spec.x + (float)p.lx, top, (float)p.w, h, th::knownBox);
-            if (isHi) tc.draw(g, f, s.label, spec.x + (float)p.lx + kPadX + 1, top + ty + 1, rgb(0x000000, 0.95f));
-            tc.draw(g, f, s.label, spec.x + (float)p.lx + kPadX, top + ty, isHi ? hiCol : th::knownLabel);
+            // centred in its box (it is laid out centred on its carrier; a shortened name carries its own text)
+            const float tw = (float)tc.width(f, p.shown());
+            tc.draw(g, f, p.shown(), spec.x + (float)(p.lx + (p.w - tw) / 2), top + ty, th::knownLabel);
         }
     }
 

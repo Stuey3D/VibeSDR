@@ -3,8 +3,10 @@
 // the one call drawOverlays makes.
 //
 // ★★★ STUART (2026-11-15): "When the VTS disappears can we have a label on the VFO with the current station name" —
-//     "[User] Flex FM", "[Server] Radio Caroline", "[EiBi] China Radio Int", beside the dial's needle at the top of the
-//     waterfall (the R36S draws no LISTEN readout; the frequency is the pill's — nothing here covers either).
+//     "[User] Flex FM", "[Server] Radio Caroline", "[EiBi] China Radio Int", CENTRED on the dial's needle at the top of
+//     the waterfall (Stuart, 2026-11-16: "centre the frequency and bookmark reading on the VFO"; shifted inward near an
+//     edge). The R36S draws no LISTEN readout (the frequency is the pill's) and its signal labels sit on the spectrum's
+//     rows above, so nothing here covers either.
 // ★ THE LISTS are the VTS's own (vts.h vtsStations): the rows the owner SAVED on this receiver = [User] (the handheld is
 //   its listener's own radio — the app's "your bookmarks"), the stations it HEARD = [Server], the EiBi schedule the
 //   owner imported = [EiBi], only while on air by the hours in its comment. Nothing extra is fetched: the VTS keeps them.
@@ -14,7 +16,8 @@
 // ★★ A SUPPLEMENT, NEVER A REPEAT (Stuart, 2026-11-15 — this file's first render showed "Flex FM" on the spectrum and
 //    "[User] Flex FM" under it): the SIGNAL LABELS drawn this frame (known_labels_app.h, knownLabelsUi().k.placed() —
 //    empty when they are off) are handed over (tunedPickNow, called between their layout and their drawing). A station
-//    they already name gets NO tuned label and no other name in its place: that label is drawn in the tuned colour.
+//    they already name gets NO tagged label and no other name in its place: THAT label's name is drawn here, centred on
+//    the needle in the tuned colour, and not on the spectrum as well (2026-11-16, as the app and the web do).
 // ★ RECEIVED, not only dead on: matched inside the receive passband (s.bwLow / s.bwHigh, the demodulator's filter).
 #pragma once
 #include "bm_state.h"
@@ -88,23 +91,30 @@ inline int tunedPickNow(Ctx& c, const RadioState& s, const std::vector<PlacedLab
     return u.highlight;
 }
 
-/** Called from drawOverlays with the waterfall's rect: the label beside the needle at its top, or nothing. */
+/** Called from drawOverlays with the waterfall's rect: the label centred on the needle at its top, or nothing. */
 inline void tunedLabelDraw(Ctx& c, const RadioState& s, Rect wfr, const unsigned char* lut) {
     TunedLabelUi& u = tunedLabelUi();
     if (u.pickedAt != c.t) tunedPickNow(c, s, {});   // the SIGNAL LABELS are off (or not drawn): nothing placed
-    if (u.text.empty() || !c.f.small.get()) return;
+    // ★★ a signal label already names the station: ITS name is drawn here, centred on the needle, and not on the
+    //    spectrum (known_labels.h draw skips it) — once, on the VFO, as the app and the web draw it
+    std::string text = u.text;
+    if (text.empty() && u.highlight >= 0) {
+        const std::vector<PlacedLabel>& pl = knownLabelsUi().k.placed();
+        if ((size_t)u.highlight < pl.size() && pl[u.highlight].sig) text = pl[u.highlight].sig->label;
+    }
+    if (text.empty() || !c.f.small.get()) return;
     const double lo = s.viewCentreHz - s.spanHz / 2;
     const float nx = wfr.x + (float)((s.vfoHz - lo) / s.spanHz) * wfr.w;
     if (nx < wfr.x || nx > wfr.r()) return;
     const Font& f = c.f.small;
     const float pad = 4, bh = (float)f.lineHeight() + 2;
-    const float bw = std::min(wfr.w - 4, (float)c.tc.width(f, u.text) + 2 * pad);
+    const float bw = std::min(wfr.w - 4, (float)c.tc.width(f, text) + 2 * pad);
     const float bx = (float)tl::labelX(nx - wfr.x, bw, wfr.w) + wfr.x, by = wfr.y + 3;
     const unsigned col = tl::stampColour(dispSet().needle, lut);
     c.g.rect(bx, by, bw, bh, rgb(0x000000, 0.6f));
     c.g.clipPush(bx, by, bw, bh);
-    c.tc.draw(c.g, f, u.text, bx + pad + 1, by + 2, rgb(0x000000, 0.95f));   // the dark shadow, one pixel down-right
-    c.tc.draw(c.g, f, u.text, bx + pad, by + 1, rgb(col));
+    c.tc.draw(c.g, f, text, bx + pad + 1, by + 2, rgb(0x000000, 0.95f));   // the dark shadow, one pixel down-right
+    c.tc.draw(c.g, f, text, bx + pad, by + 1, rgb(col));
     c.g.clipPop();
 }
 

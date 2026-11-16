@@ -156,11 +156,10 @@ inline std::string tunedLabel(const std::vector<Row>& rows, double dialHz, int n
     return tunedPick(rows, dialHz, nowMin, liveName, vtsShowing, settled, pb, shown).label;
 }
 
-/** tunedLabelX: the box's left edge — `gap` right of the needle when it fits, else left of it; kept on screen. */
-inline double labelX(double needleX, double boxW, double width, double gap = 6, double margin = 2) {
-    double x = needleX + gap;
-    if (x + boxW > width - margin) x = needleX - gap - boxW;
-    return std::max(margin, std::min(width - margin - boxW, x));
+/** tunedLabelX: the box's left edge — CENTRED on the needle (Stuart, 2026-11-16: "centre the frequency and bookmark
+ *  reading on the VFO"), shifted inward near an edge; kept on screen. */
+inline double labelX(double needleX, double boxW, double width, double margin = 2) {
+    return std::max(margin, std::min(width - margin - boxW, needleX - boxW / 2));
 }
 
 /** wfStamps.ts stampColour: the needle colour (0xRRGGBB), or white when its hue is within kHueClash° of the palette's at

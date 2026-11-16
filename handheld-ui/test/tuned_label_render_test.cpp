@@ -1,10 +1,11 @@
 // tuned_label_render_test.cpp — THE TUNED STATION'S LABEL ON THE R36S, drawn by the real App::drawOverlays offscreen at
 // 640×480 (Stuart, 2026-11-15: "When the VTS disappears can we have a label on the VFO with the current station name").
 //   • the dial at rest on a saved row WITH the SIGNAL LABELS on: the spectrum already says "Flex FM", so NO "[User] Flex FM"
-//     under it (Stuart, 2026-11-15: a supplement, never a repeat) — "Flex FM" itself turns the tuned colour instead (lilac
-//     while the dial is moving); with them off: "[User] Flex FM" beside the needle;
+//     under it (Stuart, 2026-11-15: a supplement, never a repeat) — "Flex FM" itself MOVES to the needle, centred, in the
+//     tuned colour, and is not drawn on the spectrum as well (2026-11-16: "centre the frequency and bookmark reading on
+//     the VFO"; lilac on the spectrum while the dial is moving); with them off: "[User] Flex FM" centred on the needle;
 //   • 2 kHz off the saved row, still inside the 9 kHz AM passband: still named;
-//   • at the right edge, an EiBi row on air (no hours = on air): "[EiBi] …" flipped LEFT of the needle, on screen;
+//   • at the right edge, an EiBi row on air (no hours = on air): "[EiBi] …" shifted inward, wholly on screen;
 //   • the dial just moved: nothing (it waits tl::kSettleMs); a dial on nothing: nothing.
 // Pixels are read back from the frame; PNGs written to $TUNED_LABEL_OUT (if set) for a look. Silent: no audio.
 // Run in the arm64 test image: handheld-ui/test/run_offscreen_tests.sh tuned_label_render_test
@@ -115,28 +116,33 @@ int main() {
     CHECK(bright(nx + 4, nx + 200) == 0, "the dial just arrived: no label yet (%d bright px)", bright(nx + 4, nx + 200));
     CHECK(lilac(nx, nx + 120) > 20 && whiteish(nx, nx + 120) == 0, "…and \"Flex FM\" on the spectrum in its own lilac (%d lilac, %d white)",
           lilac(nx, nx + 120), whiteish(nx, nx + 120));
+    const int lilac0 = lilac(0, 640);
     render("user-labels-on-no-duplicate", 9580000, 100.7);
-    CHECK(bright(0, 640) == 0, "SIGNAL LABELS on, \"Flex FM\" on the spectrum: no \"[User] Flex FM\" under it (%d bright px)", bright(0, 640));
-    CHECK(whiteish(nx, nx + 120) > 20 && lilac(nx, nx + 120) == 0, "…\"Flex FM\" itself drawn in the tuned colour instead (%d tuned, %d lilac)",
-          whiteish(nx, nx + 120), lilac(nx, nx + 120));
-    // ── SIGNAL LABELS off: [User], right of the needle ──
+    CHECK(lilac(0, 640) < lilac0 && lilac(nx, nx + 120) == 0 && whiteish(nx, nx + 120) == 0,
+          "SIGNAL LABELS on, at rest: \"Flex FM\" is no longer drawn on the spectrum (%d lilac by it, %d tuned)", lilac(nx, nx + 120), whiteish(nx, nx + 120));
+    CHECK(bright(nx - 60, nx - 2) > 10 && bright(nx + 2, nx + 60) > 10,
+          "…its name is drawn ACROSS the needle at the waterfall's top, centred (%d left, %d right)", bright(nx - 60, nx - 2), bright(nx + 2, nx + 60));
+    CHECK(std::abs(bright(nx - 60, nx) - bright(nx, nx + 60)) < std::max(bright(nx - 60, nx), bright(nx, nx + 60)),
+          "…roughly evenly either side");
+    // ── SIGNAL LABELS off: [User], centred on the needle ──
     dispSet().knownLabels = false;
     render("user-labels-off", 9580000, 100.8);
-    CHECK(bright(nx + 4, nx + 200) > 40, "labels off, at rest on a saved row: the label right of the needle (%d bright px)", bright(nx + 4, nx + 200));
-    CHECK(bright(nx - 200, nx - 4) == 0, "…and nothing left of it");
+    CHECK(bright(nx - 200, nx - 4) > 40 && bright(nx + 4, nx + 200) > 40,
+          "labels off, at rest on a saved row: the label centred across the needle (%d left, %d right)", bright(nx - 200, nx - 4), bright(nx + 4, nx + 200));
     // ── 2 kHz off, inside the ±4.5 kHz AM passband: still named ──
     const int ox = xOf(9582000);
     render("2k-off-moving", 9582000, 100.9);
     render("2k-off", 9582000, 101.6);
-    CHECK(bright(ox + 4, ox + 200) > 40, "2 kHz off, still received: still named (%d)", bright(ox + 4, ox + 200));
+    CHECK(bright(ox - 200, ox + 200) > 40, "2 kHz off, still received: still named (%d)", bright(ox - 200, ox + 200));
 
-    // ── the right edge, EiBi: flipped left, on screen ──
+    // ── the right edge, EiBi: shifted inward, on screen ──
     const int ex = xOf(9640000);
     render("eibi-moving", 9640000, 102.0);
     CHECK(bright(0, 640) == 0, "a new dial: nothing until it rests (%d)", bright(0, 640));
     render("eibi-right-edge", 9640000, 102.7);
-    CHECK(bright(ex - 260, ex - 4) > 40, "EiBi at the right edge: flipped left of the needle (%d)", bright(ex - 260, ex - 4));
-    CHECK(bright(ex + 4, 640) == 0, "…nothing right of it, off the edge");
+    CHECK(bright(ex - 260, ex - 4) > 40, "EiBi at the right edge: shifted inward, mostly left of the needle (%d)", bright(ex - 260, ex - 4));
+    CHECK(bright(ex - 260, ex) > bright(ex, 640), "…more of it left of the needle than right (%d / %d)", bright(ex - 260, ex), bright(ex, 640));
+    CHECK(bright(636, 640) == 0, "…and nothing in the last pixels: wholly on screen");
 
     // ── on nothing ──
     render("nothing", 9600000, 103.0);

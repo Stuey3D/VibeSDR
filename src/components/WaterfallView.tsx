@@ -93,11 +93,11 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
+import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, dabGradeText, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
-import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
+import { tunedPick, tunedLabelX, vfoLabelLayout, utcMinutes, type Passband, type TunedRow, type TunedPick, type VfoBox, type VfoBlockedBox } from '../utils/tunedStation';
 import { displayMap, fanRefresh, fanRow, motionImageRows, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { ringCapFromDeviceClass, ringNextRows, RING_MIN_ROWS } from '../utils/wfRingSize';
 import { growRing } from '../utils/wfRingGrow';
@@ -2816,7 +2816,6 @@ function WaterfallView({
   //    Laid out only when the view, the dial or the list changes; null while the toggle is off or none is in view.
   //    ★ The same layout as the web's (waterfall.ts _drawKnown). RN cannot measure text synchronously, so a label's box
   //      is estimated (estimateLabelWidth) — generous, and the box sizes itself to the text when drawn.
-  const knownNX = needle && showCenterMarker ? needle.nX : null;
   const knownCX = centerMarker ? centerMarker.x : null;
   // ★★ V12 in DAB on a view holding two whole blocks, the Band III blocks join the list (utils/dabBlockView.ts)
   const labelList = useMemo(() => withDabBlocks(knownSignals, dabBlocks, bwHz), [knownSignals, dabBlocks, bwHz]);
@@ -2825,37 +2824,61 @@ function WaterfallView({
   //     dabLabelLayout, up to DAB_BLOCK_ROWS), the tuned block's name on the row above them and LISTEN above that. Rows climb from the boundary, 14 pt each; with the
   //     spectrum hidden the stack is moved down so its top row sits where RF CENTRE's does.
   const dabWideNow = isDabWideList(labelList);
+  // ★★★ (not a wide DAB view — Stuart, 2026-11-16: "centre the frequency and bookmark reading on the VFO", "centre all
+  //     signal labels on their carrier frequency") the labels CENTRED on their carriers and stacked (up to 4 rows,
+  //     knownSignals.ts labelLayout), and the VFO's box — the readout, with the tuned station's name over it — centred on
+  //     the needle on the row above them (tunedStation.ts vfoLabelLayout). Laid out with the labels off too (the box).
+  const needleReadout = needle && showCenterMarker ? (needleLabel || 'LISTEN: ' + fmtHz(tuneHz)) : null;
   const knownPlan = useMemo(() => {
-    if (!labelList || !labelList.length || !(bwHz > 0) || !(width > 0)) return null;
-    const blocked: BlockedBox[] = [{ row: 0, x0: 0, x1: 30 }, { row: 1, x0: 0, x1: 30 }];
-    // (on a wide DAB view LISTEN sits above every block row — nothing there to keep clear of it)
-    if (knownNX !== null && !dabWideNow) { const l = Math.min(width - 96, knownNX + 3); blocked.push({ row: 0, x0: l, x1: l + 90 }); }
+    if (!(bwHz > 0) || !(width > 0)) return null;
+    if (dabWideNow ? !labelList || !labelList.length : false) return null;
+    const blocked: VfoBlockedBox[] = [{ row: 0, x0: 0, x1: 30, labelsOnly: true }, { row: 1, x0: 0, x1: 30, labelsOnly: true }];
+    // (LISTEN sits above every label row — on a wide DAB view above the blocks, else in the VFO's box)
     if (knownCX !== null) { const l = Math.min(width - 96, knownCX + 3); blocked.push({ row: 1, x0: l, x1: l + 96 }); }
-    // ★ the DC spike's two lines (labelBase − 44, 92 wide, left of the spike) cross rows 2 and 3 — only DAB reaches them
-    if (dabWideNow && dcSpikeX !== null) for (const r of [2, 3]) blocked.push({ row: r, x0: Math.max(0, dcSpikeX - 92), x1: dcSpikeX + 1 });
+    // ★ the DC spike's two lines (labelBase − 44, 92 wide, left of the spike) cross rows 2 and 3 — the labels reach them
+    if (dcSpikeX !== null) for (const r of [2, 3]) blocked.push({ row: r, x0: Math.max(0, dcSpikeX - 92), x1: dcSpikeX + 1 });
     const measure = (t: string) => estimateLabelWidth(t, 9, 3, 0.62);
     if (dabWideNow) {
-      const plan = dabLabelLayout(labelList, visStart, bwHz, width, measure, tuneHz, blocked, 4);
-      return { placed: plan.placed.length ? plan.placed : null, liveRow: plan.liveRow, merged: plan.merged };
+      const plan = dabLabelLayout(labelList!, visStart, bwHz, width, measure, tuneHz, blocked, 4);
+      return { placed: plan.placed.length ? plan.placed : null, liveRow: plan.liveRow, merged: plan.merged, vfo: null as VfoBox | null,
+               pick: null as TunedPick | null };
     }
-    const p = labelLayout(labelList, visStart, bwHz, width, measure, tuneHz, blocked, 4);
-    return { placed: p.length ? p : null, liveRow: 0, merged: false };
-  }, [labelList, visStart, bwHz, width, tuneHz, knownNX, knownCX, dabWideNow, dcSpikeX]);
+    const pickFor = (shown: readonly { hz: number; dialHz?: number; src: string }[]): TunedPick => tunedStation
+      ? tunedPick(tunedStation.rows, tuneHz, utcMinutes(), { settled: true, vtsShowing: false, passband: tunedStation.passband, shown })
+      : { label: null, highlight: -1 };
+    const plan = vfoLabelLayout(labelList ?? [], visStart, bwHz, width, measure, tuneHz, blocked, needleReadout, pickFor, 4);
+    const box = needle && needle.nX >= 0 && needle.nX <= width ? plan.box : null;
+    return { placed: plan.placed.length ? plan.placed : null, liveRow: box ? box.row + box.lines.length - 1 : 0, merged: !!box,
+             vfo: box, pick: plan.pick };
+  }, [labelList, visStart, bwHz, width, tuneHz, knownCX, dabWideNow, dcSpikeX, needleReadout, tunedStation, needle]);
   const knownPlaced = knownPlan ? knownPlan.placed : null;
   const liveRow = knownPlan ? knownPlan.liveRow : 0;
-  // ★★ the wide DAB view's tuned box IS the needle's readout ("194.064M: DAB 7D" over the name) — no separate one drawn
+  const vfoBox = knownPlan ? knownPlan.vfo : null;
+  // ★★ the VFO's box (or the wide DAB view's tuned box) IS the needle's readout — no separate one drawn
   const readoutMerged = !!knownPlan?.merged;
   const labelBase = liveRow > 1 && !(specShow && specH > 40) ? markerLabelBase + 14 * (liveRow - 1) : markerLabelBase;
   const rowTop = useCallback((r: number) => labelBase - 14 * r, [labelBase]);
+  // ★★★ each label's MARKER LINE ABOVE it (Stuart, 2026-11-16): from its top edge at the TRUE carrier, up past the stack,
+  //     never through another label or the VFO's box (knownSignals.ts labelStems); not on a wide DAB view (its own ticks)
+  const vfoIdx = vfoBox ? vfoBox.sigIdx : -1;
+  const knownStems = useMemo(() => {
+    if (!knownPlaced || dabWideNow) return null;
+    const ps = knownPlaced.filter((_, i) => i !== vfoIdx);
+    const st = labelStems(ps, rowTop, 13, 8, vfoBox ? [vfoBox] : []);
+    const out = new Map<object, { x: number; y0: number; y1: number }>();
+    ps.forEach((p, i) => out.set(p, st[i]));
+    return out;
+  }, [knownPlaced, dabWideNow, vfoIdx, vfoBox, rowTop]);
 
-  // ★★ V12 the tuned station: its own label beside the needle, OR — when one of the labels above already names it — that
-  //    label drawn in the tuned colour instead (tunedPick: never both, never a second name in its place)
+  // ★★ V12 the tuned station: in the VFO's box (vfoLabelLayout's pick), or — on a wide DAB view — its own label beside the
+  //    needle / the label naming it in the tuned colour (tunedPick: never both, never a second name in its place)
   const tunedPicked = useMemo(() => {
+    if (knownPlan?.pick) return knownPlan.pick;
     if (!tunedStation) return null;
     return tunedPick(tunedStation.rows, tuneHz, utcMinutes(), { settled: true, vtsShowing: false, passband: tunedStation.passband,
                                                                shown: knownPlaced ? knownPlaced.map(p => p.sig) : [] });
-  }, [tunedStation, tuneHz, knownPlaced]);
-  const tunedLabel = tunedPicked ? tunedPicked.label : null;
+  }, [knownPlan, tunedStation, tuneHz, knownPlaced]);
+  const tunedLabel = tunedPicked && !vfoBox && dabWideNow ? tunedPicked.label : null;   // (DAB only: else it is in the VFO's box)
   const tunedHi = tunedPicked ? tunedPicked.highlight : -1;
 
   // ── Visible tiles (deckOcclusion) ───────────────────────────────────────────
@@ -3411,7 +3434,21 @@ function WaterfallView({
             box on the waterfall when the spectrum is hidden), a bar along a digital mode's span, and the decoder's name on
             RF CENTRE's dark box in a fixed pale lilac — never the VFO colour, which LISTEN uses on the same row. */}
         {/* ★ the ticks and span bars first, every box after — an upper row's tall tick never crosses another's text */}
-        {knownPlaced && knownPlaced.map((p, i) => {
+        {knownPlaced && knownStems && knownPlaced.map((p, i) => {
+          const st = knownStems.get(p);
+          if (!st) return null;
+          const s = p.sig;
+          const bx0 = s.lo != null ? Math.max(0, hzToX(s.lo)) : 0, bx1 = s.hi != null ? Math.min(width, hzToX(s.hi)) : 0;
+          return (
+            <React.Fragment key={'kt' + i + ':' + s.hz}>
+              <View pointerEvents="none" style={[styles.knownTick, { left: st.x, top: Math.min(st.y0, st.y1), height: Math.max(1, Math.abs(st.y1 - st.y0)) }]} />
+              {bx1 - bx0 >= 3 && specShow && specH > 40 && (
+                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: wfTop - 2 }]} />
+              )}
+            </React.Fragment>
+          );
+        })}
+        {knownPlaced && !knownStems && knownPlaced.map((p, i) => {
           const top = rowTop(p.row + (p.span ?? 1) - 1);   // ★ a two-line DAB box's top
           const tickBot = specShow && specH > 40 ? wfTop : rowTop(p.row) + 13;
           const s = p.sig;
@@ -3428,6 +3465,7 @@ function WaterfallView({
           );
         })}
         {knownPlaced && knownPlaced.map((p, i) => {
+          if (i === vfoIdx) return null;   // ★★ drawn AS the VFO's box, below
           const span = Math.max(1, p.span ?? 1);
           const top = rowTop(p.row + span - 1);   // ★ a two-line DAB box's top: one 14-pt row taller
           const s = p.sig;
@@ -3444,7 +3482,7 @@ function WaterfallView({
                     accessibilityHint={tapLabel ? (dab ? 'Goes to this multiplex' : s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
                     onAccessibilityTap={tapLabel}
                     ref={tapLabel ? screenNavRef('known' + i, tapLabel) : undefined}
-                    style={[styles.knownBox, { left: p.lx, top }, dab && { width: p.w, alignItems: 'center', height: 13 + 14 * (span - 1) }]}>
+                    style={[styles.knownBox, { left: p.lx, top, width: p.w, alignItems: 'center' }, dab && { height: 13 + 14 * (span - 1) }]}>
                 {/* ★★ a DAB block's box is laid out CENTRED on its own block (dabBlockBoxX) at the estimated width — so it is drawn
                     at that width with the text centred, or an estimate wider than the text would shift it right again. A named
                     block is TWO lines, the block over its name ("taller instead of wider", dabBlockView.ts). */}
@@ -3487,7 +3525,7 @@ function WaterfallView({
 
         {/* The needle's own label. With an RF-centre marker on screen too, an
             unlabelled needle is ambiguous — which line am I listening to? */}
-        {needle && showCenterMarker && !readoutMerged && (
+        {needle && showCenterMarker && !readoutMerged && dabWideNow && (
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: needleColor,
@@ -3500,15 +3538,40 @@ function WaterfallView({
           </Text>
         )}
 
+        {/* ★★★ THE VFO'S BOX (utils/tunedStation.ts vfoLabelLayout — Stuart, 2026-11-16: "Can we centre the frequency and
+            bookmark reading on the VFO please"): CENTRED on the needle (shifted inward at an edge), on the row above the
+            signal labels. The readout alone: LISTEN's look (the needle colour). With a station's name: the name over the
+            readout, both centred, in the tuned colour with a dark halo on the labels' box — as DAB's tuned box — and its
+            marker line up from the top at the needle. Laid out at its estimated width, so drawn at it, text centred. */}
+        {vfoBox && needle && (() => {
+          const n = vfoBox.lines.length, top = rowTop(vfoBox.row + n - 1);
+          const tap = vfoIdx >= 0 && knownPlaced && onKnownTap ? (() => { const s = knownPlaced[vfoIdx].sig; return () => onKnownTap(s); })() : undefined;
+          return (
+            <React.Fragment key="vfobox">
+              {vfoBox.named && <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(vfoBox.x), top: top - 8, height: 8, backgroundColor: stampCol }]} />}
+              <View pointerEvents="none" accessible accessibilityLabel={vfoBox.named ? 'Tuned to ' + vfoBox.lines.join(', ') : vfoBox.lines[0]}
+                    accessibilityRole={tap ? 'button' : undefined} onAccessibilityTap={tap}
+                    style={[styles.knownBox, { left: vfoBox.lx, top, width: vfoBox.w, height: 13 + 14 * (n - 1), alignItems: 'center' },
+                            !vfoBox.named && { backgroundColor: 'rgba(0,0,0,0.65)' }]}>
+                {vfoBox.lines.map((t, li) => (
+                  <Text key={li} numberOfLines={1}
+                        style={[styles.knownText, { fontFamily, lineHeight: 14, textAlign: 'center' },
+                                vfoBox.named ? [styles.knownHiText, { color: stampCol }] : { color: needleColor, fontWeight: 'normal' }]}>{t}</Text>
+                ))}
+              </View>
+            </React.Fragment>
+          );
+        })()}
+
         {/* ★★ V12 THE TUNED STATION'S LABEL (utils/tunedStation.ts — Stuart, 2026-11-15: "When the VTS disappears can we have
-            a label on the VFO with the current station name"). Beside the needle, one row BELOW its LISTEN readout (the
+            a label on the VFO with the current station name"). A wide DAB view only (else the VFO box above). One row BELOW LISTEN (the
             top of the waterfall with the spectrum on; under LISTEN's row without it), so it never covers it. The scale
             stamps' look: the VFO colour, white where that clashes with the palette (stampCol), a dark halo on a dark box.
             Flipped to the needle's left near the right edge and kept on screen (tunedLabelX). RN cannot measure text
             here, so the width is estimated (generously) and a flipped box is pinned by its RIGHT edge to the needle. */}
         {tunedLabel && needle && needle.nX >= 0 && needle.nX <= width && (() => {
           const est = Math.min(width - 4, estimateLabelWidth(tunedLabel, 9.5, 4, 0.62));
-          const lx = tunedLabelX(needle.nX, est, width);
+          const lx = tunedLabelX(needle.nX, est, width);   // (a wide DAB view only — else the VFO's box)
           const top = specShow && specH > 40 ? wfTop + 3 : markerLabelBase + 16;
           const pos = lx < needle.nX ? { right: Math.max(2, width - (lx + est)) } : { left: lx };
           return (

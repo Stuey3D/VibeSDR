@@ -3,8 +3,9 @@
 // scripts/web-tuned-label-driver.ts. Stuart (2026-11-15): "When the VTS disappears can we have a label on the VFO with the
 // current station name".
 //   • at a phone (390 px, dpr 3 → 2), a tablet (768) and a desktop (1400), the spectrum on and off, with the needle in
-//     the middle and at both edges: the label is drawn, wholly on screen, beside the needle (right of it, or left of it
-//     near the right edge), and never over LISTEN's readout;
+//     the middle and at both edges: the label is drawn, wholly on screen, CENTRED on the needle (Stuart, 2026-11-16:
+//     "centre the frequency and bookmark reading on the VFO") or shifted inward at an edge, in ONE box with LISTEN's
+//     readout under it;
 //   • no label = nothing drawn. Pictures to TUNEDLABEL_PNG=<dir>.
 //   node scripts/test-web-tuned-label.mjs
 import fs from 'node:fs';
@@ -65,8 +66,11 @@ try {
       ok(!!t && t.text === LABEL, `${tag}, needle at the ${where}: drawn`);
       if (!t) continue;
       ok(t.x >= 0 && t.x + t.w <= d.W && t.y >= 0 && t.y + t.h <= d.H, `   …wholly on screen (x ${t.x.toFixed(0)}–${(t.x + t.w).toFixed(0)} of ${d.W})`);
-      ok(t.x > d.nX || t.x + t.w < d.nX, '   …beside the needle, not across it');
-      ok(!overlap(t, d.listen), `   …clear of LISTEN's readout (label y ${t.y.toFixed(0)}, LISTEN y ${d.listen.y.toFixed(0)}–${(d.listen.y + d.listen.h).toFixed(0)})`);
+      const mid = t.x + t.w / 2;
+      ok(where === 'middle' ? Math.abs(mid - d.nX) < 1 : t.x <= d.nX + 1 && d.nX <= t.x + t.w + 1,
+         where === 'middle' ? `   …centred on the needle (box middle ${mid.toFixed(1)}, needle ${d.nX.toFixed(1)})`
+                            : `   …shifted inward at the ${where}, still across the needle (${t.x.toFixed(0)}–${(t.x + t.w).toFixed(0)}, needle ${d.nX.toFixed(0)})`);
+      ok(d.box?.lines?.length === 2 && d.box.lines[1] === d.readout, `   …one box: the name over LISTEN's readout ("${d.box?.lines?.join(' / ')}")`);
       if (PNG && where !== 'left edge') {
         const u = await ev('__tl.png()');
         fs.writeFileSync(path.join(PNG, `${sz.name}-${spec ? 'spectrum' : 'nospectrum'}-${where.replace(' ', '-')}.png`), Buffer.from(u.split(',')[1], 'base64'));
@@ -76,8 +80,9 @@ try {
     ok(none.tuned === null, `${tag}: no label, nothing drawn`);
     // ★ a supplement, never a repeat: the spectrum's own label for the bookmark is drawn → no "[User] Flex FM" under it
     const dup = await ev(`__tl.draw(9580000, 'Flex FM', 'user', true)`);
-    ok(dup.tuned === null, `${tag}: the bookmark's own spectrum label is drawn — no duplicate under it`);
-    ok(dup.highlight === 0, `${tag}: …and that label is drawn in the tuned colour instead (highlight ${dup.highlight})`);
+    ok(dup.tuned?.text === 'Flex FM' && dup.highlight >= 0, `${tag}: the bookmark's own spectrum label MOVES into the VFO box — "Flex FM", no "[User]" (highlight ${dup.highlight})`);
+    ok(dup.placed.filter((l) => l === 'Flex FM').length === 1 && dup.box?.sigIdx === dup.highlight, `${tag}: …drawn once, the box standing for it (a tap still finds it)`);
+    ok(dup.box && Math.abs(dup.box.lx + dup.box.w / 2 - dup.nX) < 1, `${tag}: …centred on the needle`);
     if (PNG && sz.name === 'phone' && spec) { const u = await ev('__tl.png()'); fs.writeFileSync(path.join(PNG, 'phone-spectrum-no-duplicate.png'), Buffer.from(u.split(',')[1], 'base64')); }
     const solo = await ev(`__tl.draw(9580000, 'Flex FM', 'user', false)`);
     ok(solo.tuned?.text === '[User] Flex FM' && solo.highlight === -1, `${tag}: signal labels off — the bookmark gets the label, nothing highlighted`);

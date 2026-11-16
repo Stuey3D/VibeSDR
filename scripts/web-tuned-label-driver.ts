@@ -47,15 +47,11 @@ const S: any = (window as any).__tl = {
     frame(S.centre, S.span, S.bins); wf.push(S.bins, S.centre, S.span);
     wf.tick(performance.now()); wf.draw();
     const W = wf.canvas.width, H = wf.canvas.height;
-    // LISTEN's box, as markerLabel draws it
-    const ctx = wf.canvas.getContext('2d');
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    ctx.save(); ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
-    const lt = wf.liveLabel(), tw = ctx.measureText(lt).width; ctx.restore();
     const nX = wf.hzToX(hz, W);
-    const ly = wf.markerLabelY(H, 0);
-    const lx = nX + 6 * dpr + tw > W ? nX - tw - 6 * dpr : nX + 6 * dpr;
-    return { W, H, nX, tuned: wf.tunedDrawn, highlight: wf.tunedHighlight, listen: { x: lx - 3 * dpr, y: ly - 9 * dpr, w: tw + 6 * dpr, h: 13 * dpr } };
+    // ★★ the VFO's box (tunedStation.ts vfoLabelLayout): the name over the readout, centred on the needle
+    const box = wf.vfoPlan?.box ?? null;
+    return { W, H, nX, tuned: wf.tunedDrawn, highlight: wf.tunedHighlight, box, readout: wf.liveLabel(),
+             placed: (wf.knownPlaced || []).map((p: any) => p.sig.label) };
   },
   png() { return (document.getElementById('wf') as HTMLCanvasElement).toDataURL('image/png'); },
 };

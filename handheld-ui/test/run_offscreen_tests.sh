@@ -11,7 +11,7 @@
 #   wefax_adj_test    WEFAX's ADJ row is pressed into: LEFT / RIGHT walk MARGIN · SLANT · AUTO · RAW until ENTER edits one;
 #                     ENTER or BACK finishes (BACK consumed, the box not released); DOWN off it or closing ADJ ends it
 #   tuned_label_render_test  V12 the tuned station's label (drawOverlays, read back): beside the needle at the waterfall's
-#                     top once the dial rests, flipped left at the right edge, nothing while it moves or on nothing
+#                     top once the dial rests, centred on the needle, shifted inward at the right edge, nothing while it moves or on nothing
 #   paging_box_test   V12 PAGE: offered only where the engine says, the speaker glyph / VTS line while it runs with the
 #                     person's own mute untouched (from on, from muted, from APRS), the page list (parse, newest first,
 #                     bounded, ENTER reads one whole), nothing written to disk

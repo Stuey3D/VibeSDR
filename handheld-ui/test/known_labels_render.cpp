@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
     const Panel panels[3] = {
         {"40 m, dial on FT8: FT8 · FT4 · JS8 · WSPR + an EiBi CW row", 7.000e6, 100e3, 7.074e6, 200, 2800},
         {"FM, 26 names in view: the cap (8) and collision culling", 87.5e6, 20.5e6, 93.7e6, -100000, 100000},
-        {"4.6 MHz, dial on Northwood 4608.1: never over the needle", 4.550e6, 100e3, 4.6081e6, 200, 2800},
+        {"4.6 MHz, dial on Northwood 4608.1: centred, stacked, lines up", 4.550e6, 100e3, 4.6081e6, 200, 2800},
     };
     KnownLabels kl[3];
     for (auto& k : kl) k.setList(std::vector<KnownSig>(list));
