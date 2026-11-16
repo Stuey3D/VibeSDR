@@ -58,7 +58,7 @@ struct Facts {
 inline const std::vector<const char*>& allModes() {
     static const std::vector<const char*> v = {
         "wfm", "rds", "nfm", "tone", "am", "usb", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "lsb", "cwu", "cwl",
-        "drm", "freedv", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
+        "drm", "freedv", "m17", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
         "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
@@ -160,6 +160,11 @@ inline Caps compute(const Facts& f) {
         if (id == "amst") return touches(R, 520e3, 1710e3);            // ★ C-QUAM is medium wave
         if (id == "drm") return touches(R, 148.5e3, 24e6);             // ★ DRM30: LW, MW and SW (not an R820T's 24 MHz up)
         if (id == "freedv") return hf;                                  // ★ V12 FreeDV digital voice: the HF amateur bands
+        /* ★ V12 M17 digital voice: the 2 m and 70 cm amateur bands, where M17 lives. Not the HF+, as AIS is not: it stops
+         *  at 260 MHz (no 70 cm), and its 2 m path is left out the same way (docs/v12/M17.md — a decision for Stuart; nothing
+         *  in the receiver needs it gone). An Icom never: its FM audio is demodulated and de-emphasised in the radio, and the
+         *  4-FSK receiver reads IQ (not in kIcom above). */
+        if (id == "m17") return d != "airspyhf" && (touches(R, 144e6, 148e6) || touches(R, 420e6, 450e6));
         if (id == "dab") {
             std::vector<vibedab::Range> v;
             for (const auto& x : R) v.push_back({ (uint32_t)std::min(4.0e9, x.lo), (uint32_t)std::min(4.0e9, x.hi) });

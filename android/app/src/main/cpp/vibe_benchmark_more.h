@@ -54,6 +54,7 @@
 #include "vibe_ism_service.h"
 #include "vibe_hdlc.h"
 #include "vibe_freedv.h"             // ★ V12 FreeDV as a mode (the dec_freedv row) — the system's libcodec2, dlopen'd
+#include "vibe_m17.h"                // ★ V12 M17 as a mode (the dec_m17 row) — our own receiver, Codec 2 from the same library
 #include "benchsynth/cw_synth.h"
 #include "benchsynth/psk_synth.h"
 #include "benchsynth/sitor_synth.h"
@@ -702,6 +703,9 @@ inline RowRule ruleFor(const std::string& id) {
         /* ★★ V12 FreeDV (vibe_freedv.h): a listener's MODE, not a decoder slot. Not green = "freedv" off by default on a fresh
          *  setup (the owner can always tick it back — the benchmark sets the default, never hides). */
         { "dec_freedv",   { "freedv", true,  false } },
+        /* ★★ V12 M17 (vibe_m17.h): a listener's MODE, like FreeDV. Not green = "m17" off by default on a fresh setup (the
+         *  owner can always tick it back — the benchmark sets the default, never hides). */
+        { "dec_m17",      { "m17",    true,  false } },
     };
     for (const auto& e : t) if (id == e.id) return e.r;
     if (id.rfind("spot_", 0) == 0) return { "spots", false, true };   // ★ every digital-spots mode: inside "Digital spots"
@@ -1220,6 +1224,39 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         }
         while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
         r.decoded = (int)L.speechBlocks();
+        if (L.droppedBlocks()) r.label += " (fell behind)";
+        return r;
+    });
+
+    /* ★★ V12 M17 AS A MODE — one listener's receiver on a VOICE transmission (the dearer case: the 4-FSK chain runs
+     *  always, and on top of it the Viterbi, Golay and Codec 2 3200 for every frame). Our own transmitter makes an M17
+     *  over from the spec (vibe_m17.h voiceTransmission — its speech encoded by the system's libcodec2), at 18 dB C/N in
+     *  9 kHz, as 48 kHz channel IQ fed in real time; vibe-m17's own thread is in the process figure. The row's proof that
+     *  it decodes is the voice frames counted. Not measured where libcodec2 is not installed (the mode is then not offered). */
+    run("dec_m17", "M17 (per listener, a voice over)", [&] {
+        Row r; r.id = "dec_m17"; r.label = "M17 (per listener, decoding a voice over)";
+        if (!vibe::m17::available()) { r.label += " \xe2\x80\x94 libcodec2 not installed"; return r; }
+        std::vector<short> sp(size_t(8000 * 5));
+        for (size_t i = 0; i < sp.size(); ++i) sp[i] = short(3000 * std::sin(2 * M_PI * (150.0 + 40 * std::sin(i / 4000.0)) * double(i) / 8000.0));
+        const int frames = int(kRowMinSec / 0.04) + 30;
+        const std::vector<int8_t> syms = vibe::m17::voiceTransmission("@ALL", "BENCH", frames, sp);
+        std::vector<vibe::m17::cf32> iq = vibe::m17::modulate(syms, 48000, 150.0);
+        std::mt19937 g(17); std::normal_distribution<float> d(0.f, float(std::sqrt(48000.0 / 9000.0 / std::pow(10.0, 1.8) / 2)));
+        for (auto& v : iq) v += vibe::m17::cf32(d(g), d(g));
+        vibe::m17::M17Listener L;
+        std::vector<float> out(480);
+        const double t0 = wallNow(); double fedSec = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+        while (pos + 480 <= iq.size()) {
+            if (!measuring && fedSec >= 0.5) { c0 = processCpu(); measuring = true; }
+            L.feedIq(iq.data() + pos, 480, 48000.0);
+            L.takePcm(out.data(), 480);
+            pos += 480; fedSec += 480 / 48000.0;
+            const double ahead = fedSec - (wallNow() - t0);
+            if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+        }
+        r.pct = 100.0 * (processCpu() - c0) / std::max(1e-3, fedSec - 0.5);
+        while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        r.decoded = L.voiceFrames();
         if (L.droppedBlocks()) r.label += " (fell behind)";
         return r;
     });
