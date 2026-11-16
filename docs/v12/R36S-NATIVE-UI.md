@@ -49,6 +49,15 @@ full state, client has no vote, client sends only what the person did).
 ~~SET FROM MAP~~ (done 11-07: native map, map_*.h) · RDS / station names · decoders (FT8, NAVTEX, …) · DAB · recordings (the engine
 records to the card, since the native UI has no page to tap) · the clock from MSF / DAB / RDS.
 
+### PAGE — pagers on the handheld's own radio (2026-11-16)
+POCSAG and FLEX, AUTO with PROTOCOL / RATE under the key, in the VHF tab's PAGING group (`paging.h`, `dec_state.h`,
+`dec_box.h`). **Local hardware only**: the engine offers it only in the handheld's own radio process, for a radio plugged
+into the R36S, to a loopback decoder socket (`vibe_paging_gate.h`) — never a server, never the LAN. The box lists the
+pages (time, protocol and rate, capcode, function / phase, message; ENTER reads one whole), in memory only — nothing on
+the card. The speaker is silent while it runs: the ENGINE plays the silence and the person's own volume and mute are
+never touched, so they are as they were when PAGE stops (the glyph, the AUDIO sheet and the VTS line say so meanwhile).
+Details, tests and what has not been run on a real R36S: docs/v12/DECODERS-WAVE2.md section 7c.
+
 ## Measure, both images, same radio
 `vibe.debuglog` on each: per-process and per-thread CPU, cpufreq residency, battery drain over 30 min at a fixed
 brightness. The native image replaces the browser one only when it does the basic radio at a fraction of the CPU.

@@ -23,6 +23,7 @@ servers.
 - **0 false decodes on noise** (long noise runs, measured, as every other decoder).
 - Unchanged from the earlier decision: **ONE "PAGE" button**; **Android local hardware only** (the phone's own
   plugged-in radio) — never on any server, not even to LAN clients; **nothing to the gallery**.
+  ★ 2026-11-16 (Stuart): **and the R36S handheld** — the user's own handheld receiver, on its own screen (section 7c).
 
 ### SIMD — hard requirement for every decoder in this wave (Stuart, 2026-10-31)
 
@@ -494,6 +495,68 @@ without `VIBE_PAGING` on the Mac; the app's TS: services type-checked, the TSX f
 of the components runs out of the 512 MB cap); a tone-filter (non-coherent FSK) detector would beat the
 discriminator's threshold at 512/1200 (≈ several dB) — a later improvement; switching the mode to NFM on PAGE is
 left to the user (the hint says so).
+
+### 7c. PAGING ON THE R36S HANDHELD (2026-11-16)
+
+Stuart, 2026-11-16: add PAGE to the R36S — the user's own handheld receiver — and *"when it is in use the audio needs to
+be muted"*. Files: `vibe_paging_gate.h` (new), `vibe_decoder_host.h` (`pagingProcess`, `pagingHere`), `local_sdr_shim.cpp`
+(`pagingCapable`, the attach refusal, `setHandheld`, the speaker), `vibe_benchmark_more.h`, `vibeserver/CMakeLists.txt`;
+`handheld-ui/src/paging.h` (new), `dec_state.h`, `dec_box.h`, `sec_audio.h`, `vts.h`, `vts_core.h`; tests
+`vibeserver/test-paging-gate.cpp`, `scripts/test-paging-local-only.mjs`, `handheld-ui/test/paging_box_test.cpp`, the VTS
+golden (op `PS` + a bar scenario).
+
+**How it runs.** The R36S's radio process is the desktop `vibeserver` binary in its handheld profile
+(`--handheld-radio`, started by the supervisor `vibeserver --handheld`). So the engine is now COMPILED into the desktop
+VibeServer (`VIBE_PAGING` on `vibeserver_core`, `paging_decoder.cpp` in its sources) — and is dormant everywhere but
+that one process. The receiver runs in the engine as on Android (its own discriminator on the channel IQ,
+`PagingRun`); vibe-hhui is a client of it on the decoder socket, like every other decoder on the handheld.
+
+**The local-only rule — one pure function (`vibe_paging_gate.h`), each lock enough on its own:**
+1. built (`VIBE_PAGING`);
+2. an allowed PROCESS — `DecoderHost::pagingProcess()`: true from the start only in the Android client library;
+   `LocalSdrShim::setHandheld(true)` sets it in the handheld's radio process; never set in a server. Where it is false,
+   `"paging"` is an UNKNOWN decoder (`knownExt` → `pagingHere()`), whatever a client sends;
+3. the device's own — Android, or the handheld profile (`g_vsHandheld`), checked again independently of 2;
+4. not serving — `g_serveOnLan` false (the handheld child calls `setServeOnLan(false)`: it binds 127.0.0.1, and the
+   supervisor in front of it binds 127.0.0.1 only, so no LAN, tunnel or proxy client can exist);
+5. a USB radio with our own IQ — not rtl_tcp, SpyServer or an Icom;
+6. (attach) the decoder socket's peer is loopback; 7. (attach) never VFO B.
+vibeserver.json carries `"paging":true` + `pagingModes` only when 1–5 hold; vibe-hhui draws PAGE only then. The
+Android gate is the same function — nothing weaker was invented. A refusal is in the device's words: the phone's, the
+handheld's (*"Paging runs only on this handheld's own screen, on a radio plugged into it."*) or a server's (*"Paging is
+never decoded by a server — only on a radio plugged into your own phone or R36S handheld."*). The benchmark's paging row
+is drawn only where `pagingHere()`. Nothing reaches the gallery (no tap for paging, as before) or a log (the host logs
+"decoder attached: paging, auto" — never a capcode or a message; vibe-hhui's stderr names the decoder, never a page).
+
+**Silent.** While a paging receiver runs in the process, the handheld's speaker plays silence
+(`pagingSpeakerLevel` in `sendWs`'s speaker path). The person's own volume and mute are never changed — not by the
+engine, not by vibe-hhui — so when PAGE stops the speaker is exactly as it was, however it stops: closed, another
+decoder chosen, or vibe-hhui gone (its decoder socket closes and the host stops the receiver; paging is not an audio
+decoder, so a held session does not keep it). vibe-hhui only SAYS it: the deck's speaker glyph and the AUDIO sheet's
+mute key show muted (a press says *"The speaker is muted while PAGE runs — it comes back as it was when PAGE stops"*
+rather than pretend to unmute), and the VTS bar holds *"PAGE · FLEX 3200/4 · 3 pages · speaker muted"*. (The Android app
+mutes on the client — `prePagingMuteRef` — because there the phone's own audio player is the speaker.) The recording
+tap (REC) is not silenced: a recording made while PAGE runs records the channel's audio, as asked.
+
+**The R36S view** (vibe-hhui, the decoder box): PAGE in the VHF tab's PAGING group (decoderBands.ts' place); switched on,
+PROTOCOL (AUTO · POCSAG · FLEX) and, for POCSAG, RATE (ANY · 512 · 1200 · 2400) open under it — the engine's own
+`pagingModes`, MFSK's pattern; the hint is paging.ts' `PAGING_HINT`. The box lists the pages newest first: time (UTC,
+as everything on the handheld), protocol and rate in amber (*FLEX 3200/4*, *POCSAG 1200*), the address / capcode, the
+function bits (POCSAG F0–F3) or the FLEX phase (A–D), *cut short* where the lock went, and the message on its own
+line. The D-pad walks the rows; ENTER reads a page whole, ENTER again is back on its row; CLR empties the list; STOP
+closes it. The header's status is paging.ts' `pagingStatusText` (*"listening — AUTO (rate from the signal)"*,
+*"FLEX 3200/4 · 3 pages"*, the narrow-filter warning). **Nothing is written to disk**: the list is in memory, at most
+200 pages (the oldest goes), gone on STOP, CLR or a restart.
+
+| Test | What it proves | Result |
+|---|---|---|
+| `test-paging-gate` (run-tests) | the rule: 1 engine case of 32, 1 attach case of 128; a host in a server process does not know `paging` (Unknown, no IQ wanted, fed pages anyway → nothing); in the handheld's process our own FLEX pages reach its socket, another host's socket gets nothing, no gallery tap is asked for, the log has no page text; `pagingRunning` 1 while it runs, 0 after — the speaker level back as it was | 26 / 26 |
+| `scripts/test-paging-local-only.mjs` (run-tests, the real Mac binary) | a SERVER: no `paging` in vibeserver.json; a decoder socket from the LAN address and one from 127.0.0.1 asking for paging are refused, 0 binary frames, the log says refused, never attached. THE HANDHELD (`--handheld` + a fake radio): its door refuses the LAN address (ECONNREFUSED); no paging offered for a radio not plugged into it (the test radio is rtl_tcp); an attach refused in the handheld's words, 0 frames | 14 / 14 |
+| `paging_box_test` (offscreen, arm64 trixie image) | no key without `paging` + `pagingModes`, PAGING group on VHF only, the owner's block; the attach's mode; the speaker from on, from muted and from APRS (which mutes for itself) — glyph and VTS line on while PAGE runs, the person's mute never touched, back after; the six made-up pages parsed newest first, two lines in one frame, ENTER reads one whole and back, bounded at 200, an odd line kept as text, restart empty; the picker's PROTOCOL / RATE rows; HOME empty but the UI's device id | 58 / 58 |
+| VTS golden (`run_vts_golden.sh`; also compiled and run in the arm64 trixie image) | paging.ts `parsePagingStatus` + `pagingStatusText` line for line (op `PS`, 13 inputs incl. non-objects and UTF-16 cuts); the bar holds PAGE's line, a notice takes its turn, a mode's own line wins, closing clears it | 2376 / 2376 |
+
+**Not run on a real R36S** (no device here): the speaker's silence on the real codec, a real pager on air, the list's
+look on the real panel (offscreen screenshots only). The R36S image build was not run.
 
 ## 8. EAS / SAME — DONE, wired to server and app (2026-10-31, third run)
 
