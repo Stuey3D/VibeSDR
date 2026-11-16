@@ -1,16 +1,17 @@
 // freedv.h — V12 FreeDV digital voice on the R36S: the rules of src/services/freedv.ts (the app and the web page read
 // that file), line for line. docs/v12/FREEDV.md.
 //
-// ★★ OFFERED ONLY WHERE THE SERVER LISTS IT: vibeserver.json `modes` has "freedv" only when the server's libcodec2
-//    loaded, and `freedvSubs` the sub-modes it runs. No "freedv" = no FreeDV key (app.h offeredModes).
+// ★★ OFFERED ONLY WHERE THE SERVER LISTS IT: vibeserver.json `modes` has "freedv" only when the server runs one of its
+//    sub-modes (RADE built in, or libcodec2 loaded), and `freedvSubs` the sub-modes it runs. No "freedv" = no FreeDV key.
 // ★★ THE SIDEBAND IS THE SERVER'S: LSB below 10 MHz, USB from 10 MHz up; its report says which ("sb") and the passband
 //    follows the report. freedvSidebandAt is only for the moment before the first report.
 //    ★ A listener may override it (Stuart 2026-11-16): SIDEBAND AUTO / USB / LSB under the sub-mode keys
 //    ({"type":"freedv_sub","sb":"lsb"}); the report says what was chosen ("sbSel").
-// ★ AUTO finds 700D / 700E / 1600; a manual choice is the fallback ({"type":"freedv_sub","sub":"700D"}, "auto" goes
+// ★ AUTO finds RADE / 700D / 700E / 1600; a manual choice is the fallback ({"type":"freedv_sub","sub":"700D"}, "auto" goes
 //   back; no sub = "tell me the current state", sent on entering the mode).
 // ★ The VTS line is short — the screen is small: "FreeDV · searching", "FreeDV 1600 · searching" (a manual choice),
-//   "FreeDV 700D · 6 dB · G4ABC" (in sync).
+//   "FreeDV 700D · 6 dB · G4ABC" (in sync), "FreeDV · last G4ABC" (RADE, in place of "searching": the over that has just ended —
+//   its end-of-over callsign, "last" in the report; never shown beside a station that is talking now).
 // Golden-tested against the TS: test/gen_vts_golden.ts (ops FV / FO / FS) → test/vts_golden_test.cpp.
 #pragma once
 #include "json.h"
@@ -21,7 +22,7 @@
 
 namespace hh {
 
-inline const char* const kFreeDvSubs[] = {"700D", "700E", "1600"};
+inline const char* const kFreeDvSubs[] = {"RADE", "700D", "700E", "1600"};   // ★ RADE first: it is what is on air
 inline const char* const kFreeDvSidebands[] = {"auto", "usb", "lsb"};
 inline const char* const kFreeDvLabel = "FreeDV";
 
@@ -32,13 +33,14 @@ inline bool freedvIsSub(const std::string& s) {
 
 /** The server's {"type":"freedv"} report. */
 struct FreeDvState {
-    std::string sub = "auto";    // what the listener (or the room) chose: auto | 700D | 700E | 1600
+    std::string sub = "auto";    // what the listener (or the room) chose: auto | RADE | 700D | 700E | 1600
     std::string sb = "usb";      // the sideband the server demodulates
     std::string sbSel = "auto";  // the sideband chosen: auto (the convention) | usb | lsb
     bool sync = false;           // decoding speech now
     std::string mode;            // the sub-mode in sync ("" while searching)
     bool hasSnr = false; int snr = 0;   // dB, while in sync
     std::string text;            // the station's text channel (callsign etc.), "" = none
+    std::string last;            // ★ RADE: the callsign of the over that has just ended, "" = none
 };
 
 /** parseFreeDv: false when the message is not a report. Text is kept printable ASCII, trimmed, ≤ 40 characters. */
@@ -59,6 +61,14 @@ inline bool parseFreeDv(const Json& m, FreeDvState& st) {
         while (b > a && t[b - 1] == ' ') b--;
         t = t.substr(a, std::min<size_t>(b - a, 40));
         st.text = t;
+    }
+    if (m["last"].kind == Json::Str) {   // ★ as "text", clipped to 12 (FreeDV's reliable text carries 8)
+        std::string t;
+        for (unsigned char c : m["last"].str()) if (c >= 0x20 && c <= 0x7e) t += (char)c;
+        size_t a = 0, b = t.size();
+        while (a < b && t[a] == ' ') a++;
+        while (b > a && t[b - 1] == ' ') b--;
+        st.last = t.substr(a, std::min<size_t>(b - a, 12));
     }
     return true;
 }
@@ -81,7 +91,8 @@ inline std::string freedvVts(const FreeDvState* st) {
     if (!st->sync) {
         std::string what = st->sub == "auto" ? std::string() : st->sub;
         if (st->sbSel == "usb" || st->sbSel == "lsb") what += (what.empty() ? "" : " ") + std::string(st->sbSel == "usb" ? "USB" : "LSB");
-        return what.empty() ? std::string(kFreeDvLabel) + dot + "searching" : std::string(kFreeDvLabel) + " " + what + dot + "searching";
+        const std::string tail = st->last.empty() ? std::string("searching") : "last " + st->last;   // ★ RADE: in place of "searching"
+        return what.empty() ? std::string(kFreeDvLabel) + dot + tail : std::string(kFreeDvLabel) + " " + what + dot + tail;
     }
     std::string s = std::string(kFreeDvLabel) + " " + st->mode;
     if (st->hasSnr) s += dot + std::to_string(st->snr) + " dB";

@@ -14,7 +14,7 @@
  *   B hz region | key primary secondary         the band announcement (SDRScreen showBandNotif's text, vtsCheck's order)
  *   E ecc pi | iso                              eccPiToIso
  *   C max s | out   ·   D max s | out           cleanKeepSpacing / dabSafeText
- *   FV json | ok sub sb sync mode snr text vts  parseFreeDv + freedvVts (src/services/freedv.ts; snr '-' = none)
+ *   FV json | ok sub sb sbSel sync mode snr text last vts  parseFreeDv + freedvVts (src/services/freedv.ts; snr '-' = none)
  *   FO json | subs                              freedvOffered (subs comma-joined, '-' = not offered)
  *   FS hz sb sel | side lo hi                   freedvSidebandAt(hz, sel) + freedvPassband(sb)
  *   MV json | ok vts info line                  parseM17 + m17Vts / m17Info / m17Line (src/services/m17.ts)
@@ -163,17 +163,25 @@ const FDV: unknown[] = [
   { type: 'freedv', sub: 'auto', sb: 'lsb', sbSel: 'auto', state: 'search' },
   { type: 'freedv', sub: '1600', sb: 'usb', sbSel: 'xsb', state: 'search' },
   { type: 'freedv', sub: 'auto', sb: 'lsb', sbSel: 'lsb', state: 'sync', mode: '700D', snr: 4 },
+  // ★ V12 RADE: the sub-mode, and the end-of-over callsign as "last" — shown only while searching
+  { type: 'freedv', sub: 'auto', sb: 'usb', sbSel: 'auto', state: 'sync', mode: 'RADE', snr: 3, last: 'M0ABC' },
+  { type: 'freedv', sub: 'auto', sb: 'lsb', sbSel: 'auto', state: 'search', mode: '', last: 'G4ABC' },
+  { type: 'freedv', sub: 'RADE', sb: 'lsb', sbSel: 'usb', state: 'search', last: '  DG4\u0007SDX  ' },
+  { type: 'freedv', sub: 'RADEV2', sb: 'usb', state: 'sync', mode: 'RADEV2', snr: 1, last: 'X'.repeat(30) },
   { type: 'drm', sub: 'auto' },
   { sub: 'auto' },
 ];
 for (const m of FDV) {
   const st = parseFreeDv(m);
   L.push(`FV ${hex(JSON.stringify(m))} | ` + (st
-    ? `1 ${st.sub} ${st.sb} ${st.sbSel} ${st.sync ? 1 : 0} ${hex(st.mode)} ${st.snr === undefined ? '-' : st.snr} ${hex(st.text)} ${hex(freedvVts(st))}`
+    ? `1 ${st.sub} ${st.sb} ${st.sbSel} ${st.sync ? 1 : 0} ${hex(st.mode)} ${st.snr === undefined ? '-' : st.snr} ${hex(st.text)} ${hex(st.last)} ${hex(freedvVts(st))}`
     : `0 ${hex(freedvVts(null))}`));
 }
 const OFFERS: unknown[] = [
   { modes: ['usb', 'freedv'], freedvSubs: ['700D', '700E', '1600'] },
+  { modes: ['usb', 'freedv'], freedvSubs: ['RADE', '700D', '700E', '1600'] },
+  { modes: ['usb', 'freedv'], freedvSubs: ['1600', 'RADE'] },
+  { modes: ['usb', 'freedv'], freedvSubs: ['RADE'] },
   { modes: ['usb', 'freedv'], freedvSubs: ['1600', '700D'] },
   { modes: ['usb', 'freedv'], freedvSubs: ['2020', '700E'] },
   { modes: ['usb', 'freedv'] },
