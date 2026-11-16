@@ -372,11 +372,13 @@ export interface BlockedBox { row: number; x0: number; x1: number }
  * Lay out the labels in view: `lo`..`lo + span` Hz across `width` px; `measure(label)` = the label's box width (px);
  * `dialHz` breaks priority ties (nearer wins). Each label sits to the RIGHT of its marker (`pad` px), or to its left
  * near the right edge (as RF CENTRE's does). A label that overlaps one already placed (or a blocked box) tries the next
- * row; if every row is taken it is dropped. Never more than LABEL_MAX. Returned in the order placed.
+ * row; if every row is taken it is dropped. Never more than `max` (LABEL_MAX unless a caller — the wide DAB view —
+ * says otherwise). Returned in the order placed.
  */
 export function labelLayout(list: readonly KnownSignal[], lo: number, span: number, width: number,
                             measure: (label: string) => number, dialHz: number,
-                            blocked: readonly BlockedBox[] = [], pad = 3, rows = LABEL_ROWS, gap = LABEL_GAP): PlacedLabel[] {
+                            blocked: readonly BlockedBox[] = [], pad = 3, rows = LABEL_ROWS, gap = LABEL_GAP,
+                            max = LABEL_MAX): PlacedLabel[] {
   const out: PlacedLabel[] = [];
   if (!(span > 0 && width > 0)) return out;
   const vis = signalsInView(list, lo, lo + span);
@@ -387,7 +389,7 @@ export function labelLayout(list: readonly KnownSignal[], lo: number, span: numb
   for (const b of blocked) if (b.row >= 0 && b.row < rows) taken[b.row].push([b.x0, b.x1]);
   const free = (row: number, x0: number, x1: number) => taken[row].every(([a, b]) => x1 + gap <= a || x0 >= b + gap);
   for (const sig of vis) {
-    if (out.length >= LABEL_MAX) break;
+    if (out.length >= max) break;
     const x = (sig.hz - lo) / span * width;
     const w = measure(sig.label);
     const lx = x + pad + w > width ? Math.max(0, x - pad - w) : x + pad;
