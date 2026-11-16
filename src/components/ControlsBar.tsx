@@ -2456,7 +2456,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         </DomeKey>
 
         {/* CHAT */}
-        <DomeKey ref={screenNavRef('chatBtn', chatOff ? undefined : onChat)} style={por.key} {...keyProps} lightReach={chatOff ? 0 : keyProps.lightReach}
+        <DomeKey ref={mergeRefs(tourRef('chatBtn'), screenNavRef('chatBtn', chatOff ? undefined : onChat))} style={por.key} {...keyProps} lightReach={chatOff ? 0 : keyProps.lightReach}
           onPress={chatOff ? NOOP : onChat} accessibilityLabel="Chat"
           accessibilityHint={chatOff ? 'Chat is not available on this server' : undefined}
           overlay={chatUnread
@@ -2853,7 +2853,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           accessibilityLabel={`${audioAsRecord ? 'Record' : 'Audio'}${macMuted ? ', muted' : ''}`}>
           {p => <AudioKeyLegend size={ICON_SZ} progress={p} asRecord={audioAsRecord} muted={macMuted} />}
         </DomeKey>
-        <DomeKey ref={screenNavRef('chatBtn', chatOff ? undefined : onChat)} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={chatOff ? 0 : lightReach}
+        <DomeKey ref={mergeRefs(tourRef('chatBtn'), screenNavRef('chatBtn', chatOff ? undefined : onChat))} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={chatOff ? 0 : lightReach}
           onPress={chatOff ? NOOP : onChat}
           accessibilityHint={chatOff ? 'Chat is not available on this server' : undefined}
           overlay={chatUnread
