@@ -3170,6 +3170,8 @@ const BLOCKABLE = [
   { id: "jtty",   label: "JTTY" },
   /* ★ V12 2026-11-16 the NCDXF / IARU beacon tracker: which of the 18 beacons are heard on 20–10 m, and how far down. */
   { id: "ncdxf",  label: "NCDXF beacons" },
+  /* ★ V12 balloons (docs/v12/BALLOONS.md): UKHAS RTTY telemetry, Horus Binary and SSDV pictures, a listener's decoder on 70 cm. */
+  { id: "balloon", label: "Balloons (UKHAS, Horus, SSDV)" },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP

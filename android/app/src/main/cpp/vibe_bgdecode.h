@@ -186,7 +186,8 @@ private:
             gallery::Meta mm = meta_;
             mm.utc = now;
             // ★ A CW run is written exactly as an RTTY run is (V12 2026-10-25) — only its name differs.
-            const std::string what = meta_.kind == "cw" ? "CW" : meta_.kind == "psk" ? "PSK" : meta_.kind == "sitora" ? "SITOR-A" : "RTTY";
+            const std::string what = meta_.kind == "cw" ? "CW" : meta_.kind == "psk" ? "PSK" : meta_.kind == "sitora" ? "SITOR-A"
+                                   : meta_.kind == "balloon" ? "Balloon telemetry" : "RTTY";
             mm.title = what + " \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " " + upper(meta_.mode);
             const std::string head = what + " \xc2\xb7 " + where() + "\nStarted " + gallery::utcStamp(now, "%Y-%m-%d %H:%M UTC") + "\n\n";
             run_ = store_.create(mm, "txt", head + buf_);
@@ -222,6 +223,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "aprs") return "aprs";      // ★ V12: the day's packets + a summary card of stations (vibe_station_log.h)
     if (ext == "dsc") return "dsc";        // ★ DSC: the day's log per frequency + an item per distress/urgency call
     if (ext == "sitora") return "sitora";  // ★ V12 SITOR-A: the link's text, as an RTTY run (both stations, labelled)
+    if (ext == "balloon") return "balloon"; // ★ V12 balloons: the reports as a run, and each SSDV picture as a .jpg
     return "";
 }
 
@@ -763,12 +765,74 @@ private:
     std::shared_ptr<std::atomic<int64_t>> last_;
 };
 
+/** ★★ V12 BALLOONS (vibe_balloon_run.h): the reports go into a text run exactly as RTTY's do (GalleryTap), and each SSDV
+ *  picture is kept as a JPEG — when it COMPLETES (the 0x0B frame says so), or, cut off (the decoder stopped, the listener
+ *  left), the last state it reached, marked partial. Bounded: one JPEG per picture key held (the newest draw), ≤ 4 keys. */
+class BalloonGalleryTap : public DecoderTap {
+public:
+    BalloonGalleryTap(gallery::Store& store, gallery::Meta meta, std::function<double()> dial)
+        : store_(store), meta_(meta), text_(store, std::move(meta), std::move(dial)) {}
+    ~BalloonGalleryTap() override { finish(true); }
+    void text(const std::string& t) override { text_.text(t); }
+    void tick() override { text_.tick(); }
+    void frame(const uint8_t* d, size_t n) override {
+        if (n < 12 || d[0] != 0x0B) return;
+        const size_t kl = d[1];
+        if (n < 2 + kl + 9) return;
+        const std::string key((const char*)d + 2, kl);
+        const uint8_t* p = d + 2 + kl;
+        const int have = p[0] << 8 | p[1], expected = p[2] << 8 | p[3];
+        const bool complete = p[4] != 0;
+        const int w = p[5] << 8 | p[6], h = p[7] << 8 | p[8];
+        std::string jpg((const char*)p + 9, n - (2 + kl + 9));
+        std::lock_guard<std::mutex> lk(m_);
+        if (done_ || jpg.size() < 4) return;
+        Held& e = held_[key];
+        e.jpg.swap(jpg); e.have = have; e.expected = expected; e.w = w; e.h = h;
+        if (!e.started) e.started = gallery::nowUtc();
+        if (complete && !e.saved) { save_(key, e, false); e.saved = true; e.jpg.clear(); e.jpg.shrink_to_fit(); }
+        if (held_.size() > 4) {   // the oldest unfinished goes (saved as far as it got)
+            auto old = held_.begin();
+            for (auto it = held_.begin(); it != held_.end(); ++it) if (it->second.started < old->second.started) old = it;
+            if (!old->second.saved && !old->second.jpg.empty()) save_(old->first, old->second, true);
+            held_.erase(old);
+        }
+    }
+    void finish(bool interrupted) override {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            if (done_) return;
+            done_ = true;
+            for (auto& kv : held_) if (!kv.second.saved && !kv.second.jpg.empty()) save_(kv.first, kv.second, true);
+            held_.clear();
+        }
+        text_.finish(interrupted);
+    }
+private:
+    struct Held { std::string jpg; int have = 0, expected = 0, w = 0, h = 0; int64_t started = 0; bool saved = false; };
+    void save_(const std::string& key, const Held& e, bool partial) {
+        gallery::Meta m = meta_;
+        m.utc = e.started; m.partial = partial;
+        const std::string call = gallery::printable(key.substr(0, key.find('#')), 12);
+        m.title = "SSDV Â· " + call + " Â· " + std::to_string(e.w) + "Ã" + std::to_string(e.h)
+                + (partial ? " Â· " + std::to_string(e.have) + (e.expected ? " of " + std::to_string(e.expected) : std::string()) + " packets" : std::string());
+        store_.add(m, "jpg", e.jpg);
+    }
+    gallery::Store& store_;
+    gallery::Meta meta_;
+    GalleryTap text_;
+    std::mutex m_;
+    bool done_ = false;
+    std::map<std::string, Held> held_;
+};
+
 /** ★ One factory for every decoder's gallery copy — background decoding's and a listener's alike. */
 inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr,
                                     std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
     if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta, std::move(dial));
     if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
+    if (meta.kind == "balloon") return std::make_shared<BalloonGalleryTap>(st, meta, std::move(dial));
     if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk" || meta.kind == "sitora") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
         if (log) t->setLog(std::move(log), tag);

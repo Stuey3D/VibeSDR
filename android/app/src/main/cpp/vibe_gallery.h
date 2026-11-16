@@ -634,7 +634,7 @@ public:
         path = itemPath(dir(), name);
         const size_t dot = name.rfind('.');
         const std::string ext = dot == std::string::npos ? "" : name.substr(dot + 1);
-        ctype = ext == "txt" ? "text/plain; charset=utf-8" : ext == "png" ? "image/png" : ext == "json" ? "application/json"
+        ctype = ext == "txt" ? "text/plain; charset=utf-8" : ext == "png" ? "image/png" : ext == "jpg" ? "image/jpeg" : ext == "json" ? "application/json"
               : "application/octet-stream";
         return true;
     }

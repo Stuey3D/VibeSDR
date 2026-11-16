@@ -175,6 +175,9 @@ flags_for() {
     # ★ V12 the NCDXF / IARU beacon tracker (decoders/ncdxf_tracker.h, vibe_ncdxf_run.h): synthetic CW at the published
     #   schedule — steps vs SNR, noise, the callsign, clock, pitch, QSB, the grid, the host's run. `--wav` replays a recording.
     test-ncdxf)            echo "-O2" ;;
+    # ★ V12 balloons (decoders/balloon_*.h): UKHAS RTTY, Horus Binary, SSDV — our transmitter into our receiver, false-positive
+    #   minutes, SIMD = scalar, cost. `test-balloon wav <file> [rate]` replays a recording; `clip` writes the e2e clip.
+    test-balloon)          echo "-O2" ;;
     # ★★ The ADS-B gain rule after Stuart's FlightAware box: the top, down only for dynamic range, never for strong aircraft.
     test-adsb-gain)        echo "-O2 -lpthread" ;;
     # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard
@@ -270,6 +273,7 @@ flags_for() {
 deps_for() {
   case "$1" in
     test-wspr)          echo "android/app/src/main/cpp/decoders/digimodes/wspr_decoder.cpp $VDSP/third_party/pffft/pffft.c" ;;
+    test-balloon)       echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;   # ★ the RTTY decoder the balloon bank runs
     test-dxscan-fm)     echo "$VDSP/fft.cpp $VDSP/channelizer.cpp $VDSP/ddc.cpp $VDSP/stereo.cpp $VDSP/rds.cpp" ;;   # ★ kiss + pffft: cobjs_for
     test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
@@ -764,6 +768,8 @@ if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1))
 if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 NCDXF beacons: the shared client half (src/services/ncdxf.ts) and both clients' keys (2026-11-16).
 if npx tsx scripts/test_ncdxf_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 balloons: the shared client half (src/services/balloons.ts) and both clients' keys.
+if npx tsx scripts/test_balloon_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1828,6 +1834,24 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-psk.sh clip "$OUT/psk-clip.cu8" 
   rm -f "$OUT/psk-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-psk.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 BALLOONS (docs/v12/BALLOONS.md): the real server on a fake rtl_tcp replaying test-balloon's synthetic clip (our own
+#     transmitter: a payload on 434.200 MHz USB sending UKHAS at 300 Bd, an SSDV picture at 600 Bd and Horus v2): every report
+#     as sent, the picture complete, the manual pins, a one-pipeline and a range-locked radio, the owner's switch
+#     (test-server-balloon); then the web client in headless Edge (--mute-audio) — the BALLOONS key, the payload rows, the
+#     picture drawn, the pins, 390 px (test-web-balloon). NOT RUN without VIBESERVER_BIN.
+printf '\n\033[1m── Balloons (end to end: the server, then the web client) ──\033[0m\n'
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-balloon android/app/src/main/cpp/decoders/balloon_rx.h android/app/src/main/cpp/decoders/balloon_tx.h \
+  android/app/src/main/cpp/decoders/balloon_horus.h android/app/src/main/cpp/decoders/balloon_ssdv.h android/app/src/main/cpp/decoders/balloon_ukhas.h
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-balloon" ] && "$OUT/test-balloon" clip "$OUT/balloon-clip.cu8" 288000 60 >/dev/null; then
+  VIBE_BALLOON_CLIP="$OUT/balloon-clip.cu8" node scripts/test-server-balloon.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_BALLOON_CLIP="$OUT/balloon-clip.cu8" node scripts/test-web-balloon.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/balloon-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-balloon built above)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 THE RTTY SKIMMER (2026-11-14): the real server on a fake rtl_tcp replaying test-rtty-skimmer's synthetic clip (four

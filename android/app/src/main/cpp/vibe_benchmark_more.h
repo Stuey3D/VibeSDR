@@ -54,6 +54,7 @@
 #include "vibe_ism_service.h"
 #include "vibe_hdlc.h"
 #include "vibe_freedv.h"             // ★ V12 FreeDV as a mode (the dec_freedv row) — the system's libcodec2, dlopen'd
+#include "decoders/balloon_tx.h"     // ★ V12 balloons (the dec_balloon row) — our own transmitter
 #include "vibe_m17.h"                // ★ V12 M17 as a mode (the dec_m17 row) — our own receiver, Codec 2 from the same library
 #include "benchsynth/cw_synth.h"
 #include "benchsynth/psk_synth.h"
@@ -522,6 +523,22 @@ inline std::vector<float> pskSignal(const std::string& text, double rate) {
     return re;
 }
 /** A JTTY message (packMessage → frames → the 4-GFSK waveform) at `rate`, tone 0 at `f0`, in noise. */
+/** ★ V12 balloons: what a payload sends — UKHAS sentences at 300 Bd 8N2 600 Hz, then a Horus v2 packet, 20 dB in 3 kHz;
+ *  the receiver's whole search runs on it (every RTTY candidate, Horus beside). */
+inline std::vector<float> balloonAudio() {
+    using namespace vibe::balloon;
+    tx::Keying k;
+    tx::Rtty r; r.baud = 300; r.shift = 600; r.centre = 1500; r.bits = 8; r.stop = 2;
+    for (int i = 0; i < 3; ++i) {
+        tx::rtty(tx::bytesOf(tx::sentence("BENCH", i, 12, 0, i * 5, 52.0 + i * 0.001, -1.0, 20000 + 10 * i)), r, k, i ? 0.2 : 1.0);
+        tx::horus(tx::horusPacket(2, 256, i, 12, 0, i * 5 + 2, 52.0f, -1.0f, 20000), 1100, 270, k);
+    }
+    std::vector<float> a; double ph = 0;
+    tx::render(k, 48000, 0.1f, a, ph);
+    std::mt19937 g(53); std::normal_distribution<float> n(0.f, 0.02f);
+    for (float& v : a) v += n(g);
+    return a;
+}
 inline std::vector<float> jttyMessage(const std::string& text, double rate, double f0) {
     std::vector<uint64_t> frames;
     if (!jtty::packMessage(text, frames)) return {};
@@ -685,6 +702,7 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_cw",       { "cw",     true,  true  } }, { "dec_cwskim",   { "cw",     false, true  } },
         { "dec_psk",      { "psk",    true,  true  } }, { "dec_pskskim",  { "psk",    false, true  } },
         { "dec_rttyskim", { "rtty",   false, true  } },   // ★ inside RTTY's switch, which carries the green one-signal decoder
+        { "dec_balloon",  { "balloon", true, true  } },   // ★ V12 balloons: a listener's decoder (a slot)
         { "dec_jtty",     { "jtty",   true,  true  } }, { "dec_sitora",   { "sitora", true,  true  } },
         { "dec_dsc",      { "dsc",    true,  true  } }, { "dec_same",     { "same",   true,  true  } },
         { "dec_selcal",   { "selcal", true,  true  } }, { "dec_mfsk",     { "mfsk",   true,  true  } },
@@ -816,6 +834,12 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     });
     run("dec_jtty", "Decoder: JTTY", [&] {
         return hostAudioRow("dec_jtty", "Decoder: JTTY", "jtty", attach + "\"extension_name\":\"jtty\"}", jttyMessage("CQ G4ABC IO91", 48000, 1000), Count::Any);
+    });
+    /* ★★ V12 balloons (docs/v12/BALLOONS.md): UKHAS RTTY + Horus Binary — the whole AUTO search (24 RTTY candidates) and
+     *  the Horus demodulator on one listener's audio. Sets the "balloon" switch's default; never hides it. */
+    run("dec_balloon", "Decoder: Balloons", [&] {
+        return hostAudioRow("dec_balloon", "Decoder: Balloons (UKHAS RTTY + Horus, AUTO)", "balloon", attach + "\"extension_name\":\"balloon\"}",
+                            balloonAudio(), Count::Any);
     });
     run("dec_sitora", "Decoder: SITOR-A", [&] {
         const auto L = sitorsynth::makeLink("002320204", "364775427", "GOOD MORNING THIS IS A TEST +?", "QSL +?", "73 +?", 4, 7);

@@ -59,6 +59,7 @@
 #endif
 #include "vibe_jtty_run.h"
 #include "vibe_ncdxf_run.h"   // ★ V12 2026-11-16 the NCDXF / IARU beacon tracker
+#include "vibe_balloon_run.h"  // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV pictures — docs/v12/BALLOONS.md
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -639,7 +640,7 @@ public:
         std::lock_guard<std::mutex> lk(decMtx_);
         if (hfdl_) return "hfdl";
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -782,7 +783,7 @@ private:
     static bool knownExt(const std::string& e) {
         if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -790,12 +791,12 @@ private:
     static std::string paramsOf(const std::string& msg) {
         std::string k;
         for (const char* f : { "center_frequency", "shift", "baud_rate", "lpm", "image_width", "carrier",
-                               "deviation", "bandwidth", "width", "centre" }) {
+                               "deviation", "bandwidth", "width", "centre", "bits", "reverse", "horus_baud", "horus_spacing" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
         for (const char* f : { "encoding", "framing", "station", "band", "mode" }) { k += str(msg, f); k += ','; }
         for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
-                               "\"auto\":true", "\"usos\":true" })
+                               "\"auto\":true", "\"usos\":true", "\"rtty\":false", "\"horus\":false" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
         return k;
     }
@@ -828,7 +829,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_; }
+    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -856,6 +857,7 @@ private:
 #endif
         jtty_.reset();
         ncdxf_.reset();
+        balloon_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
         active_.store(false, std::memory_order_relaxed);
@@ -1071,6 +1073,8 @@ private:
             buildJttyLocked_();
         } else if (ext == "ncdxf") {
             buildNcdxfLocked_();
+        } else if (ext == "balloon") {
+            buildBalloonLocked_(msg);
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
             /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
@@ -1347,6 +1351,24 @@ private:
         ncdxf_.reset(new NcdxfRun(std::move(rf), std::move(o)));
         active_.store(true, std::memory_order_relaxed);
         log("decoder attached: NCDXF beacons");
+    }
+    /** ★★ V12 BALLOONS (vibe_balloon_run.h, decoders/balloon_rx.h): UKHAS RTTY telemetry, Horus Binary and SSDV pictures on
+     *  the listener's USB audio, all at once. AUTO by default; any of "baud_rate", "bits" (7/8), "reverse" (0/1), "shift",
+     *  "horus_baud", "horus_spacing" pins that part of the search (the manual controls under AUTO); "rtty":false /
+     *  "horus":false switch a half off. */
+    void buildBalloonLocked_(const std::string& msg) {
+        double baud = 0, bits = 0, rev = -1, shift = 0, hb = 100, hs = 0;
+        num(msg, "baud_rate", baud); num(msg, "bits", bits); num(msg, "reverse", rev); num(msg, "shift", shift);
+        num(msg, "horus_baud", hb); num(msg, "horus_spacing", hs);
+        const bool rtty = msg.find("\"rtty\":false") == std::string::npos, horus = msg.find("\"horus\":false") == std::string::npos;
+        BalloonRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+        o.json = [this](const std::string& j) { broadcastText(j, -1); };   // ★ a status, re-sent: not in the gap log
+        o.frame = [this](const std::vector<uint8_t>& f) { broadcast(f.data(), f.size()); };
+        balloon_.reset(new BalloonRun(BalloonRun::configFrom(baud, bits, rev, shift, hb, hs, rtty, horus), std::move(o)));
+        active_.store(true, std::memory_order_relaxed);
+        log("decoder attached: balloons");
     }
     void sendSstv(const std::vector<uint8_t>& m) {
         std::lock_guard<std::mutex> sl(sstvSendMtx_);   // ★ SSTV has a video-decode thread of its own
@@ -1675,6 +1697,12 @@ private:
                 if (!dec.empty()) sstv_->process(dec.data(), (int)dec.size());
                 return;
             }
+            if (balloon_) {
+                // ★ balloons: float audio straight in; reports, pictures and state are sent from inside (BalloonRun)
+                balloon_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (ncdxf_) {
                 // ★ NCDXF: float audio + the block's capture UTC (the slot is cut by when it was heard, as FT8's)
                 ncdxf_->feedAudio(data, count, decUtc_);
@@ -1813,6 +1841,7 @@ private:
     std::atomic<bool> pagingIq_{false};       // ★ paging runs: the shim hands this host its channel IQ (wantsChannelIq)
     std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::unique_ptr<NcdxfRun> ncdxf_;         // ★ V12 NCDXF beacons (buildNcdxfLocked_)
+    std::unique_ptr<BalloonRun> balloon_;     // ★ V12 balloons (buildBalloonLocked_)
     double decUtc_ = NAN;                     ///< ★ the capture UTC of the block decode_ is handed (NaN = now)
     std::unique_ptr<JttyRun> jtty_;           // ★ JTTY: every JTTY signal in the passband (buildJttyLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)

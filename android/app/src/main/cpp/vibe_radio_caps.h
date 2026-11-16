@@ -62,6 +62,7 @@ inline const std::vector<const char*>& allModes() {
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
         "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
+        "balloon",          // ★ V12 balloons (docs/v12/BALLOONS.md): a listener's decoder on USB, 70 cm
     };
     return v;
 }
@@ -149,7 +150,8 @@ inline Caps compute(const Facts& f) {
             static const char* kIcom[] = { "nfm", "am", "usb", "lsb", "cwu", "cwl", "rtty", "navtex", "wefax", "sstv",
                                            "ft8", "time", "spots", "cw", "psk", "dsc", "sitora", "same", "selcal",
                                            "mfsk", "hell", "jtty", "aprs",
-                                           "hfdl" };   // ★ HFDL reads the USB audio: an Icom's does
+                                           "hfdl",     // ★ HFDL reads the USB audio: an Icom's does
+                                           "balloon" };   // ★ …and so do balloons (an IC-9700 / IC-705 on 70 cm; reach decides)
             bool listed = false;
             for (const char* k : kIcom) if (id == k) { listed = true; break; }
             if (!listed) return false;   // ★ WFM, SAM/ECSS/C-QUAM, DRM, CTCSS (it reads channel IQ), every whole-radio mode
@@ -201,7 +203,7 @@ inline Caps compute(const Facts& f) {
         if (id == "rtty" || id == "mfsk" || id == "hell") return hf;
         if (id == "sstv" || id == "ft8" || id == "spots") return anyAmateur;
         if (id == "spotsband") return !icom && anyAmateur;                 // ★ Band reads IQ across a band
-        if (vibereach::entry(id)) return tableOk(id.c_str());             // navtex dsc same selcal aprs cw psk jtty
+        if (vibereach::entry(id)) return tableOk(id.c_str());             // navtex dsc same selcal aprs cw psk jtty balloon
         return true;
     };
     for (const char* id : allModes()) if (can(id)) c.modes.push_back(id);
