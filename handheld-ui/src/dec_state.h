@@ -1159,8 +1159,10 @@ inline void decTick(App& a, const RadioState& s) {
             // ★★★ THE LAW, once a session as PAGE first opens (Stuart, 2026-11-16) — paging.ts PAGING_LAW_NOTICE; the box's
             //     empty state and the picker's hint carry it too
             if (paging && !u.pagingLawShown) { u.pagingLawShown = true; a.toastLong(kPagingLawNotice); }
+            // ★★★ a recording running as PAGE opens records silence from here (the engine's rule and audio_rec.h's) — said
+            else if (paging && A.rec.recording()) a.toast(kPagingRecSilent);
         }
-        pagingVtsLine() = paging ? pagingVts(u.pagingHave ? &u.pagingSt : nullptr) : std::string();
+        pagingVtsLine() = paging ? pagingVts(u.pagingHave ? &u.pagingSt : nullptr, A.rec.recording()) : std::string();
     }
     // ★ tests: VIBE_HHUI_DEC_START=time,spots starts those once the session runs and the offer is in (the screenshots)
     {

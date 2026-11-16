@@ -120,8 +120,12 @@ public:
         return true;
     }
 
-    /** One message on the audio socket (binary = a PCM frame). Returns true when the recording reached its cap. */
-    bool pcm(const std::string& d) {
+    /** One message on the audio socket (binary = a PCM frame). Returns true when the recording reached its cap.
+     *  ★★★ `silent` = PAGE runs (Stuart, 2026-11-16: "Recording should be silent for pager that way nobody can record and
+     *  decode again later"): the frame is written as silence of the same length — to the file AND the record buffer — so
+     *  the recording keeps its clock and goes on with normal audio once PAGE stops. The engine already sends silence
+     *  then (vibe_paging_gate.h); this holds even if it did not. */
+    bool pcm(const std::string& d, bool silent = false) {
         if (d.size() <= 6) return false;
         const uint8_t* p = (const uint8_t*)d.data();
         const int ch = p[0];
@@ -133,6 +137,7 @@ public:
         if (frames <= 0) return false;
         // int16 LE on the wire; the R36S (and the test container) is little-endian, as is the WAV
         const int16_t* s = (const int16_t*)(const void*)(p + 6);
+        if (silent) { zeros_.assign((size_t)frames * ch, 0); s = zeros_.data(); }
         if (bufSec_ > 0) {
             Chunk c; c.ch = ch; c.frames = frames; c.pcm.assign(s, s + (size_t)frames * ch);
             rbFrames_ += (uint64_t)frames;
@@ -146,6 +151,7 @@ public:
     }
 
 private:
+    std::vector<int16_t> zeros_;   // ★ PAGE's silence, one frame's worth
     FILE* f_ = nullptr;
     std::string path_;
     uint64_t frames_ = 0;

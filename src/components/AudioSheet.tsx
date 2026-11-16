@@ -21,6 +21,7 @@ import {
 import { sMeterText, sqlClosedOf } from '../constants/meters';
 import { setMacAudioVolume, toggleMacAudioMute, useMacAudio } from '../services/macAudio';
 import { macVolumeLabel } from '../constants/macAudio';
+import { PAGING_REC_SILENT, PAGING_REC_NOTE } from '../services/paging';   // ★ V12 PAGE: REC is silent while it runs
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
@@ -593,6 +594,8 @@ export interface AudioSheetProps {
   // Recording
   recording?:   boolean;
   onRec?:       () => void;
+  /** ★★★ V12 PAGE runs (Android, the phone's own radio): the engine sends silence, so REC records silence — said here. */
+  pagingRecSilent?: boolean;
   recSeconds?:  number;
   onRecordings?: () => void;
   /** ★★ V12 RECORD BUFFER — 0 (Off) / 30 / 60 s held before the tap (hooks/useRecordBuffer). App-wide. Every backend:
@@ -742,7 +745,7 @@ export interface AudioSheetProps {
 export default function AudioSheet({
   visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', meterBus, isLocal = false, recordingOnly = false,
   nr = false, onNr, nb = false, onNb, nbx = false, onNbx, nfmVoice = true, onNfmVoice,
-  recording = false, onRec, recSeconds = 0, onRecordings, recBuffer = 0, onRecBuffer, vfoRec = null,
+  recording = false, onRec, pagingRecSilent = false, recSeconds = 0, onRecordings, recBuffer = 0, onRecBuffer, vfoRec = null,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR,
@@ -942,6 +945,10 @@ export default function AudioSheet({
               <View style={st.recDot} />
               <Text style={st.recTime}>{fmtRecTime(recSeconds)}</Text>
             </PopupWindow>
+          )}
+          {/* ★★★ V12 PAGE: REC (and the buffer) record silence while PAGE runs — said, never pretended otherwise */}
+          {pagingRecSilent && (
+            <Text style={st.iqNote}>{PAGING_REC_SILENT}. {PAGING_REC_NOTE}</Text>
           )}
           {/* ★★ RECORD BUFFER (V12) — beside REC because it changes what REC does: Stuart, 2026-10-18, "a setting so a
               user knows why recordings are longer than they expected. Next to the record button". The note is his

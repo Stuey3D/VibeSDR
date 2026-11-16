@@ -128,7 +128,8 @@ static int golden(const char* path) {
         } else if (op == "PX") {
             // ★★★ paging.ts' words, one copy: paging.h's constants must be them exactly
             std::string name; is >> name;
-            const char* t = name == "law" ? hh::kPagingLawNotice : name == "hint" ? hh::kPagingHint : nullptr;
+            const char* t = name == "law" ? hh::kPagingLawNotice : name == "recSilent" ? hh::kPagingRecSilent
+                          : name == "recNote" ? hh::kPagingRecNote : name == "hint" ? hh::kPagingHint : nullptr;
             got = t ? hex(t) : "unknown " + name;
         } else { std::fprintf(stderr, "unknown op: %s\n", line.c_str()); fails++; continue; }
         expect(got == want, "line " + std::to_string(n) + ": " + lhs + "\n   want " + want + "\n   got  " + got);
@@ -321,6 +322,9 @@ static void scenarios() {
         hh::PagingStatus p; p.detected = "FLEX 3200/4"; p.pages = 3;
         r.in.pagingLine = hh::pagingVts(&p); r.step(100);
         expect(r.line() == "PAGE \xc2\xb7 FLEX 3200/4 \xc2\xb7 3 pages \xc2\xb7 speaker muted", "PAGE locked: " + r.line());
+        r.in.pagingLine = hh::pagingVts(&p, true); r.step(100);
+        expect(r.line() == "PAGE \xc2\xb7 FLEX 3200/4 \xc2\xb7 3 pages \xc2\xb7 speaker muted \xc2\xb7 REC silent", "PAGE while recording says REC is silent: " + r.line());
+        r.in.pagingLine = hh::pagingVts(&p); r.step(100);
         r.in.noticeNew = true; r.in.noticeText = "A server notice"; r.step(100);
         expect(r.bar.shown() && r.bar.shown()->name == "A server notice", "a notice takes its turn");
         r.step(7600);

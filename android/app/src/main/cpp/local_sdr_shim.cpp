@@ -17979,6 +17979,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Same rule for the per-client path — see dabInject_. And ADS-B — see onAudio.
         if (g_dabMode.load(std::memory_order_relaxed) && !dabInject_) return;
         if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)) return;
+        // ★★★ V12 PAGING: silence while a paging receiver runs here — so every recording of this stream is silent too
+        //     (vibe_paging_gate.h). Before the encoder: Opus and PCM alike carry the silence.
+        std::vector<int16_t> pagingZeros;
+        pcm = vibe::pagingAudioOut(pcm, (size_t)count * ch, DecoderHost::pagingRunning().load(std::memory_order_relaxed), pagingZeros);
         std::vector<int16_t> monoBuf;
         if (c->forceMono && ch == 2) {
             monoBuf.resize((size_t)count);
@@ -18034,6 +18038,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  level), then send each group its own stream — the silence group from the cached silence packet. */
     void sendAudioPcmSquelchAware(const std::vector<std::shared_ptr<net::Socket>>& socksIn,
                                   const int16_t* pcm, int count, int ch) {
+        // ★★★ V12 PAGING: the shared stream is silence while a paging receiver runs (vibe_paging_gate.h) — the VFO A/B mixes
+        //     and VFO A's own recording stream below are made from this block, so they are silent with it.
+        std::vector<int16_t> pagingZeros;
+        if (count > 0) pcm = vibe::pagingAudioOut(pcm, (size_t)count * ch, DecoderHost::pagingRunning().load(std::memory_order_relaxed), pagingZeros);
         // ★★ V12 VFO A/B: a listener mixing a watch channel gets its own L/R stream; everyone else the shared one.
         const std::vector<std::shared_ptr<net::Socket>> socks = watchDivertShared(socksIn, pcm, count, ch);
         if (socks.empty()) return;
@@ -18105,6 +18113,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             vsAudioBytes.fetch_add(frame.size() * socks.size(), std::memory_order_relaxed);
         };
         if (count <= 0) return;
+        // ★★★ V12 PAGING: silence while a paging receiver runs (vibe_paging_gate.h) — whoever calls this
+        std::vector<int16_t> pagingZeros;
+        pcm = vibe::pagingAudioOut(pcm, (size_t)count * ch, DecoderHost::pagingRunning().load(std::memory_order_relaxed), pagingZeros);
 
         // Mono-request fold (see audioForceMono): stereo → mono BEFORE encoding. Covers both the Opus
         // and PCM paths and the encoder rebuilds itself on the channel change, same as a pilot flip.
@@ -29242,6 +29253,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     void iqTapInto(const std::shared_ptr<IqOut>& iq, const cf32* in, int n, int inRate) {
         if (!iq || n <= 0 || !iq->hasConsumer()) return;
+        // ★★★ V12 PAGING: not a sample of IQ leaves while a paging receiver runs (vibe_paging_gate.h; the stream is
+        //     closed by iqOffForPaging — this covers the moment in between)
+        if (!vibe::pagingAllowsIqOut(DecoderHost::pagingRunning().load(std::memory_order_relaxed))) return;
         if (inRate <= 0) return;
         // ★ Full rate: rotate the capture down by the hardware offset on a COPY (the pipeline
         //   still needs the original), so the consumer's centre is exact. See requestConsumerCentre.
@@ -29318,6 +29332,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         iqTearDown(iq);
         if (iq->full) applyAutoIf();   // ★ the IF filter follows the zoom again
     }
+    /** ★★★ V12 PAGING: PAGE has started — every raw IQ stream in this process ends, and its listener is told why
+     *  (vibe_paging_gate.h pagingIqOutRefusal). From the decoder socket's thread, as iqStopFor runs from a control one. */
+    void iqOffForPaging() {
+        std::vector<std::shared_ptr<net::Socket>> told;
+        std::vector<std::shared_ptr<ClientDsp>> cs;
+        { std::lock_guard<std::mutex> lk(clientMtx); for (auto& kv : clientDsp) if (kv.second) cs.push_back(kv.second); }
+        for (auto& c : cs) {
+            bool had; { std::lock_guard<std::mutex> lk(c->mtx); had = (bool)c->iq; }
+            if (!had) continue;
+            iqStop(c.get());
+            std::lock_guard<std::mutex> lk(clientMtx);
+            if (c->spec) told.push_back(c->spec);
+        }
+        std::shared_ptr<net::Socket> ds; bool direct = false;
+        { std::lock_guard<std::mutex> lk(iqDirectMtx); direct = (bool)iqDirect; ds = iqDirectSock; }
+        if (direct) { iqStopDirect(); if (ds) told.push_back(ds); }
+        const std::string j = std::string("{\"type\":\"iqout\",\"on\":0,\"why\":\"") + vibe::pagingIqOutRefusal() + "\"}";
+        for (auto& sk : told) if (sk && sk->isOpen()) sendText(sk, j);
+        if (!told.empty()) LOGI("raw IQ out: closed — PAGE started");
+    }
     void iqTearDown(const std::shared_ptr<IqOut>& iq) {
         if (!iq) return;
         iq->run.store(false);
@@ -29382,6 +29416,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Never on a shared dial: an rtl_tcp client's tune would move everybody.
         if (g_vsMaxUsers.load() > 1 && !perClientDsp()) return refuse("not on a shared dial — every listener here shares one VFO");
         if (g_dabMode.load(std::memory_order_relaxed)) return refuse("not while DAB has the receiver");
+        // ★★★ V12 PAGING: never while a paging receiver runs here — an IQ stream can be recorded and decoded later
+        if (!vibe::pagingAllowsIqOut(DecoderHost::pagingRunning().load(std::memory_order_relaxed))) return refuse(vibe::pagingIqOutRefusal());
         if (c && c->iq) iqStop(c.get());
         if (direct) iqStopDirect();      // one stream per dial: a second request replaces the first
         if (g_vsRawIqActive.load() >= vsRawIqMax())
@@ -29751,6 +29787,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             ));
                         continue;
                     }
+                    // ★★★ V12 PAGING: no raw IQ stream may carry the channel while PAGE runs (vibe_paging_gate.h)
+                    iqOffForPaging();
                 }
                 // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
                 //    fields we normally discard, plus the constellation). SELECTING IT IS THE TOGGLE,
@@ -31192,6 +31230,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void watchSendRec(WatchSet* w, int vfo, const std::vector<std::shared_ptr<net::Socket>>& socks, const float* x, int frames,
                       int ch, bool opus) {
         if (frames <= 0 || vfo < 0 || vfo > 1) return;
+        // ★★★ V12 PAGING: a VFO's own recording stream is silence while a paging receiver runs (vibe_paging_gate.h)
+        std::vector<float> pagingZeros;
+        x = vibe::pagingAudioOut(x, (size_t)frames * ch, DecoderHost::pagingRunning().load(std::memory_order_relaxed), pagingZeros);
         std::vector<int16_t> pcm;
         floatToPcm16(x, (size_t)frames * ch, pcm);
         const uint32_t sr = (uint32_t)AUDIO_SR;
@@ -31236,6 +31277,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** One session's own stream, framed exactly as the shared one (Opus if the shared stream is Opus, else PCM). */
     void watchSendPrivate(WatchSet* w, const std::vector<std::shared_ptr<net::Socket>>& socks, const int16_t* pcm, int count, int ch) {
+        // ★★★ V12 PAGING: VFO B is in this mix — silence while a paging receiver runs (vibe_paging_gate.h)
+        std::vector<int16_t> pagingZeros;
+        if (count > 0) pcm = vibe::pagingAudioOut(pcm, (size_t)count * ch, DecoderHost::pagingRunning().load(std::memory_order_relaxed), pagingZeros);
         auto fanOut = [&](const std::vector<uint8_t>& frame) {
             for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x2, frame.data(), frame.size(), Out::Audio);
             vsAudioBytes.fetch_add(frame.size() * socks.size(), std::memory_order_relaxed);
