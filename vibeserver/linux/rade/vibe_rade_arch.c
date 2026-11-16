@@ -38,6 +38,41 @@ static const char* const kNames[5] = { "c", "c", "c", "c", "c" };
 static const char* const kFamily = "scalar";
 #endif
 
+/* ★★ A SECOND OPINION, only ever lowering Opus's answer — so a wrong "yes" can never become an illegal instruction:
+ *  - x86 AVX2: Opus checks CPUID only. The OS must also save the 256-bit registers (OSXSAVE, then XCR0 bits 1-2), or the
+ *    first AVX instruction faults — e.g. a hypervisor or kernel (noxsave) that hides the state but not the CPUID bits.
+ *  - Linux ARM: Opus reads /proc/cpuinfo's text. getauxval(AT_HWCAP) is the kernel's own answer for THIS process — the
+ *    same on real hardware, but right where the text is not: under qemu-user, /proc/cpuinfo is the HOST's, so an armhf
+ *    binary emulated as a Cortex-A7 on an arm64 host read "asimddp" and died on the dot product (seen 2026-11-16).
+ *    32-bit: HWCAP_NEON is bit 12, HWCAP_ASIMDDP bit 24 (Linux 6.2+; older kernels never report it, and neither does
+ *    their /proc/cpuinfo). 64-bit: HWCAP_ASIMDDP is bit 20. */
+#if defined(OPUS_HAVE_RTCD) && (defined(OPUS_X86_MAY_HAVE_SSE2) || defined(OPUS_X86_MAY_HAVE_AVX2))
+#include <cpuid.h>
+static int os_clamp(int a) {
+    if (a < 4) return a;
+    unsigned eax, ebx, ecx, edx;
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx) || !(ecx & (1u << 27))) return 3;   /* no OSXSAVE */
+    unsigned lo, hi;
+    __asm__ __volatile__(".byte 0x0f, 0x01, 0xd0" : "=a"(lo), "=d"(hi) : "c"(0));   /* xgetbv(0) */
+    (void)hi;
+    return (lo & 6u) == 6u ? a : 3;
+}
+#elif defined(OPUS_HAVE_RTCD) && defined(OPUS_ARM_MAY_HAVE_NEON_INTR) && defined(__linux__)
+#include <sys/auxv.h>
+static int os_clamp(int a) {
+    const unsigned long hw = getauxval(AT_HWCAP);
+#if defined(__aarch64__)
+    if (a >= 4 && !(hw & (1ul << 20))) a = 3;
+#else
+    if (a >= 3 && !(hw & (1ul << 12))) a = 2;
+    if (a >= 4 && !(hw & (1ul << 24))) a = 3;
+#endif
+    return a;
+}
+#else
+static int os_clamp(int a) { return a; }
+#endif
+
 static int g_arch = -1;      /* -1 = not asked yet; a benign race (every thread computes the same value) */
 static int g_detected = 0;
 
@@ -53,7 +88,7 @@ static int parse_arch(const char* s) {
 int vrade_rx_arch(void) {
     int a = __atomic_load_n(&g_arch, __ATOMIC_ACQUIRE);
     if (a >= 0) return a;
-    const int det = opus_select_arch();
+    const int det = os_clamp(opus_select_arch());
     a = det;
     const int want = parse_arch(getenv("VIBE_RADE_ARCH"));
     if (want >= 0 && want < a) a = want;   /* ★ only ever DOWN: never an instruction the CPU lacks */

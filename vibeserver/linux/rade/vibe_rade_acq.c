@@ -1,4 +1,4 @@
-/* vibe_rade_acq.c — RADE V1's pilot SEARCH, reorganised so the compiler vectorises it (NEON / SSE2; scalar on ARMv6).
+/* vibe_rade_acq.c — RADE V1's pilot SEARCH, reorganised and vectorised by hand (NEON / SSE2; scalar on ARMv6).
  *
  * ★★ WHY (measured 2026-11-16): a RADE receiver that is SEARCHING — the state it is in whenever nobody is transmitting,
  *    which is most of the time — cost 3.5 % of an M5 core, three times what it costs IN SYNC decoding speech (1.1 %). The
@@ -8,9 +8,9 @@
  *    That is the RADE cost that decides whether a small ARM board can run it at all.
  * ★★ WHAT CHANGES: nothing in the arithmetic — the same sums, each over n in the same order, the same maximum (time outer,
  *    frequency inner, first strict maximum), the same threshold. Only the loop order: for each t, eight frequency bins at
- *    a time are summed over all 160 samples from a pilot table stored [n][f] as separate real and imaginary rows — a plain
- *    float loop the compiler vectorises with SSE2 (x86), its eight running sums held in registers; NEON (ARMv7 and AArch64)
- *    is written out by hand, because GCC vectorised neither (see the loop). The |Dt| sums for the noise threshold are taken
+ *    a time are summed over all 160 samples from a pilot table stored [n][f] as separate real and imaginary rows — its eight
+ *    running sums held in registers. NEON (ARMv7 and AArch64) and SSE2 (x86) are written out by hand, because GCC
+ *    vectorised none of the three (see the loop); the plain C is left for ARMv6. The |Dt| sums for the noise threshold are taken
  *    in the same pass (same order as upstream's second pass) instead of a second sweep of the grid. Off-air (rade_c's own
  *    5-minute recording) the decode is the same as upstream's: the same syncs, frames and callsigns.
  * ★ rade_c's own function is still built (renamed vrade_upstream_acq_detect_pilots by build-rade.sh) and used if the
@@ -46,6 +46,15 @@ int vrade_upstream_acq_check_pilots(rade_acq* acq, const RADE_COMP* rx, int tmax
 #endif
 #else
 #define VR_NEON 0
+#endif
+/* ★★ x86: SSE2 by hand too (2026-11-16). The comment below used to say the compiler vectorised the plain loop on x86;
+ *    it did not — GCC 12 left it as scalar mulss/addss (found counting the x86_64 build under qemu: searching cost
+ *    1499 M instructions a second against arm64's 223 M). SSE2 is every amd64 and the i386 package's floor. */
+#if !VR_NEON && (defined(__SSE2__) || defined(_M_X64))
+#include <emmintrin.h>
+#define VR_SSE2 1
+#else
+#define VR_SSE2 0
 #endif
 
 /* The frequency-shifted pilots p_w[f][n] (rade_acq_init), transposed to [n][f] and split into real and imaginary rows.
@@ -97,6 +106,26 @@ static void corr_t(const RADE_COMP* rx, int t, int Nmf, float* a1r, float* a1i, 
         }
         vst1q_f32(&a1r[fb], s1r0); vst1q_f32(&a1r[fb + 4], s1r1); vst1q_f32(&a1i[fb], s1i0); vst1q_f32(&a1i[fb + 4], s1i1);
         vst1q_f32(&a2r[fb], s2r0); vst1q_f32(&a2r[fb + 4], s2r1); vst1q_f32(&a2i[fb], s2i0); vst1q_f32(&a2i[fb + 4], s2i1);
+#elif VR_SSE2
+        /* ★ The C below, four bins to a register: the same products, combined in the same order (xr·pr − xi·pi, THEN
+         *   added to the sum), so its sums are bit-identical to the scalar loop's — unlike NEON's multiply-accumulates. */
+        __m128 s1r0 = _mm_setzero_ps(), s1r1 = s1r0, s1i0 = s1r0, s1i1 = s1r0, s2r0 = s1r0, s2r1 = s1r0, s2i0 = s1r0, s2i1 = s1r0;
+        for (int n = 0; n < RADE_M; n++) {
+            const __m128 xr = _mm_set1_ps(x[n].real), xi = _mm_set1_ps(-x[n].imag);
+            const __m128 yr = _mm_set1_ps(y[n].real), yi = _mm_set1_ps(-y[n].imag);
+            const __m128 pr0 = _mm_load_ps(&g_pre[n][fb]), pr1 = _mm_load_ps(&g_pre[n][fb + 4]);
+            const __m128 pi0 = _mm_load_ps(&g_pim[n][fb]), pi1 = _mm_load_ps(&g_pim[n][fb + 4]);
+            s1r0 = _mm_add_ps(s1r0, _mm_sub_ps(_mm_mul_ps(xr, pr0), _mm_mul_ps(xi, pi0)));
+            s1r1 = _mm_add_ps(s1r1, _mm_sub_ps(_mm_mul_ps(xr, pr1), _mm_mul_ps(xi, pi1)));
+            s1i0 = _mm_add_ps(s1i0, _mm_add_ps(_mm_mul_ps(xr, pi0), _mm_mul_ps(xi, pr0)));
+            s1i1 = _mm_add_ps(s1i1, _mm_add_ps(_mm_mul_ps(xr, pi1), _mm_mul_ps(xi, pr1)));
+            s2r0 = _mm_add_ps(s2r0, _mm_sub_ps(_mm_mul_ps(yr, pr0), _mm_mul_ps(yi, pi0)));
+            s2r1 = _mm_add_ps(s2r1, _mm_sub_ps(_mm_mul_ps(yr, pr1), _mm_mul_ps(yi, pi1)));
+            s2i0 = _mm_add_ps(s2i0, _mm_add_ps(_mm_mul_ps(yr, pi0), _mm_mul_ps(yi, pr0)));
+            s2i1 = _mm_add_ps(s2i1, _mm_add_ps(_mm_mul_ps(yr, pi1), _mm_mul_ps(yi, pr1)));
+        }
+        _mm_storeu_ps(&a1r[fb], s1r0); _mm_storeu_ps(&a1r[fb + 4], s1r1); _mm_storeu_ps(&a1i[fb], s1i0); _mm_storeu_ps(&a1i[fb + 4], s1i1);
+        _mm_storeu_ps(&a2r[fb], s2r0); _mm_storeu_ps(&a2r[fb + 4], s2r1); _mm_storeu_ps(&a2i[fb], s2i0); _mm_storeu_ps(&a2i[fb + 4], s2i1);
 #else
         float s1r[VR_FB] = {0}, s1i[VR_FB] = {0}, s2r[VR_FB] = {0}, s2i[VR_FB] = {0};
         for (int n = 0; n < RADE_M; n++) {
