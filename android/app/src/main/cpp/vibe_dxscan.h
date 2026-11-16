@@ -37,6 +37,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -640,9 +641,71 @@ public:
         std::string band;                              // "" | "FM" | "DAB"
         std::string sort = "last";                     // last | first | peak | times
         int offset = 0, limit = 50;
+        /** ★★ V12 2026-11-16 THE DIAL'S DX LABELS (?dial=1 — knownSignals.ts dxDialSignals): see dialJson. */
+        bool dial = false;
     };
+
+    /** ★★ HOW LONG A DX CATCH STAYS ON THE DIAL after it was last heard (Stuart, 2026-11-16: "shown for 1 week from when it
+     *  was last heard. After that it leaves the dial and lives only in the DX Log"). The clients apply the same cut. */
+    static constexpr int64_t kDialSec = 7 * 86400;
+    static constexpr int kDialMax = 100;
+    /**
+     * ★★★ THE DIAL'S DX CATCHES (GET /vibeserver/dxlog.json?dial=1 — Stuart, 2026-11-16: "show DX catches on the dial as
+     * signal labels too, marked as sporadic"). Only what a label needs, and only REAL catches:
+     *   • class DX — never a Local (it is in the discovered bookmarks), a Suspect (a spill, an image, an intermod: not a
+     *     station there at all) or a Provisional (the first day's baseline, not yet judged — mostly the locals);
+     *   • last heard within kDialSec (a week) of `now`;
+     *   • ★ a LOCAL WINS ITS CHANNEL: none on an FM frequency or a DAB block where the log holds a Local — the local's label
+     *     (its bookmark) is the one drawn there;
+     *   • one per channel — the most recently heard (an opening that brought two PIs to 99.3 shows the latest);
+     *   • newest first, at most kDialMax (a few kB; the 256 MB floor).
+     * The page's head is listJson's (counts, now…) so a client reads both alike; an older server ignores ?dial=1 and sends
+     * its ordinary page, which the clients filter by the same rules (class, the week).
+     */
+    std::string dialJson(int64_t now) const {
+        std::set<int> localFm; std::set<std::string> localDab;
+        for (const auto& kv : entries_) {
+            const Entry& e = kv.second;
+            if (e.cls != Cls::Local) continue;
+            if (e.dab) localDab.insert(e.blockName); else localFm.insert(e.khz);
+        }
+        std::vector<const Entry*> v;
+        for (const auto& kv : entries_) {
+            const Entry& e = kv.second;
+            if (e.cls != Cls::Dx || e.lastHeard <= 0 || now - e.lastHeard > kDialSec || e.lastHeard - now > 3600) continue;
+            if (e.dab ? (e.blockName.empty() || localDab.count(e.blockName)) : (!fmInAnyRange(e.khz) || localFm.count(e.khz))) continue;
+            v.push_back(&e);
+        }
+        std::stable_sort(v.begin(), v.end(), [](const Entry* a, const Entry* b) { return a->lastHeard > b->lastHeard; });
+        std::set<std::string> chan;
+        std::string j;
+        int n = 0;
+        for (const Entry* e : v) {
+            if (n >= kDialMax) break;
+            if (!chan.insert(e->dab ? "D" + e->blockName : "F" + std::to_string(e->khz)).second) continue;   // the latest on it
+            char b[200];
+            if (!e->dab) {
+                const int ri = fmRangeOf(e->khz);
+                std::snprintf(b, sizeof b, "{\"id\":%d,\"band\":\"FM\",\"class\":\"dx\",\"freqKhz\":%d,\"range\":\"%s\",\"pi\":\"%04X\",\"rds\":%s,\"ps\":\"",
+                              e->id, e->khz, ri >= 0 ? kFmRanges[ri].id : "fm", e->pi, e->pi ? "true" : "false");
+                j += std::string(n ? "," : "") + b + esc(e->psLast) + "\"";
+            } else {
+                std::snprintf(b, sizeof b, "{\"id\":%d,\"band\":\"DAB\",\"class\":\"dx\",\"freqKhz\":%d,\"block\":\"%s\",\"eid\":\"%04X\",\"ensemble\":\"",
+                              e->id, e->khz, esc(e->blockName).c_str(), (unsigned)e->eid);
+                j += std::string(n ? "," : "") + b + esc(e->ensLabel) + "\"";
+            }
+            std::snprintf(b, sizeof b, ",\"lastHeard\":%lld}", (long long)e->lastHeard);
+            j += b;
+            ++n;
+        }
+        char h[160];
+        std::snprintf(h, sizeof h, "{\"ok\":true,\"dial\":true,\"total\":%d,\"offset\":0,\"limit\":%d,\"now\":%lld,\"maxAgeSec\":%lld,\"entries\":[",
+                      n, kDialMax, (long long)now, (long long)kDialSec);
+        return h + j + "]}";
+    }
     /** The DX Log page: filtered, sorted, paged. `total` = how many match the filter. */
     std::string listJson(const Query& q, int64_t now) const {
+        if (q.dial) return dialJson(now);
         std::vector<const Entry*> v;
         int nLocal = 0, nSuspect = 0, nDx = 0, nProv = 0;
         for (const auto& kv : entries_) {
