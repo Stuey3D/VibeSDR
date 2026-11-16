@@ -17672,7 +17672,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
         switch (a.kind) {
-            case A::RetunePrimary: g_dab.setService(a.sid); break;
+            case A::RetunePrimary:
+                LOGI("[DAB] own station: nobody else hears the radio's own \xe2\x80\x94 it follows its listener to %04X", unsigned(a.sid));
+                g_dab.setService(a.sid);
+                break;
             case A::SwitchAll:
                 g_dab.setService(a.sid);
                 if (sock) sendText(sock, "{\"type\":\"notice\",\"why\":\"every station decoder on this radio is busy \u2014 the station changed for everyone on the radio's own\"}");
@@ -26305,7 +26308,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             bool immutable = false;
             bool haveSlide = false;
             if (slideH.size() == 16 && slideH.find_first_not_of("0123456789abcdef") == std::string::npos)
-                immutable = haveSlide = g_dab.slideByHash(strtoull(slideH.c_str(), nullptr, 16), sl);
+                immutable = haveSlide = g_dab.slideByHash(strtoull(slideH.c_str(), nullptr, 16), sl)
+                                        || g_dab.stationSlideByHash(strtoull(slideH.c_str(), nullptr, 16), sl);   // ★★ V12 own station
             if (!haveSlide)
                 haveSlide = slideSid.empty()
                     ? g_dab.slide(sl)

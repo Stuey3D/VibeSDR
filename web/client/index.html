@@ -1735,6 +1735,9 @@ body.adsbMap #srvHealth { right: 0 !important; }
                    background:rgba(255,255,255,0.04); }
 .dabSvc .cod { font-size:9px; letter-spacing:1px; padding:1px 5px; border-radius:3px;
                border:1px solid var(--btn-border); color: var(--unit); flex:0 0 auto; }
+/* ★★ V12 own station: "▶ 2" — this service is playing on the radio, for two listeners (docs/v12/DAB-OWN-STATION.md) */
+.dabSvc .pl { font-size:9px; letter-spacing:.5px; color: var(--unit); flex:0 0 auto; white-space:nowrap; }
+.dabSvc .pl:empty { display:none; }
 #dabSignal { padding: 8px 10px; font-size: 11.5px; }
 /* ── ★★ V12: the DAB band scan's result list (main.ts dabScanRender). Phone width first: the name ellipsises, the block,
    count and quality never wrap away. ── */

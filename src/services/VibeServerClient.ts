@@ -101,6 +101,7 @@ export class VibeServerClient extends VibeServerWsClient {
 
   /** ★★★ Reports that arrive after our own `dab off` are ghosts — see DabExitGuard (dabStepper.ts). */
   private dabExit = new DabExitGuard();
+  private dabOwnOn = false;   // ★★ V12 own station — the last report's own.on (docs/v12/DAB-OWN-STATION.md)
 
   dab(on: boolean, channel?: number, sid?: number) {
     if (this.askBlocked()) return;   // ★★ ask before tuning — the multiplex is everybody's on a shared dial
@@ -153,7 +154,9 @@ export class VibeServerClient extends VibeServerWsClient {
 
   /** Switch service WITHIN the tuned multiplex — no retune, no re-acquire. */
   dabService(sid: number) {
-    if (this.askBlocked()) return;   // ★★ ask before tuning — the station is everybody's on a shared dial
+    /* ★★ ask before tuning — the station is everybody's on a shared dial; ★★ V12 OWN STATION: unless the server says a pick
+     *  is this listener's alone (own.on, docs/v12/DAB-OWN-STATION.md) — then it changes nobody else's audio. */
+    if (!this.dabOwnOn && this.askBlocked()) return;
     holdNativeHealing(VibeServerClient.DAB_SERVICE_HOLD_MS, `DAB service ${sid}`);
     this.sendSpectrum({ type: 'dab_service', sid });
   }
@@ -368,6 +371,7 @@ export class VibeServerClient extends VibeServerWsClient {
          *  which would lock the dial out on a receiver that is back on MW (DabExitGuard says why). */
         if (!this.dabExit.accept(Date.now())) return true;
         const st = parseDabMessage(msg);
+        this.dabOwnOn = st.own?.on === true;
         /* ★★ A TRANSITION NOBODY HERE ASKED FOR — the server landing on DAB after a connect, or
          *    another listener moving the shared dial. Held on a CHANGE only: `dab` arrives every
          *    second, and holding on each one would switch the heal off for the whole of DAB. (Our

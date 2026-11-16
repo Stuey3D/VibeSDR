@@ -1304,6 +1304,7 @@ export class SpectrumClient {
         const now = Date.now();
         if (now < this.dabQuietUntil) return;
         const r = this.dabAsm.ingest(msg, now);
+        this.dabOwnOn = !!(msg.own && (msg.own as { on?: boolean }).on);
         if (r.resync) this._send({ type: 'dab_resync' });
         // ★ Self-healing scopes: a new socket (a reconnect) starts with them off; restate while the pane is open.
         if (this.dabScopesOn && msg.v === 2 && !('iq' in msg) && now - this.dabScopesSaidAt > 3000) {
@@ -2416,7 +2417,9 @@ export class SpectrumClient {
     if (sid !== undefined) m.sid = sid;
     this._send(m);
   }
-  dabService(sid: number) { if (this.askBlocked()) return; this._send({ type: 'dab_service', sid }); }
+  /** ★★ V12 own station (docs/v12/DAB-OWN-STATION.md): with the server's `own.on`, a pick changes only THIS listener's audio — not
+   *  a shared action, so ask-before-tuning does not hold it (the owner's scan lock still does). */
+  dabService(sid: number) { if (this.dabOwnOn ? this.scanLocked : this.askBlocked()) return; this._send({ type: 'dab_service', sid }); }
   /** ★★ V12: start / stop a DAB band scan. The server decides who may (dabBandScanWhyNot) and answers in words. */
   dabScan(on: boolean) { this._send({ type: 'dab_scan', on: on ? 1 : 0 }); }
   /** ★★ V12: ask for the last scan's state (a `dab_scan` back) — read-only, anyone; an older server ignores the type. */
@@ -2554,6 +2557,7 @@ export class SpectrumClient {
     return true;
   }
   private dabAsm = new DabAssembler();
+  private dabOwnOn = false;   // ★★ V12 own station — the last report's own.on
   private drmScopesOn = false;
   private drmScopesSaidAt = 0;
   private drmIqAt = 0;

@@ -980,6 +980,13 @@ public:
      *  setChannel both clear — correctly, because the pane must never show the last station's
      *  artwork under this one's name. The live slide keeps that behaviour; this is a second,
      *  durable copy that survives the retune and answers by SId. */
+    /** ★ A slide named by hash in a STATION's report (/vibeserver/dabslide?h=) — a listener's own station's picture. */
+    bool stationSlideByHash(uint64_t h, Slide& out) {
+        std::vector<std::shared_ptr<DabService>> list;
+        { std::lock_guard<std::mutex> sk(stM_); list = stations_; }
+        for (auto& st : list) if (st->slideByHash(h, out)) return true;
+        return false;
+    }
     void setSlideDir(const std::string& dir) { std::lock_guard<std::mutex> lk(m_); slideDir_ = dir; }
 
     /** The kept slideshow image for one service, from memory or from the disk store. */
