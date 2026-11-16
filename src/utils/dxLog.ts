@@ -37,7 +37,7 @@ export interface DxPage {
   counts: { dx: number; local: number; suspect: number; provisional: number };
   bootstrap: boolean; bootstrapEnds: number; sweeps: { fm: number; dab: number }; alertSeq: number; now: number;
   entries: DxEntry[];
-  scanner?: { on: boolean; bands: string; waitMin: number; raster: number; viewAdmin: boolean };
+  scanner?: { on: boolean; bands: string; waitMin: number; raster: number; viewAdmin: boolean; oirt?: boolean; ext?: boolean };
   canPromote?: boolean; error?: string;
 }
 export interface DxAlert { seq: number; utc: number; id: number; kind: 'new' | 'opening' | string; text: string }
@@ -142,6 +142,12 @@ export function dxFooter(p: DxPage, shown: number): string {
   const c = p.counts;
   bits.push(`${c.dx + c.provisional} DX · ${c.local} local · ${c.suspect} suspect`);
   if (p.sweeps) bits.push(`${p.sweeps.fm} FM · ${p.sweeps.dab} DAB scans completed`);   // ★ the same word as each row's "heard in N scans"
+  // ★ V12 2026-11-16: the FM ranges swept (an older server says nothing: 87.5–108), and where the locals go
+  const sc = p.scanner;
+  if (sc && sc.on && sc.bands !== 'dab' && (sc.oirt !== undefined || sc.ext !== undefined)) {
+    bits.push(`FM ${[sc.oirt ? 'OIRT 65.8–74' : '', sc.ext ? '76–87.5' : '', '87.5–108'].filter(Boolean).join(', ')} MHz`);
+  }
+  if (c.local > 0) bits.push('locals go into the bookmarks');
   let s = bits.join(' · ');
   if (p.bootstrap) s += ` — building this server's baseline until ${dxWhen(p.bootstrapEnds, p.now)}: everything is marked BASELINE and nothing alerts until then.`;
   void shown;
