@@ -38,6 +38,7 @@ int main() {
            "HF+ only: the HF decoders run");
         ok(benchhw::nearestOffered(hw, 2048000, benchhw::Need::Wfm) == 912000, "HF+ only: a feature row runs at its 912 kS/s");
         ok(!runs(hw, "dec_ism") && !runs(hw, "dec_lora"), "HF+ only: no ISM / LoRa (it tops out near 260 MHz)");
+        ok(runs(hw, "dec_m17"), "HF+ only: M17 runs (2 m is in its 60\u2013260 MHz range)");
     }
     // ── an RTL dongle alone ──
     {
