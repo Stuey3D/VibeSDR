@@ -954,7 +954,8 @@ if sh handheld-ui/test/run_tuned_label.sh; then pass=$((pass+1)); else fail=$((f
 #    src/services/freedv.ts (searching / a manual choice / in sync), its offer, its sideband and passband.
 if sh handheld-ui/test/run_vts_golden.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE R36S BATTERY BLOCK + CALIBRATION (2026-11-15): the live lines and the ≈ figures (battery_math.h), vibe-hwd's
-#    calibration (Full → a safe empty, resumed over a power-off, cancelled by charging, the stress load) and its
+#    calibration (started on the charger, a GENUINE full judged from the charger's physics — FullJudge, 2026-11-16 —
+#    → a safe empty, resumed over a power-off, cancelled by charging, the stress load only at the unplug) and its
 #    charge-port watch (the 2 A limit at the plug edge, the 5 s trace) — fake sysfs, no device.
 if bash handheld-ui/test/run_battery_math_test.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 for t in battery-smooth-test battery-cal-test charger-watch-test; do

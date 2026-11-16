@@ -172,6 +172,9 @@ damage the card.
 
 - `test/capacity-test.py rootfs/usr/lib/vibesdr-r36s/vibe-card` — the check against simulated honest / wrap / drop
   cards, verdicts and restore (Mac, no hardware).
+- `test/battery-cal-test.py` — the battery calibration (started on the charger) and the FULL JUDGE: "full" from the
+  charger's own CHARGE_FINISH or the battery's current tapered under the PMIC's termination current near its CV
+  voltage, held 5 min — never the gauge's % (Stuart's gauge read 100 % with 0.96 A still going in).
 - `test/battery-smooth-test.py` · `test/charger-watch-test.py` — `vibe-hwd`'s battery meter and its charge-port watch
   (the 2 A input limit at the plug edge, the 5 s port trace after each edge, status flips on the cord) against a fake
   sysfs and PMIC (Mac, no hardware).

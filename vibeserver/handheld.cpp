@@ -889,7 +889,8 @@ void hDevicePost(Req& r) {
         line = std::string("{\"set\":\"boost\",\"value\":") + (x->n != 0 ? "1" : "0") + "}";
     } else if (action == "calibrate") {
         // ★★ battery calibration (vibe-hwd BatteryCal): NORMAL = use the radio until it switches itself off at a safe
-        //    empty; STRESS = the fastest way there (full backlight, every core busy). The service refuses unless Full.
+        //    empty; STRESS = the fastest way there (full backlight, every core busy). Started ON THE CHARGER: the service
+        //    refuses off the cord, then waits for a genuine full (FullJudge) and asks for the unplug.
         const std::string mode = v.str("mode");
         if (mode != "normal" && mode != "stress") { json(r.fd, errJson("mode must be normal or stress"), 400); return; }
         line = "{\"action\":\"calibrate\",\"mode\":\"" + mode + "\"}";

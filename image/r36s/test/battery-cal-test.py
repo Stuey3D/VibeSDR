@@ -160,7 +160,7 @@ except ValueError as ex: ok(str(ex) == "plug in the charger first — it starts 
 # ★★ Stuart's case: the gauge at 100 %, 0.96 A still going in — START is accepted and WAITS
 put(True, "Charging", v=4.15, a=0.96, q=2500000); tick(h, 1)
 h.cal_start("normal")
-ok(h.cal.phase == "charging" and EMIT[-1] == {"event": "battery_cal", "phase": "charging", "mode": "normal"},
+ok(h.cal.phase == "charging" and EMIT[-1] == {"event": "battery_cal", "phase": "charging", "mode": "normal", "start": True},
    "★★ START on the charger at a gauge 100 %% with 0.96 A going in: accepted, waiting for a genuine full (%s)" % h.cal.phase)
 pw = h.state()["power"]
 ok(pw["charge"]["state"] == "cc" and pw["charge"]["cvV"] == 4.20 and pw["charge"]["termA"] == 0.2 and pw["charge"]["nearVlim"] is False,

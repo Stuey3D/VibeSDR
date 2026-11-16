@@ -1132,7 +1132,7 @@ class Hwd:
     def cal_start(self, mode):
         online = rd(CHG + "/online", "0") == "1"
         self.cal.start(mode, online, self.judge.state == "full", rd_num(BAT + "/charge_now", 1))
-        self.emit({"event": "battery_cal", "phase": self.cal.phase, "mode": mode})
+        self.emit({"event": "battery_cal", "phase": self.cal.phase, "mode": mode, "start": True})   # (the UI toasts its own reply)
 
     def cal_cancel(self):
         if self.cal.cancel("calibration cancelled"):
