@@ -61,7 +61,7 @@ import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow, type TunedPick } from '../../../src/utils/tunedStation.ts';
-import { withDabBlocks, isDabBlockSignal, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
+import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -357,6 +357,9 @@ export class Waterfall {
    *  colour; null while VFO B is off. Brightness cross-fades are worked out by main.ts each frame (vfoAB.needleAlpha). */
   vfoLiveColor = '';
   vfoLiveLabel = '';
+  /** ★★ V12 LISTEN's label row (markerLabelY's stack): 0, or above the block rows on a wide DAB view (dabLiveRow). */
+  private liveRow = 0;
+  private knownLiveRow = 0;
   vfoLiveAlpha = 1;
   vfo2: { hz: number; lo: number; hi: number; col: string; label: string; alpha: number; parked: boolean } | null = null;
   /** Latest normalised spectrum trace + peak hold, and the previous pair — the
@@ -1233,6 +1236,9 @@ export class Waterfall {
     }
     this.tunedPicked = null;   // ★ made in _drawKnown against this frame's placed labels, else in _drawTuned
     this.labelList = this.spanHz > 0 ? withDabBlocks(this.knownSignals, this.dabBlocks, this.spanHz) : null;
+    // ★★ V12 on a wide DAB view the VFO-coloured labels sit ABOVE the block rows (dabBlockView.ts dabLabelLayout):
+    //    _drawKnown sets LISTEN's row from the layout it makes; anything else, row 0
+    if (!isDabWideList(this.labelList)) this.liveRow = 0;
     if (this.labelList && this.labelList.length) this._drawKnown(ctx, W, H);
     else if (this.knownPlaced.length) { this.knownPlaced = []; this.knownKey = ''; }
     this._drawVfo(ctx, W, H);
@@ -1547,7 +1553,7 @@ export class Waterfall {
       // needle is ambiguous — which line is the one you're listening to?
       const dpr2 = renderDpr();
       void dpr2;
-      this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? 0 : 2), label, col);
+      this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? this.liveRow : this.liveRow ? this.liveRow + 1 : 2), label, col);
     }
 
     ctx.restore();
@@ -1743,7 +1749,7 @@ export class Waterfall {
     const span = this.spanHz, lo = this.displayCenterHz() - span / 2;
     const font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
     const showSpec = this._showSpec && H - this.wf.height > 40 * dpr;
-    const key = `${lo}|${span}|${W}|${H}|${dpr}|${this.vfoHz}|${this.rfCenterHz}|${this.knownGen}|${showSpec}|${this.vfoHidden}|${this.liveLabel()}`;   // ★ the label's width blocks a row
+    const key = `${lo}|${span}|${W}|${H}|${dpr}|${this.vfoHz}|${this.rfCenterHz}|${this.knownGen}|${showSpec}|${this.vfoHidden}|${this.liveLabel()}|${this.dcSpikeHz}`;   // ★ the label's width blocks a row
     if (key !== this.knownKey) {
       this.knownKey = key;
       ctx.save(); ctx.font = font;
@@ -1755,18 +1761,36 @@ export class Waterfall {
         if (w === undefined) { w = ctx.measureText(t).width + 6 * dpr; if (this.knownWidth.size > 512) this.knownWidth.clear(); this.knownWidth.set(k, w); }
         return w;
       };
-      // The boxes LISTEN (row 0) and RF CENTRE (row 1) draw — markerLabel's own geometry — and the dB axis at the left.
+      // The boxes LISTEN (row 0, or dabLiveRow) and RF CENTRE (row 1) draw — markerLabel's own geometry — and the dB axis.
+      const dabWide = isDabWideList(this.labelList);
       const blocked: BlockedBox[] = [{ row: 0, x0: 0, x1: 30 * dpr }, { row: 1, x0: 0, x1: 30 * dpr }];
       const box = (row: number, x: number, text: string) => {
         const tw = ctx.measureText(text).width;
         const lx = x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
         blocked.push({ row, x0: lx - 3 * dpr, x1: lx + tw + 3 * dpr });
       };
-      if (this.vfoHz && !this.vfoHidden) box(0, this.hzToX(this.vfoHz, W), this.liveLabel());
+      // (on a wide DAB view LISTEN sits above every block row — nothing there to keep clear of it)
+      if (this.vfoHz && !this.vfoHidden && !dabWide) box(0, this.hzToX(this.vfoHz, W), this.liveLabel());
       if (this.rfCenterHz != null) box(1, this.hzToX(this.rfCenterHz, W), `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M${this.rfCenterNote}`);
-      this.knownPlaced = labelLayout(this.labelList!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
+      // ★ the DC spike's two-line box (_drawDcSpike: row 3 down past row 2) — only the wide DAB view has rows that high
+      if (dabWide && this.dcSpikeHz != null) {
+        const x = this.hzToX(this.dcSpikeHz, W);
+        ctx.font = `bold ${10 * dpr}px ui-monospace, Menlo, monospace`; const tw = ctx.measureText('DC Spike').width;
+        ctx.font = `${8.5 * dpr}px ui-monospace, Menlo, monospace`; const w = Math.max(tw, ctx.measureText('Not a real signal').width);
+        ctx.font = font;
+        const lx = x - 6 * dpr - w >= 0 ? x - 6 * dpr - w : x + 6 * dpr;
+        for (const r of [2, 3]) blocked.push({ row: r, x0: Math.min(lx - 3 * dpr, x), x1: Math.max(lx + w + 3 * dpr, x + 1) });
+      }
+      if (dabWide) {
+        const plan = dabLabelLayout(this.labelList!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
+        this.knownPlaced = plan.placed; this.knownLiveRow = plan.liveRow;
+      } else {
+        this.knownPlaced = labelLayout(this.labelList!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
+        this.knownLiveRow = 0;
+      }
       ctx.restore();
     }
+    this.liveRow = this.knownLiveRow;
     // ★★ V12 the tuned station against the labels placed THIS frame: its own label, or one of these in the tuned colour
     this.tunedPicked = this._pickTuned(this.knownPlaced.map(p => p.sig));
     if (!this.knownPlaced.length) return;
@@ -1778,11 +1802,10 @@ export class Waterfall {
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
     const tickW = Math.max(1, Math.round(dpr));
+    const isHi = (pi: number) => pi === hiIdx || (isDabBlockSignal(this.knownPlaced[pi].sig) && (this.knownPlaced[pi].sig as DabBlockSignal).dabCurrent);
+    // ★ the ticks and span bars FIRST, every box after — a tall tick (the upper rows') then never crosses another's text
     for (let pi = 0; pi < this.knownPlaced.length; pi++) {
-      const p = this.knownPlaced[pi];
-      // ★★ names the station you are tuned to — or, in DAB, the block being received: the tuned label's colour and shadow
-      const dabHi = isDabBlockSignal(p.sig) && p.sig.dabCurrent;
-      const hi = pi === hiIdx || dabHi;
+      const p = this.knownPlaced[pi], hi = isHi(pi);
       const y = this.markerLabelY(H, p.row);
       const boxTop = y - 9 * dpr, boxBot = y + 4 * dpr;
       ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;
@@ -1795,7 +1818,14 @@ export class Waterfall {
         const x0 = Math.max(0, this.hzToX(s.lo, W)), x1 = Math.min(W, this.hzToX(s.hi, W));
         if (x1 - x0 >= 3 * dpr) { ctx.globalAlpha = 0.55; ctx.fillRect(x0, (showSpec ? specH : boxBot) - 2 * dpr, x1 - x0, 2 * dpr); }
       }
-      ctx.globalAlpha = 1;
+    }
+    ctx.globalAlpha = 1;
+    for (let pi = 0; pi < this.knownPlaced.length; pi++) {
+      const p = this.knownPlaced[pi], s = p.sig;
+      // ★★ names the station you are tuned to — or, in DAB, the block being received: the tuned label's colour and shadow
+      const hi = isHi(pi);
+      const y = this.markerLabelY(H, p.row);
+      const boxTop = y - 9 * dpr;
       ctx.fillStyle = KNOWN_LABEL_BOX;
       ctx.fillRect(p.lx, boxTop, p.w, 13 * dpr);
       ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;

@@ -94,7 +94,7 @@ import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../servi
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
-import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, type DabBlockSignal } from '../utils/dabBlockView';
+import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
@@ -2820,14 +2820,31 @@ function WaterfallView({
   const knownCX = centerMarker ? centerMarker.x : null;
   // ★★ V12 in DAB on a view holding two whole blocks, the Band III blocks join the list (utils/dabBlockView.ts)
   const labelList = useMemo(() => withDabBlocks(knownSignals, dabBlocks, bwHz), [knownSignals, dabBlocks, bwHz]);
-  const knownPlaced = useMemo(() => {
+  // ★★★ V12 A WIDE DAB VIEW (Stuart, 2026-11-16: every block labelled, "raise the VFO coloured labels above so they dont
+  //     foul the next block along too"): every block on as few rows as hold them and their names (dabBlockView.ts
+  //     dabLabelLayout, up to DAB_BLOCK_ROWS), the tuned block's name on the row above them and LISTEN above that. Rows climb from the boundary, 14 pt each; with the
+  //     spectrum hidden the stack is moved down so its top row sits where RF CENTRE's does.
+  const dabWideNow = isDabWideList(labelList);
+  const knownPlan = useMemo(() => {
     if (!labelList || !labelList.length || !(bwHz > 0) || !(width > 0)) return null;
     const blocked: BlockedBox[] = [{ row: 0, x0: 0, x1: 30 }, { row: 1, x0: 0, x1: 30 }];
-    if (knownNX !== null) { const l = Math.min(width - 96, knownNX + 3); blocked.push({ row: 0, x0: l, x1: l + 90 }); }
+    // (on a wide DAB view LISTEN sits above every block row — nothing there to keep clear of it)
+    if (knownNX !== null && !dabWideNow) { const l = Math.min(width - 96, knownNX + 3); blocked.push({ row: 0, x0: l, x1: l + 90 }); }
     if (knownCX !== null) { const l = Math.min(width - 96, knownCX + 3); blocked.push({ row: 1, x0: l, x1: l + 96 }); }
-    const p = labelLayout(labelList, visStart, bwHz, width, (t) => estimateLabelWidth(t, 9, 3, 0.62), tuneHz, blocked, 4);
-    return p.length ? p : null;
-  }, [labelList, visStart, bwHz, width, tuneHz, knownNX, knownCX]);
+    // ★ the DC spike's two lines (labelBase − 44, 92 wide, left of the spike) cross rows 2 and 3 — only DAB reaches them
+    if (dabWideNow && dcSpikeX !== null) for (const r of [2, 3]) blocked.push({ row: r, x0: Math.max(0, dcSpikeX - 92), x1: dcSpikeX + 1 });
+    const measure = (t: string) => estimateLabelWidth(t, 9, 3, 0.62);
+    if (dabWideNow) {
+      const plan = dabLabelLayout(labelList, visStart, bwHz, width, measure, tuneHz, blocked, 4);
+      return { placed: plan.placed.length ? plan.placed : null, liveRow: plan.liveRow };
+    }
+    const p = labelLayout(labelList, visStart, bwHz, width, measure, tuneHz, blocked, 4);
+    return { placed: p.length ? p : null, liveRow: 0 };
+  }, [labelList, visStart, bwHz, width, tuneHz, knownNX, knownCX, dabWideNow, dcSpikeX]);
+  const knownPlaced = knownPlan ? knownPlan.placed : null;
+  const liveRow = knownPlan ? knownPlan.liveRow : 0;
+  const labelBase = liveRow > 1 && !(specShow && specH > 40) ? markerLabelBase + 14 * (liveRow - 1) : markerLabelBase;
+  const rowTop = useCallback((r: number) => labelBase - 14 * r, [labelBase]);
 
   // ★★ V12 the tuned station: its own label beside the needle, OR — when one of the labels above already names it — that
   //    label drawn in the tuned colour instead (tunedPick: never both, never a second name in its place)
@@ -3018,7 +3035,7 @@ function WaterfallView({
           return;
         }
         if (onKnownTap && knownPlaced) {
-          const hit = knownLabelHit(knownPlaced, e.x, e.y, (row) => (row === 0 ? markerLabelBase : markerLabelBase - 14), 13);
+          const hit = knownLabelHit(knownPlaced, e.x, e.y, rowTop, 13);
           const t0 = tapStart.current;
           if (hit && isLabelTap(e.x - t0.x, e.y - t0.y, Date.now() - t0.t)) { onKnownTap(hit.sig); return; }
         }
@@ -3036,7 +3053,7 @@ function WaterfallView({
           }
         }
         onTapTune?.(Math.round(hzOnRow(e.x / width, geo, visStart, bwHz)));
-      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop, wfTop, stampRowPt, engine, onKnownTap, knownPlaced, markerLabelBase,
+      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop, wfTop, stampRowPt, engine, onKnownTap, knownPlaced, rowTop,
            dabBlocks, onDabBlockTap]);
 
   // Pan runs as a WORKLET (UI thread): event delivery + accumulation never wait
@@ -3367,7 +3384,7 @@ function WaterfallView({
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: centerMarkerColor,
-                  left: Math.min(width - 96, centerMarker.x + 3), top: markerLabelBase - 14,
+                  left: Math.min(width - 96, centerMarker.x + 3), top: rowTop(1),
                   width: 96, textAlign: 'left', fontSize: 9,
                 }]}>
             {'RF CENTRE: ' + fmtHz(centerMarkerHz as number)}
@@ -3379,23 +3396,38 @@ function WaterfallView({
             label, which reads to the right of the same place on a dongle. A short red tick marks the exact frequency. */}
         {dcSpikeX !== null && (
           <View pointerEvents="none" accessible accessibilityLabel="DC Spike. Not a real signal."
-                style={{ position: 'absolute', left: Math.max(0, dcSpikeX - 92), top: markerLabelBase - 44, width: 92 }}>
+                style={{ position: 'absolute', left: Math.max(0, dcSpikeX - 92), top: labelBase - 44, width: 92 }}>
             <Text style={[styles.tickLabel, styles.dcSpikeTop, { fontFamily }]}>DC Spike</Text>
             <Text style={[styles.tickLabel, styles.dcSpikeSub, { fontFamily }]}>Not a real signal</Text>
           </View>
         )}
         {dcSpikeX !== null && (
-          <View pointerEvents="none" style={[styles.dcSpikeTick, { left: dcSpikeX - 0.5, top: markerLabelBase - 44 }]} />
+          <View pointerEvents="none" style={[styles.dcSpikeTick, { left: dcSpikeX - 0.5, top: labelBase - 44 }]} />
         )}
 
         {/* ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts): a thin tick at the signal down to the spectrum's floor (beside the
             box on the waterfall when the spectrum is hidden), a bar along a digital mode's span, and the decoder's name on
             RF CENTRE's dark box in a fixed pale lilac — never the VFO colour, which LISTEN uses on the same row. */}
+        {/* ★ the ticks and span bars first, every box after — an upper row's tall tick never crosses another's text */}
         {knownPlaced && knownPlaced.map((p, i) => {
-          const top = p.row === 0 ? markerLabelBase : markerLabelBase - 14;
+          const top = rowTop(p.row);
           const tickBot = specShow && specH > 40 ? wfTop : top + 13;
           const s = p.sig;
           const bx0 = s.lo != null ? Math.max(0, hzToX(s.lo)) : 0, bx1 = s.hi != null ? Math.min(width, hzToX(s.hi)) : 0;
+          const hi = i === tunedHi || (isDabBlockSignal(s) && s.dabCurrent);
+          return (
+            <React.Fragment key={'kt' + i + ':' + s.hz}>
+              <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) },
+                                                 hi && { backgroundColor: stampCol, opacity: 1 }]} />
+              {bx1 - bx0 >= 3 && (
+                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }]} />
+              )}
+            </React.Fragment>
+          );
+        })}
+        {knownPlaced && knownPlaced.map((p, i) => {
+          const top = rowTop(p.row);
+          const s = p.sig;
           // ★★ V12 the label naming the station you are tuned to — or, in DAB, the block being received: the tuned label's
           //    colour (stampCol) and dark halo
           const dab = isDabBlockSignal(s) ? s : null;
@@ -3403,12 +3435,7 @@ function WaterfallView({
           const tapLabel = dab ? (onDabBlockTap ? () => onDabBlockTap(dab.dabIdx) : undefined) : onKnownTap ? () => onKnownTap(s) : undefined;
           return (
             <React.Fragment key={'ks' + i + ':' + s.hz}>
-              <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) },
-                                                 hi && { backgroundColor: stampCol, opacity: 1 }]} />
-              {bx1 - bx0 >= 3 && (
-                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }]} />
-              )}
-              {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot, LABEL_MAX at most. */}
+              {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot (all of Band III on a wide DAB view). */}
               <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ').replace(' — ', ', ')}
                     accessibilityRole={tapLabel ? 'button' : undefined}
                     accessibilityHint={tapLabel ? (dab ? 'Goes to this multiplex' : s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
@@ -3450,7 +3477,7 @@ function WaterfallView({
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: needleColor,
-                  left: Math.min(width - (needleLabel ? 124 : 96), needle.nX + 3), top: markerLabelBase,
+                  left: Math.min(width - (needleLabel ? 124 : 96), needle.nX + 3), top: rowTop(liveRow),
                   width: needleLabel ? 124 : 96, textAlign: 'left', fontSize: 9,
                 }]}>
             {needleLabel || 'LISTEN: ' + fmtHz(tuneHz)}

@@ -14,7 +14,11 @@
 //   4. a click inside 8A sends exactly the `dab` block change the ▶ arrow sends (the arrow then steps 8A → 8B); a click
 //      in the guard between two blocks sends nothing; held back by ask-before-tuning, a click sends nothing and nudges;
 //   5. zoomed in on the wide radio (2 MHz): the labels go, and a click is no longer a block swap;
-//   6. a phone-width page (390 px) on the wide view: labels drawn, none overlapping, all on screen.
+//   6. a phone-width page (390 px) on the wide view: labels drawn, none overlapping, all on screen;
+//   7. ★ 2026-11-16 (Stuart, the Almere B210: "we are missing all of the DAB block labels and the known multiplex name for
+//      all known MUX's", "raise the VFO coloured labels above so they dont foul the next block along too") — ALL of Band
+//      III on screen (56 MHz) with a scan that named most blocks: every block in view labelled, the known names shown, the
+//      tuned block's name on the row above the block rows and LISTEN above that, nothing overlapping.
 // SHOTS=<dir> saves the pictures; DEBUG=1 logs the proxy and the page console; PASSTHRU=1 serves the binary's own page instead.
 // Usage: VIBESERVER_BIN=/path/to/vibeserver node scripts/test-web-dab-blocks.mjs (exit 3 = not run)
 import { spawn } from 'node:child_process';
@@ -122,11 +126,11 @@ const PLACED = `(() => { const w = ${WF}.wf, dpr = Math.min(2, window.devicePixe
   const m = document.createElement("canvas").getContext("2d"); m.font = (10 * dpr) + "px ui-monospace, Menlo, monospace";
   return (w.knownPlaced || []).map(p => ({ label: p.sig.label, dab: p.sig.dabIdx !== undefined, cur: !!p.sig.dabCurrent, lx: p.lx, w: p.w, row: p.row,
     W: w.canvas.width, text: m.measureText(p.sig.label).width })); })()`;
-/** LISTEN's box on row 0, as the frame draws it (markerLabel's geometry), device px. */
+/** LISTEN's box on its row (0, or above the block rows on a wide DAB view — wf.liveRow), markerLabel's geometry, device px. */
 const LISTEN_BOX = `(() => { const w = ${WF}.wf, d = w.vfoDrawn, dpr = Math.min(2, window.devicePixelRatio || 1); if (!d) return null;
   const m = document.createElement("canvas").getContext("2d"); m.font = (10 * dpr) + "px ui-monospace, Menlo, monospace";
   const tw = m.measureText(d.label).width, lx = d.nX + 6 * dpr + tw > d.W ? d.nX - tw - 6 * dpr : d.nX + 6 * dpr;
-  return { row: 0, x0: lx - 3 * dpr, x1: lx + tw + 3 * dpr }; })()`;
+  return { row: w.liveRow || 0, x0: lx - 3 * dpr, x1: lx + tw + 3 * dpr }; })()`;
 /** A point on the spectrum (the live scale) at frequency hz, in page CSS px. */
 const at = (hz) => js(`(() => { const v = ${WF}; const c = v.wf.canvas, r = c.getBoundingClientRect();
   return [r.left + v.wf.hzToX(${hz}, c.clientWidth), r.top + Math.max(30, 0.12 * r.height)]; })()`);
@@ -137,7 +141,7 @@ const setSpan = (hz, centre) => js(`(() => { const w = ${WF}.wf; Object.definePr
 const overlaps = (ps, listen) => {
   if (ps.some(p => p.w < p.text)) return true;
   if (listen && ps.some(p => p.row === listen.row && p.lx < listen.x1 && listen.x0 < p.lx + p.w)) return true;
-  for (const r of [0, 1]) { const row = ps.filter(p => p.row === r).sort((a, b) => a.lx - b.lx);
+  for (let r = 0; r <= 8; r++) { const row = ps.filter(p => p.row === r).sort((a, b) => a.lx - b.lx);
     for (let k = 1; k < row.length; k++) if (row[k].lx < row[k - 1].lx + row[k - 1].w) return true; }
   return false;
 };
@@ -269,6 +273,31 @@ try {
   ok(ps.some(p => p.cur), '…the block being received among them');
   await shot('dab-blocks-wide-phone.png');
   await call('Emulation.clearDeviceMetricsOverride');
+
+  // ── 7. all of Band III, most blocks named by a scan ──
+  {
+    const names = { '5A': 'NL Lokaal 5A', '5C': 'DAB-NL Regio', '6B': 'Flevoland', '6C': 'NPO', '6D': 'Noord-Holland', '7A': 'Lokaal Zuid',
+      '7B': 'Utrecht Regio', '7C': 'Commercieel 2', '8A': '8A regio Alphen', '8B': 'Gelderland', '8C': 'Amsterdam Lokaal',
+      '8D': 'Brabant', '9A': 'Regionaal 9A', '9B': 'Zuid-Holland', '9C': 'DAB+ Rotterdam', '11C': 'Commercieel', '12A': 'Landelijk 12A' };
+    const blocks = await js(`(() => { const b = ${WF}.wf.dabBlocks || []; return b.map(x => ({ name: x.bare.slice(4), hz: x.hz, idx: x.dabIdx })); })()`);
+    const found = blocks.filter(b => names[b.name]).map(b => ({ block: b.name, channel: b.idx, hz: b.hz, ensemble: names[b.name], fib: 0.98, mer: 20, complete: true, services: [] }));
+    await js(`(${WF}.spec.cb.onDabScan)({ type: "dab_scan", running: false, finished: true, done: 41, total: 41, seq: 2, found: ${JSON.stringify(found)} }); 1`);
+    await setSpan(56_000_000, 202_000_000); await sleep(800);
+    ps = await js(PLACED);
+    const lo = 202_000_000 - 28_000_000, hi = 202_000_000 + 28_000_000;
+    const inView = blocks.filter(b => b.hz >= lo && b.hz <= hi).map(b => b.name);
+    const shown = new Set(ps.filter(p => p.dab).map(p => p.label.split(' ')[1]));
+    const missing = inView.filter(b => !shown.has(b));
+    console.log(`  all of Band III: ${ps.filter(p => p.dab).length} block labels on ${Math.max(...ps.map(p => p.row)) + 1} rows`);
+    ok(missing.length === 0, `every block in view is labelled (${inView.length})${missing.length ? ' — missing ' + missing.join(', ') : ''}`);
+    const namedIn = inView.filter(b => names[b]), namedShown = ps.filter(p => p.dab && !p.cur && / — /.test(p.label)).length;
+    ok(namedShown >= Math.ceil(namedIn.length * 0.9), `the known names are shown (${namedShown} of ${namedIn.length})`);
+    const cur = ps.find(p => p.cur), top = Math.max(...ps.filter(p => !p.cur).map(p => p.row));
+    const live = await js(`${WF}.wf.liveRow`);
+    ok(cur && cur.row > top && live === cur.row + 1, `the tuned block's name is on the row above every block (${cur?.row} > ${top}), LISTEN above it (${live})`);
+    ok(!overlaps(ps, await js(LISTEN_BOX)) && ps.every(p => p.lx >= 0 && p.lx + p.w <= p.W + 1), '…none overlapping, all on screen');
+    await shot('dab-blocks-band3.png');
+  }
 
   ok(errors.length === 0, 'no JavaScript errors' + (errors.length ? ': ' + errors.slice(0, 2).join(' | ') : ''));
 } catch (e) { console.error(e); fails++; }

@@ -12,7 +12,8 @@ import { DAB_BLOCKS, dabBlockIndex } from '../src/services/dabBlocks.ts';
 import { DAB_BLOCK_HALF_HZ, DAB_WIDE_MIN_SPAN_HZ, PRIO_DAB_CURRENT, PRIO_DAB_NAMED, PRIO_DAB_BLOCK, dabWideView, dabMuxNames,
          dabBlockLabel, dabBlockSignals, isDabBlockSignal, dabBlocksInView, withDabBlocks, dabBlockHit, dabBlockHint }
   from '../src/utils/dabBlockView.ts';
-import { labelLayout, KNOWN_SIGNALS, estimateLabelWidth, type KnownSignal } from '../src/utils/knownSignals.ts';
+import { labelLayout, KNOWN_SIGNALS, estimateLabelWidth, LABEL_MAX, LABEL_ROWS, type KnownSignal, type PlacedLabel } from '../src/utils/knownSignals.ts';
+import { dabLabelLayout, isDabWideList, DAB_BLOCK_ROWS, DAB_BLOCK_ROWS_MIN, DAB_LABEL_MAX, type DabBlockSignal, dabBlockSignals as dabBlockSignals2, withDabBlocks as withDabBlocks2 } from '../src/utils/dabBlockView.ts';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -88,6 +89,87 @@ eq('a long name is shortened', dabBlockLabel('12B', 'An extremely long ensemble 
     eq(`${W} px: no two labels overlap`, overlap, false);
     eq(`${W} px: the current block is drawn first`, placed[0]?.sig.label, 'DAB 7D — MTVNL');
     eq(`${W} px: the named neighbour is kept`, placed.some(p => p.sig.label === 'DAB 8A — 8A regio Alphen'), true);
+  }
+}
+
+// ── ★★★ 2026-11-16 (Stuart, the Almere B210): EVERY block on a wide view, known names named, the tuned pair ABOVE them ──
+{
+  // the names a server that has scanned Band III around Almere could hold (block memory) — most blocks named
+  const almere: Record<string, string> = { '5A': 'NL Lokaal 5A', '5C': 'DAB-NL Regio', '6B': 'Flevoland', '6C': 'NPO',
+    '6D': 'Noord-Holland', '7A': 'Lokaal Zuid', '7B': 'Utrecht Regio', '7C': 'Commercieel 2', '7D': 'MTVNL',
+    '8A': '8A regio Alphen', '8B': 'Gelderland', '8C': 'Amsterdam Lokaal', '8D': 'Brabant', '9A': 'Regionaal 9A',
+    '9B': 'Zuid-Holland', '9C': 'DAB+ Rotterdam', '11C': 'Commercieel', '12A': 'Landelijk 12A', '12C': 'NPO Landelijk' };
+  const names = new Map(Object.entries(almere));
+  const cur = dabBlockIndex('7D');
+  const blocks = dabBlockSignals2(names, cur);
+  const span = 56_000_000;
+  const list = withDabBlocks2(KNOWN_SIGNALS, blocks, span)!;
+  eq('a wide DAB list is recognised', isDabWideList(list), true);
+  eq('an HF list is not', isDabWideList(KNOWN_SIGNALS), false);
+  // web: a 2380-px canvas at dpr 2 (10 × dpr monospace ≈ 6.02 × dpr per character, + 6 × dpr padding); the app at 1190 pt
+  const cases: Array<[string, number, (t: string) => number, number]> = [
+    ['web 2380 px (dpr 2)', 2380, (t) => t.length * 12.04 + 12, 8],
+    ['app 1190 pt', 1190, (t) => estimateLabelWidth(t, 9, 3, 0.62), 4],
+    ['web 1440 px (dpr 1)', 1440, (t) => t.length * 6.02 + 6, 4],
+  ];
+  for (const [what, W, measure, pad] of cases) {
+    for (const lo of [174_000_000, 184_000_000]) {
+      const lsts = lo; const hi = lsts + span;
+      const plan = dabLabelLayout(list, lsts, span, W, measure, hz('7D'), [], pad);
+      const placed: PlacedLabel[] = plan.placed, TOP = plan.tunedRow;
+      eq(`${what} ${(lsts / 1e6).toFixed(0)} MHz: the tuned row is above the block rows, LISTEN's above that`,
+         [plan.tunedRow, plan.liveRow, plan.rows >= DAB_BLOCK_ROWS_MIN && plan.rows <= DAB_BLOCK_ROWS], [plan.rows, plan.rows + 1, true]);
+      const inView = DAB_BLOCKS.map((b, i) => [b, i] as const).filter(([b]) => b.hz >= lsts && b.hz <= hi).map(([, i]) => i);
+      const got = new Set(placed.filter((p) => isDabBlockSignal(p.sig)).map((p) => (p.sig as DabBlockSignal).dabIdx));
+      const tag = `${what}, ${(lsts / 1e6).toFixed(0)}–${(hi / 1e6).toFixed(0)} MHz`;
+      eq(`${tag}: every block in view is labelled (${inView.length})`, inView.filter((i) => !got.has(i)).map((i) => DAB_BLOCKS[i].name), []);
+      const tuned = placed.find((p) => isDabBlockSignal(p.sig) && (p.sig as DabBlockSignal).dabCurrent);
+      eq(`${tag}: the tuned block is named, on the row above the blocks`, [tuned?.sig.label, tuned?.row], ['DAB 7D — MTVNL', TOP]);
+      eq(`${tag}: nothing else on the tuned row or above`, placed.filter((p) => p !== tuned && p.row >= TOP).length, 0);
+      let overlap = '';
+      for (let r = 0; r <= TOP; r++) {
+        const row = placed.filter((p) => p.row === r).sort((a, b) => a.lx - b.lx);
+        for (let k = 1; k < row.length; k++) if (row[k].lx < row[k - 1].lx + row[k - 1].w) overlap = `${row[k - 1].sig.label} / ${row[k].sig.label}`;
+      }
+      eq(`${tag}: no two labels overlap`, overlap, '');
+      const e8a = placed.find((p) => p.sig.label.startsWith('DAB 8A'));
+      eq(`${tag}: 8A (beside the tuned block) is labelled on a block row`, !!e8a && e8a.row < TOP, true);
+      const namedInView = inView.filter((i) => names.has(DAB_BLOCKS[i].name) && i !== cur);
+      const namedShown = placed.filter((p) => isDabBlockSignal(p.sig) && !(p.sig as DabBlockSignal).dabCurrent && p.sig.label.includes(' — ')).length;
+      console.log(`      (${tag}: ${plan.rows} block rows, ${namedShown} of ${namedInView.length} known names)`);
+      eq(`${tag}: nearly every known name is shown (≥ 90 %)`, namedShown >= Math.ceil(namedInView.length * 0.9), true);
+      eq(`${tag}: a bare block reads "DAB <block>"`, placed.filter((p) => isDabBlockSignal(p.sig) && !p.sig.label.includes(' — ')).every((p) => /^DAB \d+[A-N]$/.test(p.sig.label)), true);
+    }
+  }
+  // a phone: whatever fits — still never an overlap, the tuned pair still on top
+  {
+    const W = 390, lo = 184_000_000, measure = (t: string) => estimateLabelWidth(t, 9, 3, 0.62);
+    const plan = dabLabelLayout(list, lo, span, W, measure, hz('7D'), [], 4), placed = plan.placed;
+    let overlap = false;
+    for (let r = 0; r <= plan.tunedRow; r++) {
+      const row = placed.filter((p) => p.row === r).sort((a, b) => a.lx - b.lx);
+      for (let k = 1; k < row.length; k++) if (row[k].lx < row[k - 1].lx + row[k - 1].w) overlap = true;
+    }
+    const n = placed.filter((p) => isDabBlockSignal(p.sig)).length;
+    console.log(`      (390 pt phone, 56 MHz: ${n} block labels placed)`);
+    eq('390 pt phone: no overlap, the tuned block on top', [overlap, placed.find((p) => (p.sig as DabBlockSignal).dabCurrent)?.row], [false, plan.tunedRow]);
+  }
+  eq('the cap covers all of Band III', DAB_LABEL_MAX >= DAB_BLOCKS.length, true);
+  // ★ a narrower wide view (8 MS/s, ~4 blocks) needs few rows: the spectrum keeps its room
+  {
+    const p = dabLabelLayout(list, hz('7D') - 4_000_000, 8_000_000, 1440, (t) => t.length * 6.02 + 6, hz('7D'), [], 4);
+    eq('8 MHz view: two block rows, every block named', [p.rows, p.placed.filter((x) => isDabBlockSignal(x.sig) && !x.sig.label.includes(' — ')).length], [2, 0]);
+  }
+  // ★ the DC spike's box (rows 2 and 3) lifts the tuned pair above it
+  {
+    const p = dabLabelLayout(list, hz('7D') - 4_000_000, 8_000_000, 1440, (t) => t.length * 6.02 + 6, hz('7D'), [{ row: 3, x0: 600, x1: 700 }], 4);
+    eq('a blocked row 3: at least four block rows, the tuned name above', [p.rows >= 4, p.tunedRow === p.rows], [true, true]);
+  }
+  // ★ outside the wide DAB view nothing changes: the ordinary 12-label, 2-row layout
+  {
+    const lo = 7_000_000, sp = 12_000_000;
+    const p = labelLayout(KNOWN_SIGNALS, lo, sp, 2400, (t) => t.length * 6 + 6, 10_000_000, [], 4);
+    eq('HF view: still at most LABEL_MAX labels on LABEL_ROWS rows', p.length <= LABEL_MAX && p.every((x) => x.row < LABEL_ROWS), true);
   }
 }
 
