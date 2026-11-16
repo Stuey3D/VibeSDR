@@ -51,6 +51,43 @@ export interface AdsbAircraftRaw extends AdsbInfo {
   rssi?: number;
   /** ★ how far the server has followed it, NM (vibe_adsb.h setPos) */
   tracked_nm?: number;
+  /** ★ V12 Mode S Comm-B: what the aircraft told a ground radar, CONFIRMED registers only (vibe_adsb_commb.h). */
+  commb?: AdsbCommB;
+}
+
+/** ★ V12 Comm-B (DF20/21) fields — aircraft.json names; absent = not confirmed recently. */
+export interface AdsbCommB {
+  nav_altitude_mcp?: number; nav_altitude_fms?: number; nav_qnh?: number;
+  roll?: number; true_track?: number; gs?: number; track_rate?: number; tas?: number;
+  mag_heading?: number; ias?: number; mach?: number; baro_rate?: number; geom_rate?: number;
+  ws?: number; wd?: number; oat?: number; static_hpa?: number; humidity?: number;
+  ident?: string;
+  acas_ra?: { age?: number; active?: boolean; terminated?: boolean; advisory?: string; threat?: string };
+}
+const COMMB_NUM = ['nav_altitude_mcp', 'nav_altitude_fms', 'nav_qnh', 'roll', 'true_track', 'gs', 'track_rate', 'tas',
+  'mag_heading', 'ias', 'mach', 'baro_rate', 'geom_rate', 'ws', 'wd', 'oat', 'static_hpa', 'humidity'] as const;
+/** ★ Only the known keys, numbers finite, text bounded — it is drawn in the map WebView's card. */
+export function parseCommB(v: unknown): AdsbCommB | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const c = v as Record<string, unknown>;
+  const o: AdsbCommB = {};
+  for (const k of COMMB_NUM) { const n = num(c[k]); if (n !== undefined) (o as Record<string, number>)[k] = n; }
+  const id = cleanText(c.ident, 8);
+  if (/^[A-Z0-9 ]+$/.test(id)) o.ident = id;
+  const ra = c.acas_ra;
+  if (ra && typeof ra === 'object' && !Array.isArray(ra)) {
+    const r = ra as Record<string, unknown>;
+    const out: NonNullable<AdsbCommB['acas_ra']> = {};
+    if (num(r.age) !== undefined) out.age = num(r.age);
+    if (typeof r.active === 'boolean') out.active = r.active;
+    if (typeof r.terminated === 'boolean') out.terminated = r.terminated;
+    const adv = cleanText(r.advisory, 40);
+    if (adv) out.advisory = adv;
+    const th = cleanText(r.threat, 6).toLowerCase();
+    if (/^[0-9a-f]{6}$/.test(th)) out.threat = th;
+    if (out.active || out.terminated) o.acas_ra = out;
+  }
+  return Object.keys(o).length ? o : undefined;
 }
 
 /** A whole `adsb` report. */
@@ -124,6 +161,8 @@ export function parseAdsbMessage(msg: Record<string, unknown>): AdsbReport {
     if (/^[0-7]{4}$/.test(sq)) r.squawk = sq;
     const em = typeof a.emergency === 'number' ? String(a.emergency) : cleanText(a.emergency, 16);
     if (em && em !== '0' && em !== 'none') r.emergency = em;
+    const cb = parseCommB(a.commb);
+    if (cb) r.commb = cb;
     aircraft.push(r);
   }
   return {

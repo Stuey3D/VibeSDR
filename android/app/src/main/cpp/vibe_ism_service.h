@@ -622,6 +622,8 @@ public:
     /** ★ V12 LoRa: on/off (the owner's switch) and the detector budget in vibelora::detCost units (∞ = every plan
      *  channel the capture holds; the default tier always runs while LoRa is on). Takes effect at the next start(). */
     void setLora(bool on, double budgetUnits) { std::lock_guard<std::mutex> lk(mtx_); loraOn_ = on; loraBudget_ = budgetUnits; }
+    /** ★ V12 the owner's per-network switches under LoRa ("loraaprs", "fanet", "meshcom" off): their channels are not run. */
+    void setLoraNetsOff(std::vector<std::string> nets) { lora_.setNetsOff(std::move(nets)); }
     /** ★ V12 2026-11-12: the receiver's region (vibeism::regionAt) — which 902–928 MHz channels are LoRa's default set. */
     void setRegion(Region r) { std::lock_guard<std::mutex> lk(mtx_); region_ = r; }
     /** ★ V12 found on air: where this radio's found channels are kept (beside its bookmarks; "" = memory only), and the

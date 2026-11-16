@@ -82,6 +82,26 @@ nothing, never garbage.
 
 ---
 
+### 1.5 LoRa-APRS, FANET, MeshCom (V12 2026-11-16, `vibe_lora_ham.h`)
+- **LoRa-APRS** — the amateur convention (the lora-aprs firmware and its documentation): `'<' 0xFF 0x01` then a TNC2
+  packet `SRC>DEST,PATH:info`; 433.775 MHz SF12 125 kHz CR 4/5, sync 0x12. The info field goes through **our APRS
+  parser** (`vibeaprs::parseInfo`) — positions, Mic-E, weather, messages, symbols, the readable line. Plan: the 433
+  default set (1.5 units). UK operators also use 439.9125 MHz, outside every ISM band we capture: not listened to.
+- **FANET** — Skytraxx's protocol.txt (fanet-stm32, read for the facts): 868.2 MHz SF7 250 kHz (Europe), 920.8 MHz SF7
+  500 kHz (zone 2), sync 0xF1. Types 1 tracking (lat/93206, lon/46603, altitude with ×4 scale, speed 0.5 km/h ×5,
+  climb 0.1 m/s ×5, heading /256, the online-tracking bit, aircraft type), 2 name, 3 message (broadcast only shown),
+  4 service (gateway / weather: temperature, wind, humidity, pressure, charge), 7 ground tracking (walking … distress).
+  The signature (4 bytes) is skipped, not checked. Plan: 868.2 first of tier 1; 920.8 tier 2.
+- **MeshCom 4.x** — icssw.org's protocol page: type `':'`/`'!'`/`'@'`, 4-byte id (LSB first), MAX-HOP (low 3 bits,
+  0x80 MQTT, 0x40 path wanted), `SRC[,PATH]>DEST` + APRS-style payload, 0x00, hardware id, modulation id, FCS. The page
+  gives the FCS two ways; we check the 16-bit sum of bytes 0..MOD and count it, never refuse on it (the LoRa CRC held).
+  433.175 MHz SF11 250 kHz CR 4/6, sync 0x2B. Plan: 433 tier 1. **At 2.4 MS/s the 433 capture (radio 434.17 MHz) stops
+  short of 433.175 ± 125 kHz** — MeshCom runs on radios at 2.56 MS/s and up (and with "every channel" on those).
+- Each network has its own switch under LoRa (`loraaprs`, `meshcom`, `fanet`); off = its channels are not run.
+- Tests: `test-lora-ham` — payload vectors from each description, then modulated (vibe_lora.h encode/modulate) into
+  noisy IQ through the real engine: LoRa-APRS ×2 and MeshCom at 0 dB SNR (433 at 3.2 MS/s), FANET ×3 at +3 dB (868 at
+  2.4 MS/s); the switches; 10 s of noise per band → nothing. **Not yet heard on air.**
+
 ## 2. Privacy — decided, and what Stuart can change
 
 | | Shown | Never shown |
@@ -97,6 +117,11 @@ switch LoRa off per radio on the Setup page ("LoRa / Meshtastic / MeshCore").
 publish. Tests: test-lora "the privacy rule, on what a client receives", test-server-lora "PRIVACY ON THE WIRE".
 
 ---
+
+**V12 2026-11-16 additions:** LoRa-APRS and MeshCom are amateur radio — callsigns and positions public by law and
+design, shown exactly as the APRS decoder does. A FANET pilot is a person: exact only when their own online-tracking bit
+is set (consent to public tracking, as the Open Glider Network honours it), otherwise rounded to ~1 km and marked
+approximate; a FANET weather station or gateway is infrastructure (exact). FANET unicast messages are not shown.
 
 ## 3. How it works
 

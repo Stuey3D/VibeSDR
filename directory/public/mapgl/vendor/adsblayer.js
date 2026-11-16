@@ -540,7 +540,7 @@
                   vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
                   engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport,
-                  trailPush, trailGradient, trailAlt, TRAIL_STEP_NM, TRAIL_STEP_FT, TRAIL_MAX };
+                  trailPush, trailGradient, trailAlt, TRAIL_STEP_NM, TRAIL_STEP_FT, TRAIL_MAX, commbRows };
 
   /* ══ ICONS — one geometry, two renderers ═══════════════════════════════════════════════════════
    * Every icon is a list of parts in a 40×40 box, nose up (north), centre (20,20): f = filled path,
@@ -731,6 +731,10 @@
       + '.vsadsb-pop-' + th + ' td:first-child{color:rgba(' + T.ink + ',0.65);padding-right:10px;white-space:nowrap}'
       + '.vsadsb-pop-' + th + ' td:last-child{color:rgba(' + T.ink + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .em{color:#ff6a50;font-weight:600;letter-spacing:1px;margin-bottom:4px}'
+      // ★ V12 Comm-B rows: their heading line, the TCAS advisory, a dim age
+      + '.vsadsb-pop-' + th + ' td.sec{padding-top:5px;font-size:11px;color:rgba(' + T.ink + ',0.65)}'
+      + '.vsadsb-pop-' + th + ' td .ra{color:#ff6a50;font-weight:600}'
+      + '.vsadsb-pop-' + th + ' td .d{color:rgba(' + T.ink + ',0.65);font-size:11px}'
       // ★ V12 aircraft data: the operator line (logo or text badge), the route, the photo and the credits
       + '.vsadsb-pop-' + th + ' .op{display:flex;align-items:center;gap:8px;margin:-2px 0 6px;min-height:20px}'
       + '.vsadsb-pop-' + th + ' .op img{max-width:85px;max-height:20px;object-fit:contain}'
@@ -773,6 +777,34 @@
     return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
   function num(v) { const n = Number(v); return v == null || v === '' || !isFinite(n) ? null : n; }
+  /* ★★ V12 MODE S COMM-B (vibe_adsb_commb.h): what the aircraft told a ground radar — its selected altitude, heading,
+   *  airspeeds, roll, the wind and temperature outside, a collision-avoidance advisory. The server sends a register
+   *  only once it is CONFIRMED (never guessed), inside its own "commb" object, so the card can say where it came from. */
+  function commbRows(c) {
+    const out = [];
+    if (!c || typeof c !== 'object') return out;
+    const row = (k, v) => { if (v) out.push('<tr><td>' + esc(k) + '</td><td>' + esc(v) + '</td></tr>'); };
+    const n = (k) => num(c[k]);
+    const tcas = c.acas_ra && typeof c.acas_ra === 'object' ? c.acas_ra : null;
+    if (tcas && (tcas.active === true || tcas.terminated === true)) {
+      const adv = typeof tcas.advisory === 'string' ? tcas.advisory.slice(0, 40) : '';
+      const age = num(tcas.age);
+      out.push('<tr><td>TCAS</td><td><span class="ra">' + esc(tcas.active === true ? 'Advisory: ' + (adv || 'active') : 'Advisory ended') + '</span>'
+        + (age != null ? ' <span class="d">' + Math.round(age) + ' s ago</span>' : '') + '</td></tr>');
+    }
+    const sel = n('nav_altitude_mcp') != null ? n('nav_altitude_mcp') : n('nav_altitude_fms');
+    const qnh = n('nav_qnh');
+    row('Selected', [sel != null ? Math.round(sel).toLocaleString('en-GB') + ' ft' : '', qnh != null ? 'set ' + qnh.toFixed(qnh % 1 ? 1 : 0) + ' hPa' : ''].filter(Boolean).join(' \u00b7 '));
+    if (n('mag_heading') != null) row('Heading', Math.round(n('mag_heading')) + '\u00b0 magnetic');
+    row('Airspeed', [n('ias') != null ? 'IAS ' + Math.round(n('ias')) + ' kt' : '', n('mach') != null ? 'Mach ' + n('mach').toFixed(2) : '',
+                     n('tas') != null ? 'TAS ' + Math.round(n('tas')) + ' kt' : ''].filter(Boolean).join(' \u00b7 '));
+    const roll = n('roll');
+    if (roll != null) row('Bank', Math.abs(roll) < 1 ? 'wings level' : Math.round(Math.abs(roll)) + '\u00b0 ' + (roll > 0 ? 'right' : 'left'));
+    if (n('ws') != null && n('wd') != null) row('Wind', Math.round(n('ws')) + ' kt from ' + Math.round(n('wd')) + '\u00b0' + (n('oat') != null ? ' \u00b7 ' + n('oat').toFixed(0) + ' \u00b0C outside' : ''));
+    // ★ where these came from, said once above them
+    if (out.length) out.unshift('<tr><td colspan="2" class="sec">From its replies to radar (Mode S)</td></tr>');
+    return out;
+  }
   /** ★ Off-air text is whatever a transponder sent: a callsign is kept to the characters a callsign has. */
   function cleanFlight(v) { return String(v == null ? '' : v).replace(/[^A-Za-z0-9 -]/g, '').trim().slice(0, 10); }
   function cleanHex(v) { return String(v == null ? '' : v).replace(/[^~0-9A-Fa-f]/g, '').slice(0, 7).toLowerCase(); }
@@ -1177,6 +1209,7 @@
       row('Speed', num(a.gs) != null ? Math.round(a.gs) + ' kt' : '');
       row('Track', num(a.track) != null ? Math.round(a.track) + '° ' + cardinal(a.track) : '');
       row('Squawk', a.squawk ? String(a.squawk).replace(/[^0-7]/g, '').slice(0, 4) : '');
+      rows.push(...commbRows(a.commb));
       if (rx && s.disp) {
         const d = distNm(rx.lat, rx.lon, s.fix.lat, s.fix.lon), b = bearingDeg(rx.lat, rx.lon, s.fix.lat, s.fix.lon);
         row('From you', (d < 10 ? d.toFixed(1) : Math.round(d)) + ' NM · ' + Math.round(b) + '° ' + cardinal(b));

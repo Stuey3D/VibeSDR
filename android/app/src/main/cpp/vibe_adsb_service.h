@@ -44,13 +44,15 @@ public:
     ~Service() { stop(); }
 
     /** Start decoding a capture at `rateHz`. lat/lon NAN when the server has no position. */
-    void start(double rateHz, double lat, double lon) {
+    /** `commb`: read Mode S Comm-B replies too (the owner's "commb" switch, vibe_adsb_commb.h). */
+    void start(double rateHz, double lat, double lon, bool commb = true) {
         stop();
         std::lock_guard<std::mutex> lk(mtx_);
         rate_ = rateHz;
         demod_.reset(new Demod(rateHz));
         tracker_ = Tracker();
-        tracker_.setMaxRangeNm(360);                      // as dump1090-fa: a position further than this is a bad decode
+        tracker_.setMaxRangeNm(360);
+        tracker_.setCommB(commb);                      // as dump1090-fa: a position further than this is a bad decode
         if (lat == lat && lon == lon) tracker_.setReceiver(lat, lon);
         rxLat_ = lat; rxLon_ = lon;
         queue_.clear();

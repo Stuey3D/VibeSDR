@@ -18,6 +18,7 @@
 #include "vibe_lorawan.h"
 #include "vibe_meshtastic.h"
 #include "vibe_meshcore.h"
+#include "vibe_lora_ham.h"   // ★ V12 LoRa-APRS, FANET, MeshCom
 #include "vibe_lora_discover.h"   // ★ V12 2026-11-12: LoRa channels found on air
 #include "vibe_thread.h"
 #include <atomic>
@@ -35,7 +36,8 @@ namespace vibelora {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 struct PlanCh {
     const char* name;          ///< "LoRaWAN 868.1"
-    const char* net;           ///< "lorawan" | "meshtastic" | "meshcore" — what is expected there (the sync word decides)
+    const char* net;           ///< "lorawan" | "meshtastic" | "meshcore" | "loraaprs" | "fanet" | "meshcom" — what is
+                               ///<   expected there (the sync word decides, then this)
     double hz, bw;
     std::vector<int> sfs;
     std::vector<uint8_t> syncs;
@@ -64,6 +66,9 @@ inline int tierAt(const PlanCh& c, vibeism::Region r) {
  *  /configuracao tells Brazil to pick it; Vietnam 920.250 SF8 BW62.5; Thailand 921.000 SF7 BW62.5). */
 inline const std::vector<PlanCh>& planFor(const std::string& band) {
     static const std::vector<uint8_t> LW = {0x34, 0x12}, MT = {0x2B, 0x12}, MC = {0x12};
+    /* ★ V12 2026-11-16 (vibe_lora_ham.h): LoRa-APRS sync 0x12 (the lora-aprs firmware's), FANET 0xF1 (protocol.txt),
+     *  MeshCom 0x2B (MeshCom's LoRa settings). */
+    static const std::vector<uint8_t> LA = {0x12}, FN = {0xF1}, MX = {0x2B};
     static const std::vector<int> ALL = {7, 8, 9, 10, 11, 12};
     static const std::vector<PlanCh> eu868 = {
         {"Meshtastic LongFast 869.525", "meshtastic", 869.525e6, 250e3, {11}, MT, false, 0},
@@ -71,6 +76,9 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
         {"LoRaWAN 868.1", "lorawan", 868.1e6, 125e3, ALL, LW, false, 0},
         {"LoRaWAN 868.3", "lorawan", 868.3e6, 125e3, ALL, LW, false, 0},
         {"LoRaWAN 868.5", "lorawan", 868.5e6, 125e3, ALL, LW, false, 0},
+        /* ★ V12 FANET (paragliders, hang gliders, gliders — protocol.txt: 868.2 MHz SF7 250 kHz). Tier 1, FIRST of it: busy
+         *  on flying days, silent the rest of the week, so not in the Pi 2's default set — on wherever the budget allows. */
+        {"FANET 868.2", "fanet", 868.2e6, 250e3, {7}, FN, false, 1},
         {"MeshCore 869.618 SF7", "meshcore", 869.618e6, 62.5e3, {7}, MC, false, 1},
         {"Meshtastic 869.525 other presets", "meshtastic", 869.525e6, 250e3, {7, 8, 9, 10}, MT, false, 1},
         {"LoRaWAN 867.1", "lorawan", 867.1e6, 125e3, ALL, LW, false, 1},
@@ -86,6 +94,10 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
     static const std::vector<PlanCh> eu433 = {
         {"Meshtastic LongFast 433.875", "meshtastic", 433.875e6, 250e3, {11}, MT, false, 0},
         {"MeshCore EU 433 Narrow 433.650", "meshcore", 433.650e6, 62.5e3, {8}, MC, false, 0},
+        /* ★ V12 LoRa-APRS (433.775 MHz SF12 125 kHz CR 4/5 — the amateur trackers and iGates of Europe): the default set,
+         *  1.5 units (one SF12 detector). MeshCom (433.175 MHz SF11 250 kHz CR 4/6, mostly Austria and Germany): tier 1. */
+        {"LoRa APRS 433.775", "loraaprs", 433.775e6, 125e3, {12}, LA, false, 0},
+        {"MeshCom 433.175", "meshcom", 433.175e6, 250e3, {11}, MX, false, 1},
         {"LoRaWAN 433.175", "lorawan", 433.175e6, 125e3, ALL, LW, false, 1},
         {"LoRaWAN 433.375", "lorawan", 433.375e6, 125e3, ALL, LW, false, 1},
         {"LoRaWAN 433.575", "lorawan", 433.575e6, 125e3, ALL, LW, false, 1},
@@ -140,6 +152,9 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
         {"MeshCore Thailand 921.000", "meshcore", 921.0e6, 62.5e3, {7}, MC, false, 0, AS},
         {"LoRaWAN AS923-2 921.4", "lorawan", 921.4e6, 125e3, SF7_10, LW, false, 1, AS},
         {"LoRaWAN AS923-2 921.6", "lorawan", 921.6e6, 125e3, SF7_10, LW, false, 1, AS},
+        /* ★ V12 FANET zone 2 (protocol.txt: 920.8 MHz SF7 500 kHz — the Americas, Australia/NZ, Japan, China). 4 units for
+         *  one SF7 detector at 500 kHz and little traffic: tier 2 (the budget, or "every channel"). */
+        {"FANET zone 2 920.8", "fanet", 920.8e6, 500e3, {7}, FN, false, 2},
     };
     static const std::vector<PlanCh> b923 = {
         {"MeshCore Brazil / AU 923.125", "meshcore", 923.125e6, 62.5e3, {8}, MC, false, 0},
@@ -326,10 +341,15 @@ struct Heard { Frame f; Msg m; };
 inline Msg interpret(const Frame& f, const char* expect) {
     Msg m;
     bool ok = false;
-    if (f.sync == 0x2B) ok = meshtastic::parse(f.bytes, m);
+    const std::string ex(expect ? expect : "");
+    if (f.sync == 0xF1) ok = fanet::parse(f.bytes, m);
+    else if (f.sync == 0x2B && ex == "meshcom") { ok = meshcom::parse(f.bytes, m); if (!ok) { m = Msg(); ok = meshtastic::parse(f.bytes, m); } }
+    else if (f.sync == 0x12 && loraaprs::parse(f.bytes, m)) ok = true;   // ★ its '<' 0xFF 0x01 prefix says what it is
+    else if (f.sync == 0x2B) ok = meshtastic::parse(f.bytes, m);
     else if (f.sync == 0x34) ok = lorawan::parse(f.bytes, f.crcOn, m);
     else if (f.sync == 0x12) {
-        if (std::string(expect) == "meshcore" || std::string(expect) == "meshtastic") ok = meshcore::parse(f.bytes, m);
+        m = Msg();
+        if (ex == "meshcore" || ex == "meshtastic") ok = meshcore::parse(f.bytes, m);
         if (!ok) { m = Msg(); ok = lorawan::parse(f.bytes, f.crcOn, m); if (ok) m.net = "private network"; }
     }
     if (!ok) { m = Msg(); m.proto = "lora"; m.what = "frame"; }
@@ -351,7 +371,10 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         hc_ = hwCentreHz; rate_ = rateHz;
         chans_.clear(); demods_.clear(); streams_.clear(); names_.clear();
-        const auto& plan = planFor(band);
+        /* ★ V12 the owner's per-network switches (LoRa-APRS, FANET, MeshCom — under LoRa): their channels are not run */
+        planOn_.clear();
+        for (const auto& c : planFor(band)) if (!netOff(c.net)) planOn_.push_back(c);
+        const auto& plan = planOn_;
         planSize_ = plan.size();
         /* ★ the found channels as plan channels: the engine OWNS their names (the book may change while this runs) */
         foundPlan_.clear(); foundNames_.clear();
@@ -493,6 +516,9 @@ public:
     /** ★ V12 found on air: how many of channelsRun() are found channels; search the capture for LoRa-shaped bursts. */
     size_t foundRun() const { return foundRun_; }
     void setDiscover(bool on) { discover_ = on; }
+    /** ★ V12 networks the owner switched off ("loraaprs", "fanet", "meshcom"): their plan channels are left out. */
+    void setNetsOff(std::vector<std::string> nets) { std::lock_guard<std::mutex> lk(mtx_); netsOff_ = std::move(nets); }
+    bool netOff(const char* net) const { for (const auto& n : netsOff_) if (n == net) return true; return false; }
     bool discovering() const { return discover_; }
     std::vector<Shape> takeShapes() { std::lock_guard<std::mutex> sl(shapeMtx_); std::vector<Shape> v; v.swap(shapes_); return v; }
     Shaper::Counts shapeCounts() { std::lock_guard<std::mutex> sl(shapeMtx_); return shaper_.counts(); }
@@ -698,6 +724,8 @@ private:
     std::vector<std::string> names_;
     size_t planSize_ = 0;
     std::vector<PlanCh> foundPlan_;
+    std::vector<PlanCh> planOn_;             ///< the band's plan less the networks switched off (chosen_ points in here)
+    std::vector<std::string> netsOff_;
     std::vector<std::string> foundNames_;
     size_t foundRun_ = 0;
     bool discover_ = false;

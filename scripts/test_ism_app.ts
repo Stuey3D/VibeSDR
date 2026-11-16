@@ -317,5 +317,29 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('a message row carries its band column', /class="ismBand">868</.test(web.ismListHtml(w!, 'msgs', app.ISM_UNITS_DEFAULT, '', null, bands)), true);
 }
 
+// ── V12 LoRa-APRS, MeshCom, FANET rows (vibe_lora_ham.h / vibe_lora_track.h): both readers keep their fields alike ──
+{
+  const r = { type: 'ism', band: '868', centre: 868_800_000, devices: [
+    { key: 'm1', kind: 'fanet', make: 'FANET', model: 'paraglider', name: 'Anna B', line: 'FANET · Anna B · paraglider · 2448 m', node: '11:1234',
+      role: 'paraglider', lat: 46.68, lon: 7.86, alt: 2448, speed: 36, course: 225, climb: 1.8, online: 1, ntype: 'aircraft', freq: 868_200_000, snr: 3, seen: 2, count: 4 },
+    { key: 'm2', kind: 'fanet', make: 'FANET', model: 'glider', name: '11:5555', line: 'FANET · 11:5555 · glider', node: '11:5555',
+      role: 'glider', lat: 46.69, lon: 7.87, approx: 1, ntype: 'aircraft', freq: 868_200_000, snr: 3, seen: 2, count: 1 },
+    { key: 'm3', kind: 'loraaprs', make: 'LoRa APRS', model: 'jogger', name: 'M0ABC-7', line: 'LoRa APRS · M0ABC-7 · jogger', node: 'M0ABC-7',
+      lat: 52.24, lon: -0.87, sym: '/[', path: 'WIDE1-1', ntype: 'companion', freq: 433_775_000, snr: -0.4, seen: 9, count: 2 },
+    { key: 'm4', kind: 'meshcom', make: 'MeshCom', model: '', name: 'OE1KBC-12', line: 'MeshCom · OE1KBC-12 → all: “Servus”', node: 'OE1KBC-12',
+      freq: 433_175_000, snr: -0.1, seen: 30, count: 1 } ] };
+  const wa = web.ismSanitise(r)!, aa = app.ismSanitise(r)!;
+  eq('the new kinds: the two sanitisers agree', aa.devices, wa.devices);
+  eq('FANET fields kept', [aa.devices[0].speed, aa.devices[0].climb, aa.devices[0].online, aa.devices[0].ntype], [36, 1.8, 1, 'aircraft']);
+  eq('APRS symbol and path kept', [aa.devices[2].sym, aa.devices[2].path], ['/[', 'WIDE1-1']);
+  eq('network names', ['loraaprs', 'meshcom', 'fanet'].map(app.ismNetName), ['LoRa APRS', 'MeshCom', 'FANET']);
+  eq('filter tabs offer them', ['loraaprs', 'meshcom', 'fanet'].every((k) => app.ISM_KINDS.some((x) => x.id === k) && web.ISM_KINDS.some((x) => x.id === k)), true);
+  eq('a FANET flyer on the map is an aircraft', [web.ismNodeType(wa.devices[0]), app.ismNodeType(aa.devices[0])], ['aircraft', 'aircraft']);
+  eq('its detail: speed, climb', web.ismLoraDetail(wa.devices[0]).some((l) => l.includes('36 km/h') && l.includes('+1.8 m/s')), true);
+  eq('a pilot without public tracking is said to be approximate', web.ismLoraDetail(wa.devices[1]).some((l) => l.includes('has not chosen public tracking')), true);
+  eq('LoRa APRS detail says the path', app.ismLoraDetail(aa.devices[2]).some((l) => l.includes('via WIDE1-1')), true);
+  eq('details agree', aa.devices.map((d) => app.ismLoraDetail(d)), wa.devices.map((d) => web.ismLoraDetail(d)));
+}
+
 console.log(`ism app: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

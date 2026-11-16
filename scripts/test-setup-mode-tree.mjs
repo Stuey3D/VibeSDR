@@ -200,7 +200,7 @@ try {
   await sleep(1500);
   const vj = await (await fetch(`http://127.0.0.1:${P + 1}/vibeserver.json`)).json().catch(() => ({}));
   ok(Array.isArray(vj.modes) && !vj.modes.includes('drm') && vj.adsb !== true, `the server enforces them: no "drm" in its modes, ADS-B not offered (adsb ${vj.adsb})`);
-  ok(Array.isArray(vj.loraChannels) && vj.loraChannels.some((c) => c.band === '868' && c.plan === 16 && c.fit > c.defaults),
+  ok(Array.isArray(vj.loraChannels) && vj.loraChannels.some((c) => c.band === '868' && c.plan === 17 && c.fit > c.defaults),   // ★ 17: V12 2026-11-16 FANET 868.2 joined the plan
      `vibeserver.json says how many LoRa channels run (${JSON.stringify(vj.loraChannels)})`);
   await openSetup();
   ok(await js(`${JSON.stringify(NEW)}.every(id => ${'document.querySelector(\'input[data-mode="\' + id + \'"]\')'}.checked === false)`), 'reloaded: each shows unticked');

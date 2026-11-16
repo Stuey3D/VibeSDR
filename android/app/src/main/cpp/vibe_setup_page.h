@@ -3132,6 +3132,11 @@ const BLOCKABLE = [
   /* ★★ V12 (2026-10-31) "every channel" — the owner's "lora+all", IN the CSV when ticked. Unticked, LoRa still listens:
    *  the default channels always, plus what the benchmark affords (vibelora::budgetFromBench). */
   { id: "lora+all", label: "LoRa: listen on every channel", parent: "lora", on: true },
+  /* ★ V12 2026-11-16 (vibe_lora_ham.h) three more networks on the same engine, each its own switch: off = its channels
+   *  are not listened to. Offered only where the radio reaches them (433 MHz; FANET 868.2 / 920.8 MHz). */
+  { id: "loraaprs", label: "LoRa APRS (amateur trackers and iGates, 433.775 MHz)", parent: "lora" },
+  { id: "meshcom",  label: "MeshCom (amateur mesh, 433.175 MHz)", parent: "lora" },
+  { id: "fanet",    label: "FANET (paragliders and gliders, 868.2 MHz)", parent: "lora" },
   /* ★ V12 CW — the listener's decoder and the skimmer (docs/v12/CW-SKIMMER.md), ONE switch: the skimmer is the same
    *  decoder across a wider slice, and the server enforces both with "cw" (cwskim → cw). */
   { id: "cw",     label: "CW decoder and skimmer" },
@@ -3165,6 +3170,9 @@ const BLOCKABLE = [
   { id: "aprs",   label: "APRS" },
   /* ★ ADS-B (aircraft on 1090 MHz, a whole-radio mode) — the server enforced "adsb"; the page never offered it. */
   { id: "adsb",   label: "ADS-B aircraft" },
+  /* ★ V12 Mode S Comm-B (vibe_adsb_commb.h): what aircraft tell the ground radars — selected altitude, airspeeds, heading,
+   *  winds aloft, TCAS advisories — read from the same 1090 MHz capture. Under ADS-B: nothing to read without it. */
+  { id: "commb",  label: "ADS-B: radar replies (selected altitude, airspeeds, winds)", parent: "adsb" },
 ];
 /** The tree as drawn: BLOCKABLE plus one entry per digital-spots mode this server runs (vibeserver.json spotModes), under
  *  "spots", before Band. Each is `spots-<mode>` in the CSV when off — the server leaves the mode out everywhere. */

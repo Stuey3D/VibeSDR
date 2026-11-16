@@ -162,6 +162,9 @@ flags_for() {
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
+    # ★ V12 Mode S Comm-B (vibe_adsb_commb.h): the Riddle's BDS examples, then inference through the Tracker — ADS-B
+    #   cross-checks, second-reply confirmation, data parity, the 1,7 veto, ACAS RA, 2,0 naming, random-field false rate.
+    test-adsb-commb)       echo "-O2" ;;
     # ★ V12 TDF / ALS162 (decoders/tdf_phase.h): synthetic phase code through the TIME decoder — noise, drift, timing, CPU.
     #   `test-tdf --wav <file> [start_utc]` replays an UberSDR recording (docs/v12/TIME-TDF.md).
     test-tdf)              echo "-O2" ;;
@@ -229,6 +232,9 @@ flags_for() {
     # ★★ V12 the ISM map (2026-11-01): positions parsed, the node table's cap / 24 h expiry / newest wins, the privacy rule
     #    (a person's node rounded to ~1 km), the gallery's "stations received" card. Fast (no DSP).
     test-lora-nodes)       echo "-O2 -lpthread" ;;
+    # ★ V12 LoRa-APRS, FANET, MeshCom (vibe_lora_ham.h): payload vectors from each published description, then modulated into
+    #   noisy IQ through the real engine on the 433 / 868 plans; the privacy rule, the owner's per-network switches, noise.
+    test-lora-ham)         echo "-O2 -lpthread" ;;
     # ★★ V12 the NAVTEX map (2026-11-01): gallery titles read back, the stations placed by the label's own resolver, the
     #    time of day / history / message text where it could not decide, the fold, the real fixture set. Fast.
     test-navtex-map)       echo "-O2 -lpthread" ;;

@@ -15194,7 +15194,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
         const double runRate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
-        g_adsb.start(runRate, g_bgLat.load(), g_bgLon.load());
+        g_adsb.start(runRate, g_bgLat.load(), g_bgLon.load(), !vsModeBlocked("commb"));   // ★ V12 Comm-B, the owner's switch under ADS-B
         adsbLastReport_ = adsbLastGain_ = nowSecs();
         g_adsbMode.store(true);
         if (adsbGainIdx_ >= 0) LocalSdrShim::instance().setGain(adsbGainSet_);
@@ -15544,6 +15544,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★ V12 LoRa (vibe_lora_service.h, docs/v12/LORA-MESH.md): on unless the owner blocks "lora"; every plan channel
          *  when the owner allows "lora+all", otherwise the default set plus what the benchmark's dec_lora row affords. */
         g_ism.setLora(!vsModeBlocked("lora"), vsModeBlocked("lora+all") ? INFINITY : vibelora::budgetFromBench(vsLoraBenchPct()));
+        // ★ V12 LoRa-APRS, FANET, MeshCom (vibe_lora_ham.h): each its own switch under LoRa (Setup → Modes and decoders)
+        {
+            std::vector<std::string> off;
+            for (const char* n : {"loraaprs", "fanet", "meshcom"}) if (vsModeBlocked(n)) off.push_back(n);
+            g_ism.setLoraNetsOff(std::move(off));
+        }
         // ★ V12 2026-11-12: which 902–928 MHz channels are the default set follows the receiver's own position
         g_ism.setRegion(vibeism::regionAt(g_bgLat.load(), g_bgLon.load()));
         auto log = ismMakeLog(b);

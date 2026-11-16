@@ -59,6 +59,10 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'ism', label: 'ISM sensors and meters' },
   { id: 'lora', label: 'LoRa / Meshtastic / MeshCore', parent: 'ism' },
   { id: 'lora+all', label: 'LoRa: listen on every channel', parent: 'lora', on: true },
+  // ★ V12 LoRa-APRS, MeshCom, FANET (vibe_lora_ham.h) — under LoRa, as on the setup page
+  { id: 'loraaprs', label: 'LoRa APRS (amateur trackers and iGates, 433.775 MHz)', parent: 'lora' },
+  { id: 'meshcom', label: 'MeshCom (amateur mesh, 433.175 MHz)', parent: 'lora' },
+  { id: 'fanet', label: 'FANET (paragliders and gliders, 868.2 MHz)', parent: 'lora' },
   { id: 'cw', label: 'CW decoder and skimmer' }, { id: 'psk', label: 'PSK31/63 decoder and skimmer' },
   { id: 'dsc', label: 'DSC' }, { id: 'sitora', label: 'SITOR-A' },
   { id: 'same', label: 'EAS / SAME' }, { id: 'selcal', label: 'SELCAL' },
@@ -69,6 +73,8 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },
   { id: 'aprs', label: 'APRS' },
   { id: 'adsb', label: 'ADS-B aircraft' },
+  // ★ V12 Mode S Comm-B (vibe_adsb_commb.h) — under ADS-B, as on the setup page
+  { id: 'commb', label: 'ADS-B: radar replies (selected altitude, airspeeds, winds)', parent: 'adsb' },
 ];
 /** The list as drawn: BLOCKABLE plus one switch per digital-spots mode under "spots", before Band — `spots-<mode>` off.
  *  ★ The modes are this build's own (DIGI_MODE_STYLE, the map legend's list): the server on this phone IS this build. */
@@ -95,7 +101,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
 /** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'aisstore', 'adsb', 'drm', 'tone',
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'loraaprs', 'meshcom', 'fanet', 'ndb', 'ais', 'aisstore', 'adsb', 'commb', 'drm', 'tone',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
