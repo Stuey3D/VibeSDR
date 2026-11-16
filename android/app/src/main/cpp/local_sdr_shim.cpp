@@ -7775,6 +7775,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  dial (fdvLowerSideband): every shared retune goes through rx.setTune(vfoOffsetNow(), rxModeDial(), …), so crossing
      *  10 MHz in FreeDV flips the sideband in the same move. */
     std::atomic<bool> fdvMode_{false};
+    std::atomic<bool> m17Mode_{false};   // ★ V12 M17 on the shared demodulator: its channel width is fixed (setBandwidth)
     vibedsp::RxPipeline::Mode rxModeDial() const {
         if (fdvMode_.load(std::memory_order_relaxed))
             return fdvLowerSideband(audioFreq.load()) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
@@ -10236,6 +10237,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto mp = paramsFor(c->mode);
         if (c->mode == "freedv" && fdvLowerSideband(c->vfoHz)) mp.kind = ModeParams::SSB_LSB;   // ★ V12 FreeDV's sideband
         double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
+        if (c->mode == "m17") bw = mp.bandwidth;   // ★ V12 M17: the receiver needs its whole 12.5 kHz channel — a width is not a choice here
         /* ★★★ THE SAME LIMITS THE SHARED PATH HAS, BEFORE THE CHANNEL IS SIZED FROM THEM. This path
          *  took `bandwidthHigh - bandwidthLow` as sent and sized the listener's channel from it —
          *  no owner cap (setBandwidth's g_vsMaxBandwidth), no ceiling of any kind. USB at 500 kHz
@@ -18431,6 +18433,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
         rxMode = rxModeFor(mp);
         fdvMode_.store(mode == "freedv", std::memory_order_relaxed);   // ★ V12 FreeDV: rxModeDial picks the sideband
+        m17Mode_.store(mode == "m17", std::memory_order_relaxed);      // ★ V12 M17: setBandwidth keeps its 12.5 kHz
         toneSharedWant.store(mp.kind == ModeParams::NFM && mode != "m17" && !vsModeBlocked("tone"));   // ★ V12 tone ID (toneFeedShared); "tone" = the owner switched it off
         // Clamp to what the IQ can actually carry. Most public SpyServers cap the
         // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
@@ -23339,6 +23342,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { double cap = g_vsMaxBandwidth.load();
           if (g_serveOnLan.load() && cap > 0 && bw > cap) bw = cap; }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
+        if (m17Mode_.load(std::memory_order_relaxed)) bw = paramsFor("m17").bandwidth;   // ★ V12 M17: its whole channel, always
         // ★ The mode's floor/ceiling (RxPipeline::clampBwHz) here as well as in setTune, so the
         //   width this reports (vfoBwHz) is the one the chain is running.
         rxBwHz = vibedsp::RxPipeline::clampBwHz(rxMode, std::min(bw, sampleRate * 0.8));

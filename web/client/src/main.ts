@@ -211,6 +211,8 @@ import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, type 
 // ★★ V12 FreeDV digital voice (src/services/freedv.ts — the rules the app and the R36S share)
 import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME, FREEDV_HINT,
          type FreeDvSub, type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
+// ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
+import { m17Offered, m17Vts, m17Info, m17MergeMsgs, type M17State, type M17Msg } from '../../../src/services/m17';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
  *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
@@ -920,6 +922,7 @@ async function loadAudioPolicy(httpBase: string) {
     // ★ V12 synchronous AM: the family THIS server lists (an older one played "sam" as plain AM — never offered there)
     amSyncCap = amSyncOffered(Array.isArray(j.modes) ? j.modes : []);
     freedvSubs = freedvOffered(j);   // ★★ V12 FreeDV: [] where the server's libcodec2 did not load — no key at all then
+    m17Cap = m17Offered(j);          // ★★ V12 M17: only where libcodec2 loaded and the radio reaches 2 m / 70 cm
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
@@ -2757,6 +2760,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     /* ★★ V12 FreeDV: the server's report — the VTS line, the sub-mode row's lit key and the passband's side. A report after
      *  leaving the mode (or under a whole-radio mode) is a ghost. The SERVER chooses the sideband; we only draw it. */
+    /* ★★ V12 M17: the server's report — the VTS line and its info row (text, position, the relayed station, the newest
+     *  SMS). A report after leaving the mode (or under a whole-radio mode) is a ghost. */
+    onM17: (f) => {
+      if (!spec || spec.mode !== 'm17' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
+      m17State = f;
+      m17Msgs = m17MergeMsgs(m17Msgs, f);
+      updateVts();
+    },
     onFreeDv: (f) => {
       if (!spec || spec.mode !== 'freedv' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
       fdvState = f;
@@ -4815,12 +4826,17 @@ function updateVts() {
    *  time the mode is on — it is SILENT until speech, so the line is how a listener knows it is working. */
   const fdvOn = spec.mode === 'freedv' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
   if (fdvOn) { name = freedvVts(fdvState); flag = ''; logo = ''; src = ''; dabRt = ''; dabSvcSid = 0; }
+  /* ★★ V12 M17 likewise ("M17 · searching", "M17 · G4ABC → M17-M17 C", "M17 · last G4ABC"), with what the station sends
+   *  besides its voice (META text, a position, the relayed station, the newest SMS) as the line's text. */
+  const m17On = spec.mode === 'm17' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
+  const m17Text = m17On ? m17Info(m17State) : '';
+  if (m17On) { name = m17Vts(m17State); flag = ''; logo = ''; src = ''; dabRt = ''; dabSvcSid = 0; }
 
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
   // ★ Tracks whether what we are about to show is LIVE (the station naming itself) or STATIC (our
   //   guess from a list). Only the live kind may stay up — see vtsHoldFor().
-  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label) || fdvOn;
+  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label) || fdvOn || m17On;
   if (!name) {
     const near = nearestStation(hz);
     if (near && Math.abs(near.frequency - hz) <= VTS_ON_HZ) {
@@ -4935,6 +4951,7 @@ function updateVts() {
     ? { id: vtsHex(dabSvcSid), idLabel: 'SId', name, text: dabRt }
     : toneOn ? { name: toneName, text: tone }
     : fdvOn ? { name }
+    : m17On ? { name, text: m17Text }
     : { id: vtsHex(rdsPi), idLabel: 'PI', name: rdsName, text: rdsName ? rdsText : '' };
   setClass(vts, 'line', lineMode);
   applyVtsScroll(lineMode);
@@ -7457,6 +7474,10 @@ let amSyncState: AmSyncState | null = null;
 let freedvSubs: FreeDvSub[] = [];
 /** ★★ V12 FreeDV: the server's last report while in the mode (null before the first, and on leaving — a ghost otherwise). */
 let fdvState: FreeDvState | null = null;
+/** ★★ V12 M17: offered by THIS server (vibeserver.json modes), its last report while in the mode, and the packets heard. */
+let m17Cap = false;
+let m17State: M17State | null = null;
+let m17Msgs: M17Msg[] = [];
 /** The demodulators to offer: the fixed set, plus the synchronous AM family and DRM where this server has them (beside
  *  AM, where an AM listener looks), FreeDV beside USB / LSB — minus what the owner switched off. */
 function offeredModes(): SDRMode[] {
@@ -7465,6 +7486,7 @@ function offeredModes(): SDRMode[] {
     out.push(m);
     if (m === 'am') out.push(...(amSyncCap as SDRMode[]));
     if (m === 'lsb' && freedvSubs.length) out.push('freedv');
+    if (m === 'nfm' && m17Cap) out.push('m17');   // ★★ V12 M17 beside NFM, where an NFM listener looks
   }
   if (drmCap) out.push('drm');
   return out.filter((m) => !isModeBlocked(m));
@@ -19354,6 +19376,8 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   // ★ V12 DRM: the box follows the mode; a new mode forgets the old station (and its meter and its picture)
   if (m !== 'drm') { drmState = null; drmIq = null; drmQualityMeter.reset(); drmQuality = null; }
   if (m !== 'freedv') fdvState = null;   // ★ V12 FreeDV: its line goes with the mode
+  if (m !== 'm17') m17State = null;      // ★ V12 M17 likewise (the packets heard are kept)
+  else if (!send && !m17State) spec.m17Status();   // ★ adopted (a room already in M17): ask for its report now
   else if (!send && !fdvState) spec.freedvSub(null);   // ★ adopted (a room already in FreeDV): ask for its report now
   amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second
   bwAutoState = null;                 // ★★ V12 …and so are AUTO's edges
@@ -19378,6 +19402,7 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
   wfm: 250000,
   drm: 5000,   // ★ V12 DRM: unused — the bandwidth row is hidden in DRM (see syncBw)
   freedv: 3000,   // ★ V12 FreeDV: unused — the server fixes the modem's channel; the row is hidden (see syncBw)
+  m17: 4500,      // ★ V12 M17: unused — the server fixes the receiver's channel; the row is hidden (see syncBw)
   // ★ V12 synchronous AM: AM-shaped as AM; ECSS's edges are SSB's (one sideband, up to 6 kHz like USB/LSB)
   sau: 20000, sal: 20000, amst: 20000, ecssu: 6000, ecssl: 6000,
 };
@@ -19424,7 +19449,7 @@ function syncBw() {
    *  row is hidden rather than left as a slider that does nothing (AGENTS.md: no dead controls). */
   //  ★ V12 FreeDV likewise: the server fixes the modem's 2.7 kHz channel; the sub-mode row takes its place in the picker.
   { const row = document.querySelector('.bwRow') as HTMLElement | null;
-    if (row) row.style.display = spec.mode === 'drm' || spec.mode === 'freedv' ? 'none' : ''; }
+    if (row) row.style.display = spec.mode === 'drm' || spec.mode === 'freedv' || spec.mode === 'm17' ? 'none' : ''; }
   const max = BW_EDGE_MAX[spec.mode] ?? 6000;
   const step = max > 50_000 ? 1000 : max > 10_000 ? 100 : 10;
   const lo = $<HTMLInputElement>('bwLo');
