@@ -30,6 +30,7 @@ import { parseFreeDv, freedvSubMessage, type FreeDvChoice } from './freedv';   /
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
+import { parseSondeReport } from './sondes';   // ★ V12 radiosondes (RS41)
 import { parseDabScan, parseFmScan } from './dabBandScan';
 import { othersEnded, type WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 
@@ -314,6 +315,19 @@ export class VibeServerClient extends VibeServerWsClient {
     this.avdataHeld = on;
     this.sendSpectrum(on && band ? { type: 'avdata', on: 1, band } : { type: 'avdata', on: on ? 1 : 0 });
   }
+  /* ── V12 RADIOSONDES (docs/v12/RS41.md) — the datalink's pattern: the server puts the radio on a 400–406 MHz band,
+   *  finds and decodes every RS41 in the capture, ignores tune / zoom / mode while it runs. ── */
+  private sdExit = new DabExitGuard();
+  sondesHeld = false;
+  /** `band`: 'lo' | 'mid' | 'hi' | 'all' (the server's sondesBands ids); omitted = where it last was, else its default. */
+  sondes(on: boolean, band?: string) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio to 400 MHz
+    holdNativeHealing(VibeServerClient.AIS_HOLD_MS, on ? 'sondes on' : 'sondes off');
+    if (on && !this.sondesHeld) { this.sdExit.entered(); this.cancelPacedTune(); }
+    else if (!on) this.sdExit.left(Date.now());
+    this.sondesHeld = on;
+    this.sendSpectrum(on && band ? { type: 'sondes', on: 1, band } : { type: 'sondes', on: on ? 1 : 0 });
+  }
   /** One ship's track (the map's card) — a read, answered to the asker only (`ais_trail`). */
   aisTrail(mmsi: number) {
     if (Number.isInteger(mmsi) && mmsi > 0) this.sendSpectrum({ type: 'ais_trail', mmsi });
@@ -529,6 +543,24 @@ export class VibeServerClient extends VibeServerWsClient {
       case 'avdata_error':
         this.avdataHeld = false;
         this.callbacks.onAvdata?.(null, dabSafeText(msg.why, 200) || 'The aircraft datalink is not available on this receiver');
+        return true;
+      /* ★ V12 RADIOSONDES: as the datalink — a report MEANS the mode is on; `sondes_off` ended it; `sondes_error` refused. */
+      case 'sondes': {
+        if (!this.sdExit.accept(Date.now())) return true;   // ★ a ghost after our own off
+        const r = parseSondeReport(msg);
+        if (!r) return true;
+        this.sondesHeld = true;
+        this.callbacks.onSondes?.(r);
+        return true;
+      }
+      case 'sondes_off':
+        this.sdExit.offConfirmed(Date.now());
+        this.sondesHeld = false;
+        this.callbacks.onSondes?.(null);
+        return true;
+      case 'sondes_error':
+        this.sondesHeld = false;
+        this.callbacks.onSondes?.(null, dabSafeText(msg.why, 200) || 'Radiosondes are not available on this receiver');
         return true;
       case 'ais_off':
         this.aisExit.offConfirmed(Date.now());

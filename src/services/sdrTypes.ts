@@ -13,6 +13,7 @@ import { parseNdbCapability } from './ndb';
 import { parsePagingModes, type PagingMode } from './paging';   // ★ V12 PAGING (Android local hardware only)
 import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';
 import { parseAvBands, type AvBand } from './aviation';   // ★ V12 aviation   // ★ V12 AIS / APRS
+import { parseSondeBands, type SondeBand } from './sondes';   // ★ V12 radiosondes
 import { AM_SYNC_LABEL } from './amSync.ts';
 const { sam: _samLabel, ...AM_SYNC_LABEL_NO_SAM } = AM_SYNC_LABEL;   // 'sam' keeps its own entry below
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
@@ -476,6 +477,8 @@ export interface ServerOccupancy {
   hfdl?: boolean;
   /** ★ V12 AIRCRAFT DATALINK (ACARS / VDL2, a whole-radio mode): offered / greyed with its reason; absent = no key. */
   avdata?: { ok: boolean; why: string; bands: AvBand[]; text: boolean };
+  /** ★ V12 RADIOSONDES (RS41, a whole-radio mode on 400–406 MHz): offered / greyed with its reason; absent = no key. */
+  sondes?: { ok: boolean; why: string; bands: SondeBand[] };
   /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
    *  first) — textModes.ts. */
   mfsk?: boolean;
@@ -581,6 +584,10 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       avdata:    j.avdata === true || j.avdata === false
         ? { ok: j.avdata === true, why: cleanText(j.avdataWhy, 200) || (j.avdata === true ? '' : 'The aircraft datalink is not available on this receiver'),
             bands: parseAvBands(j.avdataBands), text: j.avdataText === true }
+        : undefined,
+      sondes:    j.sondes === true || j.sondes === false
+        ? { ok: j.sondes === true, why: cleanText(j.sondesWhy, 200) || (j.sondes === true ? '' : 'Radiosondes are not available on this receiver'),
+            bands: parseSondeBands(j.sondesBands) }
         : undefined,
       mfsk:      j.mfsk === true,
       mfskModes: parseTextModes(j.mfskModes),

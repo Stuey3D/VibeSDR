@@ -2,9 +2,13 @@
  * sondes.ts — ★ V12 RADIOSONDES (docs/v12/RS41.md): the words and shapes both clients use for a VibeServer's SONDES
  * whole-radio mode ({"type":"sondes"}: RS41 weather balloons on 400–406 MHz). One copy (the app's SondesPanel and the
  * web's sondes.ts), so every screen says the same thing.
+ * ★ tracks.ts's range and bearing; the map's icon and card are HTML strings (the web's TrackView and the app's MapOverlay
+ *   WebView draw the same ones), every field escaped.
  * ★ NEVER A GUESSED PTU: the server sends `temp` only once the sonde's whole calibration (51 subframes) is in; until then
  *   the line says how much has arrived. Humidity and pressure are not decoded at all.
  */
+
+import { rangeBearing, type LatLon, type TrackItem, type TrackRow } from './tracks';
 
 /** One sonde from the report (vibe_rs41_service.h Tracker::json). */
 export interface Sonde {
@@ -99,7 +103,7 @@ export function sondeLine(s: Sonde): string {
 }
 /** The temperature, or how far the calibration has got — never a guess. */
 export function sondeTemp(s: Sonde): string {
-  if (s.temp != null) return `${s.temp.toFixed(1)} °C`;
+  if (s.temp != null) return `${s.temp < 0 ? '\u2212' : ''}${Math.abs(s.temp).toFixed(1)} \u00b0C`;
   return s.cal >= 51 ? 'temperature not decoded' : `not yet calibrated (${s.cal} of 51)`;
 }
 /** The second line: where it was heard, its state, the temperature (or the calibration's progress). */
@@ -125,4 +129,49 @@ export function sondeEmpty(r: SondeReport | null): string {
   return `Searching ${span} for RS41 radiosondes. Weather services launch them twice a day (around 11:15 and 23:15 UTC in `
     + 'much of Europe) and each is heard for one to three hours; an aerial for 400 MHz with a clear view of the sky hears them '
     + 'furthest. Step the band if your nearest launch site uses another frequency.';
+}
+
+function esc(v: unknown): string {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+}
+/** ★ Falling = the climb rate below −2 m/s: after the balloon burst, on its way down. */
+export function sondeFalling(s?: Sonde): boolean { return !!s && s.climb != null && s.climb < -2; }
+/** A balloon: falling ones orange, pointing down (the climb rate's sign is the one thing a glance must get). */
+export function sondeIcon(s?: Sonde): { html: string; w: number; h: number } {
+  const down = sondeFalling(s);
+  const fill = down ? '#ff8a4d' : '#7fd4ff';
+  return { html: `<svg width="20" height="22" viewBox="0 0 20 22" aria-hidden="true"><ellipse cx="10" cy="8" rx="6.5" ry="7.2" fill="${fill}" stroke="#000" stroke-width="0.9"/>`
+    + `<path d="M10 15.2v4.3" stroke="#000" stroke-width="1"/><rect x="7.6" y="19" width="4.8" height="2.6" fill="#fff" stroke="#000" stroke-width="0.7"/>`
+    + (down ? '<path d="M10 4.5v6M7.4 8.3 10 11l2.6-2.7" stroke="#000" stroke-width="1.2" fill="none"/>' : '') + '</svg>', w: 20, h: 22 };
+}
+/** The map's card (HTML, escaped). */
+export function sondeCard(s: Sonde): string {
+  const pos = s.lat != null && s.lon != null
+    ? `<br>${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}${s.speed != null ? ` \u00b7 ${s.speed.toFixed(1)} m/s towards ${Math.round(s.heading ?? 0)}\u00b0` : ''}` : '';
+  return `<b>${esc(sondeLine(s))}</b><br>${esc(sondeDetail(s))}${pos}<br><small>${s.n} frame${s.n === 1 ? '' : 's'} \u00b7 last ${esc(sondeAge(s.age))}`
+    + `${s.sats != null ? ` \u00b7 ${s.sats} satellites` : ''}</small>`;
+}
+/** A sonde's track, [lat, lon] oldest first (the map's trail — from the report, never a request). */
+export function sondeTrail(r: SondeReport | null, key: string): [number, number][] {
+  const s = r?.sondes.find((x) => x.serial === key);
+  return s ? s.track.map((p) => [p[0], p[1]] as [number, number]) : [];
+}
+/** The app's map (MapOverlay 'sondes', the shared track layer): the sondes with a position. */
+export function sondeTrackItems(r: SondeReport | null): TrackItem[] {
+  if (!r) return [];
+  return r.sondes.filter((s) => s.lat != null && s.lon != null)
+    .map((s) => ({ key: s.serial, lat: s.lat as number, lon: s.lon as number, _ic: sondeIcon(s), _lb: s.serial, _cd: sondeCard(s) }));
+}
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+/** The app's map list (TrackLiveList): nearest first where the receiver's place is known, else the newest. */
+export function sondeTrackRows(r: SondeReport | null, rx: LatLon | null): TrackRow[] {
+  if (!r) return [];
+  const rows = r.sondes.map((s) => ({ s, rb: rx && s.lat != null && s.lon != null ? rangeBearing(rx, s.lat, s.lon) : null }));
+  if (rx) rows.sort((a, b) => (a.rb && b.rb ? a.rb.km - b.rb.km : a.rb ? -1 : b.rb ? 1 : a.s.age - b.s.age));
+  return rows.map(({ s, rb }) => ({
+    key: s.serial, colour: sondeFalling(s) ? '#ff8a4d' : '#7fd4ff', flag: '', name: sondeLine(s), second: sondeDetail(s),
+    sp: s.speed != null ? `${s.speed.toFixed(0)} m/s` : '', trend: (s.climb == null ? 0 : s.climb > 1 ? 1 : s.climb < -1 ? -1 : 0) as -1 | 0 | 1,
+    range: rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km` : s.lat == null ? 'no position' : '',
+    brg: rb ? COMPASS[Math.round(rb.brg / 45) % 8] : '', noPos: s.lat == null, age: sondeAge(s.age), em: false,
+  }));
 }
