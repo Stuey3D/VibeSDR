@@ -43,6 +43,8 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
 import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
+import { avCard, avIcon, avItems, avRanges, avRows, avStatus } from './avdata';   // ★ V12 the aircraft datalink
+import { parseAvBands, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -913,6 +915,7 @@ async function loadAudioPolicy(httpBase: string) {
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
     aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
+    avReadCap(j);                // ★ V12 the aircraft datalink (ACARS / VDL2): the same three states, and its bands
     // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
     //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
     decWhy = parseDecWhy(j);
@@ -1917,6 +1920,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onNdbStats: (m) => ndbView?.stats_(m),
     onAis: (r) => onAisReport(r),
     onAisError: (why: string) => { showPill(why, 7000); if (aisOn && !aisReport) aisUiOff(); },
+    onAvdata: (r) => onAvReport(r),
+    onAvdataError: (why: string) => { showPill(why, 7000); if (avOn && !avReport) avUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     // ★★ The answer to our mode_resume (wholeResumeTick): yes = the reports follow; no = the mode goes, and why is said
@@ -8885,7 +8890,7 @@ function adsbReadCap(j: any) {
 /** ★ ADS-B and ISM have nothing to hear: the page lets go of the audio output while either is on (audio.ts setQuiet —
  *  the AirPods followed a page "playing" silence). One rule for both, so a hand-over between them never plays a gap. */
 function syncAudioQuiet() {
-  const q = adsbOn || ismOn || aisOn || ndbOn;
+  const q = adsbOn || ismOn || aisOn || ndbOn || avOn;   // ★ V12 + the aircraft datalink (no audio either)
   if (!audio || audio.quiet === q) return;
   audio.setQuiet(q);
   updateMediaSession();
@@ -9780,6 +9785,71 @@ function onAisReport(r: AisReport | null) {
   aisRender();
 }
 
+/* ★★★ THE AIRCRAFT DATALINK (V12, docs/v12/AVIATION.md) — AIS's shape (avdata.ts): the page covers itself with a
+ *  TrackView, the bands in its top bar, EXIT gives the receiver back. ★ Offered only where vibeserver.json says so:
+ *  `avdata` true (live) / false (greyed, `avdataWhy` on a tap) / absent (no band reachable — no control at all). */
+let avCap: { ok: boolean; why: string } | null = null;
+let avBands: AvBand[] = [];
+let avOn = false;
+let avReport: AvReport | null = null;
+let avView: TrackView | null = null;
+function avReadCap(j: any) {
+  if (j?.avdata === true) avCap = { ok: true, why: '' };
+  else if (j?.avdata === false) {
+    const why = typeof j.avdataWhy === 'string' ? j.avdataWhy.trim().slice(0, 200) : '';
+    avCap = { ok: false, why: why || 'The aircraft datalink is not available on this receiver' };
+  } else avCap = null;
+  avBands = parseAvBands(j?.avdataBands);
+}
+function avUiOn() {
+  avOn = true;
+  syncAudioQuiet();
+  closePanels();
+  if (!avView) avView = new TrackView({
+    title: 'AIRCRAFT DATALINK · ACARS + VDL2', exitLabel: 'EXIT DATALINK', listTitle: 'HEARD', onExit: () => avSetMode(false),
+    icon: () => avIcon(), label: (it: any) => String(it.flight || it.reg || it.icao || ''), card: (it: any) => avCard(it),
+    ranges: avRanges(avBands), range: avReport?.band || '', rangeHint: 'The band: ACARS (131 MHz) or VDL2 (136 MHz)', rangeLabel: 'The band',
+    onRange: (id: string) => { if (spec && avReport?.band !== id) spec.avdata(true, id); },
+  });
+  avView.show(myPos());
+  avRender();
+}
+function avUiOff() {
+  avOn = false;
+  syncAudioQuiet();
+  avReport = null;
+  avView?.hide();
+  renderFreq();
+}
+function avSetMode(on: boolean) {
+  if (on) {
+    if (avCap && !avCap.ok) { showPill(avCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.avdata(true); return; }   // ★ ask before tuning: spec says why
+    audio?.holdHealing(6000);
+    avUiOn();
+    spec?.avdata(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.avdata(false);
+    avUiOff();
+  }
+}
+function avRender() {
+  if (!avView) return;
+  const r = avReport;
+  avView.update(avItems(r), avRows(r), avStatus(r), r ? r.aircraft.length : 0, myPos());
+  // ★ the server owns the band: the control shows where the radio IS (a refused pick snaps back with the next report)
+  if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
+}
+/** ★ A report (on) or the server's `avdata_off` (null). */
+function onAvReport(r: AvReport | null) {
+  if (!r) { if (avOn) { audio?.holdHealing(6000); avUiOff(); } return; }
+  avReport = r;
+  if (!avOn) avUiOn();   // ★ somebody else put the receiver here (or we joined it)
+  audio?.holdHealing(8000);   // ★ nothing to hear: the server sends no audio (as in AIS)
+  avRender();
+}
+
 /* ★★ APRS'S MAP (V12) — the APRS decoder box's MAP button opens the same full-screen map with the stations heard (their
  *  symbols, a tapped one's track and its card). Closing it goes back to the box; the decoder carries on either way. */
 let aprsView: TrackView | null = null;
@@ -10161,7 +10231,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : avOn ? 'DATALINK' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -10227,6 +10297,9 @@ function buildControls() {
     aisCap:        () => aisCap,
     aisOn:         () => aisOn,
     toggleAis:     toggleAisMode,
+    avCap:         () => avCap,          // ★ V12 the aircraft datalink
+    avOn:          () => avOn,
+    toggleAv:      toggleAvMode,
     ndbCap:        () => ndbCap,
     ndbOn:         () => ndbOn,
     toggleNdb:     toggleNdbMode,
@@ -14397,6 +14470,7 @@ function toggleDabMode() { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabO
 function toggleAdsbMode() { if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
 function toggleIsmMode() { if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
 function toggleAisMode() { if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
+function toggleAvMode() { if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); avSetMode(!avOn); }
 function toggleNdbMode() { if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); }
 /* ★★★ TUNES THE RADIO ITSELF in the decoder panel — the mode menu's keys, with the mode menu's rule: a REFUSED mode is not
  *  drawn unless it is ON (so it can be left), DAB where the radio is DAB-capable. A press closes the panel, as the menu does. */
@@ -14409,6 +14483,7 @@ setWholeRadioKeys(() => {
   };
   add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
   add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
+  add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
   if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB (Experimental) — digital radio, Band III',
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');

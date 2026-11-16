@@ -24,6 +24,7 @@ import { AdsbInfoStore, type AdsbInfo } from '../../../src/services/adsbInfo';
 import { ismSanitise, type IsmReport } from './ism';
 import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
+import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
 import { type WatchState, watchSanitise } from './vfoAB';
@@ -724,6 +725,10 @@ export interface SpectrumCallbacks {
    *  — its arrival MEANS AIS is on. null = the server left AIS (`ais_off`). */
   onAis?: (r: AisReport | null) => void;
   onAisError?: (why: string) => void;
+  /** ★★ V12 AIRCRAFT DATALINK (ACARS / VDL2): a report once a second while the receiver is in the mode — its arrival MEANS
+   *  it is on; null = the server left it (`avdata_off`). Parsed by the app's own src/services/aviation.ts. */
+  onAvdata?: (r: AvReport | null) => void;
+  onAvdataError?: (why: string) => void;
   /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
   onAisTrail?: (mmsi: number, pts: [number, number][]) => void;
   /** ★★ The answer to modeResume (src/services/wholeModeResume.ts): may this listener have the whole-radio mode the
@@ -1392,6 +1397,25 @@ export class SpectrumClient {
       }
       case 'ais_error':
         this.cb.onAisError?.(String(msg.why ?? 'AIS is not available on this receiver'));
+        return;
+      /* ★★ V12 AIRCRAFT DATALINK — AIS's three messages and its ghost guard. */
+      case 'avdata': {
+        if (Date.now() < this.avQuietUntil) return;
+        const r = parseAvReport(msg);
+        if (!r) return;
+        this.avHeld = true;
+        this.cb.onAvdata?.(r);
+        return;
+      }
+      case 'avdata_off': {
+        this.avHeld = false;
+        const now = Date.now();
+        if (this.avQuietUntil > now) this.avQuietUntil = Math.min(this.avQuietUntil, now + 1500);
+        this.cb.onAvdata?.(null);
+        return;
+      }
+      case 'avdata_error':
+        this.cb.onAvdataError?.(String(msg.why ?? 'The aircraft datalink is not available on this receiver').slice(0, 200));
         return;
       case 'ais_trail': {
         const m = Number(msg.mmsi);
@@ -2398,6 +2422,16 @@ export class SpectrumClient {
     this.aisHeld = on;
     if (on) this.wholeLastAt.ais = Date.now();
     this._send({ type: 'ais', on: on ? 1 : 0 });
+  }
+  /* ★★ V12 AIRCRAFT DATALINK: `band` 'acars' | 'vdl2' (vibeserver.json avdataBands); omitted = where it last was. */
+  avHeld = false;
+  private avQuietUntil = 0;
+  avdata(on: boolean, band?: string) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — it takes the whole shared radio to the airband
+    if (on) this.tunePacer.cancel();
+    this.avQuietUntil = on ? 0 : Date.now() + 5000;
+    this.avHeld = on;
+    this._send(on && band ? { type: 'avdata', on: 1, band } : { type: 'avdata', on: on ? 1 : 0 });
   }
   /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
   aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }

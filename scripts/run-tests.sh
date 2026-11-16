@@ -1633,6 +1633,9 @@ if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-vdl2" --write-clip "$OUT/vdl2-clip.cu8" 2400000 >/dev/null 2>&1
   VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" node scripts/test-server-avdata.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ …and the web client's view of it (headless Edge, --mute-audio) — needs the page built into VIBESERVER_BIN
+  VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" node scripts/test-web-avdata.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/vdl2-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))
