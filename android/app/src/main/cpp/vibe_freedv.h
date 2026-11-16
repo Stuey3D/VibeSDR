@@ -129,6 +129,45 @@ inline bool trustedFile(const std::string& p) {
 }
 #endif
 
+/** ★★ THE LIBRARY ITSELF, opened once for every user of it (FreeDV here, M17's vocoder in vibe_m17.h) — one dlopen, one
+ *  trust check, one answer. `handle` is null when there is no library; `why` says so in words. VIBE_CODEC2_DISABLE=1 makes
+ *  the library "not installed" for everybody (the M17 tests); VIBE_FREEDV_DISABLE=1 (below) switches off FreeDV alone. */
+struct Lib { void* handle = nullptr; std::string path, why; };
+inline Lib openLib() {
+    Lib l;
+#if defined(VIBE_FREEDV_NO_DLOPEN)
+    l.why = "Codec 2 is not available on this platform yet";
+    return l;
+#else
+    if (const char* d = std::getenv("VIBE_CODEC2_DISABLE")) if (d[0] && d[0] != '0') { l.why = "libcodec2 switched off (VIBE_CODEC2_DISABLE)"; return l; }
+    void* h = nullptr;
+#if defined(__APPLE__)
+    static const char* const kTry[] = { "/opt/homebrew/opt/codec2/lib/libcodec2.dylib",
+                                        "/usr/local/opt/codec2/lib/libcodec2.dylib",
+                                        "/opt/local/lib/libcodec2.dylib" };
+    for (const char* p : kTry) {
+        if (!trustedFile(p)) continue;
+        h = ::dlopen(p, RTLD_NOW | RTLD_LOCAL);
+        if (h) { l.path = p; break; }
+    }
+#else
+    // ★ measured 2026-11-16: Debian 12 bookworm libcodec2-1.0 (1.0.5), Debian 13 trixie libcodec2-1.2 (1.2.0)
+    static const char* const kTry[] = { "libcodec2.so.1.2", "libcodec2.so.1.1", "libcodec2.so.1.0", "libcodec2.so" };
+    for (const char* p : kTry) {
+        h = ::dlopen(p, RTLD_NOW | RTLD_LOCAL);
+        if (h) { l.path = p; break; }
+    }
+#endif
+    if (!h) { l.why = "libcodec2 is not installed"; return l; }
+    l.handle = h;   // ★ never closed: the library lives as long as the process (a static's lifetime)
+    return l;
+#endif
+}
+inline const Lib& lib() {
+    static const Lib l = openLib();
+    return l;
+}
+
 /** Load once, on first ask; thread-safe (a function-local static). VIBE_FREEDV_DISABLE=1 makes it report "not
  *  installed" — for the tests that prove the mode disappears without the library. */
 inline Api loadApi() {
@@ -138,25 +177,10 @@ inline Api loadApi() {
     return a;
 #else
     if (const char* d = std::getenv("VIBE_FREEDV_DISABLE")) if (d[0] && d[0] != '0') { a.why = "FreeDV switched off (VIBE_FREEDV_DISABLE)"; return a; }
-    void* h = nullptr;
-#if defined(__APPLE__)
-    static const char* const kTry[] = { "/opt/homebrew/opt/codec2/lib/libcodec2.dylib",
-                                        "/usr/local/opt/codec2/lib/libcodec2.dylib",
-                                        "/opt/local/lib/libcodec2.dylib" };
-    for (const char* p : kTry) {
-        if (!trustedFile(p)) continue;
-        h = ::dlopen(p, RTLD_NOW | RTLD_LOCAL);
-        if (h) { a.path = p; break; }
-    }
-#else
-    // ★ measured 2026-11-16: Debian 12 bookworm libcodec2-1.0 (1.0.5), Debian 13 trixie libcodec2-1.2 (1.2.0)
-    static const char* const kTry[] = { "libcodec2.so.1.2", "libcodec2.so.1.1", "libcodec2.so.1.0", "libcodec2.so" };
-    for (const char* p : kTry) {
-        h = ::dlopen(p, RTLD_NOW | RTLD_LOCAL);
-        if (h) { a.path = p; break; }
-    }
-#endif
-    if (!h) { a.why = "libcodec2 is not installed"; return a; }
+    const Lib& L = lib();
+    void* h = L.handle;
+    if (!h) { a.why = L.why; return a; }
+    a.path = L.path;
     bool all = true;
     auto sym = [&](const char* n) { void* s = ::dlsym(h, n); if (!s) all = false; return s; };
     a.open       = reinterpret_cast<FdvOpaque* (*)(int)>(sym("freedv_open"));
@@ -176,7 +200,7 @@ inline Api loadApi() {
     a.setTxt     = reinterpret_cast<void (*)(FdvOpaque*, void (*)(void*, char), char (*)(void*), void*)>(sym("freedv_set_callback_txt"));
     a.getVersion = reinterpret_cast<int (*)()>(sym("freedv_get_version"));
     a.comptx     = reinterpret_cast<void (*)(FdvOpaque*, void*, short*)>(::dlsym(h, "freedv_comptx"));   // ★ optional
-    if (!all) { ::dlclose(h); a = Api(); a.why = "libcodec2 is too old (the FreeDV API is incomplete)"; return a; }
+    if (!all) { a = Api(); a.why = "libcodec2 is too old (the FreeDV API is incomplete)"; return a; }
     a.ok = true;
     a.version = a.getVersion();
     // ★ What THIS library can open — 700E arrived with codec2 1.0; a build may leave modes out (FREEDV_MODE_*_EN).
@@ -185,7 +209,6 @@ inline Api loadApi() {
         if (f) { a.sub[s] = true; a.close(f); }
     }
     if (!a.anySub()) { a.ok = false; a.why = "libcodec2 offers none of 700D, 700E or 1600"; }
-    // ★ the handle is never closed: the library lives as long as the process (a static's lifetime)
     return a;
 #endif
 }
@@ -195,6 +218,62 @@ inline const Api& api() {
 }
 /** ★ The one question every reader asks — hwinfo's `modes`, vsModeKnown, the clients' picker through hwinfo. */
 inline bool available() { return api().anySub(); }
+
+// ── ★★ V12 THE VOCODER ALONE (M17, vibe_m17.h): Codec 2's own API from the SAME library — codec2.h's published C ─────
+//    signatures, found with dlsym in the handle FreeDV uses. M17 carries Codec 2 3200 (voice) or 1600 (voice + data) in
+//    its stream frames; no modem of codec2's is involved. Independent of FreeDV's answer: a library whose FreeDV API is
+//    incomplete may still have the vocoder, and VIBE_FREEDV_DISABLE does not take it away.
+struct C2Opaque;
+struct Vocoder {
+    bool ok = false;
+    std::string why;
+    bool mode3200 = false, mode1600 = false;   ///< which of M17's two rates this library can create
+    C2Opaque* (*create)(int) = nullptr;
+    void (*destroy)(C2Opaque*) = nullptr;
+    void (*encode)(C2Opaque*, unsigned char*, short*) = nullptr;
+    void (*decode)(C2Opaque*, short*, const unsigned char*) = nullptr;
+    int (*samplesPerFrame)(C2Opaque*) = nullptr;
+    int (*bitsPerFrame)(C2Opaque*) = nullptr;
+};
+/** codec2.h's mode numbers (stable since 0.x): CODEC2_MODE_3200 0, CODEC2_MODE_1600 2. */
+constexpr int kC2Mode3200 = 0, kC2Mode1600 = 2;
+inline Vocoder loadVocoder() {
+    Vocoder v;
+#if defined(VIBE_FREEDV_NO_DLOPEN)
+    v.why = "Codec 2 is not available on this platform yet";
+    return v;
+#else
+    const Lib& L = lib();
+    if (!L.handle) { v.why = L.why; return v; }
+    bool all = true;
+    auto sym = [&](const char* n) { void* s = ::dlsym(L.handle, n); if (!s) all = false; return s; };
+    v.create          = reinterpret_cast<C2Opaque* (*)(int)>(sym("codec2_create"));
+    v.destroy         = reinterpret_cast<void (*)(C2Opaque*)>(sym("codec2_destroy"));
+    v.encode          = reinterpret_cast<void (*)(C2Opaque*, unsigned char*, short*)>(sym("codec2_encode"));
+    v.decode          = reinterpret_cast<void (*)(C2Opaque*, short*, const unsigned char*)>(sym("codec2_decode"));
+    v.samplesPerFrame = reinterpret_cast<int (*)(C2Opaque*)>(sym("codec2_samples_per_frame"));
+    v.bitsPerFrame    = reinterpret_cast<int (*)(C2Opaque*)>(sym("codec2_bits_per_frame"));
+    if (!all) { v = Vocoder(); v.why = "libcodec2 has no vocoder API"; return v; }
+    // ★ probed, as FreeDV's sub-modes are: a build may leave a mode out (CODEC2_MODE_*_EN). The frame shapes are checked
+    //   too — M17 packs exactly 64 bits per 3200 frame (20 ms) and per 1600 frame (40 ms).
+    auto probe = [&](int mode, int samples) {
+        C2Opaque* c = v.create(mode);
+        if (!c) return false;
+        const bool good = v.samplesPerFrame(c) == samples && v.bitsPerFrame(c) == 64;
+        v.destroy(c);
+        return good;
+    };
+    v.mode3200 = probe(kC2Mode3200, 160);
+    v.mode1600 = probe(kC2Mode1600, 320);
+    v.ok = v.mode3200;   // ★ 3200 is M17's voice; without it there is no M17 voice to offer
+    if (!v.ok) v.why = "libcodec2 cannot run Codec 2 3200";
+    return v;
+#endif
+}
+inline const Vocoder& vocoder() {
+    static const Vocoder v = loadVocoder();
+    return v;
+}
 
 /** ★ A FreeDV signal as 48 kHz USB audio, made by the library's OWN transmitter (freedv_tx) from a synthetic voice — the
  *  benchmark's proof that its row decodes (vibe_benchmark_more.h dec_freedv). Empty when the library is not here. */
