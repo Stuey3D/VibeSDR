@@ -60,6 +60,8 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'cw', label: 'CW decoder and skimmer' }, { id: 'psk', label: 'PSK31/63 decoder and skimmer' },
   { id: 'dsc', label: 'DSC' }, { id: 'sitora', label: 'SITOR-A' },
   { id: 'same', label: 'EAS / SAME' }, { id: 'selcal', label: 'SELCAL' },
+  // ★ V12 HFDL (docs/v12/AVIATION.md): aircraft on HF, a listener's decoder on the USB dial — as on the setup page
+  { id: 'hfdl', label: 'HFDL (aircraft on HF)' },
   { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR' }, { id: 'hell', label: 'Feld Hell (Hellschreiber)' },
   { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
   { id: 'ais', label: 'AIS ships' },
@@ -67,7 +69,15 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },
   { id: 'aprs', label: 'APRS' },
   { id: 'adsb', label: 'ADS-B aircraft' },
+  /* ★★ V12 AIRCRAFT DATALINK (ACARS, VDL2 — a whole-radio mode) and, under it, the owner's opt-in for the message TEXT
+   *  ("+" token, IN the CSV when on, off by default) with DECODER-RESEARCH.md §4.3's notice — as on the setup page. */
+  { id: 'avdata', label: 'Aircraft datalink (ACARS, VDL2)' },
+  { id: 'avdata+text', label: 'Aircraft datalink: show the message text (to you only)', parent: 'avdata', on: true },
 ];
+/** ★ ONE TEXT, TWO READERS: vibe_setup_page.h AVDATA_TEXT_NOTICE. */
+const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless '
+  + 'Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law '
+  + 'where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.';
 /** The list as drawn: BLOCKABLE plus one switch per digital-spots mode under "spots", before Band — `spots-<mode>` off.
  *  ★ The modes are this build's own (DIGI_MODE_STYLE, the map legend's list): the server on this phone IS this build. */
 function modeTree(): ModeEntry[] {
@@ -94,6 +104,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
 const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'aisstore', 'adsb', 'drm', 'tone',
+  'avdata', 'avdata+text',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
@@ -4748,6 +4759,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                           band plan's channels as the benchmark says this phone can afford. On, it listens on every channel the
                           capture holds.
                         </Text>
+                      </View>
+                    ) : m.id === 'avdata+text' ? (
+                      <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{AVDATA_TEXT_NOTICE}</Text>
                       </View>
                     ) : chip(m, inert);
                     if (!k.length) return box;

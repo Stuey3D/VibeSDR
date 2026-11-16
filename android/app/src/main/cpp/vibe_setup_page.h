@@ -3085,6 +3085,10 @@ function bandLabel(entry) {
  *  token that is IN the CSV when ticked ("lora+all" — the "spotsband+wspr" convention); `node` moves an existing control
  *  of the page under its parent (DAB's label scan, Band's mode-by-mode list). The digital-spots modes are added under
  *  "spots" from the server's own list (spotModes) — `spots-<mode>` off. */
+/* ★★ V12 the message-text opt-in's notice (DECODER-RESEARCH.md §4.3). ONE TEXT, TWO READERS: ServerModeScreen.tsx. */
+const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless "
+  + "Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law "
+  + "where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.";
 const BLOCKABLE = [
   { id: "wfm",    label: "WFM"      },
   /* ★ Advanced RDS lives inside WFM: no FM, no RDS of any kind (the shim drops "rds" from the offer without WFM). */
@@ -3143,6 +3147,9 @@ const BLOCKABLE = [
   { id: "same", label: "EAS / SAME" },
   /* ★ V12 SELCAL (2026-10-31) — the aeronautical selective call (ICAO, 32 tones). */
   { id: "selcal", label: "SELCAL" },
+  /* ★ V12 HFDL (docs/v12/AVIATION.md) — aircraft on HF, a listener's decoder on the USB dial; its aircraft feed the HFDL
+   *  map. The benchmark's "dec_hfdl" row sets its default. */
+  { id: "hfdl", label: "HFDL (aircraft on HF)" },
   /* ★ V12 (2026-10-31): ONE switch — MFSK16/32, Olivia, Contestia and THOR are one key with one AUTO. */
   { id: "mfsk", label: "MFSK, Olivia, Contestia, THOR" },
   /* ★ V12 FELD HELL (2026-10-31) — drawn, not read: the text painted as it is heard. */
@@ -3161,6 +3168,11 @@ const BLOCKABLE = [
   { id: "aprs",   label: "APRS" },
   /* ★ ADS-B (aircraft on 1090 MHz, a whole-radio mode) — the server enforced "adsb"; the page never offered it. */
   { id: "adsb",   label: "ADS-B aircraft" },
+  /* ★★ V12 AIRCRAFT DATALINK (docs/v12/AVIATION.md) — ACARS and VDL2, a whole-radio mode on 131 / 136 MHz. Flight IDs,
+   *  registrations, positions and labels are shown by default; the MESSAGE TEXT is the owner's opt-in below it ("+"
+   *  token, IN the CSV when ticked, off by default), with the notice DECODER-RESEARCH.md §4.3 asks for. */
+  { id: "avdata", label: "Aircraft datalink (ACARS, VDL2)" },
+  { id: "avdata+text", label: "Aircraft datalink: show the message text (to you only)", parent: "avdata", on: true },
 ];
 /** The tree as drawn: BLOCKABLE plus one entry per digital-spots mode this server runs (vibeserver.json spotModes), under
  *  "spots", before Band. Each is `spots-<mode>` in the CSV when off — the server leaves the mode out everywhere. */
@@ -3431,6 +3443,8 @@ function modeBlockRender() {
     let h = box(m);
     if (m.id === "lora+all") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="loraAllHint" style="margin:2px 0 0 24px">`
                                 + loraAllHint() + `</div></div>`;
+    if (m.id === "avdata+text") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="avdataTextHint" style="margin:2px 0 0 24px">`
+                                   + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
     if (!k.length) return h;
     return `<div class="modeGroup" data-group="${esc(m.id)}" style="flex:1 1 100%">${h}`
       + `<div class="modeKids" data-kids-of="${esc(m.id)}" style="display:flex;flex-wrap:wrap;gap:8px 10px;`
@@ -3827,7 +3841,8 @@ function modeBlockSummary() {
     ? `Switched off: ${off.map(id => name(id) + (modeRegionOff(id, own) ? " (by default in this region)" : "")).join(", ")}.`
     : "Everything this radio can do is offered.")
     + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
-    + (all.includes("lora+all") ? " LoRa listens on every channel." : "");
+    + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
+    + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "");
   bandModeRender();
 }
 

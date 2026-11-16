@@ -49,6 +49,7 @@
 #include "vibe_aprs_run.h"    // ★ V12 APRS (1200 Bd VHF, 300 Bd HF) on the listener's audio — docs/v12/AIS-APRS.md
 #include "vibe_dsc_run.h"
 #include "vibe_sitora_run.h"
+#include "vibe_hfdl_run.h"   // ★ V12 HFDL on the USB dial — docs/v12/AVIATION.md (the aircraft go to the radio's table)
 #include "decoders/same_decoder.h"   // ★ V12 EAS / SAME (47 CFR § 11.31)
 #include "decoders/selcal_decoder.h" // ★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91)
 #include "decoders/textmodes.h"      // ★ V12 MFSK16/32, OLIVIA/CONTESTIA, THOR (one object per family, AUTO)
@@ -257,6 +258,9 @@ public:
     struct Env {
         /** The dial this host's audio is tuned to (Hz) — a spot's RF frequency is dial + audio offset. */
         std::function<double()> dialHz;
+        /** ★ V12 HFDL: the aircraft table its messages go to; null = the radio's own (vibeavi::sharedTracker). The
+         *  benchmark gives its own, so a timing run never puts test aircraft on a server's map. */
+        vibeavi::Tracker* aircraft = nullptr;
         std::function<void(const std::string&)> log;
         /** Box-wide slots; null = unlimited (a decoder-only sidecar serving one app). */
         DecoderSlots* slots = nullptr;
@@ -632,6 +636,7 @@ public:
      *  on decoderKind: "attached" was once true while nothing had been constructed). */
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
+        if (hfdl_) return "hfdl";
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
              : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
     }
@@ -774,6 +779,7 @@ private:
     static constexpr size_t kReplayBacklog = 128u * 1024;    // pace a replay below this backlog
 
     static bool knownExt(const std::string& e) {
+        if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
             || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty";
     }
@@ -821,7 +827,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
+    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -839,6 +845,7 @@ private:
         aprs_.reset();
         dsc_.reset();
         sitora_.reset();
+        hfdl_.reset();
         same_.reset();
         selcal_.reset();
         tm_.reset();
@@ -1043,6 +1050,8 @@ private:
             buildDscLocked_(msg);
         } else if (ext == "sitora") {
             buildSitoraLocked_(msg);
+        } else if (ext == "hfdl") {
+            buildHfdlLocked_();
         } else if (ext == "same") {
             buildSameLocked_();
         } else if (ext == "selcal") {
@@ -1221,6 +1230,25 @@ private:
         o.json = [this](const std::string& j) { broadcastText(j); };
         sitora_.reset(new SitorARun(cf, std::move(o)));
         log("decoder attached: SITOR-A, tones around " + std::to_string((int)cf) + " Hz");
+    }
+    /** ★★ HFDL (V12, 2026-11-16): the HF aircraft datalink on the listener's USB dial (the published HFDL frequency; the
+     *  carrier 1440 Hz above it in the audio). One line per message in the box (never a message body — vibe_hfdl_run.h),
+     *  and every aircraft into the radio's table, which /addon/hfdl/aircraft and the HFDL MAP read. No parameters. */
+    void buildHfdlLocked_() {
+        HfdlRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.json = [this](const std::string& j) { broadcastText(j); };
+        // ★ the dial asked at most once a second (it takes clientMtx): a message's frequency is the dial it was heard on
+        auto dial = env_.dialHz;
+        auto last = std::make_shared<std::pair<double, double>>(0.0, 0.0);
+        std::function<double()> dialNow;
+        if (dial) dialNow = [dial, last] {
+            const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (t - last->first >= 1.0) { last->first = t; last->second = dial(); }
+            return last->second;
+        };
+        hfdl_.reset(new HfdlRun(env_.aircraft ? *env_.aircraft : vibeavi::sharedTracker(), std::move(o), std::move(dialNow)));
+        log("decoder attached: HFDL (USB dial, carrier 1440 Hz above it)");
     }
     /** ★★ EAS / SAME (V12, 2026-10-31): the US Emergency Alert System headers (decoders/same_decoder.h, 47 CFR § 11.31)
      *  on the listener's audio — NOAA Weather Radio (162.400–162.550 MHz NFM) or any EAS participant's broadcast. Text:
@@ -1653,6 +1681,12 @@ private:
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
+            if (hfdl_) {
+                // ★ HFDL: float audio straight in; its lines and status are sent from inside (HfdlRun).
+                hfdl_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (sitora_) {
                 // ★ SITOR-A: float audio straight in; its text, status and state are sent from inside (SitorARun).
                 sitora_->feedAudio(data, count);
@@ -1739,6 +1773,7 @@ private:
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
     std::unique_ptr<vibeaprs::Run> aprs_;     // ★ APRS (V12): the modem + the station list (vibe_aprs_run.h)
     std::unique_ptr<SitorARun> sitora_;       // ★ SITOR-A: the ARQ listener (buildSitoraLocked_)
+    std::unique_ptr<HfdlRun> hfdl_;           // ★ HFDL: the aircraft datalink on the USB dial (buildHfdlLocked_)
     std::unique_ptr<SameDecoder> same_;       // ★ EAS / SAME (buildSameLocked_)
     std::unique_ptr<SelcalDecoder> selcal_;   // ★ SELCAL (buildSelcalLocked_)
     std::unique_ptr<TextModeDecoder> tm_;     // ★ MFSK / OLIVIA / THOR (buildTextModeLocked_)

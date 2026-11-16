@@ -46,6 +46,9 @@
 #include "vibe_ndb_service.h"
 #include "vibe_dxscan_fm.h"          // ★★★ V12 the idle DX scanner's FM hop (the dec_dxscan row)
 #include "vibe_ais_service.h"
+#include "vibe_avi_service.h"   // ★ V12 aviation: the datalink rows (dec_vdl2, dec_acars)
+#include "vibe_avi_mode.h"
+#include "vibe_avi_tx.h"
 #include "vibe_ism_service.h"
 #include "vibe_hdlc.h"
 #include "benchsynth/cw_synth.h"
@@ -248,6 +251,8 @@ inline Row hostAudioRow(const std::string& id, const std::string& label, const s
     auto tap = std::make_shared<CountTap>();
     DecoderHost::Env env;
     env.dialHz = [] { return 14070000.0; };
+    static vibeavi::Tracker benchAircraft;   // ★ HFDL's messages go here, never onto a server's map
+    env.aircraft = &benchAircraft;
     env.tap = [tap](const std::string&, const std::string&) { return tap; };
     env.cwSpotTap = [tap](bool) { return tap; };
     env.pskSpotTap = [tap](bool) { return tap; };
@@ -682,6 +687,9 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_hell",     { "hell",   true,  true  } }, { "dec_aprs",     { "aprs",   true,  true  } },
         { "dec_paging",   { "",       false, true  } },   // ★ the phone's own app on its own radio: no owner switch
         { "dec_ndb",      { "ndb",    true,  false } }, { "dec_ais",      { "ais",    true,  false } },
+        // ★ V12 aviation: VDL2 (12 channels, the heavier band) sets the datalink mode's default; ACARS is shown beside it
+        { "dec_vdl2",     { "avdata", true,  false } }, { "dec_acars",    { "avdata", false, false } },
+        { "dec_hfdl",     { "hfdl",   true,  true  } },
         { "dec_ism",      { "ism",    true,  false } }, { "dec_wmbus",    { "ism",    false, false } },
         { "dec_tone",     { "",       false, false } }, { "dec_nr",       { "",       false, false } },
         { "dec_notch",    { "",       false, false } },
@@ -1028,6 +1036,68 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         if (svc.droppedBlocks()) r.label += " (fell behind)";
         svc.stop();
         return r;
+    });
+    /* ★★ V12 AIRCRAFT DATALINK (docs/v12/AVIATION.md §Cost): the mode's two bands as the server runs them — vibeavi::Service
+     *  on its own thread (VDL2's channels on its workers), fed IN REAL TIME, SCORED BY THE HOTTEST THREAD (as AIS).
+     *  The traffic is the transmitters of the tests (vibe_avi_tx.h): bursts on three channels in one second of noise, looped. */
+    auto aviRow = [&](const char* id, const char* label, const char* bandId) {
+        run(id, label, [&] {
+            Row r; r.id = id; r.label = label;
+            const vibeavi::Band* b = vibeavi::bandById(bandId);
+            if (!b) return r;
+            const double fs = 2.4e6;
+            std::vector<vibeavi::cf32> x((size_t)fs);
+            { std::mt19937 g(9); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+            const double nPow = 2 * 0.02 * 0.02 * 10500.0 / fs;
+            for (int k = 0; k < 3; ++k) {
+                const double off = b->chans[size_t(k % b->chans.size())] - b->centreHz;
+                if (std::string(bandId) == "vdl2") {
+                    char txt[64]; std::snprintf(txt, sizeof txt, "M%02dABE%04d/BENCH %d", k, 1000 + k, k);
+                    auto f = vibeavitx::avlcAcars(0x400100u + uint32_t(k), 0x10949Au, ".G-BNCH", "H1", char('0' + k), txt);
+                    vibeavitx::vdl2Burst(x, fs, off, std::sqrt(nPow * 300.0), size_t((0.05 + 0.3 * k) * fs), vibeavitx::vdl2Symbols({ f }), 0.3 * k);
+                } else {
+                    auto blk = vibeavitx::makeBlock('2', ".G-BNCH", 0x15, "H1", char('0' + k), "M01ABE1234/BENCH");
+                    vibeavitx::acarsBurst(x, fs, off, 0.1, size_t((0.05 + 0.3 * k) * fs), vibeavitx::airBits(blk));
+                }
+            }
+            vibeavi::Tracker tr(false);
+            vibeavi::Service svc(tr);
+            svc.start(b->id, b->centreHz, fs, b->chans);
+            const size_t blk = (size_t)(fs / 100);
+            const double t0 = wallNow(); double fed = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+            std::map<uint64_t, ThreadTime> th0;
+            while (fed < kRtWarmSec + kRtSec) {
+                if (!measuring && fed >= kRtWarmSec) { c0 = processCpu(); th0 = threadTimes(); measuring = true; }
+                svc.feed(x.data() + pos, blk);
+                pos = (pos + blk) % x.size(); fed += blk / fs;
+                const double ahead = fed - (wallNow() - t0);
+                if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            scoreHottest(r, th0, threadTimes(), kRtSec, 100.0 * (processCpu() - c0) / kRtSec);
+            r.decoded = (int)svc.messages();
+            if (svc.dropped()) r.label += " (fell behind)";
+            svc.stop();
+            return r;
+        });
+    };
+    aviRow("dec_vdl2", "Decoder: VDL2 aircraft (12 channels @ 2.4 MS/s)", "vdl2");
+    aviRow("dec_acars", "Decoder: ACARS aircraft (4 channels @ 2.4 MS/s)", "acars");
+    run("dec_hfdl", "Decoder: HFDL", [&] {
+        // ★ a listener's dial: two 300 bit/s bursts in USB audio (the carrier 1440 Hz in), with noise
+        std::vector<float> a;
+        std::mt19937 rng(11);
+        for (int k = 0; k < 2; ++k) {
+            char flt[7]; std::snprintf(flt, sizeof flt, "BEN%03d", k);
+            std::vector<vibeavi::cf32> sym, bb;
+            vibeavitx::hfdlSymbols(0, vibeavitx::hfdlPerfMpdu(20 + k, 7, flt, 52.0, -8.0), sym);
+            vibeavitx::hfdlModulate(sym, bb, 2.0, 12.0, -99, 0, rng);
+            const auto au = vibeavitx::hfdlUsbAudio(bb, 48000);
+            a.insert(a.end(), au.begin(), au.end());
+            a.insert(a.end(), 48000 * 5, 0.f);   // ★ the decoder holds a burst to its longest end
+        }
+        addNoise(a, 0.02f, 12);
+        return hostAudioRow("dec_hfdl", "Decoder: HFDL (one dial)", "hfdl", attach + "\"extension_name\":\"hfdl\"}", a, Count::Any);
     });
     auto ismRow = [&](const char* id, const char* label, const char* clipId, const char* bandId) {
         run(id, label, [&] {

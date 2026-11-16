@@ -137,6 +137,7 @@ enum class Need {
     Paging,      // POCSAG / FLEX: 138–470 MHz in practice
     Ism,         // an ISM band (433 / 868 / 915 MHz — vibeism's own; here: 433.05–434.79 or 863–870 or 902–928)
     Spots,       // digital spots: HF, 6 m or 2 m
+    Avdata,      // ★ V12 the aircraft datalink: ACARS 131.5–131.85 or VDL2 136.68–136.99 MHz, not an HF+ / an Icom
 };
 
 struct Gate { bool run = true; std::string why; };
@@ -194,6 +195,11 @@ inline Gate gateNeed(const Hw& hw, Need n) {
             if (!any([](const Radio& r) { return touches(r, 433.05e6, 434.79e6) || touches(r, 863e6, 870e6) || touches(r, 902e6, 928e6); }))
                 return no("no radio here reaches an ISM band (433 / 868 / 915 MHz)");
             break;
+        case Need::Avdata:
+            if (!any([](const Radio& r) { return r.driver != "airspyhf" && r.driver != "icom"
+                                                 && (reaches(r, 131.50e6, 131.85e6) || reaches(r, 136.68e6, 136.99e6)); }))
+                return no("no radio here reaches the aircraft datalink (131 / 136 MHz)");
+            break;
         case Need::Spots:
             if (!any([](const Radio& r) { return hasHf(r) || touches(r, 28e6, 29.7e6) || touches(r, 50e6, 54e6) || touches(r, 144e6, 148e6); }))
                 return no("no radio here reaches a digital-spots band (HF, 6 m or 2 m)");
@@ -211,6 +217,8 @@ inline Need needFor(const std::string& id) {
     if (id == "dab" || is("dab_")) return Need::Dab;
     if (is("adsb")) return Need::Adsb;
     if (id == "dec_ais") return Need::Ais;
+    if (id == "dec_vdl2" || id == "dec_acars") return Need::Avdata;
+    if (id == "dec_hfdl") return Need::Hf;
     if (id == "dec_navtex") return Need::Navtex;
     if (id == "dec_ndb") return Need::Ndb;
     if (id == "dec_time") return Need::TimeSig;

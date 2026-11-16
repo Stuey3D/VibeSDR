@@ -251,7 +251,7 @@ public:
         if (kind == "acars") acars_.reset(new vibeacars::Receiver(rateHz, hwCentreHz, chans));
         else vdl2_.reset(new vibevdl2::Receiver(rateHz, hwCentreHz, chans));
         { std::lock_guard<std::mutex> lk(mtx_); queue_.clear(); queued_ = 0; dropped_ = 0; run_ = true; health_ = Health(); clipN_ = clipSeen_ = 0; winStart_ = 0; }
-        worker_ = std::thread([this] { loop_(); });
+        worker_ = std::thread([this] { vibeDecoderThread(kind_ == "acars" ? "vibe-acars" : "vibe-vdl2"); loop_(); });   // ★ decoder priority (vibe_thread.h)
     }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); run_ = false; }
@@ -322,7 +322,7 @@ private:
 };
 
 /** ★ THE ONE TABLE of this radio process: the datalink mode (ACARS / VDL2) and every listener's HFDL land here, so an
- *  aircraft heard on VHF and on HF is one row, and /addon/hfdl/* and the mode's report read the same rows. Bounded
+ *  aircraft heard on VHF and on HF is one row, and /addon/hfdl/aircraft + groundstations and the mode's report read the same rows. Bounded
  *  (2000 rows, 128 stations). Bodies start OFF: the shim sets the owner's choice before anything is decoded. */
 inline Tracker& sharedTracker() { static Tracker t(false); return t; }
 

@@ -1623,6 +1623,19 @@ else
   echo '   not run — needs VIBESERVER_BIN and the test-lora build'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 AIRCRAFT DATALINK (docs/v12/AVIATION.md): the real server on a fake rtl_tcp replaying a synthetic VDL2 clip
+#     (test-vdl2 --write-clip): the mode's capability and bands, the aircraft table, message bodies to the owner only (and
+#     only with the opt-in), the band step, the receiver given back, the owner's switch, /addon/hfdl/*. Needs VIBESERVER_BIN.
+printf '\n\033[1m── Aircraft datalink mode + the HFDL endpoints (end to end: the server) ──\033[0m\n'
+if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-vdl2" --write-clip "$OUT/vdl2-clip.cu8" 2400000 >/dev/null 2>&1
+  VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" node scripts/test-server-avdata.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/vdl2-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by
 #     test-ais / test-aprs --write-clip — AIS mode (both channels, the ship list, a track, the dial given back, the gallery)
 #     and the APRS decoder on a listener's NFM (stations, weather, an object, a message, the gallery); then the web client

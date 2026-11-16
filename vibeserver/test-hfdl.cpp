@@ -2,7 +2,8 @@
 //  `test-hfdl --wav <file.wav> <centreHz> [dialHz…]` decodes a REAL 16-bit stereo IQ WAV (UberSDR iq192); with
 //  `--ref <file.ref.txt>` it matches what it decoded against the reference transcript (HFDL_DEBUG=1: every burst).
 #include "vibe_hfdl.h"
-#include "vibe_hfdl_run.h"   // ★ §5: the listener's decoder on USB audio (the server's "hfdl" decoder)
+#include "vibe_hfdl_run.h"
+#include "vibe_avi_tx.h"   // ★ §5: the listener's decoder on USB audio (the server's "hfdl" decoder)
 
 #include <chrono>
 #include <cstdio>
@@ -21,90 +22,11 @@ using vibehfdl::cf32;
 static uint64_t g_digest = 1469598103934665603ull;
 static void dig(const void* p, size_t n) { const uint8_t* b = static_cast<const uint8_t*>(p); for (size_t i = 0; i < n; ++i) g_digest = (g_digest ^ b[i]) * 1099511628211ull; }
 
-static void modulate(const std::vector<cf32>& sym, std::vector<cf32>& out, double fOff, double snrDb, double echoDb, int echoDelay, std::mt19937& rng);
-static std::vector<float> burstSymbols(int mode, const std::vector<uint8_t>& mpdu, std::vector<cf32>& sym);
-// ── the transmitter (tests): MPDU bytes → code → interleave → scramble → the burst's symbols ──────────────────────
-static void putCrc(std::vector<uint8_t>& b, size_t from) {
-    uint16_t c = 0xFFFF;
-    for (size_t i = from; i < b.size(); ++i) { c ^= b[i]; for (int k = 0; k < 8; ++k) c = (c & 1) ? uint16_t((c >> 1) ^ 0x8408) : uint16_t(c >> 1); }
-    c ^= 0xFFFF; b.push_back(uint8_t(c)); b.push_back(uint8_t(c >> 8));
-}
-/** A downlink MPDU with one LPDU: performance data (flight, position) — `lat`/`lon` in degrees. */
-static std::vector<uint8_t> perfMpdu(int ac, int gs, const char* flight, double lat, double lon) {
-    std::vector<uint8_t> l = { 0x0D, 0xFF, 0xD1 };
-    for (int i = 0; i < 6; ++i) l.push_back(uint8_t(flight[i]));
-    const uint32_t la = uint32_t(int32_t(std::lround(lat / 180.0 * 0x7FFFF))) & 0xFFFFF, lo = uint32_t(int32_t(std::lround(lon / 180.0 * 0x7FFFF))) & 0xFFFFF;
-    l.push_back(uint8_t(la)); l.push_back(uint8_t(la >> 8)); l.push_back(uint8_t(((la >> 16) & 0xF) | ((lo & 0xF) << 4)));
-    l.push_back(uint8_t(lo >> 4)); l.push_back(uint8_t(lo >> 12));
-    while (l.size() < 1 + 47) l.push_back(uint8_t(l.size()));
-    putCrc(l, 0);
-    std::vector<uint8_t> m = { 0x07, uint8_t(gs), uint8_t(ac), 0x00, 0x01, 0x00, uint8_t(l.size() - 1) };
-    putCrc(m, 0);
-    m.insert(m.end(), l.begin(), l.end());
-    return m;
-}
-static std::vector<float> burstSymbols(int mode, const std::vector<uint8_t>& mpdu, std::vector<cf32>& sym) {
-    const vibehfdl::Mode md = vibehfdl::modeOf(mode);
-    const int nData = md.segments * vibehfdl::kDataLen, coded = nData * md.bitsPerSym, info = coded / md.rate;
-    std::vector<int> bits((size_t)info, 0);
-    for (size_t i = 0; i < mpdu.size() * 8 && int(i) < info - 6; ++i) bits[i] = (mpdu[i / 8] >> (i % 8)) & 1;
-    std::vector<int> c;
-    int r = 0;
-    for (int b : bits) {
-        r = ((r << 1) | b) & 127;
-        const int c0 = __builtin_popcount(r & 0x6D) & 1, c1 = __builtin_popcount(r & 0x4F) & 1;
-        if (md.rate == 4) { c.push_back(c0); c.push_back(c0); c.push_back(c1); c.push_back(c1); } else { c.push_back(c0); c.push_back(c1); }
-    }
-    const auto order = vibehfdl::deinterleaveOrder(coded, md.colShift);
-    std::vector<int> tx((size_t)coded);
-    for (int i = 0; i < coded; ++i) tx[size_t(order[size_t(i)])] = c[size_t(i)];
-    sym.clear();
-    for (int i = 0; i < 448; ++i) sym.push_back(cf32((i & 1) ? 1.f : -1.f, 0));      // a pre-key (content irrelevant here)
-    const auto& A = vibehfdl::aSeq();
-    for (int k = 0; k < 2 * vibehfdl::kALen; ++k) sym.push_back(cf32(A[size_t(k % vibehfdl::kALen)], 0));
-    for (int k = 0; k < vibehfdl::kM1Len; ++k) sym.push_back(cf32(vibehfdl::m1Sym(mode, k), 0));
-    for (int k = 0; k < vibehfdl::kM2Len; ++k) sym.push_back(cf32(vibehfdl::m1Sym(mode, k), 0));
-    for (int k = 0; k < 9 * vibehfdl::kTLen; ++k) sym.push_back(cf32(vibehfdl::tSym(k % vibehfdl::kTLen), 0));
-    vibehfdl::Scrambler scr;
-    const int M = 1 << md.bitsPerSym;
-    size_t ci = 0;
-    for (int s = 0; s < md.segments; ++s) {
-        for (int k = 0; k < vibehfdl::kDataLen; ++k) {
-            int lab = 0;
-            for (int b = 0; b < md.bitsPerSym; ++b) lab = (lab << 1) | tx[ci++];
-            int idx = 0; for (int i = 0; i < M; ++i) if ((i ^ (i >> 1)) == lab) idx = i;   // the Gray label's point
-            cf32 v = std::polar(1.0f, float(idx) * 2 * float(M_PI) / M);
-            if (md.bitsPerSym == 1) v = cf32(lab ? -1.f : 1.f, 0);
-            if (scr.next()) v = -v;
-            sym.push_back(v);
-        }
-        for (int k = 0; k < vibehfdl::kTLen; ++k) sym.push_back(cf32(vibehfdl::tSym(k), 0));
-    }
-    return {};
-}
-/** The symbols at 4 samples a symbol, root-raised-cosine α 0.31, a carrier offset, a second path, noise. */
+// ── the transmitter: vibe_avi_tx.h (shared with the benchmark's HFDL row) ──
+static std::vector<uint8_t> perfMpdu(int ac, int gs, const char* flight, double lat, double lon) { return vibeavitx::hfdlPerfMpdu(ac, gs, flight, lat, lon); }
+static std::vector<float> burstSymbols(int mode, const std::vector<uint8_t>& mpdu, std::vector<cf32>& sym) { return vibeavitx::hfdlSymbols(mode, mpdu, sym); }
 static void modulate(const std::vector<cf32>& sym, std::vector<cf32>& out, double fOff, double snrDb, double echoDb, int echoDelay, std::mt19937& rng) {
-    const double a = 0.31;
-    auto rrc = [&](double t) {
-        if (std::fabs(t) < 1e-9) return 1 - a + 4 * a / M_PI;
-        if (std::fabs(std::fabs(4 * a * t) - 1) < 1e-6) return a / std::sqrt(2.0) * ((1 + 2 / M_PI) * std::sin(M_PI / (4 * a)) + (1 - 2 / M_PI) * std::cos(M_PI / (4 * a)));
-        return (std::sin(M_PI * t * (1 - a)) + 4 * a * t * std::cos(M_PI * t * (1 + a))) / (M_PI * t * (1 - 16 * a * a * t * t));
-    };
-    const size_t pre = 4000, n = sym.size() * 4 + 2 * pre;
-    out.assign(n, cf32(0, 0));
-    const float eg = float(std::pow(10.0, echoDb / 20));
-    for (size_t k = 0; k < sym.size(); ++k)
-        for (int j = -32; j <= 32; ++j) {
-            const long i = long(pre + k * 4) + j;
-            const float h = float(rrc(j / 4.0)) * 0.5f;
-            out[size_t(i)] += sym[k] * h;
-            if (echoDelay && i + echoDelay < long(n)) out[size_t(i + echoDelay)] += sym[k] * h * eg * cf32(0.6f, 0.8f);
-        }
-    double sp = 0; for (size_t k = 0; k < sym.size(); ++k) sp += std::norm(out[pre + k * 4]);
-    sp /= sym.size();
-    const float sigma = float(std::sqrt(sp / std::pow(10.0, snrDb / 10) / 2));
-    std::normal_distribution<float> g(0, sigma);
-    for (size_t i = 0; i < n; ++i) out[i] = out[i] * std::polar(1.0f, float(2 * M_PI * fOff * i / vibehfdl::kWorkRate)) + cf32(g(rng), g(rng));
+    vibeavitx::hfdlModulate(sym, out, fOff, snrDb, echoDb, echoDelay, rng);
 }
 static int synthOnce(int mode, double snr, double fOff, double echoDb, int echoDelay, uint32_t seed) {
     std::mt19937 rng(seed);
@@ -360,15 +282,8 @@ int main(int argc, char** argv) {
                 std::vector<cf32> zz(4096, cf32(0, 0)); for (int q = 0; q < 10; ++q) d.feed(zz.data(), 4096, [&](const vibehfdl::Message& m) { got += m.flight == flt; });
                 std::printf("   direct %s: %d (det %llu noM1 %llu bursts %llu pdus %llu crcBad %llu)\n", flt, got, (unsigned long long)d.stats().detections, (unsigned long long)d.stats().noM1, (unsigned long long)d.stats().bursts, (unsigned long long)d.stats().pdus, (unsigned long long)d.stats().crcBad);
             }
-            const double up = 48000.0 / vibehfdl::kWorkRate;
-            std::vector<float> a(size_t(double(x.size()) * up));
-            for (size_t k = 0; k < a.size(); ++k) {
-                const double t = double(k) / up; const size_t j = size_t(t); const float f = float(t - double(j));
-                auto at = [&](long q) { return q < 0 || q >= long(x.size()) ? cf32(0, 0) : x[size_t(q)]; };
-                const cf32 p0 = at(long(j) - 1), p1 = at(long(j)), p2 = at(long(j) + 1), p3 = at(long(j) + 2);
-                const cf32 c = ((( -0.5f * p0 + 1.5f * p1 - 1.5f * p2 + 0.5f * p3) * f + (p0 - 2.5f * p1 + 2.0f * p2 - 0.5f * p3)) * f + (-0.5f * p0 + 0.5f * p2)) * f + p1;
-                a[k] = float((c * std::polar(1.0f, float(2 * M_PI * 1440.0 * double(k) / 48000.0))).real()) + 0.05f * float(std::sin(2 * M_PI * 2900.0 * double(k) / 48000.0));
-            }
+            std::vector<float> a = vibeavitx::hfdlUsbAudio(x, 48000);
+            for (size_t k = 0; k < a.size(); ++k) a[k] += 0.05f * float(std::sin(2 * M_PI * 2900.0 * double(k) / 48000.0));
             for (size_t k = 0; k < a.size(); k += 4800) run.feedAudio(a.data() + k, int(std::min<size_t>(4800, a.size() - k)));
             std::vector<float> z(48000, 0.f);
             for (int s = 0; s < 6; ++s) run.feedAudio(z.data(), int(z.size()));   // ★ the decoder holds a burst to its longest end
