@@ -321,6 +321,10 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/same_decoder.cpp"   # ★ V12 EAS / SAME
     "${CPP_DIR}/decoders/selcal_decoder.cpp"   # ★ V12 SELCAL
     "${CPP_DIR}/decoders/textmodes.cpp"   # ★ V12 MFSK / OLIVIA / THOR
+    # ★★★ V12 PAGING (POCSAG / FLEX) — for the R36S handheld's radio process ONLY (vibe_paging_gate.h). Compiled in, but
+    #     dormant in every other process: DecoderHost::pagingProcess() is false until --handheld-radio sets the handheld
+    #     profile, so on a server "paging" is an unknown decoder and vibeserver.json never offers it.
+    "${CPP_DIR}/decoders/paging_decoder.cpp"
     "${CPP_DIR}/decoders/feld_hell.cpp"   # ★ V12 FELD HELL, drawn
     # ★ V12: JTTY — the WSJT-X 3.2 keyboard mode, every signal in the passband, no slots (decoders/jtty_decoder.h)
     "${CPP_DIR}/decoders/jtty_decoder.cpp"
@@ -494,6 +498,8 @@ target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_LIBRTLSDR)
 #    Defined from VIBESERVER_VERSION so it cannot drift from the package the user installed.
 target_compile_definitions(vibeserver_core PUBLIC VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}"
     VIBE_DAB_PFFFT=1)   # ★ DAB OFDM through PFFFT — see vibe_dab_fft.h
+# ★★★ V12 PAGING: the engine is built in for the R36S handheld; it runs only in its radio process (vibe_paging_gate.h)
+target_compile_definitions(vibeserver_core PUBLIC VIBE_PAGING=1)
 target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
 
 # ── SDRplay (RSP): the API is dlopen()ed, NEVER LINKED — and on Linux we now SHIP one (OpenRSP) ──

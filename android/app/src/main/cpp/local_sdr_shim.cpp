@@ -158,6 +158,7 @@
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "decoders/tone_id.h"         // ★ V12: CTCSS / DCS tone ID on NFM (its own discriminator on the channel IQ)
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
+#include "vibe_paging_gate.h"        // ★★★ V12 PAGING: where it may run (Android app / R36S handheld only) — one pure rule
 #include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
 #include "vibe_freedv.h"              // ★ V12 FreeDV: a per-listener mode — the system's libcodec2, dlopen'd (docs/v12/FREEDV.md)
 #include "vibe_m17.h"                 // ★ V12 M17: a per-listener mode — our own 4-FSK receiver, Codec 2 from the same library (docs/v12/M17.md)
@@ -19192,7 +19193,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const int ch = payload[0];
                 std::vector<int16_t> pcm((len - 6) / 2);
                 std::memcpy(pcm.data(), payload + 6, pcm.size() * 2);
-                const float lv = speakerLevel.load(std::memory_order_relaxed);
+                /* ★★★ V12 PAGING IS SILENT (Stuart, 2026-11-16: "when it is in use the audio needs to be muted"): while a
+                 *  paging receiver runs in this process the speaker plays silence. HERE, not in the page: the person's own
+                 *  level is never touched, so when PAGE stops — closed, another decoder, or the UI gone (its decoder socket
+                 *  closes, the host stops the receiver) — the speaker is exactly as it was. vibe_paging_gate.h. */
+                const float lv = vibe::pagingSpeakerLevel(speakerLevel.load(std::memory_order_relaxed),
+                                                          DecoderHost::pagingRunning().load(std::memory_order_relaxed));
                 if (lv < 0.999f) {
                     // ★ linear, exactly as the browser's GainNode applied the same slider — the level does not change
                     const float g = lv;
@@ -29573,10 +29579,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★★★ PAGING: THE PHONE'S OWN APP ON THE PHONE'S OWN RADIO, NOTHING ELSE (Stuart's spec). Refused unless
                  *  the engine may run it here (not serving, a USB radio) AND this socket is loopback; never on VFO B. */
                 if (ext == "paging") {
-                    if (!LocalSdrShim::instance().pagingCapable() || !isLoopback(sock->peerAddress()) || wantsB(payload)) {
-                        LOGI("decoder paging refused — it runs only in the app, on the phone's own radio");
-                        sendDecoderRefusal(sock, "decoder", ext, "local_only",
-                            "Paging runs only in the VibeSDR app, on a radio plugged into this phone.");
+                    if (!vibe::pagingGateAttach(LocalSdrShim::instance().pagingCapable(), isLoopback(sock->peerAddress()), wantsB(payload))) {
+                        LOGI("decoder paging refused — it runs only on the device's own radio, on its own screen");
+                        sendDecoderRefusal(sock, "decoder", ext, "local_only", vibe::pagingRefusalText(g_vsHandheld.load(),
+#if defined(__ANDROID__)
+                            true
+#else
+                            false
+#endif
+                            ));
                         continue;
                     }
                 }
@@ -38117,7 +38128,15 @@ void LocalSdrShim::setGalleryCardLayout(const std::string& filesDir) {
     c.on = !filesDir.empty();
     if (c.on) { ::mkdir(filesDir.c_str(), 0755); LOGI("gallery: handheld card layout — items under %s/<DECODER>/", filesDir.c_str()); }
 }
-void LocalSdrShim::setHandheld(bool on) { g_vsHandheld.store(on); if (on) LOGI("handheld profile: one radio, one owner, 127.0.0.1"); }
+void LocalSdrShim::setHandheld(bool on) {
+    g_vsHandheld.store(on);
+    if (on) LOGI("handheld profile: one radio, one owner, 127.0.0.1");
+#if defined(VIBE_PAGING) && !defined(__ANDROID__)
+    // ★★★ V12 PAGING on the R36S (Stuart, 2026-11-16): the handheld's radio process is the user's own receiver on the
+    //     user's own screen — the only desktop process that may run it (vibe_paging_gate.h). Never set on a server.
+    DecoderHost::pagingProcess().store(on);
+#endif
+}
 bool LocalSdrShim::handheld() { return g_vsHandheld.load(); }
 bool LocalSdrShim::webAssetFor(const std::string& path, bool acceptsBr, bool acceptsGzip,
                                std::string& body, std::string& contentType, std::string& encoding) {
@@ -45461,10 +45480,17 @@ bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 bool LocalSdrShim::isIcom() const { return p && p->useIcom(); }
 bool LocalSdrShim::pagingCapable() const {
 #if defined(VIBE_PAGING)
-    // ★★★ Android local hardware only (docs/v12/DECODERS-WAVE2.md "PAGING"): never while serving — then LAN, tunnel and
-    //     proxy visitors exist — and only a radio plugged into this phone (IQ of our own: not rtl_tcp, SpyServer, Icom).
-    if (g_serveOnLan.load()) return false;
-    return p && !p->useTcp() && !p->useSpy() && !p->useIcom();
+    // ★★★ LOCAL HARDWARE ONLY (docs/v12/DECODERS-WAVE2.md "PAGING", vibe_paging_gate.h): the Android app or the R36S
+    //     handheld's radio process (DecoderHost::pagingProcess — never a server), never while serving — then LAN, tunnel
+    //     and proxy visitors exist — and only a radio plugged into this device (IQ of our own: not rtl_tcp, SpyServer,
+    //     Icom).
+#if defined(__ANDROID__)
+    const bool ownDevice = true;
+#else
+    const bool ownDevice = g_vsHandheld.load();
+#endif
+    return vibe::pagingGateEngine(DecoderHost::pagingBuilt(), DecoderHost::pagingProcess().load(), ownDevice,
+                                  g_serveOnLan.load(), p && !p->useTcp() && !p->useSpy() && !p->useIcom());
 #else
     return false;
 #endif

@@ -910,10 +910,12 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         return hostAudioRow("dec_aprs", "Decoder: APRS (1200 Bd)", "aprs", attach + "\"extension_name\":\"aprs\",\"baud_rate\":1200}", a, Count::Events);
     });
 #if defined(VIBE_PAGING)
-    /* ★★ PAGING — ANDROID LOCAL HARDWARE ONLY (the define is the Android library's), so the row exists only on the build
-     *  that offers the decoder (AGENTS.md: never show what cannot work here). SYNTHETIC ONLY: paging frequencies carry
+    /* ★★ PAGING — LOCAL HARDWARE ONLY (the Android app; the R36S handheld), so the row exists only where the decoder is
+     *  offered (AGENTS.md: never show what cannot work here). SYNTHETIC ONLY: paging frequencies carry
      *  private messages, so no recording of one is ever used. FLEX 1600, our own transmitter, on the channel IQ. */
-    run("dec_paging", "Decoder: Paging", [&] {
+    // ★★ …and only in a process that may run it (DecoderHost::pagingProcess: the Android app, the R36S's radio process).
+    //    The desktop VibeServer compiles the engine for the handheld, so on a server this row is not drawn at all.
+    if (DecoderHost::pagingHere()) run("dec_paging", "Decoder: Paging", [&] {
         Row r; r.id = "dec_paging"; r.label = "Decoder: Paging (POCSAG / FLEX, AUTO)";
         auto peer = std::make_shared<CountPeer>();
         DecoderHost::Env env; env.dialHz = [] { return 153.0e6; };

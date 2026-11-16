@@ -109,6 +109,9 @@ flags_for() {
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
     test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★★ V12 PAGING's gate (vibe_paging_gate.h): built in, as the desktop VibeServer now is for the R36S — and still dormant
+    #     outside the Android app / the handheld's radio process.
+    test-paging-gate)      echo "-O2 -DVIBE_PAGING=1 -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
     # ★★ V12 DIGITAL SPOTS (2026-10-26): the mode registry, the band table and stepping, Band mode's tuner, a synthetic
     #    20 m slice (FT8 + FT4 on their own dials) decoded end to end, the lower sideband rejected, noise → no spot.
     test-digi-spots)       echo "-O2 -I $VDSP -I android/app/src/main/cpp/ft8_lib" ;;
@@ -411,6 +414,7 @@ deps_for() {
     # ★★ V12 PAGING (ITU-R M.584-2 Annex 1, POCSAG 512/1200/2400, AUTO): the ITU's sync/idle words as codewords, every rate both
     #    polarities, hours of noise with zero pages. Android local hardware only — the engine is all that is tested here.
     test-paging)        echo "android/app/src/main/cpp/decoders/paging_decoder.cpp" ;;
+    test-paging-gate)   echo "$(deps_for test-decoder-hosts) android/app/src/main/cpp/decoders/paging_decoder.cpp" ;;
     # ★★ V12 EAS / SAME (47 CFR § 11.31): the header format, LSB-first bits, the three bursts soft-combined, hours of noise → 0.
     test-same)          echo "android/app/src/main/cpp/decoders/same_decoder.cpp" ;;
     # ★★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91 Table 3-1): 300 random codes over 32 tones, the dial, noise, DTMF, speech.
@@ -450,7 +454,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
+    test-decoder-hosts|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
@@ -591,6 +595,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     memory across a hot swap, a recording onto the card, SPECTRUM RATE 5/10/20 (with indicative CPU figures), and an
 #     ordinary server's landing page on the D-pad. ~4 min. Same VIBESERVER_BIN rule (exit 3 = not run).
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-handheld.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 PAGING NEVER LEAVES THE DEVICE (2026-11-16): the desktop binary now compiles the engine for the R36S — a server
+#     offers no paging and refuses it from the LAN and from loopback with no frame sent; the handheld's door is closed to the
+#     LAN and refuses it for a radio not plugged into it. ~30 s. Same VIBESERVER_BIN rule (exit 3 = not run).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-paging-local-only.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dx-scan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
