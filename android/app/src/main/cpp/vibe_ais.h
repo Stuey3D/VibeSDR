@@ -614,6 +614,7 @@ struct Msg {
     int etaMonth = 0, etaDay = 0, etaHour = 24, etaMin = 60;
     // AtoN
     int atonType = -1; bool virt = false, offPos = false;
+    int atonStatus = -1;   ///< ★ type 21 bits 260–267, the IALA A-126 status byte (vibe_ais_asm.h atonStatus)
     // base station / SAR
     int year = 0, month = 0, day = 0, hour = 24, minute = 60, sec = 60;
     int altM = -1;   ///< SAR aircraft altitude, metres (4095 = none)
@@ -674,7 +675,7 @@ inline bool decode(const std::vector<uint8_t>& bytes, Msg& m) {
             return true;
         case 21: {
             m.atonType = int(B.u(38, 5)); m.name = B.text(43, 20); m.accuracy = B.u(163, 1); pos28(164, 192);
-            dims(219); m.second = int(B.u(253, 6)); m.offPos = B.u(259, 1); m.virt = B.u(269, 1);
+            dims(219); m.second = int(B.u(253, 6)); m.offPos = B.u(259, 1); m.atonStatus = int(B.u(260, 8)); m.virt = B.u(269, 1);
             if (B.n() > 272) m.name += B.text(272, int((B.n() - 272) / 6));
             return true;
         }
@@ -703,7 +704,8 @@ inline bool decode(const std::vector<uint8_t>& bytes, Msg& m) {
             m.text = B.text(40, int((B.n() - 40) / 6));
             return true;
         default:
-            return true;   // ★ a valid frame of a type we only count (binary messages, slot management …)
+            return true;   // ★ a valid frame of a type decode() does not read: binary messages 6/8 go on to
+                           //   vibe_ais_asm.h (the service), the rest (slot management …) are only counted
     }
 }
 

@@ -9,6 +9,7 @@
 //    heard. Kept 60 min after last heard (an anchored class A reports every 3 min, its name every 6), at most 1000 rows.
 #pragma once
 #include "vibe_ais.h"
+#include "vibe_ais_asm.h"     // ★ V12 2026-11-16 binary messages 6/8: met/hydro, area notices, text
 #include "vibe_station_sink.h"
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B and ISM
 
@@ -54,6 +55,12 @@ struct Vessel {
     int bow = -1, stern = -1, port = -1, stbd = -1;
     int etaMonth = 0, etaDay = 0, etaHour = 24, etaMin = 60;
     bool virt = false, offPos = false;
+    int atonStatus = -1;             ///< ★ type 21's status byte (vibe_ais_asm.h atonStatus: light / RACON / alarm)
+    // ★★ V12 2026-11-16 MET/HYDRO (binary message 8, DAC 1 FI 31 / 11): the station's latest readings, per SITE — one
+    //    base station may send the weather of several places, each with its own position. At most kMetSites, the
+    //    oldest site gives way. metAt = service time each was heard.
+    static constexpr int kMetSites = 4;
+    asmsg::Met met[kMetSites]; double metAt[kMetSites] = {}; int nMet = 0; double metLoggedAt = -1e9;
     double first = 0, last = 0, posAt = -1;
     int count = 0, ch = 0;
     float level = -120, snr = 0;
@@ -83,6 +90,10 @@ inline std::string readable(const Vessel& v) {
         s += dot; s += atonTypeName(v.atonType)[0] ? atonTypeName(v.atonType) : "aid to navigation";
         if (v.virt) s += " (virtual)";
         if (v.offPos) s += dot + std::string("OFF POSITION");
+        const asmsg::AtonStatus st = asmsg::atonStatus(v.atonStatus);
+        if (st.valid && st.light == 3) s += dot + std::string("LIGHT FAULT");
+        if (st.valid && st.racon == 3) s += dot + std::string("RACON FAULT");
+        if (st.valid && st.alarm) s += dot + std::string("ALARM");
         return s;
     }
     if (v.kind == "base") { s += dot + std::string("base station"); if (f) s += dot + std::string(f->name); return s; }
@@ -119,7 +130,7 @@ public:
         fe_.reset(new Front(rateHz, hwCentreHz));
         fe_->seedAfc(afcHz_);   // ★ the crystal's error from the last run (Front::afcStep_): no settling again
         queue_.clear(); queued_ = 0; dropped_ = 0;
-        if (!keepList) { t0_ = std::chrono::steady_clock::now(); ships_.clear(); msgs_ = 0; perCh_[0] = perCh_[1] = 0; repaired_ = 0; other_ = 0; safety_.clear(); rateWin_.clear(); }
+        if (!keepList) { t0_ = std::chrono::steady_clock::now(); ships_.clear(); msgs_ = 0; perCh_[0] = perCh_[1] = 0; repaired_ = 0; other_ = 0; safety_.clear(); notices_.clear(); binary_ = 0; rateWin_.clear(); }
         cap_.reset(rateHz, now());
         storeLast_ = now();
         run_ = true;
@@ -192,7 +203,20 @@ public:
                + ",\"name\":\"" + jsonEsc(safety_[i].name) + "\",\"text\":\"" + jsonEsc(safety_[i].text) + "\""
                + (safety_[i].to ? ",\"to\":" + std::to_string(safety_[i].to) : std::string()) + "}";
         }
-        return o + "]}";
+        // ★ V12 2026-11-16 area notices and text descriptions (binary 6/8, DAC 1 FI 22/23/29/30), newest last
+        o += "],\"notices\":[";
+        for (size_t i = 0; i < notices_.size(); ++i) {
+            const NoticeRec& n = notices_[i];
+            if (i) o += ',';
+            o += "{\"age\":" + fmtNum(t - n.t, 0) + ",\"mmsi\":" + std::to_string(n.mmsi) + ",\"name\":\"" + jsonEsc(n.name)
+               + "\",\"text\":\"" + jsonEsc(n.line) + "\",\"fi\":" + std::to_string(n.n.fi);
+            if (n.n.what >= 0) o += ",\"what\":" + std::to_string(n.n.what);
+            if (n.n.lat == n.n.lat) o += ",\"lat\":" + fmtNum(n.n.lat, 5) + ",\"lon\":" + fmtNum(n.n.lon, 5);
+            if (n.n.to) o += ",\"to\":" + std::to_string(n.n.to);
+            o += "}";
+        }
+        char bb[64]; std::snprintf(bb, sizeof bb, "],\"binary\":%llu}", (unsigned long long)binary_);
+        return o + bb;
     }
     /** {"type":"ais_trail","mmsi":N,"pts":[[lat,lon,ageSec],…]} — oldest first. Empty pts for an unknown ship. */
     std::string trailJson(uint32_t mmsi) {
@@ -267,7 +291,8 @@ private:
                 c.lat = v.lat; c.lon = v.lon; c.sog = v.sog; c.cog = v.cog; c.draught = v.draught;
                 c.bow = v.bow; c.stern = v.stern; c.port = v.port; c.stbd = v.stbd;
                 c.etaMonth = v.etaMonth; c.etaDay = v.etaDay; c.etaHour = v.etaHour; c.etaMin = v.etaMin;
-                c.virt = v.virt; c.offPos = v.offPos; c.first = v.first; c.last = v.last; c.posAt = v.posAt; c.count = v.count; c.ch = v.ch;
+                c.virt = v.virt; c.offPos = v.offPos; c.atonStatus = v.atonStatus; c.first = v.first;
+                c.nMet = v.nMet; for (int k = 0; k < v.nMet; ++k) { c.met[k] = v.met[k]; c.metAt[k] = v.metAt[k]; } c.last = v.last; c.posAt = v.posAt; c.count = v.count; c.ch = v.ch;
                 for (const auto& p : v.trail) if (p.t > v.storedTrailT) c.trail.push_back(p);
                 if (!v.trail.empty()) v.storedTrailT = v.trail.back().t;
                 v.storedAt = v.last;
@@ -289,8 +314,11 @@ private:
         ++msgs_; ++perCh_[ch & 1]; rateWin_.push_back(t);
         if (rateWin_.size() > 20000) rateWin_.pop_front();
         if (f.repaired) ++repaired_;
+        // ★ V12 2026-11-16 binary messages: the ones we can read (vibe_ais_asm.h) go on the sender's row
+        asmsg::Kind bk; asmsg::Met bmet; asmsg::Notice bnote; int bin = 0;
+        if (m.type == 6 || m.type == 8) { ++binary_; bin = asmsg::parse(f.bytes, bk, bmet, bnote); }
         const bool shown = (m.type >= 1 && m.type <= 5) || m.type == 9 || m.type == 11 || m.type == 12 || m.type == 14
-                        || m.type == 18 || m.type == 19 || m.type == 21 || m.type == 24 || m.type == 27;
+                        || m.type == 18 || m.type == 19 || m.type == 21 || m.type == 24 || m.type == 27 || bin > 0;
         if (!shown || m.mmsi == 0) { ++other_; return; }
         Vessel& v = ships_[m.mmsi];
         if (v.count == 0) { v.mmsi = m.mmsi; v.first = t; }
@@ -304,6 +332,13 @@ private:
             default: break;
         }
         if (isBeacon(m.mmsi)) v.kind = "sart";
+        if (bin) {
+            // ★ a station first heard by its binary message: what its MMSI says it is (M.585: 99… AtoN, 00… coast)
+            if (v.count == 1) { if (m.mmsi / 10000000 == 99) v.kind = "aton"; else if (m.mmsi < 10000000) v.kind = "base"; }
+            if (bin == 1) { addMet_(v, bmet, t, ch, heard); return; }
+            addNotice_(v, bnote, t, ch, heard);
+            return;
+        }
         if (m.type == 12 || m.type == 14) {
             Safety s{t, m.mmsi, displayName(v), m.text, m.type == 12 ? m.destMmsi : 0};
             safety_.push_back(s);
@@ -320,7 +355,7 @@ private:
         if (m.bow >= 0 && (m.bow + m.stern) > 0) { v.bow = m.bow; v.stern = m.stern; v.port = m.port; v.stbd = m.stbd; }
         if (m.draught == m.draught) v.draught = m.draught;
         if (m.type == 5) { v.etaMonth = m.etaMonth; v.etaDay = m.etaDay; v.etaHour = m.etaHour; v.etaMin = m.etaMin; }
-        if (m.type == 21) { v.atonType = m.atonType; v.virt = m.virt; v.offPos = m.offPos; }
+        if (m.type == 21) { v.atonType = m.atonType; v.virt = m.virt; v.offPos = m.offPos; v.atonStatus = m.atonStatus; }
         if (m.type == 9) v.altM = m.altM;
         if (m.nav >= 0) v.nav = m.nav;
         if (m.type == 1 || m.type == 2 || m.type == 3) v.rot = m.rot;
@@ -357,6 +392,48 @@ private:
             }
         }
     }
+    /** ★ A met report onto its sender: the same SITE (within 500 m, or both without a position) is replaced, a new one
+     *  added, the oldest of kMetSites given up. A station with no position of its own is drawn at the readings'. */
+    void addMet_(Vessel& v, const asmsg::Met& m, double t, int ch, std::vector<vibestation::Heard>* heard) {
+        int slot = -1;
+        for (int k = 0; k < v.nMet; ++k) {
+            const asmsg::Met& o = v.met[k];
+            const bool bothNone = o.lat == asmsg::kNoPos32 && m.lat == asmsg::kNoPos32;
+            bool near = false;
+            if (o.lat != asmsg::kNoPos32 && m.lat != asmsg::kNoPos32) {
+                const double dy = (o.lat - m.lat) * 1e-7 * 111320.0, dx = (o.lon - m.lon) * 1e-7 * 111320.0 * std::cos(m.lat * 1e-7 * M_PI / 180);
+                near = dx * dx + dy * dy < 500.0 * 500.0;
+            }
+            if (bothNone || near) { slot = k; break; }
+        }
+        if (slot < 0 && v.nMet < Vessel::kMetSites) slot = v.nMet++;
+        if (slot < 0) { slot = 0; for (int k = 1; k < v.nMet; ++k) if (v.metAt[k] < v.metAt[slot]) slot = k; }
+        v.met[slot] = m; v.metAt[slot] = t;
+        if (v.lat != v.lat && m.lat != asmsg::kNoPos32) { v.lat = m.lat / 1e7; v.lon = m.lon / 1e7; v.posAt = t; }
+        // ★ the gallery: a station's weather at most every 30 min (it repeats every few minutes)
+        if (heard && t - v.metLoggedAt >= 1800) {
+            const std::string line = asmsg::metLine(m);
+            if (!line.empty()) {
+                heard->push_back({ std::to_string(v.mmsi) + "#met", "met", displayName(v),
+                                   displayName(v) + " (MMSI " + std::to_string(v.mmsi) + ") \xc2\xb7 weather: " + line, kChanHz[ch & 1] });
+                v.metLoggedAt = t;
+            }
+        }
+    }
+    /** ★ An area notice or text description: the strip keeps the newest kNotices; the same words from the same station
+     *  (they repeat every few minutes) only refresh the time. */
+    static constexpr size_t kNotices = 20;
+    void addNotice_(Vessel& v, const asmsg::Notice& n, double t, int ch, std::vector<vibestation::Heard>* heard) {
+        const std::string line = asmsg::noticeLine(n);
+        if (line.empty()) return;
+        for (auto it = notices_.begin(); it != notices_.end(); ++it) {
+            if (it->mmsi == v.mmsi && it->line == line) { NoticeRec r = *it; r.t = t; notices_.erase(it); notices_.push_back(r); return; }
+        }
+        notices_.push_back({ t, v.mmsi, displayName(v), line, n });
+        while (notices_.size() > kNotices) notices_.erase(notices_.begin());
+        if (heard) heard->push_back({ std::to_string(v.mmsi) + "#note", "notice", displayName(v),
+                                      displayName(v) + " (MMSI " + std::to_string(v.mmsi) + ") \xc2\xb7 notice: " + line, kChanHz[ch & 1] });
+    }
     void prune_(double t) {
         for (auto it = ships_.begin(); it != ships_.end();) { if (t - it->second.last > kKeepSec) it = ships_.erase(it); else ++it; }
         while (ships_.size() > kMaxVessels) {
@@ -379,6 +456,17 @@ public:
         if (v.shipType >= 0) { str("stypeName", shipTypeName(v.shipType)); o += ",\"family\":\""; o += shipFamily(v.shipType); o += "\""; }
         if (v.nav >= 0) { inum("nav", v.nav); str("navName", navStatusName(v.nav)); }
         if (v.kind == "aton") { inum("aton", v.atonType); str("atonName", atonTypeName(v.atonType)); if (v.virt) o += ",\"virtual\":1"; if (v.offPos) o += ",\"offpos\":1"; }
+        {   // ★ V12 2026-11-16 the AtoN status byte (IALA A-126 page 7): light, RACON, alarm
+            const asmsg::AtonStatus st = asmsg::atonStatus(v.atonStatus);
+            if (st.valid) { inum("light", st.light); inum("racon", st.racon); if (st.alarm) o += ",\"alarm\":1"; }
+        }
+        if (v.nMet > 0) {   // ★ V12 2026-11-16 met/hydro readings, newest first
+            int idx[Vessel::kMetSites]; for (int k = 0; k < v.nMet; ++k) idx[k] = k;
+            std::sort(idx, idx + v.nMet, [&](int a, int b) { return v.metAt[a] > v.metAt[b]; });
+            o += ",\"met\":[";
+            for (int k = 0; k < v.nMet; ++k) { if (k) o += ','; asmsg::metJson(v.met[idx[k]], t - v.metAt[idx[k]], o); }
+            o += "]";
+        }
         num("lat", v.lat, 5); num("lon", v.lon, 5); num("sog", v.sog, 1); num("cog", v.cog, 1);
         inum("hdg", v.heading);
         { const double r = rotDegMin(v.rot); if (r == r) num("rot", r, 1); else if (v.rot == 127 || v.rot == -127) o += std::string(",\"turn\":") + (v.rot > 0 ? "1" : "-1"); }
@@ -396,6 +484,9 @@ public:
 private:
 
     struct Safety { double t; uint32_t mmsi; std::string name, text; uint32_t to; };
+    struct NoticeRec { double t; uint32_t mmsi; std::string name, line; asmsg::Notice n; };
+    std::vector<NoticeRec> notices_;
+    uint64_t binary_ = 0;
     std::mutex mtx_;
     std::condition_variable cv_;
     std::thread worker_;

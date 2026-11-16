@@ -15869,7 +15869,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int64_t wall = vibe::gallery::nowUtc();
             std::vector<vibeais::store::Rec> recs; recs.reserve(changed.size());
             for (const auto& v : changed) recs.push_back(vibeais::store::fromVessel(v, svcNow, wall));
-            const size_t n = vibeais::store::write(gs.dir(), gs.limitBytes(), recs);
+            size_t n = vibeais::store::write(gs.dir(), gs.limitBytes(), recs);
+            n += vibeais::store::writeMet(gs.dir(), gs.limitBytes(), changed, svcNow, wall);   // ★ V12 the stations' weather
             if (n) gs.fit();
         };
     }
@@ -25418,7 +25419,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (lim > 0) q.limit = (size_t)std::min<long>(lim, vibeais::store::kMaxCap);
                 size_t total = 0;
                 const auto v = vibeais::store::read(g.dir(), q, &total);
-                reply("200 OK", "application/json", vibeais::store::toJson(v, now, q.tracks, total));
+                reply("200 OK", "application/json", vibeais::store::toJson(v, now, q.tracks, total, g.dir()));
                 return;
             }
             if (path == "/vibeserver/gallery/navtex-stations.json") {
