@@ -2,10 +2,12 @@
  * The AIRCRAFT DATALINK box on a VibeServer (V12, docs/v12/AVIATION.md) — ACARS and VDL2, a whole-radio mode, in ISM's
  * box (IsmPanel): over the lower waterfall, which stays live (the bursts on it are half the point).
  *
- *   header: ● DATALINK · the band (VDL2 136.8625 MHz) · ACARS / VDL2 (the two bands, the current one lit) · EXIT
+ *   header: ● DATALINK · the band (VDL2 136.8625 MHz) · ACARS / VDL2 (the two bands, the current one lit) · MAP · EXIT
  *   status: "5 aircraft · 33 messages · gain 43.4 dB auto"
  *   list:   newest first (the server's order): heard … ago · who (flight · registration · ICAO address) — what was last
- *           heard (the label's plain name) · via (VDL2 136.975)
+ *           heard (the label's plain name); under it the route and last OUT / OFF / ON / IN, the position's altitude and
+ *           fix time (when the server could read one — services/aviation.ts avDetail), and how it was heard (VDL2 136.975)
+ *   ★ MAP (V12 2026-11-16) opens MapOverlay 'avdata': the aircraft that reported a position; CLOSE MAP comes back here.
  *
  * ★★ THE SERVER OWNS THE BAND (the shared-dial contract): a band key sends the band, the next report says where the radio
  *    is. ★★ MESSAGE TEXT appears only where the server sent it — the owner's opt-in, to the owner's own session; this
@@ -17,7 +19,7 @@ import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-n
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
-import { avAge, avLine, type AvBand, type AvReport } from '../services/aviation';
+import { avAge, avAppsText, avDetail, avLine, type AvBand, type AvReport } from '../services/aviation';
 
 const AV_MAX_W = 760;
 
@@ -31,6 +33,8 @@ export interface AvdataPanelProps {
   /** The bands this radio reaches (vibeserver.json avdataBands), in step order. */
   bands: AvBand[];
   onPickBand: (id: string) => void;
+  /** ★ The aircraft with a position on a map (MapOverlay 'avdata'); absent on Apple TV (no map there). */
+  onMap?: () => void;
   bottomOffset: number;
   topLimit?: number;
 }
@@ -51,6 +55,7 @@ export default function AvdataPanel(p: AvdataPanelProps) {
   const r = p.report;
   const band = p.error ? 'not available' : r ? `${r.bandName} ${(r.hz / 1e6).toFixed(4).replace(/0+$/, '')} MHz` : 'finding the band…';
   const status = r ? `${r.aircraft.length} aircraft · ${r.msgs} message${r.msgs === 1 ? '' : 's'}`
+    + (avAppsText(r) ? ` · ${avAppsText(r)}` : '')
     + (r.gain != null ? ` · gain ${r.gain.toFixed(1)} dB${r.gainAuto ? ' auto' : ''}` : '') + (r.dropped ? ' · fell behind' : '') : '';
 
   return (
@@ -66,6 +71,7 @@ export default function AvdataPanel(p: AvdataPanelProps) {
           <DecoderKey key={b.id} active={r?.band === b.id} label={b.name} onPress={() => { if (r?.band !== b.id) p.onPickBand(b.id); }}
                       accessibilityLabel={`${b.name}: ${b.region}`} />
         ))}
+        {p.on && !!p.onMap && <DecoderKey label="MAP" onPress={p.onMap} accessibilityLabel="The aircraft that reported a position, on a map" />}
         <DecoderKey onPress={p.onExit} label={p.on ? 'EXIT' : 'CLOSE'}
                     accessibilityLabel={p.on ? 'Leave the aircraft datalink — the receiver goes back to where it was' : 'Close'} />
       </DecoderHeader>
@@ -78,11 +84,11 @@ export default function AvdataPanel(p: AvdataPanelProps) {
             <Text style={s.note}>Taking the receiver to the aircraft datalink…</Text>
           ) : r.aircraft.length ? r.aircraft.map((a, i) => (
             <View key={(a.icao || a.reg || a.flight || '') + i} style={[s.row, i % 2 === 0 && s.rowAlt]}
-                  accessibilityLabel={`${avLine(a)}, heard ${avAge(a.age + since)}, ${a.via}`}>
+                  accessibilityLabel={`${avLine(a)}, heard ${avAge(a.age + since)}, ${avDetail(a)}`}>
               <Text style={s.ago} numberOfLines={1}>{avAge(a.age + since).replace(' ago', '')}</Text>
               <View style={s.txtCol}>
                 <Text style={s.txt}>{avLine(a)}</Text>
-                <Text style={s.detail} numberOfLines={1}>{a.via}{a.n > 1 ? ` · ${a.n} messages` : ''}</Text>
+                <Text style={s.detail} numberOfLines={2}>{avDetail(a)}</Text>
                 {!!a.text && <Text style={s.body}>{a.text}</Text>}
               </View>
             </View>

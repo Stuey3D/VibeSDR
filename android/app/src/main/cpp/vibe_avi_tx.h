@@ -4,6 +4,7 @@
 // which time the real receivers on real-shaped traffic. Not on any receive path.
 #pragma once
 #include "vibe_acars.h"
+#include "vibe_acars_apps.h"
 #include "vibe_vdl2.h"
 #include "vibe_hfdl.h"
 
@@ -12,6 +13,7 @@
 #include <complex>
 #include <random>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -67,6 +69,37 @@ inline void acarsBurst(std::vector<cf32>& cap, double fs, double offHz, double A
     }
 }
 
+
+// ── ACARS applications (vibe_acars_apps.h, run backwards) ───────────────────────────────────────────────────────────
+/** An ADS-C basic report as an aircraft sends it in label B6: "/<gs7>.ADS<reg7><hex>" (reg7 dot-padded, ".G-EUPT") with the ARINC 622 CRC.
+ *  `pastHour` in seconds; navigation accuracy 7, redundancy and TCAS OK. */
+inline std::string adsCBasic(const std::string& gs7, const std::string& reg7, double lat, double lon, int altFt, double pastHour) {
+    auto coord = [](double d) { return uint32_t(int32_t(std::lround(d * double(0xFFFFF) / (180.0 - 90.0 / 524288.0)))) & 0x1FFFFFu; };
+    uint8_t g[11] = { 7 };
+    uint64_t hi = (uint64_t(coord(lat)) << 43) | (uint64_t(coord(lon)) << 22) | (uint64_t(uint16_t(int16_t(altFt / 4))) << 6);
+    const uint32_t ts = uint32_t(std::lround(pastHour * 8)) & 0x7FFFu;
+    hi |= ts >> 9;                                          // 64 bits: lat 21, lon 21, alt 16, the top 6 of the time
+    const uint16_t lo = uint16_t(((ts & 0x1FFu) << 7) | 0x1F);   // the low 9 bits of the time, then 7 status bits
+    for (int i = 0; i < 8; ++i) g[1 + i] = uint8_t(hi >> (56 - 8 * i));
+    g[9] = uint8_t(lo >> 8); g[10] = uint8_t(lo);
+    std::vector<uint8_t> buf;
+    for (char c : std::string("ADS") + reg7) buf.push_back(uint8_t(c));
+    buf.insert(buf.end(), g, g + 11);
+    const uint16_t c = uint16_t(~vibeacarsapps::crc622(buf.data(), buf.size()));
+    buf.push_back(uint8_t(c >> 8)); buf.push_back(uint8_t(c));
+    std::string o = "/" + gs7 + ".ADS" + reg7;   // reg7 is dot-padded: ".G-EUPT"
+    char h[3];
+    for (size_t i = 10; i < buf.size(); ++i) { std::snprintf(h, sizeof h, "%02X", buf[i]); o += h; }
+    return o;
+}
+/** An FMS position report (H1, "#M1B" sublabel) with its CRC: "POSN51286W000380,WPT,HHMMSS,FL,…" + 4 hex digits. */
+inline std::string fmsPos(const std::string& posField, int hhmmss, int fl) {
+    char b[160];
+    std::snprintf(b, sizeof b, "POS%s,TEST1,%06d,%03d,TEST2,%06d,TEST3,M50,25010,240", posField.c_str(), hhmmss, fl, hhmmss);
+    const std::string d = b;
+    std::snprintf(b, sizeof b, "%04X", vibeacarsapps::crc702(d.data(), d.size()));
+    return "#M1B" + d + b;
+}
 
 // ── VDL2 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 inline void putAddr(std::vector<uint8_t>& f, uint32_t addr, int type, int status, bool last) {

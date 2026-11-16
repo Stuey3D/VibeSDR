@@ -623,6 +623,30 @@ inline std::string mapAvWho(const Json& a) {
     for (const char* k : {"flight", "reg", "icao"}) { const std::string v = mapTrim(a[k].str().substr(0, 12)); if (!v.empty()) w += (w.empty() ? "" : " · ") + v; }
     return w.empty() ? std::string("unknown aircraft") : w;
 }
+/** ★ V12 2026-11-16 (aviation.ts avRoute / avFix): "EGLL > EDDF · OUT 20:30" and "37000 ft · fix 21:57:54 · FMS" —
+ *  what the server's ACARS applications read (vibe_acars_apps.h). Flight data only; empty when nothing was read. */
+inline std::string mapAvRoute(const Json& a) {
+    std::string r;
+    const std::string f = a["from"].str().substr(0, 4), t = a["to"].str().substr(0, 4);
+    if (f.size() == 4 && t.size() == 4) r = f + " > " + t;
+    std::string o = a["oooi"].str().substr(0, 3);
+    if (o == "out" || o == "off" || o == "on" || o == "in") {
+        for (char& c : o) c = char(c - 32);
+        const std::string tm = a["oooiTime"].str().substr(0, 5);
+        r += (r.empty() ? "" : " · ") + o + (tm.empty() ? "" : " " + tm);
+    }
+    return r;
+}
+inline std::string mapAvFix(const Json& a) {
+    if (a["lat"].kind != Json::Num) return "";
+    std::string r;
+    if (a["alt"].kind == Json::Num) r = mapFmt("%.0f ft", a["alt"].n);
+    const std::string t = a["posTime"].str().substr(0, 9);
+    if (!t.empty()) r += (r.empty() ? "" : " · ") + std::string(t[0] == ':' ? "fix at " + t + " past the hour" : "fix " + t);
+    const std::string src = a["posSrc"].str().substr(0, 8);
+    if (!src.empty()) r += (r.empty() ? "" : " · ") + src;
+    return r;
+}
 inline std::string mapAvKey(const Json& a, size_t i) {
     for (const char* k : {"icao", "reg", "flight"}) if (!a[k].str().empty()) return a[k].str().substr(0, 12);
     return mapFmt("row%zu", i);
@@ -637,8 +661,10 @@ inline void mapAvBuild(App&, const RadioState& s, std::vector<MapListRow>& rows,
         row.title = mapAvWho(a);
         row.col = rgb(0xffd34d);
         row.right = agoText(a["age"].num(0));
-        std::string sub = a["labelName"].str().substr(0, 40);
+        std::string sub = mapAvRoute(a);                           // ★ the route / OOOI first, else the label's name
+        if (sub.empty()) sub = a["labelName"].str().substr(0, 40);
         if (sub.empty() && !a["label"].str().empty()) sub = "label " + a["label"].str().substr(0, 4);
+        if (a["alt"].kind == Json::Num) sub += (sub.empty() ? "" : " · ") + mapFmt("%.0f ft", a["alt"].n);
         sub += (sub.empty() ? "" : " · ") + a["via"].str().substr(0, 30);
         double lat, lon;
         if (mapPos(a, lat, lon)) {
@@ -663,6 +689,9 @@ inline std::vector<std::string> mapAvCard(App&, const RadioState& s, const std::
         std::string t = a["labelName"].str();
         if (!a["label"].str().empty()) t = "label " + a["label"].str().substr(0, 4) + (t.empty() ? "" : " · " + t);
         if (!t.empty()) l.push_back(t.substr(0, 60));
+        const std::string route = mapAvRoute(a), fix = mapAvFix(a);   // ★ V12 2026-11-16 the ACARS applications
+        if (!route.empty()) l.push_back(route.substr(0, 60));
+        if (!fix.empty()) l.push_back(fix.substr(0, 60));
         l.push_back(a["via"].str().substr(0, 40) + " · heard " + agoText(a["age"].num(0)) + " ago · " + mapFmt("%.0f", a["n"].num(0)) + " messages");
         const std::string body = a["text"].str();
         for (size_t o = 0; o < body.size() && l.size() < 8; o += 44) l.push_back(body.substr(o, 44));   // ★ only the owner's own session gets one

@@ -113,7 +113,10 @@ import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's H
  *  gallery folded per station (src/services/navtexMap.ts), on the track layer, with great-circle lines from the receiver. */
 /* ★ 'sondes' (V12) = the SONDES box's MAP: RS41 radiosondes at their last position, a chosen one's track (from the
  *  report — services/sondes.ts), on the same track layer; CLOSE MAP goes back to the box and the mode carries on. */
-export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb' | 'ais' | 'aprs' | 'ndb' | 'dsc' | 'ism' | 'navtex' | 'sondes';
+/* ★ 'avdata' (V12, 2026-11-16) = the DATALINK box's MAP: the ACARS / VDL2 aircraft whose messages carried a position the
+ *  server is sure of (ADS-C, FMS reports, the airline layouts — vibe_acars_apps.h), on the same track layer
+ *  (services/aviation.ts avTrackItems); CLOSE MAP goes back to the box and the mode carries on. */
+export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb' | 'ais' | 'aprs' | 'ndb' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata';
 
 interface MapOverlayProps {
   visible: boolean;
@@ -229,7 +232,7 @@ function buildHtml(
   const isHfdl = kind === 'hfdl';
   const isAdsb = kind === 'adsb';
   const isNdb = kind === 'ndb';   // ★ V12 NDB — the aero look, its own layer, RN's live list (as ADS-B)
-  const isTrk = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes';   // ★ V12 AIS / APRS / DSC / ISM — the shared track layer
+  const isTrk = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata';   // ★ V12 AIS / APRS / DSC / ISM — the shared track layer
   /* ★★ THE AIRCRAFT MAPS SHARE ONE LOOK: ADS-B wears HFDL's amber-black page, its 'aero' basemap and its chrome.
    *  `aero` is the look; `isHfdl` stays for what is HFDL's alone (SNAP, the ground stations, the flight toast). */
   const aero = isHfdl || isAdsb || isNdb;
@@ -243,11 +246,11 @@ function buildHtml(
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
   const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES · RS41' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES · RS41' : kind === 'avdata' ? 'AIRCRAFT DATALINK' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" style="vertical-align:middle;opacity:0.8"><path d="M12 9 L8 22 M12 9 L16 22 M9.5 17 L14.5 17" stroke="rgba(255,190,40,0.9)" stroke-width="1.6" fill="none" stroke-linecap="round"/><circle cx="12" cy="7" r="1.8" fill="rgba(255,190,40,0.9)"/><path d="M7.5 3.5 A6 6 0 0 0 7.5 10.5 M16.5 3.5 A6 6 0 0 1 16.5 10.5" stroke="rgba(255,190,40,0.7)" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`
-    : kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' || kind === 'ism' || kind === 'navtex' ? '&#128225;' : kind === 'sondes' ? '&#127880;' : aero
+    : kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' || kind === 'ism' || kind === 'navtex' ? '&#128225;' : kind === 'sondes' ? '&#127880;' : aero || kind === 'avdata'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.x},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
@@ -503,11 +506,12 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     : kind === 'dsc' ? '<button id="back" aria-label="Close the map — the DSC decoder carries on">CLOSE MAP</button>'
     : kind === 'ism' ? '<button id="back" aria-label="Close the map — ISM carries on">CLOSE MAP</button>'
     : kind === 'sondes' ? '<button id="back" aria-label="Close the map — the sondes mode carries on">CLOSE MAP</button>'
+    : kind === 'avdata' ? '<button id="back" aria-label="Close the map — the aircraft datalink carries on">CLOSE MAP</button>'
     : kind === 'navtex' ? '<button id="back" aria-label="Close the map">CLOSE MAP</button>'
     : '<button id="back">&#8592; SDR</button>'}
   <div id="title">${TITLE}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
-  ${isTrk ? `<button id="snap" class="trkfit" title="Fit every ${kind === 'ais' ? 'ship' : kind === 'dsc' ? 'position' : kind === 'ism' ? 'node' : kind === 'sondes' ? 'sonde' : 'station'} on the map">FIT</button>` : ''}
+  ${isTrk ? `<button id="snap" class="trkfit" title="Fit every ${kind === 'ais' ? 'ship' : kind === 'dsc' ? 'position' : kind === 'ism' ? 'node' : kind === 'sondes' ? 'sonde' : kind === 'avdata' ? 'aircraft' : 'station'} on the map">FIT</button>` : ''}
   ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
@@ -547,6 +551,11 @@ ${isSpots ? `
       <div class="lg-row"><span class="lg-dot" style="background:#ffad42;"></span><span>object / item</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:#c58cff;"></span><span>digipeater / gateway</span></div>
       <div class="lg-row"><span>&#9711;</span><span>Dashed ring = alternate symbol table</span></div>
+      ` : kind === 'avdata' ? `
+      <div class="lg-sec">AIRCRAFT DATALINK (ACARS / VDL2)</div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ffd34d;"></span><span>the last position an aircraft reported</span></div>
+      <div class="lg-row"><span>&#9711;</span><span>ADS-C, FMS and airline position reports only &mdash; most messages carry none</span></div>
+      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
       ` : kind === 'sondes' ? `
       <div class="lg-sec">RADIOSONDES (RS41)</div>
       <div class="lg-row"><span class="lg-dot" style="background:#7fd4ff;"></span><span>climbing (or level)</span></div>
@@ -1035,7 +1044,7 @@ if(LOCAL){
 }else if(KIND==='ndb'){
   /* ★ V12 NDB: the beacon layer draws the receiver's house itself (ndblayer.js) — only the view is set here. */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],7);
-}else if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'){
+}else if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'){
   /* ★ V12 AIS / APRS: the server's /location, injected; the track layer draws the receiver's house itself (setReceiver). */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],8);
 }else{
@@ -1567,7 +1576,7 @@ if(KIND==='ndb'){
  *  a tapped one's track and its card. Each item arrives with its icon, label and card already made (src/services/tracks.ts
  *  — one rule, two readers with the web), so this page holds no copy of what a ship looks like. A track is asked of React
  *  Native (AIS: the server's ais_trail; APRS: the list's own), answered through __trkTrail. */
-if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'){
+if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'){
   var trkLayer=null,trkWait={},trkWantFocus=null;
   function trkPost(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));}
   function trkMake(){
@@ -1592,7 +1601,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
           if(b)b.addEventListener('click',function(){trkPost({t:'trkTr',f:f});});
           trkPost({t:'trkCard',f:f,title:b?(b.getAttribute('data-title')||''):''});
         },
-        labelZoom:KIND==='ism'?6:KIND==='navtex'?3:KIND==='sondes'?5:undefined,focusZoom:KIND==='ism'?11:KIND==='navtex'?6:KIND==='sondes'?9:undefined,
+        labelZoom:KIND==='ism'?6:KIND==='navtex'?3:KIND==='sondes'?5:KIND==='avdata'?5:undefined,focusZoom:KIND==='ism'?11:KIND==='navtex'?6:KIND==='sondes'?9:KIND==='avdata'?8:undefined,
         trail:function(key,done){
           trkWait[key]=done;trkPost({t:'trkTrail',key:String(key)});
           setTimeout(function(){if(trkWait[key]===done){delete trkWait[key];done([]);}},8000);
@@ -2121,7 +2130,7 @@ export default function MapOverlay(
   };
   /* ★ V12 AIS / APRS: the items each report (they REPLACE — the server's list is the truth), double-encoded as ADS-B's are
    *  (a ship's name can never become source). Parked in __pendingTrk until the page's handler exists. */
-  const isTrkKind = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes';
+  const isTrkKind = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata';
   const trkRef = useRef(trk); trkRef.current = trk;
   /* ★★ V12 2026-11-01 THE NAVTEX CARDS' TEXT AND TRANSLATE: the page asks for a card's gallery file (only one of the
    *  items' own, by its safe name), React Native fetches it (the read auth) and sends it back as TEXT; then the gallery's
@@ -2433,7 +2442,7 @@ export default function MapOverlay(
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList title={kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
+          <TrackLiveList title={kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}

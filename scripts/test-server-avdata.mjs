@@ -118,6 +118,17 @@ async function signIn(S, sock) {
     const ei = r && r.aircraft.find((a) => a.icao === '4CA97B');
     ok(ei && ei.reg === 'EI-EST' && ei.flight === 'FR1234' && ei.label === 'H1' && /^VDL2 136\.\d{3}$/.test(ei.via), `a row: ${JSON.stringify(ei)}`);
     ok(r && r.band === 'vdl2' && r.bandName === 'VDL2' && r.msgs >= 5, `band vdl2, msgs ${r && r.msgs}`);
+    // ★ V12 2026-11-16 the ACARS applications (vibe_acars_apps.h): three aircraft report a position, one an OOOI OUT
+    const row = (ic) => r && r.aircraft.find((a) => a.icao === ic);
+    const fms = row('4CA97B'), l16 = row('4070E8'), adsc = row('3C6548'), oooi = row('406B90');
+    ok(fms && Math.abs(fms.lat - (53 + 21.4 / 60)) < 1e-3 && Math.abs(fms.lon + (2 + 16.4 / 60)) < 1e-3 && fms.alt === 37000 && fms.posSrc === 'FMS' && fms.posTime === '21:20:00',
+       `FMS position on EI-EST: ${JSON.stringify(fms)}`);
+    ok(l16 && l16.lat === 52.48 && l16.lon === -1.9 && l16.alt === 24000 && l16.posSrc === 'ACARS', `label 16 position on G-JZHU: ${JSON.stringify(l16)}`);
+    ok(adsc && Math.abs(adsc.lat - 51.75) < 1e-3 && Math.abs(adsc.lon + 0.5) < 1e-3 && adsc.alt === 36000 && adsc.posSrc === 'ADS-C' && adsc.posTime === ':20:34' && adsc.app === 'ADS-C',
+       `ADS-C position on D-AIJH: ${JSON.stringify(adsc)}`);
+    ok(oooi && oooi.from === 'EGLL' && oooi.to === 'LEMD' && oooi.oooi === 'out' && oooi.oooiTime === '10:15' && oooi.lat == null, `OOOI on G-EZWK: ${JSON.stringify(oooi)}`);
+    ok(r && r.apps && r.apps.pos >= 2 && r.apps.adsc >= 1 && r.apps.oooi >= 1 && r.apps.unparsed >= 1, `the counters: ${JSON.stringify(r && r.apps)}`);
+    ok(!sp.txt.some((m) => m.includes('EGLLXYA') || m.includes('#M1BPOS')), '★ the messages themselves (ADS-C hex, FMS text) are bodies: not sent');
     ok(!sp.txt.some((m) => m.includes('TEST MESSAGE BODY')), '★ no message body anywhere without the owner\'s opt-in');
     sp.send({ type: 'tune', frequency: 145000000, mode: 'nfm' });
     await sleep(800);
