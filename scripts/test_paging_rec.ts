@@ -46,7 +46,8 @@ ok(pagingMutedBanner(true) === '\u{1F507} AUDIO MUTED · REC SILENT WHILE PAGE R
 const sdr = read('src/screens/SDRScreen.tsx'), about = read('src/components/AboutOverlay.tsx');
 const modeSel = read('src/components/ModeSelector.tsx'), audio = read('src/components/AudioSheet.tsx');
 ok(/<Text style=\{capText\}>\{PAGING_HINT\}<\/Text>/.test(modeSel), 'the PAGE key\'s hint is PAGING_HINT (the law first)');
-const tour = sdr.match(/Platform\.OS === 'android' \? ', Paging \(PAGE[^]*?\)' : ''\)/)?.[0] ?? '';
+// ★ the mode card is a short overview now (Stuart 2026-11-16) — its Android-only PAGE sentence still carries the law
+const tour = sdr.match(/\{ id: 'mode', title:[^]*?Platform\.OS === 'android' \? '[^']*PAGE[^]*? : ''\)/)?.[0] ?? '';
 ok(tour.includes('PAGING_LAW_NOTICE') && tour.includes('recordings are silent'), "the tour's mode card: the law and REC's silence");
 const aboutPaging = about.slice(about.indexOf('PAGING ON ANDROID'), about.indexOf('MSK144 FOR METEOR SCATTER'));
 ok(aboutPaging.includes('PAGING_LAW_NOTICE') && /recording made while PAGE runs is silent/.test(aboutPaging) && /REC records silence/.test(aboutPaging),
