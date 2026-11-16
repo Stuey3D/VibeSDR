@@ -11,6 +11,8 @@ import React from 'react';
 import { Switch, Text, TouchableOpacity, View } from 'react-native';
 
 export interface DxScanModel { on: boolean; bands: 'both' | 'fm' | 'dab'; waitMin: number; raster: 50 | 100; viewAdmin: boolean;
+                               /** ★ V12 2026-11-16 the extra FM ranges (vibe_dxscan.h kFmRanges) — default ON */
+                               oirt: boolean; ext: boolean;
                                /** kept as saved, not drawn (proof clips are opt-in and not offered yet; the opening gap) */
                                rest?: Record<string, unknown> }
 export function parseDxScan(json: string): DxScanModel {
@@ -21,12 +23,14 @@ export function parseDxScan(json: string): DxScanModel {
   if (c.proof === true) rest.proof = true;
   if (typeof c.gapMin === 'number' && c.gapMin !== 30) rest.gapMin = c.gapMin;
   return { on: c.on === true, bands: c.bands === 'fm' || c.bands === 'dab' ? c.bands : 'both',
-           waitMin: c.waitMin > 0 ? c.waitMin : 5, raster: Number(c.raster) === 50 ? 50 : 100, viewAdmin: c.viewAdmin === true, rest };
+           waitMin: c.waitMin > 0 ? c.waitMin : 5, raster: Number(c.raster) === 50 ? 50 : 100, viewAdmin: c.viewAdmin === true,
+           oirt: c.oirt !== false, ext: c.ext !== false, rest };
 }
 /** '' when off and never set — the radio's config stays as it was before this existed. */
 export function collectDxScan(m: DxScanModel, wasSet: boolean): string {
   if (!m.on && !wasSet) return '';
-  return JSON.stringify({ on: m.on, bands: m.bands, waitMin: m.waitMin, raster: m.raster, viewAdmin: m.viewAdmin, ...(m.rest || {}) });
+  return JSON.stringify({ on: m.on, bands: m.bands, waitMin: m.waitMin, raster: m.raster, viewAdmin: m.viewAdmin,
+                          oirt: m.oirt, ext: m.ext, ...(m.rest || {}) });
 }
 
 const WAITS = [1, 2, 5, 10, 15, 30, 60];
@@ -47,8 +51,11 @@ export default function DxScanSetup({ C, F, model, onChange, driver, rate }: {
   );
   // ★ The hop count, as the server plans it (vibe_dxscan.h planFm)
   const half = 0.4 * rate - 100e3, r = model.raster * 1e3;
-  const perHop = half >= r ? Math.floor((2 * half) / r) + 1 : 0;
-  const hops = perHop ? Math.ceil(((108e6 - 87.5e6) / r + 1) / perHop) : 0;
+  const hopsIn = (lo: number, hi: number, rr: number) => {
+    const n = half >= rr ? Math.floor((2 * half) / rr) + 1 : 0;
+    return n ? Math.ceil(((hi - lo) / rr + 1) / n) : 0;
+  };
+  const hops = hopsIn(87.5e6, 108e6, r) + (model.oirt ? hopsIn(65.81e6, 74e6, 30e3) : 0) + (model.ext ? hopsIn(76e6, 87.45e6, 50e3) : 0);
   return (
     <View>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -60,9 +67,12 @@ export default function DxScanSetup({ C, F, model, onChange, driver, rate }: {
         {`DX Scanner — catch Sporadic-E, tropo and meteor scatter while the radio is idle. When nobody has been listening for `
          + `${model.waitMin === 60 ? '1 hour' : `${model.waitMin} minute${model.waitMin === 1 ? '' : 's'}`} the radio slowly sweeps `
          + `${bands === 'both' ? 'Broadcast FM and DAB' : bands === 'fm' ? 'Broadcast FM' : 'DAB'} and keeps every station it identifies `
-         + '(the RDS PI on FM, the multiplex on DAB) in a DX Log, apart from your bookmarks. Strong local stations are logged once and then '
-         + 'stay out of the way; the first day builds that baseline. The moment anybody connects, the scan stops and the radio goes back to '
-         + 'exactly where it was left. Background Decoding profiles come first.'}
+         + '(the RDS PI on FM, or a station with no RDS by its stereo pilot or its strength; the multiplex on DAB) in a DX Log, apart '
+         + 'from your bookmarks. Strong local stations are logged once and then stay out of the way; the first day builds that baseline. '
+         + 'Once a week of scanning has established a station as LOCAL it is added to this server\u2019s discovered bookmarks (FM with its '
+         + 'RDS name and PI, DAB with every service of the multiplex) \u2014 DX catches never are, and one you delete stays deleted. '
+         + 'The moment anybody connects, the scan stops and the radio goes back to exactly where it was left. Background Decoding '
+         + 'profiles come first.'}
       </Text>
       {model.on && (
         <View style={{ marginTop: 10 }}>
@@ -87,6 +97,19 @@ export default function DxScanSetup({ C, F, model, onChange, driver, rate }: {
               <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
                 {chip('100 kHz', model.raster === 100, () => set({ raster: 100 }), 'r100')}
                 {chip('50 kHz (regions that use it)', model.raster === 50, () => set({ raster: 50 }), 'r50')}
+              </View>
+              {/* ★ the extra FM ranges, under FM (the server skips one this radio cannot tune or the owner does not permit) */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                <Text style={{ color: C.text, fontFamily: F, fontSize: 14, flex: 1, paddingRight: 12 }}>
+                  {'Also OIRT, 65.8\u201374 MHz (Eastern Europe, Sporadic-E)'}</Text>
+                <Switch value={model.oirt} onValueChange={(v) => set({ oirt: v })}
+                        trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} accessibilityLabel="Also scan OIRT" />
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                <Text style={{ color: C.text, fontFamily: F, fontSize: 14, flex: 1, paddingRight: 12 }}>
+                  {'Also extended FM, 76\u201387.5 MHz (Japan, Brazil, the Dutch pirates under 87)'}</Text>
+                <Switch value={model.ext} onValueChange={(v) => set({ ext: v })}
+                        trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} accessibilityLabel="Also scan extended FM" />
               </View>
               {hops > 0 && (
                 <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12, marginTop: 2 }}>

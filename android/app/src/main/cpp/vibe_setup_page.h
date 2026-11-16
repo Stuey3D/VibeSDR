@@ -2210,14 +2210,24 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           the radio slowly sweeps <span id="dxBandsWrap"><select id="dxBands" style="width:auto;display:inline-block">
             <option value="both">Broadcast FM and DAB</option><option value="fm">Broadcast FM only</option>
             <option value="dab">DAB only</option></select></span><span id="dxBandsFmOnly" class="hide">Broadcast FM</span>
-          and keeps every station it identifies (the RDS PI on FM, the multiplex on DAB) in a <b>DX Log</b>, apart from
-          your bookmarks. Strong local stations are logged once and then stay out of the way; the first day builds that
-          baseline. The moment anybody connects, the scan stops and the radio goes back to exactly where it was left.
+          and keeps every station it identifies (the RDS PI on FM, or a station with no RDS by its stereo pilot or its
+          strength; the multiplex on DAB) in a <b>DX Log</b>, apart from your bookmarks. Strong local stations are logged
+          once and then stay out of the way; the first day builds that baseline. Once a week of scanning has established a
+          station as LOCAL it is added to this server's discovered bookmarks (FM with its RDS name and PI, DAB with every
+          service of the multiplex) &mdash; DX catches never are. Delete one and it stays deleted. The moment anybody connects, the scan stops and the radio goes back to exactly where it was left.
           Background Decoding profiles come first. <span id="dxPlanLine"></span></p>
         <div id="dxOpts" class="hide" style="margin:4px 0 0 24px">
           <label style="display:flex;gap:8px;align-items:center;margin:4px 0"><span>FM channel raster</span>
             <select id="dxRaster" style="width:auto;display:inline-block">
               <option value="100">100 kHz</option><option value="50">50 kHz (regions that use it)</option></select></label>
+          <!-- ★ V12 2026-11-16: the extra FM ranges (vibe_dxscan.h kFmRanges) — under FM, default ON; the server skips a
+               range this radio cannot tune or the owner does not permit -->
+          <label style="display:flex;gap:8px;align-items:center;margin:4px 0">
+            <input type="checkbox" id="dxOirt" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Also OIRT, 65.8&ndash;74 MHz (Eastern Europe, Sporadic-E; 30 kHz channels)</span></label>
+          <label style="display:flex;gap:8px;align-items:center;margin:4px 0">
+            <input type="checkbox" id="dxExt" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Also extended FM, 76&ndash;87.5 MHz (Japan, Brazil, the Dutch pirates under 87; 50 kHz channels)</span></label>
           <label style="display:flex;gap:8px;align-items:center;margin:4px 0">
             <input type="checkbox" id="dxViewAdmin" style="width:16px;height:16px;accent-color:var(--amber)">
             <span>Only the owner may view the DX Log</span></label>
@@ -7200,11 +7210,13 @@ function dxLoad(r) {
   $("dxWait").value = w;
   $("dxBands").value = fmOnly ? "fm" : (c.bands === "fm" || c.bands === "dab" ? c.bands : "both");
   $("dxRaster").value = Number(c.raster) === 50 ? "50" : "100";
+  $("dxOirt").checked = c.oirt !== false;   // ★ default ON
+  $("dxExt").checked = c.ext !== false;
   $("dxViewAdmin").checked = c.viewAdmin === true;
   dxKeep = { proof: c.proof === true, gapMin: c.gapMin > 0 ? c.gapMin : 30 };   // ★ kept as saved, not drawn
   if (!$("dxOn").__wired) {
     $("dxOn").__wired = 1;
-    for (const id of ["dxOn", "dxBands", "dxRaster", "dxWait"]) $(id).addEventListener("change", dxRender);
+    for (const id of ["dxOn", "dxBands", "dxRaster", "dxWait", "dxOirt", "dxExt"]) $(id).addEventListener("change", dxRender);
   }
   dxRender();
 }
@@ -7214,12 +7226,16 @@ function dxRender() {
   // ★ The raster only means something when FM is swept.
   const fm = $("dxBands").value !== "dab";
   $("dxRaster").closest("label").classList.toggle("hide", !fm);
+  $("dxOirt").closest("label").classList.toggle("hide", !fm);
+  $("dxExt").closest("label").classList.toggle("hide", !fm);
   const r = dxRadio || {};
   const rate = Number(r.rate) || 2400000;
   // ★ The hop count, as the server plans it (vibe_dxscan.h planFm: a channel inside ±(0.4·rate − 100 kHz) of the centre).
   const half = 0.4 * rate - 100e3, raster = Number($("dxRaster").value) * 1e3;
   const perHop = half >= raster ? Math.floor(2 * half / raster) + 1 : 0;
-  const hops = perHop ? Math.ceil(((108e6 - 87.5e6) / raster + 1) / perHop) : 0;
+  const hopsIn = function (lo, hi, r) { const n = half >= r ? Math.floor(2 * half / r) + 1 : 0; return n ? Math.ceil(((hi - lo) / r + 1) / n) : 0; };
+  const hops = (perHop ? Math.ceil(((108e6 - 87.5e6) / raster + 1) / perHop) : 0)
+             + ($("dxOirt").checked ? hopsIn(65.81e6, 74e6, 30e3) : 0) + ($("dxExt").checked ? hopsIn(76e6, 87.45e6, 50e3) : 0);
   const bits = [];
   if (fm && hops) bits.push("At " + (rate / 1e6).toFixed(3) + " MS/s FM takes about " + hops + " hops of ~4 s (about " + Math.max(1, Math.round(hops * 4.5 / 60)) + " min a sweep)");
   if ($("dxBands").value !== "fm" && r.driver !== "airspyhf") bits.push("DAB steps all 41 Band III blocks, a few seconds each where nothing is there and longer where a multiplex is being pulled in");
@@ -7239,7 +7255,8 @@ function dxCollect() {
   // ★ Off and never set stores nothing — the radio's entry stays as it was before this existed.
   if (!on && !(dxRadio && dxRadio.dxScan)) return "";
   const out = { on: on, bands: $("dxBands").value, waitMin: parseFloat($("dxWait").value) || 5,
-                raster: Number($("dxRaster").value) === 50 ? 50 : 100, viewAdmin: $("dxViewAdmin").checked };
+                raster: Number($("dxRaster").value) === 50 ? 50 : 100, viewAdmin: $("dxViewAdmin").checked,
+                oirt: $("dxOirt").checked, ext: $("dxExt").checked };
   if (keep.proof) out.proof = true;
   if (keep.gapMin && keep.gapMin !== 30) out.gapMin = keep.gapMin;
   return JSON.stringify(out);

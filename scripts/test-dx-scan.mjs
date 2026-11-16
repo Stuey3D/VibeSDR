@@ -196,12 +196,40 @@ async function testLocals() {
   await sleep(1000);
 }
 
+/* ★★ G. THE EXTENDED FM RANGES (2026-11-16): an OIRT station on 69.80 and a Dutch pirate on 86.65 (off the 100 kHz raster)
+ *  in the fake dongle's band; the log's cursor starts at the bottom of OIRT so the sweep reaches them first. */
+async function testRanges() {
+  console.log('── G. the extended FM ranges: OIRT 69.80 (30 kHz raster) and a pirate on 86.65 (50 kHz) ──');
+  const now = Math.floor(Date.now() / 1000);
+  const seed = (dir) => fs.writeFileSync(path.join(dir, 'data', 'dxlog-dx-test.json'), JSON.stringify({ v: 1, created: now, nextId: 1,
+    sweepsFm: 0, sweepsDab: 0, alertSeq: 0, fmCursorKhz: 65810, dabCursor: 0, nextDab: false, bootDone: false, entries: [], alerts: [] }));
+  const G = await startServer('ranges', { on: true, bands: 'fm', waitMin: 5 }, ['--rate', '2400000', '--fm-rds', '69.8:E201:RADIO_1,86.65:D001:PIRATE'], { seed });
+  const a = ws(G.port, '/ws/user-spectrum?user_session_id=dxgg0001&bins=256');
+  await G.until(() => a.hw);
+  a.send({ type: 'leave' }); a.close();
+  const get = () => fetch(`${G.H}/vibeserver/dxlog.json?limit=100&suspect=1`).then((r) => r.json()).catch(() => ({ entries: [] }));
+  let list = { entries: [] };
+  await G.until(async () => { list = await get(); return list.entries.some((e) => e.freqKhz === 86650 && e.pi === 'D001'); }, 240000);
+  const hops = [...G.logText().matchAll(/DX scanner: FM ([\d.]+).([\d.]+) MHz: /g)].map((m) => Number(m[1]));
+  ok(hops.length > 0 && hops[0] < 66.0, `★ the sweep starts in OIRT (first hop ${hops[0]} MHz; ${hops.length} hops so far)`);
+  const o = list.entries.find((e) => e.freqKhz === 69800);
+  ok(o && o.pi === 'E201' && o.range === 'oirt', `★ OIRT 69.80 is logged with its PI, range oirt (${o ? `${o.freqKhz} ${o.pi} ${o.range}` : 'missing'})`);
+  const pz = list.entries.find((e) => e.freqKhz === 86650);
+  ok(pz && pz.pi === 'D001' && pz.range === 'ext', `★ the pirate on 86.65 — off the 100 kHz raster — is logged where it is, range ext (${pz ? `${pz.freqKhz} ${pz.range}` : 'missing'})`);
+  ok(!list.entries.some((e) => e.pi === 'D001' && e.freqKhz !== 86650 && e.class !== 'suspect'), 'and not filed again on a neighbouring 50 kHz channel');
+  ok(list.scanner && list.scanner.oirt === true && list.scanner.ext === true, 'the page says both extra ranges are on (the defaults)');
+  G.stop();
+  await sleep(1000);
+}
+
 try {
-  await testLocals();
-  if (process.env.DX_TEST_ONLY !== 'locals') {
+  const only = process.env.DX_TEST_ONLY || '';
+  if (!only || only === 'locals') await testLocals();
+  if (!only || only === 'ranges') await testRanges();
+  if (!only) {
   // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   console.log('── A. FM: nobody here → the scan starts and finds the RDS stations ──');
-  const S = await startServer('fm', { on: true, bands: 'fm', waitMin: 5, raster: 100 }, ['--rate', '2400000', '--fm-rds', STATIONS]);
+  const S = await startServer('fm', { on: true, bands: 'fm', waitMin: 5, raster: 100, oirt: false, ext: false }, ['--rate', '2400000', '--fm-rds', STATIONS]);
   const a = ws(S.port, '/ws/user-spectrum?user_session_id=dxaa0001&bins=256');
   ok(await S.until(() => a.hw), 'hwinfo arrives');
   ok(a.hw?.dxLog === true, `hwinfo offers the DX Log (dxLog=${a.hw?.dxLog})`);
@@ -317,7 +345,7 @@ try {
     D.stop();
     try { fs.unlinkSync(raw); } catch {}
   }
-  }   // ★ DX_TEST_ONLY=locals runs F alone
+  }   // ★ DX_TEST_ONLY=locals | ranges runs F or G alone
 } catch (e) {
   console.log('   FAIL (exception)', e);
   fail++;
