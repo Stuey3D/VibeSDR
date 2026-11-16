@@ -21,13 +21,14 @@ const { sam: _samLabel, ...AM_SYNC_LABEL_NO_SAM } = AM_SYNC_LABEL;   // 'sam' ke
 //   (docs/v12/DRM.md); not in MODES. The server receives it whole per listener; the client draws the DRM box.
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
                     | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst'   // ★ V12 synchronous AM (amSync.ts)
-                    | 'freedv';   // ★ V12 FreeDV digital voice (freedv.ts) — VibeServer only, where its `modes` lists it
+                    | 'freedv'    // ★ V12 FreeDV digital voice (freedv.ts) — VibeServer only, where its `modes` lists it
+                    | 'm17';      // ★ V12 M17 digital voice (m17.ts) — VibeServer only, where its `modes` lists it
 export type Mode = SDRMode; // alias
 
 export const MODES: SDRMode[] = ['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl'];
 export const MODE_LABELS: Record<SDRMode, string> = {
   usb: 'USB', lsb: 'LSB', am: 'AM', sam: 'SAM',
-  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM', freedv: 'FreeDV',
+  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM', freedv: 'FreeDV', m17: 'M17',
   ...AM_SYNC_LABEL_NO_SAM,   // ★ V12 synchronous AM (amSync.ts)
 };
 

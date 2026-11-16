@@ -27,6 +27,7 @@ import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
 import { drmSanitise, drmIqSanitise } from './drm';   // ★ V12 DRM
 import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
 import { parseFreeDv, freedvSubMessage, type FreeDvChoice } from './freedv';   // ★ V12 FreeDV digital voice
+import { parseM17, m17StatusMessage } from './m17';   // ★ V12 M17 digital voice
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
@@ -128,6 +129,9 @@ export class VibeServerClient extends VibeServerWsClient {
   /** ★★ V12 FreeDV: AUTO or one sub-mode by hand (the fallback when AUTO cannot settle); null only asks for the current
    *  report (entering the mode, a reconnect). On a shared dial the choice is the room's, so it asks before tuning
    *  (dialChat ASK_SHARED_SETTINGS has "freedv_sub", as the server's list does). */
+  /** ★★ V12 M17: ask for the receiver's current report (entering the mode, a reconnect, a room already in M17). Nothing
+   *  to choose inside the mode, so nothing to gate. */
+  m17Status() { this.sendSpectrum(m17StatusMessage()); }
   freedvSub(sub: FreeDvChoice | null) {
     if (sub && this.askBlocked()) return;
     this.sendSpectrum(freedvSubMessage(sub));
@@ -506,6 +510,9 @@ export class VibeServerClient extends VibeServerWsClient {
         this.callbacks.onFreeDv?.(f);
         return true;
       }
+      /* ★★ V12 M17 — the receiver's report when it changes (searching / in sync, the callsigns, META, packets). A ghost
+       *  after leaving is the screen's to drop. */
+      case 'm17': { const f = parseM17(msg); if (f) this.callbacks.onM17?.(f); return true; }
       /* ★★ V12 what AUTO has done to this listener's passband — the sliders show it while it cuts (bwAuto.ts). */
       case 'bwauto': { const b = parseBwAuto(msg); if (b) this.callbacks.onBwAuto?.(b); return true; }
       /* ★ V12 AIS: a report about once a second — ITS ARRIVAL MEANS AIS IS ON (a second listener joining a radio somebody

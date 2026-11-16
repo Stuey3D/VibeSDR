@@ -191,7 +191,7 @@ const everyDecoderListed: [MissingDecoder] extends [never] ? true : MissingDecod
 
 /** Every demod the app can be in (sdrTypes' SDRMode, held to it exactly by `satisfies`). */
 export const DEMODS = { usb: 1, lsb: 1, am: 1, sam: 1, fm: 1, nfm: 1, cwu: 1, cwl: 1, wfm: 1, drm: 1,
-                        sau: 1, sal: 1, ecssu: 1, ecssl: 1, amst: 1, freedv: 1 } as const satisfies
+                        sau: 1, sal: 1, ecssu: 1, ecssl: 1, amst: 1, freedv: 1, m17: 1 } as const satisfies
   Record<SDRMode, 1>;
 
 /**

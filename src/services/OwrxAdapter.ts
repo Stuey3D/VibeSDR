@@ -127,6 +127,7 @@ const MODE_TO_WIRE: Record<SDRMode, string> = {
   // ★ The V12 synchronous AM family is VibeServer's own; the names pass through as an unlisted mode always did.
   sau: 'sau', sal: 'sal', ecssu: 'ecssu', ecssl: 'ecssl', amst: 'amst',
   freedv: 'freedv',   // ★ OpenWebRX's own FreeDV mode has this id too (still gated on its `modes` list)
+  m17: 'm17',         // ★ …and its own M17 (digiham) — likewise gated on its `modes` list
 };
 
 const OWRX_CAPS: BackendCapabilities = {
