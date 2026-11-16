@@ -249,6 +249,16 @@ int main() {
         CHECK(!t.aircraft().at(A).cb, "no Comm-B state until a reply");
     }
 
+    // ── 9. The owner's switch off: the reply is still the aircraft's (altitude/squawk), the MB field is not read ──
+    {
+        Tracker t;
+        t.setCommB(false);
+        t.accept(allCall(A), 0);
+        CHECK(t.accept(cbFrame(A, mb60(10, 300, 0.80, 0)), 1), "switched off: the reply still counts for the aircraft");
+        CHECK(!t.accept(cbFrame(A, mb60(10, 300, 0.80, 0), 20, 0x60), 1), "switched off: no data-parity lookup either");
+        CHECK(!t.aircraft().at(A).cb && t.commbStats().fields == 0, "switched off: nothing read, nothing kept");
+    }
+
     printf("%s: %d checks, %d failed\n", fails ? "FAIL" : "PASS", checks, fails);
     return fails ? 1 : 0;
 }

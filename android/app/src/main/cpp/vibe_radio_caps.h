@@ -59,7 +59,7 @@ inline const std::vector<const char*>& allModes() {
     static const std::vector<const char*> v = {
         "wfm", "rds", "nfm", "tone", "am", "usb", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "lsb", "cwu", "cwl",
         "drm", "freedv", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
-        "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb",
+        "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb",
     };
     return v;
 }
@@ -162,7 +162,7 @@ inline Caps compute(const Facts& f) {
             for (const auto& x : R) v.push_back({ (uint32_t)std::min(4.0e9, x.lo), (uint32_t)std::min(4.0e9, x.hi) });
             return vibedab::radioCanDab(v.data(), v.size(), rateKnown ? (uint32_t)f.maxRateHz : vibedab::kMinCaptureHz);
         }
-        if (id == "adsb") return holds(R, 1089e6, 1091e6) && rateAtLeast(2.4e6 - 1000);
+        if (id == "adsb" || id == "commb") return holds(R, 1089e6, 1091e6) && rateAtLeast(2.4e6 - 1000);
         if (id == "ais" || id == "aisstore") return d != "airspyhf" && holds(R, 161.95e6, 162.05e6);
         if (id == "ism" || id == "lora") {
             if (!rateAtLeast(vibeism::kMinRateHz)) return false;
@@ -193,7 +193,7 @@ inline Caps compute(const Facts& f) {
     auto drop = [&](const char* child, const char* parent) {
         if (!c.has(parent)) c.modes.erase(std::remove(c.modes.begin(), c.modes.end(), std::string(child)), c.modes.end());
     };
-    drop("rds", "wfm"); drop("tone", "nfm"); drop("lora", "ism"); drop("aisstore", "ais"); drop("spotsband", "spots");
+    drop("rds", "wfm"); drop("tone", "nfm"); drop("lora", "ism"); drop("aisstore", "ais"); drop("spotsband", "spots"); drop("commb", "adsb");
 
     // ── the settings ──
     Settings& s = c.s;

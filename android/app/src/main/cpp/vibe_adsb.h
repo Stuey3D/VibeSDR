@@ -653,6 +653,8 @@ public:
      *  a global decode that lands implausibly far away. */
     void setReceiver(double lat, double lon) { haveRx_ = true; rxLat_ = lat; rxLon_ = lon; }
     void setMaxRangeNm(double nm) { maxRangeNm_ = nm; }
+    /** ★ V12 the owner's "commb" switch (Setup → Modes and decoders, under ADS-B): off = MB fields are not read. */
+    void setCommB(bool on) { commbOn_ = on; }
 
     /** Judge and apply one frame. `now` in seconds. Returns true if it was believed. */
     bool accept(const Frame& f, double now) {
@@ -689,7 +691,7 @@ public:
         if (!known(s, now)) {
             // ★ V12 Comm-B data parity: the radar asked the aircraft to overlay its parity with the address XOR the
             //   requested register's number in the top 8 bits — exactly one register giving a known aircraft says which
-            if (df == 20 || df == 21) {
+            if ((df == 20 || df == 21) && commbOn_) {
                 for (int r = 0; r < commb::kRegs; ++r) {
                     const uint32_t c = s ^ (uint32_t(commb::regCode(r)) << 16);
                     if (!known(c, now)) continue;
@@ -706,7 +708,7 @@ public:
             a.onGround = (df == 4 || df == 20) && (m[0] & 7) == 1 ? true : a.onGround;
         }
         if (df == 5 || df == 21) a.squawk = squawk13(bits(m, 20, 32));
-        if (df == 20 || df == 21) commB(a, m, now, dp >= 0 ? commb::regCode(dp) : -1);
+        if ((df == 20 || df == 21) && commbOn_) commB(a, m, now, dp >= 0 ? commb::regCode(dp) : -1);
         ++good_;
         return true;
     }
@@ -1001,6 +1003,7 @@ private:
     double maxRangeNm_ = 400;
     uint64_t good_ = 0, rejected_ = 0, repaired_ = 0;
     commb::Stats cbStats_;
+    bool commbOn_ = true;
 };
 
 } // namespace vibeadsb

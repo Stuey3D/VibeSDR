@@ -15194,7 +15194,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
         const double runRate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
-        g_adsb.start(runRate, g_bgLat.load(), g_bgLon.load());
+        g_adsb.start(runRate, g_bgLat.load(), g_bgLon.load(), !vsModeBlocked("commb"));   // ★ V12 Comm-B, the owner's switch under ADS-B
         adsbLastReport_ = adsbLastGain_ = nowSecs();
         g_adsbMode.store(true);
         if (adsbGainIdx_ >= 0) LocalSdrShim::instance().setGain(adsbGainSet_);
