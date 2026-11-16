@@ -27,6 +27,9 @@ export interface IsmDevice {
   /** ★ V12 the ISM map: 1 = the position is a person's, rounded to ~1 km by the server (vibe_lora_track.h publishedPos);
    *  `ntype` what the node is — repeater / room / sensor / companion. */
   approx?: number; ntype?: string;
+  /** ★ V12 LoRa-APRS / FANET / MeshCom (vibe_lora_ham.h): movement (km/h, °, m/s), a FANET weather station's wind, the
+   *  APRS symbol and digipeater path, and `online` = a FANET pilot's own public-tracking bit (exact position). */
+  speed?: number; course?: number; climb?: number; sym?: string; path?: string; online?: number;
 }
 /** A public mesh message (Meshtastic's default channel, MeshCore's Public channel — nothing else is ever sent). */
 export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number }
@@ -55,9 +58,11 @@ export const ISM_KINDS: Array<{ id: string; label: string }> = [
   { id: 'keyfob', label: 'KEY FOB' }, { id: 'meter', label: 'METER' },
   // ★ V12 LoRa (868 / 433 / 915 bands): the mesh networks, LoRaWAN (with any LoRa frame we cannot name), the public messages
   { id: 'meshtastic', label: 'MESHTASTIC' }, { id: 'meshcore', label: 'MESHCORE' }, { id: 'lorawan', label: 'LORAWAN' },
+  // ★ V12 2026-11-16: the amateur LoRa networks and FANET's paragliders (vibe_lora_ham.h)
+  { id: 'loraaprs', label: 'LORA APRS' }, { id: 'meshcom', label: 'MESHCOM' }, { id: 'fanet', label: 'FANET' },
   { id: 'msgs', label: 'MESSAGES' },
 ];
-export const LORA_KINDS = ['meshtastic', 'meshcore', 'lorawan', 'lora'];
+export const LORA_KINDS = ['meshtastic', 'meshcore', 'lorawan', 'lora', 'loraaprs', 'meshcom', 'fanet'];
 
 /** A report from the wire, sanitised: only plain fields of the types we read, at most 300 devices. */
 export function ismSanitise(msg: any): IsmReport | null {
@@ -107,14 +112,19 @@ function loraFields(d: any, num: (v: any) => number | undefined, str: (v: any, n
     posAge: num(d.posAge), prec: num(d.prec), alt: num(d.alt), battPct: num(d.battPct), volt: num(d.volt), chUtil: num(d.chUtil), hops: num(d.hops),
     fcnt: num(d.fcnt), fport: num(d.fport), encLen: num(d.encLen), priv: num(d.priv), sf: num(d.sf), bw: num(d.bw), cr: num(d.cr), sync: str(d.sync, 2),
     temp: num(d.temp), hum: num(d.hum), baro: num(d.baro), msgs: msgs.length ? msgs : undefined,
+    speed: num(d.speed), course: num(d.course), climb: num(d.climb), wind: num(d.wind), dir: num(d.dir), gust: num(d.gust),
+    sym: str(d.sym, 2), path: str(d.path, 60), online: num(d.online),
     approx: num(d.approx), ntype: NODE_TYPES.includes(d.ntype) ? d.ntype : undefined,
   };
 }
-export const NODE_TYPES = ['repeater', 'room', 'sensor', 'companion'];
+export const NODE_TYPES = ['repeater', 'room', 'sensor', 'companion', 'aircraft'];
 /** ★ V12 LoRa: does this row go on the map? */
 export function ismOnMap(d: IsmDevice): boolean { return d.lat !== undefined && d.lon !== undefined; }
 /** The network's name as the list says it. */
-export function ismNetName(kind: string): string { return kind === 'meshtastic' ? 'Meshtastic' : kind === 'meshcore' ? 'MeshCore' : kind === 'lorawan' ? 'LoRaWAN' : 'LoRa'; }
+export function ismNetName(kind: string): string {
+  return kind === 'meshtastic' ? 'Meshtastic' : kind === 'meshcore' ? 'MeshCore' : kind === 'lorawan' ? 'LoRaWAN'
+    : kind === 'loraaprs' ? 'LoRa APRS' : kind === 'meshcom' ? 'MeshCom' : kind === 'fanet' ? 'FANET' : 'LoRa';
+}
 
 /** ★ A LoRa row's detail (the hover / tap): the radio side, then what the node published, then its recent public messages. */
 export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | null, withMsgs = true): string[] {
@@ -135,12 +145,17 @@ export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | 
   if (d.battPct !== undefined) me.push(d.battPct > 100 ? 'powered' : `battery ${d.battPct} %`);
   if (d.volt !== undefined) me.push(`${d.volt.toFixed(2)} V`);
   if (d.chUtil !== undefined) me.push(`channel use ${d.chUtil.toFixed(0)} %`);
+  // ★ V12 LoRa-APRS / FANET / MeshCom: how it is moving, a weather station's wind, the digipeaters it came by
+  if (d.speed !== undefined && d.speed >= 1) me.push(`${Math.round(d.speed)} km/h${d.course !== undefined ? ' ' + compass(d.course) : ''}`);
+  if (d.climb !== undefined && Math.abs(d.climb) >= 0.1) me.push(`${d.climb > 0 ? '+' : ''}${d.climb.toFixed(1)} m/s`);
+  if (d.kind === 'fanet' && d.wind !== undefined) me.push(`wind ${Math.round(d.wind)} km/h${d.dir !== undefined ? ' from ' + Math.round(d.dir) + '°' : ''}`);
+  if (d.path) me.push(`via ${d.path}`);
   if (me.length) out.push(me.join(' · '));
   if (d.lat !== undefined && d.lon !== undefined) {
     let p = `${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}`;
     if (d.alt !== undefined) p += ` · ${Math.round(d.alt)} m`;
     if (rx) { const k = rangeKm(rx, d.lat, d.lon); p += ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}`; }
-    if (d.approx) p += ' · approximate (~1 km): a companion node is a person';
+    if (d.approx) p += d.kind === 'fanet' ? ' · approximate (~1 km): the pilot has not chosen public tracking' : ' · approximate (~1 km): a companion node is a person';
     else if (d.prec && d.prec < 32) p += ' · position deliberately approximate';
     out.push(p);
   }
@@ -568,7 +583,8 @@ export class IsmBox {
 //     is drawn where the server put it (~1 km) and labelled approximate.
 //  ★★★ NO MESSAGE CONTENT ON THE MAP — the card is the node's own description and the radio side, never its texts.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const MAP_COLOURS: Record<string, string> = { meshtastic: '#67ea94', meshcore: '#ff9f43', lorawan: '#7ab8ff', lora: '#b9a7ff' };
+const MAP_COLOURS: Record<string, string> = { meshtastic: '#67ea94', meshcore: '#ff9f43', lorawan: '#7ab8ff', lora: '#b9a7ff',
+  loraaprs: '#ff6fb5', meshcom: '#5fd3e8', fanet: '#ffe066' };
 function escM(s: string): string { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 /** The node's type: the server's `ntype`, else from its role (an older server). */
 export function ismNodeType(d: { ntype?: string; role?: string; kind: string }): string {
@@ -579,7 +595,7 @@ export function ismNodeType(d: { ntype?: string; role?: string; kind: string }):
   if (r === 'sensor') return 'sensor';
   return 'companion';
 }
-export const NODE_TYPE_WORD: Record<string, string> = { repeater: 'repeater', room: 'room server', sensor: 'sensor', companion: 'companion' };
+export const NODE_TYPE_WORD: Record<string, string> = { repeater: 'repeater', room: 'room server', sensor: 'sensor', companion: 'companion', aircraft: 'aircraft' };
 /** ★ How strongly a node is drawn by how long since it was heard: full for 15 min, then down to 0.35 at 24 h. */
 export function ismAgeOpacity(seen: number): number {
   if (!(seen > 900)) return 1;
@@ -598,6 +614,9 @@ const GLYPH: Record<string, string> = {
   sensor: '<path d="M11 5.5 V13" stroke="#111" stroke-width="2.6" stroke-linecap="round"/><circle cx="11" cy="15" r="2.6" fill="#111"/>',
   // a person
   companion: '<circle cx="11" cy="7.6" r="2.6" fill="#111"/><path d="M6.6 16.6 a4.4 4.4 0 0 1 8.8 0 Z" fill="#111"/>',
+  // ★ V12 FANET: a paraglider's wing over its pilot
+  aircraft: '<path d="M4.5 9.5 Q11 3.8 17.5 9.5" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>'
+          + '<path d="M6 9.5 L11 15 L16 9.5" stroke="#111" stroke-width="1" fill="none"/><circle cx="11" cy="16" r="1.8" fill="#111"/>',
 };
 /** The marker: the type's glyph on a disc in the network's colour (a square for infrastructure, a circle for a person),
  *  fading with age; a person's dashed ring says "approximate". */
@@ -605,7 +624,7 @@ export function ismMapIcon(d: IsmDevice): { html: string; w: number; h: number }
   const c = MAP_COLOURS[d.kind] || '#ffb833';
   const t = ismNodeType(d);
   const op = ismAgeOpacity(d.seen).toFixed(2);
-  const shape = t === 'companion'
+  const shape = t === 'companion' || t === 'aircraft'
     ? `<circle cx="11" cy="11" r="9.5" fill="${c}" stroke="#111" stroke-width="1.2"/>`
     : `<rect x="1.5" y="1.5" width="19" height="19" rx="4.5" fill="${c}" stroke="#111" stroke-width="1.2"/>`;
   const ring = d.approx ? `<circle cx="11" cy="11" r="10.6" fill="none" stroke="${c}" stroke-width="1" stroke-dasharray="2 2"/>` : '';

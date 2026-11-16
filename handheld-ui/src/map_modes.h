@@ -687,7 +687,9 @@ inline void mapIsmBuild(App&, const RadioState& s, std::vector<MapListRow>& rows
         const std::string bl = mapIsmBandLabel(d["freq"].num(0), mapModes().ismBands);
         row.sub = (bl.empty() ? "" : bl + " | ") + d["line"].str().substr(0, 120);
         const std::string kind = d["kind"].str();
-        row.col = kind == "meshtastic" || kind == "meshcore" || kind == "lorawan" ? rgb(0x7cff9b) : kind == "meter" ? rgb(0x9fb3c8) : th::amber;
+        // ★ V12 LoRa-APRS / MeshCom (amateur, pink / cyan) and FANET (paragliders, yellow) — the web map's colours
+        row.col = kind == "meshtastic" || kind == "meshcore" || kind == "lorawan" ? rgb(0x7cff9b) : kind == "meter" ? rgb(0x9fb3c8)
+                : kind == "loraaprs" ? rgb(0xff6fb5) : kind == "meshcom" ? rgb(0x5fd3e8) : kind == "fanet" ? rgb(0xffe066) : th::amber;
         double lat, lon;
         if (mapPos(d, lat, lon)) {
             row.pos = true; row.lat = lat; row.lon = lon; withPos++;
