@@ -7,7 +7,7 @@
 //      (≤ 799 hPa, ≥ 1201 hPa, "visibility more than", negative temperatures, water level −10 m and +30 m).
 //   2. FI 11 (Circ.236): lat-before-lon and the offset encodings.
 //   3. Type 6 (addressed): the longer header, the destination MMSI.
-//   4. Area notices (FI 22 / 23): the description table, start time, duration ("until cancelled"), a circle's place
+//   4. Area notices (FI 22 / 23): the description table, start time, duration (0 = cancelled), a circle's place
 //      and radius with its scale factor, a rectangle, a text sub-area joined to the words.
 //   5. Text description (FI 29).
 //   6. The type 21 status byte: light on / off / fault, RACON, alarm; a page other than 7 is not read.
@@ -182,7 +182,9 @@ static void testNotice() {
     R.u(1, 3); R.u(2, 2); R.s(std::lround(-4.0 * 60000), 25); R.s(std::lround(50.2 * 60000), 24); R.u(4, 3); R.u(30, 8); R.u(50, 8); R.u(0, 9); R.u(0, 5);
     R.pad8();
     CHECK(am::parse(R.bytes(), k, m, n) == 2 && n.what == 37 && n.shape == 1 && std::abs(n.sizeM - 5000) < 0.1 && n.durationMin == 262143, "rectangle 5 km, firing area");
-    CHECK(am::noticeLine(n).find("Restricted: firing danger area") == 0 && am::noticeLine(n).find("until cancelled") != std::string::npos, "until cancelled");
+    CHECK(am::noticeLine(n).find("Restricted: firing danger area") == 0 && am::noticeLine(n).find(", for") == std::string::npos, "262143 = no duration given: %s", am::noticeLine(n).c_str());
+    n.durationMin = 0;
+    CHECK(am::noticeLine(n).find(", CANCELLED") != std::string::npos, "duration 0 = the notice is cancelled");
     CHECK(std::string(am::noticeName(22)).empty() && std::string(am::noticeName(126)) == "Cancelled", "reserved code empty; 126 cancelled");
     n.what = 22; n.text.clear(); n.shape = -1;
     CHECK(am::noticeLine(n).find("Area notice 22") == 0, "a reserved code still says what it is");

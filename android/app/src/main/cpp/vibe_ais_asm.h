@@ -64,7 +64,7 @@ struct Notice {
     int fi = 0;                 ///< 22/23 area notice · 29/30 text
     int what = -1;              ///< the notice description code (0–127), −1 for text
     int month = 0, day = 0, hour = 24, minute = 60;
-    int durationMin = -1;       ///< −1 not given; 262143 = until cancelled
+    int durationMin = -1;       ///< minutes; −1 / 262143 not given; 0 = this notice is cancelled
     int shape = -1;             ///< 0 circle/point · 1 rectangle · 2 sector · 3 line · 4 polygon
     double lat = NAN, lon = NAN, sizeM = NAN;
     uint32_t to = 0;            ///< addressed: the destination MMSI
@@ -130,7 +130,7 @@ inline bool metFi31(const Bits& B, size_t a, Met& m) {
     { const uint32_t v = B.u(a + 266, 4); if (v <= 12) m.sea = int16_t(v); }           // 13 n/a
     { const int32_t v = B.s(a + 270, 10); if (v >= -100 && v <= 500) m.water10 = int16_t(v); }   // 501 n/a
     { const uint32_t v = B.u(a + 280, 3); if (v >= 1 && v <= 6) m.precip = int16_t(v); }   // 7 n/a
-    { const uint32_t v = B.u(a + 283, 9); if (v <= 500) m.sal10 = int16_t(v); }        // 510 n/a, 511 no sensor
+    { const uint32_t v = B.u(a + 283, 9); if (v <= 501) m.sal10 = int16_t(v); }        // 501 = 50.1 ‰ or more, 510 n/a, 511 no sensor
     { const uint32_t v = B.u(a + 292, 2); if (v <= 1) m.ice = int16_t(v); }            // 3 n/a
     return true;
 }
@@ -364,8 +364,8 @@ inline std::string noticeLine(const Notice& n) {
     if (n.what >= 0 && n.day >= 1 && n.hour <= 23 && n.minute <= 59) {
         char b[48]; std::snprintf(b, sizeof b, "from %02d:%02d UTC %02d-%02d", n.hour, n.minute, n.day, n.month);
         s += dot; s += b;
-        if (n.durationMin == 262143) s += ", until cancelled";
-        else if (n.durationMin > 0) s += n.durationMin % 60 ? ", for " + std::to_string(n.durationMin) + " min" : ", for " + std::to_string(n.durationMin / 60) + " h";
+        if (n.durationMin == 0) s += ", CANCELLED";
+        else if (n.durationMin > 0 && n.durationMin < 262143) s += n.durationMin % 60 ? ", for " + std::to_string(n.durationMin) + " min" : ", for " + std::to_string(n.durationMin / 60) + " h";
     }
     return s;
 }
