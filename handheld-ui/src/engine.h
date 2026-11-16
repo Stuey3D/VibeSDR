@@ -12,6 +12,7 @@
 #pragma once
 #include "http.h"
 #include "json.h"
+#include "freedv.h"
 #include "ws.h"
 
 #include <atomic>
@@ -28,8 +29,10 @@
 
 namespace hh {
 
-/** The per-mode passband the server applies on a mode change (web/client/src/spectrum.ts MODE_BANDWIDTHS). */
-inline bool modePassband(const std::string& m, int& lo, int& hi) {
+/** The per-mode passband the server applies on a mode change (web/client/src/spectrum.ts MODE_BANDWIDTHS). FreeDV's
+ *  side follows the dial (`hz`, freedv.h: LSB below 10 MHz) until the server's report says otherwise. */
+inline bool modePassband(const std::string& m, int& lo, int& hi, double hz = 0) {
+    if (m == "freedv") { freedvPassband(freedvSidebandAt(hz), lo, hi); return true; }
     struct E { const char* m; int lo, hi; };
     static const E t[] = {
         {"usb", 50, 2700}, {"lsb", -2700, -50}, {"am", -5000, 5000}, {"sam", -5000, 5000},
@@ -130,6 +133,8 @@ public:
 
     // ── what the person did ──
     void tune(double hz) {
+        // ★ V12 FreeDV: crossing 10 MHz flips the side at once (the server does the same and reports it)
+        if (st_.mode == "freedv" && std::string(freedvSidebandAt(hz)) != freedvSidebandAt(st_.vfoHz)) freedvPassband(freedvSidebandAt(hz), st_.bwLow, st_.bwHigh);
         st_.vfoHz = hz;                                // ★ the readout moves at once (the app predicts the same)
         /* ★★★ AT MOST ONE TUNE EVERY kTuneGapS, ALWAYS THE LATEST (Stuart, 2026-11-14, handheld74: spinning the stick
          *  "bounce[d] up and down the band and keep bouncing about for a few seconds after I stopped"). A tune a frame
@@ -148,13 +153,14 @@ public:
     }
     void setMode(const std::string& m) {
         int lo, hi;
-        if (!modePassband(m, lo, hi)) return;
+        if (!modePassband(m, lo, hi, st_.vfoHz)) return;
         st_.mode = m; st_.bwLow = lo; st_.bwHigh = hi;
         char b[256];
         // ★ two messages, as the web client: the server ignores bandwidth on a tune that changes mode
         std::snprintf(b, sizeof b, "{\"type\":\"tune\",\"frequency\":%.0f,\"mode\":%s,\"modeSet\":1}", st_.vfoHz, jsonQuote(m).c_str());
         spec_.sendText(b);
         setBandwidth(lo, hi);
+        if (m == "freedv") spec_.sendText(freedvSubMessage(""));   // ★ V12 FreeDV: ask for the current report (sub, side, sync)
     }
     void setBandwidth(int lo, int hi) {
         st_.bwLow = lo; st_.bwHigh = hi;
@@ -348,7 +354,7 @@ private:
             }
             st_.locked = j["locked"].boolean(); st_.shared = j["shared"].boolean();
             const std::string m = j["mode"].str();
-            if (!m.empty() && m != st_.mode) { st_.mode = m; modePassband(m, st_.bwLow, st_.bwHigh); }
+            if (!m.empty() && m != st_.mode) { st_.mode = m; modePassband(m, st_.bwLow, st_.bwHigh, st_.vfoHz); }
             if (j.has("gainNow")) st_.gainNow = (int)j["gainNow"].num();
             if (j.has("agc")) st_.agc = j["agc"].boolean();
             st_.configSeq++;
@@ -376,6 +382,9 @@ private:
             if (j["radio"].has("driver")) st_.hwDriver = j["radio"]["driver"].str();
         } else if (t == "sig") {
             st_.chanDb = j["chan"].num(st_.chanDb); st_.floorDb = j["floor"].num(st_.floorDb);
+        } else if (t == "freedv") {
+            // ★ V12 FreeDV: the server's side wins — the drawn passband follows its report
+            if (st_.mode == "freedv" && (j["sb"].str() == "lsb" || j["sb"].str() == "usb")) freedvPassband(j["sb"].str(), st_.bwLow, st_.bwHigh);
         } else if (t == "rds") {
             st_.rdsPs = j["ps"].str(); st_.rdsRt = j["radiotext"].str(); st_.rdsStereo = j["stereo"].boolean();
         }

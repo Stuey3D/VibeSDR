@@ -452,6 +452,9 @@ struct Inputs {
     double drmSid = 0;
     // tone ({"type":"tone","label":…})
     bool toneNew = false; std::string toneLabel;
+    // ★ V12 FreeDV: the line while in the mode (freedv.h freedvVts — "FreeDV · searching", "FreeDV 700D · 6 dB · G4ABC"),
+    //   "" outside it. A state, not an arrival: the line is held for as long as the mode is on.
+    std::string fdvLine;
     const std::vector<VtsStation>* stations = nullptr;   // ★ the bookmarks + EiBi (null = none, as the goldens run)
     // notice ({"type":"notice"} — `why` (a refusal) or `vts` (a server line for the bar); `ask` refusals are dropped)
     bool noticeNew = false; std::string noticeText;
@@ -492,6 +495,7 @@ public:
         else if (in.dabNew) onDab(in);
         if (in.drmNew) onDrm(in);
         else if (in.mode != "drm" && live_.badge == "DRM") dropDrm();   // ★ leaving DRM takes its station with it
+        if (in.fdvLine != fdvLine_) onFreeDv(in.fdvLine);               // ★ V12 FreeDV owns the bar in its mode, gone on leaving
         if (in.toneNew) setTone(in.mode == "nfm" || in.mode == "fm" ? in.toneLabel : "");
         if (in.noticeNew && !in.noticeText.empty()) show(in.noticeText, 7000);
         ownNotices(in);
@@ -527,6 +531,8 @@ private:
     PsStabiliser ps_;
     double psTickAt_ = 0;
     bool dabOn_ = false;
+    // ★ V12 FreeDV's line (Inputs::fdvLine)
+    std::string fdvLine_;
     // the tone
     std::string toneLabel_;
     uint64_t toneKey_ = 0;
@@ -723,6 +729,23 @@ private:
         l.iso = in.drmCountry;
         live_ = l;
     }
+    /** ★ V12 FreeDV: held like a live station (a notice still takes its turn and the line comes back after it), text
+     *  only, no mark. It names nothing a bookmark should talk over: while it is up, the bookmark / EiBi pop-up waits. */
+    void onFreeDv(const std::string& line) {
+        fdvLine_ = line;
+        if (line.empty()) {
+            if (liveBadge_ == "FreeDV") { liveBadge_.clear(); hasLiveBadge_ = false; liveRef_.clear(); }
+            if (live_.badge == "FreeDV") live_ = Live{};
+            return;
+        }
+        liveRef_ = line;
+        liveBadge_ = "FreeDV"; hasLiveBadge_ = true;
+        ps_.reset(); liveCall_.clear(); psTickAt_ = 0;
+        Live l;
+        l.text = line;
+        l.badge = "FreeDV";
+        live_ = l;
+    }
     void dropDrm() {
         if (liveBadge_ == "DRM") { liveBadge_.clear(); hasLiveBadge_ = false; liveRef_.clear(); }
         if (live_.badge == "DRM") live_ = Live{};
@@ -762,7 +785,7 @@ private:
             Notif x;
             x.key = ++key_; x.name = name; x.rt = live_.text; x.id = vtsId; x.idLabel = isDab ? "SId" : "PI";
             x.kind = Notif::StationOn; x.hold = true;
-            x.badge = isDrm ? "" : hasLiveBadge_ ? liveBadge_ : (!vtsId.empty() ? "RDS" : "");   // ★ no DRM mark (the web has none)
+            x.badge = isDrm || liveBadge_ == "FreeDV" ? "" : hasLiveBadge_ ? liveBadge_ : (!vtsId.empty() ? "RDS" : "");   // ★ no DRM mark (the web has none)
             x.iso = iso;
             x.annunciators = ann; x.tp = live_.tp; x.ta = live_.ta; x.af = live_.af;
             x.dab = dab; x.dabPlus = plus;

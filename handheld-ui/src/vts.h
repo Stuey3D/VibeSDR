@@ -19,6 +19,7 @@
 // ★ Include AFTER the App class (it defines App::drawVts). State lives here (vtsState), not in App.
 #pragma once
 #include "vts_core.h"
+#include "freedv.h"
 #include "bm_state.h"
 #include "vts_marks.h"
 
@@ -61,7 +62,8 @@ struct Arrival {
 struct State {
     Screen screen;
     Bar bar;
-    Arrival rds, dab, dabOff, dabErr, drm, tone, notice, device;
+    Arrival rds, dab, dabOff, dabErr, drm, tone, notice, device, fdv;
+    bool fdvHave = false; FreeDvState fdvLast;   // ★ V12 the newest FreeDV report THIS time in the mode (none = searching)
     bool wasConnected = false;
     double listsAt = -1e9;   // when the bookmarks / EiBi were last asked for (drawVts)
     std::map<std::pair<const void*, char32_t>, bool> glyphs;   // TTF_GlyphIsProvided32, cached
@@ -164,6 +166,15 @@ inline Inputs readInputs(State& st, const RadioState& s, double nowMs, int regio
                 in.drmSid = (double)std::strtoul(j["serviceId"].str().c_str(), nullptr, 16);
             }
         }
+    }
+    // ★ V12 FreeDV — the report while in the mode; one from before this time in it is not about it (the mode asks
+    //   afresh on entry: engine.h setMode), so the line starts at "FreeDV · searching"
+    {
+        const Json& j = s.msg("freedv");
+        const bool fresh = st.fdv(j, j["sub"].str() + "\x1f" + j["sb"].str() + "\x1f" + j["state"].str() + "\x1f" + j["mode"].str() + "\x1f" + numSig(j, "snr") + j["text"].str());
+        if (s.mode != "freedv") st.fdvHave = false;
+        else if (fresh) { FreeDvState f; if (parseFreeDv(j, f)) { st.fdvLast = f; st.fdvHave = true; } }
+        in.fdvLine = s.mode == "freedv" ? freedvVts(st.fdvHave ? &st.fdvLast : nullptr) : "";
     }
     // tone
     {

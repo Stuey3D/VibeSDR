@@ -14,6 +14,9 @@
  *   B hz region | key primary secondary         the band announcement (SDRScreen showBandNotif's text, vtsCheck's order)
  *   E ecc pi | iso                              eccPiToIso
  *   C max s | out   ·   D max s | out           cleanKeepSpacing / dabSafeText
+ *   FV json | ok sub sb sync mode snr text vts  parseFreeDv + freedvVts (src/services/freedv.ts; snr '-' = none)
+ *   FO json | subs                              freedvOffered (subs comma-joined, '-' = not offered)
+ *   FS hz sb | side lo hi                       freedvSidebandAt(hz) + freedvPassband(sb)
  * Run: node --no-warnings --import ./ts_resolve.mjs --import ./ts_transform.mjs gen_vts_golden.ts <outFile>
  */
 import { writeFileSync } from 'node:fs';
@@ -24,6 +27,7 @@ import { dabSafeText } from '../../src/services/dabTypes.ts';
 import { eccPiToIso } from '../../src/services/rdsCountry.ts';
 import { getBandsAtRegion, type Band } from '../../src/constants/bandPlan.ts';
 import { fmtBandFreq } from '../../src/services/stations.ts';
+import { parseFreeDv, freedvVts, freedvOffered, freedvSidebandAt, freedvPassband } from '../../src/services/freedv.ts';
 
 const outFile = process.argv[2] ?? 'vts_golden.txt';
 const L: string[] = [];
@@ -134,6 +138,42 @@ for (const region of [0, 1, 2, 3]) {
 for (const ecc of [0, 0xA1, 0xE0, 0xE1, 0xE2, 0xE3, 0xF0, 0xF4, 0xB0]) for (const pi of ['', 'C201', '1234', 'D3A1', 'F0F0', '0ABC', 'e123']) L.push(`E ${ecc} ${hex(pi)} | ${hex(eccPiToIso(ecc, pi || undefined))}`);
 const RAW = ['BBC R2  ', '\u0001PS\u0007', ' Now‮playing​ ', 'Ärzte\u0085', 'x'.repeat(80), '\tTAB\t', '﻿BOM'];
 for (const s of RAW) for (const max of [16, 64]) { L.push(`C ${max} ${hex(s)} | ${hex(cleanKeepSpacing(s, max))}`); L.push(`D ${max} ${hex(s)} | ${hex(dabSafeText(s, max))}`); }
+
+// ── V12 FreeDV (freedv.ts → handheld-ui/src/freedv.h) ──
+const FDV: unknown[] = [
+  { type: 'freedv', sub: 'auto', sb: 'usb', state: 'search', mode: '' },
+  { type: 'freedv', sub: '1600', sb: 'lsb', state: 'search', mode: '' },
+  { type: 'freedv', sub: '700E', sb: 'usb', state: 'search', mode: '700D', snr: 4 },
+  { type: 'freedv', sub: 'auto', sb: 'usb', state: 'sync', mode: '700D', snr: 6, text: 'G4ABC' },
+  { type: 'freedv', sub: 'auto', sb: 'lsb', state: 'sync', mode: '700E', snr: 5.5 },
+  { type: 'freedv', sub: '700D', sb: 'usb', state: 'sync', mode: '700D', snr: -2.5, text: '  M0XYZ  ' },
+  { type: 'freedv', sub: 'auto', sb: 'usb', state: 'sync', mode: '1600', snr: 12.49, text: 'Ö3 G4\u0007ABC Ärzte' },
+  { type: 'freedv', sub: 'auto', sb: 'usb', state: 'sync', mode: '1600', text: 'x'.repeat(60) },
+  { type: 'freedv', sub: 'auto', sb: 'usb', state: 'sync', mode: '2020', snr: 3 },
+  { type: 'freedv', sub: 'nonsense', sb: 'xsb', state: 'sync', mode: '700E', snr: '7', text: 42 },
+  { type: 'freedv', state: 'sync', mode: '700D', text: '   ' },
+  { type: 'freedv' },
+  { type: 'drm', sub: 'auto' },
+  { sub: 'auto' },
+];
+for (const m of FDV) {
+  const st = parseFreeDv(m);
+  L.push(`FV ${hex(JSON.stringify(m))} | ` + (st
+    ? `1 ${st.sub} ${st.sb} ${st.sync ? 1 : 0} ${hex(st.mode)} ${st.snr === undefined ? '-' : st.snr} ${hex(st.text)} ${hex(freedvVts(st))}`
+    : `0 ${hex(freedvVts(null))}`));
+}
+const OFFERS: unknown[] = [
+  { modes: ['usb', 'freedv'], freedvSubs: ['700D', '700E', '1600'] },
+  { modes: ['usb', 'freedv'], freedvSubs: ['1600', '700D'] },
+  { modes: ['usb', 'freedv'], freedvSubs: ['2020', '700E'] },
+  { modes: ['usb', 'freedv'] },
+  { modes: ['usb', 'lsb'], freedvSubs: ['700D', '700E', '1600'] },
+  { freedvSubs: ['700D'] },
+  {},
+];
+for (const j of OFFERS) L.push(`FO ${hex(JSON.stringify(j))} | ${freedvOffered(j as never).join(',') || '-'}`);
+for (const hz of [0, -5, 1, 3573000, 7177000, 9999999, 10000000, 14236000, 28330000])
+  for (const sb of ['usb', 'lsb'] as const) { const [lo, hi] = freedvPassband(sb); L.push(`FS ${hz} ${sb} | ${freedvSidebandAt(hz)} ${lo} ${hi}`); }
 
 writeFileSync(outFile, L.join('\n') + '\n');
 console.error(`vts golden: ${L.length} lines → ${outFile}`);

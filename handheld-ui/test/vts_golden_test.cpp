@@ -3,6 +3,7 @@
 // rules and timings (SDRScreen.tsx / VTSBar.tsx have no TS that runs outside React, so those are stated here).
 // Silent: no GL, no audio.   handheld-ui/test/run_vts_golden.sh
 #include "../src/vts_core.h"
+#include "../src/freedv.h"
 
 #include <cstdio>
 #include <fstream>
@@ -94,6 +95,22 @@ static int golden(const char* path) {
         } else if (op == "C" || op == "D") {
             size_t mx; std::string s; is >> mx >> s;
             got = hex(op == "C" ? cleanKeepSpacing(unhex(s), mx) : dabSafeText(unhex(s), mx));
+        } else if (op == "FV") {
+            std::string js; is >> js;
+            hh::FreeDvState st;
+            if (hh::parseFreeDv(hh::Json::parse(unhex(js)), st))
+                got = "1 " + st.sub + " " + st.sb + " " + (st.sync ? "1" : "0") + " " + hex(st.mode) + " " + (st.hasSnr ? std::to_string(st.snr) : "-")
+                    + " " + hex(st.text) + " " + hex(hh::freedvVts(&st));
+            else got = "0 " + hex(hh::freedvVts(nullptr));
+        } else if (op == "FO") {
+            std::string js; is >> js;
+            std::string j;
+            for (auto& x : hh::freedvOffered(hh::Json::parse(unhex(js)))) j += (j.empty() ? "" : ",") + x;
+            got = j.empty() ? "-" : j;
+        } else if (op == "FS") {
+            double hz; std::string sb; is >> hz >> sb;
+            int lo, hi; hh::freedvPassband(sb, lo, hi);
+            got = std::string(hh::freedvSidebandAt(hz)) + " " + std::to_string(lo) + " " + std::to_string(hi);
         } else { std::fprintf(stderr, "unknown op: %s\n", line.c_str()); fails++; continue; }
         expect(got == want, "line " + std::to_string(n) + ": " + lhs + "\n   want " + want + "\n   got  " + got);
     }
@@ -242,6 +259,24 @@ static void scenarios() {
         expect(r.bar.shown().has_value(), "DRM back on relock");
         r.in.mode = "usb"; r.step(600);
         expect(!r.bar.shown(), "leaving DRM clears it");
+    }
+    {   // ★ V12 FreeDV: held while in the mode, follows the report, a notice takes its turn, leaving clears it
+        Rig r; r.in.mode = "freedv"; r.in.vfoHz = 14236000; r.step(100);
+        r.in.fdvLine = hh::freedvVts(nullptr); r.step(400);
+        expect(r.line() == "FreeDV \xc2\xb7 searching", "FreeDV searching: " + r.line());
+        expect(r.bar.shown() && r.bar.shown()->badge.empty() && r.bar.shown()->hold, "FreeDV: held, no mark");
+        hh::FreeDvState f; f.sub = "1600"; r.in.fdvLine = hh::freedvVts(&f); r.step(100);
+        expect(r.line() == "FreeDV 1600 \xc2\xb7 searching", "FreeDV manual searching: " + r.line());
+        f.sub = "auto"; f.sync = true; f.mode = "700D"; f.hasSnr = true; f.snr = 6; f.text = "G4ABC";
+        r.in.fdvLine = hh::freedvVts(&f); r.step(100);
+        expect(r.line() == "FreeDV 700D \xc2\xb7 6 dB \xc2\xb7 G4ABC", "FreeDV in sync: " + r.line());
+        expect(r.sc.liveName() == r.in.fdvLine, "FreeDV holds the station display");
+        r.in.noticeNew = true; r.in.noticeText = "A server notice"; r.step(100);
+        expect(r.bar.shown() && r.bar.shown()->name == "A server notice", "a notice takes its turn");
+        r.step(7600);
+        expect(r.line() == "FreeDV 700D \xc2\xb7 6 dB \xc2\xb7 G4ABC", "FreeDV back after the notice: " + r.line());
+        r.in.mode = "usb"; r.in.fdvLine = ""; r.step(600);
+        expect(!r.bar.shown() && r.sc.liveName().empty(), "leaving FreeDV clears it");
     }
     {   // the tone, NFM only
         Rig r; r.in.mode = "nfm"; r.in.vfoHz = 145500000; r.step(100);
