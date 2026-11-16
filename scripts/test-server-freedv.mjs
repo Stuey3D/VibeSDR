@@ -165,7 +165,10 @@ async function scenario(label, args, tag, sb = 'usb') {
       const r = reps().slice(n0).filter((x) => x.state === 'sync').at(-1);
       ok(r && r.sub === 'auto' && typeof r.snr === 'number' && r.snr > 3, `…the report: sub auto, SNR ${r && r.snr} dB`);
       ok(r && r.sb === sb, `…demodulated on the ${sb.toUpperCase()} side, by FreeDV's convention (${r && r.sb})`);
-      ok(await until(() => reps().slice(n0).some((x) => x.text === 'VIBE TEST'), 30000), `…the station's text: ${JSON.stringify(reps().slice(n0).map((x) => x.text).filter(Boolean).at(-1))}`);
+      // ★ 50 s: the text is shown once the same line has come twice (vibe_freedv.h); one line takes ~7 s, the clip's 20 s
+      //   loop garbles one line each time round, and ~16 s after sync was measured on a clean feed (2026-11-16) —
+      //   30 s failed ~1 run in 6 with three servers running at once
+      ok(await until(() => reps().slice(n0).some((x) => x.text === 'VIBE TEST'), 50000), `…the station's text: ${JSON.stringify(reps().slice(n0).map((x) => x.text).filter(Boolean).at(-1))}`);
       L.aud.bin.length = 0;
       await sleep(3000);
       const pcm = await pcmOf(L.aud.bin);

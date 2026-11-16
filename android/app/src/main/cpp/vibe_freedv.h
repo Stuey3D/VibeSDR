@@ -294,6 +294,10 @@ public:
     int lockedSub() const { return locked_.load(std::memory_order_relaxed); }
     /** ★ The modem's SNR estimate in dB while in sync, else NaN. */
     float snrDb() const { return snr_.load(std::memory_order_relaxed); }
+    /** How many times AUTO has chosen sub-mode `s` since this receiver began (the tests: a false win shows here). */
+    int winsOf(int s) const { return s >= 0 && s < 4 ? wins_[s].load(std::memory_order_relaxed) : 0; }
+    /** AUTO winners that lost sync within kProbationSec and sent it back to the full search. */
+    int probationLosses() const { return probationLosses_.load(std::memory_order_relaxed); }
     /** Modems open right now — 3 while AUTO searches, 1 once locked (the test checks the others were closed). */
     int modemsOpen() const { return open_.load(std::memory_order_relaxed); }
 
@@ -306,6 +310,12 @@ private:
      *  a codec2 chirp if its squelch let that frame through. Reported and played only after 0.5 s held. */
     static constexpr double kHeldSec = 0.5;
     static constexpr double kRelockSec = 8.0;                // AUTO: this long without sync searches again
+    /* ★★ …EXCEPT A WINNER THAT DID NOT LAST. A sync held for a second can still be the wrong sub-mode's demodulator on a
+     *  marginal signal, or a fade at the very moment of the win. Waiting the full 8 s then is 8 s of silence on a station
+     *  that is still there. So a winner that decodes no clean frame for a second within 4 s of winning sends AUTO straight
+     *  back to the full search (counted: probationLosses()). A station that has held longer gets the patient 8 s. */
+    static constexpr double kProbationSec = 4.0, kProbationLostSec = 1.0;
+    // ★ "lost", for AUTO, is the time since the last clean frame (Modem::sinceGoodSec) — see decide()
     static constexpr double kSnrEverySec = 1.0;              // the report's SNR moves at most once a second
 
     struct Block { std::vector<float> pcm; double rate = 0; };
@@ -316,10 +326,16 @@ private:
         size_t head = 0;
         std::vector<short> out;     // one freedv_rx call's speech
         double syncSec = 0, lostSec = 0;
+        int clean = 0, dirty = 0;   // frames decoded since sync came: FEC clean / with errors left (freedv_get_rx_status)
+        /** Time since this demodulator last decoded a CLEAN frame (in sync, bits out, no errors left). NOT reset by a sync
+         *  that comes and goes: a demodulator holding a false sync flickers in and out, and each flicker used to restart
+         *  the 8 s "lost" clock — measured 2026-11-16, 700E on a 1600 station, never giving up. */
+        double sinceGoodSec = 0;
         float snr = 0;
         bool sync = false;
         std::unique_ptr<vibedsp::RationalResampler> up;   // speech rate → 48 kHz (the active modem only)
-        std::string line, lastLine, text;                 // the varicode text channel
+        std::string line, text;                           // the varicode text channel
+        std::string recent[4];                            // the last lines received, newest first
     };
 
     static void onTxtChar(void* st, char c) {
@@ -327,8 +343,11 @@ private:
         if (c == '\r' || c == '\n') {
             if (!m->line.empty()) {
                 // ★ shown only once it has come twice the same: plain varicode has no check, and noise reads as text
-                if (m->line == m->lastLine) m->text = m->line;
-                m->lastLine = m->line;
+                /* ★ …twice the same, among the last four: one line garbled in between (a fade, a burst of noise — or the
+                 *  bench clip's loop cutting one in half) must not stop a callsign that keeps coming in clean from showing. */
+                for (const auto& r : m->recent) if (!r.empty() && r == m->line) { m->text = m->line; break; }
+                for (int i = 3; i > 0; --i) m->recent[i] = m->recent[i - 1];
+                m->recent[0] = m->line;
                 m->line.clear();
             }
             return;
@@ -410,17 +429,36 @@ private:
 
     void runModem(Modem& m) {
         const Api& a = api();
+        /* ★★★ nin == 0 IS A REAL ANSWER (found 2026-11-16, the intermittent test-server-freedv failure). The OFDM modes' timing
+         *  loop asks for FEWER samples to slip back, and now and then for none at all. This loop used to read 0 as "nothing to
+         *  do" and stop — and since nothing then moved the modem on, it asked for 0 again on every block: that receiver was
+         *  wedged for good, deaf until AUTO's 8 s re-search (or forever, on a manual choice). Measured on 700E: a noise lead-in
+         *  of 0.37 s or 2 s before the station wedged it every time; 5 s did not. freedv_rx with nin 0 consumes nothing and
+         *  moves the state on, so it is called — a few times at most per pass, so a library that kept answering 0 could not
+         *  spin this thread. */
+        int zeroRuns = 0;
         for (;;) {
             const int nin = a.nin(m.f);
-            if (nin <= 0 || m.in.size() - m.head < size_t(nin)) break;
+            if (nin < 0 || m.in.size() - m.head < size_t(nin)) break;
+            if (nin == 0 && ++zeroRuns > 4) break;
             const int nout = a.rx(m.f, m.out.data(), m.in.data() + m.head);
             m.head += size_t(nin);
             const double dt = double(nin) / kModemRate;
             int sync = 0; float snr = 0;
             a.stats(m.f, &sync, &snr);
             m.sync = sync != 0;
-            if (m.sync) { m.syncSec += dt; m.lostSec = 0; m.snr = snr; }
-            else { m.syncSec = 0; m.lostSec += dt; }
+            const int st = a.rxStatus(m.f);
+            m.sinceGoodSec += dt;
+            if (m.sync) {
+                m.syncSec += dt; m.lostSec = 0; m.snr = snr;
+                if (st & 0x4 /*FREEDV_RX_BITS*/) {
+                    if (st & 0x8 /*FREEDV_RX_BIT_ERRORS*/) ++m.dirty;
+                    else { ++m.clean; m.sinceGoodSec = 0; }
+                }
+            } else {
+                if (m.syncSec > 0 && &m == active_) note("lost", m);
+                m.syncSec = 0; m.lostSec += dt; m.clean = m.dirty = 0;
+            }
             if (&m == active_ && nout > 0 && m.syncSec >= kHeldSec) {
                 speechBlocks_.fetch_add(1, std::memory_order_relaxed);
                 spF_.resize(size_t(nout)); spO_.resize(size_t(m.up->maxOut(nout)));
@@ -444,8 +482,20 @@ private:
         if (cur_ == kAuto) {
             if (!active_) {
                 Modem* best = nullptr;
-                for (auto& m : modems_) if (m->syncSec >= kLockSec && (!best || m->snr > best->snr)) best = m.get();
+                /* ★★★ A WIN IS SYNC *AND* DECODING (2026-11-16, the intermittent test-server-freedv failure). An OFDM demodulator
+                 *  can hold "sync" on a signal that is not its own — measured: 700D kept sync for 2.9 s on a 1600 station, every
+                 *  frame with errors left after the LDPC, SNR ~0 — and a second of that won AUTO, closed the 1600 demodulator
+                 *  that was about to win, and left the listener 8 s+ in silence. So a candidate must also have decoded more
+                 *  clean frames than failed ones (freedv_get_rx_status). 1600 has no FEC and never reports errors; its false
+                 *  syncs are flickers the 1 s hold already refuses. Ties: the cleaner, then the stronger. */
+                for (auto& m : modems_) {
+                    if (m->syncSec < kLockSec || m->clean < 2 || m->clean <= m->dirty) continue;
+                    if (!best || m->clean - m->dirty > best->clean - best->dirty
+                        || (m->clean - m->dirty == best->clean - best->dirty && m->snr > best->snr)) best = m.get();
+                }
                 if (best) {
+                    note("win", *best);
+                    wins_[best->sub].fetch_add(1, std::memory_order_relaxed);
                     // ★ the winner stays; the others go (memory and CPU back)
                     std::unique_ptr<Modem> keep;
                     for (auto& m : modems_) if (m.get() == best) keep = std::move(m);
@@ -455,8 +505,16 @@ private:
                     active_ = modems_.front().get();
                     makeUp(*active_);
                     open_.store(1);
+                    winAt_ = streamSec_;
                 }
-            } else if (active_->lostSec >= kRelockSec) {
+            } else if (streamSec_ - winAt_ < kProbationSec + kProbationLostSec && active_->sinceGoodSec >= kProbationLostSec) {
+                note("probation lost", *active_);
+                probationLosses_.fetch_add(1, std::memory_order_relaxed);
+                rebuild(kAuto);   // ★ the win did not last: every sub-mode searches again, now
+                return;
+            } else if (active_->sinceGoodSec >= kRelockSec) {
+                // ★ nothing decoded cleanly for 8 s: out of sync, or "in sync" on failed frames (a station gone, a false hold)
+                note("search again", *active_);
                 rebuild(kAuto);   // ★ the station went — search every sub-mode again
                 return;
             }
@@ -464,6 +522,15 @@ private:
         const bool in = active_ && active_->sync && active_->syncSec >= kHeldSec;
         locked_.store(in ? active_->sub : kAuto);
         snr_.store(in ? active_->snr : NAN);
+    }
+
+    /** ★ DIAGNOSTIC: VIBE_FREEDV_LOG=1 prints AUTO's decisions to stderr (stream time, sub-mode, how long it held sync,
+     *  its SNR and its frames clean / with errors). Off unless set. */
+    void note(const char* what, const Modem& m) {
+        static const bool on = [] { const char* e = std::getenv("VIBE_FREEDV_LOG"); return e && e[0] && e[0] != '0'; }();
+        if (!on) return;
+        std::fprintf(stderr, "[freedv %p] %7.2f s %-12s %s sync %.2f s snr %.1f clean %d dirty %d\n", static_cast<void*>(this),
+                     streamSec_, what, subName(m.sub), m.syncSec, m.snr, m.clean, m.dirty);
     }
 
     static void jsonText(std::string& j, const std::string& s) {
@@ -503,6 +570,9 @@ private:
     std::atomic<int> locked_{kAuto}, open_{0};
     std::atomic<float> snr_{NAN};
     std::atomic<uint64_t> speechBlocks_{0};
+    std::atomic<int> wins_[4] = {{0}, {0}, {0}, {0}};
+    std::atomic<int> probationLosses_{0};
+    double winAt_ = -1e9;
     double snrAt_ = -1e9, streamSec_ = 0; int snrShown_ = 0; bool wasIn_ = false;
 
     mutable std::mutex m_;

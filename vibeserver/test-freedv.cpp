@@ -122,6 +122,7 @@ struct Run {
     float snr = NAN;
     uint64_t dropped = 0;
     double cpuPerSec = 0;
+    int wins[4] = {0, 0, 0, 0};
 };
 
 /** Feed `x` (48 kHz) in 20 ms blocks as the audio callback does: feed, then take the same number of frames out. */
@@ -199,6 +200,7 @@ static Run throughPipeline(int sub, int listenSub, double snrDb, double offHz, d
     r.outRms = std::sqrt(ctx.e / double(std::max<size_t>(1, ctx.tot)));
     r.nonZeroFrac = double(ctx.nz) / double(std::max<size_t>(1, ctx.tot));
     r.status = L.statusJson(nullptr); r.snr = L.snrDb(); r.dropped = L.droppedBlocks();
+    for (int k = 0; k < 4; ++k) r.wins[k] = L.winsOf(k);
     return r;
 }
 
@@ -333,6 +335,77 @@ int main(int argc, char** argv) {
         check(r.status.find("\"sub\":\"auto\"") != std::string::npos, "the report says AUTO");
         check(r.speech > 40 && r.outRms > 0.01, "audio after AUTO's lock");
         std::printf("   CPU: %.1f %% of real time (AUTO, searching then one modem)\n", 100 * r.cpuPerSec);
+    }
+
+    /* ★★ 2b. AUTO NEVER CHOOSES THE WRONG SUB-MODE (2026-11-16: test-server-freedv failed ~1 run in 4 on the 1600 station —
+     *  AUTO in "sync" at 2 dB on something else, then silence). Each sub-mode alone, many times: a different noise lead-in
+     *  (so the modems see the signal start at a different phase), the clip's own loop (the signal twice, end to start — the
+     *  fake dongle's wrap), 8 and 12 dB. Every win must be the sub-mode on air. */
+    std::printf("\n── 2b. AUTO on one sub-mode, many starts and the loop wrap: never a wrong win ──\n");
+    {
+        int runs = 0, wrong = 0, missed = 0;
+        std::string why;
+        for (int s : subs) {
+            if (!a.sub[s]) continue;
+            const std::vector<cf> m8 = modulate(s, 20);
+            for (int k = 0; k < 16; ++k) {
+                const double snr = (k & 1) ? 8 : 12;
+                std::vector<float> one = usbAudio(m8, snr, 100 + unsigned(k));
+                std::vector<float> x;
+                // a noise lead-in of 0…5.6 s at the same noise level as the signal's
+                { const double ps = realPower(m8); const double sig = std::sqrt(ps / (0.75 * std::pow(10.0, snr / 10)));
+                  std::mt19937 rng(500 + unsigned(k)); std::normal_distribution<float> nd(0.f, float(sig));
+                  std::vector<float> n8(size_t(k * 0.37 * 8000)); for (auto& v : n8) v = nd(rng);
+                  vibedsp::RationalResampler up(8000, 48000); std::vector<float> o(size_t(up.maxOut(int(n8.size())) + 1));
+                  o.resize(size_t(up.process(n8.data(), int(n8.size()), o.data()))); x = o; }
+                x.insert(x.end(), one.begin(), one.end());
+                x.insert(x.end(), one.begin(), one.end());   // ★ the loop: end straight into start, as the fake dongle replays
+                FreeDvListener L(fdv::kAuto);
+                const Run r = play(L, x);
+                ++runs;
+                int other = 0;
+                for (int o : subs) if (o != s) other += L.winsOf(o);
+                if (other) { ++wrong; char b[160]; std::snprintf(b, sizeof b, " [%s k=%d %.0f dB: wins 700D %d 700E %d 1600 %d]", fdv::subName(s), k, snr,
+                                                           L.winsOf(fdv::k700D), L.winsOf(fdv::k700E), L.winsOf(fdv::k1600)); why += b; }
+                if (r.locked != s) { ++missed; char b[120]; std::snprintf(b, sizeof b, " [%s k=%d: ends %s]", fdv::subName(s), k, fdv::subName(r.locked)); why += b; }
+            }
+        }
+        std::printf("   %d runs, %d with a wrong win, %d not in sync on the right sub-mode at the end%s\n", runs, wrong, missed, why.c_str());
+        check(wrong == 0, "AUTO never wins on a sub-mode that is not on air", std::to_string(wrong) + " of " + std::to_string(runs));
+        check(missed == 0, "…and every run ends in sync on the one that is", std::to_string(missed) + " of " + std::to_string(runs));
+    }
+
+    /* ★★ 2b′. …and through the REAL USB chain (the server's path, where the false win was seen: 700E holding "sync" on the
+     *  1600 station at ~1 dB, every frame failing its FEC): each sub-mode, 8 runs with different mistunings and noise. */
+    std::printf("\n── 2b′. the same through the RxPipeline USB chain ──\n");
+    {
+        int runs = 0, wrong = 0, missed = 0; std::string why;
+        for (int s : subs) {
+            if (!a.sub[s]) continue;
+            for (int k = 0; k < 8; ++k) {
+                const Run r = throughPipeline(s, fdv::kAuto, (k & 1) ? 8 : 12, 6000 + 137 * k, -40 + 11 * k, 12);
+                ++runs;
+                int other = 0; for (int o : subs) if (o != s) other += r.wins[o];
+                if (other) { ++wrong; char b[120]; std::snprintf(b, sizeof b, " [%s k=%d: wins %d/%d/%d]", fdv::subName(s), k, r.wins[1], r.wins[2], r.wins[3]); why += b; }
+                if (r.locked != s) { ++missed; char b[80]; std::snprintf(b, sizeof b, " [%s k=%d ends %s]", fdv::subName(s), k, fdv::subName(r.locked)); why += b; }
+            }
+        }
+        std::printf("   %d runs, %d with a wrong win, %d not in sync on the right one at the end%s\n", runs, wrong, missed, why.c_str());
+        check(wrong == 0 && missed == 0, "through the USB chain: only ever the sub-mode on air", why);
+    }
+
+    /* ★★ 2c. A WINNER THAT DID NOT LAST searches again at once, not after 8 s: 700D for 2.5 s (AUTO wins it about 1.3 s
+     *  in), then the same dial carries 1600. AUTO must be decoding 1600 within 4 s of the change. */
+    std::printf("\n── 2c. a short-lived win: the full search again at once ──\n");
+    if (a.sub[fdv::k700D] && a.sub[fdv::k1600]) {
+        std::vector<float> d = usbAudio(modulate(fdv::k700D, 3), 12, 31), f = usbAudio(modulate(fdv::k1600, 12), 12, 32);
+        d.resize(size_t(48000 * 2.5));
+        std::vector<float> x = d; x.insert(x.end(), f.begin(), f.begin() + 48000 * 4);
+        FreeDvListener L(fdv::kAuto);
+        const Run r = play(L, x);
+        std::printf("   %s  wins 700D %d 1600 %d, probation losses %d\n", desc(r).c_str(), L.winsOf(fdv::k700D), L.winsOf(fdv::k1600), L.probationLosses());
+        check(L.winsOf(fdv::k700D) >= 1 && L.probationLosses() >= 1, "the 700D win that did not last went back to the search");
+        check(r.locked == fdv::k1600, "…and AUTO is on 1600 within 4 s of the change (not 8 s + a search)");
     }
 
     std::printf("\n── 3. weak signals, manual ──\n");

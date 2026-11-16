@@ -15,16 +15,33 @@ The lines are kept short because the R36S screen is small.
 ## Sub-modes, AUTO and the manual fallback
 
 - **Sub-modes:** 700D, 700E and 1600. RADE is out of scope.
-- **AUTO:** runs all three demodulators while it searches. The first to hold sync for one second wins and the other two
-  are closed, which gives back their memory and CPU. After 8 s without sync, AUTO searches all three again. A new station
-  (the dial moves more than 50 Hz) gets a new search at once.
+- **AUTO:** runs all three demodulators while it searches.
+  - **A win:** a demodulator must hold sync for one second **and** have decoded more frames that pass the FEC than fail
+    it (`freedv_get_rx_status`). Ties go to the cleaner, then the stronger. The other two are then closed, which gives
+    back their memory and CPU.
+  - **Giving up:** after 8 s with no clean frame, AUTO searches all three again. A winner that decodes no clean frame for
+    1 s within 4 s of winning goes back to the search at once ("probation").
+  - **A new station** (the dial moves more than 50 Hz) gets a new search at once.
+  - **Why frames and not sync alone** (2026-11-16, an intermittent test-server-freedv failure, about 1 run in 4): an OFDM
+    demodulator can hold "sync" on a signal that is not its own. 700E won on the 1600 station at about 1 dB with every
+    frame failing its FEC, and closed the 1600 demodulator that was about to win. 700D held sync for 2.9 s on a 1600
+    signal after its own station stopped. The false sync also flickered in and out, and each flicker restarted the old
+    "8 s without sync" clock, so it never gave up. The listener heard silence. Loss is therefore measured as time since
+    the last clean frame, which a flicker does not reset.
+- **`nin == 0`** (found while chasing the same failure): the OFDM timing loop sometimes asks for no samples at all. The
+  receiver used to take 0 as "nothing to do" and never called the modem again, so that demodulator was deaf for good.
+  On 700E, a noise lead-in of 0.37 s or 2 s before the station wedged it every time. `freedv_rx` is now called with
+  `nin` 0 (it consumes nothing and moves the state on), at most a few times per block.
+- **Diagnostics:** `VIBE_FREEDV_LOG=1` prints AUTO's decisions to stderr: wins, losses, probation and re-searches, with
+  the sync time, SNR and clean/failed frame counts.
 - **Manual choice:** runs that one sub-mode only. It is the fallback for when AUTO cannot settle. This follows the house
   rule that auto decoders keep manual controls underneath them.
 - **Held sync:** a sync is reported and played only after it has held for 0.5 s. When 1600 was chosen by hand on a 700D
   station, its demodulator flickered into sync for a frame or two. Without the hold, that showed a "sync" on the VTS for a
   signal it could not decode.
-- **Text:** the varicode text channel (usually the callsign) is shown only once the same line has arrived twice. Plain
-  varicode has no check, and noise reads as text.
+- **Text:** the varicode text channel (usually the callsign) is shown only once the same line has arrived twice (matched
+  against the last four lines, so one garbled line in between does not hold it back). Plain varicode has no check, and
+  noise reads as text. A line takes about 7 s, so the text shows 6–16 s after sync on a clean signal.
 
 ## Sideband
 
