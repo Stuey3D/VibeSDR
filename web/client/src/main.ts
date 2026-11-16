@@ -5511,11 +5511,12 @@ function freedvSubRow(): HTMLElement | null {
     sg.appendChild(b);
   }
   wrap.appendChild(sg);
-  freedvSubRowSync(g);
+  freedvSubRowSync(g, sg);   // ★ both grids passed: the row is not in the document yet
   return wrap;
 }
 /** The row's lit key follows the server's report — none before the first one (a shared room may hold a manual choice). */
-function freedvSubRowSync(g: HTMLElement | null = document.getElementById('mFreeDvSub')) {
+function freedvSubRowSync(g: HTMLElement | null = document.getElementById('mFreeDvSub'),
+                          sg: HTMLElement | null = document.getElementById('mFreeDvSb')) {
   if (!g) return;
   const sub = fdvState?.sub;
   for (const x of Array.from(g.querySelectorAll('button')) as HTMLButtonElement[]) {
@@ -5523,7 +5524,6 @@ function freedvSubRowSync(g: HTMLElement | null = document.getElementById('mFree
     x.classList.toggle('on', on);
     x.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
-  const sg = document.getElementById('mFreeDvSb');
   const sb = fdvState?.sbSel;
   if (sg) for (const x of Array.from(sg.querySelectorAll('button')) as HTMLButtonElement[]) {
     const on = x.dataset.sb === sb;
