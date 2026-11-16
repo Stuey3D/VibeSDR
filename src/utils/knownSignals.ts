@@ -361,8 +361,12 @@ export interface PlacedLabel {
   sig: KnownSignal;
   /** The marker's x, and the label box's left and width (px). */
   x: number; lx: number; w: number;
-  /** 0 = the row by the boundary, 1 = the next. */
+  /** 0 = the row by the boundary, 1 = the next. A taller box's LOWEST row. */
   row: number;
+  /** ★★ Rows the box is tall (default 1) — a wide DAB view's named block is two (dabBlockView.ts: the block over its name). */
+  span?: number;
+  /** The text drawn, one entry per line, top first, CENTRED in the box (absent = `sig.label` on one line, left-aligned). */
+  lines?: string[];
 }
 
 /** A box another label already owns on a row (LISTEN, RF CENTRE…), px. */
@@ -450,13 +454,14 @@ export function knownLabelHit(placed: readonly PlacedLabel[] | null | undefined,
                               minH = LABEL_HIT_MIN_H, padX = LABEL_HIT_PAD_X): PlacedLabel | null {
   if (!placed || !placed.length || !Number.isFinite(x) || !Number.isFinite(y)) return null;
   let best: PlacedLabel | null = null, bestD = Infinity;
-  const half = Math.max(boxH, minH) / 2;
   for (const p of placed) {
-    const t = rowTop(p.row), cy = t + boxH / 2;
-    if (x < p.lx - padX || x > p.lx + p.w + padX || y < cy - half || y > cy + half) continue;
+    // ★ a taller box (span > 1) runs from its top row's top down to its lowest row's box bottom
+    const t = rowTop(p.row + Math.max(1, p.span ?? 1) - 1), h = rowTop(p.row) - t + boxH, cy = t + h / 2;
+    const halfP = Math.max(h, minH) / 2;
+    if (x < p.lx - padX || x > p.lx + p.w + padX || y < cy - halfP || y > cy + halfP) continue;
     // distance from the point to the box itself (0 inside it)
     const dx = x < p.lx ? p.lx - x : x > p.lx + p.w ? x - p.lx - p.w : 0;
-    const dy = y < t ? t - y : y > t + boxH ? y - t - boxH : 0;
+    const dy = y < t ? t - y : y > t + h ? y - t - h : 0;
     const d = dx * dx + dy * dy;
     if (d < bestD) { bestD = d; best = p; }
   }

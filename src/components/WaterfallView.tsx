@@ -94,7 +94,7 @@ import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../servi
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
-import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, type DabBlockSignal } from '../utils/dabBlockView';
+import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
@@ -3410,8 +3410,8 @@ function WaterfallView({
             RF CENTRE's dark box in a fixed pale lilac — never the VFO colour, which LISTEN uses on the same row. */}
         {/* ★ the ticks and span bars first, every box after — an upper row's tall tick never crosses another's text */}
         {knownPlaced && knownPlaced.map((p, i) => {
-          const top = rowTop(p.row);
-          const tickBot = specShow && specH > 40 ? wfTop : top + 13;
+          const top = rowTop(p.row + (p.span ?? 1) - 1);   // ★ a two-line DAB box's top
+          const tickBot = specShow && specH > 40 ? wfTop : rowTop(p.row) + 13;
           const s = p.sig;
           const bx0 = s.lo != null ? Math.max(0, hzToX(s.lo)) : 0, bx1 = s.hi != null ? Math.min(width, hzToX(s.hi)) : 0;
           const hi = i === tunedHi || (isDabBlockSignal(s) && s.dabCurrent);
@@ -3426,7 +3426,8 @@ function WaterfallView({
           );
         })}
         {knownPlaced && knownPlaced.map((p, i) => {
-          const top = rowTop(p.row);
+          const span = Math.max(1, p.span ?? 1);
+          const top = rowTop(p.row + span - 1);   // ★ a two-line DAB box's top: one 14-pt row taller
           const s = p.sig;
           // ★★ V12 the label naming the station you are tuned to — or, in DAB, the block being received: the tuned label's
           //    colour (stampCol) and dark halo
@@ -3441,10 +3442,15 @@ function WaterfallView({
                     accessibilityHint={tapLabel ? (dab ? 'Goes to this multiplex' : s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
                     onAccessibilityTap={tapLabel}
                     ref={tapLabel ? screenNavRef('known' + i, tapLabel) : undefined}
-                    style={[styles.knownBox, { left: p.lx, top }, dab && { width: p.w, alignItems: 'center' }]}>
+                    style={[styles.knownBox, { left: p.lx, top }, dab && { width: p.w, alignItems: 'center', height: 13 + 14 * (span - 1) }]}>
                 {/* ★★ a DAB block's box is laid out CENTRED on its own block (dabBlockBoxX) at the estimated width — so it is drawn
-                    at that width with the text centred, or an estimate wider than the text would shift it right again */}
-                <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
+                    at that width with the text centred, or an estimate wider than the text would shift it right again. A named
+                    block is TWO lines, the block over its name ("taller instead of wider", dabBlockView.ts). */}
+                {p.lines ? p.lines.map((t, li) => (
+                  <Text key={li} numberOfLines={1} style={[styles.knownText, { fontFamily, lineHeight: 14, textAlign: 'center' }, hi && [styles.knownHiText, { color: stampCol }]]}>{t}</Text>
+                )) : (
+                  <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
+                )}
               </View>
             </React.Fragment>
           );
@@ -3479,8 +3485,10 @@ function WaterfallView({
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: needleColor,
-                  left: Math.min(width - (needleLabel ? 124 : 96), needle.nX + 3), top: rowTop(liveRow),
-                  width: needleLabel ? 124 : 96, textAlign: 'left', fontSize: 9,
+                  // ★★ a wide DAB view: CENTRED on the needle, kept on screen (Stuart, 2026-11-16); else beside it
+                  left: liveRow > 0 ? dabBlockBoxX(needle.nX, needleLabel ? 124 : 96, width) : Math.min(width - (needleLabel ? 124 : 96), needle.nX + 3),
+                  top: rowTop(liveRow),
+                  width: needleLabel ? 124 : 96, textAlign: liveRow > 0 ? 'center' : 'left', fontSize: 9,
                 }]}>
             {needleLabel || 'LISTEN: ' + fmtHz(tuneHz)}
           </Text>

@@ -61,7 +61,7 @@ import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow, type TunedPick } from '../../../src/utils/tunedStation.ts';
-import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
+import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, dabBlockBoxX, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -1553,7 +1553,8 @@ export class Waterfall {
       // needle is ambiguous — which line is the one you're listening to?
       const dpr2 = renderDpr();
       void dpr2;
-      this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? this.liveRow : this.liveRow ? this.liveRow + 1 : 2), label, col);
+      this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? this.liveRow : this.liveRow ? this.liveRow + 1 : 2), label, col,
+                       primary && this.liveRow > 0);   // ★ the wide DAB view's readout: centred on the needle
     }
 
     ctx.restore();
@@ -1644,12 +1645,14 @@ export class Waterfall {
 
   private markerLabel(
     ctx: CanvasRenderingContext2D, x: number, W: number, y: number,
-    text: string, colour: string,
+    text: string, colour: string, centred = false,
   ) {
     const dpr = renderDpr();
     ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
     const tw = ctx.measureText(text).width;
-    const lx = x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
+    // ★★ centred on the needle (a wide DAB view — Stuart, 2026-11-16), kept on screen; else beside it, flipped at the edge
+    const lx = centred ? dabBlockBoxX(x, tw + 6 * dpr, W) + 3 * dpr
+             : x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
     ctx.fillRect(lx - 3 * dpr, y - 9 * dpr, tw + 6 * dpr, 13 * dpr);
     ctx.fillStyle = colour;
@@ -1807,7 +1810,7 @@ export class Waterfall {
     for (let pi = 0; pi < this.knownPlaced.length; pi++) {
       const p = this.knownPlaced[pi], hi = isHi(pi);
       const y = this.markerLabelY(H, p.row);
-      const boxTop = y - 9 * dpr, boxBot = y + 4 * dpr;
+      const boxTop = this.markerLabelY(H, p.row + (p.span ?? 1) - 1) - 9 * dpr, boxBot = y + 4 * dpr;
       ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;
       ctx.globalAlpha = 0.8;
       // the tick: from the box down to the spectrum's floor, or beside the box on the waterfall
@@ -1824,13 +1827,18 @@ export class Waterfall {
       const p = this.knownPlaced[pi], s = p.sig;
       // ★★ names the station you are tuned to — or, in DAB, the block being received: the tuned label's colour and shadow
       const hi = isHi(pi);
-      const y = this.markerLabelY(H, p.row);
-      const boxTop = y - 9 * dpr;
+      const y = this.markerLabelY(H, p.row), span = Math.max(1, p.span ?? 1);
+      const topY = this.markerLabelY(H, p.row + span - 1), boxTop = topY - 9 * dpr;
       ctx.fillStyle = KNOWN_LABEL_BOX;
-      ctx.fillRect(p.lx, boxTop, p.w, 13 * dpr);
+      ctx.fillRect(p.lx, boxTop, p.w, y + 4 * dpr - boxTop);   // ★ 13 × dpr for one line; a two-line box is a row taller
       ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;
       if (hi) { ctx.shadowColor = 'rgba(0,0,0,0.95)'; ctx.shadowOffsetY = Math.max(1, Math.round(dpr)); ctx.shadowBlur = NO_GLOW ? 0 : Math.round(2 * dpr); }
-      ctx.fillText(s.label, p.lx + 3 * dpr, y);
+      if (p.lines) {
+        // ★★ a DAB block: its lines centred in the box, the block on top (dabBlockView.ts — "taller instead of wider")
+        ctx.textAlign = 'center';
+        p.lines.forEach((t, li) => ctx.fillText(t, p.lx + p.w / 2, this.markerLabelY(H, p.row + span - 1 - li)));
+        ctx.textAlign = 'left';
+      } else ctx.fillText(s.label, p.lx + 3 * dpr, y);
       if (hi) { ctx.shadowColor = 'transparent'; ctx.shadowOffsetY = 0; ctx.shadowBlur = 0; }
     }
     ctx.restore();
