@@ -125,9 +125,10 @@ const WF = `window.__vibeWf()`;
 const PLACED = `(() => { const w = ${WF}.wf, dpr = Math.min(2, window.devicePixelRatio || 1);
   const m = document.createElement("canvas").getContext("2d"); m.font = (10 * dpr) + "px ui-monospace, Menlo, monospace";
   return (w.knownPlaced || []).map(p => ({ label: p.sig.label, dab: p.sig.dabIdx !== undefined, cur: !!p.sig.dabCurrent, lx: p.lx, w: p.w, row: p.row,
-    W: w.canvas.width, text: m.measureText(p.sig.label).width })); })()`;
+    span: p.span || 1, lines: p.lines || null, block: p.sig.block || '', grade: p.sig.grade ? p.sig.grade.g : '', x: p.x,
+    W: w.canvas.width, text: Math.max(...(p.lines || [p.sig.label]).map(t => m.measureText(t).width)) })); })()`;
 /** LISTEN's box on its row (0, or above the block rows on a wide DAB view — wf.liveRow), markerLabel's geometry, device px. */
-const LISTEN_BOX = `(() => { const w = ${WF}.wf, d = w.vfoDrawn, dpr = Math.min(2, window.devicePixelRatio || 1); if (!d) return null;
+const LISTEN_BOX = `(() => { const w = ${WF}.wf, d = w.vfoDrawn, dpr = Math.min(2, window.devicePixelRatio || 1); if (!d || w.readoutMerged) return null;   // ★ merged into the tuned box
   const m = document.createElement("canvas").getContext("2d"); m.font = (10 * dpr) + "px ui-monospace, Menlo, monospace";
   const tw = m.measureText(d.label).width, lx = d.nX + 6 * dpr + tw > d.W ? d.nX - tw - 6 * dpr : d.nX + 6 * dpr;
   return { row: w.liveRow || 0, x0: lx - 3 * dpr, x1: lx + tw + 3 * dpr }; })()`;
@@ -140,8 +141,8 @@ const setSpan = (hz, centre) => js(`(() => { const w = ${WF}.wf; Object.definePr
 /** Any two labels on one row overlapping, a box narrower than its text, or a label over LISTEN's box. */
 const overlaps = (ps, listen) => {
   if (ps.some(p => p.w < p.text)) return true;
-  if (listen && ps.some(p => p.row === listen.row && p.lx < listen.x1 && listen.x0 < p.lx + p.w)) return true;
-  for (let r = 0; r <= 8; r++) { const row = ps.filter(p => p.row === r).sort((a, b) => a.lx - b.lx);
+  if (listen && ps.some(p => listen.row >= p.row && listen.row < p.row + p.span && p.lx < listen.x1 && listen.x0 < p.lx + p.w)) return true;
+  for (let r = 0; r <= 10; r++) { const row = ps.filter(p => r >= p.row && r < p.row + p.span).sort((a, b) => a.lx - b.lx);   // ★ a two-line box on both rows
     for (let k = 1; k < row.length; k++) if (row[k].lx < row[k - 1].lx + row[k - 1].w) return true; }
   return false;
 };
@@ -177,7 +178,18 @@ try {
   await until(`/ — /.test(document.getElementById("dabMuxLbl")?.textContent || "")`, 15000);
   const ens = (await js(`document.getElementById("dabMuxLbl")?.textContent || ""`)).split(' — ')[1] || '';
   console.log(`  the ensemble on 7D: "${ens}"`);
+  // ★ every DAB report seen (window.__lastDab), and test grades merged into each (window.__q) — the page's own road
+  await js(`(() => { const s = ${WF}.spec, o = s.cb.onDab; s.cb.onDab = (d) => { window.__lastDab = d;
+    return o(window.__q ? { ...d, blockQ: { ...(d.blockQ || {}), ...window.__q } } : d); }; return 1; })()`);
   await sleep(3000);
+
+  // ── 0. ★★ the server GRADES the block it decodes (vibe_dab_block_quality.h), once settled (6 s + a 10-s span). Every FIB
+  //    reads on the bench multiplex, so it is working or marginal — and the 5.8-s clip's LOOP SEAM loses a super frame or
+  //    two in every span (an audible gap: the counters below), which is exactly what marginal means; never "not working".
+  ok(await until(`["good", "marginal"].includes(window.__lastDab?.blockQ?.["7D"]?.g) && window.__lastDab.blockQ["7D"].fib >= 0.9`, 40000),
+     `the server grades 7D from what it measured: ${JSON.stringify(await js('window.__lastDab?.blockQ || null'))}`);
+  const srv7D = await js(`window.__lastDab?.blockQ?.["7D"]?.g || ""`);
+  console.log(`  the bench audio so far: ${await js('JSON.stringify({ auIn: window.__lastDab?.auIn, auBad: window.__lastDab?.auBad, mp2In: window.__lastDab?.mp2In, mp2Bad: window.__lastDab?.mp2Bad })')}`);
 
   // ── 1. the RTL's own view: one multiplex, nothing changes ──
   const span0 = await js(`${WF}.wf.spanHz`), centre0 = await js(`${WF}.wf.centerHz`);
@@ -197,23 +209,39 @@ try {
     found: [{ block: "8A", channel: ${IDX['8A']}, hz: ${B['8A']}, ensemble: "8A regio Alphen", fib: 0.98, mer: 20, complete: true, services: [] }] }); 1`);
   await setSpan(8_000_000, B['7D']); await sleep(600);
   ps = await js(PLACED);
-  const dabL = ps.filter(p => p.dab).map(p => p.label);
+  const dabL = ps.filter(p => p.dab).map(p => (p.lines || [p.label]).join(' / '));
   console.log(`  wide view labels: ${dabL.join(' | ')}`);
-  ok(dabL.some(l => l === `DAB 7D — ${ens}`.slice(0, `DAB 7D — `.length + 18) || l.startsWith('DAB 7D — ')), '7D is labelled with its ensemble\'s own name');
-  ok(dabL.includes('DAB 8A — 8A regio Alphen'), '8A carries the name the band scan gave it');
-  ok(['7C', '8B'].every(b => dabL.includes(`DAB ${b}`)), 'the unnamed neighbours read plain "DAB 7C" / "DAB 8B" (nothing invented)');
-  ok(ps.filter(p => p.cur).length === 1 && ps.find(p => p.cur).label.startsWith('DAB 7D'), 'the block being received is the one drawn in the tuned colour');
+  const tunedBox = ps.find(p => p.cur);
+  ok(!!tunedBox && tunedBox.lines[0] === '194.064M: DAB 7D' && !!tunedBox.lines[1] && tunedBox.lines[1].startsWith(ens.slice(0, 10).trim()),
+     `ONE tuned box: the readout over the ensemble's own name (${tunedBox?.lines?.join(' / ')})`);
+  ok(await js(`${WF}.wf.readoutMerged === true`), '…and the needle draws no separate readout');
+  ok(dabL.includes('8A / 8A regio Alphen'), '8A: two lines, the block over the name the band scan gave it');
+  ok(['7C', '8B'].every(b => dabL.includes(b)), 'the unnamed neighbours read plain "7C" / "8B" on one line (nothing invented)');
+  ok(ps.filter(p => p.cur).length === 1, 'the block being received is the one drawn in the tuned colour');
+  const pxOf = await js(`(() => { const w = ${WF}.wf; return [w.hzToX(${B['7D']} - 768000), w.hzToX(${B['7D']} + 768000)]; })()`);
+  ok(ps.filter(p => p.dab && !p.cur).every(p => p.lx <= 0 || p.lx + p.w >= p.W || Math.abs(p.lx + p.w / 2 - p.x) <= 1),
+     'every block label is centred on its own block');
+  ok(!!tunedBox && Math.abs(tunedBox.lx + tunedBox.w / 2 - tunedBox.x) <= 2 && pxOf[0] < tunedBox.x && tunedBox.x < pxOf[1], 'the tuned box is centred on the needle');
+  ok(!!tunedBox && ps.filter(p => !p.cur).every(p => p.row + p.span - 1 < tunedBox.row), '…above every block row');
   ok(!overlaps(ps, await js(LISTEN_BOX)), 'no two labels overlap, nor LISTEN\'s box, and every box holds its text');
   ok(ps.every(p => p.lx >= 0 && p.lx + p.w <= p.W + 1), 'every label is on screen');
-  const listen = await js(`(() => { const w = ${WF}.wf, d = w.vfoDrawn; return d ? d.label : ''; })()`);
-  ok(/DAB 7D/.test(listen), `the needle still reads "${listen}"`);
   await shot('dab-blocks-wide-desktop.png');
+  // ★★ the grades: a bar on each graded block's box, from the server's blockQ (here injected beside its own)
+  { const now = Math.floor(Date.now() / 1000);
+    await js(`window.__q = { "7C": { g: "marginal", mer: 9.1, fib: 0.8, t: ${now - 60} }, "8A": { g: "bad", mer: 7, fib: 0, t: ${now - 120} },
+      "8B": { g: "good", mer: 18, fib: 1, t: ${now - 9 * 86400} } }; 1`);
+    ok(await until(`(${PLACED}).some(p => p.block === "8A" && p.grade === "bad")`, 4000), 'a grade from the server marks its block (8A not working)');
+    ps = await js(PLACED);
+    const g = Object.fromEntries(ps.filter(p => p.dab).map(p => [p.block, p.grade]));
+    ok(g['7C'] === 'marginal' && g['7D'] === srv7D && g['8B'] === '', `7C marginal, 7D the server's own grade (${srv7D}), 8B's week-old grade not shown (${JSON.stringify(g)})`);
+    await shot('dab-blocks-grades.png');
+  }
 
   // ── 3. the hover hint ──
   { const p = await at(B['8A'] + 200_000); await hover(p[0], p[1]); await hover(p[0] + 1, p[1]); }
   ok(await until(`document.getElementById("ptrFreq").classList.contains("show")`, 3000), 'hovering over 8A shows a hint');
   const hint = await js(`document.querySelector("#ptrFreq .m").textContent`);
-  ok(hint === 'go to 8A — 8A regio Alphen', `…reading "${hint}"`);
+  ok(/^go to 8A — 8A regio Alphen · not decoding, MER 7 dB, measured \d\d:\d\d$/.test(hint), `…reading "${hint}"`);
   ok((await js(`${WF}.wf.canvas.style.cursor`)) === 'pointer', '…with a pointer');
   await shot('dab-blocks-hover.png');
   { const p = await at((B['7D'] + B['8A']) / 2); await hover(p[0], p[1]); await hover(p[0] + 1, p[1]); }
@@ -241,7 +269,7 @@ try {
   ok(click.length === 1 && click[0].on === 1 && click[0].channel === IDX['8A'] && click[0].sid === undefined, `…once, to 8A: ${JSON.stringify(click)}`);
   ok(await until(`/8A/.test(document.getElementById("dabMuxLbl")?.textContent || "")`, 3000), '…and the DAB box moves to 8A');
   // ★ (8A's name may be gone by now: the server answers the block change with its own scan state, which knows no 8A)
-  ok(await until(`(${PLACED}).find(p => p.cur)?.label.startsWith("DAB 8A")`, 3000), `…and 8A becomes the highlighted label (${(await js(PLACED)).find(p => p.cur)?.label})`);
+  ok(await until(`(${PLACED}).find(p => p.cur)?.block === "8A"`, 3000), `…and 8A becomes the highlighted label (${(await js(PLACED)).find(p => p.cur)?.lines?.join(' / ')})`);
   await shot('dab-blocks-after-click.png');
   // the arrow, for comparison: ▶ from 8A sends the same shape of message for 8B
   await sleep(1500);
@@ -267,7 +295,7 @@ try {
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
   await sleep(1500);
   ps = await js(PLACED);
-  console.log(`  phone labels: ${ps.filter(p => p.dab).map(p => p.label).join(' | ')}`);
+  console.log(`  phone labels: ${ps.filter(p => p.dab).map(p => (p.lines || [p.label]).join(' / ')).join(' | ')}`);
   ok(ps.some(p => p.dab), 'phone width: block labels drawn');
   ok(!overlaps(ps, await js(LISTEN_BOX)) && ps.every(p => p.lx >= 0 && p.lx + p.w <= p.W + 1), '…none overlapping, all on screen');
   ok(ps.some(p => p.cur), '…the block being received among them');
@@ -286,15 +314,22 @@ try {
     ps = await js(PLACED);
     const lo = 202_000_000 - 28_000_000, hi = 202_000_000 + 28_000_000;
     const inView = blocks.filter(b => b.hz >= lo && b.hz <= hi).map(b => b.name);
-    const shown = new Set(ps.filter(p => p.dab).map(p => p.label.split(' ')[1]));
+    const shown = new Set(ps.filter(p => p.dab).map(p => p.block));
     const missing = inView.filter(b => !shown.has(b));
-    console.log(`  all of Band III: ${ps.filter(p => p.dab).length} block labels on ${Math.max(...ps.map(p => p.row)) + 1} rows`);
+    console.log(`  all of Band III: ${ps.filter(p => p.dab).length} block labels on ${Math.max(...ps.map(p => p.row + p.span))} rows`);
     ok(missing.length === 0, `every block in view is labelled (${inView.length})${missing.length ? ' — missing ' + missing.join(', ') : ''}`);
-    const namedIn = inView.filter(b => names[b]), namedShown = ps.filter(p => p.dab && !p.cur && / — /.test(p.label)).length;
-    ok(namedShown >= Math.ceil(namedIn.length * 0.9), `the known names are shown (${namedShown} of ${namedIn.length})`);
-    const cur = ps.find(p => p.cur), top = Math.max(...ps.filter(p => !p.cur).map(p => p.row));
-    const live = await js(`${WF}.wf.liveRow`);
-    ok(cur && cur.row > top && live === cur.row + 1, `the tuned block's name is on the row above every block (${cur?.row} > ${top}), LISTEN above it (${live})`);
+    const namedIn = inView.filter(b => names[b] && b !== ps.find(p => p.cur)?.block);
+    const namedShown = namedIn.filter(b => ps.some(p => p.dab && !p.cur && p.block === b && p.span === 2 && p.lines?.[1])).length;
+    ok(namedShown === namedIn.length, `every name the scan gave is shown, under its block (${namedShown} of ${namedIn.length})`);
+    const cur = ps.find(p => p.cur), top = Math.max(...ps.filter(p => !p.cur).map(p => p.row + p.span - 1));
+    ok(!!cur && cur.row > top && (await js(`${WF}.wf.readoutMerged`)), `the tuned box (readout + name) is above every block row (${cur?.row} > ${top}), no separate readout`);
+    // a full Band III with MIXED grades, for the picture
+    const now = Math.floor(Date.now() / 1000), mix = {};
+    ['5A', '5C', '6B', '6C', '7B', '8B', '9B', '11C', '12A'].forEach(b => (mix[b] = { g: 'good', mer: 17, fib: 1, t: now - 300 }));
+    ['7A', '8C', '9A'].forEach(b => (mix[b] = { g: 'marginal', mer: 9, fib: 0.8, t: now - 600 }));
+    ['6D', '8D'].forEach(b => (mix[b] = { g: 'bad', mer: 7, fib: 0, t: now - 900 }));
+    await js(`window.__q = ${JSON.stringify(mix)}; 1`);
+    ok(await until(`(${PLACED}).some(p => p.block === "6D" && p.grade === "bad")`, 4000), 'mixed grades drawn across Band III');
     ok(!overlaps(ps, await js(LISTEN_BOX)) && ps.every(p => p.lx >= 0 && p.lx + p.w <= p.W + 1), '…none overlapping, all on screen');
     await shot('dab-blocks-band3.png');
   }
