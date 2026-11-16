@@ -124,7 +124,9 @@ eq('a long name is shortened', dabBlockLabel('12B', 'An extremely long ensemble 
       const got = new Set(placed.filter((p) => isDabBlockSignal(p.sig)).map((p) => (p.sig as DabBlockSignal).dabIdx));
       const tag = `${what}, ${(lsts / 1e6).toFixed(0)}–${(hi / 1e6).toFixed(0)} MHz`;
       eq(`${tag}: every block in view is labelled (${inView.length})`, inView.filter((i) => !got.has(i)).map((i) => DAB_BLOCKS[i].name), []);
-      eq(`${tag}: the tuned box reads "7D" over "MTVNL", on the row above the blocks`, [tuned?.lines, tuned?.row], [['7D', 'MTVNL'], TOP]);
+      eq(`${tag}: ONE tuned box — the readout over the name ("194.064M: DAB 7D" / "MTVNL"), above the blocks, the readout merged`,
+         [tuned?.lines, tuned?.row, plan.merged], [['194.064M: DAB 7D', 'MTVNL'], TOP, true]);
+      eq(`${tag}: "7D" appears once`, placed.filter((p) => (p.lines ?? []).some((l) => /\b7D\b/.test(l))).length, 1);
       const needleX = (hz('7D') - lsts) / span * W;
       eq(`${tag}: the tuned box is centred on the needle`, !!tuned && Math.abs(tuned.lx + tuned.w / 2 - needleX) <= 2, true);
       eq(`${tag}: nothing else on the tuned rows or above`, placed.filter((p) => p !== tuned && p.row + (p.span ?? 1) - 1 >= TOP).length, 0);
@@ -191,6 +193,14 @@ eq('a long name is shortened', dabBlockLabel('12B', 'An extremely long ensemble 
     const hitTop = knownLabelHit(p.placed, two.lx + two.w / 2, rowTop(two.row + 1) + 3, rowTop, 13, 1, 0);
     const hitLow = knownLabelHit(p.placed, two.lx + two.w / 2, rowTop(two.row) + 10, rowTop, 13, 1, 0);
     eq('a two-line box is tapped on either line', [hitTop === two, hitLow === two], [true, true]);
+  }
+  // ★ no received block in view (the needle elsewhere): no merged box — the caller draws its readout on liveRow
+  {
+    const p = dabLabelLayout(list, hz('11C') - 4_000_000, 8_000_000, 1440, (t) => t.length * 6.02 + 6, hz('11C'), [], 4);
+    eq('the received block off screen: not merged, LISTEN on the row above the blocks', [p.merged, p.liveRow], [false, p.rows + 1]);
+    const q = dabLabelLayout(withDabBlocks2(KNOWN_SIGNALS, dabBlockSignals2(new Map(), dabBlockIndex('7D')), span)!, hz('7D') - 4_000_000, 8_000_000, 1440, (t) => t.length * 6.02 + 6, hz('7D'), [], 4);
+    const t = q.placed.find((x) => isDabBlockSignal(x.sig) && (x.sig as DabBlockSignal).dabCurrent);
+    eq('a received block with no known name: one line, the readout', [t?.lines, t?.span, q.merged, q.liveRow], [['194.064M: DAB 7D'], 1, true, q.rows + 1]);
   }
   // ★ the DC spike's box (rows 2 and 3) lifts the tuned pair above it
   {

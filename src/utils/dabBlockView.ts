@@ -91,6 +91,11 @@ export function dabBlockLabel(block: string, mux?: string): string {
   return n ? `DAB ${block} — ${n}` : `DAB ${block}`;
 }
 
+/** ★★ The tuned box's first line — the needle's frequency and its block: "194.064M: DAB 7D". */
+export function dabTunedHead(hz: number, block: string): string {
+  return `${(hz / 1e6).toFixed(3)}M: DAB ${block}`;
+}
+
 /** The ensemble's name as drawn under its block: whitespace tidied, at most DAB_MUX_NAME_MAX characters (an ellipsis). */
 export function dabMuxShort(mux?: string): string {
   const n = clean(mux);
@@ -207,7 +212,12 @@ export function dabBlockBoxX(x: number, w: number, width: number): number {
 
 /** The wide view's layout: the boxes, how many block rows it used, the tuned block's (lowest) row (= rows) and LISTEN's
  *  (above the tuned box: rows + 2 for a named two-line box, rows + 1 for a bare one). */
-export interface DabLabelPlan { placed: PlacedLabel[]; rows: number; tunedRow: number; liveRow: number }
+export interface DabLabelPlan {
+  placed: PlacedLabel[]; rows: number; tunedRow: number; liveRow: number;
+  /** ★★ The tuned box carries the needle's readout — the caller draws NO separate LISTEN/readout label (false = no block
+   *  being received is in view: the caller draws its readout as usual, on `liveRow`). */
+  merged: boolean;
+}
 
 /**
  * ★★★ THE WIDE DAB VIEW'S LAYOUT (same units and conventions as knownSignals.ts labelLayout; `blocked` boxes on the block
@@ -217,14 +227,15 @@ export interface DabLabelPlan { placed: PlacedLabel[]; rows: number; tunedRow: n
  *    it): a named block is a TWO-LINE box (PlacedLabel.span 2, .lines), the block on top and its name underneath, both
  *    centred, CENTRED ON ITS OWN BLOCK and no wider than the block where it can be. In order:
  *   1. the block being received, alone on the row(s) above the block rows, CENTRED ON THE NEEDLE (`dialHz`) and kept on
- *      screen — its whole name;
+ *      screen: ONE box with the needle's readout and its whole name ("194.064M: DAB 7D" over "MTVNL") — `merged`, so the
+ *      caller draws no separate readout;
  *   2. every other block in view as a one-line box ("8A"), left to right, on the lowest block row it fits — none dropped;
  *   3. each named block (nearest the dial first) grown into the two-line box: its name as it is, else shortened with an
  *      ellipsis to the block's width (dabFitName) — in place (its row and the one above) or on the lowest free pair of
  *      rows; ONLY a name that cannot be shortened to the block's width is drawn whole and wider, on a pair of rows where it
  *      overlaps nothing; where nothing fits the block stays one line;
  *   4. the other labels in view (decoders, bookmarks…) in what is left of the block rows, at most LABEL_MAX of them.
- * LISTEN (the needle's own readout) is the caller's, on `liveRow`, CENTRED ON THE NEEDLE too (dabBlockBoxX).
+ * With no received block in view the needle's readout is the caller's, on `liveRow`, CENTRED ON THE NEEDLE (dabBlockBoxX).
  */
 export function dabLabelLayout(list: readonly KnownSignal[], lo: number, span: number, width: number,
                                measure: (label: string) => number, dialHz: number,
@@ -236,10 +247,10 @@ export function dabLabelLayout(list: readonly KnownSignal[], lo: number, span: n
   const floor = blocked.reduce((m, b) => Math.max(m, b.row + 1), DAB_BLOCK_ROWS_MIN);
   for (let rows = Math.min(floor, maxRows); rows <= maxRows; rows++) {
     const r = layoutRows(list, lo, span, width, measure, dialHz, blocked, pad, gap, rows);
-    plan = { placed: r.placed, rows, tunedRow: rows, liveRow: rows + r.tunedSpan };
+    plan = { placed: r.placed, rows, tunedRow: rows, liveRow: rows + r.tunedSpan, merged: r.placed.some((p) => isDabBlockSignal(p.sig) && p.sig.dabCurrent) };
     if (r.complete) break;
   }
-  return plan ?? { placed: [], rows: 0, tunedRow: 0, liveRow: 1 };
+  return plan ?? { placed: [], rows: 0, tunedRow: 0, liveRow: 1, merged: false };
 }
 
 function layoutRows(list: readonly KnownSignal[], lo: number, span: number, width: number,
@@ -268,19 +279,17 @@ function layoutRows(list: readonly KnownSignal[], lo: number, span: number, widt
   const two = (b: DabBlockSignal, name: string, x: number, lx: number, w: number, row: number): PlacedLabel =>
     ({ sig: b, x, lx, w, row, span: 2, lines: [b.block, name] });
 
-  // 1. the tuned block, on its own row(s), centred on the NEEDLE
+  // 1. the tuned block, on its own row(s), centred on the NEEDLE — ONE box: the needle's readout and the ensemble's name
+  //    (Stuart, 2026-11-16: "7D" shown once — "194.064M: DAB 7D" over "MTVNL"; the separate readout is not drawn here)
   let tunedSpan = 1;
   if (current) {
-    const x = xOf(Number.isFinite(dialHz) ? dialHz : current.hz);
-    if (current.mux) {
-      const w = Math.max(measure(current.block), measure(current.mux)), lx = dabBlockBoxX(x, w, width);
-      take(rows, lx, lx + w); take(rows + 1, lx, lx + w);
-      placed.push(two(current, current.mux, x, lx, w, rows)); tunedSpan = 2;
-    } else {
-      const w = measure(current.block), lx = dabBlockBoxX(x, w, width);
-      take(rows, lx, lx + w);
-      placed.push({ sig: current, x, lx, w, row: rows, span: 1, lines: [current.block] });
-    }
+    const needleHz = Number.isFinite(dialHz) ? dialHz : current.hz;
+    const x = xOf(needleHz), head = dabTunedHead(needleHz, current.block);
+    const lines = current.mux ? [head, current.mux] : [head];
+    const w = Math.max(...lines.map(measure)), lx = dabBlockBoxX(x, w, width);
+    for (let r = 0; r < lines.length; r++) take(rows + r, lx, lx + w);
+    placed.push({ sig: current, x, lx, w, row: rows, span: lines.length, lines });
+    tunedSpan = lines.length;
   }
   // 2. every other block, one line, left to right
   const slot = new Map<DabBlockSignal, PlacedLabel>();

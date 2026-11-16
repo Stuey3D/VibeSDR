@@ -359,6 +359,9 @@ export class Waterfall {
   vfoLiveLabel = '';
   /** ★★ V12 LISTEN's label row (markerLabelY's stack): 0, or above the block rows on a wide DAB view (dabLiveRow). */
   private liveRow = 0;
+  /** ★★ the wide DAB view's tuned box carries the needle's readout this frame (dabLabelLayout `merged`) */
+  private readoutMerged = false;
+  private knownMerged = false;
   private knownLiveRow = 0;
   vfoLiveAlpha = 1;
   vfo2: { hz: number; lo: number; hi: number; col: string; label: string; alpha: number; parked: boolean } | null = null;
@@ -1238,7 +1241,7 @@ export class Waterfall {
     this.labelList = this.spanHz > 0 ? withDabBlocks(this.knownSignals, this.dabBlocks, this.spanHz) : null;
     // ★★ V12 on a wide DAB view the VFO-coloured labels sit ABOVE the block rows (dabBlockView.ts dabLabelLayout):
     //    _drawKnown sets LISTEN's row from the layout it makes; anything else, row 0
-    if (!isDabWideList(this.labelList)) this.liveRow = 0;
+    if (!isDabWideList(this.labelList)) { this.liveRow = 0; this.readoutMerged = false; }
     if (this.labelList && this.labelList.length) this._drawKnown(ctx, W, H);
     else if (this.knownPlaced.length) { this.knownPlaced = []; this.knownKey = ''; }
     this._drawVfo(ctx, W, H);
@@ -1553,8 +1556,11 @@ export class Waterfall {
       // needle is ambiguous — which line is the one you're listening to?
       const dpr2 = renderDpr();
       void dpr2;
-      this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? this.liveRow : this.liveRow ? this.liveRow + 1 : 2), label, col,
-                       primary && this.liveRow > 0);   // ★ the wide DAB view's readout: centred on the needle
+      // ★★ a wide DAB view with the received block in view: its box IS the readout ("194.064M: DAB 7D" over the name —
+      //    dabBlockView.ts dabLabelLayout `merged`), so the needle draws none of its own; without one, centred on the needle
+      if (!(primary && this.readoutMerged))
+        this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? this.liveRow : this.liveRow ? this.liveRow + 1 : 2), label, col,
+                         primary && this.liveRow > 0);
     }
 
     ctx.restore();
@@ -1786,14 +1792,14 @@ export class Waterfall {
       }
       if (dabWide) {
         const plan = dabLabelLayout(this.labelList!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
-        this.knownPlaced = plan.placed; this.knownLiveRow = plan.liveRow;
+        this.knownPlaced = plan.placed; this.knownLiveRow = plan.liveRow; this.knownMerged = plan.merged;
       } else {
         this.knownPlaced = labelLayout(this.labelList!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
-        this.knownLiveRow = 0;
+        this.knownLiveRow = 0; this.knownMerged = false;
       }
       ctx.restore();
     }
-    this.liveRow = this.knownLiveRow;
+    this.liveRow = this.knownLiveRow; this.readoutMerged = this.knownMerged;
     // ★★ V12 the tuned station against the labels placed THIS frame: its own label, or one of these in the tuned colour
     this.tunedPicked = this._pickTuned(this.knownPlaced.map(p => p.sig));
     if (!this.knownPlaced.length) return;

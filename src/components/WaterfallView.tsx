@@ -2836,13 +2836,15 @@ function WaterfallView({
     const measure = (t: string) => estimateLabelWidth(t, 9, 3, 0.62);
     if (dabWideNow) {
       const plan = dabLabelLayout(labelList, visStart, bwHz, width, measure, tuneHz, blocked, 4);
-      return { placed: plan.placed.length ? plan.placed : null, liveRow: plan.liveRow };
+      return { placed: plan.placed.length ? plan.placed : null, liveRow: plan.liveRow, merged: plan.merged };
     }
     const p = labelLayout(labelList, visStart, bwHz, width, measure, tuneHz, blocked, 4);
-    return { placed: p.length ? p : null, liveRow: 0 };
+    return { placed: p.length ? p : null, liveRow: 0, merged: false };
   }, [labelList, visStart, bwHz, width, tuneHz, knownNX, knownCX, dabWideNow, dcSpikeX]);
   const knownPlaced = knownPlan ? knownPlan.placed : null;
   const liveRow = knownPlan ? knownPlan.liveRow : 0;
+  // ★★ the wide DAB view's tuned box IS the needle's readout ("194.064M: DAB 7D" over the name) — no separate one drawn
+  const readoutMerged = !!knownPlan?.merged;
   const labelBase = liveRow > 1 && !(specShow && specH > 40) ? markerLabelBase + 14 * (liveRow - 1) : markerLabelBase;
   const rowTop = useCallback((r: number) => labelBase - 14 * r, [labelBase]);
 
@@ -3481,7 +3483,7 @@ function WaterfallView({
 
         {/* The needle's own label. With an RF-centre marker on screen too, an
             unlabelled needle is ambiguous — which line am I listening to? */}
-        {needle && showCenterMarker && (
+        {needle && showCenterMarker && !readoutMerged && (
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: needleColor,
