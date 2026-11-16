@@ -444,7 +444,10 @@ are not intelligible, which is RADE's own limit. 700D is still unproven off air:
 - **`test-bench-decoders`:** `dec_rade` measures (> 0 %), decodes 29 blocks, and has its defaults rule.
 - **After the runtime dispatch (2026-11-16, macOS arm64):** test-freedv 82/82 with RADE on the chosen path and again with
   `VIBE_RADE_ARCH=neon` and `=c`, 57/57 without RADE; test-bench-decoders all passed (dec_rade 1.4 %, 29 blocks);
-  test-server-freedv 146 passed, 0 failed; test-bench-defaults all passed. test-web-freedv was not re-run (no client
+  test-server-freedv 146 passed, 0 failed on the first dispatch build — then, after the last commits, 144 passed, 2
+  failed twice, both on the codec2 **1600** station at 7.190 MHz LSB, one-pipeline radio (no text, no speech in 3 s,
+  though AUTO synced on it). A control run with the server linked against the PRE-dispatch archive failed the same two
+  checks, so it is not this change (RADE's code is not on that path); not chased further here. test-bench-defaults all passed. test-web-freedv was not re-run (no client
   change).
 - **`rade-bench`** (`vibeserver/linux/rade/rade-bench.cpp`) is the cost tool used for the tables above; it is not part of
   the test run.
