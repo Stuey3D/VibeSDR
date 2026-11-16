@@ -319,6 +319,13 @@ public:
         st->stationSignalStop_();
     }
     size_t stationCount() const { std::lock_guard<std::mutex> sk(stM_); return stations_.size(); }
+    /** ★ Is `sid` an audio service on the multiplex now? And is the list complete (FIG 0/7, or every service found)? */
+    bool hasService(uint32_t sid) {
+        std::lock_guard<std::mutex> lk(m_);
+        auto it = rx_.ensemble().services.find(sid);
+        return it != rx_.ensemble().services.end() && !it->second.isData;
+    }
+    bool listComplete() { std::lock_guard<std::mutex> lk(m_); return rx_.ensemble().mciComplete(); }
     /** ★ Bumps whenever a block change (or DAB's end) closed every station — the shim's cue to move their listeners. */
     uint32_t stationGeneration() const { return stGen_.load(std::memory_order_relaxed); }
     /** Close every station (DAB's end). A block change does this itself — see tuneLocked_. */

@@ -10,6 +10,7 @@
 // ★ A listener is a SESSION (user_session_id): their spectrum and audio sockets go together.
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -32,6 +33,10 @@ inline int nFromBench(double perStationPct, double dabTotalPct, int cores) {
     const int extra = spare > 0 ? int(std::floor(spare / perStationPct)) : 0;
     return std::min(16, 1 + extra);
 }
+
+/** The benchmark's own-station row's memory per station, KB (vibe_benchmark_dab.h writes it, runBenchmark's dabStations
+ *  block reads it; −1 = not measured). */
+inline std::atomic<long>& benchMemKB() { static std::atomic<long> v{-1}; return v; }
 
 /** On or off: the owner's `setting` (-1 the rule, 0 off, 1 on), the measured N (0 = not measured) and the user limit. */
 inline bool effectiveOn(int setting, int n, int limit) {
@@ -126,6 +131,9 @@ public:
         return sid;
     }
     bool present(const std::string& sess) const { return present_.count(sess) != 0; }
+    std::vector<std::string> presentList() const { std::vector<std::string> v; for (const auto& kv : present_) v.push_back(kv.first); return v; }
+    /** The shim could not open the station the roster chose (the hard cap): the listener hears the radio's own. */
+    void toPrimary(const std::string& sess) { on_.erase(sess); }
     void forget(double now, double graceSecs = 120.0) {
         for (auto it = gone_.begin(); it != gone_.end();) it = now - it->second.at > graceSecs ? gone_.erase(it) : std::next(it);
     }

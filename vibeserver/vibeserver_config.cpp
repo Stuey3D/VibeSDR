@@ -678,6 +678,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     if (r.dxScan.size() > 1000) r.dxScan.clear();
     I("idleKickMin", r.idleKickMin);
     I("dabScanLabels", r.dabScanLabels);
+    I("dabOwnStation", r.dabOwnStation);   // ★★ V12 own station per listener (docs/v12/DAB-OWN-STATION.md)
     dropBlockedDabLanding(r.blockedModes, r.landingDabChannel, r.landingDabSid, r.landingDabService);
 }
 
@@ -756,6 +757,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("dxScan", r.dxScan);                     // ★★★ V12 — see the reader
     N("idleKickMin", r.idleKickMin);
     N("dabScanLabels", r.dabScanLabels);
+    N("dabOwnStation", r.dabOwnStation);
     // ★★★ AND WHAT A NEWER VERSION WROTE, back exactly as it was (see RadioConfig::unknownKeys). Last, after every
     //     key this version owns — and a kept key is never one of ours, so the flat reader cannot be misled.
     for (const auto& kv : r.unknownKeys) o += "\"" + kv.first + "\":" + kv.second + ",";

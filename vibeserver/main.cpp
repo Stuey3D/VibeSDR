@@ -2587,7 +2587,7 @@ int main(int argc, char** argv) {
                 const std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
                                                          [&] { auto r = vibe::runDabRows(clip, 6.0);
                                                                for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
-                                                               return r; }, 4, decoderClip, hw);
+                                                               return r; }, 5, decoderClip, hw);
                 vsBenchSave(j);
                 vsApplyRateGate(vibe::usrpcaps::rateGate().locked);   // ★ the reacquire below re-reads it
                 if (released) {
@@ -4976,6 +4976,8 @@ int main(int argc, char** argv) {
         // ★★ THE HANDHELD NEVER SCANS EVERY STATION'S LABELS (Stuart, 2026-11-07: "DAB should lose the all station radio
         //    text on this device as that will be too much") — the R36S's A35s spend their DAB time on the station played.
         LocalSdrShim::instance().setDabScanLabels(g_handheldChild ? 0 : (mine ? mine->dabScanLabels : -1));
+        // ★★ V12 DAB own station (docs/v12/DAB-OWN-STATION.md): the owner's switch, per radio
+        LocalSdrShim::instance().setDabOwnStation(mine ? mine->dabOwnStation : -1);
         LocalSdrShim::instance().setLandingInfo(mine ? mine->antenna : std::string(),
                                                 g_serverConfig.landingMessage,
                                                 g_serverConfig.landingLinkUrl,
