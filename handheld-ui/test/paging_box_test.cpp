@@ -8,6 +8,8 @@
 //   • THE LIST: the engine's lines (made up here) become rows — time, "FLEX 3200/4", the capcode, the function / phase, the
 //     text, "cut short" — newest first, bounded at kPagingMax; ENTER on a row reads it whole, ENTER again is the list;
 //     CLR empties it; a restart of PAGE starts empty;
+//   • THE LAW: paging.ts' notice is the hint's first sentence (the picker, the empty box) and is shown once a session as PAGE
+//     first opens — not again;
 //   • NOTHING ON DISK: the whole run, with HOME pointed at an empty folder, leaves no file but the UI's own device id.
 // Silent (no audio). Run in the arm64 test image: handheld-ui/test/run_offscreen_tests.sh paging_box_test
 #include "../src/app.h"
@@ -107,10 +109,15 @@ int main() {
     CHECK(decAttachJson(gS, "paging").find("\"mode\":\"pocsag1200\"") != std::string::npos, "attach: a manual rate");
     u.pagingMode = "auto";
 
+    // ── the law: the hint's first sentence; shown once a session as PAGE first opens ──
+    CHECK(std::string(kPagingHint).rfind(kPagingLawNotice, 0) == 0, "the hint starts with the law's notice");
+    CHECK(std::string(kPagingLawNotice).find("illegal in certain countries") != std::string::npos, "…which says so plainly");
     // ── the speaker, from unmuted ──
     aud::State& A = aud::st();
     A.mute = false; A.vol = 80;
+    a.toast_.clear();
     decStart(a, gS, "paging"); decTick(a, gS);
+    CHECK(a.toast_ == kPagingLawNotice, "PAGE's first opening this session: the law's notice is shown (%s)", a.toast_.c_str());
     CHECK(A.pagingSilent && glyphMuted(), "PAGE open: the glyph shows the speaker muted");
     CHECK(!A.mute && A.vol == 80, "…and the person's own mute and volume are untouched (the engine plays the silence)");
     CHECK(pagingVtsLine().find("PAGE \xc2\xb7 ") == 0 && pagingVtsLine().find("speaker muted") != std::string::npos, "the VTS line: %s", pagingVtsLine().c_str());
@@ -119,7 +126,9 @@ int main() {
     CHECK(pagingVtsLine().empty(), "…and the VTS line gone");
     // ── from muted ──
     A.mute = true;
+    a.toast_.clear();
     decStart(a, gS, "paging"); decTick(a, gS);
+    CHECK(a.toast_.empty(), "PAGE opened again: the notice is not repeated this session");
     CHECK(glyphMuted() && A.mute, "muted before PAGE: muted while it runs");
     decStop(a, "paging"); decTick(a, gS);
     CHECK(A.mute && !A.pagingSilent, "…and still muted after (it was the person's)");

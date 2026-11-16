@@ -125,6 +125,11 @@ static int golden(const char* path) {
             std::string js; is >> js;
             hh::PagingStatus st;
             got = hh::parsePagingStatus(hh::Json::parse(unhex(js)), st) ? "1 " + hex(hh::pagingStatusText(&st)) : "0 " + hex(hh::pagingStatusText(nullptr));
+        } else if (op == "PX") {
+            // ★★★ paging.ts' words, one copy: paging.h's constants must be them exactly
+            std::string name; is >> name;
+            const char* t = name == "law" ? hh::kPagingLawNotice : name == "hint" ? hh::kPagingHint : nullptr;
+            got = t ? hex(t) : "unknown " + name;
         } else { std::fprintf(stderr, "unknown op: %s\n", line.c_str()); fails++; continue; }
         expect(got == want, "line " + std::to_string(n) + ": " + lhs + "\n   want " + want + "\n   got  " + got);
     }

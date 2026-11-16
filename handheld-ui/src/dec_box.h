@@ -505,7 +505,7 @@ inline void decPanePaging(App& a, Ctx& c, const RadioState& s, Rect view) {
     }
     // ★ back from a page read whole: the highlight on its row again (set once the rows are this frame's items)
     if (!decPageRefocus().empty()) { a.nav_.setFocus("dec", decPageRefocus()); decPageRefocus().clear(); }
-    if (u.pages.empty()) { decNone(c, view, u.pagingHave && !u.pagingSt.detected.empty() ? "locked on " + u.pagingSt.detected + " \u2014 each page appears here as it is decoded" : std::string(kPagingHint)); return; }
+    if (u.pages.empty()) { decNone(c, view, u.pagingHave && !u.pagingSt.detected.empty() ? "locked on " + u.pagingSt.detected + " \u2014 each page appears here as it is decoded. " + kPagingLawNotice : std::string(kPagingHint)); return; }
     const float rh = 2 * c.f.small.lineHeight() + 10;
     const int hit = decRows(c, decListScroll(), view, (int)u.pages.size(), rh, "dec.pg.", [&](int k) { return std::to_string((unsigned long long)u.pages[(size_t)k].id); },
         [&](int k, Rect rr, bool) {

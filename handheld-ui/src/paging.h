@@ -72,8 +72,12 @@ inline std::string pagingStatusText(const PagingStatus* s) {
     return head + n + w;
 }
 
-/** paging.ts PAGING_HINT, with the handheld's names for the rows (PROTOCOL, RATE). */
+/** paging.ts PAGING_LAW_NOTICE — shown first in the hint (the empty box, the picker) and once a session as PAGE opens. */
+inline const char* const kPagingLawNotice =
+    "Decoding pagers is illegal in certain countries \xe2\x80\x94 please check the laws in your country before using it.";
+/** paging.ts pagingHintFor('PROTOCOL', 'RATE') — the handheld's names for the rows. */
 inline const char* const kPagingHint =
+    "Decoding pagers is illegal in certain countries \xe2\x80\x94 please check the laws in your country before using it. "
     "Tune a paging channel in NFM with the filter at 12.5 kHz or wider. AUTO finds the protocol and the rate \xe2\x80\x94 POCSAG "
     "512, 1200 or 2400, or FLEX 1600, 3200 or 6400 \xe2\x80\x94 and names it; if AUTO cannot lock, pick the PROTOCOL (and for POCSAG "
     "the RATE) below. FLEX names its own speed in every frame. The speaker is muted while PAGE runs and comes back as it was "

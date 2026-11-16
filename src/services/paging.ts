@@ -32,8 +32,16 @@ export function pagingStatusText(s: PagingStatus | null): string {
   const w = s.short ? ' · filter narrow: widen NFM to 12.5 kHz or more' : '';
   return head + n + w;
 }
-export const PAGING_HINT =
-  'Tune a paging channel in NFM with the filter at 12.5 kHz or wider. AUTO finds the protocol and the rate — POCSAG ' +
-  '512, 1200 or 2400, or FLEX 1600, 3200 or 6400 — and names it; if AUTO cannot lock, pick the protocol (and for POCSAG ' +
-  'the rate) below. FLEX names its own speed in every frame. The speaker is muted while PAGE runs and comes back as it was ' +
-  'when you close it. Pages are shown here only — never saved or sent anywhere.';
+/** ★★★ THE LAW (Stuart, 2026-11-16) — shown wherever PAGE is offered or described: the hint under the key, the tour,
+ *  About, the R36S's PAGE box. ONE copy: every client reads this (the R36S's paging.h is golden-tested against it). */
+export const PAGING_LAW_NOTICE =
+  'Decoding pagers is illegal in certain countries \u2014 please check the laws in your country before using it.';
+/** The hint under PAGE, with the client's names for its two rows (the app: protocol / rate; the R36S: PROTOCOL / RATE). */
+export function pagingHintFor(protocolRow: string, rateRow: string): string {
+  return PAGING_LAW_NOTICE + ' Tune a paging channel in NFM with the filter at 12.5 kHz or wider. AUTO finds the protocol ' +
+    'and the rate \u2014 POCSAG 512, 1200 or 2400, or FLEX 1600, 3200 or 6400 \u2014 and names it; if AUTO cannot lock, pick ' +
+    `the ${protocolRow} (and for POCSAG the ${rateRow}) below. FLEX names its own speed in every frame. The speaker is ` +
+    'muted while PAGE runs and comes back as it was when you close it. Pages are shown here only \u2014 never saved or ' +
+    'sent anywhere.';
+}
+export const PAGING_HINT = pagingHintFor('protocol', 'rate');

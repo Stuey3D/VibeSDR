@@ -437,6 +437,7 @@ struct DecUi {
     std::deque<PageRow> pages;        // ★ V12 PAGE: newest first, ≤ kPagingMax, in memory ONLY (never a file, never a log)
     PagingStatus pagingSt; bool pagingHave = false;
     uint64_t pagingSeq = 0, pageRead = 0;   // ★ the last page's number; the page being read whole (0 = the list)
+    bool pagingLawShown = false;       // ★ V12 PAGE: the law's notice has been toasted this session (once, as PAGE first opens)
     double reattachAt = 0;           // a burst of option presses settles into one re-attach
     // the server's offer (GET /vibeserver.json, off the UI thread)
     std::mutex capMtx;
@@ -1155,6 +1156,9 @@ inline void decTick(App& a, const RadioState& s) {
         if (paging != A.pagingSilent) {
             A.pagingSilent = paging;
             std::fprintf(stderr, "vibe-hhui: speaker %s (PAGE %s)\n", paging ? "silent" : "back as it was", paging ? "open" : "closed");
+            // ★★★ THE LAW, once a session as PAGE first opens (Stuart, 2026-11-16) — paging.ts PAGING_LAW_NOTICE; the box's
+            //     empty state and the picker's hint carry it too
+            if (paging && !u.pagingLawShown) { u.pagingLawShown = true; a.toastLong(kPagingLawNotice); }
         }
         pagingVtsLine() = paging ? pagingVts(u.pagingHave ? &u.pagingSt : nullptr) : std::string();
     }
