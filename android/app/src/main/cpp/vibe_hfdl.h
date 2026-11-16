@@ -343,7 +343,12 @@ private:
         const float pq = q + q1;
         if (cand_) {
             if (pq > bestQ_) { bestQ_ = pq; bestN_ = n; bestW_ = std::arg(D); }
-            if (n - bestN_ > 256) {   // ★ 64 symbols: a strong burst's partial overlaps with the pre-key peak before the true one
+            /* ★★ HELD PAST THE PAIR'S OWN SPACING (2026-11-16). The hold was 256 samples (64 symbols), shorter than the 508
+             *  between A1's end and A2's: on a STRONG burst (≥ 16 dB, the synthetic set — never seen in the recordings, whose
+             *  bursts are weaker) the pre-key's Q passed detQ, the pair rule armed at A1's end, the hold ran out before A2's
+             *  end arrived, and the burst was worked 127 symbols early — A coherent, M1 "unclear", 0 messages at 20–40 dB.
+             *  A2's end (both halves of the pair) always beats A1's (one half), so the hold covers it. */
+            if (n - bestN_ > 4 * kALen + 64) {   // ★ a strong burst's partial overlaps (and A1's own end) peak before the true one
                 st_.detections++;
                 coarseW_ = bestW_;                 // ★ the carrier's step a symbol, from the differential correlator
                 startBurst_(bestN_ - 4 * kALen);   // A1's end
