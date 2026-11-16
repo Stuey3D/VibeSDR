@@ -14,6 +14,7 @@
 //     with the jurisdiction notice on the setup page), and never in a public gallery.
 #pragma once
 #include "vibe_acars.h"
+#include "vibe_acars_apps.h"   // ★ what the messages say: positions, OOOI, ADS-C / CPDLC named (§Applications)
 #include "vibe_vdl2.h"
 #include "vibe_hfdl.h"
 
@@ -51,6 +52,9 @@ inline const char* labelName(const std::string& l) {
         { "11", "arrival" }, { "5U", "weather request" }, { "5Z", "airline ops" }, { "B6", "ADS-C" }, { "BA", "CPDLC / ATS" },
         { "SA", "media advisory" }, { "QA", "out of gate" }, { "QB", "off the ground" }, { "QC", "on the ground" }, { "QD", "in at the gate" },
         { "80", "airline ops" }, { "1L", "airline ops" }, { "Q1", "OOOI" }, { "RA", "uplink to the printer" },
+        // ★ the labels vibe_acars_apps.h reads (libacars for the ATS ones, the MIT sample set for the OOOI ones)
+        { "QP", "out of gate" }, { "QQ", "off the ground" }, { "QR", "on the ground" }, { "QS", "in at the gate" },
+        { "AA", "ATS uplink (CPDLC / ADS-C)" }, { "A6", "ADS-C request" }, { "44", "position / OOOI" },
     };
     for (const auto& e : t) if (l == e.l) return e.n;
     return "";
@@ -60,6 +64,12 @@ struct Aircraft {
     uint32_t icao = 0;               ///< 0 = not known (ACARS alone)
     std::string reg, flight;
     double lat = NAN, lon = NAN, posAt = -1;
+    // ★ from the ACARS applications (vibe_acars_apps.h) — flight data, shown by default like the registration
+    bool hasAlt = false; int altFt = 0;
+    std::string posSrc, posTime;     ///< "ADS-C" | "FMS" | "ACARS" | "HFDL"; the fix time AS REPORTED ("21:57:54", ":06:36")
+    std::string from, to;            ///< ICAO airports from an OOOI / FMS / weather report
+    std::string oooi, oooiTime;      ///< the last OUT / OFF / ON / IN event and its time ("20:30")
+    std::string app;                 ///< the last structured message's application: "ADS-C", "CPDLC", "OOOI", "FMS", "position"
     double first = 0, last = 0;
     int count = 0;
     std::string via;                 ///< "VDL2 136.975", "ACARS 131.725", "HFDL 8977 (Reykjavik)"
@@ -98,7 +108,7 @@ public:
         char via[48]; std::snprintf(via, sizeof via, "VDL2 %.3f", f.hz / 1e6);
         a.via = via;
         if (fromAc) a.level = f.levelDb;
-        if (f.hasAcars && f.acarsCrcOk) acars_(a, f.acars);
+        if (f.hasAcars && f.acarsCrcOk) acars_(a, f.acars, now);
         ++msgs_;
     }
     void addAcars(const vibeacars::Block& b, double now) {
@@ -107,7 +117,7 @@ public:
         Aircraft& a = row_(0, b.reg, now);
         char via[48]; std::snprintf(via, sizeof via, "ACARS %.3f", b.hz / 1e6);
         a.via = via; a.level = b.levelDb;
-        acars_(a, b);
+        acars_(a, b, now);
         ++msgs_;
     }
     void addHfdl(const vibehfdl::Message& m, double now) {
@@ -119,8 +129,8 @@ public:
         a.via = via;
         a.gsId = m.dstId; a.hfdlKhz = m.hz / 1e3; a.hfdlAt = now; a.hfdlLevel = m.snrDb;
         if (!m.flight.empty()) a.flight = m.flight;
-        if (!std::isnan(m.lat)) { a.lat = m.lat; a.lon = m.lon; a.posAt = now; }
-        if (m.hasAcars && m.acarsCrcOk) acars_(a, m.acars);
+        if (!std::isnan(m.lat)) { a.lat = m.lat; a.lon = m.lon; a.posAt = now; a.posSrc = "HFDL"; a.posTime.clear(); a.hasAlt = false; }
+        if (m.hasAcars && m.acarsCrcOk) acars_(a, m.acars, now);
         ++msgs_;
     }
     /** Rows heard in the last `keepS` seconds, newest first: {"aircraft":[{icao, reg, flight, lat, lon, via, n, age, label, text}]}. */
@@ -130,7 +140,12 @@ public:
         std::vector<const Aircraft*> v;
         for (const auto& a : rows_) if (now - a.last <= keepS) v.push_back(&a);
         std::sort(v.begin(), v.end(), [](const Aircraft* x, const Aircraft* y) { return x->last > y->last; });
-        std::string o = "{\"msgs\":" + std::to_string(msgs_) + ",\"aircraft\":[";
+        std::string o = "{\"msgs\":" + std::to_string(msgs_);
+        char cb[160];
+        std::snprintf(cb, sizeof cb, ",\"apps\":{\"pos\":%llu,\"oooi\":%llu,\"adsc\":%llu,\"cpdlc\":%llu,\"unparsed\":%llu}",
+                      (unsigned long long)nPos_, (unsigned long long)nOooi_, (unsigned long long)nAdsc_, (unsigned long long)nCpdlc_, (unsigned long long)nUnparsed_);
+        o += cb;
+        o += ",\"aircraft\":[";
         char b[160];
         for (size_t i = 0; i < v.size(); ++i) {
             const Aircraft& a = *v[i];
@@ -139,7 +154,15 @@ public:
             if (a.icao) { std::snprintf(b, sizeof b, "\"icao\":\"%06X\",", a.icao); o += b; }
             if (!a.reg.empty()) o += "\"reg\":\"" + jsonEsc(a.reg) + "\",";
             if (!a.flight.empty()) o += "\"flight\":\"" + jsonEsc(a.flight) + "\",";
-            if (!std::isnan(a.lat)) { std::snprintf(b, sizeof b, "\"lat\":%.4f,\"lon\":%.4f,\"posAge\":%.0f,", a.lat, a.lon, now - a.posAt); o += b; }
+            if (!std::isnan(a.lat)) {
+                std::snprintf(b, sizeof b, "\"lat\":%.4f,\"lon\":%.4f,\"posAge\":%.0f,", a.lat, a.lon, now - a.posAt); o += b;
+                if (a.hasAlt) { std::snprintf(b, sizeof b, "\"alt\":%d,", a.altFt); o += b; }
+                if (!a.posSrc.empty()) o += "\"posSrc\":\"" + jsonEsc(a.posSrc) + "\",";
+                if (!a.posTime.empty()) o += "\"posTime\":\"" + jsonEsc(a.posTime) + "\",";
+            }
+            if (!a.from.empty()) o += "\"from\":\"" + jsonEsc(a.from) + "\",\"to\":\"" + jsonEsc(a.to) + "\",";
+            if (!a.oooi.empty()) o += "\"oooi\":\"" + jsonEsc(a.oooi) + "\",\"oooiTime\":\"" + jsonEsc(a.oooiTime) + "\",";
+            if (!a.app.empty()) o += "\"app\":\"" + jsonEsc(a.app) + "\",";
             if (!a.lastLabel.empty()) o += "\"label\":\"" + jsonEsc(a.lastLabel) + "\",\"labelName\":\"" + jsonEsc(labelName(a.lastLabel)) + "\",";
             if (bodies_ && withText && !a.lastText.empty()) o += "\"text\":\"" + jsonEsc(a.lastText) + "\",";
             std::snprintf(b, sizeof b, "\"level\":%.1f,\"n\":%d,\"age\":%.0f,", a.level, a.count, now - a.last); o += b;
@@ -151,7 +174,7 @@ public:
     size_t size() { std::lock_guard<std::mutex> lk(m_); return rows_.size(); }
     uint64_t messages() { std::lock_guard<std::mutex> lk(m_); return msgs_; }
     /** Forget every row (a fresh entry into the mode keeps nothing from a radio that has moved on). */
-    void clear() { std::lock_guard<std::mutex> lk(m_); rows_.clear(); gs_.clear(); msgs_ = other_ = 0; }
+    void clear() { std::lock_guard<std::mutex> lk(m_); rows_.clear(); gs_.clear(); msgs_ = other_ = 0; nPos_ = nOooi_ = nAdsc_ = nCpdlc_ = nUnparsed_ = 0; reasm_ = vibeacarsapps::Reassembler(); }
 
     /** ★ /addon/hfdl/aircraft — the HFDL map's shape (src/components/MapOverlay.tsx fetchAC): an array of
      *  {key, icao, flight, reg, lat, lon, last_seen (unix s), gs_id, freq_khz, msg_count}. ★ No sig_level: the map reads
@@ -200,11 +223,34 @@ public:
     }
 
 private:
-    void acars_(Aircraft& a, const vibeacars::Block& b) {
+    void acars_(Aircraft& a, const vibeacars::Block& b, double now) {
         if (!b.reg.empty()) a.reg = b.reg;
         if (!b.flight.empty()) a.flight = b.flight;
         a.lastLabel = b.label;
         if (bodies_) a.lastText = b.text; else a.lastText.clear();
+        // ★ the applications: only once the whole message is in (ETB blocks joined), only what vibe_acars_apps.h is sure of
+        std::string whole;
+        if (!reasm_.add(b, now, whole)) return;
+        const vibeacarsapps::Result r = vibeacarsapps::parse(b.label, whole, b.downlink);
+        if (r.kind.empty()) { if (!whole.empty()) ++nUnparsed_; return; }
+        if (r.app == "cpdlc") { ++nCpdlc_; a.app = "CPDLC"; }        // ★ named only: CPDLC content is never decoded
+        else if (r.app == "adsc") { ++nAdsc_; a.app = "ADS-C"; }
+        else if (r.app == "oooi") { ++nOooi_; a.app = "OOOI"; }
+        else if (r.app == "pos") { ++nPos_; a.app = r.kind.compare(0, 3, "FMS") == 0 ? "FMS" : "position"; }
+        else a.app = "FMS";
+        if (r.hasPos) {
+            a.lat = r.lat; a.lon = r.lon; a.posAt = now;
+            a.hasAlt = r.hasAlt; a.altFt = r.altFt;
+            a.posSrc = r.app == "adsc" ? "ADS-C" : r.kind.compare(0, 3, "FMS") == 0 ? "FMS" : "ACARS";
+            a.posTime = vibeacarsapps::fixTimeText(r);
+        }
+        if (!r.from.empty()) { a.from = r.from; a.to = r.to; }
+        if (!r.oooi.empty()) {
+            a.oooi = r.oooi;
+            char t[8];
+            if (r.oooiSec >= 0) { std::snprintf(t, sizeof t, "%02d:%02d", r.oooiSec / 3600, r.oooiSec / 60 % 60); a.oooiTime = t; } else a.oooiTime.clear();
+        }
+        if (a.flight.empty() && !r.flight.empty()) a.flight = r.flight;
     }
     /** The row for this aircraft: by ICAO address when known, else by registration, else by flight. Adopts a row found by
      *  registration when the ICAO address arrives later (VDL2 then ACARS for the same aircraft, or the other way). */
@@ -238,6 +284,8 @@ private:
     std::map<int, GsHeard> gs_;   // ★ ≤ 128 ids
     bool bodies_;
     uint64_t msgs_ = 0, other_ = 0;
+    uint64_t nPos_ = 0, nOooi_ = 0, nAdsc_ = 0, nCpdlc_ = 0, nUnparsed_ = 0;   ///< ★ unparsed = had text, no layout we are sure of
+    vibeacarsapps::Reassembler reasm_;   // ★ bounded (32 messages × 8 blocks)
 };
 
 /** The whole-radio decoder (ACARS or VDL2) on its own thread. `kind` "acars" | "vdl2". */
