@@ -17,6 +17,7 @@
 #include "vibe_acars_apps.h"   // ★ what the messages say: positions, OOOI, ADS-C / CPDLC named (§Applications)
 #include "vibe_vdl2.h"
 #include "vibe_hfdl.h"
+#include "vibe_aircraft_share.h"   // ★ V12 2026-11-16 the shared table every radio on the machine writes (the AVIATION MAP)
 
 #include <algorithm>
 #include <atomic>
@@ -77,6 +78,9 @@ struct Aircraft {
     std::string lastLabel, lastText; ///< lastText: only kept when bodies are on
     // ★ HFDL: the last burst's ground station, frequency and level, and when (the map's /addon/hfdl/aircraft fields)
     int gsId = -1; double hfdlKhz = 0, hfdlAt = -1; float hfdlLevel = 0;
+    // ★ V12 2026-11-16 the shared table (vibe_aircraft_share.h): which decoders heard it and when (wall seconds), and how many
+    //   of its messages have already been handed over
+    uint8_t srcMask = 0; double srcAt[vibeavshare::kNSrc] = {}; int countShared = 0;
 };
 
 /** ★ The HFDL ground stations (the public HFDL station list: id, name, position to a tenth of a degree). */
@@ -107,6 +111,7 @@ public:
         Aircraft& a = row_(ic, f.hasAcars ? f.acars.reg : "", now);
         char via[48]; std::snprintf(via, sizeof via, "VDL2 %.3f", f.hz / 1e6);
         a.via = via;
+        heard_(a, vibeavshare::kVdl2, now);
         if (fromAc) a.level = f.levelDb;
         if (f.hasAcars && f.acarsCrcOk) acars_(a, f.acars, now);
         ++msgs_;
@@ -117,6 +122,7 @@ public:
         Aircraft& a = row_(0, b.reg, now);
         char via[48]; std::snprintf(via, sizeof via, "ACARS %.3f", b.hz / 1e6);
         a.via = via; a.level = b.levelDb;
+        heard_(a, vibeavshare::kAcars, now);
         acars_(a, b, now);
         ++msgs_;
     }
@@ -127,6 +133,7 @@ public:
         Aircraft& a = row_(m.icao, m.hasAcars ? m.acars.reg : "", now, m.icao ? "" : m.flight);
         char via[64]; std::snprintf(via, sizeof via, "HFDL %.0f%s%s", m.hz / 1e3, *vibehfdl::gsName(m.dstId) ? " " : "", vibehfdl::gsName(m.dstId));
         a.via = via;
+        heard_(a, vibeavshare::kHfdl, now);
         a.gsId = m.dstId; a.hfdlKhz = m.hz / 1e3; a.hfdlAt = now; a.hfdlLevel = m.snrDb;
         if (!m.flight.empty()) a.flight = m.flight;
         if (!std::isnan(m.lat)) { a.lat = m.lat; a.lon = m.lon; a.posAt = now; a.posSrc = "HFDL"; a.posTime.clear(); a.hasAlt = false; }
@@ -222,7 +229,36 @@ public:
         return o + "]";
     }
 
+    /** ★★ V12 2026-11-16 THE SHARED TABLE's provider (vibe_aircraft_share.h Sharer): the rows heard since `sinceMs` (wall
+     *  clock), as updates — never a message body — and the HFDL ground stations heard since. Under the table's lock, briefly. */
+    void shareSince(int64_t sinceMs, std::vector<vibeavshare::Update>& out, std::vector<vibeavshare::GsHeard>& gs) {
+        std::lock_guard<std::mutex> lk(m_);
+        const double since = sinceMs / 1000.0;
+        for (auto& a : rows_) {
+            if (a.last < since || !a.srcMask) continue;
+            vibeavshare::Update u;
+            u.icao = a.icao; u.reg = a.reg; u.flight = a.flight; u.from = a.from; u.to = a.to; u.label = a.lastLabel; u.app = a.app; u.via = a.via;
+            u.srcMask = a.srcMask;
+            for (int s = 0; s < vibeavshare::kNSrc; ++s) u.srcMs[s] = (int64_t)std::llround(a.srcAt[s] * 1000);
+            u.heardMs = (int64_t)std::llround(a.last * 1000);
+            if (!std::isnan(a.lat)) {
+                u.hasPos = true; u.lat = a.lat; u.lon = a.lon; u.posMs = (int64_t)std::llround(a.posAt * 1000);
+                u.posSrc = a.posSrc == "ADS-C" ? vibeavshare::kAdsc : a.posSrc == "HFDL" ? vibeavshare::kHfdl
+                         : a.via.compare(0, 4, "VDL2") == 0 ? vibeavshare::kVdl2 : a.via.compare(0, 4, "HFDL") == 0 ? vibeavshare::kHfdl : vibeavshare::kAcars;
+                u.hasAlt = a.hasAlt; u.altFt = a.altFt; u.posTime = a.posTime;
+            }
+            u.count = (uint32_t)std::max(0, a.count - a.countShared); a.countShared = a.count;
+            out.push_back(std::move(u));
+            if (out.size() >= vibeavshare::kCap) break;
+        }
+        for (const auto& kv : gs_) if (kv.second.at >= since) {
+            vibeavshare::GsHeard g; g.id = kv.first; g.ms = (int64_t)std::llround(kv.second.at * 1000); g.khz = kv.second.khz.empty() ? 0 : kv.second.khz.back();
+            gs.push_back(g);
+        }
+    }
+
 private:
+    static void heard_(Aircraft& a, int src, double now) { a.srcMask |= uint8_t(1u << src); a.srcAt[src] = now; }
     void acars_(Aircraft& a, const vibeacars::Block& b, double now) {
         if (!b.reg.empty()) a.reg = b.reg;
         if (!b.flight.empty()) a.flight = b.flight;
@@ -242,6 +278,7 @@ private:
             a.lat = r.lat; a.lon = r.lon; a.posAt = now;
             a.hasAlt = r.hasAlt; a.altFt = r.altFt;
             a.posSrc = r.app == "adsc" ? "ADS-C" : r.kind.compare(0, 3, "FMS") == 0 ? "FMS" : "ACARS";
+            if (r.app == "adsc") heard_(a, vibeavshare::kAdsc, now);   // ★ the map names ADS-C beside its bearer
             a.posTime = vibeacarsapps::fixTimeText(r);
         }
         if (!r.from.empty()) { a.from = r.from; a.to = r.to; }
@@ -373,5 +410,13 @@ private:
  *  aircraft heard on VHF and on HF is one row, and /addon/hfdl/aircraft + groundstations and the mode's report read the same rows. Bounded
  *  (2000 rows, 128 stations). Bodies start OFF: the shim sets the owner's choice before anything is decoded. */
 inline Tracker& sharedTracker() { static Tracker t(false); return t; }
+
+/** ★★ V12 2026-11-16: hand this process's datalink table to the shared table (vibe_aircraft_share.h) — called when the
+ *  datalink mode starts or a listener's HFDL decoder attaches. Idempotent (the provider is replaced by name). */
+inline void shareTrackerProvide() {
+    vibeavshare::sharer().provide("avi", [](int64_t since, std::vector<vibeavshare::Update>& out, std::vector<vibeavshare::GsHeard>& gs) {
+        sharedTracker().shareSince(since, out, gs);
+    });
+}
 
 }  // namespace vibeavi

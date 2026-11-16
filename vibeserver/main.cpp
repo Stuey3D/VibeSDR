@@ -4943,6 +4943,10 @@ int main(int argc, char** argv) {
             } else
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", o.galleryMb >= 0 ? o.galleryMb : g_serverConfig.galleryMb,
                                      g_serverConfig.galleryPublic, g_serverConfig.gallerySaveLive);
+            // ★★ V12 2026-11-16 THE SHARED AIRCRAFT TABLE (vibe_aircraft_share.h): every radio process of this machine writes
+            //    ADS-B, ACARS, VDL2 and HFDL into one file in the RUNTIME directory (a tmpfs here: /run/vibeserver), so the
+            //    AVIATION MAP on any radio shows each aircraft once with every source that heard it — never the SD card.
+            LocalSdrShim::setAircraftShareDir(handoffDir());
             LocalSdrShim::setGalleryRedact(gallerySerials(g_serverConfig));   // ★★★ before the label: a serial never reaches an item
             LocalSdrShim::setGalleryRadioLabel(mine ? (mine->label.empty() ? mine->driver : mine->label) : std::string());
         }

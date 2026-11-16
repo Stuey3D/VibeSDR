@@ -15264,6 +15264,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         const double runRate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         g_adsb.start(runRate, g_bgLat.load(), g_bgLon.load(), !vsModeBlocked("commb"));   // ★ V12 Comm-B, the owner's switch under ADS-B
+        // ★★ V12 2026-11-16 the AVIATION MAP: this radio's ADS-B into the shared table (vibe_aircraft_share.h), so another
+        //    radio's datalink rows join the same aircraft. Idempotent; the provider gives nothing while ADS-B is stopped.
+        vibeavshare::sharer().provide("adsb", [](int64_t since, std::vector<vibeavshare::Update>& out, std::vector<vibeavshare::GsHeard>&) {
+            g_adsb.shareSince(since, out);
+        });
         adsbLastReport_ = adsbLastGain_ = nowSecs();
         g_adsbMode.store(true);
         if (adsbGainIdx_ >= 0) LocalSdrShim::instance().setGain(adsbGainSet_);
@@ -16239,6 +16244,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     void avEnter(const vibeavi::Band& b) {
+        vibeavi::shareTrackerProvide();   // ★ V12 2026-11-16 the AVIATION MAP: this radio's datalink into the shared table
         const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         const double hw = b.centreHz;
         if (g_avMode.load()) {
@@ -26107,6 +26113,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reply("200 OK", "{\"ok\":true,\"removed\":" + std::to_string(n) + "}"); return;
             }
             reply("404 Not Found", "{\"ok\":false,\"error\":\"unknown DX log request\"}");
+            return;
+        } else if (reqLine.rfind("GET /vibeserver/aircraft.json", 0) == 0) {
+            /* ★★ V12 2026-11-16 THE AVIATION MAP's aircraft (vibe_aircraft_share.h): every aircraft ANY radio on this machine
+             *  heard — ADS-B, ACARS, VDL2, HFDL, ADS-C — one row each, with the sources that heard it, and the HFDL ground
+             *  stations heard. ?since=<seconds back> (0 / absent = the hour the table keeps). Flight data only: never a
+             *  message body. "off":1 where the owner switched every aircraft mode off. CORS open, as /addon/hfdl/*. */
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            long since = 0;
+            { const size_t q = reqLine.find("since="), sp = reqLine.find(' ', 4);
+              if (q != std::string::npos && (sp == std::string::npos || q < sp)) since = std::max(0L, std::min(3600L, std::atol(reqLine.c_str() + q + 6))); }
+            const int64_t now = vibeavshare::wallMs();
+            std::string body;
+            if (vsModeBlocked("adsb") && vsModeBlocked("avdata") && vsModeBlocked("hfdl"))
+                body = "{\"now\":" + std::to_string((long long)(now / 1000)) + ",\"count\":0,\"aircraft\":[],\"stations\":[],\"off\":1}";
+            else {
+                std::vector<vibeavshare::GsHeard> gs;
+                const auto rows = vibeavshare::table().read(now, since ? now - since * 1000 : 0, &gs);
+                body = vibeavshare::toJson(rows, gs, now, [](const std::string& l) { return std::string(vibeavi::labelName(l)); },
+                    [](int id, std::string& name, double& lat, double& lon) {
+                        for (const auto& g : vibeavi::groundStations()) if (g.id == id) { name = g.name; lat = g.lat; lon = g.lon; return true; }
+                        return false;
+                    });
+            }
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
             return;
         } else if (reqLine.rfind("GET /addon/hfdl/", 0) == 0) {
             /* ★★ V12 HFDL — THE HFDL MAP'S TWO ENDPOINTS (docs/v12/AVIATION.md §Decision): the clients' HFDL map
@@ -38075,6 +38108,10 @@ void LocalSdrShim::setDxLogFile(const std::string& path) {
     if (path == g_dxLogPath) return;
     if (g_dxLogLoaded) dxLogFlushLocked("the log moved");
     g_dxLogPath = path; g_dxLogLoaded = false;
+}
+void LocalSdrShim::setAircraftShareDir(const std::string& dir) {
+    vibeavshare::table().setDir(dir);
+    LOGI("aircraft table: %s", dir.empty() ? "this process only" : (dir + "/" + vibeavshare::kFile).c_str());
 }
 void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publicRead, bool saveLive) {
     auto& g = vibe::gallery::shared();
