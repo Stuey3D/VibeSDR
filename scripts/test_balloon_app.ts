@@ -2,7 +2,7 @@
 // server's report sanitised, the 0x0B picture frame read, the words, the attach parameters for AUTO and the manual pins,
 // and the keys wired in both clients (only where the server offers "balloon"). Run: npx tsx scripts/test_balloon_app.ts
 import { readFileSync } from 'node:fs';
-import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_HINT, balloonIsAuto, balloonLine, balloonParams, balloonPicture, balloonPictureText,
+import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_HINT, balloonIsAuto, balloonLine, balloonMerge, balloonParams, balloonPicture, balloonPictureText,
          balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen } from '../src/services/balloons';
 import { decoderNear, DECODER_PLACES } from '../src/utils/decoderBands';
 
@@ -47,6 +47,14 @@ eq('status: before a report', balloonStatus(null), 'listening for a balloon…')
 eq('status: tones, no settings yet', balloonStatus({ ...r, state: 1, rtty: { ...r.rtty, settings: '' }, horus: { ...r.horus, tones: null } }), 'RTTY tones 600 Hz apart — working out its settings…');
 eq('status: nothing', balloonStatus({ ...r, state: 0, rtty: { ...r.rtty, settings: '', shift: 0 }, horus: { ...r.horus, tones: null } }).startsWith('listening — tune a payload in USB'), true);
 eq('picture text', balloonPictureText(r.images[0]), 'VIBE1 picture 7 · 12 of 30 packets');
+// ★ the box keeps every payload since it opened (a re-attach starts the server's list again)
+const kept = balloonMerge([], r);
+eq('merge: newest heard first', kept.map((p) => p.call), ['HORUS-256', 'VIBE1', 'NOFIX', 'BAD']);
+const fresh = balloonSanitise({ ...msg, now: msg.now + 30, payloads: [{ ...msg.payloads[1] as object, count: 3, heard: msg.now + 25 }] })!;
+const k2 = balloonMerge(kept, fresh);
+eq('merge: an empty-ish fresh run keeps the rest, the newer report replaces its own', [k2.length, k2[0].call, k2[0].count], [4, 'VIBE1', 3]);
+eq('merge: an older report never replaces a newer one', balloonMerge(k2, r).find((p) => p.call === 'VIBE1')!.count, 3);
+eq('merge: nothing in, nothing lost', balloonMerge(k2, null).length, 4);
 
 // ── the 0x0B frame ──
 const key = 'VIBE1#7';
@@ -64,8 +72,8 @@ eq('AUTO sends nothing', balloonParams(BALLOON_AUTO), {});
 ok('AUTO is AUTO', balloonIsAuto(BALLOON_AUTO));
 eq('pins', balloonParams({ baud: 300, bits: 8, reverse: 1, shift: 600, horusSpacing: 270 }), { baud_rate: 300, bits: 8, reverse: 1, shift: 600, horus_spacing: 270 });
 eq('reverse 0 is a pin (normal), -1 is AUTO', [balloonParams({ ...BALLOON_AUTO, reverse: 0 }), balloonParams({ ...BALLOON_AUTO, reverse: -1 })], [{ reverse: 0 }, {}]);
-eq('labels', [balloonPinLabel('baud', 0), balloonPinLabel('baud', 300), balloonPinLabel('bits', 7), balloonPinLabel('reverse', -1), balloonPinLabel('reverse', 1), balloonPinLabel('shift', 425)],
-   ['AUTO', '300', '7-bit', 'AUTO', 'REV', '425 Hz']);
+eq('labels', [balloonPinLabel('baud', 0), balloonPinLabel('baud', 300), balloonPinLabel('bits', 7), balloonPinLabel('reverse', -1), balloonPinLabel('reverse', 0), balloonPinLabel('reverse', 1), balloonPinLabel('shift', 425)],
+   ['AUTO', '300', '7-bit', 'AUTO', 'NORM', 'REV', '425 Hz']);
 eq('speeds offered', [...BALLOON_BAUDS], [0, 50, 75, 100, 150, 300, 600]);
 ok('the hint says where to tune and in what', BALLOON_HINT.includes('USB') && BALLOON_HINT.includes('434') && BALLOON_HINT.includes('SSDV'));
 ok('the key sits on 70 cm (decoder tabs)', decoderNear('balloon', 434.2e6) && !decoderNear('balloon', 144.8e6));
@@ -79,10 +87,12 @@ ok('web: shown only where "balloon"', main.includes('balloonCap = j.balloon === 
 ok('web: the rows, the pictures and the pins', html.includes('id="balloonRows"') && html.includes('id="balloonPics"') && html.includes('id="balloonBaud"') && main.includes('function renderBalloon'));
 ok('web: the JSON and the pictures routed', dec.includes("msg.type === 'balloon'") && dec.includes("balloon: 'balloon'") && dec.includes('onBalloonPicture'));
 ok('web: the pins are what is attached', main.includes("if (mode === 'balloon') return balloonParams(balloonSet);"));
+ok('web: the rows are kept across a re-attach', main.includes('balloonSeen = balloonMerge(balloonSeen, r)'));
 ok('web: the gallery shows a .jpg as a picture', main.includes('/\\.(png|jpg)$/i.test(it.f)') && html.includes('data-kind="balloon"'));
 const ms = src('src/components/ModeSelector.tsx'), sd = src('src/screens/SDRScreen.tsx'), dc = src('src/services/DecoderClient.ts');
 ok('app: the key only where offered', ms.includes("const balloonShown = !!decoderControls?.balloonAvail && !isBlocked('balloon')") && sd.includes('balloonAvail: balloonCapable'));
 ok('app: the pins under the key', ms.includes("row('RTTY SPEED', 'baud', BALLOON_BAUDS)") && sd.includes('balloonSettings, onBalloonSettings'));
+ok('app: a pin re-attaches in place, the rows kept', sd.includes("decoderClient.current.start('balloon')") && sd.includes('setBalloonSeen((prev) => balloonMerge(prev, r))'));
 ok('app: attach + JSON + pictures', dc.includes("case 'balloon': return { extension_name: 'balloon', params: balloonParams(this.balloonSet) };")
    && dc.includes("m.type === 'balloon'") && dc.includes("name === 'balloon' && t === 0x0b"));
 ok('app: the gallery shows a .jpg as a picture', src('src/components/GalleryOverlay.tsx').includes('/\\.(png|jpg)$/i'));

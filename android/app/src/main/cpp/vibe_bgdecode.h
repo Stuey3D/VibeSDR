@@ -814,8 +814,8 @@ private:
         gallery::Meta m = meta_;
         m.utc = e.started; m.partial = partial;
         const std::string call = gallery::printable(key.substr(0, key.find('#')), 12);
-        m.title = "SSDV Â· " + call + " Â· " + std::to_string(e.w) + "Ã" + std::to_string(e.h)
-                + (partial ? " Â· " + std::to_string(e.have) + (e.expected ? " of " + std::to_string(e.expected) : std::string()) + " packets" : std::string());
+        m.title = "SSDV \xc2\xb7 " + call + " \xc2\xb7 " + std::to_string(e.w) + "\xc3\x97" + std::to_string(e.h)
+                + (partial ? " \xc2\xb7 " + std::to_string(e.have) + (e.expected ? " of " + std::to_string(e.expected) : std::string()) + " packets" : std::string());
         store_.add(m, "jpg", e.jpg);
     }
     gallery::Store& store_;

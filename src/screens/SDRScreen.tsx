@@ -150,7 +150,7 @@ import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_
          mergeRttyHistory, type CwList, type CwSpot } from '../services/cwList';
 import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
 import { NCDXF_BANDS, type NcdxfReport } from '../services/ncdxf';   // ★ V12 NCDXF beacons
-import { BALLOON_AUTO, type BalloonPicture, type BalloonReport, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
+import { BALLOON_AUTO, balloonMerge, type BalloonPayload, type BalloonPicture, type BalloonReport, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
 import type { BalloonPic } from '../components/BalloonView';
 import { bytesToBase64 } from '../services/base64';
 import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, dscPanelChannels, dscBandLabel, dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle,
@@ -5891,6 +5891,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [ncdxfReport, setNcdxfReport] = useState<NcdxfReport | null>(null);   // ★ V12 NCDXF beacons: the grid
   /* ★★ V12 balloons — the payloads, the SSDV pictures so far (as data URIs, ≤ 3, the newest drawn last) and the pins. */
   const [balloonReport, setBalloonReport] = useState<BalloonReport | null>(null);
+  const [balloonSeen, setBalloonSeen] = useState<BalloonPayload[]>([]);   // ★ every payload since the box opened (balloonMerge)
   const [balloonPics, setBalloonPics] = useState<BalloonPic[]>([]);
   const [balloonSettings, setBalloonSettings] = useState<BalloonSettings>({ ...BALLOON_AUTO });
   const balloonSetRef = useRef<BalloonSettings>({ ...BALLOON_AUTO });
@@ -6001,7 +6002,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onJttySpot: (sp) => { if (activeDecRef.current === 'jtty') setJttySpots((prev) => mergeJttySpot(prev, sp)); },
       onNcdxf: (r) => { if (activeDecRef.current === 'ncdxf') setNcdxfReport(r); },
-      onBalloon: (r) => { if (activeDecRef.current === 'balloon') { setBalloonReport(r); if (r.state >= 3) markDecodeOutput(); } },
+      onBalloon: (r) => { if (activeDecRef.current === 'balloon') { setBalloonReport(r); setBalloonSeen((prev) => balloonMerge(prev, r)); if (r.state >= 3) markDecodeOutput(); } },
       onBalloonPicture: (p) => { if (activeDecRef.current === 'balloon') balloonPictureIn(p); },
       onDscCall: (c) => {
         if (activeDecRef.current !== 'dsc') return;
@@ -6492,7 +6493,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoding(false);
     decoderImageRef.current?.reset();
     setCwList(null); setCwSpots([]);
-    setJttyList([]); setJttySpots([]); setNcdxfReport(null); setBalloonReport(null); setBalloonPics([]); setDscCalls([]); setDscMapOpen(false); setDscFocus('');
+    setJttyList([]); setJttySpots([]); setNcdxfReport(null); setBalloonReport(null); setBalloonSeen([]); setBalloonPics([]); setDscCalls([]); setDscMapOpen(false); setDscFocus('');
     aprsReset();   // ★ V12 APRS: a fresh attach (or another decoder) starts with no stations
     if (!type) return;
     if (type === 'scanner') { setDecoderStatus(''); return; }   // ★ the scanner's status is its own body's first line
@@ -6612,7 +6613,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoderText('');
     setDecoderStatus('listening…');
     setCwList(null); setCwSpots([]);
-    setJttyList([]); setJttySpots([]); setNcdxfReport(null); setBalloonReport(null); setBalloonPics([]); setDscCalls([]); setDscMapOpen(false); setDscFocus('');
+    setJttyList([]); setJttySpots([]); setNcdxfReport(null); setBalloonReport(null); setBalloonSeen([]); setBalloonPics([]); setDscCalls([]); setDscMapOpen(false); setDscFocus('');
     aprsReset();   // ★ V12 APRS: closing the box closes its map too (the web's stopDecoder)
   }, [aprsReset]);
 
@@ -6891,8 +6892,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ V12 balloons: a pin changed — this session's, re-attached at once (the server builds the search from the attach). */
   const onBalloonSettings = useCallback((b: BalloonSettings) => {
     balloonSetRef.current = b; setBalloonSettings(b);
-    if (activeDecRef.current === 'balloon') openDecoder('balloon');
-  }, [openDecoder]);
+    // ★ re-attached in place (as DSC's channel change): the rows and pictures so far stay in the box
+    if (activeDecRef.current === 'balloon' && decoderClient.current) { decoderClient.current.balloonSet = { ...b }; decoderClient.current.start('balloon'); }
+  }, []);
   const onAprsBaud = useCallback((b: AprsBaud) => {
     aprsBaudRef.current = b; setAprsBaud(b);
     AsyncStorage.setItem('lsv_aprs_baud', String(b)).catch(() => {});
@@ -14469,7 +14471,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           } } : null}
           /* ★ V12 JTTY: a tap = USB, the dial 1500 Hz below the station (jttyTuneFor). */
           ncdxf={activeDecoder === 'ncdxf' ? { report: ncdxfReport } : null}
-          balloon={activeDecoder === 'balloon' ? { report: balloonReport, pictures: balloonPics } : null}
+          balloon={activeDecoder === 'balloon' ? { report: balloonReport ? { ...balloonReport, payloads: balloonSeen } : null, pictures: balloonPics } : null}
           jtty={activeDecoder === 'jtty' ? { list: jttyList, spots: jttySpots, onTune: (rf: number) => { if (rf > 0) onDecTuneHz(jttyTuneFor(rf), 'usb' as SDRMode); } } : null}
           /* ★ V12 DSC: the calls; MAP for a position (dscMapOpen — the server's own map). */
           dsc={activeDecoder === 'dsc' ? { calls: dscCalls, onMap: onDscMap, keys: (() => {

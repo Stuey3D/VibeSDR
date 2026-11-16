@@ -165,6 +165,21 @@ async function checkFull(D, label) {
     const n = jsons(L.dx, 'balloon').length;
     await sleep(7000);
     ok(jsons(L.dx, 'balloon').length === n, `detached: the reports stop (${n} → ${jsons(L.dx, 'balloon').length})`);
+    // ★ the gallery: the finished picture as a JPEG, and the reports as a text run (written when the decoder stopped)
+    const g = await (await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery.json?offset=0&limit=100&kind=balloon`)).json();
+    const items = g.items || [];
+    const jpg = items.find((i) => /\.jpg$/.test(i.f) && /SSDV · VIBE1 · 96×64/.test(i.title || ''));
+    ok(!!jpg, `the gallery keeps the picture (${items.map((i) => i.f + ' "' + (i.title || '') + '"').join(' | ')})`);
+    if (jpg) {
+      const r = await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery/file/${encodeURIComponent(jpg.f)}`);
+      const b = Buffer.from(await r.arrayBuffer());
+      ok(r.headers.get('content-type') === 'image/jpeg' && b[0] === 0xff && b[1] === 0xd8 && b.at(-1) === 0xd9, `…served as image/jpeg, a whole JPEG (${b.length} bytes)`);
+    }
+    const runs = items.filter((i) => /\.txt$/.test(i.f) && /Balloon telemetry/.test(i.title || ''));
+    ok(runs.length > 0, `the gallery keeps the reports as "Balloon telemetry" runs (${runs.length}: one per run of the decoder)`);
+    let t = '';
+    for (const r of runs) t += await (await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery/file/${encodeURIComponent(r.f)}`)).text();
+    ok(/VIBE1 #2  52\.20601, 0\.11950/.test(t) && /HORUS-256 #50[12]/.test(t), '…with the report lines in them');
     for (const k of ['spec', 'aud', 'dx']) L[k].close();
   } finally { S.stop(); }
 }

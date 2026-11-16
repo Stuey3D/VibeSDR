@@ -311,6 +311,8 @@ public:
     void clearTones() { haveTones_ = false; }
     bool haveTones() const { return haveTones_; }
     const double* tones() const { return tones_; }
+    /** Where the spectrum placed the four (the loops hold each within 40 Hz of these) — what a person is told. */
+    const double* placed() const { return anchor_; }
     unsigned long packets = 0, crcFails = 0, uwHits = 0, toneSets = 0;
 
     void process(const float* x, int n) {
@@ -414,6 +416,10 @@ private:
      *  tone is off. Only when that tone stood well clear of the others (4×), a twentieth of the error a symbol, kept within
      *  40 Hz of where the spectrum placed it. */
     void afc_(const float* e) {
+        // ★ once Horus has decoded, only inside a frame (the 600 bits after a UW): between packets a payload sends RTTY on
+        //   the same frequency, and its tones would pull the held ones off by up to the 40 Hz clamp (seen: 254 Hz spacing
+        //   reported for a 270 Hz payload after an RTTY burst)
+        if (packets > 0 && nb_ - lastUw_ > 600) return;
         int k = 0; for (int j = 1; j < 4; ++j) if (e[j] > e[k]) k = j;
         float second = 0; for (int j = 0; j < 4; ++j) if (j != k) second = std::max(second, e[j]);
         if (e[k] < 4 * second) return;
@@ -450,7 +456,7 @@ private:
         // ★ the UW, either tone order (reversed tones turn every bit over): at most kUwErr bits wrong
         if (nb_ >= 16) {
             const int dn = __builtin_popcount((unsigned)(uint16_t)(hard_ ^ 0x2424)), di = __builtin_popcount((unsigned)(uint16_t)(hard_ ^ 0xDBDB));
-            if ((dn <= kUwErr || di <= kUwErr) && pend_.size() < 8) { pend_.push_back({ nb_, di < dn, false }); ++uwHits; }
+            if ((dn <= kUwErr || di <= kUwErr) && pend_.size() < 8) { pend_.push_back({ nb_, di < dn, false }); ++uwHits; lastUw_ = nb_; }
         }
         for (size_t i = 0; i < pend_.size();) {
             Pend& p = pend_[i];
@@ -481,7 +487,7 @@ private:
     float stRe_[4] = {1, 1, 1, 1}, stIm_[4] = {0, 0, 0, 0};
     bool haveTones_ = false;
     int N_ = 120, pos_ = 0, locked_ = 0;
-    long long n_ = 0, next_ = 120, nb_ = 0;
+    long long n_ = 0, next_ = 120, nb_ = 0, lastUw_ = -100000;
     Bank bank_{};
     std::vector<float> ring_[4];
     std::vector<double> metric_;

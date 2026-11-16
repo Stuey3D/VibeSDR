@@ -83,13 +83,15 @@ public:
     /** 0 nothing heard · 1 a signal (tones) · 3 decoding (a sentence or packet in the last 30 s). */
     int state() const {
         if (sec_ - lastGoodAt_ < 30 && lastGoodAt_ > 0) return 3;
-        return (centre_ > 0 && sec_ - pairAt_ < 5) || horus_.haveTones() ? 1 : 0;
+        return (centre_ > 0 && sec_ - pairAt_ < 5) || (horus_.haveTones() && sec_ - fourAt_ < 5) ? 1 : 0;
     }
     double rttyCentre() const { return centre_; }
     double rttyShift() const { return shift_; }
     /** What the RTTY is sending, once a sentence has passed ("300 Bd · 8N1 · 425 Hz"); "" before. */
     std::string rttySettings() const { return rttyWinner_; }
-    bool   horusTones(double t[4]) const { if (!horus_.haveTones()) return false; for (int k = 0; k < 4; ++k) t[k] = horus_.tones()[k]; return true; }
+    /** The Horus tones — only while Horus is DECODING (a packet in the last minute); a placement on its own is a try. */
+    bool   horusTones(double t[4]) const { if (!horus_.haveTones() || !horusRecent()) return false; for (int k = 0; k < 4; ++k) t[k] = horus_.placed()[k]; return true; }
+    bool   horusRecent() const { return lastHorusAt_ > -100 && sec_ - lastHorusAt_ < 60; }
     const horus::Demod& horus() const { return horus_; }
     int    candidates() const { return (int)cands_.size(); }
     /** "300 Bd 8N1" for candidate i (logs). */
@@ -109,16 +111,25 @@ private:
         std::unique_ptr<ssdv::Framer> sf;
     };
     void onSpectrum_() {
-        // ★ Horus first: four equal tones are not an RTTY pair, and must not restart the RTTY bank
+        // ★ Horus first. ★★ The spectrum of fast RTTY (300 Bd and up) can show four evenly spaced peaks of its own, so
+        //   four tones are only BELIEVED as Horus once a packet has passed: until then a placement is a try (harmless —
+        //   nothing passes its CRC), and once Horus has decoded in the last minute a placement far from its tones is
+        //   ignored (the RTTY bursts between its packets must not knock it off), and only then do four tones keep the
+        //   RTTY bank from following the spectrum.
         double t4[4];
         const bool four = cfg_.horus && findFour(spec_, t4, cfg_.horusSpacing);
+        const bool horusLive = horusRecent();
         if (four) {
-            const unsigned long sets = horus_.toneSets;
-            horus_.setTones(t4); fourAt_ = sec_;
-            if (horus_.toneSets != sets) { std::vector<float> h; history_(h); horus_.process(h.data(), (int)h.size()); }
+            bool far = !horus_.haveTones();
+            if (!far) for (int k = 0; k < 4; ++k) far |= std::fabs(t4[k] - horus_.tones()[k]) > 30;
+            if (!(horusLive && far)) {
+                const unsigned long sets = horus_.toneSets;
+                horus_.setTones(t4); fourAt_ = sec_;
+                if (horus_.toneSets != sets) { std::vector<float> h; history_(h); horus_.process(h.data(), (int)h.size()); }
+            }
         }
-        else if (horus_.haveTones() && sec_ - fourAt_ > 8 && sec_ - lastHorusAt_ > 8) horus_.clearTones();
-        if (!cfg_.rtty || four) return;
+        else if (horus_.haveTones() && sec_ - fourAt_ > 8 && !horusLive) horus_.clearTones();
+        if (!cfg_.rtty || (four && horusLive)) return;
         double lo, hi;
         if (!findPair(spec_, lo, hi, cfg_.rttyShift)) return;
         pairAt_ = sec_;

@@ -274,6 +274,7 @@ static void testRttyAir() {
         const int ok = countUkhas(g, N);
         CHECK(ok == N && (int)g.t.size() == N, "%s: %d of %d sentences, %zu reports, named \"%s\"", c.what, ok, N, g.t.size(), rx->rttySettings().c_str());
         CHECK(rx->rttySettings().find(std::to_string((int)c.baud) + " Bd") == 0, "%s: …and the settings named are its speed", c.what);
+        { double t4[4]; CHECK(!rx->horusTones(t4), "%s: …and no Horus reported (fast RTTY's spectrum can look like four tones)", c.what); }
         delete rx;
         // ★ the manual controls: everything pinned to what it is
         Config m; m.rttyBaud = c.baud; m.rttyBits = c.bits; m.rttyReverse = c.rev ? 1 : 0; m.rttyShift = c.shift;

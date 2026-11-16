@@ -186,8 +186,8 @@ import {
 import { mapglVendor, probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
-import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonLine, balloonParams,
-         balloonPicture, balloonPictureText, balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen, type BalloonReport, type BalloonSettings } from '../../../src/services/balloons';   // ★ V12 balloons
+import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonLine, balloonMerge, balloonParams,
+         balloonPicture, balloonPictureText, balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen, type BalloonPayload, type BalloonReport, type BalloonSettings } from '../../../src/services/balloons';   // ★ V12 balloons
 import { NCDXF_BANDS, NCDXF_HINT, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
 import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
@@ -13062,6 +13062,7 @@ let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'p
  *  AUTO with the manual pins under it. Offered only where vibeserver.json says "balloon" (greyed with why off 70 cm). */
 let balloonCap = false;
 let balloonLast: BalloonReport | null = null;
+let balloonSeen: BalloonPayload[] = [];   // ★ every payload since the box opened (balloonMerge)
 let balloonSet: BalloonSettings = { ...BALLOON_AUTO };
 const balloonPics = new Map<string, { url: string; text: string }>();
 function balloonEsc(s: string) { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)); }
@@ -13069,9 +13070,9 @@ function renderBalloon() {
   const rows = document.getElementById('balloonRows');
   if (!rows) return;
   const r = balloonLast;
-  if (!r || !r.payloads.length) rows.innerHTML = `<div class="idle" style="color:var(--text-dim);font-size:11px;padding:6px">${balloonEsc(balloonStatus(r))}</div>`;
-  else rows.innerHTML = r.payloads.map((p) => `<div class="bln"><div><b>${balloonEsc(p.call)}</b><span class="nums">${balloonEsc(balloonLine(p))}</span></div>`
-    + `<div class="when">${balloonEsc(balloonWhen(p, r.now))}</div><div class="sent">${balloonEsc(p.sentence)}</div></div>`).join('');
+  if (!balloonSeen.length) rows.innerHTML = `<div class="idle" style="color:var(--text-dim);font-size:11px;padding:6px">${balloonEsc(balloonStatus(r))}</div>`;
+  else rows.innerHTML = balloonSeen.map((p) => `<div class="bln"><div><b>${balloonEsc(p.call)}</b><span class="nums">${balloonEsc(balloonLine(p))}</span></div>`
+    + `<div class="when">${balloonEsc(balloonWhen(p, r ? r.now : Date.now() / 1000))}</div><div class="sent">${balloonEsc(p.sentence)}</div></div>`).join('');
   const pics = document.getElementById('balloonPics');
   if (!pics) return;
   pics.innerHTML = '';
@@ -13095,7 +13096,7 @@ function balloonPictureIn(buf: ArrayBuffer) {
   while (balloonPics.size > 3) { const [k, v] = balloonPics.entries().next().value!; URL.revokeObjectURL(v.url); balloonPics.delete(k); }
   renderBalloon();
 }
-function balloonClear() { for (const v of balloonPics.values()) URL.revokeObjectURL(v.url); balloonPics.clear(); balloonLast = null; }
+function balloonClear() { for (const v of balloonPics.values()) URL.revokeObjectURL(v.url); balloonPics.clear(); balloonLast = null; balloonSeen = []; }
 /** The pins' keys (AUTO first) — built once, lit from balloonSet. */
 function initBalloonSettings() {
   const hint = document.getElementById('balloonHint');
@@ -13991,7 +13992,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec !== 'balloon') return;
       const r = balloonSanitise(d);
       if (!r) return;
-      balloonLast = r; renderBalloon();
+      balloonLast = r; balloonSeen = balloonMerge(balloonSeen, r); renderBalloon();
       decStateText = balloonStatus(r);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
       setDecLive(r.state >= 3);
@@ -14887,6 +14888,7 @@ function showDecBox(what: string) {
                             : what === 'sitora' ? 'SITOR-A'
                             : isTextFamily(what) ? TEXT_FAMILY_KEY[what]
                             : what === 'hell'  ? 'FELD HELL'
+                            : what === 'balloon' ? 'BALLOONS'
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);

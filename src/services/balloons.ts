@@ -76,6 +76,14 @@ export function balloonPicture(buf: ArrayBuffer | Uint8Array): BalloonPicture | 
   return { key, have: b[p] << 8 | b[p + 1], expected: b[p + 2] << 8 | b[p + 3], complete: b[p + 4] !== 0, w: b[p + 5] << 8 | b[p + 6], h: b[p + 7] << 8 | b[p + 8], jpeg };
 }
 
+/** ★ What the box keeps: every payload seen since it opened, by callsign, the newest report of each, newest heard first
+ *  (≤ 12). A re-attach (a pin changed) starts a fresh run on the server, whose list begins empty — the rows must not vanish. */
+export function balloonMerge(prev: readonly BalloonPayload[], r: BalloonReport | null): BalloonPayload[] {
+  const m = new Map<string, BalloonPayload>();
+  for (const p of prev) m.set(p.call, p);
+  if (r) for (const p of r.payloads) { const o = m.get(p.call); if (!o || p.heard >= o.heard) m.set(p.call, p); }
+  return [...m.values()].sort((a, b) => b.heard - a.heard).slice(0, 12);
+}
 /** The status line. */
 export function balloonStatus(r: BalloonReport | null): string {
   if (!r) return 'listening for a balloon…';
@@ -122,8 +130,8 @@ export const BALLOON_POLARITY = [-1, 0, 1] as const;
 export const BALLOON_SHIFTS = [0, 350, 425, 600, 850] as const;
 export const BALLOON_SPACINGS = [0, 244, 270] as const;
 export const balloonPinLabel = (k: keyof BalloonSettings, v: number): string =>
-  v === 0 || (k === 'reverse' && v === -1) ? 'AUTO'
-  : k === 'baud' ? `${v}` : k === 'bits' ? `${v}-bit` : k === 'reverse' ? (v ? 'REV' : 'NORM') : `${v} Hz`;
+  k === 'reverse' ? (v === 1 ? 'REV' : v === 0 ? 'NORM' : 'AUTO')   // ★ polarity: −1 AUTO · 0 normal · 1 reversed
+  : v === 0 ? 'AUTO' : k === 'baud' ? `${v}` : k === 'bits' ? `${v}-bit` : `${v} Hz`;
 /** ★ The attach message's parameters: only what is pinned (absent = AUTO, which is what an older client sends too). */
 export function balloonParams(s: BalloonSettings): Record<string, number> {
   const o: Record<string, number> = {};
