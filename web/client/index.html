@@ -4373,6 +4373,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="aprsMapBtn" title="The stations heard, on the map" style="display:none">MAP</button>
     <!-- ★ V12 NAVTEX: the stations this server has received (its gallery), on the map (main.ts navMapOpen) -->
     <button class="btn" id="nvMapBtn" title="The NAVTEX stations this server has received, on the map" aria-label="NAVTEX stations received, on the map" style="display:none">MAP</button>
+    <!-- ★ V12 2026-11-16 the AVIATION MAP (HFDL first): every aircraft this server's radios hear, each once -->
+    <button class="btn" id="hfdlMapBtn" title="The AVIATION MAP: the aircraft heard on HFDL here, with ADS-B and the datalink from any radio of this server" aria-label="Aviation map" style="display:none">MAP</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <!-- ★★ V12 PLAIN — the CW box's codes in plain English (main.ts syncCwPlain); CW only, lit while on. -->
     <button class="btn" id="cwPlain" title="Explain the CW in plain English (press again for the CW as sent)" aria-pressed="false" style="display:none">EXPLAIN</button>
@@ -4862,6 +4864,8 @@ select.btn { padding: 6px 8px; }
          Exit ADS-B button"). The way out never scrolls away; the stats sit beside the gain. -->
     <div id="adsbTopScroll">
     <div id="adsbTitle">ADS-B <span class="w">AIRCRAFT MAP</span></div>
+    <!-- ★ V12 2026-11-16 the AVIATION MAP: drawn only when another source (a second radio's ACARS / VDL2, HFDL) has aircraft -->
+    <button type="button" id="adsbAvMap" class="btn" hidden title="The AVIATION MAP: these aircraft with what this server's other radios hear (ACARS, VDL2, HFDL, ADS-C) — each aircraft once">AVIATION MAP</button>
     <div id="adsbCntWrap" title="Aircraft on the map"><svg width="16" height="16" viewBox="0 0 26 26" aria-hidden="true"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="currentColor"/></svg><span id="adsbCnt">…</span></div>
     <span id="adsbStat"></span>
     <span id="adsbCapture" hidden></span>

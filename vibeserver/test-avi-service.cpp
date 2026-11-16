@@ -1,7 +1,8 @@
 // test-avi-service.cpp — V12 aviation service (vibe_avi_service.h): the aircraft table merges VDL2 (ICAO address),
 // ACARS (registration) and HFDL (ICAO / flight) into one row per aircraft; message bodies only with the owner's opt-in;
 // the thread drops the OLDEST block when it falls behind and counts it. docs/v12/AVIATION.md §Service.
-//  `test-avi-service --cu8 <vdl2.u8> <rate>` runs a real VDL2 capture through the service and prints the table.
+//  `test-avi-service --cu8 <vdl2.u8> <rate> [hwCentreHz]` runs a real VDL2 capture through the service and prints the table
+//  (the centre: 136.850 MHz unless given — the mode's band sits at 136.8625).
 #include "vibe_avi_service.h"
 
 #include <cstdio>
@@ -16,7 +17,7 @@ int main(int argc, char** argv) {
         vibeavi::Tracker tr(false);
         vibeavi::Service svc(tr);
         const double rate = std::atof(argv[3]);
-        svc.start("vdl2", 136.850e6, rate, vibevdl2::defaultChannels());
+        svc.start("vdl2", argc > 4 ? std::atof(argv[4]) : 136.850e6, rate, vibevdl2::defaultChannels());
         FILE* f = std::fopen(argv[2], "rb");
         std::vector<uint8_t> buf(1 << 17); std::vector<vibeavi::cf32> z(1 << 16);
         size_t r;

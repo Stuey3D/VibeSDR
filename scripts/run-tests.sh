@@ -264,7 +264,7 @@ flags_for() {
     #    cleaner, the one mix pass and a listener's channel lands within 1 Hz; DC; phase across a retune; the gate; the cost.
     test-pll-iq)           echo "-O2" ;;
     # ★ V12 aviation: -O2 — each test times its receiver against real time (CPU per capture second).
-    test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service) echo "-O2 -lpthread" ;;
+    test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "-O2 -lpthread" ;;
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
     test-rs41|test-rs41-service) echo "-O2 -lpthread" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
@@ -438,7 +438,7 @@ deps_for() {
                               $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
     # ★ V12 AVIATION DATALINK (docs/v12/AVIATION.md): ACARS, VDL2, HFDL and the service that runs them share one front end
     #   (vibe_avi_front.h — the channeliser, FFT and decimators); pffft + kiss_fft from cobjs_for.
-    test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
+    test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     # ★ V12 RS41: the same channeliser / FFT / half-bands (vibe_rs41_rx.h); pffft + kiss_fft from cobjs_for.
     test-rs41|test-rs41-service) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     *)                  echo "" ;;
@@ -459,7 +459,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-rs41|test-rs41-service)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -782,6 +782,8 @@ if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+
 if npx tsx scripts/test_decoder_bands.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 aviation, the clients' half (src/services/aviation.ts): the datalink report parsed defensively, the HFDL status line
 if npx tsx scripts/test_aviation_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 2026-11-16 THE AVIATION MAP's client rules (src/services/aviationMap.ts): the table parsed, live + table joined once, the layers present
+if npx tsx scripts/test_aviation_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 radiosondes, the clients' half (src/services/sondes.ts): the report parsed defensively, no temperature unless the
 #   calibration is whole, the lines, the map's items / rows / card and a chosen sonde's track
 if npx tsx scripts/test_sondes_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1680,10 +1682,18 @@ if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-vdl2" --write-clip "$OUT/vdl2-clip.cu8" 2400000 >/dev/null 2>&1
   VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" node scripts/test-server-avdata.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 2026-11-16 THE SHARED AIRCRAFT TABLE: two radio processes on one runtime dir — ADS-B (test-adsb --write-clip) on
+  #    one, the VDL2 clip on the other — each aircraft once in /vibeserver/aircraft.json with both sources
+  "$OUT/test-adsb" --write-clip "$OUT/adsb-syn-clip.u8" 4 >/dev/null 2>&1
+  VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/test-server-avmap.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★ …and the web client's view of it (headless Edge, --mute-audio) — needs the page built into VIBESERVER_BIN
   VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" node scripts/test-web-avdata.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  rm -f "$OUT/vdl2-clip.cu8"
+  # ★★ V12 2026-11-16 the AVIATION MAP in the web client: two radio processes (ADS-B + DATALINK), one table, headless Edge
+  VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/test-web-avmap.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/vdl2-clip.cu8" "$OUT/adsb-syn-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))
 fi

@@ -192,6 +192,9 @@
     // HFDL / ACARS / ADS-B: aircraft. Airfields and runways matter; a sea port never does.
     aero: { airports: true, runways: true, ports: false, rail: false,
             places: 'major', grid: false, roads: false },
+    // ★ V12 2026-11-16 the AVIATION MAP with AIRPORTS switched off: aero without the airfields and runways.
+    'aero-plain': { airports: false, runways: false, ports: false, rail: false,
+                    places: 'major', grid: false, roads: false },
     // AIS: ships. Ports matter, and a reef is a navigational fact; an airfield is noise.
     marine: { airports: false, runways: false, ports: true, rail: false,
               places: 'major', grid: false, roads: false },

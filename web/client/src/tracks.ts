@@ -524,6 +524,7 @@ export class TrackView {
   private gen = 0;
   private vm: any = null;
   private lmap: any = null;
+  private vmL: any = null;   // ★ the Leaflet map's VibeMap (its setProfile)
   private layer: any = null;
   private pending: any[] | null = null;
   private rx: LatLon | null = null;
@@ -595,6 +596,23 @@ export class TrackView {
       };
     }
   }
+  /** ★★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer: the basemap's profile, switched live ('aero' ↔ 'aero-plain'),
+   *  on whichever map this view made (GPU or Leaflet). Remembered for a map made later. */
+  setProfile(name: string) {
+    if (this.o.profile === name) return;
+    this.o.profile = name;
+    (window as any).__vibeTrkProfile = name;   // ★ for drivers (scripts/test-web-avmap.mjs), like __vibeTrkMap
+    try {
+      // ★ a server whose map pack predates 'aero-plain' says no: the airport layers are switched by name instead
+      if (this.vm && this.vm.setProfile?.(name) === false) {
+        const m = this.vm.map;
+        for (const id of ['airports-4', 'airports-6', 'airports-7', 'airports-8', 'runways', 'runway-ends'])
+          if (m?.getLayer?.(id)) m.setLayoutProperty(id, 'visibility', name === 'aero-plain' ? 'none' : 'visible');
+      }
+    } catch (e) { console.error('[tracks] profile', e); }
+    try { this.vmL?.setProfile?.(name); } catch (e) { console.error('[tracks] profile', e); }
+  }
+  get profile(): string { return this.o.profile || ''; }
   /** ★ V12 2026-11-02: the time filter's pressed button, from outside (the two shipping views share one filter). */
   setRange(id: string) {
     for (const b of Array.from(this.root.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === id));
@@ -675,7 +693,7 @@ export class TrackView {
     try { this.vm?.destroy(); } catch (e) { console.error('[tracks] map destroy', e); }
     this.vm = null;
     try { this.lmap?.remove(); } catch (e) { console.error('[tracks] Leaflet remove', e); }
-    this.lmap = null;
+    this.lmap = null; this.vmL = null;
     // ★ V12 2026-11-02: the KEY stays (it is the view's, not the map's) — it was removed here, so a map closed and opened
     //   again had no KEY (and setLegend found nothing to fill)
     for (const el of Array.from(this.mapHost.children)) if (el !== this.list && !el.classList.contains('trkKey')) el.remove();
@@ -723,7 +741,7 @@ export class TrackView {
     if (my !== this.gen) return;
     // ★ the shared map data (coastlines, places) — as AdsbMap draws it under Leaflet
     if (!w.VibeMap) { try { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); } catch (e) { console.error('[tracks] vibemap', e); } }
-    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', ...(this.o.profile ? { profile: this.o.profile } : {}) });
+    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', ...(this.o.profile ? { profile: this.o.profile } : {}) });
     this.attach(this.lmap, L);
   }
   private attach(map: any, L: any) {

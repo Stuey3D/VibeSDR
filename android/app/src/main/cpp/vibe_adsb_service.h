@@ -11,6 +11,7 @@
 #pragma once
 #include "vibe_adsb.h"
 #include "vibe_adsb_capture.h"   // ★ CaptureMeter — the live "capture N %"
+#include "vibe_aircraft_share.h"   // ★ V12 2026-11-16 the shared table every radio on the machine writes (the AVIATION MAP)
 #include "vibe_adsb_data.h"     // what an aircraft IS (registration, type, operator, route) — V12 aircraft data
 #include <atomic>
 #include <chrono>
@@ -160,6 +161,40 @@ public:
         return tracker_.aircraft().size();
     }
 
+    /** ★★ V12 2026-11-16 THE SHARED TABLE's provider (vibe_aircraft_share.h Sharer): every aircraft heard since `sinceMs`
+     *  (wall clock) — address, callsign, the database's registration / type / route, the position while it is fresh — so a
+     *  second radio's ACARS / VDL2 / HFDL rows join it by address or registration. Under the tracker lock, briefly; the
+     *  file is written by the Sharer's own thread. Anonymous (non-ICAO) addresses are not an aircraft's identity: left out. */
+    void shareSince(int64_t sinceMs, std::vector<vibeavshare::Update>& out) {
+        const int64_t wallNow = vibeavshare::wallMs();
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (!run_.load(std::memory_order_relaxed)) return;
+        const double tn = now();
+        auto wall = [&](double t) { return wallNow - (int64_t)std::llround((tn - t) * 1000); };
+        std::lock_guard<std::mutex> il(infoMtx_);
+        for (const auto& kv : tracker_.aircraft()) {
+            const Aircraft& a = kv.second;
+            if (a.nonIcao) continue;
+            const int64_t heard = wall(a.seen);
+            if (heard < sinceMs) continue;
+            vibeavshare::Update u;
+            u.icao = a.icao; u.flight = a.callsign;
+            u.srcMask = 1u << vibeavshare::kAdsb; u.srcMs[vibeavshare::kAdsb] = heard; u.heardMs = heard;
+            if (a.hasPos && tn - a.seenPos <= 60) {
+                u.hasPos = true; u.lat = a.lat; u.lon = a.lon; u.posMs = wall(a.seenPos); u.posSrc = vibeavshare::kAdsb;
+                u.hasAlt = a.hasAlt; u.altFt = a.altBaro; u.hasTrk = a.hasTrack; u.trk = (float)a.track; u.hasGs = a.hasGs; u.gs = (float)a.gs;
+                u.ground = a.onGround;
+            } else if (a.hasAlt) { u.hasAlt = true; u.altFt = a.altBaro; }
+            auto it = shareInfo_.find(a.icao);
+            if (it != shareInfo_.end()) { u.reg = it->second.r; u.type = it->second.t; u.from = it->second.from; u.to = it->second.to; }
+            const uint32_t c = a.messages; auto& sent = shareSent_[a.icao];
+            u.count = c >= sent ? c - sent : c; sent = c;
+            out.push_back(std::move(u));
+            if (out.size() >= vibeavshare::kCap) break;
+        }
+        if (shareSent_.size() > 4 * vibeavshare::kCap) shareSent_.clear();   // ★ bounded: the counts restart, nothing else
+    }
+
 private:
     static constexpr double kMaxQueuedSec = 0.5;           // capture the decoder may fall behind by before dropping
 
@@ -267,6 +302,18 @@ public:
             it = work_.erase(it);
         }
         std::lock_guard<std::mutex> il(infoMtx_);
+        // ★ V12 the shared table's view of each aircraft (registration, type, the leg it is on) — shareSince reads it
+        for (const Seen& s : snap) {
+            if (s.nonIcao) continue;
+            auto w = work_.find(s.icao);
+            if (w == work_.end()) continue;
+            ShareInfo& si = shareInfo_[s.icao];
+            si.r = w->second.info.r; si.t = w->second.info.t; si.from.clear(); si.to.clear();
+            const auto& rt = w->second.info.route;
+            const int leg = w->second.info.leg;
+            if (rt.size() >= 2 && leg >= 0 && leg + 1 < (int)rt.size()) { si.from = rt[(size_t)leg].code; si.to = rt[(size_t)leg + 1].code; }
+        }
+        for (auto it = shareInfo_.begin(); it != shareInfo_.end();) { if (live.count(it->first)) ++it; else it = shareInfo_.erase(it); }
         for (const auto& g : gone) { infoJson_.erase(g); infoDelta_.erase(g); }
         for (const auto& c : changed) {
             if (c.second.empty()) { if (infoJson_.erase(c.first)) infoDelta_.insert(c.first); }
@@ -297,6 +344,9 @@ private:
     std::mutex infoMtx_;
     std::map<std::string, std::string> infoJson_;
     std::set<std::string> infoDelta_;
+    struct ShareInfo { std::string r, t, from, to; };
+    std::unordered_map<uint32_t, ShareInfo> shareInfo_;     // ★ under infoMtx_ — bounded by the live aircraft (erased with them)
+    std::unordered_map<uint32_t, uint32_t> shareSent_;      // ★ under infoMtx_ — messages already handed to the shared table
 };
 
 /**

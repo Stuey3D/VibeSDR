@@ -1287,6 +1287,7 @@ private:
             return last->second;
         };
         hfdl_.reset(new HfdlRun(env_.aircraft ? *env_.aircraft : vibeavi::sharedTracker(), std::move(o), std::move(dialNow)));
+        if (!env_.aircraft) vibeavi::shareTrackerProvide();   // ★ V12 the AVIATION MAP: this radio's HFDL into the shared table
         log("decoder attached: HFDL (USB dial, carrier 1440 Hz above it)");
     }
     /** ★★ EAS / SAME (V12, 2026-10-31): the US Emergency Alert System headers (decoders/same_decoder.h, 47 CFR § 11.31)
