@@ -86,13 +86,21 @@ try {
   console.log('      placed:', labels.join(' | '));
   ok(labels.includes('RTTY · DWD') && labels.includes('WEFAX · Northwood'), 'DWD 4583 RTTY and Northwood 4610 WEFAX are labelled');
   ok(labels.some(l => l.startsWith('NAVTEX') || l.startsWith('DSC')), 'the 4.2 MHz maritime cluster gets its safety label');
-  ok(!labels.includes('RTTY · Iqaluit'), 'an EiBi label 30 kHz from the safety cluster gives way to it (lower priority)');
-  ok(g.placed.length <= 12 && g.placed.every(p => p.row < 2), `${g.placed.length} labels, on two rows at most`);
+  ok(labels.includes('RTTY · Iqaluit'), 'an EiBi label 30 kHz from the safety cluster STACKS above it rather than being dropped (2026-11-16)');
+  ok(labels.indexOf('RTTY · Iqaluit') > labels.findIndex(l => l.startsWith('NAVTEX') || l.startsWith('DSC')), '…placed after the safety labels (lower priority)');
+  ok(g.placed.length <= 12 && g.placed.every(p => p.row < 4), `${g.placed.length} labels, on four rows at most`);
+  // ★★ Stuart, 2026-11-16: every label CENTRED on its carrier (or shifted inward at an edge, or slid along a crowded row
+  //    — always still over its own carrier); no two overlapping
+  ok(g.placed.every(p => p.lx - 1 <= p.x && p.x <= p.lx + p.w + 1), 'every label sits over its own carrier');
+
+  ok(!g.placed.some((a, i) => g.placed.some((b, j) => i !== j && a.row === b.row && a.lx < b.lx + b.w && b.lx < a.lx + a.w)), 'no two labels overlap');
   const inSpec = await lilac(0, g.specH), inWf = await lilac(g.specH + 2, g.H);
   ok(inSpec > 200 && inWf === 0, `drawn in the spectrum only (${inSpec} lilac px there, ${inWf} in the waterfall)`);
-  // LISTEN's box (row 0, right of the needle) is never under a label
+  // LISTEN (the VFO's box) sits centred on the needle ABOVE every label row
+  const vb = await ev(`__wfDrv.wf.vfoPlan?.box ?? null`);
   const nX = (4400000 - (4440000 - 270000)) / 540000 * 1200;
-  ok(!g.placed.some(p => p.row === 0 && p.lx < nX + 6 + 90 && p.lx + p.w > nX), 'nothing drawn over LISTEN on its row');
+  ok(!!vb && Math.abs(vb.lx + vb.w / 2 - nX) < 1 && g.placed.every(p => p.row < vb.row),
+     `LISTEN centred on the needle (box ${vb?.lx.toFixed(0)}–${(vb?.lx + vb?.w).toFixed(0)}, needle ${nX.toFixed(0)}), above every label (row ${vb?.row})`);
   await shot('1-4.17-4.71MHz-spectrum');
 
   // ── 1a. EiBi on its own: VFF Iqaluit (-TY) ──
@@ -105,6 +113,8 @@ try {
   await ev(`__wfDrv.ask(4600000, 200000)`); await ev(`(__wfDrv.wf.vfoHz = 4608100, true)`); await ev('__wfDrv.run(2500)');
   g = await geo();
   ok(g.placed.map(p => p.label).join() === 'WEFAX · Northwood,RTTY · DWD' || (g.placed.length === 2), `4.5–4.7 MHz: ${g.placed.map(p => p.label).join(', ')}`);
+  ok(g.placed.every(p => Math.abs(p.lx + p.w / 2 - p.x) < 0.01),
+     `zoomed in, room either side: each exactly CENTRED on its carrier (${g.placed.map(p => `${p.label} ${(p.lx + p.w / 2 - p.x).toFixed(2)} px`).join(', ')})`);
   await shot('2-4.5-4.7MHz-spectrum');
 
   // ── 2. 20 m digital ──
