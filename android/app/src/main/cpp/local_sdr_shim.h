@@ -160,6 +160,8 @@ public:
     static void rateGuardClear();
     /** ADS-B at 2.56 MS/s on an RTL: the owner's own switch (not tied to the rate switch); never the default. */
     static void setVibeServerAdsb256(bool on);
+    /** ★ V12 ISM at 2.56 MS/s on an RTL (MeshCom 433.175 beside LoRa-APRS 433.775): the owner's switch; never the default. */
+    static void setVibeServerIsm256(bool on);
     /** ★ Raw IQ out: 0 off, 1 local network only, 2 local + public (tunnel); maxUsers 0 = host default. */
     static void setVibeServerRawIq(int mode, int maxUsers, int lanMaxHz = 0);
     /** ★ A transient line for every listener's VTS bar (the `vts` notice field). */

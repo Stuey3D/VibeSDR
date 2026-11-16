@@ -48,9 +48,10 @@ try {
   ok(st.ism === true, `vibeserver.json: ism ${JSON.stringify(st.ism)} ${st.ismWhy || ''}`);
   const ids = (st.ismBands || []).map((b) => b.id);
   // ★ V12 2026-11-12: the 902–928 MHz mesh bands (907 Meshtastic US, 910 MeshCore US, 920 Meshtastic ANZ, 923 MeshCore BR/AU, AS923)
-  // ★ beta72: the world LoRa blocks join the sensor and mesh bands — an R820T reaches all seventeen, in frequency order
-  ok(JSON.stringify(ids) === JSON.stringify(['315', '433', '479', '865', '867', '868', '904', '907', '910', '913', '915', '917', '920', '922', '923', '925', '927']),
-     `ismBands (an R820T reaches all seventeen, in frequency order): ${ids.join(' ')}`);
+  // ★ beta72: the world LoRa blocks join the sensor and mesh bands — an R820T reaches all eighteen, in frequency order
+  //   (V12 2026-11-16: 439 — the UK's LoRa APRS on 439.9125)
+  ok(JSON.stringify(ids) === JSON.stringify(['315', '433', '439', '479', '865', '867', '868', '904', '907', '910', '913', '915', '917', '920', '922', '923', '925', '927']),
+     `ismBands (an R820T reaches all eighteen, in frequency order): ${ids.join(' ')}`);
   ok((st.ismBands || []).every((b) => typeof b.region === 'string' && b.region.length > 0), `every band names its region (the BANDS list): ${(st.ismBands || []).filter((b) => !b.region).map((b) => b.id).join(' ') || 'all'}`);
   ok((st.ismBands || []).every((b) => b.name.length <= 40), 'every band name fits the clients (≤ 40 characters)');
   ok(st.ismLanding === '433', `ismLanding for a UK locator: ${st.ismLanding}`);
@@ -88,9 +89,10 @@ try {
   const tp = last.devices.find((d) => d.kind === 'tpms');
   ok(tp && tp.nick === 1 && tp.id === undefined && tp.line === 'TPMS #1 · Schrader · 32 PSI · 18 °C', `the TPMS line: ${tp && tp.line}`);
 
-  // a band STEP up: 479 (beta72's China block), the list kept; then 868 by name for the meters
+  // a band STEP up: 439 (V12: the UK's LoRa APRS block), the list kept; then 868 by name for the meters
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));
-  ok(await until(() => last.band === '479', 5000), `step +1 → ${last.band}`);
+  ok(await until(() => last.band === '439', 5000), `step +1 → ${last.band}`);
+  ok(await until(() => !!last.lora && last.lora.chans >= 1, 5000), `439 runs its LoRa channels (LoRa APRS UK): ${JSON.stringify(last.lora)}`);
   ok(last.devices.length >= 4, `the list is kept across a band step (${last.devices.length})`);
   ws.send(JSON.stringify({ type: 'ism', on: 1, band: '868' }));
   ok(await until(() => last.band === '868', 5000), `868 by name: ${last.band}`);

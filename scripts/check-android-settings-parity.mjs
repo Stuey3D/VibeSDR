@@ -91,6 +91,7 @@ const TABLE = [
   P(['maxFps'], 'WATERFALL RATE', 'maxFftRate'),
   P(['dabRateBoost'], 'dabRateBoost', 'dabRateBoost'),
   P(['adsb256'], 'adsb256', 'adsb256'),
+  P(['ism256'], 'ism256', 'ism256'),   // ★ V12 ISM at 2.56 MS/s (RTL)
   P(['biasT'], 'BIAS-T', 'biasT'),
   P(['ppm'], 'FREQUENCY CORRECTION', 'ppm'),
   P(['convLo', 'convDown', 'convHi'], 'CONVERTER IN FRONT OF THE RADIO', 'converterOffsetHz'),

@@ -70,6 +70,7 @@ while the server is stopped, so "live" here is the next Start; the engine's tick
 | Antenna port names | `antennaNames` | ports — **fixed** (this branch) | The screen called `NativeModules.VibeLocalSdrModule`, which does not exist (the module is `VibeLocalSDR`), so the radio's ports were never read and the names card never drew. Also the antenna switch's live apply and search. |
 | ADS-B as the landing / keep it running | `landingAdsb`, `adsbKeepRunning` | ports (verified) | |
 | ADS-B at 2.56 MS/s (RTL) | `adsb256` | ports (verified) | |
+| ISM at 2.56 MS/s (RTL) | `ism256` | ports | V12 2026-11-16: the ADS-B switch's twin (MeshCom 433.175 beside LoRa APRS 433.775). |
 | Change the sample rate when a mode needs it + the rate guard | `dabRateBoost` | ports (verified) | |
 | VFO A/B | `vfoB` | ports (verified) | |
 | Keep the spectrum sharp when zoomed in (zoom detail) | `zoomSpectrum` | ports (verified) | Default on; benchmark decides. |

@@ -302,7 +302,7 @@ const K = {
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
-  dabRateBoost: 'vs_dabboost', adsb256: 'vs_adsb256',
+  dabRateBoost: 'vs_dabboost', adsb256: 'vs_adsb256', ism256: 'vs_ism256',
   vfoB: 'vs_vfob',   // ★★ V12 VFO A/B — the owner's switch; absent = on
   dabScanLabels: 'vs_dabscan',
   /** ★ RETIRED 2026-09-28 (the start-on-boot switch) — kept only so the stored value can be removed. */
@@ -553,6 +553,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [rateGuard, setRateGuard] = useState<RateGuardState | null>(null);
   /** ★★ ADS-B at 2.56 MS/s on an RTL — never the default; acts only with the switch above on. */
   const [adsb256, setAdsb256] = useState(false);
+  /** ★★ V12 ISM at 2.56 MS/s on an RTL (MeshCom 433.175 beside LoRa APRS 433.775) — never the default. */
+  const [ism256, setIsm256] = useState(false);
   /** ★ LITE ONLY — the DAB whole-multiplex label scan (every station's name/text, not just the one playing).
    *  -1 = the server's default (OFF on VibeServer Lite: it costs a 32-bit box real CPU), 0 off, 1 on.
    *  Stuart, 2026-09-19: off on Lite "but with a toggle in the options"; the main app keeps it on, no switch. */
@@ -1172,6 +1174,17 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   ADS-B takes the radio to 2.56 MS/s instead of 2.4, and back when it ends. Below 97 % capture in
                   ADS-B the dongle is dropping samples.
                 </Text>
+                {/* ★★ V12 ISM's twin (Stuart 2026-11-16): the same shape, its own switch */}
+                <OptRow C={C} F={F} active={ism256}
+                  label="Use 2.56 MS/s sample rate for ISM (may drop some samples)"
+                  onPress={() => {
+                    const v = !ism256;
+                    setIsm256(v); AsyncStorage.setItem(K.ism256, v ? '1' : '0');
+                  }} />
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
+                  ISM takes the radio to 2.56 MS/s, and back when it ends, so on 433 MHz MeshCom (433.175 MHz) is
+                  heard beside LoRa APRS (433.775 MHz) and the rest of the band.
+                </Text>
               </>)}
             </>)}
             {/* ★★ 2026-10-31: on a single-range radio this is drawn UNDER DAB in the modes list (a decoder's options under
@@ -1495,6 +1508,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             if (st?.blocked) { setDabRateBoost(false); AsyncStorage.setItem(K.dabRateBoost, '0'); }
           }).catch(() => { /* an older build without the guard */ });
           { const axt = g(K.adsb256); if (axt != null) setAdsb256(axt === '1'); }
+          { const ist = g(K.ism256); if (ist != null) setIsm256(ist === '1'); }
           { const gl = g(K.gainLimits); if (gl != null) setGainLimits(gl); }
           // ★ -1 is "leave it alone" and is a REAL value, so no `|| default` here.
           { const rg = g(K.restGain); if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg)); }
@@ -2134,6 +2148,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     vfoB: vfoB ? 1 : 0,   // ★★ V12 VFO A/B — VibeServerBoot reads cfg "vfoB" (1 on, 0 off)
     // ★ Only an RTL's — sent false on any other radio, so a value saved while a dongle was plugged in cannot ride along.
     adsb256: isRtl && adsb256,
+    ism256: isRtl && ism256,   // ★ V12 likewise
     // ★★★ THE DAB LANDING STATION — never sent beside a DAB block (the engine refuses it too).
     ...(dabBlockedNow(blockedModes) || live.current.landingDabCh < 0
       ? { landingDabChannel: -1, landingDabSid: 0, landingDabService: '' }
@@ -2284,7 +2299,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.antNames, live.current.antNames],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'], [K.vfoB, vfoB ? '1' : '0'],
-      [K.adsb256, adsb256 ? '1' : '0'],
+      [K.adsb256, adsb256 ? '1' : '0'], [K.ism256, ism256 ? '1' : '0'],
       [K.gainLimits, gainLimits], [K.gainLocks, gainLocks], [K.gainSplits, gainSplits],
       [K.gainCurves, gainCurves], [K.ifBwLimits, ifBwLimits],
       [K.restGain, String(restGain)],
@@ -2364,7 +2379,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      blockedModes, dabRateBoost, vfoB, adsb256, dabScanLabels, isLite,
+      blockedModes, dabRateBoost, vfoB, adsb256, ism256, dabScanLabels, isLite,
       gainLimits, gainLocks, gainSplits, gainCurves, ifBwLimits, isRtl, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown,
       keepAlive]);

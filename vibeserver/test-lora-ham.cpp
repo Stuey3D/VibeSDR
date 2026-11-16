@@ -190,6 +190,14 @@ int main() {
         for (const auto& c : planFor("868")) fn |= std::string(c.net) == "fanet" && c.hz == 868.2e6 && c.tier == 1;
         for (const auto& c : planFor("920")) fz |= std::string(c.net) == "fanet" && c.hz == 920.8e6 && c.tier == 2;
         ok(la && mx && fn && fz, "LoRa-APRS 433.775 (default set), MeshCom 433.175, FANET 868.2 (tier 1) and 920.8 (tier 2)");
+        bool uk = false, ukmx = false, pl = false, us = false;
+        for (const auto& c : planFor("439")) { uk |= std::string(c.net) == "loraaprs" && c.hz == 439.9125e6 && c.sfs == std::vector<int>{12} && c.tier == 0;
+                                               ukmx |= std::string(c.net) == "meshcom" && c.hz == 439.9125e6 && c.sfs == std::vector<int>{10}; }
+        for (const auto& c : planFor("433")) pl |= std::string(c.net) == "loraaprs" && c.hz == 434.855e6 && c.sfs == std::vector<int>{9};
+        for (const auto& c : planFor("915")) us |= std::string(c.net) == "loraaprs";
+        ok(uk && ukmx && pl && !us, "LoRa-APRS UK 439.9125 (default set) + MeshCom UK SF10, PL 434.855 SF9 (915.000 left to discovery)");
+        const vibeism::Band* b439 = vibeism::bandById("439");
+        ok(b439 && std::fabs(b439->centreHz - 439.9125e6) < 1 && vibeism::exactAllowed(*b439, 439.9125e6), "the 439 block: centred on 439.9125");
         double u = 0; for (const auto& c : planFor("868")) if (c.tier == 0) u += chanCost(c);
         ok(std::fabs(u - 25.85) < 0.01, "the 868 default set (the Pi 2's budget yardstick) is unchanged: " + std::to_string(u) + " units");
     }
@@ -216,10 +224,24 @@ int main() {
         const auto offd = run("433", hc, x, {"loraaprs", "meshcom"}, nullptr, fs);
         std::vector<std::string> nm; const std::vector<cf> none(1024);
         run("433", hc, none, {}, nullptr, 2.4e6, &nm);
-        bool la24 = false, mx24 = false; for (auto& n : nm) { la24 |= has(n, "LoRa APRS"); mx24 |= has(n, "MeshCom"); }
+        bool la24 = false, mx24 = false; for (auto& n : nm) { la24 |= has(n, "LoRa APRS"); mx24 |= has(n, "MeshCom 433.175"); }
         ok(la24 && !mx24, "at 2.4 MS/s (radio at 434.17) LoRa-APRS runs; MeshCom 433.175 is past the capture's edge and is not run");
+        // ★ V12 2026-11-16: the owner's ISM 2.56 MS/s switch (g_ism256) — at 2.56 the radio at 434.17 holds 433.175 ± 125 kHz
+        std::vector<std::string> nm256; run("433", hc, none, {}, nullptr, 2.56e6, &nm256);
+        bool la256 = false, mx256 = false, pl256 = false;
+        for (auto& n : nm256) { la256 |= has(n, "LoRa APRS 433.775"); mx256 |= has(n, "MeshCom 433.175"); pl256 |= has(n, "434.855"); }
+        ok(la256 && mx256 && pl256, "at 2.56 MS/s (radio at 434.17) LoRa-APRS 433.775, MeshCom 433.175 and LoRa-APRS PL 434.855 all run");
         int any = 0; for (const auto& h : offd) any += h.m.proto == "loraaprs" || h.m.proto == "meshcom";
         ok(any == 0, "LoRa-APRS and MeshCom switched off: their channels are not run, nothing decoded");
+    }
+    std::printf("── on the air (synthetic): the UK's 439.9125 at 2.048 MS/s, radio at 440.1125 MHz ──\n");
+    {
+        const double hc = 439.9125e6 + 200e3, fs = 2.048e6;
+        std::vector<Tx> txs = { {439.9125e6, 125e3, 12, 1, 0x12, laPacket("G4ABC-9>APLRT1:!5130.00N/00010.00W>Driving"), 0.4, 800} };
+        const auto x = render(txs, fs, hc, 4.0, 0.0, 7);
+        const auto got = run("439", hc, x, {}, nullptr, fs);
+        int la = 0; for (const auto& h : got) la += h.m.proto == "loraaprs" && h.m.node == "G4ABC-9";
+        ok(la == 1, "a UK LoRa-APRS tracker decoded at 0 dB SNR (" + std::to_string(la) + ")");
     }
     std::printf("── on the air (synthetic): 868 band at 2.4 MS/s, radio at 868.8 MHz ──\n");
     {

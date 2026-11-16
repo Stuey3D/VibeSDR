@@ -1747,6 +1747,11 @@ static std::atomic<bool>   g_rateGuardUnpersisted{false};
  *  not tied to the rate switch (the switch IS the owner allowing ADS-B this rate). Other radios ignore it.
  *  ✗ 3.2 MS/s ("extreme", beta9/10) stays removed: on the Pi 2 it dropped samples and heard far fewer aircraft. */
 static std::atomic<bool>   g_adsb256{false};
+/* ★★ V12 ISM AT 2.56 MS/s ON AN RTL (Stuart 2026-11-16) — exactly the ADS-B switch's shape, for the 433 band: at 2.048 or
+ *  2.4 MS/s MeshCom's 433.175 MHz channel (250 kHz wide) falls outside the capture beside LoRa-APRS's 433.775; at 2.56 it
+ *  fits (vibe_lora_service.h keeps a channel only inside ±45 % of the rate). Never the default; RTLs only; the rate guard
+ *  (vibe_rate_guard.h) holds it at the radio's own rate after a run fell over at a boosted one. */
+static std::atomic<bool>   g_ism256{false};
 /** Set by dabRestore(); consumed by the DSP loop once any pending rebuild has landed. */
 static std::atomic<bool>   g_dabRetuneAfterRebuild{false};
 
@@ -7776,12 +7781,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  dial (fdvLowerSideband): every shared retune goes through rx.setTune(vfoOffsetNow(), rxModeDial(), …), so crossing
      *  10 MHz in FreeDV flips the sideband in the same move. */
     std::atomic<bool> fdvMode_{false};
+    std::atomic<int> fdvSharedSb{vibe::freedv::kSbAuto};   // ★ V12 the room's FreeDV sideband choice (AUTO / USB / LSB)
     std::atomic<bool> m17Mode_{false};   // ★ V12 M17 on the shared demodulator: its channel width is fixed (setBandwidth)
     vibedsp::RxPipeline::Mode rxModeDial() const {
         if (fdvMode_.load(std::memory_order_relaxed))
             return fdvLowerSideband(audioFreq.load(), fdvSharedSb.load()) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
         return rxMode;
-    std::atomic<int> fdvSharedSb{vibe::freedv::kSbAuto};   // ★ V12 the room's FreeDV sideband choice (AUTO / USB / LSB)
     }
 
     // Margin keeping the VFO inside the usable capture: above the 50 kHz auto-
@@ -9271,12 +9276,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         uint64_t fdvSentVer = 0;
         double fdvAtHz = 0;
         int fdvSub = vibe::freedv::kAuto;
+        int fdvSb = vibe::freedv::kSbAuto;          // ★ their sideband choice: AUTO (the convention) / USB / LSB
         /** ★ V12 M17: this listener's M17 receiver while their mode is "m17" (vibe_m17.h) — created/destroyed under mtx in
          *  clientRetune, fed from clientIqCb (the channel IQ), drained in onClientAudio. */
         std::unique_ptr<vibe::m17::M17Listener> m17;
         uint64_t m17SentVer = 0;
         double m17AtHz = 0;
-        int fdvSb = vibe::freedv::kSbAuto;          // ★ their sideband choice: AUTO (the convention) / USB / LSB
         /** ★★ V12 CTCSS / DCS TONE ID (decoders/tone_id.h) — this listener's, while their mode is NFM. Fed in clientIqCb
          *  from the pipeline's CHANNEL IQ (post-NCO, the dial at DC, already cut to the passband — so a neighbouring
          *  12.5 kHz channel inside the wider slice cannot capture its discriminator). Everything below is touched under
@@ -15126,12 +15131,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGE("[rate] %s at %.3f MS/s during %s — leaving %s, the radio back at its own rate, and the rate switch OFF",
              why, rate / 1e6, mode.c_str(), mode.c_str());
         g_rateGuard.recordStall(rate, mode, (long long)vsNowEpoch());
-        g_dabRateBoost.store(false, std::memory_order_relaxed);
-        vsPersist("{\"dabRateBoost\":false}");
+        if (mode == "ISM") {   // ★ V12 ISM's own 2.56 switch is what boosted it: that one goes off
+            g_ism256.store(false, std::memory_order_relaxed);
+            vsPersist("{\"ism256\":false}");
+        } else {
+            g_dabRateBoost.store(false, std::memory_order_relaxed);
+            vsPersist("{\"dabRateBoost\":false}");
+        }
         vsSayVts("The radio stopped responding at " + vibe::RateFault::rateText(rate) + " during " + mode
                  + " \xe2\x80\x94 " + mode + " has ended and the radio is back at its own rate.");
         if (g_adsbMode.load()) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
         else if (g_dabMode.load()) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
+        else if (g_ismMode.load()) handleControl(nullptr, "{\"type\":\"ism\",\"on\":0}");   // ★ V12 ISM at 2.56 MS/s
         // ★ The leave relaunched the stream at the base rate; if IQ flows, a dead-stream flag from the boost is history.
         auto heard = [this] { return std::max(lastIqAt.load(std::memory_order_relaxed), tcpDataAt.load(std::memory_order_relaxed)); };
         const double before = heard();
@@ -15681,6 +15692,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_ismMode.store(true);
         if (ismGainIdx_ >= 0) LocalSdrShim::instance().setGain(ismGainSet_);
         ismLastReport_ = ismLastGain_ = ismQuietSince_ = nowSecs(); ismLastSize_ = 0;
+        /* ★★ V12 ISM AT 2.56 MS/s (g_ism256, the owner's switch, RTLs only): ONE rate change at most, ADS-B's way — the
+         *  marker down first (a process that dies at this rate leaves it, and the next start holds the radio at its own),
+         *  put back by ismLeave from s.rate. ismTune then places the band for the new rate. */
+        {
+            const bool rtl = dev != nullptr || useTcp();
+            if (rtl && g_ism256.load(std::memory_order_relaxed) && !g_rateGuard.blocked() && std::fabs(2.56e6 - sampleRate) > 1000.0) {
+                LOGI("[ISM] rate %.3f -> 2.560 MS/s (the owner's ISM 2.56 MS/s switch)", sampleRate / 1e6);
+                g_rateGuard.mark(2.56e6, "ISM", (long long)vsNowEpoch());
+                rateBoostFellBack_.store(false);
+                LocalSdrShim::instance().setSampleRate(2.56e6);
+            }
+        }
         applyAutoIf();
         ismTune(b, customHz, true);
     }
@@ -15716,6 +15739,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (s.agcSet != -999) LocalSdrShim::instance().setIfAgcSetPoint(s.agcSet);
         else if (useSdrplay()) LocalSdrShim::instance().setIfAgcSetPoint(-30);
         agcForget("ISM off: the gain that suited the band does not suit a carrier");
+        if (s.rate > 0.0 && std::fabs(s.rate - sampleRate) > 1000.0) {   // ★ the rate it found, if ISM changed it (g_ism256)
+            noteHwMoved();
+            LocalSdrShim::instance().setSampleRate(s.rate);
+        }
         if (s.ds > 0) { LOGI("[ISM] mode OFF: direct sampling back to %d", s.ds); LocalSdrShim::instance().setDirectSampling(s.ds); }
         if (s.audio > 0.0) audioFreq.store(s.audio);
         if (s.view > 0.0) viewCenter.store(s.view);
@@ -21373,6 +21400,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
+        if (type == "ism256") {   // ★ V12 ISM at 2.56 MS/s (RTL) — the adsb256 switch's twin
+            double v = 0;
+            if (jsonNum(msg, "on", v) && adminGate("ISM at 2.56 MS/s")) {
+                g_ism256.store(v != 0, std::memory_order_relaxed);
+                vsPersist(std::string("{\"ism256\":") + (v != 0 ? "1" : "0") + "}");
+                LOGI("ISM at 2.56 MS/s (RTL): %s", v != 0 ? "ON" : "off");
+                sendHwInfo(sock);
+            }
+            return;
+        }
         if (type == "dabBoost") {
             /* ★ An owner-level decision about the machine, so it goes through the same admin gate
              *  as the other radio settings and is persisted. See g_dabRateBoost. */
@@ -21436,16 +21473,32 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  joining a shared dial already in it, gets the VTS line at once rather than at the next change. On a range-locked
          *  radio it is this listener's own receiver; on a shared dial it is the room's (gated with the mode, askRefuses).
          *  A sub-mode this library cannot open is refused by not being applied — the report says what runs. */
+        /* ★★ …and "sb":"auto"|"usb"|"lsb" (Stuart 2026-11-16): the sideband. AUTO follows FreeDV's convention (LSB below
+         *  10 MHz, USB above); USB / LSB override it for a station that does not. Same gate, same owner (this listener's
+         *  receiver, or the room's), and the demodulator flips sideband in the same move (clientRetune / rxModeDial). */
         if (type == "freedv_sub") {
             const std::string want = jsonStr(msg, "sub");
             int sub = want.empty() ? -1 : vibe::freedv::subFromName(want);
             if (sub > 0 && !vibe::freedv::api().sub[sub]) sub = -1;
+            const std::string wantSb = jsonStr(msg, "sb");
+            const int sb = wantSb.empty() ? -1 : vibe::freedv::sbFromName(wantSb);
             std::string j;
             if (auto me = dspFor(sock)) {
+                bool sbChanged = false;
+                {
+                    std::lock_guard<std::mutex> lk(me->mtx);
+                    if (sub >= 0) { me->fdvSub = sub; if (me->fdv) me->fdv->setSub(sub); }
+                    if (sb >= 0 && sb != me->fdvSb) { me->fdvSb = sb; sbChanged = true; }
+                }
+                if (sbChanged) clientRetune(me.get());   // ★ the channel's sideband and the receiver's report, as a retune does
                 std::lock_guard<std::mutex> lk(me->mtx);
                 if (me->fdv) j = me->fdv->statusJson(nullptr);
             } else {
                 if (sub >= 0) fdvSharedSub.store(sub);
+                if (sb >= 0 && fdvSharedSb.exchange(sb) != sb) {
+                    std::lock_guard<std::recursive_mutex> lk(modeMtx);
+                    if (fdvMode_.load(std::memory_order_relaxed)) rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
+                }
                 std::lock_guard<std::mutex> lk(fdvSharedMtx);
                 if (fdvShared) {
                     if (sub >= 0) fdvShared->setSub(sub);
@@ -21476,33 +21529,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  not show an empty constellation box until the next half-second tick — this socket gets a report with the
              *  scopes now. Under g_dabReportMtx like every report, so it can never land after a dab_off. */
             if (on != 0 && g_dabMode.load(std::memory_order_relaxed)) {
-        /* ★★ …and "sb":"auto"|"usb"|"lsb" (Stuart 2026-11-16): the sideband. AUTO follows FreeDV's convention (LSB below
-         *  10 MHz, USB above); USB / LSB override it for a station that does not. Same gate, same owner (this listener's
-         *  receiver, or the room's), and the demodulator flips sideband in the same move (clientRetune / rxModeDial). */
                 const DabParts dp = dabParts();   // ★ built BEFORE the report lock — the decoder may be mid-frame
                 std::lock_guard<std::mutex> rl(g_dabReportMtx);
                 if (g_dabMode.load(std::memory_order_relaxed)) sendDab(sock, dp);
             }
-            const std::string wantSb = jsonStr(msg, "sb");
-            const int sb = wantSb.empty() ? -1 : vibe::freedv::sbFromName(wantSb);
             return;
         }
-                bool sbChanged = false;
-                {
-                    std::lock_guard<std::mutex> lk(me->mtx);
-                    if (sub >= 0) { me->fdvSub = sub; if (me->fdv) me->fdv->setSub(sub); }
-                    if (sb >= 0 && sb != me->fdvSb) { me->fdvSb = sb; sbChanged = true; }
-                }
-                if (sbChanged) clientRetune(me.get());   // ★ the channel's sideband and the receiver's report, as a retune does
         /* ★★★ V12: THE DAB BAND SCAN from a listener — {"type":"dab_scan","on":1} starts, "on":0 stops (and puts the
          *  radio back on the block it was on). Who may: dabBandScanWhyNot — refused IN WORDS, so an old or hand-written
          *  client on a shared radio is told why rather than ignored. */
         /* ★★ V12 2026-11-04 THE LAST SCAN'S LIST, FOR ANYONE (Stuart: "change the button's name from scan to multiplexes
          *  … after the initial scan is complete that way it can be shown on shared VFO servers too"). Read-only: the
-                if (sb >= 0 && fdvSharedSb.exchange(sb) != sb) {
-                    std::lock_guard<std::recursive_mutex> lk(modeMtx);
-                    if (fdvMode_.load(std::memory_order_relaxed)) rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
-                }
          *  ensembles the last band scan found (names, blocks, quality) — it starts and stops nothing, so it needs no
          *  permission. Its OWN type, never `dab_scan` with a flag: an older server reads a `dab_scan` with no "on" as
          *  CANCEL, and an unknown type it simply ignores. */
@@ -36454,7 +36491,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const double tcpAt = tcpDataAt.load(std::memory_order_relaxed);
             const bool tcpSilent = useTcp() && tcpAt > 0 && nowSecs() - tcpAt > 3.0;
             if (((silent && expectingIq) || tcpSilent || captureDown.load()) && !radioReleased.load() && !rateBoostFellBack_.load()
-                && (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed))
+                && (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed)
+                    || g_ismMode.load(std::memory_order_relaxed))   // ★ V12 ISM at 2.56 MS/s
                 && g_rateGuard.boosted(&bRate, &bMode)) {
                 rateBoostStalled(bRate, bMode, (silent || tcpSilent) ? "the radio stopped delivering samples (no IQ for 3 s)"
                                                                      : "the capture stream stopped");
@@ -39114,6 +39152,7 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
 std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json(); }
 void LocalSdrShim::rateGuardClear() { g_rateGuard.clear(); }
 void LocalSdrShim::setVibeServerAdsb256(bool on) { g_adsb256.store(on, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerIsm256(bool on) { g_ism256.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerVfoB(bool on) { g_vsVfoB.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerNbWide(int mode) {
     g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
@@ -40107,6 +40146,7 @@ static std::string vsTunableJson() {
         j += std::string(",\"dabBoostUseful\":") + (useful ? "true" : "false");
         // ★ The same switch serves ADS-B (and any later mode with a rate of its own); ADS-B at 2.56 MS/s is its own switch, RTLs only
         j += std::string(",\"adsb256\":") + (g_adsb256.load(std::memory_order_relaxed) ? "true" : "false");
+        j += std::string(",\"ism256\":") + (g_ism256.load(std::memory_order_relaxed) ? "true" : "false");   // ★ V12 ISM's twin
     }
     /* ★★★ DIRECT SAMPLING, SAID OUT LOUD (Stuart, 2026-09-20). Two different questions, both answered here:
      *  ★★ `autoDs` — does this receiver reach HF BY ITSELF? On a Nooelec and its kin, everything below the

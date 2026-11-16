@@ -103,6 +103,20 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
         {"LoRaWAN 433.575", "lorawan", 433.575e6, 125e3, ALL, LW, false, 1},
         {"MeshCore EU 433 Long Range 433.650", "meshcore", 433.650e6, 250e3, {11}, MC, false, 2},
         {"MeshCore PT 433.375", "meshcore", 433.375e6, 62.5e3, {9}, MC, false, 2},
+        /* ★ V12 2026-11-16 — the rest of 433's amateur and mesh channels (docs/v12/LORA-MESH.md §LoRa-APRS / MeshCom;
+         *  sources: the LoRa_APRS_Tracker / iGate default profiles, MeshCom-Firmware country_profile.cpp, Meshtastic's
+         *  djb2 slot for "LongFast" in UA_433 and ANZ_433). Poland's LoRa APRS "1200 bps" profile is busy there: tier 1. */
+        {"LoRa APRS PL 434.855 (1200 bps)", "loraaprs", 434.855e6, 125e3, {9}, LA, false, 1},
+        {"MeshCom LA/ON 433.175 SF10", "meshcom", 433.175e6, 125e3, {10}, MX, false, 2},
+        {"MeshCom LA 433.925 SF10", "meshcom", 433.925e6, 125e3, {10}, MX, false, 2},
+        {"Meshtastic UA_433 LongFast 434.375", "meshtastic", 434.375e6, 250e3, {11}, MT, false, 2},
+        {"Meshtastic ANZ_433 LongFast 434.425", "meshtastic", 434.425e6, 250e3, {11}, MT, false, 2, homeBit(vibeism::Region::Oceania)},
+    };
+    /* ★★ V12 2026-11-16 — THE UK's LoRa APRS (vibe_ism_bands.h "439"): 439.9125 MHz, SF12 125 kHz CR 4/5 as on 433.775
+     *  (OARC wiki packet:lora), and MeshCom UK on the same frequency at SF10 125 kHz CR 4/6 (MeshCom country profile). */
+    static const std::vector<PlanCh> b439 = {
+        {"LoRa APRS UK 439.9125", "loraaprs", 439.9125e6, 125e3, {12}, LA, false, 0},
+        {"MeshCom UK 439.9125", "meshcom", 439.9125e6, 125e3, {10}, MX, false, 1},
     };
     /* ★★ V12 2026-11-12 — THE 902–928 MHz PLANS (LORA-MESH.md §Plans, a source for every line). `home` = the regions
      *  whose network a channel is (tierAt): at home its tier, unknown position one lower, elsewhere tier 2 — so a Pi 2
@@ -145,6 +159,8 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
         {"LoRaWAN AU915 916.0", "lorawan", 916.0e6, 125e3, SF7_10, LW, false, 2, SA | OC},
         {"LoRaWAN AU915 916.2", "lorawan", 916.2e6, 125e3, SF7_10, LW, false, 2, SA | OC},
         {"LoRaWAN AU915 915.9 (500 kHz)", "lorawan", 915.9e6, 500e3, {8}, LW, false, 2, SA | OC},
+        /* ✗ LoRa APRS's 915.000 profile (the LoRa_APRS_Tracker default list) is NOT a plan channel: how widely it is used is
+         *  unclear, and adaptive discovery (vibe_lora_discover.h) finds a busy unknown channel there by itself. */
     };
     static const std::vector<PlanCh> b920 = {
         {"Meshtastic ANZ LongFast 919.875", "meshtastic", 919.875e6, 250e3, {11}, MT, false, 0},
@@ -273,6 +289,7 @@ inline const std::vector<PlanCh>& planFor(const std::string& band) {
     if (band == "927") return b927;
     if (band == "868") return eu868;
     if (band == "433") return eu433;
+    if (band == "439") return b439;
     if (band == "907") return b907;
     if (band == "910") return b910;
     if (band == "915") return b915;

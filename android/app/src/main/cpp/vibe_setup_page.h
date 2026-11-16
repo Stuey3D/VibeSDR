@@ -1957,6 +1957,16 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <div class="note" id="adsb256Note" style="margin-left:24px">ADS-B takes the radio to 2.56 MS/s instead of 2.4,
          and back when it ends. Watch the capture figure in ADS-B: below 97 % the dongle is dropping samples.</div>
       </div>
+      <!-- ★★ V12 ISM AT 2.56 MS/s — THE SAME SHAPE AS ADS-B's (Stuart, 2026-11-16): an RTL only, never the default. On
+           433 MHz MeshCom's channel (433.175) sits outside a 2.048 or 2.4 MS/s capture beside LoRa APRS (433.775); at
+           2.56 both fit. Hidden on every other radio (AGENTS.md). -->
+      <div id="ism256Box" class="hide">
+      <label class="row" id="ism256Row" style="gap:8px;margin-top:10px;margin-left:24px">
+        <input type="checkbox" id="ism256" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Use 2.56 MS/s sample rate for ISM (may drop some samples)</span></label>
+      <div class="note" id="ism256Note" style="margin-left:24px">ISM takes the radio to 2.56 MS/s, and back when it
+         ends, so on 433 MHz MeshCom (433.175 MHz) is heard beside LoRa APRS (433.775 MHz) and the rest of the band.</div>
+      </div>
       <div id="hwBiasT" class="hide">
         <label style="display:flex;gap:8px;align-items:center">
           <input type="checkbox" id="biasT" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -4842,6 +4852,11 @@ function modeRateShow(r) {
   $("adsb256").disabled = !live;
   $("adsb256").checked = !!r.adsb256;
   $("adsb256Row").style.opacity = live ? "" : "0.45";
+  // ★ V12 ISM's twin: the same rule (an RTL only), its own switch
+  $("ism256Box").classList.toggle("hide", !(can && rtl));
+  $("ism256").disabled = !live;
+  $("ism256").checked = !!r.ism256;
+  $("ism256Row").style.opacity = live ? "" : "0.45";
   if (typeof rateGuardShow === "function") rateGuardShow();
 }
 /** ★★★ A STALL OR CRASH AT A RATE A MODE BOOSTED TO (HW.rateGuard, vibe_rate_guard.h): the red line, and the switch
@@ -6723,6 +6738,7 @@ function fill() {
   // ★ The switch re-draws the option beneath it.
   $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; modeRateShow(radio()); });
   $("adsb256").addEventListener("change", () => { radio().adsb256 = $("adsb256").checked; });
+  $("ism256").addEventListener("change", () => { radio().ism256 = $("ism256").checked; });   // ★ V12
   $("rateGuardClear").addEventListener("click", rateGuardClear);
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {
@@ -7033,6 +7049,7 @@ const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodula
 const BG_ISM_BANDS = [
   { id: "315", label: "315 MHz (US / Japan: tyre sensors, key fobs, remotes)" },
   { id: "433", label: "433.92 MHz (weather stations, sensors, doorbells, tyre sensors)" },
+  { id: "439", label: "439.9 MHz \u2014 UK LoRa APRS and MeshCom (439.9125)" },
   { id: "479", label: "479 MHz \u2014 China LoRa (CN470, Meshtastic CN)" },
   { id: "865", label: "865 MHz \u2014 India LoRaWAN (IN865), Meshtastic India / NZ_865" },
   { id: "867", label: "867 MHz \u2014 EU LoRaWAN 867.1\u2013867.9, Meshtastic Kazakhstan / Nepal" },

@@ -28,7 +28,13 @@ for (const [p, what] of [['../android/app/src/main/cpp/vibe_setup_page.h', 'the 
   const t = read(p);
   ok(!/adsbExtreme|AdsbExtreme|3\.2 MS\/s \(extreme\)/.test(t), `${what} has no 3.2 MS/s "extreme"`);
   ok(/adsb256|Adsb256/.test(t), `${what} carries adsb256`);
+  ok(/ism256|Ism256/.test(t), `${what} carries ism256 (V12 ISM at 2.56 MS/s)`);
 }
+ok(/<span>Use 2\.56 MS\/s sample rate for ISM \(may drop some samples\)<\/span>/.test(src), 'the page reads "Use 2.56 MS/s sample rate for ISM (may drop some samples)"');
+ok(/rtl && g_ism256\.load\(std::memory_order_relaxed\) && !g_rateGuard\.blocked\(\)/.test(read('../android/app/src/main/cpp/local_sdr_shim.cpp')),
+   'the shim: an RTL with ISM 2.56 on takes 2.56 MS/s in ISM, unless the rate guard holds a fall-over');
+ok(/B\("ism256", r\.ism256\)/.test(read('../vibeserver/vibeserver_config.cpp')) && /getBool\(s, "ism256", c\.ism256\)/.test(read('../vibeserver/vibeserver_config.cpp')),
+   'vibeserver_config.cpp reads and writes ism256, on the live path too');
 ok(/<span>Use 2\.56 MS\/s sample rate for ADS-B \(may drop some samples\)<\/span>/.test(src), 'the page reads "Use 2.56 MS/s sample rate for ADS-B (may drop some samples)"');
 ok(/rtl && g_adsb256\.load\(std::memory_order_relaxed\) && !g_rateGuard\.blocked\(\)\) return 2\.56e6;/.test(read('../android/app/src/main/cpp/local_sdr_shim.cpp')),
    'the shim: an RTL with it on takes 2.56 MS/s in ADS-B, unless the rate guard holds a fall-over');
@@ -39,7 +45,7 @@ function els() {
   const e = {};
   const mk = () => ({ disabled: false, checked: false, style: { opacity: '', display: '' },
     _hide: false, classList: { toggle(c, on) { if (c === 'hide') e._last._hide = !!on; } } });
-  for (const id of ['dabRateBoost', 'dabRateBoostRow', 'dabRateBoostNote', 'dabRateBoostNo', 'dabWideNote', 'adsb256Box', 'adsb256', 'adsb256Row']) e[id] = mk();
+  for (const id of ['dabRateBoost', 'dabRateBoostRow', 'dabRateBoostNote', 'dabRateBoostNo', 'dabWideNote', 'adsb256Box', 'adsb256', 'adsb256Row', 'ism256Box', 'ism256', 'ism256Row']) e[id] = mk();
   return e;
 }
 function run(r, HW = null) {
@@ -70,6 +76,14 @@ e = run({ driver: 'sdrplay', adsb256: true });
 ok(e.adsb256Box._hide, 'an RSP: the 2.56 option is not drawn (AGENTS.md: one radio only)');
 e = run({ driver: 'rtlsdr' });
 ok(!e.adsb256.checked, 'nothing saved → 2.56 unticked (never the default)');
+e = run({ driver: 'rtlsdr', ism256: true });
+ok(!e.ism256Box._hide && !e.ism256.disabled && e.ism256.checked, 'RTL, ISM 2.56 saved on → drawn, live and ticked');
+e = run({ driver: 'rtl_tcp' });
+ok(!e.ism256Box._hide && !e.ism256.checked, 'rtl_tcp: drawn, unticked by default');
+for (const d of ['sdrplay', 'airspy', 'hackrf', 'usrp', 'airspyhf']) {
+  e = run({ driver: d, ism256: true });
+  ok(e.ism256Box._hide, `${d}: the ISM 2.56 option is not drawn (one radio only)`);
+}
 
 console.log(fail ? `\n${fail} FAILED` : '\nall good');
 process.exit(fail ? 1 : 0);

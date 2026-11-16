@@ -1622,6 +1622,9 @@ if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   [ -x "$OUT/test-wmbus" ] && "$OUT/test-wmbus" --write-clip "$OUT/wmbus-clip.u8" 868800000 2400000 >/dev/null
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" VIBE_WMBUS_CLIP="$OUT/wmbus-clip.u8" node scripts/test-server-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ V12 "Use 2.56 MS/s sample rate for ISM" (ism256): the rate up on entry, back on leaving, MeshCom 433.175 then fits
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-server-ism256.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" VIBE_WMBUS_CLIP="$OUT/wmbus-clip.u8" node scripts/test-web-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★★ V12 ISM IN THE GALLERY (2026-10-25): a listener's session writes the day's log + card (nothing while it ran, the
