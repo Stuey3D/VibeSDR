@@ -476,6 +476,8 @@ export interface ServerOccupancy {
   same?: boolean;
   /** ★ V12 SELCAL: this server's aeronautical selective-call decoder ('selcal'). */
   selcal?: boolean;
+  /** ★ V12 DTMF + 5-tone selective calling ('tones') — on any frequency; the server decides what is shown. */
+  tones?: boolean;
   /** ★ V12 HFDL: this server decodes HFDL on a listener's USB dial ('hfdl') and serves /addon/hfdl/* for the HFDL MAP. */
   hfdl?: boolean;
   /** ★ V12 AIRCRAFT DATALINK (ACARS / VDL2, a whole-radio mode): offered / greyed with its reason; absent = no key. */
@@ -580,6 +582,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       timeTdf:   j.timeTdf === true,
       ncdxf:     j.ncdxf === true,   // ★ V12 the NCDXF / IARU beacon tracker
       balloon:   j.balloon === true, // ★ V12 balloons
+      tones:     j.tones === true,   // ★ V12 DTMF + 5-tone
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
       same:      j.same === true,

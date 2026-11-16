@@ -60,6 +60,7 @@
 #include "vibe_jtty_run.h"
 #include "vibe_ncdxf_run.h"   // ★ V12 2026-11-16 the NCDXF / IARU beacon tracker
 #include "vibe_balloon_run.h"  // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV pictures — docs/v12/BALLOONS.md
+#include "vibe_tones_run.h"    // ★ V12 tone decoders: DTMF and 5-tone selective calling — docs/v12/TONES.md
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -222,6 +223,9 @@ struct DecoderPeer {
     virtual void text(const std::string& s) = 0;
     /** Bytes queued and not yet on the wire — paces a replay. 0 when unknown. */
     virtual size_t backlog() const { return 0; }
+    /** ★ V12 (docs/v12/TONES.md): is this socket the server OWNER's (signed in to the admin page)? A line only the owner may
+     *  see (textFramePriv) goes to these sockets alone. Asked per line, so signing in or out takes effect at once. */
+    virtual bool privileged() const { return false; }
 };
 using DecoderPeerPtr = std::shared_ptr<DecoderPeer>;
 
@@ -298,6 +302,11 @@ public:
         /** ★ What the benchmark says this machine affords for Band, in FT8 units (∞ / NaN = no benchmark). Asked once per
          *  Band start. */
         std::function<double()> bandBudgetUnits;
+        /** ★★ V12 tone decoders: the owner's opt-in to 5-tone digits off the amateur bands ("tones+digits"). Read when the
+         *  decoder starts; empty = off. Never anything a client sends. */
+        std::function<bool()> tonesDigits;
+        /** ★ The ITU region of this server's band plan (vibe_bands.h) — which bands are amateur. Empty = Region 1. */
+        std::function<int()> region;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -640,7 +649,7 @@ public:
         std::lock_guard<std::mutex> lk(decMtx_);
         if (hfdl_) return "hfdl";
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -783,7 +792,7 @@ private:
     static bool knownExt(const std::string& e) {
         if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -794,9 +803,9 @@ private:
                                "deviation", "bandwidth", "width", "centre", "bits", "reverse", "horus_baud", "horus_spacing" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
-        for (const char* f : { "encoding", "framing", "station", "band", "mode" }) { k += str(msg, f); k += ','; }
+        for (const char* f : { "encoding", "framing", "station", "band", "mode", "standard" }) { k += str(msg, f); k += ','; }
         for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
-                               "\"auto\":true", "\"usos\":true", "\"rtty\":false", "\"horus\":false" })
+                               "\"auto\":true", "\"usos\":true", "\"rtty\":false", "\"horus\":false", "\"dtmf\":false", "\"five\":false" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
         return k;
     }
@@ -829,7 +838,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_; }
+    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -858,6 +867,7 @@ private:
         jtty_.reset();
         ncdxf_.reset();
         balloon_.reset();
+        tones_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
         active_.store(false, std::memory_order_relaxed);
@@ -931,6 +941,25 @@ private:
         while (!done_.empty() && (done_.size() > kDoneMax || doneBytes_ > kReplayMax)) {
             doneBytes_ -= done_.front().bytes; done_.pop_front();
         }
+    }
+    /** ★ V12 (TONES.md): one line, two versions — `priv` to the owner's sockets (DecoderPeer::privileged), `pub` to every other
+     *  socket, the gap log and the gallery. A line the owner opted in to see is never kept where anyone else could replay it. */
+    void textFramePriv(const std::string& pub, const std::string& priv) {
+        auto frame = [](const std::string& text) {
+            std::vector<uint8_t> m(13 + text.size());
+            m[0] = 0x01;
+            const uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            for (int i = 0; i < 8; i++) m[1 + i] = (uint8_t)(ts >> ((7 - i) * 8));
+            const uint32_t len = (uint32_t)text.size();
+            m[9] = (uint8_t)(len >> 24); m[10] = (uint8_t)(len >> 16); m[11] = (uint8_t)(len >> 8); m[12] = (uint8_t)len;
+            std::memcpy(m.data() + 13, text.data(), text.size());
+            return m;
+        };
+        const std::vector<uint8_t> a = frame(pub), b = frame(priv);
+        for (auto& p : snapshotPeers()) { const auto& m = p->privileged() ? b : a; p->binary(m.data(), m.size()); }
+        gapNote(GapDecoder, true, a.data(), a.size());
+        if (DecoderTapPtr t = tap()) t->text(pub);
     }
     void textFrame(const std::string& text) {
         std::vector<uint8_t> m(13 + text.size());
@@ -1075,6 +1104,8 @@ private:
             buildNcdxfLocked_();
         } else if (ext == "balloon") {
             buildBalloonLocked_(msg);
+        } else if (ext == "tones") {
+            buildTonesLocked_(msg);
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
             /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
@@ -1369,6 +1400,26 @@ private:
         balloon_.reset(new BalloonRun(BalloonRun::configFrom(baud, bits, rev, shift, hb, hs, rtty, horus), std::move(o)));
         active_.store(true, std::memory_order_relaxed);
         log("decoder attached: balloons");
+    }
+    /** ★★ V12 TONE DECODERS (vibe_tones_run.h, decoders/tones_rx.h): DTMF and 5-tone selective calling on the listener's NFM / AM
+     *  audio, both at once. "dtmf":false / "five":false switch one off; "standard" pins the 5-tone table (a toneTables() id;
+     *  anything else AUTO). WHAT IS SHOWN is decided in TonesRun by the dial's band (amateur or not) and the owner's opt-in
+     *  (Env::tonesDigits) — never by the client. */
+    void buildTonesLocked_(const std::string& msg) {
+        TonesRun::Config c;
+        c.dtmf = msg.find("\"dtmf\":false") == std::string::npos;
+        c.five = msg.find("\"five\":false") == std::string::npos;
+        c.pin = tones::tableIndex(str(msg, "standard"));
+        c.digits5 = env_.tonesDigits ? env_.tonesDigits() : false;
+        TonesRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.textPriv = [this](const std::string& pub, const std::string& priv) { textFramePriv(pub, priv); };
+        o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+        o.json = [this](const std::string& j) { broadcastText(j, -1); };
+        tones_.reset(new TonesRun(c, env_.dialHz, env_.region, std::move(o)));
+        active_.store(true, std::memory_order_relaxed);
+        log(std::string("decoder attached: tones (") + (c.dtmf ? "DTMF" : "") + (c.dtmf && c.five ? " + " : "") + (c.five ? "5-tone" : "")
+            + (c.pin >= 0 ? std::string(", ") + tones::toneTables()[c.pin].name : std::string()) + ")");
     }
     void sendSstv(const std::vector<uint8_t>& m) {
         std::lock_guard<std::mutex> sl(sstvSendMtx_);   // ★ SSTV has a video-decode thread of its own
@@ -1697,6 +1748,11 @@ private:
                 if (!dec.empty()) sstv_->process(dec.data(), (int)dec.size());
                 return;
             }
+            if (tones_) {
+                // ★ tones: float audio straight in; lines and state are sent from inside (TonesRun)
+                tones_->feedAudio(data, count);
+                return;
+            }
             if (balloon_) {
                 // ★ balloons: float audio straight in; reports, pictures and state are sent from inside (BalloonRun)
                 balloon_->feedAudio(data, count);
@@ -1842,6 +1898,7 @@ private:
     std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::unique_ptr<NcdxfRun> ncdxf_;         // ★ V12 NCDXF beacons (buildNcdxfLocked_)
     std::unique_ptr<BalloonRun> balloon_;     // ★ V12 balloons (buildBalloonLocked_)
+    std::unique_ptr<TonesRun> tones_;         // ★ V12 DTMF + 5-tone (buildTonesLocked_)
     double decUtc_ = NAN;                     ///< ★ the capture UTC of the block decode_ is handed (NaN = now)
     std::unique_ptr<JttyRun> jtty_;           // ★ JTTY: every JTTY signal in the passband (buildJttyLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)

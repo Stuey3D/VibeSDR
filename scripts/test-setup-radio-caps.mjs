@@ -101,7 +101,7 @@ console.log('\nThe Icom tab, exactly');
 {
   const r = tab('icom', { blockedModes: 'dab,wfm,rtty' });
   const d = drawn().sort().join(',');
-  ok(d === 'am,aprs,cw,cwl,cwu,dsc,ft8,hell,hfdl,jtty,lsb,mfsk,navtex,nfm,psk,rtty,selcal,sitora,spots,sstv,time,usb,wefax',
+  ok(d === 'am,aprs,cw,cwl,cwu,dsc,ft8,hell,hfdl,jtty,lsb,mfsk,navtex,nfm,psk,rtty,selcal,sitora,spots,sstv,time,tones,tones+digits,usb,wefax',   // ★ V12 DTMF + 5-tone: the Icom's FM / AM audio
      `only the radio's own modes and the audio decoders: ${d}`);
   ok(r.blockedModes === 'dab,wfm,rtty', '★ hiding is not clearing: the saved list is untouched');
   page.modeBlockSummary();

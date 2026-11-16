@@ -188,6 +188,7 @@ import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
 import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonLine, balloonMerge, balloonParams,
          balloonPicture, balloonPictureText, balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen, type BalloonPayload, type BalloonReport, type BalloonSettings } from '../../../src/services/balloons';   // ★ V12 balloons
+import { FIVE_TONE_STANDARDS, TONES_DEFAULTS, TONES_HINT, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from '../../../src/services/tones';   // ★ V12 DTMF + 5-tone
 import { NCDXF_BANDS, NCDXF_HINT, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
 import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
@@ -887,6 +888,7 @@ async function loadAudioPolicy(httpBase: string) {
   jttyCap = false;             // ★ …nor JTTY
   ncdxfCap = false;            // ★ …nor the NCDXF beacon tracker
   balloonCap = false;          // ★ …nor balloons
+  tonesCap = false;            // ★ …nor DTMF / 5-tone
   decWhy = {};                 // ★ …and no decoder out of reach until this radio says so
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
@@ -988,6 +990,9 @@ async function loadAudioPolicy(httpBase: string) {
       if (b) b.hidden = !hellCap || blockedModes.has('hell'); }
     { const b = document.querySelector('#timeStation [data-station="tdf"]') as HTMLElement | null;
       if (b) b.hidden = j.timeTdf !== true; }   // ★ V12 TDF: a station of TIME, only on a server that reads it
+    tonesCap = j.tones === true;   // ★ V12 DTMF + 5-tone: decoded by this server, any frequency (what is SHOWN is the server's rule)
+    { const b = document.querySelector('#decodersPanel [data-dec="tones"]') as HTMLElement | null;
+      if (b) b.hidden = !tonesCap || blockedModes.has('tones'); }
     balloonCap = j.balloon === true || !!decWhy.balloon;   // ★ V12 balloons: decoded by this server (greyed with why off 70 cm)
     { const b = document.querySelector('#decodersPanel [data-dec="balloon"]') as HTMLElement | null;
       if (b) b.hidden = !balloonCap || blockedModes.has('balloon'); }
@@ -2195,7 +2200,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap) || (id === 'balloon' && !balloonCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap) || (id === 'balloon' && !balloonCap) || (id === 'tones' && !tonesCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -13056,7 +13061,38 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'hfdl' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'hfdl' | null = null;
+/* ★★ DTMF + 5-TONE (V12) — decoded on the server (decoders/tones_rx.h): one line per DTMF string or 5-tone call on this
+ *  listener's NFM / AM audio. WHAT IS SHOWN is the server's rule (vibe_tones_run.h): digits on the amateur bands only, so this
+ *  page draws whatever it is sent. The settings: DTMF and 5-TONE each on/off, and the 5-tone STANDARD — AUTO, with one table
+ *  pinned under it as the manual fallback. Offered only where vibeserver.json says "tones". */
+let tonesCap = false;
+let tonesSet: TonesOptions = { ...TONES_DEFAULTS };
+let tonesLast: TonesStatus | null = null;
+function initTonesSettings() {
+  const hint = document.getElementById('tonesHint');
+  if (hint) hint.textContent = TONES_HINT;
+  const seg = (id: string, items: ReadonlyArray<{ label: string; on: boolean; set: () => void }>) => {
+    const host = document.getElementById(id);
+    if (!host) return;
+    host.textContent = '';
+    for (const it of items) {
+      const b = document.createElement('button');
+      b.className = 'btn' + (it.on ? ' on' : '');
+      b.textContent = it.label;
+      b.onclick = () => { it.set(); initTonesSettings(); reattachIf('tones'); };
+      host.appendChild(b);
+    }
+  };
+  // ★ never both off: switching the last one off switches the other on
+  seg('tonesWhich', [
+    { label: 'DTMF', on: tonesSet.dtmf, set: () => { tonesSet = { ...tonesSet, dtmf: !tonesSet.dtmf, five: tonesSet.dtmf && !tonesSet.five ? true : tonesSet.five }; } },
+    { label: '5-TONE', on: tonesSet.five, set: () => { tonesSet = { ...tonesSet, five: !tonesSet.five, dtmf: tonesSet.five && !tonesSet.dtmf ? true : tonesSet.dtmf }; } },
+  ]);
+  seg('tonesStd', FIVE_TONE_STANDARDS.map((x) => ({ label: x.label, on: tonesSet.standard === x.id, set: () => { tonesSet = { ...tonesSet, standard: x.id }; } })));
+  const std = document.getElementById('tonesStdRow');
+  if (std) std.style.opacity = tonesSet.five ? '' : '0.45';
+}
 /* ★★ BALLOONS (V12) — decoded on the server (decoders/balloon_rx.h): UKHAS RTTY telemetry, Horus Binary and SSDV pictures on
  *  this listener's USB audio. The box: one row per payload (newest first), then the pictures as they build; the settings are
  *  AUTO with the manual pins under it. Offered only where vibeserver.json says "balloon" (greyed with why off 70 cm). */
@@ -13790,7 +13826,8 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'dsc') { const v = vfoNow(decVfo); return dscParams(v.frequency, String(v.mode ?? '')); }   // ★ the decoding VFO's dial
   if (mode === 'sitora') return { center_frequency: 1000 };
   if (isTextFamily(mode)) return { mode: tmMode[mode] };   // ★ the tones around 1 kHz, as RTTY; the polarity is found
-  if (mode === 'balloon') return balloonParams(balloonSet);   // ★ AUTO sends nothing; each pin narrows the search
+  if (mode === 'balloon') return balloonParams(balloonSet);
+  if (mode === 'tones') return tonesParams(tonesSet);   // ★ both on, AUTO: nothing; each change one field   // ★ AUTO sends nothing; each pin narrows the search
   return {};
 }
 
@@ -13801,6 +13838,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
       if (activeDec === 'dsc') return;   // ★ DSC's rows are drawn from its JSON (onDscCall); the line is the same text
       if (activeDec === 'jtty') return;  // ★ JTTY's rows are drawn from its JSON (onJttySignals); the line is the same text
+      if (activeDec === 'tones') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ DTMF / 5-tone: the heard log, last 40 lines
       if (activeDec === 'balloon') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ balloons: the report log, last 40 lines
       if (activeDec === 'ncdxf') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ NCDXF: the heard log, last 40 lines
       const el = $('decText');
@@ -13888,6 +13926,7 @@ function initDecoders(host: string, auth: AuthState) {
                    : activeDec === 'jtty' ? (st ? 'decoding…' : 'listening…')
                    : activeDec === 'ncdxf' ? ncdxfStatus(ncdxfLast)
                    : activeDec === 'balloon' ? balloonStatus(balloonLast)
+                   : activeDec === 'tones' ? tonesStateText(st, tonesLast)
                    : activeDec === 'rtty' && rttySkim ? (st >= 3 ? 'decoding…' : st ? 'RTTY found — working out its settings…' : 'listening…')
                    : kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
@@ -13998,6 +14037,13 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(r.state >= 3);
     },
     onBalloonPicture: (buf) => { if (activeDec === 'balloon') balloonPictureIn(buf); },
+    // ★★ V12 DTMF + 5-tone: amateur here or not (whether digits can be shown), on attach and when the dial changes band.
+    onTones: (d) => {
+      if (activeDec !== 'tones') return;
+      tonesLast = tonesSanitise(d);
+      decStateText = tonesStateText(0, tonesLast);
+      if (!decTuneHint) $('decStatus').textContent = decStateText;
+    },
     // ★★ V12 NCDXF beacons: the grid and the last slot, every ten seconds.
     onNcdxf: (d) => {
       if (activeDec !== 'ncdxf') return;
@@ -14146,7 +14192,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'hfdl';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'hfdl';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12 out of this radio's reach: the press says why and starts nothing (decWhyPaint draws the key greyed)
       if (decWhy[mode]) { showPill(`${(b.textContent || mode).trim()} unavailable \u2014 ${decWhy[mode]}`, 8000); return; }
@@ -14770,7 +14816,7 @@ function anyDecoderLeft(): boolean {
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
     || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal')) || (hfdlCap && !blockedModes.has('hfdl'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
-    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon'));
+    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon')) || (tonesCap && !blockedModes.has('tones'));
 }
 
 /* ★★ THE WHOLE-RADIO TOGGLES — one each, for the mode menu (mobile.ts deps) AND the decoder panel's TUNES THE RADIO ITSELF
@@ -14860,6 +14906,8 @@ function syncDecButtons() {
   if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
   $('jttySettings').hidden = activeDec !== 'jtty';
   if (activeDec === 'jtty') initJttyDials();
+  $('tonesSettings').hidden = activeDec !== 'tones';
+  if (activeDec === 'tones') initTonesSettings();
   $('balloonSettings').hidden = activeDec !== 'balloon';
   if (activeDec === 'balloon') initBalloonSettings();
   $('ncdxfSettings').hidden = activeDec !== 'ncdxf';
@@ -14889,6 +14937,7 @@ function showDecBox(what: string) {
                             : isTextFamily(what) ? TEXT_FAMILY_KEY[what]
                             : what === 'hell'  ? 'FELD HELL'
                             : what === 'balloon' ? 'BALLOONS'
+                            : what === 'tones' ? 'DTMF / 5-TONE'
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -14932,6 +14981,7 @@ function showDecBox(what: string) {
   if (what === 'ncdxf') { ncdxfLast = null; renderNcdxf(); }
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
   else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
+  else if (what === 'tones') { tonesLast = null; decStateText = tonesStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = TONES_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
   else if (what === 'hfdl') { decStateText = hfdlStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HFDL_HINT; }
   else if (what === 'hell') { hellPager.reset(); decStateText = hellStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HELL_HINT; }

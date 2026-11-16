@@ -178,6 +178,10 @@ flags_for() {
     # ★ V12 balloons (decoders/balloon_*.h): UKHAS RTTY, Horus Binary, SSDV — our transmitter into our receiver, false-positive
     #   minutes, SIMD = scalar, cost. `test-balloon wav <file> [rate]` replays a recording; `clip` writes the e2e clip.
     test-balloon)          echo "-O2" ;;
+    # ★ V12 tone decoders (decoders/tones_*.h): DTMF (Q.23/Q.24) and 5-tone selcall — our transmitter into our receiver, every
+    #   digit and table, twist/timing/frequency limits, minutes of noise / speech-like / music-like audio with nothing decoded,
+    #   SIMD = scalar, cost. `test-tones wav <file>…` runs recordings as a talk-off corpus (exit 1 when anything decodes).
+    test-tones)            echo "-O2" ;;
     # ★★ The ADS-B gain rule after Stuart's FlightAware box: the top, down only for dynamic range, never for strong aircraft.
     test-adsb-gain)        echo "-O2 -lpthread" ;;
     # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard
@@ -770,6 +774,8 @@ if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fai
 if npx tsx scripts/test_ncdxf_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 balloons: the shared client half (src/services/balloons.ts) and both clients' keys.
 if npx tsx scripts/test_balloon_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 DTMF + 5-tone: the shared client half (src/services/tones.ts), both clients' keys and options, the setup screens.
+if npx tsx scripts/test_tones_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1852,6 +1858,24 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-balloon" ] && "$OUT/test-ball
   rm -f "$OUT/balloon-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and test-balloon built above)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 DTMF + 5-TONE (docs/v12/TONES.md): the real server on a fake rtl_tcp replaying test-tones' synthetic NFM clip (our own
+#     transmitter: DTMF "*73#1234", a ZVEI-1 call and a CCIR call): on 2 m the digits, on PMR446 only "heard" and the digits in
+#     nothing any socket was sent, the owner's 5-tone opt-in reaching the signed-in owner and never a listener's mirror, the
+#     pins, a range-locked radio, the owner's switch (test-server-tones); then the web client in headless Edge (--mute-audio) —
+#     the key, its options, the lines (test-web-tones). NOT RUN without VIBESERVER_BIN.
+printf '\n\033[1m── DTMF + 5-tone (end to end: the server, then the web client) ──\033[0m\n'
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-tones android/app/src/main/cpp/decoders/tones_tx.h android/app/src/main/cpp/decoders/tones_fivetone.h \
+  android/app/src/main/cpp/decoders/tones_dtmf.h
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-tones" ] && "$OUT/test-tones" clip "$OUT/tones-clip.cu8" 288000 30 >/dev/null; then
+  VIBE_TONES_CLIP="$OUT/tones-clip.cu8" node scripts/test-server-tones.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_TONES_CLIP="$OUT/tones-clip.cu8" node scripts/test-web-tones.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/tones-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-tones built above)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 THE RTTY SKIMMER (2026-11-14): the real server on a fake rtl_tcp replaying test-rtty-skimmer's synthetic clip (four

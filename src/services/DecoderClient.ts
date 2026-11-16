@@ -57,6 +57,7 @@ import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
 import { sameStateText, selcalStateText } from './alertDecoders';
+import { TONES_DEFAULTS, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from './tones';   // ★ V12 DTMF + 5-tone
 import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS / SAME and SELCAL
 import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
@@ -72,6 +73,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
   | 'ncdxf'   // ★ V12 the NCDXF / IARU beacon tracker — a VibeServer's own (ncdxf.ts): a line per beacon heard, 0x03, the grid JSON
   | 'mfsk'   // ★ V12 the MFSK keyboard modes — MFSK16/32, OLIVIA, CONTESTIA, THOR on ONE key (textModes.ts): text as it decodes, 0x03, textmode_status
   | 'hell'    // ★ V12 FELD HELL — drawn by a VibeServer (feldHell.ts): WEFAX's grey lines (re-sent as a strip fills), hell_status
+  | 'tones'   // ★ V12 DTMF + 5-tone selective calling on a VibeServer (tones.ts): a line per string / call, 0x03, {"type":"tones"}
   | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
   | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
@@ -335,6 +337,10 @@ export class DecoderClient {
   aprsBaud: 1200 | 300 = 1200;
   /** ★ V12 balloons: AUTO, or the listener's manual pins (balloons.ts balloonParams) — re-attach to apply. */
   balloonSet: BalloonSettings = { ...BALLOON_AUTO };
+  /** ★ V12 DTMF + 5-tone: which decoders run and the 5-tone standard (tones.ts tonesParams) — re-attach to apply. */
+  tonesSet: TonesOptions = { ...TONES_DEFAULTS };
+  /** The server's last word on this dial: amateur (digits shown) or not. */
+  tonesLast: TonesStatus | null = null;
   /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */
   pagingMode = 'auto';
   /** ★ V12 MFSK / OLIVIA / THOR: each family's chosen sub-mode (a server `<family>Modes` id, 'auto' first) — a change is a re-attach. */
@@ -674,6 +680,10 @@ export class DecoderClient {
             if (this.active !== 'rtty' || !this.rttySkim) return;
             const sp = parseCwSpot(m.data, Date.now(), false, true);
             if (sp) this.cb.onCwSpot?.(sp);
+          } else if (m.type === 'tones' && m.data) {
+            if (this.active !== 'tones') return;
+            this.tonesLast = tonesSanitise(m.data);
+            this.cb.onStatus(tonesStateText(0, this.tonesLast));
           } else if (m.type === 'balloon' && m.data) {
             if (this.active !== 'balloon') return;
             const r = balloonSanitise(m.data);
@@ -867,6 +877,8 @@ export class DecoderClient {
       case 'ncdxf':   return { extension_name: 'ncdxf', params: {} };
       // ★ V12 balloons: AUTO sends nothing; each pin narrows the server's search (balloons.ts).
       case 'balloon': return { extension_name: 'balloon', params: balloonParams(this.balloonSet) };
+      // ★ V12 DTMF + 5-tone: both on and AUTO send nothing (tones.ts); what is SHOWN is the server's rule.
+      case 'tones': return { extension_name: 'tones', params: tonesParams(this.tonesSet) };
       // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.
       case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };
       // ★ V12 SITOR-A: the tones around 1 kHz (as RTTY); polarity, timing and each station's offset are found.
@@ -899,7 +911,7 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'balloon' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || name === 'hfdl' || isTextFamily(name)) {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'balloon' || name === 'tones' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || name === 'hfdl' || isTextFamily(name)) {
       if (name === 'balloon' && t === 0x0b) {
         // ★ V12 balloons: an SSDV picture so far (balloonPicture checks every length and that it is a JPEG)
         const p = balloonPicture(u8);
@@ -916,6 +928,11 @@ export class DecoderClient {
         if (u8.length < 2) return;
         if (!u8[1]) { this.tmLast = null; this.cb.onStatus(textModeStatusText(name, this.textMode[name], null, this.textModes)); }
         this.cb.onDot(u8[1] ? 'active' : 'idle');
+      } else if (name === 'tones' && t === 0x03) {
+        // ★ DTMF + 5-tone: 0 listening · 1 tones sounding (the amateur / not line is kept from the status JSON)
+        if (u8.length < 2) return;
+        this.cb.onStatus(tonesStateText(u8[1], this.tonesLast));
+        this.cb.onDot(u8[1] ? 'sync' : 'idle');
       } else if (name === 'selcal' && t === 0x03) {
         if (u8.length < 2) return;
         this.cb.onStatus(selcalStateText(u8[1]));

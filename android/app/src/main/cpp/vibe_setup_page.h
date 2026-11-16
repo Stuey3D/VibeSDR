@@ -3089,6 +3089,10 @@ function bandLabel(entry) {
 const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless "
   + "Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law "
   + "where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.";
+/* ★ V12 tones (docs/v12/TONES.md): beside the 5-tone opt-in — what it is and who sees it. */
+const TONES_DIGITS_NOTICE = "Off the amateur bands a 5-tone call's number says who is being called on a private radio system. "
+  + "Only switch this on if the law where this server is allows it. The numbers are shown only to you, the owner, while you "
+  + "are signed in \u2014 never to listeners, never in the gallery. DTMF off the amateur bands is never shown (it can be a phone number).";
 const BLOCKABLE = [
   { id: "wfm",    label: "WFM"      },
   /* ★ Advanced RDS lives inside WFM: no FM, no RDS of any kind (the shim drops "rds" from the offer without WFM). */
@@ -3172,6 +3176,12 @@ const BLOCKABLE = [
   { id: "ncdxf",  label: "NCDXF beacons" },
   /* ★ V12 balloons (docs/v12/BALLOONS.md): UKHAS RTTY telemetry, Horus Binary and SSDV pictures, a listener's decoder on 70 cm. */
   { id: "balloon", label: "Balloons (UKHAS, Horus, SSDV)" },
+  /* ★★ V12 tone decoders (docs/v12/TONES.md): DTMF and 5-tone selective calling on a listener's NFM / AM audio. On the
+   *  amateur bands the digits are shown; elsewhere DTMF is only "DTMF heard" (a dialled number — never shown, no switch) and
+   *  5-tone its format ("ZVEI-1 5-tone heard"). Under it, the owner's opt-in ("+" token, IN the CSV when ticked, off by
+   *  default): 5-tone digits off the amateur bands, shown to the owner's own signed-in sockets only. */
+  { id: "tones", label: "DTMF and 5-tone selective calling" },
+  { id: "tones+digits", label: "5-tone: show the called numbers off the amateur bands (to you only)", parent: "tones", on: true },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP
@@ -3463,6 +3473,8 @@ function modeBlockRender() {
                                 + loraAllHint() + `</div></div>`;
     if (m.id === "avdata+text") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="avdataTextHint" style="margin:2px 0 0 24px">`
                                    + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
+    if (m.id === "tones+digits") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="tonesDigitsHint" style="margin:2px 0 0 24px">`
+                                   + esc(TONES_DIGITS_NOTICE) + `</div></div>`;
     if (!k.length) return h;
     return `<div class="modeGroup" data-group="${esc(m.id)}" style="flex:1 1 100%">${h}`
       + `<div class="modeKids" data-kids-of="${esc(m.id)}" style="display:flex;flex-wrap:wrap;gap:8px 10px;`
@@ -3860,7 +3872,8 @@ function modeBlockSummary() {
     : "Everything this radio can do is offered.")
     + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
-    + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "");
+    + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
+    + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "");
   bandModeRender();
 }
 

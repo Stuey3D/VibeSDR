@@ -318,6 +318,8 @@ ITU-T Q.23/Q.24 ✓ tone pairs. Goertzel bank, twist and duration checks; the sa
 Use: repeater/EchoLink/AllStar control codes on amateur NFM. **S, trivial.** ⚖ Show it on amateur frequencies only
 (band plan, as in `DECODER-RESEARCH.md` §4.2); on PMR/telephone-patch frequencies DTMF can be a dialled number:
 format only ("DTMF heard").
+★ **Built 2026-11-16 with 5-tone selcall — docs/v12/TONES.md** (a listener's decoder on NFM/AM, `tones`; digits on the
+amateur bands only, decided on the server; synthetic tests only, nothing off air yet).
 
 ---
 
@@ -596,7 +598,7 @@ NCO trim, like the engine's `trim` but referenced to a beacon instead of an orbi
 | **Golay (GSC)** | Motorola, partly documented; multimon-ng has a GSC demod (GPL-2+) | almost gone; a few US systems | **skip** |
 | **Mobitex** | Ericsson (documented by third parties) | data network largely closed; the *framing* survives in some cubesats (covered by §6.3) | **skip** as paging |
 | **ReFLEX** | Motorola proprietary | dying US two-way paging | **skip** |
-| **5-tone selcall** (ZVEI/CCIR/EEA/EIA) | tone tables public ✓ | still used in European PMR and German fire-brigade alerting | ⚖ format only ("ZVEI-1 5-tone") by default; the digits are addressing (admin opt-in). S, trivial |
+| **5-tone selcall** (ZVEI/CCIR/EEA/EIA) | tone tables public ✓ | still used in European PMR and German fire-brigade alerting | ⚖ format only ("ZVEI-1 5-tone") by default; the digits are addressing (admin opt-in). S, trivial. ★ **Built 2026-11-16 — docs/v12/TONES.md** (digits on the amateur bands; elsewhere to the owner only, opt-in) |
 | **German FMS / ZVEI BOS** | public | German emergency services; listening is restricted in Germany | **skip** |
 | **MPT1327** | §3.2 | declining UK trunking | ⚖ identity-only, later |
 | **US train EOT/HOT** (457.9375/452.9375 MHz, 1200 bit/s FSK) | AAR S-9152 (paid); behaviour documented publicly; SDRangel has an End-of-Train demod (GPL-3 ✓) | US/Canada only; none in the UK | **later, low**: railway telemetry (brake pressure, motion), no personal data; receive only (HOT commands brake trains, so never transmit, which we never do) |
