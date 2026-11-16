@@ -75,6 +75,7 @@ inline const DecDef kDecs[] = {
     {"hell", "HELL", DK_PICTURE, "hell", false, true, "FELD HELL (Hellschreiber): drawn, not read — the text is painted as it is heard, a strip at a time, and you read it. Every column is printed twice, one copy above the other, so a slant or a fade that cuts one copy leaves the other whole. Tune USB so the signal is in your passband (the tone is found by itself); each new page puts the last one under PREV."},
     {"adsb", "ADS-B", DK_MAP, "adsb", false, false, ""}, {"ais", "AIS", DK_MAP, "ais", false, false, ""},
     {"ndb", "NDB", DK_MAP, "ndb", false, false, ""}, {"ism", "ISM", DK_MAP, "ism", false, false, ""},
+    {"avdata", "DATALINK", DK_MAP, "avdata", false, false, ""},   // ★ V12 the aircraft datalink (map_modes.h)
 };
 inline const DecDef* decDef(const std::string& id) { for (auto& d : kDecs) if (id == d.id) return &d; return nullptr; }
 

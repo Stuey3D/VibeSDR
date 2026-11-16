@@ -29,6 +29,7 @@ import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
 import { parseFreeDv, freedvSubMessage, type FreeDvChoice } from './freedv';   // ★ V12 FreeDV digital voice
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
+import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
 import { parseDabScan, parseFmScan } from './dabBandScan';
 import { othersEnded, type WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 
@@ -300,6 +301,19 @@ export class VibeServerClient extends VibeServerWsClient {
     if (on) this.wholeAskAt.ais = Date.now();
     this.sendSpectrum({ type: 'ais', on: on ? 1 : 0 });
   }
+  /* ── V12 AIRCRAFT DATALINK (docs/v12/AVIATION.md) — AIS's pattern with ISM's bands: the server puts the radio on the
+   *  band (ACARS 131.675 / VDL2 136.8625 MHz), decodes every channel, ignores tune / zoom / mode while it runs. ── */
+  private avExit = new DabExitGuard();
+  avdataHeld = false;
+  /** `band`: 'acars' | 'vdl2' (the server's avdataBands ids); omitted = where it last was, else its first band. */
+  avdata(on: boolean, band?: string) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio to the airband
+    holdNativeHealing(VibeServerClient.AIS_HOLD_MS, on ? 'datalink on' : 'datalink off');
+    if (on && !this.avdataHeld) { this.avExit.entered(); this.cancelPacedTune(); }
+    else if (!on) this.avExit.left(Date.now());
+    this.avdataHeld = on;
+    this.sendSpectrum(on && band ? { type: 'avdata', on: 1, band } : { type: 'avdata', on: on ? 1 : 0 });
+  }
   /** One ship's track (the map's card) — a read, answered to the asker only (`ais_trail`). */
   aisTrail(mmsi: number) {
     if (Number.isInteger(mmsi) && mmsi > 0) this.sendSpectrum({ type: 'ais_trail', mmsi });
@@ -497,6 +511,25 @@ export class VibeServerClient extends VibeServerWsClient {
         this.callbacks.onAis?.(r);
         return true;
       }
+      /* ★ V12 AIRCRAFT DATALINK: as AIS — a report's arrival MEANS the mode is on; `avdata_off` ended it; `avdata_error`
+       *  the refusal, with its reason. Parsed defensively (services/aviation.ts parseAvReport). */
+      case 'avdata': {
+        if (!this.avExit.accept(Date.now())) return true;   // ★ a ghost after our own off
+        const r = parseAvReport(msg);
+        if (!r) return true;
+        this.avdataHeld = true;
+        this.callbacks.onAvdata?.(r);
+        return true;
+      }
+      case 'avdata_off':
+        this.avExit.offConfirmed(Date.now());
+        this.avdataHeld = false;
+        this.callbacks.onAvdata?.(null);
+        return true;
+      case 'avdata_error':
+        this.avdataHeld = false;
+        this.callbacks.onAvdata?.(null, dabSafeText(msg.why, 200) || 'The aircraft datalink is not available on this receiver');
+        return true;
       case 'ais_off':
         this.aisExit.offConfirmed(Date.now());
         if (this.aisHeld) holdNativeHealing(VibeServerClient.AIS_HOLD_MS, 'server reports AIS off');

@@ -10,6 +10,7 @@
 //  6. CPU: real time per capture second.
 //  `test-acars --cu8 <file.u8> <rate> <hwCentreHz> [chanHz…]` decodes a REAL capture (ACARS_DEBUG=1: every BCS failure).
 #include "vibe_acars.h"
+#include "vibe_avi_tx.h"   // ★ the transmitters (shared with the benchmark rows)
 
 #include <chrono>
 #include <cstdio>
@@ -26,53 +27,8 @@ using vibeacars::cf32;
 static uint64_t g_digest = 1469598103934665603ull;
 static void dig(const void* p, size_t n) { const uint8_t* b = static_cast<const uint8_t*>(p); for (size_t i = 0; i < n; ++i) g_digest = (g_digest ^ b[i]) * 1099511628211ull; }
 
-// ── a block's bytes, as an aircraft would send them ────────────────────────────────────────────────────────────────
-static std::vector<uint8_t> makeBlock(char mode, const std::string& reg7, char ack, const std::string& label, char blk,
-                                      const std::string& text, bool etb = false) {
-    std::vector<uint8_t> b;
-    b.push_back(uint8_t(mode));
-    for (char c : reg7) b.push_back(uint8_t(c));
-    b.push_back(uint8_t(ack));
-    for (char c : label) b.push_back(uint8_t(c));
-    b.push_back(uint8_t(blk));
-    if (!text.empty()) { b.push_back(vibeacars::STX); for (char c : text) b.push_back(uint8_t(c)); }
-    b.push_back(etb ? vibeacars::ETB : vibeacars::ETX);
-    for (auto& v : b) v = vibeacars::withParity(v);
-    const uint16_t c = vibeacars::bcs(b.data(), b.size());
-    b.push_back(uint8_t(c)); b.push_back(uint8_t(c >> 8));
-    b.push_back(vibeacars::withParity(vibeacars::DEL));
-    return b;
-}
-/** Bits on the air (LSB first): pre-key ones, '+' '*' SYN SYN SOH, the block. */
-static std::vector<int> airBits(const std::vector<uint8_t>& blk, int prekeyBits = 128) {
-    std::vector<int> bits(size_t(prekeyBits), 1);
-    const uint8_t s[5] = { vibeacars::withParity('+'), vibeacars::withParity('*'), vibeacars::withParity(vibeacars::SYN),
-                           vibeacars::withParity(vibeacars::SYN), vibeacars::withParity(vibeacars::SOH) };
-    for (uint8_t v : s) for (int i = 0; i < 8; ++i) bits.push_back((v >> i) & 1);
-    for (uint8_t v : blk) for (int i = 0; i < 8; ++i) bits.push_back((v >> i) & 1);
-    for (int i = 0; i < 8; ++i) bits.push_back(1);   // a trailing character of ones, as the carrier drops
-    return bits;
-}
-
-/** One AM-MSK burst added into a capture at `fs`: offset `offHz` from the capture centre, carrier amplitude `A`, start
- *  sample `s0`, modulation index `m`. The tone of bit k is 2400 Hz when it equals bit k−1, 1200 Hz when it differs. */
-static void addBurst(std::vector<cf32>& cap, double fs, double offHz, double A, size_t s0, const std::vector<int>& bits,
-                     double m = 0.6, double ph0 = 0.3) {
-    const double sp = fs / 2400.0;
-    double ph = ph0, cph = 1.1;
-    int prev = 1;
-    const size_t n = size_t(bits.size() * sp);
-    for (size_t i = 0; i < n && s0 + i < cap.size(); ++i) {
-        const size_t k = size_t(double(i) / sp);
-        const int b = bits[std::min(k, bits.size() - 1)];
-        const int pb = k ? bits[k - 1] : prev;
-        const double f = (b == pb) ? 2400.0 : 1200.0;
-        ph += 2 * M_PI * f / fs;
-        const double env = A * (1.0 + m * std::cos(ph));
-        cph += 2 * M_PI * offHz / fs;
-        cap[s0 + i] += cf32(float(env * std::cos(cph)), float(env * std::sin(cph)));
-    }
-}
+using vibeavitx::makeBlock; using vibeavitx::airBits;   // ★ vibe_avi_tx.h (the transmitters)
+template <class... A> static void addBurst(A&&... a) { vibeavitx::acarsBurst(std::forward<A>(a)...); }
 
 struct Res { int good = 0, rep = 0, wrong = 0; };
 

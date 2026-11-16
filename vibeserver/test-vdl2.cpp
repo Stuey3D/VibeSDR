@@ -1,6 +1,7 @@
 // test-vdl2.cpp — V12 VDL Mode 2 (vibe_vdl2_fec.h, vibe_vdl2.h), docs/v12/AVIATION.md §VDL2.
 //  `test-vdl2 --cu8 <file.u8> <rate> <hwCentreHz> [chanHz…]` decodes a REAL capture (VDL2_DEBUG=1: every failure).
 #include "vibe_vdl2.h"
+#include "vibe_avi_tx.h"   // ★ the transmitters (shared with the benchmark rows)
 
 #include <chrono>
 #include <cstdio>
@@ -22,102 +23,9 @@ static uint64_t g_digest = 1469598103934665603ull;
 static void dig(const void* p, size_t n) { const uint8_t* b = static_cast<const uint8_t*>(p); for (size_t i = 0; i < n; ++i) g_digest = (g_digest ^ b[i]) * 1099511628211ull; }
 
 // ── the transmitter, for the tests: AVLC frame → HDLC bits → octets → RS + interleave → header → scramble → symbols ──
-static void putAddr(std::vector<uint8_t>& f, uint32_t addr, int type, int status, bool last) {
-    const uint32_t r = (uint32_t(status) << 27) | (uint32_t(type) << 24) | (addr & 0xFFFFFFu);
-    uint32_t raw = 0;
-    for (int i = 0; i < 28; ++i) raw |= ((r >> i) & 1u) << (27 - i);
-    for (int k = 0; k < 4; ++k) f.push_back(uint8_t(((raw >> (7 * k)) & 0x7F) << 1 | (last && k == 3 ? 1 : 0)));
-}
-static std::vector<uint8_t> avlcAcars(uint32_t src, uint32_t dst, const std::string& reg7, const std::string& label, char blk, const std::string& text) {
-    std::vector<uint8_t> f;
-    putAddr(f, dst, 4, 0, false);
-    putAddr(f, src, 1, 0, true);
-    f.push_back(0x10);                                  // an I frame
-    f.push_back(0xFF); f.push_back(0xFF); f.push_back(0x01);
-    std::vector<uint8_t> a;
-    a.push_back(vibeacars::withParity('2'));
-    for (char c : reg7) a.push_back(vibeacars::withParity(uint8_t(c)));
-    a.push_back(vibeacars::withParity(0x15));
-    for (char c : label) a.push_back(vibeacars::withParity(uint8_t(c)));
-    a.push_back(vibeacars::withParity(uint8_t(blk)));
-    a.push_back(vibeacars::withParity(vibeacars::STX));
-    for (char c : text) a.push_back(vibeacars::withParity(uint8_t(c)));
-    a.push_back(vibeacars::withParity(vibeacars::ETX));
-    const uint16_t c = vibeacars::bcs(a.data(), a.size());
-    a.push_back(uint8_t(c)); a.push_back(uint8_t(c >> 8)); a.push_back(0x7F);
-    f.insert(f.end(), a.begin(), a.end());
-    uint16_t fc = 0xFFFF;
-    for (uint8_t x : f) { fc ^= x; for (int b = 0; b < 8; ++b) fc = (fc & 1) ? uint16_t((fc >> 1) ^ 0x8408) : uint16_t(fc >> 1); }
-    fc = uint16_t(~fc);
-    f.push_back(uint8_t(fc)); f.push_back(uint8_t(fc >> 8));
-    return f;
-}
-/** The burst's 3-bit symbols after the unique word (header + data + parity), from frames already carrying their FCS. */
-static std::vector<int> burstSymbols(const std::vector<std::vector<uint8_t>>& frames) {
-    std::vector<uint8_t> bits;
-    auto flag = [&] { for (int i = 0; i < 8; ++i) bits.push_back(i == 0 || i == 7 ? 0 : 1); };
-    flag();
-    for (const auto& f : frames) {
-        int ones = 0;
-        for (uint8_t x : f) for (int i = 0; i < 8; ++i) {
-            const int b = (x >> i) & 1; bits.push_back(uint8_t(b));
-            if (b) { if (++ones == 5) { bits.push_back(0); ones = 0; } } else ones = 0;
-        }
-        flag();
-    }
-    const int len = int(bits.size());
-    const vibevdl2::Layout L((len + 7) / 8);
-    std::vector<uint8_t> oct(size_t(L.octets), 0);
-    for (int i = 0; i < len; ++i) oct[size_t(i / 8)] |= uint8_t(bits[size_t(i)] << (i % 8));
-    std::vector<std::array<uint8_t, 255>> blk(size_t(L.blocks));
-    for (auto& b : blk) b.fill(0);
-    // the same column walk the receiver uses, the other way round
-    vibevdl2::dealColumns(L.octets, L.blocks, vibevdl2::Rs::K, L.lastLen, 0, [&](int r, int c, int i) { blk[size_t(r)][size_t(c)] = oct[size_t(i)]; });
-    for (auto& b : blk) vibevdl2::Rs::get().encode(b.data());
-    std::vector<uint8_t> out(oct);
-    std::vector<uint8_t> fec(size_t(L.fecOctets));
-    const int fecRows = L.lastPar ? L.blocks : L.blocks - 1;
-    vibevdl2::dealColumns(L.fecOctets, fecRows, vibevdl2::Rs::R, L.lastPar ? L.lastPar : vibevdl2::Rs::R, vibevdl2::Rs::K,
-                          [&](int r, int c, int i) { fec[size_t(i)] = blk[size_t(r)][size_t(c)]; });
-    out.insert(out.end(), fec.begin(), fec.end());
-    // header + data bits, scrambled
-    std::vector<uint8_t> tx;
-    const uint32_t hw = vibevdl2::hdrEncode(uint32_t(len));
-    for (int i = 24; i >= 0; --i) tx.push_back(uint8_t((hw >> i) & 1));
-    for (uint8_t x : out) for (int i = 0; i < 8; ++i) tx.push_back(uint8_t((x >> i) & 1));
-    vibevdl2::Lfsr l;
-    for (auto& b : tx) b ^= uint8_t(l.next());
-    while (tx.size() % 3) tx.push_back(0);
-    std::vector<int> sym;
-    for (size_t i = 0; i < tx.size(); i += 3) sym.push_back((tx[i] << 2) | (tx[i + 1] << 1) | tx[i + 2]);
-    return sym;
-}
-/** Add one burst at capture rate fs: ramp-up (5 × 000), the unique word, `sym`, a raised-cosine pulse (α 0.6). */
-static void addBurst(std::vector<cf32>& cap, double fs, double offHz, double A, size_t s0, const std::vector<int>& sym, double ph0) {
-    std::vector<int> all(5, 0);
-    for (int i = 0; i < 16; ++i) all.push_back(vibevdl2::kUw[i]);
-    all.insert(all.end(), sym.begin(), sym.end());
-    for (int i = 0; i < 3; ++i) all.push_back(0);
-    std::vector<cf32> pts; int a = 0;
-    for (int g : all) { a = (a + vibevdl2::stepOf(g)) & 7; pts.push_back(std::polar(1.0f, float(a) * float(M_PI / 4))); }
-    const double sps = fs / vibevdl2::kSymRate, al = 0.6;
-    auto rc = [&](double t) {   // t in symbols
-        const double x = 4 * al * al * t * t;
-        if (std::fabs(1 - x) < 1e-6) return M_PI / 4 * std::sin(M_PI / (2 * al)) / (M_PI / (2 * al));
-        const double sc = t == 0 ? 1 : std::sin(M_PI * t) / (M_PI * t);
-        return sc * std::cos(M_PI * al * t) / (1 - x);
-    };
-    const size_t n = size_t(double(pts.size()) * sps);
-    double cph = ph0;
-    for (size_t i = 0; i < n && s0 + i < cap.size(); ++i) {
-        const double ts = double(i) / sps;
-        const int k0 = int(std::floor(ts));
-        cf32 v(0, 0);
-        for (int k = k0 - 5; k <= k0 + 6; ++k) if (k >= 0 && k < int(pts.size())) v += pts[size_t(k)] * float(rc(ts - k));
-        cph += 2 * M_PI * offHz / fs;
-        cap[s0 + i] += v * float(A) * std::polar(1.0f, float(cph));
-    }
-}
+using vibeavitx::putAddr; using vibeavitx::avlcAcars;   // ★ vibe_avi_tx.h (the transmitters)
+static std::vector<int> burstSymbols(const std::vector<std::vector<uint8_t>>& f) { return vibeavitx::vdl2Symbols(f); }
+template <class... A> static void addBurst(A&&... a) { vibeavitx::vdl2Burst(std::forward<A>(a)...); }
 struct Res { int good = 0, wrong = 0; };
 static Res synth(double fs, double snrDb, int nb, uint32_t seed) {
     const double hw = 136.850e6;
@@ -153,6 +61,42 @@ static Res synth(double fs, double snrDb, int nb, uint32_t seed) {
             dig(t.data(), t.size());
         });
     return r;
+}
+
+/** ★ `test-vdl2 --write-clip out.cu8 rate` — a 20 s capture centred on 136.850 MHz (unsigned 8-bit IQ, I first) for the
+ *  server's end-to-end test (scripts/test-server-avdata.mjs, through vibeserver/fake-rtl-tcp.mjs): five aircraft with
+ *  fixed ICAO addresses and registrations, ACARS over AVLC on 136.775 / 136.875 / 136.975, 25 dB, every 0.6 s. */
+static int writeClip(int argc, char** argv) {
+    if (argc < 4) { std::fprintf(stderr, "usage: test-vdl2 --write-clip out.cu8 rate\n"); return 2; }
+    const double fs = std::atof(argv[3]), hw = 136.850e6;
+    const std::vector<double> ch = { 136.775e6, 136.875e6, 136.975e6 };
+    const double sigma = 0.02, nPow = 2 * sigma * sigma * vibevdl2::kSymRate / fs, A = std::sqrt(nPow * std::pow(10.0, 25.0 / 10));
+    static const struct { uint32_t icao; const char* reg; const char* flight; } ac[] = {
+        { 0x4CA97B, ".EI-EST", "FR1234" }, { 0x4070E8, ".G-JZHU", "LS08DE" }, { 0x3C6548, ".D-AIJH", "LH4567" },
+        { 0x781361, ".B-1243", "CA0937" }, { 0x406B90, ".G-EZWK", "U22468" } };
+    std::mt19937 rng(42);
+    std::normal_distribution<float> g(0.f, float(sigma));
+    const size_t total = size_t(fs * 20);
+    std::vector<cf32> cap(total);
+    for (auto& v : cap) v = cf32(g(rng), g(rng));
+    int k = 0;
+    for (double t = 0.1; t < 19.5; t += 0.6, ++k) {
+        const auto& a = ac[k % 5];
+        char txt[96]; std::snprintf(txt, sizeof txt, "M%02dA%s/TEST MESSAGE BODY %d", k % 100, a.flight, k);   // msg no (4) + flight (6)
+        auto f = avlcAcars(a.icao, 0x10949Au, a.reg, "H1", char('0' + k % 10), txt);
+        addBurst(cap, fs, ch[size_t(k % 3)] - hw, A, size_t(fs * t), burstSymbols({ f }), (rng() % 1000) * 0.00628);
+    }
+    FILE* o = std::fopen(argv[2], "wb");
+    if (!o) { std::perror(argv[2]); return 2; }
+    std::vector<uint8_t> u(total * 2);
+    for (size_t i = 0; i < total; ++i) {
+        auto q = [](float x) { const int v = int(std::lround(127.5f + 127.5f * x)); return uint8_t(v < 0 ? 0 : v > 255 ? 255 : v); };
+        u[2 * i] = q(cap[i].real()); u[2 * i + 1] = q(cap[i].imag());
+    }
+    std::fwrite(u.data(), 1, u.size(), o);
+    std::fclose(o);
+    std::printf("wrote %s: %zu samples at %.0f S/s, %d bursts\n", argv[2], total, fs, k);
+    return 0;
 }
 
 static void printFrame(const vibevdl2::Frame& f) {
@@ -224,6 +168,7 @@ int main(int argc, char** argv) {
         vi("g=", T.gardner); vf("bw=", T.rxBw); vi("deep=", T.deepStop); vi("fd=", T.fdFilter); vi("poly=", T.polyInterp); { const size_t q = s.find("nt="); if (q != std::string::npos) T.interpTaps = std::atoi(s.c_str() + q + 3); } vf("beta=", T.kaiserBeta); vf("gate=", T.gate); { const size_t q = s.find("shape="); if (q != std::string::npos) T.fdShape = std::atoi(s.c_str() + q + 6); } vf("bin=", T.binHz); { const size_t q = s.find("rx="); if (q != std::string::npos) T.rxKind = std::atoi(s.c_str() + q + 3); } vf("tr=", T.rxTr); vi("coh=", T.coherent); vf("pa=", T.pllA); vf("pb=", T.pllB); vi("er=", T.erasures); vi("rrc=", T.rrc); vf("q=", T.syncQ); vf("fg=", T.freqGain); vf("tg=", T.tGain);
     }
     if (argc > 1 && !std::strcmp(argv[1], "--cu8")) return cu8(argc, argv);
+    if (argc > 1 && !std::strcmp(argv[1], "--write-clip")) return writeClip(argc, argv);
     const bool quick = argc > 1 && !std::strcmp(argv[1], "--quick");
     if (argc > 1 && !std::strcmp(argv[1], "--sens")) {
         if (argc > 2) { const double snr = std::atof(argv[2]); Res r = synth(2.4e6, snr, 3, 1); std::printf("%d good %d wrong\n", r.good, r.wrong); return 0; }

@@ -491,6 +491,8 @@ export interface TrackViewOpts {
   range?: string;
   onRange?: (id: string) => void;
   rangeHint?: string;
+  /** ★ V12 what the segmented control IS, for a screen reader (default: the time filter's words) — the datalink's bands. */
+  rangeLabel?: string;
   /** ★ V12 2026-11-01: a KEY — a folded panel, bottom-right of the map, listing what each icon means (rows of HTML). The
    *  labels give way when the map is busy or zoomed out (the declutter), so the icons alone must still be readable. */
   legend?: string;
@@ -535,7 +537,7 @@ export class TrackView {
     r.className = 'trkView'; r.hidden = true;
     r.setAttribute('role', 'dialog'); r.setAttribute('aria-label', o.title + ' map');
     r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
-      + (o.ranges?.length ? `<span class="rng" role="group" aria-label="Show what was heard in the last…" title="${esc(o.rangeHint || '')}">`
+      + (o.ranges?.length ? `<span class="rng" role="group" aria-label="${esc(o.rangeLabel || 'Show what was heard in the last…')}" title="${esc(o.rangeHint || '')}">`
          + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
       // ★ V12 2026-11-02 the SHIPPING MAP: the layer row is always in the page (hidden when empty) — setToggles() redraws it
       //   as layers gain or lose data on this server (a layer with nothing is absent, never an empty toggle)

@@ -43,6 +43,8 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
 import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
+import { avCard, avIcon, avItems, avRanges, avRows, avStatus } from './avdata';   // ★ V12 the aircraft datalink
+import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -873,6 +875,7 @@ async function loadAudioPolicy(httpBase: string) {
   sitoraCap = false;           // ★ …nor SITOR-A
   sameCap = false;             // ★ …nor EAS / SAME
   selcalCap = false;           // ★ …nor SELCAL
+  hfdlCap = false;             // ★ …nor HFDL
   tmCaps = {};                 // ★ …nor the MFSK keyboard modes
   hellCap = false;             // ★ …nor FELD HELL
   jttyCap = false;             // ★ …nor JTTY
@@ -919,6 +922,7 @@ async function loadAudioPolicy(httpBase: string) {
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
     aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
+    avReadCap(j);                // ★ V12 the aircraft datalink (ACARS / VDL2): the same three states, and its bands
     // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
     //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
     decWhy = parseDecWhy(j);
@@ -960,6 +964,9 @@ async function loadAudioPolicy(httpBase: string) {
     { const b = document.querySelector('#decodersPanel [data-dec="same"]') as HTMLElement | null;
       if (b) b.hidden = !sameCap || blockedModes.has('same'); }
     selcalCap = j.selcal === true || !!decWhy.selcal;   // ★ SELCAL (V12): the aeronautical selective call, decoded by this server
+    hfdlCap = j.hfdl === true || !!decWhy.hfdl;   // ★ HFDL (V12): aircraft on HF, decoded on the listener's USB dial
+    { const b = document.querySelector('#decodersPanel [data-dec="hfdl"]') as HTMLElement | null;
+      if (b) b.hidden = !hfdlCap || blockedModes.has('hfdl'); }
     { const b = document.querySelector('#decodersPanel [data-dec="selcal"]') as HTMLElement | null;
       if (b) b.hidden = !selcalCap || blockedModes.has('selcal'); }
     for (const fam of TEXT_FAMILIES) {   // ★ MFSK / OLIVIA / THOR (V12): a family where the server lists it, with its choices
@@ -1928,6 +1935,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onNdbStats: (m) => ndbView?.stats_(m),
     onAis: (r) => onAisReport(r),
     onAisError: (why: string) => { showPill(why, 7000); if (aisOn && !aisReport) aisUiOff(); },
+    onAvdata: (r) => onAvReport(r),
+    onAvdataError: (why: string) => { showPill(why, 7000); if (avOn && !avReport) avUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     // ★★ The answer to our mode_resume (wholeResumeTick): yes = the reports follow; no = the mode goes, and why is said
@@ -2172,7 +2181,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -8960,7 +8969,7 @@ function adsbReadCap(j: any) {
 /** ★ ADS-B and ISM have nothing to hear: the page lets go of the audio output while either is on (audio.ts setQuiet —
  *  the AirPods followed a page "playing" silence). One rule for both, so a hand-over between them never plays a gap. */
 function syncAudioQuiet() {
-  const q = adsbOn || ismOn || aisOn || ndbOn;
+  const q = adsbOn || ismOn || aisOn || ndbOn || avOn;   // ★ V12 + the aircraft datalink (no audio either)
   if (!audio || audio.quiet === q) return;
   audio.setQuiet(q);
   updateMediaSession();
@@ -9855,6 +9864,71 @@ function onAisReport(r: AisReport | null) {
   aisRender();
 }
 
+/* ★★★ THE AIRCRAFT DATALINK (V12, docs/v12/AVIATION.md) — AIS's shape (avdata.ts): the page covers itself with a
+ *  TrackView, the bands in its top bar, EXIT gives the receiver back. ★ Offered only where vibeserver.json says so:
+ *  `avdata` true (live) / false (greyed, `avdataWhy` on a tap) / absent (no band reachable — no control at all). */
+let avCap: { ok: boolean; why: string } | null = null;
+let avBands: AvBand[] = [];
+let avOn = false;
+let avReport: AvReport | null = null;
+let avView: TrackView | null = null;
+function avReadCap(j: any) {
+  if (j?.avdata === true) avCap = { ok: true, why: '' };
+  else if (j?.avdata === false) {
+    const why = typeof j.avdataWhy === 'string' ? j.avdataWhy.trim().slice(0, 200) : '';
+    avCap = { ok: false, why: why || 'The aircraft datalink is not available on this receiver' };
+  } else avCap = null;
+  avBands = parseAvBands(j?.avdataBands);
+}
+function avUiOn() {
+  avOn = true;
+  syncAudioQuiet();
+  closePanels();
+  if (!avView) avView = new TrackView({
+    title: 'AIRCRAFT DATALINK · ACARS + VDL2', exitLabel: 'EXIT DATALINK', listTitle: 'HEARD', onExit: () => avSetMode(false),
+    icon: () => avIcon(), label: (it: any) => String(it.flight || it.reg || it.icao || ''), card: (it: any) => avCard(it),
+    ranges: avRanges(avBands), range: avReport?.band || '', rangeHint: 'The band: ACARS (131 MHz) or VDL2 (136 MHz)', rangeLabel: 'The band',
+    onRange: (id: string) => { if (spec && avReport?.band !== id) spec.avdata(true, id); },
+  });
+  avView.show(myPos());
+  avRender();
+}
+function avUiOff() {
+  avOn = false;
+  syncAudioQuiet();
+  avReport = null;
+  avView?.hide();
+  renderFreq();
+}
+function avSetMode(on: boolean) {
+  if (on) {
+    if (avCap && !avCap.ok) { showPill(avCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.avdata(true); return; }   // ★ ask before tuning: spec says why
+    audio?.holdHealing(6000);
+    avUiOn();
+    spec?.avdata(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.avdata(false);
+    avUiOff();
+  }
+}
+function avRender() {
+  if (!avView) return;
+  const r = avReport;
+  avView.update(avItems(r), avRows(r), avStatus(r), r ? r.aircraft.length : 0, myPos());
+  // ★ the server owns the band: the control shows where the radio IS (a refused pick snaps back with the next report)
+  if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
+}
+/** ★ A report (on) or the server's `avdata_off` (null). */
+function onAvReport(r: AvReport | null) {
+  if (!r) { if (avOn) { audio?.holdHealing(6000); avUiOff(); } return; }
+  avReport = r;
+  if (!avOn) avUiOn();   // ★ somebody else put the receiver here (or we joined it)
+  audio?.holdHealing(8000);   // ★ nothing to hear: the server sends no audio (as in AIS)
+  avRender();
+}
+
 /* ★★ APRS'S MAP (V12) — the APRS decoder box's MAP button opens the same full-screen map with the stations heard (their
  *  symbols, a tapped one's track and its card). Closing it goes back to the box; the decoder carries on either way. */
 let aprsView: TrackView | null = null;
@@ -10236,7 +10310,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : avOn ? 'DATALINK' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -10302,6 +10376,9 @@ function buildControls() {
     aisCap:        () => aisCap,
     aisOn:         () => aisOn,
     toggleAis:     toggleAisMode,
+    avCap:         () => avCap,          // ★ V12 the aircraft datalink
+    avOn:          () => avOn,
+    toggleAv:      toggleAvMode,
     ndbCap:        () => ndbCap,
     ndbOn:         () => ndbOn,
     toggleNdb:     toggleNdbMode,
@@ -12880,7 +12957,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'hfdl' | null = null;
 /* ★★ NCDXF / IARU BEACONS (V12, 2026-11-16) — tracked on the server (decoders/ncdxf_tracker.h): the box is the propagation
  *  grid, 18 beacons × 5 bands, from the server's report every 10 s; the settings hold the five beacon frequencies to tune.
  *  Offered only where vibeserver.json says "ncdxf" (greyed with the reason where this radio reaches none of them). */
@@ -12967,6 +13044,7 @@ let sitoraCap = false;
  *  (src/services/alertDecoders.ts — the app's words). Offered only where vibeserver.json says "same" / "selcal": true. */
 let sameCap = false;
 let selcalCap = false;
+let hfdlCap = false;   // ★ V12 HFDL on the dial (vibe_hfdl_run.h) — the web has no HFDL map: the box's lines are the view
 /* ★★ MFSK / OLIVIA / THOR (V12, 2026-10-31) — the MFSK keyboard modes, decoded on the server (decoders/textmodes.h): the
  *  text box; the status line names what AUTO locked ("OLIVIA 8/250 · 1500 Hz"); one MODE row (tmSettings) holds the
  *  family's choices — the server's own list, AUTO first. Offered only where vibeserver.json says "<family>": true. */
@@ -13771,6 +13849,10 @@ function initDecoders(host: string, auth: AuthState) {
       decStateText = textModeStatusText(activeDec, tmMode[activeDec], st, tmCaps[activeDec] ?? []);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
+    onHfdlStatus: (d) => {   // ★ V12 HFDL: the messages and bursts heard on this dial
+      if (activeDec !== 'hfdl') return;
+      decStateText = hfdlStatusText(d); $('decStatus').textContent = decStateText;
+    },
     onSitorStatus: (d) => {
       if (activeDec !== 'sitora') return;
       const st = parseSitorStatus(d);
@@ -13892,7 +13974,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'hfdl';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12 out of this radio's reach: the press says why and starts nothing (decWhyPaint draws the key greyed)
       if (decWhy[mode]) { showPill(`${(b.textContent || mode).trim()} unavailable \u2014 ${decWhy[mode]}`, 8000); return; }
@@ -14514,7 +14596,7 @@ function anyDecoderLeft(): boolean {
   // ★ V12: CW and APRS count only where this server has them (vibeserver.json "cw", "aprs") — hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
-    || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal'))
+    || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal')) || (hfdlCap && !blockedModes.has('hfdl'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
     || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf'));
 }
@@ -14525,6 +14607,7 @@ function toggleDabMode() { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabO
 function toggleAdsbMode() { if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
 function toggleIsmMode() { if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
 function toggleAisMode() { if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
+function toggleAvMode() { if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); avSetMode(!avOn); }
 function toggleNdbMode() { if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); }
 /* ★★★ TUNES THE RADIO ITSELF in the decoder panel — the mode menu's keys, with the mode menu's rule: a REFUSED mode is not
  *  drawn unless it is ON (so it can be left), DAB where the radio is DAB-capable. A press closes the panel, as the menu does. */
@@ -14537,6 +14620,7 @@ setWholeRadioKeys(() => {
   };
   add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
   add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
+  add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
   if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB (Experimental) — digital radio, Band III',
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
@@ -14558,7 +14642,7 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
  *  title and label (hover, focus, a screen reader), and a press shows the reason (touch, pad, keyboard) — never hidden,
  *  never live. An owner's block still hides it (it is false with no reason). */
 let decWhy: Record<string, string> = {};
-const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf'];
+const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'hfdl'];
 function parseDecWhy(j: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!j || typeof j !== 'object') return out;
@@ -14670,6 +14754,7 @@ function showDecBox(what: string) {
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
   else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
+  else if (what === 'hfdl') { decStateText = hfdlStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HFDL_HINT; }
   else if (what === 'hell') { hellPager.reset(); decStateText = hellStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HELL_HINT; }
   else if (isTextFamily(what)) { decStateText = textModeStatusText(what, tmMode[what], null, tmCaps[what] ?? []); $('decStatus').textContent = decStateText; $('decStatus').title = TEXT_FAMILY_HINT[what]; }
   else $('decStatus').title = '';

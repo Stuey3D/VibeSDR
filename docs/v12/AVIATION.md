@@ -4,13 +4,15 @@ Branch `v12-aviation` (from `v12-experimental` 460bb2f12). Written 2026-10-31 / 
 
 | Mode | Code | Test | Status |
 |---|---|---|---|
-| **VHF ACARS** (AM-MSK 2400 bit/s) | `vibe_acars.h` on `vibe_avi_front.h` | `vibeserver/test-acars.cpp` | **Decoder works on real signals.** Not wired. |
-| **VDL Mode 2** (D8PSK 10.5 ksym/s) | `vibe_vdl2.h`, `vibe_vdl2_fec.h` on `vibe_avi_front.h` | `vibeserver/test-vdl2.cpp` | **Decoder works on real signals.** Not wired. |
-| **HFDL** (PSK 1800 Bd, HF) | `vibe_hfdl.h` | `vibeserver/test-hfdl.cpp` | **Decoder works on real signals** (BPSK modes verified; QPSK/8PSK only self-consistent). Not wired. |
-| Service (thread, queue, aircraft table, JSON) | `vibe_avi_service.h` | `vibeserver/test-avi-service.cpp` | Works; **not wired into `local_sdr_shim.cpp`** — see RESUME HERE. |
+| **VHF ACARS** (AM-MSK 2400 bit/s) | `vibe_acars.h` on `vibe_avi_front.h` | `vibeserver/test-acars.cpp` | **Decoder works on real signals.** Wired: the Aircraft datalink mode's `acars` band. |
+| **VDL Mode 2** (D8PSK 10.5 ksym/s) | `vibe_vdl2.h`, `vibe_vdl2_fec.h` on `vibe_avi_front.h` | `vibeserver/test-vdl2.cpp` | **Decoder works on real signals.** Wired: the mode's `vdl2` band. |
+| **HFDL** (PSK 1800 Bd, HF) | `vibe_hfdl.h`, `vibe_hfdl_run.h` (a listener's USB dial) | `vibeserver/test-hfdl.cpp` | **Decoder works on real signals** (BPSK modes verified; QPSK/8PSK only self-consistent). Wired: decoder ext `hfdl`. |
+| Service, table, JSON, bands | `vibe_avi_service.h`, `vibe_avi_mode.h` | `vibeserver/test-avi-service.cpp` | Wired into `local_sdr_shim.cpp` (2026-11-16) — see RESUME HERE. |
+| Transmitters (tests + benchmark) | `vibe_avi_tx.h` | — | ACARS, VDL2, HFDL bursts; `test-vdl2 --write-clip` makes the server e2e's clip. |
 
 All headers are in `android/app/src/main/cpp/`. The tests are header-only plus vibedsp's `fft.cpp`, `channelizer.cpp`,
-`ddc.cpp` (and PFFFT/KissFFT); they are not yet targets in `vibeserver/CMakeLists.txt` (RESUME HERE, step 1).
+`ddc.cpp` (and PFFFT/KissFFT); they are `vibeserver/CMakeLists.txt` targets (ctest acars / vdl2 / hfdl / avi-service) and
+in `scripts/run-tests.sh`.
 
 ## The short version (results)
 
@@ -208,7 +210,78 @@ FIR it replaced).
   error location (every shortened block failed: 35 → 230 frames); VDL2 noise floor rising 3.7× a second; VDL2 Q≈1 on
   one dominant product; HFDL Σ|d| over every sample instead of every 4th.
 
+## Wired (2026-11-16, branch v12-aviation-wire)
+
+**Server** (`local_sdr_shim.cpp`, AIS's shape with ISM's bands):
+- `{"type":"avdata", on, band?|step?}` → `{"type":"avdata", band, bandName, hz, msgs, aircraft[], dropped, gain, gainAuto}`
+  once a second, `avdata_off`, `avdata_error{why}`. Bands (`vibe_avi_mode.h`): **ACARS** radio at 131.675 MHz (131.525,
+  131.550, 131.725, 131.825) and **VDL2** at **136.8625** MHz (every channel 136.700–136.975) — both centres between
+  channels so the DC remnant hits none (the plan said 136.850, which is itself a channel). Step clamps at the ends.
+- Gain: AIS's 85 % up the radio's own list, `vibeism::GainRule` on the service's clip share (measured on the service
+  thread, every 4th sample). One whole-radio mode at a time; tune / zoom / mode held; given back exactly as found; leaves
+  when the radio empties and comes back for the same listener (`mode_resume` / arrivalResume, with its band).
+- Reach: a radio that tunes the whole band, not the HF+, not an Icom (`vsAvdataReach`); hwinfo `avdata`, `avdataWhy`,
+  `avdataBands`, `avdataText`; in the directory's `modes`; `vibe_radio_caps.h` `avdata`, `hfdl` (HFDL reads audio, so an
+  Icom has it).
+- ⚖ **Message bodies**: only with the owner's `avdata+text` (a "+" token, IN blockedModes when on, off by default, with
+  §4.3's notice on the setup page and ServerModeScreen), and then only on sockets that proved the admin password
+  (`adminNow`). Everyone else: flight, registration, ICAO, label name. The HFDL box line never carries a body.
+- **HFDL**: decoder ext `hfdl` (`vibe_hfdl_run.h`: 48 kS/s USB audio, mixed down by 1440 Hz, FIR to 12 kS/s, a sharp FIR
+  flat to 1.25 kHz / shut by 1.65 kHz against the image, `Demod(12000)`), reach = the HF aeronautical bands
+  (`vibe_decoder_reach.h`). Every message to the radio's table (`vibeavi::sharedTracker()`); `GET /addon/hfdl/aircraft`
+  and `/addon/hfdl/groundstations` in the clients' HFDL-map shape (the public station list with positions; frequencies
+  only as heard here; no `sig_level` — the map reads dBFS and we measure SNR).
+- Benchmark rows: `dec_vdl2` (primary for `avdata`), `dec_acars`, `dec_hfdl` (a slot) — real time, hottest thread,
+  on `vibe_avi_tx.h`'s bursts; a benchmark HFDL run writes to its own table (Env::aircraft), never a server's map.
+- ★ **HFDL fix found while wiring**: a strong burst (≥ 16 dB, synthetic) decoded nothing — the pre-key armed the pair
+  rule at A1's end and the 256-sample hold expired before A2's end (508 samples later). The hold now covers the pair's
+  spacing: 25 dB 0/10 → 8–9/10 per mode, −4…10 dB unchanged. **Not re-checked on the real recordings: the IQ captures
+  are no longer in `~/VibeSDR-test-audio/aviation` (only their logs / reference transcripts are).** Known limit: 40 dB
+  over digital silence still commits early (not an HF condition).
+
+**Clients**: the app — DATALINK key (TUNES THE RADIO ITSELF), `AvdataPanel` (ISM's box: band keys, EXIT, the list),
+HFDL MAP on a VibeServer starts the `hfdl` decoder on the dial then opens the map (a VibeServer without `hfdl` draws no
+HFDL MAP key), the known-signal HFDL label no longer excludes VibeServers. The web — DATALINK in the mode menu and the
+whole-radio keys (a TrackView: bands in the top bar, the list, EXIT), the HFDL decoder key (lines in the box; the web has
+no HFDL map). The R36S — `avdata` map mode (list first, ACARS / VDL2 keys). Copy: About V12 note, sdrTour mode card,
+web tutorial (website: once it ships).
+
+**Tests** (all registered in `scripts/run-tests.sh`): test-acars 10034/0, test-vdl2 42/0, test-hfdl 44/0 (+ §5 the audio
+path, the map JSON, 2 min of audio noise = 0), test-avi-service 7/0, `test-server-avdata.mjs` 29/0 (the real server on a
+fake rtl_tcp with `test-vdl2 --write-clip`: bands, the table, bodies to the owner only, the step, the hand-back, the
+owner's switch, `/addon/hfdl/*`), `test-web-avdata.mjs` 15/0 (headless Edge `--mute-audio`, desktop + 390 px),
+`test_aviation_app.ts` 11/0, test-bench-decoders, test-radio-caps 227/0, test-setup-radio-caps 71, test-decoder-hosts,
+test-server-ais-aprs 36/0 and test-server-decoder-reach 35/0 unchanged. **Nothing was run on air.**
+
 ## RESUME HERE
+
+Done: steps 1–5 below (see "Wired"). Left, in order:
+
+1. **On air.** Re-record (the captures are gone): ACARS 131.675 / VDL2 136.85 at 2.4 MS/s and two HFDL windows, re-run
+   `test-acars --cu8`, `test-vdl2 --cu8`, `test-hfdl --wav … --ref` — the HFDL hold change must be confirmed on the real
+   6598 / 8931 kHz recordings (23/42 and 12/16 before). Then the mode on a real RTL (bench radio, 0 listeners).
+2. **The ADS-B card's datalink line** (§Decision): on a two-radio server, the ADS-B aircraft with the same ICAO address
+   as a Tracker row gets its last label / position. Not built: the Tracker is per radio PROCESS, so this needs the two
+   processes to share it (the gallery-lock pattern AIS's ship store uses) — a design call.
+3. **ACARS label parsing** (labels 16 / H1 positions → `lat`/`lon` in the rows; the app's box and the web map then show
+   them), and **US ACARS** (129.125–131.550 MHz needs its own centre and a heavier front end — a third band).
+4. The app: `mode_resume` for `avdata` (the server's arrivalResume already puts a returning listener back), tune keys /
+   drum stepping the bands (ISM's stepper — today only the box's keys do), a gamepad/keyboard nav for `AvdataPanel`.
+   The web: the tune arrows stepping bands. The R36S: a canned feed + golden for the mode.
+5. SIMD left (unchanged): HFDL's 126-term correlator, the equaliser, the Viterbi ACS; HFDL's mixer in `vibe_hfdl_run.h`
+   is a scalar complex rotator (48 k multiplies a second).
+6. Decoder work left (unchanged): HFDL's misses (decision feedback from the Viterbi), QPSK/8PSK labelling on air, a VDL2
+   soft header Chase, X.25/CLNP summaries.
+7. Optional: a real Pi 2 bench run (bench binaries only, 0 listeners, never :48000) — the benchmark rows now exist.
+
+### Decisions for Stuart
+- The `avdata+text` notice wording (setup page / ServerModeScreen `AVDATA_TEXT_NOTICE`), and whether the owner should
+  see bodies in the app at all or only on the setup page.
+- VDL2 centre 136.8625 (between channels) instead of the plan's 136.850.
+- The key's name: DATALINK (fits one key size); the box title says AIRCRAFT DATALINK · ACARS + VDL2 on the web.
+
+## The original plan (kept for the record)
+
 
 1. **Build targets**: add `test-acars`, `test-vdl2`, `test-hfdl`, `test-avi-service` to `vibeserver/CMakeLists.txt`
    (header-only + `vibedsp`, `-O3 -ffp-contract=fast`, as `test-ais`). The cross builds used

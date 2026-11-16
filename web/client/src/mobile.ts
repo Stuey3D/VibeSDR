@@ -123,6 +123,10 @@ export type MobileDeps = {
   aisCap: () => { ok: boolean; why: string } | null;
   aisOn: () => boolean;
   toggleAis: () => void;
+  /** ★ V12 the aircraft datalink (ACARS / VDL2) — AIS's three states. */
+  avCap?: () => { ok: boolean; why: string } | null;
+  avOn?: () => boolean;
+  toggleAv?: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -417,6 +421,17 @@ export function initMobileControls(deps: MobileDeps) {
       if (!aic.ok) aisRow.setAttribute('aria-disabled', 'true');
       aisRow.onclick = () => { deps.toggleAis(); close(); refresh(); };
       grid.appendChild(aisRow);
+    }
+    /* ★★ V12 THE AIRCRAFT DATALINK beside AIS — the same three states; absent where no band is reachable. */
+    const avc = deps.avCap?.();
+    if (avc && deps.toggleAv && (avc.ok || deps.avOn?.())) {
+      const avRow = document.createElement('button');
+      avRow.className = 'mModeOpt' + (deps.avOn?.() ? ' on' : '') + (avc.ok ? '' : ' dis');
+      setModeLabel(avRow, 'acars', 'DATALINK');
+      avRow.title = avc.ok ? 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz' : `The aircraft datalink is not available: ${avc.why}`;
+      if (!avc.ok) avRow.setAttribute('aria-disabled', 'true');
+      avRow.onclick = () => { deps.toggleAv!(); close(); refresh(); };
+      grid.appendChild(avRow);
     }
 
     const sole = deps.soleDecoder();

@@ -60,6 +60,7 @@ inline const std::vector<const char*>& allModes() {
         "wfm", "rds", "nfm", "tone", "am", "usb", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "lsb", "cwu", "cwl",
         "drm", "freedv", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
+        "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
     };
     return v;
 }
@@ -146,7 +147,8 @@ inline Caps compute(const Facts& f) {
         if (icom) {
             static const char* kIcom[] = { "nfm", "am", "usb", "lsb", "cwu", "cwl", "rtty", "navtex", "wefax", "sstv",
                                            "ft8", "time", "spots", "cw", "psk", "dsc", "sitora", "same", "selcal",
-                                           "mfsk", "hell", "jtty", "aprs" };
+                                           "mfsk", "hell", "jtty", "aprs",
+                                           "hfdl" };   // ★ HFDL reads the USB audio: an Icom's does
             bool listed = false;
             for (const char* k : kIcom) if (id == k) { listed = true; break; }
             if (!listed) return false;   // ★ WFM, SAM/ECSS/C-QUAM, DRM, CTCSS (it reads channel IQ), every whole-radio mode
@@ -164,6 +166,8 @@ inline Caps compute(const Facts& f) {
         }
         if (id == "adsb" || id == "commb") return holds(R, 1089e6, 1091e6) && rateAtLeast(2.4e6 - 1000);
         if (id == "ais" || id == "aisstore") return d != "airspyhf" && holds(R, 161.95e6, 162.05e6);
+        // ★ V12 Aircraft datalink: ACARS (131.525–131.825) or VDL2 (136.700–136.975) whole — not the HF+ (AIS's reason)
+        if (id == "avdata") return d != "airspyhf" && (holds(R, 131.50e6, 131.85e6) || holds(R, 136.68e6, 136.99e6));
         if (id == "ism" || id == "lora") {
             if (!rateAtLeast(vibeism::kMinRateHz)) return false;
             for (const auto& b : vibeism::bands()) if (holds(R, b.centreHz - b.needHz, b.centreHz + b.needHz)) return true;

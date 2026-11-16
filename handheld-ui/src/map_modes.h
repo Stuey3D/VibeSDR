@@ -80,7 +80,9 @@ inline MapModes& mapModes() {
         x.m = {mk("adsb", "ADS-B", "ADS-B · 1090 MHz", "aero", 8, {50, 100, 200}),
                mk("ais", "AIS", "AIS · 161.975 + 162.025", "marine", 9, {10, 25, 50}),
                mk("ism", "ISM", "ISM", "spots", 9, {}),
-               mk("ndb", "NDB", "NDB · LF BEACONS", "aero", 6, {100, 250, 500})};
+               mk("ndb", "NDB", "NDB · LF BEACONS", "aero", 6, {100, 250, 500}),
+               // ★ V12 the aircraft datalink (ACARS / VDL2, docs/v12/AVIATION.md): {"type":"avdata","on":1} as the web sends it
+               mk("avdata", "DATALINK", "AIRCRAFT DATALINK · ACARS + VDL2", "aero", 7, {50, 100, 200})};
         const char* c = std::getenv("VIBE_HHUI_MAP_CANNED");
         x.canned = c ? c : "";
     }
@@ -603,6 +605,62 @@ inline std::vector<std::string> mapAisCard(App&, const RadioState& s, const std:
     return {};
 }
 
+// THE AIRCRAFT DATALINK ─────────────────────────────────────────────────────────────────────────────────────────────────
+/** ★ V12 (src/services/aviation.ts avLine): who — flight · registration · ICAO address — and the label's plain name. The
+ *  report's `text` (the owner's opt-in, the owner's session only) goes on the card, never in the list. */
+inline std::string mapAvWho(const Json& a) {
+    std::string w;
+    for (const char* k : {"flight", "reg", "icao"}) { const std::string v = mapTrim(a[k].str().substr(0, 12)); if (!v.empty()) w += (w.empty() ? "" : " · ") + v; }
+    return w.empty() ? std::string("unknown aircraft") : w;
+}
+inline std::string mapAvKey(const Json& a, size_t i) {
+    for (const char* k : {"icao", "reg", "flight"}) if (!a[k].str().empty()) return a[k].str().substr(0, 12);
+    return mapFmt("row%zu", i);
+}
+inline void mapAvBuild(App&, const RadioState& s, std::vector<MapListRow>& rows, std::vector<MapMarker>& mk, std::string& status) {
+    const Json& r = mapReport(s, *mapMode("avdata"));
+    const auto& as = r["aircraft"].a;
+    for (size_t i = 0; i < as.size() && i < 150; i++) {
+        const Json& a = as[i];
+        MapListRow row;
+        row.key = mapAvKey(a, i);
+        row.title = mapAvWho(a);
+        row.col = rgb(0xffd34d);
+        row.right = agoText(a["age"].num(0));
+        std::string sub = a["labelName"].str().substr(0, 40);
+        if (sub.empty() && !a["label"].str().empty()) sub = "label " + a["label"].str().substr(0, 4);
+        sub += (sub.empty() ? "" : " · ") + a["via"].str().substr(0, 30);
+        double lat, lon;
+        if (mapPos(a, lat, lon)) {
+            row.pos = true; row.lat = lat; row.lon = lon;
+            if (mk.size() < 600) mk.push_back({row.key, lat, lon, MG_PLANE, NAN, row.col, row.title, ""});
+        }
+        row.sub = sub;
+        rows.push_back(row);
+    }
+    char b[160];
+    std::snprintf(b, sizeof b, "%s %.4f MHz · %zu aircraft · %.0f messages", r["bandName"].str().substr(0, 8).c_str(), r["hz"].num(0) / 1e6, as.size(), r["msgs"].num(0));
+    status = r.isNull() ? "starting — tuning to the aircraft datalink…" : b;
+}
+inline std::vector<std::string> mapAvCard(App&, const RadioState& s, const std::string& key) {
+    const Json& r = mapReport(s, *mapMode("avdata"));
+    const auto& as = r["aircraft"].a;
+    for (size_t i = 0; i < as.size(); i++) {
+        const Json& a = as[i];
+        if (mapAvKey(a, i) != key) continue;
+        std::vector<std::string> l;
+        l.push_back(mapAvWho(a));
+        std::string t = a["labelName"].str();
+        if (!a["label"].str().empty()) t = "label " + a["label"].str().substr(0, 4) + (t.empty() ? "" : " · " + t);
+        if (!t.empty()) l.push_back(t.substr(0, 60));
+        l.push_back(a["via"].str().substr(0, 40) + " · heard " + agoText(a["age"].num(0)) + " ago · " + mapFmt("%.0f", a["n"].num(0)) + " messages");
+        const std::string body = a["text"].str();
+        for (size_t o = 0; o < body.size() && l.size() < 8; o += 44) l.push_back(body.substr(o, 44));   // ★ only the owner's own session gets one
+        return l;
+    }
+    return {};
+}
+
 // NDB ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** ndb.ts ndbBars: < 10 dB one, < 20 two, else three; 0 = not heard in the last minute. */
 inline int mapNdbBars(double snr, bool live) { if (!live) return 0; return snr < 10 ? 1 : snr < 20 ? 2 : 3; }
@@ -901,6 +959,20 @@ inline void mapRegisterModes() {
             };
         }
         if (id == "ais") { d.build = mapAisBuild; d.card = mapAisCard; d.empty = "listening on 161.975 and 162.025 MHz — ships appear as they report"; }
+        if (id == "avdata") {
+            d.build = mapAvBuild; d.card = mapAvCard; d.listFirst = true;
+            d.empty = "listening on every channel of the band — aircraft appear as they are heard (ACARS and VDL2 are bursts)";
+            // ★ the two bands — the server owns the band: a press sends it, the next report says where the radio is
+            d.keys = [](App& a, const RadioState& s, std::vector<std::pair<std::string, std::function<void()>>>& k) {
+                const std::string cur = mapReport(s, *mapMode("avdata"))["band"].str();
+                for (const char* b : {"acars", "vdl2"}) {
+                    const std::string id2 = b, lab = id2 == "acars" ? "ACARS" : "VDL2";
+                    k.push_back({cur == id2 ? "[" + lab + "]" : lab, [&a, id2, cur] {
+                        if (cur != id2 && mapModes().canned != "avdata") a.eng_->send("{\"type\":\"avdata\",\"on\":1,\"band\":\"" + id2 + "\"}");
+                    }});
+                }
+            };
+        }
         if (id == "ndb") { d.build = mapNdbBuild; d.card = mapNdbCard; d.empty = "skimming the beacon band — each carrier is listed as it is found, its ident as it is read"; }
         if (id == "ism") {
             d.build = mapIsmBuild; d.card = mapIsmCard; d.empty = "listening — sensors, meters and mesh nodes appear as they are decoded"; d.listFirst = true;

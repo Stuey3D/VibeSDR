@@ -55,7 +55,8 @@ import { ncdxfSanitise, ncdxfStatus, type NcdxfReport } from './ncdxf';   // ★
 import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
-import { sameStateText, selcalStateText } from './alertDecoders';   // ★ V12 EAS / SAME and SELCAL
+import { sameStateText, selcalStateText } from './alertDecoders';
+import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS / SAME and SELCAL
 import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
@@ -73,6 +74,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
   | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
   | 'sitora'  // ★ V12 SITOR-A — a VibeServer's maritime ARQ listener (vibe_sitora_run.h): text, link state, status JSON
+  | 'hfdl'    // ★ V12 HFDL — a VibeServer's aircraft datalink on the USB dial (vibe_hfdl_run.h): a line per message, hfdl_status
   | 'aprs';   // ★ V12 APRS — a VibeServer's own packet decoder (vibe_aprs_run.h): JSON lists and packets, no text frame
 
 /** The time signal stations the server can decode. Each is a separate extension name on the
@@ -690,6 +692,9 @@ export class DecoderClient {
             if (this.active !== 'paging') return;
             const st = parsePagingStatus(m.data);
             if (st) { this.pagingLast = st; this.cb.onStatus(pagingStatusText(st)); this.cb.onDot(st.detected ? 'active' : 'idle'); }
+          } else if (m.type === 'hfdl_status' && m.data) {
+            if (this.active !== 'hfdl') return;
+            this.cb.onStatus(hfdlStatusText(m.data));
           } else if (m.type === 'sitora_status' && m.data) {
             if (this.active !== 'sitora') return;
             const st = parseSitorStatus(m.data);
@@ -858,6 +863,8 @@ export class DecoderClient {
       case 'same':    return { extension_name: 'same', params: {} };
       // ★ V12 SELCAL: nothing to set (ICAO's 32 tones, found by themselves).
       case 'selcal':  return { extension_name: 'selcal', params: {} };
+      // ★ V12 HFDL: nothing to set — the dial is the published HFDL frequency, the carrier 1440 Hz above it.
+      case 'hfdl':    return { extension_name: 'hfdl', params: {} };
       // ★ V12 MFSK (+ OLIVIA, CONTESTIA, THOR): "mode" is one of the server's own ids — the server falls back to AUTO for any other.
       case 'mfsk': this.tmLast = null; return { extension_name: name, params: { mode: this.textMode[name] } };
       // ★ V12 FELD HELL: nothing to set — the tone is found by itself.
@@ -879,7 +886,7 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || isTextFamily(name)) {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || name === 'hfdl' || isTextFamily(name)) {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);

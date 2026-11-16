@@ -406,6 +406,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
                             "dec_same", "dec_selcal", "dec_mfsk", "dec_hell", "dec_aprs", "dec_paging", "dec_ndb", "dec_ais",
                             "dec_ism", "dec_wmbus", "dec_lora_all", "dec_tone", "dec_nr", "dec_notch", "dec_dxscan", "dec_freedv", "dab", "adsb" })
         (void)gated(id);
+    for (const char* id : { "dec_vdl2", "dec_acars", "dec_hfdl" }) (void)gated(id);   // ★ V12 aviation
     if (benchhw::gateNeed(hw, benchhw::Need::Spots).run == false) notRun.push_back({ "spot_*", benchhw::gateNeed(hw, benchhw::Need::Spots).why });
     // ★ The hosts' DAB (2 steps) and ADS-B (2) rows: not counted when they will not run, so the bar still ends at its end.
     if (moreRows) {

@@ -144,7 +144,7 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
 export function modeIconFor(id: string): ModeIconName | null {
   const k = id.toLowerCase().replace(/[^a-z0-9]/g, '');
   switch (k) {
-    case 'adsb': case 'hfdl': case 'selcal': case 'acars': case 'vdl2': case 'vdl': case 'hfdlmap': return 'aircraft';
+    case 'adsb': case 'hfdl': case 'selcal': case 'acars': case 'vdl2': case 'vdl': case 'hfdlmap': case 'avdata': return 'aircraft';
     case 'ais': case 'dsc': case 'navtex': case 'sitora': case 'sitor': case 'amtor': return 'ship';   // ★ SITOR-A beside NAVTEX (SITOR-B)
     case 'ndb': case 'ncdxf': return 'beacon';   // ★ V12 NCDXF / IARU beacons
     case 'ism': return 'sensor';

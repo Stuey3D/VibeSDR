@@ -758,6 +758,8 @@ if npx tsx scripts/test_ncdxf_app.ts; then pass=$((pass+1)); else fail=$((fail+1
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if npx tsx scripts/test_decoder_bands.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 aviation, the clients' half (src/services/aviation.ts): the datalink report parsed defensively, the HFDL status line
+if npx tsx scripts/test_aviation_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 (2026-10-26, M7EIW): every spot's time is HH:MM:SS UTC, its slot's START — one helper for web, app and maps.
@@ -1643,6 +1645,22 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   rm -f "$OUT/lora-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-lora build'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 AIRCRAFT DATALINK (docs/v12/AVIATION.md): the real server on a fake rtl_tcp replaying a synthetic VDL2 clip
+#     (test-vdl2 --write-clip): the mode's capability and bands, the aircraft table, message bodies to the owner only (and
+#     only with the opt-in), the band step, the receiver given back, the owner's switch, /addon/hfdl/*. Needs VIBESERVER_BIN.
+printf '\n\033[1m── Aircraft datalink mode + the HFDL endpoints (end to end: the server) ──\033[0m\n'
+if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-vdl2" --write-clip "$OUT/vdl2-clip.cu8" 2400000 >/dev/null 2>&1
+  VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" node scripts/test-server-avdata.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ …and the web client's view of it (headless Edge, --mute-audio) — needs the page built into VIBESERVER_BIN
+  VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" node scripts/test-web-avdata.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/vdl2-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by

@@ -490,6 +490,9 @@ export interface SDRCallbacks {
   /** ★ V12 AIS, VIBESERVER-ONLY: a report about once a second while the receiver is in AIS (its arrival MEANS AIS is on);
    *  null = it ended (`ais_off`); `err` = the refusal (`ais_error`). */
   onAis?:       (r: AisReport | null, err?: string) => void;
+  /** ★ V12 AIRCRAFT DATALINK (ACARS / VDL2), VIBESERVER-ONLY: a report about once a second while the receiver is in the
+   *  mode (its arrival MEANS it is on); null = it ended (`avdata_off`); `err` = the refusal (`avdata_error`). */
+  onAvdata?:    (r: import('./aviation').AvReport | null, err?: string) => void;
   /** ★★ V12, VIBESERVER-ONLY: the answer to modeResume (wholeModeResume.ts) — may this listener have the whole-radio mode
    *  the server left while they were away back? `why` = the refusal, in words. */
   onModeResume?: (kind: 'adsb' | 'ndb' | 'ism' | 'ais', ok: boolean, why?: string) => void;

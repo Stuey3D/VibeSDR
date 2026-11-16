@@ -82,6 +82,11 @@ inline const std::vector<Entry>& table() {
             { band(2850e3, 3155e3), band(3400e3, 3500e3), band(4650e3, 4750e3), band(5450e3, 5730e3),
               band(6525e3, 6765e3), band(8815e3, 9040e3), band(10005e3, 10100e3), band(11275e3, 11400e3),
               band(13260e3, 13360e3), band(17900e3, 18030e3), band(21924e3, 22000e3), band(118e6, 137e6) } });
+        // HFDL (V12, 2026-11-16): the same HF aeronautical mobile (R) bands — its ground stations' frequencies are in them.
+        v.push_back({ "hfdl", "HFDL", "is on the HF aeronautical bands (2.9\xe2\x80\x93" "22 MHz)",
+            { band(2850e3, 3155e3), band(3400e3, 3500e3), band(4650e3, 4750e3), band(5450e3, 5730e3),
+              band(6525e3, 6765e3), band(8815e3, 9040e3), band(10005e3, 10100e3), band(11275e3, 11400e3),
+              band(13260e3, 13360e3), band(17900e3, 18030e3), band(21924e3, 22000e3) } });
         // CW, PSK, JTTY: the amateur bands — greyed only when NOT ONE of them is reachable.
         v.push_back({ "cw",   "CW",   "is on the amateur bands (136 kHz to 1.3 GHz)", amateurBands() });
         v.push_back({ "psk",  "PSK",  "is on the amateur bands (136 kHz to 1.3 GHz)", amateurBands() });
