@@ -396,17 +396,18 @@ public:
     }
 
     /** Draw the last layout. Every quad goes into the frame's one batch; glyphs come from the atlas. ★★ V12 `hi` (≥ 0): the
-     *  placed label naming the station you are tuned to — its tick and name in `hiCol` (the tuned label's colour) with a
-     *  dark shadow (tuned_label_app.h). */
+     *  placed label naming the station you are tuned to — NOT drawn here: its name is the tuned label's, centred on the
+     *  needle (tuned_label_app.h — Stuart, 2026-11-16: "centre the frequency and bookmark reading on the VFO"), so it is
+     *  never drawn twice. `hiCol` is no longer used (kept so callers need not change). */
     void draw(Gfx& g, TextCache& tc, const Font& f, Rect spec, double lo, double span, int hi = -1, Rgba hiCol = Rgba{}) const {
         if (placed_.empty()) return;
         const float h = boxH(f), ty = (h - f.lineHeight()) / 2.f + 0.5f;
         const Rgba tick = rgb(0xd9b8ff, 0.8f), bar = rgb(0xd9b8ff, 0.55f);
         for (size_t pi = 0; pi < placed_.size(); pi++) {
             const PlacedLabel& p = placed_[pi];
-            const bool isHi = (int)pi == hi;
+            if ((int)pi == hi) continue;   // ★★ drawn as the tuned label, on the needle
             const float top = rowTop(spec, f, p.row), x = spec.x + (float)std::round(p.x);
-            g.rect(x, top, 1, spec.b() - top, isHi ? hiCol : tick);
+            g.rect(x, top, 1, spec.b() - top, tick);
             const KnownSig& s = *p.sig;
             if (s.lo >= 0 && s.hi >= 0) {
                 const float x0 = std::max(spec.x, spec.x + (float)((s.lo - lo) / span * spec.w));
@@ -414,8 +415,7 @@ public:
                 if (x1 - x0 >= 3) g.rect(x0, spec.b() - 2, x1 - x0, 2, bar);
             }
             g.rect(spec.x + (float)p.lx, top, (float)p.w, h, th::knownBox);
-            if (isHi) tc.draw(g, f, s.label, spec.x + (float)p.lx + kPadX + 1, top + ty + 1, rgb(0x000000, 0.95f));
-            tc.draw(g, f, s.label, spec.x + (float)p.lx + kPadX, top + ty, isHi ? hiCol : th::knownLabel);
+            tc.draw(g, f, s.label, spec.x + (float)p.lx + kPadX, top + ty, th::knownLabel);
         }
     }
 
