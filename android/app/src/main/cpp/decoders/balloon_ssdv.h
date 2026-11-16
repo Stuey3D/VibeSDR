@@ -14,9 +14,12 @@
 //       x⁸ + x⁷ + x² + x + 1, generator roots β^(112 … 143), β = α¹¹ — over the 255 bytes after the sync byte, the first
 //       byte the highest power;
 //     • callsign: base 40, the first character least significant ('0'–'9' = 1–10, 'A'–'Z' = 14–39);
-//     • tables: the JPEG standard's (ITU-T T.81 Annex K) Huffman tables; quantisation: Annex K's two tables with every
-//       value rounded up to an even number — except the chrominance table's third and fifth (zig-zag) entries, 22 —
-//       scaled for quality level 0–7 as the IJG library scales quality 1, 14, 29, 43, 50, 71, 86, 100;
+//     • tables (Stuart 2026-11-16: "standard files, standard tables"): the JPEG standard's own, ITU-T T.81 Annex K —
+//       Tables K.3–K.6 (Huffman) and K.1 / K.2 (quantisation), exactly as printed, for every quality level. No number in
+//       them comes from the reference program. A transmitter's own tables for a level may differ from Annex K by a
+//       near-uniform factor, which shows as a contrast change around mid-grey; when a picture completes its levels are
+//       measured (the 2nd–98th percentile of its luminance blocks, WEFAX's auto-level rule — auto_level.h) and, if its
+//       contrast is out, the written tables are scaled and the luminance shifted to bring it back (Image::levels_);
 //     • the MCU is 4, 2 or 1 luminance blocks then Cb then Cr; a packet's reset MCU has ITS FIRST luminance block's DC and
 //       its Cb and Cr DC relative to 0 (the other luminance blocks of that MCU follow on from the first, as usual);
 //     • a lost MCU is written as an "empty" block per component — DC difference 0, end of block — and an MCU cut short by
@@ -26,6 +29,7 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <cstring>
@@ -33,6 +37,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "auto_level.h"
 
 namespace vibe {
 namespace balloon {
@@ -246,12 +251,13 @@ inline const HuffSpec& huff(int t) {
     }();
     return h[(size_t)t];
 }
-/** Annex K's tables in zig-zag order, and SSDV's: each rounded up to even, chrominance zig-zag 3 and 5 = 22. */
+/** The zig-zag order (T.81 Figure A.6): zig-zag position → natural (row-major) index. */
 inline const uint8_t* zigzag() {
     static const uint8_t z[64] = { 0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
                                    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63 };
     return z;
 }
+/** ITU-T T.81 Annex K Table K.1 (luminance) and K.2 (chrominance), in zig-zag order, exactly as the standard prints them. */
 inline void baseQuant(int table, uint8_t out[64]) {
     static const uint8_t lum[64] = { 16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
                                      14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92,
@@ -259,19 +265,13 @@ inline void baseQuant(int table, uint8_t out[64]) {
     static const uint8_t chr[64] = { 17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99,
                                      47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
                                      99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99 };
-    for (int i = 0; i < 64; ++i) {
-        const int v = (table ? chr : lum)[zigzag()[i]];
-        out[i] = (uint8_t)((v + 1) / 2 * 2);
-    }
-    if (table) out[3] = out[5] = 22;
+    for (int i = 0; i < 64; ++i) out[i] = (table ? chr : lum)[zigzag()[i]];
 }
-/** Level 0–7 → the table SSDV's decoder writes (IJG scaling of quality 1, 14, 29, 43, 50, 71, 86, 100). */
-inline void quantTable(int table, int level, uint8_t out[64]) {
-    static const int q[8] = { 1, 14, 29, 43, 50, 71, 86, 100 };
-    const int Q = q[std::max(0, std::min(7, level))];
-    const int scale = Q < 50 ? 5000 / Q : 200 - 2 * Q;
+/** The table a picture's JPEG is written with: Annex K's, times `gain` (1 = the standard's own — every picture until its
+ *  levels are measured; see Image::levels_), each entry kept to baseline JPEG's 1…255. */
+inline void quantTable(int table, uint8_t out[64], double gain = 1.0) {
     uint8_t b[64]; baseQuant(table, b);
-    for (int i = 0; i < 64; ++i) { int v = (b[i] * scale + 50) / 100; out[i] = (uint8_t)std::max(1, std::min(255, v)); }
+    for (int i = 0; i < 64; ++i) { const long v = std::lround(b[i] * gain); out[i] = (uint8_t)std::max(1L, std::min(255L, v)); }
 }
 
 /** Huffman codes for encoding and the decoding tables (T.81 Annex C / F.2.2.3). */
@@ -372,8 +372,57 @@ public:
     /** MCUs decoded into the picture by the last build. */
     int mcusDecoded = 0;
 
-    /** ★ The JPEG: headers, then every MCU in order — decoded from the packets we have, an empty block where one is lost. */
+    /** ★ What the last COMPLETE build did to the levels: the tables' gain and the luminance shift (grey levels, 0 = none).
+     *  1 / 0 until a picture completes, and whenever its contrast was already right. */
+    double levelGain = 1.0; int levelShift = 0;
+    /** Off: every build keeps the standard's tables (the tests that compare coefficients exactly). */
+    bool autoLevels = true;
+
+    /** ★ The JPEG: headers, then every MCU in order — decoded from the packets we have, an empty block where one is lost.
+     *  A complete picture is built twice: once to measure its levels, once with them put right (levels_). Small pictures
+     *  (≤ 2048 packets), and only at completion — a picture still arriving keeps the standard's tables, so its levels do
+     *  not jump about while it grows. */
     std::vector<uint8_t> jpeg() {
+        gain_ = 1.0; lumaOff_ = 0; levelGain = 1.0; levelShift = 0;
+        if (!autoLevels || !complete()) return build_(nullptr);
+        uint32_t hist[256] = {0};
+        std::vector<uint8_t> first = build_(hist);
+        if (!levels_(hist)) return first;
+        return build_(nullptr);
+    }
+
+private:
+    double gain_ = 1.0;   ///< the tables' factor for this build
+    int lumaOff_ = 0;     ///< added to every luminance block's DC level (output side) for this build
+    /** ★ AUTO-LEVEL ON COMPLETION (WEFAX's rule, auto_level.h). `hist`: the picture's luminance block means (grey levels).
+     *  Their 2nd–98th percentiles should span about 24…231 (block means never reach the extremes the pixels do); a span
+     *  within 0.8–1.25 of that and a centre within 12 grey levels is left alone — "if contrast is out", never a restyle of
+     *  a picture that is right. Otherwise the tables are scaled by k (every coefficient, so every pixel's distance from
+     *  mid-grey, chrominance too: a transmitter's tables differ from Annex K's for both alike) and the luminance shifted
+     *  so the 2nd percentile lands on 24. k is held to 0.4…2.5.
+     *  Returns whether anything changed. */
+    bool levels_(const uint32_t hist[256]) {
+        uint64_t n = 0; for (int i = 0; i < 256; ++i) n += hist[i];
+        if (n < 16) return false;
+        int lo = 0, hi = 255; autoLevelRange(hist, n, lo, hi);
+        constexpr double kLo = 24, kHi = 231;
+        double k = (kHi - kLo) / double(hi - lo);
+        k = std::max(0.4, std::min(2.5, k));
+        const double centre = 0.5 * (lo + hi), want = 0.5 * (kLo + kHi);
+        if (k >= 0.8 && k <= 1.25) k = 1.0;
+        // the shift, in grey levels, that puts the stretched 2nd percentile on kLo (or, unstretched, the centre on want)
+        double c = k == 1.0 ? want - centre : kLo - 128.0 - k * (lo - 128.0);
+        if (k == 1.0 && std::fabs(c) < 12.0) return false;
+        uint8_t q0[64]; quantTable(0, q0, k);
+        const double kEff = q0[0] / 16.0;   // the gain the luminance DC entry really got (Annex K's DC entry is 16)
+        gain_ = k;
+        lumaOff_ = (int)std::lround(c * 8.0 / q0[0]);
+        levelGain = kEff; levelShift = (int)std::lround(c);
+        return true;
+    }
+
+    std::vector<uint8_t> build_(uint32_t* hist) {
+        hist_ = hist;
         std::vector<uint8_t> o;
         o.reserve(packets.size() * 220 + 700);
         headers_(o);
@@ -425,10 +474,11 @@ public:
         while (mcu < total) emptyMcu_(w, yc), ++mcu;
         w.align();
         o.push_back(0xFF); o.push_back(0xD9);
+        hist_ = nullptr;
         return o;
     }
+    uint32_t* hist_ = nullptr;   ///< the measuring build's luminance histogram (null: not measuring)
 
-private:
     /** One MCU from the stream to the writer. On running out (a lost packet next) the MCU is ended cleanly and false comes
      *  back; nothing half-read is ever written. */
     bool decodeMcu_(BitReader& r, BitWriter& w, int yc, bool reset, int* abs_, int* outPred) {
@@ -444,8 +494,15 @@ private:
             if (!r.sym(hd, s) || s > 11 || !r.get(s, v)) { r.seek(save); endRest_(w, yc, part, false); return false; }
             const int diff = extend(v, s);
             if (reset && (part == 0 || comp != 0)) abs_[comp] = diff; else abs_[comp] += diff;
-            const int od = abs_[comp] - outPred[comp];
-            outPred[comp] = abs_[comp];
+            if (hist_ && comp == 0) {   // ★ the block's mean grey with the standard's DC entry, 16: 128 + DC × 16 / 8
+                const int m = std::max(0, std::min(255, 128 + abs_[0] * 2));
+                ++hist_[m];
+            }
+            // ★ the output's DC in the shifted domain (lumaOff_): the first block's difference carries the shift, every
+            //   later one (and every empty block's 0) keeps it
+            const int val = abs_[comp] + (comp == 0 ? lumaOff_ : 0);
+            const int od = val - outPred[comp];
+            outPred[comp] = val;
             int os; uint32_t ob; sizeBits(od, os, ob);
             if (os > 11) { endRest_(w, yc, part, false); return false; }
             w.put(hd.code[os], hd.size[os]); if (os) w.put(ob, os);
@@ -482,7 +539,7 @@ private:
         };
         o.push_back(0xFF); o.push_back(0xD8);
         m(0xE0, { 'J', 'F', 'I', 'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0 });
-        for (int t = 0; t < 2; ++t) { uint8_t q[64]; quantTable(t, quality, q); std::vector<uint8_t> b{ (uint8_t)t }; b.insert(b.end(), q, q + 64); m(0xDB, b); }
+        for (int t = 0; t < 2; ++t) { uint8_t q[64]; quantTable(t, q, gain_); std::vector<uint8_t> b{ (uint8_t)t }; b.insert(b.end(), q, q + 64); m(0xDB, b); }
         const int W = w16 * 16, H = h16 * 16;
         const uint8_t samp = mode == 0 ? 0x22 : mode == 1 ? 0x12 : mode == 2 ? 0x21 : 0x11;
         m(0xC0, { 8, (uint8_t)(H >> 8), (uint8_t)H, (uint8_t)(W >> 8), (uint8_t)W, 3, 1, samp, 0, 2, 0x11, 1, 3, 0x11, 1 });

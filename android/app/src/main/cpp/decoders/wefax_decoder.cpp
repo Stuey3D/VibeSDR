@@ -1,5 +1,6 @@
 // VibeSDR V4 — WEFAX decoder (C++ port of ka9q audio_extensions/wefax/decoder.go).
 #include "wefax_decoder.h"
+#include "auto_level.h"
 #include <cstdio>
 #include <algorithm>
 #include <cmath>
@@ -469,13 +470,8 @@ void WefaxDecoder::beginChart(const std::string& why, bool openPhasing, int curP
 void WefaxDecoder::updateAutoLevel(const uint8_t* line, int w) {
     for (int i = 0; i < w; i++) levelHist[line[i]]++;
     levelCount += (uint64_t)w;
-    const uint64_t loCount = levelCount * 2 / 100;    // 2nd percentile from the bottom
-    const uint64_t topCount = levelCount * 2 / 100;   // 2% from the top → 98th percentile
-    uint64_t acc = 0; int lo = 0, hi = 255;
-    for (int v = 0; v < 256; v++)   { acc += levelHist[v]; if (acc >= loCount)  { lo = v; break; } }
-    acc = 0;
-    for (int v = 255; v >= 0; v--)  { acc += levelHist[v]; if (acc >= topCount) { hi = v; break; } }
-    if (hi <= lo) hi = lo + 1;
+    int lo = 0, hi = 255;
+    autoLevelRange(levelHist, levelCount, lo, hi);   // ★ 2nd…98th percentile (auto_level.h — SSDV reads its pictures the same way)
     const double scale = 255.0 / (double)(hi - lo);
     for (int v = 0; v < 256; v++) {
         double x = (v - lo) * scale;

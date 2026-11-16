@@ -362,11 +362,21 @@ static void testSsdv() {
     CHECK(refused17 == 50, "…17 are never 'corrected' to the sent word (%d of 50)", refused17);
     int hv = 0; for (int t = 0; t < 4; ++t) { int sum = 0; for (int i = 0; i < 16; ++i) sum += ssdv::huff(t).bits[i]; hv += sum == (int)ssdv::huff(t).vals.size(); }
     CHECK(hv == 4 && ssdv::huff(2).vals.size() == 162 && ssdv::huff(3).vals.size() == 162, "Annex K tables: 12, 12, 162, 162 symbols, counts agree");
-    uint8_t q[64]; ssdv::quantTable(0, 4, q);
-    CHECK(q[0] == 16 && q[1] == 12 && q[63] == 100, "quality 4 (IJG 50): luminance starts 16 12, ends 100 (%d %d … %d)", q[0], q[1], q[63]);
-    ssdv::quantTable(1, 7, q);
-    bool ones = true; for (int i = 0; i < 64; ++i) ones &= q[i] == 1;
-    CHECK(ones, "quality 7: every entry 1");
+    {   // ★ the JPEG standard's tables and nothing else (ITU-T T.81 Annex K, Tables K.1 and K.2 as printed, row by row)
+        static const int K1[64] = { 16, 11, 10, 16, 24, 40, 51, 61,  12, 12, 14, 19, 26, 58, 60, 55,  14, 13, 16, 24, 40, 57, 69, 56,
+                                    14, 17, 22, 29, 51, 87, 80, 62,  18, 22, 37, 56, 68, 109, 103, 77,  24, 35, 55, 64, 81, 104, 113, 92,
+                                    49, 64, 78, 87, 103, 121, 120, 101,  72, 92, 95, 98, 112, 100, 103, 99 };
+        static const int K2[64] = { 17, 18, 24, 47, 99, 99, 99, 99,  18, 21, 26, 66, 99, 99, 99, 99,  24, 26, 56, 99, 99, 99, 99, 99,
+                                    47, 66, 99, 99, 99, 99, 99, 99,  99, 99, 99, 99, 99, 99, 99, 99,  99, 99, 99, 99, 99, 99, 99, 99,
+                                    99, 99, 99, 99, 99, 99, 99, 99,  99, 99, 99, 99, 99, 99, 99, 99 };
+        uint8_t q[64]; int same = 0;
+        ssdv::quantTable(0, q); for (int i = 0; i < 64; ++i) same += q[i] == K1[ssdv::zigzag()[i]];
+        ssdv::quantTable(1, q); for (int i = 0; i < 64; ++i) same += q[i] == K2[ssdv::zigzag()[i]];
+        CHECK(same == 128, "quantisation: Annex K's K.1 and K.2 exactly, in zig-zag order (%d of 128 entries)", same);
+        ssdv::quantTable(0, q); CHECK(q[1] == 11 && q[63] == 99, "…luminance zig-zag 1 is 11 and 63 is 99, as printed (%d, %d)", q[1], q[63]);
+        ssdv::quantTable(0, q, 30.0); bool cap = true; for (int i = 0; i < 64; ++i) cap &= q[i] >= 1 && q[i] <= 255;
+        CHECK(cap, "a scaled table stays inside baseline JPEG's 1…255");
+    }
 
     for (int mode = 0; mode < 4; ++mode) for (int fec = 1; fec >= 0; --fec) {
         if (!fec && mode != 0) continue;
@@ -377,6 +387,7 @@ static void testSsdv() {
         for (const auto& b : pkts) { ssdv::Packet p; if (ssdv::parsePacket(b.data(), p)) { ++parsed; im = col.add(p, 0); } }
         CHECK(parsed == (int)pkts.size() && im && im->complete(), "mode %d%s: %zu packets parsed, the picture complete", mode, fec ? "" : " no-FEC", pkts.size());
         if (!im) continue;
+        im->autoLevels = false;   // ★ coefficients compared exactly here; the levels have their own test below
         const auto jpg = im->jpeg();
         std::vector<std::vector<int16_t>> back;
         const bool rd = readJpeg(jpg, im->ycparts(), im->mcuCount(), back);
@@ -390,6 +401,47 @@ static void testSsdv() {
             std::vector<uint8_t> b = pkts[1]; for (int k = 0; k < 10; ++k) b[(size_t)(20 + 17 * k)] ^= 0x5A;
             ssdv::Packet p; CHECK(ssdv::parsePacket(b.data(), p) && p.rsFixed == 10 && p.payload == [&] { ssdv::Packet o; ssdv::parsePacket(pkts[1].data(), o); return o.payload; }(),
                                   "mode %d: 10 bytes wrong in a packet, RS mends all 10", mode);
+        }
+    }
+    {   // ★ AUTO-LEVEL ON COMPLETION (balloon_ssdv.h Image::levels_, WEFAX's 2nd–98th percentile rule)
+        auto build = [&](double dcScale, std::vector<std::vector<int16_t>>& blocks, ssdv::Image*& im, ssdv::Collector& col) {
+            blocks = tx::picture(6, 4, 0, 33);
+            for (size_t i = 0; i < blocks.size(); ++i) if (i % 6 < 4) blocks[i][0] = (int16_t)std::lround(blocks[i][0] * dcScale);
+            im = nullptr;
+            for (const auto& b : ssdv::encodeImage("VIBE1", 9, 6, 4, 0, 4, blocks)) { ssdv::Packet p; if (ssdv::parsePacket(b.data(), p)) im = col.add(p, 0); }
+        };
+        auto dqt0 = [](const std::vector<uint8_t>& j) { for (size_t i = 0; i + 5 < j.size(); ++i) if (j[i] == 0xFF && j[i + 1] == 0xDB && j[i + 4] == 0) return (int)j[i + 5]; return -1; };
+        {   // low contrast: the luminance DC at half its range — what a transmitter's tables twice Annex K's would look like
+            std::vector<std::vector<int16_t>> blocks; ssdv::Image* im = nullptr; ssdv::Collector col;
+            build(0.5, blocks, im, col);
+            const auto jpg = im ? im->jpeg() : std::vector<uint8_t>();
+            std::vector<std::vector<int16_t>> back;
+            const bool rd = im && readJpeg(jpg, 4, im->mcuCount(), back);
+            CHECK(im && im->complete() && im->levelGain > 1.5 && im->levelGain <= 2.5, "a dull picture: its tables scaled up (gain %.2f, shift %d)", im ? im->levelGain : 0, im ? im->levelShift : 0);
+            CHECK(dqt0(jpg) > 16, "…the JPEG's own luminance table says so (DC entry %d)", dqt0(jpg));
+            int acSame = 0, acAll = 0, dcDelta = 0; bool dcUniform = true;
+            for (size_t i = 0; rd && i < blocks.size(); ++i) {
+                for (int k = 1; k < 64; ++k) { ++acAll; acSame += back[i][(size_t)k] == blocks[i][(size_t)k]; }
+                const int d = back[i][0] - blocks[i][0];
+                if (i % 6 < 4) { if (i == 0) dcDelta = d; dcUniform &= d == dcDelta; } else dcUniform &= d == 0;
+            }
+            CHECK(rd && acSame == acAll && dcUniform, "…every AC term unchanged, every luminance DC shifted by the same %d, colour DC unchanged", dcDelta);
+            std::vector<uint8_t> partial;
+            {   // a picture still arriving keeps the standard's tables
+                ssdv::Collector c2; ssdv::Image* p2 = nullptr;
+                auto pk = ssdv::encodeImage("VIBE1", 10, 6, 4, 0, 4, blocks);
+                for (size_t i = 0; i + 1 < pk.size(); ++i) { ssdv::Packet p; if (ssdv::parsePacket(pk[i].data(), p)) p2 = c2.add(p, 0); }
+                partial = p2 ? p2->jpeg() : partial;
+                CHECK(p2 && !p2->complete() && dqt0(partial) == 16 && p2->levelGain == 1.0, "…while incomplete it keeps Annex K's tables (DC entry %d)", dqt0(partial));
+            }
+        }
+        {   // contrast already right: the block means spanning ~16…240 (within the dead band of 24…231) — left exactly as sent
+            std::vector<std::vector<int16_t>> blocks; ssdv::Image* im = nullptr; ssdv::Collector col;
+            build(1.39, blocks, im, col);
+            const auto jpg = im ? im->jpeg() : std::vector<uint8_t>();
+            std::vector<std::vector<int16_t>> back;
+            CHECK(im && im->levelGain == 1.0 && im->levelShift == 0 && dqt0(jpg) == 16 && readJpeg(jpg, 4, im->mcuCount(), back) && back == blocks,
+                  "a picture whose contrast is right is not touched (gain %.2f, shift %d)", im ? im->levelGain : 0, im ? im->levelShift : 0);
         }
     }
     {   // lost packets: the MCUs whose start was in a lost packet (or that ran into one) are empty, the rest exact
@@ -452,6 +504,7 @@ static void testSsdv() {
         ssdv::Image* im = rx->pictures().images().empty() ? nullptr : rx->pictures().images().begin()->second.get();
         CHECK(im && im->complete() && (int)g.p.size() == (int)pkts.size(), "every packet (%zu of %zu), the picture complete", g.p.size(), pkts.size());
         std::vector<std::vector<int16_t>> back;
+        if (im) im->autoLevels = false;   // ★ compared exactly (the levels have their own test)
         CHECK(im && readJpeg(im->jpeg(), 4, im->mcuCount(), back) && back == blocks, "…exactly the picture sent");
         CHECK(countUkhas(g, 0) == 0 && g.t.size() == 1 && g.t[0].count == 900, "the sentence between the packets is read too (%zu)", g.t.size());
         delete rx;
