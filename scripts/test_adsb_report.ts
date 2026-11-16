@@ -142,5 +142,21 @@ eq('prefs unparseable', parseAdsbMapPrefs('{'), ADSB_MAP_PREFS_DEFAULT);
   eq('junk feedWarn: absent', parseAdsbMessage({ aircraft: [], feedWarn: 42 }).feedWarn, undefined);
 }
 
+// ── V12 Mode S Comm-B: the "commb" object (vibe_adsb_commb.h json) — known keys only, bounded text ───────────
+{
+  const r = parseAdsbMessage({ aircraft: [{ hex: '3c4dd2', commb: {
+    nav_altitude_mcp: 3000, nav_qnh: 1020, roll: 1.9, tas: 424, mag_heading: 42.7, ias: 252, mach: 0.42, ws: 22, wd: 344, oat: -48.75,
+    ident: 'KLM1017', acas_ra: { age: 3, active: true, terminated: false, advisory: 'Climb', threat: '4CA123', junk: 1 },
+    evil: '<script>', baro_rate: 'x' } }] });
+  eq('commb numbers kept', [r.aircraft[0].commb?.nav_altitude_mcp, r.aircraft[0].commb?.ias, r.aircraft[0].commb?.mach, r.aircraft[0].commb?.oat], [3000, 252, 0.42, -48.75]);
+  eq('commb unknown keys and non-numbers dropped', [(r.aircraft[0].commb as Record<string, unknown>).evil, r.aircraft[0].commb?.baro_rate], [undefined, undefined]);
+  eq('commb ident', r.aircraft[0].commb?.ident, 'KLM1017');
+  eq('commb ACAS RA kept, threat lower-cased', r.aircraft[0].commb?.acas_ra, { age: 3, active: true, terminated: false, advisory: 'Climb', threat: '4ca123' });
+  eq('no commb: absent', parseAdsbMessage({ aircraft: [{ hex: '3c4dd2' }] }).aircraft[0].commb, undefined);
+  eq('empty / junk commb: absent', [parseAdsbMessage({ aircraft: [{ hex: '3c4dd2', commb: {} }] }).aircraft[0].commb,
+     parseAdsbMessage({ aircraft: [{ hex: '3c4dd2', commb: [1, 2] }] }).aircraft[0].commb], [undefined, undefined]);
+  eq('an RA neither active nor ended: dropped', parseAdsbMessage({ aircraft: [{ hex: '3c4dd2', commb: { acas_ra: { age: 1 } } }] }).aircraft[0].commb, undefined);
+}
+
 console.log(`test_adsb_report: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

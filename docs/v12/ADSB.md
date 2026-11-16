@@ -46,6 +46,16 @@ client must disable those controls (as in DAB). Entering ADS-B from DAB is allow
 
 Aircraft not heard for 60 s are dropped by the server.
 
+**Comm-B / Enhanced Surveillance** (V12, `vibe_adsb_commb.h`): an aircraft that has answered a ground radar (DF20/21)
+may carry `"commb":{…}` — **confirmed registers only** (data parity, two agreeing ADS-B quantities, or a second reply
+within 30 s with close values; an ambiguous field is thrown away, never guessed). Values are 30 s fresh (4,4 120 s,
+2,0 5 min, an ACAS advisory 1 min). Fields, in aircraft.json's names: 4,0 `nav_altitude_mcp`, `nav_altitude_fms` (ft),
+`nav_qnh` (hPa), `nav_modes` (`vnav`/`althold`/`approach`); 5,0 `roll` (° right +), `true_track`, `gs`, `track_rate`
+(°/s), `tas`; 6,0 `mag_heading`, `ias`, `mach`, `baro_rate`, `geom_rate`; 4,4 `ws`, `wd`, `oat` (°C), `static_hpa`,
+`humidity`; 2,0 `ident`; 3,0 `acas_ra{age, active, terminated, advisory, threat}`; 1,7 `bds` (which of 4,0/4,4/5,0/6,0
+the aircraft says it has). The report gains `"commb":{"fields","confirmed","ambiguous"}` counters. The card shows them
+under "From its replies to radar (Mode S)", kept apart from the ADS-B rows above them.
+
 **What each aircraft IS** (V12 aircraft data, 2026-10-24 — design and licences: `ADSB-DATA-RESEARCH.md`) arrives in its
 own message, ONCE per aircraft and again only when it changes (a callsign arrives, the route is re-judged), just before
 the report it belongs to; a socket that joins gets the whole set (`full:1`) before its first report:

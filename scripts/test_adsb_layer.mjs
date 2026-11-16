@@ -318,5 +318,19 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   }
 }
 
+// ── V12 Mode S Comm-B rows on the card (commbRows): what is shown, the heading line, nothing when absent ──
+{
+  const html = M.commbRows({ nav_altitude_mcp: 3000, nav_qnh: 1020, mag_heading: 42.7, ias: 252, mach: 0.42, tas: 424, roll: -12.3,
+                             ws: 22, wd: 344.5, oat: -48.75, acas_ra: { age: 3, active: true, advisory: 'Climb' } }).join('');
+  ok(html.includes('From its replies to radar (Mode S)'), 'Comm-B rows say where they came from');
+  ok(html.includes('3,000 ft') && html.includes('set 1020 hPa'), 'selected altitude and pressure setting');
+  ok(html.includes('43\u00b0 magnetic') && html.includes('IAS 252 kt') && html.includes('Mach 0.42') && html.includes('TAS 424 kt'), 'heading and airspeeds');
+  ok(html.includes('12\u00b0 left'), 'bank angle, left wing down');
+  ok(html.includes('22 kt from 345\u00b0') && html.includes('-49 \u00b0C outside'), 'wind and temperature');
+  ok(html.includes('Advisory: Climb') && html.includes('3 s ago'), 'the TCAS advisory first, with its age');
+  ok(M.commbRows(undefined).length === 0 && M.commbRows({}).length === 0, 'no Comm-B: no rows, no heading line');
+  ok(!M.commbRows({ acas_ra: { advisory: '<b>x</b>', active: true } }).join('').includes('<b>'), 'advisory text escaped');
+}
+
 console.log(`${fails ? 'FAILED' : 'ok'} — ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

@@ -470,6 +470,25 @@ inline std::vector<std::string> mapAdsbCard(App&, const RadioState& s, const std
         if (p["track"].kind == Json::Num) a2 += mapFmt(" · track %03.0f°", p["track"].n);
         if (p["squawk"].kind == Json::Str) a2 += " · squawk " + p["squawk"].s;
         if (!a2.empty()) l.push_back(a2);
+        // ★ V12 Mode S Comm-B (vibe_adsb_commb.h): what it told a radar — confirmed registers only, its own lines
+        const Json& cb = p["commb"];
+        if (cb.kind == Json::Obj) {
+            const Json& ra = cb["acas_ra"];
+            if (ra.kind == Json::Obj && ra["active"].kind == Json::Bool && ra["active"].b)
+                l.push_back("TCAS advisory: " + (ra["advisory"].str().empty() ? std::string("active") : ra["advisory"].str().substr(0, 40)));
+            std::string c1;
+            if (cb["nav_altitude_mcp"].kind == Json::Num) c1 = mapFmt("Selected %.0f ft", cb["nav_altitude_mcp"].n);
+            if (cb["nav_qnh"].kind == Json::Num) c1 += (c1.empty() ? "" : " · ") + mapFmt("set %.0f hPa", cb["nav_qnh"].n);
+            if (cb["mag_heading"].kind == Json::Num) c1 += (c1.empty() ? "" : " · ") + mapFmt("heading %03.0f°", cb["mag_heading"].n);
+            if (!c1.empty()) l.push_back(c1);
+            std::string c2;
+            if (cb["ias"].kind == Json::Num) c2 = mapFmt("IAS %.0f kt", cb["ias"].n);
+            if (cb["mach"].kind == Json::Num) c2 += (c2.empty() ? "" : " · ") + mapFmt("Mach %.2f", cb["mach"].n);
+            if (cb["tas"].kind == Json::Num) c2 += (c2.empty() ? "" : " · ") + mapFmt("TAS %.0f kt", cb["tas"].n);
+            if (!c2.empty()) l.push_back(c2);
+            if (cb["ws"].kind == Json::Num && cb["wd"].kind == Json::Num)
+                l.push_back(mapFmt("Wind %.0f kt", cb["ws"].n) + mapFmt(" from %03.0f°", cb["wd"].n) + (cb["oat"].kind == Json::Num ? mapFmt(" · %.0f °C", cb["oat"].n) : ""));
+        }
         double lat, lon;
         std::string a3 = "ICAO " + upper(key);
         if (mapPos(p, lat, lon)) { const std::string d = mapDist(lat, lon); if (!d.empty()) a3 += " · " + d; }
