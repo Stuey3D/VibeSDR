@@ -5618,6 +5618,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 APRS — this server's own decoder on your audio: 1200 Bd packet on NFM (VHF), or 300 Bd HF packet on USB. -->
     <!-- ★★ V12 balloons: UKHAS RTTY telemetry, Horus Binary and SSDV pictures — decoded on the server; hidden unless it says "balloon" (greyed with why off 70 cm). -->
     <button class="btn" data-dec="balloon" hidden title="High-altitude balloons — UKHAS RTTY telemetry, Horus Binary 4-FSK and SSDV pictures from amateur payloads, mostly on 434 MHz: tune the payload in USB and everything is found by itself">BALLOONS</button>
+    <!-- ★★ V12 DTMF + 5-tone selective calling — decoded on the server; hidden unless it says "tones". Digits only on the amateur bands (the server's rule). -->
+    <button class="btn" data-dec="tones" hidden title="DTMF and 5-tone selective calling on NFM / AM — the digits on the amateur bands (repeater and link control codes); anywhere else only what was heard, never a number">DTMF / 5-TONE</button>
     <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <!-- ★★ V12 DSC: maritime Digital Selective Calling (ITU-R M.493) — decoded on the server; hidden unless it says "dsc". -->
@@ -5770,6 +5772,12 @@ select.btn { padding: 6px 8px; }
       <div class="seg" id="ncdxfBands"></div>
     </div>
     <div class="hint" id="ncdxfHint"></div>
+  </div>
+  <!-- ★★ V12 DTMF + 5-tone: which decoders run, and the 5-tone STANDARD — AUTO with one table pinned under it. -->
+  <div class="subPanel" id="tonesSettings" hidden>
+    <div class="mrow"><label>DECODE</label><div class="seg" id="tonesWhich"></div></div>
+    <div class="mrow" id="tonesStdRow"><label>5-TONE STANDARD</label><div class="seg" id="tonesStd" style="flex-wrap:wrap"></div></div>
+    <div class="hint" id="tonesHint"></div>
   </div>
   <!-- ★★ V12 balloons: AUTO, and the manual pins under it (Stuart: an automatic decoder keeps manual controls underneath). -->
   <div class="subPanel" id="balloonSettings" hidden>
