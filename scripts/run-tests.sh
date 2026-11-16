@@ -162,6 +162,9 @@ flags_for() {
     # ★ V12 TDF / ALS162 (decoders/tdf_phase.h): synthetic phase code through the TIME decoder — noise, drift, timing, CPU.
     #   `test-tdf --wav <file> [start_utc]` replays an UberSDR recording (docs/v12/TIME-TDF.md).
     test-tdf)              echo "-O2" ;;
+    # ★ V12 the NCDXF / IARU beacon tracker (decoders/ncdxf_tracker.h, vibe_ncdxf_run.h): synthetic CW at the published
+    #   schedule — steps vs SNR, noise, the callsign, clock, pitch, QSB, the grid, the host's run. `--wav` replays a recording.
+    test-ncdxf)            echo "-O2" ;;
     # ★★ The ADS-B gain rule after Stuart's FlightAware box: the top, down only for dynamic range, never for strong aircraft.
     test-adsb-gain)        echo "-O2 -lpthread" ;;
     # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard

@@ -3152,6 +3152,8 @@ const BLOCKABLE = [
   { id: "ndb",    label: "NDB beacons" },
   /* ★ V12 JTTY (docs/v12/JTTY.md) — the WSJT-X 3.2 keyboard mode, every JTTY signal in a listener's passband. */
   { id: "jtty",   label: "JTTY" },
+  /* ★ V12 2026-11-16 the NCDXF / IARU beacon tracker: which of the 18 beacons are heard on 20–10 m, and how far down. */
+  { id: "ncdxf",  label: "NCDXF beacons" },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP
