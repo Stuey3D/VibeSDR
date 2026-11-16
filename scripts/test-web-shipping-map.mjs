@@ -34,11 +34,20 @@ const keep = [];
 for (const l of lines) { const j = JSON.parse(l); const src = path.join(SET, 'files', j.f); if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(gal, j.f)); keep.push(l); } }
 keep.reverse();
 // ★ the fixtures were heard on 2026-11-01: moved to end an hour ago, so their forecasts are CURRENT (a forecast over a day
-//   old is never drawn — latest wins) and the arrows show
+//   old is never drawn — latest wins) and the arrows show.
+// ★ V12 2026-11-16 the FILE NAME moves with the time: a gallery file is named when it is heard (YYYYMMDD-HHMMSS-…), and
+//   with the old 1–2 Nov names kept the map opened elsewhere from 16 Nov on (the Humber arrow out of view) — a server
+//   never holds a name and a time two weeks apart
 const now = Math.floor(Date.now() / 1000);
 {
   const tMax = Math.max(...keep.map((l) => JSON.parse(l).t));
-  for (let i = 0; i < keep.length; i++) { const j = JSON.parse(keep[i]); j.t = j.t - tMax + now - 3600; keep[i] = JSON.stringify(j); }
+  for (let i = 0; i < keep.length; i++) {
+    const j = JSON.parse(keep[i]); const was = j.f; j.t = j.t - tMax + now - 3600;
+    j.f = new Date(j.t * 1000).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15) + was.slice(15);
+    fs.rmSync(path.join(gal, was), { force: true });
+    fs.copyFileSync(path.join(SET, 'files', was), path.join(gal, j.f));
+    keep[i] = JSON.stringify(j);
+  }
 }
 // ★ a DSC DISTRESS alert with its position, as vibe_dsc_gallery.h saveAlert writes it (newest)
 const dscF = '20261102-120000-dsc-2187k5-a1b2.txt';
