@@ -16,7 +16,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Animated, Dimensions, Easing, Pressable, StyleSheet, Text, View,
+  Animated, Dimensions, Easing, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useGlassTheme, type PopupTokens } from './PopupShell';
@@ -179,11 +179,18 @@ function CoachmarkOverlay({
 
   // Bubble vertical placement: below the target if it's in the top ~55%, else above.
   const below   = rect ? (rect.y + rect.height / 2) < win.height * 0.55 : true;
-  const BUBBLE_W = Math.min(320, win.width - 32);
+  // ★ A long card gets a wider bubble where the window has room (Stuart 2026-11-16: the mode card ran off a 14" MacBook
+  //   at its smallest text size) — 320 stays the width on a phone and for every short card.
+  const longBody = step.body.length > 600;
+  const BUBBLE_W = Math.min(longBody ? 520 : 320, win.width - 32);
   const bubbleTop = rect
     ? (below ? sy + sh + 14 : undefined)
-    : win.height / 2 - 80;
+    : (longBody ? 16 : win.height / 2 - 80);
   const bubbleBottom = rect && !below ? (win.height - sy + 14) : undefined;
+  // ★ …and the bubble never runs off the window: it is capped to the room on its side of the target and the BODY
+  //   scrolls inside it, so the count, Skip and Next always stay on screen.
+  const room = rect ? (below ? win.height - (sy + sh + 14) - 16 : sy - 14 - 16) : win.height - 32;
+  const bubbleMaxH = Math.max(160, room);
   // Horizontal: centre on the target, clamped on-screen.
   const bubbleLeft = rect
     ? Math.max(16, Math.min(win.width - BUBBLE_W - 16, rect.x + rect.width / 2 - BUBBLE_W / 2))
@@ -226,10 +233,12 @@ function CoachmarkOverlay({
       )}
 
       {/* Speech bubble */}
-      <View style={[styles.bubble, { width: BUBBLE_W, left: bubbleLeft, top: bubbleTop as number, bottom: bubbleBottom as number }]}>
+      <View style={[styles.bubble, { width: BUBBLE_W, left: bubbleLeft, top: bubbleTop as number, bottom: bubbleBottom as number, maxHeight: bubbleMaxH }]}>
         {!!step.title && <Text style={styles.title}>{step.title}</Text>}
-        <Text style={styles.body}>{step.body}</Text>
-        {!!step.illustration && <View style={styles.illo}>{step.illustration}</View>}
+        <ScrollView style={styles.scroll} showsVerticalScrollIndicator persistentScrollbar>
+          <Text style={styles.body}>{step.body}</Text>
+          {!!step.illustration && <View style={styles.illo}>{step.illustration}</View>}
+        </ScrollView>
         <View style={styles.row}>
           <Text style={styles.count}>{index + 1} / {count}</Text>
           <View style={styles.btns}>
@@ -266,6 +275,7 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   title: { color: pt.ink.text, fontFamily: F, fontSize: 14, fontWeight: 'bold', marginBottom: 5, letterSpacing: 0.5 },
   body:  { color: pt.ink.textSoft, fontFamily: F, fontSize: 13.5, lineHeight: 19 },
   illo:  { marginTop: 12 },
+  scroll: { flexGrow: 0, flexShrink: 1 },
   row:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 },
   count: { color: pt.ink.textDim, fontFamily: F, fontSize: 11, letterSpacing: 1 },
   btns:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
