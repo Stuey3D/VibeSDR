@@ -5896,6 +5896,15 @@ static std::mutex                    g_vsBenchMtx;
 /** ★★ V12 DAB OWN STATION (docs/v12/DAB-OWN-STATION.md): the owner's switch, per radio — -1 the rule (the default), 0 off,
  *  1 on — and the benchmark's N (the dabStations block, vibe_benchmark_dab.h), re-read at most every 10 s. */
 static std::atomic<int> g_dabOwnSetting{-1};
+/** MemAvailable from /proc/meminfo, KB; -1 where there is no such file (a Mac — never a small board). */
+static long vsMemAvailableKB() {
+    FILE* f = std::fopen("/proc/meminfo", "r");
+    if (!f) return -1;
+    char line[128]; long kb = -1;
+    while (std::fgets(line, sizeof line, f)) if (std::sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
+    std::fclose(f);
+    return kb;
+}
 static int vsDabStationsN() {
     static std::mutex m; static double at = -1e9; static int n = 0;
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -17681,6 +17690,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (sock) sendText(sock, "{\"type\":\"notice\",\"why\":\"every station decoder on this radio is busy \u2014 the station changed for everyone on the radio's own\"}");
                 break;
             case A::OpenStation: {
+                /* ★★★ NO OOM EVER (feedback_memory_floor_256mb): a station costs ~3–9 MB resident (measured, Pi 2 and Mac —
+                 *  docs/v12/DAB-OWN-STATION.md §6). Under 64 MB available the pick switches the radio's own station instead,
+                 *  as before the feature, and says why — never a station that could push a small board out of memory. */
+                if (const long avail = vsMemAvailableKB(); avail >= 0 && avail < 64 * 1024) {
+                    dabRoster_.toPrimary(sess); g_dab.setService(a.sid);
+                    LOGI("[DAB] own station %04X NOT opened: only %ld MB of memory available \xe2\x80\x94 the radio's own station changed instead", unsigned(a.sid), avail / 1024);
+                    if (sock) sendText(sock, "{\"type\":\"notice\",\"why\":\"this server is short of memory \\u2014 the station changed for everyone on the radio's own\"}");
+                    break;
+                }
                 auto st = std::make_shared<DabOwnSt>();
                 st->sid = a.sid;
                 st->svc = g_dab.openStation(a.sid);
