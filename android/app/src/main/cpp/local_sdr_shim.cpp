@@ -830,8 +830,9 @@ ModeParams paramsFor(const std::string& mode) {
     /* nfm / fm */                return {ModeParams::NFM, 50000, 12500, 1};
 }
 
-/** ★ V12 FreeDV's sideband by the SSB convention FreeDV follows: LSB below 10 MHz, USB from 10 MHz up. */
-static inline bool fdvLowerSideband(double dialHz) { return dialHz > 0 && dialHz < 10e6; }
+/** ★ V12 FreeDV's sideband: AUTO by the SSB convention FreeDV follows (LSB below 10 MHz, USB from 10 MHz up), or the
+ *  listener's / the room's USB / LSB override (freedv_sub's "sb") — vibe::freedv::lowerSideband is the one rule. */
+static inline bool fdvLowerSideband(double dialHz, int sb) { return vibe::freedv::lowerSideband(dialHz, sb); }
 
 // Map the shim's mode kind onto the V5 engine's demod mode.
 vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k);
@@ -7778,8 +7779,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<bool> m17Mode_{false};   // ★ V12 M17 on the shared demodulator: its channel width is fixed (setBandwidth)
     vibedsp::RxPipeline::Mode rxModeDial() const {
         if (fdvMode_.load(std::memory_order_relaxed))
-            return fdvLowerSideband(audioFreq.load()) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
+            return fdvLowerSideband(audioFreq.load(), fdvSharedSb.load()) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
         return rxMode;
+    std::atomic<int> fdvSharedSb{vibe::freedv::kSbAuto};   // ★ V12 the room's FreeDV sideband choice (AUTO / USB / LSB)
     }
 
     // Margin keeping the VFO inside the usable capture: above the 50 kHz auto-
@@ -9274,6 +9276,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::unique_ptr<vibe::m17::M17Listener> m17;
         uint64_t m17SentVer = 0;
         double m17AtHz = 0;
+        int fdvSb = vibe::freedv::kSbAuto;          // ★ their sideband choice: AUTO (the convention) / USB / LSB
         /** ★★ V12 CTCSS / DCS TONE ID (decoders/tone_id.h) — this listener's, while their mode is NFM. Fed in clientIqCb
          *  from the pipeline's CHANNEL IQ (post-NCO, the dial at DC, already cut to the passband — so a neighbouring
          *  12.5 kHz channel inside the wider slice cannot capture its discriminator). Everything below is touched under
@@ -10235,7 +10238,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (c->rx) c->rx->requestRdsResync();
         }
         auto mp = paramsFor(c->mode);
-        if (c->mode == "freedv" && fdvLowerSideband(c->vfoHz)) mp.kind = ModeParams::SSB_LSB;   // ★ V12 FreeDV's sideband
+        if (c->mode == "freedv" && fdvLowerSideband(c->vfoHz, c->fdvSb)) mp.kind = ModeParams::SSB_LSB;   // ★ V12 FreeDV's sideband
         double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
         if (c->mode == "m17") bw = mp.bandwidth;   // ★ V12 M17: the receiver needs its whole 12.5 kHz channel — a width is not a choice here
         /* ★★★ THE SAME LIMITS THE SHARED PATH HAS, BEFORE THE CHANNEL IS SIZED FROM THEM. This path
@@ -10340,11 +10343,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  nudge to centre the signal keeps the lock); a zoom, a passband drag or a restated tune keep it. */
         if (c->mode == "freedv") {
             if (!c->fdv || std::fabs(c->fdvAtHz - c->vfoHz) > 50.0) {
-                c->fdv.reset(new vibe::freedv::FreeDvListener(c->fdvSub)); c->fdvSentVer = 0; c->fdvAtHz = c->vfoHz;
+                c->fdv.reset(new vibe::freedv::FreeDvListener(c->fdvSub, c->fdvSb, fdvLowerSideband(c->vfoHz, c->fdvSb))); c->fdvSentVer = 0; c->fdvAtHz = c->vfoHz;
             }
         }
         else if (c->fdv) { c->fdv.reset(); c->fdvAtHz = 0; }
-        if (c->fdv) c->fdv->setSideband(fdvLowerSideband(c->vfoHz));
+        if (c->fdv) { c->fdv->setSideband(fdvLowerSideband(c->vfoHz, c->fdvSb)); c->fdv->setSidebandChoice(c->fdvSb); }
         /* ★ V12 M17: a new receiver for a new channel (> 3 kHz away — less is a nudge on the same station, which the
          *  receiver's own DC fit absorbs); a zoom, a passband drag or a restated tune keep it. */
         if (c->mode == "m17") {
@@ -18185,12 +18188,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             {
                 std::lock_guard<std::mutex> lk(fdvSharedMtx);
                 if (fdvShared && std::fabs(audioFreq.load() - fdvSharedAtHz) > 50.0) {
-                    fdvShared = std::make_shared<vibe::freedv::FreeDvListener>(fdvSharedSub.load()); fdvSharedVer = 0; fdvSharedAtHz = audioFreq.load();
+                    fdvShared = std::make_shared<vibe::freedv::FreeDvListener>(fdvSharedSub.load(), fdvSharedSb.load(), fdvLowerSideband(audioFreq.load(), fdvSharedSb.load())); fdvSharedVer = 0; fdvSharedAtHz = audioFreq.load();
                 }
                 d = fdvShared;
             }
             if (d) {
-                d->setSideband(fdvLowerSideband(audioFreq.load()));
+                const int sbSel = fdvSharedSb.load();
+                d->setSideband(fdvLowerSideband(audioFreq.load(), sbSel)); d->setSidebandChoice(sbSel);
                 d->feedAudio(&data[0].l, count, 2, 48000.0);
                 std::vector<float> mono(static_cast<size_t>(count));
                 d->takePcm(mono.data(), count);
@@ -18451,7 +18455,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         {   // ★ V12 FreeDV on the shared dial (perClientDsp() radios build theirs per listener in clientRetune)
             std::lock_guard<std::mutex> lk(fdvSharedMtx);
             if (mode == "freedv") {
-                if (!fdvShared) { fdvShared = std::make_shared<vibe::freedv::FreeDvListener>(fdvSharedSub.load()); fdvSharedVer = 0; fdvSharedAtHz = audioFreq.load(); }
+                if (!fdvShared) { fdvShared = std::make_shared<vibe::freedv::FreeDvListener>(fdvSharedSub.load(), fdvSharedSb.load(), fdvLowerSideband(audioFreq.load(), fdvSharedSb.load())); fdvSharedVer = 0; fdvSharedAtHz = audioFreq.load(); }
             } else fdvShared.reset();
         }
         {   // ★ V12 M17 on the shared dial (perClientDsp() radios build theirs per listener in clientRetune)
@@ -21439,12 +21443,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::string j;
             if (auto me = dspFor(sock)) {
                 std::lock_guard<std::mutex> lk(me->mtx);
-                if (sub >= 0) { me->fdvSub = sub; if (me->fdv) me->fdv->setSub(sub); }
                 if (me->fdv) j = me->fdv->statusJson(nullptr);
             } else {
                 if (sub >= 0) fdvSharedSub.store(sub);
                 std::lock_guard<std::mutex> lk(fdvSharedMtx);
-                if (fdvShared) { if (sub >= 0) fdvShared->setSub(sub); j = fdvShared->statusJson(nullptr); }
+                if (fdvShared) {
+                    if (sub >= 0) fdvShared->setSub(sub);
+                    if (sb >= 0) { fdvShared->setSidebandChoice(sb); fdvShared->setSideband(fdvLowerSideband(audioFreq.load(), sb)); }
+                    j = fdvShared->statusJson(nullptr);
+                }
             }
             if (!j.empty()) sendText(sock, j);
             return;
@@ -21469,17 +21476,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  not show an empty constellation box until the next half-second tick — this socket gets a report with the
              *  scopes now. Under g_dabReportMtx like every report, so it can never land after a dab_off. */
             if (on != 0 && g_dabMode.load(std::memory_order_relaxed)) {
+        /* ★★ …and "sb":"auto"|"usb"|"lsb" (Stuart 2026-11-16): the sideband. AUTO follows FreeDV's convention (LSB below
+         *  10 MHz, USB above); USB / LSB override it for a station that does not. Same gate, same owner (this listener's
+         *  receiver, or the room's), and the demodulator flips sideband in the same move (clientRetune / rxModeDial). */
                 const DabParts dp = dabParts();   // ★ built BEFORE the report lock — the decoder may be mid-frame
                 std::lock_guard<std::mutex> rl(g_dabReportMtx);
                 if (g_dabMode.load(std::memory_order_relaxed)) sendDab(sock, dp);
             }
+            const std::string wantSb = jsonStr(msg, "sb");
+            const int sb = wantSb.empty() ? -1 : vibe::freedv::sbFromName(wantSb);
             return;
         }
+                bool sbChanged = false;
+                {
+                    std::lock_guard<std::mutex> lk(me->mtx);
+                    if (sub >= 0) { me->fdvSub = sub; if (me->fdv) me->fdv->setSub(sub); }
+                    if (sb >= 0 && sb != me->fdvSb) { me->fdvSb = sb; sbChanged = true; }
+                }
+                if (sbChanged) clientRetune(me.get());   // ★ the channel's sideband and the receiver's report, as a retune does
         /* ★★★ V12: THE DAB BAND SCAN from a listener — {"type":"dab_scan","on":1} starts, "on":0 stops (and puts the
          *  radio back on the block it was on). Who may: dabBandScanWhyNot — refused IN WORDS, so an old or hand-written
          *  client on a shared radio is told why rather than ignored. */
         /* ★★ V12 2026-11-04 THE LAST SCAN'S LIST, FOR ANYONE (Stuart: "change the button's name from scan to multiplexes
          *  … after the initial scan is complete that way it can be shown on shared VFO servers too"). Read-only: the
+                if (sb >= 0 && fdvSharedSb.exchange(sb) != sb) {
+                    std::lock_guard<std::recursive_mutex> lk(modeMtx);
+                    if (fdvMode_.load(std::memory_order_relaxed)) rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
+                }
          *  ensembles the last band scan found (names, blocks, quality) — it starts and stops nothing, so it needs no
          *  permission. Its OWN type, never `dab_scan` with a flag: an older server reads a `dab_scan` with no "on" as
          *  CANCEL, and an unknown type it simply ignores. */
@@ -32549,7 +32572,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double pbLo = ch - bw * 0.5, pbHi = ch + bw * 0.5;
         // ★ V12 FreeDV's sideband follows the dial (rxModeDial) — at THIS dial, which may be the one about to be tuned
         const vibedsp::RxPipeline::Mode rm = !fdvMode_.load(std::memory_order_relaxed) ? rxMode
-                                           : fdvLowerSideband(dialHz) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
+                                           : fdvLowerSideband(dialHz, fdvSharedSb.load()) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
         if (rm == vibedsp::RxPipeline::Mode::SSB_USB || rm == vibedsp::RxPipeline::Mode::CW) { pbLo = ch; pbHi = ch + bw; }
         else if (rm == vibedsp::RxPipeline::Mode::SSB_LSB)                                  { pbLo = ch - bw; pbHi = ch; }
         return vibe::vfoDcZone(dialHz, pbLo, pbHi, off);

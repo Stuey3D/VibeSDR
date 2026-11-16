@@ -817,18 +817,30 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
         std::vector<std::string> subs;
         { std::lock_guard<std::mutex> lk(srvMtx_); subs = srvFreedvSubs_; }
         FreeDvState fs;
-        const std::string chosen = parseFreeDv(s.msg("freedv"), fs) ? fs.sub : std::string("auto");
+        const bool have = parseFreeDv(s.msg("freedv"), fs);
+        const std::string chosen = have ? fs.sub : std::string("auto");
+        const std::string sbChosen = have ? fs.sbSel : std::string("auto");
         const Rect p{444, 8, 184, 464};
         c.g.rrect(p.x, p.y, p.w, p.h, 10, rgb(0x101010, 0.97f));
         c.tc.draw(c.g, c.f.bodyB, "FREEDV", p.x + 14, p.y + 14, th::btnText);
-        float y = p.y + 50;
+        float y = p.y + 46;
         subs.insert(subs.begin(), "auto");
         for (const auto& sb : subs) {
-            if (toggle(c, "fdv." + sb, {p.x + 14, y, p.w - 28, 44}, sb == chosen, sb == "auto" ? "AUTO" : sb, sb == "auto" ? "AUTO" : sb))
+            if (toggle(c, "fdv." + sb, {p.x + 14, y, p.w - 28, 40}, sb == chosen, sb == "auto" ? "AUTO" : sb, sb == "auto" ? "AUTO" : sb))
                 eng_->send(freedvSubMessage(sb));
-            y += 54;
+            y += 48;
         }
-        c.tc.draw(c.g, c.f.small, s.bwHigh > 0 ? "ON USB" : "ON LSB", p.x + 14, y + 4, th::dim);   // the side the passband follows
+        /* ★ V12 the sideband (Stuart 2026-11-16): AUTO follows FreeDV's convention (LSB below 10 MHz, USB above); USB / LSB
+         *  by hand for a station that does not. Lit by the report's "sbSel". */
+        c.tc.draw(c.g, c.f.bodyB, "SIDEBAND", p.x + 14, y + 4, th::btnText);
+        y += 32;
+        for (const char* sbk : kFreeDvSidebands) {
+            const std::string k = sbk, lab = k == "auto" ? "AUTO" : k == "usb" ? "USB" : "LSB";
+            if (toggle(c, "fdvsb." + k, {p.x + 14, y, p.w - 28, 40}, k == sbChosen, lab, "Sideband " + lab))
+                eng_->send(freedvSubMessage("", k));
+            y += 48;
+        }
+        c.tc.draw(c.g, c.f.small, s.bwHigh > 0 ? "ON USB" : "ON LSB", p.x + 14, y + 2, th::dim);   // the side the passband follows
         return;
     }
     // ── BANDWIDTH (hidden in DRM, as the web's syncBw — and in M17, whose receiver cuts its own channel) ──

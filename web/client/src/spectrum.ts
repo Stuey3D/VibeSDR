@@ -42,7 +42,7 @@ import { AM_SYNC_PASSBAND, AM_SYNC_MAX_BW, parseAmSync, type AmSyncState } from 
 import { parseAutoBwModes, parseBwAuto, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
 // ★★ V12 FreeDV digital voice — the shared rules (src/services/freedv.ts): the report, the sideband, the sub-mode message
 import { parseFreeDv, freedvPassband, freedvSidebandAt, freedvSubMessage,
-         type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
+         type FreeDvState, type FreeDvChoice, type FreeDvSideband } from '../../../src/services/freedv';
 // ★★ V12 M17 digital voice — the shared rules (src/services/m17.ts): the report, its passband, the report request
 import { parseM17, M17_PASSBAND, m17StatusMessage, type M17State } from '../../../src/services/m17';
 import type { WholeKind } from '../../../src/services/wholeModeResume';   // ★ V12: coming back to a whole-radio mode
@@ -2223,7 +2223,7 @@ export class SpectrumClient {
     this.mode = mode;
     this.lastLocalTuneAt = performance.now();   // ★ ours — configs already sent with the OLD mode must not undo it
     // ★ V12 FreeDV: the side the server will demodulate here, until its first report says which
-    const bw = mode === 'freedv' ? freedvPassband(freedvSidebandAt(this.frequency)) : MODE_BANDWIDTHS[mode];
+    const bw = mode === 'freedv' ? freedvPassband(freedvSidebandAt(this.frequency, this.fdvSbSel)) : MODE_BANDWIDTHS[mode];
     if (bw) { this.bandwidthLow = bw[0]; this.bandwidthHigh = bw[1]; }
     // The shim IGNORES bandwidth fields on a tune that also changes mode
     // (local_sdr_shim.cpp:1529) — so send mode, then bandwidth separately.
@@ -2240,10 +2240,14 @@ export class SpectrumClient {
   /** ★★ V12 FreeDV: AUTO or one sub-mode by hand ({"type":"freedv_sub","sub":…}); null only asks for the current report.
    *  Nothing is assumed — the page lights what the server's next report says. A CHOICE asks first on a shared dial (the
    *  room hears it); asking for the report changes nothing, so it never does. */
-  freedvSub(sub: FreeDvChoice | null) {
-    if (sub && this.askBlocked()) return;
-    this._send(freedvSubMessage(sub));
+  /** ★ …and `sb`, the sideband: AUTO (FreeDV's convention, LSB below 10 MHz) or USB / LSB by hand (Stuart 2026-11-16). */
+  freedvSub(sub: FreeDvChoice | null, sb?: FreeDvSideband | null) {
+    if ((sub || sb) && this.askBlocked()) return;
+    if (sb) this.fdvSbSel = sb;
+    this._send(freedvSubMessage(sub, sb));
   }
+  /** ★ V12 FreeDV's sideband choice as last chosen or reported — the side drawn before the next report. */
+  fdvSbSel: FreeDvSideband = 'auto';
 
   setBandwidth(low: number, high: number) {
     // ★ The one door every passband goes through (slider, bookmark, shared link), so the WFM floor

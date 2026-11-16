@@ -100,7 +100,7 @@ static int golden(const char* path) {
             std::string js; is >> js;
             hh::FreeDvState st;
             if (hh::parseFreeDv(hh::Json::parse(unhex(js)), st))
-                got = "1 " + st.sub + " " + st.sb + " " + (st.sync ? "1" : "0") + " " + hex(st.mode) + " " + (st.hasSnr ? std::to_string(st.snr) : "-")
+                got = "1 " + st.sub + " " + st.sb + " " + st.sbSel + " " + (st.sync ? "1" : "0") + " " + hex(st.mode) + " " + (st.hasSnr ? std::to_string(st.snr) : "-")
                     + " " + hex(st.text) + " " + hex(hh::freedvVts(&st));
             else got = "0 " + hex(hh::freedvVts(nullptr));
         } else if (op == "FO") {
@@ -109,9 +109,9 @@ static int golden(const char* path) {
             for (auto& x : hh::freedvOffered(hh::Json::parse(unhex(js)))) j += (j.empty() ? "" : ",") + x;
             got = j.empty() ? "-" : j;
         } else if (op == "FS") {
-            double hz; std::string sb; is >> hz >> sb;
+            double hz; std::string sb, sel; is >> hz >> sb >> sel;
             int lo, hi; hh::freedvPassband(sb, lo, hi);
-            got = std::string(hh::freedvSidebandAt(hz)) + " " + std::to_string(lo) + " " + std::to_string(hi);
+            got = std::string(hh::freedvSidebandAt(hz, sel)) + " " + std::to_string(lo) + " " + std::to_string(hi);
         } else if (op == "MV") {
             std::string js; is >> js;
             hh::M17State st;

@@ -46,7 +46,7 @@ import { HELL_HINT } from '../services/feldHell';   // ★ V12 FELD HELL
 import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
 import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, type GroupedMode } from '../services/autoModes';   // ★★★ AUTO's fallback rows
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
-import { FREEDV_HINT, type FreeDvChoice, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
+import { FREEDV_HINT, FREEDV_SIDEBANDS, freedvSidebandLabel, type FreeDvChoice, type FreeDvSideband, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
@@ -419,7 +419,8 @@ interface ModeSelectorProps {
   modes?:   { id: string; label: string; a11y?: string; demod?: boolean }[];
   /** ★ V12 FreeDV (VibeServer): while the mode is FreeDV, the manual fallback under AUTO — AUTO and the sub-modes THIS
    *  server runs, `sub` lit as the server reports it. Absent = no row (no dead controls). */
-  freedv?: { subs: readonly FreeDvSub[]; sub: FreeDvChoice; onSub: (s: FreeDvChoice) => void } | null;
+  freedv?: { subs: readonly FreeDvSub[]; sub: FreeDvChoice; onSub: (s: FreeDvChoice) => void;
+             sb?: FreeDvSideband; onSb?: (s: FreeDvSideband) => void } | null;
   /** OWRX secondary decoder running on top of the carrier (e.g. 'sstv'/'fax').
    *  Highlighted separately so the carrier demod (`current`) stays lit too. */
   activeDecoder?: string;
@@ -1911,6 +1912,16 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               <SegBtn key={v} label={v === 'auto' ? 'AUTO' : v} active={freedv.sub === v} onPress={() => freedv.onSub(v)} />
             ))}
           </OptRow>
+          {/* ★ V12 the sideband (Stuart 2026-11-16): AUTO follows FreeDV's convention (LSB below 10 MHz, USB above);
+              USB / LSB by hand for a station that does not. The server applies it; the lit key is its report's "sbSel". */}
+          {!!freedv.onSb && (<>
+            <SubLabel label="FREEDV SIDEBAND" />
+            <OptRow>
+              {FREEDV_SIDEBANDS.map((v) => (
+                <SegBtn key={v} label={freedvSidebandLabel(v)} active={(freedv.sb ?? 'auto') === v} onPress={() => freedv.onSb?.(v)} />
+              ))}
+            </OptRow>
+          </>)}
           <Text style={capText}>{FREEDV_HINT}</Text>
         </>)}
 

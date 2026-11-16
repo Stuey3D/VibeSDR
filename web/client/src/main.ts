@@ -212,6 +212,7 @@ import { autoBwOffered, shownEdges, type BwAutoState } from '../../../src/servic
 import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, type AmSyncId, type AmSyncState } from '../../../src/services/amSync';
 // ★★ V12 FreeDV digital voice (src/services/freedv.ts — the rules the app and the R36S share)
 import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME, FREEDV_HINT,
+         FREEDV_SIDEBANDS, freedvSidebandLabel,
          type FreeDvSub, type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
 // ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
@@ -2776,6 +2777,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onFreeDv: (f) => {
       if (!spec || spec.mode !== 'freedv' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
       fdvState = f;
+      spec.fdvSbSel = f.sbSel;
       const [lo, hi] = freedvPassband(f.sb);
       // ★ Written straight in, never sent (the width is the server's): the waterfall draws it on the next frame, and the
       //   hidden width row is kept true to it
@@ -5486,6 +5488,27 @@ function freedvSubRow(): HTMLElement | null {
     g.appendChild(b);
   }
   wrap.appendChild(g);
+  /* ★ V12 the sideband (Stuart 2026-11-16): AUTO follows FreeDV's convention (LSB below 10 MHz, USB above); USB / LSB by
+   *  hand for a station that does not. Lit by the report's "sbSel", as the sub-mode keys are by its "sub". */
+  const sbSep = document.createElement('div');
+  sbSep.className = 'mBwSep';
+  sbSep.textContent = 'FREEDV SIDEBAND';
+  wrap.appendChild(sbSep);
+  const sg = document.createElement('div');
+  sg.className = 'mModeGrid';
+  sg.id = 'mFreeDvSb';
+  sg.style.gridTemplateColumns = `repeat(${FREEDV_SIDEBANDS.length}, minmax(0, 1fr))`;
+  for (const c of FREEDV_SIDEBANDS) {
+    const b = document.createElement('button');
+    b.className = 'mModeOpt';
+    b.style.minWidth = '0'; b.style.paddingLeft = b.style.paddingRight = '0.3em';
+    b.dataset.sb = c;
+    b.textContent = freedvSidebandLabel(c);
+    b.title = c === 'auto' ? `${FREEDV_NAME}: LSB below 10 MHz, USB above (the FreeDV convention)` : `${FREEDV_NAME}: ${c.toUpperCase()} whatever the band`;
+    b.onclick = () => spec?.freedvSub(null, c);   // ★ lit by the server's next report, never by this tap
+    sg.appendChild(b);
+  }
+  wrap.appendChild(sg);
   freedvSubRowSync(g);
   return wrap;
 }
@@ -5495,6 +5518,13 @@ function freedvSubRowSync(g: HTMLElement | null = document.getElementById('mFree
   const sub = fdvState?.sub;
   for (const x of Array.from(g.querySelectorAll('button')) as HTMLButtonElement[]) {
     const on = x.dataset.sub === sub;
+    x.classList.toggle('on', on);
+    x.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  const sg = document.getElementById('mFreeDvSb');
+  const sb = fdvState?.sbSel;
+  if (sg) for (const x of Array.from(sg.querySelectorAll('button')) as HTMLButtonElement[]) {
+    const on = x.dataset.sb === sb;
     x.classList.toggle('on', on);
     x.setAttribute('aria-pressed', on ? 'true' : 'false');
   }

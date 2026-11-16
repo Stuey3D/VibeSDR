@@ -466,7 +466,7 @@ export abstract class VibeServerWsClient {
     // too (setMode already does) — without this, connecting in a restored
     // non-USB mode kept the constructor's USB edges and the first emission
     // overwrote the screen's correct values (AM showing only one sideband).
-    const cbw = modeDefaultPassband(mode, frequency);   // ★ V12 FreeDV's side follows the dial
+    const cbw = modeDefaultPassband(mode, frequency, this.fdvSbSel);   // ★ V12 FreeDV's side follows the dial
     if (cbw) { this.status.bandwidthLow = cbw[0]; this.status.bandwidthHigh = cbw[1]; }
     // The screen already set its own state from the tune it passed in, so if the receiver sent us
     // somewhere else it has to be told — otherwise the readout shows one frequency while the audio
@@ -745,13 +745,15 @@ export abstract class VibeServerWsClient {
     const changed = mode !== t.mode;
     t.mode = mode;
     if (!changed) return;                      // ★ see above — a re-assert is not a mode change
-    const bw = modeDefaultPassband(mode, t.frequency ?? this.status.frequency);   // ★ V12 FreeDV's side follows the dial
+    const bw = modeDefaultPassband(mode, t.frequency ?? this.status.frequency, this.fdvSbSel);   // ★ V12 FreeDV's side follows the dial
     if (bw) { t.bandwidthLow = bw[0]; t.bandwidthHigh = bw[1]; }
   }
 
   /** ★★ V12 FreeDV: THE SIDEBAND IS THE SERVER'S (freedv.ts). Its report says which side it demodulates ("sb"); the
    *  passband we draw (and measure the S-meter in) moves to that side — mirrored, so the width is kept. Drawn only:
    *  nothing is sent (the server sizes the channel from the width, whichever side it is). */
+  /** ★ V12 FreeDV's sideband choice (AUTO / USB / LSB) as last chosen or reported — the side drawn before a report. */
+  protected fdvSbSel: import('./freedv').FreeDvSideband = 'auto';
   protected adoptFreeDvSideband(sb: 'usb' | 'lsb') {
     const s = this.status;
     if (s.mode !== 'freedv') return;
@@ -775,7 +777,7 @@ export abstract class VibeServerWsClient {
     // ★ On a CHANGE only — see _adoptMode above. Re-picking the mode you are already on rebuilds
     //   nothing on the server, so it must not silently reset the width here either.
     if (changed) {
-      const bw = modeDefaultPassband(mode, this.status.frequency);   // ★ V12 FreeDV's side follows the dial
+      const bw = modeDefaultPassband(mode, this.status.frequency, this.fdvSbSel);   // ★ V12 FreeDV's side follows the dial
       if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
     }
     this._routeTune(this.status.frequency, mode);   // ★ one route — see _routeTune

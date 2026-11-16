@@ -71,6 +71,29 @@ inline int subFromName(const std::string& n) {
     if (u == "1600") return k1600;
     return -1;
 }
+/** ★ The sideband choice (Stuart 2026-11-16): AUTO follows FreeDV's SSB convention — LSB below 10 MHz, USB from 10 MHz
+ *  up — and USB / LSB override it, for a station (or a net, or a band plan) that does not. An inverted modem signal never
+ *  syncs, so this is the fallback when AUTO finds nothing on a signal that is plainly there. */
+enum Sb : int { kSbAuto = 0, kSbUsb = 1, kSbLsb = 2 };
+inline const char* sbName(int s) { return s == kSbUsb ? "usb" : s == kSbLsb ? "lsb" : "auto"; }
+/** "usb" / "LSB" / "auto" → Sb; -1 when it is none of ours. */
+inline int sbFromName(const std::string& n) {
+    std::string u;
+    for (char c : n) u += char(std::tolower((unsigned char)c));
+    if (u == "auto" || u.empty()) return kSbAuto;
+    if (u == "usb") return kSbUsb;
+    if (u == "lsb") return kSbLsb;
+    return -1;
+}
+/** ★ THE ONE SIDEBAND RULE: true = demodulate LSB. Every demodulator site (shared and per listener) asks this. */
+inline bool lowerSideband(double dialHz, int sb) {
+    if (sb == kSbLsb) return true;
+    if (sb == kSbUsb) return false;
+    // ★ 60 m is USB (the FreeDV application's own rule: USB from 10 MHz up, or anywhere in the 60 m band, 5.25–5.45 MHz)
+    if (dialHz >= 5.25e6 && dialHz <= 5.45e6) return false;
+    return dialHz > 0 && dialHz < 10e6;
+}
+
 /** codec2's own mode numbers (freedv_api.h, stable since 1.0: FREEDV_MODE_1600 0, _700D 7, _700E 13). */
 inline int codec2Mode(int s) { return s == k700D ? 7 : s == k700E ? 13 : s == k1600 ? 0 : -1; }
 
@@ -314,7 +337,13 @@ public:
     static constexpr int kOutRate = 48000;
     static constexpr int kModemRate = 8000;   // ★ 700D, 700E and 1600 all run their modem at 8 kHz (checked at open)
 
-    explicit FreeDvListener(int sub = kAuto) : want_(sub) { th_ = std::thread([this] { loop(); }); }
+    /** `sbSel` / `lsb`: the sideband choice and the side demodulated, set BEFORE the worker's first report — a new
+     *  receiver for a nudged dial must not report AUTO for a moment when the listener chose USB. */
+    explicit FreeDvListener(int sub = kAuto, int sbSel = kSbAuto, bool lsb = false) : want_(sub) {
+        if (sbSel >= kSbAuto && sbSel <= kSbLsb) sbSel_.store(sbSel);
+        lsb_.store(lsb);
+        th_ = std::thread([this] { loop(); });
+    }
     ~FreeDvListener() {
         { std::lock_guard<std::mutex> lk(m_); stop_ = true; }
         cv_.notify_all();
@@ -355,6 +384,9 @@ public:
     /** ★ Which sideband the radio demodulates for it (the server's rule: FreeDV's SSB convention) — reported, so a client
      *  draws the passband on the right side of the dial without a rule of its own. */
     void setSideband(bool lsb) { lsb_.store(lsb, std::memory_order_relaxed); }
+    /** ★ What the listener (or the room) chose — AUTO / USB / LSB — reported as "sbSel" so a picker shows the choice
+     *  while "sb" shows what is demodulated. */
+    void setSidebandChoice(int sb) { if (sb >= kSbAuto && sb <= kSbLsb) sbSel_.store(sb, std::memory_order_relaxed); }
     int sub() const { return want_.load(); }
 
     /** ★ The report and a counter that moves when it changes (the caller sends on change). */
@@ -615,7 +647,7 @@ private:
     static void jsonText(std::string& j, const std::string& s) {
         for (char c : s) { if (c == '"' || c == '\\') j += '\\'; j += c; }
     }
-    /** {"type":"freedv","sub":"auto"|"700D"…,"sb":"usb"|"lsb","state":"search"|"sync","mode":"700D"|"","snr":5,"text":"…"} */
+    /** {"type":"freedv","sub":"auto"|"700D"…,"sb":"usb"|"lsb","sbSel":"auto"|"usb"|"lsb","state":"search"|"sync","mode":"700D"|"","snr":5,"text":"…"} */
     void publish(bool force) {
         const bool in = active_ && active_->sync && active_->syncSec >= kHeldSec;
         int snr = 0;
@@ -628,6 +660,7 @@ private:
         std::string j = "{\"type\":\"freedv\",\"sub\":\"";
         j += subName(cur_);
         j += lsb_.load(std::memory_order_relaxed) ? "\",\"sb\":\"lsb" : "\",\"sb\":\"usb";
+        j += "\",\"sbSel\":\""; j += sbName(sbSel_.load(std::memory_order_relaxed));
         j += "\",\"state\":\""; j += in ? "sync" : "search";
         j += "\",\"mode\":\""; j += in ? subName(active_->sub) : "";
         j += "\"";
@@ -640,6 +673,7 @@ private:
 
     std::atomic<int> want_;
     std::atomic<bool> lsb_{false};
+    std::atomic<int> sbSel_{kSbAuto};
     int cur_ = -1;
     std::vector<std::unique_ptr<Modem>> modems_;   // worker thread only
     Modem* active_ = nullptr;                       // worker thread only

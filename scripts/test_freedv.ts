@@ -4,7 +4,7 @@
  *   Run: node --no-warnings --max-old-space-size=512 scripts/test_freedv.ts
  * ★ SILENT: no audio, no network.
  */
-import { FREEDV_SUBS, freedvOffered, freedvPassband, freedvSidebandAt, freedvSubMessage, freedvVts, parseFreeDv } from '../src/services/freedv.ts';
+import { FREEDV_SUBS, FREEDV_SIDEBANDS, freedvSidebandLabel, freedvOffered, freedvPassband, freedvSidebandAt, freedvSubMessage, freedvVts, parseFreeDv } from '../src/services/freedv.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { (c ? pass++ : fail++); console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -36,6 +36,19 @@ console.log('── the passband side and the message ──');
 ok(eq(freedvPassband('usb'), [50, 2700]) && eq(freedvPassband('lsb'), [-2700, -50]), 'USB above the dial, LSB below');
 ok(freedvSidebandAt(7.177e6) === 'lsb' && freedvSidebandAt(3.643e6) === 'lsb' && freedvSidebandAt(14.236e6) === 'usb' && freedvSidebandAt(10e6) === 'usb', 'the server\'s rule: LSB below 10 MHz');
 ok(eq(freedvSubMessage('700E'), { type: 'freedv_sub', sub: '700E' }) && eq(freedvSubMessage(null), { type: 'freedv_sub' }), 'freedv_sub, with and without a choice');
+
+
+console.log('── the sideband override (AUTO / USB / LSB) ──');
+ok(freedvSidebandAt(7.177e6, 'usb') === 'usb' && freedvSidebandAt(14.236e6, 'lsb') === 'lsb' && freedvSidebandAt(7.177e6, 'auto') === 'lsb', 'a chosen side wins over the convention; AUTO keeps it');
+ok(eq(freedvSubMessage(null, 'lsb'), { type: 'freedv_sub', sb: 'lsb' }) && eq(freedvSubMessage('700D', 'auto'), { type: 'freedv_sub', sub: '700D', sb: 'auto' }), 'freedv_sub carries the sideband');
+ok(parseFreeDv({ type: 'freedv', sb: 'usb', sbSel: 'usb', state: 'search' })!.sbSel === 'usb', 'the report\'s chosen side');
+ok(parseFreeDv({ type: 'freedv', sb: 'lsb', state: 'search' })!.sbSel === 'auto', 'an older server (no sbSel) reads as AUTO');
+ok(parseFreeDv({ type: 'freedv', sbSel: 'wsb', state: 'search' })!.sbSel === 'auto', 'nonsense reads as AUTO');
+ok(freedvVts(parseFreeDv({ type: 'freedv', sub: 'auto', sbSel: 'lsb', state: 'search' })) === 'FreeDV LSB · searching', 'a chosen side searching names it');
+ok(freedvVts(parseFreeDv({ type: 'freedv', sub: '700E', sbSel: 'usb', state: 'search' })) === 'FreeDV 700E USB · searching', '…with a chosen sub-mode');
+ok(freedvVts(parseFreeDv({ type: 'freedv', sub: 'auto', sbSel: 'usb', state: 'sync', mode: '700D', snr: 3 })) === 'FreeDV 700D · 3 dB', 'in sync the line is unchanged');
+ok(freedvSidebandAt(5.3685e6) === 'usb' && freedvSidebandAt(5.4035e6) === 'usb' && freedvSidebandAt(5.2e6) === 'lsb', '60 m is USB under AUTO (the FreeDV application\'s rule)');
+ok(FREEDV_SIDEBANDS.join(',') === 'auto,usb,lsb' && freedvSidebandLabel('lsb') === 'LSB', 'the keys: AUTO USB LSB');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -26,7 +26,7 @@ import { ismSanitise } from './ism';
 import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
 import { drmSanitise, drmIqSanitise } from './drm';   // ★ V12 DRM
 import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
-import { parseFreeDv, freedvSubMessage, type FreeDvChoice } from './freedv';   // ★ V12 FreeDV digital voice
+import { parseFreeDv, freedvSubMessage, type FreeDvChoice, type FreeDvSideband } from './freedv';   // ★ V12 FreeDV digital voice
 import { parseM17, m17StatusMessage } from './m17';   // ★ V12 M17 digital voice
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
@@ -132,9 +132,11 @@ export class VibeServerClient extends VibeServerWsClient {
   /** ★★ V12 M17: ask for the receiver's current report (entering the mode, a reconnect, a room already in M17). Nothing
    *  to choose inside the mode, so nothing to gate. */
   m17Status() { this.sendSpectrum(m17StatusMessage()); }
-  freedvSub(sub: FreeDvChoice | null) {
-    if (sub && this.askBlocked()) return;
-    this.sendSpectrum(freedvSubMessage(sub));
+  /** ★ …and `sb`, the sideband: AUTO (FreeDV's convention, LSB below 10 MHz) or USB / LSB by hand (Stuart 2026-11-16). */
+  freedvSub(sub: FreeDvChoice | null, sb?: FreeDvSideband | null) {
+    if ((sub || sb) && this.askBlocked()) return;
+    if (sb) this.fdvSbSel = sb;
+    this.sendSpectrum(freedvSubMessage(sub, sb));
   }
 
   /** ★★ V12 THE DRM CONSTELLATION (2026-11-12): the DRM Signal pane is open — the server sends {"type":"drm_iq"} only then
@@ -506,6 +508,7 @@ export class VibeServerClient extends VibeServerWsClient {
       case 'freedv': {
         const f = parseFreeDv(msg);
         if (!f) return true;
+        this.fdvSbSel = f.sbSel;
         this.adoptFreeDvSideband(f.sb);
         this.callbacks.onFreeDv?.(f);
         return true;
