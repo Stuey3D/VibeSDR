@@ -131,6 +131,7 @@
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
 #include "vibe_dab_confirm.h"   // ★ V12: when a service list is true enough to reconcile bookmarks by
+#include "vibe_dab_block_quality.h"   // ★ V12: how well each block decodes here (working / marginal / not working)
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
 #include "vibe_ism_service.h"   // ISM sensors (V12) — our own clean-room decoders, docs/v12/ISM-DECODER.md
 #include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
@@ -1447,6 +1448,65 @@ static void dabEnsRemember(int blk, std::string label) {
         LOGI("[DAB] %s remembered as \"%s\"", vibedab::kBandIII[blk].name, label.c_str());
     }
 }
+/* ★★ V12 HOW WELL EACH BLOCK DECODES HERE (vibe_dab_block_quality.h — Stuart, 2026-11-16: "label working, marginal and
+ *  non working ones"). The same shape and lifetime as the ensemble names above: one record per block, on disk beside
+ *  them (dab-quality.txt), written only when a grade changes (or its time is 30 min old). Learnt from the live decode
+ *  (dabQualityTick, on every DAB status build — so only while someone is listening) and from the band / DX scans. */
+static std::mutex                     g_dabQMtx;
+static vibedab::BlockQualityMemory    g_dabQMem;
+static vibedab::BlockGrader           g_dabQGrader;
+static std::string                    g_dabQFile;
+static bool                           g_dabQLoaded = false;
+static int dabBlockIndexOf_(const char* name) {
+    for (size_t i = 0; i < vibedab::kBandIIICount; ++i) if (!std::strcmp(name, vibedab::kBandIII[i].name)) return int(i);
+    return -1;
+}
+static const char* dabBlockNameOf_(int i) { return vibedab::kBandIII[i].name; }
+static void dabQLoadLocked() {
+    if (g_dabQLoaded) return;
+    g_dabQLoaded = true;
+    if (g_dabQFile.empty()) return;
+    if (FILE* f = std::fopen(g_dabQFile.c_str(), "r")) { g_dabQMem.load(f, dabBlockIndexOf_); std::fclose(f); }
+}
+static void dabQSaveLocked() {
+    if (g_dabQFile.empty()) return;
+    const std::string tmp = g_dabQFile + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        g_dabQMem.save(f, dabBlockNameOf_, vibedab::kBandIIICount);
+        std::fclose(f);
+        std::rename(tmp.c_str(), g_dabQFile.c_str());   // ★ atomic, as the ensemble file is
+    }
+}
+/** Note one block's grade (live or scan). Saved only when the memory changed. */
+static void dabQNote(int blk, const vibedab::BlockQ& q) {
+    if (blk < 0 || (size_t)blk >= vibedab::kBandIIICount) return;
+    std::lock_guard<std::mutex> lk(g_dabQMtx);
+    dabQLoadLocked();
+    if (g_dabQMem.note(blk, q, int64_t(time(nullptr)))) {
+        dabQSaveLocked();
+        LOGI("[DAB] %s graded %s (MER %.1f dB, FIB %.0f %%)", vibedab::kBandIII[blk].name, vibedab::blockGradeName(q.g),
+             q.mer, q.fib * 100.0f);
+    }
+}
+static double dabQNow_() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+/** ★ The live grade: the decoder's own snapshot (its block — never the dial's, which may already be moving), judged by
+ *  the BlockGrader once settled. Cheap: a struct copy under the snapshot's small lock. */
+static void dabQualityTick() {
+    if (!g_dabMode.load(std::memory_order_relaxed)) return;
+    const auto q = g_dab.quality();
+    vibedab::BlockGrader::Verdict v;
+    bool got;
+    { std::lock_guard<std::mutex> lk(g_dabQMtx);
+      got = g_dabQGrader.feed(q.channel, q.locked, q.fibRate, q.merDb, q.audioIn, q.audioBad, dabQNow_(), v); }
+    if (got) dabQNote(v.channel, v.q);
+}
+static std::string dabQualityJson() {
+    std::lock_guard<std::mutex> lk(g_dabQMtx);
+    dabQLoadLocked();
+    return g_dabQMem.json(dabBlockNameOf_, vibedab::kBandIIICount);
+}
 /* ★★★ AN OFF-AIR PICTURE, SENT ONCE (2026-10-19). Album art, slides, carousel objects and SPI logos were sent whole
  *  on every request: the live slide `no-cache` with nothing to revalidate against, `?sid=` re-sent in full every
  *  60 s, the carousel `no-cache`. Now each carries a STRONG ETag — FNV-1a of the bytes, so the tag IS the picture and
@@ -1582,7 +1642,8 @@ static std::string dabBlocksJson() {
  *  (true or false), so a client merging live reports never keeps a stale true after a scan. */
 static std::string dabUnscannedField() { return vsDabUnscanned() ? ",\"unscanned\":true" : ",\"unscanned\":false"; }
 static void dabStatusJsonFinish_(std::string& j) {
-    const std::string blocks = dabBlocksJson() + dabUnscannedField();
+    dabQualityTick();   // ★★ V12 the live grade of the block being decoded (vibe_dab_block_quality.h)
+    const std::string blocks = dabBlocksJson() + dabQualityJson() + dabUnscannedField();
     if (!j.empty() && j.back() == '}') j.insert(j.size() - 1, blocks);
 }
 /** ★ Non-blocking, for vibe-dsp — see DabService::jsonTry. False = the decoder is busy, try again. */
@@ -1598,7 +1659,7 @@ using DabParts = vibedab::DabService::ReportParts;
 static void dabPartsFinish_(DabParts& p) {
     dabStatusJsonFinish_(p.legacy);
     if (p.live.empty() || p.list.empty()) { p.live.clear(); return; }   // the truncation guard fired: legacy only
-    const std::string blocks = dabBlocksJson();
+    const std::string blocks = dabBlocksJson() + dabQualityJson();   // ★ the grades change rarely — the list's rev follows
     if (!blocks.empty() && p.list.back() == '}') p.list.insert(p.list.size() - 1, blocks);
     p.listRev = vibedab::DabService::fnv1a(p.list);
     char r[64];
@@ -17355,6 +17416,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 bm.push_back({ r.sid, l, r.eid, r.ecc });
             }
             const bool found = everLocked && (!hit.services.empty() || !ens.empty());
+            /* ★★ V12 the scan's grade of this block (vibe_dab_block_quality.h): only where a FIB was read (fibAt ≥ 0). A block
+             *  that "locked" and never gave one is the scan's false lock — noise reads like that here as often as a
+             *  doubled multiplex does, so it is not called NOT WORKING from a scan; a listener staying on it grades it. */
+            if (everLocked && fibAt >= 0) {
+                const auto g = vibedab::gradeBlock(true, q.fibRate, q.merDb, 0, 0);
+                if (g != vibedab::BlockGrade::None) dabQNote(int(idx), vibedab::BlockQ{ g, q.merDb, q.fibRate, 0 });
+            }
             // ★ An empty block the AGC did not have to cut for is noise alone: where it settled is the noise gain.
             if (!found && !cutSeen && lastGainTenthDb >= gainAtStart) scanSeedSteps = g_ovlSteps.load(std::memory_order_relaxed);
             int added = 0, removed = 0;
@@ -40779,6 +40847,8 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
           g_dabLnaFile  = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-lna.txt"; }
         { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);   // ★ beside the gain memory, same directory
           g_dabEnsFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-ensembles.txt"; }
+        { std::lock_guard<std::mutex> lk(g_dabQMtx);   // ★ V12 the per-block grades, beside the names
+          g_dabQFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-quality.txt"; g_dabQLoaded = false; g_dabQMem.clear(); }
         g_dabLogoDir = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-logos";
         /* ★★ The last DAB band scan (g_dabScanFile) — beside the bookmarks, which are this radio's own file. The
          *  standalone server names it per radio itself (setDabScanFile, before this); the phone has one radio. */
