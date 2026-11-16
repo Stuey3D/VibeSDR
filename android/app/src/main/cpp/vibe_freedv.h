@@ -342,6 +342,10 @@ public:
     explicit FreeDvListener(int sub = kAuto, int sbSel = kSbAuto, bool lsb = false) : want_(sub) {
         if (sbSel >= kSbAuto && sbSel <= kSbLsb) sbSel_.store(sbSel);
         lsb_.store(lsb);
+        // ★ the report a client reads before the worker's first publish carries the same choice (the placeholder
+        //   below had no "sbSel" at all — a nudged shared dial briefly reported no choice, test-server-freedv caught it)
+        status_ = std::string("{\"type\":\"freedv\",\"sub\":\"auto\",\"sb\":\"") + (lsb ? "lsb" : "usb")
+                + "\",\"sbSel\":\"" + sbName(sbSel_.load()) + "\",\"state\":\"search\",\"mode\":\"\"}";
         th_ = std::thread([this] { loop(); });
     }
     ~FreeDvListener() {

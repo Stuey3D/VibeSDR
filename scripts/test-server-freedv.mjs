@@ -241,7 +241,7 @@ async function overrideScenario(label, args, tag) {
       n0 = reps().length;
       L.spec.send({ type: 'tune', frequency: STATIONS[0][0] + 100, mode: 'freedv' });
       await sleep(1500);
-      ok(reps().slice(n0).every((r) => r.sbSel === 'usb'), 'a nudge on the dial keeps the chosen side');
+      ok(reps().slice(n0).every((r) => r.sbSel === 'usb'), `a nudge on the dial keeps the chosen side (${JSON.stringify(reps().slice(n0).find((r) => r.sbSel !== 'usb') || null)})`);
       n0 = reps().length;
       L.spec.send({ type: 'freedv_sub', sb: 'auto' });
       ok(await until(() => reps().slice(n0).some((r) => r.sbSel === 'auto' && r.sb === 'lsb'), 5000), `sb auto: back to LSB by the convention (${JSON.stringify(last())})`);
