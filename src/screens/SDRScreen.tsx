@@ -13881,8 +13881,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulators & decoders',
       body: 'This is the demodulator and decoders menu. Here you will find a wide range of demodulators and decoders to listen to or decode the signals you find \u2014 voice (AM, SSB, CW, FM and more), digital radio, data modes and whole-receiver views such as DAB, ADS-B and the shipping map \u2014 and the filter bandwidth for what you are listening to. Each one\u2019s options open just under its key; a key this receiver cannot use stays greyed, so tap it to read why.' + (Platform.OS === 'android' ? ' With a radio plugged into this phone it also holds PAGE, the pager decoder: the speaker is muted and recordings are silent while it runs. ' + PAGING_LAW_NOTICE : ''),
-      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
-      body: 'Spin the drum to move up and down the band. In DAB, ISM and DIGI BAND, where the receiver moves itself between blocks or bands, the drum gives way to two tune keys: each press steps one, the one you are on is lit above them, and each key names the one it goes to. Your own drum comes back when you leave. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
+      target: tourRef('modeBtn') },    { id: 'drum', title: 'Tune with the VFO drum',
+      body: 'Spin the drum or tap the buttons to tune up and down by the step rate you have set. In some modes, such as DAB and ISM, these controls step from block to block or band to band instead.',
       target: tourRef('vfoDrum') },
     // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
     { id: 'step', title: 'Step rate',
