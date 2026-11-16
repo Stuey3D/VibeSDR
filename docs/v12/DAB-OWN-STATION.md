@@ -142,6 +142,17 @@ ensemble. Each listener's choice is kept, and §5 applies it on the new block.
   opening the K stations, and `memKB` is per station. There is a hard cap of 16 stations per radio whatever N says.
   A 256 MB box at N ≤ 4 adds a few MB.
 
+### 6.1 Measured (2026-11-16)
+
+| Box | Front end (dab row, threads) | Per extra station | N | RSS per station | Notes |
+|---|---|---|---|---|---|
+| M5 Pro Mac, 15 cores | 1.9 % | **0.32 %** | 16 (cap) | ~5.5 MB | vibeserver-bench, FAAD2 |
+| Pi 2, 4 × Cortex-A7 0.9 GHz | 107 % (vibe-dab 86 + msc 17 + faad2 3.5) | **12.3 – 13.5 %** (vibe-dab-st ~6.6 + its faad2 ~6.3) | **8 – 9** | 3 – 5 MB | dab-station-bench, armhf ARM mode + NEON, standalone at 0 listeners; K = 6 stations: 0 frames dropped |
+
+The bench clip is deliberately impaired (RS repairing constantly), so these are worst-case figures. On the Pi 2,
+the rule therefore turns own station on for a listener limit up to 8. Below 64 MB `MemAvailable`, no station is
+opened (Linux). The pick then switches the radio's own station, as before the feature, and the listener is told why.
+
 ## 7. Protocol
 
 Server → client (spectrum socket). Everything is in the report the client already reads, so each listener gets its
@@ -202,6 +213,18 @@ Audio: unchanged formats. A station listener's audio socket simply carries that 
 
 ## 11. Phase 2 (NOT this job): many multiplexes from one wide capture
 
+### 11.0 HARD RULE: the standard DAB path does not move (Stuart, 2026-11-16)
+
+The weak-multiplex lock is the crown jewel. Everything new about gain applies **only to the wide DAB modes**: a
+sample rate of 4 MS/s or more, with a capture that holds more than one multiplex. That covers RF gain judged on
+the blocks in use, slow gain behaviour, per-mux digital levelling and pager-burst immunity. **Below 4 MS/s, and in
+today's single-multiplex DAB mode, the AGC, the gain path and the decode stay byte for byte as they are.** Phase 1
+changes none of them either. `scripts/test-dab-standard-path-guard.mjs` holds this:
+- the AGC and gain sources are unchanged;
+- the shim adds and removes no gain or AGC line;
+- the receiver gains only the empty tap;
+- real weak captures decode identically before and after.
+
 Phase 1 is shaped so that Phase 2 reuses it directly:
 - **one multiplex decoder** (the radio's `DabService` front end: OFDM/FIC/TII) fed by its own cut of a wider capture,
 - **per-station decoders** (station-mode `DabService`) hanging off whichever multiplex decoder they belong to, through
@@ -227,6 +250,45 @@ Phase 1 is shaped so that Phase 2 reuses it directly:
   boundaries differ: 10D → 11A is 1.856 MHz, not 1.712.
 - **Lazy:** only multiplexes with a listener run OFDM/FIC, and only stations in use run their decode. A mux with no
   listener has no DDC slice computed. In the FFT bank, its bins are never inverse-transformed.
+
+### 11.1a Gain in wide mode: the rule for EVERY wide radio
+
+- **Settle once, then hold.** The RF/IF gain is chosen once for the whole capture. After that it moves only
+  slowly, and only for clipping or headroom. Each multiplex's level is handled **digitally after the
+  channeliser**: a per-mux scale on the DDC/bank output, so every block's OFDM sees full-scale soft bits whatever
+  its neighbours do. A gain step can therefore never knock a multiplex off. This is the cure for the Almere B210,
+  whose own AGC flaps in DAB and drops multiplexes ("with AGC off DAB locks perfectly").
+- **Judge on the DAB blocks in use**, from the channeliser outputs, not on total ADC power. Out-of-band energy
+  counts only as a clipping guard.
+- **Ignore short bursts.** Use a fast attack only for real clipping (ADC peak near full scale). Otherwise decide
+  slowly, over seconds, so a burst below clipping changes nothing. When a burst does clip, log it and ride it out
+  briefly rather than stepping the gain down and back up. Stuart's diagnosis of the Almere flapping is the Dutch
+  P2000 FLEX pagers at ~169.65 MHz: short, very strong bursts that a total-power AGC ducks on every one, so the
+  multiplexes dip.
+- **The real cure for actual overload is in hardware:** a Band III band-pass, or a 169 MHz notch. Say so to an
+  owner whose capture clips.
+- **Tests (Phase 2):**
+  - A synthetic strong burst outside the DAB blocks (2-FSK, 0.5 to 2 s on, every few seconds), added to the
+    Lenovo capture or to a synthetic one, must not change the RF gain or lose lock while it stays below clipping.
+  - A forced RF gain step during the capture must not lose lock on any of the three Lenovo multiplexes.
+
+### 11.1b Does the AGC keep 10D usable beside 10C and 11A? (explicit measurement)
+
+One RF/IF gain serves all three blocks. The AGC is driven by total power, and 11A dominates that: in the capture,
+11A sits ~36 dB above the floor against ~13 dB for 10D.
+
+- **Compare:** 10D's MER, FIB error rate and MSC BER from the wide 8 MS/s capture against the single-mux live
+  check (10D MER 9.2, FIB 12/12, BER 0.098; 10C 18.9; 11A 23.7). Do this both on the recorded file and live on
+  the Lenovo.
+- **Check:**
+  - the per-mux digital stage rescales 10D to full-scale soft bits;
+  - the AGC does not step on 11A's level in a way that drops 10D;
+  - no intermod or ADC clipping from 11A lands on 10D (look at the spectrum under 10D for 11A products, and at
+    the ADC peak histogram).
+- **Record the RSP1A's native sample depth** on that path. That is the API's 16-bit samples, from a 12-bit ADC
+  at this rate; the cu8 used over raw IQ is 8-bit.
+- **If 10D comes out worse in wide mode,** report by how much, and whether the wide-mode AGC target or headroom
+  should differ. Never trade the weak-signal crown jewel for it: the single-mux path is untouched by rule 11.0.
 
 ### 11.2 PPM
 
@@ -258,5 +320,21 @@ listener's mux is knocked off (test-afc "it glided").
   (thread times, as the benchmark rows do), the channeliser/DDC cost, and peak RSS. Report the resulting N for the
   own-station rule. Compare per-station against Phase 1's `dec_dab_station` figure for that machine, which checks the
   cost model against real numbers.
+- **The headline end-to-end run (Stuart: "listen to all 65 stations at once"):**
+  - 65 simultaneous listener sessions over loopback on the Lenovo (10C 16 + 10D 19 + 11A 30), each on a
+    different service, every one getting continuous audio.
+  - Report the CPU per multiplex front end, per station and in total on the i5, and the memory.
+  - Report per-listener audio continuity (underruns and gaps, and how long it held), and the network side: kB/s
+    per listener and the total. At ~30 kB/s each, 65 listeners is ~2 MB/s, ~16 Mbit/s of upload. That is the
+    realistic limit over the internet, separate from what the CPU can do.
+  - If 65 does not fit, report the largest N that does and which resource limits it. Never claim 65 unless it was
+    measured.
+- **Lenovo rules:**
+  - 0 listeners first.
+  - Back up `/etc/vibeserver/config.json`. When finished, it must hash again to the reference copy
+    `/etc/vibeserver/config.json.stuart-2026-11-16` (sha256 4f6c3890…0522816), with the service running normally
+    and the background decoders back (NAVTEX 489.5 and 517.5, the NDB skimmer, spots) on 648 kHz AM.
+  - Run a test binary from a scratch directory with its own config, or stop the service and run it. Never
+    apt-install a test build there, and never build there.
 - Then scale up: the Almere B210 at 56 MS/s, most of Band III. That only happens with the owner's agreement (via
   Stuart). The box is public: never test on it unasked.
