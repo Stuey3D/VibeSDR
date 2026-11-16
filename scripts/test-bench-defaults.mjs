@@ -44,7 +44,8 @@ ok(sws.size >= 13 && !sws.has('rtty') && !sws.has('spots'), `the rule's primary 
 // ★ V12 2026-11-16 a switch whose decoder the phone's own server cannot run is on the setup page only — a switch in the app
 //   would be dead (AGENTS.md). Each says why; when it is ported, it moves into the app and off this list (checked below).
 const NOT_IN_APP = { freedv: "the phone's server never loads libcodec2 (vibe_freedv.h VIBE_FREEDV_NO_DLOPEN on Android)",
-                     m17: "the same library is M17's vocoder (vibe_m17.h through vibe_freedv.h), never loaded on Android" };
+                     m17: "the same library is M17's vocoder (vibe_m17.h through vibe_freedv.h), never loaded on Android",
+                     rade: "the phone's server is built without RADE (librade_vibe.a is a VibeServer build only, never VIBE_HAVE_RADE on Android)" };
 for (const sw of sws) {
   const page = new RegExp(`\\{ id: "${sw}",`).test(src), inApp = new RegExp(`\\{ id: '${sw}',`).test(app);
   if (NOT_IN_APP[sw]) ok(page && !inApp, `"${sw}" is on the setup page, not in the app: ${NOT_IN_APP[sw]}`);
