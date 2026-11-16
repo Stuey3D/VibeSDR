@@ -45,6 +45,8 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
 import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avCard, avIcon, avItems, avRanges, avRows, avStatus } from './avdata';   // ★ V12 the aircraft datalink
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
+import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
+import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -923,6 +925,7 @@ async function loadAudioPolicy(httpBase: string) {
     ndbReadCap(j);               // ★ NDB (V12): the same three states
     aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
     avReadCap(j);                // ★ V12 the aircraft datalink (ACARS / VDL2): the same three states, and its bands
+    sdReadCap(j);                // ★ V12 radiosondes (RS41): the same three states, and its bands
     // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
     //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
     decWhy = parseDecWhy(j);
@@ -1937,6 +1940,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAisError: (why: string) => { showPill(why, 7000); if (aisOn && !aisReport) aisUiOff(); },
     onAvdata: (r) => onAvReport(r),
     onAvdataError: (why: string) => { showPill(why, 7000); if (avOn && !avReport) avUiOff(); },
+    onSondes: (r) => onSdReport(r),
+    onSondesError: (why: string) => { showPill(why, 7000); if (sdOn && !sdReport) sdUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     // ★★ The answer to our mode_resume (wholeResumeTick): yes = the reports follow; no = the mode goes, and why is said
@@ -8969,7 +8974,7 @@ function adsbReadCap(j: any) {
 /** ★ ADS-B and ISM have nothing to hear: the page lets go of the audio output while either is on (audio.ts setQuiet —
  *  the AirPods followed a page "playing" silence). One rule for both, so a hand-over between them never plays a gap. */
 function syncAudioQuiet() {
-  const q = adsbOn || ismOn || aisOn || ndbOn || avOn;   // ★ V12 + the aircraft datalink (no audio either)
+  const q = adsbOn || ismOn || aisOn || ndbOn || avOn || sdOn;   // ★ V12 + the aircraft datalink and the sondes (no audio either)
   if (!audio || audio.quiet === q) return;
   audio.setQuiet(q);
   updateMediaSession();
@@ -9920,6 +9925,71 @@ function avRender() {
   // ★ the server owns the band: the control shows where the radio IS (a refused pick snaps back with the next report)
   if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
 }
+/* ★★★ RADIOSONDES (V12, docs/v12/RS41.md) — the datalink's shape (sondes.ts): a TrackView, the bands in its top bar, EXIT
+ *  gives the receiver back; a chosen sonde draws its track from the report. ★ Offered only where vibeserver.json says so:
+ *  `sondes` true (live) / false (greyed, `sondesWhy` on a tap) / absent (no 400 MHz reach — no control at all). */
+let sdCap: { ok: boolean; why: string } | null = null;
+let sdBands: SondeBand[] = [];
+let sdOn = false;
+let sdReport: SondeReport | null = null;
+let sdView: TrackView | null = null;
+function sdReadCap(j: any) {
+  if (j?.sondes === true) sdCap = { ok: true, why: '' };
+  else if (j?.sondes === false) {
+    const why = typeof j.sondesWhy === 'string' ? j.sondesWhy.trim().slice(0, 200) : '';
+    sdCap = { ok: false, why: why || 'Radiosondes are not available on this receiver' };
+  } else sdCap = null;
+  sdBands = parseSondeBands(j?.sondesBands);
+}
+function sdUiOn() {
+  sdOn = true;
+  syncAudioQuiet();
+  closePanels();
+  if (!sdView) sdView = new TrackView({
+    title: 'RADIOSONDES · RS41', exitLabel: 'EXIT SONDES', listTitle: 'SONDES', onExit: () => sdSetMode(false),
+    icon: (it: any) => sondeIcon(it), label: (it: any) => String(it.serial || ''), card: (it: any) => sondeCard(it),
+    trail: (key: string, done: (pts: [number, number][]) => void) => done(sondeTrail(sdReport, key)),
+    ranges: sondeRanges(sdBands), range: sdReport?.band || '', rangeHint: 'The band searched: radiosondes use 400\u2013406 MHz', rangeLabel: 'The band',
+    onRange: (id: string) => { if (spec && sdReport?.band !== id) spec.sondes(true, id); },
+  });
+  sdView.show(myPos());
+  sdRender();
+}
+function sdUiOff() {
+  sdOn = false;
+  syncAudioQuiet();
+  sdReport = null;
+  sdView?.hide();
+  renderFreq();
+}
+function sdSetMode(on: boolean) {
+  if (on) {
+    if (sdCap && !sdCap.ok) { showPill(sdCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.sondes(true); return; }   // ★ ask before tuning: spec says why
+    audio?.holdHealing(6000);
+    sdUiOn();
+    spec?.sondes(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.sondes(false);
+    sdUiOff();
+  }
+}
+function sdRender() {
+  if (!sdView) return;
+  const r = sdReport;
+  sdView.update(sondeItems(r), sondeRows(r), sondeStatus(r), r ? r.sondes.length : 0, myPos());
+  if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
+}
+/** ★ A report (on) or the server's `sondes_off` (null). */
+function onSdReport(r: SondeReport | null) {
+  if (!r) { if (sdOn) { audio?.holdHealing(6000); sdUiOff(); } return; }
+  sdReport = r;
+  if (!sdOn) sdUiOn();   // ★ somebody else put the receiver here (or we joined it)
+  audio?.holdHealing(8000);   // ★ nothing to hear: the server sends no audio
+  sdRender();
+}
+
 /** ★ A report (on) or the server's `avdata_off` (null). */
 function onAvReport(r: AvReport | null) {
   if (!r) { if (avOn) { audio?.holdHealing(6000); avUiOff(); } return; }
@@ -10310,7 +10380,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : avOn ? 'DATALINK' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : avOn ? 'DATALINK' : sdOn ? 'SONDES' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -10379,6 +10449,9 @@ function buildControls() {
     avCap:         () => avCap,          // ★ V12 the aircraft datalink
     avOn:          () => avOn,
     toggleAv:      toggleAvMode,
+    sdCap:         () => sdCap,          // ★ V12 radiosondes
+    sdOn:          () => sdOn,
+    toggleSd:      toggleSdMode,
     ndbCap:        () => ndbCap,
     ndbOn:         () => ndbOn,
     toggleNdb:     toggleNdbMode,
@@ -14607,7 +14680,8 @@ function toggleDabMode() { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabO
 function toggleAdsbMode() { if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
 function toggleIsmMode() { if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
 function toggleAisMode() { if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
-function toggleAvMode() { if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); avSetMode(!avOn); }
+function toggleAvMode() { if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); if (sdOn && !avOn) sdUiOff(); avSetMode(!avOn); }
+function toggleSdMode() { if (adsbOn && !sdOn) adsbUiOff(); if (ismOn && !sdOn) ismUiOff(); if (ndbOn && !sdOn) ndbUiOff(); if (aisOn && !sdOn) aisUiOff(); if (avOn && !sdOn) avUiOff(); sdSetMode(!sdOn); }
 function toggleNdbMode() { if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); }
 /* ★★★ TUNES THE RADIO ITSELF in the decoder panel — the mode menu's keys, with the mode menu's rule: a REFUSED mode is not
  *  drawn unless it is ON (so it can be left), DAB where the radio is DAB-capable. A press closes the panel, as the menu does. */
@@ -14621,6 +14695,7 @@ setWholeRadioKeys(() => {
   add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
   add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
   add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
+  add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
   if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB (Experimental) — digital radio, Band III',
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');

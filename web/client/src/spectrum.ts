@@ -25,6 +25,7 @@ import { ismSanitise, type IsmReport } from './ism';
 import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
 import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
+import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
 import { type WatchState, watchSanitise } from './vfoAB';
@@ -739,6 +740,10 @@ export interface SpectrumCallbacks {
    *  it is on; null = the server left it (`avdata_off`). Parsed by the app's own src/services/aviation.ts. */
   onAvdata?: (r: AvReport | null) => void;
   onAvdataError?: (why: string) => void;
+  /** ★★ V12 RADIOSONDES (RS41): a report once a second while the receiver is in the SONDES mode — its arrival MEANS it is
+   *  on; null = the server left it (`sondes_off`). Parsed by the app's own src/services/sondes.ts. */
+  onSondes?: (r: SondeReport | null) => void;
+  onSondesError?: (why: string) => void;
   /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
   onAisTrail?: (mmsi: number, pts: [number, number][]) => void;
   /** ★★ The answer to modeResume (src/services/wholeModeResume.ts): may this listener have the whole-radio mode the
@@ -1429,6 +1434,25 @@ export class SpectrumClient {
       }
       case 'avdata_error':
         this.cb.onAvdataError?.(String(msg.why ?? 'The aircraft datalink is not available on this receiver').slice(0, 200));
+        return;
+      /* ★★ V12 RADIOSONDES — the datalink's three messages and its ghost guard. */
+      case 'sondes': {
+        if (Date.now() < this.sdQuietUntil) return;
+        const r = parseSondeReport(msg);
+        if (!r) return;
+        this.sdHeld = true;
+        this.cb.onSondes?.(r);
+        return;
+      }
+      case 'sondes_off': {
+        this.sdHeld = false;
+        const now = Date.now();
+        if (this.sdQuietUntil > now) this.sdQuietUntil = Math.min(this.sdQuietUntil, now + 1500);
+        this.cb.onSondes?.(null);
+        return;
+      }
+      case 'sondes_error':
+        this.cb.onSondesError?.(String(msg.why ?? 'Radiosondes are not available on this receiver').slice(0, 200));
         return;
       case 'ais_trail': {
         const m = Number(msg.mmsi);
@@ -2455,6 +2479,16 @@ export class SpectrumClient {
     this.avQuietUntil = on ? 0 : Date.now() + 5000;
     this.avHeld = on;
     this._send(on && band ? { type: 'avdata', on: 1, band } : { type: 'avdata', on: on ? 1 : 0 });
+  }
+  /* ★★ V12 RADIOSONDES: `band` 'lo' | 'mid' | 'hi' | 'all' (vibeserver.json sondesBands); omitted = where it last was. */
+  sdHeld = false;
+  private sdQuietUntil = 0;
+  sondes(on: boolean, band?: string) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — it takes the whole shared radio to 400 MHz
+    if (on) this.tunePacer.cancel();
+    this.sdQuietUntil = on ? 0 : Date.now() + 5000;
+    this.sdHeld = on;
+    this._send(on && band ? { type: 'sondes', on: 1, band } : { type: 'sondes', on: on ? 1 : 0 });
   }
   /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
   aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }
