@@ -147,6 +147,7 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
             vibeadsbdata::installCurlFetcher("VibeServer (+https://vibesdr.net)");
 #endif
             vibeadsbdata::Updater::get().start();
+            LocalSdrShim::setHorusNamesDir(dir + "/horus");   // ★ V12 balloons: Horus payload names (same transport)
         }
         geoip::load();
         asndb::load();

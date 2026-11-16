@@ -39153,6 +39153,13 @@ std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json(); }
 void LocalSdrShim::rateGuardClear() { g_rateGuard.clear(); }
 void LocalSdrShim::setVibeServerAdsb256(bool on) { g_adsb256.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerIsm256(bool on) { g_ism256.store(on, std::memory_order_relaxed); }
+void LocalSdrShim::setHorusNamesDir(const std::string& dir) {
+    vibehorus::Names::get().setDir(dir);
+    vibehorus::Names::get().setFetcher([](const std::string& url, const std::string& dest) {
+        const vibeadsbdata::Fetcher f = vibeadsbdata::Updater::get().fetcher();
+        return f ? f(url, dest, "", "").status : 0;
+    });
+}
 void LocalSdrShim::setVibeServerVfoB(bool on) { g_vsVfoB.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerNbWide(int mode) {
     g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);

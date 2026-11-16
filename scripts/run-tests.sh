@@ -178,6 +178,7 @@ flags_for() {
     # ★ V12 balloons (decoders/balloon_*.h): UKHAS RTTY, Horus Binary, SSDV — our transmitter into our receiver, false-positive
     #   minutes, SIMD = scalar, cost. `test-balloon wav <file> [rate]` replays a recording; `clip` writes the e2e clip.
     test-balloon)          echo "-O2" ;;
+    test-horus-names)      echo "-O1 -lpthread" ;;   # ★ V12 Horus payload names: the list's format, once a day, bounds
     # ★★ The ADS-B gain rule after Stuart's FlightAware box: the top, down only for dynamic range, never for strong aircraft.
     test-adsb-gain)        echo "-O2 -lpthread" ;;
     # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard

@@ -5088,6 +5088,7 @@ int main(int argc, char** argv) {
         vibeadsbdata::installCurlFetcher("VibeServer (+https://vibesdr.net)");
 #endif
         vibeadsbdata::Updater::get().start();
+        LocalSdrShim::setHorusNamesDir(vsDataDir() + "/horus");   // ★ V12 balloons: Horus payload names (same transport)
     }
     asndb::load();
     LocalSdrShim::setAsnHandler([](const std::string& ip, uint32_t& asn, std::string& name) {

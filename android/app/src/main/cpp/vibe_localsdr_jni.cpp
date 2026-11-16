@@ -231,6 +231,8 @@ Java_com_vibesdr_app_VibeMapGL_nativeInitAdsb(JNIEnv* env, jclass cls, jstring j
     if (g_adsbFetchIf) vibeadsbdata::Updater::get().setFetcher(jniAdsbFetch);
     else LOGE("adsb data: VibeMapGL.fetchIf not found — the weekly aircraft-data update is unavailable");
     vibeadsbdata::Updater::get().start();
+    // ★ V12 balloons: Horus payload names beside the aircraft data, fetched the same way (vibe_horus_names.h)
+    { const size_t sl = data.find_last_of('/'); vibe::LocalSdrShim::setHorusNamesDir((sl == std::string::npos ? data : data.substr(0, sl)) + "/horus"); }
     LOGI("adsb data: %s (images %s)", data.c_str(), images.c_str());
 }
 

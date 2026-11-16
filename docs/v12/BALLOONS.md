@@ -176,13 +176,35 @@ reads real sentences.
 - The CPU on a Pi 2; the benchmark row has not been run on a real box.
 - The web end-to-end test ran on this Mac only; the app's BalloonView has not been seen on a device (tsc only).
 
+## Horus payload names (V12 2026-11-16, `vibe_horus_names.h`)
+
+A Horus v1/v2 packet carries a number (v1 0–255, v2 256–65535). **Project Horus's payload ID list** gives each its
+callsign: `https://raw.githubusercontent.com/projecthorus/horusdemodlib/master/payload_id_list.txt` — `#` comments, then
+`ID, CALLSIGN` per line; new IDs are requested by issue or pull request. It sits in horusdemodlib (LGPL-2.1); the list is
+factual data that horusdemodlib itself downloads at run time, and here it is only downloaded and read the same way — never
+bundled, and parsed by our own code.
+
+- **The server fetches, never a client**, and only when it needs to: the first Horus packet it decodes asks for a name;
+  if the copy on disk (`<data dir>/horus/payload_id_list.txt`) is missing or more than a day old, a background download
+  starts. **At most once a day, across restarts** (`horus/checked` holds the time of the last try, which counts whether
+  it worked or not). A server that never hears Horus never downloads anything.
+- **Bounded:** a download over 512 KB is refused (today's is ~15 KB); at most 65 536 names, each ≤ 20 characters of
+  A–Z a–z 0–9 `- _ .`; any other line is skipped. A download that parses to nothing never replaces a good copy.
+- **Transport:** the ADS-B aircraft data's (curl on Linux and the Mac, OkHttp on Android), wired in main.cpp,
+  vibeserver_api.cpp (Mac Simple mode) and the Android JNI. iOS has none: `HORUS-<id>` there, as for any ID the list does
+  not name.
+- The report (`call`), the text line and the payload list all carry the name; the decoder itself still writes
+  `HORUS-<id>`, and the UKHAS sentence it stands for keeps that (its CRC is its own).
+- Tests: `test-horus-names` (the list's format, bounds, once a day across a restart, failures count, bad downloads never
+  replace a good copy, no transport → `HORUS-<id>`); `test-server-balloon` seeds a list on disk and sees payload 256
+  reported by its name (the e2e tests mark today's try done, so no test touches the network).
+
 ## Not built
 
 - **Off-air decoding** — needs a 70 cm receiver and a flight (or the Pi 500's RTL on 434 MHz when a UK payload flies).
 - **SondeHub amateur upload** and **the map** (payload positions on the SHIPPING/aircraft-style map, a track). The survey
   says to share them with the radiosonde work; RS41 has neither yet either.
-- **Horus payload names** (the payload-ID list is a file Project Horus publishes online; we show `HORUS-<id>`) and its
-  **custom fields** (shown as hex only).
+- **Horus custom fields** (shown as hex only; Project Horus's custom_field_list.json describes them per payload).
 - **Horus v3** (ASN.1-encoded, 32–128 bytes, newer flights) and the old **LDPC** Horus modes.
 - **SSDV erasure padding** (the wiki's "insert padding bytes when a byte is dropped" — a dropped RTTY byte loses the packet).
 - **SSDV from satellites** (§6.4) — the SSDV layer is reusable; no satellite framing was built.
@@ -196,8 +218,8 @@ reads real sentences.
    and the auto-level carries it. Not yet seen on a real picture (none has been received).
 2. **An interop check against the reference programs.** Building and running horusdemodlib and `ssdv` locally (never
    committed) would turn "synthetic only" into "matches the reference" for SSDV. It needs your permission in this setup.
-3. **UW tolerance 2 bits** (horusdemodlib uses 1). It found 9 of 10 packets on their v2 sample instead of 6; minutes of
-   noise still give nothing. OK?
+3. ✓ **UW tolerance 2 bits** (horusdemodlib uses 1) — kept, Stuart 2026-11-16. It found 9 of 10 packets on their v2
+   sample instead of 6; minutes of noise still give nothing.
 4. **SondeHub upload** — an owner opt-in, as for RS41? It is the community's map for amateur payloads, and receivers
    uploading is what makes a chase work. Not built; your call (shared with the RS41 decision).
 5. **Payload names** — fetch Project Horus's payload-ID list (a small JSON on GitHub) on the server once a day, or keep
