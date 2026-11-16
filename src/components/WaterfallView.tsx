@@ -94,7 +94,7 @@ import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../servi
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
-import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, type DabBlockSignal } from '../utils/dabBlockView';
+import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, dabGradeText, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow } from '../utils/tunedStation';
@@ -3439,7 +3439,7 @@ function WaterfallView({
           return (
             <React.Fragment key={'ks' + i + ':' + s.hz}>
               {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot (all of Band III on a wide DAB view). */}
-              <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ').replace(' — ', ', ')}
+              <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ').replace(' — ', ', ') + (dab?.grade ? '. ' + dabGradeText(dab.grade, Date.now() / 1000) : '')}
                     accessibilityRole={tapLabel ? 'button' : undefined}
                     accessibilityHint={tapLabel ? (dab ? 'Goes to this multiplex' : s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
                     onAccessibilityTap={tapLabel}
@@ -3448,6 +3448,10 @@ function WaterfallView({
                 {/* ★★ a DAB block's box is laid out CENTRED on its own block (dabBlockBoxX) at the estimated width — so it is drawn
                     at that width with the text centred, or an estimate wider than the text would shift it right again. A named
                     block is TWO lines, the block over its name ("taller instead of wider", dabBlockView.ts). */}
+                {/* ★★ how well this block decodes here (the server's grade — dabBlockView.ts): a bar along the box's foot */}
+                {dab?.grade && (
+                  <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 2, backgroundColor: DAB_GRADE_COLOUR[dab.grade.g] }} />
+                )}
                 {p.lines ? p.lines.map((t, li) => (
                   <Text key={li} numberOfLines={1} style={[styles.knownText, { fontFamily, lineHeight: 14, textAlign: 'center' }, hi && [styles.knownHiText, { color: stampCol }]]}>{t}</Text>
                 )) : (

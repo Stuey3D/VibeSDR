@@ -13,7 +13,7 @@ import { DAB_BLOCK_HALF_HZ, DAB_WIDE_MIN_SPAN_HZ, PRIO_DAB_CURRENT, PRIO_DAB_NAM
          dabBlockLabel, dabBlockSignals, isDabBlockSignal, dabBlocksInView, withDabBlocks, dabBlockHit, dabBlockHint }
   from '../src/utils/dabBlockView.ts';
 import { labelLayout, knownLabelHit, KNOWN_SIGNALS, estimateLabelWidth, LABEL_MAX, LABEL_ROWS, type KnownSignal, type PlacedLabel } from '../src/utils/knownSignals.ts';
-import { dabLabelLayout, dabFitName, isDabWideList, DAB_BLOCK_ROWS, DAB_BLOCK_ROWS_MIN, DAB_LABEL_MAX, type DabBlockSignal, dabBlockSignals as dabBlockSignals2, withDabBlocks as withDabBlocks2 } from '../src/utils/dabBlockView.ts';
+import { dabLabelLayout, dabFitName, parseDabBlockQ, dabFreshGrades, dabGradeLine, DAB_GRADE_COLOUR, isDabWideList, DAB_BLOCK_ROWS, DAB_BLOCK_ROWS_MIN, DAB_LABEL_MAX, type DabBlockSignal, dabBlockSignals as dabBlockSignals2, withDabBlocks as withDabBlocks2 } from '../src/utils/dabBlockView.ts';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -213,6 +213,29 @@ eq('a long name is shortened', dabBlockLabel('12B', 'An extremely long ensemble 
     const p = labelLayout(KNOWN_SIGNALS, lo, sp, 2400, (t) => t.length * 6 + 6, 10_000_000, [], 4);
     eq('HF view: still at most LABEL_MAX labels on LABEL_ROWS rows', p.length <= LABEL_MAX && p.every((x) => x.row < LABEL_ROWS), true);
   }
+}
+
+// ── each block's grade (the server's blockQ — vibe_dab_block_quality.h) ──────────────────────────────────────────────
+{
+  const now = Date.UTC(2026, 10, 16, 16, 50) / 1000;
+  const raw = { '6C': { g: 'good', mer: 16.4, fib: 1, t: now - 120 }, '6D': { g: 'bad', mer: 7.0, fib: 0, t: now - 180 },
+                '7D': { g: 'marginal', mer: 9, fib: 0.8, t: now - 8 * 86400 }, 'ZZ': { g: 'good', mer: 1, fib: 1, t: now },
+                '8A': { g: 'great', mer: 1, fib: 1, t: now }, '8B': { g: 'bad', mer: 'x', fib: 9, t: now }, '9A': 'bad', '9B': { g: 'good' } };
+  const q = parseDabBlockQ(raw);
+  eq('blockQ parsed: known blocks and grades only; MER defaulted, FIB clamped', Object.keys(q).sort(), ['6C', '6D', '7D', '8B']);
+  eq('…8B kept with safe numbers', [q['8B'].mer, q['8B'].fib], [0, 1]);
+  eq('nothing usable: {}', [parseDabBlockQ(null), parseDabBlockQ([1]), parseDabBlockQ('x')], [{}, {}, {}]);
+  const fresh = dabFreshGrades(q, now);
+  eq('a grade older than a week is not shown', [fresh.has('6C'), fresh.has('6D'), fresh.has('7D')], [true, true, false]);
+  const sigs = dabBlockSignals2(new Map([['6C', '6C']]), dabBlockIndex('6C'), fresh);
+  eq('the grade rides on its block', [sigs[dabBlockIndex('6D')].grade?.g, sigs[dabBlockIndex('6C')].grade?.g, sigs[dabBlockIndex('5A')].grade], ['bad', 'good', undefined]);
+  eq('an older server (no grades): no mark', dabBlockSignals2(new Map(), -1).every((b) => b.grade === undefined), true);
+  const at = (h: number, m: number) => new Date(2026, 10, 16, h, m).getTime() / 1000;
+  eq('the hint: "go to 6D · not decoding, MER 7 dB, measured 16:47"',
+     dabBlockHint(dabBlockIndex('6D'), new Map(), -1, new Map([['6D', { g: 'bad', mer: 7.0, fib: 0, t: at(16, 47) }]]), at(16, 50)),
+     'go to 6D · not decoding, MER 7 dB, measured 16:47');
+  eq('an older grade gives its date', dabGradeLine('6C', { g: 'good', mer: 16.4, fib: 1, t: at(9, 0) - 2 * 86400 }, at(16, 50)), '6C — decoding, MER 16 dB, measured 14 Nov');
+  eq('three distinct colours', new Set(Object.values(DAB_GRADE_COLOUR)).size, 3);
 }
 
 // ── the click ─────────────────────────────────────────────────────────────────────────────────────────────────────

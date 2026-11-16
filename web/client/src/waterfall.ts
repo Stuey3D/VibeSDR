@@ -61,7 +61,7 @@ import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
 import { tunedPick, tunedLabelX, utcMinutes, type Passband, type TunedRow, type TunedPick } from '../../../src/utils/tunedStation.ts';
-import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, dabBlockBoxX, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
+import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -1837,6 +1837,10 @@ export class Waterfall {
       const topY = this.markerLabelY(H, p.row + span - 1), boxTop = topY - 9 * dpr;
       ctx.fillStyle = KNOWN_LABEL_BOX;
       ctx.fillRect(p.lx, boxTop, p.w, y + 4 * dpr - boxTop);   // ★ 13 × dpr for one line; a two-line box is a row taller
+      // ★★ how well this block decodes here (the server's grade — dabBlockView.ts): a bar along the box's foot, green /
+      //    amber / red, so the name keeps its own colour and stays readable
+      const grade = isDabBlockSignal(s) ? (s as DabBlockSignal).grade : undefined;
+      if (grade) { ctx.fillStyle = DAB_GRADE_COLOUR[grade.g]; ctx.fillRect(p.lx, y + 4 * dpr - 2 * dpr, p.w, 2 * dpr); }
       ctx.fillStyle = hi ? hiCol : KNOWN_LABEL_COLOUR;
       if (hi) { ctx.shadowColor = 'rgba(0,0,0,0.95)'; ctx.shadowOffsetY = Math.max(1, Math.round(dpr)); ctx.shadowBlur = NO_GLOW ? 0 : Math.round(2 * dpr); }
       if (p.lines) {

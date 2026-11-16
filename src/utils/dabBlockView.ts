@@ -122,6 +122,53 @@ export function dabFitName(name: string, maxW: number, measure: (t: string) => n
   return null;
 }
 
+// ── How well each block decodes here (the server's grade — vibe_dab_block_quality.h) ─────────────────────────────────
+/* ★★ STUART (2026-11-16, Almere 6C plays and 6D "locked, but nothing decodes" at the same level): "label working, marginal
+ *    and non working ones". The server grades each block from what it MEASURED there (the live decode once settled, the
+ *    band and DX scans) and sends the grades as `blockQ` beside `blocks`. A grade older than DAB_GRADE_MAX_AGE_S is not
+ *    shown — a week-old reading is a guess about today. An older server sends none: no mark at all. */
+export type DabGradeName = 'good' | 'marginal' | 'bad';
+export interface DabBlockGrade { g: DabGradeName; mer: number; fib: number; t: number }
+export const DAB_GRADE_MAX_AGE_S = 7 * 24 * 3600;
+/** The mark's colours: working, marginal, not working. */
+export const DAB_GRADE_COLOUR: Record<DabGradeName, string> = { good: '#3ddc84', marginal: '#ffb020', bad: '#ff4d4d' };
+const GRADE_WORD: Record<DabGradeName, string> = { good: 'decoding', marginal: 'marginal', bad: 'not decoding' };
+
+/** `blockQ` parsed defensively — at most 64 blocks, known grades only, finite numbers. {} for anything else. */
+export function parseDabBlockQ(raw: unknown): Record<string, DabBlockGrade> {
+  const out: Record<string, DabBlockGrade> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>).slice(0, 64)) {
+    if (!/^\d{1,2}[A-N]$/.test(k) || !v || typeof v !== 'object') continue;
+    const o = v as Record<string, unknown>;
+    const g = o.g, mer = Number(o.mer), fib = Number(o.fib), t = Number(o.t);
+    if ((g !== 'good' && g !== 'marginal' && g !== 'bad') || !Number.isFinite(t) || t <= 0) continue;
+    out[k] = { g, mer: Number.isFinite(mer) ? mer : 0, fib: Number.isFinite(fib) ? Math.max(0, Math.min(1, fib)) : 0, t };
+  }
+  return out;
+}
+
+/** The grades still worth showing at `nowS` (unix seconds): no older than DAB_GRADE_MAX_AGE_S. */
+export function dabFreshGrades(q: Readonly<Record<string, DabBlockGrade>> | null | undefined, nowS: number): Map<string, DabBlockGrade> {
+  const m = new Map<string, DabBlockGrade>();
+  for (const [k, v] of Object.entries(q ?? {})) if (nowS - v.t <= DAB_GRADE_MAX_AGE_S) m.set(k, v);
+  return m;
+}
+
+/** "not decoding, MER 7 dB, measured 16:47" (a time today) or "… measured 14 Nov" (an older one). */
+export function dabGradeText(q: DabBlockGrade, nowS: number): string {
+  const d = new Date(q.t * 1000), now = new Date(nowS * 1000);
+  const two = (n: number) => String(n).padStart(2, '0');
+  const sameDay = d.toDateString() === now.toDateString();
+  const when = sameDay ? `${two(d.getHours())}:${two(d.getMinutes())}`
+    : `${d.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()]}`;
+  return `${GRADE_WORD[q.g]}, MER ${Math.round(q.mer)} dB, measured ${when}`;
+}
+/** "6D — not decoding, MER 7 dB, measured 16:47" (the app's accessibility text). */
+export function dabGradeLine(block: string, q: DabBlockGrade, nowS: number): string {
+  return `${block} — ${dabGradeText(q, nowS)}`;
+}
+
 /** A block label row for the shared layout: which block, and whether it is the one being received. */
 export interface DabBlockSignal extends KnownSignal {
   dabIdx: number; dabCurrent: boolean;
@@ -130,14 +177,19 @@ export interface DabBlockSignal extends KnownSignal {
   /** ★★ The two-line box's parts (Stuart, 2026-11-16: "taller instead of wider"): the block ("8A") on top, the ensemble's
    *  name ('' = none known) underneath — no "DAB " and no " — " (the band bar already says DAB). */
   block: string; mux: string;
+  /** ★★ How well it decodes here (the server's grade, fresh ones only) — absent = never measured / an older server. */
+  grade?: DabBlockGrade;
 }
 
 /** Every Band III block as a label (sorted by frequency — labelLayout takes the ones in view). `current` = index into
  *  DAB_BLOCKS of the block being received, −1 = none. */
-export function dabBlockSignals(names: ReadonlyMap<string, string>, current: number): DabBlockSignal[] {
+export function dabBlockSignals(names: ReadonlyMap<string, string>, current: number,
+                                grades?: ReadonlyMap<string, DabBlockGrade> | null): DabBlockSignal[] {
   return DAB_BLOCKS.map((b, i) => {
     const mux = names.get(b.name);
+    const grade = grades?.get(b.name);
     return {
+      ...(grade ? { grade } : {}),
       hz: b.hz, lo: b.hz - DAB_BLOCK_HALF_HZ, hi: b.hz + DAB_BLOCK_HALF_HZ,
       label: dabBlockLabel(b.name, mux), dec: '', dialHz: b.hz, mode: 'dab',
       prio: i === current ? PRIO_DAB_CURRENT : mux ? PRIO_DAB_NAMED : PRIO_DAB_BLOCK,
@@ -181,11 +233,14 @@ export function dabBlockHit(hz: number, spanHz: number): number {
 }
 
 /** The hover hint on the web: "go to 8A — 8A regio Alphen", "go to 5A", "on 7D — MTVNL" for the block already playing. */
-export function dabBlockHint(idx: number, names: ReadonlyMap<string, string>, current: number): string {
+export function dabBlockHint(idx: number, names: ReadonlyMap<string, string>, current: number,
+                             grades?: ReadonlyMap<string, DabBlockGrade> | null, nowS = Date.now() / 1000): string {
   const b = DAB_BLOCKS[idx];
   if (!b) return '';
   const n = clean(names.get(b.name));
-  return `${idx === current ? 'on' : 'go to'} ${b.name}${n ? ' — ' + n : ''}`;
+  const g = grades?.get(b.name);
+  // ★ the grade after it: "go to 6D · not decoding, MER 7 dB, measured 16:47"
+  return `${idx === current ? 'on' : 'go to'} ${b.name}${n ? ' — ' + n : ''}${g ? ' · ' + dabGradeText(g, nowS) : ''}`;
 }
 
 // ── The wide view's own layout ────────────────────────────────────────────────────────────────────────────────────────

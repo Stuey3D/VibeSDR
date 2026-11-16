@@ -283,7 +283,7 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, type KnownSignal, type KnownAvail } from '../utils/knownSignals';
-import { dabBlockSignals, dabMuxNames } from '../utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
+import { dabBlockSignals, dabMuxNames, dabFreshGrades, type DabBlockGrade } from '../utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
@@ -12113,9 +12113,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const dabCurBlock = dabState?.channel ? dabBlockIndex(dabState.channel) : dabBlock;
   const dabNames = dabOn ? dabMuxNames({ live: dabState ? { channel: dabState.channel, label: dabState.label } : null,
                                          memory: dabMemoryRef.current, scan: dabScan?.found ?? null }) : null;
-  const dabNamesKey = dabNames ? `${dabCurBlock}|${[...dabNames].map(([k, v]) => `${k}=${v}`).join('\u0001')}` : '';
+  // ★★ V12 each block's grade (the server's blockQ — working / marginal / not working), kept like the names
+  const dabGradeRef = useRef<Record<string, DabBlockGrade>>({});
+  if (dabState?.blockQ) dabGradeRef.current = dabState.blockQ;
+  const dabGrades = dabOn ? dabFreshGrades(dabGradeRef.current, Date.now() / 1000) : null;
+  const dabNamesKey = dabNames ? `${dabCurBlock}|${[...dabNames].map(([k, v]) => `${k}=${v}`).join('\u0001')}|${[...(dabGrades ?? [])].map(([k, v]) => `${k}=${v.g}${v.t}`).join(',')}` : '';
   const dabNamesRef = useRef(dabNames); dabNamesRef.current = dabNames;
-  const dabBlockRows = useMemo(() => (dabNamesRef.current ? dabBlockSignals(dabNamesRef.current, dabCurBlock) : null),
+  const dabGradesRef = useRef(dabGrades); dabGradesRef.current = dabGrades;
+  const dabBlockRows = useMemo(() => (dabNamesRef.current ? dabBlockSignals(dabNamesRef.current, dabCurBlock, dabGradesRef.current) : null),
     [dabNamesKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** A tap inside a block: the MULTIPLEXES pick's own road (dabGoTo — ask before tuning, the shared dial, the server's
    *  block change and service auto-select). The block already playing: nothing. */

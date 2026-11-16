@@ -6,7 +6,7 @@
  *     32 KB/s, 16 KB twice a second, three times the waterfall. 12 KB of each was the station list, which changes only
  *     while the multiplex is being read, and 1.8 KB the constellation + impulse response, drawn only while the Signal
  *     pane is open. A client that opens its spectrum socket with `dab=2` now receives:
- *       `dab_list` — every service's fixed fields + dataSvcs + licensed + blocks, ONLY when that changes (`rev`);
+ *       `dab_list` — every service's fixed fields + dataSvcs + licensed + blocks + blockQ, ONLY when that changes (`rev`);
  *       `dab_dls`  — every service's radio text with its age, ONLY when a text changes (`rev`);
  *       `dab`      — the live report (`v: 2`, naming the listRev/dlsRev it belongs to), with `ir`/`iq` only while
  *                    the client has said `dab_scopes` on.
@@ -55,7 +55,7 @@ export class DabAssembler {
       return out;
     });
     const report: Msg = { ...m, services };
-    for (const k of ['dataSvcs', 'licensed', 'blocks'] as const) if (list && list[k] !== undefined) report[k] = list[k];
+    for (const k of ['dataSvcs', 'licensed', 'blocks', 'blockQ'] as const) if (list && list[k] !== undefined) report[k] = list[k];   // ★ V12 blockQ: each block's grade
 
     let resync = false;
     if ((list?.rev !== m.listRev || dls?.msg.rev !== m.dlsRev) && nowMs - this.lastResyncAt >= 5000) {

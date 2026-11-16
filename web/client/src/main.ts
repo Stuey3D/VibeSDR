@@ -128,7 +128,7 @@ import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBand
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
 import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, type KnownSignal, type KnownAvail } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
-import { dabBlockSignals, dabMuxNames, dabWideView, dabBlockHit, dabBlockHint } from '../../../src/utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
+import { dabBlockSignals, dabMuxNames, dabWideView, dabBlockHit, dabBlockHint, parseDabBlockQ, dabFreshGrades, type DabBlockGrade } from '../../../src/utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, inPassband, TUNED_SETTLE_MS, type Passband, type TunedRow } from '../../../src/utils/tunedStation';   // ★★ the tuned station's label at the VFO
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
@@ -2045,6 +2045,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
       { const mem = (d as { blocks?: Record<string, string> }).blocks;   // ★★ V12 the server's block memory (dabTypes.ts DabState.blocks)
         if (mem && typeof mem === 'object' && Object.keys(mem).length) dabBlockMemory = mem; }
+      { const q = (d as { blockQ?: unknown }).blockQ;   // ★★ V12 each block's grade (dabBlockView.ts parseDabBlockQ)
+        if (q !== undefined) dabBlockQ = parseDabBlockQ(q); }
       dabState = d; dabRender(); updateVts(); syncStereoLight();
       {
         // ★ And whether audio is REACHING this page (dabWithPlayback) — the player's own output stamp. Muted, or held
@@ -7669,8 +7671,11 @@ const dabStepper = new DabBlockStepper(DAB_BLOCKS.length,
  *  Names come only from what the server said: the live ensemble, its block memory (`blocks` on the report — kept here,
  *  as dabState is cleared on every block change) and the last band scan. A click inside a block = dabBlockPick. */
 let dabBlockMemory: Record<string, string> = {};
+/** ★★ V12 how well each block decodes here — the server's grades (dabBlockView.ts), {} from an older server. */
+let dabBlockQ: Record<string, DabBlockGrade> = {};
 let dabBlocksKey = '';
 let dabNamesCache: Map<string, string> = new Map();
+let dabGradesCache: Map<string, DabBlockGrade> = new Map();
 function dabCurrentBlock(): number {
   const ch = dabState?.channel;
   return ch ? DAB_BLOCKS.findIndex(b => b.name === ch) : dabChannel;
@@ -7681,10 +7686,11 @@ function dabBlocksSync() {
   const names = dabMuxNames({ live: dabState ? { channel: dabState.channel, label: dabState.label } : null,
                               memory: dabBlockMemory, scan: dabScanState?.found ?? null });
   const cur = dabCurrentBlock();
-  const key = `${cur}|${[...names].map(([k, v]) => `${k}=${v}`).join('\u0001')}`;
+  const grades = dabFreshGrades(dabBlockQ, Date.now() / 1000);
+  const key = `${cur}|${[...names].map(([k, v]) => `${k}=${v}`).join('\u0001')}|${[...grades].map(([k, v]) => `${k}=${v.g}${v.t}`).join(',')}`;
   if (key === dabBlocksKey && wf.dabBlocks) return;
-  dabBlocksKey = key; dabNamesCache = names;
-  wf.dabBlocks = dabBlockSignals(names, cur);
+  dabBlocksKey = key; dabNamesCache = names; dabGradesCache = grades;
+  wf.dabBlocks = dabBlockSignals(names, cur, grades);
   wf.knownGen++;
 }
 /** ★★ A CLICK INSIDE A BLOCK on a wide DAB view: the MULTIPLEXES pick's own road (dabGoTo — the shared dial, the server's
@@ -21767,7 +21773,7 @@ function initPointerFreq(c: HTMLCanvasElement) {
       const bi = dabBlockHit(wf.xyToHz(x, y, cw, H), wf.spanHz);
       setPtr(bi >= 0);
       if (bi < 0) { setShown(false); return; }
-      const hint = dabBlockHint(bi, dabNamesCache, dabCurrentBlock());
+      const hint = dabBlockHint(bi, dabNamesCache, dabCurrentBlock(), dabGradesCache);
       if (mEl.textContent !== hint) {
         mEl.textContent = hint; fEl.textContent = ''; uEl.textContent = '';
         if (shownBm) { el.classList.toggle('hasBm', false); shownBm = ''; if (bnEl) bnEl.textContent = ''; }

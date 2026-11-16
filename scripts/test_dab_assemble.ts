@@ -7,7 +7,7 @@ const eq = (what: string, got: unknown, want: unknown) => {
   const ok = JSON.stringify(got) === JSON.stringify(want); ok ? pass++ : fail++;
   if (!ok) console.error(`FAIL ${what}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`);
 };
-const list = { type: 'dab_list', rev: 'aaaa', channel: '12D', eid: 1, blocks: { '12D': 'Bench' },
+const list = { type: 'dab_list', rev: 'aaaa', channel: '12D', eid: 1, blocks: { '12D': 'Bench' }, blockQ: { '12D': { g: 'good', mer: 18, fib: 1, t: 1763300000 } },
   services: [{ sid: 1, label: 'One' }, { sid: 2, label: 'Two' }, { sid: 3, label: 'Three' }] };
 const dls = { type: 'dab_dls', rev: 'bbbb', channel: '12D',
   dls: { '1': { dls: 'Now on One', dlsAge: 0, dlpRunning: true, dlp: { title: 'T' } }, '2': { dls: 'Two text', dlsAge: 30 } } };
@@ -23,6 +23,7 @@ const live = (o: Record<string, unknown> = {}) => ({ type: 'dab', v: 2, channel:
   eq('another service ages on the CLIENT between sends: 30 s + 10 s', [s[1].dls, s[1].dlsAge], ['Two text', 40]);
   eq('a service with no text has none', 'dls' in s[2], false);
   eq('blocks from the list', (r.report as any).blocks, { '12D': 'Bench' });
+  eq('★ V12 each block’s grade from the list too', (r.report as any).blockQ, { '12D': { g: 'good', mer: 18, fib: 1, t: 1763300000 } });
   eq('revisions match: no resync', r.resync, false);
   // the tuned service changes: service 1 is now a scanned row with an age
   eq('a service that is no longer tuned ages', (a.ingest(live({ sid: 2 }), 11_000).report as any).services[0].dlsAge, 10);
