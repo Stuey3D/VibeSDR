@@ -178,6 +178,10 @@ flags_for() {
     # ★ V12 balloons (decoders/balloon_*.h): UKHAS RTTY, Horus Binary, SSDV — our transmitter into our receiver, false-positive
     #   minutes, SIMD = scalar, cost. `test-balloon wav <file> [rate]` replays a recording; `clip` writes the e2e clip.
     test-balloon)          echo "-O2" ;;
+    # ★ V12 tone decoders (decoders/tones_*.h): DTMF (Q.23/Q.24) and 5-tone selcall — our transmitter into our receiver, every
+    #   digit and table, twist/timing/frequency limits, minutes of noise / speech-like / music-like audio with nothing decoded,
+    #   SIMD = scalar, cost. `test-tones wav <file>…` runs recordings as a talk-off corpus (exit 1 when anything decodes).
+    test-tones)            echo "-O2" ;;
     # ★★ The ADS-B gain rule after Stuart's FlightAware box: the top, down only for dynamic range, never for strong aircraft.
     test-adsb-gain)        echo "-O2 -lpthread" ;;
     # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard
