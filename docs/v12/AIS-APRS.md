@@ -91,6 +91,41 @@ craft and AtoNs, `970/972/974` SART / MOB / EPIRB (shown red as DISTRESS BEACON)
 
 Readable line: `WILSON GOOLE · cargo · 12 kn SW · at anchor → ROTTERDAM`.
 
+### Binary messages (2026-11-16, `vibe_ais_asm.h`)
+
+Types 6 (addressed) and 8 (broadcast), international DAC 001, from **IMO SN.1/Circ.289** (and the withdrawn
+**SN/Circ.236** for FI 11), the type 6/8 headers from **M.1371-5 Annex 8**, and type 21's status byte from **IALA A-126**.
+Written from the tables; every field's "not available" code becomes nothing (never a number on a card).
+
+| DAC/FI | What | Where it shows |
+|---|---|---|
+| 1/31 | Met/hydro (Circ.289): wind, gust, directions, air / dew / sea temperature, humidity, pressure + trend, visibility ("over" flag), water level (tide) + trend, surface current, waves, swell, sea state, precipitation, salinity, ice | the SENDER's row: `met:[…]` (newest site first), the card's Weather rows, the list's "SW 14 kn · tide 3.21 m" |
+| 1/11 | The same, Circ.236 layout (lat before lon, offset encodings) | as FI 31 |
+| 1/22, 1/23 | Area notice: the Circ.289 description table in plain words, start time, duration ("until cancelled"), the first shape's place and size, text sub-areas joined | `notices:[…]` → the strip under the safety texts (ℹ) |
+| 1/29, 1/30 | Text description | `notices:[…]` |
+| type 21 bits 260–267 | AtoN status, page 7: light on / off / FAULT, RACON fitted / working / FAULT, alarm | `light`, `racon`, `alarm`; FAULT and ALARM in the readable line and red on the card |
+
+- **Sites:** a base station may send the weather of several places, each with its own position. A row keeps up to **4
+  sites** (same place = within 500 m, replaced); the oldest gives way. A station heard only by its met report is drawn at
+  the readings' position, and its kind comes from its MMSI (99… AtoN, 00… coast station). The card says "at <position>"
+  for a site more than 0.5 NM from the station.
+- **Bounded:** 4 sites × 64 B per row (the 1000-row cap), 20 notices (a repeat only refreshes its time), everything
+  else counted (`binary` in the report) and not shown — a regional DAC's layout is that region's, and a guess would put
+  wrong numbers on a card.
+- **Gallery:** a station's weather is logged at most every 30 min (`#met`), a new notice once (`#note`).
+- **Stored for the SHIPPING MAP:** the status byte rides in the ship record's spare flag bits; the weather goes to
+  `<gallery>/ais-met.dat` (64-byte reports, 4 sites a station, 8–128 stations by the gallery size — 37 KB at most,
+  counted inside the gallery size and removed with it), merged under the gallery lock; `ais-ships.json` carries `met`.
+- **Not read yet:** FI 21 (weather observation from a ship), FI 24/25/27/28 (extended static, dangerous cargo, routes),
+  FI 32 (tidal window); currents 2 and 3 of FI 31 (only the surface current is shown); area-notice polygons are shown
+  as their first point, not drawn on the map.
+- **Tests:** `vibeserver/test-ais-binary.cpp` (63 checks — every field and its n/a code and edges, the type 6 header,
+  notices, the status byte, the NMEA armour round trip, the service rows/sites/notices, the met store's round trip,
+  merge and bounds, 200 000 random payloads) and `scripts/test_ais_aprs_app.ts` (card / list / strip, web = app).
+  **All vectors are synthetic, built from the published tables. No off-air type 8 has been decoded yet** — the first
+  real UK AtoN met station heard should be checked against its published values (the 4-site and status-byte rules
+  especially).
+
 ### Server contract
 
 **Capability** (`/vibeserver.json`): no `ais` field = the radio cannot reach 162 MHz, or it is an Airspy HF+ or an Icom
