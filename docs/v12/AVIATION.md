@@ -245,8 +245,8 @@ Modelled on the SHIPPING MAP (`shippingMap.ts`, docs/v12/SHIPPING-MAP.md): one r
   (MapOverlay `avdata`, now `AVIATION MAP`, the `aero` basemap, toggles in its list, AIRPORTS switched live through
   `__trkProfile`).
 - **Copy:** sdrTour mode card, About V12 note, the web tutorial.
-- **Tests:** `test_aviation_map.ts` 47/0; `test-web-avmap.mjs` (headless Edge `--mute-audio`, two real radio processes);
-  `test-web-avdata.mjs` adapted (the list is the map's).
+- **Tests:** `test_aviation_map.ts` 47/0; `test-web-avmap.mjs` 28/0 (headless Edge `--mute-audio`, two real radio processes);
+  `test-web-avdata.mjs` 22/0 (adapted: the list is the map's); `test-web-shipping-map.mjs` 36/0 (TrackView unchanged for it).
 
 ## On air 2026-11-16 (daytime, 16:38–16:56 UTC)
 
