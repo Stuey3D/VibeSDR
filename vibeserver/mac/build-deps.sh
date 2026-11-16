@@ -302,7 +302,7 @@ RADE_C_SHA=01f16e517b7961796d959de5921b4cfec40b9a2dc72b4625ece019a53bc3dfaf
 FDVB_COMMIT=49006b029853061ca4e992f9632a51875aa3ecf1
 FDVB_SHA=d8d8e158f770c9dd26b870a40c6562affae9cd5cda7d87bb6ef21382470d7cc7
 RADE_SCRIPT="$MAC/../linux/build-rade.sh"
-RADE_WRAP_SUM="$(cat "$RADE_SCRIPT" "$MAC/../../android/app/src/main/cpp/rade/"vibe_rade* | shasum -a 256 | cut -c1-16)"
+RADE_WRAP_SUM="$(cat "$RADE_SCRIPT" "$MAC/../linux/rade/"vibe_rade* | shasum -a 256 | cut -c1-16)"
 RADE_STAMP="rade $RADE_C_COMMIT $RADE_C_SHA fdvb $FDVB_COMMIT $FDVB_SHA opus $OPUS_VER $OPUS_SHA min=$MIN arch=$ARCH $CCVER src=$RADE_WRAP_SUM"
 if stamp_ok rade "$RADE_STAMP" "$PREFIX/lib/librade_vibe.a"; then echo "==> RADE V1: up to date"; else
   echo "==> RADE V1: building for macOS $MIN"

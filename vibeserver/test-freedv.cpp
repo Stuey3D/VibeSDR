@@ -279,10 +279,12 @@ static int writeClip(const char* path, int rate, double sec, double snrDb, bool 
         std::vector<cf> m8 = t.sub == fdv::kRade ? modulate(t.sub, sec * 0.7, "G4ABC") : modulate(t.sub, sec + 1);   // (the same voice and text for each)
         if (t.sub == fdv::kRade) {
             const double pr = realPower(std::vector<cf>(m8.begin(), m8.begin() + long(std::min<size_t>(m8.size(), size_t(sec * 0.6 * 8000)))));
-            /* ★ 6 dB above the codec2 stations: the end-of-over callsign is ONE frame of LDPC-coded QPSK and needs ~9 dB to
+            /* ★ 3 dB above the codec2 stations: the end-of-over callsign is ONE frame of LDPC-coded QPSK and needs ~9 dB to
              *  come through (measured 2026-11-16: every time at 8.7 dB, never at 6.5) — at the clip's 12 dB, RADE's own SNR
-             *  estimate reads ~8 dB through the range-locked radio's channel and the server test's "last" check failed. */
-            const double want = (ps == 0 ? pr : ps) * 4.0;
+             *  estimate reads ~8 dB through the range-locked radio's channel and the server test's "last" check failed.
+             *  Not 6 dB: the louder station raised the clip's peak, the 8-bit scaling pushed every other station down
+             *  towards the quantisation floor, and 700D's first SNR report on 40 m read 3 dB (the check wants > 3). */
+            const double want = (ps == 0 ? pr : ps) * 2.0;
             for (auto& x : m8) x *= float(std::sqrt(want / pr));
             if (ps == 0) ps = pr;
             m8.resize(size_t((sec + 1) * 8000), cf(0, 0));             // noise only to the end of the loop

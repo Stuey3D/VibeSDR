@@ -966,7 +966,7 @@ if(VIBE_XAAC)
   endif()
 endif()
 
-# ── FreeDV RADE V1 receive (V12, 2026-11-16 — docs/v12/FREEDV.md "RADE", vibe_freedv.h, rade/vibe_rade.h) ──────────────
+# ── FreeDV RADE V1 receive (V12, 2026-11-16 — docs/v12/FREEDV.md "RADE", vibe_freedv.h, linux/rade/vibe_rade.h) ────────
 # ★★ BSD only: FreeDV's rade_c (BSD-2-Clause) + Opus 1.6.1's DNN code and FARGAN vocoder (BSD-3-Clause) + freedv-backend's
 #    reliable text (BSD-2-Clause), built from pinned, SHA-256-checked source by linux/build-rade.sh (called by both
 #    build-deps.sh) into ONE archive whose only globals are vrade_* — its private copy of Opus's DNN code cannot meet the

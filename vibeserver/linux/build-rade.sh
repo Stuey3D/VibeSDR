@@ -27,7 +27,7 @@ set -euo pipefail
 RC="${1:?rade_c}"; OP="${2:?opus}"; FB="${3:?freedv-backend}"; PREFIX="${4:?prefix}"
 : "${CC:?CC}" "${CXX:?CXX}" "${AR:?AR}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-WRAP="$HERE/../../android/app/src/main/cpp/rade"
+WRAP="${RADE_WRAP:-$HERE/rade}"   # ★ our wrapper sources (vibe_rade.h, .c): beside this script, so the build images can COPY them
 B="$(mktemp -d)"; trap 'rm -rf "$B"' EXIT
 JOBS="${JOBS:-4}"
 

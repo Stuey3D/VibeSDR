@@ -22,7 +22,7 @@
 //    manual controls underneath).
 // ★★★ RADE V1 (V12, 2026-11-16 — what nearly every FreeDV station sends today) is NOT codec2: it is FreeDV's own C port,
 //     rade_c, with Opus's FARGAN vocoder (all BSD), COMPILED IN where the build found it (VIBE_HAVE_RADE, librade_vibe.a —
-//     rade/vibe_rade.h, vibeserver/linux/build-rade.sh). So a server without libcodec2 still offers FreeDV, with RADE
+//     vibeserver/linux/rade/vibe_rade.h, vibeserver/linux/build-rade.sh). So a server without libcodec2 still offers FreeDV, with RADE
 //     alone; a server with neither does not offer the mode at all. Its end-of-over callsign (CRC-checked) is reported as
 //     "last" once the over ends — it names the station just heard, never the one talking now.
 #pragma once
