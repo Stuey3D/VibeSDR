@@ -874,7 +874,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setCwCapable(false);
     setRttySkimCapable(false);
     setSkimCapable(true);
-    setPskCapable(false); setJttyCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
+    setPskCapable(false); setJttyCapable(false); setTimeTdfCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
     setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setAutoBwModes([]); setBwAutoState(null);
     setAdsbCap(undefined);
     setIsmCap(undefined);
@@ -898,6 +898,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setRttySkimCapable(o?.rttyskim === true && o?.skim !== false);   // ★ V12 the RTTY skimmer — only where it can run
         setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal);
         setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
+        setTimeTdfCapable(o?.timeTdf === true);   // ★ V12 TDF — a station of the TIME decoder, on servers that read it
         // ★ V12 MFSK / OLIVIA / THOR: a family is offered where its flag is true; its choices are the server's list
         setTmModes({ mfsk: o?.mfsk === true ? (o?.mfskModes ?? []) : undefined });   // ★ ONE key: MFSK, OLIVIA, CONTESTIA, THOR
         // ★★★ V12 PAGING — the phone's own engine says so only for its own radio; its manual choices are data (paging.ts)
@@ -2601,6 +2602,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [pskCapable, setPskCapable] = useState(false);
   const [rttySkimCapable, setRttySkimCapable] = useState(false);   // ★ V12 the RTTY skimmer ("rttyskim": true)
   const [jttyCapable, setJttyCapable] = useState(false);
+  const [timeTdfCapable, setTimeTdfCapable] = useState(false);   // ★ V12 TDF (ALS162): this server's TIME decoder reads it
   const [dscCapable, setDscCapable] = useState(false);
   const [sitoraCapable, setSitoraCapable] = useState(false);   // ★ V12 SITOR-A: this VibeServer decodes it
   const [sameCapable, setSameCapable] = useState(false);       // ★ V12 EAS / SAME: this VibeServer decodes it
@@ -6431,11 +6433,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   stations and only the receiver's location tells them apart — which not every server
       //   publishes.
       const forced = timeStationPref !== 'auto' ? timeStationPref : '';
-      const st = forced || timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+      const st0 = forced || timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+      const st = st0 === 'tdf' && !timeTdfCapable ? null : st0;   // ★ V12 TDF only where the server reads it
       if (!st) {
         timeStationRef.current = '';
         setDecoderStatus('Tune to a time signal first — MSF 60kHz, DCF77 77.5kHz, '
-                       + 'WWVB 60kHz, JJY 40/60kHz, WWV 2.5/5/10/15/20MHz, RWM 4996/9996/14996kHz');
+                       + 'WWVB 60kHz, JJY 40/60kHz, WWV 2.5/5/10/15/20MHz, RWM 4996/9996/14996kHz'
+                       + (timeTdfCapable ? ', TDF 162kHz' : ''));
         return;
       }
       if (decoderClient.current) decoderClient.current.timeStation = st as any;
@@ -6485,7 +6489,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
     if (decoderClient.current) decoderClient.current.vfo = decVfoRef.current;   // ★★ "vfo":"B" when it runs on B
     decoderClient.current?.start(type);
-  }, [status.frequency, timeStationPref, onVfoAB, aprsReset, abStartVfo]);
+  }, [status.frequency, timeStationPref, timeTdfCapable, onVfoAB, aprsReset, abStartVfo]);
 
   /**
    * ★★★ THE STATION FOLLOWS THE DIAL WHILE THE DECODER IS RUNNING. It was chosen ONCE, at attach —
@@ -15583,7 +15587,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★ What this receiver actually runs. null = we could not ask, and the row then offers
            *  everything exactly as it always did — see srvExtensions. */
           serverExtensions: srvExtensions,
-          timeStation: timeStationPref,
+          timeStation: timeStationPref, timeTdf: timeTdfCapable,
           onTimeStation: (v: string) => {
             setTimeStationPref(v);
             setSessionChoice('time.station', v, 'auto');   // ★★★ for this session only (decoderSession.ts)

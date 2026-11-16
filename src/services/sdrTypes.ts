@@ -457,6 +457,8 @@ export interface ServerOccupancy {
    *  ONE SIGNAL only — no SKIMMER view that could not work. */
   rttyskim?: boolean;
   jtty?: boolean;
+  /** ★ V12 2026-11-16 the TIME decoder reads TDF (ALS162, 162 kHz phase code) on this server. Absent = an older one. */
+  timeTdf?: boolean;
   dsc?: boolean;
   /** ★ V12 SITOR-A: this server's maritime ARQ listener ('sitora'). False or absent = no key. */
   sitora?: boolean;
@@ -559,6 +561,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       skim:      j.skim !== false,
       psk:       j.psk === true,
       jtty:      j.jtty === true,
+      timeTdf:   j.timeTdf === true,
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
       same:      j.same === true,

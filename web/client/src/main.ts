@@ -964,6 +964,8 @@ async function loadAudioPolicy(httpBase: string) {
     hellCap = j.hell === true;   // ★ FELD HELL (V12): drawn by this server, read by eye
     { const b = document.querySelector('#decodersPanel [data-dec="hell"]') as HTMLElement | null;
       if (b) b.hidden = !hellCap || blockedModes.has('hell'); }
+    { const b = document.querySelector('#timeStation [data-station="tdf"]') as HTMLElement | null;
+      if (b) b.hidden = j.timeTdf !== true; }   // ★ V12 TDF: a station of TIME, only on a server that reads it
     jttyCap = j.jtty === true || !!decWhy.jtty;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="jtty"]') as HTMLElement | null;
       if (b) b.hidden = !jttyCap || blockedModes.has('jtty'); }
@@ -13386,6 +13388,9 @@ let timeStation = 'msf';
 const TIME_STATIONS: Record<string, { label: string; hint: string }> = {
   msf:   { label: 'MSF',   hint: 'MSF, Anthorn — tune <b>60.000 kHz</b> in <b>CW</b>.' },
   dcf77: { label: 'DCF77', hint: 'DCF77, Mainflingen — tune <b>77.500 kHz</b> in <b>CW</b>.' },
+  // ★ V12 2026-11-16 TDF (ALS162): the code is in the carrier's PHASE, so it must be a CW beat note — AM shows nothing.
+  tdf:   { label: 'TDF',   hint: 'TDF, Allouis (France) — tune <b>162.000 kHz</b> in <b>CW</b>. Its code is in the carrier\u2019s '
+                                 + '<b>phase</b>, so in AM there is nothing to read. French time (CET/CEST).' },
   wwvb:  { label: 'WWVB', hint: 'WWVB, Fort Collins — tune <b>60.000 kHz</b> in <b>CW</b>. '
                                  + 'Note MSF shares this frequency: which one you hear is geography.' },
   // ★ V12: JJY (NICT) — 40 kHz Ohtakadoya-yama, 60 kHz Hagane-yama; JST (UTC+9).

@@ -28048,7 +28048,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     static bool decoderBlocked(const std::string& ext) {
         std::string key = ext;
         if (ext == "fsk") key = "rtty";
-        else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy") key = "time";
+        else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy" || ext == "tdf") key = "time";
         else if (ext == "cwskim") key = "cw";        // ★ the skimmer is CW's too — one owner switch
         else if (ext == "pskskim") key = "psk";      // ★ …and PSK's skimmer is PSK's
         else if (ext == "rttyskim") key = "rtty";    // ★ …and the RTTY skimmer is RTTY's — one owner switch
@@ -38968,6 +38968,9 @@ static std::string vsTunableJson() {
     /* ★★ JTTY (V12, 2026-10-26): the WSJT-X 3.2 keyboard mode, every JTTY signal in the passband (decoders/jtty_decoder.h).
      *  Absent on an older server, so its clients draw no JTTY button there; false where the owner has blocked it. */
     j += vsDecoderCapJson("jtty", reach);
+    /* ★ V12 2026-11-16 TDF (ALS162, 162 kHz phase code — decoders/tdf_phase.h): a station of the TIME decoder. Present =
+     *  this server reads it, so a client draws the TDF station only here (an older server would refuse "tdf"). */
+    j += ",\"timeTdf\":true";
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {

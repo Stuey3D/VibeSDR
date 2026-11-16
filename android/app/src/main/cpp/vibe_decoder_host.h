@@ -775,7 +775,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -1012,7 +1012,7 @@ private:
             sstv_->onComplete = [this]() { std::vector<uint8_t> m; m.push_back(0x05); put32(m, 0); sendSstv(m); };
             sstv_->onRedrawStart = [this]() { std::vector<uint8_t> m{ 0x08 }; sendSstv(m); };
             log("decoder attached: sstv");
-        } else if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy") {
+        } else if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy" || ext == "tdf") {
             std::string which = ext == "time" ? str(msg, "station") : ext;
             if (which.empty()) which = "msf";
             buildTimeLocked_(which);
@@ -1312,6 +1312,7 @@ private:
             : which == "rwm"   ? TimeDecoder::Station::RWM
             : which == "wwvb"  ? TimeDecoder::Station::WWVB
             : which == "jjy"   ? TimeDecoder::Station::JJY
+            : which == "tdf"   ? TimeDecoder::Station::TDF     // ★ V12 2026-11-16 ALS162's phase code (tdf_phase.h)
             : which == "wwv"   ? TimeDecoder::Station::WWV
                                : TimeDecoder::Station::MSF;
         time_ = new TimeDecoder(48000, st);
@@ -1358,7 +1359,7 @@ private:
                 const long long civil = (long long)timegm(&tmv);
                 int offMin = 0;
                 if (name == "MSF") offMin = t.dst ? 60 : 0;
-                else if (name == "DCF77") offMin = t.dst ? 120 : 60;
+                else if (name == "DCF77" || name == "TDF") offMin = t.dst ? 120 : 60;   // ★ TDF: French legal time, CET/CEST
                 else if (name == "JJY") offMin = 540;
                 const long long utcMs = (civil - offMin * 60LL) * 1000LL;
                 const long long hostMs = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1366,7 +1367,9 @@ private:
                 if (t.year >= 2020 && t.year < 2100) {
                     char js[200];
                     std::snprintf(js, sizeof js, "{\"type\":\"time_sync\",\"data\":{\"station\":\"%s\",\"utcMs\":%lld,"
-                                  "\"hostMs\":%lld,\"rxDelayMs\":31}}", name.c_str(), utcMs, hostMs);
+                                  "\"hostMs\":%lld,\"rxDelayMs\":%d}}", name.c_str(), utcMs, hostMs,
+                                  // ★ TDF's phase front end opens its "dip" kDipAfterSecondMs after the top of the second
+                                  31 + (name == "TDF" ? (int)vibe::TdfPhase::kDipAfterSecondMs : 0));
                     broadcastText(js, -1);
                 }
             }

@@ -75,7 +75,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
 
 /** The time signal stations the server can decode. Each is a separate extension name on the
  *  wire — the shim builds a TimeDecoder for the one asked for. */
-export type TimeStation = 'msf' | 'dcf77' | 'wwv' | 'wwvb' | 'rwm' | 'jjy';
+export type TimeStation = 'msf' | 'dcf77' | 'wwv' | 'wwvb' | 'rwm' | 'jjy' | 'tdf';
 
 /**
  * ★★★ WHICH STATION IS ON THIS FREQUENCY. Nobody tunes 60 kHz by accident, but plenty of people
@@ -101,6 +101,7 @@ export function timeStationFor(hz: number, receiverLonDeg?: number | null): Time
   }
   if (near(40_000, 2_000))    return 'jjy';     // ★ V12: JJY Ohtakadoya-yama — 40 kHz is JJY's alone
   if (near(77_500, 2_000))    return 'dcf77';
+  if (near(162_000, 2_000))   return 'tdf';       // ★ V12 TDF / ALS162, Allouis — phase code, tune it in CW
   if (near(66_666, 2_000))    return 'rwm';
   // ★★★ RWM IS TESTED FIRST, AND THE TOLERANCE IS TIGHT, because 4996 and 9996 kHz sit just
   //     4 kHz from WWV's 5000 and 10000. With WWV checked first at ±5 kHz, RWM could NEVER be

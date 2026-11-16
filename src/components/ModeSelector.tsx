@@ -543,6 +543,8 @@ interface ModeSelectorProps {
     rttySettings?: RttySettings; onRttySettings?: (s: RttySettings) => void;
     /** '' / 'auto' = choose from the tuned frequency. Anything else forces that station. */
     timeStation?: string; onTimeStation?: (s: string) => void;
+    /** ★ V12 2026-11-16 this server's TIME decoder reads TDF (ALS162) — its station is offered only then. */
+    timeTdf?: boolean;
     wefaxLpm?: number; onWefaxLpm?: (v: number) => void;
   } | null;
   // OWRX MAP + FILES pages (relocated from MenuSheet OPENWEBRX section) — same
@@ -1500,7 +1502,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'time':
         return (<>
           <SubLabel label="STATION" />
-          <OptRow>{(['auto', 'msf', 'dcf77', 'wwv', 'wwvb', 'jjy', 'rwm'] as const).map(v => (
+          <OptRow>{(['auto', 'msf', 'dcf77', 'tdf', 'wwv', 'wwvb', 'jjy', 'rwm'] as const).filter(v => v !== 'tdf' || dc.timeTdf).map(v => (
             <SegBtn key={v} label={v.toUpperCase()} active={(dc.timeStation ?? 'auto') === v} onPress={() => dc.onTimeStation?.(v)} />
           ))}</OptRow>
         </>);

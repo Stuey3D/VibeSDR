@@ -151,7 +151,7 @@ ok(edge.length === 1 && edge[0].lx + edge[0].w <= edge[0].x, 'near the right edg
 console.log('tapped: the preset table');
 const MODES = new Set(['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl', 'wfm', 'drm']);   // sdrTypes.ts SDRMode
 const DECS = new Set(['rtty', 'wefax', 'navtex', 'dsc', 'spots', 'time', 'hfdl', 'cw', '']);
-const TIME_ST = new Set(['msf', 'dcf77', 'wwv', 'wwvb', 'rwm', 'jjy']);   // DecoderClient TimeStation (JJY: V12 wave 2)
+const TIME_ST = new Set(['msf', 'dcf77', 'wwv', 'wwvb', 'rwm', 'jjy', 'tdf']);   // DecoderClient TimeStation (JJY: V12 wave 2)
 const bad: string[] = [];
 for (const s of KNOWN_SIGNALS) {
   const why = !MODES.has(s.mode) ? `mode ${s.mode}` : !DECS.has(s.dec) ? `decoder ${s.dec}` : !(s.dialHz > 0) ? 'no dial'

@@ -171,7 +171,9 @@ constexpr double kClipX   = 3.0;     ///< |x| past this many times the "on" leve
 }  // namespace
 
 TimeDecoder::TimeDecoder(int sampleRate, Station station)
-    : sr_(sampleRate > 0 ? sampleRate : 48000), station_(station) {
+    : sr_(sampleRate > 0 ? sampleRate : 48000), station_(station == Station::TDF ? Station::DCF77 : station) {
+    // ★ V12 TDF: the DCF77 reader behind a phase front end (tdf_phase.h)
+    if (station == Station::TDF) { tdf_ = true; tdfFe_.reset(new TdfPhase(sr_)); }
     decim_ = std::max(1, sr_ / kEnvHz);
     env_.assign(kEnvRing, 0.0f);
     if (station_ != Station::RWM) initReader();
@@ -242,7 +244,7 @@ void TimeDecoder::process(const int16_t* samples, int count) {
             bpX2_ = bpX1_; bpX1_ = raw; bpY2_ = bpY1_; bpY1_ = y;
             raw = y;
         }
-        double x = std::fabs(raw);
+        double x = tdf_ ? tdfFe_->push(raw) : std::fabs(raw);   // ★ TDF: "carrier low" = a phase element
         clock_ += 1;
         // ★★ A LIGHTNING CRASH IS CLIPPED BEFORE IT REACHES THE ENVELOPE (2026-10-05). A rectified
         //    sine never exceeds ~1.6x its own average and a carrier-plus-noise rarely 3x, so
@@ -896,6 +898,7 @@ void TimeDecoder::tickSample(double raw) {
 }
 
 const char* TimeDecoder::stationTag() const {
+    if (tdf_) return "TDF";
     switch (station_) {
         case Station::MSF:   return "MSF";
         case Station::DCF77: return "DCF77";
@@ -1843,7 +1846,8 @@ bool TimeDecoder::decodeDcf77(TimeStamp& out) const {
     out.month = month; out.day = day; out.weekday = wday;
     out.hour = hour; out.minute = min;
     out.dst = b[17] != 0;
-    out.leapSecondPending = b[19] != 0;
+    // ★ TDF warns of a leap second in bits 1 (positive) and 2 (negative); its bit 19 is always 0
+    out.leapSecondPending = tdf_ ? (b[1] != 0 || b[2] != 0) : b[19] != 0;
     return true;
 }
 

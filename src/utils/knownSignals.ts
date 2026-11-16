@@ -200,7 +200,7 @@ function buildTable(): KnownSignal[] {
   // ★ CW = 'cwu' on the wire (sdrTypes.ts SDRMode has no plain 'cw'): the carrier keyed in amplitude becomes a beat note
   t.push(time(40_000, 'JJY', 'cwu', 'time', ['jjy']),
          time(60_000, 'MSF/WWVB/JJY', 'cwu', 'time', ['msf', 'wwvb', 'jjy']), time(77_500, 'DCF77', 'cwu', 'time', ['dcf77']),
-         time(66_666, 'RBU', 'cwu', 'time', ['rwm']));
+         time(66_666, 'RBU', 'cwu', 'time', ['rwm']), time(162_000, 'TDF', 'cwu', 'time', ['tdf']));
   for (const f of [4_996_000, 9_996_000, 14_996_000]) t.push(time(f, 'RWM', 'cwu', 'time', ['rwm']));
   for (const f of [2_500_000, 5_000_000, 10_000_000, 15_000_000]) t.push(time(f, 'WWV/WWVH', 'am', 'time', ['wwv']));
   for (const f of [20_000_000, 25_000_000]) t.push(time(f, 'WWV', 'am', 'time', ['wwv']));

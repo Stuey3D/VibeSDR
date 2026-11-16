@@ -159,6 +159,9 @@ flags_for() {
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
+    # ★ V12 TDF / ALS162 (decoders/tdf_phase.h): synthetic phase code through the TIME decoder — noise, drift, timing, CPU.
+    #   `test-tdf --wav <file> [start_utc]` replays an UberSDR recording (docs/v12/TIME-TDF.md).
+    test-tdf)              echo "-O2" ;;
     # ★★ The ADS-B gain rule after Stuart's FlightAware box: the top, down only for dynamic range, never for strong aircraft.
     test-adsb-gain)        echo "-O2 -lpthread" ;;
     # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard
@@ -350,7 +353,7 @@ deps_for() {
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;
-    test-time-decoder)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
+    test-time-decoder|test-tdf)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
     test-radiodns-ecc)  echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
     test-radiodns-name) echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
     test-geoip)         echo "$SRC/geoip.cpp $SRC/proc.cpp" ;;
