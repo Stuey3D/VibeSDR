@@ -8,7 +8,11 @@
 //    page says what it is doing — live V / A / W, the charge counted so far and an ETA (the charge left to the empty
 //    point / the smoothed current) — and how to stop it: HOLD POWER (the normal power-off; the next start is the
 //    ordinary radio, still counting). Charging before empty cancels the run, and the screen goes with it.
-// ★ Before the unplug (armed) BACK, or CANCEL, calls it off — nothing has been measured yet.
+// ★★ STARTED ON THE CHARGER (2026-11-16): first this page waits for a GENUINE full charge (vibe-hwd FullJudge — the
+//    charger's physics, never the gauge's 100 %) and shows how far the charge has got; NO stress load yet (it would only
+//    slow the charge). Then "Full — unplug the charger to start"; the load and the count begin at the unplug. Pulled
+//    out before full: nothing starts, the page says so.
+// ★ Before the unplug (charging / armed) BACK, or CANCEL, calls it off — nothing has been measured yet.
 #pragma once
 // (included by app.h after App is declared)
 #include "battery_math.h"
@@ -16,11 +20,12 @@
 
 namespace hh {
 
-/** A stress calibration is armed or running (the service's state, read within the last 30 s). */
+/** A stress calibration is waiting on the charger, armed or running (the service's state, read within the last 30 s). */
 inline bool calScreenUp() {
     HwShared& h = hwShared();
     std::lock_guard<std::mutex> lk(h.m);
-    return h.cal.mode == "stress" && (h.cal.phase == "armed" || h.cal.phase == "running") && hwNow() - h.batAt < 30;
+    return h.cal.mode == "stress" && (h.cal.phase == "charging" || h.cal.phase == "armed" || h.cal.phase == "running")
+        && hwNow() - h.batAt < 30;
 }
 
 inline void calDrawScreen(App& a, Ctx& c) {
@@ -34,11 +39,31 @@ inline void calDrawScreen(App& a, Ctx& c) {
     c.g.rect(0, 0, W, H, th::bg);
     c.tc.draw(c.g, c.f.title, "Battery calibration mode", W / 2, 22, th::btnText, 1);
     c.g.rect(40, 58, W - 80, 1, th::barBorder);
+    if (k.phase == "charging") {
+        // ★ waiting for a genuine full: the charge's progress (both numbers — battery_math.h battChargeLines)
+        const bool out = !k.plugged || !b.online;
+        c.tc.draw(c.g, c.f.big, out ? "Not full yet" : "Charging to full first", W / 2, 120, th::amber, 1);
+        float y = 174;
+        if (out) {
+            c.tc.draw(c.g, c.f.body, "Plug the charger back in to carry on", W / 2, y, th::white, 1); y += c.f.body.lineHeight();
+        } else {
+            for (auto& l : battChargeLines(b)) { c.tc.draw(c.g, c.f.body, l, W / 2, y, th::white, 1); y += c.f.body.lineHeight(); }
+        }
+        y += 10;
+        for (auto& l : c.tc.wrap(c.f.body, "When the charger has really finished you will be asked to unplug. The fast load "
+                                           "starts then — not now, it would only slow the charge.", (int)W - 100)) {
+            c.tc.draw(c.g, c.f.body, l, W / 2, y, th::dim, 1); y += c.f.body.lineHeight();
+        }
+        BtnStyle st; st.font = &c.f.btn; st.disabled = busy;
+        if (button(c, "cal.cancel", {W / 2 - 110, H - 96, 220, 52}, "CANCEL", st) || c.nav.backPressed()) hwCalibrate(a.eng_ ? a.eng_->port() : 0, "");
+        return;
+    }
     if (k.phase == "armed") {
-        c.tc.draw(c.g, c.f.big, "Unplug the charger to start", W / 2, 150, th::amber, 1);
+        c.tc.draw(c.g, c.f.big, "Full — unplug the charger", W / 2, 150, th::green, 1);
         float y = 214;
-        for (auto& l : c.tc.wrap(c.f.body, "Then the screen stays at full brightness and every core is kept busy until the battery reaches a safe "
-                                           "empty; the radio then switches itself off and the measured capacity is kept.", (int)W - 100)) {
+        for (auto& l : c.tc.wrap(c.f.body, "The count starts when the charger comes out. Then the screen stays at full brightness "
+                                           "and every core is kept busy until the battery reaches a safe empty; the radio then "
+                                           "switches itself off and the measured capacity is kept.", (int)W - 100)) {
             c.tc.draw(c.g, c.f.body, l, W / 2, y, th::white68, 1); y += c.f.body.lineHeight();
         }
         BtnStyle st; st.font = &c.f.btn; st.disabled = busy;

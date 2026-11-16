@@ -121,6 +121,8 @@ public:
     std::string focus(const std::string& layer) const { auto it = focus_.find(layer); return it == focus_.end() ? "" : it->second; }
     void forget(const std::string& layer) { focus_.erase(layer); pendingDefault_.erase(layer); }
     bool backPressed() { if (in_.back && !consumed_) { consumed_ = true; return true; } return false; }
+    /** An item with this id was registered this frame (tests: which keys a screen offers). */
+    bool has(const std::string& id) const { for (auto& i : items_) if (i.id == id) return true; return false; }
     const Input& input() const { return in_; }
     /** Before begin(): whether `layer`'s highlighted control slides when held (from the frame just drawn). */
     bool focusRepeats(const std::string& layer) const {

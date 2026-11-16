@@ -38,37 +38,49 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
     y = menuRow(c, a, y, "BATTERY", "");
     {
         std::string t = "—";
-        bool ok; int mins;
-        { std::lock_guard<std::mutex> lk(sh.m); ok = sh.hwdOk; mins = sh.minutesLeft; }
+        bool ok, full; int mins;
+        { std::lock_guard<std::mutex> lk(sh.m); ok = sh.hwdOk; mins = sh.minutesLeft; full = sh.bat.online && sh.bat.charge.state == "full"; }
         if (battery_ >= 0) {
-            t = std::to_string(battery_) + " %" + (charging_ ? " · charging" : "");
+            // ★ "full" only when the CHARGER says so (vibe-hwd FullJudge) — a gauge's 100 % on the cord is still charging
+            t = std::to_string(battery_) + " %" + (charging_ ? (full ? " · full" : " · charging") : "");
             if (!charging_ && mins >= 0) t += " · about " + std::to_string(mins / 60) + " h " + std::to_string(mins % 60) + " min left";
         } else if (!ok) t = "the hardware service is not running";
         c.tc.draw(c.g, c.f.body, t, a.r() - 6, y0 + valY, th::dim, 2);
     }
     // ★★★ THE BATTERY BLOCK (Stuart, 2026-11-15): what the battery is doing NOW, once a second — measured on battery;
     //     on the charger the unit's own use and the charger's current are worked out (≈, battery_math.h) — and the
-    //     CALIBRATION beside it: this cell's real capacity, measured on a discharge from Full (vibe-hwd BatteryCal).
+    //     CALIBRATION beside it: this cell's real capacity, measured on a discharge from a GENUINE full (vibe-hwd
+    //     BatteryCal + FullJudge, 2026-11-16: "Full — charge finished" comes from the charger, never the gauge's 100 %).
     {
         static double lastPoll = 0;
         if (nowSec() - lastPoll >= 1.0) { lastPoll = nowSec(); if (port) hwRefreshDevice(port); }
         BattLive b; BattCal k; bool busy;
         { std::lock_guard<std::mutex> lk(sh.m); b = sh.bat; k = sh.cal; busy = sh.calBusy; }
-        for (auto& l : battLiveLines(b)) { c.tc.draw(c.g, c.f.small, l, a.x + 6, y - 6, th::white68); y += c.f.small.lineHeight(); }
+        for (auto& l : battLiveLines(b)) {
+            // ★ the verdicts in colour: full green, "not full yet" / the input-limit hint amber; the figures plain
+            const bool full = l.rfind("Full —", 0) == 0, warn = l.find("not full yet") != std::string::npos
+                || l.rfind("Input near", 0) == 0 || l.rfind("A shorter cable", 0) == 0 || l.rfind("The charger is held", 0) == 0;
+            for (auto& w : c.tc.wrap(c.f.small, l, (int)a.w - 12)) {
+                c.tc.draw(c.g, c.f.small, w, a.x + 6, y - 6, full ? th::green : warn ? th::amber : th::white68); y += c.f.small.lineHeight();
+            }
+        }
         y += 4;
-        for (auto& l : battCalResultLines(k, b.fullMah)) { c.tc.draw(c.g, c.f.small, l, a.x + 6, y - 6, k.hasResult ? th::green : th::dim); y += c.f.small.lineHeight(); }
+        for (auto& l : battCalResultLines(k, b.fullMah))
+            for (auto& w : c.tc.wrap(c.f.small, l, (int)a.w - 12)) { c.tc.draw(c.g, c.f.small, w, a.x + 6, y - 6, k.hasResult ? th::green : th::dim); y += c.f.small.lineHeight(); }
         const std::string ph = battCalPhaseLine(k);
         std::string say = !ph.empty() ? ph : k.note;   // (the last run's note: "calibration cancelled — …", "… failed …")
         if (!say.empty()) say[0] = (char)std::toupper((unsigned char)say[0]);
         if (!say.empty()) for (auto& l : c.tc.wrap(c.f.small, say, (int)a.w - 12)) { c.tc.draw(c.g, c.f.small, l, a.x + 6, y - 6, th::amber); y += c.f.small.lineHeight(); }
         y += 8;
         // CALIBRATE — NORMAL · STRESS (press twice: a stray press must not start a run that ends in a power-off);
-        // while waiting for the unplug, CANCEL. Running: no key — charging before empty is what cancels it.
+        // started ON THE CHARGER; while it waits for full, or for the unplug, CANCEL. Running: no key — charging
+        // before empty is what cancels it.
         y0 = y;
         y = menuRow(c, a, y, "CALIBRATE", k.phase == "idle"
-            ? "Measures this battery's real capacity. Charge to Full, press NORMAL (use the radio until it switches itself "
-              "off) or STRESS (the fastest: full brightness, every core busy, a screen of its own — hold POWER to stop it), "
-              "then unplug. A power-off part-way does not spoil it."
+            ? "Measures this battery's real capacity. With the charger in, press NORMAL (use the radio until it switches "
+              "itself off) or STRESS (the fastest: full brightness, every core busy, a screen of its own — hold POWER to "
+              "stop it). It waits for a genuine full charge, then asks you to unplug; the count starts then. A power-off "
+              "part-way does not spoil it."
             : "");
         static double armedN = 0, armedS = 0;
         const double t = nowSec();
@@ -86,7 +98,7 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
             }
         } else if (k.phase == "running") {
             c.tc.draw(c.g, c.f.body, k.mode == "stress" ? "under way (fast)" : "under way", a.r() - 6, y0 + valY, th::amber, 2);
-        } else if (k.phase == "armed") {
+        } else if (k.phase == "armed" || k.phase == "charging") {
             st.disabled = busy;
             if (hwRowButton(c, "hw.calX", {a.x, y0, a.w, 44}, {x0, y0 + 3, bw, 38}, "CANCEL", st)) hwCalibrate(port, "");
         }
