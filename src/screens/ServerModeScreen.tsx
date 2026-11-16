@@ -81,6 +81,8 @@ const BLOCKABLE: ModeEntry[] = [
    *  ("+" token, IN the CSV when on, off by default) with DECODER-RESEARCH.md §4.3's notice — as on the setup page. */
   { id: 'avdata', label: 'Aircraft datalink (ACARS, VDL2)' },
   { id: 'avdata+text', label: 'Aircraft datalink: show the message text (to you only)', parent: 'avdata', on: true },
+  // ★★ V12 RADIOSONDES (RS41 on 400–406 MHz, a whole-radio mode) — as on the setup page
+  { id: 'sondes', label: 'Radiosondes (RS41 weather balloons)' },
 ];
 /** ★ ONE TEXT, TWO READERS: vibe_setup_page.h AVDATA_TEXT_NOTICE. */
 const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless '
@@ -112,7 +114,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
 const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'loraaprs', 'meshcom', 'fanet', 'ndb', 'ais', 'aisstore', 'adsb', 'commb', 'drm', 'tone',
-  'avdata', 'avdata+text',
+  'avdata', 'avdata+text', 'sondes',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,

@@ -47,6 +47,8 @@
 #include "vibe_dxscan_fm.h"          // ★★★ V12 the idle DX scanner's FM hop (the dec_dxscan row)
 #include "vibe_ais_service.h"
 #include "vibe_avi_service.h"   // ★ V12 aviation: the datalink rows (dec_vdl2, dec_acars)
+#include "vibe_rs41_service.h"  // ★ V12 RS41 radiosondes: the SONDES row (dec_rs41)
+#include "vibe_rs41_tx.h"
 #include "vibe_avi_mode.h"
 #include "vibe_avi_tx.h"
 #include "vibe_ism_service.h"
@@ -691,6 +693,8 @@ inline RowRule ruleFor(const std::string& id) {
         // ★ V12 aviation: VDL2 (12 channels, the heavier band) sets the datalink mode's default; ACARS is shown beside it
         { "dec_vdl2",     { "avdata", true,  false } }, { "dec_acars",    { "avdata", false, false } },
         { "dec_hfdl",     { "hfdl",   true,  true  } },
+        // ★ V12 RS41 radiosondes: the SONDES mode's default (a whole-radio mode — not the decoder limit's yardstick)
+        { "dec_rs41",     { "sondes", true,  false } },
         { "dec_ism",      { "ism",    true,  false } }, { "dec_wmbus",    { "ism",    false, false } },
         { "dec_tone",     { "",       false, false } }, { "dec_nr",       { "",       false, false } },
         { "dec_notch",    { "",       false, false } },
@@ -1087,6 +1091,44 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     };
     aviRow("dec_vdl2", "Decoder: VDL2 aircraft (12 channels @ 2.4 MS/s)", "vdl2");
     aviRow("dec_acars", "Decoder: ACARS aircraft (4 channels @ 2.4 MS/s)", "acars");
+    /* ★★ V12 RADIOSONDES (docs/v12/RS41.md): the SONDES mode as the server runs it — vibers41::Service on its own thread,
+     *  one 2 MHz band at 2.4 MS/s, fed IN REAL TIME, SCORED BY THE HOTTEST THREAD (as AIS and the datalink). Three sondes
+     *  from our own transmitter (vibe_rs41_tx.h), one frame a second each, in four seconds of noise, looped. */
+    run("dec_rs41", "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_rs41"; r.label = "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+        const vibers41::Band* b = vibers41::bandById("mid");
+        if (!b) return r;
+        const double fs = 2.4e6;
+        const int secs = 4;
+        std::vector<vibers41::cf32> x(size_t(fs) * secs);
+        { std::mt19937 g(9); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
+        for (int k = 0; k < 3; ++k) {
+            vibers41tx::Sonde s(uint32_t(70 + k));
+            char ser[9]; std::snprintf(ser, sizeof ser, "B%07d", 1000 + k); s.serial = ser;
+            vibers41tx::Gfsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 2400, 0.05 + 0.2 * k);
+            for (int f = 0; f < secs; ++f) tx.addFrame(f, vibers41tx::frameOnAir(s, f));
+            tx.render(x.data(), x.size(), 0);
+        }
+        vibers41::Service svc;
+        svc.start(*b, b->centreHz, fs);
+        const size_t blk = (size_t)(fs / 100);
+        const double t0 = wallNow(); double fed = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+        std::map<uint64_t, ThreadTime> th0;
+        while (fed < kRtWarmSec + kRtSec) {
+            if (!measuring && fed >= kRtWarmSec) { c0 = processCpu(); th0 = threadTimes(); measuring = true; }
+            svc.feed(x.data() + pos, blk);
+            pos = (pos + blk) % x.size(); fed += blk / fs;
+            const double ahead = fed - (wallNow() - t0);
+            if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        scoreHottest(r, th0, threadTimes(), kRtSec, 100.0 * (processCpu() - c0) / kRtSec);
+        r.decoded = (int)svc.tracker().frames();
+        if (svc.dropped()) r.label += " (fell behind)";
+        svc.stop();
+        return r;
+    });
     run("dec_hfdl", "Decoder: HFDL", [&] {
         // ★ a listener's dial: two 300 bit/s bursts in USB audio (the carrier 1440 Hz in), with noise
         std::vector<float> a;

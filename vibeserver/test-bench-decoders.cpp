@@ -77,7 +77,7 @@ int main() {
         ok(r.pct > 0.0 && r.pct < 400.0, r.id + ": " + std::to_string(r.pct).substr(0, 5) + " % of a core");
         if (!filter) ok(r.decoded > 0, r.id + " decoded its signal (" + std::to_string(r.decoded) + ")");
         // ★★ whole-radio rows are scored by their HOTTEST thread (as ADS-B), the process total kept in the detail
-        if (r.id == "dec_ais" || r.id == "dec_ism" || r.id == "dec_wmbus" || r.id == "dec_lora_all" || r.id == "dec_vdl2" || r.id == "dec_acars") {
+        if (r.id == "dec_ais" || r.id == "dec_ism" || r.id == "dec_wmbus" || r.id == "dec_lora_all" || r.id == "dec_vdl2" || r.id == "dec_acars" || r.id == "dec_rs41") {
             double proc = -1; for (const auto& t : r.threads) if (t.first == "process") proc = t.second;
             ok(!r.hottest.empty() && proc >= 0 && r.pct <= proc + 0.5, r.id + ": scored by its hottest thread (" + r.hottest + " "
                + std::to_string(r.pct).substr(0, 5) + " %), process " + std::to_string(proc).substr(0, 5) + " % kept in the detail");

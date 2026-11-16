@@ -97,7 +97,7 @@ static int writeClip(int argc, char** argv) {
     const struct { const char* serial; double hz; double lat, lon, alt, vU; } def[] = {
         { "S3310411", 403.300e6, 50.218, -5.327, 3400, 5.2 },      // a Camborne-like sonde, climbing
         { "T1520789", 402.700e6, 51.410, 0.420, 18000, 5.8 },
-        { "U0912345", 404.200e6, 52.300, -1.100, 26000, -14.0 },   // descending after burst
+        { "U0912345", 403.850e6, 52.300, -1.100, 26000, -14.0 },   // descending after burst
     };
     std::vector<vibers41tx::Gfsk> tx;
     const double sigma = 0.02, n10k = 2 * sigma * sigma * 10e3 / fs;
