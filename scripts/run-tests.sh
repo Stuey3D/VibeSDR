@@ -545,6 +545,11 @@ printf '\n\033[1m── RSP hwinfo -> controls, per model ──\033[0m\n'
 if node scripts/check-rsp-caps.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── device filters (RSP only from Android 8.0) ──\033[0m\n'
 if node scripts/check-device-filter.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── the standard DAB path is untouched (front end, AGC, gain) ──\033[0m\n'
+# ★★★ Stuart's HARD RULE (2026-11-16): own station splits the per-station back end only. Part 2 (weak captures, before vs
+#     after) runs when DAB_WEAK_BEFORE / DAB_WEAK_AFTER name dab-weak builds; exit 3 = only the source half ran.
+node scripts/test-dab-standard-path-guard.mjs; rc=$?
+if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── gain write path ──\033[0m\n'
 if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
