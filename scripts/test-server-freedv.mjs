@@ -183,7 +183,8 @@ async function scenario(label, args, tag, sb = 'usb') {
         const pcm = await pcmOf(L.aud.bin);
         ok(pcm.length > 48000 && rms(pcm) > 300, `…decoded speech on the audio socket (${(pcm.length / 48000).toFixed(1)} s, rms ${rms(pcm).toFixed(0)})`);
         ok(!reps().slice(n0).some((x) => x.state === 'sync' && x.text), '…no "text" while in sync (the callsign is the last over\'s, never the talker\'s)');
-        // ★ the end-of-over frame: once the over ends (≤ 20 s round the loop) the report keeps the callsign as "last"
+        // ★ the end-of-over frame: once the over ends (≤ 20 s round the loop) the report keeps the callsign as "last". 45 s =
+        //   two overs' ends: at the clip's level RADE reads ~8 dB here, at the callsign's own threshold (test-freedv.cpp writeClip)
         ok(await until(() => reps().slice(n0).some((x) => x.last === 'G4ABC'), 45000), `…the end of the over: "last" ${JSON.stringify(reps().slice(n0).map((x) => x.last).filter(Boolean).at(-1))}`);
         continue;
       }
