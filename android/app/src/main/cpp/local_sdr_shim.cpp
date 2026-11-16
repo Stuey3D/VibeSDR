@@ -33963,8 +33963,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::mutex> lk(dxStatMtx_);
             dxHopWall_ = st.wallSec; dxHopCpu_ = st.cpuSec; dxHopPeaks_ = st.peaks; dxHopRounds_ = st.rounds;
             char b[320];
-            std::snprintf(b, sizeof b, "FM %.1f\xe2\x80\x93%.1f MHz: %d peak(s), %d identified%s%s in %.1f s", hop.loHz / 1e6, hop.hiHz / 1e6,
-                          st.peaks, confirmed, names.empty() ? "" : " (", names.empty() ? "" : (names + ")").c_str(), st.wallSec);
+            std::snprintf(b, sizeof b, "FM %.1f\xe2\x80\x93%.1f MHz: %d peak(s) + %d weak, %d identified%s%s in %.1f s", hop.loHz / 1e6, hop.hiHz / 1e6,
+                          st.peaks, st.weak, confirmed, names.empty() ? "" : " (", names.empty() ? "" : (names + ")").c_str(), st.wallSec);
             dxLast_ = line = b;
             if (wrapped && dxSweepStartFm_ > 0) dxSweepSecsFm_ = nowSecs() - dxSweepStartFm_;
         }

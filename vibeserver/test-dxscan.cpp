@@ -70,6 +70,9 @@ int main() {
         ok(log.findKey(fmKey(0, 96300)) && !log.findKey(fmKey(0, 96300))->stereo, "a strong mono carrier is logged too (mono)");
         log.commitFm(95900, 97200, 96550, 100, { fm(96800, 0, "", 0, false, -40, 20) }, T0 + 30);
         ok(!log.findKey(fmKey(0, 96800)), "a moderate carrier with no pilot and no RDS is not (a hi-fi tuner's stop level)");
+        // ★★ 2026-11-16 (the G35's 107.4–107.8): a locked pilot is the proof at ANY level — there is no SNR bar on it any more
+        log.commitFm(95900, 97200, 96550, 100, { fm(96900, 0, "", 0, false, -62, 7, true) }, T0 + 35);
+        ok(log.findKey(fmKey(0, 96900)) && log.findKey(fmKey(0, 96900))->stereo, "★ a WEAK station with its pilot locked (7 dB) is logged");
         // ★ RDS found later on the no-RDS frequency: ONE entry, the first heard carried
         log.commitFm(95900, 97200, 96550, 100, { fm(96100, 0xCF9F, "FLEX FM", 3, false, -40, 14, true) }, T0 + 40);
         const Entry* r = log.findKey(fmKey(0xCF9F, 96100));

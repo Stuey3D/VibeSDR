@@ -94,8 +94,16 @@ public:
         int    peaksPerRound = 64; // ★ the benchmark's budget (a weak box decodes the peaks in rounds)
         int    workers = 0;        // 0 = one per core to spare, at most 4
         float  minSnrDb = 8.0f;    // a channel this far over the hop's floor is a peak
+        /** ★★ WEAK CANDIDATES GET A DWELL TOO (2026-11-16, the G35: three weak stereo stations at 107.4–107.8 beside NLive
+         *  106.9 in one hop, never logged). After the peaks, up to `maxWeak` more channels between weakSnrDb and minSnrDb —
+         *  each the highest within ±100 kHz, so never a neighbour's skirt — are demodulated for their pilot and RDS. One is
+         *  REPORTED only if its pilot held for pilotHoldSec or its RDS confirmed; a weak channel with neither is dropped
+         *  (it was noise, or a mono station too weak to be sure of). Stuart: a slower sweep is fine on an idle server. */
+        float  weakSnrDb = 5.0f;
+        int    maxWeak = 8;
+        double pilotHoldSec = 0.5; // ★ the pilot locked for this long in all over the dwell = a stereo station
     };
-    struct Stats { int peaks = 0, rounds = 0, workers = 0, extended = 0; double wallSec = 0, cpuSec = 0; long droppedBlocks = 0; float floorDb = -200; };
+    struct Stats { int peaks = 0, weak = 0, rounds = 0, workers = 0, extended = 0; double wallSec = 0, cpuSec = 0; long droppedBlocks = 0; float floorDb = -200; };
 
     FmHopEngine() = default;
     ~FmHopEngine() { abort(); }
@@ -144,6 +152,8 @@ private:
         double hz = 0;
         int centreBin = 0;
         float levelDb = -200, snrDb = 0;
+        bool weak = false;                 // ★ under minSnrDb: a weak candidate (Params::weakSnrDb)
+        long long lockedN = 0;             // samples of the dwell with the pilot locked
         vibedsp::Channelizer::ExtractCtx ctx;
         vibedsp::FmDemod fm;
         vibedsp::StereoPLL pll;
@@ -275,6 +285,7 @@ private:
                         ch.pll.processBlock(ch.mpx.data(), n, ch.lmr.data(), ch.r57.data(), ch.r57q.data(), ch.clk.data());
                         ch.rds.setPilotRef(ch.pll.lockAmp());
                         ch.rds.process(ch.mpx.data(), ch.r57.data(), ch.r57q.data(), ch.clk.data(), n);
+                        if (ch.pll.locked()) ch.lockedN += n;
                     }
                 }
             });
@@ -320,11 +331,12 @@ private:
             const double floorP = std::max(1e-30, (double)bins[bins.size() / 10] / std::max(1, specBlocks) * (2 * w + 1));
             const double n2 = (double)N * (double)N / 4.0;   // ★ a full-scale tone through the Hann window: (Σw)² = (N/2)²
             stats_.floorDb = (float)(10.0 * std::log10(floorP / n2));
-            std::vector<C> peaks;
+            std::vector<C> peaks, weak;
+            const double lowest = std::min(p_.minSnrDb, p_.maxWeak > 0 ? p_.weakSnrDb : p_.minSnrDb);
             for (size_t i = 0; i < cs.size(); ++i) {
                 if (!cs[i].own) continue;
                 const double snr = 10.0 * std::log10(cs[i].p / floorP);
-                if (snr < p_.minSnrDb) continue;
+                if (snr < lowest) continue;
                 bool top = true;
                 for (int d = -reach; d <= reach && top; ++d) {
                     if (!d) continue;
@@ -332,13 +344,19 @@ private:
                     if (j < 0 || j >= (long)cs.size()) continue;
                     if (cs[(size_t)j].p > cs[i].p) top = false;
                 }
-                if (top) peaks.push_back(cs[i]);
+                if (top) (snr >= p_.minSnrDb ? peaks : weak).push_back(cs[i]);
             }
             std::sort(peaks.begin(), peaks.end(), [](const C& a, const C& b) { return a.p > b.p; });
             if ((int)peaks.size() > p_.maxPeaks) peaks.resize((size_t)p_.maxPeaks);
+            std::sort(weak.begin(), weak.end(), [](const C& a, const C& b) { return a.p > b.p; });
+            if ((int)weak.size() > std::max(0, p_.maxWeak)) weak.resize((size_t)std::max(0, p_.maxWeak));
+            const size_t nStrong = peaks.size();
+            peaks.insert(peaks.end(), weak.begin(), weak.end());
             const int keep = chanBins - chanBins / vibedsp::Channelizer::OVERLAP_DIV;
-            for (const auto& pk : peaks) {
+            for (size_t pi = 0; pi < peaks.size(); ++pi) {
+                const C& pk = peaks[pi];
                 auto ch = std::make_unique<Chan>();
+                ch->weak = pi >= nStrong;
                 ch->hz = pk.hz;
                 ch->centreBin = (int)std::lround((pk.hz - p_.centreHz) / binHz);
                 ch->levelDb = (float)(10.0 * std::log10(pk.p / n2));
@@ -351,13 +369,15 @@ private:
                 c->mpx.resize((size_t)keep); c->lmr.resize((size_t)keep);
                 c->r57.resize((size_t)keep); c->r57q.resize((size_t)keep); c->clk.resize((size_t)keep);
             }
-            stats_.peaks = (int)chans.size();
+            stats_.peaks = (int)nStrong;
+            stats_.weak = (int)(chans.size() - nStrong);
         };
 
         auto armChan = [&](Chan& c) {
             c.fm.setGain((float)(chanRate / (2.0 * M_PI * 75000.0)));
             c.fm.reset();
             c.pll.configure(19000.0, chanRate); c.pll.reset();
+            c.lockedN = 0;
             vibedsp::RdsDecoder::Callbacks cb;
             cb.ctx = &c;
             cb.group = [](void* x, uint16_t pi, int clean) { if (clean) ++static_cast<Chan*>(x)->clean[pi]; };
@@ -446,7 +466,11 @@ private:
         }
         if (!stop_ && finished) {
             flush();
+            const long long holdN = (long long)(p_.pilotHoldSec * chanRate);
             for (const auto& c : chans) {
+                const bool pilot = c->pll.locked() || c->lockedN >= holdN;
+                // ★ a weak candidate is a station only on its own evidence: the pilot held, or RDS confirmed
+                if (c->weak && !pilot && !c->confirmed()) continue;
                 FmHit h;
                 h.khz = (int)std::lround(c->hz / 1e3);
                 int best = 0; uint16_t bp = 0;
@@ -458,7 +482,7 @@ private:
                     h.psComplete = b && b->psComplete();
                 }
                 h.levelDb = c->levelDb; h.snrDb = c->snrDb;
-                h.pilot = c->pll.locked();   // ★ a stereo station is logged even without RDS (vibe_dxscan.h commitFm)
+                h.pilot = pilot;   // ★ a stereo station is logged even without RDS (vibe_dxscan.h commitFm)
                 results_.push_back(h);
             }
         }

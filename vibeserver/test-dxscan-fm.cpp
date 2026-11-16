@@ -86,6 +86,8 @@ static std::vector<FmHit> runHop(FmHopEngine& e, const FmHopEngine::Params& p, c
     return e.results();
 }
 
+static int64_t T0dx() { return 1800000000; }
+
 int main() {
     const double fs = 2.4e6, centre = 98.95e6;   // a hop centre half a raster step off the raster
     // stations on the 100 kHz raster at offsets from the centre (98.950): 98.1, 98.4, 98.8, 99.2, 99.6
@@ -176,6 +178,45 @@ int main() {
         ok(!edge, "★ no peak on the hop's first channel (104.3) from BBC 104.2's skirt below it");
         ok(!dc, "★ no peak on 104.8 from the capture's DC spike");
         ok(hz && hz->pi == 0xC0BB && fmConfirmed(hz->groups, hz->psComplete), "★ Horizon is found on 104.7 and named (C0BB)");
+    }
+
+    std::printf("── weak stereo stations beside a strong one (the G35's 107.25 hop, 2026-11-16) ──\n");
+    {
+        // NLive 106.9 strong with RDS; 107.4 and 107.8 weak, pilot only (no RDS); 107.6 weak too — on 106.9's mirror about the DC
+        const double c3 = 107.25e6;
+        const auto iq3 = capture(fs, 9.0, { { -350e3, 0xCA89, "NLive   ", 0.30, true },
+                                            { +150e3, 0x0001, "        ", 0.0025, false },   // ~10 dB channel SNR
+                                            { +350e3, 0x0002, "        ", 0.0020, false },
+                                            { +550e3, 0x0003, "        ", 0.0016, false } },   // ~6 dB: under the peak bar
+                                 0.002, 13);
+        FmHopEngine e7; FmHopEngine::Params q;
+        q.rateHz = fs; q.centreHz = c3; q.dcHz = c3; q.rasterKhz = 100; q.loHz = 106.7e6; q.hiHz = 107.8e6; q.dwellSec = 4.0;
+        const auto h7 = runHop(e7, q, iq3);
+        auto at = [&](int khz) -> const FmHit* { for (const auto& h : h7) if (h.khz == khz) return &h; return nullptr; };
+        for (int k : { 106900, 107400, 107600, 107800 }) {
+            const FmHit* h = at(k);
+            std::printf("      %.1f MHz: %s\n", k / 1e3, h ? (std::string("SNR ") + std::to_string((int)std::lround(h->snrDb)) + " dB, pilot " + (h->pilot ? "locked" : "no")
+                                                           + (h->pi ? ", PI" : "")).c_str() : "not reported");
+        }
+        const FmHit* w4 = at(107400); const FmHit* w8 = at(107800);
+        ok(at(106900) && at(106900)->pi == 0xCA89, "NLive 106.9 identified");
+        ok(w4 && w4->pilot && w4->snrDb < 12.0f, "★ 107.4: a weak pilot-only station (under the old 12 dB bar) is reported with its pilot locked");
+        ok(w8 && w8->pilot && w8->snrDb < q.minSnrDb, "★ 107.8: under the peak bar too — a WEAK CANDIDATE given a dwell, pilot locked");
+        ok(e7.stats().weak >= 1, "the weak candidates are counted (" + std::to_string(e7.stats().weak) + ")");
+        // …and through the log
+        Log lg(T0dx());
+        lg.commitFm(106700, 107800, 107250, 100, h7, T0dx() + 86400 * 2);
+        const Entry* e4 = lg.findKey(fmKey(0, 107400));
+        const Entry* e8 = lg.findKey(fmKey(0, 107800));
+        const Entry* e6 = lg.findKey(fmKey(0, 107600));
+        ok(e4 && e4->stereo && e4->cls != Cls::Suspect, "★ 107.4 is LOGGED (no RDS, stereo), not suspect");
+        ok(e8 && e8->stereo && e8->cls != Cls::Suspect, "★ 107.8 is LOGGED (no RDS, stereo), not suspect");
+        ok(!e6 || e6->cls == Cls::Suspect, "107.6, on 106.9's mirror about the hop's DC and far weaker, is kept SUSPECT (the image rule unchanged)"
+                                           + std::string(e6 ? " — " + e6->suspectWhy : " — not reported"));
+        // a weak candidate of plain noise is never reported
+        const auto quiet = capture(fs, 6.0, {}, 0.002, 17);
+        FmHopEngine e8n; const auto hq = runHop(e8n, q, quiet);
+        ok(hq.empty(), "noise only: no weak candidate is reported (" + std::to_string(hq.size()) + ")");
     }
 
     std::printf("\n%d passed, %d failed\n", pass, fail);

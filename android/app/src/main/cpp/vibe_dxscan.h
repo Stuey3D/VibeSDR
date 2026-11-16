@@ -60,7 +60,11 @@ static constexpr int64_t kWindowSec   = 7 * 86400;
 static constexpr int64_t kBootstrapSec = 24 * 3600;
 static constexpr double kLocalRatio   = 0.90;
 static constexpr int    kLocalMinVisitsBootstrap = 3;   // a baseline local must have been visited at least this often
-static constexpr float  kFmNoRdsPilotSnr = 12.0f;   // ★ a station with no RDS: its pilot locked and this far over the floor
+/* ★★ (2026-11-16, the G35: 107.4 / 107.6 / 107.8 stereo at 19–22 dB on the listener's meter, never logged — nothing filed
+ *  under 12.6 dB in 4 sweeps) a LOCKED 19 kHz PILOT IS THE PROOF, whatever the level: there used to be a 12 dB bar on it
+ *  as well (kFmNoRdsPilotSnr), and the scanner's channel SNR (±80 kHz of power over the quietest tenth of the hop's bins)
+ *  reads a weak stereo station well under the listener's figure. The skirt / image / intermod rules still mark a pilot
+ *  that belongs to a stronger neighbour as Suspect. */
 static constexpr float  kFmNoRdsMonoSnr  = 25.0f;   // …or, mono, this far (a hi-fi tuner's stop level, over any local's skirt)
 static constexpr int    kFmMinGroups  = 3;      // ★ brief §6: PI in at least 3 CRC-valid groups within one dwell
 static constexpr double kFmBandLoHz   = 87.5e6, kFmBandHiHz = 108.0e6;
@@ -332,11 +336,11 @@ public:
         for (const auto& h : hits) {
             /* ★★★ STATIONS WITHOUT RDS ARE STATIONS (Stuart, 2026-11-14: "we still need to include non RDS stations like a
              *  digital HiFi tuner doing a scan too"). A hit whose RDS did not confirm is logged by its FREQUENCY (PI 0000)
-             *  when its 19 kHz pilot locked (a real stereo station) at ≥ kFmNoRdsPilotSnr, or — mono — at ≥ kFmNoRdsMonoSnr
+             *  when its 19 kHz pilot locked (a real stereo station — at any level, see kFmNoRdsMonoSnr), or — mono — at ≥ kFmNoRdsMonoSnr
              *  (a hi-fi tuner's stop level; well above a strong local's skirt). The image / intermod checks below apply as
              *  to any station. A frequency that already has an RDS station logged is not filed again without RDS. */
             const bool rds = fmConfirmed(h.groups, h.psComplete) && h.pi != 0;
-            const bool noRds = !rds && ((h.pilot && h.snrDb >= kFmNoRdsPilotSnr) || h.snrDb >= kFmNoRdsMonoSnr);
+            const bool noRds = !rds && (h.pilot || h.snrDb >= kFmNoRdsMonoSnr);
             if (!rds && !noRds) continue;
             if (noRds && hasRdsAt(h.khz)) continue;
             const uint16_t pi = rds ? h.pi : 0;
