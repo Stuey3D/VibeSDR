@@ -247,6 +247,12 @@ struct Entry {
     float    peakLevelDb = -200, peakSnrDb = 0;
     float    presence = 0;               // presence_ratio_7d, refreshed on every visit
     std::string promoted;                // promoted_bookmark_id ("" = not promoted)
+    /** ★★ V12 2026-11-16 THIS LOCAL HAS BEEN HANDED TO THE DISCOVERED BOOKMARKS (Stuart: "once the DX Log has established
+     *  the locals then we can add them to the RDS discovered bookmarks, same with the DAB multiplexes too"). Set once the
+     *  shim has written it (localsForBookmarks / markLocalBookmarked); cleared when the entry stops being Local, so a
+     *  station that is established AGAIN later is offered again. ★ ONE-SHOT while it stays Local: after this the shim only
+     *  ever refreshes a row that is still there, so a bookmark the owner deleted does not come back every sweep. */
+    bool     bmLocal = false;
     std::vector<Opening> openings;
     uint32_t lastSweep = 0;              // the band's sweep number when last heard ("Live now")
     /* ★★ VISITS THAT LOOKED AND MISSED IT since it was last heard (Stuart, 2026-11-05: "heard 117 times in 5 openings" on a
@@ -427,6 +433,47 @@ public:
         return vr;
     }
 
+    /** ★★ A LOCAL FOR THE DISCOVERED BOOKMARKS — only what a bookmark needs, copied out so the shim can write the bookmarks
+     *  without holding the log's lock. */
+    struct LocalBm {
+        int id = 0;
+        bool dab = false;
+        bool fresh = false;              // true = not yet handed over (add it); false = handed over before (refresh only)
+        int khz = 0;                     // FM: the channel; DAB: the block's centre
+        uint16_t pi = 0;                 // FM: 0 = a station with no RDS
+        std::string ps;                  // FM: the last WHOLE PS ("" = none assembled)
+        int block = -1;                  // DAB
+        uint32_t eid = 0;
+        int ecc = -1;
+        std::vector<std::pair<uint32_t, std::string>> services;
+        int64_t lastHeard = 0;
+    };
+    /** ★★ EVERY LOCAL, AND NOTHING ELSE (Stuart 2026-11-16: only the LOCALS go into the discovered bookmarks — a DX catch,
+     *  Sporadic-E, tropo, meteor scatter, a provisional or a suspect, stays in the DX Log). The log's own rule decides:
+     *  class Local, nothing more is asked here. A DAB local needs a named service (a multiplex that named none has nothing
+     *  to bookmark); an FM local needs a channel in the band. Bounded by kMaxEntries. */
+    std::vector<LocalBm> localsForBookmarks() const {
+        std::vector<LocalBm> v;
+        const int lo = (int)std::lround(kFmBandLoHz / 1e3), hi = (int)std::lround(kFmBandHiHz / 1e3);
+        for (const auto& kv : entries_) {
+            const Entry& e = kv.second;
+            if (e.cls != Cls::Local) continue;
+            if (e.dab && (e.block < 0 || e.services.empty() || !e.eid)) continue;
+            if (!e.dab && (e.khz < lo || e.khz > hi)) continue;
+            LocalBm b;
+            b.id = e.id; b.dab = e.dab; b.fresh = !e.bmLocal; b.khz = e.khz; b.pi = e.pi; b.ps = e.psLast;
+            b.block = e.block; b.eid = e.eid; b.ecc = e.ecc; b.services = e.services; b.lastHeard = e.lastHeard;
+            v.push_back(std::move(b));
+        }
+        return v;
+    }
+    /** The shim wrote this local into the bookmarks: not offered as new again while it stays Local. */
+    bool markLocalBookmarked(int id) {
+        auto it = entries_.find(id);
+        if (it == entries_.end() || it->second.cls != Cls::Local || it->second.bmLocal) return false;
+        it->second.bmLocal = true; dirty_ = true; return true;
+    }
+
     /** Promote: the caller wrote the bookmark; this remembers it (and makes the entry unprunable). */
     bool setPromoted(int id, const std::string& bm) {
         auto it = entries_.find(id); if (it == entries_.end()) return false;
@@ -495,6 +542,7 @@ public:
         if (e.peakLevelDb > -199) { std::snprintf(b, sizeof b, ",\"peakLevelDb\":%.1f", e.peakLevelDb); j += b; }
         std::snprintf(b, sizeof b, ",\"peakSnrDb\":%.1f", e.peakSnrDb); j += b;
         if (!e.promoted.empty()) j += ",\"promoted\":\"" + esc(e.promoted) + "\"";
+        if (e.bmLocal && e.cls == Cls::Local) j += ",\"inBookmarks\":true";   // ★ a local handed to the discovered bookmarks
         if (withOpenings) {
             j += ",\"openingList\":[";
             for (size_t i = e.openings.size(); i-- > 0;) {   // newest first
@@ -650,6 +698,7 @@ public:
                 e.peakLevelDb = (float)num(o, "peakLevelDb", -200); e.peakSnrDb = (float)num(o, "peakSnrDb", 0);
                 e.presence = (float)num(o, "presence", 0);
                 e.promoted = o.str("promoted");
+                e.bmLocal = bo(o, "inBookmarks", false) && e.cls == Cls::Local;
                 e.lastSweep = (uint32_t)num(o, "lastSweep", 0);
                 e.missedVisits = (uint32_t)num(o, "mv", 0);
                 if (const Json* ol = o.get("openingList"); ol && ol->kind == Json::Arr) {
@@ -813,7 +862,7 @@ private:
         for (const auto& s : svcs)
             if ((int)o.services.size() < kMaxOpeningServices && std::find(o.services.begin(), o.services.end(), s) == o.services.end()) o.services.push_back(s);
         // ★ a Local unheard for over the window has dropped back (judge does it on visits; this catches a band unvisited)
-        if (e.cls == Cls::Local && e.lastHeard > 0 && now - e.lastHeard > kWindowSec) e.cls = Cls::Dx;
+        if (e.cls == Cls::Local && e.lastHeard > 0 && now - e.lastHeard > kWindowSec) { e.cls = Cls::Dx; e.bmLocal = false; }
         e.lastHeard = now; ++e.timesHeard; e.lastSweep = sweepNow;
         if (level > e.peakLevelDb) e.peakLevelDb = level;
         if (snr > e.peakSnrDb) e.peakSnrDb = snr;
@@ -840,7 +889,7 @@ private:
         e.presence = presenceOf(e, now, &visits);
         if (e.cls == Cls::Provisional) return;                  // the bootstrap's end decides (classifyBootstrapEnd)
         if (e.cls == Cls::Local) {
-            if (now - e.lastHeard > kWindowSec) e.cls = Cls::Dx;   // ★ gone a week: drops back, unclassified
+            if (now - e.lastHeard > kWindowSec) { e.cls = Cls::Dx; e.bmLocal = false; }   // ★ gone a week: drops back, unclassified
             return;
         }
         if (e.cls == Cls::Suspect) return;

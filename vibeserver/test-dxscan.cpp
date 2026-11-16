@@ -362,6 +362,56 @@ int main() {
         ok(log.size() == 1 && log.find(keepId) && n > 0, "clear keeps the promoted entry");
     }
 
+    std::printf("── locals into the discovered bookmarks (2026-11-16) ──\n");
+    {
+        Log log(T0);
+        int64_t t = T0;
+        DabHit d; d.block = 30; d.blockName = "12B"; d.eid = 0xC1CE; d.ecc = 0xE1; d.label = "Digital One"; d.fibOk = 3;
+        d.services = { { 0xC0CE, "Classic FM" }, { 0xC0D2, "talkSPORT" } };
+        // a day of sweeps: two FM locals (one with no RDS) and a DAB local, every visit
+        for (; t < T0 + 26 * 3600; t += 1200) {
+            log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 8, true), fm(99400, 0, "", 0, false, -30, 30, true) }, t);
+            log.commitDab(30, &d, t);
+        }
+        // ★ then a Sporadic-E catch, heard for twenty minutes — DX, never Local
+        for (int64_t u = t; u <= t + 20 * 60; u += 120)
+            log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 8, true), fm(99400, 0, "", 0, false, -30, 30, true),
+                                                     fm(98800, 0x5201, "RAI R1", 5, true) }, u);
+        DabHit es = d; es.block = 31; es.blockName = "12C"; es.eid = 0xE0F1; es.label = "Far Away"; es.services = { { 0xF1, "Far Radio" } };
+        log.commitDab(31, &es, t + 600);
+        t += 30 * 60;
+        auto locals = log.localsForBookmarks();
+        bool fmR4 = false, fmNoRds = false, dab = false, dx = false;
+        for (const auto& l : locals) {
+            if (!l.dab && l.pi == 0xC201 && l.khz == 98500 && l.ps == "BBC R4" && l.fresh) fmR4 = true;
+            if (!l.dab && l.pi == 0 && l.khz == 99400 && l.fresh) fmNoRds = true;
+            if (l.dab && l.eid == 0xC1CE && l.block == 30 && l.ecc == 0xE1 && l.services.size() == 2 && l.services[0].second == "Classic FM") dab = true;
+            if (l.pi == 0x5201 || l.eid == 0xE0F1) dx = true;
+        }
+        ok(locals.size() == 3, "★ the locals are offered — three of them (" + std::to_string(locals.size()) + ")");
+        ok(fmR4, "an FM local with its PI and its whole PS");
+        ok(fmNoRds, "an FM local with no RDS, by its frequency");
+        ok(dab, "a DAB local: block, EId, ECC and every named service");
+        ok(!dx && log.findKey(fmKey(0x5201, 98800))->cls == Cls::Dx, "★★ the Sporadic-E catch (DX) is NOT offered — only locals become bookmarks");
+        ok(log.findKey(dabKey(0xE0F1, "12C"))->cls == Cls::Dx, "  nor the DX multiplex");
+        for (const auto& l : locals) log.markLocalBookmarked(l.id);
+        bool anyFresh = false;
+        for (const auto& l : log.localsForBookmarks()) anyFresh = anyFresh || l.fresh;
+        ok(!anyFresh && log.localsForBookmarks().size() == 3, "★ once handed over, no local is offered as NEW again (refresh only — a deleted bookmark stays deleted)");
+        ok(!log.markLocalBookmarked(log.findKey(fmKey(0x5201, 98800))->id), "a DX entry cannot be marked as a bookmarked local");
+        Log back; back.fromFileJson(log.toFileJson());
+        anyFresh = false;
+        for (const auto& l : back.localsForBookmarks()) anyFresh = anyFresh || l.fresh;
+        ok(!anyFresh && back.localsForBookmarks().size() == 3, "the handed-over mark survives a restart");
+        // ★ a local that goes away for over a week drops back to DX — and if it is established again, it is offered again
+        for (int64_t u = t; u < t + 9 * 86400; u += 1800) log.commitDab(30, &d, u);
+        log.evaluate(t + 9 * 86400);   // ★ the tick re-judges every entry once a minute
+        bool r4Offered = false;
+        for (const auto& l : log.localsForBookmarks()) if (l.pi == 0xC201) r4Offered = true;
+        ok(log.findKey(fmKey(0xC201, 98500))->cls == Cls::Dx && !r4Offered, "a Local gone a week drops back to DX and is no longer offered");
+        ok(!log.find(log.findKey(fmKey(0xC201, 98500))->id)->bmLocal, "  and its handed-over mark is cleared (a re-established local is offered afresh)");
+    }
+
     std::printf("── persistence ──\n");
     {
         Log log(T0);
