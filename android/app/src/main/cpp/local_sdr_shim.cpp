@@ -2620,13 +2620,16 @@ static int bmScanFm(const std::vector<FmScanBmRow>& rows, bool addMissing = true
     std::lock_guard<std::mutex> lk(g_bmMtx);
     for (const auto& r : rows) {
         if (r.pi < 0 || r.khz <= 0) continue;
-        const double hz = bmSnapFm(r.khz * 1000.0);
+        // ★ only 87.5–108 snaps to its 100 kHz raster: OIRT's 69.80 or a pirate's 86.65 (the DX log's other ranges) stay exact
+        const double hz = r.khz >= 87500 ? bmSnapFm(r.khz * 1000.0) : r.khz * 1000.0;
         if (hz <= 0) continue;
         const long long key = bmKey(hz);
         const std::string ps = r.psComplete && r.pi > 0 ? bmClean(r.ps, 64) : std::string();
         char prov[64];
-        if (r.pi > 0) std::snprintf(prov, sizeof prov, "PI: %04X %.1fMHz", (unsigned)r.pi, hz / 1e6);
-        else std::snprintf(prov, sizeof prov, "%.1fMHz (no RDS)", hz / 1e6);
+        // ★ two decimals off the 100 kHz raster (OIRT 69.80, a pirate's 86.65)
+        const bool fine = (long long)llround(hz) % 100000 != 0;
+        if (r.pi > 0) std::snprintf(prov, sizeof prov, fine ? "PI: %04X %.2fMHz" : "PI: %04X %.1fMHz", (unsigned)r.pi, hz / 1e6);
+        else std::snprintf(prov, sizeof prov, fine ? "%.2fMHz (no RDS)" : "%.1fMHz (no RDS)", hz / 1e6);
         auto it = g_bookmarks.find(key);
         if (it != g_bookmarks.end()) {
             LearnedBm& b = it->second;
@@ -33704,14 +33707,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** The FM hops this radio can make now, inside the owner's permitted bands. */
     /** `dxLog`: the DX scanner's plan — behind kDxFmIfHz on a radio that can narrow (dxCloseLooks' note). The owner's FM
      *  band scan (bookmarks) keeps its wide hops. */
+    /** ★★ V12 2026-11-16: the DX scanner sweeps EVERY FM range the owner has on (vibe::dx::kFmRanges — OIRT, extended
+     *  FM 76–87.5, the main band), each on its own raster; the owner's FM band scan (bookmarks, dxLog false) stays on
+     *  87.5–108. A hop is kept only where THIS RADIO TUNES it (the driver's own ranges, radioCapsJson) — an R820T reaches
+     *  65 MHz, a radio that does not simply skips OIRT — and where the owner permits it (vsPermittedRanges). */
     std::vector<vibe::dx::FmHopPlan> dxFmPlan(const vibe::dx::Config& c, bool dxLog = true) {
-        auto plan = vibe::dx::planFm(sampleRate, c.rasterKhz, vibe::dx::kFmBandLoHz, vibe::dx::kFmBandHiHz,
-                                     dxLog && dxCanNarrow() ? kDxFmIfHz : 0.0);
-        const vibebands::Ranges perm = vsPermittedRanges(vibebands::Ranges{{0.0, 2.0e9}});
-        if (perm.empty()) return plan;
-        std::vector<vibe::dx::FmHopPlan> out;
-        for (const auto& h : plan) if (vibebands::allows(perm, h.loHz) || vibebands::allows(perm, h.hiHz) || vibebands::allows(perm, h.centreHz)) out.push_back(h);
-        return out;
+        const double ifHz = dxLog && dxCanNarrow() ? kDxFmIfHz : 0.0;
+        auto plan = dxLog ? vibe::dx::planFmRanges(sampleRate, c, ifHz)
+                          : vibe::dx::planFm(sampleRate, c.rasterKhz, vibe::dx::kFmBandLoHz, vibe::dx::kFmBandHiHz, ifHz);
+        return vibe::dx::keepTunable(plan, dxHardwareRanges(), vsPermittedRanges(vibebands::Ranges{{0.0, 2.0e9}}));
+    }
+    /** The driver's own tuning ranges ("ranges":[[lo,hi],…] in radioCapsJson). Empty = it publishes none (assume all). */
+    static vibebands::Ranges dxHardwareRanges() {
+        vibebands::Ranges hw;
+        const std::string caps = LocalSdrShim::instance().radioCapsJson();
+        const size_t k = caps.find("\"ranges\":[");
+        if (k == std::string::npos) return hw;
+        const size_t end = caps.find("]]", k);
+        const std::string body = caps.substr(k + 10, end == std::string::npos ? std::string::npos : end - k - 9);
+        size_t pos = 0;
+        while ((pos = body.find('[', pos)) != std::string::npos) {
+            const double lo = atof(body.c_str() + pos + 1);
+            const size_t c = body.find(',', pos);
+            const double hi = c == std::string::npos ? 0 : atof(body.c_str() + c + 1);
+            if (hi > lo) hw.push_back({ lo, hi });
+            pos = c == std::string::npos ? body.size() : c + 1;
+        }
+        return hw;
     }
 
     void dxLoop() {
@@ -33820,7 +33842,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     static int dxIfRung(double hz) { for (int r : kIfRungs) if (r >= hz) return r; return 0; }
     bool dxCanNarrow() const { return dev != nullptr && g_tunerBwAuto.load(std::memory_order_relaxed) && g_vsLockedCentre.load() <= 0.0; }
     void dxSetIf(int hz) { g_dxIfHz.store(dxCanNarrow() ? hz : 0, std::memory_order_relaxed); }
-    int dxCloseLooks(const vibe::dx::Config& cfg, std::vector<vibe::dx::FmHit>& hits) {
+    int dxCloseLooks(const vibe::dx::Config& cfg, std::vector<vibe::dx::FmHit>& hits, int rasterKhz) {
         if (!dxCanNarrow()) return 0;
         const vibe::dx::FmHopEngine::Params def;
         std::vector<size_t> want;
@@ -33865,8 +33887,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));   // ★ the AGC's climb behind the narrower filter
             vibe::dx::FmHopEngine::Params p;
             p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
-            p.rasterKhz = cfg.rasterKhz; p.loHz = f - cfg.rasterKhz * 500.0; p.hiHz = f + cfg.rasterKhz * 500.0;
+            p.rasterKhz = rasterKhz; p.loHz = f - rasterKhz * 500.0; p.hiHz = f + rasterKhz * 500.0;
             p.peaksPerRound = 1;
+            p.maxWeak = 0;   // ★ the look is at ONE channel already chosen
             dxFm_.start(p);
             dxFmFeed_.store(true);
             const double t0 = nowSecs();
@@ -33879,7 +33902,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             ++n;
             bool named = false;
             for (const auto& c : dxFm_.results()) {
-                if (std::abs(c.khz - h.khz) > std::max(1, cfg.rasterKhz / 2)) continue;
+                if (std::abs(c.khz - h.khz) > std::max(1, rasterKhz / 2)) continue;
                 // ★ what the close look decoded; the LEVEL and SNR stay the hop's (one floor for the whole hop — openings
                 //   and alerts compare like with like)
                 if (c.pi && vibe::dx::fmConfirmed(c.groups, c.psComplete)) { h.pi = c.pi; h.ps = c.ps; h.psComplete = c.psComplete; h.groups = c.groups; named = true; }
@@ -33913,7 +33936,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         dxGainEnter(hopKey, "FM hop");
         vibe::dx::FmHopEngine::Params p;
         p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
-        p.rasterKhz = cfg.rasterKhz; p.loHz = hop.loHz; p.hiHz = hop.hiHz;
+        p.rasterKhz = hop.rasterKhz; p.loHz = hop.loHz; p.hiHz = hop.hiHz;   // ★ the hop's own raster (OIRT 30, extended 50)
         p.peaksPerRound = dxPeakBudget();
         if (const char* e = std::getenv("VIBESERVER_DX_DWELL_SEC"); e && *e) p.dwellSec = std::max(0.5, std::atof(e));   // ★ TEST-ONLY
         dxFm_.start(p);
@@ -33933,7 +33956,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (const auto& h : dxFm_.results()) if (perm.empty() || vibebands::allows(perm, h.khz * 1e3)) hits.push_back(h);
         const auto st = dxFm_.stats();
         dxGainLearn(hopKey);   // ★ before the close looks move the filter and the gain
-        const int looks = dxCloseLooks(cfg, hits);
+        const int looks = dxCloseLooks(cfg, hits, hop.rasterKhz);
         dxSetIf(0);
         applyAutoIf();   // ★ back to the ordinary rule — a widening arms the AGC's fast cut, as it should
         vibe::dx::VisitResult vr;
@@ -33950,7 +33973,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ the hop just before, when it WAS just before (the spill rule looks across the boundary both ways)
             const bool adjacent = dxPrevHopIdx_ >= 0 && dxPrevHopIdx_ + 1 == job.index;
             if (!adjacent) dxPrevHits_.clear();
-            vr = g_dxLog.commitFm((int)std::lround(hop.loHz / 1e3), (int)std::lround(hop.hiHz / 1e3), (int)std::lround(p.dcHz / 1e3), cfg.rasterKhz, hits, utc,
+            vr = g_dxLog.commitFm((int)std::lround(hop.loHz / 1e3), (int)std::lround(hop.hiHz / 1e3), (int)std::lround(p.dcHz / 1e3), hop.rasterKhz, hits, utc,
                                   &dxPrevHits_);
             vr.suspects += g_dxLog.markSpill(dxPrevHits_, hits);
             dxPrevHits_ = hits; dxPrevHopIdx_ = job.index;
@@ -34055,7 +34078,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibe::dx::Config c;
         { std::lock_guard<std::mutex> lk(g_dxMtx); c = g_dxCfg; }
         if (vibe::dx::planFm(sampleRate, c.rasterKhz).empty()) return "this radio's sample rate is too narrow to hold an FM channel";
-        if (dxFmPlan(c).empty()) return "none of 87.5\xe2\x80\x93" "108 MHz is inside the range this radio may tune";
+        if (dxFmPlan(c, false).empty()) return "none of 87.5\xe2\x80\x93" "108 MHz is inside the range this radio may tune";
         return "";
     }
     /** ★ The scan's state to every listener (the admin's progress; everybody else's banner when locked). */

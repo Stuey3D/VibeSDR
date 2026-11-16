@@ -302,7 +302,8 @@ private:
              *  at 104.85 sat inside 104.8's ±80 kHz and its spike outweighed a real S9 station 100 kHz away). The bins
              *  within dcGuardHz of DC are left out of every channel's sum, the rest scaled up to the same width. */
             const int kDc = (int)std::lround((p_.dcHz - p_.centreHz) / binHz), dcG = std::max(1, (int)std::lround(p_.dcGuardHz / binHz));
-            const int reach = p_.rasterKhz == 50 ? 2 : 1;   // a peak is the highest within ±100 kHz
+            // a peak is the highest within ±100 kHz: 1 channel each side at 100 kHz, 2 at 50, 3 at OIRT's 30
+            const int reach = std::max(1, (int)std::lround(100.0 / std::max(1, p_.rasterKhz)));
             /* ★★ AND THE CHANNELS JUST OUTSIDE THE HOP ARE MEASURED TOO (this comment was here; the code was not): a hop's
              *  first channel holds the upper half of a strong station one channel below it (104.3 = BBC 104.2's skirt, 98.3
              *  = R1 98.2's) and, with nothing below it to compare, was a "peak" — decoded as that station: the spill rows.

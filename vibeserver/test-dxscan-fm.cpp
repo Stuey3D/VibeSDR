@@ -219,6 +219,21 @@ int main() {
         ok(hq.empty(), "noise only: no weak candidate is reported (" + std::to_string(hq.size()) + ")");
     }
 
+    std::printf("── OIRT: a 30 kHz raster hop (2026-11-16) ──\n");
+    {
+        // two OIRT stations, 69.80 (strong) and 70.31 (weaker), in a hop centred half a raster off: 69.995
+        const double c4 = 69.995e6;
+        const auto iq4 = capture(fs, 5.0, { { -195e3, 0xE201, "RADIO 1 ", 0.10, true }, { +315e3, 0xE202, "MAYAK   ", 0.02, true } }, 0.002, 19);
+        FmHopEngine e9; FmHopEngine::Params q;
+        q.rateHz = fs; q.centreHz = c4; q.dcHz = c4; q.rasterKhz = 30; q.loHz = 69.38e6; q.hiHz = 70.58e6; q.dwellSec = 4.0;
+        const auto h9 = runHop(e9, q, iq4);
+        const FmHit* a1 = nullptr; const FmHit* a2 = nullptr; int others = 0;
+        for (const auto& h : h9) { if (h.khz == 69800) a1 = &h; else if (h.khz == 70310) a2 = &h; else ++others; }
+        ok(a1 && a1->pi == 0xE201 && fmConfirmed(a1->groups, a1->psComplete), "★ 69.80 found on the 30 kHz raster and identified");
+        ok(a2 && a2->pi == 0xE202 && fmConfirmed(a2->groups, a2->psComplete), "★ 70.31 too");
+        ok(others == 0, "★ each station is ONE peak, not one per 30 kHz channel across its width (" + std::to_string(others) + " others)");
+    }
+
     std::printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }
