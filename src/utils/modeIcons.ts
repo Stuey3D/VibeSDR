@@ -155,6 +155,7 @@ export function modeIconFor(id: string): ModeIconName | null {
     case 'ndb': case 'ncdxf': return 'beacon';   // ★ V12 NCDXF / IARU beacons
     case 'ism': return 'sensor';
     case 'sondes': case 'sonde': case 'rs41': case 'radiosonde': return 'balloon';   // ★ V12 radiosondes
+    case 'balloon': return 'balloon';   // ★ V12 amateur balloons (UKHAS / Horus / SSDV) — the same glyph
     case 'paging': case 'pocsag': case 'flex': case 'pager': return 'pager';   // ★ V12 PAGING (and OpenWebRX's POCSAG)
     case 'aprs': case 'packet': return 'aprs';
     case 'sstv': return 'tv';

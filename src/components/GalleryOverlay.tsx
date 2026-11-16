@@ -57,6 +57,8 @@ const KINDS: { id: string; label: string }[] = [
   // ★★ V12 2026-10-26: DSC — each frequency's day of calls as a .txt, every distress/urgency call on its own (vibe_dsc_gallery.h)
   { id: 'dsc', label: 'DSC' },
   { id: 'sitora', label: 'SITOR-A' },
+  // ★★ V12 balloons: the reports as a run, and each SSDV picture (a .jpg) — vibe_bgdecode.h BalloonGalleryTap
+  { id: 'balloon', label: 'BALLOONS' },
 ];
 const p2 = (n: number) => String(n).padStart(2, '0');
 export function galleryWhen(t: number): string {
@@ -168,7 +170,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                    today ? async () => ((await one(today).catch(() => false)) ? merged() : null) : null);
     } catch { setNote('Could not reach the server.'); }
   };
-  const isImage = (it: GalleryItem) => /\.png$/i.test(it.f);
+  const isImage = (it: GalleryItem) => /\.(png|jpg)$/i.test(it.f);   // ★ V12 balloons: SSDV pictures are JPEGs
   const show = async (it: GalleryItem) => {
     setOpen(it); setText(''); setTextOk(false);
     if (isImage(it)) return;

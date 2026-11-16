@@ -71,6 +71,8 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'hfdl', label: 'HFDL (aircraft on HF)' },
   { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR' }, { id: 'hell', label: 'Feld Hell (Hellschreiber)' },
   { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
+  // ★ V12 balloons (docs/v12/BALLOONS.md): UKHAS RTTY, Horus Binary, SSDV pictures — a listener's decoder on 70 cm, as on the setup page
+  { id: 'balloon', label: 'Balloons (UKHAS, Horus, SSDV)' },
   { id: 'ais', label: 'AIS ships' },
   // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },

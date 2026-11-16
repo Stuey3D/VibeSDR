@@ -31,10 +31,11 @@ for (const id of WHOLE_RADIO_IDS) ok(bandsOfDecoder(id).length === 0, `${id} is 
 for (const id of WHOLE_RADIO_IDS) for (const hz of [7.074e6, 145e6, 1090e6, 198e3, 130e6]) for (const b of RADIO_BANDS)
   ok(!decoderDim(id, hz, b.id), `${id} never dimmed (${hz / 1e6} MHz, ${b.label} tab)`);
 for (const id of WHOLE_RADIO_IDS) ok(!!modeIconFor(id), `${id} has a glyph`);
-// ★ V12: UHF holds PAGING only (Android local hardware — the key exists only on the phone's own radio), so on every other
-//   client the tab is still never drawn (decBands keeps a band only when one of its keys is present).
-ok(DECODER_PLACES.uhf.length === 1 && DECODER_PLACES.uhf[0].group === 'paging' && DECODER_PLACES.uhf[0].ids.join() === 'paging',
-   'UHF holds only PAGING (ADS-B and ISM tune the radio) — no UHF tab where PAGE is not offered');
+// ★ V12: UHF holds BALLOONS (a VibeServer whose radio reaches 70 cm) and PAGING (Android local hardware — the key exists
+//   only on the phone's own radio), so a client offered neither still never draws the tab (decBands keeps a band only when
+//   one of its keys is present).
+ok(DECODER_PLACES.uhf.map((g) => `${g.group}:${g.ids.join('+')}`).join() === 'amateur:balloon,paging:paging',
+   'UHF holds only BALLOONS and PAGING (ADS-B and ISM tune the radio) — no UHF tab where neither is offered');
 ok(DECODER_PLACES.vhf.some(g => g.group === 'paging' && g.ids.includes('paging')), 'VHF has the Paging group (PAGE)');
 ok(bandsOfDecoder('spots').join() === 'hf,vhf', 'DIGITAL SPOTS HF and VHF (6 m / 2 m)');
 for (const b of RADIO_BANDS) {

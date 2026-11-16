@@ -186,6 +186,8 @@ import {
 import { mapglVendor, probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
+import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonLine, balloonParams,
+         balloonPicture, balloonPictureText, balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen, type BalloonReport, type BalloonSettings } from '../../../src/services/balloons';   // ★ V12 balloons
 import { NCDXF_BANDS, NCDXF_HINT, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
 import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
@@ -884,6 +886,7 @@ async function loadAudioPolicy(httpBase: string) {
   hellCap = false;             // ★ …nor FELD HELL
   jttyCap = false;             // ★ …nor JTTY
   ncdxfCap = false;            // ★ …nor the NCDXF beacon tracker
+  balloonCap = false;          // ★ …nor balloons
   decWhy = {};                 // ★ …and no decoder out of reach until this radio says so
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
@@ -985,6 +988,9 @@ async function loadAudioPolicy(httpBase: string) {
       if (b) b.hidden = !hellCap || blockedModes.has('hell'); }
     { const b = document.querySelector('#timeStation [data-station="tdf"]') as HTMLElement | null;
       if (b) b.hidden = j.timeTdf !== true; }   // ★ V12 TDF: a station of TIME, only on a server that reads it
+    balloonCap = j.balloon === true || !!decWhy.balloon;   // ★ V12 balloons: decoded by this server (greyed with why off 70 cm)
+    { const b = document.querySelector('#decodersPanel [data-dec="balloon"]') as HTMLElement | null;
+      if (b) b.hidden = !balloonCap || blockedModes.has('balloon'); }
     ncdxfCap = j.ncdxf === true || !!decWhy.ncdxf;   // ★ V12 NCDXF beacons: tracked by this server (greyed with why off its reach)
     { const b = document.querySelector('#decodersPanel [data-dec="ncdxf"]') as HTMLElement | null;
       if (b) b.hidden = !ncdxfCap || blockedModes.has('ncdxf'); }
@@ -2189,7 +2195,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap) || (id === 'balloon' && !balloonCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -8745,7 +8751,7 @@ function dabUiOn() {
   // ★★ V12: the server decoders' own lists too (CW/PSK, APRS, DSC, JTTY) — showDecBox() toggles them when a decoder
   //    opens, but DAB takes the box without it, so APRS's "listening…" and PACKETS sat under the DAB signal view
   //    (Stuart's Pi 2, 2026-10-26).
-  for (const id of ['cwList', 'aprsList', 'dscList', 'jttyList', 'ncdxfList']) document.getElementById(id)?.classList.remove('on');
+  for (const id of ['cwList', 'aprsList', 'dscList', 'jttyList', 'ncdxfList', 'balloonList']) document.getElementById(id)?.classList.remove('on');
   $('decBox').classList.remove('wide');
   $('decBox').classList.remove('navtex');
   $<HTMLButtonElement>('decPrev').style.display = 'none';
@@ -13050,7 +13056,65 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'hfdl' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'hfdl' | null = null;
+/* ★★ BALLOONS (V12) — decoded on the server (decoders/balloon_rx.h): UKHAS RTTY telemetry, Horus Binary and SSDV pictures on
+ *  this listener's USB audio. The box: one row per payload (newest first), then the pictures as they build; the settings are
+ *  AUTO with the manual pins under it. Offered only where vibeserver.json says "balloon" (greyed with why off 70 cm). */
+let balloonCap = false;
+let balloonLast: BalloonReport | null = null;
+let balloonSet: BalloonSettings = { ...BALLOON_AUTO };
+const balloonPics = new Map<string, { url: string; text: string }>();
+function balloonEsc(s: string) { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)); }
+function renderBalloon() {
+  const rows = document.getElementById('balloonRows');
+  if (!rows) return;
+  const r = balloonLast;
+  if (!r || !r.payloads.length) rows.innerHTML = `<div class="idle" style="color:var(--text-dim);font-size:11px;padding:6px">${balloonEsc(balloonStatus(r))}</div>`;
+  else rows.innerHTML = r.payloads.map((p) => `<div class="bln"><div><b>${balloonEsc(p.call)}</b><span class="nums">${balloonEsc(balloonLine(p))}</span></div>`
+    + `<div class="when">${balloonEsc(balloonWhen(p, r.now))}</div><div class="sent">${balloonEsc(p.sentence)}</div></div>`).join('');
+  const pics = document.getElementById('balloonPics');
+  if (!pics) return;
+  pics.innerHTML = '';
+  for (const [key, v] of balloonPics) {
+    const info = r?.images.find((i) => i.key === key);
+    const f = document.createElement('figure');
+    const img = document.createElement('img'); img.src = v.url; img.alt = `SSDV picture ${key}`;
+    const c = document.createElement('figcaption'); c.textContent = info ? balloonPictureText(info) : v.text;
+    f.append(img, c); pics.appendChild(f);
+  }
+}
+/** ★ A picture frame: the JPEG so far becomes the picture's image (the previous one's URL let go). ≤ 3 kept. */
+function balloonPictureIn(buf: ArrayBuffer) {
+  const p = balloonPicture(buf);
+  if (!p) return;
+  const url = URL.createObjectURL(new Blob([p.jpeg.slice()], { type: 'image/jpeg' }));
+  const old = balloonPics.get(p.key);
+  if (old) URL.revokeObjectURL(old.url);
+  balloonPics.delete(p.key);
+  balloonPics.set(p.key, { url, text: `${p.key.replace('#', ' picture ')} · ${p.complete ? 'complete' : `${p.have}${p.expected ? ' of ' + p.expected : ''} packets`}` });
+  while (balloonPics.size > 3) { const [k, v] = balloonPics.entries().next().value!; URL.revokeObjectURL(v.url); balloonPics.delete(k); }
+  renderBalloon();
+}
+function balloonClear() { for (const v of balloonPics.values()) URL.revokeObjectURL(v.url); balloonPics.clear(); balloonLast = null; }
+/** The pins' keys (AUTO first) — built once, lit from balloonSet. */
+function initBalloonSettings() {
+  const hint = document.getElementById('balloonHint');
+  if (hint) hint.textContent = BALLOON_HINT;
+  const rowOf = (id: string, k: keyof BalloonSettings, vals: readonly number[]) => {
+    const host = document.getElementById(id);
+    if (!host) return;
+    host.textContent = '';
+    for (const v of vals) {
+      const b = document.createElement('button');
+      b.className = 'btn' + (balloonSet[k] === v ? ' on' : '');
+      b.textContent = balloonPinLabel(k, v);
+      b.onclick = () => { balloonSet = { ...balloonSet, [k]: v }; initBalloonSettings(); reattachIf('balloon'); };
+      host.appendChild(b);
+    }
+  };
+  rowOf('balloonBaud', 'baud', BALLOON_BAUDS); rowOf('balloonBits', 'bits', BALLOON_BITS); rowOf('balloonPol', 'reverse', BALLOON_POLARITY);
+  rowOf('balloonShift', 'shift', BALLOON_SHIFTS); rowOf('balloonSpacing', 'horusSpacing', BALLOON_SPACINGS);
+}
 /* ★★ NCDXF / IARU BEACONS (V12, 2026-11-16) — tracked on the server (decoders/ncdxf_tracker.h): the box is the propagation
  *  grid, 18 beacons × 5 bands, from the server's report every 10 s; the settings hold the five beacon frequencies to tune.
  *  Offered only where vibeserver.json says "ncdxf" (greyed with the reason where this radio reaches none of them). */
@@ -13725,6 +13789,7 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'dsc') { const v = vfoNow(decVfo); return dscParams(v.frequency, String(v.mode ?? '')); }   // ★ the decoding VFO's dial
   if (mode === 'sitora') return { center_frequency: 1000 };
   if (isTextFamily(mode)) return { mode: tmMode[mode] };   // ★ the tones around 1 kHz, as RTTY; the polarity is found
+  if (mode === 'balloon') return balloonParams(balloonSet);   // ★ AUTO sends nothing; each pin narrows the search
   return {};
 }
 
@@ -13735,6 +13800,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
       if (activeDec === 'dsc') return;   // ★ DSC's rows are drawn from its JSON (onDscCall); the line is the same text
       if (activeDec === 'jtty') return;  // ★ JTTY's rows are drawn from its JSON (onJttySignals); the line is the same text
+      if (activeDec === 'balloon') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ balloons: the report log, last 40 lines
       if (activeDec === 'ncdxf') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ NCDXF: the heard log, last 40 lines
       const el = $('decText');
       // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
@@ -13820,6 +13886,7 @@ function initDecoders(host: string, auth: AuthState) {
       decStateText = activeDec === 'dsc' ? (st ? 'receiving a call…' : 'listening…')
                    : activeDec === 'jtty' ? (st ? 'decoding…' : 'listening…')
                    : activeDec === 'ncdxf' ? ncdxfStatus(ncdxfLast)
+                   : activeDec === 'balloon' ? balloonStatus(balloonLast)
                    : activeDec === 'rtty' && rttySkim ? (st >= 3 ? 'decoding…' : st ? 'RTTY found — working out its settings…' : 'listening…')
                    : kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
@@ -13919,6 +13986,17 @@ function initDecoders(host: string, auth: AuthState) {
       if (!l) return;
       jttyLast = l; renderJtty(); setDecLive(l.some((x) => x.active));
     },
+    // ★★ V12 balloons: the report on every decode and every 5 s; each picture as it grows.
+    onBalloon: (d) => {
+      if (activeDec !== 'balloon') return;
+      const r = balloonSanitise(d);
+      if (!r) return;
+      balloonLast = r; renderBalloon();
+      decStateText = balloonStatus(r);
+      if (!decTuneHint) $('decStatus').textContent = decStateText;
+      setDecLive(r.state >= 3);
+    },
+    onBalloonPicture: (buf) => { if (activeDec === 'balloon') balloonPictureIn(buf); },
     // ★★ V12 NCDXF beacons: the grid and the last slot, every ten seconds.
     onNcdxf: (d) => {
       if (activeDec !== 'ncdxf') return;
@@ -14067,7 +14145,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'hfdl';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'hfdl';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12 out of this radio's reach: the press says why and starts nothing (decWhyPaint draws the key greyed)
       if (decWhy[mode]) { showPill(`${(b.textContent || mode).trim()} unavailable \u2014 ${decWhy[mode]}`, 8000); return; }
@@ -14691,7 +14769,7 @@ function anyDecoderLeft(): boolean {
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
     || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal')) || (hfdlCap && !blockedModes.has('hfdl'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
-    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf'));
+    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon'));
 }
 
 /* ★★ THE WHOLE-RADIO TOGGLES — one each, for the mode menu (mobile.ts deps) AND the decoder panel's TUNES THE RADIO ITSELF
@@ -14737,7 +14815,7 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
  *  title and label (hover, focus, a screen reader), and a press shows the reason (touch, pad, keyboard) — never hidden,
  *  never live. An owner's block still hides it (it is false with no reason). */
 let decWhy: Record<string, string> = {};
-const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'hfdl'];
+const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl'];
 function parseDecWhy(j: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!j || typeof j !== 'object') return out;
@@ -14781,6 +14859,8 @@ function syncDecButtons() {
   if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
   $('jttySettings').hidden = activeDec !== 'jtty';
   if (activeDec === 'jtty') initJttyDials();
+  $('balloonSettings').hidden = activeDec !== 'balloon';
+  if (activeDec === 'balloon') initBalloonSettings();
   $('ncdxfSettings').hidden = activeDec !== 'ncdxf';
   if (activeDec === 'ncdxf') initNcdxfBands();
   $('tmSettings').hidden = !isTextFamily(activeDec) || !(tmCaps[activeDec]?.length);
@@ -14844,6 +14924,8 @@ function showDecBox(what: string) {
   if (isDsc) { dscCalls.clear(); renderDsc(); }
   const isJtty = what === 'jtty';
   $('jttyList').classList.toggle('on', isJtty);
+  $('balloonList').classList.toggle('on', what === 'balloon');
+  if (what === 'balloon') { balloonClear(); renderBalloon(); }
   $('ncdxfList').classList.toggle('on', what === 'ncdxf');
   if (what === 'ncdxf') { ncdxfLast = null; renderNcdxf(); }
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
@@ -17888,7 +17970,7 @@ async function openGalleryItem(it: GalleryItem) {
   galTrReset();
   // ★ A chart or a picture is shown as itself; the browser fetches it (same origin, the same read auth).
   const img = $('galImg') as HTMLImageElement;
-  if (/\.png$/i.test(it.f)) {
+  if (/\.(png|jpg)$/i.test(it.f)) {   // ★ V12 balloons: SSDV pictures are JPEGs
     $('galText').hidden = true; img.hidden = false; img.src = url;
     return;
   }

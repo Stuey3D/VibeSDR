@@ -80,7 +80,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'hfdl' | null;
+export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'hfdl' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -164,6 +164,10 @@ export interface DecoderCallbacks {
   onAprsPacket?: (p: AprsPacket) => void;
   /** ★ JTTY: the stations list and a spot (as the server sent them — jtty.ts checks them). */
   onJttySignals?: (data: unknown) => void;
+  /** ★ V12 balloons: the report (payloads, pictures, what RTTY / Horus found) on every report and every 5 s, and each
+   *  SSDV picture as it grows (src/services/balloons.ts). */
+  onBalloon?: (data: unknown) => void;
+  onBalloonPicture?: (buf: ArrayBuffer) => void;
   /** ★ V12 NCDXF beacons: the grid and the last slot, every 10 s (src/services/ncdxf.ts). */
   onNcdxf?: (data: unknown) => void;
   onJttySpot?: (data: unknown) => void;
@@ -243,6 +247,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   // ★ V12 JTTY: every JTTY signal in the listener's passband — nothing to set.
   jtty: 'jtty',
   ncdxf: 'ncdxf',   // ★ V12 the NCDXF / IARU beacon tracker (vibe_ncdxf_run.h)
+  balloon: 'balloon',   // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV (vibe_balloon_run.h)
 };
 
 export class DecoderClient {
@@ -465,6 +470,11 @@ export class DecoderClient {
                                lat: n(d.lat), lon: n(d.lon), to: s(d.to, 12) || undefined, text: s(d.text, 200) || undefined });
       return;
     }
+    if (msg.type === 'balloon' && msg.data) {
+      if (this.mode !== 'balloon') return;
+      this.cb.onBalloon?.(msg.data);
+      return;
+    }
     if (msg.type === 'ncdxf' && msg.data) {
       if (this.mode !== 'ncdxf') return;
       this.cb.onNcdxf?.(msg.data);
@@ -586,6 +596,9 @@ export class DecoderClient {
       case 'jtty':
       // ★ V12 NCDXF beacons: a line per beacon heard and the state (0 off a beacon frequency, 3 tracking).
       case 'ncdxf':
+      // ★ V12 balloons: a line per report, the state, and 0x0B — an SSDV picture so far (balloonPicture reads it)
+      case 'balloon':
+        if (op === 0x0b && this.mode === 'balloon') { this.cb.onBalloonPicture?.(buf); return; }
         if (op === 0x01 && buf.byteLength >= 13) {
           const len = dv.getUint32(9, false);           // big-endian
           const text = new TextDecoder().decode(new Uint8Array(buf, 13, Math.min(len, buf.byteLength - 13)));

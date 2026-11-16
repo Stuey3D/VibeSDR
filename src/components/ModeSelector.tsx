@@ -33,6 +33,7 @@ import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText, rttySkimHintText } from '../services/cwList';
 import { NCDXF_HINT } from '../services/ncdxf';   // ★ V12 NCDXF beacons
+import { BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonPinLabel, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
 import { JTTY_HINT } from '../services/jtty';
 import ModeIcon, { ModeLabel, modeKeyIcon } from './ModeIcon';   // ★ V12 mode icons (Stuart 2026-10-28)
 import { DECODER_PLACES, RADIO_BANDS, WHOLE_RADIO_IDS, WHOLE_RADIO_LABEL, WHOLE_RADIO_HINT, decoderGroupIcon, decoderGroupLabel, decoderDim, openingBand,
@@ -47,7 +48,7 @@ import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, typ
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 import { FREEDV_HINT, type FreeDvChoice, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -526,6 +527,8 @@ interface ModeSelectorProps {
     jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
     /** ★★ V12 NCDXF beacons — only where `"ncdxf"` is offered; its settings are the beacon frequencies THIS radio reaches. */
     ncdxfAvail?: boolean; ncdxfBands?: Array<{ hz: number; label: string }>; onNcdxfBand?: (hz: number) => void;
+    /** ★★ V12 balloons — only where `"balloon"` is offered; its settings are AUTO and the manual pins under it. */
+    balloonAvail?: boolean; balloonSettings?: BalloonSettings; onBalloonSettings?: (s: BalloonSettings) => void;
     /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches: `dscChans` the distress
      *  set, `dscRoutine` the routine channels (ITU-R M.541) of the band the dial is on, named `dscBandLabel`. */
     dscAvail?: boolean; dscChans?: Array<{ hz: number; label: string; vhf: boolean }>;
@@ -642,6 +645,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const pskShown = !!decoderControls?.pskAvail && !isBlocked('psk');
   const jttyShown = !!decoderControls?.jttyAvail && !isBlocked('jtty');
   const ncdxfShown = !!decoderControls?.ncdxfAvail && !isBlocked('ncdxf');   // ★ V12 NCDXF beacons
+  const balloonShown = !!decoderControls?.balloonAvail && !isBlocked('balloon');   // ★ V12 balloons
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
   const sitoraShown = !!decoderControls?.sitoraAvail && !isBlocked('sitora');   // ★ V12 SITOR-A
   const sameShown = !!decoderControls?.sameAvail && !isBlocked('same');   // ★ V12 EAS / SAME
@@ -650,7 +654,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
   const tmShown = (f: TextFamily) => !!decoderControls?.tmModes?.[f] && !isBlocked(f);   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
-  const srvDecShown = cwShown || pskShown || jttyShown || ncdxfShown || dscShown || sitoraShown || sameShown || selcalShown || hellShown || pagingShown || aprsShown
+  const srvDecShown = cwShown || pskShown || jttyShown || ncdxfShown || balloonShown || dscShown || sitoraShown || sameShown || selcalShown || hellShown || pagingShown || aprsShown
     || tmShown('mfsk');
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
@@ -730,6 +734,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (pskShown) addLegend('PSK', 'psk');
     if (jttyShown) addLegend('JTTY', 'jtty');
     if (ncdxfShown) addLegend('BEACONS', 'ncdxf');
+    if (balloonShown) addLegend('BALLOONS', 'balloon');
     if (dscShown) addLegend('DSC', 'dsc');
     if (aprsShown) addLegend('APRS', 'aprs');
     if (advRdsShown) addLegend(advRdsLabel, 'rds');
@@ -838,7 +843,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     // ★★ V12 out of this radio's reach: greyed, and a press says why (never starts it)
     const why = dc.decWhy?.[id];
@@ -1218,6 +1223,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'psk':  return pskShown ? srvKey('psk', 'PSK', 'PSK31 and PSK63 decoder') : null;
       case 'jtty': return jttyShown ? srvKey('jtty', 'JTTY', 'JTTY keyboard-mode decoder') : null;
       case 'ncdxf': return ncdxfShown ? srvKey('ncdxf', 'BEACONS', 'NCDXF beacon tracker') : null;
+      case 'balloon': return balloonShown ? srvKey('balloon', 'BALLOONS', 'High-altitude balloon telemetry and pictures') : null;
       case 'dsc':  return dscShown ? srvKey('dsc', 'DSC', 'Maritime DSC decoder') : null;
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
       case 'same':   return sameShown ? srvKey('same', 'SAME', 'EAS and SAME emergency alert header decoder') : null;
@@ -1238,7 +1244,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (!decoderControls) return false;
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
-      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;
+      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;   case 'balloon': return balloonShown;
       case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'hell': return hellShown; case 'paging': return pagingShown;
       case 'mfsk': return tmShown('mfsk'); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
@@ -1651,6 +1657,25 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </>)}
           <Text style={capText}>{NCDXF_HINT}</Text>
         </>);
+      /* ★★ V12 balloons: AUTO, and the pins under it — RTTY speed, bits, polarity, shift; Horus spacing — and the hint. */
+      case 'balloon': {
+        const bs = dc.balloonSettings;
+        if (!bs) return <Text style={capText}>{BALLOON_HINT}</Text>;
+        const row = (label: string, k: keyof BalloonSettings, vals: readonly number[]) => (<>
+          <SubLabel label={label} />
+          <OptRow>{vals.map((v) => (
+            <SegBtn key={v} label={balloonPinLabel(k, v)} active={bs[k] === v} onPress={() => dc.onBalloonSettings?.({ ...bs, [k]: v })} />
+          ))}</OptRow>
+        </>);
+        return (<>
+          {row('RTTY SPEED', 'baud', BALLOON_BAUDS)}
+          {row('BITS', 'bits', BALLOON_BITS)}
+          {row('POLARITY', 'reverse', BALLOON_POLARITY)}
+          {row('SHIFT', 'shift', BALLOON_SHIFTS)}
+          {row('HORUS SPACING', 'horusSpacing', BALLOON_SPACINGS)}
+          <Text style={capText}>{BALLOON_HINT}</Text>
+        </>);
+      }
       /* ★★ V12 DSC: DISTRESS (every band this radio reaches) and the ROUTINE channels (ITU-R M.541) of the band the dial is
           on — each tuned as a DSC receiver does (USB 1.7 kHz below the ASSIGNED frequency, or Ch 70 NFM) — and the hint. */
       case 'dsc':
