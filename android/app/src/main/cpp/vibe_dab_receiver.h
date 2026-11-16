@@ -623,6 +623,9 @@ public:
          *    24 ms, four to a Mode I frame. */
         if (frameBits.size() >= ficBits + size_t(kCifBits) * 4) {
             const int8_t* msc = frameBits.data() + ficBits;
+            /* ★★ V12 OWN STATION (docs/v12/DAB-OWN-STATION.md): the frame's four CIFs to the listeners' own stations, which
+             *  decode their sub-channels on their own threads. Empty unless a station is open — then this is one test. */
+            if (mscTap_) mscTap_(msc, size_t(kCifBits) * size_t(kCifsPerFrameI));
             if (mscOn_) {
                 /* ★ Hand the four CIFs over and return to the next frame's front end. The queue is
                  *  bounded and the producer WAITS when it is full: dropping a frame here would be
@@ -809,6 +812,25 @@ public:
 
     const Ensemble& ensemble() const { return ensemble_; }
     const DabStats& stats()    const { return stats_; }
+
+    /* ── ★★ V12 OWN STATION (docs/v12/DAB-OWN-STATION.md) ─────────────────────────────────────────────────────────────
+     *  The radio's receiver hands each frame's MSC (four CIFs of soft bits) to a TAP; a STATION's receiver never sees IQ —
+     *  it adopts the multiplex's ensemble and stats and runs only the MSC half for its one service. */
+    using MscTap = std::function<void(const int8_t* msc, size_t n)>;
+    /** Set or clear the tap. Call from the thread that calls push(), or with it held off (the service's m_). */
+    void setMscTap(MscTap t) { mscTap_ = std::move(t); }
+    bool hasMscTap() const { return bool(mscTap_); }
+    /** A station adopts the multiplex: the ensemble (when given) and the front end's stats, keeping its OWN MSC error
+     *  rate (its sub-channel's, written by pumpService) — the scopes too, for a listener's Signal pane. */
+    void adoptMux(const Ensemble* e, const DabStats& s) {
+        if (e) ensemble_ = *e;
+        const double keep = stats_.mscBer;
+        stats_ = s;
+        stats_.mscBer = keep;
+    }
+    void adoptScopes(const std::vector<int8_t>& c, const std::vector<uint8_t>& ir) { constel_ = c; ir_ = ir; }
+    /** A station's decode of one frame's four CIFs (the tap's bits) — its service's sub-channel only. Never split. */
+    void pumpMscFrame(const int8_t* msc) { pumpFrameMsc(msc); }
     void reset() {
         /* ★ Frames still queued for the MSC thread belong to the block being left: drop them
          *  (the one in hand finishes), rather than decode the old multiplex into the new one. */
@@ -1055,6 +1077,7 @@ private:
     std::thread mscThread_;
     double mscBerEma_ = 0.0;
     std::atomic<double> mscBerPub_{0.0};
+    MscTap mscTap_;                             ///< ★ V12 own station — see setMscTap
     TiiDetector tii_;
     std::vector<int8_t>  constel_;
     std::vector<uint8_t> ir_;

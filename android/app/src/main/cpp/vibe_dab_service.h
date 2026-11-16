@@ -80,7 +80,7 @@ public:
                 pushPcm48Stereo(pcm, n, 2, int(kAudioRateHz), gen);
             });
         }
-        ~DabService() { stopWorker(); aac_.stop(); }
+        ~DabService() { stationJoin_(); stopWorker(); aac_.stop(); }
 
 /** The rate every listener socket is fed at, whatever the service was coded at. */
     static constexpr uint32_t kAudioRateHz = 48000;
@@ -131,6 +131,7 @@ private:
                 prevSid_ = was;
             }
         }
+        stationsDropLocked_();   // ★★ V12 own station: a station's sub-channel belongs to the ensemble being left
         channel_ = idx;
         blockCentre_.store(double(kBandIII[idx].centreHz), std::memory_order_relaxed);   // ★ the DDC thread reads it
         rx_.reset();
@@ -271,6 +272,64 @@ public:
     /** ★ The service ASKED FOR — set before the ensemble has arrived, and what a resume should bring
      *  back if the listener left before it ever played (see the shim's g_dabWantSid). */
     uint32_t wantedService() const { return want_; }
+
+    /* ── ★★ V12 OWN STATION — each listener's own station on one multiplex (docs/v12/DAB-OWN-STATION.md) ──────────────
+     *  A STATION is a DabService in station mode: it never sees IQ. The radio's service (this one, the PRIMARY) hands it
+     *  every frame's MSC bits through the receiver's tap plus a snapshot of the multiplex (stats every frame; the
+     *  ensemble, the TII lines and the scopes about once a second), and the station runs only its own service's
+     *  sub-channel decode and audio chain — the whole of the same code the primary runs (super frames, RS, FAAD2/MP2,
+     *  PAD, slides, the report), on its own thread "vibe-dab-st". With no station open the tap is empty and nothing on
+     *  the primary's path differs. */
+    struct MuxSnap {
+        DabStats stats;
+        std::shared_ptr<const Ensemble> ens;
+        std::shared_ptr<const std::vector<TiiLine>> tii;
+        std::shared_ptr<const std::vector<int8_t>> constel;
+        std::shared_ptr<const std::vector<uint8_t>> ir;
+        int channel = -1; double rfCentre = 0, rfRate = 0;
+    };
+    using MscBits = std::shared_ptr<const std::vector<int8_t>>;
+    static constexpr size_t kStationQueue = 6;     ///< frames (0.58 s); full = the OLDEST is dropped, never a wait
+    static constexpr size_t kMaxStations  = 16;    ///< per radio, whatever the benchmark says (memory floor)
+
+    /** Open a station playing `sid` (it starts the moment the service is in the ensemble). nullptr at the cap. */
+    std::shared_ptr<DabService> openStation(uint32_t sid) {
+        auto st = std::make_shared<DabService>();
+        std::lock_guard<std::mutex> lk(m_);
+        { std::lock_guard<std::mutex> sk(stM_); if (stations_.size() >= kMaxStations) return nullptr; }
+        st->station_ = true;
+        st->slideDir_ = slideDir_;
+        st->knownRatios_ = knownRatios_; st->legacyRatio_ = legacyRatio_;   // ★ read only: a station never saves (ratioFile_ empty)
+        st->stationStart_(makeSnapLocked_(true));
+        st->setService(sid);
+        { std::lock_guard<std::mutex> sk(stM_); stations_.push_back(st); }
+        if (!rx_.hasMscTap()) rx_.setMscTap([this](const int8_t* msc, size_t n) { tapFrame_(msc, n); });
+        return st;
+    }
+    /** Detach a station: no more frames reach it and its thread is told to stop. The LAST reference joins it, so drop it
+     *  on a control thread, never the audio clock. */
+    void closeStation(const std::shared_ptr<DabService>& st) {
+        if (!st) return;
+        std::lock_guard<std::mutex> lk(m_);
+        bool empty = false;
+        { std::lock_guard<std::mutex> sk(stM_);
+          stations_.erase(std::remove(stations_.begin(), stations_.end(), st), stations_.end());
+          empty = stations_.empty(); }
+        if (empty) rx_.setMscTap(nullptr);
+        st->stationSignalStop_();
+    }
+    size_t stationCount() const { std::lock_guard<std::mutex> sk(stM_); return stations_.size(); }
+    /** ★ Bumps whenever a block change (or DAB's end) closed every station — the shim's cue to move their listeners. */
+    uint32_t stationGeneration() const { return stGen_.load(std::memory_order_relaxed); }
+    /** Close every station (DAB's end). A block change does this itself — see tuneLocked_. */
+    void closeAllStations() { std::lock_guard<std::mutex> lk(m_); stationsDropLocked_(); }
+    bool isStation() const { return station_; }
+    /** A station's frames dropped because it fell behind (its queue full) — a 96 ms hole in ITS audio only. */
+    uint32_t stationDropped() const { return stDropped_.load(std::memory_order_relaxed); }
+    uint32_t stationFrames() const { return stFrames_.load(std::memory_order_relaxed); }
+    /** ★ Offline tools only (dab-weak, test-dab-own, the benchmark): frames waiting in this station's queue — a replay
+     *  waits for it, so a fast feed never makes a station drop what the live radio would have decoded. */
+    size_t stationBacklogForTest() { std::lock_guard<std::mutex> qk(stQm_); return stQ_.size(); }
 
     /** ★★★ A LISTENER CHANGED MULTIPLEX WITHOUT NAMING A STATION: the server chooses one, once the list has arrived
      *  (vibe_dab_last_service.h — the same station, else the last one played here, else the first). Until then the
@@ -1086,6 +1145,7 @@ public:
      *  has none for it, offered as candidates (vibe_dab_tii.h). The codes are read once per ensemble;
      *  the resolving is a few pattern checks per shared comb, at report time. Caller holds m_. */
     std::vector<TiiLine> tiiLinesLocked_() {
+        if (station_) return stTii_ ? *stTii_ : std::vector<TiiLine>{};   // ★ V12 own station: the multiplex's, as adopted
         /* ★★★ CONFIRMED, HELD, EXPIRED (TiiTrack, vibe_dab_tii.h — 7D's "constantly growing" list, 2026-11-13, and the
          *  Almere B210's forty "signal lost" lines, 2026-11-15). The verdicts are taken as the worker makes them
          *  (tiiTrackLocked_); a report only reads the list at the time it is sent. */
@@ -3043,6 +3103,111 @@ private:
     uint64_t                inSamples_ = 0;
     uint32_t                inDropped_ = 0;
     bool                    inStop_ = false;
+
+    /* ── ★★ V12 OWN STATION: the primary's side (stations_, the tap) and a station's side (its queue and thread) ── */
+    mutable std::mutex stM_;                                  ///< leaf: stations_ only
+    std::vector<std::shared_ptr<DabService>> stations_;
+    std::atomic<uint32_t> stGen_{0};
+    unsigned snapN_ = 0;
+    std::shared_ptr<const Ensemble> snapEns_;
+    std::shared_ptr<const std::vector<TiiLine>> snapTii_;
+    std::shared_ptr<const std::vector<int8_t>> snapConstel_;
+    std::shared_ptr<const std::vector<uint8_t>> snapIr_;
+    bool station_ = false;
+    struct StJob { MscBits bits; std::shared_ptr<const MuxSnap> snap; };
+    std::mutex stQm_;
+    std::condition_variable stCv_;
+    std::deque<StJob> stQ_;
+    bool stStop_ = false;
+    std::thread stThread_;
+    std::atomic<uint32_t> stDropped_{0}, stFrames_{0};
+    std::shared_ptr<const Ensemble> stEns_;
+    std::shared_ptr<const std::vector<TiiLine>> stTii_;
+    std::shared_ptr<const std::vector<int8_t>> stConstel_;
+
+    /** The multiplex as a station needs it. Caller holds m_ (on the worker, inside push, or a control thread). */
+    std::shared_ptr<const MuxSnap> makeSnapLocked_(bool refresh) {
+        if (refresh || !snapEns_ || (++snapN_ % 10) == 0) {
+            snapEns_ = std::make_shared<const Ensemble>(rx_.ensemble());
+            snapTii_ = std::make_shared<const std::vector<TiiLine>>(tiiLinesLocked_());
+            snapConstel_ = std::make_shared<const std::vector<int8_t>>(rx_.constellation());
+            snapIr_ = std::make_shared<const std::vector<uint8_t>>(rx_.impulseResponse());
+        }
+        auto m = std::make_shared<MuxSnap>();
+        m->stats = rx_.stats(); m->ens = snapEns_; m->tii = snapTii_; m->constel = snapConstel_; m->ir = snapIr_;
+        m->channel = channel_;
+        m->rfCentre = rfCentre_.load(std::memory_order_relaxed); m->rfRate = rfRate_.load(std::memory_order_relaxed);
+        return m;
+    }
+    /** The receiver's tap — on the front end's thread, under m_. ONE copy of the bits, shared by every station. */
+    void tapFrame_(const int8_t* msc, size_t n) {
+        std::vector<std::shared_ptr<DabService>> list;
+        { std::lock_guard<std::mutex> sk(stM_); list = stations_; }
+        if (list.empty()) return;
+        auto bits = std::make_shared<const std::vector<int8_t>>(msc, msc + n);
+        auto snap = makeSnapLocked_(false);
+        for (auto& st : list) st->stationPush_(bits, snap);
+    }
+    void stationsDropLocked_() {
+        std::vector<std::shared_ptr<DabService>> list;
+        { std::lock_guard<std::mutex> sk(stM_); list.swap(stations_); }
+        if (rx_.hasMscTap()) rx_.setMscTap(nullptr);
+        if (list.empty()) return;
+        for (auto& st : list) st->stationSignalStop_();
+        stGen_.fetch_add(1, std::memory_order_relaxed);
+    }
+    // ── a station's own side ──
+    void stationStart_(std::shared_ptr<const MuxSnap> snap) {
+        { std::lock_guard<std::mutex> lk(m_); stationApplyLocked_(*snap); }
+        stThread_ = std::thread([this] { stationLoop_(); });
+    }
+    void stationPush_(const MscBits& bits, const std::shared_ptr<const MuxSnap>& snap) {
+        {
+            std::lock_guard<std::mutex> qk(stQm_);
+            if (stStop_) return;
+            if (stQ_.size() >= kStationQueue) { stQ_.pop_front(); stDropped_.fetch_add(1, std::memory_order_relaxed); }
+            stQ_.push_back(StJob{ bits, snap });
+        }
+        stCv_.notify_one();
+    }
+    void stationSignalStop_() {
+        { std::lock_guard<std::mutex> qk(stQm_); stStop_ = true; stQ_.clear(); }
+        stCv_.notify_all();
+    }
+    void stationJoin_() {
+        if (!station_) return;
+        stationSignalStop_();
+        if (stThread_.joinable()) {
+            if (stThread_.get_id() != std::this_thread::get_id()) stThread_.join(); else stThread_.detach();
+        }
+    }
+    void stationApplyLocked_(const MuxSnap& m) {
+        rx_.adoptMux(m.ens && m.ens != stEns_ ? m.ens.get() : nullptr, m.stats);
+        if (m.ens) stEns_ = m.ens;
+        stTii_ = m.tii;
+        if (m.constel && m.constel != stConstel_ && m.ir) { rx_.adoptScopes(*m.constel, *m.ir); stConstel_ = m.constel; }
+        channel_ = m.channel;
+        rfCentre_.store(m.rfCentre, std::memory_order_relaxed); rfRate_.store(m.rfRate, std::memory_order_relaxed);
+    }
+    /** A station's decode loop: its service's sub-channel from each frame, then the same audio chain the primary runs. */
+    void stationLoop_() {
+        vibeAudioThread("vibe-dab-st");   // ★ audio for its listeners — the same class as vibe-dab-msc
+        for (;;) {
+            StJob job;
+            {
+                std::unique_lock<std::mutex> qk(stQm_);
+                stCv_.wait(qk, [this] { return !stQ_.empty() || stStop_; });
+                if (stStop_) return;
+                job = std::move(stQ_.front()); stQ_.pop_front();
+            }
+            std::lock_guard<std::mutex> lk(m_);
+            stationApplyLocked_(*job.snap);
+            if (want_ && sid_ != want_ && rx_.ensemble().services.count(want_) && rx_.selectService(want_)) sid_ = want_;
+            rx_.pumpMscFrame(job.bits->data());
+            stFrames_.fetch_add(1, std::memory_order_relaxed);
+            drainAudio();
+        }
+    }
 
     mutable std::mutex m_;
     DabReceiver rx_{kRateHz};
