@@ -1,7 +1,8 @@
 // The handheld SIGNAL LABELS port's golden test: replays known_labels_inputs.json through src/known_labels.h and requires
 // gen_known_labels_golden.ts's lines (the app's src/utils/knownSignals.ts) exactly — the curated table, EiBi's utility
 // rows at four times of day, the receiver's bookmarks, the merged list and seven layouts. Then the R36S's own rules:
-// the cap (HH_LABEL_MAX), no label over the needle or the dB axis, no two labels overlapping, and the layout cache.
+// the cap (HH_LABEL_MAX), centred over its own carrier, no marker line under a higher label, no label over the dB axis,
+// no two labels overlapping, and the layout cache.
 // Silent: no GL drawing, no audio.   handheld-ui/test/run_known_labels.sh
 #include "../src/json.h"
 #include "../src/known_labels.h"
@@ -68,7 +69,12 @@ int main(int argc, char** argv) {
         for (auto& q : p) {
             char b[96];
             std::snprintf(b, sizeof b, "P %d %.3f %.3f %s %s |", q.row, q.x, q.lx, jsNum(q.w).c_str(), jsNum(q.sig->hz).c_str());
-            got.push_back(b + q.sig->label);
+            got.push_back(b + q.sig->label + "|" + q.text);
+        }
+        for (const LabelStem& st : labelStems(p, [](int r) { return 100.0 - 14 * r; }, 13, 8)) {
+            char b[96];
+            std::snprintf(b, sizeof b, "S %s %.3f %.3f", jsNum(st.x).c_str(), st.y0, st.y1);
+            got.push_back(b);
         }
     }
 
@@ -91,12 +97,18 @@ int main(int argc, char** argv) {
         std::vector<KnownSig> crowd;
         for (int i = 0; i < 40; i++) { KnownSig s; s.hz = 10e6 + i * 2500; s.label = "SIG " + std::to_string(i); s.prio = PRIO_TABLE; s.src = "table"; crowd.push_back(s); }
         const double lo = 10e6, span = 100e3, W = 640, dial = 10e6 + 20 * 2500, nx = (dial - lo) / span * W;
-        std::vector<BlockedBox> bl = {{0, 0, KnownLabels::kAxisW}, {1, 0, KnownLabels::kAxisW}, {0, nx - 1, nx + 1}, {1, nx - 1, nx + 1}};
-        const auto p = labelLayout(crowd, lo, span, W, measure, dial, bl, KnownLabels::kMarkPad, LABEL_ROWS, KnownLabels::kGap, HH_LABEL_MAX, 1);
+        (void)nx;
+        std::vector<BlockedBox> bl = {{0, 0, KnownLabels::kAxisW}, {1, 0, KnownLabels::kAxisW}};
+        const auto p = labelLayout(crowd, lo, span, W, measure, dial, bl, KnownLabels::kMarkPad, LABEL_ROWS_MAX, KnownLabels::kGap, HH_LABEL_MAX, 1);
         check((int)p.size() == HH_LABEL_MAX, "the cap: exactly HH_LABEL_MAX placed from 40");
         check(!p.empty() && p[0].sig->hz == dial, "the station you are on is placed first");
+        check(!p.empty() && std::fabs(p[0].lx + p[0].w / 2 - p[0].x) < 1e-9, "…centred on its carrier (2026-11-16)");
+        const auto st = labelStems(p, [](int r) { return 100.0 - 14 * r; }, 13, 6);
         for (size_t i = 0; i < p.size(); i++) {
-            check(!(p[i].lx < nx + 1 + 1 && p[i].lx + p[i].w > nx - 1 - 1), "no box over the needle");
+            check(p[i].lx - 1 <= p[i].x && p[i].x <= p[i].lx + p[i].w + 1, "every box over its own carrier");
+            check(p[i].row < LABEL_ROWS_MAX, "stacked on at most LABEL_ROWS_MAX rows");
+            for (size_t j = 0; j < p.size(); j++)
+                if (j != i && p[j].row > p[i].row) check(st[i].x < p[j].lx || st[i].x > p[j].lx + p[j].w, "no marker line under a higher label");
             check(p[i].lx >= KnownLabels::kAxisW + 1, "no box over the dB axis");
             check(p[i].lx >= 0 && p[i].lx + p[i].w <= W, "inside the spectrum");
             for (size_t j = 0; j < i; j++)
@@ -109,9 +121,9 @@ int main(int argc, char** argv) {
         auto q = labelLayout(two, lo, span, W, measure, 10.050e6, {}, 3, 1, 4, HH_LABEL_MAX, 1);
         check(q.size() == 1 && q[0].sig->label == "SAFETY", "one row: the higher priority wins the collision");
         q = labelLayout(two, lo, span, W, measure, 10.050e6, {}, 3, 2, 4, HH_LABEL_MAX, 1);
-        check(q.size() == 2 && q[0].row == 0 && q[1].row == 1, "two rows: the loser drops to the second row");
+        check(q.size() == 2 && q[0].row == 0 && q[1].row == 1, "two rows: the loser stacks on the second row");
     }
-    std::printf("  R36S rules: %s\n", fails ? "FAILED" : "ok (cap, needle, axis, overlaps, priority)");
+    std::printf("  R36S rules: %s\n", fails ? "FAILED" : "ok (cap, centred, carrier, lines, axis, overlaps, priority)");
 
     // ── cost: building the list from a full-size schedule, and one layout ──
     {

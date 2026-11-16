@@ -4,7 +4,7 @@
  *  known_labels_inputs.json, which both sides read — one copy of the data.
  *  Run: node --no-warnings --import ./ts_resolve.mjs gen_known_labels_golden.ts <out.txt> */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { eibiKnownSignals, bookmarkSignals, knownSignalList, labelLayout, KNOWN_SIGNALS, type KnownSignal, type BlockedBox }
+import { eibiKnownSignals, bookmarkSignals, knownSignalList, labelLayout, labelStems, KNOWN_SIGNALS, type KnownSignal, type BlockedBox }
   from '../../src/utils/knownSignals.ts';
 
 const inp = JSON.parse(readFileSync(new URL('./known_labels_inputs.json', import.meta.url), 'utf8'));
@@ -31,6 +31,8 @@ const measure = (t: string) => Array.from(t).length * 7 + 6;
 for (const v of inp.views) {
   const p = labelLayout(list, v.lo, v.span, v.width, measure, v.dial, v.blocked as BlockedBox[], v.pad ?? 3);
   out.push(`V ${v.name} ${p.length}`);
-  for (const q of p) out.push(`P ${q.row} ${q.x.toFixed(3)} ${q.lx.toFixed(3)} ${q.w} ${q.sig.hz} |${q.sig.label}`);
+  for (const q of p) out.push(`P ${q.row} ${q.x.toFixed(3)} ${q.lx.toFixed(3)} ${q.w} ${q.sig.hz} |${q.sig.label}|${q.lines ? q.lines[0] : ''}`);
+  // ★★ the marker lines above them (labelStems): rows 14 apart from y 100 up, boxes 13 tall, 8 past the stack
+  for (const st of labelStems(p, (r) => 100 - 14 * r, 13, 8)) out.push(`S ${st.x} ${st.y0.toFixed(3)} ${st.y1.toFixed(3)}`);
 }
 writeFileSync(process.argv[2], out.join('\n') + '\n');
