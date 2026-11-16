@@ -1128,7 +1128,7 @@ foreach(t acars vdl2 hfdl avi-service)
 endforeach()
 # ★★ V12 RS41 RADIOSONDES (docs/v12/RS41.md): the frame from the listener documentation, our own transmitter through the
 #    whole receiver (SNR, offsets, several sondes, noise), and the service + its JSON. Header-only on vibedsp.
-foreach(t rs41)
+foreach(t rs41 rs41-service)
   add_executable(test-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-${t}.cpp")
   target_include_directories(test-${t} PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
   target_compile_options(test-${t} PRIVATE -O3 -ffp-contract=fast)
