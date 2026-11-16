@@ -23,11 +23,12 @@
  *   radio       the AMATEUR group's heading in the decoder panel (utils/decoderBands)
  *   map         MAP — the spots map, an OpenWebRX's map (VIEWS; was the colour 🗺 emoji, 2026-10-29)
  *   picture     FILES — an OpenWebRX's decoded pictures (VIEWS; was the colour 🖼 emoji)
+ *   balloon     SONDES (RS41 radiosondes — a weather balloon with its instrument hanging below)
  */
 
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
-  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager';
+  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -114,6 +115,11 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
     { c: [8.5, 15, 3], w: 1.6 },
     { d: 'M14.5 12.5h4M14.5 15h4M14.5 17.5h4', w: 1.5 },
   ],
+  balloon: [   // ★ V12 a weather balloon, its line and the sonde hanging below
+    { d: 'M12 2.2c3.6 0 6.2 2.7 6.2 6.1 0 3.6-3.2 6.6-6.2 7.6-3-1-6.2-4-6.2-7.6 0-3.4 2.6-6.1 6.2-6.1Z' },
+    { d: 'M12 15.9v3.2', w: 1.4 },
+    { r: [9.6, 19.1, 4.8, 3.2, 0.6], fill: true },
+  ],
   pager: [   // a pager: the case, its screen, one key
     { r: [3, 6, 18, 12, 2.5] },
     { r: [6, 9, 9, 4, 1], w: 1.5 },
@@ -148,6 +154,7 @@ export function modeIconFor(id: string): ModeIconName | null {
     case 'ais': case 'dsc': case 'navtex': case 'sitora': case 'sitor': case 'amtor': return 'ship';   // ★ SITOR-A beside NAVTEX (SITOR-B)
     case 'ndb': case 'ncdxf': return 'beacon';   // ★ V12 NCDXF / IARU beacons
     case 'ism': return 'sensor';
+    case 'sondes': case 'sonde': case 'rs41': case 'radiosonde': return 'balloon';   // ★ V12 radiosondes
     case 'paging': case 'pocsag': case 'flex': case 'pager': return 'pager';   // ★ V12 PAGING (and OpenWebRX's POCSAG)
     case 'aprs': case 'packet': return 'aprs';
     case 'sstv': return 'tv';

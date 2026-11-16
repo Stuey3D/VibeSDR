@@ -5,7 +5,7 @@
  * decoderBands.ts), tested by scripts/test_decoder_bands.ts.
  *
  *   TUNES THE RADIO ITSELF (above the tabs, never dimmed — WHOLE_RADIO_IDS):
- *                     ADS-B · AIS · DATALINK (ACARS / VDL2) · DAB · ISM · NDB · DIGITAL SPOTS: BAND
+ *                     ADS-B · AIS · DATALINK (ACARS / VDL2) · DAB · ISM · NDB · SONDES (RS41) · DIGITAL SPOTS: BAND
  *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map) · SELCAL
  *                     ⚓ Maritime  NAVTEX · DSC · SITOR-A · WEFAX
  *                     Amateur     DIGITAL SPOTS · CW · PSK · RTTY · JTTY · SSTV · APRS (300 Bd HF packet)
@@ -103,7 +103,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
  * frequencies; the tune keys then step bands). Their availability is the callers' existing rules (locked range,
  * blocked modes, what the radio reaches), untouched.
  */
-export const WHOLE_RADIO_IDS: readonly string[] = ['adsb', 'ais', 'avdata', 'dab', 'ism', 'ndb', 'spotsband'];   // ★ V12 avdata: the aircraft datalink
+export const WHOLE_RADIO_IDS: readonly string[] = ['adsb', 'ais', 'avdata', 'dab', 'ism', 'ndb', 'sondes', 'spotsband'];   // ★ V12 avdata: the aircraft datalink; sondes: RS41 radiosondes
 export const WHOLE_RADIO_LABEL = 'TUNES THE RADIO ITSELF';
 export const WHOLE_RADIO_HINT = 'Each moves the radio to its own frequencies and opens its own view.';
 

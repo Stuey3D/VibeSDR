@@ -17,7 +17,7 @@
 // ★ THE DIAL: held in ADS-B and AIS (L2/R2 say so), BAND steps in ISM (DAB's settle-then-send stepper, 450 ms), the
 //   listener's own in NDB (the beacon band is the capture; tuning stays inside it).
 // ★ BOUNDED: lists 150 rows, markers 600, the aircraft-info store 3000 entries, APRS 300 stations, DSC 200 calls.
-// ★ Tests: VIBE_HHUI_MAP_CANNED=adsb|ais|ndb|ism|aprs|dsc feeds canned reports through the same readers (no radio
+// ★ Tests: VIBE_HHUI_MAP_CANNED=adsb|ais|ndb|ism|sondes|aprs|dsc feeds canned reports through the same readers (no radio
 //   traffic, nothing sent) — the fake RTL has clips for some of these, not for all, and the screenshots need all.
 #pragma once
 #include "map_page.h"
@@ -59,6 +59,7 @@ struct MapModes {
     struct IsmBand { std::string id, name, region; double hz = 0; };   // ★ hz: the band column on each row
     std::vector<IsmBand> ismBands;
     std::string ismLanding;
+    std::vector<std::pair<std::string, std::string>> sondeBands;   // ★ V12 radiosondes: vibeserver.json sondesBands (id, "402–404")
     // ISM band stepper (main.ts ismStepperFor: the band the person STOPPED on, once, 450 ms after the last press)
     int ismHop = -1; double ismSendAt = 0; double ismAskUntil = 0; int ismAsk = -1;
     // ADS-B aircraft data (adsb_info), per hex
@@ -82,7 +83,9 @@ inline MapModes& mapModes() {
                mk("ism", "ISM", "ISM", "spots", 9, {}),
                mk("ndb", "NDB", "NDB · LF BEACONS", "aero", 6, {100, 250, 500}),
                // ★ V12 the aircraft datalink (ACARS / VDL2, docs/v12/AVIATION.md): {"type":"avdata","on":1} as the web sends it
-               mk("avdata", "DATALINK", "AIRCRAFT DATALINK · ACARS + VDL2", "aero", 7, {50, 100, 200})};
+               mk("avdata", "DATALINK", "AIRCRAFT DATALINK · ACARS + VDL2", "aero", 7, {50, 100, 200}),
+               // ★ V12 RS41 radiosondes (docs/v12/RS41.md): {"type":"sondes","on":1} as the web sends it
+               mk("sondes", "SONDES", "RADIOSONDES · RS41", "spots", 7, {50, 100, 200})};
         const char* c = std::getenv("VIBE_HHUI_MAP_CANNED");
         x.canned = c ? c : "";
     }
@@ -129,6 +132,13 @@ inline void mapFetchCaps(int port) {
         x.ismBands.clear();   // ★ ≤ 64: a bound on the server's list, not a design limit (src/services/ism.ts ISM_MAX_BANDS)
         mapIsmParseBands(j, x.ismBands);
         x.ismLanding = j["ismLanding"].str();
+        x.sondeBands.clear();
+        for (auto& b : j["sondesBands"].a)
+            if (b["id"].kind == Json::Str && b["name"].kind == Json::Str && x.sondeBands.size() < 8) {
+                std::string n = b["name"].s.substr(0, 24);
+                const size_t sp = n.find(" MHz"); if (sp != std::string::npos) n.resize(sp);
+                x.sondeBands.push_back({b["id"].s.substr(0, 8), n});
+            }
         for (auto& m : x.m) if (m.id == "ism" && x.ismBands.empty()) m.cap = -1;   // ★ no bands = no ISM (main.ts ismReadCap)
     });
 }
@@ -661,6 +671,65 @@ inline std::vector<std::string> mapAvCard(App&, const RadioState& s, const std::
     return {};
 }
 
+// RADIOSONDES ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** ★ V12 (src/services/sondes.ts sondeLine / sondeTemp): serial · height · climb; the temperature ONLY when the server sent
+ *  one beside a whole calibration (cal 51) — never a guessed PTU — else how much of the calibration has arrived. */
+inline std::string mapSdLine(const Json& x) {
+    std::string w = x["serial"].str().substr(0, 12);
+    if (x["alt"].kind == Json::Num) w += mapFmt(" · %.0f m", x["alt"].n);
+    if (x["climb"].kind == Json::Num) w += std::string(" · ") + (x["climb"].n < 0 ? "\xe2\x88\x92" : "+") + mapFmt("%.1f m/s", std::fabs(x["climb"].n));
+    return w;
+}
+inline std::string mapSdTemp(const Json& x) {
+    const int cal = (int)x["cal"].num(0);
+    if (cal == 51 && x["temp"].kind == Json::Num) return std::string(x["temp"].n < 0 ? "\xe2\x88\x92" : "") + mapFmt("%.1f \xc2\xb0" "C", std::fabs(x["temp"].n));
+    return cal >= 51 ? std::string("temperature not decoded") : mapFmt("not yet calibrated (%.0f of 51)", cal < 0 ? 0.0 : double(cal));
+}
+inline bool mapSdFalling(const Json& x) { return x["climb"].kind == Json::Num && x["climb"].n < -2; }
+inline void mapSdBuild(App&, const RadioState& s, std::vector<MapListRow>& rows, std::vector<MapMarker>& mk, std::string& status) {
+    const Json& r = mapReport(s, *mapMode("sondes"));
+    const auto& ss = r["sondes"].a;
+    for (size_t i = 0; i < ss.size() && i < 64; i++) {
+        const Json& x = ss[i];
+        if (x["serial"].str().empty()) continue;
+        MapListRow row;
+        row.key = x["serial"].str().substr(0, 12);
+        row.title = mapSdLine(x);
+        row.col = mapSdFalling(x) ? rgb(0xff8a4d) : rgb(0x7fd4ff);
+        row.right = agoText(x["age"].num(0));
+        std::string sub = mapFmt("%.3f MHz", std::round(x["hz"].num(0) / 1e3) / 1e3);
+        if (x["enc"].kind == Json::Bool && x["enc"].b) sub += " · encrypted — no position";
+        else sub += " · " + mapSdTemp(x);
+        double lat, lon;
+        if (mapPos(x, lat, lon)) {
+            row.pos = true; row.lat = lat; row.lon = lon;
+            // ★ the APRS balloon symbol ("/O") in the sonde's colour: the map already draws it, and it means the same thing
+            if (mk.size() < 64) mk.push_back({row.key, lat, lon, MG_APRS, NAN, row.col, row.key, "/O"});
+        }
+        row.sub = sub;
+        rows.push_back(row);
+    }
+    char b[160];
+    std::snprintf(b, sizeof b, "%s · %zu sonde%s · listening on %zu signal%s", r["bandName"].str().substr(0, 16).c_str(), ss.size(), ss.size() == 1 ? "" : "s",
+                  r["chans"].a.size(), r["chans"].a.size() == 1 ? "" : "s");
+    status = r.isNull() ? "starting — tuning to the radiosonde band…" : b;
+}
+inline std::vector<std::string> mapSdCard(App&, const RadioState& s, const std::string& key) {
+    const Json& r = mapReport(s, *mapMode("sondes"));
+    for (const auto& x : r["sondes"].a) {
+        if (x["serial"].str().substr(0, 12) != key) continue;
+        std::vector<std::string> l;
+        l.push_back(mapSdLine(x));
+        l.push_back(mapFmt("%.3f MHz · ", std::round(x["hz"].num(0) / 1e3) / 1e3) + mapSdTemp(x));
+        double lat, lon;
+        if (mapPos(x, lat, lon)) l.push_back(mapFmt("%.5f, ", lat) + mapFmt("%.5f · ", lon) + mapFmt("%.1f m/s towards ", x["speed"].num(0)) + mapFmt("%.0f\xc2\xb0", x["heading"].num(0)));
+        if (mapSdFalling(x) && x["maxAlt"].kind == Json::Num) l.push_back(mapFmt("descending — burst near %.0f m", x["maxAlt"].n));
+        l.push_back(mapFmt("%.0f frames · heard ", x["n"].num(0)) + agoText(x["age"].num(0)) + " ago" + mapFmt(" · %.0f track points", double(x["track"].a.size())));
+        return l;
+    }
+    return {};
+}
+
 // NDB ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** ndb.ts ndbBars: < 10 dB one, < 20 two, else three; 0 = not heard in the last minute. */
 inline int mapNdbBars(double snr, bool live) { if (!live) return 0; return snr < 10 ? 1 : snr < 20 ? 2 : 3; }
@@ -973,6 +1042,23 @@ inline void mapRegisterModes() {
                 }
             };
         }
+        if (id == "sondes") {
+            d.build = mapSdBuild; d.card = mapSdCard; d.listFirst = true;
+            d.empty = "searching the band for RS41 radiosondes — launched twice a day, each heard for one to three hours";
+            // ★ the bands this radio runs (vibeserver.json sondesBands) — the server owns the band: a press sends it
+            d.keys = [](App& a, const RadioState& s, std::vector<std::pair<std::string, std::function<void()>>>& k) {
+                const Json& r = mapReport(s, *mapMode("sondes"));
+                const std::string cur = r["band"].str();
+                std::vector<std::pair<std::string, std::string>> bands;
+                { std::lock_guard<std::mutex> lk(mapModes().capMtx); bands = mapModes().sondeBands; }
+                for (const auto& b : bands) {
+                    const std::string id2 = b.first, lab = b.second;
+                    k.push_back({cur == id2 ? "[" + lab + "]" : lab, [&a, id2, cur] {
+                        if (cur != id2 && mapModes().canned != "sondes") a.eng_->send("{\"type\":\"sondes\",\"on\":1,\"band\":" + jsonQuote(id2) + "}");
+                    }});
+                }
+            };
+        }
         if (id == "ndb") { d.build = mapNdbBuild; d.card = mapNdbCard; d.empty = "skimming the beacon band — each carrier is listed as it is found, its ident as it is read"; }
         if (id == "ism") {
             d.build = mapIsmBuild; d.card = mapIsmCard; d.empty = "listening — sensors, meters and mesh nodes appear as they are decoded"; d.listFirst = true;
@@ -1116,6 +1202,20 @@ inline void mapCannedTick(App& a, const RadioState& s) {
              "{\"key\":\"m2\",\"kind\":\"meshcore\",\"name\":\"NN-Repeater\",\"short\":\"NNR\",\"line\":\"MeshCore repeater\",\"lat\":52.21,\"lon\":-0.95,\"freq\":869618000,\"snr\":3,\"age\":5},"
              "{\"key\":\"w1\",\"kind\":\"meter\",\"make\":\"Kamstrup\",\"model\":\"Multical 21\",\"line\":\"Water 123.456 m³\",\"freq\":868950000,\"snr\":11,\"age\":2}]}";
         if (x.ismBands.empty()) { std::lock_guard<std::mutex> lk(x.capMtx); x.ismBands = {{"433", "433 MHz", "Europe, UK"}, {"868", "868 MHz (EU)", "Europe, UK"}, {"915", "915 MHz (US)", "The Americas"}}; }
+    } else if (x.canned == "sondes") {
+        // ★ V12 two sondes rising, one falling after its burst; calibration incomplete on all but one (its temperature)
+        j = "{\"type\":\"sondes\",\"band\":\"mid\",\"bandName\":\"402\xe2\x80\x93" "404 MHz\",\"hz\":403005000,\"lo\":402000000,\"hi\":404000000,\"chans\":[{\"hz\":403300000,\"db\":18,\"n\":9}],\"sondes\":[";
+        const char* ser[] = {"S3310411", "T1520789", "U0912345"};
+        const double hz[] = {403.3e6, 402.7e6, 403.85e6}, climb[] = {5.2, 5.8, -14.0}, alt0[] = {3400, 18000, 26000};
+        for (int i = 0; i < 3; i++) {
+            const double la = lat0 + 0.2 * (i - 1) + k * 0.0003, lo = lon0 + 0.3 * (i - 1) + k * 0.0004;
+            std::snprintf(b, sizeof b, "%s{\"serial\":\"%s\",\"kind\":\"RS41\",\"hz\":%.0f,\"age\":%d,\"n\":%d,\"frame\":%d,\"cal\":%d%s,\"lat\":%.5f,\"lon\":%.5f,\"alt\":%.0f,\"climb\":%.1f,\"speed\":6,\"heading\":60,\"sats\":9,\"maxAlt\":%.0f,\"track\":[[%.5f,%.5f,%.0f]]}",
+                          i ? "," : "", ser[i], hz[i], i, 10 + k, 3000 + k, i == 2 ? 51 : 10 + k % 40, i == 2 ? ",\"temp\":-41.3" : "", la, lo, alt0[i] + climb[i] * k,
+                          climb[i], i == 2 ? 31000.0 : alt0[i] + climb[i] * k, la, lo, alt0[i] + climb[i] * k);
+            j += b;
+        }
+        j += "]}";
+        { std::lock_guard<std::mutex> lk(x.capMtx); if (x.sondeBands.empty()) x.sondeBands = {{"lo", "400\xe2\x80\x93" "402"}, {"mid", "402\xe2\x80\x93" "404"}, {"hi", "404\xe2\x80\x93" "406"}}; }
     } else if (x.canned == "aprs") {
         if (k % 3 == 0) mapDecFeed(a, "aprs_list", Json::parse("{\"stations\":[{\"key\":\"M0ABC-9\",\"from\":\"M0ABC-9\",\"kind\":\"position\",\"sym\":\"/>\",\"symName\":\"Car\",\"line\":\"car, 48 km/h · via MB7UH\",\"lat\":52.25,\"lon\":-0.88,\"speed\":48,\"course\":120,\"seen\":3},"
                                                             "{\"key\":\"MB7UH\",\"from\":\"MB7UH\",\"kind\":\"position\",\"sym\":\"/#\",\"symName\":\"Digipeater\",\"line\":\"digipeater\",\"lat\":52.33,\"lon\":-0.71,\"seen\":40},"

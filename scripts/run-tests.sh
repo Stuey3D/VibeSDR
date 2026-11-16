@@ -254,6 +254,8 @@ flags_for() {
     test-pll-iq)           echo "-O2" ;;
     # ★ V12 aviation: -O2 — each test times its receiver against real time (CPU per capture second).
     test-acars|test-vdl2|test-hfdl|test-avi-service) echo "-O2 -lpthread" ;;
+    # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
+    test-rs41|test-rs41-service) echo "-O2 -lpthread" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
     test-tz-id) [ "$(uname)" = Darwin ] && echo "-framework CoreFoundation" || echo "" ;;
     *)               echo "" ;;
@@ -425,6 +427,8 @@ deps_for() {
     # ★ V12 AVIATION DATALINK (docs/v12/AVIATION.md): ACARS, VDL2, HFDL and the service that runs them share one front end
     #   (vibe_avi_front.h — the channeliser, FFT and decimators); pffft + kiss_fft from cobjs_for.
     test-acars|test-vdl2|test-hfdl|test-avi-service) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
+    # ★ V12 RS41: the same channeliser / FFT / half-bands (vibe_rs41_rx.h); pffft + kiss_fft from cobjs_for.
+    test-rs41|test-rs41-service) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     *)                  echo "" ;;
   esac
 }
@@ -443,7 +447,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-vdl2|test-hfdl|test-avi-service)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-vdl2|test-hfdl|test-avi-service|test-rs41|test-rs41-service)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -760,6 +764,9 @@ if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+
 if npx tsx scripts/test_decoder_bands.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 aviation, the clients' half (src/services/aviation.ts): the datalink report parsed defensively, the HFDL status line
 if npx tsx scripts/test_aviation_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 radiosondes, the clients' half (src/services/sondes.ts): the report parsed defensively, no temperature unless the
+#   calibration is whole, the lines, the map's items / rows / card and a chosen sonde's track
+if npx tsx scripts/test_sondes_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 (2026-10-26, M7EIW): every spot's time is HH:MM:SS UTC, its slot's START — one helper for web, app and maps.
@@ -1661,6 +1668,22 @@ if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   rm -f "$OUT/vdl2-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 SONDES (docs/v12/RS41.md): the real server on a fake rtl_tcp replaying a synthetic 403.005 MHz capture
+#     (test-rs41 --write-clip: three RS41s from our own transmitter): the capability and bands, the sonde table, no
+#     temperature before the calibration is whole, the band step, the receiver given back, the owner's switch; then the web
+#     client (headless Edge, --mute-audio). Needs VIBESERVER_BIN (exit 3 = not run). ★ Nothing here was heard on air.
+printf '\n\033[1m── Sondes mode (RS41 radiosondes, end to end: the server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-rs41" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-rs41" --write-clip "$OUT/rs41-clip.cu8" 2400000 >/dev/null 2>&1
+  VIBE_RS41_CLIP="$OUT/rs41-clip.cu8" node scripts/test-server-sondes.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_RS41_CLIP="$OUT/rs41-clip.cu8" node scripts/test-web-sondes.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/rs41-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-rs41 build'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by

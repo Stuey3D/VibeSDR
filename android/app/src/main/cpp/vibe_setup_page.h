@@ -3185,6 +3185,8 @@ const BLOCKABLE = [
    *  token, IN the CSV when ticked, off by default), with the notice DECODER-RESEARCH.md §4.3 asks for. */
   { id: "avdata", label: "Aircraft datalink (ACARS, VDL2)" },
   { id: "avdata+text", label: "Aircraft datalink: show the message text (to you only)", parent: "avdata", on: true },
+  /* ★★ V12 RADIOSONDES (docs/v12/RS41.md) — RS41 weather balloons on 400–406 MHz, a whole-radio mode. */
+  { id: "sondes", label: "Radiosondes (RS41 weather balloons)" },
 ];
 /** The tree as drawn: BLOCKABLE plus one entry per digital-spots mode this server runs (vibeserver.json spotModes), under
  *  "spots", before Band. Each is `spots-<mode>` in the CSV when off — the server leaves the mode out everywhere. */

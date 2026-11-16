@@ -76,6 +76,7 @@ inline const DecDef kDecs[] = {
     {"adsb", "ADS-B", DK_MAP, "adsb", false, false, ""}, {"ais", "AIS", DK_MAP, "ais", false, false, ""},
     {"ndb", "NDB", DK_MAP, "ndb", false, false, ""}, {"ism", "ISM", DK_MAP, "ism", false, false, ""},
     {"avdata", "DATALINK", DK_MAP, "avdata", false, false, ""},   // ★ V12 the aircraft datalink (map_modes.h)
+    {"sondes", "SONDES", DK_MAP, "sondes", false, false, ""},     // ★ V12 RS41 radiosondes (map_modes.h)
 };
 inline const DecDef* decDef(const std::string& id) { for (auto& d : kDecs) if (id == d.id) return &d; return nullptr; }
 

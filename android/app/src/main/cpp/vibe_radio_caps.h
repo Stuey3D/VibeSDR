@@ -61,6 +61,7 @@ inline const std::vector<const char*>& allModes() {
         "drm", "freedv", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
         "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
+        "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
     };
     return v;
 }
@@ -168,6 +169,8 @@ inline Caps compute(const Facts& f) {
         if (id == "ais" || id == "aisstore") return d != "airspyhf" && holds(R, 161.95e6, 162.05e6);
         // ★ V12 Aircraft datalink: ACARS (131.525–131.825) or VDL2 (136.700–136.975) whole — not the HF+ (AIS's reason)
         if (id == "avdata") return d != "airspyhf" && (holds(R, 131.50e6, 131.85e6) || holds(R, 136.68e6, 136.99e6));
+        // ★ V12 Radiosondes: one 2 MHz band of 400–406 MHz whole — not the HF+ (AIS's reason), not an Icom (no IQ)
+        if (id == "sondes") return d != "airspyhf" && (holds(R, 400.0e6, 402.0e6) || holds(R, 402.0e6, 404.0e6) || holds(R, 404.0e6, 406.0e6));
         if (id == "ism" || id == "lora") {
             if (!rateAtLeast(vibeism::kMinRateHz)) return false;
             for (const auto& b : vibeism::bands()) if (holds(R, b.centreHz - b.needHz, b.centreHz + b.needHz)) return true;

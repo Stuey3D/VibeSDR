@@ -127,6 +127,10 @@ export type MobileDeps = {
   avCap?: () => { ok: boolean; why: string } | null;
   avOn?: () => boolean;
   toggleAv?: () => void;
+  /** ★ V12 radiosondes (RS41) — the same three states. */
+  sdCap?: () => { ok: boolean; why: string } | null;
+  sdOn?: () => boolean;
+  toggleSd?: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -432,6 +436,17 @@ export function initMobileControls(deps: MobileDeps) {
       if (!avc.ok) avRow.setAttribute('aria-disabled', 'true');
       avRow.onclick = () => { deps.toggleAv!(); close(); refresh(); };
       grid.appendChild(avRow);
+    }
+    /* ★★ V12 RADIOSONDES beside it — the same three states; absent where the radio cannot reach 400 MHz. */
+    const sdc = deps.sdCap?.();
+    if (sdc && deps.toggleSd && (sdc.ok || deps.sdOn?.())) {
+      const sdRow = document.createElement('button');
+      sdRow.className = 'mModeOpt' + (deps.sdOn?.() ? ' on' : '') + (sdc.ok ? '' : ' dis');
+      setModeLabel(sdRow, 'sondes', 'SONDES');
+      sdRow.title = sdc.ok ? 'Radiosondes — RS41 weather balloons on 400–406 MHz, with a map' : `Radiosondes are not available: ${sdc.why}`;
+      if (!sdc.ok) sdRow.setAttribute('aria-disabled', 'true');
+      sdRow.onclick = () => { deps.toggleSd!(); close(); refresh(); };
+      grid.appendChild(sdRow);
     }
 
     const sole = deps.soleDecoder();
