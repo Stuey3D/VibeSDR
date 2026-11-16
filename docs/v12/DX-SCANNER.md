@@ -170,6 +170,7 @@ longer to adjust the gain etc to try and pull a multiplex in as best as it can."
 | | |
 |---|---|
 | `GET /vibeserver/dxlog.json?band=&local=1&suspect=1&sort=last\|first\|peak\|times&offset=&limit=` | the page: `total`, `counts`, `bootstrap`, `sweeps`, `alertSeq`, `entries`, `scanner` (its settings), `canPromote` |
+| `GET /vibeserver/dxlog.json?dial=1` | ★ V12 2026-11-16 the DIAL's DX labels (knownSignals.ts dxDialSignals): class DX only, heard within a week, none on a channel a Local holds, one per channel (latest), compact, ≤ 100 — same gate as the log |
 | `GET /vibeserver/dxlog/entry?id=` | one entry with its openings, newest first |
 | `GET /vibeserver/dxlog/alerts?since=` | alerts newer than a sequence number |
 | `POST /vibeserver/dxlog/promote?id=` | owner: into the bookmarks |
