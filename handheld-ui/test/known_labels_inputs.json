@@ -478,5 +478,194 @@
     }
    ]
   }
- ]
+ ],
+ "dx": {
+  "now": 1800000000,
+  "bmHz": [
+   95800000,
+   94600000
+  ],
+  "entries": [
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799992800,
+    "rds": true,
+    "freqKhz": 98800,
+    "pi": "5202",
+    "ps": "RNE 1",
+    "range": "fm"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799982000,
+    "rds": true,
+    "freqKhz": 98800,
+    "pi": "5201",
+    "ps": "RAI R1"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799997600,
+    "rds": true,
+    "freqKhz": 98900,
+    "pi": "5203",
+    "ps": "  RADIO   UNO  "
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799740800,
+    "rds": false,
+    "freqKhz": 69800,
+    "pi": "0000",
+    "ps": "",
+    "range": "oirt"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799910000,
+    "rds": false,
+    "freqKhz": 69830,
+    "pi": "0000",
+    "ps": "",
+    "range": "oirt"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799996460,
+    "rds": false,
+    "freqKhz": 86650,
+    "pi": "0000",
+    "ps": "",
+    "range": "ext"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799999970,
+    "rds": true,
+    "freqKhz": 99300,
+    "pi": "C363",
+    "ps": ""
+   },
+   {
+    "band": "FM",
+    "class": "suspect",
+    "lastHeard": 1799992800,
+    "rds": true,
+    "freqKhz": 101100,
+    "ps": "SUSPECT"
+   },
+   {
+    "band": "FM",
+    "class": "provisional",
+    "lastHeard": 1799992800,
+    "rds": true,
+    "freqKhz": 101300,
+    "ps": "BASELINE"
+   },
+   {
+    "band": "FM",
+    "class": "local",
+    "lastHeard": 1799992800,
+    "rds": true,
+    "freqKhz": 101500,
+    "ps": "LOCAL"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799395200,
+    "rds": true,
+    "freqKhz": 102100,
+    "ps": "WEEK IN"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799395199,
+    "rds": true,
+    "freqKhz": 102300,
+    "ps": "WEEK OUT"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799992800,
+    "rds": true,
+    "freqKhz": 95800,
+    "ps": "UNDER BM"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799992800,
+    "rds": true,
+    "freqKhz": 94600,
+    "ps": "NO LABEL"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799992800,
+    "rds": true,
+    "freqKhz": 145500,
+    "ps": "NOT FM"
+   },
+   {
+    "band": "FM",
+    "class": "dx",
+    "lastHeard": 1799827200,
+    "rds": true,
+    "freqKhz": 103000,
+    "ps": "A VERY LONG STATION NAME"
+   },
+   {
+    "band": "DAB",
+    "class": "dx",
+    "block": "12C",
+    "eid": "E0F1",
+    "ensemble": "Far Away",
+    "freqKhz": 227360,
+    "lastHeard": 1799910000
+   },
+   {
+    "band": "DAB",
+    "class": "dx",
+    "block": "12D",
+    "eid": "E0F2",
+    "ensemble": "",
+    "freqKhz": 229072,
+    "lastHeard": 1799481600
+   }
+  ],
+  "views": [
+   {
+    "name": "fm-wide",
+    "lo": 87500000,
+    "span": 20500000,
+    "width": 640,
+    "dial": 98800000
+   },
+   {
+    "name": "fm-tight",
+    "lo": 98000000,
+    "span": 2000000,
+    "width": 300,
+    "dial": 98000000
+   },
+   {
+    "name": "oirt",
+    "lo": 69500000,
+    "span": 600000,
+    "width": 640,
+    "dial": 69800000
+   }
+  ]
+ }
 }

@@ -156,6 +156,48 @@ try {
   ok(!fl.includes('BBC R2') && !fl.some(l => l.startsWith('PI4322')), 'the personal name wins its channel; a provisional PI name is not a label');
   await shot('5-fm-bookmarks-learnt-rds');
 
+  // ── 3c. ★★ V12 DX CATCHES ON THE DIAL (Stuart, 2026-11-16): italic, their own colour, "· DX · 2 h ago", a week, under a bookmark ──
+  await ev(`(() => { const w = __wfDrv.wf, K = __known, now = Math.floor(Date.now() / 1000);
+    const bms = K.bookmarkSignals([{ name: 'Radio 2 (mine)', frequency: 89100000, mode: 'wfm' }],
+      [{ name: 'Heart', frequency: 96400000, mode: 'wfm', source: 'server', manual: false, pi: 0xC3A1 }], false);
+    const base = K.knownSignalList([], bms);
+    const E = (o) => ({ band: 'FM', class: 'dx', lastHeard: now - 7200, ...o });
+    const dx = K.dxDialSignals([E({ freqKhz: 92300, ps: 'RNE 1' }), E({ freqKhz: 96400, ps: 'UNDER BM' }),
+      E({ freqKhz: 99700, ps: 'RAI R1', lastHeard: now - 3 * 86400 }), E({ freqKhz: 101500, ps: 'OLD', lastHeard: now - 8 * 86400 }),
+      E({ freqKhz: 102500, ps: 'SPILL', class: 'suspect' })], now, base, [89100000, 96400000]);
+    w.knownSignals = K.knownSignalList([], bms, dx); w.knownGen++;
+    // what is written, in which font and colour
+    window.__ft = [];
+    const f = CanvasRenderingContext2D.prototype.fillText;
+    if (!CanvasRenderingContext2D.prototype.__ftWrapped) {
+      CanvasRenderingContext2D.prototype.fillText = function (t, x, y) { if (window.__ft && window.__ft.length < 4000) window.__ft.push({ t: String(t), font: this.font, fill: String(this.fillStyle) }); return f.apply(this, arguments); };
+      CanvasRenderingContext2D.prototype.__ftWrapped = true;
+    }
+    return true; })()`);
+  await ev(`__wfDrv.setCarriers([89100000, 92300000, 96400000, 99700000, 101500000])`);
+  await ev(`(__wfDrv.wf.vfoHz = 89100000, __wfDrv.wf.knownKey = '', true)`);
+  await ev(`__wfDrv.ask(95000000, 14000000)`); await ev('__wfDrv.run(2500)');
+  g = await geo();
+  const xl = g.placed.map(p => p.label);
+  console.log('      placed:', xl.join(' | '));
+  ok(xl.includes('RNE 1 · DX · 2 h ago') && xl.includes('RAI R1 · DX · 3 days ago'), 'DX catches are labelled: name · DX · when');
+  ok(!xl.some(l => l.startsWith('UNDER BM')) && xl.includes('Heart'), '★ a learnt name on the same channel wins — no DX label there');
+  ok(!xl.some(l => l.startsWith('OLD') || l.startsWith('SPILL')), '★ older than a week, or a suspect: not on the dial');
+  const pdx = g.placed.find(p => p.label.startsWith('RNE 1'));
+  ok(!!pdx && Math.abs(pdx.lx + pdx.w / 2 - pdx.x) < 1, 'centred on its carrier, like every label');
+  ok(!g.placed.some((a, i) => g.placed.some((b, j) => i !== j && a.row === b.row && a.lx < b.lx + b.w && b.lx < a.lx + a.w)), 'nothing overlaps');
+  const ft = await ev(`window.__ft`);
+  const dxT = ft.filter(r => r.t.includes(' · DX · ')), bmT = ft.filter(r => r.t === 'Heart');
+  ok(dxT.length > 0 && dxT.every(r => /italic/.test(r.font) && r.fill.toLowerCase() === '#ffe45c'), `★ drawn ITALIC in the DX colour (${dxT[0]?.font}, ${dxT[0]?.fill})`);
+  ok(bmT.length > 0 && bmT.every(r => !/italic/.test(r.font) && r.fill.toLowerCase() === '#d9b8ff'), '…and a bookmark beside it upright in the lilac');
+  // lemon (#ffe45c) pixels: the DX colour reaches the canvas, in the spectrum only
+  const lemon = (y0, y1) => ev(`(() => { const c = document.getElementById('wf'); const d = c.getContext('2d').getImageData(0, ${y0}, c.width, ${y1 - y0}).data;
+    let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 225 && d[i + 1] > 195 && d[i + 2] < 140 && d[i + 2] > 50) n++; return n; })()`);
+  const lIn = await lemon(0, g.specH), lWf = await lemon(g.specH + 2, g.H);
+  ok(lIn > 60 && lWf === 0, `the DX colour on the canvas, in the spectrum only (${lIn} px there, ${lWf} below)`);
+  await ev(`(window.__ft = null, true)`);
+  await shot('5b-fm-dx-catches');
+
   // ── 4. off ──
   await ev(`(__wfDrv.wf.showSpec = true, __wfDrv.wf.knownSignals = null, __wfDrv.wf.knownGen++, true)`); await ev('__wfDrv.run(1000)');
   ok((await lilac(0, (await geo()).H)) === 0, 'toggle off: nothing drawn');

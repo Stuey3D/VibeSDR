@@ -35,8 +35,36 @@ struct KnownLabelsUi {
     std::vector<KnownSig> eibiCache;
     uint64_t eibiSeq = ~0ull;
     int eibiBucket = -1;
+    // ★★ V12 THE DX CATCHES ON THE DIAL (known_labels.h dxDialSignals — the app's and the web's rule): the engine's
+    //    GET /vibeserver/dxlog.json?dial=1 — fetched on a worker while the labels are on, once and then every ten minutes
+    //    (the scanner sweeps only while nobody listens); ≤ DX_DIAL_MAX entries kept. A 403 (the owner's "admin lock on
+    //    viewing") or an engine without a DX Log (404) = none. Under `m`.
+    std::vector<DxDialIn> dx;
+    double dxNow = 0;                // the engine's clock in its answer (unix s) …
+    std::time_t dxAt = 0;            // … and this clock then — the labels' "2 h ago" runs on the engine's clock
+    uint64_t dxSeq = 0, dxBuiltSeq = ~0ull;
+    double dxFetchAt = -1e9;
+    bool dxBusy = false;
+    int dxMinute = -1;               // the minute the list's "… ago" was worked out for
 };
 inline KnownLabelsUi& knownLabelsUi() { static KnownLabelsUi u; return u; }
+
+/** Fetch the DX catches (a worker). */
+inline void knownLabelsFetchDx(int port) {
+    KnownLabelsUi& u = knownLabelsUi();
+    { std::lock_guard<std::mutex> lk(u.m); if (u.dxBusy) return; u.dxBusy = true; }
+    hwAsync([port] {
+        KnownLabelsUi& u = knownLabelsUi();
+        const HttpResult r = httpRequest(port, "GET", "/vibeserver/dxlog.json?dial=1&limit=100", "", 10);
+        double pn = 0;
+        std::vector<DxDialIn> v;
+        if (r.status == 200) v = dxDialParse(r.body, &pn);
+        std::lock_guard<std::mutex> lk(u.m);
+        u.dxBusy = false;
+        if (r.status == 0) return;   // no answer: keep what we had, try at the next round
+        u.dx = std::move(v); u.dxNow = pn; u.dxAt = std::time(nullptr); u.dxSeq++;
+    });
+}
 
 /** ★★ V12 the tuned station (tuned_label_app.h, after this file): which placed label names it, −1 = none. */
 inline int tunedPickNow(Ctx& c, const RadioState& s, const std::vector<PlacedLabel>& placed);
@@ -73,7 +101,17 @@ inline bool knownLabelsBuild(int nowMin, uint64_t stSeq) {
             }
         }
         if (redoEibi) { u.eibiCache = eibiKnownSignals(eibi, nowMin); u.eibiSeq = stSeq; u.eibiBucket = nowMin / 10; }
-        std::vector<KnownSig> list = knownSignalList(u.eibiCache, bookmarkSignals(bms));
+        const std::vector<KnownSig> bmSigs = bookmarkSignals(bms);
+        std::vector<KnownSig> list = knownSignalList(u.eibiCache, bmSigs);
+        // ★★ V12 + the DX catches, clear of every channel those labels — or any bookmark at all — hold
+        std::vector<DxDialIn> dx; double dxNow;
+        { std::lock_guard<std::mutex> lk(u.m); dx = u.dx; dxNow = u.dxNow > 0 ? u.dxNow + (double)(std::time(nullptr) - u.dxAt) : (double)std::time(nullptr); }
+        if (!dx.empty()) {
+            std::vector<double> bmHz;
+            for (const BookmarkIn& b : bms) bmHz.push_back(b.frequency);
+            const std::vector<KnownSig> dxs = dxDialSignals(std::move(dx), dxNow, list, bmHz);
+            if (!dxs.empty()) list = knownSignalList(u.eibiCache, bmSigs, dxs);
+        }
         std::lock_guard<std::mutex> lk(u.m);
         u.built = std::move(list); u.ready = true; u.busy = false;
     });
@@ -85,7 +123,7 @@ inline void knownLabelsDraw(App& a, Ctx& c, const RadioState& s, Rect spec) {
     KnownLabelsUi& u = knownLabelsUi();
     // ★ off, or the DAB page's thin strip (no room for two rows — as the dB grid), or no view: nothing at all
     if (!dispSet().knownLabels || spec.h < 60 || !(s.spanHz > 0)) {
-        if (u.on) { u.k.clear(); u.on = false; u.bmSeq = u.stSeq = ~0ull; u.bucket = -1; }
+        if (u.on) { u.k.clear(); u.on = false; u.bmSeq = u.stSeq = ~0ull; u.bucket = -1; u.dxFetchAt = -1e9; u.dxBuiltSeq = ~0ull; }
         return;
     }
     u.on = true;
@@ -98,12 +136,17 @@ inline void knownLabelsDraw(App& a, Ctx& c, const RadioState& s, Rect spec) {
         { BmShared& b = bmShared(); std::lock_guard<std::mutex> lk(b.m); haveStations = b.stationsSeq > 0; }
         if (!haveStations) bmLoadStations(port);
     }
+    if (a.eng_ && now - u.dxFetchAt > 600) { u.dxFetchAt = now; knownLabelsFetchDx(a.eng_->port()); }   // ★★ V12 the DX catches
     // a source changed → rebuild (on the worker)
     uint64_t bs, ss;
     { BmShared& b = bmShared(); std::lock_guard<std::mutex> lk(b.m); bs = b.seq; ss = b.stationsSeq; }
     const int nowMin = knownUtcMinutes(), bucket = nowMin / 10;
-    if ((bs != u.bmSeq || ss != u.stSeq || bucket != u.bucket) && knownLabelsBuild(nowMin, ss)) {
-        u.bmSeq = bs; u.stSeq = ss; u.bucket = bucket;
+    // ★★ V12 a new DX list, or (while any are held) a new minute for their "… ago"
+    uint64_t dxSeq; bool dxAny;
+    { std::lock_guard<std::mutex> lk(u.m); dxSeq = u.dxSeq; dxAny = !u.dx.empty(); }
+    const bool dxDue = dxSeq != u.dxBuiltSeq || (dxAny && nowMin != u.dxMinute);
+    if ((bs != u.bmSeq || ss != u.stSeq || bucket != u.bucket || dxDue) && knownLabelsBuild(nowMin, ss)) {
+        u.bmSeq = bs; u.stSeq = ss; u.bucket = bucket; u.dxBuiltSeq = dxSeq; u.dxMinute = nowMin;
     }
     {
         std::lock_guard<std::mutex> lk(u.m);

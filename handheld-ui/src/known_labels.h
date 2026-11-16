@@ -23,6 +23,7 @@
 //   rebuilt only when the bookmarks, the schedule or the ten-minute EiBi clock change (known_labels_app.h).
 #pragma once
 #include "gfx.h"
+#include "json.h"
 #include "known_signals_gen.h"
 #include "text.h"
 #include "ui.h"
@@ -43,6 +44,8 @@ namespace hh {
 namespace th {
 inline const Rgba knownLabel = rgb(0xd9b8ff);
 inline const Rgba knownBox   = rgb(0x000000, 0.62f);
+// ★★ V12 knownSignals.ts DX_LABEL_COLOUR — a DX catch's label and line (lemon: not the lilac, the VFO's, DAB's)
+inline const Rgba dxLabel    = rgb(0xffe45c);
 }  // namespace th
 
 // ── the list ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -52,7 +55,10 @@ struct KnownSig {
     std::string label, dec, mode;
     double dialHz = 0;
     int prio = 0;
-    std::string src;                   // table · eibi · server · learnt (personal: the handheld keeps no own list)
+    std::string src;                   // table · eibi · server · learnt · dx (personal: the handheld keeps no own list)
+    // ★★ V12 a DX catch (dxDialSignals): when it was last heard (unix s) — drawn in th::dxLabel
+    bool dx = false;
+    double heard = 0;
 };
 
 constexpr int PRIO_SAFETY = 7, PRIO_TABLE = 6, PRIO_ROUTINE = 5, PRIO_PERSONAL = 4, PRIO_SERVER = 3, PRIO_LEARNT = 2,
@@ -289,12 +295,114 @@ inline std::vector<KnownSig> bookmarkSignals(const std::vector<BookmarkIn>& serv
     return out;
 }
 
-/** knownSignals.ts knownSignalList: the table + EiBi's + the bookmarks, one list sorted by hz (stable). */
-inline std::vector<KnownSig> knownSignalList(const std::vector<KnownSig>& eibi, const std::vector<KnownSig>& bms) {
+/** knownSignals.ts knownSignalList: the table + EiBi's + the bookmarks + the DX catches, one list sorted by hz (stable). */
+inline std::vector<KnownSig> knownSignalList(const std::vector<KnownSig>& eibi, const std::vector<KnownSig>& bms,
+                                             const std::vector<KnownSig>& dx = {}) {
     std::vector<KnownSig> v = knownTable();
     v.insert(v.end(), eibi.begin(), eibi.end());
     v.insert(v.end(), bms.begin(), bms.end());
+    v.insert(v.end(), dx.begin(), dx.end());
     std::stable_sort(v.begin(), v.end(), [](const KnownSig& a, const KnownSig& b) { return a.hz < b.hz; });
+    return v;
+}
+
+// ── ★★ V12 DX catches on the dial (knownSignals.ts dxDialSignals — Stuart, 2026-11-16) ─────────────────────────────────
+// The engine's DX Log (GET /vibeserver/dxlog.json?dial=1): class "dx" only, a WEEK from last heard, a bookmark or a
+// known-signal label on the same channel wins, one a channel (the most recently heard), PRIO_DX below every bookmark,
+// "RNE 1 · DX · 2 h ago", OIRT to two decimals. ★ The R36S has no italic face in its atlas (Atkinson Hyperlegible
+// Regular/Bold only), so a DX label is marked by its colour (th::dxLabel) and the "DX" tag — not slanted.
+// ★ A DAB catch needs the server's freqKhz (it always sends the block's centre); the TS's Band III fallback is not here.
+constexpr int PRIO_DX = 0;
+constexpr double DX_DIAL_MAX_AGE_S = 7 * 86400;
+constexpr int DX_DIAL_MAX = 100;
+
+struct DxDialIn {
+    std::string band, cls, range, pi, ps, block, eid, ensemble;
+    double freqKhz = 0, lastHeard = 0;
+    bool rds = true;
+};
+/** dxDialAgo: "just now", "12 min ago", "2 h ago", "1 day ago", "3 days ago". */
+inline std::string dxDialAgo(double heard, double nowS) {
+    const double s = std::max(0.0, nowS - heard);
+    if (s < 120) return "just now";
+    if (s < 3600) return std::to_string((long long)std::floor(s / 60)) + " min ago";
+    if (s < 86400) return std::to_string((long long)std::floor(s / 3600)) + " h ago";
+    const long long d = (long long)std::floor(s / 86400);
+    return std::to_string(d) + (d == 1 ? " day ago" : " days ago");
+}
+/** dxFmChannel: "98.8"; OIRT and any channel off the 100 kHz raster to two decimals ("69.80", "86.65"). */
+inline std::string dxFmChannel(double khz, const std::string& range) {
+    const long long k = (long long)std::llround(khz);
+    const bool oirt = range == "oirt" || (range.empty() && k > 0 && k < 75000);
+    char b[32];
+    std::snprintf(b, sizeof b, oirt || k % 100 ? "%.2f" : "%.1f", khz / 1000.0);
+    return b;
+}
+inline std::string dxTidy(const std::string& s) {
+    std::string o;
+    for (const std::string& w : kl::splitWs(s)) { if (!o.empty()) o += ' '; o += w; }
+    return o;
+}
+/** dxDialName: FM — the PS, else the PI, else (no RDS) the channel; DAB — the block and the ensemble. */
+inline std::string dxDialName(const DxDialIn& e) {
+    if (e.band == "DAB") {
+        const std::string ens = dxTidy(e.ensemble);
+        const std::string n = !ens.empty() ? ens : (!e.eid.empty() ? "EId " + e.eid : "");
+        return e.block.empty() ? n : n.empty() ? e.block : e.block + " " + n;
+    }
+    const std::string ps = dxTidy(e.ps);
+    if (!ps.empty()) return ps;
+    if (e.rds && !e.pi.empty() && e.pi != "0000") return "PI " + e.pi;
+    return dxFmChannel(e.freqKhz, e.range);
+}
+inline std::string dxDialLabel(const DxDialIn& e, double nowS) {
+    return bookmarkLabel(dxDialName(e)) + " \xc2\xb7 DX \xc2\xb7 " + dxDialAgo(e.lastHeard, nowS);
+}
+/** knownSignals.ts dxDialSignals. `others` = the labels already in force, `bmHz` = every bookmark's frequency. */
+inline std::vector<KnownSig> dxDialSignals(std::vector<DxDialIn> entries, double nowS, const std::vector<KnownSig>& others,
+                                           const std::vector<double>& bmHz) {
+    std::vector<KnownSig> out;
+    std::vector<DxDialIn> cand;
+    for (DxDialIn& e : entries)
+        if (e.cls == "dx" && e.lastHeard > 0 && nowS - e.lastHeard <= DX_DIAL_MAX_AGE_S && e.lastHeard - nowS <= 3600) cand.push_back(std::move(e));
+    std::stable_sort(cand.begin(), cand.end(), [](const DxDialIn& a, const DxDialIn& b) { return a.lastHeard > b.lastHeard; });
+    std::vector<double> taken;
+    for (const KnownSig& o : others) if (o.src != "dx") taken.push_back(o.hz);
+    for (double h : bmHz) if (h > 0) taken.push_back(h);
+    for (const DxDialIn& e : cand) {
+        if ((int)out.size() >= DX_DIAL_MAX) break;
+        const bool dab = e.band == "DAB";
+        if (!dab && e.band != "FM") continue;
+        if (!dab && !(e.freqKhz >= 65800 && e.freqKhz <= 108000)) continue;
+        const double hz = e.freqKhz * 1000;
+        if (!(hz > 0)) continue;
+        const double tol = dab ? 50000 : 12000;
+        bool near = false;
+        for (double h : taken) if (std::fabs(h - hz) <= tol) { near = true; break; }
+        for (const KnownSig& o : out) if (!near && std::fabs(o.hz - hz) <= tol) near = true;
+        if (near) continue;
+        KnownSig s;
+        s.hz = hz; s.label = dxDialLabel(e, nowS); s.dec = ""; s.dialHz = hz; s.mode = dab ? "dab" : "wfm"; s.prio = PRIO_DX;
+        s.src = "dx"; s.dx = true; s.heard = e.lastHeard;
+        out.push_back(std::move(s));
+    }
+    std::stable_sort(out.begin(), out.end(), [](const KnownSig& a, const KnownSig& b) { return a.hz < b.hz; });
+    return out;
+}
+/** The engine's dxlog.json (?dial=1, or an older engine's page) → the entries. Bounded: at most DX_DIAL_MAX read. */
+inline std::vector<DxDialIn> dxDialParse(const std::string& body, double* pageNow = nullptr) {
+    std::vector<DxDialIn> v;
+    const Json j = Json::parse(body);
+    if (pageNow) *pageNow = j["now"].num(0);
+    const Json& es = j["entries"];
+    for (size_t i = 0; i < es.size() && (int)v.size() < DX_DIAL_MAX; i++) {
+        const Json& o = es[i];
+        DxDialIn e;
+        e.band = o["band"].str(); e.cls = o["class"].str(); e.range = o["range"].str(); e.pi = o["pi"].str(); e.ps = o["ps"].str();
+        e.block = o["block"].str(); e.eid = o["eid"].str(); e.ensemble = o["ensemble"].str();
+        e.freqKhz = o["freqKhz"].num(0); e.lastHeard = o["lastHeard"].num(0); e.rds = o["rds"].boolean(true);
+        v.push_back(std::move(e));
+    }
     return v;
 }
 
@@ -477,8 +585,9 @@ public:
         std::vector<PlacedLabel> ps;
         for (size_t pi = 0; pi < placed_.size(); pi++) if ((int)pi != hi) ps.push_back(placed_[pi]);
         const auto stems = labelStems(ps, [&](int r) { return (double)rowTop(spec, f, r); }, h, 6);
+        const Rgba dxTick = rgb(0xffe45c, 0.8f);   // ★★ V12 a DX catch's line in its own colour
         for (size_t i = 0; i < ps.size(); i++)
-            g.rect(spec.x + (float)stems[i].x, (float)stems[i].y0, 1, (float)(stems[i].y1 - stems[i].y0), tick);
+            g.rect(spec.x + (float)stems[i].x, (float)stems[i].y0, 1, (float)(stems[i].y1 - stems[i].y0), ps[i].sig->dx ? dxTick : tick);
         for (size_t pi = 0; pi < placed_.size(); pi++) {
             const PlacedLabel& p = placed_[pi];
             if ((int)pi == hi) continue;   // ★★ drawn as the tuned label, on the needle
@@ -492,7 +601,7 @@ public:
             g.rect(spec.x + (float)p.lx, top, (float)p.w, h, th::knownBox);
             // centred in its box (it is laid out centred on its carrier; a shortened name carries its own text)
             const float tw = (float)tc.width(f, p.shown());
-            tc.draw(g, f, p.shown(), spec.x + (float)(p.lx + (p.w - tw) / 2), top + ty, th::knownLabel);
+            tc.draw(g, f, p.shown(), spec.x + (float)(p.lx + (p.w - tw) / 2), top + ty, s.dx ? th::dxLabel : th::knownLabel);
         }
     }
 

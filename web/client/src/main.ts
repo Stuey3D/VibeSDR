@@ -129,7 +129,7 @@ import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   /
 import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
-import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, type KnownSignal, type KnownAvail } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
+import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, type KnownSignal, type KnownAvail, type DxDialEntry } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
 import { dabBlockSignals, dabMuxNames, dabWideView, dabBlockHit, dabBlockHint, parseDabBlockQ, dabFreshGrades, type DabBlockGrade } from '../../../src/utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, inPassband, TUNED_SETTLE_MS, type Passband, type TunedRow } from '../../../src/utils/tunedStation';   // ★★ the tuned station's label at the VFO
 import {
@@ -7713,6 +7713,12 @@ let dabBlockMemory: Record<string, string> = {};
 /** ★★ V12 how well each block decodes here — the server's grades (dabBlockView.ts), {} from an older server. */
 let dabBlockQ: Record<string, DabBlockGrade> = {};
 let dabBlocksKey = '';
+/** ★★ V12 the DX catches on the dial (dxDialFetch — knownSignals.ts dxDialSignals), [] while none / the labels off. Kept
+ *  here (before dabBlocksSync reads it): a wide DAB view names an otherwise unnamed block by its DX catch. */
+let dxDialList: KnownSignal[] = [];
+/** …and what the server last sent (dxDialFetch): the entries, its clock then, and when they arrived. */
+let dxDialEntries: DxDialEntry[] = [];
+let dxDialPageNow = 0, dxDialAtMs = 0;
 let dabNamesCache: Map<string, string> = new Map();
 let dabGradesCache: Map<string, DabBlockGrade> = new Map();
 function dabCurrentBlock(): number {
@@ -7726,10 +7732,11 @@ function dabBlocksSync() {
                               memory: dabBlockMemory, scan: dabScanState?.found ?? null });
   const cur = dabCurrentBlock();
   const grades = dabFreshGrades(dabBlockQ, Date.now() / 1000);
-  const key = `${cur}|${[...names].map(([k, v]) => `${k}=${v}`).join('\u0001')}|${[...grades].map(([k, v]) => `${k}=${v.g}${v.t}`).join(',')}`;
+  const dxDab = dxDialList.filter(s => s.dx?.block);
+  const key = `${cur}|${[...names].map(([k, v]) => `${k}=${v}`).join('\u0001')}|${[...grades].map(([k, v]) => `${k}=${v.g}${v.t}`).join(',')}|${dxDab.map(s => s.label).join('\u0001')}`;
   if (key === dabBlocksKey && wf.dabBlocks) return;
   dabBlocksKey = key; dabNamesCache = names; dabGradesCache = grades;
-  wf.dabBlocks = dabBlockSignals(names, cur, grades);
+  wf.dabBlocks = dabBlockSignals(names, cur, grades, dxDab);
   wf.knownGen++;
 }
 /** ★★ A CLICK INSIDE A BLOCK on a wide DAB view: the MULTIPLEXES pick's own road (dabGoTo — the shared dial, the server's
@@ -18348,6 +18355,7 @@ function dxLogSyncBtn() {
   $('dxLogBtn').hidden = !dxLogOk;
   if (!dxLogOk && isPanelOpen('dxLogPanel')) $('dxLogPanel').classList.remove('open');
   dxAlertsArm();
+  dxDialArm();   // ★★ V12 the DX catches on the dial (each connect: this server's own, or none)
 }
 function dxAlertsOn(): boolean { try { return localStorage.getItem(DX_ALERT_KEY) === '1'; } catch { return false; } }
 function dxAlertSeqKey(): string { return `${DX_ALERT_SEEN}:${currentHost}`; }
@@ -18665,13 +18673,55 @@ function slider(
 let knownLabelsOn = true;
 function applyKnownSignals() {
   if (!wf) return;
-  if (!knownLabelsOn) { wf.knownSignals = null; wf.knownGen++; return; }
+  if (!knownLabelsOn) { wf.knownSignals = null; wf.knownGen++; if (dxDialList.length) { dxDialList = []; dabBlocksSync(); } return; }
   const d = new Date();
   // ★★ + this browser's own bookmarks, the server owner's saved ones and the FM names it learnt from RDS (GET /bookmarks
   //    carries "manual" and "nameSrc" — knownSignals.ts bookmarkSignals); the schedule's broadcast rows never.
   const bms = bookmarkSignals(getBookmarks(), getServerBookmarks(), false);
-  wf.knownSignals = knownSignalList(eibiKnownSignals(getStations(), d.getUTCHours() * 60 + d.getUTCMinutes()), bms);
+  const eibi = eibiKnownSignals(getStations(), d.getUTCHours() * 60 + d.getUTCMinutes());
+  const base = knownSignalList(eibi, bms);
+  // ★★ V12 + the DX catches (dxDialFetch), clear of every channel those labels — or any bookmark at all — hold
+  const hadDx = dxDialList.length > 0;
+  dxDialList = dxDialSignals(dxDialEntries, dxServerNow(dxDialPageNow, dxDialAtMs), base,
+                             [...getBookmarks(), ...getServerBookmarks()].map(b => b.frequency));
+  wf.knownSignals = dxDialList.length ? knownSignalList(eibi, bms, dxDialList) : base;
   wf.knownGen++;
+  if (hadDx || dxDialList.length) dabBlocksSync();
+}
+/* ★★★ V12 DX CATCHES ON THE DIAL (knownSignals.ts dxDialSignals — Stuart, 2026-11-16: "show DX catches on the dial as
+ *     signal labels too, marked as sporadic"). The server's own list — GET /vibeserver/dxlog.json?dial=1: real DX
+ *     catches heard this week, one a channel, compact, ≤ 100 (an older server sends its ordinary page, filtered here by
+ *     the same rules). Fetched only while the labels are ON and the server has a DX Log (hwinfo `dxLog`): on connect,
+ *     then every ten minutes (the scanner sweeps only while nobody listens, so the list barely moves while you do).
+ *  ★★ NEVER A LEAK: the same request, and so the same gate, as the DX LOG view — the read PIN, and the owner's "admin
+ *     lock on viewing" (a 403 → no labels). The labels' "2 h ago" is re-worked each minute while any are held. */
+let dxDialFetchTimer: number | null = null, dxDialClock: number | null = null;
+let dxDialGen = 0;
+async function dxDialFetch() {
+  if (!dxLogOk || !knownLabelsOn) return;
+  const gen = dxDialGen;
+  let entries: DxDialEntry[] = [], pageNow = 0;
+  try {
+    const r = await fetch(galUrl('/vibeserver/dxlog.json?dial=1&limit=100'), { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json() as { entries?: DxDialEntry[]; now?: number };
+      entries = Array.isArray(j.entries) ? j.entries.slice(0, 100) : [];
+      pageNow = typeof j.now === 'number' ? j.now : 0;
+    }
+  } catch { return; }   // offline — the next round
+  if (gen !== dxDialGen) return;   // ★ another server since (or the labels switched off)
+  dxDialEntries = entries; dxDialPageNow = pageNow; dxDialAtMs = Date.now();
+  applyKnownSignals();
+}
+function dxDialArm() {
+  dxDialGen++;
+  if (dxDialFetchTimer != null) { clearInterval(dxDialFetchTimer); dxDialFetchTimer = null; }
+  if (dxDialClock != null) { clearInterval(dxDialClock); dxDialClock = null; }
+  if (dxDialEntries.length) { dxDialEntries = []; applyKnownSignals(); }
+  if (!dxLogOk || !knownLabelsOn) return;
+  void dxDialFetch();
+  dxDialFetchTimer = window.setInterval(() => { void dxDialFetch(); }, DX_DIAL_FETCH_MS);
+  dxDialClock = window.setInterval(() => { if (dxDialEntries.length && knownLabelsOn) applyKnownSignals(); }, 60_000);
 }
 /** ★ A decoder key in the panel this receiver offers now (the owner's block list, vibeserver.json's own decoders) —
  *  initChat's canDecode rule. */
@@ -19177,7 +19227,7 @@ function buildMenu() {
     (v) => { wf!.specAlpha = v / 100; }, 'specAlpha');
   toggle('peakHold', (on) => wf!.applySettings({ peakHold: on }), 'peakHold', true);
   // ★★ KNOWN-SIGNAL LABELS (src/utils/knownSignals.ts) — this browser's choice, ON by default.
-  toggle('knownLabels', (on) => { knownLabelsOn = on; applyKnownSignals(); }, 'knownLabels', true);
+  toggle('knownLabels', (on) => { knownLabelsOn = on; applyKnownSignals(); dxDialArm(); }, 'knownLabels', true);   // ★★ V12 + the DX catches
 
   applyCoarse((prefs().wfCoarse as string) || 'auto');
 
@@ -22027,7 +22077,7 @@ function initPointerFreq(c: HTMLCanvasElement) {
       const bi = dabBlockHit(wf.xyToHz(x, y, cw, H), wf.spanHz);
       setPtr(bi >= 0);
       if (bi < 0) { setShown(false); return; }
-      const hint = dabBlockHint(bi, dabNamesCache, dabCurrentBlock(), dabGradesCache);
+      const hint = dabBlockHint(bi, dabNamesCache, dabCurrentBlock(), dabGradesCache, Date.now() / 1000, dxDialList);
       if (mEl.textContent !== hint) {
         mEl.textContent = hint; fEl.textContent = ''; uEl.textContent = '';
         if (shownBm) { el.classList.toggle('hasBm', false); shownBm = ''; if (bnEl) bnEl.textContent = ''; }

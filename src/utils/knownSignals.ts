@@ -30,6 +30,7 @@
 import { DSC_ALL, dscTuneFor } from './dscChannels.ts';
 import { NAVTEX_BANDS_KHZ } from './navtexStations.generated.ts';
 import { RTTY_WEATHER } from './rttySpec.ts';
+import { DAB_BLOCKS } from '../services/dabBlocks.ts';
 
 /** Decoder ids, as the decoder panel names them (decoderBands.ts DECODER_PLACES). '' = no decoder (a voice service). */
 export type KnownDecoder = 'rtty' | 'wefax' | 'navtex' | 'dsc' | 'spots' | 'time' | 'hfdl' | 'cw' | '';
@@ -63,9 +64,18 @@ export interface KnownSignal {
   dialHz: number; mode: string;
   /** Higher wins a collision (PRIO_*). */
   prio: number;
-  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab';   // 'dab' = a Band III block (dabBlockView.ts)
+  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab' | 'dx';   // 'dab' = a Band III block (dabBlockView.ts)
   /** The decoder's settings for this signal, where they are published (curated entries only). */
   preset?: KnownPreset;
+  /** ★★ V12 a DX CATCH from the server's DX Log (dxDialSignals) — drawn ITALIC in DX_LABEL_COLOUR. On a wide DAB view a
+   *  block named only by a DX catch carries it too (dabBlockView.ts). */
+  dx?: DxDialMark;
+}
+/** What a DX label carries beyond its text: when it was last heard (unix s), its name, and its DAB block (DAB only). */
+export interface DxDialMark {
+  heard: number; name: string;
+  /** DAB only: the block ("12C") and the ensemble's name alone ("Far Away", or "EId E0F1") — a wide DAB view's block box. */
+  block?: string; ensemble?: string;
 }
 
 /** ★★ Collision priority (Stuart, 2026-10-30): safety > curated decoder labels > personal bookmarks > bookmarks saved to
@@ -78,6 +88,9 @@ export const PRIO_PERSONAL = 4; // the user's own bookmarks
 export const PRIO_SERVER = 3;   // saved to the server by its owner
 export const PRIO_LEARNT = 2;   // an FM station's name this receiver learnt from RDS
 export const PRIO_EIBI = 1;
+/** ★★ V12 a DX catch (dxDialSignals) — below every bookmark and learnt name (Stuart, 2026-11-16): the first to be shortened
+ *  or dropped when the rows run out. (EiBi's utility rows are HF; a DX catch is FM or Band III — they never meet.) */
+export const PRIO_DX = 0;
 
 /** The most labels drawn at once — a hard cap, whatever is in view (Pi-2-class browsers, 1 GB phones). */
 export const LABEL_MAX = 12;
@@ -339,10 +352,138 @@ export function bookmarkSignals(personal: readonly BookmarkRow[], server: readon
   return out.sort((a, b) => a.hz - b.hz);
 }
 
-/** The curated table, EiBi's on-air utility entries and the bookmark labels, one sorted list. */
-export function knownSignalList(eibi: readonly KnownSignal[], bookmarks: readonly KnownSignal[] = []): KnownSignal[] {
-  if (!eibi.length && !bookmarks.length) return KNOWN_SIGNALS as KnownSignal[];
-  return [...KNOWN_SIGNALS, ...eibi, ...bookmarks].sort((a, b) => a.hz - b.hz);
+/** The curated table, EiBi's on-air utility entries, the bookmark labels and the DX catches (dxDialSignals — already
+ *  cleared of every channel the others hold), one sorted list. */
+export function knownSignalList(eibi: readonly KnownSignal[], bookmarks: readonly KnownSignal[] = [],
+                                dx: readonly KnownSignal[] = []): KnownSignal[] {
+  if (!eibi.length && !bookmarks.length && !dx.length) return KNOWN_SIGNALS as KnownSignal[];
+  return [...KNOWN_SIGNALS, ...eibi, ...bookmarks, ...dx].sort((a, b) => a.hz - b.hz);
+}
+
+// ── DX catches on the dial ────────────────────────────────────────────────────────────────────────────────────────
+/* ★★★ STUART (2026-11-16): the server's DX Log (vibe_dxscan.h) puts its LOCALS in the discovered bookmarks; the other
+ *     entries — the DX catches: Sporadic-E, tropo, meteor scatter — stay in the log and NEVER become bookmarks. They are
+ *     shown on the dial as signal labels too, MARKED AS SPORADIC:
+ *      • the look: "RNE 1 · DX · 2 h ago" — the name, a DX tag and when it was last heard; ITALIC; its own colour
+ *        (DX_LABEL_COLOUR), never the bookmarks' lilac, the VFO's or DAB's;
+ *      • for a WEEK from when it was last heard (DX_DIAL_MAX_AGE_S), then only in the DX Log;
+ *      • a local, a bookmark or a known-signal label on the same channel WINS: no DX label is drawn over or instead of it
+ *        (the server already leaves out a channel its log holds a Local on; `others` and `bookmarkHz` do the rest here);
+ *      • only real catches: class "dx" — never a Suspect (a spill, an image: no station there at all) or a Provisional
+ *        (the first day's baseline, not yet judged — mostly the locals themselves);
+ *      • FM in every range the scanner sweeps — OIRT 65.81–74 (30 kHz, named to two decimals: "69.80"), 76–87.45 and
+ *        87.5–108 — and Band III for DAB catches (a wide DAB view folds them into its block labels: dabBlockView.ts).
+ *  ★ The server's GET /vibeserver/dxlog.json?dial=1 sends exactly these (vibe_dxscan.h dialJson); an older server sends
+ *    its ordinary page, which this filters by the same rules. Both are gated as the DX Log itself is (the read PIN, and
+ *    the owner's "admin lock on viewing": a listener who cannot open the log gets a 403 and no labels).
+ *  ★ The text says how long ago, so the callers rebuild it each minute while any are held (cheap: ≤ DX_DIAL_MAX). */
+/** The DX labels' colour: a lemon yellow — not the bookmarks' lilac (KNOWN_LABEL_COLOUR), the VFO's red, DAB's pink,
+ *  RF CENTRE's cyan, the scale's green or amber, or the DAB grade marks. */
+export const DX_LABEL_COLOUR = '#ffe45c';
+/** How long a catch stays on the dial after it was last heard (s) — vibe_dxscan.h Log::kDialSec. */
+export const DX_DIAL_MAX_AGE_S = 7 * 86400;
+/** The most DX labels held (vibe_dxscan.h Log::kDialMax). */
+export const DX_DIAL_MAX = 100;
+/** How often the callers fetch the list while the labels are on (ms) — the scanner sweeps only while nobody listens. */
+export const DX_DIAL_FETCH_MS = 10 * 60_000;
+/** Two labels on one FM channel: within this (Hz) — under half OIRT's 30 kHz raster. */
+const DX_SAME_FM_HZ = 12_000;
+/** …on one DAB block (10A and 10N sit 160 kHz apart). */
+const DX_SAME_DAB_HZ = 50_000;
+/** The DX Log's own extremes: OIRT's foot to the top of Band II (vibe_dxscan.h kFmRanges). */
+const DX_FM_LO_KHZ = 65_800, DX_FM_HI_KHZ = 108_000;
+
+/** A DX Log entry as GET /vibeserver/dxlog.json sends it (dxLog.ts DxEntry; ?dial=1 sends only these fields). */
+export interface DxDialEntry {
+  band: string; class: string; lastHeard: number;
+  freqKhz?: number; range?: string; pi?: string; ps?: string; rds?: boolean;
+  block?: string; eid?: string; ensemble?: string;
+}
+
+/** "just now", "12 min ago", "2 h ago", "1 day ago", "3 days ago". */
+export function dxDialAgo(heard: number, nowS: number): string {
+  const s = Math.max(0, nowS - heard);
+  if (s < 120) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  const d = Math.floor(s / 86400);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}
+/** An FM channel as the DX Log writes it: "98.8"; OIRT (30 kHz) and any channel off the 100 kHz raster to two decimals —
+ *  "69.80", "86.65" (dxLog.ts dxWhere's rule). */
+export function dxFmChannel(khz: number, range?: string): string {
+  const oirt = range === 'oirt' || (!range && khz > 0 && khz < 75_000);
+  return (khz / 1000).toFixed(oirt || khz % 100 ? 2 : 1);
+}
+/** The name a DX label shows: FM — the PS, else the PI, else (no RDS) the channel; DAB — the block and the ensemble. */
+export function dxDialName(e: DxDialEntry): string {
+  if (e.band === 'DAB') {
+    const ens = String(e.ensemble ?? '').replace(/\s+/g, ' ').trim();
+    return [e.block ?? '', ens || (e.eid ? `EId ${e.eid}` : '')].filter(Boolean).join(' ');
+  }
+  const ps = String(e.ps ?? '').replace(/\s+/g, ' ').trim();
+  if (ps) return ps;
+  if (e.rds !== false && e.pi && e.pi !== '0000') return `PI ${e.pi}`;
+  return dxFmChannel(e.freqKhz ?? 0, e.range);
+}
+/** "RNE 1 · DX · 2 h ago" — the name (bookmarkLabel's length), the tag, when. Shortened from the END when the rows run
+ *  out, so the name goes last of all; the italic and the colour still say DX. */
+export function dxDialLabel(e: DxDialEntry, nowS: number): string {
+  return `${bookmarkLabel(dxDialName(e))} · DX · ${dxDialAgo(e.lastHeard, nowS)}`;
+}
+/** Where a DX catch sits (Hz): the FM channel, or the DAB block's centre (the server's freqKhz, else Band III's table). */
+function dxDialHz(e: DxDialEntry): number {
+  if (e.band === 'DAB') {
+    if (e.freqKhz && e.freqKhz > 0) return e.freqKhz * 1000;
+    return DAB_BLOCKS.find((b) => b.name === e.block)?.hz ?? 0;
+  }
+  return (e.freqKhz ?? 0) * 1000;
+}
+
+/**
+ * ★★ THE DX CATCHES AS LABELS (see above): `entries` from GET /vibeserver/dxlog.json (?dial=1, or an older server's page),
+ * `nowS` the SERVER's clock (its page's `now` plus the time since — a phone's clock an hour out must not age a catch),
+ * `others` the labels already in force (table, EiBi, bookmarks), `bookmarkHz` every bookmark's frequency (a local in the
+ * discovered bookmarks with no settled name draws no label, and still wins its channel). One label a channel — the most
+ * recently heard; newest first up to DX_DIAL_MAX; returned sorted by frequency.
+ */
+export function dxDialSignals(entries: readonly DxDialEntry[] | null | undefined, nowS: number,
+                              others: readonly KnownSignal[] = [], bookmarkHz: readonly number[] = []): KnownSignal[] {
+  if (!entries || !entries.length || !Number.isFinite(nowS)) return [];
+  const cand = entries.filter((e) => !!e && e.class === 'dx' && e.lastHeard > 0 && nowS - e.lastHeard <= DX_DIAL_MAX_AGE_S
+                                    && e.lastHeard - nowS <= 3600)
+                      .sort((a, b) => b.lastHeard - a.lastHeard);
+  const taken = [...others.filter((o) => o.src !== 'dx').map((o) => o.hz), ...bookmarkHz.filter((h) => h > 0)];
+  const out: KnownSignal[] = [];
+  for (const e of cand) {
+    if (out.length >= DX_DIAL_MAX) break;
+    const dab = e.band === 'DAB';
+    if (!dab && e.band !== 'FM') continue;
+    if (!dab && !((e.freqKhz ?? 0) >= DX_FM_LO_KHZ && (e.freqKhz ?? 0) <= DX_FM_HI_KHZ)) continue;
+    const hz = dxDialHz(e);
+    if (!(hz > 0)) continue;
+    const tol = dab ? DX_SAME_DAB_HZ : DX_SAME_FM_HZ;
+    if (taken.some((h) => Math.abs(h - hz) <= tol) || out.some((o) => Math.abs(o.hz - hz) <= tol)) continue;
+    const name = dxDialName(e);
+    out.push({ hz, label: dxDialLabel(e, nowS), dec: '', dialHz: hz, mode: dab ? 'dab' : 'wfm', prio: PRIO_DX, src: 'dx',
+               dx: { heard: e.lastHeard, name, ...(dab && e.block ? { block: e.block, ensemble: dxDialName({ ...e, block: '' }) } : {}) } });
+  }
+  return out.sort((a, b) => a.hz - b.hz);
+}
+/** True for a DX catch's label (drawn italic in DX_LABEL_COLOUR) — a dxDialSignals row, or a DAB block named by one. */
+export function isDxLabel(s: KnownSignal | null | undefined): boolean {
+  return !!s && !!s.dx;
+}
+/** The words a screen reader or a hover gives a DX label: "DX catch 98.8 MHz, RNE 1, last heard 2 h ago". */
+export function dxDialHint(s: KnownSignal, nowS: number): string {
+  if (!s.dx) return s.label;
+  const where = s.dx.block ? `DAB ${s.dx.block}` : `${dxFmChannel(Math.round(s.hz / 1000))} MHz`;
+  return `DX catch ${where}, ${s.dx.name}, last heard ${dxDialAgo(s.dx.heard, nowS)}`;
+}
+/** The server's clock now (s), from a page's `now` and when it arrived (Date.now() ms then) — the age the labels show. */
+export function dxServerNow(pageNow: number | undefined, fetchedAtMs: number, nowMs = Date.now()): number {
+  const local = nowMs / 1000;
+  return typeof pageNow === 'number' && pageNow > 0 ? pageNow + (nowMs - fetchedAtMs) / 1000 : local;
 }
 
 // ── In view, and laid out ──────────────────────────────────────────────────────────────────────────────────────────

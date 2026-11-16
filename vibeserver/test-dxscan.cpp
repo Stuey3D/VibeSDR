@@ -516,6 +516,65 @@ int main() {
         ok(log.listJson(q, T0 + 26 * 3600).find("C201") != std::string::npos, "the toggle shows them");
     }
 
+    std::printf("── the dial's DX catches (?dial=1, 2026-11-16) ──\n");
+    {
+        Log log(T0);
+        int64_t t = T0;
+        DabHit d; d.block = 30; d.blockName = "12B"; d.eid = 0xC1CE; d.ecc = 0xE1; d.label = "Digital One"; d.fibOk = 3;
+        d.services = { { 0xC0CE, "Classic FM" } };
+        for (; t < T0 + 26 * 3600; t += 1200) {   // the bootstrap: a local on 98.5 and a DAB local on 12B
+            log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 8, true) }, t);
+            log.commitDab(30, &d, t);
+        }
+        const auto has = [](const std::string& j, const std::string& k) { return j.find(k) != std::string::npos; };
+        // an old catch, ten days before the look
+        log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 8, true), fm(99100, 0x6201, "OLD ES", 5, true) }, t);
+        const int64_t old = t;
+        t += 2 * 86400;
+        // ★ Sporadic-E: two PIs on 98.8 (the later wins the channel), another PI on the local's 98.5, OIRT 69.80 without RDS
+        log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 8, true), fm(98800, 0x5201, "RAI R1", 5, true) }, t);
+        log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC202, "OTHER", 5, true) }, t + 60);
+        log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 8, true), fm(98800, 0x5202, "RNE 1", 5, true) }, t + 300);
+        log.commitFm(69500, 70100, 69815, 30, { fm(69800, 0, "", 0, false, -30, 30) }, t + 400);
+        // and its skirt: the same PI 100 kHz off a far stronger hit — a SUSPECT, never a label
+        log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 40, true, 3, 44, true), fm(98600, 0xC201, "BBC R4", 8, true, -6, 35, true) }, t + 500);
+        DabHit es = d; es.block = 31; es.blockName = "12C"; es.eid = 0xE0F1; es.label = "Far Away"; es.services = { { 0xF1, "Far Radio" } };
+        log.commitDab(31, &es, t + 600);
+        DabHit on12b = d; on12b.eid = 0xE0F2; on12b.label = "Other 12B";
+        log.commitDab(30, &on12b, t + 700);
+        log.evaluate(t + 800);
+        Log::Query q; q.dial = true;
+        const std::string j = log.listJson(q, t + 800);
+        std::printf("      %s\n", j.c_str());
+        ok(log.findKey(fmKey(0xC201, 98500))->cls == Cls::Local && log.findKey(fmKey(0x5202, 98800))->cls == Cls::Dx,
+           "(the set-up: 98.5 is a Local, 98.8 RNE 1 a DX catch)");
+        ok(has(j, "\"dial\":true") && has(j, "\"pi\":\"5202\"") && has(j, "\"ps\":\"RNE 1\"") && has(j, "\"freqKhz\":98800"),
+           "★ a DX catch is on the dial with what a label needs (PI, PS, frequency)");
+        ok(!has(j, "\"pi\":\"5201\""), "★ one label a channel: of two PIs on 98.8, the most recently heard");
+        ok(!has(j, "\"pi\":\"C202\"") && !has(j, "\"freqKhz\":98500"), "★ a LOCAL WINS ITS CHANNEL: no DX catch on the local's 98.5");
+        ok(log.findKey(fmKey(0xC201, 98600)) && log.findKey(fmKey(0xC201, 98600))->cls == Cls::Suspect && !has(j, "\"freqKhz\":98600"),
+           "★ a Suspect (the local's skirt) is never on the dial");
+        ok(has(j, "\"freqKhz\":69800,\"range\":\"oirt\"") && has(j, "\"rds\":false"), "★ OIRT 69.80 without RDS, ranged");
+        ok(has(j, "\"block\":\"12C\"") && has(j, "\"ensemble\":\"Far Away\"") && !has(j, "Other 12B"),
+           "★ DAB: the 12C catch is; another ensemble on the local 12B is not");
+        ok(has(j, "OLD ES"), "a catch heard 2 days ago is on the dial");
+        ok(!has(j, "\"class\":\"local\"") && !has(j, "Classic") && !has(j, "\"services\"") && !has(j, "openingList"),
+           "compact: no locals, no services, no openings");
+        ok(!has(log.listJson(q, old + 7 * 86400 + 1), "OLD ES") && has(log.listJson(q, old + 7 * 86400), "OLD ES"),
+           "★ the WEEK: on the dial up to 7 days after it was last heard, gone after");
+        Log boot(T0);
+        boot.commitFm(98000, 99800, 98950, 100, { fm(98800, 0x5201, "RAI R1", 5, true) }, T0 + 10);
+        ok(!has(boot.listJson(q, T0 + 20), "5201") && has(boot.listJson(Log::Query{}, T0 + 20), "5201"),
+           "★ a Provisional (the first day's baseline) is in the log but never on the dial");
+        Log big(T0);
+        for (int64_t u = T0; u < T0 + 25 * 3600; u += 3600) big.commitFm(87500, 88000, 87750, 100, {}, u);
+        for (int k = 0; k < 150; ++k)
+            big.commitFm(88000, 108000, 98000, 100, { fm(88000 + k * 100, (uint16_t)(0x1000 + k), "ES", 3, true) }, T0 + 25 * 3600 + k);
+        const std::string bj = big.listJson(q, T0 + 26 * 3600);
+        size_t n = 0; for (size_t p = 0; (p = bj.find("\"id\":", p)) != std::string::npos; ++p) ++n;
+        ok(n == 100 && bj.size() < 16000, "bounded: at most 100 on the dial (" + std::to_string(n) + ", " + std::to_string(bj.size()) + " bytes)");
+    }
+
     std::printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }

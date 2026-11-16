@@ -26207,6 +26207,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ── ★★★ V12: THE DX LOG (vibe_dxscan.h, docs/v12/DX-SCANNER.md) — ADDITIVE: no older client asks for any of it ──────
         // GET  /vibeserver/dxlog.json[?band=FM|DAB&local=1&suspect=1&sort=last|first|peak|times&offset=&limit=]
         //                                                   — the log, filtered and paged (≤ 100); default DX only
+        // GET  /vibeserver/dxlog.json?dial=1                — ★★ V12 the DIAL's DX labels: real DX catches heard this week,
+        //                                                     one a channel, compact (vibe_dxscan.h dialJson)
         // GET  /vibeserver/dxlog/entry?id=N                 — one entry with its openings (newest first)
         // GET  /vibeserver/dxlog/alerts?since=SEQ           — alerts newer than SEQ (each client keeps its own; alerts are opt-in)
         // POST /vibeserver/dxlog/promote?id=N               — OWNER: copy it into the bookmarks (frequency, name, mode)
@@ -26265,6 +26267,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!post && path == "/vibeserver/dxlog.json") {
                 vibe::dx::Log::Query q;
                 q.showLocal = qv("local") == "1"; q.showSuspect = qv("suspect") == "1";
+                q.dial = qv("dial") == "1";   // ★★ V12 the dial's DX labels (vibe_dxscan.h dialJson) — the same gate as the log
                 const std::string band = qv("band"); if (band == "FM" || band == "DAB") q.band = band;
                 const std::string sort = qv("sort"); if (sort == "first" || sort == "peak" || sort == "times") q.sort = sort;
                 q.offset = std::max(0, std::atoi(qv("offset").c_str()));

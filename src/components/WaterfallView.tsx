@@ -93,7 +93,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
+import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, dxDialHint, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, dabGradeText, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
@@ -3441,7 +3441,8 @@ function WaterfallView({
           const bx0 = s.lo != null ? Math.max(0, hzToX(s.lo)) : 0, bx1 = s.hi != null ? Math.min(width, hzToX(s.hi)) : 0;
           return (
             <React.Fragment key={'kt' + i + ':' + s.hz}>
-              <View pointerEvents="none" style={[styles.knownTick, { left: st.x, top: Math.min(st.y0, st.y1), height: Math.max(1, Math.abs(st.y1 - st.y0)) }]} />
+              <View pointerEvents="none" style={[styles.knownTick, { left: st.x, top: Math.min(st.y0, st.y1), height: Math.max(1, Math.abs(st.y1 - st.y0)) },
+                                                 isDxLabel(s) && styles.knownDxTick]} />
               {bx1 - bx0 >= 3 && specShow && specH > 40 && (
                 <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: wfTop - 2 }]} />
               )}
@@ -3457,6 +3458,7 @@ function WaterfallView({
           return (
             <React.Fragment key={'kt' + i + ':' + s.hz}>
               <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) },
+                                                 isDxLabel(s) && !isDabBlockSignal(s) && styles.knownDxTick,
                                                  hi && { backgroundColor: stampCol, opacity: 1 }]} />
               {bx1 - bx0 >= 3 && (
                 <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }]} />
@@ -3474,10 +3476,17 @@ function WaterfallView({
           const dab = isDabBlockSignal(s) ? s : null;
           const hi = i === tunedHi || !!dab?.dabCurrent;
           const tapLabel = dab ? (onDabBlockTap ? () => onDabBlockTap(dab.dabIdx) : undefined) : onKnownTap ? () => onKnownTap(s) : undefined;
+          // ★★ V12 A DX CATCH (knownSignals.ts dxDialSignals): ITALIC in its own colour — on a DAB block named only by one,
+          //    just the name line. Slanted with a skew, not fontStyle: the display faces have no italic cut to fall back on.
+          const dx = isDxLabel(s);
+          const dxLine = (li: number) => dx && (!dab || li >= 1);
+          const nowS = Date.now() / 1000;
           return (
             <React.Fragment key={'ks' + i + ':' + s.hz}>
               {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot (all of Band III on a wide DAB view). */}
-              <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ').replace(' — ', ', ') + (dab?.grade ? '. ' + dabGradeText(dab.grade, Date.now() / 1000) : '')}
+              <View pointerEvents="none" accessible accessibilityLabel={(dx && !dab ? dxDialHint(s, nowS) : s.label.replace(' · ', ', ').replace(' — ', ', '))
+                                                                         + (dab && dx ? '. ' + dxDialHint(s, nowS) : '')
+                                                                         + (dab?.grade ? '. ' + dabGradeText(dab.grade, nowS) : '')}
                     accessibilityRole={tapLabel ? 'button' : undefined}
                     accessibilityHint={tapLabel ? (dab ? 'Goes to this multiplex' : s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
                     onAccessibilityTap={tapLabel}
@@ -3491,9 +3500,9 @@ function WaterfallView({
                   <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 2, backgroundColor: DAB_GRADE_COLOUR[dab.grade.g] }} />
                 )}
                 {p.lines ? p.lines.map((t, li) => (
-                  <Text key={li} numberOfLines={1} style={[styles.knownText, { fontFamily, lineHeight: 14, textAlign: 'center' }, hi && [styles.knownHiText, { color: stampCol }]]}>{t}</Text>
+                  <Text key={li} numberOfLines={1} style={[styles.knownText, { fontFamily, lineHeight: 14, textAlign: 'center' }, dxLine(li) && styles.knownDxText, hi && [styles.knownHiText, { color: stampCol }]]}>{t}</Text>
                 )) : (
-                  <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
+                  <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, dxLine(0) && styles.knownDxText, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
                 )}
               </View>
             </React.Fragment>
@@ -3678,6 +3687,9 @@ const styles = StyleSheet.create({
   knownSpan: { position: 'absolute', height: 2, backgroundColor: KNOWN_LABEL_COLOUR, opacity: 0.55 },
   knownBox: { position: 'absolute', height: 13, paddingHorizontal: 3, backgroundColor: KNOWN_LABEL_BOX, justifyContent: 'center' },
   knownText: { fontSize: 9, fontWeight: 'bold', color: KNOWN_LABEL_COLOUR },
+  // ★★ V12 a DX catch's text and line (knownSignals.ts DX_LABEL_COLOUR): its own colour, slanted as italic
+  knownDxText: { color: DX_LABEL_COLOUR, transform: [{ skewX: '-12deg' }] },
+  knownDxTick: { backgroundColor: DX_LABEL_COLOUR },
   // ★★ V12 the tuned station's label (utils/tunedStation.ts) — the scale stamps' dark band and halo, in the stamp colour
   tunedBox: { position: 'absolute', height: 14, paddingHorizontal: 4, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center' },
   // ★★ …and a signal label that names the tuned station: its size, the tuned colour (set inline) and the same dark halo
