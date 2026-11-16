@@ -94,6 +94,7 @@ inline std::string modeLabel(const std::string& id) {
     // src/services/amSync.ts modeLegend
     static const char* sync[][2] = {{"sam", "SAM"}, {"sau", "SAM-U"}, {"sal", "SAM-L"}, {"ecssu", "ECSS-U"}, {"ecssl", "ECSS-L"}, {"amst", "AM-ST"}};
     for (auto& p : sync) if (id == p[0]) return p[1];
+    if (id == "freedv") return kFreeDvLabel;   // src/services/freedv.ts FREEDV_LABEL
     return upper(id);
 }
 inline std::vector<ModeDef> offeredModes(const std::vector<std::string>& srvModes, const std::vector<std::string>& blocked) {
@@ -102,6 +103,7 @@ inline std::vector<ModeDef> offeredModes(const std::vector<std::string>& srvMode
     for (const char* sy : {"sam", "sau", "sal", "ecssu", "ecssl", "amst"}) if (has(srvModes, sy)) ids.push_back(sy);
     for (const char* m : {"usb", "lsb", "cwu", "cwl"}) ids.push_back(m);
     if (has(srvModes, "drm")) ids.push_back("drm");
+    if (has(srvModes, "freedv")) ids.push_back("freedv");   // ★ V12 only where the server's libcodec2 loaded (freedv.h)
     if (has(srvModes, "dab")) ids.push_back("dab");   // (vibeserver.json dab === true, added to srvModes at the fetch)
     std::vector<ModeDef> out;
     for (auto& id : ids) {
@@ -191,6 +193,7 @@ public:
     // the server's offer (GET /vibeserver.json) and the device's location (GET /handheld/location) — fetched off-thread
     std::mutex srvMtx_;
     std::vector<std::string> srvModes_;
+    std::vector<std::string> srvFreedvSubs_;   // ★ V12 vibeserver.json freedvSubs (freedv.h freedvOffered), key order
     bool haveLon_ = false; double lon_ = 0;
     int region() { std::lock_guard<std::mutex> lk(srvMtx_); return ituRegion(haveLon_, lon_); }
     bool settingsDirty_ = false; double settingsAt_ = 0;

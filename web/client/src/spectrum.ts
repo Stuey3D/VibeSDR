@@ -38,10 +38,14 @@ import type { DrmState } from './drm';
 import { drmIqSanitise, type DrmIq } from '../../../src/services/drm';
 import { AM_SYNC_PASSBAND, AM_SYNC_MAX_BW, parseAmSync, type AmSyncState } from '../../../src/services/amSync';
 import { parseAutoBwModes, parseBwAuto, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
+// ★★ V12 FreeDV digital voice — the shared rules (src/services/freedv.ts): the report, the sideband, the sub-mode message
+import { parseFreeDv, freedvPassband, freedvSidebandAt, freedvSubMessage,
+         type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
 import type { WholeKind } from '../../../src/services/wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 // ★ V12 synchronous AM: sau / sal / ecssu / ecssl / amst (src/services/amSync.ts) — offered only where the server lists them
+// ★ V12 FreeDV: 'freedv' — offered only where the server lists it (freedvOffered)
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
-                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst';
+                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst' | 'freedv';
 
 /** The server applies these on every mode change and never reports bandwidth
  *  back, so the client mirrors the table to stay in sync. */
@@ -54,6 +58,9 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   wfm: [-100000, 100000],
   // ★ V12 DRM: the server cuts its own 10 kHz channel (spectrum occupancy 3, ±5 kHz about the dial); shown as such
   drm: [-5000, 5000],
+  // ★ V12 FreeDV: an SSB passband on the side the SERVER demodulates — USB here; setMode and the report put it on the
+  //   right side (freedvPassband / freedvSidebandAt: LSB below 10 MHz)
+  freedv: [50, 2700],
 };
 
 /** ★★★ THE NARROWEST WFM PASSBAND (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz, which the
@@ -73,6 +80,7 @@ export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
   fm:  64_000, nfm: 64_000,
   wfm: 500_000,
   drm: 10_000,   // ★ V12 DRM: fixed — the receiver cuts its own channel; the width row is hidden in DRM
+  freedv: 3_000,   // ★ V12 FreeDV: fixed by the server (the modem's channel); the width row is hidden in FreeDV
 };
 
 /** A passband the server will honour as given: WFM narrower than WFM_MIN_BW_HZ is widened about its
@@ -689,6 +697,8 @@ export interface SpectrumCallbacks {
   onDrm?: (d: DrmState) => void;
   /** ★★ V12 the DRM constellation ({"type":"drm_iq"}, already checked — drmIqSanitise): only after drmScopes(true). */
   onDrmIq?: (q: DrmIq) => void;
+  /** ★★ V12 FreeDV: the listener's FreeDV receiver ({"type":"freedv"}, already parsed — parseFreeDv), on every change. */
+  onFreeDv?: (s: FreeDvState) => void;
   /** ★ V12 CTCSS / DCS tone ID on NFM: the label on change ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), '' = none locked. */
   onToneId?: (label: string) => void;
   /** ★ V12 the AM family's carrier lock, applied auto-bandwidth edges and AM-stereo pilot (shim sendAmSync). */
@@ -1110,6 +1120,8 @@ export class SpectrumClient {
       if (this.view.centerHz && this.view.binBandwidth) {
         this._flushView();
       }
+      // ★ V12 FreeDV: a new socket has no report yet — ask, so the VTS line is not left on the old one
+      if (this.mode === 'freedv') this._send(freedvSubMessage(null));
       this.lastRxAt = performance.now();
       this.pingTimer = window.setInterval(() => {
         this.lastPingAt = performance.now();
@@ -1255,6 +1267,7 @@ export class SpectrumClient {
         this.cb.onDrm?.(msg as DrmState);
         return;
       }
+      case 'freedv': { const f = parseFreeDv(msg); if (f) this.cb.onFreeDv?.(f); return; }
       case 'drm_iq': {
         const q = drmIqSanitise(msg);
         if (q) { this.drmIqAt = Date.now(); this.cb.onDrmIq?.(q); }
@@ -2152,7 +2165,8 @@ export class SpectrumClient {
     this.tunePacer.cancel();
     this.mode = mode;
     this.lastLocalTuneAt = performance.now();   // ★ ours — configs already sent with the OLD mode must not undo it
-    const bw = MODE_BANDWIDTHS[mode];
+    // ★ V12 FreeDV: the side the server will demodulate here, until its first report says which
+    const bw = mode === 'freedv' ? freedvPassband(freedvSidebandAt(this.frequency)) : MODE_BANDWIDTHS[mode];
     if (bw) { this.bandwidthLow = bw[0]; this.bandwidthHigh = bw[1]; }
     // The shim IGNORES bandwidth fields on a tune that also changes mode
     // (local_sdr_shim.cpp:1529) — so send mode, then bandwidth separately.
@@ -2160,6 +2174,15 @@ export class SpectrumClient {
     //   so a step's echo of a stale mode can never switch the radio (2026-11-04, Saber's IC-7300). Other servers ignore it.
     this._send({ type: 'tune', frequency: this.frequency, mode, modeSet: 1 });
     this._send({ type: 'bandwidth', bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh });
+    if (mode === 'freedv') this._send(freedvSubMessage(null));   // ★ V12 FreeDV: the report at once, for the VTS line
+  }
+
+  /** ★★ V12 FreeDV: AUTO or one sub-mode by hand ({"type":"freedv_sub","sub":…}); null only asks for the current report.
+   *  Nothing is assumed — the page lights what the server's next report says. A CHOICE asks first on a shared dial (the
+   *  room hears it); asking for the report changes nothing, so it never does. */
+  freedvSub(sub: FreeDvChoice | null) {
+    if (sub && this.askBlocked()) return;
+    this._send(freedvSubMessage(sub));
   }
 
   setBandwidth(low: number, high: number) {

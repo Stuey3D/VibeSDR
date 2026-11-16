@@ -22,6 +22,13 @@ import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
 import { DRM_SEARCHING, drmBoxReading, type DrmQuality } from '../../../src/utils/drmQuality';
 import { setModeLabel } from './modeIconDom';   // ★ V12 mode icons
 import { modeLegend, isAmSync, AM_SYNC_NAME } from '../../../src/services/amSync';
+import { FREEDV_LABEL, FREEDV_NAME } from '../../../src/services/freedv';
+
+/** A demodulator's key legend: amSync.ts's (SAM-U, ECSS-L, AM-ST … everything else upper-cased), with FreeDV written as
+ *  its own name ("FreeDV", not "FREEDV"). The page's one legend — the picker, the card's chip and Now Playing use it. */
+export function modeLegendWeb(mode: string): string {
+  return mode === 'freedv' ? FREEDV_LABEL : modeLegend(mode);
+}
 
 /** The reading box's own tooltip (DRM swaps in the decoder's explanation while it is on — paintDab). */
 const SNR_TITLE = 'Signal reading: SNR / S-meter / dBFS';
@@ -312,8 +319,9 @@ export function initMobileControls(deps: MobileDeps) {
     const cur = deps.mode().toLowerCase();
     for (const m of deps.modes()) {
       const b = document.createElement('button');
-      b.textContent = modeLegend(m);   // ★ V12: SAM-U, ECSS-L, AM-ST … (amSync.ts); everything else upper-cased as before
+      b.textContent = modeLegendWeb(m);   // ★ V12: SAM-U, ECSS-L, AM-ST … (amSync.ts), FreeDV; everything else upper-cased as before
       if (isAmSync(m)) { b.title = AM_SYNC_NAME[m]; b.setAttribute('aria-label', AM_SYNC_NAME[m]); }
+      else if (m === 'freedv') { b.title = FREEDV_NAME; b.setAttribute('aria-label', FREEDV_NAME); }
       b.className = 'mModeOpt' + (m.toLowerCase() === cur ? ' on' : '');
       b.onclick = () => { deps.setMode(m); close(); refresh(); };
       grid.appendChild(b);
@@ -562,7 +570,7 @@ export function initMobileControls(deps: MobileDeps) {
     const chEl = document.getElementById('mChan');
     // ★ Write-on-change (4 Hz poll; the value almost never moves).
     if (chEl) { const h = !ft?.chan; if (chEl.hidden !== h) chEl.hidden = h; put(chEl, ft?.chan ?? ''); }
-    put($('mMode'), modeLegend(deps.mode()));
+    put($('mMode'), modeLegendWeb(deps.mode()));
     put($('mStep'), deps.stepLabel());
     // ★ The stereo light, mute, LOCK/FREE and the recorder are NOT polled here: main.ts has ONE
     //   writer for each (syncStereoLight, setMuted, the lock button, initRecorder/updateRecTime)

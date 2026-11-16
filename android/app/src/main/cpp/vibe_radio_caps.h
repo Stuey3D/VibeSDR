@@ -58,7 +58,7 @@ struct Facts {
 inline const std::vector<const char*>& allModes() {
     static const std::vector<const char*> v = {
         "wfm", "rds", "nfm", "tone", "am", "usb", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "lsb", "cwu", "cwl",
-        "drm", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
+        "drm", "freedv", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb",
     };
     return v;
@@ -156,6 +156,7 @@ inline Caps compute(const Facts& f) {
         if (id == "wfm" || id == "rds") return touches(R, 76e6, 108e6);
         if (id == "amst") return touches(R, 520e3, 1710e3);            // ★ C-QUAM is medium wave
         if (id == "drm") return touches(R, 148.5e3, 24e6);             // ★ DRM30: LW, MW and SW (not an R820T's 24 MHz up)
+        if (id == "freedv") return hf;                                  // ★ V12 FreeDV digital voice: the HF amateur bands
         if (id == "dab") {
             std::vector<vibedab::Range> v;
             for (const auto& x : R) v.push_back({ (uint32_t)std::min(4.0e9, x.lo), (uint32_t)std::min(4.0e9, x.hi) });

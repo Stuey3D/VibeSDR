@@ -96,7 +96,7 @@ const POWERSAVE_FPS = 5;
 
 import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState, AfcState } from './sdrProtocol';
 export type { AfcState } from './sdrProtocol';
-import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, clampVibePassband } from './sdrProtocol';
+import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, clampVibePassband, modeDefaultPassband, freedvPassbandOnSide } from './sdrProtocol';
 import { roomMode, roomPassband } from './roomPassband';
 import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
@@ -466,7 +466,7 @@ export abstract class VibeServerWsClient {
     // too (setMode already does) — without this, connecting in a restored
     // non-USB mode kept the constructor's USB edges and the first emission
     // overwrote the screen's correct values (AM showing only one sideband).
-    const cbw = MODE_BANDWIDTHS[mode];
+    const cbw = modeDefaultPassband(mode, frequency);   // ★ V12 FreeDV's side follows the dial
     if (cbw) { this.status.bandwidthLow = cbw[0]; this.status.bandwidthHigh = cbw[1]; }
     // The screen already set its own state from the tune it passed in, so if the receiver sent us
     // somewhere else it has to be told — otherwise the readout shows one frequency while the audio
@@ -741,12 +741,24 @@ export abstract class VibeServerWsClient {
    *      m != mode)` (local_sdr_shim.cpp, the `tune` and `mode` handlers). A re-assert of the
    *      current mode changes nothing there and must change nothing here. AGENTS.md, ONE RULE TWO
    *      READERS: the rule was the server's and only the server kept it. */
-  private _adoptMode(mode: SDRMode, t: { mode: string; bandwidthLow: number; bandwidthHigh: number } = this.status) {
+  private _adoptMode(mode: SDRMode, t: { mode: string; bandwidthLow: number; bandwidthHigh: number; frequency?: number } = this.status) {
     const changed = mode !== t.mode;
     t.mode = mode;
     if (!changed) return;                      // ★ see above — a re-assert is not a mode change
-    const bw = MODE_BANDWIDTHS[mode];
+    const bw = modeDefaultPassband(mode, t.frequency ?? this.status.frequency);   // ★ V12 FreeDV's side follows the dial
     if (bw) { t.bandwidthLow = bw[0]; t.bandwidthHigh = bw[1]; }
+  }
+
+  /** ★★ V12 FreeDV: THE SIDEBAND IS THE SERVER'S (freedv.ts). Its report says which side it demodulates ("sb"); the
+   *  passband we draw (and measure the S-meter in) moves to that side — mirrored, so the width is kept. Drawn only:
+   *  nothing is sent (the server sizes the channel from the width, whichever side it is). */
+  protected adoptFreeDvSideband(sb: 'usb' | 'lsb') {
+    const s = this.status;
+    if (s.mode !== 'freedv') return;
+    const pb = freedvPassbandOnSide(s.bandwidthLow, s.bandwidthHigh, sb);
+    if (!pb) return;   // ★ already on that side
+    s.bandwidthLow = pb[0]; s.bandwidthHigh = pb[1];
+    this.callbacks.onStatus({ ...this.status });
   }
 
   setMode(mode: SDRMode) {
@@ -763,7 +775,7 @@ export abstract class VibeServerWsClient {
     // ★ On a CHANGE only — see _adoptMode above. Re-picking the mode you are already on rebuilds
     //   nothing on the server, so it must not silently reset the width here either.
     if (changed) {
-      const bw = MODE_BANDWIDTHS[mode];
+      const bw = modeDefaultPassband(mode, this.status.frequency);   // ★ V12 FreeDV's side follows the dial
       if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
     }
     this._routeTune(this.status.frequency, mode);   // ★ one route — see _routeTune

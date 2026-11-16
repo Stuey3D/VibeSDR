@@ -90,9 +90,10 @@ ok('offered where listed', drmOffered(['nfm', 'am', 'drm']));
 ok('not on an older server', !drmOffered(['nfm', 'am']) && !drmOffered(undefined));
 const scr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
 // ★ 8f0e275dd wraps the list in withAmSync (the AM sync modes, also by capability) — DRM's gate is unchanged inside it.
-ok('the app offers DRM only through the capability', /const vibeModes = withAmSync\(drmCapable \? withDrm\(LOCAL_MODES\) : LOCAL_MODES, amSyncCap\);/.test(scr));
-ok('the width row goes in DRM', /onFilterBoth=\{status\.mode === 'drm' \? undefined : onFilterBoth\}/.test(scr));
-ok('the shim lists drm in its modes', readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8').includes('"jtty", "drm" }'));
+// ★ V12 FreeDV wraps it again (withFreeDv, by its own capability) — DRM's gate is unchanged inside it.
+ok('the app offers DRM only through the capability', /withAmSync\(drmCapable \? withDrm\(LOCAL_MODES\) : LOCAL_MODES, amSyncCap\)/.test(scr));
+ok('the width row goes in DRM', /onFilterBoth=\{status\.mode === 'drm' (\|\| \(status\.mode === 'freedv' && freedvCap\.length\) )?\? undefined : onFilterBoth\}/.test(scr));
+ok('the shim lists drm in its modes', readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8').includes('"jtty", "drm", "freedv" }'));
 
 // ── ★★ V12 THE SIGNAL PANE (2026-10-26): the app's rows ARE the web's — same headings, labels, values, tones, tooltips ──
 const NEW: DrmState = {

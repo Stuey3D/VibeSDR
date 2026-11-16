@@ -14,6 +14,7 @@ import type { IsmReport } from './ism';
 import type { AisReport } from './tracks';   // ★ V12 AIS
 import type { AskState } from './dialChat';
 import { AM_SYNC_PASSBAND } from './amSync.ts';   // ★ .ts: node tests import this file directly
+import { freedvPassband, freedvSidebandAt } from './freedv.ts';   // ★ V12 FreeDV
 
 /** ★★ V12 hwinfo `afc` — the server's automatic frequency correction (vibe_afc.h, LocalSdrShim::afcJson). */
 export interface AfcState {
@@ -34,7 +35,8 @@ export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the
 
 // 'wfm' = broadcast FM (stereo); local-hardware (RTL-SDR) only — UberSDR is HF.
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'   // ★ V12 'drm' — sdrTypes.ts
-                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst';   // ★ V12 synchronous AM (amSync.ts) — VibeServer only
+                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst'   // ★ V12 synchronous AM (amSync.ts) — VibeServer only
+                    | 'freedv';   // ★ V12 FreeDV digital voice (freedv.ts) — VibeServer only
 
 /** ★★★ VibeServer's narrowest WFM passband (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz,
  *  which the server clamps to anyway. A broadcast carrier swings ±75 kHz and the narrowest real
@@ -52,6 +54,7 @@ export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
   wfm: 500_000,
   drm: 10_000,   // ★ V12 DRM: fixed — the server's DRM receiver cuts its own channel; no width control in DRM
   sau: 48_000, sal: 48_000, amst: 48_000, ecssu: 12_000, ecssl: 12_000,   // ★ V12 synchronous AM (AM_SYNC_MAX_BW)
+  freedv: 12_000,   // ★ V12 FreeDV rides the SSB demodulator (paramsFor "freedv"), so SSB's ceiling
 };
 
 /** The passband VibeServer will actually run — WFM's floor (widened about its own centre) and
@@ -78,7 +81,22 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   fm:  [-6000, 6000],  nfm: [-5000, 5000],
   wfm: [-100000, 100000],
   drm: [-5000, 5000],   // ★ V12 DRM: the web's MODE_BANDWIDTHS (spectrum.ts) — drawn only; the server takes its own channel
+  /* ★ V12 FreeDV: SSB's 2.7 kHz on the USB side. Only the default — the side follows the dial (LSB below 10 MHz) and the
+   *  server's report says which it demodulates; the client draws freedvPassband(freedvSidebandAt(dial)) until the report's "sb" (VibeServerClient). */
+  freedv: [50, 2700],
 };
+
+/** ★ V12 the passband a mode starts with at `hz` — MODE_BANDWIDTHS, except FreeDV, whose side follows the dial as the
+ *  server's does (LSB below 10 MHz). The server's report ("sb") then wins (VibeServerClient 'freedv'). */
+export function modeDefaultPassband(mode: SDRMode, hz: number): [number, number] | undefined {
+  return mode === 'freedv' ? freedvPassband(freedvSidebandAt(hz)) : MODE_BANDWIDTHS[mode];
+}
+/** ★ V12 FreeDV: the drawn passband moved to the side the server's report names — mirrored about the dial, so the width is
+ *  kept; a passband straddling the dial (never FreeDV's own) becomes freedvPassband(sb). null = already on that side. */
+export function freedvPassbandOnSide(lo: number, hi: number, sb: 'usb' | 'lsb'): [number, number] | null {
+  if (hi > lo && (sb === 'lsb' ? hi <= 0 : lo >= 0)) return null;
+  return (lo >= 0 || hi <= 0) && hi > lo ? [-hi, -lo] : freedvPassband(sb);
+}
 
 export interface SDRStatus {
   frequency: number;    // Hz
@@ -458,6 +476,9 @@ export interface SDRCallbacks {
   onDrm?:       (s: import('./drm').DrmState) => void;
   /** ★★ V12 the DRM constellation ({"type":"drm_iq"}), only while the Signal pane asked for it (drmScopes). */
   onDrmIq?:     (q: import('./drm').DrmIq) => void;
+  /** ★ V12 FreeDV, VIBESERVER-ONLY: the listener's (or the room's) FreeDV receiver's report, sent when it changes while
+   *  the mode is FreeDV (vibe_freedv.h; parsed by freedv.ts parseFreeDv). The screen drops one after leaving the mode. */
+  onFreeDv?:    (s: import('./freedv').FreeDvState) => void;
   /** ★ V12 CTCSS / DCS TONE ID, VIBESERVER-ONLY: the NFM channel's sub-audible tone or DCS code as the server reads it
    *  ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), sent when it changes; '' = none locked. Shown as the VTS line's quiet
    *  suffix (SDRScreen toneLabel). */

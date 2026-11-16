@@ -124,6 +124,9 @@ const MODE_TO_WIRE: Record<SDRMode, string> = {
   usb: 'usb', lsb: 'lsb', am: 'am', sam: 'sam',
   fm: 'nfm', nfm: 'nfm', cwu: 'cw', cwl: 'cw', wfm: 'wfm',
   drm: 'drm',   // ★ OpenWebRX's own DRM demodulator (gated on its `modes` list, as every mode here)
+  // ★ The V12 synchronous AM family is VibeServer's own; the names pass through as an unlisted mode always did.
+  sau: 'sau', sal: 'sal', ecssu: 'ecssu', ecssl: 'ecssl', amst: 'amst',
+  freedv: 'freedv',   // ★ OpenWebRX's own FreeDV mode has this id too (still gated on its `modes` list)
 };
 
 const OWRX_CAPS: BackendCapabilities = {

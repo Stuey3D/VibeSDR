@@ -101,6 +101,8 @@ export function tunedPassband(mode: string | undefined, bwLow?: number | null, b
   else if (m === 'lsb' || m === 'ecssl') pb = { lo: -3_000, hi: 0 };
   else if (m === 'cw' || m === 'cwu' || m === 'cwl') pb = { lo: -300, hi: 300 };
   else if (m === 'am' || m === 'sam' || m === 'sau' || m === 'sal' || m === 'amst' || m === 'drm') pb = { lo: -5_000, hi: 5_000 };
+  // ★ V12 FreeDV without edges: the side is the server's (freedv.ts), so either side of the dial
+  else if (m === 'freedv') pb = { lo: -3_000, hi: 3_000 };
   else pb = { lo: -1_500, hi: 1_500 };
   return { lo: clamp(pb.lo), hi: clamp(pb.hi) };
 }

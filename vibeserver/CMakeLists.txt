@@ -334,6 +334,9 @@ add_library(vibeserver_core STATIC
 target_include_directories(vibeserver_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}" "${CPP_DIR}" "${CPP_DIR}/vibedsp" "${CPP_DIR}/ft8_lib")
 target_link_libraries(vibeserver_core PUBLIC vibedsp)
+# ★ V12 FreeDV (vibe_freedv.h) dlopen's the system's libcodec2 at run time — nothing is linked for it but the loader
+#   itself (libdl on a glibc before 2.34; empty on macOS and newer glibc).
+target_link_libraries(vibeserver_core PUBLIC ${CMAKE_DL_LIBS})
 
 # ── the CLI harness ───────────────────────────────────────────────────────────
 # ★ The TUI is part of the SAME binary, not a second one: Stuart's requirement is "SSH in, type
@@ -1652,7 +1655,11 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #     simply gets the basic map.
   #  ★ The server says which layers it has not got, per request, rather than failing silently — see
   #    the 404 wording in vibe_mapdata.h.
-  set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "vibeserver-mapdata-detail")
+  # ★★ V12 FreeDV (docs/v12/FREEDV.md): the distribution's Codec 2 library, dlopen'd at run time — RECOMMENDS, never
+  #    Depends (the guard below would refuse it, and rightly: a missing one costs only the FreeDV mode, which the server
+  #    then simply does not offer). The soname differs by release: libcodec2-1.0 on Debian 12 bookworm (1.0.5), libcodec2-1.2
+  #    on Debian 13 trixie (1.2.0) — apt installs the first alternative that exists.
+  set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "vibeserver-mapdata-detail, libcodec2-1.2 | libcodec2-1.1 | libcodec2-1.0")
   # ★★★ THE GUARD: a release package whose Depends names ANY library but libc6 is refused and
   #     deleted, so "nothing from the system but glibc" cannot regress quietly — a -dev package
   #     creeping back into a build image, a new find_library, a dynamic libatomic. Release builds

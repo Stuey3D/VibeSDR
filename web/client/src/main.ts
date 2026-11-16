@@ -52,7 +52,7 @@ import { RspAgcWatch, rspAgcSampleOf, vagcAutoNote, vagcChoiceText, vagcIfOwner,
  *  sections that failed — counted per source and type. Type __vibeFaults() in the console. */
 (window as unknown as { __vibeFaults: () => unknown }).__vibeFaults =
   () => ({ total: faultTotal(), faults: faultSummary() });
-import { initMobileControls } from './mobile';
+import { initMobileControls, modeLegendWeb as modeLegend } from './mobile';
 import { addModeIcon } from './modeIconDom';   // ★ V12 mode icons
 import { layoutDecoderBands, decoderBandsDial, setWholeRadioKeys, placeOptions, sizeKeys } from './decoderBandsDom';   // ★ V12 decoder panel by band
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the contract module the app reads too, and the browser's panel.
@@ -202,7 +202,10 @@ import { cwHasWpmRange, cwWpmText } from '../../../src/utils/cwFormat';
 import { RTTY_WAITING, rttyShort, rttyJoin } from './rttySkim';   // ★★ V12 the RTTY skimmer's rows and card
 import { callHtml, wireQrz } from './qrzLink';
 import { autoBwOffered, shownEdges, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
-import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, modeLegend, type AmSyncId, type AmSyncState } from '../../../src/services/amSync';
+import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, type AmSyncId, type AmSyncState } from '../../../src/services/amSync';
+// ★★ V12 FreeDV digital voice (src/services/freedv.ts — the rules the app and the R36S share)
+import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME, FREEDV_HINT,
+         type FreeDvSub, type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
  *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
@@ -909,6 +912,7 @@ async function loadAudioPolicy(httpBase: string) {
     drmCap = Array.isArray(j.modes) && j.modes.includes('drm');   // ★ V12 DRM — see offeredModes
     // ★ V12 synchronous AM: the family THIS server lists (an older one played "sam" as plain AM — never offered there)
     amSyncCap = amSyncOffered(Array.isArray(j.modes) ? j.modes : []);
+    freedvSubs = freedvOffered(j);   // ★★ V12 FreeDV: [] where the server's libcodec2 did not load — no key at all then
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
@@ -2729,6 +2733,18 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           !audio || h === 'muted' || h === 'suspended' ? undefined : out ? performance.now() - out : Infinity) as DrmQuality;
       }
       drmBoxSync(); updateVts();
+    },
+    /* ★★ V12 FreeDV: the server's report — the VTS line, the sub-mode row's lit key and the passband's side. A report after
+     *  leaving the mode (or under a whole-radio mode) is a ghost. The SERVER chooses the sideband; we only draw it. */
+    onFreeDv: (f) => {
+      if (!spec || spec.mode !== 'freedv' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
+      fdvState = f;
+      const [lo, hi] = freedvPassband(f.sb);
+      // ★ Written straight in, never sent (the width is the server's): the waterfall draws it on the next frame, and the
+      //   hidden width row is kept true to it
+      if (spec.bandwidthLow !== lo || spec.bandwidthHigh !== hi) { spec.bandwidthLow = lo; spec.bandwidthHigh = hi; syncBw(); }
+      freedvSubRowSync();
+      updateVts();
     },
     onDrmIq: (q) => {
       if (!spec || spec.mode !== 'drm') return;
@@ -4774,12 +4790,16 @@ function updateVts() {
     dabRt = drmState.text || ''; dabSvcSid = drmState.serviceId ? parseInt(drmState.serviceId, 16) || 0 : 0;
     logo = '';
   }
+  /* ★★ V12 FreeDV: the line says what the modem is doing ("FreeDV · searching", "FreeDV 700D · 6 dB · G4ABC") the whole
+   *  time the mode is on — it is SILENT until speech, so the line is how a listener knows it is working. */
+  const fdvOn = spec.mode === 'freedv' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
+  if (fdvOn) { name = freedvVts(fdvState); flag = ''; logo = ''; src = ''; dabRt = ''; dabSvcSid = 0; }
 
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
   // ★ Tracks whether what we are about to show is LIVE (the station naming itself) or STATIC (our
   //   guess from a list). Only the live kind may stay up — see vtsHoldFor().
-  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label);
+  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label) || fdvOn;
   if (!name) {
     const near = nearestStation(hz);
     if (near && Math.abs(near.frequency - hz) <= VTS_ON_HZ) {
@@ -4893,6 +4913,7 @@ function updateVts() {
   const lineParts: VtsLineParts = inDab
     ? { id: vtsHex(dabSvcSid), idLabel: 'SId', name, text: dabRt }
     : toneOn ? { name: toneName, text: tone }
+    : fdvOn ? { name }
     : { id: vtsHex(rdsPi), idLabel: 'PI', name: rdsName, text: rdsName ? rdsText : '' };
   setClass(vts, 'line', lineMode);
   applyVtsScroll(lineMode);
@@ -5395,6 +5416,45 @@ function icomFilRow(): HTMLElement | null {
   }
   wrap.appendChild(g);
   return wrap;
+}
+/** ★★ V12 FreeDV's manual fallback, in the mode picker while FreeDV is the mode (where the width row sits in the others —
+ *  the width is the server's here): AUTO and each sub-mode THIS server runs. The lit key is the server's `sub`, never the
+ *  tap — a choice refused on a shared dial, or by the server, would otherwise look taken. */
+function freedvSubRow(): HTMLElement | null {
+  if (!spec || spec.mode !== 'freedv' || !freedvSubs.length || dabOn || adsbOn || ismOn || ndbOn || aisOn) return null;
+  const wrap = document.createElement('div');
+  const sep = document.createElement('div');
+  sep.className = 'mBwSep';
+  sep.textContent = 'FREEDV';
+  sep.title = FREEDV_HINT;
+  wrap.appendChild(sep);
+  const g = document.createElement('div');
+  g.className = 'mModeGrid';
+  g.id = 'mFreeDvSub';
+  g.style.gridTemplateColumns = `repeat(${freedvSubs.length + 1}, minmax(0, 1fr))`;   // one row, even at 390 px
+  for (const c of ['auto', ...freedvSubs] as FreeDvChoice[]) {
+    const b = document.createElement('button');
+    b.className = 'mModeOpt';
+    b.style.minWidth = '0'; b.style.paddingLeft = b.style.paddingRight = '0.3em';
+    b.dataset.sub = c;
+    b.textContent = c === 'auto' ? 'AUTO' : c;
+    b.title = c === 'auto' ? `${FREEDV_NAME}: find the sub-mode on air` : `${FREEDV_NAME}: ${c} only`;
+    b.onclick = () => spec?.freedvSub(c);   // ★ lit by the server's next report (freedvSubRowSync), never by this tap
+    g.appendChild(b);
+  }
+  wrap.appendChild(g);
+  freedvSubRowSync(g);
+  return wrap;
+}
+/** The row's lit key follows the server's report — none before the first one (a shared room may hold a manual choice). */
+function freedvSubRowSync(g: HTMLElement | null = document.getElementById('mFreeDvSub')) {
+  if (!g) return;
+  const sub = fdvState?.sub;
+  for (const x of Array.from(g.querySelectorAll('button')) as HTMLButtonElement[]) {
+    const on = x.dataset.sub === sub;
+    x.classList.toggle('on', on);
+    x.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
 }
 /** The mode picker on an Icom: the label back to the radio's mode name, sent as icom_control. */
 function icomPickMode(label: string) {
@@ -7372,11 +7432,19 @@ let toneLabel = '';
 /** ★★ V12 the synchronous AM family this server lists (vibeserver.json modes) — empty on every older server. */
 let amSyncCap: AmSyncId[] = [];
 let amSyncState: AmSyncState | null = null;
+/** ★★ V12 FreeDV: the sub-modes THIS server's libcodec2 runs (vibeserver.json freedvSubs) — [] = FreeDV not offered. */
+let freedvSubs: FreeDvSub[] = [];
+/** ★★ V12 FreeDV: the server's last report while in the mode (null before the first, and on leaving — a ghost otherwise). */
+let fdvState: FreeDvState | null = null;
 /** The demodulators to offer: the fixed set, plus the synchronous AM family and DRM where this server has them (beside
- *  AM, where an AM listener looks) — minus what the owner switched off. */
+ *  AM, where an AM listener looks), FreeDV beside USB / LSB — minus what the owner switched off. */
 function offeredModes(): SDRMode[] {
   const out: SDRMode[] = [];
-  for (const m of MODES) { out.push(m); if (m === 'am') out.push(...(amSyncCap as SDRMode[])); }
+  for (const m of MODES) {
+    out.push(m);
+    if (m === 'am') out.push(...(amSyncCap as SDRMode[]));
+    if (m === 'lsb' && freedvSubs.length) out.push('freedv');
+  }
   if (drmCap) out.push('drm');
   return out.filter((m) => !isModeBlocked(m));
 }
@@ -10191,7 +10259,7 @@ function buildControls() {
      *  but this time it stayed in DAB mode until I clicked the DAB button again."
      *  ★ Selecting FM plainly MEANS "stop doing DAB", and a picker where one entry is a toggle
      *    and the rest are a radio group is a picker that lies about what it does. */
-    modeExtra:  () => icomFilRow(),
+    modeExtra:  () => icomFilRow() ?? freedvSubRow(),
     setMode:    (m) => { if (icomR) { icomPickMode(m); return; }
                          // ★ ADS-B: leave, and spend the pick on the dial the server gives back (adsbPendingMode).
                          if (adsbOn) { adsbPendingMode = m as SDRMode; adsbSetMode(false); return; }
@@ -19044,7 +19112,11 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   if (send) spec.setMode(m);
   else {
     spec.mode = m;
-    if (!keepPassband) { const bw = MODE_BANDWIDTHS[m]; spec.bandwidthLow = bw[0]; spec.bandwidthHigh = bw[1]; }
+    if (!keepPassband) {
+      // ★ V12 FreeDV: on the side the server demodulates here, until its report says (freedvSidebandAt)
+      const bw = m === 'freedv' ? freedvPassband(fdvState?.sb ?? freedvSidebandAt(spec.frequency)) : MODE_BANDWIDTHS[m];
+      spec.bandwidthLow = bw[0]; spec.bandwidthHigh = bw[1];
+    }
   }
   // ★ The card's own readout (#mMode) is the only one; it is refreshed by mobile.ts's poll.
   if (m !== 'wfm') {
@@ -19057,6 +19129,8 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   }
   // ★ V12 DRM: the box follows the mode; a new mode forgets the old station (and its meter and its picture)
   if (m !== 'drm') { drmState = null; drmIq = null; drmQualityMeter.reset(); drmQuality = null; }
+  if (m !== 'freedv') fdvState = null;   // ★ V12 FreeDV: its line goes with the mode
+  else if (!send && !fdvState) spec.freedvSub(null);   // ★ adopted (a room already in FreeDV): ask for its report now
   amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second
   bwAutoState = null;                 // ★★ V12 …and so are AUTO's edges
   drmBoxSync();
@@ -19079,6 +19153,7 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
   fm: 30000,    nfm: 30000,
   wfm: 250000,
   drm: 5000,   // ★ V12 DRM: unused — the bandwidth row is hidden in DRM (see syncBw)
+  freedv: 3000,   // ★ V12 FreeDV: unused — the server fixes the modem's channel; the row is hidden (see syncBw)
   // ★ V12 synchronous AM: AM-shaped as AM; ECSS's edges are SSB's (one sideband, up to 6 kHz like USB/LSB)
   sau: 20000, sal: 20000, amst: 20000, ecssu: 6000, ecssl: 6000,
 };
@@ -19123,7 +19198,9 @@ function syncBw() {
   if (!spec) return;
   /* ★★ V12 DRM: the width means nothing there — the server's DRM receiver takes its channel before the AM filter — so the
    *  row is hidden rather than left as a slider that does nothing (AGENTS.md: no dead controls). */
-  { const row = document.querySelector('.bwRow') as HTMLElement | null; if (row) row.style.display = spec.mode === 'drm' ? 'none' : ''; }
+  //  ★ V12 FreeDV likewise: the server fixes the modem's 2.7 kHz channel; the sub-mode row takes its place in the picker.
+  { const row = document.querySelector('.bwRow') as HTMLElement | null;
+    if (row) row.style.display = spec.mode === 'drm' || spec.mode === 'freedv' ? 'none' : ''; }
   const max = BW_EDGE_MAX[spec.mode] ?? 6000;
   const step = max > 50_000 ? 1000 : max > 10_000 ? 100 : 10;
   const lo = $<HTMLInputElement>('bwLo');

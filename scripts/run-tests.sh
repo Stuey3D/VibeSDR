@@ -93,6 +93,9 @@ flags_for() {
     test-watch|test-watch-cost) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;   # ★ V12 VFO A/B (vibe_watch.h)
     test-am-sync)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★ V12 SAM / ECSS / AM stereo / AM auto bandwidth (amsync.cpp)
     test-auto-bw)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★★ V12 SSB / CW auto bandwidth (autobw.cpp) through the real pipeline
+    # ★★ V12 FreeDV as a mode (vibe_freedv.h): codec2's own transmitter → noise → our modem host and the real USB chain.
+    #    NOT RUN (exit 3) without libcodec2 (apt install libcodec2-1.2 / brew install codec2) — it is dlopen'd, never linked.
+    test-freedv)           echo "-O2 -I $VDSP -I $KISS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
     # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
     #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
     test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
@@ -124,7 +127,7 @@ flags_for() {
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
     # ★★ …and every row after the first eight (vibe_benchmark_more.h, 2026-10-31): the host's decoders, every digital-spots
     #    engine, NDB / AIS / ISM, tone ID and the audio filters. VIBE_BENCH_CLIP=<decoders-bench.vbu8> runs the clip rows.
-    test-bench-decoders)   echo "-O2 -DVIBE_DAB_PFFFT -I android/app/src/main/cpp/ft8_lib -I $VDSP -I $KISS -lpthread" ;;   # ★ PFFFT as the server builds it (ISM/LoRa DetFft)
+    test-bench-decoders)   echo "-O2 -DVIBE_DAB_PFFFT -I android/app/src/main/cpp/ft8_lib -I $VDSP -I $KISS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;   # ★ PFFFT as the server builds it (ISM/LoRa DetFft)
     # ★ Hostile attach messages through the real decoders (audit 2026-10-03) — same deps as the hosts.
     test-decoder-hardening) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ SSTV geometry + colour on synthetic pictures with a known sender clock error (audit 2026-10-04)
@@ -273,7 +276,7 @@ deps_for() {
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-pll-iq)          echo "$VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;
     test-am-sync)         echo "$VDSP/amsync.cpp $VDSP/ddc.cpp $VDSP/fft.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-auto-bw)         echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-auto-bw|test-freedv) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
@@ -729,6 +732,8 @@ if npx tsx scripts/test_spots_band_app.ts; then pass=$((pass+1)); else fail=$((f
 #    the capability (vibeserver.json modes lists "drm").
 if npx tsx scripts/test_drm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_am_sync.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 synchronous AM (amSync.ts)
+if node --no-warnings scripts/test_freedv.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV as a mode (freedv.ts)
+if node --no-warnings scripts/test_freedv_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV in the app (key, VTS, sub-mode row, sideband)
 if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
 #    NM, rows, tiles, the map feed, Find / stats, the readings' memory, the capability, the wiring (V12 NDB).
@@ -872,6 +877,9 @@ if bash handheld-ui/test/run_dab_quality_test.sh; then pass=$((pass+1)); else fa
 # ★★ V12 The R36S's port of the tuned station's label (handheld-ui/src/tuned_label.h) replays tunedStation.ts's own
 #    outputs, line for line (Docker arm64 when the image is there, else the host compiler).
 if sh handheld-ui/test/run_tuned_label.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ The R36S's VTS port (handheld-ui/src/vts_core.h) replays the app's VTS TS line for line — V12 with FreeDV's line from
+#    src/services/freedv.ts (searching / a manual choice / in sync), its offer, its sideband and passband.
+if sh handheld-ui/test/run_vts_golden.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE R36S BATTERY BLOCK + CALIBRATION (2026-11-15): the live lines and the ≈ figures (battery_math.h), vibe-hwd's
 #    calibration (Full → a safe empty, resumed over a power-off, cancelled by charging, the stress load) and its
 #    charge-port watch (the 2 A limit at the plug edge, the 5 s trace) — fake sysfs, no device.
@@ -1673,6 +1681,24 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-cw.sh clip "$OUT/cw-clip.cu8" >/
   rm -f "$OUT/cw-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 FreeDV AS A MODE (vibe_freedv.h, docs/v12/FREEDV.md): the real server on a fake rtl_tcp replaying test-freedv's
+#     synthetic clip (700D, 700E and 1600 stations made by codec2's own transmitter): AUTO names each, the report, the text,
+#     decoded speech on the audio socket, a manual sub-mode, USB again after, a one-pipeline and a range-locked radio, and no
+#     mode without libcodec2 (test-server-freedv). NOT RUN without VIBESERVER_BIN or libcodec2 (the clip writer exits 3).
+printf '\n\033[1m── FreeDV (end to end: the server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-freedv" ] && "$OUT/test-freedv" clip "$OUT/freedv-clip.cu8" 288000 20 12 >/dev/null \
+   && "$OUT/test-freedv" clip "$OUT/freedv-clip-lsb.cu8" 288000 20 12 lsb >/dev/null; then
+  VIBE_FREEDV_CLIP="$OUT/freedv-clip.cu8" VIBE_FREEDV_CLIP_LSB="$OUT/freedv-clip-lsb.cu8" node scripts/test-server-freedv.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ …then the web page (headless Edge, --mute-audio): the key, the VTS line, the FREEDV row, 390 px, LSB on 40 m —
+  #   served from this tree's web/dist (node scripts/build-web.mjs), exit 3 without it.
+  VIBE_FREEDV_CLIP="$OUT/freedv-clip.cu8" VIBE_FREEDV_CLIP_LSB="$OUT/freedv-clip-lsb.cu8" node scripts/test-web-freedv.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/freedv-clip.cu8" "$OUT/freedv-clip-lsb.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and libcodec2 (apt install libcodec2-1.2 / brew install codec2)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 THE DRM CONSTELLATION + RECEPTION METER (2026-11-12): the same shape on a SYNTHETIC DRM signal (the test

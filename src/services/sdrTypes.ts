@@ -18,13 +18,14 @@ const { sam: _samLabel, ...AM_SYNC_LABEL_NO_SAM } = AM_SYNC_LABEL;   // 'sam' ke
 // ★ V12 'drm' = Digital Radio Mondiale, a VibeServer demodulator offered only where its vibeserver.json `modes` lists it
 //   (docs/v12/DRM.md); not in MODES. The server receives it whole per listener; the client draws the DRM box.
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
-                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst';   // ★ V12 synchronous AM (amSync.ts)
+                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst'   // ★ V12 synchronous AM (amSync.ts)
+                    | 'freedv';   // ★ V12 FreeDV digital voice (freedv.ts) — VibeServer only, where its `modes` lists it
 export type Mode = SDRMode; // alias
 
 export const MODES: SDRMode[] = ['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl'];
 export const MODE_LABELS: Record<SDRMode, string> = {
   usb: 'USB', lsb: 'LSB', am: 'AM', sam: 'SAM',
-  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM',
+  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM', freedv: 'FreeDV',
   ...AM_SYNC_LABEL_NO_SAM,   // ★ V12 synchronous AM (amSync.ts)
 };
 
@@ -481,6 +482,8 @@ export interface ServerOccupancy {
   spotsBand?: SpotsBandCap;
   /** ★ V12: the demodulators this server offers (`modes`) — DRM is offered only where it lists "drm". */
   modes?: string[];
+  /** ★ V12 FreeDV: the sub-modes this server's libcodec2 runs (read through freedv.ts freedvOffered, never alone). */
+  freedvSubs?: string[];
   /** ★ V12 ISM (docs/v12/ISM-DECODER.md): undefined = no control (an HF+ reaches no ISM band, an older server);
    *  `ok: false` = greyed with the reason; `bands` = the bands THIS radio reaches. */
   ism?: IsmCap;
@@ -572,6 +575,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       spotModes: parseSpotModes(j.spotModes),
       spotsBand: parseSpotsBandCap(j),
       modes:     Array.isArray(j.modes) ? j.modes.filter((m: unknown) => typeof m === 'string').map((m: string) => m.slice(0, 12)).slice(0, 40) : undefined,
+      freedvSubs: Array.isArray(j.freedvSubs) ? j.freedvSubs.filter((m: unknown) => typeof m === 'string').map((m: string) => m.slice(0, 8)).slice(0, 8) : undefined,
       ism:       parseIsmCapability(j),
       ndb:       parseNdbCapability(j),   // ★ V12 NDB — absent where this radio reaches no LF
       ais:       parseAisCapability(j),

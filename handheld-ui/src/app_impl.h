@@ -810,6 +810,27 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
     }
     if (nav_.focus("mode").empty()) nav_.setFocus("mode", dabActive() ? std::string("m.dab") : "m." + s.mode);
 
+    // ── ★ V12 FreeDV: no BANDWIDTH (the modem's 2.7 kHz side is the server's) — the sub-mode choice in its place. AUTO
+    //    finds 700D / 700E / 1600; a manual choice is the fallback when AUTO cannot settle. Only the sub-modes this
+    //    server's library runs (vibeserver.json freedvSubs). The lit one is the server's report ("sub"), not a guess. ──
+    if (s.mode == "freedv" && !dabActive()) {
+        std::vector<std::string> subs;
+        { std::lock_guard<std::mutex> lk(srvMtx_); subs = srvFreedvSubs_; }
+        FreeDvState fs;
+        const std::string chosen = parseFreeDv(s.msg("freedv"), fs) ? fs.sub : std::string("auto");
+        const Rect p{444, 8, 184, 464};
+        c.g.rrect(p.x, p.y, p.w, p.h, 10, rgb(0x101010, 0.97f));
+        c.tc.draw(c.g, c.f.bodyB, "FREEDV", p.x + 14, p.y + 14, th::btnText);
+        float y = p.y + 50;
+        subs.insert(subs.begin(), "auto");
+        for (const auto& sb : subs) {
+            if (toggle(c, "fdv." + sb, {p.x + 14, y, p.w - 28, 44}, sb == chosen, sb == "auto" ? "AUTO" : sb, sb == "auto" ? "AUTO" : sb))
+                eng_->send(freedvSubMessage(sb));
+            y += 54;
+        }
+        c.tc.draw(c.g, c.f.small, s.bwHigh > 0 ? "ON USB" : "ON LSB", p.x + 14, y + 4, th::dim);   // the side the passband follows
+        return;
+    }
     // ── BANDWIDTH (hidden in DRM, as the web's syncBw) ──
     if (s.mode == "drm" || s.mode.empty() || dabActive()) return;
     const Rect p{444, 8, 184, 464};
@@ -1318,7 +1339,8 @@ inline int App::run(int argc, char** argv) {
                     const Json vj = Json::parse(v.body);
                     for (auto& m : vj["modes"].a) ms.push_back(m.str());
                     if (vj["dab"].boolean()) ms.push_back("dab");
-                    std::lock_guard<std::mutex> lk(srvMtx_); srvModes_ = ms;
+                    std::vector<std::string> fdv = freedvOffered(vj);
+                    std::lock_guard<std::mutex> lk(srvMtx_); srvModes_ = ms; srvFreedvSubs_ = fdv;
                 }
                 const HttpResult l = httpRequest(p, "GET", "/handheld/location", "", 4);
                 if (l.status == 200) {
