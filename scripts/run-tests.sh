@@ -1684,6 +1684,9 @@ if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   # ★ …and the web client's view of it (headless Edge, --mute-audio) — needs the page built into VIBESERVER_BIN
   VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" node scripts/test-web-avdata.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 2026-11-16 the AVIATION MAP in the web client: two radio processes (ADS-B + DATALINK), one table, headless Edge
+  VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/test-web-avmap.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/vdl2-clip.cu8" "$OUT/adsb-syn-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))

@@ -87,7 +87,8 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   await ev(`[...document.querySelectorAll('.trkView:not([hidden]) button')].find(b => b.textContent.trim() === 'VDL2')?.click()`);
   ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .trkRow').length >= 5`, 30000), `aircraft listed: ${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow b')].map(x => x.textContent).join(' | ')`)}`);
   const rows = await ev(`document.querySelector('.trkView:not([hidden]) .rows')?.textContent`) || '';
-  ok(/FR1234 · EI-EST · 4CA97B/.test(rows), 'a row: flight · registration · ICAO address');
+  ok(/FR1234\s*EI-EST · 4CA97B · VDL2/.test(rows), 'a row: the flight, then registration · ICAO address · the source (the AVIATION MAP\'s list)');
+  ok(/AVIATION MAP · DATALINK/.test(await ev(`document.querySelector('.trkView:not([hidden]) .ttl')?.textContent`) || ''), 'the view is the AVIATION MAP');
   ok(!/TEST MESSAGE BODY/.test(rows), '★ no message text without the owner\'s opt-in');
   ok(/VDL2 136\.\d+ MHz · \d+ aircraft/.test(await ev(`document.querySelector('.trkView:not([hidden])')?.textContent`) || ''), 'the status names the band and the count');
   // ★ V12 2026-11-16 the ACARS applications: three of the clip's aircraft report a position (FMS, label 16, ADS-C) — on the

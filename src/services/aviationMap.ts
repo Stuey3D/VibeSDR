@@ -15,7 +15,7 @@
 //    AIRPORTS is always there (the basemap always has them). One layer alone draws no toggle row.
 //  · ⚖ Flight data only (address, registration, flight, position, altitude, airports, the label's name) — never a message
 //    body: the table never holds one (the owner's opt-in body stays on the DATALINK list, on the owner's own socket).
-import { esc, rangeBearing, compass8, ago, type LatLon, type TrackItem, type TrackRow } from './tracks';
+import { esc, rangeBearing, compass8, ago, heardAgo, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { avFix, avRoute, type AvAircraft, type AvReport } from './aviation';
 
 export const AVIATION_TITLE = 'AVIATION MAP';
@@ -57,6 +57,7 @@ export function avLayersPresent(have: AvHave, focus: AvFocus): AvLayerId[] {
   const out: AvLayerId[] = [];
   const add = (id: AvLayerId) => { if (!out.includes(id)) out.push(id); };
   FOCUS[focus].forEach(add);
+  if (focus === 'hfdl') add('stations');   // ★ the HFDL map's own stations beside it
   for (const s of AV_SRC) if (have[s.id] > 0) add(s.id);
   if (have.stations > 0 || focus === 'hfdl') add('stations');
   add('airports');
@@ -82,6 +83,8 @@ export interface AvPlane {
   label?: string; labelName?: string; app?: string; via?: string;
   /** the last OUT / OFF / ON / IN (the live datalink report's) */
   oooi?: string; oooiTime?: string;
+  /** ★ what the live report said the fix came from ("FMS", "ACARS" layout, "ADS-C", "HFDL") — the row's words; posSrc is the source */
+  posApp?: string;
   /** the sources that heard it (server names: "ADS-B", "VDL2", …) and how long ago each did (s) */
   src: string[]; srcAge: Record<string, number>;
   age: number; n: number;
@@ -141,7 +144,7 @@ export function planeFromLive(a: AvAircraft, i: number): AvPlane {
     key: a.icao || (a.reg ? `r:${regKey(a.reg)}` : a.flight ? `f:${fltKey(a.flight)}` : `row${i}`),
     icao: a.icao, reg: a.reg, flight: a.flight, lat: a.lat, lon: a.lon, alt: a.alt, posAge: a.posAge, posTime: a.posTime,
     posSrc: a.posSrc === 'ADS-C' ? 'ADS-C' : a.lat != null ? (src[0] ?? undefined) : undefined,
-    from: a.from, to: a.to, oooi: a.oooi, oooiTime: a.oooiTime, label: a.label, labelName: a.labelName, app: a.app, via: a.via, src, srcAge, age: a.age, n: a.n, live: true,
+    posApp: a.posSrc, from: a.from, to: a.to, oooi: a.oooi, oooiTime: a.oooiTime, label: a.label, labelName: a.labelName, app: a.app, via: a.via, src, srcAge, age: a.age, n: a.n, live: true,
   };
 }
 /** ★★ ONE AIRCRAFT ONCE: the live report's rows (this radio, now) and the shared table's (every radio), joined by ICAO
@@ -205,7 +208,7 @@ export function avPlaneCard(p: AvPlane, rx: LatLon | null, wrap: 'web' | 'app' =
   if (p.oooi) add(p.oooi.toUpperCase(), p.oooiTime ? `${p.oooiTime} UTC` : 'heard');
   if (p.lat != null && p.lon != null) {
     add('Position', `${Math.abs(p.lat).toFixed(3)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(3)}°${p.lon >= 0 ? 'E' : 'W'}`
-      + `${p.posSrc ? ` · from ${p.posSrc}` : ''}${p.posAge != null ? ` · ${ago(p.posAge)} ago` : ''}`);
+      + `${p.posSrc ? ` · from ${p.posSrc}` : ''}${p.posAge != null ? ` · ${heardAgo(p.posAge)}` : ''}`);
     if (p.alt != null) add('Altitude', p.ground ? 'on the ground' : `${Math.round(p.alt).toLocaleString('en-GB')} ft`);
     if (p.gs != null) add('Speed', `${Math.round(p.gs)} kt${p.trk != null ? ` · track ${Math.round(p.trk)}°` : ''}`);
     if (p.posTime) add('Fix time', p.posTime.startsWith(':') ? `${p.posTime} past the hour (as reported)` : `${p.posTime} UTC (as reported)`);
@@ -232,7 +235,7 @@ export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
     const who = [p.reg && p.reg !== avName(p) ? p.reg : '', p.icao && p.icao !== avName(p) ? p.icao : '', p.type ?? ''].filter(Boolean).join(' · ');
     return {
       key: `a:${p.key}`, colour: avColour(p), flag: '', name: avName(p),
-      second: [who, p.src.join(' + '), avRoute(p as unknown as AvAircraft), avFix(p as unknown as AvAircraft), p.labelName ?? ''].filter(Boolean).join(' · '),
+      second: [who, p.src.join(' + '), avRoute(p as unknown as AvAircraft), avFix({ ...p, posSrc: p.posApp ?? p.posSrc } as unknown as AvAircraft), p.labelName ?? ''].filter(Boolean).join(' · '),
       sp: p.alt != null ? (p.ground ? 'GND' : `FL${String(Math.max(0, Math.round(p.alt / 100))).padStart(3, '0')}`) : '', trend: 0 as const,
       range: rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km` : p.lat == null ? 'no position' : '',
       brg: rb ? compass8(rb.brg) : '', noPos: p.lat == null, age: ago(Math.min(p.age, ...Object.values(p.srcAge))), em: false,

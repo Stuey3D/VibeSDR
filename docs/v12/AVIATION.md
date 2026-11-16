@@ -10,6 +10,8 @@ Branch `v12-aviation` (from `v12-experimental` 460bb2f12). Written 2026-10-31 / 
 | Service, table, JSON, bands | `vibe_avi_service.h`, `vibe_avi_mode.h` | `vibeserver/test-avi-service.cpp` | Wired into `local_sdr_shim.cpp` (2026-11-16) — see RESUME HERE. |
 | ACARS applications (positions, OOOI, ARINC 622) | `vibe_acars_apps.h` | `vibeserver/test-acars-apps.cpp` | 2026-11-16, branch `v12-acars-apps` — §Applications. **Not yet seen on air.** |
 | Transmitters (tests + benchmark) | `vibe_avi_tx.h` | — | ACARS, VDL2, HFDL bursts; `test-vdl2 --write-clip` makes the server e2e's clip. |
+| **Shared aircraft table** (every radio process) | `vibe_aircraft_share.h` | `vibeserver/test-aircraft-share.cpp`, `scripts/test-server-avmap.mjs` | 2026-11-16, branch `v12-avmap` — §The shared table. |
+| **AVIATION MAP** (web + app) | `src/services/aviationMap.ts` | `scripts/test_aviation_map.ts`, `scripts/test-web-avmap.mjs` | 2026-11-16 — §The aviation map. |
 
 All headers are in `android/app/src/main/cpp/`. The tests are header-only plus vibedsp's `fft.cpp`, `channelizer.cpp`,
 `ddc.cpp` (and PFFFT/KissFFT); they are `vibeserver/CMakeLists.txt` targets (ctest acars / vdl2 / hfdl / avi-service) and
@@ -25,6 +27,11 @@ in `scripts/run-tests.sh`.
 | VDL2 | Pi 2 V4, 2.048 MS/s, 302 s | **165 frames** (23 ACARS), **23 aircraft** | none |
 | HFDL | UberSDR RX888 iq192, 8931 kHz window, 600 s | **12 of 16** reference messages (+ ones the reference did not list) | UberSDR's HFDL add-on |
 | HFDL | UberSDR RX888 iq192, 6598 kHz window, 600 s | **23 of 42** reference messages | UberSDR's HFDL add-on |
+| **2026-11-16 (daytime, §On air 2026-11-16)** | | | |
+| ACARS | Pi 500 V4L (:48002, serial 4), 2.4 MS/s, 476 s, 131.675 centre | **91 blocks** (8 repaired), 8 synced bursts not decoded | none |
+| VDL2 | Pi 500 V4L, 2.4 MS/s, 480 s, 136.8625 centre | **1028 AVLC frames** (233 ACARS), **78 aircraft** | none |
+| HFDL | UberSDR RX888 iq192, 11245 kHz window (11184 + 11306), 600 s | **23 of 96** reference messages (+ 39 the feed does not list) | UberSDR's HFDL add-on |
+| HFDL | UberSDR RX888 iq192, 15000 kHz window (15025), 600 s | **23 of 127** reference messages (+ 57 the feed does not list) | UberSDR's HFDL add-on |
 
 - **Zero false decodes on noise:** ACARS 10 min of noise on 3 channels: 0 blocks; VDL2 10 min on 12 channels: 0 frames;
   HFDL 20 min: 0 messages. Every ACARS repair passes a BCS check *and* a plausibility check, and is unique
@@ -176,6 +183,96 @@ multi-block (ETB) reassembler (32 messages × 8 blocks, 60 s).
   `.u8.log` files in `~/VibeSDR-test-audio/aviation` hold the session's server messages only — **not** the decoded
   frames — so the real captures' messages were not available as parser input (the IQ is gone too).
 
+## The shared table (`vibe_aircraft_share.h`, 2026-11-16, branch v12-avmap)
+
+Stuart (2026-11-16): *share the aircraft table across radios — a server with 2 SDRs, one on ADS-B, one on ACARS/VDL2, must
+not show duplicate aircraft.* Each radio is its own PROCESS (`vibeserver/main.cpp superviseRadios`, or systemd's
+`vibeserver@<serial>`), each with its own tables (`vibe_adsb.h` Tracker, `vibe_avi_service.h` Tracker) — so the rows meet in
+ONE small file every radio process of the machine reads and writes under `flock`, the ship store's pattern.
+
+- **Where:** `<runtime dir>/aircraft-live.dat` — `handoffDir()` (`/run/vibeserver`, a tmpfs, on a Linux server; `/tmp/
+  vibeserver-<uid>` without systemd; `VIBESERVER_RUNTIME_DIR` in the tests). ★ Never the data dir: ADS-B rewrites its
+  aircraft every 2 s, which an SD card must not see. Live data, not a log — it does not outlive a reboot. The Android app's one
+  radio (no directory set): the same table in memory, one code path.
+- **Bounded by construction:** header 64 B · 128 HFDL ground stations × 16 B · **1024 rows × 256 B** = 264 256 B, made at
+  full size; a wrong magic / version / size is re-made empty. Full: the row heard longest ago gives its slot up; a row
+  unheard for an hour is free.
+- **Off every DSP and decoder thread:** a `Sharer` thread per process (decoder priority) asks each provider every 2 s for
+  what changed — ADS-B's `Service::shareSince` (the tracker under its lock: address, callsign, the aircraft database's
+  registration / type / the leg it is on, the position while it is under a minute old) and the datalink table's
+  `Tracker::shareSince` (address, registration, flight, airports, the last label, the position and where it came from,
+  never a body) — and merges them into the file: one `pread` of the table, a `pwrite` per changed row.
+- **The merge (`mergeInto`, one rule for every writer):** by ICAO address; else by REGISTRATION (dots, hyphens and spaces
+  ignored), never across two different addresses; else by FLIGHT ID exactly, never across different addresses or
+  registrations. An update that names two rows (its address one, its registration the other) joins them. Field by field the
+  newest wins; the position is the newest fix by arrival, with its source.
+- **Sources:** a bit each — ADS-B, ACARS, VDL2, HFDL, and ADS-C beside its bearer when an ADS-C report gave the position —
+  with when each last heard the aircraft.
+- **Read:** `GET /vibeserver/aircraft.json[?since=<s>]` on ANY radio (CORS open, as `/addon/hfdl/*`):
+  `{now, count, aircraft:[{key, icao?, reg?, flight?, type?, lat?, lon?, alt?, trk?, gs?, ground?, posSrc, posAge, posTime?,
+  from?, to?, label?, labelName?, app?, via?, src:[…], srcAge:{…}, age, n}], stations:[{id, name, lat, lon, khz, age}]}`;
+  `"off":1` where the owner switched ADS-B, the datalink and HFDL all off. `key` is the address, else `r:<REG>`, else
+  `f:<FLIGHT>`.
+- ⚖ Flight data only, as the datalink list shows by default; the table never holds a message body.
+- **Tests:** `test-aircraft-share` 42/0 (the merge rules, joins, no merge across addresses, newest fix, the cap and the hour,
+  the exact file size and a corrupt file, **four processes writing 200 aircraft at once** — every row with all four sources
+  and every count kept —, the datalink provider never handing over a body, the JSON); `test-server-avmap.mjs` 15/0 (two
+  REAL radio processes on one runtime dir: ADS-B from `test-adsb --write-clip` on one, the VDL2 clip on the other; 4CA97B and
+  406B90 once each with ADS-B + VDL2 from either radio's endpoint, 400F11 ADS-B only, 3C6548 VDL2 + ADS-C with its
+  position, no key twice, no body, the file's size, the rows outlive the modes).
+
+## The aviation map (`src/services/aviationMap.ts`, 2026-11-16)
+
+Modelled on the SHIPPING MAP (`shippingMap.ts`, docs/v12/SHIPPING-MAP.md): one rule, two readers (web `main.ts`, app
+`SDRScreen` → `MapOverlay`), the shared track layer (`tracklayer.js`).
+
+- **Data:** `/vibeserver/aircraft.json` every 3 s while open, and — in the DATALINK mode — its live report (`avMerge`: the live
+  row's fields win, the table adds the other radios' sources and a newer position; joined by address, registration, flight).
+- **Layers = the sources:** ADS-B · VDL2 · ACARS · HFDL · ADS-C; an aircraft is drawn while ANY source that heard it is on.
+  Then **HFDL STATIONS** (the ground stations heard, a mast glyph) and **AIRPORTS** — always present, **on by default**: the
+  basemap's `aero` profile; off = the new `aero-plain` profile (aero without airfields and runways; `vibemap.js` and
+  `vibemap-style.json` — a server whose map pack predates it gets the airport layers switched off by name).
+- **No dead controls:** a source with no aircraft has no toggle; the source(s) the map was opened for are always there and
+  first (DATALINK → VDL2 + ACARS, HFDL → HFDL + its stations, ADS-B → ADS-B); one layer alone, no toggle row.
+- **The glyph:** an aircraft pointing along its track (ADS-B), coloured by the source of its position (ADS-B amber, VDL2
+  green, ACARS blue, HFDL orange, ADS-C violet), a small number when more than one source heard it; faded past 10 min.
+  The card: flight, registration, ICAO, type, route / OOOI, position (and from which source, how old), altitude, speed and
+  track, the fix time as reported, the range from here, **Heard on: ADS-B now · VDL2 40 s**, the last message's plain name.
+- **Where it opens — web:** the DATALINK mode's own view IS the map (`AVIATION MAP · DATALINK`, its bands in the top bar, the
+  list in two sections: THIS RADIO — HEARD NOW (with the owner's message text where the server sent it) and OTHER SOURCES
+  ON THIS SERVER, EXIT DATALINK); **MAP** in the HFDL decoder box (standalone, CLOSE MAP — the web had no HFDL map); **AVIATION
+  MAP** in ADS-B's top bar, drawn only when another source has aircraft (asked every 20 s). **App:** the DATALINK box's MAP
+  (MapOverlay `avdata`, now `AVIATION MAP`, the `aero` basemap, toggles in its list, AIRPORTS switched live through
+  `__trkProfile`).
+- **Copy:** sdrTour mode card, About V12 note, the web tutorial.
+- **Tests:** `test_aviation_map.ts` 47/0; `test-web-avmap.mjs` (headless Edge `--mute-audio`, two real radio processes);
+  `test-web-avdata.mjs` adapted (the list is the map's).
+
+## On air 2026-11-16 (daytime, 16:38–16:56 UTC)
+
+Recordings (not in git): `~/VibeSDR-test-audio/aviation/2026-11-16/`, each with `.log` (the session) and `.decoded.txt`
+(every block / frame / message our decoder printed — the text kept this time, as RESUME step 3 asked).
+
+- **ACARS** — Pi 500 V4L via the front door's `/r/00000004/` (the radio ports listen on 127.0.0.1 only now), listeners 0
+  checked by `iqrec.mjs` before and every 5 s during; 131.675 MHz, 2.4 MS/s, 476 s, 0 drops, the dial put back.
+  **91 blocks** (131.725: 51, 131.825: 28, 131.525: 12, 131.550: 0), 8 repaired, 8 synced bursts not decoded; 0.5 % of an
+  M5 core. Labels seen: `_` (link test), H1, H2, B0/BA/B1/B2, 14, 15, 16, 18.
+- **VDL2** — same radio, 136.8625 MHz, 480 s, 0 drops. **1028 frames, 233 of them ACARS, 78 aircraft** (136.825: 626,
+  136.975: 170, 136.850: 127, 136.875: 44, 136.900: 43, 136.775: 18). Through the service and the applications
+  (`test-avi-service --cu8 … 136862500`, `.service.json.txt`): **1 ADS-C position** (G-ZBLB 52.475 N 1.255 W, 21 980 ft,
+  ":53:10" — plausible over the Midlands), **5 OOOI**, 7 CPDLC (named), **70 unparsed**, 0 FMS / label 16 positions.
+- **HFDL** — UberSDR RX888 (read-only, its own channel), two 600 s windows at once, frequencies from 75 s of its feed (11184,
+  15025, 17928, 8942 were busy). **11245 kHz window: 23 of 96** reference messages; **15000 kHz: 23 of 127**; plus 39 / 57
+  messages the reference feed does not list (ground uplinks — logon confirms, logoffs, squitter-carried ACARS). The misses
+  are mostly 300 bit/s aircraft downlinks. **The detection-hold change (11e8bff4f) is confirmed harmless on real signals:**
+  the decoder from before it (689452b00's `vibe_hfdl.h`) gives exactly the same 23 / 96 and 23 / 127. HFDL's real-signal
+  catch rate is the biggest gap left (23/42 and 12/16 on the 2026-10-31 night windows; a quarter or less today).
+- **Real samples for the layouts left out** (no layout added — the rule: published + checkable first):
+  - **label 20** `POSN51524W001012,,165521,199,VELAG` (3C5821, DAFAA) — the open question (decimal 51.524 / −1.012 or
+    51° 52.4′ / 1° 01.2′): an ADS-B recording at the same time would settle it.
+  - **label 16** `POSGI4235/161641,ALT 3448,ETA ,FOB 259,N 52.714 W  1.053,WS …` — a different label-16 layout from the one we
+    read; **label 15** `FST01EGLLKATLN535028W0030313340 …` (an FST flight-status report).
+
 ## Decision: its own mode AND the ADS-B aircraft
 
 - **ACARS and VDL2 need the radio at 131.x / 136.x MHz; ADS-B needs 1090.** One RTL cannot do both, and ACARS
@@ -300,7 +397,15 @@ test-server-ais-aprs 36/0 and test-server-decoder-reach 35/0 unchanged. **Nothin
 
 ## RESUME HERE
 
-Done: steps 1–5 below (see "Wired") and the ACARS applications (§Applications, 2026-11-16: commits 439b7a91f, d246cc9e8,
+**2026-11-16, branch `v12-avmap` (from `v12-experimental` 8e28d5250), not merged, not pushed:** the shared aircraft table
+(§The shared table), the AVIATION MAP (§The aviation map), and the on-air run (§On air 2026-11-16) — step 1's recordings
+are done; step 2 (the ADS-B card's datalink line) is superseded by the shared table + the map. Owed: an app device run of
+the map (tsc clean); an app ADS-B entry to the map (the web has AVIATION MAP in ADS-B's bar; the app's ADS-B map has none);
+an AVIATION MAP for a VibeServer's HFDL in the app (its HFDL map still reads `/addon/hfdl/*` of its own radio); the
+directory's copy of `vibemap-style.json` (`sync-mapgl-assets.mjs` full run) before the next directory deploy; HFDL's
+catch rate on real signals (above); the label 20 / 16 / 15 layouts on the samples above (a decision).
+
+Done before: steps 1–5 below (see "Wired") and the ACARS applications (§Applications, 2026-11-16: commits 439b7a91f, d246cc9e8,
 05bcb9f0f on `v12-acars-apps`, not merged). Tests: test-acars-apps 61/0, test-avi-service 7/0, test-acars 10034/0,
 test-vdl2 42/0, test-hfdl 44/0, test_aviation_app 21/0, test-server-avdata 35/0, test-web-avdata 21/0 (headless Edge
 `--mute-audio`, 3 aircraft on the map). **Nothing run on air.** Left, in order:
@@ -327,6 +432,14 @@ test-vdl2 42/0, test-hfdl 44/0, test_aviation_app 21/0, test-server-avdata 35/0,
 7. Optional: a real Pi 2 bench run (bench binaries only, 0 listeners, never :48000) — the benchmark rows now exist.
 
 ### Decisions for Stuart
+- **The shared table (2026-11-16)**: it lives in the runtime dir (tmpfs) and is gone at a reboot — live, not kept. Keep it
+  that way, or also keep the aircraft in the gallery like the ship store? It holds an hour; ADS-B-only aircraft too.
+- **Flight-ID joins**: an aircraft is joined by flight ID only when neither side has an address or registration that
+  disagrees; ADS-B callsigns (ICAO "EZY45KL") and ACARS flight IDs (IATA "U22468") rarely match, so the address and the
+  registration do nearly all the joining. An IATA↔ICAO airline table would join more (ours to build from the airline
+  data the ADS-B database already holds).
+- **AIRPORTS** switches the basemap's airfields and runways; a separate airport LAYER (names, ICAO codes, cards from the
+  ADS-B database's airports) was not built.
 - **ACARS applications**: (a) linking libacars (MIT) instead of / beside our parser — it decodes far more (CPDLC, MIAM,
   media advisory); we did not link it. (b) Origin / destination airports from OOOI and FMS reports are shown by default
   as flight data — or behind the opt-in? (c) Label 20 and other airline layouts wait for a real capture.
