@@ -105,6 +105,11 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   await sleep(1500);
   const after = await ev(`document.getElementById('mFreq')?.textContent`);
   ok(/96\.100/.test(after || ''), `the dial is back: ${after}`);
+  // ★★ HFDL: a listener's decoder on the dial — offered where vibeserver.json says "hfdl": true (an RTL reaches HF here)
+  ok(await ev(`(() => { const b = document.querySelector('#decodersPanel [data-dec="hfdl"]'); return !!b && !b.hidden; })()`), 'the DECODERS panel offers HFDL');
+  await ev(`document.querySelector('#decodersPanel [data-dec="hfdl"]').click()`);
+  ok(await until(`document.getElementById('decTitle')?.textContent === 'HFDL'`, 4000), `the box is HFDL (${await ev(`document.getElementById('decTitle')?.textContent`)})`);
+  ok(/listening for HFDL/.test(await ev(`document.getElementById('decStatus')?.textContent`) || ''), `its status: ${await ev(`document.getElementById('decStatus')?.textContent`)}`);
 });
 console.log(`${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

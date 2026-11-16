@@ -44,7 +44,7 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
 import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avCard, avIcon, avItems, avRanges, avRows, avStatus } from './avdata';   // ★ V12 the aircraft datalink
-import { parseAvBands, type AvBand, type AvReport } from '../../../src/services/aviation';
+import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -871,6 +871,7 @@ async function loadAudioPolicy(httpBase: string) {
   sitoraCap = false;           // ★ …nor SITOR-A
   sameCap = false;             // ★ …nor EAS / SAME
   selcalCap = false;           // ★ …nor SELCAL
+  hfdlCap = false;             // ★ …nor HFDL
   tmCaps = {};                 // ★ …nor the MFSK keyboard modes
   hellCap = false;             // ★ …nor FELD HELL
   jttyCap = false;             // ★ …nor JTTY
@@ -957,6 +958,9 @@ async function loadAudioPolicy(httpBase: string) {
     { const b = document.querySelector('#decodersPanel [data-dec="same"]') as HTMLElement | null;
       if (b) b.hidden = !sameCap || blockedModes.has('same'); }
     selcalCap = j.selcal === true || !!decWhy.selcal;   // ★ SELCAL (V12): the aeronautical selective call, decoded by this server
+    hfdlCap = j.hfdl === true || !!decWhy.hfdl;   // ★ HFDL (V12): aircraft on HF, decoded on the listener's USB dial
+    { const b = document.querySelector('#decodersPanel [data-dec="hfdl"]') as HTMLElement | null;
+      if (b) b.hidden = !hfdlCap || blockedModes.has('hfdl'); }
     { const b = document.querySelector('#decodersPanel [data-dec="selcal"]') as HTMLElement | null;
       if (b) b.hidden = !selcalCap || blockedModes.has('selcal'); }
     for (const fam of TEXT_FAMILIES) {   // ★ MFSK / OLIVIA / THOR (V12): a family where the server lists it, with its choices
@@ -2166,7 +2170,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -12878,7 +12882,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'hfdl' | null = null;
 /* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
  *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
  *  first, coloured by confidence) over the SPOTS; the settings hold the announced calling frequencies. Offered only where
@@ -12927,6 +12931,7 @@ let sitoraCap = false;
  *  (src/services/alertDecoders.ts — the app's words). Offered only where vibeserver.json says "same" / "selcal": true. */
 let sameCap = false;
 let selcalCap = false;
+let hfdlCap = false;   // ★ V12 HFDL on the dial (vibe_hfdl_run.h) — the web has no HFDL map: the box's lines are the view
 /* ★★ MFSK / OLIVIA / THOR (V12, 2026-10-31) — the MFSK keyboard modes, decoded on the server (decoders/textmodes.h): the
  *  text box; the status line names what AUTO locked ("OLIVIA 8/250 · 1500 Hz"); one MODE row (tmSettings) holds the
  *  family's choices — the server's own list, AUTO first. Offered only where vibeserver.json says "<family>": true. */
@@ -13716,6 +13721,10 @@ function initDecoders(host: string, auth: AuthState) {
       decStateText = textModeStatusText(activeDec, tmMode[activeDec], st, tmCaps[activeDec] ?? []);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
+    onHfdlStatus: (d) => {   // ★ V12 HFDL: the messages and bursts heard on this dial
+      if (activeDec !== 'hfdl') return;
+      decStateText = hfdlStatusText(d); $('decStatus').textContent = decStateText;
+    },
     onSitorStatus: (d) => {
       if (activeDec !== 'sitora') return;
       const st = parseSitorStatus(d);
@@ -13837,7 +13846,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'hfdl';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12 out of this radio's reach: the press says why and starts nothing (decWhyPaint draws the key greyed)
       if (decWhy[mode]) { showPill(`${(b.textContent || mode).trim()} unavailable \u2014 ${decWhy[mode]}`, 8000); return; }
@@ -14459,7 +14468,7 @@ function anyDecoderLeft(): boolean {
   // ★ V12: CW and APRS count only where this server has them (vibeserver.json "cw", "aprs") — hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
-    || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal'))
+    || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal')) || (hfdlCap && !blockedModes.has('hfdl'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
     || (jttyCap && !blockedModes.has('jtty'));
 }
@@ -14505,7 +14514,7 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
  *  title and label (hover, focus, a screen reader), and a press shows the reason (touch, pad, keyboard) — never hidden,
  *  never live. An owner's block still hides it (it is false with no reason). */
 let decWhy: Record<string, string> = {};
-const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty'];
+const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'hfdl'];
 function parseDecWhy(j: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!j || typeof j !== 'object') return out;
@@ -14613,6 +14622,7 @@ function showDecBox(what: string) {
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
   else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
+  else if (what === 'hfdl') { decStateText = hfdlStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HFDL_HINT; }
   else if (what === 'hell') { hellPager.reset(); decStateText = hellStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HELL_HINT; }
   else if (isTextFamily(what)) { decStateText = textModeStatusText(what, tmMode[what], null, tmCaps[what] ?? []); $('decStatus').textContent = decStateText; $('decStatus').title = TEXT_FAMILY_HINT[what]; }
   else $('decStatus').title = '';
