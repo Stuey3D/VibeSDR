@@ -417,6 +417,10 @@ inline void dabPaneStations(App& a, Ctx& c, const RadioState& s, Rect view, floa
             if (tiles) { const float t = rr.h - 8; dabLogoTile(c, {x, rr.y + 4, t, t}, sv["label"].str(), sv["sid"].num(0)); x += t + 8; }
             std::string cod = sv["codec"].str();
             if (sv["kbps"].num(0) > 0) cod += " " + std::to_string((int)sv["kbps"].num(0)) + "k";
+            // ★★ V12 OWN STATION: ">2" = playing on this radio for two listeners (the server's `playing`) — ASCII, short,
+            //    inside the row's 40 characters; absent on an older server
+            for (const auto& p : (*rep)["playing"].a)
+                if (p["sid"].num(0) == sv["sid"].num(0) && p["n"].num(0) > 0) { cod = ">" + std::to_string((int)p["n"].num(0)) + " " + cod; break; }
             const float cw = (float)c.tc.width(c.f.small, cod);
             c.tc.draw(c.g, c.f.small, cod, rr.r() - 10, rr.cy() - c.f.small.lineHeight() / 2.f, on ? th::activeTx : th::dim, 2);
             if (on) { c.g.triangle(x, rr.cy() - 6, x, rr.cy() + 6, x + 9, rr.cy(), th::activeTx); x += 14; }

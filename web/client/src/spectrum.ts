@@ -400,6 +400,11 @@ export interface AdsbReport {
 /** What the server reports about a DAB multiplex. Every field is MEASURED — see briefs/BRIEF-dab.md;
  *  nothing here is inferred, which is the standard the Advanced RDS panel already sets. */
 export interface DabState {
+  /** ★★ V12 OWN STATION (docs/v12/DAB-OWN-STATION.md): a pick is this listener's own (`own.on`); every service playing on
+   *  this radio and its listener count; the service THIS listener hears. Absent on an older server. */
+  own?: { on: boolean; n: number; limit: number };
+  playing?: { sid: number; n: number }[];
+  mine?: number;
   channel: string; centreHz: number; label: string; eid: number;
   locked: boolean; nullDepthDb: number; offsetHz: number; offsetPpm: number;
   carrierShift: number; prs: number;
