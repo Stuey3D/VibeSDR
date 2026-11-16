@@ -88,6 +88,7 @@ struct State {
     // the speaker
     int vol = 80;                  // main.ts:9806 — pref `volume` × 100, else 80
     bool mute = false;             // not persisted (as the web)
+    bool pagingSilent = false;     // ★ V12 PAGE runs: the ENGINE plays silence (dec_state.h decTick) — `mute` is left alone
     bool wasConnected = false;
     int sentTap = -1;
     // the recorder
@@ -333,7 +334,7 @@ inline void audioTick(App& a, const RadioState& s) {
         S.nfmResentAt = nowSec();
     }
     if (S.rec.recording()) a.num_["audio.recSec"] = S.rec.seconds();   // ★ for the deck's status line (#mRecTime)
-    a.num_["audio.mute"] = S.mute ? 1 : 0;   // ★ for the deck's speaker key (#mAudio's muted glyph follows THIS mute)
+    a.num_["audio.mute"] = S.mute || S.pagingSilent ? 1 : 0;   // ★ for the deck's speaker key (#mAudio's muted glyph follows THIS mute — and PAGE's silence)
     a.num_["audio.vol"] = S.vol;
     // what the workers handed back
     {
@@ -584,9 +585,13 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
         rowLabel(c, "VOLUME", x0, y + 24);
         const float vx = x0 + (float)c.tc.width(c.f.bodyB, "VOLUME") + 16;
         const Rect mk{vx, y + 2, 44, 44};
-        BtnStyle ms; ms.on = S.mute; ms.radius = 8;
-        if (button(c, "a.mute", mk, "", ms)) { S.mute = !S.mute; sendLevel(*this); }
-        speakerGlyph(c, mk.cx() - 2, mk.cy(), S.mute ? th::red : th::btnText, S.mute);
+        BtnStyle ms; ms.on = S.mute || S.pagingSilent; ms.radius = 8;
+        // ★★ V12 PAGE: the speaker is silent while it runs (the engine's) — the key says so rather than pretend to unmute
+        if (button(c, "a.mute", mk, "", ms)) {
+            if (S.pagingSilent) toast("The speaker is muted while PAGE runs \u2014 it comes back as it was when PAGE stops");
+            else { S.mute = !S.mute; sendLevel(*this); }
+        }
+        speakerGlyph(c, mk.cx() - 2, mk.cy(), S.mute || S.pagingSilent ? th::red : th::btnText, S.mute || S.pagingSilent);
         double v = S.vol;
         const float sx = mk.r() + 18, sw = xr - 56 - sx;
         navRow({{"a.mute", mk.cx()}, {"a.vol", sx + sw / 2}});

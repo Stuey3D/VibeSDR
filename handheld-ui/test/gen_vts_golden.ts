@@ -19,6 +19,7 @@
  *   FS hz sb | side lo hi                       freedvSidebandAt(hz) + freedvPassband(sb)
  *   MV json | ok vts info line                  parseM17 + m17Vts / m17Info / m17Line (src/services/m17.ts)
  *   MO json | 0/1                               m17Offered
+ *   PS json | ok text                           parsePagingStatus + pagingStatusText (src/services/paging.ts; V12 PAGE)
  * Run: node --no-warnings --import ./ts_resolve.mjs --import ./ts_transform.mjs gen_vts_golden.ts <outFile>
  */
 import { writeFileSync } from 'node:fs';
@@ -31,6 +32,7 @@ import { getBandsAtRegion, type Band } from '../../src/constants/bandPlan.ts';
 import { fmtBandFreq } from '../../src/services/stations.ts';
 import { parseFreeDv, freedvVts, freedvOffered, freedvSidebandAt, freedvPassband } from '../../src/services/freedv.ts';
 import { parseM17, m17Vts, m17Info, m17Line, m17Offered } from '../../src/services/m17.ts';
+import { parsePagingStatus, pagingStatusText } from '../../src/services/paging.ts';
 
 const outFile = process.argv[2] ?? 'vts_golden.txt';
 const L: string[] = [];
@@ -208,6 +210,27 @@ for (const m of M17C) {
   L.push(`MV ${hex(JSON.stringify(m))} | ` + (st ? `1 ${hex(m17Vts(st))} ${hex(m17Info(st))} ${hex(m17Line(st))}` : `0 ${hex(m17Vts(null))}`));
 }
 for (const j of [{ modes: ['nfm', 'm17'] }, { modes: ['nfm', 'freedv'] }, {}, { modes: 'm17' }]) L.push(`MO ${hex(JSON.stringify(j))} | ${m17Offered(j as never) ? 1 : 0}`);
+
+// ── V12 PAGE (paging.ts → handheld-ui/src/paging.h) ──
+const PSC: unknown[] = [
+  { mode: 'auto', detected: '', pages: 0, rate: 31250, short: false },
+  { mode: 'auto', detected: 'FLEX 3200/4', pages: 1, rate: 31250, short: false },
+  { mode: 'auto', detected: 'POCSAG 1200', pages: 3, rate: 20000, short: true },
+  { mode: 'pocsag1200', detected: '', pages: 0, rate: 20000, short: true },
+  { mode: 'flex', detected: '', pages: 12, rate: 48000 },
+  { detected: 'X'.repeat(40), pages: 2 },
+  { mode: 7, detected: 5, pages: 'many', rate: null, short: 'yes' },
+  { mode: 'auto', detected: 'FLEX 6400/4 \u00b7 \u{1F600}\u{1F600}', pages: 2.5 },
+  { mode: 'auto', detected: '\u{1F600}'.repeat(20), pages: -1 },
+  {},
+  null,
+  'paging',
+  [],
+];
+for (const d of PSC) {
+  const st = parsePagingStatus(d);
+  L.push(`PS ${hex(JSON.stringify(d))} | ` + (st ? `1 ${hex(pagingStatusText(st))}` : `0 ${hex(pagingStatusText(null))}`));
+}
 
 writeFileSync(outFile, L.join('\n') + '\n');
 console.error(`vts golden: ${L.length} lines → ${outFile}`);

@@ -12,12 +12,15 @@
 #                     ENTER or BACK finishes (BACK consumed, the box not released); DOWN off it or closing ADJ ends it
 #   tuned_label_render_test  V12 the tuned station's label (drawOverlays, read back): beside the needle at the waterfall's
 #                     top once the dial rests, flipped left at the right edge, nothing while it moves or on nothing
+#   paging_box_test   V12 PAGE: offered only where the engine says, the speaker glyph / VTS line while it runs with the
+#                     person's own mute untouched (from on, from muted, from APRS), the page list (parse, newest first,
+#                     bounded, ENTER reads one whole), nothing written to disk
 #   handheld-ui/test/run_offscreen_tests.sh [test …]   (default: all)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 IMG=${IMG:-vibe-hh-map:trixie}
-TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test wefax_adj_test tuned_label_render_test}
+TESTS=${*:-cw_log_test slider_hold_test wide_vfo_render_test ism_bands_test wefax_adj_test tuned_label_render_test paging_box_test}
 docker run --rm --platform linux/arm64 -v "$REPO/handheld-ui:/w:ro" -v "$REPO/assets/fonts:/fonts:ro" "$IMG" sh -c "
   set -e; cd /w; T=\$(mktemp -d)
   for t in $TESTS; do

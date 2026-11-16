@@ -26,6 +26,7 @@
 //   signals for.
 #pragma once
 #include "hw_state.h"
+#include "paging.h"   // ★ V12 PAGE (POCSAG / FLEX) — the R36S's own radio only; a list in memory, nothing kept
 #include "ws.h"
 
 #include <cstdint>
@@ -45,7 +46,7 @@ namespace hh {
 
 /** What a decoder's box draws. TEXT = a scrolling log; KB = CW/PSK (the one signal's text, the signals, the calls
  *  heard); JTTY / DSC / APRS / SPOTS = their own rows. PICTURE and MAP are the later passes' (not offered yet). */
-enum DecKind { DK_TEXT, DK_KB, DK_JTTY, DK_DSC, DK_APRS, DK_SPOTS, DK_PICTURE, DK_MAP };
+enum DecKind { DK_TEXT, DK_KB, DK_JTTY, DK_DSC, DK_APRS, DK_SPOTS, DK_PICTURE, DK_MAP, DK_PAGING };
 struct DecDef {
     const char* id;       // the web's data-dec ("spots" = DIGITAL SPOTS: SINGLE MODE)
     const char* label;    // the key's legend
@@ -69,6 +70,9 @@ inline const DecDef kDecs[] = {
     {"mfsk",   "MFSK",    DK_TEXT, "mfsk",   false, true,  "MFSK16/32, OLIVIA, CONTESTIA and THOR: tune USB so the whole signal sits in your passband — for OLIVIA, 1.5 kHz below the published centre. AUTO tries the common sub-modes of all four side by side and names the one it finds; if it cannot lock, pick the family and then the sub-mode below."},
     {"time",   "TIME",    DK_TEXT, "",       false, true,  ""},
     {"spots",  "DIGITAL SPOTS", DK_SPOTS, "", false, true, "The digital modes at your dial (FT8 and FT4 on your passband), decoded on the server. Press a spot to tune to it."},
+    // ★★★ V12 PAGE (POCSAG / FLEX, AUTO — paging.h): offered ONLY by the handheld's own radio process for a radio plugged into
+    //     it (vibeserver.json `paging`, vibe_paging_gate.h). A list of pages in memory; the speaker is silent while it runs.
+    {"paging", "PAGE", DK_PAGING, "paging", false, true, kPagingHint},
     // ★ the later passes (in the table so they plug in; never offered until they are built)
     {"wefax", "WEFAX", DK_PICTURE, "", false, true, "Weather charts by radio fax, drawn line by line. Tune USB 1.9 kHz below the station's published frequency — Northwood 4608.1, DWD 7878.1 kHz; 120 LPM for nearly every station. The margin and slant are found on each chart by itself; ADJ in the box sets them by hand. Each finished chart is kept in the GALLERY."},
     {"sstv", "SSTV", DK_PICTURE, "", false, true, "Slow-scan TV pictures — 14.230 MHz USB on 20 m (7.171 MHz LSB on 40 m; 145.800 MHz FM from the ISS). The mode is found by itself; each finished picture is kept in the GALLERY."},
@@ -88,7 +92,9 @@ inline const std::vector<DecPlace>& decPlaces(int band) {
         {"AVIATION", {"selcal"}}, {"MARITIME", {"navtex", "dsc", "sitora", "wefax"}},
         {"AMATEUR", {"spots", "cw", "psk", "rtty", "jtty", "mfsk", "hell", "sstv", "aprs"}}, {"UTILITY", {"time"}}};
     static const std::vector<DecPlace> vhf = {
-        {"AVIATION", {"selcal"}}, {"MARITIME", {"dsc"}}, {"AMATEUR", {"aprs", "spots", "cw", "sstv"}}, {"BROADCAST", {"same"}}};
+        {"AVIATION", {"selcal"}}, {"MARITIME", {"dsc"}}, {"AMATEUR", {"aprs", "spots", "cw", "sstv"}},
+        {"PAGING", {"paging"}},   // ★ V12 (decoderBands.ts 'paging', VHF and UHF) — drawn only where the engine offers it
+        {"BROADCAST", {"same"}}};
     return band == 0 ? hf : vhf;
 }
 
@@ -427,6 +433,10 @@ struct DecUi {
     bool pskSkim = false; int pskWidth = 12000;
     int aprsBaud = 1200;
     std::string mfskMode = "auto";
+    std::string pagingMode = "auto";  // ★ V12 PAGE: AUTO, or a pagingModes id ("pocsag1200", "flex" …) — this session only
+    std::deque<PageRow> pages;        // ★ V12 PAGE: newest first, ≤ kPagingMax, in memory ONLY (never a file, never a log)
+    PagingStatus pagingSt; bool pagingHave = false;
+    uint64_t pagingSeq = 0, pageRead = 0;   // ★ the last page's number; the page being read whole (0 = the list)
     double reattachAt = 0;           // a burst of option presses settles into one re-attach
     // the server's offer (GET /vibeserver.json, off the UI thread)
     std::mutex capMtx;
@@ -436,6 +446,7 @@ struct DecUi {
     bool skimOk = true;
     double aprsHz = 144.8e6;
     std::vector<DecGMode> mfskModes;
+    std::vector<DecGMode> pagingModes;   // ★ V12 PAGE: vibeserver.json pagingModes (AUTO first, then POCSAG …, FLEX …)
     std::vector<std::string> spotModes;
     // the socket
     std::shared_ptr<WsClient> ws;
@@ -602,6 +613,7 @@ inline bool decOffered(const RadioState& s, const DecDef& d) {
     if (u.why.count(d.id)) return true;
     auto it = u.caps.find(d.cap);
     if (std::string(d.id) == "mfsk") return it != u.caps.end() && it->second && !u.mfskModes.empty();
+    if (std::string(d.id) == "paging") return it != u.caps.end() && it->second && !u.pagingModes.empty();
     return it != u.caps.end() && it->second;
 }
 /** The server's reason a fixed-frequency decoder cannot run on this radio ("" = it can). */
@@ -645,7 +657,7 @@ inline void decFetchCaps(int port) {
         if (r.status != 200) return;
         const Json j = Json::parse(r.body);
         u.caps.clear(); u.why.clear();
-        for (const char* k : {"cw", "psk", "rttyskim", "aprs", "dsc", "sitora", "same", "selcal", "navtex", "mfsk", "jtty", "hell"}) {
+        for (const char* k : {"cw", "psk", "rttyskim", "aprs", "dsc", "sitora", "same", "selcal", "navtex", "mfsk", "jtty", "hell", "paging"}) {
             u.caps[k] = j[k].boolean();
             const std::string& w = j[std::string(k) + "Why"].str();
             if (j[k].kind == Json::Bool && !j[k].b && !w.empty()) u.why[k] = w.substr(0, 200);
@@ -656,6 +668,11 @@ inline void decFetchCaps(int port) {
         for (auto& m : j["mfskModes"].a) {
             DecGMode g{m["id"].str(), m["label"].str(), m["group"].str()};
             if (!g.id.empty() && g.id.size() <= 24 && !g.label.empty() && g.label.size() <= 24 && u.mfskModes.size() < 48) u.mfskModes.push_back(g);
+        }
+        u.pagingModes.clear();
+        for (auto& m : j["pagingModes"].a) {   // ★ autoModes.ts parseGroupedModes(v, 16)'s limits
+            DecGMode g{m["id"].str(), m["label"].str(), m["group"].str()};
+            if (!g.id.empty() && g.id.size() <= 24 && !g.label.empty() && g.label.size() <= 24 && g.group.size() <= 16 && u.pagingModes.size() < 16) u.pagingModes.push_back(g);
         }
         u.spotModes.clear();
         for (auto& m : j["spotModes"].a) if (!m.str().empty() && u.spotModes.size() < 12) u.spotModes.push_back(m.str().substr(0, 12));
@@ -705,6 +722,7 @@ inline std::string decAttachJson(const RadioState& s, const std::string& id) {
         else j += ",\"band\":\"hf\",\"center_frequency\":" + std::to_string(decDscCentre(s.vfoHz, m));
     } else if (id == "sitora") j += ",\"center_frequency\":1000";
     else if (id == "mfsk") j += ",\"mode\":" + jsonQuote(u.mfskMode);
+    else if (id == "paging") j += ",\"mode\":" + jsonQuote(u.pagingMode);
     else if (decIsPicture(id)) j += decPicParams(id);
     return j + "}";
 }
@@ -716,6 +734,7 @@ inline std::string decIdleStatus(const std::string& id) {
     const DecUi& u = decUi();
     if (id == "mfsk") return u.mfskMode == "auto" ? "listening — AUTO (MFSK, OLIVIA, CONTESTIA or THOR, from the signal)" : "listening — " + u.mfskMode;
     if (id == "same") return "listening for alert headers";
+    if (id == "paging") { PagingStatus p; p.mode = u.pagingMode; return pagingStatusText(&p); }
     if (id == "selcal") return "listening for SELCAL";
     if (id == "sitora") return "NO SIGNAL";
     return "listening…";
@@ -756,6 +775,7 @@ inline void decStart(App& a, const RadioState& s, const std::string& id) {
     // ★ the first sub-pane: TEXT in ONE SIGNAL, SIGNALS in the skimmer (it was 1 — CALLS — once the skimmer has no TEXT)
     u.view = id; u.sub = 0;
     u.sigHist.clear(); decReadSig(0);
+    u.pages.clear(); u.pageRead = 0; u.pagingHave = false; u.pagingSt = PagingStatus{};
     u.log.clear(); u.sitor = Json(); u.sigs.clear(); u.calls.clear(); u.dsc.clear(); u.aprs.clear(); u.aprsLog.clear();
     u.status = decIdleStatus(id); u.tuneHint.clear(); u.live = false;
     u.navtexHz = s.vfoHz;
@@ -814,6 +834,18 @@ inline void decOnText(App& a, const RadioState& s, const std::string& t) {
         u.navtexHz = s.vfoHz;
     }
     if (u.active == "dsc" || u.active == "jtty") return;   // ★ their rows are drawn from the JSON; the line is the same text
+    if (u.active == "paging") {
+        // ★★ V12 PAGE: one row per line, kept in this list only (paging.h) — never logged, never written anywhere
+        size_t at = 0;
+        while (at < t.size()) {
+            size_t e = t.find('\n', at);
+            if (e == std::string::npos) e = t.size();
+            if (e > at) { PageRow r = pagingParseLine(t.substr(at, e - at), (double)std::time(nullptr)); r.id = ++u.pagingSeq; pagingPush(u.pages, std::move(r)); }
+            at = e + 1;
+        }
+        u.live = true; u.liveAt = nowSec();
+        return;
+    }
     u.log.push(t, u.active == "time");
     u.live = true; u.liveAt = nowSec();
     (void)a;
@@ -843,6 +875,7 @@ inline void decOnState(const RadioState& s, int st) {
     const std::string& m = u.active;
     if (m == "sitora") { u.status = decSitorText(u.sitor, st); u.live = st >= 2 && st <= 6; return; }
     if (m == "mfsk") { if (!st) u.status = decIdleStatus("mfsk"); u.live = st != 0; return; }
+    if (m == "paging") { u.live = st != 0; return; }   // ★ the words are paging_status's
     if (m == "same") { u.status = st ? "reading an alert header…" : "listening for alert headers"; u.live = st != 0; return; }
     if (m == "selcal") { u.status = st ? "tones…" : "listening for SELCAL"; u.live = st != 0; return; }
     if (m == "dsc") u.status = st ? "receiving a call…" : "listening…";
@@ -1042,6 +1075,12 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
         else u.status = decIdleStatus("mfsk");
         return;
     }
+    if (type == "paging_status" && d.kind == Json::Obj) {
+        if (u.active != "paging") return;
+        PagingStatus p;
+        if (parsePagingStatus(d, p)) { u.pagingSt = p; u.pagingHave = true; u.status = pagingStatusText(&p); }
+        return;
+    }
     if (type == "sitora_status" && d.kind == Json::Obj) {
         if (u.active != "sitora") return;
         u.sitor = d;
@@ -1105,6 +1144,19 @@ inline void decTick(App& a, const RadioState& s) {
             }
             std::fprintf(stderr, "vibe-hhui: speaker %s (APRS %s)\n", A.mute ? "muted" : "on", aprs ? "open" : "closed");
         }
+    }
+    // ★★★ PAGE IS SILENT (Stuart, 2026-11-16: "when it is in use the audio needs to be muted"). The ENGINE plays silence
+    //     while its paging receiver runs (pagingSpeakerLevel) and the person's own mute and level are NOT touched here —
+    //     so they are exactly as they were when PAGE ends, however it ends (a crash closes the decoder socket and the
+    //     receiver stops with it). This only tells the deck's glyph, the AUDIO sheet and the VTS bar.
+    {
+        const bool paging = u.active == "paging";
+        aud::State& A = aud::st();
+        if (paging != A.pagingSilent) {
+            A.pagingSilent = paging;
+            std::fprintf(stderr, "vibe-hhui: speaker %s (PAGE %s)\n", paging ? "silent" : "back as it was", paging ? "open" : "closed");
+        }
+        pagingVtsLine() = paging ? pagingVts(u.pagingHave ? &u.pagingSt : nullptr) : std::string();
     }
     // ★ tests: VIBE_HHUI_DEC_START=time,spots starts those once the session runs and the offer is in (the screenshots)
     {
@@ -1287,6 +1339,24 @@ inline void decCannedTick(App& a, const RadioState& s) {
         if (k == 2) decOnJson(a, s, "{\"type\":\"sitora_status\",\"data\":{\"link\":4,\"iss\":0,\"master\":0,\"ids\":[\"PEARDBY\",\"\"],\"numbers\":[\"364775427\",\"\"],\"blocks\":120,\"repeats\":12,\"lost\":2,\"idChecked\":true}}");
         static const std::string txt = "[1 · PEARDBY] GA+? QRU? MSG FOR MASTER: ETA ROTTERDAM 0600 UTC 08 NOV. CARGO DOCS FOLLOW. ";
         decOnBinary(a, s, decTextFrame(txt.substr((size_t)(k * 5) % txt.size(), 5)));
+    } else if (m == "paging") {
+        // ★ V12 PAGE: made-up pages only (synthetic — no real paging traffic is used anywhere)
+        if (k == 1) decOnJson(a, s, "{\"type\":\"paging_status\",\"data\":{\"mode\":\"auto\",\"detected\":\"\",\"pages\":0,\"rate\":31250,\"short\":false}}");
+        if (k == 3) { decOnBinary(a, s, std::string("\x03\x01", 2)); decOnJson(a, s, "{\"type\":\"paging_status\",\"data\":{\"mode\":\"auto\",\"detected\":\"FLEX 3200/4\",\"pages\":0,\"rate\":31250,\"short\":false}}"); }
+        static const char* lines[] = {
+            "[FLEX 3200/4 \xc2\xb7 0123456 \xc2\xb7 A] TEST PAGE ONE FROM THE VIBESDR CANNED FEED\n",
+            "[FLEX 3200/4 \xc2\xb7 0234567 \xc2\xb7 C] 12:40 MEETING MOVED TO ROOM 4, BRING THE SPARE AERIAL AND THE LONG COAX PLEASE\n",
+            "[POCSAG 1200 \xc2\xb7 1234567 \xc2\xb7 F3] SYNTHETIC ALPHA PAGE\n",
+            "[POCSAG 512 \xc2\xb7 0007000 \xc2\xb7 F0] 0123-456 789\n",
+            "[POCSAG 2400 \xc2\xb7 1600000 \xc2\xb7 F1] (tone only)\n",
+            "[FLEX 6400/4 \xc2\xb7 0345678 \xc2\xb7 B] A LONG MESSAGE THAT LOST ITS LOCK HALF WAY (cut short)\n"};
+        if (k >= 4 && k % 3 == 1 && (k - 4) / 3 < 6) {
+            const int i = (k - 4) / 3;
+            decOnBinary(a, s, decTextFrame(lines[i]));
+            char j[200]; std::snprintf(j, sizeof j, "{\"type\":\"paging_status\",\"data\":{\"mode\":\"auto\",\"detected\":\"%s\",\"pages\":%d,\"rate\":31250,\"short\":false}}",
+                                       i < 2 ? "FLEX 3200/4" : i == 2 ? "POCSAG 1200" : i == 3 ? "POCSAG 512" : i == 4 ? "POCSAG 2400" : "FLEX 6400/4", i + 1);
+            decOnJson(a, s, j);
+        }
     } else if (decIsPicture(m)) {
         decPicCanned(a, s, k);
     } else if (m == "same" || m == "selcal" || m == "mfsk") {
