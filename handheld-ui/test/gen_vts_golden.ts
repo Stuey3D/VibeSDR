@@ -16,7 +16,7 @@
  *   C max s | out   ·   D max s | out           cleanKeepSpacing / dabSafeText
  *   FV json | ok sub sb sync mode snr text vts  parseFreeDv + freedvVts (src/services/freedv.ts; snr '-' = none)
  *   FO json | subs                              freedvOffered (subs comma-joined, '-' = not offered)
- *   FS hz sb | side lo hi                       freedvSidebandAt(hz) + freedvPassband(sb)
+ *   FS hz sb sel | side lo hi                   freedvSidebandAt(hz, sel) + freedvPassband(sb)
  *   MV json | ok vts info line                  parseM17 + m17Vts / m17Info / m17Line (src/services/m17.ts)
  *   MO json | 0/1                               m17Offered
  * Run: node --no-warnings --import ./ts_resolve.mjs --import ./ts_transform.mjs gen_vts_golden.ts <outFile>
@@ -156,13 +156,18 @@ const FDV: unknown[] = [
   { type: 'freedv', sub: 'nonsense', sb: 'xsb', state: 'sync', mode: '700E', snr: '7', text: 42 },
   { type: 'freedv', state: 'sync', mode: '700D', text: '   ' },
   { type: 'freedv' },
+  { type: 'freedv', sub: 'auto', sb: 'usb', sbSel: 'usb', state: 'search' },
+  { type: 'freedv', sub: '700E', sb: 'lsb', sbSel: 'lsb', state: 'search' },
+  { type: 'freedv', sub: 'auto', sb: 'lsb', sbSel: 'auto', state: 'search' },
+  { type: 'freedv', sub: '1600', sb: 'usb', sbSel: 'xsb', state: 'search' },
+  { type: 'freedv', sub: 'auto', sb: 'lsb', sbSel: 'lsb', state: 'sync', mode: '700D', snr: 4 },
   { type: 'drm', sub: 'auto' },
   { sub: 'auto' },
 ];
 for (const m of FDV) {
   const st = parseFreeDv(m);
   L.push(`FV ${hex(JSON.stringify(m))} | ` + (st
-    ? `1 ${st.sub} ${st.sb} ${st.sync ? 1 : 0} ${hex(st.mode)} ${st.snr === undefined ? '-' : st.snr} ${hex(st.text)} ${hex(freedvVts(st))}`
+    ? `1 ${st.sub} ${st.sb} ${st.sbSel} ${st.sync ? 1 : 0} ${hex(st.mode)} ${st.snr === undefined ? '-' : st.snr} ${hex(st.text)} ${hex(freedvVts(st))}`
     : `0 ${hex(freedvVts(null))}`));
 }
 const OFFERS: unknown[] = [
@@ -175,8 +180,9 @@ const OFFERS: unknown[] = [
   {},
 ];
 for (const j of OFFERS) L.push(`FO ${hex(JSON.stringify(j))} | ${freedvOffered(j as never).join(',') || '-'}`);
-for (const hz of [0, -5, 1, 3573000, 7177000, 9999999, 10000000, 14236000, 28330000])
-  for (const sb of ['usb', 'lsb'] as const) { const [lo, hi] = freedvPassband(sb); L.push(`FS ${hz} ${sb} | ${freedvSidebandAt(hz)} ${lo} ${hi}`); }
+for (const hz of [0, -5, 1, 3573000, 5249999, 5250000, 5368500, 5450000, 5450001, 7177000, 9999999, 10000000, 14236000, 28330000])
+  for (const sb of ['usb', 'lsb'] as const)
+    for (const sel of ['auto', 'usb', 'lsb'] as const) { const [lo, hi] = freedvPassband(sb); L.push(`FS ${hz} ${sb} ${sel} | ${freedvSidebandAt(hz, sel)} ${lo} ${hi}`); }
 
 // ── V12 M17 (m17.ts → handheld-ui/src/m17.h) ──
 const M17C: unknown[] = [

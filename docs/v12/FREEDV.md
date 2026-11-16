@@ -8,13 +8,14 @@ mode is silent until there is speech to play. The VTS line explains the silence:
 |---|---|
 | `FreeDV · searching` | AUTO, nothing decoded yet |
 | `FreeDV 1600 · searching` | a sub-mode chosen by hand, nothing decoded |
+| `FreeDV LSB · searching`, `FreeDV 700E USB · searching` | a sideband (and a sub-mode) chosen by hand, nothing decoded |
 | `FreeDV 700D · 6 dB · G4ABC` | in sync: the sub-mode on air, the modem's SNR, the station's text |
 
 The lines are kept short because the R36S screen is small.
 
 ## Sub-modes, AUTO and the manual fallback
 
-- **Sub-modes:** 700D, 700E and 1600. RADE is out of scope.
+- **Sub-modes:** 700D, 700E and 1600. RADE is not decoded — see "What is on air today" below: it is now nearly all of the traffic.
 - **AUTO:** runs all three demodulators while it searches.
   - **A win:** a demodulator must hold sync for one second **and** have decoded more frames that pass the FEC than fail
     it (`freedv_get_rx_status`). Ties go to the cleaner, then the stronger. The other two are then closed, which gives
@@ -45,9 +46,10 @@ The lines are kept short because the R36S screen is small.
 
 ## Sideband
 
-FreeDV keeps the SSB convention: LSB below 10 MHz, USB from 10 MHz up. This is from freedv.org, "What you need"; a
-community proposal to use USB everywhere has not been adopted. A modem signal on the wrong sideband is inverted and never
-syncs. So the server picks the sideband from the dial and reports it:
+FreeDV keeps the SSB convention: LSB below 10 MHz, USB from 10 MHz up **and on 60 m** (5.25–5.45 MHz). That is the
+FreeDV application's own rule (freedv-gui `isUsbFreq = f >= 10 MHz || is60MeterBand`) and freedv.org's getting-started
+page. A modem signal on the wrong sideband is inverted and never syncs. So the server picks the sideband from the dial and
+reports it:
 
 - **Per listener:** `clientRetune`, which runs on every tune.
 - **Shared demodulator:** `rxModeDial()`, which every `rx.setTune` call now uses.
@@ -56,8 +58,84 @@ syncs. So the server picks the sideband from the dial and reports it:
 
 Clients draw the passband on the side the report gives (`"sb"`). They never decide it themselves.
 
-⚠ **Decision for Stuart:** the rule is fixed at 10 MHz. 60 m (5 MHz) is reported to be USB by some operators. A manual
-sideband override is not built.
+### The sideband override (Stuart, 2026-11-16)
+
+**FREEDV SIDEBAND — AUTO / USB / LSB**, under the sub-mode keys (FREEDV MODE) on the web page, in the app's mode sheet
+and on the R36S. AUTO is the convention above; USB or LSB demodulates that side whatever the band, for a station or a net
+that does not follow it (and for FreeDV 3.0, which moves to USB everywhere — see "What is on air" below).
+
+- **Whose choice:** the same as the sub-mode's. On a range-locked radio it is the listener's own and is kept across
+  retunes (`ClientDsp::fdvSb`; a change re-runs `clientRetune`, so the channel flips side at once). On a one-pipeline
+  radio or a shared dial it is the room's (`fdvSharedSb`, read by `rxModeDial()` and `mainDcZone`), and asks before tuning
+  like the sub-mode does (`freedv_sub` is in the gated list).
+- **A new receiver** (the dial moved more than 50 Hz) is built with the choice already set, so its first report never
+  says AUTO for a listener who chose USB.
+- **The report** carries both: `"sbSel"` (what was chosen) and `"sb"` (what is demodulated). The keys are lit from
+  `sbSel`, never from the tap. An older server sends no `sbSel`; clients read that as AUTO.
+
+## What is on air today, and why Stuart has never decoded FreeDV off air (2026-11-16)
+
+**Short answer: almost everybody on FreeDV now transmits RADE, which we do not decode.** 700D, 700E and 1600 — the three
+modes this receiver runs — have become legacy modes that hardly anyone sends.
+
+**Evidence**
+
+- **FreeDV Reporter** (qso.freedv.org; it shows each station's mode). Two view-only snapshots on 2026-11-16:
+  - First: 67 stations connected. Transmit mode was RADEV1 for 58, RADEV2 for 6, analogue LSB for 1. **None were on 700D,
+    700E or 1600.**
+  - Second, at 16:55 UTC: 73 stations. RADEV1 62, RADEV2 7, LSB 2. Again none on 700D, 700E or 1600. Receive reports:
+    RADEV1 130, RADEV2 28.
+  - Busiest frequencies: 14.236 (19 stations), 7.177, 7.065, 7.160, 7.115, 3.603 (RADEV2), 7.197.
+  - Caveat: Reporter sees only software users who have reporting switched on. SM1000 and ezDV hardware users, who can
+    only run 700D, may not appear.
+- **The FreeDV application** (freedv-gui 2.4.x, its USER_MANUAL): RADEV1 is the default. 1600, 700D and 700E are
+  "legacy" modes, hidden unless "Enable Legacy Modes" is ticked; 700C is deprecated. freedv.org keeps 700D "for
+  compatibility with hardware such as EzDV and SM1000 which cannot run RADE".
+- **FreeDV 3.0** (in development, branch `v3.0-dev`, tag `v3.0.0-dev1`): the June 2026 developer update says it removes
+  700D/E and 1600 and moves the official convention to **USB on every band**. The sideband override above covers that
+  for RADE-era stations that still use the legacy modes.
+- No current net was found that runs 700D or 700E specifically. The UK nets listed on freedv.org (3.640 / 3.643 LSB,
+  5.3685 USB, Sunday 0900 and daily 1600 local) do not name a mode.
+
+**RADE, in facts** (for a later decision — not built in this task)
+
+| | |
+|---|---|
+| What it is | "Radio Autoencoder": a neural network maps speech features straight to OFDM symbols and back. Rowe and Valin, arXiv:2505.06671 |
+| Licence | **BSD-2-Clause** — the Python reference (github.com/drowe67/radae) and the C port (github.com/freedv/rade_c), which the README says to use for deployment |
+| Runtime | rade_c is pure C, no Python or PyTorch. It uses Opus's DNN `nnet` code and the **FARGAN** vocoder from Opus (BSD); its build fetches and builds Opus |
+| Weights | compiled in as C arrays: about 1 M weights each for encoder and decoder (paper), ~4–5 MB each as float32 (estimated from the generated sources' size); V2 adds larger ones and an ML sync network |
+| CPU | paper: 32 MMAC/s each for encoder and decoder, ~300 MMAC/s for FARGAN — "real time on a laptop CPU". On a Pi 2 this needs measuring before it is offered |
+| Waveform (V1) | OFDM, 8 kHz modem rate, 30 carriers at 50 baud (20 ms + 4 ms cyclic prefix), 120 ms frames with pilots; ~1.5 kHz (paper) or ~2.1 kHz 99 % bandwidth (README) |
+| V2 | 14 carriers, ~860 Hz, 40 ms frames, ML sync. The README says on-air use is not yet recommended and the waveform, weights and API may change — yet it is already on Reporter |
+| Specification | **none published** beyond the V1 paper and the reference code; a V2 paper is "planned" |
+
+**Off air, 2026-11-16 16:55–17:05 UTC** (Stuart's UberSDR, standing permission; ten minutes each, recorded at once with
+`tools/ubersdr-rec`, kept in `~/VibeSDR-test-audio/freedv/` with a README): 14.236 USB, 7.177 LSB, 7.160 LSB, 7.065 LSB,
+3.643 LSB and 5.3685 USB, while Reporter showed 69 of 73 stations on RADE and none on the legacy modes. Replayed through
+our receiver (`test-freedv wav`, AUTO, `VIBE_FREEDV_LOG=1`):
+
+- **No sync on any recording** — not one held sync, not one frame passed the FEC, no text, no speech.
+- There **were** signals: on 7.065 (five RADEV1 stations on Reporter) the 0.7–2.2 kHz band stood 6 dB over its edges
+  for 22 % of the recording, on 3.643 for 28 % (1.2–2.0 kHz), on 7.177 for 7 %. 20 m and 60 m were empty from the UK
+  at that hour.
+- So the honest reading: what was on air was (by Reporter's count) RADE, and our receiver correctly found nothing it
+  knows. It is not proof our 700D path works off air — that still needs a 700D transmission (an SM1000 / ezDV user, or a
+  scheduled test). It does say why Stuart has never heard FreeDV decode: there is almost no 700D/700E/1600 left to hear.
+
+**Recommendation**
+
+1. Keep 700D/700E/1600 as they are: they cost nothing when nobody sends them, and the hardware users (SM1000, ezDV) can
+   only send 700D.
+2. **RADE V1 is the mode worth adding**, and its licence allows it: link `rade_c` (BSD-2) — the whole receiver, weights
+   and FARGAN — rather than reimplementing it. There is no published standard to write it from; the reference *is* the
+   definition, as Codec 2 is for 700D. As with libcodec2, prefer loading a system or bundled library to vendoring
+   source, and measure the Pi 2 first: FARGAN at ~300 MMAC/s per listener is far heavier than the 700D modem (0.6 % of an
+   M5 core), so it may need to be one shared receiver, or benchmark-gated like the other heavy decoders.
+3. Wait for RADE V2 to settle before adding it (its own README says so).
+4. Until RADE is in, the mode's hint and the VTS line should say what it decodes. Today's hint already names "700D, 700E
+   or 1600"; a listener on 14.236 will see "FreeDV · searching" for ever. ⚠ **Decision for Stuart:** whether to say
+   "RADE is not decoded yet" in the hint.
 
 ## The protocol
 
@@ -67,9 +145,10 @@ sideband override is not built.
   never offered on an Icom (its audio is the radio's own demodulator) or on VFO B.
 - **Selecting it:** `{"type":"tune","frequency":…,"mode":"freedv"}`, like any demodulator.
 - **Report** (on the spectrum socket, whenever it changes):
-  `{"type":"freedv","sub":"auto|700D|700E|1600","sb":"usb|lsb","state":"search|sync","mode":"700D|","snr":N,"text":"…"}`
-- **Choosing a sub-mode:** `{"type":"freedv_sub","sub":"auto|700D|700E|1600"}`. Sent without `sub`, it only asks for the
-  report, which comes back at once. On an ask-before-tuning shared dial this is gated with the mode (`askRefuses`).
+  `{"type":"freedv","sub":"auto|700D|700E|1600","sb":"usb|lsb","sbSel":"auto|usb|lsb","state":"search|sync","mode":"700D|","snr":N,"text":"…"}`
+- **Choosing a sub-mode or a sideband:** `{"type":"freedv_sub","sub":"auto|700D|700E|1600","sb":"auto|usb|lsb"}` — either
+  field, both or neither. Sent with neither, it only asks for the report, which comes back at once. A value that is none
+  of ours is ignored. On an ask-before-tuning shared dial a choice is gated with the mode (`askRefuses`).
 
 ## Threading and memory
 
@@ -128,8 +207,11 @@ Why dynamic, and why not a hard dependency:
 | `test-freedv clip OUT.cu8 [rate sec snr usb\|lsb]` | writes the bench clip: 700D at +10 kHz, 700E at +20 kHz, 1600 at −10 kHz | tool |
 | `test-freedv wav FILE [sub]` | replays off-air audio and prints every report | tool |
 | `scripts/test-server-freedv.mjs` (run-tests.sh; silent) | the real server on a fake rtl_tcp replaying the clips. 20 m USB and 40 m LSB, each on a one-pipeline radio and a range-locked one: AUTO names each sub-mode, the report's sideband and SNR, the text, decoded speech on the audio socket, silence on a manual sub-mode that is not on air, AUTO back again, SSB audio after leaving, and no mode without the library | see the commit log |
-| `scripts/test_freedv.ts` | the client rule module | 17/17 |
-| `handheld-ui/test/run_vts_golden.sh` | the R36S VTS lines, generated from `freedv.ts` | 2323 checks, 0 failed |
+| `scripts/test-server-freedv.mjs`, sideband override | the 20 m (USB) clip replayed at 7.21 MHz, on both radio kinds: AUTO is LSB there and never syncs; `sb usb` → the report says `sbSel usb`, `sb usb`, and AUTO syncs on 700D; a nudge keeps the choice; `sb auto` → LSB again; nonsense ignored | 2026-11-16 |
+| `scripts/test-web-freedv.mjs`, sideband override | the same station in the web page: the FREEDV SIDEBAND row, USB lit by the report, sync, the passband above the dial, one line at 390 px, AUTO back | 2026-11-16 |
+| `scripts/test_freedv.ts` | the client rule module, the override and 60 m | 27/27 |
+| `scripts/test_freedv_app.ts` | the app: passband side with an override, the row under the sub-modes, gated and lit by the report | 23/23 |
+| `handheld-ui/test/run_vts_golden.sh` | the R36S VTS lines and sideband rule (override, 60 m), generated from `freedv.ts` | 2427 checks, 0 failed |
 
 ## Android, Lite and iOS: not this round
 

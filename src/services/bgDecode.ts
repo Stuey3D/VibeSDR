@@ -35,6 +35,7 @@ export const BG_DEMODS: Record<string, string> = { usb: 'USB', lsb: 'LSB', nfm: 
 export const BG_ISM_WORDS: Record<string, string> = {
   '315': '315 MHz (US / Japan: tyre sensors, key fobs, remotes)',
   '433': '433.92 MHz (weather stations, sensors, doorbells, tyre sensors)',
+  '439': '439.9 MHz — UK LoRa APRS and MeshCom (439.9125)',
   '479': '479 MHz — China LoRa (CN470, Meshtastic CN)',
   '865': '865 MHz — India LoRaWAN (IN865), Meshtastic India / NZ_865',
   '867': '867 MHz — EU LoRaWAN 867.1–867.9, Meshtastic Kazakhstan / Nepal',

@@ -86,7 +86,15 @@ nothing, never garbage.
 - **LoRa-APRS** — the amateur convention (the lora-aprs firmware and its documentation): `'<' 0xFF 0x01` then a TNC2
   packet `SRC>DEST,PATH:info`; 433.775 MHz SF12 125 kHz CR 4/5, sync 0x12. The info field goes through **our APRS
   parser** (`vibeaprs::parseInfo`) — positions, Mic-E, weather, messages, symbols, the readable line. Plan: the 433
-  default set (1.5 units). UK operators also use 439.9125 MHz, outside every ISM band we capture: not listened to.
+  default set (1.5 units).
+  - **The UK's 439.9125 MHz** (V12 2026-11-16, Stuart): its own block, **439** ("439.9 MHz LoRa APRS (UK)", the radio
+    200 kHz above the channel so its DC is off it). LoRa-APRS SF12 125 kHz CR 4/5 in the default set, and MeshCom UK on
+    the same frequency at SF10 125 kHz CR 4/6 at tier 1. Source: OARC wiki packet:lora; MeshCom-Firmware country_profile.
+  - **Poland's "1200 bps" profile, 434.855 MHz SF9 125 kHz CR 4/7**, inside the 433 capture: tier 1 (LoRa_APRS_Tracker /
+    iGate default profiles).
+  - ✗ **915.000 MHz** (the trackers' Americas profile): not a plan channel — how widely it is used is unclear, and adaptive
+    discovery finds a busy unknown channel there by itself (test-lora's found-channel case sits on 915.000).
+  - ✗ No 144 MHz LoRa-APRS standard was found; a "433.900 SF9 fast" variant could not be confirmed. Not added.
 - **FANET** — Skytraxx's protocol.txt (fanet-stm32, read for the facts): 868.2 MHz SF7 250 kHz (Europe), 920.8 MHz SF7
   500 kHz (zone 2), sync 0xF1. Types 1 tracking (lat/93206, lon/46603, altitude with ×4 scale, speed 0.5 km/h ×5,
   climb 0.1 m/s ×5, heading /256, the online-tracking bit, aircraft type), 2 name, 3 message (broadcast only shown),
@@ -97,6 +105,19 @@ nothing, never garbage.
   gives the FCS two ways; we check the 16-bit sum of bytes 0..MOD and count it, never refuse on it (the LoRa CRC held).
   433.175 MHz SF11 250 kHz CR 4/6, sync 0x2B. Plan: 433 tier 1. **At 2.4 MS/s the 433 capture (radio 434.17 MHz) stops
   short of 433.175 ± 125 kHz** — MeshCom runs on radios at 2.56 MS/s and up (and with "every channel" on those).
+  - **ISM at 2.56 MS/s on an RTL** (V12 2026-11-16, Stuart): an owner's switch exactly like ADS-B's —
+    "Use 2.56 MS/s sample rate for ISM (may drop some samples)" (config `ism256`, per radio, RTLs only, never the default;
+    the setup page, the app's server screen and Android's boot all carry it). ISM takes the radio to 2.56 MS/s on entry
+    and puts the old rate back when it ends; the rate guard (vibe_rate_guard.h) marks it first, and a stall at 2.56 leaves
+    ISM and turns **this** switch off. At 2.56 the capture's ±45 % reaches 433.018 MHz from 434.17, so MeshCom's
+    433.050–433.300 fits beside LoRa-APRS, Meshtastic, MeshCore and PL 434.855 (test-lora-ham).
+  - **Should the 433 centre move?** No. The radio sits 250 kHz above 433.92 so its DC misses the sensors' busiest
+    frequency; a lower centre would put the DC on 433.92's sensors or on Meshtastic 433.875 (433.75–434.00). At 2.4 MS/s
+    `ismHwCentre` already pulls it to 434.13, which leaves MeshCom 433.175 exactly on the edge. 2.56 MS/s is the clean way.
+  - Other MeshCom profiles added at tier 2: LA/ON 433.175 SF10 125 kHz (fits at 2.4 MS/s) and LA 433.925 SF10.
+  - ✗ MeshCom 869.525 / 906.875 (SF11 250 kHz, sync 0x2B) share Meshtastic LongFast's frequency, bandwidth, SF and sync
+    word; telling them apart needs content-based classification of every frame. Not added: those frames are still
+    decoded as Meshtastic's channel and fall through its parser.
 - Each network has its own switch under LoRa (`loraaprs`, `meshcom`, `fanet`); off = its channels are not run.
 - Tests: `test-lora-ham` — payload vectors from each description, then modulated (vibe_lora.h encode/modulate) into
   noisy IQ through the real engine: LoRa-APRS ×2 and MeshCom at 0 dB SNR (433 at 3.2 MS/s), FANET ×3 at +3 dB (868 at
@@ -150,7 +171,8 @@ between the preamble windows and the SFD is carried too (SF12 at 500 kHz lost ev
 | band | tier 0 (always, while LoRa is on) | tier 1 / 2 (budget) |
 |---|---|---|
 | 868 | Meshtastic LongFast 869.525 (BW250 SF11, syncs 0x2B / 0x12), MeshCore EU/UK 869.618 (BW62.5 SF8), LoRaWAN 868.1 / .3 / .5 (BW125 SF7–12) | MeshCore SF7; Meshtastic other presets SF7–10; LoRaWAN 867.1–867.9; RX2 869.525 inverted (SF9, SF12); LongModerate 869.4625 / 869.5875; MeshCore CZ |
-| 433 | Meshtastic 433.875, MeshCore 433.650 | LoRaWAN EU433 433.175/.375/.575; MeshCore 433 variants |
+| 433 | Meshtastic 433.875, MeshCore 433.650, LoRa-APRS 433.775 | MeshCom 433.175 (2.56 MS/s), LoRa-APRS PL 434.855 SF9; LoRaWAN EU433 433.175/.375/.575; MeshCore 433 variants; MeshCom SF10 433.175 / 433.925; Meshtastic UA_433 434.375, ANZ_433 434.425 |
+| 439 | LoRa-APRS UK 439.9125 (SF12 125 kHz) | MeshCom UK 439.9125 (SF10 125 kHz) |
 | 907 | Meshtastic US LongFast 906.875 (BW250 SF11) | BR_902 MediumFast 906.625 SF9 (S. America) |
 | 910 | MeshCore USA/Canada 910.525 (BW62.5 SF7) | Costa Rica 910.525 BW125 SF11; US915 sub-band 5 909.9–911.1 (tier 2) |
 | 915 | N. America: LoRaWAN US915 914.3 / 914.5 (SF7–10). S. America and AU/NZ: MeshCore Australia 915.800 (BW250 SF10), Australia (Mid) 915.075 (BW125 SF9), LoRaWAN AU915 915.2 (SF7–10) | US915 914.7 / 914.9; AU915 915.4–916.2 and 915.9 (BW500 SF8) |

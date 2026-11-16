@@ -355,6 +355,8 @@ struct Config {
     bool dabRateBoost = false;
     /** ★ ADS-B at 2.56 MS/s on an RTL: the owner's own switch (Stuart's OWRX ADS-B rate); never the default. */
     bool adsb256 = false;
+    /** ★ V12 ISM at 2.56 MS/s on an RTL (MeshCom 433.175 beside LoRa-APRS 433.775): the owner's switch; never the default. */
+    bool ism256 = false;
     /* ★ V12: there is no DAB+ decoder choice — FAAD2 is the Linux and Mac servers' only one (2026-10-29). An old config's
      *  `dabAacDecoder` / `dabFaad2` keys are ignored on load and dropped at the next save. */
     int  rawIq = 0;               // ★ raw IQ out: 0 off, 1 local only, 2 local + public
@@ -694,6 +696,7 @@ struct RadioConfig {
     int    ppb = 0;             // Airspy HF+ calibration, parts per billion
     bool   dabRateBoost = false;   // per radio — see Config::dabRateBoost
     bool   adsb256 = false;    // per radio — see Config::adsb256
+    bool   ism256 = false;     // per radio — see Config::ism256
     int    rawIq = 0;              // ★ raw IQ out: 0 off, 1 local network only, 2 local + public
     int    rawIqMax = 0;           // ★ total raw IQ listeners at once; 0 = the host's default
     int  rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling in Hz, 0 = none (one-listener radio only)

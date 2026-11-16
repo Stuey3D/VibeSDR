@@ -84,12 +84,24 @@ last in Stuart's order: Network > Audio > Spectrum > Decoders).
 ### Building the picture
 
 SSDV's payload is a baseline JPEG's entropy-coded MCUs with no markers, no byte stuffing, fixed tables, the first MCU that
-starts in each packet on a byte with its DC values from 0. Our decoder writes a real JPEG: the headers (JFIF, the two
-quantisation tables for the packet's quality level, SOF0 with the subsampling, the four Annex K Huffman tables, SOS), then
+starts in each packet on a byte with its DC values from 0. Our decoder writes a real JPEG: the headers (JFIF, the JPEG
+standard's two quantisation tables, SOF0 with the subsampling, the four Annex K Huffman tables, SOS), then
 every MCU in order — a run of consecutive packets is one bit stream; each block's Huffman symbols are copied as they are
 except the **DC, re-differenced** against what was written (so a packet's "from 0" DC lands right); a lost MCU is an
 "empty" one (DC difference 0, end of block — the previous block's level, no detail); an MCU cut short by a lost packet is
 ended cleanly; byte stuffing added; EOI. Rebuilt at most every 4 s while a picture grows, and at once when it completes.
+
+**Standard files, standard tables (Stuart, 2026-11-16).** The picture is an ordinary baseline JFIF `.jpg` (`file` and
+macOS `sips` read it; the gallery stores it as `image/jpeg`), and its tables are **ITU-T T.81 Annex K's, exactly as
+printed** (K.1 / K.2 quantisation, K.3–K.6 Huffman) for every quality level. No number in them comes from the reference
+program. A transmitter quantises against its own tables for each quality level; where those differ from Annex K by a
+near-uniform factor the picture shows it as a contrast change around mid-grey. So **when a picture completes its levels
+are measured and put right, WEFAX's way** (`auto_level.h`, the rule WEFAX's live auto-level now shares): the 2nd–98th
+percentile of the luminance blocks' means should span about 24…231 grey; inside 0.8–1.25 of that, centred within 12
+grey levels, the picture is left exactly as sent. Otherwise the written tables are scaled by k (0.4…2.5; every
+coefficient, so luminance and colour alike) and the luminance shifted (one DC difference, at the start of the scan) so
+the 2nd percentile lands on 24. A picture still arriving keeps Annex K's tables, so its levels do not jump about while it
+grows. Cost: a completed picture is built twice (≤ 2048 packets).
 
 ## The formats, and where each fact came from (the house rule)
 
@@ -103,8 +115,8 @@ ended cleanly; byte stuffing added; EOI. Rebuilt at most every 4 s while a pictu
 | Golay(23,12) generator 0xC75 | M17's `vibe_m17_fec.h golayCheck` (the M17 spec's matrix); `test-balloon` proves it equals the 0xC75 long division for all 4096 words |
 | SSDV packet layout, RS over bytes 1–223, lost-packet handling, "first MCU byte-aligned, DC from 0" | UKHAS wiki guides:ssdv (the format description) |
 | CRC-32 (zlib), RS(255,223) CCSDS conventional basis (field 0x187, roots β^112…143, β = α¹¹), base-40 callsign, the reset MCU's DC rule (first Y block and Cb/Cr only), padding with 1s, the empty-block filler | the reference `ssdv` program (GPL-3, Codeberg fsphil/ssdv) — **read for the conventions, not copied** |
-| Huffman tables | ITU-T T.81 Annex K.3 (the standard's) |
-| Quantisation: Annex K's two tables with every value rounded up to even, except chrominance zig-zag 3 and 5 = 22; quality level 0–7 = IJG quality 1, 14, 29, 43, 50, 71, 86, 100 with IJG's scaling | the reference program's tables, **expressed as a rule over Annex K** (see decisions) |
+| Huffman tables | ITU-T T.81 Annex K.3–K.6 (the standard's) |
+| Quantisation: Annex K's K.1 and K.2 exactly, every quality level; levels put right on completion (auto_level.h) | ITU-T T.81 Annex K. ✗ Until 2026-11-16 the tables were the reference program's (Annex K rounded to even, two entries 22, quality levels scaled as IJG quality 1…100) — read from GPL code; removed on Stuart's decision |
 
 ## Threading, CPU and memory
 
@@ -121,7 +133,7 @@ ended cleanly; byte stuffing added; EOI. Rebuilt at most every 4 s while a pictu
 
 | Suite | What | Result |
 |---|---|---|
-| `test-balloon` (vibeserver/, run-tests.sh) | CRC check values; UKHAS parse/refuse/framer; Golay (all 4096, every ≤3-error pattern, Chase 4); Horus coding bit-exact v1/v2 + 3 errors in every codeword; Horus on air (our 4-FSK: 244/270/400 Hz spacing, low/high in the passband, reversed tones, 0.3 % fast clock, manual pins, threshold); UKHAS on air (50/100/300/600 Bd, 7/8 bits, 1/2 stop, 350–850 Hz, reversed, high in the passband; each pinned by hand; a wrong pin decodes nothing); SSDV (callsigns, RS 16 errors mended / 17 never mis-corrected, every subsampling mode + no-FEC exact, lost packet → empty MCUs only there, bounds); SSDV over 600 Bd RTTY exact; **5 minutes of noise and ~3 minutes of ordinary RTTY (Baudot, 8-bit text full of `$` and `*`, random bytes with sync bytes) — not one report or picture packet**; no Horus reported on fast RTTY; SIMD = scalar bit for bit; cost | **128 / 0** |
+| `test-balloon` (vibeserver/, run-tests.sh) | CRC check values; UKHAS parse/refuse/framer; Golay (all 4096, every ≤3-error pattern, Chase 4); Horus coding bit-exact v1/v2 + 3 errors in every codeword; Horus on air (our 4-FSK: 244/270/400 Hz spacing, low/high in the passband, reversed tones, 0.3 % fast clock, manual pins, threshold); UKHAS on air (50/100/300/600 Bd, 7/8 bits, 1/2 stop, 350–850 Hz, reversed, high in the passband; each pinned by hand; a wrong pin decodes nothing); SSDV (callsigns, RS 16 errors mended / 17 never mis-corrected, every subsampling mode + no-FEC exact, lost packet → empty MCUs only there, bounds; the quantisation tables are Annex K's K.1/K.2 exactly; a dull complete picture has its tables scaled and luminance shifted — every AC term unchanged, every luminance DC moved alike — while one still arriving, and one already right, are untouched); SSDV over 600 Bd RTTY exact; **5 minutes of noise and ~3 minutes of ordinary RTTY (Baudot, 8-bit text full of `$` and `*`, random bytes with sync bytes) — not one report or picture packet**; no Horus reported on fast RTTY; SIMD = scalar bit for bit; cost | **134 / 0** |
 | `test-balloon wav <file> [rate]` | a recording through the receiver (report) | see Verified |
 | `test-server-balloon.mjs` | the real server, fake rtl_tcp, `test-balloon clip` on 434.200 MHz: one-pipeline and range-locked radio — both UKHAS sentences and both Horus packets field for field, the SSDV picture complete as a whole JPEG, text lines, states; pinned 50 Bd → Horus only; 300 Bd 8-bit + `horus:false` → UKHAS only; detach stops; the gallery keeps the picture as image/jpeg and the reports as runs; blocked → false | **33 / 0** |
 | `test-web-balloon.mjs` | the binary's embedded page, headless Edge `--mute-audio`: UHF tab, BALLOONS under Amateur, pins on AUTO, rows, the picture decoded as an `<img>` 96 × 64, a pin re-attaches and the rows stay, 390 px, no page exception | **21 / 0** |
@@ -164,13 +176,35 @@ reads real sentences.
 - The CPU on a Pi 2; the benchmark row has not been run on a real box.
 - The web end-to-end test ran on this Mac only; the app's BalloonView has not been seen on a device (tsc only).
 
+## Horus payload names (V12 2026-11-16, `vibe_horus_names.h`)
+
+A Horus v1/v2 packet carries a number (v1 0–255, v2 256–65535). **Project Horus's payload ID list** gives each its
+callsign: `https://raw.githubusercontent.com/projecthorus/horusdemodlib/master/payload_id_list.txt` — `#` comments, then
+`ID, CALLSIGN` per line; new IDs are requested by issue or pull request. It sits in horusdemodlib (LGPL-2.1); the list is
+factual data that horusdemodlib itself downloads at run time, and here it is only downloaded and read the same way — never
+bundled, and parsed by our own code.
+
+- **The server fetches, never a client**, and only when it needs to: the first Horus packet it decodes asks for a name;
+  if the copy on disk (`<data dir>/horus/payload_id_list.txt`) is missing or more than a day old, a background download
+  starts. **At most once a day, across restarts** (`horus/checked` holds the time of the last try, which counts whether
+  it worked or not). A server that never hears Horus never downloads anything.
+- **Bounded:** a download over 512 KB is refused (today's is ~15 KB); at most 65 536 names, each ≤ 20 characters of
+  A–Z a–z 0–9 `- _ .`; any other line is skipped. A download that parses to nothing never replaces a good copy.
+- **Transport:** the ADS-B aircraft data's (curl on Linux and the Mac, OkHttp on Android), wired in main.cpp,
+  vibeserver_api.cpp (Mac Simple mode) and the Android JNI. iOS has none: `HORUS-<id>` there, as for any ID the list does
+  not name.
+- The report (`call`), the text line and the payload list all carry the name; the decoder itself still writes
+  `HORUS-<id>`, and the UKHAS sentence it stands for keeps that (its CRC is its own).
+- Tests: `test-horus-names` (the list's format, bounds, once a day across a restart, failures count, bad downloads never
+  replace a good copy, no transport → `HORUS-<id>`); `test-server-balloon` seeds a list on disk and sees payload 256
+  reported by its name (the e2e tests mark today's try done, so no test touches the network).
+
 ## Not built
 
 - **Off-air decoding** — needs a 70 cm receiver and a flight (or the Pi 500's RTL on 434 MHz when a UK payload flies).
 - **SondeHub amateur upload** and **the map** (payload positions on the SHIPPING/aircraft-style map, a track). The survey
   says to share them with the radiosonde work; RS41 has neither yet either.
-- **Horus payload names** (the payload-ID list is a file Project Horus publishes online; we show `HORUS-<id>`) and its
-  **custom fields** (shown as hex only).
+- **Horus custom fields** (shown as hex only; Project Horus's custom_field_list.json describes them per payload).
 - **Horus v3** (ASN.1-encoded, 32–128 bytes, newer flights) and the old **LDPC** Horus modes.
 - **SSDV erasure padding** (the wiki's "insert padding bytes when a byte is dropped" — a dropped RTTY byte loses the packet).
 - **SSDV from satellites** (§6.4) — the SSDV layer is reusable; no satellite framing was built.
@@ -179,15 +213,13 @@ reads real sentences.
 
 ## Decisions for Stuart
 
-1. **The SSDV quantisation tables.** Real SSDV pictures are quantised against the reference program's two tables, which
-   are not the JPEG standard's. We wrote them as a rule over Annex K (every value rounded up to even; chrominance zig-zag
-   3 and 5 = 22) — that rule *is* those numbers. They are format constants a decoder must use to get the levels right,
-   but they came from reading GPL code. Keep (my recommendation: they are interoperability data, like a CRC polynomial),
-   or switch to plain Annex K (pictures a few per cent off in contrast)?
+1. ✓ **The SSDV quantisation tables — decided 2026-11-16:** plain Annex K, with the levels put right on completion. At
+   the default quality level the difference from a transmitter's tables is a few per cent; at other levels it is larger
+   and the auto-level carries it. Not yet seen on a real picture (none has been received).
 2. **An interop check against the reference programs.** Building and running horusdemodlib and `ssdv` locally (never
    committed) would turn "synthetic only" into "matches the reference" for SSDV. It needs your permission in this setup.
-3. **UW tolerance 2 bits** (horusdemodlib uses 1). It found 9 of 10 packets on their v2 sample instead of 6; minutes of
-   noise still give nothing. OK?
+3. ✓ **UW tolerance 2 bits** (horusdemodlib uses 1) — kept, Stuart 2026-11-16. It found 9 of 10 packets on their v2
+   sample instead of 6; minutes of noise still give nothing.
 4. **SondeHub upload** — an owner opt-in, as for RS41? It is the community's map for amateur payloads, and receivers
    uploading is what makes a chase work. Not built; your call (shared with the RS41 decision).
 5. **Payload names** — fetch Project Horus's payload-ID list (a small JSON on GitHub) on the server once a day, or keep

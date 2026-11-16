@@ -88,6 +88,8 @@ public:
         Db::get().setDir(d);
     }
     void setFetcher(Fetcher f) { std::lock_guard<std::mutex> lk(m_); fetch_ = std::move(f); }
+    /** ★ V12 the transport, for the other small daily downloads that share it (vibe_horus_names.h). */
+    Fetcher fetcher() { std::lock_guard<std::mutex> lk(m_); return fetch_; }
     void setUserAgent(const std::string& ua) { std::lock_guard<std::mutex> lk(m_); ua_ = ua; }
     std::string userAgent() { std::lock_guard<std::mutex> lk(m_); return ua_; }
     bool canFetch() { std::lock_guard<std::mutex> lk(m_); return (bool)fetch_ && !dir_.empty(); }

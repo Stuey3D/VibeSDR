@@ -14,7 +14,7 @@ import type { IsmReport } from './ism';
 import type { AisReport } from './tracks';   // ★ V12 AIS
 import type { AskState } from './dialChat';
 import { AM_SYNC_PASSBAND } from './amSync.ts';   // ★ .ts: node tests import this file directly
-import { freedvPassband, freedvSidebandAt } from './freedv.ts';   // ★ V12 FreeDV
+import { freedvPassband, freedvSidebandAt, type FreeDvSideband } from './freedv.ts';   // ★ V12 FreeDV
 import { M17_PASSBAND } from './m17.ts';   // ★ V12 M17
 
 /** ★★ V12 hwinfo `afc` — the server's automatic frequency correction (vibe_afc.h, LocalSdrShim::afcJson). */
@@ -91,9 +91,10 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
 };
 
 /** ★ V12 the passband a mode starts with at `hz` — MODE_BANDWIDTHS, except FreeDV, whose side follows the dial as the
- *  server's does (LSB below 10 MHz). The server's report ("sb") then wins (VibeServerClient 'freedv'). */
-export function modeDefaultPassband(mode: SDRMode, hz: number): [number, number] | undefined {
-  return mode === 'freedv' ? freedvPassband(freedvSidebandAt(hz)) : MODE_BANDWIDTHS[mode];
+ *  server's does (LSB below 10 MHz), or the listener's USB / LSB override (`fdvSb`). The server's report ("sb") then wins
+ *  (VibeServerClient 'freedv'). */
+export function modeDefaultPassband(mode: SDRMode, hz: number, fdvSb: FreeDvSideband = 'auto'): [number, number] | undefined {
+  return mode === 'freedv' ? freedvPassband(freedvSidebandAt(hz, fdvSb)) : MODE_BANDWIDTHS[mode];
 }
 /** ★ V12 FreeDV: the drawn passband moved to the side the server's report names — mirrored about the dial, so the width is
  *  kept; a passband straddling the dial (never FreeDV's own) becomes freedvPassband(sb). null = already on that side. */

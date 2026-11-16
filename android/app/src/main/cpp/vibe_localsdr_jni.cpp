@@ -231,6 +231,8 @@ Java_com_vibesdr_app_VibeMapGL_nativeInitAdsb(JNIEnv* env, jclass cls, jstring j
     if (g_adsbFetchIf) vibeadsbdata::Updater::get().setFetcher(jniAdsbFetch);
     else LOGE("adsb data: VibeMapGL.fetchIf not found — the weekly aircraft-data update is unavailable");
     vibeadsbdata::Updater::get().start();
+    // ★ V12 balloons: Horus payload names beside the aircraft data, fetched the same way (vibe_horus_names.h)
+    { const size_t sl = data.find_last_of('/'); vibe::LocalSdrShim::setHorusNamesDir((sl == std::string::npos ? data : data.substr(0, sl)) + "/horus"); }
     LOGI("adsb data: %s (images %s)", data.c_str(), images.c_str());
 }
 
@@ -1636,11 +1638,12 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeRateGuardClear(JNIEnv*, jobject) {
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabPolicy(JNIEnv* env, jobject,
-                                                     jboolean rateBoost, jboolean adsb256, jstring blockedCsv) {
+                                                     jboolean rateBoost, jboolean adsb256, jboolean ism256, jstring blockedCsv) {
     // ★ rateBoost is the GENERAL rate switch now (DAB and ADS-B); adsb256 = ADS-B at 2.56 MS/s on an RTL, which
     //   the shim honours only with the switch on. Both set on every start, so neither outlives the config.
     vibe::LocalSdrShim::setVibeServerDabRateBoost(rateBoost == JNI_TRUE);
     vibe::LocalSdrShim::setVibeServerAdsb256(adsb256 == JNI_TRUE);
+    vibe::LocalSdrShim::setVibeServerIsm256(ism256 == JNI_TRUE);   // ★ V12 ISM at 2.56 MS/s (RTL), its twin
     const char* b = blockedCsv ? env->GetStringUTFChars(blockedCsv, nullptr) : nullptr;
     vibe::LocalSdrShim::setVibeServerBlockedModes(b ? b : "");
     if (b) env->ReleaseStringUTFChars(blockedCsv, b);

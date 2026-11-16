@@ -78,7 +78,8 @@ int main(int argc, char** argv) {
     // ── AIRSPY HF+ (0.5 kHz – 31 MHz and 60 – 260 MHz, 912 kS/s) ──
     {
         const Caps c = of("airspyhf");
-        yes(c, "HF+", { "wfm", "rds", "nfm", "am", "sam", "amst", "drm", "navtex", "wefax", "time", "ndb", "aprs", "same", "ft8" });
+        yes(c, "HF+", { "wfm", "rds", "nfm", "am", "sam", "amst", "drm", "navtex", "wefax", "time", "ndb", "aprs", "same", "ft8",
+                       "m17" });   // ★ M17 on 2 m (Stuart 11-16: every SDR that can reach it); 70 cm is out of its range
         no(c, "HF+", { "dab", "adsb", "commb", "ism", "lora", "loraaprs", "fanet", "meshcom", "ais", "aisstore" });
         ok(!c.s.dabLanding && !c.s.adsbLanding && c.s.fmDefaults && c.s.dxScan, "HF+: no DAB / ADS-B landing; FM defaults and DX scan");
         ok(c.s.ppb && !c.s.ppm && !c.s.biasT && !c.s.directSampling, "HF+: ppb, no ppm, bias-T or direct sampling");

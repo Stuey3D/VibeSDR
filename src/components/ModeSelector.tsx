@@ -32,7 +32,7 @@ import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText, rttySkimHintText } from '../services/cwList';
-import { NCDXF_HINT } from '../services/ncdxf';   // ★ V12 NCDXF beacons
+import { NCDXF_HINT, NCDXF_FOLLOW_HINT } from '../services/ncdxf';   // ★ V12 NCDXF beacons
 import { BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonPinLabel, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
 import { JTTY_HINT } from '../services/jtty';
 import ModeIcon, { ModeLabel, modeKeyIcon } from './ModeIcon';   // ★ V12 mode icons (Stuart 2026-10-28)
@@ -47,7 +47,7 @@ import { HELL_HINT } from '../services/feldHell';   // ★ V12 FELD HELL
 import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
 import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, type GroupedMode } from '../services/autoModes';   // ★★★ AUTO's fallback rows
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
-import { FREEDV_HINT, type FreeDvChoice, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
+import { FREEDV_HINT, FREEDV_SIDEBANDS, freedvSidebandLabel, type FreeDvChoice, type FreeDvSideband, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
@@ -420,7 +420,8 @@ interface ModeSelectorProps {
   modes?:   { id: string; label: string; a11y?: string; demod?: boolean }[];
   /** ★ V12 FreeDV (VibeServer): while the mode is FreeDV, the manual fallback under AUTO — AUTO and the sub-modes THIS
    *  server runs, `sub` lit as the server reports it. Absent = no row (no dead controls). */
-  freedv?: { subs: readonly FreeDvSub[]; sub: FreeDvChoice; onSub: (s: FreeDvChoice) => void } | null;
+  freedv?: { subs: readonly FreeDvSub[]; sub: FreeDvChoice; onSub: (s: FreeDvChoice) => void;
+             sb?: FreeDvSideband; onSb?: (s: FreeDvSideband) => void } | null;
   /** OWRX secondary decoder running on top of the carrier (e.g. 'sstv'/'fax').
    *  Highlighted separately so the carrier demod (`current`) stays lit too. */
   activeDecoder?: string;
@@ -528,6 +529,9 @@ interface ModeSelectorProps {
     jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
     /** ★★ V12 NCDXF beacons — only where `"ncdxf"` is offered; its settings are the beacon frequencies THIS radio reaches. */
     ncdxfAvail?: boolean; ncdxfBands?: Array<{ hz: number; label: string }>; onNcdxfBand?: (hz: number) => void;
+    /** ★★ V12 NCDXF FOLLOW — the listener's OWN dial hops with one beacon up the bands. Null on a shared dial (never there:
+     *  the shared-dial contract) or where the radio reaches none of the five. */
+    ncdxfFollow?: { on: boolean; call: string; onToggle: () => void; onStep: (d: 1 | -1) => void } | null;
     /** ★★ V12 balloons — only where `"balloon"` is offered; its settings are AUTO and the manual pins under it. */
     balloonAvail?: boolean; balloonSettings?: BalloonSettings; onBalloonSettings?: (s: BalloonSettings) => void;
     /** ★★ V12 DTMF + 5-tone — only where `"tones"` is offered; DTMF / 5-TONE each on or off, and the 5-tone STANDARD (AUTO,
@@ -1662,6 +1666,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               <SegBtn key={d.hz} label={d.label} active={Math.abs((dc.tunedHz ?? 0) - d.hz) < 1500} onPress={() => dc.onNcdxfBand?.(d.hz)} />
             ))}</OptRow>
           </>)}
+          {!!dc.ncdxfFollow && (<>
+            {/* ★★ V12 FOLLOW (Stuart 2026-11-16): one beacon, up the bands, on this listener's own dial only */}
+            <SubLabel label="FOLLOW" />
+            <OptRow>
+              <SegBtn label={'\u2039'} active={false} onPress={() => dc.ncdxfFollow!.onStep(-1)} />
+              <SegBtn label={dc.ncdxfFollow.call} active={false} onPress={() => dc.ncdxfFollow!.onStep(1)} />
+              <SegBtn label={'\u203a'} active={false} onPress={() => dc.ncdxfFollow!.onStep(1)} />
+              <SegBtn label="FOLLOW" active={dc.ncdxfFollow.on} onPress={dc.ncdxfFollow.onToggle} />
+            </OptRow>
+            <Text style={capText}>{NCDXF_FOLLOW_HINT}</Text>
+          </>)}
           <Text style={capText}>{NCDXF_HINT}</Text>
         </>);
       /* ★★ V12 DTMF + 5-tone: which decoders run (never both off), the 5-tone STANDARD — AUTO, one table pinned under it — and
@@ -1941,6 +1956,16 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               <SegBtn key={v} label={v === 'auto' ? 'AUTO' : v} active={freedv.sub === v} onPress={() => freedv.onSub(v)} />
             ))}
           </OptRow>
+          {/* ★ V12 the sideband (Stuart 2026-11-16): AUTO follows FreeDV's convention (LSB below 10 MHz, USB above);
+              USB / LSB by hand for a station that does not. The server applies it; the lit key is its report's "sbSel". */}
+          {!!freedv.onSb && (<>
+            <SubLabel label="FREEDV SIDEBAND" />
+            <OptRow>
+              {FREEDV_SIDEBANDS.map((v) => (
+                <SegBtn key={v} label={freedvSidebandLabel(v)} active={(freedv.sb ?? 'auto') === v} onPress={() => freedv.onSb?.(v)} />
+              ))}
+            </OptRow>
+          </>)}
           <Text style={capText}>{FREEDV_HINT}</Text>
         </>)}
 

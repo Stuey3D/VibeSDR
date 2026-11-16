@@ -306,6 +306,13 @@ int main(int argc, char** argv) {
 
     const int subs[] = {fdv::k700D, fdv::k700E, fdv::k1600};
 
+    std::printf("\n── 0. the sideband rule (AUTO = the FreeDV application's; USB / LSB by hand) ──\n");
+    check(fdv::lowerSideband(7.177e6, fdv::kSbAuto) && fdv::lowerSideband(3.643e6, fdv::kSbAuto), "AUTO: 40 m and 80 m LSB");
+    check(!fdv::lowerSideband(14.236e6, fdv::kSbAuto) && !fdv::lowerSideband(10e6, fdv::kSbAuto), "AUTO: from 10 MHz up USB");
+    check(!fdv::lowerSideband(5.3685e6, fdv::kSbAuto) && !fdv::lowerSideband(5.4035e6, fdv::kSbAuto), "AUTO: 60 m USB");
+    check(!fdv::lowerSideband(7.177e6, fdv::kSbUsb) && fdv::lowerSideband(14.236e6, fdv::kSbLsb), "USB / LSB by hand win over the convention");
+    check(fdv::sbFromName("LSB") == fdv::kSbLsb && fdv::sbFromName("auto") == fdv::kSbAuto && fdv::sbFromName("dsb") == -1, "sideband names");
+
     std::printf("\n── 1. each sub-mode chosen by hand, 10 dB, 20 s ──\n");
     for (int s : subs) {
         if (!a.sub[s]) continue;

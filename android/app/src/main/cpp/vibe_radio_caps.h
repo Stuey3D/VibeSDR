@@ -164,11 +164,10 @@ inline Caps compute(const Facts& f) {
         if (id == "amst") return touches(R, 520e3, 1710e3);            // ★ C-QUAM is medium wave
         if (id == "drm") return touches(R, 148.5e3, 24e6);             // ★ DRM30: LW, MW and SW (not an R820T's 24 MHz up)
         if (id == "freedv") return hf;                                  // ★ V12 FreeDV digital voice: the HF amateur bands
-        /* ★ V12 M17 digital voice: the 2 m and 70 cm amateur bands, where M17 lives. Not the HF+, as AIS is not: it stops
-         *  at 260 MHz (no 70 cm), and its 2 m path is left out the same way (docs/v12/M17.md — a decision for Stuart; nothing
-         *  in the receiver needs it gone). An Icom never: its FM audio is demodulated and de-emphasised in the radio, and the
-         *  4-FSK receiver reads IQ (not in kIcom above). */
-        if (id == "m17") return d != "airspyhf" && (touches(R, 144e6, 148e6) || touches(R, 420e6, 450e6));
+        /* ★ V12 M17 digital voice: the 2 m and 70 cm amateur bands, where M17 lives — on every SDR that reaches one. The
+         *  HF+ gets it on 2 m (it stops at 260 MHz, so 70 cm is never in its ranges; touches() decides). An Icom never: its
+         *  FM audio is demodulated and de-emphasised in the radio, and the 4-FSK receiver reads IQ (not in kIcom above). */
+        if (id == "m17") return touches(R, 144e6, 148e6) || touches(R, 420e6, 450e6);
         if (id == "dab") {
             std::vector<vibedab::Range> v;
             for (const auto& x : R) v.push_back({ (uint32_t)std::min(4.0e9, x.lo), (uint32_t)std::min(4.0e9, x.hi) });
@@ -187,7 +186,8 @@ inline Caps compute(const Facts& f) {
         }
         /* ★ V12 the LoRa networks with their own switches: only where the radio reaches their channels (433.175–433.775 MHz;
          *  FANET 868.2, or zone 2's 920.8) at an ISM capture rate */
-        if (id == "loraaprs" || id == "meshcom") return rateAtLeast(vibeism::kMinRateHz) && holds(R, 433.05e6, 434.79e6);
+        if (id == "loraaprs" || id == "meshcom")   // ★ 433, or the UK's 439.9125 (V12 2026-11-16)
+            return rateAtLeast(vibeism::kMinRateHz) && (holds(R, 433.05e6, 434.79e6) || holds(R, 439.85e6, 439.975e6));
         if (id == "fanet") return rateAtLeast(vibeism::kMinRateHz) && (holds(R, 868.05e6, 868.35e6) || holds(R, 920.5e6, 921.1e6));
         if (id == "ndb") {
             if (d == "rtl" && !f.converter && f.rtlHf != 2) return false;   // ★ vsNdbReach: the Q branch, or nothing

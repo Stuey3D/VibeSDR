@@ -24,6 +24,7 @@
 // ★ Bounded: ≤ 12 payloads kept (the oldest heard goes), the receiver's own bounds (balloon_rx.h), one JPEG built at a time.
 #pragma once
 #include "decoders/balloon_rx.h"
+#include "vibe_horus_names.h"   // ★ V12 Horus payload IDs → callsigns (Project Horus's list, fetched by the server)
 
 #include <algorithm>
 #include <chrono>
@@ -96,7 +97,16 @@ private:
         return o;
     }
     static std::string num(double v, const char* fmt = "%.5f") { if (!std::isfinite(v)) return "null"; char b[32]; std::snprintf(b, sizeof b, fmt, v); return b; }
-    void report_(const balloon::Telemetry& t) {
+    void report_(const balloon::Telemetry& tIn) {
+        /* ★ A Horus payload by its callsign where Project Horus's list names it (vibe_horus_names.h — the server's own
+         *  copy, refreshed at most once a day); "HORUS-<id>" otherwise, as the decoder wrote it. */
+        balloon::Telemetry named;
+        const balloon::Telemetry* tp = &tIn;
+        if (tIn.source == "horus") {
+            const std::string nm = vibehorus::Names::get().name(tIn.horusId);
+            if (!nm.empty()) { named = tIn; named.callsign = nm; tp = &named; }
+        }
+        const balloon::Telemetry& t = *tp;
         const double now = nowS();
         Payload& p = payloads_[t.callsign];
         p.t = t; p.heard = now; ++p.n;

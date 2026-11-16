@@ -215,6 +215,48 @@ if (CLIP_LSB && fs.existsSync(CLIP_LSB)) {
   CENTRE = 14200000; CLIPNOW = CLIP; STATIONS = stationsAt(CENTRE);
 } else console.log('   (40 m LSB scenarios not run — set VIBE_FREEDV_CLIP_LSB)');
 
+/* ★★ THE SIDEBAND OVERRIDE (Stuart 2026-11-16): the 20 m (USB) clip replayed at 7.2 MHz — a USB station below 10 MHz, which
+ *  the convention's AUTO demodulates on LSB and so never syncs. {"type":"freedv_sub","sb":"usb"} puts the receiver on USB:
+ *  it syncs, and the report says what was chosen ("sbSel") and what is demodulated ("sb"). "auto" goes back to LSB. */
+async function overrideScenario(label, args, tag) {
+  console.log(`── ${label} ──`);
+  const S = await server(args, tag);
+  try {
+    const st = await S.status();
+    const L = await listener(S.port, `fdv${tag}001`, STATIONS[0][0], 'freedv');
+    const ping = setInterval(() => L.spec.send({ type: 'ping' }), 2000);   // ★ keepalive
+    try {
+      const reps = () => jsons(L.spec, 'freedv');
+      const last = () => reps().at(-1);
+      if (!st.freedvSubs.includes('700D')) { console.log('   (no 700D in this libcodec2 — not run)'); return; }
+      L.spec.send({ type: 'freedv_sub' });
+      ok(await until(() => last() && last().sb === 'lsb' && last().sbSel === 'auto', 5000), `AUTO at 7.21 MHz: LSB by the convention (${JSON.stringify(last())})`);
+      await sleep(6000);
+      ok(!reps().some((r) => r.state === 'sync'), 'a USB station on LSB never syncs');
+      let n0 = reps().length;
+      L.spec.send({ type: 'freedv_sub', sb: 'usb' });
+      ok(await until(() => reps().slice(n0).some((r) => r.sbSel === 'usb' && r.sb === 'usb'), 5000), `sb usb: the report says sbSel usb, sb usb (${JSON.stringify(last())})`);
+      ok(await until(() => reps().slice(n0).some((r) => r.state === 'sync' && r.mode === '700D' && r.sb === 'usb'), 15000), `…and AUTO syncs on 700D (${JSON.stringify(last())})`);
+      // ★ a retune keeps the listener's choice (it is theirs, like the sub-mode)
+      n0 = reps().length;
+      L.spec.send({ type: 'tune', frequency: STATIONS[0][0] + 100, mode: 'freedv' });
+      await sleep(1500);
+      ok(reps().slice(n0).every((r) => r.sbSel === 'usb'), 'a nudge on the dial keeps the chosen side');
+      n0 = reps().length;
+      L.spec.send({ type: 'freedv_sub', sb: 'auto' });
+      ok(await until(() => reps().slice(n0).some((r) => r.sbSel === 'auto' && r.sb === 'lsb'), 5000), `sb auto: back to LSB by the convention (${JSON.stringify(last())})`);
+      n0 = reps().length;
+      L.spec.send({ type: 'freedv_sub', sb: 'wsb' });
+      await sleep(1500);
+      ok(reps().slice(n0).every((r) => r.sbSel === 'auto'), 'a sideband that is none of ours is ignored');
+    } finally { clearInterval(ping); for (const k of ['spec', 'aud']) L[k].close(); }
+  } finally { await S.stop(); }
+}
+CENTRE = 7200000; CLIPNOW = CLIP; STATIONS = stationsAt(CENTRE);
+await overrideScenario('sideband override: a USB station at 7.21 MHz, one-pipeline radio', ['--freq', String(STATIONS[0][0]), '--mode', 'usb', '--users', '1'], 'ovone');
+await overrideScenario('sideband override: a USB station at 7.21 MHz, range-locked radio', ['--freq', String(CENTRE), '--lock-freq', String(CENTRE), '--users', '4', '--mode', 'usb', '--idle-grace', '0'], 'ovlock');
+CENTRE = 14200000; CLIPNOW = CLIP; STATIONS = stationsAt(CENTRE);
+
 {
   console.log('── no libcodec2 (VIBE_FREEDV_DISABLE=1) ──');
   const S = await server(['--freq', String(STATIONS[0][0]), '--mode', 'usb', '--users', '1'], 'none', { VIBE_FREEDV_DISABLE: '1' });

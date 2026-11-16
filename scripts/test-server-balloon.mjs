@@ -77,9 +77,14 @@ const pictures = (st) => st.bin.filter((b) => b[0] === 0x0b).map((b) => {
            w: b.readUInt16BE(p + 5), h: b.readUInt16BE(p + 7), jpeg: b.subarray(p + 9) };
 });
 
-async function server(args, tag, radioExtra = {}) {
+async function server(args, tag, radioExtra = {}, horusList = null) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-balloon-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
+  /* ★ V12 Horus payload names (vibe_horus_names.h): the server fetches Project Horus's list at most once a day. A test
+   *  never touches the network — "checked" in the future means today's try is done; `horusList` seeds the copy on disk. */
+  fs.mkdirSync(path.join(dir, 'data', 'horus'));
+  fs.writeFileSync(path.join(dir, 'data', 'horus', 'checked'), String(Math.floor(Date.now() / 1000) + 10 * 86400));
+  if (horusList) fs.writeFileSync(path.join(dir, 'data', 'horus', 'payload_id_list.txt'), horusList);
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     configured: true, name: 'Balloon test', locator: 'JO02ae', adminPass: 'balloon-test-admin',
     radios: [{ serial: `balloon-${tag}`, label: 'Test radio', enabled: true, configured: true, ...radioExtra }],
@@ -193,6 +198,23 @@ async function checkFull(D, label) {
     A.dx.send({ type: 'audio_extension_attach', extension_name: 'balloon' });
     await checkFull(A.dx, 'per-listener');
     for (const k of ['spec', 'aud', 'dx']) A[k].close();
+  } finally { S.stop(); }
+}
+
+// ── 2b. Horus payload names (Project Horus's list, the server's own copy) ──
+{
+  console.log('── Horus payload names: 256 named by the list on disk ──');
+  const S = await server(['--freq', String(DIAL), '--mode', 'usb', '--users', '1'], 'names', {}, '# test list\n0, 4FSKTEST\n256, VIBE-HAB\n');
+  try {
+    const L = await listener(S.port, 'balloon09');
+    const ping = setInterval(() => L.spec.send({ type: 'ping' }), 2000);   // ★ keepalive
+    L.dx.send({ type: 'audio_extension_attach', extension_name: 'balloon' });
+    ok(await until(() => sawCount(L.dx, 'VIBE-HAB', 501) || sawCount(L.dx, 'VIBE-HAB', 502), 60000), 'payload 256 reported as VIBE-HAB, its name in the list');
+    ok(!jsons(L.dx, 'balloon').some((m) => m.data.payloads.some((p) => p.call === 'HORUS-256')), '…never as HORUS-256');
+    ok(/VIBE-HAB #50[12]/.test(text01(L.dx)), 'the text line names it too');
+    ok(!fs.existsSync(path.join(S.dir, 'data', 'horus', 'payload_id_list.download')), 'no download attempted (today\'s try is done)');
+    clearInterval(ping);
+    for (const k of ['spec', 'aud', 'dx']) L[k].close?.();
   } finally { S.stop(); }
 }
 

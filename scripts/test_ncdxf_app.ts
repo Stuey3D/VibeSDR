@@ -2,7 +2,8 @@
 // app and the web client): the server's report sanitised, the grid rows, the status line, and the keys wired in both
 // clients (only where the server offers "ncdxf"). Run: npx tsx scripts/test_ncdxf_app.ts
 import { readFileSync } from 'node:fs';
-import { ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, ncdxfCellView, NCDXF_BANDS, NCDXF_HINT } from '../src/services/ncdxf';
+import { ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, ncdxfCellView, NCDXF_BANDS, NCDXF_HINT, NCDXF_CALLS, ncdxfSlot, ncdxfBandOf,
+         ncdxfBeaconOn, ncdxfFollowBand, ncdxfFollowAllowed, ncdxfFollowTunedAway, NCDXF_FOLLOW_LEAD_S } from '../src/services/ncdxf';
 import { decoderNear } from '../src/utils/decoderBands';
 
 let pass = 0, fail = 0;
@@ -62,6 +63,40 @@ ok('app: the bands this radio reaches', sd.includes('NCDXF_BANDS.filter((b) => c
 ok('app: attach + JSON', dc.includes("case 'ncdxf':   return { extension_name: 'ncdxf', params: {} };") && dc.includes("m.type === 'ncdxf'"));
 const about = src('src/components/AboutOverlay.tsx');
 ok('About: the V12 note', about.includes('NCDXF'));
+
+// ── ★★ FOLLOW (Stuart 2026-11-16): one beacon up the bands, on the listener's own dial only ──
+{
+  const H = 1794816000;   // a multiple of 180: hh:mm:00 with mm % 3 = 0 — 4U1UN on 14.100
+  eq('slot 0 at the cycle start, 17 at +170 s, wraps at 180', [ncdxfSlot(H), ncdxfSlot(H + 175), ncdxfSlot(H + 180)], [0, 17, 0]);
+  eq('the published schedule: 4U1UN on 20 m in slot 0, 17 m in slot 1 … 10 m in slot 4, silent in slot 5',
+     [0, 1, 2, 3, 4, 5].map((sl) => ncdxfBandOf(0, sl)), [0, 1, 2, 3, 4, -1]);
+  eq('OH2B (13) on 20 m in slot 13; who is on 15 m in slot 15 (OH2B)', [ncdxfBandOf(13, 13), ncdxfBeaconOn(2, 15)], [0, 13]);
+  eq('YV5B (17) wraps: 17 m in slot 0', ncdxfBandOf(17, 0), 1);
+  const all = [true, true, true, true, true];
+  // following 4U1UN through a cycle, one second into each slot: the band it is on, a moment early; while silent, back on 20 m
+  const seen = []; for (let t = 0; t < 180; t += 10) seen.push(ncdxfFollowBand(0, H + t + 1, all));
+  eq('FOLLOW 4U1UN: 20 17 15 12 10 m, then waits on 20 m for 13 slots', seen, [0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  eq('…tuned ' + NCDXF_FOLLOW_LEAD_S + ' s before the slot (at +9.6 s it is already on 17 m)', ncdxfFollowBand(0, H + 9.6, all), 1);
+  eq('…and not earlier (at +9.4 s still 20 m)', ncdxfFollowBand(0, H + 9.4, all), 0);
+  const noTwelve = [true, true, true, false, true];
+  eq("a band the radio cannot reach is skipped: in 12 m's slot it waits on 10 m", ncdxfFollowBand(0, H + 30, noTwelve), 4);
+  const tenOnly = [false, false, false, false, true];
+  eq('only 10 m reachable: it waits there all cycle', [0, 50, 100, 170].map((t) => ncdxfFollowBand(0, H + t, tenOnly)), [4, 4, 4, 4]);
+  eq('none reachable: -1 (FOLLOW is not offered)', ncdxfFollowBand(0, H, [false, false, false, false, false]), -1);
+  eq('★ never a shared dial: exclusive yes, open / room / shared flag no, an old server (no dial word) yes',
+     [ncdxfFollowAllowed('exclusive'), ncdxfFollowAllowed('open'), ncdxfFollowAllowed('room'), ncdxfFollowAllowed('exclusive', true), ncdxfFollowAllowed(undefined)],
+     [true, false, false, false, true]);
+  eq('a hand tune 2 kHz away stops it; the CW pitch nudge of 700 Hz does not', [ncdxfFollowTunedAway(14_102_000, 14_100_000), ncdxfFollowTunedAway(14_100_700, 14_100_000), ncdxfFollowTunedAway(14_100_000, 0)], [true, false, false]);
+  eq("the eighteen calls, the tracker's order", [NCDXF_CALLS.length, NCDXF_CALLS[0], NCDXF_CALLS[13], NCDXF_CALLS[17]], [18, '4U1UN', 'OH2B', 'YV5B']);
+  const tracker = src('android/app/src/main/cpp/decoders/ncdxf_tracker.h');
+  ok('the calls match ncdxf_tracker.h', NCDXF_CALLS.every((c) => tracker.includes(`"${c}"`)));
+  const web = src('web/client/src/main.ts'), html = src('web/client/index.html'), scr = src('src/screens/SDRScreen.tsx'), ms = src('src/components/ModeSelector.tsx');
+  ok('web: the FOLLOW row, hidden unless allowed', html.includes('id="ncdxfFollowRow" hidden') && /ncdxfFollowAllowed\(dialModeNow, srvSharedDial\)/.test(web));
+  ok('web: a dial turning shared re-checks (onDial) and leaving the tracker stops it', /dialModeNow = d\.mode;\n\s+ncdxfFollowSync\(\)/.test(web) && /else ncdxfFollowStop\(\)/.test(web));
+  ok('app: offered only where allowed (ncdxfFollowAllowed on the dial\'s mode)', /ncdxfFollowAllowed\(dialStateRef\.current\?\.mode\)/.test(scr) && /ncdxfFollow: ncdxfCapable && ncdxfFollowMay\(\)/.test(scr));
+  ok('app: the FOLLOW row under BAND', /<SubLabel label="FOLLOW" \/>/.test(ms));
+  ok('both: tuned in CW, a band key stops FOLLOW', /decTune\(hz, 'cwu'/.test(web) && /ncdxfFollowStop\(\); decTune\(b\.hz/.test(web) && /setNcdxfFollow\(\(f\) => \(\{ \.\.\.f, on: false \}\)\); onTuneHz\(hz, 'cwu'/.test(scr));
+}
 
 console.log(`${fail ? 'FAIL' : 'ok '}  test_ncdxf_app — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

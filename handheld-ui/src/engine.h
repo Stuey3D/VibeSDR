@@ -136,7 +136,10 @@ public:
     // ── what the person did ──
     void tune(double hz) {
         // ★ V12 FreeDV: crossing 10 MHz flips the side at once (the server does the same and reports it)
-        if (st_.mode == "freedv" && std::string(freedvSidebandAt(hz)) != freedvSidebandAt(st_.vfoHz)) freedvPassband(freedvSidebandAt(hz), st_.bwLow, st_.bwHigh);
+        if (st_.mode == "freedv") {
+            FreeDvState fs; const std::string sel = parseFreeDv(st_.msg("freedv"), fs) ? fs.sbSel : std::string("auto");   // ★ a chosen side stays put
+            if (std::string(freedvSidebandAt(hz, sel)) != freedvSidebandAt(st_.vfoHz, sel)) freedvPassband(freedvSidebandAt(hz, sel), st_.bwLow, st_.bwHigh);
+        }
         st_.vfoHz = hz;                                // ★ the readout moves at once (the app predicts the same)
         /* ★★★ AT MOST ONE TUNE EVERY kTuneGapS, ALWAYS THE LATEST (Stuart, 2026-11-14, handheld74: spinning the stick
          *  "bounce[d] up and down the band and keep bouncing about for a few seconds after I stopped"). A tune a frame

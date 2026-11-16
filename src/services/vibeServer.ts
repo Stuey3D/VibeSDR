@@ -153,6 +153,8 @@ export type VibeServerConfig = {
   vfoB?: number;
   /** ★★ ADS-B at 2.56 MS/s on an RTL — its own switch, not tied to dabRateBoost. Never the default. */
   adsb256?: boolean;
+  /** ★★ V12 ISM at 2.56 MS/s on an RTL — its own switch, never the default. VibeServerBoot reads cfg "ism256". */
+  ism256?: boolean;
   /** ★★★ V12 BACKGROUND DECODING — this radio's profiles as ONE JSON string, exactly RadioConfig::bgDecode
    *  (vibe_bgdecode_config.h parse/toJson; services/bgDecode.ts writes it). '' = none — off, as before it existed. */
   bgDecode?: string;
@@ -367,6 +369,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     dabRateBoost: cfg.dabRateBoost === true,
     vfoB: cfg.vfoB === 0 ? 0 : 1,
     adsb256: cfg.adsb256 === true,
+    ism256: cfg.ism256 === true,
     // ★★ V12 background decoding + the gallery, at definite values on every start (VibeServerBoot applies them)
     bgDecode: cfg.bgDecode ?? '',
     dxScan: cfg.dxScan ?? '',   // ★★★ V12 the idle DX scanner (VibeServerBoot: setDxScan + the log file)

@@ -191,7 +191,8 @@ import { LEAFLET_ASSET } from './leafletAsset';
 import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonLine, balloonMerge, balloonParams,
          balloonPicture, balloonPictureText, balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen, type BalloonPayload, type BalloonReport, type BalloonSettings } from '../../../src/services/balloons';   // ★ V12 balloons
 import { FIVE_TONE_STANDARDS, TONES_DEFAULTS, TONES_HINT, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from '../../../src/services/tones';   // ★ V12 DTMF + 5-tone
-import { NCDXF_BANDS, NCDXF_HINT, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
+import { NCDXF_BANDS, NCDXF_HINT, NCDXF_FOLLOW_HINT, NCDXF_CALLS, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, ncdxfFollowBand,
+         ncdxfFollowAllowed, ncdxfFollowTunedAway, ncdxfBeaconOn, ncdxfSlot, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
 import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
          dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle, type DscCall, type DscPin, type DscChannel } from './dsc';
@@ -215,6 +216,7 @@ import { autoBwOffered, shownEdges, type BwAutoState } from '../../../src/servic
 import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, type AmSyncId, type AmSyncState } from '../../../src/services/amSync';
 // ★★ V12 FreeDV digital voice (src/services/freedv.ts — the rules the app and the R36S share)
 import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME, FREEDV_HINT,
+         FREEDV_SIDEBANDS, freedvSidebandLabel,
          type FreeDvSub, type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
 // ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
@@ -1810,6 +1812,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDial: (d) => {
       chatDial(d);
       dialModeNow = d.mode;
+      ncdxfFollowSync();   // ★ V12 FOLLOW: a dial that turns shared stops it (never a shared dial)
       {
         // ★★ ASK BEFORE TUNING — adopt the server's word; say so when the room lets this listener in.
         const was = askNow;
@@ -2785,6 +2788,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onFreeDv: (f) => {
       if (!spec || spec.mode !== 'freedv' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
       fdvState = f;
+      spec.fdvSbSel = f.sbSel;
       const [lo, hi] = freedvPassband(f.sb);
       // ★ Written straight in, never sent (the width is the server's): the waterfall draws it on the next frame, and the
       //   hidden width row is kept true to it
@@ -5495,15 +5499,43 @@ function freedvSubRow(): HTMLElement | null {
     g.appendChild(b);
   }
   wrap.appendChild(g);
-  freedvSubRowSync(g);
+  /* ★ V12 the sideband (Stuart 2026-11-16): AUTO follows FreeDV's convention (LSB below 10 MHz, USB above); USB / LSB by
+   *  hand for a station that does not. Lit by the report's "sbSel", as the sub-mode keys are by its "sub". */
+  const sbSep = document.createElement('div');
+  sbSep.className = 'mBwSep';
+  sbSep.textContent = 'FREEDV SIDEBAND';
+  wrap.appendChild(sbSep);
+  const sg = document.createElement('div');
+  sg.className = 'mModeGrid';
+  sg.id = 'mFreeDvSb';
+  sg.style.gridTemplateColumns = `repeat(${FREEDV_SIDEBANDS.length}, minmax(0, 1fr))`;
+  for (const c of FREEDV_SIDEBANDS) {
+    const b = document.createElement('button');
+    b.className = 'mModeOpt';
+    b.style.minWidth = '0'; b.style.paddingLeft = b.style.paddingRight = '0.3em';
+    b.dataset.sb = c;
+    b.textContent = freedvSidebandLabel(c);
+    b.title = c === 'auto' ? `${FREEDV_NAME}: LSB below 10 MHz, USB above (the FreeDV convention)` : `${FREEDV_NAME}: ${c.toUpperCase()} whatever the band`;
+    b.onclick = () => spec?.freedvSub(null, c);   // ★ lit by the server's next report, never by this tap
+    sg.appendChild(b);
+  }
+  wrap.appendChild(sg);
+  freedvSubRowSync(g, sg);   // ★ both grids passed: the row is not in the document yet
   return wrap;
 }
 /** The row's lit key follows the server's report — none before the first one (a shared room may hold a manual choice). */
-function freedvSubRowSync(g: HTMLElement | null = document.getElementById('mFreeDvSub')) {
+function freedvSubRowSync(g: HTMLElement | null = document.getElementById('mFreeDvSub'),
+                          sg: HTMLElement | null = document.getElementById('mFreeDvSb')) {
   if (!g) return;
   const sub = fdvState?.sub;
   for (const x of Array.from(g.querySelectorAll('button')) as HTMLButtonElement[]) {
     const on = x.dataset.sub === sub;
+    x.classList.toggle('on', on);
+    x.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  const sb = fdvState?.sbSel;
+  if (sg) for (const x of Array.from(sg.querySelectorAll('button')) as HTMLButtonElement[]) {
+    const on = x.dataset.sb === sb;
     x.classList.toggle('on', on);
     x.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
@@ -13299,9 +13331,71 @@ function initNcdxfBands() {
     const k = document.createElement('button');
     k.className = 'btn'; k.textContent = b.label;
     k.title = `${(b.hz / 1e6).toFixed(3)} MHz in CW`;
-    k.onclick = () => { if (!spec) return; decTune(b.hz, 'cwu' as SDRMode); renderFreq(); };
+    k.onclick = () => { if (!spec) return; ncdxfFollowStop(); decTune(b.hz, 'cwu' as SDRMode); renderFreq(); };
     host.appendChild(k);
   }
+  ncdxfFollowSync();
+}
+/* ★★ FOLLOW (V12, Stuart 2026-11-16 — ncdxf.ts): this listener's OWN dial hops with one beacon up the five bands. A timer
+ *  checks four times a second where the beacon is (server time: the report's `now` against this clock) and tunes only
+ *  when the band changes. NEVER on a shared dial — the row is hidden there and a dial that turns shared stops it; tuning
+ *  anywhere by hand stops it too. */
+let ncdxfFollowOn = false, ncdxfFollowTimer = 0, ncdxfFollowPut = 0, ncdxfClockOff = 0;
+const ncdxfServerNow = () => Date.now() / 1000 + ncdxfClockOff;
+const ncdxfReach = () => NCDXF_BANDS.map((b) => clampTune(b.hz) === b.hz);
+function ncdxfFollowMay(): boolean {
+  return activeDec === 'ncdxf' && !!spec && ncdxfFollowAllowed(dialModeNow, srvSharedDial) && ncdxfReach().some(Boolean);
+}
+function ncdxfFollowStop() {
+  ncdxfFollowOn = false; ncdxfFollowPut = 0;
+  if (ncdxfFollowTimer) { clearInterval(ncdxfFollowTimer); ncdxfFollowTimer = 0; }
+  ncdxfFollowSync();
+}
+function ncdxfFollowTick() {
+  if (!ncdxfFollowOn) return;
+  if (!ncdxfFollowMay() || !spec) { ncdxfFollowStop(); return; }
+  if (ncdxfFollowTunedAway(spec.frequency, ncdxfFollowPut)) { ncdxfFollowStop(); return; }   // ★ the listener tuned by hand
+  const who = Number(($('ncdxfFollowWho') as HTMLSelectElement).value) || 0;
+  const b = ncdxfFollowBand(who, ncdxfServerNow(), ncdxfReach());
+  if (b < 0) { ncdxfFollowStop(); return; }
+  const hz = NCDXF_BANDS[b].hz;
+  if (hz !== ncdxfFollowPut) { ncdxfFollowPut = hz; decTune(hz, 'cwu' as SDRMode); renderFreq(); }
+}
+/** The row drawn only where FOLLOW may run; the key lit while it runs. */
+function ncdxfFollowSync() {
+  const row = document.getElementById('ncdxfFollowRow'), hint = document.getElementById('ncdxfFollowHint');
+  const sel = document.getElementById('ncdxfFollowWho') as HTMLSelectElement | null;
+  const btn = document.getElementById('ncdxfFollow');
+  if (!row || !sel || !btn || !hint) return;
+  const may = ncdxfFollowMay();
+  row.hidden = !may; hint.hidden = !may;
+  if (!may) { if (ncdxfFollowOn) ncdxfFollowStop(); return; }
+  hint.textContent = NCDXF_FOLLOW_HINT;
+  if (!sel.options.length) {
+    const calls: readonly string[] = ncdxfLast?.beacons.map((x) => x.call) ?? NCDXF_CALLS;
+    calls.forEach((c, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = c; sel.appendChild(o); });
+  }
+  btn.classList.toggle('on', ncdxfFollowOn);
+  btn.setAttribute('aria-pressed', ncdxfFollowOn ? 'true' : 'false');
+}
+function ncdxfFollowStart() {
+  if (!ncdxfFollowMay()) return;
+  ncdxfFollowOn = true; ncdxfFollowPut = 0;
+  if (!ncdxfFollowTimer) ncdxfFollowTimer = window.setInterval(ncdxfFollowTick, 250);
+  ncdxfFollowTick();
+  ncdxfFollowSync();
+}
+{
+  const btn = document.getElementById('ncdxfFollow'), sel = document.getElementById('ncdxfFollowWho') as HTMLSelectElement | null;
+  if (btn) btn.onclick = () => { if (ncdxfFollowOn) ncdxfFollowStop(); else {
+    // ★ first press: the beacon on the air now on the band the dial is on (or 20 m) — the one being heard
+    if (sel && !sel.dataset.picked && spec) {
+      const k = Math.max(0, NCDXF_BANDS.findIndex((b) => Math.abs(spec!.frequency - b.hz) < 1500));
+      sel.value = String(ncdxfBeaconOn(k, ncdxfSlot(ncdxfServerNow())));
+    }
+    ncdxfFollowStart();
+  } };
+  if (sel) sel.onchange = () => { sel.dataset.picked = '1'; if (ncdxfFollowOn) { ncdxfFollowPut = 0; ncdxfFollowTick(); } };
 }
 /* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
  *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
@@ -14163,6 +14257,7 @@ function initDecoders(host: string, auth: AuthState) {
       const r = ncdxfSanitise(d);
       if (!r) return;
       ncdxfLast = r; renderNcdxf();
+      if (r && r.now > 0) ncdxfClockOff = r.now - Date.now() / 1000;   // ★ FOLLOW keeps the server's clock, as the tracker does
       decStateText = ncdxfStatus(r);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
       setDecLive(r.band >= 0 && !!r.last && r.last.steps > 0);
@@ -15025,7 +15120,7 @@ function syncDecButtons() {
   $('balloonSettings').hidden = activeDec !== 'balloon';
   if (activeDec === 'balloon') initBalloonSettings();
   $('ncdxfSettings').hidden = activeDec !== 'ncdxf';
-  if (activeDec === 'ncdxf') initNcdxfBands();
+  if (activeDec === 'ncdxf') initNcdxfBands(); else ncdxfFollowStop();   // ★ V12 FOLLOW ends with the tracker
   $('tmSettings').hidden = !isTextFamily(activeDec) || !(tmCaps[activeDec]?.length);
   renderTmModes();
   renderDscKeys();

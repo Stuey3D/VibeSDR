@@ -31,6 +31,9 @@ const RATE = 288000, CENTRE = 434175000, DIAL = CENTRE + 25000;
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-webballoon-'));
 for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
+// ★ V12 Horus payload names: never the network in a test — today's try counts as done (vibe_horus_names.h)
+fs.mkdirSync(path.join(dir, 'data', 'horus'));
+fs.writeFileSync(path.join(dir, 'data', 'horus', 'checked'), String(Math.floor(Date.now() / 1000) + 10 * 86400));
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Balloon web test', locator: 'JO02ae', adminPass: 'wballoon-admin',
   radios: [{ serial: 'wballoon', label: 'Test radio', enabled: true, configured: true }] }));
 const rtlPort = await freePort(), port = await freePort(), cdp = await freePort();

@@ -25,6 +25,11 @@ inline const std::vector<Band>& bands() {
     static const std::vector<Band> b = {
         {"315", "315 MHz ISM",    315.00e6, 250e3, 200e3, "USA, Canada, Japan"},   // US/Japan TPMS, fobs, remotes
         {"433", "433.92 MHz ISM", 433.92e6, 250e3, 870e3, "Europe, UK, Africa, Australia, much of Asia"},   // 433.05–434.79: EU/UK sensors, weather, doorbells, TPMS
+        /* ★★ V12 2026-11-16 — THE UK's LoRa APRS (Stuart: "UK LoRa-APRS on 439.9125 MHz"): the UK's trackers, digipeaters
+         *  and iGates (and MeshCom UK) are on 439.9125, 6 MHz above the 433 band — no 433 capture reaches it. A LoRa-only
+         *  block in the 70 cm amateur band: the radio 200 kHz above the channel (its DC off the signal), the channel's
+         *  125 kHz with room for a crystal error (needHz 100 kHz). Sources: OARC wiki packet:lora; MeshCom country profile. */
+        {"439", "439.9 MHz LoRa APRS (UK)", 439.9125e6, 200e3, 100e3, "UK (70 cm amateur LoRa APRS, MeshCom)"},
         /* ★★ V12 beta72 — THE WORLD BLOCKS (docs/v12/LORA-WORLD-BANDS.md §THE BLOCK LIST; Stuart 11-12: "treat them like
          *  DAB blocks"). Each is one ~2 MHz capture with the RADIO on its centre (dcOffsetHz 0), placed so every default
          *  channel of the regions it serves fits at 2.048 MS/s; neighbours may overlap, like DAB's 11A/11N. The eight bands

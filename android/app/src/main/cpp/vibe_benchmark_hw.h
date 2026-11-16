@@ -139,7 +139,7 @@ enum class Need {
     Spots,       // digital spots: HF, 6 m or 2 m
     Avdata,      // ★ V12 the aircraft datalink: ACARS 131.5–131.85 or VDL2 136.68–136.99 MHz, not an HF+ / an Icom
     Sondes,      // ★ V12 radiosondes: a 2 MHz band of 400–406 MHz, not an HF+ / an Icom
-    M17,         // ★ V12 M17 digital voice: 2 m or 70 cm, not an HF+ / an Icom (vibe_radio_caps.h)
+    M17,         // ★ V12 M17 digital voice: 2 m or 70 cm on any SDR (the HF+ on 2 m), never an Icom (vibe_radio_caps.h)
 };
 
 struct Gate { bool run = true; std::string why; };
@@ -208,7 +208,7 @@ inline Gate gateNeed(const Hw& hw, Need n) {
                 return no("no radio here reaches the radiosonde band (400\xe2\x80\x93" "406 MHz)");
             break;
         case Need::M17:
-            if (!any([](const Radio& r) { return r.driver != "airspyhf" && r.driver != "icom"
+            if (!any([](const Radio& r) { return r.driver != "icom"
                                                  && (touches(r, 144e6, 148e6) || touches(r, 420e6, 450e6)); }))
                 return no("no radio here reaches M17 (2 m / 70 cm)");
             break;

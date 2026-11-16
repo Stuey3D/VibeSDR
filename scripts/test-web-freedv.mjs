@@ -11,6 +11,9 @@
 //   • 390 px: the row is one line inside the menu, nothing scrolls sideways;
 //   • leaving FreeDV (USB): the line drops its FreeDV text, the FREEDV row goes and the BANDWIDTH row comes back;
 //   • 40 m: the passband is drawn on the LOWER sideband (the server's convention, its report's "sb");
+//   • the SIDEBAND row (AUTO / USB / LSB) under the sub-modes: a USB station at 7.21 MHz never syncs on AUTO (LSB there);
+//     USB by hand is lit by the server's report, the line says "FreeDV USB · searching" until it syncs, the passband moves
+//     above the dial, and the row fits one line at 390 px;
 //   • a server whose libcodec2 did not load (VIBE_FREEDV_DISABLE=1): no FreeDV key at all.
 //   Screenshots: VIBE_SHOT_DIR (default the temp dir).
 //   node scripts/build-web.mjs   (then)
@@ -123,10 +126,11 @@ async function scenario(title, { clip, centre, freq, env: extraEnv = {} }, body)
       openPicker: async () => { if (!(await ev(`!!document.getElementById('mModeMenu')`))) await ev(`document.getElementById('mMode').click()`); await sleep(400); },
       // ★ through the picker's own CLOSE key — it puts the moved width row back (removing the menu would lose it)
       closePicker: async () => { await ev(`[...(document.getElementById('mModeMenu')?.querySelectorAll('button.mModeClose') || [])].find(b => /^\\s*CLOSE\\s*$/i.test(b.textContent))?.click(); 1`); await sleep(250); },
-      keys: () => ev(`JSON.stringify([...document.querySelectorAll('#mModeMenu .mModeGrid:not(#mFreeDvSub) > .mModeOpt')].map(b => b.textContent))`).then(JSON.parse),
+      keys: () => ev(`JSON.stringify([...document.querySelectorAll('#mModeMenu .mModeGrid:not(#mFreeDvSub):not(#mFreeDvSb) > .mModeOpt')].map(b => b.textContent))`).then(JSON.parse),
       pick: async (legend) => { await P.openPicker(); return ev(`(() => { const b = [...document.querySelectorAll('#mModeMenu .mModeOpt')].find(b => b.textContent === ${JSON.stringify(legend)}); if (b) b.click(); return !!b; })()`); },
       vts: () => ev(`(document.getElementById('vtsName')?.textContent || '').trim()`),
       lit: () => ev(`[...document.querySelectorAll('#mFreeDvSub .mModeOpt.on')].map(b => b.textContent).join(',')`),
+      litSb: () => ev(`[...document.querySelectorAll('#mFreeDvSb .mModeOpt.on')].map(b => b.textContent).join(',')`),
     };
     await body(P);
     ok(errs.length === 0, `no exception on the page${errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''}`);
@@ -214,6 +218,38 @@ if (CLIP_LSB && fs.existsSync(CLIP_LSB)) {
     shots.push(await P.shot('freedv-lsb-desktop.png'));
   });
 } else console.log('   (40 m LSB scenario not run — set VIBE_FREEDV_CLIP_LSB)');
+
+await scenario('the sideband override: a USB station at 7.21 MHz', { clip: CLIP, centre: 7200000, freq: 7210000 }, async (P) => {
+  ok(await P.pick('FreeDV'), 'FreeDV chosen at 7.210 MHz');
+  ok(await P.until(`window.__fdv.in.some(m => m.sb === 'lsb' && m.sbSel === 'auto')`, 6000), 'AUTO: the server demodulates LSB here (the convention)');
+  await P.openPicker();
+  ok(await P.ev(`[...document.querySelectorAll('#mModeMenu .mBwSep')].some(s => s.textContent === 'FREEDV SIDEBAND')`), 'in the picker: the FREEDV SIDEBAND row, under the sub-modes');
+  const sbs = await P.ev(`[...document.querySelectorAll('#mFreeDvSb .mModeOpt')].map(b => b.textContent).join(' ')`);
+  ok(sbs === 'AUTO USB LSB', `its keys: ${sbs}`);
+  ok(await P.until(`[...document.querySelectorAll('#mFreeDvSb .mModeOpt.on')].map(b => b.textContent).join() === 'AUTO'`, 3000), `AUTO lit, from the report ("${await P.litSb()}")`);
+  await P.ev(`[...document.querySelectorAll('#mFreeDvSb .mModeOpt')].find(b => b.textContent === 'USB').click(); 1`);
+  ok(await P.until(`window.__fdv.out.some(m => m.type === 'freedv_sub' && m.sb === 'usb')`, 2000), 'tapping USB sends freedv_sub sb usb');
+  ok(await P.until(`[...document.querySelectorAll('#mFreeDvSb .mModeOpt.on')].map(b => b.textContent).join() === 'USB'`, 5000), `USB lit once the server's report says so ("${await P.litSb()}")`);
+  ok(await P.until(`/^FreeDV 700D · -?\\d+ dB/.test(document.getElementById('vtsName')?.textContent || '')`, 45000), `in sync on USB at 7.21 MHz: "${await P.vts()}"`);
+  ok(await P.ev(`document.getElementById('bwHiVal').textContent === '+2.7k' && document.getElementById('bwLoVal').textContent === '+50'`),
+     `the passband is drawn above the dial (${await P.ev(`document.getElementById('bwLoVal').textContent + ' … ' + document.getElementById('bwHiVal').textContent`)})`);
+  shots.push(await P.shot('freedv-sideband-desktop.png'));
+  await P.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await sleep(1200);
+  await P.closePicker(); await P.openPicker();
+  const fit = JSON.parse(await P.ev(`JSON.stringify((() => { const m = document.getElementById('mModeMenu').getBoundingClientRect();
+    const bs = [...document.querySelectorAll('#mFreeDvSb .mModeOpt')].map(b => b.getBoundingClientRect());
+    return { doc: document.documentElement.scrollWidth, mL: m.left, mR: m.right, tops: [...new Set(bs.map(b => Math.round(b.top)))].length,
+             l: Math.min(...bs.map(b => b.left)), r: Math.max(...bs.map(b => b.right)) }; })())`));
+  ok(fit.doc <= 391 && fit.tops === 1 && fit.l >= fit.mL && fit.r <= fit.mR + 0.5, `390 px: the SIDEBAND row is one line inside the menu (page ${fit.doc})`);
+  shots.push(await P.shot('freedv-sideband-phone.png'));
+  await P.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  await sleep(600);
+  await P.ev(`[...document.querySelectorAll('#mFreeDvSb .mModeOpt')].find(b => b.textContent === 'AUTO').click(); 1`);
+  ok(await P.until(`[...document.querySelectorAll('#mFreeDvSb .mModeOpt.on')].map(b => b.textContent).join() === 'AUTO'`, 5000), 'AUTO goes back');
+  ok(await P.until(`document.getElementById('bwLoVal').textContent === '−2.7k'`, 5000), 'and the passband returns below the dial');
+  await P.closePicker();
+});
 
 await scenario('no libcodec2 (VIBE_FREEDV_DISABLE=1): no FreeDV key', { clip: CLIP, centre: 14200000, freq: 14210000, env: { VIBE_FREEDV_DISABLE: '1' } }, async (P) => {
   await P.openPicker();
