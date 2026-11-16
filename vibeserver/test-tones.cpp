@@ -13,6 +13,7 @@
 //     DTMF — nothing. `test-tones wav <file>…` runs recordings (e.g. macOS `say` output) and prints anything decoded.
 //   • SIMD = scalar: the Goertzel bank and the decimator bit for bit, and every decode the same.
 //   • Cost on this machine.
+//   `test-tones clip <out.cu8> [rate] [seconds]` writes the end-to-end tests' NFM clip (see writeClip).
 #include "decoders/tones_rx.h"
 #include "decoders/tones_tx.h"
 
@@ -417,8 +418,42 @@ static int replay(int argc, char** argv) {
     return found ? 1 : 0;   // ★ for talk-off corpora: anything decoded is a failure
 }
 
+// ── the end-to-end clip ─────────────────────────────────────────────────────────────────────────────────────────────
+/** ★ The server/web tests' clip: unsigned 8-bit IQ at `rate`, an NFM channel (±2.5 kHz deviation, 30 dB C/N in 12.5 kHz)
+ *  25 kHz ABOVE the clip's centre, on a loop of about 6 s: DTMF "*73#1234" (70 ms tones, 70 ms pauses), a ZVEI-1 call
+ *  "12345", a CCIR call "40719" (100 ms tones), silence between. Where it is depends on the --hf-centre the test gives
+ *  fake-rtl-tcp: on 2 m it is an amateur repeater, on PMR446 it is not. */
+static int writeClip(const char* out, double rate, double seconds) {
+    std::vector<float> a;
+    tx::silence(a, 1.0); tx::dtmf(a, "*73#1234");
+    tx::silence(a, 1.0); tx::fiveTone(a, 0, "12345");
+    tx::silence(a, 1.0); tx::fiveTone(a, 5, "40719");
+    tx::silence(a, 1.5);
+    FILE* f = std::fopen(out, "wb"); if (!f) { std::perror(out); return 1; }
+    std::mt19937 rng(77); std::normal_distribution<float> g(0.0f, std::sqrt(0.5f));
+    const double A = std::sqrt(std::pow(10.0, 30.0 / 10) * 12500.0 / rate * 2.0);
+    const size_t total = (size_t)(seconds * rate);
+    std::vector<uint8_t> buf; buf.reserve(1 << 17);
+    auto q = [](double v) { const int x = (int)std::lround(127.5 + v * 18.0); return (uint8_t)std::max(0, std::min(255, x)); };
+    double ph = 0;
+    for (size_t i = 0; i < total; ++i) {
+        const double t = i / rate;
+        const size_t k = (size_t)std::fmod(t * 48000.0, (double)a.size());
+        const double dev = 2500.0 * a[k] / 0.55;   // ★ the loudest DTMF pair (≈ 0.55 peak) at full deviation
+        ph += 2 * M_PI * (25000.0 + dev) / rate;
+        if (ph > M_PI) ph -= 2 * M_PI;
+        buf.push_back(q(A * std::cos(ph) + g(rng))); buf.push_back(q(A * std::sin(ph) + g(rng)));
+        if (buf.size() >= (1 << 17)) { std::fwrite(buf.data(), 1, buf.size(), f); buf.clear(); }
+    }
+    std::fwrite(buf.data(), 1, buf.size(), f);
+    std::fclose(f);
+    std::printf("clip: %s, %.0f s at %.0f S/s, one pass %.1f s\n", out, seconds, rate, a.size() / 48000.0);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 2 && std::string(argv[1]) == "wav") return replay(argc, argv);
+    if (argc > 2 && std::string(argv[1]) == "clip") return writeClip(argv[2], argc > 3 ? std::atof(argv[3]) : 288000, argc > 4 ? std::atof(argv[4]) : 30);
     std::printf("test-tones — DTMF (ITU-T Q.23/Q.24) and 5-tone selective calling\n");
     testTables();
     testDtmf();

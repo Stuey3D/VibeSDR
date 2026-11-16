@@ -73,6 +73,11 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
   // ★ V12 balloons (docs/v12/BALLOONS.md): UKHAS RTTY, Horus Binary, SSDV pictures — a listener's decoder on 70 cm, as on the setup page
   { id: 'balloon', label: 'Balloons (UKHAS, Horus, SSDV)' },
+  /* ★★ V12 tone decoders (docs/v12/TONES.md): DTMF and 5-tone selective calling on a listener's NFM / AM audio, and under it
+   *  the owner's opt-in for 5-tone numbers off the amateur bands ("+" token, IN the CSV when on, off by default) — as on the
+   *  setup page, with the same notice. */
+  { id: 'tones', label: 'DTMF and 5-tone selective calling' },
+  { id: 'tones+digits', label: '5-tone: show the called numbers off the amateur bands (to you only)', parent: 'tones', on: true },
   { id: 'ais', label: 'AIS ships' },
   // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },
@@ -91,6 +96,10 @@ const BLOCKABLE: ModeEntry[] = [
 const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless '
   + 'Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law '
   + 'where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.';
+/** ★ ONE TEXT, TWO READERS: vibe_setup_page.h TONES_DIGITS_NOTICE. */
+const TONES_DIGITS_NOTICE = 'Off the amateur bands a 5-tone call\u2019s number says who is being called on a private radio system. '
+  + 'Only switch this on if the law where this server is allows it. The numbers are shown only to you, the owner, while you '
+  + 'are signed in \u2014 never to listeners, never in the gallery. DTMF off the amateur bands is never shown (it can be a phone number).';
 /** The list as drawn: BLOCKABLE plus one switch per digital-spots mode under "spots", before Band — `spots-<mode>` off.
  *  ★ The modes are this build's own (DIGI_MODE_STYLE, the map legend's list): the server on this phone IS this build. */
 function modeTree(): ModeEntry[] {
@@ -4777,6 +4786,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
                         {chip(m, inert)}
                         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{AVDATA_TEXT_NOTICE}</Text>
+                      </View>
+                    ) : m.id === 'tones+digits' ? (
+                      <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{TONES_DIGITS_NOTICE}</Text>
                       </View>
                     ) : chip(m, inert);
                     if (!k.length) return box;

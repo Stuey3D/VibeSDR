@@ -8809,6 +8809,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         void binary(const uint8_t* d, size_t n) override { im->sendWs(sock, 0x2, d, n); }
         void text(const std::string& t) override { im->sendText(sock, t); }
         size_t backlog() const override { return im->outboxBacklog(sock); }
+        /** ★ V12 tones (docs/v12/TONES.md): the owner's own decoder socket — signed in to the admin page now. */
+        bool privileged() const override { return im->decoderSockAdmin(sock); }
     };
     // ★ decoderEnv() is defined beside acceptDxcluster.
     DecoderRouter decoders_{ [this](const std::string& s) { return decoderEnv(s); } };
@@ -29448,6 +29450,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
             };
             e.rttySkimWorkers = [] { return LocalSdrShim::rttySkimWorkers(); };
+            // ★★ V12 tones: the owner's opt-in to 5-tone digits off the amateur bands (setup page, "tones+digits", off by
+            //    default) — and the band plan's region, which decides what is amateur (docs/v12/TONES.md).
+            e.tonesDigits = [] { return vsModeBlocked("tones+digits"); };
+            e.region = [] { return vibebands::defaultRegion(); };
             // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.
             e.spotTap = [dial](bool band) -> vibe::DecoderTapPtr {
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
@@ -30098,6 +30104,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     control path without touching clientMtx (which the caller may already hold).
      *  ★ The fallback stays for a receiver that cannot have a second listener: there the radio-wide
      *    flag IS this listener's, and removing it would break every single-user server. */
+    /** ★★ V12 (docs/v12/TONES.md): is this DECODER socket the owner's? A decoder socket never signs in itself; it carries its
+     *  listener's session, and the owner is a session whose spectrum / audio socket has proved the admin password (adminSocks).
+     *  A single-listener receiver has one listener: the radio's own admin flag. */
+    bool decoderSockAdmin(const std::shared_ptr<net::Socket>& sock) {
+        if (!sock) return false;
+        std::string sess;
+        { std::lock_guard<std::mutex> lk(clientMtx); auto it = dxSockSession.find(sock.get()); if (it != dxSockSession.end()) sess = it->second; }
+        if (g_vsMaxUsers.load() <= 1) return adminOk.load();
+        if (sess.empty()) return false;
+        std::set<const net::Socket*> admins;
+        { std::lock_guard<std::mutex> al(adminSockMtx); admins = adminSocks; }
+        if (admins.empty()) return false;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        for (const auto& kv : sockSession) if (kv.second == sess && admins.count(kv.first)) return true;
+        return false;
+    }
     bool adminNow(const std::shared_ptr<net::Socket>& sock) {
         if (auto d = dspFor(sock)) return d->adminOk.load();
         if (g_vsMaxUsers.load() > 1) {
@@ -39886,6 +39908,9 @@ static std::string vsTunableJson() {
     /* ★ V12 balloons (decoders/balloon_rx.h): UKHAS RTTY telemetry, Horus Binary, SSDV pictures — a listener's decoder on
      *  USB. Absent on an older server; false + its reason where this radio does not reach 70 cm or the owner blocked it. */
     j += vsDecoderCapJson("balloon", reach);
+    /* ★ V12 tone decoders (decoders/tones_rx.h): DTMF and 5-tone selective calling on a listener's NFM / AM audio — on any
+     *  frequency (what is SHOWN depends on it: docs/v12/TONES.md). Absent on an older server; false where the owner blocked it. */
+    j += std::string(",\"tones\":") + (vsModeBlocked("tones") ? "false" : "true");
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -40130,7 +40155,7 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "drm", "freedv", "m17" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "drm", "freedv", "m17" };
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -40303,7 +40328,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

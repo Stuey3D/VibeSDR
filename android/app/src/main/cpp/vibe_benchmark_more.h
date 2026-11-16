@@ -55,6 +55,7 @@
 #include "vibe_hdlc.h"
 #include "vibe_freedv.h"             // ★ V12 FreeDV as a mode (the dec_freedv row) — the system's libcodec2, dlopen'd
 #include "decoders/balloon_tx.h"     // ★ V12 balloons (the dec_balloon row) — our own transmitter
+#include "decoders/tones_tx.h"       // ★ V12 DTMF + 5-tone (the dec_tones row) — our own transmitter
 #include "vibe_m17.h"                // ★ V12 M17 as a mode (the dec_m17 row) — our own receiver, Codec 2 from the same library
 #include "benchsynth/cw_synth.h"
 #include "benchsynth/psk_synth.h"
@@ -539,6 +540,22 @@ inline std::vector<float> balloonAudio() {
     for (float& v : a) v += n(g);
     return a;
 }
+/** ★ V12 tones: what a repeater user and a PMR fleet send — DTMF strings and 5-tone calls (ZVEI-1, CCIR, EEA), 20 dB in 3 kHz,
+ *  with speech-like gaps of noise between; both decoders run on it. */
+inline std::vector<float> tonesAudio() {
+    using namespace vibe::tones;
+    std::vector<float> a;
+    for (int i = 0; i < 3; ++i) {
+        tx::silence(a, 0.5); tx::dtmf(a, "*73#1234");
+        tx::silence(a, 0.5); tx::fiveTone(a, 0, "12345");
+        tx::silence(a, 0.5); tx::fiveTone(a, 5, "40719");
+        tx::silence(a, 0.5); tx::fiveTone(a, 6, "23356");
+    }
+    tx::silence(a, 1.0);
+    std::mt19937 g(71); std::normal_distribution<float> n(0.f, 0.03f);
+    for (float& v : a) v += n(g);
+    return a;
+}
 inline std::vector<float> jttyMessage(const std::string& text, double rate, double f0) {
     std::vector<uint64_t> frames;
     if (!jtty::packMessage(text, frames)) return {};
@@ -703,6 +720,7 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_psk",      { "psk",    true,  true  } }, { "dec_pskskim",  { "psk",    false, true  } },
         { "dec_rttyskim", { "rtty",   false, true  } },   // ★ inside RTTY's switch, which carries the green one-signal decoder
         { "dec_balloon",  { "balloon", true, true  } },   // ★ V12 balloons: a listener's decoder (a slot)
+        { "dec_tones",    { "tones",  true,  true  } },   // ★ V12 DTMF + 5-tone: a listener's decoder (a slot)
         { "dec_jtty",     { "jtty",   true,  true  } }, { "dec_sitora",   { "sitora", true,  true  } },
         { "dec_dsc",      { "dsc",    true,  true  } }, { "dec_same",     { "same",   true,  true  } },
         { "dec_selcal",   { "selcal", true,  true  } }, { "dec_mfsk",     { "mfsk",   true,  true  } },
@@ -840,6 +858,12 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     run("dec_balloon", "Decoder: Balloons", [&] {
         return hostAudioRow("dec_balloon", "Decoder: Balloons (UKHAS RTTY + Horus, AUTO)", "balloon", attach + "\"extension_name\":\"balloon\"}",
                             balloonAudio(), Count::Any);
+    });
+    /* ★★ V12 tones (docs/v12/TONES.md): DTMF and 5-tone selective calling, both on one listener's audio. Sets the "tones"
+     *  switch's default; never hides it. */
+    run("dec_tones", "Decoder: DTMF / 5-tone", [&] {
+        return hostAudioRow("dec_tones", "Decoder: DTMF + 5-tone selective calling", "tones", attach + "\"extension_name\":\"tones\"}",
+                            tonesAudio(), Count::Any);
     });
     run("dec_sitora", "Decoder: SITOR-A", [&] {
         const auto L = sitorsynth::makeLink("002320204", "364775427", "GOOD MORNING THIS IS A TEST +?", "QSL +?", "73 +?", 4, 7);
