@@ -162,6 +162,12 @@ flags_for() {
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
+    # ★ V12 TDF / ALS162 (decoders/tdf_phase.h): synthetic phase code through the TIME decoder — noise, drift, timing, CPU.
+    #   `test-tdf --wav <file> [start_utc]` replays an UberSDR recording (docs/v12/TIME-TDF.md).
+    test-tdf)              echo "-O2" ;;
+    # ★ V12 the NCDXF / IARU beacon tracker (decoders/ncdxf_tracker.h, vibe_ncdxf_run.h): synthetic CW at the published
+    #   schedule — steps vs SNR, noise, the callsign, clock, pitch, QSB, the grid, the host's run. `--wav` replays a recording.
+    test-ncdxf)            echo "-O2" ;;
     # ★★ The ADS-B gain rule after Stuart's FlightAware box: the top, down only for dynamic range, never for strong aircraft.
     test-adsb-gain)        echo "-O2 -lpthread" ;;
     # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard
@@ -176,7 +182,7 @@ flags_for() {
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
-    test-ais|test-aprs|test-ais-store) echo "-O2 -lpthread" ;;
+    test-ais|test-aprs|test-ais-store|test-ais-binary) echo "-O2 -lpthread" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
@@ -353,7 +359,7 @@ deps_for() {
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;
-    test-time-decoder)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
+    test-time-decoder|test-tdf)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
     test-radiodns-ecc)  echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
     test-radiodns-name) echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
     test-geoip)         echo "$SRC/geoip.cpp $SRC/proc.cpp" ;;
@@ -402,7 +408,7 @@ deps_for() {
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
-    test-ais|test-aprs|test-ais-store) echo "$VDSP/ddc.cpp" ;;
+    test-ais|test-aprs|test-ais-store|test-ais-binary) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
     test-drm|test-drm-signal|test-drm-constellation) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
     test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;
@@ -740,6 +746,8 @@ if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=
 if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 AIS + APRS in the app (src/services/tracks.ts) against the web's tracks.ts — one rule, two readers
 if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 NCDXF beacons: the shared client half (src/services/ncdxf.ts) and both clients' keys (2026-11-16).
+if npx tsx scripts/test_ncdxf_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

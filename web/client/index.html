@@ -3242,6 +3242,19 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 
 /* ★★ V12 JTTY (jtty.ts): one row per station, lowest frequency first — frequency · call · SNR · confidence · age, then
    its recent messages coloured by confidence (the CW list's four colours); the spots under them. */
+/* ★★ V12 NCDXF beacons: the grid — beacon rows, band columns, the steps heard in each cell (ncdxf.ts). */
+#ncdxfList { display: none; margin-top: 6px; }
+#ncdxfList.on { display: block; }
+#ncdxfGrid table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+#ncdxfGrid th { color: var(--text-dim); font-weight: 600; font-size: 10px; letter-spacing: 1px; padding: 2px 4px; text-align: center; }
+#ncdxfGrid th.on { color: var(--freq); }
+#ncdxfGrid td { padding: 1px 4px; text-align: center; border-top: 1px solid rgba(255,255,255,0.06); }
+#ncdxfGrid td.b { text-align: left; color: var(--freq); letter-spacing: 1px; white-space: nowrap; }
+#ncdxfGrid td.b small { color: var(--text-dim); letter-spacing: 0; margin-left: 6px; }
+#ncdxfGrid td.c { min-width: 2.4em; color: #0b1014; font-weight: 700; border-radius: 3px; }
+#ncdxfGrid td.c.none { color: var(--text-dim); font-weight: 400; }
+#ncdxfGrid td.c.old { opacity: 0.45; }
+#ncdxfGrid td.c.now { outline: 1px solid var(--freq); outline-offset: -1px; }
 #jttyList { display: none; margin-top: 6px; }
 #jttyList.on { display: block; }
 #jttyList .jtr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 4.2em 4.4em 3.4em; gap: 2px 8px;
@@ -4453,6 +4466,8 @@ select.btn { padding: 6px 8px; }
     <div id="dscList"><div id="dscKeys"></div><div id="dscRows"></div></div>
     <!-- ★★ JTTY: every JTTY station in the passband (lowest frequency first, coloured by confidence), then the spots (jtty.ts). -->
     <div id="jttyList"><div id="jttyRows"></div><div id="jttySpotsHead">SPOTS</div><div id="jttySpots"></div></div>
+    <!-- ★★ V12 NCDXF / IARU beacons: the propagation grid — 18 beacons × 5 bands, how far down the steps (src/services/ncdxf.ts). -->
+    <div id="ncdxfList"><div id="ncdxfGrid"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data
          twice, and this is the surface the user deliberately chose. -->
@@ -5590,6 +5605,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <!-- ★★ V12 DSC: maritime Digital Selective Calling (ITU-R M.493) — decoded on the server; hidden unless it says "dsc". -->
     <!-- ★★ V12 JTTY: the WSJT-X 3.2 keyboard mode — decoded on the server; hidden unless it says "jtty". -->
+    <!-- ★★ V12 NCDXF / IARU beacons: tracked on the server; hidden unless it says "ncdxf" (greyed with why off its reach). -->
+    <button class="btn" data-dec="ncdxf" hidden title="NCDXF / IARU beacons — 18 beacons round the world on 14.100, 18.110, 21.150, 24.930 and 28.200 MHz, ten seconds each on a three-minute cycle: who you hear on each band, and how far down their four power steps">BEACONS</button>
     <button class="btn" data-dec="jtty" hidden title="JTTY — the new WSJT-X keyboard mode: RTTY-style contest exchanges and free text with weak-signal FEC; every JTTY signal in your passband decoded at once">JTTY</button>
     <button class="btn" data-dec="dsc" hidden title="Maritime Digital Selective Calling — distress, urgency, safety and routine calls between ships and coast stations (MF/HF and VHF channel 70)">DSC</button>
     <button class="btn" data-dec="sitora" hidden title="SITOR-A (AMTOR mode A) — the maritime ARQ teleprinter: ship and coast station in turn, 100 Bd, 170 Hz shift. Both stations of a link are printed, each under its own label">SITOR-A</button>
@@ -5621,6 +5638,8 @@ select.btn { padding: 6px 8px; }
       <div class="seg" id="timeStation">
         <button class="btn on" data-station="msf"   title="Anthorn, UK — tune 60.000 kHz in CW">MSF 60k</button>
         <button class="btn" data-station="dcf77" title="Mainflingen, DE — tune 77.500 kHz in CW">DCF77 77.5k</button>
+        <!-- ★ V12 2026-11-16 TDF (ALS162): phase-coded, so CW (a beat note), never AM. Shown by main.ts on a server that reads it. -->
+        <button class="btn" data-station="tdf" hidden title="Allouis, France — tune 162.000 kHz in CW. Its time code is in the carrier's phase, so AM shows nothing. French time (CET/CEST).">TDF 162k</button>
         <!-- ★ WWVB is ALSO on 60 kHz, like MSF — which one you hear is a matter of geography, not
              of tuning. Worth saying, or a UK listener picking WWVB would blame the decoder. -->
         <button class="btn" data-station="wwvb"  title="Fort Collins, US — also 60.000 kHz, in CW. Receivable in North America; in Europe MSF dominates this frequency.">WWVB 60k</button>
@@ -5725,6 +5744,13 @@ select.btn { padding: 6px 8px; }
       <div class="seg" id="tmModes" style="flex-wrap:wrap"></div>
     </div>
     <div class="hint" id="tmHint"></div>
+  </div>
+  <div class="subPanel" id="ncdxfSettings" hidden>
+    <div class="mrow">
+      <label>BAND</label>
+      <div class="seg" id="ncdxfBands"></div>
+    </div>
+    <div class="hint" id="ncdxfHint"></div>
   </div>
   <div class="subPanel" id="jttySettings" hidden>
     <div class="mrow">

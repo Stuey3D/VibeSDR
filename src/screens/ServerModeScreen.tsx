@@ -46,7 +46,7 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'dab', label: 'DAB' }, { id: 'dabScan', label: '', parent: 'dab', node: 'dabScan' },
   { id: 'rtty', label: 'RTTY (and RTTY AUTO)' }, { id: 'navtex', label: 'NAVTEX' },
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
-  { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals (MSF, DCF77, WWV/WWVB, RWM, JJY)' },
+  { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals (MSF, DCF77, TDF, WWV/WWVB, RWM, JJY)' },
   { id: 'spots', label: 'Digital spots / map' },
   // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
   { id: 'spotsband', label: 'Band: a whole band at once', parent: 'spots' },

@@ -182,6 +182,7 @@ import {
 import { mapglVendor, probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
+import { NCDXF_BANDS, NCDXF_HINT, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
 import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
          dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle, type DscCall, type DscPin, type DscChannel } from './dsc';
@@ -875,6 +876,7 @@ async function loadAudioPolicy(httpBase: string) {
   tmCaps = {};                 // ★ …nor the MFSK keyboard modes
   hellCap = false;             // ★ …nor FELD HELL
   jttyCap = false;             // ★ …nor JTTY
+  ncdxfCap = false;            // ★ …nor the NCDXF beacon tracker
   decWhy = {};                 // ★ …and no decoder out of reach until this radio says so
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
@@ -968,6 +970,11 @@ async function loadAudioPolicy(httpBase: string) {
     hellCap = j.hell === true;   // ★ FELD HELL (V12): drawn by this server, read by eye
     { const b = document.querySelector('#decodersPanel [data-dec="hell"]') as HTMLElement | null;
       if (b) b.hidden = !hellCap || blockedModes.has('hell'); }
+    { const b = document.querySelector('#timeStation [data-station="tdf"]') as HTMLElement | null;
+      if (b) b.hidden = j.timeTdf !== true; }   // ★ V12 TDF: a station of TIME, only on a server that reads it
+    ncdxfCap = j.ncdxf === true || !!decWhy.ncdxf;   // ★ V12 NCDXF beacons: tracked by this server (greyed with why off its reach)
+    { const b = document.querySelector('#decodersPanel [data-dec="ncdxf"]') as HTMLElement | null;
+      if (b) b.hidden = !ncdxfCap || blockedModes.has('ncdxf'); }
     jttyCap = j.jtty === true || !!decWhy.jtty;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="jtty"]') as HTMLElement | null;
       if (b) b.hidden = !jttyCap || blockedModes.has('jtty'); }
@@ -2165,7 +2172,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -8704,7 +8711,7 @@ function dabUiOn() {
   // ★★ V12: the server decoders' own lists too (CW/PSK, APRS, DSC, JTTY) — showDecBox() toggles them when a decoder
   //    opens, but DAB takes the box without it, so APRS's "listening…" and PACKETS sat under the DAB signal view
   //    (Stuart's Pi 2, 2026-10-26).
-  for (const id of ['cwList', 'aprsList', 'dscList', 'jttyList']) document.getElementById(id)?.classList.remove('on');
+  for (const id of ['cwList', 'aprsList', 'dscList', 'jttyList', 'ncdxfList']) document.getElementById(id)?.classList.remove('on');
   $('decBox').classList.remove('wide');
   $('decBox').classList.remove('navtex');
   $<HTMLButtonElement>('decPrev').style.display = 'none';
@@ -12873,7 +12880,45 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | null = null;
+/* ★★ NCDXF / IARU BEACONS (V12, 2026-11-16) — tracked on the server (decoders/ncdxf_tracker.h): the box is the propagation
+ *  grid, 18 beacons × 5 bands, from the server's report every 10 s; the settings hold the five beacon frequencies to tune.
+ *  Offered only where vibeserver.json says "ncdxf" (greyed with the reason where this radio reaches none of them). */
+let ncdxfCap = false;
+let ncdxfLast: NcdxfReport | null = null;
+function renderNcdxf() {
+  const host = document.getElementById('ncdxfGrid');
+  if (!host) return;
+  const r = ncdxfLast;
+  if (!r) { host.innerHTML = '<div class="idle" style="color:var(--text-dim);font-size:11px;padding:6px">waiting for the first ten-second slot…</div>'; return; }
+  const e = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+  let h = '<table><tr><th></th>' + NCDXF_BANDS.map((b, k) => `<th class="${r.band === k ? 'on' : ''}">${b.label.replace(' ', '')}</th>`).join('') + '</tr>';
+  for (const row of ncdxfRows(r)) {
+    h += `<tr><td class="b">${e(row.call)}<small>${e(row.where)}</small></td>`;
+    for (const c of row.cells) {
+      const cls = ['c', c.steps ? '' : 'none', c.faded ? 'old' : '', c.now ? 'now' : ''].filter(Boolean).join(' ');
+      h += `<td class="${cls}" style="background:${c.steps ? ncdxfStepColour(c.steps) : 'transparent'}" title="${e(c.title)}">${e(c.text)}</td>`;
+    }
+    h += '</tr>';
+  }
+  host.innerHTML = h + '</table>';
+}
+/** ★ The five beacon frequencies this radio can reach, CW — the rest are not drawn (AGENTS.md: no dead controls). */
+function initNcdxfBands() {
+  const host = document.getElementById('ncdxfBands');
+  const hint = document.getElementById('ncdxfHint');
+  if (hint) hint.textContent = NCDXF_HINT;
+  if (!host) return;
+  host.textContent = '';
+  for (const b of NCDXF_BANDS) {
+    if (clampTune(b.hz) !== b.hz) continue;
+    const k = document.createElement('button');
+    k.className = 'btn'; k.textContent = b.label;
+    k.title = `${(b.hz / 1e6).toFixed(3)} MHz in CW`;
+    k.onclick = () => { if (!spec) return; decTune(b.hz, 'cwu' as SDRMode); renderFreq(); };
+    host.appendChild(k);
+  }
+}
 /* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
  *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
  *  first, coloured by confidence) over the SPOTS; the settings hold the announced calling frequencies. Offered only where
@@ -13454,6 +13499,9 @@ let timeStation = 'msf';
 const TIME_STATIONS: Record<string, { label: string; hint: string }> = {
   msf:   { label: 'MSF',   hint: 'MSF, Anthorn — tune <b>60.000 kHz</b> in <b>CW</b>.' },
   dcf77: { label: 'DCF77', hint: 'DCF77, Mainflingen — tune <b>77.500 kHz</b> in <b>CW</b>.' },
+  // ★ V12 2026-11-16 TDF (ALS162): the code is in the carrier's PHASE, so it must be a CW beat note — AM shows nothing.
+  tdf:   { label: 'TDF',   hint: 'TDF, Allouis (France) — tune <b>162.000 kHz</b> in <b>CW</b>. Its code is in the carrier\u2019s '
+                                 + '<b>phase</b>, so in AM there is nothing to read. French time (CET/CEST).' },
   wwvb:  { label: 'WWVB', hint: 'WWVB, Fort Collins — tune <b>60.000 kHz</b> in <b>CW</b>. '
                                  + 'Note MSF shares this frequency: which one you hear is geography.' },
   // ★ V12: JJY (NICT) — 40 kHz Ohtakadoya-yama, 60 kHz Hagane-yama; JST (UTC+9).
@@ -13516,6 +13564,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
       if (activeDec === 'dsc') return;   // ★ DSC's rows are drawn from its JSON (onDscCall); the line is the same text
       if (activeDec === 'jtty') return;  // ★ JTTY's rows are drawn from its JSON (onJttySignals); the line is the same text
+      if (activeDec === 'ncdxf') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ NCDXF: the heard log, last 40 lines
       const el = $('decText');
       // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
       //    a progress line once a SECOND — the fields filling in as they arrive — and appending
@@ -13599,6 +13648,7 @@ function initDecoders(host: string, auth: AuthState) {
       }
       decStateText = activeDec === 'dsc' ? (st ? 'receiving a call…' : 'listening…')
                    : activeDec === 'jtty' ? (st ? 'decoding…' : 'listening…')
+                   : activeDec === 'ncdxf' ? ncdxfStatus(ncdxfLast)
                    : activeDec === 'rtty' && rttySkim ? (st >= 3 ? 'decoding…' : st ? 'RTTY found — working out its settings…' : 'listening…')
                    : kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
@@ -13697,6 +13747,16 @@ function initDecoders(host: string, auth: AuthState) {
       const l = jttySignalsFromJson(d);
       if (!l) return;
       jttyLast = l; renderJtty(); setDecLive(l.some((x) => x.active));
+    },
+    // ★★ V12 NCDXF beacons: the grid and the last slot, every ten seconds.
+    onNcdxf: (d) => {
+      if (activeDec !== 'ncdxf') return;
+      const r = ncdxfSanitise(d);
+      if (!r) return;
+      ncdxfLast = r; renderNcdxf();
+      decStateText = ncdxfStatus(r);
+      if (!decTuneHint) $('decStatus').textContent = decStateText;
+      setDecLive(r.band >= 0 && !!r.last && r.last.steps > 0);
     },
     onJttySpot: (d) => {
       if (activeDec !== 'jtty') return;
@@ -13832,7 +13892,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12 out of this radio's reach: the press says why and starts nothing (decWhyPaint draws the key greyed)
       if (decWhy[mode]) { showPill(`${(b.textContent || mode).trim()} unavailable \u2014 ${decWhy[mode]}`, 8000); return; }
@@ -14456,7 +14516,7 @@ function anyDecoderLeft(): boolean {
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
     || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
-    || (jttyCap && !blockedModes.has('jtty'));
+    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf'));
 }
 
 /* ★★ THE WHOLE-RADIO TOGGLES — one each, for the mode menu (mobile.ts deps) AND the decoder panel's TUNES THE RADIO ITSELF
@@ -14498,7 +14558,7 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
  *  title and label (hover, focus, a screen reader), and a press shows the reason (touch, pad, keyboard) — never hidden,
  *  never live. An owner's block still hides it (it is false with no reason). */
 let decWhy: Record<string, string> = {};
-const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty'];
+const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf'];
 function parseDecWhy(j: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!j || typeof j !== 'object') return out;
@@ -14542,6 +14602,8 @@ function syncDecButtons() {
   if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
   $('jttySettings').hidden = activeDec !== 'jtty';
   if (activeDec === 'jtty') initJttyDials();
+  $('ncdxfSettings').hidden = activeDec !== 'ncdxf';
+  if (activeDec === 'ncdxf') initNcdxfBands();
   $('tmSettings').hidden = !isTextFamily(activeDec) || !(tmCaps[activeDec]?.length);
   renderTmModes();
   renderDscKeys();
@@ -14603,6 +14665,8 @@ function showDecBox(what: string) {
   if (isDsc) { dscCalls.clear(); renderDsc(); }
   const isJtty = what === 'jtty';
   $('jttyList').classList.toggle('on', isJtty);
+  $('ncdxfList').classList.toggle('on', what === 'ncdxf');
+  if (what === 'ncdxf') { ncdxfLast = null; renderNcdxf(); }
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
   else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }

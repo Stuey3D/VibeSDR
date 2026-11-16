@@ -526,6 +526,38 @@ inline void mapAisBuild(App&, const RadioState& s, std::vector<MapListRow>& rows
     std::snprintf(b, sizeof b, "%zu ships · %d on the map · A %.0f / B %.0f msgs", vs.size(), withPos, r["chA"].num(0), r["chB"].num(0));
     status = r.isNull() ? "starting — tuning to the AIS channels…" : b;
 }
+/** ★ V12 2026-11-16 (tracks.ts aisCard's rows, shortened for the 640 px card): type 21's status byte (light / RACON /
+ *  alarm) and the newest met/hydro report a station sent (vibe_ais_asm.h metJson) — wind, air, pressure, visibility,
+ *  tide, waves, sea temperature, only what the station has. */
+inline void mapAisMetLines(const Json& v, std::vector<std::string>& l) {
+    static const char* c16[16] = {"N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"};
+    static const char* tr[3] = {"steady", "falling", "rising"};
+    auto dir = [&](double d) { return std::string(c16[int(std::lround(std::fmod(std::fmod(d, 360) + 360, 360) / 22.5)) % 16]); };
+    auto trend = [&](const Json& t) { const int i = (int)t.num(-1); return i >= 0 && i <= 2 ? std::string(" ") + tr[i] : std::string(); };
+    std::string st;
+    const int light = (int)v["light"].num(0), racon = (int)v["racon"].num(0);
+    if (light) st += std::string("light ") + (light == 3 ? "FAULT" : light == 1 ? "on" : "off");
+    if (racon) st += (st.empty() ? "" : " · ") + std::string("RACON ") + (racon == 3 ? "FAULT" : racon == 2 ? "working" : "fitted");
+    if (v["alarm"].num(0) == 1) st += (st.empty() ? "" : " · ") + std::string("ALARM");
+    if (!st.empty()) l.push_back(st);
+    if (v["met"].a.empty()) return;
+    const Json& m = v["met"].a[0];
+    std::string w;
+    if (m["wind"].kind == Json::Num) {
+        w = "Wind " + (m["windDir"].kind == Json::Num ? dir(m["windDir"].n) + " " : "") + mapFmt("%.0f kn", m["wind"].n);
+        if (m["gust"].kind == Json::Num && m["gust"].n > m["wind"].n) w += mapFmt(", gusting %.0f", m["gust"].n);
+    }
+    if (m["airC"].kind == Json::Num) w += (w.empty() ? "" : " · ") + mapFmt("%.1f °C", m["airC"].n);
+    if (m["hPa"].kind == Json::Num) w += (w.empty() ? "" : " · ") + mapFmt("%.0f hPa", m["hPa"].n) + trend(m["pTrend"]);
+    if (!w.empty()) l.push_back(w);
+    std::string h;
+    if (m["vis"].kind == Json::Num) h = std::string("Visibility ") + (m["visMore"].num(0) ? "over " : "") + mapFmt("%.1f NM", m["vis"].n);
+    if (m["level"].kind == Json::Num) h += (h.empty() ? "" : " · ") + mapFmt("Tide %.2f m", m["level"].n) + trend(m["levelTrend"]);
+    if (m["wave"].kind == Json::Num) h += (h.empty() ? "" : " · ") + mapFmt("Waves %.1f m", m["wave"].n);
+    if (m["waterC"].kind == Json::Num) h += (h.empty() ? "" : " · ") + mapFmt("Sea %.1f °C", m["waterC"].n);
+    if (!h.empty()) l.push_back(h);
+    if (m["age"].kind == Json::Num) l.push_back("Weather heard " + agoText(m["age"].n) + (m["age"].n < 5 ? "" : " ago") + (m["obs"].str().empty() ? "" : " · obs " + m["obs"].str().substr(0, 8) + " UTC"));
+}
 inline std::vector<std::string> mapAisCard(App&, const RadioState& s, const std::string& key) {
     const Json& r = mapReport(s, *mapMode("ais"));
     for (auto& v : r["vessels"].a) {
@@ -541,6 +573,7 @@ inline std::vector<std::string> mapAisCard(App&, const RadioState& s, const std:
         if (v["cog"].kind == Json::Num) n += mapFmt(" · course %03.0f°", v["cog"].n);
         if (!n.empty()) l.push_back(n);
         if (!v["dest"].str().empty()) l.push_back("To " + v["dest"].str() + (v["eta"].str().empty() ? "" : " · ETA " + v["eta"].str()));
+        mapAisMetLines(v, l);   // ★ V12 2026-11-16 the AtoN's status and the station's weather (binary messages)
         double lat, lon;
         std::string d = "MMSI " + key;
         if (mapPos(v, lat, lon)) { const std::string dd = mapDist(lat, lon); if (!dd.empty()) d += " · " + dd; }
@@ -969,7 +1002,7 @@ inline void mapCannedTick(App& a, const RadioState& s) {
         for (int i = 0; i < 8; i++) {
             const double la = 51.2 + i * 0.05 + k * 0.0004, lo = 1.3 + i * 0.07;
             std::snprintf(b, sizeof b, "%s{\"mmsi\":%d,\"name\":\"%s\",\"family\":\"%s\",\"stypeName\":\"%s\",\"lat\":%.5f,\"lon\":%.5f,\"sog\":%.1f,\"cog\":%d,\"hdg\":%d,\"seen\":%d%s}",
-                          i ? "," : "", 235000100 + i * 11, names[i], fam[i], fam[i], la, lo, i == 3 ? 0.1 : 4.0 + i * 2, 40 + i * 35, 40 + i * 35, i, i == 6 ? ",\"aton\":1" : "");
+                          i ? "," : "", 235000100 + i * 11, names[i], fam[i], fam[i], la, lo, i == 3 ? 0.1 : 4.0 + i * 2, 40 + i * 35, 40 + i * 35, i, i == 6 ? ",\"aton\":1,\"light\":1,\"met\":[{\"fi\":31,\"age\":40,\"wind\":14,\"windDir\":225,\"gust\":21,\"airC\":11.2,\"hPa\":1012,\"pTrend\":1,\"vis\":4.5,\"level\":3.21,\"levelTrend\":2}]" : "");
             j += b;
         }
         j += "]}";

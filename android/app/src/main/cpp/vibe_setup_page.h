@@ -3112,7 +3112,7 @@ const BLOCKABLE = [
   { id: "wefax",  label: "WEFAX"    }, { id: "sstv", label: "SSTV"   },
   { id: "ft8",    label: "FT8 / FT4" },
   /* ★ Time signals: one decoder for MSF, DCF77, WWV, WWVB, RWM and JJY — the station is the decoder's own choice. */
-  { id: "time",   label: "Time signals (MSF, DCF77, WWV/WWVB, RWM, JJY)" },
+  { id: "time",   label: "Time signals (MSF, DCF77, TDF, WWV/WWVB, RWM, JJY)" },
   /* ★ The server-side FT8/FT4 spot decoder and the map drawn from it, as ONE switch: the map is
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
    *  buttons were dead weight in its clients (Stuart, 2026-09-17). Under it: each spots mode (spotModes), then Band. */
@@ -3154,6 +3154,8 @@ const BLOCKABLE = [
   { id: "ndb",    label: "NDB beacons" },
   /* ★ V12 JTTY (docs/v12/JTTY.md) — the WSJT-X 3.2 keyboard mode, every JTTY signal in a listener's passband. */
   { id: "jtty",   label: "JTTY" },
+  /* ★ V12 2026-11-16 the NCDXF / IARU beacon tracker: which of the 18 beacons are heard on 20–10 m, and how far down. */
+  { id: "ncdxf",  label: "NCDXF beacons" },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP

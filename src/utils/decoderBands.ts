@@ -82,7 +82,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
   hf: [
     { group: 'aviation', ids: ['hfdl', 'selcal'] },
     { group: 'maritime', ids: ['navtex', 'dsc', 'sitora', 'wefax'] },
-    { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'mfsk', 'hell', 'sstv', 'aprs'] },   // ★ V12 the MFSK keyboard modes, FELD HELL
+    { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'mfsk', 'hell', 'sstv', 'aprs', 'ncdxf'] },   // ★ V12 the MFSK keyboard modes, FELD HELL, NCDXF beacons
     { group: 'other',    ids: ['time'] },
   ],
   vhf: [
@@ -168,6 +168,7 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   psk:    hz => anyNear(hz, HAM),
   rtty:   hz => anyNear(hz, HAM),
   jtty:   hz => anyNear(hz, HAM),
+  ncdxf:  hz => pointsNear(hz, [14.100e6, 18.110e6, 21.150e6, 24.930e6, 28.200e6], 5e3),   // ★ V12 the five beacon frequencies
   mfsk:   hz => anyNear(hz, HAM),   // ★ one key: MFSK16/32, OLIVIA, CONTESTIA, THOR
   hell:   hz => anyNear(hz, HAM),
   sstv:   hz => anyNear(hz, HAM),

@@ -146,7 +146,7 @@ export function modeIconFor(id: string): ModeIconName | null {
   switch (k) {
     case 'adsb': case 'hfdl': case 'selcal': case 'acars': case 'vdl2': case 'vdl': case 'hfdlmap': return 'aircraft';
     case 'ais': case 'dsc': case 'navtex': case 'sitora': case 'sitor': case 'amtor': return 'ship';   // ★ SITOR-A beside NAVTEX (SITOR-B)
-    case 'ndb': return 'beacon';
+    case 'ndb': case 'ncdxf': return 'beacon';   // ★ V12 NCDXF / IARU beacons
     case 'ism': return 'sensor';
     case 'paging': case 'pocsag': case 'flex': case 'pager': return 'pager';   // ★ V12 PAGING (and OpenWebRX's POCSAG)
     case 'aprs': case 'packet': return 'aprs';

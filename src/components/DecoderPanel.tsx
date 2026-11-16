@@ -44,6 +44,8 @@ import AircraftPanel from './AircraftPanel';
 import CwView, { CallLink, cwItems } from './CwView';
 import TranscriptText from './TranscriptText';   // ★ V12 callsigns in the captions
 import JttyView, { jttyItems } from './JttyView';
+import NcdxfView from './NcdxfView';   // ★ V12 NCDXF beacons
+import type { NcdxfReport } from '../services/ncdxf';
 import DscView, { dscHasPos, type DscBoxKey } from './DscView';
 import AprsView from './AprsView';   // ★ V12 APRS
 import type { AprsBoxRow } from '../services/tracks';
@@ -68,7 +70,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | null;
 // ★ V12 FELD HELL is drawn, so it is a picture here (PREV, SAVE, CLR, zoom) — plainly, without WEFAX's ADJ
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv', 'hell'];
 
@@ -128,6 +130,8 @@ export interface DecoderPanelProps {
   rtty?:           { skim: boolean; list: CwList | null; spots: CwSpot[]; history: Record<number, string>; onTune: (hz: number) => void } | null;
   /** ★ V12 JTTY (VibeServer): the stations and spots (JttyView) and its tune (USB, 1500 Hz below) — set while JTTY runs. */
   jtty?:           { list: JttySignal[]; spots: JttySpot[]; onTune: (rfHz: number) => void } | null;
+  /** ★ V12 NCDXF beacons (VibeServer): the propagation grid (NcdxfView) — set while the tracker runs. */
+  ncdxf?:          { report: NcdxfReport | null } | null;
   /** ★ V12 DSC (VibeServer): the calls newest first (DscView) and MAP for a position — set while DSC runs. */
   dsc?:            { calls: DscCall[]; onMap?: (c: DscCall) => void; keys?: DscBoxKey[] } | null;
   /** ★ V12 digital spots: the modes THIS server decodes (vibeserver.json spotModes — the MODE filter's choices, matched by
@@ -267,6 +271,7 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   // ★ V12: PSK31/63, JTTY and DSC — a VibeServer's own decoders (PSK SKIMMER while the skimmer runs).
   psk:     'PSK',
   jtty:    'JTTY',
+  ncdxf:   'BEACONS',   // ★ V12 NCDXF / IARU beacons
   dsc:     'DSC',
   sitora:  'SITOR-A',
   // ★ V12: POCSAG paging with AUTO — only on the phone's own radio (services/paging.ts)
@@ -305,7 +310,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, rtty = null, jtty = null, dsc = null, aprs = null, scanner = null,
+  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, rtty = null, jtty = null, ncdxf = null, dsc = null, aprs = null, scanner = null,
   spotModes, spotsTitle, spotModeStates,
 }: DecoderPanelProps) {
   const sfModes = React.useMemo(() => spotFilterModes(spotModes ?? SF_MODES_UBERSDR), [spotModes]);
@@ -436,6 +441,8 @@ export default function DecoderPanel({
   /** ★ V12 JTTY / DSC: their own list views in place of the text body. */
   const isJtty = activeDecoder === 'jtty' && !!jtty && !isSpotsMode && !isDabMode && !isAircraftMode;
   const isDsc = activeDecoder === 'dsc' && !!dsc && !isSpotsMode && !isDabMode && !isAircraftMode;
+  /** ★ V12 NCDXF beacons: the grid, with the heard log under it, in place of the text body. */
+  const isNcdxf = activeDecoder === 'ncdxf' && !!ncdxf && !isSpotsMode && !isDabMode && !isAircraftMode;
   /** Any of the list decoders (their rows are the keyboard's list; the text body is not drawn). */
   /** ★ V12 APRS: the stations / messages / packets view (AprsView) in place of the plain text body. */
   const isAprs = activeDecoder === 'aprs' && !!aprs && !isSpotsMode && !isDabMode && !isAircraftMode;
@@ -1603,6 +1610,9 @@ export default function DecoderPanel({
                     focusIdx={kbZone === 'list' ? listIdx : -1} onTune={jtty!.onTune}
                     scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}
+        {!minimised && isNcdxf && (
+          <NcdxfView report={ncdxf!.report} log={decoderText} bodySize={bodySize} scrollRef={outputRef} />
+        )}
         {!minimised && isDsc && (
           <DscView calls={dsc!.calls} keys={dsc!.keys} bodySize={bodySize} focusIdx={kbZone === 'list' ? listIdx : -1} onMap={dsc!.onMap}
                    scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
@@ -1615,7 +1625,7 @@ export default function DecoderPanel({
         {!minimised && isScanner && (
           <ScannerPanel {...scanner!} focusIdx={kbZone === 'list' ? listIdx : -1} navRef={scanNav} bodyStyle={bodySize} />
         )}
-        {!minimised && !isNavtex && !isListDec && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
+        {!minimised && !isNavtex && !isListDec && !isNcdxf && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
           <View style={dp.adjRow}>
             <Text style={[dp.output, { flex: 1, minWidth: 160, color: dc.output, fontFamily: FONT }]}>{notice.text}</Text>
             {!!notice.action && !!notice.onAction && (
@@ -1625,7 +1635,7 @@ export default function DecoderPanel({
             )}
           </View>
         )}
-        {!minimised && !isNavtex && !isListDec && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
+        {!minimised && !isNavtex && !isListDec && !isNcdxf && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
             ref={outputRef}
             // ★★★ minHeight AS WELL AS maxHeight. As a cap alone, BIG did NOTHING on a text

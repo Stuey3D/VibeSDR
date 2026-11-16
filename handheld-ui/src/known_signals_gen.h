@@ -10,6 +10,7 @@ inline const KnownSigDef kKnownSignals[] = {
     {77500, -1, -1, "TIME · DCF77", "time", 77500, "cwu", 6},
     {137500, 137400, 137600, "WSPR", "spots", 136000, "usb", 6},
     {147300, -1, -1, "RTTY · DWD", "rtty", 146300, "usb", 6},
+    {162000, -1, -1, "TIME · TDF", "time", 162000, "cwu", 6},
     {424000, -1, -1, "NAVTEX", "navtex", 423500, "usb", 7},
     {475700, 475600, 475800, "WSPR", "spots", 474200, "usb", 6},
     {490000, -1, -1, "NAVTEX", "navtex", 489500, "usb", 7},
@@ -126,5 +127,5 @@ inline const KnownSigDef kKnownSignals[] = {
     {432174000, 432174000, 432177000, "FT8", "spots", 432174000, "usb", 6},
     {1296050000, 1296050200, 1296126800, "Q65", "spots", 1296050000, "usb", 6},
 };
-inline const int kKnownSignalsN = 121;
+inline const int kKnownSignalsN = 122;
 }  // namespace hh

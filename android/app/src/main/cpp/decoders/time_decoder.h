@@ -15,8 +15,11 @@
 // ★ Structured so WWV/WWVH and RWM can join: they are the same shape (a pulse width per second,
 //   decoded into BCD) at a different rate and on a subcarrier. See Station.
 #pragma once
+#include "tdf_phase.h"   // ★ V12 2026-11-16 TDF's phase front end
+
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -53,6 +56,11 @@ public:
          *  which WWVB lacks. Time is JST (UTC+9), the minute that begins at the frame's marker. At :15 and :45 the year
          *  seconds carry the callsign in Morse (the year then comes from the host clock). Tune it in CW / AM. */
         JJY,
+        /** ★★ TDF / ALS162 (V12, 2026-11-16) — Allouis, 162 kHz (ANFR). DCF77's time code and symbol timing (100 ms = 0,
+         *  200 ms = 1, nothing at second 59) sent as PHASE modulation, so tdf_phase.h turns the phase into the envelope
+         *  the DCF77 reader reads; the reader runs as DCF77 (stationTag says TDF). French legal time (CET/CEST, bits
+         *  17/18 as DCF77); its leap-second warnings are bits 1–2, not DCF77's 19. Tune it in CW / USB as a beat note. */
+        TDF,
     };
 
     /** What the decoder is doing, so the UI can be honest rather than blank. */
@@ -253,7 +261,9 @@ private:
     int    tag_ = 0, tagPending_ = 0, tagPendingN_ = 0, tagContrary_ = 0, tagUnsupported_ = 0;
 
     const int      sr_;
-    const Station  station_;
+    const Station  station_;        ///< ★ the READER's station: TDF reads as DCF77 (tdf_ says it is TDF)
+    bool           tdf_ = false;
+    std::unique_ptr<TdfPhase> tdfFe_;
     State          state_ = State::NoSignal;
 
     // Envelope follower: rectify, then a slow and a fast average. The pair is what separates a

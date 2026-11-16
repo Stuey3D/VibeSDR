@@ -86,6 +86,9 @@ inline const std::vector<Entry>& table() {
         v.push_back({ "cw",   "CW",   "is on the amateur bands (136 kHz to 1.3 GHz)", amateurBands() });
         v.push_back({ "psk",  "PSK",  "is on the amateur bands (136 kHz to 1.3 GHz)", amateurBands() });
         v.push_back({ "jtty", "JTTY", "is on the amateur bands (136 kHz to 1.3 GHz)", amateurBands() });
+        // ★ V12 2026-11-16 NCDXF / IARU beacons: 14.100, 18.110, 21.150, 24.930, 28.200 MHz — any one of them will do.
+        v.push_back({ "ncdxf", "NCDXF beacons", "is on 14.100, 18.110, 21.150, 24.930 and 28.200 MHz",
+            { ch(14.100e6, 2e3), ch(18.110e6, 2e3), ch(21.150e6, 2e3), ch(24.930e6, 2e3), ch(28.200e6, 2e3) } });
         return v;
     }();
     return t;

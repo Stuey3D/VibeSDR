@@ -27,7 +27,11 @@ const aisMsg = {
       hdg: 224, rot: -3, draught: 5.6, len: 89, beam: 14, eta: '10-27 06:00', trend: 1, line: 'WILSON GOOLE · cargo', ch: 'A', snr: 21, seen: 3, age: 3, posAge: 3, count: 40 },
     { mmsi: 244123456, kind: 'B', name: 'SEA BREEZE', flag: 'NL', family: 'leisure', stypeName: 'sailing', lat: 50.70, lon: -1.10, sog: 0.2,
       nav: 15, ch: 'B', seen: 50, age: 50, posAge: 50, count: 3, trend: -1 },
-    { mmsi: 992351234, kind: 'aton', atonName: 'cardinal mark N', virtual: 1, lat: 50.75, lon: -1.2, seen: 120, age: 120, posAge: 120, count: 2 },
+    { mmsi: 992351234, kind: 'aton', atonName: 'cardinal mark N', virtual: 1, lat: 50.75, lon: -1.2, seen: 120, age: 120, posAge: 120, count: 2,
+      light: 3, racon: 2, alarm: 1,   // ★ V12 2026-11-16 binary messages: the status byte and the station's weather
+      met: [{ fi: 31, age: 90, lat: 50.75, lon: -1.2, obs: '16 09:41', wind: 14, gust: 21, windDir: 225, airC: 11.2, hum: 87, hPa: 1012, pTrend: 1,
+              vis: 4.5, level: 3.21, levelTrend: 2, wave: 1.2, waveS: 6, waterC: 12, precip: 1, ice: 0, evil: '<x>' },
+            { fi: 11, age: 400, lat: 51.2, lon: -1.0, wind: 5, obs: '<b>' }, 'junk'] },
     { mmsi: 2320123, kind: 'base', name: '', lat: 50.95, lon: -1.42, seen: 6, age: 6, posAge: 6, count: 99 },
     { mmsi: 111232506, kind: 'sar', lat: 50.6, lon: -1.0, cog: 80, alt: 300, seen: 1, age: 1, posAge: 1, count: 5 },
     { mmsi: 970123456, kind: 'sart', name: 'SART TEST', seen: 2, age: 2, posAge: -1, count: 1 },
@@ -35,6 +39,7 @@ const aisMsg = {
       sog: {}, seen: 900, age: 900, count: 1 },
   ],
   safety: [{ age: 30, mmsi: 970123456, name: 'SART TEST', text: 'SART ACTIVE' }, { age: 400, mmsi: 235012345, name: '', text: 'NAV WARNING <x>' }],
+  notices: [{ age: 120, mmsi: 2320123, name: 'SOLENT VTS', text: 'Caution: fairway closed · circle 1.5 km at 50.7900 -1.1100', fi: 22, what: 18, lat: 50.79, lon: -1.11 }],
   gain: 33.8, gainAuto: 1,
 };
 
@@ -70,8 +75,21 @@ for (const r of ar) {
 eq('AIS row: the SART is an emergency row', ar.find((r) => r.key === '970123456')?.em, true);
 eq('AIS row: no position', ar.find((r) => r.key === '970123456')?.range, 'no position');
 eq('AIS row: trend', ar.find((r) => r.key === '235012345')?.trend, 1);
-eq('AIS safety strip: newest first, at most three', app.aisSafetyLines(aa), ['⚠ MMSI 235012345: NAV WARNING <x> · 7 min ago', '⚠ SART TEST: SART ACTIVE · 30 s ago']);
-eq('AIS safety strip empty', app.aisSafetyLines({ ...aa, safety: [] }), []);
+eq('AIS safety strip: newest first, at most three', app.aisSafetyLines({ ...aa, notices: [] }), ['⚠ MMSI 235012345: NAV WARNING <x> · 7 min ago', '⚠ SART TEST: SART ACTIVE · 30 s ago']);
+eq('AIS safety strip empty', app.aisSafetyLines({ ...aa, safety: [], notices: [] }), []);
+// ★ V12 2026-11-16 binary messages: the station's weather on its card, the status byte, the notices after the safety texts
+const at = aa.vessels.find((v) => v.mmsi === 992351234)!;
+eq('AIS met: two sites kept, junk dropped, unknown keys dropped', [at.met?.length, (at.met?.[0] as any).evil, at.met?.[1].obs], [2, undefined, undefined]);
+const atCard = app.aisCard(at, rx);
+for (const w of ['Light', 'FAULT', 'RACON', 'working', 'ALARM', 'SW 14 kn, gusting 21', '11.2 °C · humidity 87 %', '1012 hPa falling', '4.5 NM',
+                 '3.21 m rising', '1.2 m · 6 s', '12.0 °C', 'rain', 'obs 16 09:41 UTC']) ok(`AIS met card says "${w}"`, atCard.includes(w));
+ok('AIS met card: the far site says where it is', atCard.includes('at 51°12.000′N'));
+ok('AIS met card: the near site does not', (atCard.match(/at 5\d°/g) || []).length === 1);
+eq('AIS met short (the list)', app.aisMetShort(at.met?.[0]), 'SW 14 kn · tide 3.21 m');
+ok('AIS met in the list row', (ar.find((r) => r.key === '992351234')?.second || '').includes('SW 14 kn'));
+eq('AIS notices after the safety strip', app.aisSafetyLines(aa)[2], 'ℹ SOLENT VTS: Caution: fairway closed · circle 1.5 km at 50.7900 -1.1100 · 2 min ago');
+ok('AIS notices in the web strip too', web.aisSafetyHtml(wa).includes('fairway closed'));
+eq('AIS met rows = web', app.aisMetRows(at.met![0]), web.aisMetRows(wa.vessels.find((v) => v.mmsi === 992351234)!.met![0]));
 
 // ── what the map is handed ──
 const items = app.aisItems(aa, rx);

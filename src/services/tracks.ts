@@ -31,12 +31,41 @@ export interface AisVessel {
   virtual?: number; offpos?: number; lat?: number; lon?: number; sog?: number; cog?: number; hdg?: number; rot?: number; turn?: number;
   draught?: number; len?: number; beam?: number; eta?: string; alt?: number; trend?: number; line?: string;
   ch?: string; level?: number; snr?: number; seen: number; age: number; posAge: number; count: number; trail?: number;
+  /** ★ V12 2026-11-16 type 21's status byte (IALA A-126): light 0 none · 1 on · 2 off · 3 fault; RACON 0 none · 1 not
+   *  monitored · 2 working · 3 fault; alarm 1. */
+  light?: number; racon?: number; alarm?: number;
+  /** ★ V12 2026-11-16 the station's weather (binary message 8, Circ.289 met/hydro), newest site first. */
+  met?: AisMet[];
+}
+/** One met/hydro report (vibe_ais_asm.h metJson): every field optional — a station sends what its sensors have. */
+export interface AisMet {
+  fi: number; age: number; lat?: number; lon?: number; obs?: string;
+  wind?: number; gust?: number; windDir?: number; gustDir?: number; airC?: number; hum?: number; dewC?: number;
+  hPa?: number; pTrend?: number; vis?: number; visMore?: number; level?: number; levelTrend?: number; cur?: number; curDir?: number;
+  wave?: number; waveS?: number; waveDir?: number; swell?: number; swellS?: number; swellDir?: number; sea?: number;
+  waterC?: number; precip?: number; sal?: number; ice?: number;
+}
+export interface AisNotice { age: number; mmsi: number; name: string; text: string; fi: number; what?: number; lat?: number; lon?: number; to?: number }
+const MET_KEYS = ['lat', 'lon', 'wind', 'gust', 'windDir', 'gustDir', 'airC', 'hum', 'dewC', 'hPa', 'pTrend', 'vis', 'visMore', 'level',
+  'levelTrend', 'cur', 'curDir', 'wave', 'waveS', 'waveDir', 'swell', 'swellS', 'swellDir', 'sea', 'waterC', 'precip', 'sal', 'ice'] as const;
+export function aisMetSanitise(a: unknown): AisMet[] | undefined {
+  if (!Array.isArray(a)) return undefined;
+  const out: AisMet[] = [];
+  for (const m of a.slice(0, 4)) {
+    if (!m || typeof m !== 'object') continue;
+    const o: any = { fi: num((m as any).fi) ?? 0, age: num((m as any).age) ?? 0 };
+    const obs = str((m as any).obs, 12); if (/^\d\d \d\d:\d\d$/.test(obs)) o.obs = obs;
+    for (const k of MET_KEYS) { const n = num((m as any)[k]); if (n != null) o[k] = n; }
+    out.push(o);
+  }
+  return out.length ? out : undefined;
 }
 export interface AisSafety { age: number; mmsi: number; name: string; text: string; to?: number }
 export interface AisReport {
   type: 'ais'; rate: number; now: number; msgs: number; msgRate: number; chA: number; chB: number; repaired: number;
   dropped: number; capture: number; noise: number; vessels: AisVessel[]; safety: AisSafety[];
   gain?: number; gainAuto?: number;
+  notices?: AisNotice[];
 }
 export interface AprsStation {
   key: string; from: string; kind: string; name?: string; sym: string; symName?: string; lat?: number; lon?: number;
@@ -74,10 +103,13 @@ export function aisSanitise(m: any): AisReport | null {
       alt: num(v.alt) ?? undefined, trend: num(v.trend) ?? undefined, line: str(v.line, 200), ch: str(v.ch, 2),
       level: num(v.level) ?? undefined, snr: num(v.snr) ?? undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
       posAge: num(v.posAge) ?? -1, count: num(v.count) ?? 0, trail: num(v.trail) ?? undefined,
+      light: num(v.light) ?? undefined, racon: num(v.racon) ?? undefined, alarm: num(v.alarm) ?? undefined, met: aisMetSanitise(v.met),
     });
   }
   const safety = Array.isArray(m.safety) ? m.safety.slice(0, 20).map((s: any) => ({ age: num(s?.age) ?? 0, mmsi: num(s?.mmsi) ?? 0, name: str(s?.name, 40), text: str(s?.text, 200), to: num(s?.to) ?? undefined })) : [];
-  return { type: 'ais', rate: num(m.rate) ?? 0, now: num(m.now) ?? 0, msgs: num(m.msgs) ?? 0, msgRate: num(m.msgRate) ?? 0,
+  const notices: AisNotice[] = Array.isArray(m.notices) ? m.notices.slice(-20).map((s: any) => ({ age: num(s?.age) ?? 0, mmsi: num(s?.mmsi) ?? 0, name: str(s?.name, 40),
+    text: str(s?.text, 300), fi: num(s?.fi) ?? 0, what: num(s?.what) ?? undefined, lat: num(s?.lat) ?? undefined, lon: num(s?.lon) ?? undefined, to: num(s?.to) ?? undefined })) : [];
+  return { notices, type: 'ais', rate: num(m.rate) ?? 0, now: num(m.now) ?? 0, msgs: num(m.msgs) ?? 0, msgRate: num(m.msgRate) ?? 0,
            chA: num(m.chA) ?? 0, chB: num(m.chB) ?? 0, repaired: num(m.repaired) ?? 0, dropped: num(m.dropped) ?? 0,
            capture: num(m.capture) ?? -1, noise: num(m.noise) ?? 0, vessels: vs, safety,
            gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined };
@@ -256,8 +288,49 @@ export function aisCard(v: AisVessel, rx: LatLon | null): string {
     add('Position', esc(fmtPos(v.lat, v.lon)));
     if (rx) { const rb = rangeBearing(rx, v.lat, v.lon); add('From here', `${nmText(rb.nm)} ${compass8(rb.brg)}`); }
   }
+  // ★ V12 2026-11-16 the AtoN's own status (type 21) and its weather (binary message 8)
+  if (v.light) add('Light', v.light === 3 ? '<b style="color:#ff6b5e">FAULT</b>' : v.light === 1 ? 'on' : 'off');
+  if (v.racon) add('RACON', v.racon === 3 ? '<b style="color:#ff6b5e">FAULT</b>' : v.racon === 2 ? 'working' : 'fitted');
+  if (v.alarm) add('Status', '<b style="color:#ff6b5e">ALARM</b>');
+  for (const m of v.met || []) {
+    const far = m.lat != null && m.lon != null && v.lat != null && v.lon != null ? rangeBearing({ lat: v.lat, lon: v.lon }, m.lat, m.lon) : null;
+    const where = far && far.nm >= 0.5 ? ` <span style="opacity:.7">at ${esc(fmtPos(m.lat, m.lon))}</span>` : '';
+    add('Weather', `${esc(heardAgo(m.age))}${m.obs ? ` · obs ${esc(m.obs)} UTC` : ''}${where}`);
+    for (const [k, val] of aisMetRows(m)) add(k, esc(val));
+  }
   add('Heard', `${heardAgo(v.seen)} · ${v.count} message${v.count === 1 ? '' : 's'} · AIS ${v.ch === 'B' ? '2' : '1'}${v.snr != null ? ` · ${Math.round(v.snr)} dB` : ''}`);
   return `<div class="trkCard"><div class="t">${flagHtml(v.flag)}<b>${esc(aisName(v))}</b></div>${rows.join('')}</div>`;
+}
+const C16 = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+const compass16 = (d: number) => C16[Math.round(((d % 360) + 360) % 360 / 22.5) % 16];
+const TREND = ['steady', 'falling', 'rising'];
+const PRECIP = ['', 'rain', 'thunderstorm', 'freezing rain', 'mixed / ice', 'snow', ''];
+/** ★ One met report as card rows, plain words, only what the station sent: [label, value]. Shared shape with the app. */
+export function aisMetRows(m: AisMet): [string, string][] {
+  const r: [string, string][] = [];
+  if (m.wind != null) r.push(['Wind', `${m.windDir != null ? compass16(m.windDir) + ' ' : ''}${m.wind} kn${m.gust != null && m.gust > m.wind ? `, gusting ${m.gust}` : ''}`]);
+  if (m.airC != null) r.push(['Air', `${m.airC.toFixed(1)} °C${m.hum != null ? ` · humidity ${m.hum} %` : ''}${m.dewC != null ? ` · dew point ${m.dewC.toFixed(1)} °C` : ''}`]);
+  if (m.hPa != null) r.push(['Pressure', `${m.hPa} hPa${m.pTrend != null && TREND[m.pTrend] ? ' ' + TREND[m.pTrend] : ''}`]);
+  if (m.vis != null) r.push(['Visibility', `${m.visMore ? 'over ' : ''}${m.vis.toFixed(1)} NM`]);
+  if (m.level != null) r.push(['Tide', `${m.level.toFixed(2)} m${m.levelTrend != null && TREND[m.levelTrend] ? ' ' + TREND[m.levelTrend] : ''}`]);
+  if (m.cur != null) r.push(['Current', `${m.cur.toFixed(1)} kn${m.curDir != null ? ' ' + compass16(m.curDir) : ''}`]);
+  if (m.wave != null) r.push(['Waves', `${m.wave.toFixed(1)} m${m.waveS != null ? ` · ${m.waveS} s` : ''}${m.waveDir != null ? ' from ' + compass16(m.waveDir) : ''}`]);
+  if (m.swell != null) r.push(['Swell', `${m.swell.toFixed(1)} m${m.swellS != null ? ` · ${m.swellS} s` : ''}${m.swellDir != null ? ' from ' + compass16(m.swellDir) : ''}`]);
+  if (m.sea != null) r.push(['Sea state', `Beaufort ${m.sea}`]);
+  if (m.waterC != null) r.push(['Sea temperature', `${m.waterC.toFixed(1)} °C`]);
+  if (m.precip != null && PRECIP[m.precip]) r.push(['Precipitation', PRECIP[m.precip]]);
+  if (m.sal != null) r.push(['Salinity', `${m.sal.toFixed(1)} ‰`]);
+  if (m.ice != null) r.push(['Ice', m.ice ? 'yes' : 'none']);
+  return r;
+}
+/** ★ The list's short weather word for a station: "SW 14 kn · tide 3.21 m". */
+export function aisMetShort(m: AisMet | undefined): string {
+  if (!m) return '';
+  const p: string[] = [];
+  if (m.wind != null) p.push(`${m.windDir != null ? compass16(m.windDir) + ' ' : ''}${m.wind} kn`);
+  if (m.level != null) p.push(`tide ${m.level.toFixed(2)} m`);
+  else if (m.vis != null) p.push(`vis ${m.vis.toFixed(1)} NM`);
+  return p.join(' · ');
 }
 export function aisStatus(r: AisReport | null): string {
   if (!r) return 'listening on 161.975 and 162.025 MHz…';
@@ -280,7 +353,7 @@ export function aisListRows(r: AisReport | null, rx: LatLon | null): TrackRow[] 
   rows.sort((a, b) => (a.rb && b.rb ? a.rb.km - b.rb.km : a.rb ? -1 : b.rb ? 1 : a.v.seen - b.v.seen));
   return rows.map(({ v, rb }) => ({
     key: String(v.mmsi), colour: aisColour(v), flag: v.flag && /^[A-Z]{2}$/.test(v.flag) ? flagEmoji(v.flag) : '', name: aisName(v),
-    second: [aisKindWord(v), v.navName && v.nav !== 0 && v.nav !== 15 ? v.navName : '', v.dest ? '→ ' + v.dest : ''].filter(Boolean).join(' · ')
+    second: [aisKindWord(v), v.navName && v.nav !== 0 && v.nav !== 15 ? v.navName : '', v.dest ? '→ ' + v.dest : '', aisMetShort(v.met?.[0])].filter(Boolean).join(' · ')
       || `MMSI ${v.mmsi}`,
     sp: v.sog != null && v.sog >= 0.1 ? `${v.sog.toFixed(v.sog < 10 ? 1 : 0)} kn${v.cog != null && v.sog >= 0.5 ? ' ' + compass8(v.cog) : ''}` : v.lat != null ? 'still' : '',
     trend: v.trend === 1 ? 1 : v.trend === -1 ? -1 : 0,
@@ -290,8 +363,11 @@ export function aisListRows(r: AisReport | null, rx: LatLon | null): TrackRow[] 
 }
 /** ★ The safety strip: the newest safety-related broadcasts (types 12/14), at most three, newest first. */
 export function aisSafetyLines(r: AisReport | null): string[] {
-  if (!r || !r.safety.length) return [];
-  return r.safety.slice(-3).reverse().map((s) => `⚠ ${s.name || 'MMSI ' + s.mmsi}: ${s.text} · ${ago(s.age)} ago`);
+  if (!r) return [];
+  const safety = r.safety.slice(-3).reverse().map((s) => `⚠ ${s.name || 'MMSI ' + s.mmsi}: ${s.text} · ${ago(s.age)} ago`);
+  // ★ V12 2026-11-16 area notices and text descriptions (binary messages): after the safety texts, two at most
+  const notes = (r.notices || []).slice(-2).reverse().map((n) => `ℹ ${n.name || 'MMSI ' + n.mmsi}: ${n.text} · ${ago(n.age)} ago`);
+  return [...safety, ...notes];
 }
 
 // ── APRS: icons, rows, cards ──────────────────────────────────────────────────────────────────────────────────────

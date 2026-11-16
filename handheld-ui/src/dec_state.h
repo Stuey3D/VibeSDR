@@ -96,6 +96,8 @@ struct DecTimeStation { const char* id; const char* key; const char* hint; doubl
 inline const DecTimeStation kTimeStations[] = {
     {"msf", "MSF 60k", "MSF, Anthorn — tune 60.000 kHz in CW.", 60000, "cwu"},
     {"dcf77", "DCF77 77.5k", "DCF77, Mainflingen — tune 77.500 kHz in CW.", 77500, "cwu"},
+    // ★ V12 2026-11-16 TDF (ALS162): its code is in the carrier's PHASE, so CW (a beat note) — never AM
+    {"tdf", "TDF 162k", "TDF, Allouis (France) — tune 162.000 kHz in CW. Its code is in the carrier's phase, so AM shows nothing. French time (CET/CEST).", 162000, "cwu"},
     {"wwvb", "WWVB 60k", "WWVB, Fort Collins — tune 60.000 kHz in CW. MSF shares this frequency: which one you hear is geography.", 60000, "cwu"},
     {"wwv", "WWV (AM)", "WWV, Fort Collins — 2.5 / 5 / 10 / 15 / 20 MHz in AM (not CW). From Europe try 15 MHz in the afternoon.", 15000000, "am"},
     {"jjy", "JJY 40/60k", "JJY, Japan — 40.000 kHz or 60.000 kHz in CW. The time shown is JST (UTC+9).", 40000, "cwu"},

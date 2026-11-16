@@ -458,6 +458,10 @@ export interface ServerOccupancy {
    *  ONE SIGNAL only — no SKIMMER view that could not work. */
   rttyskim?: boolean;
   jtty?: boolean;
+  /** ★ V12 2026-11-16 the TIME decoder reads TDF (ALS162, 162 kHz phase code) on this server. Absent = an older one. */
+  timeTdf?: boolean;
+  /** ★ V12 2026-11-16 the NCDXF / IARU beacon tracker runs here (false + ncdxfWhy where this radio reaches none). */
+  ncdxf?: boolean;
   dsc?: boolean;
   /** ★ V12 SITOR-A: this server's maritime ARQ listener ('sitora'). False or absent = no key. */
   sitora?: boolean;
@@ -503,7 +507,7 @@ export interface ServerOccupancy {
 }
 
 /** ★★★ V12 the decoders vibe_decoder_reach.h can grey for reach — the server sends `"<id>": false, "<id>Why": "…"`. */
-export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty'] as const;
+export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf'] as const;
 /** id → reason, for each fixed-frequency decoder this radio cannot reach. A reason is honoured only beside `<id>: false`
  *  (an owner's block sends false with no reason — that key stays hidden, as ever). */
 export function parseDecoderReach(j: any): Record<string, string> {
@@ -562,6 +566,8 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       skim:      j.skim !== false,
       psk:       j.psk === true,
       jtty:      j.jtty === true,
+      timeTdf:   j.timeTdf === true,
+      ncdxf:     j.ncdxf === true,   // ★ V12 the NCDXF / IARU beacon tracker
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
       same:      j.same === true,

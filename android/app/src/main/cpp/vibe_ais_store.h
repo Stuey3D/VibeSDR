@@ -71,6 +71,7 @@ struct Rec {
     uint16_t len = 0, beam = 0;
     int16_t stype = -1, nav = -1;
     int16_t aton = -1; uint8_t kind = 0, flags = 0;       ///< kind: 0 A · 1 B · 2 base · 3 aton · 4 sar · 5 sart; flags 1 virtual · 2 off position
+                                                          ///< ★ V12 2026-11-16 flags 4 = AtoN status known, then light (bits 3–4), RACON (5–6), alarm (7)
     uint16_t count = 0; uint8_t nTrk = 0, ch = 0;
     uint32_t imo = 0;
     int16_t alt = -1, spare = 0;
@@ -105,6 +106,8 @@ inline Rec fromVessel(const Vessel& v, double svcNow, int64_t wallNow) {
     if (v.bow >= 0 && v.bow + v.stern > 0) { r.len = (uint16_t)(v.bow + v.stern); r.beam = (uint16_t)std::max(0, v.port + v.stbd); }
     r.stype = (int16_t)v.shipType; r.nav = (int16_t)v.nav; r.aton = (int16_t)v.atonType;
     r.kind = kindCode(v.kind); r.flags = (v.virt ? 1 : 0) | (v.offPos ? 2 : 0);
+    { const asmsg::AtonStatus st = asmsg::atonStatus(v.atonStatus);
+      if (st.valid) r.flags |= uint8_t(4 | (st.light << 3) | (st.racon << 5) | (st.alarm ? 128 : 0)); }
     r.count = (uint16_t)std::min(65535, v.count); r.ch = (uint8_t)v.ch; r.imo = v.imo; r.alt = (int16_t)std::min(32767, v.altM);
     putStr(r.name, sizeof r.name, v.name); putStr(r.call, sizeof r.call, v.callsign); putStr(r.dest, sizeof r.dest, v.dest);
     if (v.etaMonth > 0 && v.etaDay > 0) {
@@ -133,6 +136,8 @@ inline Vessel toVessel(const Rec& r) {
     v.draught = r.draught10 < 0 ? NAN : r.draught10 / 10.0;
     if (r.len > 0) { v.bow = r.len; v.stern = 0; v.port = r.beam; v.stbd = 0; }
     v.virt = r.flags & 1; v.offPos = r.flags & 2; v.count = r.count; v.ch = r.ch;
+    // ★ the status byte back in its IALA A-126 page-7 form (vibe_ais_asm.h atonStatus reads it)
+    if (r.flags & 4) v.atonStatus = (7 << 5) | (((r.flags >> 5) & 3) << 3) | (((r.flags >> 3) & 3) << 1) | ((r.flags >> 7) & 1);
     return v;
 }
 /** ★ Merge `in` (newer from one radio) into `have` (on disk, perhaps another radio's): the newest state wins field by
@@ -148,6 +153,7 @@ inline void merge(Rec& have, const Rec& in) {
     if (!out.eta[0]) std::memcpy(out.eta, old.eta, sizeof out.eta);
     if (!out.imo) out.imo = old.imo;
     if (out.stype < 0) out.stype = old.stype;
+    if (!(out.flags & 4) && (old.flags & 4)) out.flags = uint8_t((out.flags & 3) | (old.flags & ~3));
     if (!out.len) { out.len = old.len; out.beam = old.beam; }
     if (out.draught10 < 0) out.draught10 = old.draught10;
     if (out.lat == kNoPos || (old.posAt > out.posAt && old.lat != kNoPos)) {
@@ -199,9 +205,14 @@ inline bool pwriteAll(int fd, const void* p, size_t n, off_t at) {
 inline off_t recAt(uint32_t cap, uint32_t slot) { return (off_t)(kHeader + (uint64_t)cap * 8 + (uint64_t)slot * kRecSize); }
 
 /** Bytes the store takes on disk now (0 when absent) — the gallery's side bytes. */
+static constexpr const char* kMetFile = "ais-met.dat";   ///< ★ V12 2026-11-16 the stations' weather (below)
 inline uint64_t bytesOnDisk(const std::string& dir) {
+    if (dir.empty()) return 0;
+    uint64_t n = 0;
     struct stat st{};
-    return !dir.empty() && ::stat((dir + "/" + kFile).c_str(), &st) == 0 ? (uint64_t)st.st_size : 0;
+    if (::stat((dir + "/" + kFile).c_str(), &st) == 0) n += (uint64_t)st.st_size;
+    if (::stat((dir + "/" + kMetFile).c_str(), &st) == 0) n += (uint64_t)st.st_size;
+    return n;
 }
 
 /** ★★ WRITE: the ships that changed, merged into the store under the machine-wide lock. `limitBytes` is the owner's
@@ -210,7 +221,7 @@ inline size_t write(const std::string& dir, uint64_t limitBytes, const std::vect
     if (dir.empty()) return 0;
     const std::string path = dir + "/" + kFile;
     Lock lk(dir, false);
-    if (limitBytes == 0) { ::unlink(path.c_str()); return 0; }
+    if (limitBytes == 0) { ::unlink(path.c_str()); ::unlink((dir + "/" + kMetFile).c_str()); return 0; }
     if (in.empty()) return 0;
     const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0644);
     if (fd < 0) return 0;
@@ -303,8 +314,141 @@ inline std::vector<Rec> read(const std::string& dir, const Query& q, size_t* tot
     return out;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★ V12 2026-11-16 THE MET STORE: <gallery>/ais-met.dat — the weather AtoN and port stations send (binary message 8,
+//  vibe_ais_asm.h), so the shipping map shows a station's wind, tide and visibility with nobody listening.
+//    header (64 B) · records (used × 288 B): MMSI, last heard, up to 4 sites with when each was heard
+//    ★★ BOUNDED: at most metCapFor(limit) stations (8…128 — 37 KB at most), the station heard longest ago gives way;
+//       counted inside the gallery's size (bytesOnDisk above). Same lock, same "only what changed" writes as the ships.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+static constexpr uint32_t kMetMagic = 0x314D4941;   // "AIM1"
+static constexpr uint32_t kMetRecSize = 288;
+static constexpr uint32_t kMetMaxCap = 128, kMetMinCap = 8;
+struct MetRec {
+    uint32_t mmsi = 0, seen = 0;
+    uint32_t at[Vessel::kMetSites] = {};   ///< UTC each site was heard
+    uint8_t n = 0, pad[3] = {};
+    asmsg::Met site[Vessel::kMetSites];
+};
+static_assert(sizeof(MetRec) <= kMetRecSize, "a met record is 288 bytes");
+inline uint32_t metCapFor(uint64_t limitBytes) {
+    const uint64_t c = limitBytes / 256 / kMetRecSize;
+    return (uint32_t)std::max<uint64_t>(kMetMinCap, std::min<uint64_t>(kMetMaxCap, c));
+}
+/** A ship from the service → its met record (n = 0: it has none). */
+inline MetRec metFromVessel(const Vessel& v, double svcNow, int64_t wallNow) {
+    MetRec r;
+    r.mmsi = v.mmsi; r.seen = (uint32_t)std::max<int64_t>(0, wallNow - (int64_t)std::llround(svcNow - v.last));
+    r.n = (uint8_t)std::max(0, std::min(v.nMet, (int)Vessel::kMetSites));
+    for (int k = 0; k < r.n; ++k) { r.site[k] = v.met[k]; r.at[k] = (uint32_t)std::max<int64_t>(0, wallNow - (int64_t)std::llround(svcNow - v.metAt[k])); }
+    return r;
+}
+/** Merge sites: the same place (within 500 m, or both without a position) keeps the newer; the oldest give way. */
+inline void mergeMet(MetRec& have, const MetRec& in) {
+    for (int i = 0; i < in.n; ++i) {
+        const asmsg::Met& m = in.site[i];
+        int slot = -1;
+        for (int k = 0; k < have.n; ++k) {
+            const asmsg::Met& o = have.site[k];
+            bool same = o.lat == asmsg::kNoPos32 && m.lat == asmsg::kNoPos32;
+            if (o.lat != asmsg::kNoPos32 && m.lat != asmsg::kNoPos32) {
+                const double dy = (o.lat - m.lat) * 1e-7 * 111320.0, dx = (o.lon - m.lon) * 1e-7 * 111320.0 * std::cos(m.lat * 1e-7 * M_PI / 180);
+                same = dx * dx + dy * dy < 500.0 * 500.0;
+            }
+            if (same) { slot = k; break; }
+        }
+        if (slot >= 0) { if (in.at[i] >= have.at[slot]) { have.site[slot] = m; have.at[slot] = in.at[i]; } continue; }
+        if (have.n < Vessel::kMetSites) slot = have.n++;
+        else { slot = 0; for (int k = 1; k < have.n; ++k) if (have.at[k] < have.at[slot]) slot = k; if (have.at[slot] > in.at[i]) continue; }
+        have.site[slot] = m; have.at[slot] = in.at[i];
+    }
+    have.seen = std::max(have.seen, in.seen);
+}
+/** ★ WRITE the stations among `changed` that carry weather. @return records written. */
+inline size_t writeMet(const std::string& dir, uint64_t limitBytes, const std::vector<Vessel>& changed, double svcNow, int64_t wallNow) {
+    if (dir.empty() || limitBytes == 0) return 0;
+    std::vector<MetRec> in;
+    for (const Vessel& v : changed) if (v.nMet > 0) in.push_back(metFromVessel(v, svcNow, wallNow));
+    if (in.empty()) return 0;
+    const std::string path = dir + "/" + kMetFile;
+    Lock lk(dir, false);
+    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0644);
+    if (fd < 0) return 0;
+    Header h;
+    struct stat st{};
+    const uint32_t want = metCapFor(limitBytes);
+    const bool fresh = ::fstat(fd, &st) != 0 || (uint64_t)st.st_size < kHeader || !preadAll(fd, &h, sizeof h, 0) || h.magic != kMetMagic
+                    || h.recSize != kMetRecSize || h.cap < kMetMinCap || h.cap > kMetMaxCap || h.used > h.cap
+                    || (uint64_t)st.st_size < kHeader + (uint64_t)h.used * kMetRecSize;
+    if (fresh || h.cap > want) {
+        h = Header(); h.magic = kMetMagic; h.recSize = kMetRecSize; h.cap = want; h.used = 0;
+        if (::ftruncate(fd, 0) != 0 || !pwriteAll(fd, &h, sizeof h, 0)) { ::close(fd); return 0; }
+    }
+    std::vector<MetRec> all(h.used);
+    for (uint32_t i = 0; i < h.used; ++i) {
+        char buf[kMetRecSize];
+        if (!preadAll(fd, buf, kMetRecSize, (off_t)(kHeader + (uint64_t)i * kMetRecSize))) { h.used = i; all.resize(i); break; }
+        std::memcpy(&all[i], buf, sizeof(MetRec));
+        if (all[i].n > Vessel::kMetSites) all[i].n = Vessel::kMetSites;
+    }
+    std::vector<char> touched(h.cap, 0);
+    size_t n = 0;
+    for (const MetRec& r : in) {
+        uint32_t slot = UINT32_MAX;
+        for (uint32_t i = 0; i < h.used; ++i) if (all[i].mmsi == r.mmsi) { slot = i; break; }
+        if (slot != UINT32_MAX) mergeMet(all[slot], r);
+        else if (h.used < h.cap) { slot = h.used++; all.push_back(r); }
+        else {
+            uint32_t old = UINT32_MAX, oldSeen = UINT32_MAX;
+            for (uint32_t i = 0; i < h.used; ++i) if (!touched[i] && all[i].seen < oldSeen) { oldSeen = all[i].seen; old = i; }
+            if (old == UINT32_MAX) break;
+            slot = old; all[slot] = r;
+        }
+        char buf[kMetRecSize] = {};
+        std::memcpy(buf, &all[slot], sizeof(MetRec));
+        if (!pwriteAll(fd, buf, kMetRecSize, (off_t)(kHeader + (uint64_t)slot * kMetRecSize))) break;
+        touched[slot] = 1; ++n;
+    }
+    pwriteAll(fd, &h, sizeof h, 0);
+    ::close(fd);
+    return n;
+}
+inline std::vector<MetRec> readMet(const std::string& dir) {
+    std::vector<MetRec> out;
+    if (dir.empty()) return out;
+    Lock lk(dir, true);
+    const int fd = ::open((dir + "/" + kMetFile).c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return out;
+    Header h;
+    if (preadAll(fd, &h, sizeof h, 0) && h.magic == kMetMagic && h.recSize == kMetRecSize && h.cap >= kMetMinCap && h.cap <= kMetMaxCap && h.used <= h.cap) {
+        for (uint32_t i = 0; i < h.used; ++i) {
+            char buf[kMetRecSize]; MetRec r;
+            if (!preadAll(fd, buf, kMetRecSize, (off_t)(kHeader + (uint64_t)i * kMetRecSize))) break;
+            std::memcpy(&r, buf, sizeof r);
+            if (!r.mmsi) continue;
+            if (r.n > Vessel::kMetSites) r.n = Vessel::kMetSites;
+            out.push_back(r);
+        }
+    }
+    ::close(fd);
+    return out;
+}
+inline void metJsonFor(const std::vector<MetRec>& all, uint32_t mmsi, int64_t now, std::string& one) {
+    for (const MetRec& r : all) {
+        if (r.mmsi != mmsi || !r.n) continue;
+        int idx[Vessel::kMetSites]; for (int k = 0; k < r.n; ++k) idx[k] = k;
+        std::sort(idx, idx + r.n, [&](int a, int b) { return r.at[a] > r.at[b]; });
+        one += ",\"met\":[";
+        for (int k = 0; k < r.n; ++k) { if (k) one += ','; asmsg::metJson(r.site[idx[k]], (double)(now - (int64_t)r.at[idx[k]]), one); }
+        one += "]";
+        return;
+    }
+}
+
 /** {"now":…,"count":…,"total":…,"vessels":[…the live report's vessel shape, ages from now…]} */
-inline std::string toJson(const std::vector<Rec>& v, int64_t now, bool tracks, size_t total) {
+/** `dir` given: each station's stored weather (the met store, below) is added as the live report's "met" array. */
+inline std::string toJson(const std::vector<Rec>& v, int64_t now, bool tracks, size_t total, const std::string& dir = std::string()) {
+    const std::vector<MetRec> mets = dir.empty() ? std::vector<MetRec>() : readMet(dir);
     std::string o = "{\"now\":" + std::to_string((long long)now) + ",\"count\":" + std::to_string(v.size()) + ",\"total\":" + std::to_string(total) + ",\"vessels\":[";
     bool first = true;
     for (const Rec& r : v) {
@@ -320,6 +464,7 @@ inline std::string toJson(const std::vector<Rec>& v, int64_t now, bool tracks, s
         const std::string eta = getStr(r.eta, sizeof r.eta);
         if (!eta.empty() && one.find("\"eta\":") == std::string::npos) one += ",\"eta\":\"" + jsonEsc(eta) + "\"";
         one += ",\"stored\":1";
+        if (!mets.empty()) metJsonFor(mets, r.mmsi, now, one);
         if (tracks && r.nTrk) {
             one += ",\"pts\":[";
             for (int i = 0; i < r.nTrk && i < kTrack; ++i) {
