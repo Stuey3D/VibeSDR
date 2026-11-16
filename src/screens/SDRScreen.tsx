@@ -13912,6 +13912,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'menu', title: 'The settings menu',
       body: 'This is the main settings menu. In here you can set up your display and controls, and set up the SDR hardware where the server allows it.',
       target: tourRef('menuBtn') },
+    { id: 'audio', title: 'The audio menu',
+      body: 'This is the audio menu. In here you will find all the audio and signal clean-up controls, including the recorder, squelch and every noise reduction option.',
+      target: tourRef('audioBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
     { id: 'keys', title: 'A keyboard or controller drives it all',

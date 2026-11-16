@@ -2440,7 +2440,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
 
         {/* AUDIO — opens the audio sheet; breathes red↔white while recording
             (REC lives inside the sheet, so this is the tap target to stop it). */}
-        <DomeKey ref={screenNavRef('audioBtn', onAudio)} style={por.key} {...keyProps} onPress={onAudio}
+        <DomeKey ref={mergeRefs(tourRef('audioBtn'), screenNavRef('audioBtn', onAudio))} style={por.key} {...keyProps} onPress={onAudio}
           accessibilityLabel={`${audioAsRecord ? 'Record' : 'Audio'}${macMuted ? ', muted' : ''}`}
           overlay={<Animated.View pointerEvents="none"
             style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseRec, opacity: recPulse }]} />}>
@@ -2844,7 +2844,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
         {/* ★ Recording / unread chat: the outline turns red / blue on the default key (today's
             signal); a cap has no outline, so there it is a ring round the slot. */}
-        <DomeKey ref={screenNavRef('audioBtn', onAudio)} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach} onPress={onAudio}
+        <DomeKey ref={mergeRefs(tourRef('audioBtn'), screenNavRef('audioBtn', onAudio))} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach} onPress={onAudio}
           /* ★★ BREATHES, as the portrait key does (Stuart, 2026-10-06: the breathing went missing when the control
               customisation arrived — this key got a STATIC red outline). One pulse on every chassis: a ring that
               fades in and out on the same recPulse as portrait. */
