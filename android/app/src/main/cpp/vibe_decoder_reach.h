@@ -94,6 +94,9 @@ inline const std::vector<Entry>& table() {
         // ★ V12 2026-11-16 NCDXF / IARU beacons: 14.100, 18.110, 21.150, 24.930, 28.200 MHz — any one of them will do.
         v.push_back({ "ncdxf", "NCDXF beacons", "is on 14.100, 18.110, 21.150, 24.930 and 28.200 MHz",
             { ch(14.100e6, 2e3), ch(18.110e6, 2e3), ch(21.150e6, 2e3), ch(24.930e6, 2e3), ch(28.200e6, 2e3) } });
+        // ★ V12 balloons (UKHAS RTTY, Horus Binary, SSDV): amateur payloads on 70 cm — the 434 MHz licence-exempt band and the
+        //   amateur allocation round it. Any part of it will do (payloads are anywhere in it).
+        v.push_back({ "balloon", "Balloons", "is on 70 cm (430\xe2\x80\x93" "440 MHz, the 434 MHz payload band)", { band(430e6, 440e6) } });
         return v;
     }();
     return t;

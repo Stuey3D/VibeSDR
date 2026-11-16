@@ -39883,6 +39883,9 @@ static std::string vsTunableJson() {
     /* ★ V12 2026-11-16 the NCDXF / IARU beacon tracker (decoders/ncdxf_tracker.h): absent on an older server (no key
      *  there), false + its reason where this radio reaches none of the five beacon frequencies or the owner blocked it. */
     j += vsDecoderCapJson("ncdxf", reach);
+    /* ★ V12 balloons (decoders/balloon_rx.h): UKHAS RTTY telemetry, Horus Binary, SSDV pictures — a listener's decoder on
+     *  USB. Absent on an older server; false + its reason where this radio does not reach 70 cm or the owner blocked it. */
+    j += vsDecoderCapJson("balloon", reach);
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -40127,7 +40130,7 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "drm", "freedv", "m17" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "drm", "freedv", "m17" };
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -40300,7 +40303,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

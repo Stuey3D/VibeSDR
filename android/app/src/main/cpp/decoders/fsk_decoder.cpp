@@ -309,6 +309,13 @@ FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
     // One SIGNALLING element in samples (5N1.5 doubles baudRate above to sample half-bits; the ATC's time
     // constants are in whole symbols).
     symLen = sampleRate / (stopVariable ? baudRate / 2.0 : baudRate);
+    /* ★★ V12 BALLOONS (docs/v12/BALLOONS.md): 300 and 600 baud. The tone filters (167 Hz wide) and the 140 Hz envelope
+     *  lowpass suit 45–100 baud; at 300 baud they smear one bit into the next. Above 110 baud each tone filter is a baud
+     *  wide and the envelope lowpass 0.6 of the baud — at 110 baud and below nothing changes (every existing use). */
+    {
+        const double symBaud = stopVariable ? baudRate / 2.0 : baudRate;
+        if (symBaud > 110) { bpBw_ = symBaud; lowpassFilterF = 0.6 * symBaud; }
+    }
     updateFilters();
     // ★ AFC (setAfc): each tone's baseband lowpass — wide enough for a keyed tone and ±50 Hz of error, narrow enough
     //   (two poles) that the OTHER tone, a shift away, is ~20 dB down. Two poles at 54–60 Hz for 170 and 450 Hz.
@@ -354,7 +361,7 @@ void FskDecoder::afcStep_() {
     if (c != centerFrequency) retune(c);
 }
 void FskDecoder::updateFilters() {
-    markSpaceFilterQ = 6.0 * centerFrequency / 1000.0;
+    markSpaceFilterQ = bpBw_ > 0 ? centerFrequency / bpBw_ : 6.0 * centerFrequency / 1000.0;
     double qv = centerFrequency + (4.0 * 1000.0 / centerFrequency);
     markF = qv + deviationF; spaceF = qv - deviationF;
     biquadMark.configure(BiQuad::Bandpass, markF, sampleRate, markSpaceFilterQ);
@@ -571,6 +578,7 @@ void FskDecoder::processBit(bool bit) {
 }
 void FskDecoder::processCharacter(uint16_t code) {
     if (!ita2) return;
+    if (onData && ita2->ascii && nbits != 15) onData(ita2->dataOf(code));
     const char32_t ch = ita2->processChar(code);
     if (ch != 0 && onChar) onChar(ch);
 }

@@ -295,6 +295,9 @@ DJ2LS FreeDATA (GPL-3 ✓) uses codec2's OFDM data modes for ARQ; only beacons a
 third party. Tiny user base. Later.
 
 ### 2.11 UKHAS balloon telemetry, Horus Binary and SSDV images — **build now (small, UK-flavoured, legal, gallery-friendly)**
+★ **Built 2026-11-16 as a listener's decoder on USB — docs/v12/BALLOONS.md** (our own receiver: the RTTY decoder as a
+CRC-judged bank, our own Horus 4-FSK demodulator and SSDV JPEG builder; Project Horus's sample recordings decode; SSDV,
+the map and SondeHub upload are synthetic-only / not built — see there).
 1. **Standards:** UKHAS telemetry sentence format (`$$CALL,…*CRC`) and RTTY practice (ukhas.org.uk ✓); **Horus Binary
    v2** (Project Horus docs ✓: 4-FSK 100 Bd with Golay/LDPC-style coding); **SSDV** (packetised JPEG with RS, used by
    balloons and some satellites; format description ✓).
@@ -546,6 +549,7 @@ rather than letting users conclude the decoder is broken.
    audio/IQ (free downloads), our RTL/RSP passes.
 
 ### 6.4 SSDV from satellites — **with 2.11**
+★ The SSDV layer is built (decoders/balloon_ssdv.h, docs/v12/BALLOONS.md); no satellite framing yet.
 Some cubesats send SSDV images; the same SSDV layer as balloons. Gallery.
 
 ### 6.5 GOES HRIT/LRIT, GK-2A LRIT, Elektro-L — **later, and not for UK hosts**

@@ -3242,6 +3242,19 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 
 /* ★★ V12 JTTY (jtty.ts): one row per station, lowest frequency first — frequency · call · SNR · confidence · age, then
    its recent messages coloured by confidence (the CW list's four colours); the spots under them. */
+/* ★★ V12 balloons: one row per payload (call, numbers, when), then the SSDV pictures as they build (balloons.ts). */
+#balloonList { display: none; margin-top: 6px; }
+#balloonList.on { display: block; }
+#balloonRows .bln { padding: 4px 2px; border-top: 1px solid rgba(255,255,255,0.06); font-variant-numeric: tabular-nums; }
+#balloonRows .bln:first-child { border-top: 0; }
+#balloonRows .bln b { color: var(--freq); letter-spacing: 1px; margin-right: 8px; }
+#balloonRows .bln .nums { font-size: 12px; }
+#balloonRows .bln .when { color: var(--text-dim); font-size: 11px; }
+#balloonRows .bln .sent { color: var(--text-dim); font-size: 10px; word-break: break-all; opacity: 0.8; }
+#balloonPics { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+#balloonPics figure { margin: 0; max-width: 100%; }
+#balloonPics img { display: block; max-width: 100%; width: 320px; height: auto; image-rendering: auto; background: #000; border-radius: 3px; }
+#balloonPics figcaption { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
 /* ★★ V12 NCDXF beacons: the grid — beacon rows, band columns, the steps heard in each cell (ncdxf.ts). */
 #ncdxfList { display: none; margin-top: 6px; }
 #ncdxfList.on { display: block; }
@@ -4466,6 +4479,8 @@ select.btn { padding: 6px 8px; }
     <div id="dscList"><div id="dscKeys"></div><div id="dscRows"></div></div>
     <!-- ★★ JTTY: every JTTY station in the passband (lowest frequency first, coloured by confidence), then the spots (jtty.ts). -->
     <div id="jttyList"><div id="jttyRows"></div><div id="jttySpotsHead">SPOTS</div><div id="jttySpots"></div></div>
+    <!-- ★★ V12 balloons: the payloads heard (newest first) and the SSDV pictures building up (src/services/balloons.ts). -->
+    <div id="balloonList"><div id="balloonRows"></div><div id="balloonPics"></div></div>
     <!-- ★★ V12 NCDXF / IARU beacons: the propagation grid — 18 beacons × 5 bands, how far down the steps (src/services/ncdxf.ts). -->
     <div id="ncdxfList"><div id="ncdxfGrid"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
@@ -5601,6 +5616,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 2026-10-26: PSK31/63 — this server's own (decoders/psk_skimmer.h); drawn only where vibeserver.json says "psk": true. -->
     <button class="btn" data-dec="psk" hidden title="PSK31 and PSK63 — every PSK signal in your passband listed, the one in the middle decoded; or SKIMMER: every PSK signal across a segment around your dial">PSK</button>
     <!-- ★★ V12 APRS — this server's own decoder on your audio: 1200 Bd packet on NFM (VHF), or 300 Bd HF packet on USB. -->
+    <!-- ★★ V12 balloons: UKHAS RTTY telemetry, Horus Binary and SSDV pictures — decoded on the server; hidden unless it says "balloon" (greyed with why off 70 cm). -->
+    <button class="btn" data-dec="balloon" hidden title="High-altitude balloons — UKHAS RTTY telemetry, Horus Binary 4-FSK and SSDV pictures from amateur payloads, mostly on 434 MHz: tune the payload in USB and everything is found by itself">BALLOONS</button>
     <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <!-- ★★ V12 DSC: maritime Digital Selective Calling (ITU-R M.493) — decoded on the server; hidden unless it says "dsc". -->
@@ -5753,6 +5770,15 @@ select.btn { padding: 6px 8px; }
       <div class="seg" id="ncdxfBands"></div>
     </div>
     <div class="hint" id="ncdxfHint"></div>
+  </div>
+  <!-- ★★ V12 balloons: AUTO, and the manual pins under it (Stuart: an automatic decoder keeps manual controls underneath). -->
+  <div class="subPanel" id="balloonSettings" hidden>
+    <div class="mrow"><label>RTTY SPEED</label><div class="seg" id="balloonBaud"></div></div>
+    <div class="mrow"><label>BITS</label><div class="seg" id="balloonBits"></div></div>
+    <div class="mrow"><label>POLARITY</label><div class="seg" id="balloonPol"></div></div>
+    <div class="mrow"><label>SHIFT</label><div class="seg" id="balloonShift"></div></div>
+    <div class="mrow"><label>HORUS SPACING</label><div class="seg" id="balloonSpacing"></div></div>
+    <div class="hint" id="balloonHint"></div>
   </div>
   <div class="subPanel" id="jttySettings" hidden>
     <div class="mrow">
@@ -5915,6 +5941,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 2026-10-26: DSC — each frequency's day of calls as a .txt, and every distress/urgency call on its own (MAP). -->
     <button class="btn" data-kind="dsc">DSC</button>
     <button class="btn" data-kind="sitora">SITOR-A</button>
+    <!-- ★★ V12 balloons: the reports as a run, and each SSDV picture as a JPEG. -->
+    <button class="btn" data-kind="balloon">BALLOONS</button>
   </div>
   <div id="galList"></div>
   <!-- ★ V12 beta 4: pages (main.ts renderGalleryPager) — "‹ Newer · 1 … 6 7 8 … 14 · Older ›", "Page 7 of 14". -->

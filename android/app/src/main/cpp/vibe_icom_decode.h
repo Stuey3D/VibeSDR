@@ -72,7 +72,7 @@ inline Plan plan(const std::string& ext, const std::string& radioMode, int fil, 
     const bool ssb = m == "usb" || m == "lsb", data = m == "usbd" || m == "lsbd";
     const bool cwMode = m == "cw" || m == "cwr", rttyMode = m == "rtty" || m == "rttyr";
     // ★ The time signals are read in whatever the listener tunes them in (MSF / DCF77: CW or AM), as on an SDR.
-    if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy" || ext == "tdf" || ext == "ncdxf") return p;   // ★ NCDXF: CW or USB, as tuned
+    if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy" || ext == "tdf" || ext == "ncdxf" || ext == "balloon") return p;   // ★ NCDXF: CW or USB, as tuned · balloons: USB, as tuned
     // ★ CW: CW itself, or any sideband (a wider USB filter lists every CW signal in it) — kept. From AM / FM / RTTY,
     //   the radio's CW mode at its widest filter (the dial is then the signal, as the listener tuned it).
     if (ext == "cw") {

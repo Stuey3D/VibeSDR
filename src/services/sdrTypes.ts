@@ -465,6 +465,8 @@ export interface ServerOccupancy {
   timeTdf?: boolean;
   /** ★ V12 2026-11-16 the NCDXF / IARU beacon tracker runs here (false + ncdxfWhy where this radio reaches none). */
   ncdxf?: boolean;
+  /** ★ V12 balloons (UKHAS RTTY, Horus Binary, SSDV) decode here (false + balloonWhy where this radio does not reach 70 cm). */
+  balloon?: boolean;
   dsc?: boolean;
   /** ★ V12 SITOR-A: this server's maritime ARQ listener ('sitora'). False or absent = no key. */
   sitora?: boolean;
@@ -516,7 +518,7 @@ export interface ServerOccupancy {
 }
 
 /** ★★★ V12 the decoders vibe_decoder_reach.h can grey for reach — the server sends `"<id>": false, "<id>Why": "…"`. */
-export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'hfdl'] as const;
+export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl'] as const;
 /** id → reason, for each fixed-frequency decoder this radio cannot reach. A reason is honoured only beside `<id>: false`
  *  (an owner's block sends false with no reason — that key stays hidden, as ever). */
 export function parseDecoderReach(j: any): Record<string, string> {
@@ -577,6 +579,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       jtty:      j.jtty === true,
       timeTdf:   j.timeTdf === true,
       ncdxf:     j.ncdxf === true,   // ★ V12 the NCDXF / IARU beacon tracker
+      balloon:   j.balloon === true, // ★ V12 balloons
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
       same:      j.same === true,

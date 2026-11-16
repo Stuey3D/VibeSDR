@@ -93,6 +93,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
     { group: 'other',    ids: ['rds', 'same'] },   // ★ V12 SAME: NOAA Weather Radio, 162.400–162.550 MHz
   ],
   uhf: [
+    { group: 'amateur',  ids: ['balloon'] },   // ★ V12 balloons: UKHAS / Horus / SSDV payloads on 70 cm
     { group: 'paging',   ids: ['paging'] },
   ],
 };
@@ -169,6 +170,7 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   rtty:   hz => anyNear(hz, HAM),
   jtty:   hz => anyNear(hz, HAM),
   ncdxf:  hz => pointsNear(hz, [14.100e6, 18.110e6, 21.150e6, 24.930e6, 28.200e6], 5e3),   // ★ V12 the five beacon frequencies
+  balloon: hz => hz >= 430e6 && hz <= 440e6,   // ★ V12 balloons: 70 cm, the 434 MHz payload band
   mfsk:   hz => anyNear(hz, HAM),   // ★ one key: MFSK16/32, OLIVIA, CONTESTIA, THOR
   hell:   hz => anyNear(hz, HAM),
   sstv:   hz => anyNear(hz, HAM),
