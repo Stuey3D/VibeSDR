@@ -1114,6 +1114,15 @@ add_executable(test-dxscan-fm "${CMAKE_CURRENT_SOURCE_DIR}/test-dxscan-fm.cpp")
 target_include_directories(test-dxscan-fm PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
 target_link_libraries(test-dxscan-fm PRIVATE vibedsp Threads::Threads)
 add_test(NAME dxscan-fm COMMAND test-dxscan-fm)
+# ★★ V12 AVIATION DATALINK (docs/v12/AVIATION.md): ACARS, VDL2, HFDL and the service that runs them — header-only on
+#    vibedsp's channeliser / FFT / half-bands. -O3 -ffp-contract=fast: each test times its receiver against real time.
+foreach(t acars vdl2 hfdl avi-service)
+  add_executable(test-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-${t}.cpp")
+  target_include_directories(test-${t} PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
+  target_compile_options(test-${t} PRIVATE -O3 -ffp-contract=fast)
+  target_link_libraries(test-${t} PRIVATE vibedsp Threads::Threads)
+  add_test(NAME ${t} COMMAND test-${t})
+endforeach()
 # ★ dxscan-fm-replay: a recorded .cu8 capture through the FM hop engine as a sweep runs it (dev tool; captures stay in
 #   ~/VibeSDR-test-audio/fm). Peaks found and each one's clean RDS groups — why a station is or is not identified.
 add_executable(dxscan-fm-replay "${CMAKE_CURRENT_SOURCE_DIR}/dxscan-fm-replay.cpp")
