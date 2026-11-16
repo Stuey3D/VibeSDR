@@ -122,6 +122,16 @@ ok(m.FullJudge().feed(0, True, "Charging", 4.19, 0.0, 4.95, CFG, 0x40) == "full"
 j = m.FullJudge()
 for t in range(0, 900): j.feed(t, True, "Not charging", 4.12, -0.10, 4.95, CFG)
 ok(j.state == "paused", "on the cord but the battery giving: paused, never full")
+j = m.FullJudge(); seen_paused = False
+for t in range(0, 400):   # tapered, with the status flapping to Not charging for 5 s in every 40 (the LED flicker)
+    s = j.feed(t, True, "Not charging" if t % 40 < 5 else "Charging", 4.19, -0.05 if t % 40 < 5 else 0.12, 4.95, CFG)
+    seen_paused = seen_paused or s == "paused"
+ok(seen_paused and j.state == "full", "★ brief Charging ↔ Not charging flaps keep the hold: full after it (%s)" % j.state)
+j = m.FullJudge()
+for t in range(0, 200): j.feed(t, True, "Charging", 4.19, 0.12, 4.95, CFG)
+for t in range(200, 290): j.feed(t, True, "Not charging", 4.12, -0.10, 4.95, CFG)
+for t in range(290, 400): j.feed(t, True, "Charging", 4.19, 0.12, 4.95, CFG)
+ok(j.state == "hold", "a pause over a minute starts the hold again (%s)" % j.state)
 j = m.FullJudge()
 for t in range(0, 900): j.feed(t, True, "Charging", None if t % 3 else 4.19, None if t % 3 else 0.12, 4.95, CFG)
 ok(j.state == "full", "missing readings change nothing (one in three present, still full after the hold)")

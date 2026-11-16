@@ -256,6 +256,7 @@ TERM_FALLBACK_A = 0.15        # nothing readable: the rk817's lowest termination
 VLIM_NEAR_V = 0.15            # the port this close to VLIM: the hint ("a shorter cable charges faster")
 VLIM_AT_V = 0.05              # … this close: treated as limited (never judged full)
 TERM_STEPS_MA = (150, 200, 300, 400)
+PAUSE_RESET_S = 60.0          # a pause on the cord longer than this restarts the hold
 CC_FRACTION = 0.85            # the current this close to the CC setting: still constant current
 CHG_FINISH = 4
 
@@ -317,6 +318,7 @@ class FullJudge:
     def reset(self):
         self.state, self.by, self.v, self.a, self.t, self.since = "off", None, None, None, None, None
         self.limited = self.near = False
+        self.paused_since = None
 
     def _ema(self, old, x, dt):
         if old is None:
@@ -344,8 +346,16 @@ class FullJudge:
         self.t = t
         self.v, self.a = self._ema(self.v, bat_v, dt), self._ema(self.a, bat_a, dt)
         if status not in ("Charging", "Full") or bat_a <= 0:
-            self.state, self.since = "paused", None     # the console's load has the port; nothing is going in
+            # the console's load has the port; nothing is going in. ★ The status flaps Charging ↔ Not charging on this
+            # board (ChargerWatch's flip lines): a flap shorter than PAUSE_RESET_S keeps the hold — it only can never
+            # END on a paused reading; a longer pause starts it again.
+            if self.paused_since is None:
+                self.paused_since = t
+            if t - self.paused_since >= PAUSE_RESET_S:
+                self.since = None
+            self.state = "paused"
             return self.state
+        self.paused_since = None
         near_cv = self.v >= cfg["cvV"] - FULL_NEAR_CV_V
         # ★ still at the charger's constant current (≥ 85 % of it) is CC whatever the voltage says — Stuart's 4.15 V
         #   at 0.96 A of a 1.0 A setting is not topping up yet
