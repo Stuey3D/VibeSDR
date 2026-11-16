@@ -3564,7 +3564,7 @@ function WaterfallView({
         })()}
 
         {/* ★★ V12 THE TUNED STATION'S LABEL (utils/tunedStation.ts — Stuart, 2026-11-15: "When the VTS disappears can we have
-            a label on the VFO with the current station name"). Beside the needle, one row BELOW its LISTEN readout (the
+            a label on the VFO with the current station name"). A wide DAB view only (else the VFO box above). One row BELOW LISTEN (the
             top of the waterfall with the spectrum on; under LISTEN's row without it), so it never covers it. The scale
             stamps' look: the VFO colour, white where that clashes with the palette (stampCol), a dark halo on a dark box.
             Flipped to the needle's left near the right edge and kept on screen (tunedLabelX). RN cannot measure text

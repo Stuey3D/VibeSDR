@@ -1414,7 +1414,7 @@ export class Waterfall {
    *  have a label on the VFO with the current station name"). One row BELOW LISTEN — the top of the waterfall with the
    *  spectrum on (LISTEN sits just above the boundary), under the DC spike's row without it — so it never covers the
    *  frequency readout. The scale stamps' look: the VFO colour, white where that clashes with the palette (stampColour),
-   *  a dark shadow, on markerLabel's dark box. Beside the needle, flipped left at the right edge, kept on screen. */
+   *  a dark shadow, on markerLabel's dark box. A wide DAB view only (else _drawVfoBox): centred on the needle, kept on screen. */
   private _drawTuned(ctx: CanvasRenderingContext2D, W: number, H: number) {
     if (this.vfoPlan) { this._drawVfoBox(ctx, W, H); return; }
     this.tunedDrawn = null;

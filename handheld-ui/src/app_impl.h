@@ -425,7 +425,7 @@ inline void App::drawOverlays(Ctx& c, const RadioState& s, Rect spec, Rect wfr) 
     c.g.rect(vx - 1, spec.y, 2, spec.h, dispNeedle(0.9f));
     c.g.rect(vx - 0.5f, wfr.y, 1, wfr.h, dispNeedle(0.45f));
     knownLabelsDraw(*this, c, s, spec);   // ★ SIGNAL LABELS at the spectrum's foot, never over the needle (known_labels_app.h)
-    tunedLabelDraw(c, s, wfr, wfp_.palette().rgba);   // ★ V12 "[EiBi] China Radio Int" beside the needle (tuned_label_app.h)
+    tunedLabelDraw(c, s, wfr, wfp_.palette().rgba);   // ★ V12 "[EiBi] China Radio Int" centred on the needle (tuned_label_app.h)
     // ★ no radio name over the spectrum (Stuart, 2026-11-07: "takes up valuable space") — it is in SDR HARDWARE → RECEIVER
     // (the station's RDS name is the VTS bar's now — vts.h)
 }
