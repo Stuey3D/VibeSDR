@@ -70,6 +70,9 @@ int main() {
         ok(log.findKey(fmKey(0, 96300)) && !log.findKey(fmKey(0, 96300))->stereo, "a strong mono carrier is logged too (mono)");
         log.commitFm(95900, 97200, 96550, 100, { fm(96800, 0, "", 0, false, -40, 20) }, T0 + 30);
         ok(!log.findKey(fmKey(0, 96800)), "a moderate carrier with no pilot and no RDS is not (a hi-fi tuner's stop level)");
+        // ★★ 2026-11-16 (the G35's 107.4–107.8): a locked pilot is the proof at ANY level — there is no SNR bar on it any more
+        log.commitFm(95900, 97200, 96550, 100, { fm(96900, 0, "", 0, false, -62, 7, true) }, T0 + 35);
+        ok(log.findKey(fmKey(0, 96900)) && log.findKey(fmKey(0, 96900))->stereo, "★ a WEAK station with its pilot locked (7 dB) is logged");
         // ★ RDS found later on the no-RDS frequency: ONE entry, the first heard carried
         log.commitFm(95900, 97200, 96550, 100, { fm(96100, 0xCF9F, "FLEX FM", 3, false, -40, 14, true) }, T0 + 40);
         const Entry* r = log.findKey(fmKey(0xCF9F, 96100));
@@ -360,6 +363,135 @@ int main() {
         ok(log.find(keepId) != nullptr, "★ a PROMOTED entry is never pruned, however old");
         const int n = log.clear();
         ok(log.size() == 1 && log.find(keepId) && n > 0, "clear keeps the promoted entry");
+    }
+
+    std::printf("── the extended FM ranges: OIRT, 76–87.5 (Japan / Dutch pirates), 87.5–108 (2026-11-16) ──\n");
+    {
+        Config c; std::string e;
+        ok(parseConfig("{\"on\":true}", c, e) && c.oirt && c.ext, "★ both extra ranges default ON");
+        ok(parseConfig("{\"on\":true,\"oirt\":false,\"ext\":false}", c, e) && !c.oirt && !c.ext, "each can be switched off");
+        Config back; parseConfig(toJson(c), back, e);
+        ok(!back.oirt && !back.ext && toJson(back) == toJson(c), "and round-trips");
+        Config on; parseConfig("{\"on\":true}", on, e);
+        for (int ri = 0; ri < kFmRangeCount; ++ri) {
+            const auto& R = kFmRanges[ri];
+            const int r = on.rasterFor(ri);
+            const auto p = planFm(2.4e6, r, R.loHz, R.hiHz, 1.4e6);
+            std::set<int> seen; bool once = true, onRaster = true, inside = true, offDc = true;
+            for (const auto& h : p) {
+                for (double f = h.loHz; f <= h.hiHz + 1; f += r * 1000.0) {
+                    const int k = (int)std::lround(f / 1e3);
+                    if (!seen.insert(k).second) once = false;
+                    if (((k - (int)std::lround(R.loHz / 1e3)) % r) != 0) onRaster = false;
+                    if (k < (int)std::lround(R.loHz / 1e3) || k > (int)std::lround(R.hiHz / 1e3)) inside = false;
+                    if (std::fabs(f - h.centreHz) < r * 500.0 - 1) offDc = false;
+                }
+            }
+            const int want = (int)std::floor((R.hiHz - R.loHz) / (r * 1e3) + 1e-6) + 1;
+            char b[200];
+            std::snprintf(b, sizeof b, "%s: %zu hops, all %d channels on its %d kHz raster once each, inside the range, none on DC", R.id, p.size(), want, r);
+            ok((int)seen.size() == want && once && onRaster && inside && offDc && !p.empty(), b);
+        }
+        {   // ★ OIRT's real channels are on the 30 kHz raster from 65.81
+            const auto p = planFm(2.4e6, 30, kFmRanges[0].loHz, kFmRanges[0].hiHz);
+            std::set<int> ch;
+            for (const auto& h : p) for (double f = h.loHz; f <= h.hiHz + 1; f += 30e3) ch.insert((int)std::lround(f / 1e3));
+            ok(ch.count(66440) && ch.count(69800) && ch.count(70310) && ch.count(68840) && !ch.count(69850),
+               "★ OIRT channels 66.44, 68.84, 69.80, 70.31 are on the raster (69.85 is not)");
+        }
+        {   // ★ a pirate on 86.65 is a channel of the 50 kHz extended range
+            const auto p = planFm(2.4e6, 50, kFmRanges[1].loHz, kFmRanges[1].hiHz);
+            bool has = false;
+            for (const auto& h : p) for (double f = h.loHz; f <= h.hiHz + 1; f += 50e3) if ((int)std::lround(f / 1e3) == 86650) has = true;
+            ok(has, "★ 86.65 MHz (a Dutch pirate just under 87) is a channel of the extended range");
+        }
+        const auto all = planFmRanges(2.4e6, on, 1.4e6);
+        bool asc = true, rasters = true;
+        for (size_t i = 1; i < all.size(); ++i) if (all[i].loHz <= all[i - 1].hiHz) asc = false;
+        for (const auto& h : all) if (h.rasterKhz != on.rasterFor(h.range)) rasters = false;
+        ok(!all.empty() && all.front().range == 0 && all.back().range == 2 && asc && rasters,
+           "★ the whole plan runs low to high, OIRT → 76–87.5 → 87.5–108, each hop on its range's raster (" + std::to_string(all.size()) + " hops)");
+        Config fmOnly = on; fmOnly.oirt = false; fmOnly.ext = false;
+        ok(planFmRanges(2.4e6, fmOnly, 1.4e6).size() == planFm(2.4e6, 100, kFmBandLoHz, kFmBandHiHz, 1.4e6).size(), "with both off, the plan is the main band's");
+        // ★ the radio's tuning range and the owner's permitted set
+        const vibebands::Ranges g35{ { 60e6, 260e6 } }, from70{ { 70e6, 2e9 } };
+        ok(keepTunable(all, g35, {}).size() == all.size(), "a radio tuning 60–260 MHz (the G35) sweeps every range");
+        const auto t70 = keepTunable(all, from70, {});
+        bool lo70 = !t70.empty(); for (const auto& h : t70) lo70 = lo70 && h.loHz >= 70e6;
+        ok(lo70 && t70.size() < all.size(), "★ a radio from 70 MHz up: the OIRT hops it cannot tune whole are dropped");
+        const vibebands::Ranges permFm{ { 87.5e6, 108e6 } };
+        const auto pf = keepTunable(all, {}, permFm);
+        bool onlyFm = !pf.empty(); for (const auto& h : pf) onlyFm = onlyFm && h.hiHz >= 87.5e6;
+        ok(onlyFm, "★ an owner who permits only 87.5–108: no OIRT or extended-range hop");
+        // ★ the cursor walks across the ranges and wraps to OIRT
+        Log lc(T0);
+        Config cf = on; cf.dab = false;
+        Job j = nextJob(lc, cf, all, 0);
+        ok(all[(size_t)j.index].range == 2, "a new log starts where it always did (87.5)");
+        for (size_t k = 0; k < all.size(); ++k) { j = nextJob(lc, cf, all, 0); advance(lc, cf, j, all, 0); }
+        ok(lc.fmCursorKhz >= 87500 && lc.sweeps(false) == 1, "one sweep later it has wrapped through OIRT and the extended range");
+        // ★ entries outside 87.5–108: logged, ranged, saved and loaded
+        Log lx(T0);
+        lx.commitFm(69500, 70100, 69815, 30, { fm(69800, 0, "", 0, false, -30, 30) }, T0 + 10);       // OIRT, mono, strong
+        lx.commitFm(86200, 87000, 86625, 50, { fm(86650, 0, "", 0, false, -60, 9, true) }, T0 + 20);  // a pirate, stereo
+        lx.commitFm(76000, 76600, 76325, 50, { fm(76100, 0x1234, "JP FM", 5, true) }, T0 + 30);      // Japan, RDS
+        Log ly; ly.fromFileJson(lx.toFileJson());
+        ok(ly.findKey(fmKey(0, 69800)) && ly.findKey(fmKey(0, 86650)) && ly.findKey(fmKey(0x1234, 76100)) && ly.toFileJson() == lx.toFileJson(),
+           "★ OIRT 69.80, a pirate on 86.65 and Japan's 76.1 are logged and survive save and load byte for byte");
+        Log::Query q; q.showLocal = q.showSuspect = true;
+        const std::string page = ly.listJson(q, T0 + 40);
+        ok(page.find("\"freqKhz\":69800") != std::string::npos && page.find("\"range\":\"oirt\"") != std::string::npos
+           && page.find("\"range\":\"ext\"") != std::string::npos, "the API carries each entry's range (oirt / ext / fm)");
+    }
+
+    std::printf("── locals into the discovered bookmarks (2026-11-16) ──\n");
+    {
+        Log log(T0);
+        int64_t t = T0;
+        DabHit d; d.block = 30; d.blockName = "12B"; d.eid = 0xC1CE; d.ecc = 0xE1; d.label = "Digital One"; d.fibOk = 3;
+        d.services = { { 0xC0CE, "Classic FM" }, { 0xC0D2, "talkSPORT" } };
+        // a day of sweeps: two FM locals (one with no RDS) and a DAB local, every visit
+        for (; t < T0 + 26 * 3600; t += 1200) {
+            log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 8, true), fm(99400, 0, "", 0, false, -30, 30, true) }, t);
+            log.commitDab(30, &d, t);
+        }
+        // ★ then a Sporadic-E catch, heard for twenty minutes — DX, never Local
+        for (int64_t u = t; u <= t + 20 * 60; u += 120)
+            log.commitFm(98000, 99800, 98950, 100, { fm(98500, 0xC201, "BBC R4", 8, true), fm(99400, 0, "", 0, false, -30, 30, true),
+                                                     fm(98800, 0x5201, "RAI R1", 5, true) }, u);
+        DabHit es = d; es.block = 31; es.blockName = "12C"; es.eid = 0xE0F1; es.label = "Far Away"; es.services = { { 0xF1, "Far Radio" } };
+        log.commitDab(31, &es, t + 600);
+        t += 30 * 60;
+        auto locals = log.localsForBookmarks();
+        bool fmR4 = false, fmNoRds = false, dab = false, dx = false;
+        for (const auto& l : locals) {
+            if (!l.dab && l.pi == 0xC201 && l.khz == 98500 && l.ps == "BBC R4" && l.fresh) fmR4 = true;
+            if (!l.dab && l.pi == 0 && l.khz == 99400 && l.fresh) fmNoRds = true;
+            if (l.dab && l.eid == 0xC1CE && l.block == 30 && l.ecc == 0xE1 && l.services.size() == 2 && l.services[0].second == "Classic FM") dab = true;
+            if (l.pi == 0x5201 || l.eid == 0xE0F1) dx = true;
+        }
+        ok(locals.size() == 3, "★ the locals are offered — three of them (" + std::to_string(locals.size()) + ")");
+        ok(fmR4, "an FM local with its PI and its whole PS");
+        ok(fmNoRds, "an FM local with no RDS, by its frequency");
+        ok(dab, "a DAB local: block, EId, ECC and every named service");
+        ok(!dx && log.findKey(fmKey(0x5201, 98800))->cls == Cls::Dx, "★★ the Sporadic-E catch (DX) is NOT offered — only locals become bookmarks");
+        ok(log.findKey(dabKey(0xE0F1, "12C"))->cls == Cls::Dx, "  nor the DX multiplex");
+        for (const auto& l : locals) log.markLocalBookmarked(l.id);
+        bool anyFresh = false;
+        for (const auto& l : log.localsForBookmarks()) anyFresh = anyFresh || l.fresh;
+        ok(!anyFresh && log.localsForBookmarks().size() == 3, "★ once handed over, no local is offered as NEW again (refresh only — a deleted bookmark stays deleted)");
+        ok(!log.markLocalBookmarked(log.findKey(fmKey(0x5201, 98800))->id), "a DX entry cannot be marked as a bookmarked local");
+        Log back; back.fromFileJson(log.toFileJson());
+        anyFresh = false;
+        for (const auto& l : back.localsForBookmarks()) anyFresh = anyFresh || l.fresh;
+        ok(!anyFresh && back.localsForBookmarks().size() == 3, "the handed-over mark survives a restart");
+        // ★ a local that goes away for over a week drops back to DX — and if it is established again, it is offered again
+        for (int64_t u = t; u < t + 9 * 86400; u += 1800) log.commitDab(30, &d, u);
+        log.evaluate(t + 9 * 86400);   // ★ the tick re-judges every entry once a minute
+        bool r4Offered = false;
+        for (const auto& l : log.localsForBookmarks()) if (l.pi == 0xC201) r4Offered = true;
+        ok(log.findKey(fmKey(0xC201, 98500))->cls == Cls::Dx && !r4Offered, "a Local gone a week drops back to DX and is no longer offered");
+        ok(!log.find(log.findKey(fmKey(0xC201, 98500))->id)->bmLocal, "  and its handed-over mark is cleared (a re-established local is offered afresh)");
     }
 
     std::printf("── persistence ──\n");

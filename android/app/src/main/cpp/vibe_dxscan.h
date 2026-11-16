@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "vibe_antswitch.h"   // ★ its small strict JSON reader (Json / parseJson) — pure, no sockets
+#include "vibe_bands.h"       // ★ Ranges / allows — which hops this radio tunes and the owner permits (keepTunable)
 
 namespace vibe {
 namespace dx {
@@ -60,10 +61,42 @@ static constexpr int64_t kWindowSec   = 7 * 86400;
 static constexpr int64_t kBootstrapSec = 24 * 3600;
 static constexpr double kLocalRatio   = 0.90;
 static constexpr int    kLocalMinVisitsBootstrap = 3;   // a baseline local must have been visited at least this often
-static constexpr float  kFmNoRdsPilotSnr = 12.0f;   // ★ a station with no RDS: its pilot locked and this far over the floor
+/* ★★ (2026-11-16, the G35: 107.4 / 107.6 / 107.8 stereo at 19–22 dB on the listener's meter, never logged — nothing filed
+ *  under 12.6 dB in 4 sweeps) a LOCKED 19 kHz PILOT IS THE PROOF, whatever the level: there used to be a 12 dB bar on it
+ *  as well (kFmNoRdsPilotSnr), and the scanner's channel SNR (±80 kHz of power over the quietest tenth of the hop's bins)
+ *  reads a weak stereo station well under the listener's figure. The skirt / image / intermod rules still mark a pilot
+ *  that belongs to a stronger neighbour as Suspect. */
 static constexpr float  kFmNoRdsMonoSnr  = 25.0f;   // …or, mono, this far (a hi-fi tuner's stop level, over any local's skirt)
 static constexpr int    kFmMinGroups  = 3;      // ★ brief §6: PI in at least 3 CRC-valid groups within one dwell
 static constexpr double kFmBandLoHz   = 87.5e6, kFmBandHiHz = 108.0e6;
+
+/* ★★★ THE FM RANGES THE SCANNER SWEEPS (V12, 2026-11-16 — Stuart: "We need to cover the extended FM range, so we cover the
+ *  Dutch pirates and the Japanese and the OIRT range too"). One row per range; adding one is a row here (and its switch
+ *  in Config). Each has its OWN raster — the plan, the peak-pick and the log all take the hop's raster, never one global.
+ *    oirt  65.81–73.97 MHz, 30 kHz: Eastern Europe's band (Sporadic-E DX in the UK). The raster is 65.81 + n·30 kHz —
+ *          66.44, 69.80, 70.31 … are all on it. ★ Its STEREO is the polar-modulation system (a 31.25 kHz pilot-tone), which
+ *          nothing here decodes: an OIRT station is found by its RDS (rare), a 19 kHz pilot (the CCIR-stereo minority), or —
+ *          mono — its strength (kFmNoRdsMonoSnr). Never claimed stereo from polar.
+ *    ext   76.00–87.45 MHz, 50 kHz: Japan (76–95) and Brazil's eFM (76–88) and the Dutch pirates who "hang around just
+ *          under 87 MHz" (Stuart) — not always on a 100 kHz channel, so 50 kHz (86.65 is a channel). Joined to the main
+ *          band, so 76–108 is one continuous sweep.
+ *    fm    87.5–108 MHz, the owner's raster (100 or 50 kHz).
+ *  ★ A range runs only where this radio tunes it and the owner permits it (the shim's dxFmPlan). Both extra ranges default
+ *    ON: they are what Sporadic-E brings, and a radio that cannot reach them simply skips them. */
+struct FmRange { const char* id; const char* name; double loHz, hiHz; int rasterKhz; };   // rasterKhz 0 = the owner's
+static constexpr FmRange kFmRanges[] = {
+    { "oirt", "OIRT 65.8\xe2\x80\x93" "74",                                 65.81e6, 74.0e6,  30 },
+    { "ext",  "Extended FM 76\xe2\x80\x93" "87.5 (Japan / Dutch pirates)", 76.0e6,  87.45e6, 50 },
+    { "fm",   "FM 87.5\xe2\x80\x93" "108",                                   87.5e6,  108.0e6, 0 },
+};
+static constexpr int kFmRangeCount = (int)(sizeof kFmRanges / sizeof kFmRanges[0]);
+/** Which range a channel is in (-1 = none of them). */
+inline int fmRangeOf(int khz) {
+    for (int i = 0; i < kFmRangeCount; ++i)
+        if (khz >= (int)std::lround(kFmRanges[i].loHz / 1e3) && khz <= (int)std::lround(kFmRanges[i].hiHz / 1e3)) return i;
+    return -1;
+}
+inline bool fmInAnyRange(int khz) { return fmRangeOf(khz) >= 0; }
 
 inline std::string esc(const std::string& s) {
     std::string o; o.reserve(s.size() + 8);
@@ -88,14 +121,24 @@ struct Config {
     bool viewAdmin = false;            // admin lock on viewing the log (default open)
     bool proof = false;                // ★ §12 q2 decided: proof clips opt-in, default OFF (not drawn yet — see the doc)
     int  gapMin = 30;                  // a new opening after this many minutes unheard
+    bool oirt = true;                  // ★ the extra FM ranges (kFmRanges) — options under the FM band, default ON
+    bool ext = true;
     bool any() const { return on && (fm || dab); }
+    /** Is range `i` of kFmRanges swept? (the main band whenever FM is) */
+    bool range(int i) const {
+        if (!fm || i < 0 || i >= kFmRangeCount) return false;
+        const std::string id = kFmRanges[i].id;
+        return id == "oirt" ? oirt : id == "ext" ? ext : true;
+    }
+    int rasterFor(int i) const { return i >= 0 && i < kFmRangeCount && kFmRanges[i].rasterKhz > 0 ? kFmRanges[i].rasterKhz : rasterKhz; }
 };
 inline std::string bandsWord(const Config& c) { return c.fm && c.dab ? "both" : c.fm ? "fm" : c.dab ? "dab" : "none"; }
 inline std::string toJson(const Config& c) {
-    char b[200];
-    std::snprintf(b, sizeof b, "{\"on\":%s,\"bands\":\"%s\",\"waitMin\":%d,\"raster\":%d,\"viewAdmin\":%s,\"proof\":%s,\"gapMin\":%d}",
+    char b[240];
+    std::snprintf(b, sizeof b, "{\"on\":%s,\"bands\":\"%s\",\"waitMin\":%d,\"raster\":%d,\"viewAdmin\":%s,\"proof\":%s,\"gapMin\":%d,"
+                  "\"oirt\":%s,\"ext\":%s}",
                   c.on ? "true" : "false", bandsWord(c).c_str(), c.waitMin, c.rasterKhz, c.viewAdmin ? "true" : "false",
-                  c.proof ? "true" : "false", c.gapMin);
+                  c.proof ? "true" : "false", c.gapMin, c.oirt ? "true" : "false", c.ext ? "true" : "false");
     return b;
 }
 /** @return false (and `err`) on a blob that is not a JSON object. Out-of-range numbers are clamped, never refused —
@@ -117,6 +160,8 @@ inline bool parseConfig(const std::string& text, Config& out, std::string& err) 
     out.viewAdmin = bo("viewAdmin", false);
     out.proof = bo("proof", false);
     out.gapMin = std::max(5, std::min(24 * 60, (int)std::lround(num("gapMin", 30))));
+    out.oirt = bo("oirt", true);
+    out.ext = bo("ext", true);
     return true;
 }
 
@@ -137,6 +182,8 @@ inline double fmHalfUse(double rateHz) { return std::max(0.0, 0.4 * rateHz - 100
 struct FmHopPlan {
     double centreHz = 0;           // the capture centre (tuned)
     double loHz = 0, hiHz = 0;     // the raster channels this hop owns, inclusive (each channel in exactly one hop)
+    int    rasterKhz = 100;        // ★ this hop's raster (its range's — OIRT 30, extended 50, the main band the owner's)
+    int    range = 2;              // index into kFmRanges
 };
 /** The hops that cover every raster channel of [loHz, hiHz] once each. A capture centre sits half a raster step off the
  *  raster, so no channel lands on the dongle's DC. Empty when the capture is too narrow to hold one channel. */
@@ -159,8 +206,31 @@ inline std::vector<FmHopPlan> planFm(double rateHz, int rasterKhz, double loHz =
         c = std::floor((c - loHz - r / 2) / r) * r + loHz + r / 2;
         long last = i;
         while (last + 1 < nCh && loHz + (last + 1) * r <= c + half + 1e-3) ++last;
-        out.push_back({ c, f0, loHz + last * r });
+        FmHopPlan h; h.centreHz = c; h.loHz = f0; h.hiHz = loHz + last * r; h.rasterKhz = rasterKhz;
+        h.range = fmRangeOf((int)std::lround(f0 / 1e3)); if (h.range < 0) h.range = kFmRangeCount - 1;
+        out.push_back(h);
         i = last + 1;
+    }
+    return out;
+}
+/** ★ The hops a radio can make: every channel of the hop inside what it TUNES (`hw`, the driver's ranges; empty = all),
+ *  and some of the hop inside what the owner PERMITS (`perm`; empty = no limit — the hits are filtered again at commit). */
+inline std::vector<FmHopPlan> keepTunable(const std::vector<FmHopPlan>& plan, const vibebands::Ranges& hw, const vibebands::Ranges& perm) {
+    std::vector<FmHopPlan> out;
+    for (const auto& h : plan) {
+        if (!hw.empty() && !(vibebands::allows(hw, h.loHz) && vibebands::allows(hw, h.hiHz))) continue;
+        if (!perm.empty() && !(vibebands::allows(perm, h.loHz) || vibebands::allows(perm, h.hiHz) || vibebands::allows(perm, h.centreHz))) continue;
+        out.push_back(h);
+    }
+    return out;
+}
+/** ★★ EVERY RANGE THE OWNER HAS ON, low to high, each on its own raster — one sweep from 65.8 to 108. The shim drops the
+ *  hops this radio cannot tune or the owner does not permit. */
+inline std::vector<FmHopPlan> planFmRanges(double rateHz, const Config& c, double ifHz = 0) {
+    std::vector<FmHopPlan> out;
+    for (int i = 0; i < kFmRangeCount; ++i) {
+        if (!c.range(i)) continue;
+        for (auto h : planFm(rateHz, c.rasterFor(i), kFmRanges[i].loHz, kFmRanges[i].hiHz, ifHz)) { h.range = i; out.push_back(h); }
     }
     return out;
 }
@@ -247,6 +317,12 @@ struct Entry {
     float    peakLevelDb = -200, peakSnrDb = 0;
     float    presence = 0;               // presence_ratio_7d, refreshed on every visit
     std::string promoted;                // promoted_bookmark_id ("" = not promoted)
+    /** ★★ V12 2026-11-16 THIS LOCAL HAS BEEN HANDED TO THE DISCOVERED BOOKMARKS (Stuart: "once the DX Log has established
+     *  the locals then we can add them to the RDS discovered bookmarks, same with the DAB multiplexes too"). Set once the
+     *  shim has written it (localsForBookmarks / markLocalBookmarked); cleared when the entry stops being Local, so a
+     *  station that is established AGAIN later is offered again. ★ ONE-SHOT while it stays Local: after this the shim only
+     *  ever refreshes a row that is still there, so a bookmark the owner deleted does not come back every sweep. */
+    bool     bmLocal = false;
     std::vector<Opening> openings;
     uint32_t lastSweep = 0;              // the band's sweep number when last heard ("Live now")
     /* ★★ VISITS THAT LOOKED AND MISSED IT since it was last heard (Stuart, 2026-11-05: "heard 117 times in 5 openings" on a
@@ -326,11 +402,11 @@ public:
         for (const auto& h : hits) {
             /* ★★★ STATIONS WITHOUT RDS ARE STATIONS (Stuart, 2026-11-14: "we still need to include non RDS stations like a
              *  digital HiFi tuner doing a scan too"). A hit whose RDS did not confirm is logged by its FREQUENCY (PI 0000)
-             *  when its 19 kHz pilot locked (a real stereo station) at ≥ kFmNoRdsPilotSnr, or — mono — at ≥ kFmNoRdsMonoSnr
+             *  when its 19 kHz pilot locked (a real stereo station — at any level, see kFmNoRdsMonoSnr), or — mono — at ≥ kFmNoRdsMonoSnr
              *  (a hi-fi tuner's stop level; well above a strong local's skirt). The image / intermod checks below apply as
              *  to any station. A frequency that already has an RDS station logged is not filed again without RDS. */
             const bool rds = fmConfirmed(h.groups, h.psComplete) && h.pi != 0;
-            const bool noRds = !rds && ((h.pilot && h.snrDb >= kFmNoRdsPilotSnr) || h.snrDb >= kFmNoRdsMonoSnr);
+            const bool noRds = !rds && (h.pilot || h.snrDb >= kFmNoRdsMonoSnr);
             if (!rds && !noRds) continue;
             if (noRds && hasRdsAt(h.khz)) continue;
             const uint16_t pi = rds ? h.pi : 0;
@@ -427,6 +503,46 @@ public:
         return vr;
     }
 
+    /** ★★ A LOCAL FOR THE DISCOVERED BOOKMARKS — only what a bookmark needs, copied out so the shim can write the bookmarks
+     *  without holding the log's lock. */
+    struct LocalBm {
+        int id = 0;
+        bool dab = false;
+        bool fresh = false;              // true = not yet handed over (add it); false = handed over before (refresh only)
+        int khz = 0;                     // FM: the channel; DAB: the block's centre
+        uint16_t pi = 0;                 // FM: 0 = a station with no RDS
+        std::string ps;                  // FM: the last WHOLE PS ("" = none assembled)
+        int block = -1;                  // DAB
+        uint32_t eid = 0;
+        int ecc = -1;
+        std::vector<std::pair<uint32_t, std::string>> services;
+        int64_t lastHeard = 0;
+    };
+    /** ★★ EVERY LOCAL, AND NOTHING ELSE (Stuart 2026-11-16: only the LOCALS go into the discovered bookmarks — a DX catch,
+     *  Sporadic-E, tropo, meteor scatter, a provisional or a suspect, stays in the DX Log). The log's own rule decides:
+     *  class Local, nothing more is asked here. A DAB local needs a named service (a multiplex that named none has nothing
+     *  to bookmark); an FM local needs a channel in the band. Bounded by kMaxEntries. */
+    std::vector<LocalBm> localsForBookmarks() const {
+        std::vector<LocalBm> v;
+        for (const auto& kv : entries_) {
+            const Entry& e = kv.second;
+            if (e.cls != Cls::Local) continue;
+            if (e.dab && (e.block < 0 || e.services.empty() || !e.eid)) continue;
+            if (!e.dab && !fmInAnyRange(e.khz)) continue;   // ★ every FM range (OIRT and extended FM included)
+            LocalBm b;
+            b.id = e.id; b.dab = e.dab; b.fresh = !e.bmLocal; b.khz = e.khz; b.pi = e.pi; b.ps = e.psLast;
+            b.block = e.block; b.eid = e.eid; b.ecc = e.ecc; b.services = e.services; b.lastHeard = e.lastHeard;
+            v.push_back(std::move(b));
+        }
+        return v;
+    }
+    /** The shim wrote this local into the bookmarks: not offered as new again while it stays Local. */
+    bool markLocalBookmarked(int id) {
+        auto it = entries_.find(id);
+        if (it == entries_.end() || it->second.cls != Cls::Local || it->second.bmLocal) return false;
+        it->second.bmLocal = true; dirty_ = true; return true;
+    }
+
     /** Promote: the caller wrote the bookmark; this remembers it (and makes the entry unprunable). */
     bool setPromoted(int id, const std::string& bm) {
         auto it = entries_.find(id); if (it == entries_.end()) return false;
@@ -467,6 +583,8 @@ public:
         char b[160];
         if (!e.dab) {
             std::snprintf(b, sizeof b, ",\"freqKhz\":%d,\"pi\":\"%04X\",\"rds\":%s,\"stereo\":%s", e.khz, e.pi, e.pi ? "true" : "false", e.stereo ? "true" : "false"); j += b;
+            // ★ which FM range (kFmRanges) — the views show OIRT's 30 kHz channels to two decimals (69.80)
+            if (const int ri = fmRangeOf(e.khz); ri >= 0) j += std::string(",\"range\":\"") + kFmRanges[ri].id + "\"";
             j += ",\"ps\":\"" + esc(e.psLast) + "\",\"psVariants\":[";
             for (size_t i = 0; i < e.psVariants.size(); ++i) j += (i ? ",\"" : "\"") + esc(e.psVariants[i]) + "\"";
             j += "]";
@@ -495,6 +613,7 @@ public:
         if (e.peakLevelDb > -199) { std::snprintf(b, sizeof b, ",\"peakLevelDb\":%.1f", e.peakLevelDb); j += b; }
         std::snprintf(b, sizeof b, ",\"peakSnrDb\":%.1f", e.peakSnrDb); j += b;
         if (!e.promoted.empty()) j += ",\"promoted\":\"" + esc(e.promoted) + "\"";
+        if (e.bmLocal && e.cls == Cls::Local) j += ",\"inBookmarks\":true";   // ★ a local handed to the discovered bookmarks
         if (withOpenings) {
             j += ",\"openingList\":[";
             for (size_t i = e.openings.size(); i-- > 0;) {   // newest first
@@ -650,6 +769,7 @@ public:
                 e.peakLevelDb = (float)num(o, "peakLevelDb", -200); e.peakSnrDb = (float)num(o, "peakSnrDb", 0);
                 e.presence = (float)num(o, "presence", 0);
                 e.promoted = o.str("promoted");
+                e.bmLocal = bo(o, "inBookmarks", false) && e.cls == Cls::Local;
                 e.lastSweep = (uint32_t)num(o, "lastSweep", 0);
                 e.missedVisits = (uint32_t)num(o, "mv", 0);
                 if (const Json* ol = o.get("openingList"); ol && ol->kind == Json::Arr) {
@@ -813,7 +933,7 @@ private:
         for (const auto& s : svcs)
             if ((int)o.services.size() < kMaxOpeningServices && std::find(o.services.begin(), o.services.end(), s) == o.services.end()) o.services.push_back(s);
         // ★ a Local unheard for over the window has dropped back (judge does it on visits; this catches a band unvisited)
-        if (e.cls == Cls::Local && e.lastHeard > 0 && now - e.lastHeard > kWindowSec) e.cls = Cls::Dx;
+        if (e.cls == Cls::Local && e.lastHeard > 0 && now - e.lastHeard > kWindowSec) { e.cls = Cls::Dx; e.bmLocal = false; }
         e.lastHeard = now; ++e.timesHeard; e.lastSweep = sweepNow;
         if (level > e.peakLevelDb) e.peakLevelDb = level;
         if (snr > e.peakSnrDb) e.peakSnrDb = snr;
@@ -840,7 +960,7 @@ private:
         e.presence = presenceOf(e, now, &visits);
         if (e.cls == Cls::Provisional) return;                  // the bootstrap's end decides (classifyBootstrapEnd)
         if (e.cls == Cls::Local) {
-            if (now - e.lastHeard > kWindowSec) e.cls = Cls::Dx;   // ★ gone a week: drops back, unclassified
+            if (now - e.lastHeard > kWindowSec) { e.cls = Cls::Dx; e.bmLocal = false; }   // ★ gone a week: drops back, unclassified
             return;
         }
         if (e.cls == Cls::Suspect) return;

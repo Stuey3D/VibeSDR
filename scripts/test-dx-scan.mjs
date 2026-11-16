@@ -72,9 +72,11 @@ const procs = [];
 const stopAll = () => { for (const p of procs) { try { p.kill('SIGTERM'); } catch {} } };
 process.on('exit', stopAll);
 
-async function startServer(tag, dxScan, rtlArgs) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-dx-${tag}-`));
-  for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
+async function startServer(tag, dxScan, rtlArgs, opts = {}) {
+  // ★ opts.dir: start again on the same data (a restart); opts.seed(dir): write files into data/ before it starts
+  const dir = opts.dir || fs.mkdtempSync(path.join(os.tmpdir(), `vs-dx-${tag}-`));
+  for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d), { recursive: true });
+  if (opts.seed) opts.seed(dir);
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     configured: true, name: 'DX Scanner Test', locator: 'IO92nh', adminPass: ADMIN,
     radios: [{ serial: 'dx-test', label: 'Test radio', enabled: true, configured: true, users: 1, rate: 2400000, dxScan: JSON.stringify(dxScan) }],
@@ -112,10 +114,122 @@ async function startServer(tag, dxScan, rtlArgs) {
 const vfo = (st) => { const c = st.last('config'); return c ? Number(c.vfo) : NaN; };
 
 const STATIONS = '89.3:C201:BBC_R4,98.8:5201:RAI_R1,104.6:F201:FR_INTER';
+
+/* ★★ F. THE LOCALS INTO THE DISCOVERED BOOKMARKS (2026-11-16). A week of scanning cannot be run here, so the server starts
+ *  on a DX log a week old (written as the server writes it): FM and DAB locals, a DX catch, a suspect, a provisional, a local
+ *  handed over before whose bookmark the owner has since deleted — and a bookmarks file holding a learned RDS row for one of
+ *  the locals and the owner's own bookmark on another local's frequency. */
+async function testLocals() {
+  console.log('── F. the locals the DX log established go into the discovered bookmarks (FM + DAB) ──');
+  const now = Math.floor(Date.now() / 1000), DAY = 86400;
+  const fmE = (id, pi, khz, ps, cls, extra = {}) => ({ id, band: 'FM', key: `FM:${pi.toString(16).toUpperCase().padStart(4, '0')}:${khz}`, class: cls,
+    khz, piN: pi, ps, psVariants: ps ? [ps] : [], firstHeard: now - 10 * DAY, lastHeard: now - 300, timesHeard: 400, presence: 0.99, lastSweep: 50, ...extra });
+  const dabE = (id, eid, blk, block, cls, services) => ({ id, band: 'DAB', key: `DAB:${eid.toString(16).toUpperCase()}:${block}`, class: cls,
+    blk, block, eidN: eid, ecc: 0xE1, ensemble: 'Test Mux', services, khz: 0, firstHeard: now - 10 * DAY, lastHeard: now - 300, timesHeard: 300, presence: 0.98, lastSweep: 50 });
+  const entries = [
+    fmE(1, 0xC201, 89300, 'BBC R4', 'local'),                       // a learned RDS row is already there → merged, one row
+    fmE(2, 0xC202, 90500, 'BBC R2', 'local'),                       // new → added with its PI and PS
+    fmE(3, 0, 95000, '', 'local'),                                  // no RDS → by its frequency
+    fmE(4, 0xC999, 101000, 'OTHER', 'local'),                       // the owner's bookmark at 101.0 → untouched
+    fmE(5, 0x5201, 98800, 'RAI R1', 'dx'),                          // ★ a Sporadic-E catch → NOT bookmarked
+    fmE(6, 0xCAAA, 102000, 'GONE', 'local', { inBookmarks: true }), // handed over before, deleted since → stays deleted
+    fmE(7, 0xF201, 104600, 'FR INTER', 'suspect'),                  // suspect → not
+    fmE(8, 0xC203, 91000, 'BBC R3', 'provisional'),                 // not yet judged → not
+    dabE(9, 0xC1CE, 32, '12B', 'local', [{ sid: 0xC0CE, label: 'Classic FM' }, { sid: 0xC0D2, label: 'talkSPORT' }]),
+    dabE(10, 0xE0F1, 33, '12C', 'dx', [{ sid: 0xF1, label: 'Far Radio' }]),   // ★ a DX multiplex → NOT bookmarked
+  ];
+  const seed = (dir) => {
+    fs.writeFileSync(path.join(dir, 'data', 'dxlog-dx-test.json'), JSON.stringify({ v: 1, created: now - 10 * DAY, nextId: 20, sweepsFm: 50,
+      sweepsDab: 50, alertSeq: 0, fmCursorKhz: 87500, dabCursor: 0, nextDab: false, bootDone: true, entries, alerts: [] }));
+    fs.writeFileSync(path.join(dir, 'data', 'bookmarks-dx-test.json'), JSON.stringify([
+      { frequency: 89300000, name: 'BBC Radio 4', pi: 0xC201, lastHeard: now - 3600, manual: false, mode: 'wfm', source: 'server' },
+      { frequency: 101000000, name: 'My Station', pi: -1, lastHeard: now - 3600, manual: true, mode: 'wfm', source: 'server' },
+    ]));
+  };
+  const L = await startServer('locals', { on: true, bands: 'both', waitMin: 5 }, ['--rate', '2400000'], { seed });
+  const hold = ws(L.port, '/ws/user-spectrum?user_session_id=dxff0001&bins=256');   // ★ a listener: the scanner never sweeps
+  await L.until(() => hold.hw);
+  ok(await L.until(() => L.count(/DX log: \d+ local\(s\) handed to the discovered bookmarks/) >= 1, 15000),
+     `★ the server hands its locals over (${(L.logText().match(/DX log: \d+ local\(s\) handed[^\n]*/) || ['nothing'])[0]})`);
+  const getBm = async (S) => { const r = await fetch(`${S.H}/bookmarks`).then((x) => x.json()).catch(() => []); return Array.isArray(r) ? r : (r.bookmarks || []); };
+  const at = (arr, hz) => arr.filter((x) => Math.abs(Number(x.frequency) - hz) < 1000);
+  let bm = await getBm(L);
+  ok(at(bm, 89300000).length === 1 && at(bm, 89300000)[0].name === 'BBC Radio 4' && at(bm, 89300000)[0].pi === 0xC201,
+     `★ a local already learned from RDS: ONE row, its settled name kept (${at(bm, 89300000).map((x) => x.name).join(' | ')})`);
+  const r2 = at(bm, 90500000)[0];
+  ok(r2 && r2.name === 'BBC R2' && r2.pi === 0xC202 && /wfm/.test(r2.mode) && r2.manual === false && r2.scanned === true,
+     `★ a new FM local: frequency, WFM, its PS and PI, discovered (not manual) — ${r2 ? `"${r2.name}" PI ${r2.pi.toString(16)} ${r2.mode}` : 'missing'}`);
+  ok(at(bm, 95000000).length === 1 && /95\.0MHz \(no RDS\)/.test(at(bm, 95000000)[0].name), `an FM local with no RDS, by its frequency (${at(bm, 95000000)[0]?.name})`);
+  ok(at(bm, 101000000).length === 1 && at(bm, 101000000)[0].name === 'My Station' && at(bm, 101000000)[0].manual === true,
+     '★ the owner’s own bookmark on a local’s frequency is untouched');
+  ok(at(bm, 98800000).length === 0, '★★ the DX catch (Sporadic-E, RAI R1 98.8) is NOT bookmarked — only locals');
+  ok(at(bm, 104600000).length === 0 && at(bm, 91000000).length === 0, 'nor the suspect, nor the provisional');
+  ok(at(bm, 102000000).length === 0, '★ a local handed over before, whose bookmark was deleted, does not come back');
+  const dab = bm.filter((x) => /dab/i.test(x.mode || ''));
+  ok(dab.length === 2 && dab.every((x) => Math.abs(x.frequency - 225648000) < 1000 && x.eid === 0xC1CE)
+     && dab.some((x) => x.sid === 0xC0CE && x.name === 'Classic FM') && dab.some((x) => x.sid === 0xC0D2 && x.name === 'talkSPORT'),
+     `★ the DAB local multiplex: every service on 12B with its SId (${dab.map((x) => `${x.name}/${x.sid?.toString(16)}`).join(', ')})`);
+  ok(!bm.some((x) => Math.abs(x.frequency - 227360000) < 1000), '★★ the DX multiplex on 12C is NOT bookmarked');
+  const dl = await fetch(`${L.H}/vibeserver/dxlog.json?local=1&limit=100`).then((r) => r.json());
+  ok(dl.entries.find((e) => e.id === 2)?.inBookmarks === true && !dl.entries.find((e) => e.id === 5)?.inBookmarks,
+     'the DX log says which locals are in the bookmarks');
+  const total1 = bm.length;
+  // the owner deletes one of the new ones
+  const del = await fetch(`${L.H}/bookmarks?frequency=90500000&${await L.adminQ()}`, { method: 'DELETE' });
+  ok(del.ok, `the owner deletes the BBC R2 bookmark (${del.status})`);
+  await sleep(65000);   // ★ the next minute's pass
+  bm = await getBm(L);
+  ok(at(bm, 90500000).length === 0, '★ the next pass does not put the deleted local back');
+  hold.close(); L.stop();
+  await sleep(1500);
+  // ★ a restart on the same files: nothing twice, the deletion holds
+  const L2 = await startServer('locals', { on: true, bands: 'both', waitMin: 5 }, ['--rate', '2400000'], { dir: L.dir });
+  const hold2 = ws(L2.port, '/ws/user-spectrum?user_session_id=dxff0002&bins=256');
+  await L2.until(() => hold2.hw);
+  await L2.until(() => /DX log: \d+ entries from/.test(L2.logText()), 8000);
+  await sleep(5000);
+  bm = await getBm(L2);
+  ok(L2.count(/handed to the discovered bookmarks/) === 0, 'after a restart nothing is handed over twice');
+  ok(bm.length === total1 - 1 && at(bm, 89300000).length === 1 && bm.filter((x) => /dab/i.test(x.mode || '')).length === 2 && at(bm, 90500000).length === 0,
+     `★ no duplicates after a restart, and the deleted one stays deleted (${bm.length} rows, was ${total1} before the deletion)`);
+  hold2.close(); L2.stop();
+  await sleep(1000);
+}
+
+/* ★★ G. THE EXTENDED FM RANGES (2026-11-16): an OIRT station on 69.80 and a Dutch pirate on 86.65 (off the 100 kHz raster)
+ *  in the fake dongle's band; the log's cursor starts at the bottom of OIRT so the sweep reaches them first. */
+async function testRanges() {
+  console.log('── G. the extended FM ranges: OIRT 69.80 (30 kHz raster) and a pirate on 86.65 (50 kHz) ──');
+  const now = Math.floor(Date.now() / 1000);
+  const seed = (dir) => fs.writeFileSync(path.join(dir, 'data', 'dxlog-dx-test.json'), JSON.stringify({ v: 1, created: now, nextId: 1,
+    sweepsFm: 0, sweepsDab: 0, alertSeq: 0, fmCursorKhz: 65810, dabCursor: 0, nextDab: false, bootDone: false, entries: [], alerts: [] }));
+  const G = await startServer('ranges', { on: true, bands: 'fm', waitMin: 5 }, ['--rate', '2400000', '--fm-rds', '69.8:E201:RADIO_1,86.65:D001:PIRATE'], { seed });
+  const a = ws(G.port, '/ws/user-spectrum?user_session_id=dxgg0001&bins=256');
+  await G.until(() => a.hw);
+  a.send({ type: 'leave' }); a.close();
+  const get = () => fetch(`${G.H}/vibeserver/dxlog.json?limit=100&suspect=1`).then((r) => r.json()).catch(() => ({ entries: [] }));
+  let list = { entries: [] };
+  await G.until(async () => { list = await get(); return list.entries.some((e) => e.freqKhz === 86650 && e.pi === 'D001'); }, 240000);
+  const hops = [...G.logText().matchAll(/DX scanner: FM ([\d.]+).([\d.]+) MHz: /g)].map((m) => Number(m[1]));
+  ok(hops.length > 0 && hops[0] < 66.0, `★ the sweep starts in OIRT (first hop ${hops[0]} MHz; ${hops.length} hops so far)`);
+  const o = list.entries.find((e) => e.freqKhz === 69800);
+  ok(o && o.pi === 'E201' && o.range === 'oirt', `★ OIRT 69.80 is logged with its PI, range oirt (${o ? `${o.freqKhz} ${o.pi} ${o.range}` : 'missing'})`);
+  const pz = list.entries.find((e) => e.freqKhz === 86650);
+  ok(pz && pz.pi === 'D001' && pz.range === 'ext', `★ the pirate on 86.65 — off the 100 kHz raster — is logged where it is, range ext (${pz ? `${pz.freqKhz} ${pz.range}` : 'missing'})`);
+  ok(!list.entries.some((e) => e.pi === 'D001' && e.freqKhz !== 86650 && e.class !== 'suspect'), 'and not filed again on a neighbouring 50 kHz channel');
+  ok(list.scanner && list.scanner.oirt === true && list.scanner.ext === true, 'the page says both extra ranges are on (the defaults)');
+  G.stop();
+  await sleep(1000);
+}
+
 try {
+  const only = process.env.DX_TEST_ONLY || '';
+  if (!only || only === 'locals') await testLocals();
+  if (!only || only === 'ranges') await testRanges();
+  if (!only) {
   // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   console.log('── A. FM: nobody here → the scan starts and finds the RDS stations ──');
-  const S = await startServer('fm', { on: true, bands: 'fm', waitMin: 5, raster: 100 }, ['--rate', '2400000', '--fm-rds', STATIONS]);
+  const S = await startServer('fm', { on: true, bands: 'fm', waitMin: 5, raster: 100, oirt: false, ext: false }, ['--rate', '2400000', '--fm-rds', STATIONS]);
   const a = ws(S.port, '/ws/user-spectrum?user_session_id=dxaa0001&bins=256');
   ok(await S.until(() => a.hw), 'hwinfo arrives');
   ok(a.hw?.dxLog === true, `hwinfo offers the DX Log (dxLog=${a.hw?.dxLog})`);
@@ -129,7 +243,7 @@ try {
   // two whole sweeps (12 hops each at 2.4 MS/s): with the test's short 2.5 s dwell a station can give its PI in one visit
   // and finish its PS in the next — the entry keeps the last PS it heard, as on air
   ok(await S.until(() => S.count(/DX scanner: FM [\d.]+.[\d.]+ MHz: /) >= 24, 180000), `two whole FM sweeps (${S.count(/DX scanner: FM [\d.]+.[\d.]+ MHz: /)} hops)`);
-  const hopCpu = [...S.logText().matchAll(/DX scanner: FM ([\d.]+).([\d.]+) MHz: (\d+) peak\(s\), (\d+) identified.* in ([\d.]+) s .*?(\d+) worker\(s\), ([\d.]+) s CPU/g)];
+  const hopCpu = [...S.logText().matchAll(/DX scanner: FM ([\d.]+).([\d.]+) MHz: (\d+) peak\(s\) \+ \d+ weak, (\d+) identified.* in ([\d.]+) s .*?(\d+) worker\(s\), ([\d.]+) s CPU/g)];
   if (hopCpu.length) {
     const cpu = hopCpu.map((m) => Number(m[7])), wall = hopCpu.map((m) => Number(m[5]));
     console.log(`      hop wall ${Math.min(...wall).toFixed(1)}–${Math.max(...wall).toFixed(1)} s, process CPU per hop ${Math.min(...cpu).toFixed(2)}–${Math.max(...cpu).toFixed(2)} s`);
@@ -231,6 +345,7 @@ try {
     D.stop();
     try { fs.unlinkSync(raw); } catch {}
   }
+  }   // ★ DX_TEST_ONLY=locals | ranges runs F or G alone
 } catch (e) {
   console.log('   FAIL (exception)', e);
   fail++;

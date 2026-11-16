@@ -23,6 +23,11 @@ export interface DxEntry {
   /** ★ FM: false for a station logged WITHOUT RDS (PI 0000 — Stuart: "include non RDS stations like a digital HiFi
    *  tuner doing a scan"); stereo = its pilot locked. Absent on an older server (then judged by the PI). */
   rds?: boolean; stereo?: boolean;
+  /** ★ FM: which of the scanner's ranges (V12 2026-11-16) — 'oirt' 65.8–74 (30 kHz raster), 'ext' 76–87.5 (Japan / the
+   *  Dutch pirates, 50 kHz), 'fm' 87.5–108. Absent on an older server (which only scanned 87.5–108). */
+  range?: 'oirt' | 'ext' | 'fm';
+  /** ★ V12 2026-11-16: a LOCAL the server has put in its discovered bookmarks. */
+  inBookmarks?: boolean;
   firstHeard: number; lastHeard: number; timesHeard: number; presence: number; openings: number; live: boolean;
   peakLevelDb?: number; peakSnrDb: number; promoted?: string;
   openingList?: DxOpening[];
@@ -32,7 +37,7 @@ export interface DxPage {
   counts: { dx: number; local: number; suspect: number; provisional: number };
   bootstrap: boolean; bootstrapEnds: number; sweeps: { fm: number; dab: number }; alertSeq: number; now: number;
   entries: DxEntry[];
-  scanner?: { on: boolean; bands: string; waitMin: number; raster: number; viewAdmin: boolean };
+  scanner?: { on: boolean; bands: string; waitMin: number; raster: number; viewAdmin: boolean; oirt?: boolean; ext?: boolean };
   canPromote?: boolean; error?: string;
 }
 export interface DxAlert { seq: number; utc: number; id: number; kind: 'new' | 'opening' | string; text: string }
@@ -74,9 +79,13 @@ export function dxAgo(t: number, now = Date.now() / 1000): string {
   return `${Math.round(s / 86400)} d`;
 }
 
-/** The row's left column: "98.8" (MHz) or "12D". */
+/** The row's left column: "98.8" (MHz), "69.80" (OIRT — always two decimals on its 30 kHz raster), "86.65" (off the
+ *  100 kHz raster) or "12D". */
 export function dxWhere(e: DxEntry): string {
-  return e.band === 'FM' ? ((e.freqKhz || 0) / 1000).toFixed(e.freqKhz && e.freqKhz % 100 ? 2 : 1) : (e.block || '');
+  if (e.band !== 'FM') return e.block || '';
+  const khz = e.freqKhz || 0;
+  const oirt = e.range === 'oirt' || (!e.range && khz > 0 && khz < 75000);
+  return (khz / 1000).toFixed(oirt || khz % 100 ? 2 : 1);
 }
 /** The row's title: the PS (or the PI) on FM; the ensemble (or its EId) on DAB. */
 /** An FM station logged without RDS (no PI to show). */
@@ -92,7 +101,10 @@ export function dxTags(e: DxEntry): string[] {
   if (e.class === 'local') t.push('LOCAL');
   else if (e.class === 'suspect') t.push('SUSPECT');
   else if (e.class === 'provisional') t.push('BASELINE');
-  if (e.promoted) t.push('BOOKMARKED');
+  // ★ a local the server put in its discovered bookmarks reads the same as one the owner promoted
+  if (e.promoted || e.inBookmarks) t.push('BOOKMARKED');
+  if (e.band === 'FM' && e.range === 'oirt') t.push('OIRT');
+  else if (e.band === 'FM' && e.range === 'ext') t.push('EXT FM');
   return t;
 }
 /** The row's second line: identity, how often, when. */
@@ -130,6 +142,12 @@ export function dxFooter(p: DxPage, shown: number): string {
   const c = p.counts;
   bits.push(`${c.dx + c.provisional} DX · ${c.local} local · ${c.suspect} suspect`);
   if (p.sweeps) bits.push(`${p.sweeps.fm} FM · ${p.sweeps.dab} DAB scans completed`);   // ★ the same word as each row's "heard in N scans"
+  // ★ V12 2026-11-16: the FM ranges swept (an older server says nothing: 87.5–108), and where the locals go
+  const sc = p.scanner;
+  if (sc && sc.on && sc.bands !== 'dab' && (sc.oirt !== undefined || sc.ext !== undefined)) {
+    bits.push(`FM ${[sc.oirt ? 'OIRT 65.8–74' : '', sc.ext ? '76–87.5' : '', '87.5–108'].filter(Boolean).join(', ')} MHz`);
+  }
+  if (c.local > 0) bits.push('locals go into the bookmarks');
   let s = bits.join(' · ');
   if (p.bootstrap) s += ` — building this server's baseline until ${dxWhen(p.bootstrapEnds, p.now)}: everything is marked BASELINE and nothing alerts until then.`;
   void shown;

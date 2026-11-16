@@ -2560,9 +2560,13 @@ static std::set<long long> bmDabKeys() {
     return k;
 }
 struct DabScanBmRow { uint32_t sid; std::string label; int eid; int ecc; };
-static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std::set<long long>* before) {
+/* ★★ V12 2026-11-16 `addMissing` / `heardAt` — for the DX log's LOCALS (dxLocalsToBookmarks): a local the owner has
+ *  already been handed is only REFRESHED (addMissing false: a row that is gone — deleted by the owner, cleared — stays
+ *  gone), and it is stamped with when the scanner last heard it, never later (heardAt; 0 = now). */
+static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std::set<long long>* before,
+                     bool addMissing = true, long long heardAt = 0) {
     if (hz <= 0) return 0;
-    const long long now = (long long)time(nullptr);
+    const long long now = heardAt > 0 ? heardAt : (long long)time(nullptr);
     int added = 0;
     bool changed = false;
     std::lock_guard<std::mutex> lk(g_bmMtx);
@@ -2578,13 +2582,13 @@ static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std
             b.missedAt = 0;   // ★ heard: any pending removal is off (vibedab::reconcilePlan)
             // ★ The heartbeat alone is persisted at most daily: a rescan of an unchanged list must not rewrite the file.
             if (now - b.lastHeard > 24 * 3600) changed = true;
-            b.name = n; b.eid = r.eid; b.ecc = r.ecc; b.scanned = true; b.lastHeard = now; b.nameSrc = kNameHeard;
+            b.name = n; b.eid = r.eid; b.ecc = r.ecc; b.scanned = true; b.lastHeard = std::max(b.lastHeard, now); b.nameSrc = kNameHeard;
             // ★ "added" means new SINCE THE SCAN BEGAN: the ordinary learn path (every 5 s on the DSP thread) may have
             //   written it a moment ago while the scan dwelt here — that is still this scan's find.
             if (before && !before->count(key)) ++added;
             continue;
         }
-        if (g_bookmarks.size() >= kBmMax) continue;   // ★ the hard ceiling holds for a scan too
+        if (!addMissing || g_bookmarks.size() >= kBmMax) continue;   // ★ the hard ceiling holds for a scan too
         LearnedBm b;
         b.name = n; b.pi = -1; b.hz = (long long)llround(hz); b.mode = "dab";
         b.lastHeard = now; b.manual = false; b.sid = int(r.sid); b.eid = r.eid; b.ecc = r.ecc; b.scanned = true;
@@ -2605,35 +2609,46 @@ static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std
  *    - saved by hand              → left exactly as the owner made it.
  *  One save, only if something changed. @return how many were NEW. */
 struct FmScanBmRow { int khz; int pi; std::string ps; bool psComplete; };
-static int bmScanFm(const std::vector<FmScanBmRow>& rows) {
-    const long long now = (long long)time(nullptr);
+/* ★★ V12 2026-11-16 `addMissing` / `heardAt` — as bmScanDab's, for the DX log's LOCALS. And `pi` 0 is a station with NO
+ *  RDS (the DX log files those by frequency — a hi-fi tuner's scan): named "104.2MHz (no RDS)", provisional, pi -1; it
+ *  never displaces a row already at that frequency (an RDS station or anything else), and RDS learning replaces it the
+ *  moment a listener's tune hears a PI there (bmLearn: a new PI drops a learned row). The owner's band scan sends none. */
+static int bmScanFm(const std::vector<FmScanBmRow>& rows, bool addMissing = true, long long heardAt = 0) {
+    const long long now = heardAt > 0 ? heardAt : (long long)time(nullptr);
     int added = 0;
     bool changed = false;
     std::lock_guard<std::mutex> lk(g_bmMtx);
     for (const auto& r : rows) {
-        if (r.pi <= 0 || r.khz <= 0) continue;
-        const double hz = bmSnapFm(r.khz * 1000.0);
+        if (r.pi < 0 || r.khz <= 0) continue;
+        // ★ only 87.5–108 snaps to its 100 kHz raster: OIRT's 69.80 or a pirate's 86.65 (the DX log's other ranges) stay exact
+        const double hz = r.khz >= 87500 ? bmSnapFm(r.khz * 1000.0) : r.khz * 1000.0;
         if (hz <= 0) continue;
         const long long key = bmKey(hz);
-        const std::string ps = r.psComplete ? bmClean(r.ps, 64) : std::string();
+        const std::string ps = r.psComplete && r.pi > 0 ? bmClean(r.ps, 64) : std::string();
         char prov[64];
-        std::snprintf(prov, sizeof prov, "PI: %04X %.1fMHz", (unsigned)r.pi, hz / 1e6);
+        // ★ two decimals off the 100 kHz raster (OIRT 69.80, a pirate's 86.65)
+        const bool fine = (long long)llround(hz) % 100000 != 0;
+        if (r.pi > 0) std::snprintf(prov, sizeof prov, fine ? "PI: %04X %.2fMHz" : "PI: %04X %.1fMHz", (unsigned)r.pi, hz / 1e6);
+        else std::snprintf(prov, sizeof prov, fine ? "%.2fMHz (no RDS)" : "%.1fMHz (no RDS)", hz / 1e6);
         auto it = g_bookmarks.find(key);
         if (it != g_bookmarks.end()) {
             LearnedBm& b = it->second;
             if (b.manual) continue;
-            if (b.pi == r.pi) {
+            const bool same = r.pi > 0 ? b.pi == r.pi : b.pi <= 0;
+            if (same) {
                 if (!b.scanned || now - b.lastHeard > 24 * 3600) changed = true;
-                b.scanned = true; b.lastHeard = now;
+                b.scanned = true; b.lastHeard = std::max(b.lastHeard, now);
                 if (b.nameSrc < kNameGuess && !ps.empty()) { b.name = ps; b.nameSrc = kNameGuess; changed = true; }
                 continue;
             }
+            // ★ a no-RDS sighting never displaces a station with an identity; a refresh never replaces anything
+            if (r.pi == 0 || !addMissing) continue;
             g_bookmarks.erase(it);   // ★ another station is here now — the old one's name would be a lie
-        } else if (g_bookmarks.size() >= kBmMax) continue;
+        } else if (!addMissing || g_bookmarks.size() >= kBmMax) continue;
         LearnedBm b;
         b.name = ps.empty() ? std::string(prov) : ps;
         b.nameSrc = ps.empty() ? kNameProvisional : kNameGuess;
-        b.pi = r.pi; b.hz = (long long)llround(hz); b.mode = "wfm";
+        b.pi = r.pi > 0 ? r.pi : -1; b.hz = (long long)llround(hz); b.mode = "wfm";
         b.lastHeard = now; b.manual = false; b.scanned = true;
         g_bookmarks[key] = b;
         ++added; changed = true;
@@ -6580,6 +6595,50 @@ static void dxLogFlushLocked(const char* why) {
     std::fclose(f);
     if (ok && std::rename(tmp.c_str(), g_dxLogPath.c_str()) == 0) { g_dxLog.clean(); LOGI("DX log: %zu entries written (%s, %zu bytes)", g_dxLog.size(), why, j.size()); }
     else { std::remove(tmp.c_str()); LOGE("DX log: writing %s failed", g_dxLogPath.c_str()); }
+}
+/** ★★★ THE DX LOG'S LOCALS INTO THE DISCOVERED BOOKMARKS (V12, 2026-11-16 — Stuart: "Once the DX Log has established the
+ *  locals then we can add them to the RDS discovered bookmarks, same with the DAB multiplexes too").
+ *  The locals are the log's own judgement (vibe_dxscan.h: present in ≥ 90 % of a week's visits, every day — or the
+ *  bootstrap's baseline); nothing else is asked here. ★★ ONLY LOCALS: a DX catch (Sporadic-E, tropo, meteor scatter), a
+ *  provisional or a suspect stays in the DX Log and never becomes a bookmark (Stuart, the same day).
+ *  They go in exactly as the owner's band scans put stations in — bmScanFm / bmScanDab, the same keys as RDS and DAB
+ *  learning (frequency+PI, block+SId), origin SCANNED (the year-long expiry, "Clear learned stations" takes them):
+ *    - already there (learned on air, or scanned) → refreshed in place, never a second row;
+ *    - saved or edited BY HAND                     → left exactly as the owner made it;
+ *    - a local handed over before (Entry::bmLocal) → REFRESH ONLY. A row the owner deleted, or "Clear learned" took, is
+ *      not written back: the bookmarks keep no tombstones, so this one-shot mark is what stops it returning every sweep.
+ *  Stamped with when the SCANNER last heard it, not now. Called from the tick once a minute, after evaluate(), never
+ *  under both locks at once (the log's is dropped before the bookmarks' is taken). Bounded: ≤ kMaxEntries locals. */
+static void dxLocalsToBookmarks() {
+    std::vector<vibe::dx::Log::LocalBm> locals;
+    {
+        std::lock_guard<std::mutex> lk(g_dxLogMtx);
+        if (!g_dxLogLoaded) return;
+        locals = g_dxLog.localsForBookmarks();
+    }
+    if (locals.empty()) return;
+    std::vector<int> handed;
+    int addedFm = 0, addedDab = 0;
+    for (const auto& l : locals) {
+        if (!l.dab) {
+            std::vector<FmScanBmRow> rows{ { l.khz, int(l.pi), l.ps, !l.ps.empty() } };
+            addedFm += bmScanFm(rows, l.fresh, (long long)l.lastHeard);
+        } else {
+            const double hz = l.block >= 0 && l.block < (int)vibedab::kBandIIICount ? double(vibedab::kBandIII[l.block].centreHz)
+                                                                                    : l.khz * 1000.0;
+            std::vector<DabScanBmRow> rows;
+            for (const auto& sv : l.services) rows.push_back({ sv.first, sv.second, int(l.eid), l.ecc });
+            addedDab += bmScanDab(hz, rows, nullptr, l.fresh, (long long)l.lastHeard);
+        }
+        if (l.fresh) handed.push_back(l.id);
+    }
+    if (handed.empty()) return;
+    {
+        std::lock_guard<std::mutex> lk(g_dxLogMtx);
+        for (int id : handed) g_dxLog.markLocalBookmarked(id);
+    }
+    LOGI("DX log: %zu local(s) handed to the discovered bookmarks \xe2\x80\x94 %d new FM station(s), %d new DAB service(s)",
+         handed.size(), addedFm, addedDab);
 }
 /** ★ TEST-ONLY knobs, read from the environment so no build differs from the one that ships:
  *  VIBESERVER_BG_WAIT_SEC overrides the owner's wait; VIBESERVER_BG_TEST_CLOCK names a file holding "HH:MM" that
@@ -33592,13 +33651,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibe::dx::Config cfg;
         { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
         const double now = nowSecs();
+        bool dxLocalsDue = false;
         {
             std::lock_guard<std::mutex> lk(g_dxLogMtx);
             if (cfg.on) dxLogLoadLocked();
             g_dxLog.setGapMin(cfg.gapMin);
             if (now - g_dxLogFlushedAt >= 300) { g_dxLogFlushedAt = now; dxLogFlushLocked("the 5-minute flush"); }
-            if (now >= dxEvalAt_ && g_dxLogLoaded) { dxEvalAt_ = now + 60; g_dxLog.evaluate((int64_t)time(nullptr)); }
+            if (now >= dxEvalAt_ && g_dxLogLoaded) { dxEvalAt_ = now + 60; g_dxLog.evaluate((int64_t)time(nullptr)); dxLocalsDue = true; }
         }
+        // ★★ V12 2026-11-16: the locals it has established, into the discovered bookmarks — once a minute, after the re-judge
+        if (dxLocalsDue && cfg.on) dxLocalsToBookmarks();
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
         std::string why = dxWhyNot(cfg);
@@ -33645,14 +33707,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** The FM hops this radio can make now, inside the owner's permitted bands. */
     /** `dxLog`: the DX scanner's plan — behind kDxFmIfHz on a radio that can narrow (dxCloseLooks' note). The owner's FM
      *  band scan (bookmarks) keeps its wide hops. */
+    /** ★★ V12 2026-11-16: the DX scanner sweeps EVERY FM range the owner has on (vibe::dx::kFmRanges — OIRT, extended
+     *  FM 76–87.5, the main band), each on its own raster; the owner's FM band scan (bookmarks, dxLog false) stays on
+     *  87.5–108. A hop is kept only where THIS RADIO TUNES it (the driver's own ranges, radioCapsJson) — an R820T reaches
+     *  65 MHz, a radio that does not simply skips OIRT — and where the owner permits it (vsPermittedRanges). */
     std::vector<vibe::dx::FmHopPlan> dxFmPlan(const vibe::dx::Config& c, bool dxLog = true) {
-        auto plan = vibe::dx::planFm(sampleRate, c.rasterKhz, vibe::dx::kFmBandLoHz, vibe::dx::kFmBandHiHz,
-                                     dxLog && dxCanNarrow() ? kDxFmIfHz : 0.0);
-        const vibebands::Ranges perm = vsPermittedRanges(vibebands::Ranges{{0.0, 2.0e9}});
-        if (perm.empty()) return plan;
-        std::vector<vibe::dx::FmHopPlan> out;
-        for (const auto& h : plan) if (vibebands::allows(perm, h.loHz) || vibebands::allows(perm, h.hiHz) || vibebands::allows(perm, h.centreHz)) out.push_back(h);
-        return out;
+        const double ifHz = dxLog && dxCanNarrow() ? kDxFmIfHz : 0.0;
+        auto plan = dxLog ? vibe::dx::planFmRanges(sampleRate, c, ifHz)
+                          : vibe::dx::planFm(sampleRate, c.rasterKhz, vibe::dx::kFmBandLoHz, vibe::dx::kFmBandHiHz, ifHz);
+        return vibe::dx::keepTunable(plan, dxHardwareRanges(), vsPermittedRanges(vibebands::Ranges{{0.0, 2.0e9}}));
+    }
+    /** The driver's own tuning ranges ("ranges":[[lo,hi],…] in radioCapsJson). Empty = it publishes none (assume all). */
+    static vibebands::Ranges dxHardwareRanges() {
+        vibebands::Ranges hw;
+        const std::string caps = LocalSdrShim::instance().radioCapsJson();
+        const size_t k = caps.find("\"ranges\":[");
+        if (k == std::string::npos) return hw;
+        const size_t end = caps.find("]]", k);
+        const std::string body = caps.substr(k + 10, end == std::string::npos ? std::string::npos : end - k - 9);
+        size_t pos = 0;
+        while ((pos = body.find('[', pos)) != std::string::npos) {
+            const double lo = atof(body.c_str() + pos + 1);
+            const size_t c = body.find(',', pos);
+            const double hi = c == std::string::npos ? 0 : atof(body.c_str() + c + 1);
+            if (hi > lo) hw.push_back({ lo, hi });
+            pos = c == std::string::npos ? body.size() : c + 1;
+        }
+        return hw;
     }
 
     void dxLoop() {
@@ -33761,7 +33842,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     static int dxIfRung(double hz) { for (int r : kIfRungs) if (r >= hz) return r; return 0; }
     bool dxCanNarrow() const { return dev != nullptr && g_tunerBwAuto.load(std::memory_order_relaxed) && g_vsLockedCentre.load() <= 0.0; }
     void dxSetIf(int hz) { g_dxIfHz.store(dxCanNarrow() ? hz : 0, std::memory_order_relaxed); }
-    int dxCloseLooks(const vibe::dx::Config& cfg, std::vector<vibe::dx::FmHit>& hits) {
+    int dxCloseLooks(const vibe::dx::Config& cfg, std::vector<vibe::dx::FmHit>& hits, int rasterKhz) {
         if (!dxCanNarrow()) return 0;
         const vibe::dx::FmHopEngine::Params def;
         std::vector<size_t> want;
@@ -33806,8 +33887,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));   // ★ the AGC's climb behind the narrower filter
             vibe::dx::FmHopEngine::Params p;
             p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
-            p.rasterKhz = cfg.rasterKhz; p.loHz = f - cfg.rasterKhz * 500.0; p.hiHz = f + cfg.rasterKhz * 500.0;
+            p.rasterKhz = rasterKhz; p.loHz = f - rasterKhz * 500.0; p.hiHz = f + rasterKhz * 500.0;
             p.peaksPerRound = 1;
+            p.maxWeak = 0;   // ★ the look is at ONE channel already chosen
             dxFm_.start(p);
             dxFmFeed_.store(true);
             const double t0 = nowSecs();
@@ -33820,7 +33902,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             ++n;
             bool named = false;
             for (const auto& c : dxFm_.results()) {
-                if (std::abs(c.khz - h.khz) > std::max(1, cfg.rasterKhz / 2)) continue;
+                if (std::abs(c.khz - h.khz) > std::max(1, rasterKhz / 2)) continue;
                 // ★ what the close look decoded; the LEVEL and SNR stay the hop's (one floor for the whole hop — openings
                 //   and alerts compare like with like)
                 if (c.pi && vibe::dx::fmConfirmed(c.groups, c.psComplete)) { h.pi = c.pi; h.ps = c.ps; h.psComplete = c.psComplete; h.groups = c.groups; named = true; }
@@ -33854,7 +33936,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         dxGainEnter(hopKey, "FM hop");
         vibe::dx::FmHopEngine::Params p;
         p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
-        p.rasterKhz = cfg.rasterKhz; p.loHz = hop.loHz; p.hiHz = hop.hiHz;
+        p.rasterKhz = hop.rasterKhz; p.loHz = hop.loHz; p.hiHz = hop.hiHz;   // ★ the hop's own raster (OIRT 30, extended 50)
         p.peaksPerRound = dxPeakBudget();
         if (const char* e = std::getenv("VIBESERVER_DX_DWELL_SEC"); e && *e) p.dwellSec = std::max(0.5, std::atof(e));   // ★ TEST-ONLY
         dxFm_.start(p);
@@ -33874,7 +33956,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (const auto& h : dxFm_.results()) if (perm.empty() || vibebands::allows(perm, h.khz * 1e3)) hits.push_back(h);
         const auto st = dxFm_.stats();
         dxGainLearn(hopKey);   // ★ before the close looks move the filter and the gain
-        const int looks = dxCloseLooks(cfg, hits);
+        const int looks = dxCloseLooks(cfg, hits, hop.rasterKhz);
         dxSetIf(0);
         applyAutoIf();   // ★ back to the ordinary rule — a widening arms the AGC's fast cut, as it should
         vibe::dx::VisitResult vr;
@@ -33891,7 +33973,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ the hop just before, when it WAS just before (the spill rule looks across the boundary both ways)
             const bool adjacent = dxPrevHopIdx_ >= 0 && dxPrevHopIdx_ + 1 == job.index;
             if (!adjacent) dxPrevHits_.clear();
-            vr = g_dxLog.commitFm((int)std::lround(hop.loHz / 1e3), (int)std::lround(hop.hiHz / 1e3), (int)std::lround(p.dcHz / 1e3), cfg.rasterKhz, hits, utc,
+            vr = g_dxLog.commitFm((int)std::lround(hop.loHz / 1e3), (int)std::lround(hop.hiHz / 1e3), (int)std::lround(p.dcHz / 1e3), hop.rasterKhz, hits, utc,
                                   &dxPrevHits_);
             vr.suspects += g_dxLog.markSpill(dxPrevHits_, hits);
             dxPrevHits_ = hits; dxPrevHopIdx_ = job.index;
@@ -33904,8 +33986,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::mutex> lk(dxStatMtx_);
             dxHopWall_ = st.wallSec; dxHopCpu_ = st.cpuSec; dxHopPeaks_ = st.peaks; dxHopRounds_ = st.rounds;
             char b[320];
-            std::snprintf(b, sizeof b, "FM %.1f\xe2\x80\x93%.1f MHz: %d peak(s), %d identified%s%s in %.1f s", hop.loHz / 1e6, hop.hiHz / 1e6,
-                          st.peaks, confirmed, names.empty() ? "" : " (", names.empty() ? "" : (names + ")").c_str(), st.wallSec);
+            std::snprintf(b, sizeof b, "FM %.1f\xe2\x80\x93%.1f MHz: %d peak(s) + %d weak, %d identified%s%s in %.1f s", hop.loHz / 1e6, hop.hiHz / 1e6,
+                          st.peaks, st.weak, confirmed, names.empty() ? "" : " (", names.empty() ? "" : (names + ")").c_str(), st.wallSec);
             dxLast_ = line = b;
             if (wrapped && dxSweepStartFm_ > 0) dxSweepSecsFm_ = nowSecs() - dxSweepStartFm_;
         }
@@ -33996,7 +34078,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibe::dx::Config c;
         { std::lock_guard<std::mutex> lk(g_dxMtx); c = g_dxCfg; }
         if (vibe::dx::planFm(sampleRate, c.rasterKhz).empty()) return "this radio's sample rate is too narrow to hold an FM channel";
-        if (dxFmPlan(c).empty()) return "none of 87.5\xe2\x80\x93" "108 MHz is inside the range this radio may tune";
+        if (dxFmPlan(c, false).empty()) return "none of 87.5\xe2\x80\x93" "108 MHz is inside the range this radio may tune";
         return "";
     }
     /** ★ The scan's state to every listener (the admin's progress; everybody else's banner when locked). */

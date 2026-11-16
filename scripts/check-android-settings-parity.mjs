@@ -101,7 +101,7 @@ const TABLE = [
   // ── ★★★ V12 BACKGROUND DECODING (the reason this test exists) ──
   P(['bgOn', 'bgWait', 'bgKeepInRange'], 'Background Decoding', 'bgDecode'),
   // ★★★ V12 the idle DX scanner (components/DxScanSetup) — one JSON blob, RadioConfig::dxScan; Lite too (the same engine)
-  P(['dxOn', 'dxWait', 'dxBands', 'dxRaster', 'dxViewAdmin'], 'Only the owner may view the DX Log', 'dxScan'),
+  P(['dxOn', 'dxWait', 'dxBands', 'dxRaster', 'dxOirt', 'dxExt', 'dxViewAdmin'], 'Only the owner may view the DX Log', 'dxScan'),
   P(['rspVibeAgc'], 'VibeAGC (SDRplay)', 'rspVibeAgc'),
   P(['nbWide'], 'IMPULSE NOISE BLANKER', 'nbWide'),
   // ── the SDRplay card (Stuart 2026-11-04: "all the ones currently in Linux go to android") and the HF+ calibration ──
