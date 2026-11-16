@@ -22,6 +22,10 @@
 //     7. !vfoB      — (attach only) never on VFO B (one receiver, the dial the user is looking at).
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
 namespace vibe {
 
 /** May this engine offer paging at all? (vibeserver.json `"paging":true` + `pagingModes` only when true.) */
@@ -45,5 +49,35 @@ inline const char* pagingRefusalText(bool handheld, bool android) {
  *  receiver runs in this process, the person's own level otherwise — which is never changed, so it comes back as it was
  *  whenever paging stops. */
 inline float pagingSpeakerLevel(float level, int pagingRunning) { return pagingRunning > 0 ? 0.0f : level; }
+
+/* ★★★ EVERY RECORDING IS SILENT WHILE PAGING RUNS (Stuart, 2026-11-16: "Recording should be silent for pager that way
+ *     nobody can record and decode again later"). Not the speaker alone: while a paging receiver runs in this process,
+ *     NO audio leaves the engine — every stream it sends (the shared one, a listener's own, a VFO A/B mix, a VFO's own
+ *     recording stream, format 5) carries silence. So whatever records it records silence: the Android app's recorder
+ *     and its record buffer, a VFO's own track, the R36S's REC tap and record buffer, the web page's recorder on the
+ *     handheld. It is decided HERE, at the source, so no client has to remember the rule — and no client can skip it.
+ *     It is lifted the moment the receiver stops (the counter drops), so normal audio comes back by itself.
+ *   ★ Raw IQ out (an rtl_tcp stream another app could record) is REFUSED while paging runs, and a stream already on is
+ *     closed when PAGE starts (local_sdr_shim.cpp iqOffForPaging); not a sample of IQ is queued while the counter is up. */
+/** Does a running paging receiver silence what leaves the engine? (One relaxed atomic read by the caller.) */
+inline bool pagingSilencesOutput(int pagingRunning) { return pagingRunning > 0; }
+/** The block as it may leave the engine: `pcm` itself, or `n` zeros (in `zeros`) while paging runs. */
+inline const int16_t* pagingAudioOut(const int16_t* pcm, size_t n, int pagingRunning, std::vector<int16_t>& zeros) {
+    if (!pagingSilencesOutput(pagingRunning)) return pcm;
+    zeros.assign(n, 0);
+    return zeros.data();
+}
+inline const float* pagingAudioOut(const float* pcm, size_t n, int pagingRunning, std::vector<float>& zeros) {
+    if (!pagingSilencesOutput(pagingRunning)) return pcm;
+    zeros.assign(n, 0.0f);
+    return zeros.data();
+}
+/** May raw IQ out start (or keep sending)? Never while a paging receiver runs. */
+inline bool pagingAllowsIqOut(int pagingRunning) { return pagingRunning <= 0; }
+/** The words a refused (or closed) raw IQ stream gets. */
+inline const char* pagingIqOutRefusal() {
+    return "Raw IQ out is off while PAGE runs \xe2\x80\x94 nothing from the radio leaves this device to be recorded. "
+           "It can be switched on again when PAGE stops.";
+}
 
 }  // namespace vibe

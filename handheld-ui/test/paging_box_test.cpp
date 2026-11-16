@@ -8,11 +8,18 @@
 //   • THE LIST: the engine's lines (made up here) become rows — time, "FLEX 3200/4", the capcode, the function / phase, the
 //     text, "cut short" — newest first, bounded at kPagingMax; ENTER on a row reads it whole, ENTER again is the list;
 //     CLR empties it; a restart of PAGE starts empty;
+//   • THE LAW: paging.ts' notice is the hint's first sentence (the picker, the empty box) and is shown once a session as PAGE
+//     first opens — not again;
+//   • ★★★ REC IS SILENT WHILE PAGE RUNS: the engine's PCM frames (made up here, a tone) through the app's own audio hook
+//     (audioTick's onAudio → audio_rec.h) into the recorder's file: PAGE on before REC → every sample silent; PAGE opened in
+//     the middle → silent from there; PAGE closed → the tone again, sample for sample; the record buffer silent too; the
+//     VTS line says "REC silent" and starting REC under PAGE says so;
 //   • NOTHING ON DISK: the whole run, with HOME pointed at an empty folder, leaves no file but the UI's own device id.
 // Silent (no audio). Run in the arm64 test image: handheld-ui/test/run_offscreen_tests.sh paging_box_test
 #include "../src/app.h"
 
 #include <dirent.h>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -54,6 +61,29 @@ static void offer(bool paging, bool modes) {
                                {"pocsag2400", "2400", "POCSAG"}, {"flex", "ANY", "FLEX"}};
     u.capFetched = true; u.capAt = nowSec() + 1e6;
 }
+/** One PCM frame as the engine's speaker tap sends it (sendAudioPcm): [0] ch · [1] 0 raw · [2..5] rate LE · int16 LE.
+ *  `tone` false = the silence the engine sends while PAGE runs (vibe_paging_gate.h pagingAudioOut). */
+static std::string pcmFrame(int frames, int ch, bool tone, int& ph) {
+    std::string f(6 + (size_t)frames * ch * 2, '\0');
+    f[0] = (char)ch; f[1] = 0; const uint32_t sr = 48000; std::memcpy(&f[2], &sr, 4);
+    for (int i = 0; i < frames; i++, ph++) {
+        const int16_t v = tone ? (int16_t)std::lround(9000.0 * std::sin(2 * 3.14159265358979 * 1000.0 * ph / 48000.0)) : 0;
+        for (int c = 0; c < ch; c++) std::memcpy(&f[6 + ((size_t)i * ch + c) * 2], &v, 2);
+    }
+    return f;
+}
+/** The recorder's temp file (stereo int16) read back, then removed (the test leaves nothing on disk). */
+static std::vector<int16_t> readRec(const arec::Done& d) {
+    std::vector<int16_t> v;
+    if (FILE* f = std::fopen(d.path.c_str(), "rb")) {
+        int16_t b[4096]; size_t n;
+        while ((n = std::fread(b, 2, 4096, f)) > 0) v.insert(v.end(), b, b + n);
+        std::fclose(f);
+    }
+    std::remove(d.path.c_str());
+    return v;
+}
+static size_t nonZero(const std::vector<int16_t>& v, size_t a, size_t b) { size_t n = 0; for (size_t i = a; i < b && i < v.size(); i++) n += v[i] != 0; return n; }
 /** The deck glyph's fact, as audioTick sets it (sec_audio.h). */
 static bool glyphMuted() { const aud::State& S = aud::st(); return S.mute || S.pagingSilent; }
 
@@ -107,10 +137,15 @@ int main() {
     CHECK(decAttachJson(gS, "paging").find("\"mode\":\"pocsag1200\"") != std::string::npos, "attach: a manual rate");
     u.pagingMode = "auto";
 
+    // ── the law: the hint's first sentence; shown once a session as PAGE first opens ──
+    CHECK(std::string(kPagingHint).rfind(kPagingLawNotice, 0) == 0, "the hint starts with the law's notice");
+    CHECK(std::string(kPagingLawNotice).find("illegal in certain countries") != std::string::npos, "…which says so plainly");
     // ── the speaker, from unmuted ──
     aud::State& A = aud::st();
     A.mute = false; A.vol = 80;
+    a.toast_.clear();
     decStart(a, gS, "paging"); decTick(a, gS);
+    CHECK(a.toast_ == kPagingLawNotice, "PAGE's first opening this session: the law's notice is shown (%s)", a.toast_.c_str());
     CHECK(A.pagingSilent && glyphMuted(), "PAGE open: the glyph shows the speaker muted");
     CHECK(!A.mute && A.vol == 80, "…and the person's own mute and volume are untouched (the engine plays the silence)");
     CHECK(pagingVtsLine().find("PAGE \xc2\xb7 ") == 0 && pagingVtsLine().find("speaker muted") != std::string::npos, "the VTS line: %s", pagingVtsLine().c_str());
@@ -119,7 +154,9 @@ int main() {
     CHECK(pagingVtsLine().empty(), "…and the VTS line gone");
     // ── from muted ──
     A.mute = true;
+    a.toast_.clear();
     decStart(a, gS, "paging"); decTick(a, gS);
+    CHECK(a.toast_.empty(), "PAGE opened again: the notice is not repeated this session");
     CHECK(glyphMuted() && A.mute, "muted before PAGE: muted while it runs");
     decStop(a, "paging"); decTick(a, gS);
     CHECK(A.mute && !A.pagingSilent, "…and still muted after (it was the person's)");
@@ -219,6 +256,57 @@ int main() {
     decStart(a, gS, "paging"); decTick(a, gS);
     CHECK(u.pages.empty(), "PAGE started again: the list is empty (nothing was kept)");
     decStop(a, "paging"); decTick(a, gS);
+
+    // ── ★★★ REC IS SILENT WHILE PAGE RUNS — the engine's frames through the app's own audio hook into the recorder ──
+    {
+        audioTick(a, gS);   // installs the hook (Engine::onAudio) as the app does every frame
+        CHECK((bool)eng.onAudio, "the audio hook is installed");
+        auto feed = [&](int blocks, bool tone, int& ph) { for (int b = 0; b < blocks; b++) eng.onAudio(false, pcmFrame(960, 2, tone, ph)); };
+        int ph = 0;
+        A.rec.setBuffer(0);
+        // 1. PAGE already on when REC starts — and the engine's tap still carrying the tone (as if it did not silence):
+        //    the file is silence all the same (audio_rec.h's own rule)
+        decStart(a, gS, "paging"); decTick(a, gS);
+        a.toast_.clear();
+        aud::startRecording(a, gS);
+        CHECK(A.rec.recording() && a.toast_ == kPagingRecSilent, "REC under PAGE: it says so (%s)", a.toast_.c_str());
+        decTick(a, gS);
+        CHECK(pagingVtsLine().find("REC silent") != std::string::npos, "the VTS line says REC is silent: %s", pagingVtsLine().c_str());
+        feed(50, true, ph);
+        arec::Done d;
+        CHECK(A.rec.stop(d), "stopped");
+        std::vector<int16_t> r = readRec(d);
+        CHECK(r.size() == (size_t)50 * 960 * 2 && nonZero(r, 0, r.size()) == 0, "PAGE on from the start: %zu samples, %zu not silent", r.size(), nonZero(r, 0, r.size()));
+        decStop(a, "paging"); decTick(a, gS);
+        CHECK(pagingVtsLine().empty(), "PAGE closed: no line");
+        // 2. REC first, PAGE opened half way, then closed: tone · silence · tone
+        CHECK(A.rec.start(), "REC again");
+        feed(25, true, ph);
+        decStart(a, gS, "paging"); decTick(a, gS);
+        feed(25, true, ph);
+        decStop(a, "paging"); decTick(a, gS);
+        feed(25, true, ph);
+        CHECK(A.rec.stop(d), "stopped");
+        r = readRec(d);
+        const size_t third = (size_t)25 * 960 * 2;
+        CHECK(r.size() == 3 * third, "one unbroken recording: %zu samples", r.size());
+        CHECK(nonZero(r, 0, third) > third / 2, "before PAGE: the channel's audio");
+        CHECK(nonZero(r, third, 2 * third) == 0, "while PAGE ran: silence (%zu not silent)", nonZero(r, third, 2 * third));
+        CHECK(nonZero(r, 2 * third, 3 * third) > third / 2, "after PAGE: the audio again");
+        { int p2 = 100 * 960; const std::string ref = pcmFrame(960, 2, true, p2); int16_t s0; std::memcpy(&s0, &ref[6], 2);
+          CHECK(r[2 * third] == s0, "…sample for sample (%d = %d)", r[2 * third], s0); }
+        // 3. the record buffer: what it holds while PAGE runs is silence too
+        A.rec.setBuffer(30);
+        decStart(a, gS, "paging"); decTick(a, gS);
+        feed(25, true, ph);
+        decStop(a, "paging"); decTick(a, gS);
+        CHECK(A.rec.start(), "REC with the buffer's prefix");
+        CHECK(A.rec.stop(d), "stopped");
+        r = readRec(d);
+        CHECK(r.size() == third && nonZero(r, 0, r.size()) == 0, "the buffer's PAGE half-second came out silent (%zu samples, %zu not)", r.size(), nonZero(r, 0, r.size()));
+        A.rec.setBuffer(0);
+        eng.onAudio = nullptr;
+    }
 
     // ── nothing on disk ──
     const auto files = listDir(home);

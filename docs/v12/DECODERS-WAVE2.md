@@ -535,8 +535,8 @@ decoder chosen, or vibe-hhui gone (its decoder socket closes and the host stops 
 decoder, so a held session does not keep it). vibe-hhui only SAYS it: the deck's speaker glyph and the AUDIO sheet's
 mute key show muted (a press says *"The speaker is muted while PAGE runs — it comes back as it was when PAGE stops"*
 rather than pretend to unmute), and the VTS bar holds *"PAGE · FLEX 3200/4 · 3 pages · speaker muted"*. (The Android app
-mutes on the client — `prePagingMuteRef` — because there the phone's own audio player is the speaker.) The recording
-tap (REC) is not silenced: a recording made while PAGE runs records the channel's audio, as asked.
+mutes on the client — `prePagingMuteRef` — because there the phone's own audio player is the speaker.) ★ Superseded
+the same day (section 7d): REC is now silent while PAGE runs too.
 
 **The R36S view** (vibe-hhui, the decoder box): PAGE in the VHF tab's PAGING group (decoderBands.ts' place); switched on,
 PROTOCOL (AUTO · POCSAG · FLEX) and, for POCSAG, RATE (ANY · 512 · 1200 · 2400) open under it — the engine's own
@@ -557,6 +557,44 @@ closes it. The header's status is paging.ts' `pagingStatusText` (*"listening —
 
 **Not run on a real R36S** (no device here): the speaker's silence on the real codec, a real pager on air, the list's
 look on the real panel (offscreen screenshots only). The R36S image build was not run.
+
+### 7d. PAGE: THE LAW'S NOTICE, AND RECORDINGS SILENT WHILE IT RUNS (2026-11-16)
+
+Stuart: *"Decoding pagers is illegal in certain countries — please check the laws in your country before using it."* and
+*"Recording should be silent for pager that way nobody can record and decode again later."*
+
+**The words — one copy, `src/services/paging.ts`:** `PAGING_LAW_NOTICE`, `PAGING_REC_SILENT` ("REC · silent while PAGE
+runs"), `PAGING_REC_NOTE`, and `pagingHintFor(protocolRow, rateRow)` (the hint, the law its first sentence; `PAGING_HINT` is
+the app's). The R36S's `paging.h` copies are checked line for line by the VTS golden (op `PX`). Shown: the hint under the
+PAGE key (app) / in the picker and the empty box (R36S); the R36S toasts the notice once a session as PAGE first opens and
+appends it to the box's "locked on …" line; the sdrTour mode card's Android clause; the About V12 note (Android and R36S
+paragraphs). The website lists no decoders; the watch and pickerTour do not describe PAGE.
+
+**Every recording path, and how each is silent while a paging receiver runs** (`DecoderHost::pagingRunning() > 0` — from
+the attach to the stop, whatever ends it):
+
+| Path | How |
+|---|---|
+| The engine's audio streams — shared (`sendAudioPcmSquelchAware`, `sendAudioPcm`), a listener's own (`sendClientAudio`, DAB's PCM included), VFO A/B mixes (`watchSendPrivate`), a VFO's own recording stream, format 5 (`watchSendRec`) | `vibe::pagingAudioOut` before the encoder: Opus and PCM alike carry silence (`vibe_paging_gate.h`). Every recorder fed from the engine records silence |
+| Android app: ⏺ REC and the record buffer (`VibeStreamService` `recTapShorts`, records through a mute on purpose) | fed by the phone's engine over `/ws/audio` → silence. The Audio sheet says *REC · silent while PAGE runs* + the note; the banner *AUDIO MUTED · REC SILENT WHILE PAGE RUNS* while recording |
+| Android app: REC A / REC B (`VfoTrack`, format 5) | `watchSendRec` → silence (paging is never on VFO B, but VFO B's own stream is silenced too) |
+| R36S: REC and the record buffer (vibe-hhui `audio_rec.h`, the engine's speaker tap) | the tap carries the engine's silence; AND `Recorder::pcm(d, silent)` writes silence while PAGE is open (file and buffer), so the recording keeps its clock. AUDIO sheet: *REC · silent while PAGE runs* + the note; VTS bar *… · speaker muted · REC silent*; a toast when REC starts under PAGE or PAGE opens during REC |
+| R36S: the web page's recorder (Cog fallback) | the same tap → silence |
+| Raw IQ out (rtl_tcp stream, LAN port bound to 127.0.0.1 when not serving, or `/ws/iq`) | refused while PAGE runs (`pagingIqOutRefusal`), a stream already on is closed when PAGE attaches (`iqOffForPaging`, its listener told why), and `iqTapInto` queues nothing while the counter is up |
+| Not silenced, on purpose | DAB+'s AAC frames (`pumpDabPlusAudio`: the decoded broadcast service, not the paging channel); the developer-only `VIBE_IQ_DUMP` / `VIBE_DAB_DUMP` / `VIBE_DRM_DUMP` env-var dumps (DAB/DRM, not reachable from a device's UI); the band spectrogram (a picture). No server-side audio recording exists; the handheld supervisor's `/handheld/recordings` only stores what vibe-hhui uploads |
+
+Normal audio returns by itself when PAGE stops (the counter drops; nothing was changed but what is sent).
+
+| Test | What it proves | Result |
+|---|---|---|
+| `test-paging-gate` | + `pagingAudioOut` / `pagingAllowsIqOut`; with a real receiver started and stopped: a recording with PAGE on from the start is all silence; PAGE started mid-recording → silence from there; stopped → the tone sample for sample; raw IQ allowed / refused / allowed | 41 / 41 |
+| `paging_box_test` (arm64 trixie, offscreen) | + the law: the hint's first sentence, toasted once a session; the engine's frames (a tone, as if NOT silenced) through vibe-hhui's own audio hook into the recorder's file: PAGE first → all silence; PAGE mid → tone · silence · tone; the record buffer silent; "REC silent" on the VTS line and a toast | 78 / 78 |
+| VTS golden | + op `PX`: paging.h's law, REC words and hint = paging.ts's; the bar's "REC silent" line | 2452 / 2452 (Mac and arm64) |
+| `scripts/test_paging_rec.ts` (run-tests) | the app's words in the hint, tour, About, Audio sheet, banner; every `Out::Audio` sender in the shim is silenced or named (DAB+ AAC, raw IQ); raw IQ refused / closed / starved; the Android recorder takes the engine's stream | 37 / 37 |
+
+Not run: a real phone or R36S (no device here), the Android gradle build; the engine end-to-end with a real USB radio
+(the paging gate refuses the test's rtl_tcp radio by design, so the shim's senders are pinned by source and the rule by
+test-paging-gate).
 
 ## 8. EAS / SAME — DONE, wired to server and app (2026-10-31, third run)
 

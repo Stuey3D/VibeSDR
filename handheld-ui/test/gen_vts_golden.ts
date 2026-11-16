@@ -20,6 +20,8 @@
  *   MV json | ok vts info line                  parseM17 + m17Vts / m17Info / m17Line (src/services/m17.ts)
  *   MO json | 0/1                               m17Offered
  *   PS json | ok text                           parsePagingStatus + pagingStatusText (src/services/paging.ts; V12 PAGE)
+ *   PX name | text                              paging.ts' words, ONE copy (the law, REC while PAGE runs, the hint with the
+ *                                               handheld's row names) — paging.h's constants must equal them
  * Run: node --no-warnings --import ./ts_resolve.mjs --import ./ts_transform.mjs gen_vts_golden.ts <outFile>
  */
 import { writeFileSync } from 'node:fs';
@@ -32,7 +34,7 @@ import { getBandsAtRegion, type Band } from '../../src/constants/bandPlan.ts';
 import { fmtBandFreq } from '../../src/services/stations.ts';
 import { parseFreeDv, freedvVts, freedvOffered, freedvSidebandAt, freedvPassband } from '../../src/services/freedv.ts';
 import { parseM17, m17Vts, m17Info, m17Line, m17Offered } from '../../src/services/m17.ts';
-import { parsePagingStatus, pagingStatusText } from '../../src/services/paging.ts';
+import { parsePagingStatus, pagingStatusText, PAGING_LAW_NOTICE, PAGING_REC_SILENT, PAGING_REC_NOTE, pagingHintFor } from '../../src/services/paging.ts';
 
 const outFile = process.argv[2] ?? 'vts_golden.txt';
 const L: string[] = [];
@@ -237,6 +239,12 @@ for (const d of PSC) {
   const st = parsePagingStatus(d);
   L.push(`PS ${hex(JSON.stringify(d))} | ` + (st ? `1 ${hex(pagingStatusText(st))}` : `0 ${hex(pagingStatusText(null))}`));
 }
+
+// ★★★ paging.ts' words — the R36S must say exactly what the app says (the law, REC while PAGE runs, the hint)
+L.push(`PX law | ${hex(PAGING_LAW_NOTICE)}`);
+L.push(`PX recSilent | ${hex(PAGING_REC_SILENT)}`);
+L.push(`PX recNote | ${hex(PAGING_REC_NOTE)}`);
+L.push(`PX hint | ${hex(pagingHintFor('PROTOCOL', 'RATE'))}`);
 
 writeFileSync(outFile, L.join('\n') + '\n');
 console.error(`vts golden: ${L.length} lines → ${outFile}`);

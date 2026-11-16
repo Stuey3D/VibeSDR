@@ -10,6 +10,9 @@
 // ★★ SILENT. While PAGE runs the ENGINE plays silence on the speaker (local_sdr_shim.cpp, pagingSpeakerLevel) and the
 //    person's own mute and volume are never touched — so it comes back as it was however PAGE ends, a crash included
 //    (the decoder socket closes, the receiver stops). Here only the glyph and the words say so (pagingSilentNow).
+// ★★★ RECORDINGS ARE SILENT TOO (Stuart, 2026-11-16: "nobody can record and decode again later"): the engine sends
+//    silence on the REC tap while its receiver runs (vibe_paging_gate.h pagingAudioOut), and the recorder here writes
+//    silence while PAGE is open as well (audio_rec.h Recorder::pcm's `silent`) — the record buffer included.
 // ★ The wire (vibe_paging_run.h): 0x01 one line per page "[POCSAG 1200 · 1234567 · F3] text" / "[FLEX 3200/4 · 0123456 · A]
 //   text" ("(tone only)", "(binary data)", "(secure message)", " (cut short)"); 0x03 locked 0/1;
 //   {"type":"paging_status","data":{mode,detected,pages,rate,short}}.
@@ -72,12 +75,21 @@ inline std::string pagingStatusText(const PagingStatus* s) {
     return head + n + w;
 }
 
-/** paging.ts PAGING_HINT, with the handheld's names for the rows (PROTOCOL, RATE). */
+/** paging.ts PAGING_LAW_NOTICE — shown first in the hint (the empty box, the picker) and once a session as PAGE opens. */
+inline const char* const kPagingLawNotice =
+    "Decoding pagers is illegal in certain countries \xe2\x80\x94 please check the laws in your country before using it.";
+/** paging.ts PAGING_REC_SILENT / PAGING_REC_NOTE — REC while PAGE runs (the engine sends silence: vibe_paging_gate.h). */
+inline const char* const kPagingRecSilent = "REC \xc2\xb7 silent while PAGE runs";
+inline const char* const kPagingRecNote =
+    "While PAGE runs, recordings are silent \xe2\x80\x94 the record buffer too \xe2\x80\x94 and raw IQ out is off, so no page can be "
+    "recorded and decoded later. Normal audio comes back when PAGE stops.";
+/** paging.ts pagingHintFor('PROTOCOL', 'RATE') — the handheld's names for the rows. */
 inline const char* const kPagingHint =
+    "Decoding pagers is illegal in certain countries \xe2\x80\x94 please check the laws in your country before using it. "
     "Tune a paging channel in NFM with the filter at 12.5 kHz or wider. AUTO finds the protocol and the rate \xe2\x80\x94 POCSAG "
     "512, 1200 or 2400, or FLEX 1600, 3200 or 6400 \xe2\x80\x94 and names it; if AUTO cannot lock, pick the PROTOCOL (and for POCSAG "
-    "the RATE) below. FLEX names its own speed in every frame. The speaker is muted while PAGE runs and comes back as it was "
-    "when you close it. Pages are shown here only \xe2\x80\x94 never saved or sent anywhere.";
+    "the RATE) below. FLEX names its own speed in every frame. The speaker is muted while PAGE runs and recordings are "
+    "silent; both come back as they were when you close it. Pages are shown here only \xe2\x80\x94 never saved or sent anywhere.";
 
 // ── one page ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -145,9 +157,10 @@ inline void pagingPush(std::deque<PageRow>& pages, PageRow r) {
     while (pages.size() > kPagingMax) pages.pop_back();
 }
 
-/** The VTS bar's line while PAGE runs: "PAGE · FLEX 3200/4 · 3 pages · speaker muted". `st` null = no report yet. */
-inline std::string pagingVts(const PagingStatus* st) {
-    return "PAGE \xc2\xb7 " + pagingStatusText(st) + " \xc2\xb7 speaker muted";
+/** The VTS bar's line while PAGE runs: "PAGE · FLEX 3200/4 · 3 pages · speaker muted" (+ " · REC silent" while a
+ *  recording runs — it is recording silence). `st` null = no report yet. */
+inline std::string pagingVts(const PagingStatus* st, bool recording = false) {
+    return "PAGE \xc2\xb7 " + pagingStatusText(st) + " \xc2\xb7 speaker muted" + (recording ? " \xc2\xb7 REC silent" : "");
 }
 
 /** ★ What the VTS bar shows for PAGE (vts.h reads it; dec_state.h decTick writes it): "" while PAGE is not running. */

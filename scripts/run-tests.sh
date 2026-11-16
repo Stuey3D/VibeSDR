@@ -802,6 +802,10 @@ if npx tsx scripts/test_aviation_map.ts; then pass=$((pass+1)); else fail=$((fai
 if npx tsx scripts/test_sondes_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 PAGE (2026-11-16, Stuart): the law's notice wherever PAGE is described, and RECORDINGS SILENT WHILE PAGE RUNS — every
+#     audio sender in the engine passes through pagingAudioOut (what the Android recorder and the R36S tap record), raw IQ
+#     out refused / closed, the app's words (test-paging-gate runs the rule end to end).
+if npx tsx scripts/test_paging_rec.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 (2026-10-26, M7EIW): every spot's time is HH:MM:SS UTC, its slot's START — one helper for web, app and maps.
 if npx tsx scripts/test_spot_time.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and Band's DEFAULT from the benchmark (the setup page's benchApplyDefaults + the app's applyBench), owner override kept.

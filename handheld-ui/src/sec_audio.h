@@ -18,6 +18,7 @@
 #pragma once
 // (included by app.h after App is declared)
 #include "audio_rec.h"
+#include "paging.h"   // ★ V12 PAGE: REC is silent while it runs (kPagingRecSilent / kPagingRecNote)
 
 namespace hh {
 
@@ -224,6 +225,7 @@ inline void startRecording(App& a, const RadioState& s) {
     if (!S.rec.start()) { a.toast("Recording NOT saved · cannot write the temp file"); return; }
     a.num_["audio.recSec"] = S.rec.seconds();
     syncTap(a, s);
+    if (S.pagingSilent) a.toast(kPagingRecSilent);   // ★ V12 PAGE: say so — it is recording silence until PAGE stops
 }
 
 /** A DSP switch as the radio runs it: a press in the last 4 s wins, then the hwinfo report, then `def`. */
@@ -297,7 +299,8 @@ inline void audioTick(App& a, const RadioState& s) {
         // ★ the recording tap: every audio-socket message reaches here on the UI thread (Engine::pump)
         a.eng_->onAudio = [&a](bool text, const std::string& d) {
             if (text) return;
-            if (st().rec.pcm(d)) { stopRecording(a, a.eng_->state()); a.toast("Recording stopped at 2 GB"); }
+            // ★★★ V12 PAGE: silence into the file and the record buffer while PAGE runs (audio_rec.h; the engine's own rule too)
+            if (st().rec.pcm(d, st().pagingSilent)) { stopRecording(a, a.eng_->state()); a.toast("Recording stopped at 2 GB"); }
         };
     }
     // a (re)connect: the engine keeps no per-client state — tell it the level, the tap and the squelch again
@@ -635,6 +638,13 @@ inline void App::drawAudioSheet(Ctx& c, const RadioState& s) {
             nav_.setFocus("audio", "r.close");
         }
         y += 50 + 18;
+        // ★★★ V12 PAGE: REC records silence while PAGE runs — said here, not pretended otherwise (paging.ts' words)
+        if (S.pagingSilent) {
+            y -= 10;
+            wrapText(c, kPagingRecSilent, x0, y, w, th::red);
+            wrapText(c, kPagingRecNote, x0, y, w, th::dim);
+            y += 10;
+        }
     }
 
     // ════ REC BUFFER — §3.7 (★ drawn as it IS; 30 s on a fresh handheld, the choice kept — Settings::recBuffer) ════
