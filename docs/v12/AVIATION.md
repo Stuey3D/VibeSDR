@@ -8,6 +8,7 @@ Branch `v12-aviation` (from `v12-experimental` 460bb2f12). Written 2026-10-31 / 
 | **VDL Mode 2** (D8PSK 10.5 ksym/s) | `vibe_vdl2.h`, `vibe_vdl2_fec.h` on `vibe_avi_front.h` | `vibeserver/test-vdl2.cpp` | **Decoder works on real signals.** Wired: the mode's `vdl2` band. |
 | **HFDL** (PSK 1800 Bd, HF) | `vibe_hfdl.h`, `vibe_hfdl_run.h` (a listener's USB dial) | `vibeserver/test-hfdl.cpp` | **Decoder works on real signals** (BPSK modes verified; QPSK/8PSK only self-consistent). Wired: decoder ext `hfdl`. |
 | Service, table, JSON, bands | `vibe_avi_service.h`, `vibe_avi_mode.h` | `vibeserver/test-avi-service.cpp` | Wired into `local_sdr_shim.cpp` (2026-11-16) — see RESUME HERE. |
+| ACARS applications (positions, OOOI, ARINC 622) | `vibe_acars_apps.h` | `vibeserver/test-acars-apps.cpp` | 2026-11-16, branch `v12-acars-apps` — §Applications. **Not yet seen on air.** |
 | Transmitters (tests + benchmark) | `vibe_avi_tx.h` | — | ACARS, VDL2, HFDL bursts; `test-vdl2 --write-clip` makes the server e2e's clip. |
 
 All headers are in `android/app/src/main/cpp/`. The tests are header-only plus vibedsp's `fft.cpp`, `channelizer.cpp`,
@@ -130,6 +131,50 @@ Its own thread fed by copy, a half-second queue that drops the OLDEST block and 
 found by registration adopts the ICAO address when VDL2 or HFDL brings it), HFDL by ICAO (logons) or flight. JSON:
 `{"msgs":N,"aircraft":[{icao, reg, flight, lat, lon, posAge, label, labelName, text?, level, n, age, via}]}` — `text`
 only with the owner's opt-in.
+
+## Applications (`vibe_acars_apps.h`, 2026-11-16, branch v12-acars-apps)
+
+What a BCS-good message's text SAYS, for the few layouts that are published and checkable. Every ACARS message from all
+three decoders (VHF ACARS, ACARS over VDL2, ACARS over HFDL) goes through it in the `Tracker` (`acars_`), after a bounded
+multi-block (ETB) reassembler (32 messages × 8 blocks, 60 s).
+
+| Layout | Labels | Check | Gives |
+|---|---|---|---|
+| **ARINC 622** envelope `/<gs>.<IMI><reg7><hex>` | A6 AA B6 BA, H1 after the sublabel (`#M1B`, `- #M1`) and MFI (`/B6 `) | its CRC-16 (0x1021, preset FFFF, residue 1D0F) | the IMI: **ADS-C** (`ADS`, `DIS`) or **CPDLC** (`AT1` `CR1` `CC1` `DR1`) |
+| ADS-C downlink groups | inside ARINC 622 `ADS` | the envelope CRC; group lengths walked, an unknown group ends the walk | the first basic-shaped group (7 basic, 9 emergency, 10/18/19/20 events): lat/lon (21-bit), altitude (16-bit × 4 ft), seconds past the hour (15-bit × ⅛ s); accuracy 0 (navigation lost) is NOT shown; group 12 flight ID |
+| FMS downlinks (ARINC 702-style) | H1 `#M1B…`, `/.POS…` | the trailing 4-hex-digit CRC (reflected 0x1021, preset/xor FFFF, nibbles reversed) — refused otherwise | IMI `POS` or IEI `PS`: position (deg, min, tenths), the reported HHMMSS and flight level after it; IEI `AF`: the airports |
+| Label 16 | 16 | whole fixed part matched | `N 44.203,W 86.546,31965,…` / `N 28.177/W 96.055` decimal positions, altitude |
+| Label 15 | 15 | `(2…(Z` frame | `(2N38448W 77216…` position; `OFF` + date + HHMM the take-off |
+| Label 44 | 44 | whole fixed part | `POS0n` position + FL + airports; `OFF0n` / `ON0n` / `IN0n` position + airports + time |
+| QP QQ QR QS | QP–QS | 4+4 capitals, a real HHMM | OUT / OFF / ON / IN, the airports (QQ's long form: + position) |
+| H2 `02E` | H2 | every 32-character observation (position, HHMM, FL, temp, wind, 'G') | the airports and the LAST observation's position, time, FL. The weather itself is not decoded. |
+
+- **CPDLC is named, never decoded** (`app: "CPDLC"`): its content is controller–pilot conversation. ADS-C uplinks
+  (contract requests) and disconnects are named, no position.
+- **Never a guessed field**: a near miss (a minute of 60, a lower-case airport, a wrong CRC, a bogus text) is counted as
+  `unparsed`; so is any label with text and no layout here. test-acars-apps §5: 200 000 random texts across the position
+  labels → 0 positions. **Label 20 is left out**: two published readings of its `N38160` disagree (decimal degrees vs
+  degrees and minutes) — a real capture must settle it. QA–QF (OOOI on some airlines) have no published sample layout
+  we could check: named only (as before).
+- ⚖ **Privacy**: position, altitude, the fix time, flight, airports, the OOOI event are **flight data** — shown by default
+  like the registration. Nothing else leaves the server: the message text (ADS-C hex, FMS text, free text) stays behind
+  the owner's `avdata+text` opt-in on the owner's own socket; weather values, fuel, CPDLC content are not decoded at all.
+- **JSON** (each row, when known): `alt` (ft), `posSrc` (`ADS-C` | `FMS` | `ACARS` | `HFDL`), `posTime` (AS REPORTED:
+  `21:57:54`, or ADS-C's `:06:36` past the hour — never converted to a date we would have to guess), `from`, `to`,
+  `oooi` (`out|off|on|in`), `oooiTime` (`20:30`), `app` (`ADS-C` | `CPDLC` | `OOOI` | `FMS` | `position`); and the report
+  `apps: {pos, oooi, adsc, cpdlc, unparsed}`. A later message without a position keeps the last one (`posAge` ages it).
+- **Clients**: `src/services/aviation.ts` (one copy) — `avFix`, `avRoute`, `avDetail`, the map's items/rows/card. The
+  app's DATALINK box has **MAP** (MapOverlay `avdata`, the shared track layer, CLOSE MAP back to the box); the web's
+  TrackView map already drew positions and now its rows carry them; the R36S list/card show the route, altitude, fix.
+- **Sources** (read for facts, no code taken): libacars (MIT) and its PROG_GUIDE for the ARINC 622 envelope, its CRC
+  and the ADS-C groups, with its published sample messages and their decoded positions; acars-decoder-typescript
+  (airframesio, MIT) for the airline layouts, the FMS CRC and their sample messages. Both CRCs were verified on those
+  samples before use. libacars is **not linked** (Stuart's call).
+- **Test vectors**: the published samples (with their published answers), our own transmitter (`vibe_avi_tx.h`
+  `adsCBasic`, `fmsPos`: 2000 random ADS-C reports round trip; an ADS-C report over our ACARS modem and receiver), and
+  ONE frame from our own Pi 500 VDL2 capture (G-EZGJ's H2 `02E31GMMXEGGW…`, kept in test-vdl2 §4). ★ The capture
+  `.u8.log` files in `~/VibeSDR-test-audio/aviation` hold the session's server messages only — **not** the decoded
+  frames — so the real captures' messages were not available as parser input (the IQ is gone too).
 
 ## Decision: its own mode AND the ADS-B aircraft
 
@@ -255,7 +300,10 @@ test-server-ais-aprs 36/0 and test-server-decoder-reach 35/0 unchanged. **Nothin
 
 ## RESUME HERE
 
-Done: steps 1–5 below (see "Wired"). Left, in order:
+Done: steps 1–5 below (see "Wired") and the ACARS applications (§Applications, 2026-11-16: commits 439b7a91f, d246cc9e8,
+05bcb9f0f on `v12-acars-apps`, not merged). Tests: test-acars-apps 61/0, test-avi-service 7/0, test-acars 10034/0,
+test-vdl2 42/0, test-hfdl 44/0, test_aviation_app 21/0, test-server-avdata 35/0, test-web-avdata 21/0 (headless Edge
+`--mute-audio`, 3 aircraft on the map). **Nothing run on air.** Left, in order:
 
 1. **On air.** Re-record (the captures are gone): ACARS 131.675 / VDL2 136.85 at 2.4 MS/s and two HFDL windows, re-run
    `test-acars --cu8`, `test-vdl2 --cu8`, `test-hfdl --wav … --ref` — the HFDL hold change must be confirmed on the real
@@ -263,8 +311,12 @@ Done: steps 1–5 below (see "Wired"). Left, in order:
 2. **The ADS-B card's datalink line** (§Decision): on a two-radio server, the ADS-B aircraft with the same ICAO address
    as a Tracker row gets its last label / position. Not built: the Tracker is per radio PROCESS, so this needs the two
    processes to share it (the gallery-lock pattern AIS's ship store uses) — a design call.
-3. **ACARS label parsing** (labels 16 / H1 positions → `lat`/`lon` in the rows; the app's box and the web map then show
-   them), and **US ACARS** (129.125–131.550 MHz needs its own centre and a heavier front end — a third band).
+3. ~~ACARS label parsing~~ — **done 2026-11-16** (§Applications, branch `v12-acars-apps`). Left: **check it on air** —
+   record ACARS + VDL2 with the decoders' frame print (`test-acars --cu8`, `test-vdl2 --cu8` print every block's text)
+   and KEEP those transcripts this time; count how many real messages each layout takes and look at every `unparsed`
+   label that carries a position-looking text (label 20, 5U, 80, H1 sublabels other than M1, the European airlines' own
+   layouts) before adding any. HFDL carries much ADS-C: its positions now reach `/addon/hfdl/aircraft` too (untested on
+   air). Then **US ACARS** (129.125–131.550 MHz needs its own centre and a heavier front end — a third band).
 4. The app: `mode_resume` for `avdata` (the server's arrivalResume already puts a returning listener back), tune keys /
    drum stepping the bands (ISM's stepper — today only the box's keys do), a gamepad/keyboard nav for `AvdataPanel`.
    The web: the tune arrows stepping bands. The R36S: a canned feed + golden for the mode.
@@ -275,6 +327,9 @@ Done: steps 1–5 below (see "Wired"). Left, in order:
 7. Optional: a real Pi 2 bench run (bench binaries only, 0 listeners, never :48000) — the benchmark rows now exist.
 
 ### Decisions for Stuart
+- **ACARS applications**: (a) linking libacars (MIT) instead of / beside our parser — it decodes far more (CPDLC, MIAM,
+  media advisory); we did not link it. (b) Origin / destination airports from OOOI and FMS reports are shown by default
+  as flight data — or behind the opt-in? (c) Label 20 and other airline layouts wait for a real capture.
 - The `avdata+text` notice wording (setup page / ServerModeScreen `AVDATA_TEXT_NOTICE`), and whether the owner should
   see bodies in the app at all or only on the setup page.
 - VDL2 centre 136.8625 (between channels) instead of the plan's 136.850.
