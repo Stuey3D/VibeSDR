@@ -5,6 +5,7 @@
 #include "../src/vts_core.h"
 #include "../src/freedv.h"
 #include "../src/m17.h"
+#include "../src/paging.h"
 
 #include <cstdio>
 #include <fstream>
@@ -120,6 +121,10 @@ static int golden(const char* path) {
         } else if (op == "MO") {
             std::string js; is >> js;
             got = hh::m17Offered(hh::Json::parse(unhex(js))) ? "1" : "0";
+        } else if (op == "PS") {
+            std::string js; is >> js;
+            hh::PagingStatus st;
+            got = hh::parsePagingStatus(hh::Json::parse(unhex(js)), st) ? "1 " + hex(hh::pagingStatusText(&st)) : "0 " + hex(hh::pagingStatusText(nullptr));
         } else { std::fprintf(stderr, "unknown op: %s\n", line.c_str()); fails++; continue; }
         expect(got == want, "line " + std::to_string(n) + ": " + lhs + "\n   want " + want + "\n   got  " + got);
     }
@@ -302,6 +307,24 @@ static void scenarios() {
         expect(r.line() == "M17 \xc2\xb7 G4ABC \xc2\xb7 VIBE TEST", "M17 back after the notice: " + r.line());
         r.in.mode = "nfm"; r.in.m17Line = ""; r.step(600);
         expect(!r.bar.shown() && r.sc.liveName().empty(), "leaving M17 clears it");
+    }
+    {   // ★ V12 PAGE: its line held while the decoder runs (in NFM), follows the status, a notice takes its turn, closing clears it
+        Rig r; r.in.mode = "nfm"; r.in.vfoHz = 153350000; r.step(100);
+        r.in.pagingLine = hh::pagingVts(nullptr); r.step(400);
+        expect(r.line() == "PAGE \xc2\xb7 listening\xe2\x80\xa6 \xc2\xb7 speaker muted", "PAGE listening: " + r.line());
+        expect(r.bar.shown() && r.bar.shown()->badge.empty() && r.bar.shown()->hold, "PAGE: held, no mark");
+        hh::PagingStatus p; p.detected = "FLEX 3200/4"; p.pages = 3;
+        r.in.pagingLine = hh::pagingVts(&p); r.step(100);
+        expect(r.line() == "PAGE \xc2\xb7 FLEX 3200/4 \xc2\xb7 3 pages \xc2\xb7 speaker muted", "PAGE locked: " + r.line());
+        r.in.noticeNew = true; r.in.noticeText = "A server notice"; r.step(100);
+        expect(r.bar.shown() && r.bar.shown()->name == "A server notice", "a notice takes its turn");
+        r.step(7600);
+        expect(r.line() == "PAGE \xc2\xb7 FLEX 3200/4 \xc2\xb7 3 pages \xc2\xb7 speaker muted", "PAGE back after the notice: " + r.line());
+        r.in.m17Line = hh::m17Line(nullptr); r.step(200);
+        expect(r.line() == "M17 \xc2\xb7 searching", "a mode's own line wins over PAGE's: " + r.line());
+        r.in.m17Line = ""; r.step(200);
+        r.in.pagingLine = ""; r.step(600);
+        expect(!r.bar.shown() && r.sc.liveName().empty(), "PAGE closed clears it");
     }
     {   // the tone, NFM only
         Rig r; r.in.mode = "nfm"; r.in.vfoHz = 145500000; r.step(100);

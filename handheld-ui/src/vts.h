@@ -21,6 +21,7 @@
 #include "vts_core.h"
 #include "freedv.h"
 #include "m17.h"
+#include "paging.h"
 #include "bm_state.h"
 #include "vts_marks.h"
 
@@ -189,6 +190,7 @@ inline Inputs readInputs(State& st, const RadioState& s, double nowMs, int regio
         else if (fresh) { M17State f; if (parseM17(j, f)) { st.m17Last = f; st.m17Have = true; } }
         in.m17Line = s.mode == "m17" ? m17Line(st.m17Have ? &st.m17Last : nullptr) : "";
     }
+    in.pagingLine = pagingVtsLine();   // ★ V12 PAGE (paging.h): written by dec_state.h decTick while PAGE runs
     // tone
     {
         const Json& j = s.msg("tone");

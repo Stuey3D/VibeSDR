@@ -553,7 +553,8 @@ public:
     }
     /** ★ Band's IQ blocks dropped behind the decode thread (monotonic) — the health pill's TOO HEAVY line reads it. */
     uint64_t iqBlocksDropped() const { return iqDropped_.load(std::memory_order_relaxed); }
-    /** ★★ PAGING (V12): built into this library at all? (VIBE_PAGING — the Android native library only.) */
+    /** ★★ PAGING (V12): built into this library at all? (VIBE_PAGING — the Android client library, and since 2026-11-16
+     *  the desktop VibeServer for the R36S handheld; pagingProcess() says whether this process may use it.) */
     static constexpr bool pagingBuilt() {
 #if defined(VIBE_PAGING)
         return true;
@@ -561,6 +562,21 @@ public:
         return false;
 #endif
     }
+    /** ★★★ May THIS PROCESS run paging at all? (V12, 2026-11-16.) The engine is compiled into the desktop VibeServer too
+     *  now — for the R36S handheld, whose radio process is that binary — so being BUILT no longer means being allowed.
+     *  True from the start only in the Android client library (VIBE_PAGING there is the phone's own app); everywhere
+     *  else false until LocalSdrShim::setHandheld(true) — the handheld's radio process, which binds 127.0.0.1 only and
+     *  is started by the handheld supervisor. A server never sets it, so "paging" is an UNKNOWN extension there
+     *  (knownExt), whatever a client asks. vibe_paging_gate.h has the rest of the rule. */
+    static std::atomic<bool>& pagingProcess() {
+#if defined(VIBE_PAGING) && defined(__ANDROID__)
+        static std::atomic<bool> on{true};
+#else
+        static std::atomic<bool> on{false};
+#endif
+        return on;
+    }
+    static bool pagingHere() { return pagingBuilt() && pagingProcess().load(std::memory_order_relaxed); }
     /** ★ How many paging receivers run in this process — the one atomic the DSP thread reads before it looks for a host. */
     static std::atomic<int>& pagingRunning() { static std::atomic<int> n{0}; return n; }
     /** ★ Paging runs here: it wants the pipeline's CHANNEL IQ (feedChannelIq). Cheap: read on every channel block. */
@@ -792,7 +808,7 @@ private:
     static bool knownExt(const std::string& e) {
         if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a

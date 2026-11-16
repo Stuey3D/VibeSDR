@@ -465,6 +465,58 @@ inline void decPaneAprs(App& a, Ctx& c, const RadioState& s, Rect view) {
     }
 }
 
+/** "14:32:07" (UTC, as every time on the handheld). */
+inline std::string decHmsS(double t) {
+    const time_t tt = (time_t)t; struct tm g{}; gmtime_r(&tt, &g);
+    char b[16]; std::snprintf(b, sizeof b, "%02d:%02d:%02d", g.tm_hour, g.tm_min, g.tm_sec); return b;
+}
+/** ★★ V12 PAGE: the pages, newest first — time · protocol and rate · address (capcode) · function (FLEX: phase), then the
+ *  message on a line of its own. ENTER on a row reads that page whole; ENTER again (or another row) is back to the list.
+ *  The rows are this list in memory only (paging.h) — CLR, STOP or a restart and they are gone. */
+inline std::string& decPageRefocus() { static std::string id; return id; }
+inline void decPanePaging(App& a, Ctx& c, const RadioState& s, Rect view) {
+    DecUi& u = decUi();
+    (void)a; (void)s;
+    const PageRow* open = nullptr;
+    for (auto& p : u.pages) if (p.id == u.pageRead) { open = &p; break; }
+    if (!open) u.pageRead = 0;
+    auto head = [&](const PageRow& p, float x, float y, float r) {
+        x += (float)c.tc.draw(c.g, c.f.small, decHmsS(p.at), x, y, th::dim) + 10;
+        if (!p.proto.empty()) {
+            x += (float)c.tc.draw(c.g, c.f.small, p.proto, x, y, rgb(0xffc966)) + 10;
+            x += (float)c.tc.draw(c.g, c.f.small, p.addr, x, y, th::white) + 10;
+            x += (float)c.tc.draw(c.g, c.f.small, p.fn, x, y, th::white68) + 10;
+        }
+        if (p.cut) c.tc.draw(c.g, c.f.small, "cut short", r, y, rgb(0xff9a5a), 2);
+        (void)x;
+    };
+    if (open) {
+        // the page, whole
+        const Nav::Hit h = c.nav.item("dec.page.read", view);
+        c.g.rrect(view.x, view.y, view.w, view.h, 6, th::activeBg);
+        head(*open, view.x + 8, view.y + 4, view.r() - 8);
+        const auto& ln = c.tc.wrap(c.f.body, open->text, (int)view.w - 16);
+        float y = view.y + 6 + c.f.small.lineHeight();
+        for (size_t i = 0; i < ln.size() && y + c.f.body.lineHeight() <= view.b() + 2; i++, y += c.f.body.lineHeight())
+            c.tc.draw(c.g, c.f.body, ln[i], view.x + 8, y, th::white);
+        if (h.focused) c.g.rframe(view.x - 1, view.y - 1, view.w + 2, view.h + 2, 7, 3, th::focus);
+        if (h.pressed) { decPageRefocus() = "dec.pg." + std::to_string((unsigned long long)open->id); u.pageRead = 0; }
+        return;
+    }
+    // ★ back from a page read whole: the highlight on its row again (set once the rows are this frame's items)
+    if (!decPageRefocus().empty()) { a.nav_.setFocus("dec", decPageRefocus()); decPageRefocus().clear(); }
+    if (u.pages.empty()) { decNone(c, view, u.pagingHave && !u.pagingSt.detected.empty() ? "locked on " + u.pagingSt.detected + " \u2014 each page appears here as it is decoded" : std::string(kPagingHint)); return; }
+    const float rh = 2 * c.f.small.lineHeight() + 10;
+    const int hit = decRows(c, decListScroll(), view, (int)u.pages.size(), rh, "dec.pg.", [&](int k) { return std::to_string((unsigned long long)u.pages[(size_t)k].id); },
+        [&](int k, Rect rr, bool) {
+            const PageRow& p = u.pages[(size_t)k];
+            decRowBg(c, rr, false);
+            head(p, rr.x + 8, rr.y + 3, rr.r() - 8);
+            c.tc.draw(c.g, c.f.small, decFit(c, c.f.small, p.text, (int)rr.w - 16), rr.x + 8, rr.y + 5 + c.f.small.lineHeight(), th::white);
+        });
+    if (hit >= 0) { u.pageRead = u.pages[(size_t)hit].id; a.nav_.setFocus("dec", "dec.page.read"); }
+}
+
 // ── the picker (the web's decoders panel) ────────────────────────────────────────────────────────────────────────────
 
 /** One row of the picker. */
@@ -626,6 +678,30 @@ inline void decOptionRows(App& a, const RadioState& s, const std::string& id, st
             std::vector<std::string> mo; int ms = 0; std::vector<std::string> ids;
             for (size_t i = 0; i < in.size(); i++) { mo.push_back(in[i]->label); ids.push_back(in[i]->id); if (in[i]->id == u.mfskMode) ms = (int)i; }
             choice("mfsk.mode", "MODE", mo, ms, [ids](int i) { decUi().mfskMode = ids[(size_t)i]; decReattachSoon("mfsk"); });
+        }
+    }
+    else if (id == "paging") {
+        // ★★★ AUTO's fallback rows (autoModes.ts — MFSK's pattern): PROTOCOL (AUTO + the engine's groups), then RATE where the
+        //     protocol has a real choice (POCSAG's ANY / 512 / 1200 / 2400; FLEX names its own speed, so it has none)
+        std::vector<DecGMode> list; { std::lock_guard<std::mutex> lk(u.capMtx); list = u.pagingModes; }
+        std::vector<std::string> groups;
+        for (auto& m : list) if (!m.group.empty() && std::find(groups.begin(), groups.end(), m.group) == groups.end()) groups.push_back(m.group);
+        std::string g;
+        for (auto& m : list) if (m.id == u.pagingMode) g = m.group;
+        std::vector<std::string> o = {"AUTO"}; int sel = 0;
+        for (size_t i = 0; i < groups.size(); i++) { o.push_back(upper(groups[i])); if (groups[i] == g) sel = (int)i + 1; }
+        choice("paging.proto", "PROTOCOL", o, sel, [list, groups](int i) {
+            DecUi& x = decUi();
+            if (i == 0) x.pagingMode = "auto";
+            else for (auto& m : list) if (m.group == groups[(size_t)i - 1]) { x.pagingMode = m.id; break; }   // the protocol's own "ANY"
+            decReattachSoon("paging");
+        });
+        std::vector<const DecGMode*> in;
+        for (auto& m : list) if (!g.empty() && m.group == g) in.push_back(&m);
+        if (in.size() > 1) {
+            std::vector<std::string> mo; int ms = 0; std::vector<std::string> ids;
+            for (size_t i = 0; i < in.size(); i++) { mo.push_back(in[i]->label); ids.push_back(in[i]->id); if (in[i]->id == u.pagingMode) ms = (int)i; }
+            choice("paging.rate", "RATE", mo, ms, [ids](int i) { decUi().pagingMode = ids[(size_t)i]; decReattachSoon("paging"); });
         }
     }
     const DecDef* d = decDef(id);
@@ -933,6 +1009,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
         else if (d && d->kind == DK_PICTURE) decPicPane(a, c, s, body, grabbed);
         else if (d && d->kind == DK_DSC) decPaneDsc(a, c, s, body);
         else if (d && d->kind == DK_APRS) decPaneAprs(a, c, s, body);
+        else if (d && d->kind == DK_PAGING) decPanePaging(a, c, s, body);
         else if (d && (d->kind == DK_KB || d->kind == DK_JTTY || (view == "rtty" && u.rttySkim))) {
             const auto subs = decSubs(view);
             const std::string sp = u.sub >= 0 && u.sub < (int)subs.size() ? subs[(size_t)u.sub] : "SIGNALS";
@@ -955,7 +1032,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (xv) { if (xv->clear) xv->clear(); }
             else if (d && d->kind == DK_PICTURE) picClear();
             else if (view == "spots") { u.spots.clear(); u.spotsSeq++; }
-            else { u.log.clear(); u.calls.clear(); u.dsc.clear(); u.aprsLog.clear(); u.aprs.clear(); decClearLists(); decListScroll() = {}; decSigAnchor() = {}; }
+            else { u.log.clear(); u.calls.clear(); u.dsc.clear(); u.aprsLog.clear(); u.aprs.clear(); u.pages.clear(); u.pageRead = 0; decClearLists(); decListScroll() = {}; decSigAnchor() = {}; }
         } else if (act == 3) {
             if (decRunning()) decStop(a, view == "spots" ? "spots" : view);
             if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); decRelease(a); }
