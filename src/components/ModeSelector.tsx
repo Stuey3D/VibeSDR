@@ -32,7 +32,7 @@ import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText, rttySkimHintText } from '../services/cwList';
-import { NCDXF_HINT } from '../services/ncdxf';   // ★ V12 NCDXF beacons
+import { NCDXF_HINT, NCDXF_FOLLOW_HINT } from '../services/ncdxf';   // ★ V12 NCDXF beacons
 import { BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonPinLabel, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
 import { JTTY_HINT } from '../services/jtty';
 import ModeIcon, { ModeLabel, modeKeyIcon } from './ModeIcon';   // ★ V12 mode icons (Stuart 2026-10-28)
@@ -528,6 +528,9 @@ interface ModeSelectorProps {
     jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
     /** ★★ V12 NCDXF beacons — only where `"ncdxf"` is offered; its settings are the beacon frequencies THIS radio reaches. */
     ncdxfAvail?: boolean; ncdxfBands?: Array<{ hz: number; label: string }>; onNcdxfBand?: (hz: number) => void;
+    /** ★★ V12 NCDXF FOLLOW — the listener's OWN dial hops with one beacon up the bands. Null on a shared dial (never there:
+     *  the shared-dial contract) or where the radio reaches none of the five. */
+    ncdxfFollow?: { on: boolean; call: string; onToggle: () => void; onStep: (d: 1 | -1) => void } | null;
     /** ★★ V12 balloons — only where `"balloon"` is offered; its settings are AUTO and the manual pins under it. */
     balloonAvail?: boolean; balloonSettings?: BalloonSettings; onBalloonSettings?: (s: BalloonSettings) => void;
     /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches: `dscChans` the distress
@@ -1655,6 +1658,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <OptRow>{dc.ncdxfBands.map((d) => (
               <SegBtn key={d.hz} label={d.label} active={Math.abs((dc.tunedHz ?? 0) - d.hz) < 1500} onPress={() => dc.onNcdxfBand?.(d.hz)} />
             ))}</OptRow>
+          </>)}
+          {!!dc.ncdxfFollow && (<>
+            {/* ★★ V12 FOLLOW (Stuart 2026-11-16): one beacon, up the bands, on this listener's own dial only */}
+            <SubLabel label="FOLLOW" />
+            <OptRow>
+              <SegBtn label={'\u2039'} active={false} onPress={() => dc.ncdxfFollow!.onStep(-1)} />
+              <SegBtn label={dc.ncdxfFollow.call} active={false} onPress={() => dc.ncdxfFollow!.onStep(1)} />
+              <SegBtn label={'\u203a'} active={false} onPress={() => dc.ncdxfFollow!.onStep(1)} />
+              <SegBtn label="FOLLOW" active={dc.ncdxfFollow.on} onPress={dc.ncdxfFollow.onToggle} />
+            </OptRow>
+            <Text style={capText}>{NCDXF_FOLLOW_HINT}</Text>
           </>)}
           <Text style={capText}>{NCDXF_HINT}</Text>
         </>);

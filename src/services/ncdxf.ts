@@ -25,6 +25,9 @@ export const NCDXF_BANDS: readonly { hz: number; label: string }[] = [
   { hz: 24_930_000, label: '12 m' }, { hz: 28_200_000, label: '10 m' },
 ];
 export const NCDXF_STEPS = ['100 W', '10 W', '1 W', '0.1 W'];
+/** The eighteen in the published order (ncdxf_tracker.h kBeacons) — FOLLOW's names before the first report. */
+export const NCDXF_CALLS = ['4U1UN', 'VE8AT', 'W6WX', 'KH6RS', 'ZL6B', 'VK6RBP', 'JA2IGY', 'RR9O', 'VR2B', '4S7B', 'ZS6DN', '5Z4B',
+  '4X6TU', 'OH2B', 'CS3B', 'LU4AA', 'OA4B', 'YV5B'] as const;
 /** ★ The words under the key: where to tune, and what the grid means. */
 export const NCDXF_HINT = 'Tune 14.100, 18.110, 21.150, 24.930 or 28.200 MHz in CW or USB — or press a band. Eighteen beacons round '
   + 'the world take turns, ten seconds each, on a three-minute cycle locked to UTC: a callsign, then four dashes at 100 W, 10 W, 1 W and '
@@ -98,3 +101,36 @@ export function ncdxfStatus(r: NcdxfReport | null): string {
 export function ncdxfStepColour(steps: number): string {
   return ['transparent', '#E8C547', '#B8D84A', '#7EDB5A', '#3FD86B'][Math.max(0, Math.min(4, steps))];
 }
+
+/* ★★ FOLLOW (Stuart 2026-11-16) — the listener's OWN dial hops with one beacon up the five bands: each beacon sends 10 s on
+ *  20 m, then 17, 15, 12 and 10 m, then is silent for 130 s (beacon (slot − band) mod 18 is on `band`, ncdxf_tracker.h
+ *  beaconAt). FOLLOW tunes the band it is on a moment before its slot starts (so the callsign is heard from the top), and
+ *  while it is silent waits on the first band it will come back to. Only bands this radio reaches; the tracker then judges
+ *  each slot as it always does, so the grid fills along that beacon's row.
+ * ★★★ NEVER A SHARED DIAL (the shared-dial contract: the client has no vote — a timer retuning everybody's receiver every
+ *    ten seconds is the last thing a room wants). Offered only where this listener's dial is their own (`dial` mode
+ *    "exclusive": a range-locked radio's own channel, or a radio they have to themselves); a dial that becomes shared
+ *    stops it, and so does tuning anywhere else by hand. */
+export const NCDXF_FOLLOW_LEAD_S = 0.5;   // tune this long before the slot, so its first callsign element is in
+/** The 10 s slot (0–17) holding UTC second `utc`. */
+export function ncdxfSlot(utc: number): number { return Math.floor((((utc % 180) + 180) % 180) / 10); }
+/** The band (0–4) beacon `beacon` is on in `slot`, or -1 while it is silent. */
+export function ncdxfBandOf(beacon: number, slot: number): number { const b = (((slot - beacon) % 18) + 18) % 18; return b < 5 ? b : -1; }
+/** Who is on `band` in `slot` (the tracker's beaconAt). */
+export function ncdxfBeaconOn(band: number, slot: number): number { return (((slot - band) % 18) + 18) % 18; }
+/** Where FOLLOW puts the dial at `utc` (server time): the band index, or -1 when this radio reaches none of the five. */
+export function ncdxfFollowBand(beacon: number, utc: number, reach: readonly boolean[]): number {
+  const s = ncdxfSlot(utc + NCDXF_FOLLOW_LEAD_S);
+  const b = ncdxfBandOf(beacon, s);
+  if (b >= 0 && reach[b]) return b;
+  for (let k = 1; k <= 18; k++) { const n = ncdxfBandOf(beacon, (s + k) % 18); if (n >= 0 && reach[n]) return n; }
+  return -1;
+}
+/** ★ May this listener FOLLOW? Only on their own dial (`dialMode` "exclusive"; an older server that never says = its own). */
+export function ncdxfFollowAllowed(dialMode: string | null | undefined, sharedFlag = false): boolean {
+  return !sharedFlag && (!dialMode || dialMode === 'exclusive');
+}
+/** Did the listener tune away by hand? (the dial more than 1.5 kHz from where FOLLOW put it) — FOLLOW stops then. */
+export function ncdxfFollowTunedAway(dialHz: number, putHz: number): boolean { return putHz > 0 && Math.abs(dialHz - putHz) > 1500; }
+export const NCDXF_FOLLOW_HINT = 'FOLLOW keeps your own dial on one beacon as it moves up the bands, ten seconds each, so its row fills in. '
+  + 'Only where the dial is yours alone — never on a dial you share with other listeners. Tune by hand to stop.';

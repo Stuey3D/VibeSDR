@@ -5769,6 +5769,14 @@ select.btn { padding: 6px 8px; }
       <label>BAND</label>
       <div class="seg" id="ncdxfBands"></div>
     </div>
+    <!-- ★★ V12 FOLLOW (Stuart 2026-11-16): this listener's OWN dial hops with one beacon up the bands. Hidden on a shared
+         dial (the shared-dial contract: the client has no vote) and where the radio reaches none of the five. -->
+    <div class="mrow" id="ncdxfFollowRow" hidden>
+      <label>FOLLOW</label>
+      <div class="seg"><select id="ncdxfFollowWho" class="btn" title="The beacon to follow"></select>
+        <button class="btn" id="ncdxfFollow" aria-pressed="false">FOLLOW</button></div>
+    </div>
+    <div class="hint" id="ncdxfFollowHint" hidden></div>
     <div class="hint" id="ncdxfHint"></div>
   </div>
   <!-- ★★ V12 balloons: AUTO, and the manual pins under it (Stuart: an automatic decoder keeps manual controls underneath). -->

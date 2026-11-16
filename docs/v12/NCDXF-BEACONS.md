@@ -52,6 +52,26 @@ the 0.1 W dash of a beacon whose 100 W dash is +15 dB in 2.5 kHz.
 CPU: ~0.1 % of one M5 core (scalar: a mixer + three one-poles per sample, then once per 10 s a 17-bin DFT on ~700
 frames and 18 × 151 correlations). Not a hot loop; no SIMD needed.
 
+## FOLLOW (V12 2026-11-16, Stuart)
+
+A **FOLLOW** key under the BAND keys (web and app): the listener's **own** dial hops with one beacon up the five bands —
+20, 17, 15, 12, 10 m, ten seconds each — then waits on the first band it will return to while it is silent (130 s of the
+three minutes). The tracker judges each slot as it always does, so that beacon's row of the grid fills in.
+
+- **Whose dial:** only this listener's. FOLLOW is offered only where the server's `dial` mode is `exclusive` (a radio they
+  have to themselves, or their own channel on a range-locked radio) and the web page's `tuneMode` is not `open`. **Never
+  on a shared dial** — the shared-dial contract: the client has no vote, and a timer retuning everybody's receiver every
+  ten seconds is not a listener's to start. A dial that turns shared stops it (the `dial` message re-checks).
+- **Which beacon:** the one on the air now on the band the dial is on (20 m otherwise); ‹ › (app) or the list (web) picks
+  another.
+- **When:** a tick four times a second works out the slot from the **server's** clock (the report's `now` against the
+  page's clock — the tracker's own time base) and tunes only when the band changes, 0.5 s before the slot starts so the
+  callsign is heard from its first element. Bands this radio cannot reach are skipped.
+- **Stopping:** the key again, a BAND key, a hand tune more than 1.5 kHz away, leaving BEACONS, or a dial that turns
+  shared. The existing tracker is unchanged.
+- The rule is one module (`src/services/ncdxf.ts` — `ncdxfFollowBand`, `ncdxfFollowAllowed`), tested in
+  `scripts/test_ncdxf_app.ts` against the published schedule (`ncdxf_tracker.h beaconAt`'s order and calls).
+
 ## Clients
 
 - **Web**: BEACONS under Amateur (hidden unless `"ncdxf"`; greyed with the reason where the radio reaches none of the

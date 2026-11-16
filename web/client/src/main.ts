@@ -188,7 +188,8 @@ import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
 import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonLine, balloonMerge, balloonParams,
          balloonPicture, balloonPictureText, balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen, type BalloonPayload, type BalloonReport, type BalloonSettings } from '../../../src/services/balloons';   // ★ V12 balloons
-import { NCDXF_BANDS, NCDXF_HINT, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
+import { NCDXF_BANDS, NCDXF_HINT, NCDXF_FOLLOW_HINT, NCDXF_CALLS, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, ncdxfFollowBand,
+         ncdxfFollowAllowed, ncdxfFollowTunedAway, ncdxfBeaconOn, ncdxfSlot, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
 import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
          dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle, type DscCall, type DscPin, type DscChannel } from './dsc';
@@ -1804,6 +1805,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDial: (d) => {
       chatDial(d);
       dialModeNow = d.mode;
+      ncdxfFollowSync();   // ★ V12 FOLLOW: a dial that turns shared stops it (never a shared dial)
       {
         // ★★ ASK BEFORE TUNING — adopt the server's word; say so when the room lets this listener in.
         const was = askNow;
@@ -13180,9 +13182,71 @@ function initNcdxfBands() {
     const k = document.createElement('button');
     k.className = 'btn'; k.textContent = b.label;
     k.title = `${(b.hz / 1e6).toFixed(3)} MHz in CW`;
-    k.onclick = () => { if (!spec) return; decTune(b.hz, 'cwu' as SDRMode); renderFreq(); };
+    k.onclick = () => { if (!spec) return; ncdxfFollowStop(); decTune(b.hz, 'cwu' as SDRMode); renderFreq(); };
     host.appendChild(k);
   }
+  ncdxfFollowSync();
+}
+/* ★★ FOLLOW (V12, Stuart 2026-11-16 — ncdxf.ts): this listener's OWN dial hops with one beacon up the five bands. A timer
+ *  checks four times a second where the beacon is (server time: the report's `now` against this clock) and tunes only
+ *  when the band changes. NEVER on a shared dial — the row is hidden there and a dial that turns shared stops it; tuning
+ *  anywhere by hand stops it too. */
+let ncdxfFollowOn = false, ncdxfFollowTimer = 0, ncdxfFollowPut = 0, ncdxfClockOff = 0;
+const ncdxfServerNow = () => Date.now() / 1000 + ncdxfClockOff;
+const ncdxfReach = () => NCDXF_BANDS.map((b) => clampTune(b.hz) === b.hz);
+function ncdxfFollowMay(): boolean {
+  return activeDec === 'ncdxf' && !!spec && ncdxfFollowAllowed(dialModeNow, srvSharedDial) && ncdxfReach().some(Boolean);
+}
+function ncdxfFollowStop() {
+  ncdxfFollowOn = false; ncdxfFollowPut = 0;
+  if (ncdxfFollowTimer) { clearInterval(ncdxfFollowTimer); ncdxfFollowTimer = 0; }
+  ncdxfFollowSync();
+}
+function ncdxfFollowTick() {
+  if (!ncdxfFollowOn) return;
+  if (!ncdxfFollowMay() || !spec) { ncdxfFollowStop(); return; }
+  if (ncdxfFollowTunedAway(spec.frequency, ncdxfFollowPut)) { ncdxfFollowStop(); return; }   // ★ the listener tuned by hand
+  const who = Number(($('ncdxfFollowWho') as HTMLSelectElement).value) || 0;
+  const b = ncdxfFollowBand(who, ncdxfServerNow(), ncdxfReach());
+  if (b < 0) { ncdxfFollowStop(); return; }
+  const hz = NCDXF_BANDS[b].hz;
+  if (hz !== ncdxfFollowPut) { ncdxfFollowPut = hz; decTune(hz, 'cwu' as SDRMode); renderFreq(); }
+}
+/** The row drawn only where FOLLOW may run; the key lit while it runs. */
+function ncdxfFollowSync() {
+  const row = document.getElementById('ncdxfFollowRow'), hint = document.getElementById('ncdxfFollowHint');
+  const sel = document.getElementById('ncdxfFollowWho') as HTMLSelectElement | null;
+  const btn = document.getElementById('ncdxfFollow');
+  if (!row || !sel || !btn || !hint) return;
+  const may = ncdxfFollowMay();
+  row.hidden = !may; hint.hidden = !may;
+  if (!may) { if (ncdxfFollowOn) ncdxfFollowStop(); return; }
+  hint.textContent = NCDXF_FOLLOW_HINT;
+  if (!sel.options.length) {
+    const calls: readonly string[] = ncdxfLast?.beacons.map((x) => x.call) ?? NCDXF_CALLS;
+    calls.forEach((c, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = c; sel.appendChild(o); });
+  }
+  btn.classList.toggle('on', ncdxfFollowOn);
+  btn.setAttribute('aria-pressed', ncdxfFollowOn ? 'true' : 'false');
+}
+function ncdxfFollowStart() {
+  if (!ncdxfFollowMay()) return;
+  ncdxfFollowOn = true; ncdxfFollowPut = 0;
+  if (!ncdxfFollowTimer) ncdxfFollowTimer = window.setInterval(ncdxfFollowTick, 250);
+  ncdxfFollowTick();
+  ncdxfFollowSync();
+}
+{
+  const btn = document.getElementById('ncdxfFollow'), sel = document.getElementById('ncdxfFollowWho') as HTMLSelectElement | null;
+  if (btn) btn.onclick = () => { if (ncdxfFollowOn) ncdxfFollowStop(); else {
+    // ★ first press: the beacon on the air now on the band the dial is on (or 20 m) — the one being heard
+    if (sel && !sel.dataset.picked && spec) {
+      const k = Math.max(0, NCDXF_BANDS.findIndex((b) => Math.abs(spec!.frequency - b.hz) < 1500));
+      sel.value = String(ncdxfBeaconOn(k, ncdxfSlot(ncdxfServerNow())));
+    }
+    ncdxfFollowStart();
+  } };
+  if (sel) sel.onchange = () => { sel.dataset.picked = '1'; if (ncdxfFollowOn) { ncdxfFollowPut = 0; ncdxfFollowTick(); } };
 }
 /* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
  *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
@@ -14034,6 +14098,7 @@ function initDecoders(host: string, auth: AuthState) {
       const r = ncdxfSanitise(d);
       if (!r) return;
       ncdxfLast = r; renderNcdxf();
+      if (r && r.now > 0) ncdxfClockOff = r.now - Date.now() / 1000;   // ★ FOLLOW keeps the server's clock, as the tracker does
       decStateText = ncdxfStatus(r);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
       setDecLive(r.band >= 0 && !!r.last && r.last.steps > 0);
@@ -14893,7 +14958,7 @@ function syncDecButtons() {
   $('balloonSettings').hidden = activeDec !== 'balloon';
   if (activeDec === 'balloon') initBalloonSettings();
   $('ncdxfSettings').hidden = activeDec !== 'ncdxf';
-  if (activeDec === 'ncdxf') initNcdxfBands();
+  if (activeDec === 'ncdxf') initNcdxfBands(); else ncdxfFollowStop();   // ★ V12 FOLLOW ends with the tracker
   $('tmSettings').hidden = !isTextFamily(activeDec) || !(tmCaps[activeDec]?.length);
   renderTmModes();
   renderDscKeys();
