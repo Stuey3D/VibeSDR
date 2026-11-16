@@ -18,9 +18,17 @@
 #   <prefix>/include/vibe_rade.h
 #   <prefix>/share/licences/LICENSE.rade_c, COPYING.opus, LICENSE.freedv-backend
 #
-# ★★ SIMD: no runtime dispatch — Opus's own compile-time choice (dnn/vec.h): x86 with SSE2 (every amd64, and i386 at the
-#    package's -msse2 floor) takes vec_avx.h's SSE paths, ARM with NEON (armhf -mfpu=neon-vfpv4, every arm64) takes
-#    vec_neon.h, and everything else (ARMv6) the scalar code. The CALLER's CFLAGS carry the ISA, as for every other library.
+# ★★ SIMD: RUNTIME DISPATCH (V12, 2026-11-16 — FREEDV.md "SIMD"). One archive runs the best of Opus's own DNN builds the
+#    CPU has, chosen once by Opus's own detection (OPUS_HAVE_RTCD; opus_select_arch: CPUID / /proc/cpuinfo / sysctl):
+#      x86 (amd64, and i386 at the package's -msse2 floor)   SSE2 → SSE4.1 → AVX2+FMA       (dnn/x86/nnet_{sse2,sse4_1,avx2}.c)
+#      arm64                                                 NEON → NEON + int8 dot product (dnn/arm/nnet_{neon,dotprod}.c)
+#      armhf (-mfpu=neon-vfpv4)                              NEON → dot product (an A76-class core on a 32-bit OS; never a Pi 2)
+#      no SSE2 / no NEON (ARMv6)                             the scalar code, no dispatch — exactly as before
+#    The floors do not move: each dearer tier is its own object, reached only when the CPU says it has the instructions,
+#    so nothing here needs AVX2 (or the dot product) to run. The CALLER's CFLAGS still carry the floor, as for every library.
+#    ★ The crux: rade_c's rade_rx.c passes a HARD-CODED `int arch = 0` to its decoder, so dispatch alone would change nothing
+#      there. A copy of rade_rx.c takes its arch from vrade_rx_arch() (rade/vibe_rade_arch.c) and FARGAN is given the same
+#      number; the line is checked, not assumed, like nnet.c's. VIBE_RADE_ARCH (tests only) forces a lower path.
 # ★ Weights: Opus's debug float copies are left out (DISABLE_DEBUG_FLOAT, Opus's own default), the int8 sets are used.
 # ★ RADE V2 is not built: its own README says the waveform and weights will change and on-air use is not recommended.
 set -euo pipefail
@@ -57,29 +65,76 @@ sed 's/^#define MAX_CONV_INPUTS_ALL .*$/#define MAX_CONV_INPUTS_ALL 2048  \/\* V
 [ "$(grep -c '^#define MAX_CONV_INPUTS_ALL 2048' "$B/opus/nnet.c" || true)" -eq 1 ] \
   || { echo "!! Opus nnet.c: MAX_CONV_INPUTS_ALL not found to raise — refusing (RADE would overrun its stack)"; exit 1; }
 
+# ★★ rade_c's decoder call site: `int arch = 0;` → this CPU's DNN path (see the header). Exactly one line, or refuse.
+mkdir -p "$B/rade"
+sed 's/^\( *\)int arch = 0;$/\1int arch = vrade_rx_arch();  \/\* VibeSDR: Opus DNN runtime dispatch (build-rade.sh) \*\//' \
+    "$RC/src/rade_rx.c" > "$B/rade/rade_rx.c"
+{ [ "$(grep -c 'int arch = vrade_rx_arch();' "$B/rade/rade_rx.c" || true)" -eq 1 ] && ! grep -q 'int arch = 0;' "$B/rade/rade_rx.c"; } \
+  || { echo "!! rade_c rade_rx.c: the decoder's 'int arch = 0;' not found once — refusing (it would never dispatch)"; exit 1; }
+
+# ── which SIMD family this target is, asked of the compiler with the caller's flags (FREEDV.md "SIMD") ────────────────
+PRE="$($CC ${CFLAGS:-} -dM -E -x c /dev/null)"
+has() { case "$PRE" in *"#define $1 "*) return 0 ;; *) return 1 ;; esac; }
+DNN_DEFS=(); DNN_C=(); ISA=scalar
+if { has __x86_64__ || has __i386__; } && has __SSE2__; then
+  ISA=x86
+  # ★ SSE/SSE2 presumed (the package floor); SSE4.1 and AVX2+FMA only when CPUID says so. CPU_INFO_BY_C: <cpuid.h>.
+  DNN_DEFS=(-DOPUS_HAVE_RTCD -DCPU_INFO_BY_C -DOPUS_X86_MAY_HAVE_SSE -DOPUS_X86_PRESUME_SSE -DOPUS_X86_MAY_HAVE_SSE2
+            -DOPUS_X86_PRESUME_SSE2 -DOPUS_X86_MAY_HAVE_SSE4_1 -DOPUS_X86_MAY_HAVE_AVX2)
+  DNN_C=("$OP/celt/x86/x86cpu.c" "$OP/dnn/x86/x86_dnn_map.c" "$OP/dnn/x86/nnet_sse2.c" "$OP/dnn/x86/nnet_sse4_1.c"
+         "$OP/dnn/x86/nnet_avx2.c")
+elif has __aarch64__; then
+  ISA=arm64
+  DNN_DEFS=(-DOPUS_HAVE_RTCD -DOPUS_ARM_MAY_HAVE_NEON_INTR -DOPUS_ARM_PRESUME_NEON_INTR -DOPUS_ARM_PRESUME_AARCH64_NEON_INTR
+            -DOPUS_ARM_MAY_HAVE_NEON -DOPUS_ARM_MAY_HAVE_DOTPROD)
+  DNN_C=("$OP/celt/arm/armcpu.c" "$OP/dnn/arm/arm_dnn_map.c" "$OP/dnn/arm/nnet_neon.c" "$OP/dnn/arm/nnet_dotprod.c")
+elif has __arm__ && has __ARM_NEON; then
+  ISA=armhf
+  DNN_DEFS=(-DOPUS_HAVE_RTCD -DOPUS_ARM_MAY_HAVE_NEON_INTR -DOPUS_ARM_PRESUME_NEON_INTR -DOPUS_ARM_MAY_HAVE_NEON
+            -DOPUS_ARM_MAY_HAVE_DOTPROD)
+  DNN_C=("$OP/celt/arm/armcpu.c" "$OP/dnn/arm/arm_dnn_map.c" "$OP/dnn/arm/nnet_neon.c" "$OP/dnn/arm/nnet_dotprod.c")
+fi
+echo "==> RADE DNN code: $ISA$([ "$ISA" = scalar ] || echo ' (runtime dispatch)')"
+
 INC=(-I"$OP/include" -I"$OP/celt" -I"$OP/silk" -I"$OP/dnn" -I"$OP" -I"$B/fb/pipeline" -I"$WRAP" -I"$RC/src")
 DEFS=(-DOPUS_BUILD -DUSE_ALLOCA -DHAVE_LRINT -DHAVE_LRINTF -DDISABLE_DEBUG_FLOAT -DNDEBUG)
 FLAGS=(-O2 -fPIC -w -ffunction-sections -fdata-sections)
 case "$(uname -s)" in Darwin) ;; *) FLAGS+=(-Wa,--noexecstack) ;; esac
 
 COMMON_C=("$RC/src/rade_dsp.c" "$RC/src/rade_ofdm.c" "$RC/src/rade_bpf.c"
-          "$B/opus/nnet.c" "$OP/dnn/nnet_default.c" "$OP/dnn/parse_lpcnet_weights.c" "$OP/dnn/freq.c" "$OP/dnn/burg.c" "$OP/dnn/lpcnet_tables.c"
+          "$B/opus/nnet.c" "$OP/dnn/nnet_default.c" ${DNN_C[@]+"${DNN_C[@]}"} "$WRAP/vibe_rade_arch.c"
+          "$OP/dnn/parse_lpcnet_weights.c" "$OP/dnn/freq.c" "$OP/dnn/burg.c" "$OP/dnn/lpcnet_tables.c"
           "$OP/celt/kiss_fft.c" "$OP/celt/mathops.c" "$OP/celt/celt_lpc.c" "$OP/celt/pitch.c" "$OP/celt/entcode.c")
 COMMON_CXX=("$B/fb/pipeline/rade_text.cpp" "$B/fb/pipeline/ldpc_decode.cpp" "$B/fb/pipeline/ldpc_encode.cpp")
-RX_C=("$RC/src/rade_acq.c" "$WRAP/vibe_rade_acq.c" "$RC/src/rade_rx.c" "$RC/src/rade_dec.c" "$RC/src/rade_dec_data.c"
+RX_C=("$RC/src/rade_acq.c" "$WRAP/vibe_rade_acq.c" "$B/rade/rade_rx.c" "$RC/src/rade_dec.c" "$RC/src/rade_dec_data.c"
       "$OP/dnn/fargan.c" "$OP/dnn/fargan_data.c" "$WRAP/vibe_rade.c")
 TX_C=("$RC/src/rade_tx.c" "$RC/src/rade_enc.c" "$RC/src/rade_enc_data.c"
       "$OP/dnn/lpcnet_enc.c" "$OP/dnn/pitchdnn.c" "$OP/dnn/pitchdnn_data.c" "$WRAP/vibe_rade_tx.c")
 
 # ★ every object compiled once, in parallel (the two weight files are ~24 MB of C each and dominate)
 # ★★ The pilot search (vibe_rade_acq.c): rade_c's rade_acq_detect_pilots is renamed where it is defined and ours takes its
-#    name — the same arithmetic in a loop order the compiler vectorises, at -O3 (see that file: the search was 3× the cost
-#    of decoding). -fno-math-errno lets the |Dt| loop vectorise too; nothing there reads errno.
+#    name — the same arithmetic in a register-friendly loop order, written in NEON and SSE2 by hand (GCC vectorised none of
+#    them; see that file: the search was 3× the cost of decoding), at -O3. -fno-math-errno lets the |Dt| loop vectorise;
+#    nothing there reads errno.
+# ★★ DNN dispatch: Opus's layer code, its tables and its CPU detection — and our arch helper — get the RTCD defines; nothing
+#    else does (fargan.c, pitch.c and the rest keep the plain build, so celt's own pitch dispatch is never pulled in).
+#    Each dearer tier gets its ISA flags on ITS file only, as Opus's own build does. ★ arm64's NEON tier and the C table
+#    entries are built for plain ARMv8-A: Apple's clang turns the dot product on by default, which would make "neon" the
+#    dot-product code and leave nothing to fall back to or compare against.
 compile() {   # compile <src> <obj>
   local extra=()
   case "$1" in
     */rade_acq.c)       extra=(-Drade_acq_detect_pilots=vrade_upstream_acq_detect_pilots -Drade_acq_check_pilots=vrade_upstream_acq_check_pilots) ;;
     */vibe_rade_acq.c)  extra=(-O3 -fno-math-errno) ;;
+    */rade_rx.c)        extra=(-include "$WRAP/vibe_rade.h") ;;   # ★ declares vrade_rx_arch() for the line changed above
+    */nnet.c|*/x86cpu.c|*/x86_dnn_map.c|*/armcpu.c|*/arm_dnn_map.c|*/vibe_rade_arch.c) extra=(${DNN_DEFS[@]+"${DNN_DEFS[@]}"}) ;;
+    */nnet_default.c|*/nnet_neon.c)
+      extra=(${DNN_DEFS[@]+"${DNN_DEFS[@]}"}); [ "$ISA" != arm64 ] || extra+=(-march=armv8-a) ;;
+    */nnet_sse2.c)      extra=("${DNN_DEFS[@]}" -msse2) ;;
+    */nnet_sse4_1.c)    extra=("${DNN_DEFS[@]}" -msse4.1) ;;
+    */nnet_avx2.c)      extra=("${DNN_DEFS[@]}" -mavx -mfma -mavx2) ;;
+    */nnet_dotprod.c)
+      extra=("${DNN_DEFS[@]}" -march=armv8.2-a+dotprod); [ "$ISA" != armhf ] || extra+=(-mfpu=neon-fp-armv8) ;;
   esac
   case "$1" in
     *.cpp) $CXX ${CXXFLAGS:-${CFLAGS:-}} -std=c++17 "${DEFS[@]}" "${INC[@]}" "${FLAGS[@]}" -c "$1" -o "$2" ;;
@@ -143,10 +198,21 @@ for a in librade_vibe librade_vibe_tx; do
 done
 # ★ …and nothing of Opus or RADE is left UNdefined: it would bind to libopus.a's copy at the server's link (or not link)
 for a in librade_vibe librade_vibe_tx; do
-  u="$("$NM" -u "$PREFIX/lib/$a.a" 2>/dev/null | awk 'NF && $NF !~ /:$/ {print $NF}' | grep -E '^_?(silk_|celt_|opus_|compute_|fargan|lpcnet|pitchdnn|rade_|linear_init|conv2d_init|parse_weights|kiss_|burg|ldpc)' || true)"
+  u="$("$NM" -u "$PREFIX/lib/$a.a" 2>/dev/null | awk 'NF && $NF !~ /:$/ {print $NF}' | grep -E '^_?(silk_|celt_|opus_|compute_|fargan|lpcnet|pitchdnn|rade_|linear_init|conv2d_init|parse_weights|kiss_|burg|ldpc|DNN_|vrade_rx_arch)' || true)"
   [ -z "$u" ] || { echo "!! $a.a leaves Opus/RADE symbols undefined:"; echo "$u" | sort -u | head; exit 1; }
 done
 [ "$("$NM" -g --defined-only "$PREFIX/lib/librade_vibe.a" | grep -c -E ' T _?vrade_rx_process$' || true)" -gt 0 ] \
   || { echo "!! librade_vibe.a has no vrade_rx_process — refusing"; exit 1; }
+# ★ …and every tier the dispatch table names is INSIDE the receiver (as local code): a missing tier would be a table entry
+#   pointing at nothing, or a build that quietly never leaves C.
+case "$ISA" in
+  x86)         tiers="compute_linear_sse2 compute_linear_sse4_1 compute_linear_avx2 opus_select_arch" ;;
+  arm64|armhf) tiers="compute_linear_neon compute_linear_dotprod opus_select_arch" ;;
+  *)           tiers="" ;;
+esac
+for t in $tiers; do
+  "$NM" "$PREFIX/lib/librade_vibe.a" 2>/dev/null | grep -E " [Tt] _?$t\$" >/dev/null \
+    || { echo "!! librade_vibe.a has no $t — the $ISA dispatch is incomplete; refusing"; exit 1; }
+done
 ls -l "$PREFIX/lib/librade_vibe.a" "$PREFIX/lib/librade_vibe_tx.a"
-echo "==> RADE V1 receiver built (librade_vibe.a)"
+echo "==> RADE V1 receiver built (librade_vibe.a, DNN: $ISA)"

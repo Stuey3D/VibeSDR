@@ -47,6 +47,9 @@ static int rx_init(struct vrade_rx* r) {
     if (rade_rx_init(&r->rx, NULL, 3, 1, 1) != 0) return -1;
     r->rx.verbose = 0;
     fargan_init(&r->fargan);
+    /* ★ FARGAN on the same DNN path as the decoder (vibe_rade_arch.c): fargan_init asked opus_select_arch() itself, which
+     *   is right but cannot see the tests' VIBE_RADE_ARCH — both networks must be on the path a test names. */
+    r->fargan.arch = vrade_rx_arch();
     r->fargan_ready = 0;
     r->cont_frames = 0;
     return 0;
@@ -163,7 +166,7 @@ long vrade_bench_decode(int frames) {
     for (int m = 0; m < frames; m++) {
         for (int c = 0; c < RADE_NZMF; c++) {
             for (int i = 0; i < RADE_LATENT_DIM; i++) { s = s * 1103515245u + 12345u; z[i] = ((float)((s >> 9) & 0xffff) / 32768.f - 1.f) * 0.7f; }
-            rade_core_decoder(&r->rx.dec_state, &r->rx.dec_model, dec, z, 0);
+            rade_core_decoder(&r->rx.dec_state, &r->rx.dec_model, dec, z, vrade_rx_arch());
             for (int k = 0; k < RADE_FRAMES_PER_STEP; k++) {
                 memset(feat, 0, sizeof(feat));
                 for (int j = 0; j < RADE_NUM_FEATURES; j++) feat[j] = dec[k * (RADE_NUM_FEATURES + 1) + j];

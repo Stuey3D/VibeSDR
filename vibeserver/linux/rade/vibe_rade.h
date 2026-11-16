@@ -63,6 +63,12 @@ int vrade_text_eoo_bits(const char* callsign, float* bits);
  *  does not depend on the values). Returns the speech samples made, so the work cannot be optimised away. */
 long vrade_bench_decode(int frames);
 
+/** ★ Which of Opus's DNN code paths the decoder and FARGAN run on (runtime dispatch, docs/v12/FREEDV.md "SIMD"): the
+ *  table index opus_select_arch() picked for this CPU, asked once. VIBE_RADE_ARCH (tests only) forces a lower one.
+ *  vrade_rx_arch_name() names it, e.g. "x86 avx2", "arm dotprod", "arm neon (forced; this CPU has dotprod)", "scalar c". */
+int vrade_rx_arch(void);
+const char* vrade_rx_arch_name(void);
+
 /* ── the transmitter (tests and the benchmark only) ─────────────────────────────────────────────────────────────── */
 typedef struct vrade_tx vrade_tx;
 vrade_tx* vrade_tx_open(void);
