@@ -4,7 +4,7 @@
  *   Run: npx tsx scripts/test_m17.ts
  * ★ SILENT: no audio, no network.
  */
-import { M17_PASSBAND, m17Info, m17MergeMsgs, m17MsgLine, m17Offered, m17Position, m17StatusMessage, m17Vts, parseM17,
+import { M17_PASSBAND, m17Info, m17Line, m17MergeMsgs, m17MsgLine, m17Offered, m17Position, m17StatusMessage, m17Vts, parseM17,
          type M17Msg } from '../src/services/m17.ts';
 
 let pass = 0, fail = 0;
@@ -48,6 +48,8 @@ ok(m17Position({ lat: 52.62346, lon: -1.12346, alt: 120.5, spd: 48.5 }) === '52.
 ok(m17MsgLine(p.msg!) === 'SMS G4ABC → M0XYZ: Hello from M17' && m17MsgLine({ id: 1, ptype: 2, bytes: 41, src: 'M0XYZ' }) === 'Packet (type 2, 41 bytes) from M0XYZ', 'packets as lines');
 ok(m17Info(null) === '' && m17Info(s0) === '', 'nothing to say → empty');
 ok(m17Info(parseM17({ type: 'm17', state: 'sync', via: 'G7XYZ via M17-GBR A', text: 'Hi', ber: 7 })) === 'G7XYZ via M17-GBR A · Hi · 7 % errors', 'via, text, then the error rate when it is high');
+ok(m17Line(parseM17({ type: 'm17', state: 'sync', kind: 'voice', src: 'G4ABC', dst: '@ALL', text: 'VIBE TEST' })) === 'M17 · G4ABC · VIBE TEST'
+   && m17Line(s0) === 'M17 · searching', 'one line for a bar with one text: the VTS line, then the info');
 let list: M17Msg[] = [];
 list = m17MergeMsgs(list, p); list = m17MergeMsgs(list, p);
 ok(list.length === 1, 'a packet repeated in every report is kept once');

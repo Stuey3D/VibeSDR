@@ -132,6 +132,11 @@ export function m17Info(s: M17State | null): string {
   return parts.join(' · ');
 }
 
+/** ★ The VTS line and its info as one line, for a bar with one text (the app, the R36S): "M17 · G4ABC · VIBE TEST". */
+export function m17Line(s: M17State | null): string {
+  return [m17Vts(s), m17Info(s)].filter(Boolean).join(' · ');
+}
+
 /** ★ The packets heard, newest first, kept across reports (each report carries only the newest, and repeats it). A new
  *  receiver (a retune) numbers from 1 again, so a packet is known by its number AND its contents. */
 export function m17MergeMsgs(list: M17Msg[], s: M17State | null, max = 20): M17Msg[] {

@@ -166,7 +166,7 @@ import { drmOffered, type DrmIq, type DrmState } from '../services/drm';
 import { DrmQualityMeter } from '../utils/drmQuality';
 import { amSyncOffered, amSyncReadout, AM_SYNC_LABEL, AM_SYNC_NAME, isAmFamily, type AmSyncId, type AmSyncState } from '../services/amSync';   // ★ V12
 import { freedvOffered, freedvVts, FREEDV_LABEL, FREEDV_NAME, type FreeDvChoice, type FreeDvState, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV
-import { m17Offered, m17Vts, m17Info, M17_LABEL, M17_NAME, type M17State } from '../services/m17';   // ★ V12 M17
+import { m17Offered, m17Line, M17_LABEL, M17_NAME, type M17State } from '../services/m17';   // ★ V12 M17
 import { autoBwOffered, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
 import { landingSpotBand, bandPassband } from '../utils/digiModes';
@@ -12630,8 +12630,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  exactly as a tone; leaving the mode drops it (freedvState is cleared) and the tone's own rule is back. */
   /* ★★ V12 M17 the same, with what the station sends besides its voice after it (m17.ts m17Info: the relayed station, META
    *  text, a position, the newest SMS): "M17 · G4ABC · VIBE TEST", "M17 · last G4ABC · SMS G4ABC → M0XYZ: 73". */
-  const m17Line = status.mode === 'm17' && m17Cap ? [m17Vts(m17State), m17Info(m17State)].filter(Boolean).join(' · ') : '';
-  const vtsModeLine = status.mode === 'freedv' && freedvCap.length ? freedvVts(freedvState) : m17Line || toneLabel;   // ★ VibeServer's FreeDV / M17 only
+  const m17Text = status.mode === 'm17' && m17Cap ? m17Line(m17State) : '';
+  const vtsModeLine = status.mode === 'freedv' && freedvCap.length ? freedvVts(freedvState) : m17Text || toneLabel;   // ★ VibeServer's FreeDV / M17 only
   // ★ V12 tone ID: a new tone (or its end) re-draws the line — after a bookmark's name, or alone. A live station (RDS /
   //   DAB / a DMR caller) owns the bar, and a notice keeps its turn (vtsNoticeUntil); the next tune picks the tone up.
   useEffect(() => {

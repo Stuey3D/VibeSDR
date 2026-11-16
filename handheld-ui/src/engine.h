@@ -13,6 +13,7 @@
 #include "http.h"
 #include "json.h"
 #include "freedv.h"
+#include "m17.h"
 #include "ws.h"
 
 #include <atomic>
@@ -33,6 +34,7 @@ namespace hh {
  *  side follows the dial (`hz`, freedv.h: LSB below 10 MHz) until the server's report says otherwise. */
 inline bool modePassband(const std::string& m, int& lo, int& hi, double hz = 0) {
     if (m == "freedv") { freedvPassband(freedvSidebandAt(hz), lo, hi); return true; }
+    if (m == "m17") { m17Passband(lo, hi); return true; }   // ★ V12 M17: its 9 kHz channel (the server keeps its own 12.5)
     struct E { const char* m; int lo, hi; };
     static const E t[] = {
         {"usb", 50, 2700}, {"lsb", -2700, -50}, {"am", -5000, 5000}, {"sam", -5000, 5000},
@@ -161,6 +163,7 @@ public:
         spec_.sendText(b);
         setBandwidth(lo, hi);
         if (m == "freedv") spec_.sendText(freedvSubMessage(""));   // ★ V12 FreeDV: ask for the current report (sub, side, sync)
+        if (m == "m17") spec_.sendText(m17StatusMessage());       // ★ V12 M17 likewise
     }
     void setBandwidth(int lo, int hi) {
         st_.bwLow = lo; st_.bwHigh = hi;

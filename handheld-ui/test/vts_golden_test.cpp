@@ -4,6 +4,7 @@
 // Silent: no GL, no audio.   handheld-ui/test/run_vts_golden.sh
 #include "../src/vts_core.h"
 #include "../src/freedv.h"
+#include "../src/m17.h"
 
 #include <cstdio>
 #include <fstream>
@@ -111,6 +112,14 @@ static int golden(const char* path) {
             double hz; std::string sb; is >> hz >> sb;
             int lo, hi; hh::freedvPassband(sb, lo, hi);
             got = std::string(hh::freedvSidebandAt(hz)) + " " + std::to_string(lo) + " " + std::to_string(hi);
+        } else if (op == "MV") {
+            std::string js; is >> js;
+            hh::M17State st;
+            if (hh::parseM17(hh::Json::parse(unhex(js)), st)) got = "1 " + hex(hh::m17Vts(&st)) + " " + hex(hh::m17Info(&st)) + " " + hex(hh::m17Line(&st));
+            else got = "0 " + hex(hh::m17Vts(nullptr));
+        } else if (op == "MO") {
+            std::string js; is >> js;
+            got = hh::m17Offered(hh::Json::parse(unhex(js))) ? "1" : "0";
         } else { std::fprintf(stderr, "unknown op: %s\n", line.c_str()); fails++; continue; }
         expect(got == want, "line " + std::to_string(n) + ": " + lhs + "\n   want " + want + "\n   got  " + got);
     }
@@ -277,6 +286,22 @@ static void scenarios() {
         expect(r.line() == "FreeDV 700D \xc2\xb7 6 dB \xc2\xb7 G4ABC", "FreeDV back after the notice: " + r.line());
         r.in.mode = "usb"; r.in.fdvLine = ""; r.step(600);
         expect(!r.bar.shown() && r.sc.liveName().empty(), "leaving FreeDV clears it");
+    }
+    {   // ★ V12 M17: held while in the mode like FreeDV's line, follows the report, a notice takes its turn, leaving clears it
+        Rig r; r.in.mode = "m17"; r.in.vfoHz = 433425000; r.step(100);
+        r.in.m17Line = hh::m17Line(nullptr); r.step(400);
+        expect(r.line() == "M17 \xc2\xb7 searching", "M17 searching: " + r.line());
+        expect(r.bar.shown() && r.bar.shown()->badge.empty() && r.bar.shown()->hold, "M17: held, no mark");
+        hh::M17State m; m.sync = true; m.kind = "voice"; m.src = "G4ABC"; m.dst = "@ALL"; m.text = "VIBE TEST";
+        r.in.m17Line = hh::m17Line(&m); r.step(100);
+        expect(r.line() == "M17 \xc2\xb7 G4ABC \xc2\xb7 VIBE TEST", "M17 in sync: " + r.line());
+        expect(r.sc.liveName() == r.in.m17Line, "M17 holds the station display");
+        r.in.noticeNew = true; r.in.noticeText = "A server notice"; r.step(100);
+        expect(r.bar.shown() && r.bar.shown()->name == "A server notice", "a notice takes its turn");
+        r.step(7600);
+        expect(r.line() == "M17 \xc2\xb7 G4ABC \xc2\xb7 VIBE TEST", "M17 back after the notice: " + r.line());
+        r.in.mode = "nfm"; r.in.m17Line = ""; r.step(600);
+        expect(!r.bar.shown() && r.sc.liveName().empty(), "leaving M17 clears it");
     }
     {   // the tone, NFM only
         Rig r; r.in.mode = "nfm"; r.in.vfoHz = 145500000; r.step(100);
