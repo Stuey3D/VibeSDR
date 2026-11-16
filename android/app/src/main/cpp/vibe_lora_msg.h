@@ -13,7 +13,7 @@
 namespace vibelora {
 
 struct Msg {
-    std::string proto;        ///< "lorawan" | "meshtastic" | "meshcore" | "lora" (an unrecognised LoRa frame)
+    std::string proto;        ///< "lorawan" | "meshtastic" | "meshcore" | "loraaprs" | "fanet" | "meshcom" | "lora" (unrecognised)
     std::string node;         ///< the sender as the network names it: "!a1b2c3d4" · MeshCore key prefix "a1b2c3d4" · DevAddr "260B1234"
     std::string what;         ///< "text", "position", "nodeinfo", "telemetry", "advert", "uplink", "join", "private", …
     // ── a node's own description (mesh networks publish these) ──
@@ -37,6 +37,14 @@ struct Msg {
     bool adr = false, ack = false, fpending = false, adrAckReq = false;
     std::string net;          ///< "The Things Network" when the DevAddr says so
     std::string joinEui, devEui;
+    // ── V12 LoRa-APRS / FANET / MeshCom (vibe_lora_ham.h) ──
+    double speedKmh = NAN, course = NAN, climb = NAN;   ///< ground speed, course over ground (°), climb (m/s)
+    int acType = -1;          ///< FANET aircraft type (0–7), -1 = not an aircraft
+    int ground = -1;          ///< FANET ground-tracking state (0–15), -1 = none
+    bool online = false;      ///< FANET: the pilot's own "online tracking" bit (consent to public tracking)
+    std::string sym, aprsLine, path;   ///< APRS symbol (table + code), the APRS decoder's readable line, the digipeater path
+    double windDir = NAN, windKmh = NAN, gustKmh = NAN;  ///< a FANET weather station
+    uint32_t msgId = 0; int hwId = -1, fcsOk = -1;       ///< MeshCom: message id, hardware id, FCS checked (1/0, -1 = absent)
     // ── the radio side (filled by the service) ──
     int sf = 0; double bw = 0; int cr = 0; uint8_t sync = 0; int len = 0;
     double freqHz = 0; float snrDb = 0, levelDb = -99;

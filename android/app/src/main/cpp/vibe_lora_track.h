@@ -36,8 +36,28 @@ struct Event { std::string kind, name, line; double freqHz = 0; };
 //     (a role heard later can still promote a router) and never goes further.
 //   · No message text is ever part of a position (NodeFix has no field one could travel in).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-/** The node's type as the map draws it: "repeater" | "room" | "sensor" | "companion". */
-inline const char* nodeType(const std::string& proto, const std::string& role) {
+/* ★ V12 2026-11-16 LoRa-APRS, FANET and MeshCom (vibe_lora_ham.h):
+ *   · LoRa-APRS and MeshCom are AMATEUR radio: callsigns and positions are public by design — exact, as the APRS decoder
+ *     shows them. Digipeaters / iGates (APRS symbols # and &) draw as repeaters, weather stations (_) as sensors.
+ *   · FANET: an aircraft or a person on the ground is a PERSON. Exact only when the pilot's own "online tracking" bit is
+ *     set (`consent` below — their choice to be tracked publicly); otherwise ~1 km and approximate, as a companion node.
+ *     A FANET ground station (weather, internet gateway) is infrastructure. */
+inline bool amateur(const std::string& proto) { return proto == "loraaprs" || proto == "meshcom"; }
+/** The node's type as the map draws it: "repeater" | "room" | "sensor" | "companion" | "aircraft". */
+inline const char* nodeType(const std::string& proto, const std::string& role, const std::string& sym = "") {
+    if (amateur(proto)) {
+        const char c = sym.size() == 2 ? sym[1] : 0;
+        if (c == '#' || c == '&') return "repeater";
+        if (c == '_') return "sensor";
+        return "companion";
+    }
+    if (proto == "fanet") {
+        if (role == "weather station") return "sensor";
+        if (role == "internet gateway" || role == "ground station") return "repeater";
+        static const char* air[] = {"aircraft", "paraglider", "hang glider", "balloon", "glider", "powered aircraft", "helicopter", "drone"};
+        for (const char* a : air) if (role == a) return "aircraft";
+        return "companion";
+    }
     if (proto == "meshcore") {
         if (role == "repeater") return "repeater";
         if (role == "room server") return "room";
@@ -52,15 +72,17 @@ inline const char* nodeType(const std::string& proto, const std::string& role) {
     return "companion";
 }
 /** True when the node's position is published exactly (see the rule above). */
-inline bool infrastructure(const std::string& proto, const std::string& role) {
-    return std::string(nodeType(proto, role)) != "companion";
+inline bool infrastructure(const std::string& proto, const std::string& role, const std::string& sym = "") {
+    const std::string t = nodeType(proto, role, sym);
+    return t == "repeater" || t == "room" || t == "sensor";
 }
 struct PubPos { double lat = NAN, lon = NAN; bool approx = false; };
 /** The position as it may leave the node table. */
-inline PubPos publishedPos(const std::string& proto, const std::string& role, double lat, double lon) {
+inline PubPos publishedPos(const std::string& proto, const std::string& role, double lat, double lon, bool consent = false,
+                           const std::string& sym = "") {
     PubPos p;
     if (!(lat == lat) || !(lon == lon)) return p;
-    if (infrastructure(proto, role)) { p.lat = lat; p.lon = lon; return p; }
+    if (amateur(proto) || (proto == "fanet" && consent) || infrastructure(proto, role, sym)) { p.lat = lat; p.lon = lon; return p; }
     p.lat = std::round(lat * 100.0) / 100.0; p.lon = std::round(lon * 100.0) / 100.0; p.approx = true;
     if (p.lat == 0) p.lat = 0; if (p.lon == 0) p.lon = 0;   // ★ never "-0.00"
     return p;
@@ -83,6 +105,9 @@ public:
         if (m.proto == "meshtastic") key = "mt:" + m.node;
         else if (m.proto == "meshcore") key = m.what == "advert" ? "mc:" + m.node : "mc:traffic";
         else if (m.proto == "lorawan") key = "lw:" + (m.node.empty() ? std::string("joinaccept") : m.node);
+        else if (m.proto == "loraaprs") key = "la:" + m.node;
+        else if (m.proto == "fanet") key = "fn:" + m.node;
+        else if (m.proto == "meshcom") key = "mx:" + m.node;
         else { char b[64]; std::snprintf(b, sizeof b, "lora:%.0f:%d:%02X", m.freqHz / 1e4, m.sf, m.sync); key = b; }
         Row& r = rows_[key];
         const bool fresh = r.count == 0;
@@ -92,7 +117,16 @@ public:
         if (!m.longName.empty()) r.longName = m.longName;
         if (!m.shortName.empty()) r.shortName = m.shortName;
         if (!m.hw.empty()) r.hw = m.hw;
-        if (!m.role.empty()) r.role = m.role;
+        if (!m.role.empty() && !(m.proto == "fanet" && m.what == "name")) r.role = m.role;
+        // ★ V12 LoRa-APRS / FANET / MeshCom: movement, the APRS symbol and line, the pilot's tracking choice, a station's wind
+        if (m.speedKmh == m.speedKmh) r.speed = m.speedKmh;
+        if (m.course == m.course) r.course = m.course;
+        if (m.climb == m.climb) r.climb = m.climb;
+        if (m.proto == "fanet" && (m.what == "tracking" || m.what == "ground")) r.online = m.online;
+        if (!m.sym.empty() && m.lat == m.lat) r.sym = m.sym;
+        if (!m.path.empty()) r.path = m.path;
+        if (m.windKmh == m.windKmh) { r.wind = m.windKmh; r.windDir = m.windDir; r.gust = m.gustKmh; }
+        if ((m.proto == "loraaprs" || m.proto == "meshcom") && m.text.empty()) r.lineHam = hamLine(m);
         if (m.lat == m.lat) { r.lat = m.lat; r.lon = m.lon; r.posT = t; if (m.altM == m.altM) r.alt = m.altM; r.prec = m.precisionBits; }
         if (m.batt >= 0) r.batt = m.batt;
         if (m.volt == m.volt) r.volt = m.volt;
@@ -116,7 +150,7 @@ public:
         for (const Text& x : msgs_) if (x.net == m.proto && x.text == m.text && (x.node == m.node || (m.proto == "meshcore" && x.from == m.from)) && t - x.t < 600) dup = true;
         if (!m.text.empty() && !dup) {
             Text x; x.t = t; x.net = m.proto; x.node = m.node; x.text = m.text; x.channel = m.channel;
-            x.from = m.proto == "meshcore" ? m.from : (r.longName.empty() ? m.node : r.longName);
+            x.from = (m.proto == "meshcore" || amateur(m.proto)) ? m.from : (r.longName.empty() ? m.node : r.longName);
             x.freq = m.freqHz;
             msgs_.push_back(x);
             while (msgs_.size() > kMaxMsgs) msgs_.pop_front();
@@ -125,8 +159,8 @@ public:
             ++texts_;
             news = true;
             // ★ the gallery keeps each public message as its own row ("meshmsg", vibe_ism_gallery.h)
-            if (ev) ev->push_back({"meshmsg", x.from.empty() ? std::string(m.proto == "meshcore" ? "MeshCore" : "Meshtastic") : x.from,
-                                   (m.proto == "meshcore" ? std::string("MeshCore") : std::string("Meshtastic")) + mkDot() + (x.channel.empty() ? "" : x.channel + mkDot())
+            if (ev) ev->push_back({"meshmsg", x.from.empty() ? std::string(makeOf(m.proto)) : x.from,
+                                   std::string(makeOf(m.proto)) + mkDot() + (x.channel.empty() ? "" : x.channel + mkDot())
                                    + (x.from.empty() ? "" : x.from + ": ") + "\xe2\x80\x9c" + x.text + "\xe2\x80\x9d", m.freqHz});
         }
         if (m.what == "position" || m.what == "advert" || m.what == "nodeinfo") news = news || fresh;
@@ -147,7 +181,9 @@ public:
             // ★ mesh nodes beacon every 15 min to 12 h (a MeshCore repeater's flood advert is 12 h by default): kept 24 h, so
             //   the map still has them between adverts. LoRaWAN devices and stray frames: 2 h. Newest wins: past kMaxRows the
             //   least recently heard row goes — the table never grows past it (256 MB boards).
-            const double keep = (it->second.proto == "meshtastic" || it->second.proto == "meshcore") ? kMeshKeepSec : 2 * 3600.0;
+            // ★ LoRa-APRS / MeshCom 6 h (the APRS decoder's keep), FANET 2 h (a flight)
+            const std::string& pr = it->second.proto;
+            const double keep = (pr == "meshtastic" || pr == "meshcore") ? kMeshKeepSec : amateur(pr) ? 6 * 3600.0 : 2 * 3600.0;
             if (t - it->second.last > keep) it = rows_.erase(it); else ++it;
         }
         while (rows_.size() > kMaxRows) {
@@ -191,11 +227,15 @@ private:
         int batt = -1; double volt = NAN, temp = NAN, hum = NAN, hpa = NAN, chUtil = NAN;
         int hops = -1, fcnt = -1, fport = -1, encLen = -1;
         bool found = false;
+        double speed = NAN, course = NAN, climb = NAN, wind = NAN, windDir = NAN, gust = NAN;
+        bool online = false;
+        std::string sym, path, lineHam;
         std::deque<Text> msgs;
     };
     static std::string hex2(uint8_t v) { char b[4]; std::snprintf(b, sizeof b, "%02X", v); return b; }
     static const char* makeOf(const std::string& p) {
-        return p == "meshtastic" ? "Meshtastic" : p == "meshcore" ? "MeshCore" : p == "lorawan" ? "LoRaWAN" : "LoRa";
+        return p == "meshtastic" ? "Meshtastic" : p == "meshcore" ? "MeshCore" : p == "lorawan" ? "LoRaWAN"
+             : p == "loraaprs" ? "LoRa APRS" : p == "fanet" ? "FANET" : p == "meshcom" ? "MeshCom" : "LoRa";
     }
     static std::string nameOf(const Row& r) {
         if (r.proto == "meshcore" && r.node.empty()) return "MeshCore traffic";
@@ -211,6 +251,26 @@ private:
         const std::string d = mkDot();
         if (r.proto == "lorawan") return r.lineLw + d + "SF" + std::to_string(r.sf);
         if (r.proto == "lora") return r.lineLora + (r.count > 1 ? d + std::to_string(r.count) + " frames" : "");
+        if (amateur(r.proto)) {
+            std::string s = r.lineHam.empty() ? std::string(makeOf(r.proto)) + d + r.node : r.lineHam;
+            if (!r.msgs.empty()) s += d + "\xe2\x80\x9c" + r.msgs.back().text + "\xe2\x80\x9d";
+            return s;
+        }
+        if (r.proto == "fanet") {
+            std::string s = "FANET" + d + nameOf(r);
+            if (!r.role.empty()) s += d + r.role;
+            if (r.alt == r.alt && nodeType(r.proto, r.role) == std::string("aircraft")) s += d + f1(r.alt, 0) + " m";
+            if (r.speed == r.speed && r.speed >= 1) s += d + f1(r.speed, 0) + " km/h";
+            if (r.climb == r.climb && std::fabs(r.climb) >= 0.1) s += d + (r.climb > 0 ? "+" : "") + f1(r.climb, 1) + " m/s";
+            if (r.wind == r.wind) s += d + "wind " + f1(r.wind, 0) + " km/h from " + f1(r.windDir, 0) + "\xc2\xb0";
+            if (r.temp == r.temp) s += d + f1(r.temp, 1) + " \xc2\xb0" "C";
+            if (r.lat == r.lat) {
+                const PubPos p = publishedPos(r.proto, r.role, r.lat, r.lon, r.online);
+                s += d + (p.approx ? f1(p.lat, 2) + ", " + f1(p.lon, 2) + " approx." : f1(p.lat, 4) + ", " + f1(p.lon, 4));
+            }
+            if (!r.msgs.empty()) s += d + "\xe2\x80\x9c" + r.msgs.back().text + "\xe2\x80\x9d";
+            return s;
+        }
         if (r.proto == "meshcore" && r.node.empty())
             return "MeshCore" + d + "traffic" + d + std::to_string(r.count) + (r.count == 1 ? " packet" : " packets")
                  + (r.priv ? d + std::to_string(r.priv) + " encrypted" : "") + d + "last: " + r.lastWhat;
@@ -239,11 +299,16 @@ private:
         if (r.found) o += ",\"onAir\":1";   // ★ found on air, not a standard channel
         str("chan", r.channel); str("net", r.net); str("mtype", r.mtype); str("what", r.lastWhat);
         if (r.lat == r.lat) {
-            const PubPos p = publishedPos(r.proto, r.role, r.lat, r.lon);
+            const PubPos p = publishedPos(r.proto, r.role, r.lat, r.lon, r.online, r.sym);
             num("lat", p.lat, p.approx ? 2 : 6); num("lon", p.lon, p.approx ? 2 : 6); if (p.approx) o += ",\"approx\":1";
             num("posAge", std::max(0.0, t - r.posT), 0); if (r.prec) num("prec", r.prec, 0);
         }
-        if (r.proto == "meshtastic" || r.proto == "meshcore") str("ntype", nodeType(r.proto, r.role));
+        if (r.proto == "meshtastic" || r.proto == "meshcore" || amateur(r.proto) || r.proto == "fanet") str("ntype", nodeType(r.proto, r.role, r.sym));
+        // ★ V12 LoRa-APRS / FANET / MeshCom
+        num("speed", r.speed, 0); num("course", r.course, 0); num("climb", r.climb, 1);
+        num("wind", r.wind, 0); num("dir", r.windDir, 0); num("gust", r.gust, 0);
+        str("sym", r.sym); str("path", r.path);
+        if (r.proto == "fanet" && r.online) o += ",\"online\":1";
         num("alt", r.alt, 0);
         if (r.batt >= 0) num("battPct", r.batt, 0);
         num("volt", r.volt, 2); num("temp", r.temp, 1); num("hum", r.hum, 0); num("baro", r.hpa, 1); num("chUtil", r.chUtil, 1);
