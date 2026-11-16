@@ -97,7 +97,7 @@ public:
         /** ★★ WEAK CANDIDATES GET A DWELL TOO (2026-11-16, the G35: three weak stereo stations at 107.4–107.8 beside NLive
          *  106.9 in one hop, never logged). After the peaks, up to `maxWeak` more channels between weakSnrDb and minSnrDb —
          *  each the highest within ±100 kHz, so never a neighbour's skirt — are demodulated for their pilot and RDS. One is
-         *  REPORTED only if its pilot held for pilotHoldSec or its RDS confirmed; a weak channel with neither is dropped
+         *  REPORTED only if its pilot held (pilotHoldSec, and half the dwell) or its RDS confirmed; a weak channel with neither is dropped
          *  (it was noise, or a mono station too weak to be sure of). Stuart: a slower sweep is fine on an idle server. */
         float  weakSnrDb = 5.0f;
         int    maxWeak = 8;
@@ -153,7 +153,7 @@ private:
         int centreBin = 0;
         float levelDb = -200, snrDb = 0;
         bool weak = false;                 // ★ under minSnrDb: a weak candidate (Params::weakSnrDb)
-        long long lockedN = 0;             // samples of the dwell with the pilot locked
+        long long lockedN = 0, seenN = 0;  // samples of the dwell with the pilot locked, and in all
         vibedsp::Channelizer::ExtractCtx ctx;
         vibedsp::FmDemod fm;
         vibedsp::StereoPLL pll;
@@ -285,6 +285,7 @@ private:
                         ch.pll.processBlock(ch.mpx.data(), n, ch.lmr.data(), ch.r57.data(), ch.r57q.data(), ch.clk.data());
                         ch.rds.setPilotRef(ch.pll.lockAmp());
                         ch.rds.process(ch.mpx.data(), ch.r57.data(), ch.r57q.data(), ch.clk.data(), n);
+                        ch.seenN += n;
                         if (ch.pll.locked()) ch.lockedN += n;
                     }
                 }
@@ -378,7 +379,7 @@ private:
             c.fm.setGain((float)(chanRate / (2.0 * M_PI * 75000.0)));
             c.fm.reset();
             c.pll.configure(19000.0, chanRate); c.pll.reset();
-            c.lockedN = 0;
+            c.lockedN = 0; c.seenN = 0;
             vibedsp::RdsDecoder::Callbacks cb;
             cb.ctx = &c;
             cb.group = [](void* x, uint16_t pi, int clean) { if (clean) ++static_cast<Chan*>(x)->clean[pi]; };
@@ -469,7 +470,10 @@ private:
             flush();
             const long long holdN = (long long)(p_.pilotHoldSec * chanRate);
             for (const auto& c : chans) {
-                const bool pilot = c->pll.locked() || c->lockedN >= holdN;
+                /* ★ locked at the end (as always), or held for at least pilotHoldSec AND half the dwell — a lock that
+                 *  flickers on now and then (a tone-modulated carrier, noise) adds up to half a second over a long dwell
+                 *  and must not make a station (the fake dongle's carriers, test-dx-scan A) */
+                const bool pilot = c->pll.locked() || (c->lockedN >= holdN && 2 * c->lockedN >= c->seenN);
                 // ★ a weak candidate is a station only on its own evidence: the pilot held, or RDS confirmed
                 if (c->weak && !pilot && !c->confirmed()) continue;
                 FmHit h;
