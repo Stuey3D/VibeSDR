@@ -13835,30 +13835,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   //   settings sheet, and the tour cannot spotlight into it — MenuSheet is a
   //   <Modal>, and the coachmark is now an in-tree overlay that cannot draw above
   //   one (see Coachmark.tsx). So they are illustrated, like the servers chip.
-  const rowMock = (label: string, a: string, b: string, aActive: boolean) => (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
-      <Text style={{ color: gt.ink.section, fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
-                     letterSpacing: 0.6, width: 46 }}>{label}</Text>
-      {[a, b].map((t, i) => (
-        <View key={t} style={{
-          paddingVertical: 4, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1,
-          borderColor: (i === 0) === aActive ? gt.gold.selBorder : gt.ink.keyBorder,
-          backgroundColor: (i === 0) === aActive ? gt.ink.keyBgAct : 'transparent' }}>
-          <Text style={{ color: (i === 0) === aActive ? gt.gold.sel : gt.ink.key,
-                         fontFamily: 'Atkinson Hyperlegible', fontSize: 12 }}>{t}</Text>
-        </View>
-      ))}
-    </View>
-  );
-  const schemeMock = (
-    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: gt.ink.border,
-                   backgroundColor: 'rgba(14,10,4,0.94)', padding: 10, minWidth: 200 }}>
-      <Text style={{ color: gt.ink.section, fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
-                     letterSpacing: 1 }}>CONTROL CUSTOMISATION</Text>
-      {rowMock('TUNE', 'DRUM', 'KEYS', true)}
-      {rowMock('ZOOM', 'DRUM', 'KEYS', true)}
-    </View>
-  );
   const keysMock = (
     <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: gt.ink.border,
                    backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 9, paddingHorizontal: 12,
@@ -13938,9 +13914,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
-    { id: 'schemes', title: 'Pick your control scheme',
-      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them. In ISM every step of the tuning moves one band. On a tablet held upright, PORTRAIT CONTROLS there picks WIDE (tune and zoom at the screen\u2019s edges, more of the waterfall clear) or TALL (bigger keys); it starts on whichever fits the screen best.',
-      target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard or controller drives it all',
       body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom, and typing a number opens the frequency box with it. A game controller does the same, on Android too: the D-pad moves the highlight, SELECT shows a guide to every button, holding START switches between face buttons and the two sticks (a tap of START — or the top button on a two-stick pad — swaps VFO A and B while both are on), and Enter on a text box opens an on-screen keyboard it can type with. More in the settings cog, under KEYBOARD and CONTROLLER GUIDE.',
       target: tourRef('menuBtn'), illustration: keysMock },
