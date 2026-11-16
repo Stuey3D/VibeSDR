@@ -173,7 +173,9 @@ interface MapOverlayProps {
           toggles?: Array<{ id: string; label: string; words: string }>; toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;
           cardText?: (file: string) => Promise<{ ok: boolean; text: string }>; translateTo?: string;
           /** a line over the map (the warnings index being built) — '' = none */
-          note?: string } | null;
+          note?: string;
+          /** ★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer: the basemap profile ('aero' | 'aero-plain'), switched live */
+          profile?: string } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
   /** ★ V12 drawn over the map, last (on top): the second server's card (Stuart, 2026-10-30: "the 2nd server chip control
@@ -246,7 +248,7 @@ function buildHtml(
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
   const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES · RS41' : kind === 'avdata' ? 'AIRCRAFT DATALINK' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES · RS41' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" style="vertical-align:middle;opacity:0.8"><path d="M12 9 L8 22 M12 9 L16 22 M9.5 17 L14.5 17" stroke="rgba(255,190,40,0.9)" stroke-width="1.6" fill="none" stroke-linecap="round"/><circle cx="12" cy="7" r="1.8" fill="rgba(255,190,40,0.9)"/><path d="M7.5 3.5 A6 6 0 0 0 7.5 10.5 M16.5 3.5 A6 6 0 0 1 16.5 10.5" stroke="rgba(255,190,40,0.7)" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`
@@ -721,7 +723,7 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
-      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1});
+      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb'||KIND==='avdata')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -967,7 +969,7 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
    *  resolves to the FILESYSTEM ROOT — /mapdata/v1/... — which exists nowhere and fails silently,
    *  one layer at a time, exactly the quiet blank this rework exists to end. */
   dataBase: 'mapdata/v1/',
-  profile: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb') ? 'aero'
+  profile: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb' || KIND === 'avdata') ? 'aero'
     // ★ sea maps show PORTS, not airports (Stuart, 2026-11-01: "we need the ports instead, so felixstowe dover etc")
     : (KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'marine' : 'spots'
 });
@@ -1620,6 +1622,13 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     }catch(e){console.error('tracks: bad report',e);}
   };
   window.__trkFit=function(){try{var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}};
+  /* ★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer: the basemap profile, live. A map pack that predates 'aero-plain'
+   *  says no — then the airport layers are switched by name. */
+  window.__trkProfile=function(name){try{
+    if(GLVM){if(GLVM.setProfile(name)===false){var m=GLVM.map;['airports-4','airports-6','airports-7','airports-8','runways','runway-ends'].forEach(function(id){
+      if(m.getLayer(id))m.setLayoutProperty(id,'visibility',name==='aero-plain'?'none':'visible');});}}
+    else if(VM&&VM.setProfile)VM.setProfile(name);
+  }catch(e){console.error('tracks profile',e);}};
   window.__trkTrail=function(key,pts){var d=trkWait[key];if(!d)return;delete trkWait[key];d(Array.isArray(pts)?pts:[]);};
   /* ★ A row chosen (the live list, or the APRS box before the map was up): before the first items, when they come. */
   window.__trkFocus=function(k){try{var l=trkMake();if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
@@ -2181,6 +2190,8 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`(window.__trkPush?window.__trkPush(${lit}):(window.__pendingTrk=${lit}));true;`);
   };
   useEffect(() => { if (visible) pushTrk(trk?.items); }, [kind, visible, trk?.items]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer (the basemap profile), live
+  useEffect(() => { if (visible && trk?.profile) webRef.current?.injectJavaScript(`window.__trkProfile&&window.__trkProfile(${JSON.stringify(trk.profile)});true;`); }, [visible, kind, trk?.profile]); // eslint-disable-line react-hooks/exhaustive-deps
   const [trkSel, setTrkSel] = useState<string | null>(null);
   const trkFocus = (key: string) => {
     setTrkSel(key);

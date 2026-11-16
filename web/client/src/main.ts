@@ -43,7 +43,9 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
 import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
-import { avCard, avIcon, avItems, avRanges, avRows, avStatus } from './avdata';   // ★ V12 the aircraft datalink
+import { avRanges, avStatus } from './avdata';   // ★ V12 the aircraft datalink
+import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as avLayerOn, sharedSanitise,
+         type AvLayers, type AvFocus, type SharedAircraft } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
@@ -9007,6 +9009,7 @@ function syncAudioQuiet() {
 }
 function adsbUiOn() {
   adsbOn = true; setTimeout(drmBoxSync, 0);
+  avAdsbProbe(true);   // ★ V12 2026-11-16 the AVIATION MAP key, when another source has aircraft here
   syncAudioQuiet();
   if (spec) spec.adsbHeld = true;
   setTimeout(syncDialTips, 0);
@@ -9066,6 +9069,7 @@ function initWholeResume() {
 /** The UI half of leaving ADS-B — the map gone, every control given back. */
 function adsbUiOff() {
   adsbOn = false; setTimeout(drmBoxSync, 0);
+  avAdsbProbe(false);
   adsbReport = null;
   adsbFirstSeen.clear();   // ★ the next visit's first report is "already there", not new
   adsbListLast = '';
@@ -9911,18 +9915,77 @@ function avReadCap(j: any) {
   } else avCap = null;
   avBands = parseAvBands(j?.avdataBands);
 }
+/* ★★★ V12 2026-11-16 THE AVIATION MAP (src/services/aviationMap.ts, docs/v12/AVIATION.md §The aviation map) — the shipping
+ *  map's shape for aircraft: ADS-B, ACARS, VDL2, HFDL and ADS-C on ONE map, each aircraft once with the sources that heard
+ *  it, from GET /vibeserver/aircraft.json (vibe_aircraft_share.h — every radio on this server writes it). The DATALINK
+ *  mode's own view IS this map (its live list first, EXIT gives the receiver back); the HFDL decoder's MAP and ADS-B's
+ *  AVIATION MAP open it standalone (CLOSE MAP). Layers with no aircraft are absent; AIRPORTS is on by default. */
+const AV_LAYERS_KEY = 'vibesdr.avMapLayers';
+let avLayers: AvLayers = avLayersOf(lsGet(AV_LAYERS_KEY));
+let avShared: SharedAircraft | null = null;
+let avMapView: TrackView | null = null;
+let avMapFocus: AvFocus = 'datalink';
+let avPollT: ReturnType<typeof setTimeout> | null = null;
+let avPollSeq = 0;
+async function avSharedFetch(): Promise<SharedAircraft | null> {
+  try {
+    const r = await fetch(P('/vibeserver/aircraft.json'), { cache: 'no-store' });
+    return r.ok ? sharedSanitise(await r.json()) : null;
+  } catch { return null; }
+}
+/** ★ LIVE: every 3 s while either view is open (the server's table is rewritten every 2 s by each radio). */
+async function avPoll() {
+  if (avPollT) { clearTimeout(avPollT); avPollT = null; }
+  if (!avView?.open && !avMapView?.open) return;
+  const seq = ++avPollSeq;
+  const got = await avSharedFetch();
+  if (seq !== avPollSeq || (!avView?.open && !avMapView?.open)) return;
+  if (got) avShared = got;
+  avRender();
+  avMapRender();
+  avPollT = setTimeout(() => { void avPoll(); }, 3000);
+}
+/** The view options both aviation views share: every item carries its own icon, label and card. */
+function avViewOpts() {
+  return {
+    icon: (it: any) => it._ic, label: (it: any) => it._lb || '', card: (it: any) => it._cd || '',
+    labelRank: (it: any) => it._rk ?? 0, aria: (it: any) => it._aria || it._lb || '',
+    labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain',
+    onToggle: (id: string, on: boolean) => {
+      avLayers = { ...avLayers, [id]: on };
+      try { localStorage.setItem(AV_LAYERS_KEY, JSON.stringify(avLayers)); } catch { /* private */ }
+      avRender(); avMapRender();
+    },
+  };
+}
+/** The list: sections per kind (this radio's live datalink first, with the owner's message text where the server sent it). */
+function avListHtml(c: ReturnType<typeof avCompose>, bodies: Map<string, string>): string {
+  if (!c.rows.length) return '';
+  const liveKeys = new Set(c.planes.filter((p) => p.live).map((p) => `a:${p.key}`));
+  const row = (x: (typeof c.rows)[number]) => trkRowHtml(x).replace('</small></span>', `</small>${bodies.get(x.key) ? `<small class="avText">${escapeHtml(bodies.get(x.key) as string)}</small>` : ''}</span>`);
+  const live = c.rows.filter((r) => liveKeys.has(r.key)), rest = c.rows.filter((r) => !liveKeys.has(r.key));
+  const sec = (t: string) => `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`;
+  if (!live.length) return rest.map(row).join('');
+  return sec('THIS RADIO — HEARD NOW') + live.map(row).join('') + (rest.length ? sec('OTHER SOURCES ON THIS SERVER') + rest.map(row).join('') : '');
+}
+function avChrome(v: TrackView, c: ReturnType<typeof avCompose>) {
+  v.setToggles(c.toggles, avLayers as Record<string, boolean>);
+  v.setLegend(avLegendHtml(c.present));
+  v.setProfile(c.profile);
+}
 function avUiOn() {
   avOn = true;
   syncAudioQuiet();
   closePanels();
   if (!avView) avView = new TrackView({
-    title: 'AIRCRAFT DATALINK · ACARS + VDL2', exitLabel: 'EXIT DATALINK', listTitle: 'HEARD', onExit: () => avSetMode(false),
-    icon: () => avIcon(), label: (it: any) => String(it.flight || it.reg || it.icao || ''), card: (it: any) => avCard(it),
+    title: `${AVIATION_TITLE} · DATALINK`, exitLabel: 'EXIT DATALINK', listTitle: 'AIRCRAFT', onExit: () => avSetMode(false),
     ranges: avRanges(avBands), range: avReport?.band || '', rangeHint: 'The band: ACARS (131 MHz) or VDL2 (136 MHz)', rangeLabel: 'The band',
     onRange: (id: string) => { if (spec && avReport?.band !== id) spec.avdata(true, id); },
+    ...avViewOpts(),
   });
   avView.show(myPos());
   avRender();
+  void avPoll();
 }
 function avUiOff() {
   avOn = false;
@@ -9945,11 +10008,54 @@ function avSetMode(on: boolean) {
   }
 }
 function avRender() {
-  if (!avView) return;
+  if (!avView?.open) return;
   const r = avReport;
-  avView.update(avItems(r), avRows(r), avStatus(r), r ? r.aircraft.length : 0, myPos());
+  const c = avCompose(r, avShared, 'datalink', avLayers, myPos(), 'web');
+  avChrome(avView, c);
+  // ★ the owner's message text (only where the server sent it: the opt-in, on the owner's own session)
+  const bodies = new Map<string, string>();
+  for (const p of c.planes) if (p.live) { const a = r?.aircraft.find((x) => (x.icao && x.icao === p.icao) || (x.reg && x.reg === p.reg)); if (a?.text) bodies.set(`a:${p.key}`, a.text); }
+  const rows = avListHtml(c, bodies) || (r && !r.aircraft.length
+    ? `<div class="trkEmpty">Listening on every ${escapeHtml(r.bandName)} channel. Aircraft appear here as they are heard — ACARS and VDL2 are bursts, so a quiet minute is normal; a receiver near an airport or under a flight path hears the most.</div>`
+    : `<div class="trkEmpty">${r ? escapeHtml(AV_EMPTY) : 'Taking the receiver to the aircraft datalink…'}</div>`);
+  avView.update(c.items, rows, [avStatus(r), c.status].filter(Boolean).join(' · '), c.planes.length, myPos());
   // ★ the server owns the band: the control shows where the radio IS (a refused pick snaps back with the next report)
   if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
+}
+/** ★ The standalone AVIATION MAP: the HFDL decoder's MAP ('hfdl') and ADS-B's AVIATION MAP ('adsb') — the same map,
+ *  that source first. CLOSE MAP goes back; nothing is tuned. */
+function avMapOpen(focus: AvFocus) {
+  avMapFocus = focus;
+  if (!avMapView) avMapView = new TrackView({
+    title: AVIATION_TITLE, exitLabel: 'CLOSE MAP', listTitle: 'AIRCRAFT',
+    onExit: () => { avMapView?.hide(); if (avPollT && !avView?.open) { clearTimeout(avPollT); avPollT = null; } },
+    ...avViewOpts(),
+  });
+  avMapView.show(myPos());
+  avMapRender();
+  void avPoll();
+}
+function avMapRender() {
+  if (!avMapView?.open) return;
+  const c = avCompose(avOn ? avReport : null, avShared, avMapFocus, avLayers, myPos(), 'web');
+  avChrome(avMapView, c);
+  avMapView.update(c.items, avListHtml(c, new Map()) || `<div class="trkEmpty">${escapeHtml(avShared?.off ? 'The owner of this server has switched the aircraft decoders off.' : AV_EMPTY)}</div>`,
+                   c.status, c.planes.length, myPos());
+}
+/** ★ ADS-B's AVIATION MAP key: drawn only when another source (a second radio's datalink, HFDL) has aircraft here — the
+ *  map would otherwise be the ADS-B map again (AGENTS.md: no dead controls). Asked every 20 s while ADS-B is on. */
+let avAdsbProbeT: ReturnType<typeof setInterval> | null = null;
+function avAdsbProbe(on: boolean) {
+  const b = document.getElementById('adsbAvMap') as HTMLElement | null;
+  if (avAdsbProbeT) { clearInterval(avAdsbProbeT); avAdsbProbeT = null; }
+  if (!on) { if (b) b.hidden = true; return; }
+  const ask = async () => {
+    const got = await avSharedFetch();
+    if (got) avShared = got;
+    if (b) b.hidden = !got || !got.aircraft.some((a) => a.src.some((x) => x !== 'ADS-B'));
+  };
+  void ask();
+  avAdsbProbeT = setInterval(() => { void ask(); }, 20_000);
 }
 /* ★★★ RADIOSONDES (V12, docs/v12/RS41.md) — the datalink's shape (sondes.ts): a TrackView, the bands in its top bar, EXIT
  *  gives the receiver back; a chosen sonde draws its track from the report. ★ Offered only where vibeserver.json says so:
@@ -10524,6 +10630,7 @@ function buildControls() {
   /* ★ ADS-B's map view: EXIT ADS-B (the whole way out, as EXIT DAB), CHAT (the card's key is under the map),
    *  the list's head (collapse / open) and its rows (that aircraft on the map). */
   $('adsbExit').onclick = () => adsbSetMode(false);
+  $('adsbAvMap').onclick = () => avMapOpen('adsb');   // ★ V12 2026-11-16 the AVIATION MAP, ADS-B first
   $('adsbFar').onclick = () => { if (adsbFarHex) adsbMap?.focus(adsbFarHex); };
   $('adsbNew').onclick = () => { if (adsbNewHex) adsbMap?.focus(adsbNewHex); };
   $('adsbLong').onclick = () => { if (adsbLongHex) adsbMap?.focus(adsbLongHex); };
@@ -13202,7 +13309,7 @@ let sitoraCap = false;
  *  (src/services/alertDecoders.ts — the app's words). Offered only where vibeserver.json says "same" / "selcal": true. */
 let sameCap = false;
 let selcalCap = false;
-let hfdlCap = false;   // ★ V12 HFDL on the dial (vibe_hfdl_run.h) — the web has no HFDL map: the box's lines are the view
+let hfdlCap = false;   // ★ V12 HFDL on the dial (vibe_hfdl_run.h) — the box's lines, and MAP (the AVIATION MAP, HFDL first)
 /* ★★ MFSK / OLIVIA / THOR (V12, 2026-10-31) — the MFSK keyboard modes, decoded on the server (decoders/textmodes.h): the
  *  text box; the status line names what AUTO locked ("OLIVIA 8/250 · 1500 Hz"); one MODE row (tmSettings) holds the
  *  family's choices — the server's own list, AUTO first. Offered only where vibeserver.json says "<family>": true. */
@@ -14324,6 +14431,7 @@ function initDecoders(host: string, auth: AuthState) {
   // ★ APRS: the map, the packet speed (a re-attach — a different modem on the server), and the region's channel
   $('aprsMapBtn').onclick = () => aprsMapOpen();
   $('nvMapBtn').onclick = () => { void navMapOpen(); };
+  $('hfdlMapBtn').onclick = () => avMapOpen('hfdl');   // ★ V12 2026-11-16 the AVIATION MAP, HFDL first
   segButtons('aprsBaud', 'aprsbaud', (v) => { aprsBaud = Number(v) === 300 ? 300 : 1200; aprsHintSync(); if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; renderAprs(); reattachIf('aprs'); } });
   $('aprsTune').onclick = () => {
     if (!spec) return;
@@ -14917,6 +15025,7 @@ function showDecBox(what: string) {
   const isAprs = what === 'aprs';
   $('aprsList').classList.toggle('on', isAprs);
   $('aprsMapBtn').style.display = isAprs ? '' : 'none';
+  $('hfdlMapBtn').style.display = what === 'hfdl' ? '' : 'none';
   if (isAprs) { $('decText').classList.add('off'); aprsLast = null; aprsLog.length = 0; aprsTrails.clear(); renderAprs(); }
   else aprsView?.hide();
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
