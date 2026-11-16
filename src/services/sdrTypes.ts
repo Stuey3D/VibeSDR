@@ -11,7 +11,8 @@ import { parseTunable } from '../utils/tuneWindow';
 import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBand';
 import { parseNdbCapability } from './ndb';
 import { parsePagingModes, type PagingMode } from './paging';   // ★ V12 PAGING (Android local hardware only)
-import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';   // ★ V12 AIS / APRS
+import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';
+import { parseAvBands, type AvBand } from './aviation';   // ★ V12 aviation   // ★ V12 AIS / APRS
 import { AM_SYNC_LABEL } from './amSync.ts';
 const { sam: _samLabel, ...AM_SYNC_LABEL_NO_SAM } = AM_SYNC_LABEL;   // 'sam' keeps its own entry below
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
@@ -466,6 +467,10 @@ export interface ServerOccupancy {
   same?: boolean;
   /** ★ V12 SELCAL: this server's aeronautical selective-call decoder ('selcal'). */
   selcal?: boolean;
+  /** ★ V12 HFDL: this server decodes HFDL on a listener's USB dial ('hfdl') and serves /addon/hfdl/* for the HFDL MAP. */
+  hfdl?: boolean;
+  /** ★ V12 AIRCRAFT DATALINK (ACARS / VDL2, a whole-radio mode): offered / greyed with its reason; absent = no key. */
+  avdata?: { ok: boolean; why: string; bands: AvBand[]; text: boolean };
   /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
    *  first) — textModes.ts. */
   mfsk?: boolean;
@@ -500,7 +505,7 @@ export interface ServerOccupancy {
 }
 
 /** ★★★ V12 the decoders vibe_decoder_reach.h can grey for reach — the server sends `"<id>": false, "<id>Why": "…"`. */
-export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty'] as const;
+export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'hfdl'] as const;
 /** id → reason, for each fixed-frequency decoder this radio cannot reach. A reason is honoured only beside `<id>: false`
  *  (an owner's block sends false with no reason — that key stays hidden, as ever). */
 export function parseDecoderReach(j: any): Record<string, string> {
@@ -563,6 +568,11 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       sitora:    j.sitora === true,
       same:      j.same === true,
       selcal:    j.selcal === true,
+      hfdl:      j.hfdl === true,
+      avdata:    j.avdata === true || j.avdata === false
+        ? { ok: j.avdata === true, why: cleanText(j.avdataWhy, 200) || (j.avdata === true ? '' : 'The aircraft datalink is not available on this receiver'),
+            bands: parseAvBands(j.avdataBands), text: j.avdataText === true }
+        : undefined,
       mfsk:      j.mfsk === true,
       mfskModes: parseTextModes(j.mfskModes),
       hell:      j.hell === true,

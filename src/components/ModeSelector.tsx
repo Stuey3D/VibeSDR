@@ -447,6 +447,8 @@ interface ModeSelectorProps {
   // (UberSDR feeds only — hidden for OWRX/Kiwi/local); we just render the buttons.
   showServerMaps?: boolean;
   onServerMap?:    (kind: 'hfdl' | 'digi' | 'cw') => void;
+  /** ★ V12 server maps this receiver cannot fill (a VibeServer without "hfdl": true has no HFDL to map) — not drawn. */
+  serverMapHide?:  ReadonlyArray<'hfdl' | 'digi' | 'cw'>;
 
   // CLIENT DECODERS (relocated from MenuSheet §4.3). null = don't show (OWRX, or
   // landscape on a non-tablet where the settings callout has no room). SDRScreen bundles
@@ -603,7 +605,7 @@ interface ModeSelectorProps {
 
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose,
   filterLow: ownLow = 0, filterHigh: ownHigh = 0, bwEdgeMax = 6000, bwEdgeMin = 0, onFilterBoth, autoBw,
-  showServerMaps = false, onServerMap, owrxPages,
+  showServerMaps = false, onServerMap, serverMapHide, owrxPages,
   decoderControls, spotsControls, transcribeControls, blocked, dcSpikeOnScreen = false, dialHz }: ModeSelectorProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const [dcInfoOpen, setDcInfoOpen] = useState(false);   // ★ V12 beta25 — the DC spike's explanation, opened by its key
@@ -653,7 +655,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  the spots section keeps its other keys (BAND, CW SPOTS, STT, MAP), the server maps their DIGITAL and CW. */
   const spotsInBands = decSectionShown && spotsShown;
   const bandInWhole = spotsInBands && !!spotsControls?.band;   // ★ SPOTS: BAND in TUNES THE RADIO ITSELF
-  const hfdlInBands = decSectionShown && showServerMaps && !!onServerMap;
+  const hfdlInBands = decSectionShown && showServerMaps && !!onServerMap && !serverMapHide?.includes('hfdl');
   const { theme: theme0 } = useTheme();
   const surf = usePopupSurface();
   const pt = usePopupTheme();
@@ -686,7 +688,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /* ★★ THE SERVER'S OWN MAPS (an UberSDR's HFDL / digital spots / CW spots) are VIEWS like any other (Stuart,
    *  2026-10-29) — HFDL only where it is not already in HF Aviation. */
   const serverMapKeys = showServerMaps && onServerMap
-    ? SERVER_MAPS.filter((m) => !(m.kind === 'hfdl' && hfdlInBands)) : [];
+    ? SERVER_MAPS.filter((m) => !(m.kind === 'hfdl' && hfdlInBands) && !serverMapHide?.includes(m.kind)) : [];
   /* ★★★ ONE KEY SIZE FOR THE WHOLE PANEL (Stuart, 2026-10-29 — utils/decoderKeyGrid). Every key the DECODERS, VIEWS and
    *  spots sections can draw (every band tab's too, so switching tabs never resizes them) is listed with its legend; the
    *  legends are MEASURED in the keys' own font (the hidden row below) and the panel's own width is measured where it is

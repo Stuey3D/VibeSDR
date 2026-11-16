@@ -16,6 +16,7 @@
 
 import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
+import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
 import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks, type AfcState } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode, ICOM_SCOPE_FLOOR_DB,
@@ -880,6 +881,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setIsmCap(undefined);
     setNdbCap(undefined);   // ★ V12 NDB
     setAisCap(undefined);           // ★ V12 AIS / APRS — cleared first, as every per-radio answer
+    setHfdlCapable(false); setAvCap(undefined);   // ★ V12 aviation — the same
     setAprsCap({ on: false, hz: 144.8e6 });
     setDecWhy({});   // ★ V12 decoder reach: a new radio says its own
     setAntBands(null);
@@ -897,6 +899,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         setSkimCapable(o?.skim !== false);   // ★ V12 an Icom: CW / PSK are ONE SIGNAL only
         setRttySkimCapable(o?.rttyskim === true && o?.skim !== false);   // ★ V12 the RTTY skimmer — only where it can run
         setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal);
+        setHfdlCapable(o?.hfdl === true);   // ★ V12 HFDL: this VibeServer decodes it on the dial (and serves the HFDL MAP)
+        setAvCap(o?.avdata);                // ★ V12 Aircraft datalink — absent where no band is reachable (no key at all)
         setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
         // ★ V12 MFSK / OLIVIA / THOR: a family is offered where its flag is true; its choices are the server's list
         setTmModes({ mfsk: o?.mfsk === true ? (o?.mfskModes ?? []) : undefined });   // ★ ONE key: MFSK, OLIVIA, CONTESTIA, THOR
@@ -2608,6 +2612,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  greyed with the reason (never hidden, never live). */
   const [decWhy, setDecWhy] = useState<Record<string, string>>({});
   const [selcalCapable, setSelcalCapable] = useState(false);   // ★ V12 SELCAL: this VibeServer decodes it
+  const [hfdlCapable, setHfdlCapable] = useState(false);       // ★ V12 HFDL: this VibeServer decodes it on the dial
+  const hfdlCapRef = useRef(false); hfdlCapRef.current = hfdlCapable;
+  const [avCap, setAvCap] = useState<{ ok: boolean; why: string; bands: AvBand[]; text: boolean } | undefined>(undefined);   // ★ V12 Aircraft datalink
   const [hellCapable, setHellCapable] = useState(false);       // ★ V12 FELD HELL: this VibeServer draws it
   /** ★ V12 MFSK / OLIVIA / THOR: each family this VibeServer offers, with its choices (AUTO first); absent = not offered. */
   const [tmModes, setTmModes] = useState<Partial<Record<TextFamily, TextMode[]>>>({});
@@ -6017,7 +6024,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -6449,6 +6456,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       setDecoderStatus(textModeStatusText(type, tmModeRef.current[type], null, tmModesRef.current[type] ?? []));
     }
     if (type === 'hell') setDecoderStatus(hellStatusText(null));   // ★ V12 FELD HELL: the tone is found by itself
+    if (type === 'hfdl') setDecoderStatus(hfdlStatusText(null));   // ★ V12 HFDL: the dial is the published frequency
     if (type === 'paging' && decoderClient.current) {
       decoderClient.current.pagingMode = pagingModeRef.current;
       setDecoderStatus(pagingModeRef.current === 'auto' ? 'listening — AUTO (POCSAG or FLEX, from the signal)' : `listening — ${fullModeName(pagingModesRef.current, pagingModeRef.current)}`);
@@ -6531,6 +6539,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]);
     stopSpotFlush();
   }, [stopSpotFlush]);
+  /** ★★ V12 THE HFDL MAP. An UberSDR's add-on decodes every HFDL channel itself; a VibeServer decodes the listener's OWN
+   *  dial (vibe_hfdl_run.h) — so on a VibeServer that offers it ("hfdl": true) opening the map starts the HFDL decoder on
+   *  the dial first (one box at a time, as any decoder), and what it hears fills /addon/hfdl/*, which the map polls. */
+  const openHfdlMap = useCallback(() => {
+    if ((client.current as { isVibe?: boolean } | null)?.isVibe && hfdlCapRef.current && activeDecRef.current !== 'hfdl') {
+      stopSpots();
+      setSelDecoder('hfdl');
+      openDecoder('hfdl');
+    }
+    setMapKind('hfdl');
+  }, [stopSpots, openDecoder]);
   /* ★★ VFO B GONE WITH SPOTS ON IT (switched off, a listener needing its place, FM broadcast): the server has stopped them
    *  and said why (decoder_refused "vfo") — the screen stops them too, so Band's arrows do not go on stepping bands on A
    *  for spots that no longer run. A decoder on B keeps its box, showing the server's reason. */
@@ -12905,8 +12924,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       dsc: dscCapable && isVibe && !blockedModes.has('dsc'),
       cw: cwCapable && isVibe && !blockedModes.has('cw'),
       spots: notOwrx && !blockedModes.has('spots'),
-      // ★ HFDL: an UberSDR's own decoder, seen as its HFDL MAP (a VibeServer runs none — the tap just tunes there)
-      hfdl: notOwrx && !isLocal && !isKiwi && !isVibe && !IS_APPLE_TV,
+      // ★ HFDL: an UberSDR's own decoder, seen as its HFDL MAP; ★ V12 a VibeServer's where it says "hfdl": true — the tap
+      //   then starts the decoder on the dial it tuned (openHfdlMap), which is what fills that server's map
+      hfdl: notOwrx && !isLocal && !isKiwi && !IS_APPLE_TV && (!isVibe || hfdlCapable),
     };
   }
   const onKnownTap = useCallback((sig: KnownSignal) => {
@@ -12937,7 +12957,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (spotsKindRef.current !== 'digi') onSpotsToggle('digi');   // ★ Single — Band already running keeps its band
       return;
     }
-    if (plan.dec === 'hfdl') { setMapKind('hfdl'); return; }      // ★ an UberSDR's HFDL map (knownAvail says where)
+    if (plan.dec === 'hfdl') { openHfdlMap(); return; }      // ★ the HFDL map (knownAvail says where); a VibeServer's decodes the dial
     if (plan.dec === 'rtty' && p?.rtty) {
       const next: RttySettings = { ...rttySettings, ...p.rtty, auto: false, stop: 1.5, usos: false };
       setRttySettings(next);
@@ -15561,7 +15581,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
         showServerMaps={(route.params.serverType ?? 'ubersdr') !== 'owrx' && !isLocal && !isKiwi}
-        onServerMap={(k) => { setModeSelOpen(false); setMapKind(k); }}
+        onServerMap={(k) => { setModeSelOpen(false); if (k === 'hfdl') openHfdlMap(); else setMapKind(k); }}
+        serverMapHide={(client.current as { isVibe?: boolean } | null)?.isVibe && !hfdlCapable ? ['hfdl'] : undefined}
         owrxPages={route.params.serverType === 'owrx' ? {
           onMap:   () => { setModeSelOpen(false); onAdminLink('/map', 'Map'); },
           onFiles: () => { setModeSelOpen(false); onAdminLink('/files', 'Files'); },
