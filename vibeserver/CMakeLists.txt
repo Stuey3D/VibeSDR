@@ -992,9 +992,14 @@ if(VIBE_RADE)
     message(STATUS "RADE V1:   ${RADE_LIB}")
     target_include_directories(vibeserver_core PUBLIC "${_rade_prefix}/include")
     target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_RADE)
-    target_link_libraries(vibeserver_core PUBLIC "${RADE_LIB}")
+    # ★★ rade_c's TRANSMITTER too (librade_vibe_tx.a, before the receiver's archive it takes its end-of-over bits from):
+    #    the benchmark's dec_rade row measures a receiver DECODING a real RADE over, and only rade_c's own transmitter makes
+    #    one. Nothing else in the server calls it. ~1.4 MB of archive (the encoder's int8 weights and Opus's feature
+    #    extractor); never paged in unless the benchmark runs.
     if(EXISTS "${_rade_prefix}/lib/librade_vibe_tx.a")
-      set(RADE_TX_LIB "${_rade_prefix}/lib/librade_vibe_tx.a")   # ★ the tests' transmitter only, never the server
+      set(RADE_TX_LIB "${_rade_prefix}/lib/librade_vibe_tx.a")
+      target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_RADE_TX)
+      target_link_libraries(vibeserver_core PUBLIC "${RADE_TX_LIB}" "${RADE_LIB}")
     endif()
     foreach(_f LICENSE.rade_c COPYING.opus LICENSE.freedv-backend)
       if(EXISTS "${_rade_prefix}/share/licences/${_f}")

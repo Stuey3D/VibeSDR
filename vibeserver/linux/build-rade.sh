@@ -66,16 +66,24 @@ COMMON_C=("$RC/src/rade_dsp.c" "$RC/src/rade_ofdm.c" "$RC/src/rade_bpf.c"
           "$B/opus/nnet.c" "$OP/dnn/nnet_default.c" "$OP/dnn/parse_lpcnet_weights.c" "$OP/dnn/freq.c" "$OP/dnn/burg.c" "$OP/dnn/lpcnet_tables.c"
           "$OP/celt/kiss_fft.c" "$OP/celt/mathops.c" "$OP/celt/celt_lpc.c" "$OP/celt/pitch.c" "$OP/celt/entcode.c")
 COMMON_CXX=("$B/fb/pipeline/rade_text.cpp" "$B/fb/pipeline/ldpc_decode.cpp" "$B/fb/pipeline/ldpc_encode.cpp")
-RX_C=("$RC/src/rade_acq.c" "$RC/src/rade_rx.c" "$RC/src/rade_dec.c" "$RC/src/rade_dec_data.c"
+RX_C=("$RC/src/rade_acq.c" "$WRAP/vibe_rade_acq.c" "$RC/src/rade_rx.c" "$RC/src/rade_dec.c" "$RC/src/rade_dec_data.c"
       "$OP/dnn/fargan.c" "$OP/dnn/fargan_data.c" "$WRAP/vibe_rade.c")
 TX_C=("$RC/src/rade_tx.c" "$RC/src/rade_enc.c" "$RC/src/rade_enc_data.c"
       "$OP/dnn/lpcnet_enc.c" "$OP/dnn/pitchdnn.c" "$OP/dnn/pitchdnn_data.c" "$WRAP/vibe_rade_tx.c")
 
 # ★ every object compiled once, in parallel (the two weight files are ~24 MB of C each and dominate)
+# ★★ The pilot search (vibe_rade_acq.c): rade_c's rade_acq_detect_pilots is renamed where it is defined and ours takes its
+#    name — the same arithmetic in a loop order the compiler vectorises, at -O3 (see that file: the search was 3× the cost
+#    of decoding). -fno-math-errno lets the |Dt| loop vectorise too; nothing there reads errno.
 compile() {   # compile <src> <obj>
+  local extra=()
+  case "$1" in
+    */rade_acq.c)       extra=(-Drade_acq_detect_pilots=vrade_upstream_acq_detect_pilots -Drade_acq_check_pilots=vrade_upstream_acq_check_pilots) ;;
+    */vibe_rade_acq.c)  extra=(-O3 -fno-math-errno) ;;
+  esac
   case "$1" in
     *.cpp) $CXX ${CXXFLAGS:-${CFLAGS:-}} -std=c++17 "${DEFS[@]}" "${INC[@]}" "${FLAGS[@]}" -c "$1" -o "$2" ;;
-    *)     $CC ${CFLAGS:-} -std=gnu11 "${DEFS[@]}" "${INC[@]}" "${FLAGS[@]}" -c "$1" -o "$2" ;;
+    *)     $CC ${CFLAGS:-} -std=gnu11 "${DEFS[@]}" "${INC[@]}" "${FLAGS[@]}" ${extra[@]+"${extra[@]}"} -c "$1" -o "$2" ;;
   esac
 }
 export -f compile; export CC CXX CFLAGS CXXFLAGS 2>/dev/null || true

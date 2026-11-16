@@ -3122,6 +3122,10 @@ const BLOCKABLE = [
   { id: "drm",    label: "DRM"      },
   /* ★ V12 FreeDV digital voice (docs/v12/FREEDV.md) — a demodulator; listed by the server only where libcodec2 is installed. */
   { id: "freedv", label: "FreeDV (digital voice)" },
+  /* ★★ V12 2026-11-16 FreeDV's RADE V1 (what nearly every FreeDV station sends): under FreeDV, offered where RADE is in the
+   *  build. The benchmark's dec_rade row unticks it on a box that measured it below green (benchApplyDefaults) — the owner
+   *  can always tick it back. Off, AUTO hunts 700D / 700E / 1600 only and listeners are not offered RADE. */
+  { id: "rade", label: "FreeDV: RADE V1", parent: "freedv" },
   /* ★ V12 M17 digital voice (docs/v12/M17.md) — a demodulator on 2 m / 70 cm; listed only where libcodec2 is installed. */
   { id: "m17",    label: "M17 (digital voice)" },
   { id: "dab",    label: "DAB"      },

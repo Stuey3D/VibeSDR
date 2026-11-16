@@ -58,7 +58,7 @@ struct Facts {
 inline const std::vector<const char*>& allModes() {
     static const std::vector<const char*> v = {
         "wfm", "rds", "nfm", "tone", "am", "usb", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "lsb", "cwu", "cwl",
-        "drm", "freedv", "m17", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
+        "drm", "freedv", "rade", "m17", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
         "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
@@ -164,6 +164,7 @@ inline Caps compute(const Facts& f) {
         if (id == "amst") return touches(R, 520e3, 1710e3);            // ★ C-QUAM is medium wave
         if (id == "drm") return touches(R, 148.5e3, 24e6);             // ★ DRM30: LW, MW and SW (not an R820T's 24 MHz up)
         if (id == "freedv") return hf;                                  // ★ V12 FreeDV digital voice: the HF amateur bands
+        if (id == "rade") return hf;                                    // ★ V12 FreeDV's RADE V1, an option under it
         /* ★ V12 M17 digital voice: the 2 m and 70 cm amateur bands, where M17 lives — on every SDR that reaches one. The
          *  HF+ gets it on 2 m (it stops at 260 MHz, so 70 cm is never in its ranges; touches() decides). An Icom never: its
          *  FM audio is demodulated and de-emphasised in the radio, and the 4-FSK receiver reads IQ (not in kIcom above). */

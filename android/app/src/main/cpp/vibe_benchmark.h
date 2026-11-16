@@ -404,7 +404,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora",
                             "dec_rttyauto", "dec_cw", "dec_cwskim", "dec_psk", "dec_pskskim", "dec_jtty", "dec_sitora", "dec_dsc",
                             "dec_same", "dec_selcal", "dec_mfsk", "dec_hell", "dec_aprs", "dec_paging", "dec_ndb", "dec_ais",
-                            "dec_ism", "dec_wmbus", "dec_lora_all", "dec_tone", "dec_nr", "dec_notch", "dec_dxscan", "dec_freedv", "dec_m17", "dab", "adsb" })
+                            "dec_ism", "dec_wmbus", "dec_lora_all", "dec_tone", "dec_nr", "dec_notch", "dec_dxscan", "dec_freedv", "dec_rade", "dec_m17", "dab", "adsb" })
         (void)gated(id);
     for (const char* id : { "dec_vdl2", "dec_acars", "dec_hfdl" }) (void)gated(id);   // ★ V12 aviation
     (void)gated("dec_rs41");   // ★ V12 RS41 radiosondes

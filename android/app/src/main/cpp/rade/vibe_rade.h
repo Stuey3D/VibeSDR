@@ -70,12 +70,14 @@ void vrade_tx_close(vrade_tx* t);
 /** Samples per modem frame (960) and per end-of-over frame (1152), at 8 kHz. */
 int vrade_tx_frame_samples(void);
 int vrade_tx_eoo_samples(void);
-/** Push n speech samples (16 kHz, ±1). Each completed 120 ms modem frame is appended to out as real 8 kHz samples
- *  (nominal peak about ±1); returns how many were written. out must hold vrade_tx_frame_samples() * (1 + n / 1920). */
-int vrade_tx_speech(vrade_tx* t, const float* speech, int n, float* out);
-/** The end-of-over frame carrying `callsign` (FreeDV's reliable text: up to 8 of A-Z 0-9 / and a few symbols). Writes
- *  vrade_tx_eoo_samples() samples to out and returns that count. */
-int vrade_tx_eoo(vrade_tx* t, const char* callsign, float* out);
+/** Push n speech samples (16 kHz, ±1). Each completed 120 ms modem frame is appended at 8 kHz — the real part to re (what
+ *  an SSB transmitter sends; nominal peak about ±1) and, when im is not NULL, the imaginary part (re + j·im is the analytic
+ *  signal: every carrier is above 0 Hz). Returns how many samples were written; each buffer must hold
+ *  vrade_tx_frame_samples() * (1 + n / 1920). */
+int vrade_tx_speech(vrade_tx* t, const float* speech, int n, float* re, float* im);
+/** The end-of-over frame carrying `callsign` (FreeDV's reliable text: up to 8 of A-Z 0-9 / and a few symbols), as above.
+ *  Writes vrade_tx_eoo_samples() samples and returns that count. */
+int vrade_tx_eoo(vrade_tx* t, const char* callsign, float* re, float* im);
 
 #ifdef __cplusplus
 }

@@ -46,6 +46,16 @@ for d in "${VIBE_DEPS:-/nonexistent}" vibeserver/mac/deps/prefix; do
   fi
 done
 
+# ★ V12 FreeDV RADE V1: the receiver (librade_vibe.a) and the tests' transmitter (librade_vibe_tx.a) from build-rade.sh — a
+#   release's deps prefix, VIBE_RADE_PREFIX, or the Mac's deps prefix. Without them test-freedv runs its codec2 half only
+#   (and says the RADE half is NOT RUN). The transmitter's archive goes FIRST: it takes its end-of-over bits from the receiver's.
+RADE_FLAGS=""; RADE_LIBS=""
+for d in "${VIBE_DEPS:-/nonexistent}" "${VIBE_RADE_PREFIX:-/nonexistent}" vibeserver/mac/deps/prefix; do
+  if [ -f "$d/lib/librade_vibe.a" ] && [ -f "$d/lib/librade_vibe_tx.a" ]; then
+    RADE_FLAGS="-DVIBE_HAVE_RADE -DVIBE_HAVE_RADE_TX -I $d/include"; RADE_LIBS="$d/lib/librade_vibe_tx.a $d/lib/librade_vibe.a"; break
+  fi
+done
+
 # test name -> extra compiler flags it needs
 flags_for() {
   case "$1" in
@@ -95,7 +105,7 @@ flags_for() {
     test-auto-bw)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★★ V12 SSB / CW auto bandwidth (autobw.cpp) through the real pipeline
     # ★★ V12 FreeDV as a mode (vibe_freedv.h): codec2's own transmitter → noise → our modem host and the real USB chain.
     #    NOT RUN (exit 3) without libcodec2 (apt install libcodec2-1.2 / brew install codec2) — it is dlopen'd, never linked.
-    test-freedv)           echo "-O2 -I $VDSP -I $KISS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
+    test-freedv)           echo "-O2 -I $VDSP -I $KISS $RADE_FLAGS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
     # ★★ V12 M17 as a mode (vibe_m17_fec.h, vibe_m17.h): our own encoder from the spec → RRC 4-FSK → noise → our receiver, and
     #    the real RxPipeline in NFM. The voice checks are NOT RUN (exit 3) without libcodec2 — the FEC, packets and callsigns
     #    still run and must pass.
@@ -306,7 +316,10 @@ deps_for() {
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-pll-iq)          echo "$VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;
     test-am-sync)         echo "$VDSP/amsync.cpp $VDSP/ddc.cpp $VDSP/fft.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-auto-bw|test-freedv|test-m17) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-freedv) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c $RADE_LIBS" ;;
+    test-auto-bw|test-m17) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
@@ -1803,7 +1816,7 @@ fresh_clip_writer() {   # name  source…
       || { rm -f "$bin"; echo "   ($name did not build — its clip is not made: $OUT/$name.clipbuildlog)"; }
   fi
 }
-[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-freedv android/app/src/main/cpp/vibe_freedv.h
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-freedv android/app/src/main/cpp/vibe_freedv.h $RADE_LIBS
 printf '\n\033[1m── FreeDV (end to end: the server, then the web client) ──\033[0m\n'
 if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-freedv" ] && "$OUT/test-freedv" clip "$OUT/freedv-clip.cu8" 288000 20 12 >/dev/null \
    && "$OUT/test-freedv" clip "$OUT/freedv-clip-lsb.cu8" 288000 20 12 lsb >/dev/null; then
@@ -1815,7 +1828,7 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-freedv" ] && "$OUT/test-freed
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/freedv-clip.cu8" "$OUT/freedv-clip-lsb.cu8"
 else
-  echo '   not run — needs VIBESERVER_BIN and libcodec2 (apt install libcodec2-1.2 / brew install codec2)'; notrun=$((notrun+1))
+  echo '   not run — needs VIBESERVER_BIN and libcodec2 (apt install libcodec2-1.2 / brew install codec2) or RADE (build-rade.sh)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 M17 AS A MODE (vibe_m17.h, docs/v12/M17.md): the real server on a fake rtl_tcp replaying test-m17's synthetic clip
@@ -1832,7 +1845,7 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-m17" ] && [ "$("$OUT/test-m17
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/m17-clip.cu8"
 else
-  echo '   not run — needs VIBESERVER_BIN and libcodec2 (apt install libcodec2-1.2 / brew install codec2)'; notrun=$((notrun+1))
+  echo '   not run — needs VIBESERVER_BIN and libcodec2 (apt install libcodec2-1.2 / brew install codec2) or RADE (build-rade.sh)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 THE DRM CONSTELLATION + RECEPTION METER (2026-11-12): the same shape on a SYNTHETIC DRM signal (the test

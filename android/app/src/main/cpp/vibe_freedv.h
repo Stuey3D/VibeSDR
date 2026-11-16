@@ -16,10 +16,15 @@
 //    it is sending from a PCM buffer (silence until primed, silence on underrun, the oldest dropped past 1.5 s). The
 //    modem and the vocoder run on their own vibe-freedv thread at the audio-codec rung, below the chain that feeds it —
 //    as DAB+'s FAAD2 does. A slow modem can never stall the audio thread: at worst it is late and the listener hears a gap.
-// ★★ AUTO: the three priority modes (700D, 700E, 1600) are all demodulated while searching, and the first to hold sync
+// ★★ AUTO: the priority modes (RADE V1, 700D, 700E, 1600) are all demodulated while searching, and the first to hold sync
 //    for a second wins; the others are closed (memory and CPU back) and AUTO searches again only after 8 s without sync.
 //    A manual choice runs that one mode only — the fallback for when AUTO cannot settle (house rule: auto decoders keep
 //    manual controls underneath).
+// ★★★ RADE V1 (V12, 2026-11-16 — what nearly every FreeDV station sends today) is NOT codec2: it is FreeDV's own C port,
+//     rade_c, with Opus's FARGAN vocoder (all BSD), COMPILED IN where the build found it (VIBE_HAVE_RADE, librade_vibe.a —
+//     rade/vibe_rade.h, vibeserver/linux/build-rade.sh). So a server without libcodec2 still offers FreeDV, with RADE
+//     alone; a server with neither does not offer the mode at all. Its end-of-over callsign (CRC-checked) is reported as
+//     "last" once the over ends — it names the station just heard, never the one talking now.
 #pragma once
 #include "vibedsp/vibedsp.h"
 #include "vibe_thread.h"
@@ -41,6 +46,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(VIBE_HAVE_RADE)
+#include "vibe_rade.h"   // ★ the RADE V1 receiver (librade_vibe.a); its transmitter (librade_vibe_tx.a) only in tests
+#endif
+
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
@@ -56,10 +65,15 @@
 namespace vibe {
 namespace freedv {
 
-/** ★ The sub-modes we offer, in the order a picker draws them. 0 = AUTO. The numbers are ours, not codec2's. */
-enum Sub : int { kAuto = 0, k700D = 1, k700E = 2, k1600 = 3 };
+/** ★ The sub-modes we offer. 0 = AUTO. The numbers are ours, not codec2's (RADE is not codec2's at all). The picker's
+ *  order is subsJson's: RADE first — it is what is on air. */
+enum Sub : int { kAuto = 0, k700D = 1, k700E = 2, k1600 = 3, kRade = 4 };
+constexpr int kSubCount = 5;
 inline const char* subName(int s) {
-    switch (s) { case k700D: return "700D"; case k700E: return "700E"; case k1600: return "1600"; default: return "auto"; }
+    switch (s) {
+        case k700D: return "700D"; case k700E: return "700E"; case k1600: return "1600"; case kRade: return "RADE";
+        default: return "auto";
+    }
 }
 /** "700D" / "700d" / "auto" → Sub; -1 when it is none of ours. */
 inline int subFromName(const std::string& n) {
@@ -69,6 +83,7 @@ inline int subFromName(const std::string& n) {
     if (u == "700D") return k700D;
     if (u == "700E") return k700E;
     if (u == "1600") return k1600;
+    if (u == "RADE" || u == "RADEV1") return kRade;
     return -1;
 }
 /** ★ The sideband choice (Stuart 2026-11-16): AUTO follows FreeDV's SSB convention — LSB below 10 MHz, USB from 10 MHz
@@ -104,7 +119,7 @@ struct Api {
     std::string why;            ///< why not, in words, when !ok ("libcodec2 is not installed")
     std::string path;           ///< the library that loaded
     int version = 0;            ///< freedv_get_version()
-    bool sub[4] = {false, false, false, false};   ///< which of 700D/700E/1600 this library can open
+    bool sub[kSubCount] = {false, false, false, false, false};   ///< which sub-modes run here: 700D/700E/1600 (libcodec2), RADE (compiled in)
     FdvOpaque* (*open)(int) = nullptr;
     void (*close)(FdvOpaque*) = nullptr;
     int (*rx)(FdvOpaque*, short*, short*) = nullptr;
@@ -123,16 +138,11 @@ struct Api {
     int (*getVersion)() = nullptr;
     /** ★ Optional (the tests' transmitter only): the complex modulator — the modem signal as its analytic baseband. */
     void (*comptx)(FdvOpaque*, void* /*COMP[] = {float re, im}*/, short*) = nullptr;
-    /** True when at least one of our sub-modes can be opened — the whole question "is the mode offered?". */
-    bool anySub() const { return ok && (sub[k700D] || sub[k700E] || sub[k1600]); }
-    /** ["700D","700E","1600"] — what this library offers, for hwinfo. */
-    std::string subsJson() const {
-        std::string j = "[";
-        bool first = true;
-        for (int s = k700D; s <= k1600; ++s)
-            if (ok && sub[s]) { j += std::string(first ? "\"" : ",\"") + subName(s) + "\""; first = false; }
-        return j + "]";
-    }
+    /** True when at least one of our sub-modes can be opened — the whole question "is the mode offered?". `ok` is about
+     *  libcodec2 only: RADE needs none of it. (The owner's RADE switch is applied by runs(), below.) */
+    bool anySub() const;
+    /** ["RADE","700D","700E","1600"] — what this server runs, for hwinfo, in the picker's order. */
+    std::string subsJson() const;
 };
 
 #if !defined(VIBE_FREEDV_NO_DLOPEN)
@@ -191,15 +201,37 @@ inline const Lib& lib() {
     return l;
 }
 
+/** ★ RADE V1: compiled in, and a receiver opens (it allocates ~0.5 MB). VIBE_RADE_DISABLE=1 takes RADE alone away (the
+ *  tests: the mode with libcodec2 only); VIBE_FREEDV_DISABLE=1 takes the whole mode away, RADE included. */
+inline bool radeRuns() {
+#if defined(VIBE_HAVE_RADE)
+    if (const char* d = std::getenv("VIBE_RADE_DISABLE")) if (d[0] && d[0] != '0') return false;
+    vrade_rx* r = vrade_rx_open();
+    if (!r) return false;
+    vrade_rx_close(r);
+    return true;
+#else
+    return false;
+#endif
+}
+
+inline Api loadCodec2Api();
 /** Load once, on first ask; thread-safe (a function-local static). VIBE_FREEDV_DISABLE=1 makes it report "not
  *  installed" — for the tests that prove the mode disappears without the library. */
 inline Api loadApi() {
+    if (const char* d = std::getenv("VIBE_FREEDV_DISABLE")) if (d[0] && d[0] != '0') { Api a; a.why = "FreeDV switched off (VIBE_FREEDV_DISABLE)"; return a; }
+    Api a = loadCodec2Api();
+    a.sub[kRade] = radeRuns();
+    if (a.sub[kRade] && !a.ok) a.why += " (RADE V1 runs without it)";
+    return a;
+}
+/** The libcodec2 half: 700D, 700E and 1600. */
+inline Api loadCodec2Api() {
     Api a;
 #if defined(VIBE_FREEDV_NO_DLOPEN)
     a.why = "FreeDV is not available on this platform yet";
     return a;
 #else
-    if (const char* d = std::getenv("VIBE_FREEDV_DISABLE")) if (d[0] && d[0] != '0') { a.why = "FreeDV switched off (VIBE_FREEDV_DISABLE)"; return a; }
     const Lib& L = lib();
     void* h = L.handle;
     if (!h) { a.why = L.why; return a; }
@@ -238,6 +270,31 @@ inline Api loadApi() {
 inline const Api& api() {
     static const Api a = loadApi();
     return a;
+}
+/** ★★ THE OWNER'S RADE SWITCH ("rade", under FreeDV on the setup page — vibe_setup_page.h BLOCKABLE). The server sets this
+ *  to its blocked-modes question (vsModeBlocked("rade")); unset (the tests) RADE is never blocked. The benchmark's dec_rade
+ *  row ticks it OFF on a fresh setup where RADE is not green — the owner can always tick it back (never hidden). */
+inline bool (*&radeBlockedFn())() { static bool (*f)() = nullptr; return f; }
+/** RADE is in this build and a receiver opens — whatever the owner chose (the setup page shows the switch on this). */
+inline bool radeBuilt() { return api().sub[kRade]; }
+/** Which sub-mode `s` runs on this server now: 700D… through libcodec2; RADE compiled in and not switched off. */
+inline bool runs(int s) {
+    if (s <= kAuto || s >= kSubCount || !api().sub[s]) return false;
+    if (s != kRade) return api().ok;
+    return !(radeBlockedFn() && radeBlockedFn()());
+}
+inline bool Api::anySub() const {
+    if (ok && (sub[k700D] || sub[k700E] || sub[k1600])) return true;
+    return sub[kRade] && !(radeBlockedFn() && radeBlockedFn()());
+}
+inline std::string Api::subsJson() const {
+    std::string j = "[";
+    bool first = true;
+    for (int s : {int(kRade), int(k700D), int(k700E), int(k1600)}) {
+        const bool on = sub[s] && (s == kRade ? !(radeBlockedFn() && radeBlockedFn()()) : ok);
+        if (on) { j += std::string(first ? "\"" : ",\"") + subName(s) + "\""; first = false; }
+    }
+    return j + "]";
 }
 /** ★ The one question every reader asks — hwinfo's `modes`, vsModeKnown, the clients' picker through hwinfo. */
 inline bool available() { return api().anySub(); }
@@ -298,32 +355,69 @@ inline const Vocoder& vocoder() {
     return v;
 }
 
-/** ★ A FreeDV signal as 48 kHz USB audio, made by the library's OWN transmitter (freedv_tx) from a synthetic voice — the
- *  benchmark's proof that its row decodes (vibe_benchmark_more.h dec_freedv). Empty when the library is not here. */
-inline std::vector<float> testAudio48k(int sub, double sec, float rms = 0.1f) {
-    const Api& a = api();
-    std::vector<float> out;
-    if (!a.ok || sub < k700D || sub > k1600 || !a.sub[sub]) return out;
-    FdvOpaque* f = a.open(codec2Mode(sub));
-    if (!f) return out;
-    const int ns = a.nSpeech(f), nm = a.nNomModem(f);
-    std::vector<short> sp(static_cast<size_t>(ns)), mod(static_cast<size_t>(nm));
-    std::vector<float> m8;
-    double ph = 0; long n = 0;
-    for (double t = 0; t < sec; t += double(ns) / 8000) {
-        for (int i = 0; i < ns; ++i, ++n) {
-            const double tt = double(n) / 8000, f0 = 120 + 30 * std::sin(2 * M_PI * 0.7 * tt);
-            ph += 2 * M_PI * f0 / 8000;
-            double v = 0;
-            for (int h = 1; h * f0 < 3500; ++h) v += std::sin(h * ph) / h;
-            sp[size_t(i)] = short(std::lrint(4000 * v * std::max(0.0, std::sin(2 * M_PI * 3.5 * tt))));
-        }
-        a.tx(f, mod.data(), sp.data());
-        for (short v : mod) m8.push_back(float(v));
+/** ★ The tests' and the benchmark's synthetic voice: a buzz whose pitch wanders (120 ± 30 Hz) with its harmonics to
+ *  3.5 kHz, in syllables (3.5 per second). `n` samples at `rate`. */
+inline void synthVoice(std::vector<float>& out, int rate, long n, float amp) {
+    out.resize(size_t(n));
+    double ph = 0;
+    for (long i = 0; i < n; ++i) {
+        const double tt = double(i) / rate, f0 = 120 + 30 * std::sin(2 * M_PI * 0.7 * tt);
+        ph += 2 * M_PI * f0 / rate;
+        double v = 0;
+        for (int h = 1; h * f0 < 3500; ++h) v += std::sin(h * ph) / h;
+        out[size_t(i)] = float(amp * v * std::max(0.0, std::sin(2 * M_PI * 3.5 * tt)));
     }
-    a.close(f);
+}
+
+#if defined(VIBE_HAVE_RADE) && defined(VIBE_HAVE_RADE_TX)
+/** ★ A RADE V1 over as 8 kHz modem audio (nominal peak ±1), made by FreeDV's own transmitter (rade_c, the tests' archive
+ *  librade_vibe_tx.a): `sec` of the synthetic voice, then the end-of-over frame carrying `callsign` ("" = none sent). */
+inline std::vector<float> radeOver8k(double sec, const char* callsign) {
+    std::vector<float> m8, sp;
+    vrade_tx* t = vrade_tx_open();
+    if (!t) return m8;
+    synthVoice(sp, VRADE_SPEECH_RATE, long(sec * VRADE_SPEECH_RATE), 0.25f);
+    m8.resize(size_t(vrade_tx_frame_samples()) * (2 + sp.size() / 1920));
+    m8.resize(size_t(vrade_tx_speech(t, sp.data(), int(sp.size()), m8.data(), nullptr)));
+    if (callsign) {
+        std::vector<float> e(static_cast<size_t>(vrade_tx_eoo_samples()));
+        e.resize(size_t(vrade_tx_eoo(t, callsign, e.data(), nullptr)));
+        m8.insert(m8.end(), e.begin(), e.end());
+    }
+    vrade_tx_close(t);
+    return m8;
+}
+#endif
+
+/** ★ A FreeDV signal as 48 kHz USB audio, made by the library's OWN transmitter (freedv_tx; RADE's, rade_c's) from a
+ *  synthetic voice — the benchmark's proof that its row decodes (vibe_benchmark_more.h dec_freedv). Empty when that
+ *  transmitter is not here (RADE's only in the tests). */
+inline std::vector<float> testAudio48k(int sub, double sec, float rms = 0.1f) {
+    std::vector<float> out, m8;
+    if (sub == kRade) {
+#if defined(VIBE_HAVE_RADE) && defined(VIBE_HAVE_RADE_TX)
+        m8 = radeOver8k(sec, "G4ABC");
+#endif
+    } else {
+        const Api& a = api();
+        if (!a.ok || sub < k700D || sub > k1600 || !a.sub[sub]) return out;
+        FdvOpaque* f = a.open(codec2Mode(sub));
+        if (!f) return out;
+        const int ns = a.nSpeech(f), nm = a.nNomModem(f);
+        std::vector<float> voice;
+        std::vector<short> sp(static_cast<size_t>(ns)), mod(static_cast<size_t>(nm));
+        const long total = long(std::ceil(sec * 8000 / ns)) * ns;
+        synthVoice(voice, 8000, total, 4000.f);
+        for (long at = 0; at + ns <= total; at += ns) {
+            for (int i = 0; i < ns; ++i) sp[size_t(i)] = short(std::lrint(voice[size_t(at + i)]));
+            a.tx(f, mod.data(), sp.data());
+            for (short v : mod) m8.push_back(float(v));
+        }
+        a.close(f);
+    }
+    if (m8.empty()) return out;
     double p = 0; for (float v : m8) p += double(v) * v;
-    const float k = m8.empty() ? 0.f : float(rms / std::sqrt(p / double(m8.size())));
+    const float k = float(rms / std::sqrt(p / double(m8.size())));
     for (float& v : m8) v *= k;
     vibedsp::RationalResampler up(8000, 48000);
     out.resize(static_cast<size_t>(up.maxOut(int(m8.size()))));
@@ -335,11 +429,13 @@ inline std::vector<float> testAudio48k(int sub, double sec, float rms = 0.1f) {
 class FreeDvListener {
 public:
     static constexpr int kOutRate = 48000;
-    static constexpr int kModemRate = 8000;   // ★ 700D, 700E and 1600 all run their modem at 8 kHz (checked at open)
+    static constexpr int kModemRate = 8000;   // ★ 700D, 700E, 1600 and RADE all run their modem at 8 kHz (checked at open)
 
     /** `sbSel` / `lsb`: the sideband choice and the side demodulated, set BEFORE the worker's first report — a new
      *  receiver for a nudged dial must not report AUTO for a moment when the listener chose USB. */
-    explicit FreeDvListener(int sub = kAuto, int sbSel = kSbAuto, bool lsb = false) : want_(sub) {
+    /** `withRade` false: AUTO never opens RADE (the benchmark's dec_freedv row measures the codec2 trio alone — RADE has
+     *  its own row, dec_rade, and its own default). */
+    explicit FreeDvListener(int sub = kAuto, int sbSel = kSbAuto, bool lsb = false, bool withRade = true) : want_(sub), withRade_(withRade) {
         if (sbSel >= kSbAuto && sbSel <= kSbLsb) sbSel_.store(sbSel);
         lsb_.store(lsb);
         // ★ the report a client reads before the worker's first publish carries the same choice (the placeholder
@@ -384,7 +480,7 @@ public:
     }
 
     /** ★ The listener's choice: AUTO or one sub-mode. Applied by the worker before its next block. */
-    void setSub(int sub) { if (sub >= kAuto && sub <= k1600) want_.store(sub); }
+    void setSub(int sub) { if (sub >= kAuto && sub < kSubCount) want_.store(sub); }
     /** ★ Which sideband the radio demodulates for it (the server's rule: FreeDV's SSB convention) — reported, so a client
      *  draws the passband on the right side of the dial without a rule of its own. */
     void setSideband(bool lsb) { lsb_.store(lsb, std::memory_order_relaxed); }
@@ -410,11 +506,13 @@ public:
     /** ★ The modem's SNR estimate in dB while in sync, else NaN. */
     float snrDb() const { return snr_.load(std::memory_order_relaxed); }
     /** How many times AUTO has chosen sub-mode `s` since this receiver began (the tests: a false win shows here). */
-    int winsOf(int s) const { return s >= 0 && s < 4 ? wins_[s].load(std::memory_order_relaxed) : 0; }
+    int winsOf(int s) const { return s >= 0 && s < kSubCount ? wins_[s].load(std::memory_order_relaxed) : 0; }
     /** AUTO winners that lost sync within kProbationSec and sent it back to the full search. */
     int probationLosses() const { return probationLosses_.load(std::memory_order_relaxed); }
-    /** Modems open right now — 3 while AUTO searches, 1 once locked (the test checks the others were closed). */
+    /** Modems open right now — every sub-mode while AUTO searches, 1 once locked (the test checks the others were closed). */
     int modemsOpen() const { return open_.load(std::memory_order_relaxed); }
+    /** ★ RADE: the last end-of-over callsign heard on this receiver ("" before any) — the tests' "did the EOO decode?". */
+    std::string lastCallsign() const { std::lock_guard<std::mutex> lk(sm_); return last_; }
 
 private:
     static constexpr int kPrimeFrames = kOutRate * 3 / 10;   // 0.3 s — a 700D modem frame is 160 ms of speech
@@ -437,6 +535,10 @@ private:
     struct Modem {
         int sub = 0;
         FdvOpaque* f = nullptr;
+#if defined(VIBE_HAVE_RADE)
+        vrade_rx* rade = nullptr;   // ★ kRade: FreeDV's RADE V1 receiver instead of a codec2 FreeDV object
+        std::vector<float> rin, rout;
+#endif
         std::vector<short> in;      // modem-rate samples waiting
         size_t head = 0;
         std::vector<short> out;     // one freedv_rx call's speech
@@ -472,9 +574,20 @@ private:
 
     void openModem(int sub) {
         const Api& a = api();
-        if (!a.ok || !a.sub[sub]) return;
+        if (!runs(sub)) return;
         auto m = std::make_unique<Modem>();
         m->sub = sub;
+#if defined(VIBE_HAVE_RADE)
+        if (sub == kRade) {
+            m->rade = vrade_rx_open();
+            if (!m->rade) return;
+            m->rin.resize(size_t(vrade_rx_nin_max()));
+            m->rout.resize(size_t(vrade_rx_pcm_max()));
+            m->in.reserve(size_t(vrade_rx_nin_max()) * 4);
+            modems_.push_back(std::move(m));
+            return;
+        }
+#endif
         m->f = a.open(codec2Mode(sub));
         if (!m->f) return;
         if (a.modemRate(m->f) != kModemRate) { a.close(m->f); return; }
@@ -484,8 +597,14 @@ private:
         m->in.reserve(size_t(std::max(1, a.nMaxModem(m->f))) * 4);
         modems_.push_back(std::move(m));
     }
+    static void closeModem(Modem& m) {
+        if (m.f) { api().close(m.f); m.f = nullptr; }
+#if defined(VIBE_HAVE_RADE)
+        if (m.rade) { vrade_rx_close(m.rade); m.rade = nullptr; }
+#endif
+    }
     void closeAll() {
-        for (auto& m : modems_) if (m && m->f) api().close(m->f);
+        for (auto& m : modems_) if (m) closeModem(*m);
         modems_.clear();
         active_ = nullptr;
     }
@@ -493,7 +612,7 @@ private:
     void rebuild(int sub) {
         closeAll();
         cur_ = sub;
-        if (sub == kAuto) { for (int s = k700D; s <= k1600; ++s) openModem(s); }
+        if (sub == kAuto) { for (int s : {int(kRade), int(k700D), int(k700E), int(k1600)}) if (s != kRade || withRade_) openModem(s); }
         else openModem(sub);
         if (sub != kAuto && !modems_.empty()) active_ = modems_.front().get();
         locked_.store(kAuto);
@@ -504,6 +623,9 @@ private:
         publish(true);
     }
     void makeUp(Modem& m) {
+#if defined(VIBE_HAVE_RADE)
+        if (m.rade) { m.up.reset(new vibedsp::RationalResampler(VRADE_SPEECH_RATE, kOutRate)); return; }   // ★ FARGAN: 16 kHz
+#endif
         const int sr = api().speechRate(m.f);
         m.up.reset(new vibedsp::RationalResampler(sr > 0 ? sr : 8000, kOutRate));
     }
@@ -542,7 +664,64 @@ private:
         closeAll();
     }
 
+    /** ★ Decoded speech from the active modem, at its own rate, into the 48 kHz PCM buffer the audio callback takes from. */
+    void pushSpeech(Modem& m, const float* sp, int n) {
+        speechBlocks_.fetch_add(1, std::memory_order_relaxed);
+        spO_.resize(size_t(m.up->maxOut(n)));
+        const int no = m.up->process(sp, n, spO_.data());
+        std::lock_guard<std::mutex> lk(pm_);
+        pcm_.insert(pcm_.end(), spO_.begin(), spO_.begin() + no);
+        if (pcm_.size() > size_t(kMaxFrames)) pcm_.erase(pcm_.begin(), pcm_.end() - kPrimeFrames);
+    }
+
+#if defined(VIBE_HAVE_RADE)
+    /* ★★ RADE V1, one modem frame (120 ms) per call. Its own state machine decides sync — four pilot detections in a row
+     *  (~0.5 s) before it calls it, so no extra hold here (kHeldSec is for codec2's flickering OFDM syncs). "Clean" is a
+     *  decoded frame whose unique word (the auxiliary bits the decoder hands back) came through without errors — RADE has
+     *  no FEC to report, and the UW is what its own receiver uses to drop a false sync. The end-of-over frame carries the
+     *  callsign, LDPC-coded and CRC-checked (FreeDV's reliable text): kept as "last", never shown as the station talking. */
+    void runRade(Modem& m) {
+        int zeroRuns = 0;
+        for (;;) {
+            const int nin = vrade_rx_nin(m.rade);
+            if (nin < 0 || m.in.size() - m.head < size_t(nin)) break;
+            if (nin == 0 && ++zeroRuns > 4) break;
+            for (int i = 0; i < nin; ++i) m.rin[size_t(i)] = float(m.in[m.head + size_t(i)]) * (1.0f / 16000.0f);
+            int info = 0;
+            const int nout = vrade_rx_process(m.rade, m.rin.data(), m.rout.data(), &info);
+            m.head += size_t(nin);
+            const double dt = double(nin) / kModemRate;
+            m.sync = vrade_rx_sync(m.rade) != 0;
+            m.sinceGoodSec += dt;
+            if (m.sync || (info & VRADE_INFO_FRAME)) {
+                m.syncSec += dt; m.lostSec = 0; m.snr = vrade_rx_snr_db(m.rade);
+                if (info & VRADE_INFO_FRAME) {
+                    if (info & VRADE_INFO_UWERR) ++m.dirty;
+                    else { ++m.clean; m.sinceGoodSec = 0; }
+                }
+            } else {
+                if (m.syncSec > 0 && &m == active_) note("lost", m);
+                m.syncSec = 0; m.lostSec += dt; m.clean = m.dirty = 0;
+            }
+            if (info & VRADE_INFO_CALL) {
+                std::string c = vrade_rx_callsign(m.rade);
+                note("callsign", m);
+                if (!c.empty()) { std::lock_guard<std::mutex> lk(sm_); last_ = c; }
+            }
+            if (&m == active_ && nout > 0) pushSpeech(m, m.rout.data(), nout);
+        }
+        if (m.head > 0 && (m.head >= m.in.size() / 2 || m.head > 16384)) {
+            m.in.erase(m.in.begin(), m.in.begin() + long(m.head));
+            m.head = 0;
+        }
+        if (m.in.size() > size_t(kModemRate) * 4) { m.in.clear(); m.head = 0; }   // never more than 4 s behind
+    }
+#endif
+
     void runModem(Modem& m) {
+#if defined(VIBE_HAVE_RADE)
+        if (m.rade) { runRade(m); return; }
+#endif
         const Api& a = api();
         /* ★★★ nin == 0 IS A REAL ANSWER (found 2026-11-16, the intermittent test-server-freedv failure). The OFDM modes' timing
          *  loop asks for FEWER samples to slip back, and now and then for none at all. This loop used to read 0 as "nothing to
@@ -575,13 +754,9 @@ private:
                 m.syncSec = 0; m.lostSec += dt; m.clean = m.dirty = 0;
             }
             if (&m == active_ && nout > 0 && m.syncSec >= kHeldSec) {
-                speechBlocks_.fetch_add(1, std::memory_order_relaxed);
-                spF_.resize(size_t(nout)); spO_.resize(size_t(m.up->maxOut(nout)));
+                spF_.resize(size_t(nout));
                 for (int i = 0; i < nout; ++i) spF_[size_t(i)] = float(m.out[size_t(i)]) * (1.0f / 32768.0f);
-                const int no = m.up->process(spF_.data(), nout, spO_.data());
-                std::lock_guard<std::mutex> lk(pm_);
-                pcm_.insert(pcm_.end(), spO_.begin(), spO_.begin() + no);
-                if (pcm_.size() > size_t(kMaxFrames)) pcm_.erase(pcm_.begin(), pcm_.end() - kPrimeFrames);
+                pushSpeech(m, spF_.data(), nout);
             }
         }
         // ★ bounded: compact once the consumed part is the bulk of it
@@ -614,7 +789,7 @@ private:
                     // ★ the winner stays; the others go (memory and CPU back)
                     std::unique_ptr<Modem> keep;
                     for (auto& m : modems_) if (m.get() == best) keep = std::move(m);
-                    for (auto& m : modems_) if (m && m->f) api().close(m->f);
+                    for (auto& m : modems_) if (m) closeModem(*m);
                     modems_.clear();
                     modems_.push_back(std::move(keep));
                     active_ = modems_.front().get();
@@ -634,7 +809,7 @@ private:
                 return;
             }
         }
-        const bool in = active_ && active_->sync && active_->syncSec >= kHeldSec;
+        const bool in = heldSync(active_);
         locked_.store(in ? active_->sub : kAuto);
         snr_.store(in ? active_->snr : NAN);
     }
@@ -651,9 +826,16 @@ private:
     static void jsonText(std::string& j, const std::string& s) {
         for (char c : s) { if (c == '"' || c == '\\') j += '\\'; j += c; }
     }
-    /** {"type":"freedv","sub":"auto"|"700D"…,"sb":"usb"|"lsb","sbSel":"auto"|"usb"|"lsb","state":"search"|"sync","mode":"700D"|"","snr":5,"text":"…"} */
+    /** In sync for the report and the speaker: codec2's modes once the sync has held kHeldSec; RADE as soon as its own
+     *  receiver says so (it has already seen four pilots in a row). */
+    static bool heldSync(const Modem* m) {
+        if (!m || !m->sync) return false;
+        return m->sub == kRade ? true : m->syncSec >= kHeldSec;
+    }
+    /** {"type":"freedv","sub":"auto"|"RADE"|"700D"…,"sb":"usb"|"lsb","sbSel":"auto"|"usb"|"lsb","state":"search"|"sync",
+     *   "mode":"RADE"|"700D"|"","snr":5,"text":"…","last":"G4ABC"} — "last": RADE's end-of-over callsign, once an over ended */
     void publish(bool force) {
-        const bool in = active_ && active_->sync && active_->syncSec >= kHeldSec;
+        const bool in = heldSync(active_);
         int snr = 0;
         if (in) {
             const double now = streamSec_;   // ★ stream time, not the wall clock: the same signal, the same reports
@@ -670,12 +852,14 @@ private:
         j += "\"";
         if (in) j += ",\"snr\":" + std::to_string(snr);
         if (active_ && !active_->text.empty()) { j += ",\"text\":\""; jsonText(j, active_->text); j += "\""; }
-        j += "}";
         std::lock_guard<std::mutex> lk(sm_);
+        if (!last_.empty()) { j += ",\"last\":\""; jsonText(j, last_); j += "\""; }
+        j += "}";
         if (j != status_) { status_ = j; ++statusVer_; }
     }
 
     std::atomic<int> want_;
+    const bool withRade_ = true;
     std::atomic<bool> lsb_{false};
     std::atomic<int> sbSel_{kSbAuto};
     int cur_ = -1;
@@ -687,7 +871,7 @@ private:
     std::atomic<int> locked_{kAuto}, open_{0};
     std::atomic<float> snr_{NAN};
     std::atomic<uint64_t> speechBlocks_{0};
-    std::atomic<int> wins_[4] = {{0}, {0}, {0}, {0}};
+    std::atomic<int> wins_[kSubCount] = {{0}, {0}, {0}, {0}, {0}};
     std::atomic<int> probationLosses_{0};
     double winAt_ = -1e9;
     double snrAt_ = -1e9, streamSec_ = 0; int snrShown_ = 0; bool wasIn_ = false;
@@ -705,6 +889,7 @@ private:
     uint64_t underruns_ = 0;
 
     mutable std::mutex sm_;
+    std::string last_;   // ★ RADE's last end-of-over callsign (guarded by sm_; the worker writes, the report reads)
     std::string status_ = "{\"type\":\"freedv\",\"sub\":\"auto\",\"sb\":\"usb\",\"state\":\"search\",\"mode\":\"\"}";
     uint64_t statusVer_ = 1;
 

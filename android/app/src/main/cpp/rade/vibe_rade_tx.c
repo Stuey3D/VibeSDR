@@ -47,7 +47,7 @@ void vrade_tx_close(vrade_tx* t) {
 int vrade_tx_frame_samples(void) { return RADE_NMF; }
 int vrade_tx_eoo_samples(void) { return RADE_NEOO; }
 
-int vrade_tx_speech(vrade_tx* t, const float* sp, int n, float* out) {
+int vrade_tx_speech(vrade_tx* t, const float* sp, int n, float* out, float* im) {
     int w = 0;
     for (int i = 0; i < n; i++) {
         float v = sp[i] * 32768.f;
@@ -59,16 +59,16 @@ int vrade_tx_speech(vrade_tx* t, const float* sp, int n, float* out) {
         if (++t->nfeat < RADE_NZMF * RADE_FRAMES_PER_STEP) continue;
         t->nfeat = 0;
         const int no = rade_tx_process(&t->tx, t->iq, t->feat);
-        for (int k = 0; k < no; k++) out[w++] = t->iq[k].real;
+        for (int k = 0; k < no; k++, w++) { out[w] = t->iq[k].real; if (im) im[w] = t->iq[k].imag; }
     }
     return w;
 }
 
-int vrade_tx_eoo(vrade_tx* t, const char* callsign, float* out) {
+int vrade_tx_eoo(vrade_tx* t, const char* callsign, float* out, float* im) {
     float bits[VR_EOO_BITS];
     vrade_text_eoo_bits(callsign, bits);   /* ★ from librade_vibe.a: the LDPC code lives there once (C++ COMDAT, see build-rade.sh) */
     rade_tx_state_set_eoo_bits(&t->tx, bits);
     const int no = rade_tx_state_eoo(&t->tx, t->iq);
-    for (int k = 0; k < no; k++) out[k] = t->iq[k].real;
+    for (int k = 0; k < no; k++) { out[k] = t->iq[k].real; if (im) im[k] = t->iq[k].imag; }
     return no;
 }
