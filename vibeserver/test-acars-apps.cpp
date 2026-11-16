@@ -204,6 +204,23 @@ int main() {
         CHECK(j.find("LPAFAYA") == std::string::npos && j.find("\"text\"") == std::string::npos, "no body without the opt-in");
     }
 
+    std::printf("7b. our own encoders (vibe_avi_tx.h) round trip through the parser\n");
+    {
+        int bad = 0;
+        std::mt19937 rng(77);
+        for (int i = 0; i < 2000; ++i) {
+            const double la = -89 + 178.0 * (rng() % 100000) / 100000.0, lo = -179 + 358.0 * (rng() % 100000) / 100000.0;
+            const int alt = int(rng() % 12000) * 4;
+            const double ph = (rng() % 28800) / 8.0;
+            const Result r = parse("B6", vibeavitx::adsCBasic("EGLLXYA", ".G-EUPT", la, lo, alt, ph), true);
+            if (!(r.hasPos && near(r.lat, la, 2e-4) && near(r.lon, lo, 2e-4) && r.altFt == alt && r.fixPastHour == int(std::lround(ph * 8)))) ++bad;
+        }
+        CHECK(bad == 0, "ADS-C encoder → parser: %d of 2000 wrong", bad);
+        const Result f = parse("H1", vibeavitx::fmsPos("N51286W000380", 123456, 350), true);
+        CHECK(f.kind == "FMS position" && near(f.lat, 51 + 28.6 / 60, 1e-9) && near(f.lon, -(0 + 38.0 / 60), 1e-9) && f.altFt == 35000 && f.fixSec == 12 * 3600 + 34 * 60 + 56,
+              "FMS encoder → parser: %s %.4f %.4f", f.kind.c_str(), f.lat, f.lon);
+    }
+
     std::printf("8. the table: positions, OOOI, CPDLC named, bodies only with the owner's opt-in\n");
     {
         vibeavi::Tracker tr(false);

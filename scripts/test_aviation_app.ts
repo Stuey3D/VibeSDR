@@ -1,7 +1,7 @@
 // test_aviation_app.ts — V12 aviation, the clients' half (src/services/aviation.ts): the datalink report parsed
 // defensively (bounded, control characters out, bad numbers dropped), the bands list, the list line (never the body),
 // the HFDL status line. The server's own shapes are checked end to end in scripts/test-server-avdata.mjs.
-import { avAge, avLine, hfdlStatusText, parseAvBands, parseAvReport } from '../src/services/aviation';
+import { avAge, avAppsText, avCard, avDetail, avFix, avLine, avRoute, avTrackItems, avTrackRows, hfdlStatusText, parseAvBands, parseAvReport } from '../src/services/aviation';
 
 let fail = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fail++; };
@@ -25,5 +25,28 @@ const b = parseAvBands([{ id: 'acars', name: 'ACARS', region: 'Europe', hz: 1316
 ok(b.length === 1 && b[0].id === 'acars' && b[0].channels === 4, 'bands: a malformed one dropped');
 ok(hfdlStatusText(null) === 'listening for HFDL' && hfdlStatusText({ msgs: 1, bursts: 3 }) === '1 message · 3 bursts heard', 'the HFDL status line');
 ok(avAge(4) === '4 s ago' && avAge(130) === '2 min ago' && avAge(7300) === '2 h ago', 'ages in words');
+
+// ★ V12 2026-11-16 the ACARS applications' fields (vibe_acars_apps.h → Tracker::json)
+const apps = parseAvReport({ type: 'avdata', band: 'vdl2', bandName: 'VDL2', hz: 136862500, msgs: 9, dropped: 0,
+  apps: { pos: 2, oooi: 1, adsc: 1, cpdlc: 1, unparsed: 4 },
+  aircraft: [
+    { icao: '3C6548', reg: 'D-AIJH', flight: 'LH4567', lat: 51.75, lon: -0.5, posAge: 3, alt: 36000, posSrc: 'ADS-C', posTime: ':20:34', app: 'ADS-C', label: 'B6', level: -30, n: 4, age: 3, via: 'VDL2 136.875' },
+    { reg: 'G-EZWK', flight: 'U22468', from: 'EGLL', to: 'LEMD', oooi: 'out', oooiTime: '10:15', app: 'OOOI', label: 'QP', level: -30, n: 1, age: 9, via: 'VDL2 136.975' },
+    { reg: 'EI-EST', lat: 53.357, lon: -2.273, alt: 37000, posSrc: 'FMS', posTime: '21:20:00', level: -30, n: 1, age: 1, via: 'ACARS 131.725' },
+    { reg: 'X', from: 'egll', to: 'LEMD<script>', oooi: 'sideways', alt: 1e9, level: 0, n: 0, age: 0, via: '' },
+  ] });
+ok(!!apps && apps.apps?.pos === 2 && apps.apps?.cpdlc === 1, 'the apps counters parse');
+ok(!!apps && avFix(apps.aircraft[0]) === '36,000 ft · fix at :20:34 past the hour · ADS-C', `ADS-C fix line: ${apps && avFix(apps.aircraft[0])}`);
+ok(!!apps && avFix(apps.aircraft[2]) === '37,000 ft · fix 21:20:00 UTC · FMS', `FMS fix line: ${apps && avFix(apps.aircraft[2])}`);
+ok(!!apps && avRoute(apps.aircraft[1]) === 'EGLL → LEMD · OUT 10:15 UTC' && avFix(apps.aircraft[1]) === '', `route + OOOI: ${apps && avRoute(apps.aircraft[1])}`);
+ok(!!apps && avDetail(apps.aircraft[1]).startsWith('EGLL → LEMD') && avDetail(apps.aircraft[1]).endsWith('VDL2 136.975'), `detail: ${apps && avDetail(apps.aircraft[1])}`);
+const bad = apps && apps.aircraft[3];
+ok(!!bad && bad.from === undefined && bad.to === undefined && bad.oooi === undefined && bad.alt === undefined, `hostile app fields dropped: ${JSON.stringify(bad)}`);
+ok(!!apps && avAppsText(apps) === '3 position messages · 1 OOOI · 1 CPDLC', `status tail: ${apps && avAppsText(apps)}`);
+const items = avTrackItems(apps);
+ok(items.length === 2 && items[0].key === '3C6548' && items[0]._lb === 'LH4567' && items[0]._cd.includes('36,000 ft'), `map items: ${items.map((i) => i.key).join(',')}`);
+ok(!avCard({ reg: '<b>x', level: 0, n: 0, age: 0, via: '<img>' }).includes('<img>'), 'the card is escaped');
+const rows = avTrackRows(apps, { lat: 51.5, lon: -0.12 });
+ok(rows.length === 4 && rows[0].sp === 'FL360' && /km$/.test(rows[0].range) && rows[1].range === 'no position' && rows[1].noPos, `map rows: ${rows.map((r) => `${r.key}:${r.sp}:${r.range}`).join(' ')}`);
 console.log(fail ? `${fail} FAILED` : 'all passed');
 process.exit(fail ? 1 : 0);

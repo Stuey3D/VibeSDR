@@ -90,6 +90,15 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   ok(/FR1234 · EI-EST · 4CA97B/.test(rows), 'a row: flight · registration · ICAO address');
   ok(!/TEST MESSAGE BODY/.test(rows), '★ no message text without the owner\'s opt-in');
   ok(/VDL2 136\.\d+ MHz · \d+ aircraft/.test(await ev(`document.querySelector('.trkView:not([hidden])')?.textContent`) || ''), 'the status names the band and the count');
+  // ★ V12 2026-11-16 the ACARS applications: three of the clip's aircraft report a position (FMS, label 16, ADS-C) — on the
+  //   map, with the altitude and the fix in the row; G-EZWK's OOOI OUT with its airports; still no message text
+  ok(await until(`document.querySelectorAll('.vtl-mk').length >= 3`, 15000), `aircraft on the map: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
+  const rows2 = await ev(`document.querySelector('.trkView:not([hidden]) .rows')?.textContent`) || '';
+  ok(/37,000 ft · fix 21:20:00 UTC · FMS/.test(rows2), 'the FMS row: altitude, the fix time, the source');
+  ok(/36,000 ft · fix at :20:34 past the hour · ADS-C/.test(rows2), 'the ADS-C row: the time past the hour');
+  ok(/EGLL → LEMD · OUT 10:15 UTC/.test(rows2), 'the OOOI row: the route and OUT');
+  ok(!/EGLLXYA|#M1BPOS/.test(await ev(`document.body.innerHTML`) || ''), '★ the messages themselves never on the page without the opt-in');
+  ok(/position messages/.test(await ev(`document.querySelector('.trkView:not([hidden])')?.textContent`) || ''), 'the status counts the position messages');
   console.log('   screenshot', await shot('desktop'));
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1200);

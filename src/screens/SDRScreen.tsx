@@ -16,7 +16,7 @@
 
 import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
-import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
+import { AV_MAP_EMPTY, avTrackItems, avTrackRows, hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
 import { sondeStatus, sondeTrackItems, sondeTrackRows, sondeEmpty, sondeTrail, type SondeBand, type SondeReport } from '../services/sondes';   // ★ V12 radiosondes
 import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks, type AfcState } from '../services/sdrProtocol';
@@ -2643,7 +2643,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [avReport, setAvReport] = useState<AvReport | null>(null);
   const [avError, setAvError] = useState<string | undefined>(undefined);
   const [avBoxOpen, setAvBoxOpen] = useState(false);
-  const avUiOff = useCallback(() => { avOnRef.current = false; setAvOn(false); setAvReport(null); setAvBoxOpen(false); setAvError(undefined); }, []);
+  const [avMapOpen, setAvMapOpen] = useState(false);   // ★ V12 the DATALINK box's MAP (MapOverlay 'avdata'; the mode carries on)
+  const avUiOff = useCallback(() => { avOnRef.current = false; setAvOn(false); setAvReport(null); setAvBoxOpen(false); setAvMapOpen(false); setAvError(undefined); }, []);
   /* ★★ V12 RADIOSONDES (RS41) — the datalink's pattern and box (SondesPanel), with a MAP (MapOverlay 'sondes'). */
   const [sdCap, setSdCap] = useState<{ ok: boolean; why: string; bands: SondeBand[] } | undefined>(undefined);
   const [sdOn, setSdOn] = useState(false);
@@ -4230,7 +4231,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     : navMapOpen && !IS_APPLE_TV ? 'navtex'
     : ismGal && !IS_APPLE_TV ? 'ism'
     : ismMapOpen && !IS_APPLE_TV && ismOn ? 'ism'
-    : sdMapOpen && !IS_APPLE_TV && sdOn ? 'sondes' : mapKind;   // ★ V12 the SONDES box's MAP (the mode carries on)
+    : sdMapOpen && !IS_APPLE_TV && sdOn ? 'sondes'   // ★ V12 the SONDES box's MAP (the mode carries on)
+    : avMapOpen && !IS_APPLE_TV && avOn ? 'avdata' : mapKind;   // ★ V12 the DATALINK box's MAP (the mode carries on)
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -11314,6 +11316,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     items: sondeTrackItems(sdReport), rows: sondeTrackRows(sdReport, trkRx), status: sondeStatus(sdReport), empty: sondeEmpty(sdReport),
     trail: (key: string) => Promise.resolve(sondeTrail(sdReportRef.current, key)),
   }), [sdReport, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ V12 the DATALINK map: the aircraft whose messages carried a position (services/aviation.ts; newest first). */
+  const avTrk = useMemo(() => ({
+    items: avTrackItems(avReport), rows: avTrackRows(avReport, trkRx), status: avReport ? `${avReport.aircraft.filter((a) => a.lat != null).length} of ${avReport.aircraft.length} aircraft with a position` : '',
+    empty: AV_MAP_EMPTY, trail: () => Promise.resolve([] as [number, number][]),
+  }), [avReport, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ismGalTrk = useMemo(() => {
     const rx = trkRx ?? ismGal?.rx ?? null;
     const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);
@@ -15297,6 +15304,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (askGate()) return;
             (client.current as unknown as { avdata?: (on: boolean, band?: string) => void } | null)?.avdata?.(true, id);
           }}
+          onMap={IS_APPLE_TV ? undefined : () => { markInteract(); setAvMapOpen(true); }}
           topLimit={boxTopLimit}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />
@@ -16293,19 +16301,19 @@ export default function SDRScreen({ route, navigation }: Props) {
           adsb_off is what finally takes the map down. A crash in it only puts it away (the mode key brings it back). */}
       {/* ★ IS_TV is true on ANDROID TV as well, which has a WebView: ADS-B's map is drawn there (it is the mode's only
           screen off Apple TV); the other server maps keep their old gate (tv.ts IS_APPLE_TV). */}
-      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
-                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : setMapKind(null))}
+      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
+                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}
-        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : setMapKind(null))}
+        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
-        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lat ?? null : undefined}
-        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lon ?? null : undefined}
+        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lat ?? null : undefined}
+        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lon ?? null : undefined}
         /* ★★ V12 NDB: the report, the readings kept, Find and the stats (NdbLiveList) — the page opens no socket of its own. */
         ndb={shownMap === 'ndb' ? {
           report: ndbReport, tracks: ndbTracks.current, seq: ndbSeq, found: ndbFound, findResult: ndbFindResult, stats: ndbStats,
@@ -16315,7 +16323,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onDecide: (act, ident, hz, airfield) => { client.current?.ndbConfirm?.(act, ident, hz, airfield); },
         } : undefined}
         /* ★★ V12 AIS / APRS: the items (icon, label, card made here), the live list, its status and the AIS safety strip. */
-        trk={shownMap === 'ais' ? aisShipTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? (ismGal ? ismGalTrk : ismTrk) : shownMap === 'navtex' ? navTrk : shownMap === 'sondes' ? sdTrk : null}
+        trk={shownMap === 'ais' ? aisShipTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? (ismGal ? ismGalTrk : ismTrk) : shownMap === 'navtex' ? navTrk : shownMap === 'sondes' ? sdTrk : shownMap === 'avdata' ? avTrk : null}
         /* ★ V12 the spots map's MODE filter and legend: this server's modes (vibeserver.json spotModes), by family */
         spotModes={shownMap === 'digi' ? spotModesSrv : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}

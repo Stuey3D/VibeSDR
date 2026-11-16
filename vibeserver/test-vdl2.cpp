@@ -65,7 +65,8 @@ static Res synth(double fs, double snrDb, int nb, uint32_t seed) {
 
 /** ★ `test-vdl2 --write-clip out.cu8 rate` — a 20 s capture centred on 136.850 MHz (unsigned 8-bit IQ, I first) for the
  *  server's end-to-end test (scripts/test-server-avdata.mjs, through vibeserver/fake-rtl-tcp.mjs): five aircraft with
- *  fixed ICAO addresses and registrations, ACARS over AVLC on 136.775 / 136.875 / 136.975, 25 dB, every 0.6 s. */
+ *  fixed ICAO addresses and registrations, ACARS over AVLC on 136.775 / 136.875 / 136.975, 25 dB, every 0.6 s; three of
+ *  them report a position (FMS, label 16, ADS-C), one an OOOI OUT, one free text. */
 static int writeClip(int argc, char** argv) {
     if (argc < 4) { std::fprintf(stderr, "usage: test-vdl2 --write-clip out.cu8 rate\n"); return 2; }
     const double fs = std::atof(argv[3]), hw = 136.850e6;
@@ -82,8 +83,18 @@ static int writeClip(int argc, char** argv) {
     int k = 0;
     for (double t = 0.1; t < 19.5; t += 0.6, ++k) {
         const auto& a = ac[k % 5];
-        char txt[96]; std::snprintf(txt, sizeof txt, "M%02dA%s/TEST MESSAGE BODY %d", k % 100, a.flight, k);   // msg no (4) + flight (6)
-        auto f = avlcAcars(a.icao, 0x10949Au, a.reg, "H1", char('0' + k % 10), txt);
+        // ★ the applications (vibe_acars_apps.h): EI-EST an FMS position (H1), G-JZHU a label 16 position, D-AIJH an ADS-C
+        //   basic report (B6), G-EZWK an OOOI OUT (QP); B-1243 free text (the body the owner's opt-in is tested with)
+        char pre[16]; std::snprintf(pre, sizeof pre, "M%02dA%s", k % 100, a.flight);   // msg no (4) + flight (6)
+        std::string label = "H1", body;
+        switch (k % 5) {
+            case 0: body = vibeavitx::fmsPos("N53214W002164", 212000, 370); break;                  // 53.357 N, 2.273 W
+            case 1: label = "16"; body = "N 52.480,W  1.900,24000,6, 290"; break;
+            case 2: label = "B6"; body = vibeavitx::adsCBasic("EGLLXYA", a.reg, 51.75, -0.5, 36000, 1234.5); break;
+            case 3: { char t[48]; std::snprintf(t, sizeof t, "TEST MESSAGE BODY %d", k); body = t; break; }
+            default: label = "QP"; body = "EGLLLEMD1015"; break;
+        }
+        auto f = avlcAcars(a.icao, 0x10949Au, a.reg, label, char('0' + k % 10), std::string(pre) + body);
         addBurst(cap, fs, ch[size_t(k % 3)] - hw, A, size_t(fs * t), burstSymbols({ f }), (rng() % 1000) * 0.00628);
     }
     FILE* o = std::fopen(argv[2], "wb");
