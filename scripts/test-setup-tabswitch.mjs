@@ -37,7 +37,7 @@ const mkEl = (id) => {
       contains: (c) => e._cls.has(c),
     },
     addEventListener() {}, removeEventListener() {}, appendChild() {}, remove() {}, insertBefore() {},
-    querySelector: () => null, closest: () => null, contains: () => false,
+    querySelector: () => null, closest: (sel) => $el(id + ' < ' + sel), contains: () => false,   // ★ every element sits in its label (dxRaster / dxOirt / dxExt hide theirs)
     querySelectorAll: () => [], getAttribute: () => null, setAttribute() {}, focus() {},
   };
   return e;

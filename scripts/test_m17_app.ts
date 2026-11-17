@@ -34,7 +34,9 @@ ok(/withM17\(withFreeDv\(/.test(scr), 'the key is added to the VibeServer list o
 ok(/getStatus\(\)\.mode === 'm17'\) setM17State/.test(scr), 'a report after leaving the mode is a ghost');
 ok((scr.match(/\(status\.mode === 'm17' && m17Cap\) \? undefined : onFilterBoth/g) || []).length === 2, 'no width sliders in M17 (both places they are drawn)');
 ok(/m17Status\?\.\(\)/.test(scr) && /case 'm17': \{ const f = parseM17\(msg\)/.test(vsc), 'entering the mode and a reconnect ask for the report; the client parses it with parseM17');
-ok(/M17 sits after NFM/.test(scr), 'the tour\'s mode card says where M17 is');
+// ★ the tour's mode card is an overview now (Stuart 2026-11-16): it names no key's place, so it cannot misdirect — the About note says where M17 is
+ok(!/M17/.test((() => { const t = scr; const i = t.indexOf("{ id: 'mode', title:"); return i < 0 ? '' : t.slice(i, t.indexOf("{ id: '", i + 5)); })()) && /M17 DIGITAL VOICE[^']*a new mode beside NFM/.test(readFileSync(new URL('../src/components/AboutOverlay.tsx', import.meta.url), 'utf8')),
+  'the tour\'s mode card stays an overview (no M17 place to go stale); About says M17 sits beside NFM');
 
 console.log(`\n${fail ? 'FAIL' : 'ok  '} m17 app: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

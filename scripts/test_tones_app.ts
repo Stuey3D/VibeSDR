@@ -71,7 +71,8 @@ ok('…with the same notice on both', notice(page).length > 100 && notice(page) 
 
 // ── the copy that says where the key is ──
 ok('About: the V12 note', src('src/components/AboutOverlay.tsx').includes('DTMF AND 5-TONE SELECTIVE CALLING'));
-ok('the tour says where the key is', sd.includes('on both the VHF and UHF tabs Amateur holds DTMF / 5-TONE'));
+// ★ the tour's mode card is an overview now (Stuart 2026-11-16) — it names no key's place; About and the web tutorial do
+ok('the tour\'s mode card stays an overview (no DTMF place to go stale); About says where the key is', !(() => { const t = sd; const i = t.indexOf("{ id: 'mode', title:"); return i < 0 ? '' : t.slice(i, t.indexOf("{ id: '", i + 5)); })().includes('DTMF') && src('src/components/AboutOverlay.tsx').includes('VHF and UHF tabs of the decoders) reads keypad tones'));
 ok('the web tutorial says where the key is', src('web/client/src/tutorial.ts').includes('on the VHF and UHF tabs DTMF / 5-TONE'));
 
 console.log(`${fail ? 'FAIL' : 'ok '}  test_tones_app — ${pass} passed, ${fail} failed`);

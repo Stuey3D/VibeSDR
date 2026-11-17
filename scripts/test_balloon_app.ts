@@ -98,7 +98,8 @@ ok('app: attach + JSON + pictures', dc.includes("case 'balloon': return { extens
 ok('app: the gallery shows a .jpg as a picture', src('src/components/GalleryOverlay.tsx').includes('/\\.(png|jpg)$/i'));
 ok('app: the phone\'s server has the switch', src('src/screens/ServerModeScreen.tsx').includes("{ id: 'balloon', label:"));
 ok('About: the V12 note', src('src/components/AboutOverlay.tsx').includes('BALLOONS \\u2014 HIGH-ALTITUDE BALLOON'));
-ok('the tour says where the key is', sd.includes('on the UHF tab, Amateur holds BALLOONS'));
+// ★ the tour's mode card is an overview now (Stuart 2026-11-16) — it names no key's place; the web tutorial (below) and About do
+ok('the tour\'s mode card stays an overview (no BALLOONS place to go stale)', !(() => { const t = sd; const i = t.indexOf("{ id: 'mode', title:"); return i < 0 ? '' : t.slice(i, t.indexOf("{ id: '", i + 5)); })().includes('BALLOONS'));
 ok('the web tutorial says where the key is', src('web/client/src/tutorial.ts').includes('its Amateur group holds BALLOONS'));
 
 console.log(`${fail ? 'FAIL' : 'ok '}  test_balloon_app — ${pass} passed, ${fail} failed`);

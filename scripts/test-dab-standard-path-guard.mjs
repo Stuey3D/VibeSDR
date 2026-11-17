@@ -14,7 +14,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const BASE = process.env.BASE || 'v12-experimental';
+// ★ pinned to v12-experimental just BEFORE own station merged (dc95053aa): after the merge the branch IS the base and the diff is empty
+const BASE = process.env.BASE || 'dc95053aa';
 let pass = 0, fail = 0;
 const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const git = (...a) => spawnSync('git', ['-C', root, ...a], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout || '';

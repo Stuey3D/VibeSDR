@@ -21,6 +21,7 @@ import {
   usePopupTheme, usePopupSurface, usePopupFrame, engraveText, PopupKey, PopupPlate, PopupHandle, useSheetDrag, sheetCap,
 } from './PopupShell';
 import type { IsmBand } from '../services/ism';
+import { scrollLane } from '../constants/popupTokens';
 
 const SHEET_BG = 'rgba(8,6,1,0.97)';
 const ROW_H = 54;
@@ -80,7 +81,7 @@ export default function IsmBandSheet({ visible, bands, currentId, onPick, onClos
                         pt.metal && { ...engraveText(pt), fontWeight: '700' }]}>
             ISM BANDS
           </Text>
-          <ScrollView ref={scrollRef} style={{ maxHeight: listMax }} contentContainerStyle={st.list}
+          <ScrollView ref={scrollRef} style={{ maxHeight: listMax }} contentContainerStyle={[st.list, scrollLane]}
                       showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
             {bands.map((b, i) => {
               const cur = b.id === currentId;

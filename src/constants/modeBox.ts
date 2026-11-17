@@ -164,7 +164,8 @@ export function composeModeLabel(mode: string, decoder: string | null | undefine
   if (dab) return 'DAB';
   // ★ TRANSCRIBE listens to the audio, it is not a digimode riding the demod — the box keeps reading plain USB / WFM.
   // ★ V12 the SCANNER neither: it moves the demod about, it does not decode on top of it.
-  const dec = decoder && decoder !== 'transcribe' && decoder !== 'scanner' ? (decoder === 'wefax' ? 'fax' : decoder) : '';
+  const dec = decoder && decoder !== 'transcribe' && decoder !== 'scanner' ? (decoder === 'wefax' ? 'fax' : decoder === 'balloon' ? 'hab' : decoder) : '';
+  // ★ V12 BALLOONS reads HAB (high-altitude balloon, UKHAS's own word) in the box: "WFM: BALLOON" overflowed the 320 pt field
   // ★ V12 CW on a CW demod reads "CW", never "CW: CW" (modeDisplay folds cwu / cwl to CW).
   /* ★ V12 with a decoder riding, the synchronous AM family reads as its FAMILY — SAM (SAM-U/L and ECSS are synchronous
    *  detection too) or AM (AM stereo): "SAM-U: NAVTEX" / "ECSS-L: WHISPER" did not fit the field on any faceplate

@@ -150,7 +150,8 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('WaterfallView takes its needle from needleGeometry with needleHidden', /needleGeometry\(\{ hidden: needleHidden/.test(wv), true);
   // ★ every renderer path reads `needle` — the needle canvas (iOS), the in-waterfall group (Android), the LISTEN label
   eq('no renderer places the needle from tuneHz itself', (wv.match(/hzToX\(tuneHz\)/g) ?? []).length, 0);
-  eq('the LISTEN label is behind `needle &&`', /\{needle && showCenterMarker && \(/.test(wv), true);
+  // ★ v12-vfocentre: the LISTEN text is needleReadout (centred on the VFO above the label stack), still behind `needle &&`
+  eq('the LISTEN label is behind `needle &&`', /needleReadout = needle && showCenterMarker \?/.test(wv), true);
   const scr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
   eq('the receiver screen hides it while ISM is on', /needleHidden=\{ismOn\}/.test(scr), true);
   eq('one waterfall (phone, iPad and Mac share it)', (scr.match(/<WaterfallView\b/g) ?? []).length, 1);

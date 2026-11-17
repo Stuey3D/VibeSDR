@@ -19,6 +19,7 @@ import {
   Animated, Dimensions, Easing, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { scrollLane } from '../constants/popupTokens';
 import { useGlassTheme, type PopupTokens } from './PopupShell';
 import { useOverlay, useKeyboardMode, useNavFocus } from './PanelNav';
 
@@ -235,7 +236,7 @@ function CoachmarkOverlay({
       {/* Speech bubble */}
       <View style={[styles.bubble, { width: BUBBLE_W, left: bubbleLeft, top: bubbleTop as number, bottom: bubbleBottom as number, maxHeight: bubbleMaxH }]}>
         {!!step.title && <Text style={styles.title}>{step.title}</Text>}
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator persistentScrollbar>
+        <ScrollView style={styles.scroll} contentContainerStyle={scrollLane} showsVerticalScrollIndicator persistentScrollbar>
           <Text style={styles.body}>{step.body}</Text>
           {!!step.illustration && <View style={styles.illo}>{step.illustration}</View>}
         </ScrollView>

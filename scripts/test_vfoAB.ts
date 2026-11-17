@@ -293,8 +293,10 @@ console.log('── where the A/B switch lives, and VFO B\'s colour ──');
   const fmTag = scr.slice(scr.indexOf('<FreqModal'), scr.indexOf('<FreqModal') + 6000);
   ok(/vfoAB=\{abOn\}/.test(fmTag) && /onVfoAB=\{abOffered > 0 && !dabOn && !icom && activeDecoder !== 'scanner' \? onVfoAB : undefined\}/.test(fmTag),
      'SDRScreen hands the toggle to the frequency card, under the same gates');
-  ok(!/id: 'step', title: 'Step rate, and VFO A\/B'/.test(scr) && /VFO A\/B/.test(scr.slice(scr.indexOf("id: 'freq'"), scr.indexOf("id: 'mode'"))),
-     'the tour says VFO A/B is on the frequency card, not under STEP');
+  // ★ Stuart's wording (2026-11-16): the frequency card says "switch on a second VFO"; the step card does not mention it
+  const card = (id: string) => { const i = scr.indexOf(`{ id: '${id}', title:`); return i < 0 ? '' : scr.slice(i, scr.indexOf("{ id: '", i + 5)); };
+  ok(!/id: 'step', title: 'Step rate, and VFO A\/B'/.test(scr) && /second VFO/.test(card('freq')) && !/VFO A\/B|second VFO/.test(card('step')),
+     'the tour says the second VFO is on the frequency card, not under STEP');
   ok(autoVfoBColour('#ffffff') === '#38c8ff' && autoVfoBColour('#4499ff') === '#ffb020' && autoVfoBColour('junk') === '#38c8ff',
      'AUTO: cyan, amber against a blue VFO A — what B has always drawn in');
   ok(vfoBNeedle('#ffffff', VFO_B_AUTO) === '#38c8ff' && vfoBNeedle('#ffffff', '#cc44ff') === '#cc44ff' && vfoBNeedle('#ffffff', 'nonsense') === '#38c8ff',

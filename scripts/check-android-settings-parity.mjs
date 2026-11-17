@@ -32,6 +32,8 @@ const TABLE = [
   // ── Pocket / Linux machine maintenance: the phone IS the machine and has its own screens for these ──
   N(['claimPass', 'claimPass2', 'claimPin', 'pass'], 'the Setup page\'s own sign-in and first-run claim; the phone\'s screen is on the device itself'),
   N(['wifiIgnore', 'apSsid', 'apPsk', 'wifiCountry', 'sshPass', 'sshPass2'], 'Pocket (Pi image) Wi-Fi, hotspot and SSH — Android owns its own network'),
+  N(['winAutoOn'], 'Start with Windows — a Windows server\'s own Scheduled Task / sign-in list; the card shows only on Windows'),
+  N(['dabOwnStation'], 'DAB own station per listener (V12 2026-11-16): the phone\'s server follows the benchmark rule (on when N >= its user limit); the owner override is not on the app\'s screen yet — queued, see docs/v12/DAB-OWN-STATION.md'),
   N(['cpuGovernor'], 'Linux cpufreq governor — an Android app cannot set one'),
   // ★★ V12 auto-PPM (vibe_afc.h): on by default; on the phone its switch, line, Reset and Turn off are the radio menu's (the app's
   //    hardware panel and the web page — hwinfo `afc`), and the switch is kept in the radio's store beside the bookmarks, as the

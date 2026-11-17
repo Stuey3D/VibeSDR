@@ -10,7 +10,7 @@
 //     that is the standard the Advanced RDS panel set and the DAB panel keeps. A row we cannot
 //     measure says so rather than showing a plausible number.
 
-import { parseDabBlockQ, type DabBlockGrade } from '../utils/dabBlockView';
+import { parseDabBlockQ, type DabBlockGrade } from '../utils/dabBlockView.ts';
 
 export interface DabState {
   channel: string; centreHz: number; label: string; eid: number;
