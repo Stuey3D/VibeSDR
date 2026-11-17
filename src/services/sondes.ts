@@ -82,6 +82,11 @@ export function parseSondeBands(v: unknown): SondeBand[] {
   return out;
 }
 
+/** ★★ V12 The map's band keys — the web's sondeRanges (web/client/src/sondes.ts), the same words. */
+export function sondeRanges(bands: SondeBand[]): Array<{ id: string; label: string; words: string }> {
+  return bands.map((b) => ({ id: b.id, label: b.name.replace(' MHz', ''), words: `Search ${b.name}` }));
+}
+
 /** "403.300 MHz" — the frequency the sonde was heard on (to the kHz). */
 export function sondeMHz(hz: number): string { return `${(Math.round(hz / 1e3) / 1e3).toFixed(3)} MHz`; }
 /** "12 s ago" / "4 min ago" / "2 h ago". */

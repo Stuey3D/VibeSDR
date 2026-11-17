@@ -18,7 +18,7 @@ import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type 
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
 import { AV_EMPTY, avCompose, avLayersOf, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
-import { sondeStatus, sondeTrackItems, sondeTrackRows, sondeEmpty, sondeTrail, type SondeBand, type SondeReport } from '../services/sondes';   // ★ V12 radiosondes
+import { sondeStatus, sondeTrackItems, sondeTrackRows, sondeEmpty, sondeTrail, sondeRanges, type SondeBand, type SondeReport } from '../services/sondes';   // ★ V12 radiosondes
 import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks, type AfcState } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode, ICOM_SCOPE_FLOOR_DB,
@@ -3375,6 +3375,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (leave) c?.ais?.(false);
     aisUiOff();
   }, [aisUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★★ V12 Leave SONDES from its map (it opens into the map now) — the box's EXIT, the same steps. */
+  const exitSondes = useCallback(() => {
+    const c = client.current as unknown as { sondes?: (on: boolean) => void } | null;
+    if (sdOnRef.current && askLocked(dialStateRef.current)) { setSdMapOpen(false); askGate(); return; }
+    if (sdOnRef.current) c?.sondes?.(false);
+    sdUiOff();
+  }, [sdUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★ A DAB bookmark: the multiplex AND the service, in one go — the web client's dabGoTo.
    *  Enters DAB if needed, retunes if the block differs, otherwise just switches service. */
@@ -7529,7 +7536,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         if (why) { sdOnRef.current = false; setSdOn(false); setSdError(why); setSdBoxOpen(true); return; }
         if (!r) { sdUiOff(); return; }
-        if (!sdOnRef.current) { sdOnRef.current = true; setSdBoxOpen(true); }
+        if (!sdOnRef.current) { sdOnRef.current = true; if (IS_APPLE_TV) setSdBoxOpen(true); else setSdMapOpen(true); }   // ★★ V12 into the map
         setSdOn(true); setSdError(undefined);
         setSdReport(r);
       },
@@ -11406,7 +11413,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const sdTrk = useMemo(() => ({
     items: sondeTrackItems(sdReport), rows: sondeTrackRows(sdReport, trkRx), status: sondeStatus(sdReport), empty: sondeEmpty(sdReport),
     trail: (key: string) => Promise.resolve(sondeTrail(sdReportRef.current, key)),
-  }), [sdReport, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+    // ★★ V12 the band keys on the map itself, as the web's (it opens straight into the map now)
+    ranges: sondeRanges(sdCap?.bands ?? []), range: sdReport?.band || '', rangeHint: 'The band searched: radiosondes use 400\u2013406 MHz',
+    onRange: (id: string) => {
+      markInteract();
+      if (sdReportRef.current?.band === id || askGate()) return;
+      (client.current as unknown as { sondes?: (on: boolean, band?: string) => void } | null)?.sondes?.(true, id);
+    },
+  }), [sdReport, trkRx?.lat, trkRx?.lon, sdCap]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★ V12 2026-11-16 THE AVIATION MAP (services/aviationMap.ts — the web's avCompose too): the DATALINK box's MAP shows
    *  this radio's live aircraft AND every other source on the server (GET /vibeserver/aircraft.json — ADS-B, another radio's
    *  ACARS / VDL2, HFDL, ADS-C), each aircraft once with the sources that heard it; layers with no aircraft are absent;
@@ -16064,7 +16078,12 @@ export default function SDRScreen({ route, navigation }: Props) {
             setModeSelOpen(false);
             if (askGate()) return;   // ★★ ask before tuning — entering or leaving moves everybody's radio
             if (sdOnRef.current) { c.sondes(false); sdUiOff(); return; }
-            setSdError(undefined); setSdReport(null); setSdBoxOpen(true);
+            /* ★★ V12 (Stuart, 2026-11-17): SONDES OPENS INTO ITS MAP, as on the web (TrackView) and as ADS-B / AIS do here —
+             *  "sondes in the web client open directly into the map but on the app they open into a waterfall with controls
+             *  that behave oddly". The map carries the band keys and closing it leaves SONDES; the box stays for the Apple TV
+             *  (no maps there) and for a refusal's reason. */
+            setSdError(undefined); setSdReport(null);
+            if (IS_APPLE_TV) setSdBoxOpen(true); else setSdMapOpen(true);
             sdOnRef.current = true; setSdOn(true);
             c.sondes(true);
           },
@@ -16487,7 +16506,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}
-        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
+        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? exitSondes() : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
         rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lat ?? null : undefined}

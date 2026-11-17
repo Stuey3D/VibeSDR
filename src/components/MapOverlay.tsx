@@ -507,7 +507,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     : kind === 'aprs' ? '<button id="back" aria-label="Close the map — the APRS decoder carries on">CLOSE MAP</button>'
     : kind === 'dsc' ? '<button id="back" aria-label="Close the map — the DSC decoder carries on">CLOSE MAP</button>'
     : kind === 'ism' ? '<button id="back" aria-label="Close the map — ISM carries on">CLOSE MAP</button>'
-    : kind === 'sondes' ? '<button id="back" aria-label="Close the map — the sondes mode carries on">CLOSE MAP</button>'
+    : kind === 'sondes' ? '<button id="back" aria-label="Exit SONDES and give the receiver back">EXIT SONDES</button>'   /* ★★ V12 the mode's screen, as the web's (2026-11-17) */
     : kind === 'avdata' ? '<button id="back" aria-label="Close the map — the aircraft datalink carries on">CLOSE MAP</button>'
     : kind === 'navtex' ? '<button id="back" aria-label="Close the map">CLOSE MAP</button>'
     : '<button id="back">&#8592; SDR</button>'}

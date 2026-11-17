@@ -2,6 +2,9 @@
 // (bounded, control characters out, bad numbers and positions dropped), ★ NO TEMPERATURE unless the calibration is whole,
 // the list's lines, the map's items / rows / card (escaped) and a chosen sonde's track, the bands. The server's own shapes
 // are checked end to end in scripts/test-server-sondes.mjs, the web page in test-web-sondes.mjs.
+import { sondeRanges } from '../src/services/sondes';
+import { sondeRanges as webSondeRanges } from '../web/client/src/sondes';
+import { readFileSync } from 'node:fs';
 import { parseSondeBands, parseSondeReport, sondeCard, sondeClimb, sondeDetail, sondeEmpty, sondeLine, sondeStatus, sondeTemp,
          sondeTrackItems, sondeTrackRows, sondeTrail, sondeMHz } from '../src/services/sondes';
 
@@ -49,5 +52,18 @@ ok(rows[0].trend === 1 && rows[1].trend === -1, 'climbing / falling arrows');
 ok(sondeTrail(r, 'S3310411').length === 2 && sondeTrail(r, 'nope').length === 0, 'a chosen sonde\'s track from the report');
 const b = parseSondeBands([{ id: 'lo', name: '400–402 MHz', hz: 401005000, lo: 400e6, hi: 402e6 }, { id: 'mid' }, 'x']);
 ok(b.length === 1 && b[0].id === 'lo' && b[0].hi === 402e6, 'bands: a malformed one dropped');
+
+// ── ★★ V12 2026-11-17 (Stuart): the app opens SONDES straight into its map, as the web does ──
+ok(JSON.stringify(sondeRanges(b)) === JSON.stringify(webSondeRanges(b as any)) && sondeRanges(b)[0].label === '400–402',
+   "the map's band keys: the web's, word for word");
+const scr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+const map = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
+ok(/if \(IS_APPLE_TV\) setSdBoxOpen\(true\); else setSdMapOpen\(true\);\s*sdOnRef\.current = true; setSdOn\(true\);\s*c\.sondes\(true\);/.test(scr),
+   'SONDES opens into its map (the box only on the Apple TV, which has no maps)');
+ok(/if \(!sdOnRef\.current\) \{ sdOnRef\.current = true; if \(IS_APPLE_TV\) setSdBoxOpen\(true\); else setSdMapOpen\(true\); \}/.test(scr),
+   '…and so does joining a receiver somebody else put on SONDES');
+ok(/shownMap === 'sondes' \? exitSondes\(\)/.test(scr) && /kind === 'sondes' \? '<button id="back"[^']*>EXIT SONDES<\/button>'/.test(map),
+   "the map's key reads EXIT SONDES and leaves the mode");
+ok(/ranges: sondeRanges\(sdCap\?\.bands \?\? \[\]\)/.test(scr), 'the band keys are on the map');
 console.log(fail ? `${fail} FAILED` : 'all passed');
 process.exit(fail ? 1 : 0);
