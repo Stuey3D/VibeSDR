@@ -236,12 +236,16 @@ Audio: unchanged formats. A station listener's audio socket simply carries that 
   replaying the RSP1A capture: two listeners on two multiplexes at once, a station and a sharer on 11A, 10D never opened,
   the radio sent no tune and no rate change, the one clock reading, leaving and closing). Bench:
   `scripts/bench-server-dab-wide-lr.mjs`.
-- **Measured through the server (Mac M5 Pro, replayed capture, Opus):** 65 listener sessions, each on a different
-  service across 10C 16 + 10D 19 + 11A 30 — all 65 on their own service with audio frames throughout (no gap over
-  200 ms); 10C 16/16 and 11A 30/30 decoding ≥ 90 % of super frames, 10D mean 0.69 (the weak one, as offline). Server
-  187 % of one core in total, RSS 126 MB, 4.5 kB/s per listener (295 kB/s total). For scale, 54 sessions merely
-  connected (their FM VFOs, not in DAB) cost 148 %: a listener's own VFO, which still runs while they are in DAB, is the
-  larger part — the next saving.
+- **Measured through the server (Mac M5 Pro, replayed capture, Opus 96 kb/s stereo, per-station encoder threads):** 65
+  listener sessions, each on a different service across 10C 16 + 10D 19 + 11A 30 — all 65 on their own service with
+  audio frames throughout (no gap over 200 ms); 10C 16/16 and 11A 30/30 decoding ≥ 90 % of super frames, 10D mean 0.69
+  (the weak one, as offline). Server 246 % of one core in total (of 15), RSS 167 MB, 12.2 kB/s per listener (792 kB/s,
+  ~6.3 Mbit/s in all — the uplink, not the CPU, is the limit on most connections). A listener's own VFO still runs
+  underneath while they are in DAB (54 sessions merely on their FM VFOs cost ~148 %) — the next saving.
+- **Each station's Opus encode is its own thread** (`vibe-dab-enc`, bounded queue, drop-oldest; 2026-11-17, the Pi 2's
+  live saturation): the 20 ms clocks only hand out PCM. The `dec_dab_station` row and `dab-station-bench` count the
+  encode: Linux arm64 0.87 % → 1.68 % per station (×1.9); the Pi 2's 12.9 % → ~25 % gives N 5 (estimated, not measured).
+- **Waterfall on a weak box:** 8fce05f27's 2 fps rule counts streams on any multiplex here.
 - **Not done:** the live Lenovo run (§11.4: no amd64 build route without building on the Lenovo or enabling Rosetta in
   the Mac's Docker VM); §11.1a wide-mode gain rules; a benchmark row for a multiplex front end; the channeliser bank for
   large N (B210); a listener in DAB still runs their VFO's demodulator underneath.
