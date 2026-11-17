@@ -18,6 +18,7 @@
 #pragma once
 #include "vibe_benchmark.h"
 #include "vibe_dab_service.h"
+#include "opus_audio_encoder.h"   // ★★ a station's cost includes its ONE Opus encode (the coordinator's Pi 2 finding, 2026-11-17)
 #include <memory>
 #include <thread>
 #include <atomic>
@@ -148,7 +149,11 @@ inline long dabBenchRssKB() {
  *  its tap — what the server runs when three more listeners each pick their own. Fed in real time like the `dab` row.
  *  The figure is (every thread this run − every thread of the `dab` row) / K: one station's own decode (vibe-dab-st) and
  *  its FAAD2 (vibe-faad2), % of a core. -1 if a station decoded nothing. Memory: RSS after warm-up minus before the
- *  stations opened, per station (dabStationMemKB). */
+ *  stations opened, per station (dabStationMemKB).
+ *  ★★★ AND ITS ONE OPUS ENCODE (2026-11-17, live on the Pi 2: five own stations on 10C saturated the box — each station's
+ *      stereo encode is ~12 % of a Cortex-A7 core and the row had left it out, so N read ~2× too high). Each station here
+ *      gets its own `vibe-dab-enc` thread taking 20 ms of its PCM and encoding it at the server's stereo bitrate, as the
+ *      server's per-station encoder does — so "one more station" is the decode AND what it costs to send. */
 inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdetail::Result& dabRow, double seconds, double warm = 6.0) {
     using namespace benchdetail;
     Result r; r.id = "dec_dab_station"; r.label = "DAB+: each extra station (own station per listener)"; r.rate = clip.rate;
@@ -170,6 +175,24 @@ inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdeta
     const size_t blk = size_t(clip.rate / 20) * 2;
     size_t pos = 0;
     std::vector<float> pcm(48000);
+    // ★★ each station's encoder, on its own thread, 20 ms at a time — the server's shape (vibe-dab-enc)
+    std::atomic<bool> encRun{true};
+    std::vector<std::thread> enc;
+#ifdef VIBE_HAVE_OPUS
+    for (auto& s : st) if (s) enc.emplace_back([&encRun, sp = s] {
+        vibeThreadName("vibe-dab-enc");
+        vibe::OpusAudioEncoder opus; opus.setBitrate(96000);   // ★ the server's default stereo rate (64 k × 3/2, opusBitrateFor)
+        std::vector<float> f(960 * 2); std::vector<int16_t> q(960 * 2); std::vector<std::vector<uint8_t>> pk;
+        auto next = std::chrono::steady_clock::now();
+        while (encRun.load()) {
+            next += std::chrono::milliseconds(20);
+            std::this_thread::sleep_until(next);
+            const size_t got = sp->takePcm(f.data(), 960);
+            for (size_t i = 0; i < 960 * 2; ++i) { const float v = i < got * 2 ? std::max(-1.0f, std::min(1.0f, f[i])) : 0.0f; q[i] = int16_t(std::lround(v * 32767.0f)); }
+            pk.clear(); opus.encode(q.data(), 960, 2, pk);
+        }
+    });
+#endif
     std::map<long, double> mid; bool measuring = false; long rssWarm = 0;
     const auto t0 = std::chrono::steady_clock::now();
     double fedSecs = 0;
@@ -181,10 +204,12 @@ inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdeta
         pos = (pos + n) % clip.iq.size();
         fedSecs += double(n / 2) / clip.rate;
         while (svc->takePcm(pcm.data(), pcm.size() / 2) > 0) {}
-        for (auto& s : st) if (s) while (s->takePcm(pcm.data(), pcm.size() / 2) > 0) {}
+        if (enc.empty()) for (auto& s : st) if (s) while (s->takePcm(pcm.data(), pcm.size() / 2) > 0) {}
         std::this_thread::sleep_until(t0 + std::chrono::microseconds((long long)(fedSecs * 1e6)));
     }
     const auto after = threadCpu();
+    encRun.store(false);
+    for (auto& t : enc) t.join();
     unsigned sfMin = ~0u; int open = 0;
     for (auto& s : st) {
         if (!s) continue;
@@ -197,7 +222,7 @@ inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdeta
     st.clear();
     svc.reset();
     scan.store(scanWas);
-    double total = 0, stThreads = 0, faad = 0;
+    double total = 0, stThreads = 0, faad = 0, encT = 0;
     for (const auto& kv : after) {
         if (before.count(kv.first)) continue;
         auto m = mid.find(kv.first);
@@ -206,6 +231,7 @@ inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdeta
         const std::string nm = threadName(kv.first);
         if (nm.rfind("vibe-dab-st", 0) == 0) stThreads += used;
         if (nm.rfind("vibe-faad2", 0) == 0) faad += used;
+        if (nm.rfind("vibe-dab-enc", 0) == 0) encT += used;
     }
     double dabTotal = 0;
     for (const auto& t : dabRow.threads) if (t.first != "vibe-dsp") dabTotal += t.second;   // ★ the feeder is not the receiver
@@ -215,11 +241,12 @@ inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdeta
     r.threads.push_back({ "per station", per });
     r.threads.push_back({ "vibe-dab-st (each)", stThreads / K });
     r.threads.push_back({ "vibe-faad2 (all)", faad });
+    r.threads.push_back({ "vibe-dab-enc (each)", encT / K });
     const long memPer = (rssWarm > 0 && rss0 > 0) ? std::max(0L, (rssWarm - rss0) / K) : -1;
     vibedab::own::benchMemKB().store(memPer);
     if (std::getenv("VIBE_BENCH_DEBUG"))
-        std::fprintf(stderr, "[dec_dab_station] per station %.2f %% (total %.1f − dab %.1f) / %d; vibe-dab-st each %.2f %%; mem %ld KB each; sfOk min %u\n",
-                     per, total, dabTotal, K, stThreads / K, memPer, sfMin == ~0u ? 0 : sfMin);
+        std::fprintf(stderr, "[dec_dab_station] per station %.2f %% (total %.1f − dab %.1f) / %d; vibe-dab-st each %.2f %%; vibe-dab-enc each %.2f %%; mem %ld KB each; sfOk min %u\n",
+                     per, total, dabTotal, K, stThreads / K, encT / K, memPer, sfMin == ~0u ? 0 : sfMin);
     return r;
 }
 

@@ -39,7 +39,8 @@ const rx = git('diff', '-U0', BASE, '--', C + 'vibe_dab_receiver.h').split('\n')
 const rxRemoved = rx.filter((l) => l.startsWith('-') && !l.startsWith('---'));
 ok(rxRemoved.length === 0, `DabReceiver: nothing removed or rewritten (${rxRemoved.length} lines)`);
 const pushAdds = rx.filter((l) => l.startsWith('+') && /mscTap_\(msc/.test(l));
-ok(pushAdds.length === 1 && /if \(mscTap_\)/.test(pushAdds[0]), 'DabReceiver::push gains only the tap, which is empty unless a station is open');
+// ★ At most the one tap line — against a BASE after own station merged (e.g. DAB Phase 2's branch point) there is none to add
+ok(pushAdds.length <= 1 && pushAdds.every((l) => /if \(mscTap_\)/.test(l)), `DabReceiver::push gains at most the tap, which is empty unless a station is open (${pushAdds.length})`);
 const svc = git('diff', '-U0', BASE, '--', C + 'vibe_dab_service.h').split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
 ok(svc.length <= 1 && svc.every((l) => /~DabService\(\)/.test(l)), `DabService: the only rewritten line is the destructor (it now joins a station's thread) — ${svc.length}`);
 

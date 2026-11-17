@@ -550,6 +550,12 @@ printf '\n\033[1m── the standard DAB path is untouched (front end, AGC, gain
 #     after) runs when DAB_WEAK_BEFORE / DAB_WEAK_AFTER name dab-weak builds; exit 3 = only the source half ran.
 node scripts/test-dab-standard-path-guard.mjs; rc=$?
 if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 DAB PHASE 2 (docs/v12/DAB-OWN-STATION.md §11): in a wide LOCKED range each listener is in DAB on their own
+#     multiplex and the radio never moves — the real server on fake rtl_tcp replaying the RSP1A's 8 MS/s 10C/10D/11A capture
+#     (~/VibeSDR-test-audio/dab-wide; exit 3 = not run without it or without VIBESERVER_BIN). Silent.
+printf '\n\033[1m── DAB in a wide locked range: a listener\x27s own multiplex (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-wide-lr.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── gain write path ──\033[0m\n'
 if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
