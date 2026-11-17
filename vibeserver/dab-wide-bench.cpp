@@ -134,16 +134,20 @@ int main(int argc, char** argv) {
     }
     size_t combPh = 0;
     std::unique_ptr<vibedab::bank::Runner> bankR;
+    const auto before = threads();
+    // ★ the bank's threads AFTER the snapshot, so they are counted
     if (useBank) {
         const int hw = int(std::max(1u, std::thread::hardware_concurrency()));
-        bankR = std::make_unique<vibedab::bank::Runner>(outRate, std::max(0, std::min(3, hw / 2 - 1)));
+        const char* wEnv = std::getenv("DAB_BANK_WORKERS");   // ★ measure the split: 0 = the bank thread alone
+        bankR = std::make_unique<vibedab::bank::Runner>(outRate, wEnv ? std::atoi(wEnv) : std::max(0, std::min(3, hw / 2 - 1)));
+        if (const char* c = std::getenv("DAB_BANK_CHUNK_KB")) bankR->chunkBytes(size_t(std::atoi(c)) << 10);
         std::vector<vibedab::bank::Runner::Out> outs;
         for (size_t k = 0; k < mux.size(); ++k) { vibedab::DabService* svc = mux[k].svc.get();
             outs.push_back({ int(k), shifts[k], [svc](const float* y, size_t n, size_t raw) { svc->feedChannelised(y, n, raw); }, nullptr }); }
         bankR->setOutputs(std::move(outs));
         std::fprintf(stderr, "bank: %.3f MS/s, %zu blocks, N %d H %d D %d, %d workers\n", outRate / 1e6, mux.size(), bankR->plan().N, bankR->plan().H, bankR->plan().D, bankR->workers());
     }
-    const auto before = threads();
+
     const long rss0 = rssKB();
     std::map<long, std::pair<std::string, double>> mid;
     bool opened = false, measuring = false; long rssMid = 0;

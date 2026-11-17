@@ -80,6 +80,13 @@ public:
             w_[size_t(2 * dst)] = hf[size_t(2 * hb)] / float(p.N);
             w_[size_t(2 * dst + 1)] = hf[size_t(2 * hb + 1)] / float(p.N);
         }
+        contiguous_ = src_[0] + M_ / 2 <= p.N && src_[size_t(M_ / 2)] + M_ / 2 <= p.N;
+        {   // the residual NCO's per-sample rotations within one hop, and the step across a whole hop
+            const int keep = p.H / p.D;
+            rot_.resize(size_t(2 * keep));
+            for (int i = 0; i < keep; ++i) { const auto z = std::polar(1.0, std::arg(ncoStep_) * double(i)); rot_[size_t(2 * i)] = float(z.real()); rot_[size_t(2 * i + 1)] = float(z.imag()); }
+            ncoKeep_ = std::polar(1.0, std::arg(ncoStep_) * double(keep));
+        }
         if (setup_) { pffft_destroy_setup(setup_); setup_ = nullptr; }
         setup_ = pffft_new_setup(M_, PFFFT_COMPLEX);
         if (!setup_) return false;
@@ -109,27 +116,37 @@ public:
         if (!ok_) return;
         float* y = y_.get();
         const float* w = w_.data();
-        for (int j = 0; j < M_; ++j) {
-            const float* x = X + 2 * size_t(src_[size_t(j)]);
-            const float xr = x[0], xi = x[1], wr = w[2 * j], wi = w[2 * j + 1];
-            y[2 * j] = xr * wr - xi * wi; y[2 * j + 1] = xr * wi + xi * wr;
-        }
+        // ★ the selected bins are two contiguous runs of the spectrum (unless the block wraps past bin N-1): straight
+        //   loops the compiler vectorises, not a gather through src_
+        auto run = [&](int dst, const float* x, int n) {
+            float* yy = y + 2 * dst; const float* ww = w + 2 * dst;
+            for (int j = 0; j < n; ++j) {
+                const float xr = x[2 * j], xi = x[2 * j + 1], wr = ww[2 * j], wi = ww[2 * j + 1];
+                yy[2 * j] = xr * wr - xi * wi; yy[2 * j + 1] = xr * wi + xi * wr;
+            }
+        };
+        if (contiguous_) { run(0, X + 2 * size_t(src_[0]), M_ / 2); run(M_ / 2, X + 2 * size_t(src_[size_t(M_ / 2)]), M_ / 2); }
+        else for (int j = 0; j < M_; ++j) run(j, X + 2 * size_t(src_[size_t(j)]), 1);
         pffft_transform_ordered(setup_, y, t_.get(), wk_.get(), PFFFT_BACKWARD);
         // the last H / D outputs are the valid ones (overlap-save); the whole-bin and residual shifts taken out
         const int keep = P_.H / P_.D, from = M_ - keep;
         const size_t base = mid_.size();
         mid_.resize(base + size_t(2 * keep));
         float* m = mid_.data() + base;
-        std::complex<double> ph = hopPh_ * nco_;
-        const std::complex<double> st = ncoStep_;
+        /* ★★ THE RESIDUAL NCO FROM A TABLE. It was `ph *= st` per sample in complex<double> — a serial chain the compiler
+         *  cannot vectorise (and under gcc without fast-math, a NaN-checked multiply each time), 27 blocks × 3.5 M outputs a
+         *  second. Now: this hop's start phase once, in double; per sample rot_[i] = st^i (built at configure) and two
+         *  independent float multiplies. Same phase to ~1e-7. */
+        const std::complex<double> ph = hopPh_ * nco_;
+        const float pc = float(ph.real()), ps = float(ph.imag());
         const float* t = t_.get() + 2 * size_t(from);
+        const float* r = rot_.data();
         for (int i = 0; i < keep; ++i) {
-            const float c = float(ph.real()), s = float(ph.imag());
-            const float a = t[2 * i], b = t[2 * i + 1];
-            m[2 * i] = a * c - b * s; m[2 * i + 1] = a * s + b * c;
-            ph *= st;
+            const float a = t[2 * i], b = t[2 * i + 1], rc = r[2 * i], rs = r[2 * i + 1];
+            const float u = a * rc - b * rs, v = a * rs + b * rc;
+            m[2 * i] = u * pc - v * ps; m[2 * i + 1] = u * ps + v * pc;
         }
-        nco_ *= std::pow(st, keep);
+        nco_ *= ncoKeep_;
         nco_ /= std::abs(nco_);
         hopPh_ *= hopRot_; hopPh_ /= std::abs(hopPh_);
         ++blk_;
@@ -141,8 +158,8 @@ public:
 private:
     struct AlignedFree { void operator()(float* p) const { if (p) pffft_aligned_free(p); } };
     Plan P_; int M_ = 0, k0_ = 0; uint64_t blk_ = 0; bool ok_ = false, passthrough_ = false;
-    std::complex<double> ncoStep_{1, 0}, nco_{1, 0}, hopRot_{1, 0}, hopPh_{1, 0};
-    std::vector<int> src_; std::vector<float> w_, mid_;
+    std::complex<double> ncoStep_{1, 0}, nco_{1, 0}, hopRot_{1, 0}, hopPh_{1, 0}, ncoKeep_{1, 0};
+    std::vector<int> src_; std::vector<float> w_, mid_, rot_; bool contiguous_ = false;
     PFFFT_Setup* setup_ = nullptr;
     std::unique_ptr<float, AlignedFree> y_, t_, wk_;
     ddc::Rational rat_;
@@ -276,8 +293,10 @@ public:
             b.assign(iq, iq + 2 * n);
             qFloats_ += b.size();
             q_.push_back(std::move(b));
-            static constexpr size_t kCapFloats = (8u << 20) / sizeof(float);
-            while (qFloats_ > kCapFloats && q_.size() > 1) {
+            // ★ the cap is TIME, not bytes: 8 MB was 19 ms at 56 MS/s — one late block dropped a whole block. 150 ms of input
+            //   (67 MB at 56 MS/s, 9.6 MB at 8) — still a hard bound, and only filled when the bank falls behind
+            const size_t capFloats = std::max<size_t>((8u << 20) / sizeof(float), size_t(fs_ * 0.15) * 2);
+            while (qFloats_ > capFloats && q_.size() > 1) {
                 dropped_.fetch_add(q_.front().size() / 2, std::memory_order_relaxed);
                 qFloats_ -= q_.front().size();
                 free_.push_back(std::move(q_.front())); q_.pop_front();
@@ -285,6 +304,8 @@ public:
         }
         cv_.notify_one();
     }
+    /** Spectra held per hand-out to the slices (bench knob; the default is the measured best). */
+    void chunkBytes(size_t b) { chunkBytes_.store(std::max<size_t>(b, 1), std::memory_order_relaxed); }
     uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
     uint64_t blocks() const { return blocks_.load(std::memory_order_relaxed); }
 private:
@@ -327,24 +348,43 @@ private:
             }
             apply_();
             const size_t n = b.size() / 2, N2 = size_t(2 * bank_.plan_().N);
-            hops_ = 0;
-            bank_.processHops(b.data(), n, [&](const float* X) {
-                if (spec_.size() < (hops_ + 1) * N2) spec_.resize((hops_ + 1) * N2);
-                std::memcpy(spec_.data() + hops_ * N2, X, sizeof(float) * N2);
-                ++hops_;
-            });
             blocks_.fetch_add(1, std::memory_order_relaxed);
-            nRaw_ = n;
-            if (cuts_.empty()) continue;
-            // ★ the slices: this thread takes every (W+1)-th from 0, each worker its own residue
-            if (workers_ > 0 && cuts_.size() > 1) {
-                { std::lock_guard<std::mutex> lk(wm_); ++gen_; busy_ = workers_; }
-                wcv_.notify_all();
-                runShare_(0);
-                std::unique_lock<std::mutex> lk(wm_);
-                dcv_.wait(lk, [this] { return busy_ == 0; });
-            } else runShare_(-1);
+            /* ★★ HOPS ARE HANDED TO THE SLICES IN CHUNKS of ≤ chunkBytes_ of spectra — but the default is the whole block.
+             *  MEASURED (M5, Linux, 56 MS/s × 27, bank CPU): 256 KB 120 %, 1 MB 84 %, 4 MB 76 %, whole block 74 % with 3 workers
+             *  (79 / 73 / 70 / 69 % on the bank thread alone). Keeping the spectra in cache was the theory; the hand-off per
+             *  chunk costs more than the cache saves. The knob stays for the bench and bounds spec_ for a huge feed. */
+            const size_t chunk = std::max<size_t>(1, chunkBytes_.load(std::memory_order_relaxed) / (N2 * sizeof(float)));
+            if (spec_.size() < chunk * N2) spec_.resize(chunk * N2);
+            size_t rawLeft = n;
+            hops_ = 0;
+            auto run = [&] {
+                if (!hops_) return;
+                // ★ nRaw: the wide samples these hops stand for, the block's remainder going with the last chunk
+                const size_t raw = std::min(rawLeft, hops_ * size_t(bank_.plan_().H));
+                nRaw_ = raw; rawLeft -= raw;
+                cutHops_();
+                hops_ = 0;
+            };
+            bank_.processHops(b.data(), n, [&](const float* X) {
+                std::memcpy(spec_.data() + hops_ * N2, X, sizeof(float) * N2);
+                if (++hops_ == chunk) run();
+            });
+            run();
+            // anything not stood for by a hop (the overlap still filling) is told with the next — the decoder counts arrivals
+            if (rawLeft) carryRaw_ += rawLeft;
         }
+    }
+    /** The cuts for the hops in spec_: split between this thread and the workers, or all here. */
+    void cutHops_() {
+        if (cuts_.empty()) return;
+        nRaw_ += carryRaw_; carryRaw_ = 0;
+        if (workers_ > 0 && cuts_.size() > 1) {
+            { std::lock_guard<std::mutex> lk(wm_); ++gen_; busy_ = workers_; }
+            wcv_.notify_all();
+            runShare_(0);
+            std::unique_lock<std::mutex> lk(wm_);
+            dcv_.wait(lk, [this] { return busy_ == 0; });
+        } else runShare_(-1);
     }
     /** `who` = 0 … workers (the bank thread is 0), or -1 = every cut. */
     void runShare_(int who) {
@@ -376,7 +416,8 @@ private:
     double fs_; int workers_;
     Bank bank_;
     std::vector<Cut> cuts_;
-    std::vector<float> spec_; size_t hops_ = 0, nRaw_ = 0;
+    std::atomic<size_t> chunkBytes_{64u << 20};
+    std::vector<float> spec_; size_t hops_ = 0, nRaw_ = 0, carryRaw_ = 0;
     std::mutex m_; std::condition_variable cv_;
     std::deque<std::vector<float>> q_, free_; size_t qFloats_ = 0; bool stop_ = false;
     std::vector<Out> pending_; bool havePending_ = false;
