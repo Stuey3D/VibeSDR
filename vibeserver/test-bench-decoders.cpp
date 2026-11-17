@@ -12,6 +12,7 @@
 // ★ Silent: no audio device is opened anywhere.
 #include "vibe_benchmark_decoders.h"
 #include "vibe_benchmark_more.h"
+#include "vibe_dab_own.h"   // ★★ V12 own station: nFromBench
 #include <cstdio>
 #include <cstdlib>
 #include <string>

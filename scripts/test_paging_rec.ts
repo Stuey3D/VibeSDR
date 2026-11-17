@@ -68,7 +68,8 @@ const body = (name: string) => {
   const e = lines.findIndex((l, k) => k > i && l === '    }');
   return lines.slice(i, e + 1).join('\n');
 };
-const SILENCED = ['sendClientAudio', 'sendAudioPcmSquelchAware', 'sendAudioPcm', 'watchSendRec', 'watchSendPrivate'];
+// ★★ V12 dabOwnSend: a DAB own station's stream to its listeners (docs/v12/DAB-OWN-STATION.md) — silenced like the rest
+const SILENCED = ['sendClientAudio', 'sendAudioPcmSquelchAware', 'sendAudioPcm', 'watchSendRec', 'watchSendPrivate', 'dabOwnSend'];
 /** Out::Audio senders that carry no PCM of the channel: DAB+'s own AAC (the decoded broadcast service — not the paging
  *  channel; its PCM path goes through sendClientAudio and IS silenced) and raw IQ out (refused and closed while PAGE runs). */
 const NOT_PCM: Record<string, string> = { pumpDabPlusAudio: "DAB+'s own AAC", iqWriteLoop: 'raw IQ out', acceptIqWs: 'raw IQ out (header)' };
