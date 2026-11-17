@@ -1535,6 +1535,11 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
               in AGENTS.md: a control whose every use is a no-op reads as a broken feature. -->
       <div class="card hide" id="gainCard">
         <h2>Gain limits</h2>
+        <!-- ★★ V12 ONE HOME FOR AN SDRplay's GAIN (Stuart, 2026-11-17: "the gain locks for the SDRPlay need to be with the
+             radio controls as right now there are multiple stages in the setup menu where the gain is setup"). For an
+             SDRplay, placeGainRows() moves #gainRows (this card's whole body, every id and handler intact) under the
+             radio's own AGC rows in "This radio's hardware", and hides this card; any other radio keeps it here. -->
+        <div id="gainRows">
         <p class="why">Optional. Leave everything empty and listeners have the full range, which is
            what a receiver does today.</p>
 
@@ -1786,6 +1791,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
              &mdash; up to your position with Limit, fixed at it with Lock &mdash; and no Free mode,
              manual LNA / mixer / VGA or AGCs. It holds for a signed-in admin too: change it here.
              Bands without a rule keep every control.</span></div></label>
+        </div><!-- #gainRows -->
       </div>
 
       <div class="card hide" id="bandCard">
@@ -3063,10 +3069,13 @@ function layoutLockedRadio(locked) {
     const hw = $("hwSerial") ? $("hwSerial").parentNode : null;
     if (hw && rate)  hw.insertBefore(rate, hw.firstChild);
     if (hw && bias)  hw.insertBefore(bias, rate ? rate.nextSibling : hw.firstChild);
-    const gc = $("gainCard");
+    // ★★ V12 the rows' own container (#gainRows), which moves under an SDRplay's AGC rows (placeGainRows) — never
+    //    assume the card is the parent, or insertBefore throws and the tab's whole fill() stops there.
+    const agc = $("rtlAgcRow");
+    const gc = (agc && agc.parentNode) || $("gainRows") || $("gainCard");
     // ★ Above VibeAGC, not appended at the bottom: the AGC row's note refers to it (Stuart,
     //   2026-09-15: "move that starting gain slider above the VibeAGC toggle").
-    if (gc && rest) { const agc = $("rtlAgcRow"); gc.insertBefore(rest, agc || null);
+    if (gc && rest) { gc.insertBefore(rest, agc || null);
                       const lk = $("gainRestLockRow"); if (lk) gc.insertBefore(lk, agc || null); }
   }
   const lim = $("gainLimitRow");
@@ -4334,6 +4343,25 @@ function gainAspLabel(raw) {
   return ($("gainCurve").value === "1" ? "Sensitivity " : "Linearity ") + Math.round(raw / 10);
 }
 
+/** ★★ V12 Where the gain card's body lives: under an SDRplay's own AGC rows when that block is drawn, else in its card.
+ *  Called after renderGain (which owns the card's visibility) and after renderHw draws the RSP block. */
+function placeGainRows() {
+  const rows = $("gainRows"), card = $("gainCard"), here = $("rspGainHere");
+  if (!rows || !card) return;
+  if (here && (radio().driver || "") === "sdrplay") {
+    if (rows.parentElement !== here) here.appendChild(rows);
+    card.classList.add("hide");
+  } else gainRowsHome();
+}
+/** The body back in its own card — BEFORE renderHw rewrites #hw, or the rows would be thrown away with the old block. */
+function gainRowsHome() {
+  const rows = $("gainRows"), card = $("gainCard");
+  if (rows && card && rows.parentElement !== card) {
+    card.appendChild(rows);
+    card.classList.toggle("hide", card.dataset.show !== "1");
+  }
+}
+
 function renderGain() {
   const r = radio();
   const drv = r.driver || "";
@@ -4357,6 +4385,7 @@ function renderGain() {
   const isUsrp = drv === "usrp";
   // ★★ SHOWN ONLY WHERE THE CONTROL EXISTS. An HF+ has no gain to cap, so offering a ceiling box
   //    for it would be a setting that does nothing — the exact fault AGENTS.md has a rule about.
+  $("gainCard").dataset.show = (isRtl || isRsp || isHf || isHrf || isAsp || isUsrp) ? "1" : "0";
   $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf || isHrf || isAsp || isUsrp));
   // ★★★ THE RTL'S AGC SWITCH WAS NEVER SHOWN AT ALL. The row was added with class="hide" and no
   //     line was ever written to take it off, so "VibeSDR Custom AGC for RTL-SDR" has been in the
@@ -4405,13 +4434,15 @@ function renderGain() {
    *   radio is the half-corrected copy AGENTS.md warns about. */
   { const lbl = $("gainAgcLockRow").querySelector(".lbl");
     const note = $("gainAgcLockRow").querySelector(".note");
-    if (lbl) lbl.textContent = isRsp ? "Lock the SDRplay's AGC on"
+    if (lbl) lbl.textContent = isRsp ? "Lock the AGC on (RF and IF)"
                              : isHf  ? "Lock the Airspy HF+'s AGC on"
                                      : "Lock VibeAGC on";
     if (note) note.innerHTML = isRsp
-      ? "Listeners may not switch to manual. This is the RSP's OWN IF AGC, in the tuner \u2014 not "
-        + "VibeSDR's loop, which is only used on an RTL-SDR. With it locked on, the IF ceiling "
-        + "below is hidden: the AGC owns that control."
+      /* ★★ V12 (Stuart, 2026-11-17): the lock holds BOTH halves — a listener on the Lenovo RSP1A had switched the RF AGC
+       *  off and set the gain by hand, because the lock covered only the IF AGC. */
+      ? "Listeners may not switch either AGC off or set the RF or IF gain by hand: the RF AGC is held on, and the IF "
+        + "stays with whichever AGC runs it (VibeAGC or the RSP's own, chosen above). You keep every control once "
+        + "signed in as admin. With it locked on, the IF ceiling below is hidden: the AGC owns that control."
       : isHf
       ? "Listeners may not switch to manual. This is the Airspy HF+'s OWN AGC, and on this radio it "
         + "is the whole protection available \u2014 there is no variable gain to limit, only an "
@@ -4500,6 +4531,7 @@ function renderGain() {
   wireGainSlider("gainMaxSlider", "gainMax");
   fillGainBands();
   gainChips();
+  placeGainRows();   // ★★ V12 an SDRplay's gain sits with its AGC rows (see #gainRows)
 }
 
 function renderBands() {
@@ -5240,6 +5272,7 @@ async function renderHw() {
   fillGainBands();   // ★ BANDS is only trustworthy here — see fillGainBands.
 
   const el = $("hw");
+  gainRowsHome();   // ★★ V12 out of the RSP block before it is redrawn (placeGainRows)
   // ★★ SAY WHICH RADIO THESE OPTIONS BELONG TO when it is not the one running. Otherwise the page
   //    quietly shows one radio's capabilities under another radio's name, and the owner has no way
   //    of telling — which is the same class of fault as a tour card pointing at a moved control.
@@ -5480,6 +5513,10 @@ async function renderHw() {
         in the app's hardware panel, once you have unlocked the protected settings. A choice made there
         is saved here too.</div>
 
+      <!-- ★★ V12 the gain card's body lands here on an SDRplay (placeGainRows) — the lock beside the AGC it locks -->
+      <div class="sectionTitle" style="margin-top:18px"><b>Gain limits and locks</b></div>
+      <div id="rspGainHere"></div>
+
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="autoNotch" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Automatic notch filtering</span></label>
@@ -5533,13 +5570,14 @@ async function renderHw() {
           <b id="dabAgcTargetVal" style="min-width:5.5em;text-align:right"></b>
         </label></div>
 
-      <div class="hint">The RSP manages its own gain by default. To set it by hand, see the note
-        below.</div>`;
+      <div class="hint">The RSP manages its own gain by default. Its starting gain, per-band ceilings and the AGC
+        lock are all under <b>Gain limits and locks</b> above, beside the AGC they act on.</div>`;
     {
       // ★ Model-gated rows — see rspCaps. The RSP1 has no notches at all, so its owner sees neither.
       const c = rspCaps(hw, r);
       const vis = (id, yes) => { const e = $(id); if (e) e.style.display = yes ? "" : "none"; };
       vis("rspAmNotchRow", c.amNotch); vis("rspHdrRow", c.hdr); vis("rspExtRefRow", c.extRef);
+      placeGainRows();   // ★★ V12 the gain card's body under the AGC rows just drawn
       for (const [box, yes] of [["rfNotch", c.rfNotch], ["dabNotch", c.dabNotch]]) {
         const lab = $(box) && $(box).closest("label");
         if (lab) { lab.style.display = yes ? "" : "none";
@@ -5668,7 +5706,8 @@ async function renderHw() {
        about your aerial yet, so coming UP to a working gain is the safe direction. A near-empty
        waterfall on a brand-new server is this protection working, not a fault.`;
 
-  /* ★★★ THE GAIN STORY LIVES IN ONE PLACE NOW — the Gain limits card, where the starting gain
+  /* ★★★ THE GAIN STORY LIVES IN ONE PLACE NOW — the Gain limits card (on an SDRplay, its body moved under the AGC
+   *     rows here: placeGainRows, 2026-11-17), where the starting gain
    *     sits above VibeAGC with a lock beside it. This card used to carry two paragraphs about
    *     where gain is NOT set, above a select that set it (Stuart, 2026-09-15: "double
    *     settings"). Only a radio with something of its own to say keeps a note here. */
@@ -5807,7 +5846,8 @@ function refreshHw() {
   const want = curRadio;
   formRadio = -2;
   hwPending = renderHw().then(() => { if (curRadio === want) formRadio = want; })
-                        .catch(() => { if (curRadio === want) formRadio = want; });
+                        .catch(() => { if (curRadio === want) formRadio = want; })
+                        .finally(() => { if (typeof placeGainRows === "function") placeGainRows(); });   // ★★ V12 see #gainRows
   return hwPending;
 }
 

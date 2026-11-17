@@ -1301,6 +1301,14 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── SDRplay AGC choice from the menu (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-rsp-vagc-control.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE OWNER'S AGC LOCK HOLDS AN SDRplay's RF AGC TOO (2026-11-17): a listener's RF AGC off, manual RF and IF gain refused
+#     and told; AGC on allowed; the admin keeps every control; unlocked, nothing refused.
+printf '\n\033[1m── SDRplay AGC lock covers the RF AGC (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-rsp-agc-lock.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the setup page keeps an SDRplay's gain in ONE place, under its AGC rows (real page, headless MUTED Edge).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-setup-rsp-gain-home.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ …and the web page's RADIO section on an SDRplay (a page shim dresses the fake radio as an RSP1A): the AGC row for
 #    the owner and for a listener, and what IF AGC / RF AGC / AGC TARGET say per mode. Needs Edge; silent.

@@ -21069,7 +21069,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LOGI("RSP gain refused — the owner has fixed the gain on this band");
                 return;
             }
-            if (jsonNum(msg, "lna", v)) {
+            /* ★★★ THE OWNER'S AGC LOCK COVERS BOTH LOOPS (Stuart, 2026-11-17 — a listener on the Lenovo RSP1A had
+             *     switched the RF AGC off and set the RF gain by hand). Locked on, a listener may not turn the RF AGC
+             *     off, nor set the RF (LNA) or IF gain by hand: the AGC owns both. Turning either AGC ON is always
+             *     allowed. The signed-in admin is exempt, as everywhere else (see `gain`). A refusal says why and
+             *     re-sends this listener the radio's true state, so the switch and sliders snap back. */
+            const bool agcHeld = LocalSdrShim::agcLocked() && !adminNow(sock);
+            {
+                double rv = 0;
+                const bool rfOff = jsonNum(msg, "rfagc", rv) && rv == 0;
+                const bool manual = jsonNum(msg, "lna", rv) || jsonNum(msg, "ifgr", rv);
+                if (agcHeld && (rfOff || manual)) {
+                    // ★ Only these fields are dropped: a notch or the antenna in the same message still applies.
+                    LOGI("RSP %s refused — the owner has locked the AGC on", rfOff ? "RF AGC off" : "manual gain");
+                    sendText(sock, "{\"type\":\"notice\",\"why\":\"the server owner has locked the AGC on "
+                                   "for this receiver \xe2\x80\x94 the RF and IF gain are the AGC's\"}");
+                    sendHwInfo(sock);
+                }
+            }
+            if (!agcHeld && jsonNum(msg, "lna", v)) {
                 const int cap = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
                 const int n = (useSdrplay() && sdrp) ? sdrp->lnaStateCount() : 0;
                 if (cap >= 0 && n > 1) {
@@ -21081,7 +21099,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
             }
-            if (jsonNum(msg, "lna", v))    { LocalSdrShim::instance().setLnaState((int)v);
+            if (!agcHeld && jsonNum(msg, "lna", v))    { LocalSdrShim::instance().setLnaState((int)v);
                                              const int n = (useSdrplay() && sdrp) ? sdrp->lnaStateCount() : 0;
                                              std::string j = "{\"lnaState\":" + std::to_string((int)v);
                                              if (n > 1) {
@@ -21102,7 +21120,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *   in and a number coming out.
              * ★ Not offered while the AGC is locked on — the loop owns this control there, so a
              *   ceiling on it would be a figure nothing reads. The setup page hides it to match. */
-            if (jsonNum(msg, "ifgr", v)) {
+            if (!agcHeld && jsonNum(msg, "ifgr", v)) {
                 // ★ No conversion left to get backwards: the owner's figure and the wire figure are
                 //   both a gain REDUCTION in dB. Clamped UP, because more reduction is less gain.
                 const int floor = LocalSdrShim::ifGrFloorAt(LocalSdrShim::instance().listenFrequency());
@@ -21133,7 +21151,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *   2026-09-12): the slider moved, the number changed, the radio did not.
              * ★ Moving the block below the switch is the whole fix. Do not move it back: the two
              *   are ordered by a hardware rule, not by the order the fields happen to be read. */
-            if (jsonNum(msg, "ifgr", v))   { LocalSdrShim::instance().setIfGainReduction((int)v);
+            if (!agcHeld && jsonNum(msg, "ifgr", v))   { LocalSdrShim::instance().setIfGainReduction((int)v);
                                              vsPersist("{\"ifGr\":" + std::to_string((int)v) + "}"); }
             /* ★★ REFUSED WHEN THE OWNER HAS LOCKED IT, and SAID SO. The target decides how hard
              *  the front end is driven for everybody on a shared receiver, so it is the operator's
@@ -21151,7 +21169,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★ THE RF HALF OF THE GAIN LOOP, from the menu. Persisted like every other RSP
              *  control so it survives a restart — and reported back on rspstat, which is what
              *  keeps the button honest on a shared receiver where somebody else may flip it. */
-            if (jsonNum(msg, "rfagc", v)) {
+            if (jsonNum(msg, "rfagc", v) && !(agcHeld && v == 0)) {
                 LocalSdrShim::setVibeServerRfAgc(v != 0);
                 vsPersist(std::string("{\"rfAgc\":") + (v != 0 ? "true" : "false") + "}");
                 LOGI("RSP RF AGC %s by a listener", v != 0 ? "ON" : "off");
@@ -38435,6 +38453,12 @@ int LocalSdrShim::gainCurveAt(double hz) {
 
 void LocalSdrShim::setAgcLock(bool on) {
     g_agcLock.store(on);
+    /* ★★★ LOCKED ON MEANS THE WHOLE LOOP ON — THE RF HALF TOO (Stuart, 2026-11-17: back on the Lenovo RSP1A he found
+     *     "someone had disabled VibeAGC on the RF and changed the gain themselves"). The lock covered only the IF AGC, so
+     *     on an SDRplay the RF AGC (VibeAGC's LNA loop) stayed a listener's to switch off. A lock now switches it on, the
+     *     way it switches VibeAGC on for an RTL (setVibeAgcRtl(rtlAgc || agcLock)), whatever order start-up calls these
+     *     in: setVibeServerRfAgc holds it on while the lock is set. Unlocking leaves it as it is. */
+    if (on) g_vibeAgcRspOn.store(1, std::memory_order_relaxed);
     LOGI("AGC lock: %s", on ? "ON — listeners may not turn it off" : "off");
 }
 bool LocalSdrShim::agcLocked() { return g_agcLock.load() && g_serveOnLan.load(); }   // ★ see gainLockedAt
@@ -39851,7 +39875,10 @@ void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
  *   reason every other RSP control lives there. Auto then owns rfNotch/dabNotch from the retune
  *   path; these two only say whether it is running and who else may interfere. */
 void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.store(on ? 1 : 0); }
-void LocalSdrShim::setVibeServerRfAgc(bool on) { g_vibeAgcRspOn.store(on ? 1 : 0, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerRfAgc(bool on) {
+    // ★★ The owner's AGC lock holds the RF loop on (setAgcLock): a config or a message saying off does not take it away.
+    g_vibeAgcRspOn.store((on || g_agcLock.load()) ? 1 : 0, std::memory_order_relaxed);
+}
 static std::atomic<bool> g_rspDabDecim{false};
 void LocalSdrShim::setVibeServerRspVibeAgc(int choice) {
     // ★ BENCH: VIBE_RSP_VIBEAGC=0|1|2 overrides the owner's setting, for a same-binary A/B without touching their config.

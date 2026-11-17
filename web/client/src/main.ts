@@ -21557,7 +21557,8 @@ function rspRestricted(): boolean {
  *  owner's controls. ★ (2026-10-30) With VibeAGC (SDRplay) running instead, this key is VibeAGC's licence to move the
  *  LNA — the same answer: the LNA is not the slider's. Which loop runs is the AGC row (renderRspVagc). */
 function rfAgcDrivesLna(): boolean {
-  return !!document.getElementById('rspRfAgc')?.classList.contains('on');
+  // ★★ The owner's AGC lock holds the RF loop on (server: setAgcLock / rsp_control), so the LNA is never the slider's.
+  return hwAgcLocked || !!document.getElementById('rspRfAgc')?.classList.contains('on');
 }
 
 function applyRspLock() {
@@ -21808,6 +21809,17 @@ function pushAllRspSettings() {
 function syncRspAgcLock() {
   const t = document.getElementById('rspIfAgc') as HTMLButtonElement | null;
   const gr = document.getElementById('rspIfGr') as HTMLInputElement | null;
+  /* ★★★ AND THE RF HALF, WHICH THE LOCK NOW HOLDS TOO (Stuart, 2026-11-17: on the Lenovo RSP1A "someone had disabled
+   *     VibeAGC on the RF and changed the gain themselves"). Locked: the RF AGC key shows on and greyed, and the RF
+   *     slider is the AGC's. The server refuses both anyway; this makes the refusal visible. */
+  const rf = document.getElementById('rspRfAgc') as HTMLButtonElement | null;
+  const lna = document.getElementById('rspLna') as HTMLInputElement | null;
+  if (rf) {
+    rf.classList.toggle('locked', hwAgcLocked);
+    if (hwAgcLocked) rf.classList.add('on');
+    rf.title = hwAgcLocked ? 'The owner has locked the AGC on for this receiver, so the RF gain is the AGC\'s.' : '';
+  }
+  if (lna) lna.disabled = hwAgcLocked;
   if (t) {
     t.classList.toggle('locked', hwAgcLocked);
     if (hwAgcLocked) t.classList.add('on');      // locked ON — never show it off
@@ -21868,7 +21880,7 @@ function initRspControls() {
     b.onclick = () => {
       // ★ The owner's lock wins BEFORE the class is toggled — otherwise the button shows "off"
       //   for the round trip and the server answers by simply ignoring it. See syncRspAgcLock.
-      if (key === 'ifagc' && hwAgcLocked && b.classList.contains('on')) return;
+      if ((key === 'ifagc' || key === 'rfagc') && hwAgcLocked && b.classList.contains('on')) return;
       // ★ And the notches while the server owns them — see applyRspLock. Sending would be refused.
       if ((key === 'rfnotch' || key === 'dabnotch') && (hwAutoNotch || !hwUserNotch)) return;
       const on = !b.classList.contains('on');
