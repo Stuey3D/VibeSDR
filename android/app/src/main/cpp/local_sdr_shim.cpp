@@ -5932,6 +5932,29 @@ static long vsMemAvailableKB() {
     std::fclose(f);
     return kb;
 }
+/** ★★ V12 IS THIS A WEAK BOX FOR DAB? The saved benchmark's own DAB row (one multiplex and its first station, the
+ *  hottest thread) at 25 % of a core or more — the Pi 2 measured 66 %, an i5 a few. No benchmark = not known = no.
+ *  Re-read at most every 10 s, as vsDabStationsN. Read by the waterfall's DAB rate (recomputeEngineRate). */
+static bool vsDabWeakBox() {
+    static std::mutex m; static double at = -1e9; static bool weak = false;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(m);
+    if (now - at < 10.0) return weak;
+    at = now;
+    LocalSdrShim::BenchGetFn getFn;
+    { std::lock_guard<std::mutex> bk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+    weak = false;
+    if (!getFn) return weak;
+    const std::string j = getFn();
+    const size_t r = j.find("\"id\":\"dab\"");
+    if (r == std::string::npos) return weak;
+    const size_t e = j.find('}', r), p = j.find("\"pct\":", r);
+    if (p != std::string::npos && p < e) weak = std::atof(j.c_str() + p + 6) >= 25.0;
+    return weak;
+}
+/** ★★ V12 More than one DAB station is playing (an own station has listeners) — set by the own-station loop with a
+ *  10 s hold on the way back down (dabMultiCheck), read by recomputeEngineRate. */
+static std::atomic<bool> g_dabMultiStation{false};
 static int vsDabStationsN() {
     static std::mutex m; static double at = -1e9; static int n = 0;
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -10876,6 +10899,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  the waterfall to save server CPU and skim the entire NDB band at once"): the map covers it; 1 fps keeps the gain
          *  telemetry and the link meter alive. */
         if (g_ndbMode.load(std::memory_order_relaxed) && want > 1.0) want = 1.0;
+        /* ★★ V12 DAB WITH SEVERAL STATIONS PLAYING, ON A WEAK BOX: 2 fps (Stuart, 2026-11-17: "5FPS if all users are on
+         *  the same station but as soon as users change to another station and multiple dab stations are running the
+         *  waterfall throttles to 2FPS but only on weaker boxes" — "the waterfall is only really there on DAB to show you
+         *  which blocks have multiplexes"). Measured on the Pi 2 with five stations: the spectrum thread 37 % of a core
+         *  at ~6 fps, the box at 1.6 % idle and the audio glitching; at 2 fps the stations get that CPU. The clients'
+         *  fixed output clock repeats the newest row, so the waterfall slows, never stalls. One station (everyone on the
+         *  radio's own) or a box the benchmark does not call weak: untouched. */
+        if (g_dabMode.load(std::memory_order_relaxed) && g_dabMultiStation.load(std::memory_order_relaxed)
+            && want > 2.0 && vsDabWeakBox()) want = 2.0;
         /* ★★ AND THE GOVERNOR'S, BELOW THE OWNER'S (vibe_spec_governor.h): only while this box is starved for CPU,
          *  20 → 10 → 5. It never raises anything — the owner's top and a listener's lower ask both still hold — and
          *  the idle floor (2 fps) is below every rung, so it is never touched. */
@@ -17901,9 +17933,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeThreadName("vibe-dab-own");
         while (dabOwnRun_.load(std::memory_order_relaxed)) {
             dabOwnTick();
+            dabMultiCheck();
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
         dabOwnTick();   // ★ once more after DAB's end: closes and joins what is left
+        if (g_dabMultiStation.exchange(false)) recomputeEngineRate();   // ★★ V12 DAB is over: the listeners' rate again
+    }
+    /** ★★ V12 Several stations playing? (an own station with listeners). Up at once; down only after 10 s with one, so a
+     *  listener stepping through the list does not flip the waterfall's rate on every pick. A change re-decides the rate. */
+    double dabMultiLastAt_ = -1e9;
+    void dabMultiCheck() {
+        bool multi = false;
+        if (const auto ov = dabOwnViewNow()) for (const auto& kv : ov->audio) if (!kv.second.empty()) { multi = true; break; }
+        const double now = nowSecs();
+        if (multi) dabMultiLastAt_ = now;
+        const bool want = multi || (g_dabMultiStation.load() && now - dabMultiLastAt_ < 10.0);
+        if (want == g_dabMultiStation.load()) return;
+        g_dabMultiStation.store(want);
+        const bool weak = vsDabWeakBox();
+        LOGI("[DAB] %s", want ? (weak ? "several stations playing \xe2\x80\x94 a weak box: the waterfall drops to 2 fps"
+                                      : "several stations playing \xe2\x80\x94 this box keeps its waterfall rate")
+                              : (weak ? "one station again \xe2\x80\x94 the waterfall back at the listeners' rate"
+                                      : "one station again"));
+        recomputeEngineRate();
     }
     /** A station's 20 ms: its own pre-buffer, its PCM, ONE encode for everyone on it. The clock thread. */
     void dabOwnPumpStation(DabOwnSt& st, const std::vector<std::shared_ptr<net::Socket>>& socks, size_t want) {

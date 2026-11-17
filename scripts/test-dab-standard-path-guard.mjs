@@ -25,7 +25,13 @@ console.log(`── 1. source, against ${BASE} ──`);
 const agcFiles = fs.readdirSync(path.join(root, C)).filter((f) => /agc|gain/i.test(f)).map((f) => C + f);
 const agcDiff = git('diff', BASE, '--', ...agcFiles);
 ok(agcFiles.length > 0 && agcDiff === '', `the AGC / gain sources are unchanged (${agcFiles.length} files: ${agcFiles.map((f) => path.basename(f)).join(', ')})`);
-const shim = git('diff', '-U0', BASE, '--', C + 'local_sdr_shim.cpp').split('\n');
+/* ★ The shim's gain/AGC lines are judged from SHIM_BASE: f026471cd is the end of the SDRplay AGC lock work (Stuart,
+ *  2026-11-17 — the lock holds the RF AGC too, the admin takes both gains, a locked RF figure leaves listeners the IF).
+ *  Those lines are the RSP's own gain controls for every mode, reviewed and tested there (test-rsp-agc-lock.mjs); they
+ *  are not DAB's standard path, whose AGC sources are still held to BASE above. Phase 1 added no such line (this check
+ *  passed against BASE before that work). */
+const SHIM_BASE = process.env.SHIM_BASE || 'f026471cd';
+const shim = git('diff', '-U0', SHIM_BASE, '--', C + 'local_sdr_shim.cpp').split('\n');
 const gainish = /setGain|setTunerGain|g_gain|dabSeedGain|vibeAgc|Agc\(|agc_|rtlAgc|gainSteps|setLna|setIfGain/;
 ok(!shim.some((l) => l.startsWith('-') && !l.startsWith('---') && gainish.test(l)), 'the shim removes no line that touches the gain or AGC');
 ok(!shim.some((l) => l.startsWith('+') && !l.startsWith('+++') && gainish.test(l)), 'the shim adds no gain or AGC call');

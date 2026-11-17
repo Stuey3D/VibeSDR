@@ -72,11 +72,11 @@ await sleep(400);
 const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 let srv = null;
 const log = fs.openSync(path.join(dir, 'server.log'), 'a');
-function writeConfig(own, n) {
+function writeConfig(own, n, rows = []) {
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'DAB own', locator: 'IO92nh',
     adminPass: 'dab-own-admin', radios: [{ serial: 'dabown', label: 'T', enabled: true, configured: true, users: 3, dabOwnStation: own }] }));
   // ★ the benchmark's answer, as vibe_benchmark.h writes it (only the block the rule reads)
-  fs.writeFileSync(path.join(dir, 'benchmark.json'), JSON.stringify({ v: 1, at: 1, rows: [], dabStations: { n, perStationPct: 9.5, frontPct: 60, memKB: 900 } }));
+  fs.writeFileSync(path.join(dir, 'benchmark.json'), JSON.stringify({ v: 1, at: 1, rows, dabStations: { n, perStationPct: 9.5, frontPct: 60, memKB: 900 } }));
 }
 async function startServer() {
   srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2048000', '--freq', '96100000', '--mode', 'wfm', '--users', '3'],
@@ -199,6 +199,9 @@ try {
   const sA = spectrum(a);
   ok(corr(sA, sC) > 0.8 && corr(sA, sC) > corr(sA, sB), `A now sounds like what C's station played (spectrum r ${corr(sA, sC).toFixed(2)}; vs B's ${corr(sA, sB).toFixed(2)})`);
   A.close();
+  { const t = fs.readFileSync(path.join(dir, 'server.log'), 'utf8');
+    ok(/several stations playing — this box keeps its waterfall rate/.test(t) && !/a weak box: the waterfall drops to 2 fps/.test(t),
+       'a box the benchmark does not call weak keeps its waterfall rate with several stations playing'); }
   await stopServer();
 
   console.log('── 2. own station OFF (benchmark N 2 < limit 3) ──');
@@ -215,6 +218,29 @@ try {
   ok(await until(() => playingOf(D.last(), t) === 2, 5000), `playing: ${t.toString(16)} × 2`);
   D.close(); E.close();
 } finally {
+  await stopServer();
+
+  console.log('── 3. a weak box (the benchmark\'s DAB row 66 % of a core): several stations → the waterfall at 2 fps ──');
+  fs.appendFileSync(path.join(dir, 'server.log'), '\n=== WEAK ===\n');
+  writeConfig(-1, 5, [{ id: 'dab', label: 'DAB+ @ 2.048 MS/s', rate: 2048000, pct: 66.2, grade: 'green' }]);
+  await startServer();
+  const weakLog = () => fs.readFileSync(path.join(dir, 'server.log'), 'utf8').split('=== WEAK ===')[1] || '';
+  const W1 = listener('w'); await W1.opened; await sleep(600);
+  const W2 = listener('x'); await W2.opened; await sleep(600);
+  W1.send({ type: 'dab', on: 1, channel: home });
+  ok(await until(() => (W1.last()?.sid ?? 0) > 0 && (W1.last()?.services?.length ?? 0) >= 3, 30000), `${home} plays`);
+  const w0 = W1.last().sid, w1 = W1.last().services.map((x) => x.sid).find((x) => x !== w0);
+  await sleep(2000);
+  ok(!/several stations playing/.test(weakLog()), 'one station for both listeners: no throttle');
+  W2.send({ type: 'dab_service', sid: w1 });
+  ok(await until(() => /several stations playing — a weak box: the waterfall drops to 2 fps/.test(weakLog()), 8000), '★ W2 picks another station: several stations playing');
+  ok(await until(() => /engine FFT rate [\d.]+ -> 2\.0 fps/.test(weakLog()), 5000), '★ …and the engine drops to 2 fps');
+  W2.send({ type: 'dab_service', sid: w0 });
+  await sleep(6000);
+  ok(!/one station again/.test(weakLog()), 'back on one station: the 2 fps holds for a while (no flip on every pick)');
+  ok(await until(() => /one station again — the waterfall back at the listeners' rate/.test(weakLog()), 30000), '★ …then the waterfall comes back after the hold');
+  ok(await until(() => /engine FFT rate 2\.0 -> (?!2\.0)[\d.]+ fps/.test(weakLog()), 5000), '…the engine back above 2 fps');
+  W1.close(); W2.close();
   await stopServer();
   try { rtl.kill('SIGTERM'); } catch {}
 }
