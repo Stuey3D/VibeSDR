@@ -22200,9 +22200,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★ NAME THE ACTUAL REASON. "cannot reach a multiplex at 2.048 MS/s" sent the
                  *  owner of a decoder-less server hunting through sample rates and aerials for a
                  *  fault that was not in the radio at all. */
-                sendText(sock, !vsDabDecoderAvailable()
-                    ? "{\"type\":\"dab_error\",\"why\":\"this server was built without a DAB+ audio decoder, so it cannot do DAB\"}"
-                    : "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
+                /* ★★ V12 AND A SHARED LOCKED RANGE SAYS SO (2026-11-17, the Lenovo rerun: a DAB request on a locked range
+                 *  shared by several listeners at 2.048 MS/s was refused with "cannot reach a DAB multiplex", which the
+                 *  receiver plainly can — and the server logged nothing, so it read as a silent drop). Such a range cannot
+                 *  move its capture onto a multiplex for one listener; DAB there is the wide mode's (§11: 4 MS/s or more,
+                 *  two blocks in the range). Logged, so a refusal is never invisible on the server either. */
+                const bool sharedRange = g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0
+                                      && g_vsMaxUsers.load(std::memory_order_relaxed) > 1;
+                const char* why = !vsDabDecoderAvailable()
+                    ? "this server was built without a DAB+ audio decoder, so it cannot do DAB"
+                    : sharedRange
+                    ? "this receiver is a locked range shared by several listeners, so it cannot move onto one multiplex \xe2\x80\x94 DAB here needs the owner to set a range of 4 MS/s or more that holds two DAB blocks or more"
+                    : "this receiver cannot reach a DAB multiplex at 2.048 MS/s";
+                LOGI("[DAB] ON refused: %s", why);
+                sendText(sock, std::string("{\"type\":\"dab_error\",\"why\":\"") + why + "\"}");
                 return;
             }
             /* ★★★ TAKE THE LOCK OFF FIRST — see g_dabLockHeld. Anything below that moves the

@@ -556,6 +556,10 @@ if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then pass=$((pass+1)); else fail=$((fail+1));
 printf '\n\033[1m── DAB in a wide locked range: a listener\x27s own multiplex (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-wide-lr.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ A DAB request on a locked range is never dropped silently: a SHARED range at 2.048 MS/s refuses with the reason (and
+#    logs it); a one-listener range is honoured as before (2026-11-17).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-lr-refuse.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── gain write path ──\033[0m\n'
 if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
