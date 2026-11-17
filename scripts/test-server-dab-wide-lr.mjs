@@ -89,7 +89,7 @@ const LOCK = PHYS - 15000;   // ★ rtl_tcp: the server tunes the dongle 15 kHz 
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
   configured: true, fullMode: true, sharing: 'public',
   radios: [{ serial: 'fake', driver: 'rtlsdr', enabled: true, configured: true, users: 8, mode: 'locked', lockFreq: LOCK,
-             rate: RATE, freq: LOCK, demodMode: 'wfm', dabOwnStation: 1 }],
+             rate: RATE, freq: LOCK, demodMode: 'wfm', dabOwnStation: 1, autoPpm: true }],
 }));
 const rtlLog = [];
 const rtl = spawn(process.execPath, ['--max-old-space-size=512', path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
@@ -171,6 +171,8 @@ try {
   ok(await until(() => F.dab()?.channel === '10D', 15000), `stepping down from 11A to a block outside lands on the next inside below, 10D (${F.dab()?.channel})`);
   F.close();
 
+  // ★★ §11.2: ONE clock reading for the radio, from the listeners' multiplexes (the replayed capture is the RSP's own air)
+  ok(/\[DAB-LR\] clock: [23] multiplexes, MER-weighted median [-+][0-9.]+ ppm/.test(log()), `★ §11.2: ONE clock reading for the radio, the MER-weighted median of the multiplexes (${(log().match(/\[DAB-LR\] clock:[^\n]*/) || ['none'])[0].slice(0, 110)})`);
   ok(moves(t0).length === 0, `★★ THE RADIO NEVER MOVED: no tune, no rate change while listeners were in DAB (${JSON.stringify(moves(t0).slice(0, 4))})`);
 
   console.log('── leaving ──');

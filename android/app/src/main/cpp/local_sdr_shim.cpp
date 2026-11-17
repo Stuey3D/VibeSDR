@@ -18070,7 +18070,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<bool> dabLrRun_{false};
     std::atomic<int> dabLrCount_{0};                               // listeners in DAB (the hot paths' fast "nobody")
     std::thread dabLrCtl_, dabLrClk_;
-    double lrLastReport_ = 0, lrEmptySince_ = 0, dabLrEligAt_ = 0;
+    double lrLastReport_ = 0, lrEmptySince_ = 0, dabLrEligAt_ = 0, lrLastClk_ = 0, lrClkLogAt_ = 0;
+    /** ★★ §11.2 ONE PPM CONTROLLER PER RADIO: vibe-dab-lr reads every multiplex's clock every 2 s and leaves ONE reading
+     *  here — the MER-weighted median of their offsets (vibe_dab_wide.h), outliers dropped — for the AFC tick to take. A leaf
+     *  lock, so the AFC never waits on a decoder or on dabLrOpMtx_ (which sendHwInfo, and so the AFC's own lock, sits under). */
+    std::mutex lrClkMtx_;
+    vibedab::DabService::ClockRead lrClk_;
+    bool lrClkFresh_ = false;
+    bool dabLrClockTake(vibedab::DabService::ClockRead& out) {
+        std::lock_guard<std::mutex> lk(lrClkMtx_);
+        if (!lrClkFresh_) return false;
+        out = lrClk_; lrClkFresh_ = false;
+        return true;
+    }
+    bool dabLrClockActive() { return dabLrCount_.load(std::memory_order_relaxed) > 0; }
 
     std::shared_ptr<const LrView> dabLrViewNow() { std::lock_guard<std::mutex> lk(dabLrViewMtx_); return dabLrView_; }
     /** This radio's capture as DAB sees it: the PHYSICAL centre and the rate. */
@@ -18351,6 +18364,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     ++it;
                 }
             lrPublishLocked_(spec, aud);
+            // ★★ §11.2 the radio's one clock reading, every 2 s, from every open multiplex
+            if (now - lrLastClk_ >= 2.0 && !lrMux_.empty()) {
+                lrLastClk_ = now;
+                std::vector<vibedab::wide::Reading> rs;
+                vibedab::DabService::ClockRead best; bool have = false;
+                for (auto& kv : lrMux_) {
+                    const auto c = kv.second->svc->clockRead();
+                    if (!c.locked || c.disturbed || !(c.blockHz > 0)) continue;
+                    rs.push_back({ c.offsetHz / c.blockHz * 1e6, double(c.merDb) });
+                    if (!have || c.merDb > best.merDb) { best = c; have = true; }
+                }
+                double ppm = 0; int dropped = 0;
+                if (have && vibedab::wide::weightedMedianPpm(rs, 2.0, ppm, dropped)) {
+                    best.offsetHz = ppm * best.blockHz / 1e6;   // ★ the strongest multiplex's reading, carrying the combined offset
+                    if (now - lrClkLogAt_ > 60.0) {
+                        lrClkLogAt_ = now;
+                        LOGI("[DAB-LR] clock: %zu multiplex%s, MER-weighted median %+.3f ppm â the radio's one reading (auto-PPM)",
+                             rs.size(), rs.size() == 1 ? "" : "es", ppm);
+                    }
+                    if (dropped) LOGI("[DAB-LR] clock: %d of %zu multiplexes disagree by more than 2 ppm â left out (a weak one, or a transmitter off frequency)", dropped, rs.size());
+                    std::lock_guard<std::mutex> lk(lrClkMtx_);
+                    lrClk_ = best; lrClkFresh_ = true;
+                }
+            }
             // ★ Reports, every 0.5 s: each listener their station's (or their multiplex's own), never another's
             if (now - lrLastReport_ >= 0.5) {
                 lrLastReport_ = now;
@@ -46390,9 +46427,16 @@ void LocalSdrShim::afcTick() {
         //   listening or the radio is in DAB (which gains the most from a right sample clock and rides a retune)
         tryHw = g_afc.on() && !g_afc.suspended() && g_afc.acquired() && !gliding && !g_afc.verifying() && afcHwCapable()
                 && (g_dabMode.load(std::memory_order_relaxed) || Impl::s_listenersCached.load(std::memory_order_relaxed) <= 0);
-        if (!g_afc.on() || g_afc.suspended() || !g_dabMode.load(std::memory_order_relaxed)) { g_afcStableSince = 0; publish(); }
+        /* ★★ V12 Phase 2 (§11.2): in a wide locked range the listeners' multiplexes are the reference — ONE reading for the
+         *  radio, combined by vibe-dab-lr (MER-weighted median), never one per multiplex. Whole-radio DAB: exactly as before. */
+        const bool dabWhole = g_dabMode.load(std::memory_order_relaxed);
+        vibedab::DabService::ClockRead lrc;
+        const bool lrRef = !dabWhole && p->dabLrClockActive();
+        const bool lrHave = lrRef && p->dabLrClockTake(lrc);
+        if (!g_afc.on() || g_afc.suspended() || !(dabWhole || lrRef)) { g_afcStableSince = 0; publish(); }
+        else if (lrRef && !lrHave) { publish(); }   // ★ no fresh combined reading yet: wait for the next one
         else {
-            const auto c = g_dab.clockRead();
+            const auto c = dabWhole ? g_dab.clockRead() : lrc;
             vibeafc::DabRead d;
             d.locked = c.locked; d.frames = c.frames; d.offsetHz = c.offsetHz; d.blockHz = c.blockHz;
             d.merDb = c.merDb; d.fibRate = c.fibRate; d.mscBer = c.mscBer; d.disturbed = c.disturbed;
