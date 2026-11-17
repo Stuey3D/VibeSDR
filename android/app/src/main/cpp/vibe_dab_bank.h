@@ -354,7 +354,6 @@ private:
              *  (79 / 73 / 70 / 69 % on the bank thread alone). Keeping the spectra in cache was the theory; the hand-off per
              *  chunk costs more than the cache saves. The knob stays for the bench and bounds spec_ for a huge feed. */
             const size_t chunk = std::max<size_t>(1, chunkBytes_.load(std::memory_order_relaxed) / (N2 * sizeof(float)));
-            if (spec_.size() < chunk * N2) spec_.resize(chunk * N2);
             size_t rawLeft = n;
             hops_ = 0;
             auto run = [&] {
@@ -366,6 +365,7 @@ private:
                 hops_ = 0;
             };
             bank_.processHops(b.data(), n, [&](const float* X) {
+                if (spec_.size() < (hops_ + 1) * N2) spec_.resize((hops_ + 1) * N2);   // ★ grows to the block's hops, never the cap
                 std::memcpy(spec_.data() + hops_ * N2, X, sizeof(float) * N2);
                 if (++hops_ == chunk) run();
             });
