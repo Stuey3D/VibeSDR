@@ -81,7 +81,13 @@ public:
         wk_.reset((float*)pffft_aligned_malloc(sizeof(float) * 2 * size_t(M_)));
         rat_ = ddc::Rational();
         passthrough_ = std::fabs(p.mid - DabDdc::kOutHz) < 1.0;
-        if (!passthrough_) rat_.design(p.mid, DabDdc::kOutHz, DabDdc::kPassHz, DabDdc::kStopHz, DabDdc::kAttDb);
+        /* ★★ A WIDER TAIL THAN THE DDC'S, BECAUSE THE BANK HAS ALREADY DONE ITS JOB. The DDC's half-band output still carries
+         *  the neighbours, so its rational stage must stop at 1.248 MHz. Here the bank's own filter has taken everything past
+         *  ±1.248 MHz down 80 dB, so the tail only has to stop the images, which begin at mid − 1.248 MHz (2.25 MHz at 3.5
+         *  MS/s): a transition three times wider, a third of the taps. What survives to ±1.248 folds, at 2.048 MS/s, no nearer
+         *  the ensemble than 0.8 MHz — outside its ±0.768. ★ (Tried: pffft's unordered layout to skip both reorder passes —
+         *  under 2 % of a core at 56 MS/s × 26, and its internal layout is not a per-complex permutation. Not worth it.) */
+        if (!passthrough_) rat_.design(p.mid, DabDdc::kOutHz, DabDdc::kPassHz, std::max(DabDdc::kStopHz, p.mid - DabDdc::kStopHz), DabDdc::kAttDb);
         mid_.clear();
         ok_ = true;
         return true;

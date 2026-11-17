@@ -330,7 +330,7 @@ public:
                 float re, im;
                 dot4(&hist_[size_t(2 * pos_)], &hd_[size_t(ph_) * size_t(2 * T_)], T_ / 2, re, im);
                 y[2 * w] = re; y[2 * w + 1] = im; ++w;
-                ph_ += M_; pos_ += ph_ / L_; ph_ %= L_;
+                ph_ += M_; while (ph_ >= L_) { ph_ -= L_; ++pos_; }   // ★ no divide per output (M/L is under 2 at every rate) — the same arithmetic
             }
             out.resize(base + 2 * w);
             // ★ drop what no future output needs: everything before the next window's start
