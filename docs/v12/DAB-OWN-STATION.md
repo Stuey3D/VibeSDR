@@ -211,7 +211,42 @@ Audio: unchanged formats. A station listener's audio socket simply carries that 
   primary path is unchanged by construction, and the ladder proves it. The same ladder is then run with stations
   attached, to show that the primary is unaffected when the tap is busy.
 
-## 11. Phase 2 (NOT this job): many multiplexes from one wide capture
+## 11. Phase 2: many multiplexes from one wide capture — BUILT for the locked wide range (branch `dab-wide-phase2`, 2026-11-17)
+
+### 11.9 What was built (read this first)
+
+- **Where it applies:** a LOCKED range (every listener has their own VFO — `perClientDsp`) whose capture is 4 MS/s or more
+  and holds at least two Band III blocks (`vibe_dab_wide.h` `eligible`; the "N" raster block is not offered beside an
+  ordinary block it overlaps). Nothing else: whole-radio DAB, its AGC, gain path and decode are untouched (§11.0 — the
+  guard against the branch point passes; the weak ladders 12B / 11D / 10D decode identically, 9/9).
+- **Per listener:** `dab {on, channel, sid}` puts THIS listener on a block inside the capture (outside → the nearest
+  inside; the block keys step inside it). One multiplex decoder per block with a listener (`LrMux`: a DabService fed the
+  whole capture, its DDC cutting the block out), opened on the first listener, closed with the last. Stations on it by
+  Phase 1's Roster, per multiplex. Their audio socket carries their station (their VFO's audio is held back while in
+  DAB); their spectrum socket their multiplex's report (`lr`, `own`, `playing`, `mine`). `dab {on:0}` gives them their
+  VFO back. Sockets gone: off their multiplex; back within 120 s: put back on block and station by the server.
+- **Threads:** `vibe-dab-lr` (4 Hz: presence, resumes, reports, closing and joining), `vibe-dab-lrclk` (audio rung, 20 ms,
+  Phase 1's pump: one Opus encode per station, PAGE gate included); vibe-dsp only copies the capture to each decoder.
+- **Stations:** the rule (N ≥ limit → N − 1), or forced on (`dabOwnStation: 1`) → a station per listener, NOT capped at
+  Phase 1's 16 (the memory floor and the per-multiplex cap of 64 still hold).
+- **PPM (§11.2):** one reading for the radio every 2 s — the MER-weighted median of the open multiplexes, outliers over
+  2 ppm dropped and logged — taken by the AFC tick in place of `g_dab.clockRead()`.
+- **Clients:** nothing new on the wire; `vibeserver.json` `dab: true` on such a radio is what turns the key on.
+- **Tests:** `test-dab-wide-lr` (29, the rules); `scripts/test-server-dab-wide-lr.mjs` (25, the real server on fake rtl_tcp
+  replaying the RSP1A capture: two listeners on two multiplexes at once, a station and a sharer on 11A, 10D never opened,
+  the radio sent no tune and no rate change, the one clock reading, leaving and closing). Bench:
+  `scripts/bench-server-dab-wide-lr.mjs`.
+- **Measured through the server (Mac M5 Pro, replayed capture, Opus):** 65 listener sessions, each on a different
+  service across 10C 16 + 10D 19 + 11A 30 — all 65 on their own service with audio frames throughout (no gap over
+  200 ms); 10C 16/16 and 11A 30/30 decoding ≥ 90 % of super frames, 10D mean 0.69 (the weak one, as offline). Server
+  187 % of one core in total, RSS 126 MB, 4.5 kB/s per listener (295 kB/s total). For scale, 54 sessions merely
+  connected (their FM VFOs, not in DAB) cost 148 %: a listener's own VFO, which still runs while they are in DAB, is the
+  larger part — the next saving.
+- **Not done:** the live Lenovo run (§11.4: no amd64 build route without building on the Lenovo or enabling Rosetta in
+  the Mac's Docker VM); §11.1a wide-mode gain rules; a benchmark row for a multiplex front end; the channeliser bank for
+  large N (B210); a listener in DAB still runs their VFO's demodulator underneath.
+
+
 
 ### 11.0 HARD RULE: the standard DAB path does not move (Stuart, 2026-11-16)
 
