@@ -290,6 +290,106 @@ Phase 1 is shaped so that Phase 2 reuses it directly:
 - **Lazy:** only multiplexes with a listener run OFDM/FIC, and only stations in use run their decode. A mux with no
   listener has no DDC slice computed. In the FFT bank, its bins are never inverse-transformed.
 
+### 11.1c The splitter as built, and what it costs at 56 MS/s × every Band III block (2026-11-17)
+
+**Built:** `vibe_dab_bank.h`, an overlap-save FFT filter bank, used by the server above the measured crossover.
+- **Shared forward pass:** one N-point forward FFT (pffft) of the capture per hop H, shared by every multiplex.
+  At 56 MS/s: N 4 096, H 3 456. A sweep put N 4 096 best: 2 048 / 16 384 / 32 768 all cost 55–56 % of a core,
+  against 50 % at 4 096.
+- **Per block:**
+  1. its M = N/D bins (two contiguous runs) times the filter (pass ±0.80 MHz, stop ±1.248 MHz, 80 dB Kaiser — the
+     DDC's own constants);
+  2. an M-point inverse FFT, keeping the last H/D samples;
+  3. a per-hop phasor for the whole-bin shift, plus a table-driven residual NCO;
+  4. a rational step to 2.048 MS/s with a 14-tap tail. The bank has already filtered, so the tail only stops images.
+- D is the DDC's own half-band rule, so the mid rate matches the DDC's.
+- **Threads:** `vibe-dab-bank` plus min(3, hw/2 − 1) `vibe-dab-bankw` workers at the DDC priority. The queue is
+  bounded to 150 ms of input and drops the oldest, so it never blocks the reader.
+- **Selection:** the server picks the bank when `fwd(rate) + slice(rate) × blocks` (benchmark row `dec_dab_bank`) is
+  under `ddc8 × rate/8 MS/s × blocks`, with ±10 % hysteresis.
+
+**Quality: identical to the DDC path.**
+- **Real 8 MS/s RSP1A file:**
+
+  | Block | MER (both) | FIB | BER DDC | BER bank |
+  |---|---|---|---|---|
+  | 10C | 18.2 | 1.0 | 0.0022 | 0.0022 |
+  | 10D | 8.9 | 1.0 | 0.1065 | 0.1071 |
+  | 11A | 23.6 | 1.0 | 0 | 0 |
+
+- **Synthesised 56 MS/s × 27 blocks** (the file ×7, comb of 9 copies 5.6 MHz apart): MER equal block for block, FIB 1.000
+  everywhere.
+- **End to end:** test-server-dab-wide-lr 29/29 through each front end.
+
+**Cost.** `dab-wide-bench`, % of one core per second of capture, the decoder threads only.
+- Synthetic 56 MS/s × 27 blocks.
+- "1 listener per block" means each multiplex's own decode.
+- "+36 stations" adds 36 more stations on top of that.
+- M5 = Linux arm64 container. Lenovo = i5-11300H (4C/8T), with the service running and the bench nice'd.
+
+| | M5 | Lenovo |
+|---|---|---|
+| no listeners (lazy: nothing runs) | 0 % | 0 % |
+| bank, cutting 27 blocks | 64.4 % (was 81.2 before the NCO table) | 180.9 % (was 188.8) |
+| 27 front ends (OFDM + FIC) | 34.4 % (1.27 % each) | 105.8 % (3.9 % each) |
+| **total, 1 listener per block** | **101 %** | **293 %** (≈ 37 % of the machine) |
+| + 36 more stations | +21.4 % → 0.6 % per station | +66.4 % → 1.85 % per station |
+| the same 27 blocks through 27 DDCs | 626 % | 2 697 % (cannot run) |
+| peak RSS | 483 MB (bench, unpaced, queue full) | 484 MB |
+| dropped | 0 | 0 (the 8 MB cap dropped 2.24 M samples at +36 stations; the time-based cap fixed it) |
+
+Bank against DDCs at other rates (1 listener per block):
+
+| | M5 bank | M5 DDCs | Lenovo bank | Lenovo DDCs |
+|---|---|---|---|---|
+| 32 MS/s × 15 | 37.0 % | 175 % | 94.8 % | 803 % |
+| 16 MS/s × 9 | 22.4 % | 57 % | 53.8 % | 245 % |
+| 8 MS/s × 3 | 10.3 % | 11.2 % | 15.8 % | 20.2 % |
+
+**What was measured and kept, or dropped:**
+- **Residual NCO as a float table per hop:** kept. It replaced a serial `complex<double>` chain per output sample.
+  Unit cost at 56 × 26 went from 50.6 to 37.9 % of a core (clang); the bank thread on M5 Linux from 81 to 64 %.
+- **Contiguous bin runs instead of a gather:** kept.
+- **Hand-off in cache-sized chunks:** dropped as worse. 256 KB cost 120 %, 1 MB 84 %, 4 MB 76 %, the whole block 74 %
+  (M5, 3 workers). The default is the whole block.
+- **Workers:** the bank thread alone costs 69 %, with 3 workers 74 %. The split costs about 5 points and buys real-time
+  headroom on x86, so it stays.
+- **pffft's unordered layout:** under 2 % gain, and not a per-complex permutation. Not used.
+- **Polyphase bank:** not built. The Band III grid is not uniform, so each block still needs its own shift and tail.
+  The front end would cost about what the forward FFT costs, and the forward FFT is 20 % of the bank here.
+  This is reasoning, not a measurement.
+- **Native sc16/sc8 input:** not done. The bank reads the float stream vibe-dsp already makes, with no extra pass.
+  There is no B210 here to measure sc8 MER.
+
+**The benchmark figure (Lenovo, `vibeserver-bench`, 2026-11-17).** The `dec_dab_bank` row:
+
+| | 8 MS/s | 16 MS/s | 32 MS/s | 56 MS/s |
+|---|---|---|---|---|
+| fwd | 2.0 | 4.5 | 10.6 | 20.4 % |
+| per block | 2.68 | 2.73 | 2.63 | 2.46 % |
+
+With per station 1.58 %, mux front 2.5 % and ddc8 4.97 %, `dabListeners` for **56 MS/s × 27 blocks = 212 DAB listeners**
+(the per-block DDCs alone: 0; the cut alone would be 939 %).
+- At 8 MS/s × 3: 299 (DDCs 295).
+- At 32 MS/s × 15: 254 (DDCs 97).
+- ★ That figure assumes the single-scenario costs and 8 hyperthreads. Under the full 27-block load the bench measured
+  3.9 % per front end and 1.85 % per station, which works out to about 170 listeners. Expect the real ceiling between
+  the two.
+
+**Front ends: the next saving, not taken (needs Stuart's OK; it is the receiver).**
+- **Where the time goes:** per 96 ms frame on the M5, about 910 µs. Of that:
+  - symbols (76 FFTs plus DQPSK): 520 µs, 57 %
+  - frequency derotation: 158 µs
+  - bits: 136 µs
+  - sync: 62 µs
+  - phase reference: 26 µs
+- **The opportunity:** a listener needs only the MSC symbols holding their sub-channel(s), plus the one before each for
+  the differential reference. That is roughly 12–16 of the 72 MSC symbols. Skipping the rest, in wide mode only, would
+  cut each front end by an estimated 40–50 %, about 15 % of the M5 total and 45 % of a core on the Lenovo at 56 × 27.
+- **What it would need:** the own-station decoders take the whole MSC through `mscTap_`, so the union of every station's
+  CU range would have to reach the receiver.
+- **Why it is not done:** it changes code the hard rule (§11.0) protects. Not done without his say.
+
 ### 11.1a Gain in wide mode: the rule for EVERY wide radio
 
 - **Settle once, then hold.** The RF/IF gain is chosen once for the whole capture. After that it moves only
