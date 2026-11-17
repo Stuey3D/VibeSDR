@@ -4530,8 +4530,32 @@ int main(int argc, char** argv) {
         //     ★ The two normal exits already call this; only the failure path did not. An exit
         //       path that skips the cleanup the other exits do is a bug waiting for its moment.
         LocalSdrShim::stopMdns();
-        std::fprintf(stderr, "VibeServer: failed to start — %s\n",
-                     err.empty() ? "(no reason given)" : err.c_str());
+        /* ★★★ V12 A RADIO THAT WILL NOT OPEN MUST NOT FLOOD THE JOURNAL (2026-11-17, a tester's B210: systemd restarted its
+         *     process every 5 s for 90 minutes — 1,060 restarts — and the same three lines each time pushed everything else
+         *     out of the 3 MB the diagnostics keep, including the moment it first broke). A radio process keeps a count of
+         *     its consecutive failures beside its hand-off socket: the full reason is printed when it changes and every
+         *     20th time, a one-line note otherwise, and it waits a little longer each time (5 s more a failure, at most a
+         *     minute) before exiting, so systemd's restart is no longer a 5-second loop. A start clears the count. */
+        const std::string reason = err.empty() ? std::string("(no reason given)") : err;
+        int failN = 0; std::string lastReason;
+        const std::string failFile = (!o.radioSerial.empty() && !handoffDir().empty())
+                                   ? handoffDir() + "/" + o.radioSerial + ".openfail" : std::string();
+        if (!failFile.empty()) {
+            if (FILE* ff = std::fopen(failFile.c_str(), "r")) {
+                char line[4096] = {0};
+                if (std::fgets(line, sizeof line, ff)) failN = std::atoi(line);
+                if (std::fgets(line, sizeof line, ff)) { lastReason = line; if (!lastReason.empty() && lastReason.back() == '\n') lastReason.pop_back(); }
+                std::fclose(ff);
+            }
+            ++failN;
+            if (FILE* ff = std::fopen(failFile.c_str(), "w")) { std::fprintf(ff, "%d\n%s\n", failN, reason.c_str()); std::fclose(ff); }
+        }
+        if (failN <= 1 || reason != lastReason || failN % 20 == 0)
+            std::fprintf(stderr, "VibeServer: failed to start — %s%s\n", reason.c_str(),
+                         failN > 1 ? (" (attempt " + std::to_string(failN) + ")").c_str() : "");
+        else
+            std::fprintf(stderr, "VibeServer: still cannot open the radio (attempt %d) — the reason above stands\n", failN);
+        if (failN > 1) std::this_thread::sleep_for(std::chrono::seconds(std::min(60, 5 * (failN - 1))));
         // Only offer the source hint when the failure could plausibly BE the source — a port
         // clash has nothing to do with rtl_tcp, and a wrong hint sends people hunting in the
         // wrong place.
@@ -4539,6 +4563,9 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "Is there an rtl_tcp listening on %s:%d?\n", o.tcpHost.c_str(), o.tcpPort);
         return 1;
     }
+
+    // ★★ V12 the radio opened: its failure count (and the backoff it drives) starts again from nothing — see the fail path
+    if (!o.radioSerial.empty() && !handoffDir().empty()) ::unlink((handoffDir() + "/" + o.radioSerial + ".openfail").c_str());
 
     // ★★★ STATE THE BIAS-T, EVERY START, WHETHER OR NOT WE WANT IT ON.
     //

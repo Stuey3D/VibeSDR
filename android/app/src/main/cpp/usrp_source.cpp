@@ -87,6 +87,53 @@ std::vector<Found> walk(bool readSerials) {
     return out;
 }
 
+/** ★★★ V12 A B2xx THAT IS ON THE BUS BUT WILL NOT ANSWER (2026-11-17, a tester's B210 clone on beta80): our walk saw
+ *  it (2500:0020 — firmware already loaded), nobody held it (OpenWebRX+ was not running), and UHD's find came back
+ *  empty for 90 minutes and across a warm reboot, which keeps the board powered and its firmware in the FX3. UHD answers
+ *  "nothing found" both when another program has the radio and when the FX3 is running firmware it cannot talk to
+ *  (another UHD's, or one that has wedged) — so we were telling the owner to stop a program that was not there.
+ *  What this does, in that order and never more:
+ *    · open + CLAIM interface 0. BUSY = another program really has it → leave it alone (never reset a radio somebody
+ *      is using: that would pull it out from under OpenWebRX+). ACCESS = we are not allowed to open it (udev rule).
+ *    · claimed = nobody holds it → the FX3's own reset request (UHD's B200_VREQ_FX3_RESET, 0x99, vendor OUT, 4 zero
+ *      bytes — what b2xx_fx3_utils --reset-device sends). The FX3 drops back to its Cypress bootloader (04b4:00f3) and
+ *      re-enumerates; UHD's find then loads OUR firmware from the hint, as on a cold plug. */
+enum class Fx3Rescue { Reset, Busy, NoAccess, Gone, Failed };
+Fx3Rescue rescueFx3(const Found& f, std::string& why) {
+    libusb_context* ctx = nullptr;
+    if (libusb_init(&ctx) != 0) { why = "libusb would not start"; return Fx3Rescue::Failed; }
+    libusb_device** list = nullptr;
+    const ssize_t n = libusb_get_device_list(ctx, &list);
+    libusb_device* dev = nullptr;
+    for (ssize_t i = 0; i < n; i++)
+        if (libusb_get_bus_number(list[i]) == f.bus && libusb_get_device_address(list[i]) == f.addr) { dev = list[i]; break; }
+    Fx3Rescue out = Fx3Rescue::Gone;
+    if (dev) {
+        libusb_device_handle* h = nullptr;
+        const int o = libusb_open(dev, &h);
+        if (o == LIBUSB_ERROR_ACCESS) { out = Fx3Rescue::NoAccess; why = "libusb: access denied opening the device"; }
+        else if (o != 0 || !h) { out = Fx3Rescue::Failed; why = std::string("libusb_open: ") + libusb_error_name(o); }
+        else {
+            const int c = libusb_claim_interface(h, 0);
+            if (c == LIBUSB_ERROR_BUSY) { out = Fx3Rescue::Busy; why = "libusb: interface 0 is claimed by another program"; }
+            else if (c == LIBUSB_ERROR_ACCESS) { out = Fx3Rescue::NoAccess; why = "libusb: access denied claiming the device"; }
+            else if (c != 0) { out = Fx3Rescue::Failed; why = std::string("libusb_claim_interface: ") + libusb_error_name(c); }
+            else {
+                unsigned char data[4] = {0, 0, 0, 0};
+                const int r = libusb_control_transfer(h, LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_ENDPOINT_OUT, 0x99, 0, 0, data, 4, 1000);
+                // ★ The FX3 may go before it acknowledges: NO_DEVICE / PIPE / IO there is the reset happening, not a failure.
+                if (r >= 0 || r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_PIPE || r == LIBUSB_ERROR_IO) out = Fx3Rescue::Reset;
+                else { out = Fx3Rescue::Failed; why = std::string("FX3 reset request: ") + libusb_error_name(r); }
+                libusb_release_interface(h, 0);
+            }
+            libusb_close(h);
+        }
+    }
+    if (n >= 0) libusb_free_device_list(list, 1);
+    libusb_exit(ctx);
+    return out;
+}
+
 /** Where our images are, most specific first — see usrpcaps::resolveImage. */
 std::vector<std::string> imageDirs() {
     std::vector<std::string> d;
@@ -201,8 +248,37 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
         /* ★★ Matched by the CLEANED serial, never by handing UHD ours: UHD reads the descriptor itself and a clone's may
          *    carry junk after the serial ("31A0B7C ?"), which an exact hint would never match. Every B2xx is found, then
          *    the one whose cleaned serial is ours is taken; with no serial (or a single radio) the first. */
-        const uhd::device_addrs_t found = uhd::device::find(hint, uhd::device::USRP);
-        if (found.empty()) { err = usrpcaps::busyAdvice("", /*foundNone=*/true); return false; }
+        uhd::device_addrs_t found = uhd::device::find(hint, uhd::device::USRP);
+        if (found.empty()) {
+            /* ★★★ V12 NOT NECESSARILY ANOTHER PROGRAM — see rescueFx3. Ask the device itself; reset it only when nobody
+             *     holds it, then look again with UHD's own messages showing, so a failure says what UHD said. */
+            std::string why;
+            const Fx3Rescue r = rescueFx3(f, why);
+            if (r == Fx3Rescue::Busy) { err = usrpcaps::busyAdvice(why, true); return false; }
+            if (r == Fx3Rescue::NoAccess) {
+                err = "VibeServer is not allowed to open this USRP's USB device (" + why + ") \xe2\x80\x94 its udev rule is "
+                      "missing or was replaced; reinstalling VibeServer puts it back, then unplug and replug the radio.";
+                return false;
+            }
+            if (r == Fx3Rescue::Reset) {
+                std::fprintf(stderr, "VibeServer: the USRP was on the bus but would not answer and nobody held it \xe2\x80\x94 "
+                                     "reset it to its bootloader to load our firmware\n");
+                uhd::log::set_console_level(uhd::log::info);   // ★ this time, UHD says what it is doing
+                for (int i = 0; i < 20 && found.empty(); i++) {   // ★ up to ~10 s for the re-enumeration and the firmware
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    found = uhd::device::find(hint, uhd::device::USRP);
+                }
+                if (!std::getenv("UHD_LOG_CONSOLE_LEVEL")) uhd::log::set_console_level(uhd::log::warning);
+            }
+            if (found.empty()) {
+                err = r == Fx3Rescue::Reset
+                    ? "This USRP is on the USB bus but did not answer even after VibeServer reset it to load its firmware "
+                      "\xe2\x80\x94 unplug it for five seconds (a warm reboot keeps it powered) and plug it back in."
+                    : "UHD could not open this USRP although it is on the USB bus (" + (why.empty() ? std::string("no reason given") : why)
+                      + ") \xe2\x80\x94 unplug it for five seconds and plug it back in.";
+                return false;
+            }
+        }
         uhd::device_addr_t addr = found.front();
         if (!f.serial.empty())
             for (const auto& a : found)
