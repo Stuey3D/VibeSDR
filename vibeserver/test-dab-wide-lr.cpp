@@ -62,6 +62,19 @@ int main() {
     ok(dabListeners(1.2, 4.8, 7.5, 16e6, 3, 8) < dabListeners(1.2, 4.8, 7.5, 8e6, 3, 8), "a faster capture costs more DDC per block");
     ok(dabListeners(-1, 4.8, 7.5, 8e6, 3, 8) == 0 && dabListeners(1.2, -1, 7.5, 8e6, 3, 8) == 0, "not measured: 0");
     ok(dabListeners(25.0, 300.0, 30.0, 8e6, 3, 4) == 0, "fronts alone past the budget: 0");
+    // ── §11.1 the filter bank: the cheaper front end for many blocks (a B210 at 56 MS/s, every block in range) ──
+    BankCost bk; bk.rates = { 8e6, 16e6, 32e6, 56e6 }; bk.fwd = { 0.8, 1.9, 4.1, 7.8 }; bk.slice = { 1.7, 1.7, 1.75, 1.7 };
+    ok(dabListeners(1.5, 2.3, 5.15, 56e6, 26, 8) == 0, "★ 56 MS/s × 26 blocks with per-mux DDCs only: 26 × 36 % — no room at all (the B210 case before the bank)");
+    { const int n = dabListeners(1.5, 2.3, 5.15, 56e6, 26, 8, &bk);
+      ok(n == int((560 - 70 - 26 * 2.3 - (7.8 + 26 * 1.7)) / 1.5), "★ …with the bank: an honest figure (" + std::to_string(n) + " DAB listeners on 8 threads)"); }
+    { bool use = true;
+      // ★ the M5's own figures: one DDC at 8 MS/s 2.1 %; the bank 0.8 % + 1.7 % a block — whichever is cheaper wins
+      double c = cutCostPct(2, 8e6, 2.1, &bk, &use);
+      ok(!use && std::fabs(c - 4.2) < 1e-9, "two blocks at 8 MS/s: DDCs 4.2 % vs the bank 4.2 % — not cheaper, the DDCs stay");
+      c = cutCostPct(3, 8e6, 2.1, &bk, &use);
+      ok(use && std::fabs(c - (0.8 + 3 * 1.7)) < 1e-9, "three blocks at 8 MS/s: the bank (5.9 % vs 6.3 %)");
+      cutCostPct(26, 56e6, 5.15, &bk, &use); ok(use, "26 blocks at 56 MS/s: the bank");
+      ok(std::fabs(bk.fwdAt(24e6) - 3.0) < 1e-9 && std::fabs(bk.fwdAt(112e6) - 15.6) < 1e-9, "the measured costs interpolate between rates and scale past the ends"); }
 
     // ── one PPM figure for the radio (§11.2) ──
     double ppm = 0; int dropped = 0;

@@ -18,7 +18,8 @@
 #pragma once
 #include "vibe_benchmark.h"
 #include "vibe_dab_service.h"
-#include "opus_audio_encoder.h"   // ★★ a station's cost includes its ONE Opus encode (the coordinator's Pi 2 finding, 2026-11-17)
+#include "opus_audio_encoder.h"
+#include "vibe_dab_bank.h"         // ★★ V12 §11.1: the wide-capture filter bank's own row   // ★★ a station's cost includes its ONE Opus encode (the coordinator's Pi 2 finding, 2026-11-17)
 #include <memory>
 #include <thread>
 #include <atomic>
@@ -289,6 +290,39 @@ inline benchdetail::Result runDabMuxRow(const benchdetail::Result& dabRow, const
     return r;
 }
 
+/** ★★ V12 §11.1 THE FILTER BANK'S COSTS (vibe_dab_bank.h) — what the shim and the DAB listener figure weigh against the
+ *  per-mux DDCs ("the benchmark sets the default"). At 8, 16, 32 and 56 MS/s, on synthetic IQ (the cost does not depend on
+ *  what is on air), flat out on this thread: the forward FFT alone (`fwd@R`), and the bank with K = 4 slices (`slice@R` =
+ *  the difference / K). The row's pct is the 56 MS/s × 26-block total (the B210 case); its threads carry every figure. */
+inline benchdetail::Result runDabBankRow(double seconds) {
+    using namespace benchdetail;
+    Result r; r.id = "dec_dab_bank"; r.label = "DAB+: the wide-capture filter bank (56 MS/s, 26 blocks)"; r.rate = 56000000;
+    const double secs = std::max(0.1, std::min(0.3, seconds / 20.0));
+    double fwd56 = 0, slice56 = 0;
+    for (double rate : { 8e6, 16e6, 32e6, 56e6 }) {
+        const size_t n = size_t(rate * secs);
+        std::vector<float> x(2 * n);
+        uint32_t s = 2463534242u;
+        for (auto& v : x) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; v = float(int32_t(s) >> 8) * (1.0f / 8388608.0f) * 0.2f; }
+        auto timed = [&](int k) {
+            vibedab::bank::Bank b; b.configure(rate);
+            for (int i = 0; i < k; ++i) b.setSlice(size_t(i), -0.40 * rate + 0.9e6 + i * 1.712e6);
+            std::vector<std::vector<float>> o(static_cast<size_t>(k) + 0);
+            const auto t0 = std::chrono::steady_clock::now();
+            for (size_t i = 0; i < n; i += 65536) { b.process(x.data() + 2 * i, std::min<size_t>(65536, n - i), o); for (auto& v : o) v.clear(); }
+            return 100.0 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / secs;
+        };
+        const double f = timed(0), withK = timed(4), sl = std::max(0.0, (withK - f) / 4.0);
+        char nm[32];
+        std::snprintf(nm, sizeof nm, "fwd@%d", int(rate / 1e6)); r.threads.push_back({ nm, f });
+        std::snprintf(nm, sizeof nm, "slice@%d", int(rate / 1e6)); r.threads.push_back({ nm, sl });
+        if (rate == 56e6) { fwd56 = f; slice56 = sl; }
+    }
+    r.pct = fwd56 + 26 * slice56;
+    r.hottest = "bank";
+    return r;
+}
+
 /** ★★ FETCHED ONCE, KEPT (Stuart, 2026-09-19): the clip is 18 MB gzipped, too big to ship in an APK or a .deb and
  *  needed only when the benchmark runs. Desktop/Linux fetches it here with curl; Android hands in a path its own
  *  Kotlin downloaded. Returns the clip's path, or empty if it could not be had — the DAB rows are then simply
@@ -337,6 +371,9 @@ inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, 
     // ★★ V12 Phase 2: what each multiplex costs in a wide locked range — the DAB listener capacity (vibe_dab_wide.h)
     benchStep("DAB+: each multiplex in a wide capture");
     out.push_back(runDabMuxRow(out.front(), out.back(), seconds));
+    // ★★ V12 §11.1: the filter bank — the other way to cut many blocks out of a wide capture
+    benchStep("DAB+: the wide-capture filter bank");
+    out.push_back(runDabBankRow(seconds));
     return out;
 }
 

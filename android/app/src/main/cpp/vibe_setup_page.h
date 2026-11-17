@@ -2371,7 +2371,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"],
   ["dec_tone", "CTCSS / DCS tone ID"], ["dec_nr", "Noise reduction"], ["dec_notch", "Auto notch"],
   ["dab", "DAB+"], ["dab_scan", "DAB+ station label scan", "dab"], ["dec_dab_station", "DAB+ own station", "dab"],
-  ["dec_dab_mux", "DAB+ each multiplex in a wide capture", "dab"],
+  ["dec_dab_mux", "DAB+ each multiplex in a wide capture", "dab"], ["dec_dab_bank", "DAB+ wide-capture filter bank", "dab"],
   ["adsb", "ADS-B"],
 ];
 /** The short names of the rows this version measures that the saved run `b` has no word on (in BENCH_KNOWN_ROWS order). */

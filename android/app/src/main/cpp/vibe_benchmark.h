@@ -413,7 +413,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     if (benchhw::gateNeed(hw, benchhw::Need::Spots).run == false) notRun.push_back({ "spot_*", benchhw::gateNeed(hw, benchhw::Need::Spots).why });
     // ★ The hosts' DAB (2 steps) and ADS-B (2) rows: not counted when they will not run, so the bar still ends at its end.
     if (moreRows) {
-        if (!benchhw::gateRow(hw, "dab").run) moreRowSteps -= 4;   // ★ dab, dab_scan, dec_dab_station, dec_dab_mux
+        if (!benchhw::gateRow(hw, "dab").run) moreRowSteps -= 5;   // ★ dab, dab_scan, dec_dab_station, dec_dab_mux, dec_dab_bank
         if (!benchhw::gateRow(hw, "adsb").run) moreRowSteps -= 2;
         moreRowSteps = std::max(0, moreRowSteps);
     }
@@ -799,7 +799,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     double narrowPer = -1;
     for (const char* id : { "lk_nfm", "lk_am", "lk_ssb" }) narrowPer = std::max(narrowPer, pctOf(id));
     int dabUsers = 0;
-    { const double st = pctOf("dec_dab_station");
+    { const double st = pctOf("dec_dab_station");   // ★ one block: no cutting, so the bank does not enter this figure
       double front = -1, ddc8 = -1;
       for (const auto& r : res) if (r.id == "dec_dab_mux") for (const auto& t : r.threads) {
           if (t.first == "OFDM/FIC front end") front = t.second;
@@ -860,10 +860,22 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
                 if (t.first == "DDC @ 8 MS/s") ddc8 = t.second; }
             char b[320];
             std::snprintf(b, sizeof b, ",\"dabStations\":{\"n\":%d,\"perStationPct\":%.2f,\"frontPct\":%.1f,\"memKB\":%ld,"
-                          "\"muxFrontPct\":%.2f,\"ddc8Pct\":%.2f,\"cores\":%d}",
+                          "\"muxFrontPct\":%.2f,\"ddc8Pct\":%.2f,\"cores\":%d",
                           vibedab::own::nFromBench(perSt, dabTot, (int)cores), perSt, dabTot, vibedab::own::benchMemKB().load(),
                           muxFront, ddc8, (int)cores);
             j += b;
+            // ★★ V12 §11.1: the filter bank's measured costs by rate — "bank":{"rates":[…],"fwd":[…],"slice":[…]}
+            std::string br, bf, bs;
+            for (const auto& r : res) if (r.id == "dec_dab_bank")
+                for (const auto& t : r.threads) {
+                    const bool isF = t.first.rfind("fwd@", 0) == 0, isS = t.first.rfind("slice@", 0) == 0;
+                    if (!isF && !isS) continue;
+                    char v[48]; std::snprintf(v, sizeof v, "%s%.3f", (isF ? bf : bs).empty() ? "" : ",", t.second);
+                    (isF ? bf : bs) += v;
+                    if (isF) { std::snprintf(v, sizeof v, "%s%d", br.empty() ? "" : ",", std::atoi(t.first.c_str() + 4) * 1000000); br += v; }
+                }
+            if (!br.empty()) j += ",\"bank\":{\"rates\":[" + br + "],\"fwd\":[" + bf + "],\"slice\":[" + bs + "]}";
+            j += "}";
         }
     }
     // ★ How long the whole measurement took, seconds — shown to the owner beside the table (Stuart: a two-minute blank is

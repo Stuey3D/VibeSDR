@@ -132,6 +132,7 @@
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
 #include "vibe_dab_own.h"       // ★★ V12 DAB own station — docs/v12/DAB-OWN-STATION.md
 #include "vibe_dab_wide.h"      // ★★★ V12 DAB Phase 2: a listener's own multiplex in a locked wide range (§11)
+#include "vibe_dab_bank.h"      // ★★★ V12 §11.1: one filter-bank pass cuts every block in use
 #include "vibe_dab_confirm.h"   // ★ V12: when a service list is true enough to reconcile bookmarks by
 #include "vibe_dab_block_quality.h"   // ★ V12: how well each block decodes here (working / marginal / not working)
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
@@ -5981,6 +5982,32 @@ static std::atomic<bool> g_dabMultiStation{false};
  *  at `centreHz` / `rateHz` with every block in it decoding — from the benchmark's dabStations block (perStationPct,
  *  muxFrontPct, ddc8Pct, cores), re-read at most every 10 s. 0 = not measured (an older benchmark without the multiplex
  *  row reads 0: the rule is off until the benchmark runs again — the setup page says so). */
+/** ★★ V12 §11.1 The benchmark's figures for cutting blocks out of a wide capture: one DDC at 8 MS/s and the filter bank's costs
+ *  by rate (the dabStations block's "bank"), re-read at most every 10 s. Empty bank = not measured (per-mux DDCs only). */
+struct VsDabCut { double ddc8 = -1; vibedab::wide::BankCost bank; };
+static VsDabCut vsDabCutFigures() {
+    static std::mutex m; static double at = -1e9; static VsDabCut v;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(m);
+    if (now - at < 10.0) return v;
+    at = now; v = VsDabCut();
+    LocalSdrShim::BenchGetFn getFn;
+    { std::lock_guard<std::mutex> bk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+    const std::string j = getFn ? getFn() : std::string();
+    const size_t b = j.find("\"dabStations\":{");
+    if (b == std::string::npos) return v;
+    const size_t e = j.find("\"bank\":", b) != std::string::npos ? j.find("]}", j.find("\"bank\":", b)) : j.find('}', b);
+    { const size_t p = j.find("\"ddc8Pct\":", b); if (p != std::string::npos && p < e) v.ddc8 = std::atof(j.c_str() + p + 10); }
+    auto arr = [&](const char* key, std::vector<double>& out) {
+        const size_t p = j.find(key, b); if (p == std::string::npos || p > e) return;
+        const size_t o = j.find('[', p), c = j.find(']', p); if (o == std::string::npos || c == std::string::npos) return;
+        const char* q = j.c_str() + o + 1; const char* end = j.c_str() + c;
+        while (q < end) { char* nx = nullptr; const double d = std::strtod(q, &nx); if (nx == q) break; out.push_back(d); q = nx; while (q < end && (*q == ',' || *q == ' ')) ++q; }
+    };
+    arr("\"rates\":", v.bank.rates); arr("\"fwd\":", v.bank.fwd); arr("\"slice\":", v.bank.slice);
+    if (!v.bank.ok()) v.bank = vibedab::wide::BankCost();
+    return v;
+}
 static int vsDabLrListeners(double centreHz, double rateHz) {
     static std::mutex m; static double at = -1e9; static double per = -1, front = -1, ddc8 = -1; static int cores = 0;
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -6001,7 +6028,8 @@ static int vsDabLrListeners(double centreHz, double rateHz) {
         }
     }
     const int muxes = int(vibedab::wide::blocksIn(centreHz, rateHz).size());
-    return vibedab::wide::dabListeners(per, front, ddc8, rateHz, std::max(1, muxes), cores);
+    const VsDabCut cut = vsDabCutFigures();   // ★★ V12 §11.1: the bank where it is the cheaper way to cut
+    return vibedab::wide::dabListeners(per, front, ddc8, rateHz, std::max(1, muxes), cores, cut.bank.ok() ? &cut.bank : nullptr);
 }
 static int vsDabStationsN() {
     static std::mutex m; static double at = -1e9; static int n = 0;
@@ -18132,6 +18160,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         struct Pump { std::shared_ptr<DabOwnSt> st; std::vector<std::shared_ptr<net::Socket>> socks; };
         std::vector<Pump> pumps;                                    // each playing station and its listeners' audio sockets
         std::set<net::Socket*> muted;                               // every socket of a listener in DAB: no VFO audio
+        std::shared_ptr<vibedab::bank::Runner> bank;                // ★★ V12 §11.1: set = the filter bank cuts every block (one feed)
     };
     struct LrGone { int idx; uint32_t sid; double at; };
     std::mutex dabLrOpMtx_, dabLrViewMtx_, dabLrThrMtx_;
@@ -18140,6 +18169,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::map<std::string, LrGone> lrGone_;                          // left with sockets gone (a reconnect resumes) — 120 s
     /** ★★ V12 DAB ONLY: sessions the signed-in admin took out of DAB — never landed again until they ask for DAB. */
     std::set<std::string> lrOptOut_;
+    /** ★★ V12 §11.1 the filter bank, when it is the cheaper front end for the blocks open (vsDabCutFigures; hysteresis). */
+    std::shared_ptr<vibedab::bank::Runner> lrBank_;
+    std::vector<int> lrBankKeys_; double lrBankCentre_ = 0;
     std::vector<std::shared_ptr<DabOwnSt>> lrGrave_;                // closed stations / multiplexes: joined on vibe-dab-lr
     std::shared_ptr<const LrView> dabLrView_;
     std::atomic<bool> dabLrRun_{false};
@@ -18333,6 +18365,44 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (sp != spec.end()) for (auto& sk : sp->second) v->muted.insert(sk.get());
         }
         dabLrCount_.store(int(lrSess_.size()), std::memory_order_relaxed);
+        /* ★★★ V12 §11.1 WHICH FRONT END CUTS THE BLOCKS: the per-mux DDCs, or ONE filter bank pass for all of them — the
+         *  cheaper by THIS machine's benchmark (vsDabCutFigures; "the benchmark sets the default"), for the blocks open now.
+         *  Hysteresis: on when the bank is 10 % cheaper, off when it is 10 % dearer, so one listener coming and going at the
+         *  crossover does not flip it. Not measured: the DDCs, as before. A switch costs each decoder one short re-sync. */
+        {
+            const int used = int(lrMux_.size());
+            const double rate = sampleRate, centre = lrCentre();
+            const VsDabCut cut = vsDabCutFigures();
+            bool want = false;
+            if (used >= 2 && cut.bank.ok() && cut.ddc8 > 0) {
+                const double b = cut.bank.fwdAt(rate) + cut.bank.sliceAt(rate) * used, d = cut.ddc8 * rate / 8e6 * used;
+                want = lrBank_ ? b < d * 1.10 : b < d * 0.90;
+            }
+            if (want) {
+                if (!lrBank_ || std::fabs(lrBank_->rate() - rate) > 1.0) {
+                    const int hw = int(std::max(1u, std::thread::hardware_concurrency()));
+                    lrBank_ = std::make_shared<vibedab::bank::Runner>(rate, std::max(0, std::min(3, hw / 2 - 1)));
+                    lrBankKeys_.clear();
+                    LOGI("[DAB-LR] the filter bank cuts the blocks: %d open at %.3f MS/s (one forward FFT for all, %d worker%s)",
+                         used, rate / 1e6, lrBank_->workers(), lrBank_->workers() == 1 ? "" : "s");
+                }
+                std::vector<int> keys; for (const auto& kv : lrMux_) keys.push_back(kv.first);
+                if (keys != lrBankKeys_ || std::fabs(centre - lrBankCentre_) > 1.0) {
+                    std::vector<vibedab::bank::Runner::Out> outs;
+                    for (auto& kv : lrMux_) {
+                        std::shared_ptr<vibedab::DabService> svc = kv.second->svc;
+                        outs.push_back({ kv.first, double(vibedab::kBandIII[kv.first].centreHz) - centre,
+                                         [svc](const float* y, size_t n, size_t raw) { svc->feedChannelised(y, n, raw); }, nullptr });
+                    }
+                    lrBank_->setOutputs(std::move(outs));
+                    lrBankKeys_ = keys; lrBankCentre_ = centre;
+                }
+                v->bank = lrBank_;
+            } else if (lrBank_) {
+                LOGI("[DAB-LR] the per-multiplex DDCs cut the blocks again (%d open)", used);
+                lrBank_.reset(); lrBankKeys_.clear();
+            }
+        }
         std::lock_guard<std::mutex> lk(dabLrViewMtx_);
         dabLrView_ = v;
     }
@@ -18604,6 +18674,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::vector<std::string> all; for (const auto& s : lrSess_) all.push_back(s.first);
             for (const auto& s : all) lrLeaveLocked_(s, false);
             while (!lrMux_.empty()) lrCloseMuxLocked_(lrMux_.begin());
+            lrBank_.reset(); lrBankKeys_.clear();   // ★★ V12 §11.1 the bank's threads end with the range
             std::lock_guard<std::mutex> lk(dabLrViewMtx_); dabLrView_.reset();
             dabLrCount_.store(0);
         }
@@ -18618,6 +18689,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const auto v = dabLrViewNow();
         if (!v || v->feeds.empty()) return;
         const double c = lrCentre(), r = sampleRate;
+        if (v->bank) {   // ★★ V12 §11.1: ONE copy to the bank, which cuts every block; the decoders take its output
+            for (auto& s : v->feeds) { s->setRfCentre(c); s->setRfRate(r); }
+            v->bank->feed(reinterpret_cast<const float*>(iq), n);
+            return;
+        }
         for (auto& s : v->feeds) { s->setRfCentre(c); s->setRfRate(r); s->feed(reinterpret_cast<const float*>(iq), n); }
     }
     /** The per-client audio path: is this socket's listener in DAB here (their station plays instead of their VFO)? */

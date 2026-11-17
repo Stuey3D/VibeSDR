@@ -98,8 +98,13 @@ fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
 // ★★ THE MACHINE'S MEASURED FIGURES (Stuart, 2026-11-17: the cap is the hardware's, from the benchmark — not measured = no
 //    stations): a dabStations block as vibe_benchmark.h writes it, figures that give this test's handful of listeners room
 //    on any machine (vibe_dab_wide.h dabListeners: (70 × 8 − 70 − 3 × (5 + 8)) / 2 = 225).
+// ★★ V12 §11.1 WHICH FRONT END: DAB_LR_FRONT=bank gives the machine a measured filter bank cheaper than its DDCs (the server
+//    then cuts every block in ONE pass), =ddc (the default) leaves the bank unmeasured (the per-mux DDCs, as before).
+const FRONT = process.env.DAB_LR_FRONT === 'bank' ? 'bank' : 'ddc';
 fs.writeFileSync(path.join(dir, 'benchmark.json'), JSON.stringify({ v: 1, at: 1, rows: [],
-  dabStations: { n: 200, perStationPct: 2, frontPct: 7, memKB: 1300, muxFrontPct: 5, ddc8Pct: 8, cores: 8 } }));
+  dabStations: { n: 200, perStationPct: 2, frontPct: 7, memKB: 1300, muxFrontPct: 5, ddc8Pct: 8, cores: 8,
+                 ...(FRONT === 'bank' ? { bank: { rates: [8000000, 16000000, 32000000, 56000000], fwd: [0.8, 1.9, 4.1, 7.8], slice: [1.7, 1.7, 1.75, 1.7] } } : {}) } }));
+console.log(`── front end: ${FRONT === 'bank' ? 'the filter bank (one pass for every block)' : 'the per-multiplex DDCs'} ──`);
 const rtlLog = [];
 const rtl = spawn(process.execPath, ['--max-old-space-size=512', path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
                                      '--dab-map', `${PHYS}=${CLIP}`], { stdio: ['ignore', 'pipe', 'ignore'] });
@@ -199,6 +204,8 @@ try {
   for (const x of L) x.close();
   ok(await until(() => /\[DAB-LR\] multiplex 11A closed/.test(log()) || /multiplex 1[0-9][A-D] closed[^\n]*\(0 open\)/.test(log()), 8000), '★ everyone gone: every multiplex decoder closed');
   ok(!/Segmentation|Assertion|terminate called|ABORT/.test(log()), 'no crash in the server log');
+  ok(FRONT === 'bank' ? /\[DAB-LR\] the filter bank cuts the blocks/.test(log()) : !/the filter bank cuts the blocks/.test(log()),
+     `★ the front end the benchmark chose cut the blocks: ${FRONT}`);
 } finally {
   clearTimeout(deadline);
   cleanup();

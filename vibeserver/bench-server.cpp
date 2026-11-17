@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[%d/%d] %s\n", d, n, l.c_str()); }, secs, uplink,
         [&] { auto r = vibe::runDabRows(clip, secs);
               for (auto& a : vibe::runAdsbRows(adsbClip, secs)) r.push_back(a);
-              return r; }, 6, decoderClip == "-" ? std::string() : decoderClip, hw);
+              return r; }, 7, decoderClip == "-" ? std::string() : decoderClip, hw);
     std::puts(j.c_str());
     return 0;
 }
