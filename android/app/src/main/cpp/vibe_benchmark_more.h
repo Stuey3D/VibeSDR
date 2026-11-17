@@ -745,6 +745,9 @@ inline RowRule ruleFor(const std::string& id) {
         /* ★★ V12 M17 (vibe_m17.h): a listener's MODE, like FreeDV. Not green = "m17" off by default on a fresh setup (the
          *  owner can always tick it back — the benchmark sets the default, never hides). */
         { "dec_m17",      { "m17",    true,  false } },
+        /* ★★ V12 DAB own station per listener (docs/v12/DAB-OWN-STATION.md, vibe_benchmark_dab.h): switches nothing off and is
+         *  no decoder slot — its figure sets N (the dabStations block), which the own-station rule compares with the user limit. */
+        { "dec_dab_station", { "",    false, false } },
     };
     for (const auto& e : t) if (id == e.id) return e.r;
     if (id.rfind("spot_", 0) == 0) return { "spots", false, true };   // ★ every digital-spots mode: inside "Digital spots"

@@ -323,6 +323,9 @@ public:
     void setIdleKickMinutes(int minutes);
     /** DAB whole-multiplex label scan: -1 = build default (off on 32-bit ARM), 0 off, 1 on. */
     void setDabScanLabels(int mode);
+    /** ★★ V12 DAB own station per listener (docs/v12/DAB-OWN-STATION.md): -1 = the benchmark's rule (N >= the user limit),
+     *  0 off, 1 on. */
+    void setDabOwnStation(int mode);
     /** True when somebody is listening but is past their guarantee, so an arriving listener may
      *  take the radio. ★ For the PUBLIC card only — the admin views report the truth. */
     bool claimableNow() const;

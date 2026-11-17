@@ -130,6 +130,7 @@
 #include "vibe_wide_row.h"      // ★ V12 the full-capture row (SPWB v2)
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
+#include "vibe_dab_own.h"       // ★★ V12 DAB own station — docs/v12/DAB-OWN-STATION.md
 #include "vibe_dab_confirm.h"   // ★ V12: when a service list is true enough to reconcile bookmarks by
 #include "vibe_dab_block_quality.h"   // ★ V12: how well each block decodes here (working / marginal / not working)
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
@@ -985,6 +986,7 @@ static std::mutex          g_dabReportMtx;
 static void dabModeEnd() {
     std::lock_guard<std::mutex> lk(g_dabReportMtx);
     g_dabMode.store(false);
+    g_dab.closeAllStations();   // ★★ V12 own station: out of DAB nobody has one (their threads join on the own-station loop)
 }
 
 /** ★★★ WHAT THE LISTENER IS ACTUALLY ON, WHEN IT IS A MULTIPLEX. The admin page read `mode` — the
@@ -5906,6 +5908,33 @@ static std::mutex                    g_vsConfigMtx;
 static LocalSdrShim::BenchRunFn      g_vsBenchRun;
 static LocalSdrShim::BenchGetFn      g_vsBenchGet;
 static std::mutex                    g_vsBenchMtx;
+/** ★★ V12 DAB OWN STATION (docs/v12/DAB-OWN-STATION.md): the owner's switch, per radio — -1 the rule (the default), 0 off,
+ *  1 on — and the benchmark's N (the dabStations block, vibe_benchmark_dab.h), re-read at most every 10 s. */
+static std::atomic<int> g_dabOwnSetting{-1};
+/** MemAvailable from /proc/meminfo, KB; -1 where there is no such file (a Mac — never a small board). */
+static long vsMemAvailableKB() {
+    FILE* f = std::fopen("/proc/meminfo", "r");
+    if (!f) return -1;
+    char line[128]; long kb = -1;
+    while (std::fgets(line, sizeof line, f)) if (std::sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
+    std::fclose(f);
+    return kb;
+}
+static int vsDabStationsN() {
+    static std::mutex m; static double at = -1e9; static int n = 0;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(m);
+    if (now - at < 10.0) return n;
+    at = now;
+    LocalSdrShim::BenchGetFn getFn;
+    { std::lock_guard<std::mutex> bk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+    n = 0;
+    if (!getFn) return n;
+    const std::string j = getFn();
+    const size_t p = j.find("\"dabStations\":{\"n\":");
+    if (p != std::string::npos) n = std::atoi(j.c_str() + p + 19);
+    return n;
+}
 static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::SdrChangesGetFn g_vsSdrChangesGet;   // ★ guarded by g_vsConfigMtx
 static LocalSdrShim::SdrChangeSetFn  g_vsSdrChangeSet;
@@ -11811,6 +11840,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "icom_control",
         };
         if (!kGated.count(type)) return false;
+        // ★★ V12 own station: with it on, a station pick changes only the picker's audio — nothing to ask anyone
+        if (type == "dab_service" && g_dabMode.load(std::memory_order_relaxed) && dabOwnOn()) return false;
         const double now = Impl::nowSecs();
         std::string me;
         bool notice = false, state = false;
@@ -12185,7 +12216,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> rl(g_dabReportMtx);   // ★ never after a dab_off — see dabModeEnd
           if (g_dabMode.load(std::memory_order_relaxed)) {
               { std::lock_guard<std::mutex> pl(dabPeerMtx); auto it = dabPeers.find(sock.get()); if (it != dabPeers.end()) { it->second.listRev = 0; it->second.dlsRev = 0; } }
-              sendDab(sock, dabParts());
+              sendDab(sock, dabPartsForSock(sock));
           } }
         // ★ …and a receiver in ADS-B tells the client now, so its box opens with the aircraft already there
         if (g_adsbMode.load(std::memory_order_relaxed)) {
@@ -17639,6 +17670,304 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::thread       dabClockThread_;
     std::mutex        dabClockMtx_;   ///< guards dabClockThread_ across start/stop — see stopDabClock
 
+    /* ══ ★★ V12 DAB OWN STATION — each listener's own station on one multiplex (docs/v12/DAB-OWN-STATION.md) ══════════
+     *  The ROSTER (vibe_dab_own.h) says who hears what; this carries it out. Three threads touch it:
+     *   • the control path (a listener's dab_service) and the OWN-STATION LOOP (vibe-dab-own, 4 Hz: who is here, resumes,
+     *     block changes, closing emptied stations, joining their threads) — serialised by dabOwnOpMtx_, and the only ones
+     *     that call into g_dab (which may wait for a frame's decode);
+     *   • the audio clock and vibe-dsp, which only READ a published view (dabOwnView_, a shared_ptr swapped under the leaf
+     *     dabOwnViewMtx_) — never the roster, never a wait on a decoder. */
+    struct DabOwnSt {
+        uint32_t sid = 0;
+        std::shared_ptr<vibedab::DabService> svc;
+        bool primed = false;           // ★ clock thread only — the primary's 250 ms pre-buffer rule, per station
+        uint32_t filled = 0;           // frames of silence sent to keep its cadence (as dabFilled_)
+        std::mutex encM;               // guards opus
+#ifdef VIBE_HAVE_OPUS
+        vibe::OpusAudioEncoder opus;   // ★ ONE encode per station, shared by everyone on it
+#endif
+    };
+    struct DabOwnView {
+        bool on = false;
+        std::vector<std::shared_ptr<DabOwnSt>> stations;
+        std::map<net::Socket*, std::shared_ptr<DabOwnSt>> bySock;     // every socket (audio AND spectrum) of a station listener
+        std::map<DabOwnSt*, std::vector<std::shared_ptr<net::Socket>>> audio;   // each station's audio sockets
+        std::string fields;            // ,"own":{…},"playing":[…] — the same for everyone; "mine" is added per socket
+    };
+    std::mutex dabOwnOpMtx_, dabOwnViewMtx_;
+    vibedab::own::Roster dabRoster_;                                // under dabOwnOpMtx_
+    std::map<uint32_t, std::shared_ptr<DabOwnSt>> dabOwnSt_;         // under dabOwnOpMtx_
+    std::vector<std::shared_ptr<DabOwnSt>> dabOwnGrave_;            // closed: joined on the own-station loop
+    uint32_t dabOwnGen_ = 0;
+    double   dabOwnBlockAt_ = 0;
+    std::shared_ptr<const DabOwnView> dabOwnView_;
+    std::atomic<bool> dabOwnRun_{false};
+    std::thread dabOwnThread_;
+
+    std::shared_ptr<const DabOwnView> dabOwnViewNow() { std::lock_guard<std::mutex> lk(dabOwnViewMtx_); return dabOwnView_; }
+    /** On for this radio now: the owner's switch and the rule (N against the user limit), on a dial with more than one
+     *  listener allowed — one listener has nobody to differ from (the radio's own station follows them). */
+    bool dabOwnOn() {
+        const int limit = g_vsMaxUsers.load();
+        return limit > 1 && !perClientDsp() && vibedab::own::effectiveOn(g_dabOwnSetting.load(), vsDabStationsN(), limit);
+    }
+    int dabOwnCap() { return vibedab::own::stationCap(g_dabOwnSetting.load(), vsDabStationsN(), g_vsMaxUsers.load()); }
+    uint32_t dabPrimarySid() { const uint32_t s = g_dab.service(); return s ? s : g_dab.wantedService(); }
+
+    /** Sessions with an open audio socket (the listeners), and every socket each one holds. Takes clientMtx. */
+    void dabOwnSessions(std::map<std::string, std::vector<std::shared_ptr<net::Socket>>>& audio,
+                        std::map<std::string, std::vector<net::Socket*>>& all) {
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        if (audioClient && audioClient->isOpen()) socks.push_back(audioClient);
+        for (auto& a : audioExtra) if (a && a->isOpen()) socks.push_back(a);
+        for (auto& kv : clientDsp) if (kv.second->audio && kv.second->audio->isOpen()) socks.push_back(kv.second->audio);
+        for (auto& sk : socks) {
+            auto it = sockSession.find(sk.get());
+            if (it != sockSession.end() && !it->second.empty()) audio[it->second].push_back(sk);
+        }
+        for (const auto& kv : sockSession) if (audio.count(kv.second)) all[kv.second].push_back(kv.first);
+    }
+    /** Carry out one roster action. Caller holds dabOwnOpMtx_ (NOT clientMtx, NOT the view lock). */
+    void dabOwnApplyLocked_(const std::string& sess, const vibedab::own::Action& a, const std::shared_ptr<net::Socket>& sock) {
+        using A = vibedab::own::Action;
+        if (a.closeSid) {
+            auto it = dabOwnSt_.find(a.closeSid);
+            if (it != dabOwnSt_.end()) {
+                g_dab.closeStation(it->second->svc);
+                LOGI("[DAB] own station %04X closed (its last listener moved on)", unsigned(a.closeSid));
+                dabOwnGrave_.push_back(it->second); dabOwnSt_.erase(it);
+            }
+        }
+        switch (a.kind) {
+            case A::RetunePrimary:
+                LOGI("[DAB] own station: nobody else hears the radio's own \xe2\x80\x94 it follows its listener to %04X", unsigned(a.sid));
+                g_dab.setService(a.sid);
+                break;
+            case A::SwitchAll:
+                g_dab.setService(a.sid);
+                if (sock) sendText(sock, "{\"type\":\"notice\",\"why\":\"every station decoder on this radio is busy \u2014 the station changed for everyone on the radio's own\"}");
+                break;
+            case A::OpenStation: {
+                /* ★★★ NO OOM EVER (feedback_memory_floor_256mb): a station costs ~3–9 MB resident (measured, Pi 2 and Mac —
+                 *  docs/v12/DAB-OWN-STATION.md §6). Under 64 MB available the pick switches the radio's own station instead,
+                 *  as before the feature, and says why — never a station that could push a small board out of memory. */
+                if (const long avail = vsMemAvailableKB(); avail >= 0 && avail < 64 * 1024) {
+                    dabRoster_.toPrimary(sess); g_dab.setService(a.sid);
+                    LOGI("[DAB] own station %04X NOT opened: only %ld MB of memory available \xe2\x80\x94 the radio's own station changed instead", unsigned(a.sid), avail / 1024);
+                    if (sock) sendText(sock, "{\"type\":\"notice\",\"why\":\"this server is short of memory \\u2014 the station changed for everyone on the radio's own\"}");
+                    break;
+                }
+                auto st = std::make_shared<DabOwnSt>();
+                st->sid = a.sid;
+                st->svc = g_dab.openStation(a.sid);
+                if (!st->svc) { dabRoster_.toPrimary(sess); g_dab.setService(a.sid); break; }
+                dabOwnSt_[a.sid] = st;
+                LOGI("[DAB] own station %04X opened (%zu open)", unsigned(a.sid), dabOwnSt_.size());
+                break;
+            }
+            default: break;
+        }
+    }
+    /** Publish what the readers need. Caller holds dabOwnOpMtx_. */
+    void dabOwnPublishLocked_(bool on, const std::map<std::string, std::vector<std::shared_ptr<net::Socket>>>& audio,
+                              const std::map<std::string, std::vector<net::Socket*>>& all) {
+        auto v = std::make_shared<DabOwnView>();
+        v->on = on;
+        for (auto& kv : dabOwnSt_) v->stations.push_back(kv.second);
+        std::vector<std::string> present;
+        for (const auto& kv : audio) {
+            present.push_back(kv.first);
+            const uint32_t sid = dabRoster_.stationOf(kv.first);
+            auto st = sid ? dabOwnSt_.find(sid) : dabOwnSt_.end();
+            if (st == dabOwnSt_.end()) continue;
+            for (auto& sk : kv.second) v->audio[st->second.get()].push_back(sk);
+            auto a = all.find(kv.first);
+            if (a != all.end()) for (auto* p : a->second) v->bySock[p] = st->second;
+        }
+        char b[96];
+        std::snprintf(b, sizeof b, ",\"own\":{\"on\":%s,\"n\":%d,\"limit\":%d},\"playing\":[", on ? "true" : "false",
+                      vsDabStationsN(), g_vsMaxUsers.load());
+        v->fields = b;
+        bool first = true;
+        for (const auto& p : dabRoster_.playing(dabPrimarySid(), present)) {
+            std::snprintf(b, sizeof b, "%s{\"sid\":%u,\"n\":%d}", first ? "" : ",", unsigned(p.first), p.second);
+            v->fields += b; first = false;
+        }
+        v->fields += "]";
+        std::lock_guard<std::mutex> lk(dabOwnViewMtx_);
+        dabOwnView_ = v;
+    }
+    /** ★ A listener's own pick (dab_service). true = handled per listener; false = the old whole-radio path applies. */
+    bool dabOwnPick(const std::shared_ptr<net::Socket>& sock, uint32_t sid) {
+        if (!sid || !g_dabMode.load(std::memory_order_relaxed) || !dabOwnOn()) return false;
+        std::string sess;
+        { std::lock_guard<std::mutex> lk(clientMtx); auto it = sockSession.find(sock.get()); if (it != sockSession.end()) sess = it->second; }
+        if (sess.empty()) return false;
+        std::lock_guard<std::mutex> op(dabOwnOpMtx_);
+        std::map<std::string, std::vector<std::shared_ptr<net::Socket>>> audio; std::map<std::string, std::vector<net::Socket*>> all;
+        dabOwnSessions(audio, all);
+        dabOwnSyncLocked_(audio);
+        if (!dabRoster_.present(sess)) dabRoster_.arrive(sess, nowSecs());   // ★ a spectrum-only client still picks for itself
+        const vibedab::own::Action a = dabRoster_.pick(sess, sid, dabPrimarySid(), dabOwnCap());
+        dabOwnApplyLocked_(sess, a, sock);
+        dabOwnPublishLocked_(true, audio, all);
+        return true;
+    }
+    /** Who is here: arrivals resume their station (inside the grace period), departures may empty one. dabOwnOpMtx_ held. */
+    void dabOwnSyncLocked_(const std::map<std::string, std::vector<std::shared_ptr<net::Socket>>>& audio) {
+        const double now = nowSecs();
+        for (const auto& s : dabRoster_.presentList())
+            if (!audio.count(s)) {
+                const uint32_t c = dabRoster_.leave(s, now);
+                if (c) dabOwnApplyLocked_(s, vibedab::own::Action{ vibedab::own::Action::None, 0, c }, nullptr);
+            }
+        for (const auto& kv : audio) {
+            if (dabRoster_.present(kv.first)) continue;
+            const uint32_t back = dabRoster_.arrive(kv.first, now);
+            if (back && back != dabPrimarySid() && g_dab.hasService(back)) {
+                LOGI("[DAB] own station: a returning listener resumes %04X", unsigned(back));
+                dabOwnApplyLocked_(kv.first, dabRoster_.pick(kv.first, back, dabPrimarySid(), dabOwnCap()), nullptr);
+            }
+        }
+        dabRoster_.forget(now);
+    }
+    /** The own-station loop's tick (vibe-dab-own, 4 Hz). */
+    void dabOwnTick() {
+        std::vector<std::shared_ptr<DabOwnSt>> reap;
+        {
+            std::lock_guard<std::mutex> op(dabOwnOpMtx_);
+            const bool dab = g_dabMode.load(std::memory_order_relaxed);
+            const bool on = dab && dabOwnOn();
+            std::map<std::string, std::vector<std::shared_ptr<net::Socket>>> audio; std::map<std::string, std::vector<net::Socket*>> all;
+            if (dab) dabOwnSessions(audio, all);
+            const uint32_t gen = g_dab.stationGeneration();
+            if (gen != dabOwnGen_) {
+                // ★ The multiplex changed (or DAB ended): g_dab closed every station. Everyone is on the radio's own; each wish waits.
+                dabOwnGen_ = gen;
+                dabRoster_.blockChanged();
+                for (auto& kv : dabOwnSt_) dabOwnGrave_.push_back(kv.second);
+                dabOwnSt_.clear();
+                dabOwnBlockAt_ = nowSecs();
+            }
+            if (!on) {
+                if (!dabOwnSt_.empty()) { g_dab.closeAllStations(); for (auto& kv : dabOwnSt_) dabOwnGrave_.push_back(kv.second); dabOwnSt_.clear(); }
+                dabRoster_.clear();
+                dabOwnGen_ = g_dab.stationGeneration();
+            } else {
+                dabOwnSyncLocked_(audio);
+                // ★ per listener, rule 1 on the new multiplex: their own SId if it is here (the list may still be arriving)
+                const std::map<std::string, uint32_t> pend = dabRoster_.pending();
+                for (const auto& kv : pend) {
+                    if (!dabRoster_.present(kv.first)) { dabRoster_.dropPending(kv.first); continue; }
+                    if (g_dab.hasService(kv.second)) {
+                        LOGI("[DAB] own station: %04X is on the new multiplex too \xe2\x80\x94 its listener keeps it", unsigned(kv.second));
+                        dabOwnApplyLocked_(kv.first, dabRoster_.pick(kv.first, kv.second, dabPrimarySid(), dabOwnCap()), nullptr);
+                    } else if (g_dab.listComplete() || nowSecs() - dabOwnBlockAt_ > 30.0) dabRoster_.dropPending(kv.first);
+                }
+            }
+            if (dab) dabOwnPublishLocked_(on, audio, all);
+            else { std::lock_guard<std::mutex> lk(dabOwnViewMtx_); dabOwnView_.reset(); }
+            /* ★ ONLY WHAT NOBODY ELSE HOLDS: the audio clock may still have last tick's view (and through it a closed
+             *  station) for one 20 ms pass — that station waits here for the next tick, so its thread never joins there. */
+            std::vector<std::shared_ptr<DabOwnSt>> keep;
+            for (auto& g : dabOwnGrave_) (g.use_count() == 1 ? reap : keep).push_back(std::move(g));
+            dabOwnGrave_.swap(keep);
+        }
+        reap.clear();   // ★ HERE: the last references — each station's thread joins on this thread, never the audio clock
+    }
+    void dabOwnLoop() {
+        vibeThreadName("vibe-dab-own");
+        while (dabOwnRun_.load(std::memory_order_relaxed)) {
+            dabOwnTick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        dabOwnTick();   // ★ once more after DAB's end: closes and joins what is left
+    }
+    /** A station's 20 ms: its own pre-buffer, its PCM, ONE encode for everyone on it. The clock thread. */
+    void dabOwnPumpStation(DabOwnSt& st, const std::vector<std::shared_ptr<net::Socket>>& socks, size_t want) {
+        static constexpr size_t kPrimeFrames = 48000 / 4;   // ★ the primary's working depth (pumpDabAudio)
+        if (!st.svc || socks.empty() || want == 0) return;
+        const size_t avail = st.svc->pcmAvailable();
+        if (!st.primed) { if (avail < kPrimeFrames) return; st.primed = true; }
+        std::vector<float> f(want * 2, 0.0f);
+        const size_t got = st.svc->takePcm(f.data(), std::min(avail, want));
+        if (got < want) st.filled += uint32_t(want - got);
+        const float g = audioGain.load();
+        std::vector<int16_t> pcm(want * 2);
+        for (size_t i = 0; i < want * 2; ++i) {
+            const float v = std::max(-1.0f, std::min(1.0f, f[i] * g));
+            pcm[i] = int16_t(std::lround(v * 32767.0f));
+        }
+        dabOwnSend(st, socks, pcm.data(), int(want), 2);
+    }
+    /** The shared stream's shape (sendAudioPcm), with the station's OWN encoder. ★ PAGE gate first (vibe_paging_gate.h). */
+    void dabOwnSend(DabOwnSt& st, const std::vector<std::shared_ptr<net::Socket>>& socks, const int16_t* pcm, int count, int ch) {
+        std::vector<int16_t> pagingZeros;
+        pcm = vibe::pagingAudioOut(pcm, (size_t)count * ch, DecoderHost::pagingRunning().load(std::memory_order_relaxed), pagingZeros);
+        auto fanOut = [&](const std::vector<uint8_t>& frame) {
+            for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x2, frame.data(), frame.size(), Out::Audio);
+            vsAudioBytes.fetch_add(frame.size() * socks.size(), std::memory_order_relaxed);
+        };
+        std::vector<int16_t> monoBuf;
+        if (audioForceMono.load() && ch == 2) {
+            monoBuf.resize((size_t)count);
+            for (int i = 0; i < count; i++) monoBuf[i] = (int16_t)(((int)pcm[i * 2] + (int)pcm[i * 2 + 1]) / 2);
+            pcm = monoBuf.data(); ch = 1;
+        }
+#ifdef VIBE_HAVE_OPUS
+        if (audioWantsOpus.load()) {
+            std::vector<std::vector<uint8_t>> packets;
+            { std::lock_guard<std::mutex> lk(st.encM); st.opus.setBitrate(opusBitrateFor(ch)); st.opus.encode(pcm, count, ch, packets); }
+            const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;
+            for (auto& pkt : packets) {
+                std::vector<uint8_t> frame; frame.reserve(6 + pkt.size());
+                frame.push_back((uint8_t)ch); frame.push_back(3);
+                frame.push_back((uint8_t)(sr & 0xff));         frame.push_back((uint8_t)((sr >> 8) & 0xff));
+                frame.push_back((uint8_t)((sr >> 16) & 0xff)); frame.push_back((uint8_t)((sr >> 24) & 0xff));
+                frame.insert(frame.end(), pkt.begin(), pkt.end());
+                fanOut(frame);
+            }
+            return;
+        }
+#endif
+        std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
+        frame[0] = (uint8_t)ch; frame[1] = 0;
+        uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
+        std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
+        fanOut(frame);
+    }
+    /** The `own` / `playing` / `mine` fields into a report, before its final brace (legacy and live). */
+    static void dabOwnStamp(DabParts& p, const std::string& fields, uint32_t mine) {
+        if (fields.empty()) return;
+        char b[32]; std::snprintf(b, sizeof b, ",\"mine\":%u", unsigned(mine));
+        const std::string add = fields + b;
+        if (!p.legacy.empty() && p.legacy.back() == '}') p.legacy.insert(p.legacy.size() - 1, add);
+        if (!p.live.empty() && p.live.back() == '}') p.live.insert(p.live.size() - 1, add);
+    }
+    /** ★ THE REPORT FOR THIS SOCKET: its station's (its own sid, DLS, slide, codec — the multiplex fields as the radio's), or
+     *  the radio's own; with the own/playing/mine fields. `wait` false = never block (vibe-dsp): false if busy. */
+    bool dabPartsFor(net::Socket* sk, const std::shared_ptr<const DabOwnView>& v, const DabParts& primary, DabParts& out,
+                     std::map<DabOwnSt*, DabParts>* cache, bool wait) {
+        std::shared_ptr<DabOwnSt> st;
+        if (v) { auto it = v->bySock.find(sk); if (it != v->bySock.end()) st = it->second; }
+        if (!st) { out = primary; if (v) dabOwnStamp(out, v->fields, dabPrimarySid()); return true; }
+        if (cache) { auto c = cache->find(st.get()); if (c != cache->end()) { out = c->second; return true; } }
+        DabParts p;
+        if (wait) p = st->svc->parts();
+        else if (!st->svc->partsTry(p)) return false;
+        dabPartsFinish_(p);
+        dabOwnStamp(p, v->fields, st->sid);
+        if (cache) (*cache)[st.get()] = p;
+        out = std::move(p);
+        return true;
+    }
+    DabParts dabPartsForSock(const std::shared_ptr<net::Socket>& sk) {
+        DabParts out;
+        dabPartsFor(sk.get(), dabOwnViewNow(), dabParts(), out, nullptr, true);
+        return out;
+    }
+
     void pumpDabPlusAudio() {
         std::vector<uint8_t> au;
         while (g_dab.takeAdts(au)) {
@@ -17672,11 +18001,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   if (kv.second->audio && kv.second->audio->isOpen()) socks.push_back(kv.second->audio);
               if (audioClient && audioClient->isOpen()) socks.push_back(audioClient);
               for (auto& a2 : audioExtra) if (a2 && a2->isOpen()) socks.push_back(a2); }
+            const auto ov = dabOwnViewNow();   // ★★ V12 own station: its listeners get their station's, below
             for (auto& sk : socks) {
+                if (ov && ov->bySock.count(sk.get())) continue;
                 sendWs(sk, 0x2, frame.data(), frame.size(), Out::Audio);
                 vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
             }
         }
+        // ★★ V12 own station, on a server without FAAD2: each station's access units to its own listeners, framed alike
+        if (const auto ov = dabOwnViewNow())
+            for (auto& st : ov->stations) {
+                auto a = ov->audio.find(st.get());
+                if (!st->svc) continue;
+                while (st->svc->takeAdts(au)) {
+                    const uint32_t sr = uint32_t(st->svc->aacCoreRateHz());
+                    const uint8_t ch = uint8_t(st->svc->aacCoreChannels()) | (st->svc->aacParametricStereo() ? 0x80u : 0u);
+                    if (sr == 0 || au.empty() || a == ov->audio.end()) continue;
+                    std::vector<uint8_t> frame;
+                    frame.reserve(6 + au.size());
+                    frame.push_back(ch); frame.push_back(4);
+                    frame.push_back(uint8_t(sr & 0xff));         frame.push_back(uint8_t((sr >> 8) & 0xff));
+                    frame.push_back(uint8_t((sr >> 16) & 0xff)); frame.push_back(uint8_t((sr >> 24) & 0xff));
+                    frame.insert(frame.end(), au.begin(), au.end());
+                    for (auto& sk : a->second) if (sk && sk->isOpen()) {
+                        sendWs(sk, 0x2, frame.data(), frame.size(), Out::Audio);
+                        vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+                    }
+                }
+            }
     }
 
     /** @param iqSamples how much capture this call represents — see the pacing note below. */
@@ -17765,6 +18117,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (dabClockRun_.exchange(true)) return;
         joinOnce(dabClockThread_, "dab clock (restart)");   // ★ never overwrite a joinable thread
         dabClockThread_ = std::thread([this]{ dabClockLoop(); });
+        // ★★ V12 own station: its loop runs while the clock does (it decides nothing while the feature is off)
+        joinOnce(dabOwnThread_, "dab own (restart)");
+        dabOwnRun_.store(true);
+        dabOwnThread_ = std::thread([this]{ dabOwnLoop(); });
     }
     void stopDabClock() {
         /* ★★★ THE ONE SITE THE 2026-08-17 PATTERN FIX MISSED. This was the bare
@@ -17780,6 +18136,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           if (!dabClockRun_.exchange(false)) return;
           t = std::move(dabClockThread_); }
         joinOnce(t, "dab clock");
+        dabOwnRun_.store(false);
+        joinOnce(dabOwnThread_, "dab own");
     }
 
     /** @param forceFrames when non-zero, emit exactly this many 48 kHz frames — the audio clock's
@@ -17808,6 +18166,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  then stop, because dabClockLoop() will emit the PCM on its own 20 ms cadence. The
          *  clock's own call passes forceFrames and must fall through, or the audio it exists to
          *  send would be short-circuited by the very flag that enables it. */
+        // ★★ V12 OWN STATION: each station's 20 ms to its own listeners (the clock's tick) — before the primary's pre-buffer
+        //    check below, which returns early while the radio's own station is filling.
+        if (forceFrames) if (const auto ov = dabOwnViewNow())
+            for (auto& st : ov->stations) { auto a = ov->audio.find(st.get()); if (a != ov->audio.end()) dabOwnPumpStation(*st, a->second, forceFrames); }
         if (forceFrames == 0) {
             // ★ DAB+ never produces PCM here — it is reframed and handed on. See pumpDabPlusAudio.
             pumpDabPlusAudio();
@@ -17856,8 +18218,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
                 // ★★★ Checked and sent under one lock, so it can never land after dab_off — see dabModeEnd.
                 std::lock_guard<std::mutex> rl(g_dabReportMtx);
+                // ★★ V12 own station: each socket its OWN station's report (built once per station, never waited for)
+                const auto ov = dabOwnViewNow();
+                std::map<DabOwnSt*, DabParts> stParts;
                 if (g_dabMode.load(std::memory_order_relaxed))
-                    for (auto& sk : socks) sendDab(sk, dp);   // ★ each socket its own format — see sendDab
+                    for (auto& sk : socks) {
+                        DabParts mine;
+                        if (dabPartsFor(sk.get(), ov, dp, mine, &stParts, false)) sendDab(sk, mine);   // ★ each socket its own format — see sendDab
+                    }
             }
             if (dabClockRun_.load(std::memory_order_relaxed)) return;
         }
@@ -18001,8 +18369,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     pcm[i] = int16_t(v * 32767.0f);
                 }
                 std::vector<std::pair<ClientDsp*, std::shared_ptr<net::Socket>>> targets;
+                const auto ov = dabOwnViewNow();   // ★★ V12 own station: a station's listeners hear their station, not this
                 { std::lock_guard<std::mutex> lk(clientMtx);
-                  for (auto& kv : clientDsp) if (kv.second->audio && kv.second->audio->isOpen())
+                  for (auto& kv : clientDsp) if (kv.second->audio && kv.second->audio->isOpen() && !(ov && ov->bySock.count(kv.second->audio.get())))
                       targets.emplace_back(kv.second.get(), kv.second->audio); }
                 dabInject_ = true;
                 for (auto& t : targets) sendClientAudio(t.first, t.second, pcm.data(), int(got), 2);
@@ -18451,7 +18820,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★★ EVERY LISTENER, NOT JUST THE LAST ONE TO ARRIVE. One VFO means one demodulation and
         //     one encode; the only thing that scales is the fan-out — which is exactly why this
         //     mode is cheap enough to run on a phone (BRIEF-vibeserver-shared-tuning).
-        const std::vector<std::shared_ptr<net::Socket>> socks = allAudioSocks();
+        std::vector<std::shared_ptr<net::Socket>> socks = allAudioSocks();
+        // ★★ V12 own station: while DAB injects the radio's own station, its station listeners are served by their own stream
+        if (dabInject_) if (const auto ov = dabOwnViewNow())
+            if (!ov->bySock.empty())
+                socks.erase(std::remove_if(socks.begin(), socks.end(), [&](const std::shared_ptr<net::Socket>& sk) { return ov->bySock.count(sk.get()) != 0; }), socks.end());
         if (socks.empty()) return;
 
         // Auto notch (mono listening path, opt-in): removes steady tones before NR.
@@ -21602,10 +21975,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (type == "dab_service") {
             double sid = 0; jsonNum(msg, "sid", sid);
-            g_dab.setService(uint32_t(sid));
+            /* ★★ V12 OWN STATION (docs/v12/DAB-OWN-STATION.md): with the feature on, a pick is THIS listener's — rules A–E in
+             *  vibe_dab_own.h (a lone listener still moves the radio's own station, exactly as before). Off: the radio's. */
+            if (!dabOwnPick(sock, uint32_t(sid))) g_dab.setService(uint32_t(sid));
             /* ★ Only while DAB is on. Out of DAB this reply is a `dab` report about a multiplex the
              *  radio is not on, and a client reads that as "the receiver is in DAB" (see dabModeEnd). */
-            if (g_dabMode.load(std::memory_order_relaxed)) sendDab(sock, dabParts());
+            if (g_dabMode.load(std::memory_order_relaxed)) sendDab(sock, dabPartsForSock(sock));
             return;
         }
         /* ★ The Signal pane opened or closed (a `dab=2` client): the constellation + impulse response only while it
@@ -26014,7 +26389,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             bool immutable = false;
             bool haveSlide = false;
             if (slideH.size() == 16 && slideH.find_first_not_of("0123456789abcdef") == std::string::npos)
-                immutable = haveSlide = g_dab.slideByHash(strtoull(slideH.c_str(), nullptr, 16), sl);
+                immutable = haveSlide = g_dab.slideByHash(strtoull(slideH.c_str(), nullptr, 16), sl)
+                                        || g_dab.stationSlideByHash(strtoull(slideH.c_str(), nullptr, 16), sl);   // ★★ V12 own station
             if (!haveSlide)
                 haveSlide = slideSid.empty()
                     ? g_dab.slide(sl)
@@ -38143,6 +38519,10 @@ bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& 
 void LocalSdrShim::setDabScanLabels(int mode) {
     vibedab::dabScanLabels().store(mode < 0 ? -1 : (mode ? 1 : 0), std::memory_order_relaxed);
     LOGI("[DAB] whole-multiplex label scan: %s", vibedab::dabScanLabelsOn() ? "on" : "off (the playing station keeps its own text)");
+}
+void LocalSdrShim::setDabOwnStation(int mode) {
+    g_dabOwnSetting.store(mode < 0 ? -1 : (mode ? 1 : 0), std::memory_order_relaxed);
+    LOGI("[DAB] own station per listener: %s", mode < 0 ? "the benchmark's rule" : mode ? "on (the owner's choice)" : "off (the owner's choice)");
 }
 void LocalSdrShim::setIdleKickMinutes(int minutes) {
     // ★ Clamped to the floor rather than accepted as typed: 15 minutes is short enough already,

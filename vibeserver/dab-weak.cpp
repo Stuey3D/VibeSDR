@@ -32,6 +32,10 @@
 //                       receiver position, and print the TII list of every verdict as {"t":…,"tii":[…],"tiiDiag":{…}}.
 //                       "--tii -" = the directory without a position; --tii-nodir 1 = no directory at all (the
 //                       shared-comb CANDIDATES path, as in a country with no published codes)
+//     --stations S,S…  ★ V12 OWN STATION (docs/v12/DAB-OWN-STATION.md): open these services (hex SIds) as STATIONS on the
+//                       first service — decoded from its frames by the tap, as a listener's own station is. One extra JSON
+//                       line each ("path":"station"). The first service's own line is the crown-jewel check: with stations
+//                       attached it must read as without.
 //   Prints ONE JSON line per service: lock/label/first-audio times (in CLIP seconds), the final MER, FIB rate, super
 //   frames ok of tried, AUs bad of in, RS lost, and the input's own measured in-band SNR.
 // ★ The clip is STREAMED (as dab-unitlog): nothing whole-file in memory. ★ Paced by back-pressure (never ahead of the
@@ -266,6 +270,7 @@ int main(int argc, char** argv) {
     bool loop = false;
     double driftRate = 0, driftMax = 1500, ppm = 0; bool trace = false;
     const char* tiiPos = nullptr; bool tiiNoDir = false;
+    const char* stationsArg = nullptr;
     bool paired = false;   // ★ --paired 1: the noise goes in at the CLIP's rate before the up-sampler, so the wide path sees
                            //   exactly the in-band noise the native path does (an A/B of the front ends alone)
     for (int i = 2; i + 1 < argc; i += 2) {
@@ -293,6 +298,7 @@ int main(int argc, char** argv) {
         else if (a == "--second") second = v;
         else if (a == "--offset2") offset2 = std::atof(v);
         else if (a == "--sid2") sid2 = uint32_t(std::strtoul(v, nullptr, 16));
+        else if (a == "--stations") stationsArg = v;
         else { std::printf("unknown option %s\n", a.c_str()); return 2; }
     }
     Clip c1, c2;
@@ -327,6 +333,17 @@ int main(int argc, char** argv) {
     };
     addSvc(c1, sid, offset, argv[1]);
     if (second) addSvc(c2, sid2, offset2, second);
+    std::vector<std::shared_ptr<vibedab::DabService>> stations;
+    std::vector<uint32_t> stationSids;
+    if (stationsArg) {
+        for (const char* p = stationsArg; *p; ) {
+            char* end = nullptr; const unsigned long v = std::strtoul(p, &end, 16);
+            if (end == p) break;
+            stationSids.push_back(uint32_t(v));
+            p = *end == ',' ? end + 1 : end;
+        }
+        for (uint32_t s : stationSids) stations.push_back(svcs[0]->openStation(s));
+    }
 
     // ★ Noise: power relative to the clip's TOTAL power at its own rate, measured on its first second (after the skip).
     std::vector<uint8_t> u; std::vector<float> f1, f2;
@@ -405,6 +422,7 @@ int main(int argc, char** argv) {
         }
         for (int w = 0; w < 400000; ++w) {   // ★ back-pressure: never ahead of any worker
             bool busy = false; for (auto& s : svcs) if (s->backlogForTest() > 0) busy = true;
+            for (auto& st : stations) if (st && st->stationBacklogForTest() > 0) busy = true;
             if (!busy) break;
             std::this_thread::sleep_for(microseconds(100));
         }
@@ -448,6 +466,18 @@ int main(int argc, char** argv) {
                     num(j, "frames"), num(j, "reacquires"), num(j, "offsetHz"),
                     duration<double>(steady_clock::now() - tw0).count());
     }
+    for (size_t k = 0; k < stations.size(); ++k) {
+        if (!stations[k]) { std::printf("{\"path\":\"station\",\"sid\":\"%x\",\"error\":\"cap\"}\n", stationSids[k]); continue; }
+        const std::string j = stations[k]->json();
+        std::printf("{\"path\":\"station\",\"sid\":\"%x\",\"playing\":\"%x\",\"sfOk\":%.0f,\"sfTried\":%.0f,\"auIn\":%.0f,\"auBad\":%.0f,"
+                    "\"rsFixed\":%.0f,\"rsLost\":%.0f,\"mp2In\":%.0f,\"mp2Out\":%.0f,\"mp2Bad\":%.0f,\"mscBer\":%.4f,\"mer\":%.2f,"
+                    "\"frames\":%u,\"dropped\":%u,\"pcmPushed\":%.0f}\n",
+                    stationSids[k], unsigned(stations[k]->service()), num(j, "sfOk"), num(j, "sfTried"), num(j, "auIn"), num(j, "auBad"),
+                    num(j, "rsFixed"), num(j, "rsLost"), num(j, "mp2In"), num(j, "mp2Out"), num(j, "mp2Bad"), num(j, "mscBer"), num(j, "mer"),
+                    stations[k]->stationFrames(), stations[k]->stationDropped(), num(j, "pcmPushed"));
+    }
+    for (auto& st : stations) if (st) svcs[0]->closeStation(st);
+    stations.clear();
     if (trace) std::printf("{\"traceSummary\":true,\"minMer\":%.1f,\"minMerAt\":%d,\"secsWithNoGoodSuperFrame\":%.0f}\n", minMer, worstSec, sfDropSecs);
     for (auto& s : svcs) s->stopWorker();
     return 0;

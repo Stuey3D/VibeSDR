@@ -379,6 +379,7 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPre
    *  We never retune to it: on a shared VFO one listener's traffic flash drags everybody else off
    *  the station they chose. */
   const ann = (d.announce ?? []).filter(a => a.subChId === sv.subch && a.types.length);
+  const listening = (d.playing ?? []).find(p => p.sid === sv.sid)?.n ?? 0;
   const alarm = ann.some(a => a.alarm);
   return (
     <TouchableOpacity /* nav-registered: DabPanel's list (focused prop) */ onPress={onPress} style={[s.svc, active && s.svcActive]} activeOpacity={0.7}
@@ -394,6 +395,9 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPre
         </Text>
         {!!text && <Marquee text={text} style={[s.svcDls, active && { color: C.selLive }]} />}
       </View>
+      {/* ★★ V12 OWN STATION: "▶ 2" — this service is playing on the radio for two listeners (the server's `playing`), so
+          joining one is obvious. Absent on an older server. */}
+      {listening > 0 && <Text style={s.svcCodec}>{'\u25B6 '}{listening}{'  '}</Text>}
       <Text style={s.svcCodec}>{sv.codec}{sv.kbps ? ` ${sv.kbps}k` : ''}</Text>
       <NavRing on={!!focused} color={ring ?? '#fff'} radius={6} />
     </TouchableOpacity>

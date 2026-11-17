@@ -792,6 +792,7 @@ struct RadioConfig {
      *    nobody to reclaim it for. */
     int    idleKickMin = 0;
     int    dabScanLabels = -1;   ///< whole-multiplex DAB label scan: -1 build default (off on 32-bit ARM), 0 off, 1 on
+    int    dabOwnStation = -1;   ///< ★★ V12 each listener their own DAB station: -1 the benchmark rule (N >= users), 0 off, 1 on
     /** ★★★ KEYS THIS VERSION DOES NOT KNOW, KEPT AS WRITTEN (11.0.10-4, for "Receive beta updates"). A V12 beta
      *  writes settings 11.x has never heard of (an Icom's port, say); an owner who unticks beta and goes back to 11
      *  must find them all again when they tick it once more, so a load + save here never drops one. Raw JSON text:

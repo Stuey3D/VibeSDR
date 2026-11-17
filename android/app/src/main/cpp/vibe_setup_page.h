@@ -1875,6 +1875,21 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
          what every station is playing. It costs processor time; the default is off on a small 32-bit
          machine and on everywhere else. The station you are listening to always shows its own text.</div>
       </div>
+      <!-- ★★ V12 DAB OWN STATION (docs/v12/DAB-OWN-STATION.md) — drawn under DAB (modeBlockRender moves it there). Stuart's
+           rule: the benchmark measures N stations at once; N >= the listener limit = on, else off; the owner chooses. -->
+      <div id="dabOwnRow">
+      <label class="row" style="gap:8px;margin-top:2px">
+        <span class="lbl" style="min-width:0">DAB: each listener their own station</span>
+        <select id="dabOwnStation">
+          <option value="-1">As the benchmark says</option>
+          <option value="1">On</option>
+          <option value="0">Off</option>
+        </select></label>
+      <div class="note">On, every listener on a shared dial can pick their own station inside the multiplex, and the rest
+         keep theirs. Listeners on the same station share one decode. The multiplex itself stays shared. Off, a pick changes
+         the station for everyone, as before.</div>
+      <div class="note" id="dabOwnNote"></div>
+      </div>
         <div class="note" id="modeBlockNote"></div>
       </div>
 
@@ -2307,8 +2322,28 @@ function benchGradeColour(g) {
   return g === "red" ? "#ff8a7d" : g === "amber" ? "#ffcc66" : g === "none" ? "var(--dim)" : "#7bd88f";
 }
 
+/* ★★ V12 DAB OWN STATION — the sentence under the switch. ONE RULE, TWO READERS: vibe_dab_own.h setupText is the server's
+ *  copy; scripts/test-setup-dab-own.mjs holds this one to the same strings. `n` = the benchmark's dabStations.n (0 = none). */
+function dabOwnText(setting, n, limit) {
+  if (!(n > 0)) return "Not measured yet: run the benchmark to see how many listeners this box can give their own station.";
+  const on = setting === 1 || (setting === -1 && n >= Math.max(1, limit));
+  if (setting === -1 && on) return "On: this box can give up to " + n + " listeners their own DAB station, and the listener limit is " + limit + ".";
+  if (setting === -1) return "Off: this box can give up to " + n + " listeners their own DAB station. Lower the listener limit to " + n + " to turn it on.";
+  if (setting === 1 && n < limit) return "On by your choice: this box measured up to " + n + " stations at once, below the listener limit of " + limit + ". Watch the health chip.";
+  if (setting === 1) return "On by your choice: this box can give up to " + n + " listeners their own DAB station.";
+  return "Off by your choice: everyone hears the same station. This box could give up to " + n + " listeners their own.";
+}
+function dabOwnRender() {
+  const el = $("dabOwnNote"), sel = $("dabOwnStation");
+  if (!el || !sel) return;
+  const n = (BENCH && BENCH.dabStations && Number(BENCH.dabStations.n)) || 0;
+  const limit = parseInt(($("users") && $("users").value) || "1", 10) || 1;
+  el.textContent = dabOwnText(parseInt(sel.value, 10), n, limit);
+}
+
 function renderBench(j) {
   BENCH = (j && j.v) ? j : null;
+  if (typeof dabOwnRender === "function") dabOwnRender();   // ★★ V12 own station: the sentence names the measured N
   const tbl = $("benchTable"), rows = $("benchRows"), when = $("benchWhen"), adv = $("benchAdvice");
   if (!BENCH) { if (tbl) tbl.classList.add("hide"); if (when) when.textContent = "Never run on this machine."; return; }
   if (when) {
@@ -3142,6 +3177,8 @@ const BLOCKABLE = [
   /* ★ The whole-multiplex label scan, moved here from the radio's hardware card (2026-10-31). Still drawn only on a
    *  small 32-bit machine ("lite" in vibeserver.json) — the only place it is a choice; elsewhere it is simply on. */
   { id: "dabScan", parent: "dab", node: "dabScanRow" },
+  /* ★★ V12 each listener their own DAB station (docs/v12/DAB-OWN-STATION.md) — under DAB, on every server. */
+  { id: "dabOwn", parent: "dab", node: "dabOwnRow" },
   { id: "rtty",   label: "RTTY (and RTTY AUTO)" }, { id: "navtex", label: "NAVTEX" },
   { id: "wefax",  label: "WEFAX"    }, { id: "sstv", label: "SSTV"   },
   { id: "ft8",    label: "FT8 / FT4" },
@@ -3463,7 +3500,7 @@ function modeBlockRender() {
   const host = $("modeBlockList");
   if (!host) return;
   // ★ moved controls out first, so emptying the list cannot take them with it
-  for (const id of ["dabScanRow", "bandModeWrap"]) { const n = modeNodeEl(id); if (n && n.parentNode) n.parentNode.removeChild(n); }
+  for (const id of ["dabScanRow", "dabOwnRow", "bandModeWrap"]) { const n = modeNodeEl(id); if (n && n.parentNode) n.parentNode.removeChild(n); }
   const off = modeBlockSet();
   // ★★ V12 only what THIS radio can run (vibe_radio_caps.h): an HF+ is not offered DAB, an Icom not WFM (capsApply)
   if (typeof capsSig === "function") MODE_CAPS_DRAWN = capsSig();
@@ -3568,9 +3605,9 @@ function modeTreeGrey() {
     el.disabled = !!a;
     el.title = a ? `${a.label} is off` : "";
   });
-  for (const n of [modeNodeEl("dabScanRow"), modeNodeEl("bandModeWrap")]) {
+  for (const n of [modeNodeEl("dabScanRow"), modeNodeEl("dabOwnRow"), modeNodeEl("bandModeWrap")]) {
     if (!n) continue;
-    const a = modeOffAncestor(tree, n.id === "dabScanRow" ? "dabScan" : "bandModes", off);
+    const a = modeOffAncestor(tree, n.id === "dabScanRow" ? "dabScan" : n.id === "dabOwnRow" ? "dabOwn" : "bandModes", off);
     n.querySelectorAll("select,input").forEach(c => { c.disabled = !!a; });
   }
 }
@@ -4391,6 +4428,8 @@ function renderGain() {
   modeRateShow(r);
   fpsShow(r);
   $("dabScanLabels").value = String(r.dabScanLabels === 0 || r.dabScanLabels === 1 ? r.dabScanLabels : -1);
+  $("dabOwnStation").value = String(r.dabOwnStation === 0 || r.dabOwnStation === 1 ? r.dabOwnStation : -1);
+  dabOwnRender();
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
@@ -6771,6 +6810,8 @@ function fill() {
   $("maxFps").addEventListener("change", () => {
     const v = parseFloat($("maxFps").value) || 10; radio().maxFps = v; radio().fftRate = v; });
   $("dabScanLabels").addEventListener("change", () => { radio().dabScanLabels = parseInt($("dabScanLabels").value, 10); });
+  $("dabOwnStation").addEventListener("change", () => { radio().dabOwnStation = parseInt($("dabOwnStation").value, 10); dabOwnRender(); });
+  $("users").addEventListener("input", dabOwnRender);
   $("gainSplitSlider").addEventListener("input", () => {
     const v = parseInt($("gainSplitSlider").value, 10);
     $("gainSplitVal").textContent = v + "% LNA / " + (100 - v) + "% VGA";

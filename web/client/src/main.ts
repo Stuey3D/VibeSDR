@@ -8037,7 +8037,7 @@ function dabRender() {
   if (skeleton !== dabLastListHtml) {
     dabLastListHtml = skeleton;
     st.innerHTML = d.services.length
-      ? d.services.map(sv => `<div class="dabSvc" role="button" tabindex="0" data-sid="${Number(sv.sid) || 0}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
+      ? d.services.map(sv => `<div class="dabSvc" role="button" tabindex="0" data-sid="${Number(sv.sid) || 0}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="pl"></span><span class="cod"></span></div>`).join('')
         + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
       : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
           : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`
@@ -8063,6 +8063,12 @@ function dabRender() {
     const inner = dlsBox.querySelector('.dlsIn') as HTMLElement;
     setStyle(dlsBox, 'display', dlsText ? 'block' : 'none');
     if (inner.textContent !== dlsText) { inner.textContent = dlsText; delete inner.dataset.armed; inner.classList.remove('scroll'); }
+    /* ★★ V12 OWN STATION: which services are playing on this radio and for how many (the server's `playing`), so joining one
+     *  is obvious; with own.on a pick is this listener's alone. Absent on an older server — nothing drawn. */
+    const pl = el.querySelector('.pl') as HTMLElement | null;
+    const pn = (d.playing ?? []).find(p => p.sid === sv.sid)?.n ?? 0;
+    setText(pl, pn > 0 ? `\u25B6 ${pn}` : '');
+    if (pl) { const t = pn > 0 ? `${pn} listening${d.own?.on ? ' \u2014 pick it to join, or pick any other for your own station' : ''}` : ''; if (pl.title !== t) pl.title = t; }
     const cod = el.querySelector('.cod') as HTMLElement;
     setText(cod, `${sv.codec}${sv.kbps ? ' ' + sv.kbps + 'k' : ''}`);
     if (cod.title !== (sv.prot ?? '')) cod.title = sv.prot ?? '';

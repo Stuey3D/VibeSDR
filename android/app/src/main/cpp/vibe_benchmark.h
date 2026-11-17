@@ -14,6 +14,7 @@
 // ★ Every future decoder adds its row here (the rule is Stuart's): an update re-runs it, so a new decoder starts
 //   switched off on a box it would overload.
 #pragma once
+#include "vibe_dab_own.h"   // ★★ V12 own station: nFromBench — the dabStations block
 #include "vibedsp/vibedsp.h"
 #include "vibedsp/vibe_denormals.h"
 #if defined(VIBE_HAVE_OPUS)
@@ -411,7 +412,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     if (benchhw::gateNeed(hw, benchhw::Need::Spots).run == false) notRun.push_back({ "spot_*", benchhw::gateNeed(hw, benchhw::Need::Spots).why });
     // ★ The hosts' DAB (2 steps) and ADS-B (2) rows: not counted when they will not run, so the bar still ends at its end.
     if (moreRows) {
-        if (!benchhw::gateRow(hw, "dab").run) moreRowSteps -= 2;
+        if (!benchhw::gateRow(hw, "dab").run) moreRowSteps -= 3;   // ★ dab, dab_scan, dec_dab_station
         if (!benchhw::gateRow(hw, "adsb").run) moreRowSteps -= 2;
         moreRowSteps = std::max(0, moreRowSteps);
     }
@@ -808,6 +809,22 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
             int w = vibe::rttySkimDefaultWorkers();
             if (rttySkimPct >= 0) w = (rttySkimPct <= 1.5 && cores >= 6) ? 4 : (rttySkimPct <= 6.0 && cores >= 4) ? 2 : 1;
             j += ",\"rttySkimWorkers\":" + std::to_string(w) + "}";
+        }
+    }
+    /* ★★ V12 DAB OWN STATION (docs/v12/DAB-OWN-STATION.md, vibe_dab_own.h nFromBench): N = how many stations this box
+     *  decodes at once — the rule turns each listener's own station on when N >= the user limit. Absent when the DAB rows did
+     *  not run (no Band III radio, no clip): the shim then reads 0, "not measured". */
+    {
+        double perSt = -1, dabTot = 0; bool haveDab = false;
+        for (const auto& r : res) {
+            if (r.id == "dec_dab_station") perSt = r.pct;
+            if (r.id == "dab" && r.pct >= 0) { haveDab = true; for (const auto& t : r.threads) if (t.first != "vibe-dsp") dabTot += t.second; }
+        }
+        if (haveDab && perSt > 0) {
+            char b[200];
+            std::snprintf(b, sizeof b, ",\"dabStations\":{\"n\":%d,\"perStationPct\":%.2f,\"frontPct\":%.1f,\"memKB\":%ld}",
+                          vibedab::own::nFromBench(perSt, dabTot, (int)cores), perSt, dabTot, vibedab::own::benchMemKB().load());
+            j += b;
         }
     }
     // ★ How long the whole measurement took, seconds — shown to the owner beside the table (Stuart: a two-minute blank is

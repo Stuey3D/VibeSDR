@@ -20,6 +20,10 @@
 #include "vibe_dab_service.h"
 #include <memory>
 #include <thread>
+#include <atomic>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
 #if !defined(__ANDROID__)
 // ★ vibeserver/proc.h — fork+execvp, no shell. Every desktop includer links vibeserver_core, which
 //   builds proc.cpp and puts vibeserver/ on the include path. Android never downloads (see below).
@@ -124,6 +128,101 @@ inline benchdetail::Result runDabRow(const std::string& id, const std::string& l
     return r;
 }
 
+/** ★ Resident memory now, KB (0 = unknown). For the own-station row's per-station figure. */
+inline long dabBenchRssKB() {
+#if defined(__APPLE__)
+    mach_task_basic_info info{}; mach_msg_type_number_t n = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &n) == KERN_SUCCESS) return long(info.resident_size / 1024);
+    return 0;
+#elif defined(__linux__)
+    long pages = 0, rss = 0;
+    if (FILE* f = std::fopen("/proc/self/statm", "r")) { if (std::fscanf(f, "%ld %ld", &pages, &rss) != 2) rss = 0; std::fclose(f); }
+    return rss * (sysconf(_SC_PAGESIZE) / 1024);
+#else
+    return 0;
+#endif
+}
+
+/** ★★ V12 OWN STATION (docs/v12/DAB-OWN-STATION.md): WHAT ONE MORE STATION COSTS. The same multiplex as the `dab` row
+ *  through a fresh DabService, plus K = 3 STATIONS on three other services (48 k DAB+, as most real stations are) fed by
+ *  its tap — what the server runs when three more listeners each pick their own. Fed in real time like the `dab` row.
+ *  The figure is (every thread this run − every thread of the `dab` row) / K: one station's own decode (vibe-dab-st) and
+ *  its FAAD2 (vibe-faad2), % of a core. -1 if a station decoded nothing. Memory: RSS after warm-up minus before the
+ *  stations opened, per station (dabStationMemKB). */
+inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdetail::Result& dabRow, double seconds, double warm = 6.0) {
+    using namespace benchdetail;
+    Result r; r.id = "dec_dab_station"; r.label = "DAB+: each extra station (own station per listener)"; r.rate = clip.rate;
+    auto& scan = vibedab::dabScanLabels();
+    const int scanWas = scan.load();
+    scan.store(0);
+    const auto before = threadCpu();
+    auto svc = std::make_unique<vibedab::DabService>();
+    svc->setRfRate(clip.rate);
+    svc->setRfCentre(clip.centre);
+    for (int i = 0; i < int(vibedab::kBandIIICount); ++i)
+        if (std::fabs(double(vibedab::kBandIII[i].centreHz) - clip.centre) < 1000.0) { svc->setChannel(i); break; }
+    svc->setService(clip.sid);
+    const long rss0 = dabBenchRssKB();
+    static constexpr int K = 3;
+    // ★ The bench clip's services are C001…C00B (vibeserver/bench-clip/make-clip.sh); three that are not the played one.
+    std::vector<std::shared_ptr<vibedab::DabService>> st;
+    for (uint32_t s = 0xC001; s <= 0xC00B && int(st.size()) < K; ++s) if (s != clip.sid) st.push_back(svc->openStation(s));
+    const size_t blk = size_t(clip.rate / 20) * 2;
+    size_t pos = 0;
+    std::vector<float> pcm(48000);
+    std::map<long, double> mid; bool measuring = false; long rssWarm = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    double fedSecs = 0;
+    for (;;) {
+        if (!measuring && fedSecs >= warm) { mid = threadCpu(); measuring = true; rssWarm = dabBenchRssKB(); }
+        if (fedSecs >= warm + seconds) break;
+        const size_t n = std::min(blk, clip.iq.size() - pos);
+        svc->feed(clip.iq.data() + pos, n / 2);
+        pos = (pos + n) % clip.iq.size();
+        fedSecs += double(n / 2) / clip.rate;
+        while (svc->takePcm(pcm.data(), pcm.size() / 2) > 0) {}
+        for (auto& s : st) if (s) while (s->takePcm(pcm.data(), pcm.size() / 2) > 0) {}
+        std::this_thread::sleep_until(t0 + std::chrono::microseconds((long long)(fedSecs * 1e6)));
+    }
+    const auto after = threadCpu();
+    unsigned sfMin = ~0u; int open = 0;
+    for (auto& s : st) {
+        if (!s) continue;
+        ++open;
+        const std::string js = s->json();
+        unsigned v = 0; if (const char* p = std::strstr(js.c_str(), "\"sfOk\":")) v = unsigned(std::strtoul(p + 7, nullptr, 10));
+        sfMin = std::min(sfMin, v);
+    }
+    for (auto& s : st) if (s) svc->closeStation(s);
+    st.clear();
+    svc.reset();
+    scan.store(scanWas);
+    double total = 0, stThreads = 0, faad = 0;
+    for (const auto& kv : after) {
+        if (before.count(kv.first)) continue;
+        auto m = mid.find(kv.first);
+        const double used = 100.0 * (kv.second - (m != mid.end() ? m->second : 0.0)) / seconds;
+        total += used;
+        const std::string nm = threadName(kv.first);
+        if (nm.rfind("vibe-dab-st", 0) == 0) stThreads += used;
+        if (nm.rfind("vibe-faad2", 0) == 0) faad += used;
+    }
+    double dabTotal = 0;
+    for (const auto& t : dabRow.threads) if (t.first != "vibe-dsp") dabTotal += t.second;   // ★ the feeder is not the receiver
+    const double per = std::max(0.0, total - dabTotal) / K;
+    r.pct = (open == K && sfMin != ~0u && sfMin > 0) ? per : -1.0;
+    r.hottest = "per station";
+    r.threads.push_back({ "per station", per });
+    r.threads.push_back({ "vibe-dab-st (each)", stThreads / K });
+    r.threads.push_back({ "vibe-faad2 (all)", faad });
+    const long memPer = (rssWarm > 0 && rss0 > 0) ? std::max(0L, (rssWarm - rss0) / K) : -1;
+    vibedab::own::benchMemKB().store(memPer);
+    if (std::getenv("VIBE_BENCH_DEBUG"))
+        std::fprintf(stderr, "[dec_dab_station] per station %.2f %% (total %.1f − dab %.1f) / %d; vibe-dab-st each %.2f %%; mem %ld KB each; sfOk min %u\n",
+                     per, total, dabTotal, K, stThreads / K, memPer, sfMin == ~0u ? 0 : sfMin);
+    return r;
+}
+
 /** ★★ FETCHED ONCE, KEPT (Stuart, 2026-09-19): the clip is 18 MB gzipped, too big to ship in an APK or a .deb and
  *  needed only when the benchmark runs. Desktop/Linux fetches it here with curl; Android hands in a path its own
  *  Kotlin downloaded. Returns the clip's path, or empty if it could not be had — the DAB rows are then simply
@@ -166,6 +265,9 @@ inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, 
     out.push_back(runDabRow("dab",      "DAB+ @ 2.048 MS/s",                   clip, false, seconds));
     benchStep("DAB+ with the station label scan");
     out.push_back(runDabRow("dab_scan", "DAB+ + station label scan @ 2.048 MS/s", clip, true,  seconds));
+    // ★★ V12 own station per listener: what each extra station costs (docs/v12/DAB-OWN-STATION.md) — sets N
+    benchStep("DAB+: each extra station");
+    out.push_back(runDabStationRow(clip, out.front(), seconds));
     return out;
 }
 

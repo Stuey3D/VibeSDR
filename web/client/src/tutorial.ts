@@ -126,6 +126,9 @@ const STEPS: Step[] = [
         + 'no bandwidth to set). '
         + 'In DECODERS… there, the modes that tune the radio themselves and open '
         + 'their own view (ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, DIGI BAND) come first, under TUNES THE RADIO ITSELF — they '
+        // ★★ V12 DAB own station (docs/v12/DAB-OWN-STATION.md) — where the server allows it, a pick is the listener's alone
+        + 'are in this menu too; DAB\u2019s station list marks \u25B6 2 beside a station two listeners are hearing, and where the '
+        + 'server gives each listener their own station a pick changes only what you hear (the multiplex stays shared); they '
         + 'are in this menu too; DATALINK opens the AVIATION MAP with the aircraft heard on the ACARS (131 MHz) or VDL2 (136 MHz) channels, '
         + 'the two bands in its top bar, and beside them every aircraft this server\u2019s other radios hear \u2014 ADS-B, HFDL, ADS-C \u2014 each '
         + 'aircraft once, its card saying which sources heard it, with a layer key for each source, HFDL STATIONS and AIRPORTS (on until you switch '

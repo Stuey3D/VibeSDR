@@ -18,6 +18,12 @@ export interface DabState {
   carrierShift: number; prs: number;
   fibOk: number; fibTotal: number; fibRate: number; frames: number;
   sid: number; bitrate: number; protection: string;
+  /** ★★ V12 OWN STATION (docs/v12/DAB-OWN-STATION.md): `own.on` = a pick is this listener's own (the server's rule: the
+   *  benchmark's N >= the user limit, or the owner's switch); `playing` = every service playing on this radio and how many
+   *  listen to each; `mine` = the service THIS listener hears. All from the server — absent on an older one. */
+  own?: { on: boolean; n: number; limit: number };
+  playing?: { sid: number; n: number }[];
+  mine?: number;
   /** ★★★ What this server has HEARD on each Band III block — block name -> ensemble label,
    *  remembered across restarts by the server. The block pickers on the watches are built from it,
    *  and a picker without it is a column of bare numbers. Absent until the server has heard
@@ -216,6 +222,16 @@ export function parseDabMessage(m: Record<string, unknown>): DabState {
     o.blocks = out;
   }
   if (m.blockQ !== undefined) o.blockQ = parseDabBlockQ(m.blockQ);   // ★★ V12 the per-block grades, sanitised
+  /* ★★ V12 OWN STATION: numbers only, bounded (64 services is the list's own cap). */
+  if (m.own && typeof m.own === 'object') {
+    const w = m.own as Record<string, unknown>;
+    o.own = { on: w.on === true, n: Math.max(0, Math.min(64, Number(w.n) | 0)), limit: Math.max(0, Math.min(1000, Number(w.limit) | 0)) };
+  } else delete o.own;
+  o.playing = Array.isArray(m.playing)
+    ? (m.playing as unknown[]).slice(0, 64).map(p => p as Record<string, unknown>)
+        .filter(p => p && Number(p.sid) > 0).map(p => ({ sid: Number(p.sid) >>> 0, n: Math.max(0, Math.min(1000, Number(p.n) | 0)) }))
+    : undefined;
+  if (m.mine !== undefined) o.mine = Number(m.mine) >>> 0;
   o.channel  = dabSafeText(m.channel, 8);
   o.label    = dabSafeText(m.label, 32);
   o.protection = dabSafeText(m.protection, 16);
