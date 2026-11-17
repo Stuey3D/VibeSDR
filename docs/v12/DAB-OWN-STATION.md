@@ -428,5 +428,23 @@ listener's mux is knocked off (test-afc "it glided").
     i5 at a quarter of the machine, with audio throughout on 10C and 11A. 10D's DAB+ stations did not decode live
     (signal, possibly the notch above) — so **48 of 65 audible (all 46 on 10C and 11A + 10D's 2 MP2), 65 of 65
     served** on their own service. Results: ~/VibeSDR-test-audio/dab-wide/results-2026-11-17/lenovo-*; the client: scripts/bench-server-dab-wide-lr-remote.mjs.
+- **THE RERUN WITH THE NOTCH FIX, 2026-11-17 ~20:35 (build 7c82fe030, same Lenovo, same rules; service down
+  20:31:39–~20:42:50, ~11 min; config hash identical after, decoders back, scratch removed).**
+  - The log: "auto notch: DAB notch off at 215.140 MHz" straight after start-up, and no DAB notch ON during the run.
+  - Benchmark: per station 1.50 %, multiplex front end 2.33 %, DDC 5.14 % → 311 DAB listeners for the range; FM 67,
+    narrow 1187.
+  - 65/65 on their own service; 62 stations + 3 multiplexes; **10C 16/16 and 11A 30/30 at 100 %, 12.3 kB/s each**;
+    server 203 % of one core (of 800 %), 250 MB, 620 kB/s in all. Gaps: one per listener (~327 ms, all 65 alike — the
+    client's start-of-window call), none otherwise.
+  - **10D with the notch out: MER 8.4 dB (was 8.1), FIB 0.991 (was 0.943), MSC BER 0.123 (was 0.137); DAB+ super
+    frames still ~1 % per station (113 of 13 117) — 17 of 19 silent, its 2 MP2 services at ≥ 99 %.** The notch was
+    real (the FIB recovered) but not the whole story: at BER ~0.12 the DAB+ sub-channels do not survive. The
+    single-mux live reading on this RSP (2026-11-16) was MER 9.2, BER 0.098 — so wide mode on the live RSP reads ~0.8
+    dB MER lower on 10D, and that is the margin between decoding and not. ★ §11.1b's same-session single-mux reading
+    was not obtained again: a radio left in per-listener mode by the test config routed the client's DAB request to
+    the locked-range handler, which (not eligible at 2.048 MS/s) dropped it WITHOUT an error to the client — a fault
+    to fix: refuse with a reason. Next for 10D: the wide-mode gain rules (§11.1a — 11A dominates the AGC), and the
+    single-mux reading in the same session.
+  - Results: ~/VibeSDR-test-audio/dab-wide/results-2026-11-17/lenovo-*-notchfix*.
 - Then scale up: the Almere B210 at 56 MS/s, most of Band III. That only happens with the owner's agreement (via
   Stuart). The box is public: never test on it unasked.
