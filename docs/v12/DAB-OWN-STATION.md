@@ -446,5 +446,19 @@ listener's mux is knocked off (test-afc "it glided").
     to fix: refuse with a reason. Next for 10D: the wide-mode gain rules (§11.1a — 11A dominates the AGC), and the
     single-mux reading in the same session.
   - Results: ~/VibeSDR-test-audio/dab-wide/results-2026-11-17/lenovo-*-notchfix*.
+- **6 MS/s (Stuart, 2026-11-17: "test 6msps") — does NOT fit the three blocks; not run, the Lenovo not taken.**
+  - Span: 10C's lower edge 212.592 MHz to 11A's upper edge 217.696 MHz = 5.104 MHz, centre 215.144 MHz, so the outer
+    edges sit ±2.552 MHz from centre.
+  - Our rule (vibe_dab_wide.h blocksIn: block centre offset + 0.8 MHz ≤ 0.42 × rate): at 6 MS/s the flat part is
+    ±2.52 MHz and 10C / 11A each need ±2.584 — only 10D would be "in", so the range is not even eligible (two blocks
+    needed). 6.048 MS/s (±2.54) fails the same way; the three need ≥ ~6.15 MS/s.
+  - The RSP at 6 MS/s uses its 6 MHz IF filter (sdrplay_source.cpp bandwidthKHzForRate): ±3.0 MHz — the outer
+    blocks' edges would sit in its roll-off, 0.45 MHz from Nyquist, with 11B / 10B's far halves (beyond ±3 MHz) folding
+    back onto 10C / 11A.
+  - ADC depth (SDRplay's own figures — RSP1A datasheet v1.9, https://www.sdrplay.com/docs/RSP1Adatasheetv1.9.pdf, and
+    RSP1A Technical Information R1P0): 14-bit 2–6.048 MS/s, 12-bit 6.048–8.064, 10-bit 8.064–9.216, 8-bit above. So
+    6 MS/s would be 14-bit against 8 MS/s's 12-bit (~12 dB of converter range), but no rate that holds all three
+    blocks is in the 14-bit range. The 14-bit wide capture would take two adjacent blocks only (10C + 10D, or 10D +
+    11A, centred between them).
 - Then scale up: the Almere B210 at 56 MS/s, most of Band III. That only happens with the owner's agreement (via
   Stuart). The box is public: never test on it unasked.
