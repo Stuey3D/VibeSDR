@@ -290,7 +290,7 @@ public:
     };
     using MscBits = std::shared_ptr<const std::vector<int8_t>>;
     static constexpr size_t kStationQueue = 6;     ///< frames (0.58 s); full = the OLDEST is dropped, never a wait
-    static constexpr size_t kMaxStations  = 16;    ///< per radio, whatever the benchmark says (memory floor)
+    static constexpr size_t kMaxStations  = 64;    ///< per multiplex decoder, whatever the benchmark says (the shim caps by N and by free memory)
 
     /** Open a station playing `sid` (it starts the moment the service is in the ensemble). nullptr at the cap. */
     std::shared_ptr<DabService> openStation(uint32_t sid) {
