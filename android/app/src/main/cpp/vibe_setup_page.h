@@ -1858,6 +1858,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           FM may be quite wrong for a DAB transmitter two miles away.
           <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
         <div id="modeBlockList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:10px"></div>
+        <!-- ★★ V12 DAB ONLY (Stuart, 2026-11-17): every other mode switched off — say what that does for listeners -->
+        <div id="dabOnlyModesNote" class="note hide" style="margin-top:10px"><b>DAB only: listeners land in DAB and cannot
+          leave it.</b> There is no EXIT DAB for them; you can still leave it when signed in as admin.</div>
         <!-- ★★ V12 BAND GOVERNOR (decoders/digi_governor.h): the owner's word per mode in "Digital spots: Band". -->
         <div id="bandModeWrap" class="hide" style="margin-top:12px">
           <div class="hint"><b>Digital spots: Band, mode by mode.</b> Band reads every mode on a band at once. To keep that
@@ -3630,10 +3633,19 @@ function modeBlockRender() {
 
 /** ★★ A PARENT OFF GREYS ITS OPTIONS, WITH THE REASON — never hides them (Stuart: never hide controls). Updated in place
  *  on every change (a re-render would drop the benchmark's notes beside the boxes). */
+/** ★★ V12 DAB ONLY — the server's rule (local_sdr_shim.cpp dabOnlyNow): DAB on, and every demodulator and every whole-radio
+ *  mode this radio offers off. */
+const DAB_ONLY_OTHERS = ["wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
+                         "drm", "freedv", "m17", "adsb", "ism", "ndb", "ais", "avdata", "sondes"];
+function dabOnlyModes(off, tree) {
+  const has = new Set(tree.map(m => m.id));
+  return has.has("dab") && !off.has("dab") && DAB_ONLY_OTHERS.filter(id => has.has(id)).every(id => off.has(id));
+}
 function modeTreeGrey() {
   const host = $("modeBlockList");
   if (!host) return;
   const off = modeBlockSet(), tree = modeTree();
+  { const n = $("dabOnlyModesNote"); if (n) n.classList.toggle("hide", !dabOnlyModes(off, tree)); }
   host.querySelectorAll(".modeKids").forEach(k => {
     const id = k.dataset.kidsOf;
     const p = tree.find(m => m.id === id);

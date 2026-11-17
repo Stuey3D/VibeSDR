@@ -137,6 +137,16 @@ inline void dabBars(Ctx& c, float x, float yBot, float h, int level) {
     }
 }
 /** The multiplex in words: "12D · VibeSDR Bench · 6 stations" (or the block alone while it is being read). */
+/** ★★★ V12 DAB ONLY (Stuart, 2026-11-17: "if DAB is the only allowed mode then the exit button goes, also the exit button
+ *  needs to be removed on existing servers that have been locked to DAB"): the server's word (hwinfo `dabOnly`, false for the
+ *  signed-in admin) when it gave one; an older server's blocked modes otherwise — every demodulator it has (WFM, NFM, AM,
+ *  USB, LSB) blocked and DAB not (the app's and the web page's dabOnlyFrom). */
+inline bool dabOnlyHere(const RadioState& s) {
+    const Json& h = s.msg("hwinfo");
+    if (h.has("dabOnly")) return h["dabOnly"].boolean();
+    auto blocked = [&](const char* m) { for (const auto& b : s.blockedModes) if (b == m) return true; return false; };
+    return blocked("wfm") && blocked("nfm") && blocked("am") && blocked("usb") && blocked("lsb") && !blocked("dab");
+}
 inline std::string dabHeadLine(const RadioState& s) {
     const Json* r = dabReport(s);
     const int b = dabShownBlock();
@@ -259,8 +269,9 @@ inline void dabArrow(Ctx& c, float cx, float cy, float sz, int dir, Rgba col) {
 }
 /** A pane key in the header; `arrow` 0 = a ► after the label, 1 = a ◄ before it, -1 none. Returns true when pressed. */
 inline float dabKeyW(Ctx& c, const std::string& label, int arrow) { return (float)c.tc.width(c.f.tiny, label) + 18 + (arrow >= 0 ? 12 : 0); }
-inline bool dabKey(Ctx& c, const std::string& id, Rect r, const std::string& label, bool on = false, int arrow = -1) {
+inline bool dabKey(Ctx& c, const std::string& id, Rect r, const std::string& label, bool on = false, int arrow = -1, bool dim = false) {
     BtnStyle st; st.font = &c.f.tiny; st.radius = 6; st.on = on;
+    if (dim) st.text = th::dim;   // ★★ V12 greyed but still reachable, so a press can say why (DAB only)
     if (arrow < 0) return button(c, id, r, label, st);
     const bool hit = button(c, id, r, "", st);
     const Rgba col = on ? th::activeTx : th::btnText;
@@ -284,7 +295,7 @@ inline void dabHeader(App& a, Ctx& c, const RadioState& s, Rect h, bool withNow)
     ks.push_back({"dab.k.pane", u.pane == DabUi::P_SIGNAL ? "STATIONS" : "SIGNAL", 0, u.pane == DabUi::P_SIGNAL, u.pane == DabUi::P_SIGNAL ? 1 : 0});
     ks.push_back({"dab.k.blk", "BLOCK", 1, u.pane == DabUi::P_BLOCKS, -1});
     if (!scanRunning && (haveList || mayScan)) ks.push_back({"dab.k.scan", haveList ? "MULTIPLEXES" : "SCAN", 2, u.pane == DabUi::P_SCAN, -1});
-    ks.push_back({"dab.k.exit", "EXIT DAB", 3, false, -1});
+    if (!dabOnlyHere(s)) ks.push_back({"dab.k.exit", "EXIT DAB", 3, false, -1});   // ★★ V12 DAB only: no way out
     float x = h.r() - 4;
     const float kh = h.h - 6;
     std::vector<std::pair<Rect, size_t>> placed;
@@ -297,7 +308,8 @@ inline void dabHeader(App& a, Ctx& c, const RadioState& s, Rect h, bool withNow)
     // the line
     c.tc.draw(c.g, c.f.bodyB, "DAB", h.x + 10, h.cy() - c.f.bodyB.lineHeight() / 2.f, th::btnText);
     const float lx = h.x + 10 + c.tc.width(c.f.bodyB, "DAB") + 10;
-    c.tc.draw(c.g, c.f.small, dabFit(c, c.f.small, dabHeadLine(s), (int)(x - lx - 4)), lx, h.cy() - c.f.small.lineHeight() / 2.f, th::white68);
+    // ★★ V12 DAB ONLY: EXIT DAB is gone — the line says why once
+    c.tc.draw(c.g, c.f.small, dabFit(c, c.f.small, dabHeadLine(s) + (dabOnlyHere(s) ? " \xc2\xb7 DAB only on this receiver" : ""), (int)(x - lx - 4)), lx, h.cy() - c.f.small.lineHeight() / 2.f, th::white68);
     std::reverse(placed.begin(), placed.end());   // ★ registered left to right: a fresh layer never defaults to EXIT
     for (auto& p : placed) {
         const K& k = ks[p.second];

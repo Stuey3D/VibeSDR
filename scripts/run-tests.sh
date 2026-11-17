@@ -563,6 +563,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★ V12 DAB ONLY: whole-radio and wide locked range — listeners land in DAB, may not leave; the admin may (2026-11-17).
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-only.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and in the clients: one rule in the web page, the app and the R36S (an older server read from its blocked modes), and
+#    the real web page in headless MUTED Edge: in DAB without asking, no EXIT DAB, "DAB only on this receiver".
+if npx tsx scripts/test-dab-only-clients.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-dab-only.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── gain write path ──\033[0m\n'
 if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).

@@ -1881,6 +1881,8 @@ body.adsbMap #srvHealth { right: 0 !important; }
    but NOT hidden, and the readout keeps animating — a locked control still reports what the
    radio is doing, it just will not take instructions. See syncRspAgcLock in main.ts. */
 #rspIfAgc.locked { opacity: 0.55; }
+/* ★★ V12 DAB ONLY: EXIT DAB is removed and the box says why once (main.ts syncDabOnly) */
+#dabOnlyNote { font-size: 11px; opacity: 0.75; letter-spacing: .04em; padding: 2px 0 4px; }
 #rspIfGr:disabled { opacity: 0.45; cursor: not-allowed; }
 /* ★★ A HEADING FOR EACH KIND OF BOOKMARK — see renderBookmarks(). Your own choices, the owner's
    saved entries and what this aerial has actually HEARD are three different claims, and they used
@@ -4445,6 +4447,7 @@ select.btn { padding: 6px 8px; }
       <!-- ★ The EXPERIMENTAL badge that used to sit here overflowed the box on a phone and gave the
            whole decoder a sideways scroll (Stuart, 2026-09-07). Gone; the feature is not new now. -->
     </div>
+    <div id="dabOnlyNote" hidden>DAB only on this receiver</div>
     <div id="dabStations" style="display:none"></div>
     <div id="dabSignal" style="display:none"></div>
     <!-- ★★ V12: the band scan's results, a pane of their own while it runs and until the listener goes back. -->

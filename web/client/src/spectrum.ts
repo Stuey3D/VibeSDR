@@ -656,6 +656,8 @@ export interface SpectrumCallbacks {
    *  ★ Its own callback for the reason onTunerBw has one — onHwInfo's positional list is already
    *    past the length where a wrong argument goes unnoticed. */
   onDigitalAgc?: (on: boolean) => void;
+  /** ★★ V12 DAB ONLY: the owner's locked range is DAB only — EXIT DAB greyed with the reason (false for the admin). */
+  onDabOnly?: (on: boolean) => void;
   /** ★ Direct sampling IN FORCE now (auto switches it at the crossover): the tuner gain is bypassed
    *  and VibeAGC stands down. Its own callback, like onTunerBw — onHwInfo's list is long enough.
    *  Called BEFORE onHwInfo so the chip paints right on the same message. */
@@ -1845,6 +1847,7 @@ export class SpectrumClient {
         //    it reads as "this receiver is for HF", which is the truth.
         if (msg.digitalAgc !== undefined)
           this.cb.onDigitalAgc?.(msg.digitalAgc === 1 || msg.digitalAgc === true);
+        if (msg.dabOnly !== undefined) this.cb.onDabOnly?.(msg.dabOnly === true);
         if (Array.isArray(msg.blocked)) this.cb.onBlockedModes?.(msg.blocked as string[]);
         if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
           this.cb.onDspState?.({

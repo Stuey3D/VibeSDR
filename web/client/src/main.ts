@@ -6,6 +6,7 @@
  * an explicit host:port.
  */
 
+import { dabOnlyFrom } from './dabOnly';   // ★★ V12 DAB only — the rule (the app's src/services/dabOnly.ts reads the same)
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
@@ -2086,6 +2087,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // ★ The answer to LOCK's own credential-less request: the lock it asked for, not a refused password.
       if (adminLocking && !ok) { adminLocking = false; adminUnlocked = false; refreshAdminRow(); syncMediaSkip(); return; }
       adminUnlocked = ok;
+      syncDabOnly();   // ★★ V12 the admin keeps EXIT DAB
       syncMediaSkip();   // ★ the owner may skip on their own spectator dial
       // ★ An admin session has no time limit on the server, so it must have no countdown here.
       if (ok) clearTimeLeft();
@@ -2199,6 +2201,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //   assume it can filter at build time.
     onBlockedModes: (list) => {
       blockedModes = new Set(list.map(m => m.toLowerCase()));
+      syncDabOnly();   // ★★ V12 an older server's DAB only is read from this list
       /* ★★★ DECODERS TOO, not just demodulators. The owner's list covers everything a listener
        *  can choose — Stuart: "block WFM and Adv RDS from ever being shown as they are redundant
        *  on a HF only radio" — and a decoder button that opens a panel the server will refuse is
@@ -2238,6 +2241,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     /* ★ Both halves, as the note on the removed setToggleTo said: a control that must not COMMAND
      *   from storage has to READ from the radio — and it has to read the SAME flag it commands. */
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
+    onDabOnly: (on) => { hwDabOnlyKnown = true; hwDabOnly = on; syncDabOnly(); },
     onServerClock: (offsetMin, abbr, tz) => { srvTzOffsetMin = offsetMin; srvTzAbbr = abbr; srvTzId = tz; },
     onDsActive: (on, setting) => {
       hwDsActive = on;
@@ -10371,7 +10375,8 @@ function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B' | 'NDB') {
   }
   /* ★ The way out, on the box itself — #dabExit in index.html. (ADS-B's, #adsbExit, is in its map view's bar.) */
   const ex = who === 'DAB' ? document.getElementById('dabExit') : null;
-  if (ex) ex.style.display = on ? '' : 'none';
+  if (ex) ex.style.display = on && !dabOnlyNow() ? '' : 'none';   // ★★ V12 DAB only: no way out (syncDabOnly)
+  if (who === 'DAB') queueMicrotask(syncDabOnly);
   /* ★ THE IF FILTER IS DAB'S while a multiplex is being received — 2.048 MHz for the ensemble.
    *  Greyed, not merely ignored (AGENTS.md), with the reason on the control (Stuart, 2026-09-08). */
   const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
@@ -10682,7 +10687,7 @@ function buildControls() {
    *  actually looking at. dabSetMode(false) is the whole path: it arms the restore, tells the
    *  server, and gives back the zoom, the arrows, the IF filter and the frequency entry. */
   { const xb = document.getElementById('dabExit');
-    if (xb) (xb as HTMLElement).onclick = () => dabSetMode(false); }
+    if (xb) (xb as HTMLElement).onclick = () => { if (dabOnlyNow()) { showPill(DAB_ONLY_WHY, 6000); return; } dabSetMode(false); }; }
   /* ★ ADS-B's map view: EXIT ADS-B (the whole way out, as EXIT DAB), CHAT (the card's key is under the map),
    *  the list's head (collapse / open) and its rows (that aircraft on the map). */
   $('adsbExit').onclick = () => adsbSetMode(false);
@@ -20559,7 +20564,8 @@ function setFreqUnit(u: FreqUnit) {
  *  2026-09-25: "advise it is locked due to DAB mode, or EXIT DAB MODE TO USE").
  *  ★ It used to be the onclick of the retired desktop bar's hidden #pill, which the card CLICKED. */
 function openFreqEntry(typed?: string) {
-  if (dabOn) { showTuneGapMsg('Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
+  if (dabOn) { showTuneGapMsg(dabOnlyNow() ? 'This receiver is DAB only — there is no dial inside a multiplex; the block keys and the station list choose what you hear.'
+                                          : 'Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
   if (adsbOn) { showTuneGapMsg('Frequency is locked in ADS-B — the receiver is held on 1090 MHz. Press EXIT ADS-B to tune.'); return; }
   // ★ ISM: the box stays open — a typed frequency puts the capture there for an odd device (see go() below)
   if (typed === undefined || !isPanelOpen('freqPanel')) togglePanel('freqPanel');
@@ -21813,6 +21819,23 @@ function pushAllRspSettings() {
  * ★ A refused control must LOOK refused. Same rule as the auto-notch boxes and gainAuto: greyed,
  *   still animated by the readout, and saying WHY in its title — a lock is the owner's decision,
  *   not a fault, and an unexplained dead control reads as the latter. */
+/* ★★★ V12 DAB ONLY (Stuart, 2026-11-17: "if DAB is the only allowed mode then the exit button goes, also the exit button
+ *  needs to be removed on existing servers that have been locked to DAB"). EXIT DAB is REMOVED, and the box says once why
+ *  (#dabOnlyNote, "DAB only on this receiver") so nobody hunts for it. Everything else in the DAB view works as usual.
+ *  ★ The server's word when it gives one (hwinfo `dabOnly`, false for the signed-in admin); an OLDER server never sends it,
+ *    so it is worked out from what it does send — its blocked modes: every demodulator an older server has (WFM, NFM, AM,
+ *    USB, LSB) blocked and DAB not. The signed-in admin keeps EXIT either way. */
+const DAB_ONLY_WHY = 'This receiver is DAB only \u2014 its owner has set it up for DAB listeners.';
+let hwDabOnly = false, hwDabOnlyKnown = false;
+function dabOnlyNow(): boolean { return dabOnlyFrom(hwDabOnlyKnown, hwDabOnly, blockedModes, adminUnlocked); }
+function syncDabOnly() {
+  const only = dabOnlyNow();
+  const xb = document.getElementById('dabExit') as HTMLElement | null;
+  if (xb) xb.style.display = dabOn && !only ? '' : 'none';
+  const note = document.getElementById('dabOnlyNote') as HTMLElement | null;
+  if (note) { note.hidden = !(dabOn && only); note.title = DAB_ONLY_WHY; }
+}
+
 function syncRspAgcLock() {
   const t = document.getElementById('rspIfAgc') as HTMLButtonElement | null;
   const gr = document.getElementById('rspIfGr') as HTMLInputElement | null;

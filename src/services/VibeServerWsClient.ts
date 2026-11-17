@@ -3140,6 +3140,8 @@ export abstract class VibeServerWsClient {
       // ★ Same rule as lockedRate above: the server ENFORCES this, so a client that cannot see it
       //   offers a control whose every use is refused.
       this.callbacks.onHwAgcLocked?.(msg.agcLocked === true);
+      // ★★ V12 DAB ONLY — only when the server says; an older server never does, and the app then reads its blocked modes
+      if (typeof msg.dabOnly === 'boolean') this.callbacks.onHwDabOnly?.(msg.dabOnly);
       // ★ Same rule again: the server refuses, so the client must not offer. Absent = not locked,
       //   which is what every server before this one meant.
       this.callbacks.onHwGainLocked?.(msg.gainLocked === true);

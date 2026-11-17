@@ -311,6 +311,7 @@ import { meaningText } from '../constants/decoderTokens';
 import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, keepTranscribeLanguages, startTranscribe, stopTranscribe, setTranscribeTuning, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, sameLanguage, translateTargetLabel, type TranscribeCaps } from '../services/transcriber';
 import { autoOrder, autoLikely, togglePreferred, parsePreferred, receiverLanguageMissing, PREFERRED_MAX, type LikelyWhy } from '../services/transcribeOrder';
 import { translateRows } from '../services/translateTargets';
+import { dabOnlyFrom } from '../services/dabOnly';   // ★★ V12 DAB only — the web page's rule
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
@@ -681,6 +682,9 @@ function appendDecoderText(prev: string, add: string): string {
   return nl >= 0 ? next.slice(nl + 1) : next.slice(cut);
 }
 
+/** ★★ V12 DAB ONLY — the reason, when Back is pressed with EXIT DAB gone (the web page's DAB_ONLY_WHY, the same words). */
+export const DAB_ONLY_WHY = 'This receiver is DAB only \u2014 its owner has set it up for DAB listeners.';
+
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   /* ★★ V12 TWO SERVERS AT ONCE (src/services/dualServer.ts; Stuart's design, GitHub discussion #57). Which side of a
@@ -912,6 +916,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setAisCap(undefined);           // ★ V12 AIS / APRS — cleared first, as every per-radio answer
     setHfdlCapable(false); setAvCap(undefined);   // ★ V12 aviation — the same
     setSdCap(undefined);                          // ★ V12 radiosondes — the same
+    setHwDabOnly(null);                           // ★★ V12 DAB only — this server has not said yet
     setAprsCap({ on: false, hz: 144.8e6 });
     setDecWhy({});   // ★ V12 decoder reach: a new radio says its own
     setAntBands(null);
@@ -3952,6 +3957,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // UberSDR auto-range symmetric contrast (0–20). Web client calibration = 10.
   const [hwLockedRate, setHwLockedRate] = useState(0);   // >0 = server pinned the rate
   const [hwAgcLocked, setHwAgcLocked] = useState(false);
+  /* ★★★ V12 DAB ONLY (Stuart, 2026-11-17: "if DAB is the only allowed mode then the exit button goes, also the exit button
+   *  needs to be removed on existing servers that have been locked to DAB"): EXIT DAB REMOVED, the box says once why, and
+   *  Back says it instead of leaving. The server's word (`dabOnly`, null = an older server that never said), else its
+   *  blocked modes — services/dabOnly.ts, the web page's rule. */
+  const [hwDabOnly, setHwDabOnly] = useState<boolean | null>(null);
   /** The owner has FIXED the gain on this band — no gain controls at all. See onHwGainLocked. */
   const [hwGainLocked, setHwGainLocked] = useState(false);
   /** The least IF gain reduction the owner allows on this band, in dB; -1 = none. */
@@ -5665,6 +5675,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwGainCap,  setHwGainCap]  = useState(-1);
   /** Modes and decoders the owner has switched off on this receiver — hwinfo.blocked. */
   const [blockedModes, setBlockedModes] = useState<Set<string>>(new Set());
+  const dabOnlyHere = dabOnlyFrom(hwDabOnly !== null, hwDabOnly === true, blockedModes, adminOk);   // ★★ V12 DAB only (see hwDabOnly)
   /* ★★★ "THE RADIO IS DEAF AND THAT IS WHY YOU SEE NOTHING." Stuart: "dont want people connecting
    *   to a server seeing a flat spectrum thinking this is fucked and then leaving."
    *   A receiver sitting at minimum gain looks EXACTLY like a broken one — flat waterfall, no
@@ -7693,6 +7704,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
+      onHwDabOnly: (v: boolean) => { if (!destroyed.current) setHwDabOnly(v); },
       onHwGainLocked: (v: boolean) => { if (!destroyed.current) setHwGainLocked(v); },
       onHwIfGrFloor: (v: number) => { if (!destroyed.current) setHwIfGrFloor(v); },
       onHwGainCap: (v: number) => { if (!destroyed.current) setHwGainCap(v); },
@@ -15365,7 +15377,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onActiveLogo={setDabActiveLogo}
           lastAudioAt={() => lastAudioAtRef.current}
           audioRunStartAt={() => audioRunStartRef.current}
-          onExit={exitDab}
+          onExit={dabOnlyHere ? () => appAlert('DAB only', DAB_ONLY_WHY) : exitDab}
+          dabOnly={dabOnlyHere}
           tall={dabTall} onTall={onDabTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
           onBookmarks={() => { setFreqModalDab(true); setFreqModalOpen(true); }}

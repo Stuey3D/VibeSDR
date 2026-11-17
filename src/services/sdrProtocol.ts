@@ -552,6 +552,8 @@ export interface SDRCallbacks {
   /** ★ The owner has FORCED the AGC on: a listener may not set a gain at all. The web client has
    *  always read this; the app never did, which is why its panel offered a gain the server refuses. */
   onHwAgcLocked?: (locked: boolean) => void;
+  /** ★★ V12 DAB ONLY: the owner's locked range is DAB only — EXIT DAB greyed with the reason (false for the admin). */
+  onHwDabOnly?: (on: boolean) => void;
   /** ★★★ The owner has FIXED the gain on the band being listened to — every gain message is
    *  refused, so the panel must show no gain controls at all rather than ones that spring back.
    *  Distinct from onHwGainCap, which is a working control with a lower ceiling. Per band: it

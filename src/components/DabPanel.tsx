@@ -465,6 +465,8 @@ export interface DabPanelProps {
    *  demodulator menu it deactivates DAB fully rather than restore the box." Closing a window and
    *  leaving a mode are different intentions and now have different controls. */
   onExit: () => void;
+  /** ★★ V12 DAB ONLY: EXIT DAB removed and the box says why once (the server's `dabOnly`, or an older server's blocked modes). */
+  dabOnly?: boolean;
   /** ★ The Signal pane opened / closed — the server sends the constellation + impulse response only while it is
    *  open (dab=2, src/services/dabAssemble.ts). Optional: a host that does not pass it changes nothing. */
   onSignalPane?: (open: boolean) => void;
@@ -1110,10 +1112,14 @@ export default function DabPanel(p: DabPanelProps) {
               having lost the mode rather than having hidden a panel. The web client has never offered it.
               EXIT DAB is the honest way out: it leaves the mode as well as the window. SMALL is there for
               anyone who wants the picture back without leaving DAB. */}
-          <DecoderKey onPress={p.onExit} style={keyHl('exit')} label="EXIT DAB" />
+          {!p.dabOnly && <DecoderKey onPress={p.onExit} style={keyHl('exit')} label="EXIT DAB" />}
         </DecoderHeader>
 
-        <DecoderBody>{body}</DecoderBody>
+        <DecoderBody>
+          {/* ★★ V12 DAB ONLY: EXIT DAB is gone — say why once, so nobody hunts for it */}
+          {!!p.dabOnly && <Text style={[s.mux, { opacity: 0.75, fontSize: 11, marginBottom: 4 }]} accessibilityRole="text">DAB only on this receiver</Text>}
+          {body}
+        </DecoderBody>
     </DecoderShell>
   );
 }
