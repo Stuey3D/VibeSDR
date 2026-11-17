@@ -18138,6 +18138,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::map<int, std::unique_ptr<LrMux>> lrMux_;                   // under dabLrOpMtx_
     std::map<std::string, int> lrSess_;                             // session → block, under dabLrOpMtx_
     std::map<std::string, LrGone> lrGone_;                          // left with sockets gone (a reconnect resumes) — 120 s
+    /** ★★ V12 DAB ONLY: sessions the signed-in admin took out of DAB — never landed again until they ask for DAB. */
+    std::set<std::string> lrOptOut_;
     std::vector<std::shared_ptr<DabOwnSt>> lrGrave_;                // closed stations / multiplexes: joined on vibe-dab-lr
     std::shared_ptr<const LrView> dabLrView_;
     std::atomic<bool> dabLrRun_{false};
@@ -18169,6 +18171,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** ★★ The hardware's figure (Stuart, 2026-11-17): DAB listeners this machine carries with every block of THIS range
      *  decoding (vsDabLrListeners), up to the user limit, less the multiplexes' own streams. */
+    /** ★★★ V12 DAB ONLY (Stuart, 2026-11-17: "for locked range mode the owner would disable all demodulators/decoders and
+     *  just leave DAB active and in that mode the user cannot leave DAB at all"). A wide locked range (dabLrEligible) whose
+     *  owner has blocked EVERY demodulator but DAB — decoders need a demodulator, so they follow. Then each listener lands
+     *  in DAB on their own multiplex (dabLrTick) and may not leave it; the signed-in admin may, as with every lock. */
+    /*  ★★ AND ANY RADIO, NOT ONLY A WIDE RANGE (Stuart, 2026-11-17: "if DAB is the only allowed mode then the exit button
+     *     goes, also the exit button needs to be removed on existing servers that have been locked to DAB"): a whole-radio
+     *     DAB server (one multiplex, a community DAB server) is DAB only the same way — listeners land in DAB and stay.
+     *     "The only allowed mode" = every demodulator AND every whole-radio mode that would move the radio is blocked. */
+    bool dabOnlyNow() const {
+        if (vsModeBlocked("dab")) return false;
+        static const char* kOthers[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
+                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17",
+                                         "adsb", "ism", "ndb", "ais", "avdata", "sondes" };
+        for (const char* m : kOthers) if (!vsModeBlocked(m)) return false;
+        return perClientDsp() ? dabLrEligible() : vsDabCapable();
+    }
+    static constexpr const char* kDabOnlyWhy = "this receiver is DAB only \xe2\x80\x94 its owner has set it up for DAB listeners";
     int lrCap() {
         const double c = lrCentre(), r = sampleRate;
         return vibedab::wide::stationCap(g_dabOwnSetting.load(), vsDabLrListeners(c, r), g_vsMaxUsers.load(),
@@ -18363,6 +18382,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // type == "dab"
         double onV = 0; jsonNum(msg, "on", onV);
         if (onV == 0) {
+            // ★★ V12 DAB ONLY: a listener may not leave (the owner's set-up); the signed-in admin may, and is not landed again
+            if (dabOnlyNow()) {
+                if (!adminNow(sock)) {
+                    LOGI("[DAB-LR] DAB only: a listener's \"DAB off\" refused [%s]", sess.c_str());
+                    sendText(sock, std::string("{\"type\":\"dab_error\",\"why\":\"") + kDabOnlyWhy + "\"}");
+                    return true;
+                }
+                std::lock_guard<std::mutex> op(dabLrOpMtx_);
+                lrOptOut_.insert(sess);
+                LOGI("[DAB-LR] DAB only: the signed-in admin leaves DAB [%s]", sess.c_str());
+            }
             {
                 std::lock_guard<std::mutex> op(dabLrOpMtx_);
                 if (!lrSess_.count(sess)) return false;   // ★ not in DAB here: nothing to leave (the old path answers)
@@ -18400,6 +18430,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             idx = vibedab::wide::choose(want, s == lrSess_.end() ? -1 : s->second, in);
             if (idx < 0) { sendText(sock, "{\"type\":\"dab_error\",\"why\":\"no DAB block lies wholly inside this receiver's range\"}"); return true; }
             lrGone_.erase(sess);
+            lrOptOut_.erase(sess);   // ★★ V12 DAB only: they asked for DAB again
             lrJoinLocked_(sess, idx, uint32_t(sidV), sock);
             std::map<std::string, std::vector<std::shared_ptr<net::Socket>>> spec, aud; lrSockets(spec, aud);
             lrPublishLocked_(spec, aud);
@@ -18442,6 +18473,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                     ++it;
                 }
+            /* ★★★ V12 DAB ONLY: every listener LANDS in DAB on their own multiplex, without asking — the owner's landing
+             *  block (and station) when it is inside the range, else the radio's last block, else the middle one in range
+             *  (vibedab::wide::choose). Both sockets here; not already in, not coming back within the grace period, not an
+             *  admin who chose to leave. */
+            for (auto it = lrOptOut_.begin(); it != lrOptOut_.end();) it = (spec.count(*it) || aud.count(*it)) ? std::next(it) : lrOptOut_.erase(it);
+            if (eligible && dabOnlyNow()) {
+                const std::vector<int> in = vibedab::wide::blocksIn(lrCentre(), sampleRate);
+                const int land = g_vsLandingDabCh.load(std::memory_order_relaxed);
+                const int want = land >= 0 ? land : g_dabWantChannel.load(std::memory_order_relaxed);
+                const int idx = vibedab::wide::choose(want, -1, in);
+                const uint32_t sid = idx >= 0 && idx == land ? g_vsLandingDabSid.load(std::memory_order_relaxed)
+                                   : idx >= 0 && idx == g_dabWantChannel.load(std::memory_order_relaxed) ? g_dabWantSid.load(std::memory_order_relaxed) : 0u;
+                if (idx >= 0)
+                    for (const auto& kv : spec) {
+                        const std::string& s = kv.first;
+                        if (lrSess_.count(s) || lrOptOut_.count(s) || !aud.count(s) || lrGone_.count(s)) continue;
+                        lrJoinLocked_(s, idx, sid, nullptr);
+                        LOGI("[DAB-LR] DAB only: a listener lands on %s [%s]", vibedab::kBandIII[idx].name, s.c_str());
+                    }
+            }
             lrPublishLocked_(spec, aud);
             // ★★ §11.2 the radio's one clock reading, every 2 s, from every open multiplex
             if (now - lrLastClk_ >= 2.0 && !lrMux_.empty()) {
@@ -18516,7 +18567,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         while (dabLrRun_.load(std::memory_order_relaxed)) {
             dabLrTick();
             // ★ Nobody in DAB for 30 s: the threads stop (they start again with the next listener)
-            if (lrEmptySince_ > 0 && nowSecs() - lrEmptySince_ > 30.0) { dabLrRun_.store(false); break; }
+            if (lrEmptySince_ > 0 && nowSecs() - lrEmptySince_ > 30.0 && !dabOnlyNow()) { dabLrRun_.store(false); break; }   // ★★ V12 DAB only: kept
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
         dabLrTick();
@@ -22052,6 +22103,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      asker.empty() ? "?" : asker.c_str(), on ? (hasCh ? " with a block" : " — no block, the last one") : "",
                      g_dabMode.load(std::memory_order_relaxed) ? "on" : "off");
             }
+            /* ★★★ V12 DAB ONLY, WHOLE RADIO: a listener may not leave (the server's own moves — sock null — and the signed-in
+             *  admin may). See dabOnlyNow. */
+            if (!on && sock && dabOnlyNow() && !adminNow(sock)) {
+                LOGI("[DAB] DAB only: a listener's \"DAB off\" refused");
+                sendText(sock, std::string("{\"type\":\"dab_error\",\"why\":\"") + kDabOnlyWhy + "\"}");
+                return;
+            }
             if (!on) {
                 /* ★★★ ON A SHARED RADIO, ONE LISTENER CANNOT END DAB FOR THE OTHERS. Measured on
                  *  the Xcover (2026-09-07, three headless clients): the second listener pressed
@@ -24102,6 +24160,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *  ★ [[disabled_control_reads_as_absent]] — a greyed switch reads as a
                        *    missing feature, which is how "the override isnt working" looks from
                        *    the outside even once the server would allow it. */
+                      /* ★★ V12 DAB ONLY: EXIT DAB greyed with the reason (false for the signed-in admin, who may leave) */
+                      + std::string(",\"dabOnly\":") + ((dabOnlyNow() && !adminNow(sock)) ? "true" : "false")
                       + ",\"agcLocked\":"
                       + ((LocalSdrShim::agcLocked() && !adminNow(sock)) ? "true" : "false")
                       /* ★★★ AND WHETHER THE GAIN CAN MOVE AT ALL. `gainCap` alone says "no higher
@@ -29256,6 +29316,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             bool landOnAdsb = adsbLand && newSession
                            && (startOnAdsb || (!adminOk.load() && !preTuned && !sharedDialNow));
+            /* ★★★ V12 DAB ONLY, WHOLE RADIO: a new listener LANDS in DAB — the owner's landing block (and station) when set,
+             *  else the radio's last block, else the server's own choice (the "no block named" rule). A radio already in DAB
+             *  just carries on. (A wide locked range lands each listener on their own multiplex in dabLrTick instead.) */
+            if (!landOnDab && !landOnAdsb && newSession && !perClientDsp() && dabOnlyNow() && !g_dabMode.load(std::memory_order_relaxed)) {
+                const int land = landDabCh >= 0 && size_t(landDabCh) < vibedab::kBandIIICount ? landDabCh : g_dabWantChannel.load(std::memory_order_relaxed);
+                const uint32_t sid = land == landDabCh ? g_vsLandingDabSid.load(std::memory_order_relaxed) : g_dabWantSid.load(std::memory_order_relaxed);
+                LOGI("[DAB] DAB only: a new listener lands in DAB%s", land >= 0 ? (std::string(" on ") + vibedab::kBandIII[land].name).c_str() : "");
+                handleControl(sock, std::string("{\"type\":\"dab\",\"on\":1") + (land >= 0 ? ",\"channel\":" + std::to_string(land) : std::string())
+                              + (land >= 0 && sid ? ",\"sid\":" + std::to_string(sid) : std::string()) + "}");
+            }
             // ★ A radio already in ADS-B was not "left on a block" — its last state IS ADS-B (kept running)
             if (!landOnDab && !landOnAdsb && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
                 && !g_dabMode.load(std::memory_order_relaxed) && !g_adsbMode.load(std::memory_order_relaxed)
@@ -36405,6 +36475,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  Signed in, the admin may switch either AGC off; once nobody is (signed out, left, or re-locked for idleness) the
      *  RF loop is switched back on here and the IF AGC in the RSP heartbeat, which owns the hardware. Every 2 s. */
     void lockReassertTick() {
+        if (perClientDsp() && dabOnlyNow()) dabLrEnsureThreads();   // ★★ V12 DAB only: the locked-range tick lands arrivals
         const bool admin = anyAdminSignedIn();
         g_vsAdminPresent.store(admin);
         if (admin || !LocalSdrShim::agcLocked()) return;
