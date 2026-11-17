@@ -10,15 +10,22 @@
 // OUTPUT CONTRACT = vibe_dab_ddc.h DabDdc::process: interleaved complex at 2.048 MS/s centred on the block, appended — a
 // multiplex decoder cannot tell which front end fed it (DabService::feedChannelised).
 // Block frequencies come from the caller (kBandIII), never from a spacing. SIMD: pffft (NEON / SSE). Bounded: the spectra
-// are N complex floats per hop, nothing grows with time. No threads here: vibe_dab_bank_runner.h owns them.
+// are N complex floats per hop, nothing grows with time. Runner (below) owns the threads.
 #pragma once
 #include "vibe_dab_ddc.h"
 #include "vibedsp/third_party/pffft/pffft.h"
+#include "vibe_thread.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 namespace vibedab {
@@ -175,11 +182,19 @@ public:
     bool setSlice(size_t i, double shiftHz) {
         if (i >= slices_.size()) slices_.resize(i + 1);
         if (!std::isfinite(shiftHz)) { slices_[i].reset(); return true; }
-        auto s = std::make_unique<Slice>();
+        auto s = std::make_shared<Slice>();
         if (!s->configure(P_, hf_, shiftHz)) { slices_[i].reset(); return false; }
         slices_[i] = std::move(s);
         return true;
     }
+    /** ★ Build a slice for a block WITHOUT touching the running bank (any thread: hf_ is fixed after configure) — the runner
+     *  builds new ones off its own thread, so opening a multiplex never stalls the hops. Null when it does not fit. */
+    std::unique_ptr<Slice> makeSlice(double shiftHz) const {
+        auto s = std::make_unique<Slice>();
+        if (!s->configure(P_, hf_, shiftHz)) return nullptr;
+        return s;
+    }
+    void putSlice(size_t i, std::shared_ptr<Slice> s) { if (i >= slices_.size()) slices_.resize(i + 1); slices_[i] = std::move(s); }
     size_t slices() const { return slices_.size(); }
     /** Feed `n` complex input samples; every Slice appends its 2.048 MS/s output to `outs[i]` (outs.size() ≥ slices()).
      *  `onHop` (optional) runs per hop with the spectrum — the runner hands slices to its workers through it. */
@@ -211,7 +226,164 @@ private:
     std::unique_ptr<float, AlignedFree> buf_, X_, wk_;
     std::vector<float> hf_;
     int fill_ = 0;
-    std::vector<std::unique_ptr<Slice>> slices_;
+    std::vector<std::shared_ptr<Slice>> slices_;
+};
+
+
+/** ★★★ THE BANK ON ITS OWN THREADS (vibe-dab-bank + workers, the DDCs' rung). vibe-dsp hands it each block ONCE — a copy and
+ *  a notify, never the DSP — into a BOUNDED queue (past ~8 MB the OLDEST block is dropped and counted, never the reader
+ *  held). Per block: vibe-dab-bank computes every hop's spectrum (the only full-rate work), then the multiplexes are split
+ *  between it and its workers (each takes every W-th), each running its slice over all of the block's hops and handing its
+ *  2.048 MS/s to its sink — the decoder's queue, as the DDC thread does. Outputs change between blocks only (setOutputs). */
+class Runner {
+public:
+    /** `sink(samples2048, n, nRaw)` — nRaw: the wide samples this output stands for (the decoder counts what ARRIVED). */
+    using Sink = std::function<void(const float*, size_t, size_t)>;
+    struct Out { int key = -1; double shiftHz = 0; Sink sink; std::shared_ptr<Slice> ready; };
+    Runner(double fs, int workers) : fs_(fs), workers_(std::max(0, workers)) {
+        bank_.configure(fs);
+        thr_ = std::thread([this] { loop_(); });
+        for (int w = 0; w < workers_; ++w) pool_.emplace_back([this, w] { work_(w + 1); });
+    }
+    ~Runner() {
+        { std::lock_guard<std::mutex> lk(m_); stop_ = true; }
+        cv_.notify_all();
+        { std::lock_guard<std::mutex> lk(wm_); wstop_ = true; }
+        wcv_.notify_all();
+        if (thr_.joinable()) thr_.join();
+        for (auto& t : pool_) if (t.joinable()) t.join();
+    }
+    Runner(const Runner&) = delete; Runner& operator=(const Runner&) = delete;
+    double rate() const { return fs_; }
+    int workers() const { return workers_; }
+    const Plan& plan() const { return bank_.plan_(); }
+    /** The multiplexes to cut (by key = block index), applied before the next block. A key kept keeps its slice's state. */
+    void setOutputs(std::vector<Out> outs) {
+        // ★ new blocks get their slice built HERE, on the caller's thread — the bank thread only swaps pointers between blocks
+        std::vector<std::pair<int, double>> live;
+        { std::lock_guard<std::mutex> lk(m_); live = live_; }
+        for (auto& o : outs)
+            if (std::find(live.begin(), live.end(), std::make_pair(o.key, o.shiftHz)) == live.end()) o.ready = std::shared_ptr<Slice>(bank_.makeSlice(o.shiftHz));
+        std::lock_guard<std::mutex> lk(m_); pending_ = std::move(outs); havePending_ = true;
+        cv_.notify_one();
+    }
+    void feed(const float* iq, size_t n) {
+        if (!n) return;
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            std::vector<float> b;
+            if (!free_.empty()) { b.swap(free_.front()); free_.pop_front(); }
+            b.assign(iq, iq + 2 * n);
+            qFloats_ += b.size();
+            q_.push_back(std::move(b));
+            static constexpr size_t kCapFloats = (8u << 20) / sizeof(float);
+            while (qFloats_ > kCapFloats && q_.size() > 1) {
+                dropped_.fetch_add(q_.front().size() / 2, std::memory_order_relaxed);
+                qFloats_ -= q_.front().size();
+                free_.push_back(std::move(q_.front())); q_.pop_front();
+            }
+        }
+        cv_.notify_one();
+    }
+    uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
+    uint64_t blocks() const { return blocks_.load(std::memory_order_relaxed); }
+private:
+    struct Cut { int key; double shiftHz; Sink sink; size_t slot; std::vector<float> out; };
+    void apply_() {
+        std::vector<Out> want;
+        { std::lock_guard<std::mutex> lk(m_); if (!havePending_) return; want.swap(pending_); havePending_ = false; }
+        std::vector<Cut> next;
+        std::vector<char> used;
+        auto mark = [&](size_t slot) { if (used.size() <= slot) used.resize(slot + 1, 0); used[slot] = 1; };
+        std::vector<char> kept(want.size(), 0), stays(cuts_.size(), 0);
+        for (size_t w = 0; w < want.size(); ++w)                      // ★ kept: same block, same place — its state goes on
+            for (size_t c = 0; c < cuts_.size(); ++c)
+                if (!stays[c] && cuts_[c].key == want[w].key && cuts_[c].shiftHz == want[w].shiftHz) {
+                    stays[c] = 1; kept[w] = 1; cuts_[c].sink = want[w].sink; mark(cuts_[c].slot); next.push_back(std::move(cuts_[c])); break;
+                }
+        for (size_t c = 0; c < cuts_.size(); ++c) if (!stays[c]) bank_.putSlice(cuts_[c].slot, nullptr);   // gone: emptied
+        for (size_t w = 0; w < want.size(); ++w) {
+            if (kept[w] || !want[w].ready) continue;                    // ★ not built = the block does not fit this capture
+            size_t slot = 0; while (slot < used.size() && used[slot]) ++slot;
+            bank_.putSlice(slot, want[w].ready);
+            mark(slot);
+            next.push_back({ want[w].key, want[w].shiftHz, want[w].sink, slot, {} });
+        }
+        cuts_.swap(next);
+        std::lock_guard<std::mutex> lk(m_);
+        live_.clear(); for (const auto& c : cuts_) live_.push_back({ c.key, c.shiftHz });
+    }
+    void loop_() {
+        vibeAudioThread("vibe-dab-bank");
+        std::vector<float> b;
+        while (true) {
+            {
+                std::unique_lock<std::mutex> lk(m_);
+                if (b.capacity()) { if (free_.size() < 8) free_.push_back(std::move(b)); b = std::vector<float>(); }
+                cv_.wait(lk, [this] { return stop_ || !q_.empty() || havePending_; });
+                if (stop_) return;
+                if (q_.empty()) { lk.unlock(); apply_(); continue; }
+                b.swap(q_.front()); q_.pop_front(); qFloats_ -= b.size();
+            }
+            apply_();
+            const size_t n = b.size() / 2, N2 = size_t(2 * bank_.plan_().N);
+            hops_ = 0;
+            bank_.processHops(b.data(), n, [&](const float* X) {
+                if (spec_.size() < (hops_ + 1) * N2) spec_.resize((hops_ + 1) * N2);
+                std::memcpy(spec_.data() + hops_ * N2, X, sizeof(float) * N2);
+                ++hops_;
+            });
+            blocks_.fetch_add(1, std::memory_order_relaxed);
+            nRaw_ = n;
+            if (cuts_.empty()) continue;
+            // ★ the slices: this thread takes every (W+1)-th from 0, each worker its own residue
+            if (workers_ > 0 && cuts_.size() > 1) {
+                { std::lock_guard<std::mutex> lk(wm_); ++gen_; busy_ = workers_; }
+                wcv_.notify_all();
+                runShare_(0);
+                std::unique_lock<std::mutex> lk(wm_);
+                dcv_.wait(lk, [this] { return busy_ == 0; });
+            } else runShare_(-1);
+        }
+    }
+    /** `who` = 0 … workers (the bank thread is 0), or -1 = every cut. */
+    void runShare_(int who) {
+        const size_t N2 = size_t(2 * bank_.plan_().N), step = size_t(workers_ + 1);
+        for (size_t k = 0; k < cuts_.size(); ++k) {
+            if (who >= 0 && k % step != size_t(who)) continue;
+            Cut& c = cuts_[k];
+            Slice* s = bank_.slice(c.slot);
+            if (!s) continue;
+            c.out.clear();
+            for (size_t h = 0; h < hops_; ++h) s->hop(spec_.data() + h * N2, c.out);
+            if (!c.out.empty() && c.sink) c.sink(c.out.data(), c.out.size() / 2, nRaw_);
+        }
+    }
+    void work_(int who) {
+        vibeAudioThread("vibe-dab-bankw");
+        uint64_t seen = 0;
+        while (true) {
+            {
+                std::unique_lock<std::mutex> lk(wm_);
+                wcv_.wait(lk, [&] { return wstop_ || gen_ != seen; });
+                if (wstop_) return;
+                seen = gen_;
+            }
+            runShare_(who);
+            { std::lock_guard<std::mutex> lk(wm_); if (--busy_ == 0) dcv_.notify_one(); }
+        }
+    }
+    double fs_; int workers_;
+    Bank bank_;
+    std::vector<Cut> cuts_;
+    std::vector<float> spec_; size_t hops_ = 0, nRaw_ = 0;
+    std::mutex m_; std::condition_variable cv_;
+    std::deque<std::vector<float>> q_, free_; size_t qFloats_ = 0; bool stop_ = false;
+    std::vector<Out> pending_; bool havePending_ = false;
+    std::vector<std::pair<int, double>> live_;   // (key, shift) of the cuts running — read by setOutputs under m_
+    std::mutex wm_; std::condition_variable wcv_, dcv_; uint64_t gen_ = 0; int busy_ = 0; bool wstop_ = false;
+    std::atomic<uint64_t> dropped_{0}, blocks_{0};
+    std::thread thr_; std::vector<std::thread> pool_;
 };
 
 }  // namespace bank

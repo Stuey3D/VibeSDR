@@ -508,6 +508,22 @@ public:
         { std::lock_guard<std::mutex> lk(m_); iq_.clear(); iqHead_ = 0; }
         { std::lock_guard<std::mutex> ik(inM_); inQ_.clear(); }
     }
+    /** ★★ V12 §11.1 THE BANK'S HAND-OVER (vibe_dab_bank.h Runner): 2.048 MS/s already cut out of the wide capture by the shared
+     *  filter bank — the same append the DDC thread ends in (queueForWorker_), so the decoder cannot tell which front end fed
+     *  it. `nRaw` = the wide samples it stands for. Called on the bank's threads; never with the DDC path for the same block. */
+    void feedChannelised(const float* x2048, size_t n, size_t nRaw) {
+        if (!started_.load()) {
+            std::lock_guard<std::mutex> lk(m_);
+            if (!started_.load()) {
+                stop_ = false;
+                { std::lock_guard<std::mutex> ik(inM_); inStop_ = false; }
+                started_ = true;
+                worker_ = std::thread([this] { workerLoop(); });
+            }
+        }
+        wideActive_.store(true, std::memory_order_relaxed);
+        queueForWorker_(x2048, n, nRaw);
+    }
     /** ★ The DDC thread's counters, for the report and the tests: input samples dropped for falling behind. */
     uint64_t wideDropped() const { return wDropped_.load(std::memory_order_relaxed); }
     bool wideActive() const { return wideActive_.load(std::memory_order_relaxed); }

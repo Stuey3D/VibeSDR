@@ -12,6 +12,9 @@
 #include <cstdio>
 #include <random>
 #include <string>
+#include <thread>
+#include <mutex>
+#include <climits>
 
 using namespace vibedab;
 static int fails = 0, passes = 0;
@@ -113,6 +116,33 @@ int main() {
         const double delaySamples = -k / (2 * M_PI) * DabDdc::kOutHz;
         ok(worstDb < 0.1 && worstPh < 0.02, "★ " + std::to_string(int(rate / 1e6)) + " MS/s: in-band, the bank's output is the DDC's — amplitude within "
            + std::to_string(worstDb) + " dB, phase within " + std::to_string(worstPh) + " rad of a pure delay (" + std::to_string(delaySamples) + " samples)");
+    }
+    // ── the runner: its own threads, 26 outputs at 56 MS/s, every sink fed, the queue never holding the reader ──
+    {
+        const double secs = 0.6;
+        const int nb = 26;
+        std::vector<std::pair<double, double>> ts;
+        for (int k = 0; k < nb; ++k) ts.push_back({ -0.42 * fs + 0.8e6 + k * 1.712e6 + 200e3, 0.03 });
+        const auto x = tones(fs, secs, ts, 11);
+        bank::Runner r(fs, 3);
+        std::vector<std::vector<float>> got(nb);
+        std::mutex gm;
+        std::vector<bank::Runner::Out> outs;
+        for (int k = 0; k < nb; ++k) outs.push_back({ k, -0.42 * fs + 0.8e6 + k * 1.712e6, [&, k](const float* y, size_t n, size_t) { std::lock_guard<std::mutex> lk(gm); got[size_t(k)].insert(got[size_t(k)].end(), y, y + 2 * n); } });
+        r.setOutputs(outs);
+        const auto t0 = std::chrono::steady_clock::now();
+        const size_t blk = 262144;
+        // ★ at the radio's own pace (real time): the runner must keep up with nothing dropped
+        for (size_t i = 0; i < x.size() / 2; i += blk) { r.feed(x.data() + 2 * i, std::min(blk, x.size() / 2 - i)); std::this_thread::sleep_until(t0 + std::chrono::microseconds((long long)(1e6 * double(i + blk) / fs))); }
+        for (int w = 0; w < 400 && r.blocks() + r.dropped() / blk < (x.size() / 2 + blk - 1) / blk; ++w) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        size_t minN = SIZE_MAX; for (auto& g : got) minN = std::min(minN, g.size() / 2);
+        ok(minN > size_t(0.55 * DabDdc::kOutHz), "★ the runner (3 workers): all 26 outputs fed, each ≥ " + std::to_string(minN) + " samples from 0.6 s at 56 MS/s");
+        ok(r.dropped() == 0, "…nothing dropped, fed at the radio's pace (dropped " + std::to_string(r.dropped()) + ")");
+        double pt = 0, pr = 0; toneSnr(got[13], 200e3, pt, pr);
+        ok(10 * std::log10(pt / pr) > 40, "…and a block's tone is pure through the threads (" + std::to_string(10 * std::log10(pt / pr)) + " dB, 25 neighbours present)");
+        std::printf("  runner 56 MS/s × 26 blocks, 3 workers + the bank thread: kept up in real time (%.2f s for %.1f s of capture)\n", wall, secs);
     }
     // ── the costs (for the record; the benchmark measures them on the box) ──
     for (double rate : { 8e6, 16e6, 32e6, 56e6 }) {
