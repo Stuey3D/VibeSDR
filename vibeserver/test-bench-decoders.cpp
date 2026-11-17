@@ -107,6 +107,11 @@ int main() {
     ok(std::string(ruleFor("dec_lora_all").sw) == "lora+all" && !ruleFor("dec_lora_all").primary && !ruleFor("dec_lora_all").slot,
        "dec_lora_all names the owner's \"lora+all\", never switches anything off and is no slot (the readers tick it ON when green)");
     ok(!ruleFor("dec_ndb").slot && !ruleFor("dec_lora").slot && !ruleFor("dec_ft8band").slot, "whole-radio modes and Band are not the decoder limit's yardstick");
+    // ★★ V12 DAB own station: its row sets N (the dabStations block, vibe_dab_own.h nFromBench) and nothing else
+    ok(std::string(ruleFor("dec_dab_station").sw).empty() && !ruleFor("dec_dab_station").primary && !ruleFor("dec_dab_station").slot,
+       "dec_dab_station switches nothing off and is no slot (it sets the own-station N)");
+    ok(vibedab::own::nFromBench(13.0, 107.0, 4) == 8 && vibedab::own::nFromBench(0.32, 1.9, 15) == 16 && vibedab::own::nFromBench(-1, 50, 4) == 0,
+       "the own-station N: the Pi 2's measured figures give 8, the Mac's the cap (16), no row 0");
     // ★ Stuart, 2026-10-31: the first eight rows keep their old behaviour — flagged below green, never switched off.
     for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora" })
         ok(!ruleFor(id).primary, std::string(id) + " is never switched off by the benchmark (flagged only)");

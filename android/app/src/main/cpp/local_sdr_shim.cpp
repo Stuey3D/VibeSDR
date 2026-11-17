@@ -17809,7 +17809,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             if (dab) dabOwnPublishLocked_(on, audio, all);
             else { std::lock_guard<std::mutex> lk(dabOwnViewMtx_); dabOwnView_.reset(); }
-            reap.swap(dabOwnGrave_);
+            /* ★ ONLY WHAT NOBODY ELSE HOLDS: the audio clock may still have last tick's view (and through it a closed
+             *  station) for one 20 ms pass — that station waits here for the next tick, so its thread never joins there. */
+            std::vector<std::shared_ptr<DabOwnSt>> keep;
+            for (auto& g : dabOwnGrave_) (g.use_count() == 1 ? reap : keep).push_back(std::move(g));
+            dabOwnGrave_.swap(keep);
         }
         reap.clear();   // ★ HERE: the last references — each station's thread joins on this thread, never the audio clock
     }
