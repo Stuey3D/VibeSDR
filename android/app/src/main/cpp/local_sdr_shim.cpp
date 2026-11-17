@@ -6096,7 +6096,7 @@ static int   vsDesiredAgcSet();
  *   a rebuilt Impl both see it, and it does that from the retune path. */
 static void  vsRecordNotchChoice(bool rf, bool dab);
 /* ★ Evaluate and apply the automatic notches for a frequency. Returns true if anything moved. */
-static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz);
+static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz, bool dabCapture = false);
 /** ★ The owner's per-band aerial list, and the rule that follows from it at a frequency.
  *  Forward-declared for the same reason as its neighbours — the retune path sits above it. */
 static void  vsApplyAutoAntenna(SdrplaySource* sdrp, double hz);
@@ -14607,11 +14607,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *   wrong, and it was sitting there as documentation the whole time.
              * ★ The capture centre is the multiplex centre in DAB and the right answer everywhere
              *   else the audio VFO is absent. */
-            const double notchHz = g_dabMode.load(std::memory_order_relaxed)
-                                 ? rtlCenter.load()
-                                 : LocalSdrShim::instance().listenFrequency();
+            /* ★★★ V12 AND A LOCKED RANGE HAS NO ONE LISTEN FREQUENCY (Lenovo, 2026-11-17: the 65-station run at
+             *     215.14 MHz logged "listen frequency 0.000 MHz" and the auto rule stopped; with the DAB notch left in
+             *     by the start-up state the whole of Band III was cut, and the weak 10D lost every DAB+ station).
+             *     There, as in DAB, the capture centre is what the notches act on; and a wide range that holds Band III
+             *     blocks (dabLrEligible) is a DAB capture, so the DAB notch is out wherever its centre sits. */
+            const double lf = LocalSdrShim::instance().listenFrequency();
+            const bool lrDab = dabLrEligible();
+            const double notchHz = (g_dabMode.load(std::memory_order_relaxed) || lrDab || lf <= 0) ? rtlCenter.load() : lf;
             vsApplyAutoAntenna(sdrp.get(), notchHz);   // ★ same two call sites as the notch
-            if (vsApplyAutoNotch(sdrp.get(), notchHz))
+            if (vsApplyAutoNotch(sdrp.get(), notchHz, lrDab))
                 for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
             if (n % 2 == 0) {
                 /* ★★★ 320, AND CHECKED. This was 160 and the message has just grown five fields;
@@ -38695,7 +38700,7 @@ static void vsApplyAutoAntennaFrom(const std::string& now, double hz) {
     LocalSdrShim::instance().setRspAntenna(want);
 }
 
-static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz) {
+static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz, bool dabCapture) {
     /* ★★★ SAY WHY NOTHING HAPPENED. This returned false on three different conditions without a
      *     word, so "the notches are not working" had three possible causes and no way to tell
      *     them apart — and I spent two rounds guessing instead of knowing. Rate-limited to once
@@ -38715,7 +38720,8 @@ static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz) {
                  hz / 1e6);
         return false;
     }
-    const VsNotchWant w = vsAutoNotchFor(hz, g_dabMode.load(std::memory_order_relaxed));
+    // ★★ V12 a wide locked range holding Band III blocks is a DAB capture too (Phase 2): the DAB notch stays out
+    const VsNotchWant w = vsAutoNotchFor(hz, g_dabMode.load(std::memory_order_relaxed) || dabCapture);
     /* ★★★ COMPARE AGAINST WHAT THE RADIO IS ACTUALLY SET TO, NOT AGAINST WHAT WE LAST DECIDED.
      *     This kept its own `lastRf`/`lastDab` cache and wrote only when its OWN answer changed.
      *     That is idempotence measured against the wrong thing: the moment anything else moved a
@@ -43111,6 +43117,11 @@ int LocalSdrShim::startSdrplay(int index,
     //        right for a 2.5-10.5 MHz HF demo is catastrophic one band up. The operator says.
     if (g_vsRfNotch.load())  { impl->sdrp->setRfNotch(true);  LOGI("RSP: RF notch ON (owner)"); }
     if (g_vsDabNotch.load()) { impl->sdrp->setDabNotch(true); LOGI("RSP: DAB notch ON (owner)"); }
+    /* ★★★ V12 AND RECORD WHAT THE RADIO NOW HAS. The automatic rule compares its answer with the recorded state, never
+     *     with its own past decisions (vsApplyAutoNotch) — but this start-up write set the HARDWARE and recorded nothing,
+     *     so at 215.14 MHz the rule's "DAB notch off" matched a record of "off" while the radio's notch was ON, and it
+     *     was never taken out (the Lenovo's 65-station run, 2026-11-17: 10D's DAB+ stations silent). */
+    vsRecordNotchChoice(g_vsRfNotch.load(), g_vsDabNotch.load());
 
     impl->fftSize = fftSizeForRate(impl->sampleRate);
     impl->startEngine();

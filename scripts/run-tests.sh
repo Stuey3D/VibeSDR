@@ -582,6 +582,7 @@ if node scripts/test-setup-bg-release.mjs; then pass=$((pass+1)); else fail=$((f
 # ★★ Background decoding and the decoder slots (2026-10-22): one radio → VFOs capped at the slots; several → the tier list.
 if node scripts/test-setup-bg-tiers.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-bench-stale.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node scripts/test-rsp-notch-lr.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE GOVERNOR MENU OFFERS ONLY WHAT THIS MACHINE HAS (2026-10-19): the Lenovo's intel_pstate has no schedutil.
 if node scripts/test-setup-governors.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE WATERFALL RATE MENU SHOWS THE RATE THE SERVER RUNS (11.0.9): a hand-set 15 is "15 fps (set by hand)", never "Full · 20".
