@@ -397,5 +397,36 @@ listener's mux is knocked off (test-afc "it glided").
     and the background decoders back (NAVTEX 489.5 and 517.5, the NDB skimmer, spots) on 648 kHz AM.
   - Run a test binary from a scratch directory with its own config, or stop the service and run it. Never
     apt-install a test build there, and never build there.
+- **THE LIVE RUN, 2026-11-17 ~20:00 (Lenovo i5-11300H, 4 cores / 8 threads, 15.8 GB; the RSP1A on its YouLoop; build
+  317ced644 made in the Lenovo's bookworm build container into a scratch dir, never installed).** The service was stopped
+  19:53:58–~20:13:30 (~19.5 min, both ports at 0 listeners first); the test ran from /var/tmp with its own copy of the
+  config (locked range 215.140 MHz, 8 MS/s, 70 users, own station forced on, no directory/tunnel/mDNS). Afterwards
+  the config hashed identical (sha256 3979924e…), the service and radio came back on 648 kHz AM with background
+  decoding on, and the scratch dirs were removed.
+  - **Benchmark on the Lenovo first (vibeserver-bench, 138 s):** per station 1.44 % of a core (decode + FAAD2 + its
+    Opus encode), one multiplex's front end 2.50 %, one block's DDC out of 8 MS/s 5.15 % → **DAB listeners for this
+    range (three blocks at 8 MS/s): (8 × 70 − 70 − 3 × 7.65) / 1.44 = 324.** Locked-range profiles at 2.048 MS/s:
+    FM (WFM + Advanced RDS) 7.26 % per listener → 67; narrow (SSB/AM/NFM, heaviest) 0.43 % → 1150; DAB one block 337.
+  - **65 listener sessions, each on a different service** (10C 16, 10D 19, 11A 30 — the ensemble labels decoded:
+    *Northamptonshire*, *Herts Beds Bucks*, *SDL National*), from the Mac over the LAN through one SSH tunnel to the
+    radio's localhost port (no node on the Lenovo). 62 stations opened + the three multiplexes' own streams. Held
+    300 s (after a 10 s warm-up):
+    - **10C 16/16 and 11A 30/30 decoding 100 %**, each listener 12.3 kB/s (the full stream);
+    - **10D: 2/19 at ≥ 90 %** (its MP2 services), the DAB+ ones silent — MER 8.1 dB, FIB 0.943, MSC BER 0.137,
+      0 of 13 569 super frames good. 10D is the weak multiplex; the single-mux live reading on this RSP (2026-11-16)
+      was MER 9.2, FIB 12/12, BER 0.098. A clean single-mux reading in this session failed (the test client lost its
+      sockets on the retune) and was abandoned to keep the downtime short. ★ OPEN: the log shows the owner's DAB
+      notch ON at start and no "auto notch: DAB notch off" in the locked range (no single listen frequency there), so
+      the Band III notch may have been in during the run — check before reading 10D's figure as the wide mode's.
+    - **Continuity:** every listener's longest gap 261–279 ms, one per listener, identical across all 65 — the
+      client's own start-of-window blocking call, not the server (a first run that polled the server synchronously
+      every 5 s showed exactly 300 / 5 = 60 such gaps on every listener).
+    - **Server: 201 % of ONE core in total (of 800 %), RSS 284 MB.** Hottest threads mid-run: vibe-dsp 20 %, the
+      three DDCs ~9 % each, the three OFDM/FIC front ends ~4–5 % each, each station ~1 %.
+    - **Network: 598 kB/s in all (~4.8 Mbit/s); 9.2 kB/s mean per listener** (12.3 where audio flows).
+  - **Verdict:** 65 simultaneous listeners on their own services across three multiplexes from one RSP1A ran on the
+    i5 at a quarter of the machine, with audio throughout on 10C and 11A. 10D's DAB+ stations did not decode live
+    (signal, possibly the notch above) — so **48 of 65 audible (all 46 on 10C and 11A + 10D's 2 MP2), 65 of 65
+    served** on their own service. Results: ~/VibeSDR-test-audio/dab-wide/results-2026-11-17/lenovo-*; the client: scripts/bench-server-dab-wide-lr-remote.mjs.
 - Then scale up: the Almere B210 at 56 MS/s, most of Band III. That only happens with the owner's agreement (via
   Stuart). The box is public: never test on it unasked.
