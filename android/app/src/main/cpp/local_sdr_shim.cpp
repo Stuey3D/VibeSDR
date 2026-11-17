@@ -131,6 +131,7 @@
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
 #include "vibe_dab_own.h"       // ★★ V12 DAB own station — docs/v12/DAB-OWN-STATION.md
+#include "vibe_dab_wide.h"      // ★★★ V12 DAB Phase 2: a listener's own multiplex in a locked wide range (§11)
 #include "vibe_dab_confirm.h"   // ★ V12: when a service list is true enough to reconcile bookmarks by
 #include "vibe_dab_block_quality.h"   // ★ V12: how well each block decodes here (working / marginal / not working)
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
@@ -1676,6 +1677,24 @@ static void dabPartsFinish_(DabParts& p) {
              (unsigned long long)p.listRev, (unsigned long long)p.dlsRev);
     if (p.live.back() == '}') p.live.insert(p.live.size() - 1, std::string(lv) + dabUnscannedField());
 }
+/** ★★★ V12 Phase 2: a locked-range multiplex's report — the same pieces as dabPartsFinish_, with the per-block names but
+ *  NOT the live grade (dabQualityTick reads g_dab, the whole-radio decoder, which is not running in a locked range). */
+static void dabPartsFinishLr_(DabParts& p) {
+    { const std::string blocks = dabBlocksJson() + dabUnscannedField(); if (!p.legacy.empty() && p.legacy.back() == '}') p.legacy.insert(p.legacy.size() - 1, blocks); }
+    if (p.live.empty() || p.list.empty()) { p.live.clear(); return; }
+    const std::string blocks = dabBlocksJson();
+    if (!blocks.empty() && p.list.back() == '}') p.list.insert(p.list.size() - 1, blocks);
+    p.listRev = vibedab::DabService::fnv1a(p.list);
+    char r[64];
+    snprintf(r, sizeof r, ",\"rev\":\"%016llx\"", (unsigned long long)p.listRev);
+    p.list.insert(std::string("{\"type\":\"dab_list\"").size(), r);
+    snprintf(r, sizeof r, ",\"rev\":\"%016llx\"", (unsigned long long)p.dlsRev);
+    p.dls.insert(std::string("{\"type\":\"dab_dls\"").size(), r);
+    char lv[96];
+    snprintf(lv, sizeof lv, ",\"v\":2,\"listRev\":\"%016llx\",\"dlsRev\":\"%016llx\"",
+             (unsigned long long)p.listRev, (unsigned long long)p.dlsRev);
+    if (p.live.back() == '}') p.live.insert(p.live.size() - 1, std::string(lv) + dabUnscannedField());
+}
 static bool dabPartsTry(DabParts& p) {
     if (!g_dab.partsTry(p)) return false;
     dabPartsFinish_(p);
@@ -1965,6 +1984,9 @@ static int  vsDesiredRspBiasT();
 static std::atomic<bool>   g_vsRateLock{false};
 // ★★★ Locked hardware centre — see setVibeServerLockedCentre in the header for why. 0 = off.
 static std::atomic<double> g_vsLockedCentre{0.0};
+/** ★★★ V12 DAB Phase 2: this radio is a wide locked range now (Impl::dabLrEligible, refreshed by vibe-dsp) — listeners may
+ *  each be in DAB on any block inside it. The client capability (`dab` in vibeserver.json) reads it. */
+static std::atomic<bool>   g_dabLrNow{false};
 // Channel method: false = Direct (per-client DDC), true = Shared (fast convolution). Startup only.
 static std::atomic<bool>   g_vsSharedChannels{false};
 // Zoom spectrum on/off. It SUPPRESSES the wide path while active, so it needs an off switch.
@@ -18010,6 +18032,412 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
         fanOut(frame);
     }
+    /* ══ ★★★ V12 DAB PHASE 2 — A LISTENER'S OWN MULTIPLEX IN A LOCKED WIDE RANGE (docs/v12/DAB-OWN-STATION.md §11) ═══════
+     *  Stuart, 2026-11-17: "the wideband locked range multiple users scenario for DAB". In a locked range every listener
+     *  already has their own VFO; with a capture of 4 MS/s or more holding two or more Band III blocks (vibe_dab_wide.h),
+     *  every listener may also be in DAB on ANY block in it — and nothing on the radio moves, ever:
+     *   · one MULTIPLEX DECODER per block that has a listener (LrMux: a DabService fed the whole capture, its DDC cutting the
+     *     block out — the front end dab-wide-bench measured), opened LAZILY on the first listener, closed with the last;
+     *   · each listener's station on THEIR multiplex — Phase 1's rules per multiplex (vibe_dab_own.h Roster: the
+     *     multiplex's own station, a station already playing, or a new station-mode DabService off its MSC tap);
+     *   · their audio socket carries their station (their VFO's audio is held back while they are in DAB), their spectrum
+     *     socket their multiplex's report. Nobody else hears or sees any of it.
+     *  ★★★ HARD RULE §11.0: g_dabMode is never set here and g_dab never touched — the whole-radio DAB path, its AGC and
+     *      gain handling and its decode are exactly as they were; a radio that is not a wide locked range never gets here.
+     *  Threads: the control path (dab / dab_service) and vibe-dab-lr (4 Hz: who is here, reports, closing, joining) under
+     *  dabLrOpMtx_; vibe-dab-lrclk (the audio rung, 20 ms) and vibe-dsp only read the published view (dabLrView_). */
+    struct LrMux {
+        int idx = -1;
+        std::shared_ptr<vibedab::DabService> svc;            // the multiplex decoder (DDC → OFDM / FIC / TII) and its own station
+        std::shared_ptr<DabOwnSt> own;                       // that own station's audio pump (svc, never closed while the mux lives)
+        vibedab::own::Roster roster;                         // who on this multiplex hears what
+        std::map<uint32_t, std::shared_ptr<DabOwnSt>> st;    // stations on it
+        double openedAt = 0;
+    };
+    struct LrView {
+        std::vector<std::shared_ptr<vibedab::DabService>> feeds;   // every multiplex decoder (vibe-dsp feeds each the capture)
+        struct Pump { std::shared_ptr<DabOwnSt> st; std::vector<std::shared_ptr<net::Socket>> socks; };
+        std::vector<Pump> pumps;                                    // each playing station and its listeners' audio sockets
+        std::set<net::Socket*> muted;                               // every socket of a listener in DAB: no VFO audio
+    };
+    struct LrGone { int idx; uint32_t sid; double at; };
+    std::mutex dabLrOpMtx_, dabLrViewMtx_, dabLrThrMtx_;
+    std::map<int, std::unique_ptr<LrMux>> lrMux_;                   // under dabLrOpMtx_
+    std::map<std::string, int> lrSess_;                             // session → block, under dabLrOpMtx_
+    std::map<std::string, LrGone> lrGone_;                          // left with sockets gone (a reconnect resumes) — 120 s
+    std::vector<std::shared_ptr<DabOwnSt>> lrGrave_;                // closed stations / multiplexes: joined on vibe-dab-lr
+    std::shared_ptr<const LrView> dabLrView_;
+    std::atomic<bool> dabLrRun_{false};
+    std::atomic<int> dabLrCount_{0};                               // listeners in DAB (the hot paths' fast "nobody")
+    std::thread dabLrCtl_, dabLrClk_;
+    double lrLastReport_ = 0, lrEmptySince_ = 0, dabLrEligAt_ = 0;
+
+    std::shared_ptr<const LrView> dabLrViewNow() { std::lock_guard<std::mutex> lk(dabLrViewMtx_); return dabLrView_; }
+    /** This radio's capture as DAB sees it: the PHYSICAL centre and the rate. */
+    double lrCentre() const { return rtlCenter.load() + hwOffsetHz(); }
+    /** ★ A wide locked range, now (vibe_dab_wide.h eligible), on a radio that can decode DAB at all and an owner who has
+     *  not switched DAB off. */
+    bool dabLrEligible() const {
+        if (!perClientDsp() || g_icomOn.load() || vsModeBlocked("dab") || !vsDabDecoderAvailable()) return false;
+        return vibedab::wide::eligible(lrCentre(), sampleRate);
+    }
+    int lrCap() { return vibedab::wide::stationCap(g_dabOwnSetting.load(), vsDabStationsN(), g_vsMaxUsers.load()); }
+    int lrStationsOpenLocked_() const { int n = 0; for (const auto& kv : lrMux_) n += int(kv.second->st.size()); return n; }
+    static uint32_t lrOwnSid(const LrMux& m) { const uint32_t s = m.svc->service(); return s ? s : m.svc->wantedService(); }
+    std::string lrSessionOf(net::Socket* sk) {
+        std::lock_guard<std::mutex> lk(clientMtx);
+        auto it = sockSession.find(sk);
+        return it == sockSession.end() ? std::string() : it->second;
+    }
+    /** Every socket of every session, split into spectrum and audio. Takes clientMtx. */
+    void lrSockets(std::map<std::string, std::vector<std::shared_ptr<net::Socket>>>& spec,
+                   std::map<std::string, std::vector<std::shared_ptr<net::Socket>>>& aud) {
+        std::vector<std::shared_ptr<net::Socket>> a;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        for (auto& sk : allSpecClientsLocked()) {
+            auto it = sockSession.find(sk.get());
+            if (it != sockSession.end() && !it->second.empty()) spec[it->second].push_back(sk);
+        }
+        if (audioClient && audioClient->isOpen()) a.push_back(audioClient);
+        for (auto& x : audioExtra) if (x && x->isOpen()) a.push_back(x);
+        for (auto& kv : clientDsp) if (kv.second->audio && kv.second->audio->isOpen()) a.push_back(kv.second->audio);
+        for (auto& sk : a) {
+            auto it = sockSession.find(sk.get());
+            if (it != sockSession.end() && !it->second.empty()) aud[it->second].push_back(sk);
+        }
+    }
+    /** Open the multiplex decoder for block `idx`. dabLrOpMtx_ held. */
+    LrMux* lrOpenMuxLocked_(int idx) {
+        auto m = std::make_unique<LrMux>();
+        m->idx = idx;
+        m->svc = std::make_shared<vibedab::DabService>();
+        m->svc->setTxDb(&g_dabTxDb);
+        m->svc->setRfRate(sampleRate);
+        m->svc->setRfCentre(lrCentre());
+        m->svc->setChannel(idx);
+        m->own = std::make_shared<DabOwnSt>();
+        m->own->svc = m->svc;
+        m->openedAt = nowSecs();
+        LOGI("[DAB-LR] multiplex %s opened \xe2\x80\x94 cut from the %.3f MS/s capture at %.3f MHz (%zu open)",
+             vibedab::kBandIII[idx].name, sampleRate / 1e6, lrCentre() / 1e6, lrMux_.size() + 1);
+        LrMux* raw = m.get();
+        lrMux_[idx] = std::move(m);
+        return raw;
+    }
+    /** Close a multiplex nobody is on: its stations, then the decoder itself (its threads join on vibe-dab-lr). */
+    void lrCloseMuxLocked_(std::map<int, std::unique_ptr<LrMux>>::iterator it) {
+        LrMux& m = *it->second;
+        for (auto& kv : m.st) { m.svc->closeStation(kv.second->svc); lrGrave_.push_back(kv.second); }
+        m.st.clear();
+        lrGrave_.push_back(m.own);
+        LOGI("[DAB-LR] multiplex %s closed \xe2\x80\x94 nobody is on it (%zu open)", vibedab::kBandIII[m.idx].name, lrMux_.size() - 1);
+        lrMux_.erase(it);
+    }
+    /** Carry out a roster action on one multiplex (Phase 1's dabOwnApplyLocked_, per multiplex). dabLrOpMtx_ held. */
+    void lrApplyLocked_(LrMux& m, const std::string& sess, const vibedab::own::Action& a, const std::shared_ptr<net::Socket>& sock) {
+        using A = vibedab::own::Action;
+        if (a.closeSid) {
+            auto it = m.st.find(a.closeSid);
+            if (it != m.st.end()) {
+                m.svc->closeStation(it->second->svc);
+                LOGI("[DAB-LR] %s: station %04X closed (its last listener moved on)", vibedab::kBandIII[m.idx].name, unsigned(a.closeSid));
+                lrGrave_.push_back(it->second); m.st.erase(it);
+            }
+        }
+        switch (a.kind) {
+            case A::RetunePrimary: m.svc->setService(a.sid); break;
+            case A::SwitchAll:
+                m.svc->setService(a.sid);
+                if (sock) sendText(sock, "{\"type\":\"notice\",\"why\":\"every station decoder on this radio is busy \\u2014 the station changed for everyone on this multiplex\"}");
+                break;
+            case A::OpenStation: {
+                if (const long avail = vsMemAvailableKB(); avail >= 0 && avail < 64 * 1024) {   // ★ NO OOM EVER — as Phase 1
+                    m.roster.toPrimary(sess); m.svc->setService(a.sid);
+                    LOGI("[DAB-LR] station %04X NOT opened: only %ld MB of memory available", unsigned(a.sid), avail / 1024);
+                    if (sock) sendText(sock, "{\"type\":\"notice\",\"why\":\"this server is short of memory \\u2014 the station changed for everyone on this multiplex\"}");
+                    break;
+                }
+                auto st = std::make_shared<DabOwnSt>();
+                st->sid = a.sid;
+                st->svc = m.svc->openStation(a.sid);
+                if (!st->svc) { m.roster.toPrimary(sess); m.svc->setService(a.sid); break; }
+                m.st[a.sid] = st;
+                LOGI("[DAB-LR] %s: station %04X opened (%d open on the radio)", vibedab::kBandIII[m.idx].name, unsigned(a.sid), lrStationsOpenLocked_());
+                break;
+            }
+            default: break;
+        }
+    }
+    /** Take `sess` off its multiplex (closing what it emptied). dabLrOpMtx_ held. */
+    void lrLeaveLocked_(const std::string& sess, bool remember) {
+        auto s = lrSess_.find(sess);
+        if (s == lrSess_.end()) return;
+        auto it = lrMux_.find(s->second);
+        if (it != lrMux_.end()) {
+            LrMux& m = *it->second;
+            const uint32_t mine = m.roster.stationOf(sess);
+            if (remember) lrGone_[sess] = { m.idx, mine ? mine : lrOwnSid(m), nowSecs() };
+            const uint32_t c = m.roster.leave(sess, nowSecs());
+            if (c) lrApplyLocked_(m, sess, vibedab::own::Action{ vibedab::own::Action::None, 0, c }, nullptr);
+            if (m.roster.presentList().empty()) lrCloseMuxLocked_(it);
+        }
+        lrSess_.erase(s);
+    }
+    /** Put `sess` on block `idx` (opening it), then on `sid` if one was named. dabLrOpMtx_ held. */
+    void lrJoinLocked_(const std::string& sess, int idx, uint32_t sid, const std::shared_ptr<net::Socket>& sock) {
+        auto cur = lrSess_.find(sess);
+        if (cur != lrSess_.end() && cur->second != idx) lrLeaveLocked_(sess, false);
+        auto it = lrMux_.find(idx);
+        const bool fresh = it == lrMux_.end();
+        LrMux& m = fresh ? *lrOpenMuxLocked_(idx) : *it->second;
+        if (!m.roster.present(sess)) m.roster.arrive(sess, nowSecs());
+        lrSess_[sess] = idx;
+        if (sid) {
+            if (fresh) m.svc->setService(sid);   // ★ the first listener's pick IS the multiplex's own station
+            else lrApplyLocked_(m, sess, m.roster.pick(sess, sid, lrOwnSid(m), std::max(0, lrCap() - lrStationsOpenLocked_() + int(m.st.size()))), sock);
+        } else if (fresh) {
+            m.svc->armAutoChoice();               // ★ the server chooses, once the list has arrived (the radio's own rule)
+        }
+    }
+    /** Publish what vibe-dsp, the clock and the per-client audio path read. dabLrOpMtx_ held. */
+    void lrPublishLocked_(const std::map<std::string, std::vector<std::shared_ptr<net::Socket>>>& spec,
+                          const std::map<std::string, std::vector<std::shared_ptr<net::Socket>>>& aud) {
+        auto v = std::make_shared<LrView>();
+        std::map<DabOwnSt*, size_t> slot;
+        for (auto& kv : lrMux_) v->feeds.push_back(kv.second->svc);
+        for (const auto& s : lrSess_) {
+            auto mi = lrMux_.find(s.second);
+            if (mi == lrMux_.end()) continue;
+            LrMux& m = *mi->second;
+            const uint32_t sid = m.roster.stationOf(s.first);
+            std::shared_ptr<DabOwnSt> st = m.own;
+            if (sid) { auto f = m.st.find(sid); if (f != m.st.end()) st = f->second; }
+            auto a = aud.find(s.first);
+            if (a != aud.end()) {
+                auto k = slot.find(st.get());
+                if (k == slot.end()) { slot[st.get()] = v->pumps.size(); v->pumps.push_back({ st, {} }); k = slot.find(st.get()); }
+                for (auto& sk : a->second) { v->pumps[k->second].socks.push_back(sk); v->muted.insert(sk.get()); }
+            }
+            auto sp = spec.find(s.first);
+            if (sp != spec.end()) for (auto& sk : sp->second) v->muted.insert(sk.get());
+        }
+        dabLrCount_.store(int(lrSess_.size()), std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lk(dabLrViewMtx_);
+        dabLrView_ = v;
+    }
+    /** The report one listener gets: their station's (or their multiplex's own), with own/playing/mine for THEIR multiplex. */
+    bool lrPartsFor(LrMux& m, const std::string& sess, const std::vector<std::string>& present, DabParts& out, bool wait) {
+        const uint32_t sid = m.roster.stationOf(sess);
+        std::shared_ptr<vibedab::DabService> src = m.svc;
+        if (sid) { auto f = m.st.find(sid); if (f != m.st.end()) src = f->second->svc; }
+        DabParts p;
+        if (wait) p = src->parts(); else if (!src->partsTry(p)) return false;
+        dabPartsFinishLr_(p);
+        char b[128];
+        const int cap = lrCap();
+        std::snprintf(b, sizeof b, ",\"lr\":true,\"own\":{\"on\":%s,\"n\":%d,\"limit\":%d},\"playing\":[", cap > 0 ? "true" : "false",
+                      vsDabStationsN(), g_vsMaxUsers.load());
+        std::string fields = b;
+        bool first = true;
+        for (const auto& pl : m.roster.playing(lrOwnSid(m), present)) {
+            std::snprintf(b, sizeof b, "%s{\"sid\":%u,\"n\":%d}", first ? "" : ",", unsigned(pl.first), pl.second);
+            fields += b; first = false;
+        }
+        fields += "]";
+        dabOwnStamp(p, fields, sid ? sid : lrOwnSid(m));
+        out = std::move(p);
+        return true;
+    }
+    /** ★ A listener's DAB request in a locked range. true = handled here (the whole-radio path never sees it). */
+    bool dabLrControl(const std::shared_ptr<net::Socket>& sock, const std::string& type, const std::string& msg) {
+        if (!sock || !perClientDsp()) return false;
+        const std::string sess = lrSessionOf(sock.get());
+        if (sess.empty()) return false;
+        if (type == "dab_service") {
+            double sidV = 0; jsonNum(msg, "sid", sidV);
+            std::lock_guard<std::mutex> op(dabLrOpMtx_);
+            auto s = lrSess_.find(sess);
+            if (s == lrSess_.end()) return false;   // ★ not in DAB here: the old path answers (it refuses in a locked range)
+            auto mi = lrMux_.find(s->second);
+            if (mi == lrMux_.end() || !sidV) return true;
+            LrMux& m = *mi->second;
+            const int room = std::max(0, lrCap() - lrStationsOpenLocked_() + int(m.st.size()));
+            lrApplyLocked_(m, sess, m.roster.pick(sess, uint32_t(sidV), lrOwnSid(m), room), sock);
+            std::map<std::string, std::vector<std::shared_ptr<net::Socket>>> spec, aud; lrSockets(spec, aud);
+            lrPublishLocked_(spec, aud);
+            DabParts p; if (lrPartsFor(m, sess, m.roster.presentList(), p, true)) sendDab(sock, p);
+            return true;
+        }
+        // type == "dab"
+        double onV = 0; jsonNum(msg, "on", onV);
+        if (onV == 0) {
+            {
+                std::lock_guard<std::mutex> op(dabLrOpMtx_);
+                if (!lrSess_.count(sess)) return false;   // ★ not in DAB here: nothing to leave (the old path answers)
+                lrLeaveLocked_(sess, false);
+                lrGone_.erase(sess);
+                std::map<std::string, std::vector<std::shared_ptr<net::Socket>>> spec, aud; lrSockets(spec, aud);
+                lrPublishLocked_(spec, aud);
+                for (auto& sk : spec[sess]) { sendText(sk, "{\"type\":\"dab_off\"}"); sendConfig(sk); sendHwInfo(sk); }
+            }
+            { std::lock_guard<std::mutex> pl(dabPeerMtx); auto it = dabPeers.find(sock.get()); if (it != dabPeers.end()) { it->second.listRev = 0; it->second.dlsRev = 0; } }
+            LOGI("[DAB-LR] a listener left DAB [%s]", sess.c_str());
+            return true;
+        }
+        if (!dabLrEligible()) return false;        // ★ not a wide locked range: the old path refuses as it always has
+        int want = -1;
+        {
+            std::string chName; size_t kp = msg.find("\"channel\"");
+            if (kp != std::string::npos) {
+                kp = msg.find(':', kp);
+                while (kp != std::string::npos && kp + 1 < msg.size() && isspace((unsigned char)msg[kp + 1])) ++kp;
+                if (kp != std::string::npos && kp + 1 < msg.size() && msg[kp + 1] == '"') {
+                    const size_t q = msg.find('"', kp + 2);
+                    if (q != std::string::npos) chName = msg.substr(kp + 2, q - kp - 2);
+                }
+            }
+            if (!chName.empty()) { if (const vibedab::Channel* c = vibedab::channelByName(chName.c_str())) want = int(c - &vibedab::kBandIII[0]); }
+            else { double chV = -1; if (jsonNum(msg, "channel", chV)) want = int(chV); }
+        }
+        double sidV = 0; jsonNum(msg, "sid", sidV);
+        const std::vector<int> in = vibedab::wide::blocksIn(lrCentre(), sampleRate);
+        int idx;
+        {
+            std::lock_guard<std::mutex> op(dabLrOpMtx_);
+            auto s = lrSess_.find(sess);
+            idx = vibedab::wide::choose(want, s == lrSess_.end() ? -1 : s->second, in);
+            if (idx < 0) { sendText(sock, "{\"type\":\"dab_error\",\"why\":\"no DAB block lies wholly inside this receiver's range\"}"); return true; }
+            lrGone_.erase(sess);
+            lrJoinLocked_(sess, idx, uint32_t(sidV), sock);
+            std::map<std::string, std::vector<std::shared_ptr<net::Socket>>> spec, aud; lrSockets(spec, aud);
+            lrPublishLocked_(spec, aud);
+            { std::lock_guard<std::mutex> pl(dabPeerMtx); auto it = dabPeers.find(sock.get()); if (it != dabPeers.end()) { it->second.listRev = 0; it->second.dlsRev = 0; } }
+            auto mi = lrMux_.find(idx);
+            DabParts p; if (mi != lrMux_.end() && lrPartsFor(*mi->second, sess, mi->second->roster.presentList(), p, true)) sendDab(sock, p);
+        }
+        LOGI("[DAB-LR] a listener is on %s%s [%s] — the radio does not move", vibedab::kBandIII[idx].name,
+             want >= 0 && want != idx ? " (the nearest block inside the range to the one asked for)" : "", sess.c_str());
+        dabLrEnsureThreads();
+        return true;
+    }
+    /** vibe-dab-lr's tick (4 Hz): who is still here, resumes, reports, closing and joining. */
+    void dabLrTick() {
+        std::vector<std::shared_ptr<DabOwnSt>> reap;
+        {
+            std::lock_guard<std::mutex> op(dabLrOpMtx_);
+            const double now = nowSecs();
+            std::map<std::string, std::vector<std::shared_ptr<net::Socket>>> spec, aud; lrSockets(spec, aud);
+            const bool eligible = dabLrEligible();
+            // ★ Gone: a session with no socket left leaves its multiplex (remembered 120 s); the range no longer wide: everyone out.
+            std::vector<std::string> out;
+            for (const auto& s : lrSess_) if (!eligible || (!spec.count(s.first) && !aud.count(s.first))) out.push_back(s.first);
+            for (const auto& s : out) {
+                const bool gone = !spec.count(s) && !aud.count(s);
+                lrLeaveLocked_(s, gone);
+                if (!gone) for (auto& sk : spec[s]) { sendText(sk, "{\"type\":\"dab_off\"}"); sendConfig(sk); sendHwInfo(sk); }
+                LOGI("[DAB-LR] %s [%s]", gone ? "a listener's sockets are gone \xe2\x80\x94 off their multiplex (resumed if they are back within 120 s)"
+                                              : "the range is no longer a wide locked range \xe2\x80\x94 out of DAB", s.c_str());
+            }
+            // ★ Back within the grace period: the server puts them on their block and station again (recovery, not a re-assert)
+            if (eligible)
+                for (auto it = lrGone_.begin(); it != lrGone_.end();) {
+                    if (now - it->second.at > 120.0) { it = lrGone_.erase(it); continue; }
+                    if (spec.count(it->first) && aud.count(it->first) && !lrSess_.count(it->first)) {
+                        LOGI("[DAB-LR] a returning listener resumes %s / %04X [%s]", vibedab::kBandIII[it->second.idx].name, unsigned(it->second.sid), it->first.c_str());
+                        lrJoinLocked_(it->first, it->second.idx, it->second.sid, nullptr);
+                        it = lrGone_.erase(it);
+                        continue;
+                    }
+                    ++it;
+                }
+            lrPublishLocked_(spec, aud);
+            // ★ Reports, every 0.5 s: each listener their station's (or their multiplex's own), never another's
+            if (now - lrLastReport_ >= 0.5) {
+                lrLastReport_ = now;
+                for (auto& kv : lrMux_) {
+                    LrMux& m = *kv.second;
+                    const auto present = m.roster.presentList();
+                    std::map<uint32_t, DabParts> built;
+                    for (const auto& s : present) {
+                        const uint32_t key = m.roster.stationOf(s);
+                        auto b = built.find(key);
+                        if (b == built.end()) { DabParts p; if (!lrPartsFor(m, s, present, p, false)) continue; b = built.emplace(key, std::move(p)).first; }
+                        auto sp = spec.find(s);
+                        if (sp != spec.end()) for (auto& sk : sp->second) sendDab(sk, b->second);
+                    }
+                }
+            }
+            if (lrMux_.empty() && lrSess_.empty()) { if (lrEmptySince_ == 0) lrEmptySince_ = now; } else lrEmptySince_ = 0;
+            std::vector<std::shared_ptr<DabOwnSt>> keep;
+            for (auto& g : lrGrave_) (g.use_count() == 1 ? reap : keep).push_back(std::move(g));
+            lrGrave_.swap(keep);
+        }
+        reap.clear();   // ★ HERE: each station's / multiplex's threads join on vibe-dab-lr, never the audio clock or vibe-dsp
+    }
+    void dabLrCtlLoop() {
+        vibeThreadName("vibe-dab-lr");
+        while (dabLrRun_.load(std::memory_order_relaxed)) {
+            dabLrTick();
+            // ★ Nobody in DAB for 30 s: the threads stop (they start again with the next listener)
+            if (lrEmptySince_ > 0 && nowSecs() - lrEmptySince_ > 30.0) { dabLrRun_.store(false); break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        dabLrTick();
+    }
+    /** vibe-dab-lrclk: every station's 20 ms, as the whole-radio clock does (Phase 1's pump and its ONE encode per station). */
+    void dabLrClkLoop() {
+        vibeAudioThread("vibe-dab-lrclk");
+        using namespace std::chrono;
+        auto next = steady_clock::now();
+        while (dabLrRun_.load(std::memory_order_relaxed)) {
+            next += milliseconds(20);
+            std::this_thread::sleep_until(next);
+            const auto now = steady_clock::now();
+            if (now - next > milliseconds(200)) next = now;
+            const auto v = dabLrViewNow();
+            if (!v) continue;
+            for (const auto& p : v->pumps) if (p.st) dabOwnPumpStation(*p.st, p.socks, 48000 / 50);
+        }
+    }
+    void dabLrEnsureThreads() {
+        std::lock_guard<std::mutex> lk(dabLrThrMtx_);
+        if (dabLrRun_.load()) return;
+        joinOnce(dabLrCtl_, "dab lr (restart)"); joinOnce(dabLrClk_, "dab lr clock (restart)");
+        lrEmptySince_ = 0;
+        dabLrRun_.store(true);
+        dabLrCtl_ = std::thread([this] { dabLrCtlLoop(); });
+        dabLrClk_ = std::thread([this] { dabLrClkLoop(); });
+    }
+    /** Shutdown: every multiplex closed, every thread joined. */
+    void dabLrStopAll() {
+        {
+            std::lock_guard<std::mutex> op(dabLrOpMtx_);
+            std::vector<std::string> all; for (const auto& s : lrSess_) all.push_back(s.first);
+            for (const auto& s : all) lrLeaveLocked_(s, false);
+            while (!lrMux_.empty()) lrCloseMuxLocked_(lrMux_.begin());
+            std::lock_guard<std::mutex> lk(dabLrViewMtx_); dabLrView_.reset();
+            dabLrCount_.store(0);
+        }
+        std::lock_guard<std::mutex> lk(dabLrThrMtx_);
+        dabLrRun_.store(false);
+        joinOnce(dabLrCtl_, "dab lr"); joinOnce(dabLrClk_, "dab lr clock");
+        std::lock_guard<std::mutex> op(dabLrOpMtx_);
+        lrGrave_.clear();
+    }
+    /** vibe-dsp: every open multiplex decoder gets the capture (a copy and a notify each — their DDCs run on their threads). */
+    void dabLrFeed(const cf32* iq, size_t n) {
+        const auto v = dabLrViewNow();
+        if (!v || v->feeds.empty()) return;
+        const double c = lrCentre(), r = sampleRate;
+        for (auto& s : v->feeds) { s->setRfCentre(c); s->setRfRate(r); s->feed(reinterpret_cast<const float*>(iq), n); }
+    }
+    /** The per-client audio path: is this socket's listener in DAB here (their station plays instead of their VFO)? */
+    bool dabLrMuted(net::Socket* sk) {
+        if (dabLrCount_.load(std::memory_order_relaxed) == 0) return false;
+        const auto v = dabLrViewNow();
+        return v && v->muted.count(sk) != 0;
+    }
+
     /** The `own` / `playing` / `mine` fields into a report, before its final brace (legacy and live). */
     static void dabOwnStamp(DabParts& p, const std::string& fields, uint32_t mine) {
         if (fields.empty()) return;
@@ -18484,6 +18912,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (count <= 0) return;
         // ★ Same rule for the per-client path — see dabInject_. And ADS-B — see onAudio.
         if (g_dabMode.load(std::memory_order_relaxed) && !dabInject_) return;
+        if (dabLrMuted(sock.get())) return;   // ★★★ V12 Phase 2: this listener is in DAB — their station plays, not their VFO
         if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed)) return;
         // ★★★ V12 PAGING: silence while a paging receiver runs here — so every recording of this stream is silent too
         //     (vibe_paging_gate.h). Before the encoder: Opus and PCM alike carry the silence.
@@ -21455,6 +21884,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             else adsbEnter();
             return;
         }
+        /* ★★★ V12 DAB PHASE 2: in a wide locked range a listener's DAB is THEIRS — their own multiplex, the radio unmoved
+         *  (dabLrControl). Anything it does not handle falls through to the whole-radio path, unchanged. */
+        if ((type == "dab" || type == "dab_service") && perClientDsp() && dabLrControl(sock, type, msg)) return;
         if (type == "dab") {
             /* ★★ THE DEFAULT IS OFF. It was 1, so a {"type":"dab"} with the key missing SEIZED
              *  the receiver — DAB suspends the shared-dial lock and takes the whole capture, so
@@ -32533,6 +32965,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 else                 feedClientChannels(buf.data(), (int)buf.size());
                 continue;
             }
+            /* ★★★ V12 DAB PHASE 2: a wide locked range — every listener's multiplex gets the capture (each one's DDC cuts its
+             *  block out on its own thread), and once a second the flag the client capability reads is refreshed. */
+            if (perClientDsp()) {
+                const double tnowLr = nowSecs();
+                if (tnowLr - dabLrEligAt_ > 1.0) { dabLrEligAt_ = tnowLr; g_dabLrNow.store(dabLrEligible(), std::memory_order_relaxed); }
+                if (dabLrCount_.load(std::memory_order_relaxed) > 0) dabLrFeed(buf.data(), buf.size());
+            } else if (g_dabLrNow.load(std::memory_order_relaxed)) g_dabLrNow.store(false, std::memory_order_relaxed);
             /* ★★★ NOBODY LISTENING? RUN THE SPECTRUM, SKIP THE AUDIO. Stuart, 2026-09-08:
              *  "no point having audio being decoded if nobody is listening to it."
              *
@@ -40704,7 +41143,8 @@ static std::string vsTunableJson() {
     const vibereach::Reach reach = vsDecoderReach();
     // ★ Whether to OFFER DAB at all. The client must not draw a control whose every use is a
     //   no-op (AGENTS.md), and only the server knows the effective limits.
-    j += std::string(",\"dab\":") + (vsDabCapable() ? "true" : "false");
+    // ★★★ V12 Phase 2: …or, in a wide locked range, per listener (each on any block inside it — vibe_dab_wide.h)
+    j += std::string(",\"dab\":") + ((vsDabCapable() || g_dabLrNow.load(std::memory_order_relaxed)) ? "true" : "false");
     /* ★★ CW (V12, 2026-10-25): this server's own CW decoder and skimmer (decoders/cw_skimmer.h). Absent on an older server,
      *  so its clients draw no CW button there; false where the owner has blocked CW on this receiver. */
     j += vsDecoderCapJson("cw", reach);
@@ -43112,6 +43552,7 @@ void LocalSdrShim::stopLocked() {
     // tearing the engine down, so no rx.feed runs against a destroyed engine.
     STOP_STAGE("the DAB clock");
     impl->stopDabClock();     // ★ joined here, not left for ~Impl to destroy while running
+    impl->dabLrStopAll();     // ★★★ V12 Phase 2: every listener's multiplex closed, its threads joined
     STOP_STAGE("the DSP thread");
     impl->stopDspThread();
     STOP_STAGE("the audio chain");

@@ -37,7 +37,17 @@ inline std::vector<int> blocksIn(double centreHz, double rateHz) {
     if (!(rateHz > 0) || !(centreHz > 0)) return v;
     for (int i = 0; i < int(kBandIIICount); ++i)
         if (std::fabs(double(kBandIII[i].centreHz) - centreHz) + kHalfBlockHz <= kFlat * rateHz) v.push_back(i);
-    return v;
+    /* ★ The "N" raster (10N, 11N, 12N) overlaps the ordinary blocks beside it — 11N is 160 kHz from 11A. Where an ordinary
+     *  block overlaps one in the same capture, the N block is not offered: the block keys would otherwise step 11A → 11N,
+     *  the same air 160 kHz along. A capture holding an N block alone still offers it. */
+    auto isN = [](int b) { const char* n = kBandIII[b].name; size_t k = 0; while (n[k]) ++k; return k > 0 && n[k - 1] == 'N'; };
+    std::vector<int> out;
+    for (int b : v) {
+        bool overlapped = false;
+        if (isN(b)) for (int o : v) if (o != b && !isN(o) && std::fabs(double(kBandIII[o].centreHz) - double(kBandIII[b].centreHz)) < 1536000.0) overlapped = true;
+        if (!overlapped) out.push_back(b);
+    }
+    return out;
 }
 
 /** ★ Does this capture qualify? 4 MS/s or more, and at least TWO blocks in it — one block is the ordinary DAB mode's job. */

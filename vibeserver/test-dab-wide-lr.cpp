@@ -22,7 +22,8 @@ int main() {
     // ── the Lenovo's capture: RSP1A, 8 MS/s round 215.140 MHz (docs §11.4) ──
     const auto in = blocksIn(215140000.0, 8000000.0);
     auto has = [&](int b) { return std::find(in.begin(), in.end(), b) != in.end(); };
-    ok(has(c10C) && has(c10D) && has(c11A), "the Lenovo capture holds 10C, 10D, 11A (" + names(in) + "; 11N is the N raster's, overlapping 11A)");
+    ok(has(c10C) && has(c10D) && has(c11A), "the Lenovo capture holds 10C, 10D, 11A (" + names(in) + ")");
+    ok(names(in) == "10C,10D,11A", "★ 11N (the N raster, 160 kHz from 11A) is not offered beside 11A: " + names(in));
     ok(std::find(in.begin(), in.end(), c11B) == in.end(), "11B (half off the edge) is not offered");
     ok(eligible(215140000.0, 8000000.0), "8 MS/s with three blocks: a wide locked range");
     ok(!eligible(215140000.0, 2048000.0) && !eligible(225648000.0, 2400000.0), "★ §11.0: 2.048 / 2.4 MS/s never qualify");
