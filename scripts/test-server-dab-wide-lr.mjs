@@ -37,7 +37,7 @@ const now = () => performance.now();
 function ws(port, pathq) {
   const key = crypto.randomBytes(16).toString('base64');
   const s = net.connect(port, '127.0.0.1');
-  const st = { txt: [], bin: 0, binBytes: 0, last: {}, onText: null };
+  const st = { txt: [], bin: 0, binBytes: 0, last: {}, onText: null, sq: 0, ns: 0 };
   let hs = false, buf = Buffer.alloc(0);
   s.on('connect', () => s.write(`GET ${pathq} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
   s.on('error', () => {});
@@ -52,7 +52,11 @@ function ws(port, pathq) {
       if (buf.length < off + len) break;
       const p = buf.subarray(off, off + len); buf = buf.subarray(off + len);
       if (op === 0x9) { const q = Buffer.alloc(6 + p.length); q[0] = 0x8a; q[1] = 0x80 | p.length; q.writeUInt32BE(0, 2); p.copy(q, 6); s.write(q); continue; }
-      if (op === 0x2) { st.bin++; st.binBytes += p.length; }
+      if (op === 0x2) {
+        st.bin++; st.binBytes += p.length;
+        // ★ PCM (format 0): the samples' energy — bytes alone cannot tell a station from the silence a starved one sends
+        if (p.length > 6 && p[1] === 0) for (let i = 6; i + 1 < p.length; i += 2) { const v = p.readInt16LE(i); st.sq += v * v; st.ns++; }
+      }
       if (op === 0x1) {
         const t = p.toString();
         try { const j = JSON.parse(t); if (j && j.type) { st.last[j.type] = { at: now(), ...j }; if (st.txt.length < 4000) st.txt.push(j.type); } } catch {}
@@ -129,10 +133,13 @@ try {
   ok(/\[DAB-LR\] multiplex 10C opened/.test(log()) && /\[DAB-LR\] multiplex 11A opened/.test(log()) && !/multiplex 10D opened/.test(log()),
      'one multiplex decoder per block with a listener — and none for 10D, which nobody asked for');
   ok(A.dab()?.lr === true && B.dab()?.lr === true, 'each report says it is this listener\'s own (lr)');
+  const rms = (x) => (x.ns ? Math.sqrt(x.sq / x.ns) : 0);
+  A.aud.sq = A.aud.ns = B.aud.sq = B.aud.ns = 0;
   const a0 = A.aud.binBytes, b0 = B.aud.binBytes, e0 = E.aud.binBytes;
   await sleep(6000);
   const aRate = (A.aud.binBytes - a0) / 6, bRate = (B.aud.binBytes - b0) / 6;
   ok(aRate > 100000 && bRate > 100000, `★ each one's audio socket carries their station at real time (A ${Math.round(aRate / 1024)} kB/s, B ${Math.round(bRate / 1024)} kB/s of PCM)`);
+  ok(rms(A.aud) > 200 && rms(B.aud) > 200, `★ …and it is programme, not silence (RMS A ${rms(A.aud).toFixed(0)}, B ${rms(B.aud).toFixed(0)} of 32767)`);
   ok(E.aud.binBytes - e0 > 0, `E (not in DAB) keeps their own VFO audio (${E.aud.binBytes - e0} bytes)`);
   ok(!E.spec.last.dab, 'E is never sent a DAB report');
   const svc11A = (B.dab()?.services || []).filter((s) => !s.isData && s.sid);
@@ -156,7 +163,9 @@ try {
   const pl = B.dab()?.playing || [];
   ok(pl.some((p) => p.sid === bSid && p.n === 2) && pl.some((p) => p.sid === other && p.n === 1), `11A's playing list: ${JSON.stringify(pl)}`);
   ok(!(A.dab()?.playing || []).some((p) => p.sid === other), '10C\'s playing list knows nothing of 11A');
+  C.aud.sq = C.aud.ns = 0;
   const c0 = C.aud.binBytes; await sleep(4000);
+  ok(rms(C.aud) > 200, `C's station is programme, not silence (RMS ${rms(C.aud).toFixed(0)})`);
   ok((C.aud.binBytes - c0) / 4 > 100000, `★ C's station plays (${Math.round((C.aud.binBytes - c0) / 4096)} kB/s)`);
 
   console.log('── blocks outside the range ──');

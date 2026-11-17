@@ -17761,6 +17761,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 #ifdef VIBE_HAVE_OPUS
         vibe::OpusAudioEncoder opus;   // ★ ONE encode per station, shared by everyone on it
 #endif
+        /* ★★★ THE ENCODE IS THE STATION'S OWN THREAD, NOT THE CLOCK'S (2026-11-17, live on the Pi 2: five own stations on
+         *     10C and the box saturated — vibe-dabclk at 63 %, running every station's Opus encode one after another on
+         *     the 20 ms tick, ~12 % of a Cortex-A7 core per stereo stream, so ~8 streams overrun the tick whatever the other
+         *     cores do). The clock now only takes 20 ms of PCM and hands it here; `vibe-dab-enc` encodes and sends (PAGE
+         *     gate included — dabOwnSend). BOUNDED: 10 jobs (200 ms); full = the OLDEST is dropped and counted, the clock
+         *     never waits. Started on the first job; the destructor stops and joins it (the last reference drops on the
+         *     own-station / locked-range loop, never the clock). */
+        struct EncJob { std::vector<int16_t> pcm; int count = 0; std::vector<std::shared_ptr<net::Socket>> socks; };
+        std::mutex qM; std::condition_variable qCv; std::deque<EncJob> q; bool qStop = false;
+        std::thread encThr;
+        std::atomic<uint32_t> encDropped{0};
+        ~DabOwnSt() {
+            { std::lock_guard<std::mutex> lk(qM); qStop = true; }
+            qCv.notify_all();
+            if (encThr.joinable()) { if (encThr.get_id() == std::this_thread::get_id()) encThr.detach(); else encThr.join(); }
+        }
     };
     struct DabOwnView {
         bool on = false;
@@ -17989,12 +18005,38 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const size_t got = st.svc->takePcm(f.data(), std::min(avail, want));
         if (got < want) st.filled += uint32_t(want - got);
         const float g = audioGain.load();
-        std::vector<int16_t> pcm(want * 2);
+        DabOwnSt::EncJob job;
+        job.pcm.resize(want * 2);
         for (size_t i = 0; i < want * 2; ++i) {
             const float v = std::max(-1.0f, std::min(1.0f, f[i] * g));
-            pcm[i] = int16_t(std::lround(v * 32767.0f));
+            job.pcm[i] = int16_t(std::lround(v * 32767.0f));
         }
-        dabOwnSend(st, socks, pcm.data(), int(want), 2);
+        job.count = int(want); job.socks = socks;
+        // ★★★ handed to the station's own encoder — see DabOwnSt::EncJob. Never an encode on the clock thread.
+        {
+            std::lock_guard<std::mutex> lk(st.qM);
+            if (!st.encThr.joinable() && !st.qStop) {
+                DabOwnSt* sp = &st;
+                st.encThr = std::thread([this, sp] { dabOwnEncLoop(*sp); });
+            }
+            while (st.q.size() >= 10) { st.q.pop_front(); st.encDropped.fetch_add(1, std::memory_order_relaxed); }
+            st.q.push_back(std::move(job));
+        }
+        st.qCv.notify_one();
+    }
+    /** ★★ A station's encoder thread (vibe-dab-enc, the audio rung): its jobs in order, ONE Opus encode each, to its sockets. */
+    void dabOwnEncLoop(DabOwnSt& st) {
+        vibeAudioThread("vibe-dab-enc");
+        for (;;) {
+            DabOwnSt::EncJob j;
+            {
+                std::unique_lock<std::mutex> lk(st.qM);
+                st.qCv.wait(lk, [&] { return st.qStop || !st.q.empty(); });
+                if (st.qStop) return;
+                j = std::move(st.q.front()); st.q.pop_front();
+            }
+            dabOwnSend(st, j.socks, j.pcm.data(), j.count, 2);
+        }
     }
     /** The shared stream's shape (sendAudioPcm), with the station's OWN encoder. ★ PAGE gate first (vibe_paging_gate.h). */
     void dabOwnSend(DabOwnSt& st, const std::vector<std::shared_ptr<net::Socket>>& socks, const int16_t* pcm, int count, int ch) {
