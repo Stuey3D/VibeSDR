@@ -111,8 +111,8 @@ int main() {
     // ★★ V12 DAB own station: its row sets N (the dabStations block, vibe_dab_own.h nFromBench) and nothing else
     ok(std::string(ruleFor("dec_dab_station").sw).empty() && !ruleFor("dec_dab_station").primary && !ruleFor("dec_dab_station").slot,
        "dec_dab_station switches nothing off and is no slot (it sets the own-station N)");
-    ok(vibedab::own::nFromBench(13.0, 107.0, 4) == 8 && vibedab::own::nFromBench(0.32, 1.9, 15) == 16 && vibedab::own::nFromBench(-1, 50, 4) == 0,
-       "the own-station N: the Pi 2's measured figures give 8, the Mac's the cap (16), no row 0");
+    ok(vibedab::own::nFromBench(13.0, 107.0, 4) == 8 && vibedab::own::nFromBench(0.32, 1.9, 15) == 1 + int((1050 - 1.9 - 70) / 0.32) && vibedab::own::nFromBench(-1, 50, 4) == 0,
+       "the own-station N: the Pi 2's measured figures give 8, the Mac's what it measured (no fixed cap), no row 0");
     // ★ Stuart, 2026-10-31: the first eight rows keep their old behaviour — flagged below green, never switched off.
     for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora" })
         ok(!ruleFor(id).primary, std::string(id) + " is never switched off by the benchmark (flagged only)");

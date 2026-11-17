@@ -86,11 +86,29 @@ inline int choose(int want, int current, const std::vector<int>& in) {
  *     floor and the per-multiplex hard cap (DabService::kMaxStations) still hold, and the health chip shows the strain.
  *   · off → 0: a pick on a multiplex switches that multiplex's own station for everyone ON IT. Other multiplexes are other
  *     listeners' and never move — a listener's own block is the point of the locked range. */
-inline int stationCap(int setting, int n, int limit) {
-    if (setting == 0) return 0;
-    if (setting == 1) return std::max(0, limit - 1);
-    if (n > 0 && n >= std::max(1, limit)) return std::max(0, std::min(16, n) - 1);
-    return 0;
+/** ★★ HOW MANY DAB LISTENERS a locked range carries (Stuart, 2026-11-17: "in locked range a user with a b210 would lock
+ *  it to the DAB band and the users are based on DAB decodes"), each on their own station with every block in the range
+ *  decoding — any can be in use. From this machine's benchmark (the dabStations block):
+ *   · perStationPct — one station: its decode, FAAD2 and Opus encode (dec_dab_station);
+ *   · muxFrontPct   — one multiplex's OFDM / FIC front end (the dab row less its own station's decode);
+ *   · ddc8Pct       — one block's DDC out of an 8 MS/s capture (dec_dab_mux), scaled by the capture rate; none for a
+ *                     single block at its own rate (the ordinary DAB path needs no DDC).
+ *  Within the green budget: 70 % of every core, less one core for network, spectrum and the audio clock. 0 = not measured.
+ *  Never above what the user limit allows; the shim's memory floor holds on top. */
+inline int dabListeners(double perStationPct, double muxFrontPct, double ddc8Pct, double rateHz, int muxes, int cores) {
+    if (!(perStationPct > 0) || !(muxFrontPct > 0) || cores < 1 || muxes < 1) return 0;
+    const double ddc = muxes >= 2 ? std::max(0.0, ddc8Pct) * rateHz / 8e6 : 0.0;
+    const double spare = 70.0 * cores - 70.0 - double(muxes) * (muxFrontPct + ddc);
+    return spare > 0 ? int(std::floor(spare / perStationPct)) : 0;
+}
+
+/** ★ Stations that may be open at once in a locked range, besides each multiplex's own: the measured DAB listeners
+ *  (dabListeners — the hardware's figure, never a fixed number) up to the user limit, less the multiplexes' own streams.
+ *  The owner's switch: 0 off; 1 forced on (still the measured figure); -1 the rule — on when the box carries the limit. */
+inline int stationCap(int setting, int listeners, int limit, int muxes) {
+    if (setting == 0 || listeners <= 0) return 0;
+    if (setting == -1 && listeners < std::max(1, limit)) return 0;
+    return std::max(0, std::min(listeners, std::max(1, limit)) - std::max(1, muxes));
 }
 
 /** One multiplex's clock reading, for the radio's ONE PPM controller (§11.2). */

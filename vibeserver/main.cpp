@@ -2587,7 +2587,7 @@ int main(int argc, char** argv) {
                 const std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
                                                          [&] { auto r = vibe::runDabRows(clip, 6.0);
                                                                for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
-                                                               return r; }, 5, decoderClip, hw);
+                                                               return r; }, 6, decoderClip, hw);
                 vsBenchSave(j);
                 vsApplyRateGate(vibe::usrpcaps::rateGate().locked);   // ★ the reacquire below re-reads it
                 if (released) {

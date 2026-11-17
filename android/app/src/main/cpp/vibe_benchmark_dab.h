@@ -250,6 +250,45 @@ inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdeta
     return r;
 }
 
+/** ★★ V12 DAB PHASE 2: WHAT ONE MORE MULTIPLEX COSTS in a wide locked range (Stuart, 2026-11-17: "the cap should be based on
+ *  the hardware running the server, so build it into the benchmark"). Two parts:
+ *   · its DDC — one block cut out of an 8 MS/s capture down to 2.048 MS/s (vibe_dab_ddc.h, what each multiplex decoder
+ *     runs). Its cost does not depend on what is on air, so it is timed on 8 MS/s of synthetic IQ, flat out on this
+ *     thread, and reported as % of a core at real time;
+ *   · its OFDM / FIC front end — the `dab` row's threads less what its own station's decode costs (the station row's
+ *     decode + FAAD2 each): a multiplex's own stream is counted as a station by the capacity rule (vibe_dab_wide.h).
+ *  The row's pct is the two together; its threads carry each, which runBenchmark writes into the dabStations block. */
+inline benchdetail::Result runDabMuxRow(const benchdetail::Result& dabRow, const benchdetail::Result& stRow, double seconds) {
+    using namespace benchdetail;
+    Result r; r.id = "dec_dab_mux"; r.label = "DAB+: each multiplex in a wide capture (8 MS/s)"; r.rate = 8000000;
+    vibedab::DabDdc ddc;
+    if (!ddc.configure(8000000.0, 1712000.0)) { r.pct = -1; return r; }
+    const size_t blk = 80000;   // 10 ms of 8 MS/s
+    std::vector<float> in(blk * 2), out; out.reserve(blk);
+    uint32_t x = 12345u;
+    for (auto& v : in) { x = x * 1664525u + 1013904223u; v = float(int32_t(x) >> 8) * (1.0f / 8388608.0f) * 0.25f; }
+    const double want = std::max(1.0, seconds * 0.5);   // ★ seconds of 8 MS/s input to push through
+    const auto t0 = std::chrono::steady_clock::now();
+    double fed = 0;
+    while (fed < want) { out.clear(); ddc.process(in.data(), blk, out); fed += double(blk) / 8e6; }
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    const double ddcPct = 100.0 * wall / fed;
+    double dabTot = 0;
+    for (const auto& t : dabRow.threads) if (t.first != "vibe-dsp") dabTot += t.second;
+    double stDecode = 0;
+    for (const auto& t : stRow.threads) {
+        if (t.first == "vibe-dab-st (each)") stDecode += t.second;
+        if (t.first == "vibe-faad2 (all)") stDecode += t.second / 3.0;   // ★ K = 3 stations (runDabStationRow)
+    }
+    const double front = (dabRow.pct >= 0 && dabTot > 0) ? std::max(dabTot * 0.25, dabTot - stDecode) : -1.0;
+    r.pct = front > 0 ? ddcPct + front : -1.0;
+    r.hottest = "per multiplex";
+    r.threads.push_back({ "per multiplex", r.pct });
+    r.threads.push_back({ "DDC @ 8 MS/s", ddcPct });
+    r.threads.push_back({ "OFDM/FIC front end", front });
+    return r;
+}
+
 /** ★★ FETCHED ONCE, KEPT (Stuart, 2026-09-19): the clip is 18 MB gzipped, too big to ship in an APK or a .deb and
  *  needed only when the benchmark runs. Desktop/Linux fetches it here with curl; Android hands in a path its own
  *  Kotlin downloaded. Returns the clip's path, or empty if it could not be had — the DAB rows are then simply
@@ -295,6 +334,9 @@ inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, 
     // ★★ V12 own station per listener: what each extra station costs (docs/v12/DAB-OWN-STATION.md) — sets N
     benchStep("DAB+: each extra station");
     out.push_back(runDabStationRow(clip, out.front(), seconds));
+    // ★★ V12 Phase 2: what each multiplex costs in a wide locked range — the DAB listener capacity (vibe_dab_wide.h)
+    benchStep("DAB+: each multiplex in a wide capture");
+    out.push_back(runDabMuxRow(out.front(), out.back(), seconds));
     return out;
 }
 

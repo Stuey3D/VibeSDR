@@ -95,6 +95,11 @@ fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
   radios: [{ serial: 'fake', driver: 'rtlsdr', enabled: true, configured: true, users: 8, mode: 'locked', lockFreq: LOCK,
              rate: RATE, freq: LOCK, demodMode: 'wfm', dabOwnStation: 1, autoPpm: true }],
 }));
+// ★★ THE MACHINE'S MEASURED FIGURES (Stuart, 2026-11-17: the cap is the hardware's, from the benchmark — not measured = no
+//    stations): a dabStations block as vibe_benchmark.h writes it, figures that give this test's handful of listeners room
+//    on any machine (vibe_dab_wide.h dabListeners: (70 × 8 − 70 − 3 × (5 + 8)) / 2 = 225).
+fs.writeFileSync(path.join(dir, 'benchmark.json'), JSON.stringify({ v: 1, at: 1, rows: [],
+  dabStations: { n: 200, perStationPct: 2, frontPct: 7, memKB: 1300, muxFrontPct: 5, ddc8Pct: 8, cores: 8 } }));
 const rtlLog = [];
 const rtl = spawn(process.execPath, ['--max-old-space-size=512', path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
                                      '--dab-map', `${PHYS}=${CLIP}`], { stdio: ['ignore', 'pipe', 'ignore'] });

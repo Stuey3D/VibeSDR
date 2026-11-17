@@ -2339,7 +2339,7 @@ function dabOwnText(setting, n, limit) {
   const on = setting === 1 || (setting === -1 && n >= Math.max(1, limit));
   if (setting === -1 && on) return "On: this box can give up to " + n + " listeners their own DAB station, and the listener limit is " + limit + ".";
   if (setting === -1) return "Off: this box can give up to " + n + " listeners their own DAB station. Lower the listener limit to " + n + " to turn it on.";
-  if (setting === 1 && n < limit) return "On by your choice: this box measured up to " + n + " stations at once, below the listener limit of " + limit + ". Watch the health chip.";
+  if (setting === 1 && n < limit) return "On by your choice: up to " + n + " listeners get their own station \u2014 what this box measured, below the listener limit of " + limit + ". Past that, a pick changes the station for everyone on it.";
   if (setting === 1) return "On by your choice: this box can give up to " + n + " listeners their own DAB station.";
   return "Off by your choice: everyone hears the same station. This box could give up to " + n + " listeners their own.";
 }
@@ -2368,6 +2368,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"],
   ["dec_tone", "CTCSS / DCS tone ID"], ["dec_nr", "Noise reduction"], ["dec_notch", "Auto notch"],
   ["dab", "DAB+"], ["dab_scan", "DAB+ station label scan", "dab"], ["dec_dab_station", "DAB+ own station", "dab"],
+  ["dec_dab_mux", "DAB+ each multiplex in a wide capture", "dab"],
   ["adsb", "ADS-B"],
 ];
 /** The short names of the rows this version measures that the saved run `b` has no word on (in BENCH_KNOWN_ROWS order). */

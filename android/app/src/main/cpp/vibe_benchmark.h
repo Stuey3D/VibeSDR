@@ -15,6 +15,7 @@
 //   switched off on a box it would overload.
 #pragma once
 #include "vibe_dab_own.h"   // ★★ V12 own station: nFromBench — the dabStations block
+#include "vibe_dab_wide.h"  // ★★ V12 Phase 2: dabListeners — the DAB locked-range profile
 #include "vibedsp/vibedsp.h"
 #include "vibedsp/vibe_denormals.h"
 #if defined(VIBE_HAVE_OPUS)
@@ -412,7 +413,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     if (benchhw::gateNeed(hw, benchhw::Need::Spots).run == false) notRun.push_back({ "spot_*", benchhw::gateNeed(hw, benchhw::Need::Spots).why });
     // ★ The hosts' DAB (2 steps) and ADS-B (2) rows: not counted when they will not run, so the bar still ends at its end.
     if (moreRows) {
-        if (!benchhw::gateRow(hw, "dab").run) moreRowSteps -= 3;   // ★ dab, dab_scan, dec_dab_station
+        if (!benchhw::gateRow(hw, "dab").run) moreRowSteps -= 4;   // ★ dab, dab_scan, dec_dab_station, dec_dab_mux
         if (!benchhw::gateRow(hw, "adsb").run) moreRowSteps -= 2;
         moreRowSteps = std::max(0, moreRowSteps);
     }
@@ -780,8 +781,38 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         j += nb;
     } else j += ",\"network\":null";
     benchProgress().running.store(false);
+    /* ★★★ V12 THE THREE LOCKED-RANGE PROFILES (Stuart, 2026-11-17: "the initial benchmark should run for the heaviest
+     *  decoders in both modes, so WFM Advanced RDS Locked Range for the FM Broadcast band, and then DAB, and also a much
+     *  easier SSB/AM/NFM one too"). Each is the heaviest realistic per-listener load for its band, and NOT capped at 20 —
+     *  the cap is the hardware's (the setup page still takes the smaller of this and the link):
+     *   · fm     — a WFM stereo listener (lk_wfm) WITH Advanced RDS: its own measured cost, the rdsx row less the wfm row
+     *              at the same rate (the decoder a listener's chain runs on top);
+     *   · narrow — the heaviest of NFM / AM / SSB per listener;
+     *   · dab    — DAB listeners, each on their own station, for ONE block (the dabStations block carries the figures for
+     *              any number of blocks: vibe_dab_wide.h dabListeners; the page and the shim count the range's blocks).
+     *  The old keys stay for older readers (capped at 20 as they always were). */
+    auto pctOf = [&](const char* id) { for (const auto& r : res) if (r.id == id) return r.pct; return -1.0; };
+    auto usersAt = [&](double per) { return per > 0 ? std::max(0, (int)std::floor(budget / per)) : 0; };
+    double fmPer = -1;
+    { const double lk = pctOf("lk_wfm"), rx = pctOf("rdsx_2048"), w = pctOf("wfm_2048");
+      if (lk > 0) fmPer = lk + ((rx > 0 && w > 0) ? std::max(0.0, rx - w) : 0.0); }
+    double narrowPer = -1;
+    for (const char* id : { "lk_nfm", "lk_am", "lk_ssb" }) narrowPer = std::max(narrowPer, pctOf(id));
+    int dabUsers = 0;
+    { const double st = pctOf("dec_dab_station");
+      double front = -1, ddc8 = -1;
+      for (const auto& r : res) if (r.id == "dec_dab_mux") for (const auto& t : r.threads) {
+          if (t.first == "OFDM/FIC front end") front = t.second;
+          if (t.first == "DDC @ 8 MS/s") ddc8 = t.second; }
+      dabUsers = vibedab::wide::dabListeners(st, front, ddc8, 2048000.0, 1, (int)cores); }
     j += ",\"lockedUsers\":{\"wfm\":" + std::to_string(usersFor("lk_wfm")) + ",\"nfm\":" + std::to_string(usersFor("lk_nfm"))
-       + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb")) + "}";
+       + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb"))
+       /* ★ Each profile carries the capture rate it was measured at (the locked-range rows run at 2.048 MS/s; DAB's is one
+        *  block at its own rate) — the setup page's "… users @ 8 MS/s" display and a later wide-rate measurement extend
+        *  this shape, never reshape it. */
+       + ",\"fm\":{\"n\":" + std::to_string(usersAt(fmPer)) + ",\"rate\":2048000,\"perPct\":" + std::to_string(fmPer) + "}"
+       + ",\"narrow\":{\"n\":" + std::to_string(usersAt(narrowPer)) + ",\"rate\":2048000,\"perPct\":" + std::to_string(narrowPer) + "}"
+       + ",\"dab\":{\"n\":" + std::to_string(dabUsers) + ",\"rate\":2048000,\"blocks\":1}}";
     /* ★★★ HOW MANY DECODERS AT ONCE, WITH A FULL HOUSE LISTENING (Stuart: "with this current load
      *     another 4 users could have decoders but not all 10 at once"). The house is ten narrow-band
      *     listeners — the per-VFO case, where every listener costs their own chain — or as many as
@@ -821,9 +852,17 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
             if (r.id == "dab" && r.pct >= 0) { haveDab = true; for (const auto& t : r.threads) if (t.first != "vibe-dsp") dabTot += t.second; }
         }
         if (haveDab && perSt > 0) {
-            char b[200];
-            std::snprintf(b, sizeof b, ",\"dabStations\":{\"n\":%d,\"perStationPct\":%.2f,\"frontPct\":%.1f,\"memKB\":%ld}",
-                          vibedab::own::nFromBench(perSt, dabTot, (int)cores), perSt, dabTot, vibedab::own::benchMemKB().load());
+            // ★★ V12 Phase 2: one multiplex's front end and one block's DDC at 8 MS/s (dec_dab_mux) — the DAB listener
+            //    capacity of a locked range is computed from these by the shim and the setup page (vibe_dab_wide.h).
+            double muxFront = -1, ddc8 = -1;
+            for (const auto& r : res) if (r.id == "dec_dab_mux") for (const auto& t : r.threads) {
+                if (t.first == "OFDM/FIC front end") muxFront = t.second;
+                if (t.first == "DDC @ 8 MS/s") ddc8 = t.second; }
+            char b[320];
+            std::snprintf(b, sizeof b, ",\"dabStations\":{\"n\":%d,\"perStationPct\":%.2f,\"frontPct\":%.1f,\"memKB\":%ld,"
+                          "\"muxFrontPct\":%.2f,\"ddc8Pct\":%.2f,\"cores\":%d}",
+                          vibedab::own::nFromBench(perSt, dabTot, (int)cores), perSt, dabTot, vibedab::own::benchMemKB().load(),
+                          muxFront, ddc8, (int)cores);
             j += b;
         }
     }

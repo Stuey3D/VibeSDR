@@ -22,16 +22,17 @@ namespace vibedab {
 namespace own {
 
 /** The figure the rule needs from the benchmark: N = how many stations at once.
- *  @param perStationPct the dec_dab_station row (one more station, % of a core; its hottest thread + its FAAD2)
+ *  @param perStationPct the dec_dab_station row (one more station, % of a core: its decode, its FAAD2 and its Opus encode)
  *  @param dabTotalPct   the dab row's threads summed (front end + the radio's own station)
  *  ★ 70 % of every core is the green budget; one core's worth stays for network, spectrum and the audio clock. One core
- *    → 1. Capped at 16 (vibedab::DabService::kMaxStations — memory floor; past that the uplink decides anyway).
+ *    → 1. ★★ NO FIXED CAP (Stuart, 2026-11-17: "the cap should be based on the hardware running the server, so build it
+ *    into the benchmark"): N is this machine's measured figure; the shim's memory floor still holds on top.
  *  @return 0 = not measured (the row did not run): the rule then reads OFF. */
 inline int nFromBench(double perStationPct, double dabTotalPct, int cores) {
     if (!(perStationPct > 0) || !(dabTotalPct > 0) || cores < 1) return 0;
     const double spare = 70.0 * cores - dabTotalPct - 70.0;
     const int extra = spare > 0 ? int(std::floor(spare / perStationPct)) : 0;
-    return std::min(16, 1 + extra);
+    return 1 + extra;
 }
 
 /** The benchmark's own-station row's memory per station, KB (vibe_benchmark_dab.h writes it, runBenchmark's dabStations
@@ -45,12 +46,13 @@ inline bool effectiveOn(int setting, int n, int limit) {
     return n > 0 && n >= std::max(1, limit);
 }
 
-/** ★ How many stations may be open at once (besides the radio's own): the rule's N − 1, or — forced on above N — the
- *  user limit, since a station per listener is the most there can ever be. Never above the hard cap. */
+/** ★ How many stations may be open at once (besides the radio's own): the measured N, never above the user limit, less the
+ *  radio's own. ★★ The cap is the HARDWARE's (Stuart, 2026-11-17) — forced on included: forcing it on lets listeners have
+ *  their own station on a box whose N is below the limit, but never more stations than the box measured. Not measured
+ *  (N 0) = none (the setup page says to run the benchmark). */
 inline int stationCap(int setting, int n, int limit) {
     if (!effectiveOn(setting, n, limit)) return 0;
-    const int most = std::max(n, setting == 1 ? limit : 0);
-    return std::max(0, std::min(16, most) - 1);
+    return std::max(0, std::min(n, std::max(1, limit)) - 1);
 }
 
 /** The setup page's sentence under the switch (the page draws the same words — ONE RULE, TWO READERS: vibe_setup_page.h
@@ -67,7 +69,7 @@ inline std::string setupText(int setting, int n, int limit) {
     else if (setting == -1)
         std::snprintf(b, sizeof b, "Off: this box can give up to %d listeners their own DAB station. Lower the listener limit to %d to turn it on.", n, n);
     else if (setting == 1 && n < limit)
-        std::snprintf(b, sizeof b, "On by your choice: this box measured up to %d stations at once, below the listener limit of %d. Watch the health chip.", n, limit);
+        std::snprintf(b, sizeof b, "On by your choice: up to %d listeners get their own station \xe2\x80\x94 what this box measured, below the listener limit of %d. Past that, a pick changes the station for everyone on it.", n, limit);
     else if (setting == 1)
         std::snprintf(b, sizeof b, "On by your choice: this box can give up to %d listeners their own DAB station.", n);
     else

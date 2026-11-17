@@ -962,7 +962,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeRunBenchmark(JNIEnv* env, jobject, jstri
     const std::string j = vibe::runBenchmark(nullptr, 6.0, (double)uplinkKBps,
                                              [&] { auto r = vibe::runDabRows(clip, 6.0);
                                                    for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
-                                                   return r; }, 5, decoderClip);
+                                                   return r; }, 6, decoderClip);
     return env->NewStringUTF(j.c_str());
 }
 

@@ -5977,6 +5977,32 @@ static bool vsDabWeakBox() {
 /** ★★ V12 More than one DAB station is playing (an own station has listeners) — set by the own-station loop with a
  *  10 s hold on the way back down (dabMultiCheck), read by recomputeEngineRate. */
 static std::atomic<bool> g_dabMultiStation{false};
+/** ★★ V12 THE DAB LOCKED-RANGE PROFILE (vibe_dab_wide.h dabListeners): this machine's DAB listener capacity for a capture
+ *  at `centreHz` / `rateHz` with every block in it decoding — from the benchmark's dabStations block (perStationPct,
+ *  muxFrontPct, ddc8Pct, cores), re-read at most every 10 s. 0 = not measured (an older benchmark without the multiplex
+ *  row reads 0: the rule is off until the benchmark runs again — the setup page says so). */
+static int vsDabLrListeners(double centreHz, double rateHz) {
+    static std::mutex m; static double at = -1e9; static double per = -1, front = -1, ddc8 = -1; static int cores = 0;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    {
+        std::lock_guard<std::mutex> lk(m);
+        if (now - at >= 10.0) {
+            at = now; per = front = ddc8 = -1; cores = 0;
+            LocalSdrShim::BenchGetFn getFn;
+            { std::lock_guard<std::mutex> bk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+            const std::string j = getFn ? getFn() : std::string();
+            const size_t b = j.find("\"dabStations\":{");
+            if (b != std::string::npos) {
+                const size_t e = j.find('}', b);
+                auto num = [&](const char* k) { const size_t p = j.find(k, b); return (p != std::string::npos && p < e) ? std::atof(j.c_str() + p + std::strlen(k)) : -1.0; };
+                per = num("\"perStationPct\":"); front = num("\"muxFrontPct\":"); ddc8 = num("\"ddc8Pct\":");
+                cores = int(num("\"cores\":"));
+            }
+        }
+    }
+    const int muxes = int(vibedab::wide::blocksIn(centreHz, rateHz).size());
+    return vibedab::wide::dabListeners(per, front, ddc8, rateHz, std::max(1, muxes), cores);
+}
 static int vsDabStationsN() {
     static std::mutex m; static double at = -1e9; static int n = 0;
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -18136,7 +18162,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!perClientDsp() || g_icomOn.load() || vsModeBlocked("dab") || !vsDabDecoderAvailable()) return false;
         return vibedab::wide::eligible(lrCentre(), sampleRate);
     }
-    int lrCap() { return vibedab::wide::stationCap(g_dabOwnSetting.load(), vsDabStationsN(), g_vsMaxUsers.load()); }
+    /** ★★ The hardware's figure (Stuart, 2026-11-17): DAB listeners this machine carries with every block of THIS range
+     *  decoding (vsDabLrListeners), up to the user limit, less the multiplexes' own streams. */
+    int lrCap() {
+        const double c = lrCentre(), r = sampleRate;
+        return vibedab::wide::stationCap(g_dabOwnSetting.load(), vsDabLrListeners(c, r), g_vsMaxUsers.load(),
+                                         int(vibedab::wide::blocksIn(c, r).size()));
+    }
     int lrStationsOpenLocked_() const { int n = 0; for (const auto& kv : lrMux_) n += int(kv.second->st.size()); return n; }
     static uint32_t lrOwnSid(const LrMux& m) { const uint32_t s = m.svc->service(); return s ? s : m.svc->wantedService(); }
     std::string lrSessionOf(net::Socket* sk) {

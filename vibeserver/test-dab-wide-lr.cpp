@@ -47,11 +47,21 @@ int main() {
     ok(choose(c10C, -1, {}) == -1, "a capture with no block: -1");
 
     // ── the station cap ──
-    ok(stationCap(0, 16, 8) == 0, "owner off: no stations (a pick moves that multiplex's own for everyone ON IT)");
-    ok(stationCap(-1, 16, 8) == 15, "the rule on (N 16 ≥ limit 8): N − 1, as Phase 1");
-    ok(stationCap(-1, 8, 65) == 0, "the rule off (N 8 < limit 65): none");
-    ok(stationCap(1, 8, 65) == 64, "★ forced on in a locked range: a station per listener (limit − 1), not Phase 1's 16");
-    ok(stationCap(-1, 0, 4) == 0, "not measured: off");
+    // ★★ Stuart 2026-11-17: the cap is the HARDWARE's — DAB listeners this machine carries with every block decoding
+    ok(stationCap(0, 100, 8, 3) == 0, "owner off: no stations (a pick moves that multiplex's own for everyone ON IT)");
+    ok(stationCap(-1, 100, 8, 3) == 5, "the rule on (100 DAB listeners ≥ limit 8): limit − the three multiplexes' own");
+    ok(stationCap(-1, 40, 66, 3) == 0, "the rule off (40 < limit 66): none");
+    ok(stationCap(1, 40, 66, 3) == 37, "★ forced on: the MEASURED figure (40 − the three own), not the limit, not a fixed 16");
+    ok(stationCap(1, 0, 66, 3) == 0 && stationCap(-1, 0, 4, 2) == 0, "not measured: none");
+    ok(stationCap(1, 70, 66, 3) == 63, "65 services on three multiplexes fit a box that measured 70 at limit 66: 63 besides the own");
+
+    // ── the DAB listener capacity (the benchmark's DAB locked-range profile) ──
+    ok(dabListeners(25.0, 30.0, 20.0, 8e6, 3, 4) == 2, "Pi 2 class, three blocks at 8 MS/s: (280 − 70 − 3 × 50) / 25 = 2");
+    ok(dabListeners(25.0, 50.0, 30.0, 8e6, 1, 4) == int((280 - 70 - 50) / 25.0), "one block at its own rate: no DDC");
+    ok(dabListeners(1.2, 4.8, 7.5, 8e6, 3, 8) == int((560 - 70 - 3 * 12.3) / 1.2), "i5 class: in the hundreds — the uplink, not the CPU, is the limit");
+    ok(dabListeners(1.2, 4.8, 7.5, 16e6, 3, 8) < dabListeners(1.2, 4.8, 7.5, 8e6, 3, 8), "a faster capture costs more DDC per block");
+    ok(dabListeners(-1, 4.8, 7.5, 8e6, 3, 8) == 0 && dabListeners(1.2, -1, 7.5, 8e6, 3, 8) == 0, "not measured: 0");
+    ok(dabListeners(25.0, 300.0, 30.0, 8e6, 3, 4) == 0, "fronts alone past the budget: 0");
 
     // ── one PPM figure for the radio (§11.2) ──
     double ppm = 0; int dropped = 0;

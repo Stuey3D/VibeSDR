@@ -81,18 +81,20 @@ static void rules() {
     std::printf("── 1. the rule ──\n");
     CHECK(nFromBench(18.0, 95.0, 4) == 1 + int((280 - 95 - 70) / 18.0), "Pi 2 class: 4 cores, front end 95 %%, 18 %% a station -> N = %d", nFromBench(18.0, 95.0, 4));
     CHECK(nFromBench(18.0, 95.0, 1) == 1, "one core -> 1 (no own stations)");
-    CHECK(nFromBench(0.5, 12.0, 12) == 16, "a fast box is capped at 16");
+    CHECK(nFromBench(0.5, 12.0, 12) == 1 + int((840 - 12 - 70) / 0.5), "★ no fixed cap: a fast box gets what it measured (Stuart 2026-11-17: the hardware's figure) -> %d", nFromBench(0.5, 12.0, 12));
     CHECK(nFromBench(-1, 50, 4) == 0, "no row -> 0 (not measured)");
     CHECK(effectiveOn(-1, 6, 5) && effectiveOn(-1, 5, 5) && !effectiveOn(-1, 4, 5), "rule: N >= limit on, N < limit off");
     CHECK(!effectiveOn(-1, 0, 1), "not measured -> off under the rule");
     CHECK(effectiveOn(1, 2, 10) && !effectiveOn(0, 16, 2), "the owner's switch always wins (never hide)");
-    CHECK(stationCap(-1, 6, 5) == 5 && stationCap(-1, 4, 5) == 0, "cap = N - 1 when on, 0 when off");
-    CHECK(stationCap(1, 2, 10) == 9, "forced on above N: a station per listener (limit - 1)");
+    CHECK(stationCap(-1, 6, 5) == 4 && stationCap(-1, 4, 5) == 0, "cap = min(N, limit) - 1 when on (five listeners: the radio's own + 4), 0 when off");
+    CHECK(stationCap(1, 2, 10) == 1 && stationCap(1, 0, 10) == 0, "★ forced on above N: still the measured N (N - 1 besides the radio's own); not measured: none");
     CHECK(setupText(-1, 3, 5) == "Off: this box can give up to 3 listeners their own DAB station. Lower the listener limit to 3 to turn it on.",
           "setup text, off by the rule: '%s'", setupText(-1, 3, 5).c_str());
     CHECK(setupText(-1, 8, 5) == "On: this box can give up to 8 listeners their own DAB station, and the listener limit is 5.",
           "setup text, on by the rule");
     CHECK(setupText(-1, 0, 5).rfind("Not measured yet", 0) == 0, "setup text, not measured");
+    CHECK(setupText(1, 3, 5) == "On by your choice: up to 3 listeners get their own station \xe2\x80\x94 what this box measured, below the listener limit of 5. Past that, a pick changes the station for everyone on it.",
+          "setup text, forced on below N: the measured figure is the cap: '%s'", setupText(1, 3, 5).c_str());
     CHECK(setupText(1, 3, 5).rfind("On by your choice", 0) == 0 && setupText(0, 8, 5).rfind("Off by your choice", 0) == 0, "setup text, the owner's choice");
 
     std::printf("── 2. the roster ──\n");
