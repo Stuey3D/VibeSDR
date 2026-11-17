@@ -329,6 +329,28 @@ listener's mux is knocked off (test-afc "it glided").
     realistic limit over the internet, separate from what the CPU can do.
   - If 65 does not fit, report the largest N that does and which resource limits it. Never claim 65 unless it was
     measured.
+- **First offline result (2026-11-17, Mac, `vibeserver/dab-wide-bench`, the recorded file, 30 s after 15 s warm-up):**
+  one DabService per multiplex, each cutting its block from the same 8 MS/s stream with its own DDC. Every audio
+  service was opened as a station: **65 services decoding at once** (3 multiplex decoders' own and 62 stations).
+  0 station frames dropped, 0 wide samples dropped.
+  - 10C *Northamptonshire*: 16 services, MER 18.2, FIB 1.000, BER 0.002, all decoding.
+  - 11A *SDL National*: 30 MP2 services, MER 23.6, all decoding.
+  - 10D *Herts Beds Bucks*: 19 services, MER 8.9, FIB 1.000, BER 0.107, every station ~63 % of super frames.
+    The single-mux live check read MER 9.2 and BER 0.098, so wide mode reads ~0.3 dB lower on a different minute,
+    from an 8-bit file. The live comparison on the RSP's native samples is still to do (§11.1b).
+  - The ensemble labels decoded match Stuart's list.
+  - **The same run on the Lenovo i5-11300H** (4 cores / 8 threads; standalone binary in a scratch dir, 0 listeners,
+    the server untouched; 40 s after 15 s warm-up). All 65 services decoded with the same counts as on the Mac.
+    **Total 75.5 % of ONE core:**
+    - the three DDCs (vibe-dab-ddc) 22.4 %, ~7.5 % each at 8 MS/s;
+    - the three OFDM/FIC front ends (vibe-dab) 14.3 %, ~4.8 % each;
+    - 62 stations' own decode (vibe-dab-st) 22.1 %, plus FAAD2 14.6 % and MP2 2.1 %, so **~0.6 % per station**.
+    - RSS 90 MB, ~1.3 MB per station.
+    - Audio delivered per station: 2.18 to 2.19 M samples over the ~46 s each was open, i.e. real time with no
+      shortfall. 0 frames dropped.
+    - This is decode only, without the server's network side. At ~30 kB/s a listener, 65 listeners need ~2 MB/s
+      (~16 Mbit/s) of upload, which is the realistic ceiling, not the CPU. **The end-to-end 65-listener run through
+      the server is still to do:** it needs Phase 2's server integration (a listener's own multiplex).
 - **Lenovo rules:**
   - 0 listeners first.
   - Back up `/etc/vibeserver/config.json`. When finished, it must hash again to the reference copy
