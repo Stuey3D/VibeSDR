@@ -2341,6 +2341,41 @@ function dabOwnRender() {
   el.textContent = dabOwnText(parseInt(sel.value, 10), n, limit);
 }
 
+/* ★★ V12 A BENCHMARK OLDER THAN ITS ROWS (Stuart, 2026-11-17: the Pi 2's run was from 20 September, before DAB own
+ *  station had a row, so own station sat at "not measured" and the page looked as if it would not work). Every row this
+ *  version measures, in the order it runs, with a short name. A row the saved run has neither measured nor listed as
+ *  not run was added after it. A row that needs another row's radio (DAB's, ADS-B's) is not counted as missing when
+ *  that row was not run here. scripts/test-setup-bench-stale.mjs checks this list against the benchmark's own ids. */
+const BENCH_KNOWN_ROWS = [
+  ["dec_rtty", "RTTY"], ["dec_navtex", "NAVTEX"], ["dec_wefax", "WEFAX"], ["dec_sstv", "SSTV"], ["dec_time", "Time signals"],
+  ["dec_ft8", "FT8 + FT4"], ["dec_ft8band", "Band spots"], ["dec_lora", "LoRa"], ["dec_lora_all", "LoRa on every channel"],
+  ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
+  ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
+  ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"],
+  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
+  ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
+  ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"],
+  ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"],
+  ["dec_tone", "CTCSS / DCS tone ID"], ["dec_nr", "Noise reduction"], ["dec_notch", "Auto notch"],
+  ["dab", "DAB+"], ["dab_scan", "DAB+ station label scan", "dab"], ["dec_dab_station", "DAB+ own station", "dab"],
+  ["adsb", "ADS-B"],
+];
+/** The short names of the rows this version measures that the saved run `b` has no word on (in BENCH_KNOWN_ROWS order). */
+function benchStaleRows(b) {
+  if (!b) return [];
+  const seen = new Set((b.rows || []).map(r => r.id));
+  const notRun = new Set((b.notRun || []).map(n => n.id));
+  return BENCH_KNOWN_ROWS
+    .filter(([id, , needs]) => !seen.has(id) && !notRun.has(id) && !(needs && (notRun.has(needs) || !seen.has(needs))))
+    .map(([, name]) => name);
+}
+function benchStaleText(b) {
+  const s = benchStaleRows(b);
+  if (!s.length) return "";
+  return " Measured before this version added " + (s.length === 1 ? "a row for " : s.length + " rows: ") + s.join(", ")
+    + ". Run the benchmark again to measure " + (s.length === 1 ? "it; until then it keeps its default." : "them; until then they keep their defaults.");
+}
+
 function renderBench(j) {
   BENCH = (j && j.v) ? j : null;
   if (typeof dabOwnRender === "function") dabOwnRender();   // ★★ V12 own station: the sentence names the measured N
@@ -2350,7 +2385,7 @@ function renderBench(j) {
     const d = new Date((BENCH.at || 0) * 1000);
     // ★ What the measurement cost (2026-10-31: every decoder has a row now, so the run is longer — say how long).
     const took = Number(BENCH.benchSec) > 0 ? " It took " + Math.round(BENCH.benchSec) + " seconds." : "";
-    when.textContent = "Last run " + (isFinite(d.getTime()) ? d.toLocaleString() : "recently") + "." + took;
+    when.textContent = "Last run " + (isFinite(d.getTime()) ? d.toLocaleString() : "recently") + "." + took + benchStaleText(BENCH);
   }
   rows.innerHTML = "";
   for (const r of (BENCH.rows || [])) {
