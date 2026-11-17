@@ -384,6 +384,8 @@ deps_for() {
     # ★★ V12 wide-rate DAB (vibe_dab_ddc.h): 17 capture rates × block offsets, aliases swept to the capture's edge, and
     #    its cost table — optimised, or the sweep takes minutes and the cost line means nothing.
     test-dab-ddc) echo "-O2" ;;
+    # ★★ V12 §11.1 the wide-capture filter bank against the DDC (vibe_dab_bank.h) — optimised (its cost lines), and threaded.
+    test-dab-bank) echo "-O2 -pthread" ;;
     # ★★★ A SLOW SAMPLE CLOCK (2026-11-12, a B210 4 ppm out on MTVNL 7D): the null walks to the window's front and the tracker
     #     pinned there — the lock broke up hours into a listen. The window re-centres (advanceAfterPush); the old loop must
     #     still show the fault. ~2,000 synthetic frames through the real receiver, so optimised.
@@ -483,7 +485,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-dab-bank)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"

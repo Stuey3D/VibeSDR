@@ -10,7 +10,13 @@
 //   dab-wide-bench <capture.cu8> <rate> <centreHz> <block,block,…> [secs=40] [warm=15] [stations=all|N per mux] [skip=0]
 //     capture: unsigned 8-bit I/Q (rtl_tcp style, 127.5 = zero), no header. Streamed — never whole in memory.
 // Prints one JSON line per multiplex, one per station, and a summary line.
+// ★★ V12 §11.1 (2026-11-17): DAB_BANK=1 — every block cut by ONE filter-bank pass (vibe_dab_bank.h Runner) instead of a DDC
+//    each. DAB_SYNTH_UP=k DAB_SYNTH_COPIES=c DAB_SYNTH_STEP=Hz — a WIDER capture made from this one: upsampled ×k, times a comb
+//    of c copies `step` apart (a real, periodic table: outRate/step must be whole), so c × the blocks — real ensembles — sit
+//    across rate×k (9 copies of 10C/10D/11A at 56 MS/s = 27 blocks, the B210 case). Each copy's decoders are told their own
+//    offset (rfCentre), the bank its shift; the content is the same air at each copy.
 #include "vibe_dab_service.h"
+#include "vibe_dab_bank.h"   // ★★ V12 §11.1 DAB_BANK=1: the filter bank instead of the per-mux DDCs
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -89,23 +95,54 @@ int main(int argc, char** argv) {
     const std::string stArg = argc > 7 ? argv[7] : "all";
     const int perMux = stArg == "all" ? 1000 : std::atoi(stArg.c_str());
     const double skip = argc > 8 ? std::atof(argv[8]) : 0;
+    const char* eb = std::getenv("DAB_BANK");
+    const bool useBank = eb && *eb == '1';
+    const int up = std::max(1, std::getenv("DAB_SYNTH_UP") ? std::atoi(std::getenv("DAB_SYNTH_UP")) : 1);
+    const int copies = std::max(1, std::getenv("DAB_SYNTH_COPIES") ? std::atoi(std::getenv("DAB_SYNTH_COPIES")) : 1);
+    const double step = std::getenv("DAB_SYNTH_STEP") ? std::atof(std::getenv("DAB_SYNTH_STEP")) : 5.6e6;
+    const double outRate = rate * up;
     FILE* fp = std::fopen(argv[1], "rb");
     if (!fp) { std::fprintf(stderr, "cannot read %s\n", argv[1]); return 2; }
     if (skip > 0) std::fseek(fp, long(skip * rate) * 2, SEEK_SET);
     std::vector<Mux> mux;
+    std::vector<double> shifts;   // ★ per mux: its block's offset in the (synthetic) capture — the bank's shift
+    for (int c = 0; c < copies; ++c) {
+    const double S = (double(c) - double(copies - 1) / 2.0) * step;
     for (const char* p = argv[4]; *p; ) {
         const char* e = std::strchr(p, ','); const std::string b = e ? std::string(p, e) : std::string(p);
         Mux m; m.block = b;
         for (int i = 0; i < int(vibedab::kBandIIICount); ++i) if (b == vibedab::kBandIII[i].name) m.idx = i;
         if (m.idx < 0) { std::fprintf(stderr, "unknown block %s\n", b.c_str()); return 2; }
         m.svc = std::make_unique<vibedab::DabService>();
-        m.svc->setRfRate(rate); m.svc->setRfCentre(centre); m.svc->setChannel(m.idx);
+        m.svc->setRfRate(outRate); m.svc->setRfCentre(centre - S); m.svc->setChannel(m.idx);
+        shifts.push_back(double(vibedab::kBandIII[m.idx].centreHz) - centre + S);
         mux.push_back(std::move(m));
         p = e ? e + 1 : p + std::strlen(p);
+    }
     }
     vibedab::dabScanLabels().store(0);
     const size_t blk = size_t(rate / 50);            // 20 ms of capture per feed
     std::vector<uint8_t> u(blk * 2); std::vector<float> f(blk * 2);
+    // ★★ the synthetic wide capture: ×up (polyphase, the DDC's own rational filter) times the comb of copies
+    vibedab::ddc::Rational upR; std::vector<float> g; std::vector<float> comb;
+    if (up > 1) upR.design(rate, outRate, 0.42 * rate, rate - 0.42 * rate, 70.0);
+    const int period = int(std::lround(outRate / step));
+    if (copies > 1) {
+        if (std::fabs(outRate / step - period) > 1e-6) { std::fprintf(stderr, "DAB_SYNTH_STEP must divide the output rate\n"); return 2; }
+        comb.resize(size_t(period));
+        for (int k = 0; k < period; ++k) { double v = 0; for (int c = 0; c < copies; ++c) v += std::cos(2 * M_PI * (double(c) - double(copies - 1) / 2.0) * step * k / outRate); comb[size_t(k)] = float(v); }
+    }
+    size_t combPh = 0;
+    std::unique_ptr<vibedab::bank::Runner> bankR;
+    if (useBank) {
+        const int hw = int(std::max(1u, std::thread::hardware_concurrency()));
+        bankR = std::make_unique<vibedab::bank::Runner>(outRate, std::max(0, std::min(3, hw / 2 - 1)));
+        std::vector<vibedab::bank::Runner::Out> outs;
+        for (size_t k = 0; k < mux.size(); ++k) { vibedab::DabService* svc = mux[k].svc.get();
+            outs.push_back({ int(k), shifts[k], [svc](const float* y, size_t n, size_t raw) { svc->feedChannelised(y, n, raw); }, nullptr }); }
+        bankR->setOutputs(std::move(outs));
+        std::fprintf(stderr, "bank: %.3f MS/s, %zu blocks, N %d H %d D %d, %d workers\n", outRate / 1e6, mux.size(), bankR->plan().N, bankR->plan().H, bankR->plan().D, bankR->workers());
+    }
     const auto before = threads();
     const long rss0 = rssKB();
     std::map<long, std::pair<std::string, double>> mid;
@@ -115,7 +152,11 @@ int main(int argc, char** argv) {
     while (fed < warm + secs) {
         if (std::fread(u.data(), 1, u.size(), fp) != u.size()) { std::fseek(fp, long(skip * rate) * 2, SEEK_SET); continue; }   // loop the capture
         for (size_t i = 0; i < u.size(); ++i) f[i] = (float(u[i]) - 127.5f) / 127.5f;
-        for (auto& m : mux) m.svc->feed(f.data(), blk);
+        const float* src = f.data(); size_t nSrc = blk;
+        if (up > 1) { g.clear(); upR.run(f.data(), blk, g); src = g.data(); nSrc = g.size() / 2;
+            if (copies > 1) for (size_t k = 0; k < nSrc; ++k) { const float d = comb[combPh]; g[2 * k] *= d; g[2 * k + 1] *= d; if (++combPh == size_t(period)) combPh = 0; } }
+        if (bankR) bankR->feed(src, nSrc);
+        else for (auto& m : mux) m.svc->feed(src, nSrc);
         fed += double(blk) / rate;
         if (fed >= nextPoll) {
             nextPoll += 1.0;
@@ -175,8 +216,9 @@ int main(int argc, char** argv) {
                         m.st[k]->stationDropped(), m.st[k]->stationFrames(), ok ? "true" : "false");
         }
     }
-    std::printf("{\"summary\":true,\"rate\":%.0f,\"secs\":%.0f,\"muxes\":%zu,\"stations\":%d,\"stationsDecoding\":%d,\"cores\":%ld,\"totalPct\":%.1f,"
-                "\"rssKB\":%ld,\"rssStartKB\":%ld,\"rssMidKB\":%ld,\"threads\":{", rate, secs, mux.size(), stations, stationsOk,
+    if (bankR) std::fprintf(stderr, "bank: dropped %llu wide samples\n", (unsigned long long)bankR->dropped());
+    std::printf("{\"summary\":true,\"front\":\"%s\",\"rate\":%.0f,\"secs\":%.0f,\"muxes\":%zu,\"stations\":%d,\"stationsDecoding\":%d,\"cores\":%ld,\"totalPct\":%.1f,"
+                "\"rssKB\":%ld,\"rssStartKB\":%ld,\"rssMidKB\":%ld,\"threads\":{", useBank ? "bank" : "ddc", outRate, secs, mux.size(), stations, stationsOk,
                 sysconf(_SC_NPROCESSORS_ONLN), total, rssKB(), rss0, rssMid);
     bool first = true;
     for (const auto& kv : byName) { std::printf("%s\"%s\":%.1f", first ? "" : ",", kv.first.c_str(), kv.second); first = false; }

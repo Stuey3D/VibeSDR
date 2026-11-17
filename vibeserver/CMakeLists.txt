@@ -1380,6 +1380,12 @@ add_executable(test-dab-own "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-own.cpp")
 target_include_directories(test-dab-own PRIVATE "${CPP_DIR}")
 target_compile_options(test-dab-own PRIVATE -O2)
 target_link_libraries(test-dab-own PRIVATE vibeserver_core)
+# ★★ V12 DAB Phase 2 / §11.1: dab-wide-bench — every block of a wide capture decoded at once, per-mux DDCs or the filter
+#    bank (DAB_BANK=1), from a recording or a synthetic wider one (DAB_SYNTH_*). Linux (/proc thread times).
+add_executable(dab-wide-bench "${CMAKE_CURRENT_SOURCE_DIR}/dab-wide-bench.cpp")
+target_include_directories(dab-wide-bench PRIVATE "${CPP_DIR}")
+target_compile_options(dab-wide-bench PRIVATE -O2)
+target_link_libraries(dab-wide-bench PRIVATE vibeserver_core)
 
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
