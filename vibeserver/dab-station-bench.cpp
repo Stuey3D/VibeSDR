@@ -9,6 +9,10 @@
 //   "stations":[{"sid":…,"sfOk":…,"sfTried":…,"mp2Out":…,"dropped":…}],"n":N (vibe_dab_own.h nFromBench)}
 #include "vibe_dab_service.h"
 #include "vibe_dab_own.h"
+#include "opus_audio_encoder.h"
+#include "vibe_thread.h"
+#include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -88,6 +92,27 @@ Run run(const Clip& c, uint32_t sid, int K, double secs, double warm) {
     const size_t blk = size_t(c.rate / 20) * 2;
     size_t pos = 0; std::vector<float> pcm(48000);
     std::map<long, std::pair<std::string, double>> mid; bool measuring = false;
+    /* ★★ EACH STATION'S ONE OPUS ENCODE (2026-11-17 — the Pi 2 live: ~12 % of an A7 core per stereo stream, left out
+     *  before, so N read ~2× too high): a vibe-dab-enc thread per station, 20 ms of its PCM at the server's 96 kb/s
+     *  stereo, as the server's per-station encoder does. VIBE_BENCH_NO_ENCODE=1 measures without it (the old figure). */
+    std::atomic<bool> encRun{true};
+    std::vector<std::thread> enc;
+#ifdef VIBE_HAVE_OPUS
+    if (!std::getenv("VIBE_BENCH_NO_ENCODE"))
+        for (auto& s : st) if (s) enc.emplace_back([&encRun, sp = s] {
+            vibeThreadName("vibe-dab-enc");
+            vibe::OpusAudioEncoder opus; opus.setBitrate(96000);
+            std::vector<float> f(960 * 2); std::vector<int16_t> q(960 * 2); std::vector<std::vector<uint8_t>> pk;
+            auto next = std::chrono::steady_clock::now();
+            while (encRun.load()) {
+                next += std::chrono::milliseconds(20);
+                std::this_thread::sleep_until(next);
+                const size_t got = sp->takePcm(f.data(), 960);
+                for (size_t i = 0; i < 960 * 2; ++i) { const float v = i < got * 2 ? std::max(-1.0f, std::min(1.0f, f[i])) : 0.0f; q[i] = int16_t(std::lround(v * 32767.0f)); }
+                pk.clear(); opus.encode(q.data(), 960, 2, pk);
+            }
+        });
+#endif
     const auto t0 = std::chrono::steady_clock::now(); double fed = 0;
     for (;;) {
         if (!measuring && fed >= warm) { mid = threads(); measuring = true; r.rss1 = rssKB(); }
@@ -97,10 +122,12 @@ Run run(const Clip& c, uint32_t sid, int K, double secs, double warm) {
         pos = (pos + n) % c.iq.size();
         fed += double(n / 2) / c.rate;
         while (svc->takePcm(pcm.data(), pcm.size() / 2) > 0) {}
-        for (auto& s : st) if (s) while (s->takePcm(pcm.data(), pcm.size() / 2) > 0) {}
+        if (enc.empty()) for (auto& s : st) if (s) while (s->takePcm(pcm.data(), pcm.size() / 2) > 0) {}
         std::this_thread::sleep_until(t0 + std::chrono::microseconds((long long)(fed * 1e6)));
     }
     const auto after = threads();
+    encRun.store(false);
+    for (auto& t : enc) t.join();
     for (const auto& kv : after) {
         if (before.count(kv.first)) continue;   // ★ new threads only — the decoder's, not this feeder
         auto m = mid.find(kv.first);

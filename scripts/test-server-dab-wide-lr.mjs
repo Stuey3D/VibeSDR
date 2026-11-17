@@ -163,6 +163,7 @@ try {
   const pl = B.dab()?.playing || [];
   ok(pl.some((p) => p.sid === bSid && p.n === 2) && pl.some((p) => p.sid === other && p.n === 1), `11A's playing list: ${JSON.stringify(pl)}`);
   ok(!(A.dab()?.playing || []).some((p) => p.sid === other), '10C\'s playing list knows nothing of 11A');
+  ok(/\[DAB-LR\] several stations playing/.test(log()), '★ the weak-box waterfall rule counts stations on ANY multiplex (several streams playing)');
   C.aud.sq = C.aud.ns = 0;
   const c0 = C.aud.binBytes; await sleep(4000);
   ok(rms(C.aud) > 200, `C's station is programme, not silence (RMS ${rms(C.aud).toFixed(0)})`);

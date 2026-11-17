@@ -10928,7 +10928,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  at ~6 fps, the box at 1.6 % idle and the audio glitching; at 2 fps the stations get that CPU. The clients'
          *  fixed output clock repeats the newest row, so the waterfall slows, never stalls. One station (everyone on the
          *  radio's own) or a box the benchmark does not call weak: untouched. */
-        if (g_dabMode.load(std::memory_order_relaxed) && g_dabMultiStation.load(std::memory_order_relaxed)
+        if ((g_dabMode.load(std::memory_order_relaxed) || dabLrCount_.load(std::memory_order_relaxed) > 0) && g_dabMultiStation.load(std::memory_order_relaxed)
             && want > 2.0 && vsDabWeakBox()) want = 2.0;
         /* ★★ AND THE GOVERNOR'S, BELOW THE OWNER'S (vibe_spec_governor.h): only while this box is starved for CPU,
          *  20 → 10 → 5. It never raises anything — the owner's top and a listener's lower ask both still hold — and
@@ -18446,12 +18446,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
             }
+            /* ★★ The weak-box waterfall rule (8fce05f27, dabMultiCheck) counts stations on ANY multiplex here: every
+             *  decoding stream — each multiplex's own and each station — more than one = "several stations playing". */
+            {
+                int streams = 0;
+                for (const auto& kv : lrMux_) streams += 1 + int(kv.second->st.size());
+                lrMultiCheck_(streams > 1, now);
+            }
             if (lrMux_.empty() && lrSess_.empty()) { if (lrEmptySince_ == 0) lrEmptySince_ = now; } else lrEmptySince_ = 0;
             std::vector<std::shared_ptr<DabOwnSt>> keep;
             for (auto& g : lrGrave_) (g.use_count() == 1 ? reap : keep).push_back(std::move(g));
             lrGrave_.swap(keep);
         }
         reap.clear();   // ★ HERE: each station's / multiplex's threads join on vibe-dab-lr, never the audio clock or vibe-dsp
+    }
+    double lrMultiLastAt_ = -1e9;
+    /** The same rule and hold as dabMultiCheck (whole-radio DAB), for the locked range's streams. */
+    void lrMultiCheck_(bool multi, double now) {
+        if (g_dabMode.load(std::memory_order_relaxed)) return;   // ★ never both: whole-radio DAB has its own check
+        if (multi) lrMultiLastAt_ = now;
+        const bool want = multi || (g_dabMultiStation.load() && now - lrMultiLastAt_ < 10.0);
+        if (want == g_dabMultiStation.load()) return;
+        g_dabMultiStation.store(want);
+        const bool weak = vsDabWeakBox();
+        LOGI("[DAB-LR] %s", want ? (weak ? "several stations playing \xe2\x80\x94 a weak box: the waterfall drops to 2 fps"
+                                         : "several stations playing \xe2\x80\x94 this box keeps its waterfall rate")
+                                 : (weak ? "one station again \xe2\x80\x94 the waterfall back at the listeners' rate" : "one station again"));
+        recomputeEngineRate();
     }
     void dabLrCtlLoop() {
         vibeThreadName("vibe-dab-lr");
@@ -18462,6 +18483,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
         dabLrTick();
+        if (!g_dabMode.load(std::memory_order_relaxed) && g_dabMultiStation.exchange(false)) recomputeEngineRate();   // ★ nobody in DAB here
     }
     /** vibe-dab-lrclk: every station's 20 ms, as the whole-radio clock does (Phase 1's pump and its ONE encode per station). */
     void dabLrClkLoop() {
