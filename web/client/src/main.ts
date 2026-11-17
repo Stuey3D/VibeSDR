@@ -21563,6 +21563,13 @@ function rfAgcDrivesLna(): boolean {
 
 function applyRspLock() {
   const restricted = rspRestricted();
+  /* ★★ V12 (Stuart, 2026-11-17): THE OWNER'S FIXED BAND GAIN IS THE RF GAIN ONLY — "a user could set a locked RF gain
+   *  and then allow the IF to either be AGC or manual" ("All bands" fixes it everywhere). `restricted` still hides the RF
+   *  rows on such a band; the IF AGC, the IF slider and the AGC target follow `frontLocked` alone (a shared receiver
+   *  behind the admin password), which is the only thing that withholds the whole front end. */
+  const frontLocked = hwLockedCentre > 0 && srvAdminProtected && !adminUnlocked;
+  // ★ A locked band WITH an IF figure ("RF 7 · IF 25 🔒") fixes the IF as well — the server holds it there and refuses it.
+  const ifLocked = frontLocked || (hwGainLocked && hwIfGrFloor >= 0);
   /* ★★★ VibeAGC OWNS EVERY GAIN CONTROL ON THIS RADIO, AND SAYS SO. It drives the LNA state and
    *     the IF reduction TOGETHER from its own level measurement, and it keeps the radio's own IF
    *     AGC switched off — so with it on, all three of those controls are its, not yours. Leaving
@@ -21581,7 +21588,7 @@ function applyRspLock() {
   const vibeAgcOn = agcOn && rspVagcRunning === true;
   renderRspVagc();
   const gr = $<HTMLInputElement>('rspIfGr');
-  gr.classList.toggle('agc', agcOn || restricted);
+  gr.classList.toggle('agc', agcOn || ifLocked);
   /* ★ THE RF HALF, EXACTLY AS ABOVE. VibeAGC steps the LNA, so while it is on the slider is
    *  read-only and greyed — and still live, so you can watch it move. Guarded because an older
    *  server sends no rfAgc and the button may not exist on a non-RSP radio. */
@@ -21604,7 +21611,7 @@ function applyRspLock() {
    *     only for the traditional IF agc"). Greyed, not hidden: it is a real control of a real
    *     feature, just not this one. */
   const sp = document.getElementById('rspAgcSet') as HTMLInputElement | null;
-  if (sp) sp.classList.toggle('agc', vibeAgcOn || restricted);   // ★ read-only under VibeAGC: "set by VibeAGC"
+  if (sp) sp.classList.toggle('agc', vibeAgcOn || ifLocked);   // ★ read-only under VibeAGC: "set by VibeAGC"
   /* ★★★ THE NOTCHES, WHEN THE SERVER OWNS THEM. With automatic notch filtering on, the receiver
    *     sets both from the tuned frequency and REFUSES a manual flip — so clicking them changed
    *     the button, changed nothing else, and said nothing (Stuart, 2026-09-12: "oh no i turned
@@ -21651,14 +21658,14 @@ function applyRspLock() {
   //     but read-only BECAUSE IT MOVES — watching the AGC work is how you can tell it is working
   //     at all. A hidden slider and a frozen one look identical: broken.
   const rowOf = (id: string) => document.getElementById(id)?.closest('.mrow') as HTMLElement | null;
-  for (const id of ['rspLna', 'rspIfAgc', 'rspRfAgc']) {
+  for (const id of ['rspLna', 'rspRfAgc']) {
     const r = rowOf(id); if (r) r.hidden = restricted;
   }
-  for (const id of ['rowAgcSet', 'rowRspNotch']) {
-    const r = document.getElementById(id); if (r) r.hidden = restricted;
-  }
+  { const r = rowOf('rspIfAgc'); if (r) r.hidden = ifLocked; }
+  { const r = document.getElementById('rowAgcSet'); if (r) r.hidden = ifLocked; }
+  { const r = document.getElementById('rowRspNotch'); if (r) r.hidden = frontLocked; }
   const bias = document.getElementById('rspBiasT')?.closest('.mrow') as HTMLElement | null;
-  if (bias) bias.hidden = restricted;
+  if (bias) bias.hidden = frontLocked;
 }
 
 function renderRspVals() {

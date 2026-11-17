@@ -522,7 +522,13 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
    *  ★ An ADMIN may still set them — the refusal is aimed at listeners — so admin wins here, as it
    *    does for every other gate in this panel. */
   const notchesOurs = isAdmin || (!p.rspAutoNotch && p.rspUserNotch !== false);
-  const canGain      = isAdmin || (!p.gainLocked && (!p.agcLocked || p.radio?.driver === 'hackrf'));
+  /* ★★ V12 (Stuart, 2026-11-17): ON AN SDRplay A FIXED BAND GAIN IS THE RF GAIN ONLY — "a user could set a locked RF gain
+   *  and then allow the IF to either be AGC or manual" (with "All bands" it fixes the RF everywhere). The server refuses
+   *  only the LNA there and holds the RF loops still, so the panel stays, minus the RF rows (rspRfFixed). */
+  // ★ A locked band WITH an IF figure fixes the IF too (the server refuses it), so there the panel hides as before.
+  const rspIfFixed   = isRsp && !!p.gainLocked && (p.ifGrFloorDb ?? -1) >= 0;
+  const canGain      = isAdmin || ((!p.gainLocked || (isRsp && !rspIfFixed)) && (!p.agcLocked || p.radio?.driver === 'hackrf'));
+  const rspRfFixed   = isRsp && !isAdmin && !!p.gainLocked;
   const canRate      = isAdmin || !(p.lockedRate && p.lockedRate > 0);
   /* ★ Nothing left but the password box. Then the panel does not pretend to be a control panel:
    *  it says what it is and puts the cursor where the only useful action is. */
@@ -958,6 +964,15 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 state (more reduction) before touching anything else.
               </Text>
 
+              {rspRfFixed ? (
+                <>
+                  <Text style={styles.section}>RF GAIN (LNA STATE)</Text>
+                  <Text style={styles.note}>
+                    Fixed by the owner on this band, at {(p.rspLna ?? 0)} / {Math.max(0, lnaTop)}: the same for everybody
+                    listening. The IF below is yours, on AGC or by hand.
+                  </Text>
+                </>
+              ) : (<>
               <Text style={styles.section}>RF GAIN (LNA STATE)</Text>
               <View style={styles.stepperRow}>
                 <TouchableOpacity style={styles.stepBtn}
@@ -971,6 +986,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
               </View>
               <Text style={styles.note}>0 = most RF gain. Higher states attenuate the front end.</Text>
+              </>)}
 
               <View style={styles.toggleRow}>
                 {/* ★ "IF AGC · VibeAGC" — which loop holds the IF while it is automatic (2026-10-30). */}
@@ -988,7 +1004,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   ★ It belongs NEXT TO the IF one, exactly as in the web client, because an owner
                     reading "IF AGC: AUTO" reasonably assumes that is the whole of the automatic
                     gain — and then cannot explain why the RF gain is moving too. */}
-              {p.onRspRfAgc && (
+              {p.onRspRfAgc && !rspRfFixed && (
                 <>
                   <View style={styles.toggleRow}>
                     <Text style={styles.toggleLabel}>

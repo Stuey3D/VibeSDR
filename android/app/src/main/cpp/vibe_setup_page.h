@@ -1776,6 +1776,10 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
              listeners get no gain controls at all. A band you do not lock reads
              <b>up to RF&nbsp;7 &middot; IF&nbsp;20</b> &mdash; they keep the controls and simply
              cannot go past it. Lock <b>All bands</b> and the whole radio is fixed.
+             <span id="gainLockRspNote" class="hide"><br><b>On an SDRplay, locking an RF figure alone fixes the RF
+             gain only</b>: the AGC no longer moves the LNA there, and listeners keep the IF &mdash; on AGC or by
+             hand. Give the band an IF figure too and the IF is fixed as well. Lock an RF figure on <b>All bands</b>
+             to fix the RF everywhere and leave every listener the IF.</span>
              <span id="gainLimitAgcNote" style="display:none"><br><b>With VibeAGC on</b>, the loop obeys these
              ceilings: tuning into a capped band brings the gain down to the ceiling, and the AGC
              cannot raise it past that figure however quiet the band is.</span>
@@ -4440,9 +4444,11 @@ function renderGain() {
     if (note) note.innerHTML = isRsp
       /* ★★ V12 (Stuart, 2026-11-17): the lock holds BOTH halves — a listener on the Lenovo RSP1A had switched the RF AGC
        *  off and set the gain by hand, because the lock covered only the IF AGC. */
-      ? "Listeners may not switch either AGC off or set the RF or IF gain by hand: the RF AGC is held on, and the IF "
-        + "stays with whichever AGC runs it (VibeAGC or the RSP's own, chosen above). You keep every control once "
-        + "signed in as admin. With it locked on, the IF ceiling below is hidden: the AGC owns that control."
+      ? "Listeners may not switch either AGC off or set the RF or IF gain by hand: both gains are the AGC's (VibeAGC "
+        + "or the RSP's own, chosen above). Signed in as admin you can switch either AGC off and set both gains by "
+        + "hand; once no admin is signed in, both AGCs go back on. To fix the RF and leave listeners the IF instead, "
+        + "lock an RF figure in the per-band ceilings below (All bands for the whole radio). With it locked on, the IF "
+        + "ceiling below is hidden: the AGC owns that control."
       : isHf
       ? "Listeners may not switch to manual. This is the Airspy HF+'s OWN AGC, and on this radio it "
         + "is the whole protection available \u2014 there is no variable gain to limit, only an "
@@ -4455,6 +4461,7 @@ function renderGain() {
   //      it starts clear each time rather than inheriting the last band's answer.
   // ★ The Airspy R2 / Mini gets its own LIMIT / LOCK choice and its curve picker instead.
   $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf || isUsrp));
+  $("gainLockRspNote").classList.toggle("hide", !isRsp);   // ★★ V12 an SDRplay's lock: RF only unless an IF figure
   $("gainAspLockRow").classList.toggle("hide", !isAsp);
   $("gainCurve").classList.toggle("hide", !isAsp);
   $("gainAspNote").classList.toggle("hide", !isAsp);

@@ -28,8 +28,8 @@ const ADMIN = 'agclock-Test-Pass-31';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-agclock-'));
 for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
 const CFG = path.join(dir, 'config.json');
-const writeCfg = (agcLock) => fs.writeFileSync(CFG, JSON.stringify({ configured: true, name: 'AGC lock test', adminPass: ADMIN,
-  radios: [{ serial: 'agclock-test', label: 'Test radio', enabled: true, configured: true, users: 3, agcLock, rfAgc: true }] }));
+const writeCfg = (agcLock, extra = {}) => fs.writeFileSync(CFG, JSON.stringify({ configured: true, name: 'AGC lock test', adminPass: ADMIN,
+  radios: [{ serial: 'agclock-test', label: 'Test radio', enabled: true, configured: true, users: 3, agcLock, rfAgc: true, ...extra }] }));
 writeCfg(1);
 const radioCfg = () => JSON.parse(fs.readFileSync(CFG, 'utf8')).radios.find((r) => r.serial === 'agclock-test') || {};
 const LOG = path.join(dir, 'server.log');
@@ -93,7 +93,45 @@ try {
   ok(await until(() => /RSP RF AGC off by a listener/.test(logText())), '★ the admin may switch the RF AGC off');
   A.send({ type: 'rsp_control', lna: 2 });
   ok(await until(() => radioCfg().lnaState === 2), `★ …and set the RF gain (lnaState ${radioCfg().lnaState})`);
-  L.close(); A.close();
+  A.send({ type: 'rsp_control', ifagc: 0, ifgr: 45 });
+  ok(await until(() => radioCfg().ifGr === 45 && radioCfg().ifAgc === 0), `★ …and switch the IF AGC off and set the IF gain (ifAgc ${radioCfg().ifAgc}, ifGr ${radioCfg().ifGr})`);
+  await sleep(5000);
+  ok(!/the RF AGC is back on/.test(logText()), '★ while the admin is signed in, their RF AGC off stands (nothing puts it back)');
+  A.close();
+  ok(await until(() => /AGC lock: no admin signed in — the RF AGC is back on/.test(logText()), 8000),
+     '★ the admin leaves: the RF AGC is back on for listeners (so it really was off)');
+  L.close();
+
+  console.log('── a fixed RF gain on "All bands": the IF stays the listener\'s ──');
+  await stop();
+  writeCfg(0, { gainLimits: 'all:5', gainLocks: 'all:1' });
+  fs.appendFileSync(LOG, '\n=== BAND ===\n');
+  await start();
+  const band = () => logText().split('=== BAND ===')[1] || '';
+  const B = await join('lstn0004');
+  await sleep(500);
+  B.send({ type: 'rsp_control', lna: 1 });
+  ok(await until(() => /RSP RF gain refused — the owner has fixed it on this band/.test(band())), '★ a manual RF gain: refused');
+  ok(await until(() => B.got.some((m) => m.type === 'notice' && /fixed the RF gain on this band/.test(m.why || ''))), '…and the listener is told the IF is still theirs');
+  ok(radioCfg().lnaState !== 1, `…not applied (lnaState ${radioCfg().lnaState})`);
+  B.send({ type: 'rsp_control', ifagc: 0, ifgr: 38 });
+  ok(await until(() => radioCfg().ifGr === 38 && radioCfg().ifAgc === 0), `★ the IF AGC off and a manual IF gain: allowed (ifAgc ${radioCfg().ifAgc}, ifGr ${radioCfg().ifGr})`);
+  B.send({ type: 'rsp_control', ifagc: 1 });
+  ok(await until(() => radioCfg().ifAgc === 1), '…and the IF AGC back on');
+  B.close();
+
+  console.log('── a locked band WITH an IF figure: the IF is fixed too ──');
+  await stop();
+  writeCfg(0, { gainLimits: 'all:5', gainLocks: 'all:1', ifGrLimits: 'all:30' });
+  fs.appendFileSync(LOG, '\n=== BANDIF ===\n');
+  await start();
+  const bandIf = () => logText().split('=== BANDIF ===')[1] || '';
+  const C = await join('lstn0005');
+  await sleep(500);
+  C.send({ type: 'rsp_control', ifgr: 44 });
+  ok(await until(() => /RSP gain refused — the owner has fixed it on this band/.test(bandIf())), '★ a manual IF gain: refused');
+  ok(radioCfg().ifGr !== 44, `…not applied (ifGr ${radioCfg().ifGr})`);
+  C.close();
 
   console.log('── unlocked: nothing refused ──');
   await stop();

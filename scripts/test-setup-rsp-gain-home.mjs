@@ -125,7 +125,8 @@ try {
   ok(await js(`document.getElementById("gainAgcLockRow").offsetParent !== null`), '…and is visible there');
   await js(`(() => { const c = document.getElementById("gainAgcLock"); c.checked = true; c.dispatchEvent(new Event("change")); return 1; })()`);
   ok((await js(`radio().agcLock`)) === 1, '★ ticking it where it now sits still sets this radio\'s agcLock');
-  ok(/RF AGC is held on/.test(await js(`document.querySelector("#gainAgcLockRow .note").textContent`) || ''), 'the note says the RF AGC is held on');
+  ok(/both AGCs go back on/.test(await js(`document.querySelector("#gainAgcLockRow .note").textContent`) || ''), 'the note says the admin may take both gains and the AGCs come back on after');
+  ok(await js(`!document.getElementById("gainLockRspNote").classList.contains("hide")`), 'the per-band lock says an RF figure alone leaves listeners the IF');
 
   console.log('── the RTL, then back ──');
   ok(await tab('/RTL/'), 'the RTL tab');
