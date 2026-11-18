@@ -112,13 +112,20 @@ function withHoles(outers, holes, label) {
     // ★ A vertex of the hole is ON the lake's shore only if both were simplified to touch; the
     //   bbox centre of a small island is inside the island, so test a vertex AND require the
     //   hole's bbox to sit within the outline's.
-    const [px, py] = h[0];
+    // ★ Outline and island are simplified SEPARATELY, so a vertex where the island touches its
+    //   shore can land a few metres outside the outline. Try spread vertices until one is inside.
     let best = -1;
-    for (const i of grid.get(Math.floor(px) * 1000 + Math.floor(py)) || []) {
-      const b = boxes[i];
-      if (hb[0] < b[0] || hb[1] < b[1] || hb[2] > b[2] || hb[3] > b[3]) continue;
-      if (best >= 0 && areas[i] >= areas[best]) continue;
-      if (pointInRing(px, py, outers[i])) best = i;
+    const step = Math.max(1, Math.floor(h.length / 8));
+    for (let v = 0; v < h.length && best < 0; v += step) {
+      const [px, py] = h[v];
+      for (const i of grid.get(Math.floor(px) * 1000 + Math.floor(py)) || []) {
+        const b = boxes[i];
+        // ★ Within a cell of the outline's box: the same separate simplification can push an
+        //   island's extreme a hair past its lake's.
+        if (hb[0] < b[0] - 0.01 || hb[1] < b[1] - 0.01 || hb[2] > b[2] + 0.01 || hb[3] > b[3] + 0.01) continue;
+        if (best >= 0 && areas[i] >= areas[best]) continue;
+        if (pointInRing(px, py, outers[i])) best = i;
+      }
     }
     if (best >= 0) polys[best].push(h); else orphans++;
   }
