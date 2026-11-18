@@ -10,6 +10,8 @@
 //   0x01 full f32 · 0x02 delta f32 (u16 count, {u16 idx, f32}) · 0x03 full u8 · 0x04 delta u8 (u16 count, {u16 idx, u8})
 //   u8 → dBFS = u8 − 256.  Gzipped JSON control frames (1f 8b) are NOT spectrum — the caller hands those to JS.
 //   "SPWB" (V12) is the full-capture row — kWide, see below.
+//   ★ V12 beta83 THE SPAN STAMP: version 2 (asked with `&span=1`) puts an f64 LE — the Hz per bin of THESE bins — at 22 and
+//     the body at 30. binHz() is 0 for a version-1 frame (the config's span is all there is).
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -30,12 +32,15 @@ public:
     /** The config's binCount. ★ As the JS does on every config: a DIFFERENT count reallocates (zeroed) at once. */
     void setBinCount(int n) { binCount_ = n; if (n > 0 && (int)bins_.size() != n) bins_.assign(n, 0.f); }
     int binCount() const { return binCount_; }   // updated by full frames, as status.binCount is
+    /** ★ V12 beta83 the last frame's own Hz per bin (a version-2 frame), else 0. */
+    double binHz() const { return binHz_; }
     static bool isGzip(const uint8_t* p, size_t len) { return len >= 2 && p[0] == 0x1f && p[1] == 0x8b; }
     static bool isWide(const uint8_t* p, size_t len) { return len >= 4 && p[0] == 'S' && p[1] == 'P' && p[2] == 'W' && p[3] == 'B'; }
 
 private:
     std::vector<float> bins_ = std::vector<float>(1024, 0.f);   // the JS starts at Float32Array(1024), binCount 1024
     int binCount_ = 1024;
+    double binHz_ = 0.0;
 };
 
 }  // namespace vibespec

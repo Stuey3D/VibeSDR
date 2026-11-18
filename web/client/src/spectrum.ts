@@ -2120,12 +2120,21 @@ export class SpectrumClient {
     if (flags !== FLAG_FULL_U8) { noteFault('web-spec', 'unknown-flags', new Error('unexpected frame flags'), `flags=${flags}`); return; }
 
     const centerHz = Number(dv.getBigUint64(14, true));
-    const n = buf.byteLength - 22;
+    /* ★★ V12 beta83 THE SPAN STAMP (asked with `span=1`): a version-2 frame carries the Hz per bin of ITS OWN bins (f64 at
+     *  22, body at 30). The rows go where those bins really are; a version-1 frame has only the config's span, as always. */
+    let hdr = 22, binHz = 0;
+    if (dv.getUint8(4) === 2) {
+      if (buf.byteLength < 30) { noteFault('web-spec', 'short-frame', new Error('v2 frame too short'), `len=${buf.byteLength}`); return; }
+      const b = dv.getFloat64(22, true);
+      if (b > 0 && b < 1e9) binHz = b;
+      hdr = 30;
+    }
+    const n = buf.byteLength - hdr;
     if (n <= 0) { noteFault('web-spec', 'empty-frame', new Error('frame with no bins')); return; }
 
     if (!this.bins || this.bins.length !== n) this.bins = new Float32Array(n);
     const bins = this.bins;
-    const u8 = new Uint8Array(buf, 22, n);
+    const u8 = new Uint8Array(buf, hdr, n);
 
     // Bins arrive in FFT order (DC first, then +f, then -f). Rotate by n/2 so
     // the array runs low→high frequency for the renderer.
@@ -2135,8 +2144,25 @@ export class SpectrumClient {
       bins[i] = u8[src] + U8_DBFS_OFFSET;
     }
 
-    const bwHz = this.cfg.binBandwidth * n;
+    if (binHz > 0) this.stampHeal(binHz);
+    const bwHz = (binHz > 0 ? binHz : this.cfg.binBandwidth) * n;
     this.cb.onBins?.(bins, centerHz, bwHz);
+  }
+
+  /** ★★★ V12 beta83 THE FRAMES ARE THE TRUTH ABOUT THEIR SPAN (NickB, HF+, 2026-11-18: after a big keypad jump the span stayed
+   *  wrong until a tune or zoom). The app's VibeServerWsClient._stampHeal, the same rule: a stamp that has disagreed with the
+   *  config for a whole second with nothing of ours in flight means the config is stale — the view takes the frames' span.
+   *  ★ The second keeps a zoom on a slow link (old-span frames for a while after its config) from bouncing back. */
+  private stampOffSince = 0;
+  private stampHeal(binHz: number) {
+    const cur = this.cfg.binBandwidth;
+    if (this._viewInFlight() || !(cur > 0) || Math.abs(binHz - cur) <= binHz * 1e-4) { this.stampOffSince = 0; return; }
+    const now = performance.now();
+    if (this.stampOffSince === 0) { this.stampOffSince = now; return; }
+    if (now - this.stampOffSince < 1000) return;
+    this.cfg = { ...this.cfg, binBandwidth: binHz };
+    this.view.binBandwidth = binHz;
+    this.stampOffSince = 0;
   }
 
   // ── Outbound ───────────────────────────────────────────────────────────────

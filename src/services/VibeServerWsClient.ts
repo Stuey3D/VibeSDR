@@ -171,6 +171,8 @@ const U8_DBFS_OFFSET = -256;
 // quiet, after which the server's acked state is adopted in one step.
 const VIEW_SEND_MS   = 33;
 const VIEW_SETTLE_MS = 300;
+/** ★ V12 beta83 how long a frame's span stamp must disagree with the config, nothing in flight, before it wins (_stampHeal). */
+const STAMP_HEAL_MS  = 1000;
 
 // ── Spectrum starvation watchdog ────────────────────────────────────────────
 // The audio WS has a native watchdog (VibePowerModule.reviveIfDead) that runs in
@@ -1775,7 +1777,7 @@ export abstract class VibeServerWsClient {
 
     // ★★ V12 `&wide=1` — the full-capture row (SPWB, utils/wfWide.ts) — ONLY for a server whose hwinfo said "wide" ≥ 2
     //    (remembered per server, wideCapsCore.ts). An older server gets exactly the URL it always got.
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}${listenerIdQuery()}${wideSuffix(this.baseUrl)}`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}${listenerIdQuery()}${wideSuffix(this.baseUrl)}&span=1`);
     // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
     //     WS upgrade, and React Native's WebSocket sends none by default — so every app session
     //     appeared in the owner's log as "—", indistinguishable from a bot or a bare script, while
@@ -1882,8 +1884,9 @@ export abstract class VibeServerWsClient {
       const nws = ws as unknown as NativeSpecSocket;
       // A spectrum frame, decoded natively (the waterfall already has it). Counted and applied exactly as
       // _parseBinaryFrame → _apply* would have, then the unchanged _emitSpectrum: meters, squelch, link, settle.
-      nws.onspec = (bins, freq, wireBytes, arrivedAt) => {
+      nws.onspec = (bins, freq, wireBytes, arrivedAt, binHz) => {
         specMsgCount++;
+        this.frameBinHz = binHz > 0 && binHz < 1e9 ? binHz : 0;   // ★ V12 beta83 the span stamp, decoded natively
         this.specBytes += wireBytes;
         this.nativeFrameAt = arrivedAt;   // the gap history times ARRIVALS, not when JS got round to it
         guard('vibe-spec', 'binary', () => this._applyNativeSpec(bins, freq), `len=${wireBytes}`);
@@ -1987,6 +1990,20 @@ export abstract class VibeServerWsClient {
     const freqLo    = view.getUint32(14, true);
     const freqHi    = view.getUint32(18, true);
     const frequency = freqLo + freqHi * 0x100000000;
+    /* ★★ V12 beta83 THE SPAN STAMP (asked with `&span=1`): a version-2 frame carries the Hz per bin of ITS OWN bins as an f64
+     *  at 22 and its body at 30 — see _stampHeal. A version-1 frame (an older server, or a path this server cannot vouch
+     *  for) has no stamp and the config's span stands, as it always did. */
+    let hdr = 22;
+    this.frameBinHz = 0;
+    if (bytes[4] === 2) {
+      if (buf.byteLength < 30) {
+        noteFault('vibe-spec', 'short-frame', new Error('v2 frame too short'), `len=${buf.byteLength}`);
+        return;
+      }
+      const b = view.getFloat64(22, true);
+      if (b > 0 && b < 1e9) this.frameBinHz = b;
+      hdr = 30;
+    }
 
     /* ★ NO COPY FOR THE COMMON FRAME. binary8 full frames are the steady state (every frame on a
      *  VibeServer at 1024–4096 bins); slicing the body allocated a fresh 1–4 KB ArrayBuffer per
@@ -1995,12 +2012,12 @@ export abstract class VibeServerWsClient {
     /* ★★ A FULL FRAME WITH NO BINS WOULD RESIZE THE SPECTRUM TO NOTHING — a header-only frame (a
      *  truncation exactly at the header) must be dropped, not applied, or one bad frame blanks the
      *  display until the next full one. Likewise a float body that is not a whole number of floats. */
-    if ((flags === FLAG_FULL_U8 || flags === FLAG_FULL_F32) && buf.byteLength === 22) {
+    if ((flags === FLAG_FULL_U8 || flags === FLAG_FULL_F32) && buf.byteLength === hdr) {
       noteFault('vibe-spec', 'empty-frame', new Error('full frame with no bins'), `flags=${flags}`);
       return;
     }
-    if (flags === FLAG_FULL_U8) { this._applyFullU8(new Uint8Array(buf, 22), frequency); return; }
-    const body = buf.slice(22);
+    if (flags === FLAG_FULL_U8) { this._applyFullU8(new Uint8Array(buf, hdr), frequency); return; }
+    const body = buf.slice(hdr);
     if (flags === FLAG_FULL_F32) {
       if (body.byteLength % 4) {
         noteFault('vibe-spec', 'short-frame', new Error('float body not a multiple of 4'), `len=${buf.byteLength}`);
@@ -2134,6 +2151,10 @@ export abstract class VibeServerWsClient {
   private specFrames = 0;              // frames counted in the current 1s window
   /** The native socket's ARRIVAL time of the frame being emitted (epoch ms), else 0. */
   private nativeFrameAt = 0;
+  /** ★ V12 beta83 the frame being applied: its own Hz per bin (a version-2 frame), 0 = not stamped. */
+  private frameBinHz = 0;
+  /** ★ When the stamp first disagreed with the config's span with nothing in flight (0 = it agrees) — _stampHeal. */
+  private stampOffSince = 0;
   private specBytes  = 0;              // spectrum bytes in the current 1s window (audio is native)
   private linkTimer: ReturnType<typeof setInterval> | null = null;
   private serverMaxFps = 0;            // the owner's ceiling, once hwinfo tells us
@@ -2536,6 +2557,7 @@ export abstract class VibeServerWsClient {
     // ★★ …and their REAL span: the bins are at the server's rung (s.binBandwidth, from its config) even while bwHz below
     //   is the predicted view's. The waterfall places rows by this pair (SDRStatus.trueBwHz — the zoom-out smears).
     emit.trueBwHz = s.binBandwidth > 0 ? s.binBandwidth * n : undefined;
+    if (this.frameBinHz > 0) { emit.trueBwHz = this.frameBinHz * n; this._stampHeal(this.frameBinHz); }
     const v = this.view;
     if (this._inFlight() && v.binBandwidth > 0) {
       emit.centerHz     = v.centerHz;
@@ -2568,6 +2590,27 @@ export abstract class VibeServerWsClient {
     }
     this.specFrames++;            // per-second count for the adaptive controller
     this.callbacks.onSpectrum(out, emit);
+  }
+
+  /** ★★★ V12 beta83 THE FRAMES ARE THE TRUTH ABOUT THEIR SPAN (NickB, HF+, 2026-11-18: after a keypad jump 7285 → 585 kHz
+   *  the waterfall's span stayed wrong until he tuned or zoomed — "it never seems to recover"). The row placement above
+   *  already takes the stamp. This heals the VIEW: when the stamp has disagreed with the config's span for a whole second
+   *  with nothing of ours in flight, the config is stale — adopt the frames' span, and the deviant-frame branch of
+   *  _emitSpectrum settles the view onto it exactly as it would onto a config. ★ The second is deliberate: a zoom on a slow
+   *  link has frames at the OLD span for a while after its config, and adopting them at once would bounce the zoom back. */
+  private _stampHeal(binHz: number) {
+    const s = this.status;
+    if (this._inFlight() || !(s.binBandwidth > 0) || Math.abs(binHz - s.binBandwidth) <= binHz * 1e-4) {
+      this.stampOffSince = 0;
+      return;
+    }
+    const now = Date.now();
+    if (this.stampOffSince === 0) { this.stampOffSince = now; return; }
+    if (now - this.stampOffSince < STAMP_HEAL_MS) return;
+    this.dbg(`span stamp: frames at ${binHz.toFixed(3)} Hz/bin, config said ${s.binBandwidth.toFixed(3)} — adopting the frames'`);
+    s.binBandwidth = binHz;
+    s.bwHz = binHz * s.binCount;
+    this.stampOffSince = 0;
   }
 
   private _handleSpectrumMessage(msg: Record<string, unknown>) {

@@ -20,7 +20,7 @@ import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 type Drained =
   | { k: 0; text: string }
   | { k: 1; data: ArrayBuffer }
-  | { k: 2; bins: Float32Array; freq: number; bytes: number; at: number };
+  | { k: 2; bins: Float32Array; freq: number; bytes: number; at: number; binHz?: number };   // ★ binHz: V12 beta83 the span stamp (0 = none)
 
 type Mod = {
   connect(id: number, url: string, headers: Record<string, string> | null, vibeServer: boolean): void;
@@ -63,7 +63,7 @@ export class NativeSpecSocket {
   onclose: Handler<{ code: number; reason: string }> = null;
   onerror: Handler<{ message: string }> = null;
   /** A decoded spectrum frame (bins in SERVER order, frequency Hz, its size on the wire, when it ARRIVED — epoch ms). */
-  onspec: ((bins: Float32Array, freq: number, wireBytes: number, arrivedAt: number) => void) | null = null;
+  onspec: ((bins: Float32Array, freq: number, wireBytes: number, arrivedAt: number, binHz: number) => void) | null = null;
   /** After each drained batch — the client re-mirrors its view state then. */
   ondrained: (() => void) | null = null;
 
@@ -104,7 +104,7 @@ export class NativeSpecSocket {
     const items = g.__vibeSpecSockDrain?.(this.id) ?? [];
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
-      if (it.k === 2) this.onspec?.(it.bins, it.freq, it.bytes, it.at);
+      if (it.k === 2) this.onspec?.(it.bins, it.freq, it.bytes, it.at, it.binHz ?? 0);
       else if (it.k === 1) this.onmessage?.({ data: it.data });
       else this.onmessage?.({ data: it.text });
     }

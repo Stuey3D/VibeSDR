@@ -35,6 +35,7 @@ struct SockItem {
     std::vector<uint8_t> bytes;      // kBinary (gzip control / anything the JS parser must see)
     std::vector<float> bins;         // kSpec: decoded bins in SERVER order (the client half-swaps, as before)
     double frequency = 0;            // kSpec
+    double binHz = 0;                // kSpec: ★ V12 beta83 the frame's own Hz per bin (version 2), 0 = not stamped
     size_t wireBytes = 0;            // kSpec: the frame's size on the wire (specBytes)
     double atMs = 0;                 // kSpec: when it ARRIVED (epoch ms, Date.now()'s clock) — see takeCounts
 };

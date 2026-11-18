@@ -239,6 +239,7 @@ void vibeSpectrumInstall(jsi::Runtime& rt) {
                     jsi::ArrayBuffer ab(r, std::make_shared<VecBuffer>(std::move(raw)));
                     o.setProperty(r, "bins", f32.callAsConstructor(r, ab));
                     o.setProperty(r, "freq", it.frequency);
+                    o.setProperty(r, "binHz", it.binHz);   // ★ V12 beta83 the span stamp (0 = none)
                     o.setProperty(r, "bytes", (double)it.wireBytes);
                     o.setProperty(r, "at", it.atMs);
                 }

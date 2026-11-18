@@ -125,6 +125,7 @@ bool SpecSocketSink::onBinary(const uint8_t* p, size_t len) {
         feedEngine(dec_.bins(), freq);
         nFrames_.fetch_add(1, std::memory_order_relaxed);
         SockItem it; it.kind = SockItem::kSpec; it.bins = dec_.bins(); it.frequency = freq; it.wireBytes = len;
+        it.binHz = dec_.binHz();
         it.atMs = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         return push(std::move(it));
@@ -155,7 +156,9 @@ void SpecSocketSink::feedEngine(const std::vector<float>& bins, double freq) {
     const int half = n >> 1;
     std::memcpy(display_.data(), bins.data() + half, sizeof(float) * half);
     std::memcpy(display_.data() + half, bins.data(), sizeof(float) * half);
-    e->pushFrameNative(display_.data(), n, centerHz, bwHz, freq, statusBinBw_ > 0 ? statusBinBw_ * bc : NAN);   // ★ the bins' real span
+    // ★ the bins' real span — the frame's own stamp when it carries one (V12 beta83), else the last config's
+    const double trueBw = dec_.binHz() > 0 ? dec_.binHz() * bc : (statusBinBw_ > 0 ? statusBinBw_ * bc : NAN);
+    e->pushFrameNative(display_.data(), n, centerHz, bwHz, freq, trueBw);
 }
 
 }  // namespace vibespec

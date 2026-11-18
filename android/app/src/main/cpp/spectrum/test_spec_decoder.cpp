@@ -38,6 +38,22 @@ int main() {
     uint8_t gz[] = {0x1f, 0x8b, 8, 0};      CHECK(d.feed(gz, 4, fq) == SpecDecoder::kNotSpec, "gzip is not spectrum");
     b = hdr(0x04, 1); put16(b, 3); put16(b, 0); b.push_back(1); CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kSpectrum, "truncated delta applies what fits");
     b = hdr(0x04, 1); b.push_back(1);       CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kIgnored, "delta body < 2: silent, like the JS");
+    // ★ V12 beta83 the span stamp: version 2 = f64 Hz per bin at 22, body at 30; version 1 = no stamp (0)
+    {
+        auto v2 = [](uint8_t flags, uint64_t freq, double binHz) {
+            auto x = hdr(flags, freq); x[4] = 2;
+            uint64_t u; std::memcpy(&u, &binHz, 8); for (int i = 0; i < 8; i++) x.push_back((uint8_t)(u >> (8 * i)));
+            return x; };
+        b = v2(0x03, 585000, 48.828125); for (int i = 0; i < 16; i++) b.push_back((uint8_t)(100 + i));
+        CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kSpectrum && d.bins().size() == 16 && d.bins()[0] == 100 - 256
+              && d.bins()[15] == 115 - 256, "v2 full u8: the body starts at 30");
+        CHECK(d.binHz() == 48.828125 && fq == 585000.0, "v2: the stamp %f, freq %f", d.binHz(), fq);
+        b = hdr(0x03, 585000); for (int i = 0; i < 16; i++) b.push_back(1);
+        CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kSpectrum && d.binHz() == 0.0, "v1 after v2: no stamp");
+        b = v2(0x03, 1, 10.0);              CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kFault, "v2 header-only full frame dropped");
+        b = hdr(0x03, 1); b[4] = 2; b.push_back(1); CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kFault, "v2 shorter than its header");
+        b = v2(0x03, 1, -5.0); b.push_back(1); CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kSpectrum && d.binHz() == 0.0, "a wild stamp is no stamp");
+    }
     // ★ V12 the full-capture row (SPWB) is NOT a fault: recognised before the magic check, bins untouched
     { std::vector<uint8_t> w = {'S','P','W','B', 2, 0}; w.resize(32 + 256, 0); const size_t before = d.bins().size(); const float b0 = d.bins()[0];
       CHECK(d.feed(w.data(), w.size(), fq) == SpecDecoder::kWide && d.bins().size() == before && d.bins()[0] == b0, "SPWB is kWide, the bins untouched");

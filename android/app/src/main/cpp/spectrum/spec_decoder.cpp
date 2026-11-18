@@ -10,6 +10,8 @@ constexpr int U8_DBFS_OFFSET = -256;
 inline uint16_t rd16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 inline uint32_t rd32(const uint8_t* p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
 inline float rdf(const uint8_t* p) { uint32_t u = rd32(p); float f; std::memcpy(&f, &u, 4); return f; }
+inline double rdd(const uint8_t* p) {
+    const uint64_t u = (uint64_t)rd32(p) | ((uint64_t)rd32(p + 4) << 32); double d; std::memcpy(&d, &u, 8); return d; }
 }  // namespace
 
 SpecDecoder::Result SpecDecoder::feed(const uint8_t* p, size_t len, double& frequency) {
@@ -19,9 +21,18 @@ SpecDecoder::Result SpecDecoder::feed(const uint8_t* p, size_t len, double& freq
     if (rd32(p) != SPEC_MAGIC) return kFault;                      // bad-magic
     const uint8_t flags = p[5];
     frequency = (double)rd32(p + 14) + (double)rd32(p + 18) * 4294967296.0;
-    if ((flags == 0x03 || flags == 0x01) && len == 22) return kFault;   // full frame with no bins
-    const uint8_t* body = p + 22;
-    const size_t blen = len - 22;
+    // ★ V12 beta83 the span stamp (version 2): the Hz per bin at 22, the body at 30. A wild value is no stamp at all.
+    size_t hdr = 22;
+    binHz_ = 0.0;
+    if (p[4] == 0x02) {
+        if (len < 30) return kFault;                                // short-frame
+        const double b = rdd(p + 22);
+        if (b > 0.0 && b < 1e9) binHz_ = b;
+        hdr = 30;
+    }
+    if ((flags == 0x03 || flags == 0x01) && len == hdr) return kFault;   // full frame with no bins
+    const uint8_t* body = p + hdr;
+    const size_t blen = len - hdr;
     switch (flags) {
         case 0x03: {                                                // full u8
             if ((size_t)bins_.size() != blen) { bins_.assign(blen, 0.f); binCount_ = (int)blen; }

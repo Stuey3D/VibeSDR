@@ -7629,6 +7629,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     struct SlowAvg { std::deque<std::vector<float>> ring; std::vector<float> out; };
     SlowAvg wideSlow_, zoomSlow_;
     double zoomSlowCentre_ = 0.0;   // the centre zoomSlow_'s rows were built for — see onZoomSpectrum
+    double zoomSlowSpan_ = 0.0;     // …and the span (V12 beta83, the span stamp)
     /** ★ The tuner position (rtlCenter + hwOffset) fftAccum and wideSlow_ are anchored at, and the end of the
      *  settle after it last moved — see onSpectrum, GitHub #57. DSP thread only. */
     double accumCentre_ = 0.0;
@@ -7715,6 +7716,40 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             wideSubs_.erase(it);
         }
         if (subscribe) wideSubs_[s] = WideSub{};
+    }
+
+    /* ★★★ V12 beta83 THE SPAN STAMP (NickB, HF+ Dual Port, 2026-11-18: after a keypad jump 7285 → 585 kHz the
+     *  waterfall's span stayed wrong until he tuned or zoomed — it never healed). A SPEC frame always said the CENTRE its
+     *  bins were built for (builtCentre, 2026-10-02) but never the SPAN: the client took that from the last `config`, so
+     *  rows built at another span than the config it held were drawn at the wrong scale and nothing could tell.
+     *  ★ A socket that asks with `&span=1` gets every frame this server can vouch for as version 2: the same 22 bytes,
+     *    then an f64 LE — the Hz per bin of THESE bins — then the bins (header 30). Frames it cannot vouch for (SpyServer,
+     *    Icom) stay version 1 on the same socket; the version byte says which. A socket that never asks gets exactly the
+     *    frames it always got (the R36S, the watch, older apps and pages read a 22-byte header). docs/PROTOCOL.md. */
+    std::mutex stampMtx_;                                 // ★ leaf lock, like wideMtx_
+    std::set<net::Socket*> stampSubs_;                    // ★ under stampMtx_
+    void stampSubscribe(net::Socket* s, bool subscribe) {
+        std::lock_guard<std::mutex> lk(stampMtx_);
+        if (subscribe) stampSubs_.insert(s); else stampSubs_.erase(s);
+    }
+    bool stamped(net::Socket* s) {
+        std::lock_guard<std::mutex> lk(stampMtx_);
+        return !stampSubs_.empty() && stampSubs_.count(s) > 0;
+    }
+    /** Send one SPEC frame (22-byte v1 header + bins) — as v2 with `binHz` for a socket that asked. Returns bytes sent. */
+    size_t sendSpecFrame(const std::shared_ptr<net::Socket>& sock, const uint8_t* fr, size_t len, double binHz) {
+        if (binHz > 0.0 && len >= 22 && stamped(sock.get())) {
+            thread_local std::vector<uint8_t> v2;
+            v2.resize(len + 8);
+            std::memcpy(v2.data(), fr, 22);
+            v2[4] = 0x02;
+            std::memcpy(v2.data() + 22, &binHz, 8);          // f64, little-endian on every target we build
+            std::memcpy(v2.data() + 30, fr + 22, len - 22);
+            sendWs(sock, 0x2, v2.data(), v2.size(), Out::Spectrum);
+            return v2.size();
+        }
+        sendWs(sock, 0x2, fr, len, Out::Spectrum);
+        return len;
     }
     void slowPush(SlowAvg& a, const float* row, int n) {
         a.ring.emplace_back(row, row + n);
@@ -10791,8 +10826,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             int v = (int)lround(db[src] + 256.0 + specComp);   // ★ §7: still while VibeAGC moves
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
-        sendWs(sock, 0x2, frame.data(), frame.size(), Out::Spectrum);
-        vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+        // ★ V12 beta83 the span stamp: the span this listener's view channel was BUILT for, not the one asked since.
+        const double ownSpan = c->viewRx ? c->viewRx->zoomSpanHz() : 0.0;
+        vsSpecBytes.fetch_add(sendSpecFrame(sock, frame.data(), frame.size(), ownSpan > 0.0 ? ownSpan / (double)nb : 0.0),
+                              std::memory_order_relaxed);
         wideAfterFrame(sock, c->viewSpanHz);   // ★ V12 SPWB — this listener's own view, the capture around it
     }
 
@@ -12938,7 +12975,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  ★ And a change of built centre EMPTIES the slow average: averaging rows from two views is
          *    a picture of neither. */
         const double builtCentre = rtlCenter.load() + hwOffsetHz() + rx.zoomOffsetHz();
-        if (builtCentre != zoomSlowCentre_) { zoomSlow_.ring.clear(); zoomSlowCentre_ = builtCentre; }
+        // ★★ …and the SPAN it was built for (rx.zoomSpanHz(), set on this thread with the channel): the frame says it
+        //    (sendSpecFrame), and averaging rows of two spans is a picture of neither, exactly as for two centres.
+        const double builtSpan = rx.zoomSpanHz();
+        if (builtCentre != zoomSlowCentre_ || builtSpan != zoomSlowSpan_) {
+            zoomSlow_.ring.clear(); zoomSlowCentre_ = builtCentre; zoomSlowSpan_ = builtSpan; }
         slowPush(zoomSlow_, db, nb);        // every engine frame, before the gate (see SlowAvg)
         auto due = dueForFrame(peers);
         {
@@ -12988,12 +13029,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             int v = (int)lround(best + 256.0 + specComp);   // ★ §7: still while VibeAGC moves
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
-        size_t sent = 0;
+        // ★ V12 beta83 the span stamp: each wire bin is `grp` zoom bins of builtSpan / nb.
+        const double stampBinHz = (builtSpan > 0.0 && nb > 0) ? builtSpan / (double)nb * (double)grp : 0.0;
+        size_t sentBytes = 0;
         for (size_t pi = 0; pi < peers.size(); pi++)
             if (due[pi] && peers[pi].bins == outBins)
-                { sendWs(peers[pi].sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++;
+                { sentBytes += sendSpecFrame(peers[pi].sock, frame.data(), frame.size(), stampBinHz);
                   wideAfterFrame(peers[pi].sock, displaySpan() / zoomFactor.load()); }   // ★ V12 SPWB
-        vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
+        vsSpecBytes.fetch_add(sentBytes, std::memory_order_relaxed);
         }   // end per-width loop
         // ★ The FIRST frame stays at LOGI — it is the proof the zoom path started. The every-100
         //   heartbeat is LOGV (audit 2026-10-03): at 20 fps it was a journal line every 5 s for as
@@ -13401,7 +13444,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // Clamp to 1, not 0 — 0 is the no-data sentinel and must stay unambiguous.
                 frame[22+i] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
             }
-            size_t sent = 0;
+            size_t sentBytes = 0;
             for (size_t pi = 0; pi < peers.size(); pi++) {
                 auto& p = peers[pi];
                 if (!due[pi]) continue;      // this frame is not on this listener's clock
@@ -13415,10 +13458,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const double sp = (c && c->viewSpanHz > 0) ? c->viewSpanHz : shownHz;
                 const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
                 if (std::fabs(sp - view.span) >= 1 || std::fabs(ce - view.centre) >= 1) continue;
-                sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++;
+                // ★ V12 beta83 the span stamp: the crop above takes view.span / outBins per wire bin, exactly.
+                sentBytes += sendSpecFrame(p.sock, frame.data(), frame.size(), view.span / (double)outBins);
                 wideAfterFrame(p.sock, view.span);   // ★ V12 SPWB — the rest of the capture, under this view
             }
-            vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
+            vsSpecBytes.fetch_add(sentBytes, std::memory_order_relaxed);
             }   // end per-width loop
             // (byte accounting happens inside the per-width loop now)
             // (fm meta is serviced OUTSIDE this gate — see FM META SERVICE below)
@@ -25809,6 +25853,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 { std::lock_guard<std::mutex> pl(dabPeerMtx); dabPeers[sock.get()] = DabPeer{ dabV2 }; }
                 // ★ V12 the full-capture row (SPWB) — the client's own word; a socket that does not ask never gets one.
                 wideSubscribe(sock.get(), queryParam(reqLine, "wide") == "1");
+                stampSubscribe(sock.get(), queryParam(reqLine, "span") == "1");   // ★ V12 beta83 the span stamp (sendSpecFrame)
                 const std::string bq = queryParam(reqLine, "bins");
                 wantBins = bq.empty() ? WIRE_BINS_DEFAULT : atoi(bq.c_str());
                 if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
@@ -30012,6 +30057,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           clientFpsAcc.erase(sock.get());
           clientSpecAudit.erase(sock.get());
           wideSubscribe(sock.get(), false);   // ★ V12 SPWB (wideMtx_ is a leaf lock — taking it under clientMtx is safe)
+          stampSubscribe(sock.get(), false);  // ★ V12 beta83 the span stamp (stampMtx_ is a leaf lock too)
           // ★ Close the log entry for whoever this socket was. The reason is "closed" — the
           //   paths that end a session for a REASON (kicked, banned, timeout) each record their
           //   own before getting here, and ConnLog::close only ever fills the most recent

@@ -706,6 +706,14 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    extra frames, the capture's centre/span, a one-bin carrier outside the view kept. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-wide-rows.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 beta83 THE SPAN STAMP (NickB, HF+: a big keypad jump left the waterfall's span wrong for good): `span=1` gets v2
+#    frames (the Hz per bin at 22, header 30), everyone else the v1 they always got; on every path the settled stamp IS the
+#    config's span; through 7285 ⇄ 585 kHz jumps no stamp is a span the server never configured. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-span-stamp.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the clients' half, on the REAL app client and web client: rows placed by the frame's own span, a stale config healed
+#    after a second with nothing in flight, never during a zoom of ours, v1 frames exactly as before.
+if node --no-warnings scripts/test_span_stamp.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
