@@ -222,7 +222,10 @@ await scenario('range-locked radio (the listener\'s own channel), 70 cm', ['--fr
   const S = await server(['--freq', String(STATION), '--mode', 'nfm', '--users', '1'], 'none', { VIBE_CODEC2_DISABLE: '1' });
   try {
     const st = await S.status();
-    ok(st && Array.isArray(st.modes) && !st.modes.includes('m17') && !st.modes.includes('freedv'), `vibeserver.json offers neither m17 nor freedv (${JSON.stringify(st && st.modes)})`);
+    // ★ FreeDV may stay on offer here with RADE alone (RADE needs no libcodec2 — test-server-freedv proves that case);
+    //   what must go is M17, and any codec2-based FreeDV sub-mode.
+    const fdvOk = !st || !st.modes.includes('freedv') || JSON.stringify(st.freedvSubs) === '["RADE"]';
+    ok(st && Array.isArray(st.modes) && !st.modes.includes('m17') && fdvOk, `vibeserver.json offers no m17, and freedv only as RADE (${JSON.stringify(st && st.modes)} ${JSON.stringify(st && st.freedvSubs)})`);
     const L = await listener(S.port, 'm17none01', STATION, 'm17');
     await sleep(3000);
     L.spec.send({ type: 'm17_status' });

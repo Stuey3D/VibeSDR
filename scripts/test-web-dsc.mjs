@@ -110,13 +110,14 @@ try {
   console.log('── MAP opens this server\'s map with the position ──');
   const before = (await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json())).filter((t) => t.type === 'page').length;
   await trustedClick('#dscRows .dscr.distress .dscMap');   // ★ a trusted click: a scripted one is a blocked popup
-  let mapPage = null;
+  let mapPage = null, seen = [];
   for (let i = 0; i < 40 && !mapPage; i++) {
     await sleep(250);
     const l = await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json());
-    if (l.filter((t) => t.type === 'page').length > before) mapPage = l.find((t) => t.type === 'page' && /DSC positions/.test(t.title || ''));
+    seen = l.filter((t) => t.type === 'page').map((t) => t.title || t.url);
+    if (seen.length > before) mapPage = l.find((t) => t.type === 'page' && /DSC positions/.test(t.title || ''));
   }
-  ok(!!mapPage, `a map window opened ("${mapPage ? mapPage.title : 'none'}")`);
+  ok(!!mapPage, `a map window opened ("${mapPage ? mapPage.title : `none — pages: ${JSON.stringify(seen)}, status: ${await ev(`document.getElementById('decStatus')?.textContent`)}`}")`);
   if (mapPage) {
     const mw = new WebSocket(mapPage.webSocketDebuggerUrl);
     await new Promise((r) => { mw.onopen = r; });
