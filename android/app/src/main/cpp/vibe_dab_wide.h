@@ -124,11 +124,14 @@ inline double cutCostPct(int muxes, double rateHz, double ddc8Pct, const BankCos
  *  Within the green budget: 70 % of every core, less one core for network, spectrum and the audio clock. 0 = not measured.
  *  Never above what the user limit allows; the shim's memory floor holds on top. */
 inline int dabListeners(double perStationPct, double muxFrontPct, double ddc8Pct, double rateHz, int muxes, int cores,
-                        const BankCost* bank = nullptr) {
+                        const BankCost* bank = nullptr, double captureFixedPct = 0) {
     if (!(perStationPct > 0) || !(muxFrontPct > 0) || cores < 1 || muxes < 1) return 0;
     const double cut = cutCostPct(muxes, rateHz, ddc8Pct, bank);
     if (cut < 0) return 0;
-    const double spare = 70.0 * cores - 70.0 - double(muxes) * muxFrontPct - cut;
+    // ★★ captureFixedPct: the capture's own intake + front end at this rate (the wide benchmark's "fixed"), which the
+    //    profiles count and this used to leave out — so the cap the server enforced was HIGHER than the setup page's
+    //    figure (Stuart, 2026-11-18: "the dab figure needs to be accurate … that will mean users have dropped audio").
+    const double spare = 70.0 * cores - 70.0 - double(muxes) * muxFrontPct - cut - std::max(0.0, captureFixedPct);
     return spare > 0 ? int(std::floor(spare / perStationPct)) : 0;
 }
 

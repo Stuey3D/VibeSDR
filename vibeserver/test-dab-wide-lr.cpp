@@ -62,6 +62,14 @@ int main() {
     ok(dabListeners(1.2, 4.8, 7.5, 16e6, 3, 8) < dabListeners(1.2, 4.8, 7.5, 8e6, 3, 8), "a faster capture costs more DDC per block");
     ok(dabListeners(-1, 4.8, 7.5, 8e6, 3, 8) == 0 && dabListeners(1.2, -1, 7.5, 8e6, 3, 8) == 0, "not measured: 0");
     ok(dabListeners(25.0, 300.0, 30.0, 8e6, 3, 4) == 0, "fronts alone past the budget: 0");
+    // ★★★ The capture's own intake + front end (the wide benchmark's "fixed") comes off the budget too — the cap the server
+    //     enforced used to leave it out and so let in more stations than the setup page's figure (2026-11-18).
+    ok(dabListeners(25.0, 30.0, 20.0, 8e6, 3, 4, nullptr, 50.0) == int((280 - 70 - 3 * 50 - 50) / 25.0),
+       "★★★ capture cost counted: (280 − 70 − 150 − 50) / 25 = 0");
+    ok(dabListeners(1.2, 4.8, 7.5, 8e6, 3, 8, nullptr, 120.0) < dabListeners(1.2, 4.8, 7.5, 8e6, 3, 8),
+       "★★ a measured capture cost lowers the cap");
+    ok(dabListeners(1.2, 4.8, 7.5, 8e6, 3, 8, nullptr, 0.0) == dabListeners(1.2, 4.8, 7.5, 8e6, 3, 8),
+       "no capture figure: the cap is as before");
     // ── §11.1 the filter bank: the cheaper front end for many blocks (a B210 at 56 MS/s, every block in range) ──
     BankCost bk; bk.rates = { 8e6, 16e6, 32e6, 56e6 }; bk.fwd = { 0.8, 1.9, 4.1, 7.8 }; bk.slice = { 1.7, 1.7, 1.75, 1.7 };
     ok(dabListeners(1.5, 2.3, 5.15, 56e6, 26, 8) == 0, "★ 56 MS/s × 26 blocks with per-mux DDCs only: 26 × 36 % — no room at all (the B210 case before the bank)");

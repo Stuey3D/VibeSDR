@@ -6032,8 +6032,51 @@ static int vsDabLrListeners(double centreHz, double rateHz) {
         }
     }
     const int muxes = int(vibedab::wide::blocksIn(centreHz, rateHz).size());
-    const VsDabCut cut = vsDabCutFigures();   // ★★ V12 §11.1: the bank where it is the cheaper way to cut
-    return vibedab::wide::dabListeners(per, front, ddc8, rateHz, std::max(1, muxes), cores, cut.bank.ok() ? &cut.bank : nullptr);
+    /* ★★★ THE FIGURE THE SERVER ENFORCES IS THE BENCHMARK'S OWN (Stuart, 2026-11-18: "the dab figure needs to be accurate,
+     *  no point in a user setting a higher limit if the dab benchmark doesnt agree as that will mean users have dropped
+     *  audio"). The per-station formula alone left out the capture's intake and front end, so at a wide rate it let in
+     *  more stations than the setup page said the box could carry. In order:
+     *   1. a DAB profile MEASURED at this rate and block count — a wide entry, else the quick run's — is the number
+     *      itself (the setup page's: it counts the capture, the hottest thread and the RAM);
+     *   2. else the formula less the capture's cost, from the wide entry measured nearest this rate, scaled to it
+     *      (intake and front end are per sample);
+     *   3. nothing measured anywhere: the formula as before. */
+    {
+        LocalSdrShim::BenchGetFn getFn;
+        { std::lock_guard<std::mutex> bk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+        const std::string j = getFn ? getFn() : std::string();
+        namespace bp = vibe::benchprof;
+        auto fits = [&](const std::string& dab) {
+            return !dab.empty() && dab[0] == '{' && std::fabs(bp::jsonNum(dab, "rate", 0) - rateHz) < 1.0
+                && int(bp::jsonNum(dab, "blocks", 0)) == std::max(1, muxes) && bp::jsonNum(dab, "n", -1) >= 0;
+        };
+        double capPct = -1, capRate = 0;
+        const std::string wide = bp::jsonTop(j, "wide");
+        if (!wide.empty() && wide[0] == '{') {
+            size_t i = wide.find('{') + 1;
+            while (i < wide.size()) {
+                while (i < wide.size() && (std::isspace((unsigned char)wide[i]) || wide[i] == ',')) ++i;
+                if (i >= wide.size() || wide[i] != '"') break;
+                i = bp::jsonSkip(wide, i);
+                while (i < wide.size() && (std::isspace((unsigned char)wide[i]) || wide[i] == ':')) ++i;
+                const size_t vs = i; i = bp::jsonSkip(wide, i);
+                const std::string entry = wide.substr(vs, i - vs);
+                const std::string dab = bp::jsonTop(entry, "dab");
+                if (fits(dab)) return int(bp::jsonNum(dab, "n", 0));
+                const std::string fx = bp::jsonTop(entry, "fixed");
+                const double r = bp::jsonNum(entry, "rate", 0), in = bp::jsonNum(fx, "intakePct", -1), fe = bp::jsonNum(fx, "frontPct", -1);
+                if (r > 0 && in >= 0 && fe >= 0 && (capPct < 0 || std::fabs(r - rateHz) < std::fabs(capRate - rateHz))) {
+                    capPct = in + fe; capRate = r;
+                }
+            }
+        }
+        const std::string quickDab = bp::jsonTop(bp::jsonTop(j, "lockedUsers"), "dab");
+        if (fits(quickDab)) return int(bp::jsonNum(quickDab, "n", 0));
+        const VsDabCut cut = vsDabCutFigures();   // ★★ V12 §11.1: the bank where it is the cheaper way to cut
+        const double capHere = capPct >= 0 && capRate > 0 && muxes >= 2 ? capPct * rateHz / capRate : 0.0;
+        return vibedab::wide::dabListeners(per, front, ddc8, rateHz, std::max(1, muxes), cores,
+                                           cut.bank.ok() ? &cut.bank : nullptr, capHere);
+    }
 }
 static int vsDabStationsN() {
     static std::mutex m; static double at = -1e9; static int n = 0;
