@@ -18,7 +18,10 @@ ok(heard.length === 3, 'unsubscribed: silent');
 
 // Wired where the brief says, and nowhere guessing:
 const hk = src('src/utils/hardwareKeys.ts');
-ok(/VibeKeyDown[^\n]*inputSource\.set\('keyboard'\)/.test(hk), 'a physical key sets keyboard before any listener hears it');
+// ★ The FIRST statement of the VibeKeyDown listener (since 5f105f9b0 it sits on the next line) — before the digits and the bus.
+{ const kd = hk.slice(hk.indexOf("'VibeKeyDown'"), hk.indexOf("'VibeKeyUp'"));
+  const set = kd.indexOf("inputSource.set('keyboard')");
+  ok(set > 0 && set < kd.indexOf('digitListeners') && set < kd.indexOf("bus.dispatch('down'"), 'a physical key sets keyboard before any listener hears it'); }
 ok(/function runPad[\s\S]{0,400}inputSource\.set\('pad'\)/.test(hk), 'a pad press sets pad — even while a field has the cursor');
 const app = src('App.tsx');
 ok(/onStartShouldSetResponderCapture=\{\(\) => \{ noteTouchInteraction\(\); return false; \}\}/.test(app), 'the root touch capture notes a touch and never takes it');
