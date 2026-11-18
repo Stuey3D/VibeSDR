@@ -1408,6 +1408,11 @@ static bool pendingSerialRead(std::string& oldSerial, std::string& newSerial) {
 
 static void pendingSerialClear() { ::unlink(pendingSerialPath().c_str()); }
 
+/** ★★ The exit status of a radio process whose device is not on the bus — vibeserver@.service has
+ *  RestartPreventExitStatus= and SuccessExitStatus= for it: no restart loop, the USB plug-in event
+ *  brings it back (99-vibeserver-sdr.rules → vibeserver-radios-replug.service). Keep the three in step. */
+static constexpr int kRadioAbsentExit = 3;
+
 // ── ★★★ A CONFIGURED RADIO THAT IS NOT THERE — told to the setup page, not only the journal ───
 //
 // Stuart, 2026-10-04: a radio in config.json whose serial is not attached printed "no radio with
@@ -4419,32 +4424,12 @@ int main(int argc, char** argv) {
             const auto detectedNow = vibe::detectRadios();
             for (const auto& r : detectedNow)
                 if (r.serial == o.radioSerial) { drv = r.driver; drvIdx = r.driverIndex; break; }
-            /* ★★★ A USRP WHOSE USB SERIAL HAS CHANGED (2026-11-18, a tester's B210 on beta81: configured as 30AA038,
-             *  on the bus as "0000000004BE" after a power-down — a B2xx's descriptor serial is written by whatever FX3
-             *  firmware is running, and this board's has already shown junk before). We refused it 2,387 times, every
-             *  5 s, because the string did not match — and never opened it, so it could never show its real one again.
-             *  ONLY for a USRP, and only when it is unambiguous: exactly one B2xx attached that no OTHER configured radio
-             *  names. Said loudly in the log; the config is not rewritten. */
-            if (drvIdx < 0) {
-                const vsconfig::RadioConfig* me = nullptr;
-                for (const auto& r : g_serverConfig.radios) if (r.serial == o.radioSerial) { me = &r; break; }
-                if (me && me->driver == "usrp") {
-                    const vibe::DetectedRadio* only = nullptr; int n = 0;
-                    for (const auto& d : detectedNow) {
-                        if (d.driver != "usrp") continue;
-                        bool other = false;
-                        for (const auto& r : g_serverConfig.radios) if (r.serial != o.radioSerial && r.serial == d.serial) other = true;
-                        if (other) continue;
-                        ++n; only = &d;
-                    }
-                    if (n == 1 && only) {
-                        drv = only->driver; drvIdx = only->driverIndex;
-                        std::fprintf(stderr, "VibeServer: USRP %s is not on the bus by that serial, but the only other USRP here "
-                                             "reports \"%s\" — using it (its serial changes with the firmware it is running)\n",
-                                     o.radioSerial.c_str(), only->serial.empty() ? "(none)" : only->serial.c_str());
-                    }
-                }
-            }
+            /* ✗ NO "THE ONLY OTHER USRP" FALLBACK (591c160ff, beta82 — taken out 2026-11-18). It opened any lone B2xx
+             *  in place of a configured one whose serial was not on the bus, on the guess that a B210's serial changes
+             *  with its firmware. Stuart: "if the user switches the b210 for another we would simply use that in place
+             *  of the original? … that isnt right as we dont do that with other SDR's". A different serial is a
+             *  different radio until the owner says otherwise — the setup page's "USB bus changed" REPLACE, as for
+             *  every other SDR. (The 30AA038 → 0000000004BE case was never shown to be the same board.) */
             if (drvIdx < 0) {
                 /* ★★ AND SAY WHAT *IS* THERE. "no radio with serial X" leaves the owner comparing
                  *    a string against hardware they cannot see, when we have just enumerated it.
@@ -4500,8 +4485,22 @@ int main(int argc, char** argv) {
                  *  Pi 2026-09-08 when the V4's USB identity wedged: 44 restarts hammering a dongle
                  *  that needed a power cycle, and an ABRT in the journal that read as a crash in the
                  *  receiver. A missing radio is a clean, reportable exit. */
+                /* ★★★ A MISSING RADIO WAITS FOR ITS USB DEVICE, NOT FOR A TIMER (Stuart, 2026-11-18: "dont want a
+                 *  process to be constantly running if a radio is not responding as long as the radio comes back
+                 *  when it returns"). Almere's absent B210 was restarted every 5 s — 6,155 times by 17:08, each
+                 *  one logging a dozen lines and pushing the useful journal out of the diagnostics.
+                 *  - NOT ON THE BUS (notfound): exit kRadioAbsentExit. vibeserver@.service does not restart that
+                 *    status; plugging any SDR in starts vibeserver-radios-replug.service (99-vibeserver-sdr.rules),
+                 *    which starts every configured radio that is not running.
+                 *  - HELD BY ANOTHER PROGRAM (busy): letting go fires no USB event, so it is still retried — every
+                 *    30 s instead of every 5, which is what "picked up as soon as that program lets go" costs.
+                 *  ★ Off Linux (a Mac, no systemd) the status is just a failure, as before. */
                 std::fflush(stderr);
-                std::_Exit(1);
+                if (known) { std::this_thread::sleep_for(std::chrono::seconds(25)); std::_Exit(1); }
+                std::fprintf(stderr, "VibeServer: radio %s will start by itself when it is plugged in\n",
+                             o.radioSerial.c_str());
+                std::fflush(stderr);
+                std::_Exit(kRadioAbsentExit);
             }
             /* ★ NAME EVERY SOURCE. The comment in local_sdr_shim's rate branch records that a
              *   two-source world written as "the other one" mis-handles the third every time;
