@@ -4254,8 +4254,35 @@ int main(int argc, char** argv) {
         //     (measured 2026-08-08). So take the driver and its own index from the SAME lookup.
         if (!o.radioSerial.empty()) {
             std::string drv; int drvIdx = -1;
-            for (const auto& r : vibe::detectRadios())
+            const auto detectedNow = vibe::detectRadios();
+            for (const auto& r : detectedNow)
                 if (r.serial == o.radioSerial) { drv = r.driver; drvIdx = r.driverIndex; break; }
+            /* ★★★ A USRP WHOSE USB SERIAL HAS CHANGED (2026-11-18, a tester's B210 on beta81: configured as 30AA038,
+             *  on the bus as "0000000004BE" after a power-down — a B2xx's descriptor serial is written by whatever FX3
+             *  firmware is running, and this board's has already shown junk before). We refused it 2,387 times, every
+             *  5 s, because the string did not match — and never opened it, so it could never show its real one again.
+             *  ONLY for a USRP, and only when it is unambiguous: exactly one B2xx attached that no OTHER configured radio
+             *  names. Said loudly in the log; the config is not rewritten. */
+            if (drvIdx < 0) {
+                const vsconfig::RadioConfig* me = nullptr;
+                for (const auto& r : g_serverConfig.radios) if (r.serial == o.radioSerial) { me = &r; break; }
+                if (me && me->driver == "usrp") {
+                    const vibe::DetectedRadio* only = nullptr; int n = 0;
+                    for (const auto& d : detectedNow) {
+                        if (d.driver != "usrp") continue;
+                        bool other = false;
+                        for (const auto& r : g_serverConfig.radios) if (r.serial != o.radioSerial && r.serial == d.serial) other = true;
+                        if (other) continue;
+                        ++n; only = &d;
+                    }
+                    if (n == 1 && only) {
+                        drv = only->driver; drvIdx = only->driverIndex;
+                        std::fprintf(stderr, "VibeServer: USRP %s is not on the bus by that serial, but the only other USRP here "
+                                             "reports \"%s\" — using it (its serial changes with the firmware it is running)\n",
+                                     o.radioSerial.c_str(), only->serial.empty() ? "(none)" : only->serial.c_str());
+                    }
+                }
+            }
             if (drvIdx < 0) {
                 /* ★★ AND SAY WHAT *IS* THERE. "no radio with serial X" leaves the owner comparing
                  *    a string against hardware they cannot see, when we have just enumerated it.
