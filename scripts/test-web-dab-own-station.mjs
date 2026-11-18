@@ -110,6 +110,36 @@ try {
   ok(await until(`${ROWS}.some(r => r.sid === ${third} && r.on)`, 10000), 'the page now highlights its own pick');
   await sleep(1500);
   ok(other.msgs.at(-1)?.sid === theirs, `the other listener's station did not move (${other.msgs.at(-1)?.sid?.toString(16)})`);
+  // ── ★★ V12 beta83 the wording (Stuart, 2026-11-18): the list says every user can choose their own station; the banner
+  //    alternates "ASK TO TUNE / EXIT DAB" with "ANY STATION IN THE LIST IS FREE TO CHOOSE" — and neither line overflows,
+  //    desktop or phone. Screenshots of each line at each width (VIBE_SHOT_DIR, else the temp dir).
+  const SHOTS = process.env.VIBE_SHOT_DIR || os.tmpdir();
+  ok(await until(`!document.getElementById("dabOwnNote").hidden && document.getElementById("dabOwnNote").textContent.includes("Every user can choose their own station on this multiplex")`, 5000),
+     'the top of the station list says every user can choose their own station on this multiplex');
+  const BANNER = `(() => { const m = document.getElementById("mShared"); if (!m || m.hidden) return null; const r = m.getBoundingClientRect();
+    return { t: m.textContent.trim(), over: m.scrollWidth > m.clientWidth + 1, offRight: r.right > innerWidth + 1, w: r.width }; })()`;
+  for (const [tag, w, h, mobile] of [['desktop', 1400, 900, false], ['phone', 390, 844, true]]) {
+    await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile });
+    await sleep(800);
+    const seen = new Map();
+    for (let i = 0; i < 45 && seen.size < 2; i++) {
+      const b = await js(BANNER);
+      if (b && b.t) {
+        const kind = b.t.includes('ANY STATION IN THE LIST IS FREE TO CHOOSE') ? 'free' : b.t.includes('ASK TO TUNE / EXIT DAB') ? 'ask' : 'other:' + b.t;
+        if (!seen.has(kind)) {
+          seen.set(kind, b);
+          const shot = (await call('Page.captureScreenshot', { format: 'png' })).result?.data;
+          if (shot) fs.writeFileSync(path.join(SHOTS, `dab-own-banner-${tag}-${kind.startsWith('other') ? 'other' : kind}.png`), Buffer.from(shot, 'base64'));
+        }
+      }
+      await sleep(250);
+    }
+    const ask = seen.get('ask'), free = seen.get('free');
+    ok(!!ask && !!free, `${tag}: the banner alternates both lines (${[...seen.keys()].join(' / ')})`);
+    ok(!!ask && !ask.over && !ask.offRight && !!free && !free.over && !free.offRight,
+       `${tag}: neither line overflows its box (ask "${ask?.t}" ${ask?.over ? 'OVERFLOWS' : 'fits'}, free ${free?.over ? 'OVERFLOWS' : 'fits'}, ${Math.round(ask?.w ?? 0)} px)`);
+  }
+  console.log(`   screenshots: ${SHOTS}/dab-own-banner-{desktop,phone}-{ask,free}.png`);
   ok(errors.length === 0, 'no JavaScript errors' + (errors.length ? ': ' + errors.slice(0, 2).join(' | ') : ''));
 } catch (e) { console.error(e); fails++; }
 clearInterval(beat);
