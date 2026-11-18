@@ -367,6 +367,57 @@ const SERVABLE_RADIOS = 'VibeServer can serve an RTL-SDR, an Airspy HF+, an Airs
 const dabBlockedNow = (csv: string) =>
   csv.split(/[,;\s]+/).filter(Boolean).some((t) => t.toLowerCase() === 'dab');
 
+/* ★★★ V12 THE THREE LOCKED-RANGE PROFILES, IN WORDS (vibe_bench_profiles.h — Stuart, 2026-11-17/18): "CPU/RAM:" then
+ *  "50 DAB users @ 8 MS/s" / "25 WFM + Advanced RDS users @ …" / "200 SSB/AM/NFM users @ …", each saying which bound set
+ *  it, never a line for a profile not measured. ONE RULE, TWO READERS: vibe_setup_page.h benchProfileLines says the same;
+ *  scripts/test-setup-bench-wide.mjs runs both on one result. */
+function benchRateWords(hz: any) {
+  const v = Number(hz) || 0;
+  if (v < 1e6) return Math.round(v / 1e3) + ' kS/s';
+  return String(Number((v / 1e6).toFixed(3))) + ' MS/s';
+}
+function benchProfileLine(p: any, what: string) {
+  if (!p || typeof p.n !== 'number') return '';
+  const n = Math.max(0, p.n | 0);
+  let s = n + ' ' + what + (n === 1 ? ' user' : ' users') + ' @ ' + benchRateWords(p.rate);
+  if (Number(p.blocks) >= 2) s += ', ' + p.blocks + ' blocks';
+  if (p.by === 'capture') s += ' (the capture itself cannot keep up at this rate)';
+  else if (p.by === 'ram') s += ' (set by RAM)';
+  else if (p.by === 'cpu') s += ' (set by CPU)';
+  return s;
+}
+function benchProfileLines(lu: any) {
+  if (!lu) return [];
+  const out: string[] = [];
+  const dab = benchProfileLine(lu.dab, 'DAB'), fm = benchProfileLine(lu.fm, 'WFM + Advanced RDS'),
+        nb = benchProfileLine(lu.narrow, 'SSB/AM/NFM');
+  if (dab) out.push(dab); else if (lu.dabWhy) out.push('DAB: ' + lu.dabWhy);
+  if (fm) out.push(fm);
+  if (nb) out.push(nb);
+  return out;
+}
+/* END benchProfileLines */
+/** ★ The profile blocks a saved result holds: the quick one (only in the new shape), then each wide one with its USB bus
+ *  verdict. A wide result comes only from the desktop server's WIDE BENCHMARK; this screen shows one if the file has it. */
+function benchProfileBlocks(j: any): { head: string; lines: string[]; usb?: string; unusable?: boolean }[] {
+  const out: { head: string; lines: string[]; usb?: string; unusable?: boolean }[] = [];
+  const lu = j?.lockedUsers;
+  if (lu && (lu.fm || lu.narrow || lu.dab)) out.push({ head: 'Quick benchmark \u2014 CPU/RAM:', lines: benchProfileLines(lu) });
+  for (const k of Object.keys(j?.wide || {})) {
+    const w = j.wide[k];
+    if (!w || !w.rate) continue;
+    const u = w.usb || {};
+    const unusable = !u.notRun && !u.ok;
+    const usb = u.notRun ? 'USB bus: not tested \u2014 ' + u.notRun
+      : u.ok ? `USB bus: kept up (${Number(u.deliveredPct || 0).toFixed(2)} % delivered, ${(u.usbDrops || 0) + (u.iqDrops || 0)} drops)`
+      : `USB bus: could not keep up (${u.why || Number(u.deliveredPct || 0).toFixed(2) + ' % delivered'})`;
+    out.push({ head: `Wide benchmark \u2014 ${w.label || w.driver || 'radio'} @ ${benchRateWords(w.rate)} \u2014 CPU/RAM:`
+                     + (unusable ? ' not usable at this rate (the USB bus could not keep up)' : ''),
+               lines: benchProfileLines(w), usb, unusable });
+  }
+  return out;
+}
+
 export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const { font: F } = themeFor();
   /* ★★★ IN THE USER'S COLOURS (Stuart, 2026-10-12: "Follow the text colour except for when the colours have a
@@ -594,6 +645,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  may switch it back on. Everywhere else it is a button and nothing is changed without being asked.
    *  ★ Never on an already-running server: it takes the radio off the air. */
   const [benchRows, setBenchRows] = useState<any[]>([]);
+  /** ★★★ V12 the locked-range profiles' lines (benchProfileBlocks) — the same words as the setup page. */
+  const [benchProfiles, setBenchProfiles] = useState<{ head: string; lines: string[]; usb?: string; unusable?: boolean }[]>([]);
   /** ★ How long the last measurement took, s (0 = not said — an older engine). Shown under the table. */
   const [benchSec, setBenchSec] = useState(0);
   const [benchBusy, setBenchBusy] = useState(false);
@@ -603,6 +656,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
 
   const applyBench = React.useCallback((j: any, firstSetup: boolean) => {
     setBenchRows(Array.isArray(j?.rows) ? j.rows : []);
+    setBenchProfiles(benchProfileBlocks(j));
     setBenchSec(Number(j?.benchSec) > 0 ? Number(j.benchSec) : 0);
     if (!j || !firstSetup) return;
     const row = (id: string) => (j.rows || []).find((r: any) => r.id === id);
@@ -2878,6 +2932,20 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 {`The measurement took ${Math.round(benchSec)} seconds.`}
               </Text>
             )}
+            {/* ★★★ V12 THE LOCKED-RANGE PROFILES — "CPU/RAM:" then a line each, as on the setup page. */}
+            {benchProfiles.map((b, i) => (
+              <View key={'prof' + i} style={{ marginTop: 6 }}>
+                <Text style={[styles.hint, { color: b.unusable ? C.badSoft : C.text, fontFamily: F, marginBottom: 0 }]}>{b.head}</Text>
+                {b.lines.map((l, k) => (
+                  <Text key={k} style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 0,
+                                                     textDecorationLine: b.unusable ? 'line-through' : 'none' }]}>{l}</Text>
+                ))}
+                {!!b.usb && (
+                  <Text style={[styles.hint, { fontFamily: F, marginBottom: 0,
+                                ...meaningText(C.m, b.unusable ? C.badSoft : C.textDim) }]}>{b.usb}</Text>
+                )}
+              </View>
+            ))}
           </View>
         )}
         {/* ★ The bar, while it runs — see runBench. Steps rather than seconds, because the engine
