@@ -420,6 +420,14 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     const std::vector<double> wide = benchhw::wideRates(hw);
     // ★ The wide rows' steps: a full-radio row and three locked-range rows per rate.
     const int wideSteps = 4 * (int)wide.size();
+    /* ★★★ V12 THE THREE LOCKED-RANGE PROFILES' RATES (vibe_bench_profiles.h profileRate — Stuart, 2026-11-18: "sample rate
+     *  tested should also reflect the capability of the connected SDR"): the highest rate of 8 MS/s or less a radio HERE
+     *  offers that can carry each profile; 2.048 MS/s with no radio configured. 0 = that profile does not apply here.
+     *  Four steps: the WFM listeners, Advanced RDS, the narrow listeners, DAB's capture. */
+    const double profFmRate = benchhw::gateRow(hw, "lk_wfm").run ? benchprof::profileRate(hw, benchhw::Need::Wfm) : 0.0;
+    const double profNarrowRate = benchprof::profileRate(hw, benchhw::Need::None);
+    const double profDabRate = benchhw::gateRow(hw, "dab").run ? benchprof::profileRate(hw, benchhw::Need::Dab) : 0.0;
+    const int profileSteps = 4;
     /* ★★ THIS THREAD PLAYS vibe-dsp — it feeds every scenario (runOne) and runs the decoder rows — so it flushes
      *  denormals as the served one does (vibeAudioThread). Without it the bench would charge a quiet signal's
      *  denormals to a box whose server never pays them. See vibedsp/vibe_denormals.h. */
@@ -439,7 +447,8 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         //   after two more had joined — the bar ran past its end.)
         // ★ V12: the standard and decoder rows count whether or not they run (a skipped one is a step done at once);
         //   the wide rows add their own.
-        p.steps.store(1 + 1 + 7 + 1 + 4 + 7 + 4 + 8 + benchdec::moreDecoderSteps() + (moreRows ? moreRowSteps : 0) + wideSteps);
+        p.steps.store(1 + 1 + 7 + 1 + 4 + 7 + 4 + 8 + benchdec::moreDecoderSteps() + (moreRows ? moreRowSteps : 0) + wideSteps
+                      + profileSteps);
         { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
     }
     /* ★★★ FIRST, WHILE THE MACHINE IS COOLEST: the all-core clock calibration the throttle snail is
@@ -645,6 +654,29 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         autoRow("auto_cw",  "AUTO bandwidth, added per CW listener",  M::CW,       1200, cwIq);
         autoRow("auto_wfm", "AUTO bandwidth, added per WFM listener", M::WFM,    200000, wide);
     }
+    /* ★★★ V12 THE LOCKED-RANGE PROFILES — WFM + Advanced RDS and the heaviest narrow mode, each on the server's whole
+     *  locked-range path at the rate the radios here offer (benchwide::measureFmNarrow). The narrow mode is the one the
+     *  lk_ rows above found heaviest; Advanced RDS's own cost comes from the rdsx row and the WFM row at its rate when
+     *  both ran, else it is measured. DAB's figure is put together once its rows have run (below). */
+    benchwide::ThreeProfiles profiles;
+    std::vector<benchprof::CaptureCost> profileCaps;
+    const long coresNow = std::max(1L, sysconf(_SC_NPROCESSORS_ONLN));
+    {
+        std::vector<std::string> modes;
+        { std::string heavy; double hp = -1;
+          for (const char* m : { "nfm", "am", "ssb" }) { auto it = perListener.find(std::string("lk_") + m);
+              if (it != perListener.end() && it->second > hp) { hp = it->second; heavy = m; } }
+          if (!heavy.empty()) modes.push_back(heavy); else modes = { "nfm", "am", "ssb" }; }
+        if (modes.size() > 1) modes.resize(1);   // ★ one step, as counted: NFM when the lk_ rows did not run
+        double rdsInc = -1;
+        { const Result* rx = nullptr; for (const auto& r : res) if (r.id == "rdsx_2048") rx = &r;
+          if (rx) for (const auto& r : res) if (r.id.rfind("wfm_", 0) == 0 && std::fabs(r.rate - rx->rate) < 1)
+              rdsInc = std::max(0.0, benchwide::threadSum(*rx) - benchwide::threadSum(r)); }
+        auto stepFn = [&](const std::string& l) { benchStep(l); if (progress) progress(N, N, l); };
+        benchwide::measureFmNarrow(profiles, profFmRate, profNarrowRate, modes, rdsInc, (int)coresNow,
+                                   std::max(1.5, std::min(3.0, secondsPerScenario / 2)), profileCaps, stepFn);
+        if (!(profNarrowRate > 0)) benchStep("");
+    }
     /* ★★★ THE DECODERS, EACH ON THIS BOX (B6) — see vibe_benchmark_decoders.h. Their rows join the
      *  table like any other; the recommendation below is what becomes the owner's decoder limit. */
     /* ★★★ …AND EVERY DECODER AFTER THE FIRST EIGHT (2026-10-31) — vibe_benchmark_more.h. The clip rows (the skimmers,
@@ -692,6 +724,28 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         wideV = benchwide::runWideRows(wide, secondsPerScenario, res, notRun, stepFn);
         // ★ A rate not run is a step not taken — move the bar on so it still ends at its end.
         for (size_t k = before; k < notRun.size(); ++k) benchStep("");
+    }
+    /* ★★ V12 THE DAB PROFILE, now its rows have run: this run's own station, multiplex and filter-bank figures, at the
+     *  DAB radio's profile rate — the blocks that rate holds, every one decoding, a station per listener. */
+    {
+        benchprof::DabInputs d;
+        for (const auto& r : res) {
+            if (r.id == "dec_dab_station") d.perStation = r.pct;
+            if (r.id == "dab" && r.pct >= 0) d.muxHottest = r.pct;
+            if (r.id == "dec_dab_mux") for (const auto& t : r.threads) {
+                if (t.first == "OFDM/FIC front end") d.muxFront = t.second;
+                if (t.first == "DDC @ 8 MS/s") d.ddc8 = t.second; }
+            if (r.id == "dec_dab_bank") for (const auto& t : r.threads) {
+                if (t.first.rfind("fwd@", 0) == 0) { d.bank.rates.push_back(std::atof(t.first.c_str() + 4) * 1e6); d.bank.fwd.push_back(t.second); }
+                if (t.first.rfind("slice@", 0) == 0) d.bank.slice.push_back(t.second); }
+        }
+        d.stationKB = (double)vibedab::own::benchMemKB().load();
+        const bool blocksWide = profDabRate > 0 && benchprof::dabBlocksAt(profDabRate) >= 2;
+        benchStep(blocksWide ? "Locked range: the capture for DAB @ " + benchhw::rateWords(profDabRate) : std::string());
+        if (profDabRate > 0) {
+            if (d.ok()) benchwide::dabProfile(profiles, profDabRate, d, std::max(1.5, std::min(3.0, secondsPerScenario / 2)), profileCaps);
+            if (!profiles.dab) profiles.dabWhy = moreRows ? "the DAB rows could not be measured on this run" : "this build does not measure DAB";
+        }
     }
     if (progress) progress(N, N, "done");
     { auto& p = benchProgress(); p.step.store(p.steps.load()); { std::lock_guard<std::mutex> lk(p.m); p.label = "done"; } }
@@ -783,36 +837,20 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     benchProgress().running.store(false);
     /* ★★★ V12 THE THREE LOCKED-RANGE PROFILES (Stuart, 2026-11-17: "the initial benchmark should run for the heaviest
      *  decoders in both modes, so WFM Advanced RDS Locked Range for the FM Broadcast band, and then DAB, and also a much
-     *  easier SSB/AM/NFM one too"). Each is the heaviest realistic per-listener load for its band, and NOT capped at 20 —
-     *  the cap is the hardware's (the setup page still takes the smaller of this and the link):
-     *   · fm     — a WFM stereo listener (lk_wfm) WITH Advanced RDS: its own measured cost, the rdsx row less the wfm row
-     *              at the same rate (the decoder a listener's chain runs on top);
-     *   · narrow — the heaviest of NFM / AM / SSB per listener;
-     *   · dab    — DAB listeners, each on their own station, for ONE block (the dabStations block carries the figures for
-     *              any number of blocks: vibe_dab_wide.h dabListeners; the page and the shim count the range's blocks).
-     *  The old keys stay for older readers (capped at 20 as they always were). */
-    auto pctOf = [&](const char* id) { for (const auto& r : res) if (r.id == id) return r.pct; return -1.0; };
-    auto usersAt = [&](double per) { return per > 0 ? std::max(0, (int)std::floor(budget / per)) : 0; };
-    double fmPer = -1;
-    { const double lk = pctOf("lk_wfm"), rx = pctOf("rdsx_2048"), w = pctOf("wfm_2048");
-      if (lk > 0) fmPer = lk + ((rx > 0 && w > 0) ? std::max(0.0, rx - w) : 0.0); }
-    double narrowPer = -1;
-    for (const char* id : { "lk_nfm", "lk_am", "lk_ssb" }) narrowPer = std::max(narrowPer, pctOf(id));
-    int dabUsers = 0;
-    { const double st = pctOf("dec_dab_station");   // ★ one block: no cutting, so the bank does not enter this figure
-      double front = -1, ddc8 = -1;
-      for (const auto& r : res) if (r.id == "dec_dab_mux") for (const auto& t : r.threads) {
-          if (t.first == "OFDM/FIC front end") front = t.second;
-          if (t.first == "DDC @ 8 MS/s") ddc8 = t.second; }
-      dabUsers = vibedab::wide::dabListeners(st, front, ddc8, 2048000.0, 1, (int)cores); }
-    j += ",\"lockedUsers\":{\"wfm\":" + std::to_string(usersFor("lk_wfm")) + ",\"nfm\":" + std::to_string(usersFor("lk_nfm"))
-       + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb"))
-       /* ★ Each profile carries the capture rate it was measured at (the locked-range rows run at 2.048 MS/s; DAB's is one
-        *  block at its own rate) — the setup page's "… users @ 8 MS/s" display and a later wide-rate measurement extend
-        *  this shape, never reshape it. */
-       + ",\"fm\":{\"n\":" + std::to_string(usersAt(fmPer)) + ",\"rate\":2048000,\"perPct\":" + std::to_string(fmPer) + "}"
-       + ",\"narrow\":{\"n\":" + std::to_string(usersAt(narrowPer)) + ",\"rate\":2048000,\"perPct\":" + std::to_string(narrowPer) + "}"
-       + ",\"dab\":{\"n\":" + std::to_string(dabUsers) + ",\"rate\":2048000,\"blocks\":1}}";
+     *  easier SSB/AM/NFM one too"). Measured (2026-11-18) on the whole locked-range path at the rate the radios here offer,
+     *  NOT capped at 20, the smaller of what the cores and the RAM hold and saying which (vibe_bench_profiles.h): `fm`
+     *  (WFM + Advanced RDS), `narrow` (the heaviest of NFM / AM / SSB, its `mode`) and `dab` (a station per listener, every
+     *  one of its `blocks` decoding) — each only where it was measured. The old keys stay for older readers (capped at 20
+     *  as they always were). `ram`: what was available when it ran, and the floor it leaves alone. */
+    const double availKB = benchprof::availRamKB();
+    {
+        const std::string three = benchwide::threeProfilesJson(profiles, (int)cores, availKB);
+        j += ",\"lockedUsers\":{\"wfm\":" + std::to_string(usersFor("lk_wfm")) + ",\"nfm\":" + std::to_string(usersFor("lk_nfm"))
+           + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb"))
+           + (three.empty() ? "" : "," + three) + "}";
+        char rb[96]; std::snprintf(rb, sizeof rb, ",\"ram\":{\"availKB\":%.0f,\"reserveKB\":%.0f}", availKB, benchprof::kRamReserveKB);
+        j += rb;
+    }
     /* ★★★ HOW MANY DECODERS AT ONCE, WITH A FULL HOUSE LISTENING (Stuart: "with this current load
      *     another 4 users could have decoders but not all 10 at once"). The house is ten narrow-band
      *     listeners — the per-VFO case, where every listener costs their own chain — or as many as
@@ -886,6 +924,56 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     }
     j += "}";
     return j;
+}
+
+/** The WIDE BENCHMARK's CPU steps (runWideBenchmark): WFM listeners, Advanced RDS, NFM, AM, SSB, DAB. The host adds its own
+ *  (the USB bus test) on top. */
+constexpr int kWideCpuSteps = 6;
+
+/** ★★★ V12 THE WIDE BENCHMARK, ITS CPU HALF (Stuart, 2026-11-18: "when we detect a wide sample rate capable SDR … we offer
+ *  a high sample rate benchmark too … that then lists the sample rates of the radio which you can then choose"). The
+ *  three locked-range profiles AT `hz` on the real locked-range path — the capture's fixed cost at that rate, then WFM +
+ *  Advanced RDS (where `radio` reaches 88–108 MHz), the heaviest of NFM / AM / SSB, and DAB (where it reaches Band III:
+ *  the whole blocks that rate holds, its per-station figures from the SAVED QUICK RESULT `savedQuick` — said plainly when
+ *  there is none, or it is from a version without them). Returns the entry for benchmark.json's "wide" object, without
+ *  its "usb" verdict — the host takes the radio to `hz` for that (main.cpp). The radio must already be off the air. */
+inline std::string runWideBenchmark(double hz, const benchhw::Radio& radio, const std::string& radioLabel,
+                                    const std::string& savedQuick, double secondsPerScenario,
+                                    const std::function<void(const std::string&)>& step) {
+    using namespace benchdetail;
+    const double t0 = benchdec::rowClock();
+    vibeFlushDenormals();
+    if (!RxPipeline::workerInit()) RxPipeline::workerInit() = [](const char* n) { benchwide::nameThread(n); };
+    const int cores = (int)std::max(1L, sysconf(_SC_NPROCESSORS_ONLN));
+    const double meas = std::max(1.5, std::min(3.0, secondsPerScenario / 2));
+    benchhw::Hw one; { benchhw::Radio r = radio; r.rates = { hz }; one.radios.push_back(r); }
+    const bool fm = benchhw::gateNeed(one, benchhw::Need::Wfm).run, dab = benchhw::gateNeed(one, benchhw::Need::Dab).run;
+    benchwide::ThreeProfiles P;
+    std::vector<benchprof::CaptureCost> caps;
+    benchwide::measureFmNarrow(P, fm ? hz : 0.0, hz, { "nfm", "am", "ssb" }, -1, cores, meas, caps, step);
+    if (step) step(dab ? "Locked range: DAB @ " + benchhw::rateWords(hz) : std::string());
+    if (dab) {
+        const benchprof::DabInputs d = benchprof::dabInputsFromJson(savedQuick);
+        if (d.ok()) benchwide::dabProfile(P, hz, d, meas, caps);
+        if (!P.dab) P.dabWhy = d.ok() ? "DAB could not be worked out at this rate"
+                             : benchprof::jsonTop(savedQuick, "dabStations").empty()
+                                 ? "run the quick benchmark first: DAB's per-station figures come from it"
+                                 : "the quick benchmark was run by an older version: run it again for DAB's figures";
+    }
+    const benchprof::CaptureCost cap = benchwide::captureAt(hz, meas, caps);
+    const double availKB = benchprof::availRamKB();
+    char b[640];
+    std::snprintf(b, sizeof b, "{\"v\":1,\"at\":%lld,\"rate\":%.0f,\"driver\":\"%s\",\"label\":\"%s\",\"cores\":%d,"
+                  "\"ram\":{\"availKB\":%.0f,\"reserveKB\":%.0f},\"fixed\":{\"intakePct\":%.1f,\"frontPct\":%.1f,"
+                  "\"hottestPct\":%.1f,\"dropped\":%ld,\"fixedKB\":%.0f}",
+                  (long long)time(nullptr), hz, benchprof::jsonEsc(radio.driver).c_str(), benchprof::jsonEsc(radioLabel).c_str(), cores,
+                  availKB, benchprof::kRamReserveKB, cap.intakePct, cap.frontPct, std::max(cap.intakePct, cap.frontPct), cap.dropped,
+                  cap.fixedKB);
+    std::string j = b;
+    const std::string three = benchwide::threeProfilesJson(P, cores, availKB);
+    if (!three.empty()) j += "," + three;
+    char tb[48]; std::snprintf(tb, sizeof tb, ",\"benchSec\":%.1f}", benchdec::rowClock() - t0);
+    return j + tb;
 }
 
 } // namespace vibe

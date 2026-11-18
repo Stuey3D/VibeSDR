@@ -23,6 +23,7 @@
 // ★★ BOUNDED. The test signal is 0.125 s, looped seamlessly (every tone and the carrier offset are whole cycles in it),
 //    held as sc16 — 15 MB at 30.72 MS/s. Rates run ascending and stop at the first one this machine cannot carry.
 #pragma once
+#include "vibe_bench_profiles.h"   // ★ V12 the three locked-range profiles' rules (2026-11-18)
 #include "vibe_listener_queue.h"
 #include <condition_variable>
 #include <deque>
@@ -90,15 +91,24 @@ inline void nameThread(const char* n) {
 struct LockedFigures {
     double hottest = 0; std::string hottestName;
     double intake = 0, front = 0, perListener = 0, listenersTotal = 0, process = 0;
+    double listenerHottest = 0;   // ★ V12 the hottest single thread any listener ran (its own, or its pipeline's worker)
     long dropped = 0;             // IQ buffers + listener blocks lost — anything above 0 = it did not keep up
+    long iqDropped = 0, listenerDropped = 0;   // ★ …the two apart: the shared path's, the listeners'
     bool behind = false;          // the intake could not keep real time (its own pace slipped)
+    double perListenerKB = -1;    // ★ one listener's memory (benchprof::perListenerKB) — -1 with no listeners
+    double fixedKB = 0;           // ★ the shared path's buffers AT THEIR BOUND (the IQ queue, the blocks in flight)
 };
+/** ★★ V12 WHICH LISTENER (2026-11-18): the locked-range path is the same for every mode — only the listener's chain
+ *  differs. WFM by default (the wide rows); NFM / AM / SSB for the narrow profile. */
+struct LockedMode { RxPipeline::Mode mode = RxPipeline::Mode::WFM; double bw = 200000.0; };
 
-/** ★★★ THE LOCKED-RANGE PATH AT `fs` WITH `nListeners` WFM LISTENERS, in real time — see the file note. */
-inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int16_t>& sc16, double warmSec, double measSec) {
+/** ★★★ THE LOCKED-RANGE PATH AT `fs` WITH `nListeners` LISTENERS (WFM unless `lm` says otherwise), in real time — see
+ *  the file note. */
+inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int16_t>& sc16, double warmSec, double measSec,
+                               const LockedMode& lm = LockedMode()) {
     LockedFigures F;
     const int fftSize = fftSizeForRate(fs);
-    const int chanBins = chanBinsFor(fs, fftSize, 200000.0);
+    const int chanBins = chanBinsFor(fs, fftSize, lm.bw);
     const double chanRate = fs * chanBins / fftSize;
     const int centreBin = fftSize / 4;                       // the station is at fs/4 (fmStationSc16's offset)
     const size_t total = sc16.size() / 2;
@@ -119,6 +129,11 @@ inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int1
     vibedsp::Channelizer chan(fftSize);
     const size_t lcap = vibe::listenerQueueBlocks(fs, fftSize - fftSize / vibedsp::Channelizer::OVERLAP_DIV);
     std::atomic<bool> running{true};
+    /* ★★ THE SHARED PATH'S MEMORY AT ITS BOUND, not as found: the IQ queue full (a quarter-second) and every listener
+     *  queue's blocks in flight (shared between listeners — one copy each), plus the channeliser's own buffers. */
+    F.fixedKB = (double(iq.cap) * sizeof(cf32) + double(lcap) * fftSize * sizeof(cf32) + 4.0 * fftSize * sizeof(cf32)) / 1024.0;
+    const double heap0 = benchprof::heapKB(), rss0 = benchprof::rssKB();
+    double heap1 = 0, rss1 = 0;
 
     const auto before = benchdec::threadTimes();
     for (int i = 0; i < nListeners; ++i) {
@@ -147,7 +162,7 @@ inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int1
         cb.audio = benchdetail::noAudio;
 #endif
         L->pipe.start(chanRate, 1024, 10.0, 48000, cb);
-        L->pipe.setTune(0.0, RxPipeline::Mode::WFM, 200000);
+        L->pipe.setTune(0.0, lm.mode, lm.bw);
         Lis* lp = L.get();
         L->th = std::thread([lp, &chan, centreBin, chanBins] {
             nameThread("bw-listener");
@@ -202,7 +217,10 @@ inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int1
         const double w0 = benchdec::wallNow();
         double fed = 0; bool measuring = false;
         while (fed < warmSec + measSec) {
-            if (!measuring && fed >= warmSec) { t0 = benchdec::threadTimes(); p0 = benchdec::processCpu(); measuring = true; }
+            if (!measuring && fed >= warmSec) {
+                t0 = benchdec::threadTimes(); p0 = benchdec::processCpu(); measuring = true;
+                heap1 = benchprof::heapKB(); rss1 = benchprof::rssKB();   // ★ every listener built and warmed
+            }
             // UHD's job: sc16 → fc32 (the same arithmetic; its SIMD converter is faster still)
             for (size_t i = 0; i < hand; ++i) {
                 const size_t k = (pos + i) % total;
@@ -223,8 +241,10 @@ inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int1
     intake.join();
     iq.close(); front.join();
     for (auto& L : lis) { L->q.close(); L->th.join(); }
-    F.dropped = iq.dropped;
-    for (auto& L : lis) F.dropped += L->q.dropped;
+    F.iqDropped = iq.dropped;
+    for (auto& L : lis) F.listenerDropped += L->q.dropped;
+    F.dropped = F.iqDropped + F.listenerDropped;
+    F.perListenerKB = benchprof::perListenerKB(heap0, heap1, rss0, rss1, nListeners);
     // ── the figures, read before the pipelines stop (stop() joins their workers and takes their clocks with them) ──
     (void)before;
     for (const auto& kv : t1) {
@@ -235,7 +255,10 @@ inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int1
         const std::string& nm = kv.second.name;
         if (nm == "bw-intake") F.intake = pct;
         else if (nm == "bw-front") F.front = pct;
-        else if (!before.count(kv.first)) F.listenersTotal += pct;   // the listeners' threads and their pipelines' workers
+        else if (!before.count(kv.first)) {   // the listeners' threads and their pipelines' workers
+            F.listenersTotal += pct;
+            F.listenerHottest = std::max(F.listenerHottest, pct);
+        }
         if (pct > F.hottest) { F.hottest = pct; F.hottestName = nm.empty() ? "thread" : nm; }
     }
     F.process = 100.0 * (p1 - p0) / measSec;
@@ -326,6 +349,152 @@ inline void gateFrom(const std::vector<WideVerdict>& vs, double& lockedHz, doubl
         if (!lStop) { if (v.lockedOk) lockedHz = v.hz; else lStop = true; }
         if (!fStop) { if (v.fullOk) fullHz = v.hz; else fStop = true; }
     }
+}
+
+// ── ★★★ V12 THE THREE LOCKED-RANGE PROFILES (2026-11-18 — vibe_bench_profiles.h has the rules) ─────────────────────────
+//
+// ★★ Each profile is the locked-range path above, thread for thread, with `profileListeners` listeners of its kind:
+//    the shared path (intake + front end) is its fixed cost, the listeners' threads together / their number its cost per
+//    listener, and the heap / RSS growth while they were built its memory per listener. The QUICK and WIDE benchmarks
+//    both measure through here; they differ only in the rate.
+// ★★ ADVANCED RDS rides on top of a WFM listener: its own cost is (WFM + Advanced RDS) − WFM, every thread of each, at
+//    the same rate (runOne, the rdsx row's own way). It runs on the listener's demodulated MPX, so it does not depend on
+//    the capture rate — and the locked-range loop is too short for RDS to lock, which is what the scopes need to run.
+
+/** The profile runs' test signal: 0.125 s, at most 4 Mi samples (16 MB of sc16) at any rate — bounded on a 56 MS/s
+ *  capture as on a Pi 2 (NO OOM, ever). A multiple of 4 samples: the carrier at fs/4 loops on a whole cycle. */
+inline size_t profileSamples(double fs) {
+    size_t n = (size_t)(fs * 0.125);
+    n = std::min<size_t>(n, (size_t)1 << 22);
+    return n & ~(size_t)3;
+}
+/** A narrowband AM two-tone at `offset`, straight to sc16 (no float copy of the whole signal at a wide rate). */
+inline std::vector<int16_t> nbSignalSc16(double fs, size_t n, double offset) {
+    std::vector<int16_t> o(n * 2);
+    double ph = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        const double t = (double)i / fs;
+        const double a = 0.3 * (1.0 + 0.5 * std::sin(2 * M_PI * 700.0 * t) + 0.3 * std::sin(2 * M_PI * 1700.0 * t));
+        ph += 2 * M_PI * offset / fs; if (ph > 2 * M_PI) ph -= 2 * M_PI;
+        o[2 * i] = (int16_t)std::lround(a * std::cos(ph) * 16000.0); o[2 * i + 1] = (int16_t)std::lround(a * std::sin(ph) * 16000.0);
+    }
+    return o;
+}
+/** How many listeners a profile run builds: one per spare core, 1 … 4 — enough to average, never enough to swamp a Pi 2. */
+inline int profileListeners(int cores) { return std::max(1, std::min(4, cores - 1)); }
+
+struct ProfileMeasure { benchprof::ProfileCost cost; benchprof::CaptureCost cap; int listeners = 0; double rate = 0; };
+/** ★ One profile at `fs`: `nL` listeners of `lm` on the real locked-range path (runLocked). */
+inline ProfileMeasure measureProfile(double fs, int nL, const std::vector<int16_t>& sc16, const LockedMode& lm, double meas) {
+    ProfileMeasure m; m.rate = fs; m.listeners = nL;
+    const LockedFigures F = runLocked(fs, nL, sc16, 0.5, meas, lm);
+    m.cap.rate = fs; m.cap.intakePct = F.intake; m.cap.frontPct = F.front;
+    m.cap.dropped = F.iqDropped + (F.behind ? 1 : 0); m.cap.fixedKB = F.fixedKB;
+    auto& c = m.cost;
+    c.perPct = nL > 0 ? F.perListener : -1;
+    c.perHottestPct = F.listenerHottest;
+    c.fixedPct = F.intake + F.front;
+    c.fixedHottestPct = std::max(F.intake, F.front);
+    c.dropped = m.cap.dropped;
+    c.listenerDropped = F.listenerDropped;
+    c.perKB = F.perListenerKB;
+    c.fixedKB = F.fixedKB;
+    return m;
+}
+inline double threadSum(const Result& r) { double s = 0; for (const auto& t : r.threads) s += std::max(0.0, t.second); return s; }
+/** ★ Advanced RDS per listener: (WFM + Advanced RDS) − WFM at 2.048 MS/s, every thread of each (see the note above). */
+inline double rdsIncrementPct(double seconds) {
+    const auto x = benchdetail::fmStation(2048000.0, 1.0, 200000.0);
+    const Result on = benchdetail::runOne("rdsx_inc", "", 2048000.0, RxPipeline::Mode::WFM, 200000, x, seconds, true);
+    const Result off = benchdetail::runOne("wfm_inc", "", 2048000.0, RxPipeline::Mode::WFM, 200000, x, seconds, false);
+    return std::max(0.0, threadSum(on) - threadSum(off));
+}
+
+/** What the three profiles came to — the quick run fills it at its rates, the wide run at the owner's. */
+struct ThreeProfiles {
+    bool fm = false, narrow = false, dab = false;
+    double fmRate = 0, narrowRate = 0, dabRate = 0;
+    int dabBlocks = 0, fmListeners = 0, narrowListeners = 0;
+    benchprof::ProfileCost fmC, narrowC, dabC;
+    std::string narrowMode;    // "nfm" | "am" | "ssb" — the heaviest, whose cost the figure is
+    double rdsIncPct = -1;
+    std::string dabWhy;        // ★ why DAB has no figure, in words (absent = it has one, or it does not apply here)
+};
+/** `"fm":{…},"narrow":{…},"dab":{…}` — only the profiles that were measured (never a line for one that was not). */
+inline std::string threeProfilesJson(const ThreeProfiles& p, int cores, double availKB) {
+    std::string j;
+    auto add = [&](const char* k, const std::string& v) { j += std::string(j.empty() ? "" : ",") + "\"" + k + "\":" + v; };
+    if (p.fm) {
+        char e[96]; std::snprintf(e, sizeof e, ",\"rdsPct\":%.2f,\"listeners\":%d", p.rdsIncPct, p.fmListeners);
+        add("fm", benchprof::profileJson(benchprof::profileUsers(p.fmC, cores, availKB), p.fmC, p.fmRate, e));
+    }
+    if (p.narrow) {
+        char e[96]; std::snprintf(e, sizeof e, ",\"mode\":\"%s\",\"listeners\":%d", p.narrowMode.c_str(), p.narrowListeners);
+        add("narrow", benchprof::profileJson(benchprof::profileUsers(p.narrowC, cores, availKB), p.narrowC, p.narrowRate, e));
+    }
+    if (p.dab) {
+        char e[48]; std::snprintf(e, sizeof e, ",\"blocks\":%d", p.dabBlocks);
+        add("dab", benchprof::profileJson(benchprof::profileUsers(p.dabC, cores, availKB), p.dabC, p.dabRate, e));
+    } else if (!p.dabWhy.empty()) add("dabWhy", "\"" + benchprof::jsonEsc(p.dabWhy) + "\"");
+    return j;
+}
+
+/** ★★ THE FM AND NARROW PROFILES AT `fmRate` / `narrowRate` (0 = that profile does not apply here). `narrowModes` = the
+ *  modes to try, heaviest kept (the quick run passes the one its lk_ rows found heaviest; the wide run all three).
+ *  `rdsInc` ≥ 0 = Advanced RDS's cost already known (the quick run's own rows); else it is measured. Steps named as they
+ *  start; the capture's cost at each rate run goes into `caps` (DAB at the same rate reuses it). */
+inline void measureFmNarrow(ThreeProfiles& P, double fmRate, double narrowRate, const std::vector<std::string>& narrowModes,
+                            double rdsInc, int cores, double meas, std::vector<benchprof::CaptureCost>& caps,
+                            const std::function<void(const std::string&)>& step) {
+    const int nL = profileListeners(cores);
+    if (fmRate > 0) {
+        if (step) step("Locked range: WFM listeners @ " + benchhw::rateWords(fmRate));
+        ProfileMeasure m;
+        { const auto x = fmStationSc16(fmRate, profileSamples(fmRate) / fmRate, fmRate / 4); m = measureProfile(fmRate, nL, x, LockedMode(), meas); }
+        if (step) step("Advanced RDS, per listener");
+        P.rdsIncPct = rdsInc >= 0 ? rdsInc : rdsIncrementPct(std::max(1.5, meas));
+        P.fm = true; P.fmRate = fmRate; P.fmListeners = nL; P.fmC = m.cost;
+        P.fmC.perPct += P.rdsIncPct;
+        P.fmC.perHottestPct += P.rdsIncPct;   // ★ conservative: as if Advanced RDS shared the listener's hottest thread
+        caps.push_back(m.cap);
+    } else if (step) { step(""); step(""); }
+    if (narrowRate > 0 && !narrowModes.empty()) {
+        const auto x = nbSignalSc16(narrowRate, profileSamples(narrowRate), narrowRate / 4);
+        bool first = true;
+        for (const auto& md : narrowModes) {
+            const LockedMode lm = md == "am" ? LockedMode{ RxPipeline::Mode::AM, 10000 }
+                                : md == "ssb" ? LockedMode{ RxPipeline::Mode::SSB_USB, 2700 }
+                                : LockedMode{ RxPipeline::Mode::NFM, 12500 };
+            if (step) step("Locked range: " + std::string(md == "am" ? "AM" : md == "ssb" ? "SSB" : "NFM") + " listeners @ " + benchhw::rateWords(narrowRate));
+            const ProfileMeasure m = measureProfile(narrowRate, nL, x, lm, meas);
+            if (first || m.cost.perPct > P.narrowC.perPct) { P.narrowC = m.cost; P.narrowMode = md; }
+            if (first) caps.push_back(m.cap);
+            first = false;
+        }
+        P.narrow = true; P.narrowRate = narrowRate; P.narrowListeners = nL;
+    }
+}
+/** ★ The capture's own cost at `fs`: from a profile already run at that rate, else a run with no listeners. */
+inline benchprof::CaptureCost captureAt(double fs, double meas, std::vector<benchprof::CaptureCost>& caps) {
+    for (const auto& c : caps) if (std::fabs(c.rate - fs) < 1.0 && c.ok()) return c;
+    const auto x = nbSignalSc16(fs, profileSamples(fs), fs / 4);
+    const ProfileMeasure m = measureProfile(fs, 0, x, LockedMode{ RxPipeline::Mode::NFM, 12500 }, meas);
+    caps.push_back(m.cap);
+    return m.cap;
+}
+/** ★★ THE DAB PROFILE at `rate` from `d` (vibe_bench_profiles.h dabCost): the blocks that rate holds, every one decoding,
+ *  a station per listener. Two blocks or more ride the capture's shared path, measured here (captureAt). */
+inline void dabProfile(ThreeProfiles& P, double rate, const benchprof::DabInputs& d, double meas,
+                       std::vector<benchprof::CaptureCost>& caps) {
+    const int blocks = benchprof::dabBlocksAt(rate);
+    if (blocks < 1) return;
+    if (!d.ok()) return;
+    benchprof::CaptureCost cap;
+    if (blocks >= 2) cap = captureAt(rate, meas, caps);
+    P.dabC = benchprof::dabCost(d.perStation, d.muxFront, d.muxHottest, d.ddc8, d.bank.ok() ? &d.bank : nullptr, rate, blocks, cap, d.stationKB);
+    if (!(P.dabC.perPct > 0)) return;
+    P.dab = true; P.dabBlocks = blocks;
+    P.dabRate = blocks >= 2 ? rate : 2048000.0;   // ★ one block = the ordinary DAB mode, at its own rate
 }
 
 }  // namespace benchwide

@@ -7,6 +7,9 @@
 //     [:ds]); unset = no radio configured = the full run, as before. The server passes its real radios itself.
 //   VIBE_BENCH_WIDE_ONLY=1 — run the wide capture rows alone (vibe_benchmark_wide.h) for the radios above, and print
 //     their rows and the capture verdict: how the wide rates are checked on a machine without the rest of the run.
+// ★ V12 (2026-11-18) — the WIDE BENCHMARK's CPU half (vibe_benchmark.h runWideBenchmark), no radio touched:
+//   VIBE_BENCH_WIDE_RATE=56000000 — the three locked-range profiles at that rate for the FIRST radio in VIBE_BENCH_RADIOS
+//     (an RTL if none); VIBE_BENCH_SAVED=<benchmark.json> — a saved quick result for DAB's per-station figures.
 #include "vibe_benchmark_dab.h"
 #include "vibe_benchmark_adsb.h"
 #include "vibe_thread_layout.h"
@@ -39,6 +42,15 @@ int main(int argc, char** argv) {
     vibe::vibeApplyDefaultThreadLayout();
     const double secs = argc > 1 ? std::atof(argv[1]) : 4.0;
     const vibe::benchhw::Hw hw = radiosFromEnv();
+    if (const char* wr = std::getenv("VIBE_BENCH_WIDE_RATE")) {
+        std::string saved;
+        if (const char* sp = std::getenv("VIBE_BENCH_SAVED"))
+            if (FILE* f = std::fopen(sp, "rb")) { char b[4096]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) saved.append(b, n); std::fclose(f); }
+        const vibe::benchhw::Radio r = hw.radios.empty() ? vibe::benchhw::radioFor("rtl") : hw.radios.front();
+        std::puts(vibe::runWideBenchmark(std::atof(wr), r, r.driver, saved, secs,
+                                         [](const std::string& l) { if (!l.empty()) std::fprintf(stderr, "%s\n", l.c_str()); }).c_str());
+        return 0;
+    }
     if (std::getenv("VIBE_BENCH_WIDE_ONLY")) {
         if (!vibedsp::RxPipeline::workerInit())
             vibedsp::RxPipeline::workerInit() = [](const char* n) { vibe::benchwide::nameThread(n); };
