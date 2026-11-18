@@ -525,7 +525,7 @@ std::string SdrplaySource::deviceName(int index) {
 }
 
 /** ★★★ THE NAME A RADIO IS CHOSEN BY (radios.cpp and main.cpp take the last word of deviceName as the config serial).
- *  The serial when the RSP has one. The original RSP1 and the RSP1 clones have NONE (a tester with two of them, 11-18:
+ *  The serial when the RSP has a unique one. The original RSP1 and the RSP1 clones have none, or a shared dummy (a tester with two of them, 11-18:
  *  "the old RSP1 does not have a serial number") — the model word stood in, so two of them were both "RSP1" and the
  *  second could never be picked. Now the FIRST serial-less one of a model keeps the bare model word (a config already
  *  saved with "RSP1" still finds it) and the next ones are "RSP1-2", "RSP1-3" in the API's order — the same order
@@ -545,10 +545,14 @@ static std::string standInSerial(const sdrplay_api_DeviceT* devs, unsigned n, un
     };
     if (i >= n) return "";
     if (!serialWord) return model(devs[i].hwVer);
-    if (devs[i].SerNo[0]) return devs[i].SerNo;
-    int k = 0;   // serial-less radios of the same model before this one
-    for (unsigned j = 0; j < i; ++j) if (!devs[j].SerNo[0] && model(devs[j].hwVer) == model(devs[i].hwVer)) ++k;
-    return k == 0 ? model(devs[i].hwVer) : model(devs[i].hwVer) + "-" + std::to_string(k + 1);
+    // ★★ The clones do not leave it blank: they report a SHARED dummy ("0000000001" on the tester's), so two of them
+    //    collide exactly as two blank ones do. The rule is the same for both: the first keeps its word, a repeat gets
+    //    "-2", "-3" in the API's order.
+    auto base = [&](unsigned j) { return devs[j].SerNo[0] ? std::string(devs[j].SerNo) : model(devs[j].hwVer); };
+    const std::string b = base(i);
+    int k = 0;   // radios before this one that would carry the same word
+    for (unsigned j = 0; j < i; ++j) if (base(j) == b) ++k;
+    return k == 0 ? b : b + "-" + std::to_string(k + 1);
 }
 
 std::string SdrplaySource::deviceNameLocked(int index) {
