@@ -77,7 +77,8 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
   const server = [...shim.slice(s, e).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1])
     // ★ 'adsb', 'ism', 'ndb', 'ais' and 'mode_resume' (V12) are dial moves like 'dab': the client gates them in adsb()/ism()/
     //   ndb()/ais()/modeResume() with askBlocked, not by this list (NDB/AIS e41b23dee+, mode_resume 8b63720b9).
-    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'adsb', 'ism', 'ndb', 'ais', 'mode_resume', 'iqtune'].includes(t)).sort();
+    //   ★ 'avdata' and 'sondes' (V12 2026-11-16) likewise — the web's avdata()/sondes() askBlocked.
+    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'adsb', 'ism', 'ndb', 'ais', 'mode_resume', 'iqtune', 'avdata', 'sondes'].includes(t)).sort();
   const jr = read('spike/WristSDR/WristSDR/UberClient.swift');
   const js = jr.indexOf('askSharedSettings: Set<String> = ['), je = jr.indexOf(']', js + 40);
   const jrList = [...jr.slice(js, je).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1]).sort();

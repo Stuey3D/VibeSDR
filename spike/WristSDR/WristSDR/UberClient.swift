@@ -811,6 +811,7 @@ final class UberClient: ObservableObject {
     "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
     "tunerbw", "sampleRate", "directSampling",
     "nr", "notch", "deemph", "stereo", "nfmvoice", "wsp", "nb", "nbx", "ceq", "ims", "autobw",
+    "icom_control",   // ★ an Icom's own controls (ControlMenu sends them) — the server refused them under the lock and Jr never dimmed them
     "freedv_sub",   // ★ V12 FreeDV's sub-mode choice — the server gates it with the mode (dialChat.ts ASK_SHARED_SETTINGS)
   ]
   /// True when this receiver shares one tuner between its listeners.
