@@ -524,6 +524,33 @@ std::string SdrplaySource::deviceName(int index) {
     return name;
 }
 
+/** ★★★ THE NAME A RADIO IS CHOSEN BY (radios.cpp and main.cpp take the last word of deviceName as the config serial).
+ *  The serial when the RSP has one. The original RSP1 and the RSP1 clones have NONE (a tester with two of them, 11-18:
+ *  "the old RSP1 does not have a serial number") — the model word stood in, so two of them were both "RSP1" and the
+ *  second could never be picked. Now the FIRST serial-less one of a model keeps the bare model word (a config already
+ *  saved with "RSP1" still finds it) and the next ones are "RSP1-2", "RSP1-3" in the API's order — the same order
+ *  OpenWebRX's index=0/1 picks by. `serialWord` false = the model alone ("RSP1"), for the display name. */
+static std::string standInSerial(const sdrplay_api_DeviceT* devs, unsigned n, unsigned i, bool serialWord) {
+    auto model = [](unsigned char hw) -> std::string {
+        switch (hw) {
+            case SDRPLAY_RSP1_ID:    return "RSP1";
+            case SDRPLAY_RSP1A_ID:   return "RSP1A";
+            case SDRPLAY_RSP1B_ID:   return "RSP1B";
+            case SDRPLAY_RSP2_ID:    return "RSP2";
+            case SDRPLAY_RSPduo_ID:  return "RSPduo";
+            case SDRPLAY_RSPdx_ID:   return "RSPdx";
+            case SDRPLAY_RSPdxR2_ID: return "RSPdx-R2";
+            default:                 return "RSP";
+        }
+    };
+    if (i >= n) return "";
+    if (!serialWord) return model(devs[i].hwVer);
+    if (devs[i].SerNo[0]) return devs[i].SerNo;
+    int k = 0;   // serial-less radios of the same model before this one
+    for (unsigned j = 0; j < i; ++j) if (!devs[j].SerNo[0] && model(devs[j].hwVer) == model(devs[i].hwVer)) ++k;
+    return k == 0 ? model(devs[i].hwVer) : model(devs[i].hwVer) + "-" + std::to_string(k + 1);
+}
+
 std::string SdrplaySource::deviceNameLocked(int index) {
     std::string err;
     if (!apiOpen(err)) return "";
@@ -534,20 +561,12 @@ std::string SdrplaySource::deviceNameLocked(int index) {
     api().Unlock();
     std::string name;
     if (index >= 0 && (unsigned)index < n) {
-        // ★ The MODEL, plus the serial. RSP1A/RSP1B/RSPdx behave differently enough that
-        // "SDRplay" alone would leave a user guessing which settings apply — the same
-        // reasoning as reading the dongle's USB strings rather than librtlsdr's guess.
-        switch (devs[index].hwVer) {
-            case SDRPLAY_RSP1_ID:   name = "SDRplay RSP1";   break;
-            case SDRPLAY_RSP1A_ID:  name = "SDRplay RSP1A";  break;
-            case SDRPLAY_RSP1B_ID:  name = "SDRplay RSP1B";  break;
-            case SDRPLAY_RSP2_ID:   name = "SDRplay RSP2";   break;
-            case SDRPLAY_RSPduo_ID: name = "SDRplay RSPduo"; break;
-            case SDRPLAY_RSPdx_ID:  name = "SDRplay RSPdx";  break;
-            case SDRPLAY_RSPdxR2_ID:name = "SDRplay RSPdx-R2"; break;
-            default:                name = "SDRplay RSP";    break;
-        }
-        if (devs[index].SerNo[0]) name += std::string(" ") + devs[index].SerNo;
+        // ★ The MODEL, plus the serial. RSP1A/RSP1B/RSPdx behave differently enough that "SDRplay" alone would leave a
+        //   user guessing which settings apply. A serial-less one ends in its stand-in instead (standInSerial): the first
+        //   is just "SDRplay RSP1" as it always was, the second "SDRplay RSP1 RSP1-2".
+        name = "SDRplay " + standInSerial(devs, n, (unsigned)index, false);
+        const std::string who = standInSerial(devs, n, (unsigned)index, true);
+        if (who != standInSerial(devs, n, (unsigned)index, false)) name += " " + who;
     }
     apiClose();
     return name;
@@ -599,6 +618,8 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
         return false;
     }
     impl_->dev = devs[index];
+    // ★★ Who this is, for reopen(): the serial, or the stand-in a serial-less RSP1 is chosen by (standInSerial).
+    const std::string standIn = standInSerial(devs, n, (unsigned)index, true);
     applyDuoChoice();            // ★ Duo only: pick the tuner BEFORE SelectDevice freezes it
     sdrplay_api_ErrT e = api().SelectDevice(&impl_->dev);
     api().Unlock();
@@ -610,7 +631,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     impl_->selected = true;
     // ★ Remember WHICH radio this is, by serial. reopen() cannot trust the index — enumeration
     //   order is not stable across a re-plug. Captured here, while the device struct is fresh.
-    curSerial_ = impl_->dev.SerNo[0] ? std::string(impl_->dev.SerNo) : std::string();
+    curSerial_ = standIn;
 
     if ((e = api().GetDeviceParams(impl_->dev.dev, &impl_->params))
             != sdrplay_api_Success || !impl_->params) {
@@ -1047,8 +1068,10 @@ bool SdrplaySource::reopen(std::string& err) {
 
     int idx = -1;
     for (unsigned int i = 0; i < n; i++) {
-        if (serial.empty()) { idx = (int)i; break; }              // only one radio, no serial read
-        if (devs[i].SerNo[0] && serial == devs[i].SerNo) { idx = (int)i; break; }
+        if (serial.empty()) { idx = (int)i; break; }              // never opened by name
+        // ★★ The serial, or a serial-less RSP1's stand-in — never "the first one", which with two RSP1s is the
+        //    wrong radio half the time.
+        if (serial == standInSerial(devs, n, i, true)) { idx = (int)i; break; }
     }
     if (idx < 0) {
         err = serial.empty() ? "no SDRplay device present"
