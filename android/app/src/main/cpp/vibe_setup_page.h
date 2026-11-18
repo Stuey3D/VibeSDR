@@ -521,8 +521,20 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
          while it runs (a few minutes; the result says how long) and the server comes back by itself when it
          finishes.</p>
       <div class="row">
-        <button id="benchRun" type="button">Run benchmark</button>
+        <button id="benchRun" type="button">Run quick benchmark</button>
         <span class="note" id="benchWhen"></span>
+      </div>
+      <!-- ★★★ V12 THE WIDE BENCHMARK (Stuart, 2026-11-18) — shown only where a configured radio can do wide rates (a USRP,
+           HackRF, SDRplay RSP or Airspy R2 / Mini: the server's vsWideOffer). The three locked-range profiles at the rate the
+           owner picks from THAT radio's own list, then the USB bus test at that rate. A radio picker only with several. -->
+      <div id="benchWideWrap" class="hide" style="margin-top:10px">
+        <div class="row">
+          <button id="benchWideRun" type="button">Run wide benchmark</button>
+          <select id="benchWideRadio" class="hide" aria-label="Radio"></select>
+          <select id="benchWideRate" aria-label="Sample rate"></select>
+        </div>
+        <div class="note">High sample rate SDR detected. As well as the quick benchmark, run the wide benchmark at the
+          sample rate you intend to use.</div>
       </div>
       <div class="note" id="benchMsg"></div>
       <!-- ★★ THE BAR. Two minutes of nothing looks like a hang (Stuart, 2026-09-20: "us humans need to see
@@ -535,6 +547,10 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         </div>
         <div class="note" id="benchStep" style="margin-top:5px"></div>
       </div>
+      <!-- ★★★ V12 THE THREE LOCKED-RANGE PROFILES, in Stuart's shape ("CPU/RAM:" then a line each) — the quick run's, then
+           each wide run's (benchProfileLines / benchWideLines). -->
+      <div class="note hide" id="benchProfiles" style="margin-top:10px"></div>
+      <div class="note hide" id="benchWideResult" style="margin-top:10px"></div>
       <table id="benchTable" class="hide" style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
         <tbody id="benchRows"></tbody>
       </table>
@@ -2393,7 +2409,9 @@ function benchStaleText(b) {
 function renderBench(j) {
   BENCH = (j && j.v) ? j : null;
   if (typeof dabOwnRender === "function") dabOwnRender();   // ★★ V12 own station: the sentence names the measured N
+  benchWideRender(j);   // ★★★ V12 the wide benchmark's button, its radios and rates, and what it found — quick run or not
   const tbl = $("benchTable"), rows = $("benchRows"), when = $("benchWhen"), adv = $("benchAdvice");
+  benchProfilesRender(BENCH);
   if (!BENCH) { if (tbl) tbl.classList.add("hide"); if (when) when.textContent = "Never run on this machine."; return; }
   if (when) {
     const d = new Date((BENCH.at || 0) * 1000);
@@ -2431,7 +2449,8 @@ function renderBench(j) {
               + Math.round(BENCH.network.uplinkKBps) + " kB/s up)");
   }
   const lu = BENCH.lockedUsers || {};
-  if (lu.nfm || lu.wfm) {
+  // ★ An older result without the profiles keeps its old sentence; a new one says it as the CPU/RAM lines above.
+  if ((lu.nfm || lu.wfm) && !lu.narrow && !lu.fm) {
     bits.push("On a locked range this box fits about <b>" + (lu.wfm || 0) + "</b> WFM or <b>"
               + (lu.nfm || 0) + "</b> narrow-mode listeners");
   }
@@ -2492,6 +2511,180 @@ function benchNotRunLabel(id) {
   if (m) return "Locked range @ " + (Number(m[1]) / 1000) + " MS/s, " + m[2] + " WFM listener" + (m[2] === "1" ? "" : "s");
   if (k.indexOf("dec_") === 0) return "Decoder: " + k.slice(4).toUpperCase();
   return k;
+}
+
+/* ★★★ V12 THE THREE LOCKED-RANGE PROFILES, IN WORDS (vibe_bench_profiles.h — Stuart, 2026-11-17/18):
+ *      CPU/RAM:
+ *      50 DAB users @ 8 MS/s
+ *      25 WFM + Advanced RDS users @ 8 MS/s
+ *      200 SSB/AM/NFM users @ 8 MS/s
+ *  Each line says which bound set it (the cores or the memory), and there is never a line for a profile that was not
+ *  measured. ONE RULE, TWO READERS: ServerModeScreen.tsx benchProfileLines says the same; scripts/test-setup-bench-wide.mjs
+ *  holds both to these strings. */
+function benchRateWords(hz) {
+  const v = Number(hz) || 0;
+  if (v < 1e6) return Math.round(v / 1e3) + " kS/s";
+  return String(Number((v / 1e6).toFixed(3))) + " MS/s";
+}
+function benchProfileLine(p, what) {
+  if (!p || typeof p.n !== "number") return "";
+  const n = Math.max(0, p.n | 0);
+  let s = n + " " + what + (n === 1 ? " user" : " users") + " @ " + benchRateWords(p.rate);
+  if (Number(p.blocks) >= 2) s += ", " + p.blocks + " blocks";
+  if (p.by === "capture") s += " (the capture itself cannot keep up at this rate)";
+  else if (p.by === "ram") s += " (set by RAM)";
+  else if (p.by === "cpu") s += " (set by CPU)";
+  return s;
+}
+/** The lines under "CPU/RAM:" for a set of profiles (the quick result's lockedUsers, or a wide entry), DAB first. */
+function benchProfileLines(lu) {
+  if (!lu) return [];
+  const out = [];
+  const dab = benchProfileLine(lu.dab, "DAB"), fm = benchProfileLine(lu.fm, "WFM + Advanced RDS"),
+        nb = benchProfileLine(lu.narrow, "SSB/AM/NFM");
+  if (dab) out.push(dab); else if (lu.dabWhy) out.push("DAB: " + lu.dabWhy);
+  if (fm) out.push(fm);
+  if (nb) out.push(nb);
+  return out;
+}
+/** ★★ A wide entry in words: its heading, the profile lines and the USB bus verdict. `unusable` = the bus did not keep
+ *  up, so the figures are the processor's alone and the rate cannot be used. */
+function benchWideLines(w, name) {
+  if (!w || !w.rate) return null;
+  const head = "Wide benchmark — " + (name || w.label || w.driver || "radio") + " @ " + benchRateWords(w.rate);
+  const u = w.usb || {};
+  let usb, unusable = false;
+  if (u.notRun) usb = "USB bus: not tested — " + u.notRun;
+  else if (u.ok) usb = "USB bus: kept up (" + Number(u.deliveredPct || 0).toFixed(2) + " % delivered, "
+    + ((u.usbDrops || 0) + (u.iqDrops || 0)) + " drops)";
+  else { unusable = true;
+    usb = "USB bus: could not keep up (" + (u.why || (Number(u.deliveredPct || 0).toFixed(2) + " % delivered")) + ")"; }
+  return { head, lines: benchProfileLines(w), usb, unusable };
+}
+/** The wide radios the server offers (vsWideOffer), each with its rate list: the server's list, the radio's live one
+ *  merged in where known (`live`: serial → [rates]), and its current rate. */
+function benchWideRadios(offer, live) {
+  return (Array.isArray(offer) ? offer : []).map(o => {
+    const set = new Set((o.rates || []).map(Number));
+    for (const r of ((live && live[o.serial]) || [])) set.add(Number(r));
+    if (Number(o.current) > 0) set.add(Number(o.current));
+    return Object.assign({}, o, { rates: [...set].filter(x => x > 0).sort((a, b) => a - b),
+                                  key: o.serial || ("radio" + o.index) });
+  });
+}
+/* ── what is on screen ── */
+function benchProfilesRender(b) {
+  const el = $("benchProfiles");
+  if (!el) return;
+  const lines = benchProfileLines(b && b.lockedUsers);
+  // ★ Only the new shape: the old keys (wfm / nfm …) are not a profile and must not be drawn as one.
+  if (!lines.length || !(b.lockedUsers.fm || b.lockedUsers.narrow || b.lockedUsers.dab)) { el.classList.add("hide"); el.innerHTML = ""; return; }
+  el.innerHTML = "<b>Quick benchmark — CPU/RAM:</b><br>" + lines.map(esc).join("<br>");
+  el.classList.remove("hide");
+}
+let BENCH_WIDE = [];        // ★ the wide radios on offer, with their rates (benchWideRadios)
+let BENCH_WIDE_LIVE = {};   // ★ serial → a running radio's own rate list (its /vibeserver/hardware)
+function benchWideRender(j) {
+  BENCH_WIDE = benchWideRadios(j && j.wideOffer, BENCH_WIDE_LIVE);
+  const wrap = $("benchWideWrap"), radioSel = $("benchWideRadio"), out = $("benchWideResult");
+  if (wrap) wrap.classList.toggle("hide", BENCH_WIDE.length === 0);
+  if (radioSel && BENCH_WIDE.length) {
+    const was = radioSel.value;
+    radioSel.innerHTML = BENCH_WIDE.map((o, i) => `<option value="${i}">${esc(o.label || o.driver)}</option>`).join("");
+    if (was && Number(was) < BENCH_WIDE.length) radioSel.value = was;
+    radioSel.classList.toggle("hide", BENCH_WIDE.length < 2);
+    benchWideRates();
+  }
+  if (!out) return;
+  const wide = (j && j.wide) || {};
+  const blocks = [];
+  for (const k of Object.keys(wide)) {
+    const o = BENCH_WIDE.find(x => x.key === k);
+    const w = benchWideLines(wide[k], o && o.label);
+    if (!w) continue;
+    const when = wide[k].at ? new Date(wide[k].at * 1000) : null;
+    blocks.push("<b>" + esc(w.head) + "</b>" + (when && isFinite(when.getTime()) ? " <span style=\"color:var(--dim)\">(" + esc(when.toLocaleString()) + ")</span>" : "")
+      + "<br>CPU/RAM:" + (w.unusable ? " <span style=\"color:#ff8a7d\">not usable at this rate — the USB bus could not keep up; these are what the processor alone could carry</span>" : "")
+      + "<br>" + w.lines.map(l => w.unusable ? "<s>" + esc(l) + "</s>" : esc(l)).join("<br>")
+      + "<br><span style=\"color:" + (w.unusable ? "#ff8a7d" : (wide[k].usb && wide[k].usb.ok) ? "#7bd88f" : "var(--dim)") + "\">" + esc(w.usb) + "</span>");
+  }
+  out.innerHTML = blocks.join("<br><br>");
+  out.classList.toggle("hide", !blocks.length);
+}
+/** The chosen radio's rates in the rate list, its current rate selected. */
+function benchWideRates() {
+  const sel = $("benchWideRate"), radioSel = $("benchWideRadio");
+  if (!sel) return;
+  const o = BENCH_WIDE[Number((radioSel && radioSel.value) || 0)] || BENCH_WIDE[0];
+  if (!o) { sel.innerHTML = ""; return; }
+  const was = Number(sel.dataset.radio === o.key ? sel.value : 0) || Number(o.current) || 0;
+  sel.innerHTML = o.rates.map(r => `<option value="${r}">${esc(benchRateWords(r))}</option>`).join("");
+  sel.dataset.radio = o.key;
+  if (o.rates.includes(was)) sel.value = String(was);
+}
+/** ★ A running radio's own rate list, fetched from that radio's process (the door has no radio). */
+async function benchWideLive() {
+  for (const o of BENCH_WIDE) {
+    try {
+      const pre = await benchWidePrefix(o.serial);
+      const hw = await (await fetch(pre + "/vibeserver/hardware", {cache:"no-store"})).json();
+      if (hw && Array.isArray(hw.rates) && hw.rates.length && hw.driver === o.driver) BENCH_WIDE_LIVE[o.serial] = hw.rates.map(Number);
+    } catch (e) { /* not running: its driver's list stands */ }
+  }
+}
+/** ★★★ WHERE THE WIDE REQUEST GOES: the process that HOLDS that radio. "" when it is this one (a single-radio server, or
+ *  the page served by that radio), else /r/<serial> — the front door hands it on (main.cpp refuses it anywhere else). */
+async function benchWidePrefix(serial) {
+  try {
+    const dir = await (await fetch("/vibeserver/radios", {cache:"no-store"})).json();
+    const list = dir.radios || [];
+    if (!list.length || !serial) return "";
+    const me = list.find(x => x.mine);
+    return (me && me.serial === serial) ? "" : "/r/" + encodeURIComponent(serial);
+  } catch (e) { return ""; }
+}
+async function benchWideRun(force) {
+  const btn = $("benchWideRun"), msg = $("benchMsg");
+  const o = BENCH_WIDE[Number(($("benchWideRadio") && $("benchWideRadio").value) || 0)] || BENCH_WIDE[0];
+  const hz = Number($("benchWideRate") && $("benchWideRate").value) || 0;
+  if (!o || !(hz > 0)) return;
+  if (benchPoll) { clearInterval(benchPoll); benchPoll = 0; }
+  if (btn) { btn.disabled = true; btn.textContent = "Measuring…"; }
+  if (msg) msg.textContent = "Measuring " + (o.label || o.driver) + " at " + benchRateWords(hz) + ", then testing its USB bus at that rate. "
+    + "The radio is off the air for a minute or two and comes back at its own rate.";
+  benchBar(0, "Starting…");
+  const started = Date.now() / 1000;
+  try {
+    const pre = await benchWidePrefix(o.serial);
+    const q = await authQueryFor(pre);
+    const r = await fetch(`${pre}/vibeserver/benchmark?wide=${hz}&radio=${encodeURIComponent(o.serial || String(o.index))}&${q}${force ? "&force=1" : ""}`,
+                          {method: "POST", cache: "no-store"});
+    const body = await r.text();
+    let j = {};
+    try { j = JSON.parse(body); } catch (e) { j = {}; }
+    if (!r.ok) {
+      if (r.status === 409 && !force && /listener/.test(j.error || "") && confirm((j.error || "Busy") + ".\n\nRun it anyway?")) return benchWideRun(true);
+      if (msg) msg.textContent = j.error || `The wide benchmark could not start (HTTP ${r.status}).`;
+      benchBar(0, "");
+      $("benchBarWrap").classList.add("hide");
+      return;
+    }
+    const ok = await benchFollow(pre);
+    if (!ok) { if (msg) msg.textContent = "The wide benchmark did not report any progress — check the server log."; return; }
+    for (let i = 0; i < 40; i++) {
+      try {
+        const rr = await fetch("/vibeserver/benchmark?" + await authQuery(), {cache:"no-store"});
+        if (rr.ok) { const res = await rr.json(); const w = res && res.wide && res.wide[o.key];
+                     if (w && Number(w.at) >= started - 30) { renderBench(res); break; } }
+      } catch (e) { /* the radio is being taken back */ }
+      await new Promise(res => setTimeout(res, 2000));
+    }
+  } catch (e) {
+    if (msg) msg.textContent = "The wide benchmark did not start: " + (e && e.message ? e.message : e);
+  } finally {
+    if (benchPoll) { clearInterval(benchPoll); benchPoll = 0; }
+    if (btn) { btn.disabled = false; btn.textContent = "Run wide benchmark"; }
+  }
 }
 
 /** ★★ What the measurement CHANGES. Only ever tightens a setting the owner has not already tightened further,
@@ -2624,7 +2817,10 @@ async function benchLoad() {
   try {
     const r = await fetch("/vibeserver/benchmark?" + await authQuery(), {cache:"no-store"});
     if (!r.ok) return;
-    renderBench(await r.json());
+    const j = await r.json();
+    renderBench(j);
+    // ★ V12 then each wide radio's own rate list where it is running, and the picker drawn again with it.
+    if (BENCH_WIDE.length) { await benchWideLive(); benchWideRender(j); }
   } catch (e) { /* the card simply stays empty */ }
 }
 
@@ -2648,14 +2844,15 @@ function benchBar(pct, label) {
  *  this follows the progress and picks the result up at the end.
  *  ★ The server RESTARTS itself when it finishes, so fetches failing near the end is expected, not an error —
  *    keep trying until it answers again, then read the saved result. */
-async function benchFollow() {
+async function benchFollow(prefix) {
   const msg = $("benchMsg");
+  const pre = prefix || "";   // ★ V12 the wide run's progress is the RADIO's process's — asked where it was started
   let sawRunning = false, misses = 0;
   return new Promise(resolve => {
     benchPoll = setInterval(async () => {
       let p = null;
       try {
-        const r = await fetch("/vibeserver/benchmark?progress=1&" + await authQuery(), {cache:"no-store"});
+        const r = await fetch(pre + "/vibeserver/benchmark?progress=1&" + await authQueryFor(pre), {cache:"no-store"});
         if (r.ok) p = await r.json();
       } catch (e) { /* a poll that fails changes nothing — the run carries on */ }
       if (!p) {
@@ -2719,7 +2916,7 @@ async function benchRun(force) {
     if (msg) msg.textContent = "The benchmark did not start: " + (e && e.message ? e.message : e);
   } finally {
     if (benchPoll) { clearInterval(benchPoll); benchPoll = 0; }
-    if (btn) { btn.disabled = false; btn.textContent = "Run benchmark"; }
+    if (btn) { btn.disabled = false; btn.textContent = "Run quick benchmark"; }
   }
 }
 
@@ -9502,6 +9699,8 @@ $("firstUpdCancel").onclick = async () => {
 
 $("sdrCheckAgain").addEventListener("click", () => sdrChangesLoad());
 $("benchRun").addEventListener("click", () => benchRun(false));
+$("benchWideRun").addEventListener("click", () => benchWideRun(false));
+$("benchWideRadio").addEventListener("change", benchWideRates);
 $("signinBtn").onclick = () => signIn(false);
 
 // ★ Arrived from the landing page already signed in — go straight in rather than asking again.
