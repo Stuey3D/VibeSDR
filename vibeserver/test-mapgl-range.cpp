@@ -49,7 +49,7 @@ int main() {
     ok(kind("bytes=20-10", 1000) == Range::Full, "b < a is malformed and ignored");
     ok(kind("bytes=abc-", 1000) == Range::Full, "garbage is ignored");
     ok(kind("bytes=", 1000) == Range::Full, "an empty spec is ignored");
-    ok(part("bytes=177024000-", 177024426, 177024000, 177024425), "offsets past 2^31 (the detail pack)");
+    ok(part("bytes=177024000-", 177024426, 177024000, 177024425), "offsets past 2^31 (a detail-pack-sized file)");
 
     printf("Paths:\n");
     ok(bundled("vendor/maplibre-gl.js", "vendor/maplibre-gl.js"), "vendor .js");
@@ -116,11 +116,31 @@ int main() {
     ok(access(fin.c_str(), F_OK) == 0, "a whole, valid download is installed");
     const std::string s = vibemapgl::statusJson();
     ok(s.find("\"installed\":true") != std::string::npos && s.find("\"error\":\"\"") != std::string::npos &&
-       s.find("\"bytes\":177024426") != std::string::npos && s.find("\"available\":true") != std::string::npos,
-       "status: installed, bytes, no error, available");
+       s.find("\"bytes\":" + std::to_string(vibemapgl::DETAIL_BYTES)) != std::string::npos &&
+       s.find("\"available\":true") != std::string::npos && s.find("\"outdated\":false") != std::string::npos,
+       "status: installed, bytes, no error, available, not outdated");
     printf("    %s\n", s.c_str());
+
+    // ★★ An OLDER pack (v1's size) is reported outdated and a server replaces it by itself.
+    truncate(fin.c_str(), 177024426);
+    ok(vibemapgl::statusJson().find("\"outdated\":true") != std::string::npos, "an older pack's size: outdated");
+    vibemapgl::refreshOutdated(0);
+    for (int i = 0; i < 300; ++i) {
+        struct stat sb {};
+        if (!vibemapgl::st().downloading.load() && ::stat(fin.c_str(), &sb) == 0 && sb.st_size == vibemapgl::DETAIL_BYTES) break;
+        usleep(10000);
+    }
+    waitIdle();
+    { struct stat sb {}; ok(::stat(fin.c_str(), &sb) == 0 && sb.st_size == vibemapgl::DETAIL_BYTES,
+                            "★★ refreshOutdated replaced the older pack with the published one"); }
+    ok(vibemapgl::statusJson().find("\"outdated\":false") != std::string::npos, "and it is no longer outdated");
+
     ok(vibemapgl::removeDetail(err), "remove");
     ok(vibemapgl::statusJson().find("\"installed\":false") != std::string::npos, "status: not installed");
+    // ★★ No pack installed: refreshOutdated never gives a server one it did not ask for.
+    vibemapgl::refreshOutdated(0);
+    usleep(300000); waitIdle();
+    ok(access(fin.c_str(), F_OK) != 0, "★★ no pack installed: refreshOutdated downloads nothing");
 
     // A downloader that fails.
     vibemapgl::setDownloader([](const std::string&, const std::string&, std::function<void(int64_t, int64_t)>) { return false; });

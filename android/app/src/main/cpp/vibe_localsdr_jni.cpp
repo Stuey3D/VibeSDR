@@ -172,6 +172,9 @@ Java_com_vibesdr_app_VibeMapGL_nativeInit(JNIEnv* env, jclass cls, jstring jData
     if (g_mapglDownload) {
         vibemapgl::setDownloader(jniMapglDownload);
         LOGI("mapgl: data dir set, JNI downloader installed");
+        // ★★ Lite is a server too: an older installed High Detail pack is replaced by itself, once per process.
+        static bool refreshed = false;
+        if (!refreshed) { refreshed = true; vibemapgl::refreshOutdated(); }
     } else {
         // ★ No downloader → statusJson reports available:false and the admin page says so
         //   instead of offering a button that cannot work.

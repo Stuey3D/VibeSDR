@@ -50,6 +50,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <chrono>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -67,8 +68,10 @@ namespace vibemapgl {
 
 // ★ One release asset, shared with the app (src/services/mapglDetail.ts). Change both or neither.
 inline constexpr const char* DETAIL_URL =
-    "https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v1/vibemap-detail.pmtiles";
-inline constexpr int64_t DETAIL_BYTES = 177024426;
+    "https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v2/vibemap-detail.pmtiles";
+// ★★ v2 (2026-11-18): islands in lakes are land again (v1 drew Flevoland and every lake island as water). An
+//    installed pack of any other size is an OLDER pack and a server replaces it by itself — see refreshOutdated().
+inline constexpr int64_t DETAIL_BYTES = 176657188;
 inline constexpr const char* DETAIL_NAME = "vibemap-detail.pmtiles";
 
 using Downloader = std::function<bool(const std::string&, const std::string&,
@@ -364,6 +367,7 @@ inline std::string statusJson() {
     j += ",\"total\":" + std::to_string(total);
     j += ",\"error\":\"" + jsonEsc(error) + "\"";
     j += std::string(",\"available\":") + (available() ? "true" : "false");
+    j += std::string(",\"outdated\":") + ((installed && bytes != DETAIL_BYTES) ? "true" : "false");
     return j + "}";
 }
 
@@ -454,6 +458,28 @@ inline bool startDetailInstall(std::string& err) {
     return true;
 }
 inline bool startDetailInstall() { std::string e; return startDetailInstall(e); }
+
+/** ★★★ A SERVER REPLACES AN OLDER DETAIL PACK BY ITSELF (Stuart, 2026-11-18: "replace it automatically on
+ *  servers"). The owner chose to have High Detail Maps; a wrong one is a fault, not a preference — v1 drew
+ *  Flevoland under the IJsselmeer. Only an INSTALLED pack of the wrong size is replaced: a server without one is
+ *  never given 169 MB it did not ask for. The old pack keeps being served until the new one has been checked
+ *  and renamed over it (startDetailInstall's .part → rename), and the machine-wide lock means one radio
+ *  process downloads while the others see it as "downloading". A failure is left in <name>.error and retried
+ *  at the next start. Called once per process start, after `delaySecs` so the radio is up first. */
+inline void refreshOutdated(int delaySecs = 120) {
+    std::thread([delaySecs]() {
+        std::this_thread::sleep_for(std::chrono::seconds(delaySecs));
+        const std::string dd = dataDir();
+        int64_t bytes = 0;
+        if (dd.empty() || !isFile(dd + "/" + DETAIL_NAME, &bytes) || bytes <= 0 || bytes == DETAIL_BYTES) return;
+        if (st().downloading.load() || lockHeldElsewhere(dd)) return;
+        fprintf(stderr, "VibeServer: mapgl: the installed High Detail Maps are an older pack (%lld bytes, want %lld)"
+                        " — replacing them\n", (long long)bytes, (long long)DETAIL_BYTES);
+        std::string err;
+        if (!startDetailInstall(err))
+            fprintf(stderr, "VibeServer: mapgl: could not start the High Detail Maps update — %s\n", err.c_str());
+    }).detach();
+}
 
 inline bool removeDetail(std::string& err) {
     const std::string dd = dataDir();

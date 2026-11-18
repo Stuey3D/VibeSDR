@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { detailAsked, detailInstalled, downloadDetail, markDetailAsked } from './src/services/mapglDetail';
+import { detailAsked, detailInstalled, detailOutdated, detailUpdateAsked, downloadDetail, markDetailAsked, markDetailUpdateAsked, DETAIL_BYTES } from './src/services/mapglDetail';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -348,6 +348,21 @@ export default function App() {
     let done = false, t: ReturnType<typeof setTimeout> | null = null;
     const ask = async () => {
       if (done) return; done = true;
+      /* ★★ AN OLDER PACK IS INSTALLED: say an update is ready, once per pack version (Stuart, 2026-11-18: "show a
+       *  notification in the app"). Never downloaded unasked — it is ~170 MB and the phone may be on mobile data.
+       *  "Later" leaves the offer at the foot of the server list. */
+      if (detailOutdated()) {
+        if (await detailUpdateAsked()) return;
+        t = setTimeout(() => {
+          appAlert(
+            'High Detail Maps update',
+            `An updated High Detail Maps pack is ready. It puts back land the old one drew as water — islands in lakes everywhere, and Flevoland in the Netherlands.\n\nAbout ${Math.round(DETAIL_BYTES / 1048576)} MB, once. Wi-Fi is recommended. The maps keep working while it downloads, and you can update later from the bottom of the server list.`,
+            [{ text: 'Later', style: 'cancel', onPress: () => { void markDetailUpdateAsked(); } },
+             { text: 'Update', onPress: () => { void markDetailUpdateAsked(); void downloadDetail(); } }],
+            { cancelable: false });
+        }, 1500);
+        return;
+      }
       if (detailInstalled() || (await detailAsked())) return;
       t = setTimeout(() => {
         appAlert(

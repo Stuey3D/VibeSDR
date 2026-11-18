@@ -1897,7 +1897,7 @@ type MapglAction = 'mapgl-detail-install' | 'mapgl-detail-remove' | '';
 let mapglAction: MapglAction = '';
 let mapglBytes = 0;
 let mapglShown = '';
-const MAPGL_DETAIL_MB = 169;     // ★ DETAIL_BYTES 177024426 ≈ 169 MiB — the same asset the app downloads
+const MAPGL_DETAIL_MB = 169;     // ★ DETAIL_BYTES 176657188 ≈ 169 MiB (v2, 2026-11-18) — the same asset the app downloads
 
 function renderMapglDetail(md: any) {
   const row = document.getElementById('mapglDetailRow');

@@ -19,11 +19,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, FileHandle, Paths } from 'expo-file-system';
 
 /** Where the pack is published — a GitHub release asset, beside the Lite APK. */
-export const DETAIL_URL = 'https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v1/vibemap-detail.pmtiles';
+export const DETAIL_URL = 'https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v2/vibemap-detail.pmtiles';
 /** The published size in bytes, for the "approx" wording and the integrity check.
  *  ★ TIED TO THE PUBLISHED ASSET: rebuild the pack and this, the release asset and DETAIL_URL's tag move
  *    together (a new tag, mapgl-detail-v2, so an installed v1 is never mistaken for the new one). */
-export const DETAIL_BYTES = 177024426;
+export const DETAIL_BYTES = 176657188;
+/* ★★ v2 (2026-11-18): islands in lakes are land again — v1 drew Flevoland (Almere, Lelystad) and every lake island
+ *    as water. An installed pack of any other size is an OLDER pack: the app says an update is ready (App.tsx, once
+ *    per pack version) and the foot of the server list offers it; servers replace theirs by themselves (vibe_mapgl.h). */
+const UPDATE_ASKED_KEY = 'mapgl_detail_update_asked_v2';
 /** "Asked once" — set when the first-launch prompt has been answered either way. */
 const ASKED_KEY = 'mapgl_detail_asked_v1';
 
@@ -33,6 +37,16 @@ function partFile(): File { return new File(dir(), 'vibemap-detail.pmtiles.part'
 
 export function detailInstalled(): boolean {
   try { return packFile().exists; } catch { return false; }
+}
+/** Installed, but not the published pack — an older version waiting to be replaced. */
+export function detailOutdated(): boolean {
+  try { const f = packFile(); return !!f.exists && (f.size ?? 0) !== DETAIL_BYTES; } catch { return false; }
+}
+export async function detailUpdateAsked(): Promise<boolean> {
+  try { return (await AsyncStorage.getItem(UPDATE_ASKED_KEY)) === '1'; } catch { return false; }
+}
+export async function markDetailUpdateAsked(): Promise<void> {
+  try { await AsyncStorage.setItem(UPDATE_ASKED_KEY, '1'); } catch { /* asked again next launch — harmless */ }
 }
 export function detailSizeBytes(): number {
   try { const f = packFile(); return f.exists ? (f.size ?? 0) : 0; } catch { return 0; }

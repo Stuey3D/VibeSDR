@@ -3451,11 +3451,20 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     ? `Downloading High Detail Maps… ${st.total > 0 ? Math.floor(100 * st.written / st.total) : 0}% (${mb(st.written)} of ${mb(st.total)})`
                     : st.kind === 'error'
                     ? `High Detail Maps download failed — ${st.message}. Tap to try again.`
+                    : detailMaps.outdated
+                    ? `High Detail Maps update available (${mb(DETAIL_BYTES)}) — it puts back land the old maps drew as water. Update now?`
                     : detailMaps.installed
                     ? `High Detail Maps installed, current space taken ${mb(detailMaps.bytes)} — Remove?`
                     : 'High Detail Maps not installed. These require approx 200 MB of storage space on this device and are a one time download — Download now?';
                   const onPress = () => {
                     if (st.kind === 'downloading') return;
+                    if (detailMaps.outdated) {
+                      appAlert('Update High Detail Maps?', `About ${mb(DETAIL_BYTES)}, once. Wi-Fi is recommended. The current maps keep working while it downloads.`,
+                        [{ text: 'Not now', style: 'cancel' },
+                         { text: 'Remove', style: 'destructive', onPress: () => removeDetail() },
+                         { text: 'Update', onPress: () => { void downloadDetail(); } }]);
+                      return;
+                    }
                     if (detailMaps.installed) {
                       appAlert('Remove High Detail Maps?', `This frees ${mb(detailMaps.bytes)}. The standard maps stay, and you can download these again at any time.`,
                         [{ text: 'Keep', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: () => removeDetail() }]);

@@ -5296,6 +5296,7 @@ int main(int argc, char** argv) {
     }
     // ★ The desktop downloader (curl) — shared with Mac Simple mode, see mapgl_curl.h.
     vibemapgl::installCurlDownloader();
+    vibemapgl::refreshOutdated();   // ★★ an older installed High Detail pack is replaced by itself (vibe_mapgl.h)
     // ── ★★ V12 ADS-B AIRCRAFT DATA — <data dir>/adsb: the weekly tables (vibe_adsb_data_update.h) and the owner's
     //    OperatorFlags/ + Silhouettes/ folders (VRS names). Shared by every radio process on the machine; one of
     //    them downloads (flock), the others re-map the new files. The CC0 starter is compiled in, so a server with
