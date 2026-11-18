@@ -177,7 +177,12 @@ for (const tier of ['tier0', 'tier1', 'tier2']) {
     for (const p of withHoles(load(tier, 'lakes').map(closed).filter(Boolean),
                               load(tier, 'lakeholes').map(closed).filter(Boolean), `${tier}/lakes`))
       emit(packFor(tier), 'lakes', range(tier, 'lakes'), { type: 'Polygon', coordinates: p });
-  for (const layer of ['urban', 'shelf', 'islands', 'playas'])
+  // ★ Built-up areas are clipped to the coast (gen-map-data) and their holes cut back out, as the lakes.
+  if (tier !== 'tier0' && !(ONLY === 'basic' && tier === 'tier2'))
+    for (const p of withHoles(load(tier, 'urban').map(closed).filter(Boolean),
+                              load(tier, 'urbanholes').map(closed).filter(Boolean), `${tier}/urban`))
+      emit(packFor(tier), 'urban', range(tier, 'urban'), { type: 'Polygon', coordinates: p });
+  for (const layer of [...(tier === 'tier0' ? ['urban'] : []), 'shelf', 'islands', 'playas'])
     for (const r of load(tier, layer)) { const c = closed(r); if (c) emit(packFor(tier), layer, range(tier, layer), { type: 'Polygon', coordinates: [c] }); }
   for (const layer of ['rivers', 'roads', 'rail', 'admin1', 'reefs'])
     for (const l of load(tier, layer)) if (l.length >= 2) emit(packFor(tier), layer, range(tier, layer === 'rail' ? 'roads' : layer), { type: 'LineString', coordinates: l });

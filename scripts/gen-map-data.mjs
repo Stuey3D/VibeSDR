@@ -44,6 +44,7 @@ import { readEtopo, buildRelief, encodePng, rasteriseBiomes, sliceRelief, MERC_L
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import polygonClipping from 'polygon-clipping';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'assets/mapdata/v1');
@@ -771,6 +772,83 @@ function buildUrban(gj, dp, maxScalerank, minArea = 0) {
 }
 
 /**
+ * ★★★ BUILT-UP AREAS CLIPPED TO THE COASTLINE. Natural Earth's urban extents are ~1 km work and spill over the
+ *  sea along every built-up coast -- the grey Stuart saw beside the Belgian buoys (687ca86e3: "the right fix clips
+ *  them to the coastline in the data"). Each extent is intersected with the OSM land it overlaps (the same land
+ *  the close-up map draws), so grey ends where the land does.
+ *  ★ The result can have holes (sea a city surrounds, or the extent's own holes); they go out as `urbanholes` and
+ *    gen-map-tiles cuts them out again, the lake-islands way. A clip that throws (degenerate input) keeps the
+ *    unclipped extent and is counted -- better a little grey on the sea than a town missing.
+ */
+function landIndex(coast) {
+  const polys = coast.outers.map((r) => [r]);
+  // The coast's holes (the Caspian) back into their land piece, by containment.
+  for (const h of coast.holes) {
+    const [x, y] = h[0];
+    const i = polys.findIndex((p) => pointInRingXY(x, y, p[0]));
+    if (i >= 0) polys[i].push(h);
+  }
+  const boxes = polys.map((p) => ringBox(p[0])), grid = new Map();
+  boxes.forEach(([a, b, c, d], i) => {
+    for (let gx = Math.floor(a); gx <= Math.floor(c); gx++)
+      for (let gy = Math.floor(b); gy <= Math.floor(d); gy++) {
+        const k = gx * 1000 + gy; let l = grid.get(k); if (!l) grid.set(k, l = []); l.push(i);
+      }
+  });
+  return { polys, boxes, grid };
+}
+function ringBox(r) {
+  let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+  for (const [x, y] of r) { if (x < a) a = x; if (y < b) b = y; if (x > c) c = x; if (y > d) d = y; }
+  return [a, b, c, d];
+}
+function pointInRingXY(x, y, r) {
+  let c = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const [xi, yi] = r[i], [xj, yj] = r[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+function buildUrbanClipped(gj, dp, maxScalerank, land, minArea = 0) {
+  const outers = [], holes = [];
+  let clipped = 0, unclipped = 0, allSea = 0;
+  for (const f of gj.features) {
+    const p = f.properties || {};
+    const rank = p.scalerank ?? p.SCALERANK ?? 0;
+    if (typeof rank === 'number' && rank > maxScalerank) continue;
+    const g = f.geometry;
+    const polys = g?.type === 'Polygon' ? [g.coordinates] : g?.type === 'MultiPolygon' ? g.coordinates : [];
+    for (const poly of polys) {
+      const [a, b, c, d] = ringBox(poly[0]);
+      const cand = new Set();
+      for (let gx = Math.floor(a); gx <= Math.floor(c); gx++)
+        for (let gy = Math.floor(b); gy <= Math.floor(d); gy++)
+          for (const i of land.grid.get(gx * 1000 + gy) || []) {
+            const lb = land.boxes[i];
+            if (!(lb[2] < a || lb[0] > c || lb[3] < b || lb[1] > d)) cand.add(i);
+          }
+      let result;
+      if (!cand.size) { allSea++; continue; }          // no land under it at all: it is all sea
+      try {
+        result = polygonClipping.intersection(poly, [...cand].map((i) => land.polys[i]));
+        clipped++;
+      } catch {
+        result = [poly]; unclipped++;
+      }
+      for (const rp of result) rp.forEach((ring, k) => {
+        if (k === 0 && minArea > 0 && ringArea(ring) < minArea) return;
+        const r = packRing(ring, dp, { closed: true });
+        if (r) (k === 0 ? outers : holes).push(r);
+      });
+    }
+  }
+  console.log(`  urban clipped to the coast: ${clipped} extents, ${unclipped} kept unclipped (clip failed), ${allSea} wholly at sea dropped; ${holes.length} holes`);
+  if (outers.length < 100) die(`urban: only ${outers.length} extents survived the coastline clip.`);
+  return { outers, holes };
+}
+
+/**
  * Countries, keyed by ISO_A2.
  * ★★ ISO_A2_EH, not ISO_A2. Natural Earth carries -99 in ISO_A2 for France, Norway and Kosovo
  *    (a sovereignty encoding, not a gap in the standard), so keying on it silently drops three
@@ -1194,6 +1272,9 @@ if (reliefCached) {
 const lakes50Split0 = splitAll(lakes50, 2);
 const hydro = buildHydroLakes(hydroDbf, hydroShp, 3, 1, 0.004);
 const coast = buildCoast(3);
+const landIx = landIndex(coast);
+const urban1 = buildUrbanClipped(urban50, 2, Infinity, landIx, 0.002);
+const urban2 = buildUrbanClipped(urban10, 3, Infinity, landIx);
 const layers = [
   // tier0 — only what is legible at z0–4. A small_airport dot at z2 is a pixel of noise.
   ['tier0', 'countries', buildCountries(c110, 2, 'countries110')],
@@ -1224,7 +1305,8 @@ const layers = [
   ['tier1', 'airports', buildAirports(airportsCsv, 2, new Set([0, 1]))],
   ['tier1', 'ports', buildPorts(portsCsv, 2)],
   ['tier1', 'cover', buildCover(regions, glaciers, 2, 0.05, iceShelves)],
-  ['tier1', 'urban', buildUrban(urban50, 2, Infinity, 0.002)],
+  ['tier1', 'urban', urban1.outers],
+  ['tier1', 'urbanholes', urban1.holes],
   ['tier1', 'roads', buildRoads(roads, 2, 4)],
   ['tier1', 'rivers', buildRivers(rivers50, 2, Infinity)],
   ['tier1', 'lakes', lakes50Split0.outers],
@@ -1254,7 +1336,8 @@ const layers = [
   ['tier2', 'coastholes', coast.holes],
   ['tier2', 'borders', borders.features.flatMap((f) => packLines(f.geometry, 3))],
   ['tier2', 'cover', buildCover(regions, glaciers, 3, 0, iceShelves)],
-  ['tier2', 'urban', buildUrban(urban10, 3, Infinity)],
+  ['tier2', 'urban', urban2.outers],
+  ['tier2', 'urbanholes', urban2.holes],
   ['tier2', 'roads', buildRoads(roads, 3, 8)],
   ['tier2', 'rivers', buildRivers(rivers10, 3, Infinity)],
   ['tier2', 'shelf', shelf.features.flatMap((f) => packPolygons(f.geometry, 3))],
@@ -1281,7 +1364,7 @@ const index = {
   licences: {
     resolve: { layers: ['relief (biome colouring)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© RESOLVE Ecoregions 2017', url: 'https://ecoregions.appspot.com/' },
     'noaa-etopo': { layers: ['relief'], licence: 'Public domain (US Government)', url: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
-    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'lakeholes(tier0,tier1)', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways', 'regions', 'borders'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
+    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'lakeholes(tier0,tier1)', 'places(tier0,tier1)', 'urban', 'urbanholes', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways', 'regions', 'borders'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
     geonames: { layers: ['places(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© GeoNames', url: 'https://www.geonames.org/' },
     ourairports: { layers: ['airports'], licence: 'Public domain', url: 'https://ourairports.com/data/' },
     osm: { layers: ['coast (tier2)', 'coastholes (tier2)'], licence: 'ODbL — ATTRIBUTION AND SHARE-ALIKE', attribution: '© OpenStreetMap contributors', url: 'https://osmdata.openstreetmap.de/', note: 'ODbL 4.7: an unrestricted copy of this data must be published alongside any DRM-wrapped distribution — see the GitHub release tarball.' },

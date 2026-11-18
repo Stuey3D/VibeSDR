@@ -42,6 +42,7 @@
     "esbuild": "^0.28.2",
     "jsdom": "^30.1.2",
     "patch-package": "^8.0.1",
+    "polygon-clipping": "0.15.7",
     "typescript": "~6.0.3"
   },
   "scripts": {
