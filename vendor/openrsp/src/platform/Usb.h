@@ -46,6 +46,9 @@ struct UsbDeviceInfo {
     std::string serial;              // iSerialNumber string; empty if not read / none
     std::string path;                // OS path, e.g. /dev/bus/usb/001/004 (informational)
     std::uint64_t opaqueId = 0;      // stable key while attached (bus/address on Linux)
+    // VibeSDR change (2026-11-18): the physical port, "<bus>-<port>[.<port>…]" (e.g. "3-1.4"), stable across
+    // re-plugs into the same socket. Empty where the platform cannot say (the Enumerator then uses bus-port).
+    std::string portPath;
 };
 
 // ---------------------------------------------------------------------------

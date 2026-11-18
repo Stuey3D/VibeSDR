@@ -232,6 +232,13 @@ public:
             info.portNumber = libusb_get_port_number(d);
             info.deviceAddress = libusb_get_device_address(d);
             info.opaqueId = makeId(d);
+            {   // VibeSDR change (2026-11-18): the physical port path, for naming serial-less / same-serial clones.
+                std::uint8_t ports[8];
+                const int np = libusb_get_port_numbers(d, ports, static_cast<int>(sizeof ports));
+                std::string pp = std::to_string(info.busNumber);
+                for (int k = 0; k < np; ++k) pp += (k == 0 ? "-" : ".") + std::to_string(ports[k]);
+                info.portPath = np > 0 ? pp : std::string();
+            }
             char path[64];
             std::snprintf(path, sizeof path, "/dev/bus/usb/%03u/%03u", info.busNumber, info.deviceAddress);
             info.path = path;

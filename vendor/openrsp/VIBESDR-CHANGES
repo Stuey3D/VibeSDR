@@ -21,5 +21,20 @@ file, and each leaves upstream behaviour unchanged unless the option is set:
 3. CMakeLists.txt — SDRPLAY_STATIC_CXX_RUNTIME (default OFF). ON links libstdc++/libgcc statically
    into libsdrplay_api.so.3.15 and sdrplay_apiService, so the package depends on nothing but glibc.
 
+4. VibeSDR change (2026-11-18) — EVERY DEVICE GETS A NAME OF ITS OWN. This one DOES change behaviour, for
+   devices upstream could not handle at all. The device table, SelectDevice and the unplug check key on the
+   serial, so two RSP clones reporting the same placeholder serial ("0000000001") merged into one slot (only one
+   could be listed or opened), and a device with no serial string (iSerialNumber 0 — an original RSP1, many
+   clones) failed the whole scan, hiding every RSP on the machine.
+   - src/service/Enumerator.cpp — scanDevicesLocked(): a device with no serial string is listed with an empty
+     serial instead of failing the scan; uniqueNames() then names every scanned device apart: a device the table
+     already holds (same bus identity) keeps its name, so a radio on air is never renamed; otherwise, in USB port
+     order, the first of a serial keeps it and each repeat becomes "<serial>_<port>", and a device with no serial
+     is "RSP_<port>" (<port> = "<bus>-<p>[.<p>…]"). A device with a unique serial is untouched.
+   - src/service/Enumerator.h — the uniqueNames() declaration.
+   - src/platform/Usb.h — UsbDeviceInfo::portPath; src/platform/common/UsbLibusb.cpp fills it from
+     libusb_get_port_numbers() (empty elsewhere: the bus and port number are used instead).
+   Tested by vibeserver/test-openrsp-names.cpp (scripts/test-openrsp-names.sh).
+
 How VibeServer builds it: vibeserver/CMakeLists.txt, section "OpenRSP". docs/OPENRSP-BUNDLE-PLAN.md
 gives the reasoning, and covers each platform.

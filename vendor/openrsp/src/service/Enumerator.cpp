@@ -26,7 +26,9 @@
 #include "platform/Thread.h"
 #include "service/Firmware.h"
 
+#include <algorithm>
 #include <cstring>
+#include <vector>
 
 namespace sdrplay {
 namespace service {
@@ -217,13 +219,14 @@ int Enumerator::scanDevicesLocked()
         }
         if (d_.log) d_.log->log(Level::Verbose, __func__, "desc.iSerialNumber = %x", info.iSerialNumber);
         const int serNoLen = static_cast<int>(sizeof r.serNo);
-        const int sr = h->getStringDescriptorAscii(info.iSerialNumber, r.serNo, serNoLen);
+        // VibeSDR change (2026-11-18): a device with NO serial string (iSerialNumber 0 — an original RSP1, many
+        // clones) no longer fails the whole scan, which hid every RSP on the machine. It is listed with an empty
+        // serial and named by its port below (uniqueNames).
+        const int sr = info.iSerialNumber ? h->getStringDescriptorAscii(info.iSerialNumber, r.serNo, serNoLen) : 0;
         if (sr < 0) {
-            if (d_.log) d_.log->log(Level::Error, __func__, "libusb_get_string_descriptor_ascii() %d", sr);
-            numDevices_ = 0;
-            return 1;
-        }
-        if (sr < serNoLen) r.serNo[sr] = '\0';
+            if (d_.log) d_.log->log(Level::Warning, __func__, "libusb_get_string_descriptor_ascii() %d — no serial, named by port", sr);
+            r.serNo[0] = '\0';
+        } else if (sr < serNoLen) r.serNo[sr] = '\0';
         r.vid = info.vid;
         r.pid = info.pid;
         r.rev = info.bcdDevice;
@@ -239,7 +242,65 @@ int Enumerator::scanDevicesLocked()
         ++idx;
     }
     numDevices_ = idx;
+    uniqueNames();
     return 0;
+}
+
+// VibeSDR change (2026-11-18): EVERY DEVICE GETS A NAME OF ITS OWN. The device table, SelectDevice and the removal
+// check all key on the serial, so two clones reporting the same placeholder serial ("0000000001") merged into ONE
+// slot — only one could ever be listed or opened, and which physical unit it pointed at could change — and a device
+// with no serial matched any empty slot. Now:
+//   - a device already in the table (same bus identity) keeps the name it has, so a radio on air is never renamed;
+//   - otherwise, in port order, the first of a serial keeps it plain (an existing config keeps working) and each
+//     repeat becomes "<serial>_<port>"; a device with no serial is "RSP_<port>". <port> is "<bus>-<p>[.<p>…]".
+// '_' and '-' only: the names become systemd unit names (vibeserver@<serial>), which refuse '@' and spaces.
+void Enumerator::uniqueNames()
+{
+    const int n = numDevices_;
+    auto portOf = [](const DeviceRecord &r) {
+        return !r.usb.portPath.empty() ? r.usb.portPath
+                                       : std::to_string(r.usb.busNumber) + "-" + std::to_string(r.usb.portNumber);
+    };
+    std::vector<int> order;
+    for (int i = 0; i < n; ++i) order.push_back(i);
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        return portOf(scan_[static_cast<std::size_t>(a)]) < portOf(scan_[static_cast<std::size_t>(b)]);
+    });
+    std::vector<std::string> used;
+    std::vector<bool> done(static_cast<std::size_t>(n), false);
+    auto setName = [&](DeviceRecord &r, const std::string &name) {
+        std::memset(r.serNo, 0, sizeof r.serNo);
+        std::strncpy(r.serNo, name.c_str(), sizeof r.serNo - 1);
+        used.push_back(name);
+    };
+    auto taken = [&](const std::string &name) {
+        for (const auto &u : used) if (util::strCaseCmp(u.c_str(), name.c_str()) == 0) return true;
+        return false;
+    };
+    // Pass 1: a device the table already holds keeps its name (when its raw serial still fits it).
+    for (int i : order) {
+        DeviceRecord &r = scan_[static_cast<std::size_t>(i)];
+        const DeviceRecord *k = knownRecord(r.usb);
+        if (!k || k->empty()) continue;
+        const std::string raw = r.serNo, kn = k->serNo;
+        const bool fits = raw.empty() ? kn.rfind("RSP_", 0) == 0
+                                      : (kn == raw || kn.rfind(raw + "_", 0) == 0);
+        if (!fits || taken(kn)) continue;
+        setName(r, kn);
+        done[static_cast<std::size_t>(i)] = true;
+    }
+    // Pass 2: everything else, in port order.
+    for (int i : order) {
+        if (done[static_cast<std::size_t>(i)]) continue;
+        DeviceRecord &r = scan_[static_cast<std::size_t>(i)];
+        const std::string raw = r.serNo;
+        std::string name = raw.empty() ? "RSP_" + portOf(r) : raw;
+        if (taken(name)) name = raw + "_" + portOf(r);
+        if (name != raw && d_.log)
+            d_.log->log(Level::Message, __func__, "device at port %s %s — listed as %s", portOf(r).c_str(),
+                        raw.empty() ? "has no serial" : "repeats another device's serial", name.c_str());
+        setName(r, name);
+    }
 }
 
 const DeviceRecord *Enumerator::knownRecord(const platform::UsbDeviceInfo &info) const

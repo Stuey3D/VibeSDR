@@ -750,6 +750,9 @@ if python3 vibeserver/linux/test_vibeserver_maintenance.py; then pass=$((pass+1)
 # ★★★ vibeserver-radios' unit-name guard (root, systemctl) is unchanged, and the serial an Icom is given
 #     ("IC-7300 03001234" → "IC-7300_03001234", vibe_serial.h) passes it — the IC-7300 that never started, 2026-11-03.
 if python3 vibeserver/linux/test_vibeserver_radios.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ OpenRSP names every RSP apart — Almere's two "0000000001" clones were one device to it, and an RSP1 with no
+#     serial string failed the whole scan (2026-11-18). The real Enumerator, a fake USB bus.
+if bash scripts/test-openrsp-names.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …what the admin page says about it, and which action its button sends (updateOffer.ts).
 if node --no-warnings scripts/test_update_offer.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ …and the apt repository's two suites: a beta publish never touches stable (and the reverse), one revision never

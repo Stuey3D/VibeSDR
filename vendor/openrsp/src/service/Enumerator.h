@@ -137,6 +137,8 @@ private:
     int scanDevicesLocked();
     // The device-table record of an attached bus device, or nullptr if it is not in the table.
     const DeviceRecord *knownRecord(const platform::UsbDeviceInfo &info) const;
+    // VibeSDR change (2026-11-18): a unique serial for every scanned device (same-serial and serial-less clones).
+    void uniqueNames();
     bool firmwareUploadAll(const std::vector<platform::UsbDeviceInfo> &list, bool *failed);
     void logBackendOnce();
 
