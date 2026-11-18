@@ -2723,7 +2723,8 @@ int main(int argc, char** argv) {
                         if (!uerr.empty()) std::fprintf(stderr, "VibeServer: wide benchmark USB test: %s\n", uerr.c_str());
                     } else {
                         vibe::benchStep("");
-                        usb = "{\"ok\":false,\"notRun\":\"the radio was not running, so the USB bus could not be tested\"}";
+                        usb = std::string("{\"ok\":false,\"notRun\":\"") + (held ? "this radio cannot be taken off the air for the test"
+                                                                               : "the radio was not running, so the USB bus could not be tested") + "\"}";
                     }
                     entry = vibe::benchprof::jsonWithTop(entry, "usb", usb);
                     const std::string key = r.serial.empty() ? "radio" + std::to_string(wideIdx) : r.serial;
