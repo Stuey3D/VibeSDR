@@ -8099,7 +8099,8 @@ function dabRender() {
     /* ★★ V12 OWN STATION: which services are playing on this radio and for how many (the server's `playing`), so joining one
      *  is obvious; with own.on a pick is this listener's alone. Absent on an older server — nothing drawn. */
     const pl = el.querySelector('.pl') as HTMLElement | null;
-    const pn = (d.playing ?? []).find(p => p.sid === sv.sid)?.n ?? 0;
+    // ★★ V12 beta83 only with own stations on — off, the one station is everyone's and "▶ 2" read as multi-station (Stuart).
+    const pn = d.own?.on ? ((d.playing ?? []).find(p => p.sid === sv.sid)?.n ?? 0) : 0;
     setText(pl, pn > 0 ? `\u25B6 ${pn}` : '');
     if (pl) { const t = pn > 0 ? `${pn} listening${d.own?.on ? ' \u2014 pick it to join, or pick any other for your own station' : ''}` : ''; if (pl.title !== t) pl.title = t; }
     const cod = el.querySelector('.cod') as HTMLElement;

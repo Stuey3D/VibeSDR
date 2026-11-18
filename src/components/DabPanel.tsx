@@ -379,7 +379,10 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPre
    *  We never retune to it: on a shared VFO one listener's traffic flash drags everybody else off
    *  the station they chose. */
   const ann = (d.announce ?? []).filter(a => a.subChId === sv.subch && a.types.length);
-  const listening = (d.playing ?? []).find(p => p.sid === sv.sid)?.n ?? 0;
+  /* ★★ V12 beta83 ONLY WITH OWN STATIONS ON (Stuart, 2026-11-18: a server with them off showed "▶ 2", he took it for
+   *  multi-station, picked another and the "▶ 2" moved with him — the station was everyone's). Off, there is one station
+   *  for the whole dial and the count says nothing a listener can act on. */
+  const listening = d.own?.on ? ((d.playing ?? []).find(p => p.sid === sv.sid)?.n ?? 0) : 0;
   const alarm = ann.some(a => a.alarm);
   return (
     <TouchableOpacity /* nav-registered: DabPanel's list (focused prop) */ onPress={onPress} style={[s.svc, active && s.svcActive]} activeOpacity={0.7}

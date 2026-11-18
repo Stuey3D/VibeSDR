@@ -33,5 +33,7 @@ ok(/dabOwn && listenerCount > 1 && dabFreePhase\(Date\.now\(\)\)/.test(web) && /
    'web: the banner alternates the same way and names EXIT DAB');
 ok(/id="dabOwnNote" hidden>Every user can choose their own station on this multiplex/.test(src('web/client/index.html'))
    && /dabOn && dabPane === 'stations' && !!dabState\?\.own\?\.on/.test(web), 'web: the note tops the station list while own stations are on');
+ok(/const listening = d\.own\?\.on \? /.test(src('src/components/DabPanel.tsx')) && /const pn = d\.own\?\.on \? /.test(web),
+   'the "▶ n" count shows only with own stations on (off, the station is everyone\'s and it read as multi-station) — app and web');
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
