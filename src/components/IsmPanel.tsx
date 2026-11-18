@@ -43,6 +43,9 @@ export interface IsmPanelProps {
   /** True while the receiver is in ISM; false after a refusal (the exit key then only closes). */
   on: boolean;
   onExit: () => void;
+  /** ★★ V12 THE ONLY MODE: the note ("ADS-B only on this receiver") when this mode is the receiver's only one — EXIT is
+   *  not drawn (CLOSE puts the box away; the mode carries on). */
+  only?: string;
   /** ★ beta72 (Stuart 11-13): the BANDS list replaces the box's ◀ ▶, which only duplicated the main tune keys. Every band
    *  this radio reaches, with its region; a pick jumps there (the screen's stepper — one retune). */
   bands: IsmBand[];
@@ -181,9 +184,11 @@ export default function IsmPanel(p: IsmPanelProps) {
         {bigUseful && <DecoderKey active={tall} onPress={() => p.onTall(!tall)} label={tall ? 'SMALL' : 'BIG'} style={hl('big')} />}
         {canMap && <DecoderKey onPress={() => p.onMap?.()} label="MAP" style={hl('map')}
                                accessibilityLabel="Everything heard with a position, on a map" />}
-        <DecoderKey onPress={p.onExit} label={p.on ? 'EXIT ISM' : 'CLOSE'} style={hl('exit')}
-                    accessibilityLabel={p.on ? 'Leave ISM — the receiver goes back to where it was' : 'Close'} />
+        <DecoderKey onPress={p.onExit} label={p.on && !p.only ? 'EXIT ISM' : 'CLOSE'} style={hl('exit')}
+                    accessibilityLabel={p.on && !p.only ? 'Leave ISM — the receiver goes back to where it was' : 'Close'} />
       </DecoderHeader>
+      {/* ★★ V12 THE ONLY MODE: no EXIT — say why once, so nobody hunts for it (CLOSE only puts the box away) */}
+      {!!p.only && <Text style={{ color: '#ffffff', opacity: 0.75, fontSize: 11, paddingHorizontal: 10, paddingBottom: 4 }} accessibilityRole="text">{p.only}</Text>}
       {!!r && !p.error && <Text style={s.status} numberOfLines={1}>{ismStatus(r)}</Text>}
       {!p.error && (
         <ScrollView ref={chipsRef} horizontal showsHorizontalScrollIndicator={false} style={s.chips} contentContainerStyle={s.chipsIn}

@@ -581,6 +581,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 if npx tsx scripts/test-dab-only-clients.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-dab-only.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and THE ONLY MODE in the clients, any whole-radio mode: one rule in the web page and the app (an older server read
+#    from its blocked modes), the R36S and the setup page; and the real web page in headless MUTED Edge on an ADS-B-only
+#    server: in ADS-B without asking, no EXIT ADS-B, "ADS-B only on this receiver", Escape does not leave (2026-11-18).
+if npx tsx scripts/test-only-mode-clients.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-only-mode.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── gain write path ──\033[0m\n'
 if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).

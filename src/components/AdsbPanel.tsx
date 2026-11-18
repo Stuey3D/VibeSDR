@@ -38,6 +38,9 @@ export interface AdsbPanelProps {
   /** True while the receiver is in ADS-B; false after a refusal (the exit key then only closes). */
   on: boolean;
   onExit: () => void;
+  /** ★★ V12 THE ONLY MODE: the note ("ADS-B only on this receiver") when this mode is the receiver's only one — EXIT is
+   *  not drawn (CLOSE puts the box away; the mode carries on). */
+  only?: string;
   bottomOffset: number;
   tall: boolean;
   onTall: (v: boolean) => void;
@@ -72,8 +75,10 @@ export default function AdsbPanel(p: AdsbPanelProps) {
         {/* ★ The text gives way, never the keys (the DAB box's SE lesson): EXIT must always be reachable. */}
         <Text style={[s.status, { flex: 1, flexShrink: 1, minWidth: 0 }]} numberOfLines={1}>{status}</Text>
         {bigUseful && <DecoderKey active={tall} onPress={() => p.onTall(!tall)} label={tall ? 'SMALL' : 'BIG'} />}
-        <DecoderKey onPress={p.onExit} label={p.on ? 'EXIT ADS-B' : 'CLOSE'} />
+        <DecoderKey onPress={p.onExit} label={p.on && !p.only ? 'EXIT ADS-B' : 'CLOSE'} />
       </DecoderHeader>
+      {/* ★★ V12 THE ONLY MODE: no EXIT — say why once, so nobody hunts for it (CLOSE only puts the box away) */}
+      {!!p.only && <Text style={{ color: '#ffffff', opacity: 0.75, fontSize: 11, paddingHorizontal: 10, paddingBottom: 4 }} accessibilityRole="text">{p.only}</Text>}
       <DecoderBody>
         {/* ★ HEIGHT, not maxHeight — AircraftPanel is flex-based and collapses to nothing without one
             (the note in DecoderPanel where the OWRX table is drawn). */}

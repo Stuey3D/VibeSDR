@@ -181,6 +181,8 @@ interface MapOverlayProps {
   /** ★ V12 drawn over the map, last (on top): the second server's card (Stuart, 2026-10-30: "the 2nd server chip control
    *  should also be accessible here too … with the ability to minimise it the same as in waterfall mode"). */
   overlay?: React.ReactNode;
+  /** ★★ V12 THE ONLY MODE: this map's mode is the receiver's only one — the note, and CLOSE MAP in place of its EXIT. */
+  only?: string;
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
@@ -191,7 +193,9 @@ function buildHtml(
           /** kind 'adsb': the in-map toggles as this device last left them. */
           adsbPrefs?: AdsbMapPrefs; radioUrl?: string; ndbPrefs?: NdbMapPrefs;
           /** ★ V12 kind 'digi': the modes THIS server decodes (vibeserver.json spotModes) — the filter and the legend. */
-          spotModes?: string[] },
+          spotModes?: string[];
+          /** ★★ V12 THE ONLY MODE: the note ("ADS-B only on this receiver") — the EXIT key becomes CLOSE MAP. */
+          only?: string },
   /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
    *  a legend. The page is rebuilt when they change — and they can only change from the menus, after leaving this
    *  screen (Stuart: "to change the colour of the map means youd have to exit its screen anyway"). */
@@ -499,7 +503,9 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
 </style>
 </head><body>
 <div id="topbar">
-  ${isAdsb
+  ${opts?.only
+    ? `<button id="back" aria-label="Close the map — ${esc(opts.only)}, and the mode carries on">CLOSE MAP</button>`   /* ★★ V12 the only mode: no EXIT */
+    : isAdsb
     ? '<button id="back" aria-label="Exit ADS-B and give the receiver back">EXIT ADS-B</button>'
     : isNdb
     ? '<button id="back" aria-label="Exit NDB and give the receiver back">EXIT NDB</button>'
@@ -511,7 +517,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     : kind === 'avdata' ? '<button id="back" aria-label="Close the map — the aircraft datalink carries on">CLOSE MAP</button>'
     : kind === 'navtex' ? '<button id="back" aria-label="Close the map">CLOSE MAP</button>'
     : '<button id="back">&#8592; SDR</button>'}
-  <div id="title">${TITLE}</div>
+  <div id="title">${TITLE}${opts?.only ? `<br><span style="font-size:10px;letter-spacing:1px;opacity:0.75">${esc(opts.only)}</span>` : ''}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
   ${isTrk ? `<button id="snap" class="trkfit" title="Fit every ${kind === 'ais' ? 'ship' : kind === 'dsc' ? 'position' : kind === 'ism' ? 'node' : kind === 'sondes' ? 'sonde' : kind === 'avdata' ? 'aircraft' : 'station'} on the map">FIT</button>` : ''}
   ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
@@ -1927,7 +1933,7 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay }:
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -2009,10 +2015,10 @@ export default function MapOverlay(
   const html = useMemo(
     () => (kind && glOk !== null && (kind !== 'adsb' || adsbPrefsReady) && (kind !== 'ndb' || ndbPrefsReady) ? buildHtml(kind, baseUrl, sessionUuid,
       { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
-        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes }, ink) : ''),
+        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only }, ink) : ''),
     // ★ adsbPrefsRef / ndbPrefsAtBuild are read at build time only (see above) — deliberately not dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady, spotModes?.join(',')],
+    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady, spotModes?.join(','), only],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *

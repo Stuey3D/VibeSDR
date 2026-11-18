@@ -6,7 +6,8 @@
  * an explicit host:port.
  */
 
-import { dabOnlyFrom } from './dabOnly';   // ★★ V12 DAB only — the rule (the app's src/services/dabOnly.ts reads the same)
+import { dabOnlyFrom } from './dabOnly';
+import { onlyModeFrom, onlyModeNote, onlyModeWhy } from './onlyMode';   // ★★ V12 the only mode — any whole-radio mode (the app reads the same)   // ★★ V12 DAB only — the rule (the app's src/services/dabOnly.ts reads the same)
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
@@ -2088,6 +2089,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (adminLocking && !ok) { adminLocking = false; adminUnlocked = false; refreshAdminRow(); syncMediaSkip(); return; }
       adminUnlocked = ok;
       syncDabOnly();   // ★★ V12 the admin keeps EXIT DAB
+      syncOnlyMode();  // ★★ …and every other EXIT
       syncMediaSkip();   // ★ the owner may skip on their own spectator dial
       // ★ An admin session has no time limit on the server, so it must have no countdown here.
       if (ok) clearTimeLeft();
@@ -2202,6 +2204,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onBlockedModes: (list) => {
       blockedModes = new Set(list.map(m => m.toLowerCase()));
       syncDabOnly();   // ★★ V12 an older server's DAB only is read from this list
+      syncOnlyMode();  // ★★ …and its only mode
       /* ★★★ DECODERS TOO, not just demodulators. The owner's list covers everything a listener
        *  can choose — Stuart: "block WFM and Adv RDS from ever being shown as they are redundant
        *  on a HF only radio" — and a decoder button that opens a panel the server will refuse is
@@ -2242,6 +2245,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *   from storage has to READ from the radio — and it has to read the SAME flag it commands. */
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
     onDabOnly: (on) => { hwDabOnlyKnown = true; hwDabOnly = on; syncDabOnly(); },
+    onOnlyMode: (m) => { hwOnlyMode = m; syncOnlyMode(); },   // ★★ V12 the only mode, any whole-radio mode
     onServerClock: (offsetMin, abbr, tz) => { srvTzOffsetMin = offsetMin; srvTzAbbr = abbr; srvTzId = tz; },
     onDsActive: (on, setting) => {
       hwDsActive = on;
@@ -9069,6 +9073,7 @@ function syncAudioQuiet() {
 }
 function adsbUiOn() {
   adsbOn = true; setTimeout(drmBoxSync, 0);
+  setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   avAdsbProbe(true);   // ★ V12 2026-11-16 the AVIATION MAP key, when another source has aircraft here
   syncAudioQuiet();
   if (spec) spec.adsbHeld = true;
@@ -9276,6 +9281,7 @@ function adsbSyncChat() {
 /** A listener's press: in or out. ★ From DAB the server leaves DAB itself (`dab_off`), so only DAB's
  *  UI is unwound here — sending dab:0 too would arm DAB's restore and race the ADS-B tune. */
 function adsbSetMode(on: boolean) {
+  if (!on && onlyModeRefuses('adsb')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
   if (on) {
     if (adsbCap && !adsbCap.ok) { showPill(adsbCap.why, 7000); return; }
     if (spec?.isTuneLocked()) { spec.adsb(true); return; }   // ★ ask before tuning: spec says why
@@ -9394,6 +9400,7 @@ function ismLockControls(on: boolean) {
 }
 function ismUiOn() {
   ismOn = true; setTimeout(drmBoxSync, 0);
+  setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
   if (spec) spec.ismHeld = true;
   if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (id) => ismPickBand(id), (key) => ismMapOpen(key), () => myPos(),
@@ -9418,6 +9425,7 @@ function ismUiOff() {
 }
 /** A listener's press: in (the landing band) or out. */
 function ismSetMode(on: boolean) {
+  if (!on && onlyModeRefuses('ism')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
   if (on) {
     if (ismCap && !ismCap.ok) { showPill(ismCap.why, 7000); return; }
     if (spec?.isTuneLocked()) { spec.ism(true); return; }   // ★ ask before tuning: spec says why
@@ -9450,6 +9458,7 @@ function ndbReadCap(j: any) {
  *  the audio let go (nothing to hear), the map view up over the (throttled) waterfall. */
 function ndbUiOn() {
   ndbOn = true; setTimeout(drmBoxSync, 0);
+  setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
   if (spec) spec.ndbHeld = true;
   setTimeout(syncDialTips, 0);
@@ -9498,6 +9507,7 @@ function ndbUiOff() {
   if (!dabOn && decoders?.spotsEnabled) showDecBox('spots');
 }
 function ndbSetMode(on: boolean) {
+  if (!on && onlyModeRefuses('ndb')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
   if (on) {
     if (ndbCap && !ndbCap.ok) { showPill(ndbCap.why, 7000); return; }
     if (spec?.isTuneLocked()) { spec.ndb(true); return; }   // ★ ask before tuning: spec says why
@@ -9899,6 +9909,7 @@ function aisReadCap(j: any) {
 }
 function aisUiOn() {
   aisOn = true; setTimeout(drmBoxSync, 0);
+  setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
   if (spec) spec.aisHeld = true;
   closePanels();
@@ -9923,6 +9934,7 @@ function aisUiOff() {
   renderFreq();
 }
 function aisSetMode(on: boolean) {
+  if (!on && onlyModeRefuses('ais')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
   if (on) {
     if (aisCap && !aisCap.ok) { showPill(aisCap.why, 7000); return; }
     if (spec?.isTuneLocked()) { spec.ais(true); return; }   // ★ ask before tuning: spec says why
@@ -10035,6 +10047,7 @@ function avChrome(v: TrackView, c: ReturnType<typeof avCompose>) {
 }
 function avUiOn() {
   avOn = true;
+  setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
   closePanels();
   if (!avView) avView = new TrackView({
@@ -10055,6 +10068,7 @@ function avUiOff() {
   renderFreq();
 }
 function avSetMode(on: boolean) {
+  if (!on && onlyModeRefuses('avdata')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
   if (on) {
     if (avCap && !avCap.ok) { showPill(avCap.why, 7000); return; }
     if (spec?.isTuneLocked()) { spec.avdata(true); return; }   // ★ ask before tuning: spec says why
@@ -10135,6 +10149,7 @@ function sdReadCap(j: any) {
 }
 function sdUiOn() {
   sdOn = true;
+  setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
   closePanels();
   if (!sdView) sdView = new TrackView({
@@ -10155,6 +10170,7 @@ function sdUiOff() {
   renderFreq();
 }
 function sdSetMode(on: boolean) {
+  if (!on && onlyModeRefuses('sondes')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
   if (on) {
     if (sdCap && !sdCap.ok) { showPill(sdCap.why, 7000); return; }
     if (spec?.isTuneLocked()) { spec.sondes(true); return; }   // ★ ask before tuning: spec says why
@@ -20566,7 +20582,8 @@ function setFreqUnit(u: FreqUnit) {
 function openFreqEntry(typed?: string) {
   if (dabOn) { showTuneGapMsg(dabOnlyNow() ? 'This receiver is DAB only — there is no dial inside a multiplex; the block keys and the station list choose what you hear.'
                                           : 'Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
-  if (adsbOn) { showTuneGapMsg('Frequency is locked in ADS-B — the receiver is held on 1090 MHz. Press EXIT ADS-B to tune.'); return; }
+  if (adsbOn) { showTuneGapMsg(onlyModeNow() === 'adsb' ? 'This receiver is ADS-B only — it is held on 1090 MHz.'   // ★★ V12 no EXIT to point at
+                                                   : 'Frequency is locked in ADS-B — the receiver is held on 1090 MHz. Press EXIT ADS-B to tune.'); return; }
   // ★ ISM: the box stays open — a typed frequency puts the capture there for an odd device (see go() below)
   if (typed === undefined || !isPanelOpen('freqPanel')) togglePanel('freqPanel');
   abRowPaint();
@@ -21834,6 +21851,51 @@ function syncDabOnly() {
   if (xb) xb.style.display = dabOn && !only ? '' : 'none';
   const note = document.getElementById('dabOnlyNote') as HTMLElement | null;
   if (note) { note.hidden = !(dabOn && only); note.title = DAB_ONLY_WHY; }
+}
+
+/* ★★★ V12 THE ONLY MODE, ANY WHOLE-RADIO MODE (Stuart, 2026-11-18: "the same thing we did for DAB earlier where it is the only
+ *  allowed mode, we need to do for all modes as the Almere server has an ADSB only radio and I've accidentally closed the
+ *  ADSB a couple of times meaning that it has to train the gain again"). The EXIT key of that mode (EXIT ADS-B, EXIT ISM,
+ *  EXIT NDB, EXIT AIS, EXIT DATALINK, EXIT SONDES) is NOT DRAWN and a note says why in its place; any other way out (Escape,
+ *  the mode menu) says it in a pill instead of leaving. DAB keeps its own (syncDabOnly) — the same thing, older.
+ *  ★ The server's word when it gives one (hwinfo `onlyMode`, "" for the signed-in admin); an OLDER server never sends it, so
+ *    its blocked modes decide (onlyMode.ts), among the whole-radio modes its vibeserver.json offers. */
+let hwOnlyMode: string | null = null;
+function onlyModeNow(): string {
+  const offered = new Set<string>(['dab']);   // ★ DAB counted as offered: an unknown never makes a mode look "the only one"
+  if (adsbCap) offered.add('adsb'); if (ismCap) offered.add('ism'); if (ndbCap) offered.add('ndb');
+  if (aisCap) offered.add('ais'); if (avCap) offered.add('avdata'); if (sdCap) offered.add('sondes');
+  return onlyModeFrom(hwOnlyMode, blockedModes, adminUnlocked, offered);
+}
+/** A listener's way out of `m` while it is the only mode: said in a pill, and nothing sent. True = refused. */
+function onlyModeRefuses(m: string): boolean {
+  if (onlyModeNow() !== m) return false;
+  showPill(onlyModeWhy(m), 6000);
+  return true;
+}
+/** Each mode's EXIT key, wherever its view drew it. */
+function onlyModeExits(): Array<[string, HTMLElement | null]> {
+  const trk = (v: TrackView | null) => (v?.root.querySelector('.exit') as HTMLElement | null) ?? null;
+  return [['adsb', document.getElementById('adsbExit')], ['ndb', document.getElementById('ndbExit')], ['ism', document.getElementById('ismExit')],
+          ['ais', trk(aisView)], ['avdata', trk(avView)], ['sondes', trk(sdView)]];
+}
+function syncOnlyMode() {
+  const only = onlyModeNow();
+  for (const [m, ex] of onlyModeExits()) {
+    if (!ex) continue;
+    const here = only === m;
+    ex.style.display = here ? 'none' : '';
+    let note = ex.nextElementSibling as HTMLElement | null;
+    if (!note || !note.classList.contains('onlyModeNote')) {
+      if (!here) continue;
+      note = document.createElement('span');
+      note.className = 'onlyModeNote';
+      ex.insertAdjacentElement('afterend', note);
+    }
+    note.hidden = !here;
+    note.textContent = onlyModeNote(m);
+    note.title = onlyModeWhy(m);
+  }
 }
 
 function syncRspAgcLock() {

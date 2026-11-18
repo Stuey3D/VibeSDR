@@ -658,6 +658,8 @@ export interface SpectrumCallbacks {
   onDigitalAgc?: (on: boolean) => void;
   /** ★★ V12 DAB ONLY: the owner's locked range is DAB only — EXIT DAB greyed with the reason (false for the admin). */
   onDabOnly?: (on: boolean) => void;
+  /** ★★ V12 THE ONLY MODE: the one whole-radio mode a listener may not leave ("adsb", …; "" none, "" for the admin). */
+  onOnlyMode?: (mode: string) => void;
   /** ★ Direct sampling IN FORCE now (auto switches it at the crossover): the tuner gain is bypassed
    *  and VibeAGC stands down. Its own callback, like onTunerBw — onHwInfo's list is long enough.
    *  Called BEFORE onHwInfo so the chip paints right on the same message. */
@@ -1848,6 +1850,7 @@ export class SpectrumClient {
         if (msg.digitalAgc !== undefined)
           this.cb.onDigitalAgc?.(msg.digitalAgc === 1 || msg.digitalAgc === true);
         if (msg.dabOnly !== undefined) this.cb.onDabOnly?.(msg.dabOnly === true);
+        if (typeof msg.onlyMode === 'string') this.cb.onOnlyMode?.(msg.onlyMode);   // ★★ V12 the only mode ("" none)
         if (Array.isArray(msg.blocked)) this.cb.onBlockedModes?.(msg.blocked as string[]);
         if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
           this.cb.onDspState?.({

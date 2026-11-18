@@ -30,6 +30,9 @@ export interface AvdataPanelProps {
   /** True while the receiver is in the mode; false after a refusal (the exit key then only closes). */
   on: boolean;
   onExit: () => void;
+  /** ★★ V12 THE ONLY MODE: the note ("ADS-B only on this receiver") when this mode is the receiver's only one — EXIT is
+   *  not drawn (CLOSE puts the box away; the mode carries on). */
+  only?: string;
   /** The bands this radio reaches (vibeserver.json avdataBands), in step order. */
   bands: AvBand[];
   onPickBand: (id: string) => void;
@@ -72,9 +75,11 @@ export default function AvdataPanel(p: AvdataPanelProps) {
                       accessibilityLabel={`${b.name}: ${b.region}`} />
         ))}
         {p.on && !!p.onMap && <DecoderKey label="MAP" onPress={p.onMap} accessibilityLabel="The aircraft that reported a position, on a map" />}
-        <DecoderKey onPress={p.onExit} label={p.on ? 'EXIT' : 'CLOSE'}
-                    accessibilityLabel={p.on ? 'Leave the aircraft datalink — the receiver goes back to where it was' : 'Close'} />
+        <DecoderKey onPress={p.onExit} label={p.on && !p.only ? 'EXIT' : 'CLOSE'}
+                    accessibilityLabel={p.on && !p.only ? 'Leave the aircraft datalink — the receiver goes back to where it was' : 'Close'} />
       </DecoderHeader>
+      {/* ★★ V12 THE ONLY MODE: no EXIT — say why once, so nobody hunts for it (CLOSE only puts the box away) */}
+      {!!p.only && <Text style={{ color: '#ffffff', opacity: 0.75, fontSize: 11, paddingHorizontal: 10, paddingBottom: 4 }} accessibilityRole="text">{p.only}</Text>}
       {!!r && !p.error && <Text style={s.status} numberOfLines={1}>{status}</Text>}
       <DecoderBody>
         <ScrollView style={{ maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>

@@ -58,6 +58,7 @@ struct MapModes {
     /** ★ beta72: the band's region too (vibeserver.json ismBands[].region) — the BANDS list's second line */
     struct IsmBand { std::string id, name, region; double hz = 0; };   // ★ hz: the band column on each row
     std::vector<IsmBand> ismBands;
+    std::string onlyNow;   // ★★ V12 the only mode as last read (mapTick) — for the dial's hint, which has no RadioState
     std::string ismLanding;
     std::vector<std::pair<std::string, std::string>> sondeBands;   // ★ V12 radiosondes: vibeserver.json sondesBands (id, "402–404")
     // ISM band stepper (main.ts ismStepperFor: the band the person STOPPED on, once, 450 ms after the last press)
@@ -93,6 +94,33 @@ inline MapModes& mapModes() {
 }
 inline MapMode* mapMode(const std::string& id) { for (auto& m : mapModes().m) if (m.id == id) return &m; return nullptr; }
 inline MapMode* mapModeOn() { for (auto& m : mapModes().m) if (m.on) return &m; return nullptr; }
+/** ★★★ V12 THE ONLY MODE (Stuart, 2026-11-18: "the same thing we did for DAB earlier where it is the only allowed mode, we
+ *  need to do for all modes as the Almere server has an ADSB only radio and I've accidentally closed the ADSB a couple of
+ *  times meaning that it has to train the gain again"). The receiver's only whole-radio mode, or "": the server's word
+ *  (hwinfo `onlyMode`, "" for the signed-in admin) when it gave one; an older server's blocked modes otherwise — every
+ *  demodulator it has (WFM, NFM, AM, USB, LSB) blocked and exactly one of the whole-radio modes it offers left (DAB counted
+ *  as offered). The app's and the web page's onlyModeFrom (services/onlyMode.ts); dab_box.h keeps DAB's own. */
+inline std::string onlyModeHere(const RadioState& s) {
+    static const char* kWhole[] = {"dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes"};
+    const Json& h = s.msg("hwinfo");
+    if (h.has("onlyMode")) {
+        const std::string m = h["onlyMode"].str();
+        for (const char* w : kWhole) if (m == w) return m;
+        return {};
+    }
+    auto blocked = [&](const std::string& m) { for (const auto& b : s.blockedModes) if (b == m) return true; return false; };
+    if (!(blocked("wfm") && blocked("nfm") && blocked("am") && blocked("usb") && blocked("lsb"))) return {};
+    std::string left; int n = 0;
+    MapModes& x = mapModes();
+    std::lock_guard<std::mutex> lk(x.capMtx);
+    for (const char* w : kWhole) {
+        const std::string m = w;
+        const MapMode* mm = m == "dab" ? nullptr : mapMode(m);
+        const bool offered = m == "dab" || (mm && mm->cap >= 0);
+        if (offered && !blocked(m)) { left = m; ++n; }
+    }
+    return n == 1 ? left : std::string();
+}
 /** ★ V12 for drawOverlays' whole-channel passband (wide_vfo.h): the running map mode's id, or "". */
 inline std::string wideMapModeId() { const MapMode* m = mapModeOn(); return m ? m->id : std::string(); }
 /** vibeserver.json's ismBands → the stepper's list: id, name (the readout) and region (the BANDS list's second line; an
@@ -372,7 +400,8 @@ inline bool mapTune(App& a, int n) {
         return true;
     }
     static double toldAt = 0;
-    if (nowSec() - toldAt > 3) { toldAt = nowSec(); a.toast("The dial is held in " + m->label + " — EXIT " + m->label + " to tune"); }
+    if (nowSec() - toldAt > 3) { toldAt = nowSec(); a.toast(mapModes().onlyNow == m->id ? "The dial is held in " + m->label + " — " + m->label + " only on this receiver"   // ★★ V12 no EXIT to point at
+                                                                        : "The dial is held in " + m->label + " — EXIT " + m->label + " to tune"); }
     return true;
 }
 inline bool mapZoom(App&, int) { return mapModeOn() != nullptr; }
@@ -1040,7 +1069,18 @@ inline void mapRegisterModes() {
         MapPageDef d;
         d.id = "mode:" + m.id; d.title = m.title; d.profile = m.profile; d.startZ = m.z; d.ringsNm = m.rings; d.exitLabel = "EXIT " + m.label;
         const std::string id = m.id;
-        d.exit = [id](App& a, const RadioState&) { if (MapMode* x = mapMode(id)) mapModeLeave(a, *x); };
+        d.exit = [id](App& a, const RadioState& s) {
+            /* ★★ V12 THE ONLY MODE: no way out — BACK only closes the map (the mode carries on; its entry in the mode
+             *  picker brings the map back), and says why */
+            if (onlyModeHere(s) == id) {
+                mapClosePage(a);
+                const MapMode* x = mapMode(id);
+                a.toastLong((x ? x->label : id) + " only on this receiver \xe2\x80\x94 its owner has set it up that way");
+                return;
+            }
+            if (MapMode* x = mapMode(id)) mapModeLeave(a, *x);
+        };
+        d.only = [id](const RadioState& s) { const MapMode* x = mapMode(id); return onlyModeHere(s) == id && x ? x->label + " only on this receiver" : std::string(); };
         if (id == "adsb") {
             // ★★ ODC-By 1.0 §4.3: the notice wherever the aircraft data is shown (the card carries the Mictronics tables)
             d.credit = "Contains information from Mictronics aircraft database, which is made available under the ODC Attribution License · VRS standing data (CC0)";
@@ -1119,6 +1159,7 @@ inline void mapCannedTick(App& a, const RadioState& s);
 inline void mapTick(App& a, const RadioState& s) {
     MapModes& x = mapModes();
     mapRegisterModes();
+    x.onlyNow = onlyModeHere(s);   // ★★ V12 the only mode
     mapIdle(a);
     const double now = nowSec();
     // the offer: at the session's start, then once a minute

@@ -554,6 +554,8 @@ export interface SDRCallbacks {
   onHwAgcLocked?: (locked: boolean) => void;
   /** ★★ V12 DAB ONLY: the owner's locked range is DAB only — EXIT DAB greyed with the reason (false for the admin). */
   onHwDabOnly?: (on: boolean) => void;
+  /** ★★ V12 THE ONLY MODE: the one whole-radio mode a listener may not leave ("adsb", …; "" none, "" for the admin). */
+  onHwOnlyMode?: (mode: string) => void;
   /** ★★★ The owner has FIXED the gain on the band being listened to — every gain message is
    *  refused, so the panel must show no gain controls at all rather than ones that spring back.
    *  Distinct from onHwGainCap, which is a working control with a lower ceiling. Per band: it

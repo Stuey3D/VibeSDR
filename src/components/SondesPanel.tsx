@@ -28,6 +28,9 @@ export interface SondesPanelProps {
   /** True while the receiver is in the mode; false after a refusal (the exit key then only closes). */
   on: boolean;
   onExit: () => void;
+  /** ★★ V12 THE ONLY MODE: the note ("ADS-B only on this receiver") when this mode is the receiver's only one — EXIT is
+   *  not drawn (CLOSE puts the box away; the mode carries on). */
+  only?: string;
   /** The bands this radio runs (vibeserver.json sondesBands), in step order. */
   bands: SondeBand[];
   onPickBand: (id: string) => void;
@@ -72,9 +75,11 @@ export default function SondesPanel(p: SondesPanelProps) {
                       onPress={() => { if (r?.band !== b.id) p.onPickBand(b.id); }} accessibilityLabel={`Search ${b.name}`} />
         ))}
         {p.on && !!p.onMap && <DecoderKey label="MAP" onPress={p.onMap} accessibilityLabel="The sondes on a map" />}
-        <DecoderKey onPress={p.onExit} label={p.on ? 'EXIT' : 'CLOSE'}
-                    accessibilityLabel={p.on ? 'Leave the sondes mode — the receiver goes back to where it was' : 'Close'} />
+        <DecoderKey onPress={p.onExit} label={p.on && !p.only ? 'EXIT' : 'CLOSE'}
+                    accessibilityLabel={p.on && !p.only ? 'Leave the sondes mode — the receiver goes back to where it was' : 'Close'} />
       </DecoderHeader>
+      {/* ★★ V12 THE ONLY MODE: no EXIT — say why once, so nobody hunts for it (CLOSE only puts the box away) */}
+      {!!p.only && <Text style={{ color: '#ffffff', opacity: 0.75, fontSize: 11, paddingHorizontal: 10, paddingBottom: 4 }} accessibilityRole="text">{p.only}</Text>}
       {!!r && !p.error && <Text style={s.status} numberOfLines={1}>{status}</Text>}
       <DecoderBody>
         <ScrollView style={{ maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>

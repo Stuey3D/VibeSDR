@@ -1874,7 +1874,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           FM may be quite wrong for a DAB transmitter two miles away.
           <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
         <div id="modeBlockList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:10px"></div>
-        <!-- ★★ V12 DAB ONLY (Stuart, 2026-11-17): every other mode switched off — say what that does for listeners -->
+        <!-- ★★ V12 DAB ONLY (Stuart, 2026-11-17): every other mode switched off — say what that does for listeners.
+             ★★ V12 2026-11-18: any whole-radio mode left alone (ADS-B, ISM, NDB, AIS, DATALINK, SONDES) — modeTreeGrey
+             writes that mode's name in; DAB's words are the ones below. -->
         <div id="dabOnlyModesNote" class="note hide" style="margin-top:10px"><b>DAB only: listeners land in DAB and cannot
           leave it.</b> There is no EXIT DAB for them; you can still leave it when signed in as admin.</div>
         <!-- ★★ V12 BAND GOVERNOR (decoders/digi_governor.h): the owner's word per mode in "Digital spots: Band". -->
@@ -3838,11 +3840,32 @@ function dabOnlyModes(off, tree) {
   const has = new Set(tree.map(m => m.id));
   return has.has("dab") && !off.has("dab") && DAB_ONLY_OTHERS.filter(id => has.has(id)).every(id => off.has(id));
 }
+/** ★★ V12 THE ONLY MODE, any whole-radio mode — the server's rule (local_sdr_shim.cpp onlyModeNow): the one whole-radio
+ *  mode this radio offers that is on, with every demodulator and every other whole-radio mode off; "" when none. DAB is
+ *  one case (dabOnlyModes, as before). */
+const ONLY_MODE_WHOLE = { dab: "DAB", adsb: "ADS-B", ism: "ISM", ndb: "NDB", ais: "AIS", avdata: "DATALINK", sondes: "SONDES" };
+function onlyModeOf(off, tree) {
+  if (dabOnlyModes(off, tree)) return "dab";
+  const has = new Set(tree.map(m => m.id));
+  const demods = DAB_ONLY_OTHERS.filter(id => !(id in ONLY_MODE_WHOLE));
+  if (!demods.filter(id => has.has(id)).every(id => off.has(id))) return "";
+  const left = Object.keys(ONLY_MODE_WHOLE).filter(id => has.has(id) && !off.has(id));
+  return left.length === 1 && left[0] !== "dab" ? left[0] : "";
+}
 function modeTreeGrey() {
   const host = $("modeBlockList");
   if (!host) return;
   const off = modeBlockSet(), tree = modeTree();
-  { const n = $("dabOnlyModesNote"); if (n) n.classList.toggle("hide", !dabOnlyModes(off, tree)); }
+  { const n = $("dabOnlyModesNote");
+    if (n) {
+      const only = onlyModeOf(off, tree);
+      n.classList.toggle("hide", !only);
+      if (!n.dataset.dabWords) n.dataset.dabWords = n.innerHTML;   // ★ DAB's own words, kept as written
+      if (only === "dab") n.innerHTML = n.dataset.dabWords;
+      else if (only) { const w = ONLY_MODE_WHOLE[only];
+        n.innerHTML = "<b>" + w + " only: listeners land in " + w + " and cannot leave it.</b> There is no EXIT " + w
+                    + " for them; you can still leave it when signed in as admin."; }
+    } }
   host.querySelectorAll(".modeKids").forEach(k => {
     const id = k.dataset.kidsOf;
     const p = tree.find(m => m.id === id);

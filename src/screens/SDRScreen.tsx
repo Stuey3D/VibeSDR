@@ -312,6 +312,7 @@ import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, keep
 import { autoOrder, autoLikely, togglePreferred, parsePreferred, receiverLanguageMissing, PREFERRED_MAX, type LikelyWhy } from '../services/transcribeOrder';
 import { translateRows } from '../services/translateTargets';
 import { dabOnlyFrom } from '../services/dabOnly';   // ★★ V12 DAB only — the web page's rule
+import { onlyModeFrom, onlyModeNote, onlyModeWhy } from '../services/onlyMode';   // ★★ V12 the only mode — the web page's rule
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
@@ -917,6 +918,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setHfdlCapable(false); setAvCap(undefined);   // ★ V12 aviation — the same
     setSdCap(undefined);                          // ★ V12 radiosondes — the same
     setHwDabOnly(null);                           // ★★ V12 DAB only — this server has not said yet
+    setHwOnlyMode(null); onlyToldRef.current.clear();   // ★★ V12 the only mode — likewise
     setAprsCap({ on: false, hz: 144.8e6 });
     setDecWhy({});   // ★ V12 decoder reach: a new radio says its own
     setAntBands(null);
@@ -3182,6 +3184,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
   }, []);
 
+  /* ★★★ V12 THE ONLY MODE, ANY WHOLE-RADIO MODE (Stuart, 2026-11-18: "the same thing we did for DAB earlier where it is the
+   *  only allowed mode, we need to do for all modes as the Almere server has an ADSB only radio and I've accidentally
+   *  closed the ADSB a couple of times meaning that it has to train the gain again"). When the mode is this receiver's
+   *  only one (onlyModeHere, below — services/onlyMode.ts, the web page's rule) every way out of it — its EXIT key, Back on
+   *  its map or box, its key in the Mode sheet — EXPLAINS instead of leaving; a map or box is only put away (`putAway`),
+   *  the mode carrying on, and its key brings it back. Said once per server and mode, then the view is just put away. */
+  const onlyModeRef = useRef('');
+  const onlyToldRef = useRef(new Set<string>());
+  const onlyRefuses = (k: string, putAway?: () => void): boolean => {
+    if (onlyModeRef.current !== k) return false;
+    putAway?.();
+    if (!putAway || !onlyToldRef.current.has(k)) { onlyToldRef.current.add(k); appAlert(onlyModeNote(k), onlyModeWhy(k)); }
+    return true;
+  };
   /** ★★ ENTER OR LEAVE ADS-B — the key in the demodulator sheet. toggleDab's rules exactly: pressed while the mode
    *  runs with its map put away (only a refused exit on a locked dial does that — see exitAdsb) it brings the map
    *  back; otherwise it leaves. Entering opens the map AT ONCE, before the first report, so the press is answered. The SERVER tunes (1090 MHz,
@@ -3191,6 +3207,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!c?.adsb) return;                      // not a VibeServer — the key is not drawn either
     if (adsbOnRef.current) {
       if (!adsbViewOpenRef.current) { setAdsbViewOpen(true); return; }
+      if (onlyRefuses('adsb')) return;   // ★★ V12 the only mode
       if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
       c.adsb(false);
       adsbUiOff();
@@ -3215,6 +3232,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const exitAdsb = useCallback(() => {
     const c = client.current;
     const leave = dabExitAction(adsbOnRef.current) === 'leave';
+    if (leave && onlyRefuses('adsb', () => setAdsbViewOpen(false))) return;   // ★★ V12 the only mode: the map put away
     // ★★ Ask before tuning: a locked listener may still put the BOX away — only leaving 1090 is refused.
     if (leave && askLocked(dialStateRef.current)) { setAdsbViewOpen(false); askGate(); return; }
     if (leave) c?.adsb?.(false);
@@ -3228,6 +3246,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!c?.ism) return;
     if (ismOnRef.current) {
       if (!ismBoxOpen) { setIsmBoxOpen(true); return; }
+      if (onlyRefuses('ism')) return;   // ★★ V12 the only mode
       if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
       c.ism(false);
       ismUiOff();
@@ -3245,6 +3264,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const exitIsm = useCallback(() => {
     const c = client.current;
     const leave = ismOnRef.current;
+    if (leave && onlyRefuses('ism', () => setIsmBoxOpen(false))) return;   // ★★ V12 the only mode: the box put away
     if (leave && askLocked(dialStateRef.current)) { setIsmBoxOpen(false); askGate(); return; }
     if (leave) c?.ism?.(false);
     ismUiOff();
@@ -3320,6 +3340,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!c?.ndb) return;
     if (ndbOnRef.current) {
       if (!ndbViewOpenRef.current) { setNdbViewOpen(true); return; }
+      if (onlyRefuses('ndb')) return;   // ★★ V12 the only mode
       if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
       c.ndb(false);
       ndbUiOff();
@@ -3342,6 +3363,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const exitNdb = useCallback(() => {
     const c = client.current;
     const leave = ndbOnRef.current;
+    if (leave && onlyRefuses('ndb', () => setNdbViewOpen(false))) return;   // ★★ V12 the only mode: the map put away
     if (leave && askLocked(dialStateRef.current)) { setNdbViewOpen(false); askGate(); return; }
     if (leave) c?.ndb?.(false);
     ndbUiOff();
@@ -3355,6 +3377,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!c?.ais) return;
     if (aisOnRef.current) {
       if (!aisViewOpen) { setAisViewOpen(true); return; }
+      if (onlyRefuses('ais')) return;   // ★★ V12 the only mode
       if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
       c.ais(false);
       aisUiOff();
@@ -3376,6 +3399,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const exitAis = useCallback(() => {
     const c = client.current;
     const leave = aisOnRef.current;
+    if (leave && onlyRefuses('ais', () => setAisViewOpen(false))) return;   // ★★ V12 the only mode: the map put away
     if (leave && askLocked(dialStateRef.current)) { setAisViewOpen(false); askGate(); return; }
     if (leave) c?.ais?.(false);
     aisUiOff();
@@ -3383,6 +3407,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★★ V12 Leave SONDES from its map (it opens into the map now) — the box's EXIT, the same steps. */
   const exitSondes = useCallback(() => {
     const c = client.current as unknown as { sondes?: (on: boolean) => void } | null;
+    if (sdOnRef.current && onlyRefuses('sondes', () => setSdMapOpen(false))) return;   // ★★ V12 the only mode: the map put away
     if (sdOnRef.current && askLocked(dialStateRef.current)) { setSdMapOpen(false); askGate(); return; }
     if (sdOnRef.current) c?.sondes?.(false);
     sdUiOff();
@@ -3962,6 +3987,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  Back says it instead of leaving. The server's word (`dabOnly`, null = an older server that never said), else its
    *  blocked modes — services/dabOnly.ts, the web page's rule. */
   const [hwDabOnly, setHwDabOnly] = useState<boolean | null>(null);
+  /** ★★ V12 THE ONLY MODE — the server's hwinfo `onlyMode` ("" none / the admin), null = an older server that never said. */
+  const [hwOnlyMode, setHwOnlyMode] = useState<string | null>(null);
   /** The owner has FIXED the gain on this band — no gain controls at all. See onHwGainLocked. */
   const [hwGainLocked, setHwGainLocked] = useState(false);
   /** The least IF gain reduction the owner allows on this band, in dB; -1 = none. */
@@ -5676,6 +5703,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** Modes and decoders the owner has switched off on this receiver — hwinfo.blocked. */
   const [blockedModes, setBlockedModes] = useState<Set<string>>(new Set());
   const dabOnlyHere = dabOnlyFrom(hwDabOnly !== null, hwDabOnly === true, blockedModes, adminOk);   // ★★ V12 DAB only (see hwDabOnly)
+  /* ★★ V12 THE ONLY MODE (see onlyRefuses) — the server's word, else an older server's blocked modes among the whole-radio
+   *  modes it offers (DAB counted as offered: an unknown never makes another mode look like the only one). */
+  const onlyModeHere = onlyModeFrom(hwOnlyMode, blockedModes, adminOk,
+    new Set(['dab', ...(adsbCap ? ['adsb'] : []), ...(ismCap ? ['ism'] : []), ...(ndbCap ? ['ndb'] : []), ...(aisCap ? ['ais'] : []),
+             ...(avCap ? ['avdata'] : []), ...(sdCap ? ['sondes'] : [])]));
+  onlyModeRef.current = onlyModeHere;
   /* ★★★ "THE RADIO IS DEAF AND THAT IS WHY YOU SEE NOTHING." Stuart: "dont want people connecting
    *   to a server seeing a flat spectrum thinking this is fucked and then leaving."
    *   A receiver sitting at minimum gain looks EXACTLY like a broken one — flat waterfall, no
@@ -7705,6 +7738,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
       onHwDabOnly: (v: boolean) => { if (!destroyed.current) setHwDabOnly(v); },
+      onHwOnlyMode: (m: string) => { if (!destroyed.current) setHwOnlyMode(m); },   // ★★ V12 the only mode
       onHwGainLocked: (v: boolean) => { if (!destroyed.current) setHwGainLocked(v); },
       onHwIfGrFloor: (v: number) => { if (!destroyed.current) setHwIfGrFloor(v); },
       onHwGainCap: (v: number) => { if (!destroyed.current) setHwGainCap(v); },
@@ -15414,6 +15448,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           error={adsbError}
           on={adsbOn}
           onExit={exitAdsb}
+          only={onlyModeHere === 'adsb' ? onlyModeNote('adsb') : undefined}
           tall={adsbTall} onTall={onAdsbTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
@@ -15441,8 +15476,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           report={sdReport}
           error={sdError}
           on={sdOn}
+          only={onlyModeHere === 'sondes' ? onlyModeNote('sondes') : undefined}
           onExit={() => {
             const c = client.current as unknown as { sondes?: (on: boolean) => void } | null;
+            if (sdOnRef.current && onlyRefuses('sondes', () => setSdBoxOpen(false))) return;   // ★★ V12 the only mode
             if (sdOnRef.current && askLocked(dialStateRef.current)) { setSdBoxOpen(false); askGate(); return; }
             if (sdOnRef.current) c?.sondes?.(false);
             sdUiOff();
@@ -15468,8 +15505,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           report={avReport}
           error={avError}
           on={avOn}
+          only={onlyModeHere === 'avdata' ? onlyModeNote('avdata') : undefined}
           onExit={() => {
             const c = client.current as unknown as { avdata?: (on: boolean) => void } | null;
+            if (avOnRef.current && onlyRefuses('avdata', () => setAvBoxOpen(false))) return;   // ★★ V12 the only mode
             if (avOnRef.current && askLocked(dialStateRef.current)) { setAvBoxOpen(false); askGate(); return; }
             if (avOnRef.current) c?.avdata?.(false);
             avUiOff();
@@ -15496,6 +15535,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           error={ismError}
           on={ismOn}
           onExit={exitIsm}
+          only={onlyModeHere === 'ism' ? onlyModeNote('ism') : undefined}
           /* ★ beta72: BANDS — every band, picked from a list (the tune keys / drum / pad still step). Usable once the report
            *  has said where the radio is (ismPickBand steps FROM there). */
           bands={ismHopIndex(ismCap, ismReport) >= 0 ? (ismCap?.bands ?? []) : []}
@@ -16090,6 +16130,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (!sdOnRef.current && sdCap && !sdCap.ok) { appAlert('Radiosondes unavailable', sdCap.why); return; }
             setModeSelOpen(false);
             if (askGate()) return;   // ★★ ask before tuning — entering or leaving moves everybody's radio
+            if (sdOnRef.current && onlyRefuses('sondes')) return;   // ★★ V12 the only mode
             if (sdOnRef.current) { c.sondes(false); sdUiOff(); return; }
             /* ★★ V12 (Stuart, 2026-11-17): SONDES OPENS INTO ITS MAP, as on the web (TrackView) and as ADS-B / AIS do here —
              *  "sondes in the web client open directly into the map but on the app they open into a waterfall with controls
@@ -16110,6 +16151,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (!avOnRef.current && avCap && !avCap.ok) { appAlert('Aircraft datalink unavailable', avCap.why); return; }
             setModeSelOpen(false);
             if (askGate()) return;   // ★★ ask before tuning — entering or leaving moves everybody's radio
+            if (avOnRef.current && onlyRefuses('avdata')) return;   // ★★ V12 the only mode
             if (avOnRef.current) { c.avdata(false); avUiOff(); return; }
             setAvError(undefined); setAvReport(null); setAvBoxOpen(true);
             avOnRef.current = true; setAvOn(true);
@@ -16516,6 +16558,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}
+        /* ★★ V12 THE ONLY MODE: the map's EXIT becomes CLOSE MAP (the mode carries on) with the note under the title */
+        only={shownMap && onlyModeHere === shownMap ? onlyModeNote(shownMap) : undefined}
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}

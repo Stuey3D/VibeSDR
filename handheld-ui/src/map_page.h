@@ -48,6 +48,8 @@ struct MapPageDef {
     std::function<std::vector<std::string>(App&, const RadioState&, const std::string&)> card;
     /** BACK / EXIT: leave the page (a whole-radio mode leaves the mode). */
     std::function<void(App&, const RadioState&)> exit;
+    /** ★★ V12 THE ONLY MODE: "" or the note ("ADS-B only on this receiver") — then no EXIT key, the note beside the title. */
+    std::function<std::string(const RadioState&)> only;
     /** Extra header keys (label, press). */
     std::function<void(App&, const RadioState&, std::vector<std::pair<std::string, std::function<void()>>>&)> keys;
 };
@@ -473,6 +475,8 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     c.g.rect(0, mapl::headH - 1, 640, 1, th::barBorder);
     float hx = 10;
     hx += c.tc.draw(c.g, c.f.bodyB, P.title, hx, 7, th::btnText) + 12;
+    const std::string onlyNote = P.only ? P.only(s) : std::string();   // ★★ V12 the only mode
+    if (!onlyNote.empty()) hx += c.tc.draw(c.g, c.f.tiny, onlyNote, hx, 12, th::dim) + 12;
     std::vector<std::pair<std::string, std::function<void()>>> keys;
     if (P.keys) P.keys(a, s, keys);
     if (full) keys.push_back({"MAP", [&u] { u.listFull = false; u.listOpen = true; u.view.dirty = true; }});
@@ -480,7 +484,7 @@ inline void mapDrawSheet(App& a, Ctx& c, const RadioState& s) {
     else if (!pick) keys.push_back({list ? "HIDE LIST" : "LIST", [&u] { u.listOpen = !u.listOpen; }});
     if (me && !pick && !full) keys.push_back({"HOME", [&u, mlat, mlon] { u.view.cx = mercX(mlon); u.view.cy = mercY(mlat); u.view.pan(0, 0); }});
     // ★ the picker has no keys to highlight: its D-pad pans, the bottom face sets, the right face cancels (the hint line)
-    if (!pick) keys.push_back({P.exitLabel, [&a, &s, &P] { if (P.exit) P.exit(a, s); else mapClosePage(a); }});
+    if (!pick && onlyNote.empty()) keys.push_back({P.exitLabel, [&a, &s, &P] { if (P.exit) P.exit(a, s); else mapClosePage(a); }});
     float kx = 636;
     std::function<void()> pressed;
     for (size_t i = keys.size(); i-- > 0;) {
