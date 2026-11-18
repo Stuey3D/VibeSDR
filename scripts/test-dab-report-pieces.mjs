@@ -126,8 +126,9 @@ try {
   ok(Array.isArray(neu.report?.iq), '…and reach the assembled report');
   { const withScopes = neu.msgs.filter((m) => m.type === 'dab' && Array.isArray(m.iq)).at(-1);
     const lgk = Object.keys(full() ?? {}).filter((k) => !['ir', 'iq'].includes(k) || k in (withScopes ?? {}));
-    ok(withScopes && lgk.every((k) => k in withScopes || k === 'services' || k === 'dataSvcs' || k === 'licensed' || k === 'blocks'),
-       '…with the diagnostics beside them (spiParse, spiCrc, nLinks, nFi …): the open pane has every legacy field'); }
+    const lgMiss = lgk.filter((k) => !(k in (withScopes ?? {})) && !['services', 'dataSvcs', 'licensed', 'blocks'].includes(k));
+    ok(withScopes && lgMiss.length === 0,
+       `…with the diagnostics beside them (spiParse, spiCrc, nLinks, nFi …): the open pane has every legacy field${lgMiss.length ? ` — missing ${lgMiss.join(', ')}` : ''}`); }
   neu.send({ type: 'dab_scopes', on: 0 });
   await sleep(1200);
   mark = neu.msgs.length;

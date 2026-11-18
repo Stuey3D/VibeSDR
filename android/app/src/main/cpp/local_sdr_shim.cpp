@@ -22882,7 +22882,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  not show an empty constellation box until the next half-second tick — this socket gets a report with the
              *  scopes now. Under g_dabReportMtx like every report, so it can never land after a dab_off. */
             if (on != 0 && g_dabMode.load(std::memory_order_relaxed)) {
-                const DabParts dp = dabParts();   // ★ built BEFORE the report lock — the decoder may be mid-frame
+                // ★ built BEFORE the report lock — the decoder may be mid-frame. ★★ THIS SOCKET'S report (its own station's,
+                //   with own/playing/mine), never the radio's bare one — the pane would flash the primary station.
+                const DabParts dp = dabPartsForSock(sock);
                 std::lock_guard<std::mutex> rl(g_dabReportMtx);
                 if (g_dabMode.load(std::memory_order_relaxed)) sendDab(sock, dp);
             }
