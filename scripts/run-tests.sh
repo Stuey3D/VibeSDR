@@ -572,6 +572,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★ V12 DAB ONLY: whole-radio and wide locked range — listeners land in DAB, may not leave; the admin may (2026-11-17).
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-only.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 THE ONLY MODE, any whole-radio mode (ADS-B, ISM, AIS here; DAB as one case): lands, a listener may not leave
+#    (refused + logged), the admin may; hwinfo onlyMode beside dabOnly (2026-11-18).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-only-mode.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and in the clients: one rule in the web page, the app and the R36S (an older server read from its blocked modes), and
 #    the real web page in headless MUTED Edge: in DAB without asking, no EXIT DAB, "DAB only on this receiver".
 if npx tsx scripts/test-dab-only-clients.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

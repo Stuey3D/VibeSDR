@@ -16100,6 +16100,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double onV = 0; jsonNum(msg, "on", onV);
         // ★ A listener's control: what they hear is theirs ("live") — background decoding stopped before they got here.
         if (!g_ismMode.load()) { ismOrigin_ = "live"; ismProfile_.clear(); }
+        if (onV == 0 && onlyModeRefusesLeave(sock, "ism", "ISM", "ism_error")) return;   // ★★ V12 the only mode
         if (onV == 0) { if (g_ismMode.load()) noteDialMover(sock); ismLeave(true); return; }
         const std::string why = vsIsmWhyNot();
         if (!why.empty()) { if (sock) sendText(sock, "{\"type\":\"ism_error\",\"why\":\"" + dabEscape(why) + "\"}"); return; }
@@ -16274,6 +16275,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void ndbControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         double onV = 0; jsonNum(msg, "on", onV);
         if (!g_ndbMode.load()) { ndbOrigin_ = "live"; ndbProfile_.clear(); }
+        if (onV == 0 && onlyModeRefusesLeave(sock, "ndb", "NDB", "ndb_error")) return;   // ★★ V12 the only mode
         if (onV == 0) { ndbLeave(true); return; }
         if (g_ndbMode.load()) { if (sock) { const std::string r = g_ndb.report(); sendText(sock, r.empty() ? ndbHello() : r); } return; }
         const std::string why = vsNdbWhyNot();
@@ -16506,6 +16508,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void aisControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         double onV = 0; jsonNum(msg, "on", onV);
         if (!g_aisMode.load()) { aisOrigin_ = "live"; aisProfile_.clear(); }
+        if (onV == 0 && onlyModeRefusesLeave(sock, "ais", "AIS", "ais_error")) return;   // ★★ V12 the only mode
         if (onV == 0) { aisLeave(true); return; }
         const std::string why = vsAisWhyNot();
         if (!why.empty()) { if (sock) sendText(sock, "{\"type\":\"ais_error\",\"why\":\"" + dabEscape(why) + "\"}"); return; }
@@ -16736,6 +16739,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  where the mode last was, else ACARS (else the first band this radio reaches). */
     void avControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         double onV = 0; jsonNum(msg, "on", onV);
+        if (onV == 0 && onlyModeRefusesLeave(sock, "avdata", "AVDATA", "avdata_error")) return;   // ★★ V12 the only mode
         if (onV == 0) { if (g_avMode.load()) noteDialMover(sock); avLeave(true); return; }
         std::vector<const vibeavi::Band*> can;
         for (const auto& b : vibeavi::bands()) if (vsAvdataReach(b)) can.push_back(&b);
@@ -16966,6 +16970,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the mode last was, else the whole 400–406 MHz band where this radio runs that wide, else 402–404 MHz. */
     void sdControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         double onV = 0; jsonNum(msg, "on", onV);
+        if (onV == 0 && onlyModeRefusesLeave(sock, "sondes", "SONDES", "sondes_error")) return;   // ★★ V12 the only mode
         if (onV == 0) { if (g_sdMode.load()) noteDialMover(sock); sdLeave(true); return; }
         std::vector<const vibers41::Band*> can;
         for (const auto& b : vibers41::bands()) if (vsSondeReach(b)) can.push_back(&b);
@@ -18224,6 +18229,54 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return perClientDsp() ? dabLrEligible() : vsDabCapable();
     }
     static constexpr const char* kDabOnlyWhy = "this receiver is DAB only \xe2\x80\x94 its owner has set it up for DAB listeners";
+    /* ★★★ V12 THE ONLY MODE, ANY WHOLE-RADIO MODE (Stuart, 2026-11-18: "the same thing we did for DAB earlier where it is the
+     *  only allowed mode, we need to do for all modes as the Almere server has an ADSB only radio and I've accidentally
+     *  closed the ADSB a couple of times meaning that it has to train the gain again"). DAB is one case: dabOnlyNow decides
+     *  it exactly as before (its wide locked range included). Any other whole-radio mode with an EXIT — ADS-B, ISM, NDB, AIS,
+     *  the aircraft datalink, SONDES — is the receiver's only mode when it is the one thing the owner's ticks leave (every
+     *  demodulator and every other whole-radio mode blocked) and it can run here (it is on now, or its own "why not" is
+     *  empty). Then a new listener lands in it, a listener's "off" is refused in words and logged, the signed-in admin may
+     *  still leave, and the server's own moves (sock null) still can. "" = no only mode. */
+    std::string onlyModeNow() const {
+        if (dabOnlyNow()) return "dab";
+        static const char* kDemods[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
+                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17" };
+        for (const char* m : kDemods) if (!vsModeBlocked(m)) return {};
+        const char* left = nullptr;
+        for (const char* m : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes" })
+            if (!vsModeBlocked(m)) { if (left) return {}; left = m; }
+        if (!left) return {};
+        const std::string k = left;
+        if (k == "adsb")   return g_adsbMode.load(std::memory_order_relaxed) || vsAdsbWhyNot().empty()     ? k : std::string();
+        if (k == "ism")    return g_ismMode.load(std::memory_order_relaxed)  || vsIsmWhyNot().empty()      ? k : std::string();
+        if (k == "ndb")    return g_ndbMode.load(std::memory_order_relaxed)  || vsNdbWhyNot().empty()      ? k : std::string();
+        if (k == "ais")    return g_aisMode.load(std::memory_order_relaxed)  || vsAisWhyNot().empty()      ? k : std::string();
+        if (k == "avdata") return g_avMode.load(std::memory_order_relaxed)   || vsAvdataWhyNot().empty()   ? k : std::string();
+        if (k == "sondes") return g_sdMode.load(std::memory_order_relaxed)   || vsSondeWhyNot().empty()    ? k : std::string();
+        return {};   // ★ "dab" left alone but dabOnlyNow said no (a radio that cannot do DAB): not an only mode
+    }
+    /** Is whole-radio mode `k` on now? */
+    static bool wholeModeOn(const std::string& k) {
+        return k == "dab" ? g_dabMode.load(std::memory_order_relaxed) : k == "adsb" ? g_adsbMode.load(std::memory_order_relaxed)
+             : k == "ism" ? g_ismMode.load(std::memory_order_relaxed) : k == "ndb" ? g_ndbMode.load(std::memory_order_relaxed)
+             : k == "ais" ? g_aisMode.load(std::memory_order_relaxed) : k == "avdata" ? g_avMode.load(std::memory_order_relaxed)
+             : k == "sondes" ? g_sdMode.load(std::memory_order_relaxed) : false;
+    }
+    /** The reason a listener is given, in DAB's words (kDabOnlyWhy). */
+    static std::string onlyModeWhy(const std::string& k) {
+        const char* n = k == "adsb" ? "ADS-B" : k == "ism" ? "ISM" : k == "ndb" ? "NDB" : k == "ais" ? "AIS"
+                      : k == "avdata" ? "aircraft datalink" : k == "sondes" ? "radiosonde" : "DAB";
+        return std::string("this receiver is ") + n + " only \xe2\x80\x94 its owner has set it up for " + n + " listeners";
+    }
+    /** ★★ A listener's "off" for mode `k` while it is the only mode: refused with the reason (`errType`, the mode's own
+     *  x_error) and logged. True = refused. The server's own moves (sock null) and the signed-in admin pass. */
+    bool onlyModeRefusesLeave(const std::shared_ptr<net::Socket>& sock, const std::string& k, const char* tag, const char* errType) {
+        if (!sock || !wholeModeOn(k) || onlyModeNow() != k) return false;
+        if (adminNow(sock)) { LOGI("[%s] only mode: the signed-in admin leaves", tag); return false; }
+        LOGI("[%s] only mode: a listener's \"%s off\" refused", tag, k.c_str());
+        sendText(sock, std::string("{\"type\":\"") + errType + "\",\"why\":\"" + onlyModeWhy(k) + "\"}");
+        return true;
+    }
     int lrCap() {
         const double c = lrCentre(), r = sampleRate;
         return vibedab::wide::stationCap(g_dabOwnSetting.load(), vsDabLrListeners(c, r), g_vsMaxUsers.load(),
@@ -22135,6 +22188,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             double onV = 0; jsonNum(msg, "on", onV);
             LOGI("[ADS-B] %s asked%s (ADS-B is %s)", onV != 0 ? "ON" : "OFF", sock ? " by a client" : " internally",
                  g_adsbMode.load() ? "on" : "off");
+            if (onV == 0 && onlyModeRefusesLeave(sock, "adsb", "ADS-B", "adsb_error")) return;   // ★★ V12 the only mode
             if (onV == 0) { if (g_adsbMode.load()) noteDialMover(sock); adsbLeave(true); return; }
             const std::string why = vsAdsbWhyNot();
             if (!why.empty()) {
@@ -24244,6 +24298,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *    the outside even once the server would allow it. */
                       /* ★★ V12 DAB ONLY: EXIT DAB greyed with the reason (false for the signed-in admin, who may leave) */
                       + std::string(",\"dabOnly\":") + ((dabOnlyNow() && !adminNow(sock)) ? "true" : "false")
+                      /* ★★ V12 THE ONLY MODE, any whole-radio mode ("dab", "adsb", … or "" — always sent, so a client knows
+                       *    this server says; "" for the signed-in admin, who may leave). `dabOnly` stays for older clients. */
+                      + ",\"onlyMode\":\"" + (adminNow(sock) ? std::string() : onlyModeNow()) + "\""
                       + ",\"agcLocked\":"
                       + ((LocalSdrShim::agcLocked() && !adminNow(sock)) ? "true" : "false")
                       /* ★★★ AND WHETHER THE GAIN CAN MOVE AT ALL. `gainCap` alone says "no higher
@@ -29411,8 +29468,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 handleControl(sock, std::string("{\"type\":\"dab\",\"on\":1") + (land >= 0 ? ",\"channel\":" + std::to_string(land) : std::string())
                               + (land >= 0 && sid ? ",\"sid\":" + std::to_string(sid) : std::string()) + "}");
             }
+            /* ★★★ V12 THE ONLY MODE, ANY OTHER WHOLE-RADIO MODE (see onlyModeNow): a new listener LANDS in it, through the
+             *  mode's own entry as its key does (no band named: where it last was, else its own landing band). ADS-B goes
+             *  by the owner's plain landing first, as its landing does, so the admin's EXIT gives back the owner's dial.
+             *  A radio already in the mode just carries on. Nothing else lands them after it (landOnOnly). */
+            bool landOnOnly = false;
+            if (!landOnDab && !landOnAdsb && newSession && !perClientDsp()) {
+                const std::string only = onlyModeNow();
+                if (!only.empty() && only != "dab") {
+                    landOnOnly = true;
+                    if (wholeModeOn(only)) LOGI("[ONLY] %s only: a new listener joins it (already on)", only.c_str());
+                    else {
+                        LOGI("[ONLY] %s only: a new listener lands in it", only.c_str());
+                        if (only == "adsb") landOnPlainLanding();
+                        handleControl(sock, "{\"type\":\"" + only + "\",\"on\":1}");
+                        if (!wholeModeOn(only)) LOGI("[ONLY] %s only: the landing would not open — the plain landing applies", only.c_str());
+                    }
+                    if (wholeModeOn(only)) landedSession = session;
+                    else landOnOnly = false;
+                }
+            }
             // ★ A radio already in ADS-B was not "left on a block" — its last state IS ADS-B (kept running)
-            if (!landOnDab && !landOnAdsb && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
+            if (!landOnDab && !landOnAdsb && !landOnOnly && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
                 && !g_dabMode.load(std::memory_order_relaxed) && !g_adsbMode.load(std::memory_order_relaxed)
                 && newSession) {
                 const int want = g_dabWantChannel.load(std::memory_order_relaxed);
