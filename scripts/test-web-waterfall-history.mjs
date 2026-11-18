@@ -41,7 +41,7 @@ const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'F
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 
-// ★ Every SPEC row the page receives: its centre, span and where its brightest bin says the carrier is — recorded in the page
+// ★ Every SPEC row the page receives (v1 = 22-byte header; v2, which the page asks for with &span=1, = 30 — byte 4 says which): its centre, span and where its brightest bin says the carrier is — recorded in the page
 //   before its own scripts run, so nothing the client does to the row afterwards can hide a wrong one.
 const SNIFF = `(() => { window.__rows = []; const O = WebSocket;
   window.WebSocket = function (u, p) { const w = p ? new O(u, p) : new O(u);
@@ -49,7 +49,7 @@ const SNIFF = `(() => { window.__rows = []; const O = WebSocket;
       if (typeof b === 'string') { try { const m = JSON.parse(b); if (m.type === 'config') window.__rows.push({ t: performance.now(), cfg: m.binBandwidth }); } catch {} return; }
       if (!(b instanceof ArrayBuffer) && !(b instanceof Blob)) return;
       const take = (ab) => { const dv = new DataView(ab); if (ab.byteLength < 23 || dv.getUint32(0, true) !== 0x43455053) return;
-        const c = Number(dv.getBigUint64(14, true)), n = ab.byteLength - 22, u8 = new Uint8Array(ab, 22, n), h = n >> 1; let best = -1, bi = 0;
+        const c = Number(dv.getBigUint64(14, true)), hd = dv.getUint8(4) === 2 ? 30 : 22, n = ab.byteLength - hd, u8 = new Uint8Array(ab, hd, n), h = n >> 1; let best = -1, bi = 0;
         for (let i = 0; i < n; i++) { const v = u8[(i + h) % n]; if (v > best) { best = v; bi = i; } }
         window.__rows.push({ t: performance.now(), c, n, bi }); if (window.__rows.length > 4000) window.__rows.splice(0, 1000); };
       if (b instanceof ArrayBuffer) take(b); else b.arrayBuffer().then(take); });

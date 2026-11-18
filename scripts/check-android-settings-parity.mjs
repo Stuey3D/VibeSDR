@@ -35,6 +35,7 @@ const TABLE = [
   N(['winAutoOn'], 'Start with Windows — a Windows server\'s own Scheduled Task / sign-in list; the card shows only on Windows'),
   N(['dabOwnStation'], 'DAB own station per listener (V12 2026-11-16): the phone\'s server follows the benchmark rule (on when N >= its user limit); the owner override is not on the app\'s screen yet — queued, see docs/v12/DAB-OWN-STATION.md'),
   N(['cpuGovernor'], 'Linux cpufreq governor — an Android app cannot set one'),
+  N(['benchWideRadio', 'benchWideRate'], 'the WIDE benchmark\'s radio and rate (V12 2026-11-18): only the desktop server offers one (vibeserver/main.cpp vsWideOffer → wideOffer); the phone\'s server never does, so the Setup page hides the card there too — the phone\'s screen still shows a wide result\'s lines if one is ever sent (benchProfileBlocks)'),
   // ★★ V12 auto-PPM (vibe_afc.h): on by default; on the phone its switch, line, Reset and Turn off are the radio menu's (the app's
   //    hardware panel and the web page — hwinfo `afc`), and the switch is kept in the radio's store beside the bookmarks, as the
   //    R36S keeps it; the server screen has no row of its own.

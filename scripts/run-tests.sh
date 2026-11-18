@@ -513,6 +513,9 @@ for t in "$SRC"/test-*.cpp; do
     #   ONLY on off-air recordings, which were deleted from ~/VibeSDR-test-audio once their results were built in. The sources
     #   stay; run one by hand with VIBE_TESTS="<name>" after a fresh capture (the README/logs beside each folder say how).
     test-dab-faad|test-dab-faad-queue|test-dab-tii-air|test-drm-faad|test-drm-xaac|test-ssb-offset-real) [ -n "${VIBE_TESTS:-}" ] || continue ;;
+    #   test-openrsp-names — OpenRSP's whole Enumerator (vendor/openrsp core + service sources); built and run by
+    #   scripts/test-openrsp-names.sh further down, so here it only "did not build" (no -I vendor/openrsp/src).
+    test-openrsp-names) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — built and run by scripts/test-openrsp-names.sh below\033[0m\n' "$name"; continue ;;
     test-radio-api|test-icom-source) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
   esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"

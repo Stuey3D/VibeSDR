@@ -17,7 +17,7 @@ let fails = 0;
 const ok = (c: boolean, what: string, extra = '') => { console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}${extra ? '\n' + extra : ''}`); if (!c) fails++; };
 const root = new URL('../', import.meta.url).pathname;
 
-const MARK = /rowFocus\(|splashKb|viewRef|screenNavRef|focused[=:{ ]|focused\b|Ring\(|NavRing|NavSlot|NavWrap|CardKey|ChooserKey|ChooserRow|chooserSlot|slotRing|subRing|subOn\(|navOn|tuneOn\(|hdrFocus|refusalHl|pickItems\[pickFocus\]|nav\.(key|field)\(|keyHl\(|bmSlot|slot\??\.on|\bhl\b|isFocused|kbFocus|navFocus|focusIdx|listIdx|nav-skip:|nav-registered:/;
+const MARK = /rowFocus\(|splashKb|viewRef|screenNavRef|focused[=:{ ]|focused\b|Ring\(|NavRing|NavSlot|NavWrap|CardKey|ChooserKey|ChooserRow|chooserSlot|slotRing|subRing|subOn\(|navOn|tuneOn\(|hdrFocus|refusalHl|pickItems\[pickFocus\]|nav\.(key|field)\(|keyHl\(|bmSlot|slot\??\.on|\bhl\b|isFocused|kbFocus|navFocus|focusIdx|listIdx|nav-skip:|nav-registered:|\bslot\(\(\) =>/;
 const TAG = /<(TouchableOpacity|Pressable|Switch|Slider|AnimatedPressable)\b/;
 
 function files(dir: string): string[] {
@@ -63,7 +63,7 @@ const BASELINE: Record<string, number> = {
   'src/components/ChatDrawer.tsx': 0,
   'src/components/DecoderPanel.tsx': 4,         // decoder spot rows etc. (SHOULD)
   'src/components/FreqModal.tsx': 12,           // bookmarks-pane extras: magic key, DAB rows, EiBi, sync, delete, import (SHOULD)
-  'src/components/LocalHardwarePanel.tsx': 35,  // to be rebuilt on usePanelNav (SHOULD)
+  'src/components/LocalHardwarePanel.tsx': 32,  // to be rebuilt on usePanelNav (SHOULD); 35 → 32 when slot(() => …) — the panel's own D-pad bank — was recognised (11-18)
   'src/components/MenuSheet.tsx': 9,            // sideways selector nudges, sub-page back row, drop-downs (SHOULD)
   'src/components/RecordingsOverlay.tsx': 5,    // share / delete / seek (SHOULD)
   'src/screens/SDRScreen.tsx': 2,               // owner notice + its ✕ (NICE)
