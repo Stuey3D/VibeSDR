@@ -980,9 +980,13 @@
     async function drawWater() {
       const z = map.getZoom(), box = viewBox();
       const pick2 = (what) => bestTier(tierFor(what, z)).then((t) => layer(t, what, box));
-      const [shelf, lakes, rivers, admin1] = await Promise.all([
+      /* ★★ ISLANDS IN LAKES are their own layer (`lakeholes`): a flat ring list fills every ring, so a
+       *  lake's holes used to be painted as more lake -- Flevoland under the IJsselmeer. They are drawn
+       *  as LAND straight after the lakes. A pack from before them simply has none (null -> nothing). */
+      const [shelf, lakes, rivers, admin1, lakeHoles] = await Promise.all([
         pick2('shelf'), pick2('lakes'), pick2('rivers'),
         z >= 5 ? pick2('admin1') : Promise.resolve(null),
+        bestTier(tierFor('lakes', z)).then((t) => layer(t, 'lakeholes', box)).catch(() => null),
       ]);
       shelfLayer.clearLayers(); waterLayer.clearLayers(); adminLayer.clearLayers();
       const offs = worldOffsets();
@@ -995,6 +999,11 @@
         if (!ringInView(ring, box)) continue;
         for (const dx of offs) L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]),
           inPane('water', { stroke: false, fillColor: MAP_LAKE, fillOpacity: 1 })).addTo(waterLayer);
+      }
+      for (const ring of lakeHoles || []) {
+        if (!ringInView(ring, box)) continue;
+        for (const dx of offs) L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]),
+          inPane('water', { stroke: false, fillColor: MAP_LAND, fillOpacity: 1 })).addTo(waterLayer);
       }
       let n = 0;
       for (const line of rivers || []) {

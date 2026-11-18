@@ -75,6 +75,57 @@ const closed = (ring) => {
   return (a[0] === b[0] && a[1] === b[1]) ? ring : [...ring, a];
 };
 
+/* ★★★ HOLES GO BACK INTO THEIR POLYGON. gen-map-data writes a filled layer's holes as their own list
+ *  (`lakeholes`, `coastholes`) because a flat ring list cannot carry them -- every ring of it is
+ *  filled. Here each hole is put back inside the outline that contains it, so the GPU map draws
+ *  Flevoland as land and the Caspian as water with NO style change. Matched by point-in-ring against
+ *  the SMALLEST containing outline (a lake inside an island inside a lake picks the right one).
+ *  A hole no outline contains is dropped and counted -- printed below, never silent. */
+function pointInRing(x, y, r) {
+  let c = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const [xi, yi] = r[i], [xj, yj] = r[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+function bboxOf(r) {
+  let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+  for (const [x, y] of r) { if (x < a) a = x; if (y < b) b = y; if (x > c) c = x; if (y > d) d = y; }
+  return [a, b, c, d];
+}
+const absArea = (r) => { let s = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) s += r[j][0] * r[i][1] - r[i][0] * r[j][1]; return Math.abs(s) / 2; };
+const orphanHoles = {};
+function withHoles(outers, holes, label) {
+  const polys = outers.map((r) => [r]);
+  if (!holes.length) return polys;
+  const boxes = outers.map(bboxOf), areas = outers.map(absArea), grid = new Map();
+  boxes.forEach(([a, b, c, d], i) => {
+    for (let x = Math.floor(a); x <= Math.floor(c); x++)
+      for (let y = Math.floor(b); y <= Math.floor(d); y++) {
+        const k = x * 1000 + y; let l = grid.get(k); if (!l) grid.set(k, l = []); l.push(i);
+      }
+  });
+  let orphans = 0;
+  for (const h of holes) {
+    const hb = bboxOf(h);
+    // ★ A vertex of the hole is ON the lake's shore only if both were simplified to touch; the
+    //   bbox centre of a small island is inside the island, so test a vertex AND require the
+    //   hole's bbox to sit within the outline's.
+    const [px, py] = h[0];
+    let best = -1;
+    for (const i of grid.get(Math.floor(px) * 1000 + Math.floor(py)) || []) {
+      const b = boxes[i];
+      if (hb[0] < b[0] || hb[1] < b[1] || hb[2] > b[2] || hb[3] > b[3]) continue;
+      if (best >= 0 && areas[i] >= areas[best]) continue;
+      if (pointInRing(px, py, outers[i])) best = i;
+    }
+    if (best >= 0) polys[best].push(h); else orphans++;
+  }
+  orphanHoles[label] = `${orphans} of ${holes.length}`;
+  return polys;
+}
+
 if (ONLY !== 'relief') {   // (--only=basic writes and tiles the basic pack only)
 /* ── Writers: one NDJSON per pack, each feature carrying its own layer and zoom range ────────── */
 const sinks = {};
@@ -115,13 +166,21 @@ for (const tier of ['tier0', 'tier1', 'tier2']) {
   for (const obj of load(tier, 'cover'))
     for (const [cls, rings] of Object.entries(obj))
       for (const r of rings) { const c = closed(r); if (c) emit(packFor(tier), 'cover', range(tier, 'cover'), { type: 'Polygon', coordinates: [c] }, { cls }); }
-  for (const layer of ['lakes', 'urban', 'shelf', 'islands', 'playas'])
+  if (!(ONLY === 'basic' && tier === 'tier2'))
+    for (const p of withHoles(load(tier, 'lakes').map(closed).filter(Boolean),
+                              load(tier, 'lakeholes').map(closed).filter(Boolean), `${tier}/lakes`))
+      emit(packFor(tier), 'lakes', range(tier, 'lakes'), { type: 'Polygon', coordinates: p });
+  for (const layer of ['urban', 'shelf', 'islands', 'playas'])
     for (const r of load(tier, layer)) { const c = closed(r); if (c) emit(packFor(tier), layer, range(tier, layer), { type: 'Polygon', coordinates: [c] }); }
   for (const layer of ['rivers', 'roads', 'rail', 'admin1', 'reefs'])
     for (const l of load(tier, layer)) if (l.length >= 2) emit(packFor(tier), layer, range(tier, layer === 'rail' ? 'roads' : layer), { type: 'LineString', coordinates: l });
 }
 // ★ The coastline tier: at z >= 10 the land comes from OSM coast rings, not country polygons.
-for (const r of load('tier2', 'coast')) { const c = closed(r); if (c) emit('vibemap-detail', 'land', [10, MAXZ], { type: 'Polygon', coordinates: [c] }, { coast: 1 }); }
+if (ONLY !== 'basic')
+  for (const p of withHoles(load('tier2', 'coast').map(closed).filter(Boolean),
+                            load('tier2', 'coastholes').map(closed).filter(Boolean), 'tier2/coast'))
+    emit('vibemap-detail', 'land', [10, MAXZ], { type: 'Polygon', coordinates: p }, { coast: 1 });
+console.log('holes with no outline (dropped):', JSON.stringify(orphanHoles));
 // ★ Borders have their own lines at every zoom where they are drawn (see drawBorders).
 for (const l of load('tier2', 'borders')) if (l.length >= 2) emit('vibemap-detail', 'borders', [4, MAXZ], { type: 'LineString', coordinates: l });
 for (const g of load('tier0', 'geolines'))

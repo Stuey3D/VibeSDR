@@ -256,6 +256,59 @@ function packPolygons(geom, dp) {
   return rings;
 }
 
+/**
+ * Outer rings and holes, packed SEPARATELY. ★★★ A FILLED LAYER CANNOT TAKE ITS HOLES AS MORE RINGS:
+ *  every renderer fills each ring of a flat list on its own, so a lake's island hole was painted as
+ *  more lake. That is how Flevoland — a polder ringed by the IJsselmeer, the Markermeer and the
+ *  border lakes, the island hole of one water polygon — vanished under water with Almere, Lelystad
+ *  and its airport on it (Stuart, 2026-11-18: "unless aquaman has a private jet something is
+ *  wrong"). Natural Earth's lakes alone had 231 such holes; Manitoulin, Olkhon, Isle Royale.
+ *  The holes go out as their own `<layer>holes` list and are drawn as LAND over the water.
+ */
+function splitPolygons(geom, dp) {
+  const out = { outers: [], holes: [] };
+  if (!geom) return out;
+  const polys = geom.type === 'Polygon' ? [geom.coordinates]
+    : geom.type === 'MultiPolygon' ? geom.coordinates
+      : null;
+  if (!polys) return out;
+  for (const poly of polys) {
+    poly.forEach((ring, k) => {
+      const r = packRing(ring, dp, { closed: true });
+      if (r) (k === 0 ? out.outers : out.holes).push(r);
+    });
+  }
+  return out;
+}
+
+/** splitPolygons over a whole FeatureCollection. */
+function splitAll(gj, dp) {
+  const out = { outers: [], holes: [] };
+  for (const f of gj.features) {
+    const s = splitPolygons(f.geometry, dp);
+    out.outers.push(...s.outers); out.holes.push(...s.holes);
+  }
+  return out;
+}
+
+/** Signed shoelace area. ★ Shapefiles say outer from hole by WINDING (outer clockwise = negative
+ *  here, hole anticlockwise = positive) -- the only marker the format has. */
+function signedRingArea(ring) {
+  let a = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    a += ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
+  }
+  return a / 2;
+}
+
+/** Rough km² of a lon/lat ring -- good to the few per cent a size floor needs. */
+function ringKm2(ring) {
+  let lat = 0;
+  for (const p of ring) lat += p[1];
+  lat /= ring.length || 1;
+  return Math.abs(signedRingArea(ring)) * 111.32 * 111.32 * Math.cos(lat * Math.PI / 180);
+}
+
 function packLines(geom, dp) {
   if (!geom) return [];
   const lines = geom.type === 'LineString' ? [geom.coordinates]
@@ -586,8 +639,11 @@ function buildRoads(gj, dp, maxScalerank) {
  *   Douglas-Peucker at 0.004 deg (~400 m) takes the same lakes to 2.6 M points and 38.5 MB raw,
  *   9.5 MB gzipped, with no visible change at any zoom this map reaches.
  *
- * ★★ ONLY THE LARGEST RING PER LAKE. HydroLAKES encodes islands within a lake as further rings;
- *   at these zooms an island in a reservoir is sub-pixel, and keeping them buys nothing.
+ * ★★★ THE ISLANDS ARE KEPT, as `holes` (see splitPolygons). This used to keep ONLY THE LARGEST RING
+ *   on the reasoning that "an island in a reservoir is sub-pixel" -- true of a reservoir, false of
+ *   the IJsselmeer, whose one hole is Flevoland: 1,400 km², two towns and an airport, drowned at
+ *   every detail zoom. 198,220 holes were thrown away, Manitoulin and Olkhon among them. Holes take
+ *   the SAME floor as the lakes (minAreaKm2), so a speck of reed bed is still left out.
  *
  * ★ `shouldRead` is passed to the .shp reader so the 96 % of lakes below the threshold are never
  *   decoded at all -- the attribute table is read first precisely so the geometry pass can skip.
@@ -596,7 +652,7 @@ function buildHydroLakes(dbfPath, shpPath, dp, minAreaKm2, tol) {
   const rows = readDbf(dbfPath, ['Lake_area']);
   if (rows.length < 1e6) die(`hydrolakes: only ${rows.length} rows — the dataset has changed shape.`);
   const want = rows.map((r) => r.Lake_area >= minAreaKm2);
-  const out = [];
+  const out = [], holes = [];
   eachPolygon(shpPath, (i, rings) => {
     /* ★★★ THE TOLERANCE SCALES WITH THE LAKE. A flat 400 m tolerance is right for Lake Superior
      *  and wrong for a 2.5 km² reservoir: it reduced Pitsford to a TEN-POINT BLOB. The whole
@@ -608,15 +664,20 @@ function buildHydroLakes(dbfPath, shpPath, dp, minAreaKm2, tol) {
     // ★ Clamped to [0.3, 1] x tol: a small lake gets ~120 m, a big one keeps ~400 m. Unclamped
     //   sqrt scaling took the layer to 125 MB -- the floor is what keeps this affordable.
     const t = tol * Math.min(1, Math.max(0.3, Math.sqrt(area / 300)));
-    let best = null;
     for (const ring of rings) {
-      const packed = packRing(simplifyRing(ring, t), dp, { closed: true });
-      if (packed && (!best || packed.length > best.length)) best = packed;
+      const hole = signedRingArea(ring) > 0;
+      // ★ An island takes the lake floor by its OWN size, and a finer tolerance than its lake
+      //   when it is small -- the same proportional rule, for the same reason.
+      const km2 = hole ? ringKm2(ring) : 0;
+      if (hole && km2 < minAreaKm2) continue;
+      const tr = hole ? tol * Math.min(1, Math.max(0.3, Math.sqrt(km2 / 300))) : t;
+      const packed = packRing(simplifyRing(ring, tr), dp, { closed: true });
+      if (packed) (hole ? holes : out).push(packed);
     }
-    if (best) out.push(best);
   }, (i) => want[i]);
   if (out.length < 1000) die(`hydrolakes: only ${out.length} lakes survived >= ${minAreaKm2} km².`);
-  return out;
+  if (holes.length < 1000) die(`hydrolakes: only ${holes.length} islands survived — winding read wrongly?`);
+  return { outers: out, holes };
 }
 
 /**
@@ -1074,16 +1135,19 @@ if (!(await stat(osmShp).catch(() => null))) {
   } catch (e) { die(`osm land: unzip failed (${e.message}).`); }
   process.stderr.write(' done\n');
 }
+/* ★★ THE COAST'S HOLES ARE WATER, NOT LAND. OSM's land set has exactly one -- the CASPIAN, a hole
+ *  in Eurasia -- and filling every ring painted it as land at close zoom (HydroLAKES happened to
+ *  paint it back). Holes go out as `coastholes` and the tiles cut them out of the land. */
 function buildCoast(dp) {
-  const out = [];
+  const out = [], holes = [];
   eachPolygon(osmShp, (_i, rings) => {
     for (const ring of rings) {
       const packed = packRing(ring.map(mercToLonLat), dp, { closed: true });
-      if (packed) out.push(packed);
+      if (packed) (signedRingArea(ring) > 0 ? holes : out).push(packed);
     }
   });
   if (out.length < 10000) die(`coast: only ${out.length} rings — the OSM land set has changed shape.`);
-  return out;
+  return { outers: out, holes };
 }
 
 unpacked.push(hydroDir, ecoDir, etopoDir, osmDir);
@@ -1126,6 +1190,10 @@ if (reliefCached) {
 }
 
 // tier0 world z0–4 · tier1 regional z5–7 · tier2 local z8+
+// ★ Split once each: the outlines and the islands must come from the same read.
+const lakes50Split0 = splitAll(lakes50, 2);
+const hydro = buildHydroLakes(hydroDbf, hydroShp, 3, 1, 0.004);
+const coast = buildCoast(3);
 const layers = [
   // tier0 — only what is legible at z0–4. A small_airport dot at z2 is a pixel of noise.
   ['tier0', 'countries', buildCountries(c110, 2, 'countries110')],
@@ -1147,7 +1215,9 @@ const layers = [
     ...buildRegionLabels(regions, 'land', 2, 6, REGION_CLASSES),
     ...buildRegionLabels(marine, 'sea', 2, 4, null),
   ]],
-  ['tier0', 'lakes', bigEnough(lakes50.features.flatMap((f) => packPolygons(f.geometry, 2)), 0.5)],
+  ['tier0', 'lakes', bigEnough(lakes50Split0.outers, 0.5)],
+  // ★ Islands in lakes at world zoom: only the ones a z4 view can show (Flevoland is 0.12 sq deg).
+  ['tier0', 'lakeholes', bigEnough(lakes50Split0.holes, 0.01)],
   // tier1
   ['tier1', 'countries', buildCountries(c50, 2, 'countries50')],
   ['tier1', 'places', buildNePlaces(places, 2, Infinity)],
@@ -1157,7 +1227,8 @@ const layers = [
   ['tier1', 'urban', buildUrban(urban50, 2, Infinity, 0.002)],
   ['tier1', 'roads', buildRoads(roads, 2, 4)],
   ['tier1', 'rivers', buildRivers(rivers50, 2, Infinity)],
-  ['tier1', 'lakes', lakes50.features.flatMap((f) => packPolygons(f.geometry, 2))],
+  ['tier1', 'lakes', lakes50Split0.outers],
+  ['tier1', 'lakeholes', lakes50Split0.holes],
   ['tier1', 'admin1', admin150.features.flatMap((f) => packLines(f.geometry, 2))],
   ['tier1', 'shelf', shelf.features.flatMap((f) => packPolygons(f.geometry, 2))],
   ['tier1', 'islands', minorIslands.features.flatMap((f) => packPolygons(f.geometry, 2))],
@@ -1173,12 +1244,14 @@ const layers = [
   ['tier2', 'admin1', admin1.features.flatMap((f) => packLines(f.geometry, 3))],
   // ★ HydroLAKES REPLACES Natural Earth at tier2: it is a strict superset (1.43 M vs 1,590) and
   //   carrying both would draw every large lake twice.
-  ['tier2', 'lakes', buildHydroLakes(hydroDbf, hydroShp, 3, 1, 0.004)],
+  ['tier2', 'lakes', hydro.outers],
+  ['tier2', 'lakeholes', hydro.holes],
   ['tier2', 'places', towns],
   ['tier2', 'airports', buildAirports(airportsCsv, 3, new Set([0, 1, 2, 3, 4]))],
   // ★ 4 dp (~11 m): a runway is 45 m wide, and at 3 dp its ends round onto the wrong threshold.
   ['tier2', 'runways', buildRunways(runwaysCsv, 4, 2000)],
-  ['tier2', 'coast', buildCoast(3)],
+  ['tier2', 'coast', coast.outers],
+  ['tier2', 'coastholes', coast.holes],
   ['tier2', 'borders', borders.features.flatMap((f) => packLines(f.geometry, 3))],
   ['tier2', 'cover', buildCover(regions, glaciers, 3, 0, iceShelves)],
   ['tier2', 'urban', buildUrban(urban10, 3, Infinity)],
@@ -1208,11 +1281,11 @@ const index = {
   licences: {
     resolve: { layers: ['relief (biome colouring)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© RESOLVE Ecoregions 2017', url: 'https://ecoregions.appspot.com/' },
     'noaa-etopo': { layers: ['relief'], licence: 'Public domain (US Government)', url: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
-    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways', 'regions', 'borders'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
+    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'lakeholes(tier0,tier1)', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways', 'regions', 'borders'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
     geonames: { layers: ['places(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© GeoNames', url: 'https://www.geonames.org/' },
     ourairports: { layers: ['airports'], licence: 'Public domain', url: 'https://ourairports.com/data/' },
-    osm: { layers: ['coast (tier2)'], licence: 'ODbL — ATTRIBUTION AND SHARE-ALIKE', attribution: '© OpenStreetMap contributors', url: 'https://osmdata.openstreetmap.de/', note: 'ODbL 4.7: an unrestricted copy of this data must be published alongside any DRM-wrapped distribution — see the GitHub release tarball.' },
-    hydrolakes: { layers: ['lakes(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© HydroLAKES / HydroSHEDS', url: 'https://www.hydrosheds.org/products/hydrolakes' },
+    osm: { layers: ['coast (tier2)', 'coastholes (tier2)'], licence: 'ODbL — ATTRIBUTION AND SHARE-ALIKE', attribution: '© OpenStreetMap contributors', url: 'https://osmdata.openstreetmap.de/', note: 'ODbL 4.7: an unrestricted copy of this data must be published alongside any DRM-wrapped distribution — see the GitHub release tarball.' },
+    hydrolakes: { layers: ['lakes(tier2)', 'lakeholes(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© HydroLAKES / HydroSHEDS', url: 'https://www.hydrosheds.org/products/hydrolakes' },
     'nga-wpi': { layers: ['ports'], licence: 'Public domain (US Government)', url: 'https://msi.nga.mil/Publications/WPI' },
   },
   zoom: { tier0: [0, 4], tier1: [5, 7], tier2: [8, 22] },
