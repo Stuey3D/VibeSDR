@@ -133,6 +133,27 @@ try {
     ok(/DAB only: a new listener lands in DAB/.test(S.log()) && !/\[ONLY\]/.test(S.log()), 'DAB lands by its own path, exactly as before (no [ONLY] landing)');
     L.close(); await S.stop();
   }
+  console.log('── 6. the settled ADS-B gain survives a leave (nothing blocked) ──');
+  { const S = await server('', 2400000);
+    const L = listener(S.port, 'gain'); await L.opened;
+    L.send({ type: 'adsb', on: 1 });
+    ok(await until(() => L.has('adsb'), 15000), 'in ADS-B');
+    ok(await until(() => /\[ADS-B\] gain search \(dB=msg/.test(S.log()) && /\[ADS-B\] gain [0-9.]+ dB: /.test(S.log()), 180000),
+       'the entry ramp runs and the rule settles (first entry)');
+    await sleep(3000);
+    const n0 = L.msgs.length;
+    L.send({ type: 'adsb', on: 0 });
+    ok(await until(() => L.has('adsb_off', n0), 8000), 'left');
+    const kept = S.log().match(/\[ADS-B\] gain ([0-9.]+) dB remembered for the next entry on this radio/);
+    ok(!!kept, `★ the settled gain is remembered on the leave (${kept?.[1] ?? 'none'} dB)`);
+    if (!kept) console.log(S.log().split('\n').filter((l) => /ADS-B\] gain/.test(l)).join('\n'));
+    await sleep(1500);
+    L.send({ type: 'adsb', on: 1 });
+    ok(await until(() => /\[ADS-B\] gain: back at /.test(S.log()), 15000), '★ re-entered: back at it, no ramp');
+    const back = S.log().match(/\[ADS-B\] gain: back at ([0-9.]+) dB/);
+    ok(!!kept && !!back && kept[1] === back[1], `…the same gain (${back?.[1] ?? '?'} dB)`);
+    ok((S.log().match(/\[ADS-B\] gain: ramp from/g) || []).length === 1, '…and the ramp ran once only');
+    L.close(); await S.stop(); }
 } catch (e) { fail++; console.log('   FAIL ' + (e?.stack || e)); }
 console.log(`\n   ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

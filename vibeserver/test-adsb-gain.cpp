@@ -336,6 +336,34 @@ int main() {
         ok(!q.active() && !q.found() && q.result() == 28, "an empty sky proves nothing: not found, the top, the noise rule from there");
     }
 
+    // ★★ V12 BACK WHERE IT SETTLED (Stuart, 2026-11-18: "I've accidentally closed the ADSB a couple of times meaning that it
+    //    has to train the gain again"): resume() on the same list starts at the remembered rung, steady — no ramp — and the
+    //    rule still follows from there: the same FlightAware feed holds it, and a feed that got hotter while the mode was off
+    //    is still walked down by the noise guard.
+    {
+        Feed fa;
+        fa.floor = [](double g) { return -21.6 + (g - 49.6); };
+        fa.msgs = [](double g) { return 1250 + 4.0 * g; };
+        fa.strong = [](double g) { return g > 45 ? 0.5 : 0.11; };
+        vibeadsb::GainControl c;
+        const Run first = sim(c, fa, 600);
+        const int kept = first.lastSettled;
+        vibeadsb::GainControl c2;
+        const int at = c2.resume(kRtl, false, kept, 10000);
+        ok(at == kept && !c2.busy(), "resume: straight back at the remembered rung, steady (no ramp)");
+        ok(c2.why().find("kept from the last time") != std::string::npos, "  ...and says why");
+        const Run r = sim(c2, fa, 300, false, false, 10000);
+        bool held = true; for (int i : r.idx) if (i != kept) held = false;
+        ok(held, "  ...and on the same sky it stays there (five minutes, not one rung tried)");
+        Feed hot = fa; hot.floor = [](double g) { return -21.6 + (g - 49.6) + 6.0; };   // the floor 6 dB up since it was left
+        vibeadsb::GainControl c3;
+        c3.resume(kRtl, false, kept, 20000);
+        const Run rh = sim(c3, hot, 120, false, false, 20000);
+        ok(rh.lastSettled >= 0 && rh.lastSettled < kept, "  ...a hotter feed since: the noise guard still walks it down from there");
+        vibeadsb::GainControl c4;
+        ok(c4.resume(kRtl, false, int(kRtl.size()), 0) == -1 && c4.resume({}, false, 3, 0) == -1, "  ...a rung out of the list (another radio): -1, the caller ramps");
+    }
+
     std::printf("%s: %d checks, %d failed\n", fails ? "FAIL" : "ok", passes + fails, fails);
     return fails ? 1 : 0;
 }

@@ -15407,6 +15407,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     int adsbGainIdx_ = -1, adsbGainSet_ = -999;
     vibeadsb::GainControl adsbCtl_;                   // ★ the whole gain rule (vibe_adsb_service.h) — see adsbTick
     bool adsbManual_ = false, adsbNeedSearch_ = false;
+    /* ★★ V12 THE SETTLED GAIN SURVIVES A LEAVE (Stuart, 2026-11-18: "I've accidentally closed the ADSB a couple of times
+     *  meaning that it has to train the gain again"). The rung the automatic rule had settled on when ADS-B was last left,
+     *  and the gain list it is a rung of — one radio per process, and the list must match, so another dongle never inherits
+     *  it. In memory only: a restart ramps afresh. Not a listener's own gain (adsbManual_), not a ramp or a trial still
+     *  under way (busy) — those keep whatever was remembered before. */
+    std::vector<int> adsbKeptGains_;
+    int adsbKeptIdx_ = -1;
+    bool adsbResume_ = false;   // this entry starts from adsbKeptIdx_ (adsbTick → GainControl::resume)
+    void adsbRememberGain() {
+        if (adsbManual_ || adsbGainIdx_ < 0 || adsbGains_.empty() || adsbCtl_.busy() || adsbNeedSearch_) return;
+        adsbKeptGains_ = adsbGains_; adsbKeptIdx_ = adsbGainIdx_;
+        LOGI("[ADS-B] gain %.1f dB remembered for the next entry on this radio", adsbGains_[size_t(adsbGainIdx_)] / 10.0);
+    }
     std::string adsbLoggedWhy_, adsbLoggedWarn_;
     double adsbLastReport_ = 0, adsbLastGain_ = 0;
     std::atomic<bool> rateBoostFellBack_{false};       // ★ the watchdog's boosted-rate recovery ran — see rateBoostStalled
@@ -15540,12 +15553,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  steps down (levelHeld), and its top LNA state is the one most likely to overload. */
         adsbGains_ = LocalSdrShim::instance().getTunerGains();
         adsbGainIdx_ = -1; adsbGainSet_ = -999;
-        adsbCtl_.cancel(); adsbManual_ = false; adsbNeedSearch_ = true;
+        adsbCtl_.cancel(); adsbManual_ = false; adsbNeedSearch_ = true; adsbResume_ = false;
         adsbLoggedWhy_.clear(); adsbLoggedWarn_.clear();
         if (!adsbGains_.empty()) {
             // ★ where the rule starts (adsbTick → GainControl::begin): the middle on an RTL, three-quarters on an SDRplay
             adsbGainIdx_ = useSdrplay() ? std::min(int(adsbGains_.size()) - 1, int(adsbGains_.size()) * 3 / 4) : int(adsbGains_.size()) / 2;
             adsbGainSet_ = adsbGains_[size_t(adsbGainIdx_)];
+            // ★★ V12 back where it settled last time on this radio (adsbKeptIdx_) — the same list, or the ramp as before
+            adsbResume_ = adsbKeptIdx_ >= 0 && adsbKeptGains_ == adsbGains_ && adsbKeptIdx_ < int(adsbGains_.size());
+            if (adsbResume_) { adsbGainIdx_ = adsbKeptIdx_; adsbGainSet_ = adsbGains_[size_t(adsbGainIdx_)]; }
             // ★ written below, once g_adsbMode is up — written here, the gain-step smoother (off in ADS-B) still
             //   ran on the blocks in between and held the capture down for its ~1 s glide at every entry
         }
@@ -15608,6 +15624,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Give the receiver back exactly as it was found. `tell`: send adsb_off + config to every listener. */
     void adsbLeave(bool tell) {
         adsbByKeep_.store(false);
+        if (g_adsbMode.load()) adsbRememberGain();   // ★★ V12 the settled gain survives the leave
         if (!g_adsbMode.exchange(false)) {
             if (tell) {
                 std::vector<std::shared_ptr<net::Socket>> socks;
@@ -15760,7 +15777,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         if (adsbManual_ && cur < 0) {          // ★ AUTO pressed again: ramp afresh from the middle
-            adsbManual_ = false; adsbNeedSearch_ = true;
+            adsbManual_ = false; adsbNeedSearch_ = true; adsbResume_ = false;
             LOGI("[ADS-B] automatic gain handed back — ramping from the middle");
         }
         if (adsbManual_) return;
@@ -15779,6 +15796,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (adsbNeedSearch_) {
             adsbNeedSearch_ = false;
             const bool held = useSdrplay();
+            if (adsbResume_) {
+                adsbResume_ = false;
+                const int i = adsbCtl_.resume(adsbGains_, held, adsbKeptIdx_, t);
+                if (i >= 0) {
+                    LOGI("[ADS-B] gain: back at %.1f dB, where it settled last time on this radio — no ramp (checked one step either side every ten minutes)",
+                         adsbGains_[size_t(i)] / 10.0);
+                    adsbLoggedWhy_ = adsbCtl_.why();
+                    setIdx(i);
+                    return;
+                }
+            }
             LOGI("[ADS-B] gain: %s from %.1f dB (%zu steps, %.1f-%.1f dB), noise ceiling %.0f dBFS%s", held ? "looking down" : "ramp",
                  adsbGains_[size_t(held ? std::min(int(adsbGains_.size()) - 1, int(adsbGains_.size()) * 3 / 4) : int(adsbGains_.size()) / 2)] / 10.0,
                  adsbGains_.size(), adsbGains_.front() / 10.0, adsbGains_.back() / 10.0, vibeadsb::GainTarget::kFloorDbfs,
@@ -15817,6 +15845,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  over what it saved of the listener's state, stops, and restores nothing; the mode being entered makes the one
      *  change it needs; and leaving to ordinary listening later puts back exactly what was there before either. */
     AdsbSaved adsbHandOff() {
+        if (g_adsbMode.load()) adsbRememberGain();   // ★★ V12 the settled gain survives the leave
         if (!g_adsbMode.exchange(false)) return adsbSaved_;
         g_adsb.stop();
         recomputeEngineRate();

@@ -624,6 +624,21 @@ public:
         return idx_;
     }
 
+    /** ★★ V12 BACK WHERE IT SETTLED (Stuart, 2026-11-18: "I've accidentally closed the ADSB a couple of times meaning that it
+     *  has to train the gain again"). Re-entering ADS-B on the SAME radio (the same gain list) with a rung the rule had
+     *  settled on last time: start there, steady, instead of the entry ramp — the ten-minute looks either side, the noise
+     *  guard and strong-reply pressure carry on from it exactly as after a ramp, so a sky or an aerial that changed while
+     *  the mode was off is still followed. Returns the index to set now (-1 = no list or the rung is out of it: call begin). */
+    int resume(const std::vector<int>& gains, bool levelHeld, int idx, double t) {
+        const int n = int(gains.size());
+        if (n == 0 || idx < 0 || idx >= n) return -1;
+        begin(gains, levelHeld, t);   // ★ every field as a fresh entry would have it…
+        search_.cancel();             // ★ …but no ramp
+        idx_ = idx; phase_ = Phase::Steady; changedAt_ = t; exploreAt_ = t + kExploreS;
+        why_ = "kept from the last time in ADS-B on this radio \xe2\x80\x94 checked one step either side every ten minutes";
+        return idx_;
+    }
+
     /** Every tick (the shim's 2 s). Returns the index the radio should be at. */
     int tick(double t, const Health& h) {
         if (phase_ == Phase::Off || idx_ < 0) return idx_;
