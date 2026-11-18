@@ -23,7 +23,7 @@ export const DETAIL_URL = 'https://github.com/Stuey3D/VibeSDR/releases/download/
 /** The published size in bytes, for the "approx" wording and the integrity check.
  *  ★ TIED TO THE PUBLISHED ASSET: rebuild the pack and this, the release asset and DETAIL_URL's tag move
  *    together (a new tag, mapgl-detail-v2, so an installed v1 is never mistaken for the new one). */
-export const DETAIL_BYTES = 176657188;
+export const DETAIL_BYTES = 176874906;
 /* ★★ v2 (2026-11-18): islands in lakes are land again — v1 drew Flevoland (Almere, Lelystad) and every lake island
  *    as water. An installed pack of any other size is an OLDER pack: the app says an update is ready (App.tsx, once
  *    per pack version) and the foot of the server list offers it; servers replace theirs by themselves (vibe_mapgl.h). */

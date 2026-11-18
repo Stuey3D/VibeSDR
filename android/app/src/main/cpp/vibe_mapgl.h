@@ -71,7 +71,7 @@ inline constexpr const char* DETAIL_URL =
     "https://github.com/Stuey3D/VibeSDR/releases/download/mapgl-detail-v2/vibemap-detail.pmtiles";
 // ★★ v2 (2026-11-18): islands in lakes are land again (v1 drew Flevoland and every lake island as water). An
 //    installed pack of any other size is an OLDER pack and a server replaces it by itself — see refreshOutdated().
-inline constexpr int64_t DETAIL_BYTES = 176657188;
+inline constexpr int64_t DETAIL_BYTES = 176874906;
 inline constexpr const char* DETAIL_NAME = "vibemap-detail.pmtiles";
 
 using Downloader = std::function<bool(const std::string&, const std::string&,
