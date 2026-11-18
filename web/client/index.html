@@ -1882,7 +1882,7 @@ body.adsbMap #srvHealth { right: 0 !important; }
    radio is doing, it just will not take instructions. See syncRspAgcLock in main.ts. */
 #rspIfAgc.locked { opacity: 0.55; }
 /* ★★ V12 DAB ONLY: EXIT DAB is removed and the box says why once (main.ts syncDabOnly) */
-#dabOnlyNote { font-size: 11px; opacity: 0.75; letter-spacing: .04em; padding: 2px 0 4px; }
+#dabOnlyNote, #dabOwnNote { font-size: 11px; opacity: 0.75; letter-spacing: .04em; padding: 2px 0 4px; }
 /* ★★ V12 THE ONLY MODE: in place of EXIT ADS-B / ISM / NDB / AIS / DATALINK / SONDES (main.ts syncOnlyMode) */
 .onlyModeNote { font-size: 11px; opacity: 0.75; letter-spacing: .04em; align-self: center; white-space: nowrap; padding: 0 6px; }
 #rspIfGr:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -4450,6 +4450,8 @@ select.btn { padding: 6px 8px; }
            whole decoder a sideways scroll (Stuart, 2026-09-07). Gone; the feature is not new now. -->
     </div>
     <div id="dabOnlyNote" hidden>DAB only on this receiver</div>
+    <!-- ★★ V12 beta83 own stations on: at the top of the list, where the pick is made (dabOwnNoteSync) -->
+    <div id="dabOwnNote" hidden>Every user can choose their own station on this multiplex</div>
     <div id="dabStations" style="display:none"></div>
     <div id="dabSignal" style="display:none"></div>
     <!-- ★★ V12: the band scan's results, a pane of their own while it runs and until the listener goes back. -->

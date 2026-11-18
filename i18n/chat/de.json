@@ -109,6 +109,8 @@
     "bannerShort": "GETEILT",
     "bannerFree": "FREI ZUM ABSTIMMEN",
     "bannerAsk": "ERST FRAGEN",
+    "bannerAskDab": "ERST FRAGEN / DAB BEENDEN",
+    "bannerAnyStation": "JEDER SENDER IN DER LISTE IST FREI WÄHLBAR",
     "bannerAskBefore": "VOR DEM ABSTIMMEN FRAGEN",
     "bannerAskInChat": "IM CHAT FRAGEN",
     "bannerAwaiting": "WARTE AUF ANTWORT",

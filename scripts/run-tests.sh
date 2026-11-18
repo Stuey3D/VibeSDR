@@ -714,6 +714,9 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★ …and the clients' half, on the REAL app client and web client: rows placed by the frame's own span, a stale config healed
 #    after a second with nothing in flight, never during a zoom of ours, v1 frames exactly as before.
 if node --no-warnings scripts/test_span_stamp.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta83 DAB own stations: the banner names what is shared (ASK TO TUNE / EXIT DAB) and alternates "ANY STATION IN THE
+#    LIST IS FREE TO CHOOSE"; the station list says every user can choose their own — app and web.
+if node --no-warnings scripts/test_dab_free_banner.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).

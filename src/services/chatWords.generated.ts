@@ -4,7 +4,7 @@
 
 export type ChatLang = 'en' | 'de' | 'es' | 'fr' | 'it' | 'nl' | 'pl' | 'pt-BR';
 export type ChatChromeKey =
-  'you' | 'user' | 'admin' | 'userShort' | 'joined' | 'joinedYou' | 'listening' | 'ownerTunes' | 'youDecoding' | 'userDecoding' | 'askedWaiting' | 'askedToWait' | 'askBefore' | 'askBeforeBelow' | 'youTunedLast' | 'userTuning' | 'nobodyTuning' | 'listenOnly' | 'noDab' | 'chatTitle' | 'close' | 'say' | 'webHint' | 'checkOut' | 'bookmark' | 'manual' | 'send' | 'pickAnother' | 'cancel' | 'discard' | 'freqHint' | 'freqPlaceholder' | 'sharedLine' | 'tuneKey' | 'decodeKey' | 'askToTune' | 'othersOne' | 'othersMany' | 'askButton' | 'tuneNow' | 'bannerShared' | 'bannerShort' | 'bannerFree' | 'bannerAsk' | 'bannerAskBefore' | 'bannerAskInChat' | 'bannerAwaiting' | 'bannerYoursAt' | 'askNudge' | 'langDefault';
+  'you' | 'user' | 'admin' | 'userShort' | 'joined' | 'joinedYou' | 'listening' | 'ownerTunes' | 'youDecoding' | 'userDecoding' | 'askedWaiting' | 'askedToWait' | 'askBefore' | 'askBeforeBelow' | 'youTunedLast' | 'userTuning' | 'nobodyTuning' | 'listenOnly' | 'noDab' | 'chatTitle' | 'close' | 'say' | 'webHint' | 'checkOut' | 'bookmark' | 'manual' | 'send' | 'pickAnother' | 'cancel' | 'discard' | 'freqHint' | 'freqPlaceholder' | 'sharedLine' | 'tuneKey' | 'decodeKey' | 'askToTune' | 'othersOne' | 'othersMany' | 'askButton' | 'tuneNow' | 'bannerShared' | 'bannerShort' | 'bannerFree' | 'bannerAsk' | 'bannerAskDab' | 'bannerAnyStation' | 'bannerAskBefore' | 'bannerAskInChat' | 'bannerAwaiting' | 'bannerYoursAt' | 'askNudge' | 'langDefault';
 export type ChatPhraseMeta = { id: string; group?: string; band?: 'hf' | 'vhf'; wiki?: string;
                                decoder?: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'time' };
 export type ChatPhraseWords = { text: string; key?: string; banner?: string };
@@ -188,6 +188,8 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerShort: "SHARED",
       bannerFree: "FREE TO TUNE",
       bannerAsk: "ASK TO TUNE",
+      bannerAskDab: "ASK TO TUNE / EXIT DAB",
+      bannerAnyStation: "ANY STATION IN THE LIST IS FREE TO CHOOSE",
       bannerAskBefore: "ASK BEFORE TUNING",
       bannerAskInChat: "ASK IN CHAT TO TUNE",
       bannerAwaiting: "AWAITING A REPLY",
@@ -303,6 +305,8 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerShort: "GETEILT",
       bannerFree: "FREI ZUM ABSTIMMEN",
       bannerAsk: "ERST FRAGEN",
+      bannerAskDab: "ERST FRAGEN / DAB BEENDEN",
+      bannerAnyStation: "JEDER SENDER IN DER LISTE IST FREI WÄHLBAR",
       bannerAskBefore: "VOR DEM ABSTIMMEN FRAGEN",
       bannerAskInChat: "IM CHAT FRAGEN",
       bannerAwaiting: "WARTE AUF ANTWORT",
@@ -418,6 +422,8 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerShort: "COMPART.",
       bannerFree: "LIBRE PARA SINTONIZAR",
       bannerAsk: "PIDE PERMISO",
+      bannerAskDab: "PIDE PERMISO / SALIR DE DAB",
+      bannerAnyStation: "PUEDES ELEGIR CUALQUIER EMISORA DE LA LISTA",
       bannerAskBefore: "PREGUNTA ANTES",
       bannerAskInChat: "PIDE PERMISO EN EL CHAT",
       bannerAwaiting: "ESPERANDO RESPUESTA",
@@ -533,6 +539,8 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerShort: "PARTAGÉ",
       bannerFree: "TU PEUX SYNTONISER",
       bannerAsk: "DEMANDE LA MAIN",
+      bannerAskDab: "DEMANDE LA MAIN / QUITTER LE DAB",
+      bannerAnyStation: "CHAQUE STATION DE LA LISTE SE CHOISIT LIBREMENT",
       bannerAskBefore: "DEMANDE AVANT",
       bannerAskInChat: "DEMANDE DANS LE CHAT",
       bannerAwaiting: "EN ATTENTE DE RÉPONSE",
@@ -648,6 +656,8 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerShort: "CONDIVISO",
       bannerFree: "LIBERO DA SINTONIZZARE",
       bannerAsk: "CHIEDI PRIMA",
+      bannerAskDab: "CHIEDI PRIMA / ESCI DAL DAB",
+      bannerAnyStation: "OGNI STAZIONE IN ELENCO SI SCEGLIE LIBERAMENTE",
       bannerAskBefore: "CHIEDI PRIMA",
       bannerAskInChat: "CHIEDI IN CHAT",
       bannerAwaiting: "IN ATTESA DI RISPOSTA",
@@ -763,6 +773,8 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerShort: "GEDEELD",
       bannerFree: "VRIJ OM AF TE STEMMEN",
       bannerAsk: "EERST VRAGEN",
+      bannerAskDab: "EERST VRAGEN / DAB VERLATEN",
+      bannerAnyStation: "ELKE ZENDER IN DE LIJST IS VRIJ TE KIEZEN",
       bannerAskBefore: "VRAAG VOOR JE AFSTEMT",
       bannerAskInChat: "VRAAG HET IN DE CHAT",
       bannerAwaiting: "WACHT OP ANTWOORD",
@@ -878,6 +890,8 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerShort: "WSPÓLNY",
       bannerFree: "MOŻNA STROIĆ",
       bannerAsk: "NAJPIERW ZAPYTAJ",
+      bannerAskDab: "NAJPIERW ZAPYTAJ / WYJDŹ Z DAB",
+      bannerAnyStation: "KAŻDĄ STACJĘ Z LISTY MOŻNA WYBRAĆ SWOBODNIE",
       bannerAskBefore: "ZAPYTAJ PRZED STROJENIEM",
       bannerAskInChat: "ZAPYTAJ NA CZACIE",
       bannerAwaiting: "CZEKAM NA ODPOWIEDŹ",
@@ -993,6 +1007,8 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerShort: "COMPART.",
       bannerFree: "PODE SINTONIZAR",
       bannerAsk: "PEÇA A VEZ",
+      bannerAskDab: "PEÇA A VEZ / SAIR DO DAB",
+      bannerAnyStation: "QUALQUER ESTAÇÃO DA LISTA É LIVRE PARA ESCOLHER",
       bannerAskBefore: "PERGUNTE ANTES",
       bannerAskInChat: "PEÇA A VEZ NO CHAT",
       bannerAwaiting: "AGUARDANDO RESPOSTA",

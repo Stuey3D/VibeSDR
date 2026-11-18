@@ -1118,6 +1118,12 @@ export default function DabPanel(p: DabPanelProps) {
         <DecoderBody>
           {/* ★★ V12 DAB ONLY: EXIT DAB is gone — say why once, so nobody hunts for it */}
           {!!p.dabOnly && <Text style={[s.mux, { opacity: 0.75, fontSize: 11, marginBottom: 4 }]} accessibilityRole="text">DAB only on this receiver</Text>}
+          {/* ★★ V12 beta83 own stations on: say so at the top of the list, where the pick is made (Stuart, 2026-11-18 — the
+              header has no room; the banner alternates the same news, dialChat DAB_FREE_FLIP_MS). */}
+          {pane === 'stations' && !!p.d?.own?.on && (
+            <Text style={[s.mux, { opacity: 0.75, fontSize: 11, marginBottom: 4 }]} accessibilityRole="text">
+              Every user can choose their own station on this multiplex</Text>
+          )}
           {body}
         </DecoderBody>
     </DecoderShell>

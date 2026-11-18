@@ -288,12 +288,23 @@ export function askBannerText(d: AskState, tight: boolean, clock?: (ms: number) 
 /** ★★ The SHARED TUNER banner's standing words when the ask lock is not in force — one copy for the app's bar and the
  *  browser's: FREE TO TUNE alone, ASK TO TUNE · 3/5 👤 with company, ASK BEFORE TUNING before the count is known
  *  (listeners < 0). `tight` drops the prefix (SE in Display Zoom), never the words that matter. */
-export function sharedTunerText(alone: boolean, listeners: number, max: number, tight = false): string {
+export function sharedTunerText(alone: boolean, listeners: number, max: number, tight = false, dabOwn = false): string {
   const pre = tight ? '' : `${chatT('bannerShared')} · `;
   if (listeners < 0) return `${pre}${chatT('bannerAskBefore')}`;
   if (alone) return `${pre}${chatT('bannerFree')}`;
-  return `${pre}${chatT('bannerAsk')} · ${listeners}${max > 1 ? `/${max}` : ''} 👤`;
+  // ★ V12 beta83 in DAB with own stations on, what needs asking is a change of MULTIPLEX — or leaving DAB.
+  return `${pre}${chatT(dabOwn ? 'bannerAskDab' : 'bannerAsk')} · ${listeners}${max > 1 ? `/${max}` : ''} 👤`;
 }
+
+/* ★★★ V12 beta83 THE STATIONS ARE NOT WHAT IS SHARED (Stuart, 2026-11-18, five own stations on the Pi 2: "users don't
+ *  know they can now actually choose any station within that multiplex"). In DAB with own stations on (the report's
+ *  own.on), the banner ALTERNATES its ask line with DAB_FREE_TEXT — on the app's bar and the browser's alike, and
+ *  under the ask lock too: a station pick is not a dial move there (the server lets dab_service through, local_sdr_shim
+ *  dabOwnOn), so it is true while tuning is locked. Only with company: alone, the banner already says FREE TO TUNE. */
+export const DAB_FREE_FLIP_MS = 4000;
+/** Which half of the alternation is showing at `nowMs`: true = the stations line. */
+export function dabFreePhase(nowMs: number): boolean { return Math.floor(nowMs / DAB_FREE_FLIP_MS) % 2 === 1; }
+export function dabFreeText(): string { return chatT('bannerAnyStation'); }
 
 /** True when this receiver shares one dial between its listeners. */
 export function isSharedDial(d: DialState | null): boolean {

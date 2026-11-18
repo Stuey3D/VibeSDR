@@ -234,7 +234,7 @@ import ChatDrawer,
   { type ChatMessage, type ShareItem, useHiddenChatUsers } from '../components/ChatDrawer';
 import { openWebPage } from '../utils/openWebPage';
 import { padPhrases, bannerLine, BannerGate, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
-         askLocked, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, type DialState } from '../services/dialChat';
+         askLocked, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, dabFreePhase, type DialState } from '../services/dialChat';
 import { pickChatLanguage } from '../services/chatLangNative';
 import { shareFromBookmark, shareSummary, parseShared, sharedStationText, shareTuneStep,
          type ShareOut, type SharedStation } from '../services/chatShare';
@@ -5538,6 +5538,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearInterval(t);
   }, [scanLockMine]);
   const scanLockText = scanLockMine ? scanLockLine(scanLockPhase, scanLock.done, scanLock.total) : '';
+  /* ★★★ V12 beta83 IN DAB WITH OWN STATIONS ON, THE BANNER ALTERNATES (dialChat DAB_FREE_FLIP_MS): "ASK TO TUNE / EXIT
+   *  DAB" — the multiplex is what is shared — with "ANY STATION IN THE LIST IS FREE TO CHOOSE" (Stuart, 2026-11-18). The
+   *  timer runs only while it can show: in DAB, own stations on, a shared dial with company. */
+  const dabOwnFree = !!dabState?.own?.on;
+  const dabFreeShown = dabOwnFree && sharedDial && !!dialState && !dialAlone(dialState);
+  const [dabFreeOn, setDabFreeOn] = useState(false);
+  useEffect(() => {
+    if (!dabFreeShown) { setDabFreeOn(false); return; }
+    setDabFreeOn(dabFreePhase(Date.now()));
+    const t = setInterval(() => setDabFreeOn(dabFreePhase(Date.now())), 500);
+    return () => clearInterval(t);
+  }, [dabFreeShown]);
   /** ★ Read by the watch's Icom refusal notice (onRefused), which runs outside a render. */
   const adminOkRef = useRef(adminOk); adminOkRef.current = adminOk;
   // ★ The Icom listener note (icomNoteSeen) also clears itself after 15 s: a pad or a TV remote has no way to tap its ×, and it would otherwise cover the
@@ -13480,11 +13492,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ The banner's words are the chat's language — a change must reach the memoised bar (ControlsBar sharedBannerText).
     lang: chatLangNow,
     ...(bannerSaidShown ? { said: bannerSaidShown } : {}),
+    ...(dabOwnFree ? { dabOwn: true, dabFree: dabFreeOn } : {}),   // ★ V12 beta83 the stations line (dabFreeShown)
     // ★★ Ask before tuning — the server's word on whether this listener may move the dial (dialChat.AskState).
     ...(dialState?.askFirst ? { ask: { askFirst: true, tuneLocked: dialState.tuneLocked, askState: dialState.askState,
                                       askUntil: dialState.askUntil }, onLockedTouch: nudgeAsk } : {}),
   } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
-             dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk, chatLangNow, scanLockText]);
+             dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk, chatLangNow, scanLockText,
+             dabOwnFree, dabFreeOn]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   /* ★★ DIRECT NUMBER ENTRY (Stuart, 2026-11-07: "If a user starts typing a number say I press the 9 key then the
    *  frequency entry box needs to pop up with the number 9 already entered and then i can continue to type 6.6 then

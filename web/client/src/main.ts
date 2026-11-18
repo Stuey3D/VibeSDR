@@ -150,7 +150,7 @@ import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot, type DecoderMode, type CwList, type CwSignal, type CwSpot, type SpotModeState } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
-import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, type AskState } from '../../../src/services/dialChat';
+import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, type AskState } from '../../../src/services/dialChat';
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
 import { httpBase, wsBase, isValidServerHost } from './origin';
@@ -1123,6 +1123,12 @@ function updateSharedBanner() {
   const ms = document.getElementById('mShared');
   document.getElementById('mPillIn')?.classList.toggle('shared', !!ms && !ms.hidden);
 }
+/** ★ V12 beta83 the banner's DAB alternation turns only while it can show (updateSharedBannerText). */
+let dabFreeTimer: ReturnType<typeof setInterval> | null = null;
+function dabFreeTick(on: boolean) {
+  if (on && !dabFreeTimer) dabFreeTimer = setInterval(updateSharedBanner, 500);
+  else if (!on && dabFreeTimer) { clearInterval(dabFreeTimer); dabFreeTimer = null; }
+}
 function updateSharedBannerText() {
   const ms = document.getElementById('mShared');
   if (!ms) return;
@@ -1149,9 +1155,18 @@ function updateSharedBannerText() {
   }
   ms.hidden = !srvSharedDial;
   syncMediaSkip();   // ★ the lock-screen ⏮⏭ follow the same count the banner does
-  if (!srvSharedDial) return;
+  if (!srvSharedDial) { dabFreeTick(false); return; }
   // ★★ A tuning line just arrived — the banner says it (flashSharedBanner; the app's SDRScreen bannerSaid).
   if (bannerSaidText) { ms.textContent = bannerSaidText; ms.title = 'Chat: ' + bannerSaidText; return; }
+  // ★★★ V12 beta83 in DAB with own stations on, with company: the stations line alternates with the ask line (dialChat
+  //     DAB_FREE_FLIP_MS — the app's bar does the same); dabFreeTick keeps it turning.
+  const dabOwn = dabOn && !!dabState?.own?.on;
+  dabFreeTick(dabOwn && listenerCount > 1);
+  if (dabOwn && listenerCount > 1 && dabFreePhase(Date.now())) {
+    ms.classList.remove('alone'); ms.textContent = dabFreeText();
+    ms.title = 'Any station in the list is free to choose — only changing multiplex or leaving DAB needs asking';
+    return;
+  }
   // ★★ Ask before tuning: while locked, what to do NOW (ask / awaiting a reply / when it is yours).
   const askTxt = askNow ? askBannerText(askNow, false) : null;
   if (askTxt) {
@@ -1166,7 +1181,7 @@ function updateSharedBannerText() {
   ms.classList.toggle('alone', alone);
   // ★ The words go in as TEXT (a text node), the person glyph as markup: no translated string is ever parsed as HTML.
   ms.textContent = alone ? sharedTunerText(true, listenerCount, listenerMax)
-    : sharedTunerText(false, listenerCount, listenerMax).replace(/ 👤$/, ' ');
+    : sharedTunerText(false, listenerCount, listenerMax, false, dabOwn).replace(/ 👤$/, ' ');
   if (!alone) ms.insertAdjacentHTML('beforeend',
       `<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" `
       + `style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>`);
@@ -7811,6 +7826,7 @@ function dabSetPane(p: 'stations' | 'signal' | 'scan') {
   if (st) st.style.display = dabOn && p === 'stations' ? 'block' : 'none';
   if (sg) sg.style.display = dabOn && p === 'signal' ? 'block' : 'none';
   if (sc) sc.style.display = dabOn && p === 'scan' ? 'block' : 'none';
+  dabOwnNoteSync();
   // ★ The label names where the button GOES, and the state is readable without pressing it.
   if (bt) bt.innerHTML = p === 'signal' ? '&#9666; STATIONS' : 'SIGNAL &#9656;';
   dabScanSyncBtn();
@@ -7910,8 +7926,17 @@ function dabScanRender() {
   });
 }
 
+/** ★★ V12 beta83 "Every user can choose their own station on this multiplex" — over the station list while own stations
+ *  are on (the report's own.on). */
+function dabOwnNoteSync() {
+  const n = document.getElementById('dabOwnNote');
+  if (n) n.hidden = !(dabOn && dabPane === 'stations' && !!dabState?.own?.on);
+  updateSharedBanner();   // ★ own.on decides the banner's DAB wording too — it changes with the report, not the count
+}
+
 function dabRender() {
-  dabBlocksSync();   // ★★ V12 the block labels follow the block and the names (dabBlockView.ts)
+  dabBlocksSync();
+  dabOwnNoteSync();   // ★★ V12 the block labels follow the block and the names (dabBlockView.ts)
   const st = document.getElementById('dabStations');
   const sg = document.getElementById('dabSignal');
   const lbl = document.getElementById('dabMuxLbl');

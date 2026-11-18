@@ -108,6 +108,8 @@
     "bannerShort": "SHARED",
     "bannerFree": "FREE TO TUNE",
     "bannerAsk": "ASK TO TUNE",
+    "bannerAskDab": "ASK TO TUNE / EXIT DAB",
+    "bannerAnyStation": "ANY STATION IN THE LIST IS FREE TO CHOOSE",
     "bannerAskBefore": "ASK BEFORE TUNING",
     "bannerAskInChat": "ASK IN CHAT TO TUNE",
     "bannerAwaiting": "AWAITING A REPLY",

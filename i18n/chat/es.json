@@ -109,6 +109,8 @@
     "bannerShort": "COMPART.",
     "bannerFree": "LIBRE PARA SINTONIZAR",
     "bannerAsk": "PIDE PERMISO",
+    "bannerAskDab": "PIDE PERMISO / SALIR DE DAB",
+    "bannerAnyStation": "PUEDES ELEGIR CUALQUIER EMISORA DE LA LISTA",
     "bannerAskBefore": "PREGUNTA ANTES",
     "bannerAskInChat": "PIDE PERMISO EN EL CHAT",
     "bannerAwaiting": "ESPERANDO RESPUESTA",

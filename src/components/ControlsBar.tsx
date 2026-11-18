@@ -43,7 +43,7 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
-import { askBannerText, askLocked, sharedTunerText, chatT, type AskState } from '../services/dialChat';
+import { askBannerText, askLocked, sharedTunerText, dabFreeText, chatT, type AskState } from '../services/dialChat';
 import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
 import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import { useDerivedValue, useSharedValue, type SharedValue } from 'react-native-reanimated';
@@ -644,6 +644,10 @@ export interface ControlsBarProps {
                   *  owner's lock is in force. Locked: the VFO drum / keys dim, and a touch calls onLockedTouch
                   *  (SDRScreen flashes the chat key and this banner) instead of tuning. */
                  ask?: AskState;
+                 /** ★★ V12 beta83 DAB with own stations on (the report's own.on): the ask line names the multiplex and
+                  *  EXIT DAB, and while `dabFree` (SDRScreen alternates it) the banner says any station is free to choose. */
+                 dabOwn?: boolean;
+                 dabFree?: boolean;
                  onLockedTouch?: () => void } | null;
   /** ★ STORMS — sferics about, decided by the SERVER on the wide FFT (rate per minute, seconds
    *  since the last flash). Answers "what are those lines across the waterfall?" before it is
@@ -1241,6 +1245,8 @@ const askDim = (st?: SharedTuner | null) => (st && (st.scanLock || askLocked(st.
 function sharedBannerText(st: SharedTuner, tight: boolean): string {
   if (st.scanLock) return st.scanLock;
   if (st.said) return st.said;
+  // ★★ V12 beta83 the stations line, alternating with whatever the ask line is (a pick is not a dial move — dialChat).
+  if (st.dabOwn && st.dabFree && !st.alone) return dabFreeText();
   // ★★ Ask before tuning: while locked the banner says what to do now (ask / waiting / when it is yours).
   const ask = st.ask ? askBannerText(st.ask, tight) : null;
   if (ask) return ask;
@@ -1252,9 +1258,15 @@ function sharedBannerText(st: SharedTuner, tight: boolean): string {
       //  ★ On the narrowest layouts (SE in Display Zoom) the prefix goes, never the words
       //    that matter — truncating mid-word is the one outcome that is not allowed.
       ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning (You+${Math.max(1, st.listeners - 1)})`
-      : sharedTunerText(false, st.listeners, st.max);
+      : sharedTunerText(false, st.listeners, st.max, false, !!st.dabOwn);
 }
 function sharedBannerLabel(st: SharedTuner): string {
+  // ★ V12 beta83 a screen reader gets both halves of the alternation at once.
+  if (st.dabOwn && !st.alone && !st.scanLock && !st.said)
+    return `${sharedBannerLabelBase(st)} Any station in the list is free to choose — only changing multiplex or leaving DAB needs asking.`;
+  return sharedBannerLabelBase(st);
+}
+function sharedBannerLabelBase(st: SharedTuner): string {
   if (st.scanLock) return 'The owner triggered a scan of this receiver. Please wait — the controls come back, and the radio returns to where it was, when it ends.';
   if (st.said) return `Chat: ${st.said}`;
   if (askLocked(st.ask)) return 'Shared tuner. Tuning is locked until you ask in the chat — a yes, or no answer in 15 seconds, lets you in.';
