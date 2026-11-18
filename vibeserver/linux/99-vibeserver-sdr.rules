@@ -51,3 +51,19 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea70", ATTRS{seria
 # Native-USB Icoms (IC-705 / IC-9700 / IC-7300MK2 present CDC-ACM ports under Icom's own vendor id) [unverified per model]
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0c26", MODE="0660", GROUP="plugdev", ENV{ID_MM_DEVICE_IGNORE}="1"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0c26", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# ★★★ A RADIO THAT WAS MISSING COMES BACK WHEN IT IS PLUGGED IN (Stuart, 2026-11-18). A configured radio
+# whose device is not on the bus exits and is not restarted (vibeserver@.service, status 3); any SDR
+# appearing starts vibeserver-radios-replug.service, which starts every configured radio that is not
+# running. ACTION=="add" ONLY: `udevadm trigger` (postinst) replays "change", and a radio on air is never
+# touched — the replug only starts what is stopped. The B210's firmware load re-enumerates it (another add).
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2832", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2838", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="03eb", ATTR{idProduct}=="800c", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1d50", ATTR{idProduct}=="60a1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2500", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="3923", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1df7", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="10c4", ATTR{serial}=="IC-*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0c26", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-radios-replug.service"

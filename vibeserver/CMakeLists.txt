@@ -1477,7 +1477,7 @@ if(UNIX AND NOT APPLE)
   endif()
   install(FILES linux/vibeserver.service DESTINATION lib/systemd/system)
 # ★ The per-radio template and the reconciler that starts the second and later radios.
-install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
+install(FILES linux/vibeserver@.service linux/vibeserver-radios.service linux/vibeserver-radios-replug.service
         DESTINATION lib/systemd/system)
   # ★ /lib/udev/rules.d is the PACKAGE path; /etc/udev/rules.d is for the ADMIN's own overrides.
   #   Shipping into /etc would fight the sysadmin and survive `apt purge`.

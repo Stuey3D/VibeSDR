@@ -24946,8 +24946,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             // ★★ THE RADIO IS NOT THERE — a normal outcome, not an error: its
                             //    process may be starting, stopped, or crashed. Answering it
                             //    ourselves gives the listener a real page instead of a hang.
-                            LOGI("handoff to %s failed (%s) — answering here instead",
-                                 dest.c_str(), err.c_str());
+                            /* ★★ ONCE A MINUTE PER RADIO, not once per request. A radio whose device is
+                             *    unplugged has no socket for as long as it is gone, and every page asset,
+                             *    poll and reconnect logged this — a dozen lines a second at Almere, which
+                             *    pushed the useful journal out of the 3 MB diagnostics (2026-11-18). */
+                            static std::mutex hoLogMx;
+                            static std::map<std::string, double> hoLogAt;
+                            bool say = false;
+                            {
+                                std::lock_guard<std::mutex> lk(hoLogMx);
+                                double& at = hoLogAt[dest];
+                                if (nowSecs() - at >= 60.0) { at = nowSecs(); say = true; }
+                            }
+                            if (say)
+                                LOGI("handoff to %s failed (%s) — answering here instead (said once a minute)",
+                                     dest.c_str(), err.c_str());
                         }
                     }
                 }

@@ -22,6 +22,11 @@ ExecStartPre=+/usr/lib/vibeserver/vibeserver-governor
 ExecStart=/usr/bin/vibeserver --config /etc/vibeserver/vibeserver.conf --radio-serial %i
 Restart=always
 RestartSec=5
+# ★★★ STATUS 3 = THE RADIO IS NOT ON THE USB BUS (main.cpp kRadioAbsentExit). Not restarted, and not a
+#     failure: plugging it in starts it (99-vibeserver-sdr.rules → vibeserver-radios-replug.service).
+#     Before this a missing radio was restarted every 5 s for ever — 6,155 times in a day at Almere.
+RestartPreventExitStatus=3
+SuccessExitStatus=3
 User=vibeserver
 Group=vibeserver
 # ★ `audio` for an Icom's USB audio codec (/dev/snd/pcmC*D*c) — receive audio only, never playback.

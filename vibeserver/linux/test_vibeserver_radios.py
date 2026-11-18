@@ -106,7 +106,56 @@ def script_test():
         ok("ignoring a radio with an unusable serial" in r.stdout, "…and is logged as ignored")
 
 
+
+def start_missing_test():
+    """★★★ --start-missing (udev, a radio plugged in): starts only radios that are NOT active; never restarts,
+    stops or disables one; does nothing while VibeServer is stopped (Stuart, 2026-11-18)."""
+    print("--start-missing: a radio plugged in starts only what is not running")
+    if bash_major() < 4:
+        print("  (skipped: needs bash 4 — this bash is %d; runs on Linux)" % bash_major())
+        return
+    for door_up in (True, False):
+        with tempfile.TemporaryDirectory() as tmp:
+            b = os.path.join(tmp, "bin")
+            os.makedirs(b)
+            log = os.path.join(tmp, "systemctl.log")
+            stub_vs = os.path.join(b, "vibeserver")
+            open(stub_vs, "w").write("#!/bin/sh\nprintf '%s\\n' 'RUNNING1' 'ABSENT2'\n")
+            os.chmod(stub_vs, 0o755)
+            ru = os.path.join(b, "runuser")
+            open(ru, "w").write('#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n')
+            os.chmod(ru, 0o755)
+            open(os.path.join(b, "sleep"), "w").write("#!/bin/sh\nexit 0\n")
+            os.chmod(os.path.join(b, "sleep"), 0o755)
+            # is-active: the door and the boot run are up (or not), RUNNING1 is on air, ABSENT2 is stopped.
+            active = "vibeserver@RUNNING1.service" + (" vibeserver.service vibeserver-radios.service" if door_up else "")
+            sc = os.path.join(b, "systemctl")
+            open(sc, "w").write("#!/bin/bash\necho \"$*\" >> '%s'\n"
+                                "if [ \"$1\" = is-active ]; then u=\"${@: -1}\"; for a in %s; do [ \"$a\" = \"$u\" ] && exit 0; done; exit 3; fi\n"
+                                "exit 0\n" % (log, active))
+            os.chmod(sc, 0o755)
+            conf = os.path.join(tmp, "config.json")
+            open(conf, "w").write("{}")
+            s = open(SCRIPT).read().replace("/usr/bin/vibeserver", stub_vs).replace("/var/lib/vibeserver", tmp)
+            script = os.path.join(tmp, "vibeserver-radios")
+            open(script, "w").write(s)
+            r = subprocess.run([BASH, script, "--start-missing"],
+                               env=dict(os.environ, PATH=b + os.pathsep + os.environ["PATH"], VIBESERVER_CONFIG=conf),
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+            calls = open(log).read() if os.path.exists(log) else ""
+            acts = [l for l in calls.splitlines() if not l.startswith("is-active")]
+            ok(r.returncode == 0, "exits 0 (VibeServer %s)" % ("running" if door_up else "stopped"))
+            if door_up:
+                ok("start vibeserver@ABSENT2.service" in acts, "★★★ the stopped radio is started")
+                ok(not any("RUNNING1" in l for l in acts), "★★★ the radio on air is never touched")
+                ok(not any(l.split()[0] in ("restart", "stop", "disable", "enable") for l in acts if l),
+                   "★★ nothing is restarted, stopped, enabled or disabled")
+            else:
+                ok(not acts, "★★ VibeServer stopped by its owner: no radio is started")
+
+
 function_tests()
 script_test()
+start_missing_test()
 print("%d checks, %d failures" % (count, fails))
 sys.exit(1 if fails else 0)

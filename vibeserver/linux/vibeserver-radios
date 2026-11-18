@@ -16,6 +16,22 @@
 #   vibeserver-maintenance broke once already.
 set -uo pipefail
 
+# ★★★ --start-missing: run by vibeserver-radios-replug.service when an SDR is plugged in (udev). It only
+#     STARTS a configured radio whose unit is not active — a radio on air is never restarted, nothing is
+#     stopped or disabled, and a pending serial change is left to the boot run. A radio whose device is
+#     not on the bus exits with status 3 and is not restarted (vibeserver@.service); this is what brings
+#     it back (Stuart, 2026-11-18).
+START_MISSING=0
+[ "${1:-}" = "--start-missing" ] && START_MISSING=1
+if [ "$START_MISSING" = 1 ]; then
+    # ★ Not before the boot run has done its own start, and not while the owner has VibeServer stopped.
+    systemctl is-active --quiet vibeserver.service || { echo "vibeserver-radios: VibeServer is not running — not starting radios"; exit 0; }
+    systemctl is-active --quiet vibeserver-radios.service || exit 0
+    # ★ Let the device settle (udev permissions, a B210's firmware re-enumeration, a second radio
+    #   plugged in at the same moment) before asking what is attached.
+    sleep 3
+fi
+
 CONF="${VIBESERVER_CONFIG:-/etc/vibeserver/config.json}"
 [ -r "$CONF" ] || { echo "vibeserver-radios: no readable $CONF — nothing to do"; exit 0; }
 
@@ -66,6 +82,18 @@ for serial in "${WANT[@]}"; do
 done
 
 # ── What IS running ──────────────────────────────────────────────────────────────────────────
+if [ "$START_MISSING" = 1 ]; then
+    for serial in "${WANT[@]}"; do
+        [ -z "$serial" ] && continue
+        valid_serial "$serial" || continue
+        if ! systemctl is-active --quiet "vibeserver@${serial}.service"; then
+            echo "vibeserver-radios: a radio was plugged in — starting $serial"
+            systemctl start "vibeserver@${serial}.service" 2>/dev/null
+        fi
+    done
+    exit 0
+fi
+
 mapfile -t RUNNING < <(systemctl list-units --plain --no-legend --all 'vibeserver@*.service' 2>/dev/null \
                        | awk '{print $1}' | sed 's/^vibeserver@//; s/\.service$//')
 

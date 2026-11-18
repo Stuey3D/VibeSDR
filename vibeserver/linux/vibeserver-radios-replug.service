@@ -1,0 +1,15 @@
+[Unit]
+# ★★★ STARTED BY udev WHEN AN SDR IS PLUGGED IN (99-vibeserver-sdr.rules, ACTION=="add" only).
+# A configured radio that is not on the bus exits with status 3 and is NOT restarted (vibeserver@.service);
+# this brings it back the moment its USB device appears. It only STARTS radios that are not running —
+# never restarts one that is on air (vibeserver-radios --start-missing).
+# ★ Oneshot without RemainAfterExit, so every plug-in can start it again. Two radios plugged in together
+#   start it once; it waits a moment first so both are on the bus by the time it looks.
+Description=VibeServer — start a radio that has just been plugged in
+Documentation=https://vibesdr.net
+After=vibeserver.service vibeserver-radios.service vibeserver-rsp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/vibeserver/vibeserver-radios --start-missing
+User=root
