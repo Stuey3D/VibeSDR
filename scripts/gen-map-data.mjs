@@ -810,9 +810,42 @@ function pointInRingXY(x, y, r) {
   }
   return c;
 }
+/** Sutherland–Hodgman against an axis-aligned box: one ring in, one closed ring out (or null when nothing is left).
+ *  A concave ring can come back with zero-width bridges along the box edge; polygon-clipping resolves those. */
+function clipRingToBox(ring, [x0, y0, x1, y1]) {
+  const rb = ringBox(ring);
+  if (rb[2] < x0 || rb[0] > x1 || rb[3] < y0 || rb[1] > y1) return null;
+  let pts = ring;
+  const edges = [
+    (p) => p[0] >= x0, (p) => p[0] <= x1, (p) => p[1] >= y0, (p) => p[1] <= y1,
+  ];
+  const cut = [
+    (p, q) => [x0, p[1] + ((q[1] - p[1]) * (x0 - p[0])) / (q[0] - p[0])],
+    (p, q) => [x1, p[1] + ((q[1] - p[1]) * (x1 - p[0])) / (q[0] - p[0])],
+    (p, q) => [p[0] + ((q[0] - p[0]) * (y0 - p[1])) / (q[1] - p[1]), y0],
+    (p, q) => [p[0] + ((q[0] - p[0]) * (y1 - p[1])) / (q[1] - p[1]), y1],
+  ];
+  for (let e = 0; e < 4 && pts.length; e++) {
+    const inside = edges[e], out = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[(i + 1) % pts.length];
+      const pi = inside(p), qi = inside(q);
+      if (pi) out.push(p);
+      if (pi !== qi) out.push(cut[e](p, q));
+    }
+    pts = out;
+  }
+  if (pts.length < 3) return null;
+  if (Math.abs(ringArea(pts)) < 1e-14) return null;
+  const f = pts[0], l = pts[pts.length - 1];
+  return f[0] === l[0] && f[1] === l[1] ? pts : [...pts, f];
+}
+function isBox(r, [x0, y0, x1, y1]) {
+  return Math.abs(Math.abs(ringArea(r)) - (x1 - x0) * (y1 - y0)) < 1e-9 * (1 + (x1 - x0) * (y1 - y0));
+}
 function buildUrbanClipped(gj, dp, maxScalerank, land, minArea = 0) {
   const outers = [], holes = [];
-  let clipped = 0, unclipped = 0, allSea = 0;
+  let clipped = 0, unclipped = 0, allSea = 0, kept = 0;
   for (const f of gj.features) {
     const p = f.properties || {};
     const rank = p.scalerank ?? p.SCALERANK ?? 0;
@@ -830,8 +863,24 @@ function buildUrbanClipped(gj, dp, maxScalerank, land, minArea = 0) {
           }
       let result;
       if (!cand.size) { allSea++; continue; }          // no land under it at all: it is all sea
-      try {
-        result = polygonClipping.intersection(poly, [...cand].map((i) => land.polys[i]));
+      /* ★★ THE LAND IS CUT DOWN TO THE EXTENT'S BOX FIRST. Handing polygon-clipping a whole continent (Eurasia is
+       *  millions of points) for every one of ~11k tier2 extents ran past 45 minutes on one core. A box clip is
+       *  linear and leaves only the few hundred coast points that can matter; a box wholly on land comes back as the
+       *  box itself and the extent is kept untouched. */
+      const pad = 1e-6, bx = [a - pad, b - pad, c + pad, d + pad];
+      const pieces = [];
+      let fullLand = false;
+      for (const i of cand) {
+        const outer = clipRingToBox(land.polys[i][0], bx);
+        if (!outer) continue;
+        const hs = land.polys[i].slice(1).map((h) => clipRingToBox(h, bx)).filter(Boolean);
+        if (!hs.length && isBox(outer, bx)) { fullLand = true; break; }
+        pieces.push([outer, ...hs]);
+      }
+      if (fullLand) { result = [poly]; kept++; }
+      else if (!pieces.length) { allSea++; continue; }
+      else try {
+        result = polygonClipping.intersection(poly, pieces);
         clipped++;
       } catch {
         result = [poly]; unclipped++;
@@ -843,7 +892,7 @@ function buildUrbanClipped(gj, dp, maxScalerank, land, minArea = 0) {
       });
     }
   }
-  console.log(`  urban clipped to the coast: ${clipped} extents, ${unclipped} kept unclipped (clip failed), ${allSea} wholly at sea dropped; ${holes.length} holes`);
+  console.log(`  urban clipped to the coast: ${clipped} extents, ${kept} wholly on land kept as drawn, ${unclipped} kept unclipped (clip failed), ${allSea} wholly at sea dropped; ${holes.length} holes`);
   if (outers.length < 100) die(`urban: only ${outers.length} extents survived the coastline clip.`);
   return { outers, holes };
 }
