@@ -806,7 +806,8 @@ public:
      *  saved result, or "" if it has never run. The HTTP endpoints live here because every platform serves them
      *  from the same place the config endpoints are served; the WORK lives in the daemon, which owns the radio
      *  it has to pause and the file it writes — the same split as setConfigHandlers, for the same reason. */
-    using BenchRunFn = std::function<std::string(bool force, std::string& err)>;   // -> JSON result
+    /** ★ V12 `query`: the request's query string (`wide=<hz>&radio=<serial>` asks for the WIDE BENCHMARK). */
+    using BenchRunFn = std::function<std::string(bool force, const std::string& query, std::string& err)>;   // -> JSON result
     using BenchGetFn = std::function<std::string()>;                               // -> JSON, or ""
     static void setBenchmarkHandlers(BenchRunFn run, BenchGetFn get);
     /** Has the owner finished browser setup? Distinct from "an admin password is set" — the
@@ -1071,6 +1072,12 @@ public:
     /** Take it back. False (with a reason) when something else now holds it — a normal outcome. */
     bool reacquireRadio(std::string& err);
     bool radioIsReleased() const;
+    /** ★★ V12 THE WIDE BENCHMARK'S USB BUS TEST (main.cpp, vibe_bench_profiles.h usbVerdict). The radio must be RELEASED:
+     *  it is taken back at `hz` — a runtime rate for this test only, never written to the config — left `settleSec` to
+     *  settle, the counters read, `measSec` streamed through the real intake and IQ buffer, the counters read again,
+     *  and the radio released again with its own rate put back. The caller takes it back (with its retries). */
+    struct UsbBenchCounters { double t = 0; unsigned long long samples = 0, usbEvents = 0, usbLost = 0, iqDrops = 0, iqLost = 0, gaps = 0; };
+    bool usbRateTest(double hz, double settleSec, double measSec, UsbBenchCounters& a, UsbBenchCounters& b, std::string& err);
 
     void setGain(int gainTenthDb);
     /** ★ The R820T's own IF filter, in Hz. 0 = librtlsdr's automatic choice (today's behaviour).

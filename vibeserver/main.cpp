@@ -1224,6 +1224,100 @@ static void vsApplyRateGate(bool locked) {
     g.lockedHz = l; g.fullHz = f; g.locked = locked;
 }
 
+/** ★★ THE RADIO BACK ON THE AIR after a benchmark (the quick one and the wide one alike) — see the note inside. */
+static void vsBenchBringBack(bool released) {
+    auto& shim = vibe::LocalSdrShim::instance();
+    if (released) {
+        /* ★★★ GIVE THE DEVICE TIME TO LET GO, AND KEEP ASKING. An immediate reacquire lost the race
+         *  with libusb releasing the interface — `usb_claim_interface error -6` (BUSY), and the
+         *  server then sat there SERVING WITH NO RADIO, which is the worst of both worlds: up,
+         *  listed, and deaf. Measured on the Pi 2, 2026-09-20.
+         *  ★★ And if it still will not come back, RESTART rather than stay deaf: systemd (or the
+         *     self-exec) rebuilds the radio from the saved configuration, which is proven. */
+        std::string err;
+        bool back = false;
+        for (int i = 0; i < 10 && !back; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(i == 0 ? 500 : 2000));
+            back = shim.reacquireRadio(err);
+        }
+        if (!back) {
+            std::fprintf(stderr, "VibeServer: the radio did not come back after the benchmark (%s) — "
+                                 "restarting to rebuild it\n", err.c_str());
+            vibe::benchProgress().running.store(false);
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (haveServiceManager()) { std::fflush(nullptr); _exit(0); }
+            reapRadios();
+#ifdef _WIN32
+            vibeproc::restartSelf();
+#else
+            const std::string me = selfExePath();
+            if (!me.empty()) execv(me.c_str(), g_argv);
+            execvp(g_argv[0], g_argv);
+#endif
+            _exit(0);
+        }
+    }
+}
+
+/** ★★★ V12 THE WIDE BENCHMARK'S RADIO (Stuart, 2026-11-18): the configured radio a request names — `radio=` its serial, its
+ *  public id, or its index in the config — and whether it is wide-capable. -1 = none such. */
+static int vsWideRadioIndex(const vsconfig::ServerConfig& sc, const std::string& want) {
+    for (size_t i = 0; i < sc.radios.size(); ++i) {
+        const auto& r = sc.radios[i];
+        if (!r.serial.empty() && (r.serial == want || vsconfig::radioId(r.serial) == want)) return (int)i;
+    }
+    if (!want.empty() && want.find_first_not_of("0123456789") == std::string::npos) {
+        const int i = std::atoi(want.c_str());
+        if (i >= 0 && (size_t)i < sc.radios.size()) return i;
+    }
+    // ★ A single-radio machine: the one radio, whatever was named.
+    return sc.radios.size() == 1 && want.empty() ? 0 : -1;
+}
+/** One query parameter's value ("" when absent). */
+static std::string vsQueryParam(const std::string& q, const std::string& key) {
+    size_t at = 0;
+    while (at < q.size()) {
+        const size_t amp = q.find('&', at);
+        const std::string kv = q.substr(at, amp == std::string::npos ? std::string::npos : amp - at);
+        const size_t eq = kv.find('=');
+        if (kv.substr(0, eq) == key) return eq == std::string::npos ? std::string() : kv.substr(eq + 1);
+        if (amp == std::string::npos) break;
+        at = amp + 1;
+    }
+    return "";
+}
+/** ★★ THE RATES THE WIDE BENCHMARK OFFERS FOR EACH WIDE RADIO — the driver's own list (benchhw::offlineRates: a USRP
+ *  measured as on USB 3) and the rates its gate may unlock (wideCandidates), the radio's current rate, its serial and
+ *  name. Served beside the saved result (GET), never saved: it describes the config, not a measurement. The setup page
+ *  merges in a running radio's own list (its /vibeserver/hardware). */
+static std::string vsWideOffer() {
+    vsconfig::ServerConfig sc;
+    { std::string e; if (g_configPath.empty() || !vsconfig::loadServer(g_configPath, sc, e)) sc = g_serverConfig; }
+    std::string j = "[";
+    bool first = true;
+    for (size_t i = 0; i < sc.radios.size(); ++i) {
+        const auto& r = sc.radios[i];
+        const std::string drv = r.driver == "rtlsdr" ? "rtl" : r.driver;
+        if (!vibe::benchprof::wideCapable(drv)) continue;
+#if !defined(VIBE_HAVE_USRP)
+        if (drv == "usrp") continue;
+#endif
+        std::vector<double> rates = vibe::benchhw::offlineRates(drv, drv == "usrp" ? 3 : 0);
+        for (double c : vibe::benchhw::wideCandidates(drv)) rates.push_back(c);
+        std::sort(rates.begin(), rates.end());
+        rates.erase(std::unique(rates.begin(), rates.end(), [](double a, double b) { return std::fabs(a - b) < 1; }), rates.end());
+        const double cur = (r.mode == vsconfig::Mode::LockedRange && r.lockRate > 0) ? r.lockRate : r.rate;
+        j += std::string(first ? "" : ",") + "{\"index\":" + std::to_string(i) + ",\"serial\":\"" + jsonEscape(r.serial)
+           + "\",\"driver\":\"" + jsonEscape(drv) + "\",\"label\":\"" + jsonEscape(r.label.empty() ? r.driver : r.label)
+           + "\",\"current\":" + std::to_string((long long)std::llround(cur)) + ",\"rates\":[";
+        for (size_t k = 0; k < rates.size(); ++k) j += (k ? "," : "") + std::to_string((long long)std::llround(rates[k]));
+        j += "]}";
+        first = false;
+    }
+    return j + "]";
+}
+
+
             std::atomic<bool> g_restartRequested{false};
             /** ★ Earliest moment the restart may happen, so the HTTP reply can drain first. */
             std::atomic<double> g_restartNotBefore{0.0};
@@ -2543,7 +2637,7 @@ int main(int argc, char** argv) {
      *     here. The reply goes out FIRST; the restart follows a moment later, as the settings save does.
      *  ★ The result is saved beside the config, so the admin page can show it without re-running. */
     LocalSdrShim::setBenchmarkHandlers(
-        [](bool force, std::string& err) -> std::string {
+        [](bool force, const std::string& query, std::string& err) -> std::string {
             /* ★★★ START IT AND ANSWER AT ONCE — NEVER MEASURE ON THE HTTP THREAD (2026-09-20). Two separate
              *  faults, one cause:
              *   1. `shim.stop()` closes the client sockets and JOINS the per-listener and radio threads. This
@@ -2557,6 +2651,28 @@ int main(int argc, char** argv) {
             auto& p = vibe::benchProgress();
             if (p.running.load()) { err = "a benchmark is already running"; return ""; }
             auto& shim = LocalSdrShim::instance();
+            /* ★★★ V12 THE WIDE BENCHMARK (wide=<hz>&radio=<serial | id | index>). It takes ONE radio to a rate for the USB
+             *  bus test, so it must run in the process that HOLDS that radio: the front door owns none, and a radio
+             *  process only its own. The setup page sends it to /r/<serial>/vibeserver/benchmark, which the door hands
+             *  to that radio's process (the same route as rtl-serial); anywhere else it is refused with the route. */
+            const double wideHz = std::atof(vsQueryParam(query, "wide").c_str());
+            int wideIdx = -1;
+            vsconfig::ServerConfig wsc;
+            if (wideHz > 0) {
+                { std::string e; if (g_configPath.empty() || !vsconfig::loadServer(g_configPath, wsc, e)) wsc = g_serverConfig; }
+                wideIdx = vsWideRadioIndex(wsc, vsQueryParam(query, "radio"));
+                if (wideIdx < 0) { err = "no such radio here"; return ""; }
+                const auto& r = wsc.radios[(size_t)wideIdx];
+                const std::string drv = r.driver == "rtlsdr" ? "rtl" : r.driver;
+                if (!vibe::benchprof::wideCapable(drv)) { err = "the wide benchmark is for a USRP, HackRF, SDRplay RSP or Airspy R2 / Mini"; return ""; }
+                if (!(wideHz >= 1e6 && wideHz <= 61.44e6)) { err = "that is not a rate this radio offers"; return ""; }
+                const bool mine = !g_amFrontDoor.load()
+                               && (g_myRadioSerial.empty() ? wsc.radios.size() == 1 : (g_myRadioSerial == r.serial));
+                if (!mine) {
+                    err = "that radio runs in its own process — ask /r/" + vsconfig::radioId(r.serial) + "/vibeserver/benchmark";
+                    return "";
+                }
+            }
             const int listeners = shim.listenerCount();
             if (listeners > 0 && !force) {
                 err = std::to_string(listeners) + (listeners == 1 ? " listener is" : " listeners are")
@@ -2567,6 +2683,75 @@ int main(int argc, char** argv) {
             p.running.store(true);
             p.step.store(0); p.steps.store(0);
             { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
+            if (wideHz > 0) {
+                const auto r = wsc.radios[(size_t)wideIdx];
+                std::thread([wideHz, r, wideIdx] {
+                    auto& shim = LocalSdrShim::instance();
+                    auto& p = vibe::benchProgress();
+                    p.steps.store(vibe::kWideCpuSteps + 2);
+                    const bool held = shim.isRunning() && !shim.radioIsReleased();
+                    const bool released = held && shim.releaseRadio();
+                    auto step = [](const std::string& l) { vibe::benchStep(l); };
+                    const std::string drv = r.driver == "rtlsdr" ? "rtl" : r.driver;
+                    const vibe::benchhw::Radio radio = vibe::benchhw::radioFor(drv, r.converterOffsetHz, r.converterInputLoHz,
+                                                                              r.converterInputHiHz, false, 0,
+                                                                              r.mode == vsconfig::Mode::LockedRange);
+                    const std::string label = r.label.empty() ? r.driver : r.label;
+                    std::string entry = vibe::runWideBenchmark(wideHz, radio, label, vsBenchLoad(), 6.0, step);
+                    /* ★★★ THE USB BUS TEST: the real radio at the chosen rate, through the server's real intake and IQ buffer
+                     *  — a few seconds to settle, then 20 s counted (vibe_bench_profiles.h usbVerdict). A runtime rate only:
+                     *  the config is never touched, and the radio goes back to its own rate below. */
+                    const double settle = 4.0, measure = 20.0;
+                    vibe::benchStep("USB bus @ " + vibe::benchhw::rateWords(wideHz) + ": settling");
+                    std::string usb;
+                    bool testHeld = false;
+                    if (released) {
+                        LocalSdrShim::UsbBenchCounters a, b;
+                        std::string uerr;
+                        // ★ The step label moves on once the radio is streaming — the test's own clock starts there.
+                        std::thread lab([&] { std::this_thread::sleep_for(std::chrono::milliseconds((long long)(settle * 1000) + 600));
+                                              vibe::benchStep("USB bus @ " + vibe::benchhw::rateWords(wideHz) + ": counting samples"); });
+                        const bool ran = shim.usbRateTest(wideHz, settle, measure, a, b, uerr);
+                        lab.join();
+                        if (ran) {
+                            auto cv = [](const LocalSdrShim::UsbBenchCounters& c) {
+                                vibe::benchprof::UsbCounters o; o.t = c.t; o.samples = c.samples; o.usbEvents = c.usbEvents;
+                                o.usbLost = c.usbLost; o.iqDrops = c.iqDrops; o.iqLost = c.iqLost; o.gaps = c.gaps; return o; };
+                            usb = vibe::benchprof::usbJson(vibe::benchprof::usbVerdict(cv(a), cv(b), wideHz), settle);
+                            testHeld = !shim.radioIsReleased();
+                        } else usb = "{\"ok\":false,\"notRun\":\"" + jsonEscape(uerr) + "\"}";
+                        if (!uerr.empty()) std::fprintf(stderr, "VibeServer: wide benchmark USB test: %s\n", uerr.c_str());
+                    } else {
+                        vibe::benchStep("");
+                        usb = "{\"ok\":false,\"notRun\":\"the radio was not running, so the USB bus could not be tested\"}";
+                    }
+                    entry = vibe::benchprof::jsonWithTop(entry, "usb", usb);
+                    const std::string key = r.serial.empty() ? "radio" + std::to_string(wideIdx) : r.serial;
+                    vsBenchSave(vibe::benchprof::benchWithWide(vsBenchLoad(), key, entry));
+                    if (testHeld) {
+                        // ★ It would not let go after the test, so it is still at the test rate: restart, which opens it
+                        //   from the config at its own rate (the same fallback as a failed take-back).
+                        std::fprintf(stderr, "VibeServer: the radio stayed at the wide benchmark's rate — restarting to put it back\n");
+                        vibe::benchProgress().running.store(false);
+                        std::this_thread::sleep_for(std::chrono::seconds(2));
+                        if (haveServiceManager()) { std::fflush(nullptr); _exit(0); }
+                        reapRadios();
+#ifdef _WIN32
+                        vibeproc::restartSelf();
+#else
+                        const std::string me = selfExePath();
+                        if (!me.empty()) execv(me.c_str(), g_argv);
+                        execvp(g_argv[0], g_argv);
+#endif
+                        _exit(0);
+                    }
+                    vsBenchBringBack(released);
+                    p.step.store(p.steps.load());
+                    { std::lock_guard<std::mutex> lk(p.m); p.label = "done"; }
+                    vibe::benchProgress().running.store(false);
+                }).detach();
+                return "{\"started\":true,\"wide\":true}";
+            }
             std::thread([] {
                 /* ★★★ RELEASE THE RADIO, DO NOT STOP THE SERVER (2026-09-20). shim.stop() takes the HTTP server
                  *  down with it, so the page had nothing left to ask for progress — it went silent for the whole
@@ -2588,43 +2773,19 @@ int main(int argc, char** argv) {
                                                          [&] { auto r = vibe::runDabRows(clip, 6.0);
                                                                for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
                                                                return r; }, 7, decoderClip, hw);
-                vsBenchSave(j);
+                // ★ V12: the QUICK run never erases a WIDE one — the saved "wide" block is carried across.
+                vsBenchSave(vibe::benchprof::benchKeepWide(j, vsBenchLoad()));
                 vsApplyRateGate(vibe::usrpcaps::rateGate().locked);   // ★ the reacquire below re-reads it
-                if (released) {
-                    /* ★★★ GIVE THE DEVICE TIME TO LET GO, AND KEEP ASKING. An immediate reacquire lost the race
-                     *  with libusb releasing the interface — `usb_claim_interface error -6` (BUSY), and the
-                     *  server then sat there SERVING WITH NO RADIO, which is the worst of both worlds: up,
-                     *  listed, and deaf. Measured on the Pi 2, 2026-09-20.
-                     *  ★★ And if it still will not come back, RESTART rather than stay deaf: systemd (or the
-                     *     self-exec) rebuilds the radio from the saved configuration, which is proven. */
-                    std::string err;
-                    bool back = false;
-                    for (int i = 0; i < 10 && !back; ++i) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(i == 0 ? 500 : 2000));
-                        back = shim.reacquireRadio(err);
-                    }
-                    if (!back) {
-                        std::fprintf(stderr, "VibeServer: the radio did not come back after the benchmark (%s) — "
-                                             "restarting to rebuild it\n", err.c_str());
-                        vibe::benchProgress().running.store(false);
-                        std::this_thread::sleep_for(std::chrono::seconds(2));
-                        if (haveServiceManager()) { std::fflush(nullptr); _exit(0); }
-                        reapRadios();
-#ifdef _WIN32
-                        vibeproc::restartSelf();
-#else
-                        const std::string me = selfExePath();
-                        if (!me.empty()) execv(me.c_str(), g_argv);
-                        execvp(g_argv[0], g_argv);
-#endif
-                        _exit(0);
-                    }
-                }
+                vsBenchBringBack(released);
                 vibe::benchProgress().running.store(false);
             }).detach();
             return "{\"started\":true}";
         },
-        []() -> std::string { return vsBenchLoad(); });
+        []() -> std::string {
+            /* ★ V12 the saved result, with the wide benchmark's offer beside it (never saved — see vsWideOffer). */
+            const std::string j = vsBenchLoad();
+            return vibe::benchprof::jsonWithTop(j.empty() ? std::string("{\"v\":0}") : j, "wideOffer", vsWideOffer());
+        });
 
     LocalSdrShim::setConfigHandlers(
         []() -> std::string {

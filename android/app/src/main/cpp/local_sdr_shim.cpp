@@ -3459,6 +3459,10 @@ static std::atomic<long long> g_iqDrops{0};
  *  The DAB decoder's samplesIn sits at the far end of the queue and the DSP loop, so a shortfall
  *  there could be the wire OR us, and we could not tell which. Counted in the callback itself. */
 static std::atomic<unsigned long long> g_usbSamples{0};
+/** ★★ V12 EVERY SAMPLE ANY RADIO'S LIBRARY HANDED THE IQ QUEUE (enqueueIq / Int16 / Float, before anything is dropped) —
+ *  g_usbSamples is the dongle's alone. What the wide benchmark's USB bus test sets against the nominal rate: librtlsdr
+ *  and libhackrf report no drops of their own, so fewer samples a second is the only sign a bus fell behind. */
+static std::atomic<unsigned long long> g_iqInSamples{0};
 // ★★★ A STALL IS A MAXIMUM, NOT AN AVERAGE — which is why the dsp-load figure next to the loop
 //     never showed this. It averages 200 blocks and writes to logcat; a 40 ms freeze inside a
 //     200-block window is invisible in the mean AND unreadable on a phone that filters the log.
@@ -26322,7 +26326,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ force=1 runs it even with listeners connected — the owner's call, and the page says what it costs.
             const bool force = reqLine.find("force=1") != std::string::npos;
             std::string err;
-            const std::string j = runFn(force, err);
+            // ★ V12 the query (wide=<hz>&radio=<serial>) — the daemon decides which benchmark and whether this process holds that radio.
+            const size_t q0 = reqLine.find('?'), q1 = reqLine.find(' ', q0 == std::string::npos ? 0 : q0);
+            const std::string query = q0 == std::string::npos ? std::string() : reqLine.substr(q0 + 1, q1 == std::string::npos ? std::string::npos : q1 - q0 - 1);
+            const std::string j = runFn(force, query, err);
             if (j.empty()) { reply(409, "Conflict", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
             reply(200, "OK", j);
             return;
@@ -31275,6 +31282,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     void enqueueIq(const uint8_t* buf, int sampCount, bool blockIfFull = false) {
         if (sampCount <= 0) return;
+        g_iqInSamples.fetch_add((unsigned long long)sampCount, std::memory_order_relaxed);
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v = takeIqBuf((size_t)sampCount);   // ★ recycled — see iqFree_
         // ★★★ ADC OVERLOAD, MEASURED WHILE WE ARE ALREADY HERE. See AdcStats: this is the RTL's
@@ -31437,6 +31445,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull, bool gapBefore = false,
                         bool gainStep = false) {
         if (sampCount <= 0) return;
+        g_iqInSamples.fetch_add((unsigned long long)sampCount, std::memory_order_relaxed);
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v = takeIqBuf((size_t)sampCount);   // ★ recycled — see iqFree_
         constexpr float kInv = 1.0f / 32768.0f;
@@ -31468,6 +31477,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** `gapBefore`: the SOURCE lost samples immediately before this buffer — see IqBuf. */
     void enqueueIqFloat(const float* interleaved, int sampCount, bool blockIfFull, bool gapBefore = false) {
         if (sampCount <= 0) return;
+        g_iqInSamples.fetch_add((unsigned long long)sampCount, std::memory_order_relaxed);
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v = takeIqBuf((size_t)sampCount);   // ★ recycled — see iqFree_
         std::memcpy(v.data(), interleaved, (size_t)sampCount * sizeof(cf32));
@@ -46437,6 +46447,42 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     else          impl->launchCapture();
     LOGI("radio REACQUIRED");
     impl->notifyDeviceState();
+    return true;
+}
+
+/* ★★ V12 THE WIDE BENCHMARK'S USB BUS TEST — see the header. ★ The rate is the Impl's own running figure, which every open
+ *  reads (reacquireRadio): set while the radio is released (no DSP running to read it), and put back before returning
+ *  whichever way it goes, so the caller's take-back opens it at its configured rate. Nothing here touches the config. */
+bool LocalSdrShim::usbRateTest(double hz, double settleSec, double measSec, UsbBenchCounters& a, UsbBenchCounters& b, std::string& err) {
+    Impl* const impl = p;
+    if (!impl) { err = "the server is not running"; return false; }
+    if (!impl->radioReleased.load()) { err = "the radio is not off the air"; return false; }
+    if (!(hz > 0)) { err = "no rate"; return false; }
+    const double own = impl->sampleRate;
+    impl->sampleRate = hz;
+    bool back = false;
+    for (int i = 0; i < 5 && !back; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(i == 0 ? 500 : 2000));
+        back = reacquireRadio(err);
+    }
+    if (!back) { impl->sampleRate = own; err = "the radio would not open at that rate (" + err + ")"; return false; }
+    auto read = [impl](UsbBenchCounters& c) {
+        c.t = Impl::nowSecs();
+        c.samples = g_iqInSamples.load(std::memory_order_relaxed);
+        c.usbEvents = g_usbDropEvents.load(std::memory_order_relaxed);
+        c.usbLost = g_usbDropSamples.load(std::memory_order_relaxed);
+        c.iqDrops = (unsigned long long)std::max(0LL, g_iqDrops.load(std::memory_order_relaxed));
+        c.iqLost = impl->iqDroppedSamples.load(std::memory_order_relaxed);
+        c.gaps = g_iqGaps.load(std::memory_order_relaxed);
+    };
+    std::this_thread::sleep_for(std::chrono::milliseconds((long long)(std::max(0.0, settleSec) * 1000)));
+    read(a);
+    std::this_thread::sleep_for(std::chrono::milliseconds((long long)(std::max(0.5, measSec) * 1000)));
+    read(b);
+    // ★ Measured either way. A radio that will not let go stays at the test rate and SAYS so (the rate is left true):
+    //   the caller sees it still held and restarts the process, which opens it from the config.
+    if (!releaseRadio()) { err = "the radio could not be let go after the test"; return true; }
+    impl->sampleRate = own;
     return true;
 }
 
