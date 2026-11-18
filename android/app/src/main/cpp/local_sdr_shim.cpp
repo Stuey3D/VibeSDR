@@ -24288,7 +24288,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  something that is news about twice an hour. */
     /** Safe to call during teardown — broadcastUsers() re-reads the lists, so a socket that has
      *  already been removed is simply not in them. */
-    void broadcastUsersSafe() { broadcastUsers(); }
+    /* ★★★ V12 beta83 A LEAVE MOVES THE BANNER TOO (Stuart, 2026-11-18, the Pi 2: four test listeners gone for 50 minutes
+     *  and his app still read "ASK TO TUNE · 5/5"; "it looked like another user needed to connect to cause it to refresh").
+     *  The banner reads the DIAL's `listeners`, and the dial went out on a JOIN (sendFullState) but never on a leave — only
+     *  `users`, which the banners do not read. Both leave paths (a socket's close, a held session ending) come through here,
+     *  so the dial follows them: the server sends the full state, the clients have no vote (the shared-dial contract). */
+    void broadcastUsersSafe() { broadcastUsers(); sendDialState(); }
 
     void broadcastUsers() {
         const int n = specListenerCount();

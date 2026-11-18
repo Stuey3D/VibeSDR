@@ -717,6 +717,10 @@ if node --no-warnings scripts/test_span_stamp.ts; then pass=$((pass+1)); else fa
 # ★★ V12 beta83 DAB own stations: the banner names what is shared (ASK TO TUNE / EXIT DAB) and alternates "ANY STATION IN THE
 #    LIST IS FREE TO CHOOSE"; the station list says every user can choose their own — app and web.
 if node --no-warnings scripts/test_dab_free_banner.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 beta83 a LEAVE sends the dial (its listener count) — the banners read it; it went out only on a join (Stuart: the Pi 2
+#    read 5/5 for 50 minutes after four listeners left). A held place still counts. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dial-leave.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
