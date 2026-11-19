@@ -14869,7 +14869,10 @@ function packetSegRender() {
       try { localStorage.setItem(PACKET_MODE_KEY, c.id); } catch {}
       for (const x of Array.from(host.children)) x.classList.toggle('on', (x as HTMLElement).dataset.aprsbaud === c.id);
       aprsHintSync();
-      if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; renderAprs(); reattachIf('aprs'); }
+      if (activeDec === 'aprs') {
+        aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; renderAprs(); reattachIf('aprs');
+        $('decTitle').textContent = packetMode === '300' ? 'APRS · HF 300' : packetMode === '9600' ? 'APRS · 9600' : 'APRS';   // ★ showDecBox's words
+      }
     };
     host.appendChild(b);
   }
