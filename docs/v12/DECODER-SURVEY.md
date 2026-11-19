@@ -175,6 +175,9 @@ the NAVTEX channels.
   **Skip** beyond identification.
 - **PACTOR II/III/IV:** proprietary (SCS), compressed. Identify only.
 - **VARA (HF/FM/SAT):** closed, proprietary (EA5HVK). Identify only; never attempt a decode.
+  ✗✗ **NEVER, under any circumstance (Stuart, 2026-11-19):** no VARA decoder of any kind — not linked, not clean-room, not
+  "receive only". Its author sells the modem and enforces with cease-and-desist letters; an independent open-source receiver
+  had to shut down. At most a signal tag may say "VARA (proprietary — not decoded)".
 - **WINMOR:** dead (Winlink retired it). Skip.
 - **ARDOP:** spec published (ardop.org); **ardopcf is MIT** ✓. 4FSK/PSK/QAM frames with RS. Receiving one side of
   someone else's ARQ session shows little; ARDOP FEC mode is broadcast-style. Low activity. **Later, low value.**

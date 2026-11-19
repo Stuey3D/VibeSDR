@@ -29,6 +29,7 @@
 //   the results; vibe_setup_page.h benchApplyDefaults and ServerModeScreen.tsx applyBench apply that list.
 #pragma once
 #include "vibe_decoder_host.h"
+#include "vibe_g3ruh.h"        // ★ V12 9600 packet: the dec_aprs9600 row's transmitter
 #include "decoders/digi_mode.h"
 #include "decoders/digimodes/wspr_decoder.h"
 #include "decoders/digimodes/q65_decoder.h"
@@ -524,6 +525,38 @@ inline std::vector<float> selcalCall(const char* code /* "ABCD" */) {
     a.insert(a.end(), 48000, 0.f);
     return a;
 }
+/** ★ V12 9600 packet: three bursts (plain AX.25, FX.25 16, IL2P) from our own G3RUH transmitter (vibe_g3ruh.h), as
+ *  channel IQ at `fs` with white noise at `ebn0` dB, 50 ms of noise between them. */
+inline std::vector<std::complex<float>> pkt9600Clip(double fs, double ebn0) {
+    std::vector<std::complex<float>> out;
+    std::mt19937 g(96); std::normal_distribution<float> d(0.f, 1.f);
+    const float sd = float(std::sqrt(fs / (9600.0 * std::pow(10.0, ebn0 / 10)) / 2));
+    auto frame = [](const std::string& src, const std::string& info) {
+        std::vector<uint8_t> b;
+        auto addr = [&](const std::string& c, int ssid, bool last) { for (int i = 0; i < 6; ++i) b.push_back(uint8_t((i < (int)c.size() ? c[i] : ' ') << 1)); b.push_back(uint8_t(0x60 | (ssid << 1) | (last ? 1 : 0))); };
+        addr("APRS", 0, false); addr(src, 0, true); b.push_back(0x03); b.push_back(0xF0);
+        b.insert(b.end(), info.begin(), info.end());
+        return b;
+    };
+    vibepkt::Scrambler scr; int lvl = 0;
+    for (int k = 0; k < 3; ++k) {
+        const auto f = frame(k == 0 ? "M0ABC" : k == 1 ? "G4FXA" : "G4ILP", "!5130.00N/00007.00W>VibeSDR 9600 benchmark");
+        std::vector<int> line;
+        if (k == 2) line = vibeil2p::lineBits(vibeil2p::encode(f, true, true), 24);
+        else {
+            std::vector<int> data;
+            for (int i = 0; i < 24; ++i) vibehdlc::flagBits(data);
+            if (k == 0) { std::vector<uint8_t> h = f; vibehdlc::appendFcs(h); vibehdlc::stuffBits(h, data); vibehdlc::flagBits(data); }
+            else { auto b = vibefx25::encodeBits(f, 16, 1, 1); data.insert(data.end(), b.begin(), b.end()); }
+            for (int i = 0; i < 4; ++i) vibehdlc::flagBits(data);
+            line = vibeg3ruh::lineFromData(data, scr, lvl);
+        }
+        const auto iq = vibeg3ruh::fmIq(vibeg3ruh::baseband(line, fs, 9600), fs, 3000);
+        for (size_t i = 0; i < size_t(fs * 0.05); ++i) out.push_back({ sd * d(g), sd * d(g) });
+        for (const auto& v : iq) out.push_back(v + std::complex<float>(sd * d(g), sd * d(g)));
+    }
+    return out;
+}
 /** APRS: an AX.25 UI frame, HDLC (flags, stuffing, FCS), NRZI, Bell 202 AFSK 1200 Bd at 48 kHz. */
 inline std::vector<float> aprsPacket(const std::string& src, int ssid, const std::string& info) {
     std::vector<uint8_t> b;
@@ -768,6 +801,8 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_dsc",      { "dsc",    true,  true  } }, { "dec_same",     { "same",   true,  true  } },
         { "dec_selcal",   { "selcal", true,  true  } }, { "dec_mfsk",     { "mfsk",   true,  true  } },
         { "dec_hell",     { "hell",   true,  true  } }, { "dec_aprs",     { "aprs",   true,  true  } },
+        // ★ V12 9600 packet + FX.25 + IL2P (AUTO): inside the APRS / packet switch, a decoder slot like it
+        { "dec_aprs9600", { "aprs",   false, true  } },
         { "dec_paging",   { "",       false, true  } },   // ★ the phone's own app on its own radio: no owner switch
         { "dec_ndb",      { "ndb",    true,  false } }, { "dec_ais",      { "ais",    true,  false } },
         // ★ V12 aviation: VDL2 (12 channels, the heavier band) sets the datalink mode's default; ACARS is shown beside it
@@ -1030,6 +1065,33 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         a.insert(a.end(), b.begin(), b.end());
         addNoise(a, 0.05f, 7);
         return hostAudioRow("dec_aprs", "Decoder: APRS (1200 Bd)", "aprs", attach + "\"extension_name\":\"aprs\",\"baud_rate\":1200}", a, Count::Events);
+    });
+    /* ★★ V12 9600 PACKET (docs/v12/AX25-9600-FX25-IL2P.md) — the packet decoder in AUTO (1200 on the audio AND 9600 G3RUH
+     *  on the channel IQ, FX.25 and IL2P on both), fed 9600 bursts from our own transmitter (plain AX.25, FX.25 and IL2P
+     *  in turn) at 16 dB Eb/N0 as 48 kS/s channel IQ, in real time. The row's proof that it decodes: frames counted. */
+    run("dec_aprs9600", "Decoder: packet 9600 + FX.25 + IL2P", [&] {
+        Row r; r.id = "dec_aprs9600"; r.label = "Decoder: packet AUTO (1200 + 9600, FX.25, IL2P)";
+        auto peer = std::make_shared<CountPeer>(); peer->jsonKey = "\"type\":\"aprs_frame\"";
+        DecoderHost::Env env; env.dialHz = [] { return 435.0e6; };
+        DecoderHost h(env, "bench");
+        h.addPeer(peer);
+        if (h.start("aprs", attach + "\"extension_name\":\"aprs\",\"baud_rate\":1200,\"packet\":\"auto\"}") != DecoderHost::Start::Ok) return r;
+        const std::vector<std::complex<float>> iq = pkt9600Clip(48000.0, 16.0);
+        std::vector<float> silence(480, 0.f);
+        const double c0 = processCpu(), w0 = wallNow(); double fedSec = 0; size_t pos = 0;
+        while (fedSec < kRowMaxSec && (fedSec < kRowMinSec || wallNow() - w0 < kRowWallSec)) {
+            const size_t n = std::min<size_t>(480, iq.size() - pos);
+            h.feedChannelIq(iq.data() + pos, (int)n, 48000);
+            h.feed(silence.data(), (int)n);   // ★ the 1200 half reads the listener's audio (silent here) — its cost counts too
+            pos = (pos + n) % iq.size(); fedSec += n / 48000.0;
+            const double ahead = fedSec - (wallNow() - w0);
+            if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+        }
+        settleCpu(5.0);
+        r.pct = 100.0 * (processCpu() - c0) / fedSec;
+        h.stop();
+        r.decoded = (int)peer->json.load();   // ★ frames in the frame log (each burst once)
+        return r;
     });
 #if defined(VIBE_PAGING)
     /* ★★ PAGING — LOCAL HARDWARE ONLY (the Android app; the R36S handheld), so the row exists only where the decoder is

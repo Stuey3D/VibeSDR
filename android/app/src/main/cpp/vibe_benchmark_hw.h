@@ -141,6 +141,7 @@ enum class Need {
     Sondes,      // ★ V12 radiosondes: a 2 MHz band of 400–406 MHz, not an HF+ / an Icom
     M17,         // ★ V12 M17 digital voice: 2 m or 70 cm on any SDR (the HF+ on 2 m), never an Icom (vibe_radio_caps.h)
     Lrpt,        // ★ V12 METEOR LRPT: 137.1 or 137.9 MHz (an IQ slice — never an Icom)
+    Pkt9600,     // ★ V12 9600 packet (G3RUH on the channel IQ): 2 m or 70 cm on any SDR, never an Icom (local_sdr_shim pkt9600)
     Dvsig,       // ★ V12 DV signalling: VHF 136–174 or UHF 400–470 MHz on any SDR, never an Icom (vibe_radio_caps.h)
 };
 
@@ -218,6 +219,11 @@ inline Gate gateNeed(const Hw& hw, Need n) {
             if (!any([](const Radio& r) { return r.driver != "icom" && (reaches(r, 137.038e6, 137.162e6) || reaches(r, 137.838e6, 137.962e6)); }))
                 return no("no radio here reaches the METEOR satellites (137.1 / 137.9 MHz)");
             break;
+        case Need::Pkt9600:
+            if (!any([](const Radio& r) { return r.driver != "icom"
+                                                 && (touches(r, 144e6, 148e6) || touches(r, 420e6, 450e6)); }))
+                return no("no radio here reaches 9600 packet (2 m / 70 cm)");
+            break;
         case Need::Dvsig:
             if (!any([](const Radio& r) { return r.driver != "icom" && (touches(r, 136e6, 174e6) || touches(r, 400e6, 470e6)); }))
                 return no("no radio here reaches DMR / D-STAR / YSF (VHF 136â" "174 or UHF 400â" "470 MHz)");
@@ -250,6 +256,7 @@ inline Need needFor(const std::string& id) {
     if (id == "dec_time") return Need::TimeSig;
     if (id == "dec_same") return Need::Same;
     if (id == "dec_aprs") return Need::Aprs;
+    if (id == "dec_aprs9600") return Need::Pkt9600;
     if (id == "dec_paging") return Need::Paging;
     if (id == "dec_ism" || id == "dec_wmbus" || id == "dec_lora" || id == "dec_lora_all") return Need::Ism;
     if (id == "dec_ft8" || id == "dec_ft8band" || is("spot_")) return Need::Spots;

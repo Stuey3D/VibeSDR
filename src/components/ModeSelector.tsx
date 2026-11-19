@@ -49,6 +49,7 @@ import { HELL_HINT } from '../services/feldHell';   // ★ V12 FELD HELL
 import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
 import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, type GroupedMode } from '../services/autoModes';   // ★★★ AUTO's fallback rows
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
+import { packetChoices, packetFecShown, packetHint, packetTune, type PacketCaps, type PacketMode } from '../services/packet';   // ★ V12 9600 / FX.25 / IL2P
 import { FREEDV_HINT, FREEDV_SIDEBANDS, freedvSidebandLabel, type FreeDvChoice, type FreeDvSideband, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs';
@@ -516,6 +517,9 @@ interface ModeSelectorProps {
      *  PACKET VHF 1200 / HF 300, a TUNE key (the region's channel `aprsHz` in NFM, or 10.1476 USB) and the hint. */
     aprsAvail?: boolean; aprsBaud?: AprsBaud; aprsHz?: number;
     onAprsBaud?: (b: AprsBaud) => void; onAprsTune?: () => void;
+    /** ★ V12 the packet decoder's choices (packet.ts): drawn from the server's capability; a greyed one says why. */
+    packetCaps?: PacketCaps; packetMode?: PacketMode; pktFx25?: boolean; pktIl2p?: boolean;
+    onPacketMode?: (m: PacketMode) => void; onPacketFec?: (fx25: boolean, il2p: boolean) => void;
     /** ★★ V12 THE SCANNER — a decoder-box item (docs/v12/SCANNER.md). Absent (not greyed) where scanPolicy says no: FM-DX,
      *  a VibeServer with one shared dial. `onlyScanner`: a backend with no client decoders of ours (OpenWebRX — its own
      *  decoders are demodulators in this sheet) draws the row with the scanner alone. */
@@ -1789,8 +1793,12 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           <Text style={capText}>{DSC_HINT}</Text>
         </>);
       /* ★ V12 APRS: the web's PACKET row, its TUNE key and hint (tracks.ts aprsTuneFor / aprsHintText). */
-      case 'aprs':
-        return (<>
+      case 'aprs': {
+        // ★★ V12 (docs/v12/AX25-9600-FX25-IL2P.md): AUTO · VHF 1200 · 9600 · HF 300 from the capability — the web's
+        //    packetSegRender. A greyed choice is drawn with "·" round its label and its press says why (never hidden,
+        //    never live). FX.25 / IL2P sit under 1200 and 9600; 9600 has no TUNE (no one channel). An older server: the
+        //    two old choices, exactly as before.
+        if (!dc.packetCaps || !dc.onPacketMode) return (<>
           <SubLabel label="PACKET" />
           <OptRow>
             <SegBtn label="VHF 1200" active={(dc.aprsBaud ?? 1200) === 1200} onPress={() => dc.onAprsBaud?.(1200)} />
@@ -1801,6 +1809,30 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </OptRow>
           <Text style={capText}>{aprsHintText(dc.aprsBaud ?? 1200, dc.aprsHz ?? 144.8e6)}</Text>
         </>);
+        const pm = dc.packetMode ?? '1200';
+        const tune = packetTune(pm, dc.aprsHz ?? 144.8e6);
+        const fx = dc.pktFx25 !== false, il = dc.pktIl2p !== false;
+        return (<>
+          <SubLabel label="PACKET" />
+          <OptRow>{packetChoices(dc.packetCaps).map((c) => (
+            <SegBtn key={c.id} label={c.why ? `\u00b7 ${c.label} \u00b7` : c.label} active={pm === c.id}
+                    onPress={() => (c.why ? dc.onDecWhy?.(c.label, c.why) : dc.onPacketMode?.(c.id))} />
+          ))}</OptRow>
+          {packetFecShown(dc.packetCaps, pm) && (<>
+            <SubLabel label="FEC" />
+            <OptRow>
+              <SegBtn label="FX.25" active={fx} onPress={() => dc.onPacketFec?.(!fx, il)} />
+              <SegBtn label="IL2P" active={il} onPress={() => dc.onPacketFec?.(fx, !il)} />
+            </OptRow>
+          </>)}
+          {!!tune && (
+            <OptRow>
+              <SegBtn label={tune.label} active={false} onPress={() => dc.onAprsTune?.()} />
+            </OptRow>
+          )}
+          <Text style={capText}>{packetHint(pm, dc.aprsHz ?? 144.8e6)}</Text>
+        </>);
+      }
       /* ★ V12 EAS / SAME: no settings — the hint only. */
       case 'same':
         return <Text style={capText}>{SAME_HINT}</Text>;

@@ -13,6 +13,7 @@ import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBan
 import { parseNdbCapability } from './ndb';
 import { parsePagingModes, type PagingMode } from './paging';   // ★ V12 PAGING (Android local hardware only)
 import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';
+import { parsePacketCaps, type PacketCaps } from './packet';   // ★ V12 9600 / FX.25 / IL2P
 import { parseAvBands, type AvBand } from './aviation';   // ★ V12 aviation   // ★ V12 AIS / APRS
 import { parseSondeBands, type SondeBand } from './sondes';   // ★ V12 radiosondes
 import { AM_SYNC_LABEL } from './amSync.ts';
@@ -522,6 +523,8 @@ export interface ServerOccupancy {
   ais?: AisCap;
   /** ★ V12 APRS: the server's own packet decoder (`on`), and the region's VHF channel. */
   aprs?: { on: boolean; hz: number };
+  /** ★ V12 the packet decoder's options here: FX.25 + IL2P switches, 9600 (live / greyed with why / absent). */
+  packet?: PacketCaps;
   /** ★★★ V12 DECODER REACH (vibe_decoder_reach.h): fixed-frequency decoders this radio CANNOT TUNE — id → the server's
    *  reason (`<id>Why`). Such a key is drawn greyed with that reason, never hidden, never live. Empty on an older server. */
   decWhy?: Record<string, string>;
@@ -627,6 +630,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       ndb:       parseNdbCapability(j),   // ★ V12 NDB — absent where this radio reaches no LF
       ais:       parseAisCapability(j),
       aprs:      parseAprsCapability(j),
+      packet:    parsePacketCaps(j),
       decWhy:    parseDecoderReach(j),
     };
   } catch { return null; }

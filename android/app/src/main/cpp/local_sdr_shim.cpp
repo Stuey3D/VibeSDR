@@ -10343,7 +10343,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if ((c->toneWant || !c->toneSent.empty()) && c->owner) c->owner->toneFeedClient(c, x, n, rateHz);
         // ★ V12 PAGING (Android local hardware only): one relaxed load unless a paging receiver runs in this process
         //   (★ VOR / ILS and 406 MHz beacons are fed from the listener's SLICE instead — feedOneClient)
-        if (c->owner && DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
+        // ★ V12 9600 PACKET (any build, any server): one more relaxed load (docs/v12/AX25-9600-FX25-IL2P.md)
+        if (c->owner && ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
+                         || DecoderHost::packetIqRunning().load(std::memory_order_relaxed) > 0))
             c->owner->decoders_.feedChannelIqSession(c->session, x, n, rateHz);
     }
     /** ★ The {"type":"tone"} message — the label is our own fixed text ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), no
@@ -31027,7 +31029,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ V12 tone ID on the shared dial: one relaxed load unless the dial is on NFM (or a label is left to clear)
         if (p->toneSharedWant.load(std::memory_order_relaxed) || p->toneShared) p->toneFeedShared(x, n, rateHz);
         // ★ V12 PAGING on the one pipeline (the phone's own radio, one listener): one relaxed load unless paging runs
-        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed) && !p->perClientDsp())
+        if (!p->perClientDsp() && ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
+                                   || DecoderHost::packetIqRunning().load(std::memory_order_relaxed) > 0))
             p->decoders_.feedChannelIqShared(x, n, rateHz);
         // ★★ V12 VOR / ILS, 406 MHz beacons on the one pipeline: its channel (VOR widens it to 25 kHz while it runs —
         //    navWideSync); one relaxed load when none runs
@@ -42309,6 +42312,14 @@ static std::string vsTunableJson() {
         j += "]";
     }
     j += vsDecoderCapJson("aprs", reach);
+    /* ★★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): `aprsFec` = this server's packet decoder also reads FX.25 and IL2P
+     *  (its FX.25 / IL2P switches, under the decoder); `pkt9600` = its 9600 option (G3RUH, on the channel IQ) live, or
+     *  false with `pkt9600Why` (greyed with the reason). NOT AT ALL on an Icom — its FM audio is demodulated in the radio
+     *  and 9600 needs the channel IQ (AGENTS.md: no control that cannot work here). Nothing when APRS is switched off. */
+    if (!vsModeBlocked("aprs")) {
+        j += ",\"aprsFec\":true";
+        if (!g_icomOn.load()) j += vsDecoderCapJson("pkt9600", reach);
+    }
     { char f[64]; std::snprintf(f, sizeof f, ",\"aprsHz\":%.0f", vibeaprs::regionalHz(g_bgLat.load(), g_bgLon.load())); j += f; }
     /* ★★ V12 DIGITAL SPOTS (2026-10-26): the modes this server decodes (the clients' list filter, Mode column and map
      *  legend come from here, never a list of their own), and BAND mode — `spotsBand` offered or false with `spotsBandWhy`,

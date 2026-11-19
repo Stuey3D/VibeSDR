@@ -20,6 +20,7 @@
 //   control and the APRS PID — about one garbage frame in three million could pass that.
 #pragma once
 #include "vibe_hdlc.h"
+#include "vibe_pktlink.h"   // ★ V12 FX.25 / IL2P on the same slicers (docs/v12/AX25-9600-FX25-IL2P.md)
 #include "vibedsp/vibedsp.h"
 #include "vibedsp/simd_internal.h"
 
@@ -84,6 +85,51 @@ inline bool parseAx25(const std::vector<uint8_t>& b, Ax25& f) {
     f.info.assign(b.begin() + long(p) + 2, b.end());
     return !f.info.empty();
 }
+/** ★ V12 (docs/v12/AX25-9600-FX25-IL2P.md): ANY AX.25 frame — I, S, U, UI with any PID — for the frame log (cubesat
+ *  telemetry, connected-mode traffic, NET/ROM). The addresses are checked as strictly as parseAx25; `hasPid` says
+ *  whether the frame carries a PID (I and UI frames); `info` is what follows (empty for S frames and most U frames). */
+inline bool parseAx25Frame(const std::vector<uint8_t>& b, Ax25& f, bool& hasPid) {
+    if (b.size() < 15) return false;
+    size_t p = 0;
+    std::vector<Addr> as;
+    for (;;) {
+        if (p + 7 > b.size() || as.size() >= 10) return false;
+        Addr a;
+        // ★ a satellite's "callsign" may hold a space inside it ("TRON 4" — a SatNOGS observation, 2026-11-19): every
+        //   character is still a capital, digit or space, the first is not a space, trailing spaces are padding
+        for (int i = 0; i < 6; ++i) {
+            if (!addrByteOk(b[p + size_t(i)])) return false;
+            const char c = char(b[p + size_t(i)] >> 1);
+            if (i == 0 && c == ' ') return false;
+            a.call += c;
+        }
+        while (!a.call.empty() && a.call.back() == ' ') a.call.pop_back();
+        const uint8_t s = b[p + 6];
+        a.ssid = (s >> 1) & 0x0F;
+        a.h = (s & 0x80) != 0;
+        as.push_back(a);
+        p += 7;
+        if (s & 1) break;
+    }
+    if (as.size() < 2 || p + 1 > b.size()) return false;
+    f.dest = as[0]; f.src = as[1];
+    f.digis.assign(as.begin() + 2, as.end());
+    f.control = b[p];
+    const bool iFrame = (f.control & 1) == 0, uiFrame = (f.control & ~0x10) == 0x03;
+    hasPid = iFrame || uiFrame;
+    if (hasPid) { if (p + 2 > b.size()) return false; f.pid = b[p + 1]; f.info.assign(b.begin() + long(p) + 2, b.end()); }
+    else { f.pid = 0; f.info.assign(b.begin() + long(p) + 1, b.end()); }
+    return true;
+}
+inline bool ax25FrameOk(const std::vector<uint8_t>& b) { Ax25 f; bool hp = false; return parseAx25Frame(b, f, hp); }
+/** The control field in words, for the log: "UI", "I 3/5", "RR 2", "SABM", … (AX.25 v2.2 §4.3). */
+inline std::string controlName(uint8_t c) {
+    if ((c & 1) == 0) return "I " + std::to_string((c >> 1) & 7) + "/" + std::to_string(c >> 5);
+    if ((c & 3) == 1) { static const char* n[4] = { "RR", "RNR", "REJ", "SREJ" }; return std::string(n[(c >> 2) & 3]) + " " + std::to_string(c >> 5); }
+    switch (c & ~0x10) { case 0x03: return "UI"; case 0x2F: return "SABM"; case 0x6F: return "SABME"; case 0x43: return "DISC"; case 0x0F: return "DM";
+                         case 0x63: return "UA"; case 0x87: return "FRMR"; case 0xAF: return "XID"; case 0xE3: return "TEST"; }
+    return "U";
+}
 /** TNC2 monitor format: SRC>DEST,DIGI1*,DIGI2:info — the station card's "raw" line. */
 inline std::string tnc2(const Ax25& f) {
     std::string s = addrText(f.src) + ">" + addrText(f.dest);
@@ -96,7 +142,8 @@ inline std::string tnc2(const Ax25& f) {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE DEMODULATOR
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-struct Frame { std::vector<uint8_t> bytes; int repaired = 0; float quality = 0; int slicer = 0; };
+struct Frame { std::vector<uint8_t> bytes; int repaired = 0; float quality = 0; int slicer = 0;
+               int fec = 0; int fixed = 0; bool crc = false; };   ///< ★ V12: fec = vibepkt::Fec (AX.25 / FX.25 / IL2P)
 
 inline bool aprsFrameOk(const std::vector<uint8_t>& b) { Ax25 f; return parseAx25(b, f); }
 
@@ -104,7 +151,8 @@ class AfskDemod {
 public:
     /** `fsIn` the audio rate (48000 from the decoder host); `baud` 1200 (Bell 202) or 300 (HF). `single`: one slicer
      *  only (balanced, on tune) — the baseline test-aprs measures the extra slicers against. */
-    AfskDemod(double fsIn, int baud, bool single = false) : baud_(baud) {
+    /** ★ V12 `fx25` / `il2p`: also run those receivers on every slicer's bits (docs/v12/AX25-9600-FX25-IL2P.md). */
+    AfskDemod(double fsIn, int baud, bool single = false, bool fx25 = false, bool il2p = false) : baud_(baud) {
         decim_ = std::max(1, int(std::lround(fsIn / 12000.0)));
         fs_ = fsIn / decim_;
         const double hi = baud == 300 ? 2400 : 2900;
@@ -129,8 +177,12 @@ public:
                 s.clk.reset(new vibehdlc::BitClock(fs_, baud, 0));
                 vibehdlc::Deframer::Options o;
                 o.minBytes = 18; o.maxBytes = 340;
-                o.repairMax = 8; o.validate = aprsFrameOk; o.validateClean = true;
+                // ★ V12: a REPAIRED frame must still be APRS (the old rule, three-in-a-million); a CLEAN one need only be
+                //   any well-formed AX.25 frame (offer_ checks) — cubesat telemetry and other traffic reach the frame log.
+                o.repairMax = 8; o.validate = aprsFrameOk; o.validateClean = false;
                 s.df.reset(new vibehdlc::Deframer(o));
+                if (fx25) s.fx.reset(new vibefx25::Rx());
+                if (il2p) s.il.reset(new vibeil2p::Rx());
                 sl_.push_back(std::move(s));
             }
         peakA_ = float(1.0 - std::exp(-1.0 / (fs_ / baud * 40)));
@@ -151,6 +203,7 @@ public:
         }
     }
     uint64_t repaired() const { uint64_t r = 0; for (auto& s : sl_) r += s.df->framesRepaired(); return r; }
+    uint64_t fecDupes() const { return fecDupes_; }
 
 private:
     /** One tone's correlator over the last L samples: Σ x·e^{−jωn}, kept as a running sum of a ring of products. */
@@ -171,7 +224,8 @@ private:
         }
     };
     struct Pair { Tone m, s; float mN = 0, sN = 0; };
-    struct Slicer { int pair = 0; float gain = 1; std::unique_ptr<vibehdlc::BitClock> clk; std::unique_ptr<vibehdlc::Deframer> df; };
+    struct Slicer { int pair = 0; float gain = 1; std::unique_ptr<vibehdlc::BitClock> clk; std::unique_ptr<vibehdlc::Deframer> df;
+                    std::unique_ptr<vibefx25::Rx> fx; std::unique_ptr<vibeil2p::Rx> il; int prev = 0; };
 
     template <class Out> void sample_(float y, Out& out) {
         for (auto& p : pairs_) {
@@ -185,24 +239,45 @@ private:
             Slicer& s = sl_[k];
             const Pair& p = pairs_[size_t(s.pair)];
             const float d = p.mN - s.gain * p.sN;
-            s.clk->push(d, s.df->inFrame() ? 0.75f : 0.45f, [&](float lvl) {
-                s.df->push(lvl, [&](const vibehdlc::Frame& fr) { offer_(fr, int(k), out); });
+            const bool busy = s.df->inFrame() || (s.fx && s.fx->busy()) || (s.il && s.il->busy());
+            s.clk->push(d, busy ? 0.75f : 0.45f, [&](float lvl) {
+                s.df->push(lvl, [&](const vibehdlc::Frame& fr) {
+                    if (!fr.repaired && !ax25FrameOk(fr.bytes)) return;
+                    Frame f; f.bytes = fr.bytes; f.repaired = fr.repaired; f.quality = fr.quality;
+                    offer_(f, int(k), out);
+                });
+                const int raw = lvl >= 0 ? 1 : 0;   // mark (1200 Hz) = 1, as IL2P's AFSK symbol map says
+                if (s.fx) s.fx->bit(raw == s.prev ? 1 : 0, [&](const vibefx25::Result& r) {
+                    if (!ax25FrameOk(r.bytes)) return;
+                    Frame f; f.bytes = r.bytes; f.fec = vibepkt::kFx25; f.fixed = r.fixed; f.quality = 0.5f;
+                    offer_(f, int(k), out);
+                });
+                if (s.il) s.il->bit(raw, [&](const vibeil2p::Result& r) {
+                    if (!ax25FrameOk(r.bytes)) return;
+                    Frame f; f.bytes = r.bytes; f.fec = vibepkt::kIl2p; f.fixed = r.fixed; f.crc = r.crc; f.quality = 0.5f;
+                    offer_(f, int(k), out);
+                });
+                s.prev = raw;
             });
         }
         ++t_;
         if (hasPend_ && t_ >= pendDue_) flush_(out);
     }
-    template <class Out> void offer_(const vibehdlc::Frame& fr, int slicer, Out& out) {
+    /** ★ Rank of a copy: a clean AX.25 copy first, then a repaired one, then an FEC copy (fewest fixes first). */
+    static int rank_(const Frame& f) { return f.fec ? 2 : f.repaired ? 1 : 0; }
+    template <class Out> void offer_(const Frame& fr, int slicer, Out& out) {
         uint32_t h = 2166136261u;
         for (uint8_t c : fr.bytes) h = (h ^ c) * 16777619u;
-        for (auto& r : recent_) if (r.h == h && t_ - r.t < uint64_t(fs_ * 0.5)) return;
+        // ★ FX.25's check bytes arrive after the frame's own end flag, so its copy of a frame a slicer already passed
+        //   lands here; 1.5 s covers the longest code block at 1200 Bd (255 bytes ≈ 1.7 s at 300 Bd is HF, no FX.25).
+        for (auto& r : recent_) if (r.h == h && t_ - r.t < uint64_t(fs_ * (baud_ >= 1200 ? 2.0 : 0.5))) { if (fr.fec) ++fecDupes_; return; }
         if (hasPend_ && pendH_ == h) {
-            if ((pend_.repaired && !fr.repaired) || (pend_.repaired == fr.repaired && fr.quality > pend_.quality))
-                { pend_.bytes = fr.bytes; pend_.repaired = fr.repaired; pend_.quality = fr.quality; pend_.slicer = slicer; }
+            if (rank_(fr) < rank_(pend_) || (rank_(fr) == rank_(pend_) && (fr.fixed < pend_.fixed || (fr.fixed == pend_.fixed && fr.quality > pend_.quality))))
+                { pend_ = fr; pend_.slicer = slicer; }
             return;
         }
         if (hasPend_) flush_(out);
-        pend_.bytes = fr.bytes; pend_.repaired = fr.repaired; pend_.quality = fr.quality; pend_.slicer = slicer;
+        pend_ = fr; pend_.slicer = slicer;
         pendH_ = h; hasPend_ = true; pendDue_ = t_ + uint64_t(fs_ / baud_ * 3) + 1;
     }
     template <class Out> void flush_(Out& out) {
@@ -220,6 +295,7 @@ private:
     float peakA_ = 0.001f;
     uint64_t t_ = 0;
     Frame pend_; uint32_t pendH_ = 0; bool hasPend_ = false; uint64_t pendDue_ = 0;
+    uint64_t fecDupes_ = 0;
     struct Rec { uint32_t h = 0; uint64_t t = 0; };
     static constexpr int kRecent = 8;
     Rec recent_[kRecent];

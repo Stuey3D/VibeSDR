@@ -48,6 +48,8 @@
  *   APRS ('aprs' on the listener's audio — V12, vibe_aprs_run.h; "baud_rate": 300 for HF)
  *     {"type":"aprs_packet","data":{key,from,kind,line,raw,lat?,lon?,to?,text?}}       each new packet
  *     {"type":"aprs_list","data":{baud,frames,repaired,dupes,stations:[…],messages:[…]}} every 2 s when changed, and to a joiner
+ *     ★ V12 {"type":"aprs_frame","data":{from,to,ctl,fec,fixed?,sat?,len,hex,text,…}} every AX.25 frame (packet.ts);
+ *       attach params {baud_rate, packet: auto|1200|9600|300, fx25, il2p} — docs/v12/AX25-9600-FX25-IL2P.md
  *   DSC ('dsc' — V12, maritime Digital Selective Calling, vibe_dsc_run.h)
  *     0x01 text (one readable line per call) · 0x03 | u8 state (0 listening, 1 a call coming in)
  *     {"type":"dsc_call","data":{id,utc,rf,repeat,format,category,level,self,…,lat?,lon?,line}} — see dsc.ts
@@ -162,6 +164,8 @@ export interface DecoderCallbacks {
   /** ★ APRS (V12): the station list (raw data — tracks.ts aprsSanitise), and each new packet. */
   onAprsList?: (data: any) => void;
   onAprsPacket?: (p: AprsPacket) => void;
+  /** ★ V12 every AX.25 frame, APRS or not (raw data — src/services/packet.ts parsePacketFrame). */
+  onAprsFrame?: (data: unknown) => void;
   /** ★ JTTY: the stations list and a spot (as the server sent them — jtty.ts checks them). */
   onJttySignals?: (data: unknown) => void;
   /** ★ V12 balloons: the report (payloads, pictures, what RTTY / Horus found) on every report and every 5 s, and each
@@ -471,6 +475,11 @@ export class DecoderClient {
     if (msg.type === 'aprs_list' && msg.data) {
       if (this.mode !== 'aprs') return;
       this.cb.onAprsList?.(msg.data);
+      return;
+    }
+    if (msg.type === 'aprs_frame' && msg.data) {
+      if (this.mode !== 'aprs') return;
+      this.cb.onAprsFrame?.(msg.data);
       return;
     }
     if (msg.type === 'aprs_packet' && msg.data) {
