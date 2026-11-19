@@ -271,7 +271,7 @@ struct Result { std::vector<uint8_t> bytes; int fixed = 0; bool crc = false; boo
 /** Try one payload layout on the collected bytes. */
 inline bool tryLayout(const std::vector<uint8_t>& buf, const Header& H, const Layout& L, int hdrFix, Result& r) {
     std::vector<uint8_t> payload; payload.reserve(size_t(H.count));
-    size_t p = 0; int fixes = 0; bool allStrong = true, allStrongOrClean = true;
+    size_t p = 0; int fixes = 0; bool allStrongOrClean = true;
     for (int b = 0; b < L.blocks; ++b) {
         const int sz = b < L.nLarge ? L.large : L.small;
         if (p + size_t(sz + L.parity) > buf.size()) return false;
@@ -280,7 +280,7 @@ inline bool tryLayout(const std::vector<uint8_t>& buf, const Header& H, const La
         if (f < 0) return false;
         // strong = at least 8 check bytes and short of the code's limit; clean = no correction at all
         const bool strong = L.parity >= 8 && f <= L.parity / 2 - 1;
-        allStrong = allStrong && strong; allStrongOrClean = allStrongOrClean && (strong || f == 0);
+        allStrongOrClean = allStrongOrClean && (strong || f == 0);
         fixes += f;
         descramble(blk.data(), sz);
         payload.insert(payload.end(), blk.begin(), blk.begin() + sz);
@@ -290,16 +290,28 @@ inline bool tryLayout(const std::vector<uint8_t>& buf, const Header& H, const La
     ax.insert(ax.end(), payload.begin(), payload.end());
     // a Type 0 payload must at least look like AX.25 addressing (two+ address fields ending in the extension bit)
     if (ax.size() < 15) return false;
-    // the optional trailing CRC
-    bool crcOk = false;
+    // the optional trailing CRC. ★ PRESENT = all four bytes are exact Hamming codewords with the top bit clear — four
+    //   random bytes are that one time in 65 536 — and a present CRC must MATCH (a mismatch is an error we were told
+    //   about: the frame is refused, whatever the RS codes said).
+    bool crcOk = false, crcPresent = false;
     if (p + 4 <= buf.size()) {
-        int c = 0; for (int i = 0; i < 4; ++i) c = (c << 4) | hamDec(buf[p + size_t(i)]);
+        crcPresent = true;
+        int c = 0;
+        for (int i = 0; i < 4; ++i) {
+            const uint8_t b = buf[p + size_t(i)];
+            const int nib = hamDec(b);
+            if ((b & 0x80) || hamEnc(nib) != b) crcPresent = false;
+            c = (c << 4) | nib;
+        }
         crcOk = uint16_t(c) == vibehdlc::fcs16(ax.data(), ax.size());
+        if (crcPresent && !crcOk) return false;
     }
     if (!crcOk) {
-        // ★ the no-false-frames rule (see the top of the file)
-        const bool ok = (hdrFix == 0 && allStrongOrClean) || (hdrFix == 1 && L.blocks > 0 && allStrong);
-        if (!ok) return false;
+        // ★ the no-false-frames rule (see the top of the file). A CORRECTED header is never trusted without the CRC: two
+        //   wrong header bytes are "corrected" into another valid header about one time in seventeen, and the payload's
+        //   own strength says nothing about the header (found by test-ax25hs --full: a GRBAlpha frame at 9 dB came out
+        //   as from "OM9G0R").
+        if (!(hdrFix == 0 && allStrongOrClean)) return false;
     }
     r.bytes.swap(ax); r.fixed = hdrFix + fixes; r.crc = crcOk;
     return true;

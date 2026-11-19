@@ -210,6 +210,21 @@ static void testIl2p() {
         CHECK(got == sent && wrong == 0, "%s: %d/%d with errors, %d wrong", k.name, got, sent, wrong);
         std::printf("   %-36s %d/%d decoded with errors at the rule's limit, %d wrong\n", k.name, got, sent, wrong);
     }
+    // ★ the miscorrected header (found by --full: two header bytes wrong "corrected" into another valid header): with the
+    //   CRC present it must be refused by the CRC; without it, a corrected header is never trusted
+    for (int crc = 0; crc < 2; ++crc) {
+        int got = 0, wrong = 0;
+        for (int it = 0; it < 400; ++it) {
+            std::vector<uint8_t> ax = telem(rng, 30 + int(rng() % 100));
+            std::vector<uint8_t> il = vibeil2p::encode(ax, true, crc != 0);
+            const size_t a = rng() % 15; size_t b = rng() % 15; while (b == a) b = rng() % 15;
+            il[a] ^= uint8_t(1 + rng() % 255); il[b] ^= uint8_t(1 + rng() % 255);
+            vibeil2p::Rx rx;
+            for (int bit : vibeil2p::lineBits(il, 2)) rx.bit(bit, [&](const vibeil2p::Result& r) { if (r.bytes == ax) ++got; else ++wrong; });
+        }
+        CHECK(wrong == 0, "two wrong header bytes, CRC %s: %d wrong of 400 (%d decoded)", crc ? "sent" : "not sent", wrong, got);
+        std::printf("   two wrong header bytes, CRC %-8s 400 frames: %d decoded, %d wrong\n", crc ? "sent:" : "not sent:", got, wrong);
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -253,7 +268,11 @@ static Score runModem(int link, double ebn0, double fs, bool audio, int bursts, 
     std::vector<std::vector<uint8_t>> sentFrames;
     auto onF = [&](const vibepkt::PktFrame& f) {
         bool ok = false; for (size_t q = 0; q < sentFrames.size(); ++q) if (sentFrames[q] == f.bytes) { ok = true; if (getenv("AX25HS_WHICH")) std::printf(" got#%zu(sl%d)", q, f.slicer); }
-        if (ok) { ++s.got; if (f.fec != vibepkt::kAx25) ++s.fec; } else ++s.wrong;
+        if (ok) { ++s.got; if (f.fec != vibepkt::kAx25) ++s.fec; } else {
+            ++s.wrong;
+            if (getenv("AX25HS_WRONG")) { std::printf("\n      WRONG %s fixed %d crc %d slicer %d len %zu: ", vibepkt::fecName(f.fec), f.fixed, int(f.crc), f.slicer, f.bytes.size());
+                                          for (size_t q = 0; q < std::min<size_t>(f.bytes.size(), 40); ++q) std::printf("%02x", f.bytes[q]); std::printf("\n"); }
+        }
     };
     // Eb/N0 → noise: unit-power carrier; σ² (complex, total) = fs / (baud · Eb/N0)
     const double sig2 = fs / (o.baud * std::pow(10.0, ebn0 / 10));
@@ -689,16 +708,8 @@ static int decodeWav(const char* path, int baud, bool quiet) {
 }
 
 static void tune() {
-    for (float rel : { 1.f / 1000, 1.f / 500, 1.f / 300 }) {
-        vibeg3ruh::Opts all; all.eyeRelease = rel;
-        int g = 0, n = 0;
-        for (double fs : { 48000.0, 44100.0 }) for (int inv = 0; inv < 2; ++inv) for (int seed : { 3, 4, 5, 6 }) { Score sc = runModem(kPlain, 30, fs, true, 12, seed, all, 0, inv != 0); g += sc.got; n += sc.sent; }
-        std::printf("   release 1/%.0f: audio with gaps %d/%d;", 1 / rel, g, n);
-        vibeg3ruh::Opts o1 = all; o1.slicers = 1;
-        for (double e : { 10.0, 8.0 }) std::printf(" BER@%.0f %.2e", e, lineBer(e, o1));
-        Score a = runModem(kPlain, 10, 48000, false, 40, 77, all), f = runModem(kFx32, 8, 48000, false, 40, 78, all);
-        std::printf("  AX.25@10 %d/%d FX32@8 %d/%d\n", a.got, a.sent, f.got, f.sent);
-    }
+    vibeg3ruh::Opts all;
+    for (double e : { 6.0, 7.0, 8.0, 9.0, 10.0 }) { Score sc = runModem(kIl2p, e, 48000, false, 60, 100 + int(e * 10), all); std::printf("   IL2P %.0f dB: %d/%d wrong %d\n", e, sc.got, sc.sent, sc.wrong); }
 }
 
 int main(int argc, char** argv) {
