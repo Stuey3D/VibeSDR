@@ -115,8 +115,11 @@ Sensitivity (QPSK, 6 scan periods, 4–6 seeds): Es/N0 4 dB 100 %, **3 dB ≈ 95
 ≈ 50 %, 1.5 dB ≈ 0. **Noise: 0 pictures** — 60 s each of AUTO 72k, OQPSK and 80k, and 15 s of random-bit QPSK (a locked
 carrier with no LRPT in it): RS ok 0. SIMD vs scalar (FIR + Viterbi) at Es/N0 5: the same picture byte for byte.
 `test-lrpt-host` 33 / 0 (host, preview shapes, status, gallery Store with real PNGs, pass end, noise, reach, caps).
-`scripts/test_lrpt_app.ts` 16 / 0. Unchanged: `test-decoder-reach` 76 / 0, `test-radio-caps` 247 / 0. SSE2 (x86-64,
-i686) and armhf NEON / scalar under qemu: see §RESUME HERE (run at the end of the day).
+`scripts/test_lrpt_app.ts` 16 / 0. Unchanged: `test-decoder-reach` 76 / 0, `test-radio-caps` 247 / 0. Cross-built and run
+under qemu user mode (`ft8perf-x86` image; armhf built in `vibeserver-cross:bookworm-armhf`, GCC 12): x86-64 SSE2,
+i686 SSE2, armhf NEON (`-march=armv7-a -mfpu=neon-vfpv4`) and armhf `VIBE_FORCE_SCALAR` — `test-lrpt --quick` **51 / 0 on
+each**, the SIMD and scalar pictures identical on each (Viterbi kernel 2 / 2 / 1 / 0). The CPU figures under emulation
+are not a measure of those machines.
 
 **Cost estimate for small boards** (not measured on them): AArch64 instruction count on the M5 ≈ 80 M/s at 187.5 kS/s
 (≈ 105 M/s at a 300 kS/s slice). At the Pi 2's measured NEON-kernel IPC (0.35–0.48, `PI2-REAL-CPU.md`), allowing ≈ 1.2×
