@@ -95,12 +95,14 @@ inline std::string modeLabel(const std::string& id) {
     static const char* sync[][2] = {{"sam", "SAM"}, {"sau", "SAM-U"}, {"sal", "SAM-L"}, {"ecssu", "ECSS-U"}, {"ecssl", "ECSS-L"}, {"amst", "AM-ST"}};
     for (auto& p : sync) if (id == p[0]) return p[1];
     if (id == "freedv") return kFreeDvLabel;   // src/services/freedv.ts FREEDV_LABEL
+    if (id == "dvsig") return kDvsigLabel;     // src/services/dvsig.ts DVSIG_LABEL
     return upper(id);
 }
 inline std::vector<ModeDef> offeredModes(const std::vector<std::string>& srvModes, const std::vector<std::string>& blocked) {
     auto has = [&](const std::vector<std::string>& v, const std::string& x) { return std::find(v.begin(), v.end(), x) != v.end(); };
     std::vector<std::string> ids = {"wfm", "nfm"};
     if (has(srvModes, "m17")) ids.push_back("m17");   // ★ V12 M17 beside NFM, only where the server lists it (m17.h)
+    if (has(srvModes, "dvsig")) ids.push_back("dvsig");   // ★ V12 DV ID likewise (dvsig.h)
     ids.push_back("am");
     for (const char* sy : {"sam", "sau", "sal", "ecssu", "ecssl", "amst"}) if (has(srvModes, sy)) ids.push_back(sy);
     for (const char* m : {"usb", "lsb", "cwu", "cwl"}) ids.push_back(m);
