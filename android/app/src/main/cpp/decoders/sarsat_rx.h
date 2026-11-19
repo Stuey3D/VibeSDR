@@ -2,9 +2,10 @@
 // (§2.2–2.3: 160 ms of unmodulated carrier, then 400 bit/s ±1 % biphase-L, phase modulation ±1.1 ± 0.1 rad). docs/v12/SARSAT.md.
 //
 // ★★ THE CHAIN
-//   1. A Hamming low-pass decimates the channel (≥ 24 kHz) by D to fs1 ≈ 8 kHz (SIMD dot products, nav_rx.h's kernels;
+//   1. A Hamming low-pass decimates the channel (≥ 24 kHz) by D to fs1 ≈ 24 kHz (SIMD dot products, nav_rx.h's kernels;
 //      scalar twin bit for bit). A ring keeps the last 3 s.
-//   2. FINDING A BURST: a 1024-point Hann FFT every 32 ms over ±3.5 kHz; a burst starts with a carrier LINE ≥ 14 dB over
+//   2. FINDING A BURST: a 2048-point Hann FFT every ~21 ms over ±10.5 kHz (one dial covers 406.022–406.044 MHz: every
+//      channel in use); a burst starts with a carrier LINE ≥ 14 dB over
 //      the bins' median, at a frequency with no line in the half-second before. A line that stays more than 1.2 s is a
 //      steady carrier (a spur, a CW signal) and is never decoded at all.
 //   3. THE BURST, worked as a block 0.9 s after the line: the frequency from the FFT peak, refined by the slope of the
@@ -77,9 +78,11 @@ public:
     double lastSync = 0;      ///< the last sync correlation
 
     explicit Rx(double fs, bool forceScalar = false) : scalar_(forceScalar) {
-        D_ = std::max(1, (int)std::lround(fs / 8000.0));
+        // ★ ≈ 24 kHz: ±10.5 kHz searched, so ONE dial (406.033 MHz) watches every first-generation channel in use
+        //   (406.025, .028, .031, .037, .040 MHz) — a beacon is never missed for sitting on the next channel
+        D_ = std::max(1, (int)std::floor(fs / 24000.0));   // fs1 ≥ 24 kHz
         fs1_ = fs / D_;
-        const double pass = 3600.0, stop = std::max(pass + 300.0, fs1_ - 3600.0);
+        const double pass = std::min(kSearchHz + 1500.0, 0.45 * fs1_), stop = std::max(pass + 300.0, fs1_ - pass);
         double dl = 0;
         h_ = nav::lowpass(0.5 * (pass + stop) / fs, (int)std::ceil(3.3 * fs / (stop - pass)) + 1, dl);
         T_ = (int)h_.size();
@@ -88,8 +91,8 @@ public:
         ring_.assign(ringN_, std::complex<float>(0, 0));
         win_.resize(kN);
         for (int i = 0; i < kN; ++i) win_[(size_t)i] = (float)(0.5 - 0.5 * std::cos(2 * M_PI * (i + 0.5) / kN));
-        hop_ = 256;
-        maxBin_ = std::min(kN / 2 - 2, (int)std::floor(3500.0 / (fs1_ / kN)));
+        hop_ = kN / 4;
+        maxBin_ = std::min(kN / 2 - 2, (int)std::floor(std::min(kSearchHz, pass) / (fs1_ / kN)));
     }
     double rate1() const { return fs1_; }
 
@@ -111,7 +114,8 @@ public:
     double checksum() const { return check_; }
 
 private:
-    static constexpr int kN = 1024;
+    static constexpr int kN = 2048;
+    static constexpr double kSearchHz = 10500.0;
     struct Pending { int64_t trig; double binF; double power; int bin; };
 
     void push_(std::complex<float> v) {

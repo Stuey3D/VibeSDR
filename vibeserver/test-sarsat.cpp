@@ -139,7 +139,7 @@ static void testModem() {
     for (int ri = 0; ri < 3; ++ri)
         for (int k = 0; k < 12; ++k) {
             tx::Opt o; o.rate = rates[ri]; o.seed = (uint32_t)(ri * 100 + k);
-            o.offsetHz = -3000 + 500 * (k % 13); o.bitRate = k % 3 == 0 ? 396 : k % 3 == 1 ? 404 : 400;
+            o.offsetHz = -9000 + 1500 * (k % 13);   // ★ ±9 kHz: one dial watches every channel in use o.bitRate = k % 3 == 0 ? 396 : k % 3 == 1 ? 404 : 400;
             o.index = k % 4 == 0 ? 1.0 : k % 4 == 1 ? 1.2 : 1.1; o.invert = k % 5 == 0; o.cn0 = 45;
             const Bits& b = msgs[k % 3];
             const Got g = run(tx::burst(&b, o), o.rate);
@@ -148,7 +148,7 @@ static void testModem() {
             if (g.b.size() == 1 && g.b[0].msg.hexMsg == want && std::fabs(g.b[0].offsetHz - o.offsetHz) < 5) ++good;
             else { char t[120]; std::snprintf(t, sizeof t, " [%.0f kHz k=%d: %zu bursts, %d attempts, %d refused %s %.2f]", rates[ri] / 1e3, k, g.b.size(), g.attempts, g.refused, g.why.c_str(), g.sync); fails += t; }
         }
-    ok(good == n, "36 bursts (3 rates, ±3 kHz, 396/404 bit/s, ±1.0/1.2 rad, either sense) at 45 dB-Hz: every one exactly (" + std::to_string(good) + "/" + std::to_string(n) + ")" + fails);
+    ok(good == n, "36 bursts (3 rates, −9…+7.5 kHz, 396/404 bit/s, ±1.0/1.2 rad, either sense) at 45 dB-Hz: every one exactly (" + std::to_string(good) + "/" + std::to_string(n) + ")" + fails);
     for (double cn0 : { 40.0, 37.0, 34.0 }) {
         int okN = 0, wrong = 0;
         for (int k = 0; k < 20; ++k) {
