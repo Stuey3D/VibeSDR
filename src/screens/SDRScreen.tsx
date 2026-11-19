@@ -89,6 +89,9 @@ import { audioQuietFor, noticePlan, shouldAskPermission, endedWhy, NOTICE_DELAY_
 import { aisItems, aisListRows, aisSafetyLines, aisStatus, AIS_EMPTY, aprsApplyPacket, aprsBoxRows, aprsItems, aprsListRows,
          aprsLogPush, aprsMessageLines, aprsPacketSanitise, aprsSanitise, aprsStatus, aprsTuneFor, aprsBaudOf, APRS_EMPTY,
          type AisCap, type AisReport, type AprsBaud, type AprsList } from '../services/tracks';
+// ★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): AUTO / 1200 / 9600 / 300, FX.25 + IL2P, the frame log — the web's rule
+import { packetDefault, packetIdle, packetMergeLog, packetParams, packetStatusExtra, packetTune, parsePacketCaps, parsePacketFrame,
+         type PacketCaps, type PacketFrame, type PacketMode } from '../services/packet';
 import AdsbPanel from '../components/AdsbPanel';
 import DoorSpectrogram from '../components/DoorSpectrogram';
 import { RecElapsed } from '../components/RecElapsed';
@@ -978,6 +981,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setAdsbCap(o?.adsb);
         setAisCap(o?.ais);              // ★ V12 AIS — absent where the radio cannot reach 162 MHz (no key at all)
         if (o?.aprs) setAprsCap(o.aprs);   // ★ V12 APRS — the listener's decoder, and the region's channel
+        packetApplyCaps(o?.packet ?? parsePacketCaps({}));   // ★ V12 9600 / FX.25 / IL2P — what this server's packet decoder offers
         const b = parseAntennaBands(o?.antennaRanges, o?.antennaFilters);
         setAntBands(hasAntennaBands(b) ? b : null);
       })
@@ -6034,12 +6038,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aprsBaud, setAprsBaud] = useState<AprsBaud>(1200);
   const aprsBaudRef = useRef<AprsBaud>(1200);
   useEffect(() => { AsyncStorage.getItem('lsv_aprs_baud').then((v) => { const b = aprsBaudOf(v); aprsBaudRef.current = b; setAprsBaud(b); }).catch(() => {}); }, []);
+  /* ★★ V12 PACKET (src/services/packet.ts, the web's packetSegRender): the choice (AUTO where 9600 runs), FX.25 / IL2P, the
+   *  frame log. `aprsBaud` follows it (300 for HF, else 1200) for everything that only knew the two. */
+  const [packetCaps, setPacketCaps] = useState<PacketCaps>(parsePacketCaps({}));
+  const packetCapsRef = useRef<PacketCaps>(parsePacketCaps({}));
+  const [packetMode, setPacketMode] = useState<PacketMode>('1200');
+  const packetModeRef = useRef<PacketMode>('1200');
+  const packetStored = useRef<string | null>(null);
+  const [pktFec, setPktFec] = useState<{ fx25: boolean; il2p: boolean }>({ fx25: true, il2p: true });
+  const pktFecRef = useRef({ fx25: true, il2p: true });
+  const [aprsFrames, setAprsFrames] = useState<{ f: PacketFrame; t: number }[]>([]);
+  const [aprsStatusExtra, setAprsStatusExtra] = useState('');
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_packet_mode').then((v) => { packetStored.current = v; }).catch(() => {});
+    AsyncStorage.getItem('lsv_packet_fec').then((v) => { if (v && v.length === 2) { const f = { fx25: v[0] !== '0', il2p: v[1] !== '0' }; pktFecRef.current = f; setPktFec(f); } }).catch(() => {});
+  }, []);
+  const packetApplyCaps = useCallback((c: PacketCaps) => {
+    packetCapsRef.current = c; setPacketCaps(c);
+    const m = packetDefault(c, packetStored.current ?? (aprsBaudRef.current === 300 ? '300' : undefined));
+    packetModeRef.current = m; setPacketMode(m);
+    const b: AprsBaud = m === '300' ? 300 : 1200; aprsBaudRef.current = b; setAprsBaud(b);
+  }, []);
   const [aprsList, setAprsList] = useState<AprsList | null>(null);
   const aprsListRef = useRef<AprsList | null>(null);
   const [aprsLog, setAprsLog] = useState<{ t: number; line: string }[]>([]);
   const aprsTrails = useRef(new Map<string, [number, number][]>());
   const aprsReset = useCallback(() => {
-    aprsListRef.current = null; setAprsList(null); setAprsLog([]); aprsTrails.current.clear();
+    aprsListRef.current = null; setAprsList(null); setAprsLog([]); aprsTrails.current.clear(); setAprsFrames([]); setAprsStatusExtra('');
     setAprsMapOpen(false); setAprsFocus('');
   }, []);
 
@@ -6144,8 +6169,23 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (!l) return;
         for (const st of l.stations) if (st.trail && st.trail.length) aprsTrails.current.set(st.key, st.trail);
         aprsListRef.current = l; setAprsList(l);
+        // ★ V12: a joiner's frame log (oldest first), and the status line's FX.25 / IL2P half
+        const lg = (d as any)?.log;
+        if (Array.isArray(lg)) {
+          const inc = lg.map(parsePacketFrame).filter((x: PacketFrame | null): x is PacketFrame => !!x);
+          if (inc.length) setAprsFrames((prev) => (prev.length ? prev : packetMergeLog([], inc).map((f) => ({ f, t: Date.now() - f.age * 1000 }))));
+        }
+        setAprsStatusExtra(packetStatusExtra(d));
         setDecoding(l.stations.some((x) => x.seen < 60));
         if (l.stations.length) markDecodeOutput();
+      },
+      onAprsFrame: (d) => {   // ★ V12 every AX.25 frame (packet.ts parsePacketFrame cleans it)
+        if (activeDecRef.current !== 'aprs') return;
+        const f = parsePacketFrame(d);
+        if (!f) return;
+        setAprsFrames((prev) => [{ f, t: Date.now() }, ...prev].slice(0, 60));
+        setDecoding(true);
+        markDecodeOutput();
       },
       onAprsPacket: (d) => {
         if (activeDecRef.current !== 'aprs') return;
@@ -6675,7 +6715,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (type === 'tones' && decoderClient.current) { decoderClient.current.tonesSet = { ...tonesSetRef.current }; decoderClient.current.tonesLast = null; }   // ★ V12 DTMF + 5-tone
     if (type === 'aprs' && decoderClient.current) {
       decoderClient.current.aprsBaud = aprsBaudRef.current;
-      setDecoderStatus(aprsBaudRef.current === 300 ? 'listening — HF packet, 300 Bd' : 'listening — APRS, 1200 Bd');
+      decoderClient.current.aprsParams = packetParams(packetModeRef.current, pktFecRef.current.fx25, pktFecRef.current.il2p, packetCapsRef.current);
+      setDecoderStatus(`listening — ${packetIdle(packetModeRef.current)}`);
     }
     // ★ V12 the RTTY skimmer (or ONE SIGNAL — 'fsk' with rttySettings, as always)
     if (type === 'rtty' && decoderClient.current) {
@@ -7040,6 +7081,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onAprsBaud = useCallback((b: AprsBaud) => {
     aprsBaudRef.current = b; setAprsBaud(b);
     AsyncStorage.setItem('lsv_aprs_baud', String(b)).catch(() => {});
+    if (activeDecRef.current === 'aprs') openDecoder('aprs');
+  }, [openDecoder]);
+  /** ★ V12 a packet choice (AUTO / 1200 / 9600 / 300) — remembered, re-attached at once when APRS is open. */
+  const onPacketMode = useCallback((m: PacketMode) => {
+    packetModeRef.current = m; setPacketMode(m); packetStored.current = m;
+    const b: AprsBaud = m === '300' ? 300 : 1200; aprsBaudRef.current = b; setAprsBaud(b);
+    AsyncStorage.setItem('lsv_packet_mode', m).catch(() => {});
+    if (activeDecRef.current === 'aprs') { aprsReset(); openDecoder('aprs'); }
+  }, [openDecoder, aprsReset]);
+  const onPacketFec = useCallback((fx25: boolean, il2p: boolean) => {
+    const f = { fx25, il2p }; pktFecRef.current = f; setPktFec(f);
+    AsyncStorage.setItem('lsv_packet_fec', `${fx25 ? 1 : 0}${il2p ? 1 : 0}`).catch(() => {});
     if (activeDecRef.current === 'aprs') openDecoder('aprs');
   }, [openDecoder]);
 
@@ -11736,10 +11789,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     setIsmMapOpen(false); setIsmFocus('');
   }, [ismGal]);   // eslint-disable-line react-hooks/exhaustive-deps
   const aprsTrk = useMemo(() => ({
-    items: aprsItems(aprsList, trkRx), rows: aprsListRows(aprsList, trkRx), status: aprsStatus(aprsList, aprsCap.hz),
+    items: aprsItems(aprsList, trkRx), rows: aprsListRows(aprsList, trkRx), status: aprsStatus(aprsList, aprsCap.hz) + (aprsList ? aprsStatusExtra : ''),
     empty: APRS_EMPTY, focus: aprsFocus,
     trail: (key: string) => Promise.resolve(aprsTrails.current.get(key) ?? []),
-  }), [aprsList, trkRx?.lat, trkRx?.lon, aprsCap.hz, aprsFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }), [aprsList, trkRx?.lat, trkRx?.lon, aprsCap.hz, aprsFocus, aprsStatusExtra]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★ V12 ADS-B: THE REPORT INTO THE APP'S AIRCRAFT, ranged from THIS receiver (the server's own /location — the
    *  NAVTEX naming's position), nearest first. Into `aircraft`, so the table and the WATCH (sendAircraft above,
    *  unchanged from OWRX) read one list. Re-ranged if the position lands after the first report. */
@@ -14697,7 +14750,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  Apple TV: the rows are read there. */
           aprs={activeDecoder === 'aprs' ? {
             rows: aprsBoxRows(aprsList, (serverPos ?? recvLoc) ?? null), messages: aprsMessageLines(aprsList), log: aprsLog,
-            baud: aprsBaud,
+            baud: aprsBaud, frames: aprsFrames, idle: packetIdle(packetMode), is9600: packetMode === '9600',
             onMap: IS_APPLE_TV ? null : (key?: string) => { markInteract(); setAprsFocus(key ?? ''); setAprsMapOpen(true); },
           } : null}
           cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onDecTuneHz(hz, 'cwu' as SDRMode); } } : null}
@@ -16299,7 +16352,9 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  dial on the region's channel in NFM, or 10.1476 MHz USB — a listener's own tune. */
           aprsAvail: (aprsCap.on || !!decWhy.aprs) && !!(client.current as any)?.isVibe,
           aprsBaud, aprsHz: aprsCap.hz, onAprsBaud,
-          onAprsTune: () => { const t = aprsTuneFor(aprsBaudRef.current, aprsCap.hz); markInteract(); onDecTuneHz(t.hz, t.mode as SDRMode); },
+          onAprsTune: () => { const t = packetTune(packetModeRef.current, aprsCap.hz) ?? aprsTuneFor(aprsBaudRef.current, aprsCap.hz); markInteract(); onDecTuneHz(t.hz, t.mode as SDRMode); },
+          // ★ V12 the packet choices only where the server says it has them (an older server: the two old keys)
+          ...(packetCaps.fec || packetCaps.has9600 ? { packetCaps, packetMode, pktFx25: pktFec.fx25, pktIl2p: pktFec.il2p, onPacketMode, onPacketFec } : {}),
         } : null}
         transcribeControls={txCaps?.available ? {
           active: activeDecoder === 'transcribe',

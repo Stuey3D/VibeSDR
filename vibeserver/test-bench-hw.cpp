@@ -39,6 +39,7 @@ int main() {
         ok(benchhw::nearestOffered(hw, 2048000, benchhw::Need::Wfm) == 912000, "HF+ only: a feature row runs at its 912 kS/s");
         ok(!runs(hw, "dec_ism") && !runs(hw, "dec_lora"), "HF+ only: no ISM / LoRa (it tops out near 260 MHz)");
         ok(runs(hw, "dec_m17"), "HF+ only: M17 runs (2 m is in its 60\u2013260 MHz range)");
+        ok(runs(hw, "dec_aprs9600"), "HF+ only: 9600 packet runs (2 m)");
     }
     // ── an RTL dongle alone ──
     {
@@ -49,6 +50,7 @@ int main() {
            "RTL only: the three WFM rate rows run");
         ok(!runs(hw, "dec_ndb") && !runs(hw, "dec_navtex"), "RTL without direct sampling: no NDB / NAVTEX (vsNdbReach)");
         ok(runs(hw, "dec_rtty"), "RTL: HF decoders run (its coverage table reaches HF — a V4, or direct sampling)");
+        ok(runs(hw, "dec_aprs9600"), "RTL: 9600 packet runs (2 m and 70 cm)");
         Hw ds; ds.radios.push_back(benchhw::radioFor("rtl", 0, 0, 0, true));
         ok(runs(ds, "dec_ndb") && runs(ds, "dec_navtex"), "RTL with direct sampling: NDB and NAVTEX run");
     }

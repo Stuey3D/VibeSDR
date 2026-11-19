@@ -51,6 +51,10 @@ import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as 
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
+// ★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): AUTO / 1200 / 9600 / 300, FX.25 + IL2P, the frame log — the app's rule too
+import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
+         parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
+         type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel } from './satellites';   // ★ V12 satellites — the picker, the readout, the DOPPLER button
 import { satCapFrom, satChanText, satStateWord } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
@@ -956,6 +960,10 @@ async function loadAudioPolicy(httpBase: string) {
     decWhy = parseDecWhy(j);
     aprsCap = j.aprs === true || !!decWhy.aprs;   // ★ APRS (V12): this server's own decoder on the listener's NFM / SSB audio
     if (typeof j.aprsHz === 'number' && j.aprsHz > 0) aprsHz = j.aprsHz;
+    packetCaps = parsePacketCaps(j);   // ★ V12: aprsFec / pkt9600 (+ why) — what the packet decoder offers here
+    packetMode = packetDefault(packetCaps, lsGet(PACKET_MODE_KEY));
+    aprsBaud = packetMode === '300' ? 300 : 1200;
+    packetSegRender();
     { const b = document.querySelector('#decodersPanel [data-dec="aprs"]') as HTMLElement | null; if (b) b.hidden = !aprsCap || blockedModes.has('aprs'); }
     cwCap = j.cw === true || !!decWhy.cw;       // ★ CW (V12): this server's own decoder and skimmer
     spotsReadCap(j);             // ★ DIGITAL SPOTS (V12): the modes this server decodes, and Band mode's bands — see spotsReadCap
@@ -10358,6 +10366,7 @@ function onAvReport(r: AvReport | null) {
 let aprsView: TrackView | null = null;
 let aprsLast: AprsList | null = null;
 let aprsHz = 144.8e6;
+let aprsStatusExtra = '';   // ★ V12 "· 3 FX.25 · 1 IL2P · …" (packet.ts packetStatusExtra)
 const aprsTrails = new Map<string, [number, number][]>();
 function aprsMapOpen() {
   if (!aprsView) aprsView = new TrackView({
@@ -10372,7 +10381,7 @@ function aprsMapRender() {
   if (!aprsView?.open) return;
   const l = aprsLast;
   const items = l ? l.stations.filter((st) => st.lat != null && st.lon != null && !st.killed) : [];
-  aprsView.update(items, l ? aprsRows(l, myPos()) : '', aprsStatus(l, aprsHz), l ? l.stations.length : 0, myPos());
+  aprsView.update(items, l ? aprsRows(l, myPos()) : '', aprsStatus(l, aprsHz) + (l ? aprsStatusExtra : ''), l ? l.stations.length : 0, myPos());
 }
 
 /** Spend a demodulator picked during ADS-B on the first config out of it (see adsbPendingMode). */
@@ -14239,7 +14248,7 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'time') return { station: timeStation };
   if (mode === 'cw') return cwSkim ? { width: cwWidth } : {};
   if (mode === 'psk') return pskSkim ? { width: pskWidth } : { centre: passbandCentreHz() };
-  if (mode === 'aprs') return { baud_rate: aprsBaud };
+  if (mode === 'aprs') return packetParams(packetMode, pktFx25, pktIl2p, packetCaps);   // ★ V12 packet.ts (baud_rate kept)
   if (mode === 'dsc') { const v = vfoNow(decVfo); return dscParams(v.frequency, String(v.mode ?? '')); }   // ★ the decoding VFO's dial
   if (mode === 'sitora') return { center_frequency: 1000 };
   if (isTextFamily(mode)) return { mode: tmMode[mode] };   // ★ the tones around 1 kHz, as RTTY; the polarity is found
@@ -14425,9 +14434,24 @@ function initDecoders(host: string, auth: AuthState) {
       const l = aprsSanitise(d);
       if (!l) return;
       aprsLast = l;
+      // ★ V12: a joiner's frame log (oldest first), and the packet half of the status line
+      if (Array.isArray((d as any)?.log)) {
+        const inc = ((d as any).log as unknown[]).map(parsePacketFrame).filter((x): x is PacketFrame => !!x);
+        if (inc.length && !aprsFrames.length) { aprsFrames = packetMergeLog([], inc); aprsFrameT = aprsFrames.map((f) => Date.now() - f.age * 1000); }
+      }
+      aprsStatusExtra = packetStatusExtra(d);
       for (const st of l.stations) if (st.trail && st.trail.length) aprsTrails.set(st.key, st.trail);
       renderAprs(); aprsMapRender();
       setDecLive(l.stations.some((x) => x.seen < 60));
+    },
+    onAprsFrame: (d) => {   // ★ V12 every AX.25 frame (packet.ts parsePacketFrame cleans it)
+      if (activeDec !== 'aprs') return;
+      const f = parsePacketFrame(d);
+      if (!f) return;
+      aprsFrames.unshift(f); aprsFrameT.unshift(Date.now());
+      if (aprsFrames.length > 60) { aprsFrames.length = 60; aprsFrameT.length = 60; }
+      renderAprsFrames();
+      setDecLive(true);
     },
     onAprsPacket: (p) => {
       if (activeDec !== 'aprs') return;
@@ -14812,7 +14836,7 @@ function initDecoders(host: string, auth: AuthState) {
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
     if (activeDec === 'hell') clearHellPage();
     if (kbOn()) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
-    if (activeDec === 'aprs') { aprsLog.length = 0; renderAprs(); }
+    if (activeDec === 'aprs') { aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; renderAprs(); }
     if (activeDec === 'dsc') { dscCalls.clear(); renderDsc(); }
     if (activeDec === 'jtty') { jttyLast = []; jttySpots.clear(); renderJtty(); }
   };
@@ -14820,11 +14844,18 @@ function initDecoders(host: string, auth: AuthState) {
   $('aprsMapBtn').onclick = () => aprsMapOpen();
   $('nvMapBtn').onclick = () => { void navMapOpen(); };
   $('hfdlMapBtn').onclick = () => avMapOpen('hfdl');   // ★ V12 2026-11-16 the AVIATION MAP, HFDL first
-  segButtons('aprsBaud', 'aprsbaud', (v) => { aprsBaud = Number(v) === 300 ? 300 : 1200; aprsHintSync(); if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; renderAprs(); reattachIf('aprs'); } });
+  packetSegRender();   // ★ V12: AUTO · VHF 1200 · 9600 · HF 300 from the capability (packetSegRender wires the presses)
+  const fecToggle = (id: string, get: () => boolean, set: (v: boolean) => void) => {
+    $(id).onclick = () => { set(!get()); $(id).classList.toggle('on', get()); try { localStorage.setItem(PACKET_FEC_KEY, `${pktFx25 ? 1 : 0}${pktIl2p ? 1 : 0}`); } catch {}
+                            if (activeDec === 'aprs') reattachIf('aprs'); };
+  };
+  fecToggle('aprsFx25', () => pktFx25, (v) => { pktFx25 = v; });
+  fecToggle('aprsIl2p', () => pktIl2p, (v) => { pktIl2p = v; });
+  $('aprsFx25').classList.toggle('on', pktFx25); $('aprsIl2p').classList.toggle('on', pktIl2p);
   $('aprsTune').onclick = () => {
-    if (!spec) return;
-    if (aprsBaud === 300) decTune(clampTune(10147600), 'usb');
-    else decTune(clampTune(Math.round(aprsHz)), 'nfm');
+    const t = packetTune(packetMode, aprsHz);
+    if (!spec || !t) return;
+    decTune(clampTune(t.hz), t.mode);
     renderFreq();
   };
   aprsHintSync();
@@ -14993,20 +15024,73 @@ function reattachIf(mode: string) {
 let aprsCap = false;
 let aprsBaud = 1200;
 const aprsLog: { t: number; line: string }[] = [];
+/* ★★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md, src/services/packet.ts): the choice, its FEC switches, the frame log. */
+const PACKET_MODE_KEY = 'vibe.packetMode', PACKET_FEC_KEY = 'vibe.packetFec';
+let packetCaps: PacketCaps = parsePacketCaps({});
+let packetMode: PacketMode = '1200';
+let pktFx25 = (lsGet(PACKET_FEC_KEY) ?? '11')[0] !== '0', pktIl2p = (lsGet(PACKET_FEC_KEY) ?? '11')[1] !== '0';
+let aprsFrames: PacketFrame[] = [];
+let aprsFrameT: number[] = [];   // ★ when each frame arrived here (the server's age is 0 on arrival)
+/** The PACKET choices, drawn from the capability; a greyed one says why when pressed (never hidden, never live). */
+function packetSegRender() {
+  const host = document.getElementById('aprsBaud');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const c of packetChoices(packetCaps)) {
+    const b = document.createElement('button');
+    b.className = 'btn' + (c.id === packetMode ? ' on' : '') + (c.why ? ' unreach' : '');
+    b.dataset.aprsbaud = c.id;
+    b.textContent = c.label;
+    b.title = c.why ? c.why : c.id === 'auto' ? 'AUTO: 1200 and 9600 at once, FX.25 and IL2P too' : c.id === '9600' ? '9600 Bd G3RUH packet (terrestrial 9k6, cubesats) — tune the signal in NFM'
+            : c.id === '300' ? 'HF APRS: 300 Bd, 1600/1800 Hz tones — tune 10.1476 MHz (30 m) or 14.105 MHz (20 m) in USB' : 'VHF APRS: Bell 202, 1200 Bd — tune the APRS channel in NFM';
+    if (c.why) b.setAttribute('aria-disabled', 'true');
+    b.onclick = () => {
+      if (c.why) { showPill(`${c.label} unavailable \u2014 ${c.why}`, 8000); return; }
+      packetMode = c.id; aprsBaud = c.id === '300' ? 300 : 1200;
+      try { localStorage.setItem(PACKET_MODE_KEY, c.id); } catch {}
+      for (const x of Array.from(host.children)) x.classList.toggle('on', (x as HTMLElement).dataset.aprsbaud === c.id);
+      aprsHintSync();
+      if (activeDec === 'aprs') {
+        aprsLast = null; aprsLog.length = 0; aprsFrames = []; aprsFrameT = []; renderAprs(); reattachIf('aprs');
+        $('decTitle').textContent = packetMode === '300' ? 'APRS · HF 300' : packetMode === '9600' ? 'APRS · 9600' : 'APRS';   // ★ showDecBox's words
+      }
+    };
+    host.appendChild(b);
+  }
+  aprsHintSync();
+}
 function aprsHintSync() {
+  const t = packetTune(packetMode, aprsHz);
   const b = document.getElementById('aprsTune');
-  if (b) b.textContent = aprsBaud === 300 ? 'TUNE 10.1476 USB' : `TUNE ${(aprsHz / 1e6).toFixed(3)} NFM`;
+  if (b) b.textContent = t ? t.label : '';
+  const row = document.getElementById('aprsTuneRow');
+  if (row) row.hidden = !t;   // ★ 9600 has no one channel: no TUNE key (no dead control)
+  const fr = document.getElementById('aprsFecRow');
+  if (fr) fr.hidden = !packetFecShown(packetCaps, packetMode);
   const h = document.getElementById('aprsHint');
-  if (h) h.innerHTML = aprsBaud === 300
-    ? 'HF packet: <b>300 Bd</b> on <b>10.1476 MHz USB</b> (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough. The speaker is muted while APRS listens.'
-    : `VHF APRS: <b>${(aprsHz / 1e6).toFixed(3)} MHz NFM</b> here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. <b>MAP</b> in the box shows them on the map. The speaker is muted while APRS listens.`;
+  if (h) h.textContent = packetHint(packetMode, aprsHz);
+}
+function renderAprsFrames() {
+  const head = document.getElementById('aprsFramesHead'), el = document.getElementById('aprsFrames');
+  if (!head || !el) return;
+  head.hidden = !aprsFrames.length;
+  el.innerHTML = aprsFrames.slice(0, 30).map((f, i) => {
+    const d = new Date(aprsFrameT[i] ?? Date.now());
+    const t = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+    const headTxt = packetFrameHead(f);
+    const sat = f.sat ? headTxt.replace(f.sat, '\u0000') : headTxt;   // ★ the satellite's name picked out in colour
+    const headHtml = escapeHtml(sat).replace('\u0000', `<span class="s">${escapeHtml(f.sat || '')}</span>`);
+    return `<div class="f"><span class="t">${t}</span> ${headHtml}`
+      + (f.hex ? `<span class="x">${escapeHtml(packetHexGrouped(f.hex))}</span><span class="a">${escapeHtml(f.text.slice(0, 64))}</span>` : '')
+      + '</div>';
+  }).join('');
 }
 function renderAprs() {
   const rows = document.getElementById('aprsRows');
   if (!rows) return;
   const l = aprsLast;
   const rx = myPos();
-  if (!l || !l.stations.length) rows.innerHTML = `<div class="idle">listening — ${aprsBaud === 300 ? 'HF packet, 300 Bd' : 'APRS, 1200 Bd'}; stations appear with their first packet</div>`;
+  if (!l || !l.stations.length) rows.innerHTML = `<div class="idle">listening — ${packetIdle(packetMode)}; stations appear with their first packet</div>`;
   else rows.innerHTML = l.stations.slice(0, 80).map((st) => {
     const rb = rx && st.lat != null && st.lon != null ? (() => { const d = Math.hypot((st.lat! - rx.lat) * 111.2, (st.lon! - rx.lon) * 111.2 * Math.cos(rx.lat * Math.PI / 180)); return d < 10 ? d.toFixed(1) : String(Math.round(d)); })() : '';
     const line = (st.line || '').replace(/^[^·]*·\s*/, '');
@@ -15025,6 +15109,7 @@ function renderAprs() {
     const d = new Date(p.t);
     return `<div class="p"><span class="t">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}</span> ${escapeHtml(p.line)}</div>`;
   }).join('') || '<div class="idle">no packets yet</div>';
+  renderAprsFrames();
 }
 function aprsAgo(s: number): string { return s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`; }
 function aprsColourOf(st: { kind: string; sym: string; speed?: number }): string {
@@ -15388,7 +15473,7 @@ function showDecBox(what: string) {
                             : what === 'cw'    ? (cwSkim ? 'CW SKIMMER' : 'CW')
                             : what === 'psk'   ? (pskSkim ? 'PSK SKIMMER' : 'PSK')
                             : what === 'rtty' && rttySkim ? 'RTTY SKIMMER'
-                            : what === 'aprs'  ? (aprsBaud === 300 ? 'APRS · HF 300' : 'APRS')
+                            : what === 'aprs'  ? (packetMode === '300' ? 'APRS · HF 300' : packetMode === '9600' ? 'APRS · 9600' : 'APRS')
                             : what === 'sitora' ? 'SITOR-A'
                             : isTextFamily(what) ? TEXT_FAMILY_KEY[what]
                             : what === 'hell'  ? 'FELD HELL'

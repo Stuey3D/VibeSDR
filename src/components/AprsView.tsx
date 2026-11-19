@@ -14,12 +14,17 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, t
 import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { aprsLogTime, type AprsBoxRow } from '../services/tracks';
+import { packetFrameHead, packetHexGrouped, type PacketFrame } from '../services/packet';   // ★ V12 the frame log
 
 export interface AprsViewProps {
   rows: AprsBoxRow[];
   messages: string[];
   log: { t: number; line: string }[];
   baud: 1200 | 300;
+  /** ★ V12 every AX.25 frame, newest first (cubesat telemetry, connected-mode traffic), with when it came. */
+  frames?: { f: PacketFrame; t: number }[];
+  /** ★ V12 the "listening — …" words for the packet choice (packet.ts packetIdle). */
+  idle?: string;
   bodySize: StyleProp<ViewStyle>;
   /** The row the keyboard / pad is on, -1 for none. */
   focusIdx: number;
@@ -29,7 +34,7 @@ export interface AprsViewProps {
   onScrollY?: (y: number) => void;
 }
 
-export default function AprsView({ rows, messages, log, baud, bodySize, focusIdx, onMap, scrollRef, onScrollY }: AprsViewProps) {
+export default function AprsView({ rows, messages, log, baud, frames = [], idle, bodySize, focusIdx, onMap, scrollRef, onScrollY }: AprsViewProps) {
   const tk = useDecoderTokens();
   const s = useDecoderStyles(makeS);
   const own = useRef<ScrollView | null>(null);
@@ -49,7 +54,7 @@ export default function AprsView({ rows, messages, log, baud, bodySize, focusIdx
                 onScroll={(e) => onScrollY?.(e.nativeEvent.contentOffset.y)}>
       {!rows.length && (
         <Text style={[s.idle, { color: tk.muted }]}>
-          {`listening — ${baud === 300 ? 'HF packet, 300 Bd' : 'APRS, 1200 Bd'}; stations appear with their first packet`}
+          {`listening — ${idle ?? (baud === 300 ? 'HF packet, 300 Bd' : 'APRS, 1200 Bd')}; stations appear with their first packet`}
         </Text>
       )}
       {rows.map((r, i) => {
@@ -84,6 +89,18 @@ export default function AprsView({ rows, messages, log, baud, bodySize, focusIdx
           <Text style={{ color: tk.muted }}>{aprsLogTime(p.t)} </Text>{p.line}
         </Text>
       ))}
+      {frames.length > 0 && (
+        <View style={[s.head, { borderBottomColor: tk.divider }]}><Text style={[s.headTxt, { color: tk.label }]}>FRAMES</Text></View>
+      )}
+      {frames.slice(0, 30).map(({ f, t }, i) => (
+        <View key={`${t}-${i}`} style={s.fr}>
+          <Text style={[s.pk, { color: tk.value }]} selectable>
+            <Text style={{ color: tk.muted }}>{aprsLogTime(t)} </Text>{packetFrameHead(f)}
+          </Text>
+          {!!f.hex && <Text style={[s.hx, { color: tk.muted }]} selectable>{packetHexGrouped(f.hex)}</Text>}
+          {!!f.hex && <Text style={[s.hx, { color: tk.muted }]} selectable>{f.text.slice(0, 64)}</Text>}
+        </View>
+      ))}
     </ScrollView>
   );
 }
@@ -107,4 +124,6 @@ const makeS = (T: DecoderTokens) => StyleSheet.create({
   headTxt: { fontFamily: DECODER_FONT, fontSize: 10, fontWeight: '700', letterSpacing: 1.4 },
   msg:     { fontFamily: DECODER_FONT, fontSize: 12, lineHeight: 17, paddingHorizontal: 6, paddingVertical: 2 },
   pk:      { fontFamily: DECODER_FONT, fontSize: 11, lineHeight: 16, paddingHorizontal: 6, paddingVertical: 1 },
+  fr:      { paddingVertical: 2 },
+  hx:      { fontFamily: DECODER_FONT, fontSize: 10, lineHeight: 14, paddingLeft: 18, paddingRight: 6 },
 });

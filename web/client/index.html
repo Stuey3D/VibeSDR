@@ -3191,6 +3191,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #aprsMsgs .m, #aprsLog .p { font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; padding: 1px 6px; color: rgba(255,255,255,0.82);
                             white-space: pre-wrap; word-break: break-word; }
 #aprsLog .p .t { color: rgba(255,255,255,0.45); }
+/* ★ V12 the frame log (every AX.25 frame: cubesat telemetry, connected-mode traffic) — heading, then hex and ASCII */
+#aprsFrames .f { font: 11px/1.35 ui-monospace, Menlo, Consolas, monospace; padding: 2px 6px; color: rgba(255,255,255,0.82); overflow-wrap: anywhere; }
+#aprsFrames .f .t { color: rgba(255,255,255,0.45); }
+#aprsFrames .f .s { color: #ffd36b; }
+#aprsFrames .f .x, #aprsFrames .f .a { display: block; color: rgba(255,255,255,0.6); padding-left: 1em; }
+#aprsSettings .btn.unreach { opacity: 0.45; border-style: dashed; }
 /* ★★ V12 DSC (dsc.ts): one row per call — time, frequency, ×repeats, then the line; coloured by what the call is. */
 #dscList { display: none; margin-top: 6px; }
 #dscList.on { display: block; }
@@ -4513,7 +4519,7 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="rttyCardClose" title="Back to the list">CLOSE</button></div>
       <div id="rttyCardSet"></div><pre id="rttyCardText"></pre></div>
     <!-- ★★ V12 APRS: the stations heard, the messages, and the packets as they arrive. -->
-    <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div></div>
+    <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div><div class="aprsHead" id="aprsFramesHead" hidden>FRAMES</div><div id="aprsFrames"></div></div>
     <!-- ★★ DSC: the calls, newest first — the server's line, coloured by distress / urgency / safety / routine (dsc.ts). -->
     <!-- ★★ V12 (2026-10-29): the box's own channel keys — the band the dial is on (distress + routine), else the distress
          set — and a one-tap TUNE when the dial sits ON an assigned frequency (main.ts renderDscKeys). -->
@@ -5774,12 +5780,23 @@ select.btn { padding: 6px 8px; }
   <div class="subPanel" id="aprsSettings" hidden>
     <div class="mrow">
       <label>PACKET</label>
+      <!-- ★ V12 (docs/v12/AX25-9600-FX25-IL2P.md): AUTO · VHF 1200 · 9600 · HF 300, drawn from the server's capability
+           (src/services/packet.ts packetChoices) — 9600 and AUTO only where the server has them, greyed with the reason
+           where this radio cannot reach 2 m / 70 cm. These two are what an older server offers. -->
       <div class="seg" id="aprsBaud">
         <button class="btn on" data-aprsbaud="1200" title="VHF APRS: Bell 202, 1200 Bd — tune the APRS channel in NFM">VHF 1200</button>
         <button class="btn" data-aprsbaud="300" title="HF APRS: 300 Bd, 1600/1800 Hz tones — tune 10.1476 MHz (30 m) or 14.105 MHz (20 m) in USB">HF 300</button>
       </div>
     </div>
-    <div class="mrow"><button class="btn" id="aprsTune" title="Tune this region's APRS channel">TUNE 144.800 NFM</button></div>
+    <!-- ★ V12 FX.25 and IL2P: switches UNDER the 1200 / 9600 choice (AUTO has both on; HF 300 has neither) -->
+    <div class="mrow" id="aprsFecRow" hidden>
+      <label>FEC</label>
+      <div class="seg" id="aprsFec">
+        <button class="btn on" id="aprsFx25" title="FX.25: Reed-Solomon round an ordinary AX.25 frame — mends up to 32 bad bytes">FX.25</button>
+        <button class="btn on" id="aprsIl2p" title="IL2P: Reed-Solomon packet radio without bit-stuffing (NinoTNC, Dire Wolf)">IL2P</button>
+      </div>
+    </div>
+    <div class="mrow" id="aprsTuneRow"><button class="btn" id="aprsTune" title="Tune this region's APRS channel">TUNE 144.800 NFM</button></div>
     <div class="hint" id="aprsHint">Every station heard is listed, with its position, weather, messages and the digipeater
       that carried it. <b>MAP</b> in the box shows them on the map.</div>
   </div>

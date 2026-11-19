@@ -68,11 +68,17 @@ inline const std::vector<Entry>& table() {
             { ch(156.525e6, 12.5e3), ch(2187.5e3, 1.5e3), ch(4207.5e3, 1.5e3), ch(6312.0e3, 1.5e3),
               ch(8414.5e3, 1.5e3), ch(12577.0e3, 1.5e3), ch(16804.5e3, 1.5e3) } });
         // APRS: every national 2 m channel vibeaprs::regionalHz knows, and HF APRS at 300 Bd on 30 m (the server reads
-        // a baud below 600 as HF).
+        // a baud below 600 as HF). ★ V12 (docs/v12/AX25-9600-FX25-IL2P.md): the key is the PACKET decoder now — 9600
+        // packet and cubesat telemetry live on 70 cm as well (435–438 MHz), so a radio that reaches only 70 cm has it too.
         v.push_back({ "aprs", "APRS",
-            "is on 2 m (144.390\xe2\x80\x93" "145.570 MHz) and 10.1476 MHz",
+            "is on 2 m (144.390\xe2\x80\x93" "145.570 MHz), 70 cm (430\xe2\x80\x93" "440 MHz) and 10.1476 MHz",
             { ch(144.390e6, 8e3), ch(144.575e6, 8e3), ch(144.620e6, 8e3), ch(144.640e6, 8e3), ch(144.800e6, 8e3),
-              ch(144.930e6, 8e3), ch(145.175e6, 8e3), ch(145.525e6, 8e3), ch(145.570e6, 8e3), ch(10.1476e6, 2e3) } });
+              ch(144.930e6, 8e3), ch(145.175e6, 8e3), ch(145.525e6, 8e3), ch(145.570e6, 8e3), ch(10.1476e6, 2e3),
+              band(430e6, 440e6) } });
+        // ★ V12 9600 PACKET (G3RUH) and its FEC: terrestrial 9k6 on 2 m and 70 cm, and the cubesats' 70 cm downlinks. The
+        //   PACKET decoder's 9600 option (and its AUTO) is greyed with this where the radio reaches neither.
+        v.push_back({ "pkt9600", "9600 packet", "is on 2 m (144\xe2\x80\x93" "148 MHz) and 70 cm (420\xe2\x80\x93" "450 MHz)",
+            { band(144e6, 148e6), band(420e6, 450e6) } });
         // NAVTEX: the international 518 kHz, the national 490 kHz and the HF 4209.5 kHz.
         v.push_back({ "navtex", "NAVTEX", "is on 518, 490 and 4209.5 kHz",
             { ch(518e3, 1e3), ch(490e3, 1e3), ch(4209.5e3, 1e3) } });

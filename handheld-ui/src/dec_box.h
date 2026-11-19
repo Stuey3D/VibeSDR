@@ -121,7 +121,7 @@ inline std::string decTitle(const std::string& view) {
     if (view == "cw") return u.cwSkim ? "CW SKIMMER" : "CW";
     if (view == "psk") return u.pskSkim ? "PSK SKIMMER" : "PSK";
     if (view == "rtty" && u.rttySkim) return "RTTY SKIMMER";
-    if (view == "aprs") return u.aprsBaud == 300 ? "APRS · HF 300" : "APRS";
+    if (view == "aprs") return u.aprsBaud == 300 ? "APRS · HF 300" : u.aprsPacket == "9600" ? "APRS · 9600" : "APRS";
     if (view == "time") { for (auto& t : kTimeStations) if (u.timeStation == t.id) return std::string("TIME · ") + upper(t.id); }
     if (view == "refused") return "DECODER";
     if (view == "hell") return "FELD HELL";
@@ -441,7 +441,7 @@ inline void decPaneAprs(App& a, Ctx& c, const RadioState& s, Rect view) {
     DecUi& u = decUi();
     (void)a; (void)s;
     if (u.sub == 0) {
-        if (u.aprs.empty()) { decNone(c, view, u.aprsBaud == 300 ? "listening — HF packet, 300 Bd; stations appear with their first packet" : "listening — APRS, 1200 Bd; stations appear with their first packet"); return; }
+        if (u.aprs.empty()) { decNone(c, view, std::string("listening \xe2\x80\x94 ") + (u.aprsBaud == 300 ? "HF packet, 300 Bd" : u.aprsPacket == "9600" ? "packet, 9600 Bd" : u.aprsPacket == "auto" ? "packet, 1200 + 9600" : "APRS, 1200 Bd") + "; stations appear with their first packet"); return; }
         decRows(c, decListScroll(), view, (int)u.aprs.size(), 30, "dec.ap.", [&](int k) { return u.aprs[(size_t)k].key; },
             [&](int k, Rect rr, bool) {
                 const DecAprsSt& x = u.aprs[(size_t)k];
@@ -450,6 +450,20 @@ inline void decPaneAprs(App& a, Ctx& c, const RadioState& s, Rect view) {
                 const std::string ago = sn < 60 ? std::to_string((int)sn) + "s" : sn < 3600 ? std::to_string((int)(sn / 60)) + "m" : std::to_string((int)(sn / 3600)) + "h";
                 const Rgba kc = x.kind == "weather" ? rgb(0x39d0d8) : x.kind == "object" || x.kind == "item" ? rgb(0xffad42) : rgb(0x59c26b);
                 decRowText(c, rr, x.name, 130, x.line, kc, th::white, ago);
+            });
+    } else if (u.sub == 2) {
+        // ★ V12 FRAMES: every AX.25 frame — the heading, then the hex and the text (cubesat telemetry, connected mode)
+        if (u.aprsFrames.empty()) { decNone(c, view, "no frames yet"); return; }
+        const float rh = 3 * c.f.small.lineHeight() + 8;
+        decRows(c, decListScroll(), view, (int)u.aprsFrames.size(), rh, "dec.fr.", [&](int k) { return std::to_string(k); },
+            [&](int k, Rect rr, bool) {
+                const DecAprsPkt& p = u.aprsFrames[(size_t)k];
+                decRowBg(c, rr, false);
+                std::vector<std::string> parts; size_t a0 = 0;
+                for (size_t b = p.line.find('\n'); ; b = p.line.find('\n', a0)) { parts.push_back(p.line.substr(a0, b == std::string::npos ? std::string::npos : b - a0)); if (b == std::string::npos) break; a0 = b + 1; }
+                float y = rr.y + 3;
+                c.tc.draw(c.g, c.f.small, decFit(c, c.f.small, decHms(p.at) + "  " + parts[0], (int)rr.w - 16), rr.x + 8, y, th::white);
+                for (size_t i = 1; i < parts.size() && i < 3; ++i) { y += c.f.small.lineHeight(); c.tc.draw(c.g, c.f.small, decFit(c, c.f.small, parts[i], (int)rr.w - 24), rr.x + 16, y, th::dim); }
             });
     } else {
         if (u.aprsLog.empty()) { decNone(c, view, "no packets yet"); return; }
@@ -629,13 +643,36 @@ inline void decOptionRows(App& a, const RadioState& s, const std::string& id, st
         }
     } else if (id == "aprs") {
         double hz; { std::lock_guard<std::mutex> lk(u.capMtx); hz = u.aprsHz; }
-        choice("aprs.baud", "PACKET", {"VHF 1200", "HF 300"}, u.aprsBaud == 300 ? 1 : 0, [](int i) { decUi().aprsBaud = i ? 300 : 1200; decReattachSoon("aprs"); });
+        // ★★ V12 (packet.ts packetChoices): AUTO · VHF 1200 · 9600 · HF 300 — AUTO and 9600 only where the server has 9600;
+        //    a greyed one (this radio reaches neither 2 m nor 70 cm) stays in the list and says why when picked.
+        bool has96, live96, fecOk; std::string why96;
+        { std::lock_guard<std::mutex> lk(u.capMtx); has96 = u.pkt96Has; live96 = u.pkt96Live; fecOk = u.pktFec; why96 = u.pkt96Why; }
+        std::vector<std::string> ids, labels;
+        if (has96) { ids.push_back("auto"); labels.push_back(live96 ? "AUTO" : "\xc2\xb7 AUTO \xc2\xb7"); }
+        ids.push_back("1200"); labels.push_back("VHF 1200");
+        if (has96) { ids.push_back("9600"); labels.push_back(live96 ? "9600" : "\xc2\xb7 9600 \xc2\xb7"); }
+        ids.push_back("300"); labels.push_back("HF 300");
+        int sel = 0; for (size_t i = 0; i < ids.size(); ++i) if (ids[i] == (u.aprsBaud == 300 ? std::string("300") : u.aprsPacket)) sel = (int)i;
+        choice("aprs.baud", "PACKET", labels, sel, [ids, live96, why96](int i) {
+            DecUi& x = decUi();
+            const std::string m = ids[(size_t)i];
+            if ((m == "auto" || m == "9600") && !live96) { x.status = (m == "auto" ? "AUTO" : "9600") + std::string(" unavailable \xe2\x80\x94 ") + (why96.empty() ? "9600 packet cannot run on this radio" : why96); return; }
+            x.aprsPacket = m; x.aprsPacketChosen = true; x.aprsBaud = m == "300" ? 300 : 1200; x.aprsFrames.clear();
+            decReattachSoon("aprs");
+        });
+        const std::string pm = u.aprsBaud == 300 ? std::string("300") : u.aprsPacket;
+        if (fecOk && (pm == "1200" || pm == "9600")) {
+            choice("aprs.fx25", "FX.25", {"ON", "OFF"}, u.aprsFx ? 0 : 1, [](int i) { decUi().aprsFx = i == 0; decReattachSoon("aprs"); });
+            choice("aprs.il2p", "IL2P", {"ON", "OFF"}, u.aprsIl ? 0 : 1, [](int i) { decUi().aprsIl = i == 0; decReattachSoon("aprs"); });
+        }
         const double th = u.aprsBaud == 300 ? 10147600 : hz;
         const std::string tm = u.aprsBaud == 300 ? "usb" : "nfm";
-        if (decReach(s, th)) action("aprs.tune", "TUNE", {decMHz(th) + (u.aprsBaud == 300 ? " USB" : " NFM")}, {std::fabs(s.vfoHz - th) < 500 && s.mode == tm},
+        if (pm != "9600" && decReach(s, th)) action("aprs.tune", "TUNE", {decMHz(th) + (u.aprsBaud == 300 ? " USB" : " NFM")}, {std::fabs(s.vfoHz - th) < 500 && s.mode == tm},
                                     [&a, &s, th, tm](int) { decTune(a, s, th, tm); });
         hint(u.aprsBaud == 300 ? "HF packet: 300 Bd on 10.1476 MHz USB (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough. The speaker is muted while it listens (AUDIO unmutes it)."
-                               : "VHF APRS: " + decMHz(hz) + " MHz NFM here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. The speaker is muted while it listens (AUDIO unmutes it).");
+             : pm == "9600" ? "9600 packet (G3RUH): tune the signal in NFM \xe2\x80\x94 terrestrial 9k6 on 2 m and 70 cm, or a cubesat downlink. Every frame goes in FRAMES; APRS ones also in STATIONS. The speaker is muted while it listens (AUDIO unmutes it)."
+             : pm == "auto" ? "AUTO: 1200 and 9600 at once, with FX.25 and IL2P \xe2\x80\x94 APRS on " + decMHz(hz) + " MHz NFM here, or tune any packet signal. Every frame goes in FRAMES. The speaker is muted while it listens (AUDIO unmutes it)."
+                            : "VHF APRS: " + decMHz(hz) + " MHz NFM here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. The speaker is muted while it listens (AUDIO unmutes it).");
     } else if (id == "dsc") {
         std::vector<std::string> o; std::vector<bool> lit; std::vector<DecDscCh> chs;
         for (auto& ch : kDscDistress) {
@@ -907,7 +944,7 @@ inline std::vector<std::string> decSubs(const std::string& view) {
     if (view == "psk") return u.pskSkim ? std::vector<std::string>{"SIGNALS", "CALLS"} : std::vector<std::string>{"TEXT", "SIGNALS", "CALLS"};
     if (view == "rtty" && u.rttySkim) return {"SIGNALS", "CALLS"};
     if (view == "jtty") return {"SIGNALS", "CALLS"};
-    if (view == "aprs") return {"STATIONS", "PACKETS"};
+    if (view == "aprs") return {"STATIONS", "PACKETS", "FRAMES"};   // ★ V12 FRAMES: the frame log
     return {};
 }
 
@@ -1032,7 +1069,7 @@ inline void decDrawBox(App& a, Ctx& c, const RadioState& s) {
             if (xv) { if (xv->clear) xv->clear(); }
             else if (d && d->kind == DK_PICTURE) picClear();
             else if (view == "spots") { u.spots.clear(); u.spotsSeq++; }
-            else { u.log.clear(); u.calls.clear(); u.dsc.clear(); u.aprsLog.clear(); u.aprs.clear(); u.pages.clear(); u.pageRead = 0; decClearLists(); decListScroll() = {}; decSigAnchor() = {}; }
+            else { u.log.clear(); u.calls.clear(); u.dsc.clear(); u.aprsLog.clear(); u.aprs.clear(); u.aprsFrames.clear(); u.pages.clear(); u.pageRead = 0; decClearLists(); decListScroll() = {}; decSigAnchor() = {}; }
         } else if (act == 3) {
             if (decRunning()) decStop(a, view == "spots" ? "spots" : view);
             if (!decRunning()) { u.boxOpen = false; u.view.clear(); u.refusal.clear(); decRelease(a); }

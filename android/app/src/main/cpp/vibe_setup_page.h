@@ -2387,7 +2387,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_ft8", "FT8 + FT4"], ["dec_ft8band", "Band spots"], ["dec_lora", "LoRa"], ["dec_lora_all", "LoRa on every channel"],
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
-  ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"],
+  ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
   ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_ale", "ALE"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
   ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
   ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],

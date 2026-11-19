@@ -247,6 +247,8 @@ export interface DecoderCallbacks {
    *  packet — as the server sent them; src/services/tracks.ts aprsSanitise / aprsPacketSanitise check them. */
   onAprsList?:   (data: unknown) => void;
   onAprsPacket?: (data: unknown) => void;
+  /** ★ V12 every AX.25 frame, APRS or not (src/services/packet.ts parsePacketFrame) — docs/v12/AX25-9600-FX25-IL2P.md */
+  onAprsFrame?:  (data: unknown) => void;
   /** Chat (rides this WS — chat_websocket.go via the dxcluster handler).
    *  isHistory=true for the server's buffer replay after subscribe_chat —
    *  render silently, no unread pulse. Already-seen messages are deduped
@@ -340,6 +342,8 @@ export class DecoderClient {
   dscParams: Record<string, unknown> = { band: 'hf', center_frequency: 1700 };
   /** ★ V12 APRS: 1200 Bd (VHF, NFM) or 300 Bd (HF packet, USB) — a change is a re-attach (start('aprs') again). */
   aprsBaud: 1200 | 300 = 1200;
+  /** ★ V12 packet.ts packetParams (AUTO / 1200 / 9600 / 300, FX.25, IL2P); null = the old {baud_rate} only. */
+  aprsParams: Record<string, number | string> | null = null;
   /** ★ V12 balloons: AUTO, or the listener's manual pins (balloons.ts balloonParams) — re-attach to apply. */
   balloonSet: BalloonSettings = { ...BALLOON_AUTO };
   /** ★ V12 DTMF + 5-tone: which decoders run and the 5-tone standard (tones.ts tonesParams) — re-attach to apply. */
@@ -659,10 +663,12 @@ export class DecoderClient {
               msg: spotStr(d.message ?? d.msg ?? d.text),
               bearing: spotNum(d.bearing ?? d.bearing_deg ?? d.azimuth),
             });
-          } else if ((m.type === 'aprs_list' || m.type === 'aprs_packet') && m.data) {
+          } else if ((m.type === 'aprs_list' || m.type === 'aprs_packet' || m.type === 'aprs_frame') && m.data) {
             // ★ V12 APRS: only while OUR APRS decoder is attached (a shared dial mirrors a running decoder).
             if (this.active !== 'aprs') return;
-            if (m.type === 'aprs_list') this.cb.onAprsList?.(m.data); else this.cb.onAprsPacket?.(m.data);
+            if (m.type === 'aprs_list') this.cb.onAprsList?.(m.data);
+            else if (m.type === 'aprs_frame') this.cb.onAprsFrame?.(m.data);   // ★ V12 the frame log
+            else this.cb.onAprsPacket?.(m.data);
           } else if (m.type === 'cw_signals' && m.data) {
             // ★ V12: only while OUR CW decoder is attached — on a shared dial the server mirrors a running decoder.
             if (this.active !== 'cw') return;
@@ -887,7 +893,7 @@ export class DecoderClient {
       case 'time':    return { extension_name: this.timeStation, params: {} };
       // ★ V12 CW: the skimmer's segment rides as `width` (the server reads 12–192 kHz; the box offers 24/48/96).
       // ★ V12 APRS: the baud rides as `baud_rate` (the server reads < 600 as HF 300 Bd), always sent, as the web does.
-      case 'aprs':    return { extension_name: 'aprs', params: { baud_rate: this.aprsBaud } };
+      case 'aprs':    return { extension_name: 'aprs', params: this.aprsParams ?? { baud_rate: this.aprsBaud } };
       case 'cw':      return this.cwSkim
         ? { extension_name: 'cwskim', params: { width: this.cwWidth } }
         : { extension_name: 'cw', params: {} };

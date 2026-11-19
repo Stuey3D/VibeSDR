@@ -220,7 +220,7 @@ flags_for() {
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
-    test-ais|test-aprs|test-ais-store|test-ais-binary) echo "-O2 -lpthread" ;;
+    test-ais|test-aprs|test-ais-store|test-ais-binary|test-ax25hs) echo "-O2 -lpthread" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
@@ -466,10 +466,13 @@ deps_for() {
     test-decoder-hosts|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
-    test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
+    test-sstv-quality)  echo "$VDSP/ddc.cpp $VDSP/resampler.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc + resampler: the host carries APRS and 9600 packet (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
-    test-ais|test-aprs|test-ais-store|test-ais-binary) echo "$VDSP/ddc.cpp" ;;
+    test-ais|test-aprs|test-ais-store|test-ais-binary) echo "$VDSP/ddc.cpp $VDSP/resampler.cpp" ;;   # ★ resampler: APRS carries 9600 (vibe_g3ruh.h)
+    # ★★ V12 9600 packet, FX.25, IL2P (docs/v12/AX25-9600-FX25-IL2P.md): RS, a real off-air FX.25 block, the IL2P spec's
+    #    example packets, the G3RUH modem sweep, 1200 AFSK with FEC, noise with zero frames, the run's frame log, CPU.
+    test-ax25hs)        echo "$VDSP/ddc.cpp $VDSP/resampler.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
     test-drm|test-drm-signal|test-drm-constellation) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
     test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;
@@ -879,6 +882,7 @@ if npx tsx scripts/test_drm_app.ts; then pass=$((pass+1)); else fail=$((fail+1))
 if node --no-warnings scripts/test_am_sync.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 synchronous AM (amSync.ts)
 if node --no-warnings scripts/test_freedv.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV as a mode (freedv.ts)
 if node --no-warnings scripts/test_freedv_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV in the app (key, VTS, sub-mode row, sideband)
+if npx tsx scripts/test_packet.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 packet: AUTO / 1200 / 9600 / 300, FX.25, IL2P, the frame log (packet.ts)
 if npx tsx scripts/test_m17.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 as a mode (m17.ts)
 if npx tsx scripts/test_dvsig.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 DV ID (dvsig.ts)
 if npx tsx scripts/test_m17_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 in the app (key, VTS, no width, ghost reports)
@@ -1899,6 +1903,22 @@ if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-
   rm -f "$OUT/ais-clip.cu8" "$OUT/aprs-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-ais / test-aprs builds'; notrun=$((notrun+1))
+fi
+
+# ★★ V12 9600 PACKET + FX.25 + IL2P (docs/v12/AX25-9600-FX25-IL2P.md): test-ax25hs --write-clip (9600 bursts on 435 MHz:
+#     plain AX.25, an FX.25-only telemetry frame, IL2P), the real server on a fake rtl_tcp, a listener in NFM with the
+#     packet decoder in AUTO (the channel IQ reaches the 9600 receiver), the frame log, the satellite name, FX.25 off = the
+#     FX.25 frame gone, the gallery. Needs VIBESERVER_BIN (exit 3 = not run). Silent.
+printf '\n\033[1m── 9600 packet, FX.25, IL2P (end to end: the server) ──\033[0m\n'
+if [ -x "$OUT/test-ax25hs" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-ax25hs" --write-clip "$OUT/pkt9600-clip.cu8" 2400000 2>/dev/null
+  VIBE_PKT9600_CLIP="$OUT/pkt9600-clip.cu8" node --max-old-space-size=512 scripts/test-server-packet9600.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_PKT9600_CLIP="$OUT/pkt9600-clip.cu8" node --max-old-space-size=512 scripts/test-web-packet9600.mjs; rc=$?   # ★ headless Edge, --mute-audio
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/pkt9600-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-ax25hs build'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 DECODER REACH + REGION DEFAULTS (vibe_decoder_reach.h): the real server on a fake rtl_tcp — a locked range greys

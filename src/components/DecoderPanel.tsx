@@ -147,7 +147,9 @@ export interface DecoderPanelProps {
   /** ★ V12 APRS (VibeServer): the station rows, messages and packets for the APRS view (AprsView), and MAP — the station
    *  map, on a station when a key is given (null where there is no map: Apple TV). Set only while APRS is the decoder. */
   aprs?:           { rows: AprsBoxRow[]; messages: string[]; log: { t: number; line: string }[]; baud: 1200 | 300;
-                     onMap: ((key?: string) => void) | null } | null;
+                     onMap: ((key?: string) => void) | null;
+                     /** ★ V12 the frame log, the packet choice's idle words, 9600 for the title */
+                     frames?: { f: import('../services/packet').PacketFrame; t: number }[]; idle?: string; is9600?: boolean } | null;
   /** OWRX DAB (§5.2): when an ensemble is tuned the panel shows the service list with logos;
    *  the speed-correction control (§4.5) rides in the header. NOT a decoder. */
   dabProgrammes?:  { id: number; name: string }[];
@@ -1178,6 +1180,7 @@ export default function DecoderPanel({
     ? (spotsKind === 'cw' ? 'CW SPOTS' : (spotsTitle || 'DIGITAL SPOTS'))
     : isCw && cw!.skim ? (activeDecoder === 'psk' ? 'PSK SKIMMER' : activeDecoder === 'rtty' ? 'RTTY SKIMMER' : 'CW SKIMMER')
     : isAprs && aprs!.baud === 300 ? 'APRS · HF 300'
+    : isAprs && aprs!.is9600 ? 'APRS · 9600'
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
   return (
@@ -1634,7 +1637,7 @@ export default function DecoderPanel({
                    scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}
         {!minimised && isAprs && (
-          <AprsView rows={aprs!.rows} messages={aprs!.messages} log={aprs!.log} baud={aprs!.baud} bodySize={bodySize}
+          <AprsView rows={aprs!.rows} messages={aprs!.messages} log={aprs!.log} baud={aprs!.baud} frames={aprs!.frames} idle={aprs!.idle} bodySize={bodySize}
                     focusIdx={kbZone === 'list' ? listIdx : -1} onMap={aprs!.onMap ? (k: string) => aprs!.onMap?.(k) : null}
                     scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}
