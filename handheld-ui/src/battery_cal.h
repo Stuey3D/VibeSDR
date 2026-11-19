@@ -108,7 +108,7 @@ inline void calStressSdrTick(App& a, const RadioState& s) {
     } else if (nowSec() - k.sentAt > 4) k.why = "this mode keeps its rate";   // ★ asked once; the engine kept its own
 }
 
-/** "SDR 3.2 MS/s" (+ why it is not the top rate) for the stress screen. */
+/** "SDR 2.4 MS/s" (+ why it is not the top rate) for the stress screen. */
 inline std::string calStressSdrLine(App& a) {
     if (!a.eng_) return "";
     const RadioState& s = a.eng_->state();

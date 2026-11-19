@@ -40,7 +40,7 @@ the charger input, not the battery boost (~4.8 V less drops — marginal for the
 3. **STRESS drives the SDR** (handheld-ui battery_cal.h StressSdr). While RUNNING, the radio is set to the top rate in
    hwinfo `rates` (under lockedRate), keeps decoding and streaming, is muted (vibe-hwd), and shows no waterfall. Its own
    rate comes back on done / cancelled / shutdown, and the per-radio memory keeps its own rate throughout. The screen
-   shows "N of 4 busy loops — 76 °C" and "SDR 3.2 MS/s · speaker muted · no waterfall". If the rate is not the UI's to
+   shows "N of 4 busy loops — 76 °C" and "SDR 2.4 MS/s · speaker muted · no waterfall" (an RTL's top rate is 2.4 MS/s). If the rate is not the UI's to
    change, it says why: DAB, HF+, a server lock, or a mode that keeps its rate.
 
 ## Tests
