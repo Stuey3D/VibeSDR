@@ -123,7 +123,10 @@ const STEPS: Step[] = [
         + 'starts on AUTO, LSB below 10 MHz (60 m excepted) and USB above as FreeDV operators use, with USB and LSB by hand for a station '
         + 'that is not), and, where the server has the Codec 2 library, M17 after NFM (2 m and '
         + '70 cm, where the radio reaches them; the line names who is talking, then their text, position or SMS, and there is '
-        + 'no bandwidth to set). '
+        + 'no bandwidth to set). DV ID, after them, says who is talking on a DMR, D-STAR, System Fusion, NXDN or dPMR channel '
+        + '\u2014 never the voice: its box picks AUTO or one system, and lists each transmission (callsigns, radio IDs, talkgroup, '
+        + 'talker alias and, on the amateur bands, a position for the MAP); off the amateur bands it says only that a system was '
+        + 'heard, with its colour code and slot. Analogue FM on the same channel still plays. '
         + 'In DECODERS… there, the modes that tune the radio themselves and open '
         + 'their own view (ADS-B, AIS, DATALINK, DAB, ISM, NDB, SONDES, DIGI BAND) come first, under TUNES THE RADIO ITSELF — they '
         // ★★ V12 DAB own station (docs/v12/DAB-OWN-STATION.md) — where the server allows it, a pick is the listener's alone
