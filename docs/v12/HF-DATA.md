@@ -14,7 +14,7 @@ VibeServer, from a listener's USB audio:
 
 Everything below is built, committed and tested on this Mac. **Not done / owed:**
 
-1. **Off-air DOMINOEX and MT63.** Neither was heard live (15 min of 3.582 MHz recorded 2026-11-19 ≈ 21:30 UTC: see
+1. **Off-air DOMINOEX and MT63.** Neither was heard live (15 min of 3.582 MHz recorded 2026-11-19 20:56 UTC: see
    "Real signals"). Both are proven on the public sigidwiki reference recordings (real transmitters, through mp3) and on
    our own transmitter only.
 2. **MT63 weak-signal edge.** At −2 to −4 dB (3 kHz, `tm_file`'s dilute measure) 10 of 18 synthetic overs come out whole;
@@ -137,7 +137,10 @@ while the interleaver fills (the clips start with the text). 2G ALE: two `sound 
 |---|---|---|---|
 | 20:23–20:38 | 7.102 MHz USB (HFLink 40 m) | 15 min | no ALE |
 | 20:41–20:56 | 3.596 MHz USB (HFLink 80 m) | 15 min | **SL3ZXB's TWAS soundings at +03:35 and +03:42** — decoded, 0 errors on most words, nothing else printed |
-| ≈ 21:30 | 3.582 MHz USB (80 m digital) | 15 min | see the RESUME list (no MT63 / DOMINOEX found) |
+| 20:56–21:11 | 3.582 MHz USB (80 m digital) | 15 min | no MT63 / DOMINOEX on air; **nothing printed** by the one key's AUTO or by ALE |
+
+All 45 minutes of real band audio through the one text-mode AUTO (with DOMINOEX and MT63) and through ALE: nothing
+printed except SL3ZXB's soundings — real-band false-decode check passed.
 
 Recordings in `~/VibeSDR-test-audio/hfdata/` (local, out of git).
 
@@ -150,6 +153,8 @@ Recordings in `~/VibeSDR-test-audio/hfdata/` (local, out of git).
 | of which MT63 alone (`any-mt63`) | 0.38 s | ≈ 4 % |
 | of which DOMINOEX alone (`any-dominoex`, its spectra shared with THOR) | 0.35 s | ≈ 3.5 % |
 | ALE, 300 s of noise (NEON / scalar) | 0.06 / 0.07 s (0.02 %) | ≈ 1 % |
+| benchmark rows (`vibeserver-bench 3`, this Mac): `dec_ale` | 0.0 %, 50 frames, green | — |
+| `dec_mfsk` (now the six-family AUTO) | 0.2 %, 27 chars, green | — |
 
 ★ **The trade-off (Stuart's rule: say it first)**: the one key's AUTO costs ~44 % more CPU than before; RAM is a few
 hundred KB more (MT63's seven places × two interleavers ≈ 25 KB each per bandwidth; DOMINOEX tables 1 KB). MT63 at four
