@@ -140,7 +140,7 @@ flags_for() {
     test-vfo-dc)           echo "-O2" ;;
     # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
     # ★★ …and the RTTY skimmer (V12 2026-11-14, test-rtty-skimmer): the engine and "rttyskim" through a DecoderHost.
-    test-bgdecode|test-bg-priority|test-bg-band|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
+    test-bgdecode|test-lrpt-host|test-bg-priority|test-bg-band|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
     # ★★ V12 2026-10-27: …and the NDB skimmer as a background VFO, beside NAVTEX on one capture (ndb_synth.h's beacons)
     test-bg-ndb)           echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib -I tools/ndb-bench -lpthread" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
@@ -356,7 +356,7 @@ deps_for() {
     # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link — nor pffft,
     #   which they carry too since monitor.c's STFT runs through it (2026-10-25).
     # ★ V12 2026-10-27: test-bg-ndb — the same, plus the NDB skimmer (the background NDB skimmer VFO, vibe_bgdecode_ndb.h)
-    test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer) echo "$([ "$1" = test-bg-ndb ] && echo android/app/src/main/cpp/decoders/ndb_skimmer.cpp) $VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-bgdecode|test-lrpt-host|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
@@ -463,7 +463,7 @@ deps_for() {
     test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
     test-bench-decoders) echo "$(deps_for test-decoder-hosts) android/app/src/main/cpp/decoders/tone_id.cpp android/app/src/main/cpp/decoders/audio_nr.cpp \
                               android/app/src/main/cpp/decoders/auto_notch.cpp android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/rds.cpp $VDSP/stereo.cpp $RADE_LIBS" ;;
-    test-decoder-hosts|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-decoder-hosts|test-digi-spots) echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp $VDSP/resampler.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc + resampler: the host carries APRS and 9600 packet (V12)
@@ -494,7 +494,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
+    test-decoder-hosts|test-paging-gate|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ft8-hunt|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-lrpt-host|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty|test-rtty-skimmer)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
@@ -912,6 +912,8 @@ if npx tsx scripts/test_aviation_map.ts; then pass=$((pass+1)); else fail=$((fai
 # ★ V12 radiosondes, the clients' half (src/services/sondes.ts): the report parsed defensively, no temperature unless the
 #   calibration is whole, the lines, the map's items / rows / card and a chosen sonde's track
 if npx tsx scripts/test_sondes_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 METEOR LRPT, the clients' half (src/services/lrpt.ts): lrpt_status parsed defensively, the status line, the attach
+if npx tsx scripts/test_lrpt_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 satellite engine, the clients' half (src/services/satellites.ts): parsing, the readout words, the picker rows, the cap
 if npx tsx scripts/test_satellites_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).

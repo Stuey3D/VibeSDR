@@ -106,6 +106,10 @@ inline const std::vector<Entry>& table() {
         //   HF — any of 2–30 MHz will do (the decoder reads whatever lands on the dial).
         v.push_back({ "ale", "ALE", "is on HF (2\xe2\x80\x93" "30 MHz)", { band(2e6, 30e6) } });
         v.push_back({ "balloon", "Balloons", "is on 70 cm (430\xe2\x80\x93" "440 MHz, the 434 MHz payload band)", { band(430e6, 440e6) } });
+        // ★ V12 METEOR-M LRPT (docs/v12/LRPT.md): the two downlinks the METEOR-M satellites have used, 137.100 and 137.900
+        //   MHz, each the 115 kHz signal plus ±3.1 kHz of Doppler — either will do (the satellite's entry says which is live).
+        v.push_back({ "lrpt", "METEOR LRPT", "is on 137.100 and 137.900 MHz (the METEOR-M weather satellites)",
+            { ch(137.100e6, 62e3), ch(137.900e6, 62e3) } });
         // ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): VORs and localisers on 108–117.975 MHz, glideslopes on 328.6–335.4 MHz.
         v.push_back({ "vor", "VOR / ILS", "is on 108\xe2\x80\x93" "118 MHz (VOR, ILS localiser) and 328.6\xe2\x80\x93" "335.4 MHz (glideslope)",
             { band(108.0e6, 117.975e6), band(328.6e6, 335.4e6) } });

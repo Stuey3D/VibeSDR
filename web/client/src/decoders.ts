@@ -82,7 +82,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'ale' | null;
+export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'lrpt' | 'ale' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -186,6 +186,7 @@ export interface DecoderCallbacks {
   /** ★ SITOR-A: the link status (src/services/sitora.ts parseSitorStatus checks it). */
   onSitorStatus?: (data: unknown) => void;
   onHfdlStatus?: (data: unknown) => void;   // ★ V12 HFDL: {msgs, bursts, detections}
+  onLrptStatus?: (data: unknown) => void;   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
   /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
   onTextModeStatus?: (data: unknown) => void;
   onAleStatus?: (data: unknown) => void;   // ★ V12 2G HF ALE: {"words","offset","last"} while a transmission is read
@@ -260,6 +261,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   ncdxf: 'ncdxf',   // ★ V12 the NCDXF / IARU beacon tracker (vibe_ncdxf_run.h)
   balloon: 'balloon',   // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV (vibe_balloon_run.h)
   tones: 'tones',       // ★ V12 DTMF + 5-tone selective calling (vibe_tones_run.h)
+  lrpt: 'lrpt',         // ★ V12 METEOR-M LRPT weather-satellite pictures (vibe_lrpt_run.h): "symbol_rate" etc.
   vor: 'vor',           // ★ V12 VOR / ILS (vibe_nav_run.h)
   sarsat: 'sarsat',     // ★ V12 406 MHz beacons (vibe_sarsat_run.h)
   ale: 'ale',           // ★ V12 2G HF ALE (decoders/ale_decoder.h): nothing to set
@@ -535,6 +537,11 @@ export class DecoderClient {
       this.cb.onHellStatus?.(msg.data);
       return;
     }
+    if (msg.type === 'lrpt_status' && msg.data) {
+      if (this.mode !== 'lrpt') return;
+      this.cb.onLrptStatus?.(msg.data);
+      return;
+    }
     if (msg.type === 'hfdl_status' && msg.data) {
       if (this.mode !== 'hfdl') return;
       this.cb.onHfdlStatus?.(msg.data);
@@ -688,6 +695,8 @@ export class DecoderClient {
         }
         return;
 
+      // ★ V12 METEOR LRPT: the preview arrives in SSTV's frames (0x07 start · 0x01 RGB line · 0x02 name · 0x05 complete)
+      case 'lrpt':
       case 'sstv':
         switch (op) {
           case 0x07:

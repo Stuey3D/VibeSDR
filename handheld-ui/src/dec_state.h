@@ -78,6 +78,10 @@ inline const DecDef kDecs[] = {
     // ★ the later passes (in the table so they plug in; never offered until they are built)
     {"wefax", "WEFAX", DK_PICTURE, "", false, true, "Weather charts by radio fax, drawn line by line. Tune USB 1.9 kHz below the station's published frequency — Northwood 4608.1, DWD 7878.1 kHz; 120 LPM for nearly every station. The margin and slant are found on each chart by itself; ADJ in the box sets them by hand. Each finished chart is kept in the GALLERY."},
     {"sstv", "SSTV", DK_PICTURE, "", false, true, "Slow-scan TV pictures — 14.230 MHz USB on 20 m (7.171 MHz LSB on 40 m; 145.800 MHz FM from the ISS). The mode is found by itself; each finished picture is kept in the GALLERY."},
+    // ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): weather-satellite pictures — the server's quarter-size colour preview in
+    //    SSTV's frames, lrpt_status; the full PNGs go to the server's gallery. vibeserver.json "lrpt" (absent on an Icom),
+    //    false + lrptWhy where this radio does not reach 137 MHz.
+    {"lrpt", "METEOR", DK_PICTURE, "lrpt", true, true, "METEOR-M weather satellite pictures (LRPT): tune 137.100 or 137.900 MHz while a METEOR satellite passes over (up to 15 minutes; a 137 MHz QFH or V-dipole aerial helps). The picture grows here during the pass; each pass's channels and colour composite are saved to the server's gallery as PNG."},
     {"hell", "HELL", DK_PICTURE, "hell", false, true, "FELD HELL (Hellschreiber): drawn, not read — the text is painted as it is heard, a strip at a time, and you read it. Every column is printed twice, one copy above the other, so a slant or a fade that cuts one copy leaves the other whole. Tune USB so the signal is in your passband (the tone is found by itself); each new page puts the last one under PREV."},
     {"adsb", "ADS-B", DK_MAP, "adsb", false, false, ""}, {"ais", "AIS", DK_MAP, "ais", false, false, ""},
     {"ndb", "NDB", DK_MAP, "ndb", false, false, ""}, {"ism", "ISM", DK_MAP, "ism", false, false, ""},
@@ -96,7 +100,8 @@ inline const std::vector<DecPlace>& decPlaces(int band) {
     static const std::vector<DecPlace> vhf = {
         {"AVIATION", {"selcal"}}, {"MARITIME", {"dsc"}}, {"AMATEUR", {"aprs", "spots", "cw", "sstv"}},
         {"PAGING", {"paging"}},   // ★ V12 (decoderBands.ts 'paging', VHF and UHF) — drawn only where the engine offers it
-        {"BROADCAST", {"same"}}};
+        {"BROADCAST", {"same"}},
+        {"SATELLITE", {"lrpt"}}};   // ★ V12 METEOR LRPT (decoderBands.ts: VHF, near 137.1 / 137.9 MHz)
     return band == 0 ? hf : vhf;
 }
 

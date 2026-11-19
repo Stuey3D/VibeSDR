@@ -2388,7 +2388,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
-  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_ale", "ALE"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
+  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_lrpt", "METEOR LRPT"], ["dec_ale", "ALE"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
   ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
   ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"], ["dec_dvsig", "DMR / D-STAR / YSF signalling"],
@@ -3527,6 +3527,10 @@ const BLOCKABLE = [
    *  default): 5-tone digits off the amateur bands, shown to the owner's own signed-in sockets only. */
   { id: "tones", label: "DTMF and 5-tone selective calling" },
   { id: "tones+digits", label: "5-tone: show the called numbers off the amateur bands (to you only)", parent: "tones", on: true },
+  /* ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): weather-satellite pictures on 137.1 / 137.9 MHz, a listener's decoder on a
+   *  140 kHz IQ slice of the dial; each pass's channels and colour composite go to the gallery as PNGs. Only where the
+   *  radio reaches 137 MHz, never an Icom. */
+  { id: "lrpt", label: "METEOR weather satellite pictures (LRPT)" },
   /* ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR's radial, an ILS localiser's / glideslope's deviation, the ident and the
    *  published station, from a listener's channel on 108–118 / 329–335 MHz. */
   { id: "vor", label: "VOR bearing and ILS deviation" },

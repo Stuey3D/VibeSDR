@@ -42169,6 +42169,10 @@ static std::string vsTunableJson() {
     /* ★ V12 balloons (decoders/balloon_rx.h): UKHAS RTTY telemetry, Horus Binary, SSDV pictures — a listener's decoder on
      *  USB. Absent on an older server; false + its reason where this radio does not reach 70 cm or the owner blocked it. */
     j += vsDecoderCapJson("balloon", reach);
+    /* ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): weather-satellite pictures from a 140 kHz IQ slice of the dial. Absent on an
+     *  older server and on an Icom (no IQ — AGENTS.md: never a control that cannot work here); false + its reason where this
+     *  radio does not reach 137.1 / 137.9 MHz or the owner blocked it. */
+    if (!g_icomOn.load()) j += vsDecoderCapJson("lrpt", reach);
     /* ★ V12 tone decoders (decoders/tones_rx.h): DTMF and 5-tone selective calling on a listener's NFM / AM audio — on any
      *  frequency (what is SHOWN depends on it: docs/v12/TONES.md). Absent on an older server; false where the owner blocked it. */
     j += std::string(",\"tones\":") + (vsModeBlocked("tones") ? "false" : "true");
@@ -42448,7 +42452,8 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "vor", "sarsat", "ale", "drm", "freedv", "m17", "dvsig" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "vor", "sarsat", "ale", "drm", "freedv", "m17", "dvsig",
+                                        "lrpt" };           // ★ V12 METEOR-M LRPT (docs/v12/LRPT.md) — reach-gated (137 MHz), never an Icom
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -42469,6 +42474,9 @@ static std::string vsTunableJson() {
             /* ★★ V12 M17 likewise — and never on an Icom: the receiver reads the channel's IQ, and an Icom gives us its own
              *  demodulated, de-emphasised FM audio, which a 4-FSK slicer cannot use (vibe_radio_caps.h says the same). */
             if (k == "m17" && (g_icomOn.load() || !vibe::m17::available())) continue;
+            /* ★★ V12 LRPT reads a 140 kHz IQ slice of the dial: an Icom gives us its demodulated audio only (AGENTS.md: never
+             *  a control that only works on one radio — it is simply not offered there). */
+            if (k == "lrpt" && g_icomOn.load()) continue;
             if (k == "dvsig" && g_icomOn.load()) continue;   // ★ V12 DV signalling reads the channel IQ, as M17
             if (k == "dab") { if (!vsDabCapable()) continue; }
             else if (k == "adsb") { if (!vsAdsbWhyNot().empty()) continue; }
@@ -42622,7 +42630,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR / DominoEX / MT63"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"vor", "VOR / ILS"}, {"sarsat", "406 MHz beacons"}, {"ale", "ALE"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR / DominoEX / MT63"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"lrpt", "METEOR LRPT"}, {"vor", "VOR / ILS"}, {"sarsat", "406 MHz beacons"}, {"ale", "ALE"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

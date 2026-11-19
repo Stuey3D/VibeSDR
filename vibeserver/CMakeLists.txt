@@ -1191,6 +1191,13 @@ foreach(t rs41 rs41-service sondes-types)
   target_link_libraries(test-${t} PRIVATE vibedsp Threads::Threads)
   add_test(NAME ${t} COMMAND test-${t} --quick)
 endforeach()
+# ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): the FEC pieces, our own LRPT transmitter through the whole receiver (QPSK,
+#    OQPSK + differential, 80k interleaved, Doppler, sensitivity), noise (no picture ever), SIMD against scalar; and
+#    --wav <file> decodes a real recording to PNGs. Header-only.
+add_executable(test-lrpt "${CMAKE_CURRENT_SOURCE_DIR}/test-lrpt.cpp")
+target_include_directories(test-lrpt PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
+target_compile_options(test-lrpt PRIVATE -O3)
+add_test(NAME lrpt COMMAND test-lrpt --quick)
 # ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): SGP4/SDP4 against the paper's verification set, OMM/TLE,
 #    the observer's view, Doppler and passes against Skyfield; the catalogue / TLE supply; the Doppler lock. Header-only.
 foreach(t sat-orbit sat-engine)

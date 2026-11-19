@@ -58,6 +58,7 @@
 #include "vibe_freedv.h"             // ★ V12 FreeDV as a mode (the dec_freedv row) — the system's libcodec2, dlopen'd
 #include "decoders/balloon_tx.h"     // ★ V12 balloons (the dec_balloon row) — our own transmitter
 #include "decoders/tones_tx.h"       // ★ V12 DTMF + 5-tone (the dec_tones row) — our own transmitter
+#include "vibe_lrpt_tx.h"             // ★ V12 METEOR-M LRPT (the dec_lrpt row) — our own transmitter
 #include "decoders/nav_tx.h"         // ★ V12 VOR / ILS (the dec_vor row) — our own transmitter
 #include "decoders/sarsat_tx.h"      // ★ V12 406 MHz beacons (the dec_sarsat row) — our own transmitter
 #include "vibe_m17.h"                // ★ V12 M17 as a mode (the dec_m17 row) — our own receiver, Codec 2 from the same library
@@ -792,6 +793,7 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_rttyskim", { "rtty",   false, true  } },   // ★ inside RTTY's switch, which carries the green one-signal decoder
         { "dec_balloon",  { "balloon", true, true  } },   // ★ V12 balloons: a listener's decoder (a slot)
         { "dec_tones",    { "tones",  true,  true  } },   // ★ V12 DTMF + 5-tone: a listener's decoder (a slot)
+        { "dec_lrpt",     { "lrpt",   true,  true  } },   // ★ V12 METEOR LRPT: a listener's decoder on an IQ slice (a slot)
         { "dec_vor",      { "vor",    true,  true  } },   // ★ V12 VOR / ILS: a listener's decoder on the channel IQ (a slot)
         { "dec_sarsat",   { "sarsat", true,  true  } },   // ★ V12 406 MHz beacons: a listener's decoder on the channel IQ (a slot)
         { "dec_ale",      { "ale",    true,  true  } },   // ★ V12 2G HF ALE: a listener's decoder (a slot)
@@ -951,6 +953,46 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     run("dec_tones", "Decoder: DTMF / 5-tone", [&] {
         return hostAudioRow("dec_tones", "Decoder: DTMF + 5-tone selective calling", "tones", attach + "\"extension_name\":\"tones\"}",
                             tonesAudio(), Count::Any);
+    });
+    /* ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): one satellite's 72k QPSK at the 150 kS/s IQ slice the host asks for, from our
+     *  own transmitter (three MSU-MR channels, Es/N0 10 dB, a 1.5 kHz carrier offset), through the host's IQ path — the
+     *  demodulator, two sync searchers, the Viterbi, RS and the picture. Sets the "lrpt" switch's default; never hides it.
+     *  `decoded` = preview rows drawn. */
+    run("dec_lrpt", "Decoder: METEOR LRPT", [&] {
+        Row r; r.id = "dec_lrpt"; r.label = "Decoder: METEOR LRPT (72k QPSK, 150 kS/s)";
+        DecClip c; c.id = "lrpt"; c.rate = 150000; c.centre = 137.9e6;
+        {
+            vibelrpt::tx::TxConfig t; t.sampleRate = c.rate; t.esn0Db = 10; t.carrierHz = 1500;
+            const auto iq = vibelrpt::tx::modulate(t, vibelrpt::tx::codeBits(t, vibelrpt::tx::buildVcdus(t, 8)), 0.2, 0.2);
+            c.iq.resize(iq.size() / 2);
+            for (size_t i = 0; i < c.iq.size(); ++i) c.iq[i] = { iq[2 * i], iq[2 * i + 1] };
+        }
+        auto peer = std::make_shared<CountPeer>(); peer->image = true;
+        DecoderHost::Env env;
+        env.dialHz = [cc = c.centre] { return cc; };
+        double fedSec = 0, pct = -1;
+        {
+            DecoderHost h(env, "bench");
+            h.addPeer(peer);
+            if (h.start("lrpt", attach + "\"extension_name\":\"lrpt\",\"symbol_rate\":72000,\"modulation\":\"qpsk\"}") != DecoderHost::Start::Ok) return r;
+            const double w0 = wallNow(), c0 = processCpu();
+            const size_t blk = (size_t)(c.rate / 50);
+            size_t pos = 0;
+            while (fedSec < kRowMaxSec && (fedSec < kRowMinSec || wallNow() - w0 < kRowWallSec)) {
+                while (h.queuedIq() > 0.5) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                const size_t n = std::min(blk, c.iq.size() - pos);
+                h.feedIq(c.iq.data() + pos, (int)n, c.rate, c.centre);
+                pos = (pos + n) % c.iq.size();
+                fedSec += (double)n / c.rate;
+            }
+            for (int i = 0; i < 4000 && h.queuedIq() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            settleCpu(5.0);
+            pct = 100.0 * (processCpu() - c0) / fedSec;
+            h.stop();
+        }
+        r.pct = pct;
+        r.decoded = (int)peer->lines.load();
+        return r;
     });
     /* ★★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR with its ident on 113.60 MHz, our own transmitter, the listener's channel
      *  IQ at 37.5 kHz. Sets the "vor" switch's default; never hides it. */

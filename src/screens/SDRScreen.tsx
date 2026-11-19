@@ -923,7 +923,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setCwCapable(false);
     setRttySkimCapable(false);
     setSkimCapable(true);
-    setPskCapable(false); setJttyCapable(false); setTimeTdfCapable(false); setNcdxfCapable(false); setBalloonCapable(false); setTonesCapable(false); setVorCapable(false); setSarsatCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setAleCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
+    setPskCapable(false); setJttyCapable(false); setTimeTdfCapable(false); setNcdxfCapable(false); setBalloonCapable(false); setTonesCapable(false); setLrptCapable(false); setVorCapable(false); setSarsatCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setAleCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
     setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setFreedvCap([]); setM17Cap(false); setDvsigCap(false); setAutoBwModes([]); setBwAutoState(null);
     setAdsbCap(undefined);
     setIsmCap(undefined);
@@ -959,6 +959,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setTimeTdfCapable(o?.timeTdf === true);
         setBalloonCapable(o?.balloon === true || !!dw.balloon);   // ★ V12 balloons — greyed with why off 70 cm
         setTonesCapable(o?.tones === true);   // ★ V12 DTMF + 5-tone — any frequency (what is shown is the server's rule)
+        setLrptCapable(o?.lrpt === true || !!dw.lrpt);   // ★ V12 METEOR LRPT — greyed with why off 137 MHz; absent on an Icom
         setVorCapable(o?.vor === true || !!dw.vor);            // ★ V12 VOR / ILS — greyed with why off the airband
         setSarsatCapable(o?.sarsat === true || !!dw.sarsat);   // ★ V12 406 MHz beacons — greyed with why off 406 MHz
         setNcdxfCapable(o?.ncdxf === true || !!dw.ncdxf);   // ★ V12 NCDXF beacons — greyed with why off its reach   // ★ V12 TDF — a station of the TIME decoder, on servers that read it
@@ -2672,6 +2673,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [ncdxfCapable, setNcdxfCapable] = useState(false);   // ★ V12 NCDXF beacons: this server tracks them
   const [balloonCapable, setBalloonCapable] = useState(false);   // ★ V12 balloons: this server decodes them
   const [tonesCapable, setTonesCapable] = useState(false);   // ★ V12 DTMF + 5-tone: this server decodes them
+  const [lrptCapable, setLrptCapable] = useState(false);     // ★ V12 METEOR LRPT: this server decodes the weather satellites
   const [vorCapable, setVorCapable] = useState(false);       // ★ V12 VOR / ILS: this server decodes them
   const [sarsatCapable, setSarsatCapable] = useState(false); // ★ V12 406 MHz beacons
   const [timeTdfCapable, setTimeTdfCapable] = useState(false);   // ★ V12 TDF (ALS162): this server's TIME decoder reads it
@@ -6130,7 +6132,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         else decoderImageRef.current?.imageStart(w, h);
       },
       onImageLine:  (ln: number, w: number, px: Uint8Array) => {
-        if (activeDecRef.current === 'sstv') decoderImageRef.current?.sstvLine(ln, w, px);
+        if (activeDecRef.current === 'sstv' || activeDecRef.current === 'lrpt') decoderImageRef.current?.sstvLine(ln, w, px);   // ★ V12 LRPT's preview: SSTV's RGB lines
         else if (activeDecRef.current === 'hell') decoderImageRef.current?.hellLine(ln, w, px);   // ★ FELD HELL: drawn plainly
         else                                 decoderImageRef.current?.wefaxLine(ln, w, px);
       },
@@ -6272,7 +6274,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'vor'|'sarsat'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'lrpt'|'vor'|'sarsat'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -6843,7 +6845,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'vor'|'sarsat'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'lrpt'|'vor'|'sarsat'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -16271,6 +16273,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           balloonAvail: balloonCapable && !!(client.current as any)?.isVibe,
           balloonSettings, onBalloonSettings,
           tonesAvail: tonesCapable && !!(client.current as any)?.isVibe,
+          lrptAvail: lrptCapable && !!(client.current as any)?.isVibe,
           vorAvail: vorCapable && !!(client.current as any)?.isVibe,
           sarsatAvail: sarsatCapable && !!(client.current as any)?.isVibe,
           tonesSettings, onTonesSettings,

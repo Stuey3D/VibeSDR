@@ -52,7 +52,7 @@ import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';  
 import { packetChoices, packetFecShown, packetHint, packetTune, type PacketCaps, type PacketMode } from '../services/packet';   // ★ V12 9600 / FX.25 / IL2P
 import { FREEDV_HINT, FREEDV_SIDEBANDS, freedvSidebandLabel, type FreeDvChoice, type FreeDvSideband, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -546,6 +546,8 @@ interface ModeSelectorProps {
     /** ★★ V12 DTMF + 5-tone — only where `"tones"` is offered; DTMF / 5-TONE each on or off, and the 5-tone STANDARD (AUTO,
      *  with one table pinned under it). What is SHOWN is the server's rule (digits on the amateur bands only). */
     tonesAvail?: boolean; tonesSettings?: TonesOptions; onTonesSettings?: (s: TonesOptions) => void;
+    /** ★★ V12 METEOR-M LRPT — only where `"lrpt"` is present (true, or false with `lrptWhy`: greyed). Never on an Icom. */
+    lrptAvail?: boolean;
     /** ★★ V12 VOR / ILS and 406 MHz beacons — only where `"vor"` / `"sarsat"` is offered (greyed with why off their
      *  frequencies). No settings: AUTO (the channel says VOR, localiser or glideslope); the hint under the key. */
     vorAvail?: boolean; sarsatAvail?: boolean;
@@ -669,6 +671,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const ncdxfShown = !!decoderControls?.ncdxfAvail && !isBlocked('ncdxf');   // ★ V12 NCDXF beacons
   const balloonShown = !!decoderControls?.balloonAvail && !isBlocked('balloon');   // ★ V12 balloons
   const tonesShown = !!decoderControls?.tonesAvail && !isBlocked('tones');   // ★ V12 DTMF + 5-tone
+  const lrptShown = !!decoderControls?.lrptAvail && !isBlocked('lrpt');   // ★ V12 METEOR LRPT
   const vorShown = !!decoderControls?.vorAvail && !isBlocked('vor');         // ★ V12 VOR / ILS
   const sarsatShown = !!decoderControls?.sarsatAvail && !isBlocked('sarsat'); // ★ V12 406 MHz beacons
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
@@ -762,6 +765,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (ncdxfShown) addLegend('BEACONS', 'ncdxf');
     if (balloonShown) addLegend('BALLOONS', 'balloon');
     if (tonesShown) addLegend('DTMF / 5-TONE', 'tones');
+    if (lrptShown) addLegend('METEOR LRPT', 'lrpt');
     if (vorShown) addLegend('VOR / ILS', 'vor');
     if (sarsatShown) addLegend('406 BEACONS', 'sarsat');
     if (dscShown) addLegend('DSC', 'dsc');
@@ -872,7 +876,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     // ★★ V12 out of this radio's reach: greyed, and a press says why (never starts it)
     const why = dc.decWhy?.[id];
@@ -1280,6 +1284,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'ncdxf': return ncdxfShown ? srvKey('ncdxf', 'BEACONS', 'NCDXF beacon tracker') : null;
       case 'balloon': return balloonShown ? srvKey('balloon', 'BALLOONS', 'High-altitude balloon telemetry and pictures') : null;
       case 'tones': return tonesShown ? srvKey('tones', 'DTMF / 5-TONE', 'DTMF and 5-tone selective calling decoder') : null;
+      case 'lrpt': return lrptShown ? srvKey('lrpt', 'METEOR LRPT', 'METEOR weather satellite pictures decoder, LRPT') : null;
       case 'vor':   return vorShown ? srvKey('vor', 'VOR / ILS', 'VOR radial and ILS deviation decoder') : null;
       case 'sarsat': return sarsatShown ? srvKey('sarsat', '406 BEACONS', 'COSPAS-SARSAT 406 MHz distress beacon decoder') : null;
       case 'dsc':  return dscShown ? srvKey('dsc', 'DSC', 'Maritime DSC decoder') : null;
@@ -1303,7 +1308,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (!decoderControls) return false;
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
-      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;   case 'balloon': return balloonShown;   case 'tones': return tonesShown;   case 'vor': return vorShown;   case 'sarsat': return sarsatShown;
+      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;   case 'balloon': return balloonShown;   case 'tones': return tonesShown;   case 'lrpt': return lrptShown;   case 'vor': return vorShown;   case 'sarsat': return sarsatShown;
       case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'ale': return aleShown; case 'hell': return hellShown; case 'paging': return pagingShown;
       case 'mfsk': return tmShown('mfsk'); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
