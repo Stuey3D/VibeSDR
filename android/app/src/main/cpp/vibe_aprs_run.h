@@ -9,8 +9,16 @@
 //     {"type":"aprs_packet","data":{t, from, kind, line, raw, lat?, lon?, key, sym, msg?}}  — each new packet
 //     {"type":"aprs_list","data":{baud, frames, repaired, dupes, stations:[…], messages:[…]}} — every 2 s when changed,
 //       and at once to a joiner (with each station's track; the clients add points from the packets after that).
+// ★★ V12 (docs/v12/AX25-9600-FX25-IL2P.md): 9600 Bd (G3RUH, from the listener's CHANNEL IQ — feedIq — or from
+//    discriminator audio), FX.25 and IL2P (1200 and 9600), and THE FRAME LOG — every frame, APRS or not (cubesat
+//    telemetry, connected-mode traffic), as hex and ASCII with the satellite's name where the callsign gives it:
+//     {"type":"aprs_frame","data":{age, from, to, path?, ctl, pid?, fec ("ax25"|"fx25"|"il2p"), fixed?, crc?, sat?,
+//       len, hex, text, aprs (1 when it was also an APRS packet)}}  — each new frame
+//     aprs_list also carries fx25, il2p (frames each brought), fixed (bytes corrected), "log":[…] (newest 40, to a joiner).
 #pragma once
 #include "vibe_aprs.h"
+#include "vibe_g3ruh.h"       // ★ V12 9600 Bd G3RUH (docs/v12/AX25-9600-FX25-IL2P.md)
+#include "vibe_sat_calls.h"
 #include "vibe_station_sink.h"
 
 #include <algorithm>
@@ -18,6 +26,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -68,23 +77,54 @@ public:
         std::function<void(const vibestation::Heard&)> heard;  ///< the gallery's copy (null = none)
         std::function<double()> rfHz;                          ///< the dial (for the gallery line), may be empty
         std::function<double()> clock;                         ///< seconds (tests); empty = steady clock
+        bool fx25 = false, il2p = false;                       ///< ★ V12: also decode FX.25 / IL2P (AUTO = both on)
+        std::string sat;                                       ///< ★ V12: the satellite being received (the satellite engine's hint), or ""
     };
+    /** One entry of the frame log. */
+    struct LogEntry { double t; std::string from, to, path, ctl, sat, hex, text; int pid = -1, fec = 0, fixed = 0, len = 0; bool crc = false, aprs = false; };
+    static constexpr size_t kLogMax = 60, kLogJoin = 40, kHexMax = 256;
     static constexpr size_t kMaxStations = 500, kTrailMax = 120, kMsgMax = 60;
     static constexpr double kKeepSec = 6 * 3600, kDupeSec = 30;
 
-    Run(int baud, Opts o) : baud_(baud), o_(std::move(o)), demod_(48000, baud) {}
-    int baud() const { return baud_; }
-
-    /** 48 kHz audio from the decoder thread. */
-    void feedAudio(const float* x, int n) {
-        demod_.feed(x, n, [&](const Frame& f) { onFrame(f); });
-        const double t = now();
-        if (dirty_ && t - lastList_ >= 2.0) { lastList_ = t; dirty_ = false; if (o_.json) o_.json(listJson(false)); }
+    /** `baud` 300, 1200 or ★ V12 9600 (G3RUH — fed the channel IQ, feedIq, or discriminator audio). */
+    Run(int baud, Opts o) : baud_(baud >= 4800 ? 9600 : baud), o_(std::move(o)) {
+        if (baud_ == 9600) {
+            vibeg3ruh::Opts g; g.fx25 = o_.fx25; g.il2p = o_.il2p;
+            g3_.reset(new vibeg3ruh::Demod(g));
+        } else {
+            // FX.25 and IL2P are VHF/UHF FM packet things: not on HF 300 Bd
+            afsk_.reset(new AfskDemod(48000, baud_, false, baud_ == 1200 && o_.fx25, baud_ == 1200 && o_.il2p));
+        }
     }
+    int baud() const { return baud_; }
+    /** ★ V12: this run wants the listener's CHANNEL IQ (9600), not the audio. */
+    bool wantsIq() const { return g3_ != nullptr; }
+
+    /** 48 kHz audio from the decoder thread (at 9600: FM-discriminator audio — a flat, wide one only; a normal NFM
+     *  listener's audio is filtered too narrow for 9600 and the host feeds the channel IQ instead). */
+    void feedAudio(const float* x, int n) {
+        if (g3_) g3_->feedAudio(x, n, 48000, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
+        else afsk_->feed(x, n, [&](const Frame& f) { onFrame(f); });
+        tickList_();
+    }
+    /** ★ V12 9600: the listener's channel IQ (dial at DC) at `rate` Hz. */
+    void feedIq(const std::complex<float>* x, int n, double rate) {
+        if (!g3_) return;
+        g3_->feedIq(x, n, rate, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
+        tickList_();
+    }
+    double afcHz() const { return g3_ ? g3_->afcHz() : 0; }
     /** ★ For tests and the offline tool: one frame, as the demodulator hands it over. */
     void onFrame(const Frame& f) {
+        if (f.fec == vibepkt::kFx25) ++fx25_; else if (f.fec == vibepkt::kIl2p) ++il2p_;
+        fixed_ += uint64_t(f.fixed);
         Ax25 ax;
-        if (!parseAx25(f.bytes, ax)) return;
+        bool aprs = parseAx25(f.bytes, ax);
+        // ★ V12: a UI frame with the APRS PID whose information field is BINARY and of no APRS type is telemetry (a
+        //   cubesat's, a node's), not an APRS station: it goes to the frame log only, never onto the station list.
+        if (aprs && binaryInfo_(ax.info) && parsePacket(ax).kind == "other") aprs = false;
+        logFrame_(f, aprs);
+        if (!aprs) return;
         ++frames_; if (f.repaired) ++repaired_;
         const double t = now();
         // ★ the duplicate rule (source + information field within 30 s)
@@ -107,7 +147,10 @@ public:
         const double t = now();
         prune(t);
         std::string o = "{\"type\":\"aprs_list\",\"data\":{\"baud\":" + std::to_string(baud_) + ",\"frames\":" + std::to_string(frames_)
-                      + ",\"repaired\":" + std::to_string(repaired_) + ",\"dupes\":" + std::to_string(dupes_n_) + ",\"stations\":[";
+                      + ",\"repaired\":" + std::to_string(repaired_) + ",\"dupes\":" + std::to_string(dupes_n_)
+                      + ",\"fx25\":" + std::to_string(fx25_) + ",\"il2p\":" + std::to_string(il2p_) + ",\"fixed\":" + std::to_string(fixed_)
+                      + ",\"other\":" + std::to_string(other_) + (o_.fx25 ? ",\"fx25On\":1" : "") + (o_.il2p ? ",\"il2pOn\":1" : "")
+                      + (o_.sat.empty() ? std::string() : ",\"sat\":\"" + jsonEsc(utf8Clean(o_.sat)) + "\"") + ",\"stations\":[";
         std::vector<const Station*> v;
         for (const auto& kv : stations_) v.push_back(&kv.second);
         std::sort(v.begin(), v.end(), [](const Station* a, const Station* b) { return a->last > b->last; });
@@ -120,13 +163,83 @@ public:
             o += "{\"age\":" + fmt(t - m.t, 0) + ",\"from\":\"" + jsonEsc(m.from) + "\",\"to\":\"" + jsonEsc(m.to) + "\",\"text\":\""
                + jsonEsc(utf8Clean(m.text)) + "\",\"kind\":\"" + m.kind + "\"" + (m.id.empty() ? "" : ",\"id\":\"" + jsonEsc(m.id) + "\"") + "}";
         }
-        return o + "]}}";
+        o += "]";
+        if (withTrails && !log_.empty()) {
+            o += ",\"log\":[";
+            const size_t from = log_.size() > kLogJoin ? log_.size() - kLogJoin : 0;
+            for (size_t i = from; i < log_.size(); ++i) { if (i > from) o += ','; logJson_(log_[i], t, o); }
+            o += "]";
+        }
+        return o + "}}";
     }
     size_t stationCount() const { return stations_.size(); }
+    size_t logCount() const { return log_.size(); }
+    uint64_t fx25Frames() const { return fx25_; }
+    uint64_t il2pFrames() const { return il2p_; }
+    uint64_t otherFrames() const { return other_; }
     uint64_t frames() const { return frames_; }
     uint64_t repaired() const { return repaired_; }
 
 private:
+    static bool binaryInfo_(const std::string& s) {
+        for (unsigned char c : s) if ((c < 0x20 && c != '\r' && c != '\n' && c != '\t') || c == 0x7f) return true;
+        return false;
+    }
+    void tickList_() {
+        const double t = now();
+        if (dirty_ && t - lastList_ >= 2.0) { lastList_ = t; dirty_ = false; if (o_.json) o_.json(listJson(false)); }
+    }
+    void onPkt_(const vibepkt::PktFrame& p) {
+        Frame f; f.bytes = p.bytes; f.repaired = p.repaired; f.quality = p.quality; f.slicer = p.slicer; f.fec = p.fec; f.fixed = p.fixed; f.crc = p.crc;
+        onFrame(f);
+    }
+    /** ★ The frame log: every frame (APRS or not). A non-APRS frame also goes to the gallery's day log. */
+    void logFrame_(const Frame& f, bool aprs) {
+        Ax25 ax; bool hasPid = false;
+        if (!parseAx25Frame(f.bytes, ax, hasPid)) return;
+        LogEntry e;
+        e.t = now(); e.from = addrText(ax.src); e.to = addrText(ax.dest); e.ctl = controlName(ax.control);
+        if (hasPid) e.pid = ax.pid;
+        for (size_t i = 0; i < ax.digis.size(); ++i) { if (i) e.path += ','; e.path += addrText(ax.digis[i]); if (ax.digis[i].h) e.path += '*'; }
+        e.sat = o_.sat;
+        if (e.sat.empty()) e.sat = vibesat::byCallsign(ax.src.call);
+        if (e.sat.empty()) for (const Addr& d : ax.digis) if (d.h) { const std::string n = vibesat::byCallsign(d.call); if (!n.empty()) e.sat = n; }
+        e.fec = f.fec; e.fixed = f.fixed; e.crc = f.crc; e.aprs = aprs; e.len = int(ax.info.size());
+        static const char* hx = "0123456789abcdef";
+        const size_t n = std::min(ax.info.size(), kHexMax);
+        for (size_t i = 0; i < n; ++i) {
+            const unsigned char c = (unsigned char)ax.info[i];
+            e.hex += hx[c >> 4]; e.hex += hx[c & 15];
+            e.text += (c >= 0x20 && c < 0x7f) ? char(c) : '.';
+        }
+        if (!aprs) ++other_;
+        log_.push_back(e);
+        while (log_.size() > kLogMax) log_.pop_front();
+        dirty_ = true;
+        if (o_.json) { std::string j = "{\"type\":\"aprs_frame\",\"data\":"; logJson_(e, e.t, j); o_.json(j + "}"); }
+        if (!aprs && o_.heard) {
+            vibestation::Heard h;
+            h.key = e.from; h.kind = "frame"; h.name = e.sat.empty() ? e.from : e.sat + " " + e.from;
+            h.freqHz = o_.rfHz ? o_.rfHz() : 0;
+            h.line = e.from + ">" + e.to + (e.path.empty() ? "" : "," + e.path) + " " + e.ctl
+                   + (e.sat.empty() ? "" : " \xc2\xb7 " + e.sat) + (e.fec ? std::string(" \xc2\xb7 ") + (e.fec == vibepkt::kFx25 ? "FX.25" : "IL2P") : "")
+                   + " \xc2\xb7 " + std::to_string(e.len) + " bytes: " + e.hex.substr(0, 64) + (e.hex.size() > 64 ? "\xe2\x80\xa6" : "");
+            o_.heard(h);
+        }
+    }
+    static void logJson_(const LogEntry& e, double t, std::string& o) {
+        o += "{\"age\":" + fmt(t - e.t, 0) + ",\"from\":\"" + jsonEsc(e.from) + "\",\"to\":\"" + jsonEsc(e.to) + "\"";
+        if (!e.path.empty()) o += ",\"path\":\"" + jsonEsc(e.path) + "\"";
+        o += ",\"ctl\":\"" + jsonEsc(e.ctl) + "\"";
+        if (e.pid >= 0) { char b[8]; std::snprintf(b, sizeof b, "%02X", e.pid); o += ",\"pid\":\""; o += b; o += "\""; }
+        o += ",\"fec\":\""; o += vibepkt::fecName(e.fec); o += "\"";
+        if (e.fixed) o += ",\"fixed\":" + std::to_string(e.fixed);
+        if (e.crc) o += ",\"crc\":1";
+        if (!e.sat.empty()) o += ",\"sat\":\"" + jsonEsc(utf8Clean(e.sat)) + "\"";
+        o += ",\"len\":" + std::to_string(e.len) + ",\"hex\":\"" + e.hex + "\",\"text\":\"" + jsonEsc(e.text) + "\"";
+        if (e.aprs) o += ",\"aprs\":1";
+        o += "}";
+    }
     double now() const {
         if (o_.clock) return o_.clock();
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
@@ -244,7 +357,10 @@ private:
 
     int baud_;
     Opts o_;
-    AfskDemod demod_;
+    std::unique_ptr<AfskDemod> afsk_;
+    std::unique_ptr<vibeg3ruh::Demod> g3_;
+    std::deque<LogEntry> log_;
+    uint64_t fx25_ = 0, il2p_ = 0, fixed_ = 0, other_ = 0;
     std::map<std::string, Station> stations_;
     std::map<std::string, double> dupes_;
     std::deque<Message> msgs_;

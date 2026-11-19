@@ -431,6 +431,161 @@ static double lineBer(double ebn0, const vibeg3ruh::Opts& o, int nbits = 40000) 
     return double(errs) / n;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  1200 Bd AFSK with FX.25 and IL2P (vibe_aprs.h AfskDemod)
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+/** Bell 202 continuous-phase AFSK from LINE levels (1 = mark 1200 Hz), 48 kHz, amplitude 0.3. */
+static void afsk(std::vector<float>& a, const std::vector<int>& line, double& ph) {
+    const double spb = 48000.0 / 1200;
+    double acc = 0;
+    for (int l : line) { acc += spb; const int n = int(acc); acc -= n; for (int k = 0; k < n; ++k) { ph += 2 * M_PI * (l ? 1200 : 2200) / 48000; a.push_back(float(0.3 * std::sin(ph))); } }
+}
+static Score runAfsk(int link, double snrDb, int n, int seed, bool fx, bool il) {
+    std::mt19937 rng{uint32_t(seed)};
+    std::normal_distribution<float> nd(0.f, 1.f);
+    std::vector<float> a; double ph = 0;
+    std::vector<std::vector<uint8_t>> sent;
+    for (int i = 0; i < n; ++i) {
+        for (int k = 0; k < 4800; ++k) a.push_back(0);
+        auto f = ui("G4ABC", i % 16, "APRS", "!5130.00N/00010.00W>1200 Bd FEC test packet number " + std::to_string(i) + " of " + std::to_string(seed));
+        sent.push_back(f);
+        std::vector<int> line;
+        if (link == kIl2p) line = vibeil2p::lineBits(vibeil2p::encode(f, true, true), 24);
+        else {
+            std::vector<int> data;
+            for (int k = 0; k < 24; ++k) vibehdlc::flagBits(data);
+            if (link == kPlain) { std::vector<uint8_t> g = f; vibehdlc::appendFcs(g); vibehdlc::stuffBits(g, data); vibehdlc::flagBits(data); }
+            else { auto b = vibefx25::encodeBits(f, link == kFx16 ? 16 : 32, 1, 1); data.insert(data.end(), b.begin(), b.end()); }
+            for (int k = 0; k < 3; ++k) vibehdlc::flagBits(data);
+            int lvl = 0; for (int b : data) { if (!b) lvl ^= 1; line.push_back(lvl); }
+        }
+        afsk(a, line, ph);
+    }
+    for (int k = 0; k < 9600; ++k) a.push_back(0);
+    const double nPow = 0.045 / std::pow(10, snrDb / 10) * (24000.0 / 3000);   // SNR in a 3 kHz band, as test-aprs
+    for (auto& x : a) x += float(std::sqrt(nPow) * nd(rng));
+    vibeaprs::AfskDemod d(48000, 1200, false, fx, il);
+    Score sc; sc.sent = n;
+    for (size_t o = 0; o < a.size(); o += 4800)
+        d.feed(a.data() + o, int(std::min<size_t>(4800, a.size() - o)), [&](const vibeaprs::Frame& f) {
+            bool ok = false; for (auto& x : sent) if (x == f.bytes) ok = true;
+            if (ok) { ++sc.got; if (f.fec) ++sc.fec; } else ++sc.wrong;
+        });
+    return sc;
+}
+static void testAfskFec() {
+    std::printf("6. 1200 Bd AFSK (the APRS demodulator) with FX.25 and IL2P — %% decoded vs SNR in 3 kHz\n");
+    const std::vector<double> snr = { 2, 4, 6, 8, 10 };
+    std::printf("   %-26s", "SNR (dB)"); for (double e : snr) std::printf("%6.0f", e); std::printf("   wrong\n");
+    struct Row { const char* name; int link; bool fx, il; } rows[] = {
+        { "AX.25 (FEC receivers off)", kPlain, false, false }, { "AX.25 (FEC receivers on)", kPlain, true, true },
+        { "FX.25 16", kFx16, true, true }, { "FX.25 32", kFx32, true, true }, { "IL2P", kIl2p, true, true } };
+    int plain6 = 0, fx6 = 0, il6 = 0, plainOff = 0, plainOn = 0;
+    for (const Row& r : rows) {
+        std::printf("   %-26s", r.name);
+        int wrong = 0;
+        for (double e : snr) {
+            Score sc = runAfsk(r.link, e, 30, 500 + int(e), r.fx, r.il);
+            std::printf("%5.0f%%", 100.0 * sc.got / sc.sent);
+            wrong += sc.wrong;
+            if (e == 6) { if (r.link == kPlain && !r.fx) plain6 = sc.got; if (r.link == kFx32) fx6 = sc.got; if (r.link == kIl2p) il6 = sc.got; }
+            if (r.link == kPlain) (r.fx ? plainOn : plainOff) += sc.got;
+        }
+        std::printf("   %d\n", wrong);
+        CHECK(wrong == 0, "%s: no wrong frames (%d)", r.name, wrong);
+    }
+    CHECK(plainOn == plainOff, "the FEC receivers do not change plain AX.25 (%d vs %d)", plainOn, plainOff);
+    CHECK(fx6 > plain6 && il6 > plain6, "at 6 dB FX.25 32 (%d) and IL2P (%d) beat plain AX.25 (%d)", fx6, il6, plain6);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  The run: the frame log, the satellite name, the JSON
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+static void testRun() {
+    std::printf("8. The run (vibe_aprs_run.h) at 9600 on channel IQ\n");
+    std::vector<std::string> js;
+    double clk = 0;
+    vibeaprs::Run::Opts o;
+    o.json = [&](const std::string& j) { js.push_back(j); };
+    std::vector<vibestation::Heard> heard;
+    o.heard = [&](const vibestation::Heard& h) { heard.push_back(h); };
+    o.clock = [&] { return clk; };
+    o.fx25 = true; o.il2p = true;
+    vibeaprs::Run run(9600, o);
+    CHECK(run.wantsIq() && run.baud() == 9600, "a 9600 run wants the channel IQ");
+    std::mt19937 rng(3);
+    std::vector<std::vector<uint8_t>> frames = {
+        ui("G4ABC", 9, "APRS", "!5130.00N/00010.00W>9600 mobile"),
+        telem(rng, 120),                                                     // OM9GRB → GRBAlpha by its callsign
+        ui("M0XYZ", 0, "CQ", ">Hello from a 9600 node (status)"),
+    };
+    // an I frame on a connected link (not APRS) — goes to the log only
+    { std::vector<uint8_t> b; addr(b, "GB7XYZ", 0, false, true); addr(b, "M0XYZ", 1, true); b.push_back(0x22); b.push_back(0xF0); for (char c : std::string("connected mode text")) b.push_back(uint8_t(c)); frames.push_back(b); }
+    int links[4] = { kPlain, kFx16, kIl2p, kPlain };
+    vibepkt::Scrambler scr; int lvl = 0;
+    std::vector<cf32> all;
+    std::normal_distribution<float> nd(0.f, 1.f);
+    for (size_t i = 0; i < frames.size(); ++i) {
+        auto line = txLine({ frames[i] }, links[i], scr, lvl);
+        // the telemetry frame arrives damaged: two line bits wrong inside it (each is six data bits after the descrambler
+        // and NRZI, ≤ 4 bytes) — plain AX.25 cannot have it, FX.25 (8 bytes a block) can
+        if (i == 1) for (int k = 0; k < 2; ++k) line[24 * 8 + 64 + 300 + size_t(k) * 400] ^= 1;
+        auto bb = vibeg3ruh::baseband(line, 37500, 9600);
+        auto iq = vibeg3ruh::fmIq(bb, 37500, 3000, 800);
+        for (int k = 0; k < 2000; ++k) all.push_back(cf32(0.05f * nd(rng), 0.05f * nd(rng)));
+        for (auto& v : iq) all.push_back(v + cf32(0.05f * nd(rng), 0.05f * nd(rng)));
+    }
+    for (int k = 0; k < 8000; ++k) all.push_back(cf32(0.05f * nd(rng), 0.05f * nd(rng)));
+    for (size_t i = 0; i < all.size(); i += 375) { run.feedIq(all.data() + i, int(std::min<size_t>(375, all.size() - i)), 37500); clk += 0.01; }
+    int nFrame = 0, nPacket = 0; std::string grb, conn;
+    for (auto& j : js) {
+        if (j.find("\"type\":\"aprs_frame\"") != std::string::npos) { ++nFrame; if (j.find("OM9GRB") != std::string::npos) grb = j; if (j.find("GB7XYZ") != std::string::npos) conn = j; }
+        if (j.find("\"type\":\"aprs_packet\"") != std::string::npos) ++nPacket;
+    }
+    CHECK(nFrame == 4 && nPacket == 2, "four frames in the log, two of them APRS packets — not the binary telemetry, not the I frame (%d, %d)", nFrame, nPacket);
+    CHECK(grb.find("\"sat\":\"GRBAlpha\"") != std::string::npos && grb.find("\"fec\":\"fx25\"") != std::string::npos && grb.find("\"len\":120") != std::string::npos,
+          "the telemetry frame: GRBAlpha by its callsign, via FX.25, 120 bytes (%s)", grb.substr(0, 160).c_str());
+    CHECK(conn.find("\"ctl\":\"I 1/1\"") != std::string::npos && conn.find("\"text\":\"connected mode text\"") != std::string::npos, "the I frame: control and text (%s)", conn.substr(0, 200).c_str());
+    std::string lj = run.listJson(true);
+    CHECK(lj.find("\"fx25\":1") != std::string::npos && lj.find("\"il2p\":1") != std::string::npos && lj.find("\"log\":[") != std::string::npos && lj.find("\"other\":2") != std::string::npos,
+          "the list: fx25 1, il2p 1, other 2, the log to a joiner");
+    bool galleryGrb = false; for (auto& h : heard) if (h.kind == "frame" && h.name.find("GRBAlpha") != std::string::npos) galleryGrb = true;
+    CHECK(galleryGrb, "the non-APRS frames go to the gallery's day log (GRBAlpha named)");
+    CHECK(std::fabs(run.afcHz() - 800) < 250, "the AFC found the 800 Hz offset (%.0f)", run.afcHz());
+    std::printf("   %d frames in the log (%d APRS); telemetry %s…\n", nFrame, nPacket, grb.substr(0, 120).c_str());
+    // the satellite engine's hint names everything
+    vibeaprs::Run::Opts o2 = o; o2.sat = "TESTSAT-1"; std::vector<std::string> js2; o2.json = [&](const std::string& j) { js2.push_back(j); };
+    vibeaprs::Run r2(9600, o2);
+    for (size_t i = 0; i < all.size(); i += 375) r2.feedIq(all.data() + i, int(std::min<size_t>(375, all.size() - i)), 37500);
+    int named = 0; for (auto& j : js2) if (j.find("aprs_frame") != std::string::npos && j.find("\"sat\":\"TESTSAT-1\"") != std::string::npos) ++named;
+    CHECK(named == 4, "with the satellite engine's hint every frame carries its name (%d)", named);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+static void testCpu() {
+    std::printf("9. CPU (this machine, one core, -O2) — the 9600 receiver, every receiver on, five slicers\n");
+    vibeg3ruh::Opts o;
+    for (double fs : { 48000.0, 250000.0 }) {
+        double c = 0; runModem(kPlain, 20, fs, false, 30, 900, o, 0, false, &c);
+        std::printf("   IQ at %.0f S/s: %.2f %% of a core\n", fs, 100 * c);
+        CHECK(c < 0.2, "IQ %.0f: under 20 %% of a core (%.2f %%)", fs, 100 * c);
+    }
+    double c = 0; runModem(kPlain, 20, 48000, true, 30, 901, o, 0, false, &c);
+    std::printf("   discriminator audio at 48 kHz: %.2f %% of a core\n", 100 * c);
+    vibeg3ruh::Opts o1 = o; o1.slicers = 1; o1.fx25 = false; o1.il2p = false;
+    runModem(kPlain, 20, 48000, false, 30, 900, o1, 0, false, &c);
+    std::printf("   (one slicer, AX.25 only: %.2f %%)\n", 100 * c);
+    // 1200 AFSK with and without the FEC receivers
+    std::vector<float> a(48000 * 20); std::mt19937 rng(1); std::normal_distribution<float> nd(0.f, 0.1f); for (auto& x : a) x = nd(rng);
+    for (int fec = 0; fec < 2; ++fec) {
+        vibeaprs::AfskDemod d(48000, 1200, false, fec != 0, fec != 0);
+        const auto t0 = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < a.size(); i += 4800) d.feed(a.data() + i, 4800, [](const vibeaprs::Frame&) {});
+        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("   1200 AFSK, FX.25 + IL2P %s: %.3f %% of a core\n", fec ? "on " : "off", 100 * sec / 20);
+    }
+}
+
 static void tune() {
     for (float rel : { 1.f / 1000, 1.f / 500, 1.f / 300 }) {
         vibeg3ruh::Opts all; all.eyeRelease = rel;
@@ -452,7 +607,10 @@ int main(int argc, char** argv) {
     testFx25();
     testIl2p();
     testModem(full);
+    testAfskFec();
     testNoise(noiseMin);
+    testRun();
+    testCpu();
     std::printf("\ntest-ax25hs: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
