@@ -1,6 +1,7 @@
 # BRIEF — Satellite Engine & Doppler Lock
 
 **Status:** V12 — parked 2026-10-07 (Stuart: "this is now a V12 feature when we build the decoders into the app and server"). Scoped; see "Review against the codebase" at the end before building.
+**Built 2026-11-19 (branch `v12-sat`):** the engine, the CelesTrak supply, the Doppler lock (listener channels and the shared dial), web / app / R36S UI, the decoder hook — see **"BUILT — 2026-11-19"** and **RESUME HERE** at the end. Synthetic tests only; **not yet tried on a real pass.**
 **Targets:** VibeServer (all builds incl. VibeServerLite APK), VibeSDR app (iOS/Android), web client
 **Related:** `RADIO-ROLES.md`, `DECODERS-GALLERY.md`
 
@@ -313,3 +314,169 @@ CPU cost: SGP4 at 10 Hz + NCO offset + FLL — well under 1 % on a Pi Zero.
 - **A decoder is a consumer.** Since RC25 a running decoder keeps the audio chain alive (the idle gate counted only listeners).
   A Doppler-locked channel with nobody listening (armed locks, gallery capture) must hold the chain the same way.
 - **Directory/CPU:** CelesTrak etiquette (§6.1) mirrors our own third-party etiquette — fetch via vibesdr.net only.
+
+
+---
+
+## BUILT — 2026-11-19 (branch `v12-sat`, off `v12-experimental` 3de409c9a)
+
+| Part | Code | Test | Status |
+|---|---|---|---|
+| SGP4/SDP4, TLE (checksums, Alpha-5) + OMM JSON, observer, look angles, range rate, Doppler, passes | `android/app/src/main/cpp/vibe_sat_orbit.h` | `test-sat-orbit` 122/122 | the paper's verification set exact; Skyfield agreement |
+| The curated birds, element ages, the lock, the FLL, the decoder hook | `vibe_sat_engine.h` | `test-sat-engine` 74/74 | |
+| CelesTrak GP cache (per machine, etiquette) | `vibeserver/satcat.{h,cpp}`, `main.cpp` | `test-satcat` 23/23 | |
+| Server wiring (NCO shift, tracker, messages, hwinfo, gates) | `local_sdr_shim.cpp` (search `[sat]` / `satControl`) | `scripts/test-server-sat.mjs` 33/33 | |
+| Shared words / parsers for both clients | `src/services/satellites.ts` | `scripts/test_satellites_app.ts` all pass | |
+| Web: SAT in the mode menu + the decoder panel's radio keys, the panel, the chan text, the needle | `web/client/src/satellites.ts`, `main.ts`, `mobile.ts`, `spectrum.ts` | `scripts/test-web-sat.mjs` 14/14 (headless Edge, muted, desktop + 390 px) | |
+| App: SAT key, `SatellitePanel`, `ControlsBar satTag`, `WaterfallView needleOffsetHz` | `src/components/SatellitePanel.tsx`, `SDRScreen.tsx`, … | narrow `tsc` on the new/changed components (SDRScreen: syntax only — a whole-tree `tsc` needs > 1 GB) | **not run on a device** |
+| R36S: SAT page + the readout over the waterfall | `handheld-ui/src/sat_page.h` | `-fsyntax-only -Wall` in `vibe-hh-map:trixie` (0/0) | **not run on the handheld** |
+
+### The orbit core — own code, the published model
+
+- Written from Spacetrack Report #3 as revised in AIAA 2006-6753 ("Revisiting Spacetrack Report #3"): WGS-72, the
+  improved operations mode, SDP4's lunar–solar terms, 12 h / 24 h resonance integration (720 min steps), Lyddane.
+- **Verification:** every case of the paper's `SGP4-VER.TLE` against its `tcppver.out` (both from the MIT-licensed
+  Python `sgp4` 2.24 distribution — data only, `vibeserver/testdata-sat/`): 666 rows, **worst position 0.1 mm, worst
+  velocity 0.5 µm/s**, every error ending (decay, eccentricity, semi-latus rectum) reproduced.
+- **Geometry vs an independent implementation:** 70 looks + 14 passes for ISS, SO-50, AO-7, RS-44, AO-123 at IO92ng,
+  São Paulo and Reykjavik against Skyfield 1.55 (`scripts/sat-reference.py`, its output committed as
+  `reference-passes.txt`): azimuth/elevation **0.003°**, range rate **0.33 m/s = 0.5 Hz at 437.8 MHz**, AOS/LOS/TCA
+  **0.27 s**, maximum elevation 0.003°. Sign: receding = positive range rate = received LOW (a *shift*, never a
+  correction — brief §13 TRAP).
+- **Cost (M5 Pro):** one look (SGP4 + the rotation + topocentric) **0.27 µs**; a day of ISS passes 1.4 ms. The 25 Hz
+  tracker is ~0.0007 % of a core per lock. Pi 2 not measured (expect ~30× → still negligible).
+- OMM JSON is the primary format (six-digit numbers: CelesTrak's amateur group already holds 101095 ERMINAZ-2V, which
+  propagates). TLE is parsed too (owner paste, the verification set). TLE and OMM of the same ISS set agree to 0.9 m
+  over a day (TLE's column rounding).
+
+### The birds (checked 2026-11-19, `curatedCatalogue()`)
+
+ISS (437.800 FM repeater, 145.800 voice/SSTV, 145.825 APRS) · SO-50 436.795 · AO-123 435.400 · PO-101 145.900 (FM) ·
+RS-44 435.610–435.670 + beacon 435.605 · FO-29 435.800–435.900 + 435.795 · AO-7 mode B 145.925–145.975, mode A
+29.400–29.500, beacon 29.502 · AO-73 145.950–145.970 + telemetry 145.935 · JO-97 145.855–145.875 · MO-122
+435.810–435.840 + telemetry 435.800 · SONATE-2 437.025 (9k6) + 145.825 APRS · Meteor-M2-3 and M2-4 LRPT 137.900.
+Sources: AMSAT's live FM and "Live Linear Satellites" (2026-02-21) pages, CelesTrak's current amateur + weather groups
+(every number above has a current set), SatNOGS. **Left out:** NOAA-15/18/19 — decommissioned 6 June, 13 and 19 August
+2025 (NOAA's POES archive notice; APT off); AO-91 (end of mission); SO-125 (SatNOGS says re-entered, AMSAT a 2026
+designation — disputed); TEVEL-2 (downlinks not confirmed); CAS-4A / XW-2 (re-entered); QO-100 (geostationary).
+
+### TLE supply (`satcat.cpp`)
+
+CelesTrak `gp.php?GROUP=<g>&FORMAT=json` for `amateur` and `weather`, cached at `<data>/sat/gp-<group>.json` (the
+machine's data dir: every radio process shares it). **The cache's age decides (12 h), never uptime; one attempt marker
+per machine (`last-attempt`), no fetch within 2 h of ANY attempt; the first non-200 stops the round (later groups not
+asked) and backs off 6 h → 12 h → 24 h; a 200 that is not GP JSON (a captive portal, "No GP data found") or over 2 MB
+never replaces the cache; 30–330 s of jitter before the first fetch after start-up.** The cache is published at start
+whatever its age; the engine says how old (STALE 3–7 d, ELEMENTS n d 7–14 d) and refuses past 14 days. curl, `-A
+VibeServer` (no owner details).
+
+### The Doppler lock (`local_sdr_shim.cpp`)
+
+- **Where the shift lives:** a listener's channel NCO (`clientRetune`'s residual + `satShiftHz`); the shared dial's
+  `vfoOffsetNow()` + `satSharedShift_`. The tracker (one thread, `vibe-sat-track`, 25 Hz, a 200 ms nap with no lock)
+  re-points it with a **same-chain `RxPipeline::setTune`** — the NCO moves phase-continuously, nothing is rebuilt, the
+  AGC is untouched, the tune pacer never sees it, `userTuneSeq` / band defaults never fire, no waterfall row is held.
+- **No bin hop, ever:** a locked listener's channel is sized ONCE when the lock starts for nominal ± (2.7e-5·f + the
+  2.5 kHz trim clamp) — `chanBinsFor(bw + 1.6·max)` — and stays that size until the next mode change, so the end of a
+  pass rebuilds nothing either. Measured end to end: **0 channel rebuilds in 3 s of tracking** (`test-server-sat` §3).
+- **Smoothness:** worst step **5.9 Hz per 25 Hz tick** over a 56° ISS pass at 437.8 MHz (max Doppler 10.0 kHz, max
+  rate 148 Hz/s); the trim is slew-limited to 100 Hz/s (≤ 4 Hz a tick). Readouts twice a second; the web needle
+  glides between them at the readout's rate.
+- **The loop** (FM repeaters only — `loop:"fll"`): the channel IQ (`clientIqCb`) → `ResidualMeter`: Σ x·conj(x₋₁)
+  over 0.4 s windows (no atan per sample; NEON / SSE2 / scalar give identical sums — §7) → the window's SNR by the
+  M2M4 moments (constant-envelope FM in noise: S = √(2·M2² − M4)) gated at 3 dB → a type-2 update (target = applied +
+  ½·error; a rate term for ramps) → clamp ±2.5 kHz, refuse any residual over 5 kHz outright (the steady carrier beside
+  ISS). COAST after 1.2 s with no gated window: the trim FREEZES, the model carries on. Simulated: a 1.5 s clock error +
+  1.6 ppm radio → **3 Hz after 20 s**, 2 Hz after a 6 s gap, at AOS and at TCA; 30 s of noise never opens the gate.
+  **Linear transponders and `costas` downlinks: model only** (trim 0, never COAST).
+- **Lifecycle:** match within ±12 kHz of a listed downlink (a passband ±12 kHz); several → highest elevation; none up →
+  ARMED for the next AOS (auto TRACK at AOS); refused in words otherwise (NO SAT / NO SAT DATA / NO TIME / no
+  location / elements too old / Doppler would leave a locked window). An FM lock snaps the dial to the nominal; a
+  linear lock sets the nominal so the channel does not move at all. A nudge under 15 kHz moves the nominal and keeps
+  the lock; a tune away or a mode change ends it (no config sent — the listener's own tune follows); LOS (3 s below the
+  horizon) or the button ends it and **freezes the dial where the channel is** (config sent). With nobody connected an
+  ARMED lock more than 30 min from AOS goes; an active one runs to LOS. A listener's lock dies with their channel.
+- **Shared dial:** the lock is the room's (key `kSharedKey`), anyone with tune rights ends it; `sat` is in the
+  ask-before-tuning and the owner's scan-lock lists like a tune; `sat_list` (the picker) is free.
+- **Time:** `vibeUtcNow()` (the corrected clock FT8 reads); SNTP-measured = `ok`; unmeasured but within [newest epoch
+  − 1 d, + 60 d] = `system` (tracked, "TIME: SYSTEM" shown); otherwise NO TIME (a Pi with no RTC booted offline).
+- **Location:** the published position (`setLocationJson` → `setObserver`), the grid-square centre where that is all
+  the owner gave.
+
+### Wire
+
+```
+client → server  {"type":"sat_list"}                                  the picker's list (free)
+                 {"type":"sat_list","op":"track","norad":N,"aos":A,"los":L}   one pass's sky track (≤ 120 points)
+                 {"type":"sat","op":"lock","norad"?:N}                the lock at the current dial (gated like a tune)
+                 {"type":"sat","op":"unlock"}
+server → client  {"type":"sat_list",time,located,now,why?,sats:[{id,name,norad,note,age,ageState,tx:[{label,hz,hiHz?,
+                   mode,loop,consumer?,upHz?,ctcss?,note?,reach}],az?,el?,rangeKm?,lat?,lon?,passes:[{aos,tca,los,maxEl,
+                   aosAz,losAz}]}]}
+                 {"type":"sat",state:"OFF|ARMED|TRACK|COAST|ENDED",why?,shared?,id,name,norad,tx,loop,consumer?,
+                   nominal,offset,rate,trim,az,el,aos,los,maxEl,age,ageState,time}   twice a second while locked
+                 {"type":"sat_track",norad,aos,los,pts:[[az,el]…]}
+hwinfo / vibeserver.json  "doppler":1 (a version) where the radio reaches a listed downlink; "dopplerWhy" = greyed
+config.vfo       the NOMINAL while locked; where the channel was after LOS / unlock
+```
+
+### Deviations from the brief (decide)
+
+- **§11 "the existing frequency field reports the actual frequency"** — NOT done: `config.vfo` stays on the nominal and
+  `offset` rides in `{"type":"sat"}`. Moving the reported dial 25×/s would pan every client's view (the view follows
+  the dial — the waterfall core rules) and fight the DC-placement / recentre logic. Consequence: an OLD app on a
+  shared dial hears the corrected audio but its needle sits on the nominal (up to 10 kHz off the trace).
+- **§9 "a tune > 15 kHz from the current ACTUAL frequency"** — measured from the NOMINAL (the dial every current client
+  shows and re-sends).
+- **§6.2 the vibesdr.net mirror + SatNOGS + `sats.json`** — not built; the server asks CelesTrak itself under the rules
+  above, and the transmitters are the curated list in code. `sats.json` is phase 2.
+- **§5.2 the client time offset (ping/pong), §4.3 curve-fit fallback, §7 field-mode location from the app** — not built.
+- **§10 bookmarks storing "nominal + track satellite flag"** — bookmarks store the nominal (the dial) already; the flag
+  is not stored.
+
+### RESUME HERE
+
+1. **A real pass.** Nothing has been tested on air. The coordinator (or Stuart) should take an ISS 437.800 or SO-50
+   pass on a VHF/UHF radio with a usable antenna, press DOPPLER (or SAT → TRACK), and check: centred through the pass,
+   COAST between overs and re-centred at the next, no clicks at lock start (the one channel rebuild) and none during,
+   LOS freezes the dial. Then a linear pass (RS-44) in USB. The brief's §13.1 (SDR Console side by side, ±50 Hz) is
+   the reference test.
+2. **Android Lite / the app's own server** get no orbit data yet (satcat is the desktop daemon's curl): the app
+   should fetch CelesTrak (same rules) and hand it in with `LocalSdrShim::satLoadOmm(group, json)` — or phase 2's
+   vibesdr.net `sats.json`. Until then those servers show SAT greyed "NO SAT DATA".
+3. **The web page header** (`android/app/src/main/cpp/vibe_web_page.h`) was NOT committed (generated): run
+   `node scripts/build-web.mjs` after merging, then rebuild the server, before `test-web-sat.mjs`.
+4. Phase 2 items above (sats.json mirror, client time, curve fit, field mode, the bookmark flag); a satellite glyph for
+   the mode icons (none drawn now); `doppler: 2` when linear transponders get uplink-aware handling.
+
+### RESUME HERE — the decoder hook (for v12-lrpt and v12-ax25hs)
+
+Header-only, `#include "vibe_sat_engine.h"`, namespace `vibe::sat`:
+
+```cpp
+DecoderView v = vibe::sat::decoderView(session);   // this listener's lock, else the shared dial's, else v.on == false
+//   v.on, v.state ("TRACK"/"COAST"/"ARMED"/"ENDED"), v.norad, v.satId, v.satName, v.txLabel,
+//   v.consumer ("lrpt" | "ax25-9600" | "ax25-1200" | "bpsk-telemetry" | ""), v.loop ("fll" | "none" | "costas"),
+//   v.downlinkHz (the nominal = the dial), v.inChannelHz, v.modelHz, v.rateHzS, v.elDeg, v.azDeg, v.rangeKm,
+//   v.aos, v.los, v.ageDays
+double d, r, el;
+vibe::sat::dopplerNow(norad, hz, vibe::vibeUtcNow(), d, r, &el);   // the model alone, no lock needed (gallery captures)
+vibe::sat::engine();                                               // the process's engine (listJson, passes, …)
+```
+
+★★ **Do not correct twice.** `inChannelHz` is ALREADY in the listener's channel NCO: a decoder fed from that
+listener's channel IQ (`clientIqCb`, "the dial at DC") sees only the residual and must not apply Doppler again (on
+`costas` downlinks the engine's trim is 0, so `inChannelHz == modelHz` and your carrier loop owns the residual). A
+decoder cutting its OWN slice at the nominal off the shared FFT (`feedSkimFromBins` style) must apply `modelHz` itself
+and may feed `rateHzS` into its timing / carrier loop as feed-forward. `decoderView` is a map look-up under the engine's
+mutex (no SGP4) — fine per block; the values are the tracker's last tick (≤ 40 ms old). Meteor's mode and frequency
+change on orbit: read `consumer`/`downlinkHz` from the view, never hard-code 137.9. Tested in `test-sat-engine` §8.
+
+### Open decisions for Stuart
+
+- The R36S readout sits over the waterfall above the VTS (the 640 px deck has no room beside the digits) — right place?
+- CelesTrak direct (with the rules above) until a vibesdr.net mirror exists — OK, or hold the feature until the mirror?
+- The nominal stays in `config.vfo` (old apps' needle sits on the nominal) — accept, or report the actual as the brief says?
+- An owner switch for satellites on the setup page (none now: one button, no settings, and no decoder CPU to protect)?
+- Curated list entries flagged uncertain: PO-101 (scheduled), AO-7 (sunlight only), FO-29 (power-permitting), Meteor-M2-4's
+  LRPT frequency/mode — keep, or show only birds confirmed in the last month?

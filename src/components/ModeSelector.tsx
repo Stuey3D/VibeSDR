@@ -42,6 +42,7 @@ import { modeIconFor } from '../utils/modeIcons';
 import { DSC_HINT, dscChannelOn } from '../services/dsc';
 import { PAGING_HINT, type PagingMode } from '../services/paging';   // ★ V12 PAGING
 import { SAME_HINT, SELCAL_HINT } from '../services/alertDecoders';
+import { ALE_HINT } from '../services/aleDecoder';   // ★ V12 2G HF ALE
 import { FIVE_TONE_STANDARDS, TONES_HINT, type TonesOptions } from '../services/tones';   // ★ V12 DTMF + 5-tone
 import { HELL_HINT } from '../services/feldHell';   // ★ V12 FELD HELL
 import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
@@ -49,7 +50,7 @@ import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, typ
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 import { FREEDV_HINT, FREEDV_SIDEBANDS, freedvSidebandLabel, type FreeDvChoice, type FreeDvSideband, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -507,6 +508,9 @@ interface ModeSelectorProps {
     avdataAvail?: boolean; avdataWhy?: string; avdataOn?: boolean; onAvdata?: () => void;
     /** ★★ V12 RADIOSONDES (RS41) — the same three states: absent (no 400 MHz reach), dimmed with the reason, live. */
     sondesAvail?: boolean; sondesWhy?: string; sondesOn?: boolean; onSondes?: () => void;
+    /** ★★ V12 SATELLITES — opens the satellites box (not a whole-radio mode): absent (no listed downlink in reach), dimmed
+     *  with the reason (no orbit data / location / time yet), lit while a Doppler lock runs. */
+    satAvail?: boolean; satWhy?: string; satOn?: boolean; onSat?: () => void;
     /** ★★ V12 APRS — a VibeServer's own packet decoder, only where vibeserver.json says `"aprs": true`. Its settings:
      *  PACKET VHF 1200 / HF 300, a TUNE key (the region's channel `aprsHz` in NFM, or 10.1476 USB) and the hint. */
     aprsAvail?: boolean; aprsBaud?: AprsBaud; aprsHz?: number;
@@ -550,6 +554,8 @@ interface ModeSelectorProps {
     sameAvail?: boolean;
     /** ★★ V12 SELCAL — only where `"selcal": true` (the aeronautical selective call, ICAO's 32 tones). */
     selcalAvail?: boolean;
+    /** ★★ V12 2G HF ALE — only where `"ale": true` (or greyed with `aleWhy` off HF). */
+    aleAvail?: boolean;
     /** ★★★ V12 DECODER REACH (2026-11-03, vibe_decoder_reach.h): a fixed-frequency decoder this radio CANNOT TUNE (a locked
      *  range, the driver's coverage) — the server's `<id>Why`. Its key is drawn GREYED, never hidden and never live: a press
      *  (touch, pad, keyboard) says why through `onDecWhy` instead of starting it. */
@@ -662,11 +668,12 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const sitoraShown = !!decoderControls?.sitoraAvail && !isBlocked('sitora');   // ★ V12 SITOR-A
   const sameShown = !!decoderControls?.sameAvail && !isBlocked('same');   // ★ V12 EAS / SAME
   const selcalShown = !!decoderControls?.selcalAvail && !isBlocked('selcal');   // ★ V12 SELCAL
+  const aleShown = !!decoderControls?.aleAvail && !isBlocked('ale');   // ★ V12 2G HF ALE
   const hellShown = !!decoderControls?.hellAvail && !isBlocked('hell');   // ★ V12 FELD HELL
   const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
   const tmShown = (f: TextFamily) => !!decoderControls?.tmModes?.[f] && !isBlocked(f);   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
-  const srvDecShown = cwShown || pskShown || jttyShown || ncdxfShown || balloonShown || tonesShown || dscShown || sitoraShown || sameShown || selcalShown || hellShown || pagingShown || aprsShown
+  const srvDecShown = cwShown || pskShown || jttyShown || ncdxfShown || balloonShown || tonesShown || dscShown || sitoraShown || sameShown || selcalShown || aleShown || hellShown || pagingShown || aprsShown
     || tmShown('mfsk');
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
@@ -857,7 +864,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     // ★★ V12 out of this radio's reach: greyed, and a press says why (never starts it)
     const why = dc.decWhy?.[id];
@@ -1021,7 +1028,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           style={sdOff ? { opacity: 0.45 } : undefined} />
       ) : (
       <TouchableOpacity ref={navRef as any}
-        accessibilityLabel={sdOff ? `Radiosondes, unavailable: ${dc.sondesWhy}` : 'Radiosondes — RS41 weather balloons on 400 to 406 MHz'}
+        accessibilityLabel={sdOff ? `Radiosondes, unavailable: ${dc.sondesWhy}` : 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400 to 406 MHz'}
         style={[st.btn, { borderColor: sdLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : 10 },
                 sdLit && { backgroundColor: decBg },
                 sdOff && { opacity: 0.45, borderStyle: 'dashed' as const },
@@ -1031,6 +1038,29 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: sdLit ? dec : t.btnText }]}>
           SONDES
         </ModeLabel>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
+  /* ★★ V12 THE SATELLITES KEY — the sondes key's look; it opens the box, and the box says why when it is greyed. */
+  const satOff = !!decoderControls?.satWhy;
+  const satLit = !!decoderControls?.satOn;
+  const satKey = () => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="sat" onPress={() => dc.onSat?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="SAT" active={satLit} pip stack={stackIco}
+          onPress={() => dc.onSat?.()} fontSize={12}
+          style={satOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={satOff ? `Satellites, unavailable: ${dc.satWhy}` : 'Satellites — next passes, a sky track and Doppler correction'}
+        style={[st.btn, { borderColor: satLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : 10 },
+                satLit && { backgroundColor: decBg },
+                satOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onSat?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: satLit ? dec : t.btnText }]}>SAT</Text>
       </TouchableOpacity>
       )}</NavItem>
     );
@@ -1225,6 +1255,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       default: return { id, node: null };
     }
   }).filter(k => !!k.node);
+  // ★★ V12 SATELLITES beside them (it tunes the radio too: TRACK puts the dial on a downlink) — not in WHOLE_RADIO_IDS, it
+  //    is not a whole-radio mode
+  if (decoderControls?.satAvail) wholeKeys.push({ id: 'sat', node: satKey() });
   /* ★★ V12 THE BAND GROUPS — one renderer per id (utils/decoderBands names them), so a decoder placed in two bands (DSC,
    *  CW, APRS, SSTV, DIGITAL SPOTS) is the same key in each. null = not on this radio / not allowed here (the rules above,
    *  unchanged — a locked range still hides ADS-B and the rest). */
@@ -1244,8 +1277,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
       case 'same':   return sameShown ? srvKey('same', 'SAME', 'EAS and SAME emergency alert header decoder') : null;
       case 'selcal': return selcalShown ? srvKey('selcal', 'SELCAL', 'SELCAL aeronautical selective call decoder') : null;
+      case 'ale':    return aleShown ? srvKey('ale', 'ALE', 'ALE decoder: HF soundings, calls and links') : null;
       case 'mfsk':
-        return tmShown('mfsk') ? srvKey('mfsk', TEXT_FAMILY_KEY.mfsk, 'MFSK, OLIVIA, CONTESTIA and THOR decoder, mode found automatically') : null;
+        return tmShown('mfsk') ? srvKey('mfsk', TEXT_FAMILY_KEY.mfsk, 'MFSK, OLIVIA, CONTESTIA, THOR, DOMINOEX and MT63 decoder, mode found automatically') : null;
       case 'hell':   return hellShown ? srvKey('hell', 'HELL', 'Feld Hell, drawn as it is heard') : null;
       case 'paging': return pagingShown ? srvKey('paging', 'PAGE', 'Pager decoder, POCSAG and FLEX, found automatically') : null;
       case 'aprs': return aprsShown ? srvKey('aprs', 'APRS', 'APRS packet decoder') : null;
@@ -1261,7 +1295,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
       case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;   case 'balloon': return balloonShown;   case 'tones': return tonesShown;   case 'lrpt': return lrptShown;
-      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'hell': return hellShown; case 'paging': return pagingShown;
+      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'ale': return aleShown; case 'hell': return hellShown; case 'paging': return pagingShown;
       case 'mfsk': return tmShown('mfsk'); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
       case 'spots': return spotsInBands; case 'hfdl': return hfdlInBands;
@@ -1762,6 +1796,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         return <Text style={capText}>{SAME_HINT}</Text>;
       case 'selcal':
         return <Text style={capText}>{SELCAL_HINT}</Text>;
+      /* ★ V12 2G HF ALE: no settings — nothing to choose (the standard fixes the tones and rate; the dial is the channel). */
+      case 'ale':
+        return <Text style={capText}>{ALE_HINT}</Text>;
       /* ★ V12 FELD HELL: no settings — the hint only (the tone is found by itself). */
       case 'hell':
         return <Text style={capText}>{HELL_HINT}</Text>;

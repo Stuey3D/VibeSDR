@@ -260,6 +260,8 @@ add_library(vibeserver_core STATIC
     #   into the Android and iOS apps too, and a phone has no /etc to write. See vibeserver_config.h.
     "${CMAKE_CURRENT_SOURCE_DIR}/vibeserver_config.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/eibi.cpp"
+    # ★ V12 satellite engine: CelesTrak GP data, cached per machine (docs/v12/SATELLITE-ENGINE.md §6)
+    "${CMAKE_CURRENT_SOURCE_DIR}/satcat.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/proc.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/solar.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/geoip.cpp"
@@ -320,7 +322,9 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/sitor_a.cpp"
     "${CPP_DIR}/decoders/same_decoder.cpp"   # ★ V12 EAS / SAME
     "${CPP_DIR}/decoders/selcal_decoder.cpp"   # ★ V12 SELCAL
-    "${CPP_DIR}/decoders/textmodes.cpp"   # ★ V12 MFSK / OLIVIA / THOR
+    "${CPP_DIR}/decoders/textmodes.cpp"   # ★ V12 MFSK / OLIVIA / THOR / DOMINOEX
+    "${CPP_DIR}/decoders/mt63.cpp"   # ★ V12 MT63
+    "${CPP_DIR}/decoders/ale_decoder.cpp"   # ★ V12 2G HF ALE
     # ★★★ V12 PAGING (POCSAG / FLEX) — for the R36S handheld's radio process ONLY (vibe_paging_gate.h). Compiled in, but
     #     dormant in every other process: DecoderHost::pagingProcess() is false until --handheld-radio sets the handheld
     #     profile, so on a server "paging" is an unknown decoder and vibeserver.json never offers it.
@@ -1179,7 +1183,8 @@ foreach(t acars acars-apps vdl2 hfdl avi-service aircraft-share)
 endforeach()
 # ★★ V12 RS41 RADIOSONDES (docs/v12/RS41.md): the frame from the listener documentation, our own transmitter through the
 #    whole receiver (SNR, offsets, several sondes, noise), and the service + its JSON. Header-only on vibedsp.
-foreach(t rs41 rs41-service)
+# ★★ V12 the other types (docs/v12/SONDES-TYPES.md): DFM, M10 / M20 — the same receiver, AUTO type per channel.
+foreach(t rs41 rs41-service sondes-types)
   add_executable(test-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-${t}.cpp")
   target_include_directories(test-${t} PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
   target_compile_options(test-${t} PRIVATE -O3 -ffp-contract=fast)
@@ -1193,6 +1198,15 @@ add_executable(test-lrpt "${CMAKE_CURRENT_SOURCE_DIR}/test-lrpt.cpp")
 target_include_directories(test-lrpt PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
 target_compile_options(test-lrpt PRIVATE -O3)
 add_test(NAME lrpt COMMAND test-lrpt --quick)
+# ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): SGP4/SDP4 against the paper's verification set, OMM/TLE,
+#    the observer's view, Doppler and passes against Skyfield; the catalogue / TLE supply; the Doppler lock. Header-only.
+foreach(t sat-orbit sat-engine)
+  add_executable(test-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-${t}.cpp")
+  target_include_directories(test-${t} PRIVATE "${CPP_DIR}")
+  target_compile_options(test-${t} PRIVATE -O2)
+  target_link_libraries(test-${t} PRIVATE Threads::Threads)
+  add_test(NAME ${t} COMMAND test-${t} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endforeach()
 # ★ dxscan-fm-replay: a recorded .cu8 capture through the FM hop engine as a sweep runs it (dev tool; captures stay in
 #   ~/VibeSDR-test-audio/fm). Peaks found and each one's clean RDS groups — why a station is or is not identified.
 add_executable(dxscan-fm-replay "${CMAKE_CURRENT_SOURCE_DIR}/dxscan-fm-replay.cpp")

@@ -110,6 +110,10 @@ flags_for() {
     #    the real RxPipeline in NFM. The voice checks are NOT RUN (exit 3) without libcodec2 — the FEC, packets and callsigns
     #    still run and must pass.
     test-m17)              echo "-O2 -I $VDSP -I $KISS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
+    # ★★ V12 DV signalling (vibe_dvsig*.h — DMR, D-STAR, YSF, NXDN, dPMR identities, never voice): the specs' vectors, the
+    #    correlator kernels SIMD = scalar, our transmitter for each system → FM → noise → our receiver, minutes of noise and
+    #    analogue FM speech with nothing logged, the two report copies, the listener thread, CPU. `clip` writes the e2e clip.
+    test-dvsig)            echo "-O2 -I $VDSP -lpthread" ;;
     # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
     #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
     test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
@@ -280,7 +284,9 @@ flags_for() {
     # ★ V12 aviation: -O2 — each test times its receiver against real time (CPU per capture second).
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "-O2 -lpthread" ;;
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
-    test-rs41|test-rs41-service) echo "-O2 -lpthread" ;;
+    test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
+    # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
+    test-sat-orbit|test-sat-engine) echo "-O2 -lpthread" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
     test-tz-id) [ "$(uname)" = Darwin ] && echo "-framework CoreFoundation" || echo "" ;;
     *)               echo "" ;;
@@ -319,6 +325,7 @@ deps_for() {
     test-freedv) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c $RADE_LIBS" ;;
+    test-dvsig)           echo "$VDSP/resampler.cpp $VDSP/ddc.cpp" ;;
     test-auto-bw|test-m17) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
@@ -349,7 +356,7 @@ deps_for() {
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
                               android/app/src/main/cpp/decoders/wefax_decoder.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp \
                               android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp \
-                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;
+                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
@@ -412,6 +419,7 @@ deps_for() {
     test-moveloc)       echo "$SRC/moveloc.cpp $SRC/proc.cpp" ;;
     # ★★★ The EiBi season + its fallback (NickB, 2026-10-27: B26 a 404 two days after we switched to it).
     test-eibi)          echo "$SRC/eibi.cpp $SRC/proc.cpp" ;;
+    test-satcat)        echo "$SRC/satcat.cpp $SRC/proc.cpp" ;;   # ★ V12 satellite engine: the CelesTrak cache
     test-admin-banlist) echo "" ;;
     # ★★ The POWER card's verdict (vibe_power.h, 2026-10-16): brief supply dips amber; red only for a dip
     #    held ≥ 10 s, near-continuous dips, USB over-current, or a USB device lost in a dip. Header-only,
@@ -419,7 +427,7 @@ deps_for() {
     test-power-dips)    echo "" ;;
     test-decoder-hardening) echo "$VDSP/ddc.cpp android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     # ★ NAVTEX's CCIR 476 coder, word by word (audit 2026-10-04, rows 11-13); the audio half is scripts/test-navtex.sh.
     test-navtex-fec)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
     # ★★ RTTY's letters/figures shift across a lost signal: a lost LTRS → letters, a synop line → figures (2026-10-13).
@@ -441,7 +449,8 @@ deps_for() {
     test-same)          echo "android/app/src/main/cpp/decoders/same_decoder.cpp" ;;
     # ★★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91 Table 3-1): 300 random codes over 32 tones, the dial, noise, DTMF, speech.
     test-selcal)        echo "android/app/src/main/cpp/decoders/selcal_decoder.cpp" ;;
-    test-textmodes)     echo "android/app/src/main/cpp/decoders/textmodes.cpp" ;;   # ★ V12 MFSK / OLIVIA / THOR (pffft: cobj-ndb)
+    test-ale)           echo "android/app/src/main/cpp/decoders/ale_decoder.cpp" ;;   # ★ V12 2G HF ALE (docs/v12/HF-DATA.md)
+    test-textmodes)     echo "android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp" ;;   # ★ V12 MFSK / OLIVIA / THOR (pffft: cobj-ndb)
     test-feld-hell)     echo "android/app/src/main/cpp/decoders/feld_hell.cpp" ;;   # ★ V12 FELD HELL, drawn (pffft: cobj-ndb)
     test-msk144)        echo "android/app/src/main/cpp/decoders/digimodes/msk144_code.cpp android/app/src/main/cpp/decoders/digimodes/msk144_decoder.cpp android/app/src/main/cpp/decoders/digimodes/ldpc_small.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-q65)           echo "android/app/src/main/cpp/decoders/digimodes/q65_code.cpp android/app/src/main/cpp/decoders/digimodes/q65_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
@@ -450,7 +459,7 @@ deps_for() {
                               android/app/src/main/cpp/decoders/auto_notch.cpp android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/rds.cpp $VDSP/stereo.cpp $RADE_LIBS" ;;
     test-decoder-hosts|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/rtty_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
@@ -466,7 +475,7 @@ deps_for() {
     #   (vibe_avi_front.h — the channeliser, FFT and decimators); pffft + kiss_fft from cobjs_for.
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     # ★ V12 RS41: the same channeliser / FFT / half-bands (vibe_rs41_rx.h); pffft + kiss_fft from cobjs_for.
-    test-rs41|test-rs41-service) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
+    test-rs41|test-rs41-service|test-sondes-types) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     *)                  echo "" ;;
   esac
 }
@@ -485,7 +494,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-dab-bank)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -865,6 +874,7 @@ if node --no-warnings scripts/test_am_sync.ts; then pass=$((pass+1)); else fail=
 if node --no-warnings scripts/test_freedv.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV as a mode (freedv.ts)
 if node --no-warnings scripts/test_freedv_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV in the app (key, VTS, sub-mode row, sideband)
 if npx tsx scripts/test_m17.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 as a mode (m17.ts)
+if npx tsx scripts/test_dvsig.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 DV ID (dvsig.ts)
 if npx tsx scripts/test_m17_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 in the app (key, VTS, no width, ghost reports)
 if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
@@ -891,6 +901,8 @@ if npx tsx scripts/test_aviation_map.ts; then pass=$((pass+1)); else fail=$((fai
 if npx tsx scripts/test_sondes_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 METEOR LRPT, the clients' half (src/services/lrpt.ts): lrpt_status parsed defensively, the status line, the attach
 if npx tsx scripts/test_lrpt_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 satellite engine, the clients' half (src/services/satellites.ts): parsing, the readout words, the picker rows, the cap
+if npx tsx scripts/test_satellites_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 PAGE (2026-11-16, Stuart): the law's notice wherever PAGE is described, and RECORDINGS SILENT WHILE PAGE RUNS — every
@@ -1835,9 +1847,29 @@ if [ -x "$OUT/test-rs41" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   VIBE_RS41_CLIP="$OUT/rs41-clip.cu8" node scripts/test-web-sondes.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/rs41-clip.cu8"
+  # ★★ V12 the other types (docs/v12/SONDES-TYPES.md): a DFM-09, an M10 and an M20 in one band — AUTO type per sonde
+  if [ -x "$OUT/test-sondes-types" ] && [ -z "$(find vibeserver/test-sondes-types.cpp android/app/src/main/cpp/vibe_sonde_*.h android/app/src/main/cpp/vibe_rs41*.h -newer "$OUT/test-sondes-types" 2>/dev/null | head -1)" ]; then
+    "$OUT/test-sondes-types" --write-clip "$OUT/sondes-types-clip.cu8" 2400000 >/dev/null 2>&1
+    VIBE_RS41_CLIP="$OUT/sondes-types-clip.cu8" VIBE_SONDES_TYPES=1 node scripts/test-server-sondes.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+    rm -f "$OUT/sondes-types-clip.cu8"
+  else
+    echo '   not run — the test-sondes-types build is missing or older than its sources'; notrun=$((notrun+1))
+  fi
 else
   echo '   not run — needs VIBESERVER_BIN and the test-rs41 build'; notrun=$((notrun+1))
 fi
+
+# ★★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): the real server on a fake rtl_tcp with CelesTrak's 2026-11-19
+#     groups in its orbit cache (epochs moved to an hour ago — always fresh, no network): the picker list, the Doppler lock
+#     on the shared dial and on a locked window (built once, never rebuilt by the tracker), nudge / tune away / unlock and
+#     the freeze, the greyed state with no orbit data. Needs VIBESERVER_BIN (exit 3 = not run). ★ No satellite on air here.
+printf '\n\033[1m── Satellite engine (the Doppler lock, end to end) ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ …then the web client (headless Edge, --mute-audio): the SAT entry, the picker, TRACK, the readout beside the digits, 390 px
+node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by
 #     test-ais / test-aprs --write-clip — AIS mode (both channels, the ship list, a track, the dial given back, the gallery)
@@ -2008,6 +2040,22 @@ else
   echo '   not run — needs VIBESERVER_BIN (and test-tones built above)'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 DV ID — DMR, D-STAR, YSF, NXDN, dPMR signalling, never voice (docs/v12/DV-SIGNALLING.md): the real server on a fake
+#     rtl_tcp replaying test-dvsig's synthetic clip (our own transmitter for each system in turn): on 70 cm the identities copy
+#     (DMR source, TG, alias and GPS; YSF and D-STAR callsigns; NXDN and dPMR IDs), status and pins, NFM after; on PMR446 the
+#     public copy with no identity in anything sent; the owner's opt-in reaching the signed-in owner and never a listener; the
+#     owner's switch (test-server-dvsig). NOT RUN without VIBESERVER_BIN.
+printf '\n\033[1m── DV ID (end to end: the server) ──\033[0m\n'
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-dvsig android/app/src/main/cpp/vibe_dvsig.h android/app/src/main/cpp/vibe_dvsig_fec.h \
+  android/app/src/main/cpp/vibe_dvsig_front.h android/app/src/main/cpp/vibe_dvsig_tx.h
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-dvsig" ] && "$OUT/test-dvsig" clip "$OUT/dvsig-clip.cu8" 288000 20 20 >/dev/null; then
+  VIBE_DVSIG_CLIP="$OUT/dvsig-clip.cu8" node scripts/test-server-dvsig.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/dvsig-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-dvsig built above)'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 THE RTTY SKIMMER (2026-11-14): the real server on a fake rtl_tcp replaying test-rtty-skimmer's synthetic clip (four
 #     RTTY stations of different settings around 14.080 MHz): every station listed with its own settings, listed before
 #     set, spotted at its RF, on a one-pipeline and a range-locked radio (test-server-rtty-skim); then the web client in
@@ -2063,7 +2111,7 @@ else notrun=$((notrun+1)); fi
 # ★★ V12 MFSK / OLIVIA / THOR in the WEB client (2026-10-31): a real server fed tools/textmode-bench/tm_clip, headless Edge.
 printf '\n\033[1m── MFSK + OLIVIA + THOR (end to end: the web client on a real server) ──\033[0m\n'
 if [ -n "${VIBESERVER_BIN:-}" ] && cc -O2 -c -o "$OUT/pffft_tm.o" android/app/src/main/cpp/vibedsp/third_party/pffft/pffft.c \
-   && c++ -std=c++17 -O2 -I android/app/src/main/cpp -o "$OUT/tm_clip" tools/textmode-bench/tm_clip.cpp android/app/src/main/cpp/decoders/textmodes.cpp "$OUT/pffft_tm.o" \
+   && c++ -std=c++17 -O2 -I android/app/src/main/cpp -o "$OUT/tm_clip" tools/textmode-bench/tm_clip.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp android/app/src/main/cpp/decoders/ale_decoder.cpp "$OUT/pffft_tm.o" \
    && "$OUT/tm_clip" "$OUT/tm.cu8" >/dev/null; then
   VIBE_TM_CLIP="$OUT/tm.cu8" node scripts/test-web-textmodes.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

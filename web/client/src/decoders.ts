@@ -80,7 +80,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'hfdl' | 'lrpt' | null;
+export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'hfdl' | 'lrpt' | 'ale' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -181,6 +181,7 @@ export interface DecoderCallbacks {
   onLrptStatus?: (data: unknown) => void;   // ★ V12 METEOR LRPT: src/services/lrpt.ts LrptStatus
   /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
   onTextModeStatus?: (data: unknown) => void;
+  onAleStatus?: (data: unknown) => void;   // ★ V12 2G HF ALE: {"words","offset","last"} while a transmission is read
   /** ★ V12 FELD HELL: {hz, signal} when it changes (feldHell.ts parseHellStatus); its lines come through onImageLine. */
   onHellStatus?: (data: unknown) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
@@ -253,6 +254,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   balloon: 'balloon',   // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV (vibe_balloon_run.h)
   tones: 'tones',       // ★ V12 DTMF + 5-tone selective calling (vibe_tones_run.h)
   lrpt: 'lrpt',         // ★ V12 METEOR-M LRPT weather-satellite pictures (vibe_lrpt_run.h): "symbol_rate" etc.
+  ale: 'ale',           // ★ V12 2G HF ALE (decoders/ale_decoder.h): nothing to set
 };
 
 export class DecoderClient {
@@ -495,6 +497,11 @@ export class DecoderClient {
       if (msg.type === 'jtty_signals') this.cb.onJttySignals?.(msg.data); else this.cb.onJttySpot?.(msg.data);
       return;
     }
+    if (msg.type === 'ale_status' && msg.data) {
+      if (this.mode !== 'ale') return;
+      this.cb.onAleStatus?.(msg.data);
+      return;
+    }
     if (msg.type === 'textmode_status' && msg.data) {
       if (this.mode !== 'mfsk') return;
       this.cb.onTextModeStatus?.(msg.data);
@@ -603,6 +610,8 @@ export class DecoderClient {
       // ★ EAS / SAME and SELCAL: one line per alert / call and the state (0 listening, 1 reading) — src/services/alertDecoders.ts.
       case 'same':
       case 'selcal':
+      // ★ V12 2G HF ALE: one line a transmission and the state (0 listening, 1 reading); ale_status comes as JSON.
+      case 'ale':
       // ★ V12 HFDL: one line per message (hfdl_status comes as JSON)
       case 'hfdl':
       // ★ MFSK / OLIVIA / THOR: the text as it decodes and the state (0 searching, 1 locked); textmode_status comes as JSON.

@@ -95,12 +95,14 @@ inline std::string modeLabel(const std::string& id) {
     static const char* sync[][2] = {{"sam", "SAM"}, {"sau", "SAM-U"}, {"sal", "SAM-L"}, {"ecssu", "ECSS-U"}, {"ecssl", "ECSS-L"}, {"amst", "AM-ST"}};
     for (auto& p : sync) if (id == p[0]) return p[1];
     if (id == "freedv") return kFreeDvLabel;   // src/services/freedv.ts FREEDV_LABEL
+    if (id == "dvsig") return kDvsigLabel;     // src/services/dvsig.ts DVSIG_LABEL
     return upper(id);
 }
 inline std::vector<ModeDef> offeredModes(const std::vector<std::string>& srvModes, const std::vector<std::string>& blocked) {
     auto has = [&](const std::vector<std::string>& v, const std::string& x) { return std::find(v.begin(), v.end(), x) != v.end(); };
     std::vector<std::string> ids = {"wfm", "nfm"};
     if (has(srvModes, "m17")) ids.push_back("m17");   // ★ V12 M17 beside NFM, only where the server lists it (m17.h)
+    if (has(srvModes, "dvsig")) ids.push_back("dvsig");   // ★ V12 DV ID likewise (dvsig.h)
     ids.push_back("am");
     for (const char* sy : {"sam", "sau", "sal", "ecssu", "ecssl", "amst"}) if (has(srvModes, sy)) ids.push_back(sy);
     for (const char* m : {"usb", "lsb", "cwu", "cwl"}) ids.push_back(m);
@@ -149,7 +151,7 @@ public:
     bool quit_ = false;
 
     // ── state ──
-    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB, S_DEC, S_MAP };
+    enum Sheet { S_NONE, S_MODE, S_STEP, S_MENU, S_AUDIO, S_KB, S_BOOKMARKS, S_SEARCH, S_DAB, S_DEC, S_MAP, S_SAT };   // ★ V12 S_SAT: sat_page.h
     std::vector<Sheet> sheets_;
     std::deque<Btn> presses_;
     Jog tuneJog_{30}, zoomJog_{45};
@@ -212,7 +214,7 @@ public:
     void closeTop() { if (!sheets_.empty()) { nav_.forget(layerName(sheets_.back())); sheets_.pop_back(); } }
     static const char* layerName(Sheet s) {
         switch (s) { case S_MODE: return "mode"; case S_STEP: return "step"; case S_MENU: return "menu"; case S_AUDIO: return "audio";
-                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; case S_DEC: return "dec"; case S_MAP: return "map"; default: return "deck"; }
+                     case S_KB: return "kb"; case S_BOOKMARKS: return "bm"; case S_SEARCH: return "search"; case S_DAB: return "dab"; case S_DEC: return "dec"; case S_MAP: return "map"; case S_SAT: return "sat"; default: return "deck"; }
     }
     void applyLook() {
         wfp_.setPalette(set_.palette);
@@ -239,6 +241,7 @@ public:
     // BOOKMARKS + SEARCH (bm_page.h, search_page.h) — reached from the frequency pad's two keys
     void drawBookmarks(Ctx& c, const RadioState& s);
     void drawSearch(Ctx& c, const RadioState& s);
+    void drawSat(Ctx& c, const RadioState& s);   // ★ V12 sat_page.h — the satellites page
     void drawSearchLive(Ctx& c, Rect r);
     void drawPadLinks(Ctx& c, Rect r);
     bool padLinksInput(Btn b);
@@ -309,6 +312,8 @@ inline void decDrawFull(App&, Ctx&, const RadioState&);   // the picture / galle
 // the STRESS battery calibration's own screen (battery_cal.h), drawn in place of the radio while it runs
 inline bool calScreenUp();
 inline void calDrawScreen(App&, Ctx&);
+inline void calStressSdrEnd(App&, const char*);   // ★ h80: the STRESS run drives the radio (battery_cal.h StressSdr)
+inline void calStressSdrTick(App&, const RadioState&);
 inline void decModeEntries(const RadioState&, std::vector<ModeDef>&);
 inline bool decModeLit(const std::string&);
 inline bool decRunning();   // a decoder (or Spots) is on (dec_state.h) — App::tuneTyped keeps its mode
@@ -326,6 +331,9 @@ inline void mapTick(App&, const RadioState&);
 inline bool mapTune(App&, int);
 inline bool mapZoom(App&, int);
 inline void mapModeEntries(const RadioState&, std::vector<ModeDef>&);
+inline void satModeEntries(const RadioState&, std::vector<ModeDef>&);   // ★ V12 sat_page.h
+inline void satOpen(App&);
+inline void satDrawLine(Ctx&, const RadioState&, float, float);
 inline bool mapModeLit(const std::string&);
 inline bool mapModePick(App&, const RadioState&, const std::string&);
 inline void mapDecFeed(App&, const std::string&, const Json&);
@@ -361,6 +369,7 @@ namespace hh { inline bool decSkimSegment(int& lo, int& hi); }
 #include "dec_box.h"
 #include "map_page.h"
 #include "map_modes.h"
+#include "sat_page.h"   // ★ V12 satellites — the picker, the readout, DOPPLER (docs/v12/SATELLITE-ENGINE.md)
 #include "memory.h"
 #include "clock_rds.h"
 #include "adv_rds.h"

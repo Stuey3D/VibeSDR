@@ -24,11 +24,12 @@ import { setModeLabel } from './modeIconDom';   // ★ V12 mode icons
 import { modeLegend, isAmSync, AM_SYNC_NAME } from '../../../src/services/amSync';
 import { FREEDV_LABEL, FREEDV_NAME } from '../../../src/services/freedv';
 import { M17_NAME } from '../../../src/services/m17';
+import { DVSIG_LABEL, DVSIG_NAME } from '../../../src/services/dvsig';
 
 /** A demodulator's key legend: amSync.ts's (SAM-U, ECSS-L, AM-ST … everything else upper-cased), with FreeDV written as
  *  its own name ("FreeDV", not "FREEDV"). The page's one legend — the picker, the card's chip and Now Playing use it. */
 export function modeLegendWeb(mode: string): string {
-  return mode === 'freedv' ? FREEDV_LABEL : modeLegend(mode);
+  return mode === 'freedv' ? FREEDV_LABEL : mode === 'dvsig' ? DVSIG_LABEL : modeLegend(mode);
 }
 
 /** The reading box's own tooltip (DRM swaps in the decoder's explanation while it is on — paintDab). */
@@ -132,6 +133,10 @@ export type MobileDeps = {
   sdCap?: () => { ok: boolean; why: string } | null;
   sdOn?: () => boolean;
   toggleSd?: () => void;
+  /** ★ V12 satellites — not a whole-radio mode: opens the picker (passes, sky track, DOPPLER). Absent = no entry. */
+  satCap?: () => { ok: boolean; why: string } | null;
+  satOn?: () => boolean;
+  openSat?: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -332,6 +337,7 @@ export function initMobileControls(deps: MobileDeps) {
       if (isAmSync(m)) { b.title = AM_SYNC_NAME[m]; b.setAttribute('aria-label', AM_SYNC_NAME[m]); }
       else if (m === 'freedv') { b.title = FREEDV_NAME; b.setAttribute('aria-label', FREEDV_NAME); }
       else if (m === 'm17') { b.title = M17_NAME; b.setAttribute('aria-label', M17_NAME); }
+      else if (m === 'dvsig') { b.title = DVSIG_NAME; b.setAttribute('aria-label', DVSIG_NAME); }
       b.className = 'mModeOpt' + (m.toLowerCase() === cur ? ' on' : '');
       b.onclick = () => { deps.setMode(m); close(); refresh(); };
       grid.appendChild(b);
@@ -445,10 +451,22 @@ export function initMobileControls(deps: MobileDeps) {
       const sdRow = document.createElement('button');
       sdRow.className = 'mModeOpt' + (deps.sdOn?.() ? ' on' : '') + (sdc.ok ? '' : ' dis');
       setModeLabel(sdRow, 'sondes', 'SONDES');
-      sdRow.title = sdc.ok ? 'Radiosondes — RS41 weather balloons on 400–406 MHz, with a map' : `Radiosondes are not available: ${sdc.why}`;
+      sdRow.title = sdc.ok ? 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map' : `Radiosondes are not available: ${sdc.why}`;
       if (!sdc.ok) sdRow.setAttribute('aria-disabled', 'true');
       sdRow.onclick = () => { deps.toggleSd!(); close(); refresh(); };
       grid.appendChild(sdRow);
+    }
+    /* ★★ V12 SATELLITES — only where the server offers `doppler` (the radio reaches a listed downlink); greyed with the
+     *  reason when not ready, and a press still opens the picker, which says why. */
+    const stc = deps.satCap?.();
+    if (stc && deps.openSat) {
+      const stRow = document.createElement('button');
+      stRow.className = 'mModeOpt' + (deps.satOn?.() ? ' on' : '') + (stc.ok ? '' : ' dis');
+      setModeLabel(stRow, 'sat', 'SAT');
+      stRow.title = stc.ok ? 'Satellites — next passes, a sky track and Doppler correction' : `Satellites are not available: ${stc.why}`;
+      if (!stc.ok) stRow.setAttribute('aria-disabled', 'true');
+      stRow.onclick = () => { close(); deps.openSat!(); };
+      grid.appendChild(stRow);
     }
 
     const sole = deps.soleDecoder();

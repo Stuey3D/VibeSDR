@@ -789,6 +789,7 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
     std::vector<ModeDef> ms;
     { std::lock_guard<std::mutex> lk(srvMtx_); ms = offeredModes(srvModes_, s.blockedModes); }
     mapModeEntries(s, ms);   // ADS-B · AIS · ISM · NDB — whole-radio modes, after DAB (map_modes.h)
+    satModeEntries(s, ms);   // ★ V12 SAT — the satellites page (sat_page.h), only where the server sends `doppler`
     decModeEntries(s, ms);   // DECODERS… (or the sole decoder) after the whole-radio modes
     const float cw = (r.w - 24) / 2, rh = std::min(50.f, (r.h - 16) / (float)((ms.size() + 1) / 2) - 4);
     for (size_t i = 0; i < ms.size(); i++) {
@@ -799,6 +800,7 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
         textIn(c, c.f.btn, ms[i].label, b, cur ? th::amber : rgb(0xdddddd));
         if (h.focused) focusRing(c, b, 6);
         if (h.pressed) {
+            if (ms[i].id == "sat") { closeTop(); satOpen(*this); return; }   // ★ V12 the satellites page (sat_page.h)
             if (mapModePick(*this, s, ms[i].id)) { closeTop(); return; }   // ADS-B / AIS / ISM / NDB (map_modes.h)
             if (decModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DECODERS… (dec_box.h)
             if (dabModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DAB in / out (dab_state.h)
@@ -847,7 +849,7 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
         return;
     }
     // ── BANDWIDTH (hidden in DRM, as the web's syncBw — and in M17, whose receiver cuts its own channel) ──
-    if (s.mode == "drm" || s.mode == "m17" || s.mode.empty() || dabActive()) return;
+    if (s.mode == "drm" || s.mode == "m17" || s.mode == "dvsig" || s.mode.empty() || dabActive()) return;
     const Rect p{444, 8, 184, 464};
     c.g.rrect(p.x, p.y, p.w, p.h, 10, rgb(0x101010, 0.97f));
     c.tc.draw(c.g, c.f.bodyB, "BANDWIDTH", p.x + 14, p.y + 14, th::btnText);
@@ -1289,7 +1291,7 @@ inline int App::run(int argc, char** argv) {
                 if (!screenOff_) lastInput_ = nowSec();
                 std::fprintf(stderr, "vibe-hhui: screen %s (the hardware service's event)\n", screenOff_ ? "off" : "on");
             }
-            else if (de.kind == "shutdown") toast("Switching off");
+            else if (de.kind == "shutdown") { calStressSdrEnd(*this, "switching off"); toast("Switching off"); }
             else if (de.kind == "battery_cal") {   // ★ the battery calibration's milestones (vibe-hwd BatteryCal)
                 const std::string ph = de.body["phase"].str(), note = de.body["note"].str();
                 if (de.body["start"].boolean()) {}   // (the START reply's own toast says it — hwCalibrate)
@@ -1298,7 +1300,8 @@ inline int App::run(int argc, char** argv) {
                 else if (ph == "charging") toast("Charger back — waiting for a full charge");
                 else if (ph == "running") toast(de.body["mode"].str() == "stress" ? "Calibrating fast — hold POWER to stop" : "Calibrating — use the radio until it switches itself off");
                 else if (ph == "cancelled") toast(note.empty() ? std::string("Calibration cancelled") : (char)std::toupper((unsigned char)note[0]) + note.substr(1));
-                else if (ph == "done") toast(de.body["mah"].kind == Json::Num ? "Battery measured: " + std::to_string((int)de.body["mah"].n) + " mAh — switching off" : note);
+                if (ph == "cancelled" || ph == "done") calStressSdrEnd(*this, ph == "done" ? "calibrated" : "cancelled");
+                if (ph == "done") toast(de.body["mah"].kind == Json::Num ? "Battery measured: " + std::to_string((int)de.body["mah"].n) + " mAh — switching off" : note);
                 hwRefreshDevice(eng.port());
             }
         }
@@ -1307,6 +1310,7 @@ inline int App::run(int argc, char** argv) {
         dabTick(*this, s);
         decTick(*this, s);
         mapTick(*this, s);
+        calStressSdrTick(*this, s);   // ★ a STRESS run drives the radio (battery_cal.h) — before memTick, which saves its own rate
         memTick(*this, s);
         clockTick(*this, s);
         clockAutoTick(*this);
@@ -1319,7 +1323,7 @@ inline int App::run(int argc, char** argv) {
              *    listener's own the moment it is uncovered. The screen keeps its own pace: somebody is using that page. */
             bool covered = decBoxTallShown() || mapCoversScreen(*this);
             for (const Sheet sh : sheets_)
-                covered = covered || sh == S_MENU || sh == S_AUDIO || sh == S_BOOKMARKS || sh == S_SEARCH || sh == S_DAB
+                covered = covered || sh == S_MENU || sh == S_AUDIO || sh == S_BOOKMARKS || sh == S_SEARCH || sh == S_SAT || sh == S_DAB
                        || sh == S_MAP || (sh == S_DEC && decPicFullOpen());
             specCovered_ = covered && set_.idleSave;
             // ★★ 5 rows a second, not 2 (Stuart, 2026-11-07: "preserving waterfall history so that when the screen is
@@ -1498,6 +1502,7 @@ inline int App::run(int argc, char** argv) {
             decDrawBox(*this, c, s);
             drawDeck(c, s, {lay::islandX, lay::islandY, lay::islandW, lay::islandH});
             drawVts(c, s, {lay::islandX, lay::islandY - 40, lay::islandW, 34});
+            satDrawLine(c, s, lay::islandX + 8, lay::islandY - 72);   // ★ V12 a Doppler lock's readout (sat_page.h)
         }
         for (size_t i = 0; i < sheets_.size(); i++) {
             const Sheet sh = sheets_[i];
@@ -1514,6 +1519,7 @@ inline int App::run(int argc, char** argv) {
                 case S_AUDIO: drawAudioSheet(c, s); break;
                 case S_MENU: drawMenu(c, s); break;
                 case S_MAP: mapDrawSheet(*this, c, s); break;
+                case S_SAT: drawSat(c, s); break;   // ★ V12 sat_page.h
                 default: break;
             }
             if (sheets_.size() < before) break;     // it closed itself

@@ -49,7 +49,9 @@ inline std::string memBody(App& a, const RadioState& s) {
     j += ",\"step\":" + std::to_string(a.set_.step);
     if (s.hwDriver == "rtl") {
         j += ",\"gain\":" + std::to_string(s.gainNow) + ",\"agc\":" + (s.agc ? "true" : "false");
-        if (s.hw("rateNow").num(0) > 0) j += ",\"rate\":" + memNum(s.hw("rateNow").num(0));
+        // ★ h80: a STRESS calibration drives the rate (battery_cal.h StressSdr) — the memory keeps the radio's OWN rate
+        if (stressSdr().active && stressSdr().savedRate > 0 && stressSdr().driver == s.hwDriver) j += ",\"rate\":" + memNum(stressSdr().savedRate);
+        else if (s.hw("rateNow").num(0) > 0) j += ",\"rate\":" + memNum(s.hw("rateNow").num(0));
         if (h.has("biasT")) j += std::string(",\"biasT\":") + (h["biasT"].boolean() ? "true" : "false");
         if (s.hw("ppm").kind == Json::Num) j += ",\"ppm\":" + memNum(s.hw("ppm").num(0));
         if (s.hw("ds").kind == Json::Num) j += ",\"ds\":" + memNum(s.hw("ds").num(0));

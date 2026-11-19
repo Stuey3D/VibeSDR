@@ -669,6 +669,9 @@ export interface ControlsBarProps {
    *  above the unit. Only in MHz: a listener who chose kHz or Hz keeps their digits, and the name
    *  moves into the small line instead. */
   airChannel?: AirChannel | null;
+  /** ★★ V12 SATELLITE DOPPLER: "ISS · ▼ 3.21 kHz · TRACK" beside the digits while a lock runs (the digits stay on the
+   *  NOMINAL — brief §10); the airband channel's slot, so the display font rule applies the same. null = none. */
+  satTag?: string | null;
   /** ★ The Nixie display's FIXED tube row for this radio (§7): `hf` network radios (8 tubes),
    *  `wide` a local radio to 2 GHz (10), `fm` the FM tuner screen (3 + bulb + 3). Never per frequency. */
   tubeLayout?: NixieLayout;
@@ -3330,6 +3333,7 @@ function ControlsBar({
   storms,
   adminMode,
   airChannel = null,
+  satTag = null,
   tubeLayout = 'hf',
 }: ControlsBarProps) {
   // ★★★ Entering a receiver is where the faceplate is really drawn: on trial from this first render
@@ -3363,11 +3367,12 @@ function ControlsBar({
     : freqFormat ? freqFormat(frequency) : formatHz(frequency, freqUnit),
     [frequency, freqUnit, freqFormat, chanMain, airChannel]);
   const chanTag   = useMemo(() => {
+    if (satTag) return satTag;   // ★★ V12 a satellite lock's readout wins the slot (a satellite is never on the airband)
     if (!airChannel) return null;
     const sp = airChannel.spacing === 833 ? '8.33' : '25 kHz';
     if (!chanMain) return `CH ${airChannel.name} · ${sp}`;
     return airChannel.spacing === 833 ? `8.33 · ${airChannel.trueText}` : sp;
-  }, [airChannel, chanMain]);
+  }, [airChannel, chanMain, satTag]);
   const unit      = useMemo(() => freqUnitLabel(freqUnit),       [freqUnit]);
   /* The tubes read the NUMBER. On the airband raster the channel name IS the readout (see chanMain),
    * so the tubes show the name's digits; a custom format (the FM tuner screen) is MHz. */

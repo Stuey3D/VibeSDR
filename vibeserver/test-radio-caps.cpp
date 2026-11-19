@@ -43,7 +43,8 @@ int main(int argc, char** argv) {
         yes(c, "Icom", { "nfm", "am", "usb", "lsb", "cwu", "cwl", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots",
                          "cw", "psk", "dsc", "sitora", "selcal", "mfsk", "hell", "jtty", "aprs" });
         no(c, "Icom", { "wfm", "rds", "tone", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "drm", "dab", "spotsband", "ism",
-                        "lora", "loraaprs", "fanet", "meshcom", "ndb", "ais", "aisstore", "adsb", "commb", "same" });
+                        "lora", "loraaprs", "fanet", "meshcom", "ndb", "ais", "aisstore", "adsb", "commb", "same",
+                        "dvsig" });   // ★ V12 DV ID reads IQ, as M17
         ok(!c.s.usage && !c.s.vfoB && !c.s.rawIq && !c.s.nbWide && !c.s.landing && !c.s.gain && !c.s.hardware,
            "Icom: no usage chooser, VFO A/B, Raw IQ, impulse NB, landing, gain or hardware card");
         ok(!c.s.fmDefaults && !c.s.dabLanding && !c.s.adsbLanding && !c.s.dxScan && !c.s.bgDecode && !c.s.converter,
@@ -79,7 +80,8 @@ int main(int argc, char** argv) {
     {
         const Caps c = of("airspyhf");
         yes(c, "HF+", { "wfm", "rds", "nfm", "am", "sam", "amst", "drm", "navtex", "wefax", "time", "ndb", "aprs", "same", "ft8",
-                       "m17" });   // ★ M17 on 2 m (Stuart 11-16: every SDR that can reach it); 70 cm is out of its range
+                       "m17",      // ★ M17 on 2 m (Stuart 11-16: every SDR that can reach it); 70 cm is out of its range
+                       "dvsig" }); // ★ V12 DV ID on VHF 136–174 MHz (inside the HF+'s 60–260 MHz)
         no(c, "HF+", { "dab", "adsb", "commb", "ism", "lora", "loraaprs", "fanet", "meshcom", "ais", "aisstore" });
         ok(!c.s.dabLanding && !c.s.adsbLanding && c.s.fmDefaults && c.s.dxScan, "HF+: no DAB / ADS-B landing; FM defaults and DX scan");
         ok(c.s.ppb && !c.s.ppm && !c.s.biasT && !c.s.directSampling, "HF+: ppb, no ppm, bias-T or direct sampling");

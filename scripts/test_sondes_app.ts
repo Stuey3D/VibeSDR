@@ -23,8 +23,8 @@ const real = { type: 'sondes', band: 'mid', bandName: '402–404 MHz', hz: 40300
   ] };
 const r = parseSondeReport(real);
 ok(!!r && r.band === 'mid' && r.sondes.length === 3 && r.frames === 56 && r.chans.length === 1, 'a real report parses');
-ok(!!r && sondeLine(r.sondes[0]) === 'S3310411 · 3,499 m · +5.2 m/s', `the line: ${r && sondeLine(r.sondes[0])}`);
-ok(!!r && sondeLine(r.sondes[1]) === 'U0912345 · 25,986 m · −14.0 m/s', `a falling one: ${r && sondeLine(r.sondes[1])}`);
+ok(!!r && sondeLine(r.sondes[0]) === 'RS41 S3310411 · 3,499 m · +5.2 m/s', `the line: ${r && sondeLine(r.sondes[0])}`);
+ok(!!r && sondeLine(r.sondes[1]) === 'RS41 U0912345 · 25,986 m · −14.0 m/s', `a falling one: ${r && sondeLine(r.sondes[1])}`);
 ok(!!r && sondeTemp(r.sondes[0]) === 'not yet calibrated (19 of 51)', `★ calibration 19 of 51: ${r && sondeTemp(r.sondes[0])}`);
 ok(!!r && sondeTemp(r.sondes[1]) === '−41.3 °C', `a whole calibration: ${r && sondeTemp(r.sondes[1])}`);
 // ★ a temperature sent beside an incomplete calibration is NOT shown (never a guessed PTU, whatever a server sends)
@@ -35,7 +35,7 @@ ok(!!r && /encrypted/.test(sondeDetail(r.sondes[2])) && !/calibrated/.test(sonde
 ok(!!r && sondeDetail(r.sondes[0]).startsWith('403.300 MHz'), 'where it was heard, to the kHz');
 ok(sondeMHz(402699771) === '402.700 MHz' && sondeClimb(-0.04) === '−0.0 m/s' && sondeClimb(undefined) === '', 'the units');
 ok(!!r && /402–404 MHz · 3 sondes · listening on 1 signal · gain 43\.4 dB auto/.test(sondeStatus(r)), `the status: ${r && sondeStatus(r)}`);
-ok(/Searching 402\.0–404\.0 MHz for RS41/.test(sondeEmpty({ ...r!, sondes: [] })) && /Taking the receiver/.test(sondeEmpty(null)), 'the empty list says what it is doing');
+ok(/Searching 402\.0–404\.0 MHz for radiosondes \(RS41, DFM, M10 and M20/.test(sondeEmpty({ ...r!, sondes: [] })) && /Taking the receiver/.test(sondeEmpty(null)), 'the empty list says what it is doing');
 ok(parseSondeReport({ type: 'avdata', sondes: [] }) === null && parseSondeReport(null) === null && parseSondeReport({ type: 'sondes' }) === null, 'not a report: null');
 const hostile = parseSondeReport({ type: 'sondes', sondes: [{ serial: 'S1<b>\u0000\u001b', lat: 99, lon: 5, alt: 'x', cal: 999, track: [[1, 2, 3], [100, 0, 0], 'x', [NaN, 1]] }, { lat: 1 }, 7, null] });
 ok(!!hostile && hostile.sondes.length === 1 && hostile.sondes[0].serial === 'S1<b>' && hostile.sondes[0].lat === undefined && hostile.sondes[0].lon === undefined
@@ -65,5 +65,20 @@ ok(/if \(!sdOnRef\.current\) \{ sdOnRef\.current = true; if \(IS_APPLE_TV\) setS
 ok(/shownMap === 'sondes' \? exitSondes\(\)/.test(scr) && /kind === 'sondes' \? '<button id="back"[^']*>EXIT SONDES<\/button>'/.test(map),
    "the map's key reads EXIT SONDES and leaves the mode");
 ok(/ranges: sondeRanges\(sdCap\?\.bands \?\? \[\]\)/.test(scr), 'the band keys are on the map');
+// ── ★★ V12 2026-11-19 the other types (docs/v12/SONDES-TYPES.md): the type leads the line; each type's own calibration ──
+const t = parseSondeReport({ type: 'sondes', sondes: [
+  { serial: '19012345', kind: 'DFM', model: 'DFM-09', hz: 402.7e6, cal: 4, calOf: 6, temp: -20.1, alt: 5000, climb: 5, lat: 52, lon: 0, track: [] },
+  { serial: '19012346', kind: 'DFM', model: 'DFM-09', hz: 402.7e6, cal: 6, calOf: 6, temp: -20.1, track: [] },
+  { serial: '903-2-24660', kind: 'M10', hz: 404.2e6, cal: 0, calOf: 0, temp: 15, alt: 700, track: [] },
+  { serial: '504-2-01234', kind: 'M20', hz: 405.1e6, cal: 0, calOf: 0, track: [] },
+  { serial: 'S0000002', cal: 51, temp: -3, track: [] },   // an older server: no calOf — the RS41's 51
+] });
+ok(!!t && sondeLine(t.sondes[0]) === 'DFM-09 19012345 · 5,000 m · +5.0 m/s', `a DFM's line: ${t && sondeLine(t.sondes[0])}`);
+ok(!!t && t.sondes[0].temp === undefined && sondeTemp(t.sondes[0]) === 'not yet calibrated (4 of 6)', `★ a DFM part-way through: ${t && sondeTemp(t.sondes[0])}`);
+ok(!!t && sondeTemp(t.sondes[1]) === '−20.1 °C', `a DFM calibrated: ${t && sondeTemp(t.sondes[1])}`);
+ok(!!t && t.sondes[2].temp === undefined && sondeTemp(t.sondes[2]) === 'temperature not decoded for this type' && sondeLine(t.sondes[2]).startsWith('M10 903-2-24660'),
+   `★ an M10's temperature is never shown (calOf 0): ${t && sondeTemp(t.sondes[2])}`);
+ok(!!t && sondeLine(t.sondes[3]).startsWith('M20 504-2-01234'), 'an M20');
+ok(!!t && t.sondes[4].calOf === 51 && sondeTemp(t.sondes[4]) === '−3.0 °C', 'an older server (no calOf) is an RS41');
 console.log(fail ? `${fail} FAILED` : 'all passed');
 process.exit(fail ? 1 : 0);

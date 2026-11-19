@@ -49,6 +49,7 @@
 #include "vibe_avi_service.h"   // ★ V12 aviation: the datalink rows (dec_vdl2, dec_acars)
 #include "vibe_rs41_service.h"  // ★ V12 RS41 radiosondes: the SONDES row (dec_rs41)
 #include "vibe_rs41_tx.h"
+#include "vibe_sonde_tx.h"     // ★ V12 the DFM / M10 / M20 rows (dec_dfm, dec_m10)
 #include "vibe_avi_mode.h"
 #include "vibe_avi_tx.h"
 #include "vibe_ism_service.h"
@@ -58,6 +59,7 @@
 #include "decoders/tones_tx.h"       // ★ V12 DTMF + 5-tone (the dec_tones row) — our own transmitter
 #include "vibe_lrpt_tx.h"             // ★ V12 METEOR-M LRPT (the dec_lrpt row) — our own transmitter
 #include "vibe_m17.h"                // ★ V12 M17 as a mode (the dec_m17 row) — our own receiver, Codec 2 from the same library
+#include "vibe_dvsig_tx.h"           // ★ V12 DV signalling (the dec_dvsig row) — our own receiver and transmitter
 #include "benchsynth/cw_synth.h"
 #include "benchsynth/psk_synth.h"
 #include "benchsynth/sitor_synth.h"
@@ -723,6 +725,7 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_balloon",  { "balloon", true, true  } },   // ★ V12 balloons: a listener's decoder (a slot)
         { "dec_tones",    { "tones",  true,  true  } },   // ★ V12 DTMF + 5-tone: a listener's decoder (a slot)
         { "dec_lrpt",     { "lrpt",   true,  true  } },   // ★ V12 METEOR LRPT: a listener's decoder on an IQ slice (a slot)
+        { "dec_ale",      { "ale",    true,  true  } },   // ★ V12 2G HF ALE: a listener's decoder (a slot)
         { "dec_jtty",     { "jtty",   true,  true  } }, { "dec_sitora",   { "sitora", true,  true  } },
         { "dec_dsc",      { "dsc",    true,  true  } }, { "dec_same",     { "same",   true,  true  } },
         { "dec_selcal",   { "selcal", true,  true  } }, { "dec_mfsk",     { "mfsk",   true,  true  } },
@@ -734,6 +737,8 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_hfdl",     { "hfdl",   true,  true  } },
         // ★ V12 RS41 radiosondes: the SONDES mode's default (a whole-radio mode — not the decoder limit's yardstick)
         { "dec_rs41",     { "sondes", true,  false } },
+        // ★ V12 the other types run inside the same SONDES receiver: shown beside RS41's row, RS41 keeps the default
+        { "dec_dfm",      { "sondes", false, false } }, { "dec_m10",      { "sondes", false, false } },
         { "dec_ism",      { "ism",    true,  false } }, { "dec_wmbus",    { "ism",    false, false } },
         { "dec_tone",     { "",       false, false } }, { "dec_nr",       { "",       false, false } },
         { "dec_notch",    { "",       false, false } },
@@ -747,6 +752,9 @@ inline RowRule ruleFor(const std::string& id) {
         /* ★★ V12 M17 (vibe_m17.h): a listener's MODE, like FreeDV. Not green = "m17" off by default on a fresh setup (the
          *  owner can always tick it back — the benchmark sets the default, never hides). */
         { "dec_m17",      { "m17",    true,  false } },
+        /* ★★ V12 DV signalling (vibe_dvsig.h): a listener's MODE, like M17. Not green = "dvsig" off by default on a fresh
+         *  setup (the owner can always tick it back — the benchmark sets the default, never hides). */
+        { "dec_dvsig",    { "dvsig",  true,  false } },
         /* ★★ V12 DAB own station per listener (docs/v12/DAB-OWN-STATION.md, vibe_benchmark_dab.h): switches nothing off and is
          *  no decoder slot — its figure sets N (the dabStations block), which the own-station rule compares with the user limit. */
         { "dec_dab_station", { "",    false, false } },
@@ -913,6 +921,17 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         r.decoded = (int)peer->lines.load();
         return r;
     });
+    /* ★★ V12 2026-11-19 2G HF ALE (docs/v12/HF-DATA.md): a sounding and a call (our own transmitter) on one listener's
+     *  audio — every (offset, timing) register searching all the while. Sets the "ale" switch's default; never hides it. */
+    run("dec_ale", "Decoder: ALE", [&] {
+        std::vector<float> a;
+        for (const auto& w : { aleCallWords("", "G4ABC", 4), aleCallWords("W1XYZ", "G4ABC", 6) }) {
+            auto x = aleSynth(w, 48000); a.insert(a.end(), x.begin(), x.end()); a.insert(a.end(), 48000, 0.f);
+        }
+        for (auto& v : a) v *= 0.3f;
+        addNoise(a, 0.05f, 9);
+        return hostAudioRow("dec_ale", "Decoder: ALE (2G, MIL-STD-188-141)", "ale", attach + "\"extension_name\":\"ale\"}", a, Count::Any);
+    });
     run("dec_sitora", "Decoder: SITOR-A", [&] {
         const auto L = sitorsynth::makeLink("002320204", "364775427", "GOOD MORNING THIS IS A TEST +?", "QSL +?", "73 +?", 4, 7);
         return hostAudioRow("dec_sitora", "Decoder: SITOR-A", "sitora", attach + "\"extension_name\":\"sitora\",\"center_frequency\":1000}",
@@ -939,10 +958,12 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         addNoise(a, 0.05f, 4);
         return hostAudioRow("dec_selcal", "Decoder: SELCAL", "selcal", attach + "\"extension_name\":\"selcal\"}", a, Count::Any);
     });
-    run("dec_mfsk", "Decoder: MFSK, Olivia, Contestia, THOR", [&] {
+    /* ★ (2026-11-19) the one AUTO now holds DOMINOEX (+ its FEC option) and MT63 too — every receiver runs on whatever is
+     *  on the band, so one MFSK16 over measures the whole key's cost as before (docs/v12/HF-DATA.md) */
+    run("dec_mfsk", "Decoder: MFSK, Olivia, Contestia, THOR, DominoEX, MT63", [&] {
         auto a = textModeSynth(TextModeDecoder::Family::Mfsk, "mfsk16", "CQ CQ DE G4ABC G4ABC PSE K\n", 48000, 1500);
         addNoise(a, 0.1f, 5);
-        return hostAudioRow("dec_mfsk", "Decoder: MFSK / Olivia / Contestia / THOR (AUTO)", "mfsk",
+        return hostAudioRow("dec_mfsk", "Decoder: MFSK / Olivia / Contestia / THOR / DominoEX / MT63 (AUTO)", "mfsk",
                             attach + "\"extension_name\":\"mfsk\",\"mode\":\"auto\"}", a, Count::Chars);
     });
     run("dec_hell", "Decoder: Feld Hell", [&] {
@@ -1196,22 +1217,9 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     /* ★★ V12 RADIOSONDES (docs/v12/RS41.md): the SONDES mode as the server runs it — vibers41::Service on its own thread,
      *  one 2 MHz band at 2.4 MS/s, fed IN REAL TIME, SCORED BY THE HOTTEST THREAD (as AIS and the datalink). Three sondes
      *  from our own transmitter (vibe_rs41_tx.h), one frame a second each, in four seconds of noise, looped. */
-    run("dec_rs41", "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
-        Row r; r.id = "dec_rs41"; r.label = "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+    /* ★ The service as the server runs it: `x` (2.4 MS/s, looped) fed IN REAL TIME, scored by the hottest thread. */
+    auto sondeService = [&](Row& r, std::vector<vibers41::cf32>& x, double fs) {
         const vibers41::Band* b = vibers41::bandById("mid");
-        if (!b) return r;
-        const double fs = 2.4e6;
-        const int secs = 4;
-        std::vector<vibers41::cf32> x(size_t(fs) * secs);
-        { std::mt19937 g(9); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
-        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
-        for (int k = 0; k < 3; ++k) {
-            vibers41tx::Sonde s(uint32_t(70 + k));
-            char ser[9]; std::snprintf(ser, sizeof ser, "B%07d", 1000 + k); s.serial = ser;
-            vibers41tx::Gfsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 2400, 0.05 + 0.2 * k);
-            for (int f = 0; f < secs; ++f) tx.addFrame(f, vibers41tx::frameOnAir(s, f));
-            tx.render(x.data(), x.size(), 0);
-        }
         vibers41::Service svc;
         svc.start(*b, b->centreHz, fs);
         const size_t blk = (size_t)(fs / 100);
@@ -1229,6 +1237,59 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         r.decoded = (int)svc.tracker().frames();
         if (svc.dropped()) r.label += " (fell behind)";
         svc.stop();
+    };
+    run("dec_rs41", "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_rs41"; r.label = "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+        if (!vibers41::bandById("mid")) return r;
+        const double fs = 2.4e6;
+        const int secs = 4;
+        std::vector<vibers41::cf32> x(size_t(fs) * secs);
+        { std::mt19937 g(9); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
+        for (int k = 0; k < 3; ++k) {
+            vibers41tx::Sonde s(uint32_t(70 + k));
+            char ser[9]; std::snprintf(ser, sizeof ser, "B%07d", 1000 + k); s.serial = ser;
+            vibers41tx::Gfsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 2400, 0.05 + 0.2 * k);
+            for (int f = 0; f < secs; ++f) tx.addFrame(f, vibers41tx::frameOnAir(s, f));
+            tx.render(x.data(), x.size(), 0);
+        }
+        sondeService(r, x, fs);
+        return r;
+    });
+    /* ★★ V12 the DFM and M10 / M20 (docs/v12/SONDES-TYPES.md): three sondes of the type in the same band, the same service.
+     *  The DFM sends continuously (≈ 4.5 frames a second, serial in halves), so its clip is 12 s to let a serial complete. */
+    run("dec_dfm", "Decoder: DFM radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_dfm"; r.label = "Decoder: DFM radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+        if (!vibers41::bandById("mid")) return r;
+        const double fs = 2.4e6;
+        const int secs = 12;
+        std::vector<vibers41::cf32> x(size_t(fs) * secs);
+        { std::mt19937 g(10); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
+        for (int k = 0; k < 3; ++k) {
+            vibesondetx::Dfm d; d.serial = 19000100u + uint32_t(k);
+            vibesondetx::ChipFsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 2000, vibedfm::kChipRate, 0.05 + 0.2 * k);
+            tx.put(0, d.chips(secs));
+            tx.render(x.data(), x.size(), 0);
+        }
+        sondeService(r, x, fs);
+        return r;
+    });
+    run("dec_m10", "Decoder: M10 / M20 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_m10"; r.label = "Decoder: M10 / M20 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+        if (!vibers41::bandById("mid")) return r;
+        const double fs = 2.4e6;
+        const int secs = 4;
+        std::vector<vibers41::cf32> x(size_t(fs) * secs);
+        { std::mt19937 g(11); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
+        for (int k = 0; k < 3; ++k) {
+            vibesondetx::Mxx m; m.m20 = k == 1; m.sn[4] = uint8_t(0x40 + k); m.sn20 += uint32_t(k) << 10;
+            vibesondetx::ChipFsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 4800, m.m20 ? 9600.0 : 9615.0, 0.05 + 0.2 * k);
+            for (int f = 0; f < secs; ++f) tx.put(tx.indexAt(f), m.chips(f));
+            tx.render(x.data(), x.size(), 0);
+        }
+        sondeService(r, x, fs);
         return r;
     });
     run("dec_hfdl", "Decoder: HFDL", [&] {
@@ -1418,6 +1479,37 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         r.pct = 100.0 * (processCpu() - c0) / std::max(1e-3, fedSec - 0.5);
         while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
         r.decoded = L.voiceFrames();
+        if (L.droppedBlocks()) r.label += " (fell behind)";
+        return r;
+    });
+
+    /* ★★ V12 DV SIGNALLING AS A MODE — one listener's receiver in AUTO (every system's correlators running) on a DMR
+     *  repeater downlink carrying a group call with a talker alias, from our own transmitter (vibe_dvsig_tx.h) at 18 dB C/N
+     *  in 9 kHz, as 48 kHz channel IQ fed in real time; vibe-dvsig's own thread is in the process figure. The proof that it
+     *  decodes: the DMR bursts that checked out. */
+    run("dec_dvsig", "DV signalling (per listener, AUTO)", [&] {
+        Row r; r.id = "dec_dvsig"; r.label = "DMR / D-STAR / YSF / NXDN / dPMR signalling (per listener, AUTO on a DMR call)";
+        vibe::dvsig::tx::DmrCall c; c.alias = "BENCH"; c.superframes = int(kRowMinSec / 0.36) + 4;
+        std::vector<vibe::dvsig::cf32> a = vibe::dvsig::tx::dmrIq(c, true, 77, 150.0);
+        vibe::dvsig::tx::awgn(a, 18, 9000, 78);
+        vibedsp::RationalResampler ri(24000.0, 48000, vibedsp::RationalResampler::ExactRate{}), rq(24000.0, 48000, vibedsp::RationalResampler::ExactRate{});
+        std::vector<float> re(a.size()), im(a.size()); for (size_t i = 0; i < a.size(); ++i) { re[i] = a[i].real(); im[i] = a[i].imag(); }
+        std::vector<float> x(size_t(ri.maxOut(int(a.size())))), y(x.size());
+        const int n = std::min(ri.process(re.data(), int(re.size()), x.data()), rq.process(im.data(), int(im.size()), y.data()));
+        std::vector<vibe::dvsig::cf32> iq(static_cast<size_t>(n)); for (int i = 0; i < n; ++i) iq[size_t(i)] = vibe::dvsig::cf32(x[size_t(i)], y[size_t(i)]);
+        vibe::dvsig::Listener L;
+        const double t0 = wallNow(); double fedSec = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+        while (pos + 480 <= iq.size()) {
+            if (!measuring && fedSec >= 0.5) { c0 = processCpu(); measuring = true; }
+            L.feedIq(iq.data() + pos, 480, 48000.0);
+            pos += 480; fedSec += 480 / 48000.0;
+            const double ahead = fedSec - (wallNow() - t0);
+            if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+        }
+        r.pct = 100.0 * (processCpu() - c0) / std::max(1e-3, fedSec - 0.5);
+        while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        std::string ids; L.status("bench", &ids, nullptr, nullptr);
+        r.decoded = ids.find("\"alias\":\"BENCH\"") != std::string::npos ? 1 : 0;
         if (L.droppedBlocks()) r.label += " (fell behind)";
         return r;
     });

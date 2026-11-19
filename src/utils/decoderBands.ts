@@ -84,7 +84,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
     { group: 'aviation', ids: ['hfdl', 'selcal'] },
     { group: 'maritime', ids: ['navtex', 'dsc', 'sitora', 'wefax'] },
     { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'mfsk', 'hell', 'sstv', 'aprs', 'ncdxf'] },   // ★ V12 the MFSK keyboard modes, FELD HELL, NCDXF beacons
-    { group: 'other',    ids: ['time'] },
+    { group: 'other',    ids: ['time', 'ale'] },   // ★ V12 2G HF ALE: military, government and amateur (HFLink) nets
   ],
   vhf: [
     { group: 'aviation', ids: ['selcal'] },   // ★ V12: SELCAL on VHF AM too
@@ -178,6 +178,7 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   sstv:   hz => anyNear(hz, HAM),
   aprs:   hz => anyNear(hz, HAM),
   time:   hz => pointsNear(hz, TIME_SIGNAL_HZ, 5e3),
+  ale:    hz => hz >= 2e6 && hz <= 30e6,   // ★ V12 2G ALE: nets scan channels across HF (HFLink: 3.596, 7.102, 14.109 …)
   rds:    hz => anyNear(hz, [MHz(87.5, 108)], 500e3),
   lrpt:   hz => pointsNear(hz, [137.1e6, 137.9e6], 80e3),   // ★ V12 METEOR-M LRPT's two downlinks (±Doppler and the 115 kHz signal)
   same:   hz => anyNear(hz, [MHz(162.4, 162.55)], 25e3),   // NOAA Weather Radio's seven channels   // Japan's 76–95 MHz FM is below; a hint only

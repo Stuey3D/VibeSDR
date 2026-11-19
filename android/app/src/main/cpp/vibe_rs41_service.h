@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstring>
 #include <cstdio>
 #include <deque>
 #include <map>
@@ -65,6 +66,9 @@ inline std::string jsonEsc(const std::string& s) {
 struct TrackPt { float lat, lon, alt; double t; };
 struct SondeRow {
     std::string serial;
+    const char* kind = "RS41";      ///< ★ V12 the row's key is (kind, serial): a DFM and an M10 never share a row
+    std::string model;
+    int calN = -1, calOf = -1;      ///< non-RS41: the type's own calibration progress (calOf 0 = no temperature)
     double hz = 0, first = 0, last = 0;
     int frames = 0, frameNo = -1, rsFixed = 0;
     double lat = NAN, lon = NAN, alt = NAN, vE = NAN, vN = NAN, vU = NAN, posAt = -1, maxAlt = NAN;
@@ -83,7 +87,7 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         ++frames_;
         SondeRow* r = nullptr;
-        for (auto& x : rows_) if (x.serial == f.serial) { r = &x; break; }
+        for (auto& x : rows_) if (x.serial == f.serial && !std::strcmp(x.kind, f.kind)) { r = &x; break; }
         if (!r) {
             if (rows_.size() >= kMaxRows) {
                 auto old = std::min_element(rows_.begin(), rows_.end(), [](const SondeRow& a, const SondeRow& b) { return a.last < b.last; });
@@ -91,14 +95,20 @@ public:
             }
             rows_.emplace_back();
             r = &rows_.back();
-            r->serial = f.serial; r->first = now;
+            r->serial = f.serial; r->kind = f.kind; r->first = now;
         }
         r->last = now; ++r->frames; r->frameNo = f.frameNo; r->hz = f.hz; r->snr = f.snrDb; r->rsFixed = f.rsFixed;
         if (std::isfinite(f.batteryV)) r->battery = f.batteryV;
         r->encrypted = r->encrypted || f.encrypted;
+        if (!f.model.empty()) r->model = f.model;
         if (f.calIndex >= 0) r->cal.add(f.calIndex, f.cal);
         if (f.timeOk) r->gpsUnix = gpsToUnix(f.gpsWeek, f.towMs);
-        if (f.ptuOk) {
+        if (f.unixTime > 0) r->gpsUnix = f.unixTime;
+        if (std::strcmp(f.kind, "RS41")) {
+            // ★ another type: its decoder judged the calibration; the temperature only beside a complete one
+            r->calN = f.calN; r->calOf = f.calOf;
+            if (std::isfinite(f.tempC) && f.calOf > 0 && f.calN >= f.calOf) { r->temp = f.tempC; r->tempAt = now; }
+        } else if (f.ptuOk) {
             const double t = temperature(r->cal, f.meas);
             if (std::isfinite(t)) { r->temp = t; r->tempAt = now; }
         }
@@ -137,9 +147,12 @@ public:
         bool first = true;
         for (const SondeRow* r : v) {
             o += first ? "{" : ",{"; first = false;
-            std::snprintf(b, sizeof b, "\"serial\":\"%s\",\"kind\":\"RS41\",\"hz\":%.0f,\"age\":%.1f,\"n\":%d,\"frame\":%d,\"snr\":%.1f,\"cal\":%d",
-                          jsonEsc(r->serial).c_str(), r->hz, now - r->last, r->frames, r->frameNo, r->snr, r->cal.count());
+            const bool rs = !std::strcmp(r->kind, "RS41");
+            const int calN = rs ? r->cal.count() : std::max(0, r->calN), calOf = rs ? kCalSubframes : std::max(0, r->calOf);
+            std::snprintf(b, sizeof b, "\"serial\":\"%s\",\"kind\":\"%s\",\"hz\":%.0f,\"age\":%.1f,\"n\":%d,\"frame\":%d,\"snr\":%.1f,\"cal\":%d,\"calOf\":%d",
+                          jsonEsc(r->serial).c_str(), r->kind, r->hz, now - r->last, r->frames, r->frameNo, r->snr, calN, calOf);
             o += b;
+            if (!r->model.empty()) { o += ",\"model\":\""; o += jsonEsc(r->model); o += "\""; }
             const double tx = r->cal.txHz();
             if (tx > 0) { std::snprintf(b, sizeof b, ",\"txHz\":%.0f", tx); o += b; }
             if (r->encrypted) o += ",\"enc\":true";
@@ -152,7 +165,7 @@ public:
                               r->lat, r->lon, r->alt, r->vU, spd, hd, r->sats, now - r->posAt, r->maxAlt);
                 o += b;
             }
-            if (r->tempAt >= 0 && r->cal.complete()) { std::snprintf(b, sizeof b, ",\"temp\":%.1f", r->temp); o += b; }
+            if (r->tempAt >= 0 && (rs ? r->cal.complete() : (calOf > 0 && calN >= calOf))) { std::snprintf(b, sizeof b, ",\"temp\":%.1f", r->temp); o += b; }
             if (!r->track.empty()) {
                 o += ",\"track\":[";
                 const size_t n = r->track.size(), step = (n + maxPts - 1) / std::max<size_t>(1, maxPts);
@@ -226,7 +239,8 @@ public:
         std::string o = h;
         bool first = true;
         for (const auto& c : channels()) {
-            std::snprintf(h, sizeof h, "%s{\"hz\":%.0f,\"db\":%.1f,\"n\":%d}", first ? "" : ",", c.hz, c.levelDb, c.frames);
+            std::snprintf(h, sizeof h, "%s{\"hz\":%.0f,\"db\":%.1f,\"n\":%d%s%s%s}", first ? "" : ",", c.hz, c.levelDb, c.frames,
+                          c.kind ? ",\"kind\":\"" : "", c.kind ? c.kind : "", c.kind ? "\"" : "");
             o += h; first = false;
         }
         o += "],";

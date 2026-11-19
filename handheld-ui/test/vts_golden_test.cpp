@@ -5,6 +5,7 @@
 #include "../src/vts_core.h"
 #include "../src/freedv.h"
 #include "../src/m17.h"
+#include "../src/dvsig.h"
 #include "../src/paging.h"
 
 #include <cstdio>
@@ -121,6 +122,14 @@ static int golden(const char* path) {
         } else if (op == "MO") {
             std::string js; is >> js;
             got = hh::m17Offered(hh::Json::parse(unhex(js))) ? "1" : "0";
+        } else if (op == "DV") {
+            std::string js; is >> js;
+            hh::DvsigState st;
+            if (hh::parseDvsig(hh::Json::parse(unhex(js)), st)) got = "1 " + hex(hh::dvsigVts(&st)) + " " + hex(hh::dvsigInfo(&st)) + " " + hex(hh::dvsigLine(&st));
+            else got = "0 " + hex(hh::dvsigVts(nullptr));
+        } else if (op == "DO") {
+            std::string js; is >> js;
+            got = hh::dvsigOffered(hh::Json::parse(unhex(js))) ? "1" : "0";
         } else if (op == "PS") {
             std::string js; is >> js;
             hh::PagingStatus st;

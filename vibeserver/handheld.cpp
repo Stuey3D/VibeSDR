@@ -887,6 +887,13 @@ void hDevicePost(Req& r) {
         const hhjson::Value* x = v.get("value");
         if (!x || x->kind != hhjson::Value::Num) { json(r.fd, errJson("value must be a number"), 400); return; }
         line = std::string("{\"set\":\"boost\",\"value\":") + (x->n != 0 ? "1" : "0") + "}";
+    } else if (set == "vlim") {
+        // ★★ R36S HARDWARE → INPUT FLOOR (TEST), h80: the charge port's input voltage floor (vibe-hwd VLIM_CHOICES) —
+        //    4500 / 4300 / 4000 mV only; the service holds the matching fixed CHRG_IN byte and logs every change
+        const hhjson::Value* x = v.get("value");
+        const long mv = x && x->kind == hhjson::Value::Num ? (long)x->n : 0;
+        if (mv != 4500 && mv != 4300 && mv != 4000) { json(r.fd, errJson("value must be 4500, 4300 or 4000"), 400); return; }
+        line = "{\"set\":\"vlim\",\"value\":" + std::to_string(mv) + "}";
     } else if (action == "calibrate") {
         // ★★ battery calibration (vibe-hwd BatteryCal): NORMAL = use the radio until it switches itself off at a safe
         //    empty; STRESS = the fastest way there (full backlight, every core busy). Started ON THE CHARGER: the service

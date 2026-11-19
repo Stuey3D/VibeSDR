@@ -22,6 +22,7 @@ export const BOOKMARK_MODES: readonly string[] = [
   'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'fmdx',
   'freedv',   // ★ V12 FreeDV — the server stores it where its libcodec2 loaded, and says no in its own words elsewhere
   'm17',      // ★ V12 M17 — likewise
+  'dvsig',    // ★ V12 DV ID — likewise
 ];
 /** Passband edges are within this many Hz of the carrier (the server's kMaxEdgeHz). */
 export const BM_EDGE_MAX_HZ = 500_000;

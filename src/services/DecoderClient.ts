@@ -57,6 +57,7 @@ import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
 import { sameStateText, selcalStateText } from './alertDecoders';
+import { aleStateText, parseAleStatus, type AleStatus } from './aleDecoder';   // ★ V12 2G HF ALE
 import { TONES_DEFAULTS, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from './tones';   // ★ V12 DTMF + 5-tone
 import { lrptAttachParams, lrptStatusText, parseLrptStatus } from './lrpt';   // ★ V12 METEOR LRPT
 import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS / SAME and SELCAL
@@ -77,6 +78,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
   | 'tones'   // ★ V12 DTMF + 5-tone selective calling on a VibeServer (tones.ts): a line per string / call, 0x03, {"type":"tones"}
   | 'lrpt'    // ★ V12 METEOR-M LRPT pictures on a VibeServer (lrpt.ts): SSTV's picture frames (a quarter-size preview), lrpt_status
   | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
+  | 'ale'     // ★ V12 2G HF ALE — a VibeServer's (aleDecoder.ts): one line a transmission, 0x03, ale_status
   | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
   | 'sitora'  // ★ V12 SITOR-A — a VibeServer's maritime ARQ listener (vibe_sitora_run.h): text, link state, status JSON
@@ -345,6 +347,8 @@ export class DecoderClient {
   lrptSymbolRate = 0;
   /** The server's last word on this dial: amateur (digits shown) or not. */
   tonesLast: TonesStatus | null = null;
+  /** ★ V12 ALE: the transmission being read (ale_status) — the status line's word count */
+  aleLast: AleStatus | null = null;
   /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */
   pagingMode = 'auto';
   /** ★ V12 MFSK / OLIVIA / THOR: each family's chosen sub-mode (a server `<family>Modes` id, 'auto' first) — a change is a re-attach. */
@@ -689,6 +693,10 @@ export class DecoderClient {
             const st = parseLrptStatus(m.data);
             this.cb.onStatus(lrptStatusText(st));
             if (st) this.cb.onDot(st.lines > 0 || st.sync ? 'active' : st.carrier ? 'sync' : 'idle');
+          } else if (m.type === 'ale_status' && m.data) {
+            if (this.active !== 'ale') return;
+            this.aleLast = parseAleStatus(m.data);
+            if (this.aleLast && this.aleLast.words) this.cb.onStatus(aleStateText(1, this.aleLast));
           } else if (m.type === 'tones' && m.data) {
             if (this.active !== 'tones') return;
             this.tonesLast = tonesSanitise(m.data);
@@ -899,6 +907,8 @@ export class DecoderClient {
       case 'same':    return { extension_name: 'same', params: {} };
       // ★ V12 SELCAL: nothing to set (ICAO's 32 tones, found by themselves).
       case 'selcal':  return { extension_name: 'selcal', params: {} };
+      // ★ V12 2G HF ALE: nothing to set (MIL-STD-188-141 fixes the tones and the rate; the dial is the channel).
+      case 'ale':     this.aleLast = null; return { extension_name: 'ale', params: {} };
       // ★ V12 HFDL: nothing to set — the dial is the published HFDL frequency, the carrier 1440 Hz above it.
       case 'hfdl':    return { extension_name: 'hfdl', params: {} };
       // ★ V12 MFSK (+ OLIVIA, CONTESTIA, THOR): "mode" is one of the server's own ids — the server falls back to AUTO for any other.
@@ -922,7 +932,7 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'balloon' || name === 'tones' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || name === 'hfdl' || isTextFamily(name)) {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'balloon' || name === 'tones' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || name === 'ale' || name === 'hfdl' || isTextFamily(name)) {
       if (name === 'balloon' && t === 0x0b) {
         // ★ V12 balloons: an SSDV picture so far (balloonPicture checks every length and that it is a JPEG)
         const p = balloonPicture(u8);
@@ -943,6 +953,12 @@ export class DecoderClient {
         // ★ DTMF + 5-tone: 0 listening · 1 tones sounding (the amateur / not line is kept from the status JSON)
         if (u8.length < 2) return;
         this.cb.onStatus(tonesStateText(u8[1], this.tonesLast));
+        this.cb.onDot(u8[1] ? 'sync' : 'idle');
+      } else if (name === 'ale' && t === 0x03) {
+        // ★ ALE: 0 listening · 1 a transmission being read
+        if (u8.length < 2) return;
+        if (!u8[1]) this.aleLast = null;
+        this.cb.onStatus(aleStateText(u8[1], this.aleLast));
         this.cb.onDot(u8[1] ? 'sync' : 'idle');
       } else if (name === 'selcal' && t === 0x03) {
         if (u8.length < 2) return;
