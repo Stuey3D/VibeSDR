@@ -59,6 +59,8 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta84 2026-11-19 — the quick benchmark measures only what the radios here can use (DAB's wide-capture rows).
+  { v: 'V12 (experimental)', detail: 'A QUICKER, LIGHTER BENCHMARK \u2014 the quick benchmark no longer measures DAB\u2019s wide-capture splitter at 56 MS/s on every machine. It now goes no faster than the fastest radio set up on that machine, and is not run at all where no radio is fast enough to hold two DAB multiplexes (an RTL-SDR, for one), so a small box such as a Raspberry Pi 2 gets through its first benchmark without being asked to do work it will never be given.' },
   // ★★ V12 beta83 2026-11-18 — the only mode, the lost land on the maps, High Detail Maps v2, the waterfall's scale after a
   //    big jump (the span stamp), a radio that waits to be plugged back in, RSP clones told apart. (beta82 was VibeServer only.)
   { v: 'V12 (experimental)', detail: 'THE ONLY MODE \u2014 DAB ONLY now works for every whole-radio mode: a VibeServer whose owner leaves just one of ADS-B, ISM, NDB, AIS, the aircraft datalink or SONDES switched on is a receiver for that alone \u2014 you arrive straight in it, there is no EXIT key (the box or map says \u201cADS-B only on this receiver\u201d, and closing a map only puts it away), and nobody can knock it out of the mode by accident. The owner keeps EXIT when signed in as admin. In the app, on the web page and on the R36S handheld.' },
