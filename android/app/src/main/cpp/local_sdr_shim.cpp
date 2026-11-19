@@ -9642,7 +9642,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double      toneRate = 0, toneAtHz = 0, toneFedHz = 0;
         std::string toneSent;
         double bwHz = 0;
-        int    chanBins = 0;                    // power of two dividing fftSize
+        int    chanBins = 0;                    // a whole decimation of lfft() (vibedsp.h sliceBinsFor)
         double chanRate = 0;
         std::unique_ptr<vibedsp::RxPipeline> rx;
         std::vector<cf32> slice;
@@ -10277,15 +10277,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return g_vsLockedCentre.load() > 0.0 && g_vsMaxUsers.load() > 1;
     }
 
-    /** Narrowest channel that still carries this mode, as a power of two dividing fftSize.
+    /** Narrowest channel that still carries this mode: a whole decimation of the listeners' FFT (lfft()) — a power
+     *  of two dividing it, exactly as before, wherever that FFT is the engine's power of two.
      *  ★ The channel must be comfortably wider than the demodulator's passband — a channel cut to
      *  exactly the filter width puts the filter skirts on the channel edge, where the fast
      *  convolution's own transition lives. 2.5x keeps them apart. */
     int chanBinsFor(double bwHz) const {
         const double need = std::max(bwHz * 2.5, 24000.0);
-        int b = 64;
-        while (b < fftSize && sampleRate * (double)b / (double)fftSize < need) b <<= 1;
-        return std::min(b, fftSize);
+        return vibedsp::sliceBinsFor(lfft(), sampleRate, need);
+    }
+    /** ★★★ V12 THE LISTENERS' FORWARD FFT SIZE (2026-11-19 — vibedsp.h listenerFftSize): the engine's power of two, or at
+     *  a rate where that makes a WFM listener's channel 5 % or more wider than its 500 kHz, a 2^a·3^b·5^c size that
+     *  does not (30720 at 30.72 MS/s: 512 kHz, not 960). ONLY the listeners' channeliser (chan_) and what slices its
+     *  blocks use it — the waterfall, the zoom and the wide taps keep fftSize. Cached on (rate, fftSize): read per
+     *  block by several threads, worked out once per start. */
+    mutable std::atomic<uint64_t> lfftCache_{0};
+    int lfft() const {
+        const uint64_t r = (uint64_t)std::llround(sampleRate) & 0xffffffffull, f = (uint64_t)fftSize & 0xffff;
+        const uint64_t c = lfftCache_.load(std::memory_order_relaxed);
+        if (c && (c >> 32) == r && ((c >> 16) & 0xffff) == f) return (int)(c & 0xffff);
+        const int n = vibedsp::listenerFftSize(sampleRate, fftSize);
+        lfftCache_.store((r << 32) | (f << 16) | ((uint64_t)n & 0xffff), std::memory_order_relaxed);
+        return n;
     }
 
     /** This listener's own zoomed waterfall row. Same wire format as the shared one — the client
@@ -10632,7 +10645,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::lock_guard<std::mutex> lk(c->mtx);
         if (want != c->chanBins || !c->rx) {
             c->chanBins = want;
-            c->chanRate = sampleRate * (double)want / (double)fftSize;
+            c->chanRate = sampleRate * (double)want / (double)lfft();
             c->slice.assign((size_t)want, cf32{0.0f, 0.0f});
             c->rx.reset(new vibedsp::RxPipeline());
             c->rx->setRdsExtWantedFlag(&rdsxOn);   // the scope runs only while Advanced RDS is open somewhere
@@ -10676,7 +10689,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     lands up to half a bin away from where the listener actually tuned — 122 Hz at
         //     8 MSPS with a 32k FFT, which on SSB is the difference between speech and a growl.
         //     Hand the leftover to the pipeline, which tunes within the channel.
-        const double binHz = sampleRate / (double)fftSize;
+        const double binHz = sampleRate / (double)lfft();
         const double off   = c->vfoHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
         // ★ V12 DRM: the receiver needs ≥ 24 kHz of channel; a new one for a new tune (it re-acquires anyway).
@@ -10768,7 +10781,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const int want = chanBinsFor(c->viewSpanHz * 1.25);
         if (want != c->viewChanBins || !c->viewRx) {
             c->viewChanBins = want;
-            c->viewChanRate = sampleRate * (double)want / (double)fftSize;
+            c->viewChanRate = sampleRate * (double)want / (double)lfft();
             c->viewSlice.assign((size_t)want, cf32{0.0f, 0.0f});
             c->viewRx.reset(new vibedsp::RxPipeline());
             vibedsp::RxPipeline::Callbacks vcb{};
@@ -10783,7 +10796,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  c->viewChanRate / 1e3, want, c->viewSpanHz / 1e3);
         }
         // The slice is centred on the VIEW centre bin, so the zoom sits at the residual only.
-        const double binHz = sampleRate / (double)fftSize;
+        const double binHz = sampleRate / (double)lfft();
         const double off   = c->viewCentreHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
         c->viewRx->setZoomBins(binsFor(c->spec));
@@ -10793,13 +10806,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     /** The signed centre bin this listener's VIEW channel is taken from. */
     int clientViewCentreBin(const ClientDsp* c) const {
-        const double binHz = sampleRate / (double)fftSize;
+        const double binHz = sampleRate / (double)lfft();
         return (int)std::lround((c->viewCentreHz - rtlCenter.load() - hwOffsetHz()) / binHz);
     }
 
     /** The signed centre bin this listener's channel is taken from. */
     int clientCentreBin(const ClientDsp* c) const {
-        const double binHz = sampleRate / (double)fftSize;
+        const double binHz = sampleRate / (double)lfft();
         return (int)std::lround((c->vfoHz - rtlCenter.load() - hwOffsetHz()) / binHz);
     }
 
@@ -32536,7 +32549,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!w) return;
         std::vector<std::shared_ptr<vibewatch::WatchChannel>> chs;
         { std::lock_guard<std::mutex> lk(w->m); chs = w->chans; chs.insert(chs.end(), w->fading.begin(), w->fading.end()); }
-        const double binHz = sampleRate / (double)fftSize, centre = rtlCenter.load() + hwOffsetHz();
+        const double binHz = sampleRate / (double)lfft(), centre = rtlCenter.load() + hwOffsetHz();
         for (auto& ch : chs) {
             if (ch->parked()) continue;
             const auto wd = ch->wanted();
@@ -32548,7 +32561,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const double off = wd.hz - centre;
             const int cb = (int)std::lround(off / binHz);
             const int got = chan_->extract(bins, cb, want, sl->buf.data(), sl->ctx, blockIndex);
-            if (got > 0) ch->feed(sl->buf.data(), got, sampleRate * (double)want / (double)fftSize, off - cb * binHz);
+            if (got > 0) ch->feed(sl->buf.data(), got, sampleRate * (double)want / (double)lfft(), off - cb * binHz);
             // ★★ A skimmer or Band spots DECODING VFO B: B's slices of this same forward FFT, centred on B's dial — the
             //    cut VFO A's gets in feedOneClient, with B's own scratch. The atomic first: nothing skimming, nothing looked up.
             if (ch->id() == 1 && DecoderHost::skimmersRunning().load(std::memory_order_relaxed) > 0) {
@@ -32953,36 +32966,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double w = std::min(h->iqWidthHz(), sampleRate * 0.8);
         // ★★ V12 (2026-10-27): sized for the slice's FLAT part, cut with a sixteenth's roll-off (vibe_band_slice.h —
         //    it was sized for 4 % and cut with a quarter: 40 m's ends sat 2–3 dB down at 960 kS/s, JTTY 17 dB).
-        const int b = vibe::bandSliceBins(sampleRate, fftSize, w);
+        const int b = vibe::bandSliceBins(sampleRate, lfft(), w);
         if ((int)sc.skimSlice.size() != b) sc.skimSlice.assign((size_t)b, cf32{0.0f, 0.0f});
         const int gs = chan_->extract(bins, cb, b, sc.skimSlice.data(), sc.sctx, blockIndex, vibe::kBandTaperDiv);
-        const double binHz = sampleRate / (double)fftSize;
+        const double binHz = sampleRate / (double)lfft();
         /* ★★ V12 BAND SPOTS' ACTIVITY GATE (decoders/digi_activity.h): the slice's bins' power, read off this SAME
          *  forward FFT — one multiply-add per bin, no transform — so Band can leave an empty mode window undecoded. */
         const float* pw = nullptr;
         if (gs > 0 && h->wantsBins()) {
             thread_local std::vector<float> pwBuf;
             pwBuf.resize((size_t)b);
-            vibe::digi::slicePower(bins, fftSize, cb, b, pwBuf.data());
+            vibe::digi::slicePower(bins, lfft(), cb, b, pwBuf.data());
             pw = pwBuf.data();
         }
         const double hwC = rtlCenter.load() + hwOffsetHz();
-        if (gs > 0) h->feedIq(sc.skimSlice.data(), gs, sampleRate * (double)b / (double)fftSize,
+        if (gs > 0) h->feedIq(sc.skimSlice.data(), gs, sampleRate * (double)b / (double)lfft(),
                               hwC + cb * binHz, pw, pw ? b : 0, binHz);
         // ★★ Band's EXTRA slices (40 m's JTTY, 6 m's JTTY, 15/10 m's FT4 …): one more small inverse FFT each, off
         //    this SAME forward FFT — only those this capture holds; the rest show as "out" chips (vibe_decoder_host.h).
         vibe::ExtraSlice xs[vibe::kMaxExtraSlices];
         const int nx = gs > 0 ? h->iqExtraSlices(xs) : 0;
         for (int k = 0; k < nx; ++k) {
-            const int eb = vibe::bandSliceBins(sampleRate, fftSize, xs[k].widthHz);
+            const int eb = vibe::bandSliceBins(sampleRate, lfft(), xs[k].widthHz);
             const int ecb = (int)std::lround((xs[k].centreHz - hwC) / binHz);
-            const double erate = sampleRate * (double)eb / (double)fftSize, ecentre = hwC + ecb * binHz;
+            const double erate = sampleRate * (double)eb / (double)lfft(), ecentre = hwC + ecb * binHz;
             if (!vibe::captureHolds(sampleRate, hwC, ecentre, erate)) continue;
             if ((int)sc.bandX[k].size() != eb) sc.bandX[k].assign((size_t)eb, cf32{0.0f, 0.0f});
             const int eg = chan_->extract(bins, ecb, eb, sc.bandX[k].data(), sc.bandXctx[k], blockIndex, vibe::kBandTaperDiv);
             if (eg <= 0) continue;
             const float* epw = nullptr;
-            if (pw) { sc.bandXpw.resize((size_t)eb); vibe::digi::slicePower(bins, fftSize, ecb, eb, sc.bandXpw.data()); epw = sc.bandXpw.data(); }
+            if (pw) { sc.bandXpw.resize((size_t)eb); vibe::digi::slicePower(bins, lfft(), ecb, eb, sc.bandXpw.data()); epw = sc.bandXpw.data(); }
             h->feedIq(sc.bandX[k].data(), eg, erate, ecentre, epw, epw ? eb : 0, binHz, NAN, k + 1);
         }
     }
@@ -33020,7 +33033,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //        fan-out, which is the part that scales — so an idle server does the cheap half.
         //     ★ The idle saver is a separate matter and still applies: when capture genuinely
         //       parks there is no IQ at all and this is never called.
-        if (!chan_ || chan_->fftSize() != fftSize) chan_.reset(new vibedsp::Channelizer(fftSize));
+        if (!chan_ || chan_->fftSize() != lfft()) chan_.reset(new vibedsp::Channelizer(lfft()));
+        // ★★ V12 (2026-11-19): where the listeners' FFT is not the engine's, the waterfall keeps the engine's — its own
+        //    transform, only the blocks that become rows (vibedsp.h PeriodicFft). Same size = the channeliser's block,
+        //    as it always was (below).
+        const bool ownWide = lfft() != fftSize;
+        if (ownWide) {
+            if (!wideTap_ || wideTap_->size() != fftSize) wideTap_.reset(new vibedsp::PeriodicFft(fftSize));
+            const auto w0 = std::chrono::steady_clock::now();
+            wideTap_->feed(iq, n, [&] { return wideDecimFor(fftSize); }, [&](const cf32* b, int nb) { emitWideRow(b, nb); });
+            chanWideMs_ += std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now() - w0).count();
+        } else if (wideTap_) wideTap_.reset();
         // ★ Split the channelizer's own forward FFT from the per-listener work, because they
         //   scale completely differently: the FFT is fixed no matter how many listeners there
         //   are, the fan-out is proportional. Confusing the two is how "per-client cost" ends up
@@ -33061,10 +33084,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     FFT is the same work every block, this fires only every `decim`th block and
             //     is proportional to fps. A number that mixes a fixed cost with a bursty one
             //     cannot tell you which of them is making the DSP miss real time.
-            const auto w0 = std::chrono::steady_clock::now();
-            emitWideFromBins(bins, nbins);
-            wideMs += std::chrono::duration<double,std::milli>(
-                          std::chrono::steady_clock::now() - w0).count();
+            if (!ownWide) {
+                const auto w0 = std::chrono::steady_clock::now();
+                emitWideFromBins(bins, nbins);
+                wideMs += std::chrono::duration<double,std::milli>(
+                              std::chrono::steady_clock::now() - w0).count();
+            }
         });
         const double totalMs = std::chrono::duration<double,std::milli>(
                                    std::chrono::steady_clock::now() - fanT0).count();
@@ -33095,15 +33120,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  onSpectrum exactly as the pipeline's own FFT used to. */
     std::vector<float> wideRow_;
     int wideDecim_ = 0;
+    /** Blocks of an `n`-point FFT (hop 3n/4) per wide row at the engine's frame rate — emitWideFromBins' decimation,
+     *  and the waterfall's own transform's spacing (PeriodicFft) where the listeners' FFT is not n. */
+    int wideDecimFor(int n) const {
+        const double blockRate = sampleRate / (double)(n - n / vibedsp::Channelizer::OVERLAP_DIV);
+        const int decim = (int)std::lround(blockRate / std::max(1.0, fftRate * FFT_AVG));
+        return decim < 1 ? 1 : decim;
+    }
+    /** ★★ V12 (2026-11-19): the waterfall's own transform — only while the listeners' FFT (lfft()) is not the engine's
+     *  fftSize; the row is then made from THIS, the engine's size, exactly the block it always was (vibedsp.h
+     *  PeriodicFft). Rebuilt when fftSize changes; used only from the DSP thread (feedClientChannels). */
+    std::unique_ptr<vibedsp::PeriodicFft> wideTap_;
     void emitWideFromBins(const cf32* bins, int n) {
         // ★ MATCH THE OLD RATE. The pipeline's FFT ran at fftRate*FFT_AVG; this block callback
         //   runs far faster (hop is 3/4 of the FFT, so ~325/s at 8 MSPS). Feeding onSpectrum every
         //   block would quadruple the frame rate and the averaging window with it.
-        const double blockRate = sampleRate / (double)(n - n / vibedsp::Channelizer::OVERLAP_DIV);
-        int decim = (int)std::lround(blockRate / std::max(1.0, fftRate * FFT_AVG));
-        if (decim < 1) decim = 1;
-        if (++wideDecim_ < decim) return;
+        if (++wideDecim_ < wideDecimFor(n)) return;
         wideDecim_ = 0;
+        emitWideRow(bins, n);
+    }
+    void emitWideRow(const cf32* bins, int n) {
         if ((int)wideRow_.size() != n) wideRow_.assign(n, -200.0f);
         // ★★ FFTSHIFT ON THE WAY OUT. The channelizer leaves DC at bin 0 (natural FFT order);
         //    onSpectrum has always been handed a SHIFTED row, bin 0 = -fs/2. Getting this wrong
