@@ -5,8 +5,8 @@
 //   1. A Hamming low-pass decimates the channel (≥ 24 kHz) by D to fs1 ≈ 24 kHz (SIMD dot products, nav_rx.h's kernels;
 //      scalar twin bit for bit). A ring keeps the last 3 s.
 //   2. FINDING A BURST: a 2048-point Hann FFT every ~21 ms over ±10.5 kHz (one dial covers 406.022–406.044 MHz: every
-//      channel in use); a burst starts with a carrier LINE ≥ 14 dB over
-//      the bins' median, at a frequency with no line in the half-second before. A line that stays more than 1.2 s is a
+//      channel in use); a burst starts with a carrier LINE ≥ 11 dB over
+//      the bins' 75th percentile (≈ 14 dB over noise's median; robust to a channel cut narrower than the search), at a frequency with no line in the half-second before. A line that stays more than 1.2 s is a
 //      steady carrier (a spur, a CW signal) and is never decoded at all.
 //   3. THE BURST, worked as a block 0.9 s after the line: the frequency from the FFT peak, refined by the slope of the
 //      CARRIER's phase across the burst. ★ The carrier never goes: biphase PM keeps cos(1.1) of it in every bit (each bit's
@@ -134,12 +134,15 @@ private:
         std::vector<float> p((size_t)(2 * maxBin_ + 1));
         for (int k = -maxBin_; k <= maxBin_; ++k) p[(size_t)(k + maxBin_)] = std::norm(a[(size_t)((k + kN) % kN)]);
         std::vector<float> s = p;
-        std::nth_element(s.begin(), s.begin() + s.size() / 2, s.end());
-        const float med = std::max(s[s.size() / 2], 1e-30f);
+        // ★ the floor is the 75th percentile, not the median: on a channel cut narrower than the search (the one pipeline's
+        //   NFM, ±6.25 kHz of ±10.5) the outer bins are empty, and a median among them made every noise bin a "line"
+        const size_t q = s.size() * 3 / 4;
+        std::nth_element(s.begin(), s.begin() + q, s.end());
+        const float med = std::max(s[q], 1e-30f);
         int best = 0; float bp = 0;
         for (int k = -maxBin_ + 1; k < maxBin_; ++k) { const float v = p[(size_t)(k + maxBin_)]; if (v > bp) { bp = v; best = k; } }
         const double ratio = bp / med;
-        const bool line = ratio >= 25.0;   // 14 dB over the median bin (noise alone: a few a hour)
+        const bool line = ratio >= 12.5;   // 14 dB over the median of noise (= 11 dB over its 75th percentile): a few a hour
         // steady-carrier bookkeeping: how long has a line been at (about) this bin?
         if (line) {
             if (std::abs(best - lineBin_) <= 2 && n1_ - lineLast_ <= 2 * hop_) { lineLast_ = n1_; }

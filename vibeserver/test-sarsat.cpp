@@ -165,6 +165,17 @@ static void testModem() {
         tx::Opt o; const Got g = run(tx::burst(&b, o), o.rate);
         ok(g.b.size() == 1 && g.b[0].msg.selfTest, "a self-test burst: decoded and labelled");
     }
+    {   // ★ a channel cut narrower than the search (the one pipeline's NFM, ±6.25 kHz): the empty outer bins are not the floor
+        const Bits b = tx::aviationUser(232, "G-ABCD");
+        int okN = 0; std::vector<std::complex<float>> x;
+        for (int k = 0; k < 4; ++k) { tx::Opt o; o.seed = 60 + k; o.cn0 = 42; o.offsetHz = 3000; o.lead = 1.0; o.tail = 4.0; auto y = tx::burst(&b, o); x.insert(x.end(), y.begin(), y.end()); }
+        double dl; const auto h = vibe::nav::lowpass(6250.0 / 48000.0, 121, dl);
+        std::vector<std::complex<float>> f(x.size());
+        for (size_t i = 0; i < x.size(); ++i) { std::complex<float> a(0, 0); for (size_t t = 0; t < h.size() && t <= i; ++t) a += h[t] * x[i - t]; f[i] = a; }
+        const Got g = run(f, 48000);
+        for (const auto& q : g.b) if (q.msg.identity.rfind("registration G-ABCD", 0) == 0) ++okN;
+        ok(okN == 4 && g.steady == 0, "a channel cut to ±6.25 kHz (NFM on the one pipeline): 4 of 4 bursts (" + std::to_string(okN) + "), no false steady line");
+    }
     {   // a train of three bursts 5 s apart (the first 120 s of an activation)
         const Bits b = tx::aviationUser(232, "G-ABCD");
         std::vector<std::complex<float>> x;
