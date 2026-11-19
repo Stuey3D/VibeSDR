@@ -78,6 +78,9 @@ const BLOCKABLE: ModeEntry[] = [
    *  setup page, with the same notice. */
   { id: 'tones', label: 'DTMF and 5-tone selective calling' },
   { id: 'tones+digits', label: '5-tone: show the called numbers off the amateur bands (to you only)', parent: 'tones', on: true },
+  // ★ V12 VOR / ILS and 406 MHz beacons (docs/v12/VOR-ILS.md, SARSAT.md) — the setup page's same two switches
+  { id: 'vor', label: 'VOR bearing and ILS deviation' },
+  { id: 'sarsat', label: '406 MHz distress beacons (COSPAS-SARSAT)' },
   { id: 'ais', label: 'AIS ships' },
   // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },

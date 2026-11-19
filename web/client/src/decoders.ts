@@ -80,7 +80,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'hfdl' | null;
+export type DecoderMode = 'rtty' | 'rttyskim' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -172,6 +172,10 @@ export interface DecoderCallbacks {
   onNcdxf?: (data: unknown) => void;
   /** ★ V12 DTMF + 5-tone: the status (amateur or not here, what runs) on attach and when the dial changes band (src/services/tones.ts). */
   onTones?: (data: unknown) => void;
+  /** ★ V12 VOR / ILS: the status once a second (src/services/navaids.ts vorSanitise). */
+  onVor?: (data: unknown) => void;
+  /** ★ V12 406 MHz beacons: counts and the last burst's public fields (src/services/navaids.ts sarsatSanitise). */
+  onSarsat?: (data: unknown) => void;
   onJttySpot?: (data: unknown) => void;
   /** ★ DSC: one call (its data as the server sent it — dsc.ts dscFromJson checks it). */
   onDscCall?: (data: unknown) => void;
@@ -251,6 +255,8 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   ncdxf: 'ncdxf',   // ★ V12 the NCDXF / IARU beacon tracker (vibe_ncdxf_run.h)
   balloon: 'balloon',   // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV (vibe_balloon_run.h)
   tones: 'tones',       // ★ V12 DTMF + 5-tone selective calling (vibe_tones_run.h)
+  vor: 'vor',           // ★ V12 VOR / ILS (vibe_nav_run.h)
+  sarsat: 'sarsat',     // ★ V12 406 MHz beacons (vibe_sarsat_run.h)
 };
 
 export class DecoderClient {
@@ -483,6 +489,16 @@ export class DecoderClient {
       this.cb.onTones?.(msg.data);
       return;
     }
+    if (msg.type === 'vor' && msg.data) {
+      if (this.mode !== 'vor') return;
+      this.cb.onVor?.(msg.data);
+      return;
+    }
+    if (msg.type === 'sarsat' && msg.data) {
+      if (this.mode !== 'sarsat') return;
+      this.cb.onSarsat?.(msg.data);
+      return;
+    }
     if (msg.type === 'ncdxf' && msg.data) {
       if (this.mode !== 'ncdxf') return;
       this.cb.onNcdxf?.(msg.data);
@@ -608,6 +624,9 @@ export class DecoderClient {
       case 'balloon':
       // ★ V12 DTMF + 5-tone: a line per string / call (what may be shown is the server's decision) and the state.
       case 'tones':
+      // ★ V12 VOR / ILS and 406 MHz beacons: their lines (what may be shown is the server's decision) and the state.
+      case 'vor':
+      case 'sarsat':
         if (op === 0x0b && this.mode === 'balloon') { this.cb.onBalloonPicture?.(buf); return; }
         if (op === 0x01 && buf.byteLength >= 13) {
           const len = dv.getUint32(9, false);           // big-endian

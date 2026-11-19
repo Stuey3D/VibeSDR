@@ -152,7 +152,8 @@ export function modeIconFor(id: string): ModeIconName | null {
   switch (k) {
     case 'adsb': case 'hfdl': case 'selcal': case 'acars': case 'vdl2': case 'vdl': case 'hfdlmap': case 'avdata': return 'aircraft';
     case 'ais': case 'dsc': case 'navtex': case 'sitora': case 'sitor': case 'amtor': return 'ship';   // ★ SITOR-A beside NAVTEX (SITOR-B)
-    case 'ndb': case 'ncdxf': return 'beacon';   // ★ V12 NCDXF / IARU beacons
+    case 'ndb': case 'ncdxf': case 'vor': case 'ils': return 'beacon';   // ★ V12 NCDXF / IARU beacons · VOR / ILS (a ground navaid, as an NDB)
+    case 'sarsat': case 'epirb': case 'elt': case 'plb': return 'ship';  // ★ V12 406 MHz beacons (EPIRBs, mostly)
     case 'ism': return 'sensor';
     case 'sondes': case 'sonde': case 'rs41': case 'radiosonde': return 'balloon';   // ★ V12 radiosondes
     case 'balloon': return 'balloon';   // ★ V12 amateur balloons (UKHAS / Horus / SSDV) — the same glyph
