@@ -164,10 +164,12 @@ public:
     int decode(uint8_t* cw) const {
         uint8_t S[R];
         bool any = false;
+        /* ★ Horner with a 256-byte "times this root" table per root (8 KB in all): two loads and an XOR a byte, where a
+         *  log/exp multiply with its zero tests was four times that — the syndromes run on EVERY frame, clean or not. */
         for (int i = 0; i < R; i++) {
-            const uint8_t r = rootPow_[i];                    // β^(FCR+i), β = α^PRIM
+            const uint8_t* t = mulBy_[i];                     // × β^(FCR+i), β = α^PRIM
             uint8_t acc = 0;
-            for (int j = 0; j < N; j++) acc = uint8_t(mul(acc, r) ^ cw[j]);
+            for (int j = 0; j < N; j++) acc = uint8_t(t[acc] ^ cw[j]);
             S[i] = acc; any |= acc != 0;
         }
         if (!any) return 0;
@@ -227,6 +229,7 @@ private:
         for (int i = 0; i < 255; i++) { exp_[i] = uint8_t(x); log_[x] = uint8_t(i); x <<= 1; if (x & 0x100) x ^= 0x187; }
         for (int i = 255; i < 512; i++) exp_[i] = exp_[i - 255];
         for (int i = 0; i < R; i++) rootPow_[i] = exp_[((FCR + i) * PRIM) % 255];
+        for (int i = 0; i < R; i++) for (int v = 0; v < 256; v++) mulBy_[i][v] = mul(uint8_t(v), rootPow_[i]);
         // g(x) = Π (x − β^(FCR+i)); gen_[j] = coefficient of x^j (monic, gen_[R] = 1 implied).
         uint8_t g[R + 1] = {1};
         for (int i = 0; i < R; i++) {
@@ -237,6 +240,7 @@ private:
         for (int j = 0; j < R; j++) gen_[j] = g[j];
     }
     uint8_t exp_[512]{}, log_[256]{}, rootPow_[R]{}, gen_[R]{};
+    uint8_t mulBy_[R][256]{};
 };
 
 /** De-interleave, correct and re-interleave a 1020-byte frame. Returns the total corrected, or −1 if ANY of the four

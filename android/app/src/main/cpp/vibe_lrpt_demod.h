@@ -91,6 +91,87 @@ private:
     size_t n_ = 0, pos_ = 0;
 };
 
+/** ★★★ THE MATCHED FILTER AND THE INTERPOLATOR IN ONE, EVALUATED ONLY WHERE A SAMPLE IS WANTED.
+ *  The receiver needs the filtered signal at two points a symbol (144 k a second at 72k), not at every input sample
+ *  (150–300 k a second) — and a per-sample FIR followed by a cubic interpolator was 75 % of this demodulator's cost
+ *  (392 instructions a sample on the M5; a Pi 2 would have spent ≈ 30 % of a core on it). So the root-raised-cosine
+ *  is tabulated at kPhases fractional offsets (1/64 of a sample: ≤ 0.2 % of a symbol of timing quantisation) and a point
+ *  at time τ is ONE dot product of the 2H input samples around it with that phase's taps. Per input sample only the
+ *  mix and a store remain.
+ *  ★ SIMD: the dot is NEON / SSE2 / scalar with the same four-lane partial sums and final order → bit-identical. */
+class PolyRrc {
+public:
+    static constexpr int kPhases = 64;
+    void configure(double sps, double alpha, int spanSym = 4) {
+        h_ = int(std::ceil(spanSym * sps));
+        n_ = (2 * h_ + 3) & ~3;                               // taps a phase, padded to a multiple of 4 (zeros at the end)
+        taps_.assign(size_t(kPhases) * size_t(n_), 0.f);
+        for (int p = 0; p < kPhases; p++) {
+            const double f = double(p) / kPhases;
+            double sum = 0;
+            float* t = &taps_[size_t(p) * size_t(n_)];
+            // sample i of the window is x[n − h + 1 + i]; its offset from τ = n + f is (h − 1 − i) + f
+            for (int i = 0; i < 2 * h_; i++) { const double v = rrc((double(h_ - 1 - i) + f) / sps, alpha); t[i] = float(v); sum += v; }
+            for (int i = 0; i < 2 * h_; i++) t[i] = float(double(t[i]) / sum);
+        }
+        ring_ = size_t(1) << int(std::ceil(std::log2(double(n_) + 2)));
+        if (ring_ < 64) ring_ = 64;
+        re_.assign(2 * ring_, 0.f); im_.assign(2 * ring_, 0.f); w_ = 0;
+    }
+    /** Store one (mixed) input sample. */
+    void push(float r, float i) {
+        const size_t k = w_ & (ring_ - 1);
+        re_[k] = re_[k + ring_] = r; im_[k] = im_[k + ring_] = i;
+        w_++;
+    }
+    /** Samples stored so far (the index the next push will take). */
+    uint64_t count() const { return w_; }
+    int half() const { return h_; }
+    /** The filtered signal at τ = n + f, n = `n` (needs samples up to n + h stored). */
+    void at(uint64_t n, double f, float& orr, float& oi) const {
+        int p = int(f * kPhases + 0.5); if (p >= kPhases) { p -= kPhases; n++; } if (p < 0) p = 0;
+        const size_t first = size_t((n + 1 - uint64_t(h_)) & (ring_ - 1));
+        const float* t = &taps_[size_t(p) * size_t(n_)];
+        orr = dot(&re_[first], t); oi = dot(&im_[first], t);
+    }
+    bool forceScalar = false;
+private:
+    static double rrc(double t, double a) {
+        if (std::fabs(t) < 1e-9) return 1.0 - a + 4.0 * a / M_PI;
+        if (std::fabs(std::fabs(4.0 * a * t) - 1.0) < 1e-9)
+            return a / std::sqrt(2.0) * ((1 + 2 / M_PI) * std::sin(M_PI / (4 * a)) + (1 - 2 / M_PI) * std::cos(M_PI / (4 * a)));
+        return (std::sin(M_PI * t * (1 - a)) + 4 * a * t * std::cos(M_PI * t * (1 + a))) / (M_PI * t * (1 - 16 * a * a * t * t));
+    }
+    float dot(const float* x, const float* h) const {
+        float l[4];
+        if (forceScalar) { dotScalar(x, h, l); return (l[0] + l[1]) + (l[2] + l[3]); }
+#if defined(VIBE_LRPT_FIR_NEON)
+        float32x4_t a = vdupq_n_f32(0.f);
+        for (int i = 0; i < n_; i += 4) a = vaddq_f32(a, vmulq_f32(vld1q_f32(x + i), vld1q_f32(h + i)));
+        vst1q_f32(l, a);
+#elif defined(VIBE_LRPT_FIR_SSE2)
+        __m128 a = _mm_setzero_ps();
+        for (int i = 0; i < n_; i += 4) a = _mm_add_ps(a, _mm_mul_ps(_mm_loadu_ps(x + i), _mm_loadu_ps(h + i)));
+        _mm_storeu_ps(l, a);
+#else
+        dotScalar(x, h, l);
+#endif
+        return (l[0] + l[1]) + (l[2] + l[3]);
+    }
+    void dotScalar(const float* x, const float* h, float* l) const {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
+        l[0] = l[1] = l[2] = l[3] = 0.f;
+        for (int i = 0; i < n_; i += 4)
+            for (int k = 0; k < 4; k++) l[k] = l[k] + x[i + k] * h[i + k];   // ★ no fused multiply-add
+    }
+    std::vector<float> taps_, re_, im_;
+    int h_ = 0, n_ = 0;
+    size_t ring_ = 64;
+    uint64_t w_ = 0;
+};
+
 /** Root-raised-cosine taps, unit DC gain, ±span symbols. */
 inline std::vector<float> rrcTaps(double sps, double alpha, int span = 4) {
     const int half = int(std::ceil(span * sps));
@@ -122,10 +203,13 @@ inline void fftInPlace(std::vector<std::complex<float>>& a) {
         const double ang = -2 * M_PI / double(len);
         const std::complex<float> wl(float(std::cos(ang)), float(std::sin(ang)));
         for (size_t i = 0; i < n; i += len) {
-            std::complex<float> w(1, 0);
+            float wr = 1, wi = 0;
             for (size_t j = 0; j < len / 2; j++) {
-                const auto u = a[i + j], v = a[i + j + len / 2] * w;
-                a[i + j] = u + v; a[i + j + len / 2] = u - v; w *= wl;
+                // ★ by hand, for the same reason as acqPush's x⁴ (no __mulsc3)
+                const std::complex<float> u = a[i + j], x = a[i + j + len / 2];
+                const std::complex<float> v(x.real() * wr - x.imag() * wi, x.real() * wi + x.imag() * wr);
+                a[i + j] = u + v; a[i + j + len / 2] = u - v;
+                const float nr = wr * wl.real() - wi * wl.imag(); wi = wr * wl.imag() + wi * wl.real(); wr = nr;
             }
         }
     }
@@ -137,11 +221,11 @@ public:
     void configure(const DemodConfig& c) {
         cfg_ = c;
         sps_ = c.sampleRate / c.symbolRate;
-        fir_.setTaps(rrcTaps(sps_, c.rrcAlpha));
+        mf_.configure(sps_, c.rrcAlpha);
         loopGains(c.carrierBw, cA_, cB_);
         loopGains(c.timingBw, tA_, tB_);
-        hist_.assign(4, {0.f, 0.f}); hold_ = false;
-        tau_ = 0; nIn_ = 0; half_ = 0; freq_ = 0; tFreq_ = 0; nr_ = 1; ni_ = 0; stepW_ = 1e9; agcG_ = 1.f;
+        hold_ = false;
+        tau_ = double(mf_.half()); nIn_ = 0; half_ = 0; freq_ = 0; tFreq_ = 0; nr_ = 1; ni_ = 0; stepW_ = 1e9; agcG_ = 1.f;
         acq_.clear(); acq_.reserve(kAcqN); acqDue_ = 0; acqPow_.clear(); acqLooks_ = 0;
         lockAcc_ = 0; lockN_ = 0; lockMetric_ = 0; locked_ = false;
         agc_ = 1.f; amp_ = 1.f;
@@ -180,18 +264,17 @@ public:
             const float c = float(nr_), sn = float(ni_);
             { const double r = nr_ * stepC_ - ni_ * stepS_, i = nr_ * stepS_ + ni_ * stepC_; nr_ = r; ni_ = i; }
             const float mr = xr * c - xi * sn, mi = xr * sn + xi * c;
-            float fr, fi;
-            fir_.push(mr, mi, fr, fi);
-            hist_[0] = hist_[1]; hist_[1] = hist_[2]; hist_[2] = hist_[3]; hist_[3] = {fr, fi};
+            mf_.push(mr, mi);
             nIn_++;
-            // ── interpolation points falling between hist_[1] and hist_[2] ──
-            const double base = double(nIn_) - 3.0;          // time index of hist_[1]
-            while (tau_ < base + 1.0) {
-                if (tau_ < base) { tau_ = base; }             // fell behind (start-up): catch up
-                const float mu = float(tau_ - base);
-                std::complex<float> y = interp(mu);
-                onPoint(y, out);
-                tau_ += sps_ / 2 + (half_ == 0 ? tFreq_ * 0.5 : tFreq_ * 0.5);
+            // ── the points whose window is complete: τ + h ≤ the newest sample ──
+            const double ready = double(nIn_) - 1.0 - double(mf_.half());
+            while (tau_ <= ready) {
+                if (tau_ < double(mf_.half())) tau_ = double(mf_.half());   // ★ start-up: the window must lie in the ring
+                const double fl = std::floor(tau_);
+                float yr, yi;
+                mf_.at(uint64_t(fl), tau_ - fl, yr, yi);
+                onPoint(std::complex<float>(yr, yi), out);
+                tau_ += sps_ / 2 + tFreq_ * 0.5;
             }
         }
     }
@@ -199,10 +282,8 @@ public:
     bool locked() const { return locked_; }
     double lockMetric() const { return lockMetric_; }
     double carrierHz() const { return freq_ * cfg_.sampleRate / (2 * M_PI) + doppler_.load(std::memory_order_relaxed); }
-    /** Average |soft| (≈ 45 when well-scaled) — with the lock metric, the SNR figure the report shows. */
-    double softLevel() const { return amp_; }
     const DemodConfig& config() const { return cfg_; }
-    CFir& fir() { return fir_; }
+    PolyRrc& fir() { return mf_; }
 
 private:
     static constexpr size_t kAcqN = 8192;
@@ -211,17 +292,11 @@ private:
         const double z = 0.707, th = bnT / (z + 0.25 / z), d = 1 + 2 * z * th + th * th;
         a = 4 * z * th / d; b = 4 * th * th / d;
     }
-    std::complex<float> interp(float mu) const {
-        // Cubic Lagrange through hist_[0..3] at t = 1 + mu.
-        const float t = 1.f + mu;
-        const float l0 = -(t - 1) * (t - 2) * (t - 3) / 6.f, l1 = t * (t - 2) * (t - 3) / 2.f,
-                    l2 = -t * (t - 1) * (t - 3) / 2.f, l3 = t * (t - 1) * (t - 2) / 6.f;
-        return hist_[0] * l0 + hist_[1] * l1 + hist_[2] * l2 + hist_[3] * l3;
-    }
     void acqPush(float xr, float xi) {
         if (acqDue_ > 0) { acqDue_--; return; }
-        const std::complex<float> z(xr, xi), z2 = z * z;
-        acq_.push_back(z2 * z2);
+        // ★ x⁴ by hand: std::complex's operator* goes through the C99 NaN-checking multiply (__mulsc3) without -ffast-math
+        const float ar = xr * xr - xi * xi, ai = 2.f * xr * xi;
+        acq_.push_back(std::complex<float>(ar * ar - ai * ai, 2.f * ar * ai));
         if (acq_.size() < kAcqN) return;
         fftInPlace(acq_);
         if (acqPow_.size() != kAcqN) acqPow_.assign(kAcqN, 0.f);
@@ -303,13 +378,11 @@ private:
         const float k = agc_ > 1e-9f ? 45.f / agc_ : 1.f;
         auto q = [&](float v) { float s = v * k; if (s > 127.f) s = 127.f; else if (s < -127.f) s = -127.f; return int8_t(std::lrint(s)); };
         out.push_back(q(I)); out.push_back(q(Q));
-        amp_ += 1e-3 * (0.5 * (std::fabs(double(out[out.size() - 2])) + std::fabs(double(out.back()))) - amp_);
     }
 
     DemodConfig cfg_;
     double sps_ = 2;
-    CFir fir_;
-    std::vector<std::complex<float>> hist_;
+    PolyRrc mf_;
     double tau_ = 0, tFreq_ = 0; uint64_t nIn_ = 0; int half_ = 0;
     std::complex<float> prev_{0, 0}, mid_{0, 0}, prevMid_{0, 0}; bool primed_ = false;
     double freq_ = 0, cA_ = 0, cB_ = 0, tA_ = 0, tB_ = 0;

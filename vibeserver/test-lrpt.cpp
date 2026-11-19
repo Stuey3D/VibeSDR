@@ -96,6 +96,7 @@ static int decodeWav(const char* path, const std::string& dir, const ReceiverCon
     std::fclose(f);
     report(rx, secs, cpu);
     std::string stem = path; { const size_t sl = stem.rfind('/'); if (sl != std::string::npos) stem = stem.substr(sl + 1); const size_t d = stem.rfind('.'); if (d != std::string::npos) stem = stem.substr(0, d); }
+    if (std::getenv("LRPT_NO_RENDER")) return rx.stats().rsOk > 0 ? 0 : 1;   // ★ the instruction count of the decode alone
     const auto t0 = std::chrono::steady_clock::now();
     const int n = savePictures(rx, dir, stem);
     std::printf("  pictures: %d (rendered in %.3f s)\n", n, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
