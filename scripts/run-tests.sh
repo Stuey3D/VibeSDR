@@ -110,6 +110,10 @@ flags_for() {
     #    the real RxPipeline in NFM. The voice checks are NOT RUN (exit 3) without libcodec2 — the FEC, packets and callsigns
     #    still run and must pass.
     test-m17)              echo "-O2 -I $VDSP -I $KISS -lpthread $( [ "$(uname)" = Linux ] && echo -ldl)" ;;
+    # ★★ V12 DV signalling (vibe_dvsig*.h — DMR, D-STAR, YSF, NXDN, dPMR identities, never voice): the specs' vectors, the
+    #    correlator kernels SIMD = scalar, our transmitter for each system → FM → noise → our receiver, minutes of noise and
+    #    analogue FM speech with nothing logged, the two report copies, the listener thread, CPU. `clip` writes the e2e clip.
+    test-dvsig)            echo "-O2 -I $VDSP -lpthread" ;;
     # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
     #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
     test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
@@ -319,6 +323,7 @@ deps_for() {
     test-freedv) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c $RADE_LIBS" ;;
+    test-dvsig)           echo "$VDSP/resampler.cpp $VDSP/ddc.cpp" ;;
     test-auto-bw|test-m17) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
@@ -865,6 +870,7 @@ if node --no-warnings scripts/test_am_sync.ts; then pass=$((pass+1)); else fail=
 if node --no-warnings scripts/test_freedv.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV as a mode (freedv.ts)
 if node --no-warnings scripts/test_freedv_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 FreeDV in the app (key, VTS, sub-mode row, sideband)
 if npx tsx scripts/test_m17.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 as a mode (m17.ts)
+if npx tsx scripts/test_dvsig.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 DV ID (dvsig.ts)
 if npx tsx scripts/test_m17_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 in the app (key, VTS, no width, ghost reports)
 if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
@@ -2004,6 +2010,22 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-tones" ] && "$OUT/test-tones"
   rm -f "$OUT/tones-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and test-tones built above)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 DV ID — DMR, D-STAR, YSF, NXDN, dPMR signalling, never voice (docs/v12/DV-SIGNALLING.md): the real server on a fake
+#     rtl_tcp replaying test-dvsig's synthetic clip (our own transmitter for each system in turn): on 70 cm the identities copy
+#     (DMR source, TG, alias and GPS; YSF and D-STAR callsigns; NXDN and dPMR IDs), status and pins, NFM after; on PMR446 the
+#     public copy with no identity in anything sent; the owner's opt-in reaching the signed-in owner and never a listener; the
+#     owner's switch (test-server-dvsig). NOT RUN without VIBESERVER_BIN.
+printf '\n\033[1m── DV ID (end to end: the server) ──\033[0m\n'
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-dvsig android/app/src/main/cpp/vibe_dvsig.h android/app/src/main/cpp/vibe_dvsig_fec.h \
+  android/app/src/main/cpp/vibe_dvsig_front.h android/app/src/main/cpp/vibe_dvsig_tx.h
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-dvsig" ] && "$OUT/test-dvsig" clip "$OUT/dvsig-clip.cu8" 288000 20 20 >/dev/null; then
+  VIBE_DVSIG_CLIP="$OUT/dvsig-clip.cu8" node scripts/test-server-dvsig.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/dvsig-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-dvsig built above)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 THE RTTY SKIMMER (2026-11-14): the real server on a fake rtl_tcp replaying test-rtty-skimmer's synthetic clip (four
