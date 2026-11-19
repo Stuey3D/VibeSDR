@@ -95,12 +95,15 @@ inline bool parseAx25Frame(const std::vector<uint8_t>& b, Ax25& f, bool& hasPid)
     for (;;) {
         if (p + 7 > b.size() || as.size() >= 10) return false;
         Addr a;
+        // ★ a satellite's "callsign" may hold a space inside it ("TRON 4" — a SatNOGS observation, 2026-11-19): every
+        //   character is still a capital, digit or space, the first is not a space, trailing spaces are padding
         for (int i = 0; i < 6; ++i) {
             if (!addrByteOk(b[p + size_t(i)])) return false;
             const char c = char(b[p + size_t(i)] >> 1);
-            if (c != ' ') { if (i > 0 && a.call.size() < size_t(i)) return false; a.call += c; }   // left-justified
-            else if (i == 0) return false;
+            if (i == 0 && c == ' ') return false;
+            a.call += c;
         }
+        while (!a.call.empty() && a.call.back() == ' ') a.call.pop_back();
         const uint8_t s = b[p + 6];
         a.ssid = (s >> 1) & 0x0F;
         a.h = (s & 0x80) != 0;

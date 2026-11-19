@@ -653,22 +653,29 @@ static int decodeWav(const char* path, int baud, bool quiet) {
     int nf[3] = { 0, 0, 0 };
     auto show = [&](int fec, int fixed, bool crc, const std::vector<uint8_t>& bytes, double t) {
         ++nf[fec];
+        if (getenv("AX25HS_HEX")) { std::printf("HEX "); for (uint8_t c : bytes) std::printf("%02x", c); std::printf("\n"); }
         vibeaprs::Ax25 ax; bool hp = false;
         std::string head = vibeaprs::parseAx25Frame(bytes, ax, hp) ? vibeaprs::addrText(ax.src) + ">" + vibeaprs::addrText(ax.dest) + " " + vibeaprs::controlName(ax.control) : "(not AX.25)";
         const std::string sat = vibesat::byCallsign(ax.src.call);
         std::printf("  %7.2f s  %-4s%s%s  %s%s\n", t, vibepkt::fecName(fec), fixed ? (" fixed " + std::to_string(fixed)).c_str() : "", crc ? " crc" : "", head.c_str(), sat.empty() ? "" : (" [" + sat + "]").c_str());
         if (quiet) return;
+        if (head == "(not AX.25)") { std::string hx; char t[4]; for (size_t i = 0; i < std::min<size_t>(bytes.size(), 24); ++i) { std::snprintf(t, sizeof t, "%02x", bytes[i]); hx += t; } std::printf("            %s\n", hx.c_str()); return; }
         std::string txt; for (char c : ax.info) txt += (c >= 0x20 && c < 0x7f) ? c : '.';
         std::printf("            %s\n", txt.substr(0, 160).c_str());
     };
     if (baud >= 4800) {
-        vibeg3ruh::Opts o; vibeg3ruh::Demod dm(o);
+        vibeg3ruh::Opts o;
+        if (const char* e = getenv("AX25HS_SLICERS")) o.slicers = std::max(1, std::atoi(e));   // the baseline: 1
+        vibeg3ruh::Demod dm(o);
+        const auto t0 = std::chrono::steady_clock::now();
         size_t pos = 0;
         while (pos < a.size()) {
             const size_t k = std::min<size_t>(4800, a.size() - pos);
             dm.feedAudio(a.data() + pos, int(k), fs, [&](const vibepkt::PktFrame& fr) { show(fr.fec, fr.fixed, fr.crc, fr.bytes, pos / fs); });
             pos += k;
         }
+        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("decoded in %.2f s for %.1f s of audio = %.2f %% of one core\n", sec, a.size() / fs, 100 * sec / (a.size() / fs));
     } else {
         std::vector<float> a48;
         if (std::fabs(fs - 48000) > 0.5) { vibedsp::RationalResampler rs(fs, 48000, vibedsp::RationalResampler::ExactRate{}); a48.resize(size_t(rs.maxOut(int(a.size())))); a48.resize(size_t(rs.process(a.data(), int(a.size()), a48.data()))); }
