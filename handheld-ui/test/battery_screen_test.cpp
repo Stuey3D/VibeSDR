@@ -145,6 +145,22 @@ int main() {
     k.plugged = false; setState(off, k); drawCalPage("9-stress-notfull");
     k.plugged = true; k.phase = "armed"; b.charge.state = "full"; setState(b, k); drawCalPage("10-stress-unplug");
     CHECK(hasItem("cal.cancel"), "stress page armed: CANCEL");
+    // ── h80: the STRESS run's load line (busy loops + why fewer) on the running page ──
+    k.phase = "running"; k.countedMah = 300; b.online = false; b.status = "Discharging"; b.dir = "discharge"; b.batA = 1.6; setState(b, k);
+    { HwShared& h = hwShared(); std::lock_guard<std::mutex> lk(h.m); h.stressLoops = 2; h.stressOf = 4; h.stressWhy = "76 \u00b0C"; }
+    drawCalPage("11-stress-running-hot");
+    CHECK(a.tc_.width(a.f_.body, "2 of 4 busy loops \u2014 76 \u00b0C") <= a.W - 40, "the busy-loop line fits");
+    CHECK(a.tc_.width(a.f_.body, "SDR 3.2 MS/s (this mode keeps its rate) \u00b7 speaker muted \u00b7 no waterfall") <= a.W - 20, "the SDR line fits");
+    CHECK(stressRateText(3200000) == "3.2 MS/s" && stressRateText(2048000) == "2.048 MS/s" && stressRateText(912000) == "912 kS/s", "rate text");
+    // ── h80: INPUT FLOOR (TEST) — drawn only when the service reports it ──
+    k = BattCal{}; setState(off, k);
+    { HwShared& h = hwShared(); std::lock_guard<std::mutex> lk(h.m); h.vlimMv = -1; }
+    drawHardware("12-no-vlim");
+    CHECK(!hasItem("hw.vlim#0"), "an older service (no vlimMv): no INPUT FLOOR row");
+    { HwShared& h = hwShared(); std::lock_guard<std::mutex> lk(h.m); h.vlimMv = 4300; }
+    drawHardware("13-vlim-43");
+    CHECK(hasItem("hw.vlim#0") && hasItem("hw.vlim#1") && hasItem("hw.vlim#2"), "★ INPUT FLOOR: 4.5 / 4.3 / 4.0 V keys");
+    CHECK(a.tc_.width(a.f_.body, "4.5 V (NORMAL)") <= (616 - 12 - 12) / 3 - 10, "the 4.5 V (NORMAL) key's label fits a third");
 
     std::printf("battery_screen_test: %d / %d checks pass\n", checks - fails, checks);
     return fails ? 1 : 0;

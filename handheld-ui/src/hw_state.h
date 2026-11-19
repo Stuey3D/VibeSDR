@@ -29,6 +29,10 @@ struct HwShared {
     int brightness = -1, volume = -1, batt = -1; bool charging = false;
     BattLive bat; BattCal cal; double batAt = 0;   // ★ state.power / state.calib (vibe-hwd, 2026-11-15) — when last read
     bool calBusy = false;
+    // ★ h80: the charge port's INPUT FLOOR test setting (state.vlimMv; -1 = an older service without it) and the STRESS
+    //   run's load (state.calib.stress — how many busy loops run, and why fewer: the temperature)
+    int vlimMv = -1; bool vlimBusy = false;
+    int stressLoops = -1, stressOf = 4; std::string stressWhy;
     // GET /handheld/perf
     bool perfKnown = false;
     double cpu = -1, tempC = -1, engineCpu = -1; int ramUsed = -1, ramTotal = -1, minutesLeft = -1;
@@ -88,6 +92,10 @@ inline void hwParseBattery(HwShared& h, const Json& st) {
         if (k.hasResult) { k.mah = (int)r["mah"].num(); k.design = (int)r["design"].num(0); k.utc = (long long)r["utc"].num(0); k.qEmptyMah = r["qEmpty"].num(0) / 1000.0; }
     }
     h.cal = k;
+    const Json& sx = c["stress"];
+    if (sx.kind == Json::Obj && sx["on"].boolean()) { h.stressLoops = (int)sx["loops"].num(-1); h.stressOf = (int)sx["of"].num(4); h.stressWhy = sx["why"].str(); }
+    else { h.stressLoops = -1; h.stressWhy.clear(); }
+    h.vlimMv = st["vlimMv"].kind == Json::Num ? (int)st["vlimMv"].n : -1;
     h.batAt = hwNow();
 }
 
@@ -127,6 +135,24 @@ inline void hwCalibrate(int port, const std::string& mode) {
                                          : std::string("Waiting for a full charge — leave the charger in");
         h.toasts.push_back(msg);
         h.calBusy = false;
+    });
+}
+
+/** INPUT FLOOR (TEST): 4500 / 4300 / 4000 mV — the service holds the matching CHRG_IN byte and logs the change. */
+inline void hwSetVlim(int port, int mv) {
+    { HwShared& h = hwShared(); std::lock_guard<std::mutex> lk(h.m); if (h.vlimBusy) return; h.vlimBusy = true; }
+    hwAsync([port, mv] {
+        const HttpResult r = httpRequest(port, "POST", "/handheld/device", "{\"set\":\"vlim\",\"value\":" + std::to_string(mv) + "}", 5);
+        const Json j = Json::parse(r.body);
+        const HttpResult d = httpRequest(port, "GET", "/handheld/device", "", 3);
+        HwShared& h = hwShared();
+        std::lock_guard<std::mutex> lk(h.m);
+        if (d.status == 200) hwParseBattery(h, Json::parse(d.body)["state"]);
+        char b[96];
+        if (r.status == 200 && j["ok"].boolean()) std::snprintf(b, sizeof b, "Input floor %.1f V%s", mv / 1000.0, mv == 4500 ? " (normal)" : " — test setting");
+        else std::snprintf(b, sizeof b, "%s", j["error"].str().empty() ? "The hardware service did not answer" : j["error"].str().c_str());
+        h.toasts.push_back(b);
+        h.vlimBusy = false;
     });
 }
 

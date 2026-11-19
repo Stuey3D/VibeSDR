@@ -309,6 +309,8 @@ inline void decDrawFull(App&, Ctx&, const RadioState&);   // the picture / galle
 // the STRESS battery calibration's own screen (battery_cal.h), drawn in place of the radio while it runs
 inline bool calScreenUp();
 inline void calDrawScreen(App&, Ctx&);
+inline void calStressSdrEnd(App&, const char*);   // ★ h80: the STRESS run drives the radio (battery_cal.h StressSdr)
+inline void calStressSdrTick(App&, const RadioState&);
 inline void decModeEntries(const RadioState&, std::vector<ModeDef>&);
 inline bool decModeLit(const std::string&);
 inline bool decRunning();   // a decoder (or Spots) is on (dec_state.h) — App::tuneTyped keeps its mode
