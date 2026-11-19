@@ -27,7 +27,12 @@ double mt63Shape(double x) {
 namespace {
 
 constexpr int kC = 64;           // carriers = chips
-constexpr int kPhases = 8;       // timings tried: an eighth of a symbol apart
+#ifndef VIBE_MT63_PHASES
+#define VIBE_MT63_PHASES 8
+#endif
+constexpr int kPhases = VIBE_MT63_PHASES;   // timings tried a symbol (a hop each): 8 = an eighth of a symbol apart
+constexpr int kHalf = kPhases / 2;           // the odd carriers' half-symbol, in hops
+constexpr int kHopR = 200 / kPhases;         // a hop at the mode's own rate (samples)
 constexpr int kCand = 7;         // places tried: the finder's ± 3 bins
 
 /** interleave delays d_i (symbols after the character that carrier i sends its chip) */
@@ -113,7 +118,7 @@ struct Mt63Rx::Impl {
     std::string* out = nullptr;
 
     Impl(int bw_, bool longI, const char* label) : bw(bw_), lab(label) {
-        D = 8000 / (2 * bw); N = 512 * D; hop = 25 * D; binHz = 8000.0 / N;
+        D = 8000 / (2 * bw); N = 512 * D; hop = kHopR * D; binHz = 8000.0 / N;
         ring.assign((size_t)2 * N, 0.f); win.assign(N, 0.f);
         for (int i = 0; i < N; ++i) win[i] = (float)mt63Shape((i + 0.5 - N / 2.0) / N);
         setup = pffft_new_setup(N, PFFFT_REAL);
@@ -210,10 +215,10 @@ struct Mt63Rx::Impl {
             const q65v::V a = q65v::ld(Pavg.data() + k);
             q65v::st(Pavg.data() + k, q65v::add(a, q65v::mul(A, q65v::sub(p, a))));
         }
-        if ((hops & 7) == 0) finder();
+        if (hops % kPhases == 0) finder();
         if (centre < 0) return;
-        const int hm = (int)(hops & 7);
-        const unsigned ph = (unsigned)((25 * hops) & 511);   // window start / N = 25·hops / 512 (mod 1)
+        const int hm = (int)(hops % kPhases);
+        const unsigned ph = (unsigned)((kHopR * hops) & 511);   // window start / N = kHopR·hops / 512 (mod 1)
         for (int c = 0; c < kCand; ++c) candHop(cand[c], hm, ph);
     }
     void candHop(Cand& c, int hm, unsigned ph) {
@@ -232,9 +237,9 @@ struct Mt63Rx::Impl {
         }
         // the timing metric: the even carriers read at this hop are timing hm; the odd ones are timing hm − 4
         c.met[hm] += 0.125f * (sd[0] / (sz[0] + 1e-20f) - c.met[hm]);
-        const int ho = (hm + 4) & 7;
+        const int ho = (hm + kHalf) % kPhases;
         c.met[ho] += 0.125f * (sd[1] / (sz[1] + 1e-20f) - c.met[ho]);
-        if (hm == ((c.h + 4) & 7) && c.evenHop == hops - 4) {   // the odd carriers of the symbol whose even ones came 4 hops ago
+        if (hm == (c.h + kHalf) % kPhases && c.evenHop == hops - kHalf) {   // the odd carriers of the symbol whose even ones came 4 hops ago
             for (int i = 1; i < kC; i += 2) { c.er[i] = dr[i]; c.ei[i] = di[i]; }
             symbol(c);
         }
@@ -302,22 +307,22 @@ struct Mt63Rx::Impl {
                 const bool fresh = cur < 0;
                 d.lock = true; cur = ci; curD = k;
                 if (fresh) for (char x : d.pre) text += x;
-                lastAt = hops - 8 * (int64_t)(d.dmax + 2);
+                lastAt = hops - kPhases * (int64_t)(d.dmax + 2);
                 d.pre.clear();
             }
         } else if (mine && d.q < 0.085f) { d.lock = false; cur = -1; }
         if (q < 0.09f) return;
         // ★ each character once: a reading taking over from a neighbour has read the last few characters too (their
         //   time: the symbol its first chip was sent, in hops)
-        const int64_t at = hops - 8 * (int64_t)(d.dmax + 1);
+        const int64_t at = hops - kPhases * (int64_t)(d.dmax + 1);
         //   ★ (a neighbour's timing may differ by up to most of a symbol, so the time alone cannot tell: the same code
         //   within 1½ symbols of the last one shown is the same character)
         if (d.lock && cur == ci && curD == k) {
-            if (at > lastAt + 4 && !(code == lastCode && at < lastAt + 12)) { put(d, code, text); lastAt = at; lastCode = code; }
+            if (at > lastAt + kHalf && !(code == lastCode && at < lastAt + kPhases + kHalf)) { put(d, code, text); lastAt = at; lastCode = code; }
         }
         // ★ before the lock, only once this reading has settled (its average above noise's): while the common turn
         //   settles a block of idle reads as its inverse ("@@@@@@@@" before every synthetic MT63 500S over)
-        else if (!d.lock && q > 0.11f && d.q > 0.1f) { put(d, code, d.pre); if (d.pre.size() > 32) d.pre.erase(0, d.pre.size() - 32); }
+        else if (!d.lock && q > 0.11f && d.q > 0.075f) { put(d, code, d.pre); if (d.pre.size() > 32) d.pre.erase(0, d.pre.size() - 32); }
         else if (!d.lock) d.pre.clear();
     }
     static void put(Dec& d, int c, std::string& out) {
