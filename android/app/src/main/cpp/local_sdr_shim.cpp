@@ -146,6 +146,12 @@
 #include "vibe_avi_service.h"   // ★★ V12 AIRCRAFT DATALINK (ACARS, VDL2; HFDL via the decoder host) — docs/v12/AVIATION.md
 #include "vibe_avi_mode.h"
 #include "vibe_rs41_service.h"   // ★★ V12 RS41 RADIOSONDES — the SONDES whole-radio mode (docs/v12/RS41.md)
+#include "vibe_sat_engine.h"     // ★★ V12 SATELLITE ENGINE — orbits, passes and the Doppler lock (docs/v12/SATELLITE-ENGINE.md)
+/** ★★ V12 the one satellite engine of this process (curated birds, element sets, the server's sky, every lock). */
+static vibe::sat::Engine& satEngine() { static vibe::sat::Engine e; return e; }
+/** ★ The engine reads the corrected UTC FT8 reads (brief §5), and whether SNTP has measured it. */
+static vibe::sat::Clock satClock() { return vibe::sat::Clock{vibe::vibeUtcNow(), vibe::clockMeasured().load(std::memory_order_relaxed)}; }
+static const char* const kSatShared = "\x01shared";   // ★ the shared dial's lock key (a session id never starts with \x01)
 #include "vibe_ais_store.h"     // ★★ V12 2026-11-02 the ship store in the shared gallery (the SHIPPING MAP, docs/v12/SHIPPING-MAP.md)
 #include "vibe_aprs.h"           // ★ V12 APRS — the region's frequency for the capability (the decoder itself: vibe_decoder_host.h)
 #include "vibe_station_log.h"   // ★ V12 AIS + APRS in the gallery — the day's messages + a summary card of stations
@@ -1961,6 +1967,9 @@ static std::string vsAvdataWhyNot(const vibeavi::Band* b = nullptr);   // "" = i
 static bool vsSondeTunes(const vibers41::Band& b);   // ★ V12 SONDES: this radio tunes the band
 static bool vsSondeReach(const vibers41::Band& b);   // …and runs fast enough for it
 static bool vsSondeAnyBand();        // false = not offered at all (the HF+, an Icom, a radio short of 400 MHz)
+static bool vsSatReachFn(double lo, double hi);        // ★ V12 this radio receives [lo, hi] (and a locked window holds it)
+static bool vsSatAnyReach();                           // ★ false = no Doppler button at all (no dead controls)
+static std::string vsSatWhyNot();                      // "" = a lock can be tried now
 static std::string vsSondeWhyNot(const vibers41::Band* b = nullptr);   // "" = it can run here now
 static std::string vsDecoderWhyNot(const std::string& id, const vibereach::Reach* reach = nullptr);   // ★ V12 "" = this radio reaches that fixed-frequency decoder (vibe_decoder_reach.h)
 static bool vsIsmAnyBand();          // ★ false = ISM is not offered AT ALL (the HF+): no control, no reason
@@ -8124,7 +8133,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
     // sits HW_OFFSET_HZ below DC.
-    double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() - hwOffsetHz() + demodOffset; }
+    // ★★ V12 sat Doppler on the shared dial: + the tracker's shift (satSharedShift_, declared with the lock below)
+    double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() - hwOffsetHz() + demodOffset + satSharedShift_.load(std::memory_order_relaxed); }
     /** ★★ V12 the shared demodulator's mode for the dial it is on — rxMode, except in FreeDV, whose sideband follows the
      *  dial (fdvLowerSideband): every shared retune goes through rx.setTune(vfoOffsetNow(), rxModeDial(), …), so crossing
      *  10 MHz in FreeDV flips the sideband in the same move. */
@@ -9641,6 +9651,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool        toneWant = false;
         double      toneRate = 0, toneAtHz = 0, toneFedHz = 0;
         std::string toneSent;
+        /** ★★ V12 SATELLITE DOPPLER LOCK (vibe_sat_engine.h). The shift lives in THIS listener's channel NCO
+         *  (clientRetune's residual): the dial (vfoHz) stays on the nominal frequency, the channel sits at vfoHz + satShiftHz,
+         *  moved by the tracker at 25 Hz through satApplyClient — a same-chain setTune, phase-continuous, no rebuild, no AGC
+         *  reset, never the tune pacer, never a user tune. All under `mtx`. `satMaxShiftHz` sizes the channel so the shift
+         *  never needs a bin hop (one rebuild, when the lock starts; kept until the next mode change so the end of a pass
+         *  rebuilds nothing either). */
+        bool   satOn = false;
+        double satShiftHz = 0, satMaxShiftHz = 0, satBw = 0;
+        vibedsp::RxPipeline::Mode satRxMode{};
+        vibe::sat::ResidualMeter satMeter;
+        std::string satSent; double satSentAt = 0;
         double bwHz = 0;
         int    chanBins = 0;                    // power of two dividing fftSize
         double chanRate = 0;
@@ -10301,6 +10322,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!c) return;
         if (c->drm) c->drm->feedIq(x, n, rateHz);
         if (c->m17) c->m17->feedIq(x, n, rateHz);   // ★ V12 M17: a copy into its queue (vibe_m17.h)
+        if (c->satOn && c->owner) c->owner->satFeedClient(c, x, n, rateHz);   // ★ V12 sat Doppler: the FLL's residual
         // ★ V12 tone ID: one bool when the listener is not on NFM (and nothing left to clear)
         if ((c->toneWant || !c->toneSent.empty()) && c->owner) c->owner->toneFeedClient(c, x, n, rateHz);
         // ★ V12 PAGING (Android local hardware only): one relaxed load unless a paging receiver runs in this process
@@ -10617,6 +10639,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //       deep enough to be worth a private view — and from the shared wide row when it does
         //       not. That is the same handover, decided without resizing anything.
         int want = chanBinsFor(bw);
+        // ★★ V12 SAT DOPPLER: a locked listener's channel holds the passband at nominal ± the band's largest Doppler + the
+        //    trim clamp, so the shift is the NCO's alone — a bin hop would be a phase step (a click on FM). Sized once, when
+        //    the lock starts (satMaxShiftHz is cleared by the next mode change).
+        if (c->satMaxShiftHz > 0) want = std::max(want, chanBinsFor(bw + 1.6 * c->satMaxShiftHz));
         /* ★ NOT WIDENED FOR THE ADVANCED RDS INSTRUMENT, deliberately (2026-09-29). MpxMeasure takes
          *  this pipeline's baseband ahead of the listener's filter, and extract() rolls the channel's
          *  outer quarter off — so a narrow passband here (±75 kHz asks for 375 kHz, flat to ±94) does
@@ -10678,7 +10704,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     Hand the leftover to the pipeline, which tunes within the channel.
         const double binHz = sampleRate / (double)fftSize;
         const double off   = c->vfoHz - rtlCenter.load() - hwOffsetHz();
-        const double resid = off - std::lround(off / binHz) * binHz;
+        // ★★ V12 sat Doppler: the channel's centre bin stays on the DIAL (clientCentreBin); the shift is all residual
+        const double resid = off - std::lround(off / binHz) * binHz + c->satShiftHz;
         // ★ V12 DRM: the receiver needs ≥ 24 kHz of channel; a new one for a new tune (it re-acquires anyway).
         // ★★★ ONLY FOR A NEW TUNE. This function runs for far more than a tune — every ZOOM came through here (the zoom
         //     handler called clientRetune), and so does a restated tune, a passband drag, a hardware centre move — and it
@@ -10718,6 +10745,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ VFO B allowance may have changed: DRM, WFM, or a dial into / out of the FM broadcast band (watchMaxFor)
         watchAllowDirty_.store(true, std::memory_order_relaxed);
         c->rx->setTune(resid, rxModeFor(mp), bw);
+        c->satRxMode = rxModeFor(mp); c->satBw = bw;   // ★ V12 sat Doppler: what satApplyClient re-points the NCO with
         // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …") — this listener and this dial, fixed here where both change.
         { char lb[96]; snprintf(lb, sizeof lb, "listener %.8s's own channel, %.4f MHz %s", c->session.c_str(), c->vfoHz / 1e6, c->mode.c_str());
           c->rx->setLogLabel([l = std::string(lb)] { return l; }); }
@@ -10801,6 +10829,200 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     int clientCentreBin(const ClientDsp* c) const {
         const double binHz = sampleRate / (double)fftSize;
         return (int)std::lround((c->vfoHz - rtlCenter.load() - hwOffsetHz()) / binHz);
+    }
+
+    // ══ ★★ V12 SATELLITE DOPPLER LOCK — the server side (docs/v12/SATELLITE-ENGINE.md) ═══════════════════════════════
+    /** Re-point this listener's NCO at vfoHz + satShiftHz. ★ The SAME chain (mode and width as clientRetune last set),
+     *  so RxPipeline::setTune only raises tuneReq_: the recursive rotator moves with its phase continuous — no rebuild,
+     *  no AGC reset, no audio gap (pipeline.cpp setTune). ★ Never clientRetune: that is the whole tune path (RDS clear,
+     *  log label, resweep) and runs 25 times a second here. */
+    void satApplyClient(ClientDsp* c) {
+        std::lock_guard<std::mutex> lk(c->mtx);
+        if (!c->rx || c->satBw <= 0) return;
+        const double binHz = sampleRate / (double)fftSize;
+        const double off = c->vfoHz - rtlCenter.load() - hwOffsetHz();
+        c->rx->setTune(off - std::lround(off / binHz) * binHz + c->satShiftHz, c->satRxMode, c->satBw);
+    }
+    /** The closed loop's input, from the channel IQ (clientIqCb, under c->mtx): the meter's 0.4 s windows → the engine. */
+    void satFeedClient(ClientDsp* c, const cf32* x, int n, double rateHz) {
+        double hz = 0;
+        if (c->satMeter.feed(reinterpret_cast<const float*>(x), n, rateHz, hz)) satEngine().noteResidual(c->session, hz, vibe::vibeUtcNow());
+    }
+    /** End this listener's lock. `freezeAndTell`: LOS / the button — the dial moves to where the channel IS (brief §9:
+     *  never snap back, a jump of kilohertz would lose the station) and the listener is sent the config that says so.
+     *  false: the listener is tuning away themselves — their own tune follows, and a config now would fight it. */
+    void satEndListener(const std::shared_ptr<ClientDsp>& c, const std::string& why, bool freezeAndTell) {
+        satEngine().stop(c->session);
+        {
+            std::lock_guard<std::mutex> lk(c->mtx);
+            if (freezeAndTell) c->vfoHz = std::round(c->vfoHz + c->satShiftHz);
+            c->satShiftHz = 0; c->satOn = false; c->satSent.clear();
+        }
+        LOGI("[sat] listener %.8s: Doppler lock ended (%s)", c->session.c_str(), why.c_str());
+        if (freezeAndTell) clientRetune(c.get());
+        std::shared_ptr<net::Socket> sk; { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
+        if (sk && sk->isOpen()) {
+            if (freezeAndTell) sendConfig(sk);   // ★ only when the SERVER moved the dial — never under the listener's own tune
+            sendText(sk, "{\"type\":\"sat\",\"state\":\"OFF\",\"why\":\"" + vibe::sat::jsonEsc(why) + "\",\"time\":\"ok\"}");
+        }
+    }
+    /** ★ The shared dial's shift, added in vfoOffsetNow() — so EVERY shared retune (rx.setTune(vfoOffsetNow(), …)) carries
+     *  it, and the tracker's own re-point is that same call. */
+    std::atomic<double> satSharedShift_{0.0};
+    std::string satSharedSent_; double satSharedSentAt_ = 0;   // tracker thread only
+    void satApplyShared() {
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
+        rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
+    }
+    void satEndShared(const std::string& why, bool freezeAndTell) {
+        satEngine().stop(kSatShared);
+        const double actual = audioFreq.load() + satSharedShift_.load();
+        satSharedShift_.store(0.0);
+        satSharedSent_.clear();
+        LOGI("[sat] shared dial: Doppler lock ended (%s)", why.c_str());
+        if (freezeAndTell) {
+            retune(std::round(actual));     // ★ the room's dial goes to where the channel is; the NCO lands on the same frequency
+            broadcastConfig();
+        }
+        const std::string m = "{\"type\":\"sat\",\"state\":\"OFF\",\"shared\":true,\"why\":\"" + vibe::sat::jsonEsc(why) + "\",\"time\":\"ok\"}";
+        for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m);
+    }
+    /** ★ The 25 Hz tracker. One thread for the process, started on the first lock, ~0 when there is none (a 200 ms
+     *  nap). A tick is one SGP4 evaluation per lock (0.3 µs on the M5, test-sat-orbit §4) plus an NCO request. */
+    std::atomic<bool> satTrackerUp_{false};
+    void satEnsureTracker() {
+        bool f = false;
+        if (!satTrackerUp_.compare_exchange_strong(f, true)) return;
+        std::thread([this] {
+            vibeThreadName("vibe-sat-track");
+            for (;;) {
+                const auto keys = satEngine().keys();
+                if (keys.empty()) { std::this_thread::sleep_for(std::chrono::milliseconds(200)); continue; }
+                const vibe::sat::Clock clk = satClock();
+                const double mono = nowSecs();
+                for (const auto& key : keys) {
+                    const vibe::sat::Track t = satEngine().tick(key, clk);
+                    const bool moving = t.state == vibe::sat::LockState::Track || t.state == vibe::sat::LockState::Coast;
+                    const std::string msgOut = vibe::sat::Engine::trackJsonMsg(t);
+                    if (key == kSatShared) {
+                        if (t.state == vibe::sat::LockState::Ended) { satEndShared(t.why, true); continue; }
+                        satSharedShift_.store(moving ? t.shiftHz : 0.0);
+                        satApplyShared();
+                        // ★ the readout twice a second, at once on a state change (TRACK ↔ COAST, ARMED → TRACK)
+                        const std::string st = vibe::sat::lockName(t.state);
+                        if (st != satSharedSent_ || mono - satSharedSentAt_ >= 0.5) {
+                            satSharedSent_ = st; satSharedSentAt_ = mono;
+                            std::string m = msgOut; m.insert(1, "\"shared\":true,");
+                            for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m);
+                        }
+                        continue;
+                    }
+                    std::shared_ptr<ClientDsp> c;
+                    {
+                        std::lock_guard<std::mutex> lk(clientMtx);
+                        for (auto& kv : clientDsp) if (kv.second && kv.second->session == key) { c = kv.second; break; }
+                    }
+                    if (!c) { satEngine().stop(key); continue; }   // ★ the listener's channel has gone: so has their lock
+                    if (t.state == vibe::sat::LockState::Ended) { satEndListener(c, t.why, true); continue; }
+                    { std::lock_guard<std::mutex> lk(c->mtx); c->satShiftHz = moving ? t.shiftHz : 0.0; }
+                    satApplyClient(c.get());
+                    const std::string st = vibe::sat::lockName(t.state);
+                    bool send = false;
+                    { std::lock_guard<std::mutex> lk(c->mtx);
+                      if (st != c->satSent || mono - c->satSentAt >= 0.5) { c->satSent = st; c->satSentAt = mono; send = true; } }
+                    if (send) {
+                        std::shared_ptr<net::Socket> sk; { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
+                        if (sk && sk->isOpen()) sendText(sk, msgOut);
+                    }
+                }
+                // ★ brief §9 TRAP: nobody here — an arm more than 30 min from its AOS goes (active locks run to LOS)
+                if (specListenerCount() == 0)
+                    for (const auto& k : satEngine().dropOrphanArms(clk)) if (k == kSatShared) satSharedShift_.store(0.0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+            }
+        }).detach();
+    }
+    /** {"type":"sat","op":"lock"|"unlock", norad?} — the Doppler button / the picker's TRACK. */
+    void satControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        const std::string op = jsonStr(msg, "op");
+        auto off = [&](const std::string& why) {
+            sendText(sock, "{\"type\":\"sat\",\"state\":\"OFF\",\"why\":\"" + vibe::sat::jsonEsc(why) + "\",\"time\":\""
+                           + satEngine().timeState(satClock()) + "\"}");
+        };
+        double noradV = 0; jsonNum(msg, "norad", noradV);
+        const vibe::sat::Clock clk = satClock();
+        if (perClientDsp()) {
+            auto me = dspFor(sock);
+            if (!me) return;
+            if (op == "unlock") {
+                if (satEngine().active(me->session)) satEndListener(me, "Doppler correction off", true);
+                else off("Doppler correction off");
+                return;
+            }
+            const std::string why = vsSatWhyNot();
+            if (!why.empty()) { off(why); return; }
+            double dial; std::string mode;
+            { std::lock_guard<std::mutex> lk(me->mtx); dial = me->vfoHz; mode = me->mode; }
+            if (satEngine().active(me->session)) satEngine().stop(me->session);
+            vibe::sat::Track t = satEngine().start(me->session, me->session, dial, mode, clk, (long long)noradV);
+            if (t.state == vibe::sat::LockState::Off) { sendText(sock, vibe::sat::Engine::trackJsonMsg(t)); return; }
+            // ★ the largest Doppler of a LEO at this frequency (~2.7e-5·f) + the trim clamp: the channel holds it all
+            const double maxShift = t.nominalHz * 2.7e-5 + vibe::sat::Engine::kTrimClampHz;
+            if (!vsSatReachFn(t.nominalHz - maxShift, t.nominalHz + maxShift)) {
+                satEngine().stop(me->session);
+                off("The Doppler would take this channel outside the range this receiver can hear here");
+                return;
+            }
+            {
+                std::lock_guard<std::mutex> lk(me->mtx);
+                me->satOn = true; me->satMaxShiftHz = maxShift; me->vfoHz = t.nominalHz;
+                me->satShiftHz = (t.state == vibe::sat::LockState::Track || t.state == vibe::sat::LockState::Coast) ? t.shiftHz : 0.0;
+                me->satMeter.reset(); me->satSent.clear();
+            }
+            LOGI("[sat] listener %.8s: Doppler lock on %s %s at %.3f kHz (%s, shift %+.1f Hz)", me->session.c_str(), t.satName.c_str(),
+                 t.txLabel.c_str(), t.nominalHz / 1e3, vibe::sat::lockName(t.state), t.shiftHz);
+            clientRetune(me.get());   // ★ the one rebuild: the channel widened for the pass, the NCO at nominal + shift
+            sendConfig(sock);         // ★ the dial shows the nominal (brief §8: "snap main digits to nominal")
+            sendText(sock, vibe::sat::Engine::trackJsonMsg(t));
+            satEnsureTracker();
+            return;
+        }
+        // ── the shared dial: the lock moves the channel for everyone (brief §11); anyone with tune rights ends it ──
+        if (op == "unlock") {
+            if (satEngine().active(kSatShared)) satEndShared("Doppler correction off", true); else off("Doppler correction off");
+            return;
+        }
+        const std::string why = vsSatWhyNot();
+        if (!why.empty()) { off(why); return; }
+        std::string owner;
+        { std::lock_guard<std::mutex> lk(clientMtx); auto it = sockSession.find(sock.get()); if (it != sockSession.end()) owner = it->second; }
+        std::string mode; { std::lock_guard<std::recursive_mutex> lk(modeMtx); mode = this->mode; }
+        if (satEngine().active(kSatShared)) { satEngine().stop(kSatShared); satSharedShift_.store(0.0); }
+        vibe::sat::Track t = satEngine().start(kSatShared, owner, audioFreq.load(), mode, clk, (long long)noradV);
+        if (t.state == vibe::sat::LockState::Off) { sendText(sock, vibe::sat::Engine::trackJsonMsg(t)); return; }
+        const double maxShift = t.nominalHz * 2.7e-5 + vibe::sat::Engine::kTrimClampHz;
+        if (!vsSatReachFn(t.nominalHz - maxShift, t.nominalHz + maxShift)) {
+            satEngine().stop(kSatShared);
+            off("The Doppler would take the dial outside the range this receiver can hear here");
+            return;
+        }
+        LOGI("[sat] shared dial: Doppler lock on %s %s at %.3f kHz by [%s] (%s)", t.satName.c_str(), t.txLabel.c_str(),
+             t.nominalHz / 1e3, owner.c_str(), vibe::sat::lockName(t.state));
+        satSharedShift_.store((t.state == vibe::sat::LockState::Track || t.state == vibe::sat::LockState::Coast) ? t.shiftHz : 0.0);
+        retune(t.nominalHz);   // ★ the room's dial on the nominal; vfoOffsetNow() adds the shift
+        broadcastConfig();
+        if (!vsSharedDial()) sendConfig(sock);
+        satEnsureTracker();
+    }
+    /** ★ A shared-dial tune or mode change while locked (brief §9): a nudge under 15 kHz moves the nominal and keeps the
+     *  lock; a deliberate tune, a mode change, a bookmark ends it — the dial goes where the person asked, no freeze. */
+    void satSharedTuneCheck(const std::string& type, const std::string& msg) {
+        const std::string m = jsonStr(msg, "mode");
+        std::string cur; { std::lock_guard<std::recursive_mutex> lk(modeMtx); cur = this->mode; }
+        if (!m.empty() && m != cur) { satEndShared("Mode changed \xe2\x80\x94 Doppler correction ended", false); return; }
+        double v = 0;
+        if (type == "tune" && jsonNum(msg, "frequency", v) && v > 0 && !satEngine().nudge(kSatShared, v))
+            satEndShared("Tuned away \xe2\x80\x94 Doppler correction ended", false);
     }
 
     /** Frame and send this listener's own zoomed row. Mirrors onZoomSpectrum's un-shift exactly:
@@ -12035,6 +12257,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "tune", "mode", "bandwidth", "dab", "dab_service", "adsb", "ism", "ndb", "ais", "mode_resume", "iqtune",
             "avdata",   // ★ V12 Aircraft datalink: a whole-radio mode, gated as AIS is
             "sondes",   // ★ V12 SONDES (RS41): likewise
+            "sat",      // ★ V12 the satellite Doppler lock moves the shared dial (sat_list, the picker, is free)
             "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
             "tunerbw", "sampleRate", "directSampling",
             "nr", "notch", "deemph", "stereo", "nfmvoice", "wsp", "nb", "nbx", "ceq", "ims", "autobw",
@@ -12112,7 +12335,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!g_scanLock.load() || !sock) return false;
         static const std::set<std::string> kLocked = {
             "tune", "mode", "bandwidth", "zoom", "dab", "dab_service", "dab_scan", "adsb", "ism", "ndb", "ais", "mode_resume",
-            "avdata", "sondes",
+            "avdata", "sondes", "sat",
             "iqtune", "watch", "set_rate", "sampleRate", "directSampling", "gain", "agc", "rsp_control", "rsp_agc_restart",
             "ahf_control", "airspy_control", "hackrf_control", "icom_control", "antenna", "tunerbw",
         };
@@ -21450,7 +21673,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 double v = 0, lo = 0, hi = 0, bw = 0;
                 bool changed = false;
-                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true;
+                /* ★★ V12 SAT DOPPLER (brief §9): while this listener is locked, a nudge under 15 kHz moves the nominal and
+                 *  keeps the lock (the reconnect handshake's re-sent frequency is the nominal itself — a nudge of 0); a
+                 *  mode change or a deliberate tune ends it, and the dial goes where they asked (no freeze, no config). */
+                if (me->satOn) {
+                    double tv = 0;
+                    if (!m.empty() && m != me->mode) satEndListener(me, "Mode changed \xe2\x80\x94 Doppler correction ended", false);
+                    else if (jsonNum(msg, "frequency", tv) && tv > 0 && !satEngine().nudge(me->session, tv))
+                        satEndListener(me, "Tuned away \xe2\x80\x94 Doppler correction ended", false);
+                }
+                if (!m.empty() && m != me->mode) { me->satMaxShiftHz = 0;   // ★ the channel is rebuilt anyway: back to its own size
+                                                   me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true;
                                                    specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
                 if (jsonNum(msg, "frequency", v) && v > 0) {
                     // ★ Clamp to the captured window: a listener cannot tune outside the range
@@ -22289,6 +22522,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "ais") { aisControl(sock, msg); return; }
         if (type == "avdata") { avControl(sock, msg); return; }   // ★ V12 Aircraft datalink (ACARS / VDL2)
         if (type == "sondes") { sdControl(sock, msg); return; }   // ★ V12 SONDES (RS41 radiosondes)
+        // ★★ V12 SATELLITES: `sat` is the lock (gated like a tune on a shared dial — askRefuses / the scan lock); `sat_list`
+        //    is the picker's question (free: it changes nothing). docs/v12/SATELLITE-ENGINE.md "Wire".
+        if (type == "sat") { if (sock) satControl(sock, msg); return; }
+        if (type == "sat_list") {
+            if (!sock) return;
+            if (jsonStr(msg, "op") == "track") {
+                double nv = 0, a = 0, b = 0; jsonNum(msg, "norad", nv); jsonNum(msg, "aos", a); jsonNum(msg, "los", b);
+                if (b - a > 6 * 3600) b = a + 6 * 3600;   // ★ bounded: one pass, ≤ 120 points
+                sendText(sock, "{\"type\":\"sat_track\",\"norad\":" + std::to_string((long long)nv) + ",\"aos\":" + vibe::sat::fmtNum(a, 0)
+                               + ",\"los\":" + vibe::sat::fmtNum(b, 0) + ",\"pts\":" + satEngine().trackJson((long long)nv, a, b) + "}");
+                return;
+            }
+            std::string j = satEngine().listJson(satClock(), [](double lo, double hi) { return vsSatReachFn(lo, hi); });
+            const std::string why = vsSatWhyNot();
+            if (!why.empty()) j.insert(j.size() - 1, ",\"why\":\"" + vibe::sat::jsonEsc(why) + "\"");
+            sendText(sock, j);
+            return;
+        }
         // ★★ A returning listener asking for the whole-radio mode it left in back — see modeResume
         if (type == "mode_resume") { modeResume(sock, msg); return; }
         // ★★ V12: the listener is leaving ON PURPOSE (back to the server list, the tab closed) — their sockets closing is
@@ -23423,6 +23674,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  type.c_str());
             return;
         }
+        // ★★ V12 sat Doppler on the shared dial: a nudge keeps the lock, a deliberate tune / mode change ends it (brief §9)
+        if ((type == "tune" || type == "mode") && satEngine().active(kSatShared)) satSharedTuneCheck(type, msg);
         if (type == "tune") {
             // ★★★ REMEMBER THAT THIS SESSION HAS PLACED ITSELF, so the landing gate does not
             //     later overrule it — see preTunedSession. Keyed off sockSession, NOT pendingAudio:
@@ -41301,6 +41554,28 @@ static bool vsSondeAnyBand() {
     for (const auto& b : vibers41::bands()) if (vsSondeReach(b)) return true;
     return false;
 }
+/** ★★ V12 SATELLITES: this radio receives [lo, hi] — inside one of its tuning ranges, not an Icom (no channel NCO to
+ *  move: a control there would be dead), and on a LOCKED window (per-listener channels) inside that window too: the
+ *  Doppler never moves a locked centre (brief, and the owner's lock). */
+static bool vsSatReachFn(double lo, double hi) {
+    if (g_icomOn.load()) return false;
+    bool tunes = false;
+    for (const auto& x : vsTunableRanges()) if (double(x.lo) <= lo && double(x.hi) >= hi) { tunes = true; break; }
+    if (!tunes) return false;
+    const double lc = g_vsLockedCentre.load();
+    if (lc > 0.0 && g_vsMaxUsers.load() > 1) {
+        const double half = LocalSdrShim::instance().captureSpanHz() * 0.45;   // ★ clear of the anti-alias roll-off
+        if (lo < lc - half || hi > lc + half) return false;
+    }
+    return true;
+}
+static bool vsSatAnyReach() { return satEngine().reaches([](double lo, double hi) { return vsSatReachFn(lo, hi); }); }
+static std::string vsSatWhyNot() {
+    if (!satEngine().haveObserver()) return "This server has no location set \xe2\x80\x94 the owner sets its locator on the setup page";
+    if (satEngine().elementCount() == 0) return "NO SAT DATA \xe2\x80\x94 the satellite orbit data has not been downloaded yet";
+    if (satEngine().timeState(satClock()) == "none") return "NO TIME \xe2\x80\x94 this server's clock has not been checked yet";
+    return "";
+}
 /** "" = the mode can run here now — on `b`, or (null) on at least one band. */
 static std::string vsSondeWhyNot(const vibers41::Band* b) {
     if (vsModeBlocked("sondes")) return "the server owner has switched radiosondes off on this receiver";
@@ -41816,6 +42091,15 @@ static std::string vsTunableJson() {
         }
         j += "]";
         if (vsModeBlocked("avdata+text")) j += ",\"avdataText\":true";
+    }
+    /* ★★ V12 SATELLITE DOPPLER (brief §11): `doppler` is a VERSION (1 = FM repeaters with the loop + linear transponders
+     *  model-only), advertised only where this radio receives at least one listed downlink (no dead controls: an Icom, a
+     *  radio below 28 MHz, a locked window holding no downlink — no button at all). Supported but not ready (no orbit
+     *  data yet, no location, NO TIME): still advertised, with `dopplerWhy` — the clients grey the button with it. */
+    if (vsSatAnyReach()) {
+        j += ",\"doppler\":1";
+        const std::string why = vsSatWhyNot();
+        if (!why.empty()) j += ",\"dopplerWhy\":\"" + dabEscape(why) + "\"";
     }
     /* ★★ V12 SONDES (RS41, a whole-radio mode): offered, or DISABLED with its reason — and NOT AT ALL where the radio cannot
      *  reach 400–406 MHz (HF-only radios, the HF+, an Icom: AGENTS.md). `sondesBands`: the bands THIS radio runs now. */
@@ -42673,6 +42957,13 @@ void LocalSdrShim::setStationsJson(const std::string& json) {
     g_stationsJson = json;
     LOGI("stations list set (%zu bytes)", json.size());
 }
+/** ★★ V12 SATELLITES: one CelesTrak GP group's OMM JSON (vibeserver/satcat.cpp, or an app that fetched it) → the engine. */
+int LocalSdrShim::satLoadOmm(const std::string& group, const std::string& json) {
+    const int n = satEngine().loadOmm(json);
+    LOGI("[sat] orbit data: %s group — %d listed satellites updated (%d with elements)", group.c_str(), n, satEngine().elementCount());
+    return n;
+}
+
 void LocalSdrShim::setLocationJson(const std::string& json) {
     {
         std::lock_guard<std::mutex> lk(g_locMtx);
@@ -42688,6 +42979,9 @@ void LocalSdrShim::setLocationJson(const std::string& json) {
     double lat = 0, lon = 0;
     const bool haveLL = jsonNum(json, "lat", lat) && jsonNum(json, "lon", lon) && (lat != 0.0 || lon != 0.0);
     if (haveLL) setReceiverPosition(lat, lon);
+    // ★★ V12 SATELLITES: the server's sky is computed for this same published position (brief §7: the grid-square centre
+    //    is ample — a 6-character square shifts AOS/LOS by about a second)
+    if (haveLL) satEngine().setObserver(lat, lon);
 #if defined(__ANDROID__)
     /* ★★ V12 (2026-11-03) AND THE ITU REGION, on the app's own server — the Linux and Mac servers set it from their
      *  config in main.cpp; nothing on Android ever did, so it stayed Region 1 and unknown. Known here = the region
