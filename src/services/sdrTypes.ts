@@ -478,6 +478,8 @@ export interface ServerOccupancy {
   selcal?: boolean;
   /** ★ V12 DTMF + 5-tone selective calling ('tones') — on any frequency; the server decides what is shown. */
   tones?: boolean;
+  /** ★ V12 2G HF ALE ('ale') — soundings, calls and links on HF; the server decides what is shown (aleDecoder.ts). */
+  ale?: boolean;
   /** ★ V12 HFDL: this server decodes HFDL on a listener's USB dial ('hfdl') and serves /addon/hfdl/* for the HFDL MAP. */
   hfdl?: boolean;
   /** ★ V12 AIRCRAFT DATALINK (ACARS / VDL2, a whole-radio mode): offered / greyed with its reason; absent = no key. */
@@ -520,7 +522,7 @@ export interface ServerOccupancy {
 }
 
 /** ★★★ V12 the decoders vibe_decoder_reach.h can grey for reach — the server sends `"<id>": false, "<id>Why": "…"`. */
-export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl'] as const;
+export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'ale'] as const;
 /** id → reason, for each fixed-frequency decoder this radio cannot reach. A reason is honoured only beside `<id>: false`
  *  (an owner's block sends false with no reason — that key stays hidden, as ever). */
 export function parseDecoderReach(j: any): Record<string, string> {
@@ -583,6 +585,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       ncdxf:     j.ncdxf === true,   // ★ V12 the NCDXF / IARU beacon tracker
       balloon:   j.balloon === true, // ★ V12 balloons
       tones:     j.tones === true,   // ★ V12 DTMF + 5-tone
+      ale:       j.ale === true,     // ★ V12 2G HF ALE
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
       same:      j.same === true,
