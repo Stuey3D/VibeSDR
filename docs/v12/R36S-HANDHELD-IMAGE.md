@@ -212,6 +212,7 @@ connection also carries **unsolicited event lines** (they have an `"event"` key;
 | `{"action":"poweroff"\|"reboot"\|"screen-off"\|"screen-on"}` | same |
 | `{"action":"calibrate","mode":"normal"\|"stress"}` | same — `"plug in the charger first — it starts from a full charge"` off the cord. On the cord it is accepted at any charge: `charging` (waiting for a GENUINE full — the charger's CHARGE_FINISH, or the battery's current under the termination current within 60 mV of CV, smoothed and held 5 min; never the gauge's %), then `armed` (unplug to start); the count begins at the unplug (vibe-hwd BatteryCal + FullJudge) |
 | `{"action":"calibrate-cancel"}` | same |
+| `{"set":"vlim","value":4500\|4300\|4000}` | same — h80 INPUT FLOOR (TEST): the charge port's input voltage floor; the service holds CHRG_IN 0xE5 at the fixed byte for it (0xDD / 0xBD / 0x8D, 2 A kept), saved in hwd.json, every change logged. `state` carries `vlimMv` + `vlimChoices`, and `calib.stress` = `{on, loops, of, tempC, why}` (the STRESS run's busy loops running, and the temperature that paused the rest). See R36S-CHARGER-TRACE.md |
 | `{"subscribe":true}` | `{"ok":true}`, then events on this connection |
 
 **SSH: removed 2026-11-05 — no SSH on the handheld** (Stuart). The `get ssh`, `set ssh` and `set ssh-password` requests

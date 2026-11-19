@@ -1291,7 +1291,7 @@ inline int App::run(int argc, char** argv) {
                 if (!screenOff_) lastInput_ = nowSec();
                 std::fprintf(stderr, "vibe-hhui: screen %s (the hardware service's event)\n", screenOff_ ? "off" : "on");
             }
-            else if (de.kind == "shutdown") toast("Switching off");
+            else if (de.kind == "shutdown") { calStressSdrEnd(*this, "switching off"); toast("Switching off"); }
             else if (de.kind == "battery_cal") {   // ★ the battery calibration's milestones (vibe-hwd BatteryCal)
                 const std::string ph = de.body["phase"].str(), note = de.body["note"].str();
                 if (de.body["start"].boolean()) {}   // (the START reply's own toast says it — hwCalibrate)
@@ -1300,7 +1300,8 @@ inline int App::run(int argc, char** argv) {
                 else if (ph == "charging") toast("Charger back — waiting for a full charge");
                 else if (ph == "running") toast(de.body["mode"].str() == "stress" ? "Calibrating fast — hold POWER to stop" : "Calibrating — use the radio until it switches itself off");
                 else if (ph == "cancelled") toast(note.empty() ? std::string("Calibration cancelled") : (char)std::toupper((unsigned char)note[0]) + note.substr(1));
-                else if (ph == "done") toast(de.body["mah"].kind == Json::Num ? "Battery measured: " + std::to_string((int)de.body["mah"].n) + " mAh — switching off" : note);
+                if (ph == "cancelled" || ph == "done") calStressSdrEnd(*this, ph == "done" ? "calibrated" : "cancelled");
+                if (ph == "done") toast(de.body["mah"].kind == Json::Num ? "Battery measured: " + std::to_string((int)de.body["mah"].n) + " mAh — switching off" : note);
                 hwRefreshDevice(eng.port());
             }
         }
@@ -1309,6 +1310,7 @@ inline int App::run(int argc, char** argv) {
         dabTick(*this, s);
         decTick(*this, s);
         mapTick(*this, s);
+        calStressSdrTick(*this, s);   // ★ a STRESS run drives the radio (battery_cal.h) — before memTick, which saves its own rate
         memTick(*this, s);
         clockTick(*this, s);
         clockAutoTick(*this);
