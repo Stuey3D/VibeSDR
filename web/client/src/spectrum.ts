@@ -26,6 +26,7 @@ import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
 import { parseAvReport, type AvReport } from '../../../src/services/aviation';   // ★ V12 the aircraft datalink
 import { parseSondeReport, type SondeReport } from '../../../src/services/sondes';   // ★ V12 radiosondes
+import { parseSatList, parseSatReadout, parseSatTrack, type SatList, type SatReadout, type SatTrack } from '../../../src/services/satellites';   // ★ V12 satellites
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
 import { type WatchState, watchSanitise } from './vfoAB';
@@ -45,11 +46,13 @@ import { parseFreeDv, freedvPassband, freedvSidebandAt, freedvSubMessage,
          type FreeDvState, type FreeDvChoice, type FreeDvSideband } from '../../../src/services/freedv';
 // ★★ V12 M17 digital voice — the shared rules (src/services/m17.ts): the report, its passband, the report request
 import { parseM17, M17_PASSBAND, m17StatusMessage, type M17State } from '../../../src/services/m17';
+// ★★ V12 digital-voice ID (DMR, D-STAR, YSF, NXDN, dPMR — never the voice): src/services/dvsig.ts
+import { parseDvsig, DVSIG_PASSBAND, dvsigStatusMessage, dvsigPinMessage, type DvState, type DvPin } from '../../../src/services/dvsig';
 import type { WholeKind } from '../../../src/services/wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 // ★ V12 synchronous AM: sau / sal / ecssu / ecssl / amst (src/services/amSync.ts) — offered only where the server lists them
 // ★ V12 FreeDV: 'freedv' — offered only where the server lists it (freedvOffered)
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
-                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst' | 'freedv' | 'm17';
+                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst' | 'freedv' | 'm17' | 'dvsig';
 
 /** The server applies these on every mode change and never reports bandwidth
  *  back, so the client mirrors the table to stay in sync. */
@@ -67,6 +70,7 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   freedv: [50, 2700],
   // ★ V12 M17: its 9 kHz channel — drawn only; the server keeps the receiver's 12.5 kHz whatever width is sent
   m17: M17_PASSBAND,
+  dvsig: DVSIG_PASSBAND,   // ★ V12 DV ID: the 12.5 kHz channel the server keeps
 };
 
 /** ★★★ THE NARROWEST WFM PASSBAND (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz, which the
@@ -88,6 +92,7 @@ export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
   drm: 10_000,   // ★ V12 DRM: fixed — the receiver cuts its own channel; the width row is hidden in DRM
   freedv: 3_000,   // ★ V12 FreeDV: fixed by the server (the modem's channel); the width row is hidden in FreeDV
   m17: 9_000,      // ★ V12 M17: fixed by the server (the receiver's channel); the width row is hidden in M17
+  dvsig: 12_500,   // ★ V12 DV ID likewise
 };
 
 /** A passband the server will honour as given: WFM narrower than WFM_MIN_BW_HZ is widened about its
@@ -717,6 +722,8 @@ export interface SpectrumCallbacks {
   onFreeDv?: (s: FreeDvState) => void;
   /** ★★ V12 M17: the listener's M17 receiver ({"type":"m17"}, already parsed — parseM17), on every change. */
   onM17?: (s: M17State) => void;
+  /** ★★ V12 DV ID: the listener's digital-voice ID receiver ({"type":"dvsig"}, parsed — parseDvsig), on every change. */
+  onDvsig?: (s: DvState) => void;
   /** ★ V12 CTCSS / DCS tone ID on NFM: the label on change ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), '' = none locked. */
   onToneId?: (label: string) => void;
   /** ★ V12 the AM family's carrier lock, applied auto-bandwidth edges and AM-stereo pilot (shim sendAmSync). */
@@ -760,6 +767,11 @@ export interface SpectrumCallbacks {
    *  on; null = the server left it (`sondes_off`). Parsed by the app's own src/services/sondes.ts. */
   onSondes?: (r: SondeReport | null) => void;
   onSondesError?: (why: string) => void;
+  /** ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md): the picker's list, a Doppler lock's readout (twice a second while
+   *  locked; OFF with `why` when it ends or is refused), and one pass's sky track. Parsed by src/services/satellites.ts. */
+  onSatList?: (l: SatList) => void;
+  onSat?: (r: SatReadout) => void;
+  onSatTrack?: (t: SatTrack) => void;
   /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
   onAisTrail?: (mmsi: number, pts: [number, number][]) => void;
   /** ★★ The answer to modeResume (src/services/wholeModeResume.ts): may this listener have the whole-radio mode the
@@ -1149,6 +1161,7 @@ export class SpectrumClient {
       // ★ V12 FreeDV: a new socket has no report yet — ask, so the VTS line is not left on the old one
       if (this.mode === 'freedv') this._send(freedvSubMessage(null));
       if (this.mode === 'm17') this._send(m17StatusMessage());   // ★ V12 M17 likewise
+      if (this.mode === 'dvsig') this._send(dvsigStatusMessage());   // ★ V12 DV ID likewise
       this.lastRxAt = performance.now();
       this.pingTimer = window.setInterval(() => {
         this.lastPingAt = performance.now();
@@ -1296,6 +1309,7 @@ export class SpectrumClient {
       }
       case 'freedv': { const f = parseFreeDv(msg); if (f) this.cb.onFreeDv?.(f); return; }
       case 'm17': { const f = parseM17(msg); if (f) this.cb.onM17?.(f); return; }
+      case 'dvsig': { const f = parseDvsig(msg); if (f) this.cb.onDvsig?.(f); return; }
       case 'drm_iq': {
         const q = drmIqSanitise(msg);
         if (q) { this.drmIqAt = Date.now(); this.cb.onDrmIq?.(q); }
@@ -1473,6 +1487,10 @@ export class SpectrumClient {
       case 'sondes_error':
         this.cb.onSondesError?.(String(msg.why ?? 'Radiosondes are not available on this receiver').slice(0, 200));
         return;
+      /* ★★ V12 SATELLITES */
+      case 'sat_list': { const l = parseSatList(msg); if (l) this.cb.onSatList?.(l); return; }
+      case 'sat': { const r = parseSatReadout(msg); if (r) this.cb.onSat?.(r); return; }
+      case 'sat_track': { const t = parseSatTrack(msg); if (t) this.cb.onSatTrack?.(t); return; }
       case 'ais_trail': {
         const m = Number(msg.mmsi);
         const pts: [number, number][] = Array.isArray(msg.pts) ? msg.pts.slice(-400).filter((p: any) => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1])).map((p: any) => [Number(p[0]), Number(p[1])] as [number, number]) : [];
@@ -2271,9 +2289,13 @@ export class SpectrumClient {
     this._send({ type: 'bandwidth', bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh });
     if (mode === 'freedv') this._send(freedvSubMessage(null));   // ★ V12 FreeDV: the report at once, for the VTS line
     if (mode === 'm17') this._send(m17StatusMessage());          // ★ V12 M17 likewise
+    if (mode === 'dvsig') this._send(dvsigStatusMessage());      // ★ V12 DV ID likewise
   }
   /** ★ V12 M17: ask for the current report (a room adopted already in M17). Read-only — never gated. */
   m17Status() { this._send(m17StatusMessage()); }
+  /** ★ V12 DV ID: ask for the report (read-only), or pin AUTO / one system (the manual fallback). */
+  dvsigStatus() { this._send(dvsigStatusMessage()); }
+  dvsigPin(pin: DvPin) { this._send(dvsigPinMessage(pin)); }
 
   /** ★★ V12 FreeDV: AUTO or one sub-mode by hand ({"type":"freedv_sub","sub":…}); null only asks for the current report.
    *  Nothing is assumed — the page lights what the server's next report says. A CHOICE asks first on a shared dial (the
@@ -2545,6 +2567,14 @@ export class SpectrumClient {
     this.sdQuietUntil = on ? 0 : Date.now() + 5000;
     this.sdHeld = on;
     this._send(on && band ? { type: 'sondes', on: 1, band } : { type: 'sondes', on: on ? 1 : 0 });
+  }
+  /* ★★ V12 SATELLITES: the picker's question (free — it changes nothing) and the Doppler lock (moves the dial on a shared
+   *  receiver, so it asks before tuning like a tune does). */
+  satList() { this._send({ type: 'sat_list' }); }
+  satTrack(norad: number, aos: number, los: number) { this._send({ type: 'sat_list', op: 'track', norad, aos, los }); }
+  satLock(on: boolean, norad?: number) {
+    if (this.askBlocked()) return;
+    this._send(on ? (norad ? { type: 'sat', op: 'lock', norad } : { type: 'sat', op: 'lock' }) : { type: 'sat', op: 'unlock' });
   }
   /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
   aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }

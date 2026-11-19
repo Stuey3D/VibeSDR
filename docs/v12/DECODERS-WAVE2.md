@@ -1560,3 +1560,10 @@ offline loops do not.
 Black-box kit (not in git, unchanged): `~/wsjtx-blackbox/` — WSJT-X 2.7.0 arm64 binaries, docker image `wsjtx-bb`,
 corpora. Reference recordings for the text modes: `~/VibeSDR-mfsk-refs/` (spec pages, the parsed varicode, samples,
 the Python prototypes used to settle the formats — `proto/`).
+
+## 2026-11-19 — radiosondes: DFM and M10 / M20 joined the SONDES mode
+
+Own decoders from listener documentation in the RS41's receiver (AUTO type per channel, the first type whose own checks
+pass locks it). Synthetic only; 0 cross-type and 0 noise false decodes; whole M10 / M20 frames need ≈ 5 dB more than an
+RS41. Benchmark rows `dec_dfm`, `dec_m10`. Everything — facts used, results, launch sites per type, RESUME HERE — in
+`SONDES-TYPES.md`.

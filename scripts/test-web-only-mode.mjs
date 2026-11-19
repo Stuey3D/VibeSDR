@@ -22,7 +22,7 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 let fails = 0;
 const ok = (c, what) => { console.log(`  ${c ? '\x1b[32mok\x1b[0m  ' : '\x1b[31mFAIL\x1b[0m'} ${what}`); if (!c) fails++; };
 
-const DEMODS = ['wfm', 'nfm', 'am', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'usb', 'lsb', 'cwu', 'cwl', 'drm', 'freedv', 'm17'];
+const DEMODS = ['wfm', 'nfm', 'am', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'usb', 'lsb', 'cwu', 'cwl', 'drm', 'freedv', 'm17', 'dvsig'];
 const BLOCKED = [...DEMODS, 'dab', 'ism', 'ndb', 'ais', 'avdata', 'sondes'].join(',');
 const RATE = 2400000;
 const T = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-web-onlymode-'));

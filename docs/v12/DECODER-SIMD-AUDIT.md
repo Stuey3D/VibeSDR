@@ -699,3 +699,10 @@ All three answered on 2026-10-31:
   - RTTY `jarts_*`;
   - FT8 `ft8_40m_7074000_20261025T2044`;
   - JS8 `js8_40m_7078000_…`.
+
+## 2026-11-19 — DFM / M10 / M20 (SONDES-TYPES.md)
+
+The Manchester demodulator (`vibe_sonde_manch.h`) uses the RS41's SIMD discriminator, now in `vibe_sonde_disc.h`
+(unchanged code, NEON / SSE2 / scalar). Its chip box integrator (8 adds a sample, ≤ 77 kS/s a channel) and the frame
+code are scalar: three sondes cost 0.005 s per capture second on the M5, the front end's FFT dominating.
+`VIBE_FORCE_SCALAR` passes `test-sondes-types` 76 / 0; SSE2 not built this run.

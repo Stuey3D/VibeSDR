@@ -53,6 +53,7 @@ inline double audioCentreFor(const std::string& ext, double msgCentre) {
     if (ext == "ft8" || ext == "spots") return 1500.0;       // the 200–3000 Hz slot, the middle
     if (ext == "hell") return 980.0;
     if (ext == "dsc") return 1700.0;                         // vibe_decoder_host.h: MF/HF DSC's centre
+    if (ext == "ale") return 1625.0;                         // ★ V12 2G ALE: 750–2500 Hz above the channel (a USB dial)
     return 1000.0;                                           // RTTY, SITOR-A, MFSK / Olivia / THOR, JTTY, PSK, SELCAL
 }
 

@@ -96,6 +96,9 @@ inline const std::vector<Entry>& table() {
             { ch(14.100e6, 2e3), ch(18.110e6, 2e3), ch(21.150e6, 2e3), ch(24.930e6, 2e3), ch(28.200e6, 2e3) } });
         // ★ V12 balloons (UKHAS RTTY, Horus Binary, SSDV): amateur payloads on 70 cm — the 434 MHz licence-exempt band and the
         //   amateur allocation round it. Any part of it will do (payloads are anywhere in it).
+        // ★ V12 2026-11-19 2G HF ALE (docs/v12/HF-DATA.md): military, government and amateur (HFLink) nets scan channels across
+        //   HF — any of 2–30 MHz will do (the decoder reads whatever lands on the dial).
+        v.push_back({ "ale", "ALE", "is on HF (2\xe2\x80\x93" "30 MHz)", { band(2e6, 30e6) } });
         v.push_back({ "balloon", "Balloons", "is on 70 cm (430\xe2\x80\x93" "440 MHz, the 434 MHz payload band)", { band(430e6, 440e6) } });
         // ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): VORs and localisers on 108–117.975 MHz, glideslopes on 328.6–335.4 MHz.
         v.push_back({ "vor", "VOR / ILS", "is on 108\xe2\x80\x93" "118 MHz (VOR, ILS localiser) and 328.6\xe2\x80\x93" "335.4 MHz (glideslope)",

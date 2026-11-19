@@ -51,6 +51,8 @@ import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as 
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
+import { SatPanel } from './satellites';   // ★ V12 satellites — the picker, the readout, the DOPPLER button
+import { satCapFrom, satChanText, satStateWord } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -201,6 +203,7 @@ import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor,
          dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle, type DscCall, type DscPin, type DscChannel } from './dsc';
 import { parseSitorStatus, sitorStatusText, SITORA_HINT, type SitorStatus } from '../../../src/services/sitora';
 import { SAME_HINT, SELCAL_HINT, sameStateText, selcalStateText } from '../../../src/services/alertDecoders';   // ★ V12 EAS / SAME, SELCAL
+import { ALE_HINT, aleStateText, parseAleStatus } from '../../../src/services/aleDecoder';   // ★ V12 2G HF ALE
 import { TEXT_FAMILIES, TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, isTextFamily, parseTextModeStatus, parseTextModes, textModeStatusText,
          type TextFamily, type TextMode } from '../../../src/services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { sessionChoice, setSessionChoice } from '../../../src/services/decoderSession';   // ★★★ AUTO first; manual for the session only
@@ -223,6 +226,8 @@ import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME
          type FreeDvSub, type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
 // ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
+// ★★ V12 digital-voice ID — DMR, D-STAR, YSF, NXDN, dPMR, never the voice (src/services/dvsig.ts — the app and the R36S share it)
+import { dvsigOffered, dvsigVts, dvsigInfo, dvsigMapPoints, dvRow, dvTime, DV_PINS, DVSIG_NAME, DVSIG_HINT, type DvState } from '../../../src/services/dvsig';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
  *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
@@ -898,6 +903,7 @@ async function loadAudioPolicy(httpBase: string) {
   tonesCap = false;            // ★ …nor DTMF / 5-tone
   vorCap = false;              // ★ …nor VOR / ILS
   sarsatCap = false;           // ★ …nor 406 MHz beacons
+  aleCap = false;              // ★ …nor ALE
   decWhy = {};                 // ★ …and no decoder out of reach until this radio says so
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
@@ -937,12 +943,14 @@ async function loadAudioPolicy(httpBase: string) {
     amSyncCap = amSyncOffered(Array.isArray(j.modes) ? j.modes : []);
     freedvSubs = freedvOffered(j);   // ★★ V12 FreeDV: [] where the server's libcodec2 did not load — no key at all then
     m17Cap = m17Offered(j);          // ★★ V12 M17: only where libcodec2 loaded and the radio reaches 2 m / 70 cm
+    dvsigCap = dvsigOffered(j);      // ★★ V12 DV ID: where the radio reaches VHF 136–174 / UHF 400–470 MHz and the owner allows it
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
     aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
     avReadCap(j);                // ★ V12 the aircraft datalink (ACARS / VDL2): the same three states, and its bands
     sdReadCap(j);                // ★ V12 radiosondes (RS41): the same three states, and its bands
+    satReadCap(j);               // ★ V12 satellites: `doppler` (a version) / `dopplerWhy` — absent = no entry at all
     // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
     //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
     decWhy = parseDecWhy(j);
@@ -989,6 +997,9 @@ async function loadAudioPolicy(httpBase: string) {
       if (b) b.hidden = !hfdlCap || blockedModes.has('hfdl'); }
     { const b = document.querySelector('#decodersPanel [data-dec="selcal"]') as HTMLElement | null;
       if (b) b.hidden = !selcalCap || blockedModes.has('selcal'); }
+    aleCap = j.ale === true || !!decWhy.ale;   // ★ V12 2G HF ALE: decoded by this server (greyed with why off HF)
+    { const b = document.querySelector('#decodersPanel [data-dec="ale"]') as HTMLElement | null;
+      if (b) b.hidden = !aleCap || blockedModes.has('ale'); }
     for (const fam of TEXT_FAMILIES) {   // ★ MFSK / OLIVIA / THOR (V12): a family where the server lists it, with its choices
       if (j[fam] === true) tmCaps[fam] = parseTextModes(j[fam + 'Modes']);
       const b = document.querySelector(`#decodersPanel [data-dec="${fam}"]`) as HTMLElement | null;
@@ -1986,6 +1997,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAvdata: (r) => onAvReport(r),
     onAvdataError: (why: string) => { showPill(why, 7000); if (avOn && !avReport) avUiOff(); },
     onSondes: (r) => onSdReport(r),
+    onSatList: (l) => satPanelGet()?.onList(l),
+    onSat: (r) => {
+      const p = satPanelGet();
+      const was = !!p?.readout();
+      p?.onReadout(r);
+      // ★ an ending or a refusal says why, once (no flashing, no repeat)
+      if (r.state === 'OFF' && r.why && (was || !p?.open)) showPill(r.why, 6000);
+      renderFreq();
+    },
+    onSatTrack: (t) => satPanelGet()?.onTrack(t),
     onSondesError: (why: string) => { showPill(why, 7000); if (sdOn && !sdReport) sdUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
@@ -2237,7 +2258,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap) || (id === 'balloon' && !balloonCap) || (id === 'tones' && !tonesCap) || (id === 'vor' && !vorCap) || (id === 'sarsat' && !sarsatCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap) || (id === 'balloon' && !balloonCap) || (id === 'tones' && !tonesCap) || (id === 'vor' && !vorCap) || (id === 'sarsat' && !sarsatCap) || (id === 'ale' && !aleCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -2815,6 +2836,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onM17: (f) => {
       if (!spec || spec.mode !== 'm17' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
       m17State = f;
+      updateVts();
+    },
+    /* ★★ V12 DV ID: the server's report — the VTS line, the box's log. WHAT it names is the server's decision (an identities
+     *  copy only on an amateur band, or to a signed-in owner who opted in); a report after leaving the mode is a ghost. */
+    onDvsig: (f) => {
+      if (!spec || spec.mode !== 'dvsig' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
+      dvState = f;
+      dvBoxSync();
       updateVts();
     },
     onFreeDv: (f) => {
@@ -3944,7 +3973,10 @@ function renderFrame(frameTs: number) {
   renderClock.tick(frameTs);
   if (renderCount++ % renderEvery(renderClock.hz(), renderHz()) !== 0) return;
 
-  wf.vfoHz = spec.frequency;
+  /* ★★ V12 SATELLITE DOPPLER — THE MARKER GOES WHERE THE CHANNEL IS (brief §10 TRAP): the dial shows the nominal, the
+   *  channel sits up to ±10 kHz off it, and a marker on the nominal would sit beside the trace looking broken. Between
+   *  the readouts (twice a second) the offset moves on at the readout's own rate, so the needle glides, never steps. */
+  wf.vfoHz = spec.frequency + satMarkerOffset();
   recBufCheck();   // ★ V12 record buffer's retune rule — a string compare when nothing moved, nothing at all when Off
   vfoRecBufCheck();   // ★★★ …and each VFO's own, while A/B records per VFO
   guard('web-render', 'overlays', updateViewOverlays);
@@ -4881,12 +4913,16 @@ function updateVts() {
   const m17On = spec.mode === 'm17' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
   const m17Text = m17On ? m17Info(m17State) : '';
   if (m17On) { name = m17Vts(m17State); flag = ''; logo = ''; src = ''; dabRt = ''; dabSvcSid = 0; }
+  /* ★★ V12 DV ID likewise ("DV · searching", "DMR · G4ABC Stuart", "DMR · heard · CC 1 · TS2", "DV · last YSF G4ABC"). */
+  const dvOn = spec.mode === 'dvsig' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
+  const dvText = dvOn ? dvsigInfo(dvState) : '';
+  if (dvOn) { name = dvsigVts(dvState); flag = ''; logo = ''; src = ''; dabRt = ''; dabSvcSid = 0; }
 
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
   // ★ Tracks whether what we are about to show is LIVE (the station naming itself) or STATIC (our
   //   guess from a list). Only the live kind may stay up — see vtsHoldFor().
-  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label) || fdvOn || m17On;
+  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label) || fdvOn || m17On || dvOn;
   if (!name) {
     const near = nearestStation(hz);
     if (near && Math.abs(near.frequency - hz) <= VTS_ON_HZ) {
@@ -5002,6 +5038,7 @@ function updateVts() {
     : toneOn ? { name: toneName, text: tone }
     : fdvOn ? { name }
     : m17On ? { name, text: m17Text }
+    : dvOn ? { name, text: dvText }
     : { id: vtsHex(rdsPi), idLabel: 'PI', name: rdsName, text: rdsName ? rdsText : '' };
   setClass(vts, 'line', lineMode);
   applyVtsScroll(lineMode);
@@ -7555,6 +7592,9 @@ let fdvState: FreeDvState | null = null;
 /** ★★ V12 M17: offered by THIS server (vibeserver.json modes), and its last report while in the mode. */
 let m17Cap = false;
 let m17State: M17State | null = null;
+/** ★★ V12 DV ID: offered by THIS server (vibeserver.json modes), and its last report while in the mode. */
+let dvsigCap = false;
+let dvState: DvState | null = null;
 /** The demodulators to offer: the fixed set, plus the synchronous AM family and DRM where this server has them (beside
  *  AM, where an AM listener looks), FreeDV beside USB / LSB — minus what the owner switched off. */
 function offeredModes(): SDRMode[] {
@@ -7564,6 +7604,7 @@ function offeredModes(): SDRMode[] {
     if (m === 'am') out.push(...(amSyncCap as SDRMode[]));
     if (m === 'lsb' && freedvSubs.length) out.push('freedv');
     if (m === 'nfm' && m17Cap) out.push('m17');   // ★★ V12 M17 beside NFM, where an NFM listener looks
+    if (m === 'nfm' && dvsigCap) out.push('dvsig');   // ★★ V12 DV ID likewise
   }
   if (drmCap) out.push('drm');
   return out.filter((m) => !isModeBlocked(m));
@@ -7589,7 +7630,53 @@ function drmSetPane(p: 'station' | 'signal') {
   if (box) box.scrollTop = 0;   // ★ a pane opens at its top, not wherever the other one was scrolled to
 }
 /** The DRM box: shown while the mode is DRM, filled from the last report (drm.ts). */
+/** ★★ V12 THE DV ID BOX — shown while the mode is DV ID: AUTO or one system (the manual fallback), the log of who was
+ *  heard (newest first), MAP for amateur positions, EXIT. Built once, refilled from the last report. */
+function dvBoxSync() {
+  const on = !!spec && spec.mode === 'dvsig' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
+  let box = document.getElementById('dvBox');
+  if (!on) { if (box) box.classList.remove('open'); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'dvBox';
+    box.setAttribute('data-navbox', '');   // ★ one place for the pad (DRM's box's rule)
+    box.innerHTML = `<div id="dvBoxHead"><span class="drmTitle">DV ID</span><span class="drmSub" title="${DVSIG_HINT.replace(/"/g, '&quot;')}">${DVSIG_NAME.replace(/^Digital voice ID: /, '')} · data only (the AMBE voice codec is patented)</span>`
+      + '<button class="btn" id="dvMap" type="button" title="Amateur stations that sent a position, on the map" hidden>MAP</button>'
+      + '<button class="btn" id="dvExit" type="button" title="Leave DV ID and return to NFM">EXIT</button>'
+      + '<button class="btn" id="dvMin" type="button" title="Minimise">&ndash;</button></div>'
+      + '<div id="dvBody"><div id="dvPins" class="dvPins"></div><div id="dvNote" class="drmSmall"></div><div id="dvLog"></div></div>';
+    (document.getElementById('wfWrap') ?? document.body).appendChild(box);
+    (box.querySelector('#dvExit') as HTMLElement).onclick = () => { setMode('nfm', true); renderFreq(); };
+    (box.querySelector('#dvMin') as HTMLElement).onclick = () => box!.classList.toggle('min');
+    (box.querySelector('#dvMap') as HTMLElement).onclick = () => {
+      openPinsMap(dvsigMapPoints(dvState).map((p) => ({ lat: p.lat, lon: p.lon, label: p.label, level: 0 })));
+    };
+    const pins = box.querySelector('#dvPins') as HTMLElement;
+    for (const p of DV_PINS) {
+      const b = document.createElement('button');
+      b.className = 'btn'; b.type = 'button'; b.textContent = p.label; b.dataset.pin = p.id;
+      b.title = p.id === 'auto' ? 'Every system at once: the receiver says which it hears' : `Only ${p.label} — when AUTO cannot settle on a busy channel`;
+      b.onclick = () => spec?.dvsigPin(p.id);
+      pins.appendChild(b);
+    }
+  }
+  box.classList.add('open');
+  const st = dvState;
+  box.querySelectorAll<HTMLElement>('#dvPins button').forEach((b) => b.classList.toggle('on', (st?.pin ?? 'auto') === b.dataset.pin));
+  const note = st ? (st.amateur ? `${st.band}: callsigns and IDs are shown` : st.ids ? 'Not an amateur frequency: IDs shown to you, the owner, only' : 'Not an amateur frequency: who is talking is not shown, only what was heard') : 'Listening…';
+  const ne = box.querySelector('#dvNote') as HTMLElement;
+  if (ne.textContent !== note) ne.textContent = note;
+  const pts = dvsigMapPoints(st);
+  (box.querySelector('#dvMap') as HTMLElement).hidden = !pts.length;
+  const rows = (st?.log ?? []).slice(0, 30).map((e) =>
+    `<div class="dvRow${e.open ? ' open' : ''}"><span class="dvT">${dvTime(e.t)}</span><span class="dvS">${e.sys}</span>`
+    + `<span class="dvX">${escapeHtml(dvRow(e))}</span></div>`).join('');
+  const lg = box.querySelector('#dvLog') as HTMLElement;
+  const html = rows || '<div class="drmSmall">Nothing heard yet. DMR, D-STAR, System Fusion, NXDN and dPMR are listened for at once.</div>';
+  if (lg.innerHTML !== html) lg.innerHTML = html;
+}
 function drmBoxSync() {
+  dvBoxSync();   // ★ the DV ID box follows every mode flip the DRM box does (whole-radio modes close both)
   /* ★★ …and never while DAB has the radio (Stuart, 2026-11-15, the Sony on 12B: a DRM box "Lock: searching" over DAB).
    *    DAB is a whole-radio mode of its own — the demodulator's mode can still read 'drm' underneath it (a listener who
    *    was on DRM when the shared dial went to DAB), so the mode alone is not the answer. Stuart: "the DRM box needs to
@@ -10188,7 +10275,7 @@ function sdUiOn() {
   syncAudioQuiet();
   closePanels();
   if (!sdView) sdView = new TrackView({
-    title: 'RADIOSONDES · RS41', exitLabel: 'EXIT SONDES', listTitle: 'SONDES', onExit: () => sdSetMode(false),
+    title: 'RADIOSONDES', exitLabel: 'EXIT SONDES', listTitle: 'SONDES', onExit: () => sdSetMode(false),
     icon: (it: any) => sondeIcon(it), label: (it: any) => String(it.serial || ''), card: (it: any) => sondeCard(it),
     trail: (key: string, done: (pts: [number, number][]) => void) => done(sondeTrail(sdReport, key)),
     ranges: sondeRanges(sdBands), range: sdReport?.band || '', rangeHint: 'The band searched: radiosondes use 400\u2013406 MHz', rangeLabel: 'The band',
@@ -10224,6 +10311,30 @@ function sdRender() {
   sdView.update(sondeItems(r), sondeRows(r), sondeStatus(r), r ? r.sondes.length : 0, myPos());
   if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
 }
+/* ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md, satellites.ts): the panel is made on first use. */
+function satMarkerOffset(): number {
+  const r = satPanel?.readout();
+  if (!r || (r.state !== 'TRACK' && r.state !== 'COAST') || r.offset == null) return 0;
+  const dt = Math.min(1, Math.max(0, (performance.now() - (satPanel?.readoutAt ?? 0)) / 1000));
+  return r.offset + (r.rate ?? 0) * dt;
+}
+let satCap: { ok: boolean; why: string } | null = null;
+let satPanel: SatPanel | null = null;
+function satReadCap(j: any) { satCap = satCapFrom(j); satPanel?.setCap(satCap); }
+function satPanelGet(): SatPanel | null {
+  if (!satCap) return satPanel;
+  if (!satPanel) {
+    satPanel = new SatPanel({
+      list: () => spec?.satList(),
+      track: (n, a, l) => spec?.satTrack(n, a, l),
+      lock: (on, norad) => spec?.satLock(on, norad),
+      tune: (hz, mode) => tuneTo({ frequency: hz, mode } as unknown as SearchResult),
+    });
+    satPanel.setCap(satCap);
+  }
+  return satPanel;
+}
+
 /** ★ A report (on) or the server's `sondes_off` (null). */
 function onSdReport(r: SondeReport | null) {
   if (!r) { if (sdOn) { audio?.holdHealing(6000); sdUiOff(); } return; }
@@ -10694,6 +10805,9 @@ function buildControls() {
     avOn:          () => avOn,
     toggleAv:      toggleAvMode,
     sdCap:         () => sdCap,          // ★ V12 radiosondes
+    satCap:        () => satCap,         // ★ V12 satellites (opens the picker)
+    satOn:         () => !!satPanel?.readout(),
+    openSat:       () => satPanelGet()?.show(),
     sdOn:          () => sdOn,
     toggleSd:      toggleSdMode,
     ndbCap:        () => ndbCap,
@@ -13275,7 +13389,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'ale' | null = null;
 /* ★★ DTMF + 5-TONE (V12) — decoded on the server (decoders/tones_rx.h): one line per DTMF string or 5-tone call on this
  *  listener's NFM / AM audio. WHAT IS SHOWN is the server's rule (vibe_tones_run.h): digits on the amateur bands only, so this
  *  page draws whatever it is sent. The settings: DTMF and 5-TONE each on/off, and the 5-tone STANDARD — AUTO, with one table
@@ -13306,6 +13420,8 @@ function renderNavCard() {
   if (!h) h = `<div class="note">${s ? 'searching for the 30 Hz / 9960 Hz of a VOR, or the 90 / 150 Hz of an ILS…' : ''}</div>`;
   host.innerHTML = h;
 }
+let aleCap = false;   // ★ V12 2G HF ALE (vibeserver.json "ale")
+let aleLast: ReturnType<typeof parseAleStatus> = null;
 let tonesSet: TonesOptions = { ...TONES_DEFAULTS };
 let tonesLast: TonesStatus | null = null;
 function initTonesSettings() {
@@ -14219,6 +14335,12 @@ function initDecoders(host: string, auth: AuthState) {
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
       if (activeDec === 'sitora') { if (sitorLast) sitorLast.link = st; renderSitorStatus(st); setDecLive(st >= 2 && st <= 6); return; }
       if (isTextFamily(activeDec)) { if (!st) { decStateText = textModeStatusText(activeDec, tmMode[activeDec], null, tmCaps[activeDec] ?? []); if (!decTuneHint) $('decStatus').textContent = decStateText; } setDecLive(!!st); return; }
+      if (activeDec === 'ale') {
+        if (!st) aleLast = null;
+        decStateText = aleStateText(st, aleLast);
+        if (!decTuneHint) $('decStatus').textContent = decStateText;
+        setDecLive(!!st); return;
+      }
       if (activeDec === 'same' || activeDec === 'selcal') {
         decStateText = activeDec === 'same' ? sameStateText(st) : selcalStateText(st);
         if (!decTuneHint) $('decStatus').textContent = decStateText;
@@ -14380,6 +14502,13 @@ function initDecoders(host: string, auth: AuthState) {
       if (!sp) return;
       jttySpots.push(sp); renderJtty();
     },
+    onAleStatus: (d) => {   // ★ V12 2G HF ALE: the transmission being read
+      if (activeDec !== 'ale') return;
+      aleLast = parseAleStatus(d);
+      if (!aleLast || !aleLast.words) return;
+      decStateText = aleStateText(1, aleLast);
+      if (!decTuneHint) $('decStatus').textContent = decStateText;
+    },
     onTextModeStatus: (d) => {
       if (!isTextFamily(activeDec)) return;
       const st = parseTextModeStatus(d);
@@ -14512,7 +14641,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'ale';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12 out of this radio's reach: the press says why and starts nothing (decWhyPaint draws the key greyed)
       if (decWhy[mode]) { showPill(`${(b.textContent || mode).trim()} unavailable \u2014 ${decWhy[mode]}`, 8000); return; }
@@ -15137,7 +15266,7 @@ function anyDecoderLeft(): boolean {
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
     || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal')) || (hfdlCap && !blockedModes.has('hfdl'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
-    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon')) || (tonesCap && !blockedModes.has('tones'))
+    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon')) || (tonesCap && !blockedModes.has('tones')) || (aleCap && !blockedModes.has('ale'))
     || (vorCap && !blockedModes.has('vor')) || (sarsatCap && !blockedModes.has('sarsat'));
 }
 
@@ -15162,11 +15291,16 @@ setWholeRadioKeys(() => {
   add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
   add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
   add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
-  add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
+  add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
   if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB (Experimental) — digital radio, Band III',
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
   add('ndb', 'NDB', ndbCap, ndbOn, toggleNdbMode, 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map');
+  // ★★ V12 SATELLITES: not a whole-radio mode — it opens the picker (passes, the sky track, DOPPLER). Only where the server
+  //    offers `doppler` (the radio reaches a listed downlink); greyed with the reason when not ready.
+  if (satCap) keys.push({ id: 'sat', label: 'SAT', on: !!satPanel?.readout(), dis: !satCap.ok,
+                          title: satCap.ok ? 'Satellites — next passes, a sky track and Doppler correction' : `Satellites are not available: ${satCap.why}`,
+                          press: () => { satPanelGet()?.toggle(); closePanels(); } });
   return keys;
 });
 
@@ -15184,7 +15318,7 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
  *  title and label (hover, focus, a screen reader), and a press shows the reason (touch, pad, keyboard) — never hidden,
  *  never live. An owner's block still hides it (it is false with no reason). */
 let decWhy: Record<string, string> = {};
-const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'vor', 'sarsat'];
+const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'ale', 'vor', 'sarsat'];
 function parseDecWhy(j: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!j || typeof j !== 'object') return out;
@@ -15312,6 +15446,7 @@ function showDecBox(what: string) {
   else if (what === 'sarsat') { sarsatLast = null; decStateText = sarsatStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = SARSAT_HINT; }
   else if (what === 'tones') { tonesLast = null; decStateText = tonesStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = TONES_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
+  else if (what === 'ale') { aleLast = null; decStateText = aleStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = ALE_HINT; }
   else if (what === 'hfdl') { decStateText = hfdlStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HFDL_HINT; }
   else if (what === 'hell') { hellPager.reset(); decStateText = hellStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HELL_HINT; }
   else if (isTextFamily(what)) { decStateText = textModeStatusText(what, tmMode[what], null, tmCaps[what] ?? []); $('decStatus').textContent = decStateText; $('decStatus').title = TEXT_FAMILY_HINT[what]; }
@@ -19881,6 +20016,8 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   if (m !== 'drm') { drmState = null; drmIq = null; drmQualityMeter.reset(); drmQuality = null; }
   if (m !== 'freedv') fdvState = null;   // ★ V12 FreeDV: its line goes with the mode
   if (m !== 'm17') m17State = null;      // ★ V12 M17 likewise
+  if (m !== 'dvsig') dvState = null;     // ★ V12 DV ID likewise
+  else if (!send && !dvState) spec.dvsigStatus();   // ★ adopted (a room already in DV ID): ask for its report now
   else if (!send && !m17State) spec.m17Status();   // ★ adopted (a room already in M17): ask for its report now
   else if (!send && !fdvState) spec.freedvSub(null);   // ★ adopted (a room already in FreeDV): ask for its report now
   amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second
@@ -19907,6 +20044,7 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
   drm: 5000,   // ★ V12 DRM: unused — the bandwidth row is hidden in DRM (see syncBw)
   freedv: 3000,   // ★ V12 FreeDV: unused — the server fixes the modem's channel; the row is hidden (see syncBw)
   m17: 4500,      // ★ V12 M17: unused — the server fixes the receiver's channel; the row is hidden (see syncBw)
+  dvsig: 6250,    // ★ V12 DV ID likewise
   // ★ V12 synchronous AM: AM-shaped as AM; ECSS's edges are SSB's (one sideband, up to 6 kHz like USB/LSB)
   sau: 20000, sal: 20000, amst: 20000, ecssu: 6000, ecssl: 6000,
 };
@@ -19953,7 +20091,7 @@ function syncBw() {
    *  row is hidden rather than left as a slider that does nothing (AGENTS.md: no dead controls). */
   //  ★ V12 FreeDV likewise: the server fixes the modem's 2.7 kHz channel; the sub-mode row takes its place in the picker.
   { const row = document.querySelector('.bwRow') as HTMLElement | null;
-    if (row) row.style.display = spec.mode === 'drm' || spec.mode === 'freedv' || spec.mode === 'm17' ? 'none' : ''; }
+    if (row) row.style.display = spec.mode === 'drm' || spec.mode === 'freedv' || spec.mode === 'm17' || spec.mode === 'dvsig' ? 'none' : ''; }
   const max = BW_EDGE_MAX[spec.mode] ?? 6000;
   const step = max > 50_000 ? 1000 : max > 10_000 ? 100 : 10;
   const lo = $<HTMLInputElement>('bwLo');
@@ -20598,6 +20736,10 @@ function cardFreqText(): { main: string; fine: string; unit: string; chan?: stri
     return r && { ...r, chan: b ? `${b.name} BAND` : 'NO DIGITAL BAND' };
   }
   const hz = Math.round(spec.frequency);
+  /* ★★ V12 A SATELLITE DOPPLER LOCK: the digits stay on the NOMINAL (the server snapped the dial there) and the white text
+   *  beside them is "ISS · ▼ 3.21 kHz · TRACK" (brief §10) — the same slot the airband channel uses. */
+  { const ro = satPanel?.readout() ?? null; const t = satChanText(ro);
+    if (t) { const r = cardFreqPlain(hz); return r && { ...r, chan: `${t} \u00B7 ${satStateWord(ro)}` }; } }
   // ★ An airband channel: its NAME is the figure, in MHz — see renderFreq.
   const ch = airChannelNow();
   if (ch && freqUnit === 'mhz') return { main: ch.name, fine: '', unit: 'MHz', chan: airChanTag(ch, true) };

@@ -184,7 +184,7 @@ export const READING_LONGEST = '-120 dBf';
 /** Every client-side decoder the label can carry — DecoderPanel's DecoderType, held to it by the type
  *  check below (a decoder added there and not here fails `tsc`), so the test's "longest label" is the
  *  code's, not a guess. */
-export const CLIENT_DECODERS = (['rtty', 'navtex', 'wefax', 'sstv', 'morse', 'whisper', 'ft8', 'time', 'transcribe', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'tones', 'vor', 'sarsat', 'dsc', 'sitora', 'same', 'selcal', 'mfsk', 'hell', 'paging', 'scanner', 'aprs', 'hfdl'] as const) satisfies
+export const CLIENT_DECODERS = (['rtty', 'navtex', 'wefax', 'sstv', 'morse', 'whisper', 'ft8', 'time', 'transcribe', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'tones', 'vor', 'sarsat', 'dsc', 'sitora', 'same', 'selcal', 'ale', 'mfsk', 'hell', 'paging', 'scanner', 'aprs', 'hfdl'] as const) satisfies
   readonly NonNullable<DecoderType>[];
 type MissingDecoder = Exclude<NonNullable<DecoderType>, typeof CLIENT_DECODERS[number]>;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -192,7 +192,7 @@ const everyDecoderListed: [MissingDecoder] extends [never] ? true : MissingDecod
 
 /** Every demod the app can be in (sdrTypes' SDRMode, held to it exactly by `satisfies`). */
 export const DEMODS = { usb: 1, lsb: 1, am: 1, sam: 1, fm: 1, nfm: 1, cwu: 1, cwl: 1, wfm: 1, drm: 1,
-                        sau: 1, sal: 1, ecssu: 1, ecssl: 1, amst: 1, freedv: 1, m17: 1 } as const satisfies
+                        sau: 1, sal: 1, ecssu: 1, ecssl: 1, amst: 1, freedv: 1, m17: 1, dvsig: 1 } as const satisfies
   Record<SDRMode, 1>;
 
 /**

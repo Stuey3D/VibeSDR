@@ -101,7 +101,7 @@ export function tunedPassband(mode: string | undefined, bwLow?: number | null, b
   const m = String(mode || '').toLowerCase();
   let pb: Passband;
   if (m === 'wfm') pb = { lo: -75_000, hi: 75_000 };
-  else if (m === 'nfm' || m === 'fm' || m === 'm17') pb = { lo: -6_000, hi: 6_000 };   // ★ V12 M17: an NFM channel
+  else if (m === 'nfm' || m === 'fm' || m === 'm17' || m === 'dvsig') pb = { lo: -6_000, hi: 6_000 };   // ★ V12 M17 / DV ID: an NFM channel
   else if (m === 'usb' || m === 'ecssu') pb = { lo: 0, hi: 3_000 };
   else if (m === 'lsb' || m === 'ecssl') pb = { lo: -3_000, hi: 0 };
   else if (m === 'cw' || m === 'cwu' || m === 'cwl') pb = { lo: -300, hi: 300 };

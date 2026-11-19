@@ -16,6 +16,7 @@ import type { AskState } from './dialChat';
 import { AM_SYNC_PASSBAND } from './amSync.ts';   // ★ .ts: node tests import this file directly
 import { freedvPassband, freedvSidebandAt, type FreeDvSideband } from './freedv.ts';   // ★ V12 FreeDV
 import { M17_PASSBAND } from './m17.ts';   // ★ V12 M17
+import { DVSIG_PASSBAND } from './dvsig.ts';   // ★ V12 DV ID
 
 /** ★★ V12 hwinfo `afc` — the server's automatic frequency correction (vibe_afc.h, LocalSdrShim::afcJson). */
 export interface AfcState {
@@ -38,7 +39,8 @@ export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'   // ★ V12 'drm' — sdrTypes.ts
                     | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst'   // ★ V12 synchronous AM (amSync.ts) — VibeServer only
                     | 'freedv'    // ★ V12 FreeDV digital voice (freedv.ts) — VibeServer only
-                    | 'm17';      // ★ V12 M17 digital voice (m17.ts) — VibeServer only
+                    | 'm17'       // ★ V12 M17 digital voice (m17.ts) — VibeServer only
+                    | 'dvsig';    // ★ V12 DV ID (dvsig.ts) — VibeServer only
 
 /** ★★★ VibeServer's narrowest WFM passband (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz,
  *  which the server clamps to anyway. A broadcast carrier swings ±75 kHz and the narrowest real
@@ -58,6 +60,7 @@ export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
   sau: 48_000, sal: 48_000, amst: 48_000, ecssu: 12_000, ecssl: 12_000,   // ★ V12 synchronous AM (AM_SYNC_MAX_BW)
   freedv: 12_000,   // ★ V12 FreeDV rides the SSB demodulator (paramsFor "freedv"), so SSB's ceiling
   m17: 9_000,       // ★ V12 M17: fixed — the server keeps the receiver's own 12.5 kHz channel; no width control in M17
+  dvsig: 12_500,    // ★ V12 DV ID likewise
 };
 
 /** The passband VibeServer will actually run — WFM's floor (widened about its own centre) and
@@ -88,6 +91,7 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
    *  server's report says which it demodulates; the client draws freedvPassband(freedvSidebandAt(dial)) until the report's "sb" (VibeServerClient). */
   freedv: [50, 2700],
   m17: M17_PASSBAND,   // ★ V12 M17: its 9 kHz channel (m17.ts) — drawn only; the server keeps the receiver's 12.5 kHz
+  dvsig: DVSIG_PASSBAND,   // ★ V12 DV ID: the 12.5 kHz channel the server keeps
 };
 
 /** ★ V12 the passband a mode starts with at `hz` — MODE_BANDWIDTHS, except FreeDV, whose side follows the dial as the
@@ -487,6 +491,9 @@ export interface SDRCallbacks {
   /** ★ V12 M17, VIBESERVER-ONLY: the listener's (or the room's) M17 receiver's report, sent when it changes while the mode
    *  is M17 (vibe_m17.h; parsed by m17.ts parseM17). The screen drops one after leaving the mode. */
   onM17?:       (s: import('./m17').M17State) => void;
+  /** ★ V12 DV ID, VIBESERVER-ONLY: the receiver's report (vibe_dvsig.h; parsed by dvsig.ts parseDvsig) — the copy this
+   *  socket may have (identities only on an amateur band, or to the opted-in owner). */
+  onDvsig?:     (s: import('./dvsig').DvState) => void;
   /** ★ V12 CTCSS / DCS TONE ID, VIBESERVER-ONLY: the NFM channel's sub-audible tone or DCS code as the server reads it
    *  ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), sent when it changes; '' = none locked. Shown as the VTS line's quiet
    *  suffix (SDRScreen toneLabel). */
@@ -504,6 +511,11 @@ export interface SDRCallbacks {
   /** ★ V12 RADIOSONDES (RS41), VIBESERVER-ONLY: a report about once a second while the receiver is in the SONDES mode;
    *  null = it ended (`sondes_off`); `err` = the refusal (`sondes_error`). */
   onSondes?:    (r: import('./sondes').SondeReport | null, err?: string) => void;
+  /** ★★ V12 SATELLITES, VIBESERVER-ONLY (docs/v12/SATELLITE-ENGINE.md): the picker's list, a Doppler lock's readout
+   *  (twice a second while locked; OFF with `why` at the end or on a refusal), one pass's sky track. */
+  onSatList?:   (l: import('./satellites').SatList) => void;
+  onSat?:       (r: import('./satellites').SatReadout) => void;
+  onSatTrack?:  (t: import('./satellites').SatTrack) => void;
   /** ★★ V12, VIBESERVER-ONLY: the answer to modeResume (wholeModeResume.ts) — may this listener have the whole-radio mode
    *  the server left while they were away back? `why` = the refusal, in words. */
   onModeResume?: (kind: 'adsb' | 'ndb' | 'ism' | 'ais', ok: boolean, why?: string) => void;

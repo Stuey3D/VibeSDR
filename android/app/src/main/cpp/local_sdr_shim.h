@@ -891,6 +891,9 @@ public:
      *  It's the SERVER's position — distances, map centring and the ITU region are
      *  properties of the antenna, not of whoever happens to be listening. */
     static void setLocationJson(const std::string& json);
+    /** ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): one CelesTrak GP group's OMM JSON for the curated birds.
+     *  Returns how many listed satellites it updated (-1 = not GP JSON). Thread-safe; call whenever a group arrives. */
+    static int satLoadOmm(const std::string& group, const std::string& json);
     /** Is the running source an SDRplay? The client's controls differ materially. */
     bool isSdrplay() const;
     /** RF gain positions on an RSP (0 = not an RSP / no radio). */

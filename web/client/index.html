@@ -2481,6 +2481,32 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #drmBoxHead .drmSub { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #drmBoxHead #drmPane { flex: 0 0 auto; font-size: 10px; letter-spacing: 1px; padding: 2px 8px; }
 #drmBody[hidden], #drmSignal[hidden] { display: none; }
+/* ★★ V12 DV ID — the box beside the DRM one's place (only one of the two is ever open: they are different modes) */
+#dvBox {
+  position: absolute; right: 14px; bottom: var(--decBoxBottom, 14px); z-index: 44;
+  width: min(calc(100vw - 32px), 420px); display: none;
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid var(--btn-border);
+  border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  max-height: calc(100dvh - var(--decBoxBottom, 14px) - 64px); overflow-y: auto;
+  color: var(--text, #e8dcc0); font-size: 12px;
+}
+#dvBox.open { display: block; }
+#dvBox.min #dvBody { display: none; }
+#dvBoxHead { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--bar-border); }
+#dvBoxHead .drmTitle { color: var(--amber); font-weight: 700; letter-spacing: 1px; }
+#dvBoxHead .drmSub { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dvBoxHead .btn { flex: 0 0 auto; font-size: 10px; letter-spacing: 1px; padding: 2px 8px; }
+#dvBody { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+#dvBody .drmSmall { color: var(--text-dim); font-size: 11px; }
+#dvBox .dvPins { display: flex; flex-wrap: wrap; gap: 4px; }
+#dvBox .dvPins .btn { font-size: 10px; letter-spacing: 0.5px; padding: 2px 8px; }
+#dvBox .dvPins .btn.on { color: var(--amber); border-color: var(--amber); }
+#dvLog { display: flex; flex-direction: column; gap: 3px; }
+#dvLog .dvRow { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+#dvLog .dvRow.open .dvX { color: var(--freq); }
+#dvLog .dvT { color: var(--text-dim); font-family: var(--mono, monospace); font-size: 10.5px; flex: 0 0 auto; }
+#dvLog .dvS { color: var(--amber); font-size: 10.5px; flex: 0 0 auto; min-width: 42px; }
+#dvLog .dvX { overflow-wrap: anywhere; min-width: 0; }
 /* ★★ V12 the DRM Signal pane (drm.ts drmSignalRender) — #dabSignal's rules, shared with it above, plus its own padding.
    ★ A long value (the station's text message) wraps rather than scrolling: it changes too rarely for a marquee. */
 #drmSignal { padding: 2px 10px 10px; font-size: 11.5px; }
@@ -5656,9 +5682,11 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-dec="vor" hidden title="VOR and ILS — tune a VOR (108–117.95 MHz) in AM for the radial you are on and its Morse ident; an ILS localiser or glideslope for how far off the approach you are">VOR / ILS</button>
     <!-- ★★ V12 406 MHz distress beacons (COSPAS-SARSAT) — hidden unless the server says "sarsat". Identity and position: the owner only. -->
     <button class="btn" data-dec="sarsat" hidden title="406 MHz distress beacons (EPIRB, ELT, PLB) — mostly tests. Everyone sees that one was heard and its kind and country; its identity and position go to the server's owner only. Real alerts are handled by the rescue authorities, not by VibeSDR">406 BEACONS</button>
+    <!-- ★★ V12 2G HF ALE — decoded on the server; hidden unless it says "ale" (greyed with why off its reach). -->
+    <button class="btn" data-dec="ale" hidden title="ALE (2G HF automatic link establishment) — the soundings, calls and replies of HF nets, one line each: who called whom, when. Tune an ALE channel in USB (HFLink: 3.596, 7.102, 14.109 MHz)">ALE</button>
     <button class="btn" data-dec="same" hidden title="EAS / SAME — US emergency alert headers from NOAA Weather Radio (162.400–162.550 MHz NFM) and EAS broadcasts: event, areas and times">SAME</button>
-    <!-- ★★ V12 the MFSK keyboard modes — ONE key (MFSK16/32, OLIVIA, CONTESTIA, THOR); hidden unless the server says "mfsk". -->
-    <button class="btn" data-dec="mfsk" hidden title="MFSK16/32, OLIVIA, CONTESTIA and THOR — the multi-tone keyboard modes; AUTO finds which one and its sub-mode">MFSK</button>
+    <!-- ★★ V12 the MFSK keyboard modes — ONE key (MFSK16/32, OLIVIA, CONTESTIA, THOR, DOMINOEX, MT63); hidden unless the server says "mfsk". -->
+    <button class="btn" data-dec="mfsk" hidden title="MFSK16/32, OLIVIA, CONTESTIA, THOR, DOMINOEX and MT63 — the multi-tone keyboard modes; AUTO finds which one and its sub-mode">MFSK</button>
     <!-- ★★ V12 FELD HELL — drawn on the server, read by eye; hidden unless it says "hell". -->
     <button class="btn" data-dec="hell" hidden title="FELD HELL (Hellschreiber) — the text is drawn as it is heard and you read the strip; every column printed twice, so a slant or fade in one copy leaves the other whole">HELL</button>
     <button class="btn" data-dec="wefax">WEFAX</button>

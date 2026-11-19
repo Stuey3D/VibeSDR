@@ -1,4 +1,5 @@
 // Shared SDR types used across clients and UI
+import { satCapFrom } from './satellites';   // ★ V12 satellites (doppler / dopplerWhy)
 import { parseTextModes, type TextMode } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { parseServerUrl, withScheme, toHttpUrl, buildServerUrl, type ParseOpts } from '../utils/serverUrl';
 import { STEP_833, STEP_FM_ODD, isAirbandCom } from '../utils/airband';
@@ -22,13 +23,14 @@ const { sam: _samLabel, ...AM_SYNC_LABEL_NO_SAM } = AM_SYNC_LABEL;   // 'sam' ke
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
                     | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst'   // ★ V12 synchronous AM (amSync.ts)
                     | 'freedv'    // ★ V12 FreeDV digital voice (freedv.ts) — VibeServer only, where its `modes` lists it
-                    | 'm17';      // ★ V12 M17 digital voice (m17.ts) — VibeServer only, where its `modes` lists it
+                    | 'm17'       // ★ V12 M17 digital voice (m17.ts) — VibeServer only, where its `modes` lists it
+                    | 'dvsig';    // ★ V12 DV ID: DMR / D-STAR / YSF / NXDN / dPMR signalling, never voice (dvsig.ts) — likewise
 export type Mode = SDRMode; // alias
 
 export const MODES: SDRMode[] = ['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl'];
 export const MODE_LABELS: Record<SDRMode, string> = {
   usb: 'USB', lsb: 'LSB', am: 'AM', sam: 'SAM',
-  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM', freedv: 'FreeDV', m17: 'M17',
+  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM', freedv: 'FreeDV', m17: 'M17', dvsig: 'DV ID',
   ...AM_SYNC_LABEL_NO_SAM,   // ★ V12 synchronous AM (amSync.ts)
 };
 
@@ -482,12 +484,16 @@ export interface ServerOccupancy {
   vor?: boolean;
   /** ★ V12 406 MHz beacons ('sarsat') — false + sarsatWhy where this radio does not reach 406 MHz (or an Icom). */
   sarsat?: boolean;
+  /** ★ V12 2G HF ALE ('ale') — soundings, calls and links on HF; the server decides what is shown (aleDecoder.ts). */
+  ale?: boolean;
   /** ★ V12 HFDL: this server decodes HFDL on a listener's USB dial ('hfdl') and serves /addon/hfdl/* for the HFDL MAP. */
   hfdl?: boolean;
   /** ★ V12 AIRCRAFT DATALINK (ACARS / VDL2, a whole-radio mode): offered / greyed with its reason; absent = no key. */
   avdata?: { ok: boolean; why: string; bands: AvBand[]; text: boolean };
   /** ★ V12 RADIOSONDES (RS41, a whole-radio mode on 400–406 MHz): offered / greyed with its reason; absent = no key. */
   sondes?: { ok: boolean; why: string; bands: SondeBand[] };
+  /** ★★ V12 satellites: `doppler` (a version) — absent where the radio reaches no listed downlink (no entry at all). */
+  sat?: { ok: boolean; why: string };
   /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
    *  first) — textModes.ts. */
   mfsk?: boolean;
@@ -524,7 +530,7 @@ export interface ServerOccupancy {
 }
 
 /** ★★★ V12 the decoders vibe_decoder_reach.h can grey for reach — the server sends `"<id>": false, "<id>Why": "…"`. */
-export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'vor', 'sarsat'] as const;
+export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'ale', 'vor', 'sarsat'] as const;
 /** id → reason, for each fixed-frequency decoder this radio cannot reach. A reason is honoured only beside `<id>: false`
  *  (an owner's block sends false with no reason — that key stays hidden, as ever). */
 export function parseDecoderReach(j: any): Record<string, string> {
@@ -589,6 +595,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       tones:     j.tones === true,   // ★ V12 DTMF + 5-tone
       vor:       j.vor === true,     // ★ V12 VOR / ILS
       sarsat:    j.sarsat === true,  // ★ V12 406 MHz beacons
+      ale:       j.ale === true,     // ★ V12 2G HF ALE
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
       same:      j.same === true,
@@ -598,6 +605,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
         ? { ok: j.avdata === true, why: cleanText(j.avdataWhy, 200) || (j.avdata === true ? '' : 'The aircraft datalink is not available on this receiver'),
             bands: parseAvBands(j.avdataBands), text: j.avdataText === true }
         : undefined,
+      sat:       satCapFrom(j) ?? undefined,
       sondes:    j.sondes === true || j.sondes === false
         ? { ok: j.sondes === true, why: cleanText(j.sondesWhy, 200) || (j.sondes === true ? '' : 'Radiosondes are not available on this receiver'),
             bands: parseSondeBands(j.sondesBands) }

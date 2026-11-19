@@ -297,6 +297,9 @@ export interface SDRBackend {
   freedvSub?(sub: import('./freedv').FreeDvChoice | null, sb?: import('./freedv').FreeDvSideband | null): void;
   /** ★ V12 M17 (VibeServer): ask for the receiver's current report (m17.ts). Read-only. */
   m17Status?(): void;
+  /** ★ V12 DV ID (VibeServer): ask for the report, or pin AUTO / one system (dvsig.ts). */
+  dvsigStatus?(): void;
+  dvsigPin?(pin: import('./dvsig').DvPin): void;
   /** ★ Raw IQ out for this session (VibeServer). */
   iqOut?(on: boolean, rate?: number): void;
   /** True while a multiplex is being decoded. The UI locks the zoom drum and the VFO out on this:

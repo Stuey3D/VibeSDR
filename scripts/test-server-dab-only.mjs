@@ -27,7 +27,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const until = async (f, ms = 15000) => { for (let i = 0; i < ms / 100; i++) { if (f()) return true; await sleep(100); } return !!f(); };
 const ADMIN = 'dabonly-Test-Pass-9';
-const OTHERS = 'wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,adsb,ism,ndb,ais,avdata,sondes';
+const OTHERS = 'wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig,adsb,ism,ndb,ais,avdata,sondes';
 
 function listener(port, tag) {
   const sess = `${tag}${Math.random().toString(16).slice(2, 8)}`;

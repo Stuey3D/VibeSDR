@@ -113,9 +113,9 @@ export interface MenuSheetProps {
   isFavourite?: boolean;
   onToggleFavourite?: () => void;
   /** Client decoders — skin semantics: toggle start/stop, menu stays open. */
-  decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'vor'|'sarsat'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null;
+  decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'vor'|'sarsat'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null;
   decOn?:          boolean;
-  onDecToggle?:    (m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'vor'|'sarsat'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs') => void;
+  onDecToggle?:    (m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'vor'|'sarsat'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs') => void;
   /** Digital/CW spots feeds (skin lsvSpots). */
   spotsKind?:      'digi'|'cw'|null;
   onSpotsToggle?:  (k: 'digi'|'cw') => void;

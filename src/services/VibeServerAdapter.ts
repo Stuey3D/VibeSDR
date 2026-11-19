@@ -350,6 +350,8 @@ export class VibeServerAdapter implements SDRBackend {
   drmScopes(on: boolean): void { this.vibe.drmScopes(on); }
   freedvSub(sub: import('./freedv').FreeDvChoice | null, sb?: import('./freedv').FreeDvSideband | null): void { this.vibe.freedvSub(sub, sb); }   // ★ V12 FreeDV
   m17Status(): void { this.vibe.m17Status(); }   // ★ V12 M17
+  dvsigStatus(): void { this.vibe.dvsigStatus(); }   // ★ V12 DV ID
+  dvsigPin(pin: import('./dvsig').DvPin): void { this.vibe.dvsigPin(pin); }
   iqOut(on: boolean, rate = 48000): void { this.vibe.iqOut(on, rate); }
   get inDab(): boolean { return this.vibe.inDab; }
   adsb(on: boolean): void { this.vibe.adsb(on); }
