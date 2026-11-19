@@ -2481,6 +2481,32 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #drmBoxHead .drmSub { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #drmBoxHead #drmPane { flex: 0 0 auto; font-size: 10px; letter-spacing: 1px; padding: 2px 8px; }
 #drmBody[hidden], #drmSignal[hidden] { display: none; }
+/* ★★ V12 DV ID — the box beside the DRM one's place (only one of the two is ever open: they are different modes) */
+#dvBox {
+  position: absolute; right: 14px; bottom: var(--decBoxBottom, 14px); z-index: 44;
+  width: min(calc(100vw - 32px), 420px); display: none;
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid var(--btn-border);
+  border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  max-height: calc(100dvh - var(--decBoxBottom, 14px) - 64px); overflow-y: auto;
+  color: var(--text, #e8dcc0); font-size: 12px;
+}
+#dvBox.open { display: block; }
+#dvBox.min #dvBody { display: none; }
+#dvBoxHead { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--bar-border); }
+#dvBoxHead .drmTitle { color: var(--amber); font-weight: 700; letter-spacing: 1px; }
+#dvBoxHead .drmSub { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dvBoxHead .btn { flex: 0 0 auto; font-size: 10px; letter-spacing: 1px; padding: 2px 8px; }
+#dvBody { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+#dvBody .drmSmall { color: var(--text-dim); font-size: 11px; }
+#dvBox .dvPins { display: flex; flex-wrap: wrap; gap: 4px; }
+#dvBox .dvPins .btn { font-size: 10px; letter-spacing: 0.5px; padding: 2px 8px; }
+#dvBox .dvPins .btn.on { color: var(--amber); border-color: var(--amber); }
+#dvLog { display: flex; flex-direction: column; gap: 3px; }
+#dvLog .dvRow { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+#dvLog .dvRow.open .dvX { color: var(--freq); }
+#dvLog .dvT { color: var(--text-dim); font-family: var(--mono, monospace); font-size: 10.5px; flex: 0 0 auto; }
+#dvLog .dvS { color: var(--amber); font-size: 10.5px; flex: 0 0 auto; min-width: 42px; }
+#dvLog .dvX { overflow-wrap: anywhere; min-width: 0; }
 /* ★★ V12 the DRM Signal pane (drm.ts drmSignalRender) — #dabSignal's rules, shared with it above, plus its own padding.
    ★ A long value (the station's text message) wraps rather than scrolling: it changes too rarely for a marquee. */
 #drmSignal { padding: 2px 10px 10px; font-size: 11.5px; }

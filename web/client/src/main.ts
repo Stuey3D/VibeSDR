@@ -222,6 +222,8 @@ import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME
          type FreeDvSub, type FreeDvState, type FreeDvChoice } from '../../../src/services/freedv';
 // ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
+// ★★ V12 digital-voice ID — DMR, D-STAR, YSF, NXDN, dPMR, never the voice (src/services/dvsig.ts — the app and the R36S share it)
+import { dvsigOffered, dvsigVts, dvsigInfo, dvsigMapPoints, dvRow, dvTime, DV_PINS, DVSIG_NAME, DVSIG_HINT, type DvState } from '../../../src/services/dvsig';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
  *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
@@ -934,6 +936,7 @@ async function loadAudioPolicy(httpBase: string) {
     amSyncCap = amSyncOffered(Array.isArray(j.modes) ? j.modes : []);
     freedvSubs = freedvOffered(j);   // ★★ V12 FreeDV: [] where the server's libcodec2 did not load — no key at all then
     m17Cap = m17Offered(j);          // ★★ V12 M17: only where libcodec2 loaded and the radio reaches 2 m / 70 cm
+    dvsigCap = dvsigOffered(j);      // ★★ V12 DV ID: where the radio reaches VHF 136–174 / UHF 400–470 MHz and the owner allows it
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
@@ -2806,6 +2809,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onM17: (f) => {
       if (!spec || spec.mode !== 'm17' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
       m17State = f;
+      updateVts();
+    },
+    /* ★★ V12 DV ID: the server's report — the VTS line, the box's log. WHAT it names is the server's decision (an identities
+     *  copy only on an amateur band, or to a signed-in owner who opted in); a report after leaving the mode is a ghost. */
+    onDvsig: (f) => {
+      if (!spec || spec.mode !== 'dvsig' || dabOn || adsbOn || ismOn || ndbOn || aisOn) return;
+      dvState = f;
+      dvBoxSync();
       updateVts();
     },
     onFreeDv: (f) => {
@@ -4872,12 +4883,16 @@ function updateVts() {
   const m17On = spec.mode === 'm17' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
   const m17Text = m17On ? m17Info(m17State) : '';
   if (m17On) { name = m17Vts(m17State); flag = ''; logo = ''; src = ''; dabRt = ''; dabSvcSid = 0; }
+  /* ★★ V12 DV ID likewise ("DV · searching", "DMR · G4ABC Stuart", "DMR · heard · CC 1 · TS2", "DV · last YSF G4ABC"). */
+  const dvOn = spec.mode === 'dvsig' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
+  const dvText = dvOn ? dvsigInfo(dvState) : '';
+  if (dvOn) { name = dvsigVts(dvState); flag = ''; logo = ''; src = ''; dabRt = ''; dabSvcSid = 0; }
 
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
   // ★ Tracks whether what we are about to show is LIVE (the station naming itself) or STATIC (our
   //   guess from a list). Only the live kind may stay up — see vtsHoldFor().
-  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label) || fdvOn || m17On;
+  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label) || fdvOn || m17On || dvOn;
   if (!name) {
     const near = nearestStation(hz);
     if (near && Math.abs(near.frequency - hz) <= VTS_ON_HZ) {
@@ -4993,6 +5008,7 @@ function updateVts() {
     : toneOn ? { name: toneName, text: tone }
     : fdvOn ? { name }
     : m17On ? { name, text: m17Text }
+    : dvOn ? { name, text: dvText }
     : { id: vtsHex(rdsPi), idLabel: 'PI', name: rdsName, text: rdsName ? rdsText : '' };
   setClass(vts, 'line', lineMode);
   applyVtsScroll(lineMode);
@@ -7546,6 +7562,9 @@ let fdvState: FreeDvState | null = null;
 /** ★★ V12 M17: offered by THIS server (vibeserver.json modes), and its last report while in the mode. */
 let m17Cap = false;
 let m17State: M17State | null = null;
+/** ★★ V12 DV ID: offered by THIS server (vibeserver.json modes), and its last report while in the mode. */
+let dvsigCap = false;
+let dvState: DvState | null = null;
 /** The demodulators to offer: the fixed set, plus the synchronous AM family and DRM where this server has them (beside
  *  AM, where an AM listener looks), FreeDV beside USB / LSB — minus what the owner switched off. */
 function offeredModes(): SDRMode[] {
@@ -7555,6 +7574,7 @@ function offeredModes(): SDRMode[] {
     if (m === 'am') out.push(...(amSyncCap as SDRMode[]));
     if (m === 'lsb' && freedvSubs.length) out.push('freedv');
     if (m === 'nfm' && m17Cap) out.push('m17');   // ★★ V12 M17 beside NFM, where an NFM listener looks
+    if (m === 'nfm' && dvsigCap) out.push('dvsig');   // ★★ V12 DV ID likewise
   }
   if (drmCap) out.push('drm');
   return out.filter((m) => !isModeBlocked(m));
@@ -7580,7 +7600,53 @@ function drmSetPane(p: 'station' | 'signal') {
   if (box) box.scrollTop = 0;   // ★ a pane opens at its top, not wherever the other one was scrolled to
 }
 /** The DRM box: shown while the mode is DRM, filled from the last report (drm.ts). */
+/** ★★ V12 THE DV ID BOX — shown while the mode is DV ID: AUTO or one system (the manual fallback), the log of who was
+ *  heard (newest first), MAP for amateur positions, EXIT. Built once, refilled from the last report. */
+function dvBoxSync() {
+  const on = !!spec && spec.mode === 'dvsig' && !dabOn && !adsbOn && !ismOn && !ndbOn && !aisOn;
+  let box = document.getElementById('dvBox');
+  if (!on) { if (box) box.classList.remove('open'); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'dvBox';
+    box.setAttribute('data-navbox', '');   // ★ one place for the pad (DRM's box's rule)
+    box.innerHTML = `<div id="dvBoxHead"><span class="drmTitle">DV ID</span><span class="drmSub" title="${DVSIG_HINT.replace(/"/g, '&quot;')}">${DVSIG_NAME.replace(/^Digital voice ID: /, '')} · never the voice</span>`
+      + '<button class="btn" id="dvMap" type="button" title="Amateur stations that sent a position, on the map" hidden>MAP</button>'
+      + '<button class="btn" id="dvExit" type="button" title="Leave DV ID and return to NFM">EXIT</button>'
+      + '<button class="btn" id="dvMin" type="button" title="Minimise">&ndash;</button></div>'
+      + '<div id="dvBody"><div id="dvPins" class="dvPins"></div><div id="dvNote" class="drmSmall"></div><div id="dvLog"></div></div>';
+    (document.getElementById('wfWrap') ?? document.body).appendChild(box);
+    (box.querySelector('#dvExit') as HTMLElement).onclick = () => { setMode('nfm', true); renderFreq(); };
+    (box.querySelector('#dvMin') as HTMLElement).onclick = () => box!.classList.toggle('min');
+    (box.querySelector('#dvMap') as HTMLElement).onclick = () => {
+      openPinsMap(dvsigMapPoints(dvState).map((p) => ({ lat: p.lat, lon: p.lon, label: p.label, level: 0 })));
+    };
+    const pins = box.querySelector('#dvPins') as HTMLElement;
+    for (const p of DV_PINS) {
+      const b = document.createElement('button');
+      b.className = 'btn'; b.type = 'button'; b.textContent = p.label; b.dataset.pin = p.id;
+      b.title = p.id === 'auto' ? 'Every system at once: the receiver says which it hears' : `Only ${p.label} — when AUTO cannot settle on a busy channel`;
+      b.onclick = () => spec?.dvsigPin(p.id);
+      pins.appendChild(b);
+    }
+  }
+  box.classList.add('open');
+  const st = dvState;
+  box.querySelectorAll<HTMLElement>('#dvPins button').forEach((b) => b.classList.toggle('on', (st?.pin ?? 'auto') === b.dataset.pin));
+  const note = st ? (st.amateur ? `${st.band}: callsigns and IDs are shown` : st.ids ? 'Not an amateur frequency: IDs shown to you, the owner, only' : 'Not an amateur frequency: who is talking is not shown, only what was heard') : 'Listening…';
+  const ne = box.querySelector('#dvNote') as HTMLElement;
+  if (ne.textContent !== note) ne.textContent = note;
+  const pts = dvsigMapPoints(st);
+  (box.querySelector('#dvMap') as HTMLElement).hidden = !pts.length;
+  const rows = (st?.log ?? []).slice(0, 30).map((e) =>
+    `<div class="dvRow${e.open ? ' open' : ''}"><span class="dvT">${dvTime(e.t)}</span><span class="dvS">${e.sys}</span>`
+    + `<span class="dvX">${escapeHtml(dvRow(e))}</span></div>`).join('');
+  const lg = box.querySelector('#dvLog') as HTMLElement;
+  const html = rows || '<div class="drmSmall">Nothing heard yet. DMR, D-STAR, System Fusion, NXDN and dPMR are listened for at once.</div>';
+  if (lg.innerHTML !== html) lg.innerHTML = html;
+}
 function drmBoxSync() {
+  dvBoxSync();   // ★ the DV ID box follows every mode flip the DRM box does (whole-radio modes close both)
   /* ★★ …and never while DAB has the radio (Stuart, 2026-11-15, the Sony on 12B: a DRM box "Lock: searching" over DAB).
    *    DAB is a whole-radio mode of its own — the demodulator's mode can still read 'drm' underneath it (a listener who
    *    was on DRM when the shared dial went to DAB), so the mode alone is not the answer. Stuart: "the DRM box needs to
@@ -19822,6 +19888,8 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   if (m !== 'drm') { drmState = null; drmIq = null; drmQualityMeter.reset(); drmQuality = null; }
   if (m !== 'freedv') fdvState = null;   // ★ V12 FreeDV: its line goes with the mode
   if (m !== 'm17') m17State = null;      // ★ V12 M17 likewise
+  if (m !== 'dvsig') dvState = null;     // ★ V12 DV ID likewise
+  else if (!send && !dvState) spec.dvsigStatus();   // ★ adopted (a room already in DV ID): ask for its report now
   else if (!send && !m17State) spec.m17Status();   // ★ adopted (a room already in M17): ask for its report now
   else if (!send && !fdvState) spec.freedvSub(null);   // ★ adopted (a room already in FreeDV): ask for its report now
   amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second
@@ -19848,6 +19916,7 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
   drm: 5000,   // ★ V12 DRM: unused — the bandwidth row is hidden in DRM (see syncBw)
   freedv: 3000,   // ★ V12 FreeDV: unused — the server fixes the modem's channel; the row is hidden (see syncBw)
   m17: 4500,      // ★ V12 M17: unused — the server fixes the receiver's channel; the row is hidden (see syncBw)
+  dvsig: 6250,    // ★ V12 DV ID likewise
   // ★ V12 synchronous AM: AM-shaped as AM; ECSS's edges are SSB's (one sideband, up to 6 kHz like USB/LSB)
   sau: 20000, sal: 20000, amst: 20000, ecssu: 6000, ecssl: 6000,
 };
@@ -19894,7 +19963,7 @@ function syncBw() {
    *  row is hidden rather than left as a slider that does nothing (AGENTS.md: no dead controls). */
   //  ★ V12 FreeDV likewise: the server fixes the modem's 2.7 kHz channel; the sub-mode row takes its place in the picker.
   { const row = document.querySelector('.bwRow') as HTMLElement | null;
-    if (row) row.style.display = spec.mode === 'drm' || spec.mode === 'freedv' || spec.mode === 'm17' ? 'none' : ''; }
+    if (row) row.style.display = spec.mode === 'drm' || spec.mode === 'freedv' || spec.mode === 'm17' || spec.mode === 'dvsig' ? 'none' : ''; }
   const max = BW_EDGE_MAX[spec.mode] ?? 6000;
   const step = max > 50_000 ? 1000 : max > 10_000 ? 100 : 10;
   const lo = $<HTMLInputElement>('bwLo');
