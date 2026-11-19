@@ -99,7 +99,9 @@ inline void lcBytes(const DmrCall& c, int flco, uint8_t* lc) {
 inline void dmrBurstSyms(Syms& s, const uint8_t* first108, const uint8_t* mid48, const uint8_t* last108) {
     addDibits(s, first108, 108); addDibits(s, mid48, 48); addDibits(s, last108, 108);
 }
-inline void syncBits(uint64_t v, bool data, uint8_t* b48) { for (int i = 0; i < 48; ++i) b48[i] = uint8_t(((v >> (47 - i)) & 1u) ^ (data ? 1u : 0u)); }
+/** ★ The data SYNC is the voice SYNC "symbol-wise complemented" (TS 102 361-1 table 9.2 note): +3 ↔ −3, i.e. the first bit
+ *  of every dibit inverted, not every bit. */
+inline void syncBits(uint64_t v, bool data, uint8_t* b48) { for (int i = 0; i < 48; ++i) b48[i] = uint8_t(((v >> (47 - i)) & 1u) ^ ((data && (i & 1) == 0) ? 1u : 0u)); }
 /** A data burst's 264 bits: info₁ 98 · slot type 10 · sync 48 · slot type 10 · info₂ 98. */
 inline void dataBurst(Syms& s, int cc, int dt, const uint8_t* b12, uint64_t syncVoice) {
     uint8_t info[96], tx[196]; bytesToBitsMsb(b12, 96, info); bptc196Encode(info, tx);
@@ -310,16 +312,25 @@ inline Syms dstar(const DstarCall& c, uint32_t seed) {
     for (int n = 0; n < 4; ++n) { std::array<uint8_t, 6> b{}; b[0] = uint8_t(0x40 | n); for (int k = 0; k < 5; ++k) b[size_t(1 + k)] = uint8_t(size_t(5 * n + k) < c.msg.size() ? c.msg[size_t(5 * n + k)] : ' '); blocks.push_back(b); }
     for (int o = 0; o < 41; o += 5) { std::array<uint8_t, 6> b{}; const int nn = std::min(5, 41 - o); b[0] = uint8_t(0x50 | nn); for (int k = 0; k < nn; ++k) b[size_t(1 + k)] = h[o + k]; for (int k = nn; k < 5; ++k) b[size_t(1 + k)] = 0x66; blocks.push_back(b); }
     if (!c.dprs.empty()) { const std::string l = c.dprs + "\r"; for (size_t o = 0; o < l.size(); o += 5) { std::array<uint8_t, 6> b{}; const int nn = int(std::min<size_t>(5, l.size() - o)); b[0] = uint8_t(0x30 | nn); for (int k = 0; k < nn; ++k) b[size_t(1 + k)] = uint8_t(l[o + size_t(k)]); for (int k = nn; k < 5; ++k) b[size_t(1 + k)] = 0x66; blocks.push_back(b); } }
-    size_t bi = 0;
+    // ★ per superframe (20 data frames = 10 blocks): even superframes repeat the header (9 blocks, STD7.0 §6.4: right
+    //   after the sync), odd ones carry the message and the D-PRS line
+    const size_t hdrBlocks = 9, firstMsg = 9;
+    std::vector<std::array<uint8_t, 6>> other(blocks.begin(), blocks.begin() + 4);
+    other.insert(other.end(), blocks.begin() + long(firstMsg), blocks.end());
+    size_t oi = 0;
     const Bits& pn = dstarPn();
+    std::array<uint8_t, 6> cur{}; cur.fill(0x66);
     for (int j = 0; j < c.frames; ++j) {
         for (int i = 0; i < 72; ++i) s.push_back((rng() & 1) ? 1 : -1);   // voice: random, never read
-        if (j % 21 == 0) { dsBits(s, kDsDataBits); continue; }
-        const int half = (j % 21 - 1) & 1;
-        std::array<uint8_t, 6> b{}; b.fill(0x66);
-        if ((j % 21) <= 20) b = blocks[bi % blocks.size()];
-        if (half == 1) ++bi;
-        uint8_t o[3] = {b[size_t(3 * half)], b[size_t(3 * half + 1)], b[size_t(3 * half + 2)]};
+        const int sfi = j / 21, pos = j % 21;
+        if (pos == 0) { dsBits(s, kDsDataBits); continue; }
+        const int half = (pos - 1) & 1, blk = (pos - 1) / 2;
+        if (half == 0) {
+            if ((sfi & 1) == 0 && size_t(blk) < hdrBlocks) cur = blocks[size_t(4 + blk)];
+            else if ((sfi & 1) == 1) cur = other[oi++ % other.size()];
+            else cur.fill(0x66);
+        }
+        uint8_t o[3] = {cur[size_t(3 * half)], cur[size_t(3 * half + 1)], cur[size_t(3 * half + 2)]};
         for (int i = 0; i < 24; ++i) { const int bit = ((o[i >> 3] >> (i & 7)) & 1) ^ pn[size_t(i)]; s.push_back(bit ? 1 : -1); }
     }
     dsBits(s, "101010101010101010101010101010100001001101011110");   // the end pattern

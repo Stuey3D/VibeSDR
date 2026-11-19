@@ -29,6 +29,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -48,6 +49,10 @@ inline Sys sysFromKey(const std::string& k) {
     if (k == "dmr") return Sys::Dmr; if (k == "dstar") return Sys::Dstar; if (k == "ysf") return Sys::Ysf;
     if (k == "nxdn") return Sys::Nxdn; if (k == "dpmr") return Sys::Dpmr; return Sys::None;
 }
+
+/** VIBE_DVSIG_LOG=1: every frame a system reads, to stderr (what it was, how it decoded) — the first-capture tool. */
+inline bool logOn() { static const bool on = [] { const char* e = std::getenv("VIBE_DVSIG_LOG"); return e && *e && *e != '0'; }(); return on; }
+#define DVLOG(...) do { if (::vibe::dvsig::logOn()) std::fprintf(stderr, __VA_ARGS__); } while (0)
 
 // ── The legal rule's inputs ────────────────────────────────────────────────────────────────────────────────────────────
 /** "" when `hz` is not inside an amateur allocation of `region`'s band plan, else the band's label ("70 cm amateur").
@@ -276,13 +281,14 @@ private:
         for (int i = 0; i < 5; ++i) softDibit(fr.z(1 + i), st + 10 + 2 * i);
         int gd = 0;
         const int slotType = golay20Decode(st, &gd);
-        if (slotType < 0 || gd > 3) return false;
+        if (slotType < 0 || gd > 3) { DVLOG("dmr data burst @%.1f: slot type fails (golay %d dist %d) z %.2f %.2f %.2f %.2f %.2f / %.2f %.2f %.2f %.2f %.2f\n", fr.anchor, slotType, gd, fr.z(-28), fr.z(-27), fr.z(-26), fr.z(-25), fr.z(-24), fr.z(1), fr.z(2), fr.z(3), fr.z(4), fr.z(5)); return false; }
         const int cc = (slotType >> 4) & 0xF, dt = slotType & 0xF;
         uint8_t raw[196], info[96];
         fr.hard(-77, 49, raw); fr.hard(6, 49, raw + 98);
         int fx = 0;
-        if (!bptc196Decode(raw, info, &fx)) return false;
+        if (!bptc196Decode(raw, info, &fx)) { DVLOG("dmr data burst @%.1f: cc %d type %d, BPTC fails\n", fr.anchor, cc, dt); return false; }
         uint8_t b[12]; bitsToBytesMsb(info, 96, b);
+        DVLOG("dmr data burst @%.1f si %d: cc %d type %d, golay %d, bptc %d fixes\n", fr.anchor, si, cc, dt, gd, fx);
         const float ber = float(fx + gd) * 100.f / 216.f;
         auto crcOk = [&](uint16_t mask) { const uint16_t c = uint16_t(crcCcittMsb(b, 10) ^ mask); return b[10] == uint8_t(c >> 8) && b[11] == uint8_t(c & 0xFF); };
         switch (dt) {
@@ -725,6 +731,7 @@ private:
             if (rp >= 0) { dataEnd0_ += rp - de; misses_ = 0; Levels lv; if (fit2(rp, kDsData, lv)) lv_ = lv; }
             else ++misses_;
             half_ = 0;
+            hdrLen_ = 0;   // ★ a header repeated in slow data starts right after a data sync (STD7.0 §6.4)
             lastData_ = de;
             return;
         }

@@ -196,7 +196,11 @@ inline bool embDecode(const uint8_t frag[4][32], uint8_t* lc9, int* fixes = null
         if (e < 0) return false;
         if (e == 1) { ++nfix; for (int c = 0; c < 16; ++c) m[r][c] = uint8_t((cw >> (15 - c)) & 1u); }
     }
-    for (int c = 0; c < 16; ++c) { uint8_t p = 0; for (int r = 0; r < 8; ++r) p ^= m[r][c]; if (p) return false; }
+    // ★ the column parity row has no code of its own: ONE failing column is an error in that row (the information is
+    //   untouched — the checksum below still has the last word); two or more are refused
+    int badCols = 0;
+    for (int c = 0; c < 16; ++c) { uint8_t p = 0; for (int r = 0; r < 8; ++r) p ^= m[r][c]; if (p) ++badCols; }
+    if (badCols > 1) return false;
     uint8_t lc[72]; int k = 0; uint8_t cs = 0;
     for (int r = 0; r < 7; ++r) {
         const int nlc = r < 2 ? 11 : 10;
