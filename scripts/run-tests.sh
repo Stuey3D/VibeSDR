@@ -399,6 +399,7 @@ deps_for() {
     test-dab-ddc) echo "-O2" ;;
     # ★★ V12 §11.1 the wide-capture filter bank against the DDC (vibe_dab_bank.h) — optimised (its cost lines), and threaded.
     test-dab-bank) echo "-O2 -pthread" ;;
+    test-varatag) echo "-O2" ;;   # ★ V12 the VARA HF tag: ~40 simulated captures of 150 s at 192 kS/s
     # ★★★ A SLOW SAMPLE CLOCK (2026-11-12, a B210 4 ppm out on MTVNL 7D): the null walks to the window's front and the tracker
     #     pinned there — the lock broke up hours into a listen. The window re-centres (advanceAfterPush); the old loop must
     #     still show the fault. ~2,000 synthetic frames through the real receiver, so optimised.
@@ -457,6 +458,9 @@ deps_for() {
     test-selcal)        echo "android/app/src/main/cpp/decoders/selcal_decoder.cpp" ;;
     test-ale)           echo "android/app/src/main/cpp/decoders/ale_decoder.cpp" ;;   # ★ V12 2G HF ALE (docs/v12/HF-DATA.md)
     test-textmodes)     echo "android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp" ;;   # ★ V12 MFSK / OLIVIA / THOR (pffft: cobj-ndb)
+    # ★★ V12 the VARA HF tag (vibe_varatag.h — IDENTIFY ONLY, docs/v12/VARA-TAG.md): VARA-shaped generic OFDM tagged, every
+    #    look-alike (PACTOR, single carriers, FreeDV/RADE, DRM, Olivia, MT63, real RADE + speech) 0 labels (pffft: cobj-ndb)
+    test-varatag)       echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/mt63.cpp" ;;
     test-feld-hell)     echo "android/app/src/main/cpp/decoders/feld_hell.cpp" ;;   # ★ V12 FELD HELL, drawn (pffft: cobj-ndb)
     test-msk144)        echo "android/app/src/main/cpp/decoders/digimodes/msk144_code.cpp android/app/src/main/cpp/decoders/digimodes/msk144_decoder.cpp android/app/src/main/cpp/decoders/digimodes/ldpc_small.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-q65)           echo "android/app/src/main/cpp/decoders/digimodes/q65_code.cpp android/app/src/main/cpp/decoders/digimodes/q65_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
@@ -500,7 +504,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
