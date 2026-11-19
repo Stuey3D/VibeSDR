@@ -33,7 +33,7 @@ Built and committed on this branch; **not merged**. What is done, and what is ow
    (`labelLayout`, the bar for the occupied span), tap = tune in USB with no decoder. TS tests pass
    (`scripts/test_known_signals.ts`: 132/0, 9 new).
 3. **Synthetic**: `vibeserver/test-varatag.cpp` — every positive tagged, every look-alike 0 labels (numbers below).
-4. **Real signals**: ~40 minutes of Stuart's UberSDR (80 / 40 / 30 / 20 m Winlink segments, evening 2026-11-19):
+4. **Real signals**: ~61 minutes of Stuart's UberSDR (80 / 40 / 30 / 20 m Winlink segments, 21:52–22:37 UTC 2026-11-19):
    **0 false labels — and no real VARA was found on air to confirm the positive.** The spacing window
    (`kSpacingLo/Hi` 45.3–48.5 Hz) is therefore still the published-figure value (46.9 Hz), not a measured one. **The
    coordinator should capture a real VARA ARQ session** (20 m 14.105–14.112 in daytime is the best bet from the UK;
@@ -57,10 +57,12 @@ channeliser's **unwindowed** transform) to `Tagger::row` at most 4 times a secon
 - A local noise floor: medians of ~700 Hz blocks, then the 30th percentile of ±12 blocks.
 - Runs of bins ≥ floor + 7 dB, dips of up to 4 bins bridged (a fade's notch must not cut a block in two).
 - Each run's width at 10 dB under its median top (or the floor threshold on a weak block), bridged the same way, must
-  fall in a VARA class: 380–660 Hz (500), 2050–2520 (2300), 2520–3050 (2750).
+  fall in a VARA class: 380–660 Hz (500), 2050–2600 (2300), 2600–3100 (2750).
 - The top flat (std dev ≤ 4.5 dB over the inner 80 %, ≥ 70 % of it within 6 dB of the top) and the sides steep (3 and 4
   bins out back at the floor + 4.5 dB, or 12 dB under the top — the unwindowed transform leaks ~−12 dB three bins out).
-- A passing run joins a **track** (same class, centre within ±12 % of the width). A track's on/off history over 90 s is
+- A passing run joins a **track** by centre (±12 % of the width; the narrow class never merges with a wide one); a
+  track's class is the majority of its readings (a 2300 Hz block read at 75 Hz bins straddles the 2600 Hz split now and
+  then — the measured width runs 100–250 Hz over the true one through the unwindowed transform's leakage). A track's on/off history over 90 s is
   the burst pattern.
 
 ### Stage 2 — the comb, from one narrow slice (K = 1)
@@ -70,8 +72,10 @@ listener's channel comes from (`sliceBins`: twice the class width plus a guard; 
 transform per block, and only while an evaluation is open.
 - Hann-windowed segments at ~1.5–2.9 Hz resolution, ½ overlap; a segment counts only while the block is **up** (its band
   8 dB over the slice's guard bins), so ARQ gaps and the other station's silence never dilute it.
-- After 40 such segments (or 80 s; fewer than 18 = no verdict) the averaged power spectrum's flat top has its slow shape
+- After 40 such segments (or 80 s; fewer than 18 = no verdict; a strongest period already IN the window but faint keeps
+  averaging, doubling to 160 segments / 240 s) the averaged power spectrum's flat top has its slow shape
   removed (a 150 Hz moving average) and is clipped to ±6 dB (a narrow carrier or a notch must not be the ripple).
+- The comb reads 80 % of the narrower of the track's measured width and its class (edges and leakage kept out).
 - **The periodogram of that ripple** over periods 20–200 Hz (`measureComb`) names the carrier spacing. It passes when
   the strongest period of all lies in 45.3–48.5 Hz and its value is ≥ 0.10 (0.5 = a pure ripple; noise ≈ 0.005).
 
@@ -104,12 +108,13 @@ the centre and opens nothing. Web: `spectrum.ts` `case 'sigtags'` → `main.ts` 
 ## Tests and what they showed
 
 ### Synthetic — `vibeserver/test-varatag.cpp` (the server's path: Channelizer → unwindowed rows → Tagger; slice by `extract`)
-47 Hz bins (192 kS/s, 4096 points) and 75 Hz bins (307.2 kS/s): see "Results" below for the run's figures.
+47 Hz bins (192 kS/s, 4096 points) and 75 Hz bins (307.2 kS/s). Final run: **PASSED, 0 failures; 7 positive cases
+tagged (8 tags, two sessions on one capture), 23 guard cases 0 labels.**
 
 | Case | Result |
 |---|---|
 | VARA-shaped 2300 / 2750 / 500, ARQ, 47 Hz bins | tagged, centre within 10 Hz, spacing read 46.7–46.9 Hz, after 20–28 s |
-| 2300 continuous, 75 Hz bins | tagged (spacing 46.2–46.3) |
+| 2300 continuous, 75 Hz bins | tagged (spacing read 46.2 — the 75 Hz-bin slice reads ~0.7 Hz low; inside the window) |
 | 2300 ARQ + two-path fade, 75 Hz bins; 2750 ARQ + fade, 47 Hz bins | tagged (comb P 0.17–0.19) |
 | two sessions on one capture | 2 tags |
 | noise (47 and 75 Hz bins) | 0 |
@@ -132,7 +137,9 @@ Recorded from Stuart's UberSDR (RX888) with `tools/ubersdr-rec`, 2026-11-19 21:5
 | `uber_80m_3590000_iq192_…2152Z` (120 s), `uber_80m_3595000_iq48_…2201Z` (600 s) | 80 m 3.494–3.686: LSB QSOs, FT8/FT4 at 3.573/3.575, CW, a continuous ~2.7 kHz block at 3.5805–3.583 MHz (comb ~150 Hz, not VARA), narrow data | 0 |
 | `uber_40m_7060000_iq192_…2152Z` (120 s), `uber_40m_7050000_iq48_…2201Z` (600 s), `uber_40m_7100000_iq192_…2156Z` (240 s) | 40 m 6.96–7.20: a ~2.2 kHz burst every 15 s at 7.0483–7.0505 MHz (discrete wavering tones, a carrier through it — one station, no reply; not identified), SSB, CW, FT8 | 0 |
 | `uber_30m_10140000_iq192_…2156Z` (240 s) | 30 m: FT8 10.136, narrow data | 0 |
-| 20 m / 30 m iq48 (420 s, 22:20) | see "Results" | |
+| `uber_20m_14103000_iq48_…2220Z` (420 s) | 20 m 14.079–14.127: closed to the UK by then — carriers only | 0 |
+| `uber_30m_10145000_iq48_…2220Z` (420 s) | 30 m: FT8, a ~4.5 kHz wavering utility block at 10.156–10.160 MHz | 0 |
+| `uber_80m_3597000_iq48_…2227Z` (600 s) | 80 m 3.573–3.621: as above, plus short weak bursts — a ~2.3 kHz one at 3.6045–3.6068 and a ~1.6 kHz pulsed one at 3.6097–3.6113 (t ≈ 390–520 s), too weak and short to measure a comb by hand either | 0 (5 comb looks, none passed) |
 
 **Hits on real VARA: none observed** (no VARA ARQ session was on air in these windows). **False labels: 0.**
 

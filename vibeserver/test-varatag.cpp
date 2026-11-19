@@ -292,6 +292,7 @@ static int realReplays() {
     std::printf("\n[real] %zu recording(s) in %s\n", files.size(), dir.c_str());
     int total = 0;
     for (const auto& f : files) {
+        if (!g_only.empty() && f.find(g_only) == std::string::npos) continue;
         // ★ in 150 s pieces (bounded memory: ≤ ~250 MB at 192 kS/s), each with a fresh tagger
         double fileS = 0;
         for (double st = 0; ; st += 150) {
@@ -320,8 +321,8 @@ static constexpr double kDf = 46.875, kBaud = 42.0;
 
 int main() {
     std::printf("── test-varatag: the VARA HF identification tag (identify only — nothing is decoded) ──\n");
-    if (std::getenv("VIBE_VARA_REAL")) { realReplays(); return 0; }
-    if (const char* only = std::getenv("VIBE_VARA_ONLY")) g_only = only;   // ★ report only: what is on air is not known in advance
+    if (const char* only = std::getenv("VIBE_VARA_ONLY")) g_only = only;
+    if (std::getenv("VIBE_VARA_REAL")) { realReplays(); return 0; }   // ★ report only: what is on air is not known in advance
     const double fs = 192000;   // fftSizeForRate → 4096 points, 46.9 Hz bins (an Airspy HF+ / a narrow capture)
     const double fs75 = 307200; // → 4096 points, 75 Hz bins (the server's coarsest, a 2.4 MS/s RTL's)
 
