@@ -789,6 +789,7 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
     std::vector<ModeDef> ms;
     { std::lock_guard<std::mutex> lk(srvMtx_); ms = offeredModes(srvModes_, s.blockedModes); }
     mapModeEntries(s, ms);   // ADS-B · AIS · ISM · NDB — whole-radio modes, after DAB (map_modes.h)
+    satModeEntries(s, ms);   // ★ V12 SAT — the satellites page (sat_page.h), only where the server sends `doppler`
     decModeEntries(s, ms);   // DECODERS… (or the sole decoder) after the whole-radio modes
     const float cw = (r.w - 24) / 2, rh = std::min(50.f, (r.h - 16) / (float)((ms.size() + 1) / 2) - 4);
     for (size_t i = 0; i < ms.size(); i++) {
@@ -799,6 +800,7 @@ inline void App::drawModeSheet(Ctx& c, const RadioState& s) {
         textIn(c, c.f.btn, ms[i].label, b, cur ? th::amber : rgb(0xdddddd));
         if (h.focused) focusRing(c, b, 6);
         if (h.pressed) {
+            if (ms[i].id == "sat") { closeTop(); satOpen(*this); return; }   // ★ V12 the satellites page (sat_page.h)
             if (mapModePick(*this, s, ms[i].id)) { closeTop(); return; }   // ADS-B / AIS / ISM / NDB (map_modes.h)
             if (decModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DECODERS… (dec_box.h)
             if (dabModePick(*this, s, ms[i].id)) { closeTop(); return; }   // DAB in / out (dab_state.h)
@@ -1319,7 +1321,7 @@ inline int App::run(int argc, char** argv) {
              *    listener's own the moment it is uncovered. The screen keeps its own pace: somebody is using that page. */
             bool covered = decBoxTallShown() || mapCoversScreen(*this);
             for (const Sheet sh : sheets_)
-                covered = covered || sh == S_MENU || sh == S_AUDIO || sh == S_BOOKMARKS || sh == S_SEARCH || sh == S_DAB
+                covered = covered || sh == S_MENU || sh == S_AUDIO || sh == S_BOOKMARKS || sh == S_SEARCH || sh == S_SAT || sh == S_DAB
                        || sh == S_MAP || (sh == S_DEC && decPicFullOpen());
             specCovered_ = covered && set_.idleSave;
             // ★★ 5 rows a second, not 2 (Stuart, 2026-11-07: "preserving waterfall history so that when the screen is
@@ -1498,6 +1500,7 @@ inline int App::run(int argc, char** argv) {
             decDrawBox(*this, c, s);
             drawDeck(c, s, {lay::islandX, lay::islandY, lay::islandW, lay::islandH});
             drawVts(c, s, {lay::islandX, lay::islandY - 40, lay::islandW, 34});
+            satDrawLine(c, s, lay::islandX + 8, lay::islandY - 72);   // ★ V12 a Doppler lock's readout (sat_page.h)
         }
         for (size_t i = 0; i < sheets_.size(); i++) {
             const Sheet sh = sheets_[i];
@@ -1514,6 +1517,7 @@ inline int App::run(int argc, char** argv) {
                 case S_AUDIO: drawAudioSheet(c, s); break;
                 case S_MENU: drawMenu(c, s); break;
                 case S_MAP: mapDrawSheet(*this, c, s); break;
+                case S_SAT: drawSat(c, s); break;   // ★ V12 sat_page.h
                 default: break;
             }
             if (sheets_.size() < before) break;     // it closed itself
