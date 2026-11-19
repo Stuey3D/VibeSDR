@@ -80,7 +80,7 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'tones+digits', label: '5-tone: show the called numbers off the amateur bands (to you only)', parent: 'tones', on: true },
   /* ★★ V12 DV ID (docs/v12/DV-SIGNALLING.md): DMR, D-STAR, YSF, NXDN, dPMR — who is talking, never the voice — a demodulator
    *  on VHF / UHF, and under it the owner's opt-in for radio IDs off the amateur bands ("+" token), as on the setup page. */
-  { id: 'dvsig', label: 'Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR (who is talking, never the voice)' },
+  { id: 'dvsig', label: 'Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR (who is talking \u2014 the data only; the voice codec, AMBE, is patented)' },
   { id: 'dvsig+ids', label: 'Digital voice ID: show radio IDs off the amateur bands (to you only)', parent: 'dvsig', on: true },
   { id: 'ais', label: 'AIS ships' },
   // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page

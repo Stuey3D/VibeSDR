@@ -20,7 +20,8 @@
 export const DVSIG_LABEL = 'DV ID';
 export const DVSIG_NAME = 'Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR';
 export const DVSIG_HINT = 'Who is talking on a DMR, D-STAR, System Fusion, NXDN or dPMR channel: callsigns, radio IDs, '
-  + 'talkgroup, talker alias and position on the amateur bands. The voice is never decoded; analogue FM still plays.';
+  + 'talkgroup, talker alias and position on the amateur bands. The data only: the voice is carried by the patented AMBE '
+  + 'codec, so it is never decoded. Analogue FM still plays.';
 
 export type DvSys = 'DMR' | 'D-STAR' | 'YSF' | 'NXDN' | 'dPMR';
 export type DvPin = 'auto' | 'dmr' | 'dstar' | 'ysf' | 'nxdn' | 'dpmr';

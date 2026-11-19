@@ -7610,7 +7610,7 @@ function dvBoxSync() {
     box = document.createElement('div');
     box.id = 'dvBox';
     box.setAttribute('data-navbox', '');   // ★ one place for the pad (DRM's box's rule)
-    box.innerHTML = `<div id="dvBoxHead"><span class="drmTitle">DV ID</span><span class="drmSub" title="${DVSIG_HINT.replace(/"/g, '&quot;')}">${DVSIG_NAME.replace(/^Digital voice ID: /, '')} · never the voice</span>`
+    box.innerHTML = `<div id="dvBoxHead"><span class="drmTitle">DV ID</span><span class="drmSub" title="${DVSIG_HINT.replace(/"/g, '&quot;')}">${DVSIG_NAME.replace(/^Digital voice ID: /, '')} · data only (the AMBE voice codec is patented)</span>`
       + '<button class="btn" id="dvMap" type="button" title="Amateur stations that sent a position, on the map" hidden>MAP</button>'
       + '<button class="btn" id="dvExit" type="button" title="Leave DV ID and return to NFM">EXIT</button>'
       + '<button class="btn" id="dvMin" type="button" title="Minimise">&ndash;</button></div>'

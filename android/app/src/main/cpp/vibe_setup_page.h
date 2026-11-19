@@ -3449,7 +3449,7 @@ const BLOCKABLE = [
   /* ★★ V12 digital-voice SIGNALLING (docs/v12/DV-SIGNALLING.md): DMR, D-STAR, YSF, NXDN and dPMR — who is talking (callsigns,
    *  radio IDs, talker alias, GPS on the amateur bands), never the voice. A demodulator on VHF / UHF. Under it the owner's
    *  opt-in ("+" token, off by default): IDs off the amateur bands, to the owner's own signed-in sockets only. */
-  { id: "dvsig",  label: "Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR (who is talking, never the voice)" },
+  { id: "dvsig",  label: "Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR (who is talking — the data only; the voice codec, AMBE, is patented)" },
   { id: "dvsig+ids", label: "Digital voice ID: show radio IDs off the amateur bands (to you only)", parent: "dvsig", on: true },
   { id: "dab",    label: "DAB"      },
   /* ★ The whole-multiplex label scan, moved here from the radio's hardware card (2026-10-31). Still drawn only on a

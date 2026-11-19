@@ -63,7 +63,7 @@ export default function DvsigPanel(p: DvsigPanelProps) {
       <DecoderBody>
         <ScrollView style={{ maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
           {!st || !st.log.length ? (
-            <Text style={s.note}>Nothing heard yet. DMR, D-STAR, System Fusion, NXDN and dPMR are listened for at once. The voice is never decoded.</Text>
+            <Text style={s.note}>Nothing heard yet. DMR, D-STAR, System Fusion, NXDN and dPMR are listened for at once. Only the data is decoded \u2014 the voice uses the patented AMBE codec.</Text>
           ) : st.log.slice(0, 40).map((e, i) => (
             <View key={e.id} style={[s.row, i % 2 === 0 && s.rowAlt]} accessibilityLabel={`${e.sys} ${dvRow(e)}`}>
               <Text style={s.ago} numberOfLines={1}>{dvTime(e.t)}</Text>
