@@ -14078,7 +14078,7 @@ let grpPrev = { tot: 0, at: 0 };
 
 /** Params for the current mode — the shim's startDecoder reads these. */
 function decParams(mode: string): Record<string, unknown> {
-  if (mode === 'lrpt') return lrptAttachParams(72000);   // ★ V12 METEOR LRPT: 72k, the modulation and coding AUTO
+  if (mode === 'lrpt') return lrptAttachParams();   // ★ V12 METEOR LRPT: AUTO (72k / 80k, the modulation and coding) until the satellite engine names it
   if (mode === 'rtty' && rttySkim) return { width: rttyWidth };   // ★ the skimmer finds every signal's settings itself
   if (mode === 'rtty') {
     return {

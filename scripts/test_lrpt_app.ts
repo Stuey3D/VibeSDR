@@ -26,8 +26,9 @@ ok(!!junk && junk.frames === 0 && junk.lines === 0 && junk.channels.length <= 6 
 ok(parseLrptStatus(null) === null && parseLrptStatus('x') === null, 'not an object: null');
 ok(!/NaN|undefined/.test(lrptStatusText(junk)), `no NaN in the line: ${lrptStatusText(junk)}`);
 // attach
-ok(JSON.stringify(lrptAttachParams()) === '{"symbol_rate":72000,"modulation":"auto","diff":"auto"}', 'attach: 72k AUTO');
-ok(lrptAttachParams(80000).symbol_rate === 80000 && lrptAttachParams(79000).symbol_rate === 80000 && lrptAttachParams(70000).symbol_rate === 72000, 'attach: 80k');
+ok(JSON.stringify(lrptAttachParams()) === '{"modulation":"auto","diff":"auto"}', 'attach: no rate named = AUTO (72k / 80k)');
+ok(lrptAttachParams(80000).symbol_rate === 80000 && lrptAttachParams(79000).symbol_rate === 80000 && lrptAttachParams(72000).symbol_rate === 72000, 'attach: a satellite entry names its rate');
+ok(lrptAttachParams(0).symbol_rate === undefined, 'attach: 0 = AUTO');
 // registration
 ok((REACH_DECODERS as readonly string[]).includes('lrpt'), 'greyed with its reason off 137 MHz (REACH_DECODERS)');
 ok((CLIENT_DECODERS as readonly string[]).includes('lrpt'), 'a client decoder (CLIENT_DECODERS)');

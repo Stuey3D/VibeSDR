@@ -1273,7 +1273,10 @@ private:
      *  satellite's entry), "modulation" auto | qpsk | oqpsk, "diff" auto | on | off, "interleaved" (the 80k mode). */
     void buildLrptLocked_(const std::string& msg) {
         vibelrpt::Run::Opts o;
-        double sr = 72000; num(msg, "symbol_rate", sr);
+        /* ★ "symbol_rate" from the satellite's entry (sats.json) when the client has one; absent / 0 = AUTO over 72k and
+         *  80k (the clients send nothing until the satellite engine tells them — docs/v12/LRPT.md §Interface). */
+        double sr = 0; num(msg, "symbol_rate", sr);
+        o.rateAuto = !(sr > 0);
         o.symbolRate = sr >= 76000 ? 80000 : 72000;
         const std::string m = str(msg, "modulation"), d = str(msg, "diff");
         o.mod = m == "qpsk" ? vibelrpt::ReceiverConfig::Qpsk : m == "oqpsk" ? vibelrpt::ReceiverConfig::Oqpsk : vibelrpt::ReceiverConfig::Auto;
@@ -1290,7 +1293,7 @@ private:
         imageKind_.store(2, std::memory_order_relaxed);   // ★ the SSTV frame shapes: a joiner is caught up on the picture
         cwWidth_.store(vibelrpt::Run::kSliceWidthHz, std::memory_order_relaxed);
         if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);
-        log("decoder attached: METEOR LRPT, " + std::to_string((int)o.symbolRate) + " sym/s, modulation " + (m.empty() ? "auto" : m)
+        log("decoder attached: METEOR LRPT, " + (o.rateAuto ? std::string("72k / 80k AUTO") : std::to_string((int)o.symbolRate) + " sym/s") + ", modulation " + (m.empty() ? "auto" : m)
             + ", differential " + (d.empty() ? "auto" : d));
     }
     /** ★★ DSC (V12, 2026-10-26): "band":"vhf" = channel 70 on an FM demodulator's audio; anything else MF/HF, its tones

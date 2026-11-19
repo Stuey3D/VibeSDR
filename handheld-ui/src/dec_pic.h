@@ -571,7 +571,7 @@ inline void decPicOpen(const RadioState& s, const std::string& id) {
 /** The attach parameters (main.ts decParams: wefax). */
 inline std::string decPicParams(const std::string& id) {
     if (id == "wefax") return ",\"lpm\":" + std::to_string(picUi().lpm) + ",\"carrier\":1900,\"deviation\":400,\"image_width\":1809";
-    if (id == "lrpt") return ",\"symbol_rate\":72000,\"modulation\":\"auto\",\"diff\":\"auto\"";   // ★ lrpt.ts lrptAttachParams
+    if (id == "lrpt") return ",\"modulation\":\"auto\",\"diff\":\"auto\"";   // ★ lrpt.ts lrptAttachParams: the rate AUTO (72k / 80k)
     return "";
 }
 

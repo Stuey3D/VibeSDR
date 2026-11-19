@@ -4,8 +4,7 @@
 //
 //   test-lrpt                 the synthetic suite
 //   test-lrpt --quick         the same, shorter
-//   test-lrpt --wav F [DIR]   decode a 16-bit IQ .wav recording; PNGs into DIR (default .)
-//   test-lrpt --soft F [DIR] [--diff] [--int]   decode an int8 soft-symbol (.s) file
+//   test-lrpt --wav F [DIR] [--rate-auto] [--qpsk|--oqpsk] [--80k] [--noise R]   decode a 16-bit IQ .wav recording; PNGs into DIR
 #include "vibe_lrpt.h"
 #include "vibe_lrpt_tx.h"
 
@@ -258,6 +257,15 @@ static void testChain(bool quick) {
         ReceiverConfig rc;                              // AUTO: starts QPSK at 72k, must swap
         auto r = runSynthetic(t, 60, rc); line("AUTO on an OQPSK + differential signal", r);
         CHECK(r.st.blocks > 0 && r.mode == "OQPSK", "AUTO: blocks %llu mode %s", (unsigned long long)r.st.blocks, r.mode.c_str()); }
+    {   // ★ the rate not named (no satellite entry): AUTO walks 72k OQPSK → 80k OQPSK interleaved → 72k QPSK
+        tx::TxConfig t; t.oqpsk = true; t.diff = true; t.interleaved = true; t.symbolRate = 80000; t.sampleRate = 200000; t.carrierHz = 600;
+        ReceiverConfig rc; rc.rateAuto = true;
+        auto r = runSynthetic(t, 30, rc); line("rate AUTO on an 80k OQPSK interleaved signal", r);
+        CHECK(r.st.blocks > 0 && r.mode == "OQPSK", "rate AUTO 80k: blocks %llu mode %s", (unsigned long long)r.st.blocks, r.mode.c_str());
+        tx::TxConfig q; ReceiverConfig rq; rq.rateAuto = true;
+        auto r2 = runSynthetic(q, P, rq); line("rate AUTO on 72k QPSK", r2);
+        CHECK(r2.st.blocks >= uint64_t(expectBlocks * 9 / 10) && r2.mode == "QPSK", "rate AUTO 72k: blocks %llu", (unsigned long long)r2.st.blocks);
+    }
     if (!quick) {
         tx::TxConfig t; t.oqpsk = true; t.diff = true; t.interleaved = true; t.symbolRate = 80000; t.sampleRate = 200000; t.carrierHz = -900;
         ReceiverConfig rc; rc.mod = ReceiverConfig::Oqpsk;
@@ -313,6 +321,7 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--oqpsk")) c.mod = ReceiverConfig::Oqpsk;
         if (!std::strcmp(argv[i], "--80k")) { c.symbolRate = 80000; c.interleaved = true; }
         if (!std::strcmp(argv[i], "--scalar")) c.forceScalar = true;
+        if (!std::strcmp(argv[i], "--rate-auto")) c.rateAuto = true;   // ★ what the clients send until the satellite engine names the rate
         if (!std::strcmp(argv[i], "--noise") && i + 1 < argc) g_addNoise = std::atof(argv[i + 1]);
     }
     if (argc >= 3 && !std::strcmp(argv[1], "--wav")) return decodeWav(argv[2], argc >= 4 && argv[3][0] != '-' ? argv[3] : ".", c);

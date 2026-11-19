@@ -58,7 +58,10 @@ export const LRPT_HINT =
   'lasts up to 15 minutes; a 137 MHz QFH or V-dipole aerial helps a lot). The picture grows here during the pass; each ' +
   "pass's channels and colour composite are saved to the gallery as PNG.";
 
-/** The attach parameters: the symbol rate is the satellite's (72000, or 80000 for the 80k mode); the rest AUTO. */
-export function lrptAttachParams(symbolRate = 72000): Record<string, unknown> {
-  return { symbol_rate: symbolRate >= 76000 ? 80000 : 72000, modulation: 'auto', diff: 'auto' };
+/** The attach parameters. The symbol rate is the satellite's (72000, or 80000 for the 80k mode) when its entry is known
+ *  (the satellite engine, sats.json); without one nothing is sent and the server tries both (AUTO). The rest AUTO. */
+export function lrptAttachParams(symbolRate?: number): Record<string, unknown> {
+  const p: Record<string, unknown> = { modulation: 'auto', diff: 'auto' };
+  if (typeof symbolRate === 'number' && symbolRate > 0) p.symbol_rate = symbolRate >= 76000 ? 80000 : 72000;
+  return p;
 }

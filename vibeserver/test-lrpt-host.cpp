@@ -66,7 +66,7 @@ static void feed(DecoderHost& h, const std::vector<std::complex<float>>& x, doub
     for (int i = 0; i < 5000 && h.queuedIq() > 0; i++) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
-static const std::string kAttach = "{\"type\":\"audio_extension_attach\",\"extension_name\":\"lrpt\",\"symbol_rate\":72000}";
+static const std::string kAttach = "{\"type\":\"audio_extension_attach\",\"extension_name\":\"lrpt\"}";   // ★ what the clients send: the rate AUTO
 
 static void testHost() {
     std::printf("the host's lrpt extension\n");

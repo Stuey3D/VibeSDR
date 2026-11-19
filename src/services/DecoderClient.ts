@@ -341,8 +341,8 @@ export class DecoderClient {
   balloonSet: BalloonSettings = { ...BALLOON_AUTO };
   /** ★ V12 DTMF + 5-tone: which decoders run and the 5-tone standard (tones.ts tonesParams) — re-attach to apply. */
   tonesSet: TonesOptions = { ...TONES_DEFAULTS };
-  /** ★ V12 METEOR LRPT: the satellite's symbol rate (sats.json — 72000, or 80000 for the 80k mode). */
-  lrptSymbolRate = 72000;
+  /** ★ V12 METEOR LRPT: the satellite's symbol rate (sats.json — 72000, or 80000 for the 80k mode); 0 = AUTO (both tried). */
+  lrptSymbolRate = 0;
   /** The server's last word on this dial: amateur (digits shown) or not. */
   tonesLast: TonesStatus | null = null;
   /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */

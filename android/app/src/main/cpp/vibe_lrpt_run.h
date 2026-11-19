@@ -45,6 +45,7 @@ public:
         ReceiverConfig::Mod mod = ReceiverConfig::Auto;
         ReceiverConfig::Diff diff = ReceiverConfig::DiffAuto;
         bool interleaved = false;
+        bool rateAuto = false;                                           ///< no satellite entry named the rate: 72k and 80k tried
         std::function<void(const std::string&)> json;                    ///< text frames (lrpt_status)
         std::function<void(const uint8_t*, size_t)> frame;               ///< binary picture frames
         std::function<double()> dopplerHz;                               ///< the satellite engine's feed-forward; null = none
@@ -59,7 +60,8 @@ public:
     void feedIq(const std::complex<float>* iq, int n, double rate, double /*centreRfHz*/) {
         if (n <= 0 || !(rate > 0)) return;
         if (!rx_ || std::fabs(rate - rate_) > 0.5) {
-            if (rate < o_.symbolRate * 1.8 || rate > o_.symbolRate * 8.5) {
+            const double sMax = o_.rateAuto ? 80000 : o_.symbolRate, sMin = o_.rateAuto ? 72000 : o_.symbolRate;
+            if (rate < sMax * 1.8 || rate > sMin * 8.5) {
                 if (!rateWarned_) { rateWarned_ = true; status("the IQ slice runs at " + std::to_string(int(rate)) + " S/s \xe2\x80\x94 LRPT needs 1.8 to 8 times the symbol rate"); }
                 return;
             }
@@ -90,11 +92,11 @@ public:
 
 private:
     void newReceiver() {
-        ReceiverConfig c; c.sampleRate = rate_; c.symbolRate = o_.symbolRate; c.mod = o_.mod; c.diff = o_.diff; c.interleaved = o_.interleaved;
+        ReceiverConfig c; c.sampleRate = rate_; c.symbolRate = o_.symbolRate; c.mod = o_.mod; c.diff = o_.diff; c.interleaved = o_.interleaved; c.rateAuto = o_.rateAuto;
         rx_ = std::make_unique<Receiver>(c);
         seenVersion_ = 0; previewVersion_ = 0; havePictures_ = false; sentRows_ = 0; previewOpen_ = false; lastFrameSec_ = fedSec_;
-        if (o_.log) o_.log("lrpt: receiver at " + std::to_string(int(rate_)) + " S/s, " + std::to_string(int(o_.symbolRate)) + " sym/s"
-                           + (o_.interleaved ? " (80k interleaved)" : ""));
+        if (o_.log) o_.log("lrpt: receiver at " + std::to_string(int(rate_)) + " S/s, "
+                           + (o_.rateAuto ? std::string("72k / 80k AUTO") : std::to_string(int(o_.symbolRate)) + " sym/s" + (o_.interleaved ? " (80k interleaved)" : "")));
     }
     void savePass(bool partial) {
         if (!rx_ || !havePictures_) return;
@@ -158,7 +160,7 @@ private:
             int s0, s1; rx_->stripRange(s0, s1);
             j += ",\"carrier\":" + std::string(rx_->demodLocked() ? "true" : "false") + ",\"sync\":" + (rx_->syncLocked() ? "true" : "false")
                + ",\"mode\":\"" + rx_->modeName() + "\",\"diff\":" + std::to_string(rx_->diffWinner())
-               + ",\"symbolRate\":" + std::to_string(int(o_.symbolRate)) + ",\"lock\":" + std::to_string(int(std::lround(rx_->lockMetric() * 100)))
+               + ",\"symbolRate\":" + std::to_string(int(rx_->symbolRate())) + ",\"lock\":" + std::to_string(int(std::lround(rx_->lockMetric() * 100)))
                + ",\"offsetHz\":" + std::to_string(int(std::lround(rx_->carrierHz())))
                + ",\"frames\":" + std::to_string((unsigned long long)s.rsOk) + ",\"bad\":" + std::to_string((unsigned long long)s.rsFail)
                + ",\"packets\":" + std::to_string((unsigned long long)s.packets) + ",\"lines\":" + std::to_string((s1 - s0) * 8) + ",\"channels\":[";

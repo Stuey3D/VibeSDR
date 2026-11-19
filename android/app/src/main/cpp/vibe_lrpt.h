@@ -11,11 +11,12 @@
 //
 // ★★ AUTO: the symbol rate (72k / 80k) comes from the satellite's entry (sats.json), never guessed. Within it, the
 //    two variants that differ by satellite — plain or differentially coded — are BOTH searched on the same soft stream
-//    (a second sync searcher costs a few % of a core); the first to pass Reed–Solomon wins and the other stops. QPSK vs
-//    OQPSK changes the demodulator, so AUTO alternates them every kModeSwapSec while neither has produced a frame.
-//    Every one of those can be pinned by the owner (the manual fallback).
+//    (a second sync searcher costs a few % of a core); the first to pass Reed–Solomon wins and the other stops. QPSK and
+//    OQPSK run as two demodulators side by side until one has the most good frames (Receiver::kContestFrames); with no
+//    rate named, 72k and 80k are walked while nothing decodes. Every one of those can be pinned (the manual fallback).
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -248,6 +249,9 @@ struct ReceiverConfig {
     enum Mod { Auto, Qpsk, Oqpsk } mod = Auto;
     enum Diff { DiffAuto, DiffOff, DiffOn } diff = DiffAuto;
     bool interleaved = false;                 ///< the 80k mode (sats.json)
+    /** ★ The symbol rate is NOT known (no satellite entry named it): AUTO also tries 80k OQPSK interleaved, with a longer
+     *  dwell (its deinterleaver alone takes 16 s to fill). `symbolRate` / `interleaved` are then ignored. */
+    bool rateAuto = false;
     bool forceScalar = false;                 ///< ★ tests: the A/B against the SIMD paths
 };
 
@@ -256,67 +260,84 @@ class Receiver {
 public:
     static constexpr double kModeSwapSec = 8.0;
     static constexpr double kPeriodMs = 1232.0;      ///< MSU-MR: eight lines every 1.232 s
+    /** ★ AUTO's contest: both modulations run until one has this many good frames; the one with more stays. */
+    static constexpr uint64_t kContestFrames = 12;
     explicit Receiver(const ReceiverConfig& c) : cfg_(c) {
-        curMod_ = c.mod == ReceiverConfig::Oqpsk ? 1 : 0;
-        if (c.mod == ReceiverConfig::Auto && c.symbolRate >= 76000) curMod_ = 1;   // ★ 80k has only ever been OQPSK
-        makeDemod();
-        for (int k = 0; k < 2; k++) {
-            const bool diffOn = k == 1;
-            if (c.diff == ReceiverConfig::DiffOff && diffOn) continue;
-            if (c.diff == ReceiverConfig::DiffOn && !diffOn) continue;
-            Path p;
-            p.diff = diffOn;
-            p.sync = std::make_unique<FrameSync>([this, k](const uint8_t* v, int e) { onVcdu(k, v, e); });
-            p.sync->setScalar(c.forceScalar);
-            paths_[k] = std::move(p);
-        }
+        /* ★★ WHAT AUTO TRIES. A GROUP is a symbol rate (+ the 80k interleave); within it, with the modulation not pinned,
+         *  QPSK and OQPSK demodulators run SIDE BY SIDE on the same IQ and the one with more good frames wins
+         *  (kContestFrames). Not "the first to decode": an OQPSK demodulator on the 2018 QPSK recording still passes
+         *  Reed–Solomon on 55 % of the frames, and taking the first success kept it — half the picture lost.
+         *  Groups are walked while nothing decodes. Order: the satellites in orbit (METEOR-M N2-3 and N2-4, 2026) send 72k
+         *  OQPSK most of the time and 80k OQPSK at times; 72k QPSK was METEOR-M N2's (silent since 2022). */
+        auto mods = [&](bool only80) {
+            std::vector<bool> m;   // oqpsk?
+            if (c.mod != ReceiverConfig::Qpsk) m.push_back(true);
+            if (c.mod != ReceiverConfig::Oqpsk && !(only80 && c.mod == ReceiverConfig::Auto)) m.push_back(false);   // ★ 80k has only ever been OQPSK
+            return m;
+        };
+        if (c.rateAuto) { groups_.push_back({ 72000, false, mods(false) }); groups_.push_back({ 80000, true, mods(true) }); }
+        else groups_.push_back({ c.symbolRate, c.interleaved, mods(c.symbolRate >= 76000) });
+        for (auto& g : groups_) g.dwellSec = kModeSwapSec + (g.interleaved ? double(Deinterleaver::latency()) / (2.0 * g.sym) : 0.0);
         asm_ = std::make_unique<PacketAssembler>([this](const uint8_t* p, size_t n) { onPacket(p, n); });
+        applyGroup(0);
     }
     /** ★ Test seam: every image packet's APID, sequence count, MCU number, time (ms of day) and quality factor. */
     std::function<void(int, int, int, uint32_t, int)> diag;
-    void setCaduDiag(std::function<void(int, int, int, const int*)> f) { for (auto& p : paths_) if (p.sync) p.sync->caduDiag = f; }
-    double carrierHz() const { return demod_->carrierHz(); }
-    void setDopplerHz(double hz) { if (demod_) demod_->setDopplerHz(hz); dop_ = hz; }
+    void setCaduDiag(std::function<void(int, int, int, const int*)> f) { caduDiag_ = f; for (auto& ch : chains_) for (auto& p : ch->paths) if (p.sync) p.sync->caduDiag = f; }
+    double carrierHz() const { return lead().demod->carrierHz(); }
+    void setDopplerHz(double hz) { dop_ = hz; for (auto& ch : chains_) ch->demod->setDopplerHz(hz); }
 
     /** Feed interleaved float IQ. */
     void feedIq(const float* iq, size_t n) {
-        soft_.clear();
-        demod_->setHold(decoding());
-        demod_->feed(iq, n, soft_);
+        for (auto& ch : chains_) {
+            soft_.clear();
+            ch->demod->setHold(ch->decoding());
+            ch->demod->feed(iq, n, soft_);
+            chainSoft(*ch, soft_.data(), soft_.size());
+        }
         samples_ += n;
-        feedSoft(soft_.data(), soft_.size());
-        // ── AUTO modulation: swap QPSK ↔ OQPSK while nothing has decoded ──
-        if (cfg_.mod == ReceiverConfig::Auto && !anyFrame_ && samples_ - swapAt_ > uint64_t(kModeSwapSec * cfg_.sampleRate)) {
-            swapAt_ = samples_; curMod_ ^= 1; makeDemod();
-            for (auto& p : paths_) if (p.sync) p.sync->reset();
+        // ── the contest: one modulation stays once it has proved itself ──
+        if (chains_.size() > 1) {
+            size_t best = 0;
+            for (size_t i = 1; i < chains_.size(); i++) if (chains_[i]->rsOk() > chains_[best]->rsOk()) best = i;
+            if (chains_[best]->rsOk() >= kContestFrames) {
+                std::unique_ptr<Chain> keep = std::move(chains_[best]);
+                chains_.clear(); chains_.push_back(std::move(keep));
+            }
+        }
+        // ── AUTO: the next group while nothing has decoded ──
+        if (groups_.size() > 1 && !anyFrame_ && samples_ - swapAt_ > uint64_t(groups_[gi_].dwellSec * cfg_.sampleRate)) {
+            swapAt_ = samples_;
+            applyGroup((gi_ + 1) % groups_.size());
         }
     }
-    /** Feed soft symbols directly (an archived .s file, or the client-assisted stage). */
-    void feedSoft(const int8_t* s, size_t n) {
-        const int8_t* src = s; size_t len = n;
-        if (cfg_.interleaved) { deint_.clear(); front_.push(s, n, deint_); src = deint_.data(); len = deint_.size(); }
-        for (int k = 0; k < 2; k++) {
-            Path& p = paths_[k];
-            if (!p.sync || (winner_ >= 0 && winner_ != k)) continue;
-            if (p.diff) { tmp_.assign(src, src + len); p.dd.run(tmp_.data(), tmp_.size()); p.sync->push(tmp_.data(), tmp_.size()); }
-            else p.sync->push(src, len);
-        }
-    }
+    /** Feed soft symbols directly (an archived .s file, or the client-assisted stage): the first chain's path. */
+    void feedSoft(const int8_t* s, size_t n) { if (!chains_.empty()) chainSoft(*chains_.front(), s, n); }
 
     // ── Results ──
     const std::map<int, Channel>& channels() const { return ch_; }
     Stats stats() const {
         Stats s;
-        for (auto& p : paths_) if (p.sync) { const Stats& t = p.sync->stats(); s.cadus = std::max(s.cadus, t.cadus); s.rsOk += t.rsOk; s.rsFail = std::max(s.rsFail, t.rsFail); s.rsFixed += t.rsFixed; s.syncLost += t.syncLost; s.lastVit = t.lastVit ? t.lastVit : s.lastVit; }
+        uint64_t rsOk = 0, rsFail = 0, cadus = 0, fixed = 0, lost = 0; int vit = 0;
+        for (auto& ch : chains_) for (auto& p : ch->paths) if (p.sync) {
+            const Stats& t = p.sync->stats();
+            cadus = std::max(cadus, t.cadus); rsFail = std::max(rsFail, t.rsFail); lost += t.syncLost; if (t.lastVit) vit = t.lastVit;
+        }
+        rsOk = rsOkTotal_; fixed = fixedTotal_;
+        s.cadus = cadusBase_ + cadus; s.rsOk = rsOk; s.rsFail = rsFailBase_ + rsFail; s.rsFixed = fixed; s.syncLost = lost; s.lastVit = vit;
         s.packets = packets_; s.badPackets = badPackets_; s.blocks = blocks_; s.scid = scid_; s.vcduCounter = ctr_;
         return s;
     }
-    bool demodLocked() const { return demod_->locked(); }
-    double lockMetric() const { return demod_->lockMetric(); }
-    bool syncLocked() const { for (auto& p : paths_) if (p.sync && p.sync->locked()) return true; return false; }
-    bool decoding() const { for (auto& p : paths_) if (p.sync && p.sync->decoding()) return true; return false; }
-    const char* modeName() const { return curMod_ ? "OQPSK" : "QPSK"; }
-    int diffWinner() const { return winner_ < 0 ? -1 : paths_[winner_].diff ? 1 : 0; }
+    bool demodLocked() const { return lead().demod->locked(); }
+    double lockMetric() const { return lead().demod->lockMetric(); }
+    bool syncLocked() const { for (auto& ch : chains_) for (auto& p : ch->paths) if (p.sync && p.sync->locked()) return true; return false; }
+    bool decoding() const { for (auto& ch : chains_) if (ch->decoding()) return true; return false; }
+    const char* modeName() const { return lead().oqpsk ? "OQPSK" : "QPSK"; }
+    double symbolRate() const { return lead().sym; }
+    bool interleaved() const { return lead().front != nullptr; }
+    int diffWinner() const { const Chain& c = lead(); return c.winner < 0 ? -1 : c.paths[c.winner].diff ? 1 : 0; }
+    /** ★ How many demodulators are running (2 while AUTO's contest is on) — the CPU figure's context. */
+    size_t chains() const { return chains_.size(); }
     /** ★ Bumped whenever a strip lands — a service re-renders its preview when this moves. */
     uint64_t version() const { return version_; }
     /** The strip range that holds any picture. */
@@ -336,20 +357,76 @@ public:
 
 private:
     struct Path { bool diff = false; DiffDecoder dd; std::unique_ptr<FrameSync> sync; };
-    void makeDemod() {
-        DemodConfig d; d.sampleRate = cfg_.sampleRate; d.symbolRate = cfg_.symbolRate; d.oqpsk = curMod_ == 1;
-        demod_ = std::make_unique<Demod>(d);
-        demod_->fir().forceScalar = cfg_.forceScalar;
-        demod_->setDopplerHz(dop_);
+    struct Group { double sym = 72000; bool interleaved = false; std::vector<bool> oqpsk; double dwellSec = kModeSwapSec; };
+    /** ★ One demodulator and everything after it up to the VCDU: its own 80k front, its plain and differential paths. */
+    struct Chain {
+        double sym = 72000; bool oqpsk = false;
+        std::unique_ptr<Demod> demod;
+        std::unique_ptr<InterleaveFront> front;   // ★ the 2.6 MB deinterleaver exists only in the 80k group
+        Path paths[2];
+        int winner = -1;
+        uint64_t rsOk() const { uint64_t n = 0; for (auto& p : paths) if (p.sync) n += p.sync->stats().rsOk; return n; }
+        bool decoding() const { for (auto& p : paths) if (p.sync && p.sync->decoding()) return true; return false; }
+    };
+    const Chain& lead() const {
+        size_t best = 0;
+        for (size_t i = 1; i < chains_.size(); i++) if (chains_[i]->rsOk() > chains_[best]->rsOk()) best = i;
+        return *chains_[best];
     }
-    void onVcdu(int k, const uint8_t* v, int) {
+    void applyGroup(size_t i) {
+        // ★ the counts of the chains going away are kept (a stats() that went backwards would read as a fault)
+        for (auto& ch : chains_) for (auto& p : ch->paths) if (p.sync) { cadusBase_ += p.sync->stats().cadus; rsFailBase_ += p.sync->stats().rsFail; }
+        gi_ = i;
+        chains_.clear();
+        const Group& g = groups_[i];
+        for (bool oq : g.oqpsk) {
+            auto ch = std::make_unique<Chain>();
+            ch->sym = g.sym; ch->oqpsk = oq;
+            DemodConfig d; d.sampleRate = cfg_.sampleRate; d.symbolRate = g.sym; d.oqpsk = oq;
+            ch->demod = std::make_unique<Demod>(d);
+            ch->demod->fir().forceScalar = cfg_.forceScalar;
+            ch->demod->setDopplerHz(dop_);
+            if (g.interleaved) ch->front = std::make_unique<InterleaveFront>();
+            Chain* cp = ch.get();
+            for (int k = 0; k < 2; k++) {
+                const bool diffOn = k == 1;
+                if (cfg_.diff == ReceiverConfig::DiffOff && diffOn) continue;
+                if (cfg_.diff == ReceiverConfig::DiffOn && !diffOn) continue;
+                ch->paths[k].diff = diffOn;
+                ch->paths[k].sync = std::make_unique<FrameSync>([this, cp, k](const uint8_t* v, int e) { onVcdu(*cp, k, v, e); });
+                ch->paths[k].sync->setScalar(cfg_.forceScalar);
+                if (caduDiag_) ch->paths[k].sync->caduDiag = caduDiag_;
+            }
+            chains_.push_back(std::move(ch));
+        }
+    }
+    void chainSoft(Chain& ch, const int8_t* s, size_t n) {
+        const int8_t* src = s; size_t len = n;
+        if (ch.front) { deint_.clear(); ch.front->push(s, n, deint_); src = deint_.data(); len = deint_.size(); }
+        for (int k = 0; k < 2; k++) {
+            Path& p = ch.paths[k];
+            if (!p.sync || (ch.winner >= 0 && ch.winner != k)) continue;
+            if (p.diff) { tmp_.assign(src, src + len); p.dd.run(tmp_.data(), tmp_.size()); p.sync->push(tmp_.data(), tmp_.size()); }
+            else p.sync->push(src, len);
+        }
+    }
+    void onVcdu(Chain& ch, int k, const uint8_t* v, int fixed) {
         if ((v[0] >> 6) != 1) return;                        // transfer frame version 2 ("01")
         const int vcid = v[1] & 0x3F;
         if (vcid == 63) return;                              // fill
-        if (winner_ < 0) winner_ = k;
+        if (ch.winner < 0) ch.winner = k;
+        const uint32_t ctr = (uint32_t(v[2]) << 16) | (uint32_t(v[3]) << 8) | v[4];
+        /* ★★ ONCE EACH, whichever demodulator got it first: during AUTO's contest both chains can decode the same frame.
+         *  A counter not ahead of the last one delivered is a duplicate — unless it is far behind (a new pass, a reset). */
+        if (haveCtr_) {
+            const uint32_t ahead = (ctr - lastCtr_) & 0xFFFFFF;
+            if (ahead == 0 || (ahead > 0x800000 && ((lastCtr_ - ctr) & 0xFFFFFF) < 4096)) return;
+        }
+        haveCtr_ = true; lastCtr_ = ctr;
+        rsOkTotal_++; fixedTotal_ += uint64_t(fixed > 0 ? fixed : 0);
         anyFrame_ = true;
         scid_ = ((v[0] & 0x3F) << 2) | (v[1] >> 6);
-        ctr_ = (uint32_t(v[2]) << 16) | (uint32_t(v[3]) << 8) | v[4];
+        ctr_ = ctr;
         if (vcid != 5) return;                               // ★ MSU-MR imagery is virtual channel 5
         asm_->vcdu(v);
     }
@@ -392,16 +469,17 @@ private:
     }
 
     ReceiverConfig cfg_;
-    int curMod_ = 0;
-    std::unique_ptr<Demod> demod_;
+    std::vector<Group> groups_;
+    size_t gi_ = 0;
+    std::vector<std::unique_ptr<Chain>> chains_;
+    std::function<void(int, int, int, const int*)> caduDiag_;
     double dop_ = 0;
-    Path paths_[2];
-    InterleaveFront front_;
     std::unique_ptr<PacketAssembler> asm_;
     std::vector<int8_t> soft_, deint_, tmp_;
     uint64_t samples_ = 0, swapAt_ = 0;
     bool anyFrame_ = false;
-    int winner_ = -1;
+    bool haveCtr_ = false; uint32_t lastCtr_ = 0;
+    uint64_t rsOkTotal_ = 0, fixedTotal_ = 0, cadusBase_ = 0, rsFailBase_ = 0;
     std::map<int, Channel> ch_;
     bool haveT0_ = false; uint32_t lastMs_ = 0; long lastStrip_ = 0;
     uint64_t packets_ = 0, badPackets_ = 0, blocks_ = 0, version_ = 0;
