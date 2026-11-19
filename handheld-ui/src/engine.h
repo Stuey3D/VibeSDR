@@ -14,6 +14,7 @@
 #include "json.h"
 #include "freedv.h"
 #include "m17.h"
+#include "dvsig.h"
 #include "ws.h"
 
 #include <atomic>
@@ -35,6 +36,7 @@ namespace hh {
 inline bool modePassband(const std::string& m, int& lo, int& hi, double hz = 0) {
     if (m == "freedv") { freedvPassband(freedvSidebandAt(hz), lo, hi); return true; }
     if (m == "m17") { m17Passband(lo, hi); return true; }   // ★ V12 M17: its 9 kHz channel (the server keeps its own 12.5)
+    if (m == "dvsig") { dvsigPassband(lo, hi); return true; }   // ★ V12 DV ID: the 12.5 kHz channel the server keeps
     struct E { const char* m; int lo, hi; };
     static const E t[] = {
         {"usb", 50, 2700}, {"lsb", -2700, -50}, {"am", -5000, 5000}, {"sam", -5000, 5000},
@@ -167,6 +169,7 @@ public:
         setBandwidth(lo, hi);
         if (m == "freedv") spec_.sendText(freedvSubMessage(""));   // ★ V12 FreeDV: ask for the current report (sub, side, sync)
         if (m == "m17") spec_.sendText(m17StatusMessage());       // ★ V12 M17 likewise
+        if (m == "dvsig") spec_.sendText(dvsigStatusMessage());   // ★ V12 DV ID likewise
     }
     void setBandwidth(int lo, int hi) {
         st_.bwLow = lo; st_.bwHigh = hi;

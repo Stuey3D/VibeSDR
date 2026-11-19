@@ -141,6 +141,7 @@ enum class Need {
     Sondes,      // ★ V12 radiosondes: a 2 MHz band of 400–406 MHz, not an HF+ / an Icom
     M17,         // ★ V12 M17 digital voice: 2 m or 70 cm on any SDR (the HF+ on 2 m), never an Icom (vibe_radio_caps.h)
     Pkt9600,     // ★ V12 9600 packet (G3RUH on the channel IQ): 2 m or 70 cm on any SDR, never an Icom (local_sdr_shim pkt9600)
+    Dvsig,       // ★ V12 DV signalling: VHF 136–174 or UHF 400–470 MHz on any SDR, never an Icom (vibe_radio_caps.h)
 };
 
 struct Gate { bool run = true; std::string why; };
@@ -218,6 +219,10 @@ inline Gate gateNeed(const Hw& hw, Need n) {
                                                  && (touches(r, 144e6, 148e6) || touches(r, 420e6, 450e6)); }))
                 return no("no radio here reaches 9600 packet (2 m / 70 cm)");
             break;
+        case Need::Dvsig:
+            if (!any([](const Radio& r) { return r.driver != "icom" && (touches(r, 136e6, 174e6) || touches(r, 400e6, 470e6)); }))
+                return no("no radio here reaches DMR / D-STAR / YSF (VHF 136â" "174 or UHF 400â" "470 MHz)");
+            break;
         case Need::Spots:
             if (!any([](const Radio& r) { return hasHf(r) || touches(r, 28e6, 29.7e6) || touches(r, 50e6, 54e6) || touches(r, 144e6, 148e6); }))
                 return no("no radio here reaches a digital-spots band (HF, 6 m or 2 m)");
@@ -236,9 +241,10 @@ inline Need needFor(const std::string& id) {
     if (is("adsb")) return Need::Adsb;
     if (id == "dec_ais") return Need::Ais;
     if (id == "dec_vdl2" || id == "dec_acars") return Need::Avdata;
-    if (id == "dec_rs41") return Need::Sondes;
+    if (id == "dec_rs41" || id == "dec_dfm" || id == "dec_m10") return Need::Sondes;
     if (id == "dec_hfdl") return Need::Hf;
     if (id == "dec_m17") return Need::M17;
+    if (id == "dec_dvsig") return Need::Dvsig;
     if (id == "dec_navtex") return Need::Navtex;
     if (id == "dec_ndb") return Need::Ndb;
     if (id == "dec_time") return Need::TimeSig;
@@ -249,9 +255,9 @@ inline Need needFor(const std::string& id) {
     if (id == "dec_ism" || id == "dec_wmbus" || id == "dec_lora" || id == "dec_lora_all") return Need::Ism;
     if (id == "dec_ft8" || id == "dec_ft8band" || is("spot_")) return Need::Spots;
     // ★ HF-only decoders: RTTY (and AUTO), WEFAX, the CW / PSK skimmers (HF bands), JTTY, SITOR-A, DSC (the MF/HF row),
-    //   SELCAL (HF aviation), MFSK / Olivia / Contestia / THOR, Feld Hell. A listener's CW, PSK31 and SSTV run on any band.
+    //   SELCAL (HF aviation), MFSK / Olivia / Contestia / THOR / DominoEX / MT63, ALE, Feld Hell. A listener's CW, PSK31 and SSTV run on any band.
     if (id == "dec_rtty" || id == "dec_rttyauto" || id == "dec_wefax" || id == "dec_cwskim" || id == "dec_pskskim"
-        || id == "dec_jtty" || id == "dec_sitora" || id == "dec_dsc" || id == "dec_selcal" || id == "dec_mfsk"
+        || id == "dec_jtty" || id == "dec_sitora" || id == "dec_dsc" || id == "dec_selcal" || id == "dec_mfsk" || id == "dec_ale"
         || id == "dec_hell" || id == "dec_freedv" || id == "dec_rade")   // ★ V12 FreeDV (and its RADE V1): the HF amateur bands
         return Need::Hf;
     return Need::None;

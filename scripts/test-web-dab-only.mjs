@@ -21,7 +21,7 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 let fails = 0;
 const ok = (c, what) => { console.log(`  ${c ? '\x1b[32mok\x1b[0m  ' : '\x1b[31mFAIL\x1b[0m'} ${what}`); if (!c) fails++; };
 
-const OTHERS = 'wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,adsb,ism,ndb,ais,avdata,sondes';
+const OTHERS = 'wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig,adsb,ism,ndb,ais,avdata,sondes';
 const BLOCK = 194_064_000;   // 7D
 const T = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-web-dabonly-'));
 const raw = path.join(T, 'clip.u8');

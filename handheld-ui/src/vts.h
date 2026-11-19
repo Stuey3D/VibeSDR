@@ -21,6 +21,7 @@
 #include "vts_core.h"
 #include "freedv.h"
 #include "m17.h"
+#include "dvsig.h"   // ★ V12 DV ID (DMR / D-STAR / YSF / NXDN / dPMR signalling — never the voice)
 #include "paging.h"
 #include "bm_state.h"
 #include "vts_marks.h"
@@ -64,7 +65,8 @@ struct Arrival {
 struct State {
     Screen screen;
     Bar bar;
-    Arrival rds, dab, dabOff, dabErr, drm, tone, notice, device, fdv, m17;
+    Arrival rds, dab, dabOff, dabErr, drm, tone, notice, device, fdv, m17, dv;
+    bool dvHave = false; DvsigState dvLast;      // ★ V12 the newest DV ID report THIS time in the mode
     bool m17Have = false; M17State m17Last;      // ★ V12 the newest M17 report THIS time in the mode (none = searching)
     bool fdvHave = false; FreeDvState fdvLast;   // ★ V12 the newest FreeDV report THIS time in the mode (none = searching)
     bool wasConnected = false;
@@ -189,6 +191,18 @@ inline Inputs readInputs(State& st, const RadioState& s, double nowMs, int regio
         if (s.mode != "m17") st.m17Have = false;
         else if (fresh) { M17State f; if (parseM17(j, f)) { st.m17Last = f; st.m17Have = true; } }
         in.m17Line = s.mode == "m17" ? m17Line(st.m17Have ? &st.m17Last : nullptr) : "";
+    }
+    // ★ V12 DV ID the same way: the newest transmission's line while in the mode (dvsig.h dvsigLine). The report is ours and
+    //   small; its whole text is the freshness signature (it changes whenever a field the line reads does).
+    {
+        const Json& j = s.msg("dvsig");
+        std::string sig = j["state"].str() + "\x1f" + j["pin"].str() + "\x1f" + (j["ids"].boolean() ? "1" : "0") + (j["amateur"].boolean() ? "1" : "0");
+        const Json& e0 = j["log"][0];
+        sig += "\x1f" + numSig(e0, "id") + numSig(e0, "t1") + e0["alias"].str() + e0["from"].str() + e0["text"].str() + (e0["open"].boolean() ? "o" : "c") + numSig(e0, "src") + numSig(e0["gps"], "lat");
+        const bool fresh = st.dv(j, sig);
+        if (s.mode != "dvsig") st.dvHave = false;
+        else if (fresh) { DvsigState f; if (parseDvsig(j, f)) { st.dvLast = f; st.dvHave = true; } }
+        in.dvLine = s.mode == "dvsig" ? dvsigLine(st.dvHave ? &st.dvLast : nullptr) : "";
     }
     in.pagingLine = pagingVtsLine();   // ★ V12 PAGE (paging.h): written by dec_state.h decTick while PAGE runs
     // tone

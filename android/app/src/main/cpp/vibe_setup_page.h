@@ -2388,10 +2388,10 @@ const BENCH_KNOWN_ROWS = [
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"], ["dec_aprs9600", "Packet 9600 + FX.25 + IL2P"],
-  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
+  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_ale", "ALE"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
   ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
-  ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"],
-  ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"],
+  ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],
+  ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"], ["dec_dvsig", "DMR / D-STAR / YSF signalling"],
   ["dec_tone", "CTCSS / DCS tone ID"], ["dec_nr", "Noise reduction"], ["dec_notch", "Auto notch"],
   ["dab", "DAB+"], ["dab_scan", "DAB+ station label scan", "dab"], ["dec_dab_station", "DAB+ own station", "dab"],
   ["dec_dab_mux", "DAB+ each multiplex in a wide capture", "dab"], ["dec_dab_bank", "DAB+ wide-capture filter bank", "dab"],
@@ -3414,9 +3414,18 @@ const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading
   + "Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law "
   + "where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.";
 /* ★ V12 tones (docs/v12/TONES.md): beside the 5-tone opt-in — what it is and who sees it. */
+/** ★ ONE TEXT, TWO READERS: src/screens/ServerModeScreen.tsx ALE_AMD_NOTICE. */
+const ALE_AMD_NOTICE = "Off the amateur bands an ALE text message (AMD) is a private message between government, military "
+  + "or commercial stations. Only switch this on if the law where this server is allows it. The text is shown only to you, "
+  + "the owner, while you are signed in \u2014 never to listeners, never in the gallery. Listeners see who called whom and "
+  + "the message's length.";
 const TONES_DIGITS_NOTICE = "Off the amateur bands a 5-tone call's number says who is being called on a private radio system. "
   + "Only switch this on if the law where this server is allows it. The numbers are shown only to you, the owner, while you "
   + "are signed in \u2014 never to listeners, never in the gallery. DTMF off the amateur bands is never shown (it can be a phone number).";
+const DVSIG_IDS_NOTICE = "Off the amateur bands a DMR, NXDN or dPMR radio ID says who is talking, and to whom, on someone "
+  + "else's private radio system. Only switch this on if the law where this server is allows it. The IDs are shown only to "
+  + "you, the owner, while you are signed in \u2014 never to listeners, never on the map. Everyone else sees only \u201cDMR heard\u201d, "
+  + "the colour code and the slot. On the amateur bands callsigns and IDs are always shown. The voice is never decoded.";
 const BLOCKABLE = [
   { id: "wfm",    label: "WFM"      },
   /* ★ Advanced RDS lives inside WFM: no FM, no RDS of any kind (the shim drops "rds" from the offer without WFM). */
@@ -3442,6 +3451,11 @@ const BLOCKABLE = [
   { id: "rade", label: "FreeDV: RADE V1", parent: "freedv" },
   /* ★ V12 M17 digital voice (docs/v12/M17.md) — a demodulator on 2 m / 70 cm; listed only where libcodec2 is installed. */
   { id: "m17",    label: "M17 (digital voice)" },
+  /* ★★ V12 digital-voice SIGNALLING (docs/v12/DV-SIGNALLING.md): DMR, D-STAR, YSF, NXDN and dPMR — who is talking (callsigns,
+   *  radio IDs, talker alias, GPS on the amateur bands), never the voice. A demodulator on VHF / UHF. Under it the owner's
+   *  opt-in ("+" token, off by default): IDs off the amateur bands, to the owner's own signed-in sockets only. */
+  { id: "dvsig",  label: "Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR (who is talking — the data only; the voice codec, AMBE, is patented)" },
+  { id: "dvsig+ids", label: "Digital voice ID: show radio IDs off the amateur bands (to you only)", parent: "dvsig", on: true },
   { id: "dab",    label: "DAB"      },
   /* ★ The whole-multiplex label scan, moved here from the radio's hardware card (2026-10-31). Still drawn only on a
    *  small 32-bit machine ("lite" in vibeserver.json) — the only place it is a choice; elsewhere it is simply on. */
@@ -3493,8 +3507,9 @@ const BLOCKABLE = [
   /* ★ V12 HFDL (docs/v12/AVIATION.md) — aircraft on HF, a listener's decoder on the USB dial; its aircraft feed the HFDL
    *  map. The benchmark's "dec_hfdl" row sets its default. */
   { id: "hfdl", label: "HFDL (aircraft on HF)" },
-  /* ★ V12 (2026-10-31): ONE switch — MFSK16/32, Olivia, Contestia and THOR are one key with one AUTO. */
-  { id: "mfsk", label: "MFSK, Olivia, Contestia, THOR" },
+  /* ★ V12 (2026-10-31): ONE switch — MFSK16/32, Olivia, Contestia and THOR are one key with one AUTO; ★ 2026-11-19
+   *  DominoEX and MT63 joined it (docs/v12/HF-DATA.md). */
+  { id: "mfsk", label: "MFSK, Olivia, Contestia, THOR, DominoEX, MT63" },
   /* ★ V12 FELD HELL (2026-10-31) — drawn, not read: the text painted as it is heard. */
   { id: "hell", label: "Feld Hell (Hellschreiber)" },
   /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio
@@ -3512,6 +3527,11 @@ const BLOCKABLE = [
    *  default): 5-tone digits off the amateur bands, shown to the owner's own signed-in sockets only. */
   { id: "tones", label: "DTMF and 5-tone selective calling" },
   { id: "tones+digits", label: "5-tone: show the called numbers off the amateur bands (to you only)", parent: "tones", on: true },
+  /* ★★ V12 2026-11-19 2G HF ALE (docs/v12/HF-DATA.md): soundings, calls and links on a listener's USB audio. Addresses are
+   *  always shown (who called whom is not a message's content); an AMD message's TEXT is shown on the amateur bands (HFLink),
+   *  elsewhere only with this opt-in ("+" token, IN the CSV when ticked, off by default) and then to the owner only. */
+  { id: "ale", label: "ALE (HF automatic link establishment)" },
+  { id: "ale+amd", label: "ALE: show AMD message text off the amateur bands (to you only)", parent: "ale", on: true },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP
@@ -3529,8 +3549,8 @@ const BLOCKABLE = [
    *  token, IN the CSV when ticked, off by default), with the notice DECODER-RESEARCH.md §4.3 asks for. */
   { id: "avdata", label: "Aircraft datalink (ACARS, VDL2)" },
   { id: "avdata+text", label: "Aircraft datalink: show the message text (to you only)", parent: "avdata", on: true },
-  /* ★★ V12 RADIOSONDES (docs/v12/RS41.md) — RS41 weather balloons on 400–406 MHz, a whole-radio mode. */
-  { id: "sondes", label: "Radiosondes (RS41 weather balloons)" },
+  /* ★★ V12 RADIOSONDES (docs/v12/RS41.md, SONDES-TYPES.md) — RS41, DFM, M10 / M20 weather balloons on 400–406 MHz, a whole-radio mode. */
+  { id: "sondes", label: "Radiosondes (RS41, DFM, M10, M20 weather balloons)" },
 ];
 /** The tree as drawn: BLOCKABLE plus one entry per digital-spots mode this server runs (vibeserver.json spotModes), under
  *  "spots", before Band. Each is `spots-<mode>` in the CSV when off — the server leaves the mode out everywhere. */
@@ -3805,6 +3825,10 @@ function modeBlockRender() {
                                    + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
     if (m.id === "tones+digits") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="tonesDigitsHint" style="margin:2px 0 0 24px">`
                                    + esc(TONES_DIGITS_NOTICE) + `</div></div>`;
+    if (m.id === "dvsig+ids") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="dvsigIdsHint" style="margin:2px 0 0 24px">`
+                                + esc(DVSIG_IDS_NOTICE) + `</div></div>`;
+    if (m.id === "ale+amd") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="aleAmdHint" style="margin:2px 0 0 24px">`
+                              + esc(ALE_AMD_NOTICE) + `</div></div>`;
     if (!k.length) return h;
     return `<div class="modeGroup" data-group="${esc(m.id)}" style="flex:1 1 100%">${h}`
       + `<div class="modeKids" data-kids-of="${esc(m.id)}" style="display:flex;flex-wrap:wrap;gap:8px 10px;`
@@ -3853,7 +3877,7 @@ function modeBlockRender() {
 /** ★★ V12 DAB ONLY — the server's rule (local_sdr_shim.cpp dabOnlyNow): DAB on, and every demodulator and every whole-radio
  *  mode this radio offers off. */
 const DAB_ONLY_OTHERS = ["wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
-                         "drm", "freedv", "m17", "adsb", "ism", "ndb", "ais", "avdata", "sondes"];
+                         "drm", "freedv", "m17", "dvsig", "adsb", "ism", "ndb", "ais", "avdata", "sondes"];
 function dabOnlyModes(off, tree) {
   const has = new Set(tree.map(m => m.id));
   return has.has("dab") && !off.has("dab") && DAB_ONLY_OTHERS.filter(id => has.has(id)).every(id => off.has(id));
@@ -4233,7 +4257,9 @@ function modeBlockSummary() {
     + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
     + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
-    + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "");
+    + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "")
+    + (all.includes("dvsig+ids") ? " Digital-voice radio IDs off the amateur bands are shown to you." : "")
+    + (all.includes("ale+amd") ? " ALE message text is shown to you." : "");
   bandModeRender();
 }
 

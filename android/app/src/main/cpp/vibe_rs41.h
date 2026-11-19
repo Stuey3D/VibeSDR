@@ -273,6 +273,14 @@ struct Frame {
     int sats = 0; double pdop = NAN;
     bool encrypted = false;         ///< a 0x80 block (RS41-SGM): the position is not ours to read
     int blocksOk = 0, blocksBad = 0;
+    // ★ V12 other sonde types (docs/v12/SONDES-TYPES.md): which decoder made this frame. RS41 frames leave these as
+    //   they are; a DFM / M10 / M20 frame carries its own serial (already proven by that type's checks), its temperature
+    //   (only where its calibration is complete — never a guess) and how far that calibration has got.
+    const char* kind = "RS41";      ///< "RS41", "DFM", "M10", "M20" — the row's key with the serial
+    std::string model;              ///< the finer type where the frame says it ("DFM-09", "DFM-17", "M10+") — else empty
+    double tempC = NAN;             ///< non-RS41: the decoder's temperature (NAN = none / not yet)
+    int calN = -1, calOf = -1;      ///< non-RS41: calibration pieces received / needed (calOf 0 = no temperature for this type)
+    double unixTime = 0;            ///< non-RS41: the frame's UTC time from its GPS, 0 = none
     // the receiver's own measures, filled by the demodulator
     double hz = 0;                  ///< where the channel sat (absolute)
     double offsetHz = 0;            ///< the frame's measured frequency error from that

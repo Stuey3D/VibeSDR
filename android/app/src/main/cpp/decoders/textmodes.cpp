@@ -2,6 +2,8 @@
 // for the sources each detail was taken from. V12, 2026-10-31.
 #include "textmodes.h"
 #include "mfsk_varicode.h"
+#include "dominoex_varicode.h"
+#include "mt63.h"
 #include "digimodes/q65_simd.h"
 #include "../vibedsp/third_party/pffft/pffft.h"
 #include <algorithm>
@@ -16,7 +18,7 @@ namespace vibe {
 namespace {
 
 // ── the sub-modes ────────────────────────────────────────────────────────────────────────────────────────────────────
-enum Kind { kMfsk, kThor, kOlivia, kContestia };
+enum Kind { kMfsk, kThor, kOlivia, kContestia, kDomino, kDominoFec, kMt63 };
 struct Sub {
     const char* id; const char* label; Kind kind;
     int M;          // tones
@@ -34,6 +36,30 @@ const Sub kSubs[] = {
     {"thor11", "THOR 11", kThor, 18, 1024, 11025, 2, true},
     {"thor16", "THOR 16", kThor, 18, 512, 8000, 2, true},
     {"thor22", "THOR 22", kThor, 18, 512, 11025, 2, true},
+    // ★★ V12 2026-11-19 DOMINOEX (ZL1BPU's DominoEX page: the same 18 IFK+ tones, speeds and spacings as THOR — THOR IS
+    //   DominoEX with FEC — but no FEC: one nibble a symbol and the Nibble Varicode, dominoex_varicode.h). The six
+    //   published speeds are in AUTO; MICRO (2 Bd at 8 kHz, 4000 samples, single spacing), 44 and 88 (11.025 kHz, 256 and
+    //   128 samples, double and single spacing) are manual. They share THOR's spectra and tone search (same symbol and
+    //   spacing), so AUTO's cost grows by the receivers, not the FFTs.
+    {"dominoex4",  "DOMINOEX 4",  kDomino, 18, 2048, 8000, 4, true},
+    {"dominoex5",  "DOMINOEX 5",  kDomino, 18, 2048, 11025, 4, true},
+    {"dominoex8",  "DOMINOEX 8",  kDomino, 18, 1024, 8000, 4, true},
+    {"dominoex11", "DOMINOEX 11", kDomino, 18, 1024, 11025, 2, true},
+    {"dominoex16", "DOMINOEX 16", kDomino, 18, 512, 8000, 2, true},
+    {"dominoex22", "DOMINOEX 22", kDomino, 18, 512, 11025, 2, true},
+    {"dominoex44", "DOMINOEX 44", kDomino, 18, 256, 11025, 4, false},
+    {"dominoex88", "DOMINOEX 88", kDomino, 18, 128, 11025, 2, false},
+    {"dominoexmicro", "DOMINOEX MICRO", kDomino, 18, 4000, 8000, 2, false},
+    // ★ DOMINOEX FEC (the page's "FEC option": MFSK16's coder and varicode on the IFK+ modulator, the interleaver L = 4 —
+    //   "shorter than desirable … L=4 instead of L=10"): THOR's receiver with bit i leaving 4·i symbols later. ★ IN AUTO:
+    //   DOMINOEX without FEC locks on these too (same modulation) and prints the coded bits as text — the FEC receiver's
+    //   code is what tells them apart (Impl::thorHere), and it costs a Viterbi, not a spectrum (it shares THOR's).
+    {"dominoex4fec",  "DOMINOEX 4 FEC",  kDominoFec, 18, 2048, 8000, 4, true},
+    {"dominoex5fec",  "DOMINOEX 5 FEC",  kDominoFec, 18, 2048, 11025, 4, true},
+    {"dominoex8fec",  "DOMINOEX 8 FEC",  kDominoFec, 18, 1024, 8000, 4, true},
+    {"dominoex11fec", "DOMINOEX 11 FEC", kDominoFec, 18, 1024, 11025, 2, true},
+    {"dominoex16fec", "DOMINOEX 16 FEC", kDominoFec, 18, 512, 8000, 2, true},
+    {"dominoex22fec", "DOMINOEX 22 FEC", kDominoFec, 18, 512, 11025, 2, true},
     // Olivia/Contestia: sps = 8000·M/BW; tones one FFT bin pair apart (spacing = BW/M = 8000/sps)
     {"olivia-4-125",   "OLIVIA 4/125",   kOlivia, 4, 256, 8000, 2, true},
     {"olivia-4-250",   "OLIVIA 4/250",   kOlivia, 4, 128, 8000, 2, false},
@@ -64,16 +90,32 @@ const Sub kSubs[] = {
     {"contestia-64-500",  "CONTESTIA 64/500",  kContestia, 64, 1024, 8000, 2, false},
     {"contestia-64-1000", "CONTESTIA 64/1000", kContestia, 64, 512, 8000, 2, false},
     {"contestia-64-2000", "CONTESTIA 64/2000", kContestia, 64, 256, 8000, 2, false},
+    // ★★ V12 2026-11-19 MT63 (decoders/mt63.h — its own receiver: 64 carriers, not a tone set). M / sps / stride unused;
+    //   `rate` carries the bandwidth, `sps` 1 for the long interleave.
+    {"mt63-500s",  "MT63 500S",  kMt63, 0, 0, 500, 0, true},  {"mt63-500l",  "MT63 500L",  kMt63, 0, 1, 500, 0, true},
+    {"mt63-1000s", "MT63 1000S", kMt63, 0, 0, 1000, 0, true}, {"mt63-1000l", "MT63 1000L", kMt63, 0, 1, 1000, 0, true},
+    {"mt63-2000s", "MT63 2000S", kMt63, 0, 0, 2000, 0, true}, {"mt63-2000l", "MT63 2000L", kMt63, 0, 1, 2000, 0, true},
 };
 TextModeDecoder::Family familyOfKind(Kind k) {
-    return k == kMfsk ? TextModeDecoder::Family::Mfsk : k == kThor ? TextModeDecoder::Family::Thor : TextModeDecoder::Family::Olivia;
+    // ★ DOMINOEX and MT63 exist only in the one key (Family::All): the old one-family decoders never offered them
+    return k == kMfsk ? TextModeDecoder::Family::Mfsk : k == kThor ? TextModeDecoder::Family::Thor
+         : (k == kOlivia || k == kContestia) ? TextModeDecoder::Family::Olivia : TextModeDecoder::Family::All;
 }
 const Sub* subById(const std::string& id) { for (const Sub& s : kSubs) if (id == s.id) return &s; return nullptr; }
-const char* groupOfKind(int k) { return k == kMfsk ? "MFSK" : k == kThor ? "THOR" : k == kOlivia ? "OLIVIA" : "CONTESTIA"; }
-const char* groupId(int k) { return k == kMfsk ? "mfsk" : k == kThor ? "thor" : k == kOlivia ? "olivia" : "contestia"; }
+const char* groupOfKind(int k) {
+    return k == kMfsk ? "MFSK" : k == kThor ? "THOR" : k == kOlivia ? "OLIVIA" : k == kContestia ? "CONTESTIA"
+         : k == kMt63 ? "MT63" : "DOMINOEX";
+}
+const char* groupId(int k) {
+    return k == kMfsk ? "mfsk" : k == kThor ? "thor" : k == kOlivia ? "olivia" : k == kContestia ? "contestia"
+         : k == kMt63 ? "mt63" : "dominoex";
+}
+/** the FAMILY row's groups, in order (a group may hold two kinds: DOMINOEX and DOMINOEX FEC) */
+const int kGroupKinds[] = {kMfsk, kOlivia, kContestia, kThor, kDomino, kMt63};
+inline bool inGroup(int kind, int g) { return kind == g || (g == kDomino && kind == kDominoFec); }
 /** "any-olivia" → kOlivia; −1 for anything else */
 int kindOfAny(const std::string& id) {
-    for (int k : {kMfsk, kOlivia, kContestia, kThor}) if (id == std::string("any-") + groupId(k)) return k;
+    for (int k : kGroupKinds) if (id == std::string("any-") + groupId(k)) return k;
     return -1;
 }
 
@@ -516,7 +558,9 @@ struct MfskRx : Rx {
     float ring[32][4]; int n = 0; int prevTone = -1;
     Viterbi7 vit[2]; VaricodeRx vr[2]; float carry = 0;
     bool lock = false; int lockAge = 0;
-    explicit MfskRx(const Sub* s) : Rx(s) { std::memset(ring, 0, sizeof ring); }
+    /** the diagonal interleaver's step: bit i of a symbol leaves ilv·i symbols later (MFSK16 / THOR 10; DOMINOEX FEC 4) */
+    int ilv = 10;
+    explicit MfskRx(const Sub* s) : Rx(s) { std::memset(ring, 0, sizeof ring); if (s->kind == kDominoFec) ilv = 4; }
     float repeat = 0.5f;   // EMA of "this tone again" (MFSK) / an IFK+ step never sent (THOR): a slower signal read too fast
     float split = 0.5f;    // EMA of the second strongest tone over the strongest: a faster signal read too slowly splits
     uint8_t recent[32] = {}; int nRecent = 0;   // the last 32 hard tones: a real signal uses nearly all M of them
@@ -649,9 +693,155 @@ struct MfskRx : Rx {
         for (int i = 0; i < 4; ++i) ring[t][i] = soft ? soft[i] : 0.f;
         ++n;
         if (n < 31) return;
-        // in symbol s = t − 30: bit i left 10·i symbols after it
+        // in symbol s = t − 30: bit i left ilv·i symbols after it (bit 0 of symbol s itself is read 30 symbols late, so
+        // every interleaver step ≤ 10 reads only symbols already in the ring)
         const int s = n - 31;
-        for (int i = 0; i < 4; ++i) coded(ring[(s + 10 * i) & 31][i]);
+        for (int i = 0; i < 4; ++i) coded(ring[(s + ilv * i) & 31][i]);
+    }
+};
+
+/** ★★ V12 2026-11-19 DOMINOEX (ZL1BPU, "DominoEX - an IFK Mode for HF" and "DominoEX Technical Information"; the Nibble
+ *  Varicode v2.0, dominoex_varicode.h). THOR's IFK+ front end with no FEC: the step from one tone to the next, less 2,
+ *  modulo 18 IS the nibble (16 and 17 are never sent, so no tone follows itself or its neighbour); an "initial" nibble
+ *  (0–7) begins a character, "continuation" nibbles (8–15) extend it to two or three. Two alphabets share the codes:
+ *  the primary (the keyboard) and the secondary (the station's ID, sent whenever the keyboard is idle).
+ *
+ *  ★ THE LOCK. No code to agree with, so the evidence is the modulation itself, measured over the last 64 symbols:
+ *  (1) a step that IFK+ never sends (16 or 17) — 2 in 18 on noise and on any other MFSK, ≈ 0 on DominoEX; (2) a strong
+ *  single tone each symbol (the presence MFSK uses: ≈ 3.3 on noise); (3) tones that use the whole set; (4) a character
+ *  stream with no impossible run (4 continuation nibbles). THOR has the same modulation, so a THOR receiver on the same
+ *  spectra that shows its code is preferred in the family decoder (Impl::after). */
+struct DominoRx : Rx {
+    int prevTone = -1; float bad = 0.11f, presence = 0; int nSym = 0;
+    uint64_t neverBits = ~0ull;   // 1 = that step was one IFK+ never sends, newest in bit 0 (all 1 before a signal)
+    uint8_t recent[64] = {}; int nRecent = 0;
+    int nib[3] = {}; int nNib = 0; bool nibOk = true; float lastXm = 0;   // the character in progress; impossible runs in the last 16 characters
+    uint16_t chars16 = 0; int nChars = 0;            // 1 = that character was impossible, newest in bit 0
+    uint16_t codes12[12] = {};                       // the last 12 characters' codes
+    /** ★ THOR's idle (and any steady +2 stepping) reads as an endless run of one character: not a signal to lock on */
+    int variety() const { int n = 0; for (int i = 0; i < 12; ++i) { bool seen = false; for (int j = 0; j < i; ++j) seen |= codes12[j] == codes12[i]; n += !seen; } return n; }
+    bool lock = false; int quietSyms = 0;
+    /** symbols in a row that stood out: ★ a lock waits for 64 of them — longer than a THOR / DOMINOEX FEC receiver needs
+     *  to show its code (≈ 55), so the box never shows their coded bits as DominoEX text first (measured: "ni s anr tri qt"
+     *  before every synthetic DOMINOEX FEC over); what was read meanwhile is shown at the lock (pre, ≤ 48 characters) */
+    int stretch = 0;
+    /** characters since the stream last ran on one or two codes: ★ ≥ 24 to lock — a DOMINOEX FEC / THOR over begins with
+     *  idle (to DominoEX a run of spaces) and its code shows only ≈ 24 symbols into the data */
+    int varied = 0;
+    std::string pre;   // characters read before the lock while a signal was present (≤ 24)
+    std::string sec, lastSec;   // the secondary (ID) alphabet in progress, and the last ID line shown
+    explicit DominoRx(const Sub* s) : Rx(s) {}
+    static const int16_t* table() {   // packed code → character + 1 (primary) / −(character + 1) (secondary)
+        static int16_t t[4096]; static bool init = false;
+        if (!init) {
+            std::memset(t, 0, sizeof t);
+            for (int c = 0; c < 256; ++c) { t[kDexPrimary[c]] = (int16_t)(c + 1); if (kDexSecondary[c]) t[kDexSecondary[c]] = (int16_t)-(c + 1); }
+            init = true;   // (0x000 is the one-nibble code "0", SPACE: packed codes never otherwise hold a 0 nibble)
+        }
+        return t;
+    }
+    int distinct() const {
+        uint32_t m = 0; const int n = std::min(nRecent, 64);
+        for (int i = 0; i < n; ++i) m |= 1u << recent[i];
+        return __builtin_popcount(m);
+    }
+    /** ★ split: the second strongest tone over the strongest (EMA) — a faster signal read too slowly holds two tones a
+     *  window (DOMINOEX 16 read as DOMINOEX 8, the same spacing at half the rate, took the box mid-over) */
+    float split = 0.5f;
+    float quality() const override { return std::max(0.f, 0.6f - 0.1f * (float)__builtin_popcountll(neverBits & 0xFFFFFFFFFFFFull) - 0.5f * split); }
+    bool locked() const override { return lock; }
+    bool hopeless() const override { return __builtin_popcountll(neverBits & 0xFFFFFFFFFFFFull) > 4; }
+    void emitChar(int c, bool secondary) {
+        const bool present = presence > 6.f;
+        if (secondary) {
+            // ★ a clean ID character starts the stretch: what was read before it (while the timing settled) is not kept
+            if (!lock) { pre.clear(); return; }
+            if (c >= 32 && c < 127) sec += (char)c;
+            if (sec.size() >= 32) flushSec();
+            return;
+        }
+        if (!sec.empty()) flushSec();
+        if (!lock) {
+            if (present) { appendChar(pre, c); if (pre.size() > 48) pre.erase(0, pre.size() - 48); }
+            else pre.clear();
+            return;
+        }
+        if (present) appendChar(text, c);
+    }
+    /** the station's ID (the secondary alphabet), once per change: it repeats for as long as the keyboard is idle */
+    void flushSec() {
+        std::string t = sec; sec.clear();
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        while (!t.empty() && t[0] == ' ') t.erase(0, 1);
+        if (t.size() < 3) return;
+        if (lastSec.find(t) != std::string::npos) return;   // a part of the ID already shown
+        lastSec = t;
+        if (!text.empty() && text.back() != '\n') text += '\n';
+        text += "[ID] " + t + "\n";
+    }
+    void endChar() {
+        if (nNib == 0) return;
+        const int code = (nib[0] << 8) | (nNib > 1 ? nib[1] << 4 : 0) | (nNib > 2 ? nib[2] : 0);
+        const int16_t v = table()[code];
+        chars16 = (uint16_t)(chars16 << 1); ++nChars;
+        codes12[nChars % 12] = (uint16_t)code;
+        varied = variety() <= 2 ? 0 : varied + 1;
+        // ★ a character is shown only if every symbol that carried it stood out (≥ 6× the other tones; noise reaches it
+        //   one symbol in 25) and the steps have been clean: the tail of an over and the noise after it read as
+        //   characters too until the averages notice (measured: "u85eotr" after every synthetic over)
+        const bool clean = nibOk && __builtin_popcountll(neverBits & 0xFFFF) <= 1;   // ≤ 1 bad step in the last 16
+        if (v > 0 && clean) emitChar(v - 1, false);
+        else if (v < 0 && clean) emitChar(-v - 1, true);
+        nNib = 0; nibOk = true;
+    }
+    void nibble(int v) {
+        // ★ each symbol must stand out against the signal's own level too (a third of the average): after an over ends the
+        //   noise's best tones (≥ 6 one symbol in 25) read as characters until the average falls
+        const float need = std::max(6.f, 0.3f * presence);
+        if (v < 8) { endChar(); nib[0] = v; nNib = 1; nibOk = lastXm > need; return; }
+        nibOk = nibOk && lastXm > need;
+        if (nNib == 0) return;                              // a continuation with no start (a join mid-character)
+        if (nNib == 3) { chars16 = (uint16_t)((chars16 << 1) | 1); ++nChars; nNib = 0; return; }   // impossible: 4 nibbles
+        nib[nNib++] = v;
+    }
+    void symbol(const float* Tg, int gap) override {
+        const float* T = Tg + 1;
+        float x[18]; toneLogs(T, 18, x);
+        int cur = 0; for (int k = 1; k < 18; ++k) if (T[k] > T[cur]) cur = k;
+        float xm = 0; for (int k = 0; k < 18; ++k) xm = std::max(xm, x[k]);
+        presence += 0.125f * (xm - presence); lastXm = xm;
+        {   float m1 = 0, m2 = 0;
+            for (int k = 0; k < 18; ++k) { if (T[k] > m1) { m2 = m1; m1 = T[k]; } else if (T[k] > m2) m2 = T[k]; }
+            split += (1.f / 16) * ((m1 > 0 ? m2 / m1 : 1.f) - split);
+        }
+        recent[nRecent++ & 63] = (uint8_t)cur; ++nSym;
+        stretch = xm > 6.f ? stretch + 1 : 0;
+        if (prevTone < 0 || gap) { prevTone = cur; nNib = 0; return; }
+        int v = (cur - prevTone - 2 + 36) % 18;
+        const bool never = v >= 16;
+        bad += (1.f / 32) * ((never ? 1.f : 0.f) - bad);
+        neverBits = (neverBits << 1) | (never ? 1u : 0u);
+        if (never) {   // a step IFK+ never sends: the likeliest step that it does send
+            int bv = 0; float bx = -1;
+            for (int u = 0; u < 16; ++u) { const float y = x[(prevTone + 2 + u) % 18]; if (y > bx) { bx = y; bv = u; } }
+            v = bv;
+        }
+        prevTone = cur;
+        nibble(v);
+        const int imp = __builtin_popcount(chars16);
+        // ★ lock: steps right, a tone that stands out, the whole tone set used, no impossible character in the last 16
+        // (a COUNT over the last 48 steps, not the average: the average starts at noise's 2/18 and took ~50 symbols to come
+        //  down — the first words of every over were lost)
+        const int never48 = __builtin_popcountll(neverBits & 0xFFFFFFFFFFFFull);
+        if (!lock && stretch >= 64 && never48 <= 1 && presence > 8.f && split < 0.3f && distinct() >= 13 && varied >= 24 && (chars16 & 0xFFF) == 0 && variety() >= 4) {
+            lock = true;
+            if (!pre.empty()) { text += pre; pre.clear(); }
+        } else if (lock) {
+            quietSyms = presence < 4.5f ? quietSyms + 1 : 0;
+            // ★ …and an endless run of one or two characters (THOR's idle after its over, or DominoEX's own idle spaces)
+            //   ends it: the box then went to an empty "[DOMINOEX 16]" line after every THOR over
+            if (never48 >= 6 || imp >= 3 || quietSyms > 8 || variety() <= 2) { lock = false; flushSec(); lastSec.clear(); }
+        }
     }
 };
 
@@ -885,7 +1075,24 @@ struct TextModeDecoder::Impl {
         return ladders.back().second.get();
     }
     std::vector<std::unique_ptr<Rx>> rx;
-    Rx* winner = nullptr; std::string lastStatus; int state = 0;
+    std::vector<std::unique_ptr<Mt63Rx>> mt;   // ★ MT63's receivers (their own spectra, from the 8 kHz stream)
+    /** the box's winner: one of rx or one of mt (never both) */
+    Rx* winner = nullptr; Mt63Rx* winnerMt = nullptr; std::string lastStatus; int state = 0;
+    std::string winLabel() const { return winner ? winner->sub->label : winnerMt ? winnerMt->label() : ""; }
+    float winHz() const { return winner ? winner->hz() : winnerMt ? winnerMt->hz() : 0.f; }
+    /** ★★ THOR OR DOMINOEX? (2026-11-19) One modulation: a THOR signal steps exactly as DominoEX does, so a DominoEX
+     *  receiver locks on it and reads its coded bits as nibbles. A THOR receiver on the same spectra (same symbol, same
+     *  spacing) whose two dibit pairings disagree — the code's own evidence, ≈ 0 on DominoEX — near the same place says
+     *  which it is. The reverse cannot happen: on DominoEX the THOR code never agrees, so THOR never locks. */
+    bool thorHere(const Rx* d, bool holding) const {
+        for (auto& r : rx) {
+            if ((r->sub->kind != kThor && r->sub->kind != kDominoFec) || r->st != d->st || r->sub->stride != d->sub->stride) continue;
+            const MfskRx* m = static_cast<const MfskRx*>(r.get());
+            // a DominoEX already in the box gives way only to a THOR LOCK (a passing contrast flickered it out and back)
+            if ((m->lock || (!holding && m->vit[0].steps >= Viterbi7::D && m->contrast() > 0.1f)) && std::fabs(m->hz() - d->hz()) < 0.5 * d->sub->M * d->st->binHz() * d->sub->stride) return true;
+        }
+        return false;
+    }
     TextModeDecoder* self = nullptr;
     Stream* streamFor(int sps, int rate, bool shaped) {
         for (auto& s : streams) if (s->sps == sps && s->rate == rate && s->shaped == shaped) return s.get();
@@ -894,7 +1101,13 @@ struct TextModeDecoder::Impl {
     }
     void add(const Sub* s) {
         std::unique_ptr<Rx> r;
-        if (s->kind == kMfsk || s->kind == kThor) r.reset(new MfskRx(s)); else r.reset(new OliviaRx(s));
+        if (s->kind == kMt63) {   // ★ one receiver a bandwidth: both interleaves read the same spectra
+            for (auto& m : mt) if (m->bandwidth() == s->rate) { m->enable(s->sps != 0); return; }
+            mt.emplace_back(new Mt63Rx(s->rate, s->sps != 0, s->label)); need8 = true; return;
+        }
+        if (s->kind == kMfsk || s->kind == kThor || s->kind == kDominoFec) r.reset(new MfskRx(s));
+        else if (s->kind == kDomino) r.reset(new DominoRx(s));
+        else r.reset(new OliviaRx(s));
         const bool shaped = s->kind == kOlivia || s->kind == kContestia;
         r->st = streamFor(s->sps, s->rate, shaped);
         r->fd.init(s->M, s->stride, r->st->binHz(), r->st->N / 2);
@@ -908,18 +1121,27 @@ struct TextModeDecoder::Impl {
     }
     void after() {
         // the winner: the locked receiver with the best quality; only its text is shown
-        Rx* best = nullptr;
-        for (auto& r : rx) if (r->locked() && (!best || r->quality() > best->quality())) best = r.get();
-        if (best != winner) {
-            winner = best;
-            if (best && self->onText) {
-                char h[64]; std::snprintf(h, sizeof h, "\n[%s \xc2\xb7 %.0f Hz]\n", best->sub->label, best->hz());
+        Rx* best = nullptr; Mt63Rx* bestMt = nullptr; float bq = -1e9f;
+        for (auto& r : rx) {
+            if (!r->locked() || r->quality() <= bq) continue;
+            if (r->sub->kind == kDomino && thorHere(r.get(), r.get() == winner)) continue;
+            best = r.get(); bq = r->quality();
+        }
+        for (auto& m : mt) if (m->locked() && m->quality() > bq) { bestMt = m.get(); best = nullptr; bq = m->quality(); }
+        if (best != winner || bestMt != winnerMt) {
+            winner = best; winnerMt = bestMt;
+            if ((best || bestMt) && self->onText) {
+                char h[64]; std::snprintf(h, sizeof h, "\n[%s \xc2\xb7 %.0f Hz]\n", winLabel().c_str(), winHz());
                 self->onText(h);
             }
         }
         for (auto& r : rx) {
             if (r.get() == winner && !r->text.empty() && self->onText) self->onText(r->text);
             r->text.clear();
+        }
+        for (auto& m : mt) {
+            if (m.get() == winnerMt && !m->text.empty() && self->onText) self->onText(m->text);
+            m->text.clear();
         }
         static const bool dbg = std::getenv("VIBE_TM_DEBUG") != nullptr;   // the bench's trace (tools/textmode-bench)
         if (dbg) {
@@ -929,11 +1151,11 @@ struct TextModeDecoder::Impl {
                 if (const OliviaRx* o = dynamic_cast<const OliviaRx*>(r.get())) { float e = o->quality(); std::fprintf(stderr, "(E%.2f b%d p%d hz%.0f)", e, r->fd.curB, r->fd.curP, r->hz()); }
                 if (m) std::fprintf(stderr, "(r%.2f s%.2f d%d v%.2f/%.2f)", m->repeat, m->split, m->distinct(), m->vit[0].quality(), m->vit[1].quality()); std::fprintf(stderr, "  "); } std::fprintf(stderr, "\n"); }
         }
-        const int st = winner ? 1 : 0;
+        const int st = (winner || winnerMt) ? 1 : 0;
         if (st != state) { state = st; if (self->onState) self->onState(st); }
         char js[160];
-        std::snprintf(js, sizeof js, "{\"detected\":\"%s\",\"hz\":%.0f}", winner ? winner->sub->label : "",
-                      winner ? std::round(winner->hz() / 10) * 10 : 0.0);
+        std::snprintf(js, sizeof js, "{\"detected\":\"%s\",\"hz\":%.0f}", winLabel().c_str(),
+                      st ? std::round(winHz() / 10) * 10 : 0.0);
         if (js != lastStatus) { lastStatus = js; if (self->onStatus) self->onStatus(js); }
     }
 };
@@ -947,7 +1169,7 @@ TextModeDecoder::TextModeDecoder(Family f, double inRate, const std::string& mod
         //   stream (one FFT) and the same tone set shares a finder (OLIVIA ↔ CONTESTIA, section 13)
         if (f != Family::All && familyOfKind(s.kind) != f) continue;
         if (one) { if (&s == one) d_->add(&s); }
-        else if (anyK >= 0) { if (s.kind == anyK && s.common) d_->add(&s); }
+        else if (anyK >= 0) { if (inGroup(s.kind, anyK) && s.common) d_->add(&s); }
         else if (s.common) d_->add(&s);
     }
     if (d_->need8) d_->rs8.init(inRate, 8000);
@@ -959,6 +1181,7 @@ void TextModeDecoder::feed(const float* x, int n) {
     if (d_->need8) {
         d_->rs8.feed(x, n);
         for (auto& s : d_->streams) if (s->rate == 8000) s->feed(d_->rs8.out.data(), d_->rs8.outN);
+        for (auto& m : d_->mt) m->feed(d_->rs8.out.data(), d_->rs8.outN);
     }
     if (d_->need11) {
         d_->rs11.feed(x, n);
@@ -967,18 +1190,18 @@ void TextModeDecoder::feed(const float* x, int n) {
     d_->after();
 }
 
-std::string TextModeDecoder::detected() const { return d_->winner ? d_->winner->sub->label : ""; }
-float TextModeDecoder::hz() const { return d_->winner ? d_->winner->hz() : 0.f; }
+std::string TextModeDecoder::detected() const { return d_->winLabel(); }
+float TextModeDecoder::hz() const { return d_->winHz(); }
 
 std::vector<TextModeDecoder::ModeInfo> TextModeDecoder::modes(Family f) {
     std::vector<ModeInfo> v{{"auto", "AUTO", ""}};
     if (f == Family::All) {
         // ★★★ grouped (src/services/autoModes.ts draws FAMILY, then MODE): each group's ANY (its own AUTO) first, then
         //     EVERY sub-mode we decode — the common ones and the manual-only ones (OLIVIA 64/2000, CONTESTIA 4/125 …)
-        for (int k : {kMfsk, kOlivia, kContestia, kThor}) {
+        for (int k : kGroupKinds) {
             const char* g = groupOfKind(k);
             v.push_back({std::string("any-") + groupId(k), "ANY", g});
-            for (const Sub& s : kSubs) if (s.kind == k) {
+            for (const Sub& s : kSubs) if (inGroup(s.kind, k)) {
                 std::string l = s.label; const size_t sp = l.find(' ');
                 l = sp == std::string::npos ? l.substr(4) : l.substr(sp + 1);   // "MFSK16" → "16", "OLIVIA 8/250" → "8/250"
                 v.push_back({s.id, l, g});
@@ -1013,14 +1236,40 @@ std::vector<float> textModeSynth(TextModeDecoder::Family, const std::string& mod
     const Sub* s = subById(mode);
     std::vector<float> out;
     if (!s) return out;
+    if (s->kind == kMt63) return mt63Synth(s->rate, s->sps != 0, text, fs, audioHz - s->rate / 2.0 + s->rate / 128.0, seed);
     std::mt19937 rng(seed);
     const double baud = (double)s->rate / s->sps;
     const double spacing = baud * (s->stride / 2);
-    if (s->kind == kMfsk || s->kind == kThor) {
+    if (s->kind == kDomino) {
+        // ★ nibbles: the secondary alphabet's SPACE while idle (the spec: no idle character; the ID text otherwise), the
+        //   text in the primary alphabet, a short ID in the secondary, then idle again
+        std::vector<int> nib;
+        auto put = [&](uint16_t code) { nib.push_back(code >> 8); if (code & 0xF0) nib.push_back((code >> 4) & 15); if (code & 0xF) nib.push_back(code & 15); };
+        for (int i = 0; i < 12; ++i) put(kDexSecondary[' ']);
+        for (unsigned char c : text) put(kDexPrimary[c == '\n' ? 13 : c]);
+        for (unsigned char c : std::string(" G4XYZ ")) put(kDexSecondary[c]);
+        for (int i = 0; i < 4; ++i) put(kDexSecondary[' ']);
+        put(kDexPrimary[' ']);   // ends the last character
+        std::vector<int> tones; int prev = 0;
+        for (int v : nib) { prev = (prev + 2 + v) % 18; tones.push_back(prev); }
+        const double base = audioHz - spacing * (s->M - 1) / 2, symT = 1.0 / baud; double ph = 0;
+        const size_t total = (size_t)std::ceil((tones.size() + 2) * symT * fs);
+        out.assign(total, 0.f);
+        for (size_t i = 0; i < total; ++i) {
+            const size_t k = (size_t)((double)i / fs / symT);
+            if (k >= tones.size()) break;
+            ph += 2 * M_PI * (base + spacing * tones[k]) / fs;
+            if (ph > 2 * M_PI) ph -= 2 * M_PI;
+            out[i] = (float)std::sin(ph);
+        }
+        return out;
+    }
+    if (s->kind == kMfsk || s->kind == kThor || s->kind == kDominoFec) {
+        const int ilv = s->kind == kDominoFec ? 4 : 10;
         // bits: varicode, then NUL and zeros to flush the coder and the interleaver
         std::vector<int> bits;
         auto put = [&](int c) { for (const char* p = kMfskVaricode[c & 255]; *p; ++p) bits.push_back(*p == '1'); };
-        if (s->kind == kThor) for (int i = 0; i < 64; ++i) bits.push_back(0);   // zeros first: IFK+ steps of 2 (idle)
+        if (s->kind != kMfsk) for (int i = 0; i < 64; ++i) bits.push_back(0);   // zeros first: IFK+ steps of 2 (idle)
         for (unsigned char c : text) put(c == '\n' ? 13 : c);
         put(0);
         for (int i = 0; i < 160; ++i) bits.push_back(0);
@@ -1033,7 +1282,7 @@ std::vector<float> textModeSynth(TextModeDecoder::Family, const std::string& mod
         int prev = 0;
         for (int t = 0; t < nOut; ++t) {
             int w = 0;
-            for (int i = 0; i < 4; ++i) { const int si = t - 10 * i; const int bit = si >= 0 && si < nIn ? coded[(size_t)si * 4 + i] : 0; w = (w << 1) | bit; }
+            for (int i = 0; i < 4; ++i) { const int si = t - ilv * i; const int bit = si >= 0 && si < nIn ? coded[(size_t)si * 4 + i] : 0; w = (w << 1) | bit; }
             if (s->kind == kMfsk) tones.push_back(grayInv(w));
             else { prev = (prev + 2 + w) % 18; tones.push_back(prev); }
         }

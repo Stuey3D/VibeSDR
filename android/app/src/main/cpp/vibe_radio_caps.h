@@ -58,12 +58,13 @@ struct Facts {
 inline const std::vector<const char*>& allModes() {
     static const std::vector<const char*> v = {
         "wfm", "rds", "nfm", "tone", "am", "usb", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "lsb", "cwu", "cwl",
-        "drm", "freedv", "rade", "m17", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
+        "drm", "freedv", "rade", "m17", "dvsig", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
         "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
         "balloon",          // ★ V12 balloons (docs/v12/BALLOONS.md): a listener's decoder on USB, 70 cm
         "tones",            // ★ V12 DTMF + 5-tone selcall (docs/v12/TONES.md): a listener's decoder on NFM / AM, any frequency
+        "ale",              // ★ V12 2G HF ALE (docs/v12/HF-DATA.md): a listener's decoder on USB, HF
     };
     return v;
 }
@@ -153,7 +154,8 @@ inline Caps compute(const Facts& f) {
                                            "mfsk", "hell", "jtty", "aprs",
                                            "hfdl",     // ★ HFDL reads the USB audio: an Icom's does
                                            "balloon",     // ★ …and so do balloons (an IC-9700 / IC-705 on 70 cm; reach decides)
-                                           "tones" };     // ★ …and DTMF / 5-tone on the radio's FM or AM audio
+                                           "tones",       // ★ …and DTMF / 5-tone on the radio's FM or AM audio
+                                           "ale" };       // ★ …and ALE (an HF rig's USB audio)
             bool listed = false;
             for (const char* k : kIcom) if (id == k) { listed = true; break; }
             if (!listed) return false;   // ★ WFM, SAM/ECSS/C-QUAM, DRM, CTCSS (it reads channel IQ), every whole-radio mode
@@ -169,6 +171,10 @@ inline Caps compute(const Facts& f) {
          *  HF+ gets it on 2 m (it stops at 260 MHz, so 70 cm is never in its ranges; touches() decides). An Icom never: its
          *  FM audio is demodulated and de-emphasised in the radio, and the 4-FSK receiver reads IQ (not in kIcom above). */
         if (id == "m17") return touches(R, 144e6, 148e6) || touches(R, 420e6, 450e6);
+        /* ★ V12 DV signalling (DMR, D-STAR, YSF, NXDN, dPMR identities — docs/v12/DV-SIGNALLING.md): VHF 136–174 MHz (2 m
+         *  and the VHF PMR / business band) or UHF 400–470 MHz (70 cm, UHF PMR, PMR446), where those systems live — on every
+         *  SDR that reaches one. Never an Icom: the receiver reads IQ (not in kIcom above). */
+        if (id == "dvsig") return touches(R, 136e6, 174e6) || touches(R, 400e6, 470e6);
         if (id == "dab") {
             std::vector<vibedab::Range> v;
             for (const auto& x : R) v.push_back({ (uint32_t)std::min(4.0e9, x.lo), (uint32_t)std::min(4.0e9, x.hi) });
@@ -203,7 +209,7 @@ inline Caps compute(const Facts& f) {
         }
         if (id == "wefax") return touches(R, 2e6, 23e6);
         if (id == "sitora") return touches(R, 1.6e6, 23e6);           // ★ the maritime HF bands in use
-        if (id == "rtty" || id == "mfsk" || id == "hell") return hf;
+        if (id == "rtty" || id == "mfsk" || id == "hell" || id == "ale") return hf;   // ★ ALE: 2G nets live 2–30 MHz
         if (id == "sstv" || id == "ft8" || id == "spots") return anyAmateur;
         if (id == "spotsband") return !icom && anyAmateur;                 // ★ Band reads IQ across a band
         if (vibereach::entry(id)) return tableOk(id.c_str());             // navtex dsc same selcal aprs cw psk jtty balloon

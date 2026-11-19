@@ -91,6 +91,40 @@ async function server(tag, radioExtra = {}) {
   return { port, dir, status, getJson, L, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); } };
 }
 
+// ── ★★ V12 the other types (VIBE_SONDES_TYPES=1, the clip from `test-sondes-types --write-clip`, docs/v12/SONDES-TYPES.md):
+//    a DFM-09, an M10 and an M20 in one band — each found, its type named by the server, the calibration rules per type ──
+if (process.env.VIBE_SONDES_TYPES === '1') {
+  console.log('── Sondes: AUTO type — a DFM-09, an M10 and an M20 in the 402–404 MHz band ──');
+  const S = await server('sty');
+  try {
+    const sp = ws(S.port, '/ws/user-spectrum?user_session_id=sndtyp01&bins=256&proto=1');
+    await until(() => sp.open, 3000);
+    await sleep(1000);
+    sp.send({ type: 'sondes', on: 1 });
+    const three = () => { const r = lastOf(sp, 'sondes'); return r && r.sondes.filter((s) => s.lat != null).length >= 3 ? r : null; };
+    ok(await until(() => !!three(), 40000), `three sondes with positions: ${(lastOf(sp, 'sondes')?.sondes || []).map((s) => `${s.kind} ${s.serial}@${s.hz}`).join(', ')}`);
+    // ★ the DFM's temperature needs its six channels: give it the clip's next loop if it has not come yet
+    await until(() => (lastOf(sp, 'sondes')?.sondes || []).some((s) => s.kind === 'DFM' && s.temp != null), 25000);
+    const r = lastOf(sp, 'sondes');
+    const by = (k) => r && r.sondes.find((s) => s.kind === k);
+    const d = by('DFM'), m = by('M10'), n = by('M20');
+    ok(d && d.serial === '19123456' && d.model === 'DFM-09' && Math.abs(d.hz - 402.5e6) < 2500 && Math.abs(d.lat - 52.2) < 0.01 && Math.abs(d.climb - 5.1) < 0.1,
+       `the DFM-09: ${JSON.stringify(d && { serial: d.serial, model: d.model, hz: d.hz, lat: d.lat, climb: d.climb })}`);
+    ok(d && d.calOf === 6 && d.cal === 6 && Math.abs(d.temp + 18.0) < 0.3, `★ its temperature with its six channels: ${d && d.temp} (cal ${d && d.cal} of ${d && d.calOf})`);
+    ok(m && m.serial === '903-2-24660' && Math.abs(m.hz - 403.6e6) < 2500 && Math.abs(m.lat - 50.6) < 0.01 && m.calOf === 0 && m.temp == null,
+       `the M10, no temperature (calOf 0): ${JSON.stringify(m && { serial: m.serial, hz: m.hz, lat: m.lat, calOf: m.calOf, temp: m.temp })}`);
+    ok(n && n.serial === '504-2-01234' && Math.abs(n.hz - 403.9e6) < 2500 && Math.abs(n.lat - 48.85) < 0.01 && n.climb < -14 && n.temp == null,
+       `the M20, falling: ${JSON.stringify(n && { serial: n.serial, hz: n.hz, lat: n.lat, climb: n.climb })}`);
+    ok(r && r.sondes.length === 3 && r.sondes.every((s) => ['DFM', 'M10', 'M20'].includes(s.kind)), `★ no other type reported: ${r && r.sondes.map((s) => s.kind).join(',')}`);
+    ok(r && r.chans.some((c) => c.kind === 'DFM') && r.chans.some((c) => c.kind === 'M10') && r.chans.some((c) => c.kind === 'M20'), `each channel locked to its type: ${r && JSON.stringify(r.chans)}`);
+    sp.send({ type: 'sondes', on: 0 });
+    ok(await until(() => jsons(sp, 'sondes_off').length > 0, 4000), 'sondes_off');
+    sp.close();
+  } finally { S.stop(); }
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+}
+
 // ── 1. the mode ───────────────────────────────────────────────────────────────────────────────────────────────────────
 {
   console.log('── Sondes: the 402–404 MHz band, three RS41s ──');

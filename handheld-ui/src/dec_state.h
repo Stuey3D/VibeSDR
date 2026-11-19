@@ -67,7 +67,9 @@ inline const DecDef kDecs[] = {
     {"sitora", "SITOR-A", DK_TEXT, "sitora", false, true,  "SITOR-A (ARQ) — maritime teleprinter, 100 Bd, 170 Hz shift. Tune USB so the two tones sit around 1000 Hz; both stations of a link are printed, each under its own label."},
     {"selcal", "SELCAL",  DK_TEXT, "selcal", true,  true,  "The two-tone selective calls a ground station sends to one aircraft, shown as its code (AB-CD): HF aeronautical channels in USB, VHF airband in AM."},
     {"same",   "SAME",    DK_TEXT, "same",   true,  true,  "US emergency alert headers from NOAA Weather Radio (162.400–162.550 MHz NFM) and EAS broadcasts: event, areas and times."},
-    {"mfsk",   "MFSK",    DK_TEXT, "mfsk",   false, true,  "MFSK16/32, OLIVIA, CONTESTIA and THOR: tune USB so the whole signal sits in your passband — for OLIVIA, 1.5 kHz below the published centre. AUTO tries the common sub-modes of all four side by side and names the one it finds; if it cannot lock, pick the family and then the sub-mode below."},
+    {"mfsk",   "MFSK",    DK_TEXT, "mfsk",   false, true,  "MFSK16/32, OLIVIA, CONTESTIA, THOR, DOMINOEX and MT63: tune USB so the whole signal sits in your passband — for OLIVIA, 1.5 kHz below the published centre; MT63 is up to 2 kHz wide. AUTO tries the common sub-modes of all six side by side and names the one it finds; if it cannot lock, pick the family and then the sub-mode below."},
+    // ★ V12 2026-11-19 2G HF ALE (src/services/aleDecoder.ts ALE_HINT): one line a transmission, decoded on the server
+    {"ale",    "ALE",     DK_TEXT, "ale",    true,  true,  "ALE (2G, MIL-STD-188-141): the link-setting bursts of HF nets — soundings, calls and replies, one line each. Tune an ALE channel in USB with the dial on the channel (HFLink amateur channels: 3.596, 7.102, 10.145, 14.109, 18.106 MHz). Nets scan many channels, so a station is heard only while it is on yours."},
     {"time",   "TIME",    DK_TEXT, "",       false, true,  ""},
     {"spots",  "DIGITAL SPOTS", DK_SPOTS, "", false, true, "The digital modes at your dial (FT8 and FT4 on your passband), decoded on the server. Press a spot to tune to it."},
     // ★★★ V12 PAGE (POCSAG / FLEX, AUTO — paging.h): offered ONLY by the handheld's own radio process for a radio plugged into
@@ -90,7 +92,7 @@ struct DecPlace { const char* group; std::vector<const char*> ids; };
 inline const std::vector<DecPlace>& decPlaces(int band) {
     static const std::vector<DecPlace> hf = {
         {"AVIATION", {"selcal"}}, {"MARITIME", {"navtex", "dsc", "sitora", "wefax"}},
-        {"AMATEUR", {"spots", "cw", "psk", "rtty", "jtty", "mfsk", "hell", "sstv", "aprs"}}, {"UTILITY", {"time"}}};
+        {"AMATEUR", {"spots", "cw", "psk", "rtty", "jtty", "mfsk", "hell", "sstv", "aprs"}}, {"UTILITY", {"time", "ale"}}};
     static const std::vector<DecPlace> vhf = {
         {"AVIATION", {"selcal"}}, {"MARITIME", {"dsc"}}, {"AMATEUR", {"aprs", "spots", "cw", "sstv"}},
         {"PAGING", {"paging"}},   // ★ V12 (decoderBands.ts 'paging', VHF and UHF) — drawn only where the engine offers it
@@ -666,7 +668,7 @@ inline void decFetchCaps(int port) {
         if (r.status != 200) return;
         const Json j = Json::parse(r.body);
         u.caps.clear(); u.why.clear();
-        for (const char* k : {"cw", "psk", "rttyskim", "aprs", "dsc", "sitora", "same", "selcal", "navtex", "mfsk", "jtty", "hell", "paging"}) {
+        for (const char* k : {"cw", "psk", "rttyskim", "aprs", "dsc", "sitora", "same", "selcal", "ale", "navtex", "mfsk", "jtty", "hell", "paging"}) {
             u.caps[k] = j[k].boolean();
             const std::string& w = j[std::string(k) + "Why"].str();
             if (j[k].kind == Json::Bool && !j[k].b && !w.empty()) u.why[k] = w.substr(0, 200);
@@ -683,7 +685,7 @@ inline void decFetchCaps(int port) {
         u.mfskModes.clear();
         for (auto& m : j["mfskModes"].a) {
             DecGMode g{m["id"].str(), m["label"].str(), m["group"].str()};
-            if (!g.id.empty() && g.id.size() <= 24 && !g.label.empty() && g.label.size() <= 24 && u.mfskModes.size() < 48) u.mfskModes.push_back(g);
+            if (!g.id.empty() && g.id.size() <= 24 && !g.label.empty() && g.label.size() <= 24 && u.mfskModes.size() < 80) u.mfskModes.push_back(g);   // ★ 63 since DOMINOEX + MT63
         }
         u.pagingModes.clear();
         for (auto& m : j["pagingModes"].a) {   // ★ autoModes.ts parseGroupedModes(v, 16)'s limits
@@ -757,7 +759,8 @@ inline void decSend(const std::string& j) { DecUi& u = decUi(); if (u.ws && u.ws
 /** The status line a decoder opens with (before its first state). */
 inline std::string decIdleStatus(const std::string& id) {
     const DecUi& u = decUi();
-    if (id == "mfsk") return u.mfskMode == "auto" ? "listening — AUTO (MFSK, OLIVIA, CONTESTIA or THOR, from the signal)" : "listening — " + u.mfskMode;
+    if (id == "mfsk") return u.mfskMode == "auto" ? "listening — AUTO (MFSK, OLIVIA, CONTESTIA, THOR, DOMINOEX or MT63, from the signal)" : "listening — " + u.mfskMode;
+    if (id == "ale") return "listening for ALE";
     if (id == "same") return "listening for alert headers";
     if (id == "paging") { PagingStatus p; p.mode = u.pagingMode; return pagingStatusText(&p); }
     if (id == "selcal") return "listening for SELCAL";
@@ -903,6 +906,7 @@ inline void decOnState(const RadioState& s, int st) {
     if (m == "paging") { u.live = st != 0; return; }   // ★ the words are paging_status's
     if (m == "same") { u.status = st ? "reading an alert header…" : "listening for alert headers"; u.live = st != 0; return; }
     if (m == "selcal") { u.status = st ? "tones…" : "listening for SELCAL"; u.live = st != 0; return; }
+    if (m == "ale") { u.status = st ? "reading ALE…" : "listening for ALE"; u.live = st != 0; return; }
     if (m == "dsc") u.status = st ? "receiving a call…" : "listening…";
     else if (m == "jtty") u.status = st ? "decoding…" : "listening…";
     else if (m == "cw" || m == "psk") u.status = st >= 3 ? "decoding…" : st ? "carriers found…" : "listening…";
@@ -1113,6 +1117,13 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
         u.aprsLog.push_front({(double)std::time(nullptr), decClip(!d["line"].str().empty() ? d["line"].str() : d["raw"].str(), 300)});
         decCap(u.aprsLog, 60);
         u.live = true; u.liveAt = now;
+        return;
+    }
+    if (type == "ale_status" && d.kind == Json::Obj) {   // ★ V12 ALE: the transmission being read (aleDecoder.ts aleStateText)
+        if (u.active != "ale") return;
+        const int w = (int)std::max(0.0, std::min(999.0, d["words"].num(0)));
+        const std::string last = decClip(d["last"].str(), 8);
+        if (w > 0) u.status = "reading ALE… " + std::to_string(w) + (w == 1 ? " word" : " words") + (last.empty() ? "" : " (" + last + ")");
         return;
     }
     if (type == "textmode_status" && d.kind == Json::Obj) {
@@ -1411,9 +1422,10 @@ inline void decCannedTick(App& a, const RadioState& s) {
         }
     } else if (decIsPicture(m)) {
         decPicCanned(a, s, k);
-    } else if (m == "same" || m == "selcal" || m == "mfsk") {
+    } else if (m == "same" || m == "selcal" || m == "mfsk" || m == "ale") {
         if (k == 6) decOnBinary(a, s, decTextFrame(m == "same" ? "ZCZC-WXR-TOR-029095-029101+0045-3121453-KEAX/NWS- Tornado Warning · Jackson MO, Cass MO · until 15:30\n"
-                                                    : m == "selcal" ? "14:32:07 SELCAL AB-CD (4 tones, 1.0 s)\n" : "[OLIVIA 8/250 · 1500 Hz]\nCQ CQ DE PA3ABC PA3ABC OLIVIA 8/250 K\n"));
+                                                    : m == "selcal" ? "14:32:07 SELCAL AB-CD (4 tones, 1.0 s)\n"
+                                                    : m == "ale" ? "[ALE] 21:04:12  call  K1ABC \xe2\x86\x92 W1XYZ\n" : "[OLIVIA 8/250 · 1500 Hz]\nCQ CQ DE PA3ABC PA3ABC OLIVIA 8/250 K\n"));
         if (k == 5 && m == "mfsk") decOnJson(a, s, "{\"type\":\"textmode_status\",\"data\":{\"detected\":\"OLIVIA 8/250\",\"hz\":1500}}");
     }
     if (u.spotsOn && k % 3 == 1) {

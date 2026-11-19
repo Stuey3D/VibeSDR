@@ -71,6 +71,8 @@ import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
+import SatellitePanel from '../components/SatellitePanel';   // ★ V12 the satellites box (picker, readout, DOPPLER)
+import { satChanText, satStateWord, txListenMode, txTuneHz, type SatList, type SatReadout, type SatTrack } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -176,6 +178,8 @@ import { DrmQualityMeter } from '../utils/drmQuality';
 import { amSyncOffered, amSyncReadout, AM_SYNC_LABEL, AM_SYNC_NAME, isAmFamily, type AmSyncId, type AmSyncState } from '../services/amSync';   // ★ V12
 import { freedvOffered, freedvVts, FREEDV_LABEL, FREEDV_NAME, type FreeDvChoice, type FreeDvSideband, type FreeDvState, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV
 import { m17Offered, m17Line, M17_LABEL, M17_NAME, type M17State } from '../services/m17';   // ★ V12 M17
+import { dvsigOffered, dvsigLine, DVSIG_LABEL, DVSIG_NAME, type DvState } from '../services/dvsig';   // ★ V12 DV ID
+import DvsigPanel from '../components/DvsigPanel';   // ★ V12 the DV ID box
 import { autoBwOffered, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
 import { landingSpotBand, bandPassband } from '../utils/digiModes';
@@ -632,6 +636,13 @@ function withM17(list: { id: string; label: string; a11y?: string; demod?: boole
   const add = { id: 'm17', label: M17_LABEL, a11y: M17_NAME, demod: true };
   return i < 0 ? [...list, add] : [...list.slice(0, i + 1), add, ...list.slice(i + 1)];
 }
+/** ★★ V12 DV ID after NFM (and M17), only where THIS server lists it (dvsig.ts dvsigOffered). A main key, as M17. */
+function withDvsig(list: { id: string; label: string; a11y?: string; demod?: boolean }[], on: boolean): { id: string; label: string; a11y?: string; demod?: boolean }[] {
+  if (!on) return list;
+  const i = Math.max(list.findIndex((m) => m.id === 'm17'), list.findIndex((m) => m.id === 'nfm'));
+  const add = { id: 'dvsig', label: DVSIG_LABEL, a11y: DVSIG_NAME, demod: true };
+  return i < 0 ? [...list, add] : [...list.slice(0, i + 1), add, ...list.slice(i + 1)];
+}
 const LOCAL_MODES: { id: string; label: string }[] = [
   { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
   // ★ BOTH CW SIDEBANDS — the server has always had cwu AND cwl (the web client offers both);
@@ -912,14 +923,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     setCwCapable(false);
     setRttySkimCapable(false);
     setSkimCapable(true);
-    setPskCapable(false); setJttyCapable(false); setTimeTdfCapable(false); setNcdxfCapable(false); setBalloonCapable(false); setTonesCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
-    setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setFreedvCap([]); setM17Cap(false); setAutoBwModes([]); setBwAutoState(null);
+    setPskCapable(false); setJttyCapable(false); setTimeTdfCapable(false); setNcdxfCapable(false); setBalloonCapable(false); setTonesCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setAleCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
+    setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setFreedvCap([]); setM17Cap(false); setDvsigCap(false); setAutoBwModes([]); setBwAutoState(null);
     setAdsbCap(undefined);
     setIsmCap(undefined);
     setNdbCap(undefined);   // ★ V12 NDB
     setAisCap(undefined);           // ★ V12 AIS / APRS — cleared first, as every per-radio answer
     setHfdlCapable(false); setAvCap(undefined);   // ★ V12 aviation — the same
     setSdCap(undefined);                          // ★ V12 radiosondes — the same
+    setSatCap(undefined);                         // ★ V12 satellites — the same
     setHwDabOnly(null);                           // ★★ V12 DAB only — this server has not said yet
     setHwOnlyMode(null); onlyToldRef.current.clear();   // ★★ V12 the only mode — likewise
     setAprsCap({ on: false, hz: 144.8e6 });
@@ -938,10 +950,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         setCwCapable(o?.cw === true || !!dw.cw);
         setSkimCapable(o?.skim !== false);   // ★ V12 an Icom: CW / PSK are ONE SIGNAL only
         setRttySkimCapable(o?.rttyskim === true && o?.skim !== false);   // ★ V12 the RTTY skimmer — only where it can run
-        setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal);
+        setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal); setAleCapable(o?.ale === true || !!dw.ale);
         setHfdlCapable(o?.hfdl === true);   // ★ V12 HFDL: this VibeServer decodes it on the dial (and serves the HFDL MAP)
         setAvCap(o?.avdata);                // ★ V12 Aircraft datalink — absent where no band is reachable (no key at all)
         setSdCap(o?.sondes);                // ★ V12 radiosondes — absent where the radio cannot reach 400 MHz (no key at all)
+        setSatCap(o?.sat);                  // ★ V12 satellites — absent where the radio reaches no listed downlink (no key at all)
         setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
         setTimeTdfCapable(o?.timeTdf === true);
         setBalloonCapable(o?.balloon === true || !!dw.balloon);   // ★ V12 balloons — greyed with why off 70 cm
@@ -958,6 +971,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setAmSyncCap(amSyncOffered(o?.modes)); // ★ V12 synchronous AM — the same per-radio answer
         setFreedvCap(freedvOffered(o));        // ★ V12 FreeDV — only where `modes` lists it, with the sub-modes it runs
         setM17Cap(m17Offered(o));              // ★ V12 M17 — only where `modes` lists it (libcodec2, and 2 m / 70 cm in reach)
+        setDvsigCap(dvsigOffered(o));          // ★ V12 DV ID — where `modes` lists it (VHF / UHF in reach, the owner allows it)
         setIsmCap(o?.ism);              // ★ V12 ISM — and the bands THIS radio reaches
         setNdbCap(o?.ndb);              // ★ V12 NDB — absent where this radio reaches no LF (no key at all)
         /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
@@ -2664,6 +2678,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  greyed with the reason (never hidden, never live). */
   const [decWhy, setDecWhy] = useState<Record<string, string>>({});
   const [selcalCapable, setSelcalCapable] = useState(false);   // ★ V12 SELCAL: this VibeServer decodes it
+  const [aleCapable, setAleCapable] = useState(false);         // ★ V12 2G HF ALE: this VibeServer decodes it
   const [hfdlCapable, setHfdlCapable] = useState(false);       // ★ V12 HFDL: this VibeServer decodes it on the dial
   const hfdlCapRef = useRef(false); hfdlCapRef.current = hfdlCapable;
   const [avCap, setAvCap] = useState<{ ok: boolean; why: string; bands: AvBand[]; text: boolean } | undefined>(undefined);   // ★ V12 Aircraft datalink
@@ -2686,6 +2701,35 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sdBoxOpen, setSdBoxOpen] = useState(false);
   const [sdMapOpen, setSdMapOpen] = useState(false);
   const sdUiOff = useCallback(() => { sdOnRef.current = false; setSdOn(false); setSdReport(null); setSdBoxOpen(false); setSdMapOpen(false); setSdError(undefined); }, []);
+  /* ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md) — the picker box (SatellitePanel) and the Doppler lock's readout. The
+   *  server owns the lock: the readout beside the digits (ControlsBar satTag) is what it last said; the box is a view. */
+  const [satCap, setSatCap] = useState<{ ok: boolean; why: string } | undefined>(undefined);
+  const [satBoxOpen, setSatBoxOpen] = useState(false);
+  const [satList, setSatList] = useState<SatList | null>(null);
+  const [satRo, setSatRo] = useState<SatReadout | null>(null);
+  const [satTrack, setSatTrack] = useState<SatTrack | null>(null);
+  const satAskedTrack = useRef('');
+  const satRoRef = useRef<SatReadout | null>(null);
+  /* ★ while the box is open: the list now and every 30 s, and the sky track of the locked bird's (else the first row's)
+   *  pass — asked once per pass */
+  useEffect(() => {
+    if (!satBoxOpen) return;
+    const c = client.current as unknown as { satList?: () => void } | null;
+    c?.satList?.();
+    const t = setInterval(() => c?.satList?.(), 30000);
+    return () => clearInterval(t);
+  }, [satBoxOpen]);
+  useEffect(() => {
+    if (!satBoxOpen || !satList) return;
+    const now = Date.now() / 1000;
+    const norad = satRo && satRo.state !== 'OFF' ? satRo.norad : satList.sats.find((x) => x.tx.some((t) => t.reach) && x.passes.length)?.norad;
+    const p = satList.sats.find((x) => x.norad === norad)?.passes.find((x) => x.los > now);
+    if (norad == null || !p) return;
+    const key = `${norad}|${Math.round(p.aos / 60)}`;
+    if (satAskedTrack.current === key) return;
+    satAskedTrack.current = key;
+    (client.current as unknown as { satTrack?: (n: number, a: number, l: number) => void } | null)?.satTrack?.(norad, p.aos, p.los);
+  }, [satBoxOpen, satList, satRo?.norad, satRo?.state]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [hellCapable, setHellCapable] = useState(false);       // ★ V12 FELD HELL: this VibeServer draws it
   /** ★ V12 MFSK / OLIVIA / THOR: each family this VibeServer offers, with its choices (AUTO first); absent = not offered. */
   const [tmModes, setTmModes] = useState<Partial<Record<TextFamily, TextMode[]>>>({});
@@ -2721,6 +2765,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  the mode is a ghost. */
   const [m17Cap, setM17Cap] = useState(false);
   const [m17State, setM17State] = useState<M17State | null>(null);
+  /* ★★ V12 DV ID (dvsig.ts): offered by this server, and its receiver's last report while the mode is DV ID — the VTS line
+   *  and the DV ID box. WHAT it names is the server's decision (identities only on an amateur band). */
+  const [dvsigCap, setDvsigCap] = useState(false);
+  const [dvState, setDvState] = useState<DvState | null>(null);
   /* ★★ V12 THE AUTO KEY BY THE PASSBAND SLIDERS (bwAuto.ts): the modes the server says AUTO can act on, and what it has
    *  done. Both from the server only; reset with the connection. */
   const [autoBwModes, setAutoBwModes] = useState<string[]>([]);
@@ -6220,7 +6268,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -6791,7 +6839,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -6928,6 +6976,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (status.mode !== 'm17') { setM17State(null); return; }
     if (m17Cap) client.current?.m17Status?.();   // ★ a VibeServer's M17 (an OpenWebRX names its own "m17")
   }, [status.mode, m17Cap]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ V12 DV ID the same. */
+  useEffect(() => {
+    if (status.mode !== 'dvsig') { setDvState(null); return; }
+    if (dvsigCap) client.current?.dvsigStatus?.();
+  }, [status.mode, dvsigCap]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★ V12 FreeDV: AUTO or a sub-mode by hand (ModeSelector's FREEDV MODE row) — the room's choice on a shared dial. */
   const onFreedvSub = useCallback((v: FreeDvChoice) => {
     if (askGate()) return;   // ★★ ask before tuning — what the room hears
@@ -7377,6 +7430,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ V12 FreeDV: a new socket asks for the receiver's report again (the server answers once it is in FreeDV)
         if (client.current?.getStatus().mode === 'freedv') client.current?.freedvSub?.(null);
         if (client.current?.getStatus().mode === 'm17') client.current?.m17Status?.();   // ★ V12 M17 likewise
+        if (client.current?.getStatus().mode === 'dvsig') client.current?.dvsigStatus?.();   // ★ V12 DV ID likewise
         // ★★ THE TAKEOVER IS SPENT. We are in; every reconnect from here is an accident of the
         //    network or the app lifecycle, and none of them asked to displace anybody. Clearing it
         //    here rather than on a timer means it lasts exactly as long as the act that set it.
@@ -7626,6 +7680,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onFreeDv: (f) => { if (!destroyed.current && client.current?.getStatus().mode === 'freedv') setFreedvState(f); },
       // ★ V12 M17 — likewise a ghost after leaving
       onM17: (f) => { if (!destroyed.current && client.current?.getStatus().mode === 'm17') setM17State(f); },
+      onDvsig: (f) => { if (!destroyed.current && client.current?.getStatus().mode === 'dvsig') setDvState(f); },   // ★ V12 DV ID
       onBwAuto: (b) => { if (!destroyed.current) setBwAutoState(b); },   // ★★ V12 what AUTO has done to the passband
       /* ★ V12 AIS: a report (on — arriving MEANS AIS is on, whoever put the receiver there: the map opens on the transition),
        *  the server's ais_off (null), or a refusal (the map that opened on the press closes; the reason as an alert, after
@@ -7640,6 +7695,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         setAvOn(true); setAvError(undefined);
         setAvReport(r);
       },
+      /* ★★ V12 SATELLITES: the list, the readout (an ending / refusal says why once), a pass's sky track. */
+      onSatList: (l) => { if (!destroyed.current) setSatList(l); },
+      onSat: (r) => {
+        if (destroyed.current) return;
+        // ★ the server ending a lock (LOS, the owner, another listener's tune on a shared dial) opens the box once to say
+        //   why; the listener's own tune away does not (they know) — no toast, no flashing
+        if (r.state === 'OFF' && r.why && !/^(Tuned away|Mode changed)/.test(r.why) && satRoRef.current && satRoRef.current.state !== 'OFF') setSatBoxOpen(true);
+        satRoRef.current = r;
+        setSatRo(r.state === 'OFF' && !r.why ? null : r);
+      },
+      onSatTrack: (t) => { if (!destroyed.current) setSatTrack(t); },
       /* ★ V12 RADIOSONDES: as the datalink — a report (the box opens on the transition), sondes_off (null), a refusal. */
       onSondes: (r, why) => {
         if (destroyed.current) return;
@@ -12901,7 +12967,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ V12 M17 the same, with what the station sends besides its voice after it (m17.ts m17Info: the relayed station, META
    *  text, a position, the newest SMS): "M17 · G4ABC · VIBE TEST", "M17 · last G4ABC · SMS G4ABC → M0XYZ: 73". */
   const m17Text = status.mode === 'm17' && m17Cap ? m17Line(m17State) : '';
-  const vtsModeLine = status.mode === 'freedv' && freedvCap.length ? freedvVts(freedvState) : m17Text || toneLabel;   // ★ VibeServer's FreeDV / M17 only
+  const dvText = status.mode === 'dvsig' && dvsigCap ? dvsigLine(dvState) : '';   // ★ V12 DV ID: "DMR · G4ABC Stuart · CC 1 · TS2"
+  const vtsModeLine = status.mode === 'freedv' && freedvCap.length ? freedvVts(freedvState) : m17Text || dvText || toneLabel;   // ★ VibeServer's FreeDV / M17 / DV ID only
   // ★ V12 tone ID: a new tone (or its end) re-draws the line — after a bookmark's name, or alone. A live station (RDS /
   //   DAB / a DMR caller) owns the bar, and a notice keeps its turn (vtsNoticeUntil); the next tune picks the tone up.
   useEffect(() => {
@@ -14424,6 +14491,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         centerHz={status.centerHz}
         bwHz={status.bwHz}
         tuneHz={status.frequency}
+        needleOffsetHz={satRo && (satRo.state === 'TRACK' || satRo.state === 'COAST') ? (satRo.offset ?? 0) : 0}
         /* ★★ THE CW SKIMMER'S VFO IS ITS SEGMENT (Stuart, 2026-10-25) — drawn only, never sent (cwList cwDrawnPassband);
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
         /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */
@@ -15116,6 +15184,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           adminMode={adminOk}
           sharedDial={sharedDialProp}
           airChannel={airChannelNow}
+          satTag={satRo && satRo.state !== 'OFF' ? `${satChanText(satRo)} · ${satStateWord(satRo)}` : null}
           /* ★ Nixie's FIXED tube row (faceplates §7): a network radio is HF (MAX_HZ 30 MHz, 8 tubes); a
            *  local radio tunes to 2 GHz (10 tubes). A property of the radio, never of the frequency. */
           tubeLayout={isLocal ? 'wide' : 'hf'}
@@ -15535,6 +15604,42 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       )}
       </RotateFade>
+      {/* ★★ V12 THE DV ID BOX — while the mode is DV ID, the DRM box's place (it stands down for a decoder, the spots and
+          the whole-radio modes). */}
+      <RotateFade>
+      {status.mode === 'dvsig' && dvsigCap && !activeDecoder && !spotsKind && !ismBoxOpen && !dabOn && !adsbOn && !ismOn && !aisOn && !ndbOn && (
+        <PanelBoundary name="DV ID" onClose={() => setDvState(null)}>
+        <DvsigPanel state={dvState} topLimit={boxTopLimit} onExit={() => onMode('nfm')}
+                    onPin={(pin) => client.current?.dvsigPin?.(pin)}
+                    bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH} />
+        </PanelBoundary>
+      )}
+      </RotateFade>
+      {/* ★★ V12 THE SATELLITES BOX — the decoder boxes' place; the waterfall live above it. */}
+      <RotateFade>
+      {satBoxOpen && !!satCap && (
+        <PanelBoundary name="Satellites" onClose={() => setSatBoxOpen(false)}>
+        <SatellitePanel
+          list={satList} readout={satRo} track={satTrack} cap={satCap}
+          onDoppler={(on) => {
+            markInteract();
+            if (askGate()) return;
+            (client.current as unknown as { satLock?: (on: boolean, norad?: number) => void } | null)?.satLock?.(on);
+          }}
+          onTrack={(norad, tx) => {
+            markInteract();
+            if (askGate()) return;
+            onTuneHz(txTuneHz(tx), txListenMode(tx) as SDRMode);
+            // ★ after the tune has landed, so the server matches the lock at the new dial (within 12 kHz)
+            setTimeout(() => (client.current as unknown as { satLock?: (on: boolean, norad?: number) => void } | null)?.satLock?.(true, norad), 400);
+          }}
+          onClose={() => setSatBoxOpen(false)}
+          topLimit={boxTopLimit}
+          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+        />
+        </PanelBoundary>
+      )}
+      </RotateFade>
       {/* ★★ V12 THE SONDES BOX — the datalink's place (SondesPanel); the waterfall live above it, MAP over everything. */}
       <RotateFade>
       {sdBoxOpen && (
@@ -15720,7 +15825,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDbMax={setDbMax}
         onFilterLow={onFilterLow}
         onFilterHigh={onFilterHigh}
-        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) ? undefined : onFilterBoth}   // ★ V12 DRM cuts its own channel: no width (FreeDV: the SSB channel the server sets; M17: the receiver's own 12.5 kHz)
+        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) || (status.mode === 'dvsig' && dvsigCap) ? undefined : onFilterBoth}   // ★ V12 DRM cuts its own channel: no width (FreeDV: the SSB channel the server sets; M17: the receiver's own 12.5 kHz)
         onNr={onNrMode}
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}
@@ -15993,7 +16098,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  an HF transceiver does not have. The radio's own names (USB-D, RTTY …) are in the radio panel. */
           const icomModes = icom ? new Set(icom.modes.map(icomClientMode)) : null;
           // ★ V12 DRM beside AM where this server offers it (the web's offeredModes)
-          const vibeModes = withM17(withFreeDv(withAmSync(drmCapable ? withDrm(LOCAL_MODES) : LOCAL_MODES, amSyncCap), freedvCap), m17Cap);   // ★ V12 SAM … AM-ST, FreeDV, M17
+          const vibeModes = withDvsig(withM17(withFreeDv(withAmSync(drmCapable ? withDrm(LOCAL_MODES) : LOCAL_MODES, amSyncCap), freedvCap), m17Cap), dvsigCap);   // ★ V12 SAM … AM-ST, FreeDV, M17
           const base0 = isLocal ? vibeModes
                     : route.params.serverType === 'owrx' ? serverModes
                     : LOCAL_MODES;
@@ -16011,7 +16116,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         filterHigh={status.bandwidthHigh}
         bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
         bwEdgeMin={client.current ? filterEdgeMin(client.current.caps, status.mode) : 0}
-        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) ? undefined : onFilterBoth}   // ★ V12 DRM / FreeDV / M17: the width row is not offered
+        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) || (status.mode === 'dvsig' && dvsigCap) ? undefined : onFilterBoth}   // ★ V12 DRM / FreeDV / M17: the width row is not offered
         /* ★ V12 FreeDV: AUTO and the server's sub-modes, in the width row's place, while the mode is FreeDV */
         freedv={status.mode === 'freedv' && freedvCap.length ? { subs: freedvCap, sub: freedvState?.sub ?? 'auto', onSub: onFreedvSub, sb: freedvState?.sbSel ?? 'auto', onSb: onFreedvSb } : null}
         /* ★★ V12 AUTO above SYNC — only where this server lists the mode (autoBwModes); the sliders show what AUTO chose
@@ -16167,6 +16272,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           sitoraAvail: sitoraCapable && !!(client.current as any)?.isVibe,
           sameAvail: sameCapable && !!(client.current as any)?.isVibe,
           selcalAvail: selcalCapable && !!(client.current as any)?.isVibe,
+          aleAvail: aleCapable && !!(client.current as any)?.isVibe,   // ★ V12 2G HF ALE
           decWhy: (client.current as any)?.isVibe ? decWhy : undefined,
           onDecWhy: (label: string, why: string) => { markInteract(); appAlert(`${label} unavailable`, why); },
           hellAvail: hellCapable && !!(client.current as any)?.isVibe,   // ★ V12 FELD HELL
@@ -16187,6 +16293,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           aisOn,
           /* ★★ V12 AIRCRAFT DATALINK — AIS's three states, VibeServer only (the capability is per radio). */
           /* ★★ V12 RADIOSONDES — the datalink's three states, VibeServer only (the capability is per radio). */
+          /* ★★ V12 SATELLITES — not a whole-radio mode: the key opens the box. Shown (greyed with the reason when not ready)
+           *  only where the server sends `doppler`. */
+          satAvail: !!satCap && !!(client.current as any)?.isVibe,
+          satWhy: satCap && !satCap.ok ? satCap.why : undefined,
+          satOn: !!satRo && satRo.state !== 'OFF',
+          onSat: () => { markInteract(); setModeSelOpen(false); setSatBoxOpen((v) => !v); },
           sondesAvail: (sdCap?.ok === true || sdOn) && !!(client.current as any)?.isVibe,
           sondesWhy: !sdOn && sdCap && !sdCap.ok ? sdCap.why : undefined,
           sondesOn: sdOn,

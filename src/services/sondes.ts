@@ -1,19 +1,21 @@
 /**
  * sondes.ts — ★ V12 RADIOSONDES (docs/v12/RS41.md): the words and shapes both clients use for a VibeServer's SONDES
- * whole-radio mode ({"type":"sondes"}: RS41 weather balloons on 400–406 MHz). One copy (the app's SondesPanel and the
- * web's sondes.ts), so every screen says the same thing.
+ * whole-radio mode ({"type":"sondes"}: weather balloons on 400–406 MHz — Vaisala RS41, Graw DFM, Meteomodem M10 / M20,
+ * the type found per sonde by the server, docs/v12/SONDES-TYPES.md). One copy (the app's SondesPanel and the web's
+ * sondes.ts), so every screen says the same thing.
  * ★ tracks.ts's range and bearing; the map's icon and card are HTML strings (the web's TrackView and the app's MapOverlay
  *   WebView draw the same ones), every field escaped.
- * ★ NEVER A GUESSED PTU: the server sends `temp` only once the sonde's whole calibration (51 subframes) is in; until then
- *   the line says how much has arrived. Humidity and pressure are not decoded at all.
+ * ★ NEVER A GUESSED PTU: the server sends `temp` only once the sonde's whole calibration is in (`cal` of `calOf`: 51
+ *   subframes for an RS41, 6 channels for a DFM; calOf 0 = this type's temperature is not decoded); until then the line
+ *   says how much has arrived. Humidity and pressure are not decoded at all.
  */
 
 import { rangeBearing, type LatLon, type TrackItem, type TrackRow } from './tracks';
 
 /** One sonde from the report (vibe_rs41_service.h Tracker::json). */
 export interface Sonde {
-  serial: string; kind: string; hz: number; txHz?: number;
-  age: number; n: number; frame: number; cal: number;
+  serial: string; kind: string; model?: string; hz: number; txHz?: number;
+  age: number; n: number; frame: number; cal: number; calOf: number;
   lat?: number; lon?: number; alt?: number; climb?: number; speed?: number; heading?: number; sats?: number;
   posAge?: number; maxAlt?: number; temp?: number; batt?: number; enc?: boolean; gpsTime?: number;
   track: [number, number, number][];
@@ -51,13 +53,15 @@ export function parseSondeReport(m: unknown): SondeReport | null {
         if (a != null && b != null) track.push([a, b, h ?? 0]);
       }
     const la = lat(s.lat), lo = lon(s.lon);
+    // ★ calOf: what this type's calibration needs (an older server sends none: an RS41's 51)
+    const calOf = Math.max(0, Math.min(64, num(s.calOf) ?? 51)), cal = Math.max(0, Math.min(calOf || 64, num(s.cal) ?? 0));
     sondes.push({
-      serial, kind: str(s.kind, 10) ?? 'RS41', hz: num(s.hz) ?? 0, txHz: num(s.txHz),
-      age: num(s.age) ?? 0, n: num(s.n) ?? 0, frame: num(s.frame) ?? -1, cal: Math.max(0, Math.min(51, num(s.cal) ?? 0)),
+      serial, kind: str(s.kind, 10) ?? 'RS41', model: str(s.model, 16), hz: num(s.hz) ?? 0, txHz: num(s.txHz),
+      age: num(s.age) ?? 0, n: num(s.n) ?? 0, frame: num(s.frame) ?? -1, cal, calOf,
       lat: la != null && lo != null ? la : undefined, lon: la != null && lo != null ? lo : undefined,
       alt: num(s.alt), climb: num(s.climb), speed: num(s.speed), heading: num(s.heading), sats: num(s.sats),
       posAge: num(s.posAge), maxAlt: num(s.maxAlt),
-      temp: num(s.cal) === 51 ? num(s.temp) : undefined,   // ★ a temperature with an incomplete calibration is not shown
+      temp: calOf > 0 && cal >= calOf ? num(s.temp) : undefined,   // ★ a temperature with an incomplete calibration is not shown
       batt: num(s.batt), enc: s.enc === true, gpsTime: num(s.gpsTime), track,
     });
   }
@@ -99,9 +103,11 @@ export function sondeClimb(v?: number): string {
   if (v == null) return '';
   return `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)} m/s`;
 }
-/** The list's first line: serial · altitude · climb. */
+/** The sonde's type as the list shows it: the finer model where the server knows it ("DFM-09", "M10+"), else the kind. */
+export function sondeType(s: Sonde): string { return s.model || s.kind || 'RS41'; }
+/** The list's first line: type · serial · altitude · climb. */
 export function sondeLine(s: Sonde): string {
-  const parts = [s.serial];
+  const parts = [`${sondeType(s)} ${s.serial}`];
   if (s.alt != null) parts.push(`${Math.round(s.alt).toLocaleString('en-GB')} m`);
   if (s.climb != null) parts.push(sondeClimb(s.climb));
   return parts.join(' · ');
@@ -109,7 +115,8 @@ export function sondeLine(s: Sonde): string {
 /** The temperature, or how far the calibration has got — never a guess. */
 export function sondeTemp(s: Sonde): string {
   if (s.temp != null) return `${s.temp < 0 ? '\u2212' : ''}${Math.abs(s.temp).toFixed(1)} \u00b0C`;
-  return s.cal >= 51 ? 'temperature not decoded' : `not yet calibrated (${s.cal} of 51)`;
+  if (!s.calOf) return 'temperature not decoded for this type';
+  return s.cal >= s.calOf ? 'temperature not decoded' : `not yet calibrated (${s.cal} of ${s.calOf})`;
 }
 /** The second line: where it was heard, its state, the temperature (or the calibration's progress). */
 export function sondeDetail(s: Sonde): string {
@@ -131,7 +138,7 @@ export function sondeStatus(r: SondeReport | null): string {
 export function sondeEmpty(r: SondeReport | null): string {
   if (!r) return 'Taking the receiver to the radiosonde band…';
   const span = r.lo && r.hi ? `${(r.lo / 1e6).toFixed(1)}–${(r.hi / 1e6).toFixed(1)} MHz` : r.bandName;
-  return `Searching ${span} for RS41 radiosondes. Weather services launch them twice a day (around 11:15 and 23:15 UTC in `
+  return `Searching ${span} for radiosondes (RS41, DFM, M10 and M20 — the type is found for each). Weather services launch them twice a day (around 11:15 and 23:15 UTC in `
     + 'much of Europe) and each is heard for one to three hours; an aerial for 400 MHz with a clear view of the sky hears them '
     + 'furthest. Step the band if your nearest launch site uses another frequency.';
 }

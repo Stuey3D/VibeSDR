@@ -72,7 +72,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | 'hfdl' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | 'hfdl' | null;
 // ★ V12 FELD HELL is drawn, so it is a picture here (PREV, SAVE, CLR, zoom) — plainly, without WEFAX's ADJ
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv', 'hell'];
 
@@ -286,6 +286,7 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   // ★ V12: US Emergency Alert System headers (NOAA Weather Radio, EAS broadcasts)
   same:    'EAS / SAME',
   selcal:  'SELCAL',
+  ale:     'ALE',   // ★ V12 2G HF ALE (services/aleDecoder.ts)
   tones:   'DTMF / 5-TONE',   // ★ V12 DTMF + 5-tone selective calling
   // ★ V12: a VibeServer's HFDL on the listener's USB dial — one line per message; the aircraft go on the HFDL MAP
   hfdl:    'HFDL',

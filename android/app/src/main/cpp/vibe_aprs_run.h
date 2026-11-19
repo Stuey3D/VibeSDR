@@ -80,7 +80,10 @@ public:
         std::function<double()> rfHz;                          ///< the dial (for the gallery line), may be empty
         std::function<double()> clock;                         ///< seconds (tests); empty = steady clock
         bool fx25 = false, il2p = false;                       ///< ★ V12: also decode FX.25 / IL2P (AUTO = both on)
-        std::string sat;                                       ///< ★ V12: the satellite being received (the satellite engine's hint), or ""
+        std::string sat;                                       ///< ★ V12: a fixed satellite name (tests / tools), or ""
+        /** ★ V12: the satellite engine's name for what this listener is locked on, asked per frame (vibe::sat::decoderView
+         *  in the host — docs/v12/SATELLITE-ENGINE.md "the decoder hook"); empty / "" = none. */
+        std::function<std::string()> satName;
     };
     /** One entry of the frame log. */
     struct LogEntry { double t; std::string from, to, path, ctl, sat, hex, text; int pid = -1, fec = 0, fixed = 0, len = 0; bool crc = false, aprs = false; };
@@ -226,7 +229,8 @@ private:
         e.t = now(); e.from = addrText(ax.src); e.to = addrText(ax.dest); e.ctl = controlName(ax.control);
         if (hasPid) e.pid = ax.pid;
         for (size_t i = 0; i < ax.digis.size(); ++i) { if (i) e.path += ','; e.path += addrText(ax.digis[i]); if (ax.digis[i].h) e.path += '*'; }
-        e.sat = o_.sat;
+        e.sat = o_.satName ? o_.satName() : std::string();
+        if (e.sat.empty()) e.sat = o_.sat;
         if (e.sat.empty()) e.sat = vibesat::byCallsign(ax.src.call);
         if (e.sat.empty()) for (const Addr& d : ax.digis) if (d.h) { const std::string n = vibesat::byCallsign(d.call); if (!n.empty()) e.sat = n; }
         e.fec = f.fec; e.fixed = f.fixed; e.crc = f.crc; e.aprs = aprs; e.len = int(ax.info.size());
