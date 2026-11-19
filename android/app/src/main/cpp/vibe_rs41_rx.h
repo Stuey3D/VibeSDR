@@ -17,8 +17,9 @@
 //   plausible serial. Peaks the scan finds on noise or spurs open channels that simply decode nothing.
 #pragma once
 #include "vibe_rs41.h"
-#include "vibedsp/vibedsp.h"
-#include "vibedsp/simd_internal.h"
+#include "vibe_sonde_disc.h"   // fmDisc, powerEma (shared with the DFM / M10 / M20)
+#include "vibe_sonde_dfm.h"
+#include "vibe_sonde_mxx.h"
 
 #include <algorithm>
 #include <cmath>
@@ -41,111 +42,15 @@ constexpr int kMaxHdrErr = 5;      ///< header bits allowed wrong (of 64)
 #define RS41_CHAN_MIN 15e3
 #endif
 constexpr double kChanMinRate = RS41_CHAN_MIN;
-
-// ── SIMD kernels ─────────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** The scalar reference of the vector atan2 below: Abramowitz & Stegun 4.4.49 on [0, 1] (|error| ≤ 1e-5 rad), folded
- *  to the whole circle. */
-inline float atan2Fast(float y, float x) {
-    const float ax = std::fabs(x), ay = std::fabs(y);
-    const float mx = std::max(ax, ay), mn = std::min(ax, ay);
-    const float a = mn / (mx + 1e-30f), s = a * a;
-    const float r0 = ((((0.0208351f * s - 0.0851330f) * s + 0.1801410f) * s - 0.3302995f) * s + 0.9998660f) * a;
-    float r = r0;
-    if (ay > ax) r = 1.57079637f - r;
-    if (x < 0) r = 3.14159274f - r;
-    return y < 0 ? -r : r;
-}
-
-/** out[k] = arg(z[k] · conj(z[k−1])), z[−1] = `prev` (updated). The FM discriminator, rad per sample. `tmp` scratch. */
-inline void fmDisc(const cf32* z, int n, cf32& prev, float* out, std::vector<cf32>& tmp) {
-    if (n <= 0) return;
-    tmp.resize(size_t(n) + 1);
-    tmp[0] = prev;
-    std::memcpy(tmp.data() + 1, z, size_t(n) * sizeof(cf32));
-    prev = z[n - 1];
-    const float* cf = reinterpret_cast<const float*>(tmp.data() + 1);   // current
-    const float* pf = reinterpret_cast<const float*>(tmp.data());       // previous
-    int k = 0;
-#if VIBE_NEON
-    const float32x4_t c1 = vdupq_n_f32(0.0208351f), c2 = vdupq_n_f32(-0.0851330f), c3 = vdupq_n_f32(0.1801410f),
-                      c4 = vdupq_n_f32(-0.3302995f), c5 = vdupq_n_f32(0.9998660f), hp = vdupq_n_f32(1.57079637f),
-                      pi = vdupq_n_f32(3.14159274f), tiny = vdupq_n_f32(1e-30f), zero = vdupq_n_f32(0.f);
-    for (; k + 4 <= n; k += 4) {
-        const float32x4x2_t c = vld2q_f32(cf + 2 * k), p = vld2q_f32(pf + 2 * k);
-        const float32x4_t re = vaddq_f32(vmulq_f32(c.val[0], p.val[0]), vmulq_f32(c.val[1], p.val[1]));
-        const float32x4_t im = vsubq_f32(vmulq_f32(c.val[1], p.val[0]), vmulq_f32(c.val[0], p.val[1]));
-        const float32x4_t ax = vabsq_f32(re), ay = vabsq_f32(im);
-        const float32x4_t mx = vaddq_f32(vmaxq_f32(ax, ay), tiny), mn = vminq_f32(ax, ay);
-        float32x4_t inv = vrecpeq_f32(mx);
-        inv = vmulq_f32(inv, vrecpsq_f32(mx, inv));
-        inv = vmulq_f32(inv, vrecpsq_f32(mx, inv));
-        const float32x4_t a = vmulq_f32(mn, inv), s = vmulq_f32(a, a);
-        float32x4_t r = vaddq_f32(vmulq_f32(c1, s), c2);
-        r = vaddq_f32(vmulq_f32(r, s), c3);
-        r = vaddq_f32(vmulq_f32(r, s), c4);
-        r = vaddq_f32(vmulq_f32(r, s), c5);
-        r = vmulq_f32(r, a);
-        r = vbslq_f32(vcgtq_f32(ay, ax), vsubq_f32(hp, r), r);
-        r = vbslq_f32(vcltq_f32(re, zero), vsubq_f32(pi, r), r);
-        r = vbslq_f32(vcltq_f32(im, zero), vnegq_f32(r), r);
-        vst1q_f32(out + k, r);
-    }
-#elif VIBE_SSE
-    const __m128 c1 = _mm_set1_ps(0.0208351f), c2 = _mm_set1_ps(-0.0851330f), c3 = _mm_set1_ps(0.1801410f),
-                 c4 = _mm_set1_ps(-0.3302995f), c5 = _mm_set1_ps(0.9998660f), hp = _mm_set1_ps(1.57079637f),
-                 pi = _mm_set1_ps(3.14159274f), tiny = _mm_set1_ps(1e-30f), zero = _mm_setzero_ps(),
-                 absm = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF)), sgn = _mm_castsi128_ps(_mm_set1_epi32(int(0x80000000u)));
-    for (; k + 4 <= n; k += 4) {
-        __m128 cr, ci, pr, pim;
-        vibedsp::sseLoad2(cf + 2 * k, cr, ci); vibedsp::sseLoad2(pf + 2 * k, pr, pim);
-        const __m128 re = _mm_add_ps(_mm_mul_ps(cr, pr), _mm_mul_ps(ci, pim));
-        const __m128 im = _mm_sub_ps(_mm_mul_ps(ci, pr), _mm_mul_ps(cr, pim));
-        const __m128 ax = _mm_and_ps(re, absm), ay = _mm_and_ps(im, absm);
-        const __m128 a = _mm_div_ps(_mm_min_ps(ax, ay), _mm_add_ps(_mm_max_ps(ax, ay), tiny)), s = _mm_mul_ps(a, a);
-        __m128 r = _mm_add_ps(_mm_mul_ps(c1, s), c2);
-        r = _mm_add_ps(_mm_mul_ps(r, s), c3);
-        r = _mm_add_ps(_mm_mul_ps(r, s), c4);
-        r = _mm_add_ps(_mm_mul_ps(r, s), c5);
-        r = _mm_mul_ps(r, a);
-        __m128 m = _mm_cmpgt_ps(ay, ax);
-        r = _mm_or_ps(_mm_and_ps(m, _mm_sub_ps(hp, r)), _mm_andnot_ps(m, r));
-        m = _mm_cmplt_ps(re, zero);
-        r = _mm_or_ps(_mm_and_ps(m, _mm_sub_ps(pi, r)), _mm_andnot_ps(m, r));
-        r = _mm_xor_ps(r, _mm_and_ps(im, sgn));
-        _mm_storeu_ps(out + k, r);
-    }
+/** ★ V12 the M10 / M20 slice: ≈ 9600 chips/s FSK is about ±10 kHz wide — a slice of at least this rate (64 bins: 37.5 kS/s
+ *  at 2.4 MS/s), taken with the flat-over-7/8 roll-off (extract's taperDiv 16). */
+#ifndef SONDE_WIDE_MIN
+#define SONDE_WIDE_MIN 36e3
 #endif
-    for (; k < n; ++k) {
-        const float re = cf[2 * k] * pf[2 * k] + cf[2 * k + 1] * pf[2 * k + 1];
-        const float im = cf[2 * k + 1] * pf[2 * k] - cf[2 * k] * pf[2 * k + 1];
-        out[k] = atan2Fast(im, re);
-    }
-}
-
-/** acc[k] += a · (|b[k]|² − acc[k]) — the scan's smoothed power per bin. NEON / SSE2 / scalar. */
-inline void powerEma(const cf32* b, float* acc, int n, float a) {
-    const float* bf = reinterpret_cast<const float*>(b);
-    int k = 0;
-#if VIBE_NEON
-    const float32x4_t av = vdupq_n_f32(a);
-    for (; k + 4 <= n; k += 4) {
-        const float32x4x2_t x = vld2q_f32(bf + 2 * k);
-        const float32x4_t p = vaddq_f32(vmulq_f32(x.val[0], x.val[0]), vmulq_f32(x.val[1], x.val[1]));
-        const float32x4_t q = vld1q_f32(acc + k);
-        vst1q_f32(acc + k, vaddq_f32(q, vmulq_f32(av, vsubq_f32(p, q))));
-    }
-#elif VIBE_SSE
-    const __m128 av = _mm_set1_ps(a);
-    for (; k + 4 <= n; k += 4) {
-        __m128 xr, xi; vibedsp::sseLoad2(bf + 2 * k, xr, xi);
-        const __m128 p = _mm_add_ps(_mm_mul_ps(xr, xr), _mm_mul_ps(xi, xi));
-        const __m128 q = _mm_loadu_ps(acc + k);
-        _mm_storeu_ps(acc + k, _mm_add_ps(q, _mm_mul_ps(av, _mm_sub_ps(p, q))));
-    }
+constexpr double kWideMinRate = SONDE_WIDE_MIN;
+#ifndef SONDE_WIDE_TAPER
+#define SONDE_WIDE_TAPER 4
 #endif
-    for (; k < n; ++k) { const float p = bf[2 * k] * bf[2 * k] + bf[2 * k + 1] * bf[2 * k + 1]; acc[k] += a * (p - acc[k]); }
-}
 
 // ── One channel's demodulator ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -307,6 +212,11 @@ public:
         int cb = 8;
         while (cb * bin_ < kChanMinRate && cb < n) cb *= 2;
         cb_ = cb; chRate_ = cb * bin_;
+        // ★ V12 the M10 / M20's wider slice (≈ 9600 chips/s FSK, ±10 kHz): at least kWideMinRate, flat over 7/8 of it
+        int cw = cb;
+        while (cw * bin_ < kWideMinRate && cw < n) cw *= 2;
+        cbW_ = cw; chRateW_ = cw * bin_;
+        outW_.resize(size_t(cw));
         chz_.reset(new vibedsp::Channelizer(n));
         pw_.assign(size_t(n), 0.f);
         alpha_ = float(std::min(1.0, chz_->hop() / cur));     // ★ a ~1 s time constant
@@ -318,16 +228,17 @@ public:
     double rate() const { return rate_; }
     double sharedRate() const { return shared_; }
     double chanRate() const { return chRate_; }
+    double wideRate() const { return chRateW_; }
     double binHz() const { return bin_; }
     int fftSize() const { return n_; }
     double lo() const { return lo_; }
     double hi() const { return hi_; }
     int maxChannels() const { return maxCh_; }
 
-    struct ChanInfo { double hz; float levelDb; int frames; double openS; };
+    struct ChanInfo { double hz; float levelDb; int frames; double openS; const char* kind; };
     std::vector<ChanInfo> channels() const {
         std::vector<ChanInfo> v;
-        for (const auto& c : ch_) v.push_back({ c->hz, c->level, c->frames, now_ - c->opened });
+        for (const auto& c : ch_) v.push_back({ c->hz, c->level, c->frames, now_ - c->opened, c->lock });
         return v;
     }
     uint64_t opened() const { return opened_; }
@@ -353,9 +264,18 @@ private:
     struct Chan {
         double hz = 0; int bin = 0; std::complex<double> rot{1, 0}, ph{1, 0};
         std::unique_ptr<ChanRx> rx;
+        // ★★ V12 AUTO TYPE: every new channel runs all three demodulators (RS41 and DFM on the narrow slice, M10 / M20 on
+        //    the wide one); the first type whose frame passes ITS OWN checks locks the channel — the others stop (no
+        //    cross-type reading, no wasted work). 30 s without a frame of the locked type and the channel listens to all
+        //    again (another sonde may take the frequency).
+        std::unique_ptr<vibedfm::Chan> dfm;
+        std::unique_ptr<vibemxx::Chan> mxx;
+        const char* lock = nullptr;
         double opened = 0, seen = 0, lastFrame = -1; int frames = 0; float level = 0;
         double recentre = 0; bool want = false;
+        std::complex<double> phW{1, 0};
     };
+    static bool narrowKind(const char* k) { return !k || !std::strcmp(k, "RS41") || !std::strcmp(k, "DFM"); }
     void place_(Chan& c, double hz) {
         c.hz = hz;
         const double off = hz - hw_;
@@ -369,16 +289,31 @@ private:
         powerEma(bins, pw_.data(), n_, alpha_);
         for (auto& cp : ch_) {
             Chan& c = *cp;
-            const int k = chz_->extract(bins, c.bin, cb_, out_.data(), ctx_, bi);
-            std::complex<double> p = c.ph;
-            for (int i = 0; i < k; ++i) { out_[size_t(i)] *= cf32(float(p.real()), float(p.imag())); p *= c.rot; }
-            c.ph = p / std::abs(p);
-            c.rx->process(out_.data(), k, [&](Frame& fr) {
+            if (c.lock && now_ - c.lastFrame > 30.0) c.lock = nullptr;   // ★ silent for 30 s: listen to every type again
+            auto got = [&](Frame& fr) {
+                if (c.lock && std::strcmp(c.lock, fr.kind)) return;       // ★ locked to another type: not this one's
+                c.lock = fr.kind;
                 fr.hz = c.hz + fr.offsetHz;
                 ++c.frames; c.lastFrame = now_;
                 c.recentre = std::max(-3000.0, std::min(3000.0, fr.offsetHz)); c.want = true;
                 onFrame(static_cast<const Frame&>(fr));
-            });
+            };
+            if (narrowKind(c.lock)) {
+                const int k = chz_->extract(bins, c.bin, cb_, out_.data(), ctx_, bi);
+                std::complex<double> p = c.ph;
+                for (int i = 0; i < k; ++i) { out_[size_t(i)] *= cf32(float(p.real()), float(p.imag())); p *= c.rot; }
+                c.ph = p / std::abs(p);
+                if (!c.lock || !std::strcmp(c.lock, "RS41")) c.rx->process(out_.data(), k, got);
+                if (!c.lock || !std::strcmp(c.lock, "DFM")) c.dfm->process(out_.data(), k, got);
+            }
+            if (!c.lock || !narrowKind(c.lock)) {
+                const int k = chz_->extract(bins, c.bin, cbW_, outW_.data(), ctx_, bi, SONDE_WIDE_TAPER);
+                std::complex<double> p = c.phW;
+                const std::complex<double> rw = std::polar(1.0, std::arg(c.rot) * chRate_ / chRateW_);
+                for (int i = 0; i < k; ++i) { outW_[size_t(i)] *= cf32(float(p.real()), float(p.imag())); p *= rw; }
+                c.phW = p / std::abs(p);
+                c.mxx->process(outW_.data(), k, got);
+            }
             if (c.want) { c.want = false; place_(c, c.hz + c.recentre); }
         }
         if (now_ - lastScan_ >= 0.5 && now_ >= 1.0) { lastScan_ = now_; scan_(); }
@@ -388,8 +323,8 @@ private:
     void scan_() {
         const int kLo = int(std::ceil((lo_ - hw_) / bin_)), kHi = int(std::floor((hi_ - hw_) / bin_));
         const int L = kHi - kLo + 1;
-        const int W = std::max(5, int(std::lround(10e3 / bin_)) | 1), h = W / 2;
-        if (L < 3 * W) return;
+        const int W10 = std::max(5, int(std::lround(10e3 / bin_)) | 1);
+        if (L < 3 * W10) return;
         P_.resize(size_t(L));
         for (int i = 0; i < L; ++i) P_[size_t(i)] = pw_[size_t((kLo + i) & (n_ - 1))];
         srt_ = P_;
@@ -397,38 +332,49 @@ private:
         const double fl = std::max(1e-20, double(srt_[size_t(L / 2)]));
         cum_.assign(size_t(L) + 1, 0.0);
         for (int i = 0; i < L; ++i) cum_[size_t(i) + 1] = cum_[size_t(i)] + P_[size_t(i)];
-        auto box = [&](int c) { const int a = std::max(0, c - h), b = std::min(L - 1, c + h); return cum_[size_t(b) + 1] - cum_[size_t(a)] - fl * (b - a + 1); };
-        struct Cand { double hz; float db; };
+        struct Cand { double hz; float db; double near; };
         std::vector<Cand> cands;
-        const double thr = std::pow(10.0, 2.0 / 10.0) - 1.0;   // ★ +2 dB over the floor in the 10 kHz box
-        for (int c = h + W; c < L - h - W; ++c) {
-            const double b = box(c);
-            if (b <= thr * fl * W) continue;
-            bool peak = true;
-            for (int d = -W; d <= W && peak; ++d) if (d && box(c + d) > b) peak = false;
-            if (!peak) continue;
-            // ★ not a carrier: the middle three bins hold < 60 % of the excess; not a broad block: each flank < 40 %
-            double mid = 0; for (int d = -1; d <= 1; ++d) mid += P_[size_t(c + d)] - fl;
-            if (mid > 0.6 * b) continue;
-            if (box(c - W) > 0.4 * b || box(c + W) > 0.4 * b) continue;
-            double num = 0, den = 0;
-            for (int d = -h; d <= h; ++d) { const double e = std::max(0.0, double(P_[size_t(c + d)]) - fl); num += e * d; den += e; }
-            const double k = kLo + c + (den > 0 ? num / den : 0);
-            cands.push_back({ hw_ + k * bin_, float(10 * std::log10(1 + b / (fl * W))) });
-        }
+        // ★ two passes: a 10 kHz box (RS41, DFM) and — V12 — a 20 kHz box for the M10 / M20, whose ≈ ±10 kHz spread the
+        //   narrow pass calls a "broad block" (its flanks hold too much). The same three tests in each, scaled.
+        auto pass = [&](double boxHz, double nearHz, double midMax) {
+            const int W = std::max(5, int(std::lround(boxHz / bin_)) | 1), h = W / 2;
+            if (L < 3 * W) return;
+            auto box = [&](int c) { const int a = std::max(0, c - h), b = std::min(L - 1, c + h); return cum_[size_t(b) + 1] - cum_[size_t(a)] - fl * (b - a + 1); };
+            const double thr = std::pow(10.0, 2.0 / 10.0) - 1.0;   // ★ +2 dB over the floor in the box
+            for (int c = h + W; c < L - h - W; ++c) {
+                const double b = box(c);
+                if (b <= thr * fl * W) continue;
+                bool peak = true;
+                for (int d = -W; d <= W && peak; ++d) if (d && box(c + d) > b) peak = false;
+                if (!peak) continue;
+                // ★ not a carrier: the middle three bins hold < midMax of the excess; not a broad block: each flank < 40 %
+                double mid = 0; for (int d = -1; d <= 1; ++d) mid += P_[size_t(c + d)] - fl;
+                if (mid > midMax * b) continue;
+                if (box(c - W) > 0.4 * b || box(c + W) > 0.4 * b) continue;
+                double num = 0, den = 0;
+                for (int d = -h; d <= h; ++d) { const double e = std::max(0.0, double(P_[size_t(c + d)]) - fl); num += e * d; den += e; }
+                const double k = kLo + c + (den > 0 ? num / den : 0);
+                const double hz = hw_ + k * bin_;
+                bool dup = false;
+                for (const auto& x : cands) if (std::fabs(x.hz - hz) < std::max(nearHz, x.near)) dup = true;
+                if (!dup) cands.push_back({ hz, float(10 * std::log10(1 + b / (fl * W))), nearHz });
+            }
+        };
+        pass(10e3, 6e3, 0.6);
+        pass(20e3, 10e3, 0.3);
         std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.db > b.db; });
         // the channels: seen again, closed, merged
-        for (auto& cp : ch_) for (const auto& x : cands) if (std::fabs(x.hz - cp->hz) < 6e3) { cp->seen = now_; cp->level = x.db; break; }
+        for (auto& cp : ch_) for (const auto& x : cands) if (std::fabs(x.hz - cp->hz) < x.near) { cp->seen = now_; cp->level = x.db; break; }
         for (size_t i = 0; i < ch_.size(); ++i)
             for (size_t j = i + 1; j < ch_.size(); ++j)
-                if (std::fabs(ch_[i]->hz - ch_[j]->hz) < 3e3) { ch_[ch_[i]->frames >= ch_[j]->frames ? j : i]->seen = -1e9; ch_[ch_[i]->frames >= ch_[j]->frames ? j : i]->lastFrame = -1e9; }
+                if (std::fabs(ch_[i]->hz - ch_[j]->hz) < ((narrowKind(ch_[i]->lock) && narrowKind(ch_[j]->lock)) ? 3e3 : 10e3)) { ch_[ch_[i]->frames >= ch_[j]->frames ? j : i]->seen = -1e9; ch_[ch_[i]->frames >= ch_[j]->frames ? j : i]->lastFrame = -1e9; }
         ch_.erase(std::remove_if(ch_.begin(), ch_.end(), [&](const std::unique_ptr<Chan>& c) {
             return now_ - std::max(c->seen, c->lastFrame) > 15.0; }), ch_.end());
         parked_.erase(std::remove_if(parked_.begin(), parked_.end(), [&](const std::pair<double, double>& p) { return p.second < now_; }), parked_.end());
         for (const auto& x : cands) {
             bool have = false;
-            for (auto& cp : ch_) if (std::fabs(x.hz - cp->hz) < 6e3) have = true;
-            for (auto& p : parked_) if (std::fabs(x.hz - p.first) < 6e3) have = true;
+            for (auto& cp : ch_) if (std::fabs(x.hz - cp->hz) < x.near) have = true;
+            for (auto& p : parked_) if (std::fabs(x.hz - p.first) < x.near) have = true;
             if (have) continue;
             if (int(ch_.size()) >= maxCh_) {
                 // ★ full: the channel that has decoded nothing longest gives its slot up (parked for a minute)
@@ -441,6 +387,8 @@ private:
             }
             std::unique_ptr<Chan> c(new Chan);
             c->rx.reset(new ChanRx(chRate_));
+            c->dfm.reset(new vibedfm::Chan(chRate_));
+            c->mxx.reset(new vibemxx::Chan(chRateW_));
             place_(*c, x.hz);
             c->opened = c->seen = now_; c->level = x.db;
             ch_.push_back(std::move(c));
@@ -448,15 +396,15 @@ private:
         }
     }
 
-    double rate_, hw_, shared_ = 0, bin_ = 0, chRate_ = 0, lo_ = 0, hi_ = 0;
-    int maxCh_, n_ = 0, cb_ = 0;
+    double rate_, hw_, shared_ = 0, bin_ = 0, chRate_ = 0, chRateW_ = 0, lo_ = 0, hi_ = 0;
+    int maxCh_, n_ = 0, cb_ = 0, cbW_ = 0;
     float alpha_ = 0;
     std::vector<std::unique_ptr<vibedsp::HalfbandDecimator>> hb_;
     std::unique_ptr<vibedsp::Channelizer> chz_;
     vibedsp::Channelizer::ExtractCtx ctx_;
     std::vector<float> pw_, P_, srt_;
     std::vector<double> cum_;
-    std::vector<cf32> a_, b_, out_;
+    std::vector<cf32> a_, b_, out_, outW_;
     std::vector<std::unique_ptr<Chan>> ch_;
     std::vector<std::pair<double, double>> parked_;
     double now_ = 0, lastScan_ = 0;

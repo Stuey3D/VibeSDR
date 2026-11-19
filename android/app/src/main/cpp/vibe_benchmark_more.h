@@ -49,6 +49,7 @@
 #include "vibe_avi_service.h"   // ★ V12 aviation: the datalink rows (dec_vdl2, dec_acars)
 #include "vibe_rs41_service.h"  // ★ V12 RS41 radiosondes: the SONDES row (dec_rs41)
 #include "vibe_rs41_tx.h"
+#include "vibe_sonde_tx.h"     // ★ V12 the DFM / M10 / M20 rows (dec_dfm, dec_m10)
 #include "vibe_avi_mode.h"
 #include "vibe_avi_tx.h"
 #include "vibe_ism_service.h"
@@ -732,6 +733,8 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_hfdl",     { "hfdl",   true,  true  } },
         // ★ V12 RS41 radiosondes: the SONDES mode's default (a whole-radio mode — not the decoder limit's yardstick)
         { "dec_rs41",     { "sondes", true,  false } },
+        // ★ V12 the other types run inside the same SONDES receiver: shown beside RS41's row, RS41 keeps the default
+        { "dec_dfm",      { "sondes", false, false } }, { "dec_m10",      { "sondes", false, false } },
         { "dec_ism",      { "ism",    true,  false } }, { "dec_wmbus",    { "ism",    false, false } },
         { "dec_tone",     { "",       false, false } }, { "dec_nr",       { "",       false, false } },
         { "dec_notch",    { "",       false, false } },
@@ -1154,22 +1157,9 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     /* ★★ V12 RADIOSONDES (docs/v12/RS41.md): the SONDES mode as the server runs it — vibers41::Service on its own thread,
      *  one 2 MHz band at 2.4 MS/s, fed IN REAL TIME, SCORED BY THE HOTTEST THREAD (as AIS and the datalink). Three sondes
      *  from our own transmitter (vibe_rs41_tx.h), one frame a second each, in four seconds of noise, looped. */
-    run("dec_rs41", "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
-        Row r; r.id = "dec_rs41"; r.label = "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+    /* ★ The service as the server runs it: `x` (2.4 MS/s, looped) fed IN REAL TIME, scored by the hottest thread. */
+    auto sondeService = [&](Row& r, std::vector<vibers41::cf32>& x, double fs) {
         const vibers41::Band* b = vibers41::bandById("mid");
-        if (!b) return r;
-        const double fs = 2.4e6;
-        const int secs = 4;
-        std::vector<vibers41::cf32> x(size_t(fs) * secs);
-        { std::mt19937 g(9); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
-        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
-        for (int k = 0; k < 3; ++k) {
-            vibers41tx::Sonde s(uint32_t(70 + k));
-            char ser[9]; std::snprintf(ser, sizeof ser, "B%07d", 1000 + k); s.serial = ser;
-            vibers41tx::Gfsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 2400, 0.05 + 0.2 * k);
-            for (int f = 0; f < secs; ++f) tx.addFrame(f, vibers41tx::frameOnAir(s, f));
-            tx.render(x.data(), x.size(), 0);
-        }
         vibers41::Service svc;
         svc.start(*b, b->centreHz, fs);
         const size_t blk = (size_t)(fs / 100);
@@ -1187,6 +1177,59 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         r.decoded = (int)svc.tracker().frames();
         if (svc.dropped()) r.label += " (fell behind)";
         svc.stop();
+    };
+    run("dec_rs41", "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_rs41"; r.label = "Decoder: RS41 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+        if (!vibers41::bandById("mid")) return r;
+        const double fs = 2.4e6;
+        const int secs = 4;
+        std::vector<vibers41::cf32> x(size_t(fs) * secs);
+        { std::mt19937 g(9); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
+        for (int k = 0; k < 3; ++k) {
+            vibers41tx::Sonde s(uint32_t(70 + k));
+            char ser[9]; std::snprintf(ser, sizeof ser, "B%07d", 1000 + k); s.serial = ser;
+            vibers41tx::Gfsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 2400, 0.05 + 0.2 * k);
+            for (int f = 0; f < secs; ++f) tx.addFrame(f, vibers41tx::frameOnAir(s, f));
+            tx.render(x.data(), x.size(), 0);
+        }
+        sondeService(r, x, fs);
+        return r;
+    });
+    /* ★★ V12 the DFM and M10 / M20 (docs/v12/SONDES-TYPES.md): three sondes of the type in the same band, the same service.
+     *  The DFM sends continuously (≈ 4.5 frames a second, serial in halves), so its clip is 12 s to let a serial complete. */
+    run("dec_dfm", "Decoder: DFM radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_dfm"; r.label = "Decoder: DFM radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+        if (!vibers41::bandById("mid")) return r;
+        const double fs = 2.4e6;
+        const int secs = 12;
+        std::vector<vibers41::cf32> x(size_t(fs) * secs);
+        { std::mt19937 g(10); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
+        for (int k = 0; k < 3; ++k) {
+            vibesondetx::Dfm d; d.serial = 19000100u + uint32_t(k);
+            vibesondetx::ChipFsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 2000, vibedfm::kChipRate, 0.05 + 0.2 * k);
+            tx.put(0, d.chips(secs));
+            tx.render(x.data(), x.size(), 0);
+        }
+        sondeService(r, x, fs);
+        return r;
+    });
+    run("dec_m10", "Decoder: M10 / M20 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_m10"; r.label = "Decoder: M10 / M20 radiosondes (3 sondes, a 2 MHz band @ 2.4 MS/s)";
+        if (!vibers41::bandById("mid")) return r;
+        const double fs = 2.4e6;
+        const int secs = 4;
+        std::vector<vibers41::cf32> x(size_t(fs) * secs);
+        { std::mt19937 g(11); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+        const double n10k = 2 * 0.02 * 0.02 * 10e3 / fs;
+        for (int k = 0; k < 3; ++k) {
+            vibesondetx::Mxx m; m.m20 = k == 1; m.sn[4] = uint8_t(0x40 + k); m.sn20 += uint32_t(k) << 10;
+            vibesondetx::ChipFsk tx(fs, -600e3 + 550e3 * k, std::sqrt(n10k * 100), 4800, m.m20 ? 9600.0 : 9615.0, 0.05 + 0.2 * k);
+            for (int f = 0; f < secs; ++f) tx.put(tx.indexAt(f), m.chips(f));
+            tx.render(x.data(), x.size(), 0);
+        }
+        sondeService(r, x, fs);
         return r;
     });
     run("dec_hfdl", "Decoder: HFDL", [&] {

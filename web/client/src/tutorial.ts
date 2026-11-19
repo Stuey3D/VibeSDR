@@ -132,7 +132,7 @@ const STEPS: Step[] = [
         + 'are in this menu too; DATALINK opens the AVIATION MAP with the aircraft heard on the ACARS (131 MHz) or VDL2 (136 MHz) channels, '
         + 'the two bands in its top bar, and beside them every aircraft this server\u2019s other radios hear \u2014 ADS-B, HFDL, ADS-C \u2014 each '
         + 'aircraft once, its card saying which sources heard it, with a layer key for each source, HFDL STATIONS and AIRPORTS (on until you switch '
-        + 'it off); ADS-B\u2019s top bar gains AVIATION MAP when another source has aircraft, and SONDES finds RS41 weather balloons on 400\u2013406 MHz and puts them on a map '
+        + 'it off); ADS-B\u2019s top bar gains AVIATION MAP when another source has aircraft, and SONDES finds weather balloons (RS41, DFM, M10, M20 \u2014 the type found for each) on 400\u2013406 MHz and puts them on a map '
         + '(serial, height, climb; pick one for its track), its bands in the top bar. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
         + '— Aviation (HFDL: tune an HFDL frequency in USB first — it decodes your own dial — with MAP in its box for the AVIATION MAP, and SELCAL), Maritime, Amateur, '
         + 'Utility or Broadcast — each with an icon — and a UHF tab where a decoder there is offered: its Amateur group holds BALLOONS, '

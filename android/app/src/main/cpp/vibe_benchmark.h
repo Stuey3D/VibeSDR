@@ -409,7 +409,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
                             "dec_ism", "dec_wmbus", "dec_lora_all", "dec_tone", "dec_nr", "dec_notch", "dec_dxscan", "dec_freedv", "dec_rade", "dec_m17", "dab", "adsb" })
         (void)gated(id);
     for (const char* id : { "dec_vdl2", "dec_acars", "dec_hfdl" }) (void)gated(id);   // ★ V12 aviation
-    (void)gated("dec_rs41");   // ★ V12 RS41 radiosondes
+    for (const char* id : { "dec_rs41", "dec_dfm", "dec_m10" }) (void)gated(id);   // ★ V12 radiosondes (RS41, DFM, M10 / M20)
     if (benchhw::gateNeed(hw, benchhw::Need::Spots).run == false) notRun.push_back({ "spot_*", benchhw::gateNeed(hw, benchhw::Need::Spots).why });
     // ★ The hosts' DAB (2 steps) and ADS-B (2) rows: not counted when they will not run, so the bar still ends at its end.
     if (moreRows) {
