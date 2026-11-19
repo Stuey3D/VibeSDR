@@ -141,15 +141,15 @@ public:
         loopGains(c.carrierBw, cA_, cB_);
         loopGains(c.timingBw, tA_, tB_);
         hist_.assign(4, {0.f, 0.f}); hold_ = false;
-        tau_ = 0; nIn_ = 0; half_ = 0; phase_ = 0; freq_ = 0; tFreq_ = 0;
+        tau_ = 0; nIn_ = 0; half_ = 0; freq_ = 0; tFreq_ = 0; nr_ = 1; ni_ = 0; stepW_ = 1e9; agcG_ = 1.f;
         acq_.clear(); acq_.reserve(kAcqN); acqDue_ = 0; acqPow_.clear(); acqLooks_ = 0;
         lockAcc_ = 0; lockN_ = 0; lockMetric_ = 0; locked_ = false;
         agc_ = 1.f; amp_ = 1.f;
     }
     /** ★ Doppler feed-forward from the satellite engine, Hz (the shift to REMOVE: positive = signal above nominal). */
     void setDopplerHz(double hz) { doppler_.store(hz, std::memory_order_relaxed); }
-    /** ★ The frame sync is locked: never re-acquire (at Es/N0 ≈ 3 dB the constellation lock metric dips under its
-     *  threshold while frames still decode, and a re-acquisition then moved the NCO under a working loop). */
+    /** ★ Frames are DECODING (Reed–Solomon passing): never re-acquire (at Es/N0 ≈ 3 dB the constellation lock metric dips
+     *  under its threshold while frames still decode, and a re-acquisition then moved the NCO under a working loop). */
     void setHold(bool h) { hold_ = h; if (h) { acq_.clear(); acqPow_.clear(); acqLooks_ = 0; } }
     uint64_t acquisitions() const { return acqHits_; }
 
@@ -162,16 +162,23 @@ public:
             // ── AGC: slow power follower on the raw input (the matched filter keeps its gain) ──
             const float p = xr * xr + xi * xi;
             pow_ += 1e-4f * (p - pow_);
-            const float g = pow_ > 1e-20f ? 1.f / std::sqrt(pow_) : 1.f;
-            xr *= g; xi *= g;
+            // ★ the gain itself every 64 samples (a 1/√ per sample was a Pi 2's worth of work for a 10⁻⁴ follower)
+            if ((nIn_ & 63) == 0) agcG_ = pow_ > 1e-20f ? 1.f / std::sqrt(pow_) : 1.f;
+            xr *= agcG_; xi *= agcG_;
             // ── acquisition buffer (x⁴), only while unlocked ──
             if (!locked_ && !hold_) acqPush(xr, xi);
             // ── NCO ──
-            const double dop = doppler_.load(std::memory_order_relaxed);
-            const double w = freq_ + twoPi * dop / cfg_.sampleRate;
-            const float c = float(std::cos(phase_)), sn = float(std::sin(phase_));
-            phase_ -= w;
-            if (phase_ > M_PI) phase_ -= twoPi; else if (phase_ < -M_PI) phase_ += twoPi;
+            /* ★★ THE NCO IS A ROTATING PHASOR, NOT A sin/cos A SAMPLE. The step e^{−jw} is remade only when the loop or
+             *  the Doppler moves w; the step is remade from w every 64 samples and the phasor renormalised with it (float drift
+             *  ≈ 10⁻⁷ a step). Two transcendental calls a sample at 300 kS/s were most of this receiver's cost on a Pi. */
+            if ((nIn_ & 63) == 0) {
+                const double dop = doppler_.load(std::memory_order_relaxed);
+                const double w = freq_ + twoPi * dop / cfg_.sampleRate;
+                if (w != stepW_) { stepW_ = w; stepC_ = std::cos(w); stepS_ = -std::sin(w); }
+                const double m = std::sqrt(nr_ * nr_ + ni_ * ni_); if (m > 0) { nr_ /= m; ni_ /= m; }
+            }
+            const float c = float(nr_), sn = float(ni_);
+            { const double r = nr_ * stepC_ - ni_ * stepS_, i = nr_ * stepS_ + ni_ * stepC_; nr_ = r; ni_ = i; }
             const float mr = xr * c - xi * sn, mi = xr * sn + xi * c;
             float fr, fi;
             fir_.push(mr, mi, fr, fi);
@@ -274,9 +281,11 @@ private:
         float e = (I > 0 ? Q : -Q) - (Q > 0 ? I : -I);
         const float r = std::sqrt(I * I + Q * Q) + 1e-9f;
         e /= r;
-        // Applied as the NCO's phase/frequency: the NCO subtracts phase_, so a positive error advances it.
-        phase_ -= cA_ * e;
-        freq_ += cB_ * e / sps_;
+        // Applied as the NCO's phase/frequency: the NCO turns backwards by w a sample, so a positive error turns it back
+        // by α·e now (a small rotation of the phasor) and adds β·e to the frequency.
+        { const double a = -cA_ * e, ca = 1.0 - 0.5 * a * a, sa = a;   // ★ |α·e| ≤ 0.02 rad: second order is exact enough
+          const double r = nr_ * ca - ni_ * sa, i = nr_ * sa + ni_ * ca; nr_ = r; ni_ = i; }
+        freq_ += cB_ * e / sps_;   // ★ reaches the phasor's step at the next 64-sample boundary
         const double lim = 2 * M_PI * 0.2 * cfg_.symbolRate / cfg_.sampleRate;
         if (freq_ > lim) freq_ = lim; else if (freq_ < -lim) freq_ = -lim;
         // ── lock detector: 1 − E(|I|−|Q|)² / E(I²+Q²) — 1.0 locked and clean, ≈0.64 unlocked or on noise ──
@@ -303,9 +312,10 @@ private:
     std::vector<std::complex<float>> hist_;
     double tau_ = 0, tFreq_ = 0; uint64_t nIn_ = 0; int half_ = 0;
     std::complex<float> prev_{0, 0}, mid_{0, 0}, prevMid_{0, 0}; bool primed_ = false;
-    double phase_ = 0, freq_ = 0, cA_ = 0, cB_ = 0, tA_ = 0, tB_ = 0;
+    double freq_ = 0, cA_ = 0, cB_ = 0, tA_ = 0, tB_ = 0;
+    double nr_ = 1, ni_ = 0, stepW_ = 1e9, stepC_ = 1, stepS_ = 0;   ///< the NCO phasor and its per-sample step
     std::atomic<double> doppler_{0.0};
-    float pow_ = 1.f, agc_ = 1.f; double amp_ = 0;
+    float pow_ = 1.f, agc_ = 1.f, agcG_ = 1.f; double amp_ = 0;
     std::vector<std::complex<float>> acq_; std::vector<float> acqPow_; size_t acqDue_ = 0; int acqLooks_ = 0; uint64_t acqHits_ = 0;
     double lockAcc_ = 0, lockMetric_ = 0; int lockN_ = 0; bool locked_ = false, hold_ = false;
 };

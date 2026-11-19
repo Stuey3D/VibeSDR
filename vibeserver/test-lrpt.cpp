@@ -53,6 +53,7 @@ static int savePictures(const Receiver& rx, const std::string& dir, const std::s
     return n;
 }
 
+static double g_addNoise = 0, g_rms = 0;
 static int decodeWav(const char* path, const std::string& dir, const ReceiverConfig& base) {
     FILE* f = std::fopen(path, "rb");
     if (!f) { std::printf("cannot open %s\n", path); return 2; }
@@ -81,6 +82,12 @@ static int decodeWav(const char* path, const std::string& dir, const ReceiverCon
         const size_t got = std::fread(raw.data(), 4, raw.size() / 2, f);
         if (!got) break;
         for (size_t i = 0; i < got * 2; i++) iq[i] = raw[i] / 32768.f;
+        // ★ --noise R: add complex noise of R × the recording's own RMS (the margin test: how much worse could it be)
+        if (g_addNoise > 0) {
+            if (g_rms <= 0) { double p = 0; for (size_t i = 0; i < got * 2; i++) p += double(iq[i]) * iq[i]; g_rms = std::sqrt(p / double(got * 2)); }
+            static std::mt19937 rng(77); std::normal_distribution<float> gn(0.f, 1.f);
+            for (size_t i = 0; i < got * 2; i++) iq[i] += float(g_addNoise * g_rms) * gn(rng);
+        }
         const auto t0 = std::chrono::steady_clock::now();
         rx.feedIq(iq.data(), got);
         cpu += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -236,6 +243,9 @@ static void testChain(bool quick) {
         auto r = runSynthetic(t, P, rc); char b[80]; std::snprintf(b, sizeof b, "QPSK ambiguity %d, +1.2 kHz", x); line(b, r);
         CHECK(r.st.blocks >= uint64_t(expectBlocks * 9 / 10), "ambiguity %d: blocks %llu", x, (unsigned long long)r.st.blocks);
     }
+    {   tx::TxConfig t; t.sampleRate = 300000; t.carrierHz = 2100; t.esn0Db = 10; ReceiverConfig rc; rc.mod = ReceiverConfig::Qpsk;
+        auto r = runSynthetic(t, P, rc); line("QPSK at a 300 kS/s slice (the shim's at 2.4 MS/s)", r);
+        CHECK(r.st.blocks >= uint64_t(expectBlocks * 9 / 10), "300 kS/s: blocks %llu", (unsigned long long)r.st.blocks); }
     {   tx::TxConfig t; t.sampleRate = 150000; t.carrierHz = -2800; t.dopplerRateHzS = 65; t.symbolPpm = 80; t.esn0Db = 12;
         ReceiverConfig rc; rc.mod = ReceiverConfig::Qpsk;
         auto r = runSynthetic(t, P, rc); line("QPSK 150 kS/s −2.8 kHz +65 Hz/s 80 ppm Es/N0 12", r);
@@ -303,6 +313,7 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--oqpsk")) c.mod = ReceiverConfig::Oqpsk;
         if (!std::strcmp(argv[i], "--80k")) { c.symbolRate = 80000; c.interleaved = true; }
         if (!std::strcmp(argv[i], "--scalar")) c.forceScalar = true;
+        if (!std::strcmp(argv[i], "--noise") && i + 1 < argc) g_addNoise = std::atof(argv[i + 1]);
     }
     if (argc >= 3 && !std::strcmp(argv[1], "--wav")) return decodeWav(argv[2], argc >= 4 && argv[3][0] != '-' ? argv[3] : ".", c);
     for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], "--es")) {

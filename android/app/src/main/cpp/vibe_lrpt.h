@@ -49,6 +49,9 @@ public:
     }
     Stats& stats() { return st_; }
     bool locked() const { return locked_; }
+    /** ★ Reed–Solomon passed within the last 8 CADUs — the only proof the carrier is really locked (an ASM can be "found"
+     *  with the carrier 400 Hz out at Es/N0 3 dB; holding the acquisition on that kept it out for the whole run). */
+    bool decoding() const { return sinceGood_ < 8; }
     /** ★ Test seam: each CADU's ASM score, ambiguity, Viterbi metric and the four RS words' results. */
     std::function<void(int, int, int, const int*)> caduDiag;
     void reset() { buf_.clear(); locked_ = false; scan_ = 0; misses_ = 0; }
@@ -131,7 +134,8 @@ private:
         int pw[4];
         const int e = rsFrame(f, pw);
         if (caduDiag) caduDiag(syncScore(windowAt(p), x_), x_, st_.lastVit, pw);
-        if (e < 0) { st_.rsFail++; return; }
+        if (e < 0) { st_.rsFail++; sinceGood_++; return; }
+        sinceGood_ = 0;
         st_.rsOk++; st_.rsFixed += uint64_t(e);
         fn_(f, e);
     }
@@ -142,6 +146,7 @@ private:
     std::vector<uint8_t> bits_;
     size_t scan_ = 0, pos_ = 0;
     int x_ = 0, misses_ = 0;
+    uint64_t sinceGood_ = 1000;
     bool locked_ = false;
     Stats st_;
 };
@@ -276,7 +281,7 @@ public:
     /** Feed interleaved float IQ. */
     void feedIq(const float* iq, size_t n) {
         soft_.clear();
-        demod_->setHold(syncLocked());
+        demod_->setHold(decoding());
         demod_->feed(iq, n, soft_);
         samples_ += n;
         feedSoft(soft_.data(), soft_.size());
@@ -309,6 +314,7 @@ public:
     bool demodLocked() const { return demod_->locked(); }
     double lockMetric() const { return demod_->lockMetric(); }
     bool syncLocked() const { for (auto& p : paths_) if (p.sync && p.sync->locked()) return true; return false; }
+    bool decoding() const { for (auto& p : paths_) if (p.sync && p.sync->decoding()) return true; return false; }
     const char* modeName() const { return curMod_ ? "OQPSK" : "QPSK"; }
     int diffWinner() const { return winner_ < 0 ? -1 : paths_[winner_].diff ? 1 : 0; }
     /** ★ Bumped whenever a strip lands — a service re-renders its preview when this moves. */
