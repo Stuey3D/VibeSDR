@@ -73,6 +73,9 @@ try {
   ok(!!w && w.rate === 8000000 && w.label === 'Test RSP' && w.fixed && w.fixed.frontPct >= 0, 'saved under wide.<serial>: the rate, the radio, the fixed cost');
   ok(!!w && w.fm && w.fm.rate === 8000000 && typeof w.fm.n === 'number' && /cpu|ram|capture/.test(w.fm.by)
      && w.narrow && ['nfm', 'am', 'ssb'].includes(w.narrow.mode), `…the WFM and narrow profiles, with their bounds (fm ${w && w.fm && w.fm.n} by ${w && w.fm && w.fm.by})`);
+  // ★ WFM alone (Stuart, 2026-11-19): the same run without Advanced RDS's cost — cheaper a listener, so never fewer users.
+  ok(!!w && w.fmPlain && w.fmPlain.rate === 8000000 && w.fmPlain.perPct > 0 && w.fmPlain.perPct < w.fm.perPct && w.fmPlain.n >= w.fm.n,
+     `…and WFM alone: cheaper a listener, never fewer users (${w && w.fmPlain && w.fmPlain.n} vs ${w && w.fm && w.fm.n} with Advanced RDS)`);
   ok(!!w && w.dab && w.dab.blocks >= 3, `…DAB from the saved quick figures (${w && w.dab ? w.dab.n + ' users, ' + w.dab.blocks + ' blocks' : 'none'})`);
   // ★★★ 2026-11-19: the capture rows moved here from the quick run — their verdict is the USRP's rate gate.
   const cv = w && w.capture;

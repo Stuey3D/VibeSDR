@@ -44,6 +44,10 @@ const lu = { wfm: 20, nfm: 20,
 const L = api.benchProfileLines(lu);
 ok(L.length === 3 && L[0] === '50 DAB users @ 8 MS/s, 4 blocks (set by CPU)' && L[1] === '25 WFM + Advanced RDS users @ 8 MS/s (set by RAM)'
    && L[2] === '200 SSB/AM/NFM users @ 8 MS/s (set by CPU)', 'Stuart\'s three lines, DAB first, each saying its bound');
+// ★ "A figure for WFM without advanced RDS too" (Stuart, 2026-11-19): its own line, just above WFM + Advanced RDS.
+const L2 = api.benchProfileLines({ ...lu, fmPlain: { n: 40, rate: 8e6, by: 'cpu' } });
+ok(L2.length === 4 && L2[1] === '40 WFM users @ 8 MS/s (set by CPU)' && L2[2] === '25 WFM + Advanced RDS users @ 8 MS/s (set by RAM)',
+   `WFM alone: its own line, above WFM + Advanced RDS (${L2.join(' | ')})`);
 ok(api.benchProfileLines({ dab: { n: 1, rate: 2048000, by: 'cpu', blocks: 1 } })[0] === '1 DAB user @ 2.048 MS/s (set by CPU)',
    'one block: no block count; one user: singular');
 ok(api.benchProfileLines({ fm: { n: 0, rate: 56e6, by: 'capture' } })[0] === '0 WFM + Advanced RDS users @ 56 MS/s (the capture itself cannot keep up at this rate)',
@@ -127,6 +131,7 @@ else {
   const js = app.slice(fa, fb).replace(/: any\b/g, '').replace(/: string\[\]/g, '').replace(/: string\b/g, '').replace(/: number\b/g, '');
   const appApi = new Function(`${js}\nreturn { benchProfileLines, benchRateWords };`)();
   ok(JSON.stringify(appApi.benchProfileLines(lu)) === JSON.stringify(L), 'the app\'s three lines are the page\'s');
+  ok(JSON.stringify(appApi.benchProfileLines({ ...lu, fmPlain: { n: 40, rate: 8e6, by: 'cpu' } })) === JSON.stringify(L2), '…and its WFM-alone line');
   ok(appApi.benchRateWords(30720000) === '30.72 MS/s' && appApi.benchProfileLines({ dabWhy: 'x' })[0] === 'DAB: x', '…and its words for a rate and a missing DAB');
 }
 

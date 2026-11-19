@@ -437,6 +437,7 @@ struct ThreeProfiles {
     double fmRate = 0, narrowRate = 0, dabRate = 0;
     int dabBlocks = 0, fmListeners = 0, narrowListeners = 0;
     benchprof::ProfileCost fmC, narrowC, dabC;
+    benchprof::ProfileCost wfmC;   // ★ WFM alone — the same run, without Advanced RDS's cost (Stuart, 2026-11-19)
     std::string narrowMode;    // "nfm" | "am" | "ssb" — the heaviest, whose cost the figure is
     double rdsIncPct = -1;
     std::string dabWhy;        // ★ why DAB has no figure, in words (absent = it has one, or it does not apply here)
@@ -448,6 +449,11 @@ inline std::string threeProfilesJson(const ThreeProfiles& p, int cores, double a
     if (p.fm) {
         char e[96]; std::snprintf(e, sizeof e, ",\"rdsPct\":%.2f,\"listeners\":%d", p.rdsIncPct, p.fmListeners);
         add("fm", benchprof::profileJson(benchprof::profileUsers(p.fmC, cores, availKB), p.fmC, p.fmRate, e));
+        /* ★★ "A figure for WFM without advanced RDS too" (Stuart, 2026-11-19): the same listeners, the same run, with
+         *  Advanced RDS's own cost left out — what a server holds when its listeners leave Advanced RDS off. Not "wfm":
+         *  lockedUsers.wfm is the older listener count every app still reads. */
+        char e2[48]; std::snprintf(e2, sizeof e2, ",\"listeners\":%d", p.fmListeners);
+        add("fmPlain", benchprof::profileJson(benchprof::profileUsers(p.wfmC, cores, availKB), p.wfmC, p.fmRate, e2));
     }
     if (p.narrow) {
         char e[96]; std::snprintf(e, sizeof e, ",\"mode\":\"%s\",\"listeners\":%d", p.narrowMode.c_str(), p.narrowListeners);
@@ -474,7 +480,7 @@ inline void measureFmNarrow(ThreeProfiles& P, double fmRate, double narrowRate, 
         { const auto x = fmStationSc16(fmRate, profileSamples(fmRate) / fmRate, fmRate / 4); m = measureProfile(fmRate, nL, x, LockedMode(), meas); }
         if (step) step("Advanced RDS, per listener");
         P.rdsIncPct = rdsInc >= 0 ? rdsInc : rdsIncrementPct(std::max(1.5, meas));
-        P.fm = true; P.fmRate = fmRate; P.fmListeners = nL; P.fmC = m.cost;
+        P.fm = true; P.fmRate = fmRate; P.fmListeners = nL; P.fmC = m.cost; P.wfmC = m.cost;
         P.fmC.perPct += P.rdsIncPct;
         P.fmC.perHottestPct += P.rdsIncPct;   // ★ conservative: as if Advanced RDS shared the listener's hottest thread
         caps.push_back(m.cap);

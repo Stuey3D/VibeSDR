@@ -2531,9 +2531,11 @@ function benchProfileLine(p, what) {
 function benchProfileLines(lu) {
   if (!lu) return [];
   const out = [];
-  const dab = benchProfileLine(lu.dab, "DAB"), fm = benchProfileLine(lu.fm, "WFM + Advanced RDS"),
+  const dab = benchProfileLine(lu.dab, "DAB"), wfm = benchProfileLine(lu.fmPlain, "WFM"),
+        fm = benchProfileLine(lu.fm, "WFM + Advanced RDS"),
         nb = benchProfileLine(lu.narrow, "SSB/AM/NFM");
   if (dab) out.push(dab); else if (lu.dabWhy) out.push("DAB: " + lu.dabWhy);
+  if (wfm) out.push(wfm);
   if (fm) out.push(fm);
   if (nb) out.push(nb);
   return out;
