@@ -112,7 +112,9 @@ inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int1
     LockedFigures F;
     const int engineN = fftSizeForRate(fs);          // ★ the waterfall's
     const int fftSize = listenerFftForRate(fs);      // ★ the listeners' (the same, wherever a power of two fits)
-    const int chanBins = chanBinsFor(fs, fftSize, lm.bw);
+    int chanBins = chanBinsFor(fs, fftSize, lm.bw);
+    // ★ A/B only (never set by a server): VIBE_BENCH_WFMNEED = the WFM channel asked for, in Hz.
+    if (lm.mode == RxPipeline::Mode::WFM) if (const char* e = std::getenv("VIBE_BENCH_WFMNEED")) chanBins = vibedsp::sliceBinsFor(fftSize, fs, std::atof(e));
     const double chanRate = fs * chanBins / fftSize;
     const int centreBin = fftSize / 4;                       // the station is at fs/4 (fmStationSc16's offset)
     const size_t total = sc16.size() / 2;
