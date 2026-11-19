@@ -86,7 +86,8 @@ forgotten after 120 s. At most 24 tracks; the comb re-checks a tagged track ever
 
 ### Where it runs (the reach gate)
 - HF only: the whole capture below 30.5 MHz.
-- A shared / locked radio only (`perClientDsp()`): the slice needs the channeliser. A one-pipeline radio (a personal
+- A locked-range radio with more than one listener slot only (`perClientDsp()`: `g_vsLockedCentre > 0 && maxUsers > 1`,
+  not an Icom) — the slice needs the shared channeliser. A shared-dial (unlocked) server and a single-user one run one pipeline. A one-pipeline radio (a personal
   receiver, the R36S) has no shared forward FFT; giving it one is the WideTap's cost (10–20 % of a Pi 2 core), far too
   much for a label. **Open decision for Stuart** below.
 - Someone connected (`s_listenersCached > 0`), and the owner's switch on (`varatag` in Setup → Modes and decoders, on by
