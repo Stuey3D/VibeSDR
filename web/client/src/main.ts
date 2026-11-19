@@ -15365,8 +15365,7 @@ function anyDecoderLeft(): boolean {
     || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal')) || (hfdlCap && !blockedModes.has('hfdl'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
     || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon')) || (tonesCap && !blockedModes.has('tones')) || (aleCap && !blockedModes.has('ale'))
-    || (vorCap && !blockedModes.has('vor')) || (sarsatCap && !blockedModes.has('sarsat'));
-    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon')) || (tonesCap && !blockedModes.has('tones')) || (lrptCap && !blockedModes.has('lrpt')) || (aleCap && !blockedModes.has('ale'));
+    || (vorCap && !blockedModes.has('vor')) || (sarsatCap && !blockedModes.has('sarsat')) || (lrptCap && !blockedModes.has('lrpt'));
 }
 
 /* ★★ THE WHOLE-RADIO TOGGLES — one each, for the mode menu (mobile.ts deps) AND the decoder panel's TUNES THE RADIO ITSELF
