@@ -137,14 +137,18 @@ public:
         fir_.setTaps(rrcTaps(sps_, c.rrcAlpha));
         loopGains(c.carrierBw, cA_, cB_);
         loopGains(c.timingBw, tA_, tB_);
-        hist_.assign(4, {0.f, 0.f});
+        hist_.assign(4, {0.f, 0.f}); hold_ = false;
         tau_ = 0; nIn_ = 0; half_ = 0; phase_ = 0; freq_ = 0; tFreq_ = 0;
-        acq_.clear(); acq_.reserve(kAcqN); acqDue_ = 0;
+        acq_.clear(); acq_.reserve(kAcqN); acqDue_ = 0; acqPow_.clear(); acqLooks_ = 0;
         lockAcc_ = 0; lockN_ = 0; lockMetric_ = 0; locked_ = false;
         agc_ = 1.f; amp_ = 1.f;
     }
     /** ★ Doppler feed-forward from the satellite engine, Hz (the shift to REMOVE: positive = signal above nominal). */
     void setDopplerHz(double hz) { doppler_.store(hz, std::memory_order_relaxed); }
+    /** ★ The frame sync is locked: never re-acquire (at Es/N0 ≈ 3 dB the constellation lock metric dips under its
+     *  threshold while frames still decode, and a re-acquisition then moved the NCO under a working loop). */
+    void setHold(bool h) { hold_ = h; if (h) { acq_.clear(); acqPow_.clear(); acqLooks_ = 0; } }
+    uint64_t acquisitions() const { return acqHits_; }
 
     /** Feed `n` complex samples (interleaved float I, Q); appends soft pairs (I, Q, I, Q …) to `out`. */
     void feed(const float* iq, size_t n, std::vector<int8_t>& out) {
@@ -158,7 +162,7 @@ public:
             const float g = pow_ > 1e-20f ? 1.f / std::sqrt(pow_) : 1.f;
             xr *= g; xi *= g;
             // ── acquisition buffer (x⁴), only while unlocked ──
-            if (!locked_) acqPush(xr, xi);
+            if (!locked_ && !hold_) acqPush(xr, xi);
             // ── NCO ──
             const double dop = doppler_.load(std::memory_order_relaxed);
             const double w = freq_ + twoPi * dop / cfg_.sampleRate;
@@ -184,14 +188,15 @@ public:
 
     bool locked() const { return locked_; }
     double lockMetric() const { return lockMetric_; }
-    double carrierHz() const { return -freq_ * cfg_.sampleRate / (2 * M_PI); }
+    double carrierHz() const { return freq_ * cfg_.sampleRate / (2 * M_PI) + doppler_.load(std::memory_order_relaxed); }
     /** Average |soft| (≈ 45 when well-scaled) — with the lock metric, the SNR figure the report shows. */
     double softLevel() const { return amp_; }
     const DemodConfig& config() const { return cfg_; }
     CFir& fir() { return fir_; }
 
 private:
-    static constexpr size_t kAcqN = 4096;
+    static constexpr size_t kAcqN = 8192;
+    static constexpr int kAcqLooks = 4;
     static void loopGains(double bnT, double& a, double& b) {
         const double z = 0.707, th = bnT / (z + 0.25 / z), d = 1 + 2 * z * th + th * th;
         a = 4 * z * th / d; b = 4 * th * th / d;
@@ -209,17 +214,27 @@ private:
         acq_.push_back(z2 * z2);
         if (acq_.size() < kAcqN) return;
         fftInPlace(acq_);
+        if (acqPow_.size() != kAcqN) acqPow_.assign(kAcqN, 0.f);
+        for (size_t i = 0; i < kAcqN; i++) acqPow_[i] += std::norm(acq_[i]);
+        acq_.clear();
+        if (++acqLooks_ < kAcqLooks) return;
+        /* ★★ FOUR LOOKS AVERAGED, THEN A LINE 8× THE MEAN BIN. One 4096-point look needed the line 20× the mean and
+         *  missed a 500 Hz offset at Es/N0 3 dB (the 4th power costs the line ~4× its SNR); the loop then never pulled in.
+         *  The average of four looks has a quarter of the variance, so a lower bar is safe: on noise the largest of 8192
+         *  four-look bins passes 8× about once in 10¹⁰. ±1 bin around the peak, power-weighted, for a sub-bin estimate. */
         size_t best = 0; float bp = 0, sum = 0;
-        for (size_t i = 0; i < kAcqN; i++) { const float m = std::norm(acq_[i]); sum += m; if (m > bp) { bp = m; best = i; } }
-        // ★ Only a real line moves the NCO: 20× the bin average. Noise leaves the loop where it was.
-        if (bp > 20.f * sum / float(kAcqN)) {
-            double bin = double(best); if (bin >= kAcqN / 2) bin -= double(kAcqN);
+        for (size_t i = 0; i < kAcqN; i++) { sum += acqPow_[i]; if (acqPow_[i] > bp) { bp = acqPow_[i]; best = i; } }
+        if (bp > 8.f * sum / float(kAcqN)) {
+            const float l = acqPow_[(best + kAcqN - 1) % kAcqN], r = acqPow_[(best + 1) % kAcqN];
+            double bin = double(best) + double(r - l) / double(l + bp + r);
+            if (bin >= kAcqN / 2) bin -= double(kAcqN);
             const double f4 = bin * cfg_.sampleRate / double(kAcqN);
             const double dop = doppler_.load(std::memory_order_relaxed);
             freq_ = 2 * M_PI * (f4 / 4.0 - dop) / cfg_.sampleRate;
+            acqHits_++;
         }
-        acq_.clear();
-        acqDue_ = size_t(cfg_.sampleRate * 0.25);           // ★ four looks a second at most
+        acqPow_.assign(kAcqN, 0.f); acqLooks_ = 0;
+        acqDue_ = size_t(cfg_.sampleRate * 0.25);           // ★ four decisions a second at most
     }
     void onPoint(std::complex<float> y, std::vector<int8_t>& out) {
         if (half_ == 1) { mid_ = y; half_ = 0; return; }
@@ -288,8 +303,8 @@ private:
     double phase_ = 0, freq_ = 0, cA_ = 0, cB_ = 0, tA_ = 0, tB_ = 0;
     std::atomic<double> doppler_{0.0};
     float pow_ = 1.f, agc_ = 1.f; double amp_ = 0;
-    std::vector<std::complex<float>> acq_; size_t acqDue_ = 0;
-    double lockAcc_ = 0, lockMetric_ = 0; int lockN_ = 0; bool locked_ = false;
+    std::vector<std::complex<float>> acq_; std::vector<float> acqPow_; size_t acqDue_ = 0; int acqLooks_ = 0; uint64_t acqHits_ = 0;
+    double lockAcc_ = 0, lockMetric_ = 0; int lockN_ = 0; bool locked_ = false, hold_ = false;
 };
 
 } // namespace vibelrpt

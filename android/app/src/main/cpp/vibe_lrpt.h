@@ -49,6 +49,8 @@ public:
     }
     Stats& stats() { return st_; }
     bool locked() const { return locked_; }
+    /** ★ Test seam: each CADU's ASM score, ambiguity, Viterbi metric and the four RS words' results. */
+    std::function<void(int, int, int, const int*)> caduDiag;
     void reset() { buf_.clear(); locked_ = false; scan_ = 0; misses_ = 0; }
 
 private:
@@ -126,7 +128,9 @@ private:
         st_.cadus++;
         uint8_t* f = cadu + kAsmBytes;
         derandomise(f);
-        const int e = rsFrame(f);
+        int pw[4];
+        const int e = rsFrame(f, pw);
+        if (caduDiag) caduDiag(syncScore(windowAt(p), x_), x_, st_.lastVit, pw);
         if (e < 0) { st_.rsFail++; return; }
         st_.rsOk++; st_.rsFixed += uint64_t(e);
         fn_(f, e);
@@ -265,11 +269,14 @@ public:
     }
     /** ★ Test seam: every image packet's APID, sequence count, MCU number, time (ms of day) and quality factor. */
     std::function<void(int, int, int, uint32_t, int)> diag;
+    void setCaduDiag(std::function<void(int, int, int, const int*)> f) { for (auto& p : paths_) if (p.sync) p.sync->caduDiag = f; }
+    double carrierHz() const { return demod_->carrierHz(); }
     void setDopplerHz(double hz) { if (demod_) demod_->setDopplerHz(hz); dop_ = hz; }
 
     /** Feed interleaved float IQ. */
     void feedIq(const float* iq, size_t n) {
         soft_.clear();
+        demod_->setHold(syncLocked());
         demod_->feed(iq, n, soft_);
         samples_ += n;
         feedSoft(soft_.data(), soft_.size());
