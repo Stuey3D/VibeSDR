@@ -64,7 +64,10 @@ constexpr double kRowPeriodS = 0.25;
 constexpr float kSnrDb = 7.0f;
 /** Comb evaluation: segments wanted, the fewest accepted, and the longest it may take (s). */
 constexpr int kSegsWant = 40, kSegsMin = 18;
-constexpr double kEvalMaxS = 80.0;
+/** ★ An inconclusive look — the strongest period IS in the VARA window but still faint — keeps averaging, doubling the
+ *  segments up to this many (more averaging only ever sharpens a real comb; noise and look-alikes stay where they are). */
+constexpr int kSegsMax = 160;
+constexpr double kEvalMaxS = 80.0, kEvalMaxLongS = 240.0;
 /** A track's comb result is re-checked after this (s). */
 constexpr double kCombFreshS = 240.0;
 /** The comb's periodogram value (0…0.5 for a pure ripple) that counts as a clear comb, and where it scores 1. */
@@ -92,11 +95,13 @@ inline int sliceBins(double sampleRate, int fftSize, double widthHz) {
     return b;
 }
 
-/** Which VARA width class a measured −6 dB width belongs to (−1 = none). ±12 % for the wide two, 380–660 Hz narrow. */
+/** Which VARA width class a measured width belongs to (−1 = none): 380–660 Hz narrow, 2050–2600, 2600–3100 — the
+ *  measured width runs ~100–250 Hz over the true one at the wide row's 47–75 Hz unwindowed bins (leakage), so the split
+ *  between 2300 and 2750 sits at 2600, not halfway. */
 inline int widthClass(double w) {
     if (w >= 380.0 && w <= 660.0) return 0;
-    if (w >= 2050.0 && w < 2520.0) return 1;
-    if (w >= 2520.0 && w <= 3050.0) return 2;
+    if (w >= 2050.0 && w < 2600.0) return 1;
+    if (w >= 2600.0 && w <= 3100.0) return 2;
     return -1;
 }
 
@@ -238,7 +243,7 @@ public:
             }
         }
         sliceSamples_ += n;
-        if (activeSeg_ >= kSegsWant || nowS - evalStartS_ > kEvalMaxS) finishEval(*t, nowS);
+        if (activeSeg_ >= segTarget_ || nowS - evalStartS_ > evalMaxS_) finishEval(*t, nowS);
     }
 
     /** The tags now, as the wire's `sigtags` message (kind "vara"). Any thread. */
@@ -263,6 +268,8 @@ private:
         std::deque<std::pair<double, double>> runs;   // on intervals (start, end), the last 90 s
         float shape = 0; float comb = 0; double combAt = -1e18; double spacing = 0;
         bool tagged = false; float conf = 0; bool hit = false;
+        int votes[3] = { 0, 0, 0 };   // readings per width class
+        double w = 0;                 // the measured width (Hz), smoothed
     };
 
     template <class Flo>
@@ -320,9 +327,11 @@ private:
         for (auto& t : tracks_) t.hit = false;
         for (const Run& r : seen_) {
             Track* best = nullptr; double bd = 1e18;
-            const double tol = std::max(120.0, 0.12 * kClassHz[r.cls]);
+            // ★ matched by CENTRE, not by class: a 2300 Hz block read at 75 Hz bins straddles 2520 Hz now and then, and
+            //   one signal must stay one track (its class is the majority of its readings)
             for (auto& t : tracks_) {
-                if (t.cls != r.cls) continue;
+                const double tol = std::max(120.0, 0.12 * std::max(kClassHz[t.cls], kClassHz[r.cls]));
+                if ((t.cls == 0) != (r.cls == 0)) continue;   // the narrow class never merges with a wide one
                 const double d = std::fabs(t.hz - r.hz);
                 if (d <= tol && d < bd) { bd = d; best = &t; }
             }
@@ -333,12 +342,15 @@ private:
                     if (old->id == active_) active_ = -1;
                     tracks_.erase(old);
                 }
-                Track nt; nt.id = nextId_++; nt.hz = r.hz; nt.cls = r.cls; nt.firstS = now; nt.lastOnS = now; nt.shape = r.shape;
+                Track nt; nt.id = nextId_++; nt.hz = r.hz; nt.cls = r.cls; nt.firstS = now; nt.lastOnS = now; nt.shape = r.shape; nt.w = r.w;
                 tracks_.push_back(nt);
                 best = &tracks_.back();
             }
             best->hit = true;
+            if (best->votes[r.cls] < 1000000) best->votes[r.cls]++;
+            best->cls = (int)(std::max_element(best->votes, best->votes + 3) - best->votes);
             best->hz += 0.2 * (r.hz - best->hz);
+            best->w += 0.2 * (r.w - best->w);
             best->shape += 0.2f * (r.shape - best->shape);
             if (!best->on) { best->on = true; best->onSinceS = now; }
             best->lastOnS = now;
@@ -362,12 +374,16 @@ private:
                 const double on = onTime(t, now);
                 if (now - t.lastOnS < 2.0 && on >= 3.0 && on > bestOn) { bestOn = on; pick = &t; }
             }
-            if (pick) { active_ = pick->id; evalStartS_ = now; activeSeg_ = 0; std::fill(psd_.begin(), psd_.end(), 0.0); ring_.clear(); }
+            if (pick) { active_ = pick->id; evalStartS_ = now; activeSeg_ = 0; segTarget_ = kSegsWant; evalMaxS_ = kEvalMaxS; std::fill(psd_.begin(), psd_.end(), 0.0); ring_.clear(); }
         } else if (Track* t = find(active_)) {
-            if (now - evalStartS_ > kEvalMaxS) finishEval(*t, now);
+            if (now - evalStartS_ > evalMaxS_) finishEval(*t, now);
         }
         publish(now);
     }
+
+    /** Half the part of the block the comb reads: 80 % of the narrower of its measured width and its class (the edges and
+     *  their leakage stay out of the ripple). */
+    static double inbandHalf(const Track& t) { return 0.4 * std::min(t.w > 0 ? t.w : kClassHz[t.cls], kClassHz[t.cls]); }
 
     static double onTime(const Track& t, double now) {
         double s = 0;
@@ -390,10 +406,10 @@ private:
             const cf32 c = out_[(size_t)((k + M_ / 2) % M_)];
             pw_[(size_t)k] = c.real() * c.real() + c.imag() * c.imag();
         }
-        const double half = kClassHz[t.cls] / 2.0, off = t.hz - sliceCentre_;
-        const int a = M_ / 2 + (int)std::lround((off - half * 0.85) / fb), b = M_ / 2 + (int)std::lround((off + half * 0.85) / fb);
-        const int ga = M_ / 2 + (int)std::lround((off + half + 150.0) / fb), gb = M_ / 2 + (int)std::lround(segRate_ * 0.36 / fb);
-        const int la = M_ / 2 - (int)std::lround(segRate_ * 0.36 / fb), lb = M_ / 2 + (int)std::lround((off - half - 150.0) / fb);
+        const double half = inbandHalf(t), off = t.hz - sliceCentre_, edge = std::max(half / 0.8, kClassHz[t.cls] / 2.0);
+        const int a = M_ / 2 + (int)std::lround((off - half) / fb), b = M_ / 2 + (int)std::lround((off + half) / fb);
+        const int ga = M_ / 2 + (int)std::lround((off + edge + 150.0) / fb), gb = M_ / 2 + (int)std::lround(segRate_ * 0.36 / fb);
+        const int la = M_ / 2 - (int)std::lround(segRate_ * 0.36 / fb), lb = M_ / 2 + (int)std::lround((off - edge - 150.0) / fb);
         if (a < 1 || b >= M_ - 1 || b - a < 16) return;
         double in = 0, g = 0; int gn = 0;
         for (int k = a; k <= b; k++) in += pw_[(size_t)k];
@@ -412,13 +428,18 @@ private:
         t.combAt = now;
         if (activeSeg_ >= kSegsMin) {
             const double fb = segRate_ / M_;
-            const double half = kClassHz[t.cls] / 2.0, off = t.hz - sliceCentre_;
-            const int a = M_ / 2 + (int)std::lround((off - half * 0.85) / fb), b = M_ / 2 + (int)std::lround((off + half * 0.85) / fb);
+            const double half = inbandHalf(t), off = t.hz - sliceCentre_;
+            const int a = M_ / 2 + (int)std::lround((off - half) / fb), b = M_ / 2 + (int)std::lround((off + half) / fb);
             std::vector<float> db;
             for (int k = std::max(0, a); k <= std::min(M_ - 1, b); k++)
                 db.push_back(10.0f * std::log10((float)(psd_[(size_t)k] / activeSeg_) + 1e-30f));
             const CombResult c = measureComb(db.data(), (int)db.size(), fb);
             lastComb_ = c;
+            const bool inWindow = c.bestHz >= kSpacingLo && c.bestHz <= kSpacingHi;
+            if (inWindow && c.varaP < kCombMin && activeSeg_ >= segTarget_ && segTarget_ * 2 <= kSegsMax) {
+                segTarget_ *= 2; evalMaxS_ = kEvalMaxLongS; evals_--; t.combAt = -1e18;   // ★ keep averaging (see kSegsMax)
+                return;
+            }
             const bool pass = c.bestHz >= kSpacingLo && c.bestHz <= kSpacingHi && c.varaP >= kCombMin;
             const float score = pass ? std::min(1.0f, (c.varaP - 0.04f) / (kCombFull - 0.04f)) : 0.0f;
             t.comb = std::max(0.0f, score);
@@ -460,7 +481,8 @@ private:
     int nextId_ = 1;
     double lastWidth_ = 0;
     // stage 2
-    int active_ = -1, activeSeg_ = 0, M_ = 0;
+    int active_ = -1, activeSeg_ = 0, M_ = 0, segTarget_ = kSegsWant;
+    double evalMaxS_ = kEvalMaxS;
     double evalStartS_ = 0, segRate_ = 0, sliceCentre_ = 0;
     std::unique_ptr<vibedsp::ComplexFFT> fft_;
     std::vector<float> win_, pw_;
