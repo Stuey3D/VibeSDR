@@ -195,6 +195,12 @@ flags_for() {
     #   digit and table, twist/timing/frequency limits, minutes of noise / speech-like / music-like audio with nothing decoded,
     #   SIMD = scalar, cost. `test-tones wav <file>…` runs recordings as a talk-off corpus (exit 1 when anything decodes).
     test-tones)            echo "-O2" ;;
+    # ★★ V12 VOR / ILS (docs/v12/VOR-ILS.md): 40 radials × 4 channel rates, 20 dB, offsets, voice; ILS DDM; idents; 5 min of
+    #    noise and of AM speech → nothing; SIMD = scalar; cost. `test-vor clip …` writes the e2e clip. Header-only.
+    test-vor)              echo "-O2" ;;
+    # ★★ V12 COSPAS-SARSAT 406 MHz (docs/v12/SARSAT.md): C/S T.001 Annex B's worked examples, the BCH codes, the protocols,
+    #    the modem down to 34 dB-Hz, an hour of noise and beacon-shaped random bursts → nothing. `clip …` writes the e2e clip.
+    test-sarsat)           echo "-O2" ;;
     test-horus-names)      echo "-O1 -lpthread" ;;   # ★ V12 Horus payload names: the list's format, once a day, bounds
     # ★★ The ADS-B gain rule after Stuart's FlightAware box: the top, down only for dynamic range, never for strong aircraft.
     test-adsb-gain)        echo "-O2 -lpthread" ;;
@@ -878,6 +884,9 @@ if npx tsx scripts/test_ncdxf_app.ts; then pass=$((pass+1)); else fail=$((fail+1
 if npx tsx scripts/test_balloon_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 DTMF + 5-tone: the shared client half (src/services/tones.ts), both clients' keys and options, the setup screens.
 if npx tsx scripts/test_tones_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 VOR / ILS and 406 MHz beacons: the shared client half (src/services/navaids.ts — the radial's line, the FIX, the card),
+#   both clients' keys, the setup screens, the copy.
+if npx tsx scripts/test_navaids_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -2004,6 +2013,22 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-tones" ] && "$OUT/test-tones"
   rm -f "$OUT/tones-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and test-tones built above)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 VOR / ILS and 406 MHz BEACONS (docs/v12/VOR-ILS.md, SARSAT.md): the real server on a fake rtl_tcp replaying our own
+#     clips — a VOR "LON" on radial 247.5° (113.60 MHz AM) and three 406 MHz bursts (406.037 MHz): the radial, ident and
+#     station, one pipeline and per-listener; the beacon's identity and position to the signed-in owner only (a listener's
+#     mirror checked against everything it was sent); the owner's switches (test-server-vorsar). NOT RUN without VIBESERVER_BIN.
+printf '\n\033[1m── VOR / ILS and 406 MHz beacons (end to end: the server) ──\033[0m\n'
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-vor android/app/src/main/cpp/decoders/nav_tx.h
+[ -n "${VIBESERVER_BIN:-}" ] && fresh_clip_writer test-sarsat android/app/src/main/cpp/decoders/sarsat_tx.h android/app/src/main/cpp/decoders/sarsat_msg.h
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-vor" ] && [ -x "$OUT/test-sarsat" ] \
+   && "$OUT/test-vor" clip "$OUT/vor-clip.cu8" 288000 40 25000 247.5 >/dev/null && "$OUT/test-sarsat" clip "$OUT/sarsat-clip.cu8" 288000 25000 >/dev/null; then
+  VIBE_VOR_CLIP="$OUT/vor-clip.cu8" VIBE_SARSAT_CLIP="$OUT/sarsat-clip.cu8" node scripts/test-server-vorsar.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/vor-clip.cu8" "$OUT/sarsat-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-vor / test-sarsat built above)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 THE RTTY SKIMMER (2026-11-14): the real server on a fake rtl_tcp replaying test-rtty-skimmer's synthetic clip (four
