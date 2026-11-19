@@ -23,6 +23,7 @@ inline const std::vector<float>& picZooms() { static const std::vector<float> z 
 /** The idle words in the box before the first line. */
 inline std::string picIdle(const std::string& id) {
     if (id == "wefax") return "standing by — a chart draws here line by line as it is received. Tune USB 1.9 kHz below the station's frequency (Northwood 4608.1, DWD 7878.1 kHz).";
+    if (id == "lrpt") return "waiting for a METEOR pass — tune 137.100 or 137.900 MHz while a satellite is overhead; the picture grows here.";
     if (id == "sstv") return "listening — a picture draws here as it arrives; the mode is found by itself. 14.230 MHz USB is the 20 m calling frequency.";
     return "listening for a Hell tone — tune USB with the signal in your passband; the text is painted here as it is heard.";
 }
