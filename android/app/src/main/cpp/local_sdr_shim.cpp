@@ -9639,6 +9639,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  goes to this listener's spectrum socket as {"type":"tone","label":…} when it changes ("" = nothing). */
         std::unique_ptr<vibe::ToneId> tone;
         bool        toneWant = false;
+        /** ★ V12 VOR / ILS, 406 MHz: this listener's channel is floored for their IQ decoder (clientIqCb). */
+        bool        navFloor = false;
         double      toneRate = 0, toneAtHz = 0, toneFedHz = 0;
         std::string toneSent;
         double bwHz = 0;
@@ -10304,8 +10306,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ V12 tone ID: one bool when the listener is not on NFM (and nothing left to clear)
         if ((c->toneWant || !c->toneSent.empty()) && c->owner) c->owner->toneFeedClient(c, x, n, rateHz);
         // ★ V12 PAGING (Android local hardware only): one relaxed load unless a paging receiver runs in this process
-        if (c->owner && DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
-            c->owner->decoders_.feedChannelIqSession(c->session, x, n, rateHz);
+        // ★★ …and VOR / ILS and 406 MHz beacons (any radio, served or not): the listener's channel floored at what they need
+        //    (setIqMinRate rebuilds the chain once; a no-op when unchanged), and let go again when they stop
+        if (c->owner && ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
+                         || DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)) {
+            const double need = c->owner->decoders_.feedChannelIqSession(c->session, x, n, rateHz);
+            if (need > 0 && rateHz + 1.0 < need && c->rx && !c->navFloor) { c->navFloor = true; c->rx->setIqMinRate(need); }
+            else if (need <= 0 && c->navFloor && c->rx) { c->navFloor = false; c->rx->setIqMinRate(c->drm ? 24000.0 : 0.0); }
+        } else if (c->navFloor && c->rx) { c->navFloor = false; c->rx->setIqMinRate(c->drm ? 24000.0 : 0.0); }
     }
     /** ★ The {"type":"tone"} message — the label is our own fixed text ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), no
      *  escaping needed. */
@@ -19628,6 +19636,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
     bool drmSharedZoomMoves = false;   // ★ the `zoomMovesRadio` last sent — see drmZoomMovesRadio
+    /** ★ V12 VOR / ILS, 406 MHz on the one pipeline: its channel is floored (iqCb) — and given back to what DRM / raw IQ want. */
+    bool navFloorShared = false;
+    void navFloorRestore() {
+        bool drm; { std::lock_guard<std::mutex> lk(drmSharedMtx); drm = (bool)drmShared; }
+        rx.setIqMinRate(drm ? std::max(24000.0, iqDirectRate()) : iqDirectRate());
+    }
     /** The raw-IQ-out consumer's rate on the direct path, or 0 — the channel floor DRM must not lower. */
     double iqDirectRate() {
         std::lock_guard<std::mutex> lk(iqDirectMtx);
@@ -30624,8 +30638,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ V12 tone ID on the shared dial: one relaxed load unless the dial is on NFM (or a label is left to clear)
         if (p->toneSharedWant.load(std::memory_order_relaxed) || p->toneShared) p->toneFeedShared(x, n, rateHz);
         // ★ V12 PAGING on the one pipeline (the phone's own radio, one listener): one relaxed load unless paging runs
-        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed) && !p->perClientDsp())
-            p->decoders_.feedChannelIqShared(x, n, rateHz);
+        // ★★ …and VOR / ILS, 406 MHz beacons on the one pipeline (any radio): the channel floored while they run
+        if (!p->perClientDsp() && ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
+                                   || DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)) {
+            const double need = p->decoders_.feedChannelIqShared(x, n, rateHz);
+            if (need > 0 && rateHz + 1.0 < need && !p->navFloorShared) { p->navFloorShared = true; p->rx.setIqMinRate(std::max(need, p->iqDirectRate())); }
+            else if (need <= 0 && p->navFloorShared) { p->navFloorShared = false; p->navFloorRestore(); }
+        } else if (p->navFloorShared) { p->navFloorShared = false; p->navFloorRestore(); }
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
@@ -31155,6 +31174,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    default) — and the band plan's region, which decides what is amateur (docs/v12/TONES.md).
             e.tonesDigits = [] { return vsModeBlocked("tones+digits"); };
             e.region = [] { return vibebands::defaultRegion(); };
+            // ★★ V12 VOR / ILS: the server's place (Setup's position) — the nearest station, and the owner's radial check
+            e.position = [](double& la, double& lo) { la = g_bgLat.load(); lo = g_bgLon.load(); return std::isfinite(la) && std::isfinite(lo); };
             // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.
             e.spotTap = [dial](bool band) -> vibe::DecoderTapPtr {
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
@@ -41722,6 +41743,17 @@ static std::string vsTunableJson() {
     /* ★ V12 tone decoders (decoders/tones_rx.h): DTMF and 5-tone selective calling on a listener's NFM / AM audio — on any
      *  frequency (what is SHOWN depends on it: docs/v12/TONES.md). Absent on an older server; false where the owner blocked it. */
     j += std::string(",\"tones\":") + (vsModeBlocked("tones") ? "false" : "true");
+    /* ★ V12 VOR / ILS (decoders/nav_rx.h) and 406 MHz beacons (decoders/sarsat_rx.h): listener's decoders on the CHANNEL IQ.
+     *  Absent on an older server; false + its reason where this radio does not reach them or the owner blocked them. */
+    if (g_icomOn.load()) {   // ★ an Icom's audio is not IQ: shown greyed with the reason (vibe_icom_decode.h's words)
+        if (!vsModeBlocked("vor")) j += ",\"vor\":false,\"vorWhy\":\"" + vibereach::jsonEsc(vibeicomdec::notOfferedWhy("vor")) + "\"";
+        else j += ",\"vor\":false";
+        if (!vsModeBlocked("sarsat")) j += ",\"sarsat\":false,\"sarsatWhy\":\"" + vibereach::jsonEsc(vibeicomdec::notOfferedWhy("sarsat")) + "\"";
+        else j += ",\"sarsat\":false";
+    } else {
+        j += vsDecoderCapJson("vor", reach);
+        j += vsDecoderCapJson("sarsat", reach);
+    }
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -41967,7 +41999,7 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "drm", "freedv", "m17" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "vor", "sarsat", "drm", "freedv", "m17" };
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -42140,7 +42172,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"vor", "VOR / ILS"}, {"sarsat", "406 MHz beacons"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

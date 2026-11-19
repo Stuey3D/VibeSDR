@@ -36,6 +36,9 @@ inline std::string notOfferedWhy(const std::string& ext) {
     if (ext == "cwskim" || ext == "pskskim" || ext == "rttyskim")
         return "the skimmer needs a wideband capture \xe2\x80\x94 an Icom gives one demodulated audio channel (use ONE SIGNAL)";
     if (ext == "paging") return "paging needs the radio's IQ, and an Icom has none";
+    // ★ V12 VOR / ILS and 406 MHz beacons read the CHANNEL IQ (the VOR's 30 Hz phases, the beacon's phase modulation)
+    if (ext == "vor") return "VOR and ILS need the radio's IQ (the 30 Hz phases), and an Icom gives demodulated audio";
+    if (ext == "sarsat") return "406 MHz beacons need the radio's IQ (phase modulation), and an Icom gives demodulated audio";
     if (ext == "drm") return "DRM needs at least 4.5 kHz of RF with its phase intact \xe2\x80\x94 the radio's widest SSB filter is 3.6 kHz";
     return {};
 }

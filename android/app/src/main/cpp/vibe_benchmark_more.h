@@ -56,6 +56,8 @@
 #include "vibe_freedv.h"             // ★ V12 FreeDV as a mode (the dec_freedv row) — the system's libcodec2, dlopen'd
 #include "decoders/balloon_tx.h"     // ★ V12 balloons (the dec_balloon row) — our own transmitter
 #include "decoders/tones_tx.h"       // ★ V12 DTMF + 5-tone (the dec_tones row) — our own transmitter
+#include "decoders/nav_tx.h"         // ★ V12 VOR / ILS (the dec_vor row) — our own transmitter
+#include "decoders/sarsat_tx.h"      // ★ V12 406 MHz beacons (the dec_sarsat row) — our own transmitter
 #include "vibe_m17.h"                // ★ V12 M17 as a mode (the dec_m17 row) — our own receiver, Codec 2 from the same library
 #include "benchsynth/cw_synth.h"
 #include "benchsynth/psk_synth.h"
@@ -287,6 +289,40 @@ inline Row hostAudioRow(const std::string& id, const std::string& label, const s
     r.decoded = what == Count::Chars ? (int)peer->chars.load() : what == Count::Lines ? (int)peer->lines.load()
               : what == Count::Json ? (int)peer->json.load() : what == Count::Events ? (int)tap->events.load()
               : (int)(peer->chars.load() + peer->json.load() + tap->events.load());
+    return r;
+}
+
+/** ★ V12 a listener's decoder on the CHANNEL IQ (VOR / ILS, 406 MHz beacons), through the host exactly as the server feeds
+ *  it (feedChannelIq, 20 ms blocks) — `iq` at `rate`, looped. Counts the lines it sends. */
+inline Row hostChanIqRow(const std::string& id, const std::string& label, const std::string& ext, const std::string& msg,
+                         const std::vector<std::complex<float>>& iq, double rate, double dialHz) {
+    Row r; r.id = id; r.label = label;
+    if (iq.empty()) return r;
+    auto peer = std::make_shared<CountPeer>();
+    DecoderHost::Env env;
+    env.dialHz = [dialHz] { return dialHz; };
+    double fedSec = 0, pct = -1;
+    {
+        DecoderHost h(env, "bench");
+        h.addPeer(peer);
+        if (h.start(ext, msg) != DecoderHost::Start::Ok) return r;
+        const double w0 = wallNow(), c0 = processCpu();
+        const size_t blk = (size_t)(rate / 50);
+        size_t pos = 0;
+        while (fedSec < kRowMaxSec && (fedSec < kRowMinSec || wallNow() - w0 < kRowWallSec)) {
+            while (h.queuedChannelIqSec() > 0.5) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            const size_t n = std::min(blk, iq.size() - pos);
+            h.feedChannelIq(iq.data() + pos, (int)n, rate);
+            pos = (pos + n) % iq.size();
+            fedSec += n / rate;
+        }
+        for (int i = 0; i < 4000 && h.queuedChannelIqSec() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        settleCpu(5.0);
+        pct = 100.0 * (processCpu() - c0) / fedSec;
+        h.stop();
+    }
+    r.pct = pct;
+    r.decoded = (int)peer->chars.load();
     return r;
 }
 
@@ -721,6 +757,8 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_rttyskim", { "rtty",   false, true  } },   // ★ inside RTTY's switch, which carries the green one-signal decoder
         { "dec_balloon",  { "balloon", true, true  } },   // ★ V12 balloons: a listener's decoder (a slot)
         { "dec_tones",    { "tones",  true,  true  } },   // ★ V12 DTMF + 5-tone: a listener's decoder (a slot)
+        { "dec_vor",      { "vor",    true,  true  } },   // ★ V12 VOR / ILS: a listener's decoder on the channel IQ (a slot)
+        { "dec_sarsat",   { "sarsat", true,  true  } },   // ★ V12 406 MHz beacons: a listener's decoder on the channel IQ (a slot)
         { "dec_jtty",     { "jtty",   true,  true  } }, { "dec_sitora",   { "sitora", true,  true  } },
         { "dec_dsc",      { "dsc",    true,  true  } }, { "dec_same",     { "same",   true,  true  } },
         { "dec_selcal",   { "selcal", true,  true  } }, { "dec_mfsk",     { "mfsk",   true,  true  } },
@@ -870,6 +908,21 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     run("dec_tones", "Decoder: DTMF / 5-tone", [&] {
         return hostAudioRow("dec_tones", "Decoder: DTMF + 5-tone selective calling", "tones", attach + "\"extension_name\":\"tones\"}",
                             tonesAudio(), Count::Any);
+    });
+    /* ★★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR with its ident on 113.60 MHz, our own transmitter, the listener's channel
+     *  IQ at 37.5 kHz. Sets the "vor" switch's default; never hides it. */
+    run("dec_vor", "Decoder: VOR / ILS", [&] {
+        vibe::nav::tx::VorOpt o; o.rate = 37500; o.bearing = 247.5; o.snrDb = 30; o.ident = "LON"; o.identEvery = 8;
+        return hostChanIqRow("dec_vor", "Decoder: VOR / ILS (bearing + ident)", "vor", attach + "\"extension_name\":\"vor\"}",
+                             vibe::nav::tx::vor(20, o), o.rate, 113.60e6);
+    });
+    /* ★★ V12 406 MHz beacons (docs/v12/SARSAT.md): a long standard-location burst every 5 s (an activation's first two
+     *  minutes — the busiest a beacon is), 48 kHz of channel IQ. Sets the "sarsat" switch's default; never hides it. */
+    run("dec_sarsat", "Decoder: 406 MHz beacons", [&] {
+        const vibe::sarsat::Bits b = vibe::sarsat::tx::standardLocationEpirb(232, 123456, 50.7, -1.35, true);
+        vibe::sarsat::tx::Opt o; o.rate = 48000; o.lead = 2.0; o.tail = 5.0 - 2.0 - 0.52; o.cn0 = 45;
+        return hostChanIqRow("dec_sarsat", "Decoder: 406 MHz beacons (COSPAS-SARSAT)", "sarsat", attach + "\"extension_name\":\"sarsat\"}",
+                             vibe::sarsat::tx::burst(&b, o), o.rate, 406.037e6);
     });
     run("dec_sitora", "Decoder: SITOR-A", [&] {
         const auto L = sitorsynth::makeLink("002320204", "364775427", "GOOD MORNING THIS IS A TEST +?", "QSL +?", "73 +?", 4, 7);

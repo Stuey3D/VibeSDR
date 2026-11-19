@@ -3512,6 +3512,12 @@ const BLOCKABLE = [
    *  default): 5-tone digits off the amateur bands, shown to the owner's own signed-in sockets only. */
   { id: "tones", label: "DTMF and 5-tone selective calling" },
   { id: "tones+digits", label: "5-tone: show the called numbers off the amateur bands (to you only)", parent: "tones", on: true },
+  /* ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR's radial, an ILS localiser's / glideslope's deviation, the ident and the
+   *  published station, from a listener's channel on 108–118 / 329–335 MHz. */
+  { id: "vor", label: "VOR bearing and ILS deviation" },
+  /* ★ V12 COSPAS-SARSAT (docs/v12/SARSAT.md): 406 MHz distress beacons (mostly tests). Listeners see that a beacon was
+   *  heard; its identity and encoded position go to you only. Real alerts are handled by the authorities, not by us. */
+  { id: "sarsat", label: "406 MHz distress beacons (COSPAS-SARSAT)" },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP
