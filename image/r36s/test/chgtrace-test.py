@@ -99,6 +99,13 @@ sm = [l for l in LOG[n0:] if "on the cord —" in l]
 ok(len(sm) >= 1 and "sampler" in sm[0] and "% of a core" in sm[0] and "USB 1-1" in sm[0], "★ the 30 s summary with the sampler's CPU: %s" % sm[:1])
 ok(tr.SAMPLE_S == 0.02, "20 ms samples")
 
+# ── start-up with the cord in: the snapshot line, then a burst named for it ──
+tr3 = m.FastTrace(FakePmic(), usb=lambda: frozenset({"1-1"}), res_div=1); n0 = len(LOG)
+tr3.snapshot("the cord was already in at start-up — the PMIC as found, before the input limit", 13.4)
+tr3.set_online(True); tr3.edge("start-up", 13.45); tt = 13.45
+for _ in range(200): tr3.step(tt); tt += 0.02
+ok(any("already in at start-up" in l and "IN dd OUT a0" in l and "USB 1-1" in l for l in LOG[n0:]), "★ the start-up snapshot: registers + USB")
+ok(any("START-UP: the cord was in at start-up" in l for l in LOG[n0:]), "a START-UP burst")
 if sys.argv[1:] == ["bench"]:
     N = 20000; tr2 = m.FastTrace(FakePmic(), usb=lambda: frozenset({"1-1"}), res_div=1); tr2.set_online(True)
     m.log = lambda *a: None

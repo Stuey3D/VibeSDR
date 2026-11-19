@@ -51,6 +51,7 @@ class FakeTrace:
     def __init__(self): self.edges, self.online = [], None
     def set_online(self, o): self.online = o
     def edge(self, k, t): self.edges.append(k)
+    def snapshot(self, why, t): self.edges.append("snapshot:" + ("before" if "before the input limit" in why else "?"))
 run(6)
 ok(not [l for l in LOG if l.startswith("charger: plug-in +")], "★ h80: no more 5 s of 8-s-old sysfs lines after an edge (the fast trace replaces them)")
 ok(len(WRITES) == 1, "0xDD held: no rewrite while it stands (%d writes)" % len(WRITES))
@@ -87,4 +88,9 @@ TGT[0] = 0xDD; w2.next_check = 0; w2.tick(t[0])
 ok(REGS[m.CHRG_IN] == 0xDD, "back to 4.5 V = 0xDD")
 ok(m.VLIM_CHOICES == {4500: 0xDD, 4300: 0xBD, 4000: 0x8D}, "the encoding: 0x80 | (mV-4000)/100 << 4 | 0x08 | 5")
 ok(all(m.vlim_from_chrg_in(v) == mv / 1000 for mv, v in m.VLIM_CHOICES.items()), "FullJudge's decoder reads each one back")
+# ── h80: the cord already in at start-up (plugged in during the loading screen): snapshot BEFORE the write, then a burst ──
+FT3 = FakeTrace(); REGS[m.CHRG_IN] = 0xDB; WRITES.clear(); put(True, "Charging")
+w3 = m.ChargerWatch("/dev/i2c-0", lambda: 0xDD, FT3); w3.tick(t[0])
+ok(FT3.edges == ["snapshot:before", "start-up"] and WRITES == [(m.CHRG_IN, 0xDD)],
+   "★ cord in at start-up: the PMIC snapshot first, then the limit, then a start-up burst (%s)" % FT3.edges)
 print("   %d passed, %d failed" % (P, F)); sys.exit(1 if F else 0)

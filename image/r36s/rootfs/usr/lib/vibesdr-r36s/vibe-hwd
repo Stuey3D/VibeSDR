@@ -793,7 +793,15 @@ class ChargerWatch:
         if self.online is None:
             self.online, self.status = online, status
             if online:
+                # ★★ THE CORD ALREADY IN AT START-UP (Stuart 2026-11-19: this unit will not power on with the cable in, so
+                #    he plugs it in during the loading screen — before vibe-hwd is up — and the drops followed). What the
+                #    PMIC holds BEFORE our write (the driver's limit, the charger's state, the port), then the write, then
+                #    a start-up burst of the fast trace.
+                if self.trace and self.trace.reader:
+                    self.trace.snapshot("the cord was already in at start-up — the PMIC as found, before the input limit", now)
                 self.apply_limit("start-up", now)
+                if self.trace:
+                    self.trace.edge("start-up", now)
             return
         if online != self.online:
             # ★ the edge: the limit FIRST (the SDR is drawing through this port right now), then the trace's burst
@@ -940,7 +948,16 @@ class FastTrace:
     def edge(self, kind, t):
         """A plug-in / plug-out at monotonic t: a burst (the ring before it, PLUG_POST_S after)."""
         with self.lock:
-            self._start_burst(kind, "the cord %s" % ("went in" if kind == "plug-in" else "came out"), t, self.PLUG_POST_S)
+            self._start_burst(kind, {"plug-in": "the cord went in", "plug-out": "the cord came out"}.get(kind, "the cord was in at start-up"),
+                              t, self.PLUG_POST_S)
+
+    def snapshot(self, why, t):
+        """One sample logged at once (the start-up state, before anything is written)."""
+        with self.lock:
+            self._coeffs(t)
+            s = self.read(t)
+            log("chgtrace: %s at mono %.3f — %s · USB %s · %s" % (why, t, self._fmt(s), ",".join(sorted(self.usb())) or "none",
+                                                               self._sysfs_now()))
 
     # ── sampling ──
     def _coeffs(self, t):
@@ -1782,6 +1799,11 @@ class Hwd:
             await asyncio.sleep(5)       # ★ the joypad is a module and can arrive late; a USB keyboard can come and go
 
     async def main(self):
+        loop = asyncio.get_running_loop()
+        # ★★ THE CHARGER FIRST (h80): its limit and the fast trace start before anything else here (the backlight, ALSA's
+        #    amixer runs, the socket) — a cord plugged in during the loading screen is seen, logged and limited soonest
+        charger = loop.create_task(self.charger_loop())
+        await asyncio.sleep(0)
         self.apply_brightness()
         self.apply_cpu()          # ★ the CPU SPEED cap, after vibe-cpu.service set schedutil + the 1296 MHz ceiling
         self.apply_volume()
@@ -1800,11 +1822,10 @@ class Hwd:
         except KeyError:
             log("no vibeserver group — socket left root-only")
         os.chmod(SOCK, 0o660)
-        loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, server.close)
         log("ready on", SOCK)
-        tasks = [loop.create_task(t) for t in (self.input_loop(), self.battery_loop(), self.charger_loop(), self.clock_loop(),
+        tasks = [charger] + [loop.create_task(t) for t in (self.input_loop(), self.battery_loop(), self.clock_loop(),
                                                     self.power_loop())]
         try:
             await server.serve_forever()
