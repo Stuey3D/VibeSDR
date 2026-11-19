@@ -54,6 +54,24 @@ inline std::string satChanText(const Json& r) {
     char b[48]; std::snprintf(b, sizeof b, " · %s %.2f kHz", off >= 0 ? "▲" : "▼", std::fabs(off) / 1000.0);
     return name + b;
 }
+/** satellites.ts satCreditText: "Orbits: CelesTrak · 5 h old" — CelesTrak's data is theirs, say so with its age. */
+inline std::string satCreditText(const Json& l, double now) {
+    const Json& so = l["source"];
+    const std::string orbits = so["orbits"].str();
+    if (orbits.empty()) return "";
+    std::string out = orbits.find("CelesTrak") != std::string::npos ? std::string("Orbits: CelesTrak") : orbits.substr(0, 60);
+    const double at = so.has("fetched") ? so["fetched"].num(0) : so["newestEpoch"].num(0);
+    if (at > 0) {
+        const double h = std::max(0.0, (now - at) / 3600.0);
+        char b[40];
+        if (h < 1) std::snprintf(b, sizeof b, " · under an hour old");
+        else if (h < 48) std::snprintf(b, sizeof b, " · %d h old", (int)std::lround(h));
+        else std::snprintf(b, sizeof b, " · %d days old", (int)std::lround(h / 24));
+        out += b;
+    }
+    if (so["transmitters"].str().find("SatNOGS") != std::string::npos) out += " · Transmitters: SatNOGS DB (CC BY-SA 4.0)";
+    return out;
+}
 inline std::string satStateWord(const Json& r) {
     const std::string st = r["state"].str();
     if (st.empty() || st == "OFF") return "";
@@ -161,7 +179,11 @@ inline void App::drawSat(Ctx& c, const RadioState& s) {
         return a.up ? a.el > b.el : a.aos < b.aos;
     });
     if (rows.size() > 20) rows.resize(20);
-    const Rect view{area.x - 8, y, area.w + 16, panel.b() - 8 - y};
+    // ★ the credit line at the foot of the panel (CelesTrak's orbits, SatNOGS where used, the data's age)
+    const std::string credit = satCreditText(l, now);
+    const float creditH = credit.empty() ? 0.f : (float)c.f.small.lineHeight() + 6;
+    if (!credit.empty()) c.tc.draw(c.g, c.f.small, bmFit(c.f.small, credit, (int)area.w - 4), area.x + 2, panel.b() - 6 - creditH + 4, th::dim);
+    const Rect view{area.x - 8, y, area.w + 16, panel.b() - 8 - y - creditH};
     if (l.kind == Json::Null) c.tc.draw(c.g, c.f.small, "Asking the server…", area.x + 2, y, th::dim);
     else if (rows.empty()) c.tc.draw(c.g, c.f.small, "No listed satellite can be heard on this receiver", area.x + 2, y, th::dim);
     c.g.clip(view.x, view.y, view.w, view.h);
@@ -182,8 +204,9 @@ inline void App::drawSat(Ctx& c, const RadioState& s) {
             c.tc.draw(c.g, c.f.small, when, row.r() - 10, row.y + 6, rows[i].up ? th::amber : th::dim, 2);
             const Json& t = *rows[i].tx;
             char tx[96];
-            std::snprintf(tx, sizeof tx, "%s · %.3f MHz %s", t["label"].str().substr(0, 24).c_str(), t["hz"].num(0) / 1e6,
-                          t["mode"].str() == "nfm" ? "FM" : t["mode"].str() == "usb" ? "USB" : t["mode"].str() == "cw" ? "CW" : "");
+            std::snprintf(tx, sizeof tx, "%s · %.3f MHz %s%s", t["label"].str().substr(0, 24).c_str(), t["hz"].num(0) / 1e6,
+                          t["mode"].str() == "nfm" ? "FM" : t["mode"].str() == "usb" ? "USB" : t["mode"].str() == "cw" ? "CW" : "",
+                          t["status"].str() == "inactive" ? " · INACTIVE" : "");
             c.tc.draw(c.g, c.f.small, tx, row.x + 10, row.y + 28, th::dim);
             if (h.focused) focusRing(c, row, 7);
         }

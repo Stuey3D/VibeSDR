@@ -5,7 +5,7 @@
 // geometry. Shapes captured from the real server (scripts/test-server-sat.mjs, 2026-11-19).
 import {
   ageText, clockIn, parseSatList, parseSatReadout, parseSatTrack, pickerRows, satCapFrom, satChanText, satStateWord,
-  satStatusLine, skyPath, skySvg, skyXY, txListenMode, txText, txTuneHz,
+  satStatusLine, skyPath, skySvg, skyXY, txListenMode, txText, txTuneHz, satCreditText, satTxCreditText,
 } from '../src/services/satellites';
 
 let fail = 0;
@@ -70,6 +70,21 @@ ok(Math.abs(x0) < 1e-9 && Math.abs(y0) < 1e-9 && Math.abs(yn + 1) < 1e-9 && Math
 ok(satCapFrom({}) === null && satCapFrom({ doppler: 0 }) === null, 'no `doppler` = no button at all');
 ok(JSON.stringify(satCapFrom({ doppler: 1 })) === JSON.stringify({ ok: true, why: '' }), 'doppler 1 = live');
 ok(satCapFrom({ doppler: 1, dopplerWhy: 'NO SAT DATA — the satellite orbit data has not been downloaded yet' })?.ok === false, 'greyed with the reason');
+
+// ★ the credit (vibesdr.net's sats.json: CelesTrak's orbits, SatNOGS's transmitter data) and six-digit numbers
+{
+  const l = parseSatList({ type: 'sat_list', time: 'ok', located: true, now,
+    source: { orbits: 'Orbits: CelesTrak (celestrak.org) GP data', transmitters: 'Transmitters: curated by VibeSDR from AMSAT and SatNOGS DB (db.satnogs.org, CC BY-SA 4.0)', via: 'vibesdr.net', fetched: now - 5 * 3600, newestEpoch: now - 3600 },
+    sats: [{ id: 'TEST-101095', name: 'Six', norad: 101095, note: '', age: 0.1, ageState: 'fresh',
+      tx: [{ label: 'FM', hz: 435500000, mode: 'nfm', loop: 'fll', reach: true, status: 'inactive' }], passes: [] }] });
+  ok(!!l && l.sats[0].norad === 101095 && l.sats[0].tx[0].status === 'inactive', 'six digits and a SatNOGS status parsed');
+  ok(satCreditText(l, now) === 'Orbits: CelesTrak · 5 h old', `credit: ${satCreditText(l, now)}`);
+  ok(satTxCreditText(l) === 'Transmitters: SatNOGS DB (CC BY-SA 4.0)', 'SatNOGS credited where used');
+  ok(satCreditText({ ...l!, source: { orbits: 'Orbits: CelesTrak', via: 'built-in', newestEpoch: now - 3 * 86400 } }, now) === 'Orbits: CelesTrak · 3 days old', 'the built-in list: the newest epoch\'s age');
+  ok(satCreditText({ ...l!, source: undefined }, now) === '' && satTxCreditText(null) === '', 'nothing to credit = nothing shown');
+  const r6 = parseSatReadout({ type: 'sat', state: 'ARMED', norad: 123456789, name: 'Nine', time: 'ok' });
+  ok(r6?.norad === 123456789, 'nine digits kept whole');
+}
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

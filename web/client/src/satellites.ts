@@ -7,7 +7,7 @@
  *  ★ The main digits keep the NOMINAL frequency (the server snaps the dial there); the white text beside them is
  *    satChanText() — main.ts puts it in the frequency card's `chan` slot. */
 import {
-  ageText, clockIn, pickerRows, satStateWord, satStatusLine, skySvg, txListenMode, txText, txTuneHz,
+  ageText, clockIn, pickerRows, satCreditText, satStateWord, satStatusLine, satTxCreditText, skySvg, txListenMode, txText, txTuneHz,
   type SatList, type SatReadout, type SatTrack, type SatTx,
 } from '../../../src/services/satellites';
 
@@ -156,11 +156,14 @@ export class SatPanel {
       s.tx.forEach((t, i) => {
         if (!t.reach) return;
         const dis = !!why || s.ageState === 'expired' || s.ageState === 'none';
-        h += `<button data-act="track" data-norad="${s.norad}" data-tx="${i}" ${dis ? 'disabled' : ''} title="${esc((t.note || t.label) + ' — tune there and correct the Doppler')}">${esc(t.label)} · ${esc(txText(t))}</button>`;
+        h += `<button data-act="track" data-norad="${s.norad}" data-tx="${i}" ${dis ? 'disabled' : ''} title="${esc((t.note || t.label) + (t.status === 'inactive' ? ' — SatNOGS lists this transmitter as inactive' : '') + ' — tune there and correct the Doppler')}">${esc(t.label)} · ${esc(txText(t))}${t.status === 'inactive' ? ' · INACTIVE' : ''}</button>`;
       });
       h += `</div></div>`;
     }
     if (this.list?.time === 'system') h += `<div class="sat-dim">TIME: SYSTEM — this server's clock has not been checked against a time server</div>`;
+    // ★ the credit: CelesTrak's orbits (and SatNOGS's transmitter data where used), with the data's age
+    const credit = satCreditText(this.list, now), txc = satTxCreditText(this.list);
+    if (credit) h += `<div class="sat-dim sat-credit">${esc(credit)}${txc ? ' · ' + esc(txc) : ''}</div>`;
     this.el.innerHTML = h;
   }
 }

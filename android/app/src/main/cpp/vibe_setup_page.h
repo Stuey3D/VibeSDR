@@ -946,6 +946,16 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <button type="button" id="eibiGet" class="ghost" style="margin-top:10px">
             Download now</button>
         </div>
+        <!-- ★★ V12 SATELLITE DATA (vibeserver/satcat.cpp): machine-wide like EiBi. The server never asks CelesTrak
+             itself; it syncs vibesdr.net's sats.json once a day. What went wrong, in words, with the HTTP code and
+             when it asks again — from cfg.satStatus. Hidden on a server that sends none (an older one, or the app's). -->
+        <div class="note hide" id="satNote" style="margin-top:18px">
+          <b>Satellite data</b>
+          <div class="hint" id="satState"></div>
+          <div class="hint">The satellites, their frequencies and their orbits for the SAT picker and Doppler
+            correction &mdash; downloaded once a day from vibesdr.net, which collects the orbits from CelesTrak for
+            every VibeServer (CelesTrak asks that its data is fetched once and shared, not by every receiver).</div>
+        </div>
       </div>
     </div>
 
@@ -3049,6 +3059,23 @@ function renderDirStatus(st) {
     el.textContent = "Registering with the directory\u2026 the address appears here once it answers.";
   } else {
     el.textContent = "Save and restart to publish the listing.";
+  }
+}
+/* ★★ V12 the satellite data's state (satcat.cpp statusJson): fine = when it was checked; a failure = the server's own
+ *  words ("vibesdr.net's satellite mirror is overloaded (HTTP 503) — VibeServer has stopped asking and will try again
+ *  after …"), shown in full, never a raw curl line. */
+function renderSatStatus(st) {
+  const box = $("satNote"), el = $("satState"); if (!box || !el) return;
+  if (!st || typeof st !== "object") { box.classList.add("hide"); return; }
+  box.classList.remove("hide");
+  const when = (t) => t > 0 ? new Date(t * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "short"}) : "";
+  if (st.message) {
+    el.innerHTML = `<b style="color:#ff8a7d">Not updated:</b> ${esc(String(st.message))}`
+      + (st.have ? " The last good copy is still in use." : "");
+  } else if (st.have) {
+    el.textContent = "Up to date" + (st.checked > 0 ? " \u2014 checked " + when(st.checked) : "") + ".";
+  } else {
+    el.textContent = "Not downloaded yet \u2014 it is fetched shortly after the server starts, when a radio here can hear a listed satellite.";
   }
 }
 let dirStatusTimer = 0;
@@ -6907,6 +6934,7 @@ function fill() {
   // ★ The server writes the settled value; an older server sends none — then its old behaviour (Portable off, else on).
   $("tunnelResume").checked   = typeof cfg.tunnelResume === "boolean" ? cfg.tunnelResume : (POCKET ? !!cfg.dirResume : true);
   renderDirStatus(cfg.dirStatus);
+  renderSatStatus(cfg.satStatus);
   $("dirName").value          = cfg.dirName || "";
   $("dirPublicUrl").value     = cfg.dirPublicUrl || "";
   { const reach = dirReachOf(cfg.dirPublicUrl);

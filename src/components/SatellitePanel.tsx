@@ -18,7 +18,7 @@ import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
-import { ageText, clockIn, pickerRows, satChanText, satStateWord, satStatusLine, skyPath, skyXY, txText,
+import { ageText, clockIn, pickerRows, satChanText, satCreditText, satTxCreditText, satStateWord, satStatusLine, skyPath, skyXY, txText,
          type SatList, type SatReadout, type SatTrack, type SatTx } from '../services/satellites';
 
 const SAT_MAX_W = 760;
@@ -114,14 +114,17 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                     {!!ageText(x) && <Text style={s.detail}>{ageText(x)}</Text>}
                     <View style={s.keys}>
                       {x.tx.map((t, k) => !t.reach ? null : (
-                        <DecoderKey key={k} label={`${t.label} · ${txText(t)}`} disabled={dis} onPress={() => p.onTrack(x.norad, t)}
-                                    accessibilityLabel={`Track ${x.name} ${t.label}, ${txText(t)}`} />
+                        <DecoderKey key={k} label={`${t.label} · ${txText(t)}${t.status === 'inactive' ? ' · INACTIVE' : ''}`} disabled={dis} onPress={() => p.onTrack(x.norad, t)}
+                                    accessibilityLabel={`Track ${x.name} ${t.label}, ${txText(t)}${t.status === 'inactive' ? ', listed by SatNOGS as inactive' : ''}`} />
                       ))}
                     </View>
                   </View>
                 );
               })}
           {p.list?.time === 'system' && <Text style={s.detail}>TIME: SYSTEM — this server's clock has not been checked against a time server</Text>}
+          {/* ★ the credit: CelesTrak's orbits (and SatNOGS's transmitter data where used), with the data's age */}
+          {!!satCreditText(p.list, now) &&
+            <Text style={s.detail}>{satCreditText(p.list, now)}{satTxCreditText(p.list) ? ` · ${satTxCreditText(p.list)}` : ''}</Text>}
         </ScrollView>
       </DecoderBody>
     </DecoderShell>

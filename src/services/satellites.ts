@@ -4,7 +4,7 @@
  * every screen says the same thing.
  *
  * Wire (server → client):
- *   {"type":"sat_list", time, located, now, why?, sats:[{id,name,norad,note,age,ageState,tx:[{label,hz,hiHz?,mode,loop,
+ *   {"type":"sat_list", time, located, now, why?, source?:{orbits, transmitters?, via, fetched?, newestEpoch?}, sats:[{id,name,norad,note,age,ageState,tx:[{label,hz,hiHz?,mode,loop,
  *     consumer?,upHz?,ctcss?,note?,reach}],az?,el?,rangeKm?,lat?,lon?,passes:[{aos,tca,los,maxEl,aosAz,losAz}]}]}
  *   {"type":"sat", state:"OFF"|"ARMED"|"TRACK"|"COAST"|"ENDED", why?, shared?, id, name, norad, tx, loop, consumer?,
  *     nominal, offset, rate, trim, az, el, aos, los, maxEl, age, ageState, time}
@@ -23,13 +23,17 @@ export type SatLockState = 'OFF' | 'ARMED' | 'TRACK' | 'COAST' | 'ENDED';
 export interface SatTx {
   label: string; hz: number; hiHz?: number; mode: string; loop: string; consumer?: string;
   upHz?: number; ctcss?: number; note?: string; reach: boolean;
+  /** SatNOGS DB's word, via vibesdr.net's sats.json: "inactive" = listed but reported off. */
+  status?: 'active' | 'inactive';
 }
 export interface SatPass { aos: number; tca: number; los: number; maxEl: number; aosAz: number; losAz: number }
 export interface SatInfo {
   id: string; name: string; norad: number; note: string; age: number; ageState: string;
   tx: SatTx[]; az?: number; el?: number; rangeKm?: number; lat?: number; lon?: number; passes: SatPass[];
 }
-export interface SatList { time: string; located: boolean; now: number; why?: string; sats: SatInfo[] }
+/** Where the data came from — the credit the picker shows (CelesTrak's orbits; SatNOGS's transmitter data where used). */
+export interface SatSource { orbits: string; transmitters?: string; via: string; fetched?: number; newestEpoch?: number }
+export interface SatList { time: string; located: boolean; now: number; why?: string; source?: SatSource; sats: SatInfo[] }
 export interface SatReadout {
   state: SatLockState; why?: string; shared?: boolean;
   id?: string; name?: string; norad?: number; tx?: string; loop?: string; consumer?: string;
@@ -59,7 +63,8 @@ export function parseSatList(m: unknown): SatList | null {
         if (!label || hz == null || hz <= 0) continue;
         const hi = num(t.hiHz);
         tx.push({ label, hz, hiHz: hi != null && hi > hz ? hi : undefined, mode: str(t.mode, 12) ?? 'nfm', loop: str(t.loop, 8) ?? 'none',
-                  consumer: str(t.consumer, 20), upHz: num(t.upHz), ctcss: num(t.ctcss), note: str(t.note, 120), reach: t.reach === true });
+                  consumer: str(t.consumer, 20), upHz: num(t.upHz), ctcss: num(t.ctcss), note: str(t.note, 120), reach: t.reach === true,
+                  status: t.status === 'inactive' || t.status === 'active' ? t.status : undefined });
       }
     const passes: SatPass[] = [];
     if (Array.isArray(s.passes))
@@ -74,7 +79,11 @@ export function parseSatList(m: unknown): SatList | null {
                 az: az != null && az >= 0 && az <= 360 ? az : undefined, el: el != null && Math.abs(el) <= 90 ? el : undefined,
                 rangeKm: num(s.rangeKm), lat: num(s.lat), lon: num(s.lon), passes });
   }
-  return { time: str(o.time, 8) ?? 'none', located: o.located === true, now: num(o.now) ?? Date.now() / 1000, why: str(o.why, 200), sats };
+  const so = o.source as Record<string, unknown> | undefined;
+  const source: SatSource | undefined = so && typeof so === 'object' && str(so.orbits, 120)
+    ? { orbits: str(so.orbits, 120)!, transmitters: str(so.transmitters, 160), via: str(so.via, 20) ?? '', fetched: num(so.fetched), newestEpoch: num(so.newestEpoch) }
+    : undefined;
+  return { time: str(o.time, 8) ?? 'none', located: o.located === true, now: num(o.now) ?? Date.now() / 1000, why: str(o.why, 200), source, sats };
 }
 
 export function parseSatReadout(m: unknown): SatReadout | null {
@@ -197,4 +206,20 @@ export function skySvg(track: SatTrack | null, now?: { az?: number; el?: number 
     s += `<circle cx="${x.toFixed(3)}" cy="${y.toFixed(3)}" r="0.05" fill="currentColor"/>`;
   }
   return s + '</svg>';
+}
+
+/** ★ The picker's credit line (CelesTrak's data is theirs — say so, with its age): "Orbits: CelesTrak · 5 h old".
+ *  The age is from the mirror's CelesTrak fetch, else the newest element set's epoch. '' = nothing to credit yet. */
+export function satCreditText(l: SatList | null, nowSec: number): string {
+  if (!l?.source) return '';
+  const short = /CelesTrak/i.test(l.source.orbits) ? 'Orbits: CelesTrak' : l.source.orbits;
+  const at = l.source.fetched ?? l.source.newestEpoch;
+  if (at == null || !(at > 0)) return short;
+  const h = Math.max(0, (nowSec - at) / 3600);
+  const age = h < 1 ? 'under an hour old' : h < 48 ? `${Math.round(h)} h old` : `${Math.round(h / 24)} days old`;
+  return `${short} · ${age}`;
+}
+/** The SatNOGS credit, only when the transmitter data used it (CC BY-SA 4.0 asks for attribution). */
+export function satTxCreditText(l: SatList | null): string {
+  return l?.source?.transmitters && /SatNOGS/i.test(l.source.transmitters) ? 'Transmitters: SatNOGS DB (CC BY-SA 4.0)' : '';
 }
