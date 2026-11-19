@@ -2505,7 +2505,8 @@ function benchNotRunLabel(id) {
   const k = String(id || "");
   const names = { dab: "DAB+", adsb: "ADS-B", "spot_*": "Digital spots (every mode)", lk_wfm: "Locked range, per WFM listener",
                   auto_wfm: "AUTO bandwidth, added per WFM listener", rdsx_2048: "WFM + Advanced RDS", zoom_2048: "WFM + keep-sharp zoom",
-                  nfm_2048: "NFM", am_2048: "AM", ssb_2048: "SSB" };
+                  nfm_2048: "NFM", am_2048: "AM", ssb_2048: "SSB", dec_dab_bank: "DAB+: the wide-capture filter bank",
+                  dec_dab_mux: "DAB+: each multiplex in a wide capture" };
   if (names[k]) return names[k];
   let m = /^wfm_(\d+)$/.exec(k);
   if (m) return "WFM stereo @ " + (Number(m[1]) / 1000) + " MS/s";

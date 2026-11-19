@@ -568,6 +568,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── wide benchmark (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-bench-wide.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 the QUICK benchmark's DAB wide-capture rows go no faster than the radios here — an RTL: no filter bank, no 8 MS/s
+#     DDC; an RSP: the bank at its own top rate, never 56 MS/s (Stuart, 2026-11-19). Two whole quick runs (~several min).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" VIBE_DAB_CLIP="${VIBE_DAB_CLIP:-}" node scripts/test-server-bench-dab-rate.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A DAB request on a locked range is never dropped silently: a SHARED range at 2.048 MS/s refuses with the reason (and
 #    logs it); a one-listener range is honoured as before (2026-11-17).
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-lr-refuse.mjs; rc=$?

@@ -223,6 +223,12 @@ inline void settleCpu(double capSec) {
  *  the reason. Unset = every row (no radio configured, and every caller before this existed). */
 inline std::function<bool(const std::string&)>& rowSkipFn() { static std::function<bool(const std::string&)> f; return f; }
 inline bool rowSkipped(const std::string& id) { const auto& f = rowSkipFn(); return f && f(id); }
+/** ★★★ V12 THE FASTEST RATE A RADIO HERE OFFERS, or could be offered (Stuart, 2026-11-19: "I dont even
+ *  own a 56msps radio" — the DAB filter-bank row measured 56 MS/s on every box, a Pi 2 included, 83 % of an i5 core). The
+ *  DAB wide-capture rows measure up to this and no further, and cut nothing where it holds fewer than two Band III blocks
+ *  (vibe_bench_profiles.h dabBlocksAt). 0 = no radio configured.
+ *  runBenchmark sets it for the length of one run. -1 (unset) = the whole ladder to 56 MS/s (bench-server, the tests). */
+inline double& wideTopHz() { static double v = -1; return v; }
 
 /** Every decoder row. `seconds` scales the text/image rows; FT8 always runs one whole slot pair. */
 inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(const std::string&)>& step) {

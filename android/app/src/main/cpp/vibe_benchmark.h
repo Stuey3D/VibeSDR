@@ -401,7 +401,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         return !g.run;
     };
     benchdec::rowSkipFn() = [&hw](const std::string& id) { return !benchhw::gateRow(hw, id).run; };
-    struct SkipReset { ~SkipReset() { benchdec::rowSkipFn() = nullptr; } } skipReset;
+    struct SkipReset { ~SkipReset() { benchdec::rowSkipFn() = nullptr; benchdec::wideTopHz() = -1; } } skipReset;
     // The decoder rows' own ids, for the "not run" list (their runners skip them silently — the list is said here).
     for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora",
                             "dec_rttyauto", "dec_cw", "dec_cwskim", "dec_psk", "dec_pskskim", "dec_jtty", "dec_sitora", "dec_dsc",
@@ -418,6 +418,16 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         moreRowSteps = std::max(0, moreRowSteps);
     }
     const std::vector<double> wide = benchhw::wideRates(hw);
+    // ★★★ The DAB wide-capture rows go no faster than the fastest radio here (benchdec::wideTopHz), and cut nothing where
+    //     no radio's rate holds two Band III blocks — a Pi 2 with an RTL measures only what it can serve.
+    {
+        double top = 0;
+        for (const auto& r : hw.radios) { for (double v : r.rates) top = std::max(top, v); for (double v : r.wideCandidates) top = std::max(top, v); }
+        benchdec::wideTopHz() = top;
+        if (benchhw::gateRow(hw, "dab").run && benchprof::dabBlocksAt(top) < 2)
+            notRun.push_back({ "dec_dab_bank", hw.radios.empty() ? "not run — no radio set up yet"
+                                                                 : "not run — no radio here is fast enough to hold two DAB blocks" });
+    }
     // ★ The wide rows' steps: a full-radio row and three locked-range rows per rate.
     const int wideSteps = 4 * (int)wide.size();
     /* ★★★ V12 THE THREE LOCKED-RANGE PROFILES' RATES (vibe_bench_profiles.h profileRate — Stuart, 2026-11-18: "sample rate
