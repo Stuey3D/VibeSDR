@@ -42,7 +42,8 @@ of carrier, then 400 bit/s ±1 % biphase-L, phase modulation ±1.1 ± 0.1 rad, 1
 full from a public copy; the official library is cospas-sarsat.int).
 
 1. Decimate to ≈ 24 kHz (SIMD dot products, scalar twin bit for bit); a 3 s ring.
-2. **Find a burst:** a 2048-point Hann FFT every ~21 ms over ±10.5 kHz; a carrier LINE ≥ 14 dB over the median bin at a
+2. **Find a burst:** a 2048-point Hann FFT every ~21 ms over ±10.5 kHz; a carrier LINE ≥ 11 dB over the bins' 75th
+   percentile (a median among the empty outer bins of a narrower channel made every noise bin a line — found end to end) at a
    frequency with no line before. A line lasting > 1.2 s is a steady carrier and never decoded.
 3. **Work the burst as a block** (0.85 s later): the FFT frequency, refined by the slope of the carrier's phase across the
    burst. ★ **No loop:** biphase PM keeps cos(1.1) of the carrier in every bit (the two halves cancel the ±sin part), so a
@@ -70,7 +71,7 @@ codes (Table A4 / A5) and activation from the short message's non-protected bits
 
 | Suite | What | Result |
 |---|---|---|
-| `test-sarsat` (vibeserver/, `-O2`, header-only) | **T.001 Annex B**: B1's BCH-1 001011001010101001001, its Hex ID ADCD0 08004 40401, bits 25–112 56E68 04002 20200 96552 50, serial-user float-free EPIRB with homing; B2's BCH-2 0001 0101 0001 and its 43°32′ N 001°28′ E; BCH-1 1/2/3 errors 1000/1000 each, 4 errors never back to the sent word; BCH-2 1–2 errors 2000/2000, 3 never; 5 protocols round trip with positions; 36 bursts (25 / 48 / 64 kHz, −9…+7.5 kHz off the dial, 396 / 404 bit/s, ±1.0 / 1.2 rad, either sense) all exact; 40 dB-Hz 20/20, 37 dB-Hz 20/20, 34 dB-Hz 18/20 (0 wrong); a self-test labelled; three bursts 5 s apart; **an hour of noise: 0**; a steady, a keyed and unmodulated 520 ms carriers: 0; **200 beacon-shaped bursts of random bits: 0**; SIMD = scalar; cost | **27 / 0** |
+| `test-sarsat` (vibeserver/, `-O2`, header-only) | **T.001 Annex B**: B1's BCH-1 001011001010101001001, its Hex ID ADCD0 08004 40401, bits 25–112 56E68 04002 20200 96552 50, serial-user float-free EPIRB with homing; B2's BCH-2 0001 0101 0001 and its 43°32′ N 001°28′ E; BCH-1 1/2/3 errors 1000/1000 each, 4 errors never back to the sent word; BCH-2 1–2 errors 2000/2000, 3 never; 5 protocols round trip with positions; 36 bursts (25 / 48 / 64 kHz, −9…+7.5 kHz off the dial, 396 / 404 bit/s, ±1.0 / 1.2 rad, either sense) all exact; 40 dB-Hz 20/20, 37 dB-Hz 20/20, 34 dB-Hz 18/20 (0 wrong); a self-test labelled; three bursts 5 s apart; **an hour of noise: 0**; a steady, a keyed and unmodulated 520 ms carriers: 0; **200 beacon-shaped bursts of random bits: 0**; a channel cut to ±6.25 kHz (the one pipeline's NFM) 4/4, no false steady line; SIMD = scalar; cost | **28 / 0** |
 | `test-server-vorsar.mjs` | shared dial: the attach note; the EPIRB, the ELT and the self-test; **the owner: Hex ID, MMSI 232123456, position 50.71° N 1.34° W, G-ABCD; a listener's mirror: none of it, checked against everything it was sent**; the status JSON carries no identity; per-listener, nobody signed in: public line only | (in the 25 / 0) |
 | `test_navaids_app.ts` | the status, the note and owner-only rule in the hint, placement, both clients' keys, both setup screens | (in the 42 / 0) |
 
