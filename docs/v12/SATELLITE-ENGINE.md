@@ -1,7 +1,7 @@
 # BRIEF — Satellite Engine & Doppler Lock
 
 **Status:** V12 — parked 2026-10-07 (Stuart: "this is now a V12 feature when we build the decoders into the app and server"). Scoped; see "Review against the codebase" at the end before building.
-**Built 2026-11-19 (branch `v12-sat`):** the engine, the CelesTrak supply, the Doppler lock (listener channels and the shared dial), web / app / R36S UI, the decoder hook — see **"BUILT — 2026-11-19"** and **RESUME HERE** at the end. Synthetic tests only; **not yet tried on a real pass.**
+**Built 2026-11-19 (branch `v12-sat`):** the engine, the satellite data supply (since branch `v12-celestrak`: vibesdr.net's sats.json mirror, CelesTrak's usage policy point by point — §6.4), the Doppler lock (listener channels and the shared dial), web / app / R36S UI, the decoder hook — see **"BUILT — 2026-11-19"** and **RESUME HERE** at the end. Synthetic tests only; **not yet tried on a real pass.**
 **Targets:** VibeServer (all builds incl. VibeServerLite APK), VibeSDR app (iOS/Android), web client
 **Related:** `RADIO-ROLES.md`, `DECODERS-GALLERY.md`
 
@@ -117,7 +117,8 @@ Take 5–8 samples, keep the lowest-RTT one. Re-sample every few minutes. New me
 ## 6. Data: orbital elements & transmitter frequencies
 
 ### 6.1 Sources
-- **Orbits:** CelesTrak GP data, `GROUP=amateur` (plus weather group for Meteor), **OMM JSON format**.
+- **Orbits:** CelesTrak GP data, `GROUP=amateur` (plus weather group for Meteor) — fetched ONLY by the vibesdr.net
+  mirror, **OMM CSV** (CelesTrak's policy: CSV over JSON; see §6.4).
 - **Frequencies/modes:** SatNOGS DB transmitters API (downlink, mode, baud). Check licence and attribute (believed CC BY-SA — verify).
 
 > **TRAP — do not use TLE format.** 5-digit catalogue numbers ran out (July 2026); new objects have 6-digit numbers TLE cannot represent. Parse OMM JSON straight into SGP4.
@@ -170,6 +171,65 @@ Suggested shape:
 | > 14 days | Model disabled; curve-fit fallback only |
 
 ---
+
+### 6.4 CelesTrak's usage policy — how it is met (built 2026-11-19, branch `v12-celestrak`)
+
+> ★★★ **HARD RULE — 500 / 503 = STOP EVERYTHING FOR AT LEAST 15 MINUTES.** CelesTrak: *"HTTP 500 or 503 responses are
+> server errors, meaning the server is struggling under heavy load. All queries need to stop immediately to allow system
+> recovery for all users. All requests should stop for at least 15 minutes … otherwise the duration of the problem may be
+> extended for tens of thousands of users."* In our code: a 5xx, **and a network failure / timeout / reset** (the far end
+> may be overloaded), ends the round at once — no further group, no retry of the same request, no exponential retries
+> inside a round — and starts a hold of **≥ 15 min** (a constant no configuration can lower; ours is 6 h → 24 h on the
+> mirror, 1 h → 24 h on a server) that is **written to the shared state before anything else happens**, with a
+> provisional 15-min hold written **before** each round's first request (a crash or restart mid-fetch still honours it).
+> Nothing a listener does triggers a fetch. **Fleet-safe:** every server's resume time is its hold **plus its own random
+> 0–60 min**, and its daily check sits at its own random 0–4 h offset, so thousands of servers never return together;
+> the 30–330 s start-up delay stays.
+
+Policy: <https://celestrak.org/usage-policy.php> (read 2026-11-19; Stuart sent it "for our doppler correction
+integration"). **Decision (Stuart, brief §6.2 / §11 "fetch via vibesdr.net only"): VibeServers never ask CelesTrak.**
+The ONE CelesTrak client is the **sats.json mirror on vibesdr.net** — `directory/src/sats.js`, run by the directory
+Worker's Cron Trigger (`wrangler.jsonc` `triggers.crons = "23 */6 * * *"`), state in D1 (`migrations/0010-sats.sql`,
+table `sat_mirror`), served at **`GET https://vibeserver.vibesdr.net/api/sats`** (ETag / Last-Modified / `Cache-Control:
+public, max-age=3600`, 304 on a match) and **`GET /api/sats/status`** (the mirror's state for a person). Servers sync it
+like EiBi (`vibeserver/satcat.cpp`).
+
+| Policy point | Where | How |
+|---|---|---|
+| Use CSV, not JSON (≈3× larger); TLE answers errors and cannot carry 6-digit numbers | mirror | `FORMAT=csv`, never `tle` (a 301 to a TLE query is refused); CSV parsed by header name, any column order, RFC 4180 quotes, catalogue numbers 1–999 999 999 |
+| gzip / brotli | mirror | `accept-encoding: gzip, br`; Workers' `fetch()` decodes transparently. ★ One manual request on 2026-11-19 (`GROUP=amateur&FORMAT=csv`, Accept-Encoding gzip) came back **uncompressed** (`content-length: 15284`, no `content-encoding`) — CelesTrak's dynamic `gp.php` may not compress; nothing more we can do |
+| Download only when needed, once per update (GP every 2 h) | mirror + servers | one mirror for every server; a round every 6 h and refused within 5 h of the last; two groups (amateur, weather) + SatNOGS daily. Servers ask only while a radio in the process reaches a listed downlink (`LocalSdrShim::satWanted`) and only once a day (conditional GET → 304) |
+| Any non-200: stop, report to a person, do not keep retrying | mirror (servers too) | the round ends at the first non-200; one log line (`{"sats_mirror":…,"message":…}`) and the persisted state at `/api/sats/status` (Workers logs are sampled at 10 % — the status page is the reliable record); servers: the owner's words on the setup page (`satStatus.message`) and in the log once |
+| 301: update the URL, re-requesting the old one won't clear it | mirror | the old URL is never asked again (`moved` persisted); the new location is used next round only if it is https CelesTrak and not a TLE query — else that group is dead until a software update |
+| 404: remove the URL | mirror | `dead` persisted, keyed to `MIRROR_VERSION` — cleared only by a software update (a version bump) |
+| 403: abuse / temporary block | mirror | hold 24 h → 48 h → … 7 days |
+| 500 / 503: stop all, ≥ 15 min | mirror + servers | the hard rule above (`HOLD_5XX_MIN_SEC = 900`; `vssat::kHoldFloorSec = 900`, static-asserted) |
+| NAT'd organisations: one caching proxy | — | that IS the mirror: one client, CelesTrak sees one Cloudflare egress, not thousands of carrier-CGNAT addresses |
+| Never replace good data with a bad answer | mirror + servers | each group's last good sets kept (D1 `omm:<group>`); sats.json rebuilt from good copies; a 200 that is not GP CSV / not sats.json is a failure |
+| Attribution | picker (web, app, R36S) | sats.json `attribution`; sat_list `source` → **"Orbits: CelesTrak · 5 h old"** (+ "Transmitters: SatNOGS DB (CC BY-SA 4.0)" — SatNOGS DB's data licence) |
+| User-Agent | mirror + servers | `VibeSDR-sats-mirror/1 (+https://vibesdr.net)`; servers `VibeServer/<version> (satellite data; +https://vibesdr.net)` — no personal data, no e-mail |
+
+**SatNOGS DB** (`https://db.satnogs.org/api/transmitters/?format=json`, CC BY-SA 4.0, daily, the same stop-on-non-200
+rules with its own hold): it can only mark a curated downlink `status:"inactive"` (shown INACTIVE in the pickers) and
+move a downlink the curated list marks `"follow":"mode"` (Meteor's LRPT — the §6.2 TRAP) to SatNOGS's one alive
+transmitter of that mode in 136–138 MHz. The curated list (`directory/src/sats-curated.json`) stays the authority on
+which birds and transmitters are offered; the server's built-in copy for a first boot offline is `curatedCatalogue()`
+(`test-sat-engine` §9 fails if the two drift).
+
+**sats.json** (format 1): `{format, generated, attribution:{orbits, transmitters}, licence, orbits:{<group>:{fetched}},
+satellites:[{id, name, norad, group, note, omm:{…CelesTrak OMM…}, transmitters:[{label, downlink, downlinkHigh?, mode,
+loop, consumer?, baud?, uplink?, ctcss?, note?, status?, follow?}]}]}`. `norad` is a plain integer (six digits and more
+are normal now — 101095 ERMINAZ-2V). The engine (`parseSats` / `Engine::loadSats`) refuses an unknown format, a bad id,
+a fractional or > 9-digit catalogue number; skips a transmitter with an unknown mode/loop; a running lock follows its
+bird and transmitter across a reload.
+
+**A server** (`satcat.cpp`): `<data>/sat/sats.json` + `sync-state` + `sync.lock` (flock) in the machine's data dir —
+one fetch for every radio process, the others pick the new copy up by its mtime. Daily by the copy's last check (never
+uptime) at the machine's own 0–4 h offset; ≥ 1 h between any two attempts; a conditional GET; curl `-sS --compressed`,
+no `-L`, no `--retry`. Failure → hold (1 h doubling to a day, ≥ 15 min, + random 0–60 min), the last good copy kept;
+no copy at all → SAT greyed "NO SAT DATA — this server could not reach vibesdr.net for the satellite data". **No
+fallback to CelesTrak.** Old `gp-<group>.json` caches (v12 builds that asked CelesTrak directly) are published only
+while there is no sats.json.
 
 ## 7. Location
 
@@ -324,7 +384,8 @@ CPU cost: SGP4 at 10 Hz + NCO offset + FLL — well under 1 % on a Pi Zero.
 |---|---|---|---|
 | SGP4/SDP4, TLE (checksums, Alpha-5) + OMM JSON, observer, look angles, range rate, Doppler, passes | `android/app/src/main/cpp/vibe_sat_orbit.h` | `test-sat-orbit` 122/122 | the paper's verification set exact; Skyfield agreement |
 | The curated birds, element ages, the lock, the FLL, the decoder hook | `vibe_sat_engine.h` | `test-sat-engine` 74/74 | |
-| CelesTrak GP cache (per machine, etiquette) | `vibeserver/satcat.{h,cpp}`, `main.cpp` | `test-satcat` 23/23 | |
+| sats.json mirror (the only CelesTrak client) | `directory/src/sats.js`, `sats-curated.json`, `migrations/0010-sats.sql` | `directory/scripts/test-sats.mjs` 52/52 | NOT deployed |
+| sats.json sync (per machine, EiBi-like) | `vibeserver/satcat.{h,cpp}`, `main.cpp` | `test-satcat` 43/43 | |
 | Server wiring (NCO shift, tracker, messages, hwinfo, gates) | `local_sdr_shim.cpp` (search `[sat]` / `satControl`) | `scripts/test-server-sat.mjs` 33/33 | |
 | Shared words / parsers for both clients | `src/services/satellites.ts` | `scripts/test_satellites_app.ts` all pass | |
 | Web: SAT in the mode menu + the decoder panel's radio keys, the panel, the chan text, the needle | `web/client/src/satellites.ts`, `main.ts`, `mobile.ts`, `spectrum.ts` | `scripts/test-web-sat.mjs` 14/14 (headless Edge, muted, desktop + 390 px) | |
@@ -360,15 +421,11 @@ Sources: AMSAT's live FM and "Live Linear Satellites" (2026-02-21) pages, CelesT
 2025 (NOAA's POES archive notice; APT off); AO-91 (end of mission); SO-125 (SatNOGS says re-entered, AMSAT a 2026
 designation — disputed); TEVEL-2 (downlinks not confirmed); CAS-4A / XW-2 (re-entered); QO-100 (geostationary).
 
-### TLE supply (`satcat.cpp`)
+### Satellite data supply (`satcat.cpp` ← `directory/src/sats.js`)
 
-CelesTrak `gp.php?GROUP=<g>&FORMAT=json` for `amateur` and `weather`, cached at `<data>/sat/gp-<group>.json` (the
-machine's data dir: every radio process shares it). **The cache's age decides (12 h), never uptime; one attempt marker
-per machine (`last-attempt`), no fetch within 2 h of ANY attempt; the first non-200 stops the round (later groups not
-asked) and backs off 6 h → 12 h → 24 h; a 200 that is not GP JSON (a captive portal, "No GP data found") or over 2 MB
-never replaces the cache; 30–330 s of jitter before the first fetch after start-up.** The cache is published at start
-whatever its age; the engine says how old (STALE 3–7 d, ELEMENTS n d 7–14 d) and refuses past 14 days. curl, `-A
-VibeServer` (no owner details).
+Replaced on branch `v12-celestrak` (2026-11-19): servers sync vibesdr.net's sats.json; the mirror is the only CelesTrak
+client — see **§6.4** for the policy, point by point, and the hard 5xx rule. (Before: each server asked CelesTrak for
+`FORMAT=json` itself.)
 
 ### The Doppler lock (`local_sdr_shim.cpp`)
 
@@ -428,8 +485,8 @@ config.vfo       the NOMINAL while locked; where the channel was after LOS / unl
   shared dial hears the corrected audio but its needle sits on the nominal (up to 10 kHz off the trace).
 - **§9 "a tune > 15 kHz from the current ACTUAL frequency"** — measured from the NOMINAL (the dial every current client
   shows and re-sends).
-- **§6.2 the vibesdr.net mirror + SatNOGS + `sats.json`** — not built; the server asks CelesTrak itself under the rules
-  above, and the transmitters are the curated list in code. `sats.json` is phase 2.
+- **§6.2 the vibesdr.net mirror + SatNOGS + `sats.json`** — BUILT on `v12-celestrak` (§6.4), **NOT DEPLOYED** (see RESUME
+  HERE — the mirror). SatNOGS is used narrowly (status + Meteor's follow), not as the source of the list.
 - **§5.2 the client time offset (ping/pong), §4.3 curve-fit fallback, §7 field-mode location from the app** — not built.
 - **§10 bookmarks storing "nominal + track satellite flag"** — bookmarks store the nominal (the dial) already; the flag
   is not stored.
@@ -441,13 +498,34 @@ config.vfo       the NOMINAL while locked; where the channel was after LOS / unl
    COAST between overs and re-centred at the next, no clicks at lock start (the one channel rebuild) and none during,
    LOS freezes the dial. Then a linear pass (RS-44) in USB. The brief's §13.1 (SDR Console side by side, ±50 Hz) is
    the reference test.
-2. **Android Lite / the app's own server** get no orbit data yet (satcat is the desktop daemon's curl): the app
-   should fetch CelesTrak (same rules) and hand it in with `LocalSdrShim::satLoadOmm(group, json)` — or phase 2's
-   vibesdr.net `sats.json`. Until then those servers show SAT greyed "NO SAT DATA".
+2. **Android Lite / the app's own server** get no satellite data yet (satcat is the desktop daemon's curl): the app
+   should fetch `https://vibeserver.vibesdr.net/api/sats` (never CelesTrak; daily, conditional, the same hold rules) and
+   hand it in with `LocalSdrShim::satLoadSats(json)` (needs a JNI/bridge method — not written). The same call lets the
+   app hand sats.json (~10 KB) to a server with no internet (brief §6.2) — a small `POST /vibeserver/sats` (admin) would
+   do it; not built. Until then those servers show SAT greyed "NO SAT DATA", and ServerModeScreen shows nothing about
+   satellite data (there is no supply on a phone server to report on).
 3. **The web page header** (`android/app/src/main/cpp/vibe_web_page.h`) was NOT committed (generated): run
    `node scripts/build-web.mjs` after merging, then rebuild the server, before `test-web-sat.mjs`.
 4. Phase 2 items above (sats.json mirror, client time, curve fit, field mode, the bookmark flag); a satellite glyph for
    the mode icons (none drawn now); `doppler: 2` when linear transponders get uplink-aware handling.
+
+### RESUME HERE — the mirror (branch `v12-celestrak`)
+
+**NOT DEPLOYED** (outward-facing; Stuart is asked first). Built and tested: `directory/scripts/test-sats.mjs` 52/52 (a
+real SQLite D1 shim, a fake CelesTrak + SatNOGS: every status path, the ≥ 15-min hold on disk before the request,
+never-overwrite-good, 301/404/403, ETag/304); `npx wrangler@4.45.0 deploy --dry-run` bundles (the JSON import of the
+curated list, `scheduled()`). Deploy steps for the coordinator, in order, from `directory/`:
+
+1. `npx wrangler d1 execute vibesdr-directory --remote --file migrations/0010-sats.sql`
+2. `npx wrangler deploy` (adds the `23 */6 * * *` cron and the `/api/sats` routes to the existing Worker)
+3. Do NOT run the cron by hand repeatedly — one round asks CelesTrak twice (amateur, weather) and SatNOGS once. The first
+   round happens at the next :23 past 0/6/12/18 UTC. Then check `https://vibeserver.vibesdr.net/api/sats/status`
+   (`lastError` empty, both groups with `fetched`) and `curl -sI https://vibeserver.vibesdr.net/api/sats` (200, ETag).
+4. Only then ship a VibeServer with this `satcat.cpp`: until the mirror answers, servers get 503 (held ≥ 15 min + jitter,
+   then 1 h → 24 h) and keep whatever they had.
+
+Regenerate the server fixtures after editing the curated list: `node directory/scripts/build-sats-fixture.mjs` (no
+network), then keep `curatedCatalogue()` in step (`test-sat-engine` §9 checks).
 
 ### RESUME HERE — the decoder hook (for v12-lrpt and v12-ax25hs)
 
@@ -475,7 +553,8 @@ change on orbit: read `consumer`/`downlinkHz` from the view, never hard-code 137
 ### Open decisions for Stuart
 
 - The R36S readout sits over the waterfall above the VTS (the 640 px deck has no room beside the digits) — right place?
-- CelesTrak direct (with the rules above) until a vibesdr.net mirror exists — OK, or hold the feature until the mirror?
+- The mirror: deploy it (steps in RESUME HERE — the mirror)? SatNOGS used only for status + Meteor's follow — OK, or
+  no SatNOGS at all (then no CC BY-SA share-alike on sats.json)?
 - The nominal stays in `config.vfo` (old apps' needle sits on the nominal) — accept, or report the actual as the brief says?
 - An owner switch for satellites on the setup page (none now: one button, no settings, and no decoder CPU to protect)?
 - Curated list entries flagged uncertain: PO-101 (scheduled), AO-7 (sunlight only), FO-29 (power-permitting), Meteor-M2-4's
