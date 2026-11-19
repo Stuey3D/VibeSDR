@@ -17,6 +17,7 @@
 //   7. CPU: AUTO on signal + noise against real time.
 //   Tools: `test-dvsig clip OUT.cu8 [rate=288000] [sec=30] [cn=20]` writes the server bench clip (one transmission of
 //          every system in turn, at +25 kHz) — scripts/test-server-dvsig.mjs replays it through a fake rtl_tcp.
+//          `test-dvsig sweep [trials=10]` prints the sensitivity table in docs/v12/DV-SIGNALLING.md.
 #include "vibe_dvsig_tx.h"
 
 #include <chrono>
@@ -401,7 +402,33 @@ static int writeClip(const char* path, int rate, double sec, double cn) {
     return 0;
 }
 
+/** `test-dvsig sweep [trials]`: per system, how many trials decode the identity, by C/N (9 kHz) — the doc's table. */
+static int sweep(int trials) {
+    std::printf("C/N in 9 kHz, %d trials a point: identity decoded (DMR: src+TG; YSF / D-STAR: the source callsign; NXDN: unit+group; dPMR: both IDs)\n", trials);
+    std::printf("%6s %6s %6s %6s %6s %6s %6s\n", "C/N", "DMR", "DMR al", "YSF", "D-STAR", "NXDN48", "dPMR");
+    for (double cn : {6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 20.0}) {
+        int n[6] = {};
+        for (int t = 0; t < trials; ++t) {
+            const uint32_t sd = uint32_t(1000 * cn + t);
+            tx::DmrCall c; c.alias = "G4ABC Stuart"; c.superframes = 6;
+            { const Run r = decode(tx::dmrIq(c, true, sd), cn, sd + 1); const d::Entry* e = find(r, d::Sys::Dmr, "voice");
+              if (e && e->src == c.src && e->dst == c.dst) ++n[0]; if (e && e->alias == c.alias) ++n[1]; }
+            tx::YsfCall y; y.frames = 16;
+            { const Run r = decode(tx::ysfIq(y, sd), cn, sd + 2); const d::Entry* e = find(r, d::Sys::Ysf); if (e && e->from == "G4ABC") ++n[2]; }
+            tx::DstarCall ds; ds.frames = 42;
+            { const Run r = decode(tx::dstarIq(ds, sd), cn, sd + 3); const d::Entry* e = find(r, d::Sys::Dstar); if (e && e->from == "G4ABC/ID51") ++n[3]; }
+            tx::NxdnCall nx;
+            { const Run r = decode(tx::nxdnIq(nx, sd, false), cn, sd + 4); const d::Entry* e = find(r, d::Sys::Nxdn); if (e && e->src == nx.src && e->dst == nx.dst) ++n[4]; }
+            tx::DpmrCall pm;
+            { const Run r = decode(tx::dpmrIq(pm, sd), cn, sd + 5); const d::Entry* e = find(r, d::Sys::Dpmr); if (e && e->src == pm.own && e->dst == pm.called) ++n[5]; }
+        }
+        std::printf("%4.0f dB %6d %6d %6d %6d %6d %6d\n", cn, n[0], n[1], n[2], n[3], n[4], n[5]);
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "sweep") return sweep(argc > 2 ? std::atoi(argv[2]) : 10);
     if (argc > 2 && std::string(argv[1]) == "clip") return writeClip(argv[2], argc > 3 ? std::atoi(argv[3]) : 288000, argc > 4 ? std::atof(argv[4]) : 30, argc > 5 ? std::atof(argv[5]) : 20);
     const bool quick = std::getenv("VIBE_DVSIG_QUICK") != nullptr;
     std::printf("DV signalling — correlators %s; Viterbi %s\n", d::simdName(), vibe::m17::acsName());
