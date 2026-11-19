@@ -148,10 +148,10 @@
 #include "vibe_rs41_service.h"   // ★★ V12 RS41 RADIOSONDES — the SONDES whole-radio mode (docs/v12/RS41.md)
 #include "vibe_sat_engine.h"     // ★★ V12 SATELLITE ENGINE — orbits, passes and the Doppler lock (docs/v12/SATELLITE-ENGINE.md)
 /** ★★ V12 the one satellite engine of this process (curated birds, element sets, the server's sky, every lock). */
-static vibe::sat::Engine& satEngine() { static vibe::sat::Engine e; return e; }
+static vibe::sat::Engine& satEngine() { return vibe::sat::engine(); }   // ★ the header's singleton: decoders reach it too
 /** ★ The engine reads the corrected UTC FT8 reads (brief §5), and whether SNTP has measured it. */
 static vibe::sat::Clock satClock() { return vibe::sat::Clock{vibe::vibeUtcNow(), vibe::clockMeasured().load(std::memory_order_relaxed)}; }
-static const char* const kSatShared = "\x01shared";   // ★ the shared dial's lock key (a session id never starts with \x01)
+static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared dial's lock key (vibe_sat_engine.h)
 #include "vibe_ais_store.h"     // ★★ V12 2026-11-02 the ship store in the shared gallery (the SHIPPING MAP, docs/v12/SHIPPING-MAP.md)
 #include "vibe_aprs.h"           // ★ V12 APRS — the region's frequency for the capability (the decoder itself: vibe_decoder_host.h)
 #include "vibe_station_log.h"   // ★ V12 AIS + APRS in the gallery — the day's messages + a summary card of stations

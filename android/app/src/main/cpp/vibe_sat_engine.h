@@ -688,4 +688,51 @@ private:
     std::map<std::string, Lock> locks_;
 };
 
+// ── ★★ THE HOOK FOR DECODERS (docs/v12/SATELLITE-ENGINE.md "RESUME HERE — the decoder hook") ─────────────────────────
+/** The process's one engine (the shim's lock, the server's sky). Any translation unit may call it. */
+inline Engine& engine() { static Engine e; return e; }
+/** The shared dial's lock key (a session id never starts with \x01). Per-listener locks are keyed by the session id. */
+constexpr const char* kSharedKey = "\x01shared";
+
+/** What a decoder needs to know about the satellite its listener is on.
+ *  ★★ TWO DIFFERENT DOPPLERS — read the right one:
+ *   · `inChannelHz` is ALREADY APPLIED in the listener's channel NCO (the lock moves it 25 times a second). A decoder fed
+ *     from that listener's CHANNEL IQ (clientIqCb — "the dial at DC") sees the signal at DC ± the residual only: it must
+ *     NOT correct again. (On `costas` downlinks the engine's trim is 0, so inChannelHz == modelHz: the demodulator's own
+ *     carrier loop takes the residual.)
+ *   · `modelHz` (+ `rateHzS`) is the prediction for `downlinkHz` now. A decoder cutting its OWN slice of the capture at
+ *     the nominal (feedSkimFromBins-style, off the shared forward FFT) must apply it itself — feed-forward into its NCO,
+ *     with the rate for its timing loop. */
+struct DecoderView {
+    bool on = false;                 // a lock (TRACK / COAST) is running for this listener or the shared dial
+    std::string state;               // "TRACK" | "COAST" | "ARMED" | "ENDED" | "" (none)
+    long long norad = 0;
+    std::string satId, satName, txLabel, consumer, loop;   // consumer: "lrpt", "ax25-9600", "ax25-1200", "bpsk-telemetry", ""
+    double downlinkHz = 0;           // the nominal (the dial)
+    double inChannelHz = 0;          // the shift the channel already carries (see above)
+    double modelHz = 0, rateHzS = 0; // the model's Doppler at downlinkHz now, and its rate
+    double elDeg = -90, azDeg = 0, rangeKm = 0;
+    double aos = 0, los = 0;         // the pass (UTC Unix seconds)
+    double ageDays = -1;             // the element set's age (the model is refused past 14 days)
+};
+/** The listener `session`'s lock, else the shared dial's, else nothing (`on` false). ★ Cheap (a map look-up under the
+ *  engine's mutex, no SGP4): call it per block if you like. The values are the tracker's last tick (≤ 40 ms old). */
+inline DecoderView decoderView(const std::string& session) {
+    Track t = engine().selected(session);
+    if (t.state == LockState::Off) t = engine().selected(kSharedKey);
+    DecoderView v;
+    if (t.state == LockState::Off) return v;
+    v.state = lockName(t.state);
+    v.on = t.state == LockState::Track || t.state == LockState::Coast;
+    v.norad = t.norad; v.satId = t.satId; v.satName = t.satName; v.txLabel = t.txLabel; v.consumer = t.consumer; v.loop = t.loop;
+    v.downlinkHz = t.nominalHz; v.inChannelHz = v.on ? t.shiftHz : 0.0; v.modelHz = t.modelHz; v.rateHzS = t.rateHzS;
+    v.elDeg = t.elDeg; v.azDeg = t.azDeg; v.rangeKm = t.rangeKm; v.aos = t.aos; v.los = t.los; v.ageDays = t.ageDays;
+    return v;
+}
+/** The model alone, for any listed bird at any frequency and time — a decoder that runs WITHOUT a listener's lock (a
+ *  gallery capture of a Meteor pass, a background decoder). false = not listed / no elements / no location. */
+inline bool dopplerNow(long long norad, double hz, double unixUtc, double& dopplerHz, double& rateHzS, double* elDeg = nullptr) {
+    return engine().dopplerFor(norad, hz, unixUtc, dopplerHz, rateHzS, elDeg);
+}
+
 }}  // namespace vibe::sat

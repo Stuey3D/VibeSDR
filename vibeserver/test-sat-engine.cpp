@@ -249,6 +249,34 @@ static void s6(const std::string& dir) {
     CHECK(!e->dopplerFor(12345, 137.9e6, t0, dz, rz), "hook: an unlisted bird is refused");
 }
 
+static void s8(const std::string& dir) {
+    std::printf("§8 the decoder hook (decoderView / dopplerNow on the process's engine)\n");
+    Engine& g = engine();
+    g.loadOmm(readFile(dir + "/celestrak-weather-2026-11-19.json"));
+    g.loadOmm(readFile(dir + "/celestrak-amateur-2026-11-19.json"));
+    g.setObserver(kSaoLat, kSaoLon);
+    DecoderView none = decoderView("nobody");
+    CHECK(!none.on && none.state.empty(), "no lock: nothing");
+    // an LRPT listener: find a time Meteor-M2-3 is up over São Paulo
+    double t = kIssTca, el = -90, dz = 0, rz = 0;
+    for (double x = kIssTca; x < kIssTca + 86400 && el < 20; x += 30) { dopplerNow(57166, 137.9e6, x, dz, rz, &el); t = x; }
+    CHECK(el >= 20, "Meteor-M2-3 rises over São Paulo within a day (el %.1f)", el);
+    Track tr = g.start("lrpt-listener", "o", 137.9e6, "nfm", Clock{t, true}, 57166);
+    g.tick("lrpt-listener", Clock{t + 0.04, true});
+    DecoderView v = decoderView("lrpt-listener");
+    CHECK(v.on && v.norad == 57166 && v.consumer == "lrpt" && v.loop == "costas" && v.downlinkHz == 137.9e6,
+          "the LRPT listener's view: %s %s %s %.0f (%s)", v.satName.c_str(), v.consumer.c_str(), v.loop.c_str(), v.downlinkHz, tr.why.c_str());
+    CHECK(std::fabs(v.inChannelHz - v.modelHz) < 1e-6, "costas: the channel carries the model alone (trim 0)");
+    double d2, r2; dopplerNow(57166, 137.9e6, t + 0.04, d2, r2);
+    CHECK(std::fabs(v.modelHz - d2) < 1.0 && std::fabs(v.rateHzS - r2) < 1.0, "the view's model = dopplerNow (%.1f vs %.1f Hz)", v.modelHz, d2);
+    CHECK(decoderView("another").on == false, "another listener's view is empty");
+    g.start(kSharedKey, "o", 437.8e6, "nfm", Clock{kIssTca, true}, 25544);
+    g.tick(kSharedKey, Clock{kIssTca + 0.04, true});
+    CHECK(decoderView("another").norad == 25544, "…unless the shared dial is locked: everyone sees it");
+    g.stop(kSharedKey); g.stop("lrpt-listener");
+    CHECK(!decoderView("lrpt-listener").on, "stopped");
+}
+
 static void refLag(const float* iq, int n, float prev[2], LagSums& acc) {
     float hr = sumOfProducts(iq[0], prev[0], iq[1], prev[1]), hi = diffOfProducts(iq[1], prev[0], iq[0], prev[1]);
     float hp = sumOfProducts(iq[0], iq[0], iq[1], iq[1]), h4 = squared(hp);
@@ -294,7 +322,7 @@ int main(int argc, char** argv) {
     std::string dir = "vibeserver/testdata-sat";
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--data" && i + 1 < argc) dir = argv[++i];
     if (readFile(dir + "/celestrak-amateur-2026-11-19.json").empty()) { std::printf("data missing\n"); return 3; }
-    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7();
+    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
