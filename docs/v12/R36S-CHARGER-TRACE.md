@@ -11,6 +11,14 @@ lines. Also odd: after one plug-in the port read 0 V, then 1.84 V for ~95 s, wit
 Since then (Stuart): a different cable gives a LOWER port voltage but an input current that matches what his power bank
 says it delivers — the cable is in play.
 
+Later (Stuart, 2026-11-19 evening): the long Anker cable is the best (4.76 V at plug-in, 4.91 V at full). A session
+with three cables had no drops, so it is not the cable. Both sessions used the same sequence: this unit will NOT power
+on with the cable in (open item, not investigated), so the cable goes in during the loading screen. The difference:
+the failing session started at 100 % (4.185 V, still taking ~0.40 A, the last top-up); the good one started at 97 %
+(4.17 V, 0.63 A) and charged on through Full at ~650 s with no drops. So the repro starts at 100 %. Also in the
+h79 log: the 1 s check found CHRG_IN = 0xC8 (4.4 V floor, 450 mA) at 43.5 s, just before a plug-out at 43.6 s. It
+was put back to 0xDD; probably the PMIC resetting as the cord came out, but the fast trace will show it if not.
+
 Hypotheses: (1) the dongle's start-up surge pulls the input under the 4.5 V floor; the charger throttles and near full
 the PMIC does not supplement from the battery fast enough. (2) With the charger online, the OTG port's VBUS comes from
 the charger input, not the battery boost (~4.8 V less drops — marginal for the V4).
@@ -56,6 +64,9 @@ the charger input, not the battery boost (~4.8 V less drops — marginal for the
   every 30 s summary ("sampler x.x % of a core").
 
 ## RESUME HERE
+- The repro (HOW TO TEST h80): start at 100 % (still topping up), power on without the cable, plug it in during the
+  loading screen, tune a strong FM station. With the cord in at hwd start, "the cord was already in at start-up — the
+  PMIC as found" is the state BEFORE our 0xDD write, followed by a START-UP burst.
 - Read Stuart's next log: `chgtrace#N DROP` bursts. In the 2 s before a drop, look at the port volts (USB_VOL), CLAMP,
   and the battery current turning negative. Compare with the INPUT FLOOR setting and the cable he names. If the port
   never sags and the clamp never shows, hypothesis 1 is out; look at VBUS (hypothesis 2: boost vs pass-through, which
