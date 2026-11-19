@@ -100,6 +100,11 @@ inline const std::vector<Entry>& table() {
         //   HF — any of 2–30 MHz will do (the decoder reads whatever lands on the dial).
         v.push_back({ "ale", "ALE", "is on HF (2\xe2\x80\x93" "30 MHz)", { band(2e6, 30e6) } });
         v.push_back({ "balloon", "Balloons", "is on 70 cm (430\xe2\x80\x93" "440 MHz, the 434 MHz payload band)", { band(430e6, 440e6) } });
+        // ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): VORs and localisers on 108–117.975 MHz, glideslopes on 328.6–335.4 MHz.
+        v.push_back({ "vor", "VOR / ILS", "is on 108\xe2\x80\x93" "118 MHz (VOR, ILS localiser) and 328.6\xe2\x80\x93" "335.4 MHz (glideslope)",
+            { band(108.0e6, 117.975e6), band(328.6e6, 335.4e6) } });
+        // ★ V12 COSPAS-SARSAT (docs/v12/SARSAT.md): first-generation distress beacons, 406.0–406.1 MHz.
+        v.push_back({ "sarsat", "406 MHz beacons", "is on 406.0\xe2\x80\x93" "406.1 MHz", { band(406.0e6, 406.1e6) } });
         return v;
     }();
     return t;

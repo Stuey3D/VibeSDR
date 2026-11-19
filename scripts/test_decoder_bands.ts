@@ -34,8 +34,11 @@ for (const id of WHOLE_RADIO_IDS) ok(!!modeIconFor(id), `${id} has a glyph`);
 // ★ V12: UHF holds BALLOONS (a VibeServer whose radio reaches 70 cm) and PAGING (Android local hardware — the key exists
 //   only on the phone's own radio), so a client offered neither still never draws the tab (decBands keeps a band only when
 //   one of its keys is present).
-ok(DECODER_PLACES.uhf.map((g) => `${g.group}:${g.ids.join('+')}`).join() === 'amateur:balloon+tones,paging:paging',
-   'UHF holds only BALLOONS, DTMF / 5-TONE and PAGING (ADS-B and ISM tune the radio) — no UHF tab where none is offered');
+ok(DECODER_PLACES.uhf.map((g) => `${g.group}:${g.ids.join('+')}`).join() === 'aviation:vor,maritime:sarsat,amateur:balloon+tones,paging:paging',
+   'UHF holds only VOR / ILS (the glideslope), 406 BEACONS, BALLOONS, DTMF / 5-TONE and PAGING (ADS-B and ISM tune the radio) — no UHF tab where none is offered');
+ok(bandsOfDecoder('vor').join() === 'vhf,uhf' && bandsOfDecoder('sarsat').join() === 'uhf', 'VOR / ILS in VHF (VOR, localiser) and UHF (glideslope); 406 BEACONS in UHF');
+ok(decoderNear('vor', 113.6e6) && decoderNear('vor', 332.6e6) && !decoderNear('vor', 145e6) && decoderNear('sarsat', 406.037e6) && !decoderNear('sarsat', 433e6),
+   'VOR / ILS near 108–118 and 329–335 MHz; 406 BEACONS near 406.0–406.1 MHz');
 ok(bandsOfDecoder('tones').join() === 'vhf,uhf', 'DTMF / 5-TONE in VHF and UHF (2 m and 70 cm repeaters, PMR)');
 ok(DECODER_PLACES.vhf.some(g => g.group === 'paging' && g.ids.includes('paging')), 'VHF has the Paging group (PAGE)');
 ok(bandsOfDecoder('spots').join() === 'hf,vhf', 'DIGITAL SPOTS HF and VHF (6 m / 2 m)');

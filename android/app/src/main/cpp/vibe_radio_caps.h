@@ -64,6 +64,8 @@ inline const std::vector<const char*>& allModes() {
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
         "balloon",          // ★ V12 balloons (docs/v12/BALLOONS.md): a listener's decoder on USB, 70 cm
         "tones",            // ★ V12 DTMF + 5-tone selcall (docs/v12/TONES.md): a listener's decoder on NFM / AM, any frequency
+        "vor",              // ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a listener's decoder on the channel IQ, 108–118 / 329–335 MHz
+        "sarsat",           // ★ V12 406 MHz beacons (docs/v12/SARSAT.md): a listener's decoder on the channel IQ, 406.0–406.1 MHz
         "ale",              // ★ V12 2G HF ALE (docs/v12/HF-DATA.md): a listener's decoder on USB, HF
     };
     return v;
@@ -212,7 +214,7 @@ inline Caps compute(const Facts& f) {
         if (id == "rtty" || id == "mfsk" || id == "hell" || id == "ale") return hf;   // ★ ALE: 2G nets live 2–30 MHz
         if (id == "sstv" || id == "ft8" || id == "spots") return anyAmateur;
         if (id == "spotsband") return !icom && anyAmateur;                 // ★ Band reads IQ across a band
-        if (vibereach::entry(id)) return tableOk(id.c_str());             // navtex dsc same selcal aprs cw psk jtty balloon
+        if (vibereach::entry(id)) return tableOk(id.c_str());             // navtex dsc same selcal aprs cw psk jtty balloon vor sarsat
         return true;
     };
     for (const char* id : allModes()) if (can(id)) c.modes.push_back(id);

@@ -3527,6 +3527,12 @@ const BLOCKABLE = [
    *  default): 5-tone digits off the amateur bands, shown to the owner's own signed-in sockets only. */
   { id: "tones", label: "DTMF and 5-tone selective calling" },
   { id: "tones+digits", label: "5-tone: show the called numbers off the amateur bands (to you only)", parent: "tones", on: true },
+  /* ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR's radial, an ILS localiser's / glideslope's deviation, the ident and the
+   *  published station, from a listener's channel on 108–118 / 329–335 MHz. */
+  { id: "vor", label: "VOR bearing and ILS deviation" },
+  /* ★ V12 COSPAS-SARSAT (docs/v12/SARSAT.md): 406 MHz distress beacons (mostly tests). Listeners see that a beacon was
+   *  heard; its identity and encoded position go to you only. Real alerts are handled by the authorities, not by us. */
+  { id: "sarsat", label: "406 MHz distress beacons (COSPAS-SARSAT)" },
   /* ★★ V12 2026-11-19 2G HF ALE (docs/v12/HF-DATA.md): soundings, calls and links on a listener's USB audio. Addresses are
    *  always shown (who called whom is not a message's content); an AMD message's TEXT is shown on the amateur bands (HFLink),
    *  elsewhere only with this opt-in ("+" token, IN the CSV when ticked, off by default) and then to the owner only. */

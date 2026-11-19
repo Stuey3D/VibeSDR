@@ -59,6 +59,7 @@ import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging
 import { sameStateText, selcalStateText } from './alertDecoders';
 import { aleStateText, parseAleStatus, type AleStatus } from './aleDecoder';   // ★ V12 2G HF ALE
 import { TONES_DEFAULTS, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from './tones';   // ★ V12 DTMF + 5-tone
+import { vorSanitise, vorStateText, sarsatSanitise, sarsatStateText, type VorStatus, type SarsatStatus } from './navaids';   // ★ V12 VOR / ILS, 406 MHz
 import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS / SAME and SELCAL
 import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
@@ -75,6 +76,8 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
   | 'mfsk'   // ★ V12 the MFSK keyboard modes — MFSK16/32, OLIVIA, CONTESTIA, THOR on ONE key (textModes.ts): text as it decodes, 0x03, textmode_status
   | 'hell'    // ★ V12 FELD HELL — drawn by a VibeServer (feldHell.ts): WEFAX's grey lines (re-sent as a strip fills), hell_status
   | 'tones'   // ★ V12 DTMF + 5-tone selective calling on a VibeServer (tones.ts): a line per string / call, 0x03, {"type":"tones"}
+  | 'vor'     // ★ V12 VOR / ILS on a VibeServer (navaids.ts): lines, 0x03, {"type":"vor"} once a second
+  | 'sarsat'  // ★ V12 406 MHz beacons on a VibeServer (navaids.ts): a line per burst (identity + position: the owner's only), {"type":"sarsat"}
   | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
   | 'ale'     // ★ V12 2G HF ALE — a VibeServer's (aleDecoder.ts): one line a transmission, 0x03, ale_status
   | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
@@ -343,6 +346,10 @@ export class DecoderClient {
   tonesSet: TonesOptions = { ...TONES_DEFAULTS };
   /** The server's last word on this dial: amateur (digits shown) or not. */
   tonesLast: TonesStatus | null = null;
+  /** ★ V12 VOR / ILS: the server's last status (radial / deviation, ident, station). */
+  vorLast: VorStatus | null = null;
+  /** ★ V12 406 MHz: the counts and the last burst's public fields. */
+  sarsatLast: SarsatStatus | null = null;
   /** ★ V12 ALE: the transmission being read (ale_status) — the status line's word count */
   aleLast: AleStatus | null = null;
   /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */
@@ -684,6 +691,14 @@ export class DecoderClient {
             if (this.active !== 'rtty' || !this.rttySkim) return;
             const sp = parseCwSpot(m.data, Date.now(), false, true);
             if (sp) this.cb.onCwSpot?.(sp);
+          } else if (m.type === 'vor' && m.data) {
+            if (this.active !== 'vor') return;
+            this.vorLast = vorSanitise(m.data);
+            this.cb.onStatus(vorStateText(this.vorLast && this.vorLast.kind !== 'none' ? 1 : 0, this.vorLast));
+          } else if (m.type === 'sarsat' && m.data) {
+            if (this.active !== 'sarsat') return;
+            this.sarsatLast = sarsatSanitise(m.data);
+            this.cb.onStatus(sarsatStateText(0, this.sarsatLast));
           } else if (m.type === 'ale_status' && m.data) {
             if (this.active !== 'ale') return;
             this.aleLast = parseAleStatus(m.data);
@@ -887,6 +902,9 @@ export class DecoderClient {
       case 'balloon': return { extension_name: 'balloon', params: balloonParams(this.balloonSet) };
       // ★ V12 DTMF + 5-tone: both on and AUTO send nothing (tones.ts); what is SHOWN is the server's rule.
       case 'tones': return { extension_name: 'tones', params: tonesParams(this.tonesSet) };
+      // ★ V12 VOR / ILS and 406 MHz beacons: no parameters (AUTO — the channel says VOR / localiser / glideslope).
+      case 'vor':    return { extension_name: 'vor', params: {} };
+      case 'sarsat': return { extension_name: 'sarsat', params: {} };
       // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.
       case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };
       // ★ V12 SITOR-A: the tones around 1 kHz (as RTTY); polarity, timing and each station's offset are found.
@@ -921,7 +939,7 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'balloon' || name === 'tones' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || name === 'ale' || name === 'hfdl' || isTextFamily(name)) {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'ncdxf' || name === 'balloon' || name === 'tones' || name === 'vor' || name === 'sarsat' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || name === 'ale' || name === 'hfdl' || isTextFamily(name)) {
       if (name === 'balloon' && t === 0x0b) {
         // ★ V12 balloons: an SSDV picture so far (balloonPicture checks every length and that it is a JPEG)
         const p = balloonPicture(u8);
@@ -938,6 +956,10 @@ export class DecoderClient {
         if (u8.length < 2) return;
         if (!u8[1]) { this.tmLast = null; this.cb.onStatus(textModeStatusText(name, this.textMode[name], null, this.textModes)); }
         this.cb.onDot(u8[1] ? 'active' : 'idle');
+      } else if ((name === 'vor' || name === 'sarsat') && t === 0x03) {
+        // ★ VOR: 0 searching · 1 bearing held · 2 ILS deviation held; 406: 0 listening · 1 a burst
+        if (u8.length < 2) return;
+        this.cb.onDot(u8[1] ? 'sync' : 'idle');
       } else if (name === 'tones' && t === 0x03) {
         // ★ DTMF + 5-tone: 0 listening · 1 tones sounding (the amateur / not line is kept from the status JSON)
         if (u8.length < 2) return;

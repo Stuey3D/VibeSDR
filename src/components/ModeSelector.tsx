@@ -44,13 +44,14 @@ import { PAGING_HINT, type PagingMode } from '../services/paging';   // ★ V12 
 import { SAME_HINT, SELCAL_HINT } from '../services/alertDecoders';
 import { ALE_HINT } from '../services/aleDecoder';   // ★ V12 2G HF ALE
 import { FIVE_TONE_STANDARDS, TONES_HINT, type TonesOptions } from '../services/tones';   // ★ V12 DTMF + 5-tone
+import { VOR_HINT, SARSAT_HINT } from '../services/navaids';   // ★ V12 VOR / ILS, 406 MHz beacons
 import { HELL_HINT } from '../services/feldHell';   // ★ V12 FELD HELL
 import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
 import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, type GroupedMode } from '../services/autoModes';   // ★★★ AUTO's fallback rows
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 import { FREEDV_HINT, FREEDV_SIDEBANDS, freedvSidebandLabel, type FreeDvChoice, type FreeDvSideband, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -541,6 +542,9 @@ interface ModeSelectorProps {
     /** ★★ V12 DTMF + 5-tone — only where `"tones"` is offered; DTMF / 5-TONE each on or off, and the 5-tone STANDARD (AUTO,
      *  with one table pinned under it). What is SHOWN is the server's rule (digits on the amateur bands only). */
     tonesAvail?: boolean; tonesSettings?: TonesOptions; onTonesSettings?: (s: TonesOptions) => void;
+    /** ★★ V12 VOR / ILS and 406 MHz beacons — only where `"vor"` / `"sarsat"` is offered (greyed with why off their
+     *  frequencies). No settings: AUTO (the channel says VOR, localiser or glideslope); the hint under the key. */
+    vorAvail?: boolean; sarsatAvail?: boolean;
     /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches: `dscChans` the distress
      *  set, `dscRoutine` the routine channels (ITU-R M.541) of the band the dial is on, named `dscBandLabel`. */
     dscAvail?: boolean; dscChans?: Array<{ hz: number; label: string; vhf: boolean }>;
@@ -661,6 +665,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const ncdxfShown = !!decoderControls?.ncdxfAvail && !isBlocked('ncdxf');   // ★ V12 NCDXF beacons
   const balloonShown = !!decoderControls?.balloonAvail && !isBlocked('balloon');   // ★ V12 balloons
   const tonesShown = !!decoderControls?.tonesAvail && !isBlocked('tones');   // ★ V12 DTMF + 5-tone
+  const vorShown = !!decoderControls?.vorAvail && !isBlocked('vor');         // ★ V12 VOR / ILS
+  const sarsatShown = !!decoderControls?.sarsatAvail && !isBlocked('sarsat'); // ★ V12 406 MHz beacons
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
   const sitoraShown = !!decoderControls?.sitoraAvail && !isBlocked('sitora');   // ★ V12 SITOR-A
   const sameShown = !!decoderControls?.sameAvail && !isBlocked('same');   // ★ V12 EAS / SAME
@@ -670,7 +676,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
   const tmShown = (f: TextFamily) => !!decoderControls?.tmModes?.[f] && !isBlocked(f);   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
-  const srvDecShown = cwShown || pskShown || jttyShown || ncdxfShown || balloonShown || tonesShown || dscShown || sitoraShown || sameShown || selcalShown || aleShown || hellShown || pagingShown || aprsShown
+  const srvDecShown = cwShown || pskShown || jttyShown || ncdxfShown || balloonShown || tonesShown || vorShown || sarsatShown || dscShown || sitoraShown || sameShown || selcalShown || aleShown || hellShown || pagingShown || aprsShown
     || tmShown('mfsk');
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
@@ -752,6 +758,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (ncdxfShown) addLegend('BEACONS', 'ncdxf');
     if (balloonShown) addLegend('BALLOONS', 'balloon');
     if (tonesShown) addLegend('DTMF / 5-TONE', 'tones');
+    if (vorShown) addLegend('VOR / ILS', 'vor');
+    if (sarsatShown) addLegend('406 BEACONS', 'sarsat');
     if (dscShown) addLegend('DSC', 'dsc');
     if (aprsShown) addLegend('APRS', 'aprs');
     if (advRdsShown) addLegend(advRdsLabel, 'rds');
@@ -860,7 +868,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     // ★★ V12 out of this radio's reach: greyed, and a press says why (never starts it)
     const why = dc.decWhy?.[id];
@@ -1268,6 +1276,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'ncdxf': return ncdxfShown ? srvKey('ncdxf', 'BEACONS', 'NCDXF beacon tracker') : null;
       case 'balloon': return balloonShown ? srvKey('balloon', 'BALLOONS', 'High-altitude balloon telemetry and pictures') : null;
       case 'tones': return tonesShown ? srvKey('tones', 'DTMF / 5-TONE', 'DTMF and 5-tone selective calling decoder') : null;
+      case 'vor':   return vorShown ? srvKey('vor', 'VOR / ILS', 'VOR radial and ILS deviation decoder') : null;
+      case 'sarsat': return sarsatShown ? srvKey('sarsat', '406 BEACONS', 'COSPAS-SARSAT 406 MHz distress beacon decoder') : null;
       case 'dsc':  return dscShown ? srvKey('dsc', 'DSC', 'Maritime DSC decoder') : null;
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
       case 'same':   return sameShown ? srvKey('same', 'SAME', 'EAS and SAME emergency alert header decoder') : null;
@@ -1289,7 +1299,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (!decoderControls) return false;
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
-      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;   case 'balloon': return balloonShown;   case 'tones': return tonesShown;
+      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;   case 'balloon': return balloonShown;   case 'tones': return tonesShown;   case 'vor': return vorShown;   case 'sarsat': return sarsatShown;
       case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'ale': return aleShown; case 'hell': return hellShown; case 'paging': return pagingShown;
       case 'mfsk': return tmShown('mfsk'); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
@@ -1791,6 +1801,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         return <Text style={capText}>{SAME_HINT}</Text>;
       case 'selcal':
         return <Text style={capText}>{SELCAL_HINT}</Text>;
+      /* ★ V12 VOR / ILS and 406 MHz beacons: no settings — AUTO; the hint only. */
+      case 'vor':
+        return <Text style={capText}>{VOR_HINT}</Text>;
+      case 'sarsat':
+        return <Text style={capText}>{SARSAT_HINT}</Text>;
       /* ★ V12 2G HF ALE: no settings — nothing to choose (the standard fixes the tones and rate; the dial is the channel). */
       case 'ale':
         return <Text style={capText}>{ALE_HINT}</Text>;
