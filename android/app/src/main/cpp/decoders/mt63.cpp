@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <cstring>
 #include <random>
+#include <cstdio>
+#include <cstdlib>
 
 namespace vibe {
 
@@ -63,6 +65,11 @@ struct Dec {   // one interleave's de-interleaver and character reader on one ca
     bool on = false, longI = false; int L = 32; int d[kC]; int dmax = 0;
     float q = 0;           // EMA of the characters' Walsh share (noise ≈ 0.06)
     bool lock = false; int esc = 0;
+    /** ★ which way up: EMA of (the character is text) − (its inverse, code ^ 64, is text). A reading with the wrong
+     *  half-turn reads every character inverted — idle NUL as '@', "CQ" as control codes, a space as '`' — with the same
+     *  Walsh share; text is the only thing that tells (and idle, which is most of an over, tells at once). */
+    float upright = 0;
+    static bool texty(int c) { return c == 0 || c == 10 || c == 13 || c == ' ' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == ',' || c == '?' || c == '/'; }
     std::string pre;       // characters read before the lock (the call)
     void init(bool l) {
         on = true; longI = l; delays(l, d, L);
@@ -83,7 +90,7 @@ struct Cand {
     void reset(int b_) {
         b = b_; std::memset(zr, 0, sizeof zr); std::memset(zi, 0, sizeof zi); std::memset(met, 0, sizeof met);
         h = 0; evenHop = -100; ur = ui = 0; for (float& a : amp) a = 0; std::memset(chips, 0, sizeof chips); nsym = 0;
-        for (Dec& x : dec) { x.q = 0; x.lock = false; x.esc = 0; x.pre.clear(); }
+        for (Dec& x : dec) { x.q = 0; x.lock = false; x.esc = 0; x.pre.clear(); x.upright = 0; }
     }
 };
 
@@ -100,6 +107,8 @@ struct Mt63Rx::Impl {
     Cand cand[kCand]; int centre = -1;   // the finder's place (cand[3].b)
     bool en[2] = {false, false};
     int cur = -1, curD = 0;               // the locked (candidate, interleave), −1 none
+    int64_t lastAt = -1000; int lastCode = -1;
+    const bool dbg_ = std::getenv("VIBE_MT63_DEBUG") != nullptr;   // the hop time and code of the last character shown
     std::string* out = nullptr;
 
     Impl(int bw_, bool longI, const char* label) : bw(bw_), lab(label) {
@@ -128,21 +137,36 @@ struct Mt63Rx::Impl {
         if (cur >= 0) { int nc = -1; for (int c = 0; c < kCand; ++c) if (cand[c].b == old[cur].b) nc = c; cur = nc; }
         centre = b;
     }
+    /** ★ is (candidate ci, interleave k) the best reading of all — the highest characters' share? A place one bin
+     *  off reads the same carriers nearly as well but with a turn of 0.78π a symbol, every character inverted; it is
+     *  always the weaker reading (measured: 0.29 / 0.31 beside 0.51 on the MT63 1000L reference). */
+    bool bestReading(int ci, int k) const {
+        const float q = cand[ci].dec[k].q;
+        for (int c = 0; c < kCand; ++c) for (int x = 0; x < 2; ++x)
+            if ((c != ci || x != k) && cand[c].dec[x].on && cand[c].dec[x].upright > 0.f && cand[c].dec[x].q > q) return false;
+        return true;
+    }
     /** the place of the band: the lowest carrier's bin where the 64 carriers' band most stands out from either side */
     void finder() {
         cum[0] = 0; for (int k = 0; k < N / 2; ++k) cum[k + 1] = cum[k] + Pavg[k];
         auto mean = [&](int a, int b) { return (cum[b + 1] - cum[a]) / (b - a + 1); };
         const int span = 4 * (kC - 1);
-        float best = 0; int bb = -1;
-        for (int b = kLo + 22; b + span + 22 <= kHi; ++b) {
+        auto score = [&](int b) {
             const float in = mean(b - 1, b + span + 1);
             const float lo = mean(b - 20, b - 6), hi = mean(b + span + 6, b + span + 20);
-            const float sc = in / (0.5f * (lo + hi) + 1e-20f);
-            if (sc > best) { best = sc; bb = b; }
-        }
+            return in / (0.5f * (lo + hi) + 1e-20f);
+        };
+        float best = 0; int bb = -1;
+        for (int b = kLo + 22; b + span + 22 <= kHi; ++b) { const float sc = score(b); if (sc > best) { best = sc; bb = b; } }
         if (bb < 0) return;
-        if (cur >= 0) { if (std::abs(bb - centre) <= 2) return; if (best < 3.f) return; }
-        if (centre < 0 || std::abs(bb - centre) >= 2) place(bb);
+        // ★ HELD unless clearly beaten (×1.3): a weak signal's edges wander on the noise by a few bins, and every move
+        //   that leaves the seven places restarts their de-interleavers (MT63 1000 at −4 dB never filled one: 64 symbols)
+        if (centre >= 0) {
+            const float here = score(std::max(kLo + 22, std::min(centre, kHi - span - 22)));
+            if (std::abs(bb - centre) <= 2 || best < 1.3f * here) return;
+            if (cur >= 0 && best < 3.f) return;
+        }
+        place(bb);
     }
     void feed(const float* x, int n) {
         for (int i = 0; i < n; ) {
@@ -166,7 +190,7 @@ struct Mt63Rx::Impl {
         for (int k = 0; k < N; k += 4) q65v::st(fin + k, q65v::mul(q65v::ld(o + k), q65v::ld(win.data() + k)));
         pffft_transform_ordered(setup, fin, fout, work, PFFFT_FORWARD);
         // powers, four bins a lane, and their average (≈ 4 symbols)
-        const q65v::V A = q65v::set1(1.f / 32);
+        const q65v::V A = q65v::set1(1.f / 64);   // (≈ 8 symbols)
         for (int k = 0; k < N / 2; k += 4) {
             q65v::V re, im; q65v::ld2(fout + 2 * k, re, im);
             const q65v::V p = q65v::add(q65v::mul(re, re), q65v::mul(im, im));
@@ -241,23 +265,46 @@ struct Mt63Rx::Impl {
         const float q = sum > 0 ? mx / sum : 0.f;
         const int code = v[im] > 0 ? im : im + 64;
         d.q += 0.125f * (q - d.q);
-        // ★ lock: the characters' share well above noise's (≈ 0.06) for the last eight or so; held down to 0.12. ONE
+        if (dbg_) std::fprintf(stderr, "D b%d %c n%lld q%.3f Q%.3f c%d up%.2f cur%d\n", c.b, d.longI ? 'L' : 'S', (long long)c.nsym, q, d.q, code, d.upright, cur);
+        if (q > 0.09f) d.upright += 0.125f * ((Dec::texty(code) ? 1.f : 0.f) - (Dec::texty(code ^ 64) ? 1.f : 0.f) - d.upright);
+
+        // ★ lock: the characters' share well above noise's for the last eight or so (noise, 5 min through each bandwidth:
+        //   0.051 on average, 0.099 at most for one character, 0.061 at most averaged) — 0.12; held down to 0.085. ONE
         //   (place, interleave) is read at a time; a neighbouring place reads the same carriers a bin off and nearly as
         //   well, so another takes over only when it is clearly better (×1.25)
         const bool mine = cur == ci && curD == k;
-        if (!mine && d.q > 0.22f && c.nsym > d.dmax + 8) {
+        // ★★ ONLY THE PLACE NEAREST THE CARRIERS (2026-11-19). A turn of π a symbol cannot be told from a data flip on
+        //   every carrier, so a reading one bin off (0.78π a symbol in every bandwidth) takes out the wrong half-turn and
+        //   reads every character inverted (code ^ 64: "@@@` CQ" for idle and "CQ"). The place nearest the carriers is
+        //   ≤ ½ bin off (≤ 0.39π, never ambiguous).
+        //   The comb's energy does not show it (measured: the spectrum averaged over timings ripples with its maxima
+        //   BETWEEN carriers; at each reading's own timing it picked an edge place on a real recording), the reading's
+        //   own quality does: a lock is taken only by the best reading of all, and kept to the end (the last
+        //   characters are still in the interleaver when the carriers stop).
+        if (!mine && (!bestReading(ci, k) || d.upright <= 0.f)) { d.pre.clear(); return; }
+        if (!mine && d.q > 0.12f && c.nsym > d.dmax + 8) {
             const float cq = cur >= 0 ? cand[cur].dec[curD].q : 0.f;
-            if (cur < 0 || d.q > 1.25f * cq) {
+            if (cur < 0 || d.q > 1.15f * cq) {
                 if (cur >= 0) cand[cur].dec[curD].lock = false;
                 const bool fresh = cur < 0;
                 d.lock = true; cur = ci; curD = k;
                 if (fresh) for (char x : d.pre) text += x;
+                lastAt = hops - 8 * (int64_t)(d.dmax + 2);
                 d.pre.clear();
             }
-        } else if (mine && d.q < 0.12f) { d.lock = false; cur = -1; }
-        if (q < 0.1f) return;
-        if (d.lock && cur == ci && curD == k) put(d, code, text);
-        else if (!d.lock && q > 0.15f) { put(d, code, d.pre); if (d.pre.size() > 12) d.pre.erase(0, d.pre.size() - 12); }
+        } else if (mine && d.q < 0.085f) { d.lock = false; cur = -1; }
+        if (q < 0.09f) return;
+        // ★ each character once: a reading taking over from a neighbour has read the last few characters too (their
+        //   time: the symbol its first chip was sent, in hops)
+        const int64_t at = hops - 8 * (int64_t)(d.dmax + 1);
+        //   ★ (a neighbour's timing may differ by up to most of a symbol, so the time alone cannot tell: the same code
+        //   within 1½ symbols of the last one shown is the same character)
+        if (d.lock && cur == ci && curD == k) {
+            if (at > lastAt + 4 && !(code == lastCode && at < lastAt + 12)) { put(d, code, text); lastAt = at; lastCode = code; }
+        }
+        // ★ before the lock, only once this reading has settled (its average above noise's): while the common turn
+        //   settles a block of idle reads as its inverse ("@@@@@@@@" before every synthetic MT63 500S over)
+        else if (!d.lock && q > 0.11f && d.q > 0.1f) { put(d, code, d.pre); if (d.pre.size() > 32) d.pre.erase(0, d.pre.size() - 32); }
         else if (!d.lock) d.pre.clear();
     }
     static void put(Dec& d, int c, std::string& out) {
