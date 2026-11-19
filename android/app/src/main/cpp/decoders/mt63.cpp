@@ -105,6 +105,7 @@ struct Mt63Rx::Impl {
     float cosT[512], sinT[512];
     int kLo = 0, kHi = 0;
     Cand cand[kCand]; int centre = -1;   // the finder's place (cand[3].b)
+    int seen = 0, seenB = -1;             // finder runs in a row that named (about) seenB
     bool en[2] = {false, false};
     int cur = -1, curD = 0;               // the locked (candidate, interleave), −1 none
     int64_t lastAt = -1000; int lastCode = -1;
@@ -161,11 +162,23 @@ struct Mt63Rx::Impl {
         if (bb < 0) return;
         // ★ HELD unless clearly beaten (×1.3): a weak signal's edges wander on the noise by a few bins, and every move
         //   that leaves the seven places restarts their de-interleavers (MT63 1000 at −4 dB never filled one: 64 symbols)
+        //   …but only while something there reads above noise: with nothing decoding, the place follows the best score
+        //   at once (held regardless, a fresh over's place was reached seconds late and its first words lost —
+        //   the de-interleavers start empty when the places move)
         if (centre >= 0) {
+            bool reading = false;
+            for (const Cand& c : cand) for (const Dec& d : c.dec) reading |= d.on && d.q > 0.09f;
             const float here = score(std::max(kLo + 22, std::min(centre, kHi - span - 22)));
-            if (std::abs(bb - centre) <= 2 || best < 1.3f * here) return;
-            if (cur >= 0 && best < 3.f) return;
+            if (std::abs(bb - centre) <= 2) { seen = 0; return; }
+            if (reading && best < 1.3f * here) { seen = 0; return; }
+            if (cur >= 0 && best < 3.f) { seen = 0; return; }
         }
+        // ★ and a new place must be the best three symbols running (within 2 bins): on a weak signal the best score
+        //   wanders over the noise from symbol to symbol, and each move restarted the readings (MT63 1000L at −2 dB:
+        //   nothing)
+        if (seen > 0 && std::abs(bb - seenB) <= 2) ++seen; else { seen = 1; seenB = bb; }
+        if (centre >= 0 && seen < 3) return;
+        seen = 0;
         place(bb);
     }
     void feed(const float* x, int n) {
@@ -190,7 +203,7 @@ struct Mt63Rx::Impl {
         for (int k = 0; k < N; k += 4) q65v::st(fin + k, q65v::mul(q65v::ld(o + k), q65v::ld(win.data() + k)));
         pffft_transform_ordered(setup, fin, fout, work, PFFFT_FORWARD);
         // powers, four bins a lane, and their average (≈ 4 symbols)
-        const q65v::V A = q65v::set1(1.f / 64);   // (≈ 8 symbols)
+        const q65v::V A = q65v::set1(1.f / 32);   // (≈ 4 symbols)
         for (int k = 0; k < N / 2; k += 4) {
             q65v::V re, im; q65v::ld2(fout + 2 * k, re, im);
             const q65v::V p = q65v::add(q65v::mul(re, re), q65v::mul(im, im));

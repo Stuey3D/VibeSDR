@@ -45,7 +45,7 @@ static bool inAuto(const std::string& id) {
     static const char* manualOnly[] = {"olivia-4-250", "olivia-64-2000", "contestia-4-125", "contestia-4-250",
         "contestia-4-1000", "contestia-4-2000", "contestia-8-125", "contestia-8-500", "contestia-8-2000",
         "contestia-16-250", "contestia-16-1000", "contestia-16-2000", "contestia-32-2000", "contestia-64-500",
-        "contestia-64-1000", "contestia-64-2000"};
+        "contestia-64-1000", "contestia-64-2000", "dominoex44", "dominoex88", "dominoexmicro"};
     for (const char* m : manualOnly) if (id == m) return false;
     return true;
 }
@@ -57,7 +57,7 @@ static std::string body(const std::string& t) {   // the text without the "[MODE
 }
 
 int main() {
-    std::printf("test-textmodes — MFSK16/32, OLIVIA, CONTESTIA, THOR\n");
+    std::printf("test-textmodes — MFSK16/32, OLIVIA, CONTESTIA, THOR, DOMINOEX, MT63\n");
     const double fs = 48000;
     const std::string msg = "CQ CQ DE G4XYZ G4XYZ IO91 PSE K";
     struct Case { F f; const char* id; double hz; };
@@ -75,6 +75,14 @@ int main() {
         {F::Olivia, "contestia-8-125", 1500}, {F::Olivia, "contestia-8-1000", 1500}, {F::Olivia, "contestia-8-2000", 1500},
         {F::Olivia, "contestia-16-250", 1500}, {F::Olivia, "contestia-16-2000", 1500}, {F::Olivia, "contestia-32-2000", 1500},
         {F::Olivia, "contestia-64-500", 1500}, {F::Olivia, "contestia-64-1000", 1500},
+        // ★ V12 2026-11-19 (docs/v12/HF-DATA.md): DOMINOEX, its FEC option, and MT63 — the one key only (Family::All)
+        {F::All, "dominoex4", 1000}, {F::All, "dominoex5", 1300}, {F::All, "dominoex8", 1500}, {F::All, "dominoex11", 1100},
+        {F::All, "dominoex16", 1600}, {F::All, "dominoex22", 1400}, {F::All, "dominoex44", 1500}, {F::All, "dominoex88", 1500},
+        {F::All, "dominoexmicro", 1500},
+        {F::All, "dominoex4fec", 1000}, {F::All, "dominoex5fec", 1300}, {F::All, "dominoex8fec", 1500},
+        {F::All, "dominoex11fec", 1100}, {F::All, "dominoex16fec", 1600}, {F::All, "dominoex22fec", 1400},
+        {F::All, "mt63-500s", 750}, {F::All, "mt63-500l", 900}, {F::All, "mt63-1000s", 1000}, {F::All, "mt63-1000l", 1250},
+        {F::All, "mt63-2000s", 1500}, {F::All, "mt63-2000l", 1520},
     };
     std::printf("\n── each sub-mode at +10 dB (3 kHz), 48 kHz: its manual setting, and AUTO where it is in AUTO ──\n");
     for (const Case& c : cases) {
@@ -113,7 +121,24 @@ int main() {
         const auto L = TextModeDecoder::modes(F::All);
         std::string groups; for (auto& m : L) if (!m.group.empty() && groups.find(m.group) == std::string::npos) groups += m.group + ",";
         bool every = true; for (const Case& c : cases) { bool f = false; for (auto& m : L) f |= m.id == c.id; every &= f; }
-        ok(L[0].id == "auto" && groups == "MFSK,OLIVIA,CONTESTIA,THOR," && every && L.size() == 40, "the list: AUTO, then each family's ANY and every sub-mode (" + std::to_string(L.size()) + " entries, " + groups + ")");
+        ok(L[0].id == "auto" && groups == "MFSK,OLIVIA,CONTESTIA,THOR,DOMINOEX,MT63," && every && L.size() == 63, "the list: AUTO, then each family's ANY and every sub-mode (" + std::to_string(L.size()) + " entries, " + groups + ")");
+        ok(TextModeDecoder::modesJson(F::All).find("{\"id\":\"dominoex11fec\",\"label\":\"11 FEC\",\"group\":\"DOMINOEX\"}") != std::string::npos
+           && TextModeDecoder::modesJson(F::All).find("{\"id\":\"mt63-1000l\",\"label\":\"1000L\",\"group\":\"MT63\"}") != std::string::npos, "DOMINOEX and MT63 entries carry their family and short labels");
+        {   // the wrong family again, for the new ones (a THOR signal is not DOMINOEX: same tones, its code tells)
+            auto t = withNoise(textModeSynth(F::Thor, "thor16", msg, fs, 1500), fs, 10, 42);
+            Got g = run(F::All, "auto", t, fs);
+            ok(g.detected == "THOR 16" && body(g.text).find(msg) != std::string::npos && g.text.find("DOMINOEX") == std::string::npos, "a THOR 16 signal through the one AUTO: THOR 16, never DOMINOEX (" + g.detected + ")");
+            auto u = withNoise(textModeSynth(F::All, "dominoex16", msg, fs, 1500), fs, 10, 43);
+            ok(run(F::All, "any-thor", u, fs).text.empty(), "a DOMINOEX 16 signal through THOR's ANY: nothing");
+            ok(run(F::All, "any-mt63", u, fs).text.empty(), "…through MT63's ANY: nothing");
+            auto v = withNoise(textModeSynth(F::All, "mt63-1000l", msg, fs, 1250), fs, 10, 44);
+            ok(run(F::All, "any-dominoex", v, fs).text.empty() && run(F::All, "any-olivia", v, fs).text.empty(), "an MT63 1000L signal through DOMINOEX's and OLIVIA's ANY: nothing");
+            auto w = withNoise(textModeSynth(F::All, "dominoex11fec", msg, fs, 1100), fs, 10, 45);
+            Got f = run(F::All, "auto", w, fs);
+            ok(f.detected == "DOMINOEX 11 FEC" && body(f.text).find(msg) != std::string::npos && f.text.find("[DOMINOEX 11 \xc2\xb7") == std::string::npos, "DOMINOEX 11 FEC through AUTO: the FEC receiver, never the plain one first (" + f.detected + ")");
+            auto i = withNoise(textModeSynth(F::All, "dominoex8", msg, fs, 1500), fs, 10, 46);
+            ok(run(F::All, "dominoex8", i, fs).text.find("[ID] G4XYZ") != std::string::npos, "DOMINOEX: the secondary alphabet (the station's ID) is its own line");
+        }
         ok(TextModeDecoder::modesJson(F::All).find("{\"id\":\"olivia-8-250\",\"label\":\"8/250\",\"group\":\"OLIVIA\"}") != std::string::npos, "each entry carries its family (the FAMILY row) and a short label (the MODE row)");
         auto y = withNoise(textModeSynth(F::Olivia, "olivia-8-250", msg, fs, 1500), fs, 10, 41);
         ok(body(run(F::All, "any-olivia", y, fs).text).find(msg) != std::string::npos, "ANY under OLIVIA decodes OLIVIA 8/250");
@@ -239,6 +264,21 @@ int main() {
             {"THOR8.f32", F::Thor, 8000, "The quick brown fox jumps over the lazy dog"},
             {"THOR16.f32", F::Thor, 8000, "The quick brown fox jumps over the lazy dog"},
             {"THOR11_11k.f32", F::Thor, 11025, "The quick brown fox jumps over the lazy dog"},
+            // ★ V12 2026-11-19: sigidwiki's DOMINOEX and MT63 references (mp3 → 8 kHz float32; not in git) through the one AUTO.
+            //   The strings are what decodes whole on each (an mp3 at its SNR loses a character or two on some: HF-DATA.md)
+            {"DominoEX_4Bd.f32", F::All, 8000, "BROWNFOX JUMPS OVER THE LAZY DOG 1234567890"},
+            {"DominoEX_5Bd.f32", F::All, 8000, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 1234567890"},
+            {"DominoEX_7-8Bd.f32", F::All, 8000, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 123456"},
+            {"DominoEX_11Bd.f32", F::All, 8000, "FOX JUMPS OVER TH"},
+            {"DominoEX_16Bd.f32", F::All, 8000, "BROWN FOX JUMPS OVER "},
+            {"DominoEX_22Bd.f32", F::All, 8000, "QUICK BROWN FOX JUMPS OVER THE LAZY DOG 1234567890"},
+            {"DominoEX_11_FEC.f32", F::All, 8000, "uick brown fox jumps over the lazy dog 12"},
+            {"MT63-500S.f32", F::All, 8000, "fox jumps over the lazy dog 123456789"},
+            {"MT63-500L.f32", F::All, 8000, "fox jumps over the lazy dog 123456789"},
+            {"MT63-1000S.f32", F::All, 8000, "brown fox jumps over the lazy dog 123456789"},
+            {"MT63-1000L.f32", F::All, 8000, "quick brown fox jumps over the lazy dog 123456789"},
+            {"MT63-2000S.f32", F::All, 8000, "quick brown fox jumps over the lazy dog 1234567890"},
+            {"MT63-2000L.f32", F::All, 8000, "quick brown fox jumps over the lazy dog 123456789"},
         };
         for (const Ref& r : refs) {
             FILE* fp = std::fopen((std::string(dir) + "/" + r.file).c_str(), "rb");
