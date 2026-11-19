@@ -586,6 +586,101 @@ static void testCpu() {
     }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  TOOLS
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+/** `test-ax25hs --write-clip <file.cu8> <rate>`: 9600 bursts, CENTRED (fake-rtl-tcp --hf-centre puts them where the dial
+ *  is): an APRS position (plain AX.25), a GRBAlpha-style telemetry frame by FX.25 with two line bits wrong (only FX.25
+ *  gets it), and an IL2P status — twice. ±3 kHz, 20 dB Eb/N0 (in the 48 kS/s model), as 8-bit IQ. */
+static int writeClip(const char* path, double rate) {
+    std::mt19937 rng(4242);
+    std::vector<float> bb48;
+    vibepkt::Scrambler scr; int lvl = 0;
+    for (int rep = 0; rep < 2; ++rep) {
+        const std::vector<uint8_t> fr[3] = { ui("G4ABC", 9, "APRS", "!5130.00N/00010.00W>9600 car"), telem(rng, 100), ui("G4ILP", 0, "APRS", ">IL2P 9600 status") };
+        const int ln[3] = { kPlain, kFx16, kIl2p };
+        for (int k = 0; k < 3; ++k) {
+            auto line = txLine({ fr[k] }, ln[k], scr, lvl);
+            if (k == 1) for (int e = 0; e < 2; ++e) line[24 * 8 + 64 + 300 + size_t(e) * 400] ^= 1;
+            for (int i = 0; i < 9600; ++i) bb48.push_back(1e9f);   // ★ 0.2 s with no carrier (marked)
+            auto b = vibeg3ruh::baseband(line, 48000, 9600);
+            bb48.insert(bb48.end(), b.begin(), b.end());
+        }
+    }
+    for (int i = 0; i < 9600; ++i) bb48.push_back(1e9f);
+    std::normal_distribution<double> nd(0, 1);
+    const double up = rate / 48000.0, sd = std::sqrt(48000.0 / (9600 * std::pow(10.0, 2.0)) / 2) * 0.4;
+    std::vector<uint8_t> u; u.reserve(size_t(bb48.size() * up * 2) + 16);
+    double ph = 0;
+    for (size_t i = 0; i + 1 < bb48.size(); ++i)
+        for (int j = 0; j < int(up); ++j) {
+            const bool on = bb48[i] < 1e8f && bb48[i + 1] < 1e8f;
+            const double x = on ? bb48[i] + (bb48[i + 1] - bb48[i]) * (j / up) : 0;
+            ph += 2 * M_PI * 3000.0 * x / rate;
+            const double A = on ? 0.4 : 0.0;
+            const double I = A * std::cos(ph) + sd * nd(rng), Q = A * std::sin(ph) + sd * nd(rng);
+            u.push_back(uint8_t(std::max(0.0, std::min(255.0, 127.5 + I * 127))));
+            u.push_back(uint8_t(std::max(0.0, std::min(255.0, 127.5 + Q * 127))));
+        }
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 1;
+    std::fwrite(u.data(), 1, u.size(), f); std::fclose(f);
+    std::fprintf(stderr, "wrote %s: %.1f s at %.0f S/s, 6 bursts (AX.25 G4ABC-9, FX.25 OM9GRB, IL2P G4ILP — twice)\n", path, u.size() / 2 / rate, rate);
+    return 0;
+}
+
+/** `test-ax25hs --wav <file.wav> [9600|1200] [--quiet]`: decode a recording (16-bit PCM WAV, mono or the left channel) —
+ *  FM-discriminator audio for 9600 (a radio's data port, a SatNOGS observation's audio), or 1200 Bd AFSK audio — with
+ *  every receiver on (AX.25, FX.25, IL2P), and print each frame: its receiver, the fixes, TNC2 text and the hex. */
+static int decodeWav(const char* path, int baud, bool quiet) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::fprintf(stderr, "cannot open %s\n", path); return 2; }
+    std::vector<uint8_t> b; uint8_t tmp[65536]; size_t n;
+    while ((n = std::fread(tmp, 1, sizeof tmp, f)) > 0) b.insert(b.end(), tmp, tmp + n);
+    std::fclose(f);
+    if (b.size() < 44 || std::memcmp(b.data(), "RIFF", 4) || std::memcmp(b.data() + 8, "WAVE", 4)) { std::fprintf(stderr, "not a WAV\n"); return 2; }
+    int ch = 1, bits = 16; double fs = 48000; size_t p = 12, data = 0, dlen = 0;
+    while (p + 8 <= b.size()) {
+        const uint32_t sz = uint32_t(b[p + 4]) | uint32_t(b[p + 5]) << 8 | uint32_t(b[p + 6]) << 16 | uint32_t(b[p + 7]) << 24;
+        if (!std::memcmp(b.data() + p, "fmt ", 4) && p + 24 <= b.size()) { ch = b[p + 10] | b[p + 11] << 8; fs = double(uint32_t(b[p + 12]) | uint32_t(b[p + 13]) << 8 | uint32_t(b[p + 14]) << 16 | uint32_t(b[p + 15]) << 24); bits = b[p + 22] | b[p + 23] << 8; }
+        if (!std::memcmp(b.data() + p, "data", 4)) { data = p + 8; dlen = std::min<size_t>(sz, b.size() - data); break; }
+        p += 8 + sz + (sz & 1);
+    }
+    if (!data || bits != 16 || ch < 1) { std::fprintf(stderr, "need 16-bit PCM\n"); return 2; }
+    std::vector<float> a(dlen / 2 / size_t(ch));
+    for (size_t i = 0; i < a.size(); ++i) a[i] = float(int16_t(b[data + i * 2 * size_t(ch)] | b[data + i * 2 * size_t(ch) + 1] << 8)) / 32768.f;
+    std::printf("%s: %.1f s at %.0f Hz, %d channel(s), decoding %d Bd with AX.25 + FX.25 + IL2P\n", path, a.size() / fs, fs, ch, baud);
+    int nf[3] = { 0, 0, 0 };
+    auto show = [&](int fec, int fixed, bool crc, const std::vector<uint8_t>& bytes, double t) {
+        ++nf[fec];
+        vibeaprs::Ax25 ax; bool hp = false;
+        std::string head = vibeaprs::parseAx25Frame(bytes, ax, hp) ? vibeaprs::addrText(ax.src) + ">" + vibeaprs::addrText(ax.dest) + " " + vibeaprs::controlName(ax.control) : "(not AX.25)";
+        const std::string sat = vibesat::byCallsign(ax.src.call);
+        std::printf("  %7.2f s  %-4s%s%s  %s%s\n", t, vibepkt::fecName(fec), fixed ? (" fixed " + std::to_string(fixed)).c_str() : "", crc ? " crc" : "", head.c_str(), sat.empty() ? "" : (" [" + sat + "]").c_str());
+        if (quiet) return;
+        std::string txt; for (char c : ax.info) txt += (c >= 0x20 && c < 0x7f) ? c : '.';
+        std::printf("            %s\n", txt.substr(0, 160).c_str());
+    };
+    if (baud >= 4800) {
+        vibeg3ruh::Opts o; vibeg3ruh::Demod dm(o);
+        size_t pos = 0;
+        while (pos < a.size()) {
+            const size_t k = std::min<size_t>(4800, a.size() - pos);
+            dm.feedAudio(a.data() + pos, int(k), fs, [&](const vibepkt::PktFrame& fr) { show(fr.fec, fr.fixed, fr.crc, fr.bytes, pos / fs); });
+            pos += k;
+        }
+    } else {
+        std::vector<float> a48;
+        if (std::fabs(fs - 48000) > 0.5) { vibedsp::RationalResampler rs(fs, 48000, vibedsp::RationalResampler::ExactRate{}); a48.resize(size_t(rs.maxOut(int(a.size())))); a48.resize(size_t(rs.process(a.data(), int(a.size()), a48.data()))); }
+        else a48 = a;
+        vibeaprs::AfskDemod d(48000, 1200, false, true, true);
+        for (size_t pos = 0; pos < a48.size(); pos += 4800)
+            d.feed(a48.data() + pos, int(std::min<size_t>(4800, a48.size() - pos)), [&](const vibeaprs::Frame& fr) { show(fr.fec, fr.fixed, fr.crc, fr.bytes, pos / 48000.0); });
+    }
+    std::printf("%d frames: %d AX.25, %d FX.25, %d IL2P\n", nf[0] + nf[1] + nf[2], nf[0], nf[1], nf[2]);
+    return 0;
+}
+
 static void tune() {
     for (float rel : { 1.f / 1000, 1.f / 500, 1.f / 300 }) {
         vibeg3ruh::Opts all; all.eyeRelease = rel;
@@ -601,6 +696,8 @@ static void tune() {
 
 int main(int argc, char** argv) {
     if (argc > 1 && !std::strcmp(argv[1], "--tune")) { tune(); return 0; }
+    if (argc >= 4 && !std::strcmp(argv[1], "--write-clip")) return writeClip(argv[2], std::atof(argv[3]));
+    if (argc >= 3 && !std::strcmp(argv[1], "--wav")) return decodeWav(argv[2], argc >= 4 ? std::atoi(argv[3]) : 9600, argc >= 5 && !std::strcmp(argv[4], "--quiet"));
     bool full = false; double noiseMin = 2;
     for (int i = 1; i < argc; ++i) { if (!std::strcmp(argv[i], "--full")) { full = true; noiseMin = 10; } }
     testRs();

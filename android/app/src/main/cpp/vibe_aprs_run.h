@@ -23,6 +23,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <map>
@@ -120,6 +122,18 @@ public:
         iqFed_ = true;
         g3_->feedIq(x, n, rate, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
         tickList_();
+        // ★ VIBE_PKT_LOG=1: what the 9600 receiver sees, every 5 s, to stderr — the first thing to look at on a live capture
+        static const bool dbg = std::getenv("VIBE_PKT_LOG") != nullptr;
+        if (dbg) {
+            iqSamples_ += uint64_t(n);
+            const double t = now();
+            if (t - iqLogAt_ >= 5.0) {
+                iqLogAt_ = t;
+                std::fprintf(stderr, "[packet] 9600: channel IQ at %.0f S/s (%llu samples), eye %.2f, AFC %+.0f Hz, FX.25 tags %llu, IL2P syncs %llu, frames %zu\n",
+                             rate, (unsigned long long)iqSamples_, g3_->eye(), g3_->afcHz(), (unsigned long long)g3_->fx25Tags(),
+                             (unsigned long long)g3_->il2pSyncs(), log_.size());
+            }
+        }
     }
     double afcHz() const { return g3_ ? g3_->afcHz() : 0; }
     /** ★ For tests and the offline tool: one frame, as the demodulator hands it over. */
@@ -372,6 +386,7 @@ private:
     std::unique_ptr<vibeg3ruh::Demod> g3_;
     std::deque<LogEntry> log_;
     bool iqFed_ = false;
+    uint64_t iqSamples_ = 0; double iqLogAt_ = -10;
     uint64_t fx25_ = 0, il2p_ = 0, fixed_ = 0, other_ = 0;
     std::map<std::string, Station> stations_;
     std::map<std::string, double> dupes_;

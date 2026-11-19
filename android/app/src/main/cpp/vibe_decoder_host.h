@@ -2096,7 +2096,8 @@ public:
     }
     /** ★★ PAGING (V12): a listener's channel IQ (per-VFO). One relaxed load when nothing pages anywhere. */
     void feedChannelIqSession(const std::string& session, const std::complex<float>* iq, int n, double rate) {
-        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0 || !anyPer_.load(std::memory_order_relaxed)) return;
+        if ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0 && DecoderHost::packetIqRunning().load(std::memory_order_relaxed) <= 0)
+            || !anyPer_.load(std::memory_order_relaxed)) return;
         std::shared_ptr<DecoderHost> h;
         { std::lock_guard<std::mutex> lk(m_);
           auto it = bySession_.find(session);
@@ -2105,7 +2106,7 @@ public:
     }
     /** ★★ …and the one pipeline's (a shared dial, or one listener). */
     void feedChannelIqShared(const std::complex<float>* iq, int n, double rate) {
-        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0) return;
+        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0 && DecoderHost::packetIqRunning().load(std::memory_order_relaxed) <= 0) return;
         std::shared_ptr<DecoderHost> h;
         { std::lock_guard<std::mutex> lk(m_); h = shared_; }
         if (h) h->feedChannelIq(iq, n, rate);
