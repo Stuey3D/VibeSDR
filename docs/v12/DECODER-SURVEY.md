@@ -420,6 +420,7 @@ Europe. M. Test: public US recordings.
 7. **Effort M.** Test: our RTL/RSP at 868 MHz near a gliding club; EASA spec test vectors if published.
 
 ### 4.4 VOR (bearing + ident) and ILS — **later**
+★ **Built 2026-11-19 (branch v12-vorsar): docs/v12/VOR-ILS.md** — our own receiver; no GPL source read.
 VOR: 30 Hz AM variable vs 30 Hz FM on a 9960 Hz subcarrier reference; bearing = phase difference; Morse ident through
 our CW decoder. ILS: 90/150 Hz depth difference. Described in FAA/ICAO training material ✓ (Annex 10 Vol I is paid);
 SDRangel's VOR localiser and SDR++'s VOR receiver are GPL-3 ✓. **S/M, trivial.** Fun "you are on the 247° radial of
@@ -447,6 +448,8 @@ BLE/Wi-Fi) and DJI DroneID **locate the pilot, a person**: excluded under our "n
 ## 5. Maritime and distress
 
 ### 5.1 COSPAS-SARSAT 406 MHz (EPIRB, PLB, ELT) — **build later (background watch)**
+★ **Built 2026-11-19 (branch v12-vorsar) as a listener's decoder: docs/v12/SARSAT.md** — from T.001 Issue 4 Rev. 7. ★ The
+  second BCH is **(38,26)** (26 data + 12 parity, t = 2), not (26,14) as written below. The background watch is not built.
 1. **Standard:** C/S T.001 "Specification for Cospas-Sarsat 406 MHz distress beacons" and T.018 (second-generation
    beacons), free from cospas-sarsat.int ✓. The country code table is in T.001 annexes and ITU MID tables.
 2. **Open:** dec406 (F4EHY; licence unclear, don't read until checked); scan406 (closed). Write from T.001.
