@@ -199,6 +199,7 @@ import { LEAFLET_ASSET } from './leafletAsset';
 import { BALLOON_AUTO, BALLOON_BAUDS, BALLOON_BITS, BALLOON_HINT, BALLOON_POLARITY, BALLOON_SHIFTS, BALLOON_SPACINGS, balloonLine, balloonMerge, balloonParams,
          balloonPicture, balloonPictureText, balloonPinLabel, balloonSanitise, balloonStatus, balloonWhen, type BalloonPayload, type BalloonReport, type BalloonSettings } from '../../../src/services/balloons';   // ★ V12 balloons
 import { FIVE_TONE_STANDARDS, TONES_DEFAULTS, TONES_HINT, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from '../../../src/services/tones';   // ★ V12 DTMF + 5-tone
+import { VOR_HINT, SARSAT_HINT, SARSAT_NOTE, vorSanitise, vorStateText, navCardSvg, radialFix, sarsatSanitise, sarsatStateText, type VorStatus, type SarsatStatus } from '../../../src/services/navaids';   // ★ V12 VOR / ILS, 406 MHz beacons
 import { NCDXF_BANDS, NCDXF_HINT, NCDXF_FOLLOW_HINT, NCDXF_CALLS, ncdxfSanitise, ncdxfRows, ncdxfStatus, ncdxfStepColour, ncdxfFollowBand,
          ncdxfFollowAllowed, ncdxfFollowTunedAway, ncdxfBeaconOn, ncdxfSlot, type NcdxfReport } from '../../../src/services/ncdxf';   // ★ V12 NCDXF beacons
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
@@ -904,6 +905,8 @@ async function loadAudioPolicy(httpBase: string) {
   ncdxfCap = false;            // ★ …nor the NCDXF beacon tracker
   balloonCap = false;          // ★ …nor balloons
   tonesCap = false;            // ★ …nor DTMF / 5-tone
+  vorCap = false;              // ★ …nor VOR / ILS
+  sarsatCap = false;           // ★ …nor 406 MHz beacons
   aleCap = false;              // ★ …nor ALE
   decWhy = {};                 // ★ …and no decoder out of reach until this radio says so
   spotBandCap = null;          // ★ …nor a Band spots button
@@ -1018,6 +1021,12 @@ async function loadAudioPolicy(httpBase: string) {
     tonesCap = j.tones === true;   // ★ V12 DTMF + 5-tone: decoded by this server, any frequency (what is SHOWN is the server's rule)
     { const b = document.querySelector('#decodersPanel [data-dec="tones"]') as HTMLElement | null;
       if (b) b.hidden = !tonesCap || blockedModes.has('tones'); }
+    vorCap = j.vor === true || !!decWhy.vor;            // ★ V12 VOR / ILS: decoded by this server (greyed with why off the airband)
+    { const b = document.querySelector('#decodersPanel [data-dec="vor"]') as HTMLElement | null;
+      if (b) b.hidden = !vorCap || blockedModes.has('vor'); }
+    sarsatCap = j.sarsat === true || !!decWhy.sarsat;   // ★ V12 406 MHz beacons (greyed with why off 406 MHz)
+    { const b = document.querySelector('#decodersPanel [data-dec="sarsat"]') as HTMLElement | null;
+      if (b) b.hidden = !sarsatCap || blockedModes.has('sarsat'); }
     balloonCap = j.balloon === true || !!decWhy.balloon;   // ★ V12 balloons: decoded by this server (greyed with why off 70 cm)
     { const b = document.querySelector('#decodersPanel [data-dec="balloon"]') as HTMLElement | null;
       if (b) b.hidden = !balloonCap || blockedModes.has('balloon'); }
@@ -2257,7 +2266,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap) || (id === 'balloon' && !balloonCap) || (id === 'tones' && !tonesCap) || (id === 'ale' && !aleCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (id === 'hfdl' && !hfdlCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap) || (id === 'ncdxf' && !ncdxfCap) || (id === 'balloon' && !balloonCap) || (id === 'tones' && !tonesCap) || (id === 'vor' && !vorCap) || (id === 'sarsat' && !sarsatCap) || (id === 'ale' && !aleCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -8938,7 +8947,7 @@ function dabUiOn() {
   // ★★ V12: the server decoders' own lists too (CW/PSK, APRS, DSC, JTTY) — showDecBox() toggles them when a decoder
   //    opens, but DAB takes the box without it, so APRS's "listening…" and PACKETS sat under the DAB signal view
   //    (Stuart's Pi 2, 2026-10-26).
-  for (const id of ['cwList', 'aprsList', 'dscList', 'jttyList', 'ncdxfList', 'balloonList']) document.getElementById(id)?.classList.remove('on');
+  for (const id of ['cwList', 'aprsList', 'dscList', 'jttyList', 'ncdxfList', 'balloonList', 'navCard']) document.getElementById(id)?.classList.remove('on');
   $('decBox').classList.remove('wide');
   $('decBox').classList.remove('navtex');
   $<HTMLButtonElement>('decPrev').style.display = 'none';
@@ -13389,12 +13398,37 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'hfdl' | 'ale' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'ale' | null = null;
 /* ★★ DTMF + 5-TONE (V12) — decoded on the server (decoders/tones_rx.h): one line per DTMF string or 5-tone call on this
  *  listener's NFM / AM audio. WHAT IS SHOWN is the server's rule (vibe_tones_run.h): digits on the amateur bands only, so this
  *  page draws whatever it is sent. The settings: DTMF and 5-TONE each on/off, and the 5-tone STANDARD — AUTO, with one table
  *  pinned under it as the manual fallback. Offered only where vibeserver.json says "tones". */
 let tonesCap = false;
+/* ★★ VOR / ILS and 406 MHz BEACONS (V12) — decoded on the server from the listener's channel itself (decoders/nav_rx.h,
+ *  decoders/sarsat_rx.h). VOR: the compass card with the radial (true north up where the station is listed), or the ILS
+ *  needle; the radials of two different VORs heard this session cross at a FIX. 406: the lines as sent — a beacon's identity
+ *  and position reach the owner's own lines only (the server's rule, vibe_sarsat_run.h). No settings: AUTO (the channel says
+ *  VOR / localiser / glideslope, the signal confirms). */
+let vorCap = false, sarsatCap = false;
+let vorLast: VorStatus | null = null, sarsatLast: SarsatStatus | null = null;
+const vorHeard = new Map<string, { lat: number; lon: number; brg: number; at: number }>();   // station → its last true radial
+function renderNavCard() {
+  const host = document.getElementById('navCard');
+  if (!host) return;
+  if (activeDec === 'sarsat') { host.innerHTML = `<div class="note">${SARSAT_NOTE.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!))}</div>`; return; }
+  const s = vorLast;
+  let h = navCardSvg(s);
+  if (s && s.kind === 'vor' && s.station && s.trueBrg != null) {
+    vorHeard.set(s.station.ident, { lat: s.station.lat, lon: s.station.lon, brg: s.trueBrg, at: Date.now() });
+    const others = [...vorHeard.entries()].filter(([k, v]) => k !== s.station!.ident && Date.now() - v.at < 30 * 60e3);
+    for (const [k, v] of others.slice(-1)) {
+      const fix = radialFix({ lat: s.station.lat, lon: s.station.lon, brg: s.trueBrg }, v);
+      if (fix) h += `<div class="note">FIX: ${s.station.ident} ${Math.round(s.trueBrg)}° T crosses ${k} ${Math.round(v.brg)}° T at ${Math.abs(fix[0]).toFixed(3)}° ${fix[0] < 0 ? 'S' : 'N'} ${Math.abs(fix[1]).toFixed(3)}° ${fix[1] < 0 ? 'W' : 'E'}</div>`;
+    }
+  }
+  if (!h) h = `<div class="note">${s ? 'searching for the 30 Hz / 9960 Hz of a VOR, or the 90 / 150 Hz of an ILS…' : ''}</div>`;
+  host.innerHTML = h;
+}
 let aleCap = false;   // ★ V12 2G HF ALE (vibeserver.json "ale")
 let aleLast: ReturnType<typeof parseAleStatus> = null;
 let tonesSet: TonesOptions = { ...TONES_DEFAULTS };
@@ -14230,6 +14264,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
       if (activeDec === 'dsc') return;   // ★ DSC's rows are drawn from its JSON (onDscCall); the line is the same text
       if (activeDec === 'jtty') return;  // ★ JTTY's rows are drawn from its JSON (onJttySignals); the line is the same text
+      if (activeDec === 'vor' || activeDec === 'sarsat') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ VOR / 406: the log, last 40 lines
       if (activeDec === 'tones') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ DTMF / 5-tone: the heard log, last 40 lines
       if (activeDec === 'balloon') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ balloons: the report log, last 40 lines
       if (activeDec === 'ncdxf') { const el = $('decText'); el.textContent = (el.textContent || '').split('\n').slice(-40).join('\n') + t; el.scrollTop = el.scrollHeight; return; }   // ★ NCDXF: the heard log, last 40 lines
@@ -14325,6 +14360,8 @@ function initDecoders(host: string, auth: AuthState) {
                    : activeDec === 'ncdxf' ? ncdxfStatus(ncdxfLast)
                    : activeDec === 'balloon' ? balloonStatus(balloonLast)
                    : activeDec === 'tones' ? tonesStateText(st, tonesLast)
+                   : activeDec === 'vor' ? vorStateText(st, vorLast)
+                   : activeDec === 'sarsat' ? sarsatStateText(st, sarsatLast)
                    : activeDec === 'rtty' && rttySkim ? (st >= 3 ? 'decoding…' : st ? 'RTTY found — working out its settings…' : 'listening…')
                    : kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
@@ -14450,6 +14487,21 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(r.state >= 3);
     },
     onBalloonPicture: (buf) => { if (activeDec === 'balloon') balloonPictureIn(buf); },
+    // ★★ V12 VOR / ILS: once a second — the radial or the deviation, the ident, the station.
+    onVor: (d) => {
+      if (activeDec !== 'vor') return;
+      vorLast = vorSanitise(d);
+      decStateText = vorStateText(vorLast && vorLast.kind !== 'none' ? 1 : 0, vorLast);
+      if (!decTuneHint) $('decStatus').textContent = decStateText;
+      renderNavCard();
+    },
+    // ★★ V12 406 MHz beacons: the counts and the last burst's public fields.
+    onSarsat: (d) => {
+      if (activeDec !== 'sarsat') return;
+      sarsatLast = sarsatSanitise(d);
+      decStateText = sarsatStateText(0, sarsatLast);
+      if (!decTuneHint) $('decStatus').textContent = decStateText;
+    },
     // ★★ V12 DTMF + 5-tone: amateur here or not (whether digits can be shown), on attach and when the dial changes band.
     onTones: (d) => {
       if (activeDec !== 'tones') return;
@@ -14613,7 +14665,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'hfdl' | 'ale';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'vor' | 'sarsat' | 'hfdl' | 'ale';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12 out of this radio's reach: the press says why and starts nothing (decWhyPaint draws the key greyed)
       if (decWhy[mode]) { showPill(`${(b.textContent || mode).trim()} unavailable \u2014 ${decWhy[mode]}`, 8000); return; }
@@ -15299,7 +15351,8 @@ function anyDecoderLeft(): boolean {
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
     || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal')) || (hfdlCap && !blockedModes.has('hfdl'))
     || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
-    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon')) || (tonesCap && !blockedModes.has('tones')) || (aleCap && !blockedModes.has('ale'));
+    || (jttyCap && !blockedModes.has('jtty')) || (ncdxfCap && !blockedModes.has('ncdxf')) || (balloonCap && !blockedModes.has('balloon')) || (tonesCap && !blockedModes.has('tones')) || (aleCap && !blockedModes.has('ale'))
+    || (vorCap && !blockedModes.has('vor')) || (sarsatCap && !blockedModes.has('sarsat'));
 }
 
 /* ★★ THE WHOLE-RADIO TOGGLES — one each, for the mode menu (mobile.ts deps) AND the decoder panel's TUNES THE RADIO ITSELF
@@ -15350,7 +15403,7 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
  *  title and label (hover, focus, a screen reader), and a press shows the reason (touch, pad, keyboard) — never hidden,
  *  never live. An owner's block still hides it (it is false with no reason). */
 let decWhy: Record<string, string> = {};
-const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'ale'];
+const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'ale', 'vor', 'sarsat'];
 function parseDecWhy(j: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!j || typeof j !== 'object') return out;
@@ -15426,6 +15479,8 @@ function showDecBox(what: string) {
                             : what === 'hell'  ? 'FELD HELL'
                             : what === 'balloon' ? 'BALLOONS'
                             : what === 'tones' ? 'DTMF / 5-TONE'
+                            : what === 'vor' ? 'VOR / ILS'
+                            : what === 'sarsat' ? '406 MHz BEACONS'
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -15467,9 +15522,13 @@ function showDecBox(what: string) {
   $('balloonList').classList.toggle('on', what === 'balloon');
   if (what === 'balloon') { balloonClear(); renderBalloon(); }
   $('ncdxfList').classList.toggle('on', what === 'ncdxf');
+  $('navCard').classList.toggle('on', what === 'vor' || what === 'sarsat');
+  if (what === 'vor' || what === 'sarsat') renderNavCard();
   if (what === 'ncdxf') { ncdxfLast = null; renderNcdxf(); }
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
   else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
+  else if (what === 'vor') { vorLast = null; decStateText = vorStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = VOR_HINT; }
+  else if (what === 'sarsat') { sarsatLast = null; decStateText = sarsatStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = SARSAT_HINT; }
   else if (what === 'tones') { tonesLast = null; decStateText = tonesStateText(0, null); $('decStatus').textContent = decStateText; $('decStatus').title = TONES_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
   else if (what === 'ale') { aleLast = null; decStateText = aleStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = ALE_HINT; }

@@ -78,6 +78,9 @@ const BLOCKABLE: ModeEntry[] = [
    *  setup page, with the same notice. */
   { id: 'tones', label: 'DTMF and 5-tone selective calling' },
   { id: 'tones+digits', label: '5-tone: show the called numbers off the amateur bands (to you only)', parent: 'tones', on: true },
+  // ★ V12 VOR / ILS and 406 MHz beacons (docs/v12/VOR-ILS.md, SARSAT.md) — the setup page's same two switches
+  { id: 'vor', label: 'VOR bearing and ILS deviation' },
+  { id: 'sarsat', label: '406 MHz distress beacons (COSPAS-SARSAT)' },
   /* ★★ V12 DV ID (docs/v12/DV-SIGNALLING.md): DMR, D-STAR, YSF, NXDN, dPMR — who is talking, never the voice — a demodulator
    *  on VHF / UHF, and under it the owner's opt-in for radio IDs off the amateur bands ("+" token), as on the setup page. */
   { id: 'dvsig', label: 'Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR (who is talking \u2014 the data only; the voice codec, AMBE, is patented)' },

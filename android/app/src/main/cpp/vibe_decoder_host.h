@@ -63,6 +63,8 @@
 #include "vibe_ncdxf_run.h"   // ★ V12 2026-11-16 the NCDXF / IARU beacon tracker
 #include "vibe_balloon_run.h"  // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV pictures — docs/v12/BALLOONS.md
 #include "vibe_tones_run.h"    // ★ V12 tone decoders: DTMF and 5-tone selective calling — docs/v12/TONES.md
+#include "vibe_nav_run.h"      // ★ V12 VOR bearing + ILS deviation on the channel IQ — docs/v12/VOR-ILS.md
+#include "vibe_sarsat_run.h"   // ★ V12 COSPAS-SARSAT 406 MHz beacons on the channel IQ — docs/v12/SARSAT.md
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -313,6 +315,9 @@ public:
         std::function<bool()> aleAmd;
         /** ★ The ITU region of this server's band plan (vibe_bands.h) — which bands are amateur. Empty = Region 1. */
         std::function<int()> region;
+        /** ★ V12 VOR / ILS: the server's place (lat, lon; false = not given) — the nearest published station on a channel,
+         *  and the owner's check of how far a radial passes from here. Never sent to a listener as such. */
+        std::function<bool(double&, double&)> position;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -586,11 +591,17 @@ public:
     /** ★ How many paging receivers run in this process — the one atomic the DSP thread reads before it looks for a host. */
     static std::atomic<int>& pagingRunning() { static std::atomic<int> n{0}; return n; }
     /** ★ Paging runs here: it wants the pipeline's CHANNEL IQ (feedChannelIq). Cheap: read on every channel block. */
-    bool wantsChannelIq() const { return pagingIq_.load(std::memory_order_relaxed) || packetIq_.load(std::memory_order_relaxed); }
+    bool wantsChannelIq() const { return pagingIq_.load(std::memory_order_relaxed) || packetIq_.load(std::memory_order_relaxed)
+                                        || navIq_.load(std::memory_order_relaxed); }
     /** ★ V12 9600 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): how many packet decoders in this process read the channel IQ
      *  (9600 / AUTO) — the one atomic the DSP thread reads before it looks for a host (a server with none pays nothing).
      *  Unlike paging this is every build and every server: amateur packet is a public broadcast. */
     static std::atomic<int>& packetIqRunning() { static std::atomic<int> n{0}; return n; }
+    /** ★★ V12 VOR / ILS and 406 MHz beacons run on the CHANNEL IQ too (vibe_nav_run.h, vibe_sarsat_run.h) — on any radio,
+     *  served or not (paging's local-only gate is paging's alone). How many run in this process: the DSP thread's one load. */
+    static std::atomic<int>& navIqRunning() { static std::atomic<int> n{0}; return n; }
+    /** ★ VOR runs here: its channel must hold the 9.96 ± 0.5 kHz subcarrier (the one pipeline widens it — navWideSync). */
+    bool wantsWideChannel() { std::lock_guard<std::mutex> lk(decMtx_); return (bool)nav_; }
     /** Hand paging `n` samples of the listener's channel IQ (post-NCO, dial at DC, cut to the passband) at `rate` Hz.
      *  Copies and returns at once, as feed() — the DSP thread never decodes. Two seconds behind and the oldest goes. */
     void feedChannelIq(const std::complex<float>* iq, int n, double rate) {
@@ -610,6 +621,8 @@ public:
         }
         qCv_.notify_one();
     }
+    /** ★ Seconds of channel IQ waiting (the benchmark's IQ rows pace on it). */
+    double queuedChannelIqSec() { std::lock_guard<std::mutex> lk(qM_); return qcSec_; }
     /** ★ What paging has locked ("POCSAG 1200"), or "" — for the admin page. */
     std::string pagingDetected() {
 #if defined(VIBE_PAGING)
@@ -675,7 +688,7 @@ public:
         std::lock_guard<std::mutex> lk(decMtx_);
         if (hfdl_) return "hfdl";
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : ale_ ? "ale" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : nav_ ? "vor" : sarsat_ ? "sarsat" : ale_ ? "ale" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -818,7 +831,7 @@ private:
     static bool knownExt(const std::string& e) {
         if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones" || e == "ale";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones" || e == "vor" || e == "sarsat" || e == "ale";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -864,7 +877,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_ || ale_; }
+    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_ || nav_ || sarsat_ || ale_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -895,6 +908,9 @@ private:
         ncdxf_.reset();
         balloon_.reset();
         tones_.reset();
+        nav_.reset();
+        sarsat_.reset();
+        if (navIq_.exchange(false)) navIqRunning().fetch_sub(1);
         ale_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
@@ -1152,6 +1168,9 @@ private:
             buildBalloonLocked_(msg);
         } else if (ext == "tones") {
             buildTonesLocked_(msg);
+        } else if (ext == "vor" || ext == "sarsat") {
+            buildNavIqLocked_(ext);
+            return;   // ★ fed the channel IQ (feedChannelIq), not the audio: active_ stays false
         } else if (ext == "ale") {
             buildAleLocked_();
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
@@ -1484,6 +1503,29 @@ private:
      *  audio, both at once. "dtmf":false / "five":false switch one off; "standard" pins the 5-tone table (a toneTables() id;
      *  anything else AUTO). WHAT IS SHOWN is decided in TonesRun by the dial's band (amateur or not) and the owner's opt-in
      *  (Env::tonesDigits) — never by the client. */
+    /** ★★ V12 VOR / ILS ("vor", vibe_nav_run.h) and 406 MHz beacons ("sarsat", vibe_sarsat_run.h): both on the listener's
+     *  IQ (feedChannelIq — their slice, or the one pipeline's channel; the dial near DC), so the audio chain's filters
+     *  never touch a phase; no
+     *  parameters (AUTO: VOR or ILS is read from the signal, the channel says which to expect). */
+    void buildNavIqLocked_(const std::string& ext) {
+        if (ext == "vor") {
+            NavRun::Out o;
+            o.text = [this](const std::string& t) { textFrame(t); };
+            o.textPriv = [this](const std::string& pub, const std::string& priv) { textFramePriv(pub, priv); };
+            o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+            o.json = [this](const std::string& j) { broadcastText(j, -1); };
+            nav_.reset(new NavRun(env_.dialHz, env_.position, std::move(o)));
+        } else {
+            SarsatRun::Out o;
+            o.text = [this](const std::string& t) { textFrame(t); };
+            o.textPriv = [this](const std::string& pub, const std::string& priv) { textFramePriv(pub, priv); };
+            o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+            o.json = [this](const std::string& j) { broadcastText(j, -1); };
+            sarsat_.reset(new SarsatRun(env_.dialHz, std::move(o)));
+        }
+        if (!navIq_.exchange(true)) navIqRunning().fetch_add(1);
+        log(ext == "vor" ? "decoder attached: VOR / ILS" : "decoder attached: 406 MHz beacons");
+    }
     void buildTonesLocked_(const std::string& msg) {
         TonesRun::Config c;
         c.dtmf = msg.find("\"dtmf\":false") == std::string::npos;
@@ -1747,6 +1789,11 @@ private:
                     // ★ V12 9600 packet: the same channel IQ (vibe_aprs_run.h feedIq)
                     if (aprs_ && aprs_->wantsIq()) aprs_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
                 }
+                {   // ★ V12 VOR / ILS and 406 MHz beacons: their lines and state are sent from inside
+                    std::lock_guard<std::mutex> dl(decMtx_);
+                    if (nav_) nav_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
+                    if (sarsat_) sarsat_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
+                }
                 cpuNs_.fetch_add(vibeThreadCpuNs() - c0, std::memory_order_relaxed);
                 lk.lock();
                 continue;
@@ -1988,8 +2035,11 @@ private:
     std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::unique_ptr<NcdxfRun> ncdxf_;         // ★ V12 NCDXF beacons (buildNcdxfLocked_)
     std::unique_ptr<BalloonRun> balloon_;     // ★ V12 balloons (buildBalloonLocked_)
-    std::unique_ptr<TonesRun> tones_;         // ★ V12 DTMF + 5-tone (buildTonesLocked_)
+    std::unique_ptr<TonesRun> tones_;
     std::unique_ptr<AleDecoder> ale_;         // ★ V12 2G HF ALE (buildAleLocked_)
+    std::unique_ptr<NavRun> nav_;             // ★ V12 VOR / ILS (buildNavIqLocked_) — fed the channel IQ
+    std::unique_ptr<SarsatRun> sarsat_;       // ★ V12 406 MHz beacons (buildNavIqLocked_) — fed the channel IQ
+    std::atomic<bool> navIq_{false};          // ★ one of them runs: the shim hands this host its channel IQ
     double decUtc_ = NAN;                     ///< ★ the capture UTC of the block decode_ is handed (NaN = now)
     std::unique_ptr<JttyRun> jtty_;           // ★ JTTY: every JTTY signal in the passband (buildJttyLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
@@ -2159,6 +2209,28 @@ public:
         std::shared_ptr<DecoderHost> h;
         { std::lock_guard<std::mutex> lk(m_); h = shared_; }
         if (h) h->feedChannelIq(iq, n, rate);
+    }
+    /** ★★ V12 VOR / ILS, 406 MHz beacons: a listener's IQ (their slice, per-VFO) — the same queue as paging's. */
+    void feedNavIqSession(const std::string& session, const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::navIqRunning().load(std::memory_order_relaxed) <= 0 || !anyPer_.load(std::memory_order_relaxed)) return;
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_);
+          auto it = bySession_.find(session);
+          if (it != bySession_.end()) h = it->second; }
+        if (h) h->feedChannelIq(iq, n, rate);
+    }
+    /** ★★ …and the one pipeline's channel. */
+    void feedNavIqShared(const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::navIqRunning().load(std::memory_order_relaxed) <= 0) return;
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_); h = shared_; }
+        if (h) h->feedChannelIq(iq, n, rate);
+    }
+    /** ★ Does the one pipeline's host run VOR (which needs its channel 25 kHz wide)? */
+    bool sharedWantsWide() {
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_); h = shared_; }
+        return h && h->wantsWideChannel();
     }
     /** A listener's host is finished with — every decoder stopped, every slot released, NOW. */
     void drop(const std::string& session) {

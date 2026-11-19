@@ -10342,6 +10342,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ V12 tone ID: one bool when the listener is not on NFM (and nothing left to clear)
         if ((c->toneWant || !c->toneSent.empty()) && c->owner) c->owner->toneFeedClient(c, x, n, rateHz);
         // ★ V12 PAGING (Android local hardware only): one relaxed load unless a paging receiver runs in this process
+        //   (★ VOR / ILS and 406 MHz beacons are fed from the listener's SLICE instead — feedOneClient)
         // ★ V12 9600 PACKET (any build, any server): one more relaxed load (docs/v12/AX25-9600-FX25-IL2P.md)
         if (c->owner && ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
                          || DecoderHost::packetIqRunning().load(std::memory_order_relaxed) > 0))
@@ -19921,6 +19922,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
     bool drmSharedZoomMoves = false;   // ★ the `zoomMovesRadio` last sent — see drmZoomMovesRadio
+    /** ★★ V12 VOR on the ONE pipeline: its channel IQ is cut to the AM width, and the subcarrier sits at 9.96 kHz — so while
+     *  the shared host runs VOR the width is at least 25 kHz (setBandwidth), as M17 holds its 12.5 kHz. The listener's own
+     *  width (navUserBw_) is put back when it stops. Synced at every attach, detach and decoder socket close. */
+    std::atomic<bool> navWide_{false};
+    double navUserBw_ = 0;
+    static constexpr double kNavWideHz = 25000.0;
+    void navWideSync() {
+        const bool want = !perClientDsp() && decoders_.sharedWantsWide();
+        if (want == navWide_.load()) return;
+        navWide_.store(want);
+        const double bw = navUserBw_ > 0 ? navUserBw_ : vfoBwHz.load();
+        LOGI("VOR on the shared channel: width %s", want ? "held at 25 kHz while it runs" : "given back");
+        setBandwidth(bw);
+    }
     /** The raw-IQ-out consumer's rate on the direct path, or 0 — the channel floor DRM must not lower. */
     double iqDirectRate() {
         std::lock_guard<std::mutex> lk(iqDirectMtx);
@@ -25324,6 +25339,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           if (g_serveOnLan.load() && cap > 0 && bw > cap) bw = cap; }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         if (m17Mode_.load(std::memory_order_relaxed)) bw = paramsFor("m17").bandwidth;   // ★ V12 M17: its whole channel, always
+        navUserBw_ = bw;
+        if (navWide_.load(std::memory_order_relaxed) && bw < kNavWideHz) bw = kNavWideHz;   // ★ V12 VOR: the subcarrier's channel (navWideSync)
         if (dvMode_.load(std::memory_order_relaxed)) bw = paramsFor("dvsig").bandwidth;  // ★ V12 DV signalling likewise
         // ★ The mode's floor/ceiling (RxPipeline::clampBwHz) here as well as in setTune, so the
         //   width this reports (vfoBwHz) is the one the chain is running.
@@ -31015,6 +31032,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!p->perClientDsp() && ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
                                    || DecoderHost::packetIqRunning().load(std::memory_order_relaxed) > 0))
             p->decoders_.feedChannelIqShared(x, n, rateHz);
+        // ★★ V12 VOR / ILS, 406 MHz beacons on the one pipeline: its channel (VOR widens it to 25 kHz while it runs —
+        //    navWideSync); one relaxed load when none runs
+        if (!p->perClientDsp() && DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)
+            p->decoders_.feedNavIqShared(x, n, rateHz);
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
@@ -31546,6 +31567,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★★ V12 ALE: the owner's opt-in to AMD message text off the amateur bands ("ale+amd", off by default) — HF-DATA.md
             e.aleAmd = [] { return vsModeBlocked("ale+amd"); };
             e.region = [] { return vibebands::defaultRegion(); };
+            // ★★ V12 VOR / ILS: the server's place (Setup's position) — the nearest station, and the owner's radial check
+            e.position = [](double& la, double& lo) { la = g_bgLat.load(); lo = g_bgLon.load(); return std::isfinite(la) && std::isfinite(lo); };
             // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.
             e.spotTap = [dial](bool band) -> vibe::DecoderTapPtr {
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
@@ -31696,6 +31719,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
                 // ★★★ ON VFO B (decode on either VFO): this listener's VFO B host, fed B's own audio / IQ.
+                if (wantsB(payload) && (ext == "vor" || ext == "sarsat")) {
+                    sendDecoderRefusal(sock, "decoder", ext, "vfo", "VOR / ILS and 406 MHz beacons read the radio signal of VFO A \xe2\x80\x94 start it on VFO A.");
+                    continue;
+                }
                 if (wantsB(payload)) {
                     std::shared_ptr<DecoderHost> hb = takeHostB();
                     if (!hb) {
@@ -31748,6 +31775,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 if (r == DecoderHost::Start::Unknown) { icomDecReconcile(); continue; }
                 textA = true; syncPeerA();
+                navWideSync();   // ★ V12 VOR on the one pipeline: its 25 kHz (or given back when this attach replaced it)
                 // ★★★ AND WHO STARTED IT, for the admin table — on the one-pipeline host only; a
                 //     listener's own host is theirs by construction.
                 if (!perVfo && !session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
@@ -31766,6 +31794,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 else if (host) host->stop();
                 textA = false; syncPeerA();
                 icomDecReconcile();   // ★ an Icom goes back as the decoder found it
+                navWideSync();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
             } else if (type == "subscribe_digital_spots") {
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
@@ -31862,6 +31891,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             } else if (perVfo) decoders_.drop(sess);   // ★ a listener's own host goes with them, slots and all
             else { host->stop(); host->stopSpots(); }
         }
+        navWideSync();
         outboxClose(sock);
         LOGI("dxcluster WS disconnected%s", host && left ? " (others still watching — kept decoder)"
                                           : keptForHold ? " — decoder kept running: its listener's session may be held" : "");
@@ -33320,6 +33350,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const int got = chan_->extract(bins, clientCentreBin(c.get()), c->chanBins,
                                        c->slice.data(), c->ectx, blockIndex);
         if (got > 0) c->rx->feed(c->slice.data(), got);
+        /* ★★ V12 VOR / ILS and 406 MHz beacons: THE SLICE ITSELF (the dial within half a bin of DC, ≥ 24 kHz, flat across
+         *  ±0.375 of its rate) — never the demodulator's channel, which is cut to the listener's AM / NFM width: a VOR's
+         *  subcarrier sits at 9.96 kHz and would be gone. The listener's audio and width are not touched. One relaxed load
+         *  when none runs on this server. */
+        if (got > 0 && c->owner && DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)
+            c->owner->decoders_.feedNavIqSession(c->session, c->slice.data(), got, c->chanRate);
         // ★ RAW IQ OUT: the same slice, resampled to the consumer's rate, as 8-bit IQ. The demod
         //   above keeps its copy — the stream is split, not diverted.
         if (got > 0 && c->iq && c->iq->hasConsumer()) iqTap(c.get(), c->slice.data(), got);
@@ -42136,6 +42172,17 @@ static std::string vsTunableJson() {
     /* ★ V12 tone decoders (decoders/tones_rx.h): DTMF and 5-tone selective calling on a listener's NFM / AM audio — on any
      *  frequency (what is SHOWN depends on it: docs/v12/TONES.md). Absent on an older server; false where the owner blocked it. */
     j += std::string(",\"tones\":") + (vsModeBlocked("tones") ? "false" : "true");
+    /* ★ V12 VOR / ILS (decoders/nav_rx.h) and 406 MHz beacons (decoders/sarsat_rx.h): listener's decoders on the CHANNEL IQ.
+     *  Absent on an older server; false + its reason where this radio does not reach them or the owner blocked them. */
+    if (g_icomOn.load()) {   // ★ an Icom's audio is not IQ: shown greyed with the reason (vibe_icom_decode.h's words)
+        if (!vsModeBlocked("vor")) j += ",\"vor\":false,\"vorWhy\":\"" + vibereach::jsonEsc(vibeicomdec::notOfferedWhy("vor")) + "\"";
+        else j += ",\"vor\":false";
+        if (!vsModeBlocked("sarsat")) j += ",\"sarsat\":false,\"sarsatWhy\":\"" + vibereach::jsonEsc(vibeicomdec::notOfferedWhy("sarsat")) + "\"";
+        else j += ",\"sarsat\":false";
+    } else {
+        j += vsDecoderCapJson("vor", reach);
+        j += vsDecoderCapJson("sarsat", reach);
+    }
     /* ★ V12 2026-11-19 2G HF ALE (decoders/ale_decoder.h, docs/v12/HF-DATA.md): soundings, calls and links on a listener's USB
      *  audio. Absent on an older server; false + its reason where this radio reaches no HF or the owner blocked it. */
     j += vsDecoderCapJson("ale", reach);
@@ -42401,7 +42448,7 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "ale", "drm", "freedv", "m17", "dvsig" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "vor", "sarsat", "ale", "drm", "freedv", "m17", "dvsig" };
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -42575,7 +42622,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR / DominoEX / MT63"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"ale", "ALE"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR / DominoEX / MT63"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"vor", "VOR / ILS"}, {"sarsat", "406 MHz beacons"}, {"ale", "ALE"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";
