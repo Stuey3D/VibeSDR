@@ -140,6 +140,7 @@ enum class Need {
     Avdata,      // ★ V12 the aircraft datalink: ACARS 131.5–131.85 or VDL2 136.68–136.99 MHz, not an HF+ / an Icom
     Sondes,      // ★ V12 radiosondes: a 2 MHz band of 400–406 MHz, not an HF+ / an Icom
     M17,         // ★ V12 M17 digital voice: 2 m or 70 cm on any SDR (the HF+ on 2 m), never an Icom (vibe_radio_caps.h)
+    Pkt9600,     // ★ V12 9600 packet (G3RUH on the channel IQ): 2 m or 70 cm on any SDR, never an Icom (local_sdr_shim pkt9600)
 };
 
 struct Gate { bool run = true; std::string why; };
@@ -212,6 +213,11 @@ inline Gate gateNeed(const Hw& hw, Need n) {
                                                  && (touches(r, 144e6, 148e6) || touches(r, 420e6, 450e6)); }))
                 return no("no radio here reaches M17 (2 m / 70 cm)");
             break;
+        case Need::Pkt9600:
+            if (!any([](const Radio& r) { return r.driver != "icom"
+                                                 && (touches(r, 144e6, 148e6) || touches(r, 420e6, 450e6)); }))
+                return no("no radio here reaches 9600 packet (2 m / 70 cm)");
+            break;
         case Need::Spots:
             if (!any([](const Radio& r) { return hasHf(r) || touches(r, 28e6, 29.7e6) || touches(r, 50e6, 54e6) || touches(r, 144e6, 148e6); }))
                 return no("no radio here reaches a digital-spots band (HF, 6 m or 2 m)");
@@ -238,6 +244,7 @@ inline Need needFor(const std::string& id) {
     if (id == "dec_time") return Need::TimeSig;
     if (id == "dec_same") return Need::Same;
     if (id == "dec_aprs") return Need::Aprs;
+    if (id == "dec_aprs9600") return Need::Pkt9600;
     if (id == "dec_paging") return Need::Paging;
     if (id == "dec_ism" || id == "dec_wmbus" || id == "dec_lora" || id == "dec_lora_all") return Need::Ism;
     if (id == "dec_ft8" || id == "dec_ft8band" || is("spot_")) return Need::Spots;

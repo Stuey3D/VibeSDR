@@ -86,16 +86,21 @@ public:
     static constexpr size_t kMaxStations = 500, kTrailMax = 120, kMsgMax = 60;
     static constexpr double kKeepSec = 6 * 3600, kDupeSec = 30;
 
-    /** `baud` 300, 1200 or ★ V12 9600 (G3RUH — fed the channel IQ, feedIq, or discriminator audio). */
-    Run(int baud, Opts o) : baud_(baud >= 4800 ? 9600 : baud), o_(std::move(o)) {
-        if (baud_ == 9600) {
+    /** `baud` 300, 1200 or ★ V12 9600 (G3RUH — fed the channel IQ, feedIq, or discriminator audio), or ★ 0 = AUTO:
+     *  1200 Bd on the audio AND 9600 on the channel IQ at once, FX.25 and IL2P on both (the packet decoder's default). */
+    Run(int baud, Opts o) : baud_(baud == 0 ? 0 : baud >= 4800 ? 9600 : baud), o_(std::move(o)) {
+        if (baud_ == 0) { o_.fx25 = true; o_.il2p = true; }
+        if (baud_ == 9600 || baud_ == 0) {
             vibeg3ruh::Opts g; g.fx25 = o_.fx25; g.il2p = o_.il2p;
             g3_.reset(new vibeg3ruh::Demod(g));
-        } else {
+        }
+        if (baud_ != 9600) {
+            const int b = baud_ == 0 ? 1200 : baud_;
             // FX.25 and IL2P are VHF/UHF FM packet things: not on HF 300 Bd
-            afsk_.reset(new AfskDemod(48000, baud_, false, baud_ == 1200 && o_.fx25, baud_ == 1200 && o_.il2p));
+            afsk_.reset(new AfskDemod(48000, b, false, b == 1200 && o_.fx25, b == 1200 && o_.il2p));
         }
     }
+    /** 300, 1200, 9600 — or 0 for AUTO (1200 + 9600). */
     int baud() const { return baud_; }
     /** ★ V12: this run wants the listener's CHANNEL IQ (9600), not the audio. */
     bool wantsIq() const { return g3_ != nullptr; }
@@ -103,13 +108,16 @@ public:
     /** 48 kHz audio from the decoder thread (at 9600: FM-discriminator audio — a flat, wide one only; a normal NFM
      *  listener's audio is filtered too narrow for 9600 and the host feeds the channel IQ instead). */
     void feedAudio(const float* x, int n) {
-        if (g3_) g3_->feedAudio(x, n, 48000, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
-        else afsk_->feed(x, n, [&](const Frame& f) { onFrame(f); });
+        // ★ 9600 reads the audio only where no channel IQ comes (a test, a WAV of a radio's data port): once the host
+        //   hands it IQ, the listener's narrow NFM audio would only cost CPU.
+        if (g3_ && !iqFed_) g3_->feedAudio(x, n, 48000, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
+        if (afsk_) afsk_->feed(x, n, [&](const Frame& f) { onFrame(f); });
         tickList_();
     }
     /** ★ V12 9600: the listener's channel IQ (dial at DC) at `rate` Hz. */
     void feedIq(const std::complex<float>* x, int n, double rate) {
         if (!g3_) return;
+        iqFed_ = true;
         g3_->feedIq(x, n, rate, [&](const vibepkt::PktFrame& f) { onPkt_(f); });
         tickList_();
     }
@@ -123,8 +131,10 @@ public:
         // ★ V12: a UI frame with the APRS PID whose information field is BINARY and of no APRS type is telemetry (a
         //   cubesat's, a node's), not an APRS station: it goes to the frame log only, never onto the station list.
         if (aprs && binaryInfo_(ax.info) && parsePacket(ax).kind == "other") aprs = false;
-        logFrame_(f, aprs);
-        if (!aprs) return;
+        if (!aprs) { logFrame_(f, false); return; }
+        // ★ an APRS frame goes in the frame log AFTER its packet (aprs_packet first, then aprs_frame), dupes included —
+        //   the log is a raw monitor: every frame heard, a digipeated copy too
+        struct LogAfter { Run* r; const Frame& f; ~LogAfter() { r->logFrame_(f, true); } } logAfter{ this, f };
         ++frames_; if (f.repaired) ++repaired_;
         const double t = now();
         // ★ the duplicate rule (source + information field within 30 s)
@@ -146,7 +156,8 @@ public:
     std::string listJson(bool withTrails) {
         const double t = now();
         prune(t);
-        std::string o = "{\"type\":\"aprs_list\",\"data\":{\"baud\":" + std::to_string(baud_) + ",\"frames\":" + std::to_string(frames_)
+        std::string o = "{\"type\":\"aprs_list\",\"data\":{\"baud\":" + std::to_string(baud_ == 0 ? 1200 : baud_) + (baud_ == 0 ? ",\"auto\":1" : "")
+                      + ",\"frames\":" + std::to_string(frames_)
                       + ",\"repaired\":" + std::to_string(repaired_) + ",\"dupes\":" + std::to_string(dupes_n_)
                       + ",\"fx25\":" + std::to_string(fx25_) + ",\"il2p\":" + std::to_string(il2p_) + ",\"fixed\":" + std::to_string(fixed_)
                       + ",\"other\":" + std::to_string(other_) + (o_.fx25 ? ",\"fx25On\":1" : "") + (o_.il2p ? ",\"il2pOn\":1" : "")
@@ -360,6 +371,7 @@ private:
     std::unique_ptr<AfskDemod> afsk_;
     std::unique_ptr<vibeg3ruh::Demod> g3_;
     std::deque<LogEntry> log_;
+    bool iqFed_ = false;
     uint64_t fx25_ = 0, il2p_ = 0, fixed_ = 0, other_ = 0;
     std::map<std::string, Station> stations_;
     std::map<std::string, double> dupes_;

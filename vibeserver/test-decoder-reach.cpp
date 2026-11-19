@@ -112,6 +112,17 @@ int main() {
         ok(!live("same", r) && !live("navtex", r) && !live("cw", r), "allow list FM only: SAME, NAVTEX, CW greyed");
         ok(has(whyNot("same", r), "87.5\xe2\x80\x93" "108.0 MHz"), "allow list FM only: the reason gives the range");
     }
+    // ★ V12 9600 packet: 2 m or 70 cm; APRS (the packet decoder) also on 70 cm alone
+    {
+        Reach hf{ reachRanges("airspyhf"), false };
+        ok(live("pkt9600", hf), "HF+: 9600 packet live (2 m is inside 60–260 MHz)");
+        Reach l70{ { { 432e6, 438e6 } }, true };
+        ok(live("pkt9600", l70) && live("aprs", l70), "locked 432–438 MHz: 9600 packet and the packet decoder live (70 cm)");
+        Reach fm{ { { 88e6, 96e6 } }, true };
+        ok(!live("pkt9600", fm) && has(whyNot("pkt9600", fm), "70 cm (420"), "locked 88–96 MHz: 9600 packet greyed with its bands");
+        Reach hfOnly{ { { 30e3, 30e6 } }, false };
+        ok(!live("pkt9600", hfOnly) && live("aprs", hfOnly), "HF only: 9600 greyed, APRS live (30 m HF packet)");
+    }
     // Unknown reach: never grey
     {
         Reach r;

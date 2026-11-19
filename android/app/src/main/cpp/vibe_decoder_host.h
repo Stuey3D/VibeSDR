@@ -580,7 +580,11 @@ public:
     /** ★ How many paging receivers run in this process — the one atomic the DSP thread reads before it looks for a host. */
     static std::atomic<int>& pagingRunning() { static std::atomic<int> n{0}; return n; }
     /** ★ Paging runs here: it wants the pipeline's CHANNEL IQ (feedChannelIq). Cheap: read on every channel block. */
-    bool wantsChannelIq() const { return pagingIq_.load(std::memory_order_relaxed); }
+    bool wantsChannelIq() const { return pagingIq_.load(std::memory_order_relaxed) || packetIq_.load(std::memory_order_relaxed); }
+    /** ★ V12 9600 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): how many packet decoders in this process read the channel IQ
+     *  (9600 / AUTO) — the one atomic the DSP thread reads before it looks for a host (a server with none pays nothing).
+     *  Unlike paging this is every build and every server: amateur packet is a public broadcast. */
+    static std::atomic<int>& packetIqRunning() { static std::atomic<int> n{0}; return n; }
     /** Hand paging `n` samples of the listener's channel IQ (post-NCO, dial at DC, cut to the passband) at `rate` Hz.
      *  Copies and returns at once, as feed() — the DSP thread never decodes. Two seconds behind and the oldest goes. */
     void feedChannelIq(const std::complex<float>* iq, int n, double rate) {
@@ -870,6 +874,7 @@ private:
         psk_.reset();
         rttySkim_.reset();   // ★ joins its search workers
         aprs_.reset();
+        if (packetIq_.exchange(false)) packetIqRunning().fetch_sub(1);
         dsc_.reset();
         sitora_.reset();
         hfdl_.reset();
@@ -1087,13 +1092,27 @@ private:
              *  to the gallery's tap (DecoderTap::station). */
             double b = 1200;
             num(msg, "baud_rate", b);
+            int baud = b < 600 ? 300 : 1200;
+            /* ★★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): "packet" = "auto" (1200 on the audio + 9600 on the channel
+             *  IQ, FX.25 and IL2P on — the default a new client sends), "1200", "9600" or "300"; "fx25" / "il2p" 0/1 for a
+             *  manual choice (both on when absent). `baud_rate` stays for older servers (a new client sends 1200 with
+             *  "auto", so an old server runs 1200). "sat": the satellite engine's name for what it is tracking. */
+            const std::string pk = str(msg, "packet");
+            if (pk == "auto") baud = 0; else if (pk == "9600") baud = 9600; else if (pk == "300") baud = 300; else if (pk == "1200") baud = 1200;
+            double fx = 1, il = 1;
+            num(msg, "fx25", fx); num(msg, "il2p", il);
             vibeaprs::Run::Opts o;
             o.json = [this](const std::string& j) { broadcastText(j); };
             o.heard = [this](const vibestation::Heard& h) { if (DecoderTapPtr t = tap()) t->station(h); };
             o.rfHz = env_.dialHz;
-            aprs_.reset(new vibeaprs::Run(b < 600 ? 300 : 1200, std::move(o)));
+            o.fx25 = fx != 0; o.il2p = il != 0;
+            o.sat = str(msg, "sat").substr(0, 40);
+            aprs_.reset(new vibeaprs::Run(baud, std::move(o)));
+            // ★ 9600 / AUTO read the listener's channel IQ (feedChannelIq): the shim hands it over while this is set
+            if (aprs_->wantsIq()) { if (!packetIq_.exchange(true)) packetIqRunning().fetch_add(1); }
             active_.store(true, std::memory_order_relaxed);
-            log(std::string("decoder attached: aprs ") + (b < 600 ? "300" : "1200") + " Bd");
+            log(std::string("decoder attached: aprs ") + (baud == 0 ? "AUTO (1200 + 9600)" : std::to_string(baud) + " Bd")
+                + (baud == 300 ? "" : std::string(" FX.25 ") + (fx != 0 || baud == 0 ? "on" : "off") + " IL2P " + (il != 0 || baud == 0 ? "on" : "off")));
             return;
         } else if (ext == "dsc") {
             buildDscLocked_(msg);
@@ -1677,9 +1696,14 @@ private:
                 qcSec_ = std::max(0.0, qcSec_ - (double)b.v.size() / b.rate);
                 lk.unlock();
                 const uint64_t c0 = vibeThreadCpuNs();
+                {
+                    std::lock_guard<std::mutex> dl(decMtx_);
 #if defined(VIBE_PAGING)
-                { std::lock_guard<std::mutex> dl(decMtx_); if (paging_) paging_->feedIq(b.v.data(), (int)b.v.size(), b.rate); }
+                    if (paging_) paging_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
 #endif
+                    // ★ V12 9600 packet: the same channel IQ (vibe_aprs_run.h feedIq)
+                    if (aprs_ && aprs_->wantsIq()) aprs_->feedIq(b.v.data(), (int)b.v.size(), b.rate);
+                }
                 cpuNs_.fetch_add(vibeThreadCpuNs() - c0, std::memory_order_relaxed);
                 lk.lock();
                 continue;
@@ -1911,6 +1935,7 @@ private:
 #if defined(VIBE_PAGING)
     std::unique_ptr<PagingRun> paging_;       // ★ PAGING: fed the channel IQ (feedChannelIq) — Android local hardware only
 #endif
+    std::atomic<bool> packetIq_{false};       // ★ V12 9600 / AUTO packet runs: the shim hands this host its channel IQ too
     std::atomic<bool> pagingIq_{false};       // ★ paging runs: the shim hands this host its channel IQ (wantsChannelIq)
     std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::unique_ptr<NcdxfRun> ncdxf_;         // ★ V12 NCDXF beacons (buildNcdxfLocked_)
