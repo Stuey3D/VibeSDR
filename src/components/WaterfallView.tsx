@@ -187,6 +187,9 @@ export interface WaterfallViewProps {
   centerHz:    number;
   bwHz:        number;
   tuneHz:      number;
+  /** ★★ V12 SATELLITE DOPPLER: the needle sits where the CHANNEL is (nominal + shift), not on the dial — the brief's marker
+   *  TRAP (up to ±10 kHz off the trace otherwise). Drawn only; nothing else reads it. 0 = none. */
+  needleOffsetHz?: number;
   /** Filter edges (Hz offsets from carrier; low negative, high positive). */
   filterLow?:  number;
   filterHigh?: number;
@@ -662,7 +665,7 @@ const WfStampLayer = React.memo(function WfStampLayer({ sink, width, rowPt, wfH,
 // ── Component ─────────────────────────────────────────────────────────────────
 
 function WaterfallView({
-  frameSink, binCount, centerHz, bwHz, tuneHz,
+  frameSink, binCount, centerHz, bwHz, tuneHz, needleOffsetHz = 0,
   filterLow = -3000, filterHigh = 3000,
   dbMin = -120, dbMax = -20, dbOffset = 0, wfCoarse = 'auto',
   colormap = 'gqrx', width, height, bottomGuard = 0,
@@ -2777,8 +2780,8 @@ function WaterfallView({
 
   // ── Needle + sideband geometry (v1.5) ───────────────────────────────────────
   // ★ utils/needleGeometry — every renderer path below reads this one result, so `needleHidden` (V12 ISM) removes them all.
-  const needle = useMemo(() => needleGeometry({ hidden: needleHidden, bwHz, tuneHz, filterLow, filterHigh, width, pxPerHz, hzToX, wide: wideVfo }),
-    [needleHidden, bwHz, tuneHz, filterLow, filterHigh, hzToX, pxPerHz, width, wideVfo]);
+  const needle = useMemo(() => needleGeometry({ hidden: needleHidden, bwHz, tuneHz: tuneHz + needleOffsetHz, filterLow, filterHigh, width, pxPerHz, hzToX, wide: wideVfo }),
+    [needleHidden, bwHz, tuneHz, needleOffsetHz, filterLow, filterHigh, hzToX, pxPerHz, width, wideVfo]);
 
   // ── VFO-lock boundary walls + RF-centre marker (BRIEF §5.6) ─────────────────
   // Geometry only; rendered on the spectrum/needle canvas via hzToX so it tracks

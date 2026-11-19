@@ -504,6 +504,11 @@ export interface SDRCallbacks {
   /** ★ V12 RADIOSONDES (RS41), VIBESERVER-ONLY: a report about once a second while the receiver is in the SONDES mode;
    *  null = it ended (`sondes_off`); `err` = the refusal (`sondes_error`). */
   onSondes?:    (r: import('./sondes').SondeReport | null, err?: string) => void;
+  /** ★★ V12 SATELLITES, VIBESERVER-ONLY (docs/v12/SATELLITE-ENGINE.md): the picker's list, a Doppler lock's readout
+   *  (twice a second while locked; OFF with `why` at the end or on a refusal), one pass's sky track. */
+  onSatList?:   (l: import('./satellites').SatList) => void;
+  onSat?:       (r: import('./satellites').SatReadout) => void;
+  onSatTrack?:  (t: import('./satellites').SatTrack) => void;
   /** ★★ V12, VIBESERVER-ONLY: the answer to modeResume (wholeModeResume.ts) — may this listener have the whole-radio mode
    *  the server left while they were away back? `why` = the refusal, in words. */
   onModeResume?: (kind: 'adsb' | 'ndb' | 'ism' | 'ais', ok: boolean, why?: string) => void;

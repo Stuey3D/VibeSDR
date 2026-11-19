@@ -1,4 +1,5 @@
 // Shared SDR types used across clients and UI
+import { satCapFrom } from './satellites';   // ★ V12 satellites (doppler / dopplerWhy)
 import { parseTextModes, type TextMode } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { parseServerUrl, withScheme, toHttpUrl, buildServerUrl, type ParseOpts } from '../utils/serverUrl';
 import { STEP_833, STEP_FM_ODD, isAirbandCom } from '../utils/airband';
@@ -484,6 +485,8 @@ export interface ServerOccupancy {
   avdata?: { ok: boolean; why: string; bands: AvBand[]; text: boolean };
   /** ★ V12 RADIOSONDES (RS41, a whole-radio mode on 400–406 MHz): offered / greyed with its reason; absent = no key. */
   sondes?: { ok: boolean; why: string; bands: SondeBand[] };
+  /** ★★ V12 satellites: `doppler` (a version) — absent where the radio reaches no listed downlink (no entry at all). */
+  sat?: { ok: boolean; why: string };
   /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
    *  first) — textModes.ts. */
   mfsk?: boolean;
@@ -592,6 +595,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
         ? { ok: j.avdata === true, why: cleanText(j.avdataWhy, 200) || (j.avdata === true ? '' : 'The aircraft datalink is not available on this receiver'),
             bands: parseAvBands(j.avdataBands), text: j.avdataText === true }
         : undefined,
+      sat:       satCapFrom(j) ?? undefined,
       sondes:    j.sondes === true || j.sondes === false
         ? { ok: j.sondes === true, why: cleanText(j.sondesWhy, 200) || (j.sondes === true ? '' : 'Radiosondes are not available on this receiver'),
             bands: parseSondeBands(j.sondesBands) }

@@ -507,6 +507,9 @@ interface ModeSelectorProps {
     avdataAvail?: boolean; avdataWhy?: string; avdataOn?: boolean; onAvdata?: () => void;
     /** ★★ V12 RADIOSONDES (RS41) — the same three states: absent (no 400 MHz reach), dimmed with the reason, live. */
     sondesAvail?: boolean; sondesWhy?: string; sondesOn?: boolean; onSondes?: () => void;
+    /** ★★ V12 SATELLITES — opens the satellites box (not a whole-radio mode): absent (no listed downlink in reach), dimmed
+     *  with the reason (no orbit data / location / time yet), lit while a Doppler lock runs. */
+    satAvail?: boolean; satWhy?: string; satOn?: boolean; onSat?: () => void;
     /** ★★ V12 APRS — a VibeServer's own packet decoder, only where vibeserver.json says `"aprs": true`. Its settings:
      *  PACKET VHF 1200 / HF 300, a TUNE key (the region's channel `aprsHz` in NFM, or 10.1476 USB) and the hint. */
     aprsAvail?: boolean; aprsBaud?: AprsBaud; aprsHz?: number;
@@ -1031,6 +1034,29 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★ V12 THE SATELLITES KEY — the sondes key's look; it opens the box, and the box says why when it is greyed. */
+  const satOff = !!decoderControls?.satWhy;
+  const satLit = !!decoderControls?.satOn;
+  const satKey = () => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="sat" onPress={() => dc.onSat?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="SAT" active={satLit} pip stack={stackIco}
+          onPress={() => dc.onSat?.()} fontSize={12}
+          style={satOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={satOff ? `Satellites, unavailable: ${dc.satWhy}` : 'Satellites — next passes, a sky track and Doppler correction'}
+        style={[st.btn, { borderColor: satLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : 10 },
+                satLit && { backgroundColor: decBg },
+                satOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onSat?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: satLit ? dec : t.btnText }]}>SAT</Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
   const clientKey = (k: DecId) => {
                 // ★★ V12 out of this radio's reach (NAVTEX on a radio with no HF): greyed, a press says why
                 const why = decoderControls!.decWhy?.[k];
@@ -1221,6 +1247,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       default: return { id, node: null };
     }
   }).filter(k => !!k.node);
+  // ★★ V12 SATELLITES beside them (it tunes the radio too: TRACK puts the dial on a downlink) — not in WHOLE_RADIO_IDS, it
+  //    is not a whole-radio mode
+  if (decoderControls?.satAvail) wholeKeys.push({ id: 'sat', node: satKey() });
   /* ★★ V12 THE BAND GROUPS — one renderer per id (utils/decoderBands names them), so a decoder placed in two bands (DSC,
    *  CW, APRS, SSTV, DIGITAL SPOTS) is the same key in each. null = not on this radio / not allowed here (the rules above,
    *  unchanged — a locked range still hides ADS-B and the rest). */
