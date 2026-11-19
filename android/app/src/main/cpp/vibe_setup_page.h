@@ -3531,6 +3531,12 @@ const BLOCKABLE = [
    *  140 kHz IQ slice of the dial; each pass's channels and colour composite go to the gallery as PNGs. Only where the
    *  radio reaches 137 MHz, never an Icom. */
   { id: "lrpt", label: "METEOR weather satellite pictures (LRPT)" },
+  /* ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): a VOR's radial, an ILS localiser's / glideslope's deviation, the ident and the
+   *  published station, from a listener's channel on 108–118 / 329–335 MHz. */
+  { id: "vor", label: "VOR bearing and ILS deviation" },
+  /* ★ V12 COSPAS-SARSAT (docs/v12/SARSAT.md): 406 MHz distress beacons (mostly tests). Listeners see that a beacon was
+   *  heard; its identity and encoded position go to you only. Real alerts are handled by the authorities, not by us. */
+  { id: "sarsat", label: "406 MHz distress beacons (COSPAS-SARSAT)" },
   /* ★★ V12 2026-11-19 2G HF ALE (docs/v12/HF-DATA.md): soundings, calls and links on a listener's USB audio. Addresses are
    *  always shown (who called whom is not a message's content); an AMD message's TEXT is shown on the amateur bands (HFLink),
    *  elsewhere only with this opt-in ("+" token, IN the CSV when ticked, off by default) and then to the owner only. */

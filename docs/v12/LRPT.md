@@ -67,6 +67,10 @@ Real 105 s decode: 38 MB maximum RSS including the test's WAV buffers.
   remove now, Hz, positive = received above nominal* — read once per IQ block (≈ 20 a second) and fed forward to the
   carrier loop (`Receiver::setDopplerHz`). **With neither**, acquisition + the loop follow ±3.1 kHz / 65 Hz/s unaided
   (test: −2.8 kHz with a +65 Hz/s slope and 80 ppm clock decodes every block); the engine only makes lock faster.
+- **Wired to the engine (2026-11-19, after merging `v12-sat`):** with no `Env::satDopplerHz` override, the host reads
+  `vibe::sat::decoderView(session)` once per IQ block and feeds `modelHz` (received − nominal) forward when a lock is
+  on (TRACK / COAST). The slice is cut at the DIAL (the nominal) off the shared FFT, not from the channel the lock's NCO
+  moves, so this is not a double correction — `inChannelHz` is never added. No lock = 0 (self-acquisition as before).
 - **Per-satellite parameters** (sats.json): `"symbol_rate"` 72000 / 80000 in the attach message; absent = AUTO (above).
   The 80k mode implies interleaved. Modulation and coding are found by themselves.
 - **Not built here:** pass prediction, scheduling, the capture-and-deferred decode / client-assisted stage

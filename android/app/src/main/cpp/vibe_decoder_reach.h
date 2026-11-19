@@ -104,6 +104,11 @@ inline const std::vector<Entry>& table() {
         //   MHz, each the 115 kHz signal plus ±3.1 kHz of Doppler — either will do (the satellite's entry says which is live).
         v.push_back({ "lrpt", "METEOR LRPT", "is on 137.100 and 137.900 MHz (the METEOR-M weather satellites)",
             { ch(137.100e6, 62e3), ch(137.900e6, 62e3) } });
+        // ★ V12 VOR / ILS (docs/v12/VOR-ILS.md): VORs and localisers on 108–117.975 MHz, glideslopes on 328.6–335.4 MHz.
+        v.push_back({ "vor", "VOR / ILS", "is on 108\xe2\x80\x93" "118 MHz (VOR, ILS localiser) and 328.6\xe2\x80\x93" "335.4 MHz (glideslope)",
+            { band(108.0e6, 117.975e6), band(328.6e6, 335.4e6) } });
+        // ★ V12 COSPAS-SARSAT (docs/v12/SARSAT.md): first-generation distress beacons, 406.0–406.1 MHz.
+        v.push_back({ "sarsat", "406 MHz beacons", "is on 406.0\xe2\x80\x93" "406.1 MHz", { band(406.0e6, 406.1e6) } });
         return v;
     }();
     return t;

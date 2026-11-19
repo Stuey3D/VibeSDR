@@ -482,6 +482,10 @@ export interface ServerOccupancy {
   tones?: boolean;
   /** ★ V12 METEOR-M LRPT weather-satellite pictures ('lrpt', lrpt.ts): true here, false + `lrptWhy` off 137 MHz; absent on an Icom. */
   lrpt?: boolean;
+  /** ★ V12 VOR / ILS ('vor') — false + vorWhy where this radio does not reach 108–118 / 329–335 MHz (or an Icom: no IQ). */
+  vor?: boolean;
+  /** ★ V12 406 MHz beacons ('sarsat') — false + sarsatWhy where this radio does not reach 406 MHz (or an Icom). */
+  sarsat?: boolean;
   /** ★ V12 2G HF ALE ('ale') — soundings, calls and links on HF; the server decides what is shown (aleDecoder.ts). */
   ale?: boolean;
   /** ★ V12 HFDL: this server decodes HFDL on a listener's USB dial ('hfdl') and serves /addon/hfdl/* for the HFDL MAP. */
@@ -528,7 +532,7 @@ export interface ServerOccupancy {
 }
 
 /** ★★★ V12 the decoders vibe_decoder_reach.h can grey for reach — the server sends `"<id>": false, "<id>Why": "…"`. */
-export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'lrpt', 'ale'] as const;
+export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty', 'ncdxf', 'balloon', 'hfdl', 'lrpt', 'ale', 'vor', 'sarsat'] as const;
 /** id → reason, for each fixed-frequency decoder this radio cannot reach. A reason is honoured only beside `<id>: false`
  *  (an owner's block sends false with no reason — that key stays hidden, as ever). */
 export function parseDecoderReach(j: any): Record<string, string> {
@@ -592,6 +596,8 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       balloon:   j.balloon === true, // ★ V12 balloons
       tones:     j.tones === true,   // ★ V12 DTMF + 5-tone
       lrpt:      j.lrpt === true,    // ★ V12 METEOR LRPT (false + lrptWhy = greyed: decWhy)
+      vor:       j.vor === true,     // ★ V12 VOR / ILS
+      sarsat:    j.sarsat === true,  // ★ V12 406 MHz beacons
       ale:       j.ale === true,     // ★ V12 2G HF ALE
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,

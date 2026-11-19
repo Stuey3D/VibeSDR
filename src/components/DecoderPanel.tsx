@@ -72,7 +72,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | 'hfdl' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'vor' | 'sarsat' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'ale' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | 'hfdl' | null;
 // ★ V12 FELD HELL is drawn, so it is a picture here (PREV, SAVE, CLR, zoom) — plainly, without WEFAX's ADJ
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv', 'hell', 'lrpt'];   // ★ V12 METEOR LRPT: the preview in the picture box
 
@@ -287,6 +287,8 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   ale:     'ALE',   // ★ V12 2G HF ALE (services/aleDecoder.ts)
   tones:   'DTMF / 5-TONE',   // ★ V12 DTMF + 5-tone selective calling
   lrpt:    'METEOR LRPT',     // ★ V12 METEOR-M weather-satellite pictures (services/lrpt.ts)
+  vor:     'VOR / ILS',       // ★ V12 VOR radial / ILS deviation
+  sarsat:  '406 MHz BEACONS', // ★ V12 COSPAS-SARSAT
   // ★ V12: a VibeServer's HFDL on the listener's USB dial — one line per message; the aircraft go on the HFDL MAP
   hfdl:    'HFDL',
   // ★ V12: the MFSK keyboard modes, one key a family (services/textModes.ts); the status line names the sub-mode

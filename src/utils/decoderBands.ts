@@ -10,12 +10,14 @@
  *                     ⚓ Maritime  NAVTEX · DSC · SITOR-A · WEFAX
  *                     Amateur     DIGITAL SPOTS · CW · PSK · RTTY · JTTY · SSTV · APRS (300 Bd HF packet)
  *                     Utility     TIME
- *   VHF               ✈ Aviation  SELCAL (AM)
+ *   VHF               ✈ Aviation  SELCAL (AM) · VOR / ILS (a VOR's radial, an ILS localiser's deviation)
  *                     ⚓ Maritime  DSC (channel 70)
  *                     Amateur     APRS · DIGITAL SPOTS (6 m / 2 m) · CW · SSTV · DTMF / 5-TONE (digits on amateur only)
  *                     Broadcast   ADV RDS · SAME (EAS alert headers, NOAA Weather Radio)
  *                     Paging      PAGE (POCSAG — Android local hardware only: the phone's own radio)
- *   UHF               Amateur     BALLOONS · DTMF / 5-TONE (repeaters on 70 cm; PMR446 shows format only)
+ *   UHF               ✈ Aviation  VOR / ILS (the ILS glideslope, 329–335 MHz)
+ *                     ⚓ Maritime  406 BEACONS (COSPAS-SARSAT EPIRBs — and ELTs, PLBs; identity and position: the owner only)
+ *                     Amateur     BALLOONS · DTMF / 5-TONE (repeaters on 70 cm; PMR446 shows format only)
  *                     Paging      PAGE (the 450 MHz and 900 MHz paging bands)
  *                     (ADS-B and ISM tune the radio themselves — no tab is drawn for an empty band)
  *   Every band        SCANNER · GALLERY · TRANSCRIBE (tools, not decoders of one band)
@@ -87,13 +89,15 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
     { group: 'other',    ids: ['time', 'ale'] },   // ★ V12 2G HF ALE: military, government and amateur (HFLink) nets
   ],
   vhf: [
-    { group: 'aviation', ids: ['selcal'] },   // ★ V12: SELCAL on VHF AM too
+    { group: 'aviation', ids: ['selcal', 'vor'] },   // ★ V12: SELCAL on VHF AM too · VOR / ILS (108–118 MHz)
     { group: 'maritime', ids: ['dsc'] },
     { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv', 'tones'] },   // ★ V12 DTMF + 5-tone (repeater control on 2 m)
     { group: 'paging',   ids: ['paging'] },   // ★ V12: only drawn on the phone's own radio (Android local hardware)
     { group: 'other',    ids: ['rds', 'same', 'lrpt'] },   // ★ V12 SAME: NOAA Weather Radio, 162.400–162.550 MHz · LRPT: METEOR weather satellites, 137 MHz
   ],
   uhf: [
+    { group: 'aviation', ids: ['vor'] },      // ★ V12 the ILS glideslope (329–335 MHz) — the same key as VHF's
+    { group: 'maritime', ids: ['sarsat'] },   // ★ V12 406 MHz beacons (EPIRBs mostly; ELTs and PLBs too)
     { group: 'amateur',  ids: ['balloon', 'tones'] },   // ★ V12 balloons: UKHAS / Horus / SSDV payloads on 70 cm · DTMF + 5-tone
     { group: 'paging',   ids: ['paging'] },
   ],
@@ -172,6 +176,8 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   jtty:   hz => anyNear(hz, HAM),
   ncdxf:  hz => pointsNear(hz, [14.100e6, 18.110e6, 21.150e6, 24.930e6, 28.200e6], 5e3),   // ★ V12 the five beacon frequencies
   balloon: hz => hz >= 430e6 && hz <= 440e6,   // ★ V12 balloons: 70 cm, the 434 MHz payload band
+  vor:    hz => anyNear(hz, [MHz(108, 117.975), MHz(328.6, 335.4)], 25e3),   // ★ V12 VOR / ILS
+  sarsat: hz => anyNear(hz, [MHz(406.0, 406.1)], 10e3),                       // ★ V12 COSPAS-SARSAT
   tones:  hz => hz >= 29.5e6,   // ★ V12 DTMF + 5-tone: NFM / AM channels, 10 m FM upwards
   mfsk:   hz => anyNear(hz, HAM),   // ★ one key: MFSK16/32, OLIVIA, CONTESTIA, THOR
   hell:   hz => anyNear(hz, HAM),

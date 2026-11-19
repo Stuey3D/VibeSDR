@@ -3291,6 +3291,9 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 /* ★★ V12 NCDXF beacons: the grid — beacon rows, band columns, the steps heard in each cell (ncdxf.ts). */
 #ncdxfList { display: none; margin-top: 6px; }
 #ncdxfList.on { display: block; }
+#navCard { display: none; margin-top: 6px; }
+#navCard.on { display: block; }
+#navCard .note { color: var(--text-dim); font-size: 11px; padding: 4px 2px; }
 #ncdxfGrid table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
 #ncdxfGrid th { color: var(--text-dim); font-weight: 600; font-size: 10px; letter-spacing: 1px; padding: 2px 4px; text-align: center; }
 #ncdxfGrid th.on { color: var(--freq); }
@@ -4521,6 +4524,8 @@ select.btn { padding: 6px 8px; }
     <div id="balloonList"><div id="balloonRows"></div><div id="balloonPics"></div></div>
     <!-- ★★ V12 NCDXF / IARU beacons: the propagation grid — 18 beacons × 5 bands, how far down the steps (src/services/ncdxf.ts). -->
     <div id="ncdxfList"><div id="ncdxfGrid"></div></div>
+    <!-- ★★ V12 VOR / ILS: the compass card with the radial, or the ILS needle (src/services/navaids.ts navCardSvg); 406 MHz: the note. -->
+    <div id="navCard"></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data
          twice, and this is the surface the user deliberately chose. -->
@@ -5676,6 +5681,10 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 HFDL — aircraft on HF, decoded on the server from this listener's USB dial; hidden unless it says "hfdl". -->
     <button class="btn" data-dec="hfdl" hidden title="HFDL — aircraft on HF: tune an HFDL frequency in USB (e.g. 8977 or 6535 kHz); one line per message: flight, ground station, position">HFDL</button>
     <button class="btn" data-dec="selcal" hidden title="SELCAL — the two-tone selective calls a ground station sends to one aircraft, shown as its code (AB-CD); HF aeronautical channels in USB, VHF airband in AM">SELCAL</button>
+    <!-- ★★ V12 VOR / ILS — decoded on the server from the channel itself; hidden unless it says "vor" (greyed with why where the radio does not reach 108–118 / 329–335 MHz). -->
+    <button class="btn" data-dec="vor" hidden title="VOR and ILS — tune a VOR (108–117.95 MHz) in AM for the radial you are on and its Morse ident; an ILS localiser or glideslope for how far off the approach you are">VOR / ILS</button>
+    <!-- ★★ V12 406 MHz distress beacons (COSPAS-SARSAT) — hidden unless the server says "sarsat". Identity and position: the owner only. -->
+    <button class="btn" data-dec="sarsat" hidden title="406 MHz distress beacons (EPIRB, ELT, PLB) — mostly tests. Everyone sees that one was heard and its kind and country; its identity and position go to the server's owner only. Real alerts are handled by the rescue authorities, not by VibeSDR">406 BEACONS</button>
     <!-- ★★ V12 2G HF ALE — decoded on the server; hidden unless it says "ale" (greyed with why off its reach). -->
     <button class="btn" data-dec="ale" hidden title="ALE (2G HF automatic link establishment) — the soundings, calls and replies of HF nets, one line each: who called whom, when. Tune an ALE channel in USB (HFLink: 3.596, 7.102, 14.109 MHz)">ALE</button>
     <button class="btn" data-dec="same" hidden title="EAS / SAME — US emergency alert headers from NOAA Weather Radio (162.400–162.550 MHz NFM) and EAS broadcasts: event, areas and times">SAME</button>
