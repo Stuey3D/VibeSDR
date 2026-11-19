@@ -140,6 +140,7 @@ enum class Need {
     Avdata,      // ★ V12 the aircraft datalink: ACARS 131.5–131.85 or VDL2 136.68–136.99 MHz, not an HF+ / an Icom
     Sondes,      // ★ V12 radiosondes: a 2 MHz band of 400–406 MHz, not an HF+ / an Icom
     M17,         // ★ V12 M17 digital voice: 2 m or 70 cm on any SDR (the HF+ on 2 m), never an Icom (vibe_radio_caps.h)
+    Dvsig,       // ★ V12 DV signalling: VHF 136–174 or UHF 400–470 MHz on any SDR, never an Icom (vibe_radio_caps.h)
 };
 
 struct Gate { bool run = true; std::string why; };
@@ -212,6 +213,10 @@ inline Gate gateNeed(const Hw& hw, Need n) {
                                                  && (touches(r, 144e6, 148e6) || touches(r, 420e6, 450e6)); }))
                 return no("no radio here reaches M17 (2 m / 70 cm)");
             break;
+        case Need::Dvsig:
+            if (!any([](const Radio& r) { return r.driver != "icom" && (touches(r, 136e6, 174e6) || touches(r, 400e6, 470e6)); }))
+                return no("no radio here reaches DMR / D-STAR / YSF (VHF 136â" "174 or UHF 400â" "470 MHz)");
+            break;
         case Need::Spots:
             if (!any([](const Radio& r) { return hasHf(r) || touches(r, 28e6, 29.7e6) || touches(r, 50e6, 54e6) || touches(r, 144e6, 148e6); }))
                 return no("no radio here reaches a digital-spots band (HF, 6 m or 2 m)");
@@ -233,6 +238,7 @@ inline Need needFor(const std::string& id) {
     if (id == "dec_rs41") return Need::Sondes;
     if (id == "dec_hfdl") return Need::Hf;
     if (id == "dec_m17") return Need::M17;
+    if (id == "dec_dvsig") return Need::Dvsig;
     if (id == "dec_navtex") return Need::Navtex;
     if (id == "dec_ndb") return Need::Ndb;
     if (id == "dec_time") return Need::TimeSig;

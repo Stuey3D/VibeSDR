@@ -57,6 +57,7 @@
 #include "decoders/balloon_tx.h"     // ★ V12 balloons (the dec_balloon row) — our own transmitter
 #include "decoders/tones_tx.h"       // ★ V12 DTMF + 5-tone (the dec_tones row) — our own transmitter
 #include "vibe_m17.h"                // ★ V12 M17 as a mode (the dec_m17 row) — our own receiver, Codec 2 from the same library
+#include "vibe_dvsig_tx.h"           // ★ V12 DV signalling (the dec_dvsig row) — our own receiver and transmitter
 #include "benchsynth/cw_synth.h"
 #include "benchsynth/psk_synth.h"
 #include "benchsynth/sitor_synth.h"
@@ -745,6 +746,9 @@ inline RowRule ruleFor(const std::string& id) {
         /* ★★ V12 M17 (vibe_m17.h): a listener's MODE, like FreeDV. Not green = "m17" off by default on a fresh setup (the
          *  owner can always tick it back — the benchmark sets the default, never hides). */
         { "dec_m17",      { "m17",    true,  false } },
+        /* ★★ V12 DV signalling (vibe_dvsig.h): a listener's MODE, like M17. Not green = "dvsig" off by default on a fresh
+         *  setup (the owner can always tick it back — the benchmark sets the default, never hides). */
+        { "dec_dvsig",    { "dvsig",  true,  false } },
         /* ★★ V12 DAB own station per listener (docs/v12/DAB-OWN-STATION.md, vibe_benchmark_dab.h): switches nothing off and is
          *  no decoder slot — its figure sets N (the dabStations block), which the own-station rule compares with the user limit. */
         { "dec_dab_station", { "",    false, false } },
@@ -1376,6 +1380,37 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         r.pct = 100.0 * (processCpu() - c0) / std::max(1e-3, fedSec - 0.5);
         while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
         r.decoded = L.voiceFrames();
+        if (L.droppedBlocks()) r.label += " (fell behind)";
+        return r;
+    });
+
+    /* ★★ V12 DV SIGNALLING AS A MODE — one listener's receiver in AUTO (every system's correlators running) on a DMR
+     *  repeater downlink carrying a group call with a talker alias, from our own transmitter (vibe_dvsig_tx.h) at 18 dB C/N
+     *  in 9 kHz, as 48 kHz channel IQ fed in real time; vibe-dvsig's own thread is in the process figure. The proof that it
+     *  decodes: the DMR bursts that checked out. */
+    run("dec_dvsig", "DV signalling (per listener, AUTO)", [&] {
+        Row r; r.id = "dec_dvsig"; r.label = "DMR / D-STAR / YSF / NXDN / dPMR signalling (per listener, AUTO on a DMR call)";
+        vibe::dvsig::tx::DmrCall c; c.alias = "BENCH"; c.superframes = int(kRowMinSec / 0.36) + 4;
+        std::vector<vibe::dvsig::cf32> a = vibe::dvsig::tx::dmrIq(c, true, 77, 150.0);
+        vibe::dvsig::tx::awgn(a, 18, 9000, 78);
+        vibedsp::RationalResampler ri(24000.0, 48000, vibedsp::RationalResampler::ExactRate{}), rq(24000.0, 48000, vibedsp::RationalResampler::ExactRate{});
+        std::vector<float> re(a.size()), im(a.size()); for (size_t i = 0; i < a.size(); ++i) { re[i] = a[i].real(); im[i] = a[i].imag(); }
+        std::vector<float> x(size_t(ri.maxOut(int(a.size())))), y(x.size());
+        const int n = std::min(ri.process(re.data(), int(re.size()), x.data()), rq.process(im.data(), int(im.size()), y.data()));
+        std::vector<vibe::dvsig::cf32> iq(static_cast<size_t>(n)); for (int i = 0; i < n; ++i) iq[size_t(i)] = vibe::dvsig::cf32(x[size_t(i)], y[size_t(i)]);
+        vibe::dvsig::Listener L;
+        const double t0 = wallNow(); double fedSec = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+        while (pos + 480 <= iq.size()) {
+            if (!measuring && fedSec >= 0.5) { c0 = processCpu(); measuring = true; }
+            L.feedIq(iq.data() + pos, 480, 48000.0);
+            pos += 480; fedSec += 480 / 48000.0;
+            const double ahead = fedSec - (wallNow() - t0);
+            if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+        }
+        r.pct = 100.0 * (processCpu() - c0) / std::max(1e-3, fedSec - 0.5);
+        while (L.queuedFrames() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        std::string ids; L.status("bench", &ids, nullptr, nullptr);
+        r.decoded = ids.find("\"alias\":\"BENCH\"") != std::string::npos ? 1 : 0;
         if (L.droppedBlocks()) r.label += " (fell behind)";
         return r;
     });

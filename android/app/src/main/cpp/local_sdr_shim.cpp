@@ -166,6 +166,7 @@
 #include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
 #include "vibe_freedv.h"              // ★ V12 FreeDV: a per-listener mode — the system's libcodec2, dlopen'd (docs/v12/FREEDV.md)
 #include "vibe_m17.h"                 // ★ V12 M17: a per-listener mode — our own 4-FSK receiver, Codec 2 from the same library (docs/v12/M17.md)
+#include "vibe_dvsig.h"               // ★ V12 DV signalling: DMR / D-STAR / YSF / NXDN / dPMR identities, NEVER voice (docs/v12/DV-SIGNALLING.md)
 #include "vibe_dxscan.h"            // ★★★ V12: the idle DX scanner — the log and its rules (2026-11-04)
 #include "vibe_dxscan_fm.h"         // ★★★ V12: …and its FM hop (RDS on every station of one capture)
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
@@ -826,6 +827,11 @@ ModeParams paramsFor(const std::string& mode) {
      *  the pacing clock only; the decoded speech takes its place. 12.5 kHz = the channel spacing, with room for a tuning
      *  error either side of M17's 9 kHz. */
     if (mode == "m17")            return {ModeParams::NFM, 50000, 12500, 1};
+    /* ★★ V12 DV signalling (vibe_dvsig.h): an NFM-shaped 12.5 kHz channel whose COMPLEX baseband goes to our own DMR /
+     *  D-STAR / YSF / NXDN / dPMR receiver (its own discriminator — the 4-FSK needs DC flat). The NFM audio plays as it
+     *  is, so an ANALOGUE over on a mixed-mode repeater is heard; while a digital transmission is followed it is muted
+     *  (the voice is never decoded — AMBE is excluded for good). */
+    if (mode == "dvsig")          return {ModeParams::NFM, 50000, 12500, 1};
     if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 1200, 1};
     // ★ "fmdx" WAS a mode here and is gone: it widened the channel filter, which measured 10 dB
     // WORSE for RDS SNR (see pipeline.cpp chHalf). Accepted as an alias for wfm so a client with
@@ -1890,6 +1896,7 @@ static bool vsModeKnown(const std::string& m) {
     for (const char* k : kModes) if (m == k) return true;
     if (m == "freedv") return vibe::freedv::available();   // ★ V12 FreeDV: a mode only where libcodec2 loaded
     if (m == "m17") return vibe::m17::available();         // ★ V12 M17: likewise (its vocoder is Codec 2)
+    if (m == "dvsig") return true;                         // ★ V12 DV signalling: our own code, no library
     return false;
 }
 
@@ -8131,6 +8138,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<bool> fdvMode_{false};
     std::atomic<int> fdvSharedSb{vibe::freedv::kSbAuto};   // ★ V12 the room's FreeDV sideband choice (AUTO / USB / LSB)
     std::atomic<bool> m17Mode_{false};   // ★ V12 M17 on the shared demodulator: its channel width is fixed (setBandwidth)
+    std::atomic<bool> dvMode_{false};    // ★ V12 DV signalling likewise
     vibedsp::RxPipeline::Mode rxModeDial() const {
         if (fdvMode_.load(std::memory_order_relaxed))
             return fdvLowerSideband(audioFreq.load(), fdvSharedSb.load()) ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB;
@@ -9632,6 +9640,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::unique_ptr<vibe::m17::M17Listener> m17;
         uint64_t m17SentVer = 0;
         double m17AtHz = 0;
+        /** ★ V12 DV signalling: this listener's receiver while their mode is "dvsig" (vibe_dvsig.h) — made/dropped under mtx
+         *  in clientRetune, fed from clientIqCb, its report sent from onClientAudio. dvPin = AUTO (0) or one system. */
+        std::unique_ptr<vibe::dvsig::Listener> dv;
+        uint64_t dvSentVer = 0;
+        double dvAtHz = 0;
+        int dvPin = 0;
+        std::string dvSentKey;   ///< which copy was sent last ("ids" / "pub") + the band — a change resends at once
         /** ★★ V12 CTCSS / DCS TONE ID (decoders/tone_id.h) — this listener's, while their mode is NFM. Fed in clientIqCb
          *  from the pipeline's CHANNEL IQ (post-NCO, the dial at DC, already cut to the passband — so a neighbouring
          *  12.5 kHz channel inside the wider slice cannot capture its discriminator). Everything below is touched under
@@ -10301,6 +10316,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!c) return;
         if (c->drm) c->drm->feedIq(x, n, rateHz);
         if (c->m17) c->m17->feedIq(x, n, rateHz);   // ★ V12 M17: a copy into its queue (vibe_m17.h)
+        if (c->dv) c->dv->feedIq(x, n, rateHz);     // ★ V12 DV signalling likewise (vibe_dvsig.h)
         // ★ V12 tone ID: one bool when the listener is not on NFM (and nothing left to clear)
         if ((c->toneWant || !c->toneSent.empty()) && c->owner) c->owner->toneFeedClient(c, x, n, rateHz);
         // ★ V12 PAGING (Android local hardware only): one relaxed load unless a paging receiver runs in this process
@@ -10402,6 +10418,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::shared_ptr<net::Socket> sk;
         { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
         if (sk && sk->isOpen()) { sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size()); c->m17SentVer = ver; }
+    }
+
+    /** ★★★ V12 DV signalling — WHICH COPY OF THE REPORT A SOCKET MAY HAVE (UK WTA 2006 s.48; docs/v12/DV-SIGNALLING.md).
+     *  On an AMATEUR frequency (the band plan of this server's ITU region, as TONES): the identities copy (callsigns, IDs,
+     *  aliases, text, GPS) — amateur traffic is meant for anyone to hear. Anywhere else: the PUBLIC copy ("DMR heard ·
+     *  CC 1 · slot 2"), except to the OWNER's own signed-in socket when the owner has opted in ("dvsig+ids", off by
+     *  default). Decided here, so no client, old or new, is ever sent what it must not show. */
+    bool dvIdsFor(const std::shared_ptr<net::Socket>& sk, const std::string& band) {
+        if (!band.empty()) return true;
+        if (!vsModeBlocked("dvsig+ids")) return false;   // ★ a "+" token: present in the list = the owner ticked it
+        std::lock_guard<std::mutex> al(adminSockMtx);
+        return sk && adminSocks.count(sk.get()) > 0;
+    }
+    /** ★ V12 DV signalling: this listener's report on their spectrum socket when it (or the copy they may have) changed. */
+    void dvSendStatus(ClientDsp* c) {
+        std::shared_ptr<net::Socket> sk;
+        { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
+        if (!sk || !sk->isOpen()) return;
+        const std::string band = vibe::dvsig::amateurBand(c->vfoHz, g_vsRegionKnown);
+        const bool ids = dvIdsFor(sk, band);
+        std::string idsJ, pubJ; uint64_t ver = 0;
+        c->dv->status(band, ids ? &idsJ : nullptr, ids ? nullptr : &pubJ, &ver);
+        const std::string key = std::string(ids ? "ids|" : "pub|") + band;
+        if (ver == c->dvSentVer && key == c->dvSentKey) return;
+        const std::string& j = ids ? idsJ : pubJ;
+        sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+        c->dvSentVer = ver; c->dvSentKey = key;
     }
 
     static void clientAudioCb(void* ctx, const float* pcm, int frames, int ch, int) {
@@ -10596,6 +10639,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (c->mode == "freedv" && fdvLowerSideband(c->vfoHz, c->fdvSb)) mp.kind = ModeParams::SSB_LSB;   // ★ V12 FreeDV's sideband
         double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
         if (c->mode == "m17") bw = mp.bandwidth;   // ★ V12 M17: the receiver needs its whole 12.5 kHz channel — a width is not a choice here
+        if (c->mode == "dvsig") bw = mp.bandwidth;   // ★ V12 DV signalling likewise
         /* ★★★ THE SAME LIMITS THE SHARED PATH HAS, BEFORE THE CHANNEL IS SIZED FROM THEM. This path
          *  took `bandwidthHigh - bandwidthLow` as sent and sized the listener's channel from it —
          *  no owner cap (setBandwidth's g_vsMaxBandwidth), no ceiling of any kind. USB at 500 kHz
@@ -10711,9 +10755,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
         else if (c->m17) { c->m17.reset(); c->m17AtHz = 0; }
+        /* ★ V12 DV signalling: a new receiver for a new channel (> 3 kHz away), as M17; a nudge keeps it (its fit absorbs
+         *  the tuning error). */
+        if (c->mode == "dvsig") {
+            if (!c->dv || std::fabs(c->dvAtHz - c->vfoHz) > 3000.0) {
+                c->dv.reset(new vibe::dvsig::Listener(vibe::dvsig::Sys(c->dvPin))); c->dvSentVer = 0; c->dvSentKey.clear(); c->dvAtHz = c->vfoHz;
+            }
+        }
+        else if (c->dv) { c->dv.reset(); c->dvAtHz = 0; }
         // ★ V12 tone ID: wanted on NFM only (not M17, a digital mode in an NFM channel); the callback builds it, forgets a
         //   retuned repeater, and clears the label
-        c->toneWant = (mp.kind == ModeParams::NFM) && c->mode != "m17" && !vsModeBlocked("tone");   // ★ V12 the owner's switch (setup page, under NFM)
+        c->toneWant = (mp.kind == ModeParams::NFM) && c->mode != "m17" && c->mode != "dvsig" && !vsModeBlocked("tone");   // ★ V12 the owner's switch (setup page, under NFM)
         c->toneAtHz = c->vfoHz;
         // ★ VFO B allowance may have changed: DRM, WFM, or a dial into / out of the FM broadcast band (watchMaxFor)
         watchAllowDirty_.store(true, std::memory_order_relaxed);
@@ -10865,6 +10917,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             c->m17->takePcm(m17Pcm.data(), frames);
             pcm = m17Pcm.data(); ch = 1;
             m17SendStatus(c);
+        }
+        /* ★★ V12 DV signalling: the NFM audio as it is (an analogue over on a mixed repeater is heard) — SILENCE while a
+         *  digital transmission is being followed (its noise is not speech, and its voice is never decoded). */
+        std::vector<float> dvPcm;
+        if (c->dv) {
+            if (c->dv->busy()) { dvPcm.assign(size_t(frames) * size_t(std::max(1, ch)), 0.0f); pcm = dvPcm.data(); }
+            dvSendStatus(c);
         }
         // ★★★ THE DECODERS RUN FIRST, AND WITHOUT AN AUDIO SOCKET.
         //     This used to sit BELOW the `if (!sock || !sock->isOpen()) return;` guard, so in
@@ -18339,7 +18398,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool dabOnlyNow() const {
         if (vsModeBlocked("dab")) return false;
         static const char* kOthers[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
-                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17",
+                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig",
                                          "adsb", "ism", "ndb", "ais", "avdata", "sondes" };
         for (const char* m : kOthers) if (!vsModeBlocked(m)) return false;
         return perClientDsp() ? dabLrEligible() : vsDabCapable();
@@ -18356,7 +18415,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::string onlyModeNow() const {
         if (dabOnlyNow()) return "dab";
         static const char* kDemods[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
-                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17" };
+                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig" };
         for (const char* m : kDemods) if (!vsModeBlocked(m)) return {};
         const char* left = nullptr;
         for (const char* m : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes" })
@@ -19624,6 +19683,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::shared_ptr<vibe::m17::M17Listener> m17Shared;
     uint64_t m17SharedVer = 0;
     double m17SharedAtHz = 0;
+    /* ★ V12 DV signalling on the shared dial: one receiver, its report to every spectrum socket — each socket its own copy
+     *  (dvIdsFor). Built in buildAudio, re-made for a new channel in onAudio, fed from iqCb. */
+    std::mutex dvSharedMtx;
+    std::shared_ptr<vibe::dvsig::Listener> dvShared;
+    uint64_t dvSharedVer = 0;
+    double dvSharedAtHz = 0;
+    std::string dvSharedKey;
+    std::atomic<int> dvSharedPin{0};
     std::mutex drmSharedMtx;
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
@@ -19646,6 +19713,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★★ V12 M17, shared dial: the NFM frames are the clock; as many frames of decoded speech (silence until there is
          *  some) go out in their place, mono; the report goes to every spectrum socket when it changes. */
         std::vector<stereo_t> m17Buf;
+        std::vector<stereo_t> dvBuf;
+        if (!dabInject_) {   // ★ V12 DV signalling, shared dial: the NFM audio, silent while digital is followed; the reports
+            std::shared_ptr<vibe::dvsig::Listener> d;
+            {
+                std::lock_guard<std::mutex> lk(dvSharedMtx);
+                if (dvShared && std::fabs(audioFreq.load() - dvSharedAtHz) > 3000.0) {
+                    dvShared = std::make_shared<vibe::dvsig::Listener>(vibe::dvsig::Sys(dvSharedPin.load())); dvSharedVer = 0; dvSharedAtHz = audioFreq.load();
+                }
+                d = dvShared;
+            }
+            if (d) {
+                if (d->busy()) { dvBuf.assign(size_t(count), stereo_t{}); data = dvBuf.data(); }
+                const std::string band = vibe::dvsig::amateurBand(audioFreq.load(), g_vsRegionKnown);
+                std::string idsJ, pubJ; uint64_t ver = 0;
+                d->status(band, &idsJ, &pubJ, &ver);
+                const std::string key = band + (vsModeBlocked("dvsig+ids") ? "|opt" : "");
+                if (ver != dvSharedVer || key != dvSharedKey) {
+                    dvSharedVer = ver; dvSharedKey = key;
+                    std::vector<std::shared_ptr<net::Socket>> socks;
+                    { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                    for (auto& sk : socks) if (sk && sk->isOpen()) { const std::string& j = dvIdsFor(sk, band) ? idsJ : pubJ; sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size()); }
+                }
+            }
+        }
         if (!dabInject_) {
             std::shared_ptr<vibe::m17::M17Listener> d;
             {
@@ -19930,7 +20021,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rxMode = rxModeFor(mp);
         fdvMode_.store(mode == "freedv", std::memory_order_relaxed);   // ★ V12 FreeDV: rxModeDial picks the sideband
         m17Mode_.store(mode == "m17", std::memory_order_relaxed);      // ★ V12 M17: setBandwidth keeps its 12.5 kHz
-        toneSharedWant.store(mp.kind == ModeParams::NFM && mode != "m17" && !vsModeBlocked("tone"));   // ★ V12 tone ID (toneFeedShared); "tone" = the owner switched it off
+        dvMode_.store(mode == "dvsig", std::memory_order_relaxed);     // ★ V12 DV signalling likewise
+        toneSharedWant.store(mp.kind == ModeParams::NFM && mode != "m17" && mode != "dvsig" && !vsModeBlocked("tone"));   // ★ V12 tone ID (toneFeedShared); "tone" = the owner switched it off
         // Clamp to what the IQ can actually carry. Most public SpyServers cap the
         // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
         // can exceed the whole capture — WFM's 200 kHz on a 12 kS/s stream. Asking
@@ -19955,6 +20047,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (mode == "m17") {
                 if (!m17Shared) { m17Shared = std::make_shared<vibe::m17::M17Listener>(); m17SharedVer = 0; m17SharedAtHz = audioFreq.load(); }
             } else m17Shared.reset();
+        }
+        {   // ★ V12 DV signalling on the shared dial
+            std::lock_guard<std::mutex> lk(dvSharedMtx);
+            if (mode == "dvsig") {
+                if (!dvShared) { dvShared = std::make_shared<vibe::dvsig::Listener>(vibe::dvsig::Sys(dvSharedPin.load())); dvSharedVer = 0; dvSharedKey.clear(); dvSharedAtHz = audioFreq.load(); }
+            } else dvShared.reset();
         }
         rx.setTune(vfoOffsetNow(), rxModeDial(), rxBwHz);
         // ★★ The chain is back at the mode's DEFAULT width, so the edges a listener chose are no longer
@@ -23045,6 +23143,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!j.empty()) sendText(sock, j);
             return;
         }
+        /* ★ V12 DV signalling: {"type":"dvsig_status"} — the report at once (read-only); {"type":"dvsig_pin","sys":"auto"|
+         *  "dmr"|"dstar"|"ysf"|"nxdn"|"dpmr"} — AUTO or one system (the manual fallback; on a shared dial the room's, as
+         *  FreeDV's sub-mode is). The answer is the copy this socket may have. */
+        if (type == "dvsig_status" || type == "dvsig_pin") {
+            int pin = -1;
+            if (type == "dvsig_pin") { const std::string k = jsonStr(msg, "sys"); pin = int(vibe::dvsig::sysFromKey(k)); if (k != "auto" && pin == 0) pin = -1; }
+            std::string j;
+            if (auto me = dspFor(sock)) {
+                std::lock_guard<std::mutex> lk(me->mtx);
+                if (pin >= 0) { me->dvPin = pin; if (me->dv) me->dv->setPin(vibe::dvsig::Sys(pin)); }
+                if (me->dv) {
+                    const std::string band = vibe::dvsig::amateurBand(me->vfoHz, g_vsRegionKnown);
+                    const bool ids = dvIdsFor(sock, band);
+                    std::string a, b; me->dv->status(band, &a, &b, nullptr); j = ids ? a : b;
+                    me->dvSentKey.clear();   // ★ the next report goes out whatever its version
+                }
+            } else {
+                if (pin >= 0) dvSharedPin.store(pin);
+                std::lock_guard<std::mutex> lk(dvSharedMtx);
+                if (dvShared) {
+                    if (pin >= 0) dvShared->setPin(vibe::dvsig::Sys(pin));
+                    const std::string band = vibe::dvsig::amateurBand(audioFreq.load(), g_vsRegionKnown);
+                    std::string a, b; dvShared->status(band, &a, &b, nullptr); j = dvIdsFor(sock, band) ? a : b;
+                }
+            }
+            if (!j.empty()) sendText(sock, j);
+            return;
+        }
         if (type == "dab_scopes") {
             double on = 0; jsonNum(msg, "on", on);
             {
@@ -24942,6 +25068,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           if (g_serveOnLan.load() && cap > 0 && bw > cap) bw = cap; }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         if (m17Mode_.load(std::memory_order_relaxed)) bw = paramsFor("m17").bandwidth;   // ★ V12 M17: its whole channel, always
+        if (dvMode_.load(std::memory_order_relaxed)) bw = paramsFor("dvsig").bandwidth;  // ★ V12 DV signalling likewise
         // ★ The mode's floor/ceiling (RxPipeline::clampBwHz) here as well as in setTune, so the
         //   width this reports (vfoBwHz) is the one the chain is running.
         rxBwHz = vibedsp::RxPipeline::clampBwHz(rxMode, std::min(bw, sampleRate * 0.8));
@@ -30621,6 +30748,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             { std::lock_guard<std::mutex> lk(p->m17SharedMtx); d = p->m17Shared; }
             if (d) d->feedIq(x, n, rateHz);
         }
+        {   // ★ V12 DV signalling on the shared dial
+            std::shared_ptr<vibe::dvsig::Listener> d;
+            { std::lock_guard<std::mutex> lk(p->dvSharedMtx); d = p->dvShared; }
+            if (d) d->feedIq(x, n, rateHz);
+        }
         // ★ V12 tone ID on the shared dial: one relaxed load unless the dial is on NFM (or a label is left to clear)
         if (p->toneSharedWant.load(std::memory_order_relaxed) || p->toneShared) p->toneFeedShared(x, n, rateHz);
         // ★ V12 PAGING on the one pipeline (the phone's own radio, one listener): one relaxed load unless paging runs
@@ -32110,6 +32242,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (md == "drm") return "VFO B is not available in DRM";
         if (md == "freedv") return "VFO B is not available in FreeDV";
         if (md == "m17") return "VFO B is not available in M17";
+        if (md == "dvsig") return "VFO B is not available in digital-voice ID";
         if (watchFmBroadcast(md, hz)) return "VFO A/B is not available on FM broadcast";
         return std::string();
     }
@@ -32382,7 +32515,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         std::string m = jsonStr(msg, "mode");
         if (!m.empty()) {
-            if (m == "dab" || m == "drm" || m == "freedv" || m == "m17" || vsModeRefused(m)) { refuse("mode", "VFO B cannot use that mode here"); return; }
+            if (m == "dab" || m == "drm" || m == "freedv" || m == "m17" || m == "dvsig" || vsModeRefused(m)) { refuse("mode", "VFO B cannot use that mode here"); return; }
             if (m == "wfm") { refuse("mode", "VFO A/B is not available on FM broadcast"); return; }   // ★ round 3
             if (m != wd.mode) { wd.mode = m; wd.bwHz = paramsFor(m).bandwidth; }
         }
@@ -41967,7 +42100,7 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "drm", "freedv", "m17" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "drm", "freedv", "m17", "dvsig" };
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -41988,6 +42121,7 @@ static std::string vsTunableJson() {
             /* ★★ V12 M17 likewise — and never on an Icom: the receiver reads the channel's IQ, and an Icom gives us its own
              *  demodulated, de-emphasised FM audio, which a 4-FSK slicer cannot use (vibe_radio_caps.h says the same). */
             if (k == "m17" && (g_icomOn.load() || !vibe::m17::available())) continue;
+            if (k == "dvsig" && g_icomOn.load()) continue;   // ★ V12 DV signalling reads the channel IQ, as M17
             if (k == "dab") { if (!vsDabCapable()) continue; }
             else if (k == "adsb") { if (!vsAdsbWhyNot().empty()) continue; }
             else if (k == "ism") { if (!vsIsmAnyBand() || !vsIsmWhyNot().empty()) continue; }
