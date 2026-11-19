@@ -432,6 +432,12 @@ struct DecUi {
     DecLog sigLog;
     bool pskSkim = false; int pskWidth = 12000;
     int aprsBaud = 1200;
+    // ★★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md — src/services/packet.ts, one rule with the app and the web): the choice
+    //    ("auto" / "1200" / "9600" / "300"), FX.25 / IL2P under 1200 and 9600, and the frame log (every AX.25 frame).
+    std::string aprsPacket = "1200";
+    bool aprsPacketChosen = false;   // ★ the person picked one this session (AUTO is then not imposed)
+    bool aprsFx = true, aprsIl = true;
+    std::deque<DecAprsPkt> aprsFrames;   // ★ newest first: the heading line, then the hex and the text (two lines)
     std::string mfskMode = "auto";
     std::string pagingMode = "auto";  // ★ V12 PAGE: AUTO, or a pagingModes id ("pocsag1200", "flex" …) — this session only
     std::deque<PageRow> pages;        // ★ V12 PAGE: newest first, ≤ kPagingMax, in memory ONLY (never a file, never a log)
@@ -446,6 +452,8 @@ struct DecUi {
     std::map<std::string, std::string> why;
     bool skimOk = true;
     double aprsHz = 144.8e6;
+    bool pktFec = false, pkt96Has = false, pkt96Live = false;   // ★ V12 aprsFec / pkt9600 (absent = an older server or an Icom)
+    std::string pkt96Why;
     std::vector<DecGMode> mfskModes;
     std::vector<DecGMode> pagingModes;   // ★ V12 PAGE: vibeserver.json pagingModes (AUTO first, then POCSAG …, FLEX …)
     std::vector<std::string> spotModes;
@@ -665,6 +673,13 @@ inline void decFetchCaps(int port) {
         }
         u.skimOk = !(j["skim"].kind == Json::Bool && !j["skim"].b);
         if (j["aprsHz"].num(0) > 0) u.aprsHz = j["aprsHz"].num(0);
+        // ★ V12 packet: the same three states as the app (packet.ts parsePacketCaps / packetDefault)
+        u.pktFec = j["aprsFec"].kind == Json::Bool && j["aprsFec"].b;
+        u.pkt96Has = j["pkt9600"].kind == Json::Bool;
+        u.pkt96Live = u.pkt96Has && j["pkt9600"].b;
+        u.pkt96Why = u.pkt96Has && !u.pkt96Live ? j["pkt9600Why"].str().substr(0, 200) : std::string();
+        if ((u.aprsPacket == "auto" || u.aprsPacket == "9600") && !u.pkt96Live) u.aprsPacket = "1200";
+        if (u.aprsPacket == "1200" && u.pkt96Live && !u.aprsPacketChosen) u.aprsPacket = "auto";   // ★ AUTO where 9600 runs
         u.mfskModes.clear();
         for (auto& m : j["mfskModes"].a) {
             DecGMode g{m["id"].str(), m["label"].str(), m["group"].str()};
@@ -716,7 +731,16 @@ inline std::string decAttachJson(const RadioState& s, const std::string& id) {
     } else if (id == "time") j += ",\"station\":" + jsonQuote(u.timeStation);
     else if (id == "cw") { if (u.cwSkim) j += ",\"width\":" + std::to_string(u.cwWidth); }
     else if (id == "psk") j += u.pskSkim ? ",\"width\":" + std::to_string(u.pskWidth) : ",\"centre\":" + std::to_string(decPassbandCentre(s));
-    else if (id == "aprs") j += ",\"baud_rate\":" + std::to_string(u.aprsBaud);
+    else if (id == "aprs") {
+        // ★ V12 packet.ts packetParams: baud_rate stays (1200 with AUTO, so an older server runs 1200)
+        if (u.aprsPacket == "300") j += ",\"baud_rate\":300";
+        else if (!u.pktFec && !u.pkt96Has) j += ",\"baud_rate\":1200";
+        else if (u.aprsPacket == "auto") j += ",\"baud_rate\":1200,\"packet\":\"auto\"";
+        else {
+            j += std::string(",\"baud_rate\":") + (u.aprsPacket == "9600" ? "9600" : "1200") + ",\"packet\":" + jsonQuote(u.aprsPacket);
+            if (u.pktFec) j += std::string(",\"fx25\":") + (u.aprsFx ? "1" : "0") + ",\"il2p\":" + (u.aprsIl ? "1" : "0");
+        }
+    }
     else if (id == "dsc") {
         const std::string& m = s.mode;
         if (m == "nfm" || m == "fm" || std::fabs(s.vfoHz - 156525000) < 25000) j += ",\"band\":\"vhf\"";
@@ -777,7 +801,7 @@ inline void decStart(App& a, const RadioState& s, const std::string& id) {
     u.view = id; u.sub = 0;
     u.sigHist.clear(); decReadSig(0);
     u.pages.clear(); u.pageRead = 0; u.pagingHave = false; u.pagingSt = PagingStatus{};
-    u.log.clear(); u.sitor = Json(); u.sigs.clear(); u.calls.clear(); u.dsc.clear(); u.aprs.clear(); u.aprsLog.clear();
+    u.log.clear(); u.sitor = Json(); u.sigs.clear(); u.calls.clear(); u.dsc.clear(); u.aprs.clear(); u.aprsLog.clear(); u.aprsFrames.clear();
     u.status = decIdleStatus(id); u.tuneHint.clear(); u.live = false;
     u.navtexHz = s.vfoHz;
     if (decIsPicture(id)) decPicOpen(s, id);   // ★ a clean picture box (resetDecImages), this kHz's WEFAX slant
@@ -1060,6 +1084,28 @@ inline void decOnJson(App& a, const RadioState& s, const std::string& raw) {
             u.aprs.push_back(std::move(st));
         }
         u.live = recent;
+        return;
+    }
+    if (type == "aprs_frame" && d.kind == Json::Obj) {   // ★ V12 every AX.25 frame — packet.ts packetFrameHead's words
+        if (u.active != "aprs" || d["from"].str().empty()) return;
+        std::string h = decClip(d["from"].str(), 12) + " \xe2\x86\x92 " + decClip(d["to"].str(), 12);
+        if (!d["path"].str().empty()) h += " via " + decClip(d["path"].str(), 60);
+        h += " \xc2\xb7 " + decClip(d["ctl"].str(), 12) + (d["pid"].str().empty() ? "" : " " + decClip(d["pid"].str(), 2));
+        if (!d["sat"].str().empty()) h += " \xc2\xb7 " + decClip(d["sat"].str(), 40);
+        const std::string fec = d["fec"].str();
+        if (fec == "fx25" || fec == "il2p") {
+            h += fec == "fx25" ? " \xc2\xb7 FX.25" : " \xc2\xb7 IL2P";
+            const int fx = (int)d["fixed"].num(0); if (fx > 0) h += " \xc2\xb7 " + std::to_string(fx) + " fixed";
+            if (d["crc"].num(0) > 0) h += " \xc2\xb7 CRC";
+        }
+        const int len = (int)d["len"].num(0);
+        h += " \xc2\xb7 " + std::to_string(len) + (len == 1 ? " byte" : " bytes");
+        std::string hx = decClip(d["hex"].str(), 128), g;   // the first 64 bytes, grouped in fours
+        for (size_t i = 0; i < hx.size(); i += 8) { if (i) g += ' '; g += hx.substr(i, 8); }
+        if (!g.empty()) h += "\n" + g + "\n" + decClip(d["text"].str(), 64);
+        u.aprsFrames.push_front({(double)std::time(nullptr), h});
+        decCap(u.aprsFrames, 60);
+        u.live = true; u.liveAt = now;
         return;
     }
     if (type == "aprs_packet" && d.kind == Json::Obj) {
