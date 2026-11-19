@@ -525,8 +525,11 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <span class="note" id="benchWhen"></span>
       </div>
       <!-- ★★★ V12 THE WIDE BENCHMARK (Stuart, 2026-11-18) — shown only where a configured radio can do wide rates (a USRP,
-           HackRF, SDRplay RSP or Airspy R2 / Mini: the server's vsWideOffer). The three locked-range profiles at the rate the
-           owner picks from THAT radio's own list, then the USB bus test at that rate. A radio picker only with several. -->
+           HackRF, SDRplay RSP or Airspy R2 / Mini: the server's vsWideOffer). The capture rows at 8 MS/s and up to the rate
+           the owner picks from THAT radio's own list (their verdict is the USRP's rate gate), DAB's cutting at that rate,
+           the three locked-range profiles at it, then the USB bus test. A radio picker only with several.
+           ★★★ 2026-11-19 (Stuart: "quick benchmark I would say should be based on RTL's") the quick run measures no rate
+           above an RTL's — everything wider is here. -->
       <div id="benchWideWrap" class="hide" style="margin-top:10px">
         <div class="row">
           <button id="benchWideRun" type="button">Run wide benchmark</button>
@@ -534,7 +537,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <select id="benchWideRate" aria-label="Sample rate"></select>
         </div>
         <div class="note">High sample rate SDR detected. As well as the quick benchmark, run the wide benchmark at the
-          sample rate you intend to use.</div>
+          sample rate you intend to use. The quick benchmark measures what an RTL-SDR would ask of this machine (up to
+          2.4&nbsp;MS/s); every rate above that is measured here, and a USRP is offered its faster rates once this has
+          shown the machine keeps up.</div>
       </div>
       <div class="note" id="benchMsg"></div>
       <!-- ★★ THE BAR. Two minutes of nothing looks like a hang (Stuart, 2026-09-20: "us humans need to see
@@ -2474,25 +2479,8 @@ function renderBench(j) {
    *  offered) at 8 MS/s and up — whether this machine keeps up, judged by its HOTTEST THREAD against one core, as a
    *  locked range (the fixed cost of the capture, then the cost of each listener) and as a full radio. The USRP's rates
    *  above 16 MS/s are offered only up to the highest rate that kept up here (vibe_usrp_caps.h ratesFor). */
-  const cap = BENCH.capture;
-  if (cap && Array.isArray(cap.rates) && cap.rates.length) {
-    const mhz = hz => (Math.round(hz / 1e4) / 100).toString() + " MS/s";
-    const lines = cap.rates.map(v => {
-      const lk = v.lockedHottestPct >= 0
-        ? (v.lockedOk ? "keeps up as a locked range (" + Math.round(v.lockedHottestPct) + "% of a core at its busiest thread; "
-                        + "each WFM listener adds about " + Math.round(Math.max(0, v.perListenerPct)) + "%"
-                        + (v.lockedUsers ? ", " + v.lockedUsers + " measured" : "") + ")"
-                      : "too slow here as a locked range (" + Math.round(v.lockedHottestPct) + "% of a core at its busiest thread)")
-        : "not measured as a locked range";
-      const fr = v.fullHottestPct >= 0 ? (v.fullOk ? "keeps up as a full radio (" + Math.round(v.fullHottestPct) + "%)"
-                                                   : "too slow as a full radio (" + Math.round(v.fullHottestPct) + "%)") : "";
-      return "<b>" + esc(mhz(v.hz)) + "</b>: this machine " + esc(lk) + (fr ? "; " + esc(fr) : "");
-    });
-    bits.push("Wide capture rates:<br>" + lines.join("<br>"));
-    if (cap.lockedMaxHz > 0 || cap.fullMaxHz > 0)
-      bits.push("A USRP on USB&nbsp;3 is offered rates up to <b>" + esc(mhz(cap.lockedMaxHz)) + "</b> as a locked range and <b>"
-                + esc(mhz(cap.fullMaxHz)) + "</b> as a full radio on this machine. A rate already in use stays offered.");
-  }
+  // ★ An older quick result's verdict (the quick run is an RTL's since 2026-11-19; the wide benchmark writes its own).
+  for (const b of benchCaptureBits(BENCH.capture)) bits.push(b);
   const red = (BENCH.rows || []).filter(r => r.grade === "red").map(r => r.label || r.id);
   if (red.length) bits.push("Too heavy for this box: <b>" + red.map(esc).join(", ") + "</b>");
   adv.innerHTML = bits.join("<br>");
@@ -2552,6 +2540,32 @@ function benchProfileLines(lu) {
 }
 /** ★★ A wide entry in words: its heading, the profile lines and the USB bus verdict. `unusable` = the bus did not keep
  *  up, so the figures are the processor's alone and the rate cannot be used. */
+/* ★★★ V12 THE WIDE CAPTURE RATES, IN WORDS (vibe_benchmark_wide.h captureJson): each rate measured at 8 MS/s and up —
+ *  whether this machine keeps up, judged by its HOTTEST THREAD against one core, as a locked range (the fixed cost of the
+ *  capture, then the cost of each listener) and as a full radio. The USRP's rates above 16 MS/s are offered only up to the
+ *  highest rate that kept up here (vibe_usrp_caps.h ratesFor). The WIDE benchmark's entry carries one (2026-11-19); an
+ *  older quick result carries one at its top level. */
+function benchCaptureBits(cap) {
+  const bits = [];
+  if (!(cap && Array.isArray(cap.rates) && cap.rates.length)) return bits;
+  const mhz = hz => (Math.round(hz / 1e4) / 100).toString() + " MS/s";
+  const lines = cap.rates.map(v => {
+    const lk = v.lockedHottestPct >= 0
+      ? (v.lockedOk ? "keeps up as a locked range (" + Math.round(v.lockedHottestPct) + "% of a core at its busiest thread; "
+                      + "each WFM listener adds about " + Math.round(Math.max(0, v.perListenerPct)) + "%"
+                      + (v.lockedUsers ? ", " + v.lockedUsers + " measured" : "") + ")"
+                    : "too slow here as a locked range (" + Math.round(v.lockedHottestPct) + "% of a core at its busiest thread)")
+      : "not measured as a locked range";
+    const fr = v.fullHottestPct >= 0 ? (v.fullOk ? "keeps up as a full radio (" + Math.round(v.fullHottestPct) + "%)"
+                                                 : "too slow as a full radio (" + Math.round(v.fullHottestPct) + "%)") : "";
+    return "<b>" + esc(mhz(v.hz)) + "</b>: this machine " + esc(lk) + (fr ? "; " + esc(fr) : "");
+  });
+  bits.push("Wide capture rates:<br>" + lines.join("<br>"));
+  if (cap.lockedMaxHz > 0 || cap.fullMaxHz > 0)
+    bits.push("A USRP on USB&nbsp;3 is offered rates up to <b>" + esc(mhz(cap.lockedMaxHz)) + "</b> as a locked range and <b>"
+              + esc(mhz(cap.fullMaxHz)) + "</b> as a full radio on this machine. A rate already in use stays offered.");
+  return bits;
+}
 function benchWideLines(w, name) {
   if (!w || !w.rate) return null;
   const head = "Wide benchmark — " + (name || w.label || w.driver || "radio") + " @ " + benchRateWords(w.rate);
@@ -2609,7 +2623,8 @@ function benchWideRender(j) {
     blocks.push("<b>" + esc(w.head) + "</b>" + (when && isFinite(when.getTime()) ? " <span style=\"color:var(--dim)\">(" + esc(when.toLocaleString()) + ")</span>" : "")
       + "<br>CPU/RAM:" + (w.unusable ? " <span style=\"color:#ff8a7d\">not usable at this rate — the USB bus could not keep up; these are what the processor alone could carry</span>" : "")
       + "<br>" + w.lines.map(l => w.unusable ? "<s>" + esc(l) + "</s>" : esc(l)).join("<br>")
-      + "<br><span style=\"color:" + (w.unusable ? "#ff8a7d" : (wide[k].usb && wide[k].usb.ok) ? "#7bd88f" : "var(--dim)") + "\">" + esc(w.usb) + "</span>");
+      + "<br><span style=\"color:" + (w.unusable ? "#ff8a7d" : (wide[k].usb && wide[k].usb.ok) ? "#7bd88f" : "var(--dim)") + "\">" + esc(w.usb) + "</span>"
+      + benchCaptureBits(wide[k].capture).map(b => "<br>" + b).join(""));
   }
   out.innerHTML = blocks.join("<br><br>");
   out.classList.toggle("hide", !blocks.length);

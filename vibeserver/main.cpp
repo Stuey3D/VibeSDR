@@ -2693,7 +2693,6 @@ int main(int argc, char** argv) {
                 std::thread([wideHz, r, wideIdx] {
                     auto& shim = LocalSdrShim::instance();
                     auto& p = vibe::benchProgress();
-                    p.steps.store(vibe::kWideCpuSteps + 2);
                     const bool held = shim.isRunning() && !shim.radioIsReleased();
                     const bool released = held && shim.releaseRadio();
                     auto step = [](const std::string& l) { vibe::benchStep(l); };
@@ -2702,6 +2701,7 @@ int main(int argc, char** argv) {
                                                                               r.converterInputHiHz, false, 0,
                                                                               r.mode == vsconfig::Mode::LockedRange);
                     const std::string label = r.label.empty() ? r.driver : r.label;
+                    p.steps.store(vibe::wideBenchSteps(radio, wideHz) + 2);
                     std::string entry = vibe::runWideBenchmark(wideHz, radio, label, vsBenchLoad(), 6.0, step);
                     /* ★★★ THE USB BUS TEST: the real radio at the chosen rate, through the server's real intake and IQ buffer
                      *  — a few seconds to settle, then 20 s counted (vibe_bench_profiles.h usbVerdict). A runtime rate only:

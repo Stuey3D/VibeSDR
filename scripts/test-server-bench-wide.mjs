@@ -74,6 +74,12 @@ try {
   ok(!!w && w.fm && w.fm.rate === 8000000 && typeof w.fm.n === 'number' && /cpu|ram|capture/.test(w.fm.by)
      && w.narrow && ['nfm', 'am', 'ssb'].includes(w.narrow.mode), `…the WFM and narrow profiles, with their bounds (fm ${w && w.fm && w.fm.n} by ${w && w.fm && w.fm.by})`);
   ok(!!w && w.dab && w.dab.blocks >= 3, `…DAB from the saved quick figures (${w && w.dab ? w.dab.n + ' users, ' + w.dab.blocks + ' blocks' : 'none'})`);
+  // ★★★ 2026-11-19: the capture rows moved here from the quick run — their verdict is the USRP's rate gate.
+  const cv = w && w.capture;
+  ok(!!cv && Array.isArray(cv.rates) && cv.rates.length === 1 && cv.rates[0].hz === 8000000 && typeof cv.lockedMaxHz === 'number'
+     && typeof cv.fullMaxHz === 'number', `…the capture verdict at 8 MS/s, as the quick run used to write it (${cv && JSON.stringify({ l: cv.lockedMaxHz, f: cv.fullMaxHz })})`);
+  // ★ Both paths measured (their steps are too quick to catch by polling: the verdict is the proof).
+  ok(!!cv && cv.rates[0].fullHottestPct >= 0 && cv.rates[0].lockedHottestPct >= 0, '…both the full radio and the locked range measured at 8 MS/s');
   ok(!!w && w.usb && w.usb.ok === false && /cannot be taken off the air/.test(w.usb.notRun || ''), `…the USB test says why it did not run (${w && w.usb && w.usb.notRun})`);
   ok(saved.at === quick.at && JSON.stringify(saved.rows) === JSON.stringify(quick.rows) && JSON.stringify(saved.dabStations) === JSON.stringify(quick.dabStations),
      'the quick result is kept whole beside it');

@@ -259,6 +259,22 @@ inline benchdetail::Result runDabStationRow(const DabClip& clip, const benchdeta
  *   · its OFDM / FIC front end — the `dab` row's threads less what its own station's decode costs (the station row's
  *     decode + FAAD2 each): a multiplex's own stream is counted as a station by the capacity rule (vibe_dab_wide.h).
  *  The row's pct is the two together; its threads carry each, which runBenchmark writes into the dabStations block. */
+/** ★ One block's DDC out of an 8 MS/s capture, % of a core at real time (-1 = could not be set up). */
+inline double measureDabDdc8(double seconds) {
+    vibedab::DabDdc ddc;
+    if (!ddc.configure(8000000.0, 1712000.0)) return -1;
+    const size_t blk = 80000;   // 10 ms of 8 MS/s
+    std::vector<float> in(blk * 2), out; out.reserve(blk);
+    uint32_t x = 12345u;
+    for (auto& v : in) { x = x * 1664525u + 1013904223u; v = float(int32_t(x) >> 8) * (1.0f / 8388608.0f) * 0.25f; }
+    const double want = std::max(1.0, seconds * 0.5);   // ★ seconds of 8 MS/s input to push through
+    const auto t0 = std::chrono::steady_clock::now();
+    double fed = 0;
+    while (fed < want) { out.clear(); ddc.process(in.data(), blk, out); fed += double(blk) / 8e6; }
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return 100.0 * wall / fed;
+}
+
 inline benchdetail::Result runDabMuxRow(const benchdetail::Result& dabRow, const benchdetail::Result& stRow, double seconds,
                                         bool cut = true) {
     using namespace benchdetail;
@@ -280,18 +296,8 @@ inline benchdetail::Result runDabMuxRow(const benchdetail::Result& dabRow, const
         r.threads.push_back({ "OFDM/FIC front end", front });
         return r;
     }
-    vibedab::DabDdc ddc;
-    if (!ddc.configure(8000000.0, 1712000.0)) { r.pct = -1; return r; }
-    const size_t blk = 80000;   // 10 ms of 8 MS/s
-    std::vector<float> in(blk * 2), out; out.reserve(blk);
-    uint32_t x = 12345u;
-    for (auto& v : in) { x = x * 1664525u + 1013904223u; v = float(int32_t(x) >> 8) * (1.0f / 8388608.0f) * 0.25f; }
-    const double want = std::max(1.0, seconds * 0.5);   // ★ seconds of 8 MS/s input to push through
-    const auto t0 = std::chrono::steady_clock::now();
-    double fed = 0;
-    while (fed < want) { out.clear(); ddc.process(in.data(), blk, out); fed += double(blk) / 8e6; }
-    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    const double ddcPct = 100.0 * wall / fed;
+    const double ddcPct = measureDabDdc8(seconds);
+    if (ddcPct < 0) { r.pct = -1; return r; }
     double dabTot = 0;
     for (const auto& t : dabRow.threads) if (t.first != "vibe-dsp") dabTot += t.second;
     double stDecode = 0;
@@ -314,8 +320,8 @@ inline benchdetail::Result runDabMuxRow(const benchdetail::Result& dabRow, const
  *  the difference / K). The row's pct is the 56 MS/s × 26-block total (the B210 case); its threads carry every figure. */
 inline benchdetail::Result runDabBankRow(double seconds, double topHz = 56e6) {
     using namespace benchdetail;
-    /* ★★★ Up to the fastest radio here and no further (benchdec::wideTopHz — Stuart, 2026-11-19: "I dont even own a 56msps
-     *  radio"): the ladder's rates below it, then that rate itself. The row's pct is that rate with every block it holds. */
+    /* ★★★ Up to `topHz` and no further (Stuart, 2026-11-19: "I dont even own a 56msps radio" — the wide benchmark passes
+     *  the rate the owner picked): the ladder's rates below it, then that rate itself. The row's pct is that rate with every block it holds. */
     std::vector<double> ladder;
     for (double v : { 8e6, 16e6, 32e6, 56e6 }) if (v < topHz - 1) ladder.push_back(v);
     ladder.push_back(topHz);
@@ -341,8 +347,8 @@ inline benchdetail::Result runDabBankRow(double seconds, double topHz = 56e6) {
         };
         const double f = timed(0), withK = timed(4), sl = std::max(0.0, (withK - f) / 4.0);
         char nm[32];
-        std::snprintf(nm, sizeof nm, "fwd@%d", int(rate / 1e6)); r.threads.push_back({ nm, f });
-        std::snprintf(nm, sizeof nm, "slice@%d", int(rate / 1e6)); r.threads.push_back({ nm, sl });
+        std::snprintf(nm, sizeof nm, "fwd@%g", rate / 1e6); r.threads.push_back({ nm, f });
+        std::snprintf(nm, sizeof nm, "slice@%g", rate / 1e6); r.threads.push_back({ nm, sl });
         if (rate == ladder.back()) { fwd56 = f; slice56 = sl; }
     }
     r.pct = fwd56 + blocks * slice56;
@@ -381,6 +387,20 @@ inline std::string ensureDabClip(const std::string& cacheDir,
 #endif
 }
 
+/** ★★★ THE WIDE BENCHMARK's DAB CUTTING, at the owner's rate (runWideBenchmark's wideDabCutFn): one block's DDC at 8 MS/s
+ *  and the filter bank up to `hz` — what the quick run no longer measures (an RTL's run). */
+inline void wideDabCut(double hz, double seconds, benchprof::DabInputs& d) {
+    d.ddc8 = measureDabDdc8(seconds);
+    const benchdetail::Result b = runDabBankRow(seconds, hz);
+    vibedab::wide::BankCost bc;
+    for (const auto& t : b.threads) {
+        if (t.first.rfind("fwd@", 0) == 0) { bc.rates.push_back(std::atof(t.first.c_str() + 4) * 1e6); bc.fwd.push_back(t.second); }
+        if (t.first.rfind("slice@", 0) == 0) bc.slice.push_back(t.second);
+    }
+    if (bc.ok()) d.bank = bc;
+}
+inline const bool kWideDabCutRegistered = (wideDabCutFn() = wideDabCut, true);
+
 /** Both DAB rows — the station alone, and with the whole-multiplex label scan — or none if no clip. */
 inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, double seconds) {
     std::vector<benchdetail::Result> out;
@@ -396,18 +416,16 @@ inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, 
     benchStep("DAB+: each extra station");
     out.push_back(runDabStationRow(clip, out.front(), seconds));
     // ★★ V12 Phase 2: what each multiplex costs in a wide locked range — the DAB listener capacity (vibe_dab_wide.h)
-    /* ★★★ Only what a radio here can use (benchdec::wideTopHz: -1 unset = the whole ladder as before; 0 = no radio known).
-     *  The 8 MS/s DDC is cheap (10 ms blocks): it runs where a radio here holds two blocks, or where none is known (Android
-     *  Lite passes none — a phone with an RSP still needs it). The filter bank is not cheap (56 MS/s was 83 % of an i5 core
-     *  and ~134 MB of signal): it runs only up to a KNOWN radio's top rate that holds two blocks. */
-    const double top = benchdec::wideTopHz();
-    const bool cut = top <= 0 || benchprof::dabBlocksAt(top) >= 2;
-    const bool bank = top < 0 || (top > 0 && benchprof::dabBlocksAt(top) >= 2);
+    /* ★★★ The quick run measures only what an RTL-class box serves (benchdec::dabCutMode): on a desktop server the 8 MS/s
+     *  DDC and the filter bank are the WIDE benchmark's (wideDabCut, below); with no radio known (Android Lite) the cheap
+     *  DDC still runs; unset (bench-server, the tests) both, the bank to 56 MS/s as before. */
+    const int mode = benchdec::dabCutMode();
+    const bool cut = mode != 0, bank = mode < 0;
     benchStep(cut ? "DAB+: each multiplex in a wide capture" : "DAB+: each multiplex's front end");
     out.push_back(runDabMuxRow(out.front(), out.back(), seconds, cut));
     // ★★ V12 §11.1: the filter bank — the other way to cut many blocks out of a wide capture
     benchStep(bank ? "DAB+: the wide-capture filter bank" : "");
-    if (bank) out.push_back(runDabBankRow(seconds, top < 0 ? 56e6 : top));
+    if (bank) out.push_back(runDabBankRow(seconds, 56e6));
     return out;
 }
 

@@ -401,7 +401,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         return !g.run;
     };
     benchdec::rowSkipFn() = [&hw](const std::string& id) { return !benchhw::gateRow(hw, id).run; };
-    struct SkipReset { ~SkipReset() { benchdec::rowSkipFn() = nullptr; benchdec::wideTopHz() = -1; } } skipReset;
+    struct SkipReset { ~SkipReset() { benchdec::rowSkipFn() = nullptr; benchdec::dabCutMode() = -1; } } skipReset;
     // The decoder rows' own ids, for the "not run" list (their runners skip them silently — the list is said here).
     for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora",
                             "dec_rttyauto", "dec_cw", "dec_cwskim", "dec_psk", "dec_pskskim", "dec_jtty", "dec_sitora", "dec_dsc",
@@ -417,22 +417,28 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         if (!benchhw::gateRow(hw, "adsb").run) moreRowSteps -= 2;
         moreRowSteps = std::max(0, moreRowSteps);
     }
-    const std::vector<double> wide = benchhw::wideRates(hw);
-    // ★★★ The DAB wide-capture rows go no faster than the fastest radio here (benchdec::wideTopHz), and cut nothing where
-    //     no radio's rate holds two Band III blocks — a Pi 2 with an RTL measures only what it can serve.
+    /* ★★★ THE QUICK RUN IS AN RTL's RUN (Stuart, 2026-11-19: "quick benchmark I would say should be based on RTL's as they
+     *  are the cheapest and most abundant SDR's and most likely to be the ones running on super low end hardware"). The
+     *  rates of 8 MS/s and up — the full-radio and locked-range rows, the capture verdict the USRP's rate gate reads, DAB's
+     *  per-multiplex DDC and filter bank — are the WIDE benchmark's (runWideBenchmark), at the rate the owner picks. Each
+     *  rate a radio here offers is listed as not run, with where it is measured. */
+    const std::vector<double> wide;
+    for (double hz : benchhw::wideRates(hw))
+        notRun.push_back({ "wfm_" + benchhw::rateId(hz), "not run — the wide benchmark measures " + benchhw::rateWords(hz) });
     {
         double top = 0;
         for (const auto& r : hw.radios) { for (double v : r.rates) top = std::max(top, v); for (double v : r.wideCandidates) top = std::max(top, v); }
-        benchdec::wideTopHz() = top;
-        if (benchhw::gateRow(hw, "dab").run && benchprof::dabBlocksAt(top) < 2)
+        benchdec::dabCutMode() = hw.radios.empty() ? 1 : 0;
+        if (benchhw::gateRow(hw, "dab").run)
             notRun.push_back({ "dec_dab_bank", hw.radios.empty() ? "not run — no radio set up yet"
-                                                                 : "not run — no radio here is fast enough to hold two DAB blocks" });
+                                             : benchprof::dabBlocksAt(top) >= 2 ? "not run — the wide benchmark measures it, at the rate you pick"
+                                             : "not run — no radio here is fast enough to hold two DAB blocks" });
     }
     // ★ The wide rows' steps: a full-radio row and three locked-range rows per rate.
     const int wideSteps = 4 * (int)wide.size();
     /* ★★★ V12 THE THREE LOCKED-RANGE PROFILES' RATES (vibe_bench_profiles.h profileRate — Stuart, 2026-11-18: "sample rate
-     *  tested should also reflect the capability of the connected SDR"): the highest rate of 8 MS/s or less a radio HERE
-     *  offers that can carry each profile; 2.048 MS/s with no radio configured. 0 = that profile does not apply here.
+     *  tested should also reflect the capability of the connected SDR"): the highest rate of an RTL's 2.4 MS/s or less
+     *  (benchprof::kQuickTopHz — faster is the wide benchmark's) a radio HERE offers that can carry each profile; 2.048 MS/s with no radio configured. 0 = that profile does not apply here.
      *  Four steps: the WFM listeners, Advanced RDS, the narrow listeners, DAB's capture. */
     const double profFmRate = benchhw::gateRow(hw, "lk_wfm").run ? benchprof::profileRate(hw, benchhw::Need::Wfm) : 0.0;
     const double profNarrowRate = benchprof::profileRate(hw, benchhw::Need::None);
@@ -817,23 +823,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
      *  path (fixed cost = the hotter of intake and front end with one listener; per listener; the hottest thread; how
      *  many of 1 / 5 / 10 listeners fitted) and the full-radio path. `lockedMaxHz` / `fullMaxHz`: the highest rate each
      *  kept up at with headroom (hottest thread <= 70 % of a core, nothing dropped). */
-    if (!wideV.empty()) {
-        double lmax = 0, fmax = 0;
-        benchwide::gateFrom(wideV, lmax, fmax);
-        char b[256];
-        std::snprintf(b, sizeof b, ",\"capture\":{\"lockedMaxHz\":%.0f,\"fullMaxHz\":%.0f,\"headroomPct\":%.0f,\"rates\":[",
-                      lmax, fmax, benchwide::kHeadroomPct);
-        j += b;
-        for (size_t k = 0; k < wideV.size(); ++k) {
-            const auto& v = wideV[k];
-            std::snprintf(b, sizeof b, "%s{\"hz\":%.0f,\"lockedOk\":%s,\"lockedHottestPct\":%.1f,\"lockedThread\":\"%s\","
-                          "\"fixedPct\":%.1f,\"perListenerPct\":%.1f,\"lockedUsers\":%d,\"fullOk\":%s,\"fullHottestPct\":%.1f}",
-                          k ? "," : "", v.hz, v.lockedOk ? "true" : "false", v.lockedHottest, v.lockedThread.c_str(),
-                          v.fixedPct, v.perListenerPct, v.lockedUsers, v.fullOk ? "true" : "false", v.fullHottest);
-            j += b;
-        }
-        j += "]}";
-    }
+    if (!wideV.empty()) j += "," + benchwide::captureJson(wideV);
     j += ",\"cores\":" + std::to_string(cores);
     // ★ The all-core clock this run calibrated the throttle snail to (MHz), or absent when it was
     //   already calibrated at setup or the machine has no cpufreq to read.
@@ -937,8 +927,28 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
 }
 
 /** The WIDE BENCHMARK's CPU steps (runWideBenchmark): WFM listeners, Advanced RDS, NFM, AM, SSB, DAB. The host adds its own
- *  (the USB bus test) on top. */
+ *  (the USB bus test) on top, and wideCaptureRates' rows (wideBenchSteps). */
 constexpr int kWideCpuSteps = 6;
+
+/** ★★★ The capture rows the wide benchmark runs for `radio` up to `hz` (Stuart, 2026-11-19 — the quick run is an RTL's):
+ *  every rate of 8 MS/s and up the radio offers, or could be offered, no faster than the one picked. */
+inline std::vector<double> wideCaptureRates(const benchhw::Radio& radio, double hz) {
+    benchhw::Hw one; one.radios.push_back(radio);
+    std::vector<double> o;
+    for (double v : benchhw::wideRates(one)) if (v <= hz + 1) o.push_back(v);
+    if (hz >= 8e6 - 1 && (o.empty() || std::fabs(o.back() - hz) > 1)) o.push_back(hz);
+    return o;
+}
+/** Every step of one wide run but the host's USB test: the CPU half, a full-radio + three locked-range rows per capture
+ *  rate, and DAB's cutting (the DDC and the filter bank) where the radio reaches Band III. */
+inline int wideBenchSteps(const benchhw::Radio& radio, double hz) {
+    return kWideCpuSteps + 4 * (int)wideCaptureRates(radio, hz).size() + 1;
+}
+/** ★★ DAB's cutting at the wide rate — vibe_benchmark_dab.h registers it (wideDabCut); unset in a build without DAB, which
+ *  then uses the saved quick figures as before. */
+inline std::function<void(double, double, benchprof::DabInputs&)>& wideDabCutFn() {
+    static std::function<void(double, double, benchprof::DabInputs&)> f; return f;
+}
 
 /** ★★★ V12 THE WIDE BENCHMARK, ITS CPU HALF (Stuart, 2026-11-18: "when we detect a wide sample rate capable SDR … we offer
  *  a high sample rate benchmark too … that then lists the sample rates of the radio which you can then choose"). The
@@ -958,12 +968,26 @@ inline std::string runWideBenchmark(double hz, const benchhw::Radio& radio, cons
     const double meas = std::max(1.5, std::min(3.0, secondsPerScenario / 2));
     benchhw::Hw one; { benchhw::Radio r = radio; r.rates = { hz }; one.radios.push_back(r); }
     const bool fm = benchhw::gateNeed(one, benchhw::Need::Wfm).run, dab = benchhw::gateNeed(one, benchhw::Need::Dab).run;
+    /* ★★★ THE CAPTURE ROWS, moved here from the quick run (Stuart, 2026-11-19): the full radio and the locked range at each
+     *  wide rate up to this one — their verdict is the USRP's rate gate (gateFromBenchJson reads this entry's "capture"). */
+    std::vector<benchwide::WideVerdict> wideV;
+    {
+        std::vector<Result> rows; std::vector<std::pair<std::string, std::string>> notRun;
+        const auto rates = wideCaptureRates(radio, hz);
+        const size_t before = notRun.size();
+        wideV = benchwide::runWideRows(rates, secondsPerScenario, rows, notRun, step);
+        for (size_t k = before; k < notRun.size(); ++k) if (step) step("");
+    }
     benchwide::ThreeProfiles P;
     std::vector<benchprof::CaptureCost> caps;
     benchwide::measureFmNarrow(P, fm ? hz : 0.0, hz, { "nfm", "am", "ssb" }, -1, cores, meas, caps, step);
+    if (step) step(dab ? "DAB+: cutting multiplexes out of " + benchhw::rateWords(hz) : std::string());
+    benchprof::DabInputs d = benchprof::dabInputsFromJson(savedQuick);
+    // ★★★ DAB's DDC and filter bank at THIS rate (the quick run no longer measures them) — the saved figures stay as before
+    //     where this build has no DAB.
+    if (dab && wideDabCutFn()) wideDabCutFn()(hz, secondsPerScenario, d);
     if (step) step(dab ? "Locked range: DAB @ " + benchhw::rateWords(hz) : std::string());
     if (dab) {
-        const benchprof::DabInputs d = benchprof::dabInputsFromJson(savedQuick);
         if (d.ok()) benchwide::dabProfile(P, hz, d, meas, caps);
         if (!P.dab) P.dabWhy = d.ok() ? "DAB could not be worked out at this rate"
                              : benchprof::jsonTop(savedQuick, "dabStations").empty()
@@ -982,6 +1006,7 @@ inline std::string runWideBenchmark(double hz, const benchhw::Radio& radio, cons
     std::string j = b;
     const std::string three = benchwide::threeProfilesJson(P, cores, availKB);
     if (!three.empty()) j += "," + three;
+    if (!wideV.empty()) j += "," + benchwide::captureJson(wideV);
     char tb[48]; std::snprintf(tb, sizeof tb, ",\"benchSec\":%.1f}", benchdec::rowClock() - t0);
     return j + tb;
 }

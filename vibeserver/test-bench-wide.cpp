@@ -45,11 +45,13 @@ int main() {
       ok(near(benchprof::profileRate(hf, Need::Wfm), 912000), "HF+: FM at 912 kS/s (it reaches 60–260 MHz)");
       ok(benchprof::profileRate(hf, Need::Dab) == 0, "HF+: no DAB line (912 kS/s cannot hold an ensemble)"); }
     { Hw rsp; rsp.radios.push_back(benchhw::radioFor("sdrplay"));
-      ok(near(benchprof::profileRate(rsp, Need::Wfm), 8e6) && near(benchprof::profileRate(rsp, Need::Dab), 8e6), "RSP: 8 MS/s"); }
+      ok(near(benchprof::profileRate(rsp, Need::Wfm), 2048000) && near(benchprof::profileRate(rsp, Need::Dab), 2048000),
+         "RSP: 2.048 MS/s — the quick run is an RTL's (its 8 MS/s is the WIDE benchmark's)"); }
     { Hw a; a.radios.push_back(benchhw::radioFor("airspy"));
-      ok(near(benchprof::profileRate(a, Need::None), 6e6), "Airspy R2: 6 MS/s (its 10 is past the quick run's 8)"); }
+      ok(near(benchprof::profileRate(a, Need::None), 2500000), "Airspy R2: its slowest, 2.5 MS/s (nothing at an RTL's 2.4 or below)"); }
     { Hw u; u.radios.push_back(benchhw::radioFor("usrp", 0, 0, 0, false, 3, true));
-      ok(near(benchprof::profileRate(u, Need::Wfm), 8e6), "USRP USB 3: 8 MS/s (the wider rates are the WIDE BENCHMARK's)"); }
+      ok(benchprof::profileRate(u, Need::Wfm) <= 2400001 && benchprof::profileRate(u, Need::Wfm) > 0,
+         "USRP USB 3: an RTL's rate or below (every wider rate is the WIDE BENCHMARK's)"); }
     { Hw mix; mix.radios.push_back(benchhw::radioFor("airspyhf")); mix.radios.push_back(benchhw::radioFor("rtl"));
       ok(near(benchprof::profileRate(mix, Need::Wfm), 2400000) && near(benchprof::profileRate(mix, Need::None), 2400000),
          "HF+ and RTL: the RTL's 2.4 MS/s"); }
@@ -173,7 +175,13 @@ int main() {
         const std::string quick2 = "{\"v\":1,\"at\":9,\"rows\":[]}";
         const std::string kept = benchprof::benchKeepWide(quick2, saved);
         ok(benchprof::jsonTop(kept, "at") == "9" && benchprof::jsonTop(kept, "wide") == w, "a new quick run carries the wide block across");
-        ok(benchprof::benchKeepWide(quick2, "") == quick2 && benchprof::benchKeepWide(quick2, quick1) == quick2, "…and adds nothing where there was none");
+        ok(benchprof::benchKeepWide(quick2, "") == quick2, "…and adds nothing where there was none");
+        // ★★ 2026-11-19: the quick run is an RTL's — an older quick result's capture verdict is carried over (the USRP keeps
+        //    its rates until a wide run measures them), and a new one that has its own keeps its own.
+        ok(benchprof::jsonTop(benchprof::benchKeepWide(quick2, quick1), "capture") == "{\"lockedMaxHz\":30720000}",
+           "an older quick result's capture verdict is carried over");
+        const std::string quick3 = "{\"v\":1,\"capture\":{\"lockedMaxHz\":8000000}}";
+        ok(benchprof::jsonTop(benchprof::benchKeepWide(quick3, quick1), "capture") == "{\"lockedMaxHz\":8000000}", "…never over a new one");
         const std::string fresh = benchprof::benchWithWide("", "radio0", e2);
         ok(benchprof::jsonTop(fresh, "v") == "0" && benchprof::jsonTop(benchprof::jsonTop(fresh, "wide"), "radio0") == e2,
            "no saved file: a {\"v\":0} holder with the wide entry");

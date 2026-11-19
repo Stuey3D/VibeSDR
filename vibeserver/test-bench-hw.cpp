@@ -112,6 +112,16 @@ int main() {
         ok(benchhw::gateFromBenchJson("{\"v\":1,\"rows\":[],\"capture\":{\"lockedMaxHz\":30720000,\"fullMaxHz\":28000000,\"rates\":[]}}", l, f)
            && l == 30720000 && f == 28000000, "the verdict reads back from a saved benchmark");
         ok(!benchhw::gateFromBenchJson("{\"v\":1,\"rows\":[]}", l, f) && l == 0 && f == 0, "no capture block: no verdict, gate shut");
+        // ★★ 2026-11-19: the WIDE benchmark writes the verdict into each radio's entry (the quick run is an RTL's). Every
+        //    block counts, the highest each path kept up at — a rate's own rows inside one block never cut it short.
+        const std::string wideOnly = "{\"v\":1,\"rows\":[],\"wide\":{\"A\":{\"rate\":16000000,\"capture\":{\"lockedMaxHz\":16000000,"
+            "\"fullMaxHz\":8000000,\"rates\":[{\"hz\":8000000},{\"hz\":16000000}]}},\"B\":{\"rate\":8000000,\"capture\":{"
+            "\"rates\":[{\"hz\":8000000}],\"lockedMaxHz\":8000000,\"fullMaxHz\":12000000}}}}";
+        ok(benchhw::gateFromBenchJson(wideOnly, l, f) && l == 16000000 && f == 12000000,
+           "the wide entries' verdicts: the highest of each path");
+        ok(benchhw::gateFromBenchJson("{\"capture\":{\"lockedMaxHz\":30720000,\"fullMaxHz\":0,\"rates\":[]},\"wide\":{\"A\":{\"capture\":{"
+                                      "\"lockedMaxHz\":8000000,\"fullMaxHz\":8000000,\"rates\":[]}}}}", l, f) && l == 30720000 && f == 8000000,
+           "an older quick verdict and a wide one together");
     }
     // ── Stuart's target: a locked range of 82–108 MHz ──
     {

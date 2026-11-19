@@ -1,9 +1,10 @@
-// test-server-bench-dab-rate.mjs — the QUICK benchmark's DAB wide-capture rows go no faster than the radios here (V12,
-// Stuart 2026-11-19: "I dont even own a 56msps radio" — the filter-bank row measured 56 MS/s on every box, a Pi 2
-// included, 83 % of an i5 core and ~134 MB of test signal). The real server, the real quick run, twice:
-//   · an RTL (tops out at 3.2 MS/s: one DAB block) — the filter bank is NOT RUN and says why; the multiplex row is its
-//     front end only (no 8 MS/s DDC); no row anywhere is measured above the RTL's fastest rate;
-//   · an RSP (offers 8 MS/s and up) — the bank runs, at the RSP's own top rate and below, never 56 MS/s.
+// test-server-bench-dab-rate.mjs — the QUICK benchmark is an RTL's (V12, Stuart 2026-11-19: "I dont even own a 56msps
+// radio" — the filter-bank row measured 56 MS/s on every box, a Pi 2 included, 83 % of an i5 core and ~134 MB of test
+// signal; then "quick benchmark I would say should be based on RTL's"). The real server, the real quick run, twice:
+//   · an RTL — the filter bank is NOT RUN and says why; the multiplex row is its front end only (no 8 MS/s DDC); no row
+//     anywhere is measured above an RTL's 3.2 MS/s (its profiles at 2.4; ADS-B at 3.0, as an RTL runs it);
+//   · an RSP (offers 8 MS/s) — the same: no row above 3.2 MS/s, its 8 MS/s listed as the WIDE benchmark's, and the
+//     filter bank "measured by the wide benchmark" (test-server-bench-wide.mjs runs that one).
 // Needs VIBESERVER_BIN and the DAB bench clip (VIBE_DAB_CLIP or vibeserver/bench-clip/dab-bench.vbu8); exit 3 = NOT RUN.
 // Silent (no audio is played). ~2 × the quick benchmark's length.
 import net from 'node:net'; import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import { spawn } from 'node:child_process';
@@ -64,19 +65,22 @@ try {
   ok(!!mux && /front end/.test(mux.label) && !/MS\/s\)/.test(mux.label) && mux.pct > 0, `the multiplex row is its front end only (${mux && mux.label}, ${mux && mux.pct})`);
   ok(!!a.saved.dabStations && a.saved.dabStations.muxFrontPct > 0 && !(a.saved.dabStations.ddc8Pct > 0) && !a.saved.dabStations.bank,
      `dabStations keeps the front end, no 8 MS/s DDC, no bank (${JSON.stringify(a.saved.dabStations)})`);
-  const fast = (a.saved.rows || []).filter((x) => x.rate > 3200000 && x.pct >= 0);
-  ok(fast.length === 0, `no row measured above the RTL's 3.2 MS/s (${fast.map((x) => x.id + '@' + x.rate).join(', ') || 'none'})`);
+  const fast = (a.saved.rows || []).filter((x) => x.rate > 3200000 && x.pct >= 0);   // ★ an RTL's top (ADS-B runs at 3.0)
+  ok(fast.length === 0, `no row measured above an RTL's 3.2 MS/s (${fast.map((x) => x.id + '@' + x.rate).join(', ') || 'none'})`);
 
   // ── an RSP: 8 MS/s and up, never 56 ──
   console.log('   ── an RSP (8 MS/s and up)');
   const b = await quickRun({ serial: 'fakersp', driver: 'sdrplay', label: 'Test RSP', enabled: true, configured: true, users: 4,
                              mode: 'full', rate: 2048000, freq: 98000000, demodMode: 'wfm' });
-  const bank = row(b.saved, 'dec_dab_bank');
-  ok(!!bank && bank.rate >= 8000000 && bank.rate < 56000000 && !/56 MS\/s/.test(bank.label), `the bank runs at the RSP's own top rate (${bank && bank.label} @ ${bank && bank.rate})`);
-  const bk = b.saved.dabStations && b.saved.dabStations.bank;
-  ok(!!bk && bk.rates.length >= 1 && Math.max(...bk.rates) <= bank.rate + 1, `…its ladder stops there (${bk && JSON.stringify(bk.rates)})`);
+  const nb = (b.saved.notRun || []).find((n) => n.id === 'dec_dab_bank');
+  ok(!row(b.saved, 'dec_dab_bank') && nb && /wide benchmark/.test(nb.why), `the filter bank is the wide benchmark's (${nb && nb.why})`);
+  const w8 = (b.saved.notRun || []).find((n) => n.id === 'wfm_8000');
+  ok(!!w8 && /wide benchmark/.test(w8.why), `its 8 MS/s is listed as the wide benchmark's (${w8 && w8.why})`);
+  const fastB = (b.saved.rows || []).filter((x) => x.rate > 3200000 && x.pct >= 0);
+  ok(fastB.length === 0, `no row measured above an RTL's 3.2 MS/s (${fastB.map((x) => x.id + '@' + x.rate).join(', ') || 'none'})`);
+  ok(!b.saved.capture, 'no capture verdict from the quick run (the wide benchmark writes it)');
   const mb = row(b.saved, 'dec_dab_mux');
-  ok(!!mb && b.saved.dabStations.ddc8Pct > 0, `the multiplex row cuts at 8 MS/s there (${mb && mb.label}, ddc8 ${b.saved.dabStations.ddc8Pct})`);
+  ok(!!mb && /front end/.test(mb.label) && !(b.saved.dabStations.ddc8Pct > 0), `the multiplex row is its front end (${mb && mb.label})`);
 } catch (e) { fail++; console.log(`   FAIL ${e.message}`); }
 console.log(`${fail ? '✗' : '✓'} test-server-bench-dab-rate: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -100,6 +100,15 @@ ok(!els.benchWideResult.classList.contains('hide') && html.includes('Wide benchm
    && html.includes('not usable at this rate') && html.includes('<s>50 DAB users'), 'drawn: heading, CPU/RAM, the lines struck through when unusable');
 api.benchWideRender({ v: 0, wideOffer: [usrp], wide: { '30C1234': entry } });
 ok(els.benchWideResult.innerHTML.includes('USB bus: kept up') && !els.benchWideResult.innerHTML.includes('<s>'), 'a wide result shows even with no quick result saved');
+// ★★★ 2026-11-19: the capture verdict is the WIDE benchmark's now (the quick run is an RTL's) — drawn under its entry.
+api.benchWideRender({ v: 1, wideOffer: [usrp], wide: { '30C1234': { ...entry, capture: { lockedMaxHz: 8e6, fullMaxHz: 8e6, headroomPct: 70,
+  rates: [{ hz: 8e6, lockedOk: true, lockedHottestPct: 31, perListenerPct: 2, lockedUsers: 10, fullOk: true, fullHottestPct: 12 }] } } } });
+const ch = els.benchWideResult.innerHTML;
+ok(ch.includes('Wide capture rates:') && ch.includes('<b>8 MS/s</b>: this machine keeps up as a locked range (31% of a core')
+   && ch.includes('keeps up as a full radio (12%)') && ch.includes('offered rates up to <b>8 MS/s</b> as a locked range'),
+   'the wide entry\'s capture verdict is drawn under it');
+api.benchWideRender({ v: 1, wideOffer: [usrp], wide: { '30C1234': entry } });
+ok(!els.benchWideResult.innerHTML.includes('Wide capture rates:'), '…and nothing where the entry has none');
 
 // ── wired in ──
 ok(/<button id="benchRun" type="button">Run quick benchmark<\/button>/.test(src) && /btn\.textContent = "Run quick benchmark"/.test(src),

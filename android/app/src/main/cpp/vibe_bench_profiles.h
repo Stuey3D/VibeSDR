@@ -62,6 +62,10 @@ inline bool wideCapable(const std::string& driver) {
  *  None: any radio with a capture. No radio configured = 2.048 MS/s (today's locked-range rows). 0 = no radio here can.
  *  ★ 8 MS/s and no higher: past that is the WIDE BENCHMARK's question, at the rate the owner picks — and a Pi 2's run
  *    stays at the 2.4 MS/s its dongle offers. */
+/** ★★★ THE QUICK BENCHMARK's TOP RATE — an RTL-SDR's (Stuart, 2026-11-19: "quick benchmark I would say should be based on
+ *  RTL's as they are the cheapest and most abundant SDR's"). Anything faster is the wide benchmark's, at the rate the
+ *  owner picks (runWideBenchmark measures the three profiles there). */
+constexpr double kQuickTopHz = 2400000.0;
 inline double profileRate(const benchhw::Hw& hw, benchhw::Need need) {
     if (hw.radios.empty()) return 2048000.0;
     double best = 0;
@@ -69,10 +73,15 @@ inline double profileRate(const benchhw::Hw& hw, benchhw::Need need) {
         if (r.driver == "icom") continue;
         benchhw::Hw one; one.radios.push_back(r);
         if (need != benchhw::Need::None && !benchhw::gateNeed(one, need).run) continue;
-        for (double v : r.rates) if (v <= 8e6 + 1 && v > best) {
+        // ★ A radio with no rate at an RTL's 2.4 MS/s or below (an Airspy R2 starts at 2.5) is measured at its slowest.
+        double mine = 0, lowest = 0;
+        for (double v : r.rates) {
             if (need == benchhw::Need::Dab && v < 2048000.0 - 1000.0) continue;   // ★ an ensemble needs 2.048 MS/s
-            best = v;
+            if (v <= kQuickTopHz + 1 && v > mine) mine = v;
+            if (lowest == 0 || v < lowest) lowest = v;
         }
+        if (mine == 0) mine = lowest;
+        if (mine > best) best = mine;
     }
     return best;
 }
@@ -363,8 +372,13 @@ inline std::string jsonWithTop(const std::string& j, const std::string& key, con
 }
 /** ★ The quick run's result with the saved file's "wide" block carried across (a quick run never erases a wide one). */
 inline std::string benchKeepWide(const std::string& quick, const std::string& saved) {
+    std::string out = quick;
+    /* ★★ …and an older quick run's capture verdict when this one has none (2026-11-19: the quick run is an RTL's and
+     *  measures no wide rate) — a USRP keeps the rates its machine was measured for until a wide run says otherwise. */
+    const std::string cap = jsonTop(saved, "capture");
+    if (jsonTop(out, "capture").empty() && !cap.empty() && cap[0] == '{') out = jsonWithTop(out, "capture", cap);
     const std::string w = jsonTop(saved, "wide");
-    return w.empty() || w[0] != '{' ? quick : jsonWithTop(quick, "wide", w);
+    return w.empty() || w[0] != '{' ? out : jsonWithTop(out, "wide", w);
 }
 /** ★ The saved file with one radio's wide entry written in (`key` = its serial, or "radio<n>"); everything else as it was.
  *  No saved file = a bare {"v":0} holder: the quick figures are simply absent until the quick run is made. */

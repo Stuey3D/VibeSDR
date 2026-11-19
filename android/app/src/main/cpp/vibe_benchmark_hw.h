@@ -289,19 +289,29 @@ inline bool anyLocked(const Hw& hw) { for (const auto& r : hw.radios) if (r.lock
 /** ★★ THE GATE'S INPUT, read back from a saved benchmark (benchmark.json beside the config): the "capture" block's
  *  lockedMaxHz / fullMaxHz. false (both 0) = no such block — never measured wide, so nothing above the base list. */
 inline bool gateFromBenchJson(const std::string& j, double& lockedHz, double& fullHz) {
+    /* ★★★ EVERY "capture" block counts (2026-11-19): the WIDE benchmark writes one into each radio's entry (the quick run is
+     *  an RTL's and measures no wide rate), and a quick result from before then carries one at the top level. The gate is
+     *  the highest each path kept up at in any of them — each was measured on this machine. */
     lockedHz = fullHz = 0;
-    const size_t c = j.find("\"capture\":{");
-    if (c == std::string::npos) return false;
-    auto num = [&](const char* key, double& out) {
-        const size_t k = j.find(key, c);
-        if (k == std::string::npos) return false;
-        out = std::atof(j.c_str() + k + std::strlen(key));
-        return true;
-    };
-    const bool a = num("\"lockedMaxHz\":", lockedHz), b = num("\"fullMaxHz\":", fullHz);
+    bool any = false;
+    for (size_t c = j.find("\"capture\":{"); c != std::string::npos; c = j.find("\"capture\":{", c + 1)) {
+        size_t end = c + 10; int depth = 0;   // ★ from its own opening brace to its own closing one
+        for (; end < j.size(); ++end) { if (j[end] == '{') ++depth; else if (j[end] == '}' && --depth == 0) break; }
+        auto num = [&](const char* key, double& out) {
+            const size_t k = j.find(key, c);
+            if (k == std::string::npos || k > end) return false;
+            out = std::atof(j.c_str() + k + std::strlen(key));
+            return true;
+        };
+        double l = 0, f = 0;
+        const bool a = num("\"lockedMaxHz\":", l), b = num("\"fullMaxHz\":", f);
+        if (a && b) any = true;
+        if (l > lockedHz) lockedHz = l;
+        if (f > fullHz) fullHz = f;
+    }
     if (!(lockedHz > 0)) lockedHz = 0;
     if (!(fullHz > 0)) fullHz = 0;
-    return a && b;
+    return any;
 }
 
 /** "28 MS/s" / "30.72 MS/s" / "912 kS/s" — a rate as the owner reads it. */

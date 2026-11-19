@@ -351,6 +351,27 @@ inline void gateFrom(const std::vector<WideVerdict>& vs, double& lockedHz, doubl
     }
 }
 
+/** ★★★ THE CAPTURE VERDICT as JSON — `"capture":{lockedMaxHz, fullMaxHz, headroomPct, rates:[…]}` (no leading comma): the
+ *  rate gate's input (vibe_benchmark_hw.h gateFromBenchJson). Written by the WIDE benchmark into its entry since
+ *  2026-11-19 (the quick run is an RTL's); an older quick result carries one at the top level, which still counts. */
+inline std::string captureJson(const std::vector<WideVerdict>& wideV) {
+    double lmax = 0, fmax = 0;
+    gateFrom(wideV, lmax, fmax);
+    char b[320];
+    std::snprintf(b, sizeof b, "\"capture\":{\"lockedMaxHz\":%.0f,\"fullMaxHz\":%.0f,\"headroomPct\":%.0f,\"rates\":[",
+                  lmax, fmax, kHeadroomPct);
+    std::string j = b;
+    for (size_t k = 0; k < wideV.size(); ++k) {
+        const auto& v = wideV[k];
+        std::snprintf(b, sizeof b, "%s{\"hz\":%.0f,\"lockedOk\":%s,\"lockedHottestPct\":%.1f,\"lockedThread\":\"%s\","
+                      "\"fixedPct\":%.1f,\"perListenerPct\":%.1f,\"lockedUsers\":%d,\"fullOk\":%s,\"fullHottestPct\":%.1f}",
+                      k ? "," : "", v.hz, v.lockedOk ? "true" : "false", v.lockedHottest, v.lockedThread.c_str(),
+                      v.fixedPct, v.perListenerPct, v.lockedUsers, v.fullOk ? "true" : "false", v.fullHottest);
+        j += b;
+    }
+    return j + "]}";
+}
+
 // ── ★★★ V12 THE THREE LOCKED-RANGE PROFILES (2026-11-18 — vibe_bench_profiles.h has the rules) ─────────────────────────
 //
 // ★★ Each profile is the locked-range path above, thread for thread, with `profileListeners` listeners of its kind:
