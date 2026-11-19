@@ -24,8 +24,6 @@
 #include <map>
 #include <functional>
 #include <vector>
-#include <algorithm>
-#include <cstring>
 #include <string>
 
 namespace vibedsp {
@@ -201,120 +199,6 @@ private:
     std::vector<cf32> block_, spec_;
     ExtractCtx own_;                               // scratch for the single-threaded extract()
 };
-
-// ── ★★★ V12 THE LISTENERS' CHANNELISER GEOMETRY (2026-11-19) ─────────────────────────────────────────────────────
-//
-// WHY (Stuart, 2026-11-19, of a B210 locked to the whole FM band: "those savings are huge" — "we cannot degrade the
-// listening and use experience"). A channel is `chanBins` of the forward FFT's `n` bins, so its rate is
-// rate · chanBins / n and the decimation n / chanBins must be a WHOLE number. With n always a power of two the
-// decimation can only double, and a WFM listener (500 kHz asked: 2.5 × its 200 kHz) got 960 kHz at 30.72 MS/s,
-// 875 kHz at 56 MS/s, 625 kHz at 10/20/40 MS/s — up to 1.92× the samples through every listener's demodulator.
-// A forward size with factors of 3 and 5 too (PFFFT does 2^a·3^b·5^c) lets the decimation land where the channel
-// needs it: 30720 points at 30.72 MS/s is 1 kHz a bin, and 512 of them is 512 kHz.
-// ★★ NOTHING A LISTENER HEARS CHANGES: every channel is still at least as wide as it asks for, the roll-off is still
-//    the outer quarter of the slice, the overlap still a quarter — the 8 / 16 MS/s geometry (500 kHz exactly) that
-//    is already on the air. And where a power of two already fits within 5 % (every RTL rate, 8 and 16 MS/s), the
-//    size stays the power of two and every slice is chosen exactly as before: bit for bit the same.
-
-/** ★★ THE WATERFALL'S OWN TRANSFORM when the listeners' FFT is not the engine's (2026-11-19). The wide waterfall of a
- *  locked range has always been a block of the listeners' channeliser — an UNWINDOWED `n`-point FFT of the last n
- *  samples at each hop of 3n/4, one block in `every` turned into a row. The display path, the zoom and the crop are
- *  built on the engine's power-of-two n, so where the listeners' size differs this makes EXACTLY that block, the
- *  same samples, the same transform, the same hop — but only the ones that become a row (every()'th), and it copies
- *  only the samples those blocks hold. 80 rows a second at any rate: ~2 % of one core at 32768 points. */
-class PeriodicFft {
-public:
-    explicit PeriodicFft(int n) : n_(n), fft_(n, /*inverse=*/false), win_((size_t)n), bins_((size_t)n) {
-        hop_ = n_ - n_ / Channelizer::OVERLAP_DIV; next_ = hop_;   // ★ on the channeliser's block boundaries (k·hop)
-    }
-    int size() const { return n_; }
-    int hop() const { return hop_; }
-    /** Feed `len` samples; at each due block call onBlock(bins, n) — DC at bin 0, natural order, as Channelizer's
-     *  feed() hands out. `every()` (≥ 1) = blocks from this one to the next due one, asked after each. */
-    template <class Every, class OnBlock>
-    void feed(const cf32* in, int len, Every&& every, OnBlock&& onBlock) {
-        while (len > 0) {
-            const long long r = next_ - pos_;
-            const int take = (int)std::min<long long>(len, r);
-            const long long from = next_ - n_;            // the first sample the due block holds
-            int skip = 0;
-            if (pos_ < from) { skip = (int)std::min<long long>(take, from - pos_); have_ = 0; }
-            const int keep = take - skip;
-            if (keep > 0) { std::memcpy(&win_[(size_t)have_], in + skip, (size_t)keep * sizeof(cf32)); have_ += keep; }
-            pos_ += take; in += take; len -= take;
-            if (pos_ == next_) {
-                if (have_ == n_) { fft_.forward(win_.data(), bins_.data()); onBlock(bins_.data(), n_); }
-                long long e = (long long)every(); if (e < 1) e = 1;
-                const long long nx = next_ + e * (long long)hop_;
-                const long long overlap = (long long)n_ - (nx - next_);   // the next block's samples already here
-                if (overlap > 0 && have_ == n_) {
-                    std::memmove(win_.data(), &win_[(size_t)(n_ - overlap)], (size_t)overlap * sizeof(cf32));
-                    have_ = (int)overlap;
-                } else have_ = 0;
-                next_ = nx;
-            }
-        }
-    }
-private:
-    int n_, hop_ = 0;
-    ComplexFFT fft_;
-    std::vector<cf32> win_, bins_;
-    long long pos_ = 0, next_ = 0;
-    int have_ = 0;
-};
-
-/** ★ The channel a WFM listener asks for: 2.5 × the 200 kHz broadcast filter (the shim's chanBinsFor rule). */
-constexpr double kWfmChannelNeedHz = 500000.0;
-
-/** ★★ THE SLICE for a channel needing `needHz` out of an `n`-point forward FFT at `rate`: the fewest bins, at least
- *  `minBins`, whose rate covers it — a divisor of n (a whole decimation), a multiple of 16 (the inverse FFT's SIMD
- *  path; a quarter of it is the overlap discarded). n itself when nothing smaller covers it. A power-of-two n is the
- *  doubling it always was, exactly. */
-inline int sliceBinsFor(int n, double rate, double needHz, int minBins = 64) {
-    if (n <= 0) return 0;
-    if ((n & (n - 1)) == 0) {
-        int b = minBins;
-        while (b < n && rate * (double)b / (double)n < needHz) b <<= 1;
-        return b < n ? b : n;
-    }
-    // ★ Walk the decimation DOWN from the largest that could cover it: the first that divides n gives the fewest bins.
-    long long dMax = (needHz > 0 && rate > 0) ? (long long)std::floor(rate / needHz) : 1;
-    if (dMax > n) dMax = n;
-    for (long long d = dMax; d >= 1; --d) {
-        if (n % d) continue;
-        const int b = (int)(n / d);
-        if (b < minBins) continue;
-        if (b % 16 && b != n) continue;
-        if (rate * (double)b / (double)n + 1e-6 < needHz) continue;
-        return b;
-    }
-    return n;
-}
-
-/** True when `n` has no prime factor but 2, 3 and 5 (what PFFFT transforms at full speed). */
-inline bool fftSmooth235(int n) {
-    if (n <= 0) return false;
-    for (int p : { 2, 3, 5 }) while (n % p == 0) n /= p;
-    return n == 1;
-}
-
-/** ★★★ THE LISTENERS' FORWARD FFT SIZE at `rate`, from the power of two the engine uses there (`pow2`, the shim's
- *  fftSizeForRate). Looks from pow2 down to pow2/2 for a size that is 2^a·3^b·5^c and a multiple of 64 and gives a WFM
- *  channel nearer its 500 kHz; takes it only when the channel is at least 5 % narrower than the power of two gives
- *  (the largest such size on a tie — the finest bins). Otherwise pow2 itself, so every rate where it already fits is
- *  untouched. Pure; cheap enough per start, NOT per block (the shim caches it). */
-inline int listenerFftSize(double rate, int pow2) {
-    if (pow2 < 4096 || rate < 4.0 * kWfmChannelNeedHz) return pow2;   // ★ an RTL's rates: decimation 4 at most — no gain
-    auto wfmRate = [&](int n) { return rate * (double)sliceBinsFor(n, rate, kWfmChannelNeedHz) / (double)n; };
-    const double r0 = wfmRate(pow2);
-    int best = pow2; double bestR = r0;
-    for (int n = pow2 - 64; n >= pow2 / 2; n -= 64) {
-        if (!fftSmooth235(n)) continue;
-        const double r = wfmRate(n);
-        if (r + 1e-6 < bestR) { best = n; bestR = r; }
-    }
-    return bestR <= 0.95 * r0 ? best : pow2;
-}
 
 // ── Windows ──────────────────────────────────────────────────────────────--
 // Fill `w` (length n) with the named window. Nuttall matches the current

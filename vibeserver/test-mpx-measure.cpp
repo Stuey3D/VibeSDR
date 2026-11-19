@@ -356,71 +356,6 @@ Reading runChannelised(double fs, int fftSize, double need, double bw, const Sig
     return cap.r;
 }
 
-/** ★★★ V12 (2026-11-19) WHAT A LISTENER HEARS through the LISTENERS' FFT — the power of two on the air today (`pow2`) or
- *  the 2^a·3^b·5^c size the wide rates now take (vibedsp.h listenerFftSize). Stuart: "as long as the signal quality and
- *  audio quality is maintained". The whole listener path, as feedOneClient runs it: the shared forward FFT, the slice
- *  chanBinsFor sizes (2.5 × the 200 kHz filter), the residual tuned in the listener's own pipeline, WFM stereo + RDS —
- *  and the AUDIO kept (48 kHz stereo, after `warm` seconds), the RDS block error rate and PS, the Advanced RDS figures. */
-struct EarCap : Cap {
-    std::vector<float> L, R; bool keep = false; long berSum = 0; int berN = 0; std::string ps;
-    static void onAudio(void* c, const float* pcm, int frames, int ch, int) {
-        auto* p = (EarCap*)c;
-        if (!p->keep || ch < 2) return;
-        for (int i = 0; i < frames; ++i) { p->L.push_back(pcm[2 * i]); p->R.push_back(pcm[2 * i + 1]); }
-    }
-    static void onBer(void* c, int pct) { auto* p = (EarCap*)c; if (p->keep && pct >= 0) { p->berSum += pct; p->berN++; } }
-    static void onPs(void* c, uint16_t, const char* ps8) { ((EarCap*)c)->ps.assign(ps8, strnlen(ps8, 8)); }
-};
-static int gEarTaper(bool pow2) { const char* t = std::getenv("VIBE_EAR_TAPER"); return pow2 ? 4 : (t ? std::atoi(t) : 4); }
-struct Ear { Reading r; std::vector<float> L, R; double ber = -1; std::string ps; double chanRate = 0; int fft = 0; };
-Ear runEar(double fs, bool pow2, const Sig& sig, double seconds, double warm = 1.5) {
-    static std::atomic<bool> wanted{true};
-    int fftSize = 4096; while (fftSize < (int)(fs / 75.0) && fftSize < 32768) fftSize *= 2;
-    if (!pow2) fftSize = vibedsp::listenerFftSize(fs, fftSize);
-    const int b = vibedsp::sliceBinsFor(fftSize, fs, std::max(200000.0 * 2.5, 24000.0));
-    const double chanRate = fs * b / fftSize, binHz = fs / fftSize;
-    const int centreBin = (int)std::lround(kOffsetHz / binHz);
-    EarCap cap;
-    RxPipeline rx;
-    RxPipeline::Callbacks cb{};
-    cb.ctx = &cap; cb.audio = &EarCap::onAudio; cb.rdsPs = &EarCap::onPs; cb.rdsExt = &Cap::onExt; cb.rdsBer = &EarCap::onBer;
-    rx.setRdsExtWantedFlag(&wanted);
-#ifdef VIBEDSP_HAS_MPXMEASURE
-    rx.setMeasureThread(false);
-#endif
-    rx.start(chanRate, 1024, 10.0, 48000, cb);
-    rx.setTune(kOffsetHz - centreBin * binHz, RxPipeline::Mode::WFM, 200000.0);
-    rx.setRdsNoiseCorrection(true);
-    vibedsp::Channelizer ch(fftSize);
-    vibedsp::Channelizer::ExtractCtx ctx;
-    std::vector<cf32> slice((size_t)b), buf;
-    Gen gen(sig, fs);
-    const int block = (int)std::max(4096.0, fs / 100.0);
-    const long total = (long)(fs * seconds);
-    for (long done = 0; done < total; done += block) {
-        cap.keep = done >= (long)(fs * warm);
-        gen.fill(buf, (int)std::min<long>(block, total - done));
-        ch.feed(buf.data(), (int)buf.size(), [&](const cf32* bins, int) {
-            const int got = ch.extract(bins, centreBin, b, slice.data(), ctx, ch.blockIndex(), gEarTaper(pow2));
-            if (got > 0) rx.feed(slice.data(), got);
-        });
-    }
-    rx.stop();
-    Ear e; e.r = cap.r; e.L = std::move(cap.L); e.R = std::move(cap.R); e.ps = cap.ps; e.chanRate = chanRate; e.fft = fftSize;
-    e.ber = cap.berN ? (double)cap.berSum / cap.berN : -1;
-    return e;
-}
-/** A tone's level in `x` at `hz` (48 kHz) by least squares, and what is left once it is taken out (dB re the tone). */
-static void toneFit(const std::vector<float>& x, double hz, double& levelDb, double& restDb) {
-    double c = 0, s = 0; const double w = 2 * M_PI * hz / 48000.0;
-    for (size_t i = 0; i < x.size(); ++i) { c += x[i] * std::cos(w * i); s += x[i] * std::sin(w * i); }
-    c *= 2.0 / x.size(); s *= 2.0 / x.size();
-    double rest = 0;
-    for (size_t i = 0; i < x.size(); ++i) { const double e = x[i] - (c * std::cos(w * i) + s * std::sin(w * i)); rest += e * e; }
-    const double tone = 0.5 * (c * c + s * s);
-    levelDb = 10 * std::log10(tone + 1e-30); restDb = 10 * std::log10(rest / std::max<size_t>(1, x.size()) / (tone + 1e-30) + 1e-30);
-}
-
 /** ★★★ A STREAM WITH HOLES IN IT — what a loaded server hands the DSP. Every `every` seconds a
  *  stretch of `holeLen` samples is generated (the transmitter carries on) and NOT fed: the two sides
  *  of the hole abut, exactly as they do when a radio library drops a USB buffer or a listener's
@@ -1019,46 +954,6 @@ int main(int argc, char** argv) {
                           "direct path reads (pilot 1 %%, raw 1.5 %%, peak 2 %%)", fs / 1e6, d.bw / 2e3);
             ok(near(o.pilot, direct.pilot, 0.01) && near(o.rdsRaw, direct.rdsRaw, 0.015)
                && near(o.rdsPk, direct.rdsPk, 0.02) && newRate >= 600000.0, w);
-        }
-    }
-
-    // ★★★ V12 (2026-11-19) THE WIDE RATES' LISTENERS' FFT — the same broadcast through today's power of two and through the
-    //     2^a·3^b·5^c size (vibedsp.h listenerFftSize), what the listener HEARS: L-only and R-only tones (separation,
-    //     and what is left once the tone is fitted out — distortion + noise), the same with noise on the carrier (a weak
-    //     station), the RDS block errors and PS, the Advanced RDS figures. The new may not be worse than today's on any.
-    if (mode.empty() || full || mode == "--wide-fft") {
-        std::printf("\n── the wide rates: the listeners' FFT at a 2·3·5 size, against today's power of two ──\n");
-        const double es = std::max(3.5, std::min(secs, 4.5));
-        std::vector<double> wr = { 20e6, 30.72e6, 56e6 };
-        if (full || mode == "--wide-fft") wr = { 6e6, 10e6, 20e6, 25e6, 30.72e6, 40e6, 56e6 };
-        for (double fs : wr) {
-            Sig lOnly = locked; lOnly.leftAmp = 0.45; lOnly.rightAmp = 0.0;
-            Sig rOnly = locked; rOnly.leftAmp = 0.0;  rOnly.rightAmp = 0.45;
-            Sig weak = lOnly; weak.noise = 0.12;
-            struct Side { double sep, restL, restW, ber; std::string ps; Reading r; double cr; int fft; } side[2];
-            for (int k = 0; k < 2; ++k) {
-                const bool pow2 = k == 0;
-                const Ear a = runEar(fs, pow2, lOnly, es), bR = runEar(fs, pow2, rOnly, es), w = runEar(fs, pow2, weak, es);
-                double lL, lRest, rL, rRest, xL, xRest, wL, wRest, yL, yRest;
-                toneFit(a.L, 1000.0, lL, lRest); toneFit(a.R, 1000.0, xL, xRest);          // L tone; its leak into R
-                toneFit(bR.R, 1700.0, rL, rRest); toneFit(bR.L, 1700.0, yL, yRest);        // R tone; its leak into L
-                toneFit(w.L, 1000.0, wL, wRest);
-                (void)rRest; (void)xRest; (void)yRest; (void)wL;
-                side[k].sep = std::min(lL - xL, rL - yL);
-                side[k].restL = lRest; side[k].restW = wRest; side[k].ber = a.ber; side[k].ps = a.ps; side[k].r = a.r;
-                side[k].cr = a.chanRate; side[k].fft = a.fft;
-                std::printf("   %6.2f MS/s %-12s fft %5d channel %5.1f kHz: separation %5.1f dB, L tone rest %6.1f dB, weak %6.1f dB, "
-                            "RDS errors %.1f %%, PS \"%s\", pilot %.2f raw %.2f\n", fs / 1e6, pow2 ? "(today)" : "(2·3·5)", a.fft,
-                            a.chanRate / 1e3, side[k].sep, lRest, wRest, a.ber, a.ps.c_str(), a.r.pilot, a.r.rdsRaw);
-            }
-            const auto& o = side[0]; const auto& n = side[1];
-            char w[220];
-            std::snprintf(w, sizeof w, "%.2f MS/s: a narrower channel (%.0f -> %.0f kHz) that sounds the same — separation %.1f vs %.1f dB, "
-                          "distortion+noise %.1f vs %.1f dB, weak %.1f vs %.1f dB, RDS %.1f vs %.1f %%", fs / 1e6, o.cr / 1e3, n.cr / 1e3,
-                          n.sep, o.sep, n.restL, o.restL, n.restW, o.restW, n.ber, o.ber);
-            ok(n.cr < o.cr && n.cr >= 500000.0 - 1 && n.sep >= o.sep - 0.5 && n.restL <= o.restL + 0.3 && n.restW <= o.restW + 0.3
-               && n.ber <= o.ber + 0.5 && n.ps == o.ps && !n.ps.empty()
-               && near(n.r.pilot, o.r.pilot, 0.01) && near(n.r.rdsRaw, o.r.rdsRaw, 0.015), w);
         }
     }
 

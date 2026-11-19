@@ -41,13 +41,10 @@ using vibedsp::RxPipeline;
  *  header; test-bench-hw checks the two stay equal at the rates that matter. */
 inline int fftSizeForRate(double rate) { int s = 4096; while (s < (int)(rate / 75.0) && s < 32768) s *= 2; return s; }
 inline int chanBinsFor(double rate, int fftSize, double bwHz) {
-    return vibedsp::sliceBinsFor(fftSize, rate, std::max(bwHz * 2.5, 24000.0));   // ★ a power of two: the doubling, exactly
-}
-/** ★★ V12 (2026-11-19): the LISTENERS' forward FFT (local_sdr_shim.cpp lfft() — vibedsp.h listenerFftSize). The waterfall
- *  keeps fftSizeForRate's. VIBE_BENCH_POW2 (an A/B switch, never set by a server) measures the old power-of-two one. */
-inline int listenerFftForRate(double rate) {
-    const int p = fftSizeForRate(rate);
-    return std::getenv("VIBE_BENCH_POW2") ? p : vibedsp::listenerFftSize(rate, p);
+    const double need = std::max(bwHz * 2.5, 24000.0);
+    int b = 64;
+    while (b < fftSize && rate * (double)b / (double)fftSize < need) b <<= 1;
+    return std::min(b, fftSize);
 }
 /** The wide row's rate: the server's default fftRate (20) × FFT_AVG (4) — emitWideFromBins decimates blocks to it. */
 constexpr double kWideRowsPerSec = 80.0;
@@ -110,8 +107,7 @@ struct LockedMode { RxPipeline::Mode mode = RxPipeline::Mode::WFM; double bw = 2
 inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int16_t>& sc16, double warmSec, double measSec,
                                const LockedMode& lm = LockedMode()) {
     LockedFigures F;
-    const int engineN = fftSizeForRate(fs);          // ★ the waterfall's
-    const int fftSize = listenerFftForRate(fs);      // ★ the listeners' (the same, wherever a power of two fits)
+    const int fftSize = fftSizeForRate(fs);
     const int chanBins = chanBinsFor(fs, fftSize, lm.bw);
     const double chanRate = fs * chanBins / fftSize;
     const int centreBin = fftSize / 4;                       // the station is at fs/4 (fmStationSc16's offset)
@@ -185,36 +181,26 @@ inline LockedFigures runLocked(double fs, int nListeners, const std::vector<int1
         vibedsp::IqCleaner clean; clean.configure(fs);
         // ★ A/B switches for finding which stage costs what (VIBE_BENCH_NOENC's siblings) — never set by a server.
         const bool noClean = std::getenv("VIBE_BENCH_NOCLEAN") != nullptr, noWide = std::getenv("VIBE_BENCH_NOWIDE") != nullptr;
-        std::vector<float> row((size_t)engineN);
+        std::vector<float> row((size_t)fftSize);
         const double blockRate = fs / (double)chan.hop();
         const int decim = std::max(1, (int)std::lround(blockRate / kWideRowsPerSec));
         int wideDecim = 0;
-        auto makeRow = [&](const cf32* bins, int nb) {
-            const int half = nb / 2; const float scale = 1.0f / ((float)nb * (float)nb);
-            for (int i = 0; i < nb; ++i) {
-                const cf32& c = bins[(i + half) % nb];
-                row[i] = 10.0f * std::log10((c.real() * c.real() + c.imag() * c.imag()) * scale + 1e-30f) - 8.0f;
-            }
-        };
-        // ★★ The waterfall's own transform where the listeners' FFT is not its size (the shim's wideTap_), at its rows' rate.
-        std::unique_ptr<vibedsp::PeriodicFft> wideTap;
-        if (engineN != fftSize) wideTap.reset(new vibedsp::PeriodicFft(engineN));
-        const int tapDecim = std::max(1, (int)std::lround(fs / (double)(engineN - engineN / vibedsp::Channelizer::OVERLAP_DIV) / kWideRowsPerSec));
         std::vector<cf32> buf;
         volatile float sink = 0;
         while (iq.pop(buf)) {
             if (!noClean) clean.process(buf.data(), (int)buf.size());
-            if (wideTap && !noWide)
-                wideTap->feed(buf.data(), (int)buf.size(), [&] { return tapDecim; },
-                              [&](const cf32* b, int nb) { makeRow(b, nb); sink = sink + row[nb / 3]; });
             chan.feed(buf.data(), (int)buf.size(), [&](const cf32* bins, int nb) {
                 if (!lis.empty()) {
                     Blk b; b.bins = std::make_shared<std::vector<cf32>>(bins, bins + nb); b.index = chan.blockIndex();
                     for (auto& L : lis) L->q.push(b);
                 }
-                if (!wideTap && !noWide && ++wideDecim >= decim) {
+                if (!noWide && ++wideDecim >= decim) {
                     wideDecim = 0;
-                    makeRow(bins, nb);
+                    const int half = nb / 2; const float scale = 1.0f / ((float)nb * (float)nb);
+                    for (int i = 0; i < nb; ++i) {
+                        const cf32& c = bins[(i + half) % nb];
+                        row[i] = 10.0f * std::log10((c.real() * c.real() + c.imag() * c.imag()) * scale + 1e-30f) - 8.0f;
+                    }
                     sink = sink + row[nb / 3];
                 }
             });

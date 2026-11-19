@@ -58,12 +58,6 @@ add_executable(vibedsp_channelizer_tests test_channelizer.cpp ${DSP_SRC})
 target_include_directories(vibedsp_channelizer_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_channelizer_tests PRIVATE -O2 -Wall)
 
-# ★ V12 (2026-11-19): the listeners' FFT at a 2·3·5 size is as clean as the power of two (Stuart: "as long as the signal
-#   quality and audio quality is maintained").
-add_executable(vibedsp_channelizer_sizes_tests test_channelizer_sizes.cpp ${DSP_SRC})
-target_include_directories(vibedsp_channelizer_sizes_tests PRIVATE ${DSP})
-target_compile_options(vibedsp_channelizer_sizes_tests PRIVATE -O2 -Wall)
-
 add_executable(vibedsp_demod_tests test_demod.cpp ${DSP_SRC})
 target_include_directories(vibedsp_demod_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_demod_tests PRIVATE -O2 -Wall)

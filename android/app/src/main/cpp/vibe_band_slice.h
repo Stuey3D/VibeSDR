@@ -11,7 +11,6 @@
 //      2.4 MS/s; at 960 kS/s 40 m goes 30 → 60 kHz — one inverse FFT of 64 → 128 points per block, nothing).
 #pragma once
 #include "decoders/digi_bands.h"
-#include "vibedsp/vibedsp.h"   // ★ sliceBinsFor (V12 2026-11-19)
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -28,10 +27,6 @@ static_assert(kBandTaperDiv == 16, "digi::DigiTuner::kFlatHalfFrac assumes a six
 /** The slice's size in bins (a power of two, at most the FFT) for a wanted (flat) width. */
 inline int bandSliceBins(double sampleRate, int fftSize, double widthHz) {
     int b = 64;
-    // ★ V12 (2026-11-19): the listeners' FFT may be 2^a·3^b·5^c (vibedsp.h listenerFftSize) — a whole decimation of it.
-    //   A power of two is the doubling below, exactly as it always was.
-    if (fftSize > 0 && (fftSize & (fftSize - 1)) != 0)
-        return vibedsp::sliceBinsFor(fftSize, sampleRate, widthHz / kBandFlatFrac);
     while (b < fftSize && sampleRate * (double)b / (double)fftSize * kBandFlatFrac < widthHz) b <<= 1;
     return std::min(b, fftSize);
 }

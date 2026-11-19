@@ -83,17 +83,14 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
     if ((n_ & (n_ - 1)) == 0) {
         const int m = n_ - 1;
         for (int k = 0; k < chanBins; ++k) ctx.slice[k] = bins[(centreBin + ((k < half) ? k : k - chanBins)) & m];
-    } else {
-        /* ★ V12 (2026-11-19): a 2^a·3^b·5^c size (vibedsp.h listenerFftSize) wraps with one add or subtract — the
-         *  centre is reduced into range once, and an offset never exceeds half a slice, so no divide per bin. */
-        int c0 = centreBin % n_;
-        if (c0 < 0) c0 += n_;
-        for (int k = 0; k < chanBins; ++k) {
-            // k: 0..half-1 = positive offsets, half..chanBins-1 = negative offsets
-            int src = c0 + ((k < half) ? k : k - chanBins);
-            if (src >= n_) src -= n_; else if (src < 0) src += n_;
-            ctx.slice[k] = bins[src];
-        }
+    } else
+    for (int k = 0; k < chanBins; ++k) {
+        // k: 0..half-1 = positive offsets, half..chanBins-1 = negative offsets
+        const int off = (k < half) ? k : k - chanBins;
+        int src = centreBin + off;
+        src %= n_;
+        if (src < 0) src += n_;
+        ctx.slice[k] = bins[src];
     }
 
     // ★★★ THE CHANNEL'S TRANSFER FUNCTION — NOT AN OPTIONAL POLISH. ka9q's constraint is that the
@@ -127,11 +124,7 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
      *  e^(−j2π·k·d/chanBins), d = chanBins/(2·OVERLAP_DIV) — and both halves land inside the discarded head. Cost: one
      *  complex multiply a bin (cached per size), and d output samples of constant latency (1.7 ms at 75 kHz). The
      *  listeners' channels (a quarter) are left exactly as they were. */
-    /* ★★ V12 (2026-11-19): and the LISTENERS' channels too wherever the forward FFT is a 2^a·3^b·5^c size (vibedsp.h
-     *  listenerFftSize — the wide rates only). Measured (test_channelizer_sizes): a tone off a bin centre left a floor of
-     *  −42…−52 dBc with the zero-phase quarter at those sizes, a few dB above the power of two's −46…−54 on the air
-     *  today; delayed, −108…−140 dBc. A power-of-two FFT (every RTL rate, 8 and 16 MS/s) is left exactly as it was. */
-    if (taperDiv != 4 || (n_ & (n_ - 1)) != 0) {
+    if (taperDiv != 4) {
         if ((int)ctx.lin.size() != chanBins) {
             ctx.lin.resize((size_t)chanBins);
             const int d = chanBins / (2 * OVERLAP_DIV);
