@@ -224,6 +224,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "dsc") return "dsc";        // ★ DSC: the day's log per frequency + an item per distress/urgency call
     if (ext == "sitora") return "sitora";  // ★ V12 SITOR-A: the link's text, as an RTTY run (both stations, labelled)
     if (ext == "balloon") return "balloon"; // ★ V12 balloons: the reports as a run, and each SSDV picture as a .jpg
+    if (ext == "lrpt") return "lrpt";      // ★ V12 METEOR-M LRPT: each pass's channels and composite as PNGs
     return "";
 }
 
@@ -318,6 +319,31 @@ private:
     uint32_t w_ = 0, h_ = 0, lines_ = 0, maxRow_ = 0;
     std::vector<uint8_t> px_;
     std::string mode_;
+    int64_t started_ = 0;
+    size_t saved_ = 0;
+};
+
+// ── METEOR-M LRPT: the pass's pictures, as the decoder renders them ─────────────────────────────────────────────
+/** ★★ V12 (docs/v12/LRPT.md): the decoder hands over finished full-size PNGs (vibelrpt::Run → DecoderTap::picture) when
+ *  the pass ends or it is stopped — this files each one. The preview frames it also broadcasts (SSTV-shaped, half size)
+ *  are NOT what is kept: they are a live view. ★ Standard PNGs only (Stuart: standard formats). */
+class LrptGalleryTap : public DecoderTap {
+public:
+    LrptGalleryTap(gallery::Store& store, gallery::Meta meta) : store_(store), meta_(std::move(meta)), started_(gallery::nowUtc()) {}
+    void picture(const std::string& name, const std::string& png, int w, int h, bool partial) override {
+        if (png.empty()) return;
+        std::lock_guard<std::mutex> lk(m_);
+        gallery::Meta m = meta_;
+        m.utc = started_;
+        m.partial = partial;
+        m.title = "METEOR LRPT \xc2\xb7 " + gallery::printable(name, 40) + " \xc2\xb7 " + std::to_string(w) + "\xc3\x97" + std::to_string(h);
+        if (!store_.add(m, "png", png).empty()) ++saved_;
+    }
+    size_t saved() const { std::lock_guard<std::mutex> lk(m_); return saved_; }
+private:
+    gallery::Store& store_;
+    gallery::Meta meta_;
+    mutable std::mutex m_;
     int64_t started_ = 0;
     size_t saved_ = 0;
 };
@@ -830,6 +856,7 @@ private:
 inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr,
                                     std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
+    if (meta.kind == "lrpt") return std::make_shared<LrptGalleryTap>(st, meta);
     if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta, std::move(dial));
     if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
     if (meta.kind == "balloon") return std::make_shared<BalloonGalleryTap>(st, meta, std::move(dial));

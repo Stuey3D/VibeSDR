@@ -2388,7 +2388,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"],
-  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
+  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_lrpt", "METEOR LRPT"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
   ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
   ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"],
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"],
@@ -3512,6 +3512,10 @@ const BLOCKABLE = [
    *  default): 5-tone digits off the amateur bands, shown to the owner's own signed-in sockets only. */
   { id: "tones", label: "DTMF and 5-tone selective calling" },
   { id: "tones+digits", label: "5-tone: show the called numbers off the amateur bands (to you only)", parent: "tones", on: true },
+  /* ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): weather-satellite pictures on 137.1 / 137.9 MHz, a listener's decoder on a
+   *  140 kHz IQ slice of the dial; each pass's channels and colour composite go to the gallery as PNGs. Only where the
+   *  radio reaches 137 MHz, never an Icom. */
+  { id: "lrpt", label: "METEOR weather satellite pictures (LRPT)" },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP

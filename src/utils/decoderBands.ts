@@ -91,7 +91,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
     { group: 'maritime', ids: ['dsc'] },
     { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv', 'tones'] },   // ★ V12 DTMF + 5-tone (repeater control on 2 m)
     { group: 'paging',   ids: ['paging'] },   // ★ V12: only drawn on the phone's own radio (Android local hardware)
-    { group: 'other',    ids: ['rds', 'same'] },   // ★ V12 SAME: NOAA Weather Radio, 162.400–162.550 MHz
+    { group: 'other',    ids: ['rds', 'same', 'lrpt'] },   // ★ V12 SAME: NOAA Weather Radio, 162.400–162.550 MHz · LRPT: METEOR weather satellites, 137 MHz
   ],
   uhf: [
     { group: 'amateur',  ids: ['balloon', 'tones'] },   // ★ V12 balloons: UKHAS / Horus / SSDV payloads on 70 cm · DTMF + 5-tone
@@ -179,6 +179,7 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   aprs:   hz => anyNear(hz, HAM),
   time:   hz => pointsNear(hz, TIME_SIGNAL_HZ, 5e3),
   rds:    hz => anyNear(hz, [MHz(87.5, 108)], 500e3),
+  lrpt:   hz => pointsNear(hz, [137.1e6, 137.9e6], 80e3),   // ★ V12 METEOR-M LRPT's two downlinks (±Doppler and the 115 kHz signal)
   same:   hz => anyNear(hz, [MHz(162.4, 162.55)], 25e3),   // NOAA Weather Radio's seven channels   // Japan's 76–95 MHz FM is below; a hint only
 };
 

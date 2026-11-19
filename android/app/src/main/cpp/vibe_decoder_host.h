@@ -61,6 +61,7 @@
 #include "vibe_ncdxf_run.h"   // ★ V12 2026-11-16 the NCDXF / IARU beacon tracker
 #include "vibe_balloon_run.h"  // ★ V12 balloons: UKHAS RTTY, Horus Binary, SSDV pictures — docs/v12/BALLOONS.md
 #include "vibe_tones_run.h"    // ★ V12 tone decoders: DTMF and 5-tone selective calling — docs/v12/TONES.md
+#include "vibe_lrpt_run.h"     // ★ V12 METEOR-M LRPT pictures on an IQ slice of the dial — docs/v12/LRPT.md
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -256,6 +257,9 @@ struct DecoderTap {
     virtual void station(const vibestation::Heard&) {}
     /** ★ One DSC call (V12, 2026-10-26): the call, its readable line and JSON, and whether it repeats one just given. */
     virtual void dscCall(const dsc::Call& /*call*/, const std::string& /*line*/, const std::string& /*json*/, bool /*repeat*/) {}
+    /** ★ V12 LRPT: one finished picture of a pass (a standard PNG, full size) — `name` says which ("channel 2 near-IR",
+     *  "RGB 221 false colour"); `partial` = the decoder stopped before the pass ended. */
+    virtual void picture(const std::string& /*name*/, const std::string& /*png*/, int /*w*/, int /*h*/, bool /*partial*/) {}
 };
 using DecoderTapPtr = std::shared_ptr<DecoderTap>;
 
@@ -307,6 +311,10 @@ public:
         std::function<bool()> tonesDigits;
         /** ★ The ITU region of this server's band plan (vibe_bands.h) — which bands are amateur. Empty = Region 1. */
         std::function<int()> region;
+        /** ★★ V12 LRPT: the satellite engine's Doppler for this listener's pass now (Hz to remove, + = received above the
+         *  published frequency) — the feed-forward for vibelrpt::Run (docs/v12/LRPT.md §Interface). Empty = none: the
+         *  receiver acquires and tracks the Doppler itself, or the engine moves the dial. */
+        std::function<double()> satDopplerHz;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -665,7 +673,7 @@ public:
         std::lock_guard<std::mutex> lk(decMtx_);
         if (hfdl_) return "hfdl";
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : lrpt_ ? "lrpt" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -808,7 +816,7 @@ private:
     static bool knownExt(const std::string& e) {
         if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones" || e == "lrpt";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -816,12 +824,12 @@ private:
     static std::string paramsOf(const std::string& msg) {
         std::string k;
         for (const char* f : { "center_frequency", "shift", "baud_rate", "lpm", "image_width", "carrier",
-                               "deviation", "bandwidth", "width", "centre", "bits", "reverse", "horus_baud", "horus_spacing" }) {
+                               "deviation", "bandwidth", "width", "centre", "bits", "reverse", "horus_baud", "horus_spacing", "symbol_rate" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
-        for (const char* f : { "encoding", "framing", "station", "band", "mode", "standard" }) { k += str(msg, f); k += ','; }
+        for (const char* f : { "encoding", "framing", "station", "band", "mode", "standard", "modulation", "diff" }) { k += str(msg, f); k += ','; }
         for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
-                               "\"auto\":true", "\"usos\":true", "\"rtty\":false", "\"horus\":false", "\"dtmf\":false", "\"five\":false" })
+                               "\"auto\":true", "\"usos\":true", "\"rtty\":false", "\"horus\":false", "\"dtmf\":false", "\"five\":false", "\"interleaved\":true" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
         return k;
     }
@@ -854,8 +862,10 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_; }
+    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_ || lrpt_; }
     void clearLocked_() {
+        // ★ LRPT hands the gallery its pass's pictures as it finishes, so it goes before the gallery's copy is closed
+        if (lrpt_) lrpt_->finish(true);
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
           if (t) t->finish(running_()); }
@@ -869,6 +879,7 @@ private:
         cw_.reset();
         psk_.reset();
         rttySkim_.reset();   // ★ joins its search workers
+        lrpt_.reset();
         aprs_.reset();
         dsc_.reset();
         sitora_.reset();
@@ -1081,6 +1092,9 @@ private:
         } else if (ext == "rttyskim") {
             buildRttySkimLocked_(msg);
             return;
+        } else if (ext == "lrpt") {
+            buildLrptLocked_(msg);
+            return;
         } else if (ext == "aprs") {
             /* ★★ APRS (V12): 1200 Bd Bell 202 on an NFM channel (VHF), or "baud_rate":300 — HF packet on USB/LSB. Its frames
              *  are JSON (aprs_packet / aprs_list), sent from inside the run on the decode thread; each new station line goes
@@ -1253,6 +1267,31 @@ private:
         if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);
         log("decoder attached: RTTY skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz, "
             + std::to_string(rttySkim_->workers()) + " search worker" + (rttySkim_->workers() == 1 ? "" : "s"));
+    }
+    /** ★★ V12 METEOR-M LRPT (vibe_lrpt_run.h): an IQ slice of the dial (the skimmers' path), the picture as SSTV frames,
+     *  the pass's PNGs to the gallery's copy. "symbol_rate" 72000 | 80000 (per satellite — the client takes it from the
+     *  satellite's entry), "modulation" auto | qpsk | oqpsk, "diff" auto | on | off, "interleaved" (the 80k mode). */
+    void buildLrptLocked_(const std::string& msg) {
+        vibelrpt::Run::Opts o;
+        double sr = 72000; num(msg, "symbol_rate", sr);
+        o.symbolRate = sr >= 76000 ? 80000 : 72000;
+        const std::string m = str(msg, "modulation"), d = str(msg, "diff");
+        o.mod = m == "qpsk" ? vibelrpt::ReceiverConfig::Qpsk : m == "oqpsk" ? vibelrpt::ReceiverConfig::Oqpsk : vibelrpt::ReceiverConfig::Auto;
+        o.diff = d == "on" ? vibelrpt::ReceiverConfig::DiffOn : d == "off" ? vibelrpt::ReceiverConfig::DiffOff : vibelrpt::ReceiverConfig::DiffAuto;
+        o.interleaved = msg.find("\"interleaved\":true") != std::string::npos || (o.symbolRate == 80000 && msg.find("\"interleaved\":false") == std::string::npos);
+        o.json = [this](const std::string& j) { broadcastText(j, -1); };
+        o.frame = [this](const uint8_t* f, size_t n) { sendSstv(std::vector<uint8_t>(f, f + n)); };
+        o.dopplerHz = env_.satDopplerHz;
+        o.pictures = [this](const std::vector<vibelrpt::Picture>& ps, bool partial) {
+            if (DecoderTapPtr t = tap()) for (const auto& p : ps) t->picture(p.name, p.png, p.w, p.h, partial);
+        };
+        o.log = [this](const std::string& l) { log(l); };
+        lrpt_.reset(new vibelrpt::Run(std::move(o)));
+        imageKind_.store(2, std::memory_order_relaxed);   // ★ the SSTV frame shapes: a joiner is caught up on the picture
+        cwWidth_.store(vibelrpt::Run::kSliceWidthHz, std::memory_order_relaxed);
+        if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);
+        log("decoder attached: METEOR LRPT, " + std::to_string((int)o.symbolRate) + " sym/s, modulation " + (m.empty() ? "auto" : m)
+            + ", differential " + (d.empty() ? "auto" : d));
     }
     /** ★★ DSC (V12, 2026-10-26): "band":"vhf" = channel 70 on an FM demodulator's audio; anything else MF/HF, its tones
      *  centred on "center_frequency" (1700 Hz: the dial 1.7 kHz below the DSC frequency on USB, above it on LSB). */
@@ -1696,6 +1735,7 @@ private:
                     if (b.gapN == 0 && b.slice == 0 && cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && rttySkim_) rttySkim_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.gapN == 0 && b.slice == 0 && lrpt_) lrpt_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                 }
                 {
                     std::lock_guard<std::mutex> sl(spotsMtx_);
@@ -1923,6 +1963,7 @@ private:
     DecoderTapPtr cwTap_;                     // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
     std::unique_ptr<PskRun> psk_;             // ★ PSK31/63: a listener's decoder or a skimmer (buildPskLocked_) — shares cwIq_/cwWidth_
     std::unique_ptr<RttySkimRun> rttySkim_;   // ★ the RTTY skimmer (buildRttySkimLocked_) — shares cwIq_/cwWidth_, owns its workers
+    std::unique_ptr<vibelrpt::Run> lrpt_;      // ★ V12 METEOR-M LRPT (buildLrptLocked_) — shares cwIq_/cwWidth_
     int   sstvDecim_ = 0; float sstvAcc_ = 0.0f;
     int   textSlot_ = -1;
     std::atomic<bool> active_{false};

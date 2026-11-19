@@ -64,6 +64,7 @@ inline const std::vector<const char*>& allModes() {
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
         "balloon",          // ★ V12 balloons (docs/v12/BALLOONS.md): a listener's decoder on USB, 70 cm
         "tones",            // ★ V12 DTMF + 5-tone selcall (docs/v12/TONES.md): a listener's decoder on NFM / AM, any frequency
+        "lrpt",             // ★ V12 METEOR-M LRPT pictures (docs/v12/LRPT.md): a listener's decoder on a 140 kHz IQ slice, 137 MHz
     };
     return v;
 }
@@ -206,6 +207,7 @@ inline Caps compute(const Facts& f) {
         if (id == "rtty" || id == "mfsk" || id == "hell") return hf;
         if (id == "sstv" || id == "ft8" || id == "spots") return anyAmateur;
         if (id == "spotsband") return !icom && anyAmateur;                 // ★ Band reads IQ across a band
+        if (id == "lrpt") return !icom && tableOk("lrpt");                // ★ V12 an IQ slice at 137.1 / 137.9 MHz (an Icom: no IQ)
         if (vibereach::entry(id)) return tableOk(id.c_str());             // navtex dsc same selcal aprs cw psk jtty balloon
         return true;
     };

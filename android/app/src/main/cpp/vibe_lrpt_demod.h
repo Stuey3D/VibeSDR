@@ -80,6 +80,9 @@ private:
         return (l[0] + l[1]) + (l[2] + l[3]);
     }
     void dotScalar(const float* x, const float* h, float* l) const {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
         l[0] = l[1] = l[2] = l[3] = 0.f;
         for (size_t i = 0; i < n_; i += 4)
             for (int k = 0; k < 4; k++) l[k] = l[k] + x[i + size_t(k)] * h[i + size_t(k)];   // ★ no fused multiply-add

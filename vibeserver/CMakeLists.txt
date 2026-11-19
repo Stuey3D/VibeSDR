@@ -1186,6 +1186,13 @@ foreach(t rs41 rs41-service)
   target_link_libraries(test-${t} PRIVATE vibedsp Threads::Threads)
   add_test(NAME ${t} COMMAND test-${t} --quick)
 endforeach()
+# ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): the FEC pieces, our own LRPT transmitter through the whole receiver (QPSK,
+#    OQPSK + differential, 80k interleaved, Doppler, sensitivity), noise (no picture ever), SIMD against scalar; and
+#    --wav <file> decodes a real recording to PNGs. Header-only.
+add_executable(test-lrpt "${CMAKE_CURRENT_SOURCE_DIR}/test-lrpt.cpp")
+target_include_directories(test-lrpt PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
+target_compile_options(test-lrpt PRIVATE -O3)
+add_test(NAME lrpt COMMAND test-lrpt --quick)
 # ★ dxscan-fm-replay: a recorded .cu8 capture through the FM hop engine as a sweep runs it (dev tool; captures stay in
 #   ~/VibeSDR-test-audio/fm). Peaks found and each one's clean RDS groups — why a station is or is not identified.
 add_executable(dxscan-fm-replay "${CMAKE_CURRENT_SOURCE_DIR}/dxscan-fm-replay.cpp")

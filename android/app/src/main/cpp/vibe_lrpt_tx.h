@@ -1,4 +1,4 @@
-// vibe_lrpt_tx.h — a METEOR-M LRPT TRANSMITTER, for tests only (V12, 2026-11-19): pictures → MSU-MR MCU packets →
+// vibe_lrpt_tx.h — a METEOR-M LRPT TRANSMITTER, for tests and the benchmark's dec_lrpt row (V12, 2026-11-19): pictures → MSU-MR MCU packets →
 // VCDUs → RS → randomiser → ASM → convolutional code → [differential] → [80k interleave + markers] → QPSK / OQPSK IQ.
 //
 // ★ The receiver can only be trusted as far as this is independent of it, so it is built from the same standards the

@@ -97,6 +97,10 @@ inline const std::vector<Entry>& table() {
         // ★ V12 balloons (UKHAS RTTY, Horus Binary, SSDV): amateur payloads on 70 cm — the 434 MHz licence-exempt band and the
         //   amateur allocation round it. Any part of it will do (payloads are anywhere in it).
         v.push_back({ "balloon", "Balloons", "is on 70 cm (430\xe2\x80\x93" "440 MHz, the 434 MHz payload band)", { band(430e6, 440e6) } });
+        // ★ V12 METEOR-M LRPT (docs/v12/LRPT.md): the two downlinks the METEOR-M satellites have used, 137.100 and 137.900
+        //   MHz, each the 115 kHz signal plus ±3.1 kHz of Doppler — either will do (the satellite's entry says which is live).
+        v.push_back({ "lrpt", "METEOR LRPT", "is on 137.100 and 137.900 MHz (the METEOR-M weather satellites)",
+            { ch(137.100e6, 62e3), ch(137.900e6, 62e3) } });
         return v;
     }();
     return t;
