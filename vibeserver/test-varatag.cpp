@@ -43,6 +43,7 @@ using cf = std::complex<float>;
 using vibe::varatag::Tagger;
 
 static int g_fail = 0;
+static std::string g_only;   // VIBE_VARA_ONLY=<substring>: run only the cases whose name holds it (debugging)
 #define CHECK(c, ...) do { if (!(c)) { std::printf("   FAIL: "); std::printf(__VA_ARGS__); std::printf("\n"); g_fail++; } } while (0)
 
 // ── the server's own sizes ───────────────────────────────────────────────────────────────────────────────────────
@@ -175,7 +176,8 @@ struct Result { int tags = 0; std::vector<vibe::varatag::Tag> last; double first
 /** Run `secs` of a capture at `fs` (complex), noise of unit power a sample, through the server's path. `extra` = a
  *  ready-made capture-rate signal (a recording) added in. */
 static Result runCapture(double fs, double secs, const std::vector<Placed>& sigs, uint32_t seed,
-                         const std::vector<cf>* extra = nullptr, bool printTrace = false) {
+                         const std::vector<cf>* extra = nullptr, bool printTrace = false, bool noise = true,
+                         std::vector<std::string>* tagLog = nullptr) {
     Result res;
     const int fftSize = fftSizeForRate(fs);
     vibedsp::Channelizer chan(fftSize);
@@ -207,7 +209,7 @@ static Result runCapture(double fs, double secs, const std::vector<Placed>& sigs
     for (size_t o = 0; o < n; o += chunk) {
         const int k = (int)std::min<size_t>(chunk, n - o);
         for (int i = 0; i < k; i++) {
-            cf v(nd(rng), nd(rng));
+            cf v = noise ? cf(nd(rng), nd(rng)) : cf(0, 0);
             for (auto& u : up) if (o + i < u.size()) v += u[o + i];
             if (extra && o + i < extra->size()) v += (*extra)[o + i];
             buf[(size_t)i] = v;
@@ -241,6 +243,11 @@ static Result runCapture(double fs, double secs, const std::vector<Placed>& sigs
             if (!t.empty() && res.firstTagS < 0) res.firstTagS = now;
             if ((int)t.size() > res.tags) res.tags = (int)t.size();
             if (!t.empty()) res.last = t;
+            if (tagLog) {   // every change of the tag set, with the time (real replays)
+                static std::string prev; std::string cur;
+                for (auto& x : t) { char b[96]; std::snprintf(b, sizeof b, "%.0f/%.0f(%.2f,%.1fHz) ", x.hz, x.bw, x.conf, x.spacing); cur += b; }
+                if (cur != prev) { char b[64]; std::snprintf(b, sizeof b, "t=%6.1f s: ", now); tagLog->push_back(std::string(b) + (cur.empty() ? "(none)" : cur)); prev = cur; }
+            }
         });
     }
     res.st = tg.stats(); res.comb = tg.lastComb(); res.width = tg.lastWidth();
@@ -252,7 +259,60 @@ static Result runCapture(double fs, double secs, const std::vector<Placed>& sigs
 static void report(const char* name, const Result& r) {
     std::printf("   %-46s tags %d", name, r.tags);
     if (!r.last.empty()) std::printf(" (at %.0f Hz, %.0f Hz wide, conf %.2f, spacing %.2f, first after %.0f s)", r.last[0].hz, r.last[0].bw, r.last[0].conf, r.last[0].spacing, r.firstTagS);
-    std::printf(" | evals %lld pass %lld, comb best %.1f Hz P %.2f\n", r.st.evals, r.st.evalsPass, r.comb.bestHz, r.comb.bestP);
+    std::printf(" | evals %lld pass %lld, comb best %.1f Hz P %.2f (in VARA window %.1f Hz P %.2f)", r.st.evals, r.st.evalsPass, r.comb.bestHz, r.comb.bestP, r.comb.varaHz, r.comb.varaP);
+    if (std::getenv("VIBE_VARA_WHY")) std::printf(" | stage-1 rejects: width %lld sides %lld flat %lld fill %lld level %lld (last width %.0f)",
+                                                 r.st.rejWidth, r.st.rejSteep, r.st.rejFlat, r.st.rejFill, r.st.rejSnr, r.width);
+    std::printf("\n");
+}
+
+
+// ── REAL RECORDINGS (VIBE_VARA_REAL=1): every IQ capture in ~/VibeSDR-test-audio/vara (UberSDR iq192 / iq48, stereo
+//    int16 I/Q), replayed through the same path with no noise added; the FreeDV RADE recording as a real look-alike.
+static std::vector<cf> readIqWav(const std::string& f, double& rate, double startS, double durS, double& fileS) {
+    std::vector<cf> v; FILE* w = std::fopen(f.c_str(), "rb"); if (!w) return v;
+    uint8_t h[44]; if (std::fread(h, 1, 44, w) != 44) { std::fclose(w); return v; }
+    const int ch = h[22] | (h[23] << 8); rate = h[24] | (h[25] << 8) | (h[26] << 16) | (h[27] << 24);
+    if (ch != 2 || rate <= 0) { std::fclose(w); return v; }
+    std::fseek(w, 0, SEEK_END); fileS = (std::ftell(w) - 44) / 4.0 / rate;
+    std::fseek(w, 44 + 4L * (long)(startS * rate), SEEK_SET);
+    const size_t want = (size_t)(durS * rate);
+    std::vector<int16_t> b(1 << 16); size_t got;
+    while (v.size() < want && (got = std::fread(b.data(), 2, b.size(), w)) > 1)
+        for (size_t i = 0; i + 1 < got && v.size() < want; i += 2) v.emplace_back(b[i] / 32768.0f, b[i + 1] / 32768.0f);
+    std::fclose(w); return v;
+}
+static int realReplays() {
+    const char* home = std::getenv("HOME");
+    const std::string dir = std::string(home ? home : "") + "/VibeSDR-test-audio/vara";
+    std::vector<std::string> files;
+    if (FILE* p = popen(("ls " + dir + "/*.wav 2>/dev/null").c_str(), "r")) {
+        char line[1024]; while (std::fgets(line, sizeof line, p)) { std::string s(line); while (!s.empty() && s.back() == '\n') s.pop_back(); files.push_back(s); }
+        pclose(p);
+    }
+    std::printf("\n[real] %zu recording(s) in %s\n", files.size(), dir.c_str());
+    int total = 0;
+    for (const auto& f : files) {
+        // ★ in 150 s pieces (bounded memory: ≤ ~250 MB at 192 kS/s), each with a fresh tagger
+        double fileS = 0;
+        for (double st = 0; ; st += 150) {
+            double rate = 0; std::vector<cf> x = readIqWav(f, rate, st, 150, fileS);
+            if (x.size() < 20 * rate || rate < 40000) { if (st == 0) std::printf("   %s: not a stereo IQ capture — skipped\n", f.c_str()); break; }
+            if (rate < 150000) { x = upsample(x, (int)std::lround(192000 / rate)); rate = 192000; }   // ★ a server's coarse bins
+            std::vector<float> e(std::min<size_t>(x.size(), 2000000)); for (size_t i = 0; i < e.size(); i++) e[i] = std::norm(x[i * (x.size() / e.size())]);
+            std::nth_element(e.begin(), e.begin() + e.size() / 2, e.end()); const float g = e[e.size() / 2] > 0 ? 1.0f / std::sqrt(e[e.size() / 2]) : 1.0f;
+            for (auto& v : x) v *= g;
+            std::vector<std::string> log;
+            const Result r = runCapture(rate, x.size() / rate, {}, 9, &x, false, false, &log);
+            const size_t u = f.find("uber_"); const size_t c1 = f.find('_', f.find('_', u + 5) + 1);
+            const double fc = std::atof(f.substr(f.find('_', u + 5) + 1, c1).c_str());
+            std::printf("   %s [%.0f–%.0f s]: tags at once max %d, comb evals %lld (pass %lld)\n", f.substr(f.find_last_of('/') + 1).c_str(), st, st + x.size() / rate, r.tags, r.st.evals, r.st.evalsPass);
+            for (auto& l : log) std::printf("      %s\n", l.c_str());
+            for (auto& t : r.last) std::printf("      last tag: %.3f kHz RF, %.0f Hz class, spacing %.2f Hz\n", (fc + t.hz) / 1e3, t.bw, t.spacing);
+            total += r.tags;
+            if (st + 150 >= fileS) break;
+        }
+    }
+    return total;
 }
 
 // VARA HF's PUBLISHED outward shape (sigidwiki): 2300 Hz / up to 49 carriers, 2750 / 59, 500 / 11; ~42 Bd at ~46.9 Hz
@@ -260,6 +320,8 @@ static constexpr double kDf = 46.875, kBaud = 42.0;
 
 int main() {
     std::printf("── test-varatag: the VARA HF identification tag (identify only — nothing is decoded) ──\n");
+    if (std::getenv("VIBE_VARA_REAL")) { realReplays(); return 0; }
+    if (const char* only = std::getenv("VIBE_VARA_ONLY")) g_only = only;   // ★ report only: what is on air is not known in advance
     const double fs = 192000;   // fftSizeForRate → 4096 points, 46.9 Hz bins (an Airspy HF+ / a narrow capture)
     const double fs75 = 307200; // → 4096 points, 75 Hz bins (the server's coarsest, a 2.4 MS/s RTL's)
 
@@ -292,6 +354,7 @@ int main() {
         { "2750 Hz, ARQ, two-path fade, 47 Hz bins",     59, fs,   true,  true,  18, 61000 },
     };
     for (const auto& p : pos) {
+        if (!g_only.empty() && std::string(p.name).find(g_only) == std::string::npos) continue;
         const double secs = 150;
         auto a = ofdm(p.nc, kDf, kBaud, secs, 11);
         auto b = ofdm(p.nc, kDf, kBaud, secs, 12);
@@ -384,26 +447,15 @@ int main() {
             guard(nm, { { analytic(au, 12000), -27000, 16 } });
         }
     }
-    {   // SSB speech: a real recording, if it is on this machine
+    {   // ★ REAL: Stuart's UberSDR, 40 m LSB 2026-11-16 — RADE V1 (CT1DHR's over, 470–522 s) among SSB speech (FREEDV.md)
         const char* home = std::getenv("HOME");
-        const std::string fn = std::string(home ? home : "") + "/VibeSDR-test-audio/lang/en";
-        std::string pick;
-        if (FILE* p = popen(("ls " + fn + "/*lsb*.wav 2>/dev/null | head -2").c_str(), "r")) {
-            char line[512]; while (std::fgets(line, sizeof line, p)) { std::string s(line); while (!s.empty() && (s.back() == '\n')) s.pop_back(); pick += s + "\n"; }
-            pclose(p);
-        }
-        int done = 0;
-        size_t pos0 = 0;
-        while (pos0 < pick.size()) {
-            const size_t e = pick.find('\n', pos0); const std::string f = pick.substr(pos0, e - pos0); pos0 = e + 1;
-            FILE* w = std::fopen(f.c_str(), "rb"); if (!w) continue;
-            std::fseek(w, 0, SEEK_END); const long sz = std::ftell(w); std::fseek(w, 44, SEEK_SET);
-            std::vector<int16_t> s16((size_t)std::min<long>((sz - 44) / 2, 16000L * 150)); std::fread(s16.data(), 2, s16.size(), w); std::fclose(w);
-            std::vector<float> au(s16.size()); for (size_t i = 0; i < au.size(); i++) au[i] = s16[i] / 32768.0f;
-            guard(("SSB speech: " + f.substr(f.find_last_of('/') + 1)).c_str(), { { analytic(au, 16000, true), 5000, 20 } });
-            done++;
-        }
-        if (!done) std::printf("   SSB speech: SKIPPED (no ~/VibeSDR-test-audio/lang/en recordings here)\n");
+        const std::string f = std::string(home ? home : "") + "/VibeSDR-test-audio/freedv/20261116T1655_7065000_lsb.wav";
+        if (FILE* w = std::fopen(f.c_str(), "rb")) {
+            std::fseek(w, 44 + 2L * 12000 * 440, SEEK_SET);
+            std::vector<int16_t> s16((size_t)12000 * 150); const size_t got = std::fread(s16.data(), 2, s16.size(), w); std::fclose(w);
+            std::vector<float> au(got); for (size_t i = 0; i < got; i++) au[i] = s16[i] / 32768.0f;
+            guard("REAL RADE V1 + SSB speech (40 m LSB, 440–590 s)", { { analytic(au, 12000, true), 5000, 20 } });
+        } else std::printf("   REAL RADE V1 + SSB speech: SKIPPED (%s not on this machine)\n", f.c_str());
     }
     std::printf("   guard labels in total: %d\n", guardLabels);
 

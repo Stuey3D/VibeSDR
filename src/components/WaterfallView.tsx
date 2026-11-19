@@ -93,7 +93,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, dxDialHint, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
+import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, dxDialHint, isTagLabel, VARA_TAG_HINT, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, dabGradeText, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
@@ -3487,7 +3487,7 @@ function WaterfallView({
           return (
             <React.Fragment key={'ks' + i + ':' + s.hz}>
               {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot (all of Band III on a wide DAB view). */}
-              <View pointerEvents="none" accessible accessibilityLabel={(dx && !dab ? dxDialHint(s, nowS) : s.label.replace(' · ', ', ').replace(' — ', ', '))
+              <View pointerEvents="none" accessible accessibilityLabel={(isTagLabel(s) ? VARA_TAG_HINT : dx && !dab ? dxDialHint(s, nowS) : s.label.replace(' · ', ', ').replace(' — ', ', '))
                                                                          + (dab && dx ? '. ' + dxDialHint(s, nowS) : '')
                                                                          + (dab?.grade ? '. ' + dabGradeText(dab.grade, nowS) : '')}
                     accessibilityRole={tapLabel ? 'button' : undefined}

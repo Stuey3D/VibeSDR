@@ -64,12 +64,15 @@ export interface KnownSignal {
   dialHz: number; mode: string;
   /** Higher wins a collision (PRIO_*). */
   prio: number;
-  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab' | 'dx';   // 'dab' = a Band III block (dabBlockView.ts)
+  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt' | 'dab' | 'dx' | 'tag';   // 'dab' = a Band III block (dabBlockView.ts); 'tag' = the server identified its shape (sigTagSignals)
   /** The decoder's settings for this signal, where they are published (curated entries only). */
   preset?: KnownPreset;
   /** ★★ V12 a DX CATCH from the server's DX Log (dxDialSignals) — drawn ITALIC in DX_LABEL_COLOUR. On a wide DAB view a
    *  block named only by a DX catch carries it too (dabBlockView.ts). */
   dx?: DxDialMark;
+  /** ★★ V12 a SIGNAL TAG — the server identified the signal from its spectrum shape alone (vibe_varatag.h): its kind and
+   *  the server's confidence. Display and tune only; never a decoder (VARA is proprietary and never decoded). */
+  tag?: { kind: 'vara'; conf: number };
 }
 /** What a DX label carries beyond its text: when it was last heard (unix s), its name, and its DAB block (DAB only). */
 export interface DxDialMark {
@@ -484,6 +487,64 @@ export function dxDialHint(s: KnownSignal, nowS: number): string {
 export function dxServerNow(pageNow: number | undefined, fetchedAtMs: number, nowMs = Date.now()): number {
   const local = nowMs / 1000;
   return typeof pageNow === 'number' && pageNow > 0 ? pageNow + (nowMs - fetchedAtMs) / 1000 : local;
+}
+
+// ── Signal tags: what the SERVER identified from a signal's shape (V12) ───────────────────────────────────────────
+/* ★★★ THE VARA HF TAG (vibe_varatag.h, docs/v12/VARA-TAG.md — Stuart, 2026-11-19). A VibeServer marks a signal whose
+ *     OUTWARD shape is VARA HF's: a flat block of one of its published widths (2750 / 2300 / 500 Hz), a regular comb of
+ *     carriers ~47 Hz apart in the power spectrum, coming and going in ARQ bursts. IDENTIFY ONLY:
+ *     ★★★ VARA is a proprietary modem whose author enforces it — VibeSDR NEVER decodes it, in any form. The label says so
+ *         in so many words, and never anything more (VARA_TAG_LABEL). There is no decoder to open: a tap only tunes there.
+ *  ★ The server sends `{"type":"sigtags","v":1,"tags":[{"id","hz","bw","k":"vara","c"}]}` on the spectrum socket when the
+ *    set changes (and every 10 s while any are held); an older server sends nothing and nothing is drawn. The client
+ *    forgets them SIGTAG_STALE_MS after the last message, so a server that stops sending cannot leave one behind.
+ *  ★ A curated label, an EiBi utility row or a bookmark on the same signal WINS (they name it better); a tag is drawn in
+ *    the labels' own look, with the occupied span as the digital modes' bar. */
+/** The tag's words — ONE TEXT, every reader (web, app, R36S known_labels.h): never more than this. */
+export const VARA_TAG_LABEL = 'VARA HF (proprietary — not decoded)';
+/** What a hover or a screen reader says. */
+export const VARA_TAG_HINT = 'VARA HF — a proprietary data modem (Winlink). VibeSDR recognises its shape on the spectrum; it does not decode it.';
+/** The audio centre a VARA HF signal sits at above a USB dial (Hz) — where a tap tunes the dial. */
+export const VARA_AUDIO_CENTRE_HZ = 1500;
+/** Tags not refreshed for this long are dropped (ms). */
+export const SIGTAG_STALE_MS = 30_000;
+/** One tag as the server sends it. */
+export interface SigTagEntry { id: number; hz: number; bw: number; k: string; c: number }
+/** A `sigtags` message's tags, checked: only kinds this client knows, finite, HF, at most 16. */
+export function parseSigTags(msg: unknown): SigTagEntry[] {
+  const tags = (msg && typeof msg === 'object' ? (msg as { tags?: unknown }).tags : null);
+  if (!Array.isArray(tags)) return [];
+  const out: SigTagEntry[] = [];
+  for (const t of tags.slice(0, 16)) {
+    if (!t || typeof t !== 'object') continue;
+    const o = t as Record<string, unknown>;
+    const hz = Number(o.hz), bw = Number(o.bw), c = Number(o.c);
+    if (o.k !== 'vara' || !(hz > 0 && hz < 30e6) || !(bw >= 300 && bw <= 3200)) continue;
+    out.push({ id: Number(o.id) || 0, hz: Math.round(hz), bw: Math.round(bw), k: 'vara', c: Number.isFinite(c) ? c : 0 });
+  }
+  return out;
+}
+/** The tags as labels, clear of every label already in force within half the tag's width (`others`). Sorted by hz. */
+export function sigTagSignals(tags: readonly SigTagEntry[] | null | undefined, others: readonly KnownSignal[] = []): KnownSignal[] {
+  if (!tags || !tags.length) return [];
+  const out: KnownSignal[] = [];
+  for (const t of tags) {
+    if (t.k !== 'vara') continue;
+    const half = t.bw / 2;
+    if (others.some((o) => o.src !== 'tag' && Math.abs(o.hz - t.hz) <= half)) continue;
+    out.push({ hz: t.hz, lo: t.hz - half, hi: t.hz + half, label: VARA_TAG_LABEL, dec: '', dialHz: t.hz - VARA_AUDIO_CENTRE_HZ,
+               mode: 'usb', prio: PRIO_EIBI, src: 'tag', tag: { kind: 'vara', conf: t.c } });
+  }
+  return out.sort((a, b) => a.hz - b.hz);
+}
+/** True for a server signal tag's label. */
+export function isTagLabel(s: KnownSignal | null | undefined): boolean {
+  return !!s && s.src === 'tag';
+}
+/** Labels plus tags, one sorted list (tags already cleared by sigTagSignals). */
+export function withSigTags(list: readonly KnownSignal[], tags: readonly KnownSignal[]): KnownSignal[] {
+  if (!tags.length) return list as KnownSignal[];
+  return [...list, ...tags].sort((a, b) => a.hz - b.hz);
 }
 
 // ── In view, and laid out ──────────────────────────────────────────────────────────────────────────────────────────

@@ -68,13 +68,17 @@ constexpr double kEvalMaxS = 80.0;
 /** A track's comb result is re-checked after this (s). */
 constexpr double kCombFreshS = 240.0;
 /** The comb's periodogram value (0…0.5 for a pure ripple) that counts as a clear comb, and where it scores 1. */
-constexpr float kCombMin = 0.10f, kCombFull = 0.22f;
+constexpr float kCombMin = 0.10f, kCombFull = 0.15f;
 /** Confidence: tag at or above, untag below; a tag held this long after its block was last seen (ARQ pauses). */
 constexpr float kTagConf = 0.85f, kDropConf = 0.60f;
 constexpr double kHoldS = 60.0;
 /** A track is forgotten this long after it was last seen. */
 constexpr double kForgetS = 120.0;
 constexpr int kMaxTracks = 24;
+/** Bins of dip bridged inside one block (a fade's notch), at the wide row's 47–75 Hz bins ≈ 190–300 Hz. */
+constexpr int kBridge = 4;
+/** Confidence = kShapeW × shape + (1 − kShapeW) × comb: the comb is the evidence, the shape only the candidate. */
+constexpr float kShapeW = 0.15f;
 
 struct Tag { int id; double hz; double bw; float conf; double spacing; };
 
@@ -193,7 +197,10 @@ public:
         while (i < i1) {
             if (lev(i) < flo(i) + kSnrDb) { i++; continue; }
             int j = i + 1;
-            while (j < i1 && (lev(j) >= flo(j) + kSnrDb || (j + 1 < i1 && lev(j + 1) >= flo(j + 1) + kSnrDb))) j++;
+            // ★ a fade's notch (two-path HF: −10 dB dips every ~1 kHz) must not cut one block into two: dips of up to
+            //   kBridge bins are bridged
+            auto up = [&](int q) { return q < i1 && lev(q) >= flo(q) + kSnrDb; };
+            while (j < i1) { bool any = false; for (int q = 0; q <= kBridge; q++) if (up(j + q)) { any = true; break; } if (!any) break; j++; }
             measureRun(sum, scale, bins, i, j, centreHz, binHz, flo);
             i = j + 1;
         }
@@ -240,8 +247,9 @@ public:
     bool any() const { std::lock_guard<std::mutex> lk(mtx_); return !tags_.empty(); }
 
     // ── for the tests and the setup page's cost line ──
-    struct Stats { long long rows = 0, segs = 0, evals = 0, evalsPass = 0; long long sliceSamples = 0; };
-    Stats stats() const { return { rows_, segsTotal_, evals_, evalsPass_, sliceSamples_ }; }
+    struct Stats { long long rows = 0, segs = 0, evals = 0, evalsPass = 0; long long sliceSamples = 0;
+                   long long rejWidth = 0, rejSteep = 0, rejFlat = 0, rejFill = 0, rejSnr = 0; };
+    Stats stats() const { return { rows_, segsTotal_, evals_, evalsPass_, sliceSamples_, rej_[0], rej_[1], rej_[2], rej_[3], rej_[4] }; }
     /** The last comb measurement (tests print it). */
     CombResult lastComb() const { return lastComb_; }
     double lastWidth() const { return lastWidth_; }
@@ -265,16 +273,22 @@ private:
         for (int k = a; k < b; k++) tmp_.push_back(sum[k] * scale);
         std::nth_element(tmp_.begin(), tmp_.begin() + tmp_.size() / 2, tmp_.end());
         const float top = tmp_[tmp_.size() / 2];
-        // ★ the −6 dB width: from the run's middle outwards to where the level falls 6 dB under the top (one-bin dips bridged)
+        // ★ the width: from the run's middle outwards to where the level falls 10 dB under the top (or to the floor's
+        //   threshold on a weak block), dips of up to kBridge bins bridged — a fade's notch inside the block never ends it
         const int mid = (a + b) / 2;
-        auto above = [&](int k) { return k >= 0 && k < bins && sum[k] * scale >= top - 6.0f; };
+        const float fl = flo(mid);
+        const float L = std::max(fl + kSnrDb, top - 10.0f);
+        auto above = [&](int k) { return k >= 0 && k < bins && sum[k] * scale >= L; };
+        auto aboveAny = [&](int k, int dir) { for (int q = 0; q < kBridge; q++) if (above(k + dir * q)) return true; return false; };
         int lo = mid, hi = mid;
-        while (lo - 1 >= 0 && (above(lo - 1) || above(lo - 2))) lo--;
-        while (hi + 1 < bins && (above(hi + 1) || above(hi + 2))) hi++;
+        while (lo - 1 >= 0 && aboveAny(lo - 1, -1)) lo--;
+        while (hi + 1 < bins && aboveAny(hi + 1, +1)) hi++;
+        while (lo < hi && !above(lo)) lo++;
+        while (hi > lo && !above(hi)) hi--;
         const double w = (hi - lo + 1) * binHz;
         lastWidth_ = w;
         const int cls = widthClass(w);
-        if (cls < 0) return;
+        if (cls < 0) { if (w > 300 && w < 3500) rej_[0]++; return; }
         const int nIn = hi - lo + 1;
         // ★ flat top: the inner 80 % within a few dB (std dev), and most of it within 6 dB of the top
         const int ia = lo + nIn / 10, ib = hi - nIn / 10;
@@ -283,13 +297,19 @@ private:
         if (cnt < 3) return;
         m /= cnt; const double sd = std::sqrt(std::max(0.0, s2 / cnt - m * m));
         const double fill = (double)close / cnt;
-        // ★ steep sides: two bins beyond each −6 dB edge are down at the floor (or 12 dB under the top)
+        // ★ steep sides: three and four bins beyond each edge are back at the floor (an OFDM block's edge is a bin or two
+        //   wide even unwindowed; SSB speech's roll-off spans many)
         auto outside = [&](int k) { return k < 0 || k >= bins ? -300.0f : sum[k] * scale; };
-        const float fl = flo(mid);
-        const float lim = std::max(fl + 4.0f, top - 12.0f);
-        const bool steep = outside(lo - 2) <= lim && outside(hi + 2) <= lim && outside(lo - 3) <= lim && outside(hi + 3) <= lim;
-        if (!steep || sd > 3.5 || fill < 0.85 || top - fl < kSnrDb + 1.0f) return;
-        const float shape = (float)std::max(0.0, std::min(1.0, 1.0 - (sd - 1.0) / 3.0)) * (float)fill;
+        //   ★ the wide FFT is UNWINDOWED (overlap-save needs it), so a strong block leaks: ~−12 dB three bins out. The limit
+        //     is the floor's or 12 dB under the top, whichever is higher.
+        const float lim = std::max(fl + 4.5f, top - 12.0f);
+        const bool steep = std::max(outside(lo - 3), outside(lo - 4)) <= lim && std::max(outside(hi + 3), outside(hi + 4)) <= lim;
+        if (!steep) { rej_[1]++; return; }
+        if (sd > 4.5) { rej_[2]++; return; }
+        if (fill < 0.70) { rej_[3]++; return; }
+        if (top - fl < kSnrDb + 1.0f) { rej_[4]++; return; }
+        // ★ 1 = dead flat and full; a faded block (notches) scores lower but still counts — the comb decides
+        const float shape = (float)std::max(0.0, std::min(1.0, 1.0 - (sd - 1.5) / 4.0)) * (float)std::min(1.0, fill / 0.9);
         seen_.push_back({ centreHz + ((lo + hi) * 0.5 - bins / 2) * binHz, w, cls, shape });
     }
 
@@ -413,7 +433,7 @@ private:
     void publish(double now) {
         std::vector<Tag> out;
         for (auto& t : tracks_) {
-            t.conf = 0.3f * t.shape + 0.7f * t.comb;
+            t.conf = kShapeW * t.shape + (1.0f - kShapeW) * t.comb;
             const bool alive = now - t.lastOnS <= kHoldS;
             const bool pattern = bursts(t, now) >= 2 || onTime(t, now) >= 10.0;
             if (!t.tagged && alive && pattern && t.conf >= kTagConf) t.tagged = true;
@@ -447,6 +467,7 @@ private:
     std::vector<cf32> ring_, buf_, out_;
     std::vector<double> psd_;
     CombResult lastComb_;
+    long long rej_[5] = { 0, 0, 0, 0, 0 };   // stage 1's rejections: width, sides, flatness, fill, level
     long long rows_ = 0, segsTotal_ = 0, evals_ = 0, evalsPass_ = 0, sliceSamples_ = 0;
     // published
     mutable std::mutex mtx_;

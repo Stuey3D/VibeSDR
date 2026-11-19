@@ -289,7 +289,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
-import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, type KnownSignal, type KnownAvail, type DxDialEntry } from '../utils/knownSignals';
+import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, dxDialSignals, dxServerNow, DX_DIAL_FETCH_MS, type KnownSignal, type KnownAvail, type DxDialEntry, parseSigTags, sigTagSignals, withSigTags, SIGTAG_STALE_MS, type SigTagEntry } from '../utils/knownSignals';
 import { dabBlockSignals, dabMuxNames, dabFreshGrades, type DabBlockGrade } from '../utils/dabBlockView';   // ★★ V12 DAB block labels + the block swapper
 import { tunedPassband, TUNED_SETTLE_MS } from '../utils/tunedStation';
 import { languagesNear, countryNear } from '../services/regionLanguages';
@@ -7426,6 +7426,16 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  10 MHz with sferics in the air (MW at night: 28-33 a minute measured), to draw a badge
        *  that reads "⚡ STORMS". Now only a change in what is drawn — the badge, and its spoken
        *  label's whole-number rate and seconds — gets through (power audit, 2026-10-01). */
+      // ★★ V12 the VARA HF tag (knownSignals.ts sigTagSignals — identify only): kept only when what is drawn changes
+      onSigTags: (m: unknown) => {
+        if (destroyed.current) return;
+        const tags = parseSigTags(m);
+        sigTagsAtRef.current = Date.now();
+        setSigTags((cur) => {
+          const key = (t: SigTagEntry[]) => t.map((x) => `${x.id}:${x.hz}:${x.bw}`).join(',');
+          return key(cur) === key(tags) ? cur : tags;
+        });
+      },
       onLightning: (rate, ago) => {
         if (destroyed.current) return;
         const next = rate > 0 ? { rate, ago } : null;
@@ -12308,6 +12318,15 @@ export default function SDRScreen({ route, navigation }: Props) {
    *     and read auth, so its gate — the PIN and the owner's "admin lock on viewing" (a 403 → no labels). The "2 h ago" is
    *     re-worked each minute while any are held. */
   const [dxDial, setDxDial] = useState<{ entries: DxDialEntry[]; now: number; at: number } | null>(null);
+  /* ★★ V12 SIGNAL TAGS (vibe_varatag.h — the VARA HF tag, identify only): the last `sigtags` message's tags, dropped
+   *  SIGTAG_STALE_MS after the last message (the server repeats them every 10 s while any are up). */
+  const [sigTags, setSigTags] = useState<SigTagEntry[]>([]);
+  const sigTagsAtRef = useRef(0);
+  useEffect(() => {
+    if (!sigTags.length) return;
+    const t = setInterval(() => { if (Date.now() - sigTagsAtRef.current > SIGTAG_STALE_MS) setSigTags([]); }, 5000);
+    return () => clearInterval(t);
+  }, [sigTags]);
   const [dxDialClock, setDxDialClock] = useState(0);
   useEffect(() => {
     setDxDial(null);
@@ -12351,9 +12370,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const dxDialSigs = useMemo(() => (knownBase && dxDial
     ? dxDialSignals(dxDial.entries, dxServerNow(dxDial.now, dxDial.at), knownBase.list, knownBase.bmHz) : []),
     [knownBase, dxDial, dxDialClock]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const knownSignals = useMemo(() => (!knownBase ? null
+  const knownWithDx = useMemo(() => (!knownBase ? null
     : dxDialSigs.length ? knownSignalList(knownBase.eibi, knownBase.bms, dxDialSigs) : knownBase.list),
     [knownBase, dxDialSigs]);
+  // ★★ V12 + the server's signal tags (the VARA HF tag — "VARA HF (proprietary — not decoded)"), clear of every label above
+  const knownSignals = useMemo(() => (!knownWithDx || !sigTags.length ? knownWithDx
+    : withSigTags(knownWithDx, sigTagSignals(sigTags, knownWithDx))), [knownWithDx, sigTags]);
 
   /* ★★ V12 DAB BLOCK LABELS AND THE BLOCK SWAPPER (utils/dabBlockView.ts — Stuart, 2026-11-15, the Almere B210 at 56 MS/s
    *  showing all of Band III: "add the spectrum labels to show the blocks and, if in the memory, show the MUX name next to

@@ -3467,6 +3467,9 @@ const BLOCKABLE = [
   { id: "ft8",    label: "FT8 / FT4" },
   /* ★ Time signals: one decoder for MSF, DCF77, WWV, WWVB, RWM and JJY — the station is the decoder's own choice. */
   { id: "time",   label: "Time signals (MSF, DCF77, TDF, WWV/WWVB, RWM, JJY)" },
+  /* ★★ V12 the VARA HF tag (vibe_varatag.h, docs/v12/VARA-TAG.md): a label on the spectrum over a VARA-shaped HF signal —
+   *  identify only. VARA is proprietary and is NEVER decoded; this switch only stops the server looking for its shape. */
+  { id: "varatag", label: "VARA HF tag on the spectrum (identify only \u2014 VARA is proprietary and never decoded)" },
   /* ★ The server-side FT8/FT4 spot decoder and the map drawn from it, as ONE switch: the map is
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
    *  buttons were dead weight in its clients (Stuart, 2026-09-17). Under it: each spots mode (spotModes), then Band. */

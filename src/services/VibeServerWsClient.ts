@@ -2979,6 +2979,11 @@ export abstract class VibeServerWsClient {
       this.callbacks.onLightning?.(Number(msg.rate) || 0, Number(msg.ago));
       return;
     }
+    // ★★ V12 signal tags — the VARA HF tag (vibe_varatag.h): identify only, never decoded
+    if (msg.type === 'sigtags') {
+      this.callbacks.onSigTags?.(msg);
+      return;
+    }
     if (msg.type === 'ovl') {
       this.callbacks.onOverload?.({
         gainTenthDb: Number(msg.gain) || 0,
