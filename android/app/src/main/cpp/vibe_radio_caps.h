@@ -64,6 +64,7 @@ inline const std::vector<const char*>& allModes() {
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
         "balloon",          // ★ V12 balloons (docs/v12/BALLOONS.md): a listener's decoder on USB, 70 cm
         "tones",            // ★ V12 DTMF + 5-tone selcall (docs/v12/TONES.md): a listener's decoder on NFM / AM, any frequency
+        "ale",              // ★ V12 2G HF ALE (docs/v12/HF-DATA.md): a listener's decoder on USB, HF
     };
     return v;
 }
@@ -153,7 +154,8 @@ inline Caps compute(const Facts& f) {
                                            "mfsk", "hell", "jtty", "aprs",
                                            "hfdl",     // ★ HFDL reads the USB audio: an Icom's does
                                            "balloon",     // ★ …and so do balloons (an IC-9700 / IC-705 on 70 cm; reach decides)
-                                           "tones" };     // ★ …and DTMF / 5-tone on the radio's FM or AM audio
+                                           "tones",       // ★ …and DTMF / 5-tone on the radio's FM or AM audio
+                                           "ale" };       // ★ …and ALE (an HF rig's USB audio)
             bool listed = false;
             for (const char* k : kIcom) if (id == k) { listed = true; break; }
             if (!listed) return false;   // ★ WFM, SAM/ECSS/C-QUAM, DRM, CTCSS (it reads channel IQ), every whole-radio mode
@@ -203,7 +205,7 @@ inline Caps compute(const Facts& f) {
         }
         if (id == "wefax") return touches(R, 2e6, 23e6);
         if (id == "sitora") return touches(R, 1.6e6, 23e6);           // ★ the maritime HF bands in use
-        if (id == "rtty" || id == "mfsk" || id == "hell") return hf;
+        if (id == "rtty" || id == "mfsk" || id == "hell" || id == "ale") return hf;   // ★ ALE: 2G nets live 2–30 MHz
         if (id == "sstv" || id == "ft8" || id == "spots") return anyAmateur;
         if (id == "spotsband") return !icom && anyAmateur;                 // ★ Band reads IQ across a band
         if (vibereach::entry(id)) return tableOk(id.c_str());             // navtex dsc same selcal aprs cw psk jtty balloon

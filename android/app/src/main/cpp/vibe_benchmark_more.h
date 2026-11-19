@@ -721,6 +721,7 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_rttyskim", { "rtty",   false, true  } },   // ★ inside RTTY's switch, which carries the green one-signal decoder
         { "dec_balloon",  { "balloon", true, true  } },   // ★ V12 balloons: a listener's decoder (a slot)
         { "dec_tones",    { "tones",  true,  true  } },   // ★ V12 DTMF + 5-tone: a listener's decoder (a slot)
+        { "dec_ale",      { "ale",    true,  true  } },   // ★ V12 2G HF ALE: a listener's decoder (a slot)
         { "dec_jtty",     { "jtty",   true,  true  } }, { "dec_sitora",   { "sitora", true,  true  } },
         { "dec_dsc",      { "dsc",    true,  true  } }, { "dec_same",     { "same",   true,  true  } },
         { "dec_selcal",   { "selcal", true,  true  } }, { "dec_mfsk",     { "mfsk",   true,  true  } },
@@ -871,6 +872,17 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         return hostAudioRow("dec_tones", "Decoder: DTMF + 5-tone selective calling", "tones", attach + "\"extension_name\":\"tones\"}",
                             tonesAudio(), Count::Any);
     });
+    /* ★★ V12 2026-11-19 2G HF ALE (docs/v12/HF-DATA.md): a sounding and a call (our own transmitter) on one listener's
+     *  audio — every (offset, timing) register searching all the while. Sets the "ale" switch's default; never hides it. */
+    run("dec_ale", "Decoder: ALE", [&] {
+        std::vector<float> a;
+        for (const auto& w : { aleCallWords("", "G4ABC", 4), aleCallWords("W1XYZ", "G4ABC", 6) }) {
+            auto x = aleSynth(w, 48000); a.insert(a.end(), x.begin(), x.end()); a.insert(a.end(), 48000, 0.f);
+        }
+        for (auto& v : a) v *= 0.3f;
+        addNoise(a, 0.05f, 9);
+        return hostAudioRow("dec_ale", "Decoder: ALE (2G, MIL-STD-188-141)", "ale", attach + "\"extension_name\":\"ale\"}", a, Count::Any);
+    });
     run("dec_sitora", "Decoder: SITOR-A", [&] {
         const auto L = sitorsynth::makeLink("002320204", "364775427", "GOOD MORNING THIS IS A TEST +?", "QSL +?", "73 +?", 4, 7);
         return hostAudioRow("dec_sitora", "Decoder: SITOR-A", "sitora", attach + "\"extension_name\":\"sitora\",\"center_frequency\":1000}",
@@ -897,10 +909,12 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         addNoise(a, 0.05f, 4);
         return hostAudioRow("dec_selcal", "Decoder: SELCAL", "selcal", attach + "\"extension_name\":\"selcal\"}", a, Count::Any);
     });
-    run("dec_mfsk", "Decoder: MFSK, Olivia, Contestia, THOR", [&] {
+    /* ★ (2026-11-19) the one AUTO now holds DOMINOEX (+ its FEC option) and MT63 too — every receiver runs on whatever is
+     *  on the band, so one MFSK16 over measures the whole key's cost as before (docs/v12/HF-DATA.md) */
+    run("dec_mfsk", "Decoder: MFSK, Olivia, Contestia, THOR, DominoEX, MT63", [&] {
         auto a = textModeSynth(TextModeDecoder::Family::Mfsk, "mfsk16", "CQ CQ DE G4ABC G4ABC PSE K\n", 48000, 1500);
         addNoise(a, 0.1f, 5);
-        return hostAudioRow("dec_mfsk", "Decoder: MFSK / Olivia / Contestia / THOR (AUTO)", "mfsk",
+        return hostAudioRow("dec_mfsk", "Decoder: MFSK / Olivia / Contestia / THOR / DominoEX / MT63 (AUTO)", "mfsk",
                             attach + "\"extension_name\":\"mfsk\",\"mode\":\"auto\"}", a, Count::Chars);
     });
     run("dec_hell", "Decoder: Feld Hell", [&] {

@@ -52,7 +52,8 @@
 #include "vibe_hfdl_run.h"   // ★ V12 HFDL on the USB dial — docs/v12/AVIATION.md (the aircraft go to the radio's table)
 #include "decoders/same_decoder.h"   // ★ V12 EAS / SAME (47 CFR § 11.31)
 #include "decoders/selcal_decoder.h" // ★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91)
-#include "decoders/textmodes.h"      // ★ V12 MFSK16/32, OLIVIA/CONTESTIA, THOR (one object per family, AUTO)
+#include "decoders/textmodes.h"      // ★ V12 MFSK16/32, OLIVIA/CONTESTIA, THOR, DOMINOEX, MT63 (one object per family, AUTO)
+#include "decoders/ale_decoder.h"    // ★ V12 2G HF ALE (MIL-STD-188-141 Appendix A) — docs/v12/HF-DATA.md
 #include "decoders/feld_hell.h"      // ★ V12 FELD HELL, drawn: strips down the image path (0x01 lines, as WEFAX)
 #if defined(VIBE_PAGING)
 #include "vibe_paging_run.h"   // ★ V12 PAGING — Android local hardware only (the define is the Android library's)
@@ -69,6 +70,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -305,6 +307,9 @@ public:
         /** ★★ V12 tone decoders: the owner's opt-in to 5-tone digits off the amateur bands ("tones+digits"). Read when the
          *  decoder starts; empty = off. Never anything a client sends. */
         std::function<bool()> tonesDigits;
+        /** ★★ V12 ALE: the owner's opt-in to AMD message TEXT off the amateur bands ("ale+amd"). Read when a line is sent;
+         *  empty = off. Never anything a client sends. Addresses are always shown (not message content). */
+        std::function<bool()> aleAmd;
         /** ★ The ITU region of this server's band plan (vibe_bands.h) — which bands are amateur. Empty = Region 1. */
         std::function<int()> region;
     };
@@ -665,7 +670,7 @@ public:
         std::lock_guard<std::mutex> lk(decMtx_);
         if (hfdl_) return "hfdl";
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : rttySkim_ ? "rttyskim" : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : ncdxf_ ? "ncdxf" : balloon_ ? "balloon" : tones_ ? "tones" : ale_ ? "ale" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -808,7 +813,7 @@ private:
     static bool knownExt(const std::string& e) {
         if (e == "hfdl") return true;   // ★ V12 HFDL (vibe_hfdl_run.h)
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "tdf" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingHere() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "rttyskim" || e == "jtty" || e == "ncdxf" || e == "balloon" || e == "tones" || e == "ale";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -854,7 +859,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_; }
+    bool running_() const { return hfdl_ || fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || rttySkim_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_ || ncdxf_ || balloon_ || tones_ || ale_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -884,6 +889,7 @@ private:
         ncdxf_.reset();
         balloon_.reset();
         tones_.reset();
+        ale_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
         active_.store(false, std::memory_order_relaxed);
@@ -1122,6 +1128,8 @@ private:
             buildBalloonLocked_(msg);
         } else if (ext == "tones") {
             buildTonesLocked_(msg);
+        } else if (ext == "ale") {
+            buildAleLocked_();
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
             /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
@@ -1417,6 +1425,36 @@ private:
         balloon_.reset(new BalloonRun(BalloonRun::configFrom(baud, bits, rev, shift, hb, hs, rtty, horus), std::move(o)));
         active_.store(true, std::memory_order_relaxed);
         log("decoder attached: balloons");
+    }
+    /** ★★ V12 2026-11-19 HF ALE (decoders/ale_decoder.h, docs/v12/HF-DATA.md): 2G ALE soundings, calls and links on the
+     *  listener's USB audio, one line a transmission ("[ALE] 21:04:12  call  K1ABC → W1XYZ"). ALE nets hop: whatever
+     *  lands on the dial is read. No parameters. ⚖ Addresses are shown; an AMD message's TEXT (content) is shown on an
+     *  amateur frequency (the band plan of this server's region, as the tone decoders decide it — HFLink's channels are
+     *  amateur), elsewhere only with the owner's opt-in (Env::aleAmd) and then to the owner's own sockets only
+     *  (textFramePriv) — never by a client's say-so. 0x03 1 while a transmission is being read; {"type":"ale_status"}. */
+    void buildAleLocked_() {
+        ale_.reset(new AleDecoder(48000));
+        ale_->clock = [this]() {
+            const std::time_t t = std::isfinite(decUtc_) ? (std::time_t)decUtc_ : std::time(nullptr);
+            std::tm g{};
+#if defined(_WIN32)
+            gmtime_s(&g, &t);
+#else
+            gmtime_r(&t, &g);
+#endif
+            char b[16]; std::snprintf(b, sizeof b, "%02d:%02d:%02d", g.tm_hour, g.tm_min, g.tm_sec); return std::string(b);
+        };
+        ale_->onLine = [this](const std::string& pub, const std::string& priv) {
+            if (priv.empty()) { textFrame(pub); return; }
+            const bool ham = !vibetones::amateurBand(env_.dialHz ? env_.dialHz() : 0.0, env_.region ? env_.region() : 1).empty();
+            if (ham) textFrame(priv);
+            else if (env_.aleAmd && env_.aleAmd()) textFramePriv(pub, priv);
+            else textFrame(pub);
+        };
+        ale_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+        ale_->onStatus = [this](const std::string& j) { broadcastText("{\"type\":\"ale_status\",\"data\":" + j + "}", -1); };
+        active_.store(true, std::memory_order_relaxed);
+        log("decoder attached: ALE");
     }
     /** ★★ V12 TONE DECODERS (vibe_tones_run.h, decoders/tones_rx.h): DTMF and 5-tone selective calling on the listener's NFM / AM
      *  audio, both at once. "dtmf":false / "five":false switch one off; "standard" pins the 5-tone table (a toneTables() id;
@@ -1788,8 +1826,13 @@ private:
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
+            if (ale_) {
+                ale_->feed(data, count);   // ★ ALE: its lines, state and status are sent from inside (buildAleLocked_)
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (tm_) {
-                // ★ MFSK / OLIVIA / THOR: float audio straight in; text, state and status are sent from inside
+                // ★ MFSK / OLIVIA / THOR / DOMINOEX / MT63: float audio straight in; text, state and status sent from inside
                 tm_->feed(data, count);
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
@@ -1916,6 +1959,7 @@ private:
     std::unique_ptr<NcdxfRun> ncdxf_;         // ★ V12 NCDXF beacons (buildNcdxfLocked_)
     std::unique_ptr<BalloonRun> balloon_;     // ★ V12 balloons (buildBalloonLocked_)
     std::unique_ptr<TonesRun> tones_;         // ★ V12 DTMF + 5-tone (buildTonesLocked_)
+    std::unique_ptr<AleDecoder> ale_;         // ★ V12 2G HF ALE (buildAleLocked_)
     double decUtc_ = NAN;                     ///< ★ the capture UTC of the block decode_ is handed (NaN = now)
     std::unique_ptr<JttyRun> jtty_;           // ★ JTTY: every JTTY signal in the passband (buildJttyLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)

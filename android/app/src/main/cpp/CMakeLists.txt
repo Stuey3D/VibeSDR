@@ -155,7 +155,9 @@ add_library(vibelocalsdr SHARED
     decoders/tone_id.cpp   # ★ V12: CTCSS / DCS tone ID on NFM
     decoders/same_decoder.cpp     # ★ V12: EAS / SAME (47 CFR § 11.31)
     decoders/selcal_decoder.cpp   # ★ V12: SELCAL (ICAO Annex 10 Vol III, Amendment 91)
-    decoders/textmodes.cpp        # ★ V12: MFSK16/32, OLIVIA/CONTESTIA, THOR
+    decoders/textmodes.cpp        # ★ V12: MFSK16/32, OLIVIA/CONTESTIA, THOR, DOMINOEX
+    decoders/mt63.cpp             # ★ V12: MT63 (inside the text-mode key)
+    decoders/ale_decoder.cpp      # ★ V12: 2G HF ALE (MIL-STD-188-141 Appendix A)
     decoders/feld_hell.cpp        # ★ V12: FELD HELL, drawn
     decoders/paging_decoder.cpp   # ★ V12: PAGING (POCSAG, AUTO) — Android local hardware only (VIBE_PAGING, vibe_paging_run.h)
     decoders/cw_skimmer.cpp

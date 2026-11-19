@@ -1,6 +1,7 @@
 /**
  * textModes.ts — ★ V12 (2026-10-31) THE MFSK KEYBOARD MODES: MFSK16/32, OLIVIA, CONTESTIA and THOR, decoded by a
- * VibeServer (android/app/src/main/cpp/decoders/textmodes.h). ★★ ONE KEY, "MFSK" (Stuart, 2026-10-31: "if it makes it
+ * VibeServer (android/app/src/main/cpp/decoders/textmodes.h) — ★ and from 2026-11-19 DOMINOEX (with its FEC option)
+ * and MT63 (decoders/mt63.h), two more families in the same key (docs/v12/HF-DATA.md). ★★ ONE KEY, "MFSK" (Stuart, 2026-10-31: "if it makes it
  * easier for users then add it" — Olivia, Contestia and THOR are multi-tone FSK modes too, so the family's own name
  * covers them): its AUTO runs every common sub-mode of all four side by side and names the one it locks
  * ("OLIVIA 8/250 · 1500 Hz"). The fallback controls under the key (autoModes.ts, RTTY's pattern): FAMILY (AUTO, MFSK,
@@ -21,11 +22,11 @@ export type TextMode = GroupedMode;
 export const TEXT_FAMILY_KEY: Record<TextFamily, string> = { mfsk: 'MFSK' };
 
 export const TEXT_FAMILY_HINT: Record<TextFamily, string> = {
-  mfsk: 'MFSK16/32, OLIVIA, CONTESTIA and THOR: tune USB so the whole signal sits in your passband — for OLIVIA, 1.5 kHz below the published centre (14.0715 MHz for 14.0730). AUTO tries the common sub-modes of all four side by side and names the one it finds; if it cannot lock, pick the family and then the sub-mode below. The first word of an over can go while it locks.',
+  mfsk: 'MFSK16/32, OLIVIA, CONTESTIA, THOR, DOMINOEX and MT63: tune USB so the whole signal sits in your passband — for OLIVIA, 1.5 kHz below the published centre (14.0715 MHz for 14.0730); MT63 is up to 2 kHz wide. AUTO tries the common sub-modes of all six side by side and names the one it finds; if it cannot lock, pick the family and then the sub-mode below. The first word of an over can go while it locks (MT63: its interleaver holds several seconds).',
 };
 
 /** `mfskModes` from vibeserver.json, or [] (short ids, labels and groups only; anything else is dropped). */
-export function parseTextModes(v: unknown): TextMode[] { return parseGroupedModes(v, 48); }
+export function parseTextModes(v: unknown): TextMode[] { return parseGroupedModes(v, 80); }   // ★ 63 since DOMINOEX + MT63
 
 export interface TextModeStatus { detected: string; hz: number }
 export function parseTextModeStatus(d: any): TextModeStatus | null {
@@ -37,6 +38,6 @@ export function parseTextModeStatus(d: any): TextModeStatus | null {
 /** The status line: what is locked and where, or what it is listening for. */
 export function textModeStatusText(_fam: TextFamily, mode: string, s: TextModeStatus | null, list: readonly TextMode[] = []): string {
   if (s?.detected) return `${s.detected} · ${s.hz} Hz`;
-  return mode === 'auto' ? 'listening — AUTO (MFSK, OLIVIA, CONTESTIA or THOR, from the signal)' : `listening — ${fullModeName(list, mode)}`;
+  return mode === 'auto' ? 'listening — AUTO (MFSK, OLIVIA, CONTESTIA, THOR, DOMINOEX or MT63, from the signal)' : `listening — ${fullModeName(list, mode)}`;
 }
 export function isTextFamily(x: unknown): x is TextFamily { return x === 'mfsk'; }

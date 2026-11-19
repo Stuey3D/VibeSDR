@@ -2388,7 +2388,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_rttyauto", "RTTY AUTO"], ["dec_rttyskim", "RTTY skimmer"], ["dec_cw", "CW"], ["dec_cwskim", "CW skimmer"],
   ["dec_psk", "PSK"], ["dec_pskskim", "PSK skimmer"], ["dec_jtty", "J-TTY"], ["dec_sitora", "SITOR-A"], ["dec_dsc", "DSC"],
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"],
-  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
+  ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_ale", "ALE"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
   ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
   ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"],
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"],
@@ -3414,6 +3414,11 @@ const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading
   + "Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law "
   + "where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.";
 /* ★ V12 tones (docs/v12/TONES.md): beside the 5-tone opt-in — what it is and who sees it. */
+/** ★ ONE TEXT, TWO READERS: src/screens/ServerModeScreen.tsx ALE_AMD_NOTICE. */
+const ALE_AMD_NOTICE = "Off the amateur bands an ALE text message (AMD) is a private message between government, military "
+  + "or commercial stations. Only switch this on if the law where this server is allows it. The text is shown only to you, "
+  + "the owner, while you are signed in \u2014 never to listeners, never in the gallery. Listeners see who called whom and "
+  + "the message's length.";
 const TONES_DIGITS_NOTICE = "Off the amateur bands a 5-tone call's number says who is being called on a private radio system. "
   + "Only switch this on if the law where this server is allows it. The numbers are shown only to you, the owner, while you "
   + "are signed in \u2014 never to listeners, never in the gallery. DTMF off the amateur bands is never shown (it can be a phone number).";
@@ -3493,8 +3498,9 @@ const BLOCKABLE = [
   /* ★ V12 HFDL (docs/v12/AVIATION.md) — aircraft on HF, a listener's decoder on the USB dial; its aircraft feed the HFDL
    *  map. The benchmark's "dec_hfdl" row sets its default. */
   { id: "hfdl", label: "HFDL (aircraft on HF)" },
-  /* ★ V12 (2026-10-31): ONE switch — MFSK16/32, Olivia, Contestia and THOR are one key with one AUTO. */
-  { id: "mfsk", label: "MFSK, Olivia, Contestia, THOR" },
+  /* ★ V12 (2026-10-31): ONE switch — MFSK16/32, Olivia, Contestia and THOR are one key with one AUTO; ★ 2026-11-19
+   *  DominoEX and MT63 joined it (docs/v12/HF-DATA.md). */
+  { id: "mfsk", label: "MFSK, Olivia, Contestia, THOR, DominoEX, MT63" },
   /* ★ V12 FELD HELL (2026-10-31) — drawn, not read: the text painted as it is heard. */
   { id: "hell", label: "Feld Hell (Hellschreiber)" },
   /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio
@@ -3512,6 +3518,11 @@ const BLOCKABLE = [
    *  default): 5-tone digits off the amateur bands, shown to the owner's own signed-in sockets only. */
   { id: "tones", label: "DTMF and 5-tone selective calling" },
   { id: "tones+digits", label: "5-tone: show the called numbers off the amateur bands (to you only)", parent: "tones", on: true },
+  /* ★★ V12 2026-11-19 2G HF ALE (docs/v12/HF-DATA.md): soundings, calls and links on a listener's USB audio. Addresses are
+   *  always shown (who called whom is not a message's content); an AMD message's TEXT is shown on the amateur bands (HFLink),
+   *  elsewhere only with this opt-in ("+" token, IN the CSV when ticked, off by default) and then to the owner only. */
+  { id: "ale", label: "ALE (HF automatic link establishment)" },
+  { id: "ale+amd", label: "ALE: show AMD message text off the amateur bands (to you only)", parent: "ale", on: true },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP
@@ -3805,6 +3816,8 @@ function modeBlockRender() {
                                    + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
     if (m.id === "tones+digits") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="tonesDigitsHint" style="margin:2px 0 0 24px">`
                                    + esc(TONES_DIGITS_NOTICE) + `</div></div>`;
+    if (m.id === "ale+amd") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="aleAmdHint" style="margin:2px 0 0 24px">`
+                              + esc(ALE_AMD_NOTICE) + `</div></div>`;
     if (!k.length) return h;
     return `<div class="modeGroup" data-group="${esc(m.id)}" style="flex:1 1 100%">${h}`
       + `<div class="modeKids" data-kids-of="${esc(m.id)}" style="display:flex;flex-wrap:wrap;gap:8px 10px;`
@@ -4233,7 +4246,8 @@ function modeBlockSummary() {
     + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
     + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
-    + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "");
+    + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "")
+    + (all.includes("ale+amd") ? " ALE message text is shown to you." : "");
   bandModeRender();
 }
 
