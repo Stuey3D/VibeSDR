@@ -414,6 +414,7 @@ deps_for() {
     test-moveloc)       echo "$SRC/moveloc.cpp $SRC/proc.cpp" ;;
     # ★★★ The EiBi season + its fallback (NickB, 2026-10-27: B26 a 404 two days after we switched to it).
     test-eibi)          echo "$SRC/eibi.cpp $SRC/proc.cpp" ;;
+    test-satcat)        echo "$SRC/satcat.cpp $SRC/proc.cpp" ;;   # ★ V12 satellite engine: the CelesTrak cache
     test-admin-banlist) echo "" ;;
     # ★★ The POWER card's verdict (vibe_power.h, 2026-10-16): brief supply dips amber; red only for a dip
     #    held ≥ 10 s, near-continuous dips, USB over-current, or a USB device lost in a dip. Header-only,
