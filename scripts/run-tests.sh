@@ -285,6 +285,8 @@ flags_for() {
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "-O2 -lpthread" ;;
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
     test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
+    # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
+    test-sat-orbit|test-sat-engine) echo "-O2 -lpthread" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
     test-tz-id) [ "$(uname)" = Darwin ] && echo "-framework CoreFoundation" || echo "" ;;
     *)               echo "" ;;
@@ -417,6 +419,7 @@ deps_for() {
     test-moveloc)       echo "$SRC/moveloc.cpp $SRC/proc.cpp" ;;
     # ★★★ The EiBi season + its fallback (NickB, 2026-10-27: B26 a 404 two days after we switched to it).
     test-eibi)          echo "$SRC/eibi.cpp $SRC/proc.cpp" ;;
+    test-satcat)        echo "$SRC/satcat.cpp $SRC/proc.cpp" ;;   # ★ V12 satellite engine: the CelesTrak cache
     test-admin-banlist) echo "" ;;
     # ★★ The POWER card's verdict (vibe_power.h, 2026-10-16): brief supply dips amber; red only for a dip
     #    held ≥ 10 s, near-continuous dips, USB over-current, or a USB device lost in a dip. Header-only,
@@ -895,6 +898,8 @@ if npx tsx scripts/test_aviation_map.ts; then pass=$((pass+1)); else fail=$((fai
 # ★ V12 radiosondes, the clients' half (src/services/sondes.ts): the report parsed defensively, no temperature unless the
 #   calibration is whole, the lines, the map's items / rows / card and a chosen sonde's track
 if npx tsx scripts/test_sondes_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 satellite engine, the clients' half (src/services/satellites.ts): parsing, the readout words, the picker rows, the cap
+if npx tsx scripts/test_satellites_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 PAGE (2026-11-16, Stuart): the law's notice wherever PAGE is described, and RECORDINGS SILENT WHILE PAGE RUNS — every
@@ -1851,6 +1856,17 @@ if [ -x "$OUT/test-rs41" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
 else
   echo '   not run — needs VIBESERVER_BIN and the test-rs41 build'; notrun=$((notrun+1))
 fi
+
+# ★★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): the real server on a fake rtl_tcp with CelesTrak's 2026-11-19
+#     groups in its orbit cache (epochs moved to an hour ago — always fresh, no network): the picker list, the Doppler lock
+#     on the shared dial and on a locked window (built once, never rebuilt by the tracker), nudge / tune away / unlock and
+#     the freeze, the greyed state with no orbit data. Needs VIBESERVER_BIN (exit 3 = not run). ★ No satellite on air here.
+printf '\n\033[1m── Satellite engine (the Doppler lock, end to end) ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-server-sat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ …then the web client (headless Edge, --mute-audio): the SAT entry, the picker, TRACK, the readout beside the digits, 390 px
+node --max-old-space-size=512 scripts/test-web-sat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by
 #     test-ais / test-aprs --write-clip — AIS mode (both channels, the ship list, a track, the dial given back, the gallery)

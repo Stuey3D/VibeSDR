@@ -71,6 +71,8 @@ import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
+import SatellitePanel from '../components/SatellitePanel';   // ★ V12 the satellites box (picker, readout, DOPPLER)
+import { satChanText, satStateWord, txListenMode, txTuneHz, type SatList, type SatReadout, type SatTrack } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -926,6 +928,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setAisCap(undefined);           // ★ V12 AIS / APRS — cleared first, as every per-radio answer
     setHfdlCapable(false); setAvCap(undefined);   // ★ V12 aviation — the same
     setSdCap(undefined);                          // ★ V12 radiosondes — the same
+    setSatCap(undefined);                         // ★ V12 satellites — the same
     setHwDabOnly(null);                           // ★★ V12 DAB only — this server has not said yet
     setHwOnlyMode(null); onlyToldRef.current.clear();   // ★★ V12 the only mode — likewise
     setAprsCap({ on: false, hz: 144.8e6 });
@@ -948,6 +951,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setHfdlCapable(o?.hfdl === true);   // ★ V12 HFDL: this VibeServer decodes it on the dial (and serves the HFDL MAP)
         setAvCap(o?.avdata);                // ★ V12 Aircraft datalink — absent where no band is reachable (no key at all)
         setSdCap(o?.sondes);                // ★ V12 radiosondes — absent where the radio cannot reach 400 MHz (no key at all)
+        setSatCap(o?.sat);                  // ★ V12 satellites — absent where the radio reaches no listed downlink (no key at all)
         setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
         setTimeTdfCapable(o?.timeTdf === true);
         setBalloonCapable(o?.balloon === true || !!dw.balloon);   // ★ V12 balloons — greyed with why off 70 cm
@@ -2692,6 +2696,35 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sdBoxOpen, setSdBoxOpen] = useState(false);
   const [sdMapOpen, setSdMapOpen] = useState(false);
   const sdUiOff = useCallback(() => { sdOnRef.current = false; setSdOn(false); setSdReport(null); setSdBoxOpen(false); setSdMapOpen(false); setSdError(undefined); }, []);
+  /* ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md) — the picker box (SatellitePanel) and the Doppler lock's readout. The
+   *  server owns the lock: the readout beside the digits (ControlsBar satTag) is what it last said; the box is a view. */
+  const [satCap, setSatCap] = useState<{ ok: boolean; why: string } | undefined>(undefined);
+  const [satBoxOpen, setSatBoxOpen] = useState(false);
+  const [satList, setSatList] = useState<SatList | null>(null);
+  const [satRo, setSatRo] = useState<SatReadout | null>(null);
+  const [satTrack, setSatTrack] = useState<SatTrack | null>(null);
+  const satAskedTrack = useRef('');
+  const satRoRef = useRef<SatReadout | null>(null);
+  /* ★ while the box is open: the list now and every 30 s, and the sky track of the locked bird's (else the first row's)
+   *  pass — asked once per pass */
+  useEffect(() => {
+    if (!satBoxOpen) return;
+    const c = client.current as unknown as { satList?: () => void } | null;
+    c?.satList?.();
+    const t = setInterval(() => c?.satList?.(), 30000);
+    return () => clearInterval(t);
+  }, [satBoxOpen]);
+  useEffect(() => {
+    if (!satBoxOpen || !satList) return;
+    const now = Date.now() / 1000;
+    const norad = satRo && satRo.state !== 'OFF' ? satRo.norad : satList.sats.find((x) => x.tx.some((t) => t.reach) && x.passes.length)?.norad;
+    const p = satList.sats.find((x) => x.norad === norad)?.passes.find((x) => x.los > now);
+    if (norad == null || !p) return;
+    const key = `${norad}|${Math.round(p.aos / 60)}`;
+    if (satAskedTrack.current === key) return;
+    satAskedTrack.current = key;
+    (client.current as unknown as { satTrack?: (n: number, a: number, l: number) => void } | null)?.satTrack?.(norad, p.aos, p.los);
+  }, [satBoxOpen, satList, satRo?.norad, satRo?.state]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [hellCapable, setHellCapable] = useState(false);       // ★ V12 FELD HELL: this VibeServer draws it
   /** ★ V12 MFSK / OLIVIA / THOR: each family this VibeServer offers, with its choices (AUTO first); absent = not offered. */
   const [tmModes, setTmModes] = useState<Partial<Record<TextFamily, TextMode[]>>>({});
@@ -7608,6 +7641,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         setAvOn(true); setAvError(undefined);
         setAvReport(r);
       },
+      /* ★★ V12 SATELLITES: the list, the readout (an ending / refusal says why once), a pass's sky track. */
+      onSatList: (l) => { if (!destroyed.current) setSatList(l); },
+      onSat: (r) => {
+        if (destroyed.current) return;
+        // ★ the server ending a lock (LOS, the owner, another listener's tune on a shared dial) opens the box once to say
+        //   why; the listener's own tune away does not (they know) — no toast, no flashing
+        if (r.state === 'OFF' && r.why && !/^(Tuned away|Mode changed)/.test(r.why) && satRoRef.current && satRoRef.current.state !== 'OFF') setSatBoxOpen(true);
+        satRoRef.current = r;
+        setSatRo(r.state === 'OFF' && !r.why ? null : r);
+      },
+      onSatTrack: (t) => { if (!destroyed.current) setSatTrack(t); },
       /* ★ V12 RADIOSONDES: as the datalink — a report (the box opens on the transition), sondes_off (null), a refusal. */
       onSondes: (r, why) => {
         if (destroyed.current) return;
@@ -14393,6 +14437,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         centerHz={status.centerHz}
         bwHz={status.bwHz}
         tuneHz={status.frequency}
+        needleOffsetHz={satRo && (satRo.state === 'TRACK' || satRo.state === 'COAST') ? (satRo.offset ?? 0) : 0}
         /* ★★ THE CW SKIMMER'S VFO IS ITS SEGMENT (Stuart, 2026-10-25) — drawn only, never sent (cwList cwDrawnPassband);
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
         /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */
@@ -15085,6 +15130,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           adminMode={adminOk}
           sharedDial={sharedDialProp}
           airChannel={airChannelNow}
+          satTag={satRo && satRo.state !== 'OFF' ? `${satChanText(satRo)} · ${satStateWord(satRo)}` : null}
           /* ★ Nixie's FIXED tube row (faceplates §7): a network radio is HF (MAX_HZ 30 MHz, 8 tubes); a
            *  local radio tunes to 2 GHz (10 tubes). A property of the radio, never of the frequency. */
           tubeLayout={isLocal ? 'wide' : 'hf'}
@@ -15512,6 +15558,31 @@ export default function SDRScreen({ route, navigation }: Props) {
         <DvsigPanel state={dvState} topLimit={boxTopLimit} onExit={() => onMode('nfm')}
                     onPin={(pin) => client.current?.dvsigPin?.(pin)}
                     bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH} />
+        </PanelBoundary>
+      )}
+      </RotateFade>
+      {/* ★★ V12 THE SATELLITES BOX — the decoder boxes' place; the waterfall live above it. */}
+      <RotateFade>
+      {satBoxOpen && !!satCap && (
+        <PanelBoundary name="Satellites" onClose={() => setSatBoxOpen(false)}>
+        <SatellitePanel
+          list={satList} readout={satRo} track={satTrack} cap={satCap}
+          onDoppler={(on) => {
+            markInteract();
+            if (askGate()) return;
+            (client.current as unknown as { satLock?: (on: boolean, norad?: number) => void } | null)?.satLock?.(on);
+          }}
+          onTrack={(norad, tx) => {
+            markInteract();
+            if (askGate()) return;
+            onTuneHz(txTuneHz(tx), txListenMode(tx) as SDRMode);
+            // ★ after the tune has landed, so the server matches the lock at the new dial (within 12 kHz)
+            setTimeout(() => (client.current as unknown as { satLock?: (on: boolean, norad?: number) => void } | null)?.satLock?.(true, norad), 400);
+          }}
+          onClose={() => setSatBoxOpen(false)}
+          topLimit={boxTopLimit}
+          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+        />
         </PanelBoundary>
       )}
       </RotateFade>
@@ -16167,6 +16238,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           aisOn,
           /* ★★ V12 AIRCRAFT DATALINK — AIS's three states, VibeServer only (the capability is per radio). */
           /* ★★ V12 RADIOSONDES — the datalink's three states, VibeServer only (the capability is per radio). */
+          /* ★★ V12 SATELLITES — not a whole-radio mode: the key opens the box. Shown (greyed with the reason when not ready)
+           *  only where the server sends `doppler`. */
+          satAvail: !!satCap && !!(client.current as any)?.isVibe,
+          satWhy: satCap && !satCap.ok ? satCap.why : undefined,
+          satOn: !!satRo && satRo.state !== 'OFF',
+          onSat: () => { markInteract(); setModeSelOpen(false); setSatBoxOpen((v) => !v); },
           sondesAvail: (sdCap?.ok === true || sdOn) && !!(client.current as any)?.isVibe,
           sondesWhy: !sdOn && sdCap && !sdCap.ok ? sdCap.why : undefined,
           sondesOn: sdOn,

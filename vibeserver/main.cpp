@@ -63,6 +63,7 @@
 #include <sys/file.h>
 #include <dirent.h>
 #include <limits.h>       // PATH_MAX, for selfExePath()
+#include <random>
 #include <thread>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>  // _NSGetExecutablePath — macOS's /proc/self/exe
@@ -89,6 +90,7 @@
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
 #include "vibe_benchmark_adsb.h"  // ★ …and its ADS-B rows (CPU only — the radio is not touched)
 #include "eibi.h"
+#include "satcat.h"
 #include "adsb_data_curl.h"   // V12 ADS-B aircraft data: curl transport + the updater
 #include "solar.h"
 #include "geoip.h"
@@ -3968,6 +3970,30 @@ int main(int argc, char** argv) {
                 //   cost is nothing, and it means a server that was off over a season rollover
                 //   picks it up within the hour rather than within the day.
                 std::this_thread::sleep_for(std::chrono::hours(1));
+            }
+        }).detach();
+    }
+
+    // ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md §6): CelesTrak GP orbits for the curated birds. The cache is
+    //    the MACHINE's (every radio process shares it and its one attempt marker — satcat.cpp has CelesTrak's rules), is
+    //    published at once (yesterday's orbits are good for days), and refreshed by age, detached: a hung download costs
+    //    orbits, never a receiver.
+    vssat::setDir(vsDataDir());
+    vssat::setPublisher([](const std::string& group, const std::string& json) { LocalSdrShim::satLoadOmm(group, json); });
+    {
+        const int g = vssat::loadFromCache();
+        if (g > 0) std::printf("VibeServer: satellite orbits — %d group(s) from the cache\n", g);
+        std::thread([] {
+            // ★ a few minutes' jitter first, so a fleet restarted together (an apt upgrade) does not ask together
+            std::this_thread::sleep_for(std::chrono::seconds(30 + (std::random_device{}() % 300)));
+            for (;;) {
+                if (vssat::needsRefresh()) {
+                    std::string e;
+                    const int n = vssat::refresh(e);
+                    if (n > 0) std::printf("VibeServer: satellite orbits refreshed — %d group(s)\n", n);
+                    if (!e.empty()) std::fprintf(stderr, "VibeServer: satellite orbits not refreshed — %s\n", e.c_str());
+                }
+                std::this_thread::sleep_for(std::chrono::minutes(30));
             }
         }).detach();
     }

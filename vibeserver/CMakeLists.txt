@@ -260,6 +260,8 @@ add_library(vibeserver_core STATIC
     #   into the Android and iOS apps too, and a phone has no /etc to write. See vibeserver_config.h.
     "${CMAKE_CURRENT_SOURCE_DIR}/vibeserver_config.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/eibi.cpp"
+    # ★ V12 satellite engine: CelesTrak GP data, cached per machine (docs/v12/SATELLITE-ENGINE.md §6)
+    "${CMAKE_CURRENT_SOURCE_DIR}/satcat.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/proc.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/solar.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/geoip.cpp"
@@ -1186,6 +1188,15 @@ foreach(t rs41 rs41-service sondes-types)
   target_compile_options(test-${t} PRIVATE -O3 -ffp-contract=fast)
   target_link_libraries(test-${t} PRIVATE vibedsp Threads::Threads)
   add_test(NAME ${t} COMMAND test-${t} --quick)
+endforeach()
+# ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): SGP4/SDP4 against the paper's verification set, OMM/TLE,
+#    the observer's view, Doppler and passes against Skyfield; the catalogue / TLE supply; the Doppler lock. Header-only.
+foreach(t sat-orbit sat-engine)
+  add_executable(test-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-${t}.cpp")
+  target_include_directories(test-${t} PRIVATE "${CPP_DIR}")
+  target_compile_options(test-${t} PRIVATE -O2)
+  target_link_libraries(test-${t} PRIVATE Threads::Threads)
+  add_test(NAME ${t} COMMAND test-${t} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endforeach()
 # ★ dxscan-fm-replay: a recorded .cu8 capture through the FM hop engine as a sweep runs it (dev tool; captures stay in
 #   ~/VibeSDR-test-audio/fm). Peaks found and each one's clean RDS groups — why a station is or is not identified.
