@@ -230,7 +230,7 @@ inline Need needFor(const std::string& id) {
     if (is("adsb")) return Need::Adsb;
     if (id == "dec_ais") return Need::Ais;
     if (id == "dec_vdl2" || id == "dec_acars") return Need::Avdata;
-    if (id == "dec_rs41") return Need::Sondes;
+    if (id == "dec_rs41" || id == "dec_dfm" || id == "dec_m10") return Need::Sondes;
     if (id == "dec_hfdl") return Need::Hf;
     if (id == "dec_m17") return Need::M17;
     if (id == "dec_navtex") return Need::Navtex;

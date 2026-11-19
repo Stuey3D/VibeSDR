@@ -152,8 +152,46 @@ static int decodeCu8(int argc, char** argv) {
     return 0;
 }
 
+/** The server end-to-end clip (403.005 MHz, 20 s): a DFM-09 at 402.500, an M10 at 403.600, an M20 at 403.900 MHz, 20 dB.
+ *  test-server-sondes.mjs (VIBE_SONDES_TYPES=1) checks the kinds, the model and the calibration rules from the server. */
+static int writeClip(int argc, char** argv) {
+    if (argc < 4) { std::fprintf(stderr, "usage: test-sondes-types --write-clip out.cu8 rate\n"); return 2; }
+    const double fs = std::atof(argv[3]), hw = 403.005e6;
+    const int secs = 20;
+    const double sigma = 0.02, n10k = 2 * sigma * sigma * 10e3 / fs, amp = std::sqrt(n10k * 100);
+    std::vector<std::unique_ptr<vibesondetx::ChipFsk>> tx;
+    vibesondetx::Dfm d; d.serial = 19123456; d.fl.lat = 52.2; d.fl.lon = 0.13; d.fl.alt = 4200; d.fl.vU = 5.1; d.tempC = -18.0;
+    tx.emplace_back(new vibesondetx::ChipFsk(fs, 402.500e6 - hw, amp, 2000, vibedfm::kChipRate, 0.05));
+    tx.back()->put(0, d.chips(secs));
+    for (int m20 = 0; m20 < 2; ++m20) {
+        vibesondetx::Mxx m; m.m20 = m20; m.fl.lat = m20 ? 48.85 : 50.6; m.fl.lon = m20 ? 2.35 : 3.1; m.fl.alt = m20 ? 9000 : 15000; m.fl.vU = m20 ? -15 : 4.5;
+        tx.emplace_back(new vibesondetx::ChipFsk(fs, (m20 ? 403.900e6 : 403.600e6) - hw, amp, 4800, m20 ? 9600.0 : 9615.0, 0.11 + 0.2 * m20));
+        for (int k = 0; k < secs; ++k) tx.back()->put(tx.back()->indexAt(k), m.chips(k));
+    }
+    FILE* o = std::fopen(argv[2], "wb");
+    if (!o) { std::perror(argv[2]); return 2; }
+    std::mt19937 rng(43);
+    std::normal_distribution<float> g(0.f, float(sigma));
+    const size_t total = size_t(fs * secs), chunk = 65536;
+    std::vector<cf32> buf(chunk);
+    std::vector<uint8_t> u(chunk * 2);
+    for (size_t base = 0; base < total; base += chunk) {
+        const size_t n = std::min(chunk, total - base);
+        for (size_t i = 0; i < n; ++i) buf[i] = cf32(g(rng), g(rng));
+        for (auto& t : tx) t->render(buf.data(), n, base);
+        auto q = [](float x) { const int v = int(std::lround(127.5f + 127.5f * x)); return uint8_t(v < 0 ? 0 : v > 255 ? 255 : v); };
+        for (size_t i = 0; i < n; ++i) { u[2 * i] = q(buf[i].real()); u[2 * i + 1] = q(buf[i].imag()); }
+        std::fwrite(u.data(), 1, n * 2, o);
+    }
+    std::fclose(o);
+    std::printf("wrote %s: %zu samples at %.0f S/s, centre %.3f MHz: DFM-09 19123456 @402.500, M10 %s @403.600, M20 %s @403.900\n", argv[2], total, fs, hw / 1e6,
+                vibesondetx::Mxx().serialText().c_str(), [] { vibesondetx::Mxx m; m.m20 = true; return m.serialText(); }().c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && !std::strcmp(argv[1], "--cu8")) return decodeCu8(argc, argv);
+    if (argc > 1 && !std::strcmp(argv[1], "--write-clip")) return writeClip(argc, argv);
     const bool quick = argc > 1 && !std::strcmp(argv[1], "--quick");
     const double fs = 2.4e6, hw = 403.005e6;
 

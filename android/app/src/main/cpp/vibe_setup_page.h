@@ -2390,7 +2390,7 @@ const BENCH_KNOWN_ROWS = [
   ["dec_same", "SAME"], ["dec_selcal", "SELCAL"], ["dec_mfsk", "MFSK"], ["dec_hell", "Hellschreiber"], ["dec_aprs", "APRS"],
   ["dec_balloon", "Balloons"], ["dec_tones", "DTMF + 5-tone"], ["dec_paging", "Paging"], ["dec_ndb", "NDB beacons"],
   ["dec_dxscan", "DX scanner"], ["dec_ais", "AIS ships"], ["dec_ism", "ISM"], ["dec_wmbus", "Wireless M-Bus"],
-  ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"],
+  ["dec_vdl2", "VDL2"], ["dec_acars", "ACARS"], ["dec_hfdl", "HFDL"], ["dec_rs41", "RS41 radiosondes"], ["dec_dfm", "DFM radiosondes"], ["dec_m10", "M10 / M20 radiosondes"],
   ["dec_freedv", "FreeDV"], ["dec_rade", "FreeDV RADE"], ["dec_m17", "M17"],
   ["dec_tone", "CTCSS / DCS tone ID"], ["dec_nr", "Noise reduction"], ["dec_notch", "Auto notch"],
   ["dab", "DAB+"], ["dab_scan", "DAB+ station label scan", "dab"], ["dec_dab_station", "DAB+ own station", "dab"],
@@ -3529,8 +3529,8 @@ const BLOCKABLE = [
    *  token, IN the CSV when ticked, off by default), with the notice DECODER-RESEARCH.md §4.3 asks for. */
   { id: "avdata", label: "Aircraft datalink (ACARS, VDL2)" },
   { id: "avdata+text", label: "Aircraft datalink: show the message text (to you only)", parent: "avdata", on: true },
-  /* ★★ V12 RADIOSONDES (docs/v12/RS41.md) — RS41 weather balloons on 400–406 MHz, a whole-radio mode. */
-  { id: "sondes", label: "Radiosondes (RS41 weather balloons)" },
+  /* ★★ V12 RADIOSONDES (docs/v12/RS41.md, SONDES-TYPES.md) — RS41, DFM, M10 / M20 weather balloons on 400–406 MHz, a whole-radio mode. */
+  { id: "sondes", label: "Radiosondes (RS41, DFM, M10, M20 weather balloons)" },
 ];
 /** The tree as drawn: BLOCKABLE plus one entry per digital-spots mode this server runs (vibeserver.json spotModes), under
  *  "spots", before Band. Each is `spots-<mode>` in the CSV when off — the server leaves the mode out everywhere. */

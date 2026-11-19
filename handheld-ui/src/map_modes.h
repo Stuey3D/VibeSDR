@@ -86,7 +86,7 @@ inline MapModes& mapModes() {
                // ★ V12 the aircraft datalink (ACARS / VDL2, docs/v12/AVIATION.md): {"type":"avdata","on":1} as the web sends it
                mk("avdata", "DATALINK", "AIRCRAFT DATALINK · ACARS + VDL2", "aero", 7, {50, 100, 200}),
                // ★ V12 RS41 radiosondes (docs/v12/RS41.md): {"type":"sondes","on":1} as the web sends it
-               mk("sondes", "SONDES", "RADIOSONDES · RS41", "spots", 7, {50, 100, 200})};
+               mk("sondes", "SONDES", "RADIOSONDES · RS41 DFM M10 M20", "spots", 7, {50, 100, 200})};
         const char* c = std::getenv("VIBE_HHUI_MAP_CANNED");
         x.canned = c ? c : "";
     }
@@ -730,18 +730,23 @@ inline std::vector<std::string> mapAvCard(App&, const RadioState& s, const std::
 }
 
 // RADIOSONDES ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-/** ★ V12 (src/services/sondes.ts sondeLine / sondeTemp): serial · height · climb; the temperature ONLY when the server sent
- *  one beside a whole calibration (cal 51) — never a guessed PTU — else how much of the calibration has arrived. */
+/** ★ V12 (src/services/sondes.ts sondeLine / sondeTemp): type serial · height · climb; the temperature ONLY when the server
+ *  sent one beside a whole calibration (`cal` of `calOf`: 51 for an RS41, 6 for a DFM; calOf 0 = not decoded for that type;
+ *  an older server sends no calOf — an RS41's 51) — never a guessed PTU — else how much of the calibration has arrived. */
 inline std::string mapSdLine(const Json& x) {
-    std::string w = x["serial"].str().substr(0, 12);
+    std::string ty = x["model"].str().substr(0, 16);
+    if (ty.empty()) ty = x["kind"].str().substr(0, 10);
+    if (ty.empty()) ty = "RS41";
+    std::string w = ty + " " + x["serial"].str().substr(0, 12);
     if (x["alt"].kind == Json::Num) w += mapFmt(" · %.0f m", x["alt"].n);
     if (x["climb"].kind == Json::Num) w += std::string(" · ") + (x["climb"].n < 0 ? "\xe2\x88\x92" : "+") + mapFmt("%.1f m/s", std::fabs(x["climb"].n));
     return w;
 }
 inline std::string mapSdTemp(const Json& x) {
-    const int cal = (int)x["cal"].num(0);
-    if (cal == 51 && x["temp"].kind == Json::Num) return std::string(x["temp"].n < 0 ? "\xe2\x88\x92" : "") + mapFmt("%.1f \xc2\xb0" "C", std::fabs(x["temp"].n));
-    return cal >= 51 ? std::string("temperature not decoded") : mapFmt("not yet calibrated (%.0f of 51)", cal < 0 ? 0.0 : double(cal));
+    const int cal = (int)x["cal"].num(0), of = (int)x["calOf"].num(51);
+    if (of <= 0) return "temperature not decoded for this type";
+    if (cal >= of && x["temp"].kind == Json::Num) return std::string(x["temp"].n < 0 ? "\xe2\x88\x92" : "") + mapFmt("%.1f \xc2\xb0" "C", std::fabs(x["temp"].n));
+    return cal >= of ? std::string("temperature not decoded") : mapFmt("not yet calibrated (%.0f", cal < 0 ? 0.0 : double(cal)) + mapFmt(" of %.0f)", double(of));
 }
 inline bool mapSdFalling(const Json& x) { return x["climb"].kind == Json::Num && x["climb"].n < -2; }
 inline void mapSdBuild(App&, const RadioState& s, std::vector<MapListRow>& rows, std::vector<MapMarker>& mk, std::string& status) {
@@ -1113,7 +1118,7 @@ inline void mapRegisterModes() {
         }
         if (id == "sondes") {
             d.build = mapSdBuild; d.card = mapSdCard; d.listFirst = true;
-            d.empty = "searching the band for RS41 radiosondes — launched twice a day, each heard for one to three hours";
+            d.empty = "searching the band for radiosondes (RS41, DFM, M10, M20) — launched twice a day, each heard for one to three hours";
             // ★ the bands this radio runs (vibeserver.json sondesBands) — the server owns the band: a press sends it
             d.keys = [](App& a, const RadioState& s, std::vector<std::pair<std::string, std::function<void()>>>& k) {
                 const Json& r = mapReport(s, *mapMode("sondes"));
@@ -1273,14 +1278,15 @@ inline void mapCannedTick(App& a, const RadioState& s) {
              "{\"key\":\"w1\",\"kind\":\"meter\",\"make\":\"Kamstrup\",\"model\":\"Multical 21\",\"line\":\"Water 123.456 m³\",\"freq\":868950000,\"snr\":11,\"age\":2}]}";
         if (x.ismBands.empty()) { std::lock_guard<std::mutex> lk(x.capMtx); x.ismBands = {{"433", "433 MHz", "Europe, UK"}, {"868", "868 MHz (EU)", "Europe, UK"}, {"915", "915 MHz (US)", "The Americas"}}; }
     } else if (x.canned == "sondes") {
-        // ★ V12 two sondes rising, one falling after its burst; calibration incomplete on all but one (its temperature)
+        // ★ V12 two RS41s rising, a DFM-09 falling after its burst; calibration incomplete on all but the DFM (its temperature)
         j = "{\"type\":\"sondes\",\"band\":\"mid\",\"bandName\":\"402\xe2\x80\x93" "404 MHz\",\"hz\":403005000,\"lo\":402000000,\"hi\":404000000,\"chans\":[{\"hz\":403300000,\"db\":18,\"n\":9}],\"sondes\":[";
-        const char* ser[] = {"S3310411", "T1520789", "U0912345"};
+        const char* ser[] = {"S3310411", "T1520789", "19012345"};
         const double hz[] = {403.3e6, 402.7e6, 403.85e6}, climb[] = {5.2, 5.8, -14.0}, alt0[] = {3400, 18000, 26000};
         for (int i = 0; i < 3; i++) {
             const double la = lat0 + 0.2 * (i - 1) + k * 0.0003, lo = lon0 + 0.3 * (i - 1) + k * 0.0004;
-            std::snprintf(b, sizeof b, "%s{\"serial\":\"%s\",\"kind\":\"RS41\",\"hz\":%.0f,\"age\":%d,\"n\":%d,\"frame\":%d,\"cal\":%d%s,\"lat\":%.5f,\"lon\":%.5f,\"alt\":%.0f,\"climb\":%.1f,\"speed\":6,\"heading\":60,\"sats\":9,\"maxAlt\":%.0f,\"track\":[[%.5f,%.5f,%.0f]]}",
-                          i ? "," : "", ser[i], hz[i], i, 10 + k, 3000 + k, i == 2 ? 51 : 10 + k % 40, i == 2 ? ",\"temp\":-41.3" : "", la, lo, alt0[i] + climb[i] * k,
+            std::snprintf(b, sizeof b, "%s{\"serial\":\"%s\",\"kind\":\"%s\",\"hz\":%.0f,\"age\":%d,\"n\":%d,\"frame\":%d,\"cal\":%d,\"calOf\":%d%s,\"lat\":%.5f,\"lon\":%.5f,\"alt\":%.0f,\"climb\":%.1f,\"speed\":6,\"heading\":60,\"sats\":9,\"maxAlt\":%.0f,\"track\":[[%.5f,%.5f,%.0f]]}",
+                          i ? "," : "", ser[i], i == 2 ? "DFM\",\"model\":\"DFM-09" : "RS41", hz[i], i, 10 + k, 3000 + k, i == 2 ? 6 : 10 + k % 40, i == 2 ? 6 : 51,
+                          i == 2 ? ",\"temp\":-41.3" : "", la, lo, alt0[i] + climb[i] * k,
                           climb[i], i == 2 ? 31000.0 : alt0[i] + climb[i] * k, la, lo, alt0[i] + climb[i] * k);
             j += b;
         }

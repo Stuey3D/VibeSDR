@@ -90,7 +90,7 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'avdata', label: 'Aircraft datalink (ACARS, VDL2)' },
   { id: 'avdata+text', label: 'Aircraft datalink: show the message text (to you only)', parent: 'avdata', on: true },
   // ★★ V12 RADIOSONDES (RS41 on 400–406 MHz, a whole-radio mode) — as on the setup page
-  { id: 'sondes', label: 'Radiosondes (RS41 weather balloons)' },
+  { id: 'sondes', label: 'Radiosondes (RS41, DFM, M10, M20 weather balloons)' },
 ];
 /** ★ ONE TEXT, TWO READERS: vibe_setup_page.h AVDATA_TEXT_NOTICE. */
 const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless '

@@ -445,7 +445,7 @@ export function initMobileControls(deps: MobileDeps) {
       const sdRow = document.createElement('button');
       sdRow.className = 'mModeOpt' + (deps.sdOn?.() ? ' on' : '') + (sdc.ok ? '' : ' dis');
       setModeLabel(sdRow, 'sondes', 'SONDES');
-      sdRow.title = sdc.ok ? 'Radiosondes — RS41 weather balloons on 400–406 MHz, with a map' : `Radiosondes are not available: ${sdc.why}`;
+      sdRow.title = sdc.ok ? 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map' : `Radiosondes are not available: ${sdc.why}`;
       if (!sdc.ok) sdRow.setAttribute('aria-disabled', 'true');
       sdRow.onclick = () => { deps.toggleSd!(); close(); refresh(); };
       grid.appendChild(sdRow);

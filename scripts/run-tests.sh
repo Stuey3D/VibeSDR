@@ -280,7 +280,7 @@ flags_for() {
     # ★ V12 aviation: -O2 — each test times its receiver against real time (CPU per capture second).
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "-O2 -lpthread" ;;
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
-    test-rs41|test-rs41-service) echo "-O2 -lpthread" ;;
+    test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
     test-tz-id) [ "$(uname)" = Darwin ] && echo "-framework CoreFoundation" || echo "" ;;
     *)               echo "" ;;
@@ -466,7 +466,7 @@ deps_for() {
     #   (vibe_avi_front.h — the channeliser, FFT and decimators); pffft + kiss_fft from cobjs_for.
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     # ★ V12 RS41: the same channeliser / FFT / half-bands (vibe_rs41_rx.h); pffft + kiss_fft from cobjs_for.
-    test-rs41|test-rs41-service) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
+    test-rs41|test-rs41-service|test-sondes-types) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     *)                  echo "" ;;
   esac
 }
@@ -485,7 +485,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-dab-bank)
+    test-ndb|test-ndb-suspect|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -1833,6 +1833,15 @@ if [ -x "$OUT/test-rs41" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   VIBE_RS41_CLIP="$OUT/rs41-clip.cu8" node scripts/test-web-sondes.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/rs41-clip.cu8"
+  # ★★ V12 the other types (docs/v12/SONDES-TYPES.md): a DFM-09, an M10 and an M20 in one band — AUTO type per sonde
+  if [ -x "$OUT/test-sondes-types" ] && [ -z "$(find vibeserver/test-sondes-types.cpp android/app/src/main/cpp/vibe_sonde_*.h android/app/src/main/cpp/vibe_rs41*.h -newer "$OUT/test-sondes-types" 2>/dev/null | head -1)" ]; then
+    "$OUT/test-sondes-types" --write-clip "$OUT/sondes-types-clip.cu8" 2400000 >/dev/null 2>&1
+    VIBE_RS41_CLIP="$OUT/sondes-types-clip.cu8" VIBE_SONDES_TYPES=1 node scripts/test-server-sondes.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+    rm -f "$OUT/sondes-types-clip.cu8"
+  else
+    echo '   not run — the test-sondes-types build is missing or older than its sources'; notrun=$((notrun+1))
+  fi
 else
   echo '   not run — needs VIBESERVER_BIN and the test-rs41 build'; notrun=$((notrun+1))
 fi

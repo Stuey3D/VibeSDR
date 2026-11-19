@@ -1017,7 +1017,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           style={sdOff ? { opacity: 0.45 } : undefined} />
       ) : (
       <TouchableOpacity ref={navRef as any}
-        accessibilityLabel={sdOff ? `Radiosondes, unavailable: ${dc.sondesWhy}` : 'Radiosondes — RS41 weather balloons on 400 to 406 MHz'}
+        accessibilityLabel={sdOff ? `Radiosondes, unavailable: ${dc.sondesWhy}` : 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400 to 406 MHz'}
         style={[st.btn, { borderColor: sdLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : 10 },
                 sdLit && { backgroundColor: decBg },
                 sdOff && { opacity: 0.45, borderStyle: 'dashed' as const },

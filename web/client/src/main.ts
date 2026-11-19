@@ -10179,7 +10179,7 @@ function sdUiOn() {
   syncAudioQuiet();
   closePanels();
   if (!sdView) sdView = new TrackView({
-    title: 'RADIOSONDES · RS41', exitLabel: 'EXIT SONDES', listTitle: 'SONDES', onExit: () => sdSetMode(false),
+    title: 'RADIOSONDES', exitLabel: 'EXIT SONDES', listTitle: 'SONDES', onExit: () => sdSetMode(false),
     icon: (it: any) => sondeIcon(it), label: (it: any) => String(it.serial || ''), card: (it: any) => sondeCard(it),
     trail: (key: string, done: (pts: [number, number][]) => void) => done(sondeTrail(sdReport, key)),
     ranges: sondeRanges(sdBands), range: sdReport?.band || '', rangeHint: 'The band searched: radiosondes use 400\u2013406 MHz', rangeLabel: 'The band',
@@ -15109,7 +15109,7 @@ setWholeRadioKeys(() => {
   add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
   add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
   add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
-  add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
+  add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
   if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB (Experimental) — digital radio, Band III',
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
