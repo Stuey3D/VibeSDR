@@ -1,43 +1,60 @@
-// V12 SATELLITE ENGINE — the orbit data a headless VibeServer fetches for itself (docs/v12/SATELLITE-ENGINE.md §6):
-// CelesTrak's public GP data, OMM JSON, the groups the curated list needs (vibe_sat_engine.h catalogueGroups()), cached
-// on disk with its age, bounded, offline-safe. See satcat.cpp for the etiquette rules.
+// V12 SATELLITE ENGINE — the satellite data a headless VibeServer keeps for itself (docs/v12/SATELLITE-ENGINE.md §6):
+// sats.json from vibesdr.net's mirror (directory/src/sats.js — the ONLY CelesTrak client in VibeSDR), synced like the
+// EiBi schedule: daily, jittered, a conditional GET, the last good copy kept, one shared fetch for every radio process
+// on the machine, backed off on errors. ★★★ A VibeServer NEVER asks CelesTrak itself (brief §6.1 TRAP: carrier CGNAT —
+// thousands of servers asking directly would get whole carriers firewalled). See satcat.cpp for the rules.
 #pragma once
+#include <cstdint>
 #include <ctime>
 #include <functional>
 #include <string>
-#include <vector>
 
 namespace vssat {
 
-/** The machine's data directory; the cache is <dir>/sat/gp-<group>.json. Shared by every radio process on the box. */
+/** The machine's data directory; the copy is <dir>/sat/sats.json. Shared by every radio process on the box. */
 void setDir(const std::string& dir);
-/** Where a group's JSON goes (the shim's engine). A hook so the test needs no shim. */
-void setPublisher(std::function<void(const std::string& group, const std::string& json)> fn);
-/** The groups to keep (default: amateur, weather). */
-void setGroups(const std::vector<std::string>& groups);
+/** Where sats.json goes (the shim's engine). */
+void setPublisher(std::function<void(const std::string& satsJson)> fn);
+/** ★ Old caches from v12 builds that asked CelesTrak directly (<dir>/sat/gp-<group>.json, OMM JSON): published at start
+ *  ONLY when there is no sats.json yet, so an upgraded server is not left with nothing while it first syncs. */
+void setLegacyPublisher(std::function<void(const std::string& group, const std::string& json)> fn);
+/** A dry parse of a download (the engine's parseSats): a 200 that fails it never replaces the copy. Empty = structural. */
+void setValidator(std::function<bool(const std::string& body, std::string& err)> fn);
 
-/** Publish every cached group. Returns how many were published. ★ Before any refresh: yesterday's orbits are good for
- *  days (the engine shows the age), and a radio must not wait on the network. */
+/** Publish the copy (any age — the engine shows how old). Returns 1 if published, else the legacy groups published. */
 int loadFromCache();
-/** Should we fetch? A group's cache older than kRefreshSec AND the last attempt (by ANY process on the machine — the
- *  marker is in the shared cache dir) older than the backoff. */
+/** ★ Another radio process refreshed the shared copy: publish it here too. true = published. */
+bool reloadIfChanged();
+/** Should we ask? Never inside a hold; never within kMinAttemptSec of ANY process's attempt; else when the copy is
+ *  missing or its last check is older than a day less this machine's own jitter. */
 bool needsRefresh();
-/** Fetch every group, validate, cache, publish. Returns the groups refreshed; `err` says why one failed.
- *  ★ Stops at the FIRST failure (CelesTrak: "stop immediately on non-200") and backs off. */
+/** One conditional GET. Returns 1 = new data published, 0 = unchanged (304) or failed (`err` = the owner message).
+ *  ★ Machine-wide lock: a second process finds it held and asks nothing. */
 int refresh(std::string& err);
-/** {"groups":[{"group":"amateur","age":3600,"bytes":41858}],"lastAttempt":…,"lastError":"…","backoff":…} */
+/** For the setup page: {"source":"vibesdr.net","url":…,"have":…,"checked":…,"nextTry":…,"code":…,"failures":…,
+ *  "message":"…"} — `message` is "" when all is well. */
 std::string statusJson();
+/** The owner's words for the last failure ("" = none): what happened, the HTTP code, and when VibeServer asks again. */
+std::string ownerMessage();
+/** The few words a listener's greyed SAT button carries when there is no data at all ("" = not downloaded yet). */
+std::string listenerNote();
 
-constexpr long kRefreshSec = 12 * 3600;        // orbits move ~1 km a day off; twice a day is plenty (CelesTrak updates ~2 h)
-constexpr long kMinAttemptSec = 2 * 3600;      // never more often than this from one machine, success or not
-constexpr long kBackoffFailSec = 6 * 3600;     // after a refusal / error, then doubling to a day
-constexpr size_t kMaxGroupBytes = 2u * 1024 * 1024;   // a group is ~40 KB; a 2 MB "group" is not one
+constexpr const char* kUrl = "https://vibeserver.vibesdr.net/api/sats";
+constexpr long kCheckSec = 24 * 3600;          // daily, like EiBi (the mirror rebuilds every 6 h; elements < 3 d = fresh)
+constexpr long kCheckJitterSec = 4 * 3600;     // ★ per machine, stable: a fleet does not check in at the same hour
+constexpr long kMinAttemptSec = 3600;          // never more often than this from one machine, success or not
+constexpr long kBackoffSec = 3600;             // after a failure, doubling to a day
+constexpr long kHoldFloorSec = 15 * 60;        // ★★★ no hold is shorter, whatever the configuration (CelesTrak's rule)
+constexpr long kResumeJitterSec = 3600;        // ★★ + a random 0–60 min on every hold: a fleet does not return together
+constexpr size_t kMaxBytes = 4u * 1024 * 1024; // sats.json is ~20 KB; 4 MB is not one
 
 // ── Test seams ──
-enum class Fetch { Ok, Refused, Failed };       // Refused = a non-200 answer (rate limit, block, missing)
-using Fetcher = std::function<Fetch(const std::string& url, const std::string& dest, std::string& msg)>;
+struct Request { std::string url, dest, ifNoneMatch, ifModifiedSince; };
+struct Response { int code = 0; std::string etag, lastModified, msg; };   // code 0 = no answer (network, timeout)
+using Fetcher = std::function<void(const Request&, Response&)>;
 void setFetcher(Fetcher fn);                    // empty = curl
 void setClock(std::function<std::time_t()> fn); // empty = the real clock
-std::string urlFor(const std::string& group);
+void setRandom(std::function<uint32_t()> fn);   // empty = std::random_device
+std::string userAgent();
 
 }  // namespace vssat

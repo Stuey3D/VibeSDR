@@ -55,6 +55,7 @@ struct Transmitter {
     double baud = 0;
     double upHz = 0, ctcss = 0;
     std::string note;
+    std::string status;      // sats.json: "active" | "inactive" (SatNOGS DB's word) | "" (nobody said)
     bool passband() const { return hiHz > hz; }
     double centre() const { return passband() ? 0.5 * (hz + hiHz) : hz; }
 };
@@ -113,6 +114,82 @@ inline std::vector<SatDef> curatedCatalogue() {
     v.push_back({"METEOR-M2-4", "Meteor-M2-4", 59051, "weather", "Weather images (LRPT); mode and frequency can change",
                  {dig("LRPT", 137900000, "lrpt", "lrpt", 72000, "costas")}});
     return v;
+}
+
+/** What sats.json says about itself — the picker's credit line ("Orbits: CelesTrak · 5 h old"). */
+struct SatsMeta {
+    double generated = 0;     // the mirror built it (Unix)
+    double orbitsAt = 0;      // the OLDEST group's CelesTrak fetch (Unix) — the data's age
+    std::string orbitsCredit = "Orbits: CelesTrak";
+    std::string txCredit;
+    bool fromMirror = false;
+};
+inline double isoToUnix(const std::string& s) { double jd = 0; return parseIsoUtc(s, jd) ? unixFromJd(jd) : 0.0; }
+
+/** ★★ sats.json (vibesdr.net's mirror, docs/v12/SATELLITE-ENGINE.md §6.2) → the list, the element sets, the credit.
+ *  Strict: an unknown format, no satellites, a bad id / catalogue number / frequency / mode = refused (false) and the
+ *  caller keeps what it has. A transmitter with an unknown mode or loop is skipped, not the whole bird.
+ *  ★ Catalogue numbers are integers 1 … 999 999 999 (six digits are normal now) — never a 5-digit TLE field. */
+inline bool parseSats(const std::string& text, std::vector<SatDef>& defs, std::vector<Elements>& els, std::vector<bool>& haveEl,
+                      SatsMeta& meta, std::string& err) {
+    json::Value doc;
+    if (text.size() > 4u * 1024 * 1024 || !json::parseValue(text, doc) || doc.t != json::Value::Obj) { err = "not JSON"; return false; }
+    if (doc.num("format") != 1) { err = "an unknown sats.json format"; return false; }
+    const json::Value* sats = doc.get("satellites");
+    if (!sats || sats->t != json::Value::Arr || sats->a.empty() || sats->a.size() > 200) { err = "no satellites"; return false; }
+    defs.clear(); els.clear(); haveEl.clear();
+    meta = SatsMeta{};
+    meta.fromMirror = true;
+    meta.generated = isoToUnix(doc.str("generated"));
+    if (const json::Value* at = doc.get("attribution")) {
+        if (!at->str("orbits").empty()) meta.orbitsCredit = at->str("orbits").substr(0, 120);
+        meta.txCredit = at->str("transmitters").substr(0, 160);
+    }
+    if (const json::Value* og = doc.get("orbits"); og && og->t == json::Value::Obj)
+        for (auto& kv : og->o) {
+            const double t = isoToUnix(kv.second.str("fetched"));
+            if (t > 0 && (meta.orbitsAt <= 0 || t < meta.orbitsAt)) meta.orbitsAt = t;
+        }
+    auto okId = [](const std::string& id) {
+        if (id.empty() || id.size() > 32) return false;
+        for (char c : id) if (!std::isalnum((unsigned char)c) && c != '-' && c != '_') return false;
+        return true;
+    };
+    for (const auto& x : sats->a) {
+        if (x.t != json::Value::Obj) { err = "a satellite is not an object"; return false; }
+        SatDef d;
+        d.id = x.str("id"); d.name = x.str("name").substr(0, 64); d.group = x.str("group").substr(0, 32); d.note = x.str("note").substr(0, 240);
+        const double nd = x.num("norad");
+        if (!okId(d.id) || !(nd >= 1 && nd <= 999999999.0) || nd != std::floor(nd)) { err = "a bad satellite id or catalogue number"; return false; }
+        d.norad = (long long)nd;
+        if (d.name.empty()) d.name = d.id;
+        const json::Value* txs = x.get("transmitters");
+        if (txs && txs->t == json::Value::Arr)
+            for (const auto& t : txs->a) {
+                if (t.t != json::Value::Obj || d.tx.size() >= 16) continue;
+                Transmitter tr;
+                tr.label = t.str("label").substr(0, 48); tr.hz = t.num("downlink"); tr.hiHz = t.num("downlinkHigh");
+                tr.mode = t.str("mode"); tr.loop = t.str("loop"); tr.consumer = t.str("consumer"); tr.baud = t.num("baud");
+                tr.upHz = t.num("uplink"); tr.ctcss = t.num("ctcss"); tr.note = t.str("note").substr(0, 160); tr.status = t.str("status");
+                static const char* kModes[] = {"nfm", "usb", "lsb", "cw", "am", "lrpt"};
+                bool modeOk = false; for (auto m : kModes) if (tr.mode == m) modeOk = true;
+                const bool loopOk = tr.loop == "fll" || tr.loop == "none" || tr.loop == "costas";
+                if (!modeOk || !loopOk || !(tr.hz >= 1e6 && tr.hz <= 1e10) || (tr.hiHz != 0 && !(tr.hiHz > tr.hz && tr.hiHz - tr.hz <= 2e6))) continue;
+                if (tr.status != "active" && tr.status != "inactive") tr.status.clear();
+                if (tr.consumer.size() > 24) tr.consumer.clear();
+                if (tr.label.empty()) tr.label = tr.mode;
+                d.tx.push_back(tr);
+            }
+        if (d.tx.empty()) continue;   // nothing to listen to: not offered
+        Elements e; bool have = false;
+        if (const json::Value* omm = x.get("omm"); omm && omm->t == json::Value::Obj) {
+            std::string e2;
+            have = fromOmm(omm->flat(), e, e2) && e.norad == d.norad;
+        }
+        defs.push_back(std::move(d)); els.push_back(e); haveEl.push_back(have);
+    }
+    if (defs.empty()) { err = "no satellite with a usable downlink"; return false; }
+    return true;
 }
 
 /** The CelesTrak GP groups the list needs. */
@@ -294,6 +371,39 @@ public:
         for (auto& s : sats_) s.passesAt = 0;
     }
     bool haveObserver() const { std::lock_guard<std::mutex> lk(m_); return obs_.valid; }
+    /** ★★ sats.json (vibesdr.net's mirror) → the LIST and the element sets, replacing the built-in list. Returns how
+     *  many listed birds have elements, -1 = refused (the current list and elements stay). A bird kept from the old
+     *  list keeps its elements if the new file has none or older ones; a running lock follows its bird and transmitter
+     *  (by catalogue number and label) or ends when the new list no longer has them. */
+    int loadSats(const std::string& text, std::string* errOut = nullptr) {
+        std::vector<SatDef> defs; std::vector<Elements> els; std::vector<bool> have; SatsMeta meta; std::string err;
+        if (!parseSats(text, defs, els, have, meta, err)) { if (errOut) *errOut = err; return -1; }
+        std::lock_guard<std::mutex> lk(m_);
+        std::vector<SatRow> rows(defs.size());
+        for (size_t i = 0; i < defs.size(); ++i) {
+            const SatRow* old = nullptr;
+            for (size_t k = 0; k < defs_.size(); ++k) if (defs_[k].norad == defs[i].norad && sats_[k].have) old = &sats_[k];
+            if (have[i]) {
+                Sgp4 sg;
+                if (sg.init(els[i]) && !(old && old->el.epochJd > els[i].epochJd)) { rows[i].have = true; rows[i].el = els[i]; rows[i].sgp = sg; }
+            }
+            if (!rows[i].have && old) { rows[i].have = true; rows[i].el = old->el; rows[i].sgp = old->sgp; }
+        }
+        for (auto it = locks_.begin(); it != locks_.end();) {
+            Lock& L = it->second;
+            const long long nd = defs_[L.s].norad; const std::string lab = defs_[L.s].tx[L.t].label;
+            int ns = -1, nt = -1;
+            for (size_t i = 0; i < defs.size() && ns < 0; ++i)
+                if (defs[i].norad == nd)
+                    for (size_t k = 0; k < defs[i].tx.size(); ++k) if (defs[i].tx[k].label == lab) { ns = (int)i; nt = (int)k; break; }
+            if (ns < 0 || !rows[ns].have) { it = locks_.erase(it); continue; }
+            L.s = ns; L.t = nt; ++it;
+        }
+        defs_ = std::move(defs); sats_ = std::move(rows); meta_ = meta;
+        int n = 0; for (auto& r : sats_) if (r.have) ++n;
+        return n;
+    }
+    SatsMeta meta() const { std::lock_guard<std::mutex> lk(m_); return meta_; }
     /** CelesTrak OMM JSON (one group) → element sets for the listed birds. Returns how many listed birds it updated;
      *  a newer epoch replaces an older one, an older never replaces a newer. */
     int loadOmm(const std::string& jsonText) {
@@ -325,7 +435,8 @@ public:
         if (newestEpoch) *newestEpoch = best;
         return n;
     }
-    const std::vector<SatDef>& defs() const { return defs_; }
+    /** A copy: sats.json can replace the list at any time (loadSats). */
+    std::vector<SatDef> defs() const { std::lock_guard<std::mutex> lk(m_); return defs_; }
 
     /** ★ TIME (brief §5 TRAPs): measured by SNTP = "ok"; unmeasured but within a plausible window of the element sets
      *  (a desktop whose own NTP is fine but whose SNTP to us is blocked) = "system", tracked with the word shown; a
@@ -344,6 +455,7 @@ public:
     static ReachFn rangeReach(double lo, double hi) { return [lo, hi](double a, double b) { return a >= lo && b <= hi; }; }
     /** Is any listed downlink receivable? — the reach gate (no dead controls). */
     bool reaches(const ReachFn& r) const {
+        std::lock_guard<std::mutex> lk(m_);
         for (auto& d : defs_) for (auto& t : d.tx)
             if (r(t.hz, t.passband() ? t.hiHz : t.hz)) return true;
         return false;
@@ -502,7 +614,18 @@ public:
     std::string listJson(const Clock& clk, const ReachFn& reachFn) {
         std::lock_guard<std::mutex> lk(m_);
         std::string j = "{\"type\":\"sat_list\",\"time\":\"" + timeStateLocked(clk) + "\",\"located\":" + (obs_.valid ? "true" : "false");
-        j += ",\"now\":" + fmtNum(clk.unix, 1) + ",\"sats\":[";
+        j += ",\"now\":" + fmtNum(clk.unix, 1);
+        {
+            // ★ the credit (CelesTrak's data, SatNOGS's where used) and the data's age — the picker shows both
+            double newest = 0; for (auto& r : sats_) if (r.have) newest = std::max(newest, r.el.epochUnix());
+            j += ",\"source\":{\"orbits\":\"" + jsonEsc(meta_.orbitsCredit) + "\"";
+            if (!meta_.txCredit.empty()) j += ",\"transmitters\":\"" + jsonEsc(meta_.txCredit) + "\"";
+            j += ",\"via\":\"" + std::string(meta_.fromMirror ? "vibesdr.net" : "built-in") + "\"";
+            if (meta_.orbitsAt > 0) j += ",\"fetched\":" + fmtNum(meta_.orbitsAt, 0);
+            if (newest > 0) j += ",\"newestEpoch\":" + fmtNum(newest, 0);
+            j += "}";
+        }
+        j += ",\"sats\":[";
         bool first = true;
         for (size_t i = 0; i < defs_.size(); ++i) {
             const SatDef& d = defs_[i];
@@ -525,6 +648,7 @@ public:
                 if (t.upHz > 0) j += ",\"upHz\":" + fmtNum(t.upHz, 0);
                 if (t.ctcss > 0) j += ",\"ctcss\":" + fmtNum(t.ctcss, 1);
                 if (!t.note.empty()) j += ",\"note\":\"" + jsonEsc(t.note) + "\"";
+                if (!t.status.empty()) j += ",\"status\":\"" + t.status + "\"";
                 j += std::string(",\"reach\":") + (reach ? "true" : "false") + "}";
             }
             j += "]";
@@ -684,6 +808,7 @@ private:
     mutable std::mutex m_;
     std::vector<SatDef> defs_;
     std::vector<SatRow> sats_;
+    SatsMeta meta_;
     Observer obs_;
     std::map<std::string, Lock> locks_;
 };

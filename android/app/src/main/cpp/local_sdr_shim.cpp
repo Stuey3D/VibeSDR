@@ -41745,9 +41745,15 @@ static bool vsSatReachFn(double lo, double hi) {
     return true;
 }
 static bool vsSatAnyReach() { return satEngine().reaches([](double lo, double hi) { return vsSatReachFn(lo, hi); }); }
+static std::mutex g_satNoteMtx;
+static std::string g_satNote;   // ★ the supply's reason for no data (satcat.cpp via setSatSupplyNote)
 static std::string vsSatWhyNot() {
     if (!satEngine().haveObserver()) return "This server has no location set \xe2\x80\x94 the owner sets its locator on the setup page";
-    if (satEngine().elementCount() == 0) return "NO SAT DATA \xe2\x80\x94 the satellite orbit data has not been downloaded yet";
+    if (satEngine().elementCount() == 0) {
+        std::lock_guard<std::mutex> lk(g_satNoteMtx);
+        return g_satNote.empty() ? "NO SAT DATA \xe2\x80\x94 the satellite orbit data has not been downloaded yet"
+                                 : "NO SAT DATA \xe2\x80\x94 " + g_satNote;
+    }
     if (satEngine().timeState(satClock()) == "none") return "NO TIME \xe2\x80\x94 this server's clock has not been checked yet";
     return "";
 }
@@ -43161,6 +43167,17 @@ int LocalSdrShim::satLoadOmm(const std::string& group, const std::string& json) 
     LOGI("[sat] orbit data: %s group — %d listed satellites updated (%d with elements)", group.c_str(), n, satEngine().elementCount());
     return n;
 }
+
+int LocalSdrShim::satLoadSats(const std::string& json, std::string* err) {
+    std::string e;
+    const int n = satEngine().loadSats(json, &e);
+    if (n < 0) LOGE("[sat] sats.json refused: %s \xe2\x80\x94 the current satellite data stays", e.c_str());
+    else LOGI("[sat] sats.json: %zu listed satellites, %d with elements", satEngine().defs().size(), n);
+    if (err) *err = e;
+    return n;
+}
+bool LocalSdrShim::satWanted() { return vsSatAnyReach(); }
+void LocalSdrShim::setSatSupplyNote(const std::string& note) { std::lock_guard<std::mutex> lk(g_satNoteMtx); g_satNote = note; }
 
 void LocalSdrShim::setLocationJson(const std::string& json) {
     {

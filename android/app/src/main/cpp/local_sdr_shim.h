@@ -894,6 +894,15 @@ public:
     /** ★★ V12 SATELLITE ENGINE (docs/v12/SATELLITE-ENGINE.md): one CelesTrak GP group's OMM JSON for the curated birds.
      *  Returns how many listed satellites it updated (-1 = not GP JSON). Thread-safe; call whenever a group arrives. */
     static int satLoadOmm(const std::string& group, const std::string& json);
+    /** ★★ sats.json from vibesdr.net's mirror (vibeserver/satcat.cpp, or an app handing it to a server with no internet):
+     *  the list + element sets + the credit. Returns the birds with elements, -1 = refused (`err` says why; the current
+     *  data stays). Thread-safe. */
+    static int satLoadSats(const std::string& json, std::string* err = nullptr);
+    /** ★ Does this radio receive any listed satellite downlink? — the sync asks nothing when no radio can use it. */
+    static bool satWanted();
+    /** ★ Why there is no orbit data, in a few words, for the greyed button ("vibesdr.net could not be reached …");
+     *  "" = not downloaded yet. */
+    static void setSatSupplyNote(const std::string& note);
     /** Is the running source an SDRplay? The client's controls differ materially. */
     bool isSdrplay() const;
     /** RF gain positions on an RSP (0 = not an RSP / no radio). */

@@ -252,6 +252,36 @@ static void sectionCost(const std::string& dir) {
     CHECK(us < 50, "a look under 50 µs");
 }
 
+static void sectionJsonTree(const std::string& dir) {
+    std::printf("§5 the JSON tree (sats.json) and catalogue-number ranges\n");
+    json::Value v;
+    CHECK(json::parseValue("{\"a\":[1,2,{\"b\":\"x\\u00e9\\u2014\\ud83d\\udef0\"}],\"n\":null,\"t\":true,\"f\":-1.5e-3}", v)
+          && v.get("a")->a.size() == 3 && v.get("a")->a[2].str("b") == "x\xc3\xa9\xe2\x80\x94\xf0\x9f\x9b\xb0"
+          && v.get("t")->b && std::fabs(v.num("f") + 0.0015) < 1e-12, "nested values, UTF-8 escapes and a surrogate pair");
+    CHECK(!json::parseValue("{\"a\":1,}", v) && !json::parseValue("{\"a\":1} x", v) && !json::parseValue("[1,2", v), "malformed refused");
+    std::string deep(40, '['); deep += std::string(40, ']');
+    CHECK(!json::parseValue(deep, v), "depth bounded");
+    CHECK(!json::parseValue("[" + std::string(10, '1') + "]", v, 1), "node count bounded");
+    // fromOmm through the tree: six digits and the OMM range
+    const std::string js = readFile(dir + "/sats-6digit-2026-11-19.json");
+    CHECK(json::parseValue(js, v), "the six-digit sats.json fixture parses");
+    const json::Value* last = &v.get("satellites")->a.back();
+    Elements e; std::string err;
+    CHECK(fromOmm(last->get("omm")->flat(), e, err) && e.norad == 101095 && Sgp4(e).ok(), "101095 from sats.json propagates (%s)", err.c_str());
+    json::Object o = last->get("omm")->flat();
+    for (auto& f : o) if (f.key == "NORAD_CAT_ID") f.num = 999999999;
+    CHECK(fromOmm(o, e, err) && e.norad == 999999999, "999 999 999 (the OMM field's top) kept whole");
+    for (auto& f : o) if (f.key == "NORAD_CAT_ID") f.num = 1000000000;
+    CHECK(!fromOmm(o, e, err), "ten digits refused");
+    for (auto& f : o) if (f.key == "NORAD_CAT_ID") f.num = 101095.5;
+    CHECK(!fromOmm(o, e, err), "a fraction refused");
+    for (auto& f : o) if (f.key == "NORAD_CAT_ID") { f.isNum = false; f.str = "101095"; }
+    CHECK(fromOmm(o, e, err) && e.norad == 101095, "a catalogue number sent as a string (\"101095\")");
+    // Alpha-5 TLE still read (old caches, an owner's paste): A0000..Z9999 = 100000..339999
+    long long n = 0;
+    CHECK(detail::alpha5("L1095", n) && n == 201095, "Alpha-5 L1095 = 201095 (%lld)", n);
+}
+
 int main(int argc, char** argv) {
     std::string dir = "vibeserver/testdata-sat";
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--data" && i + 1 < argc) dir = argv[++i];
@@ -259,6 +289,7 @@ int main(int argc, char** argv) {
     sectionParsing(dir);
     sectionGeometry(dir);
     sectionCost(dir);
+    sectionJsonTree(dir);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
