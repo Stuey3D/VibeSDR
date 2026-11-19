@@ -28,6 +28,7 @@ import { drmSanitise, drmIqSanitise } from './drm';   // ★ V12 DRM
 import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
 import { parseFreeDv, freedvSubMessage, type FreeDvChoice, type FreeDvSideband } from './freedv';   // ★ V12 FreeDV digital voice
 import { parseM17, m17StatusMessage } from './m17';   // ★ V12 M17 digital voice
+import { parseDvsig, dvsigStatusMessage, dvsigPinMessage, type DvPin } from './dvsig';   // ★ V12 DV ID
 import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseAvReport } from './aviation';   // ★ V12 Aircraft datalink
@@ -133,6 +134,9 @@ export class VibeServerClient extends VibeServerWsClient {
   /** ★★ V12 M17: ask for the receiver's current report (entering the mode, a reconnect, a room already in M17). Nothing
    *  to choose inside the mode, so nothing to gate. */
   m17Status() { this.sendSpectrum(m17StatusMessage()); }
+  /** ★★ V12 DV ID: the report (read-only), or AUTO / one system pinned (on a shared dial the room's, as FreeDV's sub-mode). */
+  dvsigStatus() { this.sendSpectrum(dvsigStatusMessage()); }
+  dvsigPin(pin: DvPin) { this.sendSpectrum(dvsigPinMessage(pin)); }
   /** ★ …and `sb`, the sideband: AUTO (FreeDV's convention, LSB below 10 MHz) or USB / LSB by hand (Stuart 2026-11-16). */
   freedvSub(sub: FreeDvChoice | null, sb?: FreeDvSideband | null) {
     if ((sub || sb) && this.askBlocked()) return;
@@ -520,6 +524,8 @@ export class VibeServerClient extends VibeServerWsClient {
       /* ★★ V12 M17 — the receiver's report when it changes (searching / in sync, the callsigns, META, packets). A ghost
        *  after leaving is the screen's to drop. */
       case 'm17': { const f = parseM17(msg); if (f) this.callbacks.onM17?.(f); return true; }
+      // ★★ V12 DV ID — the receiver's report (the copy this socket may have); a ghost after leaving is the screen's to drop
+      case 'dvsig': { const f = parseDvsig(msg); if (f) this.callbacks.onDvsig?.(f); return true; }
       /* ★★ V12 what AUTO has done to this listener's passband — the sliders show it while it cuts (bwAuto.ts). */
       case 'bwauto': { const b = parseBwAuto(msg); if (b) this.callbacks.onBwAuto?.(b); return true; }
       /* ★ V12 AIS: a report about once a second — ITS ARRIVAL MEANS AIS IS ON (a second listener joining a radio somebody

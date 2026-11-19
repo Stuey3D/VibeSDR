@@ -173,6 +173,8 @@ import { DrmQualityMeter } from '../utils/drmQuality';
 import { amSyncOffered, amSyncReadout, AM_SYNC_LABEL, AM_SYNC_NAME, isAmFamily, type AmSyncId, type AmSyncState } from '../services/amSync';   // ★ V12
 import { freedvOffered, freedvVts, FREEDV_LABEL, FREEDV_NAME, type FreeDvChoice, type FreeDvSideband, type FreeDvState, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV
 import { m17Offered, m17Line, M17_LABEL, M17_NAME, type M17State } from '../services/m17';   // ★ V12 M17
+import { dvsigOffered, dvsigLine, DVSIG_LABEL, DVSIG_NAME, type DvState } from '../services/dvsig';   // ★ V12 DV ID
+import DvsigPanel from '../components/DvsigPanel';   // ★ V12 the DV ID box
 import { autoBwOffered, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
 import { landingSpotBand, bandPassband } from '../utils/digiModes';
@@ -629,6 +631,13 @@ function withM17(list: { id: string; label: string; a11y?: string; demod?: boole
   const add = { id: 'm17', label: M17_LABEL, a11y: M17_NAME, demod: true };
   return i < 0 ? [...list, add] : [...list.slice(0, i + 1), add, ...list.slice(i + 1)];
 }
+/** ★★ V12 DV ID after NFM (and M17), only where THIS server lists it (dvsig.ts dvsigOffered). A main key, as M17. */
+function withDvsig(list: { id: string; label: string; a11y?: string; demod?: boolean }[], on: boolean): { id: string; label: string; a11y?: string; demod?: boolean }[] {
+  if (!on) return list;
+  const i = Math.max(list.findIndex((m) => m.id === 'm17'), list.findIndex((m) => m.id === 'nfm'));
+  const add = { id: 'dvsig', label: DVSIG_LABEL, a11y: DVSIG_NAME, demod: true };
+  return i < 0 ? [...list, add] : [...list.slice(0, i + 1), add, ...list.slice(i + 1)];
+}
 const LOCAL_MODES: { id: string; label: string }[] = [
   { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
   // ★ BOTH CW SIDEBANDS — the server has always had cwu AND cwl (the web client offers both);
@@ -910,7 +919,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setRttySkimCapable(false);
     setSkimCapable(true);
     setPskCapable(false); setJttyCapable(false); setTimeTdfCapable(false); setNcdxfCapable(false); setBalloonCapable(false); setTonesCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
-    setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setFreedvCap([]); setM17Cap(false); setAutoBwModes([]); setBwAutoState(null);
+    setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setFreedvCap([]); setM17Cap(false); setDvsigCap(false); setAutoBwModes([]); setBwAutoState(null);
     setAdsbCap(undefined);
     setIsmCap(undefined);
     setNdbCap(undefined);   // ★ V12 NDB
@@ -955,6 +964,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setAmSyncCap(amSyncOffered(o?.modes)); // ★ V12 synchronous AM — the same per-radio answer
         setFreedvCap(freedvOffered(o));        // ★ V12 FreeDV — only where `modes` lists it, with the sub-modes it runs
         setM17Cap(m17Offered(o));              // ★ V12 M17 — only where `modes` lists it (libcodec2, and 2 m / 70 cm in reach)
+        setDvsigCap(dvsigOffered(o));          // ★ V12 DV ID — where `modes` lists it (VHF / UHF in reach, the owner allows it)
         setIsmCap(o?.ism);              // ★ V12 ISM — and the bands THIS radio reaches
         setNdbCap(o?.ndb);              // ★ V12 NDB — absent where this radio reaches no LF (no key at all)
         /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
@@ -2717,6 +2727,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  the mode is a ghost. */
   const [m17Cap, setM17Cap] = useState(false);
   const [m17State, setM17State] = useState<M17State | null>(null);
+  /* ★★ V12 DV ID (dvsig.ts): offered by this server, and its receiver's last report while the mode is DV ID — the VTS line
+   *  and the DV ID box. WHAT it names is the server's decision (identities only on an amateur band). */
+  const [dvsigCap, setDvsigCap] = useState(false);
+  const [dvState, setDvState] = useState<DvState | null>(null);
   /* ★★ V12 THE AUTO KEY BY THE PASSBAND SLIDERS (bwAuto.ts): the modes the server says AUTO can act on, and what it has
    *  done. Both from the server only; reset with the connection. */
   const [autoBwModes, setAutoBwModes] = useState<string[]>([]);
@@ -6887,6 +6901,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (status.mode !== 'm17') { setM17State(null); return; }
     if (m17Cap) client.current?.m17Status?.();   // ★ a VibeServer's M17 (an OpenWebRX names its own "m17")
   }, [status.mode, m17Cap]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ V12 DV ID the same. */
+  useEffect(() => {
+    if (status.mode !== 'dvsig') { setDvState(null); return; }
+    if (dvsigCap) client.current?.dvsigStatus?.();
+  }, [status.mode, dvsigCap]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★ V12 FreeDV: AUTO or a sub-mode by hand (ModeSelector's FREEDV MODE row) — the room's choice on a shared dial. */
   const onFreedvSub = useCallback((v: FreeDvChoice) => {
     if (askGate()) return;   // ★★ ask before tuning — what the room hears
@@ -7324,6 +7343,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ V12 FreeDV: a new socket asks for the receiver's report again (the server answers once it is in FreeDV)
         if (client.current?.getStatus().mode === 'freedv') client.current?.freedvSub?.(null);
         if (client.current?.getStatus().mode === 'm17') client.current?.m17Status?.();   // ★ V12 M17 likewise
+        if (client.current?.getStatus().mode === 'dvsig') client.current?.dvsigStatus?.();   // ★ V12 DV ID likewise
         // ★★ THE TAKEOVER IS SPENT. We are in; every reconnect from here is an accident of the
         //    network or the app lifecycle, and none of them asked to displace anybody. Clearing it
         //    here rather than on a timer means it lasts exactly as long as the act that set it.
@@ -7573,6 +7593,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onFreeDv: (f) => { if (!destroyed.current && client.current?.getStatus().mode === 'freedv') setFreedvState(f); },
       // ★ V12 M17 — likewise a ghost after leaving
       onM17: (f) => { if (!destroyed.current && client.current?.getStatus().mode === 'm17') setM17State(f); },
+      onDvsig: (f) => { if (!destroyed.current && client.current?.getStatus().mode === 'dvsig') setDvState(f); },   // ★ V12 DV ID
       onBwAuto: (b) => { if (!destroyed.current) setBwAutoState(b); },   // ★★ V12 what AUTO has done to the passband
       /* ★ V12 AIS: a report (on — arriving MEANS AIS is on, whoever put the receiver there: the map opens on the transition),
        *  the server's ais_off (null), or a refusal (the map that opened on the press closes; the reason as an alert, after
@@ -12848,7 +12869,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ V12 M17 the same, with what the station sends besides its voice after it (m17.ts m17Info: the relayed station, META
    *  text, a position, the newest SMS): "M17 · G4ABC · VIBE TEST", "M17 · last G4ABC · SMS G4ABC → M0XYZ: 73". */
   const m17Text = status.mode === 'm17' && m17Cap ? m17Line(m17State) : '';
-  const vtsModeLine = status.mode === 'freedv' && freedvCap.length ? freedvVts(freedvState) : m17Text || toneLabel;   // ★ VibeServer's FreeDV / M17 only
+  const dvText = status.mode === 'dvsig' && dvsigCap ? dvsigLine(dvState) : '';   // ★ V12 DV ID: "DMR · G4ABC Stuart · CC 1 · TS2"
+  const vtsModeLine = status.mode === 'freedv' && freedvCap.length ? freedvVts(freedvState) : m17Text || dvText || toneLabel;   // ★ VibeServer's FreeDV / M17 / DV ID only
   // ★ V12 tone ID: a new tone (or its end) re-draws the line — after a bookmark's name, or alone. A live station (RDS /
   //   DAB / a DMR caller) owns the bar, and a notice keeps its turn (vtsNoticeUntil); the next tune picks the tone up.
   useEffect(() => {
@@ -15482,6 +15504,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       )}
       </RotateFade>
+      {/* ★★ V12 THE DV ID BOX — while the mode is DV ID, the DRM box's place (it stands down for a decoder, the spots and
+          the whole-radio modes). */}
+      <RotateFade>
+      {status.mode === 'dvsig' && dvsigCap && !activeDecoder && !spotsKind && !ismBoxOpen && !dabOn && !adsbOn && !ismOn && !aisOn && !ndbOn && (
+        <PanelBoundary name="DV ID" onClose={() => setDvState(null)}>
+        <DvsigPanel state={dvState} topLimit={boxTopLimit} onExit={() => onMode('nfm')}
+                    onPin={(pin) => client.current?.dvsigPin?.(pin)}
+                    bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH} />
+        </PanelBoundary>
+      )}
+      </RotateFade>
       {/* ★★ V12 THE SONDES BOX — the datalink's place (SondesPanel); the waterfall live above it, MAP over everything. */}
       <RotateFade>
       {sdBoxOpen && (
@@ -15667,7 +15700,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDbMax={setDbMax}
         onFilterLow={onFilterLow}
         onFilterHigh={onFilterHigh}
-        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) ? undefined : onFilterBoth}   // ★ V12 DRM cuts its own channel: no width (FreeDV: the SSB channel the server sets; M17: the receiver's own 12.5 kHz)
+        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) || (status.mode === 'dvsig' && dvsigCap) ? undefined : onFilterBoth}   // ★ V12 DRM cuts its own channel: no width (FreeDV: the SSB channel the server sets; M17: the receiver's own 12.5 kHz)
         onNr={onNrMode}
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}
@@ -15940,7 +15973,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  an HF transceiver does not have. The radio's own names (USB-D, RTTY …) are in the radio panel. */
           const icomModes = icom ? new Set(icom.modes.map(icomClientMode)) : null;
           // ★ V12 DRM beside AM where this server offers it (the web's offeredModes)
-          const vibeModes = withM17(withFreeDv(withAmSync(drmCapable ? withDrm(LOCAL_MODES) : LOCAL_MODES, amSyncCap), freedvCap), m17Cap);   // ★ V12 SAM … AM-ST, FreeDV, M17
+          const vibeModes = withDvsig(withM17(withFreeDv(withAmSync(drmCapable ? withDrm(LOCAL_MODES) : LOCAL_MODES, amSyncCap), freedvCap), m17Cap), dvsigCap);   // ★ V12 SAM … AM-ST, FreeDV, M17
           const base0 = isLocal ? vibeModes
                     : route.params.serverType === 'owrx' ? serverModes
                     : LOCAL_MODES;
@@ -15958,7 +15991,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         filterHigh={status.bandwidthHigh}
         bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
         bwEdgeMin={client.current ? filterEdgeMin(client.current.caps, status.mode) : 0}
-        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) ? undefined : onFilterBoth}   // ★ V12 DRM / FreeDV / M17: the width row is not offered
+        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) || (status.mode === 'dvsig' && dvsigCap) ? undefined : onFilterBoth}   // ★ V12 DRM / FreeDV / M17: the width row is not offered
         /* ★ V12 FreeDV: AUTO and the server's sub-modes, in the width row's place, while the mode is FreeDV */
         freedv={status.mode === 'freedv' && freedvCap.length ? { subs: freedvCap, sub: freedvState?.sub ?? 'auto', onSub: onFreedvSub, sb: freedvState?.sbSel ?? 'auto', onSb: onFreedvSb } : null}
         /* ★★ V12 AUTO above SYNC — only where this server lists the mode (autoBwModes); the sliders show what AUTO chose

@@ -128,6 +128,7 @@ const MODE_TO_WIRE: Record<SDRMode, string> = {
   sau: 'sau', sal: 'sal', ecssu: 'ecssu', ecssl: 'ecssl', amst: 'amst',
   freedv: 'freedv',   // ★ OpenWebRX's own FreeDV mode has this id too (still gated on its `modes` list)
   m17: 'm17',         // ★ …and its own M17 (digiham) — likewise gated on its `modes` list
+  dvsig: 'dvsig',     // ★ VibeServer's DV ID: never in an OpenWebRX's `modes` list, so never offered there
 };
 
 const OWRX_CAPS: BackendCapabilities = {
