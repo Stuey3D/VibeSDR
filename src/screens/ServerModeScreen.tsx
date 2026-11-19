@@ -78,6 +78,8 @@ const BLOCKABLE: ModeEntry[] = [
    *  setup page, with the same notice. */
   { id: 'tones', label: 'DTMF and 5-tone selective calling' },
   { id: 'tones+digits', label: '5-tone: show the called numbers off the amateur bands (to you only)', parent: 'tones', on: true },
+  // ★★ V12 METEOR-M LRPT (docs/v12/LRPT.md): weather-satellite pictures on 137 MHz, a listener's decoder on an IQ slice — as on the setup page
+  { id: 'lrpt', label: 'METEOR weather satellite pictures (LRPT)' },
   { id: 'ais', label: 'AIS ships' },
   // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },

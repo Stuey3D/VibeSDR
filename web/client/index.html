@@ -5633,6 +5633,9 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 balloons: UKHAS RTTY telemetry, Horus Binary and SSDV pictures — decoded on the server; hidden unless it says "balloon" (greyed with why off 70 cm). -->
     <button class="btn" data-dec="balloon" hidden title="High-altitude balloons — UKHAS RTTY telemetry, Horus Binary 4-FSK and SSDV pictures from amateur payloads, mostly on 434 MHz: tune the payload in USB and everything is found by itself">BALLOONS</button>
     <!-- ★★ V12 DTMF + 5-tone selective calling — decoded on the server; hidden unless it says "tones". Digits only on the amateur bands (the server's rule). -->
+    <!-- ★★ V12 METEOR-M LRPT — weather-satellite pictures on 137.100 / 137.900 MHz, decoded on the server from a 140 kHz IQ
+         slice of this listener's dial; hidden unless the server says "lrpt" (never on an Icom), greyed with why off 137 MHz. -->
+    <button class="btn" data-dec="lrpt" hidden title="METEOR weather satellite pictures (LRPT): tune 137.100 or 137.900 MHz while a METEOR-M satellite passes; the picture grows here and each pass goes to the gallery">METEOR LRPT</button>
     <button class="btn" data-dec="tones" hidden title="DTMF and 5-tone selective calling on NFM / AM — the digits on the amateur bands (repeater and link control codes); anywhere else only what was heard, never a number">DTMF / 5-TONE</button>
     <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
@@ -5973,6 +5976,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-kind="sitora">SITOR-A</button>
     <!-- ★★ V12 balloons: the reports as a run, and each SSDV picture as a JPEG. -->
     <button class="btn" data-kind="balloon">BALLOONS</button>
+    <!-- ★★ V12 METEOR LRPT: each pass's channels and colour composite as PNGs. -->
+    <button class="btn" data-kind="lrpt">METEOR</button>
   </div>
   <div id="galList"></div>
   <!-- ★ V12 beta 4: pages (main.ts renderGalleryPager) — "‹ Newer · 1 … 6 7 8 … 14 · Older ›", "Page 7 of 14". -->

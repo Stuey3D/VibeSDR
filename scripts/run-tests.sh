@@ -889,6 +889,8 @@ if npx tsx scripts/test_aviation_map.ts; then pass=$((pass+1)); else fail=$((fai
 # ★ V12 radiosondes, the clients' half (src/services/sondes.ts): the report parsed defensively, no temperature unless the
 #   calibration is whole, the lines, the map's items / rows / card and a chosen sonde's track
 if npx tsx scripts/test_sondes_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 METEOR LRPT, the clients' half (src/services/lrpt.ts): lrpt_status parsed defensively, the status line, the attach
+if npx tsx scripts/test_lrpt_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
 if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 PAGE (2026-11-16, Stuart): the law's notice wherever PAGE is described, and RECORDINGS SILENT WHILE PAGE RUNS — every

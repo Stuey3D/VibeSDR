@@ -49,7 +49,7 @@ import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, typ
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 import { FREEDV_HINT, FREEDV_SIDEBANDS, freedvSidebandLabel, type FreeDvChoice, type FreeDvSideband, type FreeDvSub } from '../services/freedv';   // ★ V12 FreeDV digital voice
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -537,6 +537,8 @@ interface ModeSelectorProps {
     /** ★★ V12 DTMF + 5-tone — only where `"tones"` is offered; DTMF / 5-TONE each on or off, and the 5-tone STANDARD (AUTO,
      *  with one table pinned under it). What is SHOWN is the server's rule (digits on the amateur bands only). */
     tonesAvail?: boolean; tonesSettings?: TonesOptions; onTonesSettings?: (s: TonesOptions) => void;
+    /** ★★ V12 METEOR-M LRPT — only where `"lrpt"` is present (true, or false with `lrptWhy`: greyed). Never on an Icom. */
+    lrptAvail?: boolean;
     /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches: `dscChans` the distress
      *  set, `dscRoutine` the routine channels (ITU-R M.541) of the band the dial is on, named `dscBandLabel`. */
     dscAvail?: boolean; dscChans?: Array<{ hz: number; label: string; vhf: boolean }>;
@@ -655,6 +657,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const ncdxfShown = !!decoderControls?.ncdxfAvail && !isBlocked('ncdxf');   // ★ V12 NCDXF beacons
   const balloonShown = !!decoderControls?.balloonAvail && !isBlocked('balloon');   // ★ V12 balloons
   const tonesShown = !!decoderControls?.tonesAvail && !isBlocked('tones');   // ★ V12 DTMF + 5-tone
+  const lrptShown = !!decoderControls?.lrptAvail && !isBlocked('lrpt');   // ★ V12 METEOR LRPT
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
   const sitoraShown = !!decoderControls?.sitoraAvail && !isBlocked('sitora');   // ★ V12 SITOR-A
   const sameShown = !!decoderControls?.sameAvail && !isBlocked('same');   // ★ V12 EAS / SAME
@@ -745,6 +748,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (ncdxfShown) addLegend('BEACONS', 'ncdxf');
     if (balloonShown) addLegend('BALLOONS', 'balloon');
     if (tonesShown) addLegend('DTMF / 5-TONE', 'tones');
+    if (lrptShown) addLegend('METEOR LRPT', 'lrpt');
     if (dscShown) addLegend('DSC', 'dsc');
     if (aprsShown) addLegend('APRS', 'aprs');
     if (advRdsShown) addLegend(advRdsLabel, 'rds');
@@ -853,7 +857,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'ncdxf' | 'balloon' | 'tones' | 'lrpt' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     // ★★ V12 out of this radio's reach: greyed, and a press says why (never starts it)
     const why = dc.decWhy?.[id];
@@ -1235,6 +1239,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'ncdxf': return ncdxfShown ? srvKey('ncdxf', 'BEACONS', 'NCDXF beacon tracker') : null;
       case 'balloon': return balloonShown ? srvKey('balloon', 'BALLOONS', 'High-altitude balloon telemetry and pictures') : null;
       case 'tones': return tonesShown ? srvKey('tones', 'DTMF / 5-TONE', 'DTMF and 5-tone selective calling decoder') : null;
+      case 'lrpt': return lrptShown ? srvKey('lrpt', 'METEOR LRPT', 'METEOR weather satellite pictures decoder, LRPT') : null;
       case 'dsc':  return dscShown ? srvKey('dsc', 'DSC', 'Maritime DSC decoder') : null;
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
       case 'same':   return sameShown ? srvKey('same', 'SAME', 'EAS and SAME emergency alert header decoder') : null;
@@ -1255,7 +1260,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (!decoderControls) return false;
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
-      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;   case 'balloon': return balloonShown;   case 'tones': return tonesShown;
+      case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;   case 'ncdxf': return ncdxfShown;   case 'balloon': return balloonShown;   case 'tones': return tonesShown;   case 'lrpt': return lrptShown;
       case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'hell': return hellShown; case 'paging': return pagingShown;
       case 'mfsk': return tmShown('mfsk'); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;

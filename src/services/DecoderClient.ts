@@ -58,6 +58,7 @@ import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
 import { sameStateText, selcalStateText } from './alertDecoders';
 import { TONES_DEFAULTS, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from './tones';   // ★ V12 DTMF + 5-tone
+import { lrptAttachParams, lrptStatusText, parseLrptStatus } from './lrpt';   // ★ V12 METEOR LRPT
 import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS / SAME and SELCAL
 import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
@@ -74,6 +75,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
   | 'mfsk'   // ★ V12 the MFSK keyboard modes — MFSK16/32, OLIVIA, CONTESTIA, THOR on ONE key (textModes.ts): text as it decodes, 0x03, textmode_status
   | 'hell'    // ★ V12 FELD HELL — drawn by a VibeServer (feldHell.ts): WEFAX's grey lines (re-sent as a strip fills), hell_status
   | 'tones'   // ★ V12 DTMF + 5-tone selective calling on a VibeServer (tones.ts): a line per string / call, 0x03, {"type":"tones"}
+  | 'lrpt'    // ★ V12 METEOR-M LRPT pictures on a VibeServer (lrpt.ts): SSTV's picture frames (a quarter-size preview), lrpt_status
   | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
   | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
@@ -339,6 +341,8 @@ export class DecoderClient {
   balloonSet: BalloonSettings = { ...BALLOON_AUTO };
   /** ★ V12 DTMF + 5-tone: which decoders run and the 5-tone standard (tones.ts tonesParams) — re-attach to apply. */
   tonesSet: TonesOptions = { ...TONES_DEFAULTS };
+  /** ★ V12 METEOR LRPT: the satellite's symbol rate (sats.json — 72000, or 80000 for the 80k mode). */
+  lrptSymbolRate = 72000;
   /** The server's last word on this dial: amateur (digits shown) or not. */
   tonesLast: TonesStatus | null = null;
   /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */
@@ -680,6 +684,11 @@ export class DecoderClient {
             if (this.active !== 'rtty' || !this.rttySkim) return;
             const sp = parseCwSpot(m.data, Date.now(), false, true);
             if (sp) this.cb.onCwSpot?.(sp);
+          } else if (m.type === 'lrpt_status' && m.data) {
+            if (this.active !== 'lrpt') return;
+            const st = parseLrptStatus(m.data);
+            this.cb.onStatus(lrptStatusText(st));
+            if (st) this.cb.onDot(st.lines > 0 || st.sync ? 'active' : st.carrier ? 'sync' : 'idle');
           } else if (m.type === 'tones' && m.data) {
             if (this.active !== 'tones') return;
             this.tonesLast = tonesSanitise(m.data);
@@ -879,6 +888,8 @@ export class DecoderClient {
       case 'balloon': return { extension_name: 'balloon', params: balloonParams(this.balloonSet) };
       // ★ V12 DTMF + 5-tone: both on and AUTO send nothing (tones.ts); what is SHOWN is the server's rule.
       case 'tones': return { extension_name: 'tones', params: tonesParams(this.tonesSet) };
+      // ★ V12 METEOR LRPT: the satellite's symbol rate (72k; 80k for that mode), the modulation and coding AUTO.
+      case 'lrpt':  return { extension_name: 'lrpt', params: lrptAttachParams(this.lrptSymbolRate) };
       // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.
       case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };
       // ★ V12 SITOR-A: the tones around 1 kHz (as RTTY); polarity, timing and each station's offset are found.
@@ -1030,7 +1041,7 @@ export class DecoderClient {
         this.cb.onImageStart?.(0, 0);
       }
 
-    } else if (name === 'sstv') {
+    } else if (name === 'sstv' || name === 'lrpt') {   // ★ V12 LRPT's preview is drawn in SSTV's frames
       if (t === 0x07) {
         const w = v.getUint32(1, false), h = v.getUint32(5, false);
         this.cb.onImageStart?.(w, h); this.cb.onDot('sync');
