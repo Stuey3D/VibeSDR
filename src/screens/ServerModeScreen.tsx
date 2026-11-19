@@ -69,7 +69,7 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'same', label: 'EAS / SAME' }, { id: 'selcal', label: 'SELCAL' },
   // ★ V12 HFDL (docs/v12/AVIATION.md): aircraft on HF, a listener's decoder on the USB dial — as on the setup page
   { id: 'hfdl', label: 'HFDL (aircraft on HF)' },
-  { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR' }, { id: 'hell', label: 'Feld Hell (Hellschreiber)' },
+  { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR, DominoEX, MT63' }, { id: 'hell', label: 'Feld Hell (Hellschreiber)' },
   { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
   // ★ V12 balloons (docs/v12/BALLOONS.md): UKHAS RTTY, Horus Binary, SSDV pictures — a listener's decoder on 70 cm, as on the setup page
   { id: 'balloon', label: 'Balloons (UKHAS, Horus, SSDV)' },
@@ -82,6 +82,9 @@ const BLOCKABLE: ModeEntry[] = [
    *  on VHF / UHF, and under it the owner's opt-in for radio IDs off the amateur bands ("+" token), as on the setup page. */
   { id: 'dvsig', label: 'Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR (who is talking \u2014 the data only; the voice codec, AMBE, is patented)' },
   { id: 'dvsig+ids', label: 'Digital voice ID: show radio IDs off the amateur bands (to you only)', parent: 'dvsig', on: true },
+  // ★ V12 2026-11-19 2G HF ALE (docs/v12/HF-DATA.md) — and its opt-in: AMD message text off the amateur bands, owner only
+  { id: 'ale', label: 'ALE (HF automatic link establishment)' },
+  { id: 'ale+amd', label: 'ALE: show AMD message text off the amateur bands (to you only)', parent: 'ale', on: true },
   { id: 'ais', label: 'AIS ships' },
   // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },
@@ -100,6 +103,11 @@ const BLOCKABLE: ModeEntry[] = [
 const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading them is an offence in the UK (Wireless '
   + 'Telegraphy Act 2006, s.48) and in many other countries, and restricted in others. Only switch this on if the law '
   + 'where this server is allows it. The text is shown only to you, the owner \u2014 never to listeners, never in the gallery.';
+/** ★ ONE TEXT, TWO READERS: vibe_setup_page.h ALE_AMD_NOTICE. */
+const ALE_AMD_NOTICE = 'Off the amateur bands an ALE text message (AMD) is a private message between government, military '
+  + 'or commercial stations. Only switch this on if the law where this server is allows it. The text is shown only to you, '
+  + 'the owner, while you are signed in \u2014 never to listeners, never in the gallery. Listeners see who called whom and '
+  + 'the message\u2019s length.';
 /** ★ ONE TEXT, TWO READERS: vibe_setup_page.h TONES_DIGITS_NOTICE. */
 const TONES_DIGITS_NOTICE = 'Off the amateur bands a 5-tone call\u2019s number says who is being called on a private radio system. '
   + 'Only switch this on if the law where this server is allows it. The numbers are shown only to you, the owner, while you '
@@ -4880,6 +4888,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
                         {chip(m, inert)}
                         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{AVDATA_TEXT_NOTICE}</Text>
+                      </View>
+                    ) : m.id === 'ale+amd' ? (
+                      <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{ALE_AMD_NOTICE}</Text>
                       </View>
                     ) : m.id === 'tones+digits' ? (
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>

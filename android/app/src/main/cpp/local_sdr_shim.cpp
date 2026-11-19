@@ -31540,6 +31540,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★★ V12 tones: the owner's opt-in to 5-tone digits off the amateur bands (setup page, "tones+digits", off by
             //    default) — and the band plan's region, which decides what is amateur (docs/v12/TONES.md).
             e.tonesDigits = [] { return vsModeBlocked("tones+digits"); };
+            // ★★ V12 ALE: the owner's opt-in to AMD message text off the amateur bands ("ale+amd", off by default) — HF-DATA.md
+            e.aleAmd = [] { return vsModeBlocked("ale+amd"); };
             e.region = [] { return vibebands::defaultRegion(); };
             // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.
             e.spotTap = [dial](bool band) -> vibe::DecoderTapPtr {
@@ -42131,6 +42133,9 @@ static std::string vsTunableJson() {
     /* ★ V12 tone decoders (decoders/tones_rx.h): DTMF and 5-tone selective calling on a listener's NFM / AM audio — on any
      *  frequency (what is SHOWN depends on it: docs/v12/TONES.md). Absent on an older server; false where the owner blocked it. */
     j += std::string(",\"tones\":") + (vsModeBlocked("tones") ? "false" : "true");
+    /* ★ V12 2026-11-19 2G HF ALE (decoders/ale_decoder.h, docs/v12/HF-DATA.md): soundings, calls and links on a listener's USB
+     *  audio. Absent on an older server; false + its reason where this radio reaches no HF or the owner blocked it. */
+    j += vsDecoderCapJson("ale", reach);
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -42385,7 +42390,7 @@ static std::string vsTunableJson() {
                                         "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "avdata", "hfdl",   // ★ V12 aviation (docs/v12/AVIATION.md)
                                         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md)
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "drm", "freedv", "m17", "dvsig" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "ncdxf", "balloon", "tones", "ale", "drm", "freedv", "m17", "dvsig" };
         std::string m = "[";
         bool first = true;
         // ★★ V12 (2026-11-05) THE SAME ANSWER THE SETUP PAGE DRAWS FROM (vibe_radio_caps.h): a mode this radio cannot run
@@ -42559,7 +42564,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"rttyskim", "RTTY skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR / DominoEX / MT63"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ncdxf", "NCDXF beacons"}, {"balloon", "Balloons"}, {"tones", "DTMF / 5-tone"}, {"ale", "ALE"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

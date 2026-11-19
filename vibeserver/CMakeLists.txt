@@ -322,7 +322,9 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/sitor_a.cpp"
     "${CPP_DIR}/decoders/same_decoder.cpp"   # ★ V12 EAS / SAME
     "${CPP_DIR}/decoders/selcal_decoder.cpp"   # ★ V12 SELCAL
-    "${CPP_DIR}/decoders/textmodes.cpp"   # ★ V12 MFSK / OLIVIA / THOR
+    "${CPP_DIR}/decoders/textmodes.cpp"   # ★ V12 MFSK / OLIVIA / THOR / DOMINOEX
+    "${CPP_DIR}/decoders/mt63.cpp"   # ★ V12 MT63
+    "${CPP_DIR}/decoders/ale_decoder.cpp"   # ★ V12 2G HF ALE
     # ★★★ V12 PAGING (POCSAG / FLEX) — for the R36S handheld's radio process ONLY (vibe_paging_gate.h). Compiled in, but
     #     dormant in every other process: DecoderHost::pagingProcess() is false until --handheld-radio sets the handheld
     #     profile, so on a server "paging" is an unknown decoder and vibeserver.json never offers it.

@@ -920,7 +920,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setCwCapable(false);
     setRttySkimCapable(false);
     setSkimCapable(true);
-    setPskCapable(false); setJttyCapable(false); setTimeTdfCapable(false); setNcdxfCapable(false); setBalloonCapable(false); setTonesCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
+    setPskCapable(false); setJttyCapable(false); setTimeTdfCapable(false); setNcdxfCapable(false); setBalloonCapable(false); setTonesCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setAleCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
     setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setFreedvCap([]); setM17Cap(false); setDvsigCap(false); setAutoBwModes([]); setBwAutoState(null);
     setAdsbCap(undefined);
     setIsmCap(undefined);
@@ -947,7 +947,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setCwCapable(o?.cw === true || !!dw.cw);
         setSkimCapable(o?.skim !== false);   // ★ V12 an Icom: CW / PSK are ONE SIGNAL only
         setRttySkimCapable(o?.rttyskim === true && o?.skim !== false);   // ★ V12 the RTTY skimmer — only where it can run
-        setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal);
+        setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal); setAleCapable(o?.ale === true || !!dw.ale);
         setHfdlCapable(o?.hfdl === true);   // ★ V12 HFDL: this VibeServer decodes it on the dial (and serves the HFDL MAP)
         setAvCap(o?.avdata);                // ★ V12 Aircraft datalink — absent where no band is reachable (no key at all)
         setSdCap(o?.sondes);                // ★ V12 radiosondes — absent where the radio cannot reach 400 MHz (no key at all)
@@ -2674,6 +2674,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  greyed with the reason (never hidden, never live). */
   const [decWhy, setDecWhy] = useState<Record<string, string>>({});
   const [selcalCapable, setSelcalCapable] = useState(false);   // ★ V12 SELCAL: this VibeServer decodes it
+  const [aleCapable, setAleCapable] = useState(false);         // ★ V12 2G HF ALE: this VibeServer decodes it
   const [hfdlCapable, setHfdlCapable] = useState(false);       // ★ V12 HFDL: this VibeServer decodes it on the dial
   const hfdlCapRef = useRef(false); hfdlCapRef.current = hfdlCapable;
   const [avCap, setAvCap] = useState<{ ok: boolean; why: string; bands: AvBand[]; text: boolean } | undefined>(undefined);   // ★ V12 Aircraft datalink
@@ -6227,7 +6228,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs'|'hfdl'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -6797,7 +6798,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'ncdxf'|'balloon'|'tones'|'dsc'|'sitora'|'same'|'selcal'|'ale'|'mfsk'|'hell'|'paging'|'aprs') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -16218,6 +16219,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           sitoraAvail: sitoraCapable && !!(client.current as any)?.isVibe,
           sameAvail: sameCapable && !!(client.current as any)?.isVibe,
           selcalAvail: selcalCapable && !!(client.current as any)?.isVibe,
+          aleAvail: aleCapable && !!(client.current as any)?.isVibe,   // ★ V12 2G HF ALE
           decWhy: (client.current as any)?.isVibe ? decWhy : undefined,
           onDecWhy: (label: string, why: string) => { markInteract(); appAlert(`${label} unavailable`, why); },
           hellAvail: hellCapable && !!(client.current as any)?.isVibe,   // ★ V12 FELD HELL
