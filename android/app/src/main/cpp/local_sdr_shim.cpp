@@ -10882,7 +10882,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("[sat] shared dial: Doppler lock ended (%s)", why.c_str());
         if (freezeAndTell) {
             retune(std::round(actual));     // ★ the room's dial goes to where the channel is; the NCO lands on the same frequency
-            broadcastConfig();
+            if (vsSharedDial()) broadcastConfig();
+            else for (auto& k : allSpecClients()) if (k && k->isOpen()) sendConfig(k);   // ★ a one-listener radio: tell them too
         }
         const std::string m = "{\"type\":\"sat\",\"state\":\"OFF\",\"shared\":true,\"why\":\"" + vibe::sat::jsonEsc(why) + "\",\"time\":\"ok\"}";
         for (auto& k : allSpecClients()) if (k && k->isOpen()) sendText(k, m);

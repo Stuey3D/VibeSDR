@@ -132,6 +132,10 @@ export type MobileDeps = {
   sdCap?: () => { ok: boolean; why: string } | null;
   sdOn?: () => boolean;
   toggleSd?: () => void;
+  /** ★ V12 satellites — not a whole-radio mode: opens the picker (passes, sky track, DOPPLER). Absent = no entry. */
+  satCap?: () => { ok: boolean; why: string } | null;
+  satOn?: () => boolean;
+  openSat?: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -449,6 +453,18 @@ export function initMobileControls(deps: MobileDeps) {
       if (!sdc.ok) sdRow.setAttribute('aria-disabled', 'true');
       sdRow.onclick = () => { deps.toggleSd!(); close(); refresh(); };
       grid.appendChild(sdRow);
+    }
+    /* ★★ V12 SATELLITES — only where the server offers `doppler` (the radio reaches a listed downlink); greyed with the
+     *  reason when not ready, and a press still opens the picker, which says why. */
+    const stc = deps.satCap?.();
+    if (stc && deps.openSat) {
+      const stRow = document.createElement('button');
+      stRow.className = 'mModeOpt' + (deps.satOn?.() ? ' on' : '') + (stc.ok ? '' : ' dis');
+      setModeLabel(stRow, 'sat', 'SAT');
+      stRow.title = stc.ok ? 'Satellites — next passes, a sky track and Doppler correction' : `Satellites are not available: ${stc.why}`;
+      if (!stc.ok) stRow.setAttribute('aria-disabled', 'true');
+      stRow.onclick = () => { close(); deps.openSat!(); };
+      grid.appendChild(stRow);
     }
 
     const sole = deps.soleDecoder();

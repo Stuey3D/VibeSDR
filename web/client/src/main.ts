@@ -51,6 +51,8 @@ import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as 
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
+import { SatPanel } from './satellites';   // ★ V12 satellites — the picker, the readout, the DOPPLER button
+import { satCapFrom, satChanText, satStateWord } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -940,6 +942,7 @@ async function loadAudioPolicy(httpBase: string) {
     aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
     avReadCap(j);                // ★ V12 the aircraft datalink (ACARS / VDL2): the same three states, and its bands
     sdReadCap(j);                // ★ V12 radiosondes (RS41): the same three states, and its bands
+    satReadCap(j);               // ★ V12 satellites: `doppler` (a version) / `dopplerWhy` — absent = no entry at all
     // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
     //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
     decWhy = parseDecWhy(j);
@@ -1977,6 +1980,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAvdata: (r) => onAvReport(r),
     onAvdataError: (why: string) => { showPill(why, 7000); if (avOn && !avReport) avUiOff(); },
     onSondes: (r) => onSdReport(r),
+    onSatList: (l) => satPanelGet()?.onList(l),
+    onSat: (r) => {
+      const p = satPanelGet();
+      const was = !!p?.readout();
+      p?.onReadout(r);
+      // ★ an ending or a refusal says why, once (no flashing, no repeat)
+      if (r.state === 'OFF' && r.why && (was || !p?.open)) showPill(r.why, 6000);
+      renderFreq();
+    },
+    onSatTrack: (t) => satPanelGet()?.onTrack(t),
     onSondesError: (why: string) => { showPill(why, 7000); if (sdOn && !sdReport) sdUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
@@ -3935,7 +3948,10 @@ function renderFrame(frameTs: number) {
   renderClock.tick(frameTs);
   if (renderCount++ % renderEvery(renderClock.hz(), renderHz()) !== 0) return;
 
-  wf.vfoHz = spec.frequency;
+  /* ★★ V12 SATELLITE DOPPLER — THE MARKER GOES WHERE THE CHANNEL IS (brief §10 TRAP): the dial shows the nominal, the
+   *  channel sits up to ±10 kHz off it, and a marker on the nominal would sit beside the trace looking broken. Between
+   *  the readouts (twice a second) the offset moves on at the readout's own rate, so the needle glides, never steps. */
+  wf.vfoHz = spec.frequency + satMarkerOffset();
   recBufCheck();   // ★ V12 record buffer's retune rule — a string compare when nothing moved, nothing at all when Off
   vfoRecBufCheck();   // ★★★ …and each VFO's own, while A/B records per VFO
   guard('web-render', 'overlays', updateViewOverlays);
@@ -10215,6 +10231,30 @@ function sdRender() {
   sdView.update(sondeItems(r), sondeRows(r), sondeStatus(r), r ? r.sondes.length : 0, myPos());
   if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
 }
+/* ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md, satellites.ts): the panel is made on first use. */
+function satMarkerOffset(): number {
+  const r = satPanel?.readout();
+  if (!r || (r.state !== 'TRACK' && r.state !== 'COAST') || r.offset == null) return 0;
+  const dt = Math.min(1, Math.max(0, (performance.now() - (satPanel?.readoutAt ?? 0)) / 1000));
+  return r.offset + (r.rate ?? 0) * dt;
+}
+let satCap: { ok: boolean; why: string } | null = null;
+let satPanel: SatPanel | null = null;
+function satReadCap(j: any) { satCap = satCapFrom(j); satPanel?.setCap(satCap); }
+function satPanelGet(): SatPanel | null {
+  if (!satCap) return satPanel;
+  if (!satPanel) {
+    satPanel = new SatPanel({
+      list: () => spec?.satList(),
+      track: (n, a, l) => spec?.satTrack(n, a, l),
+      lock: (on, norad) => spec?.satLock(on, norad),
+      tune: (hz, mode) => tuneTo({ frequency: hz, mode } as unknown as SearchResult),
+    });
+    satPanel.setCap(satCap);
+  }
+  return satPanel;
+}
+
 /** ★ A report (on) or the server's `sondes_off` (null). */
 function onSdReport(r: SondeReport | null) {
   if (!r) { if (sdOn) { audio?.holdHealing(6000); sdUiOff(); } return; }
@@ -10685,6 +10725,9 @@ function buildControls() {
     avOn:          () => avOn,
     toggleAv:      toggleAvMode,
     sdCap:         () => sdCap,          // ★ V12 radiosondes
+    satCap:        () => satCap,         // ★ V12 satellites (opens the picker)
+    satOn:         () => !!satPanel?.readout(),
+    openSat:       () => satPanelGet()?.show(),
     sdOn:          () => sdOn,
     toggleSd:      toggleSdMode,
     ndbCap:        () => ndbCap,
@@ -15114,6 +15157,11 @@ setWholeRadioKeys(() => {
                               press: () => { toggleDabMode(); closePanels(); } });
   add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
   add('ndb', 'NDB', ndbCap, ndbOn, toggleNdbMode, 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map');
+  // ★★ V12 SATELLITES: not a whole-radio mode — it opens the picker (passes, the sky track, DOPPLER). Only where the server
+  //    offers `doppler` (the radio reaches a listed downlink); greyed with the reason when not ready.
+  if (satCap) keys.push({ id: 'sat', label: 'SAT', on: !!satPanel?.readout(), dis: !satCap.ok,
+                          title: satCap.ok ? 'Satellites — next passes, a sky track and Doppler correction' : `Satellites are not available: ${satCap.why}`,
+                          press: () => { satPanelGet()?.toggle(); closePanels(); } });
   return keys;
 });
 
@@ -20539,6 +20587,10 @@ function cardFreqText(): { main: string; fine: string; unit: string; chan?: stri
     return r && { ...r, chan: b ? `${b.name} BAND` : 'NO DIGITAL BAND' };
   }
   const hz = Math.round(spec.frequency);
+  /* ★★ V12 A SATELLITE DOPPLER LOCK: the digits stay on the NOMINAL (the server snapped the dial there) and the white text
+   *  beside them is "ISS · ▼ 3.21 kHz · TRACK" (brief §10) — the same slot the airband channel uses. */
+  { const ro = satPanel?.readout() ?? null; const t = satChanText(ro);
+    if (t) { const r = cardFreqPlain(hz); return r && { ...r, chan: `${t} \u00B7 ${satStateWord(ro)}` }; } }
   // ★ An airband channel: its NAME is the figure, in MHz — see renderFreq.
   const ch = airChannelNow();
   if (ch && freqUnit === 'mhz') return { main: ch.name, fine: '', unit: 'MHz', chan: airChanTag(ch, true) };

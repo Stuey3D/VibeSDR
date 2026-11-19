@@ -339,12 +339,16 @@ public:
         return "system";
     }
 
-    /** Is any listed downlink inside [lo, hi] Hz (the radio's tuning range)? — the reach gate (no dead controls). */
-    bool reaches(double lo, double hi) const {
+    /** "Can this radio receive [lo, hi] Hz?" — the radio's tuning ranges (and a locked window), from the caller. */
+    using ReachFn = std::function<bool(double lo, double hi)>;
+    static ReachFn rangeReach(double lo, double hi) { return [lo, hi](double a, double b) { return a >= lo && b <= hi; }; }
+    /** Is any listed downlink receivable? — the reach gate (no dead controls). */
+    bool reaches(const ReachFn& r) const {
         for (auto& d : defs_) for (auto& t : d.tx)
-            if (t.hz >= lo && (t.passband() ? t.hiHz : t.hz) <= hi) return true;
+            if (r(t.hz, t.passband() ? t.hiHz : t.hz)) return true;
         return false;
     }
+    bool reaches(double lo, double hi) const { return reaches(rangeReach(lo, hi)); }
 
     // ── the lock ──
     /** Press Doppler at `dialHz` (brief §8). Matches the listed downlinks within ±12 kHz; one up → TRACK; several →
@@ -494,7 +498,8 @@ public:
     /** The picker's list: every listed bird, its elements' age, where it is now and its next passes; `lo`/`hi` = the
      *  radio's tuning range (a downlink outside it is marked "reach":false — the client does not offer it).
      *  ★ Bounded: ≤ 4 passes a bird in the next 24 h. */
-    std::string listJson(const Clock& clk, double lo, double hi) {
+    std::string listJson(const Clock& clk, double lo, double hi) { return listJson(clk, rangeReach(lo, hi)); }
+    std::string listJson(const Clock& clk, const ReachFn& reachFn) {
         std::lock_guard<std::mutex> lk(m_);
         std::string j = "{\"type\":\"sat_list\",\"time\":\"" + timeStateLocked(clk) + "\",\"located\":" + (obs_.valid ? "true" : "false");
         j += ",\"now\":" + fmtNum(clk.unix, 1) + ",\"sats\":[";
@@ -512,7 +517,7 @@ public:
             for (size_t k = 0; k < d.tx.size(); ++k) {
                 const Transmitter& t = d.tx[k];
                 if (k) j += ",";
-                const bool reach = t.hz >= lo && (t.passband() ? t.hiHz : t.hz) <= hi;
+                const bool reach = reachFn(t.hz, t.passband() ? t.hiHz : t.hz);
                 j += "{\"label\":\"" + jsonEsc(t.label) + "\",\"hz\":" + fmtNum(t.hz, 0);
                 if (t.passband()) j += ",\"hiHz\":" + fmtNum(t.hiHz, 0);
                 j += ",\"mode\":\"" + t.mode + "\",\"loop\":\"" + t.loop + "\"";
