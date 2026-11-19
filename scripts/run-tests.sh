@@ -281,6 +281,8 @@ flags_for() {
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "-O2 -lpthread" ;;
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
     test-rs41|test-rs41-service) echo "-O2 -lpthread" ;;
+    # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
+    test-sat-orbit|test-sat-engine) echo "-O2 -lpthread" ;;
     # ★ the server's zone name reads the Mac's own zone through CoreFoundation (vibe_tz_id.h).
     test-tz-id) [ "$(uname)" = Darwin ] && echo "-framework CoreFoundation" || echo "" ;;
     *)               echo "" ;;
