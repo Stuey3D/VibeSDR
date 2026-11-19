@@ -11,7 +11,7 @@
 #    can shadow a module and nothing extra has to be installed.
 # ★ Env (for tests): VIBE_HWD_SOCK, VIBE_STATE_DIR, VIBE_HWD_DRYRUN=1 (log poweroff/reboot instead of doing them),
 #   VIBE_SYSFS (prefix for /sys, a fake tree in tests), VIBE_ALSA_CARD.
-import asyncio, ctypes, fcntl, glob, grp, json, math, os, pwd, signal, struct, subprocess, sys, threading, time
+import asyncio, collections, ctypes, fcntl, glob, grp, json, math, os, pwd, signal, struct, subprocess, sys, threading, time
 
 SOCK = os.environ.get("VIBE_HWD_SOCK", "/run/vibe-hwd.sock")
 STATE_DIR = os.environ.get("VIBE_STATE_DIR", "/var/lib/vibe-state")
@@ -51,6 +51,17 @@ CHRG_TERM, CHRG_STS = 0xE6, 0xEB         # read only (FullJudge): the terminatio
 # ★★ WRITTEN AS ONE FIXED VALUE, never read-modify-write: 0xDD = USB_VLIM_EN | 4.5 V floor (sel 5, the driver's own) |
 #    USB_ILIM_EN | 2 A (sel 5). The driver's value is 0xDB (the same with 1.5 A) — read at start-up on handheld62.
 CHRG_IN_2A = 0xDD
+# ★★ THE INPUT VOLTAGE FLOOR — A TEST SETTING (h80, 2026-11-19). Stuart's h79 log: on the charger, near full, the RTL-SDR
+#    dropped off USB 0.6–6 s after starting with the port at 4.84–4.89 V — the suspicion is the dongle's start-up surge
+#    pulling the input under the 4.5 V floor. R36S HARDWARE → INPUT FLOOR (TEST) picks 4.5 V (the driver's and today's),
+#    4.3 V or 4.0 V. Still ONE FIXED VALUE per setting, never read-modify-write: bit 7 USB_VLIM_EN, bits 6:4 USB_VLIM_SEL
+#    = 4.0 + 0.1 × sel V (Rockchip's BSP rk817_charger.c input_voltage table, INPUT_VOL_4000MV + (mV − 4000) / 100; the
+#    mainline driver writes sel 5 = 4.5 V), bit 3 USB_ILIM_EN, bits 2:0 = 5 → 2 A, kept.
+def chrg_in_for(vlim_mv):
+    return 0x80 | (((vlim_mv - 4000) // 100) << 4) | 0x08 | 5
+VLIM_DEFAULT_MV = 4500
+VLIM_CHOICES = {mv: chrg_in_for(mv) for mv in (4500, 4300, 4000)}     # 0xDD · 0xBD · 0x8D
+assert VLIM_CHOICES[4500] == CHRG_IN_2A
 class _SmbusData(ctypes.Union):
     _fields_ = [("byte", ctypes.c_uint8), ("word", ctypes.c_uint16), ("block", ctypes.c_uint8 * 34)]
 
@@ -82,6 +93,39 @@ def pmic_read(dev, reg):
 
 def pmic_write(dev, reg, val):
     _smbus(dev, SMBUS_WRITE, reg, val)
+
+SMBUS_I2C_BLOCK_DATA = 8
+
+class PmicFd:
+    """★ THE FAST TRACE'S OWN PMIC HANDLE: one fd kept open (I2C_SLAVE_FORCE once), so a sample every 20 ms is a few
+    ioctls and no open()/close(). Every read is ONE i2c transfer (register-pointer write + repeated-start read, under
+    the adapter's lock) — I2C_SMBUS byte data for one register, I2C_SMBUS I2C_BLOCK_DATA for a run of them (the rk817
+    auto-increments: the mainline driver's own regmap_bulk_read of BAT_VOL_H/L etc. relies on it), so a 16-bit ADC
+    figure's two halves come from the same transfer. Read only — this class has no write."""
+    def __init__(self, dev):
+        self.fd = os.open(dev, os.O_RDWR)
+        try:
+            fcntl.ioctl(self.fd, I2C_SLAVE_FORCE, PMIC_ADDR)
+        except OSError:
+            os.close(self.fd)
+            raise
+
+    def byte(self, reg):
+        d = _SmbusData()
+        fcntl.ioctl(self.fd, I2C_SMBUS, _SmbusIoctl(SMBUS_READ, reg, SMBUS_BYTE_DATA, ctypes.pointer(d)))
+        return d.byte
+
+    def block(self, reg, n):
+        d = _SmbusData()
+        d.block[0] = n
+        fcntl.ioctl(self.fd, I2C_SMBUS, _SmbusIoctl(SMBUS_READ, reg, SMBUS_I2C_BLOCK_DATA, ctypes.pointer(d)))
+        return bytes(d.block[1:1 + n])
+
+    def close(self):
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
 
 def pmic_bus():
     """/dev/i2c-N of the RK817 (address 0x20 on i2c@ff180000) — found by its device node, never assumed."""
@@ -568,9 +612,15 @@ class Stress:
     the speaker muted — none of it saved, all of it put back by stop() (and by any restart: hwd.json is untouched).
     ★ Thermal: over STRESS_HOT_C two burners pause, over STRESS_HOTTER_C all four; under STRESS_COOL_C they run again.
     ★ No GPU load: any clock step off the 300 MHz pin has reset this board's GPU (BOOST_TARGETS' notes), and a
-      synthetic GL load means a second display client — not cheap, not safe. The radio is left running as it is."""
+      synthetic GL load means a second display client — not cheap, not safe.
+    ★★ THE RADIO IS PART OF THE LOAD (Stuart 2026-11-15: "SDR at max sample rate with audio muted and no waterfall";
+       built h80): the UI does it, because the UI is the radio's client — while a STRESS run is RUNNING the native UI
+       (handheld-ui battery_cal.h StressSdr) puts the radio on the top sample rate the engine offers it, keeps it
+       decoding and streaming (the speaker muted here, the waterfall not drawn — the calibration's own screen), and
+       puts its rate back when the run ends or is cancelled. wire() tells that screen how many busy loops run and why."""
     def __init__(self, hwd, spawn=None):
         self.hwd, self.procs, self.running, self.gov = hwd, [], 0, {}
+        self.temp_c, self.why = None, ""
         self._spawn = spawn or self._spawn_burner
 
     @staticmethod
@@ -622,6 +672,7 @@ class Stress:
         t = rd_num(THERMAL, 1000.0)
         if t is None:
             return
+        self.temp_c = t
         want = 0 if t >= STRESS_HOTTER_C else STRESS_BURNERS // 2 if t >= STRESS_HOT_C else \
             len(self.procs) if t < STRESS_COOL_C else self.running
         want = min(want, len(self.procs))
@@ -633,6 +684,13 @@ class Stress:
                     pass
             log("stress: %.1f °C — %d of %d busy loops running" % (t, want, len(self.procs)))
             self.running = want
+        # ★ why fewer than all: the temperature that paused them (the screen's "2 of 4 — 76 °C")
+        self.why = "" if self.running >= len(self.procs) else "%.0f °C" % t
+
+    def wire(self):
+        """For state.calib.stress: {on, loops, of, tempC, why}."""
+        return {"on": self.on, "loops": self.running if self.procs else 0, "of": STRESS_BURNERS,
+                "tempC": None if self.temp_c is None else round(self.temp_c, 1), "why": self.why}
 
     def stop(self):
         if not self.procs and not self.gov:
@@ -644,7 +702,7 @@ class Stress:
                 pr.wait(timeout=2)
             except Exception:
                 pass
-        self.procs, self.running = [], 0
+        self.procs, self.running, self.why = [], 0, ""
         for p, g in self.gov.items():
             if g:
                 try:
@@ -663,26 +721,26 @@ class Stress:
 class ChargerWatch:
     """★★★ THE CHARGE PORT, WATCHED CLOSELY (Stuart, 2026-11-15 log): vibe-hwd took up to 58 s to notice a plug-in (a
     1 s look, and a 30 s back-off after any PMIC error), the SDR dropped off USB at the very moment of plug-in, and the
-    charge LED goes off / on at ~20 % while the bank still puts out 5.2 V. Suspected: the port's voltage (4.67–4.85 V
-    measured while the bank gives 5.1–5.2 V — cable + connector drop) dipping under CHRG_IN's 4.5 V input floor (VLIM),
-    where the PMIC stops taking current from the port. So:
-      • the plug edge is seen within POLL_S (sysfs `online`, read 10 times a second — one small file) and the 2 A
-        input limit goes on AT the edge, not up to a second (or 30 s) later;
-      • for TRACE_S after every plug-in AND plug-out, a line every POLL_S: the port's voltage, the battery's voltage,
-        current and status, and the PMIC's CHRG_IN / CHRG_OUT — the sag (or not) at the moment the SDR drops;
+    charge LED goes off / on at ~20 % while the bank still puts out 5.2 V. So:
+      • the plug edge is seen within POLL_S (sysfs `online`, read 10 times a second — one small file; the driver sets it
+        from the PMIC's plug interrupt, so unlike its voltages it is not 8 s old) and the input limit goes on AT the
+        edge, not up to a second (or 30 s) later;
+      • every edge starts a FastTrace burst (h80: the PMIC's registers every 20 ms, the 2 s before and 3 s after) — it
+        replaces the old 5 s of sysfs lines, whose figures only change every 8 s (the h79 log: 50 identical lines);
       • a line whenever the battery's status flips (Charging ↔ Not charging / Discharging / Full) with the cord still
         in, with the port voltage at that moment — the LED symptom.
-    ★★ CHRG_IN's VALUE IS NOT CHANGED HERE (0xDD stays — the VLIM decision waits for this data).
+    ★★ THE VALUE written is the INPUT FLOOR test setting's (VLIM_CHOICES; 0xDD = 4.5 V, the default) — one fixed byte
+       per setting, never a read-modify-write.
     ★ Bounded: a handful of numbers, no history; the flip lines are capped at FLIP_MAX a minute (the rest counted).
-    The PMIC reads are the same atomic SMBus transfers as the limit's (pmic_read), never a read-modify-write."""
-    POLL_S, TRACE_S, CHECK_S, ERR_BACKOFF_S, FLIP_MAX = 0.1, 5.0, 1.0, 5.0, 20
+    The PMIC reads are the same atomic SMBus transfers as the limit's (pmic_read)."""
+    POLL_S, CHECK_S, ERR_BACKOFF_S, FLIP_MAX = 0.1, 1.0, 5.0, 20
 
-    def __init__(self, dev):
+    def __init__(self, dev, target=lambda: CHRG_IN_2A, trace=None):
         self.dev = dev
+        self.target = target          # () → the CHRG_IN byte to hold (the INPUT FLOOR setting)
+        self.trace = trace            # FastTrace or None
         self.online = None            # last `online` seen (None before the first look)
         self.status = None
-        self.trace_t0 = None          # the edge's time; tracing until trace_t0 + TRACE_S
-        self.trace_edge = ""
         self.next_check = 0.0
         self.err_logged_at = -1e9
         self.flip_min, self.flip_n, self.flip_dropped = -1, 0, 0
@@ -703,57 +761,52 @@ class ChargerWatch:
             log("charger: PMIC %s failed:" % what, e)
 
     def apply_limit(self, why, now):
-        """CHRG_IN to 0xDD if it is not (one atomic read; a write only when needed). True when it is (or was) 0xDD."""
+        """CHRG_IN to the setting's byte if it is not (one atomic read; a write only when needed). True when it is."""
         if not self.dev:
             return False
+        want = self.target()
         try:
             old = pmic_read(self.dev, CHRG_IN)
-            if old == CHRG_IN_2A:
+            if old == want:
                 return True
-            pmic_write(self.dev, CHRG_IN, CHRG_IN_2A)
+            pmic_write(self.dev, CHRG_IN, want)
             got = pmic_read(self.dev, CHRG_IN)
-            log("charger: input limit 2 A at %s (CHRG_IN 0x%02x -> 0x%02x)%s" %
-                (why, old, got, "" if got == CHRG_IN_2A else " ✗ DID NOT STICK"))
-            return got == CHRG_IN_2A
+            fl = vlim_from_chrg_in(want)
+            log("charger: input limit 2 A, floor %.1f V%s at %s (CHRG_IN 0x%02x -> 0x%02x)%s" %
+                (fl, "" if want == CHRG_IN_2A else " (TEST)", why, old, got, "" if got == want else " ✗ DID NOT STICK"))
+            return got == want
         except OSError as e:
             self._err("input limit", e)
             self.next_check = now + self.ERR_BACKOFF_S     # ★ 5 s, not 30: a plug-in still gets its limit soon
             return False
 
     def sample(self):
-        """The trace line's figures: port V, battery V / A, status, CHRG_IN, CHRG_OUT."""
+        """The flip line's figures (sysfs — the driver's 8 s values): port V, battery V / A, status."""
         return {"port": _uv(CHG + "/voltage_avg"), "batV": _uv(BAT + "/voltage_avg"), "batA": _uv(BAT + "/current_avg"),
                 "status": rd(BAT + "/status", "Unknown")}
-
-    def trace_line(self, now, online, s):
-        cin, cout = self._pmic(CHRG_IN), self._pmic(CHRG_OUT)
-        return ("charger: %s %+.1fs online %d port %s bat %s %s %s IN %s OUT %s" %
-                (self.trace_edge, now - self.trace_t0, online, _f(s["port"], "V"), _f(s["batV"], "V"),
-                 _f(s["batA"], "A", True), s["status"], "?" if cin is None else "0x%02x" % cin,
-                 "?" if cout is None else "0x%02x" % cout))
 
     def tick(self, now):
         online = rd(CHG + "/online", "0") == "1"
         status = rd(BAT + "/status", "Unknown")
+        if self.trace:
+            self.trace.set_online(online)
         if self.online is None:
             self.online, self.status = online, status
             if online:
                 self.apply_limit("start-up", now)
             return
         if online != self.online:
-            # ★ the edge: the limit FIRST (the SDR is drawing through this port right now), then the trace begins
+            # ★ the edge: the limit FIRST (the SDR is drawing through this port right now), then the trace's burst
             if online and self.apply_limit("plug-in", now):
                 self.next_check = now + self.CHECK_S
-            self.trace_t0, self.trace_edge = now, "plug-in" if online else "plug-out"
-            log("charger: %s seen (within %.1f s) — tracing the port for %.0f s" % (self.trace_edge, self.POLL_S, self.TRACE_S))
+            edge = "plug-in" if online else "plug-out"
+            if self.trace:
+                self.trace.edge(edge, now)
+            log("charger: %s seen (within %.1f s, mono %.3f)%s" % (edge, self.POLL_S, now,
+                " — the fast trace follows" if self.trace and self.trace.reader else ""))
         elif online and status != self.status:
             self._flip(now, status)
         self.online, self.status = online, status
-        if self.trace_t0 is not None:
-            if now - self.trace_t0 <= self.TRACE_S + 1e-6:
-                log(self.trace_line(now, online, self.sample()))
-            else:
-                self.trace_t0 = None
         if online and now >= self.next_check:
             self.next_check = now + self.CHECK_S
             self.apply_limit("check", now)            # (a failure moves next_check out to ERR_BACKOFF_S)
@@ -775,6 +828,311 @@ class ChargerWatch:
              "?" if cin is None else "0x%02x" % cin))
 
 
+# ── the drop-triggered charger trace (h80, 2026-11-19) ────────────────────────────────────────────────────────────────
+# ★★★ WHY: Stuart's h79 log (debuglog-f0d2614a): with the charger in and the battery at/near full (4.17–4.19 V, still
+#     taking 0.33–0.40 A) the RTL-SDR V4 dropped off USB ("usb 1-1: USB disconnect") 0.6–6 s after starting, again and
+#     again; on battery never. The old 100 ms plug trace was useless for it: its sysfs figures come from the rk817
+#     driver's own poll, every 8 s (rk817_charger.c queue_delayed_work 8000 ms), so 5 s of identical lines — and it ran
+#     only at plug edges. So this reads the PMIC's REGISTERS directly, every SAMPLE_S, into a ring of RING_S, and when a
+#     USB device disappears it logs the ring plus POST_S after it; the same burst at every plug-in / plug-out.
+# ★★ WHAT IS READ (all read only, one i2c transfer each — PmicFd):
+#     CHRG_OUT 0xE4 + CHRG_IN 0xE5 (one 2-byte block), CHRG_STS 0xEB (bits 6:4 the charger's state, 7 BAT_EXS, 3 BAT_OVP,
+#     2 CHRG_IN_CLAMP, 1 USB_EXS, 0 USB_EFF — BSP rk817_charger.c's reg_fields), and the gas gauge's ADC registers with
+#     the MAINLINE DRIVER'S OWN SCALING (drivers/power/supply/rk817_charger.c, rk817_read_props; addresses from
+#     include/linux/mfd/rk808.h):
+#       BAT_VOL 0x78/0x79 (big-endian 16)   µV = k × raw + 1000 × b
+#       BAT_CUR 0x7A/0x7B (signed BE 16)    µA = raw × 172 / res_div   (+ = into the battery, as sysfs current_avg)
+#       USB_VOL 0x7E/0x7F (BE 16)           mV = (k × raw / 1000 + b) × 60 / 46   (raw ≤ 1 → 0, as the driver)
+#     where k = (4025 − 2300) × 1000 / (VCALIB1 − VCALIB0), b = 4025 − k × VCALIB1 / 1000 (VCALIB0 0x93/0x94, VCALIB1
+#     0x95/0x96, C integer arithmetic), and res_div = 2 for a 20 mΩ sense resistor, 1 for 10 mΩ (the device tree's
+#     rockchip,resistor-sense-micro-ohms — read from /sys/firmware; unknown → the current is left out, never guessed).
+#     These are the same registers sysfs voltage_avg / current_avg / the charger's voltage_avg are made from — read at
+#     20 ms instead of 8 s. ★ How often the PMIC itself refreshes them is not documented in either driver: a run of
+#     identical samples in the trace is the ADC's own cadence, and the "ADC check" line compares them with sysfs.
+#     ✗ Left out: SYS_VOL 0x80/0x81 — neither driver scales it, so its volts are not known.
+# ★ BOUNDED: the ring is RING_S / SAMPLE_S samples of small tuples; it runs only while the charger is in AND a USB device
+#   is plugged (or a plug burst is under way); bursts are capped (BURST_MAX per BURST_WINDOW_S) and their identical
+#   samples collapsed; the sampler's own CPU time is measured and logged with every summary.
+STS_STATES = ("off", "dead", "trickle", "cccv", "FINISH", "USB-OVP", "bat-temp", "bat-timer")
+
+def _cdiv(a, b):
+    """C integer division (truncates toward zero) — the driver's arithmetic."""
+    q = abs(a) // abs(b)
+    return q if (a >= 0) == (b > 0) else -q
+
+def adc_coeffs(vcalib0, vcalib1):
+    """(k, b) as rk817_bat_calib_vol computes them, or None when the calibration words make no sense."""
+    if vcalib1 is None or vcalib0 is None or vcalib1 <= vcalib0:
+        return None
+    k = _cdiv((4025 - 2300) * 1000, vcalib1 - vcalib0)
+    return k, 4025 - _cdiv(k * vcalib1, 1000)
+
+def adc_bat_v(raw, kb):
+    return None if kb is None or raw is None else (kb[0] * raw + 1000 * kb[1]) / 1e6
+
+def adc_usb_v(raw, kb):
+    if kb is None or raw is None:
+        return None
+    if raw <= 1:
+        return 0.0
+    return _cdiv((_cdiv(kb[0] * raw, 1000) + kb[1]) * 60, 46) / 1000.0
+
+def adc_bat_a(raw, res_div):
+    return None if not res_div or raw is None else _cdiv(raw * 172, res_div) / 1e6
+
+def sense_res_div():
+    for p in glob.glob(SYS + "/firmware/devicetree/base/i2c@*/pmic@20/charger/rockchip,resistor-sense-micro-ohms"):
+        try:
+            with open(p, "rb") as f:
+                b = f.read(4)
+        except OSError:
+            continue
+        if len(b) == 4:
+            v = int.from_bytes(b, "big")
+            return {20000: 2, 10000: 1}.get(v)
+    return None
+
+def sts_text(sts):
+    if sts is None:
+        return "STS ?"
+    bits = [STS_STATES[(sts >> 4) & 7]]
+    if sts & 0x04: bits.append("CLAMP")
+    if sts & 0x02: bits.append("usb")
+    if sts & 0x01: bits.append("eff")
+    if sts & 0x08: bits.append("BAT-OVP")
+    if not sts & 0x80: bits.append("NO-BAT")
+    return "/".join(bits)
+
+def usb_devices(root=None):
+    """The USB devices on the bus now (sysfs names like '1-1', '1-1.2' — no interfaces, no root hubs)."""
+    root = root or SYS + "/bus/usb/devices"
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return frozenset()
+    return frozenset(n for n in names if ":" not in n and "-" in n and n[0].isdigit())
+
+
+class FastTrace:
+    SAMPLE_S, RING_S, POST_S, PLUG_POST_S, MAX_POST_S = 0.02, 2.0, 1.0, 3.0, 6.0
+    BURST_MAX, BURST_WINDOW_S, SUMMARY_S, CHANGE_MAX = 10, 600.0, 30.0, 20
+
+    def __init__(self, reader=None, usb=usb_devices, res_div=None, vlim_mv=lambda: VLIM_DEFAULT_MV):
+        """reader(): a PmicFd-like object (byte / block) or None; usb(): the set of USB device names."""
+        self.reader, self.usb, self.res_div, self.vlim_mv = reader, usb, res_div, vlim_mv
+        self.ring = collections.deque(maxlen=int(round(self.RING_S / self.SAMPLE_S)) + 1)
+        self.kb, self.kb_at = None, -1e9
+        self.online = False
+        self.devs = None              # last USB set seen while sampling
+        self.burst = None             # {"n", "kind", "what", "t0", "end", "pre": [...], "post": [...], "marks": {}}
+        self.burst_n, self.burst_times, self.burst_dropped = 0, collections.deque(), 0
+        self.last_sts, self.change_min, self.change_n = None, -1, 0
+        self.sum_t0, self.sum = None, None
+        self.cpu_t0 = self.cpu_w0 = None
+        self.gone_at = {}             # name → when it disappeared (for "back after N s")
+        self.err_at, self.checked = -1e9, False
+        self.lock = threading.Lock()
+
+    # ── input from ChargerWatch (the event loop) ──
+    def set_online(self, online):
+        self.online = online
+
+    def edge(self, kind, t):
+        """A plug-in / plug-out at monotonic t: a burst (the ring before it, PLUG_POST_S after)."""
+        with self.lock:
+            self._start_burst(kind, "the cord %s" % ("went in" if kind == "plug-in" else "came out"), t, self.PLUG_POST_S)
+
+    # ── sampling ──
+    def _coeffs(self, t):
+        if self.kb is None or t - self.kb_at >= 60:
+            self.kb_at = t
+            try:
+                c0, c1 = self.reader.block(0x93, 2), self.reader.block(0x95, 2)
+                self.kb = adc_coeffs(int.from_bytes(c0, "big"), int.from_bytes(c1, "big"))
+            except (OSError, AttributeError):
+                self.kb = None
+        return self.kb
+
+    def read(self, t):
+        """One sample: (t, sts, cin, cout, bat_raw, cur_raw, usb_raw) — None for whatever could not be read."""
+        r = self.reader
+        sts = cin = cout = bv = bc = uv = None
+        if r is not None:
+            try:
+                e4 = r.block(0xE4, 2); cout, cin = e4[0], e4[1]
+                sts = r.byte(CHRG_STS)
+                g = r.block(0x78, 4)
+                bv = int.from_bytes(g[0:2], "big"); bc = int.from_bytes(g[2:4], "big", signed=True)
+                uv = int.from_bytes(r.block(0x7E, 2), "big")
+            except OSError as e:
+                if t - self.err_at >= 30:
+                    self.err_at = t
+                    log("chgtrace: PMIC read failed:", e)
+        return (t, sts, cin, cout, bv, bc, uv)
+
+    def step(self, t):
+        """Once a SAMPLE_S (the sampler thread; tests call it on a fake clock). Returns True when it sampled."""
+        with self.lock:
+            if self.burst is None and not self.online:
+                # on battery: nothing read at all (not even the USB list)
+                self.ring.clear(); self.devs = None; self.sum_t0 = None; self.last_sts = None
+                return False
+            devs = self.usb()
+            if self.burst is None and not devs and not self.devs:
+                # on the cord with no radio: nothing can drop; the next plug-in of a radio starts the ring
+                self.ring.clear(); self.devs = devs; self.sum_t0 = None
+                return False
+            self._coeffs(t)
+            s = self.read(t)
+            if not self.checked and s[4] is not None:
+                self.checked = True
+                self._adc_check(s)
+            mark = ""
+            if self.devs is not None:
+                for n in sorted(self.devs - devs):
+                    mark += " ★ USB %s GONE" % n
+                    self.gone_at[n] = t
+                    if self.burst is None:
+                        self._start_burst("drop", "USB %s disappeared" % n, t, self.POST_S)
+                    else:   # ★ inside a burst already: noted in it, and the burst runs on POST_S past it
+                        self.burst["end"] = min(self.burst["t0"] + self.MAX_POST_S, max(self.burst["end"], t + self.POST_S))
+                for n in sorted(devs - self.devs):
+                    since = self.gone_at.pop(n, None)
+                    mark += " ★ USB %s BACK%s" % (n, "" if since is None else " after %.1f s" % (t - since))
+                    if self.burst is None:
+                        log("chgtrace: USB %s back%s (mono %.3f)" % (n, "" if since is None else " after %.1f s" % (t - since), t))
+            self.devs = devs
+            if self.burst is not None:
+                self.burst["post"].append((s, mark))
+            else:
+                self.ring.append((s, mark))
+            self._watch_sts(s)
+            self._summary(s)
+            if self.burst is not None and t >= self.burst["end"] - 1e-9:
+                self._dump(self.burst)
+                # the post samples become the ring's newest (a drop right after a burst still has its "before")
+                for x in self.burst["post"][-self.ring.maxlen:]:
+                    self.ring.append(x)
+                self.burst = None
+            return True
+
+    def _start_burst(self, kind, what, t, post):
+        if self.burst is not None:
+            self.burst["end"] = min(self.burst["t0"] + self.MAX_POST_S, max(self.burst["end"], t + post))
+            self.burst["what"] += "; then %s at %+.3f" % (what, t - self.burst["t0"])
+            return
+        while self.burst_times and t - self.burst_times[0] > self.BURST_WINDOW_S:
+            self.burst_times.popleft()
+        if len(self.burst_times) >= self.BURST_MAX:
+            self.burst_dropped += 1
+            log("chgtrace: %s at mono %.3f — not traced (%d bursts in %.0f min already; %d skipped)" %
+                (what, t, self.BURST_MAX, self.BURST_WINDOW_S / 60, self.burst_dropped))
+            return
+        self.burst_times.append(t)
+        self.burst_n += 1
+        self.burst = {"n": self.burst_n, "kind": kind, "what": what, "t0": t, "end": t + post,
+                      "pre": list(self.ring), "post": []}
+        self.ring.clear()
+
+    # ── output ──
+    def _fmt(self, s):
+        t, sts, cin, cout, bv, bc, uv = s
+        hx = lambda x: "??" if x is None else "%02x" % x
+        return "%s IN %s OUT %s bat %s %s port %s" % (sts_text(sts), hx(cin), hx(cout), _f(adc_bat_v(bv, self.kb), "V"),
+                                                     _f(adc_bat_a(bc, self.res_div), "A", True), _f(adc_usb_v(uv, self.kb), "V"))
+
+    def _stats(self, samples):
+        pv = [adc_usb_v(s[6], self.kb) for s in samples]; pv = [x for x in pv if x is not None]
+        ba = [adc_bat_a(s[5], self.res_div) for s in samples]; ba = [x for x in ba if x is not None]
+        bv = [adc_bat_v(s[4], self.kb) for s in samples]; bv = [x for x in bv if x is not None]
+        clamp = sum(1 for s in samples if s[1] is not None and s[1] & 0x04)
+        f3 = lambda xs, u, sg=False: "?" if not xs else "%s/%s/%s" % (_f(min(xs), u, sg), _f(sum(xs) / len(xs), u, sg), _f(max(xs), u, sg))
+        return "port %s · bat %s %s (min/mean/max) · input clamp %d of %d samples" % (f3(pv, "V"), f3(bv, "V"), f3(ba, "A", True), clamp, len(samples))
+
+    def _dump(self, b):
+        pre, post = b["pre"], b["post"]
+        t0 = b["t0"]
+        vl = self.vlim_mv()
+        log("chgtrace#%d %s: %s at mono %.3f s (≈ the kernel's [time]) — %.1f s before, %.1f s after, a sample every %d ms; "
+            "input floor %.1f V%s; %s" % (b["n"], b["kind"].upper(), b["what"], t0, len(pre) * self.SAMPLE_S,
+                                         len(post) * self.SAMPLE_S, round(self.SAMPLE_S * 1000), vl / 1000.0,
+                                         "" if vl == VLIM_DEFAULT_MV else " (TEST)", self._sysfs_now()))
+        prev, run_n, run_t = None, 0, None
+        tag = "chgtrace#%d" % b["n"]
+        for s, mark in pre + post:
+            body = self._fmt(s)
+            if body == prev and not mark:
+                run_n += 1; run_t = s[0]
+                continue
+            if run_n:
+                log("%s   … same ×%d to %+.3f" % (tag, run_n, run_t - t0))
+                run_n = 0
+            log("%s %+.3f %s%s" % (tag, s[0] - t0, body, mark))
+            prev = body if not mark else None
+        if run_n:
+            log("%s   … same ×%d to %+.3f" % (tag, run_n, run_t - t0))
+        log("%s end — %s" % (tag, self._stats([s for s, _ in pre + post])))
+
+    def _sysfs_now(self):
+        return "sysfs (the driver's 8 s figures): port %s bat %s %s" % (_f(_uv(CHG + "/voltage_avg"), "V"),
+                                                                       _f(_uv(BAT + "/voltage_avg"), "V"), _f(_uv(BAT + "/current_avg"), "A", True))
+
+    def _adc_check(self, s):
+        log("chgtrace: ADC check — registers: bat %s %s port %s (k,b %s, sense ÷%s) · %s" %
+            (_f(adc_bat_v(s[4], self.kb), "V"), _f(adc_bat_a(s[5], self.res_div), "A", True), _f(adc_usb_v(s[6], self.kb), "V"),
+             self.kb, self.res_div if self.res_div else "? — current left out", self._sysfs_now()))
+
+    def _watch_sts(self, s):
+        """★ a line whenever CHRG_STS changes while sampling (the charger's state, the clamp, USB_EXS / USB_EFF) — the h79
+        oddity (the port reading 0 V then 1.84 V for ~95 s with the console on battery after a plug-in) shows up as
+        exactly this kind of line. Capped at CHANGE_MAX a minute."""
+        sts = s[1]
+        if sts is None or sts == self.last_sts:
+            return
+        old, self.last_sts = self.last_sts, sts
+        if old is None:
+            return
+        m = int(s[0] // 60)
+        if m != self.change_min:
+            self.change_min, self.change_n = m, 0
+        self.change_n += 1
+        if self.change_n <= self.CHANGE_MAX:
+            log("chgtrace: CHRG_STS 0x%02x -> 0x%02x (%s -> %s) at mono %.3f — %s" %
+                (old, sts, sts_text(old), sts_text(sts), s[0], self._fmt(s)))
+
+    def _summary(self, s):
+        """Every SUMMARY_S while sampling on the cord: min/mean/max of the port and the battery (compare cables), and the
+        sampler's own CPU."""
+        t = s[0]
+        if self.sum_t0 is None:
+            self.sum_t0, self.sum = t, []
+            self.cpu_t0, self.cpu_w0 = time.thread_time(), time.monotonic()
+        self.sum.append(s)
+        if t - self.sum_t0 < self.SUMMARY_S:
+            return
+        cpu = time.thread_time() - self.cpu_t0
+        wall = max(1e-6, time.monotonic() - self.cpu_w0)
+        log("chgtrace: last %.0f s on the cord — %s · USB %s · sampler %.1f %% of a core" %
+            (t - self.sum_t0, self._stats(self.sum), ",".join(sorted(self.devs or ())) or "none", 100.0 * cpu / wall))
+        self.sum_t0 = None
+
+    # ── the thread ──
+    def run(self, stop):
+        nxt = time.monotonic()
+        while not stop.is_set():
+            now = time.monotonic()
+            try:
+                sampled = self.step(now)
+            except Exception as e:          # ★ the trace must never take the service down
+                log("chgtrace:", type(e).__name__, e)
+                sampled = False
+            if sampled:
+                nxt = max(nxt + self.SAMPLE_S, now)
+            else:
+                nxt = now + 0.1                  # idle: look again 10 times a second
+            stop.wait(max(0.0, nxt - time.monotonic()))
+
+
 class Hwd:
     def __init__(self):
         self.clients = set()          # writers of every connection
@@ -784,12 +1142,18 @@ class Hwd:
         #    a quarter less energy per unit of work). The CPU SPEED row is gone (2026-11-09: "that isnt needed anymore since we
         #    have determined 1GHz gives us good performance"), so a cap an older build saved is NOT read back — it could
         #    otherwise strand a console at 408 MHz with no way to change it.
-        self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME, "cpuMax": 1008000}
+        self.cfg = {"brightness": DEFAULT_BRIGHTNESS, "volume": DEFAULT_VOLUME, "cpuMax": 1008000, "vlimMv": VLIM_DEFAULT_MV}
         try:
             with open(HWD_JSON) as f:
                 self.cfg.update({k: v for k, v in json.load(f).items() if k in self.cfg and k != "cpuMax"})
         except (OSError, ValueError):
             pass
+        if self.cfg.get("vlimMv") not in VLIM_CHOICES:      # ★ anything odd on the card: the default floor
+            self.cfg["vlimMv"] = VLIM_DEFAULT_MV
+        if self.cfg["vlimMv"] != VLIM_DEFAULT_MV:
+            log("charger: TEST setting in force — input voltage floor %.1f V (CHRG_IN 0x%02x), saved from before" %
+                (self.cfg["vlimMv"] / 1000.0, VLIM_CHOICES[self.cfg["vlimMv"]]))
+        self.watch = None             # ChargerWatch (charger_loop)
         self.max_brightness = int(rd(BL + "/max_brightness", "255"))
         self.screen = "on"
         self.output = "speaker"
@@ -924,6 +1288,25 @@ class Hwd:
                 log("boost:", d, e)
         log("performance boost:", "ON (the map) — no clock moved" if on else "off")
 
+    # ── the INPUT FLOOR test setting (VLIM_CHOICES) ──
+    def chrg_in_target(self):
+        return VLIM_CHOICES.get(self.cfg.get("vlimMv"), CHRG_IN_2A)
+
+    def set_vlim(self, v):
+        mv = int(v)
+        if mv not in VLIM_CHOICES:
+            raise ValueError("input floor must be one of %s mV" % "/".join(str(x) for x in sorted(VLIM_CHOICES, reverse=True)))
+        old = self.cfg["vlimMv"]
+        if mv == old:
+            return
+        self.cfg["vlimMv"] = mv
+        log("charger: INPUT FLOOR (TEST) changed %.1f V -> %.1f V — CHRG_IN will be 0x%02x%s" %
+            (old / 1000.0, mv / 1000.0, VLIM_CHOICES[mv], "" if mv != VLIM_DEFAULT_MV else " (the default again)"))
+        self.save_soon()
+        if self.watch:
+            self.watch.next_check = 0.0              # ★ applied on the watch's next tick (≤ 0.1 s) if the cord is in
+        self.chg_cfg = None                          # FullJudge reads the floor again
+
     # ── backlight ──
     def apply_brightness(self):
         if self.screen == "on":
@@ -1054,14 +1437,29 @@ class Hwd:
         a plug edge, once a second while charging, and during the 5 s trace after an edge."""
         dev = pmic_bus()
         if not dev:
-            log("charger: PMIC i2c bus not found — the input limit stays at the driver's 1.5 A (the port is still traced)")
+            log("charger: PMIC i2c bus not found — the input limit stays at the driver's 1.5 A and there is no fast trace")
         else:
             try:   # ★ once, read only: the evidence for vibe-charge-fast's 0xA0 and for the driver's own CHRG_IN
                 log("charger: PMIC at start-up — CHRG_OUT 0x%02x (vibe-charge-fast expects 0xa0), CHRG_IN 0x%02x" %
                     (pmic_read(dev, CHRG_OUT), pmic_read(dev, CHRG_IN)))
             except OSError as e:
                 log("charger: PMIC not readable:", e)
-        w = ChargerWatch(dev)
+        # ★★ the drop-triggered fast trace (FastTrace): its own thread and its own fd, so a 20 ms sample never waits on
+        #    the event loop (the buttons) and the loop never waits on it
+        reader = None
+        if dev:
+            try:
+                reader = PmicFd(dev)
+            except OSError as e:
+                log("chgtrace: PMIC not opened — no fast trace:", e)
+        trace = FastTrace(reader, res_div=sense_res_div(), vlim_mv=lambda: self.cfg["vlimMv"])
+        if reader:
+            self.trace_stop = threading.Event()
+            threading.Thread(target=trace.run, args=(self.trace_stop,), name="chgtrace", daemon=True).start()
+            log("chgtrace: ready — PMIC registers every %d ms while the charger is in and a USB device is plugged; a burst "
+                "at every USB drop and plug edge (sense resistor %s)" % (round(FastTrace.SAMPLE_S * 1000),
+                "÷%d" % trace.res_div if trace.res_div else "unknown — battery current left out"))
+        w = self.watch = ChargerWatch(dev, self.chrg_in_target, trace if reader else None)
         while True:
             w.tick(time.monotonic())
             await asyncio.sleep(ChargerWatch.POLL_S)
@@ -1219,7 +1617,8 @@ class Hwd:
         return {"ok": True, "brightness": self.cfg["brightness"], "maxBrightness": self.max_brightness,
                 "volume": self.cfg["volume"], "muted": self.cfg["volume"] == 0, "output": self.output,
                 "battery": {"pct": b["pct"], "charging": b["charging"], "status": b["status"]}, "screen": self.screen,
-                "power": self.power, "calib": self.cal.wire(self.q_now)}
+                "power": self.power, "calib": dict(self.cal.wire(self.q_now), stress=self.stress.wire()),
+                "vlimMv": self.cfg["vlimMv"], "vlimChoices": sorted(VLIM_CHOICES, reverse=True)}
 
     async def handle(self, req, writer):
         if not isinstance(req, dict):
@@ -1244,6 +1643,8 @@ class Hwd:
             self.set_volume(req.get("value"))
         elif s == "boost":
             self.set_boost(req.get("value"))
+        elif s == "vlim":
+            self.set_vlim(req.get("value"))
         elif s == "time":
             self.set_time(req.get("utcMs"))
         elif a in ("poweroff", "reboot"):

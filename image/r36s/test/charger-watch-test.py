@@ -44,16 +44,16 @@ ok(not WRITES and not lines("plug"), "on battery: no writes, no trace")
 put(True, "Charging", port="4670000", uA="+300000")
 w.tick(t[0]); edge = t[0]; t[0] += w.POLL_S
 ok(WRITES == [(m.CHRG_IN, 0xDD)], "★ plug-in: CHRG_IN written to 0xDD on the very tick the cord was seen (%s)" % WRITES)
-ok(any("input limit 2 A at plug-in" in l and "0xdb -> 0xdd" in l for l in LOG), "the write is logged with old -> new")
+ok(any("input limit 2 A, floor 4.5 V at plug-in" in l and "0xdb -> 0xdd" in l for l in LOG), "the write is logged with old -> new")
 ok(lines("plug-in seen"), "the edge is logged")
+class FakeTrace:
+    reader = object()
+    def __init__(self): self.edges, self.online = [], None
+    def set_online(self, o): self.online = o
+    def edge(self, k, t): self.edges.append(k)
 run(6)
-tr = [l for l in LOG if l.startswith("charger: plug-in +")]
-ok(48 <= len(tr) <= 52, "★ a trace line every 100 ms for 5 s after plug-in (%d lines)" % len(tr))
-ok("port 4.670V" in tr[0] and "bat 4.050V" in tr[0] and "+0.300A" in tr[0] and "Charging" in tr[0] and "IN 0xdd OUT 0xa0" in tr[0],
-   "a trace line has port V, battery V / A / status, CHRG_IN, CHRG_OUT: %s" % tr[0])
+ok(not [l for l in LOG if l.startswith("charger: plug-in +")], "★ h80: no more 5 s of 8-s-old sysfs lines after an edge (the fast trace replaces them)")
 ok(len(WRITES) == 1, "0xDD held: no rewrite while it stands (%d writes)" % len(WRITES))
-n0 = len(LOG); run(3)
-ok(not [l for l in LOG[n0:] if "+" in l and "plug-in" in l], "the trace stops after 5 s")
 # ── the driver rewrites the limit: the 1 s check puts it back ──
 REGS[m.CHRG_IN] = 0xDB; run(1.2)
 ok(len(WRITES) == 2 and REGS[m.CHRG_IN] == 0xDD, "the once-a-second check puts 0xDD back")
@@ -67,11 +67,24 @@ fl = lines("with the cord in")
 ok(len(fl) <= w.FLIP_MAX + 1, "flips are capped per minute (%d lines)" % len(fl))
 # ── plug out: traced too, no write ──
 nw = len(WRITES); put(False, "Discharging", port="0"); run(6)
-tr = [l for l in LOG if l.startswith("charger: plug-out +")]
-ok(48 <= len(tr) <= 52 and len(WRITES) == nw, "★ plug-out traced for 5 s, nothing written (%d lines)" % len(tr))
+ok(len(WRITES) == nw and lines("plug-out seen"), "★ plug-out seen, nothing written")
 # ── a PMIC error at the edge: 5 s back-off, not 30 ──
 FAIL[0] = True; put(True, "Charging"); run(0.3)
 FAIL[0] = False; REGS[m.CHRG_IN] = 0xDB; run(6)
 ok(REGS[m.CHRG_IN] == 0xDD, "after a bus error at plug-in the limit still goes on within ~5 s")
 ok(len(lines("PMIC")) >= 1, "the bus error is logged (rate-limited)")
+# ── h80: the INPUT FLOOR test setting — the watch holds whatever byte the setting names ──
+TGT = [0xBD]; FT = FakeTrace()
+w2 = m.ChargerWatch("/dev/i2c-0", lambda: TGT[0], FT)
+WRITES.clear(); REGS[m.CHRG_IN] = 0xDB; put(False); w2.tick(t[0]); t[0] += 0.1
+put(True, "Charging"); w2.tick(t[0]); t[0] += 0.1
+ok(WRITES == [(m.CHRG_IN, 0xBD)], "★ 4.3 V setting: plug-in writes 0xBD (%s)" % WRITES)
+ok(any("floor 4.3 V (TEST) at plug-in" in l for l in LOG), "the write says the floor and TEST")
+ok(FT.edges == ["plug-in"] and FT.online is True, "the edge and the cord's state go to the fast trace")
+TGT[0] = 0x8D; w2.next_check = 0; w2.tick(t[0]); t[0] += 0.1
+ok(REGS[m.CHRG_IN] == 0x8D, "a changed setting is applied on the next tick (4.0 V = 0x8D)")
+TGT[0] = 0xDD; w2.next_check = 0; w2.tick(t[0])
+ok(REGS[m.CHRG_IN] == 0xDD, "back to 4.5 V = 0xDD")
+ok(m.VLIM_CHOICES == {4500: 0xDD, 4300: 0xBD, 4000: 0x8D}, "the encoding: 0x80 | (mV-4000)/100 << 4 | 0x08 | 5")
+ok(all(m.vlim_from_chrg_in(v) == mv / 1000 for mv, v in m.VLIM_CHOICES.items()), "FullJudge's decoder reads each one back")
 print("   %d passed, %d failed" % (P, F)); sys.exit(1 if F else 0)
