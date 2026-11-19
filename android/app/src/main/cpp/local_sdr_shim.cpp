@@ -9639,8 +9639,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  goes to this listener's spectrum socket as {"type":"tone","label":…} when it changes ("" = nothing). */
         std::unique_ptr<vibe::ToneId> tone;
         bool        toneWant = false;
-        /** ★ V12 VOR / ILS, 406 MHz: this listener's channel is floored for their IQ decoder (clientIqCb). */
-        bool        navFloor = false;
         double      toneRate = 0, toneAtHz = 0, toneFedHz = 0;
         std::string toneSent;
         double bwHz = 0;
@@ -10306,14 +10304,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ V12 tone ID: one bool when the listener is not on NFM (and nothing left to clear)
         if ((c->toneWant || !c->toneSent.empty()) && c->owner) c->owner->toneFeedClient(c, x, n, rateHz);
         // ★ V12 PAGING (Android local hardware only): one relaxed load unless a paging receiver runs in this process
-        // ★★ …and VOR / ILS and 406 MHz beacons (any radio, served or not): the listener's channel floored at what they need
-        //    (setIqMinRate rebuilds the chain once; a no-op when unchanged), and let go again when they stop
-        if (c->owner && ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
-                         || DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)) {
-            const double need = c->owner->decoders_.feedChannelIqSession(c->session, x, n, rateHz);
-            if (need > 0 && rateHz + 1.0 < need && c->rx && !c->navFloor) { c->navFloor = true; c->rx->setIqMinRate(need); }
-            else if (need <= 0 && c->navFloor && c->rx) { c->navFloor = false; c->rx->setIqMinRate(c->drm ? 24000.0 : 0.0); }
-        } else if (c->navFloor && c->rx) { c->navFloor = false; c->rx->setIqMinRate(c->drm ? 24000.0 : 0.0); }
+        //   (★ VOR / ILS and 406 MHz beacons are fed from the listener's SLICE instead — feedOneClient)
+        if (c->owner && DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
+            c->owner->decoders_.feedChannelIqSession(c->session, x, n, rateHz);
     }
     /** ★ The {"type":"tone"} message — the label is our own fixed text ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), no
      *  escaping needed. */
@@ -19636,11 +19629,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
     bool drmSharedZoomMoves = false;   // ★ the `zoomMovesRadio` last sent — see drmZoomMovesRadio
-    /** ★ V12 VOR / ILS, 406 MHz on the one pipeline: its channel is floored (iqCb) — and given back to what DRM / raw IQ want. */
-    bool navFloorShared = false;
-    void navFloorRestore() {
-        bool drm; { std::lock_guard<std::mutex> lk(drmSharedMtx); drm = (bool)drmShared; }
-        rx.setIqMinRate(drm ? std::max(24000.0, iqDirectRate()) : iqDirectRate());
+    /** ★★ V12 VOR on the ONE pipeline: its channel IQ is cut to the AM width, and the subcarrier sits at 9.96 kHz — so while
+     *  the shared host runs VOR the width is at least 25 kHz (setBandwidth), as M17 holds its 12.5 kHz. The listener's own
+     *  width (navUserBw_) is put back when it stops. Synced at every attach, detach and decoder socket close. */
+    std::atomic<bool> navWide_{false};
+    double navUserBw_ = 0;
+    static constexpr double kNavWideHz = 25000.0;
+    void navWideSync() {
+        const bool want = !perClientDsp() && decoders_.sharedWantsWide();
+        if (want == navWide_.load()) return;
+        navWide_.store(want);
+        const double bw = navUserBw_ > 0 ? navUserBw_ : vfoBwHz.load();
+        LOGI("VOR on the shared channel: width %s", want ? "held at 25 kHz while it runs" : "given back");
+        setBandwidth(bw);
     }
     /** The raw-IQ-out consumer's rate on the direct path, or 0 — the channel floor DRM must not lower. */
     double iqDirectRate() {
@@ -24956,6 +24957,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           if (g_serveOnLan.load() && cap > 0 && bw > cap) bw = cap; }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         if (m17Mode_.load(std::memory_order_relaxed)) bw = paramsFor("m17").bandwidth;   // ★ V12 M17: its whole channel, always
+        navUserBw_ = bw;
+        if (navWide_.load(std::memory_order_relaxed) && bw < kNavWideHz) bw = kNavWideHz;   // ★ V12 VOR: the subcarrier's channel (navWideSync)
         // ★ The mode's floor/ceiling (RxPipeline::clampBwHz) here as well as in setTune, so the
         //   width this reports (vfoBwHz) is the one the chain is running.
         rxBwHz = vibedsp::RxPipeline::clampBwHz(rxMode, std::min(bw, sampleRate * 0.8));
@@ -30638,13 +30641,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ V12 tone ID on the shared dial: one relaxed load unless the dial is on NFM (or a label is left to clear)
         if (p->toneSharedWant.load(std::memory_order_relaxed) || p->toneShared) p->toneFeedShared(x, n, rateHz);
         // ★ V12 PAGING on the one pipeline (the phone's own radio, one listener): one relaxed load unless paging runs
-        // ★★ …and VOR / ILS, 406 MHz beacons on the one pipeline (any radio): the channel floored while they run
-        if (!p->perClientDsp() && ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
-                                   || DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)) {
-            const double need = p->decoders_.feedChannelIqShared(x, n, rateHz);
-            if (need > 0 && rateHz + 1.0 < need && !p->navFloorShared) { p->navFloorShared = true; p->rx.setIqMinRate(std::max(need, p->iqDirectRate())); }
-            else if (need <= 0 && p->navFloorShared) { p->navFloorShared = false; p->navFloorRestore(); }
-        } else if (p->navFloorShared) { p->navFloorShared = false; p->navFloorRestore(); }
+        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed) && !p->perClientDsp())
+            p->decoders_.feedChannelIqShared(x, n, rateHz);
+        // ★★ V12 VOR / ILS, 406 MHz beacons on the one pipeline: its channel (VOR widens it to 25 kHz while it runs —
+        //    navWideSync); one relaxed load when none runs
+        if (!p->perClientDsp() && DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)
+            p->decoders_.feedNavIqShared(x, n, rateHz);
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
@@ -31326,6 +31328,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
                 // ★★★ ON VFO B (decode on either VFO): this listener's VFO B host, fed B's own audio / IQ.
+                if (wantsB(payload) && (ext == "vor" || ext == "sarsat")) {
+                    sendDecoderRefusal(sock, "decoder", ext, "vfo", "VOR / ILS and 406 MHz beacons read the radio signal of VFO A \xe2\x80\x94 start it on VFO A.");
+                    continue;
+                }
                 if (wantsB(payload)) {
                     std::shared_ptr<DecoderHost> hb = takeHostB();
                     if (!hb) {
@@ -31378,6 +31384,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 if (r == DecoderHost::Start::Unknown) { icomDecReconcile(); continue; }
                 textA = true; syncPeerA();
+                navWideSync();   // ★ V12 VOR on the one pipeline: its 25 kHz (or given back when this attach replaced it)
                 // ★★★ AND WHO STARTED IT, for the admin table — on the one-pipeline host only; a
                 //     listener's own host is theirs by construction.
                 if (!perVfo && !session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
@@ -31396,6 +31403,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 else if (host) host->stop();
                 textA = false; syncPeerA();
                 icomDecReconcile();   // ★ an Icom goes back as the decoder found it
+                navWideSync();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
             } else if (type == "subscribe_digital_spots") {
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
@@ -31492,6 +31500,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             } else if (perVfo) decoders_.drop(sess);   // ★ a listener's own host goes with them, slots and all
             else { host->stop(); host->stopSpots(); }
         }
+        navWideSync();
         outboxClose(sock);
         LOGI("dxcluster WS disconnected%s", host && left ? " (others still watching — kept decoder)"
                                           : keptForHold ? " — decoder kept running: its listener's session may be held" : "");
@@ -32949,6 +32958,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const int got = chan_->extract(bins, clientCentreBin(c.get()), c->chanBins,
                                        c->slice.data(), c->ectx, blockIndex);
         if (got > 0) c->rx->feed(c->slice.data(), got);
+        /* ★★ V12 VOR / ILS and 406 MHz beacons: THE SLICE ITSELF (the dial within half a bin of DC, ≥ 24 kHz, flat across
+         *  ±0.375 of its rate) — never the demodulator's channel, which is cut to the listener's AM / NFM width: a VOR's
+         *  subcarrier sits at 9.96 kHz and would be gone. The listener's audio and width are not touched. One relaxed load
+         *  when none runs on this server. */
+        if (got > 0 && c->owner && DecoderHost::navIqRunning().load(std::memory_order_relaxed) > 0)
+            c->owner->decoders_.feedNavIqSession(c->session, c->slice.data(), got, c->chanRate);
         // ★ RAW IQ OUT: the same slice, resampled to the consumer's rate, as 8-bit IQ. The demod
         //   above keeps its copy — the stream is split, not diverted.
         if (got > 0 && c->iq && c->iq->hasConsumer()) iqTap(c.get(), c->slice.data(), got);

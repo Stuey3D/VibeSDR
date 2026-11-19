@@ -589,9 +589,8 @@ public:
     /** ★★ V12 VOR / ILS and 406 MHz beacons run on the CHANNEL IQ too (vibe_nav_run.h, vibe_sarsat_run.h) — on any radio,
      *  served or not (paging's local-only gate is paging's alone). How many run in this process: the DSP thread's one load. */
     static std::atomic<int>& navIqRunning() { static std::atomic<int> n{0}; return n; }
-    /** ★ The least channel rate the running IQ decoder needs (Hz), 0 = none: VOR's subcarrier sits at 9.96 ± 0.5 kHz. */
-    double channelIqMinRate() const { return navIq_.load(std::memory_order_relaxed) ? kNavMinRate : 0.0; }
-    static constexpr double kNavMinRate = 32000.0;
+    /** ★ VOR runs here: its channel must hold the 9.96 ± 0.5 kHz subcarrier (the one pipeline widens it — navWideSync). */
+    bool wantsWideChannel() { std::lock_guard<std::mutex> lk(decMtx_); return (bool)nav_; }
     /** Hand paging `n` samples of the listener's channel IQ (post-NCO, dial at DC, cut to the passband) at `rate` Hz.
      *  Copies and returns at once, as feed() — the DSP thread never decodes. Two seconds behind and the oldest goes. */
     void feedChannelIq(const std::complex<float>* iq, int n, double rate) {
@@ -1442,7 +1441,8 @@ private:
      *  anything else AUTO). WHAT IS SHOWN is decided in TonesRun by the dial's band (amateur or not) and the owner's opt-in
      *  (Env::tonesDigits) — never by the client. */
     /** ★★ V12 VOR / ILS ("vor", vibe_nav_run.h) and 406 MHz beacons ("sarsat", vibe_sarsat_run.h): both on the listener's
-     *  CHANNEL IQ (feedChannelIq — the dial at DC, ≥ kNavMinRate), so the audio chain's filters never touch a phase; no
+     *  IQ (feedChannelIq — their slice, or the one pipeline's channel; the dial near DC), so the audio chain's filters
+     *  never touch a phase; no
      *  parameters (AUTO: VOR or ILS is read from the signal, the channel says which to expect). */
     void buildNavIqLocked_(const std::string& ext) {
         if (ext == "vor") {
@@ -2118,28 +2118,43 @@ public:
         { std::lock_guard<std::mutex> lk(m_); h = shared_; }
         if (h) h->feed(pcm, count, stride);
     }
-    /** ★★ PAGING (V12) — and VOR / ILS and 406 MHz beacons: a listener's channel IQ (per-VFO). One relaxed load when nothing
-     *  runs on IQ anywhere. @return the least channel rate the running decoder needs (0 = none — DecoderHost::
-     *  channelIqMinRate), so the caller can floor the listener's channel. */
-    double feedChannelIqSession(const std::string& session, const std::complex<float>* iq, int n, double rate) {
-        if ((DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0 && DecoderHost::navIqRunning().load(std::memory_order_relaxed) <= 0)
-            || !anyPer_.load(std::memory_order_relaxed)) return 0.0;
+    /** ★★ PAGING (V12): a listener's channel IQ (per-VFO). One relaxed load when nothing pages anywhere. */
+    void feedChannelIqSession(const std::string& session, const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0 || !anyPer_.load(std::memory_order_relaxed)) return;
         std::shared_ptr<DecoderHost> h;
         { std::lock_guard<std::mutex> lk(m_);
           auto it = bySession_.find(session);
           if (it != bySession_.end()) h = it->second; }
-        if (!h) return 0.0;
-        h->feedChannelIq(iq, n, rate);
-        return h->channelIqMinRate();
+        if (h) h->feedChannelIq(iq, n, rate);
     }
     /** ★★ …and the one pipeline's (a shared dial, or one listener). */
-    double feedChannelIqShared(const std::complex<float>* iq, int n, double rate) {
-        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0 && DecoderHost::navIqRunning().load(std::memory_order_relaxed) <= 0) return 0.0;
+    void feedChannelIqShared(const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0) return;
         std::shared_ptr<DecoderHost> h;
         { std::lock_guard<std::mutex> lk(m_); h = shared_; }
-        if (!h) return 0.0;
-        h->feedChannelIq(iq, n, rate);
-        return h->channelIqMinRate();
+        if (h) h->feedChannelIq(iq, n, rate);
+    }
+    /** ★★ V12 VOR / ILS, 406 MHz beacons: a listener's IQ (their slice, per-VFO) — the same queue as paging's. */
+    void feedNavIqSession(const std::string& session, const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::navIqRunning().load(std::memory_order_relaxed) <= 0 || !anyPer_.load(std::memory_order_relaxed)) return;
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_);
+          auto it = bySession_.find(session);
+          if (it != bySession_.end()) h = it->second; }
+        if (h) h->feedChannelIq(iq, n, rate);
+    }
+    /** ★★ …and the one pipeline's channel. */
+    void feedNavIqShared(const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::navIqRunning().load(std::memory_order_relaxed) <= 0) return;
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_); h = shared_; }
+        if (h) h->feedChannelIq(iq, n, rate);
+    }
+    /** ★ Does the one pipeline's host run VOR (which needs its channel 25 kHz wide)? */
+    bool sharedWantsWide() {
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_); h = shared_; }
+        return h && h->wantsWideChannel();
     }
     /** A listener's host is finished with — every decoder stopped, every slot released, NOW. */
     void drop(const std::string& session) {

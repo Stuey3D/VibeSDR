@@ -10,7 +10,8 @@
 //     keeps its bearing.
 //   • SIMD = scalar bit for bit (the decimated streams' checksum and every bearing).
 //   • Cost on this machine.
-//   `test-vor clip <out.cu8> <rate> <seconds> <rfHz> <bearing>` writes the end-to-end clip (unsigned 8-bit IQ, rtl_tcp style).
+//   `test-vor clip <out.cu8> <rate> <seconds> <offsetHz> <bearing>` writes the end-to-end clip (unsigned 8-bit IQ, rtl_tcp
+//   style): a VOR "LON" `offsetHz` above the clip's centre.
 #include "decoders/nav_rx.h"
 #include "decoders/nav_tx.h"
 
@@ -213,10 +214,9 @@ static void testCost() {
     ok(s < 6.0, b);
 }
 
-/** The end-to-end clip: a VOR at `rf` in a capture centred `rf − 250 kHz`, cu8. */
-static int writeClip(const char* out, double rate, double sec, double rfHz, double bearing) {
-    (void)rfHz;
-    tx::VorOpt o; o.rate = rate; o.bearing = bearing; o.offsetHz = 250000; o.snrDb = 35; o.identEvery = 8;
+/** The end-to-end clip: a VOR `offsetHz` above the capture's centre, cu8. */
+static int writeClip(const char* out, double rate, double sec, double offsetHz, double bearing) {
+    tx::VorOpt o; o.rate = rate; o.bearing = bearing; o.offsetHz = offsetHz; o.snrDb = 35; o.identEvery = 8;
     const auto x = tx::vor(sec, o);
     FILE* f = std::fopen(out, "wb");
     if (!f) return 1;
