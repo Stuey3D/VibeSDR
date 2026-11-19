@@ -94,7 +94,9 @@ if [ -z "$MAPDATA" ]; then
   if [ -z "$MAPDATA" ]; then
     echo "==> building the map detail pack (scripts/build-mapdata-deb.sh)"
     docker run --rm --cpus 4 -v "$REPO":/repo:ro -v "$CACHE/mapdata":/out debian:trixie-slim /bin/bash -euo pipefail -c '
-      apt-get update -qq && apt-get install -y -qq --no-install-recommends python3-minimal >/dev/null
+      # ★ python3, not python3-minimal: trixie's minimal set has no shutil (build-mapdata-deb.sh copies with it) —
+      #   the first build with an empty map cache since bookworm failed on it (2026-11-19, handheld79).
+      apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 >/dev/null
       bash /repo/scripts/build-mapdata-deb.sh --out /out >/dev/null'
     MAPDATA=$(ls -t "$CACHE"/mapdata/vibeserver-mapdata-detail_*_all.deb | head -1)
   fi
