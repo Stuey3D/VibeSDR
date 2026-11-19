@@ -19,7 +19,8 @@ import { KNOWN_SIGNALS, DIGI_DIALS, eibiKnownSignals, eibiPlace, eibiOnAir, know
          estimateLabelWidth, bookmarkSignals, bookmarkLabel, isLearntFm, LABEL_MAX, PRIO_SAFETY, PRIO_PERSONAL, PRIO_SERVER,
          PRIO_LEARNT, PRIO_EIBI, PRIO_TABLE, labelStems, LABEL_ROWS_MAX, knownTapPlan, knownLabelHit, isLabelTap, LABEL_HIT_MIN_H, type KnownSignal,
          type PlacedLabel, dxDialSignals, dxDialAgo, dxDialHint, dxServerNow, isDxLabel, PRIO_DX, DX_DIAL_MAX, DX_DIAL_MAX_AGE_S,
-         DX_LABEL_COLOUR, KNOWN_LABEL_COLOUR, type DxDialEntry } from '../src/utils/knownSignals.ts';
+         DX_LABEL_COLOUR, KNOWN_LABEL_COLOUR, type DxDialEntry,
+         parseSigTags, sigTagSignals, withSigTags, isTagLabel, VARA_TAG_LABEL, VARA_TAG_HINT } from '../src/utils/knownSignals.ts';
 import { dabBlockSignals, withDabBlocks, dabBlockHint, DAB_GRADE_COLOUR } from '../src/utils/dabBlockView.ts';
 import { RTTY_WEATHER, RTTY_SHIFTS, RTTY_BAUD_ROWS } from '../src/utils/rttySpec.ts';
 import { dscTuneFor, DSC_ALL } from '../src/utils/dscChannels.ts';
@@ -372,6 +373,34 @@ console.log('DX catches on the dial (Stuart, 2026-11-16)');
   ok(!wl.some((s) => s.src === 'dx' && s.mode === 'dab') && wl.some((s) => s.src === 'dx' && s.mode === 'wfm'),
      'withDabBlocks: on a wide DAB view the separate DAB DX label is left out (its block names it)');
   ok(dabBlockHint(33, names, 32, null, NOW, dx) === 'go to 12C — DX catch Far Away, last heard 1 day ago', 'the hover hint names the catch');
+}
+
+// ── ★★ V12 THE VARA HF TAG (sigtags — vibe_varatag.h): identify only, the words fixed, the server's message checked ──
+console.log('\nVARA HF tag (signal tags from the server)');
+{
+  ok(VARA_TAG_LABEL === 'VARA HF (proprietary \u2014 not decoded)', `the label says exactly "${VARA_TAG_LABEL}"`);
+  ok(/does not decode/.test(VARA_TAG_HINT) && /proprietary/.test(VARA_TAG_HINT), 'the hint says it is proprietary and not decoded');
+  const msg = { type: 'sigtags', v: 1, tags: [
+    { id: 3, hz: 7049400, bw: 2300, k: 'vara', c: 0.93 },
+    { id: 4, hz: 14108000, bw: 2750, k: 'vara', c: 0.9 },
+    { id: 5, hz: 7060000, bw: 2300, k: 'pactor', c: 0.99 },   // a kind this client does not know: dropped
+    { id: 6, hz: 145e6, bw: 2300, k: 'vara', c: 0.9 },         // not HF: dropped
+    { id: 7, hz: 7100000, bw: 9000, k: 'vara', c: 0.9 },        // no VARA width: dropped
+  ] };
+  const tags = parseSigTags(msg);
+  ok(tags.length === 2 && tags[0].hz === 7049400 && tags[1].bw === 2750, `parseSigTags keeps the two VARA tags (${tags.length})`);
+  ok(parseSigTags(null).length === 0 && parseSigTags({ tags: 'x' }).length === 0, 'a bad message is no tags');
+  const sigs = sigTagSignals(tags);
+  const v = sigs[0];
+  ok(sigs.length === 2 && v.label === VARA_TAG_LABEL && v.dec === '' && v.mode === 'usb' && v.src === 'tag' && isTagLabel(v),
+     'a tag is a label with NO decoder, in USB, src "tag"');
+  ok(v.dialHz === 7049400 - 1500 && v.lo === 7049400 - 1150 && v.hi === 7049400 + 1150, 'the dial 1500 Hz below the centre; the span drawn');
+  const plan = knownTapPlan(v, { rtty: true, navtex: true, wefax: true, time: true, dsc: true, cw: true, spots: true, hfdl: true });
+  ok(plan.dec === '' && plan.mode === 'usb' && plan.hz === 7047900, 'a tap only tunes (USB, 7047.9) — there is no decoder to open');
+  const bm = bookmarkSignals([{ name: 'DL0XYZ Winlink', frequency: 7049000, mode: 'usb' }], [], false);
+  ok(sigTagSignals(tags, bm).length === 1, 'a bookmark on the same signal wins: no tag drawn over it');
+  const merged = withSigTags(knownSignalList([], bm), sigs);
+  ok(merged.every((s, i) => i === 0 || merged[i - 1].hz <= s.hz) && merged.filter(isTagLabel).length === 2, 'merged into one sorted list');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
