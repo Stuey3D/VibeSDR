@@ -147,6 +147,21 @@ int main() {
             ok(s.find("sound  SHAEENQ2") != std::string::npos && s.find("USMANQ7") != std::string::npos, "two soundings by SHAEENQ2 and a call to USMANQ7: " + s);
         }
     }
+    if (const char* rec = std::getenv("VIBE_ALE_REC")) {
+        // ★ a real off-air capture (Stuart's UberSDR, 3.596 MHz USB, HFLink 80 m, 2026-11-19 ≈ 20:41–20:56 UTC: 8 kHz
+        //   float32, NOT in git) — an amateur station's TWAS sounding at +03:35 and +03:42
+        std::printf("\n── off air: %s ──\n", rec);
+        FILE* fp = std::fopen(rec, "rb");
+        if (!fp) ok(false, "missing");
+        else {
+            std::vector<float> x; float b[4096]; size_t n; while ((n = std::fread(b, 4, 4096, fp)) > 0) x.insert(x.end(), b, b + n);
+            std::fclose(fp);
+            Got g = run(x, 8000);
+            const std::string s = all(g.pub);
+            int sl3 = 0; for (auto& l : g.pub) sl3 += l.find("sound  SL3ZXB  (TWAS") != std::string::npos;
+            ok(sl3 >= 1 && g.pub.size() == (size_t)sl3, "SL3ZXB's TWAS soundings and nothing else in 15 minutes: " + s);
+        }
+    }
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }
