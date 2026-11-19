@@ -78,8 +78,8 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         y0 = y;
         y = menuRow(c, a, y, "CALIBRATE", k.phase == "idle"
             ? "Measures this battery's real capacity. With the charger in, press NORMAL (use the radio until it switches "
-              "itself off) or STRESS (the fastest: full brightness, every core busy, a screen of its own — hold POWER to "
-              "stop it). It waits for a genuine full charge, then asks you to unplug; the count starts then. A power-off "
+              "itself off) or STRESS (the fastest: full brightness, every core busy, the radio at its top sample rate, a "
+              "screen of its own — hold POWER to stop it). It waits for a genuine full charge, then asks you to unplug; the count starts then. A power-off "
               "part-way does not spoil it."
             : "");
         static double armedN = 0, armedS = 0;
@@ -101,6 +101,26 @@ inline float App::secHardware(Ctx& c, const RadioState& s, Rect a, float y) {
         } else if (k.phase == "armed" || k.phase == "charging") {
             st.disabled = busy;
             if (hwRowButton(c, "hw.calX", {a.x, y0, a.w, 44}, {x0, y0 + 3, bw, 38}, "CANCEL", st)) hwCalibrate(port, "");
+        }
+    }
+    // ★★ INPUT FLOOR (TEST) — h80, 2026-11-19: the charge port's input voltage floor (rk817 CHRG_IN VLIM). On the
+    //    charger near full the RTL-SDR dropped off USB as it started (Stuart's h79 log, the port at 4.84–4.89 V); the
+    //    suspicion is its start-up surge pulling the input under the 4.5 V floor. A TEST setting, said so on the row;
+    //    only drawn when the service reports it (an older vibe-hwd has none — no dead control).
+    {
+        int vl; bool vb;
+        { std::lock_guard<std::mutex> lk(sh.m); vl = sh.vlimMv; vb = sh.vlimBusy; }
+        if (vl > 0) {
+            y = menuRow(c, a, y, "INPUT FLOOR (TEST)", "A test setting for the RTL-SDR dropping off on the charger. The "
+                "lowest charger voltage the console will take power at: 4.5 V is normal. Lower lets a weak charger or a "
+                "long cable keep going under the radio's start-up surge. Kept until you change it; every change is in the "
+                "Diagnostic logs.");
+            const int mvs[3] = {4500, 4300, 4000};
+            int sel = -1;
+            for (int i = 0; i < 3; i++) if (mvs[i] == vl) sel = i;
+            const int hit = segmented(c, "hw.vlim", {a.x + 6, y - 4, a.w - 12, 38}, {"4.5 V (NORMAL)", "4.3 V", "4.0 V"}, sel);
+            if (hit >= 0 && hit != sel && !vb) hwSetVlim(port, mvs[hit]);
+            y += 46;
         }
     }
     // CLOCK (UTC — the device's clock, a tenth of a second)
