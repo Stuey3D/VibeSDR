@@ -58,7 +58,7 @@ struct Facts {
 inline const std::vector<const char*>& allModes() {
     static const std::vector<const char*> v = {
         "wfm", "rds", "nfm", "tone", "am", "usb", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "lsb", "cwu", "cwl",
-        "drm", "freedv", "rade", "m17", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
+        "drm", "freedv", "rade", "m17", "dvsig", "dab", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "spots", "spotsband", "ism", "lora", "cw", "psk",
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
         "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
@@ -169,6 +169,10 @@ inline Caps compute(const Facts& f) {
          *  HF+ gets it on 2 m (it stops at 260 MHz, so 70 cm is never in its ranges; touches() decides). An Icom never: its
          *  FM audio is demodulated and de-emphasised in the radio, and the 4-FSK receiver reads IQ (not in kIcom above). */
         if (id == "m17") return touches(R, 144e6, 148e6) || touches(R, 420e6, 450e6);
+        /* ★ V12 DV signalling (DMR, D-STAR, YSF, NXDN, dPMR identities — docs/v12/DV-SIGNALLING.md): VHF 136–174 MHz (2 m
+         *  and the VHF PMR / business band) or UHF 400–470 MHz (70 cm, UHF PMR, PMR446), where those systems live — on every
+         *  SDR that reaches one. Never an Icom: the receiver reads IQ (not in kIcom above). */
+        if (id == "dvsig") return touches(R, 136e6, 174e6) || touches(R, 400e6, 470e6);
         if (id == "dab") {
             std::vector<vibedab::Range> v;
             for (const auto& x : R) v.push_back({ (uint32_t)std::min(4.0e9, x.lo), (uint32_t)std::min(4.0e9, x.hi) });

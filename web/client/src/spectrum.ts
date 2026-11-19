@@ -45,11 +45,13 @@ import { parseFreeDv, freedvPassband, freedvSidebandAt, freedvSubMessage,
          type FreeDvState, type FreeDvChoice, type FreeDvSideband } from '../../../src/services/freedv';
 // ★★ V12 M17 digital voice — the shared rules (src/services/m17.ts): the report, its passband, the report request
 import { parseM17, M17_PASSBAND, m17StatusMessage, type M17State } from '../../../src/services/m17';
+// ★★ V12 digital-voice ID (DMR, D-STAR, YSF, NXDN, dPMR — never the voice): src/services/dvsig.ts
+import { parseDvsig, DVSIG_PASSBAND, dvsigStatusMessage, dvsigPinMessage, type DvState, type DvPin } from '../../../src/services/dvsig';
 import type { WholeKind } from '../../../src/services/wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 // ★ V12 synchronous AM: sau / sal / ecssu / ecssl / amst (src/services/amSync.ts) — offered only where the server lists them
 // ★ V12 FreeDV: 'freedv' — offered only where the server lists it (freedvOffered)
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
-                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst' | 'freedv' | 'm17';
+                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst' | 'freedv' | 'm17' | 'dvsig';
 
 /** The server applies these on every mode change and never reports bandwidth
  *  back, so the client mirrors the table to stay in sync. */
@@ -67,6 +69,7 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   freedv: [50, 2700],
   // ★ V12 M17: its 9 kHz channel — drawn only; the server keeps the receiver's 12.5 kHz whatever width is sent
   m17: M17_PASSBAND,
+  dvsig: DVSIG_PASSBAND,   // ★ V12 DV ID: the 12.5 kHz channel the server keeps
 };
 
 /** ★★★ THE NARROWEST WFM PASSBAND (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz, which the
@@ -88,6 +91,7 @@ export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
   drm: 10_000,   // ★ V12 DRM: fixed — the receiver cuts its own channel; the width row is hidden in DRM
   freedv: 3_000,   // ★ V12 FreeDV: fixed by the server (the modem's channel); the width row is hidden in FreeDV
   m17: 9_000,      // ★ V12 M17: fixed by the server (the receiver's channel); the width row is hidden in M17
+  dvsig: 12_500,   // ★ V12 DV ID likewise
 };
 
 /** A passband the server will honour as given: WFM narrower than WFM_MIN_BW_HZ is widened about its
@@ -717,6 +721,8 @@ export interface SpectrumCallbacks {
   onFreeDv?: (s: FreeDvState) => void;
   /** ★★ V12 M17: the listener's M17 receiver ({"type":"m17"}, already parsed — parseM17), on every change. */
   onM17?: (s: M17State) => void;
+  /** ★★ V12 DV ID: the listener's digital-voice ID receiver ({"type":"dvsig"}, parsed — parseDvsig), on every change. */
+  onDvsig?: (s: DvState) => void;
   /** ★ V12 CTCSS / DCS tone ID on NFM: the label on change ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), '' = none locked. */
   onToneId?: (label: string) => void;
   /** ★ V12 the AM family's carrier lock, applied auto-bandwidth edges and AM-stereo pilot (shim sendAmSync). */
@@ -1149,6 +1155,7 @@ export class SpectrumClient {
       // ★ V12 FreeDV: a new socket has no report yet — ask, so the VTS line is not left on the old one
       if (this.mode === 'freedv') this._send(freedvSubMessage(null));
       if (this.mode === 'm17') this._send(m17StatusMessage());   // ★ V12 M17 likewise
+      if (this.mode === 'dvsig') this._send(dvsigStatusMessage());   // ★ V12 DV ID likewise
       this.lastRxAt = performance.now();
       this.pingTimer = window.setInterval(() => {
         this.lastPingAt = performance.now();
@@ -1296,6 +1303,7 @@ export class SpectrumClient {
       }
       case 'freedv': { const f = parseFreeDv(msg); if (f) this.cb.onFreeDv?.(f); return; }
       case 'm17': { const f = parseM17(msg); if (f) this.cb.onM17?.(f); return; }
+      case 'dvsig': { const f = parseDvsig(msg); if (f) this.cb.onDvsig?.(f); return; }
       case 'drm_iq': {
         const q = drmIqSanitise(msg);
         if (q) { this.drmIqAt = Date.now(); this.cb.onDrmIq?.(q); }
@@ -2271,9 +2279,13 @@ export class SpectrumClient {
     this._send({ type: 'bandwidth', bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh });
     if (mode === 'freedv') this._send(freedvSubMessage(null));   // ★ V12 FreeDV: the report at once, for the VTS line
     if (mode === 'm17') this._send(m17StatusMessage());          // ★ V12 M17 likewise
+    if (mode === 'dvsig') this._send(dvsigStatusMessage());      // ★ V12 DV ID likewise
   }
   /** ★ V12 M17: ask for the current report (a room adopted already in M17). Read-only — never gated. */
   m17Status() { this._send(m17StatusMessage()); }
+  /** ★ V12 DV ID: ask for the report (read-only), or pin AUTO / one system (the manual fallback). */
+  dvsigStatus() { this._send(dvsigStatusMessage()); }
+  dvsigPin(pin: DvPin) { this._send(dvsigPinMessage(pin)); }
 
   /** ★★ V12 FreeDV: AUTO or one sub-mode by hand ({"type":"freedv_sub","sub":…}); null only asks for the current report.
    *  Nothing is assumed — the page lights what the server's next report says. A CHOICE asks first on a shared dial (the

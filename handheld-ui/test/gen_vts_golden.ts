@@ -19,6 +19,8 @@
  *   FS hz sb sel | side lo hi                   freedvSidebandAt(hz, sel) + freedvPassband(sb)
  *   MV json | ok vts info line                  parseM17 + m17Vts / m17Info / m17Line (src/services/m17.ts)
  *   MO json | 0/1                               m17Offered
+ *   DV json | ok vts info line                  parseDvsig + dvsigVts / dvsigInfo / dvsigLine (src/services/dvsig.ts)
+ *   DO json | 0/1                               dvsigOffered
  *   PS json | ok text                           parsePagingStatus + pagingStatusText (src/services/paging.ts; V12 PAGE)
  *   PX name | text                              paging.ts' words, ONE copy (the law, REC while PAGE runs, the hint with the
  *                                               handheld's row names) — paging.h's constants must equal them
@@ -34,6 +36,7 @@ import { getBandsAtRegion, type Band } from '../../src/constants/bandPlan.ts';
 import { fmtBandFreq } from '../../src/services/stations.ts';
 import { parseFreeDv, freedvVts, freedvOffered, freedvSidebandAt, freedvPassband } from '../../src/services/freedv.ts';
 import { parseM17, m17Vts, m17Info, m17Line, m17Offered } from '../../src/services/m17.ts';
+import { parseDvsig, dvsigVts, dvsigInfo, dvsigLine, dvsigOffered } from '../../src/services/dvsig.ts';
 import { parsePagingStatus, pagingStatusText, PAGING_LAW_NOTICE, PAGING_REC_SILENT, PAGING_REC_NOTE, pagingHintFor } from '../../src/services/paging.ts';
 
 const outFile = process.argv[2] ?? 'vts_golden.txt';
@@ -226,6 +229,30 @@ for (const m of M17C) {
   L.push(`MV ${hex(JSON.stringify(m))} | ` + (st ? `1 ${hex(m17Vts(st))} ${hex(m17Info(st))} ${hex(m17Line(st))}` : `0 ${hex(m17Vts(null))}`));
 }
 for (const j of [{ modes: ['nfm', 'm17'] }, { modes: ['nfm', 'freedv'] }, {}, { modes: 'm17' }]) L.push(`MO ${hex(JSON.stringify(j))} | ${m17Offered(j as never) ? 1 : 0}`);
+
+// ── V12 DV ID (dvsig.ts → handheld-ui/src/dvsig.h) ──
+const DMRE = { id: 3, t: 1000, t1: 4000, sys: 'DMR', kind: 'voice', open: true, enc: false, slot: 2, cc: 1, src: 2345678, dst: 2350, grp: true };
+const DVC: unknown[] = [
+  { type: 'dvsig', state: 'search', pin: 'auto', amateur: true, band: '70 cm amateur', ids: true, log: [] },
+  { type: 'dvsig', state: 'search', pin: 'ysf', amateur: true, band: '2 m amateur', ids: true, log: [] },
+  { type: 'dvsig', state: 'search', pin: 'auto', amateur: false, band: '', ids: false, log: [] },
+  { type: 'dvsig', state: 'sync', pin: 'auto', amateur: true, band: '70 cm amateur', ids: true, log: [{ ...DMRE, alias: 'G4ABC Stuart', gps: { lat: 52.62345, lon: -1.12345 } }] },
+  { type: 'dvsig', state: 'sync', pin: 'auto', amateur: true, ids: true, log: [{ ...DMRE }] },
+  { type: 'dvsig', state: 'sync', pin: 'auto', amateur: true, ids: true, log: [{ ...DMRE, grp: false, dst: 2342222, enc: true }] },
+  { type: 'dvsig', state: 'sync', pin: 'auto', amateur: false, ids: false, log: [{ ...DMRE, alias: 'leak', src: 1 }] },
+  { type: 'dvsig', state: 'search', pin: 'auto', amateur: true, ids: true, log: [{ ...DMRE, open: false }] },
+  { type: 'dvsig', state: 'sync', ids: true, amateur: true, log: [{ id: 1, t: 1, sys: 'D-STAR', kind: 'voice', open: true, enc: false, from: 'G4ABC/ID51', to: 'CQCQCQ', via1: 'GB7XX  B', text: 'Hello from VibeSDR' }] },
+  { type: 'dvsig', state: 'sync', ids: true, amateur: true, log: [{ id: 1, t: 1, sys: 'YSF', kind: 'voice', open: true, enc: false, mode: 'DN', dg: 23, from: 'G4ABC', to: 'ALL', gps: { lat: -33.5, lon: 151.25 } }] },
+  { type: 'dvsig', state: 'sync', ids: true, amateur: false, log: [{ id: 1, t: 1, sys: 'NXDN', kind: 'voice', open: true, enc: false, ran: 5, mode: 'NXDN48', src: 4321, dst: 77, grp: true }] },
+  { type: 'dvsig', state: 'sync', ids: false, amateur: false, log: [{ id: 1, t: 1, sys: 'dPMR', kind: 'voice', open: true, enc: false, cc: 0x28A }] },
+  { type: 'dvsig', state: 'sync', ids: true, amateur: true, log: [{ id: 1, t: 1, sys: 'TETRA', kind: 'voice', open: true, enc: false }] },
+  { type: 'm17' },
+];
+for (const m of DVC) {
+  const st = parseDvsig(m);
+  L.push(`DV ${hex(JSON.stringify(m))} | ` + (st ? `1 ${hex(dvsigVts(st))} ${hex(dvsigInfo(st))} ${hex(dvsigLine(st))}` : `0 ${hex(dvsigVts(null))}`));
+}
+for (const j of [{ modes: ['nfm', 'dvsig'] }, { modes: ['nfm', 'm17'] }, {}]) L.push(`DO ${hex(JSON.stringify(j))} | ${dvsigOffered(j as never) ? 1 : 0}`);
 
 // ── V12 PAGE (paging.ts → handheld-ui/src/paging.h) ──
 const PSC: unknown[] = [

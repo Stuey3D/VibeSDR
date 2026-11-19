@@ -78,6 +78,10 @@ const BLOCKABLE: ModeEntry[] = [
    *  setup page, with the same notice. */
   { id: 'tones', label: 'DTMF and 5-tone selective calling' },
   { id: 'tones+digits', label: '5-tone: show the called numbers off the amateur bands (to you only)', parent: 'tones', on: true },
+  /* ★★ V12 DV ID (docs/v12/DV-SIGNALLING.md): DMR, D-STAR, YSF, NXDN, dPMR — who is talking, never the voice — a demodulator
+   *  on VHF / UHF, and under it the owner's opt-in for radio IDs off the amateur bands ("+" token), as on the setup page. */
+  { id: 'dvsig', label: 'Digital voice ID: DMR, D-STAR, YSF, NXDN, dPMR (who is talking, never the voice)' },
+  { id: 'dvsig+ids', label: 'Digital voice ID: show radio IDs off the amateur bands (to you only)', parent: 'dvsig', on: true },
   { id: 'ais', label: 'AIS ships' },
   // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page
   { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },
@@ -100,6 +104,11 @@ const AVDATA_TEXT_NOTICE = 'ACARS messages are not meant for the public. Reading
 const TONES_DIGITS_NOTICE = 'Off the amateur bands a 5-tone call\u2019s number says who is being called on a private radio system. '
   + 'Only switch this on if the law where this server is allows it. The numbers are shown only to you, the owner, while you '
   + 'are signed in \u2014 never to listeners, never in the gallery. DTMF off the amateur bands is never shown (it can be a phone number).';
+/** ★ ONE TEXT, TWO READERS: vibe_setup_page.h DVSIG_IDS_NOTICE. */
+const DVSIG_IDS_NOTICE = 'Off the amateur bands a DMR, NXDN or dPMR radio ID says who is talking, and to whom, on someone '
+  + 'else\u2019s private radio system. Only switch this on if the law where this server is allows it. The IDs are shown only to '
+  + 'you, the owner, while you are signed in \u2014 never to listeners, never on the map. Everyone else sees only \u201cDMR heard\u201d, '
+  + 'the colour code and the slot. On the amateur bands callsigns and IDs are always shown. The voice is never decoded.';
 /** The list as drawn: BLOCKABLE plus one switch per digital-spots mode under "spots", before Band — `spots-<mode>` off.
  *  ★ The modes are this build's own (DIGI_MODE_STYLE, the map legend's list): the server on this phone IS this build. */
 function modeTree(): ModeEntry[] {
@@ -4876,6 +4885,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
                         {chip(m, inert)}
                         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{TONES_DIGITS_NOTICE}</Text>
+                      </View>
+                    ) : m.id === 'dvsig+ids' ? (
+                      <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>{DVSIG_IDS_NOTICE}</Text>
                       </View>
                     ) : chip(m, inert);
                     if (!k.length) return box;

@@ -457,6 +457,8 @@ struct Inputs {
     std::string fdvLine;
     // ★ V12 M17: likewise its line while in the mode (m17.h m17Line — "M17 · G4ABC · VIBE TEST"), "" outside it
     std::string m17Line;
+    // ★ V12 DV ID: its line while in the mode (dvsig.h dvsigLine — "DMR · G4ABC Stuart · CC 1 · TS2"), "" outside it
+    std::string dvLine;
     // ★ V12 PAGE: its line while the paging decoder runs (paging.h pagingVts — "PAGE · FLEX 3200/4 · 3 pages · speaker
     //   muted"), "" otherwise. Held like the digital-voice lines; a mode's own line wins (a listener is in one mode).
     std::string pagingLine;
@@ -502,7 +504,7 @@ public:
         else if (in.mode != "drm" && live_.badge == "DRM") dropDrm();   // ★ leaving DRM takes its station with it
         // ★ V12 FreeDV owns the bar in its mode, gone on leaving — and M17 the same way (one digital-voice line at a time:
         //   a listener is in one mode)
-        { const std::string& ml = !in.fdvLine.empty() ? in.fdvLine : !in.m17Line.empty() ? in.m17Line : in.pagingLine;
+        { const std::string& ml = !in.fdvLine.empty() ? in.fdvLine : !in.m17Line.empty() ? in.m17Line : !in.dvLine.empty() ? in.dvLine : in.pagingLine;
           if (ml != fdvLine_) onFreeDv(ml); }
         if (in.toneNew) setTone(in.mode == "nfm" || in.mode == "fm" ? in.toneLabel : "");
         if (in.noticeNew && !in.noticeText.empty()) show(in.noticeText, 7000);
