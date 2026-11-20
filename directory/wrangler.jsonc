@@ -41,9 +41,10 @@
     { "pattern": "*.vibeserver.vibesdr.net/*", "zone_name": "vibesdr.net" }
   ],
 
-  // ★★ V12 THE SATELLITE MIRROR (src/sats.js): every 6 hours at :23 — CelesTrak's GP data updates every 2 h and its
-  //    usage policy asks for one download per update at most; sats.js also refuses a round under 5 h after the last.
-  "triggers": { "crons": ["23 */6 * * *"] },
+  // ★★ V12 THE SATELLITE MIRROR (src/sats.js): a tick every 15 min; sats.js decides — a fresh good copy is refreshed every
+  //    6 h, and only with no / an old copy do failed rounds retry 15 min → 30 min → 1 h → hourly (Stuart, 2026-11-20).
+  //    CelesTrak's GP data updates every 2 h; its policy asks for one download per update at most and ≥ 15 min after a 5xx.
+  "triggers": { "crons": ["8,23,38,53 * * * *"] },
 
   // ★★ Per-address limit on GET /api/iq/<code> (src/index.js iqLookupAllowed): a lookup returns a
   //    live IQ session token, and codes are six characters. 30 a minute is far above a person typing.

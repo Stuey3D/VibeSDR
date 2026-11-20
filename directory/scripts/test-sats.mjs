@@ -250,5 +250,53 @@ console.log('§9 a FIRST round that CelesTrak refuses publishes nothing (the liv
   ok(b2 && Object.keys(b2.orbits).length > 0 && b2.satellites.some((x) => x.omm), `after the hold, a good round publishes WITH orbits (${b2 ? Object.keys(b2.orbits).join(', ') : 'none'})`);
 }
 
+console.log('§10 THE SCHEDULE (Stuart 2026-11-20): no / old copy 15 min → 30 min → 1 h → hourly; fresh copy every 6 h');
+{
+  const mk = () => {
+    const d = new DatabaseSync(':memory:');
+    d.exec(readFileSync(new URL('schema.sql', dir), 'utf8'));
+    for (const f of readdirSync(new URL('migrations/', dir)).filter((f) => f.endsWith('.sql')).sort()) {
+      try { d.exec(readFileSync(new URL('migrations/' + f, dir), 'utf8')); } catch { /* as above */ }
+    }
+    const st = (sql, args = []) => ({ bind: (...x) => st(sql, x), first: async () => d.prepare(sql).get(...args) ?? null,
+      all: async () => ({ results: d.prepare(sql).all(...args) }), run: async () => { const r = d.prepare(sql).run(...args); return { meta: { changes: r.changes } }; } });
+    return { DB: { prepare: (sql) => st(sql) } };
+  };
+  const e = mk();
+  const state = async () => M.loadState(e);
+  let t = 2_000_000_000;
+  const go = (code) => { plan = code ? { 'GROUP=amateur': { status: code } } : {}; log = []; return M.runMirror(e, { fetch: fakeFetch, now: t, curated }); };
+  // no copy: the ladder
+  const holds = [];
+  for (let i = 0; i < 5; i++) { await go(503); const s = await state(); holds.push(M.holdInForce(s, t) - t); t = M.holdInForce(s, t); }
+  ok(JSON.stringify(holds) === JSON.stringify([900, 1800, 3600, 3600, 3600]), `no copy: failures hold 15 min, 30 min, 1 h, 1 h, 1 h (${holds.map((h) => h / 60).join(', ')} min)`);
+  const early = await (async () => { const s = await state(); return M.runMirror(e, { fetch: fakeFetch, now: M.holdInForce(s, t) - 60, curated }); })();
+  ok(early.stopped === 'hold', 'inside a ladder hold the round refuses itself');
+  // first good round
+  const good = await go(0);
+  let s = await state();
+  ok(!good.stopped && s.lastGoodAt === t && s.fastFails === 0, 'a good round: lastGoodAt set, the ladder reset');
+  t += 3600; ok((await go(0)).stopped === 'recent', 'fresh copy: 1 h later no round');
+  t += 5 * 3600; ok(!(await go(0)).stopped, 'fresh copy: 6 h later a round');
+  // fresh copy fails every 6 h; the fourth failure is 24 h after the last good one
+  const good0 = t; const fh = [];
+  for (let i = 0; i < 4; i++) { t += 6 * 3600; await go(503); s = await state(); fh.push((M.holdInForce(s, t) - t) / 60); }
+  ok(fh.slice(0, 3).every((m) => m === 360), `fresh copy: a failed round waits 6 h (${fh.slice(0, 3).join(', ')} min)`);
+  ok(t - good0 === 24 * 3600 && fh[3] === 15, `24 h of failed 6-hourly rounds: the copy is old — back to 15 min (${fh[3]} min)`);
+  t = M.holdInForce(s, t); await go(503); s = await state();
+  ok(M.holdInForce(s, t) - t === 1800, '…then 30 min');
+  // 403 is never the ladder
+  const e403 = mk(); plan = { 'GROUP=amateur': { status: 403 } }; log = [];
+  await M.runMirror(e403, { fetch: fakeFetch, now: t, curated });
+  s = await M.loadState(e403);
+  ok(M.holdInForce(s, t) - t >= 24 * 3600, `no copy + 403: a block's long hold, not the ladder (${(M.holdInForce(s, t) - t) / 3600} h)`);
+  // the live state of 2026-11-20: a 522 held 6 h by the old schedule gives way to the ladder
+  const legacy = { ...(await state()), holdUntil: 1795199035, lastRound: 1795177435, lastErrorAt: 1795177435, lastCode: 522, fails: 1, fastFails: 0, lastGoodAt: 0 };
+  ok(M.holdInForce(legacy, 1795177435 + 16 * 60) === 1795177435 + 900, 'the live 12:23 UTC 522 (held to 18:23): the ladder lets the next tick run');
+  // a Worker killed mid-round: the provisional 15-min hold still holds, whatever the ladder says
+  const dying = { ...legacy, lastRound: 1795190000, holdUntil: 1795190000 + 900 };
+  ok(M.holdInForce(dying, 1795190000 + 300) === 1795190000 + 900, 'a round that died mid-way still waits its 15 min (the policy floor)');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

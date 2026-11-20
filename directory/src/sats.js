@@ -4,8 +4,8 @@
  * like the EiBi schedule. Run by the directory Worker's Cron Trigger (wrangler.jsonc "triggers"), served at GET /api/sats.
  *
  * ★★★ CELESTRAK'S USAGE POLICY IS THE DESIGN (https://celestrak.org/usage-policy.php, read 2026-11-19):
- *   · GP data updates every 2 hours: download only when needed and only once per update — the cron runs every 6 h and a
- *     round is refused if the last one was under 5 h ago (FETCH_MIN_SEC), whatever triggered it.
+ *   · GP data updates every 2 hours: download only when needed and only once per update — with a fresh good copy a round
+ *     runs every 6 h (REFRESH_SEC), whatever triggered it; only FAILED rounds retry sooner (THE SCHEDULE below).
  *   · FORMAT=csv (JSON is ~3× larger; TLE answers errors now and cannot carry six-digit catalogue numbers) — never tle.
  *   · Compression: Workers' fetch() sends Accept-Encoding gzip/br and decodes transparently (we say so explicitly too).
  *   · ANY non-200 STOPS THE ROUND (no other group is asked, nothing is retried) and is REPORTED TO A PERSON: one log line
@@ -15,7 +15,13 @@
  *   · 404 → that URL is dead: never asked again until a software update (MIRROR_VERSION changes).
  *   · 403 → a block: a long hold, 24 h doubling to 7 days.
  * ★★★ 500 / 503 (and a network failure, a timeout, a reset — the server may be overloaded): STOP EVERYTHING at once and
- *     hold for at least 15 minutes (HOLD_5XX_MIN_SEC — no setting can lower it); ours is 6 h doubling to a day. THE HOLD
+ *     hold for at least 15 minutes (HOLD_5XX_MIN_SEC — no setting can lower it). THE SCHEDULE (Stuart, 2026-11-20):
+ *       · NO GOOD COPY, or the copy is OLD (no good round for 24 h, STALE_SEC): retry 15 min → 30 min → 1 h → then
+ *         every hour (FAST_LADDER) — servers have no satellites until this succeeds, so the first pass comes first.
+ *       · A FRESH GOOD COPY: a round every 6 h (REFRESH_SEC); a failed one waits for the next 6-h slot. Four failed
+ *         6-hourly rounds = 24 h without a good one = OLD → back to the start of the fast ladder.
+ *       · 403 is a block, never the ladder: 24 h doubling to 7 days, whatever the copy's age.
+ *     The cron ticks every 15 min; a tick inside a hold only reads one row. THE HOLD
  *     IS WRITTEN BEFORE ANYTHING ELSE HAPPENS, and a provisional 15-minute hold is written BEFORE the first request, so a
  *     Worker that dies mid-round still honours it.
  * ★★ NEVER REPLACE A GOOD COPY WITH A BAD ONE: each group's last good element sets are kept (D1) and sats.json is rebuilt
@@ -29,7 +35,10 @@
 export const MIRROR_VERSION = 1;                 // ★ bump with a change of URL rules: it clears the 404 dead list
 export const CT_BASE = 'https://celestrak.org/NORAD/elements/gp.php';
 export const SATNOGS_URL = 'https://db.satnogs.org/api/transmitters/?format=json';
-export const FETCH_MIN_SEC = 5 * 3600;           // a round at most every 5 h (cron every 6 h); CelesTrak updates every 2 h
+export const REFRESH_SEC = 6 * 3600;             // a fresh good copy is refreshed every 6 h (CelesTrak updates every 2 h)
+export const REFRESH_SLACK_SEC = 5 * 60;         // the 15-min cron's tick lands a little either side of the 6 h
+export const STALE_SEC = 24 * 3600;              // no good round for a day: the copy is OLD → the fast ladder
+export const FAST_LADDER = [15 * 60, 30 * 60, 3600];   // no / old copy: after a failure, then hourly
 export const SATNOGS_EVERY_SEC = 20 * 3600;      // "daily"
 export const HOLD_5XX_MIN_SEC = 15 * 60;         // ★★★ the policy's floor — nothing may hold less after a 5xx
 export const HOLD_FAIL_SEC = 6 * 3600;           // a failure, then doubling to a day
@@ -133,6 +142,7 @@ async function putKv(env, k, v, now) {
 }
 function freshState() {
   return { version: MIRROR_VERSION, holdUntil: 0, fails: 0, f403: 0, lastRound: 0, lastCode: 200, lastError: '', lastErrorAt: 0,
+           lastGoodAt: 0, fastFails: 0,
            dead: {}, moved: {}, satnogs: { holdUntil: 0, fails: 0, at: 0, lastCode: 200, lastError: '' } };
 }
 export async function loadState(env) {
@@ -151,6 +161,25 @@ export function classify(code, s) {
   if (code === 404) return { kind: 'dead', hold: Math.max(HOLD_5XX_MIN_SEC, HOLD_FAIL_SEC) };
   if (code === 301 || code === 308) return { kind: 'moved', hold: Math.max(HOLD_5XX_MIN_SEC, HOLD_FAIL_SEC) };
   return { kind: 'refused', hold: Math.max(HOLD_5XX_MIN_SEC, Math.min(86400, HOLD_FAIL_SEC * 2 ** Math.min(s.fails, 2))) };
+}
+
+/** A good copy that is less than STALE_SEC old. */
+export function freshCopy(s, now) { return !!s.lastGoodAt && now - s.lastGoodAt < STALE_SEC; }
+
+/** CelesTrak's hold after a failure of `kind`, by THE SCHEDULE (header). Call BEFORE fastFails is counted. */
+export function celestrakHold(kind, s, now) {
+  if (kind === 'blocked') return classify(403, s).hold;
+  if (freshCopy(s, now)) return REFRESH_SEC;
+  return Math.max(HOLD_5XX_MIN_SEC, FAST_LADDER[Math.min(s.fastFails || 0, FAST_LADDER.length - 1)]);
+}
+
+/** The hold actually in force. With no / an old copy, a hold written by an older, slower schedule gives way to the ladder
+ *  (the 12:23 UTC 522 of 2026-11-20 had been held to 18:23) — never below the policy's 15 min from the last round, and
+ *  never for a 403. */
+export function holdInForce(s, now) {
+  if (freshCopy(s, now) || s.lastCode === 403 || !s.lastErrorAt) return s.holdUntil;
+  const ladder = s.lastErrorAt + FAST_LADDER[Math.min(Math.max((s.fastFails || 0) - 1, 0), FAST_LADDER.length - 1)];
+  return Math.max(Math.min(s.holdUntil, ladder), (s.lastRound || 0) + HOLD_5XX_MIN_SEC);
 }
 
 /** The words a person reads (the log line and /api/sats/status). */
@@ -210,8 +239,9 @@ export async function runMirror(env, deps) {
   const curated = deps.curated;
   const s = await loadState(env);
   const summary = { asked: [], updated: [], stopped: '', built: false };
-  if (now < s.holdUntil) { summary.stopped = 'hold'; return summary; }
-  if (s.lastRound && now - s.lastRound < FETCH_MIN_SEC && !deps.force) { summary.stopped = 'recent'; return summary; }
+  if (now < holdInForce(s, now)) { summary.stopped = 'hold'; return summary; }
+  if (freshCopy(s, now) && now - s.lastGoodAt < REFRESH_SEC - REFRESH_SLACK_SEC && !deps.force) { summary.stopped = 'recent'; return summary; }
+  const ladder = !freshCopy(s, now);              // ★ this round's failures climb the fast ladder
   // ★★ the provisional hold, BEFORE the first request: a Worker killed mid-round still waits ≥ 15 minutes
   s.lastRound = now;
   s.holdUntil = now + HOLD_5XX_MIN_SEC;
@@ -233,15 +263,18 @@ export async function runMirror(env, deps) {
         if (to && to !== url) { s.moved[url] = to; extra = to; } else { s.dead[url] = MIRROR_VERSION; extra = ''; }
       }
       if (c.kind === 'dead') s.dead[url] = MIRROR_VERSION;
-      await fail(env, s, now, 'celestrak', r.code, c.kind, c.hold, g, extra);
+      const hold = celestrakHold(c.kind, s, now);
+      if (ladder && c.kind !== 'blocked') s.fastFails = (s.fastFails || 0) + 1;
+      await fail(env, s, now, 'celestrak', r.code, c.kind, hold, g, extra);
       summary.stopped = `${r.code} ${c.kind}`;
       stopped = true;
       break;                                         // ★★★ STOP: nothing more is asked this round
     }
     const omm = r.text == null ? null : parseGpCsv(r.text);
     if (!omm) {
-      const c = classify(-1, s);
-      await fail(env, s, now, 'celestrak', 200, 'notdata', c.hold, g, r.why || 'not GP CSV');
+      const hold = celestrakHold('notdata', s, now);
+      if (ladder) s.fastFails = (s.fastFails || 0) + 1;
+      await fail(env, s, now, 'celestrak', 200, 'notdata', hold, g, r.why || 'not GP CSV');
       summary.stopped = '200 notdata';
       stopped = true;
       break;
@@ -273,7 +306,7 @@ export async function runMirror(env, deps) {
     }
   }
 
-  if (!stopped) { s.holdUntil = 0; s.fails = 0; s.f403 = 0; s.lastCode = 200; s.lastError = ''; }
+  if (!stopped) { s.holdUntil = 0; s.fails = 0; s.f403 = 0; s.lastCode = 200; s.lastError = ''; s.lastGoodAt = now; s.fastFails = 0; }
   await putKv(env, 'state', s, now);
   if (changed || !(await getKv(env, 'sats'))) summary.built = await rebuild(env, curated, now);
   return summary;
@@ -349,7 +382,7 @@ export async function rebuild(env, curated, now) {
 export async function serveSats(request, env) {
   const s = await getKv(env, 'sats');
   if (!s) return new Response(JSON.stringify({ error: 'the satellite mirror has not run yet' }), {
-    status: 503, headers: { 'content-type': 'application/json', 'retry-after': '3600', 'cache-control': 'no-store' } });
+    status: 503, headers: { 'content-type': 'application/json', 'retry-after': '900', 'cache-control': 'no-store' } });   // ★ the ladder's first rung
   const h = { 'content-type': 'application/json; charset=utf-8', etag: s.etag, 'last-modified': s.modified,
               'cache-control': 'public, max-age=3600', 'access-control-allow-origin': '*' };
   const inm = request.headers.get('if-none-match');
@@ -362,7 +395,9 @@ export async function serveSats(request, env) {
 /** GET /api/sats/status — the mirror's state for a person: the last error in words, the holds, the copies' ages. */
 export async function serveSatsStatus(env) {
   const s = await loadState(env);
-  const out = { holdUntil: s.holdUntil, lastRound: s.lastRound, lastCode: s.lastCode, lastError: s.lastError, lastErrorAt: s.lastErrorAt,
+  const now = Math.floor(Date.now() / 1000);
+  const out = { holdUntil: holdInForce(s, now), mode: freshCopy(s, now) ? 'fresh: every 6 h' : 'no / old copy: 15 min → 30 min → 1 h → hourly',
+                lastGoodAt: s.lastGoodAt, fastFails: s.fastFails, lastRound: s.lastRound, lastCode: s.lastCode, lastError: s.lastError, lastErrorAt: s.lastErrorAt,
                 dead: Object.keys(s.dead), moved: s.moved, satnogs: s.satnogs, groups: {} };
   for (const g of ['amateur', 'weather']) { const c = await getKv(env, `omm:${g}`); if (c) out.groups[g] = { fetched: c.fetched, count: c.count, url: c.url }; }
   return new Response(JSON.stringify(out), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
