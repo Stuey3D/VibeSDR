@@ -6827,6 +6827,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     openDecoder(d);
   }, [closeDecoder, openDecoder]);   // eslint-disable-line react-hooks/exhaustive-deps
   satFollowRef.current = satFollow;
+  /* ★ the radio stops offering `doppler` (a reconnect, another radio) while SATELLITE is on: the mode ends with it */
+  useEffect(() => {
+    if (satCap || !satOnRef.current) return;
+    satOnRef.current = false; setSatOn(false);
+    satFollowRef.current('', null);
+    satPendingRef.current = null; setSatPending(null); setSatPicked(null); setSatWhy(''); setSatPicture(false); setSatPictureDone(false);
+  }, [satCap]);
   /** ★ Out of SATELLITE: the drop is ALWAYS sent (a lock must never outlive the mode), its decoder stops, the box closes. */
   const satModeOff = useCallback(() => {
     if (!satOnRef.current) return;
