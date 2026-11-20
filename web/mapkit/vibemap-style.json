@@ -162,7 +162,7 @@
    "type": "vector",
    "url": "DETAIL_URL",
    "maxzoom": 10,
-   "attribution": "© GeoNames · © OpenStreetMap contributors · © HydroLAKES / HydroSHEDS"
+   "attribution": "© GeoNames · © OpenStreetMap contributors (coast, rivers via Overture Maps) · © HydroLAKES / HydroSHEDS"
   },
   "relief": {
    "type": "raster",
@@ -449,6 +449,16 @@
    "source": "detail",
    "source-layer": "lakes",
    "minzoom": 6,
+   "paint": {
+    "fill-color": "#1b4a6b"
+   }
+  },
+  {
+   "id": "riverareas-d",
+   "type": "fill",
+   "source": "detail",
+   "source-layer": "riverareas",
+   "minzoom": 10,
    "paint": {
     "fill-color": "#1b4a6b"
    }

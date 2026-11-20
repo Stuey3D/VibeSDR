@@ -283,9 +283,19 @@ for (const pack of ['vibemap-basic', 'vibemap-runways', 'vibemap-detail']) {
   const out = path.join(OUT, `${pack}.pmtiles`);
   // ★ No tile-size or feature limits: tippecanoe's defaults DROP features to fit 500 kB tiles,
   //   which would be a silent change of map. Our tiers are already thinned by design.
+  /* ★★ RIVERS AS WATER (2026-11-20 — Wisbech port and Saigon's were on land): the OSM river areas, written by
+   *  scripts/gen-river-areas.mjs straight as tippecanoe features (MapLibre zooms, layer `riverareas`). Not in the JSON
+   *  tiers — 20 M points do not belong in git — so a SECOND INPUT to the detail pack. A detail pack built without them
+   *  would be a silent step back, so it is refused (--no-riverareas to build one on purpose). */
+  const extra = [];
+  if (pack === 'vibemap-detail' && !process.argv.includes('--no-riverareas')) {
+    const ra = path.join(OUT, 'riverareas.ndjson');
+    if (!existsSync(ra)) { console.error('no build/maptiles/riverareas.ndjson — run scripts/gen-river-areas.mjs first (or pass --no-riverareas)'); process.exit(1); }
+    extra.push(ra);
+  }
   execFileSync('tippecanoe', ['-o', out, '--force', `-Z${pack === 'vibemap-runways' ? 8 : 0}`, `-z${pack === 'vibemap-basic' ? 7 : MAXZ}`,
     '--no-feature-limit', '--no-tile-size-limit', '--quiet',
-    '-P', path.join(OUT, `${pack}.ndjson`)], { stdio: 'inherit' });
+    '-P', path.join(OUT, `${pack}.ndjson`), ...extra], { stdio: 'inherit' });
   console.log(`${pack}.pmtiles  ${(statSync(out).size / 1048576).toFixed(1)} MB`);
 }
 }   // end vector packs
