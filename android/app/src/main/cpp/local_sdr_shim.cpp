@@ -140,6 +140,7 @@
 #include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
 #include "vibe_navtex_map.h"   // ★ V12 2026-11-01 the NAVTEX map: the stations received
 #include "vibe_navtex_warn.h"  // ★ V12 2026-11-01 the NAVTEX map: the warnings (navtex-warn.idx beside the gallery)
+#include "vibe_navtex_warm.h"  // ★ V12 2026-11-20 the shipping map kept built in the background (vsnav, above Impl)
 #include "vibe_ndb_service.h"   // ★★ V12 2026-10-26: NDB skimmer — every beacon in the LF band, idents by consensus (docs/v12/NDB-SKIMMER.md)
 #include "vibe_ndb_gallery.h"   //    …and its day in the gallery: the heard log and the map
 #include "vibe_ais_service.h"   // ★★ V12 AIS (both VHF channels, M.1371) — our own decoder, docs/v12/AIS-APRS.md
@@ -7120,6 +7121,213 @@ static bool dabSeedGain(ImplT* p, int wantSteps, double now, const char* what = 
 static int vsKickMinutes(double m, bool given) {
     if (!given || !std::isfinite(m)) return 30;
     return m < 1 ? 1 : m > 24 * 60 ? 24 * 60 : (int)m;
+}
+
+// ── ★★ V12 2026-11-20 THE NAVTEX MAP'S SHARED STATE — the HTTP handlers AND the background warm-up (vibe_navtex_warm.h) ──
+// Stuart: "the navtex shipping map needs to continually build in the background so it opens instantly instead of waiting,
+// only when free cpu to do so". The index (gallery/navtex-warn.idx + navtex-met.idx), the "placed" cache and the stations
+// map's scan are brought up to date by the SAME functions here, under the SAME mutex, whichever asks — a request
+// (handleConnection, /vibeserver/gallery/navtex-*.json) or the warm-up thread kicked from the housekeeping tick. Whatever
+// the warm-up has not done (no spare CPU, still mid-backfill) a request does exactly as before: 400 messages a request,
+// answered "pending" → "Building … %" ("if there has been no spare cpu time to build the map then we revert to building
+// on open like we do now"). Neither can double-index: in-process the one mutex, across a multi-radio box's processes
+// (every radio's process serves the one machine gallery) an flock on gallery/.navtex-idx.lock.
+// (vibe_navtex_warm.h is included with the other headers at the top — this part of the file is inside namespace vibe)
+namespace vsnav {
+struct NavShared {
+    std::mutex wMtx;                                            ///< the warnings/met index AND the placed cache
+    std::string placedKey;                                      ///< navKey() the placed cache was built for
+    std::unordered_map<uint64_t, vibe::navmap::Placed> placed;
+    struct Stations { std::string key; int64_t at = 0; vibe::navmap::Result r; };
+    std::mutex cMtx;                                            ///< the stations map's scans, per `since`
+    std::map<long, Stations> stations;
+    std::map<long, int64_t> asked;                              ///< since → when a client last asked (warmed for 24 h)
+    std::string doneKey;                                        ///< navKey() when the warm-up last had nothing left
+};
+NavShared& navShared() { static NavShared* s = new NavShared; return *s; }   // ★ never destroyed: a detached thread uses it
+/** A gallery file's text, bounded (16 KB) — the handlers' readText. */
+std::string navReadText(const std::string& name) {
+    auto& g = vibe::gallery::shared();
+    std::string fp, ct, o;
+    if (!g.resolve(name, fp, ct)) return o;
+    const int fd = ::open(fp.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return o;
+    o.resize(16384);
+    const ssize_t n = ::read(fd, &o[0], o.size());
+    ::close(fd);
+    o.resize(n > 0 ? (size_t)n : 0);
+    return o;
+}
+/** ★ What every cached NAVTEX answer depends on: the gallery's NAVTEX items (not every kind's — Gallery::kindStamp), the
+ *  warnings index (its series keys link the same warning across transmitters), and the receiver's position. */
+std::string navKey(uint64_t kindStamp) {
+    auto& g = vibe::gallery::shared();
+    struct stat st{};
+    const long long idxSize = ::stat((g.dir() + "/navtex-warn.idx").c_str(), &st) == 0 ? (long long)st.st_size : -1;
+    char b[128];
+    std::snprintf(b, sizeof b, "%016llx:%lld:%.4f:%.4f", (unsigned long long)kindStamp, idxSize, g_bgLat.load(), g_bgLon.load());
+    return b;
+}
+/** ★ The machine-wide guard (a multi-radio box: one process per radio, one gallery). block=false: the warm-up skips. */
+struct NavFlock {
+    int fd = -1; bool ok = false;
+    NavFlock(const std::string& dir, bool block) {
+        fd = ::open((dir + "/.navtex-idx.lock").c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        ok = fd >= 0 && ::flock(fd, LOCK_EX | (block ? 0 : LOCK_NB)) == 0;
+        if (fd >= 0 && !ok && block) ok = true;   // ★ a filesystem without locks: carry on as before
+    }
+    ~NavFlock() { if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); } }
+};
+/** ★ THE INDEX BROUGHT UP TO DATE — at most `budget` newly saved messages parsed. Caller holds navShared().wMtx.
+ *  *got = false when another process held the machine lock and block was false (nothing done). */
+vibe::navwarn::SyncResult navSyncLocked(size_t budget, bool block, std::unordered_set<uint64_t>* live, bool* got = nullptr) {
+    auto& g = vibe::gallery::shared();
+    const std::string idx = g.dir() + "/navtex-warn.idx", metIdx = g.dir() + "/navtex-met.idx";
+    NavFlock fl(g.dir(), block);
+    if (got) *got = fl.ok;
+    if (!fl.ok) return {};
+    size_t lines = 0;
+    const vibe::navwarn::LiveFn each = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
+    const vibe::navwarn::TextFn text = [](const std::string& f) { return navReadText(f); };
+    const auto sr = vibe::navwarn::sync(idx, each, text, budget, live, &lines, metIdx);
+    if (lines > 64 && lines > live->size() + live->size() / 2) { vibe::navwarn::compact(idx, *live); vibe::navmet::compact(metIdx, *live); }
+    return sr;
+}
+/** ★ ONE SCAN, TWO CACHES: every NAVTEX message placed (navmap::scan) — the warnings' card station ("Suspected …", "?")
+ *  AND the stations map's ALL (since=0), which is the same scan. Caller holds navShared().wMtx. True if it scanned. */
+bool navPlacedFreshLocked(const std::string& key) {
+    auto& s = navShared();
+    if (s.placedKey == key) return false;
+    auto& g = vibe::gallery::shared();
+    s.placed.clear();
+    const vibe::navmap::EachLine el = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
+    const auto keys = vibe::navwarn::seriesKeys(g.dir() + "/navtex-warn.idx");
+    const vibe::navmap::SeriesOf seriesOf = [&keys](const std::string& f) { auto it = keys.find(vibe::navwarn::nameHash(f)); return it == keys.end() ? std::string() : it->second; };
+    auto r = vibe::navmap::scan(el, g_bgLat.load(), g_bgLon.load(), 0, [](const std::string& f) { return navReadText(f); }, seriesOf, &s.placed);
+    s.placedKey = key;
+    std::lock_guard<std::mutex> lk(s.cMtx);
+    auto& c = s.stations[0]; c.key = key; c.at = vibe::gallery::nowUtc(); c.r = std::move(r);
+    return true;
+}
+/** ★ How long a stations scan for "heard in the last `since` seconds" stays good: its window's edge may be 1 % stale
+ *  (20 s at least) — 1 H 36 s, 24 H 14 min, 7 DAYS 1.7 h. ALL has no edge: good until the gallery changes. */
+int64_t navStationsTtl(long since) { return since <= 0 ? INT64_MAX : std::max<int64_t>(20, since / 100); }
+bool navStationsValid(const NavShared::Stations& c, const std::string& key, long since, int64_t now) {
+    return c.key == key && (since <= 0 || now - c.at < navStationsTtl(since));
+}
+/** ★ The stations map for `since` — from the cache when it is good (*hit), else scanned now (as before the warm-up). */
+std::string navStationsJson(long since, int64_t now, bool* hit, bool fromClient = true) {
+    auto& g = vibe::gallery::shared();
+    auto& s = navShared();
+    const std::string key = navKey(g.kindStamp("navtex"));
+    const double rxLat = g_bgLat.load(), rxLon = g_bgLon.load();
+    {
+        std::lock_guard<std::mutex> lk(s.cMtx);
+        if (fromClient) { s.asked[since] = now; if (s.asked.size() > 8) s.asked.erase(s.asked.begin()); }
+        auto it = s.stations.find(since);
+        if (it != s.stations.end() && navStationsValid(it->second, key, since, now)) { *hit = true; return vibe::navmap::toJson(it->second.r, rxLat, rxLon, now); }
+    }
+    *hit = false;
+    struct stat st{};
+    const bool have = !g.dir().empty() && ::stat((g.dir() + "/index.jsonl").c_str(), &st) == 0;
+    const vibe::navmap::EachLine each = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
+    const auto keys = vibe::navwarn::seriesKeys(g.dir() + "/navtex-warn.idx");
+    const vibe::navmap::SeriesOf seriesOf = [&keys](const std::string& f) { auto it = keys.find(vibe::navwarn::nameHash(f)); return it == keys.end() ? std::string() : it->second; };
+    auto r = have ? vibe::navmap::scan(each, rxLat, rxLon, since ? now - since : 0, [](const std::string& f) { return navReadText(f); }, seriesOf) : vibe::navmap::Result{};
+    std::string j = vibe::navmap::toJson(r, rxLat, rxLon, now);
+    std::lock_guard<std::mutex> lk(s.cMtx);
+    if (s.stations.size() > 8) s.stations.clear();
+    auto& c = s.stations[since]; c.key = key; c.at = now; c.r = std::move(r);
+    return j;
+}
+
+// ── the warm-up ──
+std::atomic<double> g_navWarmFirstTick{0.0};
+double navWarmNow() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+/** ★ TEST-ONLY knobs (the environment, so no build differs from the one that ships): VIBESERVER_NAVWARM_TEST_BUSY names
+ *  a file — while it exists the gate reads busy; VIBESERVER_NAVWARM_GRACE_SEC overrides the start-up grace (30 s);
+ *  VIBESERVER_NAVWARM=0 switches the warm-up off (the on-request build alone, as before 2026-11-20). */
+bool navWarmTestBusy() {
+    const char* f = std::getenv("VIBESERVER_NAVWARM_TEST_BUSY");
+    struct stat st{};
+    return f && *f && ::stat(f, &st) == 0;
+}
+double navWarmGraceSec() { const char* e = std::getenv("VIBESERVER_NAVWARM_GRACE_SEC"); return e && *e ? std::max(0.0, std::atof(e)) : 30.0; }
+bool navWarmOff() { const char* e = std::getenv("VIBESERVER_NAVWARM"); return e && *e == '0'; }
+vibe::navwarm::State navWarmGate() {
+    vibe::navwarm::GateIn in;
+    in.off = navWarmOff();
+    in.testBusy = navWarmTestBusy();
+    in.benchRunning = vibe::benchProgress().running.load();
+    const double first = g_navWarmFirstTick.load();
+    in.inGrace = first <= 0 || navWarmNow() - first < navWarmGraceSec();
+    in.throttled = g_healthThrottled.load(std::memory_order_relaxed);
+    in.cpuLevel = g_healthCpuLevel.load(std::memory_order_relaxed);
+    return vibe::navwarm::gate(in);
+}
+/** ★ ONE PASS: the index by one slice; once it is whole, the placed cache + ALL, then each range a client asked for in
+ *  the last 24 h. True while there is more to do. */
+bool navWarmPass(size_t budget, size_t* parsed) {
+    auto& g = vibe::gallery::shared();
+    auto& s = navShared();
+    if (g.dir().empty() || !g.enabled()) return false;
+    const uint64_t ks = g.kindStamp("navtex");
+    if (ks == 0) return false;   // no NAVTEX in the gallery: nothing to build
+    const int64_t now = vibe::gallery::nowUtc();
+    std::vector<long> ranges;
+    {
+        std::lock_guard<std::mutex> lk(s.cMtx);
+        for (auto& a : s.asked) if (a.first > 0 && now - a.second < 86400) ranges.push_back(a.first);
+    }
+    auto rangesValid = [&](const std::string& key) {
+        std::lock_guard<std::mutex> lk(s.cMtx);
+        for (long r : ranges) { auto it = s.stations.find(r); if (it == s.stations.end() || !navStationsValid(it->second, key, r, now)) return false; }
+        return true;
+    };
+    {
+        std::lock_guard<std::mutex> lk(s.wMtx);
+        if (s.doneKey == navKey(ks) && rangesValid(s.doneKey)) return false;   // ★ nothing new since the last whole pass
+        std::unordered_set<uint64_t> live;
+        bool got = false;
+        const auto sr = navSyncLocked(budget, false, &live, &got);
+        if (!got) return false;           // ★ another radio's process is on it — the next kick tries again
+        *parsed = sr.added;
+        if (sr.pending > 0) return true;  // ★ more of the backfill next pass
+        if (sr.added > 0) return true;    // ★ the last slice: the scans in a pass of their own
+        navPlacedFreshLocked(navKey(ks));
+    }
+    for (long r : ranges) {
+        { std::lock_guard<std::mutex> lk(s.cMtx); auto it = s.stations.find(r); if (it != s.stations.end() && navStationsValid(it->second, navKey(ks), r, now)) continue; }
+        bool hit = false; (void)navStationsJson(r, now, &hit, false);
+        return true;   // ★ one scan a pass
+    }
+    std::lock_guard<std::mutex> lk(s.wMtx);
+    s.doneKey = navKey(ks);   // ★ ks read BEFORE the work: a message saved meanwhile changes it, and the next kick redoes
+    return false;
+}
+vibe::navwarm::Worker& navWarmWorker() {
+    static vibe::navwarm::Worker* w = new vibe::navwarm::Worker(navWarmPass, navWarmGate, [] { vibeIdleThread("vibe-navwarm"); });
+    return *w;
+}
+}  // namespace vsnav
+using vsnav::navShared; using vsnav::navSyncLocked; using vsnav::navPlacedFreshLocked; using vsnav::navKey; using vsnav::navStationsJson;
+using vsnav::g_navWarmFirstTick; using vsnav::navWarmNow; using vsnav::navWarmWorker;
+/** ★ Called by the housekeeping tick (every ~2 s): starts the warm-up thread once, then kicks it. Costs a few atomics. */
+static void vsNavWarmTick() {
+    if (g_navWarmFirstTick.load() <= 0) g_navWarmFirstTick.store(navWarmNow());
+    auto& w = navWarmWorker();
+    w.start();
+    w.kick();
+}
+/** ★ /vibeserver/gallery/navtex-warm.json — what the warm-up is doing (tests, the curious owner). */
+static std::string vsNavWarmJson() {
+    auto& w = navWarmWorker();
+    char b[448];
+    // ★ lastMs / maxMs / busyMs: the thread's CPU (maxSliceMs: the longest index slice, maxMs includes the scans); maxWallMs: the longest pass by the clock (an idle thread waits its turn)
+    std::snprintf(b, sizeof b, "{\"state\":\"%s\",\"passes\":%llu,\"parsed\":%llu,\"budget\":%zu,\"lastMs\":%.2f,\"maxMs\":%.2f,\"maxSliceMs\":%.2f,\"maxWallMs\":%.1f,\"busyMs\":%.1f,\"pauses\":%llu}",
+                  vibe::navwarm::stateName(w.state()), (unsigned long long)w.passes(), (unsigned long long)w.parsed(), w.budget(),
+                  w.lastPassMs(), w.maxPassMs(), w.maxSliceMs(), w.maxWallMs(), w.busyMs(), (unsigned long long)w.pauses());
+    return b;
 }
 
 struct LocalSdrShim::Impl {
@@ -28316,89 +28524,41 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return;
             }
             if (path == "/vibeserver/gallery/navtex-stations.json") {
-                static std::mutex cMtx;
-                static std::map<long, std::pair<std::string, std::string>> cache;   // since → (stamp, json)
+                // ★★ 2026-11-20: through the shared cache the background warm-up keeps (navStationsJson, above Impl) —
+                //    ALL is good until a NAVTEX message changes; a range's window edge may be 1 % stale. A miss scans now.
                 long since = std::max(0L, std::atol(qv("since").c_str()));
                 if (since > 400L * 86400) since = 0;
-                const std::string idx = g.dir() + "/index.jsonl";
-                struct stat st{};
-                const bool have = !g.dir().empty() && ::stat(idx.c_str(), &st) == 0;
-                const int64_t now = vibe::gallery::nowUtc();
-                const std::string stamp = std::to_string((long long)st.st_mtime) + ":" + std::to_string((long long)st.st_size) + ":" + std::to_string((long long)(now / 20));
-                {
-                    std::lock_guard<std::mutex> lk(cMtx);
-                    auto it = cache.find(since);
-                    if (it != cache.end() && it->second.first == stamp) { reply("200 OK", "application/json", it->second.second); return; }
-                }
-                const double rxLat = g_bgLat.load(), rxLon = g_bgLon.load();
-                auto readText = [&](const std::string& name) {
-                    std::string fp, ct, o;
-                    if (!g.resolve(name, fp, ct)) return o;
-                    const int fd = ::open(fp.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-                    if (fd < 0) return o;
-                    o.resize(16384);
-                    const ssize_t n = ::read(fd, &o[0], o.size());
-                    ::close(fd);
-                    o.resize(n > 0 ? (size_t)n : 0);
-                    return o;
-                };
-                // ★★ through the Store's live view (the append-only index with its replacements and removals applied)
-                const vibe::navmap::EachLine each = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
-                // ★ the same warning number on another transmitter (the warnings index's series keys, when it exists)
-                const auto keys = vibe::navwarn::seriesKeys(g.dir() + "/navtex-warn.idx");
-                const vibe::navmap::SeriesOf seriesOf = [&keys](const std::string& f) { auto it = keys.find(vibe::navwarn::nameHash(f)); return it == keys.end() ? std::string() : it->second; };
-                const auto r = have ? vibe::navmap::scan(each, rxLat, rxLon, since ? now - since : 0, readText, seriesOf) : vibe::navmap::Result{};
-                const std::string j = vibe::navmap::toJson(r, rxLat, rxLon, now);
-                { std::lock_guard<std::mutex> lk(cMtx); if (cache.size() > 8) cache.clear(); cache[since] = { stamp, j }; }
-                reply("200 OK", "application/json", j);
+                bool hit = false;
+                const std::string j = navStationsJson(since, vibe::gallery::nowUtc(), &hit);
+                reply("200 OK", "application/json", j, std::string("X-Navtex-Cache: ") + (hit ? "hit" : "miss") + "\r\n");
                 return;
             }
+            // ★ what the background warm-up is doing (vibe_navtex_warm.h) — the same read rule as the gallery
+            if (path == "/vibeserver/gallery/navtex-warm.json") { reply("200 OK", "application/json", vsNavWarmJson()); return; }
             /* ★★ V12 2026-11-01 THE NAVTEX MAP — the WARNINGS (vibe_navtex_warn.h): the index beside the gallery brought up
              *  to date from its live view (at most 400 newly saved messages parsed a request — the first opening of a big
              *  gallery is the BACKFILL, answered with "pending" so the map says "Building … %"), then one marker per
              *  warning, the newest 1 000 with a position. Compacted when a third of its lines are messages since evicted. */
             if (path == "/vibeserver/gallery/navtex-warnings.json" || path == "/vibeserver/gallery/navtex-met.json") {
-                static std::mutex wMtx;
-                std::lock_guard<std::mutex> wl(wMtx);
+                /* ★★ 2026-11-20: the SAME state the background warm-up keeps (navShared, above Impl), under the same
+                 *  mutex. Whatever it has done is not done again; whatever it has not (no spare CPU, mid-backfill) is done
+                 *  here exactly as before — 400 messages a request, "pending" while there are more. */
+                auto& ns = navShared();
+                std::lock_guard<std::mutex> wl(ns.wMtx);
                 long since = std::max(0L, std::atol(qv("since").c_str()));
                 if (since > 400L * 86400) since = 0;
                 const int64_t now = vibe::gallery::nowUtc();
                 const std::string idx = g.dir() + "/navtex-warn.idx";
                 if (g.dir().empty()) { reply("200 OK", "application/json", "{\"warnings\":[],\"total\":0}"); return; }
-                auto readText = [&](const std::string& name) {
-                    std::string fp, ct, o;
-                    if (!g.resolve(name, fp, ct)) return o;
-                    const int fd = ::open(fp.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-                    if (fd < 0) return o;
-                    o.resize(16384);
-                    const ssize_t n = ::read(fd, &o[0], o.size());
-                    ::close(fd);
-                    o.resize(n > 0 ? (size_t)n : 0);
-                    return o;
-                };
-                std::unordered_set<uint64_t> live; size_t lines = 0;
-                const vibe::navwarn::LiveFn each = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
+                std::unordered_set<uint64_t> live;
                 // ★ stage 3: a forecast's areas are parsed once, beside its index line (gallery/navtex-met.idx)
                 const std::string metIdx = g.dir() + "/navtex-met.idx";
-                const auto sr = vibe::navwarn::sync(idx, each, readText, 400, &live, &lines, metIdx);
-                if (lines > 64 && lines > live.size() + live.size() / 2) { vibe::navwarn::compact(idx, live); vibe::navmet::compact(metIdx, live); }
+                const auto sr = navSyncLocked(400, true, &live);
                 /* ★ the card's station ("Suspected …", "?") and decode quality: the stations map's own placement of each
-                 *  message (navmap::scan), cached while the gallery is unchanged — one scan per new message, not per poll */
-                static std::string placedStamp;
-                static std::unordered_map<uint64_t, vibe::navmap::Placed> placed;
-                {
-                    struct stat st{};
-                    const std::string gi = g.dir() + "/index.jsonl";
-                    const std::string stamp = ::stat(gi.c_str(), &st) == 0 ? std::to_string((long long)st.st_mtime) + ":" + std::to_string((long long)st.st_size) : std::string();
-                    if (stamp != placedStamp) {
-                        placed.clear();
-                        const vibe::navmap::EachLine el = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
-                        const auto keys = vibe::navwarn::seriesKeys(idx);
-                        const vibe::navmap::SeriesOf seriesOf = [&keys](const std::string& f) { auto it = keys.find(vibe::navwarn::nameHash(f)); return it == keys.end() ? std::string() : it->second; };
-                        (void)vibe::navmap::scan(el, g_bgLat.load(), g_bgLon.load(), 0, readText, seriesOf, &placed);
-                        placedStamp = stamp;
-                    }
-                }
+                 *  message (navmap::scan), cached while the gallery's NAVTEX is unchanged — one scan per new message, not per poll */
+                //   ★ Not again on every backfill request (the index grows each one): once at the start, then when it is whole.
+                if (sr.pending == 0 || ns.placedKey.empty()) navPlacedFreshLocked(navKey(g.kindStamp("navtex")));
+                const auto& placed = ns.placed;
                 if (path == "/vibeserver/gallery/navtex-met.json") {
                     const auto mq = vibe::navmet::query(metIdx, live, since ? now - since : 0);
                     const vibe::navmet::StationOf so = [&](const std::string& f) {
@@ -38206,6 +38366,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 dxTick();
                 // ── ★★ V12: ADS-B kept running with nobody here — after bgTick, which has given the dial back by now ──
                 adsbKeepTick();
+                // ── ★★ V12 2026-11-20: the SHIPPING MAP kept built — a kick; the work is on vibe-navwarm at idle priority,
+                //    and only while the CPU gate says there is room (vsNavWarmTick, vibe_navtex_warm.h) ──
+                vsNavWarmTick();
 
                 // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have

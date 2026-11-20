@@ -35,6 +35,8 @@
 #if defined(__ANDROID__) || defined(__linux__)
   #include <sys/resource.h>   // setpriority
   #include <sys/prctl.h>      // PR_SET_NAME
+  #include <pthread.h>        // pthread_setschedparam (vibeIdleThread)
+  #include <sched.h>          // SCHED_IDLE
   #include <atomic>
   #include <cerrno>
   #include <cstdio>
@@ -135,6 +137,19 @@
    *  ★★ NOT for the admin API or anything that takes clientMtx/modeMtx: a low-priority thread that
    *     holds a lock the DSP needs is priority inversion, which is worse than the contention. */
   inline void vibeBulkThread(const char* name)     { vibeNiceThread_(name, vibeprio::kBulk); }
+  /* ★★ IDLE — BELOW THE WHOLE ORDER, BELOW BULK HTTP (2026-11-20, the NAVTEX warm-up, vibe_navtex_warm.h). Work that
+   *  nobody waits for at all — an index kept built in case somebody opens a map — runs only on a core nobody else wants:
+   *  SCHED_IDLE for this thread (no privilege needed to step down to it), nice 19 as well (Android, or a kernel that
+   *  refuses SCHED_IDLE, still gets the lowest CFS weight there is). Best effort, silent: it costs nothing to fail. */
+  inline void vibeIdleThread(const char* name) {
+      prctl(PR_SET_NAME, name);
+      errno = 0;
+      (void)setpriority(PRIO_PROCESS, 0, 19);
+  #ifdef SCHED_IDLE
+      struct sched_param sp{}; sp.sched_priority = 0;
+      (void)pthread_setschedparam(pthread_self(), SCHED_IDLE, &sp);
+  #endif
+  }
   /* ★★★ THE IQ INPUT SITS ABOVE THE WHOLE ORDER — Network > Audio > Spectrum > Decoders all
    *  consume what it delivers, and a sample it fails to collect is lost for every one of them
    *  (never late: GONE — a radio library drops the buffer). So it takes the top nice, level with
@@ -209,6 +224,11 @@
       pthread_setname_np(name);
       pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   }
+  // ★ Idle (see the Linux note): BACKGROUND, the class macOS runs only when nothing else wants the core.
+  inline void vibeIdleThread(const char* name) {
+      pthread_setname_np(name);
+      pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
+  }
   // ★ The IQ input — see the Linux note. macOS has nothing above USER_INTERACTIVE to give it.
   inline void vibeIqThread(const char* name) {
       pthread_setname_np(name);
@@ -248,6 +268,7 @@
   inline void vibeSpectrumThread(const char* name) { vibe::vibeFlushDenormals(); vibeWinPrio_(name, THREAD_PRIORITY_NORMAL); }
   inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeWinPrio_(name, THREAD_PRIORITY_BELOW_NORMAL); }
   inline void vibeBulkThread(const char* name)     { vibeWinPrio_(name, THREAD_PRIORITY_LOWEST); }
+  inline void vibeIdleThread(const char* name)     { vibeWinPrio_(name, THREAD_PRIORITY_IDLE); }
   inline void vibeIqThread(const char* name) {
       vibe::vibeFlushDenormals();
       vibeWinName_(name);
@@ -267,5 +288,6 @@
   inline void vibeDecoderLagThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeAudioDecodeThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeBulkThread(const char*) {}
+  inline void vibeIdleThread(const char*) {}
   inline void vibeIqThread(const char*) { vibe::vibeFlushDenormals(); }
 #endif
