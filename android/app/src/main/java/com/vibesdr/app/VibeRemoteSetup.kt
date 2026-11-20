@@ -169,6 +169,14 @@ object VibeRemoteSetup {
         catch (t: Throwable) { Log.w(TAG, "location from the page: $t") }
     }
 
+    private fun sameLocation(a: JSONObject?, b: JSONObject?): Boolean {
+        if (a == null || b == null) return a == b
+        return a.optString("mode") == b.optString("mode") && a.optBoolean("moving") == b.optBoolean("moving")
+            && a.optString("label") == b.optString("label") && a.optString("country") == b.optString("country")
+            && Math.abs(a.optDouble("lat", 0.0) - b.optDouble("lat", 0.0)) < 1e-6
+            && Math.abs(a.optDouble("lon", 0.0) - b.optDouble("lon", 0.0)) < 1e-6
+    }
+
     /** Maidenhead, 6 characters — the directory places a listing by it. */
     internal fun grid(lat: Double, lon: Double): String {
         if (lat.isNaN() || lon.isNaN() || lat !in -90.0..90.0 || lon !in -180.0..180.0) return ""
@@ -299,7 +307,10 @@ object VibeRemoteSetup {
             // ★★ THE MIRROR: the phone's screen hears it now and redraws (ServerModeScreen listens for "settings").
             val shown = JSONObject(merged.toString()).apply { remove("adminPassword") }
             VibeServerOps.emit("settings", JSONObject().put("source", "remote").put("settings", shown))
-            if (p.has("serverLocation")) applyLocation(ctx, merged)
+            // ★ Every page save carries the place; only a CHANGED one is published from here (the screen's own publish adds the
+            //   town's country name, which this one cannot — so an unchanged place is left as the screen published it).
+            if (p.has("serverLocation") && !sameLocation(p.optJSONObject("serverLocation"), before.optJSONObject("serverLocation")))
+                applyLocation(ctx, merged)
             // ★ The listing after the restart (a restart closes and re-opens the tunnel itself — restoreIfWanted).
             if (restart) VibeServerOps.restartFromSettings(ctx) { if (listingAct != null) applyListing(ctx, listingAct, merged) }
             else if (listingAct != null) applyListing(ctx, listingAct, merged)
