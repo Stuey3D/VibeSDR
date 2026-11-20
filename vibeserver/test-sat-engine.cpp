@@ -396,11 +396,93 @@ static void s7() {
     CHECK(us < 2000, "cheap");
 }
 
+/** ★★ V12 SATELLITE MODE (docs/v12/SATELLITE-MODE.md "THE CONTRACT"): sat_list's new fields, read by a JSON parser so
+ *  nothing depends on key order; what a pick tunes / demodulates / decodes; the lock on exactly the picked downlink. */
+static const json::Value* findSat(const json::Value& l, const char* id) {
+    const json::Value* s = l.get("sats");
+    if (!s) return nullptr;
+    for (auto& x : s->a) if (x.str("id") == id) return &x;
+    return nullptr;
+}
+static const json::Value* txOf(const json::Value* sat, size_t i) {
+    const json::Value* t = sat ? sat->get("tx") : nullptr;
+    return t && i < t->a.size() ? &t->a[i] : nullptr;
+}
+static bool boolOf(const json::Value* v, const char* k) { const json::Value* b = v ? v->get(k) : nullptr; return b && b->t == json::Value::Bool && b->b; }
+static void s11(const std::string& dir) {
+    std::printf("§11 SATELLITE MODE: sat_list fields, picks\n");
+    std::unique_ptr<Engine> e(makeEngine(dir, kSaoLat, kSaoLon));
+    // a radio that tunes 24–300 MHz: the 70 cm birds greyed, with the reason
+    ReachWhyFn why = [](double lo, double hi) { return hi <= 300e6 && lo >= 24e6 ? std::string() : std::string("This receiver cannot tune to it"); };
+    SupplyInfo sup; sup.known = true; sup.synced = 1795600000; sup.fetching = false;
+    json::Value l;
+    CHECK(json::parseValue(e->listJson(Clock{kIssTca, true}, why, sup), l) && l.t == json::Value::Obj, "the list parses");
+    const json::Value* src = l.get("source");
+    CHECK(src && src->num("synced") == 1795600000 && src->get("fetching") && src->get("fetching")->t == json::Value::Bool
+          && !src->get("fetching")->b, "source.synced + source.fetching");
+    const json::Value* iss = findSat(l, "ISS");
+    CHECK(iss && std::fabs(iss->num("inRangeFor", -1) - (kIssLos - kIssTca)) < 3, "ISS overhead: inRangeFor = s to LOS (%.0f, want %.0f)",
+          iss ? iss->num("inRangeFor", -1) : -1, kIssLos - kIssTca);
+    const json::Value *rpt = txOf(iss, 0), *voice = txOf(iss, 1), *aprs = txOf(iss, 2);
+    CHECK(voice && voice->str("use") == "voice" && boolOf(voice, "sstv"), "ISS 145.800 Voice / SSTV: use voice, sstv:true");
+    CHECK(rpt && rpt->str("use") == "voice" && !rpt->get("sstv"), "ISS 437.800 FM repeater: voice, no sstv");
+    CHECK(aprs && aprs->str("use") == "packet" && boolOf(aprs, "reach"), "ISS APRS: packet, reachable on 2 m");
+    CHECK(rpt && !boolOf(rpt, "reach") && rpt->str("why") == "This receiver cannot tune to it", "437.800 out of range: reach false + why");
+    CHECK(voice && !voice->get("why"), "no why on a reachable downlink");
+    const json::Value* met = findSat(l, "METEOR-M2-3");
+    CHECK(txOf(met, 0) && txOf(met, 0)->str("use") == "image", "Meteor LRPT: image");
+    const json::Value* rs = findSat(l, "RS-44");
+    CHECK(txOf(rs, 0) && txOf(rs, 0)->str("use") == "voice" && txOf(rs, 1) && txOf(rs, 1)->str("use") == "voice", "RS-44 transponder + beacon: voice");
+    const json::Value* ao73 = findSat(l, "AO-73");
+    CHECK(txOf(ao73, 1) && txOf(ao73, 1)->str("use") == "voice" && !txOf(ao73, 1)->get("sstv"), "AO-73 BPSK telemetry: heard (no decoder of ours)");
+    const json::Value* so = findSat(l, "SONATE-2");
+    CHECK(txOf(so, 0) && txOf(so, 0)->str("use") == "packet", "SONATE-2 9k6: packet");
+    // below the horizon: no inRangeFor
+    json::Value l2;
+    json::parseValue(e->listJson(Clock{kIssAos - 900, true}, why, sup), l2);
+    const json::Value* iss2 = findSat(l2, "ISS");
+    CHECK(iss2 && iss2->num("el", 0) < 0 && !iss2->get("inRangeFor"), "15 min before AOS: no inRangeFor (el %.1f)", iss2 ? iss2->num("el", 0) : 0);
+    // no supply known (iOS / the handheld): the keys are absent, not lies
+    json::Value l3;
+    json::parseValue(e->listJson(Clock{kIssTca, true}, why, SupplyInfo{}), l3);
+    CHECK(l3.get("source") && !l3.get("source")->get("synced") && !l3.get("source")->get("fetching"), "no supply: no synced / fetching");
+    // the old two-argument form still answers (old callers), now with use/sstv too
+    CHECK(e->listJson(Clock{kIssTca, true}, 24e6, 1766e6).find("\"use\":\"voice\"") != std::string::npos, "the old listJson form still works");
+
+    // ── what a pick does ──
+    SatDef sd; Transmitter tx; std::string p;
+    CHECK(e->txAt(25544, 1, sd, tx) && tx.label == "Voice / SSTV" && tuneHzOf(tx) == 145800000 && listenModeOf(tx) == "nfm"
+          && decoderOf(tx, p) == "sstv" && p.empty(), "ISS voice pick: 145.800 NFM + the SSTV decoder");
+    CHECK(e->txAt(25544, 2, sd, tx) && decoderOf(tx, p) == "aprs" && p.find("\"packet\":\"1200\"") != std::string::npos, "ISS APRS pick: aprs 1200 (%s)", p.c_str());
+    CHECK(e->txAt(25544, 0, sd, tx) && decoderOf(tx, p).empty(), "ISS FM repeater: no decoder");
+    CHECK(e->txAt(59112, 0, sd, tx) && decoderOf(tx, p) == "aprs" && p.find("\"packet\":\"9600\"") != std::string::npos, "SONATE-2 telemetry: aprs 9600 (%s)", p.c_str());
+    CHECK(e->txAt(57166, 0, sd, tx) && decoderOf(tx, p) == "lrpt" && listenModeOf(tx) == "nfm" && tuneHzOf(tx) == 137900000
+          && p.find("\"symbol_rate\":72000") != std::string::npos && p.find("\"modulation\":\"auto\"") != std::string::npos, "Meteor pick: 137.900, lrpt 72k AUTO (%s)", p.c_str());
+    CHECK(e->txAt(44909, 0, sd, tx) && tuneHzOf(tx) == 435640000 && listenModeOf(tx) == "usb" && decoderOf(tx, p).empty(), "RS-44 transponder: its centre in USB");
+    CHECK(decoderAttachMsg("lrpt", "\"modulation\":\"auto\"") == "{\"type\":\"audio_extension_attach\",\"extension_name\":\"lrpt\",\"modulation\":\"auto\"}"
+          && decoderAttachMsg("sstv", "") == "{\"type\":\"audio_extension_attach\",\"extension_name\":\"sstv\"}", "the attach message a socket would send");
+    CHECK(!e->txAt(25544, 3, sd, tx) && !e->txAt(25544, -1, sd, tx) && !e->txAt(1, 0, sd, tx), "no such downlink / bird: refused");
+
+    // ── the lock on exactly the picked downlink ──
+    Track t = e->start("P1", "P1", 145825000, "nfm", Clock{kIssTca, true}, 25544, 2);
+    CHECK((t.state == LockState::Track || t.state == LockState::Coast) && t.txLabel == "APRS" && t.nominalHz == 145825000, "lock on ISS APRS (%s %s)", lockName(t.state), t.txLabel.c_str());
+    e->stop("P1");
+    t = e->start("P1", "P1", 145825000, "nfm", Clock{kIssTca, true}, 25544, 1);
+    CHECK(t.state == LockState::Off && !t.why.empty(), "a dial 25 kHz from the picked downlink is refused (%s)", t.why.c_str());
+    // sstvOf reads the data, not a number: a renamed downlink without SSTV is plain voice
+    Transmitter v; v.mode = "nfm"; v.label = "Voice"; v.hz = 145800000;
+    CHECK(!sstvOf(v) && std::string(useOf(v)) == "voice", "no SSTV in the name: no SSTV decoder");
+    v.note = "School contacts and sstv events";
+    CHECK(sstvOf(v), "…named in the note (any case): SSTV");
+    v.mode = "usb";
+    CHECK(!sstvOf(v), "…but only on an FM downlink");
+}
+
 int main(int argc, char** argv) {
     std::string dir = "vibeserver/testdata-sat";
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--data" && i + 1 < argc) dir = argv[++i];
     if (readFile(dir + "/celestrak-amateur-2026-11-19.json").empty()) { std::printf("data missing\n"); return 3; }
-    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir);
+    s1(dir); s2(dir); s3(dir); s4(dir, kIssAos + 30, "AOS + 30 s"); s4(dir, kIssTca - 40, "TCA − 40 s (the fastest Doppler)"); s5(dir); s6(dir); s7(); s8(dir); s9(dir); s10(dir); s11(dir);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
