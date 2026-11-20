@@ -41,8 +41,14 @@
       <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                  android:resource="@xml/device_filter"/>
     </activity>
+    <!-- ★★★ THE SERVER'S OWN PROCESS (beta88) — the main app's manifest has the whole note. Lite's screen is React Native
+         too, and React Native's HTTP client loads System WebView (its cookie handler) on the first request, so a Play
+         update of WebView stopped Lite's process and its server with it. ":server" never loads React Native or WebView
+         (MainApplication returns early there). The UI talks to it through VibeServerHost; the watchdog brings it back. -->
     <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice|microphone"
-             android:exported="false"/>
+             android:exported="false" android:process=":server"/>
+    <service android:name=".VibeServerHost" android:exported="false" android:process=":server"/>
+    <receiver android:name=".VibeWatchdogReceiver" android:exported="false" android:process=":server"/>
     <!-- ★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — the main app's VibeUpdateReceiver, synced. Without it
          every Lite update left the server stopped until somebody pressed Start, which on a TV box means
          walking to the TV. -->
@@ -50,12 +56,12 @@
          the XCover) never grants a USB radio present at boot. Android 5.0–7.0 with no lock screen does (Kiko's
          Moto G), so VibeBootReceiver acts only there, only if the owner switched it on, and reports a refusal
          instead of pretending. See VibeBootStart. -->
-    <receiver android:name=".VibeBootReceiver" android:exported="true">
+    <receiver android:name=".VibeBootReceiver" android:exported="true" android:process=":server">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED"/>
       </intent-filter>
     </receiver>
-    <receiver android:name=".VibeUpdateReceiver" android:exported="false">
+    <receiver android:name=".VibeUpdateReceiver" android:exported="false" android:process=":server">
       <intent-filter>
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
       </intent-filter>

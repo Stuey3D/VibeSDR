@@ -46,6 +46,9 @@ class MainApplication : Application(), ReactApplication {
         // ★ 2026-10-07: names the build on this process's exit record, as the main app does, so Diagnostics
         //   says which Lite crashed — the morning after an update that matters. See VibeExitInfo.
         VibeExitInfo.stampProcess(this)
+        // ★★★ beta88: the server's own process stops here — no React Native, no SoLoader, no HTTP client for the screen
+        //     (and so no WebView). See the main app's MainApplication and VibeProcess.
+        if (VibeProcess.isServerProcess(this)) return
         /* ★ Lite set VIBE_DSP_THREADS=1 and VIBE_DAB_SPLIT=1 here from 2026-09-18 (a Fire 7's four Cortex-A7s:
          *  one pinned at 99 % by WFM stereo, two idle). Since 2026-10-16 the split is the default on every
          *  multi-core server, set in the shared native code — g_vsSplitDefault in local_sdr_shim.cpp. */
