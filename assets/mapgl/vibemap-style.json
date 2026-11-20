@@ -458,7 +458,7 @@
    "type": "fill",
    "source": "detail",
    "source-layer": "riverareas",
-   "minzoom": 10,
+   "minzoom": 8,
    "paint": {
     "fill-color": "#1b4a6b"
    }

@@ -33,6 +33,10 @@ import path from 'node:path';
 const RELEASE = '2026-11-18.0';
 const MIN_WIDTH_M = 20;
 export const MIN_ZOOM = 10;   // ★ gen-map-tiles reads the zooms from each feature; the style's riverareas-d matches
+/* ★ v4 (2026-11-20, Stuart: "is there no way we can make the rivers appear even roughly on the more zoomed out views?"):
+ *  the WIDE rivers from z8 — a 150 m river is a few pixels at z8, a 374 m Saigon reach a clear band — simplified to 60 m
+ *  (sub-pixel there). Measured: ≥150 m at z8–9 = +16 MB, 35 k polygons (≥300 m +7.6 MB, ≥100 m +27 MB). */
+export const MID_MIN_WIDTH_M = 150, MID_ZOOM = 8;
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const OUT = path.join(root, 'build/maptiles');
@@ -73,8 +77,14 @@ COPY (
                 least(greatest(2000 * km2 / perim_km / 4, 10), 60) / 111000.0), 0.0001)) || '}' AS j
   FROM '${parquet}'
   WHERE perim_km > 0 AND 2000 * km2 / perim_km >= ${MIN_WIDTH_M}
+  UNION ALL
+  SELECT '{"type":"Feature","tippecanoe":{"layer":"riverareas","minzoom":${MID_ZOOM},"maxzoom":${MIN_ZOOM - 1}},"properties":{},"geometry":'
+         || ST_AsGeoJSON(ST_ReducePrecision(ST_SimplifyPreserveTopology(geometry, 60 / 111000.0), 0.0001)) || '}' AS j
+  FROM '${parquet}'
+  WHERE perim_km > 0 AND 2000 * km2 / perim_km >= ${MID_MIN_WIDTH_M}
 ) TO '${part}' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER '\t');`);
 renameSync(part, ndjson);
 writeFileSync(path.join(OUT, 'riverareas.json'), JSON.stringify({ release: RELEASE, minWidthM: MIN_WIDTH_M, minZoom: MIN_ZOOM,
+  midMinWidthM: MID_MIN_WIDTH_M, midZoom: MID_ZOOM,
   licence: 'ODbL', attribution: '© OpenStreetMap contributors (via Overture Maps)' }, null, 1));
 console.log(`gen-river-areas: ${ndjson} ${(statSync(ndjson).size / 1048576).toFixed(0)} MB`);
