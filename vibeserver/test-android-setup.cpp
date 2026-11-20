@@ -9,6 +9,8 @@
 //   5. The device facts come through untouched, for the page's read-only card.
 #include "vibe_android_setup.h"
 #include <cstdio>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 using namespace vibe::androidsetup;
@@ -21,7 +23,16 @@ static void ok(bool c, const char* what, const std::string& extra = "") {
 
 static J parsed(const std::string& s) { J j; parse(s, j); return j; }
 
-int main() {
+static std::string slurp(const char* path) { std::ifstream f(path); std::stringstream ss; ss << f.rdbuf(); return ss.str(); }
+
+int main(int argc, char** argv) {
+    // ★ Two helper modes for scripts/test-setup-android-e2e.mjs: the page's real save goes through THIS translation.
+    if (argc == 3 && std::string(argv[1]) == "--page") { std::printf("%s", pageConfig(slurp(argv[2])).c_str()); return 0; }
+    if (argc == 3 && std::string(argv[1]) == "--patch") {
+        std::string patch, err; bool restart = false;
+        if (!settingsPatch(slurp(argv[2]), patch, restart, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        std::printf("%s", patch.c_str()); return 0;
+    }
     std::printf("== the JSON reader\n");
     {
         J j;

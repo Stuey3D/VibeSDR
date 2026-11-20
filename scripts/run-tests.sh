@@ -653,6 +653,10 @@ if node scripts/test-setup-governors.mjs; then pass=$((pass+1)); else fail=$((fa
 if node scripts/test-setup-maxfps.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta88 "Remote access to server settings": the page on an Android phone's server shows only the phone's controls.
 if node scripts/test-setup-android.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the whole page signed in and saved against a phone's config, the save run through the phone's own translation
+#    (the C++ suite above built $OUT/test-android-setup). Exit 3 = not run (no binary).
+VIBE_ANDROID_SETUP_BIN="$OUT/test-android-setup" node scripts/test-setup-android-e2e.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 RATE SWITCH: "change the sample rate when a mode needs it" (dabRateBoost); the RTL 3.2 MS/s ADS-B option stays removed.
 if node scripts/test-setup-mode-rate.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 ADS-B AS THE LANDING: drawn only where ADS-B can run, keep-running only beneath it and never ticked by default,
